@@ -387,6 +387,8 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
     setStatusFlags(RT_MODE_ERGO);         // ergo mode by default
     mode = ErgFileFormat::erg;
     pendingConfigChange = false;
+    stopConfirmationActive = false;
+    resumeAfterStopConfirmation = false;
 
     displayTemp = 0;
     displayWorkoutLap = 0;
@@ -600,7 +602,7 @@ TrainSidebar::eventFilter(QObject *, QEvent *event)
                     break;
 
                 case Qt::Key_Escape:
-                    Stop();
+                    RequestStop();
                     break;
 
                 default:
@@ -1530,7 +1532,82 @@ void TrainSidebar::Pause()        // pause capture to recalibrate
     }
 }
 
-void TrainSidebar::Stop(int deviceStatus)        // when stop button is pressed
+void TrainSidebar::RequestStop()
+{
+    if ((status & RT_RUNNING) == 0 || stopConfirmationActive) return;
+
+    if ((status & RT_RECORDING) == 0 || recordFile == NULL) {
+        Stop(DEVICE_OK);
+        return;
+    }
+
+    stopConfirmationActive = true;
+    resumeAfterStopConfirmation = (status & RT_PAUSED) == 0;
+    if (resumeAfterStopConfirmation) Start();
+
+    recordFile->flush();
+
+    QList<QString> files;
+    files.append(recordFile->fileName());
+
+    RideImportWizard *dialog = new RideImportWizard(files, context, this);
+    stopConfirmationDialog = dialog;
+    dialog->setWindowModality(Qt::ApplicationModal);
+    connect(dialog, SIGNAL(trainingSaveRequested()), this, SLOT(saveAndStopTraining()));
+    connect(dialog, SIGNAL(trainingDiscardRequested()), this, SLOT(discardAndStopTraining()));
+    connect(dialog, SIGNAL(trainingContinueRequested()), this, SLOT(continueTraining()));
+    connect(dialog, SIGNAL(finished(int)), this, SLOT(stopDialogFinished()));
+
+    dialog->process();
+    if (stopConfirmationDialog && stopConfirmationActive) {
+        dialog->enableTrainingContinuation();
+    }
+}
+
+void TrainSidebar::saveAndStopTraining()
+{
+    if (!stopConfirmationActive) return;
+    stopConfirmationActive = false;
+    resumeAfterStopConfirmation = false;
+    finishStop(KeepRecording);
+}
+
+void TrainSidebar::discardAndStopTraining()
+{
+    if (!stopConfirmationActive) return;
+    stopConfirmationActive = false;
+    resumeAfterStopConfirmation = false;
+    finishStop(DiscardRecording);
+}
+
+void TrainSidebar::continueTraining()
+{
+    if (!stopConfirmationActive) return;
+
+    bool resume = resumeAfterStopConfirmation;
+    stopConfirmationActive = false;
+    resumeAfterStopConfirmation = false;
+    if (resume && (status & RT_RUNNING) && (status & RT_PAUSED)) Start();
+}
+
+void TrainSidebar::stopDialogFinished()
+{
+    stopConfirmationDialog.clear();
+    if (stopConfirmationActive) continueTraining();
+}
+
+void TrainSidebar::Stop(int deviceStatus)
+{
+    if (stopConfirmationActive) {
+        stopConfirmationActive = false;
+        resumeAfterStopConfirmation = false;
+        if (stopConfirmationDialog) stopConfirmationDialog->done(0);
+    }
+
+    finishStop(deviceStatus == DEVICE_ERROR ? DiscardRecording : ImportRecording);
+}
+
+void TrainSidebar::finishStop(RecordingStopAction recordingAction)
 {
     if ((status&RT_RUNNING) == 0) return;
 
@@ -1619,20 +1696,22 @@ void TrainSidebar::Stop(int deviceStatus)        // when stop button is pressed
             tcoreFile=NULL;
         }
 
-        if(deviceStatus == DEVICE_ERROR)
+        if (recordingAction == DiscardRecording)
         {
             recordFile->remove();
         }
         else {
-            // add to the view - using basename ONLY
-            QString name;
-            name = recordFile->fileName();
+            if (recordingAction == ImportRecording) {
+                // add to the view - using basename ONLY
+                QString name = recordFile->fileName();
 
-            QList<QString> list;
-            list.append(name);
+                QList<QString> list;
+                list.append(name);
 
-            RideImportWizard *dialog = new RideImportWizard (list, context);
-            dialog->process(); // do it!
+                RideImportWizard *dialog = new RideImportWizard (list, context);
+                dialog->process(); // do it!
+            }
+
             if (context->currentErgFile() != nullptr) {
                 trainDB->lastWorkout(context->currentErgFile()->filename());
             } else if (! codeWorkoutKey.isEmpty()) {
@@ -3291,7 +3370,7 @@ TrainSidebar::remoteControl(uint16_t command)
         break;
 
     case GC_REMOTE_CMD_STOP:
-        this->Stop();
+        this->RequestStop();
         break;
 
     case GC_REMOTE_CMD_LAP:

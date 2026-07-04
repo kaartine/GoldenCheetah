@@ -56,12 +56,19 @@ public:
 
     int getNumberOfFiles();  // get the number of files selected for processing
     int process();
+    void enableTrainingContinuation();
     bool importInProcess() { return _importInProcess; }
     bool isAutoImport() { return autoImportMode;}
+
+signals:
+    void trainingSaveRequested();
+    void trainingDiscardRequested();
+    void trainingContinueRequested();
 
 private slots:
     void abortClicked();
     void cancelClicked();
+    void continueTrainingClicked();
     void todayClicked(int index);
     // void overClicked(); // deprecate for this release... XXX
     void activateSave();
@@ -86,7 +93,9 @@ private:
     QProgressBar *progressBar;
     QPushButton *abortButton; // also used for save and finish
     QPushButton *cancelButton; // cancel when asking for dates
+    QPushButton *continueTrainingButton;
     QComboBox *todayButton;    // set date to today when asking for dates
+    bool trainingContinuationEnabled;
     // QCheckBox *overFiles;      // chance to set overwrite when asking for dates // deprecate for this release... XXX
     // bool overwriteFiles; // flag to overwrite files from checkbox               // deprecate for this release... XXX
     Context *context; // caller

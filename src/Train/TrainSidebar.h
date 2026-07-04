@@ -48,6 +48,7 @@
 #include <QSqlTableModel>
 #include <QMutex>
 #include <QAction>
+#include <QPointer>
 
 #include "cmath" // for round()
 #include "Units.h" // for MILES_PER_KM
@@ -90,6 +91,7 @@ class RealtimeData;
 class MultiDeviceDialog;
 class TrainBottom;
 class DeviceTreeView;
+class RideImportWizard;
 
 class TrainSidebar : public GcWindow
 {
@@ -180,6 +182,7 @@ class TrainSidebar : public GcWindow
 
         void Start();       // when start button is pressed
         void Pause();       // when Paude is pressed
+        void RequestStop(); // when the user asks to stop
         void Stop(int status=0);        // when controller wants to stop
         void Connect();     // connect to train devices
         void Disconnect();  // disconnect train devices
@@ -222,6 +225,12 @@ class TrainSidebar : public GcWindow
 
         // VO2 measurement data to save
         void vo2Data(double rf, double rmv, double vo2, double vco2, double tv, double feo2);
+
+    private slots:
+        void saveAndStopTraining();
+        void discardAndStopTraining();
+        void continueTraining();
+        void stopDialogFinished();
 
     protected:
 
@@ -326,6 +335,18 @@ class TrainSidebar : public GcWindow
 
         bool autoConnect;
         bool pendingConfigChange;
+
+        enum RecordingStopAction {
+            ImportRecording,
+            KeepRecording,
+            DiscardRecording
+        };
+
+        void finishStop(RecordingStopAction recordingAction);
+
+        bool stopConfirmationActive;
+        bool resumeAfterStopConfirmation;
+        QPointer<RideImportWizard> stopConfirmationDialog;
 
         Bicycle bicycle;
 

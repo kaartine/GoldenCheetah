@@ -290,6 +290,9 @@ RideImportWizard::init(QList<QString> original, Context * /*mainWindow*/)
     cancelButton = new QPushButton(tr("Cancel"));
     cancelButton->setAutoDefault(false);
     abortButton = new QPushButton(tr("Abort"));
+    continueTrainingButton = new QPushButton(tr("Continue Training"));
+    continueTrainingButton->setHidden(true);
+    trainingContinuationEnabled = false;
     //overFiles = new QCheckBox(tr("Overwrite Existing Files"));  // deprecate for this release... XXX
     // initially the cancel, overwrite and today widgets are hidden
     // they only appear whilst we are asking the user for dates
@@ -306,6 +309,7 @@ RideImportWizard::init(QList<QString> original, Context * /*mainWindow*/)
     // only used when editing dates
     connect(todayButton, SIGNAL(activated(int)), this, SLOT(todayClicked(int)));
     connect(cancelButton, SIGNAL(clicked()), this, SLOT(cancelClicked()));
+    connect(continueTrainingButton, SIGNAL(clicked()), this, SLOT(continueTrainingClicked()));
     // connect(overFiles, SIGNAL(clicked()), this, SLOT(overClicked()));  // deprecate for this release... XXX
 
     // title & headings
@@ -390,6 +394,7 @@ RideImportWizard::init(QList<QString> original, Context * /*mainWindow*/)
     buttons->addWidget(todayButton);
     buttons->addStretch();
     // buttons->addWidget(overFiles); // deprecate for this release... XXX
+    buttons->addWidget(continueTrainingButton);
     buttons->addWidget(cancelButton);
     buttons->addWidget(abortButton);
 
@@ -467,6 +472,16 @@ RideImportWizard::expandFiles(QList<QString> files)
 int
 RideImportWizard::getNumberOfFiles() {
     return numberOfFiles;
+}
+
+void
+RideImportWizard::enableTrainingContinuation()
+{
+    trainingContinuationEnabled = true;
+    continueTrainingButton->setHidden(false);
+    abortButton->setDefault(false);
+    continueTrainingButton->setDefault(true);
+    continueTrainingButton->setFocus();
 }
 
 int
@@ -952,7 +967,21 @@ RideImportWizard::todayClicked(int index)
 void
 RideImportWizard::cancelClicked()
 {
+    if (trainingContinuationEnabled) {
+        trainingContinuationEnabled = false;
+        emit trainingDiscardRequested();
+    }
     done(0); // you are the weakest link, goodbye.
+}
+
+void
+RideImportWizard::continueTrainingClicked()
+{
+    if (!trainingContinuationEnabled) return;
+
+    trainingContinuationEnabled = false;
+    emit trainingContinueRequested();
+    done(0);
 }
 
 // info structure used by cpi updater
@@ -990,6 +1019,12 @@ RideImportWizard::abortClicked()
     }
 
     // Process "SAVE"
+
+    if (trainingContinuationEnabled) {
+        trainingContinuationEnabled = false;
+        continueTrainingButton->setHidden(true);
+        emit trainingSaveRequested();
+    }
 
     // SAVE STEP 2 - set the labels and make the text un-editable
     phaseLabel->setText(tr("Step 4 of 4: Save to Library"));

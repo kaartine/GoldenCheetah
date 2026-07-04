@@ -196,7 +196,7 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
     connect(backLap, SIGNAL(clicked()), m_trainSidebar, SLOT(RewindLap()));
     connect(m_lapButton, SIGNAL(clicked()), m_trainSidebar, SLOT(newLap()));
     connect(fwdLap, SIGNAL(clicked()), m_trainSidebar, SLOT(FFwdLap()));
-    connect(m_stopButton, SIGNAL(clicked()), m_trainSidebar, SLOT(Stop()));
+    connect(m_stopButton, SIGNAL(clicked()), m_trainSidebar, SLOT(RequestStop()));
     connect(m_trainSidebar->context, SIGNAL(start()), this, SLOT(updatePlayButtonIcon()));
     connect(m_trainSidebar->context, SIGNAL(pause()), this, SLOT(updatePlayButtonIcon()));
     connect(m_trainSidebar->context, SIGNAL(unpause()), this, SLOT(updatePlayButtonIcon()));
