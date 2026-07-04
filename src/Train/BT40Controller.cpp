@@ -21,6 +21,11 @@
 #include "BT40Controller.h"
 #include "RealtimeData.h"
 
+namespace {
+constexpr int InitialScanRetryDelayMs = 2000;
+constexpr int MaximumScanRetryDelayMs = 30000;
+}
+
 BT40Controller::BT40Controller(TrainSidebar *parent, DeviceConfiguration *dc) : RealtimeController(parent, dc)
 {
     localDevice = new QBluetoothLocalDevice(this);
@@ -58,8 +63,10 @@ BT40Controller::BT40Controller(TrainSidebar *parent, DeviceConfiguration *dc) : 
 
     scanRetryTimer = new QTimer(this);
     scanRetryTimer->setSingleShot(true);
-    scanRetryTimer->setInterval(1000);
+    scanRetryTimer->setInterval(InitialScanRetryDelayMs);
     connect(scanRetryTimer, SIGNAL(timeout()), this, SLOT(startScan()));
+    scanRetryDelayMs = InitialScanRetryDelayMs;
+    missingDeviceNoticeShown = false;
 }
 
 BT40Controller::~BT40Controller()
@@ -90,7 +97,7 @@ int
 BT40Controller::start()
 {
     running = true;
-    scanRetryTimer->stop();
+    resetScanRetryState();
     startScan();
     return 0;
 }
@@ -123,7 +130,7 @@ int
 BT40Controller::stop()
 {
     running = false;
-    scanRetryTimer->stop();
+    resetScanRetryState();
     if (discoveryAgent->isActive()) discoveryAgent->stop();
 
     devicesAwaitingRediscovery.clear();
@@ -289,6 +296,29 @@ BT40Controller::allConfiguredDevicesFound() const
 }
 
 void
+BT40Controller::resetScanRetryState()
+{
+    scanRetryTimer->stop();
+    scanRetryDelayMs = InitialScanRetryDelayMs;
+    missingDeviceNoticeShown = false;
+}
+
+void
+BT40Controller::scheduleScanRetry(const QString &firstNotice)
+{
+    if (!running || !localDc || allConfiguredDevicesFound()) return;
+
+    if (!missingDeviceNoticeShown) {
+        emit setNotification(firstNotice, 3);
+        missingDeviceNoticeShown = true;
+    }
+
+    qDebug() << "Retrying Bluetooth scan in" << scanRetryDelayMs << "ms";
+    scanRetryTimer->start(scanRetryDelayMs);
+    scanRetryDelayMs = qMin(scanRetryDelayMs * 2, MaximumScanRetryDelayMs);
+}
+
+void
 BT40Controller::rescanDevice()
 {
     BT40Device *device = qobject_cast<BT40Device*>(sender());
@@ -300,6 +330,9 @@ BT40Controller::rescanDevice()
                  << device->deviceInfo().name();
     }
 
+    // BT40Device already reports the connection loss once. Keep the
+    // controller's subsequent background scans quiet.
+    missingDeviceNoticeShown = true;
     scanRetryTimer->stop();
     startScan();
 }
@@ -312,8 +345,9 @@ BT40Controller::deviceConnectionRestored()
 
     qDebug() << "Bluetooth connection restored for"
              << device->deviceInfo().name();
-    if (allConfiguredDevicesFound() && discoveryAgent->isActive()) {
-        discoveryAgent->stop();
+    if (allConfiguredDevicesFound()) {
+        resetScanRetryState();
+        if (discoveryAgent->isActive()) discoveryAgent->stop();
     }
 }
 
@@ -336,15 +370,15 @@ BT40Controller::scanFinished()
     }
 
     if (allConfiguredDevicesFound()) {
+        resetScanRetryState();
         emit setNotification(tr("All configured Bluetooth devices found"), 2);
         qDebug() << "BT scan found all" << devices.size() << "configured device(s)";
         return;
     }
 
-    emit setNotification(tr("Bluetooth device not found, rescanning..."), 3);
     qDebug() << "BT scan found" << devices.size() << "of" << allowedDevices.size()
              << "configured device(s); retrying";
-    scanRetryTimer->start();
+    scheduleScanRetry(tr("Some Bluetooth devices are unavailable; retrying in background"));
 }
 
 
@@ -353,8 +387,7 @@ BT40Controller::deviceScanError(QBluetoothDeviceDiscoveryAgent::Error error)
 {
     qWarning() << "Error while scanning BT devices:" << error;
     if (running && localDc && !allConfiguredDevicesFound()) {
-        emit setNotification(tr("Bluetooth scan failed, retrying..."), 3);
-        scanRetryTimer->start();
+        scheduleScanRetry(tr("Bluetooth scan unavailable; retrying in background"));
     }
 }
 

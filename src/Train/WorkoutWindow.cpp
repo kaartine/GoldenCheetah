@@ -157,9 +157,10 @@ WorkoutWindow::WorkoutWindow(Context *context) :
     // telemetry
     telemetry = new WWTelemetry(workout, context);
 
-    // add the power, W'bal scale
+    // add the power, W'bal and heart rate scales
     powerscale = new WWPowerScale(workout, context);
     wbalscale = new WWWBalScale(workout, context);
+    hrscale = new WWHeartRateScale(workout);
 
     // lap markers
     lap = new WWLap(workout);

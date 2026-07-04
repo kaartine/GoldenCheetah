@@ -45,6 +45,7 @@
 #define GCWW_LAP       12 // lap markers
 #define GCWW_NOW       13 // now marker
 #define GCWW_TELEMETRY 14 // now marker
+#define GCWW_HRSCALE   15
 
 //
 // ITEMS
@@ -85,6 +86,21 @@ class WWWBalScale : public WorkoutWidgetItem {
     private:
 
         Context *context; // for athlete zones etc
+};
+
+class WWHeartRateScale : public WorkoutWidgetItem {
+
+    public:
+
+        WWHeartRateScale(WorkoutWidget *w);
+
+        // Reimplement in children
+        int type() { return GCWW_HRSCALE; }
+
+        void paint(QPainter *painter);
+
+        // locate me on the parent widget in paint coordinates
+        QRectF bounding() { return workoutWidget()->right(); }
 };
 
 // mark regions of workout that are not possible

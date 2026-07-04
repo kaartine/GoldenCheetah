@@ -46,6 +46,7 @@
 class WorkoutWidget;
 class WWPowerScale;
 class WWWBalScale;
+class WWHeartRateScale;
 class WWTTE;
 class WWLine;
 class WWWBLine;
@@ -207,6 +208,7 @@ class WorkoutWindow : public GcChartWindow
 
         WWPowerScale *powerscale;
         WWWBalScale *wbalscale;
+        WWHeartRateScale *hrscale;
         WWTTE *tte;
         WWLine *line;
         WWWBLine *wbline;

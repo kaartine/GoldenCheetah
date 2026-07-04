@@ -201,6 +201,48 @@ WWWBalScale::paint(QPainter *painter)
     }
 }
 
+WWHeartRateScale::WWHeartRateScale(WorkoutWidget *w) : WorkoutWidgetItem(w)
+{
+    w->addItem(this);
+}
+
+void
+WWHeartRateScale::paint(QPainter *painter)
+{
+    if (workoutWidget()->height() < MINTOOLHEIGHT || !workoutWidget()->shouldPlotHr()) return;
+
+    const QRectF canvas = workoutWidget()->canvas();
+    const int x = qRound(workoutWidget()->right().right()) - 1;
+    const int tickLength = qRound(3 * dpiXFactor);
+    const int spacing = qRound(SPACING);
+
+    QPen heartRatePen(GColor(CHEARTRATE));
+    heartRatePen.setWidth(1);
+    painter->setPen(heartRatePen);
+    painter->setFont(workoutWidget()->markerFont);
+    painter->drawLine(QPoint(x, qRound(canvas.top())),
+                      QPoint(x, qRound(canvas.bottom())));
+
+    QFontMetrics fontMetrics(workoutWidget()->markerFont);
+    const int labelRight = x - tickLength - spacing;
+    const QString unit = QStringLiteral("bpm");
+    const QRect unitBound = fontMetrics.boundingRect(unit);
+    painter->drawText(QPoint(labelRight - unitBound.width(),
+                             qRound(canvas.top()) + fontMetrics.ascent()),
+                      unit);
+
+    for (int bpm = 0; bpm <= workoutWidget()->maxHr(); bpm += 50) {
+        const int y = workoutWidget()->transform(0, bpm, WorkoutWidget::HEARTRATE).y();
+        painter->drawLine(QPoint(x - tickLength, y), QPoint(x, y));
+
+        const QString label = QString::number(bpm);
+        const QRect textBound = fontMetrics.boundingRect(label);
+        painter->drawText(QPoint(labelRight - textBound.width(),
+                                 y + (fontMetrics.ascent() / 2)),
+                          label);
+    }
+}
+
 // the warning bar at bottom for TTE efforts
 void
 WWTTE::paint(QPainter *painter)

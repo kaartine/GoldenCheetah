@@ -123,6 +123,7 @@ private:
     bool addressTypeChangedAfterFailure;
     QTimer *reconnectTimer;
     int reconnectAttempts;
+    bool reconnectNoticeShown;
     void getCadence(QDataStream& ds);
     void getWheelRpm(QDataStream& ds);
     void setLoadErg(double);

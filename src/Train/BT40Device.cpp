@@ -93,6 +93,7 @@ BT40Device::BT40Device(QObject *parent, QBluetoothDeviceInfo devinfo) : parent(p
     reconnectTimer->setInterval(5000); // 5 seconds
     connect(reconnectTimer, SIGNAL(timeout()), this, SLOT(attemptReconnect()));
     reconnectAttempts = 0;
+    reconnectNoticeShown = false;
 }
 
 BT40Device::~BT40Device()
@@ -122,6 +123,7 @@ BT40Device::disconnectDevice()
     connected = false;
     reconnectTimer->stop();
     reconnectAttempts = 0;
+    reconnectNoticeShown = false;
     m_control->disconnectFromDevice();
 }
 
@@ -143,12 +145,15 @@ BT40Device::deviceConnected()
     has_power = false;
     has_controllable_service = false;
     
-    // Stop reconnection timer if it's running
+    const bool wasReconnecting = reconnectTimer->isActive() || reconnectNoticeShown;
     if (reconnectTimer->isActive()) {
         reconnectTimer->stop();
-        reconnectAttempts = 0;
+    }
+    reconnectAttempts = 0;
+    if (wasReconnecting) {
         emit setNotification(tr("Reconnected to %1").arg(m_currentDevice.name()), 3);
     }
+    reconnectNoticeShown = false;
     
     m_control->discoverServices();
 }
@@ -179,7 +184,10 @@ BT40Device::controllerError(QLowEnergyController::Error error)
 
     if (connected && !reconnectTimer->isActive()) {
         reconnectAttempts = 0;
-        emit setNotification(tr("Unable to connect to %1, retrying...").arg(m_currentDevice.name()), 3);
+        if (!reconnectNoticeShown) {
+            emit setNotification(tr("Unable to connect to %1, retrying...").arg(m_currentDevice.name()), 3);
+            reconnectNoticeShown = true;
+        }
         reconnectTimer->start();
     }
 }
@@ -234,7 +242,10 @@ BT40Device::deviceDisconnected()
     // Try to reconnect if the connection was lost inadvertently
     if (connected) {
         reconnectAttempts = 0;
-        emit setNotification(tr("Lost connection to %1, attempting to reconnect...").arg(m_currentDevice.name()), 3);
+        if (!reconnectNoticeShown) {
+            emit setNotification(tr("Lost connection to %1, attempting to reconnect...").arg(m_currentDevice.name()), 3);
+            reconnectNoticeShown = true;
+        }
         emit reconnectScanRequested();
         reconnectTimer->start();
         attemptReconnect(); // Try immediately first
@@ -1018,8 +1029,7 @@ BT40Device::attemptReconnect()
 
     reconnectAttempts++;
     qDebug() << "Reconnection attempt" << reconnectAttempts << "for device" << m_currentDevice.name();
-    emit setNotification(tr("Reconnecting to %1 (attempt %2)...").arg(m_currentDevice.name()).arg(reconnectAttempts), 3);
-    
+
     this->connectDevice();
 }
 

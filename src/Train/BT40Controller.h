@@ -119,6 +119,8 @@ private slots:
 private:
     bool deviceAllowed(const QBluetoothDeviceInfo& info);
     bool allConfiguredDevicesFound() const;
+    void resetScanRetryState();
+    void scheduleScanRetry(const QString &firstNotice);
 
 private:
     QBluetoothDeviceDiscoveryAgent *discoveryAgent;
@@ -128,6 +130,8 @@ private:
     DeviceConfiguration* localDc;
     QList<DeviceInfo> allowedDevices;
     QTimer *scanRetryTimer;
+    int scanRetryDelayMs;
+    bool missingDeviceNoticeShown;
     bool running;
     QSet<BT40Device*> devicesAwaitingRediscovery;
 

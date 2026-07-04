@@ -64,7 +64,7 @@ void WorkoutWidget::adjustLayout()
         THEIGHT = 35 *dpiYFactor;
         BHEIGHT = 35 *dpiYFactor;
         LWIDTH = 65 *dpiXFactor;
-        RWIDTH = 35 *dpiXFactor;
+        RWIDTH = 80 *dpiXFactor;
         XTICLENGTH = 3 *dpiYFactor;
         YTICLENGTH = 0;
         XTICS = 20;

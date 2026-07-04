@@ -158,8 +158,16 @@ ErgFilePlot::ErgFilePlot(Context *context) : context(context)
     setAxisVisible(QwtAxis::YLeft, true);
     setAxisAutoScale(QwtAxis::YLeft, true);// we autoscale, since peaks are so much higher than troughs
 
-    setAxisScale(QwtAxis::YRight, 0, 250); // max cadence and hr
-    setAxisVisible(QwtAxis::YRight, false);
+    setAxisScale(QwtAxis::YRight, 0, 220, 50);
+    setAxisMaxMinor(QwtAxis::YRight, 0);
+    setAxisVisible(QwtAxis::YRight, true);
+    pal.setColor(QPalette::WindowText, GColor(CHEARTRATE));
+    pal.setColor(QPalette::Text, GColor(CHEARTRATE));
+    axisWidget(QwtAxis::YRight)->setPalette(pal);
+    QwtText heartRateTitle(tr("Heart Rate (bpm)"));
+    heartRateTitle.setFont(stGiles);
+    QwtPlot::setAxisFont(QwtAxis::YRight, stGiles);
+    QwtPlot::setAxisTitle(QwtAxis::YRight, heartRateTitle);
     setAxisScale(QwtAxisId(QwtAxis::YRight,2), 0, 60); // max speed of 60mph/60kmh seems ok to me!
     setAxisVisible(QwtAxisId(QwtAxis::YRight,2), false); // max speed of 60mph/60kmh seems ok to me!
     setAxisVisible(QwtAxisId(QwtAxis::YRight,2).id, false);
@@ -1008,6 +1016,7 @@ ErgFilePlot::updateCurves
     hrCurve->setPen(QPen(GColor(CHEARTRATE), _plotLineWidth));
     hrCurve->setRenderHint(QwtPlotItem::RenderAntialiased, antialias);
     hrCurve->setVisible(_showHrCurve);
+    setAxisVisible(QwtAxis::YRight, _showHrCurve);
     cadCurve->setPen(QPen(GColor(CCADENCE), _plotLineWidth));
     cadCurve->setRenderHint(QwtPlotItem::RenderAntialiased, antialias);
     cadCurve->setVisible(_showCadCurve);

@@ -186,6 +186,7 @@ class WorkoutWidget : public QWidget
         // we don't zoom/scroll the Y axis
         double maxY() { return maxY_; }
         double minY() { return 0.0f; } // might change later
+        int maxHr() { return hrMax; }
 
         // zoom in / zoom out / zoom to fit
         QPointF zoomIn();
