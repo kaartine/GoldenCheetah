@@ -24,6 +24,8 @@
 #include <QBluetoothLocalDevice>
 #include <QBluetoothDeviceDiscoveryAgent>
 #include <QBluetoothDeviceInfo>
+#include <QSet>
+#include <QTimer>
 #include "BT40Device.h"
 
 #ifndef _GC_BT40Controller_h
@@ -108,11 +110,15 @@ signals:
 
 private slots:
     void addDevice(const QBluetoothDeviceInfo&);
+    void startScan();
     void scanFinished();
     void deviceScanError(QBluetoothDeviceDiscoveryAgent::Error);
+    void rescanDevice();
+    void deviceConnectionRestored();
 
 private:
     bool deviceAllowed(const QBluetoothDeviceInfo& info);
+    bool allConfiguredDevicesFound() const;
 
 private:
     QBluetoothDeviceDiscoveryAgent *discoveryAgent;
@@ -121,6 +127,9 @@ private:
     QList<BT40Device*> devices;
     DeviceConfiguration* localDc;
     QList<DeviceInfo> allowedDevices;
+    QTimer *scanRetryTimer;
+    bool running;
+    QSet<BT40Device*> devicesAwaitingRediscovery;
 
     double load;
     double gradient;

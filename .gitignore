@@ -45,6 +45,7 @@ doc/doxygen/html
 
 # qt creator builds
 build-src*
+build-devcontainer/
 
 qwt/src/debug/
 qwt/src/release/

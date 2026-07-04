@@ -79,6 +79,8 @@ private slots:
 
 signals:
     void setNotification(QString msg, int timeout);
+    void reconnectScanRequested();
+    void connectionRestored();
 private:
     QObject *parent;
     QBluetoothDeviceInfo m_currentDevice;
@@ -101,6 +103,8 @@ private:
     double wheelSize;
     bool has_power;
     bool has_controllable_service;
+    bool heartRateSeen;
+    bool trainerDataSeen;
     CalibrationData calibrationData;
 
     // Service and Characteristic to set load
@@ -114,6 +118,9 @@ private:
     FtmsDeviceInformation ftmsDeviceInfo;
 
     bool connected;
+    QLowEnergyController::RemoteAddressType remoteAddressType;
+    bool addressTypeConfirmed;
+    bool addressTypeChangedAfterFailure;
     QTimer *reconnectTimer;
     int reconnectAttempts;
     void getCadence(QDataStream& ds);

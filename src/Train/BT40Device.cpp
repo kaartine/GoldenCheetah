@@ -64,6 +64,9 @@ BT40Device::BT40Device(QObject *parent, QBluetoothDeviceInfo devinfo) : parent(p
     connect(m_control, SIGNAL(discoveryFinished()), this, SLOT(serviceScanDone()), Qt::QueuedConnection);
 
     connected = false;
+    remoteAddressType = QLowEnergyController::RandomAddress;
+    addressTypeConfirmed = false;
+    addressTypeChangedAfterFailure = false;
     prevWheelTime = 0;
     prevWheelRevs = 0;
     prevWheelStaleness = true;
@@ -83,6 +86,8 @@ BT40Device::BT40Device(QObject *parent, QBluetoothDeviceInfo devinfo) : parent(p
     wheelSize = 2100;
     has_power = false;
     has_controllable_service = false;
+    heartRateSeen = false;
+    trainerDataSeen = false;
     
     reconnectTimer = new QTimer(this);
     reconnectTimer->setInterval(5000); // 5 seconds
@@ -99,10 +104,15 @@ BT40Device::~BT40Device()
 void
 BT40Device::connectDevice()
 {
-    qDebug() << "Connecting to device" << m_currentDevice.name() << " " << m_currentDevice.deviceUuid();
-    m_control->setRemoteAddressType(QLowEnergyController::RandomAddress);
-    m_control->connectToDevice();
+    if (m_control->state() != QLowEnergyController::UnconnectedState) return;
+
+    qDebug() << "Connecting to device" << m_currentDevice.name() << " "
+             << m_currentDevice.deviceUuid() << "using"
+             << (remoteAddressType == QLowEnergyController::RandomAddress ? "random" : "public") << "address";
+    m_control->setRemoteAddressType(remoteAddressType);
+    addressTypeChangedAfterFailure = false;
     connected = true;
+    m_control->connectToDevice();
 }
 
 void
@@ -118,7 +128,20 @@ BT40Device::disconnectDevice()
 void
 BT40Device::deviceConnected()
 {
-    qDebug() << "Connected to device" << m_currentDevice.name() << " " << m_currentDevice.deviceUuid();
+    qDebug() << "Connected to device" << m_currentDevice.name() << " " << m_currentDevice.deviceUuid()
+             << "using" << (remoteAddressType == QLowEnergyController::RandomAddress ? "random" : "public")
+             << "address";
+    addressTypeConfirmed = true;
+    addressTypeChangedAfterFailure = false;
+    emit connectionRestored();
+
+    // Service objects become invalid after a disconnect. Recreate them from
+    // the new connection instead of retaining stale notification handlers.
+    while (!m_services.isEmpty()) {
+        delete m_services.takeLast();
+    }
+    has_power = false;
+    has_controllable_service = false;
     
     // Stop reconnection timer if it's running
     if (reconnectTimer->isActive()) {
@@ -134,12 +157,39 @@ void
 BT40Device::controllerError(QLowEnergyController::Error error)
 {
     qWarning() << "Controller Error:" << error << "for device" << m_currentDevice.name() << " " << m_currentDevice.deviceUuid();
+
+    const bool connectionFailure =
+            error == QLowEnergyController::UnknownRemoteDeviceError ||
+            error == QLowEnergyController::NetworkError ||
+            error == QLowEnergyController::ConnectionError ||
+            error == QLowEnergyController::RemoteHostClosedError ||
+            error == QLowEnergyController::UnknownError;
+
+    if (connected && !addressTypeConfirmed && connectionFailure &&
+        !addressTypeChangedAfterFailure) {
+        remoteAddressType = remoteAddressType == QLowEnergyController::RandomAddress
+                ? QLowEnergyController::PublicAddress
+                : QLowEnergyController::RandomAddress;
+        addressTypeChangedAfterFailure = true;
+        qDebug() << "Will retry" << m_currentDevice.name() << "using"
+                 << (remoteAddressType == QLowEnergyController::RandomAddress ? "random" : "public") << "address";
+    }
+
+    if (connected && connectionFailure) emit reconnectScanRequested();
+
+    if (connected && !reconnectTimer->isActive()) {
+        reconnectAttempts = 0;
+        emit setNotification(tr("Unable to connect to %1, retrying...").arg(m_currentDevice.name()), 3);
+        reconnectTimer->start();
+    }
 }
 
 void
 BT40Device::deviceDisconnected()
 {
     qDebug() << "Lost connection to" << m_currentDevice.name() << " " << m_currentDevice.deviceUuid();
+    heartRateSeen = false;
+    trainerDataSeen = false;
 
     // Zero any readings provided by this device
     foreach (QLowEnergyService* const &service, m_services) {
@@ -185,6 +235,7 @@ BT40Device::deviceDisconnected()
     if (connected) {
         reconnectAttempts = 0;
         emit setNotification(tr("Lost connection to %1, attempting to reconnect...").arg(m_currentDevice.name()), 3);
+        emit reconnectScanRequested();
         reconnectTimer->start();
         attemptReconnect(); // Try immediately first
     }
@@ -270,7 +321,7 @@ BT40Device::serviceScanDone()
         connect(service, SIGNAL(characteristicRead(QLowEnergyCharacteristic,QByteArray)), this, SLOT(updateValue(QLowEnergyCharacteristic,QByteArray)));
         connect(service, SIGNAL(descriptorWritten(QLowEnergyDescriptor,QByteArray)), this, SLOT(confirmedDescriptorWrite(QLowEnergyDescriptor,QByteArray)));
         connect(service, SIGNAL(characteristicWritten(QLowEnergyCharacteristic,QByteArray)), this, SLOT(confirmedCharacteristicWrite(QLowEnergyCharacteristic,QByteArray)));
-        connect(service, SIGNAL(error(QLowEnergyService::ServiceError)), this, SLOT(serviceError(QLowEnergyService::ServiceError)));
+        connect(service, &QLowEnergyService::errorOccurred, this, &BT40Device::serviceError);
 
         if (service->serviceUuid() == QBluetoothUuid(QBluetoothUuid::ServiceClassUuid::CyclingPower)) {
             // Don't connect Cycling Power Service if there's already a controllable source that provides power.
@@ -514,19 +565,38 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
     ds.setByteOrder(QDataStream::LittleEndian); // Bluetooth data is always LE
 
     if (c.uuid() == QBluetoothUuid(QBluetoothUuid::CharacteristicType::HeartRateMeasurement)) {
+        if (value.size() < 2) {
+            qWarning() << "Invalid BTLE heart-rate payload from" << m_currentDevice.name()
+                       << value.toHex(':');
+            return;
+        }
+
         quint8 flags;
         ds >> flags;
-        float hr;
-        if (flags & 0x1) { // HR 16 bit? otherwise 8 bit
-            quint16 heartRate;
-            ds >> heartRate;
-            hr = (float) heartRate;
-        } else {
-            quint8 heartRate;
-            ds >> heartRate;
-            hr = (float) heartRate;
+        const int requiredBytes = (flags & 0x1) ? 3 : 2;
+        if (value.size() < requiredBytes) {
+            qWarning() << "Truncated BTLE heart-rate payload from" << m_currentDevice.name()
+                       << value.toHex(':');
+            return;
         }
-        dynamic_cast<BT40Controller*>(parent)->setBPM(hr);
+
+        quint16 heartRate;
+        if (flags & 0x1) { // HR 16 bit? otherwise 8 bit
+            ds >> heartRate;
+        } else {
+            quint8 heartRate8;
+            ds >> heartRate8;
+            heartRate = heartRate8;
+        }
+
+        if (!heartRateSeen) {
+            qDebug() << "Received first BTLE heart-rate sample from" << m_currentDevice.name()
+                     << heartRate << "bpm, payload" << value.toHex(':');
+            emit setNotification(tr("Receiving heart rate from %1: %2 bpm")
+                                 .arg(m_currentDevice.name()).arg(heartRate), 4);
+            heartRateSeen = true;
+        }
+        dynamic_cast<BT40Controller*>(parent)->setBPM(heartRate);
 
     } else if (c.uuid() == QBluetoothUuid(QBluetoothUuid::CharacteristicType::CyclingPowerMeasurement)) {
 
@@ -536,6 +606,14 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
         ds >> tmp_pwr;
         double power = (double) tmp_pwr;
         dynamic_cast<BT40Controller*>(parent)->setWatts(power);
+
+        if (!trainerDataSeen && power > 0) {
+            qDebug() << "Received first active cycling-power sample from" << m_currentDevice.name()
+                     << power << "W, payload" << value.toHex(':');
+            emit setNotification(tr("Receiving power from %1: %2 W")
+                                 .arg(m_currentDevice.name()).arg(power), 4);
+            trainerDataSeen = true;
+        }
 
         if (flags & 0x01) { // power balance present
             qint8 byte;
@@ -789,21 +867,37 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
         FtmsIndoorBikeData bd;
         ftms_parse_indoor_bike_data(ds, bd);
 
+        const bool hasPower = bd.flags & FtmsIndoorBikeFlags::FTMS_INST_POWER_PRESENT;
+        const bool hasCadence = bd.flags & FtmsIndoorBikeFlags::FTMS_INST_CADENCE_PRESENT;
+        const bool hasSpeed = !(bd.flags & FtmsIndoorBikeFlags::FTMS_MORE_DATA);
+        const double power = hasPower ? bd.inst_power : 0.0;
+        const double cadence = hasCadence ? bd.inst_cadence / 2.0f : 0.0;
+        const double speed = hasSpeed ? bd.inst_speed / 100.0f : 0.0;
+
         // Now update values of interest if they were present
-        if (bd.flags & FtmsIndoorBikeFlags::FTMS_INST_POWER_PRESENT)
+        if (hasPower)
         {
-            dynamic_cast<BT40Controller*>(parent)->setWatts(bd.inst_power);
+            dynamic_cast<BT40Controller*>(parent)->setWatts(power);
         }
 
-        if (bd.flags & FtmsIndoorBikeFlags::FTMS_INST_CADENCE_PRESENT)
+        if (hasCadence)
         {
-            dynamic_cast<BT40Controller*>(parent)->setCadence(bd.inst_cadence/2.0f);
+            dynamic_cast<BT40Controller*>(parent)->setCadence(cadence);
         }
 
-        if ( !(bd.flags & FtmsIndoorBikeFlags::FTMS_MORE_DATA) )
+        if (hasSpeed)
         {
             // If "more data" is false, inst speed is present. Convert to km/h by dividing with 100.
-            dynamic_cast<BT40Controller*>(parent)->setSpeed(bd.inst_speed/100.0f);
+            dynamic_cast<BT40Controller*>(parent)->setSpeed(speed);
+        }
+
+        if (!trainerDataSeen && (power > 0 || cadence > 0 || speed > 0)) {
+            qDebug() << "Received first active FTMS sample from" << m_currentDevice.name()
+                     << power << "W" << cadence << "rpm" << speed << "km/h, payload"
+                     << value.toHex(':');
+            emit setNotification(tr("Receiving trainer data from %1: %2 W, %3 rpm")
+                                 .arg(m_currentDevice.name()).arg(power).arg(cadence), 4);
+            trainerDataSeen = true;
         }
     } else if (c.uuid() == s_FtmsFeatureChar_UUID) {
         quint32 features, target_settings;
@@ -920,6 +1014,8 @@ BT40Device::attemptReconnect()
         return;
     }
     
+    if (m_control->state() != QLowEnergyController::UnconnectedState) return;
+
     reconnectAttempts++;
     qDebug() << "Reconnection attempt" << reconnectAttempts << "for device" << m_currentDevice.name();
     emit setNotification(tr("Reconnecting to %1 (attempt %2)...").arg(m_currentDevice.name()).arg(reconnectAttempts), 3);
@@ -930,9 +1026,14 @@ BT40Device::attemptReconnect()
 void
 BT40Device::confirmedDescriptorWrite(const QLowEnergyDescriptor &d, const QByteArray &value)
 {
-    if (d.isValid() && value == QByteArray("0000")) {
+    if (!d.isValid()) return;
+
+    if (value == QByteArray::fromHex("0000")) {
         qWarning() << "disabled BTLE notifications" << "for device" << m_currentDevice.name() << " " << m_currentDevice.deviceUuid();;
         this->disconnectDevice();
+    } else if (value == QByteArray::fromHex("0100")) {
+        qDebug() << "enabled BTLE notifications" << "for device" << m_currentDevice.name()
+                 << m_currentDevice.deviceUuid();
     }
 }
 

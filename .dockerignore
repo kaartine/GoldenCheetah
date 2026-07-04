@@ -1,0 +1,12 @@
+.git
+.github
+.idea
+.vscode
+build*
+src/.moc
+src/.obj
+src/.rcc
+src/.ui
+src/build
+*.user
+*.user.*
