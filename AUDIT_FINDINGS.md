@@ -46,17 +46,29 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-002: ZIP extraction permits path traversal and symlink escape
 
-- Status: OPEN
-- Code: `contrib/qzip/zip.cpp:933`, `src/FileIO/ArchiveFile.cpp:22`,
-  `src/Gui/RideImportWizard.cpp:459`, `src/Planning/PlanBundle.cpp:285`
-- Impact: Archive member paths and symlinks are used without rejecting absolute
-  paths, `..`, or links escaping the destination. Activity and plan imports can
-  overwrite arbitrary files writable by the user.
-- Test: Extract archives containing `../outside`, an absolute path, a symlink
-  target outside the root, and a file beneath an escaping symlink. Verify no
-  object is created outside the extraction directory.
-- Fix direction: Centralize safe extraction, reject links and unsafe names, and
-  verify normalized/canonical destinations remain below the extraction root.
+- Status: FIXED
+- Code: `contrib/qzip/zip.cpp`, `contrib/qzip/zipreader.h`,
+  `src/FileIO/ArchiveFile.cpp`, `src/FileIO/ArchiveFile.h`
+- Impact: Archive member paths and symlinks were used without rejecting
+  absolute paths, `..`, or links escaping the destination. Activity and plan
+  imports could overwrite arbitrary files writable by the user.
+- Test: Cover absolute, drive-prefixed, backslash, traversal, dot-component,
+  reserved-device, trailing-dot, archive-symlink, destination-symlink, root
+  symlink, existing-file, case-mismatch, Unicode-normalization, corrupt-data,
+  central-directory corruption,
+  selective-extraction, rollback, and valid nested-file cases.
+- Resolution: Extraction now validates and NFC-normalizes every member before
+  changing the filesystem, rejects non-portable aliases and links (including
+  Windows reparse points), detects case-folded collisions, and refuses existing
+  file targets. Selected members are matched exactly, decompressed and CRC
+  checked before writes, written through `QSaveFile`, and rolled back together
+  with newly created directories on later failure. Existing directory
+  permissions are never changed.
+- Verification: The focused QtTest suite first failed on the vulnerable cases
+  and now passes 26 tests. The same 26 tests pass under ASan and UBSan, the
+  application builds, and the full suite passes 113 tests with zero failures.
+- Scope: Archive resource-exhaustion limits remain tracked separately as
+  `PARSE-001`.
 
 ### SEC-003: Icon bundles permit arbitrary file overwrite
 

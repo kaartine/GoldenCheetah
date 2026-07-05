@@ -50,6 +50,16 @@
 #include <qendian.h>
 #include <qdebug.h>
 #include <qdir.h>
+#include <qhash.h>
+#include <qsavefile.h>
+#include <qset.h>
+
+#include <algorithm>
+#include <limits>
+
+#if defined(Q_OS_WIN)
+#include <qt_windows.h>
+#endif
 
 #ifdef Q_CC_MSVC
 #include <QtZlib\zlib.h>
@@ -504,87 +514,148 @@ void ZipReaderPrivate::scanFiles()
     if (!dirtyFileTree)
         return;
 
-    if (! (device->isOpen() || device->open(QIODevice::ReadOnly))) {
+    fileHeaders.clear();
+    comment.clear();
+
+    const auto failRead = [this](const char *message) {
+        if (message)
+            qWarning() << message;
+        status = ZipReader::FileReadError;
+        fileHeaders.clear();
+        comment.clear();
+    };
+
+    if (!(device->isOpen() || device->open(QIODevice::ReadOnly))) {
         status = ZipReader::FileOpenError;
         return;
     }
 
-    if ((device->openMode() & QIODevice::ReadOnly) == 0) { // only read the index from readable files.
+    if ((device->openMode() & QIODevice::ReadOnly) == 0) {
         status = ZipReader::FileReadError;
         return;
     }
 
     dirtyFileTree = false;
-    uchar tmp[4];
-    device->read((char *)tmp, 4);
-    if (readUInt(tmp) != 0x04034b50) {
-        qWarning() << "QZip: not a zip file!";
+    status = ZipReader::NoError;
+
+    uchar signature[4];
+    if (!device->seek(0)
+        || device->read(reinterpret_cast<char *>(signature), sizeof(signature))
+            != sizeof(signature)
+        || readUInt(signature) != 0x04034b50) {
+        failRead("QZip: not a zip file");
         return;
     }
 
-    // find EndOfDirectory header
-    int i = 0;
-    int start_of_directory = -1;
-    int num_dir_entries = 0;
+    int commentLengthFromEnd = 0;
+    qint64 endOfDirectoryPosition = -1;
     EndOfDirectory eod;
-    while (start_of_directory == -1) {
-        qint64 pos = device->size() - sizeof(EndOfDirectory) - i;
-        if (pos < 0 || i > 65535) {
-            qWarning() << "QZip: EndOfDirectory not found";
+    while (endOfDirectoryPosition < 0) {
+        if (commentLengthFromEnd > 65535) {
+            failRead("QZip: EndOfDirectory not found");
             return;
         }
 
-        device->seek(pos);
-        device->read((char *)&eod, sizeof(EndOfDirectory));
+        const qint64 position =
+            device->size() - sizeof(EndOfDirectory) - commentLengthFromEnd;
+        if (position < 0
+            || !device->seek(position)
+            || device->read(
+                   reinterpret_cast<char *>(&eod),
+                   sizeof(EndOfDirectory)) != sizeof(EndOfDirectory)) {
+            failRead("QZip: EndOfDirectory not found");
+            return;
+        }
         if (readUInt(eod.signature) == 0x06054b50)
-            break;
-        ++i;
+            endOfDirectoryPosition = position;
+        else
+            ++commentLengthFromEnd;
     }
 
-    // have the eod
-    start_of_directory = readUInt(eod.dir_start_offset);
-    num_dir_entries = readUShort(eod.num_dir_entries);
-    ZDEBUG("start_of_directory at %d, num_dir_entries=%d", start_of_directory, num_dir_entries);
-    int comment_length = readUShort(eod.comment_length);
-    if (comment_length != i)
-        qWarning() << "QZip: failed to parse zip file.";
-    comment = device->read(qMin(comment_length, i));
+    const int commentLength = readUShort(eod.comment_length);
+    const int entryCount = readUShort(eod.num_dir_entries);
+    const quint32 directoryOffset = readUInt(eod.dir_start_offset);
+    const quint32 directorySize = readUInt(eod.directory_size);
+    if (commentLength != commentLengthFromEnd
+        || readUShort(eod.this_disk) != 0
+        || readUShort(eod.start_of_directory_disk) != 0
+        || readUShort(eod.num_dir_entries_this_disk) != entryCount
+        || entryCount == 0xffff
+        || directoryOffset == 0xffffffffU
+        || directorySize == 0xffffffffU) {
+        failRead("QZip: invalid EndOfDirectory record");
+        return;
+    }
 
+    const qint64 directoryStart = directoryOffset;
+    const qint64 directoryEnd = directoryStart + directorySize;
+    if (directoryEnd < directoryStart
+        || directoryEnd != endOfDirectoryPosition) {
+        failRead("QZip: invalid central directory bounds");
+        return;
+    }
 
-    device->seek(start_of_directory);
-    for (i = 0; i < num_dir_entries; ++i) {
+    if (commentLength > 0) {
+        comment = device->read(commentLength);
+        if (comment.size() != commentLength) {
+            failRead("QZip: failed to read archive comment");
+            return;
+        }
+    }
+
+    if (!device->seek(directoryStart)) {
+        failRead("QZip: failed to seek to central directory");
+        return;
+    }
+
+    const auto readField =
+        [this, directoryEnd](int length, QByteArray *target) {
+            if (length < 0
+                || device->pos() < 0
+                || device->pos() > directoryEnd - length) {
+                return false;
+            }
+            *target = device->read(length);
+            return target->size() == length;
+        };
+
+    for (int index = 0; index < entryCount; ++index) {
+        if (device->pos() < 0
+            || device->pos() > directoryEnd
+                - static_cast<qint64>(sizeof(CentralFileHeader))) {
+            failRead("QZip: incomplete central directory header");
+            return;
+        }
+
         FileHeader header;
-        int read = device->read((char *) &header.h, sizeof(CentralFileHeader));
-        if (read < (int)sizeof(CentralFileHeader)) {
-            qWarning() << "QZip: Failed to read complete header, index may be incomplete";
-            break;
-        }
-        if (readUInt(header.h.signature) != 0x02014b50) {
-            qWarning() << "QZip: invalid header signature, index may be incomplete";
-            break;
+        if (device->read(
+                reinterpret_cast<char *>(&header.h),
+                sizeof(CentralFileHeader)) != sizeof(CentralFileHeader)
+            || readUInt(header.h.signature) != 0x02014b50) {
+            failRead("QZip: invalid central directory header");
+            return;
         }
 
-        int l = readUShort(header.h.file_name_length);
-        header.file_name = device->read(l);
-        if (header.file_name.length() != l) {
-            qWarning() << "QZip: Failed to read filename from zip index, index may be incomplete";
-            break;
-        }
-        l = readUShort(header.h.extra_field_length);
-        header.extra_field = device->read(l);
-        if (header.extra_field.length() != l) {
-            qWarning() << "QZip: Failed to read extra field in zip file, skipping file, index may be incomplete";
-            break;
-        }
-        l = readUShort(header.h.file_comment_length);
-        header.file_comment = device->read(l);
-        if (header.file_comment.length() != l) {
-            qWarning() << "QZip: Failed to read read file comment, index may be incomplete";
-            break;
+        if (!readField(
+                readUShort(header.h.file_name_length),
+                &header.file_name)
+            || !readField(
+                readUShort(header.h.extra_field_length),
+                &header.extra_field)
+            || !readField(
+                readUShort(header.h.file_comment_length),
+                &header.file_comment)) {
+            failRead("QZip: incomplete central directory entry");
+            return;
         }
 
         ZDEBUG("found file '%s'", header.file_name.data());
         fileHeaders.append(header);
+    }
+
+    if (device->pos() != directoryEnd) {
+        failRead("QZip: central directory size does not match entry count");
+        return;
     }
 }
 
@@ -860,123 +931,441 @@ ZipReader::FileInfo ZipReader::entryInfoAt(int index) const
 */
 QByteArray ZipReader::fileData(const QString &fileName) const
 {
+    QByteArray data;
+    if (!fileData(fileName, &data))
+        return QByteArray();
+    return data;
+}
+
+bool ZipReader::fileData(const QString &fileName, QByteArray *data) const
+{
+    if (!data)
+        return false;
+    data->clear();
+
     d->scanFiles();
-    int i;
-    for (i = 0; i < d->fileHeaders.size(); ++i) {
-        if (QString::fromLocal8Bit(d->fileHeaders.at(i).file_name) == fileName)
+    if (d->status != ZipReader::NoError)
+        return false;
+
+    int index = 0;
+    for (; index < d->fileHeaders.size(); ++index) {
+        if (QString::fromLocal8Bit(d->fileHeaders.at(index).file_name) == fileName)
             break;
     }
-    if (i == d->fileHeaders.size())
-        return QByteArray();
+    if (index == d->fileHeaders.size())
+        return false;
 
-    FileHeader header = d->fileHeaders.at(i);
-
-    int compressed_size = readUInt(header.h.compressed_size);
-    int uncompressed_size = readUInt(header.h.uncompressed_size);
-    int start = readUInt(header.h.offset_local_header);
-    //qDebug("uncompressing file %d: local header at %d", i, start);
-
-    d->device->seek(start);
-    LocalFileHeader lh;
-    d->device->read((char *)&lh, sizeof(LocalFileHeader));
-    uint skip = readUShort(lh.file_name_length) + readUShort(lh.extra_field_length);
-    d->device->seek(d->device->pos() + skip);
-
-    int compression_method = readUShort(lh.compression_method);
-    //qDebug("file=%s: compressed_size=%d, uncompressed_size=%d", fileName.toLocal8Bit().data(), compressed_size, uncompressed_size);
-
-    //qDebug("file at %lld", d->device->pos());
-    QByteArray compressed = d->device->read(compressed_size);
-    if (compression_method == 0) {
-        // no compression
-        compressed.truncate(uncompressed_size);
-        return compressed;
-    } else if (compression_method == 8) {
-        // Deflate
-        //qDebug("compressed=%d", compressed.size());
-        compressed.truncate(compressed_size);
-        QByteArray baunzip;
-        ulong len = qMax(uncompressed_size,  1);
-        int res;
-        do {
-            baunzip.resize(len);
-            res = inflate((uchar*)baunzip.data(), &len,
-                          (uchar*)compressed.constData(), compressed_size);
-
-            switch (res) {
-            case Z_OK:
-                if ((int)len != baunzip.size())
-                    baunzip.resize(len);
-                break;
-            case Z_MEM_ERROR:
-                qWarning("QZip: Z_MEM_ERROR: Not enough memory");
-                break;
-            case Z_BUF_ERROR:
-                len *= 2;
-                break;
-            case Z_DATA_ERROR:
-                qWarning("QZip: Z_DATA_ERROR: Input data is corrupted");
-                break;
-            }
-        } while (res == Z_BUF_ERROR);
-        return baunzip;
+    const FileHeader header = d->fileHeaders.at(index);
+    const uint compressedSize = readUInt(header.h.compressed_size);
+    const uint uncompressedSize = readUInt(header.h.uncompressed_size);
+    const uint maximumByteArraySize =
+        static_cast<uint>(std::numeric_limits<int>::max());
+    if (compressedSize > maximumByteArraySize
+        || uncompressedSize > maximumByteArraySize) {
+        return false;
     }
-    qWarning() << "QZip: Unknown compression method";
-    return QByteArray();
+
+    const uint start = readUInt(header.h.offset_local_header);
+    if (!d->device->seek(start))
+        return false;
+
+    LocalFileHeader localHeader;
+    if (d->device->read(reinterpret_cast<char *>(&localHeader),
+                        sizeof(LocalFileHeader)) != sizeof(LocalFileHeader)
+        || readUInt(localHeader.signature) != 0x04034b50) {
+        return false;
+    }
+
+    const uint skip = readUShort(localHeader.file_name_length)
+        + readUShort(localHeader.extra_field_length);
+    const qint64 payloadPosition = d->device->pos() + skip;
+    if (payloadPosition < d->device->pos()
+        || !d->device->seek(payloadPosition)) {
+        return false;
+    }
+
+    const int compressionMethod = readUShort(localHeader.compression_method);
+    if (compressionMethod != readUShort(header.h.compression_method))
+        return false;
+
+    const QByteArray compressed = d->device->read(compressedSize);
+    if (compressed.size() != static_cast<int>(compressedSize))
+        return false;
+
+    QByteArray uncompressed;
+    if (compressionMethod == 0) {
+        if (compressedSize != uncompressedSize)
+            return false;
+        uncompressed = compressed;
+    } else if (compressionMethod == 8) {
+        uncompressed.resize(qMax(static_cast<int>(uncompressedSize), 1));
+        ulong length = static_cast<ulong>(uncompressed.size());
+        const int result = inflate(
+            reinterpret_cast<uchar *>(uncompressed.data()),
+            &length,
+            reinterpret_cast<const uchar *>(compressed.constData()),
+            compressedSize);
+        if (result != Z_OK || length != uncompressedSize)
+            return false;
+        uncompressed.resize(static_cast<int>(uncompressedSize));
+    } else {
+        return false;
+    }
+
+    uLong checksum = crc32(0L, Z_NULL, 0);
+    checksum = crc32(
+        checksum,
+        reinterpret_cast<const Bytef *>(uncompressed.constData()),
+        static_cast<uInt>(uncompressed.size()));
+    if (static_cast<uint>(checksum) != readUInt(header.h.crc_32))
+        return false;
+
+    *data = uncompressed;
+    return true;
+}
+
+struct ZipExtractionEntry
+{
+    ZipReader::FileInfo info;
+    QString relativePath;
+    bool selected;
+    QByteArray contents;
+};
+
+static bool isWindowsDeviceName(const QString &component)
+{
+    static const QSet<QString> deviceNames = {
+        QStringLiteral("CON"), QStringLiteral("PRN"),
+        QStringLiteral("AUX"), QStringLiteral("NUL"),
+        QStringLiteral("COM1"), QStringLiteral("COM2"),
+        QStringLiteral("COM3"), QStringLiteral("COM4"),
+        QStringLiteral("COM5"), QStringLiteral("COM6"),
+        QStringLiteral("COM7"), QStringLiteral("COM8"),
+        QStringLiteral("COM9"), QStringLiteral("LPT1"),
+        QStringLiteral("LPT2"), QStringLiteral("LPT3"),
+        QStringLiteral("LPT4"), QStringLiteral("LPT5"),
+        QStringLiteral("LPT6"), QStringLiteral("LPT7"),
+        QStringLiteral("LPT8"), QStringLiteral("LPT9")
+    };
+    return deviceNames.contains(component.section(QLatin1Char('.'), 0, 0).toUpper());
+}
+
+static bool normalizedArchivePath(const ZipReader::FileInfo &fileInfo,
+                                  QString *relativePath)
+{
+    QString path = fileInfo.filePath;
+    if (fileInfo.isSymLink || path.isEmpty()
+        || path.contains(QChar::Null)
+        || path.contains(QLatin1Char('\\'))
+        || path.contains(QLatin1Char(':'))
+        || QDir::isAbsolutePath(path)
+        || path.startsWith(QLatin1Char('/'))) {
+        return false;
+    }
+
+    if (fileInfo.isDir && path.endsWith(QLatin1Char('/')))
+        path.chop(1);
+    if (path.isEmpty() || path.endsWith(QLatin1Char('/')))
+        return false;
+
+    const QStringList components = path.split(QLatin1Char('/'), Qt::KeepEmptyParts);
+    QStringList normalizedComponents;
+    for (const QString &component : components) {
+        const QString normalizedComponent =
+            component.normalized(QString::NormalizationForm_C);
+        if (normalizedComponent.isEmpty()
+            || normalizedComponent == QLatin1String(".")
+            || normalizedComponent == QLatin1String("..")
+            || normalizedComponent.endsWith(QLatin1Char('.'))
+            || normalizedComponent.endsWith(QLatin1Char(' '))
+            || isWindowsDeviceName(normalizedComponent)) {
+            return false;
+        }
+        normalizedComponents.append(normalizedComponent);
+    }
+
+    const QString normalized = normalizedComponents.join(QLatin1Char('/'));
+    if (QDir::cleanPath(normalized) != normalized)
+        return false;
+
+    *relativePath = normalized;
+    return true;
+}
+
+static bool fileSystemPathIsLink(const QFileInfo &fileInfo)
+{
+#if defined(Q_OS_WIN)
+    const QString nativePath =
+        QDir::toNativeSeparators(fileInfo.absoluteFilePath());
+    const DWORD attributes = GetFileAttributesW(
+        reinterpret_cast<LPCWSTR>(nativePath.utf16()));
+    if (attributes != INVALID_FILE_ATTRIBUTES
+        && (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+        return true;
+    }
+#endif
+    return fileInfo.isSymLink();
+}
+
+static bool destinationPathIsSafe(const QDir &baseDir,
+                                  const QString &relativePath,
+                                  bool directory)
+{
+    QString currentPath = baseDir.absolutePath();
+    const QStringList components =
+        relativePath.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+
+    for (int index = 0; index < components.size(); ++index) {
+        currentPath = QDir(currentPath).filePath(components.at(index));
+        const QFileInfo currentInfo(currentPath);
+        if (fileSystemPathIsLink(currentInfo))
+            return false;
+        if (!currentInfo.exists())
+            continue;
+
+        const bool mustBeDirectory =
+            directory || index < components.size() - 1;
+        if (!mustBeDirectory)
+            return false;
+        if (!currentInfo.isDir())
+            return false;
+    }
+    return true;
+}
+
+static bool pathContainsSymlink(QString absolutePath)
+{
+    absolutePath = QDir::cleanPath(absolutePath);
+    while (true) {
+        const QFileInfo pathInfo(absolutePath);
+        if (fileSystemPathIsLink(pathInfo))
+            return true;
+
+        const QString parentPath = pathInfo.dir().absolutePath();
+        if (parentPath == absolutePath)
+            return false;
+        absolutePath = parentPath;
+    }
+}
+
+static bool createDirectoryPath(const QDir &baseDir,
+                                const QString &relativePath,
+                                QStringList *createdDirectories)
+{
+    if (relativePath.isEmpty() || relativePath == QLatin1String("."))
+        return true;
+
+    QString currentAbsolutePath = baseDir.absolutePath();
+    QString currentRelativePath;
+    const QStringList components =
+        relativePath.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (const QString &component : components) {
+        const QString parentAbsolutePath = currentAbsolutePath;
+        currentAbsolutePath =
+            QDir(parentAbsolutePath).filePath(component);
+        if (!currentRelativePath.isEmpty())
+            currentRelativePath.append(QLatin1Char('/'));
+        currentRelativePath.append(component);
+
+        const QFileInfo existingInfo(currentAbsolutePath);
+        if (fileSystemPathIsLink(existingInfo))
+            return false;
+        if (existingInfo.exists()) {
+            if (!existingInfo.isDir())
+                return false;
+            continue;
+        }
+
+        if (!QDir(parentAbsolutePath).mkdir(component))
+            return false;
+        createdDirectories->append(currentRelativePath);
+
+        const QFileInfo createdInfo(currentAbsolutePath);
+        if (fileSystemPathIsLink(createdInfo) || !createdInfo.isDir())
+            return false;
+    }
+    return true;
 }
 
 /*!
-    Extracts the full contents of the zip file into \a destinationDir on
-    the local filesystem.
-    In case writing or linking a file fails, the extraction will be aborted.
+    Extracts the selected contents of the zip file into \a destinationDir.
+    All member names are validated before the filesystem is changed. If
+    \a allowedRelativeFiles is null, every regular file is selected.
 */
-bool ZipReader::extractAll(const QString &destinationDir) const
+bool ZipReader::extractAll(const QString &destinationDir,
+                           QStringList *extractedRelativeFiles,
+                           const QList<QString> *allowedRelativeFiles) const
 {
-    QDir baseDir(destinationDir);
+    if (extractedRelativeFiles)
+        extractedRelativeFiles->clear();
 
-    // create directories first
-    QList<FileInfo> allFiles = fileInfoList();
-    foreach (FileInfo fi, allFiles) {
-        const QString absPath = destinationDir + QDir::separator() + fi.filePath;
-        if (fi.isDir) {
-            if (!baseDir.mkpath(fi.filePath))
+    QSet<QString> allowedPaths;
+    if (allowedRelativeFiles) {
+        for (const QString &requestedPath : *allowedRelativeFiles) {
+            FileInfo requestedInfo;
+            requestedInfo.filePath = requestedPath;
+            QString normalizedPath;
+            if (!normalizedArchivePath(requestedInfo, &normalizedPath))
                 return false;
-            if (fi.permissions > 0 && !QFile::setPermissions(absPath, fi.permissions))
+            allowedPaths.insert(normalizedPath);
+        }
+    }
+
+    const QString rootPath = QDir(destinationDir).absolutePath();
+    const QFileInfo rootInfo(rootPath);
+    if (pathContainsSymlink(rootPath)
+        || (rootInfo.exists() && !rootInfo.isDir()))
+        return false;
+
+    const QDir baseDir(rootPath);
+    const QList<FileInfo> allFiles = fileInfoList();
+    if (status() != NoError)
+        return false;
+
+    QList<ZipExtractionEntry> entries;
+    QHash<QString, bool> entryTypes;
+
+    // Validate the complete archive before creating any filesystem objects.
+    for (const FileInfo &fileInfo : allFiles) {
+        QString relativePath;
+        if (!normalizedArchivePath(fileInfo, &relativePath))
+            return false;
+
+        const QString key = relativePath.toCaseFolded();
+        if (entryTypes.contains(key))
+            return false;
+
+        entryTypes.insert(key, fileInfo.isDir);
+        const bool selected = !allowedRelativeFiles
+            || (!fileInfo.isDir && allowedPaths.contains(relativePath));
+        entries.append({ fileInfo, relativePath, selected, QByteArray() });
+
+        if (!destinationPathIsSafe(baseDir, relativePath, fileInfo.isDir))
+            return false;
+    }
+
+    // A file entry may not be used as a parent by another archive member.
+    for (const ZipExtractionEntry &entry : entries) {
+        const QStringList components =
+            entry.relativePath.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+        QString parentPath;
+        for (int index = 0; index < components.size() - 1; ++index) {
+            if (!parentPath.isEmpty())
+                parentPath.append(QLatin1Char('/'));
+            parentPath.append(components.at(index));
+
+            const auto parent = entryTypes.constFind(parentPath.toCaseFolded());
+            if (parent != entryTypes.constEnd() && !parent.value())
                 return false;
         }
     }
 
-    // set up symlinks
-    foreach (FileInfo fi, allFiles) {
-        const QString absPath = destinationDir + QDir::separator() + fi.filePath;
-        if (fi.isSymLink) {
-            QString destination = QFile::decodeName(fileData(fi.filePath));
-            if (destination.isEmpty())
-                return false;
-            QFileInfo linkFi(absPath);
-            if (!QFile::exists(linkFi.absolutePath()))
-                QDir::root().mkpath(linkFi.absolutePath());
-            if (!QFile::link(destination, absPath))
-                return false;
-            /* cannot change permission of links
-            if (!QFile::setPermissions(absPath, fi.permissions))
-                return false;
-            */
+    // Validate and decompress selected members before writing anything.
+    for (ZipExtractionEntry &entry : entries) {
+        if (!entry.selected || entry.info.isDir)
+            continue;
+        if (!fileData(entry.info.filePath, &entry.contents)
+            || entry.contents.size() != entry.info.size) {
+            return false;
         }
     }
 
-    foreach (FileInfo fi, allFiles) {
-        const QString absPath = destinationDir + QDir::separator() + fi.filePath;
-        if (!fi.isDir && !fi.isSymLink) { // is file not always set correctly!?
-            QFile f(absPath);
-            if (!f.open(QIODevice::WriteOnly))
-                return false;
-            f.write(fileData(fi.filePath));
-            if (fi.permissions > 0) f.setPermissions(fi.permissions);
-            f.close();
+    const bool rootExisted = rootInfo.exists();
+    if (!QDir().mkpath(rootPath))
+        return false;
+    if (pathContainsSymlink(rootPath)) {
+        if (!rootExisted)
+            QDir().rmdir(rootPath);
+        return false;
+    }
+
+    QStringList extracted;
+    QStringList createdDirectories;
+    const auto rollback = [&]() {
+        const QFile::Permissions ownerDirectoryPermissions =
+            QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner;
+        for (const QString &relativePath : createdDirectories) {
+            QFile::setPermissions(
+                baseDir.absoluteFilePath(relativePath),
+                ownerDirectoryPermissions);
+        }
+        for (const QString &relativePath : extracted) {
+            QFile output(baseDir.absoluteFilePath(relativePath));
+            output.setPermissions(QFile::ReadOwner | QFile::WriteOwner);
+            output.remove();
+        }
+        for (int index = createdDirectories.size() - 1; index >= 0; --index)
+            QDir().rmdir(baseDir.absoluteFilePath(createdDirectories.at(index)));
+        if (!rootExisted)
+            QDir().rmdir(rootPath);
+        extracted.clear();
+        return false;
+    };
+
+    // Create explicit directory entries before regular files.
+    for (const ZipExtractionEntry &entry : entries) {
+        if (!entry.selected || !entry.info.isDir)
+            continue;
+        if (!destinationPathIsSafe(baseDir, entry.relativePath, true)
+            || !createDirectoryPath(
+                baseDir, entry.relativePath, &createdDirectories)) {
+            return rollback();
+        }
+    }
+    for (const ZipExtractionEntry &entry : entries) {
+        if (!entry.selected || entry.info.isDir)
+            continue;
+
+        const QString parentPath = QFileInfo(entry.relativePath).path();
+        if (!createDirectoryPath(
+                baseDir, parentPath, &createdDirectories)) {
+            return rollback();
+        }
+        if (!destinationPathIsSafe(baseDir, entry.relativePath, false))
+            return rollback();
+
+        QSaveFile output(baseDir.absoluteFilePath(entry.relativePath));
+        if (!output.open(QIODevice::WriteOnly)
+            || output.write(entry.contents) != entry.contents.size()) {
+            output.cancelWriting();
+            return rollback();
+        }
+        if (entry.info.permissions > 0
+            && !output.setPermissions(entry.info.permissions)) {
+            output.cancelWriting();
+            return rollback();
+        }
+        if (!output.commit())
+            return rollback();
+
+        extracted.append(entry.relativePath);
+    }
+
+    QList<const ZipExtractionEntry *> directoriesToFinalize;
+    for (const ZipExtractionEntry &entry : entries) {
+        if (entry.selected && entry.info.isDir
+            && entry.info.permissions > 0
+            && createdDirectories.contains(entry.relativePath)) {
+            directoriesToFinalize.append(&entry);
+        }
+    }
+    std::sort(
+        directoriesToFinalize.begin(),
+        directoriesToFinalize.end(),
+        [](const ZipExtractionEntry *left, const ZipExtractionEntry *right) {
+            return left->relativePath.count(QLatin1Char('/'))
+                > right->relativePath.count(QLatin1Char('/'));
+        });
+    for (const ZipExtractionEntry *entry : directoriesToFinalize) {
+        if (!QFile::setPermissions(
+                baseDir.absoluteFilePath(entry->relativePath),
+                entry->info.permissions)) {
+            return rollback();
         }
     }
 
+    if (extractedRelativeFiles)
+        *extractedRelativeFiles = extracted;
     return true;
 }
 

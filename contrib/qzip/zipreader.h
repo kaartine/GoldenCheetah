@@ -58,6 +58,7 @@
 #include <QtCore/qdatetime.h>
 #include <QtCore/qfile.h>
 #include <QtCore/qstring.h>
+#include <QtCore/qstringlist.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -99,7 +100,10 @@ public:
 
     FileInfo entryInfoAt(int index) const;
     QByteArray fileData(const QString &fileName) const;
-    bool extractAll(const QString &destinationDir) const;
+    bool fileData(const QString &fileName, QByteArray *data) const;
+    bool extractAll(const QString &destinationDir,
+                    QStringList *extractedRelativeFiles = nullptr,
+                    const QList<QString> *allowedRelativeFiles = nullptr) const;
 
     enum Status {
         NoError,

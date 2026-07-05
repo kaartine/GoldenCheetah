@@ -18,9 +18,11 @@
 
 #ifndef _GC_Archive_h
 #define _GC_Archive_h 1
-#include "GoldenCheetah.h"
 
+#include <QList>
 #include <QObject>
+#include <QString>
+#include <QStringList>
 
 class Archive : public QObject
 {

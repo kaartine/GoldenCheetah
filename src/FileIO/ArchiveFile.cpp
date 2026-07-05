@@ -19,18 +19,24 @@
 #include "ArchiveFile.h"
 #include "../qzip/zipreader.h"
 
+#include <QDir>
+#include <QFileInfo>
+
 QStringList Archive::extract(QString name, QList<QString> want, QString folder)
 {
-    QStringList returning;
-
-    foreach(QString filename, want)
-        returning  << folder + "/" + filename;
-
     ZipReader czip(name);
+    QStringList extracted;
+    if (!czip.extractAll(folder, &extracted, &want))
+        return QStringList();
 
-    // slight bug, we extract all, not selective
-    czip.extractAll(folder);
-
+    QStringList returning;
+    const QDir outputDirectory(folder);
+    for (const QString &filename : want) {
+        const QString normalizedFilename =
+            filename.normalized(QString::NormalizationForm_C);
+        if (extracted.contains(normalizedFilename))
+            returning << outputDirectory.filePath(normalizedFilename);
+    }
     return returning;
 }
 

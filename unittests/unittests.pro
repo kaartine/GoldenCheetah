@@ -12,6 +12,7 @@ equals(GC_UNITTESTS, active) {
 			   Core/utils \
 			   Core/signalSafety \
 			   Core/splineCrash \
+			   FileIO/archiveSecurity \
 			   Gui/calendarData \
 			   Gui/perspectiveStateSource \
 			   Gui/trainPerspectiveState
