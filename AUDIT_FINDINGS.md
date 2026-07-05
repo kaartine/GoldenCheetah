@@ -72,16 +72,27 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-003: Icon bundles permit arbitrary file overwrite
 
-- Status: OPEN
-- Code: `src/Gui/Pages.cpp:2397`, `src/Gui/IconManager.cpp:217`,
-  `src/Gui/IconManager.cpp:234`
-- Impact: `icons.zip` is downloaded over HTTP and each member name is passed to
-  `QDir::absoluteFilePath` without containment checks. Both downloaded and local
-  bundles can overwrite arbitrary user files.
-- Test: Import a bundle containing traversal and absolute paths and verify the
-  icon directory is the only location modified.
-- Fix direction: Reuse the safe archive API from SEC-002, require authenticated
-  HTTPS for downloaded bundles, and validate bundle contents before writing.
+- Status: FIXED
+- Code: `src/Gui/IconManager.cpp`, `src/Gui/IconManager.h`,
+  `src/Gui/Pages.cpp`
+- Impact: `icons.zip` was downloaded over HTTP and each member name was passed
+  to `QDir::absoluteFilePath` without containment checks. Both downloaded and
+  local bundles could overwrite arbitrary user files.
+- Test: Reject traversal, absolute paths, archive links, aliases, corrupt data,
+  invalid mappings and SVGs, destination links, promotion-time redirection,
+  cleartext HTTP, HTTPS downgrade, and TLS errors without changing icon state.
+- Resolution: Bundle members are validated and extracted into temporary
+  staging before atomic per-file promotion. Destination ancestors and targets
+  are checked for links or Windows reparse points immediately before each
+  commit, failures roll back, and `mapping.json` is published last. Downloads
+  require peer-verified HTTPS with no downgrade and a final 2xx response.
+- Verification: The focused normal and ASan/UBSan suites each pass 36 tests,
+  the aggregate suite passes 317 tests, and `IconManager.o` and `Pages.o`
+  compile in the Qt 6.8.3 development container.
+- Residual: A process or power failure between file commits can leave mixed
+  icon versions inside `.icons`. Cross-file crash atomicity would require
+  immutable versioned bundles plus one atomic pointer or manifest switch; this
+  does not permit writes outside `.icons`.
 
 ### MEM-001: WKO import contains attacker-controlled buffer overflows
 

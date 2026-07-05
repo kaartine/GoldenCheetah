@@ -2395,6 +2395,7 @@ IconsPage::IconsPage
 
     connect(downloadButton, &QPushButton::clicked, this, [this]() {
         QUrl url(QString("%1/icons.zip").arg(VERSION_CONFIG_PREFIX));
+        url.setScheme("https");
         if (IconManager::instance().importBundle(url)) {
             initSportTree();
             updateIconList();

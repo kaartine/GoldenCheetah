@@ -15,6 +15,7 @@ equals(GC_UNITTESTS, active) {
 			   FileIO/archiveSecurity \
 			   FileIO/wkoBounds \
 			   Gui/calendarData \
+			   Gui/iconBundleSecurity \
 			   Gui/perspectiveStateSource \
 			   Gui/trainPerspectiveState \
 			   Train/antBurstBounds \

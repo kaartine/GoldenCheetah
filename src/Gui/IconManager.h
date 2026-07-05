@@ -21,6 +21,10 @@
 
 #include <memory>
 
+#if defined(GC_ICON_BUNDLE_SECURITY_TEST)
+#include <functional>
+#endif
+
 #include <QString>
 #include <QHash>
 #include <QDir>
@@ -57,6 +61,11 @@ public:
     bool importBundle(std::unique_ptr<QIODevice> device);
 
     bool saveConfig() const;
+
+#if defined(GC_ICON_BUNDLE_SECURITY_TEST)
+    using BundleCommitHook = std::function<bool(const QString &, int)>;
+    static void setBundleCommitHookForTest(BundleCommitHook hook);
+#endif
 
 private:
     IconManager();
