@@ -18,9 +18,15 @@ class PythonDataSeries {
     public:
         PythonDataSeries(QString name, Py_ssize_t count, bool readOnly, RideFile::SeriesType seriesType, RideFile *rideFile);
         PythonDataSeries(QString name, Py_ssize_t count);
-        PythonDataSeries(PythonDataSeries*);
         PythonDataSeries();
+        PythonDataSeries(const PythonDataSeries &other);
+        PythonDataSeries(PythonDataSeries &&other) noexcept;
+        // Takes ownership of a heap-allocated series returned through SIP.
+        explicit PythonDataSeries(PythonDataSeries *ownedSeries);
         ~PythonDataSeries();
+
+        PythonDataSeries &operator=(const PythonDataSeries &other);
+        PythonDataSeries &operator=(PythonDataSeries &&other) noexcept;
 
         QString name;
         Py_ssize_t count;
@@ -29,6 +35,9 @@ class PythonDataSeries {
         bool readOnly;
         int seriesType;
         RideFile *rideFile;
+
+    private:
+        void swap(PythonDataSeries &other) noexcept;
 };
 
 class PythonXDataSeries {

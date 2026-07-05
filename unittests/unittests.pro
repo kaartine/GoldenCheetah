@@ -19,6 +19,7 @@ equals(GC_UNITTESTS, active) {
 			   Gui/iconBundleSecurity \
 			   Gui/perspectiveStateSource \
 			   Gui/trainPerspectiveState \
+			   Python/pythonDataSeriesOwnership \
 			   Train/antBurstBounds \
 			   Train/kineticPacketBounds
 	CONFIG += ordered

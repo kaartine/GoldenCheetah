@@ -1,0 +1,67 @@
+# PYTHONINCLUDES is the canonical GoldenCheetah/qmake setting. If it is not
+# configured, also support PYTHONHOME and the usual Unix python-config helper.
+PYTHON_DATA_SERIES_OWNERSHIP_INCLUDE_CANDIDATES = $$PYTHONINCLUDES
+
+isEmpty(PYTHON_DATA_SERIES_OWNERSHIP_INCLUDE_CANDIDATES) {
+    pythonOwnershipHome = $$(PYTHONHOME)
+    !isEmpty(pythonOwnershipHome) {
+        PYTHON_DATA_SERIES_OWNERSHIP_INCLUDE_CANDIDATES += $$clean_path($$pythonOwnershipHome/include)
+    }
+}
+
+unix:isEmpty(PYTHON_DATA_SERIES_OWNERSHIP_INCLUDE_CANDIDATES) {
+    pythonOwnershipConfig = $$PYTHON_CONFIG
+    isEmpty(pythonOwnershipConfig): pythonOwnershipConfig = python3-config
+    pythonOwnershipConfigOutput = $$system("$$pythonOwnershipConfig --includes", lines, pythonOwnershipConfigStatus)
+    equals(pythonOwnershipConfigStatus, 0) {
+        PYTHON_DATA_SERIES_OWNERSHIP_INCLUDE_CANDIDATES = $$split(pythonOwnershipConfigOutput, " ")
+    } else {
+        PYTHON_DATA_SERIES_OWNERSHIP_INCLUDE_CANDIDATES =
+    }
+}
+
+# Honor include directories supplied directly by a parent qmake project too.
+PYTHON_DATA_SERIES_OWNERSHIP_INCLUDE_CANDIDATES += $$INCLUDEPATH
+
+PYTHON_DATA_SERIES_OWNERSHIP_PYTHON_INCLUDEPATH =
+for(pythonOwnershipInclude, PYTHON_DATA_SERIES_OWNERSHIP_INCLUDE_CANDIDATES) {
+    pythonOwnershipInclude = $$replace(pythonOwnershipInclude, ^-I, )
+    pythonOwnershipInclude = $$replace(pythonOwnershipInclude, ^/I, )
+    pythonOwnershipInclude = $$clean_path($$pythonOwnershipInclude)
+    exists($$pythonOwnershipInclude/Python.h) {
+        PYTHON_DATA_SERIES_OWNERSHIP_PYTHON_INCLUDEPATH += $$pythonOwnershipInclude
+    }
+}
+PYTHON_DATA_SERIES_OWNERSHIP_PYTHON_INCLUDEPATH = $$unique(PYTHON_DATA_SERIES_OWNERSHIP_PYTHON_INCLUDEPATH)
+
+PYTHON_DATA_SERIES_OWNERSHIP_HAS_HEADERS = false
+for(pythonOwnershipInclude, PYTHON_DATA_SERIES_OWNERSHIP_PYTHON_INCLUDEPATH) {
+    exists($$pythonOwnershipInclude/Python.h) {
+        PYTHON_DATA_SERIES_OWNERSHIP_HAS_HEADERS = true
+    }
+}
+
+PYTHON_DATA_SERIES_OWNERSHIP_INCLUDEPATH = \
+    $$PYTHON_DATA_SERIES_OWNERSHIP_PYTHON_INCLUDEPATH \
+    ../../../src \
+    ../../../src/ANT \
+    ../../../src/Train \
+    ../../../src/FileIO \
+    ../../../src/Cloud \
+    ../../../src/Charts \
+    ../../../src/Metrics \
+    ../../../src/Gui \
+    ../../../src/Core \
+    ../../../src/Planning \
+    ../../../src/Python \
+    ../../../src/Python/SIP \
+    ../../../qwt/src \
+    ../../../contrib/qxt/src \
+    ../../../contrib/qtsolutions/json \
+    ../../../contrib/qtsolutions/qwtcurve \
+    ../../../contrib/qtsolutions/flowlayout \
+    ../../../contrib/lmfit \
+    ../../../contrib/boost \
+    ../../../contrib/kmeans \
+    ../../../contrib/voronoi \
+    ../../../contrib/httpserver

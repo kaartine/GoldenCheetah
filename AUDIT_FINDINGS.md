@@ -345,15 +345,18 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### MEM-004: PythonDataSeries copy is a double-free/use-after-free
 
-- Status: OPEN
-- Code: `src/Python/SIP/Bindings.h:14`,
-  `src/Python/SIP/Bindings.cpp:797`,
-  `src/Python/SIP/sipgoldencheetahPythonDataSeries.cpp:299`
-- Impact: Generated copying shallow-copies the owning `double*`; both wrappers
-  later call `delete[]`.
-- Test: Copy a series, destroy the source, access and destroy the copy under ASan.
-- Fix direction: Store data in a value container or implement/delete copy and
-  move operations explicitly.
+- Status: FIXED
+- Code: `src/Python/SIP/Bindings.cpp`, `src/Python/SIP/Bindings.h`
+- Impact: Generated copying shallow-copied the owning `double*`, so both
+  wrappers later called `delete[]` on the same allocation.
+- Test: Exercise copy and move construction and assignment, self-assignment,
+  source destruction, and the SIP pointer-return bridge under ASan/UBSan.
+- Resolution: `PythonDataSeries` implements deep-copy and noexcept move
+  semantics with copy-swap assignment. The SIP pointer bridge explicitly
+  adopts and destroys its heap wrapper while retaining `RideFile*` as borrowed.
+- Verification: Normal and strict ASan/UBSan suites each pass 10 tests, both
+  generated SIP ownership translation units and Python-enabled `Bindings.o`
+  compile, and the aggregate suite passes 953 tests.
 
 ### MEM-005: PowerTap line reader can overflow its stack buffer
 
