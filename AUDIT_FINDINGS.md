@@ -85,15 +85,19 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### MEM-001: WKO import contains attacker-controlled buffer overflows
 
-- Status: OPEN
-- Code: `src/FileIO/WkoRideFile.cpp:587`,
-  `src/FileIO/WkoRideFile.cpp:842`, `src/FileIO/WkoRideFile.h:65`
-- Impact: File-controlled strings are copied into two 32-byte buffers without
-  length checks. A crafted WKO file causes object or stack corruption.
+- Status: FIXED
+- Code: `src/FileIO/WkoRideFile.cpp`, `src/FileIO/WkoRideFile.h`
+- Impact: File-controlled strings were copied into two 32-byte buffers without
+  length checks. A crafted WKO file could corrupt object or stack memory.
 - Test: Import WKO fixtures with relevant lengths 31, 32, 254, and 65535 plus
-  truncated fields under ASan/UBSan.
-- Fix direction: Introduce an end-aware binary cursor and reject oversized
-  fields before copying into bounded containers.
+  truncated fields under ASan/UBSan. Reject an oversized sparse input before
+  allocation or reading.
+- Resolution: Graph and chart names are decoded through end-aware bounded
+  helpers that reject oversized and truncated payloads before copying. The
+  whole-file read is capped below the parser's bit-offset limit, checks the
+  exact byte count, and derives its end pointer from the verified read.
+- Verification: The focused normal and ASan/UBSan suites each pass 17 tests
+  without leaks, and the production `WkoRideFile.o` target compiles.
 
 ### MEM-002: Short ANT burst frames become a huge memcpy
 

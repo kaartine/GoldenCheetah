@@ -59,13 +59,13 @@ class WkoParser
         QList<RideFile*>*rides;
 
         // state data during parsing
-        WKO_UCHAR *headerdata, *rawdata, *footerdata;
+        WKO_UCHAR *headerdata, *rawdata, *footerdata, *enddata;
         WKO_ULONG version;
         WKO_ULONG WKO_device;
         char WKO_GRAPHS[32];
         QList<RideFileInterval *> references;
         int charts;
-        long bufferSize;
+        int bufferSize;
 
         // used by all the parsers as temporary storage
         unsigned char txtbuf[102400]; // text buffer
@@ -91,6 +91,12 @@ class WkoParser
         // re-used across all the segment parsers above
         WKO_UCHAR *parsePerspective(WKO_UCHAR *p);
         WKO_UCHAR *parseChart(WKO_UCHAR *p, int type = 0);
+
+        // Bounded names stored in fixed-size parser buffers
+        bool hasBytes(const WKO_UCHAR *p, size_t bytes) const;
+        bool readBoundedText(WKO_UCHAR *&p, char *buf, size_t capacity,
+                             const char *field);
+        bool readBoundedChartName(WKO_UCHAR *&p, char *buf, size_t capacity);
 
         // Basic Field decoding
         unsigned int doshort(WKO_UCHAR *p, WKO_USHORT *pnum);

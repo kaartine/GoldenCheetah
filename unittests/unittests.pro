@@ -13,6 +13,7 @@ equals(GC_UNITTESTS, active) {
 			   Core/signalSafety \
 			   Core/splineCrash \
 			   FileIO/archiveSecurity \
+			   FileIO/wkoBounds \
 			   Gui/calendarData \
 			   Gui/perspectiveStateSource \
 			   Gui/trainPerspectiveState

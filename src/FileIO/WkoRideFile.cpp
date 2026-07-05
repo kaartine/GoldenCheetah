@@ -24,6 +24,7 @@
 #include <QFile>
 #include <QTextStream>
 #include <algorithm> // for std::sort
+#include <limits>
 #include "cmath"
 
 #ifdef Q_CC_MSVC
@@ -72,12 +73,25 @@ WkoParser::WkoParser(QFile &file, QStringList &errors, QList<RideFile*>*rides)
         return;
     }
 
-    bufferSize = file.size();
+    const qint64 sourceSize = file.size();
+    const qint64 maxFileSize = std::numeric_limits<int>::max() / 8;
+    if (sourceSize > maxFileSize) {
+        file.close();
+        errors << "WKO+ file exceeds the supported size";
+        return;
+    }
+
+    bufferSize = static_cast<int>(sourceSize);
     QScopedArrayPointer<WKO_UCHAR> entirefile(new WKO_UCHAR[bufferSize]);
-    QDataStream *rawstream(new QDataStream(&file));
     headerdata = &entirefile[0];
-    rawstream->readRawData(reinterpret_cast<char *>(headerdata), file.size());
+    const qint64 bytesRead = file.read(
+        reinterpret_cast<char *>(headerdata), bufferSize);
     file.close();
+    if (bytesRead != bufferSize) {
+        errors << "Could not read complete WKO+ file";
+        return;
+    }
+    enddata = headerdata + bytesRead;
 
 
     // Check the header to make sure it really is a WKO
@@ -583,8 +597,8 @@ WkoParser::parseHeaderData(WKO_UCHAR *fb)
     results->setTag("Objective", (const char*)&txtbuf[0]);
     notes = p; p += dotext(p, &txtbuf[0]); /* 5: notes */
 
-    p += dotext(p, &txtbuf[0]); /* 6: graphs */
-    strcpy(reinterpret_cast<char *>(WKO_GRAPHS), reinterpret_cast<char *>(&txtbuf[0])); // save those graphs away
+    if (!readBoundedText(p, WKO_GRAPHS, sizeof(WKO_GRAPHS), "graph"))
+        return NULL;
 
     if (version != 1) { //!!! Version 1 beta support
         p += donumber(p, &sport); /* 7: sport */
@@ -820,7 +834,7 @@ WkoParser::parseHeaderData(WKO_UCHAR *fb)
     while (charts) {     // keep parsing until we have no charts left
 
         // basic bounds check
-        if ((p - fb) > bufferSize) {
+        if (!hasBytes(p, sizeof(WKO_ULONG))) {
             errors << "Buffer overrun, file may be corrupt / truncated";
             qDebug()<<"buffer overrun";
             return NULL;
@@ -837,10 +851,8 @@ WkoParser::parseHeaderData(WKO_UCHAR *fb)
 
             char buf[32];
 
-            // Config Type
-            p += doshort(p, &us); // got here...
-            strncpy (reinterpret_cast<char *>(buf), reinterpret_cast<char *>(p), us); buf[us]=0;
-            p += us;
+            if (!readBoundedChartName(p, buf, sizeof(buf)))
+                return NULL;
 
             /* What type? */
             if (!strcmp(buf, "CRideSettingsConfig")) type=CRIDESETTINGSCONFIG;
@@ -1454,6 +1466,87 @@ WkoParser::get_bits(WKO_UCHAR* data, unsigned bitOffset, unsigned numBits)
         bits = bits | get_bit(data, currentbit);
     }
     return bits;
+}
+
+bool
+WkoParser::hasBytes(const WKO_UCHAR *p, size_t bytes) const
+{
+    if (!p || p < headerdata || p > enddata)
+        return false;
+
+    return bytes <= static_cast<size_t>(enddata - p);
+}
+
+bool
+WkoParser::readBoundedText(WKO_UCHAR *&p, char *buf, size_t capacity,
+                           const char *field)
+{
+    size_t prefix = 1;
+    WKO_USHORT length;
+
+    if (!hasBytes(p, prefix)) {
+        errors << QString("Truncated WKO %1 name")
+                  .arg(QString::fromLatin1(field));
+        return false;
+    }
+
+    if (*p == 0xff) {
+        prefix = 3;
+        if (!hasBytes(p, prefix)) {
+            errors << QString("Truncated WKO %1 name")
+                      .arg(QString::fromLatin1(field));
+            return false;
+        }
+        length = qFromLittleEndian<quint16>(p + 1);
+    } else {
+        length = *p;
+    }
+
+    if (length >= capacity) {
+        errors << QString("WKO %1 name exceeds %2 bytes")
+                  .arg(QString::fromLatin1(field))
+                  .arg(static_cast<qulonglong>(capacity - 1));
+        return false;
+    }
+
+    if (!hasBytes(p + prefix, length)) {
+        errors << QString("Truncated WKO %1 name")
+                  .arg(QString::fromLatin1(field));
+        return false;
+    }
+
+    memcpy(buf, p + prefix, length);
+    buf[length] = '\0';
+    p += prefix + length;
+    return true;
+}
+
+bool
+WkoParser::readBoundedChartName(WKO_UCHAR *&p, char *buf, size_t capacity)
+{
+    const size_t prefix = sizeof(WKO_USHORT);
+
+    if (!hasBytes(p, prefix)) {
+        errors << "Truncated WKO chart name";
+        return false;
+    }
+
+    const WKO_USHORT length = qFromLittleEndian<quint16>(p);
+    if (length >= capacity) {
+        errors << QString("WKO chart name exceeds %1 bytes")
+                  .arg(static_cast<qulonglong>(capacity - 1));
+        return false;
+    }
+
+    if (!hasBytes(p + prefix, length)) {
+        errors << "Truncated WKO chart name";
+        return false;
+    }
+
+    memcpy(buf, p + prefix, length);
+    buf[length] = '\0';
+    p += prefix + length;
+    return true;
 }
 
 /*****************************************************************************
