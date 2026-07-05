@@ -119,15 +119,19 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### MEM-003: Malformed Kinetic BLE notifications access memory out of bounds
 
-- Status: OPEN
-- Code: `src/Train/BT40Device.cpp:741`,
-  `src/Train/BT40Device.cpp:814`, `src/Train/KurtInRide.cpp:311`,
-  `src/Train/KurtSmartControl.cpp:154`
-- Impact: InRide always reads 20 bytes, while an empty Smart Control packet
-  underflows `size - 1` and accesses memory before a zero-length allocation.
-- Test: Exercise every payload size from 0 through 21 under ASan/UBSan.
-- Fix direction: Make parsers accept bounded views and return an explicit parse
-  error for every invalid size.
+- Status: FIXED
+- Code: `src/Train/BT40Device.cpp`, `src/Train/KurtInRide.cpp`,
+  `src/Train/KurtInRide.h`, `src/Train/KurtSmartControl.cpp`,
+  `src/Train/KurtSmartControl.h`
+- Impact: InRide always read 20 bytes, while an empty Smart Control packet
+  underflowed `size - 1` and accessed memory before an empty allocation.
+- Test: Exercise every exact-sized payload from 0 through 21 under normal and
+  ASan/UBSan builds, while verifying invalid parses leave output unchanged.
+- Resolution: Bounded parsers enforce each protocol's packet-size contract
+  before decoding. All four BT40 notification branches return before changing
+  telemetry or calibration state when parsing fails.
+- Verification: The focused normal and ASan/UBSan suites each pass 112 tests,
+  and `KurtInRide.o`, `KurtSmartControl.o`, and `BT40Device.o` compile.
 
 ### BLE-001: VO2 reconnect uses a dangling static widget pointer
 

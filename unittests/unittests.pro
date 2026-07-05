@@ -17,7 +17,8 @@ equals(GC_UNITTESTS, active) {
 			   Gui/calendarData \
 			   Gui/perspectiveStateSource \
 			   Gui/trainPerspectiveState \
-			   Train/antBurstBounds
+			   Train/antBurstBounds \
+			   Train/kineticPacketBounds
 	CONFIG += ordered
 } else {
 	message("Unittests are disabled; to enable copy unittests/unittests.pri.in to unittests/unittests.pri")

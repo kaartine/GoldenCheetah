@@ -15,6 +15,7 @@
 #include <math.h>
 
 #include <QByteArray>
+#include <QByteArrayView>
 #include <QBluetoothUuid>
 
 static const char KURT_SMART_CONTROL_SERVICE_UUID[]         = "E9410200-B434-446B-B5CC-36592FC4C724";
@@ -53,6 +54,12 @@ struct smart_control_power_data
     
     /*! Current wattage the RU is Targetting */
     uint16_t targetResistance;
+};
+
+enum smart_control_parse_result
+{
+    SMART_CONTROL_PARSE_SUCCESS,
+    SMART_CONTROL_PARSE_INVALID_LENGTH
 };
 
 /*!
@@ -123,6 +130,12 @@ struct smart_control_config_data
  @return Smart Control Config Data Struct
  */
 smart_control_config_data smart_control_process_config_data(const uint8_t *data, size_t size);
+
+// Bounded notification parsers leave the output unchanged when the length is invalid.
+smart_control_parse_result smart_control_parse_power_data(
+    QByteArrayView data, smart_control_power_data &powerData);
+smart_control_parse_result smart_control_parse_config_data(
+    QByteArrayView data, smart_control_config_data &configData);
 
 // Convert device calibration state into GC CALIBRATION_STATE*
 uint8_t smart_control_state_to_calibration_state(smart_control_calibration_state);

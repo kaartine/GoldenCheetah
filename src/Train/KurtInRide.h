@@ -18,6 +18,7 @@
 #include <QBluetoothAddress>
 #include <QBluetoothDeviceInfo>
 #include <QBluetoothUuid>
+#include <QByteArrayView>
 
 static const char KURT_INRIDE_SERVICE_UUID[]         = "E9410100-B434-446B-B5CC-36592FC4C724";
 static const char KURT_INRIDE_SERVICE_POWER_UUID[]   = "E9410101-B434-446B-B5CC-36592FC4C724";
@@ -117,6 +118,12 @@ struct inride_power_data
     inride_command_result commandResult;
 };
 
+enum inride_parse_result
+{
+    INRIDE_PARSE_SUCCESS,
+    INRIDE_PARSE_INVALID_LENGTH
+};
+
 // Note about this pack. Below structures are defined with gcc's
 // __attribute__(packed). I've replaced the __attribute__
 // with the msvc form since gcc also supports it.
@@ -160,8 +167,12 @@ struct inride_config_sensor_command
 // - it is used in the de-obfuscation process of the power data as well as a "command key" for control point commands
 
 
-inride_config_data inride_process_config_data(const uint8_t * data); // requires 20 bytes
-inride_power_data inride_process_power_data(const uint8_t * data); // requires 20 bytes
+inride_config_data inride_process_config_data(const uint8_t *data); // requires 20 bytes
+inride_power_data inride_process_power_data(const uint8_t *data); // requires 20 bytes
+
+// Notification parsers leave the output unchanged when the length is invalid.
+inride_parse_result inride_parse_config_data(QByteArrayView data, inride_config_data &configData);
+inride_parse_result inride_parse_power_data(QByteArrayView data, inride_power_data &powerData);
 
 
 // The command structs that are created are packed...

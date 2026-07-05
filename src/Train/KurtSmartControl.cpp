@@ -104,11 +104,35 @@ double smart_control_ticks_to_seconds(uint32_t ticks)
     return (double)ticks / (double)SensorHz;
 }
 
+smart_control_parse_result smart_control_parse_power_data(
+    QByteArrayView data, smart_control_power_data &powerData)
+{
+    if (data.size() < 14 || data.size() > 20)
+        return SMART_CONTROL_PARSE_INVALID_LENGTH;
+
+    powerData = smart_control_process_power_data(
+        reinterpret_cast<const uint8_t *>(data.data()),
+        static_cast<size_t>(data.size()));
+    return SMART_CONTROL_PARSE_SUCCESS;
+}
+
+smart_control_parse_result smart_control_parse_config_data(
+    QByteArrayView data, smart_control_config_data &configData)
+{
+    if (data.size() < 5 || data.size() > 20)
+        return SMART_CONTROL_PARSE_INVALID_LENGTH;
+
+    configData = smart_control_process_config_data(
+        reinterpret_cast<const uint8_t *>(data.data()),
+        static_cast<size_t>(data.size()));
+    return SMART_CONTROL_PARSE_SUCCESS;
+}
+
 smart_control_power_data smart_control_process_power_data(const uint8_t *data, size_t size)
 {
     smart_control_power_data powerData;
 
-    if (size >= 14 && size <= 20) {
+    if (data != nullptr && size >= 14 && size <= 20) {
 
         uint8_t hashSeed = 0x42;
         uint8_t inData[20];
@@ -146,8 +170,23 @@ smart_control_power_data smart_control_process_power_data(const uint8_t *data, s
 
 smart_control_config_data smart_control_process_config_data(const uint8_t *data, size_t size)
 {
+    smart_control_config_data configData;
+    configData.updateRate = 1;
+    configData.tickRate = 10000;
+    configData.firmwareUpdateState = 0;
+    configData.systemStatus = 0;
+    configData.calibrationState = SMART_CONTROL_CALIBRATION_STATE_NOT_PERFORMED;
+    configData.spindownTime = 0;
+    configData.calibrationThresholdKPH = 33.8;
+    configData.brakeCalibrationThresholdKPH = 45;
+    configData.brakeStrength = 55;
+    configData.brakeOffset = 128;
+    configData.noiseFilter = 1;
+
+    if (data == nullptr || size < 5 || size > 20) return configData;
+
     uint8_t hashSeed = 0x42;
-    uint8_t* inData = (uint8_t*)malloc(size);
+    uint8_t inData[20];
     for (size_t i = 0; i < size; ++i) {
         inData[i] = data[i];
     }
@@ -156,60 +195,32 @@ smart_control_config_data smart_control_process_config_data(const uint8_t *data,
         inData[index] ^= hash;
         hash = hash8WithSeed(hash, &inData[index], 1);
     }
-    
-    smart_control_config_data configData;
-    
-    if (size >= 5) {
-        
-        configData.updateRate = inData[0];
-        configData.tickRate = ((uint32_t)inData[1] << 16) | ((uint32_t)inData[2] << 8) | (uint32_t)inData[3];
-        configData.firmwareUpdateState = inData[4];
-        
-        if (size >= 13) {
-            configData.systemStatus = ((uint16_t)inData[5] << 8) | (uint16_t)inData[6];
-            configData.calibrationState = (smart_control_calibration_state)inData[7];
-            uint32_t spindownTicks = ((uint32_t)inData[8] << 24) | ((uint32_t)inData[9] << 16) | ((uint32_t)inData[10] << 8) | (uint32_t)inData[11];
-            configData.spindownTime = smart_control_ticks_to_seconds(spindownTicks);
-        }
-        if (size >= 15) {
-            uint16_t metersPerHour = ((uint16_t)inData[12] << 8) | (uint16_t)inData[13];
-            configData.calibrationThresholdKPH = metersPerHour / 1000.0;
-        } else {
-            configData.calibrationThresholdKPH = 33.8;
-        }
-        if (size >= 18) {
-            uint16_t metersPerHour = ((uint16_t)inData[14] << 8) | (uint16_t)inData[15];
-            configData.brakeCalibrationThresholdKPH = metersPerHour / 1000.0;
-            configData.brakeStrength = inData[16];
-        } else {
-            configData.brakeCalibrationThresholdKPH = 45;
-            configData.brakeStrength = 55;
-        }
-        if (size >= 19) {
-            configData.brakeOffset = inData[17];
-        } else {
-            configData.brakeOffset = 128;
-        }
-        if (size >= 20) {
-            configData.noiseFilter = inData[18];
-        } else {
-            configData.noiseFilter = 1;
-        }
-    } else {
-        configData.updateRate = 1;
-        configData.tickRate = 10000;
-        configData.firmwareUpdateState = 0;
-        configData.systemStatus = 0;
-        configData.calibrationState = SMART_CONTROL_CALIBRATION_STATE_NOT_PERFORMED;
-        configData.spindownTime = 0;
-        configData.calibrationThresholdKPH = 33.8;
-        configData.brakeCalibrationThresholdKPH = 45;
-        configData.brakeStrength = 55;
-        configData.brakeOffset = 128;
-        configData.noiseFilter = 1;
+
+    configData.updateRate = inData[0];
+    configData.tickRate = ((uint32_t)inData[1] << 16) | ((uint32_t)inData[2] << 8) | (uint32_t)inData[3];
+    configData.firmwareUpdateState = inData[4];
+
+    if (size >= 13) {
+        configData.systemStatus = ((uint16_t)inData[5] << 8) | (uint16_t)inData[6];
+        configData.calibrationState = (smart_control_calibration_state)inData[7];
+        uint32_t spindownTicks = ((uint32_t)inData[8] << 24) | ((uint32_t)inData[9] << 16) | ((uint32_t)inData[10] << 8) | (uint32_t)inData[11];
+        configData.spindownTime = smart_control_ticks_to_seconds(spindownTicks);
     }
-    
-    free(inData);
+    if (size >= 15) {
+        uint16_t metersPerHour = ((uint16_t)inData[12] << 8) | (uint16_t)inData[13];
+        configData.calibrationThresholdKPH = metersPerHour / 1000.0;
+    }
+    if (size >= 18) {
+        uint16_t metersPerHour = ((uint16_t)inData[14] << 8) | (uint16_t)inData[15];
+        configData.brakeCalibrationThresholdKPH = metersPerHour / 1000.0;
+        configData.brakeStrength = inData[16];
+    }
+    if (size >= 19) {
+        configData.brakeOffset = inData[17];
+    }
+    if (size >= 20) {
+        configData.noiseFilter = inData[18];
+    }
 
     return configData;
 }

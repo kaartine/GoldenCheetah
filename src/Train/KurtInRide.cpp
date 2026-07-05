@@ -276,7 +276,25 @@ inride_calibration_result result_for_spindown(double time)
     return result;
 }
 
-inride_config_data inride_process_config_data(const uint8_t * data)
+inride_parse_result inride_parse_config_data(QByteArrayView data, inride_config_data &configData)
+{
+    if (data.size() != 20) return INRIDE_PARSE_INVALID_LENGTH;
+
+    configData = inride_process_config_data(
+        reinterpret_cast<const uint8_t *>(data.data()));
+    return INRIDE_PARSE_SUCCESS;
+}
+
+inride_parse_result inride_parse_power_data(QByteArrayView data, inride_power_data &powerData)
+{
+    if (data.size() != 20) return INRIDE_PARSE_INVALID_LENGTH;
+
+    powerData = inride_process_power_data(
+        reinterpret_cast<const uint8_t *>(data.data()));
+    return INRIDE_PARSE_SUCCESS;
+}
+
+inride_config_data inride_process_config_data(const uint8_t *data)
 {
     inride_config_data configData;
     configData.calibrationReady = (uint16_t)data[0];
@@ -301,7 +319,7 @@ inride_config_data inride_process_config_data(const uint8_t * data)
 }
 
 // data must be ptr to 20 bytes.
-inride_power_data inride_process_power_data(const uint8_t * data)
+inride_power_data inride_process_power_data(const uint8_t *data)
 {
     inride_power_data powerData;
     

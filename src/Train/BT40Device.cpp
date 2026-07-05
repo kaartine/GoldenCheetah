@@ -730,15 +730,17 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
         controller->emitVO2Data();
     } else if (c.uuid() == s_KurtInRideService_Config_UUID) {
 
-        if (value.size() == 20) {
-            inride_config_data icd = inride_process_config_data((const uint8_t*)value.constData());
+        inride_config_data icd;
+        if (inride_parse_config_data(QByteArrayView(value), icd) !=
+            INRIDE_PARSE_SUCCESS) return;
 
-            // Nothing to do with this data.
-            Q_UNUSED(icd);
-        }
+        // Nothing to do with this data.
+        Q_UNUSED(icd);
     } else if (c.uuid() == s_KurtInRideService_Power_UUID) {
 
-        inride_power_data ipd = inride_process_power_data((const uint8_t*)value.constData());
+        inride_power_data ipd;
+        if (inride_parse_power_data(QByteArrayView(value), ipd) !=
+            INRIDE_PARSE_SUCCESS) return;
 
         qDebug() << inride_state_to_debug_string(ipd.state, ipd.calibrationResult) << " : " 
                  << inride_command_result_to_string(ipd.commandResult) << " : " 
@@ -793,7 +795,9 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
 
     } else if (c.uuid() == s_KurtSmartControlService_Power_UUID) {
 
-        smart_control_power_data scpd = smart_control_process_power_data((const uint8_t*)value.constData(), value.size());
+        smart_control_power_data scpd;
+        if (smart_control_parse_power_data(QByteArrayView(value), scpd) !=
+            SMART_CONTROL_PARSE_SUCCESS) return;
 
         // Power
         double power = scpd.power;
@@ -811,7 +815,9 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
 
     } else if (c.uuid() == s_KurtSmartControlService_Config_UUID) {
 
-        smart_control_config_data sccd = smart_control_process_config_data((const uint8_t*)value.data(), value.size());
+        smart_control_config_data sccd;
+        if (smart_control_parse_config_data(QByteArrayView(value), sccd) !=
+            SMART_CONTROL_PARSE_SUCCESS) return;
 
         calibrationData.setState(smart_control_state_to_calibration_state(sccd.calibrationState));
         calibrationData.setSpindownTime(sccd.spindownTime);
