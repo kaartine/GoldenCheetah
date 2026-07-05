@@ -13,6 +13,7 @@ equals(GC_UNITTESTS, active) {
 			   Core/signalSafety \
 			   Core/splineCrash \
 			   FileIO/archiveSecurity \
+			   FileIO/tacxCafBounds \
 			   FileIO/wkoBounds \
 			   Gui/calendarData \
 			   Gui/iconBundleSecurity \

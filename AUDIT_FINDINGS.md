@@ -369,15 +369,19 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### MEM-006: CAF parser relies on release-disabled bounds assertions
 
-- Status: OPEN
-- Code: `src/FileIO/TacxCafRideFile.cpp:132`,
-  `src/FileIO/TacxCafRideFile.cpp:154`,
-  `src/FileIO/TacxCafRideFile.cpp:253`
-- Impact: Truncated blocks and zero-record blocks cause out-of-bounds reads once
-  `Q_ASSERT` is compiled out.
-- Test: Fuzz truncation at each byte boundary and zero-record blocks under ASan.
-- Fix direction: Validate block headers, extents, products, and record counts in
-  release code.
+- Status: FIXED
+- Code: `src/FileIO/TacxCafRideFile.cpp`
+- Impact: Truncated and zero-record blocks caused out-of-bounds reads when
+  release builds compiled out `Q_ASSERT`.
+- Test: Truncate representative version 100 and 110 files at every byte, then
+  exercise invalid counts, sizes, products, versions, and required blocks.
+- Resolution: The importer decodes fixed-width little-endian fields only after
+  validating the declared block count, per-block fingerprint and version,
+  64-bit payload extent, required record dimensions, ordering, duplicates, and
+  trailing data. Telemetry speed now comes from the stored `SpeedX10` field.
+- Verification: The release and strict ASan/UBSan suites each pass 626 tests,
+  the aggregate suite passes 943 tests, and `TacxCafRideFile.o` compiles in an
+  isolated Qt 6.8.3 production build.
 
 ### MEM-007: TTS handlers accept empty/short blocks and unsafe typed reads
 
