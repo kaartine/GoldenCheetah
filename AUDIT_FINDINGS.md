@@ -23,7 +23,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-001: Remote default layouts can execute Python or R code
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Core/GcUpgrade.h:142`, `src/Gui/AbstractView.cpp:352`,
   `src/Gui/AbstractView.cpp:1016`, `src/Gui/AbstractView.cpp:1037`,
   `src/Charts/PythonChart.cpp:578`
@@ -36,6 +36,13 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Fix direction: Package trusted defaults locally. If remote defaults remain,
   require HTTPS plus an authenticated manifest and apply a strict schema that
   excludes executable chart types and properties.
+- Resolution: Layout reset no longer performs a network request. The new
+  `PerspectiveStateSource` trust boundary loads reset state only from the
+  packaged `:/xml` resources, whitelists the four application view names, and
+  keeps normal saved-state loading explicit.
+- Verification: The regression test first failed because the trusted loader did
+  not exist. Its five QtTest cases pass, the application builds, and the full
+  suite passes 81 tests with zero failures.
 
 ### SEC-002: ZIP extraction permits path traversal and symlink escape
 

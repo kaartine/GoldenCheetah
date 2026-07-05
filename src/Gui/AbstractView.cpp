@@ -17,6 +17,7 @@
  */
 
 #include "AbstractView.h"
+#include "PerspectiveStateSource.h"
 #include "TrainPerspectiveState.h"
 #include "AthleteTab.h"
 #include "Context.h"
@@ -31,7 +32,6 @@
 #include "IdleTimer.h"
 
 #include "Settings.h"
-#include "GcUpgrade.h"
 #include "LTMWindow.h"
 
 const int SIDEBAR_DEFAULT_WIDTH=200;
@@ -337,39 +337,10 @@ AbstractView::restoreState(bool useDefault)
 
     // set content from the default
     if (useDefault) {
-
-        // for getting config
-        QNetworkAccessManager nam;
-
         // remove the current saved version
         QFile::remove(filename);
-
-        // fetch from the goldencheetah.org website
-        QString request = QString("%1/%2-perspectives.xml")
-                             .arg(VERSION_CONFIG_PREFIX)
-                             .arg(view);
-
-        QNetworkReply *reply = nam.get(QNetworkRequest(QUrl(request)));
-
-        if (reply->error() == QNetworkReply::NoError) {
-
-            // lets wait for a response with an event loop
-            // it quits on a 5s timeout or reply coming back
-            QEventLoop loop;
-            QTimer timer;
-            timer.setSingleShot(true);
-            connect(&timer, SIGNAL(timeout()), &loop, SLOT(quit()));
-            connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-            timer.start(5000);
-
-            // lets block until signal received
-            loop.exec(QEventLoop::WaitForMoreEvents);
-
-            // all good?
-            if (reply->error() == QNetworkReply::NoError) {
-                content = reply->readAll();
-            }
-        }
+        content = QString::fromUtf8(
+            PerspectiveStateSource::load(filename, view, true));
     }
 
     QList<Perspective*>restored;
@@ -417,11 +388,8 @@ AbstractView::restoreState(bool useDefault)
             filename = QString(":xml/%1-perspectives.xml").arg(view);
             useDefault = true;
         }
-        QFile file(filename);
-        if (file.open(QIODevice::ReadOnly)) {
-            content = file.readAll();
-            file.close();
-        }
+        content = QString::fromUtf8(
+            PerspectiveStateSource::load(filename, view, useDefault));
     }
 
     // if we *still* don't have content then something went

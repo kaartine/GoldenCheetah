@@ -13,6 +13,7 @@ equals(GC_UNITTESTS, active) {
 			   Core/signalSafety \
 			   Core/splineCrash \
 			   Gui/calendarData \
+			   Gui/perspectiveStateSource \
 			   Gui/trainPerspectiveState
 	CONFIG += ordered
 } else {
