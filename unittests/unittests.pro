@@ -16,7 +16,8 @@ equals(GC_UNITTESTS, active) {
 			   FileIO/wkoBounds \
 			   Gui/calendarData \
 			   Gui/perspectiveStateSource \
-			   Gui/trainPerspectiveState
+			   Gui/trainPerspectiveState \
+			   Train/antBurstBounds
 	CONFIG += ordered
 } else {
 	message("Unittests are disabled; to enable copy unittests/unittests.pri.in to unittests/unittests.pri")

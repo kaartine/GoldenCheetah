@@ -101,15 +101,21 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### MEM-002: Short ANT burst frames become a huge memcpy
 
-- Status: OPEN
-- Code: `src/ANT/ANT.cpp:1014`, `src/ANT/ANTChannel.cpp:1397`,
-  `src/ANT/ANTChannel.cpp:1404`
-- Impact: A burst frame shorter than three data bytes produces a negative
-  length that is converted to a very large `size_t` for `memcpy`.
-- Test: Pass checksum-valid burst frames of every length through `receiveByte`
-  under ASan and verify only protocol-valid sizes reach `burstData`.
-- Fix direction: Validate message-specific lengths before dispatch and use
-  checked unsigned spans rather than pointer/length pairs.
+- Status: FIXED
+- Code: `src/ANT/ANT.cpp`, `src/ANT/ANTChannel.cpp`,
+  `src/ANT/ANTChannel.h`, `src/ANT/ANTMessage.cpp`, `src/ANT/ANTMessage.h`
+- Impact: A short burst frame produced a negative payload length that became a
+  very large `size_t` for `memcpy`.
+- Test: Feed checksum-valid lengths 0-8, 10, and 255 through `receiveByte` and
+  the real channel dispatch. Cover malformed-to-valid recovery, exact payload
+  copies, sequence mismatch/progression, last-packet reset, and the 128-byte
+  assembly boundary under normal and ASan/UBSan builds.
+- Resolution: Standard burst frames now require the exact nine-byte ANT data
+  length before logging or dispatch. A checked payload view exposes exactly
+  eight bytes. Channel assembly uses bounded unsigned copy lengths and resets
+  partial state when a packet arrives out of sequence.
+- Verification: The focused normal and ASan/UBSan suites each pass 39 tests
+  without sanitizer findings.
 
 ### MEM-003: Malformed Kinetic BLE notifications access memory out of bounds
 

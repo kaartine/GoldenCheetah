@@ -26,6 +26,10 @@
 #include <QTime>
 #include <QTimer>
 
+#ifdef GC_ANT_BURST_TEST
+class TestAntBurstBounds;
+#endif
+
 #define CHANNEL_TYPE_QUICK_SEARCH 0x10 // or'ed with current channel type
 /* after fast search, wait for slow search.  Otherwise, starting slow
    search might postpone the fast search on another channel. */
@@ -80,6 +84,10 @@ class ANTChannel : public QObject {
     private:
 
         Q_OBJECT
+
+#ifdef GC_ANT_BURST_TEST
+        friend class TestAntBurstBounds;
+#endif
 
         ANT *parent;
 

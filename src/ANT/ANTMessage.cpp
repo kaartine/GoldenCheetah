@@ -223,6 +223,24 @@ ANTMessage::channelEventMessage(unsigned char c)
     }
 }
 
+bool ANTMessage::isValidBurstLength(const unsigned char length)
+{
+    return length == ANT_MAX_BURST_DATA + 1;
+}
+
+ANTMessage::PayloadView ANTMessage::burstPayload(const unsigned char *message)
+{
+    if (message == NULL ||
+        message[ANT_OFFSET_ID] != ANT_BURST_DATA ||
+        !isValidBurstLength(message[ANT_OFFSET_LENGTH])) {
+        return PayloadView();
+    }
+
+    const size_t payloadSize =
+        static_cast<size_t>(message[ANT_OFFSET_LENGTH] - 1);
+    return PayloadView(message + ANT_OFFSET_DATA + 1, payloadSize);
+}
+
 // construct an ant message based upon a message structure
 // the message structure must include the sync byte
 ANTMessage::ANTMessage(ANT *parent, const unsigned char *message) {

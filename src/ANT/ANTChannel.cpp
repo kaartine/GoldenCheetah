@@ -1385,24 +1385,34 @@ int ANTChannel::isSearching() {
 // receive burst data
 void ANTChannel::burstData(unsigned char *ant_message) {
 
-    unsigned char *message=ant_message+2;
-    char seq=(message[1]>>5)&0x3;
-    char last=(message[1]>>7)&0x1;
+    const ANTMessage::PayloadView payload = ANTMessage::burstPayload(ant_message);
+    if (!payload.isValid()) {
+        return;
+    }
+
+    const unsigned char *message=ant_message+2;
+    const unsigned char seq=(message[1]>>5)&0x3;
+    const bool last=(message[1]>>7)&0x1;
     const unsigned char next_sequence[4]={1,2,3,1};
 
     if (seq!=rx_burst_next_sequence) {
-        // we don't handle burst data at present.
-    } else {
+        burstInit();
+        return;
+    }
 
-        int len=ant_message[ANT_OFFSET_LENGTH]-3;
+    rx_burst_next_sequence=next_sequence[(int)seq];
 
-        if ((rx_burst_data_index + len)>(RX_BURST_DATA_LEN)) {
-            len = RX_BURST_DATA_LEN-rx_burst_data_index;
-        }
+    if (rx_burst_data_index >= 0 &&
+        rx_burst_data_index < RX_BURST_DATA_LEN) {
+        const size_t available =
+            static_cast<size_t>(RX_BURST_DATA_LEN - rx_burst_data_index);
+        const size_t copyLength =
+            payload.size < available ? payload.size : available;
 
-        rx_burst_next_sequence=next_sequence[(int)seq];
-        memcpy(rx_burst_data+rx_burst_data_index, message+2, len);
-        rx_burst_data_index+=len;
+        memcpy(rx_burst_data + rx_burst_data_index,
+               payload.data,
+               copyLength);
+        rx_burst_data_index += static_cast<int>(copyLength);
     }
 
     if (last) {

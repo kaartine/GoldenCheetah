@@ -1063,6 +1063,11 @@ ANT::handleChannelEvent(void) {
 void
 ANT::processMessage(void) {
 
+    if (rxMessage[ANT_OFFSET_ID] == ANT_BURST_DATA &&
+        !ANTMessage::isValidBurstLength(rxMessage[ANT_OFFSET_LENGTH])) {
+        return;
+    }
+
     ANTMessage m(this, rxMessage); // for debug!
 
 //fprintf(stderr, "<< receive %i: ", rxMessage[ANT_OFFSET_CHANNEL_NUMBER]);

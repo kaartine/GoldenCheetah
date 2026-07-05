@@ -27,6 +27,19 @@ class ANTMessage {
 
     public:
 
+        struct PayloadView {
+            PayloadView(const unsigned char *data = NULL, size_t size = 0)
+                : data(data), size(size) {}
+
+            bool isValid() const { return data != NULL; }
+
+            const unsigned char *data;
+            size_t size;
+        };
+
+        static bool isValidBurstLength(const unsigned char length);
+        static PayloadView burstPayload(const unsigned char *message);
+
         ANTMessage(); // null message
         ANTMessage(ANT *parent, const unsigned char *data); // decode from parameters
         ANTMessage(unsigned char b1,
