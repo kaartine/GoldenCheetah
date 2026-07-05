@@ -400,14 +400,15 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### MEM-008: Custom virtual trainer names use mismatched new[]/delete
 
-- Status: OPEN
+- Status: FIXED (`delete[]` paired with both `new char[]` allocation paths;
+  parser and direct-add ownership tests pass under ASan/UBSan)
 - Code: `src/Train/RealtimeController.cpp:716`,
   `src/Train/AddDeviceWizard.cpp:1275`,
   `src/Train/RealtimeController.cpp:745`
 - Impact: Destroying a custom trainer invokes undefined allocator behavior.
-- Test: Add trainers through both paths and repeatedly destroy under ASan.
-- Fix direction: Store the name as `QString`/`std::string`, or minimally use
-  `delete[]`.
+- Test: Covered by `unittests/Train/virtualPowerTrainerOwnership` for both
+  creation paths and repeated destruction.
+- Fix: Pair the existing array allocations with `delete[]`.
 
 ### MEM-009: Cancelled migration leaves Athlete owning pointers indeterminate
 

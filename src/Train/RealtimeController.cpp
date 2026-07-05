@@ -742,7 +742,7 @@ int VirtualPowerTrainerManager::PushCustomVirtualPowerTrainer(const QString& str
 
 VirtualPowerTrainerManager::~VirtualPowerTrainerManager() {
     for (auto& i : customVirtualPowerTrainers) {
-        delete i->m_pName; // custom trainer name string is allocated on create but owned and freed by manager.
+        delete[] i->m_pName; // custom trainer name string is allocated on create but owned and freed by manager.
         delete i;
     }
     customVirtualPowerTrainers.clear();
