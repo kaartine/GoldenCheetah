@@ -187,6 +187,7 @@ class AbstractView : public QWidget
         QWidget *bottom() { return bottom_; }
 
         // Support view specific behaviour
+        virtual void migratePerspectiveState(QString &) {}
         virtual void notifyViewStateRestored();
         virtual void notifyViewPerspectiveAdded(Perspective* page);
         virtual void notifyViewSidebarChanged() {}

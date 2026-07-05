@@ -28,6 +28,9 @@
 #include "ComparePane.h"
 #include "TrainBottom.h"
 #include "Specification.h"
+#include "TrainPerspectiveState.h"
+
+#include <QFile>
 
 QMap<Context*, LTMSidebar*> LTMSidebarView::LTMSidebars_;
 
@@ -399,6 +402,17 @@ TrainView::onSelectionChanged()
     if (isSelected()) {
         setBottomRequested(true);
     }
+}
+
+void
+TrainView::migratePerspectiveState(QString &content)
+{
+    QFile defaultsFile(":xml/train-perspectives.xml");
+    if (!defaultsFile.open(QIODevice::ReadOnly)) return;
+
+    const QString defaultContent = QString::fromUtf8(defaultsFile.readAll());
+    defaultsFile.close();
+    TrainPerspectiveState::migrate(content, defaultContent);
 }
 
 void

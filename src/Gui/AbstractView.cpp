@@ -17,6 +17,7 @@
  */
 
 #include "AbstractView.h"
+#include "TrainPerspectiveState.h"
 #include "AthleteTab.h"
 #include "Context.h"
 #include "Athlete.h"
@@ -309,7 +310,9 @@ AbstractView::saveState()
     QTextStream out(&file);
 
     // is just a collection of layout (aka old HomeWindow name-layout.xml)
-    out<<"<layouts>\n";
+    out << "<layouts";
+    if (type == VIEW_TRAIN) out << " version=\"" << TrainPerspectiveState::CurrentVersion << "\"";
+    out << ">\n";
 
     // so lets run through the perspectives
     foreach(Perspective *page, perspectives_) {
@@ -425,6 +428,7 @@ AbstractView::restoreState(bool useDefault)
     // badly wrong, so only reset if its not blank
     if (content != "") {
 
+        migratePerspectiveState(content);
         // whilst this happens don't show user
         setUpdatesEnabled(false);
 

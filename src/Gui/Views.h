@@ -128,6 +128,7 @@ class TrainView : public AbstractView
 
     protected:
 
+        void migratePerspectiveState(QString &content) override;
         void notifyViewPerspectiveAdded(Perspective* page) override;
 
     private:
