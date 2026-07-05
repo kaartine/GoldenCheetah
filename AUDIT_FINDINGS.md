@@ -360,15 +360,17 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### MEM-005: PowerTap line reader can overflow its stack buffer
 
-- Status: OPEN
-- Code: `src/FileIO/PowerTapDevice.cpp:48`,
-  `src/FileIO/PowerTapDevice.cpp:114`, `src/FileIO/PowerTapDevice.cpp:142`
-- Impact: The only capacity guard is `assert`, absent in release builds. A device
-  that omits CRLF writes beyond the 256-byte version buffer, while newline scan
-  also inspects one byte beyond valid input.
-- Test: Use a fake CommPort returning 256+ non-newline bytes and a trailing CR.
-- Fix direction: Enforce capacity before every read and scan only while
-  `i + 1 < length`.
+- Status: FIXED
+- Code: `src/FileIO/PowerTapDevice.cpp`, `src/FileIO/PowerTapDevice.h`
+- Impact: A device omitting CRLF could write beyond the 256-byte version
+  buffer, while newline detection read one byte beyond initialized data.
+- Test: Exercise null and zero buffers, 256-byte capacity boundaries, trailing
+  CR, exact-capacity CRLF, timeout, read failure, and escaped binary context.
+- Resolution: The line reader enforces its capacity before every byte read and
+  scans CRLF only while both bytes are in range. Error context uses bounded
+  `QString` construction and preserves the underlying serial error.
+- Verification: Normal and strict ASan/UBSan suites each pass 11 tests,
+  `PowerTapDevice.o` compiles, and the aggregate suite passes 964 tests.
 
 ### MEM-006: CAF parser relies on release-disabled bounds assertions
 

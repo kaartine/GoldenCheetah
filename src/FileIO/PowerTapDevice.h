@@ -22,6 +22,10 @@
 
 #include "Device.h"
 
+#ifdef GC_POWERTAP_BOUNDS_TEST
+class TestPowerTapBounds;
+#endif
+
 struct PowerTapDevices : public Devices
 {
     Q_DECLARE_TR_FUNCTIONS(PowerTapDevices)
@@ -44,6 +48,10 @@ struct PowerTapDevice : public Device
                           QString &err);
 
     private:
+#ifdef GC_POWERTAP_BOUNDS_TEST
+    friend class TestPowerTapBounds;
+#endif
+
     static bool
     doWrite(CommPortPtr dev, char c, bool hwecho, QString &err);
     static int

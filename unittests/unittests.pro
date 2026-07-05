@@ -13,6 +13,7 @@ equals(GC_UNITTESTS, active) {
 			   Core/signalSafety \
 			   Core/splineCrash \
 			   FileIO/archiveSecurity \
+			   FileIO/powerTapBounds \
 			   FileIO/tacxCafBounds \
 			   FileIO/wkoBounds \
 			   Gui/calendarData \

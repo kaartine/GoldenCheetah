@@ -18,8 +18,8 @@
 
 #include "PowerTapDevice.h"
 #include "PowerTapUtil.h"
+#include <cctype>
 #include <cmath>
-#include "assert.h"
 
 #ifdef Q_CC_MSVC
 // 'sprintf': This function or variable may be unsafe.
@@ -47,10 +47,10 @@ PowerTapDevices::downloadInstructions() const
 static bool
 hasNewline(const char *buf, int len)
 {
-    static char newline[] = { 0x0d, 0x0a };
+    static const char newline[] = { 0x0d, 0x0a };
     if (len < 2)
         return false;
-    for (int i = 0; i < len; ++i) {
+    for (int i = 0; i + 1 < len; ++i) {
         bool success = true;
         for (int j = 0; j < 2; ++j) {
             if (buf[i+j] != newline[j]) {
@@ -67,15 +67,23 @@ hasNewline(const char *buf, int len)
 static QString
 cEscape(const char *buf, int len)
 {
-    char *result = new char[4 * len + 1];
-    char *tmp = result;
+    if (buf == nullptr || len <= 0)
+        return QString();
+
+    static const char hexDigits[] = "0123456789abcdef";
+    QString result;
+    result.reserve(len);
     for (int i = 0; i < len; ++i) {
-        if (buf[i] == '"')
-            tmp += sprintf(tmp, "\\\"");
-        else if (isprint(buf[i]))
-            *(tmp++) = buf[i];
-        else
-            tmp += sprintf(tmp, "\\x%02x", 0xff & (unsigned) buf[i]);
+        const unsigned char byte = static_cast<unsigned char>(buf[i]);
+        if (byte == static_cast<unsigned char>('"')) {
+            result += QStringLiteral("\\\"");
+        } else if (std::isprint(byte)) {
+            result += QChar(static_cast<ushort>(byte));
+        } else {
+            result += QStringLiteral("\\x");
+            result += QLatin1Char(hexDigits[byte >> 4]);
+            result += QLatin1Char(hexDigits[byte & 0x0f]);
+        }
     }
     return result;
 }
@@ -109,16 +117,31 @@ PowerTapDevice::doWrite(CommPortPtr dev, char c, bool hwecho, QString &err)
 int
 PowerTapDevice::readUntilNewline(CommPortPtr dev, char *buf, int len, QString &err)
 {
-    Q_UNUSED(len);
+    if (len <= 0) {
+        err = tr("read buffer full after 0 bytes without newline");
+        return -1;
+    }
+    if (buf == nullptr) {
+        err = tr("read buffer is null");
+        return -1;
+    }
+
     int sofar = 0;
     while (!hasNewline(buf, sofar)) {
-        assert(sofar < len);
+        if (sofar >= len) {
+            err = QString(tr("read buffer full after %1 bytes without newline"))
+                .arg(sofar);
+            return -1;
+        }
         // Read one byte at a time to avoid waiting for timeout.
         int n = dev->read(buf + sofar, 1, err);
         if (n <= 0) {
-            err = (n < 0) ? (tr("read error: ") + err) : tr("read timeout");
-            err += QString(tr(", read %1 bytes so far: \"%2\""))
-                .arg(sofar).arg(cEscape(buf, sofar));
+            const QString reason = (n < 0)
+                ? (tr("read error: ") + err) : tr("read timeout");
+            const QString context =
+                QString(tr(", read %1 bytes so far: \"%2\""))
+                    .arg(sofar).arg(cEscape(buf, sofar));
+            err = reason + context;
             return -1;
         }
         sofar += n;
