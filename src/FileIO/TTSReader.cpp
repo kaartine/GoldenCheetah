@@ -21,8 +21,17 @@
 #include "TTSReader.h"
 #include "LocationInterpolation.h"
 
+#include <QtEndian>
+#include <QIODevice>
+
+#include <algorithm>
 #include <map>
+#include <cmath>
 #include <cstring>
+#include <limits>
+#include <new>
+#include <stdexcept>
+#include <utility>
 
 // -------------------------------------------------------------
 // LOG CONTROL
@@ -64,6 +73,55 @@ const log_disabled_output& operator << (const log_disabled_output& any, const st
 
 using namespace NS_TTSReader;
 
+namespace {
+
+constexpr std::uint64_t kTtsHeaderBytes = 14;
+constexpr int kTtsUtf16StringBlockType = 110;
+constexpr std::uint64_t kMaxTtsUtf16PayloadBytes = 1024ULL * 1024ULL;
+constexpr std::uint64_t kMaxTtsBlockBytes = 256ULL * 1024ULL * 1024ULL;
+constexpr std::uint64_t kMaxTtsPayloadBytes = 512ULL * 1024ULL * 1024ULL;
+constexpr size_t kMaxTtsBlocks = 65'536;
+
+// Two million frame mappings cover more than 18 hours at 30 Hz.
+constexpr std::uint64_t kMaxTtsDecodedRecords = 2'000'000;
+// Includes payloads, decoded streams, final points, and the chart series.
+constexpr std::uint64_t kMaxTtsWorkingSetBytes = 320ULL * 1024ULL * 1024ULL;
+
+bool checkedPayloadSize(std::uint32_t elementSize,
+                        std::uint32_t elementCount,
+                        std::uint64_t &payloadSize)
+{
+    if (elementCount != 0
+        && elementSize > std::numeric_limits<std::uint64_t>::max() / elementCount)
+        return false;
+
+    payloadSize = static_cast<std::uint64_t>(elementSize) * elementCount;
+    return payloadSize <= kMaxTtsBlockBytes
+        && payloadSize <= static_cast<std::uint64_t>(std::numeric_limits<int>::max());
+}
+
+bool checkedAdd(std::uint64_t amount, std::uint64_t &total)
+{
+    if (amount > std::numeric_limits<std::uint64_t>::max() - total)
+        return false;
+
+    total += amount;
+    return true;
+}
+
+bool addEstimatedStorage(std::uint64_t count, std::uint64_t elementSize,
+                         std::uint64_t &total)
+{
+    if (count != 0
+        && elementSize > std::numeric_limits<std::uint64_t>::max() / count) {
+        return false;
+    }
+
+    return checkedAdd(count * elementSize, total);
+}
+
+} // namespace
+
 // This is the static const string table that tts files may refer to by string key.
 static const std::map<int, const char*> tts_string_table = {
     {1001, "route name" },
@@ -84,39 +142,27 @@ static const std::map<int, const char*> tts_string_table = {
  */
 
  // Handy utils
-float AsFloat(unsigned u) {
+float AsFloat(std::uint32_t u) {
     float t;
     static_assert(sizeof(u) == sizeof(t), "Error: mismatched reinterpret sizes");
     memcpy(&t, &u, sizeof(u));
     return t;
 }
 
-float AsFloat(int i) {
-    float t;
-    static_assert(sizeof(i) == sizeof(t), "Error: mismatched reinterpret sizes");
-    memcpy(&t, &i, sizeof(i));
-    return t;
-}
-
 int toUInt(Byte b) {
-    return reinterpret_cast<UByte&>(b);
+    return static_cast<UByte>(b);
 }
 
-int getUByte(ByteArray &buffer, int offset) {
-    return (UByte)(buffer[offset]);
+int getUShort(const ByteArray &buffer, size_t offset) {
+    if (offset > buffer.size() || buffer.size() - offset < sizeof(quint16))
+        return 0;
+    return qFromLittleEndian<quint16>(buffer.data() + offset);
 }
 
-int getUShort(ByteArray buffer, size_t offset) {
-    if((offset + 1) < buffer.size())
-        return *(unsigned short*)&buffer[offset];    
-    return getUByte(buffer, static_cast<int>(offset));
-}
-
-int getUInt(ByteArray &buffer, size_t offset) {
-    if ((offset + 3) < buffer.size()) {
-        return *(unsigned*)&buffer[offset];
-    }
-    return getUShort(buffer, offset);
+std::uint32_t getUInt(const ByteArray &buffer, size_t offset) {
+    if (offset > buffer.size() || buffer.size() - offset < sizeof(quint32))
+        return 0;
+    return qFromLittleEndian<quint32>(buffer.data() + offset);
 }
 
 bool isHeader(ByteArray &buffer) {
@@ -220,73 +266,55 @@ bool encryptHeader(const IntArray &A_0, const IntArray &key2, IntArray &numArray
     }
 }
 
-bool decryptData(IntArray &A_0, IntArray &A_1, IntArray &numArray) {
+bool decryptData(ByteArray &data, const IntArray &key)
+{
+    if (key.empty())
+        return data.empty();
 
-    numArray.resize(A_0.size());
-
-    size_t index = 0;
-    int num1 = 5;
-    size_t num2 = -1000;
-
-    int e = 0; // set before each block
-    while (true) {
-        switch (num1) {
-        case 0:
-            return true;
-        case 1:
-            e = 0;
-            num1 = 4;
-            continue;
-
-        case 2:
-            if (index < A_0.size()) {
-                numArray[index] = A_1[e] ^ A_0[index];
-                num2 = e++;
-                num1 = 6;
-                continue;
-            }
-            else {
-                num1 = 0;
-                continue;
-            }
-
-        case 3:
-        case 5:
-            num1 = 2;
-            continue;
-
-        case 4:
-            ++index;
-            num1 = 3;
-            continue;
-
-        case 6:
-            if (num2 >= A_1.size() - 1) {
-                num1 = 1;
-                continue;
-            }
-            else {
-                num1 = 4;
-                continue;
-            }
-
-        default:
-            return false;
-        }
+    for (size_t i = 0; i < data.size(); ++i) {
+        const UByte encrypted = static_cast<UByte>(data[i]);
+        const UByte keyByte = static_cast<UByte>(key[i % key.size()]);
+        data[i] = static_cast<Byte>(encrypted ^ keyByte);
     }
+
+    return true;
+}
+
+bool decodeUtf16String(const ByteArray &data, std::wstring &target)
+{
+    if (data.size() % 2 != 0
+        || data.size() > kMaxTtsUtf16PayloadBytes) {
+        return false;
+    }
+
+    const size_t characterCount = data.size() / 2;
+
+    // Release an overwritten value before allocating its replacement.
+    std::wstring().swap(target);
+    target.reserve(characterCount);
+
+    const size_t allowedCapacity = std::max<size_t>(32, 2 * characterCount);
+    if (target.capacity() > allowedCapacity) {
+        std::wstring().swap(target);
+        return false;
+    }
+
+    target.resize(characterCount);
+
+    for (size_t i = 0; i < characterCount; ++i) {
+        target[i] =
+            static_cast<wchar_t>(static_cast<UByte>(data[2 * i]))
+            | static_cast<wchar_t>(
+                static_cast<UByte>(data[2 * i + 1]) << 8);
+    }
+
+    return true;
 }
 
 void iarr(const ByteArray &a, IntArray &r) {
     r.resize(0);
     for (unsigned int i = 0; i < a.size(); i++) {
         r.push_back((int)a[i]);
-    }
-}
-
-void barr(IntArray &a, ByteArray &r) {
-    r.resize(0);
-    for (unsigned int i = 0; i < a.size(); i++) {
-        r.push_back((Byte)a[i]);
     }
 }
 
@@ -297,26 +325,38 @@ void videoInfo(int version, ByteArray & data) {
 }
 
 void TTSReader::segmentRange(int version, ByteArray &data) {
-
-    Q_UNUSED(version);
-
-    if (data.size() % 10 != 0) {
+    if (!hasValidBlockSize(SEGMENT_RANGE, version, data.size())) {
         DEBUG_LOG << "Segment Range data wrong length " << data.size() << "\n";
+        return;
     }
+
+    const size_t rangeCount = data.size() / 10;
+    if (segmentRanges.size() > kMaxTtsDecodedRecords
+        || rangeCount > kMaxTtsDecodedRecords - segmentRanges.size()) {
+        return;
+    }
+
+    segmentRanges.reserve(segmentRanges.size() + rangeCount);
 
     DEBUG_LOG << "[segment range token]";
 
     // In the files I've seen this segmentRange token is only set once and contains the route length.
     // Note this code seems to permit a segment to have multiple ranges. I have no example so not sure.
-    for (unsigned int i = 0; i < data.size() / 10; i++) {
+    for (size_t i = 0; i < rangeCount; i++) {
+        const size_t offset = i * 10;
+        const std::uint32_t startCM = getUInt(data, offset);
+        const std::uint32_t endCM = getUInt(data, offset + 4);
+        const std::uint16_t metadata = getUShort(data, offset + 8);
 
-        double startKM = (getUInt(data, i * 10 + 0) / 100000.0);
-        double endKM = (getUInt(data, i * 10 + 4) / 100000.0);
+        const double startKM = startCM / 100000.0;
+        const double endKM = endCM / 100000.0;
+
+        segmentRanges.push_back({startKM, endKM, metadata});
 
         DEBUG_LOG << " [" << i << "=" << startKM << "-" << endKM << "\n";
 
-        if (getUShort(data, i * 10 + 6) != 0) {
-            DEBUG_LOG << "/0x" << std::hex << (getUShort(data, i * 10 + 6)) << std::dec << "\n";
+        if (metadata != 0) {
+            DEBUG_LOG << "/0x" << std::hex << metadata << std::dec << "\n";
         }
 
         DEBUG_LOG << "]\n";
@@ -324,7 +364,10 @@ void TTSReader::segmentRange(int version, ByteArray &data) {
 }
 
 // segment range; 548300 is 5.483km. What is short value in "old" files?
-void TTSReader::segmentInfo(int version, ByteArray &data) {
+bool TTSReader::segmentInfo(int version, ByteArray &data) {
+
+    if (!hasValidBlockSize(SEGMENT_INFO, version, data.size()))
+        return false;
 
     if ((version == 1104) && (data.size() == 8)) {
         unsigned startCM = getUInt(data, 0);
@@ -332,6 +375,9 @@ void TTSReader::segmentInfo(int version, ByteArray &data) {
 
         double startKM = (startCM / 100) / 1000.;
         double endKM   = (endCM   / 100) / 1000.;
+
+        if (!std::isfinite(startKM) || !std::isfinite(endKM))
+            return false;
 
         pendingSegment.startKM = startKM;
         pendingSegment.endKM   = endKM;
@@ -345,22 +391,32 @@ void TTSReader::segmentInfo(int version, ByteArray &data) {
 
         // NOTE: From the wattzapp debug print it looks like this 3rd value is a divisor.
         // In my test files its always 1. so no harm to divide - but beware I'm just guessing.
-        double divisor = getUShort(data, 0);
+        const std::uint16_t divisor = getUShort(data, 0);
+        if (divisor == 0)
+            return false;
 
         double startKM = ((startCM / 100) / 1000.) / divisor;
         double endKM   = ((endCM   / 100) / 1000.) / divisor;
+
+        if (!std::isfinite(startKM) || !std::isfinite(endKM))
+            return false;
 
         pendingSegment.startKM = startKM;
         pendingSegment.endKM   = endKM;
 
         DEBUG_LOG << "[segment range] " << (getUInt(data, 2) / 100000.0) << "-" << (getUInt(data, 6) / 100000.0) << "/" << getUShort(data, 0) << "\n";
     }
+
+    return true;
 }
 
 // 1 for "plain" RLV, 2 for ERGOs
 void trainingType(int version, ByteArray &data) {
 
     if (version == 1004) {
+        if (data.size() < 6)
+            return;
+
         switch (data[5]) {
         case 1:
             DEBUG_LOG << "[video type] RLV\n";
@@ -386,16 +442,24 @@ void Point::print() const {
 bool TTSReader::readData(QDataStream &is, ByteArray& buffer, bool copyPre) {
     size_t first = 0;
     if (copyPre) {
+        if (buffer.size() < 2 || pre.size() < 2)
+            return false;
+
         buffer[0] = pre[0];
         buffer[1] = pre[1];
         first = 2;
     }
 
     if (buffer.size() != first) {
-        size_t readSize = buffer.size() - first;
+        const size_t readSize = buffer.size() - first;
+        if (readSize > static_cast<size_t>(std::numeric_limits<int>::max()))
+            return false;
 
-        size_t iBytesRead = is.readRawData((char*)&buffer[first], (int)buffer.size() - static_cast<int>(first));
-        if (iBytesRead != readSize) return false;
+        const int bytesRead = is.readRawData(
+            reinterpret_cast<char *>(&buffer[first]),
+            static_cast<int>(readSize));
+        if (bytesRead < 0 || static_cast<size_t>(bytesRead) != readSize)
+            return false;
     }
 
     return true;
@@ -413,6 +477,10 @@ const std::vector<Point> & TTSReader::getPoints() const {
 
 const std::vector<Segment>& TTSReader::getSegments() const {
     return segmentList;
+}
+
+const std::vector<SegmentRange>& TTSReader::getSegmentRanges() const {
+    return segmentRanges;
 }
 
 const std::wstring& TTSReader::getRouteName()        const {
@@ -502,62 +570,174 @@ void TTSReader::recomputeAltitudeFromGradient() {
 }
 
 bool TTSReader::parseFile(QDataStream &file) {
+    try {
+        TTSReader parsed;
+        if (!parsed.parseFileContents(file))
+            return false;
+
+        *this = std::move(parsed);
+        return true;
+    } catch (const std::bad_alloc &) {
+        DEBUG_LOG << "Cannot allocate memory while parsing TTS data\n";
+        return false;
+    } catch (const std::length_error &) {
+        DEBUG_LOG << "Invalid TTS allocation size\n";
+        return false;
+    }
+}
+
+bool TTSReader::parseFileContents(QDataStream &file) {
     pre.resize(2);
-    int lastSize = -1;
+    std::uint64_t totalPayloadBytes = 0;
+    size_t blockCount = 0;
+    std::uint64_t frameRecordCount = 0;
+    std::uint64_t gpsRecordCount = 0;
+    std::uint64_t programRecordCount = 0;
+    std::uint64_t segmentRangeCount = 0;
+    std::uint64_t stringPayloadBytes = 0;
+
+    const auto addRecords = [](std::uint64_t payloadBytes,
+                               std::uint64_t recordSize,
+                               std::uint64_t &totalRecords) {
+        const std::uint64_t records = payloadBytes / recordSize;
+        if (records > kMaxTtsDecodedRecords
+            || totalRecords > kMaxTtsDecodedRecords - records) {
+            return false;
+        }
+
+        totalRecords += records;
+        return true;
+    };
+
+    const auto withinWorkingSetBudget = [&]() {
+        std::uint64_t estimatedBytes = totalPayloadBytes;
+        const std::uint64_t basisRecords =
+            std::max({frameRecordCount, gpsRecordCount, programRecordCount});
+
+        if (!addEstimatedStorage(frameRecordCount, sizeof(Point), estimatedBytes)
+            || !addEstimatedStorage(gpsRecordCount, sizeof(GPSPoint), estimatedBytes)
+            || !addEstimatedStorage(programRecordCount, sizeof(ProgramPoint), estimatedBytes)
+            || !addEstimatedStorage(segmentRangeCount, sizeof(SegmentRange), estimatedBytes)
+            || !addEstimatedStorage(basisRecords, sizeof(Point), estimatedBytes)
+            || !addEstimatedStorage(basisRecords, sizeof(Pair), estimatedBytes)) {
+            return false;
+        }
+
+        // Covers two simultaneously live strings at up to twice their size.
+        const std::uint64_t stringCharacters = (stringPayloadBytes + 1) / 2;
+        if (!addEstimatedStorage(stringCharacters, 4 * sizeof(wchar_t),
+                                 estimatedBytes)) {
+            return false;
+        }
+
+        return estimatedBytes <= kMaxTtsWorkingSetBytes;
+    };
 
     for (;;) {
-        //    is = new FileInputStream(fileName);
-        if (!readData(file, pre, false)) {
+        const int prefixBytes = file.readRawData(pre.data(), 2);
+        if (prefixBytes == 0)
+            break;
+        if (prefixBytes != 2) {
+            DEBUG_LOG << "Truncated TTS header prefix\n";
+            return false;
+        }
+
+        if (!isHeader(pre)) {
+            DEBUG_LOG << "Data encountered where a TTS header was required\n";
+            return false;
+        }
+
+        if (blockCount >= kMaxTtsBlocks) {
+            DEBUG_LOG << "Too many TTS blocks\n";
+            return false;
+        }
+
+        ByteArray header(static_cast<size_t>(kTtsHeaderBytes));
+        if (!readData(file, header, true)) {
+            DEBUG_LOG << "Cannot read complete TTS header\n";
+            return false;
+        }
+
+        std::uint64_t payloadSize = 0;
+        if (!checkedPayloadSize(getUInt(header, 6), getUInt(header, 10),
+                                payloadSize)) {
+            DEBUG_LOG << "Invalid TTS payload dimensions\n";
+            return false;
+        }
+
+        const int blockType = getUShort(header, 2);
+        const int version = getUShort(header, 4);
+        if (!hasValidBlockSize(blockType, version,
+                               static_cast<size_t>(payloadSize))) {
+            DEBUG_LOG << "Invalid TTS record dimensions\n";
+            return false;
+        }
+
+        if (!checkedAdd(payloadSize, totalPayloadBytes)
+            || totalPayloadBytes > kMaxTtsPayloadBytes) {
+            DEBUG_LOG << "TTS payload exceeds total size limit\n";
+            return false;
+        }
+
+        bool decodedShapeAccepted = true;
+        switch (blockType) {
+        case DISTANCE_FRAME:
+            decodedShapeAccepted =
+                addRecords(payloadSize, 8, frameRecordCount);
+            break;
+        case GPS_DATA:
+            decodedShapeAccepted =
+                addRecords(payloadSize, 16, gpsRecordCount);
+            break;
+        case PROGRAM_DATA:
+            decodedShapeAccepted =
+                addRecords(payloadSize, 6, programRecordCount);
+            if (decodedShapeAccepted) {
+                ++programRecordCount;
+                decodedShapeAccepted =
+                    programRecordCount <= kMaxTtsDecodedRecords;
+            }
+            break;
+        case SEGMENT_RANGE:
+            decodedShapeAccepted =
+                addRecords(payloadSize, 10, segmentRangeCount);
+            break;
+        case kTtsUtf16StringBlockType:
+            decodedShapeAccepted =
+                checkedAdd(payloadSize, stringPayloadBytes);
+            break;
+        default:
             break;
         }
 
-        if (isHeader(pre)) {
-            ByteArray header;
-            header.resize(14);
-            if (readData(file, header, true)) {
-                content.push_back(header);
-                lastSize = getUInt(header, 6) * getUInt(header, 10);
-            }
-            else {
-                DEBUG_LOG << "Error: Cannot read header\n";
-                return false;// new IllegalArgumentException("Cannot read header");
-            }
-
-            // one byte data.. unconditionally read as data, no-one is
-            // able to check it
-            if (lastSize < 2) {
-                ByteArray data;
-                data.resize(lastSize);
-                if (readData(file, data, false)) {
-                    content.push_back(data);
-                }
-                else {
-                    DEBUG_LOG << "Cannot read " << lastSize << "b data" << "\n";
-                    return false;
-                }
-
-                lastSize = -1;
-            }
+        if (!decodedShapeAccepted || !withinWorkingSetBudget()) {
+            DEBUG_LOG << "TTS decoded data exceeds memory limits\n";
+            return false;
         }
-        else {
-            if (lastSize < 2) {
-                DEBUG_LOG << "Data not allowed, header " << getUShort(pre, 0) << "\n";
+
+        QIODevice *device = file.device();
+        if (device && !device->isSequential()) {
+            const qint64 remaining = device->size() - device->pos();
+            if (remaining < 0
+                || payloadSize > static_cast<std::uint64_t>(remaining)) {
+                DEBUG_LOG << "TTS payload extends past end of input\n";
                 return false;
             }
-            ByteArray data;
-            data.resize(lastSize);
-            if (readData(file, data, true)) {
-                content.push_back(data);
-            } else {
-                DEBUG_LOG << "Cannot read " << lastSize << "b data\n";
-                return false;
-            }
-
-            lastSize = -1;
         }
-    }// for
 
-    loadHeaders();
+        ByteArray data(static_cast<size_t>(payloadSize));
+        if (!readData(file, data, false)) {
+            DEBUG_LOG << "Cannot read complete TTS payload\n";
+            return false;
+        }
+
+        content.push_back(std::move(header));
+        content.push_back(std::move(data));
+        ++blockCount;
+    }
+
+    if (!loadHeaders())
+        return false;
 
     // Clean up passes.
 
@@ -619,11 +799,16 @@ bool TTSReader::loadHeaders() {
 
     int bytes = 0;
 
-    for (unsigned cu = 0; cu < content.size(); cu++)
+    if (content.size() % 2 != 0)
+        return false;
+
+    for (size_t cu = 0; cu < content.size(); cu++)
     {
         ByteArray &data = content[cu];
 
-        if (isHeader(data)) {
+        if (cu % 2 == 0) {
+            if (data.size() != kTtsHeaderBytes || !isHeader(data))
+                return false;
 
             DEBUG_LOG << bytes << " [" << std::hex << (bytes) << std::dec << "]: "
                 << getUShort(data, 0) << "." << getUShort(data, 2) << " v"
@@ -652,7 +837,7 @@ bool TTSReader::loadHeaders() {
                 stringType = StringType::CRC;
                 break;
 
-            case 110: // UTF-16 string
+            case kTtsUtf16StringBlockType:
 
                 stringType = StringType::STRING;
                 stringId = getUShort(data, 0);
@@ -685,12 +870,7 @@ bool TTSReader::loadHeaders() {
             }
         }
         else {
-            IntArray ia;
-            iarr(data, ia);
-
-            IntArray decrD;
-            bool success = decryptData(ia, keyH, decrD);
-            if (!success)
+            if (!decryptData(data, keyH))
                 return false;
 
             DEBUG_LOG << "::";
@@ -708,7 +888,7 @@ bool TTSReader::loadHeaders() {
                 /*
                  * try { result = currentFile + "." + (imageId++) + ".png";
                  * FileOutputStream file = new FileOutputStream(result);
-                 * file.write(barr(decrD)); file.close(); } catch
+                 * file.write(data); file.close(); } catch
                  * (IOException e) { result = "cannot create: " + e; }
                  */
 
@@ -717,50 +897,46 @@ bool TTSReader::loadHeaders() {
             case STRING:
 
             {
-                if (tts_string_table.count(blockType + stringId)) {
-                    DEBUG_LOG << "[" << tts_string_table.at(blockType + stringId) << "]";
+                const int decodedStringId = blockType + stringId;
+                if (tts_string_table.count(decodedStringId)) {
+                    DEBUG_LOG << "[" << tts_string_table.at(decodedStringId) << "]";
                 } else {
                     DEBUG_LOG << "[" << blockType << "." << stringId << "]";
                 }
 
-                std::wstring result;
-
-                for (size_t i = 0; i < decrD.size() / 2; i++) {
-                    Char c = (Char)(decrD[2 * i] | (int)decrD[2 * i + 1] << 8);
-                    result.append(1, c);
-                }
-
-                switch (blockType + stringId) {
+                std::wstring *target = nullptr;
+                switch (decodedStringId) {
                 case 5002: // Video Name
-                    ttsName = result;
+                    target = &ttsName;
                     break;
                 case 1001: // Route Name
-                    routeName = result;
+                    target = &routeName;
                     break;
                 case 1002: // Route Description
-                    routeDescription = result;
+                    target = &routeDescription;
                     break;
                 case 1041: // Segment Name
-                    // Push of pending segment to segment list is triggered by finding a new
-                    // segment name. If pending segment is valid then push it, then clear
-                    // pending to start a new one.
+                    // A new segment name closes the previous pending segment.
                     flushPendingSegment();
-                    pendingSegment.name = result;
+                    target = &pendingSegment.name;
                     break;
                 case 1042: // Segment Description
-                    pendingSegment.description = result;
+                    target = &pendingSegment.description;
                     break;
                 }
 
-                DEBUG_LOG << "[" << result << "]";
+                if (target) {
+                    if (!decodeUtf16String(data, *target))
+                        return false;
+                    DEBUG_LOG << "[" << *target << "]";
+                }
             }
             break;
 
             case BLOCK:
             {
-                ByteArray ba;
-                barr(decrD, ba);
-                blockProcessing(blockType, version, ba);
+                if (!blockProcessing(blockType, version, data))
+                    return false;
             }
             default:
             break;
@@ -801,15 +977,18 @@ bool TTSReader::loadHeaders() {
 
     Basis basis = NoBasis;
 
+    if (frameMapCount == 0 && gpsCount == 0 && slopeCount == 0) {
+        return false;
+    }
+
     // Copy basis stream onto points[].
     if (frameMapCount > gpsCount && frameMapCount > slopeCount)
     {
-        // pointList basis. This holds frame mapping.
-        // Is already correct type so just copy.
-        points = pointList;
+        points = std::move(pointList);
         basis = FrameMap;
     } else if (gpsCount >= slopeCount) {
-        // GpsList basis    
+        // GpsList basis
+        points.reserve(gpsCount);
         for (size_t i = 0; i < gpsCount; i++) {
             Point p;
 
@@ -823,6 +1002,7 @@ bool TTSReader::loadHeaders() {
         basis = GPS;
     } else {
         // slope basis
+        points.reserve(slopeCount);
         for (size_t i = 0; i < slopeCount; i++) {
             Point p;
 
@@ -831,6 +1011,7 @@ bool TTSReader::loadHeaders() {
 
             points.push_back(p);
         }
+        fHasSlope = true;
         basis = Slope;
     }
 
@@ -923,6 +1104,7 @@ bool TTSReader::loadHeaders() {
     }
 
     // Convet units for distance and time. Compute speed.
+    series.reserve(points.size());
     Point *pPrevPoint = &(points[0]);
 
     unsigned int pointCount = 0;
@@ -935,9 +1117,31 @@ bool TTSReader::loadHeaders() {
         // convert to mS
         p.setTime(p.getTime() * 1000);
 
+        if (!std::isfinite(p.getDistanceFromStart())
+            || !std::isfinite(p.getTime())
+            || !std::isfinite(p.getLatitude())
+            || !std::isfinite(p.getLongitude())
+            || !std::isfinite(p.getElevation())
+            || !std::isfinite(p.getGradient())
+            || !std::isfinite(p.getPower())) {
+            return false;
+        }
+
         // speed = d/t
         if (pointCount > 0) {
-            p.setSpeed((3600 * (p.getDistanceFromStart() - pPrevPoint->getDistanceFromStart())) / ((p.getTime() - pPrevPoint->getTime())));
+            const double distanceDelta = p.getDistanceFromStart()
+                - pPrevPoint->getDistanceFromStart();
+            const double timeDelta = p.getTime() - pPrevPoint->getTime();
+            double speed = 0;
+
+            if (std::isfinite(distanceDelta) && std::isfinite(timeDelta)
+                && timeDelta > 0) {
+                speed = 3600 * distanceDelta / timeDelta;
+                if (!std::isfinite(speed))
+                    speed = 0;
+            }
+
+            p.setSpeed(speed);
         }
 
         pPrevPoint = &(points[pointCount]);
@@ -961,15 +1165,57 @@ bool TTSReader::loadHeaders() {
     return true;
 }
 
-void TTSReader::blockProcessing(int blockType, int version, ByteArray &data) {
+bool TTSReader::hasValidBlockSize(int blockType, int version, size_t size) {
+    const auto hasCompleteRecords = [size](size_t recordSize,
+                                            bool allowEmpty = false) {
+        return (allowEmpty || size != 0)
+            && size % recordSize == 0
+            && size / recordSize <= kMaxTtsDecodedRecords;
+    };
+
+    switch (blockType) {
+    case kTtsUtf16StringBlockType:
+        return size % 2 == 0 && size <= kMaxTtsUtf16PayloadBytes;
+    case PROGRAM_DATA:
+        return hasCompleteRecords(6);
+
+    // GPS and frame mapping are optional streams. Segment ranges are optional
+    // metadata. Empty blocks for these record types are valid no-ops.
+    case DISTANCE_FRAME:
+        return hasCompleteRecords(8, true);
+    case GPS_DATA:
+        return hasCompleteRecords(16, true);
+    case GENERAL_INFO:
+        return size >= 2;
+    case TRAINING_TYPE:
+        return version != 1004 || size >= 6;
+    case SEGMENT_INFO:
+        if (version == 1000)
+            return size == 10;
+        if (version == 1104)
+            return size == 8;
+        return true;
+    case SEGMENT_RANGE:
+        return hasCompleteRecords(10, true);
+    default:
+        return true;
+    }
+}
+
+bool TTSReader::blockProcessing(int blockType, int version, ByteArray &data) {
+    if (!hasValidBlockSize(blockType, version, data.size())) {
+        DEBUG_LOG << "Invalid block size " << data.size() << " for block "
+                  << blockType << " version " << version << "\n";
+        return false;
+    }
+
     switch (blockType) {
     case PROGRAM_DATA:
         programData(version, data);
         break;
 
     case DISTANCE_FRAME:
-        distanceToFrame(version, data);
-        break;
+        return distanceToFrame(version, data);
 
     case GPS_DATA:
         GPSData(version, data);
@@ -984,8 +1230,7 @@ void TTSReader::blockProcessing(int blockType, int version, ByteArray &data) {
         break;
 
     case SEGMENT_INFO:
-        segmentInfo(version, data);
-        break;
+        return segmentInfo(version, data);
 
     case SEGMENT_RANGE:
         segmentRange(version, data);
@@ -1000,6 +1245,8 @@ void TTSReader::blockProcessing(int blockType, int version, ByteArray &data) {
         DEBUG_LOG << "Unidentified block type " << blockType << "\n";
         break;
     }
+
+    return true;
 }
 
 /*
@@ -1015,7 +1262,8 @@ void TTSReader::blockProcessing(int blockType, int version, ByteArray &data) {
 // I'm not sure about the order.. but only slope/distance (0/) and
 // power/time (1/1) pairs are handled..
 void TTSReader::generalInfo(int version, ByteArray &data) {
-    Q_UNUSED(version);
+    if (!hasValidBlockSize(GENERAL_INFO, version, data.size()))
+        return;
 
     const char* programType;
 
@@ -1059,17 +1307,22 @@ void TTSReader::generalInfo(int version, ByteArray &data) {
 // It screams.. "I'm GPS position!". Distance followed by lat, lon,
 // altitude
 void TTSReader::GPSData(int version, ByteArray &data) {
-    Q_UNUSED(version);
-
-    if (data.size() % 16 != 0) {
+    if (!hasValidBlockSize(GPS_DATA, version, data.size())) {
         DEBUG_LOG << "GPS Points Data wrong length " << data.size() << "\n";
         return;
     }
 
     DEBUG_LOG << "[" << (data.size() / 16) << " gps points]\n";
 
-    int gpsCount = (int)data.size() / 16;
-    for (int i = 0; i < gpsCount; i++) {
+    const size_t gpsCount = data.size() / 16;
+    if (gpsPoints.size() > kMaxTtsDecodedRecords
+        || gpsCount > kMaxTtsDecodedRecords - gpsPoints.size()) {
+        return;
+    }
+
+    gpsPoints.reserve(gpsPoints.size() + gpsCount);
+
+    for (size_t i = 0; i < gpsCount; i++) {
 
         int distance = getUInt(data, i * 16);
 
@@ -1123,12 +1376,14 @@ void TTSReader::GPSData(int version, ByteArray &data) {
  *
  * Watt/Time Program:
  */
-void TTSReader::distanceToFrame(int version, ByteArray &data) {
-    Q_UNUSED(version);
-    if (data.size() % 8 != 0) {
+bool TTSReader::distanceToFrame(int version, ByteArray &data) {
+    if (!hasValidBlockSize(DISTANCE_FRAME, version, data.size())) {
         DEBUG_LOG << "Distance2Frame Data wrong length " << data.size() << "\n";
-        return;
+        return false;
     }
+
+    if (data.empty())
+        return true;
 
     /*
      * We can calculate frame rate by dividing number of frames by no. of
@@ -1138,39 +1393,48 @@ void TTSReader::distanceToFrame(int version, ByteArray &data) {
      * than 100 divide by 10 (typical with RLV files converted to TTS).
      */
     DEBUG_LOG << "[" << (data.size() / 8) << " video points][last frame "
-        << getUInt(data, (int)data.size() - 4) << "]" << "\n";
+        << getUInt(data, data.size() - 4) << "]" << "\n";
 
-    double dataPoints = ((int)data.size() / 8);
-    double frames = getUInt(data, (int)data.size() - 4);
+    const size_t dataPointCount = data.size() / 8;
+    const double frames = getUInt(data, data.size() - 4);
+    double decodedFrameRate = frames / static_cast<double>(dataPointCount);
 
-    frameRate = frames / dataPoints;
-
-    if (frameRate > 30 && frameRate < 100) {
-        frameRate = frameRate / 2.0;
+    if (decodedFrameRate > 30 && decodedFrameRate < 100) {
+        decodedFrameRate /= 2.0;
     }
-    else if (frameRate >= 100) {
-        frameRate = frameRate / 10.0;
+    else if (decodedFrameRate >= 100) {
+        decodedFrameRate /= 10.0;
     }
 
-    DEBUG_LOG << "Frame Rate " << frameRate << "\n";
+    if (!std::isfinite(decodedFrameRate) || decodedFrameRate <= 0) {
+        DEBUG_LOG << "Invalid frame rate " << decodedFrameRate << "\n";
+        return false;
+    }
 
-    // System.out.println("Frame Rate " + frameRate);
+    DEBUG_LOG << "Frame Rate " << decodedFrameRate << "\n";
 
-    for (unsigned int i = 0; i < data.size() / 8; i++) {
+    if (pointList.size() > kMaxTtsDecodedRecords
+        || dataPointCount > kMaxTtsDecodedRecords - pointList.size()) {
+        return false;
+    }
+
+    pointList.reserve(pointList.size() + dataPointCount);
+
+    for (size_t i = 0; i < dataPointCount; i++) {
         Point p;
         p.setDistanceFromStart(getUInt(data, i * 8));
-        int frame = getUInt(data, i * 8 + 4);
-
-        // System.out.println("frame " + frame + " dist " +
-        // (p.getDistanceFromStart()/1000));
-
-        p.setTime((int)(frame / frameRate));
+        const std::uint32_t frame = getUInt(data, i * 8 + 4);
+        p.setTime(frame / decodedFrameRate);
         pointList.push_back(p);
     }
+
+    frameRate = decodedFrameRate;
 
     // This reader was premised on all tts files having frame mapping, but
     // some don't...
     fHasFrameMapping = pointList.size() != 0;
+
+    return true;
 }
 
 /**
@@ -1185,9 +1449,7 @@ void TTSReader::distanceToFrame(int version, ByteArray &data) {
  */
 
 void TTSReader::programData(int version, ByteArray &data) {
-    Q_UNUSED(version);
-
-    if (data.size() % 6 != 0) {
+    if (!hasValidBlockSize(PROGRAM_DATA, version, data.size())) {
         DEBUG_LOG << "Program data wrong length" << data.size() << "\n";
         return;
     }
@@ -1195,9 +1457,16 @@ void TTSReader::programData(int version, ByteArray &data) {
     DEBUG_LOG << "[" << data.size() / 6 << " program points]";
 
     double distance = 0;
-    int pointCount = (int)data.size() / 6;
+    const size_t pointCount = data.size() / 6;
+    const size_t maxAdditionalPoints = pointCount + 1;
+    if (programList.size() > kMaxTtsDecodedRecords
+        || maxAdditionalPoints > kMaxTtsDecodedRecords - programList.size()) {
+        return;
+    }
 
-    for (int i = 0; i < pointCount; i++) {
+    programList.reserve(programList.size() + maxAdditionalPoints);
+
+    for (size_t i = 0; i < pointCount; i++) {
         int slope = getUShort(data, i * 6);
         if ((slope & 0x8000) != 0) {
             slope -= 0x10000;

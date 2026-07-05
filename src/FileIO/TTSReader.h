@@ -18,6 +18,7 @@
 
 // Adapted to C++ from Wattzap Community Edition Java source code.
 
+#include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <vector>
@@ -179,8 +180,17 @@ namespace NS_TTSReader {
         std::wstring description;
 
         void reset() { startKM = -1.; endKM = -1.; name.clear(); description.clear(); }
-        bool IsValid() const { return (startKM >= 0. && endKM >= 0.); }
+        bool IsValid() const {
+            return std::isfinite(startKM) && std::isfinite(endKM)
+                && startKM >= 0. && endKM >= 0.;
+        }
         Segment() { reset(); }
+    };
+
+    struct SegmentRange {
+        double startKM;
+        double endKM;
+        std::uint16_t metadata;
     };
 
     class TTSReader {
@@ -193,6 +203,7 @@ namespace NS_TTSReader {
         ByteArray pre;
 
         std::vector<Segment>      segmentList;
+        std::vector<SegmentRange> segmentRanges;
         Segment                   pendingSegment;
 
         int imageId;
@@ -227,10 +238,14 @@ namespace NS_TTSReader {
         static const int SEGMENT_RANGE = 1050;
         static const int VIDEO_INFO = 2010;
 
+        static bool hasValidBlockSize(int blockType, int version, size_t size);
+        bool parseFileContents(QDataStream &file);
+
     public:
 
-        TTSReader() : maxSlope(0), minSlope(0), totalDistance(0), fHasKM(false),
-                      fHasGPS(false), fHasAlt(false), fHasSlope(false),
+        TTSReader() : imageId(0), frameRate(0), maxSlope(0), minSlope(0),
+                      totalDistance(0), fHasKM(false), fHasGPS(false),
+                      fHasAlt(false), fHasSlope(false),
                       fHasFrameMapping(false) {}
 
         enum StringType {
@@ -240,6 +255,7 @@ namespace NS_TTSReader {
         const XYSeries           & getSeries() const;
         const std::vector<Point> & getPoints() const;
         const std::vector<Segment>& getSegments() const;
+        const std::vector<SegmentRange>& getSegmentRanges() const;
         const std::wstring        & getRouteName() const;
         const std::wstring        & getRouteDescription() const;
         double                     getDistanceMeters() const;
@@ -263,10 +279,10 @@ namespace NS_TTSReader {
         bool hasFrameMapping()    const { return fHasFrameMapping; }
 
         bool loadHeaders();
-        void blockProcessing(int blockType, int version, ByteArray &data);
+        bool blockProcessing(int blockType, int version, ByteArray &data);
 
         void segmentRange(int version, ByteArray& data);
-        void segmentInfo(int version, ByteArray& data);
+        bool segmentInfo(int version, ByteArray& data);
 
         bool flushPendingSegment() {
             bool fRet = false;
@@ -299,7 +315,7 @@ namespace NS_TTSReader {
          * Watt/Time Program:
          */
 
-        void distanceToFrame(int version, ByteArray &data);
+        bool distanceToFrame(int version, ByteArray &data);
 
         /**
          * PROGRAM data

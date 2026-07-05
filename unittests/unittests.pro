@@ -15,6 +15,7 @@ equals(GC_UNITTESTS, active) {
 			   FileIO/archiveSecurity \
 			   FileIO/powerTapBounds \
 			   FileIO/tacxCafBounds \
+			   FileIO/ttsReaderBounds \
 			   FileIO/wkoBounds \
 			   Gui/calendarData \
 			   Gui/iconBundleSecurity \

@@ -390,13 +390,19 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### MEM-007: TTS handlers accept empty/short blocks and unsafe typed reads
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/FileIO/TTSReader.cpp:528`,
   `src/FileIO/TTSReader.cpp:1042`, `src/FileIO/TTSReader.cpp:1141`
 - Impact: Empty blocks can be read at negative offsets and short blocks access
   missing bytes. Typed pointer loads are also unaligned/aliasing unsafe.
-- Test: Exercise empty and 1-15 byte blocks under ASan/UBSan.
-- Fix direction: Add per-block size contracts and decode with endian helpers.
+- Resolution: The parser is transactional, validates every header and known
+  record shape before allocation or reading, uses little-endian helpers for
+  unaligned fields, decrypts payloads in place, and bounds individual payloads,
+  decoded records, UTF-16 strings, block count, and cumulative working memory.
+- Verification: The focused normal and ASan/UBSan suites each pass 178 tests,
+  including all 0-15 byte inputs, truncations, integer overflow, memory
+  amplification, UTF-16 replacement, and encryption-key wrapping. The
+  aggregate suite passes 1,157 tests and the production `TTSReader.o` compiles.
 
 ### MEM-008: Custom virtual trainer names use mismatched new[]/delete
 
