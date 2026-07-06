@@ -191,7 +191,10 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   synchronizes every output before publishing the set, snapshots and locks the
   source, atomically archives it while preserving any prior backup, and mutates
   the cache only after persistence succeeds. It removes the captured source by
-  name, so a nested event loop cannot delete a newly selected activity.
+  name, so a nested event loop cannot delete a newly selected activity. Merge
+  Activity now saves its isolated replacement candidate first and transfers
+  ownership to the current activity only after durable persistence succeeds;
+  a failed save leaves the original activity and retry state intact.
 - Verification: The new regression cases first failed because the staged-set
   finalizer, atomic move, transactional split helper, and named archived-cache
   removal did not exist. The final `atomicActivitySave`, `splitActivitySave`,
@@ -200,7 +203,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   build links, and all 1,286 registered tests pass without failures or skips.
 - Remaining: Complete and independently commit transaction adoption in
   `CloudService`, `DownloadRideDialog`, `RideImportWizard`, `GcUpgrade`,
-  `AerolabWindow`, and `MergeActivityWizard`. Multi-file crash recovery and
+  and `AerolabWindow`. Multi-file crash recovery and
   rollback against non-cooperating writers are tracked as `DUR-007` and
   `DUR-008`.
 

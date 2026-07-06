@@ -21,6 +21,7 @@
 #include "Context.h"
 #include "Colors.h"
 #include "RideCache.h"
+#include "SaveDialogs.h"
 #include "MainWindow.h"
 #include "HelpWhatsThis.h"
 #include "LocationInterpolation.h"
@@ -1401,11 +1402,20 @@ bool
 MergeConfirm::validatePage()
 {
     // We are done -- recalculate derived series, save and mark done
-    wizard->current->notifyRideDataChanged();
     wizard->combined->recalculateDerivedSeries(true);
-    wizard->current->setRide(wizard->combined);
-    wizard->context->mainWindow->saveSilent(wizard->context, wizard->current);
-    wizard->current->setDirty(false); // lose changes
+    QString error;
+    if (!saveActivityCandidate(
+            wizard->current, wizard->combinedItem, wizard->combined,
+            [&](RideItem *candidate, QString &saveError) {
+                return MainWindow::saveSilent(
+                    wizard->context, candidate, &saveError);
+            },
+            error)) {
+        QMessageBox::warning(
+            wizard, tr("Save Activity"), error);
+        return false;
+    }
+    wizard->combined = nullptr;
 
     return true;
 }
