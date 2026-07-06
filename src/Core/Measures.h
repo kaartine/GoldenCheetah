@@ -19,6 +19,7 @@
 #ifndef _Gc_Measures_h
 #define _Gc_Measures_h
 
+#include "AtomicFileWriter.h"
 #include "GoldenCheetah.h"
 
 #include <QDate>
@@ -90,7 +91,10 @@ public:
     MeasuresGroup(QString symbol, QString name, QStringList symbols, QStringList names, QStringList metricUnits, QStringList imperialUnits, QList<double> unitsFactors, QList<QStringList> headers,  QDir dir=QDir(), bool withData=false);
     MeasuresGroup(QDir dir=QDir(), bool withData=false) : dir(dir), withData(withData) {}
     ~MeasuresGroup() {}
-    void write();
+    bool write(
+        QString *error = nullptr,
+        const AtomicFileWriterFactory &writerFactory =
+            qSaveFileWriterFactory());
     QList<Measure>& measures() { return measures_; }
     void setMeasures(QList<Measure>&x);
     void getMeasure(QDate date, Measure&) const;
@@ -129,7 +133,9 @@ private:
     QList<QStringList> headers;
     QList<Measure> measures_;
 
-    bool serialize(QString, QList<Measure> &);
+    bool serialize(
+        QString, QList<Measure> &,
+        const AtomicFileWriterFactory &, QString &);
     bool unserialize(QFile &, QList<Measure> &);
 };
 

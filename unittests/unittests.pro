@@ -6,6 +6,7 @@ exists(unittests.pri) {
 
 equals(GC_UNITTESTS, active) {
 	SUBDIRS += Core/athleteMigrationSafety \
+			   Core/measuresAtomicSave \
 			   Core/rideCacheRemoval \
 			   Core/seasonOffset \
 			   Core/season \

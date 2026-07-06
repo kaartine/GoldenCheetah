@@ -248,13 +248,28 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-002: Other persistent files are also truncated in place
 
-- Status: OPEN
-- Code: `src/Core/Measures.cpp:152`, `src/Core/Seasons.cpp:224`,
-  `src/Metrics/RideMetadata.cpp:1671`, `src/Core/RideDB.y:481`
+- Status: IN_PROGRESS - Measures fixed; seasons, metadata, and cache state
+  remain.
+- Code: fixed in `src/Core/Measures.cpp`; remaining writers are
+  `src/Core/Seasons.cpp:224`, `src/Metrics/RideMetadata.cpp:1671`, and
+  `src/Core/RideDB.y:481`.
 - Impact: Measures, seasons, metadata, and cache state can be left empty or
   partial on ENOSPC or process failure.
-- Test: Add fault-injection tests for each writer and preserve the prior file.
-- Fix direction: Share the atomic persistence helper introduced for DUR-001.
+- Measures regression test: `unittests/Core/measuresAtomicSave` injects open,
+  short-write, flush, and commit failures and requires the previous measures
+  file to remain byte-for-byte intact. It also validates the successful JSON
+  publication path.
+- Measures resolution: Serialize the complete document in memory and publish
+  it with the atomic persistence helper introduced for DUR-001. Return errors
+  to programmatic callers while preserving the existing user-visible dialog
+  for callers that do not request an error string.
+- Measures verification: The RED build failed because `MeasuresGroup::write`
+  had no injectable writer contract. The focused suite passes 7 tests normally
+  and under strict ASan/UBSan/LSan with leak detection. The full Qt 6.8.3
+  application links, and the complete worktree run passes 1,313 tests in 31
+  registered suites without failures or skips.
+- Remaining fix direction: Add equivalent fault-injection coverage and atomic
+  publication to the seasons, metadata, and cache writers.
 
 ### DUR-003: TrainDB drops user tables when version lookup fails
 
