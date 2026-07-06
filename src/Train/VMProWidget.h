@@ -7,6 +7,7 @@
 #include <QComboBox>
 #include <QGroupBox>
 #include <QLabel>
+#include <QPointer>
 #include <QLowEnergyService>
 #include <QTextEdit>
 
@@ -19,6 +20,18 @@ public:
     VMProWidget(QLowEnergyService * service, QObject * parent);
 
     void onReconnected(QLowEnergyService * service);
+
+    static VMProWidget *createOrReconnect(
+        QPointer<VMProWidget> &widget,
+        QLowEnergyService *service, QObject *parent)
+    {
+        if (widget) {
+            widget->onReconnected(service);
+        } else {
+            widget = new VMProWidget(service, parent);
+        }
+        return widget.data();
+    }
 
 private slots:
     // Add a message for display to user

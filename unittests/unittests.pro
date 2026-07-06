@@ -29,6 +29,7 @@ equals(GC_UNITTESTS, active) {
 			   Python/pythonDataSeriesOwnership \
 			   Train/antBurstBounds \
 			   Train/kineticPacketBounds \
+			   Train/vmProWidgetLifecycle \
 			   Train/virtualPowerTrainerOwnership
 	CONFIG += ordered
 } else {

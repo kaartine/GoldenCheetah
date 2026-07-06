@@ -22,11 +22,14 @@
 #include <QBluetoothDeviceInfo>
 #include <QLowEnergyController>
 #include <QLowEnergyService>
+#include <QPointer>
 #include <QQueue>
 #include <QTimer>
 
 #include "CalibrationData.h"
 #include "Ftms.h"
+
+class VMProWidget;
 
 typedef struct btle_sensor_type {
     const char *descriptive_name;
@@ -86,6 +89,7 @@ private:
     QBluetoothDeviceInfo m_currentDevice;
     QLowEnergyController *m_control;
     QList<QLowEnergyService*> m_services;
+    QPointer<VMProWidget> vmProWidget;
     int prevCrankStaleness;
     quint16 prevCrankTime;
     quint16 prevCrankRevs;

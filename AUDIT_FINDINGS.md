@@ -146,14 +146,22 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### BLE-001: VO2 reconnect uses a dangling static widget pointer
 
-- Status: OPEN
-- Code: `src/Train/BT40Device.cpp:421`
+- Status: FIXED
+- Code: `src/Train/BT40Device.cpp`, `src/Train/BT40Device.h`,
+  `src/Train/VMProWidget.h`
 - Impact: A function-static `VMProWidget` is parented to the first BLE device.
   Destroying the device frees the widget but leaves the static pointer, so the
   next reconnect calls through freed memory. Multiple VO2 devices also share it.
-- Test: Connect, stop, recreate the controller, and reconnect under ASan. Also
-  verify two VO2 devices retain independent configurators.
-- Fix direction: Store a per-device `QPointer<VMProWidget>` member.
+- Test: `unittests/Train/vmProWidgetLifecycle` verifies same-device reuse,
+  independent widgets for two devices, selective owner destruction, and clean
+  recreation after the original owner is gone.
+- Resolution: Each `BT40Device` now stores its own guarded widget pointer. The
+  shared create-or-reconnect contract reuses only that device's live child and
+  creates a new child after Qt clears the pointer during parent destruction.
+- Verification: The regression test first failed because the per-device
+  contract did not exist. All 5 cases pass normally and under strict
+  ASan/UBSan/LSan, the full registered test suite passes without failures or
+  skips, and the full Qt 6.8.3 application build links successfully.
 
 ## High
 

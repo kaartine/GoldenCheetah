@@ -418,13 +418,10 @@ BT40Device::serviceStateChanged(QLowEnergyService::ServiceState s)
                                 QBluetoothUuid(QString(VO2MASTERPRO_DATA_CHAR_UUID))));
 
                     // Create a VM Pro Configurator window
-                    static VMProWidget * vmProWidget = nullptr;
-                    if (!vmProWidget) {
-                        vmProWidget = new VMProWidget(service, this);
-                        connect(vmProWidget, &VMProWidget::setNotification, this, &BT40Device::setNotification);
-                    } else {
-                        vmProWidget->onReconnected(service);
-                    }
+                    VMProWidget *widget = VMProWidget::createOrReconnect(
+                        vmProWidget, service, this);
+                    connect(widget, &VMProWidget::setNotification, this,
+                            &BT40Device::setNotification, Qt::UniqueConnection);
                 } else if (service->serviceUuid() == QBluetoothUuid(QString(BLE_TACX_UART_UUID))) {
 
                     emit setNotification(tr("Connected to device / service: ") + m_currentDevice.name() + 
