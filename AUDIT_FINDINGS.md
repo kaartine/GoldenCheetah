@@ -167,12 +167,14 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-001: Activity saves are non-atomic and report false success
 
-- Status: IN_PROGRESS (core save and split transactions fixed; remaining
-  persistence callers are being converted independently)
+- Status: FIXED
 - Code: `src/FileIO/AtomicFileWriter.h`, `src/FileIO/JsonRideFile.y`,
   `src/Gui/SaveDialogs.cpp`, `src/Core/RideCache.cpp`,
   `src/Core/RideCacheRemoval.cpp`, `src/Gui/SplitActivitySave.cpp`,
-  `src/Gui/SplitActivityWizard.cpp`
+  `src/Gui/SplitActivityWizard.cpp`, `src/Gui/MergeActivityWizard.cpp`,
+  `src/Charts/AerolabWindow.cpp`, `src/Core/GcUpgrade.cpp`,
+  `src/Gui/RideImportWizard.cpp`, `src/Gui/DownloadRideDialog.cpp`,
+  `src/Cloud/CloudService.cpp`
 - Impact: JSON save truncates the destination in place, does not check write or
   flush status, and callers mark the activity clean even after failure. Disk
   exhaustion or a crash can destroy the only good copy.
@@ -202,18 +204,19 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   Import now publishes staged JSON before inserting the activity into the
   cache and reports write, publication, and linked-activity save failures.
   Device downloads use the same ordering and preserve stale staging files for
-  recovery instead of silently replacing them.
+  recovery instead of silently replacing them. Cloud upload and sync stop and
+  report local save failures. Cloud downloads publish JSON before updating
+  their activity lists or cache, and failed writes no longer create phantom
+  in-memory activities.
 - Verification: The new regression cases first failed because the staged-set
   finalizer, atomic move, transactional split helper, named archived-cache
   removal, and publication-before-cache contract did not exist. The final
   `atomicActivitySave`, `splitActivitySave`, and `rideCacheRemoval` suites
   pass 71, 33, and 6 tests respectively both
   normally and under strict ASan/UBSan/LSan. The full Qt 6.8.3 application
-  build links, and all 1,286 registered tests pass without failures or skips.
-- Remaining: Complete and independently commit transaction adoption in
-  `CloudService`. Multi-file crash recovery and
-  rollback against non-cooperating writers are tracked as `DUR-007` and
-  `DUR-008`.
+  build links, and all 1,293 registered tests pass without failures or skips.
+- Follow-up: Multi-file crash recovery and rollback against non-cooperating
+  writers are tracked separately as `DUR-007` and `DUR-008`.
 
 ### DATA-001: Split extraction loses and misaligns boundary data
 

@@ -17,6 +17,7 @@
  */
 
 #include "CloudService.h"
+#include "AtomicFileWriter.h"
 
 #include "Athlete.h"
 #include "RideCache.h"
@@ -365,7 +366,17 @@ CloudServiceUploadDialog::CloudServiceUploadDialog(QWidget *parent, Context *con
                     // save
                     context->notifyMetadataFlush();
                     context->ride->notifyRideMetadataChanged();
-                    context->mainWindow->saveSilent(context, item);
+                    {
+                        QString error;
+                        if (!MainWindow::saveSilent(
+                                context, item, &error)) {
+                            QMessageBox::warning(
+                                this, tr("Save Activity"), error);
+                            QMetaObject::invokeMethod(
+                                this, "close", Qt::QueuedConnection);
+                            return;
+                        }
+                    }
                     break;
                 case QMessageBox::Ignore:
                     // just proceed
@@ -930,16 +941,20 @@ CloudServiceSyncDialog::CloudServiceSyncDialog(Context *context, CloudService *s
         msgBox.setIcon(QMessageBox::Question);
         int ret = msgBox.exec();
         switch (ret) {
-        case QMessageBox::SaveAll:
+        case QMessageBox::SaveAll: {
             context->notifyMetadataFlush();
             context->ride->notifyRideMetadataChanged();
-            // save
-            if (dirtyList.count() > 0) {
-                for (int i=0; i<dirtyList.count(); i++) {
-                    context->mainWindow->saveSilent(context, dirtyList.at(i));
-                }
+            QString error;
+            if (!context->athlete->rideCache->saveActivities(
+                    dirtyList, error)) {
+                QMessageBox::warning(
+                    this, tr("Save Activity"), error);
+                QMetaObject::invokeMethod(
+                    this, "close", Qt::QueuedConnection);
+                return;
             }
             break;
+        }
         case QMessageBox::Ignore:
             // just proceed
             break;
@@ -1680,11 +1695,23 @@ CloudServiceSyncDialog::saveRide(RideFile *ride, QStringList &errors)
 
     JsonFileReader reader;
     QFile file(filename);
-    reader.writeRideFile(context, ride, file);
-
-    // add to the ride list
-    rideFiles<<targetnosuffix;
-    context->athlete->addRide(fileinfo.fileName(), true);
+    QString writeError;
+    if (!publishActivityBeforeCacheUpdate(
+            [&](QString &stepError) {
+                return reader.writeRideFile(
+                    context, ride, file, stepError,
+                    overwrite->isChecked());
+            },
+            [&]() {
+                rideFiles << targetnosuffix;
+                context->athlete->addRide(fileinfo.fileName(), true);
+            },
+            writeError)) {
+        errors << (writeError.isEmpty()
+                       ? tr("Failed to save downloaded activity")
+                       : writeError);
+        return false;
+    }
 
     return true;
 }
@@ -1981,13 +2008,24 @@ CloudServiceAutoDownload::readComplete(QByteArray*data,QString name,QString)
 
     JsonFileReader reader;
     QFile file(filename);
-    reader.writeRideFile(context, ride, file);
-
-    // delete temporary in-memory copy
+    QString writeError;
+    const bool saved = publishActivityBeforeCacheUpdate(
+        [&](QString &stepError) {
+            return reader.writeRideFile(
+                context, ride, file, stepError, false);
+        },
+        [&]() {
+            if (Context::isValid(context)) {
+                context->athlete->addRide(fileinfo.fileName(), true, false);
+            }
+        },
+        writeError);
     delete ride;
-
-    // add to the ride list -- but don't select it
-    if (Context::isValid(context)) context->athlete->addRide(fileinfo.fileName(), true, false);
+    if (!saved) {
+        qWarning() << "Autodownload: cannot save activity:"
+                   << writeError;
+        return;
+    }
 
 }
 
