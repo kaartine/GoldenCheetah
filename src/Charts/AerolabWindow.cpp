@@ -19,6 +19,7 @@
 
 #include "Context.h"
 #include "Context.h"
+#include "MainWindow.h"
 #include "AerolabWindow.h"
 #include "Aerolab.h"
 #include "AbstractView.h"
@@ -692,8 +693,14 @@ void AerolabWindow::saveParametersInRide()
         rideItem()->ride()->setTag("aerolab.Comment", QString("%1").arg(commentEdit->text()));
         rideItem()->setDirty(true);
 
-        context->mainWindow->saveSilent(context, rideItem());
-        btnSave->setEnabled(false);
+        QString error;
+        if (MainWindow::saveSilent(
+                context, rideItem(), &error)) {
+            btnSave->setEnabled(false);
+        } else {
+            QMessageBox::warning(
+                this, tr("Save Activity"), error);
+        }
      }
 }
 
