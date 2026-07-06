@@ -119,7 +119,8 @@ static QString protect(const QString string)
 %token REFERENCES
 %token XDATA
 %token SAMPLES SECS KM WATTS NM CAD KPH HR ALTITUDE LAT LON HEADWIND SLOPE TEMP
-%token LRBALANCE LTE RTE LPS RPS THB SMO2 RVERT RCAD RCON
+%token LRBALANCE LTE RTE LPS RPS THB SMO2 RVERT RCAD RCON TCORE
+%token SAMPLE_INTERVAL
 %token LPCO RPCO LPPB RPPB LPPE RPPE LPPPB RPPPB LPPPE RPPPE
 
 %start document
@@ -250,7 +251,7 @@ references: REFERENCES ':' '[' reference_list ']'
                                           jc->JsonPoint = RideFilePoint();
                                         }
 reference_list: reference | reference_list ',' reference;
-reference: '{' series '}'               { jc->JsonRide->appendReference(jc->JsonPoint);
+reference: '{' series_list '}'          { jc->JsonRide->appendReference(jc->JsonPoint);
                                           jc->JsonPoint = RideFilePoint();
                                         }
 /*
@@ -363,6 +364,8 @@ series: SECS ':' number                 { jc->JsonPoint.secs = jc->JsonNumber; }
         | RVERT ':' number              { jc->JsonPoint.rvert = jc->JsonNumber; }
         | RCAD ':' number               { jc->JsonPoint.rcad = jc->JsonNumber; }
         | RCON ':' number               { jc->JsonPoint.rcontact = jc->JsonNumber; }
+        | TCORE ':' number              { jc->JsonPoint.tcore = jc->JsonNumber; }
+        | SAMPLE_INTERVAL ':' number    { jc->JsonPoint.interval = static_cast<int>(jc->JsonNumber); }
         | string ':' number             { }
         | string ':' string
         ;
@@ -371,8 +374,14 @@ series: SECS ':' number                 { jc->JsonPoint.secs = jc->JsonNumber; }
 /*
  * Primitives
  */
-number: JS_INTEGER                         { jc->JsonNumber = QString($1).toInt(); }
-        | JS_FLOAT                         { jc->JsonNumber = QString($1).toDouble(); }
+number: JS_INTEGER                         {
+                                              jc->JsonNumber = QString($1).toDouble();
+                                              $$ = $1;
+                                          }
+        | JS_FLOAT                         {
+                                              jc->JsonNumber = QString($1).toDouble();
+                                              $$ = $1;
+                                          }
         ;
 
 string: JS_STRING                          { jc->JsonString = $1; }
@@ -392,73 +401,74 @@ static int jsonFileReaderRegistered =
     RideFileFactory::instance().registerReader(
         "json", "GoldenCheetah Json", new JsonFileReader());
 
-RideFile *
-JsonFileReader::openRideFile(QFile &file, QStringList &errors, QList<RideFile*>*) const
+static QString decodeJsonContents(const QByteArray &bytes)
 {
-    // Read the entire file into a QString -- we avoid using fopen since it
-    // doesn't handle foreign characters well. Instead we use QFile and parse
-    // from a QString
-    QString contents;
-    if (file.exists() && file.open(QFile::ReadOnly | QFile::Text)) {
+    const QByteArray utf8Bom("\xEF\xBB\xBF", 3);
+    const bool hasUtf8Bom = bytes.startsWith(utf8Bom);
+    const QByteArray payload =
+        hasUtf8Bom ? bytes.mid(utf8Bom.size()) : bytes;
+    const QString utf8 = QString::fromUtf8(payload);
+    if (utf8.toUtf8() != payload) {
+        return hasUtf8Bom
+            ? QString()
+            : QString::fromLatin1(bytes);
+    }
+    return utf8;
+}
 
-        // read in the whole thing
-        QTextStream in(&file);
-
-        // GC .JSON is stored in UTF-8 with BOM(Byte order mark) for identification
-        contents = in.readAll();
-        file.close();
-
-        // check if the text string contains the replacement character for UTF-8 encoding
-        // if yes, try to read with Latin1/ISO 8859-1 (assuming this is an "old" non-UTF-8 Json file)
-        if (contents.contains(QChar::ReplacementCharacter)) {
-           if (file.exists() && file.open(QFile::ReadOnly | QFile::Text)) {
-             QTextStream in(&file);
-             in.setEncoding (QStringConverter::Latin1);
-             contents = in.readAll();
-             file.close();
-           }
-         }
-
-    } else {
-
-        errors << "unable to open file" + file.fileName();
-        return NULL; 
+RideFile *
+JsonFileReader::fromByteArray(const QByteArray &bytes, QStringList &errors) const
+{
+    JsonContext *jc = new JsonContext();
+    if (JsonRideFilelex_init(&scanner) != 0) {
+        errors << QStringLiteral("unable to initialize JSON parser");
+        delete jc;
+        return nullptr;
     }
 
-    // create scanner context for reentrant parsing
-    JsonContext *jc = new JsonContext;
-    JsonRideFilelex_init(&scanner);
-
-    // inform the parser/lexer we have a new file
-    JsonRideFile_setString(contents, scanner);
-
-    // setup
+    JsonRideFile_setString(decodeJsonContents(bytes), scanner);
     jc->JsonRide = new RideFile;
     jc->JsonRideFileerrors.clear();
 
-    // set to non-zero if you want to
-    // to debug the yyparse() state machine
-    // sending state transitions to stderr
-    //yydebug = 1;
-
-    // parse it
-    JsonRideFileparse(jc);
-
-    // clean up
+    const int parseResult = JsonRideFileparse(jc);
     JsonRideFilelex_destroy(scanner);
 
-    // Only get errors so fail if we have any
-    // and always delete context now we're done
-    if (errors.count()) {
+    if (parseResult != 0 || !jc->JsonRideFileerrors.isEmpty()) {
         errors << jc->JsonRideFileerrors;
+        if (jc->JsonRideFileerrors.isEmpty()) {
+            errors << QStringLiteral("invalid activity JSON");
+        }
         delete jc->JsonRide;
         delete jc;
-        return NULL;
+        return nullptr;
     }
 
-    RideFile *returning = jc->JsonRide;
+    RideFile *ride = jc->JsonRide;
     delete jc;
-    return returning;
+    return ride;
+}
+
+RideFile *
+JsonFileReader::openRideFile(QFile &file, QStringList &errors, QList<RideFile*>*) const
+{
+    if (!file.exists() || !file.open(QFile::ReadOnly)) {
+        errors << QStringLiteral("unable to open file %1: %2")
+                      .arg(file.fileName(), file.errorString());
+        return nullptr;
+    }
+
+    const QByteArray contents = file.readAll();
+    const QFileDevice::FileError readError = file.error();
+    const QString readErrorString = file.errorString();
+    file.close();
+
+    if (readError != QFileDevice::NoError) {
+        errors << QStringLiteral("unable to read file %1: %2")
+                      .arg(file.fileName(), readErrorString);
+        return nullptr;
+    }
+
+    return fromByteArray(contents, errors);
 }
 
 QByteArray
@@ -601,11 +611,19 @@ JsonFileReader::toByteArray(Context *, const RideFile *ride, bool withAlt, bool 
             else out += ",\n";
 
             out += "\t\t\t{ ";
-
-            if (p->watts > 0) out += " \"WATTS\":" + QString("%1").arg(p->watts);
-            if (p->cad > 0) out += " \"CAD\":" + QString("%1").arg(p->cad);
-            if (p->hr > 0) out += " \"HR\":"  + QString("%1").arg(p->hr);
-            if (p->secs > 0) out += " \"SECS\":" + QString("%1").arg(p->secs);
+            bool firstValue = true;
+            const auto appendReferenceValue =
+                [&out, &firstValue](const QString &name, double value) {
+                    if (value <= 0) return;
+                    if (!firstValue) out += ", ";
+                    out += "\"" + name + "\":"
+                           + QStringLiteral("%1").arg(value);
+                    firstValue = false;
+                };
+            appendReferenceValue(QStringLiteral("WATTS"), p->watts);
+            appendReferenceValue(QStringLiteral("CAD"), p->cad);
+            appendReferenceValue(QStringLiteral("HR"), p->hr);
+            appendReferenceValue(QStringLiteral("SECS"), p->secs);
 
             // sample points in here!
             out += " }";
@@ -666,6 +684,8 @@ JsonFileReader::toByteArray(Context *, const RideFile *ride, bool withAlt, bool 
             if (ride->areDataPresent()->rcad) out += ", \"RCAD\":" + QString("%1").arg(p->rcad);
             if (ride->areDataPresent()->rvert) out += ", \"RVERT\":" + QString("%1").arg(p->rvert);
             if (ride->areDataPresent()->rcontact) out += ", \"RCON\":" + QString("%1").arg(p->rcontact);
+            if (ride->areDataPresent()->tcore) out += ", \"TCORE\":" + QString("%1").arg(p->tcore);
+            if (ride->areDataPresent()->interval) out += ", \"INTERVAL\":" + QString::number(p->interval);
 
             // sample points in here!
             out += " }";
@@ -779,29 +799,42 @@ JsonFileReader::toByteArray(Context *, const RideFile *ride, bool withAlt, bool 
     return out.toUtf8();
 }
 
+
 // Writes valid .json (validated at www.jsonlint.com)
 bool
 JsonFileReader::writeRideFile(Context *context, const RideFile *ride, QFile &file) const
 {
-    // can we open the file for writing?
-    if (!file.open(QIODevice::WriteOnly)) return false;
+    QString error;
+    return writeRideFile(context, ride, file, error);
+}
 
-    // truncate existing
-    file.resize(0);
+bool
+JsonFileReader::writeRideFile(Context *context, const RideFile *ride, QFile &file,
+                              QString &error,
+                              bool allowTargetReplacement,
+                              bool targetLockHeld) const
+{
+    error.clear();
+    if (file.isOpen()) {
+        error = QStringLiteral("Cannot atomically replace an open activity file");
+        return false;
+    }
 
-    QByteArray xml = toByteArray(context, ride, true, true, true, true);
+    const QByteArray json =
+        toByteArray(context, ride, true, true, true, true);
+    QStringList validationErrors;
+    std::unique_ptr<RideFile> validation(
+        fromByteArray(json, validationErrors));
+    if (!validation) {
+        error = QStringLiteral("Cannot serialize a valid activity: %1")
+                    .arg(validationErrors.join(QStringLiteral("; ")));
+        return false;
+    }
 
-    // setup streamer
-    QTextStream out(&file);
+    QByteArray contents = json;
+    // Preserve the UTF-8 BOM emitted by the previous QTextStream writer.
+    contents.prepend("\xEF\xBB\xBF", 3);
 
-    // unified codepage and BOM for identification on all platforms
-    out.setGenerateByteOrderMark(true);
-
-    out << xml;
-    out.flush();
-
-    // close
-    file.close();
-
-    return true;
+    return writeFileAtomically(file.fileName(), contents, writerFactory_, error,
+                               allowTargetReplacement, targetLockHeld);
 }

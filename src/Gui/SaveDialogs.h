@@ -25,13 +25,38 @@
 #include <QCheckBox>
 #include <QLabel>
 #include <QTableWidget>
+#include <functional>
 #include <QHeaderView>
 
+#include "AtomicFileWriter.h"
 #include "RideCache.h"
 #include "RideItem.h"
 #include "Context.h"
 
 class MainWindow;
+
+struct ActivitySaveOperations
+{
+    AtomicFileWriterFactory writerFactory;
+    ActivitySaveStep finalize;
+    ActivitySaveStep rollback;
+    std::function<bool(RideFile *, QString &)> stage;
+    std::function<void()> markClean;
+    QDateTime timestamp;
+    bool allowTargetReplacement = true;
+    bool targetLockHeld = false;
+};
+
+bool saveActivityTransaction(Context *context, RideFile *ride,
+                             const QString &targetPath,
+                             const ActivitySaveOperations &operations,
+                             QString &error);
+using ActivityCandidateSave =
+    std::function<bool(RideItem *candidate, QString &error)>;
+bool saveActivityCandidate(RideItem *current, RideItem *candidate,
+                           RideFile *replacement,
+                           const ActivityCandidateSave &save,
+                           QString &error);
 
 class SaveSingleDialogWidget : public QDialog
 {
@@ -41,12 +66,17 @@ class SaveSingleDialogWidget : public QDialog
 
     public:
         SaveSingleDialogWidget(MainWindow *, Context *context, RideItem *);
+        bool mayProceed() const { return mayProceed_; }
 
     public slots:
         void saveClicked();
         void abandonClicked();
         void cancelClicked();
         void warnSettingClicked();
+
+    protected:
+        virtual bool saveRide(QString &error);
+        virtual void reportSaveError(const QString &error);
 
     private:
 
@@ -56,6 +86,7 @@ class SaveSingleDialogWidget : public QDialog
         QPushButton *saveButton, *abandonButton, *cancelButton;
         QCheckBox *warnCheckBox;
         QLabel *warnText;
+        bool mayProceed_ = false;
 };
 
 class SaveOnExitDialogWidget : public QDialog
@@ -72,6 +103,9 @@ class SaveOnExitDialogWidget : public QDialog
         void abandonClicked();
         void cancelClicked();
         void warnSettingClicked();
+
+    protected:
+        virtual bool saveRide(RideItem *rideItem);
 
     private:
         MainWindow *mainWindow;

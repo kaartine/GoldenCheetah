@@ -502,6 +502,13 @@ bool JsonFileReader::writeRideFile(
     return false;
 }
 
+bool JsonFileReader::writeRideFile(
+    Context *, const RideFile *, QFile &, QString &error, bool, bool) const
+{
+    error = QStringLiteral("injected migration write failure");
+    return false;
+}
+
 LibraryImportResult Library::importFiles(
     Context *, QStringList files, LibraryBatchImportConfirmation)
 {

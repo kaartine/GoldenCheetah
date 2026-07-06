@@ -20,6 +20,7 @@
 #define _JsonRideFile_h
 #include "GoldenCheetah.h"
 
+#include "AtomicFileWriter.h"
 #include "RideFile.h"
 #include <stdio.h>
 #include <algorithm> // for std::sort
@@ -35,10 +36,25 @@ namespace Utils {
 };
 
 struct JsonFileReader : public RideFileReader {
+    explicit JsonFileReader(
+        AtomicFileWriterFactory writerFactory = qSaveFileWriterFactory())
+        : writerFactory_(std::move(writerFactory))
+    {
+    }
+
     virtual RideFile *openRideFile(QFile &file, QStringList &errors, QList<RideFile*>* = 0) const; 
+    RideFile *fromByteArray(const QByteArray &bytes,
+                            QStringList &errors) const;
     QByteArray toByteArray(Context *context, const RideFile *ride, bool withAlt, bool withWatts, bool withHr, bool withCad) const;
     bool writeRideFile(Context *context, const RideFile *ride, QFile &file) const;
+    bool writeRideFile(Context *context, const RideFile *ride, QFile &file,
+                       QString &error,
+                       bool allowTargetReplacement = true,
+                       bool targetLockHeld = false) const;
     bool hasWrite() const { return true; }
+
+private:
+    AtomicFileWriterFactory writerFactory_;
 };
 
 #endif // _JsonRideFile_h

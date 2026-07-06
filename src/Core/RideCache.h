@@ -25,6 +25,8 @@
 #include "RideItem.h"
 #include "PDModel.h"
 
+#include <functional>
+
 #include <QVector>
 #include <QThread>
 #include <QPointer>
@@ -146,8 +148,20 @@ class RideCache : public QObject
         OperationPreCheck checkShiftPlannedActivities(const QDate &fromDate, int dayOffset);
         OperationResult shiftPlannedActivities(const QDate &fromDate, int dayOffset);
 
+        using SaveActivityFunction =
+            std::function<bool(Context *, RideItem *, QString *)>;
+        using ActivitySavedFunction = std::function<void(RideItem *)>;
+
         bool saveActivity(RideItem *item, QString &error);
         bool saveActivities(QList<RideItem*> items, QString &error);
+        static bool saveActivity(
+            Context *context, RideItem *item, QString &error,
+            const SaveActivityFunction &save,
+            const ActivitySavedFunction &notifySaved = ActivitySavedFunction());
+        static bool saveActivities(
+            Context *context, const QList<RideItem *> &items, QString &error,
+            const SaveActivityFunction &save,
+            const ActivitySavedFunction &notifySaved = ActivitySavedFunction());
 
         RideItem *getLinkedActivity(RideItem *item);
         RideItem *findSuggestion(RideItem *rideItem);

@@ -22,6 +22,7 @@
 #include "GoldenCheetah.h"
 #include "NewSideBar.h"
 
+#include <functional>
 #include <memory>
 
 #include <QDir>
@@ -69,6 +70,7 @@ class SearchFilterBox;
 class WorkoutFilterBox;
 class NewSideBar;
 class AthleteView;
+struct ActivitySaveOperations;
 
 
 class MainWindow;
@@ -89,6 +91,11 @@ class MainWindow : public QMainWindow
 
     public:
 
+        struct SaveRideDialogOperations {
+            std::function<bool(const QList<RideItem *> &, QString &)> saveActivities;
+            std::function<void(const QString &)> reportError;
+        };
+
         MainWindow(const QDir &home);
         ~MainWindow(); // temp to zap db - will move to tab //
 
@@ -108,6 +115,13 @@ class MainWindow : public QMainWindow
         bool isStarting() const;
 
         bool filenameWillChange(RideItem *rideItem, QString *newName = nullptr) const;
+
+        static bool saveRideSingleDialog(
+            Context *, RideItem *,
+            const SaveRideDialogOperations *operations = nullptr);
+        static bool saveSilent(
+            Context *, RideItem *, QString *error = nullptr,
+            const ActivitySaveOperations *operations = nullptr);
 
     protected:
 
@@ -258,8 +272,6 @@ class MainWindow : public QMainWindow
 
         // Activity Collection
         void addIntervals(); // pass thru to tab
-        bool saveRideSingleDialog(Context *, RideItem *);
-        void saveSilent(Context *, RideItem *);
         void saveAllFilesSilent(Context *);
         void downloadRide();
         void manualRide();

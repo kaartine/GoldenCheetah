@@ -1771,15 +1771,42 @@ bool
 RideCache::saveActivity
 (RideItem *item, QString &error)
 {
-    error = "";
-    if (! item) {
-        error = tr("No activity given");
+    return RideCache::saveActivity(
+        context, item, error,
+        [](Context *saveContext, RideItem *saveItem, QString *saveError) {
+            return MainWindow::saveSilent(
+                saveContext, saveItem, saveError);
+        },
+        [this](RideItem *savedItem) { emit itemSaved(savedItem); });
+}
+
+
+bool
+RideCache::saveActivity
+(Context *context, RideItem *item, QString &error,
+ const SaveActivityFunction &save,
+ const ActivitySavedFunction &notifySaved)
+{
+    error.clear();
+    if (!item) {
+        error = QObject::tr("No activity given");
         return false;
     }
-    if (item->isDirty()) {
-        context->mainWindow->saveSilent(context, item);
-        item->setDirty(false);
-        emit itemSaved(item);
+    if (!item->isDirty()) {
+        return true;
+    }
+    if (!save) {
+        error = QObject::tr("No activity save operation available");
+        return false;
+    }
+    if (!save(context, item, &error)) {
+        if (error.isEmpty()) {
+            error = QObject::tr("The activity could not be saved");
+        }
+        return false;
+    }
+    if (notifySaved) {
+        notifySaved(item);
     }
     return true;
 }
@@ -1789,16 +1816,41 @@ bool
 RideCache::saveActivities
 (QList<RideItem*> items, QString &error)
 {
+    return RideCache::saveActivities(
+        context, items, error,
+        [](Context *saveContext, RideItem *saveItem, QString *saveError) {
+            return MainWindow::saveSilent(
+                saveContext, saveItem, saveError);
+        },
+        [this](RideItem *savedItem) { emit itemSaved(savedItem); });
+}
+
+
+bool
+RideCache::saveActivities
+(Context *context, const QList<RideItem *> &items, QString &error,
+ const SaveActivityFunction &save,
+ const ActivitySavedFunction &notifySaved)
+{
+    error.clear();
     QStringList failed;
 
     for (RideItem *item : items) {
         QString itemError;
-        if (! saveActivity(item, itemError)) {
-            failed << item->fileName;
+        if (!RideCache::saveActivity(
+                context, item, itemError, save, notifySaved)) {
+            const QString fileName =
+                item ? item->fileName : QObject::tr("<unknown activity>");
+            if (itemError.isEmpty()) {
+                failed << fileName;
+            } else {
+                failed << QStringLiteral("%1 (%2)").arg(fileName, itemError);
+            }
         }
     }
-    if (! failed.isEmpty()) {
-        error = tr("Failed to save: %1").arg(failed.join(", "));
+    if (!failed.isEmpty()) {
+        error = QObject::tr("Failed to save: %1")
+                    .arg(failed.join(QStringLiteral(", ")));
         return false;
     }
 

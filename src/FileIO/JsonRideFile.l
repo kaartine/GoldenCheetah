@@ -154,9 +154,11 @@ void JsonRideFilefree (void * ptr , yyscan_t /*scanner*/)
 \"RCON\"            return RCON;
 \"RVERT\"           return RVERT;
 \"RCAD\"            return RCAD;
+\"TCORE\"           return TCORE;
+\"INTERVAL\"        return SAMPLE_INTERVAL;
 [-+]?[0-9]+                     { *yylval = QString::fromUtf8(yytext); return JS_INTEGER; }
-[-+]?[0-9]+e-[0-9]+             { *yylval = QString::fromUtf8(yytext); return JS_FLOAT;   }
-[-+]?[0-9]+\.[-+e0-9]*          { *yylval = QString::fromUtf8(yytext); return JS_FLOAT;   }
+[-+]?[0-9]+[eE][-+]?[0-9]+      { *yylval = QString::fromUtf8(yytext); return JS_FLOAT;   }
+[-+]?[0-9]+\.[0-9]*([eE][-+]?[0-9]+)? { *yylval = QString::fromUtf8(yytext); return JS_FLOAT; }
 
 \"([^\"]|\\\")*\"               { *yylval = unprotect(yytext); return JS_STRING;  } /* contains non-quotes or escaped-quotes */
 [ \n\t\r]                       ;               /* we just ignore whitespace */

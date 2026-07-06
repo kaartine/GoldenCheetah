@@ -13,6 +13,7 @@ equals(GC_UNITTESTS, active) {
 			   Core/utils \
 			   Core/signalSafety \
 			   Core/splineCrash \
+			   FileIO/atomicActivitySave \
 			   FileIO/archiveSecurity \
 			   FileIO/powerTapBounds \
 			   FileIO/rideFileOwnership \

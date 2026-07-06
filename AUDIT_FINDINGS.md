@@ -159,16 +159,28 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-001: Activity saves are non-atomic and report false success
 
-- Status: OPEN
-- Code: `src/FileIO/JsonRideFile.y:784`, `src/Gui/SaveDialogs.cpp:189`,
-  `src/Core/RideCache.cpp:1771`
+- Status: IN_PROGRESS (core save transaction fixed; wizard-specific
+  multi-file transactions remain)
+- Code: `src/FileIO/AtomicFileWriter.h`, `src/FileIO/JsonRideFile.y`,
+  `src/Gui/SaveDialogs.cpp`, `src/Core/RideCache.cpp`
 - Impact: JSON save truncates the destination in place, does not check write or
   flush status, and callers mark the activity clean even after failure. Disk
   exhaustion or a crash can destroy the only good copy.
-- Test: Inject open, short-write, flush, and commit failures. The original bytes
-  and dirty state must remain intact.
-- Fix direction: Use `QSaveFile`, check every result, propagate errors, and only
-  mark clean after a successful atomic commit and readback where appropriate.
+- Test: `unittests/FileIO/atomicActivitySave` covers open, short-write, flush,
+  commit, corrupt-readback, lock, collision, staged-set rollback, source-change,
+  finalization, retry, dialog, and aggregate-cache failures.
+- Resolution: JSON writes now use same-directory atomic publication, file and
+  directory synchronization, readback verification, deterministic per-path
+  locks, and error propagation. Activities are marked clean only after durable
+  publication and source-file finalization. Failed finalization restores the
+  source and removes an unfinalized new target.
+- Verification: 66 focused tests pass normally and under strict
+  ASan/UBSan/LSan; the full Qt 6.8.3 application build links successfully, and
+  all 1,244 registered tests pass without failures or skips.
+- Remaining: Convert `SplitActivityWizard` and its linked/multi-file output to
+  the staged-set transaction, then add caller-level tests. Multiple files still
+  cannot be made truly crash-atomic, and non-cooperating external writers retain
+  a small check-to-publish race outside GoldenCheetah's lock protocol.
 
 ### DUR-002: Other persistent files are also truncated in place
 
@@ -464,6 +476,19 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Verification: The MEM-009 real-lifecycle test first failed strict LSan with
   two leaked directory owners and now destroys the same production objects
   without leaks.
+
+### MEM-012: RideFile leaks and aliases reference points
+
+- Status: FIXED
+- Code: `src/FileIO/RideFile.cpp`
+- Impact: Every parsed reference or exhaustion point leaked at destruction and
+  removal. The pointer-copying constructor also aliased the source's points, so
+  adding correct destruction without a deep copy would introduce double frees.
+- Test: `unittests/FileIO/rideFileOwnership` verifies independent copy ownership,
+  source destruction, both removal paths, and final teardown. The original
+  strict LeakSanitizer run reported five leaked points (1,960 bytes).
+- Fix: Deep-copy reference points and delete them on removal and destruction.
+- Verification: The focused normal and strict ASan/UBSan/LSan runs pass 5 tests.
 
 ### THREAD-003: Python chart execution races GUI object lifetime
 

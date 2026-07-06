@@ -15,6 +15,9 @@
  * with this program; if not, write to the Free Software Foundation, Inc., 51
  * Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
+
+#include <exception>
+
 #include "MainWindow.h"
 #include "AthleteTab.h"
 #include "Athlete.h"
@@ -61,32 +64,189 @@ setWarnExit(bool setting)
     appsettings->setValue(GC_WARNEXIT, setting);
 }
 
+static bool
+runDefaultSaveProcessors(RideFile *ride, QString &error)
+{
+    try {
+        DataProcessorFactory::instance().autoProcess(
+            ride, QStringLiteral("Save"), QStringLiteral("UPDATE"));
+    } catch (const QString &detail) {
+        error = detail;
+        return false;
+    } catch (const std::exception &exception) {
+        error = QString::fromLocal8Bit(exception.what());
+        return false;
+    } catch (...) {
+        error = QObject::tr("An activity processor failed");
+        return false;
+    }
+    return true;
+}
+
 //----------------------------------------------------------------------
+bool
+saveActivityTransaction(Context *context, RideFile *ride,
+                        const QString &targetPath,
+                        const ActivitySaveOperations &operations,
+                        QString &error)
+{
+    error.clear();
+    if (!ride) {
+        error = QObject::tr("Cannot open the activity for saving");
+        return false;
+    }
+    if (!operations.writerFactory) {
+        error = QObject::tr("Cannot create the atomic activity writer");
+        return false;
+    }
+    if (!operations.finalize || !operations.markClean) {
+        error = QObject::tr("Cannot complete the activity save");
+        return false;
+    }
+
+    if (operations.stage && !operations.stage(ride, error)) {
+        if (error.isEmpty()) {
+            error = QObject::tr("An activity processor failed");
+        }
+        return false;
+    }
+
+    const QString historyKey = QStringLiteral("Change History");
+    const bool hadHistory = ride->tags().contains(historyKey);
+    const QString previousHistory =
+        ride->getTag(historyKey, QString());
+    QString history = previousHistory;
+    const QDateTime timestamp = operations.timestamp.isValid()
+        ? operations.timestamp
+        : QDateTime::currentDateTime();
+    history += QObject::tr("Changes on ");
+    history += timestamp.toString() + QStringLiteral(":");
+    history += QLatin1Char('\n') + ride->command->changeLog();
+    ride->setTag(historyKey, history);
+
+    JsonFileReader reader(operations.writerFactory);
+    QFile targetFile(targetPath);
+    const bool saved = completeActivitySave(
+        [&](QString &stepError) {
+            return reader.writeRideFile(context, ride, targetFile,
+                                        stepError,
+                                        operations.allowTargetReplacement,
+                                        operations.targetLockHeld);
+        },
+        operations.finalize,
+        operations.markClean,
+        error,
+        operations.rollback);
+
+    if (!saved) {
+        if (hadHistory) {
+            ride->setTag(historyKey, previousHistory);
+        } else {
+            ride->removeTag(historyKey);
+        }
+    }
+    return saved;
+}
+
+bool
+saveActivityCandidate(RideItem *current, RideItem *candidate,
+                      RideFile *replacement,
+                      const ActivityCandidateSave &save,
+                      QString &error)
+{
+    error.clear();
+    if (!current || !candidate || current == candidate
+        || !replacement || !save
+        || candidate->ride(false) != replacement) {
+        error = QObject::tr("Cannot prepare the replacement activity");
+        return false;
+    }
+
+    candidate->path = current->path;
+    candidate->fileName = current->fileName;
+    candidate->setDirty(true);
+
+    // The candidate is not in RideCache and must not publish saved signals.
+    QObject::disconnect(replacement, nullptr, candidate, nullptr);
+    if (!save(candidate, error)) {
+        candidate->setRide(nullptr);
+        candidate->setRide(replacement);
+        if (error.isEmpty()) {
+            error = QObject::tr("Cannot save the replacement activity");
+        }
+        return false;
+    }
+
+    const QString committedPath = candidate->path;
+    const QString committedFileName = candidate->fileName;
+    candidate->setRide(nullptr);
+
+    current->setRide(replacement);
+    current->setFileName(committedPath, committedFileName);
+    current->saved();
+    return true;
+}
+
 // User selected Save... menu option, prompt if conversion is needed
 //----------------------------------------------------------------------
 bool
-MainWindow::saveRideSingleDialog(Context *context, RideItem *rideItem)
+MainWindow::saveRideSingleDialog(
+    Context *context, RideItem *rideItem,
+    const SaveRideDialogOperations *operations)
 {
-    //XXX always save if (rideItem->isDirty() == false) return false; // nothing to save you must be a ^S addict.
-
-    // get file type
-    QFile   currentFile(rideItem->path + QDir::separator() + rideItem->fileName);
-    QFileInfo currentFI(currentFile);
-    QString currentType =  currentFI.completeSuffix().toUpper();
-
-    // either prompt etc, or just save that file away!
-    if (currentType != "GC" && warnOnConvert() == true) {
-        SaveSingleDialogWidget dialog(this, context, rideItem);
-        dialog.exec();
-        return true;
-    } else {
-        QString error;
-        QList<RideItem*> activities;
-        activities << rideItem;
-        relinkRideItems(context, rideItem, activities);
-        context->athlete->rideCache->saveActivities(activities, error);
-        return true;
+    if (!rideItem) {
+        return false;
     }
+
+    const QFileInfo currentFile(
+        QDir(rideItem->path).filePath(rideItem->fileName));
+    const QString currentType = currentFile.completeSuffix().toUpper();
+    MainWindow *parent = context ? context->mainWindow : nullptr;
+
+    if (currentType != QStringLiteral("GC") && warnOnConvert()) {
+        SaveSingleDialogWidget dialog(parent, context, rideItem);
+        dialog.exec();
+        return dialog.mayProceed();
+    }
+
+    QString error;
+    QList<RideItem *> activities;
+    activities << rideItem;
+    if (context) {
+        relinkRideItems(context, rideItem, activities);
+    }
+
+    bool saved = false;
+    if (operations && operations->saveActivities) {
+        saved = operations->saveActivities(activities, error);
+    } else if (context && context->athlete
+               && context->athlete->rideCache) {
+        RideCache *cache = context->athlete->rideCache;
+        saved = RideCache::saveActivities(
+            context, activities, error,
+            [](Context *saveContext, RideItem *saveItem,
+               QString *saveError) {
+                return MainWindow::saveSilent(
+                    saveContext, saveItem, saveError);
+            },
+            [cache](RideItem *savedItem) {
+                QMetaObject::invokeMethod(
+                    cache, "itemSaved", Qt::DirectConnection,
+                    Q_ARG(RideItem *, savedItem));
+            });
+    } else {
+        error = QObject::tr("Cannot access the activity collection");
+    }
+
+    if (!saved) {
+        if (operations && operations->reportError) {
+            operations->reportError(error);
+        } else {
+            QMessageBox::warning(
+                parent, QObject::tr("Save Activity"), error);
+        }
+    }
+    return saved;
 }
 
 //----------------------------------------------------------------------
@@ -121,93 +281,136 @@ MainWindow::saveRideExitDialog(Context *context)
 //----------------------------------------------------------------------
 // Silently save ride and convert to GC format without warning user
 //----------------------------------------------------------------------
-void
-MainWindow::saveSilent(Context *context, RideItem *rideItem)
+bool
+MainWindow::saveSilent(Context *context, RideItem *rideItem, QString *error,
+                       const ActivitySaveOperations *requestedOperations)
 {
-    QGuiApplication::setOverrideCursor(Qt::WaitCursor);
-    QFile   currentFile(rideItem->path + QDir::separator() + rideItem->fileName);
-    QFileInfo currentFI(currentFile);
-    QString currentType =  currentFI.completeSuffix().toUpper();
-    QFile   savedFile;
-    bool    convert;
+    QString ignoredError;
+    QString &saveError = error ? *error : ignoredError;
+    saveError.clear();
 
-    // Do we need to convert the file type?
-    if (currentType != "JSON") convert = true;
-    else convert = false;
-
-    // Has the date/time changed?
-    QDateTime ridedatetime = rideItem->ride()->startTime();
-    QChar zero = QLatin1Char ( '0' );
-    QString targetnosuffix = QString ( "%1_%2_%3_%4_%5_%6" )
-                               .arg ( ridedatetime.date().year(), 4, 10, zero )
-                               .arg ( ridedatetime.date().month(), 2, 10, zero )
-                               .arg ( ridedatetime.date().day(), 2, 10, zero )
-                               .arg ( ridedatetime.time().hour(), 2, 10, zero )
-                               .arg ( ridedatetime.time().minute(), 2, 10, zero )
-                               .arg ( ridedatetime.time().second(), 2, 10, zero );
-
-    // if there is a notes file we need to rename it (cpi we will ignore)
-    QFile notesFile(currentFI.canonicalPath() + QDir::separator() + currentFI.baseName() + ".notes");
-    if (notesFile.exists()) notesFile.remove();
-
-    // When datetime changes we need to update
-    // the filename & rename/delete old file
-    // we also need to preserve the notes file
-    if (currentFI.baseName() != targetnosuffix) {
-
-        // rename as backup current if converting, or just delete it if its already .gc
-        // unlink previous .bak if it is already there
-        if (convert) {
-            QFile::remove(currentFile.fileName()+".bak"); // ignore errors if not there
-            currentFile.rename(currentFile.fileName(), currentFile.fileName() + ".bak");
-        } else currentFile.remove();
-        convert = false; // we just did it already!
-
-        // set the new filename & Start time everywhere
-        currentFile.setFileName(rideItem->path + QDir::separator() + targetnosuffix + ".json");
-        rideItem->setFileName(QFileInfo(currentFile).canonicalPath(), QFileInfo(currentFile).fileName());
+    if (!rideItem) {
+        saveError = QObject::tr("Cannot open the activity for saving");
+        return false;
     }
 
-    // set target filename
-    if (convert) {
-        // rename the source
-        savedFile.setFileName(currentFI.canonicalPath() + QDir::separator() + currentFI.baseName() + ".json");
+    RideFile *ride = rideItem->ride();
+    if (!ride) {
+        saveError = QObject::tr("Cannot open the activity for saving");
+        return false;
+    }
+
+    const QString sourcePath =
+        QFileInfo(QDir(rideItem->path).filePath(rideItem->fileName))
+            .absoluteFilePath();
+    const QFileInfo sourceInfo(sourcePath);
+    const bool convert = sourceInfo.completeSuffix().compare(
+                             QStringLiteral("json"), Qt::CaseInsensitive) != 0;
+
+    const QDateTime rideDateTime = ride->startTime();
+    const QChar zero = QLatin1Char('0');
+    const QString datedBaseName = QStringLiteral("%1_%2_%3_%4_%5_%6")
+        .arg(rideDateTime.date().year(), 4, 10, zero)
+        .arg(rideDateTime.date().month(), 2, 10, zero)
+        .arg(rideDateTime.date().day(), 2, 10, zero)
+        .arg(rideDateTime.time().hour(), 2, 10, zero)
+        .arg(rideDateTime.time().minute(), 2, 10, zero)
+        .arg(rideDateTime.time().second(), 2, 10, zero);
+
+    const bool keepCurrentPath =
+        !convert && sourceInfo.baseName() == datedBaseName;
+    const QString targetPath = keepCurrentPath
+        ? sourcePath
+        : QDir(sourceInfo.absolutePath()).filePath(
+              datedBaseName + QStringLiteral(".json"));
+    const bool pathChanges =
+        QDir::cleanPath(sourcePath) != QDir::cleanPath(targetPath);
+
+    AtomicFileLockSet transactionLocks;
+    if (!transactionLocks.lock(
+            { sourcePath, targetPath }, saveError)) {
+        return false;
+    }
+
+    AtomicFileSnapshot sourceSnapshot;
+    if (pathChanges && !captureAtomicFileSnapshot(
+            sourcePath, sourceSnapshot, saveError)) {
+        return false;
+    }
+
+    if (pathChanges && QFile::exists(targetPath)) {
+        saveError = QObject::tr(
+                        "Cannot save activity because the target already exists: %1")
+                        .arg(QFileInfo(targetPath).fileName());
+        return false;
+    }
+
+    ActivitySaveOperations saveOperations;
+    if (requestedOperations) {
+        saveOperations = *requestedOperations;
     } else {
-        savedFile.setFileName(currentFile.fileName());
+        saveOperations.writerFactory = qSaveFileWriterFactory();
+        saveOperations.stage = [](RideFile *activity, QString &stageError) {
+            return runDefaultSaveProcessors(activity, stageError);
+        };
+    }
+    saveOperations.allowTargetReplacement = !pathChanges;
+    saveOperations.targetLockHeld = true;
+    if (!saveOperations.timestamp.isValid()) {
+        saveOperations.timestamp = QDateTime::currentDateTime();
     }
 
-    // run the data processors configured to run "on save"
-    DataProcessorFactory::instance().autoProcess(rideItem->ride(), "Save", "UPDATE");
+    QGuiApplication::setOverrideCursor(Qt::WaitCursor);
 
-    // update the change history
-    QString log = rideItem->ride()->getTag("Change History", "");
-    log +=  tr("Changes on ");
-    log +=  QDateTime::currentDateTime().toString() + ":";
-    log += '\n' + rideItem->ride()->command->changeLog();
-    rideItem->ride()->setTag("Change History", log);
+    saveOperations.finalize = [&](QString &stepError) {
+        if (pathChanges && !atomicFileMatchesSnapshot(
+                sourcePath, sourceSnapshot, stepError)) {
+            return false;
+        }
+        if (!finalizeActivityFileReplacement(sourcePath, targetPath,
+                                             convert, stepError)) {
+            return false;
+        }
+        if (pathChanges) {
+            rideItem->setFileName(sourceInfo.absolutePath(),
+                                  QFileInfo(targetPath).fileName());
+        }
+        return true;
+    };
+    if (pathChanges) {
+        saveOperations.rollback = [&](QString &rollbackError) {
+            const QFileInfo target(targetPath);
+            if (!target.exists() && !target.isSymLink()) {
+                return true;
+            }
+            if (!QFile::remove(targetPath)) {
+                rollbackError = QObject::tr(
+                    "Cannot remove the unfinalized activity");
+                return false;
+            }
+            return syncParentDirectory(targetPath, rollbackError);
+        };
+    }
+    saveOperations.markClean = [&]() { ride->emitSaved(); };
 
-    // save in GC format
-    JsonFileReader reader;
-    reader.writeRideFile(context, rideItem->ride(), savedFile);
+    const bool saved = saveActivityTransaction(
+        context, ride, targetPath, saveOperations, saveError);
 
-    // rename the file and update the rideItem list to reflect the change
-    if (convert) {
-
-        // rename on disk
-        QFile::remove(currentFile.fileName()+".bak"); // ignore errors if not there
-        currentFile.rename(currentFile.fileName(), currentFile.fileName() + ".bak");
-
-        // rename in memory
-        rideItem->setFileName(QFileInfo(savedFile).canonicalPath(), QFileInfo(savedFile).fileName());
+    if (saved) {
+        QFile notesFile(QDir(sourceInfo.absolutePath()).filePath(
+            sourceInfo.baseName() + QStringLiteral(".notes")));
+        if (notesFile.exists()) {
+            notesFile.remove();
+        }
+        if (context && context->athlete
+            && context->athlete->rideCache
+            && context->athlete->rideCache->estimator) {
+            context->athlete->rideCache->estimator->refresh();
+        }
     }
 
-
-    // mark clean as we have now saved the data
-    rideItem->ride()->emitSaved();
-
-    // model estimates (lazy refresh)
-    context->athlete->rideCache->estimator->refresh();
     QGuiApplication::restoreOverrideCursor();
+    return saved;
 }
 
 
@@ -258,10 +461,27 @@ SaveSingleDialogWidget::SaveSingleDialogWidget(MainWindow *mainWindow, Context *
     connect(warnCheckBox, SIGNAL(clicked()), this, SLOT(warnSettingClicked()));
 }
 
+bool
+SaveSingleDialogWidget::saveRide(QString &error)
+{
+    return MainWindow::saveSilent(context, rideItem, &error);
+}
+
+void
+SaveSingleDialogWidget::reportSaveError(const QString &error)
+{
+    QMessageBox::warning(this, tr("Save Activity"), error);
+}
+
 void
 SaveSingleDialogWidget::saveClicked()
 {
-    mainWindow->saveSilent(context, rideItem);
+    QString error;
+    if (!saveRide(error)) {
+        reportSaveError(error);
+        return;
+    }
+    mayProceed_ = true;
     accept();
 }
 
@@ -269,6 +489,7 @@ void
 SaveSingleDialogWidget::abandonClicked()
 {
     rideItem->setDirty(false); // lose changes
+    mayProceed_ = true;
     reject();
 }
 
@@ -296,7 +517,12 @@ SaveOnExitDialogWidget::SaveOnExitDialogWidget(MainWindow *mainWindow, Context *
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
 
     // Warning text
-    warnText = new QLabel(tr("WARNING for athlete %1\n\nYou have made changes to some rides which\nhave not been saved. They are listed below.").arg(context->athlete->cyclist));
+    const QString athleteName =
+        context && context->athlete ? context->athlete->cyclist : QString();
+    warnText = new QLabel(
+        tr("WARNING for athlete %1\n\nYou have made changes to some rides which\n"
+           "have not been saved. They are listed below.")
+            .arg(athleteName));
     mainLayout->addWidget(warnText);
 
     // File List
@@ -347,20 +573,33 @@ SaveOnExitDialogWidget::SaveOnExitDialogWidget(MainWindow *mainWindow, Context *
     connect(exitWarnCheckBox, SIGNAL(clicked()), this, SLOT(warnSettingClicked()));
 }
 
+bool
+SaveOnExitDialogWidget::saveRide(RideItem *rideItem)
+{
+    return MainWindow::saveRideSingleDialog(context, rideItem);
+}
+
 void
 SaveOnExitDialogWidget::saveClicked()
 {
-    // whizz through the list and save one by one using
-    // singleSave to ensure warnings are given if neccessary
-    for (int i=0; i<dirtyList.count(); i++) {
-        QCheckBox *c = (QCheckBox *)dirtyFiles->cellWidget(i,0);
-        if (c->isChecked()) {
-            mainWindow->saveRideSingleDialog(context, dirtyList.at(i));
+    QList<RideItem *> skippedItems;
+    for (int i = 0; i < dirtyList.count(); ++i) {
+        QCheckBox *checkBox =
+            qobject_cast<QCheckBox *>(dirtyFiles->cellWidget(i, 0));
+        if (checkBox && checkBox->isChecked()) {
+            if (!dirtyList.at(i)->isDirty()) {
+                continue;
+            }
+            if (!saveRide(dirtyList.at(i))) {
+                return;
+            }
         } else {
-            // we need to ensure the ride is refreshed when we restart
-            // so mark the ride item as nosave to ensure rebuild
-            dirtyList.at(i)->skipsave = true;
+            skippedItems.append(dirtyList.at(i));
         }
+    }
+
+    for (RideItem *rideItem : skippedItems) {
+        rideItem->skipsave = true;
     }
     accept();
 }
@@ -404,7 +643,12 @@ proceedDialog
             return false;
         } else if (action == QMessageBox::Save) {
             QString error;
-            context->athlete->rideCache->saveActivities(check.dirtyItems, error);
+            if (!context->athlete->rideCache->saveActivities(check.dirtyItems,
+                                                              error)) {
+                QMessageBox::warning(context->mainWindow,
+                                     QObject::tr("Save Activity"), error);
+                return false;
+            }
         } else if (action == QMessageBox::Discard) {
             for (RideItem *item : check.dirtyItems) {
                 item->close();
