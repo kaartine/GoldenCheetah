@@ -19,6 +19,7 @@
  */
 
 #include "DownloadRideDialog.h"
+#include "AtomicFileWriter.h"
 #include "Device.h"
 #include "Context.h"
 #include "Athlete.h"
@@ -457,12 +458,26 @@ DownloadRideDialog::downloadClicked()
             GlobalContext::context()->rideMetadata->setLinkedDefaults(ride);
 
             JsonFileReader reader;
-            // write to tempActivties first (until RideCache is updated without crash)
+            // Stage serialization before publishing it into the activity library.
             targetFileTmpActivitiesName = context->athlete->home->tmpActivities().canonicalPath() + "/" + targetFileName;
             targetFileActivitiesName = context->athlete->home->activities().canonicalPath() + "/" + targetFileName;
-            // no worry if file already exists - .JSON writer either creates the file or updates the file content
+            // Keep a stale staging file intact so it can be inspected and recovered.
             QFile target(targetFileTmpActivitiesName);
-            reader.writeRideFile(context, ride, target);
+            QString writeError;
+            if (!reader.writeRideFile(
+                    context, ride, target, writeError, false)) {
+                delete ride;
+                ride = nullptr;
+                QMessageBox::critical(
+                    this, tr("Error"),
+                    tr("The activity %1 could not be saved as a "
+                       "GoldenCheetah .JSON file: %2")
+                        .arg(filename, writeError));
+                updateStatus(tr(".JSON creation error: file %1")
+                                 .arg(filename));
+                ++failures;
+                continue;
+            }
 
         } else {
             QMessageBox::critical( this,
@@ -476,18 +491,31 @@ DownloadRideDialog::downloadClicked()
 
         }
 
-        context->athlete->addRide(targetFileName, true, true, true);
-        // Ride Cache was updated without crash - so move the file from /tmpactivities to /activities
-        QFile targetFileActivities(targetFileActivitiesName);
-        // renaming does not overwrite - so remove any existing version (if exists) from /activities first
-        if (targetFileActivities.exists()) {
-            targetFileActivities.remove();
+        QString publishError;
+        const bool published = publishActivityBeforeCacheUpdate(
+            [&](QString &stepError) {
+                return publishStagedFileSet(
+                    { StagedFilePublication(
+                        targetFileTmpActivitiesName,
+                        targetFileActivitiesName) },
+                    stepError);
+            },
+            [&]() {
+                context->athlete->addRide(targetFileName, true);
+            },
+            publishError);
+        delete ride;
+        ride = nullptr;
+        if (!published) {
+            QMessageBox::critical(
+                this, tr("Error"),
+                tr("The activity %1 could not be published: %2")
+                    .arg(filename, publishError));
+            updateStatus(tr(".JSON publication error: file %1")
+                             .arg(filename));
+            ++failures;
+            continue;
         }
-        // now rename
-        QFile targetFileTmpActivities(targetFileTmpActivitiesName);
-        targetFileTmpActivities.rename(targetFileActivitiesName);
-        // and correct the path locally stored in Ride Item
-        context->ride->setFileName(context->athlete->home->activities().canonicalPath(), targetFileName);
     }
 
     if( ! failures )

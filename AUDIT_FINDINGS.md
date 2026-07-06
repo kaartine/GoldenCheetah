@@ -201,6 +201,8 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   written, while atomic replacement keeps interrupted upgrades retryable. Ride
   Import now publishes staged JSON before inserting the activity into the
   cache and reports write, publication, and linked-activity save failures.
+  Device downloads use the same ordering and preserve stale staging files for
+  recovery instead of silently replacing them.
 - Verification: The new regression cases first failed because the staged-set
   finalizer, atomic move, transactional split helper, named archived-cache
   removal, and publication-before-cache contract did not exist. The final
@@ -209,8 +211,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   normally and under strict ASan/UBSan/LSan. The full Qt 6.8.3 application
   build links, and all 1,286 registered tests pass without failures or skips.
 - Remaining: Complete and independently commit transaction adoption in
-  `CloudService` and `DownloadRideDialog`.
-  Multi-file crash recovery and
+  `CloudService`. Multi-file crash recovery and
   rollback against non-cooperating writers are tracked as `DUR-007` and
   `DUR-008`.
 
