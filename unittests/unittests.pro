@@ -24,6 +24,7 @@ equals(GC_UNITTESTS, active) {
 			   Gui/calendarData \
 			   Gui/iconBundleSecurity \
 			   Gui/splitActivitySave \
+			   Gui/splitRideData \
 			   Gui/perspectiveStateSource \
 			   Gui/trainPerspectiveState \
 			   Python/pythonDataSeriesOwnership \

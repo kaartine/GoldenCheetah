@@ -220,21 +220,31 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DATA-001: Split extraction loses and misaligns boundary data
 
-- Status: OPEN
-- Code: `src/Gui/SplitActivityWizard.cpp:765`,
-  `src/Gui/SplitActivityWizard.cpp:786`,
-  `src/Gui/SplitActivityWizard.cpp:812`
+- Status: FIXED
+- Code: `src/Gui/SplitRideData.cpp`,
+  `src/Gui/SplitActivityWizard.cpp`
 - Impact: Point extraction excludes the stop marker while XData extraction
   includes it, so the final selected sample is omitted and adjacent series use
   inconsistent boundary ownership. XData is copied twice; the second `QMap`
   insertion replaces the first owned pointer without deleting it. An interval
   truncated at the segment end stores the source's absolute stop time instead
   of the segment-local offset.
-- Test: Extract adjacent and final segments containing samples, one XData
-  series, and a crossing interval. Require exact boundary ownership, one
-  retained XData allocation, and local interval bounds under ASan/LSan.
-- Fix direction: Extract a pure segment-copy helper with an explicit boundary
-  policy, perform one XData pass, and offset both interval endpoints.
+- Regression test: `unittests/Gui/splitRideData` extracts adjacent and final
+  segments containing samples, XData, boundary and crossing intervals, and
+  invalid index ranges. It requires exact boundary ownership, one retained
+  XData series, and segment-local interval bounds.
+- Resolution: A pure segment-copy helper applies an explicit half-open policy
+  to preceding segments and includes the selected endpoint only in the final
+  segment. It copies XData once, offsets both interval endpoints, preserves
+  sub-second start offsets, and rejects invalid ranges.
+- Verification: The RED build failed because the helper contract did not
+  exist. The focused suite passes 13 tests normally, under strict
+  ASan/UBSan/LSan with leak detection, and from an isolated staged-only
+  snapshot. The full Qt 6.8.3 application also links from that snapshot.
+  The complete worktree run passes 1,306 tests in 30 registered suites
+  without failures or skips. A staged-only full-suite rebuild is blocked
+  before this suite by the pre-existing `DB-003` `Library::importFiles`
+  production/test-stub signature split.
 
 ### DUR-002: Other persistent files are also truncated in place
 

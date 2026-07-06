@@ -18,6 +18,7 @@
 
 #include "SplitActivityWizard.h"
 #include "SplitActivitySave.h"
+#include "SplitRideData.h"
 #include "MainWindow.h"
 #include "Athlete.h"
 #include "Context.h"
@@ -707,7 +708,12 @@ SplitConfirm::initializePage()
             if (!wizard->bg->isGap(wizard->rideItem->ride()->dataPoints().at(lastmark)->secs/60.0,
                                    wizard->rideItem->ride()->dataPoints().at(mark)->secs/60.0)) {
 
-                RideFile *add = createRideFile(lastmark, mark);
+                const SplitSegmentEnd segmentEnd =
+                    mark == points.constLast()
+                        ? SplitSegmentEnd::Include
+                        : SplitSegmentEnd::Exclude;
+                RideFile *add = extractSplitRideSegment(
+                    *wizard->rideItem->ride(), lastmark, mark, segmentEnd);
                 wizard->activities.append(add);
             }
         }
@@ -739,111 +745,6 @@ SplitConfirm::initializePage()
     wizard->setFilesList();
 }
 
-//create a new ride file from the current ride file
-//by using datapoints from index start to stop
-RideFile *
-SplitConfirm::createRideFile(long start, long stop)
-{
-    RideFile *returning = new RideFile; // target
-    RideFile *ride = wizard->rideItem->ride(); // source
-
-    // set offset in seconds, make sure in bounds too
-    double offset = 0;
-    double distanceoffset = 0;
-    if (start < ride->dataPoints().count() && start >= 0) {
-        offset = ride->dataPoints().at(start)->secs;
-        distanceoffset = ride->dataPoints().at(start)->km;
-    }
-
-    // copy first class variables (adjust starttime to include offset)
-    returning->setStartTime(ride->startTime().addSecs(offset));
-    returning->setRecIntSecs(ride->recIntSecs());
-    returning->setDeviceType(ride->deviceType());
-    returning->setFileFormat(ride->fileFormat());
-
-    // lets keep the metadata too
-    const_cast<QMap<QString,QString>&>(returning->tags()) = QMap<QString,QString>(ride->tags());
-
-    // but clear linked activities
-    returning->removeTag("Linked Filename");
-
-    // now the dataPoints, check in bounds too!
-    for(long i=start; i<stop && i<ride->dataPoints().count(); i++) {
-        RideFilePoint *p = ride->dataPoints().at(i);
-
-        returning->appendPoint(p->secs - offset, // start from zero!
-                               p->cad, p->hr, p->km - distanceoffset, p->kph,
-                               p->nm, p->watts, p->alt, p->lon, p->lat,
-                               p->headwind, p->slope, p->temp,
-                               p->lrbalance, p->lte, p->rte, p->lps, p->rps,
-                               p->lpco, p->rpco, p->lppb, p->rppb, p->lppe, p->rppe, p->lpppb, p->rpppb, p->lpppe, p->rpppe,
-                               p->smo2, p->thb,
-                               p->rvert, p->rcad, p->rcontact,
-                               p->tcore,
-                               p->interval);
-    }
-
-    double startTime = ride->dataPoints().at(start)->secs;
-    double stopTime = ride->dataPoints().at(stop)->secs;
-
-    // and the XData Series, check in bounds too!
-    foreach (XDataSeries *xdata, ride->xdata()) {
-        XDataSeries* xd = new XDataSeries(*xdata);
-        foreach (XDataPoint *xdp, xd->datapoints) delete xdp;
-        xd->datapoints.clear();
-        foreach (XDataPoint *point, xdata->datapoints) {
-            if (point->secs >= startTime && point->secs <= stopTime) {
-                XDataPoint *pt = new XDataPoint(*point);
-                pt->secs = point->secs - offset;
-                pt->km = point->km - distanceoffset;
-                xd->datapoints.append(pt);
-            }
-        }
-        if (xd->datapoints.count() > 0)
-            returning->addXData(xd->name, xd);
-        else
-            delete xd;
-    }
-
-    // lets keep intervals that start in our section truncating them
-    // if neccessary (some folks want to keep lap markers)
-    foreach (RideFileInterval *interval, wizard->rideItem->ride()->intervals()) {
-
-        if (interval->start >= startTime && interval->start <= stopTime) {
-            if (interval->stop > stopTime)
-                returning->addInterval(RideFileInterval::USER, interval->start - offset, stopTime, interval->name);
-            else 
-                returning->addInterval(RideFileInterval::USER, interval->start - offset, interval->stop - offset, interval->name);
-        }
-    }
-
-    // and the XData Series, check in bounds too!
-    foreach (XDataSeries *xdata, ride->xdata()) {
-        XDataSeries* xd = new XDataSeries;
-        xd->name = xdata->name;
-        xd->valuename = xdata->valuename;
-        xd->unitname = xdata->unitname;
-        xd->valuetype = xdata->valuetype;
-        foreach (XDataPoint *point, xdata->datapoints) {
-            if (point->secs >= startTime && point->secs <= stopTime) {
-                XDataPoint *p = new XDataPoint;
-                p->secs = point->secs - offset;
-                p->km = point->km - distanceoffset;
-                for(int i=0; i<XDATA_MAXVALUES; i++) {
-                    p->number[i] = point->number[i];
-                    p->string[i] = point->string[i];
-                }
-                xd->datapoints.append(p);
-            }
-        }
-        if (xd->datapoints.count() > 0)
-            returning->addXData(xd->name, xd);
-        else
-            delete xd;
-    }
-
-    return returning;
-}
 
 bool
 SplitConfirm::validatePage()

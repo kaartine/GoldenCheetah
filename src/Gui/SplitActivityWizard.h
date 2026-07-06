@@ -156,8 +156,6 @@ class SplitConfirm : public QWizardPage
         void initializePage(); // create ridefile * for each selected
         bool isComplete() const;
 
-        // constructs the new ridefile from current ride
-        RideFile* createRideFile(long start, long stop);
     private:
         SplitActivityWizard *wizard;
 };

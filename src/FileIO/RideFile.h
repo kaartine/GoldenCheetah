@@ -361,6 +361,7 @@ class RideFile : public QObject // QObject to emit signals
         void setId(const QString &value) { id_ = value; }
 
         // Working with INTERVALS
+        const QList<RideFileInterval*> &intervals() const { return intervals_; }
         void addInterval(RideFileInterval::IntervalType type, double start, double stop, const QString &name, QColor color=Qt::black, bool test=false) {
             intervals_.append(new RideFileInterval(type, start, stop, name, color, test));
         }
@@ -409,6 +410,7 @@ class RideFile : public QObject // QObject to emit signals
         XDataSeries *xdata(QString name) const { return xdata_.value(name, NULL); }
         void addXData(QString name, XDataSeries *series);
         QMap<QString,XDataSeries*> &xdata() { return xdata_; }
+        const QMap<QString,XDataSeries*> &xdata() const { return xdata_; }
         double xdataValue(const RideFilePoint *p, int &idx, QString xdata, QString series, RideFile::XDataJoin) const;
         void addCIQ(CIQinfo &ciqinfo);
         const QList<CIQinfo>& ciqinfo() const { return ciqinfo_; }
@@ -449,9 +451,6 @@ class RideFile : public QObject // QObject to emit signals
         void deleted();
 
     protected:
-
-        //  should access via IntervalItem
-        const QList<RideFileInterval*> &intervals() const { return intervals_; }
 
         // xdata series
         QMap<QString, XDataSeries*> xdata_;
