@@ -14,6 +14,7 @@ equals(GC_UNITTESTS, active) {
 			   Core/splineCrash \
 			   FileIO/archiveSecurity \
 			   FileIO/powerTapBounds \
+			   FileIO/rideFileOwnership \
 			   FileIO/tacxCafBounds \
 			   FileIO/ttsReaderBounds \
 			   FileIO/wkoBounds \

@@ -120,6 +120,10 @@ RideFile::~RideFile()
     emit deleted();
     foreach(RideFilePoint *point, dataPoints_)
         delete point;
+    delete minPoint;
+    delete maxPoint;
+    delete avgPoint;
+    delete totalPoint;
     //foreach(RideFileCalibration *calibration, calibrations_)
         //delete calibration;
     //foreach(RideFileInterval *interval, intervals_)

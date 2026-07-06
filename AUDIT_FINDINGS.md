@@ -427,6 +427,19 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Fix direction: Initialize every owner to null and propagate construction
   failure instead of returning a partially constructed logical object.
 
+### MEM-010: RideFile leaks its four summary points
+
+- Status: FIXED (all constructors and destruction pass under ASan/UBSan with
+  leak detection enabled)
+- Code: `src/FileIO/RideFile.cpp:69`, `src/FileIO/RideFile.cpp:85`,
+  `src/FileIO/RideFile.cpp:106`, `src/FileIO/RideFile.cpp:118`
+- Impact: Every parsed or temporary activity permanently leaks its minimum,
+  maximum, average, and total `RideFilePoint` allocations.
+- Test: `unittests/FileIO/rideFileOwnership` constructs and destroys every
+  production constructor repeatedly. Before the fix LSan reported 384 leaked
+  allocations (150,528 bytes); after the fix the same test is clean.
+- Fix: Delete the four exclusively owned summary points in `RideFile::~RideFile`.
+
 ### THREAD-003: Python chart execution races GUI object lifetime
 
 - Status: OPEN
