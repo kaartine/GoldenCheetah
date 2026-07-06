@@ -159,28 +159,60 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-001: Activity saves are non-atomic and report false success
 
-- Status: IN_PROGRESS (core save transaction fixed; wizard-specific
-  multi-file transactions remain)
+- Status: IN_PROGRESS (core save and split transactions fixed; remaining
+  persistence callers are being converted independently)
 - Code: `src/FileIO/AtomicFileWriter.h`, `src/FileIO/JsonRideFile.y`,
-  `src/Gui/SaveDialogs.cpp`, `src/Core/RideCache.cpp`
+  `src/Gui/SaveDialogs.cpp`, `src/Core/RideCache.cpp`,
+  `src/Core/RideCacheRemoval.cpp`, `src/Gui/SplitActivitySave.cpp`,
+  `src/Gui/SplitActivityWizard.cpp`
 - Impact: JSON save truncates the destination in place, does not check write or
   flush status, and callers mark the activity clean even after failure. Disk
   exhaustion or a crash can destroy the only good copy.
 - Test: `unittests/FileIO/atomicActivitySave` covers open, short-write, flush,
   commit, corrupt-readback, lock, collision, staged-set rollback, source-change,
   finalization, retry, dialog, and aggregate-cache failures.
+  `unittests/Gui/splitActivitySave` covers all split staging, publication,
+  archive, rollback, path, sync, and recovery outcomes.
+  `unittests/Core/rideCacheRemoval` executes the production removal code and
+  verifies exact named eviction after the source has already been archived.
 - Resolution: JSON writes now use same-directory atomic publication, file and
   directory synchronization, readback verification, deterministic per-path
   locks, and error propagation. Activities are marked clean only after durable
   publication and source-file finalization. Failed finalization restores the
-  source and removes an unfinalized new target.
-- Verification: 66 focused tests pass normally and under strict
-  ASan/UBSan/LSan; the full Qt 6.8.3 application build links successfully, and
-  all 1,244 registered tests pass without failures or skips.
-- Remaining: Convert `SplitActivityWizard` and its linked/multi-file output to
-  the staged-set transaction, then add caller-level tests. Multiple files still
-  cannot be made truly crash-atomic, and non-cooperating external writers retain
-  a small check-to-publish race outside GoldenCheetah's lock protocol.
+  source and removes an unfinalized new target. Split Activity now stages and
+  synchronizes every output before publishing the set, snapshots and locks the
+  source, atomically archives it while preserving any prior backup, and mutates
+  the cache only after persistence succeeds. It removes the captured source by
+  name, so a nested event loop cannot delete a newly selected activity.
+- Verification: The new regression cases first failed because the staged-set
+  finalizer, atomic move, transactional split helper, and named archived-cache
+  removal did not exist. The final `atomicActivitySave`, `splitActivitySave`,
+  and `rideCacheRemoval` suites pass 69, 33, and 6 tests respectively both
+  normally and under strict ASan/UBSan/LSan. The full Qt 6.8.3 application
+  build links, and all 1,286 registered tests pass without failures or skips.
+- Remaining: Complete and independently commit transaction adoption in
+  `CloudService`, `DownloadRideDialog`, `RideImportWizard`, `GcUpgrade`,
+  `AerolabWindow`, and `MergeActivityWizard`. Multi-file crash recovery and
+  rollback against non-cooperating writers are tracked as `DUR-007` and
+  `DUR-008`.
+
+### DATA-001: Split extraction loses and misaligns boundary data
+
+- Status: OPEN
+- Code: `src/Gui/SplitActivityWizard.cpp:765`,
+  `src/Gui/SplitActivityWizard.cpp:786`,
+  `src/Gui/SplitActivityWizard.cpp:812`
+- Impact: Point extraction excludes the stop marker while XData extraction
+  includes it, so the final selected sample is omitted and adjacent series use
+  inconsistent boundary ownership. XData is copied twice; the second `QMap`
+  insertion replaces the first owned pointer without deleting it. An interval
+  truncated at the segment end stores the source's absolute stop time instead
+  of the segment-local offset.
+- Test: Extract adjacent and final segments containing samples, one XData
+  series, and a crossing interval. Require exact boundary ownership, one
+  retained XData allocation, and local interval bounds under ASan/LSan.
+- Fix direction: Extract a pure segment-copy helper with an explicit boundary
+  policy, perform one XData pass, and offset both interval endpoints.
 
 ### DUR-002: Other persistent files are also truncated in place
 
@@ -749,6 +781,36 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Test: Mutate the cache during save under TSAN and validate every output file.
 - Fix direction: Snapshot on the owning thread, serialize the snapshot to
   `QSaveFile` in the worker.
+
+### DUR-007: Split transactions have no restart recovery journal
+
+- Status: OPEN
+- Code: `src/FileIO/AtomicFileWriter.h`,
+  `src/Gui/SplitActivitySave.cpp`
+- Impact: Runtime failures are rolled back, but a process or power loss between
+  publishing outputs, preserving an old backup, and archiving the source can
+  leave a recoverable mixture of split files and `.rollback-*` state with no
+  automatic reconciliation on restart.
+- Test: Run each durable transition in a subprocess, terminate it at injected
+  failpoints, restart, and require deterministic completion or rollback without
+  losing the source or a prior backup.
+- Fix direction: Use a private transaction directory and fsynced manifest with
+  explicit states, then reconcile incomplete transactions before loading the
+  activity cache.
+
+### DUR-008: Staged-set rollback trusts a mutable target pathname
+
+- Status: OPEN
+- Code: `src/FileIO/AtomicFileWriter.h:697`
+- Impact: GoldenCheetah holds cooperative path locks, but another process can
+  replace a newly published target before finalization fails. Rollback removes
+  the current pathname and could therefore delete the other process's file.
+- Test: Replace a published target through an injected non-cooperating writer
+  during finalization and verify rollback removes only the exact file identity
+  created by this transaction.
+- Fix direction: Record and revalidate platform file identities or publish an
+  immutable generation and atomically switch one manifest instead of deleting
+  rollback targets by pathname.
 
 ### DB-001: VideoSync import uses video-table helpers
 

@@ -17,9 +17,11 @@
  */
 
 #include "SplitActivityWizard.h"
+#include "SplitActivitySave.h"
 #include "MainWindow.h"
 #include "Athlete.h"
 #include "Context.h"
+#include "RideCache.h"
 #include "HelpWhatsThis.h"
 
 
@@ -52,6 +54,7 @@ SplitActivityWizard::SplitActivityWizard(Context *context) : QWizard(context->ma
 
     // set ride - unconst since we will wipe it away eventually
     rideItem = const_cast<RideItem*>(context->currentRideItem());
+    sourceFileName = rideItem ? rideItem->fileName : QString();
 
     // Set sensible defaults
     keepOriginal = false;
@@ -95,7 +98,7 @@ SplitActivityWizard::SplitActivityWizard(Context *context) : QWizard(context->ma
     files->setColumnWidth(3, 75*dpiXFactor); // duration
     files->setColumnWidth(4, 75*dpiXFactor); // distance
     files->setSelectionMode(QAbstractItemView::SingleSelection);
-    files->setEditTriggers(QAbstractItemView::SelectedClicked); // allow edit
+    files->setEditTriggers(QAbstractItemView::NoEditTriggers);
     files->setUniformRowHeights(true);
     files->setIndentation(0);
 
@@ -322,7 +325,6 @@ SplitActivityWizard::setFilesList()
     if (keepOriginal == false) {
         // we will wipe the original file
         QTreeWidgetItem *add = new QTreeWidgetItem(files->invisibleRootItem());
-        add->setFlags(add->flags() | Qt::ItemIsEditable);
 
         add->setText(0, rideItem->fileName);
         add->setText(1, rideItem->ride()->startTime().toString(tr("dd MMM yyyy")));
@@ -358,7 +360,6 @@ SplitActivityWizard::setFilesList()
     foreach (RideFile *ride, activities) {
 
         QTreeWidgetItem *add = new QTreeWidgetItem(files->invisibleRootItem());
-        add->setFlags(add->flags() | Qt::ItemIsEditable);
 
         QString filename = QString ("%1_%2_%3_%4_%5_%6.json")
                            .arg(ride->startTime().date().year(), 4, 10, zero)
@@ -713,12 +714,8 @@ SplitConfirm::initializePage()
         lastmark = mark;
     }
 
-    // now lets adjust the starttime to avoid conflicts
-    // and record adjustment in a metadata field for transparency
-    // it will always conflict with current ride, so we pick that
-    // up as a special case.
-    // we check against existing rides AND the rides we WILL create
-    QString originalFileName = wizard->context->athlete->home->activities().canonicalPath() + "/" + wizard->rideItem->fileName;
+    // Adjust start times so the source remains reserved until commit.
+    // Record any adjustment in metadata for transparency.
     QList<QDateTime> toBeCreated;
     foreach(RideFile *ride, wizard->activities) {
 
@@ -726,16 +723,6 @@ SplitConfirm::initializePage()
         QStringList conflicts = wizard->conflicts(ride->startTime());
 
         while (conflicts.count() || toBeCreated.contains(ride->startTime())) {
-
-            // if the only conflict is with the original filename
-            // and it will be wiped then don't worry about it
-            // we also check conflicts of rides the WILl be created
-            if (conflicts.count() == 1 &&
-                conflicts.at(0) == originalFileName &&
-                wizard->keepOriginal == false &&
-                !toBeCreated.contains(ride->startTime())) {
-                break;
-            }
 
             adjust++;
             ride->setStartTime(ride->startTime().addSecs(1));
@@ -861,45 +848,116 @@ SplitConfirm::createRideFile(long start, long stop)
 bool
 SplitConfirm::validatePage()
 {
-    if(QMessageBox::question(this, tr("Confirm"),
-       QString(tr("%1 file(s) will be created.\n\nAre you sure you wish to proceed?"))
-       .arg(wizard->activities.count()),
-       QMessageBox::Ok|QMessageBox::Cancel, QMessageBox::Cancel) == QMessageBox::Ok) {
+    if (wizard->activities.isEmpty()) {
+        QMessageBox::warning(
+            this, tr("Split Activity"),
+            tr("Select at least two split markers before continuing."));
+        return false;
+    }
+    if (wizard->sourceFileName.isEmpty()) {
+        QMessageBox::critical(
+            this, tr("Split Activity"),
+            tr("The source activity is no longer available."));
+        return false;
+    }
 
-        // LETS DO IT NOW!
-        // first do we need to remove the current ride?
-        if (wizard->keepOriginal == false) {
+    if (QMessageBox::question(
+            this, tr("Confirm"),
+            tr("%1 file(s) will be created.\n\n"
+               "Are you sure you wish to proceed?")
+                .arg(wizard->activities.count()),
+            QMessageBox::Ok | QMessageBox::Cancel,
+            QMessageBox::Cancel) != QMessageBox::Ok) {
+        return false;
+    }
 
-            wizard->context->athlete->removeCurrentRide();
-            QTreeWidgetItem *current = wizard->files->invisibleRootItem()->child(0);
-            current->setText(5, tr("Removed"));
+    const QDir activitiesDirectory =
+        wizard->context->athlete->home->activities();
+    const QString sourcePath = activitiesDirectory.filePath(
+        wizard->sourceFileName);
+    const QString backupPath =
+        wizard->context->athlete->home->fileBackup().filePath(
+            wizard->sourceFileName + QStringLiteral(".bak"));
+
+    QList<SplitActivityOutput> outputs;
+    const int offset = wizard->keepOriginal ? 0 : 1;
+    for (int index = 0;
+         index < wizard->activities.count(); ++index) {
+        QTreeWidgetItem *row =
+            wizard->files->invisibleRootItem()->child(index + offset);
+        if (!row) {
+            QMessageBox::critical(
+                this, tr("Split Activity"),
+                tr("The split activity file list is incomplete."));
+            return false;
         }
 
-        // whizz through and create each new ride
-        int off = wizard->keepOriginal ? 0 : 1; // skip first line to remove or not?
-        for(int i=0; i<wizard->activities.count(); i++) {
+        RideFile *ride = wizard->activities.at(index);
+        SplitActivityOutput output;
+        output.fileName = row->text(0);
+        output.stage =
+            [context = wizard->context, ride](
+                const QString &stagingPath, QString &stageError) {
+                JsonFileReader reader;
+                QFile stagingFile(stagingPath);
+                return reader.writeRideFile(
+                    context, ride, stagingFile,
+                    stageError, false);
+            };
+        outputs.append(output);
+    }
 
-            QTreeWidgetItem *current = wizard->files->invisibleRootItem()->child(i+off);
-            QString target = wizard->context->athlete->home->activities().canonicalPath() + "/" + current->text(0);
+    QStringList publishedFileNames;
+    QString error;
+    if (!saveSplitActivityFiles(
+            activitiesDirectory, sourcePath, backupPath,
+            outputs, wizard->keepOriginal,
+            publishedFileNames, error)) {
+        QMessageBox::critical(
+            this, tr("Split Activity"),
+            tr("The activity could not be split.\n\n%1")
+                .arg(error));
+        return false;
+    }
 
-            JsonFileReader reader;
-            QFile out(target);
-            reader.writeRideFile(wizard->context, wizard->activities.at(i), out);
+    if (!error.isEmpty()) {
+        QMessageBox::warning(
+            this, tr("Split Activity"),
+            tr("The files were saved with a recovery warning.\n\n%1")
+                .arg(error));
+    }
 
-            current->setText(5, tr("Saved"));
-
-            wizard->context->athlete->addRide(QFileInfo(out).fileName(), true);
+    if (!wizard->keepOriginal) {
+        QTreeWidgetItem *sourceRow =
+            wizard->files->invisibleRootItem()->child(0);
+        if (wizard->context->athlete->rideCache
+                ->removeArchivedRide(wizard->sourceFileName)) {
+            if (sourceRow) sourceRow->setText(5, tr("Removed"));
+        } else {
+            if (sourceRow) {
+                sourceRow->setText(5, tr("Restart required"));
+            }
+            QMessageBox::warning(
+                this, tr("Split Activity"),
+                tr("The files were saved, but the activity list "
+                   "could not be updated. Restart GoldenCheetah "
+                   "to reload the activities."));
         }
+    }
 
-        // now make this page the last (so we can see what was done)
-        setTitle(tr("Completed"));
-        setSubTitle(tr("Split Activity Completed"));
+    for (int index = 0;
+         index < publishedFileNames.count(); ++index) {
+        QTreeWidgetItem *row =
+            wizard->files->invisibleRootItem()->child(index + offset);
+        if (row) row->setText(5, tr("Saved"));
+        wizard->context->athlete->addRide(
+            publishedFileNames.at(index), true);
+    }
 
-        wizard->done = true;
-
-        return true;
-
-    } else return false;
+    setTitle(tr("Completed"));
+    setSubTitle(tr("Split Activity Completed"));
+    wizard->done = true;
+    return true;
 }
 
 bool

@@ -210,6 +210,9 @@ private slots:
     void stagedFileSetRejectsUnsafePathGraphs();
     void stagedFileSetRejectsInvalidAndDuplicateStages();
     void stagedFileSetReleasesLocksAfterLockFailure();
+    void stagedFileSetFinalizesWhileTargetsAreLocked();
+    void stagedFileSetReturnsSuccessfulFinalizerWarning();
+    void stagedFileSetRollsBackWhenFinalizerFails();
     void lockSetKeepsCaseDistinctPaths();
     void atomicWriterPreservesConcurrentNewTarget();
     void jsonWriterFailurePreservesOriginal_data();
@@ -937,6 +940,109 @@ stagedFileSetReleasesLocksAfterLockFailure()
     QLockFile firstLock(atomicFileLockPath(firstTarget));
     firstLock.setStaleLockTime(0);
     QVERIFY(firstLock.tryLock(0));
+}
+
+void TestAtomicActivitySave::stagedFileSetFinalizesWhileTargetsAreLocked()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString stage = dir.filePath(QStringLiteral("activity.stage"));
+    const QString target = dir.filePath(QStringLiteral("activity.json"));
+    writeFixture(stage, QByteArray("activity"));
+
+    bool sawPublishedTarget = false;
+    bool sawHeldTargetLock = false;
+    int finalizeCalls = 0;
+    const std::function<bool(QString &)> finalize =
+        [&](QString &finalizeError) {
+            ++finalizeCalls;
+            sawPublishedTarget =
+                readAll(target) == QByteArray("activity");
+
+            QLockFile competingLock(atomicFileLockPath(target));
+            competingLock.setStaleLockTime(0);
+            sawHeldTargetLock = !competingLock.tryLock(0);
+            if (!sawPublishedTarget || !sawHeldTargetLock) {
+                finalizeError =
+                    QStringLiteral("target was not durably locked");
+                return false;
+            }
+            return true;
+        };
+
+    QString error;
+    QVERIFY2(publishStagedFileSet(
+                 { StagedFilePublication(stage, target) }, error,
+                 publishAtomicNew, finalize),
+             qPrintable(error));
+    QCOMPARE(finalizeCalls, 1);
+    QVERIFY(sawPublishedTarget);
+    QVERIFY(sawHeldTargetLock);
+    QVERIFY(!QFile::exists(stage));
+    QCOMPARE(readAll(target), QByteArray("activity"));
+}
+
+void TestAtomicActivitySave::stagedFileSetReturnsSuccessfulFinalizerWarning()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString stage = dir.filePath(QStringLiteral("activity.stage"));
+    const QString target = dir.filePath(QStringLiteral("activity.json"));
+    writeFixture(stage, QByteArray("activity"));
+
+    const std::function<bool(QString &)> finalize =
+        [](QString &finalizeError) {
+            finalizeError = QStringLiteral("recovery warning");
+            return true;
+        };
+
+    QString error;
+    QVERIFY(publishStagedFileSet(
+        { StagedFilePublication(stage, target) }, error,
+        publishAtomicNew, finalize));
+    QCOMPARE(error, QStringLiteral("recovery warning"));
+    QVERIFY(!QFile::exists(stage));
+    QCOMPARE(readAll(target), QByteArray("activity"));
+}
+
+void TestAtomicActivitySave::stagedFileSetRollsBackWhenFinalizerFails()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    QList<StagedFilePublication> files;
+    for (int index = 0; index < 2; ++index) {
+        const QString stage =
+            dir.filePath(QStringLiteral("activity-%1.stage").arg(index));
+        const QString target =
+            dir.filePath(QStringLiteral("activity-%1.json").arg(index));
+        writeFixture(stage, QByteArray("activity-")
+                                + QByteArray::number(index));
+        files.append(StagedFilePublication(stage, target));
+    }
+
+    int finalizeCalls = 0;
+    bool sawAllTargets = true;
+    const std::function<bool(QString &)> finalize =
+        [&](QString &finalizeError) {
+            ++finalizeCalls;
+            for (const StagedFilePublication &file : std::as_const(files)) {
+                sawAllTargets = sawAllTargets
+                    && QFile::exists(file.second);
+            }
+            finalizeError = QStringLiteral("injected finalization failure");
+            return false;
+        };
+
+    QString error;
+    QVERIFY(!publishStagedFileSet(
+        files, error, publishAtomicNew, finalize));
+    QCOMPARE(finalizeCalls, 1);
+    QVERIFY(sawAllTargets);
+    QVERIFY(error.contains(QStringLiteral("finalization failure")));
+    for (const StagedFilePublication &file : std::as_const(files)) {
+        QVERIFY(!QFile::exists(file.first));
+        QVERIFY(!QFile::exists(file.second));
+    }
 }
 
 void TestAtomicActivitySave::lockSetKeepsCaseDistinctPaths()

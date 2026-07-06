@@ -197,6 +197,9 @@ using AtomicFileWriterFactory = std::function<std::unique_ptr<AtomicFileWriter>(
 using AtomicPublishFunction = std::function<bool(
     const QString &stagingPath, const QString &targetPath,
     bool &targetPublished, QString &error)>;
+using AtomicFinalizeFunction = std::function<bool(QString &error)>;
+using AtomicMoveFunction = std::function<bool(
+    const QString &sourcePath, const QString &targetPath, QString &error)>;
 
 inline bool publishAtomicReplacement(const QString &temporaryPath,
                                      const QString &targetPath,
@@ -350,6 +353,34 @@ inline bool publishAtomicNew(const QString &temporaryPath,
     return false;
 #endif
     return true;
+}
+
+inline bool moveAtomicFile(
+    const QString &sourcePath,
+    const QString &targetPath,
+    QString &error)
+{
+    error.clear();
+    bool targetCreated = false;
+    QString moveError;
+    if (publishAtomicNew(
+            sourcePath, targetPath, targetCreated, moveError)) {
+        return true;
+    }
+
+    error = moveError.isEmpty()
+        ? QStringLiteral("Cannot move the activity file atomically")
+        : moveError;
+    if (targetCreated) {
+        const QFileInfo source(sourcePath);
+        if ((!source.exists() && !source.isSymLink())
+            || !QFile::remove(targetPath)) {
+            if (!error.isEmpty()) error += QStringLiteral("; ");
+            error += QStringLiteral(
+                "cannot roll back the partial activity move");
+        }
+    }
+    return false;
 }
 
 class NewAtomicFileWriter final : public AtomicFileWriter
@@ -582,7 +613,8 @@ inline void cleanupStagedFiles(
 inline bool publishStagedFileSet(
     const QList<StagedFilePublication> &files,
     QString &error,
-    const AtomicPublishFunction &publish = publishAtomicNew)
+    const AtomicPublishFunction &publish = publishAtomicNew,
+    const AtomicFinalizeFunction &finalize = AtomicFinalizeFunction())
 {
     error.clear();
     if (files.isEmpty() || !publish) {
@@ -732,6 +764,22 @@ inline bool publishStagedFileSet(
                 cleanup();
                 return false;
             }
+        }
+    }
+
+    if (finalize) {
+        QString finalizationError;
+        if (!finalize(finalizationError)) {
+            if (finalizationError.isEmpty()) {
+                finalizationError = QStringLiteral(
+                    "Cannot finalize the staged activity files");
+            }
+            appendAtomicFileError(error, finalizationError);
+            cleanup();
+            return false;
+        }
+        if (!finalizationError.isEmpty()) {
+            appendAtomicFileError(error, finalizationError);
         }
     }
 

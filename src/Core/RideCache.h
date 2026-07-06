@@ -99,6 +99,7 @@ class RideCache : public QObject
         void addRide(QString name, bool dosignal, bool select, bool useTempActivities, bool planned);
         bool removeCurrentRide();
         bool removeRide(const QString& filenameToDelete);
+        bool removeArchivedRide(const QString& filenameToDelete);
         bool removeRides(const QStringList &filenamesToDelete, bool triggerRefresh = true);
 
         // export metrics in CSV format
@@ -237,6 +238,14 @@ class RideCache : public QObject
         bool first; // updated when estimates are marked stale
 
     private:
+        enum class RideFileDisposition {
+            Archive,
+            AlreadyArchived
+        };
+
+        bool removeRideEntry(
+            const QString &filenameToDelete,
+            RideFileDisposition disposition);
         bool renameRideFiles(const QString& oldFileName, const QString& newFileName, bool isPlanned, QString &error);
         bool isValidLink(RideItem *item1, RideItem *item2, QString &error);
         RideItem* copyPlannedRideFile(RideItem *sourceItem, const QDate &newDate, const QTime &newTime, QString &error);

@@ -51,6 +51,7 @@ public:
     Context *context;
     bool keepOriginal;
     RideItem *rideItem;
+    QString sourceFileName;
 
     int minimumGap,
         minimumSegmentSize;

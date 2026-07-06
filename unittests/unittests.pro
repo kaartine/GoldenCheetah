@@ -6,6 +6,7 @@ exists(unittests.pri) {
 
 equals(GC_UNITTESTS, active) {
 	SUBDIRS += Core/athleteMigrationSafety \
+			   Core/rideCacheRemoval \
 			   Core/seasonOffset \
 			   Core/season \
 			   Core/seasonParser \
@@ -22,6 +23,7 @@ equals(GC_UNITTESTS, active) {
 			   FileIO/wkoBounds \
 			   Gui/calendarData \
 			   Gui/iconBundleSecurity \
+			   Gui/splitActivitySave \
 			   Gui/perspectiveStateSource \
 			   Gui/trainPerspectiveState \
 			   Python/pythonDataSeriesOwnership \
