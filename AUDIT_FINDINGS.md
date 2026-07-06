@@ -196,7 +196,9 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   ownership to the current activity only after durable persistence succeeds;
   a failed save leaves the original activity and retry state intact. Aerolab
   now reports failed persistence and leaves its Save action enabled so the
-  parameters remain retryable.
+  parameters remain retryable. Legacy activity upgrades now move each source
+  into the imports directory only after its JSON replacement is durably
+  written, while atomic replacement keeps interrupted upgrades retryable.
 - Verification: The new regression cases first failed because the staged-set
   finalizer, atomic move, transactional split helper, and named archived-cache
   removal did not exist. The final `atomicActivitySave`, `splitActivitySave`,
@@ -204,8 +206,8 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   normally and under strict ASan/UBSan/LSan. The full Qt 6.8.3 application
   build links, and all 1,286 registered tests pass without failures or skips.
 - Remaining: Complete and independently commit transaction adoption in
-  `CloudService`, `DownloadRideDialog`, `RideImportWizard`, and
-  `GcUpgrade`. Multi-file crash recovery and
+  `CloudService`, `DownloadRideDialog`, and `RideImportWizard`.
+  Multi-file crash recovery and
   rollback against non-cooperating writers are tracked as `DUR-007` and
   `DUR-008`.
 

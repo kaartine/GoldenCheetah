@@ -742,17 +742,26 @@ GcUpgrade::upgradeLate(Context *context)
                             ride->setTag("Filename", targetFileName);
                             JsonFileReader reader;
                             QFile target(context->athlete->home->activities().canonicalPath() + "/" + targetFileName);
-                            reader.writeRideFile(context, ride, target);
-                            okConvert++;
-                            upgradeLog->append(tr("-> Information: Activity %1 - Successfully converted to .JSON").arg(activitiesFileName));
+                            QString writeError;
+                            if (reader.writeRideFile(
+                                    context, ride, target, writeError, true)) {
+                                okConvert++;
+                                upgradeLog->append(tr("-> Information: Activity %1 - Successfully converted to .JSON").arg(activitiesFileName));
 
-                            // copy source file to the /imports folder (only if conversion was successful)
-                            bool success = moveFile(QString("%1/%2").arg(context->athlete->home->root().canonicalPath()).arg(activitiesFileName),
-                                                    QString("%1/%2").arg(context->athlete->home->imports().canonicalPath()).arg(activitiesFileName));
-                            if (success) {
-                                ok++;
+                                // copy source file to the /imports folder (only if conversion was successful)
+                                bool success = moveFile(QString("%1/%2").arg(context->athlete->home->root().canonicalPath()).arg(activitiesFileName),
+                                                        QString("%1/%2").arg(context->athlete->home->imports().canonicalPath()).arg(activitiesFileName));
+                                if (success) {
+                                    ok++;
+                                } else {
+                                    fail++;
+                                }
                             } else {
-                                fail++;
+                                failConvert++;
+                                upgradeLog->append(
+                                    tr("-> Error: Activity %1 - .JSON conversion failed: %2")
+                                        .arg(activitiesFileName, writeError),
+                                    2);
                             }
                         } else {
                             failConvert++;
