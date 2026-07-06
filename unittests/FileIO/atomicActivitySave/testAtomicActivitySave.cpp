@@ -204,6 +204,8 @@ private slots:
     void atomicWriterRejectsLockedTarget();
     void newWriterRollsBackPartialPublishFailure();
     void stagedFileSetPublishesAll();
+    void publicationFailureSkipsCacheUpdate();
+    void publicationSuccessUpdatesCacheAfterPublish();
     void stagedFileSetRollsBackOnMiddleFailure();
     void stagedFileSetRollsBackPartiallyPublishedFailure();
     void stagedFileSetCleansStagingOnCollision();
@@ -667,6 +669,58 @@ void TestAtomicActivitySave::stagedFileSetPublishesAll()
     QVERIFY(!QFile::exists(secondStage));
     QCOMPARE(readAll(firstTarget), QByteArray("first activity"));
     QCOMPARE(readAll(secondTarget), QByteArray("second activity"));
+}
+
+void TestAtomicActivitySave::publicationFailureSkipsCacheUpdate()
+{
+    bool cacheUpdated = false;
+    QString error;
+
+    QVERIFY(!publishActivityBeforeCacheUpdate(
+        [&](QString &publishError) {
+            publishError =
+                QStringLiteral("injected activity publication failure");
+            return false;
+        },
+        [&]() { cacheUpdated = true; },
+        error));
+
+    QVERIFY(!cacheUpdated);
+    QCOMPARE(
+        error,
+        QStringLiteral("injected activity publication failure"));
+}
+
+void TestAtomicActivitySave::
+publicationSuccessUpdatesCacheAfterPublish()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString stage =
+        dir.filePath(QStringLiteral(".activity.stage"));
+    const QString target =
+        dir.filePath(QStringLiteral("activity.json"));
+    const QByteArray contents("durable activity");
+    writeFixture(stage, contents);
+
+    bool cacheUpdated = false;
+    QString error;
+    QVERIFY2(publishActivityBeforeCacheUpdate(
+                 [&](QString &publishError) {
+                     return publishStagedFileSet(
+                         { StagedFilePublication(stage, target) },
+                         publishError);
+                 },
+                 [&]() {
+                     cacheUpdated = QFile::exists(target)
+                         && !QFile::exists(stage)
+                         && readAll(target) == contents;
+                 },
+                 error),
+             qPrintable(error));
+
+    QVERIFY(error.isEmpty());
+    QVERIFY(cacheUpdated);
 }
 
 void TestAtomicActivitySave::stagedFileSetRollsBackOnMiddleFailure()

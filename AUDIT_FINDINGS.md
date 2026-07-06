@@ -198,15 +198,18 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   now reports failed persistence and leaves its Save action enabled so the
   parameters remain retryable. Legacy activity upgrades now move each source
   into the imports directory only after its JSON replacement is durably
-  written, while atomic replacement keeps interrupted upgrades retryable.
+  written, while atomic replacement keeps interrupted upgrades retryable. Ride
+  Import now publishes staged JSON before inserting the activity into the
+  cache and reports write, publication, and linked-activity save failures.
 - Verification: The new regression cases first failed because the staged-set
-  finalizer, atomic move, transactional split helper, and named archived-cache
-  removal did not exist. The final `atomicActivitySave`, `splitActivitySave`,
-  and `rideCacheRemoval` suites pass 69, 33, and 6 tests respectively both
+  finalizer, atomic move, transactional split helper, named archived-cache
+  removal, and publication-before-cache contract did not exist. The final
+  `atomicActivitySave`, `splitActivitySave`, and `rideCacheRemoval` suites
+  pass 71, 33, and 6 tests respectively both
   normally and under strict ASan/UBSan/LSan. The full Qt 6.8.3 application
   build links, and all 1,286 registered tests pass without failures or skips.
 - Remaining: Complete and independently commit transaction adoption in
-  `CloudService`, `DownloadRideDialog`, and `RideImportWizard`.
+  `CloudService` and `DownloadRideDialog`.
   Multi-file crash recovery and
   rollback against non-cooperating writers are tracked as `DUR-007` and
   `DUR-008`.

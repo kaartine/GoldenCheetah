@@ -21,6 +21,7 @@
 #include "MainWindow.h"
 
 #include "ArchiveFile.h"
+#include "AtomicFileWriter.h"
 
 #include "RideItem.h"
 #include "RideFile.h"
@@ -609,8 +610,12 @@ RideImportWizard::process()
                      QString fulltarget = QDir::tempPath() + "/" + QFileInfo(thisfile).baseName() + QString("-%1.json").arg(counter+1);
                      JsonFileReader reader;
                      QFile target(fulltarget);
-                     reader.writeRideFile(context, extracted, target);
-                     deleteMe.append(fulltarget);
+                     QString writeError;
+                     const bool written = reader.writeRideFile(
+                         context, extracted, target, writeError, false);
+                     if (written) {
+                         deleteMe.append(fulltarget);
+                     }
                      delete extracted;
                      
                      // now add each temporary file ...
@@ -653,7 +658,10 @@ RideImportWizard::process()
 
                      // Import Status
                      t = new QTableWidgetItem();
-                     t->setText(tr(""));
+                     t->setText(written
+                         ? tr("")
+                         : tr("Error - .JSON creation failed: %1")
+                               .arg(writeError));
                      t->setFlags(t->flags() & (~Qt::ItemIsEditable));
                      tableWidget->setItem(here+counter,STATUS_COLUMN,t);
 
@@ -1144,20 +1152,24 @@ RideImportWizard::abortClicked()
             // serialize
             JsonFileReader reader;
             QFile target(tmpActivitiesFulltarget);
-            if (reader.writeRideFile(context, ride, target)) {
-
-                // now try adding the Ride to the RideCache - since this may fail due to various reason, the activity file
-                // is stored in tmpActivities during this process to understand which file has create the problem when restarting GC
-                // - only after the step was successful the file is moved
-                // to the "clean" activities folder
-                context->athlete->addRide(QFileInfo(tmpActivitiesFulltarget).fileName(),
-                                          tableWidget->rowCount() < 20 ? true : false, // don't signal if mass importing
-                                          true, true);                                       // file is available only in /tmpActivities, so use this one please
-                // rideCache is successfully updated, let's move the file to the real /activities
-                if (moveFile(tmpActivitiesFulltarget, finalActivitiesFulltarget)) {
+            QString writeError;
+            if (reader.writeRideFile(context, ride, target, writeError, false)) {
+                QString publishError;
+                if (publishActivityBeforeCacheUpdate(
+                        [&](QString &stepError) {
+                            return publishStagedFileSet(
+                                { StagedFilePublication(
+                                    tmpActivitiesFulltarget,
+                                    finalActivitiesFulltarget) },
+                                stepError);
+                        },
+                        [&]() {
+                            context->athlete->addRide(
+                                activitiesTarget,
+                                tableWidget->rowCount() < 20);
+                        },
+                        publishError)) {
                     tableWidget->item(i,STATUS_COLUMN)->setText(tr("File Saved"));
-                    // and correct the path locally stored in Ride Item
-                    context->ride->setFileName(homeActivities.canonicalPath(), activitiesTarget);
 
                     // try autolinking to planned activity
                     RideItem *other = context->athlete->rideCache->findSuggestion(context->ride);
@@ -1166,15 +1178,25 @@ RideImportWizard::abortClicked()
                         RideCache::OperationResult result = context->athlete->rideCache->linkActivities(context->ride, other);
                         if (result.success) {
                             QString error;
-                            context->athlete->rideCache->saveActivities(check.affectedItems, error);
+                            if (!context->athlete->rideCache->saveActivities(
+                                    check.affectedItems, error)) {
+                                tableWidget->item(i,STATUS_COLUMN)->setText(
+                                    tr("Warning - File saved, but linked "
+                                       "activity changes could not be saved: %1")
+                                        .arg(error));
+                            }
                         }
                     }
                 }  else {
-                    tableWidget->item(i,STATUS_COLUMN)->setText(tr("Error - Moving %1 to activities folder").arg(activitiesTarget));
+                    tableWidget->item(i,STATUS_COLUMN)->setText(
+                        tr("Error - Publishing %1 to activities folder: %2")
+                            .arg(activitiesTarget, publishError));
                 }
 
             }  else {
-                tableWidget->item(i,STATUS_COLUMN)->setText(tr("Error - .JSON creation failed"));
+                tableWidget->item(i,STATUS_COLUMN)->setText(
+                    tr("Error - .JSON creation failed: %1")
+                        .arg(writeError));
             }
         } else {
             tableWidget->item(i,STATUS_COLUMN)->setText(tr("Error - Import of activitiy file failed"));

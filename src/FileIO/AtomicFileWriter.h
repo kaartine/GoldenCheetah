@@ -976,6 +976,30 @@ inline bool writeFileAtomically(const QString &path,
 }
 
 using ActivitySaveStep = std::function<bool(QString &error)>;
+using ActivityCacheUpdate = std::function<void()>;
+
+inline bool publishActivityBeforeCacheUpdate(
+    const ActivitySaveStep &publish,
+    const ActivityCacheUpdate &updateCache,
+    QString &error)
+{
+    error.clear();
+    if (!publish || !updateCache) {
+        error = QStringLiteral(
+            "Cannot complete the activity publication");
+        return false;
+    }
+
+    if (!publish(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral("Cannot publish the activity");
+        }
+        return false;
+    }
+
+    updateCache();
+    return true;
+}
 
 inline bool completeActivitySave(const ActivitySaveStep &persist,
                                  const ActivitySaveStep &finalize,
