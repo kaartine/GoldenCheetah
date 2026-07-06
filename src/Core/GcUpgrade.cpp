@@ -60,14 +60,32 @@ GcUpgrade::upgradeConfirmedByUser(const QDir &home)
     if (!folderUpgradeSuccess) {
 
         GcUpgradeExecuteDialog msgBox(home);
-        if (msgBox.exec() == QDialog::Accepted) return true;
-
-        // if not accepted
-        return false;
+        if (msgBox.exec() != QDialog::Accepted) return false;
 
     }
 
-    return true; // if there is no upgrade needed, just proceed
+    // A cancelled compatibility migration must stop before Athlete construction.
+    const int last = appsettings->cvalue(home.dirName(), GC_VERSION_USED, 0).toInt();
+    if (last && last < VERSION36_BUILD
+        && QMessageBox::warning(
+               NULL,
+               tr("Upgrade to v3.6"),
+               tr("We are about to upgrade your data and layouts to v3.6, please note Ride Summary chart was deprecated, and to use v3.5 again you will need to restore a backup"),
+               QMessageBox::Cancel | QMessageBox::Ok,
+               QMessageBox::Ok) != QMessageBox::Ok) {
+        return false;
+    }
+
+    return true;
+}
+
+bool
+GcUpgrade::executeAfterConfirmation(
+    const QDir &home, const std::function<void()> &action)
+{
+    if (!upgradeConfirmedByUser(home)) return false;
+    if (action) action();
+    return true;
 }
 
 int
@@ -357,7 +375,7 @@ GcUpgrade::upgrade(const QDir &home)
 
     if (last < VERSION33_BUILD) {
 
-        trainDB->upgradeDefaultEntriesWorkout();
+        if (trainDB) trainDB->upgradeDefaultEntriesWorkout();
     }
 
 
@@ -378,17 +396,6 @@ GcUpgrade::upgrade(const QDir &home)
     // 3.6 upgrade processing
     //----------------------------------------------------------------------
     if (last < VERSION36_BUILD) {
-
-        // Warn the user about upgrading layouts and data, giving the option to cancel when running
-        // a previous version, this is not necessary for new users.
-        if (last && QMessageBox::warning(NULL,
-                                         tr("Upgrade to v3.6"),
-                                         tr("We are about to upgrade your data and layouts to v3.6, please note Ride Summary chart was deprecated, and to use v3.5 again you will need to restore a backup"),
-                                         QMessageBox::Cancel|QMessageBox::Ok,
-                                         QMessageBox::Ok) != QMessageBox::Ok) {
-            return -1;
-        }
-
         // reset themes on basis of plot background (first 2 themes are default dark and light themes
 #if 0
         if (GCColor::luminance(GColor(CPLOTBACKGROUND)) < 127)  GCColor::applyTheme(0);
@@ -816,7 +823,7 @@ GcUpgrade::upgradeLate(Context *context)
 
     }
 
-    if (trainDB->needsUpgrade()) {
+    if (trainDB && trainDB->needsUpgrade()) {
         QStringList files = trainDB->getMigrateableWorkoutPaths();
         files << trainDB->getMigrateableVideoPaths();
         files << trainDB->getMigrateableVideoSyncPaths();

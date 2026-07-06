@@ -323,14 +323,13 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 ### THREAD-001: Cloud auto-download can outlive its athlete/context
 
 - Status: OPEN
-- Code: `src/Core/Athlete.cpp:169`, `src/Core/Athlete.cpp:238`,
-  `src/Cloud/CloudService.cpp:1805`
+- Code: `src/Core/Athlete.cpp`, `src/Cloud/CloudService.cpp`
 - Impact: Closing an athlete during download leaves an unowned worker that can
   dereference the destroyed athlete through a still-registered context.
-- Test: Block a fake provider mid-download, close the athlete, and run under
-  ASan/TSan.
-- Fix direction: Athlete teardown must cancel, join, and delete the worker before
-  dependent state is destroyed.
+- Test: Block a production worker mid-download, close the athlete, and require a
+  bounded cancellation and join under ASan/TSan.
+- Fix direction: Make the production worker cooperatively cancellable before
+  waiting in Athlete teardown; do not substitute an interruption-aware fake.
 
 ### THREAD-002: Cloud download state is mutated from GUI and worker threads
 
@@ -418,14 +417,26 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### MEM-009: Cancelled migration leaves Athlete owning pointers indeterminate
 
-- Status: OPEN
-- Code: `src/Core/GcUpgrade.cpp:389`, `src/Core/Athlete.cpp:92`,
-  `src/Core/Athlete.cpp:241`, `src/Core/Athlete.h:96`
-- Impact: Constructor return after cancellation precedes member initialization,
-  but the destructor later deletes those members.
-- Test: Cancel migration and destroy the athlete under ASan.
-- Fix direction: Initialize every owner to null and propagate construction
-  failure instead of returning a partially constructed logical object.
+- Status: FIXED
+- Code: `src/Core/GcUpgrade.cpp`, `src/Core/Athlete.cpp`,
+  `src/Core/Athlete.h`
+- Impact: Constructor return after cancellation preceded member initialization,
+  but the destructor later deleted those members.
+- Resolution: All owned and borrowed pointers have deterministic defaults.
+  `executeAfterConfirmation` centralizes the pre-construction gate used by
+  startup and tab opening. `Athlete::createInNewContext` keeps a new Context
+  owned until Athlete construction succeeds and rolls back its published UI
+  state on failure. A construction scope guard releases partially initialized
+  Athlete resources and clears the Context pointer.
+- Verification: `unittests/Core/athleteMigrationSafety` compiles the production
+  Athlete and GcUpgrade implementations and covers folder rejection, both
+  compatibility-dialog outcomes, all-accepted execution exactly once, current
+  and new users, construction from nonzero seeded storage, early construction
+  failure, and late failure after cloud and other owners exist. The focused
+  normal and ASan/UBSan/LSan runs pass 12 tests. The focused sanitizer harness
+  excludes vptr because whole-translation-unit instrumentation requires RTTI
+  from unrelated application classes; it constructs no fake polymorphic
+  objects.
 
 ### MEM-010: RideFile leaks its four summary points
 
@@ -439,6 +450,20 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   production constructor repeatedly. Before the fix LSan reported 384 leaked
   allocations (150,528 bytes); after the fix the same test is clean.
 - Fix: Delete the four exclusively owned summary points in `RideFile::~RideFile`.
+
+### MEM-011: Athlete leaks its directory structure
+
+- Status: FIXED
+- Code: `src/Core/Athlete.cpp`
+- Impact: Every opened athlete leaked its owned `AthleteDirectoryStructure`
+  and the internal directory strings retained by that object.
+- Resolution: Athlete teardown deletes the directory structure after its
+  synchronously owned path users have been destroyed. An active cloud worker
+  can still outlive it; that separate risk remains open as THREAD-001 and is not
+  claimed by this fix.
+- Verification: The MEM-009 real-lifecycle test first failed strict LSan with
+  two leaked directory owners and now destroys the same production objects
+  without leaks.
 
 ### THREAD-003: Python chart execution races GUI object lifetime
 

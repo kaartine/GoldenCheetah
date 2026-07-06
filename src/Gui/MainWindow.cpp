@@ -2036,22 +2036,21 @@ MainWindow::openAthleteTab(QString name)
     appsettings->initializeQSettingsAthlete(gcroot, name);
 
     GcUpgrade v3;
-    if (!v3.upgradeConfirmedByUser(home)) return false;
+    return v3.executeAfterConfirmation(home, [&]() {
+        // save how we are
+        saveGCState(currentAthleteTab->context);
 
-    // save how we are
-    saveGCState(currentAthleteTab->context);
-
-    Context *con= new Context(this);
-
-    con->athlete = NULL;
-    emit openingAthlete(name, con);
-
-    connect(con, SIGNAL(loadCompleted(QString,Context*)), this, SLOT(loadCompleted(QString, Context*)));
-
-    // will emit loadCompleted when done
-    con->athlete = new Athlete(con, home);
-
-    return true;
+        Athlete::createInNewContext(
+            this, home,
+            [this, name](Context *con) {
+                emit openingAthlete(name, con);
+                connect(con, SIGNAL(loadCompleted(QString,Context*)),
+                        this, SLOT(loadCompleted(QString, Context*)));
+            },
+            [this, name](Context *con) {
+                emit closingAthlete(name, con);
+            });
+    });
 }
 
 void

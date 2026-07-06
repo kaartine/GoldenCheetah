@@ -54,11 +54,73 @@
 
 #include "Route.h"
 
+#include <memory>
+#include <type_traits>
+#include <utility>
+
 #include "GcUpgrade.h" // upgrade wizard
 #include "GcCrashDialog.h" // recovering from a crash?
 
+namespace {
+
+template<typename Callback>
+class ScopeExit
+{
+public:
+    explicit ScopeExit(Callback callback)
+        : callback(std::move(callback))
+    {
+    }
+
+    ~ScopeExit()
+    {
+        if (active) callback();
+    }
+
+    void dismiss() { active = false; }
+
+private:
+    Callback callback;
+    bool active = true;
+};
+
+template<typename Callback>
+ScopeExit<std::decay_t<Callback>> makeScopeExit(Callback &&callback)
+{
+    return ScopeExit<std::decay_t<Callback>>(
+        std::forward<Callback>(callback));
+}
+
+} // namespace
+
+Context *
+Athlete::createInNewContext(
+    MainWindow *mainWindow, const QDir &homeDir,
+    const std::function<void(Context *)> &publish,
+    const std::function<void(Context *)> &rollback)
+{
+    auto newContext = std::make_unique<Context>(mainWindow);
+    newContext->athlete = nullptr;
+    const bool publicationStarted = bool(publish);
+
+    try {
+        if (publish) publish(newContext.get());
+        newContext->athlete = new Athlete(newContext.get(), homeDir);
+    } catch (...) {
+        if (publicationStarted && rollback) {
+            rollback(newContext.get());
+        }
+        throw;
+    }
+
+    return newContext.release();
+}
+
 Athlete::Athlete(Context *context, const QDir &homeDir)
 {
+    auto constructionRollback =
+        makeScopeExit([this]() { releaseOwnedResources(false); });
+
     // athlete name / structured directory
     this->home = new AthleteDirectoryStructure(homeDir);
     this->context = context;
@@ -88,12 +150,16 @@ Athlete::Athlete(Context *context, const QDir &homeDir)
 
     // Before we initialise we need to run the upgrade wizard for this athlete
     GcUpgrade v3;
-    int returnCode = v3.upgrade(home->root());
-    if (returnCode != 0) return;
+    v3.upgrade(home->root());
 
+
+    RideMetadata *rideMetadata =
+        GlobalContext::context()->rideMetadata;
+    const QStringList sports =
+        rideMetadata ? rideMetadata->sports() : QStringList();
 
     // Power Zones for Bike & Run
-    foreach (QString sport, GlobalContext::context()->rideMetadata->sports()) {
+    foreach (QString sport, sports) {
         QString i = RideFile::sportTag(sport);
         zones_[i] = new Zones(i);
         QFile zonesFile(home->config().canonicalPath() + "/" + zones_[i]->fileName());
@@ -113,7 +179,7 @@ Athlete::Athlete(Context *context, const QDir &homeDir)
     }
 
     // Heartrate Zones
-    foreach (QString sport, GlobalContext::context()->rideMetadata->sports()) {
+    foreach (QString sport, sports) {
         QString i = RideFile::sportTag(sport);
         hrzones_[i] = new HrZones(i);
         QFile hrzonesFile(home->config().canonicalPath() + "/" + hrzones_[i]->fileName());
@@ -176,9 +242,11 @@ Athlete::Athlete(Context *context, const QDir &homeDir)
     connect(rideCache, SIGNAL(loadComplete()), this, SLOT(loadComplete()));
 
     // we need to block on load complete if first (before mainwindow ready)
-    if (context->mainWindow->isStarting()) {
+    if (context->mainWindow && context->mainWindow->isStarting()) {
         loop.exec();
     }
+
+    constructionRollback.dismiss();
 }
 
 void
@@ -237,33 +305,65 @@ Athlete::loadCharts()
 
 Athlete::~Athlete()
 {
+    releaseOwnedResources(true);
+}
+
+void
+Athlete::releaseOwnedResources(bool saveCharts) noexcept
+{
+    if (cloudAutoDownload) {
+        disconnect(context, nullptr, cloudAutoDownload, nullptr);
+        if (!cloudAutoDownload->isRunning()) {
+            delete cloudAutoDownload;
+            cloudAutoDownload = nullptr;
+        }
+    }
+
     // close the ride cache down first
     delete rideCache;
+    rideCache = nullptr;
 
-    // save those preset charts
-    LTMSettings reader;
-    reader.writeChartXML(home->config(), presets); // don't write it until we fix the code
-                                               // all the changes to LTM settings and chart config
-                                               // have not been reflected in the charts.xml file
+    if (saveCharts && home) {
+        LTMSettings reader;
+        reader.writeChartXML(home->config(), presets);
+    }
 
     delete calendarDownload;
+    calendarDownload = nullptr;
 
 #ifdef GC_HAVE_ICAL
     delete rideCalendar;
+    rideCalendar = nullptr;
     delete davCalendar;
+    davCalendar = nullptr;
 #endif
 
     delete namedSearches;
+    namedSearches = nullptr;
     delete routes;
+    routes = nullptr;
     delete seasons;
+    seasons = nullptr;
     delete measures;
+    measures = nullptr;
 
-    foreach (Zones* zones, zones_) delete zones;
-    foreach (HrZones* hrzones, hrzones_) delete hrzones;
-    for (int i=0; i<2; i++) delete pacezones_[i];
+    qDeleteAll(zones_);
+    zones_.clear();
+    qDeleteAll(hrzones_);
+    hrzones_.clear();
+    for (int i = 0; i < 2; ++i) {
+        delete pacezones_[i];
+        pacezones_[i] = nullptr;
+    }
+
     delete autoImportConfig;
+    autoImportConfig = nullptr;
     delete autoImport;
+    autoImport = nullptr;
 
+    delete home;
+    home = nullptr;
+    if (context && context->athlete == this) context->athlete = nullptr;
 }
 
 void Athlete::selectRideFile(QString fileName)

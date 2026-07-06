@@ -719,11 +719,12 @@ main(int argc, char *argv[])
                 if (home.cd(cyclist)) {
                     appsettings->initializeQSettingsAthlete(homeDir, cyclist);
                     GcUpgrade v3;
-                    if (v3.upgradeConfirmedByUser(home)) {
-                        MainWindow *mainWindow = new MainWindow(home);
-                        mainWindow->show();
-                        mainWindow->ridesAutoImport();
-                        gc_opened++;
+                    if (v3.executeAfterConfirmation(home, [&]() {
+                            MainWindow *mainWindow = new MainWindow(home);
+                            mainWindow->show();
+                            mainWindow->ridesAutoImport();
+                            gc_opened++;
+                        })) {
                         home.cdUp();
                         anyOpened = true;
                     } else {
@@ -758,12 +759,12 @@ main(int argc, char *argv[])
             appsettings->initializeQSettingsAthlete(homeDir, d.choice());
             // .. and open a mainwindow
             GcUpgrade v3;
-            if (v3.upgradeConfirmedByUser(home)) {
-                MainWindow *mainWindow = new MainWindow(home);
-                mainWindow->show();
-                mainWindow->ridesAutoImport();
-                gc_opened++;
-            } else {
+            if (!v3.executeAfterConfirmation(home, [&]() {
+                    MainWindow *mainWindow = new MainWindow(home);
+                    mainWindow->show();
+                    mainWindow->ridesAutoImport();
+                    gc_opened++;
+                })) {
                 delete trainDB;
                 terminate(0);
             }

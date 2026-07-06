@@ -30,6 +30,8 @@
 #include <QNetworkReply>
 #include <QHeaderView>
 
+#include <functional>
+
 
 class Zones;
 class HrZones;
@@ -57,6 +59,7 @@ class RideAutoImportConfig;
 class RideCache;
 class IntervalCache;
 class Context;
+class MainWindow;
 class ColorEngine;
 class AnalysisSidebar;
 class AthleteTab;
@@ -72,12 +75,16 @@ class Athlete : public QObject
     public:
         Athlete(Context *context, const QDir &homeDir);
         ~Athlete();
+        static Context *createInNewContext(
+            MainWindow *mainWindow, const QDir &homeDir,
+            const std::function<void(Context *)> &publish,
+            const std::function<void(Context *)> &rollback);
         void close();
 
         // basic athlete info
         QString cyclist; // the cyclist name
         QUuid id; // unique identifier
-        AthleteDirectoryStructure *home;
+        AthleteDirectoryStructure *home = nullptr;
         const AthleteDirectoryStructure *directoryStructure() const {return home; }
 
         // zones
@@ -86,18 +93,18 @@ class Athlete : public QObject
         const PaceZones *paceZones(bool isSwim) const { return pacezones_[isSwim]; }
         QHash<QString, Zones*> zones_;
         QHash<QString, HrZones*> hrzones_;
-        PaceZones *pacezones_[2];
+        PaceZones *pacezones_[2] = { nullptr, nullptr };
         void setCriticalPower(int cp);
 
         // Data
-        Seasons *seasons;
-        Routes *routes;
+        Seasons *seasons = nullptr;
+        Routes *routes = nullptr;
         QList<RideFileCache*> cpxCache;
-        RideCache *rideCache;
-        Measures *measures;
+        RideCache *rideCache = nullptr;
+        Measures *measures = nullptr;
 
         // cloud download
-        CloudServiceAutoDownload *cloudAutoDownload;
+        CloudServiceAutoDownload *cloudAutoDownload = nullptr;
 
         // Estimates
         PDEstimate getPDEstimateFor(QDate, QString model, bool wpk, QString sport) const;
@@ -119,15 +126,15 @@ class Athlete : public QObject
         double getHeight(RideFile *ride=NULL);
 
         // athlete's calendar
-        CalendarDownload *calendarDownload;
+        CalendarDownload *calendarDownload = nullptr;
 #ifdef GC_HAVE_ICAL
-        ICalendar *rideCalendar;
-        CalDAV *davCalendar;
+        ICalendar *rideCalendar = nullptr;
+        CalDAV *davCalendar = nullptr;
 #endif
 
         // Athlete's autoimport handling
-        RideImportWizard *autoImport;
-        RideAutoImportConfig *autoImportConfig;
+        RideImportWizard *autoImport = nullptr;
+        RideAutoImportConfig *autoImportConfig = nullptr;
 
         // preset charts
         QList<LTMSettings> presets;
@@ -135,12 +142,12 @@ class Athlete : public QObject
         void translateDefaultCharts(QList<LTMSettings>&charts);
 
         // named filters / queries
-        NamedSearches *namedSearches;
+        NamedSearches *namedSearches = nullptr;
 
         // DataFilter global storage/cache
         QMap<QString,Result> dfcache;
 
-        Context *context;
+        Context *context = nullptr;
 
         // ride collection
         void selectRideFile(QString);
@@ -165,6 +172,8 @@ class Athlete : public QObject
         void configChanged(qint32);
         void loadComplete();
 
+    private:
+        void releaseOwnedResources(bool saveCharts) noexcept;
 };
 
 

@@ -23,6 +23,8 @@
 #include "Athlete.h"
 #include <QString>
 
+#include <functional>
+
 #include <QWebEngineView>
 #include <QWebEngineSettings>
 
@@ -175,6 +177,8 @@ class GcUpgrade
 	public:
         GcUpgrade() { upgradeError = false; errorCount = 0;}
         bool upgradeConfirmedByUser(const QDir &home); // upgrade warning in case of critical updates which need a backup
+        bool executeAfterConfirmation(
+            const QDir &home, const std::function<void()> &action);
         int upgrade(const QDir &home);                 // standard upgrade steps
         int upgradeLate(Context *context);             // final upgrade steps which need a full context to be available first (exceptional use only !)
         static int version() { return VERSION_LATEST; }
