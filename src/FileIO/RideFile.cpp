@@ -88,7 +88,9 @@ RideFile::RideFile(RideFile *p) :
 {
     startTime_ = p->startTime_;
     tags_ = p->tags_;
-    referencePoints_ = p->referencePoints_;
+    foreach (const RideFilePoint *point, p->referencePoints_) {
+        referencePoints_.append(new RideFilePoint(*point));
+    }
     setDeviceType(p->deviceType());
     fileFormat_ = p->fileFormat_;
     intervals_ = p->intervals_;
@@ -120,6 +122,8 @@ RideFile::~RideFile()
     emit deleted();
     foreach(RideFilePoint *point, dataPoints_)
         delete point;
+    qDeleteAll(referencePoints_);
+    referencePoints_.clear();
     delete minPoint;
     delete maxPoint;
     delete avgPoint;
@@ -2408,7 +2412,7 @@ void RideFile::appendReference(const RideFilePoint &point)
 
 void RideFile::removeReference(int index)
 {
-    referencePoints_.remove(index);
+    delete referencePoints_.takeAt(index);
 }
 
 void RideFile::removeExhaustion(int index)
@@ -2420,7 +2424,7 @@ void RideFile::removeExhaustion(int index)
     for(int k=0; k<referencePoints_.count(); k++) {
         if (referencePoints_[k]->secs > 0) {
             if (++i == index) {
-                referencePoints_.remove(k);
+                delete referencePoints_.takeAt(k);
                 return;
             }
         }

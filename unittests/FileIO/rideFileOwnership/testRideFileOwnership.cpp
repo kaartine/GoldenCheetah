@@ -17,6 +17,8 @@ class TestRideFileOwnership : public QObject
 
 private slots:
     void allConstructorsReleaseSummaryPoints();
+    void copyOwnsIndependentReferencePoints();
+    void removalsReleaseReferencePoints();
 };
 
 void TestRideFileOwnership::allConstructorsReleaseSummaryPoints()
@@ -41,6 +43,47 @@ void TestRideFileOwnership::allConstructorsReleaseSummaryPoints()
         QCOMPARE(copiedRide.getTag(QStringLiteral("Constructor"), QString()),
                  QStringLiteral("dated"));
     }
+}
+
+void TestRideFileOwnership::copyOwnsIndependentReferencePoints()
+{
+    RideFile *source = new RideFile;
+    RideFilePoint reference;
+    reference.secs = 42.0;
+    reference.hr = 151.0;
+    source->appendReference(reference);
+
+    const RideFilePoint *sourceReference =
+        source->referencePoints().constFirst();
+    RideFile copy(source);
+
+    QCOMPARE(copy.referencePoints().size(), 1);
+    const RideFilePoint *copyReference =
+        copy.referencePoints().constFirst();
+    QVERIFY(copyReference != sourceReference);
+    QCOMPARE(copyReference->secs, 42.0);
+    QCOMPARE(copyReference->hr, 151.0);
+
+    delete source;
+    QCOMPARE(copyReference->secs, 42.0);
+    QCOMPARE(copyReference->hr, 151.0);
+}
+
+void TestRideFileOwnership::removalsReleaseReferencePoints()
+{
+    RideFile ride;
+    RideFilePoint reference;
+    reference.secs = 42.0;
+    ride.appendReference(reference);
+    reference.secs = 0.0;
+    ride.appendReference(reference);
+
+    ride.removeExhaustion(0);
+    QCOMPARE(ride.referencePoints().size(), 1);
+    QCOMPARE(ride.referencePoints().constFirst()->secs, 0.0);
+
+    ride.removeReference(0);
+    QVERIFY(ride.referencePoints().isEmpty());
 }
 
 QTEST_GUILESS_MAIN(TestRideFileOwnership)
