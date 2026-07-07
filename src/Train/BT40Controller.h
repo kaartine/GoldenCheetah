@@ -118,6 +118,7 @@ private slots:
 
 private:
     bool deviceAllowed(const QBluetoothDeviceInfo& info);
+    bool isHeartRateOnly() const;
     bool allConfiguredDevicesFound() const;
     void resetScanRetryState();
     void scheduleScanRetry(const QString &firstNotice);

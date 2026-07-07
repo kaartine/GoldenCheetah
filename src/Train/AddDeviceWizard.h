@@ -49,7 +49,13 @@
 #include <QFileDialog>
 #include <QCommandLinkButton>
 #include <QScrollArea>
+#include <QMutex>
+#include <QThread>
 #include <QtCharts>
+
+#include <atomic>
+#include <functional>
+#include <utility>
 
 class DeviceScanner;
 
@@ -59,7 +65,24 @@ class AddDeviceWizard : public QWizard
 
 public:
     AddDeviceWizard(Context *context);
+    ~AddDeviceWizard() override;
     QSize sizeHint() const { return QSize(600,650); }
+
+    static bool isDeviceProfileValid(int type, const QString &profile)
+    {
+        return BluetoothDeviceTypes::permitsEmptyProfile(type) ||
+                !profile.trimmed().isEmpty();
+    }
+
+    static void cleanupController(RealtimeController *&controller)
+    {
+        RealtimeController *ownedController = controller;
+        controller = nullptr;
+        if (!ownedController) return;
+
+        ownedController->stop();
+        delete ownedController;
+    }
 
     Context *context;
     bool done; // have we finished?
@@ -124,7 +147,7 @@ class AddSearch : public QWizardPage
         int nextId() const;
         bool validatePage();
         void doScan();
-        void scanFinished(bool);
+        void scanFinished(quint64 generation, bool found, const QString &portSpec);
         void cleanupPage();
         void chooseCOMPort();
 
@@ -136,6 +159,7 @@ class AddSearch : public QWizardPage
         QComboBox *manual;
         QLabel *label, *label1, *label2;
         QString specified;
+        quint64 scanGeneration = 0;
 };
 
 class AddFirmware : public QWizardPage
@@ -218,7 +242,7 @@ class AddPairBTLE : public QWizardPage
 
     public:
         AddPairBTLE(AddDeviceWizard *);
-        int nextId() const { return 60; }
+        int nextId() const;
         void initializePage();
         bool validatePage();
         void cleanupPage();
@@ -234,6 +258,7 @@ class AddPairBTLE : public QWizardPage
         static const int NameRole = Qt::UserRole + 1;
         static const int AddressRole = Qt::UserRole + 2;
         static const int UuidRole = Qt::UserRole + 3;
+        static const int HeartRateCapableRole = Qt::UserRole + 4;
 };
 
 class AddVirtualPower : public QWizardPage
@@ -306,23 +331,120 @@ class AddFinal : public QWizardPage
         QLineEdit *virtualPowerName;
 };
 
-class DeviceScanner : public QThread
+struct DeviceScanRequest
+{
+    int type = -1;
+    int connector = -1;
+    bool deep = false;
+    int attempts = 1;
+    int retryDelayMs = 0;
+    quint64 generation = 0;
+};
+
+struct DeviceScanResult
+{
+    bool found = false;
+    bool cancelled = false;
+    QString portSpec;
+    quint64 generation = 0;
+};
+
+class DeviceScanThread : public QThread
+{
+public:
+    using CancellationCheck = std::function<bool()>;
+    using ScanFunction = std::function<DeviceScanResult(
+            const DeviceScanRequest &, const CancellationCheck &)>;
+
+    explicit DeviceScanThread(ScanFunction scanFunction,
+                              QObject *parent = nullptr) :
+        QThread(parent), scanFunction(std::move(scanFunction))
+    {
+    }
+
+    ~DeviceScanThread() override
+    {
+        stopAndWait();
+    }
+
+    quint64 startScan(DeviceScanRequest request)
+    {
+        if (isRunning()) return 0;
+
+        QMutexLocker locker(&stateMutex);
+        request.generation = ++nextGeneration;
+        pendingRequest = request;
+        cancellationRequested.store(false, std::memory_order_release);
+        start();
+        return request.generation;
+    }
+
+    DeviceScanResult scanSynchronously(DeviceScanRequest request)
+    {
+        if (isRunning() || !scanFunction) return DeviceScanResult();
+
+        request.generation = ++nextGeneration;
+        cancellationRequested.store(false, std::memory_order_release);
+        DeviceScanResult result = scanFunction(request, [this]() {
+            return cancellationRequested.load(std::memory_order_acquire);
+        });
+        result.generation = request.generation;
+        result.cancelled = cancellationRequested.load(std::memory_order_acquire);
+        return result;
+    }
+
+    void stopAndWait()
+    {
+        cancellationRequested.store(true, std::memory_order_release);
+        if (isRunning() && QThread::currentThread() != this) wait();
+    }
+
+protected:
+    void run() override
+    {
+        DeviceScanRequest request;
+        {
+            QMutexLocker locker(&stateMutex);
+            request = pendingRequest;
+        }
+
+        DeviceScanResult result;
+        if (scanFunction) {
+            result = scanFunction(request, [this]() {
+                return cancellationRequested.load(std::memory_order_acquire);
+            });
+        }
+        result.generation = request.generation;
+        result.cancelled = cancellationRequested.load(std::memory_order_acquire);
+        if (!result.cancelled) resultReady(result);
+    }
+
+    virtual void resultReady(const DeviceScanResult &) {}
+
+private:
+    ScanFunction scanFunction;
+    QMutex stateMutex;
+    DeviceScanRequest pendingRequest;
+    std::atomic_bool cancellationRequested{false};
+    quint64 nextGeneration = 0;
+};
+
+class DeviceScanner : public DeviceScanThread
 {
     Q_OBJECT
 
 signals:
-    void finished(bool); // threaded scan finished with result x
+    void scanCompleted(quint64 generation, bool found, const QString &portSpec);
 
 public:
     DeviceScanner(AddDeviceWizard *);
+    ~DeviceScanner() override;
     bool quickScan(bool deep); // non-threaded
-    void run();       // threaded
-    void stop();      // stop threaded search
+
+protected:
+    void resultReady(const DeviceScanResult &result) override;
 
 private:
-    bool active, found;  // is it still looking?
-    QString portSpec;    // did it find a port?
-
     AddDeviceWizard *wizard;
 };
 

@@ -26,9 +26,11 @@
 #include <QQueue>
 #include <QTimer>
 
+#include "BluetoothDeviceTypes.h"
 #include "CalibrationData.h"
 #include "Ftms.h"
 
+class BT40Controller;
 class VMProWidget;
 
 typedef struct btle_sensor_type {
@@ -41,8 +43,14 @@ class BT40Device: public QObject
     Q_OBJECT
 
 public:
-    BT40Device(QObject *parent, QBluetoothDeviceInfo devinfo);
+    BT40Device(BT40Controller *parent, QBluetoothDeviceInfo devinfo,
+               BluetoothDeviceTypes::DeviceRole role =
+                       BluetoothDeviceTypes::DeviceRole::Trainer);
     ~BT40Device();
+    static BluetoothDeviceTypes::ServiceKind classifyService(
+            const QBluetoothUuid &uuid);
+    static bool acceptsServiceForRole(BluetoothDeviceTypes::DeviceRole role,
+                                      const QBluetoothUuid &uuid);
     void connectDevice();
     void disconnectDevice();
     static QMap<QBluetoothUuid, btle_sensor_type_t> supportedServices;
@@ -85,9 +93,10 @@ signals:
     void reconnectScanRequested();
     void connectionRestored();
 private:
-    QObject *parent;
+    QPointer<BT40Controller> parentController;
     QBluetoothDeviceInfo m_currentDevice;
     QLowEnergyController *m_control;
+    BluetoothDeviceTypes::DeviceRole deviceRole;
     QList<QLowEnergyService*> m_services;
     QPointer<VMProWidget> vmProWidget;
     int prevCrankStaleness;
@@ -128,6 +137,20 @@ private:
     QTimer *reconnectTimer;
     int reconnectAttempts;
     bool reconnectNoticeShown;
+    bool shuttingDown;
+    bool acceptsService(const QBluetoothUuid &uuid) const;
+    bool trainerControlAllowed() const;
+    BluetoothDeviceTypes::LinkState linkState() const;
+    bool writeTrainerCharacteristic(
+            QLowEnergyService *service, const QLowEnergyCharacteristic &characteristic,
+            const QByteArray &value,
+            QLowEnergyService::WriteMode mode = QLowEnergyService::WriteWithResponse);
+    bool writeTrainerDescriptor(QLowEnergyService *service,
+                                const QLowEnergyDescriptor &descriptor,
+                                const QByteArray &value);
+    bool readTrainerCharacteristic(QLowEnergyService *service,
+                                   const QLowEnergyCharacteristic &characteristic);
+    void shutdown();
     void getCadence(QDataStream& ds);
     void getWheelRpm(QDataStream& ds);
     void setLoadErg(double);

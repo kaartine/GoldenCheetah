@@ -409,15 +409,22 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DEV-001: Failed devices are still reported as connected
 
-- Status: OPEN
-- Code: `src/Train/TrainSidebar.cpp:1850`,
-  `src/Train/TrainSidebar.cpp:1854`, `src/Train/TrainSidebar.cpp:1612`
+- Status: FIXED
+- Code: `src/Train/TrainSidebar.cpp`,
+  `src/Train/BluetoothDeviceTypes.h`
 - Impact: Controller start results are ignored and polling begins regardless.
   Failed devices can remain in a connected UI state and emit repeated errors.
-- Test: Use a fake controller whose start fails and assert transactional rollback,
-  inactive timers, and a disconnected state.
-- Fix direction: Make multi-device connection an all-or-reported-partial
-  transaction and roll back already-started controllers on failure.
+- Regression test: `unittests/Train/deviceSelection` uses fake start and stop
+  callbacks to require reverse-order rollback of both the failed controller and
+  every controller started earlier. It also verifies that successful starts do
+  not stop any controller.
+- Resolution: Multi-device startup now checks every controller result and rolls
+  back the failed controller plus all previously started controllers before the
+  connected state or polling timer can be enabled. The UI reports the device
+  that failed and clears the active-device set.
+- Verification: The focused suite passes 21 tests normally and under strict
+  ASan/UBSan/LSan. The full matrix passes 1,401 tests in 37 suites, and the Qt
+  6.8.3 application build links and starts successfully.
 
 ### BLE-002: FTMS target scaling can divide by zero
 
@@ -452,17 +459,48 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   operation per characteristic.
 - Fix direction: Process only `sender()` and record per-service initialization.
 
+### BLE-005: Heart-rate sensors compete with trainers for the active BLE slot
+
+- Status: FIXED
+- Code: `src/Train/AddDeviceWizard.cpp`, `src/Train/BluetoothDeviceTypes.h`,
+  `src/Train/TrainingDeviceSelection.h`, `src/Train/TrainSidebar.cpp`,
+  `src/Train/BT40Controller.cpp`, `src/Train/BT40Device.cpp`
+- Impact: A separately configured Bluetooth heart-rate sensor is presented as
+  another trainer. In the normal single-device Train view, selecting the KICKR
+  excludes the Fenix and selecting the Fenix excludes the KICKR. Repeated
+  disconnect/connect cycles can also delete a low-energy controller while Qt
+  still reports `ClosingState`.
+- Automated test: Selecting one trainer activates its configured Bluetooth
+  heart-rate companion, assigns BPM to it, does not activate another trainer,
+  and does not duplicate an explicitly selected heart-rate device. Lifecycle
+  tests cover cancellation, ownership, repeated stop, active and closing link
+  teardown, reconnect, late callbacks, and wizard cleanup.
+- Resolution: A persisted `Bluetooth Heart Rate Sensor` type now uses the
+  existing BLE controller but is activated automatically beside the selected
+  trainer. Trainer-control writes are suppressed for that type. A closing
+  `QLowEnergyController` is reparented and deleted after its disconnect signal
+  instead of being destroyed synchronously in `ClosingState`.
+- Verification: The device-selection suite passes 21 tests and the BLE lifecycle
+  suite passes 17 tests, both normally and under strict ASan/UBSan/LSan. The
+  full matrix passes 1,401 tests in 37 suites, the Qt 6.8.3 application starts,
+  and simultaneous Bluetooth trainer plus heart-rate broadcast was verified on
+  real hardware, including disconnect/connect recovery.
+
 ### DEV-002: ANT workers are not stopped and joined before destruction
 
 - Status: OPEN
 - Code: `src/ANT/ANTlocalController.cpp:41`, `src/ANT/ANT.cpp:641`,
   `src/Train/TrainSidebar.cpp:730`
-- Impact: Workers can retain USB resources, race controller destruction, leak
-  from the pairing wizard, or trigger `QThread destroyed while running`.
+- Impact: ANT workers can retain USB resources, race controller destruction, or
+  trigger `QThread destroyed while running`.
 - Test: Repeatedly start/stop/delete a fake blocking transport and require zero
   surviving workers and immediate port reuse.
 - Fix direction: Give controllers worker ownership, unblock I/O, request stop,
   and synchronously `wait()` in teardown.
+- Partial resolution: The add-device Bluetooth scanner now owns objects created
+  in its worker thread, supports cancellation, and joins before wizard teardown.
+  Its focused normal and sanitizer lifecycle tests pass. The ANT workers listed
+  above still require the same ownership and join discipline.
 
 ### DEV-003: ANT telemetry and command queues have data races
 

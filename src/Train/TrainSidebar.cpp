@@ -25,6 +25,7 @@
 #include "Units.h"
 #include "DeviceTypes.h"
 #include "DeviceConfiguration.h"
+#include "TrainingDeviceSelection.h"
 #include "RideImportWizard.h"
 #include "HelpWhatsThis.h"
 #include "RideFile.h"
@@ -770,7 +771,8 @@ TrainSidebar::configChanged(qint32 why)
             connect(Devices[i].controller, SIGNAL(posData(uint8_t)), this, SLOT(posData(uint8_t)));
             connect(Devices[i].controller, SIGNAL(tcoreData(float,float,float,int)), this, SLOT(tcoreData(float,float,float,int)));
 #ifdef QT_BLUETOOTH_LIB
-        } else if (Devices.at(i).type == DEV_BT40) {
+        } else if (Devices.at(i).type == DEV_BT40 ||
+                   Devices.at(i).type == DEV_BT40_HEARTRATE) {
             Devices[i].controller = new BT40Controller(this, &Devices[i]);
             connect(Devices[i].controller, SIGNAL(vo2Data(double,double,double,double,double,double)),
                     this, SLOT(vo2Data(double,double,double,double,double,double)));
@@ -780,7 +782,13 @@ TrainSidebar::configChanged(qint32 why)
 
     // select the first device
     if (Devices.count()) {
-        deviceTree->setCurrentItem(deviceTree->invisibleRootItem()->child(0));
+        int defaultDevice = 0;
+        while (defaultDevice < Devices.count() &&
+               TrainingDeviceSelection::isHeartRateDevice(Devices.at(defaultDevice).type)) {
+            ++defaultDevice;
+        }
+        if (defaultDevice == Devices.count()) defaultDevice = 0;
+        deviceTree->setCurrentItem(deviceTree->invisibleRootItem()->child(defaultDevice));
     }
     // And select default workout to Ergo
     QModelIndex firstWorkout = sortModel->index(0, 0, QModelIndex());
@@ -1825,6 +1833,8 @@ void TrainSidebar::Connect()
 
     qDebug() << "connecting..";
 
+    bool preserveHeartRateSource = false;
+
     // if we have selected multiple devices lets
     // configure the series we collect from each one
     if (deviceTree->selectedItems().count() > 1) {
@@ -1832,6 +1842,7 @@ void TrainSidebar::Connect()
         if (multisetup->exec() == false) {
             return;
         }
+        preserveHeartRateSource = true;
     } else if (deviceTree->selectedItems().count() == 1) {
         bpmTelemetry = wattsTelemetry = kphTelemetry = rpmTelemetry =
         deviceTree->selectedItems().first()->type();
@@ -1839,17 +1850,57 @@ void TrainSidebar::Connect()
         return;
     }
 
-    activeDevices = devices();
+    QList<int> deviceTypes;
+    deviceTypes.reserve(Devices.size());
+    for (const DeviceConfiguration &device : Devices) {
+        deviceTypes.append(device.type);
+    }
 
-    foreach(int dev, activeDevices) {
-        Devices[dev].controller->setWheelCircumference(Devices[dev].wheelSize);
-        Devices[dev].controller->setRollingResistance(bicycle.RollingResistance());
-        Devices[dev].controller->setWeight(bicycle.MassKG());
-        Devices[dev].controller->setWindSpeed(0); // Move to loadUpdate when wind simulation is added
+    const TrainingDeviceSelection::Selection selection =
+            TrainingDeviceSelection::select(devices(), deviceTypes);
+    activeDevices = selection.active;
+    if (activeDevices.isEmpty()) {
+        context->notifySetNotification(tr("No valid training device selected"), 4);
+        return;
+    }
+    bpmTelemetry = BluetoothDeviceTypes::resolveHeartRateSource(
+            bpmTelemetry, selection.heartRateSource,
+            preserveHeartRateSource, activeDevices);
 
-        Devices[dev].controller->start();
+    const BluetoothDeviceTypes::ControllerStartResult startResult =
+            BluetoothDeviceTypes::startControllers(
+                    activeDevices,
+                    [this](int dev) {
+                        RealtimeController *controller = Devices[dev].controller;
+                        if (!controller) return DEVICE_ERROR;
+
+                        controller->setWheelCircumference(Devices[dev].wheelSize);
+                        controller->setRollingResistance(bicycle.RollingResistance());
+                        controller->setWeight(bicycle.MassKG());
+                        controller->setWindSpeed(0);
+                        return controller->start();
+                    },
+                    [this](int dev) {
+                        RealtimeController *controller = Devices[dev].controller;
+                        if (controller) controller->stop();
+                    });
+
+    if (!startResult.success) {
+        const QString deviceName =
+                startResult.failedDevice >= 0 &&
+                startResult.failedDevice < Devices.size()
+                ? Devices.at(startResult.failedDevice).name
+                : tr("unknown device");
+        activeDevices.clear();
+        context->notifySetNotification(
+                tr("Unable to start training device: %1").arg(deviceName), 4);
+        return;
+    }
+
+    foreach (int dev, activeDevices) {
         Devices[dev].controller->resetCalibrationState();
-        connect(Devices[dev].controller, &RealtimeController::setNotification, context, &Context::setNotification);
+        connect(Devices[dev].controller, &RealtimeController::setNotification,
+                context, &Context::setNotification);
     }
     setStatusFlags(RT_CONNECTED);
     gui_timer->start(REFRESHRATE);
@@ -2006,7 +2057,7 @@ void TrainSidebar::guiUpdate()           // refreshes the telemetry
 
                 rtData.setCoreTemp(local.getCoreTemp(),local.getSkinTemp(),local.getHeatStrain());
                 // what are we getting from this one?
-                if (dev == bpmTelemetry) rtData.setHr(local.getHr());
+                if (TrainingDeviceSelection::routesHeartRate(bpmTelemetry, dev)) rtData.setHr(local.getHr());
                 if (dev == rpmTelemetry) rtData.setCadence(local.getCadence());
                 if (dev == kphTelemetry) {
                     rtData.setSpeed(local.getSpeed());

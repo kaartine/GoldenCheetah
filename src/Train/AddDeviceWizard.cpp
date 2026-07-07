@@ -27,6 +27,8 @@
 #include "RealtimeController.h" // for power trainer definitions
 #include "MultiRegressionizer.h"
 
+#include <memory>
+
 #ifdef Q_CC_MSVC
 // 'strcpy': This function or variable may be unsafe.
 #pragma warning(disable:4996)
@@ -84,6 +86,12 @@ AddDeviceWizard::AddDeviceWizard(Context *context) : QWizard(context->mainWindow
     current = 0;
 }
 
+AddDeviceWizard::~AddDeviceWizard()
+{
+    scanner->stopAndWait();
+    cleanupController(controller);
+}
+
 /*----------------------------------------------------------------------
  * Wizard Pages
  *--------------------------------------------------------------------*/
@@ -132,10 +140,8 @@ AddType::initializePage()
     wizard->portSpec = "";
     wizard->found = false;
     wizard->current = 0;
-    if (wizard->controller) {
-        delete wizard->controller;
-        wizard->controller = NULL;
-    }
+    wizard->scanner->stopAndWait();
+    AddDeviceWizard::cleanupController(wizard->controller);
 }
    
 
@@ -167,6 +173,7 @@ AddType::clicked(QString p)
     else {
         switch(wizard->deviceTypes.Supported[wizard->current].type) {
         case DEV_BT40 : next = 55; break;
+        case DEV_BT40_HEARTRATE : next = 55; break;
         case DEV_ANTLOCAL : next = 50; break; // pair 
         default:
         case DEV_CT : next = 60; break; // confirm and add 
@@ -178,114 +185,124 @@ AddType::clicked(QString p)
     wizard->next();
 }
 
-DeviceScanner::DeviceScanner(AddDeviceWizard *wizard) : wizard(wizard) {}
+namespace {
 
-void
-DeviceScanner::run()
+RealtimeController *createDeviceController(int type)
 {
-    active = true;
-    bool result = false;
-
-    for (int i=0; active && !result && i<10; i++) { // search for longer
-
-        // better to wait a while, esp. if its just a USB device
-#ifdef WIN32
-        Sleep(1000);
-#else
-        sleep(1);
-#endif
-        result = quickScan(false);
-    }
-    if (active) emit finished(result); // only signal if we weren't aborted!
-}
-
-void
-DeviceScanner::stop()
-{
-    active = false;
-}
-
-
-bool
-DeviceScanner::quickScan(bool deep) // scan quickly or if true scan forever, as deep as possible
-                                       // for now deep just means try 3 time before giving up, but we
-                                       // may want to change that to include scanning more devices?
-{
-
-    // get controller
-    if (wizard->controller) {
-        delete wizard->controller;
-        wizard->controller=NULL;
-    }
-
-    switch (wizard->deviceTypes.Supported[wizard->current].type) {
-
-    // we will need a factory for this soon..
-    case DEV_CT : wizard->controller = new ComputrainerController(NULL, NULL); break;
-    case DEV_MONARK : wizard->controller = new MonarkController(NULL, NULL); break;
-    case DEV_KETTLER : wizard->controller = new KettlerController(NULL, NULL); break;
-    case DEV_KETTLER_RACER : wizard->controller = new KettlerRacerController (NULL, NULL); break;
-    case DEV_ERGOFIT : wizard->controller = new ErgofitController(NULL, NULL); break;
-    case DEV_DAUM : wizard->controller = new DaumController(NULL, NULL); break;
+    switch (type) {
+    case DEV_CT: return new ComputrainerController(nullptr, nullptr);
+    case DEV_MONARK: return new MonarkController(nullptr, nullptr);
+    case DEV_KETTLER: return new KettlerController(nullptr, nullptr);
+    case DEV_KETTLER_RACER: return new KettlerRacerController(nullptr, nullptr);
+    case DEV_ERGOFIT: return new ErgofitController(nullptr, nullptr);
+    case DEV_DAUM: return new DaumController(nullptr, nullptr);
 #ifdef GC_HAVE_LIBUSB
-    case DEV_FORTIUS : wizard->controller = new FortiusController(NULL, NULL); break;
-    case DEV_IMAGIC : wizard->controller = new ImagicController(NULL, NULL); break;
+    case DEV_FORTIUS: return new FortiusController(nullptr, nullptr);
+    case DEV_IMAGIC: return new ImagicController(nullptr, nullptr);
 #endif
-    case DEV_NULL : wizard->controller = new NullController(NULL, NULL); break;
-    case DEV_ANTLOCAL : wizard->controller = new ANTlocalController(NULL, NULL); break;
+    case DEV_NULL: return new NullController(nullptr, nullptr);
+    case DEV_ANTLOCAL: return new ANTlocalController(nullptr, nullptr);
 #ifdef QT_BLUETOOTH_LIB
-    case DEV_BT40 : wizard->controller = new BT40Controller(NULL, NULL); break;
+    case DEV_BT40:
+    case DEV_BT40_HEARTRATE:
+        return new BT40Controller(nullptr, nullptr);
 #endif
-
-    default: wizard->controller = NULL; break;
+    default:
+        return nullptr;
     }
+}
 
-    //----------------------------------------------------------------------
-    // Search for USB devices
-    //----------------------------------------------------------------------
+bool waitForScanRetry(int delayMs,
+                      const DeviceScanThread::CancellationCheck &cancelled)
+{
+    for (int elapsed = 0; elapsed < delayMs; elapsed += 25) {
+        if (cancelled()) return false;
+        QThread::msleep(qMin(25, delayMs - elapsed));
+    }
+    return !cancelled();
+}
 
-    bool isfound = false;
-    int count=0;
-    do {
+DeviceScanResult scanForDevice(
+        const DeviceScanRequest &request,
+        const DeviceScanThread::CancellationCheck &cancelled)
+{
+    DeviceScanResult result;
+    const int attempts = qMax(1, request.attempts);
 
-        // can we find it automatically?
-        if (wizard->controller) {
-            isfound = wizard->controller->find();
+    for (int attempt = 0; attempt < attempts && !result.found; ++attempt) {
+        if (cancelled() ||
+            (request.retryDelayMs > 0 &&
+             !waitForScanRetry(request.retryDelayMs, cancelled))) {
+            result.cancelled = true;
+            return result;
         }
 
-        if (isfound == false && (wizard->deviceTypes.Supported[wizard->current].connector == DEV_LIBUSB ||
-                            wizard->deviceTypes.Supported[wizard->current].connector == DEV_USB)) {
+        std::unique_ptr<RealtimeController> controller(
+                createDeviceController(request.type));
+        if (!controller) return result;
 
-            // Go to next page where we do not found, rescan and manual override
-            if (!deep) return false;
-        }
-    
-        //----------------------------------------------------------------------
-        // Search serial ports
-        //----------------------------------------------------------------------
-
-        if (isfound == false && wizard->deviceTypes.Supported[wizard->current].connector == DEV_SERIAL) {
-
-            // automatically discover a serial port ...
-            QString error;
-            foreach (CommPortPtr port, Serial::myListCommPorts(error)) {
-
-                // check if controller still exists. gets deleted when scan cancelled
-                if (wizard->controller && wizard->controller->discover(port->name()) == true) {
-                    isfound = true;
-                    wizard->portSpec = port->name();
-                    break;
-                }
+        int deepAttempt = 0;
+        do {
+            if (cancelled()) {
+                result.cancelled = true;
+                return result;
             }
 
-            // if we still didn't find it then we need to fall back to the user
-            // specifying the device on the next page
-        }
+            result.found = controller->find();
 
-    } while (!isfound && deep && count++ < 2);
+            if (!result.found && request.connector == DEV_SERIAL) {
+                QString error;
+                foreach (CommPortPtr port, Serial::myListCommPorts(error)) {
+                    if (cancelled()) {
+                        result.cancelled = true;
+                        return result;
+                    }
+                    if (controller->discover(port->name())) {
+                        result.found = true;
+                        result.portSpec = port->name();
+                        break;
+                    }
+                }
+            }
+        } while (!result.found && request.deep && deepAttempt++ < 2);
+    }
 
-    return isfound;
+    return result;
+}
 
+}
+
+DeviceScanner::DeviceScanner(AddDeviceWizard *wizard) :
+    DeviceScanThread(scanForDevice, wizard), wizard(wizard)
+{
+}
+
+DeviceScanner::~DeviceScanner()
+{
+    stopAndWait();
+}
+
+bool
+DeviceScanner::quickScan(bool deep)
+{
+    const DeviceType &deviceType =
+            wizard->deviceTypes.Supported[wizard->current];
+    DeviceScanRequest request;
+    request.type = deviceType.type;
+    request.connector = deviceType.connector;
+    request.deep = deep;
+
+    const DeviceScanResult result = scanSynchronously(request);
+    wizard->portSpec = result.portSpec;
+    AddDeviceWizard::cleanupController(wizard->controller);
+    wizard->controller = createDeviceController(request.type);
+    return result.found && !result.cancelled;
+}
+
+void
+DeviceScanner::resultReady(const DeviceScanResult &result)
+{
+    emit scanCompleted(result.generation, result.found, result.portSpec);
 }
 
 // Scan for device port / usb etc
@@ -337,7 +354,8 @@ AddSearch::AddSearch(AddDeviceWizard *parent) : QWizardPage(parent), wizard(pare
 
     connect(stop, SIGNAL(clicked()), this, SLOT(doScan()));
     connect(manual, SIGNAL(currentIndexChanged(int)), this, SLOT(chooseCOMPort()));
-    connect(wizard->scanner, SIGNAL(finished(bool)), this, SLOT(scanFinished(bool)));
+    connect(wizard->scanner, &DeviceScanner::scanCompleted,
+            this, &AddSearch::scanFinished);
 }
 
 void
@@ -396,10 +414,18 @@ AddSearch::initializePage()
 }
 
 void
-AddSearch::scanFinished(bool result)
+AddSearch::scanFinished(quint64 generation, bool result,
+                        const QString &portSpec)
 {
+    if (!isSearching || generation != scanGeneration) return;
+
+    scanGeneration = 0;
     isSearching = false;
     wizard->found = result;
+    wizard->portSpec = portSpec;
+    AddDeviceWizard::cleanupController(wizard->controller);
+    wizard->controller = createDeviceController(
+            wizard->deviceTypes.Supported[wizard->current].type);
     bar->setMaximum(100);
     bar->setMinimum(0);
     bar->setValue(0);
@@ -407,7 +433,8 @@ AddSearch::scanFinished(bool result)
 
     if (result == true) { // woohoo we found one
 
-        if (wizard->deviceTypes.Supported[wizard->current].type == DEV_BT40) {
+        if (wizard->deviceTypes.Supported[wizard->current].type == DEV_BT40 ||
+            wizard->deviceTypes.Supported[wizard->current].type == DEV_BT40_HEARTRATE) {
             // ok we've started finding devices, lets go straight into the
             // pair screen since we now want to see the data etc.
             wizard->next();
@@ -444,18 +471,31 @@ AddSearch::doScan()
         wizard->found = false;
         wizard->portSpec = "";
 
-        wizard->scanner->start();
+        wizard->scanner->stopAndWait();
+        AddDeviceWizard::cleanupController(wizard->controller);
+        DeviceScanRequest request;
+        request.type = wizard->deviceTypes.Supported[wizard->current].type;
+        request.connector =
+                wizard->deviceTypes.Supported[wizard->current].connector;
+        request.attempts = 10;
+        request.retryDelayMs = 1000;
+        scanGeneration = wizard->scanner->startScan(request);
+        if (scanGeneration == 0) {
+            isSearching = false;
+            stop->setText(tr("Search again"));
+        }
 
     } else { // stop a scan
 
         isSearching = false;
+        scanGeneration = 0;
         // make bar stationary...
         bar->setMaximum(100);
         bar->setMinimum(0);
         bar->setValue(0);
         stop->setText(tr("Search again"));
 
-        wizard->scanner->stop();
+        wizard->scanner->stopAndWait();
     }
 }
 
@@ -468,6 +508,7 @@ AddSearch::nextId() const
         switch(wizard->deviceTypes.Supported[wizard->current].type) {
         case DEV_ANTLOCAL : return 50; break; // pair 
         case DEV_BT40 : return 55; break; // pair BT devices
+        case DEV_BT40_HEARTRATE : return 55; break; // pair BT heart-rate devices
         default:
         case DEV_CT : return 60; break; // confirm and add 
         case DEV_MONARK : return 60; break; // confirm and add
@@ -490,20 +531,10 @@ AddSearch::validatePage()
 void
 AddSearch::cleanupPage()
 {
-    wizard->scanner->stop();
-    if (isSearching) {
-    // give it time to stop...
-#ifdef WIN32
-        Sleep(2000);
-#else
-        sleep(2);
-#endif
-    }
-    isSearching=false;
-    if (wizard->controller) {
-        delete wizard->controller;
-        wizard->controller = NULL;
-    }
+    isSearching = false;
+    scanGeneration = 0;
+    wizard->scanner->stopAndWait();
+    AddDeviceWizard::cleanupController(wizard->controller);
 }
 
 // Fortius Firmware
@@ -983,6 +1014,12 @@ AddPairBTLE::AddPairBTLE(AddDeviceWizard *parent) : QWizardPage(parent), wizard(
     layout->addWidget(channelWidget);
 }
 
+int
+AddPairBTLE::nextId() const
+{
+    return wizard->type == DEV_BT40_HEARTRATE ? 70 : 60;
+}
+
 void
 AddPairBTLE::cleanupPage()
 {
@@ -990,6 +1027,7 @@ AddPairBTLE::cleanupPage()
     bar->setMaximum(0);
     bar->setMinimum(0);
     bar->setValue(0);
+    AddDeviceWizard::cleanupController(wizard->controller);
 }
 
 void
@@ -1002,8 +1040,10 @@ AddPairBTLE::initializePage()
     channelWidget->clear();
     channelWidget->headerItem()->setText(0, tr("Device"));
     channelWidget->setColumnCount(1);
-    // Use MultiSelection for device selection
-    channelWidget->setSelectionMode(QAbstractItemView::MultiSelection);
+    channelWidget->setSelectionMode(
+            wizard->type == DEV_BT40_HEARTRATE
+                    ? QAbstractItemView::SingleSelection
+                    : QAbstractItemView::MultiSelection);
     channelWidget->setUniformRowHeights(true);
     channelWidget->setIndentation(0);
 
@@ -1011,7 +1051,7 @@ AddPairBTLE::initializePage()
 
 
     // Start search
-    if (wizard->controller) delete wizard->controller;
+    AddDeviceWizard::cleanupController(wizard->controller);
     wizard->controller = new BT40Controller(NULL,NULL);
     connect(wizard->controller, SIGNAL(scanFinished(bool)), this, SLOT(scanFinished(bool)));
     wizard->controller->start();
@@ -1024,10 +1064,19 @@ AddPairBTLE::scanFinished(bool foundDevices)
     bar->setMaximum(1);
     bar->setValue(1);
 
+    int acceptedDevices = 0;
     if (foundDevices)
     {
         foreach(QBluetoothDeviceInfo deviceInfo, dynamic_cast<BT40Controller*>(wizard->controller)->getDeviceInfo())
         {
+            const bool advertisesHeartRate = deviceInfo.serviceUuids().contains(
+                    QBluetoothUuid(QBluetoothUuid::ServiceClassUuid::HeartRate));
+            if (!BluetoothDeviceTypes::acceptsDiscoveredDevice(
+                        wizard->type, advertisesHeartRate)) {
+                continue;
+            }
+            ++acceptedDevices;
+
             QTreeWidgetItem *add = new QTreeWidgetItem(channelWidget->invisibleRootItem());
 
             // Remove chars used as separator in storage
@@ -1040,6 +1089,7 @@ AddPairBTLE::scanFinished(bool foundDevices)
             add->setData(0, NameRole, deviceName);
             add->setData(0, AddressRole, deviceInfo.address().toString()); // other OS
             add->setData(0, UuidRole, deviceInfo.deviceUuid().toString()); // macOS
+            add->setData(0, HeartRateCapableRole, advertisesHeartRate);
 
             // Setup display text
             QLabel *status = new QLabel(this);
@@ -1047,12 +1097,17 @@ AddPairBTLE::scanFinished(bool foundDevices)
             channelWidget->setItemWidget(add, 0, status);
         }
     }
-    else
+    if (acceptedDevices == 0)
     {
         QTreeWidgetItem *add = new QTreeWidgetItem(channelWidget->invisibleRootItem());
         QLabel *status = new QLabel(this);
         status->setText(tr("No sensors found..."));
         channelWidget->setItemWidget(add, 0, status);
+    } else if (wizard->type == DEV_BT40_HEARTRATE &&
+               acceptedDevices == 1) {
+        QTreeWidgetItem *rootItem = channelWidget->invisibleRootItem();
+        QTreeWidgetItem *firstItem = rootItem ? rootItem->child(0) : nullptr;
+        if (firstItem) firstItem->setSelected(true);
     }
 
     // Disconnect and cleanup
@@ -1068,7 +1123,9 @@ AddPairBTLE::validatePage()
     for (int i=0; i< channelWidget->invisibleRootItem()->childCount(); i++) {
         QTreeWidgetItem *item = channelWidget->invisibleRootItem()->child(i);
 
-        if (item->isSelected())
+        if (item->isSelected() &&
+            (wizard->type != DEV_BT40_HEARTRATE ||
+             item->data(0, HeartRateCapableRole).toBool()))
         {
             // pack into device info for validation
             DeviceInfo deviceInfo(
@@ -1088,7 +1145,7 @@ AddPairBTLE::validatePage()
         }
     }
 
-    return true;
+    return AddDeviceWizard::isDeviceProfileValid(wizard->type, wizard->profile);
 }
 
 void
@@ -1613,7 +1670,8 @@ AddFinal::initializePage()
 bool
 AddFinal::validatePage()
 {
-    if (name->text() != "") {
+    if (!name->text().trimmed().isEmpty() &&
+        AddDeviceWizard::isDeviceProfileValid(wizard->type, profile->text())) {
 
         DeviceConfigurations all;
         DeviceConfiguration add;

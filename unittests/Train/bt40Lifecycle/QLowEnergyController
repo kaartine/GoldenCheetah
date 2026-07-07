@@ -1,0 +1,93 @@
+/*
+ * Deterministic QLowEnergyController test double for BT40 lifecycle tests.
+ */
+
+#ifndef GC_TEST_QLOWENERGYCONTROLLER_H
+#define GC_TEST_QLOWENERGYCONTROLLER_H
+
+#include <QBluetoothDeviceInfo>
+#include <QBluetoothUuid>
+#include <QObject>
+
+class QLowEnergyService;
+
+class QLowEnergyController : public QObject
+{
+    Q_OBJECT
+
+public:
+    enum ControllerState {
+        UnconnectedState,
+        ConnectingState,
+        ConnectedState,
+        DiscoveringState,
+        DiscoveredState,
+        ClosingState,
+        AdvertisingState
+    };
+    Q_ENUM(ControllerState)
+
+    enum Error {
+        NoError,
+        UnknownError,
+        UnknownRemoteDeviceError,
+        NetworkError,
+        InvalidBluetoothAdapterError,
+        ConnectionError,
+        AdvertisingError,
+        RemoteHostClosedError,
+        AuthorizationError,
+        MissingPermissionsError,
+        RssiReadError
+    };
+    Q_ENUM(Error)
+
+    enum RemoteAddressType {
+        PublicAddress,
+        RandomAddress
+    };
+    Q_ENUM(RemoteAddressType)
+
+    static QLowEnergyController *createCentral(
+            const QBluetoothDeviceInfo &deviceInfo, QObject *parent = nullptr);
+
+    explicit QLowEnergyController(QObject *parent = nullptr);
+    ~QLowEnergyController() override;
+
+    ControllerState state() const;
+    void setRemoteAddressType(RemoteAddressType type);
+    void connectToDevice();
+    void disconnectFromDevice();
+    void discoverServices();
+    QLowEnergyService *createServiceObject(
+            const QBluetoothUuid &serviceUuid, QObject *parent = nullptr);
+
+    void setStateForTest(ControllerState state);
+    void emitConnectedForTest();
+    void emitDisconnectedForTest();
+    void emitErrorForTest(Error error);
+
+    static void resetTestCounters();
+    static int connectCallCount();
+    static int disconnectCallCount();
+    static int discoverCallCount();
+    static int destructionCount();
+
+signals:
+    void connected();
+    void disconnected();
+    void errorOccurred(QLowEnergyController::Error error);
+    void serviceDiscovered(const QBluetoothUuid &serviceUuid);
+    void discoveryFinished();
+
+private:
+    ControllerState currentState = UnconnectedState;
+    RemoteAddressType addressType = PublicAddress;
+
+    static int connectCalls;
+    static int disconnectCalls;
+    static int discoverCalls;
+    static int destructions;
+};
+
+#endif

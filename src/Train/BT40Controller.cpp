@@ -19,6 +19,7 @@
 
 #include <QProgressDialog>
 #include "BT40Controller.h"
+#include "DeviceTypes.h"
 #include "RealtimeData.h"
 
 namespace {
@@ -29,7 +30,7 @@ constexpr int MaximumScanRetryDelayMs = 30000;
 BT40Controller::BT40Controller(TrainSidebar *parent, DeviceConfiguration *dc) : RealtimeController(parent, dc)
 {
     localDevice = new QBluetoothLocalDevice(this);
-    discoveryAgent = new QBluetoothDeviceDiscoveryAgent();
+    discoveryAgent = new QBluetoothDeviceDiscoveryAgent(this);
     discoveryAgent->setLowEnergyDiscoveryTimeout(20000);
     localDc = dc;
     running = false;
@@ -71,8 +72,7 @@ BT40Controller::BT40Controller(TrainSidebar *parent, DeviceConfiguration *dc) : 
 
 BT40Controller::~BT40Controller()
 {
-    delete localDevice;
-    delete discoveryAgent;
+    stop();
 }
 
 void
@@ -96,6 +96,12 @@ BT40Controller::getDeviceInfo()
 int
 BT40Controller::start()
 {
+    if (isHeartRateOnly() && allowedDevices.isEmpty()) {
+        running = false;
+        emit setNotification(tr("Bluetooth heart-rate device profile is empty"), 4);
+        return -1;
+    }
+
     running = true;
     resetScanRetryState();
     startScan();
@@ -133,12 +139,17 @@ BT40Controller::stop()
     resetScanRetryState();
     if (discoveryAgent->isActive()) discoveryAgent->stop();
 
+    const QList<BT40Device *> ownedDevices = devices;
+    devices.clear();
     devicesAwaitingRediscovery.clear();
-    foreach (BT40Device* const &device, devices) {
+
+    foreach (BT40Device *device, ownedDevices) {
+        if (!device) continue;
+        device->disconnect(this);
         device->disconnectDevice();
         delete device;
     }
-    devices.clear();
+
     return 0;
 }
 
@@ -157,7 +168,13 @@ BT40Controller::discover(QString)
 
 bool BT40Controller::doesPush() { return false; }
 bool BT40Controller::doesPull() { return true; }
-bool BT40Controller::doesLoad() { return true; }
+bool BT40Controller::doesLoad() { return !isHeartRateOnly(); }
+
+bool BT40Controller::isHeartRateOnly() const
+{
+    return localDc && BluetoothDeviceTypes::roleForType(localDc->type) ==
+            BluetoothDeviceTypes::DeviceRole::HeartRateOnly;
+}
 
 /*
  * gets called from the GUI to get updated telemetry.
@@ -216,7 +233,10 @@ BT40Controller::addDevice(const QBluetoothDeviceInfo &info)
 
         if (deviceAllowed(info))
         {
-            BT40Device* dev = new BT40Device(this, info);
+            const BluetoothDeviceTypes::DeviceRole role = localDc
+                    ? BluetoothDeviceTypes::roleForType(localDc->type)
+                    : BluetoothDeviceTypes::DeviceRole::Trainer;
+            BT40Device* dev = new BT40Device(this, info, role);
             devices.append(dev);
 
             // Only connect to device if we really want
@@ -227,14 +247,16 @@ BT40Controller::addDevice(const QBluetoothDeviceInfo &info)
                 // Then, commands like setWeight() may come before any device is discovered.
                 // In that case, the weight is stored but is sent to an empty list of devices.
                 // However, when devices are added, the stored parameters are sent.
-                dev->setWheelCircumference(wheelSize);
-                dev->setRollingResistance(rollingResistance);
-                dev->setWindResistance(windResistance);
-                dev->setWeight(weight);
-                dev->setWindSpeed(windSpeed);
-                dev->setMode(mode);
-                if (mode == RT_MODE_ERGO) dev->setLoad(load);
-                else dev->setGradient(gradient);
+                if (!isHeartRateOnly()) {
+                    dev->setWheelCircumference(wheelSize);
+                    dev->setRollingResistance(rollingResistance);
+                    dev->setWindResistance(windResistance);
+                    dev->setWeight(weight);
+                    dev->setWindSpeed(windSpeed);
+                    dev->setMode(mode);
+                    if (mode == RT_MODE_ERGO) dev->setLoad(load);
+                    else dev->setGradient(gradient);
+                }
 
                 connect(dev, &BT40Device::setNotification, this, &BT40Controller::setNotification);
                 connect(dev, &BT40Device::reconnectScanRequested,
@@ -261,7 +283,7 @@ BT40Controller::deviceAllowed(const QBluetoothDeviceInfo& info)
     // is the device profile is empty
     if (allowedDevices.size() == 0)
     {
-        return true;
+        return !localDc || BluetoothDeviceTypes::permitsEmptyProfile(localDc->type);
     }
 
     foreach (const DeviceInfo deviceInfo, allowedDevices)
@@ -290,7 +312,8 @@ bool
 BT40Controller::allConfiguredDevicesFound() const
 {
     if (!devicesAwaitingRediscovery.isEmpty()) return false;
-    if (allowedDevices.isEmpty()) return !devices.isEmpty();
+    if (allowedDevices.isEmpty())
+        return (!localDc || BluetoothDeviceTypes::permitsEmptyProfile(localDc->type)) && !devices.isEmpty();
 
     return devices.size() >= allowedDevices.size();
 }
@@ -356,16 +379,16 @@ BT40Controller::scanFinished()
 {
     const bool foundAnyDevices = !devices.isEmpty();
 
+    if (!running) {
+        qDebug() << "BT scan stopped";
+        return;
+    }
+
     // The pairing wizard has no configured allow-list and performs one scan.
     if (!localDc) {
         emit setNotification(tr("Bluetooth scan finished"), 2);
         emit scanFinished(foundAnyDevices);
         qDebug() << "BT scan finished with" << devices.size() << "device(s)";
-        return;
-    }
-
-    if (!running) {
-        qDebug() << "BT scan stopped";
         return;
     }
 
@@ -466,6 +489,7 @@ BT40Controller::setWheelRpm(double wrpm) {
 void BT40Controller::setLoad(double l)
 {
   load = l;
+  if (isHeartRateOnly()) return;
   for (auto* dev: devices) {
     dev->setLoad(l);
   }
@@ -474,6 +498,7 @@ void BT40Controller::setLoad(double l)
 void BT40Controller::setGradient(double g) 
 {
   gradient = g;
+  if (isHeartRateOnly()) return;
   for (auto* dev: devices) {
     dev->setGradient(g);
   }
@@ -482,6 +507,7 @@ void BT40Controller::setGradient(double g)
 void BT40Controller::setMode(int m)
 {
   mode = m;
+  if (isHeartRateOnly()) return;
   for (auto* dev: devices) {
     dev->setMode(m);
   }
@@ -490,6 +516,7 @@ void BT40Controller::setMode(int m)
 void BT40Controller::setWindSpeed(double s)
 {
   windSpeed = s;
+  if (isHeartRateOnly()) return;
   for (auto* dev: devices) {
     dev->setWindSpeed(s);
   }
@@ -498,6 +525,7 @@ void BT40Controller::setWindSpeed(double s)
 void BT40Controller::setWeight(double w)
 {
   weight = w;
+  if (isHeartRateOnly()) return;
   for (auto* dev: devices) {
     dev->setWeight(w);
   }
@@ -506,6 +534,7 @@ void BT40Controller::setWeight(double w)
 void BT40Controller::setRollingResistance(double rr)
 {
   rollingResistance = rr;
+  if (isHeartRateOnly()) return;
   for (auto* dev: devices) {
     dev->setRollingResistance(rr);
   }
@@ -514,6 +543,7 @@ void BT40Controller::setRollingResistance(double rr)
 void BT40Controller::setWindResistance(double wr)
 {
   windResistance = wr;
+  if (isHeartRateOnly()) return;
   for (auto* dev: devices) {
     dev->setWindResistance(wr);
   }
@@ -522,6 +552,7 @@ void BT40Controller::setWindResistance(double wr)
 void BT40Controller::setWheelCircumference(double wc)
 {
   wheelSize = wc;
+  if (isHeartRateOnly()) return;
   for (auto* dev: devices) {
     dev->setWheelCircumference(wc);
   }

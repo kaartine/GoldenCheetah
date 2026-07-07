@@ -37,7 +37,9 @@ equals(GC_UNITTESTS, active) {
 			   Train/antBurstBounds \
 			   Train/kineticPacketBounds \
 			   Train/vmProWidgetLifecycle \
-			   Train/virtualPowerTrainerOwnership
+			   Train/virtualPowerTrainerOwnership \
+			   Train/bt40Lifecycle \
+			   Train/deviceSelection
 	CONFIG += ordered
 } else {
 	message("Unittests are disabled; to enable copy unittests/unittests.pri.in to unittests/unittests.pri")

@@ -46,6 +46,9 @@ DeviceTypes::DeviceTypes()
       { DEV_BT40,    DEV_BTLE,     (char *) "Bluetooth 4.0", true,   false,
         tr("Bluetooth Low Energy devices such as KK Inride, Stages PM, Blue HR and Blue SC"),
         ":images/devices/btle.png" },
+      { DEV_BT40_HEARTRATE, DEV_BTLE, (char *) "Bluetooth Heart Rate Sensor", true, false,
+        tr("Bluetooth Low Energy heart-rate sensors and watches broadcasting heart rate"),
+        ":images/devices/btle.png" },
 #endif
       { DEV_CT,       DEV_SERIAL,  (char *) "Racermate Computrainer",true,    false,
         tr("Racermate Computrainer Lab or Pro bike trainer with the handlebar controller "

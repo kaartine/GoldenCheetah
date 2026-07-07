@@ -17,6 +17,7 @@
  */
 
 #include "BT40Device.h"
+#include <QCoreApplication>
 #include <QDebug>
 #include "BT40Controller.h"
 #include "VMProWidget.h"
@@ -54,7 +55,89 @@ QMap<QBluetoothUuid, btle_sensor_type_t> BT40Device::supportedServices = {
     //{ QBluetoothUuid(QBluetoothUuid::ServiceClassUuid::DeviceInformation),        { "DeviceInformation", ":images / IconPower.png"}},
 };
 
-BT40Device::BT40Device(QObject *parent, QBluetoothDeviceInfo devinfo) : parent(parent), m_currentDevice(devinfo)
+BluetoothDeviceTypes::ServiceKind
+BT40Device::classifyService(const QBluetoothUuid &uuid)
+{
+    if (uuid == QBluetoothUuid(QBluetoothUuid::ServiceClassUuid::HeartRate)) {
+        return BluetoothDeviceTypes::ServiceKind::HeartRate;
+    }
+
+    if (uuid == QBluetoothUuid(QBluetoothUuid::ServiceClassUuid::CyclingPower) ||
+        uuid == QBluetoothUuid(QString(BLE_TACX_UART_UUID)) ||
+        uuid == s_KurtInRideService_UUID ||
+        uuid == s_KurtSmartControlService_UUID ||
+        uuid == s_FtmsService_UUID) {
+        return BluetoothDeviceTypes::ServiceKind::TrainerControl;
+    }
+
+    return BluetoothDeviceTypes::ServiceKind::OtherTelemetry;
+}
+
+bool
+BT40Device::acceptsServiceForRole(BluetoothDeviceTypes::DeviceRole role,
+                                  const QBluetoothUuid &uuid)
+{
+    return BluetoothDeviceTypes::acceptsService(role, classifyService(uuid));
+}
+
+bool
+BT40Device::acceptsService(const QBluetoothUuid &uuid) const
+{
+    return acceptsServiceForRole(deviceRole, uuid);
+}
+
+bool
+BT40Device::trainerControlAllowed() const
+{
+    return BluetoothDeviceTypes::allowsTrainerControl(deviceRole);
+}
+
+BluetoothDeviceTypes::LinkState
+BT40Device::linkState() const
+{
+    if (!m_control ||
+        m_control->state() == QLowEnergyController::UnconnectedState) {
+        return BluetoothDeviceTypes::LinkState::Unconnected;
+    }
+    if (m_control->state() == QLowEnergyController::ClosingState) {
+        return BluetoothDeviceTypes::LinkState::Closing;
+    }
+    return BluetoothDeviceTypes::LinkState::Active;
+}
+
+bool
+BT40Device::writeTrainerCharacteristic(
+        QLowEnergyService *service, const QLowEnergyCharacteristic &characteristic,
+        const QByteArray &value, QLowEnergyService::WriteMode mode)
+{
+    if (!trainerControlAllowed() || !service || !characteristic.isValid()) return false;
+    service->writeCharacteristic(characteristic, value, mode);
+    return true;
+}
+
+bool
+BT40Device::writeTrainerDescriptor(QLowEnergyService *service,
+                                   const QLowEnergyDescriptor &descriptor,
+                                   const QByteArray &value)
+{
+    if (!trainerControlAllowed() || !service || !descriptor.isValid()) return false;
+    service->writeDescriptor(descriptor, value);
+    return true;
+}
+
+bool
+BT40Device::readTrainerCharacteristic(
+        QLowEnergyService *service, const QLowEnergyCharacteristic &characteristic)
+{
+    if (!trainerControlAllowed() || !service || !characteristic.isValid()) return false;
+    service->readCharacteristic(characteristic);
+    return true;
+}
+
+BT40Device::BT40Device(BT40Controller *parent, QBluetoothDeviceInfo devinfo,
+                       BluetoothDeviceTypes::DeviceRole role)
+    : QObject(parent), parentController(parent), m_currentDevice(devinfo),
+      m_control(nullptr), deviceRole(role)
 {
     m_control = QLowEnergyController::createCentral(m_currentDevice, this);
     connect(m_control, SIGNAL(connected()), this, SLOT(deviceConnected()), Qt::QueuedConnection);
@@ -94,18 +177,59 @@ BT40Device::BT40Device(QObject *parent, QBluetoothDeviceInfo devinfo) : parent(p
     connect(reconnectTimer, SIGNAL(timeout()), this, SLOT(attemptReconnect()));
     reconnectAttempts = 0;
     reconnectNoticeShown = false;
+    shuttingDown = false;
 }
 
 BT40Device::~BT40Device()
 {
-    this->disconnectDevice();
-    delete m_control;
+    shutdown();
+}
+
+void
+BT40Device::shutdown()
+{
+    if (shuttingDown) return;
+    shuttingDown = true;
+    connected = false;
+    reconnectTimer->stop();
+    reconnectAttempts = 0;
+    reconnectNoticeShown = false;
+
+    while (!m_services.isEmpty()) {
+        QLowEnergyService *service = m_services.takeLast();
+        service->disconnect(this);
+        delete service;
+    }
+    loadService = nullptr;
+    commandQueue.clear();
+
+    if (!m_control) return;
+
+    const BluetoothDeviceTypes::LinkState state = linkState();
+    QLowEnergyController *control = m_control;
+    m_control = nullptr;
+    control->disconnect(this);
+
+    if (state == BluetoothDeviceTypes::LinkState::Unconnected) {
+        delete control;
+        return;
+    }
+
+    // BlueZ and Qt can still deliver callbacks while a link is closing. Keep
+    // the controller alive outside this device until Qt confirms disconnect.
+    control->setParent(QCoreApplication::instance());
+    connect(control, &QLowEnergyController::disconnected,
+            control, &QObject::deleteLater, Qt::UniqueConnection);
+    if (BluetoothDeviceTypes::shouldDisconnect(state)) {
+        control->disconnectFromDevice();
+    }
 }
 
 void
 BT40Device::connectDevice()
 {
-    if (m_control->state() != QLowEnergyController::UnconnectedState) return;
+    if (shuttingDown || !m_control) return;
+    if (!BluetoothDeviceTypes::shouldConnect(true, linkState())) return;
 
     qDebug() << "Connecting to device" << m_currentDevice.name() << " "
              << m_currentDevice.deviceUuid() << "using"
@@ -119,17 +243,21 @@ BT40Device::connectDevice()
 void
 BT40Device::disconnectDevice()
 {
-    qDebug() << "Disconnecting from device" << m_currentDevice.name() << " " << m_currentDevice.deviceUuid();
     connected = false;
     reconnectTimer->stop();
     reconnectAttempts = 0;
     reconnectNoticeShown = false;
+    if (shuttingDown) return;
+    if (!m_control || !BluetoothDeviceTypes::shouldDisconnect(linkState())) return;
+
+    qDebug() << "Disconnecting from device" << m_currentDevice.name() << " " << m_currentDevice.deviceUuid();
     m_control->disconnectFromDevice();
 }
 
 void
 BT40Device::deviceConnected()
 {
+    if (shuttingDown || !m_control) return;
     qDebug() << "Connected to device" << m_currentDevice.name() << " " << m_currentDevice.deviceUuid()
              << "using" << (remoteAddressType == QLowEnergyController::RandomAddress ? "random" : "public")
              << "address";
@@ -161,6 +289,7 @@ BT40Device::deviceConnected()
 void
 BT40Device::controllerError(QLowEnergyController::Error error)
 {
+    if (shuttingDown || !m_control) return;
     qWarning() << "Controller Error:" << error << "for device" << m_currentDevice.name() << " " << m_currentDevice.deviceUuid();
 
     const bool connectionFailure =
@@ -195,6 +324,7 @@ BT40Device::controllerError(QLowEnergyController::Error error)
 void
 BT40Device::deviceDisconnected()
 {
+    if (shuttingDown || !parentController) return;
     qDebug() << "Lost connection to" << m_currentDevice.name() << " " << m_currentDevice.deviceUuid();
     heartRateSeen = false;
     trainerDataSeen = false;
@@ -203,33 +333,33 @@ BT40Device::deviceDisconnected()
     foreach (QLowEnergyService* const &service, m_services) {
 
         if (service->serviceUuid() == QBluetoothUuid(QBluetoothUuid::ServiceClassUuid::HeartRate)) {
-            dynamic_cast<BT40Controller*>(parent)->setBPM(0.0);
+            parentController->setBPM(0.0);
         } else if (service->serviceUuid() == QBluetoothUuid(QBluetoothUuid::ServiceClassUuid::CyclingPower)) {
-            dynamic_cast<BT40Controller*>(parent)->setWatts(0.0);
-            dynamic_cast<BT40Controller*>(parent)->setWheelRpm(0.0);
+            parentController->setWatts(0.0);
+            parentController->setWheelRpm(0.0);
         } else if (service->serviceUuid() == QBluetoothUuid(QBluetoothUuid::ServiceClassUuid::CyclingSpeedAndCadence)) {
-            dynamic_cast<BT40Controller*>(parent)->setWheelRpm(0.0);
+            parentController->setWheelRpm(0.0);
         } else if (service->serviceUuid() == QBluetoothUuid(QString(VO2MASTERPRO_SERVICE_UUID))) {
-            BT40Controller *controller = dynamic_cast<BT40Controller*>(parent);
+            BT40Controller *controller = parentController.data();
             controller->setRespiratoryFrequency(0);
             controller->setRespiratoryMinuteVolume(0);
             controller->setVO2_VCO2(0,0);
             controller->setTv(0);
             controller->setFeO2(0);
         } else if (service->serviceUuid() == s_KurtInRideService_UUID) {
-            BT40Controller* controller = dynamic_cast<BT40Controller*>(parent);
+            BT40Controller* controller = parentController.data();
             // disconnect behavior...
             controller->setWatts(0.0);
             controller->setWheelRpm(0.0);
             controller->setCadence(0.0);
         } else if (service->serviceUuid() == s_KurtSmartControlService_UUID) {
-            BT40Controller* controller = dynamic_cast<BT40Controller*>(parent);
+            BT40Controller* controller = parentController.data();
             // disconnect behavior...
             controller->setWatts(0.0);
             controller->setWheelRpm(0.0);
             controller->setCadence(0.0);
         } else if (service->serviceUuid() == s_FtmsService_UUID) {
-            BT40Controller* controller = dynamic_cast<BT40Controller*>(parent);
+            BT40Controller* controller = parentController.data();
             controller->setWatts(0.0);
             controller->setWheelRpm(0.0);
             controller->setCadence(0.0);
@@ -255,8 +385,9 @@ BT40Device::deviceDisconnected()
 void
 BT40Device::serviceDiscovered(QBluetoothUuid uuid)
 {
+    if (shuttingDown || !m_control) return;
 
-    if (supportedServices.contains(uuid)) {
+    if (supportedServices.contains(uuid) && acceptsService(uuid)) {
         QLowEnergyService *service = m_control->createServiceObject(uuid, this);
         m_services.append(service);
     }
@@ -266,11 +397,19 @@ BT40Device::serviceDiscovered(QBluetoothUuid uuid)
 void
 BT40Device::serviceScanDone()
 {
+    if (shuttingDown) return;
     qDebug() << "Service scan done for device" << m_currentDevice.name() << " " << m_currentDevice.deviceUuid();
     has_power = false;
     bool has_csc = false;
     QLowEnergyService* csc_service=NULL;
 
+    for (int index = m_services.size() - 1; index >= 0; --index) {
+        QLowEnergyService *service = m_services.at(index);
+        if (!acceptsService(service->serviceUuid())) {
+            m_services.removeAt(index);
+            delete service;
+        }
+    }
 
     // Filter out so that only one controllable service is kept
     // The idea is that in order to avoid using multiple service to control
@@ -370,6 +509,7 @@ BT40Device::serviceScanDone()
 void
 BT40Device::serviceStateChanged(QLowEnergyService::ServiceState s)
 {
+    if (shuttingDown) return;
     qDebug() << "service state changed " << s << "for device" << m_currentDevice.name() << " " << m_currentDevice.deviceUuid();
 
     if (s == QLowEnergyService::RemoteServiceDiscovered) {
@@ -377,6 +517,7 @@ BT40Device::serviceStateChanged(QLowEnergyService::ServiceState s)
         foreach (QLowEnergyService* const &service, m_services) {
 
             if (service->state() == s) {
+                if (!acceptsService(service->serviceUuid())) continue;
 
                 QList<QLowEnergyCharacteristic> characteristics;
                 if (service->serviceUuid() == QBluetoothUuid(QBluetoothUuid::ServiceClassUuid::HeartRate)) {
@@ -452,7 +593,7 @@ BT40Device::serviceStateChanged(QLowEnergyService::ServiceState s)
                     characteristics.append(service->characteristic(s_FtmsStatusChar_UUID));
 
                     // Read FTMS Feature flags to find out what's supported and not.
-                    service->readCharacteristic(service->characteristic(s_FtmsFeatureChar_UUID));
+                    readTrainerCharacteristic(service, service->characteristic(s_FtmsFeatureChar_UUID));
                 }
 
                 foreach(QLowEnergyCharacteristic characteristic, characteristics)
@@ -467,7 +608,7 @@ BT40Device::serviceStateChanged(QLowEnergyService::ServiceState s)
                             qDebug() << "Starting indication for char with UUID: " << characteristic.uuid().toString();
                             const QLowEnergyDescriptor notificationDesc = characteristic.descriptor(QBluetoothUuid::DescriptorType::ClientCharacteristicConfiguration);
                             if (notificationDesc.isValid()) {
-                                service->writeDescriptor(notificationDesc, QByteArray::fromHex("0200"));
+                                writeTrainerDescriptor(service, notificationDesc, QByteArray::fromHex("0200"));
                                 loadService = service;
                                 loadCharacteristic = characteristic;
                                 loadType = Wahoo_Kickr;
@@ -521,12 +662,12 @@ BT40Device::serviceStateChanged(QLowEnergyService::ServiceState s)
                             QByteArray command;
                             switch (mode) {
                             case RT_MODE_SLOPE:
-                                loadService->writeCharacteristic(loadCharacteristic,
+                                writeTrainerCharacteristic(loadService, loadCharacteristic,
                                     smart_control_set_mode_simulation_command(weight, rollingResistance, windResistance, gradient, windSpeed),
                                     QLowEnergyService::WriteWithResponse);
                                 break;
                             case RT_MODE_ERGO:
-                                loadService->writeCharacteristic(loadCharacteristic,
+                                writeTrainerCharacteristic(loadService, loadCharacteristic,
                                     smart_control_set_mode_erg_command(load),
                                     QLowEnergyService::WriteWithResponse);
                                 break;
@@ -545,18 +686,23 @@ BT40Device::serviceStateChanged(QLowEnergyService::ServiceState s)
                             // Start notifications since command results will come on this char
                             const QLowEnergyDescriptor notificationDesc = characteristic.descriptor(QBluetoothUuid::DescriptorType::ClientCharacteristicConfiguration);
                             if (notificationDesc.isValid()) {
-                                service->writeDescriptor(notificationDesc, QByteArray::fromHex("0100"));
+                                writeTrainerDescriptor(service, notificationDesc, QByteArray::fromHex("0100"));
                             }
 
-                            loadService->writeCharacteristic(characteristic, command);
+                            writeTrainerCharacteristic(loadService, characteristic, command);
                         } else if (characteristic.uuid() == s_FtmsFeatureChar_UUID) {
                             // Read out the different flags to find out what's supported and not.
-                            loadService->readCharacteristic(characteristic);
+                            readTrainerCharacteristic(loadService, characteristic);
                         } else {
                             qDebug() << "Starting notification for char with UUID: " << characteristic.uuid().toString();
                             const QLowEnergyDescriptor notificationDesc = characteristic.descriptor(QBluetoothUuid::DescriptorType::ClientCharacteristicConfiguration);
                             if (notificationDesc.isValid()) {
-                                service->writeDescriptor(notificationDesc, QByteArray::fromHex("0100"));
+                                if (characteristic.uuid() == QBluetoothUuid(
+                                            QBluetoothUuid::CharacteristicType::HeartRateMeasurement)) {
+                                    service->writeDescriptor(notificationDesc, QByteArray::fromHex("0100"));
+                                } else {
+                                    writeTrainerDescriptor(service, notificationDesc, QByteArray::fromHex("0100"));
+                                }
                             }
                         }
                     }
@@ -569,6 +715,14 @@ BT40Device::serviceStateChanged(QLowEnergyService::ServiceState s)
 void
 BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &value)
 {
+    if (shuttingDown || !parentController) return;
+    QObject *parent = parentController.data();
+    if (deviceRole == BluetoothDeviceTypes::DeviceRole::HeartRateOnly &&
+        c.uuid() != QBluetoothUuid(
+                QBluetoothUuid::CharacteristicType::HeartRateMeasurement)) {
+        return;
+    }
+
     QDataStream ds(value);
     ds.setByteOrder(QDataStream::LittleEndian); // Bluetooth data is always LE
 
@@ -921,14 +1075,14 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
         {
             ftmsDeviceInfo.supports_power_target = true;
             // Read in order to get max/min/increment for power target
-            loadService->readCharacteristic(loadService->characteristic(s_FtmsPowerRangeChar_UUID));
+            readTrainerCharacteristic(loadService, loadService->characteristic(s_FtmsPowerRangeChar_UUID));
         }
 
         if (target_settings & FtmsTargetSetting::FTMS_RESISTANCE_TARGET_SUPPORTED)
         {
             ftmsDeviceInfo.supports_resistance_target = true;
             // Read in order to get max/min/increment for resistance target
-            loadService->readCharacteristic(loadService->characteristic(s_FtmsResistanceRangeChar_UUID));
+            readTrainerCharacteristic(loadService, loadService->characteristic(s_FtmsResistanceRangeChar_UUID));
         }
 
         if (target_settings & FtmsTargetSetting::FTMS_INDOOR_BIKE_SIMULATION_SUPPORTED)
@@ -996,6 +1150,7 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
 void
 BT40Device::serviceError(QLowEnergyService::ServiceError e)
 {
+    if (shuttingDown) return;
     switch (e) {
     case QLowEnergyService::DescriptorWriteError:
         {
@@ -1021,6 +1176,7 @@ BT40Device::serviceError(QLowEnergyService::ServiceError e)
 void
 BT40Device::attemptReconnect()
 {
+    if (shuttingDown || !m_control) return;
     if (!connected) {
         // User manually disconnected, stop trying
         reconnectTimer->stop();
@@ -1028,7 +1184,7 @@ BT40Device::attemptReconnect()
         return;
     }
     
-    if (m_control->state() != QLowEnergyController::UnconnectedState) return;
+    if (!BluetoothDeviceTypes::shouldReconnect(connected, linkState())) return;
 
     reconnectAttempts++;
     qDebug() << "Reconnection attempt" << reconnectAttempts << "for device" << m_currentDevice.name();
@@ -1039,6 +1195,7 @@ BT40Device::attemptReconnect()
 void
 BT40Device::confirmedDescriptorWrite(const QLowEnergyDescriptor &d, const QByteArray &value)
 {
+    if (shuttingDown) return;
     if (!d.isValid()) return;
 
     if (value == QByteArray::fromHex("0000")) {
@@ -1053,6 +1210,7 @@ BT40Device::confirmedDescriptorWrite(const QLowEnergyDescriptor &d, const QByteA
 void
 BT40Device::confirmedCharacteristicWrite(const QLowEnergyCharacteristic &c, const QByteArray &value)
 {
+    if (shuttingDown) return;
     qDebug() << "BTLE wrote to " << m_currentDevice.name() << " " << c.uuid() << value.toHex(':');
     if(loadType == Wahoo_Kickr) commandWritten();
 }
@@ -1060,6 +1218,8 @@ BT40Device::confirmedCharacteristicWrite(const QLowEnergyCharacteristic &c, cons
 void
 BT40Device::getCadence(QDataStream& ds)
 {
+    if (!parentController) return;
+    QObject *parent = parentController.data();
     quint16 cur_revs;
     quint16 cur_time;
     ds >> cur_revs;
@@ -1105,6 +1265,8 @@ BT40Device::getCadence(QDataStream& ds)
 void
 BT40Device::getWheelRpm(QDataStream& ds)
 {
+    if (!parentController) return;
+    QObject *parent = parentController.data();
     quint32 wheelrevs;
     quint16 wheeltime;
     ds >> wheelrevs;
@@ -1134,6 +1296,7 @@ BT40Device::deviceInfo() const
 void
 BT40Device::setLoad(double l)
 {
+    if (!trainerControlAllowed()) return;
     load = l;
     if (mode == RT_MODE_ERGO) setLoadErg(load);
     else if (mode == RT_MODE_SPIN || mode == RT_MODE_SLOPE) setGradient(load);
@@ -1141,6 +1304,7 @@ BT40Device::setLoad(double l)
 
 void BT40Device::setGradient(double g)
 {
+    if (!trainerControlAllowed()) return;
     gradient = g;
 
     if(loadType == Tacx_UART) {
@@ -1148,7 +1312,7 @@ void BT40Device::setGradient(double g)
 
         // Based on https://github.com/abellono/tacx-ios-bluetooth-example/blob/master/How-to%20FE-C%20over%20BLE%20v1_0_0.pdf, channel must be 5.
         const auto Msg = ANTMessage::fecSetTrackResistance(5, gradient, 0);
-        loadService->writeCharacteristic(loadCharacteristic,
+        writeTrainerCharacteristic(loadService, loadCharacteristic,
                 QByteArray{(const char*) &Msg.data[0], Msg.length},
                 QLowEnergyService::WriteWithoutResponse);
 
@@ -1167,7 +1331,7 @@ void BT40Device::setGradient(double g)
         // Kurt_SmartControl is sent complete info with every update. Avoid a notification for every change by
         // only sending update for load and gradient notification
         qDebug() << tr("Kurt_SmartControl: write gradient") << gradient;
-        loadService->writeCharacteristic(loadCharacteristic,
+        writeTrainerCharacteristic(loadService, loadCharacteristic,
             smart_control_set_mode_simulation_command(weight, rollingResistance, windResistance, gradient, windSpeed),
             QLowEnergyService::WriteWithResponse);
     } else if (loadType == FTMS_Device) {
@@ -1180,13 +1344,14 @@ void BT40Device::setGradient(double g)
         QDataStream commandDs(&command, QIODevice::ReadWrite);
         commandDs.setByteOrder(QDataStream::LittleEndian);
         commandDs << (quint8)FtmsControlPointCommand::FTMS_SET_INDOOR_BIKE_SIMULATION_PARAMS << ftms_wind_speed << ftms_grade << ftms_crr << ftms_cw;
-        loadService->writeCharacteristic(loadCharacteristic, command);
+        writeTrainerCharacteristic(loadService, loadCharacteristic, command);
     }
 }
 
 void
 BT40Device::setMode(int m)
 {
+    if (!trainerControlAllowed()) return;
     // Enter Calibration Mode.
     if (m == RT_MODE_CALIBRATE && mode != RT_MODE_CALIBRATE) {
         switch (loadType) {
@@ -1200,7 +1365,7 @@ BT40Device::setMode(int m)
                     systemID[0] << systemID[1] << systemID[2] <<
                     systemID[3] << systemID[4] << systemID[5];
 
-                loadService->writeCharacteristic(loadCharacteristic,
+                writeTrainerCharacteristic(loadService, loadCharacteristic,
                     inride_create_start_calibration_command_data(systemID),
                     QLowEnergyService::WriteWithResponse);
 
@@ -1210,7 +1375,7 @@ BT40Device::setMode(int m)
             {
                 qDebug() << tr("Kurt_SmartControl: STARTING CALIBRATION");
 
-                loadService->writeCharacteristic(loadCharacteristic,
+                writeTrainerCharacteristic(loadService, loadCharacteristic,
                     smart_control_start_calibration_command(false),
                     QLowEnergyService::WriteWithResponse);
                 break;
@@ -1229,7 +1394,7 @@ BT40Device::setMode(int m)
                 QDataStream commandDs(&command, QIODevice::ReadWrite);
                 commandDs.setByteOrder(QDataStream::LittleEndian);
                 commandDs << (quint8)FtmsControlPointCommand::FTMS_SPIN_DOWN_CONTROL << opcode;
-                loadService->writeCharacteristic(loadCharacteristic, command);
+                writeTrainerCharacteristic(loadService, loadCharacteristic, command);
             } else {
                 qDebug() << "Enter calibration requested for FTMS device which doesn't support spin down calibration";
             }
@@ -1253,7 +1418,7 @@ BT40Device::setMode(int m)
                     systemID[0] << systemID[1] << systemID[2] <<
                     systemID[3] << systemID[4] << systemID[5];
 
-                loadService->writeCharacteristic(loadCharacteristic,
+                writeTrainerCharacteristic(loadService, loadCharacteristic,
                     inride_create_stop_calibration_command_data(systemID),
                     QLowEnergyService::WriteWithResponse);
 
@@ -1262,7 +1427,7 @@ BT40Device::setMode(int m)
         case Kurt_SmartControl:
             {
                 qDebug() << tr("Kurt_SmartControl: STOPPING CALIBRATION");
-                loadService->writeCharacteristic(loadCharacteristic,
+                writeTrainerCharacteristic(loadService, loadCharacteristic,
                     smart_control_stop_calibration_command(),
                     QLowEnergyService::WriteWithResponse);
                 break;
@@ -1279,6 +1444,7 @@ BT40Device::setMode(int m)
 void
 BT40Device::setWindSpeed(double s)  // In meters/second
 {
+    if (!trainerControlAllowed()) return;
     windSpeed = s;
 
     if(loadType == Wahoo_Kickr) {
@@ -1299,6 +1465,7 @@ BT40Device::setWindSpeed(double s)  // In meters/second
 void
 BT40Device::setWeight(double w)
 {
+    if (!trainerControlAllowed()) return;
     weight = w;
     setRiderCharacteristics(weight, rollingResistance, windResistance);
 }
@@ -1306,6 +1473,7 @@ BT40Device::setWeight(double w)
 void
 BT40Device::setRollingResistance(double rr)
 {
+    if (!trainerControlAllowed()) return;
     rollingResistance = rr;
     setRiderCharacteristics(weight, rollingResistance, windResistance);
 }
@@ -1313,6 +1481,7 @@ BT40Device::setRollingResistance(double rr)
 void
 BT40Device::setWindResistance(double wr)
 {
+    if (!trainerControlAllowed()) return;
     windResistance = wr;
     setRiderCharacteristics(weight, rollingResistance, windResistance);
 }
@@ -1320,6 +1489,7 @@ BT40Device::setWindResistance(double wr)
 void
 BT40Device::setWheelCircumference(double c) // in millimeters
 {
+    if (!trainerControlAllowed()) return;
     wheelSize = c;
 
     if(loadType == Wahoo_Kickr) {
@@ -1337,6 +1507,7 @@ BT40Device::setWheelCircumference(double c) // in millimeters
 void
 BT40Device::setLoadErg(double l)  // Load in Watts
 {
+    if (!trainerControlAllowed()) return;
     load = l;
 
     if(loadType == Tacx_UART) {
@@ -1344,7 +1515,7 @@ BT40Device::setLoadErg(double l)  // Load in Watts
 
         // Based on https://github.com/abellono/tacx-ios-bluetooth-example/blob/master/How-to%20FE-C%20over%20BLE%20v1_0_0.pdf, channel must be 5.
         const auto Msg = ANTMessage::fecSetTargetPower(5, (int)load);
-        loadService->writeCharacteristic(loadCharacteristic,
+        writeTrainerCharacteristic(loadService, loadCharacteristic,
                 QByteArray{(const char*) &Msg.data[0], Msg.length},
                 QLowEnergyService::WriteWithoutResponse);
 
@@ -1359,7 +1530,7 @@ BT40Device::setLoadErg(double l)  // Load in Watts
 
     } else if (loadType == Kurt_SmartControl) {
         qDebug() << tr("Kurt_SmartControl: set_mode_erg ") << load;
-        loadService->writeCharacteristic(loadCharacteristic,
+        writeTrainerCharacteristic(loadService, loadCharacteristic,
             smart_control_set_mode_erg_command(load),
             QLowEnergyService::WriteWithResponse);
     } else if (loadType == FTMS_Device) {
@@ -1371,13 +1542,14 @@ BT40Device::setLoadErg(double l)  // Load in Watts
         QDataStream commandDs(&command, QIODevice::ReadWrite);
         commandDs.setByteOrder(QDataStream::LittleEndian);
         commandDs << (quint8)FtmsControlPointCommand::FTMS_SET_TARGET_POWER << (qint16)load;
-        loadService->writeCharacteristic(loadCharacteristic, command);
+        writeTrainerCharacteristic(loadService, loadCharacteristic, command);
     }
 }
 
 void
 BT40Device::setLoadIntensity(double l)  // between 0 and 1
 {
+    if (!trainerControlAllowed()) return;
     load = l;
 
     if(loadType == Wahoo_Kickr) {
@@ -1392,7 +1564,7 @@ BT40Device::setLoadIntensity(double l)  // between 0 and 1
     } else if (loadType == Kurt_SmartControl) {
         uint8_t level = (uint8_t)(l * 9); // map [0, 1] to unsigned integer [0, 9]
         qDebug() << tr("Kurt_SmartControl: set_mode_fluid ") << level;
-        loadService->writeCharacteristic(loadCharacteristic,
+        writeTrainerCharacteristic(loadService, loadCharacteristic,
             smart_control_set_mode_fluid_command(level),
             QLowEnergyService::WriteWithResponse);
     } else if (loadType == FTMS_Device) {
@@ -1406,13 +1578,14 @@ BT40Device::setLoadIntensity(double l)  // between 0 and 1
         QDataStream commandDs(&command, QIODevice::ReadWrite);
         commandDs.setByteOrder(QDataStream::LittleEndian);
         commandDs << (quint8)FtmsControlPointCommand::FTMS_SET_TARGET_RESISTANCE_LEVEL << (qint16)(resistance);
-        loadService->writeCharacteristic(loadCharacteristic, command);
+        writeTrainerCharacteristic(loadService, loadCharacteristic, command);
     }
 }
 
 void
 BT40Device::setLoadLevel(int l)  // From 0 to 9
 {
+    if (!trainerControlAllowed()) return;
     load = l;
 
     if(loadType == Wahoo_Kickr) {
@@ -1424,7 +1597,7 @@ BT40Device::setLoadLevel(int l)  // From 0 to 9
         commandSend(command);
     } else if (loadType == Kurt_SmartControl) {
         qDebug() << "Kurt_SmartControl: set_mode_fluid " << load;
-        loadService->writeCharacteristic(loadCharacteristic,
+        writeTrainerCharacteristic(loadService, loadCharacteristic,
             smart_control_set_mode_fluid_command(load),
             QLowEnergyService::WriteWithResponse);
     } else if (loadType == FTMS_Device) {
@@ -1438,13 +1611,14 @@ BT40Device::setLoadLevel(int l)  // From 0 to 9
         QDataStream commandDs(&command, QIODevice::ReadWrite);
         commandDs.setByteOrder(QDataStream::LittleEndian);
         commandDs << (quint8)FtmsControlPointCommand::FTMS_SET_TARGET_RESISTANCE_LEVEL << (qint16)resistance;
-        loadService->writeCharacteristic(loadCharacteristic, command);
+        writeTrainerCharacteristic(loadService, loadCharacteristic, command);
     }
 }
 
 void
 BT40Device::setRiderCharacteristics(double weight, double rollingResistance, double windResistance)
 {
+    if (!trainerControlAllowed()) return;
     if(loadType == Wahoo_Kickr) {
         QByteArray command;
         int valueWeight = (int)(weight * 100.0);
@@ -1474,6 +1648,7 @@ BT40Device::setRiderCharacteristics(double weight, double rollingResistance, dou
 void
 BT40Device::commandSend(QByteArray &command)
 {
+    if (!trainerControlAllowed()) return;
     if(commandQueue.size() > 20) {
         qWarning() << "BTLE overflow of load control commands for device " << m_currentDevice.name() << " " << m_currentDevice.deviceUuid();
         return;
@@ -1486,12 +1661,14 @@ BT40Device::commandSend(QByteArray &command)
 void
 BT40Device::commandWrite(QByteArray &command)
 {
+    if (!trainerControlAllowed()) return;
     qDebug() << "BTLE write load command " << loadCharacteristic.uuid() << " " << command.toHex(':');
-    loadService->writeCharacteristic(loadCharacteristic, command);
+    writeTrainerCharacteristic(loadService, loadCharacteristic, command);
 }
 
 void
 BT40Device::commandWriteFailed() {
+    if (!trainerControlAllowed()) return;
     commandRetry++;
     if(commandRetry > 10) {
         QByteArray command = commandQueue.dequeue();
@@ -1504,6 +1681,7 @@ BT40Device::commandWriteFailed() {
 
 void
 BT40Device::commandWritten() {
+    if (!trainerControlAllowed()) return;
     commandRetry = 0;
     commandQueue.dequeue();
     if(commandQueue.size() > 0) commandWrite(commandQueue.head());
@@ -1511,6 +1689,7 @@ BT40Device::commandWritten() {
 
 void
 BT40Device::sendSimulationParameters() {
+    if (!trainerControlAllowed()) return;
     if (loadType == FTMS_Device) {
         qDebug() << tr("FTMS Device: Send simulation parameteres");
         qint16 ftms_wind_speed = this->windSpeed * 1000; // in 0.001 m/s
@@ -1521,6 +1700,6 @@ BT40Device::sendSimulationParameters() {
         QDataStream commandDs(&command, QIODevice::ReadWrite);
         commandDs.setByteOrder(QDataStream::LittleEndian);
         commandDs << (quint8)FtmsControlPointCommand::FTMS_SET_INDOOR_BIKE_SIMULATION_PARAMS << ftms_wind_speed << ftms_grade << ftms_crr << ftms_cw;
-        loadService->writeCharacteristic(loadCharacteristic, command);
+        writeTrainerCharacteristic(loadService, loadCharacteristic, command);
     }
 }

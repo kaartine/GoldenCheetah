@@ -22,6 +22,7 @@
 #ifndef _GC_DeviceTypes_h
 #define _GC_DeviceTypes_h 1
 #include "GoldenCheetah.h"
+#include "BluetoothDeviceTypes.h"
 
 #include <QList>
 
@@ -35,7 +36,6 @@
 #define DEV_GCLIENT    0x0200   // NOT IMPLEMENTED IN THIS RELEASE XXX
 #define DEV_FORTIUS    0x0800   // Tacx Fortius
 #define DEV_IMAGIC     0x1000   // Tacx Imagic
-#define DEV_BT40       0x2000   // QT Bluetooth support
 #define DEV_MONARK     0x4000   // Monark USB
 #define DEV_KETTLER    0x8000   // Kettler Serial
 #define DEV_KETTLER_RACER    0x8100   // Kettler racer Serial
