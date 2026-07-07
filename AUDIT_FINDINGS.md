@@ -601,6 +601,30 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Fix direction: Timestamp every metric per source and expire it using protocol
   appropriate timeouts.
 
+### DEV-006: Windows ANT USB1 setup failures can hang shutdown
+
+- Status: OPEN
+- Code: `src/Train/USBXpress.cpp`, `src/Train/USBXpress.h`,
+  `src/ANT/ANT.cpp`, `src/ANT/ANTChannel.cpp`
+- Impact: The USBXpress adapter reports a successful open after timeout or
+  UART configuration failures. Because synchronous USBXpress I/O defaults to
+  an infinite timeout, ANT can block in a stop-time write or its receive loop
+  while `ANT::stop()` waits indefinitely. Normal shutdown also bypasses
+  `SI_Close`, potentially retaining DLL or device state. Enumeration failures
+  consume uninitialized outputs, VID/PID names are reversed twice, and short
+  writes are reported as complete.
+- Scope: Windows builds with both USBXpress and libusb enabled, using the
+  Garmin USB1 stick (`0fcf:1004`).
+- Regression test: Build the production adapter against a fake public
+  USBXpress C API. Data-drive every enumeration and post-open failure, require
+  rollback through exactly one `SI_Close`, verify real VID/PID selection and
+  actual write counts, and use a subprocess watchdog to prove timeout failure
+  cannot leave `ANT::stop()` blocked.
+- Fix direction: Check every SDK result, make timeout and configuration
+  failures fatal, close failed opens through `SI_Close`, normalize VID/PID
+  handling and buffers, preserve actual transfer counts, and guarantee finite
+  or explicitly cancellable I/O before performing an unbounded thread join.
+
 ### THREAD-001: Cloud auto-download can outlive its athlete/context
 
 - Status: OPEN
