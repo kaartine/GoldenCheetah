@@ -25,6 +25,7 @@
 #include <QXmlStreamReader>
 #include <QDate>
 
+#include "FileIO/AtomicFileWriter.h"
 #include "Season.h"
 
 
@@ -53,7 +54,12 @@ class SeasonParser
 {
 public:
     static QList<Season> readSeasons(QFile * const file);
-    static bool serialize(QString filename, QList<Season> seasons);
+    static bool serialize(
+        QString filename,
+        const QList<Season> &seasons,
+        QString *error = nullptr,
+        const AtomicFileWriterFactory &writerFactory =
+            qSaveFileWriterFactory());
 
 private:
     static Season parseSeason(QXmlStreamReader &reader);

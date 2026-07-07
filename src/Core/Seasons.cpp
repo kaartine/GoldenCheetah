@@ -23,6 +23,7 @@
 #include <QRegularExpression>
 #include <QDebug>
 #include <QMessageBox>
+#include <QTextStream>
 
 
 //
@@ -221,26 +222,22 @@ SeasonParser::readSeasons
 
 
 bool
-SeasonParser::serialize(QString filename, QList<Season> Seasons)
+SeasonParser::serialize(
+    QString filename,
+    const QList<Season> &seasons,
+    QString *error,
+    const AtomicFileWriterFactory &writerFactory)
 {
-    // open file - truncate contents
-    QFile file(filename);
-    if (!file.open(QFile::WriteOnly)) {
-        QMessageBox msgBox;
-        msgBox.setIcon(QMessageBox::Critical);
-        msgBox.setText(QObject::tr("Problem Saving Seasons"));
-        msgBox.setInformativeText(QObject::tr("File: %1 cannot be opened for 'Writing'. Please check file properties.").arg(filename));
-        msgBox.exec();
-        return false;
-    };
-    file.resize(0);
-    QTextStream out(&file);
+    if (error) error->clear();
+
+    QString document;
+    QTextStream out(&document);
 
     // begin document
     out << "<seasons>\n";
 
     // write out to file
-    foreach (Season season, Seasons) {
+    foreach (Season season, seasons) {
         if (season.getType() != Season::temporary) {
 
             // main attributes
@@ -323,8 +320,32 @@ SeasonParser::serialize(QString filename, QList<Season> Seasons)
     // end document
     out << "</seasons>\n";
 
-    // close file
-    file.close();
+    out.flush();
+    QString saveError;
+    if (out.status() != QTextStream::Ok) {
+        saveError = QObject::tr("Cannot serialize the seasons document.");
+    } else if (!writeFileAtomically(
+                   filename,
+                   document.toUtf8(),
+                   writerFactory,
+                   saveError) && saveError.isEmpty()) {
+        saveError = QObject::tr("Cannot save the seasons document.");
+    }
+
+    if (!saveError.isEmpty()) {
+        if (error) {
+            *error = saveError;
+        } else {
+            QMessageBox msgBox;
+            msgBox.setIcon(QMessageBox::Critical);
+            msgBox.setText(QObject::tr("Problem Saving Seasons"));
+            msgBox.setInformativeText(
+                QObject::tr("File: %1 cannot be saved. %2")
+                    .arg(filename, saveError));
+            msgBox.exec();
+        }
+        return false;
+    }
 
     return true; // success
 }

@@ -1,9 +1,95 @@
 #include "Core/Seasons.h"
 #include "Core/Season.h"
+#include "FileIO/AtomicFileWriter.h"
 
 #include <QTest>
 #include <QFile>
 #include <QList>
+#include <QTemporaryDir>
+
+#include <memory>
+
+
+namespace {
+
+enum class FailurePoint
+{
+    Open,
+    Write,
+    Flush,
+    Commit
+};
+
+class FaultInjectingWriter final : public AtomicFileWriter
+{
+public:
+    explicit FaultInjectingWriter(FailurePoint failure)
+        : failure_(failure)
+    {
+    }
+
+    bool open() override
+    {
+        return failure_ != FailurePoint::Open;
+    }
+
+    qint64 write(const QByteArray &data) override
+    {
+        return failure_ == FailurePoint::Write
+            ? data.size() - 1
+            : data.size();
+    }
+
+    bool flush() override
+    {
+        return failure_ != FailurePoint::Flush;
+    }
+
+    bool commit() override
+    {
+        return failure_ != FailurePoint::Commit;
+    }
+
+    void cancelWriting() override {}
+
+    QString errorString() const override
+    {
+        return QStringLiteral("injected persistent write failure");
+    }
+
+private:
+    FailurePoint failure_;
+};
+
+QByteArray readFile(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return QByteArray();
+    }
+    return file.readAll();
+}
+
+bool writeFile(const QString &path, const QByteArray &data)
+{
+    QFile file(path);
+    return file.open(QIODevice::WriteOnly)
+        && file.write(data) == data.size();
+}
+
+QList<Season> oneSeason()
+{
+    Season season;
+    season.setName(QStringLiteral("Atomic & <season>"));
+    season.setAbsoluteStart(QDate(2026, 1, 1));
+    season.setAbsoluteEnd(QDate(2026, 12, 31));
+    season.setType(Season::season);
+    season.setId(QUuid(QStringLiteral(
+        "{762dd017-6449-48bd-aa8d-25fe035dfbda}")));
+    return QList<Season>({season});
+}
+
+} // namespace
 
 
 class TestSeasonParser: public QObject
@@ -11,6 +97,10 @@ class TestSeasonParser: public QObject
     Q_OBJECT
 
 private slots:
+    void failedWritesPreservePreviousFile_data();
+    void failedWritesPreservePreviousFile();
+    void successfulWritePublishesCompleteXml();
+
     void readSeasons() {
         QFile file("seasons.xml");
         QList<Season> seasons = SeasonParser::readSeasons(&file);
@@ -135,6 +225,63 @@ private slots:
     }
 };
 
+void TestSeasonParser::failedWritesPreservePreviousFile_data()
+{
+    QTest::addColumn<int>("failureValue");
+
+    QTest::newRow("open") << static_cast<int>(FailurePoint::Open);
+    QTest::newRow("write") << static_cast<int>(FailurePoint::Write);
+    QTest::newRow("flush") << static_cast<int>(FailurePoint::Flush);
+    QTest::newRow("commit") << static_cast<int>(FailurePoint::Commit);
+}
+
+void TestSeasonParser::failedWritesPreservePreviousFile()
+{
+    QFETCH(int, failureValue);
+    const FailurePoint failure = static_cast<FailurePoint>(failureValue);
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    const QString path = directory.filePath(QStringLiteral("seasons.xml"));
+    const QByteArray original(
+        "<seasons><season><name>existing</name></season></seasons>\n");
+    QVERIFY(writeFile(path, original));
+
+    const AtomicFileWriterFactory factory =
+        [failure](const QString &, AtomicFileMode) {
+            return std::unique_ptr<AtomicFileWriter>(
+                new FaultInjectingWriter(failure));
+        };
+    QString error;
+
+    QVERIFY(!SeasonParser::serialize(path, oneSeason(), &error, factory));
+    QVERIFY(!error.isEmpty());
+    QCOMPARE(readFile(path), original);
+}
+
+void TestSeasonParser::successfulWritePublishesCompleteXml()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    const QString path = directory.filePath(QStringLiteral("seasons.xml"));
+    const QByteArray original("<seasons/>\n");
+    QVERIFY(writeFile(path, original));
+    QString error;
+
+    QVERIFY(SeasonParser::serialize(path, oneSeason(), &error));
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    const QByteArray contents = readFile(path);
+    QVERIFY(contents.startsWith("<seasons>\n"));
+    QVERIFY(contents.endsWith("</seasons>\n"));
+
+    QFile file(path);
+    const QList<Season> seasons = SeasonParser::readSeasons(&file);
+    QCOMPARE(seasons.size(), 1);
+    QCOMPARE(seasons.first().getName(), QStringLiteral("Atomic & <season>"));
+    QCOMPARE(seasons.first().getAbsoluteStart(), QDate(2026, 1, 1));
+    QCOMPARE(seasons.first().getAbsoluteEnd(), QDate(2026, 12, 31));
+}
 
 QTEST_MAIN(TestSeasonParser)
 #include "testSeasonParser.moc"

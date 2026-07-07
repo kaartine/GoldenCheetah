@@ -248,10 +248,10 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-002: Other persistent files are also truncated in place
 
-- Status: IN_PROGRESS - Measures fixed; seasons, metadata, and cache state
+- Status: IN_PROGRESS - Measures and seasons fixed; metadata and cache state
   remain.
-- Code: fixed in `src/Core/Measures.cpp`; remaining writers are
-  `src/Core/Seasons.cpp:224`, `src/Metrics/RideMetadata.cpp:1671`, and
+- Code: fixed in `src/Core/Measures.cpp` and `src/Core/Seasons.cpp`; remaining
+  writers are `src/Metrics/RideMetadata.cpp:1671` and
   `src/Core/RideDB.y:481`.
 - Impact: Measures, seasons, metadata, and cache state can be left empty or
   partial on ENOSPC or process failure.
@@ -268,8 +268,21 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   and under strict ASan/UBSan/LSan with leak detection. The full Qt 6.8.3
   application links, and the complete worktree run passes 1,313 tests in 31
   registered suites without failures or skips.
+- Seasons regression test: `unittests/Core/seasonParser` injects open,
+  short-write, flush, and commit failures and requires the previous
+  `seasons.xml` to remain byte-for-byte intact. The successful path is parsed
+  back and checked for complete XML and preserved values.
+- Seasons resolution: Build the complete XML document in memory and publish it
+  through the atomic persistence helper. Preserve the existing two-argument
+  API and user-visible error dialog while allowing tests and programmatic
+  callers to receive detailed failures.
+- Seasons verification: The RED build failed because `SeasonParser::serialize`
+  had no injectable writer contract. The focused suite passes 8 tests normally
+  and with production sources under strict ASan/UBSan/LSan. The full Qt 6.8.3
+  application links, and the complete worktree run passes 1,318 tests in 31
+  registered suites without failures or skips.
 - Remaining fix direction: Add equivalent fault-injection coverage and atomic
-  publication to the seasons, metadata, and cache writers.
+  publication to the metadata and cache writers.
 
 ### DUR-003: TrainDB drops user tables when version lookup fails
 
