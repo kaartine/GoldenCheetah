@@ -589,20 +589,27 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Regression test: `unittests/Train/antThreadSafety` uses production ANT,
   ANTChannel, ANTMessage, RealtimeData, and CalibrationData code with a
   deterministic fake transport. It exercises every telemetry setter, races
-  telemetry publication and channel enqueue/dequeue under TSAN, and forces two
-  senders to contend between an ANT frame and its padding.
-- Resolution so far: Dedicated mutexes protect telemetry snapshots, channel
-  command enqueue/dequeue, and complete frame-plus-padding transport
-  transactions. Queue operations release their lock before channel or I/O work.
-- Verification: Before the fix, TSAN reported races in `getRealtimeData()` and
-  `QQueue::dequeue()`, the normal queue stress test triggered heap corruption,
-  and the deterministic transport observed `frame, frame, padding, padding`.
-  The six-test suite now passes normally, under TSAN, and under strict
-  ASan/UBSan/LSan. The full matrix passes all 1,479 tests in 44 result blocks
-  with no failures or skips.
-- Remaining: Move load, mode, setup, stop, timer, and calibration commands to
-  worker ownership, then remove the remaining shared ANTChannel/QObject state
-  races before marking this finding fixed.
+  telemetry, requested controls, calibration, and channel enqueue/dequeue under
+  TSAN, forces two senders to contend between an ANT frame and its padding, and
+  records which thread performs setup, runtime control, timer, and shutdown I/O.
+- Resolution so far: Dedicated mutexes protect telemetry snapshots, requested
+  control state, calibration state, channel command enqueue/dequeue, and complete
+  frame-plus-padding transport transactions. A typed worker mailbox now owns
+  setup, stop, load, gradient, mode, control-broadcast, and capability commands.
+  Queue operations release their lock before channel or I/O work, and setup
+  receives the startup acknowledgement on the worker-owned parser.
+- Verification: The first RED stage produced TSAN races in
+  `getRealtimeData()` and `QQueue::dequeue()`, heap corruption in normal queue
+  stress, and `frame, frame, padding, padding` on the fake wire. The second RED
+  stage produced three deterministic wrong-thread I/O failures for setup,
+  runtime/timer control, and shutdown; TSAN separately reported requested-mode
+  publication and calibration reset/getter races. The resulting 11-test suite
+  passes normally, under TSAN, and under strict ASan/UBSan/LSan. The complete
+  matrix passes all 1,484 tests in 44 result blocks with no failures, skips, or
+  sanitizer diagnostics.
+- Remaining: Remove the shared ANTChannel/QObject state and affinity races,
+  including channel configuration/value publication, before marking this
+  finding fixed.
 
 ### DEV-004: Stale ANT/BLE telemetry can be recorded indefinitely
 

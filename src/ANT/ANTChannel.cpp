@@ -1576,8 +1576,7 @@ ANTChannel::slotStopSensorSetupTimer() // timer
 void
 ANTChannel::slotSensorSetupTimerEvent()
 {
-    // qDebug()<<"Sensor setup timer event received. Ask for capabilities and update sensor settings accordingly...";
-    capabilities();
+    parent->requestSensorCapabilities(number);
 }
 
 uint16_t ANTChannel::capabilities()

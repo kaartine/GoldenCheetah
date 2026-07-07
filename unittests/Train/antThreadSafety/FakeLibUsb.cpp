@@ -17,6 +17,8 @@
 namespace {
 
 const unsigned char AntSyncByte = 0xa4;
+const unsigned char AntResetSystem = 0x4a;
+const unsigned char AntNotificationStartup = 0x6f;
 const std::chrono::milliseconds IdleReadWait(2);
 const std::chrono::milliseconds InterleaveWait(500);
 
@@ -30,6 +32,7 @@ struct State
     bool interleaveArmed = false;
     int interleaveMessages = 0;
     quintptr firstMessageThread = 0;
+    QByteArray readBytes;
 };
 
 std::mutex stateMutex;
@@ -40,6 +43,18 @@ bool isMessage(const QByteArray &bytes)
 {
     return !bytes.isEmpty() &&
             static_cast<unsigned char>(bytes.at(0)) == AntSyncByte;
+}
+
+QByteArray startupNotification()
+{
+    QByteArray frame;
+    frame.append(static_cast<char>(AntSyncByte));
+    frame.append(static_cast<char>(1));
+    frame.append(static_cast<char>(AntNotificationStartup));
+    frame.append(static_cast<char>(0));
+    frame.append(static_cast<char>(AntSyncByte ^ 1 ^
+                                   AntNotificationStartup));
+    return frame;
 }
 
 void completeProducerBarrier()
@@ -190,6 +205,14 @@ int LibUsb::read(char *buffer, const int bytes, const int timeout)
     std::unique_lock<std::mutex> lock(stateMutex);
     if (!opened) return -ENODEV;
 
+    if (!state.readBytes.isEmpty() && bytes > 0) {
+        const int count = std::min(bytes,
+                                   static_cast<int>(state.readBytes.size()));
+        std::copy_n(state.readBytes.constData(), count, buffer);
+        state.readBytes.remove(0, count);
+        return count;
+    }
+
     if (!state.producerBarrier) {
         ++state.snapshot.blockedReaders;
         stateChanged.notify_all();
@@ -246,6 +269,12 @@ int LibUsb::write(char *buffer, const int bytes, int)
 
     if (isMessage(payload)) {
         ++state.snapshot.messageWrites;
+        if (payload.size() > 2 &&
+            static_cast<unsigned char>(payload.at(2)) == AntResetSystem) {
+            state.readBytes.append(startupNotification());
+            stateChanged.notify_all();
+        }
+
         stateChanged.notify_all();
 
         if (state.interleaveArmed && state.interleaveMessages == 0) {

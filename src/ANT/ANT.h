@@ -502,6 +502,7 @@ public slots:
     void slotStartBroadcastTimer(int number);
     void slotStopBroadcastTimer(int number);
     void slotControlTimerEvent();
+    void requestSensorCapabilities(int channel);
 
     // get telemetry
     void getRealtimeData(RealtimeData &);             // return current realtime data
@@ -546,81 +547,97 @@ public:
     // calibration
     uint8_t getCalibrationType()
     {
+        QMutexLocker locker(&calibrationMutex);
         return calibration.getType();
     }
 
     uint8_t getCalibrationState()
     {
+        QMutexLocker locker(&calibrationMutex);
         return calibration.getState();
     }
 
     double getCalibrationTargetSpeed()
     {
+        QMutexLocker locker(&calibrationMutex);
         return calibration.getTargetSpeed();
     }
 
     uint16_t getCalibrationZeroOffset()
     {
+        QMutexLocker locker(&calibrationMutex);
         return calibration.getZeroOffset();
     }
 
     uint16_t getCalibrationSlope()
     {
+        QMutexLocker locker(&calibrationMutex);
         return calibration.getSlope();
     }
 
     uint16_t getCalibrationSpindownTime()
     {
+        QMutexLocker locker(&calibrationMutex);
         return calibration.getZeroOffset();
     }
 
     void setCalibrationState(uint8_t state)
     {
+        QMutexLocker locker(&calibrationMutex);
         calibration.setState(state);
     }
 
     void setCalibrationType(uint8_t channel, uint8_t type)
     {
+        QMutexLocker locker(&calibrationMutex);
         calibration.setType(channel, type);
     }
 
     void setCalibrationTargetSpeed(double target)
     {
+        QMutexLocker locker(&calibrationMutex);
         calibration.setTargetSpeed(target);
     }
 
     void setCalibrationZeroOffset(uint16_t offset)
     {
+        QMutexLocker locker(&calibrationMutex);
         calibration.setZeroOffset(offset);
     }
 
     void setCalibrationSlope(uint16_t slope)
     {
+        QMutexLocker locker(&calibrationMutex);
         calibration.setSlope(slope);
     }
 
     void setCalibrationSpindownTime(uint16_t time)
     {
+        QMutexLocker locker(&calibrationMutex);
         calibration.setSpindownTime(time);
     }
 
     void setCalibrationTimestamp(uint8_t channel, double time)
     {
+        QMutexLocker locker(&calibrationMutex);
         calibration.setTimestamp(channel, time);
     }
 
     void setCalibrationRequired(uint8_t channel, bool requested)
     {
+        QMutexLocker locker(&calibrationMutex);
         calibration.setRequested(channel, requested);
     }
 
     uint8_t getCalibrationChannel()
     {
+        QMutexLocker locker(&calibrationMutex);
         return calibration.getActiveChannel();
     }
 
     void resetCalibrationState()
     {
+        QMutexLocker locker(&calibrationMutex);
         calibration.resetCalibrationState();
     }
 
@@ -811,13 +828,45 @@ public:
     qint64 getElapsedTime();
 
 private:
+    enum WorkerCommandType {
+        WorkerSetup,
+        WorkerStop,
+        WorkerSetLoad,
+        WorkerSetGradient,
+        WorkerSetMode,
+        WorkerControlBroadcast,
+        WorkerSensorCapabilities
+    };
+
+    struct WorkerCommand {
+        WorkerCommand(WorkerCommandType type, double value = 0.0,
+                      int argument = 0)
+            : type(type), value(value), argument(argument) {}
+
+        WorkerCommandType type;
+        double value;
+        int argument;
+    };
+
     QSemaphore portInitDone;
+    QSemaphore setupDone;
     void run();
+    void enqueueWorkerCommand(const WorkerCommand &command);
+    bool processWorkerCommands();
+    void processChannelCommand();
+    void readPortOnce();
+    int setupOnWorker();
+    void stopOnWorker();
+    void applyLoad(double value);
+    void applyGradient(double value);
+    void applyMode(int value);
 
     RealtimeData telemetry;
     CalibrationData calibration;
 
     QMutex telemetryMutex;
+    QMutex calibrationMutex;
+    QMutex controlMutex;
     QMutex txMutex;
     QMutex pvars;  // protects Status between the worker and controller
     int Status;     // what status is the client in?
@@ -864,11 +913,18 @@ private:
     QMutex channelQueueMutex;
     QQueue<setChannelAtom> channelQueue; // messages for configuring channels from controller
 
+    QMutex workerCommandMutex;
+    QQueue<WorkerCommand> workerCommandQueue;
+    int setupResult;
+
     // generic trainer settings
     double currentLoad, load;
     double currentGradient, gradient;
     double currentRollingResistance, rollingResistance;
     int currentMode, mode;
+    double requestedLoad;
+    double requestedGradient;
+    int requestedMode;
 
     // now kickr specific
     int kickrDeviceID;

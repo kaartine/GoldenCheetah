@@ -89,7 +89,8 @@ const ant_sensor_type_t ANT::ant_sensor_types[] = {
 // thread and is part of the GC architecture NOT related to the
 // hardware controller.
 //
-ANT::ANT(QObject *parent, DeviceConfiguration *devConf, QString athlete) : QThread(parent), devConf(devConf), portInitDone(1)
+ANT::ANT(QObject *parent, DeviceConfiguration *devConf, QString athlete) :
+    QThread(parent), devConf(devConf), portInitDone(1), setupDone(0)
 {
     qRegisterMetaType<ANTMessage>("ANTMessage");
     qRegisterMetaType<uint16_t>("uint16_t");
@@ -120,11 +121,15 @@ ANT::ANT(QObject *parent, DeviceConfiguration *devConf, QString athlete) : QThre
     // set so first time through current != desired
     currentMode = 0;
     mode = RT_MODE_ERGO;
+    requestedMode = mode;
     currentLoad = 0;
     load = 100; // always set to something
+    requestedLoad = load;
     currentGradient = 0;
     currentRollingResistance = rollingResistance = 0.004; // typical for road
     gradient = 0.1;
+    requestedGradient = gradient;
+    setupResult = 0;
 
     // elapsed time reference
     elapsedTimer.start();
@@ -259,11 +264,11 @@ void ANT::setCoreTemp(double core, double skin, double strain)
 
 void ANT::run()
 {
-    int status; // control commands from controller
     powerchannels = 0;
-
-    Status = ANT_RUNNING;
-    QString strBuf;
+    {
+        QMutexLocker locker(&pvars);
+        Status = ANT_RUNNING;
+    }
 #if defined GC_HAVE_LIBUSB
     usbMode = USBNone;
 #endif
@@ -275,100 +280,166 @@ void ANT::run()
     length = bytes = 0;
     checksum = ANT_SYNC_BYTE;
 
-    if (openPort() == 0) {
-
-        // Moved early setup code (reset, network key, device pairing) to ANT::setup() so that
-        // the receive loop is already running when these early messages are transmitted. This
-        // will enable us to check responses to these messages in the future.
-
-    } else {
-        // This wakes up start()
+    if (openPort() != 0) {
         portInitDone.release();
         quit(0);
         return;
     }
 
-    // This wakes up start()
     portInitDone.release();
 
-    while(1)
-    {
-        // read more bytes from the device
-        uint8_t byte;
-
-        int rc = rawRead(&byte, 1);
-
-        if (rc > 0)
-            receiveByte((unsigned char)byte);
-        else {
-
-            // Recognise USB device removal. Linux transitions through -5 (I/O error)
-            // to -6 (No such device or address). Windows seems to stick on -5
-
-            if ((rc == -ENXIO) || (rc == -EIO && OperatingSystem == WINDOWS))
-            {
-                qDebug() << "Error communicating with USB ANT device!! Device removed?";
-                Status = 0;
-            }
-
-            msleep(5);
+    while (true) {
+        if (!processWorkerCommands()) {
+            quit(0);
+            return;
         }
 
-        //----------------------------------------------------------------------
-        // LISTEN TO CONTROLLER FOR COMMANDS
-        //----------------------------------------------------------------------
-        pvars.lock();
-        status = this->Status;
-        pvars.unlock();
+        processChannelCommand();
 
-        // do we have a channel to search / stop
-        setChannelAtom channelCommand;
-        bool hasChannelCommand = false;
+        int status;
         {
-            QMutexLocker locker(&channelQueueMutex);
-            if (!channelQueue.isEmpty()) {
-                channelCommand = channelQueue.dequeue();
-                hasChannelCommand = true;
-            }
+            QMutexLocker locker(&pvars);
+            status = Status;
         }
-        if (hasChannelCommand) {
-            if (channelCommand.device_number == -1)
-                antChannel[channelCommand.channel]->close(); // unassign
-            else
-                addDevice(channelCommand.device_number,
-                          channelCommand.channel_type,
-                          channelCommand.channel); // assign
+        if (!(status & ANT_RUNNING)) {
+            quit(0);
+            return;
         }
 
-        /* time to shut up shop */
-        if (!(status&ANT_RUNNING)) {
-            // time to stop!
+        readPortOnce();
+
+        {
+            QMutexLocker locker(&pvars);
+            status = Status;
+        }
+        if (!(status & ANT_RUNNING)) {
             quit(0);
             return;
         }
     }
 }
 
-void
-ANT::setLoad(double load)
+void ANT::enqueueWorkerCommand(const WorkerCommand &command)
 {
-    if (this->load == load) return;
+    QMutexLocker locker(&workerCommandMutex);
+    workerCommandQueue.enqueue(command);
+}
 
-    // load has changed
-    this->load = load;
+bool ANT::processWorkerCommands()
+{
+    while (true) {
+        WorkerCommand command(WorkerStop);
+        {
+            QMutexLocker locker(&workerCommandMutex);
+            if (workerCommandQueue.isEmpty()) return true;
+            command = workerCommandQueue.dequeue();
+        }
 
-    // if we have a vortex trainer connected, relay the change in target power to the brake
-    if (vortexChannel != -1)
+        switch (command.type) {
+        case WorkerSetup:
+            {
+                const int result = setupOnWorker();
+                QMutexLocker locker(&workerCommandMutex);
+                setupResult = result;
+            }
+            setupDone.release();
+            break;
+        case WorkerStop:
+            stopOnWorker();
+            return false;
+        case WorkerSetLoad:
+            applyLoad(command.value);
+            break;
+        case WorkerSetGradient:
+            applyGradient(command.value);
+            break;
+        case WorkerSetMode:
+            applyMode(command.argument);
+            break;
+        case WorkerControlBroadcast:
+            if (controlChannel >= 0 && controlChannel < channels)
+                sendMessage(ANTMessage::controlDeviceAvailability(
+                        controlChannel));
+            break;
+        case WorkerSensorCapabilities:
+            if (command.argument >= 0 && command.argument < channels)
+                antChannel[command.argument]->capabilities();
+            break;
+        }
+    }
+}
+
+void ANT::processChannelCommand()
+{
+    setChannelAtom channelCommand;
+    bool hasChannelCommand = false;
     {
-        qDebug() << "Setting vortex target power to" << load;
-        sendMessage(ANTMessage::tacxVortexSetPower(vortexChannel, vortexID, (int)load));
+        QMutexLocker locker(&channelQueueMutex);
+        if (!channelQueue.isEmpty()) {
+            channelCommand = channelQueue.dequeue();
+            hasChannelCommand = true;
+        }
     }
 
-    // if we have a FE-C trainer connected, relay the change in target power to the brake
-    if ((fecChannel != -1) && (antChannel[fecChannel]->capabilities() & FITNESS_EQUIPMENT_POWER_MODE_CAPABILITY))
+    if (!hasChannelCommand) return;
+
+    if (channelCommand.device_number == -1)
+        antChannel[channelCommand.channel]->close();
+    else
+        addDevice(channelCommand.device_number,
+                  channelCommand.channel_type,
+                  channelCommand.channel);
+}
+
+void ANT::readPortOnce()
+{
+    uint8_t byte;
+    const int rc = rawRead(&byte, 1);
+
+    if (rc > 0) {
+        receiveByte(static_cast<unsigned char>(byte));
+        return;
+    }
+
+    // Linux transitions through -5 (I/O error) to -6 (no device).
+    // Windows can remain on -5 after an ANT stick is removed.
+    if ((rc == -ENXIO) || (rc == -EIO && OperatingSystem == WINDOWS)) {
+        qDebug() << "Error communicating with USB ANT device!! Device removed?";
+        QMutexLocker locker(&pvars);
+        Status = 0;
+    }
+
+    msleep(5);
+}
+
+void ANT::setLoad(double value)
+{
     {
-        qDebug() << "Setting fitness equipment target power to" << load;
-        sendMessage(ANTMessage::fecSetTargetPower(fecChannel, (int)load));
+        QMutexLocker locker(&controlMutex);
+        if (requestedLoad == value) return;
+        requestedLoad = value;
+    }
+
+    enqueueWorkerCommand(WorkerCommand(WorkerSetLoad, value));
+}
+
+void ANT::applyLoad(double value)
+{
+    if (load == value) return;
+    load = value;
+
+    if (vortexChannel != -1) {
+        qDebug() << "Setting vortex target power to" << value;
+        sendMessage(ANTMessage::tacxVortexSetPower(
+                vortexChannel, vortexID, static_cast<int>(value)));
+    }
+
+    if ((fecChannel != -1) &&
+        (antChannel[fecChannel]->capabilities() &
+         FITNESS_EQUIPMENT_POWER_MODE_CAPABILITY)) {
+        qDebug() << "Setting fitness equipment target power to" << value;
+        sendMessage(ANTMessage::fecSetTargetPower(
+                fecChannel, static_cast<int>(value)));
     }
 }
 
@@ -438,37 +509,49 @@ void ANT::refreshVortexLoad()
     sendMessage(ANTMessage::tacxVortexSetPower(vortexChannel, vortexID, (int)load));
 }
 
-void
-ANT::setGradient(double gradient)
+void ANT::setGradient(double value)
 {
-//    if (fecChannel != -1)
-//        qDebug() << "We have fec trainer connected, simulation capabilities=" << antChannel[fecChannel]->capabilities();
-
-    if (this->gradient == gradient) return;
-
-    // gradient changed
-    this->gradient = gradient;
-
-    // if we have a FE-C trainer connected, relay the change in simulated slope of trainer electronic
-    if ((fecChannel != -1) && (antChannel[fecChannel]->capabilities() & FITNESS_EQUIPMENT_SIMUL_MODE_CAPABILITY))
     {
-        //set fitness equipment target gradient
-        qDebug() << "Setting fitness equipment target gradient to" << gradient;
-        sendMessage(ANTMessage::fecSetTrackResistance(fecChannel, gradient, currentRollingResistance));
-        currentGradient = gradient;
+        QMutexLocker locker(&controlMutex);
+        if (requestedGradient == value) return;
+        requestedGradient = value;
+    }
+
+    enqueueWorkerCommand(WorkerCommand(WorkerSetGradient, value));
+}
+
+void ANT::applyGradient(double value)
+{
+    if (gradient == value) return;
+    gradient = value;
+
+    if ((fecChannel != -1) &&
+        (antChannel[fecChannel]->capabilities() &
+         FITNESS_EQUIPMENT_SIMUL_MODE_CAPABILITY)) {
+        qDebug() << "Setting fitness equipment target gradient to" << value;
+        sendMessage(ANTMessage::fecSetTrackResistance(
+                fecChannel, value, currentRollingResistance));
+        currentGradient = value;
         // TODO : obtain acknowledge / confirm value using fecRequestCommandStatus
         // TODO : if trainer does not have simulation capabilities, use power mode & let GC calculate
         //        the desired load based on gradient, wind, rolling resistance...
     }
 }
 
-void
-ANT::setMode(int mode)
+void ANT::setMode(int value)
 {
-    if (this->mode == mode) return;
+    {
+        QMutexLocker locker(&controlMutex);
+        if (requestedMode == value) return;
+        requestedMode = value;
+    }
 
-    // mode changed
-    this->mode = mode;
+    enqueueWorkerCommand(WorkerCommand(WorkerSetMode, 0.0, value));
+}
+
+void ANT::applyMode(int value)
+{
+    mode = value;
 }
 
 void
@@ -543,67 +626,67 @@ ANT::start()
     return 0;
 }
 
-int
-ANT::setup()
+int ANT::setup()
 {
-    if (channels == 0)
-    {
-        // we obviously have not managed to open an ANT stick, fail fast
-        return 0;
-    }
+    if (QThread::currentThread() == this) return setupOnWorker();
+    if (!isRunning()) return 0;
 
-    uint8_t attempts = 0;
-    do
-    {
-        ANT_Reset_Acknowledge = false;
+    enqueueWorkerCommand(WorkerCommand(WorkerSetup));
+    setupDone.acquire();
+    QMutexLocker locker(&workerCommandMutex);
+    return setupResult;
+}
+
+int ANT::setupOnWorker()
+{
+    if (channels == 0) return 0;
+
+    ANT_Reset_Acknowledge = false;
+    for (int attempt = 0;
+         attempt < 4 && !ANT_Reset_Acknowledge;
+         ++attempt) {
         sendMessage(ANTMessage::resetSystem());
 
-        // specs say wait 500ms after reset before sending any more host commands
-        msleep(500);
+        // Receive during the mandatory post-reset delay so the startup
+        // acknowledgement is processed by the worker that owns the parser.
+        QElapsedTimer resetDelay;
+        resetDelay.start();
+        while (resetDelay.elapsed() < 500) readPortOnce();
 
         if (!ANT_Reset_Acknowledge)
             qDebug() << "ANT device reset was not acknowledged !...try again";
-//        else
-//            qDebug() << "ANT device reset successful !";
-    } while (!ANT_Reset_Acknowledge && attempts++<3);
+    }
 
-    // Error if we've not received an acknowlegement
     if (!ANT_Reset_Acknowledge) {
         qDebug() << "ANT+ reset not acknowledged, closing..";
+        QMutexLocker locker(&pvars);
         Status = 0;
     }
 
     sendMessage(ANTMessage::setNetworkKey(1, key));
 
-    // pair with specified devices on next available channel
     if (antIDs.count()) {
-
         foreach(QString antid, antIDs) {
-
             if (antid.length()) {
-                unsigned char c = antid.at(antid.length()-1).toLatin1();
-                int ch_type = interpretSuffix(c);
-                int device_number = antid.mid(0, antid.length()-1).toInt();
-
-                addDevice(device_number, ch_type, -1);
+                const unsigned char c =
+                        antid.at(antid.length()-1).toLatin1();
+                const int channelType = interpretSuffix(c);
+                const int deviceNumber =
+                        antid.mid(0, antid.length()-1).toInt();
+                addDevice(deviceNumber, channelType, -1);
             }
         }
+    } else if (!configuring) {
+        addDevice(0, ANTChannel::CHANNEL_TYPE_SPEED, 0);
+        addDevice(0, ANTChannel::CHANNEL_TYPE_POWER, 1);
+        addDevice(0, ANTChannel::CHANNEL_TYPE_CADENCE, 2);
+        addDevice(0, ANTChannel::CHANNEL_TYPE_HR, 3);
 
-    } else {
-
-        if (!configuring) {
-            // not configured, just pair with whatever you can find
-            addDevice(0, ANTChannel::CHANNEL_TYPE_SPEED, 0);
-            addDevice(0, ANTChannel::CHANNEL_TYPE_POWER, 1);
-            addDevice(0, ANTChannel::CHANNEL_TYPE_CADENCE, 2);
-            addDevice(0, ANTChannel::CHANNEL_TYPE_HR, 3);
-
-            if (channels > 4) {
-                addDevice(0, ANTChannel::CHANNEL_TYPE_SandC, 4);
-                addDevice(0, ANTChannel::CHANNEL_TYPE_MOXY, 5);
-                addDevice(0, ANTChannel::CHANNEL_TYPE_FITNESS_EQUIPMENT, 6);
-                addDevice(0, ANTChannel::CHANNEL_TYPE_FOOTPOD, 7);
-            }
+        if (channels > 4) {
+            addDevice(0, ANTChannel::CHANNEL_TYPE_SandC, 4);
+            addDevice(0, ANTChannel::CHANNEL_TYPE_MOXY, 5);
+            addDevice(0, ANTChannel::CHANNEL_TYPE_FITNESS_EQUIPMENT, 6);
+            addDevice(0, ANTChannel::CHANNEL_TYPE_FOOTPOD, 7);
         }
     }
 
@@ -654,44 +737,58 @@ ANT::pause()
     }
 }
 
-int
-ANT::stop()
+int ANT::stop()
 {
     if (!isRunning()) return 0;
 
-    // Close the connections to ANT devices before we stop. Sending the
-    // "close channel" ANT message seems to resolve an intermittent
-    // issue of unresponsive USB2 stick on subsequent opens.
+    if (QThread::currentThread() == this) {
+        stopOnWorker();
+        return 0;
+    }
+
+    enqueueWorkerCommand(WorkerCommand(WorkerStop));
+    wait();
+
+    // Give the USB device a short recovery interval before a new open.
+    msleep(125);
+    return 0;
+}
+
+void ANT::stopOnWorker()
+{
+    {
+        QMutexLocker locker(&channelQueueMutex);
+        channelQueue.clear();
+    }
+
+    // Closing channels before the port avoids an intermittently unresponsive
+    // USB2 stick on the next open.
     if (antIDs.count()) {
         foreach(QString antid, antIDs) {
             if (antid.length()) {
-                unsigned char c = antid.at(antid.length()-1).toLatin1();
-                int ch_type = interpretSuffix(c);
-                int device_number = antid.mid(0, antid.length()-1).toInt();
-
-                removeDevice(device_number, ch_type);
+                const unsigned char c =
+                        antid.at(antid.length()-1).toLatin1();
+                const int channelType = interpretSuffix(c);
+                const int deviceNumber =
+                        antid.mid(0, antid.length()-1).toInt();
+                removeDevice(deviceNumber, channelType);
             }
         }
     }
 
-    // and close any channels that are open
-    for (int i=0; i<channels; i++)
-        if (antChannel[i]->status != ANTChannel::Closed)
-            antChannel[i]->close();
-
-    // what state are we in anyway?
-    pvars.lock();
-    Status = 0; // Terminate it!
-    pvars.unlock();
-
-    if (QThread::currentThread() != this) {
-        wait();
-
-        // Give the USB device a short recovery interval before a new open.
-        msleep(125);
+    for (int channel = 0; channel < channels; ++channel) {
+        if (antChannel[channel]->status != ANTChannel::Closed)
+            antChannel[channel]->close();
     }
 
-    return 0;
+    {
+        QMutexLocker locker(&workerCommandMutex);
+        workerCommandQueue.clear();
+    }
+    {
+        QMutexLocker locker(&pvars);
+        Status = 0;
+    }
 }
 
 int
@@ -713,9 +810,12 @@ ANT::getRealtimeData(RealtimeData &rtData)
         QMutexLocker locker(&telemetryMutex);
         rtData = telemetry;
     }
-    rtData.mode = static_cast<ErgFileFormat>(mode);
-    rtData.setLoad(load);
-    rtData.setSlope(gradient);
+    {
+        QMutexLocker locker(&controlMutex);
+        rtData.mode = static_cast<ErgFileFormat>(requestedMode);
+        rtData.setLoad(requestedLoad);
+        rtData.setSlope(requestedGradient);
+    }
 }
 
 /*======================================================================
@@ -955,50 +1055,36 @@ ANT::slotSearchComplete(int number) // search completed successfully
 void
 ANT::slotStartBroadcastTimer(int channel) // timer
 {
-    if (channel < 0 || channel >= channels) return; // ignore out of bound
+    if (channel < 0 || channel >= ANT_MAX_CHANNELS) return;
 
-    // master channel  only supported for ANT remote controls
-    if (channel != controlChannel) return;
-
-    //qDebug()<<"ANT::slotStartTimer req from channel "<<channel;
-
-    // connect the timer to the remote control event slot
-    connect(antChannel[channel]->channelTimer, SIGNAL(timeout()), this, SLOT(slotControlTimerEvent()), Qt::DirectConnection);
-
-    // start the broadcast timer..
-    antChannel[channel]->channelTimer->setInterval(250); //ms
+    connect(antChannel[channel]->channelTimer, SIGNAL(timeout()),
+            this, SLOT(slotControlTimerEvent()), Qt::DirectConnection);
+    antChannel[channel]->channelTimer->setInterval(250);
     antChannel[channel]->channelTimer->start();
-
-    //qDebug()<<channel<<"timer id:" << antChannel[channel]->channelTimer->timerId();
 }
 
 void
 ANT::slotStopBroadcastTimer(int channel) // timer
 {
-    if (channel < 0 || channel >= channels) return; // ignore out of bound
+    if (channel < 0 || channel >= ANT_MAX_CHANNELS) return;
 
-    // master channel  only supported for ANT remote controls
-    if (channel != controlChannel) return;
-
-    //qDebug()<<"ANT::slotStopTimer req from channel "<<channel;
-
-    // disconnect the slot, else we duplicate signals on subsequent sessions
-    disconnect(antChannel[channel]->channelTimer, SIGNAL(timeout()), this, SLOT(slotControlTimerEvent()));
-
-
-    // stop the broadcast timer..
+    disconnect(antChannel[channel]->channelTimer, SIGNAL(timeout()),
+               this, SLOT(slotControlTimerEvent()));
     antChannel[channel]->channelTimer->stop();
 }
 
 void
 ANT::slotControlTimerEvent()
 {
-    // todo: interleave other required pages - see below for details
-    // ANT+ Managed Network Document – Controls Device Profile, Rev 2.0 Page 61
-    // Table 14-1. Required Data Elements for all ANT+ Controllable (i.e. Master) Devices
+    if (isRunning())
+        enqueueWorkerCommand(WorkerCommand(WorkerControlBroadcast));
+}
 
-    //qDebug()<<"Timer event...";
-    sendMessage(ANTMessage::controlDeviceAvailability(controlChannel));
+void ANT::requestSensorCapabilities(int channel)
+{
+    if (isRunning())
+        enqueueWorkerCommand(WorkerCommand(
+                WorkerSensorCapabilities, 0.0, channel));
 }
 
 /*----------------------------------------------------------------------

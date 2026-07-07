@@ -8,6 +8,7 @@
 #include "ANT.h"
 #include "ANTMessage.h"
 #include "LibUsb.h"
+#include "TrainSidebar.h"
 
 #include <QSemaphore>
 #include <QTest>
@@ -32,6 +33,13 @@ bool isPadding(const FakeAntTransport::WriteCall &call)
     }
     return true;
 }
+
+quintptr currentThreadId()
+{
+    return reinterpret_cast<quintptr>(QThread::currentThreadId());
+}
+
+void discardQtMessage(QtMsgType, const QMessageLogContext &, const QString &) {}
 
 QVector<FakeAntTransport::WriteCall> messages(
         const FakeAntTransport::Snapshot &snapshot)
@@ -290,6 +298,162 @@ private slots:
         QVERIFY(isMessage(transport.writes.at(2)));
         QVERIFY(isPadding(transport.writes.at(3)));
     }
+    void setupTransportRunsOnWorkerThread()
+    {
+        ANT ant;
+        const quintptr callerThread = currentThreadId();
+        QCOMPARE(ant.start(), 0);
+        QCOMPARE(ant.setup(), 0);
+
+        const FakeAntTransport::Snapshot transport =
+                FakeAntTransport::snapshot();
+        QCOMPARE(ant.stop(), 0);
+
+        const QVector<FakeAntTransport::WriteCall> frames =
+                messages(transport);
+        QVERIFY(!frames.isEmpty());
+        for (const FakeAntTransport::WriteCall &frame : frames) {
+            QVERIFY2(frame.threadId != callerThread,
+                     "ANT::setup wrote transport data outside the worker");
+        }
+    }
+
+    void runtimeControlAndTimerTransportRunOnWorkerThread()
+    {
+        ANT ant;
+        ant.setVortexData(0, 1234);
+        ant.setControlChannel(0);
+        QCOMPARE(ant.start(), 0);
+
+        const quintptr callerThread = currentThreadId();
+        ant.setLoad(245.0);
+        ant.slotControlTimerEvent();
+        const bool written = FakeAntTransport::waitForMessageWrites(2);
+        const FakeAntTransport::Snapshot transport =
+                FakeAntTransport::snapshot();
+        QCOMPARE(ant.stop(), 0);
+
+        QVERIFY(written);
+        const QVector<FakeAntTransport::WriteCall> frames =
+                messages(transport);
+        QCOMPARE(frames.size(), 2);
+        for (const FakeAntTransport::WriteCall &frame : frames) {
+            QVERIFY2(frame.threadId != callerThread,
+                     "runtime transport command bypassed the worker");
+        }
+    }
+
+    void channelShutdownRunsOnWorkerThread()
+    {
+        ANT ant;
+        QCOMPARE(ant.start(), 0);
+        ant.setChannel(0, 1234, ANTChannel::CHANNEL_TYPE_POWER);
+        QVERIFY(FakeAntTransport::waitForMessageWrites(2));
+
+        const int writesBeforeStop =
+                FakeAntTransport::snapshot().messageWrites;
+        const quintptr callerThread = currentThreadId();
+        QCOMPARE(ant.stop(), 0);
+        const FakeAntTransport::Snapshot transport =
+                FakeAntTransport::snapshot();
+        const QVector<FakeAntTransport::WriteCall> frames =
+                messages(transport);
+
+        QVERIFY(frames.size() > writesBeforeStop);
+        for (int index = writesBeforeStop; index < frames.size(); ++index) {
+            QVERIFY2(frames.at(index).threadId != callerThread,
+                     "ANT::stop closed a channel outside the worker");
+        }
+    }
+
+    void controlStatePublicationIsSynchronized()
+    {
+        ANT ant;
+        QCOMPARE(ant.start(), 0);
+        QSemaphore ready;
+        QSemaphore start;
+        std::atomic<bool> finished(false);
+
+        std::thread writer([&]() {
+            ready.release();
+            start.acquire();
+            for (int sample = 0; sample < 5000; ++sample) {
+                ant.setMode((sample & 1) ? RT_MODE_ERGO : RT_MODE_SPIN);
+                ant.setLoad(100.0 + (sample % 300));
+                ant.setGradient(-5.0 + (sample % 20));
+            }
+            finished.store(true, std::memory_order_release);
+        });
+
+        ready.acquire();
+        start.release();
+
+        RealtimeData snapshot;
+        double observed = 0.0;
+        do {
+            ant.getRealtimeData(snapshot);
+            observed += snapshot.getLoad();
+        } while (!finished.load(std::memory_order_acquire));
+
+        writer.join();
+        ant.getRealtimeData(snapshot);
+        observed += snapshot.getLoad();
+        QCOMPARE(ant.stop(), 0);
+        QVERIFY(std::isfinite(observed));
+    }
+
+    void calibrationPublicationIsSynchronized()
+    {
+        ANT ant;
+        QSemaphore ready;
+        QSemaphore start;
+        std::atomic<bool> finished(false);
+        const QtMessageHandler previousHandler =
+                qInstallMessageHandler(discardQtMessage);
+
+        std::thread writer([&]() {
+            ready.release();
+            start.acquire();
+            for (int sample = 0; sample < 5000; ++sample) {
+                const uint8_t channel = static_cast<uint8_t>(sample % 8);
+                if ((sample % 31) == 0) ant.resetCalibrationState();
+                ant.setCalibrationType(channel,
+                                       CALIBRATION_TYPE_ZERO_OFFSET);
+                ant.setCalibrationState(static_cast<uint8_t>(
+                        sample % (CALIBRATION_STATE_FAILURE + 1)));
+                ant.setCalibrationTargetSpeed(sample % 50);
+                ant.setCalibrationZeroOffset(
+                        static_cast<uint16_t>(sample));
+                ant.setCalibrationSlope(static_cast<uint16_t>(sample + 1));
+                ant.setCalibrationSpindownTime(
+                        static_cast<uint16_t>(sample + 2));
+                ant.setCalibrationTimestamp(channel, sample);
+                ant.setCalibrationRequired(channel, (sample & 1) != 0);
+            }
+            finished.store(true, std::memory_order_release);
+        });
+
+        ready.acquire();
+        start.release();
+
+        quint64 observed = 0;
+        do {
+            observed += ant.getCalibrationType();
+            observed += ant.getCalibrationState();
+            observed += static_cast<quint64>(
+                    ant.getCalibrationTargetSpeed());
+            observed += ant.getCalibrationZeroOffset();
+            observed += ant.getCalibrationSlope();
+            observed += ant.getCalibrationSpindownTime();
+            observed += ant.getCalibrationChannel();
+        } while (!finished.load(std::memory_order_acquire));
+
+        writer.join();
+        observed += ant.getCalibrationZeroOffset();
+        qInstallMessageHandler(previousHandler);
+        QVERIFY(observed > 0);
+    }
+
 };
 
 QTEST_GUILESS_MAIN(TestAntThreadSafety)
