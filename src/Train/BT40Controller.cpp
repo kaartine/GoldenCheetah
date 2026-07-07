@@ -42,6 +42,9 @@ BT40Controller::BT40Controller(TrainSidebar *parent, DeviceConfiguration *dc) : 
     rollingResistance = 0.0033;
     windResistance = 0.6;
     wheelSize = 2100;
+    telemetryClock.start();
+    appliedTelemetrySources.fill(0);
+    appliedTelemetryAvailable.fill(false);
 
     if (localDc && !localDc->deviceProfile.isEmpty())
     {
@@ -102,6 +105,11 @@ BT40Controller::start()
         return -1;
     }
 
+    telemetry = RealtimeData();
+    telemetryRouter.clear();
+    appliedTelemetrySources.fill(0);
+    appliedTelemetryAvailable.fill(false);
+    telemetryClock.restart();
     running = true;
     resetScanRetryState();
     startScan();
@@ -150,6 +158,10 @@ BT40Controller::stop()
         delete device;
     }
 
+    telemetryRouter.clear();
+    appliedTelemetrySources.fill(0);
+    appliedTelemetryAvailable.fill(false);
+    telemetry = RealtimeData();
     return 0;
 }
 
@@ -185,6 +197,7 @@ bool BT40Controller::isHeartRateOnly() const
 void
 BT40Controller::getRealtimeData(RealtimeData &rtData)
 {
+    refreshTelemetry();
     rtData = telemetry;
     processRealtimeData(rtData);
 }
@@ -480,10 +493,171 @@ BT40Controller::getCalibrationSlope() {
     return 0;
 }
 
-void
-BT40Controller::setWheelRpm(double wrpm) {
-    telemetry.setWheelRpm(wrpm, true); // record time sample for new rpm data
-    telemetry.setSpeed(wrpm * wheelSize / 1000.0 * 60.0 / 1000.0);
+void BT40Controller::setBPM(
+        BT40Device *source, float value, BluetoothTelemetryPriority priority)
+{
+    publishTelemetry(source, BluetoothTelemetryMetric::HeartRate,
+                     value, priority);
+}
+
+void BT40Controller::setWatts(
+        BT40Device *source, double value, BluetoothTelemetryPriority priority)
+{
+    publishTelemetry(source, BluetoothTelemetryMetric::Power,
+                     value, priority);
+}
+
+void BT40Controller::setWheelRpm(
+        BT40Device *source, double value, BluetoothTelemetryPriority priority)
+{
+    publishTelemetry(source, BluetoothTelemetryMetric::WheelRpm,
+                     value, priority);
+    publishTelemetry(source, BluetoothTelemetryMetric::Speed,
+                     value * wheelSize / 1000.0 * 60.0 / 1000.0, priority);
+}
+
+void BT40Controller::setSpeed(
+        BT40Device *source, double value, BluetoothTelemetryPriority priority)
+{
+    publishTelemetry(source, BluetoothTelemetryMetric::Speed,
+                     value, priority);
+}
+
+void BT40Controller::setCadence(
+        BT40Device *source, double value, BluetoothTelemetryPriority priority)
+{
+    publishTelemetry(source, BluetoothTelemetryMetric::Cadence,
+                     value, priority);
+}
+
+void BT40Controller::setRespiratoryFrequency(
+        BT40Device *source, double value, BluetoothTelemetryPriority priority)
+{
+    publishTelemetry(source, BluetoothTelemetryMetric::RespiratoryFrequency,
+                     value, priority);
+}
+
+void BT40Controller::setRespiratoryMinuteVolume(
+        BT40Device *source, double value, BluetoothTelemetryPriority priority)
+{
+    publishTelemetry(source,
+                     BluetoothTelemetryMetric::RespiratoryMinuteVolume,
+                     value, priority);
+}
+
+void BT40Controller::setVO2_VCO2(
+        BT40Device *source, double vo2, double vco2,
+        BluetoothTelemetryPriority priority)
+{
+    publishTelemetry(source, BluetoothTelemetryMetric::Vo2, vo2, priority);
+    publishTelemetry(source, BluetoothTelemetryMetric::Vco2, vco2, priority);
+}
+
+void BT40Controller::setTv(
+        BT40Device *source, double value, BluetoothTelemetryPriority priority)
+{
+    publishTelemetry(source, BluetoothTelemetryMetric::TidalVolume,
+                     value, priority);
+}
+
+void BT40Controller::setFeO2(
+        BT40Device *source, double value, BluetoothTelemetryPriority priority)
+{
+    publishTelemetry(source, BluetoothTelemetryMetric::FeO2,
+                     value, priority);
+}
+
+void BT40Controller::removeTelemetrySource(BT40Device *source)
+{
+    if (!source) return;
+    telemetryRouter.removeSource(reinterpret_cast<quintptr>(source));
+    refreshTelemetry();
+}
+
+qint64 BT40Controller::telemetryNowMs() const
+{
+    return telemetryClock.isValid() ? telemetryClock.elapsed() : 0;
+}
+
+void BT40Controller::publishTelemetry(
+        BT40Device *source, BluetoothTelemetryMetric metric, double value,
+        BluetoothTelemetryPriority priority)
+{
+    if (!source) return;
+    const quintptr sourceId = reinterpret_cast<quintptr>(source);
+    const qint64 nowMs = telemetryNowMs();
+    if (!telemetryRouter.publish(sourceId, metric, value, priority, nowMs)) {
+        return;
+    }
+    refreshTelemetryMetric(metric, nowMs, sourceId);
+}
+
+void BT40Controller::refreshTelemetry()
+{
+    const qint64 nowMs = telemetryNowMs();
+    for (int index = 0; index < BluetoothTelemetryRouter::MetricCount; ++index) {
+        refreshTelemetryMetric(
+                static_cast<BluetoothTelemetryMetric>(index), nowMs);
+    }
+}
+
+void BT40Controller::refreshTelemetryMetric(
+        BluetoothTelemetryMetric metric, qint64 nowMs, quintptr forceSource)
+{
+    const int index = static_cast<int>(metric);
+    if (index < 0 || index >= BluetoothTelemetryRouter::MetricCount) return;
+
+    const BluetoothTelemetryValue resolved =
+            telemetryRouter.resolve(metric, nowMs);
+    const size_t stateIndex = static_cast<size_t>(index);
+    const bool ownerChanged =
+            appliedTelemetryAvailable[stateIndex] != resolved.available ||
+            appliedTelemetrySources[stateIndex] != resolved.source;
+    const bool ownerPublished =
+            resolved.available && resolved.source == forceSource;
+    if (!ownerChanged && !ownerPublished) return;
+
+    const double value = resolved.available ? resolved.value : 0.0;
+    switch (metric) {
+    case BluetoothTelemetryMetric::HeartRate:
+        telemetry.setHr(value);
+        break;
+    case BluetoothTelemetryMetric::Power:
+        telemetry.setWatts(value);
+        break;
+    case BluetoothTelemetryMetric::WheelRpm:
+        telemetry.setWheelRpm(value, true);
+        break;
+    case BluetoothTelemetryMetric::Speed:
+        telemetry.setSpeed(value);
+        break;
+    case BluetoothTelemetryMetric::Cadence:
+        telemetry.setCadence(value);
+        break;
+    case BluetoothTelemetryMetric::RespiratoryFrequency:
+        telemetry.setRf(value);
+        break;
+    case BluetoothTelemetryMetric::RespiratoryMinuteVolume:
+        telemetry.setRMV(value);
+        break;
+    case BluetoothTelemetryMetric::Vo2:
+        telemetry.setVO2_VCO2(value, telemetry.getVCO2());
+        break;
+    case BluetoothTelemetryMetric::Vco2:
+        telemetry.setVO2_VCO2(telemetry.getVO2(), value);
+        break;
+    case BluetoothTelemetryMetric::TidalVolume:
+        telemetry.setTv(value);
+        break;
+    case BluetoothTelemetryMetric::FeO2:
+        telemetry.setFeO2(value);
+        break;
+    case BluetoothTelemetryMetric::Count:
+        return;
+    }
+
+    appliedTelemetryAvailable[stateIndex] = resolved.available;
+    appliedTelemetrySources[stateIndex] = resolved.source;
 }
 
 void BT40Controller::setLoad(double l)

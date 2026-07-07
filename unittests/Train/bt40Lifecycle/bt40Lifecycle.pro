@@ -15,9 +15,11 @@ CONFIG -= debug
 SOURCES = testBt40Lifecycle.cpp \
           Bt40LifecycleTestStubs.cpp \
           FakeLowEnergyController.cpp \
+          ../../../src/Train/RealtimeData.cpp \
           ../../../src/Train/RealtimeController.cpp \
           ../../../src/Train/BT40Controller.cpp \
           ../../../src/Train/BT40Device.cpp \
+          ../../../src/Train/BluetoothTelemetryRouter.cpp \
           ../../../src/Train/CalibrationData.cpp \
           ../../../src/Train/Ftms.cpp \
           ../../../src/Train/KurtInRide.cpp \

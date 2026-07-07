@@ -24,8 +24,13 @@
 #include <QBluetoothLocalDevice>
 #include <QBluetoothDeviceDiscoveryAgent>
 #include <QBluetoothDeviceInfo>
+#include <QElapsedTimer>
 #include <QSet>
 #include <QTimer>
+
+#include <array>
+
+#include "BluetoothTelemetryRouter.h"
 #include "BT40Device.h"
 
 #ifndef _GC_BT40Controller_h
@@ -64,34 +69,27 @@ public:
     bool doesPush(), doesPull(), doesLoad();
     void getRealtimeData(RealtimeData &rtData);
     void pushRealtimeData(RealtimeData &rtData);
-    void setBPM(float x) {
-	telemetry.setHr(x);
-    }
-    void setWatts(double watts) {
-	telemetry.setWatts(watts);
-    }
-    void setWheelRpm(double wrpm);
-    void setSpeed(double speed) {
-        telemetry.setSpeed(speed);
-    }
-    void setCadence(double cadence) {
-	telemetry.setCadence(cadence);
-    }
-    void setRespiratoryFrequency(double rf) {
-        telemetry.setRf(rf);
-    }
-    void setRespiratoryMinuteVolume(double rmv) {
-        telemetry.setRMV(rmv);
-    }
-    void setVO2_VCO2(double vo2, double vco2) {
-        telemetry.setVO2_VCO2(vo2, vco2);
-    }
-    void setTv(double tv) {
-        telemetry.setTv(tv);
-    }
-    void setFeO2(double feo2) {
-        telemetry.setFeO2(feo2);
-    }
+    void setBPM(BT40Device *source, float value,
+                BluetoothTelemetryPriority priority);
+    void setWatts(BT40Device *source, double value,
+                  BluetoothTelemetryPriority priority);
+    void setWheelRpm(BT40Device *source, double value,
+                     BluetoothTelemetryPriority priority);
+    void setSpeed(BT40Device *source, double value,
+                  BluetoothTelemetryPriority priority);
+    void setCadence(BT40Device *source, double value,
+                    BluetoothTelemetryPriority priority);
+    void setRespiratoryFrequency(BT40Device *source, double value,
+                                 BluetoothTelemetryPriority priority);
+    void setRespiratoryMinuteVolume(BT40Device *source, double value,
+                                    BluetoothTelemetryPriority priority);
+    void setVO2_VCO2(BT40Device *source, double vo2, double vco2,
+                     BluetoothTelemetryPriority priority);
+    void setTv(BT40Device *source, double value,
+               BluetoothTelemetryPriority priority);
+    void setFeO2(BT40Device *source, double value,
+                 BluetoothTelemetryPriority priority);
+    void removeTelemetrySource(BT40Device *source);
     void emitVO2Data() {
         emit vo2Data(telemetry.getRf(), telemetry.getRMV(), telemetry.getVO2(), telemetry.getVCO2(), telemetry.getTv(), telemetry.getFeO2());
     }
@@ -122,11 +120,23 @@ private:
     bool allConfiguredDevicesFound() const;
     void resetScanRetryState();
     void scheduleScanRetry(const QString &firstNotice);
+    qint64 telemetryNowMs() const;
+    void publishTelemetry(BT40Device *source, BluetoothTelemetryMetric metric,
+                          double value, BluetoothTelemetryPriority priority);
+    void refreshTelemetry();
+    void refreshTelemetryMetric(BluetoothTelemetryMetric metric, qint64 nowMs,
+                                quintptr forceSource = 0);
 
 private:
     QBluetoothDeviceDiscoveryAgent *discoveryAgent;
     QBluetoothLocalDevice* localDevice;
     RealtimeData telemetry;
+    BluetoothTelemetryRouter telemetryRouter;
+    QElapsedTimer telemetryClock;
+    std::array<quintptr, BluetoothTelemetryRouter::MetricCount>
+            appliedTelemetrySources{};
+    std::array<bool, BluetoothTelemetryRouter::MetricCount>
+            appliedTelemetryAvailable{};
     QList<BT40Device*> devices;
     DeviceConfiguration* localDc;
     QList<DeviceInfo> allowedDevices;

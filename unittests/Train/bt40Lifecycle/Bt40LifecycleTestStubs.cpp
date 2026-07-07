@@ -9,7 +9,6 @@
 
 #include "Train/DeviceConfiguration.h"
 #include "Train/PolynomialRegression.h"
-#include "Train/RealtimeData.h"
 #include "Train/VMProWidget.h"
 #include "ANT/ANTMessage.h"
 
@@ -86,32 +85,6 @@ void VMProWidget::onUserPieceSizePickerChanged(int) {}
 void VMProWidget::onIdleTimeoutPickerChanged(int) {}
 void VMProWidget::onVolumeCorrectionModePickerChanged(int) {}
 void VMProWidget::onSaveClicked() {}
-
-RealtimeData::RealtimeData() {}
-void RealtimeData::setWatts(double) {}
-void RealtimeData::setHr(double) {}
-void RealtimeData::setSpeed(double) {}
-void RealtimeData::setWheelRpm(double, bool) {}
-void RealtimeData::setCadence(double) {}
-void RealtimeData::setRf(double) {}
-void RealtimeData::setRMV(double) {}
-void RealtimeData::setVO2_VCO2(double, double) {}
-void RealtimeData::setTv(double) {}
-void RealtimeData::setFeO2(double) {}
-double RealtimeData::getSpeed() const { return 0.0; }
-double RealtimeData::getWheelRpm() const { return 0.0; }
-double RealtimeData::getRf() const { return 0.0; }
-double RealtimeData::getRMV() const { return 0.0; }
-double RealtimeData::getVO2() const { return 0.0; }
-double RealtimeData::getVCO2() const { return 0.0; }
-double RealtimeData::getTv() const { return 0.0; }
-double RealtimeData::getFeO2() const { return 0.0; }
-
-std::chrono::high_resolution_clock::time_point
-RealtimeData::getWheelRpmSampleTime() const
-{
-    return {};
-}
 
 ANTMessage::ANTMessage()
 {

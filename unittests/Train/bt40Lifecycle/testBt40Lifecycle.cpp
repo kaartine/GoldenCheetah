@@ -176,6 +176,88 @@ private slots:
         QCOMPARE(link->thread(), controller.thread());
     }
 
+    void controllerRoutesTelemetryByPhysicalSource()
+    {
+        BT40Controller controller(nullptr, nullptr);
+        BT40Device *trainer = createDevice(&controller);
+        BT40Device *powerMeter = createDevice(&controller);
+
+        controller.setWatts(
+                trainer, 240.0, BluetoothTelemetryPriority::Trainer);
+        controller.setCadence(
+                trainer, 86.0, BluetoothTelemetryPriority::Trainer);
+        controller.setWatts(
+                powerMeter, 225.0,
+                BluetoothTelemetryPriority::DedicatedSensor);
+        controller.setWatts(
+                trainer, 260.0, BluetoothTelemetryPriority::Trainer);
+
+        RealtimeData data;
+        controller.getRealtimeData(data);
+        QCOMPARE(data.getWatts(), 225.0);
+        QCOMPARE(data.getCadence(), 86.0);
+
+        controller.removeTelemetrySource(powerMeter);
+        controller.getRealtimeData(data);
+        QCOMPARE(data.getWatts(), 260.0);
+        QCOMPARE(data.getCadence(), 86.0);
+
+        delete powerMeter;
+        delete trainer;
+    }
+
+    void controllerRoutesAndClearsEveryTelemetryMetric()
+    {
+        BT40Controller controller(nullptr, nullptr);
+        BT40Device *sensor = createDevice(&controller);
+        const BluetoothTelemetryPriority priority =
+                BluetoothTelemetryPriority::DedicatedSensor;
+
+        controller.setBPM(sensor, 147.0f, priority);
+        controller.setWatts(sensor, 231.0, priority);
+        controller.setWheelRpm(sensor, 120.0, priority);
+        controller.setCadence(sensor, 89.0, priority);
+        controller.setRespiratoryFrequency(sensor, 32.5, priority);
+        controller.setRespiratoryMinuteVolume(sensor, 74.25, priority);
+        controller.setVO2_VCO2(sensor, 3150.0, 2780.0, priority);
+        controller.setTv(sensor, 2.15, priority);
+        controller.setFeO2(sensor, 16.8, priority);
+
+        RealtimeData data;
+        controller.getRealtimeData(data);
+        QCOMPARE(data.getHr(), 147.0);
+        QCOMPARE(data.getWatts(), 231.0);
+        QCOMPARE(data.getWheelRpm(), 120.0);
+        QCOMPARE(data.getSpeed(), 15.12);
+        QCOMPARE(data.getCadence(), 89.0);
+        QCOMPARE(data.getRf(), 32.5);
+        QCOMPARE(data.getRMV(), 74.25);
+        QCOMPARE(data.getVO2(), 3150.0);
+        QCOMPARE(data.getVCO2(), 2780.0);
+        QCOMPARE(data.getTv(), 2.15);
+        QCOMPARE(data.getFeO2(), 16.8);
+
+        controller.setSpeed(sensor, 34.5, priority);
+        controller.getRealtimeData(data);
+        QCOMPARE(data.getSpeed(), 34.5);
+
+        controller.removeTelemetrySource(sensor);
+        controller.getRealtimeData(data);
+        QCOMPARE(data.getHr(), 0.0);
+        QCOMPARE(data.getWatts(), 0.0);
+        QCOMPARE(data.getWheelRpm(), 0.0);
+        QCOMPARE(data.getSpeed(), 0.0);
+        QCOMPARE(data.getCadence(), 0.0);
+        QCOMPARE(data.getRf(), 0.0);
+        QCOMPARE(data.getRMV(), 0.0);
+        QCOMPARE(data.getVO2(), 0.0);
+        QCOMPARE(data.getVCO2(), 0.0);
+        QCOMPARE(data.getTv(), 0.0);
+        QCOMPARE(data.getFeO2(), 0.0);
+
+        delete sensor;
+    }
+
     void scannerCancellationJoinsAndKeepsWorkerOwnership()
     {
         ScanThreadRecord record;

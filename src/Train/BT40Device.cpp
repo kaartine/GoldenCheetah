@@ -41,6 +41,13 @@
 // Wahoo specific extension to the Cycling Power service
 #define WAHOO_BRAKE_CONTROL_UUID "{A026E005-0A7D-4AB3-97FA-F1500F9FEB8B}"
 
+namespace {
+constexpr BluetoothTelemetryPriority DedicatedTelemetry =
+        BluetoothTelemetryPriority::DedicatedSensor;
+constexpr BluetoothTelemetryPriority TrainerTelemetry =
+        BluetoothTelemetryPriority::Trainer;
+}
+
 QMap<QBluetoothUuid, btle_sensor_type_t> BT40Device::supportedServices = {
     { QBluetoothUuid(QBluetoothUuid::ServiceClassUuid::HeartRate),                { "Heartrate", ":images/IconHR.png" }},
     { QBluetoothUuid(QBluetoothUuid::ServiceClassUuid::CyclingPower),             { "Power", ":images/IconPower.png" }},
@@ -337,42 +344,7 @@ BT40Device::deviceDisconnected()
     heartRateSeen = false;
     trainerDataSeen = false;
 
-    // Zero any readings provided by this device
-    foreach (QLowEnergyService* const &service, m_services) {
-
-        if (service->serviceUuid() == QBluetoothUuid(QBluetoothUuid::ServiceClassUuid::HeartRate)) {
-            parentController->setBPM(0.0);
-        } else if (service->serviceUuid() == QBluetoothUuid(QBluetoothUuid::ServiceClassUuid::CyclingPower)) {
-            parentController->setWatts(0.0);
-            parentController->setWheelRpm(0.0);
-        } else if (service->serviceUuid() == QBluetoothUuid(QBluetoothUuid::ServiceClassUuid::CyclingSpeedAndCadence)) {
-            parentController->setWheelRpm(0.0);
-        } else if (service->serviceUuid() == QBluetoothUuid(QString(VO2MASTERPRO_SERVICE_UUID))) {
-            BT40Controller *controller = parentController.data();
-            controller->setRespiratoryFrequency(0);
-            controller->setRespiratoryMinuteVolume(0);
-            controller->setVO2_VCO2(0,0);
-            controller->setTv(0);
-            controller->setFeO2(0);
-        } else if (service->serviceUuid() == s_KurtInRideService_UUID) {
-            BT40Controller* controller = parentController.data();
-            // disconnect behavior...
-            controller->setWatts(0.0);
-            controller->setWheelRpm(0.0);
-            controller->setCadence(0.0);
-        } else if (service->serviceUuid() == s_KurtSmartControlService_UUID) {
-            BT40Controller* controller = parentController.data();
-            // disconnect behavior...
-            controller->setWatts(0.0);
-            controller->setWheelRpm(0.0);
-            controller->setCadence(0.0);
-        } else if (service->serviceUuid() == s_FtmsService_UUID) {
-            BT40Controller* controller = parentController.data();
-            controller->setWatts(0.0);
-            controller->setWheelRpm(0.0);
-            controller->setCadence(0.0);
-        }
-    }
+    parentController->removeTelemetrySource(this);
 
     // Stop sending load setting commands
     loadType = Load_None;
@@ -766,7 +738,8 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
                                  .arg(m_currentDevice.name()).arg(heartRate), 4);
             heartRateSeen = true;
         }
-        dynamic_cast<BT40Controller*>(parent)->setBPM(heartRate);
+        dynamic_cast<BT40Controller*>(parent)->setBPM(
+                this, heartRate, DedicatedTelemetry);
 
     } else if (c.uuid() == QBluetoothUuid(QBluetoothUuid::CharacteristicType::CyclingPowerMeasurement)) {
 
@@ -775,7 +748,8 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
         qint16 tmp_pwr;
         ds >> tmp_pwr;
         double power = (double) tmp_pwr;
-        dynamic_cast<BT40Controller*>(parent)->setWatts(power);
+        dynamic_cast<BT40Controller*>(parent)->setWatts(
+                this, power, DedicatedTelemetry);
 
         if (!trainerDataSeen && power > 0) {
             qDebug() << "Received first active cycling-power sample from" << m_currentDevice.name()
@@ -796,13 +770,13 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
         }
 
         if (flags & 0x10) { // wheel revolutions data present
-            getWheelRpm(ds);
+            getWheelRpm(ds, DedicatedTelemetry);
         }
 
         if (flags & 0x20) { // crank data present
             // If this power meter reports crank revolutions, it is
             // likely a crank-based meter (e.g. Stages)
-            getCadence(ds);
+            getCadence(ds, DedicatedTelemetry);
         }
 
     } else if (c.uuid() == QBluetoothUuid(QBluetoothUuid::CharacteristicType::CSCMeasurement)) {
@@ -811,11 +785,11 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
         ds >> flags;
 
         if (flags & 0x1) { // Wheel Revolution Data Present
-            getWheelRpm(ds);
+            getWheelRpm(ds, DedicatedTelemetry);
         }
 
         if (flags & 0x2) { // Crank Revolution Data Present
-          getCadence(ds);
+          getCadence(ds, DedicatedTelemetry);
         }
     } else if (c.uuid() == QBluetoothUuid(QString(VO2MASTERPRO_VENTILATORY_CHAR_UUID))) {
         // Modern firmwares uses three different characteristics:
@@ -834,9 +808,12 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
         ds >> rmv;
 
         BT40Controller* controller = dynamic_cast<BT40Controller*>(parent);
-        controller->setRespiratoryFrequency((double)rf/100.0f);
-        controller->setRespiratoryMinuteVolume((double)rmv/100.0f);
-        controller->setTv((double)tidal_volume/100.0f);
+        controller->setRespiratoryFrequency(
+                this, (double)rf/100.0f, DedicatedTelemetry);
+        controller->setRespiratoryMinuteVolume(
+                this, (double)rmv/100.0f, DedicatedTelemetry);
+        controller->setTv(
+                this, (double)tidal_volume/100.0f, DedicatedTelemetry);
 
     } else if (c.uuid() == QBluetoothUuid(QString(VO2MASTERPRO_GASEXCHANGE_CHAR_UUID))) {
         quint16 feo2, feco2, vo2, vco2;
@@ -857,8 +834,10 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
         }
 
         BT40Controller* controller = dynamic_cast<BT40Controller*>(parent);
-        controller->setVO2_VCO2(vo2, vco2);
-        controller->setFeO2((double)feo2/100.0f);
+        controller->setVO2_VCO2(
+                this, vo2, vco2, DedicatedTelemetry);
+        controller->setFeO2(
+                this, (double)feo2/100.0f, DedicatedTelemetry);
         controller->emitVO2Data();
     } else if (c.uuid() == QBluetoothUuid(QString(VO2MASTERPRO_DATA_CHAR_UUID))) {
         quint16 rf, rmv, feo2,vo2;
@@ -882,10 +861,14 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
         }
 
         BT40Controller* controller = dynamic_cast<BT40Controller*>(parent);
-        controller->setVO2_VCO2(vo2, 0);
-        controller->setRespiratoryFrequency((double)rf/100.0f);
-        controller->setRespiratoryMinuteVolume((double)rmv/100.0f);
-        controller->setFeO2((double)feo2/100.0f);
+        controller->setVO2_VCO2(
+                this, vo2, 0, DedicatedTelemetry);
+        controller->setRespiratoryFrequency(
+                this, (double)rf/100.0f, DedicatedTelemetry);
+        controller->setRespiratoryMinuteVolume(
+                this, (double)rmv/100.0f, DedicatedTelemetry);
+        controller->setFeO2(
+                this, (double)feo2/100.0f, DedicatedTelemetry);
         controller->emitVO2Data();
     } else if (c.uuid() == s_KurtInRideService_Config_UUID) {
 
@@ -938,17 +921,20 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
         }
 
         double power = ipd.power;
-        dynamic_cast<BT40Controller*>(parent)->setWatts(power);
+        dynamic_cast<BT40Controller*>(parent)->setWatts(
+                this, power, TrainerTelemetry);
 
         // Convert kurt speed in kph to wheel rpm, using wheelsize (mm)
         // Just so caller can convert wheel rpm back to kph... anyway...
 
         double kph = ipd.speedKPH;
         double wheelRpm = kph * (1000. / wheelSize) * (1000. / 60.);
-        dynamic_cast<BT40Controller*>(parent)->setWheelRpm(wheelRpm);
+        dynamic_cast<BT40Controller*>(parent)->setWheelRpm(
+                this, wheelRpm, TrainerTelemetry);
 
         double cadenceRPM = ipd.cadenceRPM;
-        dynamic_cast<BT40Controller*>(parent)->setCadence(cadenceRPM);
+        dynamic_cast<BT40Controller*>(parent)->setCadence(
+                this, cadenceRPM, TrainerTelemetry);
 
         //dynamic_cast<BT40Controller*>(parent)->setTrainerStatusString(inride_state_to_rtd_string(ipd.state, ipd.calibrationResult));
 
@@ -960,17 +946,20 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
 
         // Power
         double power = scpd.power;
-        dynamic_cast<BT40Controller*>(parent)->setWatts(power);
+        dynamic_cast<BT40Controller*>(parent)->setWatts(
+                this, power, TrainerTelemetry);
 
         // WheelRpm
         double kph = scpd.speedKPH;
         // Convert kurt speed in kph to wheel rpm, using wheelsize (mm)
         double wheelRpm = kph * (1000. / wheelSize) * (1000. / 60.);
-        dynamic_cast<BT40Controller*>(parent)->setWheelRpm(wheelRpm);
+        dynamic_cast<BT40Controller*>(parent)->setWheelRpm(
+                this, wheelRpm, TrainerTelemetry);
 
         // Cadence
         double cadenceRPM = scpd.cadenceRPM;
-        dynamic_cast<BT40Controller*>(parent)->setCadence(cadenceRPM);
+        dynamic_cast<BT40Controller*>(parent)->setCadence(
+                this, cadenceRPM, TrainerTelemetry);
 
     } else if (c.uuid() == s_KurtSmartControlService_Config_UUID) {
 
@@ -1053,18 +1042,21 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
         // Now update values of interest if they were present
         if (hasPower)
         {
-            dynamic_cast<BT40Controller*>(parent)->setWatts(power);
+            dynamic_cast<BT40Controller*>(parent)->setWatts(
+                this, power, TrainerTelemetry);
         }
 
         if (hasCadence)
         {
-            dynamic_cast<BT40Controller*>(parent)->setCadence(cadence);
+            dynamic_cast<BT40Controller*>(parent)->setCadence(
+                    this, cadence, TrainerTelemetry);
         }
 
         if (hasSpeed)
         {
             // If "more data" is false, inst speed is present. Convert to km/h by dividing with 100.
-            dynamic_cast<BT40Controller*>(parent)->setSpeed(speed);
+            dynamic_cast<BT40Controller*>(parent)->setSpeed(
+                    this, speed, TrainerTelemetry);
         }
 
         if (!trainerDataSeen && (power > 0 || cadence > 0 || speed > 0)) {
@@ -1232,7 +1224,8 @@ BT40Device::confirmedCharacteristicWrite(const QLowEnergyCharacteristic &c, cons
 }
 
 void
-BT40Device::getCadence(QDataStream& ds)
+BT40Device::getCadence(
+        QDataStream& ds, BluetoothTelemetryPriority priority)
 {
     if (!parentController) return;
     QObject *parent = parentController.data();
@@ -1258,11 +1251,13 @@ BT40Device::getCadence(QDataStream& ds)
             const int time = cur_time + (cur_time < prevCrankTime ? 0x10000:0) - prevCrankTime;
             const int revs = cur_revs + (cur_revs < prevCrankRevs ? 0x10000:0) - prevCrankRevs;
             const double rpm = 1024*60*revs / double(time);
-            dynamic_cast<BT40Controller*>(parent)->setCadence(rpm);
+            dynamic_cast<BT40Controller*>(parent)->setCadence(
+                this, rpm, priority);
         }
 
     } else if (prevCrankStaleness < 0 || prevCrankStaleness >= 2) {
-      dynamic_cast<BT40Controller*>(parent)->setCadence(0.0);
+      dynamic_cast<BT40Controller*>(parent)->setCadence(
+                this, 0.0, priority);
 
     }
 
@@ -1279,7 +1274,8 @@ BT40Device::getCadence(QDataStream& ds)
 }
 
 void
-BT40Device::getWheelRpm(QDataStream& ds)
+BT40Device::getWheelRpm(
+        QDataStream& ds, BluetoothTelemetryPriority priority)
 {
     if (!parentController) return;
     QObject *parent = parentController.data();
@@ -1300,7 +1296,8 @@ BT40Device::getWheelRpm(QDataStream& ds)
 
     prevWheelRevs = wheelrevs;
     prevWheelTime = wheeltime;
-    dynamic_cast<BT40Controller*>(parent)->setWheelRpm(rpm);
+    dynamic_cast<BT40Controller*>(parent)->setWheelRpm(
+            this, rpm, priority);
 }
 
 QBluetoothDeviceInfo

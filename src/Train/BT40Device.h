@@ -27,6 +27,7 @@
 #include <QTimer>
 
 #include "BluetoothDeviceTypes.h"
+#include "BluetoothTelemetryRouter.h"
 #include "CalibrationData.h"
 #include "Ftms.h"
 
@@ -152,8 +153,8 @@ private:
     bool readTrainerCharacteristic(QLowEnergyService *service,
                                    const QLowEnergyCharacteristic &characteristic);
     void shutdown();
-    void getCadence(QDataStream& ds);
-    void getWheelRpm(QDataStream& ds);
+    void getCadence(QDataStream& ds, BluetoothTelemetryPriority priority);
+    void getWheelRpm(QDataStream& ds, BluetoothTelemetryPriority priority);
     void setLoadErg(double);
     void setLoadIntensity(double);
     void setLoadLevel(int);

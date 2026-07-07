@@ -485,14 +485,27 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### BLE-003: Multiple BLE sources overwrite one shared telemetry object
 
-- Status: OPEN
-- Code: `src/Train/AddDeviceWizard.cpp:1005`,
-  `src/Train/BT40Controller.h:67`, `src/Train/BT40Device.cpp:202`
+- Status: FIXED
+- Code: `src/Train/BluetoothTelemetryRouter.cpp`,
+  `src/Train/BT40Controller.cpp`, `src/Train/BT40Device.cpp`
 - Impact: A trainer, HR belt, and power meter race by notification timing.
   Disconnecting one source also clears values still supplied by another source.
-- Test: Interleave two sources for the same metric and disconnect either one.
-- Fix direction: Maintain per-device snapshots and explicit per-metric source
-  ownership, priority, and staleness.
+- Regression test: `unittests/Train/bluetoothTelemetryRouter` interleaves
+  physical sources, verifies dedicated-sensor priority, stable equal-priority
+  ownership, independent metric owners, stale fallback, source removal, invalid
+  input rejection, and router reset. `unittests/Train/bt40Lifecycle` exercises
+  every controller telemetry setter against the real `RealtimeData` class and
+  verifies fallback and source-specific clearing.
+- Resolution: BLE notifications now publish per-device, per-metric snapshots to
+  a telemetry router. Dedicated sensors take priority over trainer telemetry,
+  current equal-priority owners remain stable while fresh, stale owners fall
+  back after five seconds, and disconnecting a device removes only that
+  device's snapshots.
+- Verification: The RED controller test did not compile before the source-aware
+  API and router existed. The focused router suite passes 14 tests and the BT40
+  lifecycle suite passes 19 tests, both normally and under strict
+  ASan/UBSan/LSan. The Qt 6.8.3 application builds and starts, and the complete
+  matrix passes 1,461 tests in 42 suites with no failures or skips.
 
 ### BLE-004: BLE service discovery initializes services repeatedly
 
