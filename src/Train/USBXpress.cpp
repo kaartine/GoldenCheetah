@@ -23,91 +23,92 @@
 
 #ifdef GC_HAVE_USBXPRESS
 
+namespace {
+
+bool getDeviceCount(DWORD &count)
+{
+    count = 0;
+    return SI_GetNumDevices(&count) == SI_SUCCESS;
+}
+
+bool getProductValue(const DWORD device, const DWORD option,
+                     unsigned int &value)
+{
+    char buffer[128] = {};
+    if (SI_GetProductString(device, buffer, option) != SI_SUCCESS)
+        return false;
+
+    buffer[sizeof(buffer) - 1] = '\0';
+    bool ok = false;
+    value = QString::fromLatin1(buffer).toUInt(&ok, 16);
+    return ok;
+}
+
+bool isGarminUsb1(const DWORD device)
+{
+    unsigned int vid = 0;
+    unsigned int pid = 0;
+    return getProductValue(device, SI_RETURN_VID, vid) &&
+            vid == GARMIN_USB1_VID &&
+            getProductValue(device, SI_RETURN_PID, pid) &&
+            pid == GARMIN_USB1_PID;
+}
+
+bool configureGarminUsb1(const HANDLE handle)
+{
+    return SI_FlushBuffers(handle, 1, 1) == SI_SUCCESS &&
+            SI_SetTimeouts(5, 5) == SI_SUCCESS &&
+            SI_SetBaudRate(handle, 115200) == SI_SUCCESS &&
+            SI_SetLineControl(handle, 0x0800) == SI_SUCCESS &&
+            SI_SetFlowControl(handle, SI_STATUS_INPUT, SI_HELD_INACTIVE,
+                              SI_HELD_INACTIVE, SI_STATUS_INPUT,
+                              SI_STATUS_INPUT, FALSE) == SI_SUCCESS;
+}
+
+}
+
 USBXpress::USBXpress() {} // nothing to do - all members are static
 
 bool USBXpress::find()
 {
-    DWORD numDevices;
+    DWORD numDevices = 0;
+    if (!getDeviceCount(numDevices)) return false;
 
-    // any USBXpress devices connected?
-    SI_GetNumDevices(&numDevices);
-    if (numDevices == 0) return false;
+    for (DWORD device = 0; device < numDevices; ++device)
+        if (isGarminUsb1(device)) return true;
 
-    // lets see if one of them is a GARMIN USB1 stick and open it
-    for (unsigned int i=0; i<numDevices; i++) {
-
-        char buffer[128];
-        bool vidok, pidok;
-
-        // we want product 1004 and vendor 0fcf
-        SI_GetProductString (i, &buffer, SI_RETURN_PID);
-        unsigned int vid = QString(buffer).toInt(&vidok, 16);
-        SI_GetProductString (i, &buffer, SI_RETURN_VID);
-        unsigned int pid = QString(buffer).toInt(&pidok, 16);
-
-        // we found ours?
-        if (vidok && vid == GARMIN_USB1_VID && pidok && pid == GARMIN_USB1_PID) {
-            return true;
-        }
-    }
-
-    // no dice. fail.
     return false;
 }
 
 int USBXpress::open(HANDLE *handle)
 {
-    DWORD numDevices;
+    if (!handle) return -1;
+    *handle = nullptr;
 
-    // any USBXpress devices connected?
-    SI_GetNumDevices(&numDevices);
-    if (numDevices == 0) return -1;
+    DWORD numDevices = 0;
+    if (!getDeviceCount(numDevices)) return -1;
 
-    // lets see if one of them is a GARMIN USB1 stick and open it
-    for (unsigned int i=0; i<numDevices; i++) {
+    for (DWORD device = 0; device < numDevices; ++device) {
+        if (!isGarminUsb1(device)) continue;
 
-        char buffer[128];
-        bool vidok, pidok;
+        HANDLE candidate = nullptr;
+        if (SI_Open(device, &candidate) != SI_SUCCESS) continue;
 
-        // we want product 1004 and vendor 0fcf
-        SI_GetProductString (i, &buffer, SI_RETURN_PID);
-        unsigned int vid = QString(buffer).toInt(&vidok, 16);
-        SI_GetProductString (i, &buffer, SI_RETURN_VID);
-        unsigned int pid = QString(buffer).toInt(&pidok, 16);
-
-        // we found ours?
-        if (vidok && vid == GARMIN_USB1_VID && pidok && pid == GARMIN_USB1_PID) {
-
-            // bingo
-            if (SI_Open (i, handle) == SI_SUCCESS) {
-
-                // clear out any crap
-                SI_FlushBuffers(*handle, 1, 1);
-                SI_SetTimeouts(5,5); // 5ms timeout seems ok
-                SI_SetBaudRate(*handle, 115200); // USB1 supports this
-                SI_SetLineControl(*handle, 0x800); // 8bit, 1 stop, no parity
-                SI_SetFlowControl(*handle, /*bCTS_MaskCode */ SI_STATUS_INPUT,
-                                           /*bRTS_MaskCode */ SI_HELD_INACTIVE,
-                                           /*bDTR_MaskCode */ SI_HELD_INACTIVE,
-                                           /*bDSRMaskCode  */ SI_STATUS_INPUT,
-                                           /*bDCD_MaskCode */ SI_STATUS_INPUT, 
-                                           /*bFlowXonXoff  */ FALSE);
-
-                // success!
-                return 0;
-                
-            }
+        if (configureGarminUsb1(candidate)) {
+            *handle = candidate;
+            return 0;
         }
+
+        SI_Close(candidate);
     }
 
-    // no dice. fail.
     return -1;
 }
 
 int USBXpress::close(HANDLE *handle)
 {
-    SI_Close(*handle);
-    return 0;
+    if (!handle || !*handle) return -1;
+    return SI_Close(*handle) == SI_SUCCESS ? 0 : -1;
 }
 
 
@@ -123,7 +124,7 @@ int USBXpress::write(HANDLE *handle, unsigned char *buf, int bytes)
 {
     DWORD wrote;
     if (SI_Write (*handle, buf, (DWORD) bytes, &wrote, NULL) == SI_SUCCESS)
-        return bytes;
+        return wrote;
     else
         return -1;
 }

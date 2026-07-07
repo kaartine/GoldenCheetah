@@ -630,9 +630,9 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DEV-006: Windows ANT USB1 setup failures can hang shutdown
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Train/USBXpress.cpp`, `src/Train/USBXpress.h`,
-  `src/ANT/ANT.cpp`, `src/ANT/ANTChannel.cpp`
+  `src/ANT/ANT.cpp`, `unittests/Train/usbXpressSafety`
 - Impact: The USBXpress adapter reports a successful open after timeout or
   UART configuration failures. Because synchronous USBXpress I/O defaults to
   an infinite timeout, ANT can block in a stop-time write or its receive loop
@@ -642,15 +642,25 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   writes are reported as complete.
 - Scope: Windows builds with both USBXpress and libusb enabled, using the
   Garmin USB1 stick (`0fcf:1004`).
-- Regression test: Build the production adapter against a fake public
-  USBXpress C API. Data-drive every enumeration and post-open failure, require
-  rollback through exactly one `SI_Close`, verify real VID/PID selection and
-  actual write counts, and use a subprocess watchdog to prove timeout failure
-  cannot leave `ANT::stop()` blocked.
-- Fix direction: Check every SDK result, make timeout and configuration
-  failures fatal, close failed opens through `SI_Close`, normalize VID/PID
-  handling and buffers, preserve actual transfer counts, and guarantee finite
-  or explicitly cancellable I/O before performing an unbounded thread join.
+- Regression test: `unittests/Train/usbXpressSafety` compiles the production
+  Windows adapter and ANT transport against fake Windows, USBXpress, and libusb
+  APIs on Linux. It data-drives every enumeration and post-open failure,
+  requires rollback through exactly one `SI_Close`, verifies real VID/PID
+  selection and actual transfer counts, and proves `ANT::closePort()` uses the
+  USBXpress close API after the USB1 fallback opens.
+- Resolution: VID and PID constants and product queries now use the canonical
+  Garmin `0fcf:1004` identity. Enumeration and every setup result are checked;
+  failed setup closes the opened handle and rejects the device. Successful
+  opens install finite read and write timeouts. Reads and writes report actual
+  transfer counts, close errors propagate, and ANT shutdown closes a USB1
+  device through `SI_Close` instead of `CloseHandle`.
+- Verification: Before the fix, the expanded harness reported 15 failures:
+  swapped identity handling, accepted enumeration and setup failures, a short
+  write reported as complete, ignored close errors, and the wrong ANT close
+  API. The resulting 29-test suite passes normally and under strict
+  ASan/UBSan/LSan. The Qt 6.8.3 application builds successfully, and the
+  complete matrix passes all 1,515 tests in 45 suites with no failures, skips,
+  blacklisted tests, or sanitizer diagnostics.
 
 ### THREAD-001: Cloud auto-download can outlive its athlete/context
 

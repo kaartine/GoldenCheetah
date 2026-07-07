@@ -30,6 +30,7 @@ struct Snapshot
 };
 
 void reset();
+void setOpenResult(int result);
 
 void enableProducerReadBarrier();
 bool synchronizeProducerWithRead(int timeoutMs = 5000);

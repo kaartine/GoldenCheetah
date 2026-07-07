@@ -25,6 +25,7 @@ const std::chrono::milliseconds InterleaveWait(500);
 struct State
 {
     FakeAntTransport::Snapshot snapshot;
+    int openResult = 0;
     bool producerBarrier = false;
     bool workerWaiting = false;
     bool producerWaiting = false;
@@ -76,6 +77,12 @@ void reset()
     Q_ASSERT(state.snapshot.liveInstances == 0);
     Q_ASSERT(!state.snapshot.leased);
     state = State();
+}
+
+void setOpenResult(const int result)
+{
+    std::lock_guard<std::mutex> lock(stateMutex);
+    state.openResult = result;
 }
 
 void enableProducerReadBarrier()
@@ -180,6 +187,7 @@ LibUsb::~LibUsb()
 int LibUsb::open()
 {
     std::lock_guard<std::mutex> lock(stateMutex);
+    if (state.openResult != 0) return state.openResult;
     if (state.snapshot.leased) return -1;
     opened = true;
     state.snapshot.leased = true;

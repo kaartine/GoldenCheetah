@@ -27,8 +27,8 @@
 #include <SiUSBXp.h> // for the constants etc
 #endif
 
-#define GARMIN_USB1_PID 0x0fcf
-#define GARMIN_USB1_VID 0x1004
+#define GARMIN_USB1_VID 0x0fcf
+#define GARMIN_USB1_PID 0x1004
 
 class USBXpress {
 

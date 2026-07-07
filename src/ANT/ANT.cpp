@@ -1256,7 +1256,11 @@ int ANT::closePort()
         return 0;
         break;
     case USB1 :
+#ifdef GC_HAVE_USBXPRESS
+        return USBXpress::close(&devicePort);
+#else
         return (int)!CloseHandle(devicePort);
+#endif
         break;
     default :
         return -1;
