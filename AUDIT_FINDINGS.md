@@ -347,16 +347,29 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-004: Full athlete backup is incomplete and not verified
 
-- Status: OPEN
-- Code: `src/FileIO/AthleteBackup.cpp:40`,
-  `src/FileIO/AthleteBackup.cpp:178`, `src/Train/TrainDB.cpp:174`
+- Status: FIXED
+- Code: `src/FileIO/AthleteBackup.cpp`,
+  `src/FileIO/AthleteBackupArchive.cpp`, `contrib/qzip/zip.cpp`
 - Impact: Planned activities, root-level database state, nested files, and read
   failures may be omitted while backup still reports success. Media is loaded
   fully into memory.
-- Test: Compare a fixture athlete tree against the archive manifest and force
-  read/write failures.
-- Fix direction: Define a persistent-data manifest, stream recursively, check
-  writer status, and verify the archive before atomic publication.
+- Regression coverage: The new 16-case `athleteBackupArchive` suite compares an
+  exact recursive fixture manifest, covers all SQLite companion files, hidden
+  files, source changes, cancellation, symlinks, corrupt archives and payloads,
+  source/output/directory write failures, null devices, and preservation of an
+  existing destination. The RED test first failed to compile because the
+  manifest, streaming, verification, and publication contract did not exist.
+- Resolution: Backups now use an explicit persistent-data manifest, recursively
+  stream regular files through checked `QIODevice` ZIP APIs, reject unsupported
+  links and classic-ZIP limits, and fail closed on every read, write, seek, or
+  flush error. The completed temporary archive is checked against the exact
+  manifest by size, CRC, and payload before an fsync-backed, no-overwrite atomic
+  publication; cancellation and all failures leave an existing target intact.
+- Verification: The focused suite passes 16 tests normally and under strict
+  ASan/UBSan/LSan. Existing archive and icon-bundle security suites pass 26 and
+  36 tests. The Qt 6.8.3 application compiles, links, and completes a `--version`
+  smoke test. The complete worktree run, including Python/SIP compilation,
+  passes 1,384 tests in 36 registered suites with no failures or skips.
 
 ### TRN-001: Device errors automatically delete the current recording
 

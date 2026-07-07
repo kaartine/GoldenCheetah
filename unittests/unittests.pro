@@ -20,6 +20,7 @@ equals(GC_UNITTESTS, active) {
 			   Core/splineCrash \
 			   FileIO/atomicActivitySave \
 			   FileIO/archiveSecurity \
+			   FileIO/athleteBackupArchive \
 			   FileIO/powerTapBounds \
 			   FileIO/rideFileOwnership \
 			   FileIO/tacxCafBounds \

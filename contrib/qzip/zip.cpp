@@ -56,6 +56,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <utility>
 
 #if defined(Q_OS_WIN)
 #include <qt_windows.h>
@@ -426,7 +427,7 @@ public:
     bool dirtyFileTree;
     QList<FileHeader> fileHeaders;
     QByteArray comment;
-    uint start_of_directory;
+    qint64 start_of_directory;
 };
 
 void QZipPrivate::fillFileInfo(int index, ZipReader::FileInfo &fileInfo) const
@@ -491,6 +492,11 @@ public:
     enum EntryType { Directory, File, Symlink };
 
     void addEntry(EntryType type, const QString &fileName, const QByteArray &contents);
+    void addEntry(EntryType type, const QString &fileName, QIODevice *source);
+    bool ensureWritable();
+    bool seekTo(qint64 position);
+    bool writeAll(const char *data, qint64 length);
+    void setStatus(ZipWriter::Status newStatus);
 };
 
 LocalFileHeader CentralFileHeader::toLocalHeader() const
@@ -595,6 +601,8 @@ void ZipReaderPrivate::scanFiles()
         return;
     }
 
+    start_of_directory = directoryStart;
+
     if (commentLength > 0) {
         comment = device->read(commentLength);
         if (comment.size() != commentLength) {
@@ -659,98 +667,413 @@ void ZipReaderPrivate::scanFiles()
     }
 }
 
-void ZipWriterPrivate::addEntry(EntryType type, const QString &fileName, const QByteArray &contents/*, QFile::Permissions permissions, QZip::Method m*/)
+void ZipWriterPrivate::setStatus(ZipWriter::Status newStatus)
+{
+    if (status == ZipWriter::NoError)
+        status = newStatus;
+}
+
+bool ZipWriterPrivate::seekTo(qint64 position)
+{
+    if (status != ZipWriter::NoError)
+        return false;
+    if (position < 0 || !device->seek(position)) {
+        setStatus(ZipWriter::FileWriteError);
+        return false;
+    }
+    return true;
+}
+
+bool ZipWriterPrivate::writeAll(const char *data, qint64 length)
+{
+    if (status != ZipWriter::NoError)
+        return false;
+
+    qint64 written = 0;
+    while (written < length) {
+        const qint64 count = device->write(data + written, length - written);
+        if (count <= 0) {
+            setStatus(ZipWriter::FileWriteError);
+            return false;
+        }
+        written += count;
+    }
+    return true;
+}
+
+bool ZipWriterPrivate::ensureWritable()
+{
+    if (status != ZipWriter::NoError)
+        return false;
+    if (!device) {
+        setStatus(ZipWriter::FileError);
+        return false;
+    }
+    if (!device->isOpen() && !device->open(QIODevice::WriteOnly)) {
+        setStatus(ZipWriter::FileOpenError);
+        return false;
+    }
+    if ((device->openMode() & QIODevice::WriteOnly) == 0) {
+        setStatus(ZipWriter::FileWriteError);
+        return false;
+    }
+    return seekTo(start_of_directory);
+}
+
+void ZipWriterPrivate::addEntry(
+    EntryType type,
+    const QString &fileName,
+    const QByteArray &contents)
 {
 #ifndef NDEBUG
     static const char *entryTypes[] = {
         "directory",
         "file     ",
         "symlink  " };
-    ZDEBUG() << "adding" << entryTypes[type] <<":" << fileName.toUtf8().data() << (type == 2 ? QByteArray(" -> " + contents).constData() : "");
+    ZDEBUG() << "adding" << entryTypes[type] <<":" << fileName.toUtf8().data()
+             << (type == Symlink ? QByteArray(" -> " + contents).constData() : "");
 #endif
 
-    if (! (device->isOpen() || device->open(QIODevice::WriteOnly))) {
-        status = ZipWriter::FileOpenError;
+    if (!ensureWritable())
+        return;
+    if (static_cast<quint64>(contents.size()) > 0xfffffffeULL
+        || start_of_directory > 0xfffffffeLL) {
+        setStatus(ZipWriter::FileError);
         return;
     }
-    device->seek(start_of_directory);
 
-    // don't compress small files
     ZipWriter::CompressionPolicy compression = compressionPolicy;
-    if (compressionPolicy == ZipWriter::AutoCompress) {
-        if (contents.length() < 64)
-            compression = ZipWriter::NeverCompress;
-        else
-            compression = ZipWriter::AlwaysCompress;
+    if (compression == ZipWriter::AutoCompress) {
+        compression = contents.size() < 64
+            ? ZipWriter::NeverCompress
+            : ZipWriter::AlwaysCompress;
+    }
+
+    QByteArray data = contents;
+    if (compression == ZipWriter::AlwaysCompress) {
+        ulong length = static_cast<ulong>(contents.size());
+        length += (length >> 12) + (length >> 14) + 11;
+        int result;
+        do {
+            if (length > static_cast<ulong>(std::numeric_limits<int>::max())) {
+                setStatus(ZipWriter::FileError);
+                return;
+            }
+            data.resize(static_cast<int>(length));
+            result = deflate(
+                reinterpret_cast<uchar *>(data.data()),
+                &length,
+                reinterpret_cast<const uchar *>(contents.constData()),
+                static_cast<ulong>(contents.size()));
+            if (result == Z_BUF_ERROR) {
+                if (length > std::numeric_limits<ulong>::max() / 2) {
+                    setStatus(ZipWriter::FileError);
+                    return;
+                }
+                length *= 2;
+            }
+        } while (result == Z_BUF_ERROR);
+        if (result != Z_OK || length > 0xfffffffeUL) {
+            setStatus(ZipWriter::FileError);
+            return;
+        }
+        data.resize(static_cast<int>(length));
     }
 
     FileHeader header;
     memset(&header.h, 0, sizeof(CentralFileHeader));
     writeUInt(header.h.signature, 0x02014b50);
-
     writeUShort(header.h.version_needed, 0x14);
-    writeUInt(header.h.uncompressed_size, contents.length());
+    writeUInt(header.h.uncompressed_size, static_cast<uint>(contents.size()));
+    writeUInt(header.h.compressed_size, static_cast<uint>(data.size()));
     writeMSDosDate(header.h.last_mod_file, QDateTime::currentDateTime());
-    QByteArray data = contents;
-    if (compression == ZipWriter::AlwaysCompress) {
+    if (compression == ZipWriter::AlwaysCompress)
         writeUShort(header.h.compression_method, 8);
 
-       ulong len = contents.length();
-        // shamelessly copied form zlib
-        len += (len >> 12) + (len >> 14) + 11;
-        int res;
-        do {
-            data.resize(len);
-            res = deflate((uchar*)data.data(), &len, (const uchar*)contents.constData(), contents.length());
-
-            switch (res) {
-            case Z_OK:
-                data.resize(len);
-                break;
-            case Z_MEM_ERROR:
-                qWarning("QZip: Z_MEM_ERROR: Not enough memory to compress file, skipping");
-                data.resize(0);
-                break;
-            case Z_BUF_ERROR:
-                len *= 2;
-                break;
-            }
-        } while (res == Z_BUF_ERROR);
-    }
-// TODO add a check if data.length() > contents.length().  Then try to store the original and revert the compression method to be uncompressed
-    writeUInt(header.h.compressed_size, data.length());
-    uint crc_32 = ::crc32(0, 0, 0);
-    crc_32 = ::crc32(crc_32, (const uchar *)contents.constData(), contents.length());
-    writeUInt(header.h.crc_32, crc_32);
+    uLong checksum = ::crc32(0L, Z_NULL, 0);
+    checksum = ::crc32(
+        checksum,
+        reinterpret_cast<const Bytef *>(contents.constData()),
+        static_cast<uInt>(contents.size()));
+    writeUInt(header.h.crc_32, static_cast<uint>(checksum));
 
     header.file_name = fileName.toLocal8Bit();
     if (header.file_name.size() > 0xffff) {
-        qWarning("QZip: Filename too long, chopping it to 65535 characters");
-        header.file_name = header.file_name.left(0xffff);
+        setStatus(ZipWriter::FileError);
+        return;
     }
-    writeUShort(header.h.file_name_length, header.file_name.length());
-    //h.extra_field_length[2];
-
+    writeUShort(
+        header.h.file_name_length,
+        static_cast<ushort>(header.file_name.size()));
     writeUShort(header.h.version_made, 3 << 8);
-    //uchar internal_file_attributes[2];
-    //uchar external_file_attributes[4];
+
     quint32 mode = permissionsToMode(permissions);
     switch (type) {
-        case File: mode |= S_IFREG; break;
-        case Directory: mode |= S_IFDIR; break;
-        case Symlink: mode |= S_IFLNK; break;
+    case File: mode |= S_IFREG; break;
+    case Directory: mode |= S_IFDIR; break;
+    case Symlink: mode |= S_IFLNK; break;
     }
     writeUInt(header.h.external_file_attributes, mode << 16);
-    writeUInt(header.h.offset_local_header, start_of_directory);
+    writeUInt(
+        header.h.offset_local_header,
+        static_cast<uint>(start_of_directory));
 
+    const LocalFileHeader localHeader = header.h.toLocalHeader();
+    if (!writeAll(
+            reinterpret_cast<const char *>(&localHeader),
+            sizeof(LocalFileHeader))
+        || !writeAll(header.file_name.constData(), header.file_name.size())
+        || !writeAll(data.constData(), data.size())) {
+        return;
+    }
+
+    const qint64 endPosition = device->pos();
+    if (endPosition < start_of_directory || endPosition > 0xfffffffeLL) {
+        setStatus(ZipWriter::FileError);
+        return;
+    }
 
     fileHeaders.append(header);
+    start_of_directory = endPosition;
+    dirtyFileTree = true;
+}
 
-    LocalFileHeader h = header.h.toLocalHeader();
-    device->write((const char *)&h, sizeof(LocalFileHeader));
-    device->write(header.file_name);
-    device->write(data);
-    start_of_directory = device->pos();
+void ZipWriterPrivate::addEntry(
+    EntryType type,
+    const QString &fileName,
+    QIODevice *source)
+{
+    if (!source) {
+        setStatus(ZipWriter::FileReadError);
+        return;
+    }
+    if (!ensureWritable())
+        return;
+
+    bool openedHere = false;
+    if ((source->openMode() & QIODevice::ReadOnly) == 0) {
+        if (source->isOpen() || !source->open(QIODevice::ReadOnly)) {
+            setStatus(ZipWriter::FileOpenError);
+            return;
+        }
+        openedHere = true;
+    }
+    const auto closeSource = [&]() {
+        if (openedHere) source->close();
+    };
+
+    if (!source->isSequential()) {
+        const qint64 remaining = source->size() - source->pos();
+        if (remaining < 0
+            || static_cast<quint64>(remaining) > 0xfffffffeULL) {
+            setStatus(ZipWriter::FileError);
+            closeSource();
+            return;
+        }
+    }
+    if (start_of_directory > 0xfffffffeLL) {
+        setStatus(ZipWriter::FileError);
+        closeSource();
+        return;
+    }
+
+    ZipWriter::CompressionPolicy compression = compressionPolicy;
+    if (compression == ZipWriter::AutoCompress) {
+        const qint64 remaining = source->isSequential()
+            ? 64
+            : source->size() - source->pos();
+        compression = remaining < 64
+            ? ZipWriter::NeverCompress
+            : ZipWriter::AlwaysCompress;
+    }
+
+    FileHeader header;
+    memset(&header.h, 0, sizeof(CentralFileHeader));
+    writeUInt(header.h.signature, 0x02014b50);
+    writeUShort(header.h.version_needed, 0x14);
+    writeMSDosDate(header.h.last_mod_file, QDateTime::currentDateTime());
+    if (compression == ZipWriter::AlwaysCompress)
+        writeUShort(header.h.compression_method, 8);
+
+    header.file_name = fileName.toLocal8Bit();
+    if (header.file_name.size() > 0xffff) {
+        setStatus(ZipWriter::FileError);
+        closeSource();
+        return;
+    }
+    writeUShort(
+        header.h.file_name_length,
+        static_cast<ushort>(header.file_name.size()));
+    writeUShort(header.h.version_made, 3 << 8);
+
+    quint32 mode = permissionsToMode(permissions);
+    switch (type) {
+    case File: mode |= S_IFREG; break;
+    case Directory: mode |= S_IFDIR; break;
+    case Symlink: mode |= S_IFLNK; break;
+    }
+    writeUInt(header.h.external_file_attributes, mode << 16);
+    const qint64 localHeaderPosition = start_of_directory;
+    writeUInt(
+        header.h.offset_local_header,
+        static_cast<uint>(localHeaderPosition));
+
+    const LocalFileHeader placeholder = header.h.toLocalHeader();
+    if (!writeAll(
+            reinterpret_cast<const char *>(&placeholder),
+            sizeof(LocalFileHeader))
+        || !writeAll(header.file_name.constData(), header.file_name.size())) {
+        closeSource();
+        return;
+    }
+
+    QByteArray input(64 * 1024, Qt::Uninitialized);
+    QByteArray output(64 * 1024, Qt::Uninitialized);
+    quint64 uncompressedSize = 0;
+    quint64 compressedSize = 0;
+    uLong checksum = ::crc32(0L, Z_NULL, 0);
+
+    const auto acceptInput = [&](const char *data, qint64 count) {
+        if (count < 0
+            || uncompressedSize + static_cast<quint64>(count)
+                > 0xfffffffeULL) {
+            setStatus(ZipWriter::FileError);
+            return false;
+        }
+        uncompressedSize += static_cast<quint64>(count);
+        checksum = ::crc32(
+            checksum,
+            reinterpret_cast<const Bytef *>(data),
+            static_cast<uInt>(count));
+        return true;
+    };
+    const auto writeOutput = [&](const char *data, qint64 count) {
+        if (count < 0
+            || compressedSize + static_cast<quint64>(count)
+                > 0xfffffffeULL) {
+            setStatus(ZipWriter::FileError);
+            return false;
+        }
+        if (!writeAll(data, count))
+            return false;
+        compressedSize += static_cast<quint64>(count);
+        return true;
+    };
+    const auto readChunk = [&]() -> qint64 {
+        const qint64 count = source->read(input.data(), input.size());
+        if (count < 0 || (count == 0 && !source->atEnd())) {
+            setStatus(ZipWriter::FileReadError);
+            return -1;
+        }
+        return count;
+    };
+
+    if (compression == ZipWriter::NeverCompress) {
+        for (;;) {
+            const qint64 count = readChunk();
+            if (count < 0 || count == 0)
+                break;
+            if (!acceptInput(input.constData(), count)
+                || !writeOutput(input.constData(), count)) {
+                break;
+            }
+        }
+    } else {
+        z_stream stream;
+        memset(&stream, 0, sizeof(stream));
+        const int initResult = deflateInit2(
+            &stream,
+            Z_DEFAULT_COMPRESSION,
+            Z_DEFLATED,
+            -MAX_WBITS,
+            8,
+            Z_DEFAULT_STRATEGY);
+        if (initResult != Z_OK) {
+            setStatus(ZipWriter::FileError);
+        } else {
+            bool inputComplete = false;
+            while (status == ZipWriter::NoError && !inputComplete) {
+                const qint64 count = readChunk();
+                if (count < 0)
+                    break;
+                if (count == 0) {
+                    inputComplete = true;
+                    break;
+                }
+                if (!acceptInput(input.constData(), count))
+                    break;
+
+                stream.next_in = reinterpret_cast<Bytef *>(input.data());
+                stream.avail_in = static_cast<uInt>(count);
+                while (status == ZipWriter::NoError
+                       && stream.avail_in > 0) {
+                    stream.next_out =
+                        reinterpret_cast<Bytef *>(output.data());
+                    stream.avail_out = static_cast<uInt>(output.size());
+                    const int result = ::deflate(&stream, Z_NO_FLUSH);
+                    if (result != Z_OK) {
+                        setStatus(ZipWriter::FileError);
+                        break;
+                    }
+                    const qint64 produced =
+                        output.size() - stream.avail_out;
+                    if (!writeOutput(output.constData(), produced))
+                        break;
+                }
+            }
+
+            if (status == ZipWriter::NoError && inputComplete) {
+                int result = Z_OK;
+                while (result != Z_STREAM_END
+                       && status == ZipWriter::NoError) {
+                    stream.next_out =
+                        reinterpret_cast<Bytef *>(output.data());
+                    stream.avail_out = static_cast<uInt>(output.size());
+                    result = ::deflate(&stream, Z_FINISH);
+                    if (result != Z_OK && result != Z_STREAM_END) {
+                        setStatus(ZipWriter::FileError);
+                        break;
+                    }
+                    const qint64 produced =
+                        output.size() - stream.avail_out;
+                    if (!writeOutput(output.constData(), produced))
+                        break;
+                }
+            }
+            if (deflateEnd(&stream) != Z_OK)
+                setStatus(ZipWriter::FileError);
+        }
+    }
+
+    closeSource();
+    if (status != ZipWriter::NoError)
+        return;
+
+    const qint64 endPosition = device->pos();
+    if (endPosition < localHeaderPosition || endPosition > 0xfffffffeLL) {
+        setStatus(ZipWriter::FileError);
+        return;
+    }
+
+    writeUInt(
+        header.h.uncompressed_size,
+        static_cast<uint>(uncompressedSize));
+    writeUInt(
+        header.h.compressed_size,
+        static_cast<uint>(compressedSize));
+    writeUInt(header.h.crc_32, static_cast<uint>(checksum));
+
+    const LocalFileHeader completedHeader = header.h.toLocalHeader();
+    if (!seekTo(localHeaderPosition)
+        || !writeAll(
+            reinterpret_cast<const char *>(&completedHeader),
+            sizeof(LocalFileHeader))
+        || !seekTo(endPosition)) {
+        return;
+    }
+
+    fileHeaders.append(header);
+    start_of_directory = endPosition;
     dirtyFileTree = true;
 }
 
@@ -1022,6 +1345,172 @@ bool ZipReader::fileData(const QString &fileName, QByteArray *data) const
 
     *data = uncompressed;
     return true;
+}
+
+bool ZipReader::verifyFile(const QString &fileName) const
+{
+    d->scanFiles();
+    if (d->status != ZipReader::NoError)
+        return false;
+
+    int index = 0;
+    for (; index < d->fileHeaders.size(); ++index) {
+        if (QString::fromLocal8Bit(d->fileHeaders.at(index).file_name)
+            == fileName) {
+            break;
+        }
+    }
+    if (index == d->fileHeaders.size())
+        return false;
+
+    const FileHeader header = d->fileHeaders.at(index);
+    const quint32 compressedSize = readUInt(header.h.compressed_size);
+    const quint32 uncompressedSize = readUInt(header.h.uncompressed_size);
+    const quint32 expectedChecksum = readUInt(header.h.crc_32);
+    const quint16 compressionMethod =
+        readUShort(header.h.compression_method);
+    if (compressionMethod != 0 && compressionMethod != 8)
+        return false;
+
+    const qint64 localHeaderPosition =
+        readUInt(header.h.offset_local_header);
+    if (localHeaderPosition < 0
+        || localHeaderPosition
+            > d->start_of_directory
+                - static_cast<qint64>(sizeof(LocalFileHeader))
+        || !d->device->seek(localHeaderPosition)) {
+        return false;
+    }
+
+    LocalFileHeader localHeader;
+    if (d->device->read(
+            reinterpret_cast<char *>(&localHeader),
+            sizeof(LocalFileHeader)) != sizeof(LocalFileHeader)
+        || readUInt(localHeader.signature) != 0x04034b50
+        || readUShort(localHeader.compression_method) != compressionMethod
+        || readUInt(localHeader.crc_32) != expectedChecksum
+        || readUInt(localHeader.compressed_size) != compressedSize
+        || readUInt(localHeader.uncompressed_size) != uncompressedSize) {
+        return false;
+    }
+
+    const quint16 fileNameLength =
+        readUShort(localHeader.file_name_length);
+    const quint16 extraFieldLength =
+        readUShort(localHeader.extra_field_length);
+    const QByteArray localFileName = d->device->read(fileNameLength);
+    if (localFileName.size() != fileNameLength
+        || localFileName != header.file_name) {
+        return false;
+    }
+
+    const qint64 payloadPosition =
+        d->device->pos() + extraFieldLength;
+    const qint64 payloadEnd =
+        payloadPosition + static_cast<qint64>(compressedSize);
+    if (payloadPosition < d->device->pos()
+        || payloadEnd < payloadPosition
+        || payloadEnd > d->start_of_directory
+        || !d->device->seek(payloadPosition)) {
+        return false;
+    }
+
+    QByteArray input(64 * 1024, Qt::Uninitialized);
+    QByteArray output(64 * 1024, Qt::Uninitialized);
+    quint64 producedTotal = 0;
+    uLong checksum = ::crc32(0L, Z_NULL, 0);
+
+    if (compressionMethod == 0) {
+        if (compressedSize != uncompressedSize)
+            return false;
+
+        quint64 remaining = compressedSize;
+        while (remaining > 0) {
+            const qint64 requested = static_cast<qint64>(
+                qMin<quint64>(remaining, input.size()));
+            const qint64 count =
+                d->device->read(input.data(), requested);
+            if (count <= 0)
+                return false;
+            checksum = ::crc32(
+                checksum,
+                reinterpret_cast<const Bytef *>(input.constData()),
+                static_cast<uInt>(count));
+            producedTotal += static_cast<quint64>(count);
+            remaining -= static_cast<quint64>(count);
+        }
+    } else {
+        z_stream stream;
+        memset(&stream, 0, sizeof(stream));
+        if (inflateInit2(&stream, -MAX_WBITS) != Z_OK)
+            return false;
+
+        bool valid = true;
+        bool streamEnded = false;
+        quint64 remaining = compressedSize;
+        while (valid && remaining > 0 && !streamEnded) {
+            const qint64 requested = static_cast<qint64>(
+                qMin<quint64>(remaining, input.size()));
+            const qint64 count =
+                d->device->read(input.data(), requested);
+            if (count <= 0) {
+                valid = false;
+                break;
+            }
+            remaining -= static_cast<quint64>(count);
+            stream.next_in =
+                reinterpret_cast<Bytef *>(input.data());
+            stream.avail_in = static_cast<uInt>(count);
+
+            while (valid && stream.avail_in > 0) {
+                const uInt inputBefore = stream.avail_in;
+                stream.next_out =
+                    reinterpret_cast<Bytef *>(output.data());
+                stream.avail_out =
+                    static_cast<uInt>(output.size());
+                const int result = ::inflate(&stream, Z_NO_FLUSH);
+                if (result != Z_OK && result != Z_STREAM_END) {
+                    valid = false;
+                    break;
+                }
+
+                const qint64 produced =
+                    output.size() - stream.avail_out;
+                if (produced > 0) {
+                    checksum = ::crc32(
+                        checksum,
+                        reinterpret_cast<const Bytef *>(output.constData()),
+                        static_cast<uInt>(produced));
+                    producedTotal += static_cast<quint64>(produced);
+                    if (producedTotal > uncompressedSize) {
+                        valid = false;
+                        break;
+                    }
+                }
+                if (result == Z_STREAM_END) {
+                    streamEnded = true;
+                    if (stream.avail_in != 0 || remaining != 0)
+                        valid = false;
+                    break;
+                }
+                if (stream.avail_in == inputBefore && produced == 0) {
+                    valid = false;
+                    break;
+                }
+            }
+        }
+
+        if (!streamEnded || remaining != 0)
+            valid = false;
+        if (inflateEnd(&stream) != Z_OK)
+            valid = false;
+        if (!valid)
+            return false;
+    }
+
+    return producedTotal == uncompressedSize
+        && static_cast<quint32>(checksum) == expectedChecksum
+        && d->device->pos() == payloadEnd;
 }
 
 struct ZipExtractionEntry
@@ -1440,6 +1929,23 @@ ZipWriter::ZipWriter(const QString &fileName, QIODevice::OpenMode mode)
     d->status = status;
 }
 
+/*!
+    Create a ZIP archive on an existing writable device. The device is not
+    owned by the writer and is closed when the archive is closed.
+*/
+ZipWriter::ZipWriter(QIODevice *device)
+    : d(std::make_unique<ZipWriterPrivate>(device))
+{
+    if (!device) {
+        d->status = ZipWriter::FileError;
+    } else if (!device->isOpen()
+               && !device->open(QIODevice::WriteOnly)) {
+        d->status = ZipWriter::FileOpenError;
+    } else if ((device->openMode() & QIODevice::WriteOnly) == 0) {
+        d->status = ZipWriter::FileWriteError;
+    }
+}
+
 ZipWriter::~ZipWriter()
 {
     close();
@@ -1458,7 +1964,7 @@ QIODevice* ZipWriter::device() const
 */
 bool ZipWriter::isWritable() const
 {
-    return d->device->isWritable();
+    return d->device && d->device->isWritable();
 }
 
 /*!
@@ -1482,6 +1988,7 @@ bool ZipWriter::exists() const
     \value FileOpenError    The file could not be opened.
     \value FilePermissionsError The file could not be accessed.
     \value FileError        Another file error occurred.
+    \value FileReadError    An error occurred when reading source data.
 */
 
 /*!
@@ -1566,27 +2073,15 @@ void ZipWriter::addFile(const QString &fileName, const QByteArray &data)
 }
 
 /*!
-    Add a file to the archive with \a device as the source of the contents.
-    The contents returned from QIODevice::readAll() will be used as the
-    filedata.
-    The file will be stored in the archive using the \a fileName which
-    includes the full path in the archive.
+    Add a file to the archive with \a device as the source. The source is read
+    and compressed incrementally, so the complete file is never held in memory.
 */
 void ZipWriter::addFile(const QString &fileName, QIODevice *device)
 {
-    Q_ASSERT(device);
-    QIODevice::OpenMode mode = device->openMode();
-    bool opened = false;
-    if ((mode & QIODevice::ReadOnly) == 0) {
-        opened = true;
-        if (! device->open(QIODevice::ReadOnly)) {
-            d->status = FileOpenError;
-            return;
-        }
-    }
-    d->addEntry(ZipWriterPrivate::File, QDir::fromNativeSeparators(fileName), device->readAll());
-    if (opened)
-        device->close();
+    d->addEntry(
+        ZipWriterPrivate::File,
+        QDir::fromNativeSeparators(fileName),
+        device);
 }
 
 /*!
@@ -1617,36 +2112,84 @@ void ZipWriter::addSymLink(const QString &fileName, const QString &destination)
 */
 void ZipWriter::close()
 {
-    if (!(d->device->openMode() & QIODevice::WriteOnly)) {
+    if (!d || !d->device)
+        return;
+    if ((d->device->openMode() & QIODevice::WriteOnly) == 0) {
+        if (d->device->isOpen())
+            d->device->close();
+        return;
+    }
+    if (d->status != ZipWriter::NoError) {
+        d->device->close();
+        return;
+    }
+    if (d->fileHeaders.size() >= std::numeric_limits<quint16>::max()
+        || d->comment.size() > std::numeric_limits<quint16>::max()
+        || !d->seekTo(d->start_of_directory)) {
+        d->setStatus(ZipWriter::FileError);
         d->device->close();
         return;
     }
 
-    //qDebug("QZip::close writing directory, %d entries", d->fileHeaders.size());
-    d->device->seek(d->start_of_directory);
-    // write new directory
-    for (int i = 0; i < d->fileHeaders.size(); ++i) {
-        const FileHeader &header = d->fileHeaders.at(i);
-        d->device->write((const char *)&header.h, sizeof(CentralFileHeader));
-        d->device->write(header.file_name);
-        d->device->write(header.extra_field);
-        d->device->write(header.file_comment);
+    for (const FileHeader &header : std::as_const(d->fileHeaders)) {
+        if (!d->writeAll(
+                reinterpret_cast<const char *>(&header.h),
+                sizeof(CentralFileHeader))
+            || !d->writeAll(
+                header.file_name.constData(),
+                header.file_name.size())
+            || !d->writeAll(
+                header.extra_field.constData(),
+                header.extra_field.size())
+            || !d->writeAll(
+                header.file_comment.constData(),
+                header.file_comment.size())) {
+            break;
+        }
     }
-    int dir_size = d->device->pos() - d->start_of_directory;
-    // write end of directory
-    EndOfDirectory eod;
-    memset(&eod, 0, sizeof(EndOfDirectory));
-    writeUInt(eod.signature, 0x06054b50);
-    //uchar this_disk[2];
-    //uchar start_of_directory_disk[2];
-    writeUShort(eod.num_dir_entries_this_disk, d->fileHeaders.size());
-    writeUShort(eod.num_dir_entries, d->fileHeaders.size());
-    writeUInt(eod.directory_size, dir_size);
-    writeUInt(eod.dir_start_offset, d->start_of_directory);
-    writeUShort(eod.comment_length, d->comment.length());
 
-    d->device->write((const char *)&eod, sizeof(EndOfDirectory));
-    d->device->write(d->comment);
+    const qint64 directoryEnd = d->device->pos();
+    const qint64 directorySize =
+        directoryEnd - d->start_of_directory;
+    if (d->status == ZipWriter::NoError
+        && (directorySize < 0
+            || directorySize > 0xfffffffeLL
+            || d->start_of_directory > 0xfffffffeLL)) {
+        d->setStatus(ZipWriter::FileError);
+    }
+
+    if (d->status == ZipWriter::NoError) {
+        EndOfDirectory end;
+        memset(&end, 0, sizeof(EndOfDirectory));
+        writeUInt(end.signature, 0x06054b50);
+        writeUShort(
+            end.num_dir_entries_this_disk,
+            static_cast<ushort>(d->fileHeaders.size()));
+        writeUShort(
+            end.num_dir_entries,
+            static_cast<ushort>(d->fileHeaders.size()));
+        writeUInt(
+            end.directory_size,
+            static_cast<uint>(directorySize));
+        writeUInt(
+            end.dir_start_offset,
+            static_cast<uint>(d->start_of_directory));
+        writeUShort(
+            end.comment_length,
+            static_cast<ushort>(d->comment.size()));
+
+        d->writeAll(
+            reinterpret_cast<const char *>(&end),
+            sizeof(EndOfDirectory));
+        d->writeAll(d->comment.constData(), d->comment.size());
+    }
+
+    if (d->status == ZipWriter::NoError) {
+        QFileDevice *fileDevice =
+            qobject_cast<QFileDevice *>(d->device);
+        if (fileDevice && !fileDevice->flush())
+            d->setStatus(ZipWriter::FileWriteError);
+    }
     d->device->close();
 }
 

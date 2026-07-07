@@ -101,6 +101,7 @@ public:
     FileInfo entryInfoAt(int index) const;
     QByteArray fileData(const QString &fileName) const;
     bool fileData(const QString &fileName, QByteArray *data) const;
+    bool verifyFile(const QString &fileName) const;
     bool extractAll(const QString &destinationDir,
                     QStringList *extractedRelativeFiles = nullptr,
                     const QList<QString> *allowedRelativeFiles = nullptr) const;

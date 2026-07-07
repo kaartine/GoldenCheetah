@@ -19,29 +19,28 @@
 #ifndef _GC_AthleteBackup_h
 #define _GC_AthleteBackup_h 1
 
+#include <QDir>
+#include <QObject>
 #include <QString>
-
-#include "Athlete.h"
-
 
 class AthleteBackup : public QObject
 {
     Q_OBJECT
 
-    public:
-        AthleteBackup(QDir athlete);
-        ~AthleteBackup();
-        void backupOnClose();
-        void backupImmediate();
+public:
+    explicit AthleteBackup(QDir athleteHome);
+    ~AthleteBackup();
 
-    private:
-        AthleteDirectoryStructure *athleteDirs;
-        QString athlete;
-        QString backupFolder;
-        QList<QDir> sourceFolderList;
-        bool backup(QString progressText);
+    void backupOnClose();
+    void backupImmediate();
 
+private:
+    QDir athleteHome;
+    QDir globalHome;
+    QString athlete;
+    QString backupFolder;
+
+    bool backup(const QString &progressText);
 };
-
 
 #endif

@@ -16,193 +16,179 @@
  * Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#include <QProgressDialog>
-#include <QMessageBox>
+#include "AthleteBackup.h"
+
+#include "AthleteBackupArchive.h"
+#include "GcUpgrade.h"
+#include "Settings.h"
+
+#include <QDateTime>
 #include <QFileDialog>
+#include <QFileInfo>
+#include <QMessageBox>
+#include <QProgressDialog>
 #include <QStorageInfo>
 
-#include "Athlete.h"
-#include "AthleteBackup.h"
-#include "Settings.h"
-#include "GcUpgrade.h"
-
-#include "../qzip/zipwriter.h"
-#include "../qzip/zipreader.h"
-
-
+#include <limits>
+#include <utility>
 
 AthleteBackup::AthleteBackup(QDir athleteHome)
+    : athleteHome(std::move(athleteHome)),
+      globalHome(this->athleteHome),
+      athlete(this->athleteHome.dirName())
 {
-    this->athleteDirs = new AthleteDirectoryStructure(athleteHome);
-    this->athlete = athleteHome.dirName();
-    this->backupFolder = "";
-
-    // set the directories to be backed up
-    // for a FULL backup basically all data folders
-    sourceFolderList.append(athleteDirs->activities());
-    sourceFolderList.append(athleteDirs->imports());
-    sourceFolderList.append(athleteDirs->records());
-    sourceFolderList.append(athleteDirs->downloads());
-    sourceFolderList.append(athleteDirs->fileBackup());
-    sourceFolderList.append(athleteDirs->config());
-    sourceFolderList.append(athleteDirs->calendar());
-    sourceFolderList.append(athleteDirs->workouts());
-    sourceFolderList.append(athleteDirs->media());
+    globalHome.cdUp();
 }
 
-AthleteBackup::~AthleteBackup()
-{
-    delete athleteDirs;
-}
+AthleteBackup::~AthleteBackup() = default;
 
-void
-AthleteBackup::backupOnClose()
+void AthleteBackup::backupOnClose()
 {
-    int backupPeriod = appsettings->cvalue(athlete, GC_AUTOBACKUP_PERIOD, 0).toInt();
-    backupFolder = appsettings->cvalue(athlete, GC_AUTOBACKUP_FOLDER, "").toString();
-    if (backupPeriod == 0 || backupFolder == "" ) return;
-    int backupCounter = appsettings->cvalue(athlete, GC_AUTOBACKUP_COUNTER, 0).toInt();
-    backupCounter++;
+    const int backupPeriod =
+        appsettings->cvalue(athlete, GC_AUTOBACKUP_PERIOD, 0).toInt();
+    backupFolder =
+        appsettings->cvalue(athlete, GC_AUTOBACKUP_FOLDER, "").toString();
+    if (backupPeriod == 0 || backupFolder.isEmpty()) return;
+
+    int backupCounter =
+        appsettings->cvalue(athlete, GC_AUTOBACKUP_COUNTER, 0).toInt();
+    ++backupCounter;
     if (backupCounter < backupPeriod) {
-        appsettings->setCValue(athlete, GC_AUTOBACKUP_COUNTER, backupCounter);
+        appsettings->setCValue(
+            athlete, GC_AUTOBACKUP_COUNTER, backupCounter);
         return;
     }
 
     backup(tr("Abort Backup and Reset Counter"));
-
     appsettings->setCValue(athlete, GC_AUTOBACKUP_COUNTER, 0);
-
 }
 
-void
-AthleteBackup::backupImmediate()
+void AthleteBackup::backupImmediate()
 {
-    backupFolder = appsettings->cvalue(athlete, GC_AUTOBACKUP_FOLDER, "").toString();
-    QString dir = QFileDialog::getExistingDirectory(NULL, tr("Select Backup Directory"),
-                            backupFolder, QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
-    if (dir == "") {
-        QMessageBox::information(NULL, tr("Athlete Backup"), tr("No backup directory selected - backup aborted"));
+    backupFolder =
+        appsettings->cvalue(athlete, GC_AUTOBACKUP_FOLDER, "").toString();
+    const QString directory = QFileDialog::getExistingDirectory(
+        nullptr,
+        tr("Select Backup Directory"),
+        backupFolder,
+        QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+    if (directory.isEmpty()) {
+        QMessageBox::information(
+            nullptr,
+            tr("Athlete Backup"),
+            tr("No backup directory selected - backup aborted"));
         return;
     }
-    // do the backup
-    backupFolder = dir;
-    QMessageBox msgBox;
-    msgBox.setWindowTitle(tr("Athlete Backup"));
-    msgBox.setText( tr("Any unsaved data will not be included into the backup .zip file."));
-    msgBox.setInformativeText(tr("Do you want to proceed?"));
-    msgBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
-    msgBox.setDefaultButton(QMessageBox::Yes);
-    int ret = msgBox.exec();
-    switch (ret) {
-    case QMessageBox::No:
-        return; // No Backup
-        break;
-    default:
-        // Ok - let's backup
-        break;
-    }
-    if (backup(tr("Abort Backup"))) {
-       QMessageBox::information(NULL, tr("Athlete Backup"), tr("Backup successfully stored in \n%1").arg(backupFolder));
-    }
 
+    backupFolder = directory;
+    QMessageBox confirmation;
+    confirmation.setWindowTitle(tr("Athlete Backup"));
+    confirmation.setText(
+        tr("Any unsaved data will not be included into the backup .zip file."));
+    confirmation.setInformativeText(tr("Do you want to proceed?"));
+    confirmation.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+    confirmation.setDefaultButton(QMessageBox::Yes);
+    if (confirmation.exec() == QMessageBox::No) return;
+
+    if (backup(tr("Abort Backup"))) {
+        QMessageBox::information(
+            nullptr,
+            tr("Athlete Backup"),
+            tr("Backup successfully stored in \n%1").arg(backupFolder));
+    }
 }
 
-// -- private methods
-
-bool
-AthleteBackup::backup(QString progressText)
+bool AthleteBackup::backup(const QString &progressText)
 {
-
-    // backup requested so lets see if we have something to backup and if yes, how much
-    int fileCount = 0;
+    AthleteBackupManifest manifest;
     qint64 fileSize = 0;
-    // count the files for the progress bar and the calculate the overall size
-    foreach (QDir folder, sourceFolderList) {
-        // get all files
-        foreach (QFileInfo fileName, folder.entryInfoList(QDir::Files | QDir::NoDotAndDotDot | QDir::NoSymLinks)) {
-           fileCount++;
-           fileSize += fileName.size();
-
-        }
-    }
-
-    if (fileCount == 0) {
-       QMessageBox::information(NULL, tr("Athlete Backup"), tr("No files found for athlete %1 - all athlete sub-directories are empty.").arg(athlete));
-       return false;
-    }
-
-    // if if there is enough space available for the backup
-    QStorageInfo storage(backupFolder);
-    if (storage.isValid() && storage.isReady()) {
-        // let's assume a 1:5 Zip compression to have enough space available for the ZIP
-        if (storage.bytesAvailable() < fileSize / 5) {
-            QMessageBox::warning(NULL, tr("Athlete Backup"), tr("Not enough space available on disk: %1 - no backup .zip file created").arg(storage.rootPath()));
-            return false;
-        }
-    } else {
-        QMessageBox::warning(NULL, tr("Athlete Backup"), tr("Directory %1 not available. No backup .zip file created for athlete %2.").arg(backupFolder).arg(athlete));
+    QString error;
+    if (!buildAthleteBackupManifest(
+            athleteHome,
+            globalHome,
+            manifest,
+            fileSize,
+            error)) {
+        QMessageBox::warning(
+            nullptr,
+            tr("Athlete Backup"),
+            tr("The backup could not be created: %1").arg(error));
         return false;
     }
 
-    QChar zero = QLatin1Char('0');
-    QString targetFileName = QString( "GC_%1_%2_%3_%4_%5_%6_%7_%8.zip" )
-                       .arg ( VERSION_LATEST )
-                       .arg ( athlete )
-                       .arg ( QDate::currentDate().year(), 4, 10, zero )
-                       .arg ( QDate::currentDate().month(), 2, 10, zero )
-                       .arg ( QDate::currentDate().day(), 2, 10, zero )
-                       .arg ( QTime::currentTime().hour(), 2, 10, zero )
-                       .arg ( QTime::currentTime().minute(), 2, 10, zero )
-                       .arg ( QTime::currentTime().second(), 2, 10, zero );
-
-
-    // add files using zip writer
-    QFile zipFile(backupFolder+"/"+targetFileName);
-    if (!zipFile.open(QIODevice::WriteOnly)) {
-        QMessageBox::warning(NULL, tr("Athlete Backup"), tr("Backup file %1 cannot be created.").arg(zipFile.fileName()));
+    if (manifest.isEmpty()) {
+        QMessageBox::information(
+            nullptr,
+            tr("Athlete Backup"),
+            tr("No files found for athlete %1 - all athlete sub-directories are empty.")
+                .arg(athlete));
         return false;
     }
-    zipFile.close();
-    ZipWriter writer(zipFile.fileName());
 
-    QProgressDialog progress(tr("Adding files to backup %1 for athlete %2 ...").arg(targetFileName).arg(athlete), progressText, 0, fileCount, NULL);
+    const QStorageInfo storage(backupFolder);
+    if (!storage.isValid() || !storage.isReady()) {
+        QMessageBox::warning(
+            nullptr,
+            tr("Athlete Backup"),
+            tr("Directory %1 not available. No backup .zip file created for athlete %2.")
+                .arg(backupFolder, athlete));
+        return false;
+    }
+
+    const qint64 archiveOverhead = qMax<qint64>(
+        1024 * 1024,
+        static_cast<qint64>(manifest.size()) * 512);
+    if (fileSize > std::numeric_limits<qint64>::max() - archiveOverhead
+        || storage.bytesAvailable() < fileSize + archiveOverhead) {
+        QMessageBox::warning(
+            nullptr,
+            tr("Athlete Backup"),
+            tr("Not enough space available on disk: %1 - no backup .zip file created")
+                .arg(storage.rootPath()));
+        return false;
+    }
+
+    const QDateTime now = QDateTime::currentDateTime();
+    const QString targetFileName =
+        QStringLiteral("GC_%1_%2_%3.zip")
+            .arg(
+                QString::number(VERSION_LATEST),
+                athlete,
+                now.toString(QStringLiteral("yyyy_MM_dd_HH_mm_ss")));
+    const QString targetPath =
+        QDir(backupFolder).filePath(targetFileName);
+
+    QProgressDialog progress(
+        tr("Adding files to backup %1 for athlete %2 ...")
+            .arg(targetFileName, athlete),
+        progressText,
+        0,
+        manifest.size(),
+        nullptr);
     progress.setWindowModality(Qt::WindowModal);
 
-    // now do the Zipping
-    bool userCanceled = false;
-    int fileCounter = 0;
-    foreach (QDir folder, sourceFolderList) {
-        // get all files
-        writer.addDirectory(folder.dirName());
-        foreach (QFileInfo fileName, folder.entryInfoList(QDir::Files | QDir::NoDotAndDotDot | QDir::NoSymLinks)) {
-            QFile file(fileName.canonicalFilePath());
-            if (file.open(QIODevice::ReadOnly)) {
-                if (progress.wasCanceled()) {
-                    userCanceled = true;
-                    break;
-                }
-                writer.addFile(folder.dirName()+"/"+fileName.fileName(), file.readAll());
-                progress.setValue(fileCounter);
-                fileCounter++;
-                file.close();
-            }
+    const AthleteBackupProgressFunction updateProgress =
+        [&progress](int completed, int total) {
+            progress.setMaximum(total);
+            progress.setValue(completed);
+            return !progress.wasCanceled();
+        };
+
+    if (!publishVerifiedAthleteBackup(
+            targetPath,
+            manifest,
+            error,
+            athleteBackupFileSourceFactory(),
+            updateProgress)) {
+        if (error != QStringLiteral("Backup canceled")) {
+            QMessageBox::warning(
+                nullptr,
+                tr("Athlete Backup"),
+                tr("The backup could not be created: %1").arg(error));
         }
-        if (userCanceled) break;
-    }
-
-    // final processing
-    writer.close();
-
-    // delete the .ZIP file if the user canceled the backup
-    if (userCanceled) {
-        zipFile.remove();
         return false;
     }
 
-    // we are done, full progress
-    progress.setValue(fileCount);
+    progress.setValue(manifest.size());
     return true;
-
 }
-
-

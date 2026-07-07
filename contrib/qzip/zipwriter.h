@@ -65,6 +65,7 @@ class ZipWriter
 {
 public:
     ZipWriter(const QString &fileName, QIODevice::OpenMode mode = (QIODevice::WriteOnly | QIODevice::Truncate) );
+    explicit ZipWriter(QIODevice *device);
 
     ~ZipWriter();
 
@@ -78,7 +79,8 @@ public:
         FileWriteError,
         FileOpenError,
         FilePermissionsError,
-        FileError
+        FileError,
+        FileReadError
     };
 
     Status status() const;
