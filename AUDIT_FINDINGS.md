@@ -393,14 +393,27 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### TRN-002: Recording I/O failures are silent
 
-- Status: OPEN
-- Code: `src/Train/TrainSidebar.cpp:1466`,
-  `src/Train/TrainSidebar.cpp:1548`, `src/Train/TrainSidebar.cpp:2362`
+- Status: FIXED
+- Code: `src/Train/TrainingRecordingIo.h`,
+  `src/Train/TrainSidebar.cpp:1477`, `src/Train/TrainSidebar.cpp:1559`,
+  `src/Train/TrainSidebar.cpp:1623`, `src/Train/TrainSidebar.cpp:2485`
 - Impact: Failure to create, write, or flush the workout CSV is not surfaced.
   Training continues while the UI implies that data is being recorded.
-- Test: Use an unwritable path and a failing/short-write device and verify a
-  visible fatal recording state plus preservation of any partial data.
-- Fix direction: Model recording health explicitly and check every I/O result.
+- Regression test: `unittests/Train/trainingRecordingIo` covers an unwritable
+  target, failed and short writes, failed flushes, exact successful writes,
+  explicit Stop-time flushing, and first-failure latching. The existing
+  `unittests/Train/trainingStopPolicy` suite verifies that keeping a failed
+  recording does not remove its raw file.
+- Resolution: Main workout CSV creation, every sample write, and explicit
+  Stop-time flushing now require exact success. The first failure stops the
+  session, preserves an existing partial CSV, and leaves a persistent error
+  notification. An open failure reports separately that no recording file was
+  created. Auxiliary telemetry files remain covered by their separate audit
+  findings.
+- Verification: The RED build failed because the checked recording-I/O
+  contract did not exist. All 9 focused tests pass normally and under strict
+  ASan/UBSan/LSan. The Qt 6.8.3 application builds and starts, and the complete
+  matrix passes 1,415 tests in 39 suites with no failures or skips.
 
 ### TRN-003: Auxiliary telemetry timestamps become non-monotonic across pause
 

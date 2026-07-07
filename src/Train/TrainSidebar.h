@@ -35,6 +35,7 @@
 #include "MultiFilterProxyModel.h"
 #include "InfoWidget.h"
 #include "TrainingStopPolicy.h"
+#include "TrainingRecordingIo.h"
 
 // standard stuff
 #include <QDir>
@@ -343,10 +344,13 @@ class TrainSidebar : public GcWindow
         static constexpr RecordingStopAction DiscardRecording = RecordingStopAction::Discard;
 
         void finishStop(RecordingStopAction recordingAction);
+        bool writeRecordingData(const QByteArray &data);
+        void stopForRecordingFailure(TrainingRecordingIo::Failure failure);
 
         bool stopConfirmationActive;
         bool resumeAfterStopConfirmation;
         QPointer<RideImportWizard> stopConfirmationDialog;
+        TrainingRecordingIo::Health recordingHealth;
 
         Bicycle bicycle;
 

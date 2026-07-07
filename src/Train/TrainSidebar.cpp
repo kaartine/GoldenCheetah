@@ -1374,6 +1374,8 @@ void TrainSidebar::Start()       // when start button is pressed
 
         qDebug() << "start...";
 
+        recordingHealth.reset();
+
 #ifdef WIN32
         // disable the screen saver on Windows
         SetThreadExecutionState(ES_DISPLAY_REQUIRED | ES_CONTINUOUS);
@@ -1471,14 +1473,18 @@ void TrainSidebar::Start()       // when start button is pressed
             if (recordFile) delete recordFile;
             recordFile = new QFile(fulltarget);
             lastRecordSecs = 0;
-            if (!recordFile->open(QFile::WriteOnly | QFile::Truncate)) {
-                clearStatusFlags(RT_RECORDING);
+            const TrainingRecordingIo::Result openResult =
+                    TrainingRecordingIo::open(
+                            *recordFile, QFile::WriteOnly | QFile::Truncate);
+            if (!openResult.ok()) {
+                stopForRecordingFailure(openResult.failure);
+                return;
             } else {
-
-                // CSV File header
-
-                QTextStream recordFileStream(recordFile);
-                recordFileStream << "secs, cad, hr, km, kph, nm, watts, alt, lon, lat, headwind, slope, temp, interval, lrbalance, lte, rte, lps, rps, smo2, thb, o2hb, hhb, target, rppb, rppe, rpppb, rpppe, lppb, lppe, lpppb, lpppe\n";
+                const QByteArray header(
+                        "secs, cad, hr, km, kph, nm, watts, alt, lon, lat, headwind, "
+                        "slope, temp, interval, lrbalance, lte, rte, lps, rps, smo2, thb, "
+                        "o2hb, hhb, target, rppb, rppe, rpppb, rpppe, lppb, lppe, lpppb, lpppe\n");
+                if (!writeRecordingData(header)) return;
 
                 disk_timer->start(SAMPLERATE);  // start screen
             }
@@ -1553,7 +1559,17 @@ void TrainSidebar::RequestStop()
     resumeAfterStopConfirmation = (status & RT_PAUSED) == 0;
     if (resumeAfterStopConfirmation) Start();
 
-    recordFile->flush();
+    const TrainingRecordingIo::Result flushResult =
+            TrainingRecordingIo::writeAndFlush(
+                    *recordFile, QByteArray(),
+                    [this]() {
+                        return recordFile->flush() &&
+                                recordFile->error() == QFileDevice::NoError;
+                    });
+    if (!flushResult.ok()) {
+        stopForRecordingFailure(flushResult.failure);
+        return;
+    }
 
     QList<QString> files;
     files.append(recordFile->fileName());
@@ -1604,6 +1620,40 @@ void TrainSidebar::stopDialogFinished()
     if (stopConfirmationActive) continueTraining();
 }
 
+bool TrainSidebar::writeRecordingData(const QByteArray &data)
+{
+    if (!recordFile) {
+        stopForRecordingFailure(TrainingRecordingIo::Failure::Write);
+        return false;
+    }
+
+    const TrainingRecordingIo::Result result =
+            TrainingRecordingIo::writeAndFlush(
+                    *recordFile, data,
+                    [this]() {
+                        return recordFile->flush() &&
+                                recordFile->error() == QFileDevice::NoError;
+                    });
+    if (!result.ok()) {
+        stopForRecordingFailure(result.failure);
+        return false;
+    }
+    return true;
+}
+
+void TrainSidebar::stopForRecordingFailure(TrainingRecordingIo::Failure failure)
+{
+    if (!recordingHealth.markFailure(failure)) return;
+
+    disk_timer->stop();
+    if (stopConfirmationActive) {
+        stopConfirmationActive = false;
+        resumeAfterStopConfirmation = false;
+        if (stopConfirmationDialog) stopConfirmationDialog->done(0);
+    }
+    finishStop(KeepRecording);
+}
+
 void TrainSidebar::Stop(int deviceStatus)
 {
     if (stopConfirmationActive) {
@@ -1631,6 +1681,10 @@ void TrainSidebar::Stop(int deviceStatus)
 void TrainSidebar::finishStop(RecordingStopAction recordingAction)
 {
     if ((status&RT_RUNNING) == 0) return;
+
+    if (!recordingHealth.isHealthy() && recordingAction != DiscardRecording) {
+        recordingAction = KeepRecording;
+    }
 
     // re-enable the screen saver on Windows
 #ifdef WIN32
@@ -1783,7 +1837,17 @@ void TrainSidebar::finishStop(RecordingStopAction recordingAction)
     ergFileQueryAdapter.resetQueryState();
     guiUpdate();
 
-    context->notifySetNotification(tr("Stopped.."), 2);
+    if (recordingHealth.isHealthy()) {
+        context->notifySetNotification(tr("Stopped.."), 2);
+    } else if (recordingHealth.failure() == TrainingRecordingIo::Failure::Open) {
+        context->notifySetNotification(
+                tr("Recording could not be started. Training was stopped and no recording file was created."),
+                0);
+    } else {
+        context->notifySetNotification(
+                tr("Recording failed. Training was stopped and the partial recording was preserved."),
+                0);
+    }
 
     return;
 }
@@ -2423,7 +2487,8 @@ void TrainSidebar::diskUpdate()
     int  secs;
 
     long torq = 0;
-    QTextStream recordFileStream(recordFile);
+    QString line;
+    QTextStream recordFileStream(&line);
 
     if (calibrating) return;
 
@@ -2478,6 +2543,9 @@ void TrainSidebar::diskUpdate()
                         << "," << displayLpppb
                         << "," << displayLpppe
                         << "," << "\n";
+
+    recordFileStream.flush();
+    if (!writeRecordingData(line.toUtf8())) return;
 }
 
 //----------------------------------------------------------------------
