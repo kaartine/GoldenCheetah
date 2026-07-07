@@ -1260,6 +1260,23 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Fix direction: Pin commits/digests, hash-lock Python dependencies, generate an
   SBOM, and smoke-test AppImage on the oldest supported glibc.
 
+## Low
+
+### DEV-007: ANT FE-C spindown result aliases the zero offset
+
+- Status: OPEN
+- Code: `src/ANT/ANT.h`, `src/ANT/ANTlocalController.cpp`,
+  `src/Train/TrainSidebar.cpp`
+- Impact: Successful ANT+ FE-C spindown calibration displays the zero-offset
+  field as the spindown duration. This can report 0 ms or duplicate the offset,
+  preventing users from verifying the trainer's result. Calibration execution
+  and activity recording are unaffected.
+- Regression test: On an idle production `ANT`, assign distinct zero-offset and
+  spindown values and require each getter to return its corresponding field.
+- Fix direction: Return `calibration.getSpindownTime()` from
+  `ANT::getCalibrationSpindownTime()`. Keep synchronization and coherent
+  publication of calibration state under `DEV-003`.
+
 ## Verification Baseline
 
 The existing containerized unit suite passed at audit time:
