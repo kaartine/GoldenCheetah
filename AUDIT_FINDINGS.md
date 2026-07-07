@@ -311,15 +311,39 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-003: TrainDB drops user tables when version lookup fails
 
-- Status: OPEN
-- Code: `src/Train/TrainDB.cpp:725`
-- Impact: A version-table read error is treated as an obsolete schema and can
+- Status: FIXED
+- Code: `src/Train/TrainDB.cpp`, `src/Train/Library.cpp`,
+  `src/Train/LibraryImportFileStager.cpp`, `src/Core/GcUpgrade.cpp`
+- Impact: A version-table read error was treated as an obsolete schema and could
   drop tags, ratings, last-run state, and other user-maintained tables without a
-  transaction or backup.
-- Test: Open locked, corrupt, missing-version, and old-version databases and
-  verify read errors never mutate data.
-- Fix direction: Distinguish query failure from an explicit old schema and use
-  transactional, versioned migrations with backup/rollback.
+  transaction or a verified migration.
+- RED evidence: An invalid schema still allowed `deleteWorkout()` to remove a
+  sentinel row; failed rebuilds still allowed later writes; an import result
+  with an incomplete request list could finalize migration; the late-upgrade
+  path initially made zero verified-finalization calls and later initialized
+  the media library zero times before import; and the file-staging regression
+  initially failed to compile because no safe staging contract existed.
+- Regression coverage: The TrainDB suite exercises malformed, missing, locked,
+  corrupt, unknown, inconsistent, empty, version-one, rollback, changed-plan,
+  incomplete-result, UNC, null-path, retry, and post-failure write cases. The
+  athlete migration suite verifies the late-upgrade handoff, and the staging
+  suite covers copy, identical retry, collision, rollback, missing source, and
+  symbolic-link cases.
+- Resolution: Schema reads now distinguish empty, current, migration-ready,
+  invalid, and I/O-error states. Invalid or failed databases are protected with
+  SQLite `query_only`; schema creation and rebuilds are transactional. Legacy
+  tables remain intact until an immutable plan, exact request list, successful
+  imports, destination rows, and unchanged source rows are all verified in one
+  final transaction. The media library is initialized before migration, and a
+  video import fails closed if no persistent media-library target exists. File
+  staging reuses only byte-identical retry targets and removes only files
+  created by a rolled-back attempt. VideoSync retry now checks and updates the
+  correct table.
+- Verification: TrainDB passes 26 tests normally and under strict
+  ASan/UBSan/LSan; athlete migration passes 13 and file staging passes 9 under
+  the same sanitizers. The Qt 6.8.3 application compiles, links, and completes
+  a `--version` smoke test. The complete worktree run passes 1,368 tests in 35
+  registered suites with no failures or skips.
 
 ### DUR-004: Full athlete backup is incomplete and not verified
 

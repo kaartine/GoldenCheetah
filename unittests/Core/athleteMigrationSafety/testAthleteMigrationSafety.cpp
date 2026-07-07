@@ -10,6 +10,8 @@
 #include "Core/Athlete.h"
 #include "Core/GcUpgrade.h"
 #include "Core/Settings.h"
+#include "Train/Library.h"
+#include "Train/TrainDB.h"
 
 #include <QAbstractButton>
 #include <QApplication>
@@ -30,6 +32,17 @@ void resetAthleteMigrationTestSettings();
 void setAthleteMigrationThrowOnIdWrite(bool enabled);
 void setAthleteMigrationThrowOnRideCacheConstruction(bool enabled);
 Context *createAthleteMigrationTestContext();
+void configureAthleteMigrationTrainDbUpgrade(
+    TrainDB *database,
+    const TrainDB::LegacyMigrationPlan &plan,
+    const LibraryImportResult &result);
+int athleteMigrationLibraryImportCalls();
+QStringList athleteMigrationImportedFiles();
+int athleteMigrationLibraryInitialiseCalls();
+bool athleteMigrationLibraryInitialisedBeforeImport();
+int athleteMigrationLegacyFinalizeCalls();
+int athleteMigrationLegacyDropCalls();
+bool athleteMigrationFinalizedExpectedImport();
 
 namespace {
 
@@ -195,6 +208,7 @@ private slots:
     void currentVersionNeedsNoCompatibilityPrompt();
     void newAthleteNeedsNoCompatibilityPrompt();
     void lateUpgradeWithoutTrainDbSucceeds();
+    void lateUpgradeFinalizesVerifiedTrainDbMigration();
     void publishedContextRollsBackLateConstructionFailure();
     void constructorFailureRollsBackPublishedContextAndOwners();
 };
@@ -420,6 +434,52 @@ void TestAthleteMigrationSafety::lateUpgradeWithoutTrainDbSucceeds()
     GcUpgrade upgrade;
     QCOMPARE(upgrade.upgradeLate(context.get()), 0);
 
+    athleteStorage.destroy();
+    QVERIFY(!context->athlete);
+}
+
+void TestAthleteMigrationSafety::lateUpgradeFinalizesVerifiedTrainDbMigration()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QDir athleteDir(root.path());
+    gcroot = root.path();
+    QVERIFY(createStructuredAthlete(
+        athleteDir, QStringLiteral("LateUpgradeTrainDb")));
+    configureAthlete(athleteDir, VERSION_LATEST, true);
+
+    std::unique_ptr<Context> context(createAthleteMigrationTestContext());
+    SeededAthleteStorage athleteStorage;
+    athleteStorage.construct(context.get(), athleteDir);
+
+    TrainDB database(QDir(root.path()));
+    TrainDB::LegacyMigrationPlan plan;
+    plan.valid = true;
+    plan.workouts = {QStringLiteral("/legacy.erg")};
+    plan.videos = {QStringLiteral("/legacy.mp4")};
+    plan.videoSyncs = {QStringLiteral("/legacy.rlv")};
+
+    LibraryImportResult result;
+    result.completed = true;
+    result.requestedFiles = plan.files();
+    result.importedWorkouts.insert(
+        plan.workouts.first(), QStringLiteral("/library/legacy.erg"));
+    result.importedVideos.insert(plan.videos.first(), plan.videos.first());
+    result.importedVideoSyncs.insert(
+        plan.videoSyncs.first(), QStringLiteral("/library/legacy.rlv"));
+    configureAthleteMigrationTrainDbUpgrade(&database, plan, result);
+
+    GcUpgrade upgrade;
+    QCOMPARE(upgrade.upgradeLate(context.get()), 0);
+    QCOMPARE(athleteMigrationLibraryInitialiseCalls(), 1);
+    QVERIFY(athleteMigrationLibraryInitialisedBeforeImport());
+    QCOMPARE(athleteMigrationLibraryImportCalls(), 1);
+    QCOMPARE(athleteMigrationImportedFiles(), plan.files());
+    QCOMPARE(athleteMigrationLegacyFinalizeCalls(), 1);
+    QCOMPARE(athleteMigrationLegacyDropCalls(), 0);
+    QVERIFY(athleteMigrationFinalizedExpectedImport());
+
+    trainDB = nullptr;
     athleteStorage.destroy();
     QVERIFY(!context->athlete);
 }

@@ -120,24 +120,53 @@ enum class ZoneContentType {
 extern int workoutModelZoneIndex(int zone, ZoneContentType zt);
 
 
+struct LibraryImportResult;
+
+
 class TrainDB : public QObject, public TagStore
 {
     Q_OBJECT
 
     public:
+        enum class SchemaStatus {
+            uninitialized,
+            current,
+            migrationReady,
+            initializationFailed,
+            invalid,
+            writeError,
+            readError
+        };
+
+        struct LegacyMigrationPlan {
+            bool valid = false;
+            QStringList workouts;
+            QStringList videos;
+            QStringList videoSyncs;
+
+            QStringList files() const
+            {
+                return workouts + videos + videoSyncs;
+            }
+
+            bool isEmpty() const { return files().isEmpty(); }
+        };
+
         TrainDB(QDir home);
         ~TrainDB();
 
         // check the db structure is up to date
-        void checkDBVersion() const;
+        bool checkDBVersion() const;
+        SchemaStatus schemaStatus() const;
         bool needsUpgrade() const;
 
         // get schema version
         int getDBVersion() const;
         int getCount() const;
 
-        void startLUW();
-        void endLUW();
+        bool startLUW();
+        bool endLUW();
+        void rollbackLUW();
 
         QAbstractTableModel *getWorkoutModel() const;
         QAbstractTableModel *getVideoModel() const;
@@ -196,15 +225,20 @@ class TrainDB : public QObject, public TagStore
         bool upgradeDefaultEntriesWorkout();
 
         // drop and recreate tables
-        void rebuildDB() const;
+        bool rebuildDB() const;
         // As rebuildDB() but keeps tables that hold user data: ratings, tags, etc
-        void rebuildDBButUserDataTables() const;
+        bool rebuildDBButUserDataTables() const;
 
         // Helpers for DB-upgrade
+        LegacyMigrationPlan legacyMigrationPlan() const;
         QStringList getMigrateableWorkoutPaths() const;
         QStringList getMigrateableVideoPaths() const;
         QStringList getMigrateableVideoSyncPaths() const;
-        void dropLegacyTables() const;
+
+        // Compatibility guard: legacy data may only be removed with a verified result.
+        bool dropLegacyTables() const;
+        bool finalizeLegacyMigration(const LegacyMigrationPlan &plan,
+                                     const LibraryImportResult &result) const;
 
     signals:
         void dataChanged();
@@ -219,6 +253,16 @@ class TrainDB : public QObject, public TagStore
         QList<int> deferredTagsAdded;
         QList<int> deferredTagsDeleted;
         QList<int> deferredTagsUpdated;
+        mutable SchemaStatus currentSchemaStatus = SchemaStatus::uninitialized;
+
+        enum class DatabaseState {
+            empty,
+            current,
+            upgradeRequired,
+            migrationReady,
+            invalid,
+            readError
+        };
 
         // get connection name
         QSqlDatabase connection() const;
@@ -229,6 +273,7 @@ class TrainDB : public QObject, public TagStore
          * create database - does nothing if its already there
          */
         bool createDatabase() const;
+        DatabaseState databaseState() const;
         void closeConnection() const;
 
         bool createDefaultEntriesWorkout() const;

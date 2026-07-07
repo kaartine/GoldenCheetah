@@ -38,7 +38,8 @@ HEADERS = ../../../src/Cloud/CalendarDownload.h \
           ../../../src/FileIO/RideAutoImportConfig.h \
           ../../../src/Metrics/HrZones.h \
           ../../../src/Metrics/PaceZones.h \
-          ../../../src/Metrics/Zones.h
+          ../../../src/Metrics/Zones.h \
+          ../../../src/Train/TrainDB.h
 
 INCLUDEPATH += ../../../src \
                ../../../src/ANT \

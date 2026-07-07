@@ -668,7 +668,7 @@ HEADERS += Train/AddDeviceWizard.h Train/CalibrationData.h Train/ComputrainerCon
            Train/WorkoutFilterBox.h Train/TagBar.h Train/Taggable.h Train/TagStore.h Train/TagWidget.h \
            Train/TrainerDayAPIQuery.h Train/TrainerDayAPIDialog.h Train/ElevationChartWindow.h
 
-HEADERS += Train/TrainBottom.h Train/TrainDB.h Train/TrainSidebar.h \
+HEADERS += Train/LibraryImportFileStager.h Train/TrainBottom.h Train/TrainDB.h Train/TrainSidebar.h \
            Train/VideoLayoutParser.h Train/VideoSyncFile.h Train/WorkoutPlotWindow.h Train/WebPageWindow.h \
            Train/WorkoutWidget.h Train/WorkoutWidgetItems.h Train/WorkoutWindow.h Train/WorkoutWizard.h Train/ZwoParser.h \
            Train/LiveMapWebPageWindow.h Train/HtmlChart.h Train/ScalingLabel.h \
@@ -777,7 +777,7 @@ SOURCES += ../contrib/qtsolutions/codeeditor/codeeditor.cpp ../contrib/qtsolutio
 ## Train View Components
 SOURCES += Train/AddDeviceWizard.cpp Train/CalibrationData.cpp Train/ComputrainerController.cpp Train/Computrainer.cpp Train/DeviceConfiguration.cpp \
            Train/DeviceTypes.cpp Train/DialWindow.cpp Train/TrainerDay.cpp Train/TrainerDayDownloadDialog.cpp Train/ErgFile.cpp Train/ErgFilePlot.cpp \
-           Train/Library.cpp Train/LibraryParser.cpp Train/MeterWidget.cpp Train/NullController.cpp Train/RealtimeController.cpp \
+           Train/Library.cpp Train/LibraryImportFileStager.cpp Train/LibraryParser.cpp Train/MeterWidget.cpp Train/NullController.cpp Train/RealtimeController.cpp \
            Train/RealtimeData.cpp Train/RealtimePlot.cpp Train/RealtimePlotWindow.cpp Train/RemoteControl.cpp Train/SpinScanPlot.cpp \
            Train/SpinScanPlotWindow.cpp Train/SpinScanPolarPlot.cpp Train/GarminServiceHelper.cpp Train/PhysicsUtility.cpp Train/BicycleSim.cpp \
            Train/PolynomialRegression.cpp Train/StravaRoutesDownload.cpp \

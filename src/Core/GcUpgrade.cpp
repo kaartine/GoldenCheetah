@@ -833,13 +833,23 @@ GcUpgrade::upgradeLate(Context *context)
     }
 
     if (trainDB && trainDB->needsUpgrade()) {
-        QStringList files = trainDB->getMigrateableWorkoutPaths();
-        files << trainDB->getMigrateableVideoPaths();
-        files << trainDB->getMigrateableVideoSyncPaths();
-        if (files.size() > 0) {
-            Library::importFiles(context, files, LibraryBatchImportConfirmation::noDialog);
+        const TrainDB::LegacyMigrationPlan plan =
+            trainDB->legacyMigrationPlan();
+        if (!plan.valid) {
+            qWarning() << "TrainDB: cannot build a verified legacy migration plan";
+            return 0;
         }
-        trainDB->dropLegacyTables();
+
+        LibraryImportResult result;
+        if (!plan.isEmpty()) {
+            Library::initialise(QDir(gcroot));
+            result = Library::importFiles(
+                context, plan.files(), LibraryBatchImportConfirmation::noDialog);
+        }
+        if (!trainDB->finalizeLegacyMigration(plan, result)) {
+            qWarning() << "TrainDB: legacy migration was not finalized; "
+                          "the source tables were preserved";
+        }
     }
 
     return 0;

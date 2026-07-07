@@ -18,7 +18,9 @@
  */
 
 #include "TrainDB.h"
+#include "Library.h"
 
+#include <QFileInfo>
 #include <QMessageBox>
 #include <QSet>
 #include <QSqlQueryModel>
@@ -117,6 +119,20 @@ static int TrainDBSchemaVersion = 2;
 TrainDB *trainDB;
 
 
+namespace {
+
+void protectDatabaseFromWrites(const QSqlDatabase &database)
+{
+    QSqlQuery query(database);
+    if (!query.exec(QStringLiteral("PRAGMA query_only = ON"))) {
+        qWarning() << "TrainDB: could not protect an unusable database from writes"
+                   << query.lastError();
+    }
+}
+
+} // namespace
+
+
 extern int
 workoutModelZoneIndex
 (int zone, ZoneContentType zt)
@@ -176,6 +192,7 @@ TrainDB::initDatabase
     if (connection().isOpen()) {
         createDatabase();
     } else {
+        currentSchemaStatus = SchemaStatus::readError;
         QMessageBox::critical(0,
                               qApp->translate("TrainDB","Cannot open database"),
                               qApp->translate("TrainDB","Unable to establish a database connection.\n"
@@ -191,23 +208,81 @@ TrainDB::initDatabase
 // rebuild effectively drops and recreates all tables
 // but not the version table, since its about deleting
 // user data (e.g. when rescanning their hard disk)
-void
+bool
 TrainDB::rebuildDB
 () const
 {
-    dropAllDataTables();
-    createAllDataTables();
+    if (currentSchemaStatus != SchemaStatus::current
+        && currentSchemaStatus != SchemaStatus::migrationReady) {
+        return false;
+    }
+
+    QSqlDatabase database = connection();
+    if (!database.transaction()) {
+        currentSchemaStatus = SchemaStatus::writeError;
+        protectDatabaseFromWrites(database);
+        return false;
+    }
+
+    bool ok = dropAllDataTables();
+    if (ok) {
+        ok = createAllDataTables();
+    }
+
+    const DatabaseState expected = currentSchemaStatus == SchemaStatus::migrationReady
+                                 ? DatabaseState::migrationReady
+                                 : DatabaseState::current;
+    if (ok) {
+        ok = databaseState() == expected;
+    }
+    if (ok && database.commit()) {
+        return true;
+    }
+
+    database.rollback();
+    currentSchemaStatus = SchemaStatus::writeError;
+    protectDatabaseFromWrites(database);
+    return false;
 }
 
 
 // wipe away all data but personal data: tags, rating, etc
 // To keep personal data, we are not deleting workouts table and tags related tables
-void
+bool
 TrainDB::rebuildDBButUserDataTables
 () const
 {
-    dropTablesButUserDataTables();
-    createAllDataTables(); // Tables that exist are not recreated
+    if (currentSchemaStatus != SchemaStatus::current
+        && currentSchemaStatus != SchemaStatus::migrationReady) {
+        return false;
+    }
+
+    QSqlDatabase database = connection();
+    if (!database.transaction()) {
+        currentSchemaStatus = SchemaStatus::writeError;
+        protectDatabaseFromWrites(database);
+        return false;
+    }
+
+    bool ok = dropTablesButUserDataTables();
+    if (ok) {
+        ok = createAllDataTables(); // Tables that exist are not recreated
+    }
+
+    const DatabaseState expected = currentSchemaStatus == SchemaStatus::migrationReady
+                                 ? DatabaseState::migrationReady
+                                 : DatabaseState::current;
+    if (ok) {
+        ok = databaseState() == expected;
+    }
+    if (ok && database.commit()) {
+        return true;
+    }
+
+    database.rollback();
+    currentSchemaStatus = SchemaStatus::writeError;
+    protectDatabaseFromWrites(database);
+    return false;
 }
 
 
@@ -606,33 +681,66 @@ TrainDB::workoutGetTagIds
 
 ///////////////////////// Helpers for DB-upgrade
 
+TrainDB::LegacyMigrationPlan
+TrainDB::legacyMigrationPlan
+() const
+{
+    LegacyMigrationPlan plan;
+    if (currentSchemaStatus != SchemaStatus::migrationReady
+        || databaseState() != DatabaseState::migrationReady) {
+        return plan;
+    }
+
+    auto readPaths = [this](const QString &sql,
+                            QStringList &paths,
+                            const QSet<QString> &ignoredPaths) {
+        QSqlQuery query(connection());
+        if (!query.exec(sql)) {
+            return false;
+        }
+        while (query.next()) {
+            if (query.value(0).isNull()) {
+                return false;
+            }
+            const QString path = query.value(0).toString();
+            if (ignoredPaths.contains(path)) {
+                continue;
+            }
+            if (path.isEmpty() || paths.contains(path)) {
+                return false;
+            }
+            paths.append(path);
+        }
+        paths.sort();
+        return true;
+    };
+
+    if (!readPaths(QStringLiteral(
+                       "SELECT filepath FROM workouts ORDER BY filepath"),
+                   plan.workouts,
+                   QSet<QString>{QStringLiteral("//1"), QStringLiteral("//2")})
+        || !readPaths(QStringLiteral(
+                          "SELECT filepath FROM videos ORDER BY filepath"),
+                      plan.videos,
+                      QSet<QString>{})
+        || !readPaths(QStringLiteral(
+                          "SELECT filepath FROM videosyncs ORDER BY filepath"),
+                      plan.videoSyncs,
+                      QSet<QString>{QStringLiteral("//1")})) {
+        return {};
+    }
+
+    plan.valid = true;
+    return plan;
+}
+
+
 QStringList
 TrainDB::getMigrateableWorkoutPaths
 () const
 {
-    int dbver = getDBVersion();
-    int oldver = dbver - 1;
-
-    QSqlQuery query(connection());
-    QStringList ret;
-
-    switch (oldver) {
-    case 1:
-        query.prepare("SELECT filepath FROM workouts WHERE filepath NOT LIKE '//%'");
-        break;
-    case 2:
-        query.prepare("SELECT filepath FROM workout WHERE source != 'gcdefault' AND type != 'code'");
-        break;
-    default:
-        qInfo() << "TrainDB::getMigrateableWorkoutPaths: Nothing to migrate from DB Version" << dbver;
-        return ret;
-    }
-    if (query.exec()) {
-        while (query.next()) {
-            ret << query.value(0).toString();
-        }
-    }
-    return ret;
+    const LegacyMigrationPlan plan = legacyMigrationPlan();
+    return plan.valid ? plan.workouts : QStringList();
 }
 
 
@@ -640,29 +748,8 @@ QStringList
 TrainDB::getMigrateableVideoPaths
 () const
 {
-    int dbver = getDBVersion();
-    int oldver = dbver - 1;
-
-    QSqlQuery query(connection());
-    QStringList ret;
-
-    switch (oldver) {
-    case 1:
-        query.prepare("SELECT filepath FROM videos");
-        break;
-    case 2:
-        query.prepare("SELECT filepath FROM video");
-        break;
-    default:
-        qInfo() << "TrainDB::getMigrateableVideoPaths: Nothing to migrate from DB Version" << dbver;
-        return ret;
-    }
-    if (query.exec()) {
-        while (query.next()) {
-            ret << query.value(0).toString();
-        }
-    }
-    return ret;
+    const LegacyMigrationPlan plan = legacyMigrationPlan();
+    return plan.valid ? plan.videos : QStringList();
 }
 
 
@@ -670,39 +757,100 @@ QStringList
 TrainDB::getMigrateableVideoSyncPaths
 () const
 {
-    int dbver = getDBVersion();
-    int oldver = dbver - 1;
-
-    QSqlQuery query(connection());
-    QStringList ret;
-
-    switch (oldver) {
-    case 1:
-        query.prepare("SELECT filepath FROM videosyncs WHERE filepath NOT LIKE '//%'");
-        break;
-    case 2:
-        query.prepare("SELECT filepath FROM videosync WHERE source != 'gcdefault'");
-        break;
-    default:
-        qInfo() << "TrainDB::getMigrateableVideoSyncPaths: Nothing to migrate from DB Version" << dbver;
-        return ret;
-    }
-    if (query.exec()) {
-        while (query.next()) {
-            ret << query.value(0).toString();
-        }
-    }
-    return ret;
+    const LegacyMigrationPlan plan = legacyMigrationPlan();
+    return plan.valid ? plan.videoSyncs : QStringList();
 }
 
 
-void
+bool
 TrainDB::dropLegacyTables
 () const
 {
-    dropTable("workouts", true);
-    dropTable("videos", true);
-    dropTable("videosyncs", true);
+    qWarning() << "TrainDB: refusing to drop legacy tables without a verified import";
+    return false;
+}
+
+
+bool
+TrainDB::finalizeLegacyMigration
+(const LegacyMigrationPlan &plan, const LibraryImportResult &result) const
+{
+    if (currentSchemaStatus != SchemaStatus::migrationReady || !plan.valid) {
+        return false;
+    }
+    if (!plan.isEmpty()
+        && !result.importedAll(plan.workouts, plan.videos, plan.videoSyncs)) {
+        return false;
+    }
+
+    QSqlDatabase database = connection();
+    if (!database.transaction()) {
+        return false;
+    }
+
+    auto samePaths = [](QStringList left, QStringList right) {
+        left.sort();
+        right.sort();
+        return left == right;
+    };
+    const LegacyMigrationPlan currentPlan = legacyMigrationPlan();
+    bool ok = currentPlan.valid
+        && samePaths(currentPlan.workouts, plan.workouts)
+        && samePaths(currentPlan.videos, plan.videos)
+        && samePaths(currentPlan.videoSyncs, plan.videoSyncs);
+
+    auto importedRowsExist = [this](const QString &table,
+                                    const QStringList &sources,
+                                    const QHash<QString, QString> &imports,
+                                    bool exactPath) {
+        QSet<QString> destinations;
+        QSqlQuery query(connection());
+        query.prepare(QStringLiteral(
+            "SELECT 1 FROM %1 WHERE filepath = :filepath").arg(table));
+        for (const QString &source : sources) {
+            const QString destination = imports.value(source);
+            if (destination.isEmpty() || destinations.contains(destination)) {
+                return false;
+            }
+            if ((exactPath && destination != source)
+                || (!exactPath
+                    && QFileInfo(destination).fileName()
+                        != QFileInfo(source).fileName())) {
+                return false;
+            }
+            destinations.insert(destination);
+            query.bindValue(QStringLiteral(":filepath"), destination);
+            if (!query.exec() || !query.next()) {
+                return false;
+            }
+            query.finish();
+        }
+        return true;
+    };
+
+    if (ok && !plan.isEmpty()) {
+        ok = importedRowsExist(QStringLiteral(TABLE_WORKOUT),
+                               plan.workouts, result.importedWorkouts, false)
+          && importedRowsExist(QStringLiteral(TABLE_VIDEO),
+                               plan.videos, result.importedVideos, true)
+          && importedRowsExist(QStringLiteral(TABLE_VIDEOSYNC),
+                               plan.videoSyncs, result.importedVideoSyncs, false);
+    }
+    if (ok) {
+        ok = dropTable(QStringLiteral("workouts"), true)
+          && dropTable(QStringLiteral("videos"), true)
+          && dropTable(QStringLiteral("videosyncs"), true);
+    }
+    if (ok) {
+        ok = databaseState() == DatabaseState::current;
+    }
+    if (ok && database.commit()) {
+        currentSchemaStatus = SchemaStatus::current;
+        return true;
+    }
+
+    database.rollback();
+    return false;
 }
 
 
@@ -713,55 +861,364 @@ bool
 TrainDB::createDatabase
 () const
 {
-    // check schema version and drop out-of-date tables
-    checkDBVersion();
-    createAllDataTables();
+    QSqlDatabase database = connection();
+    const DatabaseState state = databaseState();
+    if (state == DatabaseState::current) {
+        currentSchemaStatus = SchemaStatus::current;
+        return true;
+    }
+    if (state == DatabaseState::migrationReady) {
+        currentSchemaStatus = SchemaStatus::migrationReady;
+        return true;
+    }
+    if (state == DatabaseState::invalid || state == DatabaseState::readError) {
+        currentSchemaStatus = state == DatabaseState::invalid
+                            ? SchemaStatus::invalid
+                            : SchemaStatus::readError;
+        qWarning() << "TrainDB: refusing to modify an unrecognized database schema";
+        protectDatabaseFromWrites(database);
+        return false;
+    }
 
-    return true;
+    if (!database.transaction()) {
+        currentSchemaStatus = SchemaStatus::initializationFailed;
+        qWarning() << "TrainDB: cannot start schema transaction" << database.lastError();
+        protectDatabaseFromWrites(database);
+        return false;
+    }
+
+    bool ok = true;
+    if (state == DatabaseState::empty) {
+        ok = createTable(TABLE_VERSION, FIELDS_VERSION, false) == 1;
+    }
+    if (ok) {
+        ok = createAllDataTables();
+    }
+
+    DatabaseState finalState = DatabaseState::readError;
+    if (ok) {
+        finalState = databaseState();
+        ok = finalState == DatabaseState::current
+          || finalState == DatabaseState::migrationReady;
+    }
+    if (ok && database.commit()) {
+        currentSchemaStatus = finalState == DatabaseState::current
+                            ? SchemaStatus::current
+                            : SchemaStatus::migrationReady;
+        return true;
+    }
+
+    database.rollback();
+    currentSchemaStatus = SchemaStatus::initializationFailed;
+    protectDatabaseFromWrites(database);
+    qWarning() << "TrainDB: schema initialization failed and was rolled back";
+    return false;
 }
 
 
-void
+TrainDB::DatabaseState
+TrainDB::databaseState
+() const
+{
+    struct TableLayout {
+        QStringList columns;
+        QSet<QString> requiredNotNull;
+        QStringList primaryKey;
+    };
+
+    QSqlDatabase database = connection();
+    QHash<QString, QString> objectTypes;
+    QSqlQuery objects(database);
+    if (!objects.exec("SELECT type, name FROM sqlite_master "
+                      "WHERE name NOT LIKE 'sqlite_%'")) {
+        return DatabaseState::readError;
+    }
+    while (objects.next()) {
+        objectTypes.insert(objects.value(1).toString(), objects.value(0).toString());
+    }
+    if (objectTypes.isEmpty()) {
+        return DatabaseState::empty;
+    }
+
+    const QString versionTable = QStringLiteral(TABLE_VERSION);
+    if (!objectTypes.contains(versionTable)) {
+        return DatabaseState::invalid;
+    }
+    if (objectTypes.value(versionTable) != QStringLiteral("table")) {
+        return DatabaseState::readError;
+    }
+
+    auto checkLayout = [&database](const QString &tableName,
+                                   const TableLayout &expected) -> int {
+        QSqlQuery query(database);
+        if (!query.exec(QStringLiteral("PRAGMA table_info(\"%1\")").arg(tableName))) {
+            return -1;
+        }
+
+        QStringList columns;
+        QSet<QString> notNull;
+        QHash<int, QString> primaryKeyByPosition;
+        while (query.next()) {
+            const QString column = query.value(1).toString();
+            columns.append(column);
+            if (query.value(3).toInt() != 0) {
+                notNull.insert(column);
+            }
+            const int primaryKeyPosition = query.value(5).toInt();
+            if (primaryKeyPosition > 0) {
+                primaryKeyByPosition.insert(primaryKeyPosition, column);
+            }
+        }
+
+        QStringList primaryKey;
+        for (int position = 1; position <= primaryKeyByPosition.size(); ++position) {
+            if (!primaryKeyByPosition.contains(position)) {
+                return 0;
+            }
+            primaryKey.append(primaryKeyByPosition.value(position));
+        }
+
+        if (columns != expected.columns || primaryKey != expected.primaryKey) {
+            return 0;
+        }
+        for (const QString &column : expected.requiredNotNull) {
+            if (!notNull.contains(column)) {
+                return 0;
+            }
+        }
+        return 1;
+    };
+
+    TableLayout versionLayout;
+    versionLayout.columns = {QStringLiteral("table_name"),
+                             QStringLiteral("schema_version"),
+                             QStringLiteral("creation_date")};
+    versionLayout.primaryKey = {QStringLiteral("table_name")};
+    const int versionLayoutResult = checkLayout(versionTable, versionLayout);
+    if (versionLayoutResult < 0) {
+        return DatabaseState::readError;
+    }
+    if (versionLayoutResult == 0) {
+        return DatabaseState::invalid;
+    }
+
+    const QSet<QString> currentTables = {
+        QStringLiteral(TABLE_WORKOUT),
+        QStringLiteral(TABLE_VIDEO),
+        QStringLiteral(TABLE_VIDEOSYNC),
+        QStringLiteral(TABLE_TAGSTORE),
+        QStringLiteral(TABLE_WORKOUT_TAG)
+    };
+    const QSet<QString> legacyTables = {
+        QStringLiteral("workouts"),
+        QStringLiteral("videos"),
+        QStringLiteral("videosyncs")
+    };
+
+    QSet<QString> currentVersions;
+    QSet<QString> legacyVersions;
+    QSet<QString> seenVersionRows;
+    QSqlQuery versions(database);
+    if (!versions.exec("SELECT table_name, schema_version, creation_date FROM version")) {
+        return DatabaseState::readError;
+    }
+    while (versions.next()) {
+        if (versions.value(0).isNull()
+            || versions.value(1).isNull()
+            || versions.value(2).isNull()) {
+            return DatabaseState::invalid;
+        }
+
+        const QString tableName = versions.value(0).toString();
+        bool schemaVersionValid = false;
+        bool creationDateValid = false;
+        const int schemaVersion = versions.value(1).toInt(&schemaVersionValid);
+        versions.value(2).toLongLong(&creationDateValid);
+        if (tableName.isEmpty()
+            || !schemaVersionValid
+            || !creationDateValid
+            || seenVersionRows.contains(tableName)) {
+            return DatabaseState::invalid;
+        }
+        seenVersionRows.insert(tableName);
+
+        if (currentTables.contains(tableName) && schemaVersion == TrainDBSchemaVersion) {
+            currentVersions.insert(tableName);
+        } else if (legacyTables.contains(tableName) && schemaVersion == 1) {
+            legacyVersions.insert(tableName);
+        } else {
+            return DatabaseState::invalid;
+        }
+    }
+
+    if (seenVersionRows.isEmpty()) {
+        return DatabaseState::invalid;
+    }
+
+    const bool hasLegacyVersion = !legacyVersions.isEmpty();
+    if (hasLegacyVersion) {
+        if (legacyVersions != legacyTables) {
+            return DatabaseState::invalid;
+        }
+    } else if (currentVersions != currentTables) {
+        return DatabaseState::invalid;
+    }
+
+    auto currentLayout = [](const QString &tableName) {
+        TableLayout layout;
+        if (tableName == QStringLiteral(TABLE_WORKOUT)) {
+            layout.columns = {
+                QStringLiteral("filepath"), QStringLiteral("type"),
+                QStringLiteral("creation_date"), QStringLiteral("source"),
+                QStringLiteral("source_id"), QStringLiteral("displayname"),
+                QStringLiteral("description"), QStringLiteral("erg_subtype"),
+                QStringLiteral("erg_duration"), QStringLiteral("erg_bikestress"),
+                QStringLiteral("erg_if"), QStringLiteral("erg_iso_power"),
+                QStringLiteral("erg_vi"), QStringLiteral("erg_xp"),
+                QStringLiteral("erg_ri"), QStringLiteral("erg_bs"),
+                QStringLiteral("erg_svi"), QStringLiteral("erg_min_power"),
+                QStringLiteral("erg_max_power"), QStringLiteral("erg_avg_power"),
+                QStringLiteral("erg_dominant_zone"), QStringLiteral("erg_num_zones"),
+                QStringLiteral("erg_duration_z1"), QStringLiteral("erg_duration_z2"),
+                QStringLiteral("erg_duration_z3"), QStringLiteral("erg_duration_z4"),
+                QStringLiteral("erg_duration_z5"), QStringLiteral("erg_duration_z6"),
+                QStringLiteral("erg_duration_z7"), QStringLiteral("erg_duration_z8"),
+                QStringLiteral("erg_duration_z9"), QStringLiteral("erg_duration_z10"),
+                QStringLiteral("slp_distance"), QStringLiteral("slp_elevation"),
+                QStringLiteral("slp_avg_grade"), QStringLiteral("rating"),
+                QStringLiteral("last_run")
+            };
+            layout.requiredNotNull = {
+                QStringLiteral("filepath"), QStringLiteral("type"),
+                QStringLiteral("creation_date"), QStringLiteral("displayname")
+            };
+            layout.primaryKey = {QStringLiteral("filepath")};
+        } else if (tableName == QStringLiteral(TABLE_VIDEO)) {
+            layout.columns = {
+                QStringLiteral("filepath"), QStringLiteral("creation_date"),
+                QStringLiteral("displayname")
+            };
+            layout.requiredNotNull = {
+                QStringLiteral("filepath"), QStringLiteral("creation_date"),
+                QStringLiteral("displayname")
+            };
+            layout.primaryKey = {QStringLiteral("filepath")};
+        } else if (tableName == QStringLiteral(TABLE_VIDEOSYNC)) {
+            layout.columns = {
+                QStringLiteral("filepath"), QStringLiteral("creation_date"),
+                QStringLiteral("source"), QStringLiteral("displayname")
+            };
+            layout.requiredNotNull = {
+                QStringLiteral("filepath"), QStringLiteral("creation_date"),
+                QStringLiteral("displayname")
+            };
+            layout.primaryKey = {QStringLiteral("filepath")};
+        } else if (tableName == QStringLiteral(TABLE_TAGSTORE)) {
+            layout.columns = {QStringLiteral("id"), QStringLiteral("label")};
+            layout.requiredNotNull = {
+                QStringLiteral("id"), QStringLiteral("label")
+            };
+            layout.primaryKey = {QStringLiteral("id")};
+        } else if (tableName == QStringLiteral(TABLE_WORKOUT_TAG)) {
+            layout.columns = {QStringLiteral("filepath"), QStringLiteral("id")};
+            layout.requiredNotNull = {
+                QStringLiteral("filepath"), QStringLiteral("id")
+            };
+            layout.primaryKey = {
+                QStringLiteral("filepath"), QStringLiteral("id")
+            };
+        }
+        return layout;
+    };
+
+    auto legacyLayout = [](const QString &tableName) {
+        TableLayout layout;
+        if (tableName == QStringLiteral("workouts")) {
+            layout.columns = {
+                QStringLiteral("filepath"), QStringLiteral("filename"),
+                QStringLiteral("timestamp"), QStringLiteral("description"),
+                QStringLiteral("source"), QStringLiteral("ftp"),
+                QStringLiteral("length"), QStringLiteral("coggan_tss"),
+                QStringLiteral("coggan_if"), QStringLiteral("elevation"),
+                QStringLiteral("grade")
+            };
+        } else if (tableName == QStringLiteral("videos")) {
+            layout.columns = {
+                QStringLiteral("filepath"), QStringLiteral("filename"),
+                QStringLiteral("timestamp"), QStringLiteral("length")
+            };
+        } else if (tableName == QStringLiteral("videosyncs")) {
+            layout.columns = {
+                QStringLiteral("filepath"), QStringLiteral("filename")
+            };
+        }
+        layout.primaryKey = {QStringLiteral("filepath")};
+        return layout;
+    };
+
+    for (const QString &tableName : currentTables) {
+        if (objectTypes.contains(tableName)
+            && objectTypes.value(tableName) != QStringLiteral("table")) {
+            return DatabaseState::invalid;
+        }
+        const bool exists = objectTypes.contains(tableName);
+        const bool hasVersion = currentVersions.contains(tableName);
+        if (exists != hasVersion) {
+            return DatabaseState::invalid;
+        }
+        if (exists) {
+            const int result = checkLayout(tableName, currentLayout(tableName));
+            if (result < 0) {
+                return DatabaseState::readError;
+            }
+            if (result == 0) {
+                return DatabaseState::invalid;
+            }
+        }
+    }
+
+    for (const QString &tableName : legacyTables) {
+        if (objectTypes.contains(tableName)
+            && objectTypes.value(tableName) != QStringLiteral("table")) {
+            return DatabaseState::invalid;
+        }
+        const bool exists = objectTypes.contains(tableName);
+        const bool hasVersion = legacyVersions.contains(tableName);
+        if (exists != hasVersion) {
+            return DatabaseState::invalid;
+        }
+        if (exists) {
+            const int result = checkLayout(tableName, legacyLayout(tableName));
+            if (result < 0) {
+                return DatabaseState::readError;
+            }
+            if (result == 0) {
+                return DatabaseState::invalid;
+            }
+        }
+    }
+
+    if (!hasLegacyVersion) {
+        return DatabaseState::current;
+    }
+    return currentVersions == currentTables ? DatabaseState::migrationReady
+                                            : DatabaseState::upgradeRequired;
+}
+
+
+bool
 TrainDB::checkDBVersion
 () const
 {
-    QSet<QString> dataTables;
-    dataTables << TABLE_WORKOUT
-               << TABLE_VIDEO
-               << TABLE_VIDEOSYNC
-               << TABLE_TAGSTORE
-               << TABLE_WORKOUT_TAG;
+    return createDatabase();
+}
 
-    // can we get a version number?
-    QSqlQuery query("SELECT table_name, schema_version, creation_date FROM version", connection());
-    if (! query.exec()) {
-        // we couldn't read the version table properly
-        // it must be out of date!!
-        dropTable(TABLE_VERSION, false);
-        createTable(TABLE_VERSION, FIELDS_VERSION, false);
 
-        // wipe away whatever (if anything is there)
-        QSetIterator<QString> i(dataTables);
-        while (i.hasNext()) {
-            dropTable(i.next());
-        }
-        return;
-    }
-
-    // ok we checked out ok, so lets adjust db schema to reflect
-    // the current version / crc
-    while (query.next()) {
-        QString tableName = query.value(0).toString();
-        int currentVersion = query.value(1).toInt();
-
-        if (currentVersion == TrainDBSchemaVersion && dataTables.contains(tableName)) {
-            dataTables.remove(tableName);
-        }
-    }
-    QSetIterator<QString> i(dataTables);
-    while (i.hasNext()) {
-        dropTable(i.next());
-    }
+TrainDB::SchemaStatus
+TrainDB::schemaStatus
+() const
+{
+    return currentSchemaStatus;
 }
 
 
@@ -769,11 +1226,7 @@ bool
 TrainDB::needsUpgrade
 () const
 {
-    QSqlQuery query("SELECT MIN(schema_version) FROM version", connection());
-    if (query.exec() && query.next()) {
-        return query.value(0).toInt() != 2;
-    }
-    return false;
+    return currentSchemaStatus == SchemaStatus::migrationReady;
 }
 
 
@@ -791,20 +1244,31 @@ TrainDB::getCount
 }
 
 
-void
+bool
 TrainDB::startLUW
 ()
 {
-    connection().transaction();
+    return connection().transaction();
+}
+
+
+bool
+TrainDB::endLUW
+()
+{
+    const bool committed = connection().commit();
+    if (committed) {
+        emit dataChanged();
+    }
+    return committed;
 }
 
 
 void
-TrainDB::endLUW
+TrainDB::rollbackLUW
 ()
 {
-    connection().commit();
-    emit dataChanged();
+    connection().rollback();
 }
 
 
@@ -1066,7 +1530,7 @@ TrainDB::importVideoSync
 (QString filepath, const VideoSyncFileBase &videoSyncFileBase, ImportMode importMode) const
 {
     if (importMode == ImportMode::replace) {
-        deleteVideo(filepath);
+        deleteVideoSync(filepath);
     }
 
     QSqlQuery query(connection());
@@ -1086,7 +1550,7 @@ TrainDB::importVideoSync
         bindIfValue(query, ":source", videoSyncFileBase.source());
         ok = query.exec();
     }
-    if (   hasVideo(filepath)
+    if (   hasVideoSync(filepath)
         && (   (! ok && importMode == ImportMode::insertOrUpdate)
             || importMode == ImportMode::update)) {
         query.prepare("UPDATE videosync "
@@ -1345,7 +1809,7 @@ int
 TrainDB::createTable
 (QString tableName, QString createBody, bool hasVersionEntry, bool force) const
 {
-    bool ret = 0;
+    int ret = 0;
     bool ok = true;
     int version = 0;
 
@@ -1365,7 +1829,7 @@ TrainDB::createTable
         if (ok && hasVersionEntry) {
             ok = updateTableVersion(tableName);
         }
-        ret = 1;
+        ret = ok ? 1 : -1;
     } else {
         ret = 0;
     }
@@ -1386,7 +1850,7 @@ TrainDB::updateTableVersion
     if (! ok) {
         qDebug() << "TrainDB::updateTableVersion(.) -" << query.lastError() << "/" << query.lastQuery();
     }
-    return query.exec();
+    return ok;
 }
 
 

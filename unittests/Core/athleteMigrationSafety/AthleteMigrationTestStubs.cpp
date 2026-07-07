@@ -48,6 +48,16 @@ namespace {
 QHash<QString, QVariant> testValues;
 bool throwOnAthleteIdWrite = false;
 bool throwOnRideCacheConstruction = false;
+bool trainDbUpgradeRequired = false;
+TrainDB::LegacyMigrationPlan trainDbMigrationPlan;
+LibraryImportResult trainDbImportResult;
+QStringList importedLibraryFiles;
+int libraryImportCalls = 0;
+int legacyFinalizeCalls = 0;
+int legacyDropCalls = 0;
+int libraryInitialiseCalls = 0;
+bool libraryInitialisedBeforeImport = false;
+bool finalizedExpectedImport = false;
 
 QString settingKey(const QString &athlete, const QString &key)
 {
@@ -74,6 +84,43 @@ void resetAthleteMigrationTestSettings()
     testValues.clear();
     throwOnAthleteIdWrite = false;
     throwOnRideCacheConstruction = false;
+    trainDbUpgradeRequired = false;
+    trainDbMigrationPlan = {};
+    trainDbImportResult = {};
+    importedLibraryFiles.clear();
+    libraryImportCalls = 0;
+    legacyFinalizeCalls = 0;
+    legacyDropCalls = 0;
+    libraryInitialiseCalls = 0;
+    libraryInitialisedBeforeImport = false;
+    gcroot.clear();
+    finalizedExpectedImport = false;
+    trainDB = nullptr;
+}
+
+void configureAthleteMigrationTrainDbUpgrade(
+    TrainDB *database,
+    const TrainDB::LegacyMigrationPlan &plan,
+    const LibraryImportResult &result)
+{
+    trainDB = database;
+    trainDbUpgradeRequired = true;
+    trainDbMigrationPlan = plan;
+    trainDbImportResult = result;
+}
+
+int athleteMigrationLibraryImportCalls() { return libraryImportCalls; }
+QStringList athleteMigrationImportedFiles() { return importedLibraryFiles; }
+int athleteMigrationLibraryInitialiseCalls() { return libraryInitialiseCalls; }
+bool athleteMigrationLibraryInitialisedBeforeImport()
+{
+    return libraryInitialisedBeforeImport;
+}
+int athleteMigrationLegacyFinalizeCalls() { return legacyFinalizeCalls; }
+int athleteMigrationLegacyDropCalls() { return legacyDropCalls; }
+bool athleteMigrationFinalizedExpectedImport()
+{
+    return finalizedExpectedImport;
 }
 
 void setAthleteMigrationThrowOnIdWrite(bool enabled)
@@ -442,12 +489,71 @@ void GCColor::applyTheme(int) {}
 
 void CloudServiceFactory::upgrade(QString) {}
 
+TrainDB::TrainDB(QDir home)
+    : home(std::move(home)), db(nullptr), sessionid(QStringLiteral("test"))
+{
+}
+
+TrainDB::~TrainDB() = default;
+
+QStringList TrainDB::getWorkouts() const { return {}; }
+QHash<QString, QString> TrainDB::getWorkoutHashes() const { return {}; }
+void TrainDB::deferTagSignals(bool) {}
+bool TrainDB::isDeferredTagSignals() { return false; }
+void TrainDB::catchupTagSignals() {}
+int TrainDB::addTag(const QString &) { return -1; }
+bool TrainDB::updateTag(int, const QString &) { return false; }
+bool TrainDB::deleteTag(int) { return false; }
+bool TrainDB::deleteTag(const QString &) { return false; }
+int TrainDB::getTagId(const QString &) const { return -1; }
+QString TrainDB::getTagLabel(int) const { return {}; }
+bool TrainDB::hasTag(int) const { return false; }
+bool TrainDB::hasTag(const QString &) const { return false; }
+QList<TagStore::Tag> TrainDB::getTags() const { return {}; }
+QList<int> TrainDB::getTagIds() const { return {}; }
+QStringList TrainDB::getTagLabels() const { return {}; }
+QStringList TrainDB::getTagLabels(const QList<int>) const { return {}; }
+int TrainDB::countTagUsage(int) const { return 0; }
 bool TrainDB::upgradeDefaultEntriesWorkout() { return true; }
-bool TrainDB::needsUpgrade() const { return false; }
-QStringList TrainDB::getMigrateableWorkoutPaths() const { return {}; }
-QStringList TrainDB::getMigrateableVideoPaths() const { return {}; }
-QStringList TrainDB::getMigrateableVideoSyncPaths() const { return {}; }
-bool TrainDB::dropLegacyTables() const { return true; }
+bool TrainDB::needsUpgrade() const { return trainDbUpgradeRequired; }
+TrainDB::LegacyMigrationPlan TrainDB::legacyMigrationPlan() const
+{
+    return trainDbMigrationPlan;
+}
+QStringList TrainDB::getMigrateableWorkoutPaths() const
+{
+    return trainDbMigrationPlan.workouts;
+}
+QStringList TrainDB::getMigrateableVideoPaths() const
+{
+    return trainDbMigrationPlan.videos;
+}
+QStringList TrainDB::getMigrateableVideoSyncPaths() const
+{
+    return trainDbMigrationPlan.videoSyncs;
+}
+bool TrainDB::dropLegacyTables() const
+{
+    ++legacyDropCalls;
+    return false;
+}
+bool TrainDB::finalizeLegacyMigration(
+    const LegacyMigrationPlan &plan,
+    const LibraryImportResult &result) const
+{
+    ++legacyFinalizeCalls;
+    finalizedExpectedImport = plan.valid == trainDbMigrationPlan.valid
+        && plan.workouts == trainDbMigrationPlan.workouts
+        && plan.videos == trainDbMigrationPlan.videos
+        && plan.videoSyncs == trainDbMigrationPlan.videoSyncs
+        && result.completed == trainDbImportResult.completed
+        && result.requestedFiles == trainDbImportResult.requestedFiles
+        && result.importedWorkouts == trainDbImportResult.importedWorkouts
+        && result.importedVideos == trainDbImportResult.importedVideos
+        && result.importedVideoSyncs == trainDbImportResult.importedVideoSyncs
+        && result.failedFiles == trainDbImportResult.failedFiles;
+    return finalizedExpectedImport;
+}
 
 DataProcessorFactory::~DataProcessorFactory() = default;
 
@@ -512,11 +618,16 @@ bool JsonFileReader::writeRideFile(
     return false;
 }
 
+void Library::initialise(QDir)
+{
+    ++libraryInitialiseCalls;
+}
+
 LibraryImportResult Library::importFiles(
     Context *, QStringList files, LibraryBatchImportConfirmation)
 {
-    LibraryImportResult result;
-    result.completed = true;
-    result.requestedFiles = std::move(files);
-    return result;
+    ++libraryImportCalls;
+    libraryInitialisedBeforeImport = libraryInitialiseCalls > 0;
+    importedLibraryFiles = std::move(files);
+    return trainDbImportResult;
 }

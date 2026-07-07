@@ -22,7 +22,9 @@
 #include "ActionButtonBox.h"
 
 #include <QDir>
+#include <QHash>
 #include <QLabel>
+#include <QStringList>
 #include <QDialog>
 #include <QFileDialog>
 #include <QCheckBox>
@@ -39,6 +41,66 @@ enum class LibraryBatchImportConfirmation {
     noDialog
 };
 
+struct LibraryImportResult
+{
+    bool completed = false;
+    QStringList requestedFiles;
+    QHash<QString, QString> importedVideos;
+    QHash<QString, QString> importedWorkouts;
+    QHash<QString, QString> importedVideoSyncs;
+    QStringList failedFiles;
+
+    bool allSucceeded() const
+    {
+        if (!completed || !failedFiles.isEmpty()) {
+            return false;
+        }
+        for (const QString &file : requestedFiles) {
+            if (!contains(importedVideos, file)
+                && !contains(importedWorkouts, file)
+                && !contains(importedVideoSyncs, file)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool importedAll(const QStringList &expectedWorkouts,
+                     const QStringList &expectedVideos,
+                     const QStringList &expectedVideoSyncs) const
+    {
+        QStringList expectedFiles =
+            expectedWorkouts + expectedVideos + expectedVideoSyncs;
+        QStringList actualFiles = requestedFiles;
+        expectedFiles.sort();
+        actualFiles.sort();
+        return completed
+            && failedFiles.isEmpty()
+            && actualFiles == expectedFiles
+            && containsAll(importedWorkouts, expectedWorkouts)
+            && containsAll(importedVideos, expectedVideos)
+            && containsAll(importedVideoSyncs, expectedVideoSyncs);
+    }
+
+private:
+    static bool containsAll(const QHash<QString, QString> &available,
+                            const QStringList &expected)
+    {
+        for (const QString &file : expected) {
+            if (!contains(available, file)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static bool contains(const QHash<QString, QString> &available,
+                         const QString &source)
+    {
+        return available.contains(source) && !available.value(source).isEmpty();
+    }
+};
+
 class Library : QObject
 {
     Q_OBJECT
@@ -50,7 +112,7 @@ class Library : QObject
 
         static void initialise(QDir gcRoot); // init
         static Library *findLibrary(QString);
-        static void importFiles(Context *context, QStringList files, LibraryBatchImportConfirmation dialog=LibraryBatchImportConfirmation::optionalDialog);
+        static LibraryImportResult importFiles(Context *context, QStringList files, LibraryBatchImportConfirmation dialog=LibraryBatchImportConfirmation::optionalDialog);
         void removeRef(Context *context, QString ref);
 
         static bool refreshWorkouts(Context *context);
