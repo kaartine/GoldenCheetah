@@ -248,11 +248,9 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-002: Other persistent files are also truncated in place
 
-- Status: IN_PROGRESS - Measures, seasons, and metadata fixed; cache state
-  remains.
-- Code: fixed in `src/Core/Measures.cpp`, `src/Core/Seasons.cpp`, and
-  `src/Metrics/RideMetadata.cpp`; the remaining writer is
-  `src/Core/RideDB.y:481`.
+- Status: FIXED
+- Code: fixed in `src/Core/Measures.cpp`, `src/Core/Seasons.cpp`,
+  `src/Metrics/RideMetadata.cpp`, and `src/Core/RideDB.y`.
 - Impact: Measures, seasons, metadata, and cache state can be left empty or
   partial on ENOSPC or process failure.
 - Measures regression test: `unittests/Core/measuresAtomicSave` injects open,
@@ -297,8 +295,19 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   passes 12 tests. The full Qt 6.8.3 application links, and the complete
   worktree run passes 1,325 tests in 32 registered suites without failures or
   skips.
-- Remaining fix direction: Add equivalent fault-injection coverage and atomic
-  publication to the cache writer.
+- Cache regression test: `unittests/Core/rideCacheAtomicSave` injects open,
+  short-write, flush, and commit failures and requires the previous
+  `rideDB.json` to remain byte-for-byte intact. It also verifies complete
+  successful publication through the production persistence helper.
+- Cache resolution: Serialize the complete cache document in memory, validate
+  the stream, and atomically publish it with the shared persistence helper.
+  Preserve the existing public slot while reporting failures and exposing a
+  result-returning path for programmatic callers and fault injection.
+- Cache verification: The RED build failed because no cache persistence
+  contract existed. The focused suite passes 7 tests normally and under strict
+  ASan/UBSan/LSan with leak detection. The full Qt 6.8.3 application compiles
+  and links with the production parser and cache writer. The complete worktree
+  run passes 1,332 tests in 33 registered suites without failures or skips.
 
 ### DUR-003: TrainDB drops user tables when version lookup fails
 

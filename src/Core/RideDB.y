@@ -18,9 +18,12 @@
  */
 
 #include "RideDB.h"
+#include "RideCachePersistence.h"
 #include "RideFileCache.h"
 #include "SpecialFields.h"
 #include "Settings.h"
+
+#include <QBuffer>
 #ifdef GC_WANT_HTTP
 #include "APIWebService.h"
 #endif
@@ -480,13 +483,34 @@ QString ConstructNameNumberNumberString(QString s0, QString name, QString s1, do
 //
 void RideCache::save(bool opendata, QString filename)
 {
+    QString error;
+    if (!saveToFile(opendata, filename, error)) {
+        qWarning().noquote() << "Cannot save ride cache:" << error;
+    }
+}
 
-    // now save data away - use passed filename if set
-    QFile rideDB(QString("%1/%2").arg(context->athlete->home->cache().canonicalPath()).arg("rideDB.json"));
-    if (filename != "") rideDB.setFileName(filename);
+bool RideCache::saveToFile(
+    bool opendata,
+    const QString &filename,
+    QString &error,
+    const AtomicFileWriterFactory &writerFactory)
+{
+    error.clear();
 
-    if (rideDB.open(QFile::WriteOnly)) {
+    QString path = QString("%1/%2")
+                       .arg(context->athlete->home->cache().canonicalPath())
+                       .arg("rideDB.json");
+    if (!filename.isEmpty()) path = filename;
 
+    QByteArray document;
+    QBuffer rideDB(&document);
+    if (!rideDB.open(QIODevice::WriteOnly)) {
+        error = QStringLiteral("Cannot prepare the ride cache: %1")
+                    .arg(rideDB.errorString());
+        return false;
+    }
+
+    {
         const RideMetricFactory &factory = RideMetricFactory::instance();
 
         // ok, lets write out the cache
@@ -846,9 +870,16 @@ void RideCache::save(bool opendata, QString filename)
         }
 
         stream << "\n  ]\n}";
-
-        rideDB.close();
+        stream.flush();
+        if (stream.status() != QTextStream::Ok) {
+            error = QStringLiteral("Cannot serialize the complete ride cache");
+            return false;
+        }
     }
+
+    rideDB.close();
+    return writeRideCacheAtomically(
+        path, document, error, writerFactory);
 }
 
 #ifdef GC_WANT_HTTP

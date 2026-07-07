@@ -23,6 +23,7 @@
 #include "MainWindow.h"
 #include "RideFile.h"
 #include "RideItem.h"
+#include "RideCachePersistence.h"
 #include "PDModel.h"
 
 #include <functional>
@@ -169,6 +170,11 @@ class RideCache : public QObject
 
         bool updateFromWorkout(RideItem *item, bool autoSave = false);
         bool updateFromWorkoutAfter(const QDate &when, bool autoSave = false);
+
+        bool saveToFile(
+            bool opendata, const QString &filename, QString &error,
+            const AtomicFileWriterFactory &writerFactory =
+                qSaveFileWriterFactory());
 
     public slots:
 
