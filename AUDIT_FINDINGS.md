@@ -581,8 +581,9 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DEV-003: ANT telemetry and command queues have data races
 
-- Status: IN PROGRESS
-- Code: `src/ANT/ANT.cpp`, `src/ANT/ANT.h`
+- Status: FIXED
+- Code: `src/ANT/ANT.cpp`, `src/ANT/ANT.h`, `src/ANT/ANTChannel.cpp`,
+  `src/ANT/ANTChannel.h`
 - Impact: GUI and worker threads concurrently mutate queues and telemetry without
   a common lock, producing undefined behavior. Concurrent senders can also
   interleave an ANT frame with another frame before the required padding.
@@ -591,25 +592,30 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   deterministic fake transport. It exercises every telemetry setter, races
   telemetry, requested controls, calibration, and channel enqueue/dequeue under
   TSAN, forces two senders to contend between an ANT frame and its padding, and
-  records which thread performs setup, runtime control, timer, and shutdown I/O.
-- Resolution so far: Dedicated mutexes protect telemetry snapshots, requested
+  records which thread performs setup, discovery follow-up, runtime control,
+  timer, and shutdown I/O. It also races worker value publication against GUI
+  reads and verifies that FE-C capability requests use the discovered channel.
+- Resolution: Dedicated mutexes protect telemetry snapshots, requested
   control state, calibration state, channel command enqueue/dequeue, and complete
   frame-plus-padding transport transactions. A typed worker mailbox now owns
   setup, stop, load, gradient, mode, control-broadcast, and capability commands.
   Queue operations release their lock before channel or I/O work, and setup
-  receives the startup acknowledgement on the worker-owned parser.
+  receives the startup acknowledgement on the worker-owned parser. Channel
+  values use atomic publication, while discovery follow-up remains on the ANT
+  worker; the queued GUI callback only publishes the discovered device. FE-C
+  records the discovered channel before requesting capabilities.
 - Verification: The first RED stage produced TSAN races in
   `getRealtimeData()` and `QQueue::dequeue()`, heap corruption in normal queue
   stress, and `frame, frame, padding, padding` on the fake wire. The second RED
   stage produced three deterministic wrong-thread I/O failures for setup,
   runtime/timer control, and shutdown; TSAN separately reported requested-mode
-  publication and calibration reset/getter races. The resulting 11-test suite
-  passes normally, under TSAN, and under strict ASan/UBSan/LSan. The complete
-  matrix passes all 1,484 tests in 44 result blocks with no failures, skips, or
+  publication and calibration reset/getter races. The final RED stage showed
+  that discovery follow-up attempted I/O from the queued GUI callback, used FE-C
+  channel 255 instead of the discovered channel, and raced worker value writes
+  against `channelValue()` reads under TSAN. The resulting 13-test suite passes
+  normally, under TSAN, and under strict ASan/UBSan/LSan. The complete matrix
+  passes all 1,486 tests in 44 result blocks with no failures, skips, or
   sanitizer diagnostics.
-- Remaining: Remove the shared ANTChannel/QObject state and affinity races,
-  including channel configuration/value publication, before marking this
-  finding fixed.
 
 ### DEV-004: Stale ANT/BLE telemetry can be recorded indefinitely
 

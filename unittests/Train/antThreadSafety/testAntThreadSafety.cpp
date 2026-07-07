@@ -10,11 +10,15 @@
 #include "LibUsb.h"
 #include "TrainSidebar.h"
 
+#include <QCoreApplication>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QSemaphore>
 #include <QTest>
 
 #include <atomic>
 #include <cmath>
+#include <initializer_list>
 #include <thread>
 
 namespace {
@@ -32,6 +36,34 @@ bool isPadding(const FakeAntTransport::WriteCall &call)
         if (byte != 0) return false;
     }
     return true;
+}
+
+QByteArray antFrame(const unsigned char messageId,
+                    std::initializer_list<unsigned char> payload)
+{
+    QByteArray frame;
+    frame.append(static_cast<char>(ANT_SYNC_BYTE));
+    frame.append(static_cast<char>(payload.size()));
+    frame.append(static_cast<char>(messageId));
+    for (const unsigned char byte : payload)
+        frame.append(static_cast<char>(byte));
+
+    unsigned char checksum = 0;
+    for (const char byte : frame)
+        checksum ^= static_cast<unsigned char>(byte);
+    frame.append(static_cast<char>(checksum));
+    return frame;
+}
+
+bool isFecCapabilityRequest(const FakeAntTransport::WriteCall &call)
+{
+    return isMessage(call) && call.bytes.size() > 10 &&
+            static_cast<unsigned char>(call.bytes.at(ANT_OFFSET_ID)) ==
+                    ANT_ACK_DATA &&
+            static_cast<unsigned char>(call.bytes.at(4)) ==
+                    FITNESS_EQUIPMENT_REQUEST_DATA_PAGE &&
+            static_cast<unsigned char>(call.bytes.at(10)) ==
+                    FITNESS_EQUIPMENT_TRAINER_CAPABILITIES_PAGE;
 }
 
 quintptr currentThreadId()
@@ -364,6 +396,87 @@ private slots:
             QVERIFY2(frames.at(index).threadId != callerThread,
                      "ANT::stop closed a channel outside the worker");
         }
+    }
+
+    void channelDiscoveryFollowupUsesWorkerAndDiscoveredChannel()
+    {
+        ANT ant;
+        QCOMPARE(ant.start(), 0);
+        ant.setChannel(0, 0,
+                       ANTChannel::CHANNEL_TYPE_FITNESS_EQUIPMENT);
+        QVERIFY(FakeAntTransport::waitForMessageWrites(2));
+
+        const int writesBeforeDiscovery =
+                FakeAntTransport::snapshot().writes.size();
+        const quintptr callerThread = currentThreadId();
+        FakeAntTransport::queueReadBytes(antFrame(
+                ANT_CHANNEL_ID,
+                { 0, 0x34, 0x12, ANT_SPORT_FITNESS_EQUIPMENT_TYPE, 0 }));
+
+        FakeAntTransport::WriteCall capabilityRequest;
+        bool found = false;
+        QElapsedTimer deadline;
+        deadline.start();
+        while (!found && deadline.elapsed() < 5000) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+            const FakeAntTransport::Snapshot transport =
+                    FakeAntTransport::snapshot();
+            for (int index = writesBeforeDiscovery;
+                 index < transport.writes.size(); ++index) {
+                if (isFecCapabilityRequest(transport.writes.at(index))) {
+                    capabilityRequest = transport.writes.at(index);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) QTest::qWait(1);
+        }
+
+        QCOMPARE(ant.stop(), 0);
+        QVERIFY2(found, "FE-C discovery did not request capabilities");
+        QVERIFY2(capabilityRequest.threadId != callerThread,
+                 "FE-C discovery performed transport I/O on the GUI thread");
+        QCOMPARE(static_cast<unsigned char>(capabilityRequest.bytes.at(3)),
+                 static_cast<unsigned char>(0));
+    }
+
+    void channelValuesArePublishedWithoutDataRaces()
+    {
+        ANT ant;
+        ANTChannel *channel = ant.antChannel[0];
+        channel->channel_type = ANTChannel::CHANNEL_TYPE_HR;
+        const QByteArray low = antFrame(
+                ANT_BROADCAST_DATA,
+                { 0, 0, 0, 0, 0, 0, 0, 0, 95 });
+        const QByteArray high = antFrame(
+                ANT_BROADCAST_DATA,
+                { 0, 0, 0, 0, 0, 0, 0, 0, 175 });
+        QSemaphore started;
+        std::atomic<bool> stop(false);
+
+        std::thread writer([&]() {
+            quint64 sample = 0;
+            channel->receiveMessage(reinterpret_cast<unsigned char *>(
+                    const_cast<char *>(low.constData())));
+            started.release();
+            while (!stop.load(std::memory_order_acquire)) {
+                const QByteArray &frame = (sample++ & 1U) ? low : high;
+                channel->receiveMessage(reinterpret_cast<unsigned char *>(
+                        const_cast<char *>(frame.constData())));
+            }
+        });
+
+        started.acquire();
+        double observed = 0.0;
+        for (int sample = 0; sample < 250000; ++sample) {
+            observed += ant.channelValue(0);
+            observed += ant.channelValue2(0);
+        }
+
+        stop.store(true, std::memory_order_release);
+        writer.join();
+        QVERIFY(std::isfinite(observed));
+        QVERIFY(observed > 0.0);
     }
 
     void controlStatePublicationIsSynchronized()

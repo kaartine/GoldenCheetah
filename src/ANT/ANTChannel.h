@@ -26,6 +26,8 @@
 #include <QTime>
 #include <QTimer>
 
+#include <atomic>
+
 #ifdef GC_ANT_BURST_TEST
 class TestAntBurstBounds;
 #endif
@@ -220,9 +222,13 @@ class ANTChannel : public QObject {
         void attemptTransition(int message_code);
 
         // telemetry for this channel
-        double channelValue() { return value; }
-        double channelValue2() { return value2; }
-        double value,value2; // used during config, rather than rtData
+        double channelValue() const {
+            return value.load(std::memory_order_relaxed);
+        }
+        double channelValue2() const {
+            return value2.load(std::memory_order_relaxed);
+        }
+        std::atomic<double> value, value2; // used during config, rather than rtData
         uint16_t capabilities();
 
         // search

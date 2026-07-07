@@ -148,6 +148,13 @@ bool waitForMessageWrites(const int count, const int timeoutMs)
             });
 }
 
+void queueReadBytes(const QByteArray &bytes)
+{
+    std::lock_guard<std::mutex> lock(stateMutex);
+    state.readBytes.append(bytes);
+    stateChanged.notify_all();
+}
+
 Snapshot snapshot()
 {
     std::lock_guard<std::mutex> lock(stateMutex);

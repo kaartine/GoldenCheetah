@@ -970,18 +970,19 @@ Q_UNUSED(name);
 }
 
 void
-ANT::channelInfo(int channel, int device_number, int device_id)
+ANT::channelInfoOnWorker(int channel, int deviceNumber)
 {
-    qDebug()<<"** CONNECTION ESTABLISHED channel:"<<channel<<"device:"<<device_number<<"**";
-    emit foundDevice(channel, device_number, device_id);
+    Q_ASSERT(QThread::currentThread() == this);
+    if (channel < 0 || channel >= channels) return;
 
     // KICKR DETECTED - ACT ACCORDINGLY !
     // if we just got a power device and its recognised as being a kickr
     // trainer then we will need to open up the comms channel, unless it
     // has already been done
-    if (!configuring && antChannel[channel]->is_kickr && kickrDeviceID != device_number) {
+    if (!configuring && antChannel[channel]->is_kickr &&
+        kickrDeviceID != deviceNumber) {
 
-        kickrDeviceID = device_number;
+        kickrDeviceID = deviceNumber;
         kickrChannel = channel;
 
         // lets go ?
@@ -993,19 +994,29 @@ ANT::channelInfo(int channel, int device_number, int device_id)
     // ANT FE-C DEVICE DETECTED - ACT ACCORDINGLY !
     // if we just got an ANT FE-C trainer, request the capabilities
     if (!configuring && antChannel[channel]->is_fec) {
+        setFecChannel(channel);
         antChannel[channel]->capabilities();
-        qDebug()<<"ANT FE-C device found."<<device_number<<"on channel"<<channel;
+        qDebug()<<"ANT FE-C device found."<<deviceNumber<<"on channel"<<channel;
     }
 
     // ANT PWR DEVICE DETECTED - ACT ACCORDINGLY !
     // if we just got an PWR sensor, request the capabilities
     if (!configuring && antChannel[channel]->is_power) {
         antChannel[channel]->capabilities();
-        qDebug()<<channel<<"ANT power device found."<<device_number;
+        qDebug()<<channel<<"ANT power device found."<<deviceNumber;
     }
+}
 
-    //qDebug()<<"found device number"<<device_number<<"type"<<device_id<<"on channel"<<channel
-    //<< "is a "<<deviceTypeDescription(device_id) << "with code"<<deviceTypeCode(device_id);
+void
+ANT::channelInfo(int channel, int deviceNumber, int deviceId)
+{
+    if (channel < 0 || channel >= ANT_MAX_CHANNELS) return;
+
+    qDebug()<<"** CONNECTION ESTABLISHED channel:"<<channel<<"device:"<<deviceNumber<<"**";
+    emit foundDevice(channel, deviceNumber, deviceId);
+
+    //qDebug()<<"found device number"<<deviceNumber<<"type"<<deviceId<<"on channel"<<channel
+    //<< "is a "<<deviceTypeDescription(deviceId) <<"with code"<<deviceTypeCode(deviceId);
 }
 
 void

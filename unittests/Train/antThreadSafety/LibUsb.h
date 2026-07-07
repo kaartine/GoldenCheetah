@@ -38,6 +38,7 @@ void disableProducerReadBarrier();
 void armMessageInterleave();
 bool waitForFirstMessageBlocked(int timeoutMs = 2000);
 bool waitForMessageWrites(int count, int timeoutMs = 10000);
+void queueReadBytes(const QByteArray &bytes);
 
 Snapshot snapshot();
 

@@ -1360,6 +1360,7 @@ void ANTChannel::channelId(unsigned char *ant_message) {
 
     // tell controller we got a new channel id
     setId();
+    parent->channelInfoOnWorker(number, device_number);
     emit channelInfo(number, device_number, device_id);
 
     // if we were searching,

@@ -828,6 +828,8 @@ public:
     qint64 getElapsedTime();
 
 private:
+    friend class ANTChannel;
+
     enum WorkerCommandType {
         WorkerSetup,
         WorkerStop,
@@ -857,6 +859,7 @@ private:
     void readPortOnce();
     int setupOnWorker();
     void stopOnWorker();
+    void channelInfoOnWorker(int channel, int deviceNumber);
     void applyLoad(double value);
     void applyGradient(double value);
     void applyMode(int value);
