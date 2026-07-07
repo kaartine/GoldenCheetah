@@ -8,15 +8,75 @@
  */
 
 #include "Train/BluetoothDeviceTypes.h"
+#include "Train/TrainingControllerLifecycle.h"
 #include "Train/TrainingDeviceSelection.h"
 
 #include <QTest>
+
+namespace {
+
+struct LifecycleRecord
+{
+    QStringList events;
+};
+
+class FakeLifecycleController
+{
+public:
+    FakeLifecycleController(int id, LifecycleRecord *record) :
+        id(id), record(record)
+    {
+    }
+
+    ~FakeLifecycleController()
+    {
+        record->events.append(QStringLiteral("delete-%1").arg(id));
+    }
+
+    int stop()
+    {
+        record->events.append(QStringLiteral("stop-%1").arg(id));
+        return 0;
+    }
+
+private:
+    int id;
+    LifecycleRecord *record;
+};
+
+}
 
 class TestDeviceSelection : public QObject
 {
     Q_OBJECT
 
 private slots:
+
+    void controllerCleanupStopsDeletesAndClearsPointers()
+    {
+        LifecycleRecord record;
+        FakeLifecycleController *first =
+                new FakeLifecycleController(1, &record);
+        FakeLifecycleController *empty = nullptr;
+        FakeLifecycleController *second =
+                new FakeLifecycleController(2, &record);
+
+        TrainingControllerLifecycle::stopAndDelete(first);
+        TrainingControllerLifecycle::stopAndDelete(empty);
+        TrainingControllerLifecycle::stopAndDelete(second);
+
+        QVERIFY(!first);
+        QVERIFY(!empty);
+        QVERIFY(!second);
+        QCOMPARE(record.events, QStringList()
+                 << QStringLiteral("stop-1")
+                 << QStringLiteral("delete-1")
+                 << QStringLiteral("stop-2")
+                 << QStringLiteral("delete-2"));
+
+        TrainingControllerLifecycle::stopAndDelete(first);
+        QCOMPARE(record.events.size(), 4);
+    }
 
     void preservesStableBluetoothTypeIds()
     {

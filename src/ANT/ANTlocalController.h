@@ -37,6 +37,7 @@ class ANTlocalController : public RealtimeController
 
 public:
     ANTlocalController (TrainSidebar *parent =0, DeviceConfiguration *dc =0);
+    ~ANTlocalController() override;
 
     ANT *myANTlocal;               // the device itself
 

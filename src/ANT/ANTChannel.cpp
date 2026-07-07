@@ -32,7 +32,8 @@ static float timeout_drop=2.0; // time before reporting dropped message
 static float timeout_scan=10.0; // time to do initial scan
 static float timeout_lost=30.0; // time to do more thorough scan
 
-ANTChannel::ANTChannel(int number, ANT *parent) : parent(parent), number(number)
+ANTChannel::ANTChannel(int number, ANT *parent) :
+    QObject(parent), parent(parent), number(number)
 {
     // timer for power sensor setup
     connect(this, SIGNAL(sensorSetupTimerStart()), this, SLOT(slotStartSensorSetupTimer()));

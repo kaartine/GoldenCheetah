@@ -38,6 +38,7 @@
 #include "ErgofitController.h"
 #include "DaumController.h"
 #include "ANTlocalController.h"
+#include "TrainingControllerLifecycle.h"
 #include "ANTChannel.h"
 #include "NullController.h"
 #include "Settings.h"
@@ -76,12 +77,7 @@ public:
 
     static void cleanupController(RealtimeController *&controller)
     {
-        RealtimeController *ownedController = controller;
-        controller = nullptr;
-        if (!ownedController) return;
-
-        ownedController->stop();
-        delete ownedController;
+        TrainingControllerLifecycle::stopAndDelete(controller);
     }
 
     Context *context;

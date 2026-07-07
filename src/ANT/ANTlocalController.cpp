@@ -38,7 +38,7 @@ ANTlocalController::ANTlocalController(TrainSidebar *parent, DeviceConfiguration
         athletePath = QDir::tempPath();
     }
 
-    myANTlocal = new ANT (parent, dc, cyclist);
+    myANTlocal = new ANT (this, dc, cyclist);
     logger = new ANTLogger(this, athletePath);
 
     connect(myANTlocal, SIGNAL(foundDevice(int,int,int)), this, SIGNAL(foundDevice(int,int,int)));
@@ -57,6 +57,11 @@ ANTlocalController::ANTlocalController(TrainSidebar *parent, DeviceConfiguration
     // Connect a logger
     connect(myANTlocal, SIGNAL(receivedAntMessage(const unsigned char, const ANTMessage ,const timeval )), logger, SLOT(logRawAntMessage(const unsigned char, const ANTMessage ,const timeval)));
     connect(myANTlocal, SIGNAL(sentAntMessage(const unsigned char, const ANTMessage ,const timeval )), logger, SLOT(logRawAntMessage(const unsigned char, const ANTMessage ,const timeval)));
+}
+
+ANTlocalController::~ANTlocalController()
+{
+    stop();
 }
 
 void

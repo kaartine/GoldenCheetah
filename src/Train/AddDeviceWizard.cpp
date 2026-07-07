@@ -759,16 +759,7 @@ void
 AddPair::cleanupPage()
 {
     updateValues.stop();
-    if (wizard->controller) {
-        wizard->controller->stop();
-#ifdef WIN32
-        Sleep(1000);
-#else
-        sleep(1);
-#endif
-        delete wizard->controller;
-        wizard->controller = NULL;
-    }
+    AddDeviceWizard::cleanupController(wizard->controller);
 }
 
 static void enableDisable(QTreeWidget *tree)
@@ -791,7 +782,7 @@ AddPair::initializePage()
 {
     // setup the controller and start it off so we can
     // manipulate it
-    if (wizard->controller) delete wizard->controller;
+    AddDeviceWizard::cleanupController(wizard->controller);
     if (signalMapper) delete signalMapper;
     wizard->controller = new ANTlocalController(NULL,NULL);
     dynamic_cast<ANTlocalController*>(wizard->controller)->setDevice(wizard->portSpec);
@@ -1698,16 +1689,7 @@ AddFinal::validatePage()
  
         // shut down the controller, if it is there, since it will
         // still be connected to the device (in case we hit the back button)
-        if (wizard->controller) {
-            wizard->controller->stop();
-#ifdef WIN32
-            Sleep(1000);
-#else
-            sleep(1);
-#endif
-            delete wizard->controller;
-            wizard->controller = NULL;
-        }
+        AddDeviceWizard::cleanupController(wizard->controller);
         return true;
     }
     return false;

@@ -185,6 +185,7 @@ ANT::ANT(QObject *parent, DeviceConfiguration *devConf, QString athlete) : QThre
 
 ANT::~ANT()
 {
+    stop();
 #if defined GC_HAVE_LIBUSB
     delete usb2;
 #endif
@@ -640,6 +641,8 @@ ANT::pause()
 int
 ANT::stop()
 {
+    if (!isRunning()) return 0;
+
     // Close the connections to ANT devices before we stop. Sending the
     // "close channel" ANT message seems to resolve an intermittent
     // issue of unresponsive USB2 stick on subsequent opens.
@@ -665,8 +668,12 @@ ANT::stop()
     Status = 0; // Terminate it!
     pvars.unlock();
 
-    //short wait before returning, resolves intermittent USB error if device restarted immediately
-    msleep(125);
+    if (QThread::currentThread() != this) {
+        wait();
+
+        // Give the USB device a short recovery interval before a new open.
+        msleep(125);
+    }
 
     return 0;
 }

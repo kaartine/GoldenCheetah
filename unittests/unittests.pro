@@ -35,6 +35,7 @@ equals(GC_UNITTESTS, active) {
 			   Metrics/rideMetadataAtomicSave \
 			   Python/pythonDataSeriesOwnership \
 			   Train/antBurstBounds \
+			   Train/antLifecycle \
 			   Train/kineticPacketBounds \
 			   Train/vmProWidgetLifecycle \
 			   Train/virtualPowerTrainerOwnership \

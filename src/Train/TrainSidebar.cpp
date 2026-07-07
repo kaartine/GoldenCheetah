@@ -25,6 +25,7 @@
 #include "Units.h"
 #include "DeviceTypes.h"
 #include "DeviceConfiguration.h"
+#include "TrainingControllerLifecycle.h"
 #include "TrainingDeviceSelection.h"
 #include "RideImportWizard.h"
 #include "HelpWhatsThis.h"
@@ -433,6 +434,12 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
 TrainSidebar::~TrainSidebar
 ()
 {
+    for (DeviceConfiguration &device : Devices) {
+        if (device.type == DEV_ANTLOCAL)
+            TrainingControllerLifecycle::stopAndDelete(device.controller);
+    }
+    activeDevices.clear();
+
 #if !defined GC_VIDEO_NONE
     if (videoModel != nullptr) {
         delete videoModel;

@@ -659,7 +659,7 @@ HEADERS += ../contrib/qtsolutions/codeeditor/codeeditor.h ../contrib/qtsolutions
 
 # Train View
 HEADERS += Train/AddDeviceWizard.h Train/CalibrationData.h Train/ComputrainerController.h Train/Computrainer.h Train/DeviceConfiguration.h \
-           Train/BluetoothDeviceTypes.h Train/DeviceTypes.h Train/TrainingDeviceSelection.h Train/TrainingStopPolicy.h \
+           Train/BluetoothDeviceTypes.h Train/DeviceTypes.h Train/TrainingControllerLifecycle.h Train/TrainingDeviceSelection.h Train/TrainingStopPolicy.h \
            Train/TrainingRecordingIo.h Train/TrainingTelemetryTimeline.h \
            Train/DialWindow.h \
            Train/TrainerDayDownloadDialog.h Train/TrainerDay.h Train/ErgFile.h Train/ErgFilePlot.h \

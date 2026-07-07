@@ -555,19 +555,29 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DEV-002: ANT workers are not stopped and joined before destruction
 
-- Status: OPEN
-- Code: `src/ANT/ANTlocalController.cpp:41`, `src/ANT/ANT.cpp:641`,
-  `src/Train/TrainSidebar.cpp:730`
+- Status: FIXED
+- Code: `src/ANT/ANT.cpp`, `src/ANT/ANTChannel.cpp`,
+  `src/ANT/ANTlocalController.cpp`, `src/Train/AddDeviceWizard.cpp`,
+  `src/Train/TrainSidebar.cpp`
 - Impact: ANT workers can retain USB resources, race controller destruction, or
   trigger `QThread destroyed while running`.
-- Test: Repeatedly start/stop/delete a fake blocking transport and require zero
-  surviving workers and immediate port reuse.
-- Fix direction: Give controllers worker ownership, unblock I/O, request stop,
-  and synchronously `wait()` in teardown.
-- Partial resolution: The add-device Bluetooth scanner now owns objects created
-  in its worker thread, supports cancellation, and joins before wizard teardown.
-  Its focused normal and sanitizer lifecycle tests pass. The ANT workers listed
-  above still require the same ownership and join discipline.
+- Regression test: `unittests/Train/antLifecycle` uses the production ANT worker
+  and controller with a fake blocking transport. It covers direct worker and
+  controller destruction, synchronous stop, immediate port reuse, repeated
+  lifecycle operations, worker ownership, and channel ownership. The shared
+  controller cleanup helper also has a focused unit test.
+- Resolution: `ANT::stop()` now requests termination and synchronously joins
+  the worker before returning. Controllers own their ANT worker and stop it in
+  teardown; the Train sidebar explicitly disposes configured ANT controllers.
+  Wizard cleanup uses the same stop/delete operation without arbitrary sleeps.
+  ANT channels are QObject children of the worker, eliminating the channel and
+  timer leaks exposed by the lifecycle sanitizer run.
+- Verification: The dedicated RED suite observed a live worker, retained
+  transport lease, failed immediate reuse, controller/worker ownership
+  failures, and surviving channels before the fixes. It now passes 9 tests
+  normally and under strict ASan/UBSan/LSan. The controller helper suite passes
+  22 tests, the Qt 6.8.3 application builds and starts, and the complete matrix
+  passes 1,473 tests in 43 suites with no failures or skips.
 
 ### DEV-003: ANT telemetry and command queues have data races
 
