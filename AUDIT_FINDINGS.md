@@ -417,15 +417,25 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### TRN-003: Auxiliary telemetry timestamps become non-monotonic across pause
 
-- Status: OPEN
-- Code: `src/Train/TrainSidebar.cpp:1331`,
-  `src/Train/TrainSidebar.cpp:3422`, `src/Train/TrainSidebar.cpp:3491`
+- Status: FIXED
+- Code: `src/Train/TrainingTelemetryTimeline.h`,
+  `src/Train/TrainSidebar.cpp:1378`, `src/Train/TrainSidebar.cpp:3530`,
+  `src/Train/TrainSidebar.cpp:3546`, `src/Train/TrainSidebar.cpp:3662`
 - Impact: RR, position, core-temperature, and VO2 samples continue during pause
   using a timer that is reset on resume. Timestamps can then jump backwards.
-- Test: Pause, emit each auxiliary sample, resume, and require no paused samples
-  plus strictly increasing active-session timestamps.
-- Fix direction: Use one monotonic active-session clock and gate side channels
-  while paused or calibrating.
+- Regression test: `unittests/Train/trainingTelemetryTimeline` exercises all
+  four channels before, during, and after pause and calibration. It also
+  requires strictly increasing per-channel timestamps when the raw clock stalls
+  or moves backwards, independent channel state, session reset, invalid channel
+  rejection, and overflow-safe saturation.
+- Resolution: All auxiliary streams now use one active-session timestamp source
+  and reject samples while stopped, not recording, paused, or calibrating.
+  Per-channel high-water marks prevent equal or decreasing timestamps around
+  resume boundaries, and the timeline is reset only for a new training session.
+- Verification: The RED build failed because the shared telemetry-timeline
+  contract did not exist. All 10 focused tests pass normally and under strict
+  ASan/UBSan/LSan. The Qt 6.8.3 application builds and starts, and the complete
+  matrix passes 1,425 tests in 40 suites with no failures or skips.
 
 ### DEV-001: Failed devices are still reported as connected
 

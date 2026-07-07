@@ -41,7 +41,8 @@ equals(GC_UNITTESTS, active) {
 			   Train/bt40Lifecycle \
 			   Train/deviceSelection \
 			   Train/trainingStopPolicy \
-			   Train/trainingRecordingIo
+			   Train/trainingRecordingIo \
+			   Train/trainingTelemetryTimeline
 	CONFIG += ordered
 } else {
 	message("Unittests are disabled; to enable copy unittests/unittests.pri.in to unittests/unittests.pri")

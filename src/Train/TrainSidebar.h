@@ -36,6 +36,7 @@
 #include "InfoWidget.h"
 #include "TrainingStopPolicy.h"
 #include "TrainingRecordingIo.h"
+#include "TrainingTelemetryTimeline.h"
 
 // standard stuff
 #include <QDir>
@@ -346,11 +347,14 @@ class TrainSidebar : public GcWindow
         void finishStop(RecordingStopAction recordingAction);
         bool writeRecordingData(const QByteArray &data);
         void stopForRecordingFailure(TrainingRecordingIo::Failure failure);
+        TrainingTelemetryTimeline::SampleTime auxiliaryTimestamp(
+                TrainingTelemetryTimeline::Channel channel);
 
         bool stopConfirmationActive;
         bool resumeAfterStopConfirmation;
         QPointer<RideImportWizard> stopConfirmationDialog;
         TrainingRecordingIo::Health recordingHealth;
+        TrainingTelemetryTimeline::Timeline telemetryTimeline;
 
         Bicycle bicycle;
 

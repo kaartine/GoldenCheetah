@@ -1375,6 +1375,7 @@ void TrainSidebar::Start()       // when start button is pressed
         qDebug() << "start...";
 
         recordingHealth.reset();
+        telemetryTimeline.reset();
 
 #ifdef WIN32
         // disable the screen saver on Windows
@@ -3526,12 +3527,31 @@ TrainSidebar::remoteControl(uint16_t command)
     }
 }
 
+TrainingTelemetryTimeline::SampleTime TrainSidebar::auxiliaryTimestamp(
+        TrainingTelemetryTimeline::Channel channel)
+{
+    return telemetryTimeline.timestamp(
+            channel,
+            {
+                (status & RT_RUNNING) != 0,
+                (status & RT_RECORDING) != 0,
+                (status & RT_PAUSED) != 0,
+                (status & RT_CALIBRATING) != 0,
+                static_cast<qint64>(session_elapsed_msec),
+                session_time.elapsed()
+            });
+}
+
 // HRV R-R data received
 void TrainSidebar::rrData(uint16_t  rrtime, uint8_t count, uint8_t bpm)
 {
     Q_UNUSED(count)
 
     QMutexLocker locker(&rrMutex);
+
+    const auto sampleTime = auxiliaryTimestamp(
+            TrainingTelemetryTimeline::Channel::Rr);
+    if (!sampleTime.accepted) return;
 
     if (status&RT_RECORDING && rrFile == NULL && recordFile != NULL) {
         QString rrfile = recordFile->fileName().replace("csv", "rr");
@@ -3555,7 +3575,7 @@ void TrainSidebar::rrData(uint16_t  rrtime, uint8_t count, uint8_t bpm)
         QTextStream recordFileStream(rrFile);
 
         // convert from milliseconds to secondes
-        double secs = double(session_elapsed_msec + session_time.elapsed()) / 1000.00;
+        double secs = double(sampleTime.msecs) / 1000.00;
 
         // output a line
         recordFileStream << secs << ", " << bpm << ", " << rrtime << "\n";
@@ -3568,8 +3588,10 @@ void TrainSidebar::posData(uint8_t position)
 {
     QMutexLocker locker(&posMutex);
 
-    // convert from milliseconds to secondes
-    double secs = double(session_elapsed_msec + session_time.elapsed()) / 1000.00;
+    const auto sampleTime = auxiliaryTimestamp(
+            TrainingTelemetryTimeline::Channel::Position);
+    if (!sampleTime.accepted) return;
+    double secs = double(sampleTime.msecs) / 1000.00;
 
     if (status&RT_RECORDING && posFile == NULL && recordFile != NULL) {
         QString posFilename = recordFile->fileName().replace(".csv", ".pos.csv");
@@ -3604,6 +3626,10 @@ void TrainSidebar::posData(uint8_t position)
 // Coretemp data received
 void TrainSidebar::tcoreData(float  core, float skin, float hsi, int qual)
 {
+    const auto sampleTime = auxiliaryTimestamp(
+            TrainingTelemetryTimeline::Channel::CoreTemperature);
+    if (!sampleTime.accepted) return;
+
     if (status&RT_RECORDING && tcoreFile == NULL && recordFile != NULL) {
         QString tcorefile = recordFile->fileName().replace("csv", "tcr");
 
@@ -3625,7 +3651,7 @@ void TrainSidebar::tcoreData(float  core, float skin, float hsi, int qual)
         QTextStream recordFileStream(tcoreFile);
 
         // convert from milliseconds to secondes
-        double secs = double(session_elapsed_msec + session_time.elapsed()) / 1000.00;
+        double secs = double(sampleTime.msecs) / 1000.00;
 
         // output a line
         recordFileStream << secs << ", " << core << ", " << skin << ", " << hsi << ", " << qual << "\n";
@@ -3636,6 +3662,10 @@ void TrainSidebar::tcoreData(float  core, float skin, float hsi, int qual)
 void TrainSidebar::vo2Data(double rf, double rmv, double vo2, double vco2, double tv, double feo2)
 {
     QMutexLocker locker(&vo2Mutex);
+
+    const auto sampleTime = auxiliaryTimestamp(
+            TrainingTelemetryTimeline::Channel::Vo2);
+    if (!sampleTime.accepted) return;
 
     if (status&RT_RECORDING && vo2File == NULL && recordFile != NULL) {
         QString vo2filename = recordFile->fileName().replace("csv", "vo2");
@@ -3658,7 +3688,7 @@ void TrainSidebar::vo2Data(double rf, double rmv, double vo2, double vco2, doubl
         QTextStream recordFileStream(vo2File);
 
         // convert from milliseconds to secondes
-        double secs = double(session_elapsed_msec + session_time.elapsed()) / 1000.00;
+        double secs = double(sampleTime.msecs) / 1000.00;
 
         // output a line
         recordFileStream << secs << ", " << rf << ", " << rmv << ", " << vo2 << ", " << vco2 << ", " << tv << ", " << feo2 << "\n";
