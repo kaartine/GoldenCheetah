@@ -26,6 +26,7 @@
 #include "GoldenCheetah.h"
 #include "RealtimeData.h"
 #include "CalibrationData.h"
+#include "ANTTelemetryFreshness.h"
 #include "DeviceConfiguration.h"
 
 //
@@ -91,6 +92,9 @@
 
 class ANTMessage;
 class ANTChannel;
+#ifdef GC_ANT_FRESHNESS_TEST
+class TestAntThreadSafety;
+#endif
 
 typedef struct ant_sensor_type {
   bool user; // can user select this when calibrating ?
@@ -656,30 +660,40 @@ public:
     // channels update our telemetry
     double channelValue(int channel);
     double channelValue2(int channel);
-    void setBPM(float x) {
+    void setBPM(float x, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setHr(x);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::HeartRate, source)) {
+            telemetry.setHr(x);
+        }
     }
-    void setCadence(float x) {
+    void setCadence(float x, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        lastCadenceMessage = QDateTime(QDateTime::currentDateTime());
-        telemetry.setCadence(x);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::Cadence, source,
+                    ANTTelemetryPriority::Primary)) {
+            telemetry.setCadence(x);
+        }
     }
     float getCadence(void) {
         QMutexLocker locker(&telemetryMutex);
         return telemetry.getCadence();
     }
-    void setSecondaryCadence(float x) {
+    void setSecondaryCadence(float x, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        if (lastCadenceMessage.toSecsSinceEpoch() == 0 || (QDateTime::currentDateTime().toSecsSinceEpoch() - lastCadenceMessage.toSecsSinceEpoch())>10)  {
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::Cadence, source,
+                    ANTTelemetryPriority::Secondary)) {
             telemetry.setCadence(x);
         }
     }
 
-    void setSpeed(double x)
+    void setSpeed(double x, int source = -1)
     {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setSpeed(x);
+        if (publishTelemetryLocked(ANTTelemetryMetric::Speed, source)) {
+            telemetry.setSpeed(x);
+        }
     }
 
     void incAltDistance(double x)
@@ -688,96 +702,152 @@ public:
         telemetry.setAltDistance(telemetry.getAltDistance() + x);
     }
 
-    void setWheelRpm(float x);
+    void setWheelRpm(float x, int source = -1);
     float getWheelRpm(void) {
         QMutexLocker locker(&telemetryMutex);
         return telemetry.getWheelRpm();
     }
 
-    void setWatts(float x) {
+    void setWatts(float x, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setWatts(x);
+        if (publishTelemetryLocked(ANTTelemetryMetric::Power, source)) {
+            telemetry.setWatts(x);
+        }
     }
-    void setAltWatts(float x) {
+    void setAltWatts(float x, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setAltWatts(x);
+        if (publishTelemetryLocked(ANTTelemetryMetric::AltPower, source)) {
+            telemetry.setAltWatts(x);
+        }
     }
-    void setHb(double smo2, double thb);
+    void setHb(double smo2, double thb, int source = -1);
 
-    void setCoreTemp(double core, double skin, double strain);
+    void setCoreTemp(double core, double skin, double strain,
+                     int source = -1);
 
-    void setLRBalance(double lrbalance) {
+    void setLRBalance(double lrbalance, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setLRBalance(lrbalance);
-    }
-
-    void setTE(double lte, double rte) {
-        QMutexLocker locker(&telemetryMutex);
-        telemetry.setLTE(lte);
-        telemetry.setRTE(rte);
-    }
-
-    void setPS(double lps, double rps) {
-        QMutexLocker locker(&telemetryMutex);
-        telemetry.setLPS(lps);
-        telemetry.setRPS(rps);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::LeftRightBalance, source)) {
+            telemetry.setLRBalance(lrbalance);
+        }
     }
 
-    void setRppb(double value) {
+    void setTE(double lte, double rte, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setRppb(value);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::TorqueEffectiveness, source)) {
+            telemetry.setLTE(lte);
+            telemetry.setRTE(rte);
+        }
     }
-    void setRppe(double value) {
+
+    void setPS(double lps, double rps, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setRppe(value);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::PedalSmoothness, source)) {
+            telemetry.setLPS(lps);
+            telemetry.setRPS(rps);
+        }
     }
-    void setRpppb(double value) {
+
+    void setRppb(double value, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setRpppb(value);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::RightPowerPhase, source)) {
+            telemetry.setRppb(value);
+        }
     }
-    void setRpppe(double value) {
+    void setRppe(double value, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setRpppe(value);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::RightPowerPhase, source)) {
+            telemetry.setRppe(value);
+        }
     }
-    void setLppb(double value) {
+    void setRpppb(double value, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setLppb(value);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::RightPowerPhase, source)) {
+            telemetry.setRpppb(value);
+        }
     }
-    void setLppe(double value) {
+    void setRpppe(double value, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setLppe(value);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::RightPowerPhase, source)) {
+            telemetry.setRpppe(value);
+        }
     }
-    void setLpppb(double value) {
+    void setLppb(double value, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setLpppb(value);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::LeftPowerPhase, source)) {
+            telemetry.setLppb(value);
+        }
     }
-    void setLpppe(double value) {
+    void setLppe(double value, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setLpppe(value);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::LeftPowerPhase, source)) {
+            telemetry.setLppe(value);
+        }
     }
-    void setRightPCO(uint8_t value) {
+    void setLpppb(double value, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setRightPCO(value);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::LeftPowerPhase, source)) {
+            telemetry.setLpppb(value);
+        }
     }
-    void setLeftPCO(uint8_t value) {
+    void setLpppe(double value, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setLeftPCO(value);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::LeftPowerPhase, source)) {
+            telemetry.setLpppe(value);
+        }
     }
-    void setPosition(RealtimeData::riderPosition value) {
+    void setRightPCO(uint8_t value, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setPosition(value);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::PedalPosition, source)) {
+            telemetry.setRightPCO(value);
+        }
     }
-    void setRTorque(double torque) {
+    void setLeftPCO(uint8_t value, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setRTorque(torque);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::PedalPosition, source)) {
+            telemetry.setLeftPCO(value);
+        }
     }
-    void setLTorque(double torque) {
+    void setPosition(RealtimeData::riderPosition value, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setLTorque(torque);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::PedalPosition, source)) {
+            telemetry.setPosition(value);
+        }
     }
-    void setTorque(double torque) {
+    void setRTorque(double torque, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setTorque(torque);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::Torque, source)) {
+            telemetry.setRTorque(torque);
+        }
+    }
+    void setLTorque(double torque, int source = -1) {
+        QMutexLocker locker(&telemetryMutex);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::Torque, source)) {
+            telemetry.setLTorque(torque);
+        }
+    }
+    void setTorque(double torque, int source = -1) {
+        QMutexLocker locker(&telemetryMutex);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::Torque, source)) {
+            telemetry.setTorque(torque);
+        }
     }
 
     void setFecChannel(int channel);
@@ -798,37 +868,58 @@ public:
 
     void setControlChannel(int channel);
 
-    void setTrainerStatusAvailable(bool status) {
+    void setTrainerStatusAvailable(bool status, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setTrainerStatusAvailable(status);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::TrainerStatus, source)) {
+            telemetry.setTrainerStatusAvailable(status);
+        }
     }
-    void setTrainerCalibRequired(bool status) {
+    void setTrainerCalibRequired(bool status, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setTrainerCalibRequired(status);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::TrainerStatus, source)) {
+            telemetry.setTrainerCalibRequired(status);
+        }
     }
-    void setTrainerConfigRequired(bool status) {
+    void setTrainerConfigRequired(bool status, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setTrainerConfigRequired(status);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::TrainerStatus, source)) {
+            telemetry.setTrainerConfigRequired(status);
+        }
     }
-    void setTrainerBrakeFault(bool status) {
+    void setTrainerBrakeFault(bool status, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setTrainerBrakeFault(status);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::TrainerStatus, source)) {
+            telemetry.setTrainerBrakeFault(status);
+        }
     }
-    void setTrainerReady(bool status) {
+    void setTrainerReady(bool status, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setTrainerReady(status);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::TrainerStatus, source)) {
+            telemetry.setTrainerReady(status);
+        }
     }
-    void setTrainerRunning(bool status) {
+    void setTrainerRunning(bool status, int source = -1) {
         QMutexLocker locker(&telemetryMutex);
-        telemetry.setTrainerRunning(status);
+        if (publishTelemetryLocked(
+                    ANTTelemetryMetric::TrainerStatus, source)) {
+            telemetry.setTrainerRunning(status);
+        }
     }
 
-    void setTemp(double temp);
+    void setTemp(double temp, int source = -1);
 
     qint64 getElapsedTime();
 
 private:
     friend class ANTChannel;
+#ifdef GC_ANT_FRESHNESS_TEST
+    friend class TestAntThreadSafety;
+#endif
 
     enum WorkerCommandType {
         WorkerSetup,
@@ -863,8 +954,17 @@ private:
     void applyLoad(double value);
     void applyGradient(double value);
     void applyMode(int value);
+    qint64 telemetryNowMs() const;
+    bool publishTelemetryLocked(
+            ANTTelemetryMetric metric, int source,
+            ANTTelemetryPriority priority = ANTTelemetryPriority::Primary);
+    void clearTelemetryMetricLocked(ANTTelemetryMetric metric);
+    void clearTelemetrySource(int source);
+    void expireTelemetryLocked(qint64 nowMs);
+    void getRealtimeDataAt(RealtimeData &rtData, qint64 nowMs);
 
     RealtimeData telemetry;
+    ANTTelemetryFreshness telemetryFreshness;
     CalibrationData calibration;
 
     QMutex telemetryMutex;
@@ -909,8 +1009,6 @@ private:
     int bytes;
     int checksum;
     int powerchannels; // how many power channels do we have?
-    QDateTime lastCadenceMessage;
-
     QElapsedTimer elapsedTimer;
 
     QMutex channelQueueMutex;

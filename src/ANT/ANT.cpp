@@ -230,32 +230,149 @@ double ANT::channelValue(int channel)
     return antChannel[channel]->channelValue();
 }
 
-void ANT::setWheelRpm(float x) {
+qint64 ANT::telemetryNowMs() const
+{
+    const qint64 nowMs = elapsedTimer.elapsed();
+    return nowMs < 0 ? 0 : nowMs;
+}
+
+bool ANT::publishTelemetryLocked(
+        ANTTelemetryMetric metric, int source,
+        ANTTelemetryPriority priority)
+{
+    return telemetryFreshness.publish(
+            source, metric, priority, telemetryNowMs());
+}
+
+void ANT::clearTelemetryMetricLocked(ANTTelemetryMetric metric)
+{
+    switch (metric) {
+    case ANTTelemetryMetric::HeartRate:
+        telemetry.setHr(0);
+        break;
+    case ANTTelemetryMetric::Power:
+        telemetry.setWatts(0);
+        break;
+    case ANTTelemetryMetric::AltPower:
+        telemetry.setAltWatts(0);
+        break;
+    case ANTTelemetryMetric::WheelRpm:
+        telemetry.setWheelRpm(0, false);
+        break;
+    case ANTTelemetryMetric::Speed:
+        telemetry.setSpeed(0);
+        break;
+    case ANTTelemetryMetric::Cadence:
+        telemetry.setCadence(0);
+        break;
+    case ANTTelemetryMetric::MuscleOxygen:
+        telemetry.setHb(0, 0);
+        break;
+    case ANTTelemetryMetric::Temperature:
+        telemetry.setTemp(0);
+        break;
+    case ANTTelemetryMetric::CoreTemperature:
+        telemetry.setCoreTemp(0, 0, 0);
+        break;
+    case ANTTelemetryMetric::LeftRightBalance:
+        telemetry.setLRBalance(0);
+        break;
+    case ANTTelemetryMetric::TorqueEffectiveness:
+        telemetry.setLTE(0);
+        telemetry.setRTE(0);
+        break;
+    case ANTTelemetryMetric::PedalSmoothness:
+        telemetry.setLPS(0);
+        telemetry.setRPS(0);
+        break;
+    case ANTTelemetryMetric::RightPowerPhase:
+        telemetry.setRppb(0);
+        telemetry.setRppe(0);
+        telemetry.setRpppb(0);
+        telemetry.setRpppe(0);
+        break;
+    case ANTTelemetryMetric::LeftPowerPhase:
+        telemetry.setLppb(0);
+        telemetry.setLppe(0);
+        telemetry.setLpppb(0);
+        telemetry.setLpppe(0);
+        break;
+    case ANTTelemetryMetric::PedalPosition:
+        telemetry.setRightPCO(0);
+        telemetry.setLeftPCO(0);
+        telemetry.setPosition(RealtimeData::seated);
+        break;
+    case ANTTelemetryMetric::Torque:
+        telemetry.setRTorque(0);
+        telemetry.setLTorque(0);
+        telemetry.setTorque(0);
+        break;
+    case ANTTelemetryMetric::TrainerStatus:
+        telemetry.setTrainerStatusAvailable(false);
+        telemetry.setTrainerCalibRequired(false);
+        telemetry.setTrainerConfigRequired(false);
+        telemetry.setTrainerBrakeFault(false);
+        telemetry.setTrainerReady(false);
+        telemetry.setTrainerRunning(false);
+        break;
+    case ANTTelemetryMetric::Count:
+        break;
+    }
+}
+
+void ANT::clearTelemetrySource(int source)
+{
+    QMutexLocker locker(&telemetryMutex);
+    const QList<ANTTelemetryMetric> removed =
+            telemetryFreshness.removeSource(source);
+    for (ANTTelemetryMetric metric : removed)
+        clearTelemetryMetricLocked(metric);
+}
+
+void ANT::expireTelemetryLocked(qint64 nowMs)
+{
+    const QList<ANTTelemetryMetric> expired =
+            telemetryFreshness.expire(nowMs);
+    for (ANTTelemetryMetric metric : expired)
+        clearTelemetryMetricLocked(metric);
+}
+
+void ANT::setWheelRpm(float x, int source)
+{
     const double wheelSize = devConf
             ? devConf->wheelSize
             : appsettings->cvalue(trainAthlete, GC_WHEELSIZE, 2100).toInt();
 
     QMutexLocker locker(&telemetryMutex);
-    telemetry.setWheelRpm(x, true); // record time sample for new rpm data
-    telemetry.setSpeed(x * wheelSize / 1000 * 60 / 1000);
+    if (publishTelemetryLocked(ANTTelemetryMetric::WheelRpm, source))
+        telemetry.setWheelRpm(x, true);
+    if (publishTelemetryLocked(ANTTelemetryMetric::Speed, source))
+        telemetry.setSpeed(x * wheelSize / 1000 * 60 / 1000);
 }
 
-void ANT::setHb(double smo2, double thb)
+void ANT::setHb(double smo2, double thb, int source)
 {
     QMutexLocker locker(&telemetryMutex);
-    telemetry.setHb(smo2, thb);
+    if (publishTelemetryLocked(
+                ANTTelemetryMetric::MuscleOxygen, source)) {
+        telemetry.setHb(smo2, thb);
+    }
 }
 
-void ANT::setTemp(double temp)
+void ANT::setTemp(double temp, int source)
 {
     QMutexLocker locker(&telemetryMutex);
-    telemetry.setTemp(temp);
+    if (publishTelemetryLocked(ANTTelemetryMetric::Temperature, source))
+        telemetry.setTemp(temp);
 }
 
-void ANT::setCoreTemp(double core, double skin, double strain)
+void ANT::setCoreTemp(double core, double skin, double strain, int source)
 {
     QMutexLocker locker(&telemetryMutex);
-    telemetry.setCoreTemp(core, skin, strain);
+    if (publishTelemetryLocked(
+                ANTTelemetryMetric::CoreTemperature, source)) {
+        telemetry.setCoreTemp(core, skin, strain);
+    }
 }
 
 /*======================================================================
@@ -806,8 +923,15 @@ ANT::quit(int code)
 void
 ANT::getRealtimeData(RealtimeData &rtData)
 {
+    getRealtimeDataAt(rtData, telemetryNowMs());
+}
+
+void
+ANT::getRealtimeDataAt(RealtimeData &rtData, qint64 nowMs)
+{
     {
         QMutexLocker locker(&telemetryMutex);
+        expireTelemetryLocked(nowMs);
         rtData = telemetry;
     }
     {
@@ -1033,6 +1157,7 @@ ANT::lostInfo(int number)    // we lost the connection
 {
     if (number < 0 || number >= channels) return; // ignore out of bound
 
+    clearTelemetrySource(number);
     emit lostDevice(number);
     qDebug()<<"lost info for channel"<<number;
 }
@@ -1042,6 +1167,7 @@ ANT::staleInfo(int number)   // info is now stale - set to zero
 {
     if (number < 0 || number >= channels) return; // ignore out of bound
 
+    clearTelemetrySource(number);
     qDebug()<<"stale info for channel"<<number;
 }
 

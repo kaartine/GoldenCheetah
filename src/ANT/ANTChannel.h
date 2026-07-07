@@ -31,6 +31,9 @@
 #ifdef GC_ANT_BURST_TEST
 class TestAntBurstBounds;
 #endif
+#ifdef GC_ANT_FRESHNESS_TEST
+class TestAntThreadSafety;
+#endif
 
 #define CHANNEL_TYPE_QUICK_SEARCH 0x10 // or'ed with current channel type
 /* after fast search, wait for slow search.  Otherwise, starting slow
@@ -89,6 +92,9 @@ class ANTChannel : public QObject {
 
 #ifdef GC_ANT_BURST_TEST
         friend class TestAntBurstBounds;
+#endif
+#ifdef GC_ANT_FRESHNESS_TEST
+        friend class TestAntThreadSafety;
 #endif
 
         ANT *parent;

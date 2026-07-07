@@ -5,7 +5,7 @@ TARGET = antThreadSafety
 
 CONFIG += console testcase c++17
 
-DEFINES += GC_HAVE_LIBUSB
+DEFINES += GC_HAVE_LIBUSB GC_ANT_FRESHNESS_TEST
 
 SOURCES = testAntThreadSafety.cpp \
           FakeLibUsb.cpp \
@@ -18,6 +18,7 @@ SOURCES = testAntThreadSafety.cpp \
 
 HEADERS = LibUsb.h \
           GoldenCheetah.h \
+          ../../../src/ANT/ANTTelemetryFreshness.h \
           DeviceConfiguration.h \
           Settings.h \
           RideFile.h \

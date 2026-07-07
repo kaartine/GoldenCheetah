@@ -1,12 +1,13 @@
 /*
  * Copyright (c) 2026
  *
- * Regression coverage for DEV-003 ANT telemetry, channel command, and
- * transport transaction synchronization.
+ * Regression coverage for DEV-003 ANT synchronization and DEV-004 telemetry
+ * freshness.
  */
 
 #include "ANT.h"
 #include "ANTMessage.h"
+#include "ANTTelemetryFreshness.h"
 #include "LibUsb.h"
 #include "TrainSidebar.h"
 
@@ -14,6 +15,7 @@
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QSemaphore>
+#include <QSignalSpy>
 #include <QTest>
 
 #include <atomic>
@@ -53,6 +55,14 @@ QByteArray antFrame(const unsigned char messageId,
         checksum ^= static_cast<unsigned char>(byte);
     frame.append(static_cast<char>(checksum));
     return frame;
+}
+
+QByteArray heartRateFrame(const unsigned char channel,
+                          const unsigned char heartRate,
+                          const unsigned char beatCount)
+{
+    return antFrame(ANT_BROADCAST_DATA,
+                    {channel, 0, 0, 0, 0, 0, 0, beatCount, heartRate});
 }
 
 bool isFecCapabilityRequest(const FakeAntTransport::WriteCall &call)
@@ -114,6 +124,190 @@ private slots:
         FakeAntTransport::reset();
     }
 
+    void channelTimingStateIsInitialized()
+    {
+        const double before = get_timestamp();
+        ANT ant;
+        const double after = get_timestamp();
+
+        for (int index = 0; index < ANT_MAX_CHANNELS; ++index) {
+            ANTChannel *channel = ant.antChannel[index];
+            QVERIFY(channel->blanking_timestamp >= before);
+            QVERIFY(channel->blanking_timestamp <= after);
+            QVERIFY(channel->last_message_timestamp >= before);
+            QVERIFY(channel->last_message_timestamp <= after);
+        }
+    }
+
+    void freshTelemetryRefreshesChannelDeadline()
+    {
+        ANT ant;
+        QCOMPARE(ant.openPort(), 0);
+        ANTChannel *channel = ant.antChannel[0];
+        channel->channel_type = ANTChannel::CHANNEL_TYPE_HR;
+        channel->messages_received = 1;
+        channel->blanking_timestamp = get_timestamp() - 10.0;
+        channel->blanked = 0;
+
+        QByteArray frame = heartRateFrame(0, 147, 1);
+        channel->receiveMessage(
+                reinterpret_cast<unsigned char *>(frame.data()));
+
+        QCOMPARE(channel->blanked, 0);
+        QVERIFY(channel->blanking_timestamp > get_timestamp() - 1.0);
+        QCOMPARE(ant.closePort(), 0);
+    }
+
+    void staleChannelClearsItsHeartRate()
+    {
+        ANT ant;
+        QCOMPARE(ant.openPort(), 0);
+        ANTChannel *channel = ant.antChannel[0];
+        channel->channel_type = ANTChannel::CHANNEL_TYPE_HR;
+
+        for (unsigned char beat = 1; beat <= 3; ++beat) {
+            QByteArray frame = heartRateFrame(0, 153, beat);
+            channel->receiveMessage(
+                    reinterpret_cast<unsigned char *>(frame.data()));
+        }
+
+        RealtimeData snapshot;
+        ant.getRealtimeData(snapshot);
+        QCOMPARE(snapshot.getHr(), 153.0);
+
+        channel->blanking_timestamp = get_timestamp() - 10.0;
+        channel->blanked = 0;
+        unsigned char noTelemetry[] = {ANT_SYNC_BYTE, 0, 0xff};
+        channel->receiveMessage(noTelemetry);
+
+        ant.getRealtimeData(snapshot);
+        QCOMPARE(snapshot.getHr(), 0.0);
+        QCOMPARE(ant.closePort(), 0);
+    }
+
+    void staleSourceDoesNotClearFreshReplacement()
+    {
+        ANT ant;
+        QCOMPARE(ant.openPort(), 0);
+        ant.setBPM(141.0f, 0);
+        ant.setBPM(156.0f, 1);
+        ant.setCadence(91.0f, 2);
+
+        ant.staleInfo(0);
+        RealtimeData snapshot;
+        ant.getRealtimeData(snapshot);
+        QCOMPARE(snapshot.getHr(), 156.0);
+        QCOMPARE(snapshot.getCadence(), 91.0);
+
+        ant.staleInfo(1);
+        ant.getRealtimeData(snapshot);
+        QCOMPARE(snapshot.getHr(), 0.0);
+        QCOMPARE(snapshot.getCadence(), 91.0);
+        QCOMPARE(ant.closePort(), 0);
+    }
+
+    void lostChannelClearsItsTelemetryAndNotifies()
+    {
+        ANT ant;
+        QCOMPARE(ant.openPort(), 0);
+        QSignalSpy lostDevice(&ant, &ANT::lostDevice);
+        ant.setWatts(251.0f, 0);
+
+        ant.lostInfo(0);
+        RealtimeData snapshot;
+        ant.getRealtimeData(snapshot);
+        QCOMPARE(snapshot.getWatts(), 0.0);
+        QCOMPARE(lostDevice.count(), 1);
+        QCOMPARE(ant.closePort(), 0);
+    }
+
+    void stalePrimaryCadenceAllowsSecondaryFallback()
+    {
+        ANT ant;
+        QCOMPARE(ant.openPort(), 0);
+        ant.setCadence(94.0f, 0);
+        ant.setSecondaryCadence(76.0f, 1);
+
+        RealtimeData snapshot;
+        ant.getRealtimeData(snapshot);
+        QCOMPARE(snapshot.getCadence(), 94.0);
+
+        ant.staleInfo(0);
+        ant.setSecondaryCadence(76.0f, 1);
+        ant.getRealtimeData(snapshot);
+        QCOMPARE(snapshot.getCadence(), 76.0);
+        QCOMPARE(ant.closePort(), 0);
+    }
+
+    void metricSpecificExpiryUsesSuppliedMonotonicTime()
+    {
+        ANT ant;
+        ant.setBPM(149.0f, 0);
+        ant.setCadence(88.0f, 1);
+        ant.setTemp(22.5, 2);
+
+        const qint64 publishedAt = ant.telemetryNowMs();
+        RealtimeData snapshot;
+        ant.getRealtimeDataAt(
+                snapshot,
+                publishedAt + ANTTelemetryFreshness::FastTimeoutMs + 1);
+        QCOMPARE(snapshot.getHr(), 0.0);
+        QCOMPARE(snapshot.getCadence(), 0.0);
+        QCOMPARE(snapshot.getTemp(), 22.5);
+
+        ant.getRealtimeDataAt(
+                snapshot,
+                publishedAt + ANTTelemetryFreshness::SlowTimeoutMs + 1);
+        QCOMPARE(snapshot.getTemp(), 0.0);
+    }
+
+    void freshnessTrackerRejectsInvalidAndLowerPrioritySamples()
+    {
+        ANTTelemetryFreshness freshness;
+        QVERIFY(!freshness.publish(-2, ANTTelemetryMetric::HeartRate,
+                                   ANTTelemetryPriority::Primary, 0));
+        QVERIFY(!freshness.publish(
+                0, ANTTelemetryMetric::Count,
+                ANTTelemetryPriority::Primary, 0));
+        QVERIFY(!freshness.publish(
+                0, ANTTelemetryMetric::HeartRate,
+                static_cast<ANTTelemetryPriority>(0), 0));
+        QVERIFY(!freshness.publish(
+                0, ANTTelemetryMetric::HeartRate,
+                ANTTelemetryPriority::Primary, -1));
+        QVERIFY(freshness.expire(-1).isEmpty());
+        QVERIFY(freshness.removeSource(-2).isEmpty());
+        QVERIFY(freshness.publish(3, ANTTelemetryMetric::Cadence,
+                                  ANTTelemetryPriority::Primary, 10));
+        QVERIFY(!freshness.publish(4, ANTTelemetryMetric::Cadence,
+                                   ANTTelemetryPriority::Secondary, 11));
+
+        const auto expired = freshness.expire(
+                10 + ANTTelemetryFreshness::FastTimeoutMs + 1);
+        QVERIFY(expired.contains(ANTTelemetryMetric::Cadence));
+        QVERIFY(freshness.publish(
+                4, ANTTelemetryMetric::Cadence,
+                ANTTelemetryPriority::Secondary,
+                10 + ANTTelemetryFreshness::FastTimeoutMs + 1));
+
+        QVERIFY(freshness.removeSource(3).isEmpty());
+        const auto removed = freshness.removeSource(4);
+        QCOMPARE(removed.size(), 1);
+        QVERIFY(removed.contains(ANTTelemetryMetric::Cadence));
+        ANTTelemetryFreshness dynamics;
+        QVERIFY(dynamics.publish(
+                3, ANTTelemetryMetric::RightPowerPhase,
+                ANTTelemetryPriority::Primary, 0));
+        QVERIFY(dynamics.publish(
+                3, ANTTelemetryMetric::Torque,
+                ANTTelemetryPriority::Primary,
+                ANTTelemetryFreshness::FastTimeoutMs));
+        const auto dynamicsExpired =
+                dynamics.expire(ANTTelemetryFreshness::FastTimeoutMs + 1);
+        QVERIFY(dynamicsExpired.contains(ANTTelemetryMetric::RightPowerPhase));
+        QVERIFY(!dynamicsExpired.contains(ANTTelemetryMetric::Torque));
+    }
+
     void allTelemetrySettersArePublishedInSnapshot()
     {
         ANT ant;
@@ -152,6 +346,7 @@ private slots:
         ant.setTrainerReady(true);
         ant.setTrainerRunning(false);
 
+        const qint64 publishedAt = ant.telemetryNowMs();
         RealtimeData snapshot;
         ant.getRealtimeData(snapshot);
 
@@ -190,6 +385,46 @@ private slots:
         QVERIFY(!snapshot.getTrainerConfigRequired());
         QVERIFY(snapshot.getTrainerBrakeFault());
         QVERIFY(snapshot.getTrainerReady());
+        QVERIFY(!snapshot.getTrainerRunning());
+
+        ant.getRealtimeDataAt(
+                snapshot,
+                publishedAt + ANTTelemetryFreshness::SlowTimeoutMs + 1);
+        QCOMPARE(snapshot.getHr(), 0.0);
+        QCOMPARE(snapshot.getCadence(), 0.0);
+        QCOMPARE(snapshot.getWheelRpm(), 0.0);
+        QCOMPARE(snapshot.getSpeed(), 0.0);
+        QCOMPARE(snapshot.getAltDistance(), 4.0);
+        QCOMPARE(snapshot.getWatts(), 0.0);
+        QCOMPARE(snapshot.getAltWatts(), 0.0);
+        QCOMPARE(snapshot.getSmO2(), 0.0);
+        QCOMPARE(snapshot.gettHb(), 0.0);
+        QCOMPARE(snapshot.getCoreTemp(), 0.0);
+        QCOMPARE(snapshot.getSkinTemp(), 0.0);
+        QCOMPARE(snapshot.getHeatStrain(), 0.0);
+        QCOMPARE(snapshot.getTemp(), 0.0);
+        QCOMPARE(snapshot.getLRBalance(), 0.0);
+        QCOMPARE(snapshot.getLTE(), 0.0);
+        QCOMPARE(snapshot.getRTE(), 0.0);
+        QCOMPARE(snapshot.getLPS(), 0.0);
+        QCOMPARE(snapshot.getRPS(), 0.0);
+        QCOMPARE(snapshot.getRppb(), 0.0);
+        QCOMPARE(snapshot.getRppe(), 0.0);
+        QCOMPARE(snapshot.getRpppb(), 0.0);
+        QCOMPARE(snapshot.getRpppe(), 0.0);
+        QCOMPARE(snapshot.getLppb(), 0.0);
+        QCOMPARE(snapshot.getLppe(), 0.0);
+        QCOMPARE(snapshot.getLpppb(), 0.0);
+        QCOMPARE(snapshot.getLpppe(), 0.0);
+        QCOMPARE(snapshot.getRightPCO(), 0.0);
+        QCOMPARE(snapshot.getLeftPCO(), 0.0);
+        QCOMPARE(snapshot.getPosition(), RealtimeData::seated);
+        QCOMPARE(snapshot.getTorque(), 0.0);
+        QVERIFY(!snapshot.getTrainerStatusAvailable());
+        QVERIFY(!snapshot.getTrainerCalibRequired());
+        QVERIFY(!snapshot.getTrainerConfigRequired());
+        QVERIFY(!snapshot.getTrainerBrakeFault());
+        QVERIFY(!snapshot.getTrainerReady());
         QVERIFY(!snapshot.getTrainerRunning());
 
         ANT secondaryCadence;

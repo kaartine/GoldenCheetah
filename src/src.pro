@@ -572,7 +572,7 @@ compiler_lex_make_all.depends += compiler_yacc_decl_make_all
 ###=========================================
 
 # ANT+
-HEADERS  += ANT/ANTChannel.h ANT/ANT.h ANT/ANTlocalController.h ANT/ANTLogger.h ANT/ANTMessage.h ANT/ANTMessages.h
+HEADERS  += ANT/ANTChannel.h ANT/ANT.h ANT/ANTTelemetryFreshness.h ANT/ANTlocalController.h ANT/ANTLogger.h ANT/ANTMessage.h ANT/ANTMessages.h
 
 # Charts and associated widgets
 HEADERS += Charts/Aerolab.h Charts/AerolabWindow.h Charts/AllPlot.h Charts/AllPlotInterval.h Charts/AllPlotSlopeCurve.h \

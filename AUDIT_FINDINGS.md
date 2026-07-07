@@ -619,14 +619,35 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DEV-004: Stale ANT/BLE telemetry can be recorded indefinitely
 
-- Status: OPEN
-- Code: `src/ANT/ANTChannel.cpp:197`, `src/ANT/ANT.cpp:904`,
-  `src/Train/BT40Device.cpp:207`
+- Status: FIXED
+- Code: `src/ANT/ANTTelemetryFreshness.h`, `src/ANT/ANT.h`,
+  `src/ANT/ANT.cpp`, `src/ANT/ANTChannel.h`,
+  `src/ANT/ANTChannel.cpp`, `unittests/Train/antThreadSafety`
 - Impact: Silent sensors retain their last values; some disconnect paths do not
   clear cadence. Recordings can contain plausible but stale data.
-- Test: Stop notifications with a fake clock and verify metric-specific expiry.
-- Fix direction: Timestamp every metric per source and expire it using protocol
-  appropriate timeouts.
+- Scope: BLE source ownership, stale fallback, and disconnect handling were
+  already fixed by BLE-003. This change closes the remaining ANT path.
+- Regression test: `unittests/Train/antThreadSafety` compiles the production
+  ANT, ANTChannel, ANTMessage, and RealtimeData paths against a deterministic
+  fake transport and a supplied monotonic time. It verifies initialized channel
+  deadlines, deadline refresh on every telemetry frame, stale and lost
+  source-specific clearing, fresh replacement ownership, primary-to-secondary
+  cadence fallback, fast and slow metric expiry, and every telemetry setter.
+- Resolution: Channel timing fields are initialized and every telemetry frame
+  refreshes its blanking deadline. ANT telemetry now tracks the current source,
+  priority, and monotonic publication time per metric. Fast telemetry expires
+  after five seconds; temperature and core temperature expire after 30 seconds.
+  Stale and lost channels clear only metrics they still own, while cumulative
+  distance is retained.
+- Verification: The first RED behavior tests left a refreshed channel blanked
+  and retained a stale 153 bpm value. A compile-time RED stage then demonstrated
+  that the required per-source freshness API did not exist, and a separate RED
+  test exposed uninitialized channel timing state. The final 21-test suite
+  passes normally, under strict ASan/UBSan/LSan, and under TSAN with QtTest's
+  watchdog disabled to avoid its unrelated QWaitCondition teardown race. The
+  complete matrix passes 1,523 tests in 45 suites with zero failures, skips, or
+  blacklisted tests. The Qt 6.8.3 application builds and starts in an isolated
+  offscreen smoke test.
 
 ### DEV-006: Windows ANT USB1 setup failures can hang shutdown
 
