@@ -1,5 +1,11 @@
 #include "Ftms.h"
 
+#include <QIODevice>
+#include <QtMath>
+
+#include <algorithm>
+#include <cmath>
+
 void ftms_parse_indoor_bike_data(QDataStream &ds, FtmsIndoorBikeData &bd)
 {
     //quint16 flags, inst_speed, avg_speed, inst_cadence, avg_cadence, tot_energy, energy_per_hour, elapsed_time, remaining_time;
@@ -77,27 +83,152 @@ void ftms_parse_indoor_bike_data(QDataStream &ds, FtmsIndoorBikeData &bd)
     }
 }
 
-qint16 ftms_power_cap(qint16 power, FtmsDeviceInformation &device_info) {
+bool ftms_parse_feature_data(const QByteArray &value, FtmsFeatureData &data)
+{
+    if (value.size() != 8) return false;
 
-    power = qRound((double)power/device_info.power_increment)*device_info.power_increment;
-    if (power > device_info.maximal_power)
-    {
-        power = device_info.maximal_power;
-    } else if (power < device_info.minimal_power) {
-        power = device_info.minimal_power;
-    }
+    QDataStream stream(value);
+    stream.setByteOrder(QDataStream::LittleEndian);
+    FtmsFeatureData parsed;
+    stream >> parsed.machineFeatures >> parsed.targetSettings;
+    if (stream.status() != QDataStream::Ok) return false;
 
-    return power;
+    data = parsed;
+    return true;
 }
 
-double ftms_resistance_cap(qint16 resistance, FtmsDeviceInformation &device_info) {
-    resistance = qRound((double)resistance/device_info.resistance_increment)*device_info.resistance_increment;
-    if (resistance > device_info.maximal_resistance)
-    {
-        resistance = device_info.maximal_resistance;
-    } else if (resistance < device_info.minimal_resistance) {
-        resistance = device_info.minimal_resistance;
+QByteArray ftms_control_point_command(const FtmsTargetCommand &target)
+{
+    if (!target.isValid()) return QByteArray();
+
+    quint8 opcode = 0;
+    switch (target.type) {
+    case FtmsTargetType::Power:
+        opcode = FtmsControlPointCommand::FTMS_SET_TARGET_POWER;
+        break;
+    case FtmsTargetType::Resistance:
+        opcode = FtmsControlPointCommand::FTMS_SET_TARGET_RESISTANCE_LEVEL;
+        break;
+    case FtmsTargetType::None:
+        return QByteArray();
     }
 
-    return resistance;
+    QByteArray command;
+    QDataStream stream(&command, QIODevice::WriteOnly);
+    stream.setByteOrder(QDataStream::LittleEndian);
+    stream << opcode << target.value;
+    return stream.status() == QDataStream::Ok ? command : QByteArray();
+}
+
+FtmsTargetCommand FtmsTargetController::requestPower(double watts)
+{
+    if (!std::isfinite(watts)) return FtmsTargetCommand();
+    if (!powerRange.ready) {
+        pendingTarget = FtmsTargetType::Power;
+        pendingValue = watts;
+        return FtmsTargetCommand();
+    }
+
+    clearPendingTarget();
+    return targetCommand(FtmsTargetType::Power, watts, powerRange);
+}
+
+FtmsTargetCommand FtmsTargetController::requestResistance(double ratio)
+{
+    if (!std::isfinite(ratio)) return FtmsTargetCommand();
+    if (!resistanceRange.ready) {
+        pendingTarget = FtmsTargetType::Resistance;
+        pendingValue = ratio;
+        return FtmsTargetCommand();
+    }
+
+    clearPendingTarget();
+    const double boundedRatio = std::clamp(ratio, 0.0, 1.0);
+    const double width = static_cast<qint64>(resistanceRange.maximum) -
+                         resistanceRange.minimum;
+    return targetCommand(FtmsTargetType::Resistance,
+                         resistanceRange.minimum + width * boundedRatio,
+                         resistanceRange);
+}
+
+FtmsRangeResult FtmsTargetController::updatePowerRange(const QByteArray &value)
+{
+    return updateRange(value, powerRange, FtmsTargetType::Power);
+}
+
+FtmsRangeResult FtmsTargetController::updateResistanceRange(const QByteArray &value)
+{
+    return updateRange(value, resistanceRange, FtmsTargetType::Resistance);
+}
+
+void FtmsTargetController::clearPendingTarget()
+{
+    pendingTarget = FtmsTargetType::None;
+    pendingValue = 0.0;
+}
+
+void FtmsTargetController::reset()
+{
+    powerRange = TargetRange();
+    resistanceRange = TargetRange();
+    clearPendingTarget();
+}
+
+FtmsRangeResult FtmsTargetController::updateRange(
+        const QByteArray &value, TargetRange &range, FtmsTargetType type)
+{
+    FtmsRangeResult result;
+    if (value.size() != 6) return result;
+
+    QDataStream stream(value);
+    stream.setByteOrder(QDataStream::LittleEndian);
+    TargetRange parsed;
+    stream >> parsed.minimum >> parsed.maximum >> parsed.increment;
+    if (stream.status() != QDataStream::Ok ||
+        parsed.minimum > parsed.maximum || parsed.increment == 0) {
+        return result;
+    }
+
+    parsed.ready = true;
+    range = parsed;
+    result.accepted = true;
+    result.minimum = range.minimum;
+    result.maximum = range.maximum;
+    result.increment = range.increment;
+    result.command = pendingCommand(type, range);
+    return result;
+}
+
+FtmsTargetCommand FtmsTargetController::targetCommand(
+        FtmsTargetType type, double value, const TargetRange &range)
+{
+    if (!range.ready || !std::isfinite(value)) return FtmsTargetCommand();
+
+    const double bounded = std::clamp(
+            value, static_cast<double>(range.minimum),
+            static_cast<double>(range.maximum));
+    const double steps = (bounded - range.minimum) / range.increment;
+    const qint64 roundedSteps = qRound64(steps);
+    const qint64 scaled = static_cast<qint64>(range.minimum) +
+                          roundedSteps * range.increment;
+    const qint64 boundedScaled = std::clamp(
+            scaled, static_cast<qint64>(range.minimum),
+            static_cast<qint64>(range.maximum));
+    return FtmsTargetCommand{type, static_cast<qint16>(boundedScaled)};
+}
+
+FtmsTargetCommand FtmsTargetController::pendingCommand(
+        FtmsTargetType type, const TargetRange &range)
+{
+    if (pendingTarget != type) return FtmsTargetCommand();
+
+    const double value = pendingValue;
+    clearPendingTarget();
+    if (type == FtmsTargetType::Resistance) {
+        const double boundedRatio = std::clamp(value, 0.0, 1.0);
+        const double width = static_cast<qint64>(range.maximum) - range.minimum;
+        return targetCommand(type, range.minimum + width * boundedRatio, range);
+    }
+
+    return targetCommand(type, value, range);
 }

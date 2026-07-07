@@ -458,15 +458,30 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### BLE-002: FTMS target scaling can divide by zero
 
-- Status: OPEN
-- Code: `src/Train/BT40Device.cpp:537`,
-  `src/Train/BT40Device.cpp:1364`, `src/Train/Ftms.cpp:80`
+- Status: FIXED
+- Code: `src/Train/BT40Device.cpp:1080`,
+  `src/Train/BT40Device.cpp:1555`, `src/Train/Ftms.cpp:123`
 - Impact: FTMS load control is enabled before asynchronous range discovery has
   supplied a positive increment. A delayed or missing response reaches division
   by zero and sends invalid targets.
-- Test: Simulate delayed, absent, zero, and malformed range characteristics.
-- Fix direction: Track capability/range readiness and queue the latest target
-  until validated limits are available.
+- Regression test: `unittests/Train/ftmsTargetReadiness` covers delayed and
+  absent ranges, zero increments, truncated, oversized, and reversed ranges,
+  power and resistance scaling, latest-target replacement, reconnect reset,
+  non-finite inputs, numeric extremes, exact command bytes, malformed feature
+  data, and invalid command types.
+- Resolution: FTMS target commands now pass through a readiness controller.
+  Requests made before range discovery retain only the latest target and emit
+  no command until an exact six-byte range with ordered limits and a positive
+  increment has been accepted. Scaling uses bounded 64-bit intermediates, and
+  reconnects and mode changes discard stale state. Feature discovery is also
+  sequenced after the control point is initialized and requires an exact
+  eight-byte payload.
+- Verification: The RED build failed because the readiness contract did not
+  exist, and the invalid-enum regression failed before explicit target-type
+  validation. All 20 focused tests pass normally and under strict
+  ASan/UBSan/LSan, and the related BT40 lifecycle suite passes 17 tests. The Qt
+  6.8.3 application builds and starts, and the complete matrix passes 1,445
+  tests in 41 suites with no failures or skips.
 
 ### BLE-003: Multiple BLE sources overwrite one shared telemetry object
 

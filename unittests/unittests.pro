@@ -42,7 +42,8 @@ equals(GC_UNITTESTS, active) {
 			   Train/deviceSelection \
 			   Train/trainingStopPolicy \
 			   Train/trainingRecordingIo \
-			   Train/trainingTelemetryTimeline
+			   Train/trainingTelemetryTimeline \
+			   Train/ftmsTargetReadiness
 	CONFIG += ordered
 } else {
 	message("Unittests are disabled; to enable copy unittests/unittests.pri.in to unittests/unittests.pri")

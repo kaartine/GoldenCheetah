@@ -129,6 +129,7 @@ private:
 
     // FTMS Device Configuration
     FtmsDeviceInformation ftmsDeviceInfo;
+    FtmsTargetController ftmsTargetController;
 
     bool connected;
     QLowEnergyController::RemoteAddressType remoteAddressType;
@@ -158,6 +159,7 @@ private:
     void setLoadLevel(int);
     void setRiderCharacteristics(double weight, double rollingResistance, double windResistance);
     void sendSimulationParameters();
+    void sendFtmsTargetCommand(const FtmsTargetCommand &target);
     void commandSend(QByteArray &command);
     void commandWrite(QByteArray &command);
     void commandWriteFailed();

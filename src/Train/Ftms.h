@@ -1,7 +1,8 @@
 #ifndef FTMS_H
 #define FTMS_H
-#include <QDataStream>
+#include <QByteArray>
 #include <QBluetoothUuid>
+#include <QDataStream>
 
 // FTMS service assigned numbers
 #define FTMSDEVICE_FTMS_UUID 0x1826
@@ -157,19 +158,77 @@ struct FtmsDeviceInformation {
     bool supports_resistance_target = false;
     bool supports_simulation_target = false;
     bool supports_spin_down_calibration = false;
+};
 
-    qint16 minimal_resistance = 0;
-    qint16 maximal_resistance = 0;
-    quint16 resistance_increment = 0;
+struct FtmsFeatureData {
+    quint32 machineFeatures = 0;
+    quint32 targetSettings = 0;
+};
 
-    qint16 minimal_power = 0;
-    qint16 maximal_power = 0;
-    quint16 power_increment = 0;
+enum class FtmsTargetType {
+    None,
+    Power,
+    Resistance
+};
+
+struct FtmsTargetCommand {
+    FtmsTargetType type = FtmsTargetType::None;
+    qint16 value = 0;
+
+    bool isValid() const
+    {
+        return type == FtmsTargetType::Power ||
+               type == FtmsTargetType::Resistance;
+    }
+};
+
+struct FtmsRangeResult {
+    bool accepted = false;
+    qint16 minimum = 0;
+    qint16 maximum = 0;
+    quint16 increment = 0;
+    FtmsTargetCommand command;
+};
+
+class FtmsTargetController
+{
+public:
+    FtmsTargetCommand requestPower(double watts);
+    FtmsTargetCommand requestResistance(double ratio);
+    FtmsRangeResult updatePowerRange(const QByteArray &value);
+    FtmsRangeResult updateResistanceRange(const QByteArray &value);
+
+    bool powerRangeReady() const { return powerRange.ready; }
+    bool resistanceRangeReady() const { return resistanceRange.ready; }
+    bool hasPendingTarget() const { return pendingTarget != FtmsTargetType::None; }
+    FtmsTargetType pendingType() const { return pendingTarget; }
+
+    void clearPendingTarget();
+    void reset();
+
+private:
+    struct TargetRange {
+        qint16 minimum = 0;
+        qint16 maximum = 0;
+        quint16 increment = 0;
+        bool ready = false;
+    };
+
+    FtmsRangeResult updateRange(const QByteArray &value, TargetRange &range,
+                                FtmsTargetType type);
+    static FtmsTargetCommand targetCommand(FtmsTargetType type, double value,
+                                           const TargetRange &range);
+    FtmsTargetCommand pendingCommand(FtmsTargetType type,
+                                     const TargetRange &range);
+
+    TargetRange powerRange;
+    TargetRange resistanceRange;
+    FtmsTargetType pendingTarget = FtmsTargetType::None;
+    double pendingValue = 0.0;
 };
 
 void ftms_parse_indoor_bike_data(QDataStream &ds, FtmsIndoorBikeData &bd);
-
-qint16 ftms_power_cap(qint16 power, FtmsDeviceInformation &device_info);
-double ftms_resistance_cap(qint16 resistance, FtmsDeviceInformation &device_info);
+bool ftms_parse_feature_data(const QByteArray &value, FtmsFeatureData &data);
+QByteArray ftms_control_point_command(const FtmsTargetCommand &target);
 
 #endif // FTMS_H

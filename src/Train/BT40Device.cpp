@@ -158,6 +158,8 @@ BT40Device::BT40Device(BT40Controller *parent, QBluetoothDeviceInfo devinfo,
     prevCrankStaleness = -1; // indicates prev crank data values aren't measured values
 
     loadType = Load_None;
+    loadService = nullptr;
+    commandRetry = 0;
     load = 0;
     gradient = 0;
     prevGradient = -100;
@@ -272,6 +274,12 @@ BT40Device::deviceConnected()
     }
     has_power = false;
     has_controllable_service = false;
+    loadType = Load_None;
+    loadService = nullptr;
+    loadCharacteristic = QLowEnergyCharacteristic();
+    commandQueue.clear();
+    ftmsDeviceInfo = FtmsDeviceInformation();
+    ftmsTargetController.reset();
     
     const bool wasReconnecting = reconnectTimer->isActive() || reconnectNoticeShown;
     if (reconnectTimer->isActive()) {
@@ -368,6 +376,8 @@ BT40Device::deviceDisconnected()
 
     // Stop sending load setting commands
     loadType = Load_None;
+    ftmsDeviceInfo = FtmsDeviceInformation();
+    ftmsTargetController.reset();
 
     // Try to reconnect if the connection was lost inadvertently
     if (connected) {
@@ -591,9 +601,7 @@ BT40Device::serviceStateChanged(QLowEnergyService::ServiceState s)
                     characteristics.append(service->characteristic(s_FtmsControlPointChar_UUID));
                     characteristics.append(service->characteristic(s_FtmsIndoorBikeChar_UUID));
                     characteristics.append(service->characteristic(s_FtmsStatusChar_UUID));
-
-                    // Read FTMS Feature flags to find out what's supported and not.
-                    readTrainerCharacteristic(service, service->characteristic(s_FtmsFeatureChar_UUID));
+                    characteristics.append(service->characteristic(s_FtmsFeatureChar_UUID));
                 }
 
                 foreach(QLowEnergyCharacteristic characteristic, characteristics)
@@ -692,7 +700,7 @@ BT40Device::serviceStateChanged(QLowEnergyService::ServiceState s)
                             writeTrainerCharacteristic(loadService, characteristic, command);
                         } else if (characteristic.uuid() == s_FtmsFeatureChar_UUID) {
                             // Read out the different flags to find out what's supported and not.
-                            readTrainerCharacteristic(loadService, characteristic);
+                            readTrainerCharacteristic(service, characteristic);
                         } else {
                             qDebug() << "Starting notification for char with UUID: " << characteristic.uuid().toString();
                             const QLowEnergyDescriptor notificationDesc = characteristic.descriptor(QBluetoothUuid::DescriptorType::ClientCharacteristicConfiguration);
@@ -1068,60 +1076,68 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
             trainerDataSeen = true;
         }
     } else if (c.uuid() == s_FtmsFeatureChar_UUID) {
-        quint32 features, target_settings;
-        ds >> features >> target_settings;
-
-        if (target_settings & FtmsTargetSetting::FTMS_POWER_TARGET_SUPPORTED)
-        {
-            ftmsDeviceInfo.supports_power_target = true;
-            // Read in order to get max/min/increment for power target
-            readTrainerCharacteristic(loadService, loadService->characteristic(s_FtmsPowerRangeChar_UUID));
+        FtmsFeatureData featureData;
+        if (!ftms_parse_feature_data(value, featureData)) {
+            qWarning() << "Invalid FTMS feature payload from"
+                       << m_currentDevice.name() << value.toHex(':');
+            return;
         }
 
-        if (target_settings & FtmsTargetSetting::FTMS_RESISTANCE_TARGET_SUPPORTED)
-        {
-            ftmsDeviceInfo.supports_resistance_target = true;
-            // Read in order to get max/min/increment for resistance target
-            readTrainerCharacteristic(loadService, loadService->characteristic(s_FtmsResistanceRangeChar_UUID));
+        const quint32 targetSettings = featureData.targetSettings;
+        ftmsDeviceInfo.supports_power_target =
+                targetSettings & FtmsTargetSetting::FTMS_POWER_TARGET_SUPPORTED;
+        ftmsDeviceInfo.supports_resistance_target =
+                targetSettings & FtmsTargetSetting::FTMS_RESISTANCE_TARGET_SUPPORTED;
+        ftmsDeviceInfo.supports_simulation_target =
+                targetSettings & FtmsTargetSetting::FTMS_INDOOR_BIKE_SIMULATION_SUPPORTED;
+        ftmsDeviceInfo.supports_spin_down_calibration =
+                targetSettings & FtmsTargetSetting::FTMS_SPIN_DOWN_CONTROL_SUPPORTED;
+
+        if (ftmsDeviceInfo.supports_power_target && loadService) {
+            readTrainerCharacteristic(
+                    loadService,
+                    loadService->characteristic(s_FtmsPowerRangeChar_UUID));
         }
 
-        if (target_settings & FtmsTargetSetting::FTMS_INDOOR_BIKE_SIMULATION_SUPPORTED)
-        {
-            ftmsDeviceInfo.supports_simulation_target = true;
+        if (ftmsDeviceInfo.supports_resistance_target && loadService) {
+            readTrainerCharacteristic(
+                    loadService,
+                    loadService->characteristic(s_FtmsResistanceRangeChar_UUID));
         }
 
-        if (target_settings & FtmsTargetSetting::FTMS_SPIN_DOWN_CONTROL_SUPPORTED)
-        {
+        if (ftmsDeviceInfo.supports_spin_down_calibration) {
             calibrationData.setType(0, CALIBRATION_TYPE_SPINDOWN);
             calibrationData.setState(CALIBRATION_STATE_IDLE);
             calibrationData.setZeroOffset(0);
             calibrationData.setSpindownTime(0);
             calibrationData.setTargetSpeed(0);
             calibrationData.setSlope(0);
-
-            ftmsDeviceInfo.supports_spin_down_calibration = true;
+        }
+    } else if (c.uuid() == s_FtmsPowerRangeChar_UUID) {
+        const FtmsRangeResult result = ftmsTargetController.updatePowerRange(value);
+        if (!result.accepted) {
+            qWarning() << "Invalid FTMS power range from"
+                       << m_currentDevice.name() << value.toHex(':');
+            return;
         }
 
-    } else if (c.uuid() == s_FtmsPowerRangeChar_UUID) {
-        qint16 max, min;
-        quint16 increment;
-        ds >> min >> max >> increment;
-
-        // In watts
-        ftmsDeviceInfo.maximal_power = max;
-        ftmsDeviceInfo.minimal_power = min;
-        ftmsDeviceInfo.power_increment = increment;
-        qDebug() << "FTMS Reported Power Capabilities - Max: " << max << " Min: " << min << " Increment: " << increment;
+        qDebug() << "FTMS Reported Power Capabilities - Max:"
+                 << result.maximum << "Min:" << result.minimum
+                 << "Increment:" << result.increment;
+        sendFtmsTargetCommand(result.command);
     } else if (c.uuid() == s_FtmsResistanceRangeChar_UUID) {
-        qint16 max, min;
-        quint16 increment;
-        ds >> min >> max >> increment;
-        qDebug() << "FTMS Reported Resistance Capabilities - Max: " << max << " Min: " << min << " Increment: " << increment;
+        const FtmsRangeResult result =
+                ftmsTargetController.updateResistanceRange(value);
+        if (!result.accepted) {
+            qWarning() << "Invalid FTMS resistance range from"
+                       << m_currentDevice.name() << value.toHex(':');
+            return;
+        }
 
-        // Unitless in 0.1 of unit
-        ftmsDeviceInfo.maximal_resistance = max;
-        ftmsDeviceInfo.minimal_resistance = min;
-        ftmsDeviceInfo.resistance_increment = increment;
+        qDebug() << "FTMS Reported Resistance Capabilities - Max:"
+                 << result.maximum << "Min:" << result.minimum
+                 << "Increment:" << result.increment;
+        sendFtmsTargetCommand(result.command);
     } else if (c.uuid() == s_FtmsStatusChar_UUID) {
         quint8 opcode;
         ds >> opcode;
@@ -1352,6 +1368,8 @@ void
 BT40Device::setMode(int m)
 {
     if (!trainerControlAllowed()) return;
+    if (m != mode) ftmsTargetController.clearPendingTarget();
+
     // Enter Calibration Mode.
     if (m == RT_MODE_CALIBRATE && mode != RT_MODE_CALIBRATE) {
         switch (loadType) {
@@ -1534,15 +1552,14 @@ BT40Device::setLoadErg(double l)  // Load in Watts
             smart_control_set_mode_erg_command(load),
             QLowEnergyService::WriteWithResponse);
     } else if (loadType == FTMS_Device) {
-        qDebug() << tr("FTMS Device: Set target power ") << load;
-        load = ftms_power_cap(load, ftmsDeviceInfo);
-        qDebug() << tr("FTMS Device: Set target power - after scaling ") << load;
+        const FtmsTargetCommand target = ftmsTargetController.requestPower(load);
+        if (!target.isValid()) {
+            qDebug() << "FTMS target power queued until a valid range is available"
+                     << load;
+            return;
+        }
 
-        QByteArray command;
-        QDataStream commandDs(&command, QIODevice::ReadWrite);
-        commandDs.setByteOrder(QDataStream::LittleEndian);
-        commandDs << (quint8)FtmsControlPointCommand::FTMS_SET_TARGET_POWER << (qint16)load;
-        writeTrainerCharacteristic(loadService, loadCharacteristic, command);
+        sendFtmsTargetCommand(target);
     }
 }
 
@@ -1568,17 +1585,15 @@ BT40Device::setLoadIntensity(double l)  // between 0 and 1
             smart_control_set_mode_fluid_command(level),
             QLowEnergyService::WriteWithResponse);
     } else if (loadType == FTMS_Device) {
-        // map [0, 1] to ftms resistance level limits
-        qint16 resistance = (ftmsDeviceInfo.maximal_resistance-ftmsDeviceInfo.minimal_resistance)*l + ftmsDeviceInfo.minimal_resistance;
-        qDebug() << tr("FTMS Device: Set load intensity ") << l;
-        resistance = ftms_resistance_cap(resistance, ftmsDeviceInfo);
-        qDebug() << tr("FTMS Device: Set load intensity - after scaling ") << resistance;
+        const FtmsTargetCommand target =
+                ftmsTargetController.requestResistance(l);
+        if (!target.isValid()) {
+            qDebug() << "FTMS resistance target queued until a valid range is available"
+                     << l;
+            return;
+        }
 
-        QByteArray command;
-        QDataStream commandDs(&command, QIODevice::ReadWrite);
-        commandDs.setByteOrder(QDataStream::LittleEndian);
-        commandDs << (quint8)FtmsControlPointCommand::FTMS_SET_TARGET_RESISTANCE_LEVEL << (qint16)(resistance);
-        writeTrainerCharacteristic(loadService, loadCharacteristic, command);
+        sendFtmsTargetCommand(target);
     }
 }
 
@@ -1601,17 +1616,15 @@ BT40Device::setLoadLevel(int l)  // From 0 to 9
             smart_control_set_mode_fluid_command(load),
             QLowEnergyService::WriteWithResponse);
     } else if (loadType == FTMS_Device) {
-        // map [0, 9] to ftms resistance level limits
-        qint16 resistance = ((ftmsDeviceInfo.maximal_resistance-ftmsDeviceInfo.minimal_resistance)*l)/9 + ftmsDeviceInfo.minimal_resistance;
-        qDebug() << tr("FTMS Device: Set load level ") << l;
-        resistance = ftms_resistance_cap(resistance, ftmsDeviceInfo);
-        qDebug() << tr("FTMS Device: Set load level - after scaling ") << resistance;
+        const FtmsTargetCommand target =
+                ftmsTargetController.requestResistance(l / 9.0);
+        if (!target.isValid()) {
+            qDebug() << "FTMS resistance level queued until a valid range is available"
+                     << l;
+            return;
+        }
 
-        QByteArray command;
-        QDataStream commandDs(&command, QIODevice::ReadWrite);
-        commandDs.setByteOrder(QDataStream::LittleEndian);
-        commandDs << (quint8)FtmsControlPointCommand::FTMS_SET_TARGET_RESISTANCE_LEVEL << (qint16)resistance;
-        writeTrainerCharacteristic(loadService, loadCharacteristic, command);
+        sendFtmsTargetCommand(target);
     }
 }
 
@@ -1685,6 +1698,20 @@ BT40Device::commandWritten() {
     commandRetry = 0;
     commandQueue.dequeue();
     if(commandQueue.size() > 0) commandWrite(commandQueue.head());
+}
+
+void
+BT40Device::sendFtmsTargetCommand(const FtmsTargetCommand &target)
+{
+    if (!target.isValid() || loadType != FTMS_Device) return;
+
+    const QByteArray command = ftms_control_point_command(target);
+    if (command.isEmpty()) return;
+
+    qDebug() << "FTMS Device: Set target" << static_cast<int>(target.type)
+             << target.value << loadCharacteristic.uuid()
+             << command.toHex(':');
+    writeTrainerCharacteristic(loadService, loadCharacteristic, command);
 }
 
 void
