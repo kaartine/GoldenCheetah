@@ -34,6 +34,7 @@
 #include "PhysicsUtility.h"
 #include "MultiFilterProxyModel.h"
 #include "InfoWidget.h"
+#include "TrainingStopPolicy.h"
 
 // standard stuff
 #include <QDir>
@@ -336,11 +337,10 @@ class TrainSidebar : public GcWindow
         bool autoConnect;
         bool pendingConfigChange;
 
-        enum RecordingStopAction {
-            ImportRecording,
-            KeepRecording,
-            DiscardRecording
-        };
+        using RecordingStopAction = TrainingStopPolicy::RecordingAction;
+        static constexpr RecordingStopAction ImportRecording = RecordingStopAction::Import;
+        static constexpr RecordingStopAction KeepRecording = RecordingStopAction::Keep;
+        static constexpr RecordingStopAction DiscardRecording = RecordingStopAction::Discard;
 
         void finishStop(RecordingStopAction recordingAction);
 

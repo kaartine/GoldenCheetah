@@ -373,16 +373,23 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### TRN-001: Device errors automatically delete the current recording
 
-- Status: OPEN
-- Code: `src/Train/TrainSidebar.cpp:1607`,
-  `src/Train/TrainSidebar.cpp:1699`,
-  `src/Train/ComputrainerController.cpp:85`
+- Status: FIXED
+- Code: `src/Train/TrainSidebar.cpp`, `src/Train/TrainSidebar.h`,
+  `src/Train/TrainingStopPolicy.h`
 - Impact: A late trainer disconnect maps directly to `DiscardRecording`,
   deleting otherwise valid workout data without confirmation.
-- Test: Record samples, call `Stop(DEVICE_ERROR)`, and verify the raw recording
-  remains recoverable until the user explicitly discards it.
-- Fix direction: Stop hardware independently from recording disposition and
-  default errors to preserving/recovering partial data.
+- Regression test: `unittests/Train/trainingStopPolicy` writes sample CSV data,
+  applies the real controller-stop disposition, and requires a device error to
+  preserve the exact bytes. It also verifies normal controller completion still
+  imports and only an explicit discard removes the file.
+- Resolution: Controller failure now stops the session with the `Keep` action,
+  closes every recording stream, leaves the raw CSV in the athlete records
+  directory, and reports that the partial recording was preserved. File removal
+  is confined to the explicit discard action.
+- Verification: The RED build failed because the stop-policy contract did not
+  exist. All 5 focused tests pass normally and under ASan/UBSan/LSan, the Qt
+  6.8.3 application builds and starts, and the complete matrix passes 1,406
+  tests in 38 suites with no failures or skips.
 
 ### TRN-002: Recording I/O failures are silent
 

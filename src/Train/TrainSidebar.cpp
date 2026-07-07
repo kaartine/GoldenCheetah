@@ -1612,7 +1612,20 @@ void TrainSidebar::Stop(int deviceStatus)
         if (stopConfirmationDialog) stopConfirmationDialog->done(0);
     }
 
-    finishStop(deviceStatus == DEVICE_ERROR ? DiscardRecording : ImportRecording);
+    const bool deviceError = deviceStatus == DEVICE_ERROR;
+    const RecordingStopAction recordingAction =
+            TrainingStopPolicy::controllerStopAction(deviceError);
+    const bool preservesPartialRecording =
+            recordingAction == KeepRecording &&
+            (status & RT_RECORDING) && recordFile != nullptr;
+
+    finishStop(recordingAction);
+
+    if (preservesPartialRecording && recordFile && recordFile->exists()) {
+        context->notifySetNotification(
+                tr("Training device error. The partial recording was preserved for recovery."),
+                0);
+    }
 }
 
 void TrainSidebar::finishStop(RecordingStopAction recordingAction)
@@ -1706,7 +1719,7 @@ void TrainSidebar::finishStop(RecordingStopAction recordingAction)
 
         if (recordingAction == DiscardRecording)
         {
-            recordFile->remove();
+            TrainingStopPolicy::applyFileAction(*recordFile, recordingAction);
         }
         else {
             if (recordingAction == ImportRecording) {
