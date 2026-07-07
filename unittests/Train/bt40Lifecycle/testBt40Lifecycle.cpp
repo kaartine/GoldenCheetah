@@ -48,6 +48,16 @@ BT40Device *createDevice(BT40Controller *controller)
     return new BT40Device(controller, lifecycleDeviceInfo());
 }
 
+QLowEnergyService *findService(
+        BT40Device *device, const QBluetoothUuid &uuid)
+{
+    for (QLowEnergyService *service :
+         device->findChildren<QLowEnergyService *>()) {
+        if (service->serviceUuid() == uuid) return service;
+    }
+    return nullptr;
+}
+
 struct ScanThreadRecord {
     QThread *createdOn = nullptr;
     QThread *destroyedOn = nullptr;
@@ -156,6 +166,96 @@ private slots:
                 DeviceRole::HeartRateOnly, cadence));
         QVERIFY(BT40Device::acceptsServiceForRole(
                 DeviceRole::Trainer, cyclingPower));
+    }
+
+    void serviceInitializationRunsOncePerService_data()
+    {
+        QTest::addColumn<bool>("heartRateFirst");
+        QTest::newRow("heart-rate-first") << true;
+        QTest::newRow("cadence-first") << false;
+    }
+
+    void serviceInitializationRunsOncePerService()
+    {
+        QFETCH(bool, heartRateFirst);
+
+        BT40Controller controller(nullptr, nullptr);
+        BT40Device *device = createDevice(&controller);
+        QLowEnergyController *link =
+                device->findChild<QLowEnergyController *>();
+        QVERIFY(link);
+
+        const QBluetoothUuid heartRateService(
+                QBluetoothUuid::ServiceClassUuid::HeartRate);
+        const QBluetoothUuid cadenceService(
+                QBluetoothUuid::ServiceClassUuid::CyclingSpeedAndCadence);
+        const QBluetoothUuid heartRateMeasurement(
+                QBluetoothUuid::CharacteristicType::HeartRateMeasurement);
+        const QBluetoothUuid cadenceMeasurement(
+                QBluetoothUuid::CharacteristicType::CSCMeasurement);
+
+        link->emitServiceDiscoveredForTest(heartRateService);
+        link->emitServiceDiscoveredForTest(cadenceService);
+        link->emitDiscoveryFinishedForTest();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
+
+        QLowEnergyService *heartRate = findService(device, heartRateService);
+        QLowEnergyService *cadence = findService(device, cadenceService);
+        QVERIFY(heartRate);
+        QVERIFY(cadence);
+        QCOMPARE(heartRate->discoverCallCount(), 1);
+        QCOMPARE(cadence->discoverCallCount(), 1);
+
+        if (heartRateFirst) {
+            heartRate->emitStateChangedForTest(
+                    QLowEnergyService::RemoteServiceDiscovered);
+            cadence->emitStateChangedForTest(
+                    QLowEnergyService::RemoteServiceDiscovered);
+        } else {
+            cadence->emitStateChangedForTest(
+                    QLowEnergyService::RemoteServiceDiscovered);
+            heartRate->emitStateChangedForTest(
+                    QLowEnergyService::RemoteServiceDiscovered);
+        }
+
+        QCOMPARE(heartRate->characteristicLookupCount(heartRateMeasurement), 1);
+        QCOMPARE(cadence->characteristicLookupCount(cadenceMeasurement), 1);
+
+        heartRate->emitStateChangedForTest(
+                QLowEnergyService::RemoteServiceDiscovered);
+        cadence->emitStateChangedForTest(
+                QLowEnergyService::RemoteServiceDiscovered);
+
+        QCOMPARE(heartRate->characteristicLookupCount(heartRateMeasurement), 1);
+        QCOMPARE(cadence->characteristicLookupCount(cadenceMeasurement), 1);
+
+        QPointer<QLowEnergyService> oldHeartRate = heartRate;
+        QPointer<QLowEnergyService> oldCadence = cadence;
+        link->emitConnectedForTest();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
+        QVERIFY(oldHeartRate.isNull());
+        QVERIFY(oldCadence.isNull());
+
+        link->emitServiceDiscoveredForTest(heartRateService);
+        link->emitServiceDiscoveredForTest(cadenceService);
+        link->emitDiscoveryFinishedForTest();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
+
+        heartRate = findService(device, heartRateService);
+        cadence = findService(device, cadenceService);
+        QVERIFY(heartRate);
+        QVERIFY(cadence);
+        heartRate->emitStateChangedForTest(
+                QLowEnergyService::RemoteServiceDiscovered);
+        cadence->emitStateChangedForTest(
+                QLowEnergyService::RemoteServiceDiscovered);
+        QCOMPARE(heartRate->characteristicLookupCount(heartRateMeasurement), 1);
+        QCOMPARE(cadence->characteristicLookupCount(cadenceMeasurement), 1);
+
+        delete device;
     }
 
     void controllerAndBluetoothChildrenShareThreadAffinity()

@@ -3,6 +3,7 @@
  */
 
 #include "QLowEnergyController"
+#include "QLowEnergyService"
 
 int QLowEnergyController::connectCalls = 0;
 int QLowEnergyController::disconnectCalls = 0;
@@ -57,9 +58,10 @@ QLowEnergyController::discoverServices()
 }
 
 QLowEnergyService *
-QLowEnergyController::createServiceObject(const QBluetoothUuid &, QObject *)
+QLowEnergyController::createServiceObject(
+        const QBluetoothUuid &serviceUuid, QObject *parent)
 {
-    return nullptr;
+    return new QLowEnergyService(serviceUuid, parent ? parent : this);
 }
 
 void
@@ -84,6 +86,19 @@ void
 QLowEnergyController::emitErrorForTest(Error error)
 {
     emit errorOccurred(error);
+}
+
+void
+QLowEnergyController::emitServiceDiscoveredForTest(
+        const QBluetoothUuid &serviceUuid)
+{
+    emit serviceDiscovered(serviceUuid);
+}
+
+void
+QLowEnergyController::emitDiscoveryFinishedForTest()
+{
+    emit discoveryFinished();
 }
 
 void

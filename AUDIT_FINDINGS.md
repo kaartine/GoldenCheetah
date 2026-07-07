@@ -509,13 +509,22 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### BLE-004: BLE service discovery initializes services repeatedly
 
-- Status: OPEN
-- Code: `src/Train/BT40Device.cpp:371`
+- Status: FIXED
+- Code: `src/Train/BT40Device.cpp`, `src/Train/BT40Device.h`
 - Impact: Each service completion loops over every discovered service, repeating
   CCCD writes, FTMS control requests, Wahoo queue resets, and VO2 setup.
-- Test: Complete two or more services in different orders and assert one setup
-  operation per characteristic.
-- Fix direction: Process only `sender()` and record per-service initialization.
+- Regression test: `unittests/Train/bt40Lifecycle` completes heart-rate and
+  cadence services in both orders, repeats their completion signals, and then
+  recreates both services through the reconnect path. It asserts exactly one
+  characteristic lookup per service object on each connection.
+- Resolution: Service completion now accepts only the signal's service object
+  when it belongs to the current connection and has not already been
+  initialized. The per-connection initialized set is cleared when stale service
+  objects are destroyed during reconnect or shutdown.
+- Verification: Both RED rows observed two lookups for whichever service
+  completed first. The BT40 lifecycle suite now passes 21 tests normally and
+  under strict ASan/UBSan/LSan. The Qt 6.8.3 application builds and starts, and
+  the complete matrix passes 1,463 tests in 42 suites with no failures or skips.
 
 ### BLE-005: Heart-rate sensors compete with trainers for the active BLE slot
 

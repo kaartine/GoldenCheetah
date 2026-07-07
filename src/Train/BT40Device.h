@@ -24,6 +24,7 @@
 #include <QLowEnergyService>
 #include <QPointer>
 #include <QQueue>
+#include <QSet>
 #include <QTimer>
 
 #include "BluetoothDeviceTypes.h"
@@ -99,6 +100,7 @@ private:
     QLowEnergyController *m_control;
     BluetoothDeviceTypes::DeviceRole deviceRole;
     QList<QLowEnergyService*> m_services;
+    QSet<QLowEnergyService*> initializedServices;
     QPointer<VMProWidget> vmProWidget;
     int prevCrankStaleness;
     quint16 prevCrankTime;

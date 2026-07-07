@@ -204,6 +204,7 @@ BT40Device::shutdown()
     reconnectAttempts = 0;
     reconnectNoticeShown = false;
 
+    initializedServices.clear();
     while (!m_services.isEmpty()) {
         QLowEnergyService *service = m_services.takeLast();
         service->disconnect(this);
@@ -276,6 +277,7 @@ BT40Device::deviceConnected()
 
     // Service objects become invalid after a disconnect. Recreate them from
     // the new connection instead of retaining stale notification handlers.
+    initializedServices.clear();
     while (!m_services.isEmpty()) {
         delete m_services.takeLast();
     }
@@ -496,11 +498,16 @@ BT40Device::serviceStateChanged(QLowEnergyService::ServiceState s)
 
     if (s == QLowEnergyService::RemoteServiceDiscovered) {
 
-        foreach (QLowEnergyService* const &service, m_services) {
+        QLowEnergyService *const service =
+                qobject_cast<QLowEnergyService *>(sender());
+        if (!service || !m_services.contains(service) ||
+            service->state() != s || initializedServices.contains(service) ||
+            !acceptsService(service->serviceUuid())) {
+            return;
+        }
+        initializedServices.insert(service);
 
             if (service->state() == s) {
-                if (!acceptsService(service->serviceUuid())) continue;
-
                 QList<QLowEnergyCharacteristic> characteristics;
                 if (service->serviceUuid() == QBluetoothUuid(QBluetoothUuid::ServiceClassUuid::HeartRate)) {
 
@@ -688,7 +695,6 @@ BT40Device::serviceStateChanged(QLowEnergyService::ServiceState s)
                     }
                 }
             }
-        }
     }
 }
 

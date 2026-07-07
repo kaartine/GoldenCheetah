@@ -29,7 +29,8 @@ HEADERS = ../../../src/Train/RealtimeController.h \
           ../../../src/Train/BT40Controller.h \
           ../../../src/Train/BT40Device.h \
           ../../../src/Train/VMProWidget.h \
-          QLowEnergyController
+          QLowEnergyController \
+          QLowEnergyService
 
 INCLUDEPATH += ../../../src \
                ../../../src/ANT \

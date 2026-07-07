@@ -66,6 +66,8 @@ public:
     void emitConnectedForTest();
     void emitDisconnectedForTest();
     void emitErrorForTest(Error error);
+    void emitServiceDiscoveredForTest(const QBluetoothUuid &serviceUuid);
+    void emitDiscoveryFinishedForTest();
 
     static void resetTestCounters();
     static int connectCallCount();

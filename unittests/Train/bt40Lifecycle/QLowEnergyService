@@ -1,0 +1,110 @@
+/*
+ * Deterministic QLowEnergyService test double for BT40 lifecycle tests.
+ */
+
+#ifndef GC_TEST_QLOWENERGYSERVICE_H
+#define GC_TEST_QLOWENERGYSERVICE_H
+
+#include <QBluetoothUuid>
+#include <QByteArray>
+#include <QHash>
+#include <QLowEnergyCharacteristic>
+#include <QObject>
+
+class QLowEnergyService : public QObject
+{
+    Q_OBJECT
+
+public:
+    enum ServiceError {
+        NoError = 0,
+        OperationError,
+        CharacteristicWriteError,
+        DescriptorWriteError,
+        UnknownError,
+        CharacteristicReadError,
+        DescriptorReadError
+    };
+    Q_ENUM(ServiceError)
+
+    enum ServiceState {
+        InvalidService = 0,
+        RemoteService,
+        RemoteServiceDiscovering,
+        RemoteServiceDiscovered,
+        LocalService
+    };
+    Q_ENUM(ServiceState)
+
+    enum DiscoveryMode {
+        FullDiscovery,
+        SkipValueDiscovery
+    };
+    Q_ENUM(DiscoveryMode)
+
+    enum WriteMode {
+        WriteWithResponse = 0,
+        WriteWithoutResponse,
+        WriteSigned
+    };
+    Q_ENUM(WriteMode)
+
+    explicit QLowEnergyService(const QBluetoothUuid &uuid,
+                               QObject *parent = nullptr) :
+        QObject(parent), uuid(uuid)
+    {
+    }
+
+    ServiceState state() const { return currentState; }
+    QBluetoothUuid serviceUuid() const { return uuid; }
+
+    QLowEnergyCharacteristic characteristic(const QBluetoothUuid &uuid) const
+    {
+        ++characteristicLookups[uuid];
+        return QLowEnergyCharacteristic();
+    }
+
+    void discoverDetails(DiscoveryMode = FullDiscovery)
+    {
+        ++discoverCalls;
+        currentState = RemoteServiceDiscovering;
+    }
+
+    void readCharacteristic(const QLowEnergyCharacteristic &) {}
+    void writeCharacteristic(const QLowEnergyCharacteristic &,
+                             const QByteArray &, WriteMode) {}
+    void writeDescriptor(const QLowEnergyDescriptor &, const QByteArray &) {}
+
+    int characteristicLookupCount(const QBluetoothUuid &uuid) const
+    {
+        return characteristicLookups.value(uuid);
+    }
+
+    int discoverCallCount() const { return discoverCalls; }
+
+    void emitStateChangedForTest(ServiceState state)
+    {
+        currentState = state;
+        emit stateChanged(state);
+    }
+
+signals:
+    void stateChanged(QLowEnergyService::ServiceState state);
+    void characteristicChanged(const QLowEnergyCharacteristic &characteristic,
+                               const QByteArray &value);
+    void characteristicRead(const QLowEnergyCharacteristic &characteristic,
+                            const QByteArray &value);
+    void characteristicWritten(const QLowEnergyCharacteristic &characteristic,
+                               const QByteArray &value);
+    void descriptorWritten(const QLowEnergyDescriptor &descriptor,
+                           const QByteArray &value);
+    void errorOccurred(QLowEnergyService::ServiceError error);
+
+private:
+    QBluetoothUuid uuid;
+    ServiceState currentState = RemoteService;
+    mutable QHash<QBluetoothUuid, int> characteristicLookups;
+    int discoverCalls = 0;
+};
+
+#endif
