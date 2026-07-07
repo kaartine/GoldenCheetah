@@ -28,6 +28,7 @@ equals(GC_UNITTESTS, active) {
 			   Gui/splitRideData \
 			   Gui/perspectiveStateSource \
 			   Gui/trainPerspectiveState \
+			   Metrics/rideMetadataAtomicSave \
 			   Python/pythonDataSeriesOwnership \
 			   Train/antBurstBounds \
 			   Train/kineticPacketBounds \

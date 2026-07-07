@@ -21,6 +21,7 @@
 #include "GoldenCheetah.h"
 
 #include "Context.h"
+#include "FileIO/AtomicFileWriter.h"
 
 #include <QPointer>
 #include <QWidget>
@@ -186,7 +187,15 @@ class RideMetadata : public QWidget
 
     public:
         RideMetadata(Context *, bool singlecolumn = false);
-        static void serialize(QString filename, QList<KeywordDefinition>, QList<FieldDefinition>, QString colofield, QList<DefaultDefinition>defaultDefinitions);
+        static bool serialize(
+            QString filename,
+            const QList<KeywordDefinition> &keywordDefinitions,
+            const QList<FieldDefinition> &fieldDefinitions,
+            QString colorfield,
+            const QList<DefaultDefinition> &defaultDefinitions,
+            QString *error = nullptr,
+            const AtomicFileWriterFactory &writerFactory =
+                qSaveFileWriterFactory());
         static void readXML(QString filename, QList<KeywordDefinition>&, QList<FieldDefinition>&, QString &colorfield, QList<DefaultDefinition>&defaultDefinitions);
         QList<KeywordDefinition> getKeywords() { return keywordDefinitions; }
         QList<FieldDefinition> getFields() { return fieldDefinitions; }

@@ -161,13 +161,16 @@ void RideMetadata::readXML(
 {
 }
 
-void RideMetadata::serialize(
+bool RideMetadata::serialize(
     QString,
-    QList<KeywordDefinition>,
-    QList<FieldDefinition>,
+    const QList<KeywordDefinition> &,
+    const QList<FieldDefinition> &,
     QString,
-    QList<DefaultDefinition>)
+    const QList<DefaultDefinition> &,
+    QString *,
+    const AtomicFileWriterFactory &)
 {
+    return true;
 }
 
 bool MainWindow::isStarting() const

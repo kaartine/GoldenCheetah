@@ -248,10 +248,10 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-002: Other persistent files are also truncated in place
 
-- Status: IN_PROGRESS - Measures and seasons fixed; metadata and cache state
-  remain.
-- Code: fixed in `src/Core/Measures.cpp` and `src/Core/Seasons.cpp`; remaining
-  writers are `src/Metrics/RideMetadata.cpp:1671` and
+- Status: IN_PROGRESS - Measures, seasons, and metadata fixed; cache state
+  remains.
+- Code: fixed in `src/Core/Measures.cpp`, `src/Core/Seasons.cpp`, and
+  `src/Metrics/RideMetadata.cpp`; the remaining writer is
   `src/Core/RideDB.y:481`.
 - Impact: Measures, seasons, metadata, and cache state can be left empty or
   partial on ENOSPC or process failure.
@@ -281,8 +281,24 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   and with production sources under strict ASan/UBSan/LSan. The full Qt 6.8.3
   application links, and the complete worktree run passes 1,318 tests in 31
   registered suites without failures or skips.
+- Metadata regression test: `unittests/Metrics/rideMetadataAtomicSave` injects
+  open, short-write, flush, and commit failures and requires the previous
+  `metadata.xml` to remain byte-for-byte intact. The successful path reads the
+  generated XML back through the production parser and verifies escaped
+  keywords, fields, defaults, colors, and expressions.
+- Metadata resolution: Build the complete XML document in memory and publish
+  it through the atomic persistence helper. Return detailed failures to
+  programmatic callers while retaining the existing user-visible error dialog
+  for the original five-argument calls.
+- Metadata verification: The RED build failed because
+  `RideMetadata::serialize` returned no result and had no injectable writer
+  contract. The focused suite passes 7 tests normally and under strict
+  ASan/UBSan/LSan with leak detection; the dependent athlete migration suite
+  passes 12 tests. The full Qt 6.8.3 application links, and the complete
+  worktree run passes 1,325 tests in 32 registered suites without failures or
+  skips.
 - Remaining fix direction: Add equivalent fault-injection coverage and atomic
-  publication to the metadata and cache writers.
+  publication to the cache writer.
 
 ### DUR-003: TrainDB drops user tables when version lookup fails
 

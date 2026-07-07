@@ -1667,21 +1667,20 @@ KeywordDefinition::fingerprint(QList<KeywordDefinition> list)
  * Read / Write metadata.xml file
  *--------------------------------------------------------------------*/
 
-void
-RideMetadata::serialize(QString filename, QList<KeywordDefinition>keywordDefinitions, QList<FieldDefinition>fieldDefinitions, QString colorfield, QList<DefaultDefinition>defaultDefinitions)
+bool
+RideMetadata::serialize(
+    QString filename,
+    const QList<KeywordDefinition> &keywordDefinitions,
+    const QList<FieldDefinition> &fieldDefinitions,
+    QString colorfield,
+    const QList<DefaultDefinition> &defaultDefinitions,
+    QString *error,
+    const AtomicFileWriterFactory &writerFactory)
 {
-    // open file - truncate contents
-    QFile file(filename);
-    if (!file.open(QFile::WriteOnly)) {
-        QMessageBox msgBox;
-        msgBox.setIcon(QMessageBox::Critical);
-        msgBox.setText(tr("Problem Saving Meta Data"));
-        msgBox.setInformativeText(tr("File: %1 cannot be opened for 'Writing'. Please check file properties.").arg(filename));
-        msgBox.exec();
-        return;
-    };
-    file.resize(0);
-    QTextStream out(&file);
+    if (error) error->clear();
+
+    QString document;
+    QTextStream out(&document);
 
     // begin document
     out << "<metadata>\n";
@@ -1747,8 +1746,34 @@ RideMetadata::serialize(QString filename, QList<KeywordDefinition>keywordDefinit
     // end document
     out << "</metadata>\n";
 
-    // close file
-    file.close();
+    out.flush();
+    QString saveError;
+    if (out.status() != QTextStream::Ok) {
+        saveError = QObject::tr("Cannot serialize the metadata document.");
+    } else if (!writeFileAtomically(
+                   filename,
+                   document.toUtf8(),
+                   writerFactory,
+                   saveError) && saveError.isEmpty()) {
+        saveError = QObject::tr("Cannot save the metadata document.");
+    }
+
+    if (!saveError.isEmpty()) {
+        if (error) {
+            *error = saveError;
+        } else {
+            QMessageBox msgBox;
+            msgBox.setIcon(QMessageBox::Critical);
+            msgBox.setText(QObject::tr("Problem Saving Meta Data"));
+            msgBox.setInformativeText(
+                QObject::tr("File: %1 cannot be saved. %2")
+                    .arg(filename, saveError));
+            msgBox.exec();
+        }
+        return false;
+    }
+
+    return true;
 }
 
 void
