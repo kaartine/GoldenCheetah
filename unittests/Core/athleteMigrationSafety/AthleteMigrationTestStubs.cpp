@@ -20,6 +20,7 @@
 #include "Core/Route.h"
 #include "Core/Seasons.h"
 #include "Core/Settings.h"
+#include "FileIO/CsvRideFile.h"
 #include "FileIO/DataProcessor.h"
 #include "FileIO/JsonRideFile.h"
 #include "FileIO/RideAutoImportConfig.h"
@@ -38,6 +39,8 @@
 #include "Train/VideoWindow.h"
 
 #include <QHash>
+#include <QMutex>
+#include <QSet>
 
 #include <cstring>
 #include <stdexcept>
@@ -46,6 +49,8 @@
 namespace {
 
 QHash<QString, QVariant> testValues;
+QMutex validContextsMutex;
+QSet<Context *> validContexts;
 bool throwOnAthleteIdWrite = false;
 bool throwOnRideCacheConstruction = false;
 bool trainDbUpgradeRequired = false;
@@ -69,6 +74,13 @@ GSettings testSettings(QStringLiteral("GoldenCheetahTests"),
 
 } // namespace
 
+namespace Utils {
+bool qstringascend(const QString &left, const QString &right)
+{
+    return left < right;
+}
+}
+
 GSettings *appsettings = &testSettings;
 TrainDB *trainDB = nullptr;
 QString gcroot;
@@ -76,7 +88,6 @@ int OperatingSystem = LINUX;
 double dpiXFactor = 1.0;
 double dpiYFactor = 1.0;
 
-CloudServiceFactory *CloudServiceFactory::instance_ = nullptr;
 bool DataProcessorFactory::autoprocess = true;
 
 void resetAthleteMigrationTestSettings()
@@ -245,9 +256,23 @@ Context::Context(MainWindow *window)
     isCompareDateRanges = false;
     webEngineProfile = nullptr;
     m_HtmlTrainingBridge = nullptr;
+    {
+        QMutexLocker locker(&validContextsMutex);
+        validContexts.insert(this);
+    }
 }
 
-Context::~Context() = default;
+Context::~Context()
+{
+    QMutexLocker locker(&validContextsMutex);
+    validContexts.remove(this);
+}
+
+bool Context::isValid(Context *context)
+{
+    QMutexLocker locker(&validContextsMutex);
+    return validContexts.contains(context);
+}
 
 DateRange::DateRange(QDate from, QDate to, QString name, QColor color)
     : from(from), to(to), name(std::move(name)), color(color),
@@ -280,6 +305,16 @@ PlanFilter::PlanFilter(PlanFilterType type)
 Specification::Specification()
     : it(nullptr), recintsecs(0), ri(nullptr)
 {
+}
+
+void Specification::setDateRange(DateRange range)
+{
+    dr = std::move(range);
+}
+
+bool Specification::pass(RideItem *) const
+{
+    return true;
 }
 
 RealtimeData::RealtimeData()
@@ -353,11 +388,23 @@ void RideItem::reverted() {}
 void RideItem::saved() {}
 void RideItem::notifyRideDataChanged() {}
 void RideItem::notifyRideMetadataChanged() {}
+double RideItem::getForSymbol(QString, bool) { return 0.0; }
 
 QString RideFile::sportTag(QString sport)
 {
     return sport;
 }
+
+bool RideFile::parseRideFileName(const QString &name, QDateTime *dateTime)
+{
+    const QDateTime parsed = QDateTime::fromString(
+            name.left(19), QStringLiteral("yyyy_MM_dd_HH_mm_ss"));
+    if (!parsed.isValid()) return false;
+    if (dateTime) *dateTime = parsed;
+    return true;
+}
+
+void RideFile::recalculateDerivedSeries(bool) {}
 
 void Zones::initializeZoneParameters() {}
 bool Zones::read(QFile &) { return true; }
@@ -440,45 +487,6 @@ CalendarDownload::CalendarDownload(Context *context)
 bool CalendarDownload::download() { return false; }
 void CalendarDownload::downloadFinished(QNetworkReply *) {}
 
-void CloudServiceAutoDownload::autoDownload() {}
-
-void CloudServiceAutoDownload::run() {}
-
-void CloudServiceAutoDownload::readComplete(
-    QByteArray *, QString, QString)
-{
-}
-
-void CloudServiceUploadDialog::completed(QString, QString) {}
-
-void CloudServiceDialog::returnPressed() {}
-void CloudServiceDialog::folderSelectionChanged() {}
-void CloudServiceDialog::folderClicked(QTreeWidgetItem *, int) {}
-void CloudServiceDialog::fileDoubleClicked(QTreeWidgetItem *, int) {}
-void CloudServiceDialog::setPath(QString, bool) {}
-void CloudServiceDialog::setFolders(CloudServiceEntry *) {}
-void CloudServiceDialog::setFiles(CloudServiceEntry *) {}
-void CloudServiceDialog::createFolderClicked() {}
-
-void CloudServiceSyncDialog::cancelClicked() {}
-void CloudServiceSyncDialog::refreshClicked() {}
-void CloudServiceSyncDialog::tabChanged(int) {}
-void CloudServiceSyncDialog::downloadClicked() {}
-void CloudServiceSyncDialog::refreshCount() {}
-void CloudServiceSyncDialog::refreshUpCount() {}
-void CloudServiceSyncDialog::refreshSyncCount() {}
-void CloudServiceSyncDialog::selectAllChanged(int) {}
-void CloudServiceSyncDialog::selectAllUpChanged(int) {}
-void CloudServiceSyncDialog::selectAllSyncChanged(int) {}
-void CloudServiceSyncDialog::completedRead(QByteArray *, QString, QString) {}
-void CloudServiceSyncDialog::completedWrite(QString, QString) {}
-
-void CloudServiceAutoDownloadWidget::downloadStart() {}
-void CloudServiceAutoDownloadWidget::downloadFinish() {}
-void CloudServiceAutoDownloadWidget::downloadProgress(QString, double, int, int)
-{
-}
-
 QColor GCColor::getColor(int)
 {
     return {};
@@ -486,8 +494,6 @@ QColor GCColor::getColor(int)
 
 void GCColor::setColor(int, QColor) {}
 void GCColor::applyTheme(int) {}
-
-void CloudServiceFactory::upgrade(QString) {}
 
 TrainDB::TrainDB(QDir home)
     : home(std::move(home)), db(nullptr), sessionid(QStringLiteral("test"))
@@ -569,6 +575,14 @@ DataProcessorFactory::getProcessors(bool) const
     return {};
 }
 
+bool DataProcessorFactory::autoProcess(
+        RideFile *, QString, QString)
+{
+    return false;
+}
+
+void RideMetadata::setLinkedDefaults(RideFile *) {}
+
 QString DataProcessor::configKeyAutomation(const QString &id)
 {
     return id;
@@ -597,6 +611,24 @@ RideFile *RideFileFactory::openRideFile(
     Context *, QFile &, QStringList &, QList<RideFile *> *) const
 {
     return nullptr;
+}
+
+bool RideFileFactory::writeRideFile(
+        Context *, const RideFile *, QFile &, QString) const
+{
+    return false;
+}
+
+RideFile *CsvFileReader::openRideFile(
+        QFile &, QStringList &, QList<RideFile *> *) const
+{
+    return nullptr;
+}
+
+bool CsvFileReader::writeRideFile(
+        Context *, const RideFile *, QFile &, CsvType) const
+{
+    return false;
 }
 
 RideFile *JsonFileReader::openRideFile(

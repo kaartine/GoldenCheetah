@@ -9,6 +9,9 @@ TARGET = tst_athleteMigrationSafety
 
 include(../../unittests.pri)
 
+INCLUDEPATH += ../../../contrib/qtsolutions
+LIBS += -lz
+
 CONFIG += console testcase c++17 release
 CONFIG -= debug
 
@@ -20,10 +23,17 @@ isEmpty(GC_ATHLETE_SOURCE) {
     GC_ATHLETE_SOURCE = ../../../src/Core/Athlete.cpp
 }
 
+isEmpty(GC_CLOUD_SERVICE_SOURCE) {
+    GC_CLOUD_SERVICE_SOURCE = ../../../src/Cloud/CloudService.cpp
+}
+
 SOURCES = testAthleteMigrationSafety.cpp \
           AthleteMigrationTestStubs.cpp \
+          CloudAutoDownloadTestSupport.cpp \
+          ../../../contrib/qzip/zip.cpp \
           $$GC_UPGRADE_SOURCE \
-          $$GC_ATHLETE_SOURCE
+          $$GC_ATHLETE_SOURCE \
+          $$GC_CLOUD_SERVICE_SOURCE
 
 HEADERS = ../../../src/Cloud/CalendarDownload.h \
           ../../../src/Cloud/CloudService.h \
@@ -56,10 +66,20 @@ INCLUDEPATH += ../../../src \
 QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
 QMAKE_LFLAGS += -Wl,--gc-sections
 
-sanitize:!msvc {
+sanitize:!tsan:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \
                       -fno-omit-frame-pointer \
                       -fno-sanitize=vptr \
                       -fno-sanitize-recover=all
     QMAKE_LFLAGS += -fsanitize=address,undefined
+}
+
+tsan:!msvc {
+    QMAKE_CXXFLAGS += -fsanitize=thread \
+                      -fno-omit-frame-pointer \
+                      -fno-pie \
+                      -O1 \
+                      -g
+    QMAKE_LFLAGS += -fsanitize=thread \
+                    -no-pie
 }

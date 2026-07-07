@@ -685,14 +685,32 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### THREAD-001: Cloud auto-download can outlive its athlete/context
 
-- Status: OPEN
-- Code: `src/Core/Athlete.cpp`, `src/Cloud/CloudService.cpp`
+- Status: FIXED
+- Code: `src/Core/Athlete.cpp`, `src/Cloud/CloudService.cpp`,
+  `src/Cloud/CloudService.h`, `unittests/Core/athleteMigrationSafety`
 - Impact: Closing an athlete during download leaves an unowned worker that can
-  dereference the destroyed athlete through a still-registered context.
-- Test: Block a production worker mid-download, close the athlete, and require a
-  bounded cancellation and join under ASan/TSan.
-- Fix direction: Make the production worker cooperatively cancellable before
-  waiting in Athlete teardown; do not substitute an interruption-aware fake.
+  dereference the destroyed athlete through a still-registered context. The
+  worker's invalid-context guard also called `QThread::exit()` from an overridden
+  `run()` method and then continued executing, because `exit()` only asks a
+  thread event loop to stop.
+- Regression test: `unittests/Core/athleteMigrationSafety` links the production
+  `Athlete` and `CloudServiceAutoDownload` implementations to a blocking cloud
+  provider. It requires an invalid-context worker to return promptly and closes
+  an athlete while its real worker is waiting for a provider, requiring teardown
+  to cancel, join, and delete the worker within two seconds.
+- Resolution: Cloud auto-download now supports cooperative interruption. Its
+  30-second provider wait and three-second completion delay use worker-local
+  timers so cancellation wakes them promptly. Athlete teardown requests
+  interruption, joins and deletes the worker before releasing the ride cache or
+  athlete directories. Invalid contexts return from `run()` instead of calling
+  the ineffective `exit()` method.
+- Verification: Before the fix, the invalid-context test still had a running
+  worker after three seconds and athlete teardown returned while its blocked
+  cloud worker remained alive. The final 15-test suite passes normally, under
+  strict ASan/UBSan/LSan, and under TSAN with no suppressions. The complete
+  matrix passes 1,525 tests in 45 suites with zero failures, skips, or
+  blacklisted tests. The Qt 6.8.3 application builds and reports its version
+  successfully in an isolated offscreen smoke test.
 
 ### THREAD-002: Cloud download state is mutated from GUI and worker threads
 
@@ -821,9 +839,9 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Impact: Every opened athlete leaked its owned `AthleteDirectoryStructure`
   and the internal directory strings retained by that object.
 - Resolution: Athlete teardown deletes the directory structure after its
-  synchronously owned path users have been destroyed. An active cloud worker
-  can still outlive it; that separate risk remains open as THREAD-001 and is not
-  claimed by this fix.
+  synchronously owned path users have been destroyed. THREAD-001 subsequently
+  added mandatory cloud-worker cancellation and joining before these directories
+  are released.
 - Verification: The MEM-009 real-lifecycle test first failed strict LSan with
   two leaked directory owners and now destroys the same production objects
   without leaks.

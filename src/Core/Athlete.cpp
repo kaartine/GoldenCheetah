@@ -313,10 +313,9 @@ Athlete::releaseOwnedResources(bool saveCharts) noexcept
 {
     if (cloudAutoDownload) {
         disconnect(context, nullptr, cloudAutoDownload, nullptr);
-        if (!cloudAutoDownload->isRunning()) {
-            delete cloudAutoDownload;
-            cloudAutoDownload = nullptr;
-        }
+        cloudAutoDownload->cancelAndWait();
+        delete cloudAutoDownload;
+        cloudAutoDownload = nullptr;
     }
 
     // close the ride cache down first

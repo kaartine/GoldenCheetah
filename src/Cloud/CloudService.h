@@ -455,9 +455,13 @@ class CloudServiceAutoDownload : public QThread {
 
         // automatically downloads from cloud services
         CloudServiceAutoDownload(Context *context) : context(context), initial(true) {}
+        ~CloudServiceAutoDownload() override;
 
         // re-run after inital
         void checkDownload();
+
+        // stop any in-flight request and wait for the worker to finish
+        void cancelAndWait();
 
     public slots:
 

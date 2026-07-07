@@ -1772,12 +1772,24 @@ CloudServiceAutoDownload::checkDownload()
     start();
 }
 
+CloudServiceAutoDownload::~CloudServiceAutoDownload()
+{
+    cancelAndWait();
+}
+
+void
+CloudServiceAutoDownload::cancelAndWait()
+{
+    requestInterruption();
+    if (QThread::currentThread() != this) wait();
+}
+
 void
 CloudServiceAutoDownload::run()
 {
     // There are cases when athletes are opened and closed in quick succession that lead
     // to the context becoming invalid, so we need to protect all uses of context.
-    if (!Context::isValid(context)) exit(0);
+    if (isInterruptionRequested() || !Context::isValid(context)) return;
 
     // this is a separate thread and can run in parallel with the main gui
     // so we can loop through services and download the data needed.
@@ -1786,7 +1798,7 @@ CloudServiceAutoDownload::run()
     // get a list of services to sync from
     QStringList worklist;
     foreach(QString name, CloudServiceFactory::instance().serviceNames()) {
-        if (!Context::isValid(context)) exit(0);
+        if (isInterruptionRequested() || !Context::isValid(context)) return;
         if (appsettings->cvalue(context->athlete->cyclist, CloudServiceFactory::instance().service(name)->syncOnStartupSettingName(), "false").toString() == "true") {
             worklist << name;
         }
@@ -1798,10 +1810,12 @@ CloudServiceAutoDownload::run()
     if (worklist.count()) {
 
         // Start means we are looking for downloads to do
-        if (Context::isValid(context)) context->notifyAutoDownloadStart();
+        if (!isInterruptionRequested() && Context::isValid(context)) context->notifyAutoDownloadStart();
 
         // workthrough
         for(int i=0; i<worklist.count(); i++) {
+
+            if (isInterruptionRequested() || !Context::isValid(context)) break;
 
             // instantiate
             CloudService *service = (Context::isValid(context)) ? CloudServiceFactory::instance().newService(worklist[i], context) : nullptr;
@@ -1817,9 +1831,21 @@ CloudServiceAutoDownload::run()
                 continue;
             }
 
+            if (isInterruptionRequested() || !Context::isValid(context)) {
+                service->close();
+                delete service;
+                break;
+            }
+
             // get list of entries
             QDateTime now = QDateTime::currentDateTime();
             QList<CloudServiceEntry*> found = service->readdir(service->home(), errors, now.addDays(-30), now);
+
+            if (isInterruptionRequested() || !Context::isValid(context)) {
+                service->close();
+                delete service;
+                break;
+            }
 
             // some were found, so lets see if they match
             if (found.count()) {
@@ -1895,6 +1921,8 @@ CloudServiceAutoDownload::run()
     double inc = 100.0f / double(downloadlist.count());
     for(int i=0; i<downloadlist.count(); i++) {
 
+        if (isInterruptionRequested() || !Context::isValid(context)) break;
+
         // update progress indicator
         if (Context::isValid(context)) context->notifyAutoDownloadProgress(downloadlist[i].provider->uiName(), progress, i, downloadlist.count());
 
@@ -1903,6 +1931,13 @@ CloudServiceAutoDownload::run()
         // we block on read completing
         QEventLoop loop;
         connect(download.provider, SIGNAL(readComplete(QByteArray*,QString,QString)), &loop, SLOT(quit()));
+        QTimer interruptionTimer;
+        interruptionTimer.setInterval(10);
+        connect(&interruptionTimer, &QTimer::timeout, &loop,
+                [this, &loop]() {
+                    if (isInterruptionRequested()) loop.quit();
+                });
+        interruptionTimer.start();
         QTimer::singleShot(30000,&loop, SLOT(quit())); // timeout after 30 seconds
 
         // preallocate
@@ -1911,7 +1946,8 @@ CloudServiceAutoDownload::run()
         download.provider->readFile(downloadlist[i].data, download.entry->name, download.entry->id);
 
         // block on timeout or readComplete...
-        loop.exec();
+        if (!isInterruptionRequested()) loop.exec();
+        if (isInterruptionRequested()) break;
 
         // update progress
         progress += inc;
@@ -1923,13 +1959,25 @@ CloudServiceAutoDownload::run()
     }
 
     // time to see completion
-    sleep(3);
+    if (!isInterruptionRequested()) {
+        QEventLoop completionDelay;
+        QTimer interruptionTimer;
+        interruptionTimer.setInterval(10);
+        connect(&interruptionTimer, &QTimer::timeout, &completionDelay,
+                [this, &completionDelay]() {
+                    if (isInterruptionRequested()) completionDelay.quit();
+                });
+        interruptionTimer.start();
+        QTimer::singleShot(3000, &completionDelay, &QEventLoop::quit);
+        if (!isInterruptionRequested()) completionDelay.exec();
+    }
 
     // all done, close the sync notification, regardless of if anything was downloaded
-    if (Context::isValid(context)) context->notifyAutoDownloadEnd();
+    if (!isInterruptionRequested() && Context::isValid(context)) context->notifyAutoDownloadEnd();
 
     // remove providers
     foreach(CloudService *s, providers) {
+        disconnect(s, nullptr, this, nullptr);
         s->close();
         delete s;
     }
@@ -1938,8 +1986,6 @@ CloudServiceAutoDownload::run()
     providers.clear();
     downloadlist.clear();
 
-    // and end thread
-    exit(0);
 }
 
 void

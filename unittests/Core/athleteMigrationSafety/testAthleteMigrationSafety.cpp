@@ -7,6 +7,7 @@
  * option) any later version.
  */
 
+#include "Cloud/CloudService.h"
 #include "Core/Athlete.h"
 #include "Core/GcUpgrade.h"
 #include "Core/Settings.h"
@@ -16,8 +17,10 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QDialog>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QMessageBox>
+#include <QPointer>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
@@ -32,6 +35,10 @@ void resetAthleteMigrationTestSettings();
 void setAthleteMigrationThrowOnIdWrite(bool enabled);
 void setAthleteMigrationThrowOnRideCacheConstruction(bool enabled);
 Context *createAthleteMigrationTestContext();
+void configureBlockingCloudAutoDownload(const QString &athlete);
+bool waitForBlockingCloudRead(int timeoutMs);
+bool releaseBlockingCloudRead(CloudServiceAutoDownload *receiver);
+void cleanupBlockingCloudRead();
 void configureAthleteMigrationTrainDbUpgrade(
     TrainDB *database,
     const TrainDB::LegacyMigrationPlan &plan,
@@ -211,6 +218,8 @@ private slots:
     void lateUpgradeFinalizesVerifiedTrainDbMigration();
     void publishedContextRollsBackLateConstructionFailure();
     void constructorFailureRollsBackPublishedContextAndOwners();
+    void invalidContextStopsCloudDownloadPromptly();
+    void athleteTeardownJoinsBlockedCloudDownload();
 };
 
 void TestAthleteMigrationSafety::init()
@@ -560,6 +569,75 @@ constructorFailureRollsBackPublishedContextAndOwners()
     QVERIFY(!athleteStorage.constructed());
     QVERIFY(!athleteStorage.destroyed());
     QVERIFY(!context->athlete);
+}
+
+void TestAthleteMigrationSafety::invalidContextStopsCloudDownloadPromptly()
+{
+    Context *context = createAthleteMigrationTestContext();
+    CloudServiceAutoDownload worker(context);
+    delete context;
+
+    worker.checkDownload();
+    const bool stoppedPromptly = worker.wait(500);
+    bool cleanupStopped = stoppedPromptly;
+    if (!cleanupStopped) cleanupStopped = worker.wait(5000);
+
+    QVERIFY2(cleanupStopped,
+             "cloud worker did not finish during test cleanup");
+    QVERIFY2(stoppedPromptly,
+             "cloud worker continued after its context became invalid");
+}
+
+void TestAthleteMigrationSafety::athleteTeardownJoinsBlockedCloudDownload()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QDir athleteDir(root.path());
+    QVERIFY(createStructuredAthlete(
+            athleteDir, QStringLiteral("CloudDownloadLifecycle")));
+    configureAthlete(athleteDir, VERSION_LATEST, true);
+
+    std::unique_ptr<Context> context(createAthleteMigrationTestContext());
+    SeededAthleteStorage athleteStorage;
+    Athlete *athlete = athleteStorage.construct(context.get(), athleteDir);
+
+    configureBlockingCloudAutoDownload(athlete->cyclist);
+    QPointer<CloudServiceAutoDownload> worker(athlete->cloudAutoDownload);
+    worker->checkDownload();
+
+    const bool readStarted = waitForBlockingCloudRead(5000);
+    if (!readStarted) {
+        athleteStorage.destroy();
+        if (worker) {
+            worker->wait(35000);
+            delete worker.data();
+        }
+        cleanupBlockingCloudRead();
+    }
+    QVERIFY2(readStarted, "production cloud worker did not reach readFile");
+
+    QElapsedTimer teardownTimer;
+    teardownTimer.start();
+    athleteStorage.destroy();
+    const qint64 teardownElapsedMs = teardownTimer.elapsed();
+    const bool joinedDuringTeardown = worker.isNull();
+
+    bool releaseSucceeded = true;
+    bool cleanupJoined = true;
+    if (worker) {
+        releaseSucceeded = releaseBlockingCloudRead(worker.data());
+        cleanupJoined = worker->wait(7000);
+        if (!cleanupJoined) cleanupJoined = worker->wait(35000);
+        if (cleanupJoined) delete worker.data();
+    }
+    cleanupBlockingCloudRead();
+
+    QVERIFY2(releaseSucceeded, "failed to release blocked test provider");
+    QVERIFY2(cleanupJoined, "cloud worker did not finish during test cleanup");
+    QVERIFY2(joinedDuringTeardown,
+             "Athlete teardown returned while cloud worker was still running");
+    QVERIFY2(teardownElapsedMs < 2000,
+             "Athlete teardown did not cancel and join within two seconds");
 }
 
 QTEST_MAIN(TestAthleteMigrationSafety)
