@@ -581,14 +581,28 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DEV-003: ANT telemetry and command queues have data races
 
-- Status: OPEN
-- Code: `src/ANT/ANT.cpp:320`, `src/ANT/ANT.h:486`,
-  `src/ANT/ANT.cpp:687`
+- Status: IN PROGRESS
+- Code: `src/ANT/ANT.cpp`, `src/ANT/ANT.h`
 - Impact: GUI and worker threads concurrently mutate queues and telemetry without
-  a common lock, producing undefined behavior.
-- Test: Stress channel changes and telemetry polling under TSAN.
-- Fix direction: Keep transport state worker-owned and publish immutable or
-  mutex-protected telemetry snapshots.
+  a common lock, producing undefined behavior. Concurrent senders can also
+  interleave an ANT frame with another frame before the required padding.
+- Regression test: `unittests/Train/antThreadSafety` uses production ANT,
+  ANTChannel, ANTMessage, RealtimeData, and CalibrationData code with a
+  deterministic fake transport. It exercises every telemetry setter, races
+  telemetry publication and channel enqueue/dequeue under TSAN, and forces two
+  senders to contend between an ANT frame and its padding.
+- Resolution so far: Dedicated mutexes protect telemetry snapshots, channel
+  command enqueue/dequeue, and complete frame-plus-padding transport
+  transactions. Queue operations release their lock before channel or I/O work.
+- Verification: Before the fix, TSAN reported races in `getRealtimeData()` and
+  `QQueue::dequeue()`, the normal queue stress test triggered heap corruption,
+  and the deterministic transport observed `frame, frame, padding, padding`.
+  The six-test suite now passes normally, under TSAN, and under strict
+  ASan/UBSan/LSan. The full matrix passes all 1,479 tests in 44 result blocks
+  with no failures or skips.
+- Remaining: Move load, mode, setup, stop, timer, and calibration commands to
+  worker ownership, then remove the remaining shared ANTChannel/QObject state
+  races before marking this finding fixed.
 
 ### DEV-004: Stale ANT/BLE telemetry can be recorded indefinitely
 

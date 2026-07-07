@@ -226,26 +226,30 @@ double ANT::channelValue(int channel)
 }
 
 void ANT::setWheelRpm(float x) {
-    telemetry.setWheelRpm(x, true); // record time sample for new rpm data
+    const double wheelSize = devConf
+            ? devConf->wheelSize
+            : appsettings->cvalue(trainAthlete, GC_WHEELSIZE, 2100).toInt();
 
-    // devConf will be NULL if we are are running the add device wizard
-    // we can default to the global setting
-    if (devConf) telemetry.setSpeed(x * devConf->wheelSize / 1000 * 60 / 1000);
-    else telemetry.setSpeed(x * appsettings->cvalue(trainAthlete, GC_WHEELSIZE, 2100).toInt() / 1000 * 60 / 1000);
+    QMutexLocker locker(&telemetryMutex);
+    telemetry.setWheelRpm(x, true); // record time sample for new rpm data
+    telemetry.setSpeed(x * wheelSize / 1000 * 60 / 1000);
 }
 
 void ANT::setHb(double smo2, double thb)
 {
+    QMutexLocker locker(&telemetryMutex);
     telemetry.setHb(smo2, thb);
 }
 
 void ANT::setTemp(double temp)
 {
+    QMutexLocker locker(&telemetryMutex);
     telemetry.setTemp(temp);
 }
 
 void ANT::setCoreTemp(double core, double skin, double strain)
 {
+    QMutexLocker locker(&telemetryMutex);
     telemetry.setCoreTemp(core, skin, strain);
 }
 
@@ -318,10 +322,22 @@ void ANT::run()
         pvars.unlock();
 
         // do we have a channel to search / stop
-        if (!channelQueue.isEmpty()) {
-            setChannelAtom x = channelQueue.dequeue();
-            if (x.device_number == -1) antChannel[x.channel]->close(); // unassign
-            else addDevice(x.device_number, x.channel_type, x.channel); // assign
+        setChannelAtom channelCommand;
+        bool hasChannelCommand = false;
+        {
+            QMutexLocker locker(&channelQueueMutex);
+            if (!channelQueue.isEmpty()) {
+                channelCommand = channelQueue.dequeue();
+                hasChannelCommand = true;
+            }
+        }
+        if (hasChannelCommand) {
+            if (channelCommand.device_number == -1)
+                antChannel[channelCommand.channel]->close(); // unassign
+            else
+                addDevice(channelCommand.device_number,
+                          channelCommand.channel_type,
+                          channelCommand.channel); // assign
         }
 
         /* time to shut up shop */
@@ -693,7 +709,10 @@ ANT::quit(int code)
 void
 ANT::getRealtimeData(RealtimeData &rtData)
 {
-    rtData = telemetry;
+    {
+        QMutexLocker locker(&telemetryMutex);
+        rtData = telemetry;
+    }
     rtData.mode = static_cast<ErgFileFormat>(mode);
     rtData.setLoad(load);
     rtData.setSlope(gradient);
@@ -998,11 +1017,14 @@ ANT::sendMessage(ANTMessage m) {
     unsigned char RS='S';
     emit sentAntMessage(RS, m, timestamp);
 
-    rawWrite((uint8_t*)m.data, m.length);
+    {
+        QMutexLocker locker(&txMutex);
+        rawWrite((uint8_t*)m.data, m.length);
 
-    // this padding is important - do not remove it
-    // we need to be sure the message is at least 12 bytes
-    rawWrite((uint8_t*)padding, 5);
+        // this padding is important - do not remove it
+        // we need to be sure the message is at least 12 bytes
+        rawWrite((uint8_t*)padding, 5);
+    }
 }
 
 void

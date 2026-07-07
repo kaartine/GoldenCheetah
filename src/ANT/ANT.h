@@ -33,6 +33,7 @@
 //
 #include <QThread>
 #include <QMutex>
+#include <QMutexLocker>
 #include <QObject>
 #include <QQueue>
 #include <QStringList>
@@ -484,6 +485,7 @@ public slots:
     bool isConfiguring() { return configuring; }
     void setConfigurationMode(bool x) { configuring = x; }
     void setChannel(int channel, int device_number, int channel_type) {
+        QMutexLocker locker(&channelQueueMutex);
         channelQueue.enqueue(setChannelAtom(channel, device_number, channel_type));
     }
     bool find();                              // find usb device
@@ -638,14 +640,20 @@ public:
     double channelValue(int channel);
     double channelValue2(int channel);
     void setBPM(float x) {
+        QMutexLocker locker(&telemetryMutex);
         telemetry.setHr(x);
     }
     void setCadence(float x) {
+        QMutexLocker locker(&telemetryMutex);
         lastCadenceMessage = QDateTime(QDateTime::currentDateTime());
         telemetry.setCadence(x);
     }
-    float getCadence(void) { return telemetry.getCadence(); }
+    float getCadence(void) {
+        QMutexLocker locker(&telemetryMutex);
+        return telemetry.getCadence();
+    }
     void setSecondaryCadence(float x) {
+        QMutexLocker locker(&telemetryMutex);
         if (lastCadenceMessage.toSecsSinceEpoch() == 0 || (QDateTime::currentDateTime().toSecsSinceEpoch() - lastCadenceMessage.toSecsSinceEpoch())>10)  {
             telemetry.setCadence(x);
         }
@@ -653,21 +661,28 @@ public:
 
     void setSpeed(double x)
     {
+        QMutexLocker locker(&telemetryMutex);
         telemetry.setSpeed(x);
     }
 
     void incAltDistance(double x)
     {
+        QMutexLocker locker(&telemetryMutex);
         telemetry.setAltDistance(telemetry.getAltDistance() + x);
     }
 
     void setWheelRpm(float x);
-    float getWheelRpm(void) { return telemetry.getWheelRpm(); }
+    float getWheelRpm(void) {
+        QMutexLocker locker(&telemetryMutex);
+        return telemetry.getWheelRpm();
+    }
 
     void setWatts(float x) {
+        QMutexLocker locker(&telemetryMutex);
         telemetry.setWatts(x);
     }
     void setAltWatts(float x) {
+        QMutexLocker locker(&telemetryMutex);
         telemetry.setAltWatts(x);
     }
     void setHb(double smo2, double thb);
@@ -675,33 +690,76 @@ public:
     void setCoreTemp(double core, double skin, double strain);
 
     void setLRBalance(double lrbalance) {
+        QMutexLocker locker(&telemetryMutex);
         telemetry.setLRBalance(lrbalance);
     }
 
     void setTE(double lte, double rte) {
+        QMutexLocker locker(&telemetryMutex);
         telemetry.setLTE(lte);
         telemetry.setRTE(rte);
     }
 
     void setPS(double lps, double rps) {
+        QMutexLocker locker(&telemetryMutex);
         telemetry.setLPS(lps);
         telemetry.setRPS(rps);
     }
 
-    void setRppb(double value) { telemetry.setRppb(value); }
-    void setRppe(double value) { telemetry.setRppe(value); }
-    void setRpppb(double value) { telemetry.setRpppb(value); }
-    void setRpppe(double value) { telemetry.setRpppe(value); }
-    void setLppb(double value) { telemetry.setLppb(value); }
-    void setLppe(double value) { telemetry.setLppe(value); }
-    void setLpppb(double value) { telemetry.setLpppb(value); }
-    void setLpppe(double value) { telemetry.setLpppe(value); }
-    void setRightPCO(uint8_t value) { telemetry.setRightPCO(value); }
-    void setLeftPCO(uint8_t value) { telemetry.setLeftPCO(value); }
-    void setPosition(RealtimeData::riderPosition value) { telemetry.setPosition(value); }
-    void setRTorque(double torque) { telemetry.setRTorque(torque); }
-    void setLTorque(double torque) { telemetry.setLTorque(torque); }
+    void setRppb(double value) {
+        QMutexLocker locker(&telemetryMutex);
+        telemetry.setRppb(value);
+    }
+    void setRppe(double value) {
+        QMutexLocker locker(&telemetryMutex);
+        telemetry.setRppe(value);
+    }
+    void setRpppb(double value) {
+        QMutexLocker locker(&telemetryMutex);
+        telemetry.setRpppb(value);
+    }
+    void setRpppe(double value) {
+        QMutexLocker locker(&telemetryMutex);
+        telemetry.setRpppe(value);
+    }
+    void setLppb(double value) {
+        QMutexLocker locker(&telemetryMutex);
+        telemetry.setLppb(value);
+    }
+    void setLppe(double value) {
+        QMutexLocker locker(&telemetryMutex);
+        telemetry.setLppe(value);
+    }
+    void setLpppb(double value) {
+        QMutexLocker locker(&telemetryMutex);
+        telemetry.setLpppb(value);
+    }
+    void setLpppe(double value) {
+        QMutexLocker locker(&telemetryMutex);
+        telemetry.setLpppe(value);
+    }
+    void setRightPCO(uint8_t value) {
+        QMutexLocker locker(&telemetryMutex);
+        telemetry.setRightPCO(value);
+    }
+    void setLeftPCO(uint8_t value) {
+        QMutexLocker locker(&telemetryMutex);
+        telemetry.setLeftPCO(value);
+    }
+    void setPosition(RealtimeData::riderPosition value) {
+        QMutexLocker locker(&telemetryMutex);
+        telemetry.setPosition(value);
+    }
+    void setRTorque(double torque) {
+        QMutexLocker locker(&telemetryMutex);
+        telemetry.setRTorque(torque);
+    }
+    void setLTorque(double torque) {
+        QMutexLocker locker(&telemetryMutex);
+        telemetry.setLTorque(torque);
+    }
     void setTorque(double torque) {
+        QMutexLocker locker(&telemetryMutex);
         telemetry.setTorque(torque);
     }
 
@@ -723,12 +781,30 @@ public:
 
     void setControlChannel(int channel);
 
-    void setTrainerStatusAvailable(bool status) { telemetry.setTrainerStatusAvailable(status); }
-    void setTrainerCalibRequired(bool status) { telemetry.setTrainerCalibRequired(status); }
-    void setTrainerConfigRequired(bool status) { telemetry.setTrainerConfigRequired(status); }
-    void setTrainerBrakeFault(bool status) { telemetry.setTrainerBrakeFault(status); }
-    void setTrainerReady(bool status) { telemetry.setTrainerReady(status); }
-    void setTrainerRunning(bool status) { telemetry.setTrainerRunning(status); }
+    void setTrainerStatusAvailable(bool status) {
+        QMutexLocker locker(&telemetryMutex);
+        telemetry.setTrainerStatusAvailable(status);
+    }
+    void setTrainerCalibRequired(bool status) {
+        QMutexLocker locker(&telemetryMutex);
+        telemetry.setTrainerCalibRequired(status);
+    }
+    void setTrainerConfigRequired(bool status) {
+        QMutexLocker locker(&telemetryMutex);
+        telemetry.setTrainerConfigRequired(status);
+    }
+    void setTrainerBrakeFault(bool status) {
+        QMutexLocker locker(&telemetryMutex);
+        telemetry.setTrainerBrakeFault(status);
+    }
+    void setTrainerReady(bool status) {
+        QMutexLocker locker(&telemetryMutex);
+        telemetry.setTrainerReady(status);
+    }
+    void setTrainerRunning(bool status) {
+        QMutexLocker locker(&telemetryMutex);
+        telemetry.setTrainerRunning(status);
+    }
 
     void setTemp(double temp);
 
@@ -741,7 +817,9 @@ private:
     RealtimeData telemetry;
     CalibrationData calibration;
 
-    QMutex pvars;  // lock/unlock access to telemetry data between thread and controller
+    QMutex telemetryMutex;
+    QMutex txMutex;
+    QMutex pvars;  // protects Status between the worker and controller
     int Status;     // what status is the client in?
     bool configuring; // set to true if we're in configuration mode.
     int channels;  // how many 4 or 8 ? depends upon the USB stick...
@@ -783,6 +861,7 @@ private:
 
     QElapsedTimer elapsedTimer;
 
+    QMutex channelQueueMutex;
     QQueue<setChannelAtom> channelQueue; // messages for configuring channels from controller
 
     // generic trainer settings

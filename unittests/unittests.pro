@@ -36,6 +36,7 @@ equals(GC_UNITTESTS, active) {
 			   Python/pythonDataSeriesOwnership \
 			   Train/antBurstBounds \
 			   Train/antLifecycle \
+			   Train/antThreadSafety \
 			   Train/kineticPacketBounds \
 			   Train/vmProWidgetLifecycle \
 			   Train/virtualPowerTrainerOwnership \
