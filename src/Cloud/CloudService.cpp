@@ -30,10 +30,21 @@
 #include "DataProcessor.h"  // to run auto data processors
 #include "RideMetadata.h"   // for linked defaults processing
 
+#include <QCoreApplication>
 #include <QIcon>
 #include <QFileIconProvider>
 #include <QMessageBox>
 #include <QHeaderView>
+#include <QPointer>
+#include <QHash>
+#include <QSet>
+#include <QThread>
+#include <QTimer>
+
+#include <memory>
+#include <mutex>
+#include <string>
+#include <vector>
 
 #include "../qzip/zipwriter.h"
 #include "../qzip/zipreader.h"
@@ -44,11 +55,164 @@
 #include <zlib.h>
 #endif
 
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+int cloudAutoDownloadRequestTimeoutMs();
+void cloudAutoDownloadBufferAllocated(QByteArray *data);
+void cloudAutoDownloadBufferReleased(QByteArray *data);
+bool cloudAutoDownloadProviderAccessed(CloudService *provider);
+#endif
+
 //
 // CLOUDSERVICE BASE CLASS
 //
 
 CloudServiceFactory *CloudServiceFactory::instance_;
+
+namespace {
+
+struct QueuedSslWarning
+{
+    std::string title;
+    std::string message;
+};
+
+std::mutex queuedSslWarningsMutex;
+std::vector<QueuedSslWarning> queuedSslWarnings;
+
+void showQueuedSslWarnings()
+{
+    std::vector<QueuedSslWarning> warnings;
+    {
+        const std::lock_guard<std::mutex> lock(
+            queuedSslWarningsMutex);
+        warnings.swap(queuedSslWarnings);
+    }
+
+    for (const QueuedSslWarning &warning : warnings) {
+        QMessageBox::warning(
+            nullptr,
+            QString::fromUtf8(
+                warning.title.data(), qsizetype(warning.title.size())),
+            QString::fromUtf8(
+                warning.message.data(),
+                qsizetype(warning.message.size())));
+    }
+}
+
+struct QueuedCloudSettingExpectation
+{
+    std::string key;
+    std::string expectedValue;
+    std::string defaultValue;
+    bool athleteScoped = true;
+};
+
+struct QueuedCloudSettingUpdate
+{
+    std::string key;
+    std::string value;
+    bool athleteScoped = true;
+};
+
+struct QueuedCloudSettingsTransaction
+{
+    std::string athlete;
+    std::vector<QueuedCloudSettingExpectation> expectations;
+    std::vector<QueuedCloudSettingUpdate> updates;
+};
+
+std::mutex queuedCloudSettingsMutex;
+std::vector<QueuedCloudSettingsTransaction> queuedCloudSettings;
+
+QString storedCloudSetting(
+        const QString &athlete,
+        const QString &key,
+        const QString &defaultValue,
+        bool athleteScoped)
+{
+    const QString stored = athleteScoped
+            ? appsettings->cvalue(
+                athlete, key, defaultValue).toString()
+            : appsettings->value(
+                nullptr, key, defaultValue).toString();
+    if (stored.isEmpty() && !defaultValue.isEmpty())
+        return defaultValue;
+    return stored;
+}
+
+void applyQueuedCloudSettings()
+{
+    std::vector<QueuedCloudSettingsTransaction> transactions;
+    {
+        const std::lock_guard<std::mutex> lock(
+            queuedCloudSettingsMutex);
+        transactions.swap(queuedCloudSettings);
+    }
+
+    for (const QueuedCloudSettingsTransaction &transaction
+         : transactions) {
+        const QString athlete = QString::fromUtf8(
+            transaction.athlete.data(),
+            qsizetype(transaction.athlete.size()));
+        bool matches = true;
+        for (const QueuedCloudSettingExpectation &setting
+             : transaction.expectations) {
+            const QString key = QString::fromUtf8(
+                setting.key.data(), qsizetype(setting.key.size()));
+            const QString expectedValue = QString::fromUtf8(
+                setting.expectedValue.data(),
+                qsizetype(setting.expectedValue.size()));
+            const QString defaultValue = QString::fromUtf8(
+                setting.defaultValue.data(),
+                qsizetype(setting.defaultValue.size()));
+            if (storedCloudSetting(
+                    athlete, key, defaultValue,
+                    setting.athleteScoped) != expectedValue) {
+                matches = false;
+                break;
+            }
+        }
+        if (!matches) continue;
+
+        for (const QueuedCloudSettingUpdate &setting
+             : transaction.updates) {
+            const QString key = QString::fromUtf8(
+                setting.key.data(), qsizetype(setting.key.size()));
+            const QString value = QString::fromUtf8(
+                setting.value.data(), qsizetype(setting.value.size()));
+            if (setting.athleteScoped)
+                appsettings->setCValue(athlete, key, value);
+            else
+                appsettings->setValue(key, value);
+#ifdef GC_WANT_ALLDEBUG
+            qDebug() << "factory save setting:"
+                     << key << value;
+#endif
+        }
+    }
+}
+
+bool cloudSettingsMatch(
+        const QString &athlete,
+        const QMap<QString, QString> &expectedSettings,
+        const QMap<QString, QString> &settingDefaults)
+{
+    for (auto setting = expectedSettings.cbegin();
+         setting != expectedSettings.cend(); ++setting) {
+        const bool athleteScoped =
+                setting.key().startsWith(QStringLiteral("<athlete"));
+        if (storedCloudSetting(
+                athlete, setting.key(),
+                settingDefaults.value(setting.key()),
+                athleteScoped) != setting.value()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
 
 // nothing doing in base class, for now
 CloudService::CloudService(Context *context) :
@@ -62,6 +226,15 @@ CloudService::~CloudService()
 {
     foreach(CloudServiceEntry *p, list_) delete p;
     list_.clear();
+}
+
+void
+CloudService::abortRequests()
+{
+    const QList<QNetworkReply *> replies = findChildren<QNetworkReply *>();
+    for (QNetworkReply *reply : replies) {
+        if (reply && reply->isRunning()) reply->abort();
+    }
 }
 
 // get a new filestore entry
@@ -236,9 +409,29 @@ CloudService::compressRide(RideFile*ride, QByteArray &data, QString name)
 RideFile *
 CloudService::uncompressRide(QByteArray *data, QString name, QStringList &errors)
 {
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+    if (cloudAutoDownloadProviderAccessed(this)) return nullptr;
+#endif
+
+    if (!data) {
+        errors << tr("activity data is missing.");
+        return nullptr;
+    }
+    return uncompressRide(
+        context, downloadCompression, *data, std::move(name), errors);
+}
+
+RideFile *
+CloudService::uncompressRide(
+        Context *context,
+        CompressionType compression,
+        const QByteArray &data,
+        QString name,
+        QStringList &errors)
+{
     // make sure its named as we expect
-    if ((downloadCompression== zip && !name.endsWith(".zip")) ||
-        (downloadCompression== gzip && !name.endsWith(".gz"))) {
+    if ((compression == zip && !name.endsWith(".zip")) ||
+        (compression == gzip && !name.endsWith(".gz"))) {
         errors << tr("expected compressed activity file.");
         return NULL;
     }
@@ -253,7 +446,7 @@ CloudService::uncompressRide(QByteArray *data, QString name, QStringList &errors
         // write out to a zip file first
         QTemporaryFile zipfile;
         zipfile.open();
-        zipfile.write(*data);
+        zipfile.write(data);
         zipfile.close();
 
         // open zip
@@ -263,11 +456,11 @@ CloudService::uncompressRide(QByteArray *data, QString name, QStringList &errors
         // name without the .zip
         name = name.mid(0, name.length()-4);
     } else if (name.endsWith(".gz")) {
-        jsonData = gUncompress(*data);
+        jsonData = gUncompress(data);
         // name without the .gz
         name = name.mid(0, name.length()-3);
     } else {
-        jsonData = *data;
+        jsonData = data;
     }
 
     // uncompress and write to tmp preserviing the file extension
@@ -298,7 +491,28 @@ CloudService::sslErrors(QWidget* parent, [[maybe_unused]] QNetworkReply* reply ,
             errorString += ", ";
         errorString += e.errorString();
     }
-    QMessageBox::warning(parent, tr("HTTP"), tr("SSL error(s) has occurred: %1").arg(errorString));
+
+    const QString title = tr("HTTP");
+    const QString message =
+            tr("SSL error(s) has occurred: %1").arg(errorString);
+    QCoreApplication *application = QCoreApplication::instance();
+    if (application
+        && QThread::currentThread() != application->thread()) {
+        const QByteArray titleUtf8 = title.toUtf8();
+        const QByteArray messageUtf8 = message.toUtf8();
+        {
+            const std::lock_guard<std::mutex> lock(
+                queuedSslWarningsMutex);
+            queuedSslWarnings.push_back({
+                titleUtf8.toStdString(), messageUtf8.toStdString()});
+        }
+        QMetaObject::invokeMethod(
+            application,
+            []() { showQueuedSslWarnings(); },
+            Qt::QueuedConnection);
+        return;
+    }
+    QMessageBox::warning(parent, title, message);
     //reply->ignoreSslErrors(); // disabled for security reasons
 }
 
@@ -1751,25 +1965,783 @@ CloudServiceFactory::upgrade(QString name)
     }
 }
 
+void
+CloudServiceFactory::saveSettings(
+        CloudService *service,
+        Context *context)
+{
+    if (!service) return;
+
+    QString athlete =
+            service->property("_gcAthleteName").toString();
+    if (athlete.isEmpty()
+        && context
+        && QThread::currentThread() == context->thread()
+        && Context::isValid(context)
+        && context->athlete) {
+        athlete = context->athlete->cyclist;
+    }
+    if (athlete.isEmpty()) return;
+
+    const QVariant initialProperty =
+            service->property("_gcInitialConfiguration");
+    const bool hasInitialConfiguration = initialProperty.isValid();
+    const QVariantMap initialConfiguration = initialProperty.toMap();
+    auto changedFromInitial =
+            [&initialConfiguration, hasInitialConfiguration](
+                    const QString &key, const QString &value) {
+        return !hasInitialConfiguration
+            || !initialConfiguration.contains(key)
+            || initialConfiguration.value(key).toString() != value;
+    };
+
+    QHash<QString, QString> updates;
+    QString clearedUrlKey;
+    QString clearedUrlDefault;
+    QHashIterator<CloudService::CloudServiceSetting, QString> wanted(
+        service->settings);
+    while (wanted.hasNext()) {
+        wanted.next();
+        const QString key = wanted.value().contains(QStringLiteral("::"))
+                ? wanted.value().split(QStringLiteral("::")).at(0)
+                : wanted.value();
+        const QString value =
+                service->getSetting(key, QString()).toString();
+        const bool clearsUrlToDefault =
+                wanted.key() == CloudService::URL
+                && value.isEmpty()
+                && hasInitialConfiguration
+                && initialConfiguration.contains(key)
+                && !initialConfiguration.value(key)
+                        .toString().isEmpty();
+        if ((!value.isEmpty() || clearsUrlToDefault)
+            && changedFromInitial(key, value)) {
+            updates.insert(key, value);
+            if (clearsUrlToDefault) {
+                clearedUrlKey = key;
+                clearedUrlDefault = service->settings.value(
+                    CloudService::DefaultURL);
+            }
+        }
+    }
+
+    const QString syncStartupKey =
+            service->syncOnStartupSettingName();
+    const QString syncStartup =
+            service->getSetting(syncStartupKey, QString()).toString();
+    if (!syncStartup.isEmpty()
+        && changedFromInitial(syncStartupKey, syncStartup)) {
+        updates.insert(syncStartupKey, syncStartup);
+    }
+
+    const QString syncImportKey =
+            service->syncOnImportSettingName();
+    const QString syncImport =
+            service->getSetting(syncImportKey, QString()).toString();
+    if (!syncImport.isEmpty()
+        && changedFromInitial(syncImportKey, syncImport)) {
+        updates.insert(syncImportKey, syncImport);
+    }
+
+    if (updates.isEmpty()) return;
+
+    QVariantMap nextConfiguration = initialConfiguration;
+    for (auto update = updates.cbegin();
+         update != updates.cend(); ++update) {
+        nextConfiguration.insert(
+            update.key(),
+            update.key() == clearedUrlKey
+                ? clearedUrlDefault
+                : update.value());
+    }
+    if (!clearedUrlKey.isEmpty())
+        service->setSetting(clearedUrlKey, clearedUrlDefault);
+
+    QCoreApplication *application = QCoreApplication::instance();
+    if (application
+        && QThread::currentThread() != application->thread()) {
+        QueuedCloudSettingsTransaction transaction;
+        transaction.athlete = athlete.toUtf8().toStdString();
+        QSet<QString> expectedKeys;
+        for (auto setting = service->settings.cbegin();
+             setting != service->settings.cend(); ++setting) {
+            if (setting.key() == CloudService::DefaultURL) continue;
+            const QString key =
+                    setting.value().contains(QStringLiteral("::"))
+                    ? setting.value().split(QStringLiteral("::")).at(0)
+                    : setting.value();
+            const QString defaultValue =
+                    setting.key() == CloudService::URL
+                    ? service->settings.value(CloudService::DefaultURL)
+                    : QString();
+            expectedKeys.insert(key);
+            transaction.expectations.push_back({
+                key.toUtf8().toStdString(),
+                initialConfiguration.value(key)
+                    .toString().toUtf8().toStdString(),
+                defaultValue.toUtf8().toStdString(),
+                key.startsWith(
+                    QStringLiteral("<athlete"))});
+        }
+        for (auto update = updates.cbegin();
+             update != updates.cend(); ++update) {
+            transaction.updates.push_back({
+                update.key().toUtf8().toStdString(),
+                update.value().toUtf8().toStdString(),
+                update.key().startsWith(
+                    QStringLiteral("<athlete"))});
+            if (!expectedKeys.contains(update.key())) {
+                const QString defaultValue =
+                        update.key() == syncStartupKey
+                        || update.key() == syncImportKey
+                        ? QStringLiteral("false")
+                        : QString();
+                transaction.expectations.push_back({
+                    update.key().toUtf8().toStdString(),
+                    initialConfiguration.value(update.key())
+                        .toString().toUtf8().toStdString(),
+                    defaultValue.toUtf8().toStdString(),
+                    update.key().startsWith(
+                        QStringLiteral("<athlete"))});
+            }
+        }
+        {
+            const std::lock_guard<std::mutex> lock(
+                queuedCloudSettingsMutex);
+            queuedCloudSettings.push_back(std::move(transaction));
+        }
+        service->setProperty(
+            "_gcInitialConfiguration", nextConfiguration);
+        QMetaObject::invokeMethod(
+            application,
+            []() { applyQueuedCloudSettings(); },
+            Qt::QueuedConnection);
+        return;
+    }
+
+    for (auto update = updates.cbegin();
+         update != updates.cend(); ++update) {
+        if (update.key().startsWith(QStringLiteral("<athlete")))
+            appsettings->setCValue(
+                athlete, update.key(), update.value());
+        else
+            appsettings->setValue(update.key(), update.value());
+#ifdef GC_WANT_ALLDEBUG
+        qDebug() << "factory save setting:"
+                 << update.key() << update.value();
+#endif
+    }
+    service->setProperty(
+        "_gcInitialConfiguration", nextConfiguration);
+}
+
 //
 // Auto download
 //
+namespace {
+
+struct CloudAutoDownloadPlan
+{
+    QList<CloudService *> providers;
+    QSet<QString> rideFiles;
+    QDateTime now;
+    int requestTimeoutMs = 30000;
+    quint64 generation = 0;
+};
+
+} // namespace
+
+class CloudServiceAutoDownloadWorker final : public QObject
+{
+public:
+    CloudServiceAutoDownloadWorker(
+            CloudServiceAutoDownload *owner,
+            CloudAutoDownloadPlan plan)
+        : owner(owner),
+          providers(std::move(plan.providers)),
+          rideFiles(std::move(plan.rideFiles)),
+          now(std::move(plan.now)),
+          requestTimeoutMs(plan.requestTimeoutMs),
+          generation(plan.generation),
+          timeoutTimer(this),
+          interruptionTimer(this),
+          nextRequestTimer(this)
+    {
+        timeoutTimer.setSingleShot(true);
+        connect(
+            &timeoutTimer, &QTimer::timeout, this,
+            [this]() { requestTimedOut(); });
+
+        interruptionTimer.setInterval(10);
+        connect(
+            &interruptionTimer, &QTimer::timeout, this,
+            [this]() {
+                if (isCancelled()) cancel();
+            });
+
+        nextRequestTimer.setSingleShot(true);
+        connect(
+            &nextRequestTimer, &QTimer::timeout, this,
+            [this]() { startNextRequest(); });
+    }
+
+    ~CloudServiceAutoDownloadWorker() override
+    {
+        cleanup();
+    }
+
+    bool needsEventLoop() const
+    {
+        return running;
+    }
+
+    void begin()
+    {
+        if (running) return;
+        running = true;
+        interruptionTimer.start();
+
+        if (isCancelled()) {
+            finish(true);
+            return;
+        }
+
+        const QDate firstDate = now.addDays(-30).date();
+        const QDate lastDate = now.date();
+
+        for (int providerIndex = 0;
+             providerIndex < providers.size();
+             ++providerIndex) {
+            if (isCancelled()) {
+                finish(true);
+                return;
+            }
+
+            CloudService *service = providers.at(providerIndex);
+            if (!service) continue;
+
+            connect(
+                service, &CloudService::readComplete, this,
+                [this](
+                        QByteArray *data,
+                        const QString &name,
+                        const QString &message) {
+                    readCompleted(data, name, message);
+                });
+
+            QStringList errors;
+            beginProviderCall(service);
+            const bool opened = service->open(errors);
+            endProviderCall(service);
+
+            if (isCancelled()) {
+                finish(true);
+                return;
+            }
+            if (!opened) {
+                deleteProvider(providerIndex);
+                continue;
+            }
+            openedProviders.insert(service);
+
+            beginProviderCall(service);
+            const QString home = service->home();
+            endProviderCall(service);
+            if (isCancelled()) {
+                finish(true);
+                return;
+            }
+
+            beginProviderCall(service);
+            const QList<CloudServiceEntry *> found =
+                    service->readdir(
+                        home, errors, now.addDays(-30), now);
+            endProviderCall(service);
+            if (isCancelled()) {
+                finish(true);
+                return;
+            }
+
+            bool needed = false;
+            for (CloudServiceEntry *entry : found) {
+                QDateTime rideDateTime;
+                if (!RideFile::parseRideFileName(
+                        entry->name, &rideDateTime)) {
+                    continue;
+                }
+                if (rideDateTime.date() < firstDate
+                    || rideDateTime.date() > lastDate) {
+                    continue;
+                }
+                if (rideFiles.contains(entry->name.left(16))) continue;
+
+                needed = true;
+                requests.push_back(
+                    std::make_unique<DownloadRequest>(entry, service));
+            }
+
+            if (!needed) {
+                deleteProvider(providerIndex);
+            }
+        }
+
+        startNextRequest();
+    }
+
+    void cancel()
+    {
+        cancelled = true;
+        if (providerCallActive) {
+            abortActiveProvider();
+            return;
+        }
+        if (running) finish(true);
+        else QThread::currentThread()->quit();
+    }
+
+private:
+    struct DownloadRequest
+    {
+        DownloadRequest(
+                CloudServiceEntry *entry,
+                CloudService *provider)
+            : entry(entry), provider(provider)
+        {
+        }
+
+        CloudServiceEntry *entry = nullptr;
+        CloudService *provider = nullptr;
+        std::unique_ptr<QByteArray> data;
+        bool delivered = false;
+    };
+
+    bool isCancelled() const
+    {
+        return cancelled
+            || QThread::currentThread()->isInterruptionRequested();
+    }
+
+    void beginProviderCall(CloudService *service)
+    {
+        Q_ASSERT(!providerCallActive);
+        providerCallActive = service;
+    }
+
+    void endProviderCall(CloudService *service)
+    {
+        Q_ASSERT(providerCallActive == service);
+        providerCallActive = nullptr;
+        if (running
+            && advanceQueued
+            && !nextRequestTimer.isActive()) {
+            nextRequestTimer.start(0);
+        }
+    }
+
+    void abortProvider(CloudService *service)
+    {
+        if (!service || abortingProvider) return;
+
+        abortingProvider = true;
+        service->abortRequests();
+        abortingProvider = false;
+    }
+
+    void abortActiveProvider()
+    {
+        abortProvider(providerCallActive);
+    }
+
+    void quiesceProviders(bool abort)
+    {
+        for (CloudService *service : providers) {
+            if (!service) continue;
+            disconnect(service, nullptr, this, nullptr);
+            if (abort) abortProvider(service);
+        }
+    }
+
+    void startNextRequest()
+    {
+        if (providerCallActive) {
+            advanceQueued = true;
+            return;
+        }
+        advanceQueued = false;
+        if (!running) return;
+        if (isCancelled()) {
+            finish(true);
+            return;
+        }
+
+        const int total = int(requests.size());
+        while (nextRequest < total
+               && !requests.at(nextRequest)->provider) {
+            ++nextRequest;
+        }
+        if (nextRequest >= total) {
+            if (total > 0) {
+                postProgress(lastServiceName, 100.0, total, total);
+            }
+            finish(false);
+            return;
+        }
+
+        DownloadRequest *request = requests.at(nextRequest).get();
+        const int current = nextRequest++;
+        CloudService *provider = request->provider;
+        beginProviderCall(provider);
+        lastServiceName = provider->uiName();
+        endProviderCall(provider);
+        if (isCancelled()) {
+            finish(true);
+            return;
+        }
+        activeRequest = request;
+        postProgress(
+            lastServiceName,
+            total > 0 ? (100.0 * double(current)) / double(total) : 0.0,
+            current,
+            total);
+
+        request->data = std::make_unique<QByteArray>();
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+        cloudAutoDownloadBufferAllocated(request->data.get());
+#endif
+        requestsByData.insert(request->data.get(), request);
+
+        beginProviderCall(provider);
+        const bool started = provider->readFile(
+            request->data.get(), request->entry->name, request->entry->id);
+        endProviderCall(provider);
+
+        if (isCancelled()) {
+            finish(true);
+            return;
+        }
+
+        // Inline providers can complete before readFile returns.
+        if (request->delivered || activeRequest != request) return;
+
+        if (!started) {
+            requestsByData.remove(request->data.get());
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+            cloudAutoDownloadBufferReleased(request->data.get());
+#endif
+            request->data.reset();
+            activeRequest = nullptr;
+            queueNextRequest();
+            return;
+        }
+
+        timeoutTimer.start(requestTimeoutMs);
+    }
+
+    void queueNextRequest()
+    {
+        if (!running || advanceQueued) return;
+        advanceQueued = true;
+        if (!providerCallActive)
+            nextRequestTimer.start(0);
+    }
+
+    void requestTimedOut()
+    {
+        if (!running || !activeRequest) return;
+        DownloadRequest *timedOutRequest = activeRequest;
+        CloudService *timedOutProvider = timedOutRequest->provider;
+        activeRequest = nullptr;
+        retireProvider(timedOutProvider);
+        queueNextRequest();
+    }
+
+    void readCompleted(
+            QByteArray *data,
+            const QString &name,
+            const QString &message)
+    {
+        Q_UNUSED(message)
+        if (!running || isCancelled()) return;
+
+        const auto requestIt = requestsByData.constFind(data);
+        if (requestIt == requestsByData.cend()) {
+            qDebug() << "Autodownload: received file has no download entry";
+            return;
+        }
+
+        DownloadRequest *request = requestIt.value();
+        if (request->delivered) return;
+        request->delivered = true;
+        const CloudService::CompressionType compression =
+                request->provider->downloadCompression;
+        QMap<QString, QString> expectedSettings;
+        QMap<QString, QString> settingDefaults;
+        providerSettingsSnapshot(
+            request->provider, expectedSettings, settingDefaults);
+        QByteArray payload = std::move(*data);
+        postDownloaded(
+            std::move(payload), name, compression,
+            std::move(expectedSettings),
+            std::move(settingDefaults));
+
+        if (activeRequest == request) {
+            timeoutTimer.stop();
+            activeRequest = nullptr;
+            queueNextRequest();
+        }
+    }
+
+    void postDownloaded(
+            QByteArray data,
+            QString name,
+            CloudService::CompressionType compression,
+            QMap<QString, QString> expectedSettings,
+            QMap<QString, QString> settingDefaults)
+    {
+        CloudServiceAutoDownload::QueuedEvent event;
+        event.type = CloudServiceAutoDownload::QueuedEventType::Downloaded;
+        event.generation = generation;
+        event.data = std::move(data);
+        event.text = std::move(name);
+        event.compression = compression;
+        event.expectedSettings = std::move(expectedSettings);
+        event.settingDefaults = std::move(settingDefaults);
+        owner->enqueueEvent(std::move(event));
+    }
+
+    void providerSettingsSnapshot(
+            CloudService *service,
+            QMap<QString, QString> &snapshot,
+            QMap<QString, QString> &defaults) const
+    {
+        if (!service) return;
+
+        for (auto setting = service->settings.cbegin();
+             setting != service->settings.cend(); ++setting) {
+            if (setting.key() == CloudService::DefaultURL) continue;
+            const QString key =
+                    setting.value().contains(QStringLiteral("::"))
+                    ? setting.value().split(QStringLiteral("::")).at(0)
+                    : setting.value();
+            snapshot.insert(
+                key, service->getSetting(key, QString()).toString());
+            if (setting.key() == CloudService::URL) {
+                defaults.insert(
+                    key,
+                    service->settings.value(CloudService::DefaultURL));
+            }
+        }
+        const QString startupKey = service->syncOnStartupSettingName();
+        snapshot.insert(
+            startupKey,
+            service->getSetting(
+                startupKey, QStringLiteral("false")).toString());
+        defaults.insert(startupKey, QStringLiteral("false"));
+    }
+
+    void postProgress(
+            const QString &service,
+            double progress,
+            int current,
+            int total)
+    {
+        CloudServiceAutoDownload::QueuedEvent event;
+        event.type = CloudServiceAutoDownload::QueuedEventType::Progress;
+        event.generation = generation;
+        event.text = service;
+        event.progress = progress;
+        event.current = current;
+        event.total = total;
+        owner->enqueueEvent(std::move(event));
+    }
+
+    void finish(bool wasCancelled)
+    {
+        if (!running) return;
+        running = false;
+        timeoutTimer.stop();
+        interruptionTimer.stop();
+        nextRequestTimer.stop();
+        activeRequest = nullptr;
+        quiesceProviders(wasCancelled);
+        QThread::currentThread()->quit();
+
+        CloudServiceAutoDownload::QueuedEvent event;
+        event.type = CloudServiceAutoDownload::QueuedEventType::Finished;
+        event.generation = generation;
+        event.cancelled = wasCancelled;
+        owner->enqueueEvent(std::move(event));
+    }
+
+    void deleteProvider(int providerIndex)
+    {
+        CloudService *service = providers.at(providerIndex);
+        if (!service) return;
+
+        disconnect(service, nullptr, this, nullptr);
+        abortProvider(service);
+        beginProviderCall(service);
+        if (openedProviders.remove(service)) service->close();
+        endProviderCall(service);
+        delete service;
+        providers[providerIndex] = nullptr;
+    }
+
+    void retireProvider(CloudService *service)
+    {
+        if (!service || retiredProviders.contains(service)) return;
+
+        retiredProviders.insert(service);
+        disconnect(service, nullptr, this, nullptr);
+        abortProvider(service);
+
+        for (const std::unique_ptr<DownloadRequest> &request : requests) {
+            if (request->provider != service) continue;
+            request->provider = nullptr;
+            if (request->data) {
+                requestsByData.remove(request->data.get());
+            }
+        }
+    }
+
+    void cleanup()
+    {
+        if (cleaning) return;
+        cleaning = true;
+        timeoutTimer.stop();
+        interruptionTimer.stop();
+        nextRequestTimer.stop();
+        activeRequest = nullptr;
+
+        for (int i = 0; i < providers.size(); ++i) {
+            deleteProvider(i);
+        }
+        providers.clear();
+        openedProviders.clear();
+        retiredProviders.clear();
+        requestsByData.clear();
+
+        for (const std::unique_ptr<DownloadRequest> &request : requests) {
+            if (!request->data) continue;
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+            cloudAutoDownloadBufferReleased(request->data.get());
+#endif
+            request->data.reset();
+        }
+        requests.clear();
+        nextRequest = 0;
+        advanceQueued = false;
+        cleaning = false;
+    }
+
+    CloudServiceAutoDownload *owner = nullptr;
+    QList<CloudService *> providers;
+    QSet<CloudService *> openedProviders;
+    QSet<CloudService *> retiredProviders;
+    QSet<QString> rideFiles;
+    QDateTime now;
+    int requestTimeoutMs = 30000;
+    quint64 generation = 0;
+    QTimer timeoutTimer;
+    QTimer interruptionTimer;
+    QTimer nextRequestTimer;
+    std::vector<std::unique_ptr<DownloadRequest>> requests;
+    QHash<QByteArray *, DownloadRequest *> requestsByData;
+    DownloadRequest *activeRequest = nullptr;
+    CloudService *providerCallActive = nullptr;
+    int nextRequest = 0;
+    QString lastServiceName;
+    bool running = false;
+    bool cancelled = false;
+    bool advanceQueued = false;
+    bool abortingProvider = false;
+    bool cleaning = false;
+};
+
+CloudServiceAutoDownload::CloudServiceAutoDownload(Context *context)
+    : context(context)
+{
+}
+
+void
+CloudServiceAutoDownload::enqueueEvent(QueuedEvent event)
+{
+    bool scheduleDispatch = false;
+    {
+        const std::lock_guard<std::mutex> lock(queuedEventsMutex);
+        queuedEvents.push_back(std::move(event));
+        if (!queuedEventDispatchPending) {
+            queuedEventDispatchPending = true;
+            scheduleDispatch = true;
+        }
+    }
+
+    if (scheduleDispatch) {
+        QMetaObject::invokeMethod(
+            this, "dispatchQueuedEvents", Qt::QueuedConnection);
+    }
+}
+
+void
+CloudServiceAutoDownload::dispatchQueuedEvents()
+{
+    QueuedEvent event;
+    {
+        const std::lock_guard<std::mutex> lock(queuedEventsMutex);
+        if (queuedEvents.empty()) {
+            queuedEventDispatchPending = false;
+            return;
+        }
+        event = std::move(queuedEvents.front());
+        queuedEvents.pop_front();
+    }
+
+    QPointer<CloudServiceAutoDownload> guard(this);
+    switch (event.type) {
+    case QueuedEventType::Downloaded:
+        downloaded(
+            event.generation, std::move(event.data),
+            std::move(event.text), event.compression,
+            std::move(event.expectedSettings),
+            std::move(event.settingDefaults));
+        break;
+    case QueuedEventType::Progress:
+        downloadProgress(
+            event.generation, std::move(event.text),
+            event.progress, event.current, event.total);
+        break;
+    case QueuedEventType::Finished:
+        downloadFinished(event.generation, event.cancelled);
+        break;
+    }
+    if (!guard) return;
+
+    bool scheduleNext = false;
+    {
+        const std::lock_guard<std::mutex> lock(queuedEventsMutex);
+        if (queuedEvents.empty())
+            queuedEventDispatchPending = false;
+        else
+            scheduleNext = true;
+    }
+    if (scheduleNext) {
+        QMetaObject::invokeMethod(
+            this, "dispatchQueuedEvents", Qt::QueuedConnection);
+    }
+}
+
 void
 CloudServiceAutoDownload::autoDownload()
 {
-    if (initial) {
-        initial = false;
-
-        // starts a thread
-        start();
-    }
+    if (!initial) return;
+    initial = false;
+    startDownload();
 }
 
 void
 CloudServiceAutoDownload::checkDownload()
 {
-    // manually called to check
-    start();
+    startDownload();
 }
 
 CloudServiceAutoDownload::~CloudServiceAutoDownload()
@@ -1780,245 +2752,193 @@ CloudServiceAutoDownload::~CloudServiceAutoDownload()
 void
 CloudServiceAutoDownload::cancelAndWait()
 {
+    ++generation;
+    downloadActive = false;
+
+    if (!isRunning()) {
+        if (QThread::currentThread() != this) wait();
+        worker = nullptr;
+        QCoreApplication *application = QCoreApplication::instance();
+        if (application
+            && QThread::currentThread() == application->thread()) {
+            applyQueuedCloudSettings();
+        }
+        return;
+    }
+
     requestInterruption();
-    if (QThread::currentThread() != this) wait();
+    if (QThread::currentThread() == this) {
+        if (worker) worker->cancel();
+        return;
+    }
+
+    wait();
+    worker = nullptr;
+    QCoreApplication *application = QCoreApplication::instance();
+    if (application
+        && QThread::currentThread() == application->thread()) {
+        applyQueuedCloudSettings();
+    }
 }
 
 void
 CloudServiceAutoDownload::run()
 {
-    // There are cases when athletes are opened and closed in quick succession that lead
-    // to the context becoming invalid, so we need to protect all uses of context.
-    if (isInterruptionRequested() || !Context::isValid(context)) return;
+    CloudServiceAutoDownloadWorker *activeWorker = worker;
+    if (!activeWorker) return;
 
-    // this is a separate thread and can run in parallel with the main gui
-    // so we can loop through services and download the data needed.
-    // we notify the main gui via the usual signals.
-
-    // get a list of services to sync from
-    QStringList worklist;
-    foreach(QString name, CloudServiceFactory::instance().serviceNames()) {
-        if (isInterruptionRequested() || !Context::isValid(context)) return;
-        if (appsettings->cvalue(context->athlete->cyclist, CloudServiceFactory::instance().service(name)->syncOnStartupSettingName(), "false").toString() == "true") {
-            worklist << name;
-        }
-    }
-
-    //
-    // generate a worklist to process
-    //
-    if (worklist.count()) {
-
-        // Start means we are looking for downloads to do
-        if (!isInterruptionRequested() && Context::isValid(context)) context->notifyAutoDownloadStart();
-
-        // workthrough
-        for(int i=0; i<worklist.count(); i++) {
-
-            if (isInterruptionRequested() || !Context::isValid(context)) break;
-
-            // instantiate
-            CloudService *service = (Context::isValid(context)) ? CloudServiceFactory::instance().newService(worklist[i], context) : nullptr;
-            if (service == nullptr) continue;
-
-            // we want to trap received files
-            connect(service, SIGNAL(readComplete(QByteArray*,QString,QString)), this, SLOT(readComplete(QByteArray*,QString,QString)));
-
-            // open connection
-            QStringList errors;
-            if (service->open(errors) == false) {
-                delete service;
-                continue;
-            }
-
-            if (isInterruptionRequested() || !Context::isValid(context)) {
-                service->close();
-                delete service;
-                break;
-            }
-
-            // get list of entries
-            QDateTime now = QDateTime::currentDateTime();
-            QList<CloudServiceEntry*> found = service->readdir(service->home(), errors, now.addDays(-30), now);
-
-            if (isInterruptionRequested() || !Context::isValid(context)) {
-                service->close();
-                delete service;
-                break;
-            }
-
-            // some were found, so lets see if they match
-            if (found.count()) {
-
-                QStringList rideFiles; // what we have already
-
-                Specification specification;
-                specification.setDateRange(DateRange(now.addDays(-30).date(), now.date()));
-
-                QVector<RideItem*> rides = (Context::isValid(context)) ? context->athlete->rideCache->rides() : QVector<RideItem*> {};
-                foreach(RideItem *item, rides) {
-                    if (specification.pass(item))
-                        rideFiles << QFileInfo(item->fileName).baseName().mid(0,16);
-                }
-
-                // eliminate matches
-                bool need=false;
-                foreach(CloudServiceEntry *entry, found) {
-
-                    QDateTime ridedatetime;
-
-                    // skip files that aren't ride files
-                    if (!RideFile::parseRideFileName(entry->name, &ridedatetime)) continue;
-
-                    // skip files that aren't in range
-                    if (ridedatetime.date() < now.addDays(-30).date() || ridedatetime.date() > now.date()) continue;
-
-                    // skip files we already have
-                    bool got=false;
-                    foreach(QString name, rideFiles)
-                        if (entry->name.startsWith(name))
-                            got=true;
-
-                    // we want it !
-                    if (!got) {
-                        need = true; // need to download, so don't zap the service
-
-                        CloudServiceDownloadEntry add;
-                        add.state = CloudServiceDownloadEntry::Pending;
-                        add.entry = entry;
-                        add.provider = service;
-                        downloadlist << add;
-                    }
-                }
-
-                if (!need) {
-
-                    // none found that we need
-                    service->close();
-                    delete service;
-                } else {
-                    providers << service; // so we can clean up later
-                }
-
-            } else {
-
-                // none found
-                service->close();
-                delete service;
-            }
-        }
-    }
-
-    //
-    // Worker loop to process the list, blocking on each download
-    // and timeout if no response in 30 seconds for each
-    //
-    // Since this is asynchronous, the actual data is processed
-    // by the receivedFile method
-    //
-
-    double progress=0;
-    double inc = 100.0f / double(downloadlist.count());
-    for(int i=0; i<downloadlist.count(); i++) {
-
-        if (isInterruptionRequested() || !Context::isValid(context)) break;
-
-        // update progress indicator
-        if (Context::isValid(context)) context->notifyAutoDownloadProgress(downloadlist[i].provider->uiName(), progress, i, downloadlist.count());
-
-        CloudServiceDownloadEntry download= downloadlist[i];
-
-        // we block on read completing
-        QEventLoop loop;
-        connect(download.provider, SIGNAL(readComplete(QByteArray*,QString,QString)), &loop, SLOT(quit()));
-        QTimer interruptionTimer;
-        interruptionTimer.setInterval(10);
-        connect(&interruptionTimer, &QTimer::timeout, &loop,
-                [this, &loop]() {
-                    if (isInterruptionRequested()) loop.quit();
-                });
-        interruptionTimer.start();
-        QTimer::singleShot(30000,&loop, SLOT(quit())); // timeout after 30 seconds
-
-        // preallocate
-        downloadlist[i].data = new QByteArray;
-
-        download.provider->readFile(downloadlist[i].data, download.entry->name, download.entry->id);
-
-        // block on timeout or readComplete...
-        if (!isInterruptionRequested()) loop.exec();
-        if (isInterruptionRequested()) break;
-
-        // update progress
-        progress += inc;
-
-        // if last one we need to signal done.
-        if ((i+1) == downloadlist.count()) {
-            if (Context::isValid(context)) context->notifyAutoDownloadProgress(download.provider->uiName(), progress, i+1, downloadlist.count());
-        }
-    }
-
-    // time to see completion
-    if (!isInterruptionRequested()) {
-        QEventLoop completionDelay;
-        QTimer interruptionTimer;
-        interruptionTimer.setInterval(10);
-        connect(&interruptionTimer, &QTimer::timeout, &completionDelay,
-                [this, &completionDelay]() {
-                    if (isInterruptionRequested()) completionDelay.quit();
-                });
-        interruptionTimer.start();
-        QTimer::singleShot(3000, &completionDelay, &QEventLoop::quit);
-        if (!isInterruptionRequested()) completionDelay.exec();
-    }
-
-    // all done, close the sync notification, regardless of if anything was downloaded
-    if (!isInterruptionRequested() && Context::isValid(context)) context->notifyAutoDownloadEnd();
-
-    // remove providers
-    foreach(CloudService *s, providers) {
-        disconnect(s, nullptr, this, nullptr);
-        s->close();
-        delete s;
-    }
-
-    // in case we restart
-    providers.clear();
-    downloadlist.clear();
-
+    activeWorker->begin();
+    if (activeWorker->needsEventLoop()) exec();
+    delete activeWorker;
 }
 
 void
-CloudServiceAutoDownload::readComplete(QByteArray*data,QString name,QString)
+CloudServiceAutoDownload::startDownload()
 {
-    // find the entry I belong too
-    CloudServiceDownloadEntry entry;
-    bool found=false;
-    foreach(CloudServiceDownloadEntry p, downloadlist) {
-        if (p.data == data) {
-            entry=p;
-            found=true;
+    if (downloadActive || isRunning() || !Context::isValid(context)) return;
+
+    CloudAutoDownloadPlan plan;
+    plan.now = QDateTime::currentDateTime();
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+    plan.requestTimeoutMs = cloudAutoDownloadRequestTimeoutMs();
+#endif
+
+    CloudServiceFactory &factory = CloudServiceFactory::instance();
+    const QString athlete = context->athlete->cyclist;
+    bool hasEnabledService = false;
+
+    for (const QString &name : factory.serviceNames()) {
+        const CloudService *definition = factory.service(name);
+        if (!definition) continue;
+        if (appsettings->cvalue(
+                athlete,
+                definition->syncOnStartupSettingName(),
+                QStringLiteral("false")).toString()
+            != QStringLiteral("true")) {
+            continue;
+        }
+
+        hasEnabledService = true;
+        if (CloudService *service = factory.newService(name, context)) {
+            plan.providers.append(service);
         }
     }
 
-    if (!found) {
-        qDebug() <<"Autodownload: received file has no download entry";
+    if (!hasEnabledService) return;
+
+    if (context->athlete->rideCache) {
+        Specification specification;
+        specification.setDateRange(DateRange(
+            plan.now.addDays(-30).date(), plan.now.date()));
+        const QVector<RideItem *> rides =
+            context->athlete->rideCache->rides();
+        for (RideItem *item : rides) {
+            if (specification.pass(item)) {
+                plan.rideFiles.insert(
+                    QFileInfo(item->fileName).baseName().left(16));
+            }
+        }
+    }
+
+    for (auto service = plan.providers.begin();
+         service != plan.providers.end();) {
+        (*service)->moveToThread(this);
+        if ((*service)->thread() != this) {
+            qWarning() << "Autodownload: cannot move provider to worker";
+            delete *service;
+            service = plan.providers.erase(service);
+        } else {
+            ++service;
+        }
+    }
+
+    plan.generation = ++generation;
+    worker = new CloudServiceAutoDownloadWorker(this, std::move(plan));
+    worker->moveToThread(this);
+
+    downloadActive = true;
+    start();
+    context->notifyAutoDownloadStart();
+}
+
+void
+CloudServiceAutoDownload::downloadProgress(
+        quint64 runGeneration,
+        QString service,
+        double progress,
+        int current,
+        int total)
+{
+    if (runGeneration != generation || !Context::isValid(context)) return;
+    context->notifyAutoDownloadProgress(
+        service, progress, current, total);
+}
+
+void
+CloudServiceAutoDownload::downloadFinished(
+        quint64 runGeneration,
+        bool cancelled)
+{
+    if (runGeneration != generation) return;
+    if (QThread::currentThread() != this) wait();
+
+    worker = nullptr;
+    downloadActive = false;
+    applyQueuedCloudSettings();
+    if (!cancelled && Context::isValid(context)) {
+        context->notifyAutoDownloadEnd();
+    }
+}
+
+void
+CloudServiceAutoDownload::readComplete(
+        QByteArray *data,
+        QString name,
+        QString message)
+{
+    Q_UNUSED(data)
+    Q_UNUSED(name)
+    Q_UNUSED(message)
+}
+
+void
+CloudServiceAutoDownload::downloaded(
+        quint64 runGeneration,
+        QByteArray data,
+        QString name,
+        CloudService::CompressionType compression,
+        QMap<QString, QString> expectedSettings,
+        QMap<QString, QString> settingDefaults)
+{
+    if (runGeneration != generation) return;
+    QPointer<Context> activeContext(context);
+    const auto contextIsValid = [&activeContext]() {
+        Context *current = activeContext.data();
+        return current
+            && Context::isValid(current)
+            && current->athlete;
+    };
+    if (!contextIsValid()) return;
+
+    applyQueuedCloudSettings();
+    if (!cloudSettingsMatch(
+            activeContext->athlete->cyclist,
+            expectedSettings, settingDefaults)) {
+        qWarning() << "Autodownload: cloud settings changed during download";
         return;
     }
 
-    // ok. so we now know what request it was for
-    // so can process the result
-    // uncompress and parse, note the filename is passed and may be
-    // different to what we asked for (sometimes the data is converted
-    // from one file format to another).
+    // The provider and its worker-owned buffer can already be gone here.
     QStringList errors;
-    RideFile *ride = entry.provider->uncompressRide(data, name, errors);
-
-    // free up regardless
-    delete data;
+    RideFile *ride = CloudService::uncompressRide(
+        activeContext.data(), compression, data, std::move(name), errors);
 
     // can't process the content received.
-    if (ride == NULL) return;
+    if (!ride) return;
+    if (!contextIsValid()) {
+        delete ride;
+        return;
+    }
 
     // lets save this one away as json with the right filename
     QDateTime ridedatetime = ride->startTime();
@@ -2032,7 +2952,9 @@ CloudServiceAutoDownload::readComplete(QByteArray*data,QString name,QString)
                            .arg ( ridedatetime.time().minute(), 2, 10, zero )
                            .arg ( ridedatetime.time().second(), 2, 10, zero );
 
-    QString filename = (Context::isValid(context)) ? context->athlete->home->activities().canonicalPath() + "/" + targetnosuffix + ".json" : "";
+    const QString filename =
+            activeContext->athlete->home->activities().canonicalPath()
+            + QLatin1Char('/') + targetnosuffix + QStringLiteral(".json");
 
     // exists? -- totally should never happen unless readdir timestamp mismatches actual ride
     //            could happen if same file available at two services XXX should check above... XXX
@@ -2045,24 +2967,48 @@ CloudServiceAutoDownload::readComplete(QByteArray*data,QString name,QString)
 
     // process linked defaults
     GlobalContext::context()->rideMetadata->setLinkedDefaults(ride);
+    if (!contextIsValid()) {
+        delete ride;
+        return;
+    }
 
     // run the processor first... import
     DataProcessorFactory::instance().autoProcess(ride, "Auto", "Import");
+    if (!contextIsValid()) {
+        delete ride;
+        return;
+    }
     ride->recalculateDerivedSeries();
     // now metrics have been calculated
     DataProcessorFactory::instance().autoProcess(ride, "Save", "ADD");
+    if (!contextIsValid()) {
+        delete ride;
+        return;
+    }
 
     JsonFileReader reader;
     QFile file(filename);
     QString writeError;
     const bool saved = publishActivityBeforeCacheUpdate(
-        [&](QString &stepError) {
+        [activeContext, &reader, ride, &file](QString &stepError) {
+            Context *current = activeContext.data();
+            if (!current
+                || !Context::isValid(current)
+                || !current->athlete) {
+                stepError = QObject::tr(
+                    "Athlete closed during cloud import.");
+                return false;
+            }
             return reader.writeRideFile(
-                context, ride, file, stepError, false);
+                current, ride, file, stepError, false);
         },
-        [&]() {
-            if (Context::isValid(context)) {
-                context->athlete->addRide(fileinfo.fileName(), true, false);
+        [activeContext, &fileinfo]() {
+            Context *current = activeContext.data();
+            if (current
+                && Context::isValid(current)
+                && current->athlete) {
+                current->athlete->addRide(
+                    fileinfo.fileName(), true, false);
             }
         },
         writeError);
@@ -2074,7 +3020,6 @@ CloudServiceAutoDownload::readComplete(QByteArray*data,QString name,QString)
     }
 
 }
-
 
 CloudServiceAutoDownloadWidget::CloudServiceAutoDownloadWidget(Context *context,QWidget *parent) :
     QWidget(parent), context(context), state(Dormant)

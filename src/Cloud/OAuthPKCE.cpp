@@ -17,6 +17,7 @@
  */
 
 #include "OAuthPKCE.h"
+#include "NetworkReplyWait.h"
 
 #include <QTcpServer>
 #include <QTcpSocket>
@@ -28,6 +29,7 @@
 #include <QRandomGenerator>
 #include <QEventLoop>
 #include <QTimer>
+#include <QThread>
 #include <QUrl>
 #include <QUrlQuery>
 #include <QJsonDocument>
@@ -265,9 +267,23 @@ OAuthPKCE::exchangeCodeForTokens(const QString &code, const QString &codeVerifie
 
     QNetworkReply *reply = nam.post(request, params.query(QUrl::FullyEncoded).toUtf8());
 
-    QEventLoop loop;
-    connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-    loop.exec();
+    QThread *thread = QThread::currentThread();
+    const NetworkReplyWaitResult waitResult =
+            waitForNetworkReply(
+                reply, timeout_ * 1000,
+                [thread]() {
+                    return thread->isInterruptionRequested();
+                });
+    if (waitResult == NetworkReplyWaitResult::Interrupted) {
+        errorString_ = tr("Token exchange cancelled.");
+        reply->deleteLater();
+        return false;
+    }
+    if (waitResult == NetworkReplyWaitResult::TimedOut) {
+        errorString_ = tr("Token exchange timed out.");
+        reply->deleteLater();
+        return false;
+    }
 
     if (reply->error() != QNetworkReply::NoError) {
         errorString_ = tr("Token exchange failed: %1").arg(reply->errorString());
@@ -310,6 +326,20 @@ OAuthPKCE::refreshAccessToken(const QString &tokenUrl, const QString &clientId,
                                QString &newAccessToken, QString &newRefreshToken,
                                int &expiresIn, QString &error)
 {
+    return refreshAccessTokenWithTimeout(
+        tokenUrl, clientId, currentRefreshToken,
+        newAccessToken, newRefreshToken, expiresIn, error, 30000);
+}
+
+bool
+OAuthPKCE::refreshAccessTokenWithTimeout(
+        const QString &tokenUrl,
+        const QString &clientId,
+        const QString &currentRefreshToken,
+        QString &newAccessToken, QString &newRefreshToken,
+        int &expiresIn, QString &error,
+        int timeoutMs)
+{
     QNetworkAccessManager nam;
     QUrlQuery params;
     params.addQueryItem("grant_type", "refresh_token");
@@ -322,9 +352,23 @@ OAuthPKCE::refreshAccessToken(const QString &tokenUrl, const QString &clientId,
 
     QNetworkReply *reply = nam.post(request, params.query(QUrl::FullyEncoded).toUtf8());
 
-    QEventLoop loop;
-    connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
-    loop.exec();
+    QThread *thread = QThread::currentThread();
+    const NetworkReplyWaitResult waitResult =
+            waitForNetworkReply(
+                reply, timeoutMs,
+                [thread]() {
+                    return thread->isInterruptionRequested();
+                });
+    if (waitResult == NetworkReplyWaitResult::Interrupted) {
+        error = QObject::tr("Token refresh cancelled.");
+        reply->deleteLater();
+        return false;
+    }
+    if (waitResult == NetworkReplyWaitResult::TimedOut) {
+        error = QObject::tr("Token refresh timed out.");
+        reply->deleteLater();
+        return false;
+    }
 
     if (reply->error() != QNetworkReply::NoError) {
         error = QObject::tr("Token refresh failed: %1").arg(reply->errorString());

@@ -57,6 +57,10 @@ Strava::Strava(Context *context) : CloudService(context), context(context), root
     if (context) {
         nam = new QNetworkAccessManager(this);
         connect(nam, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
+        garminSmartRecording = appsettings->value(
+            nullptr, GC_GARMIN_SMARTRECORD, Qt::Checked).toInt() != 0;
+        garminHighWaterMark = appsettings->value(
+            nullptr, GC_GARMIN_HWMARK, 30).toInt();
     }
 
     uploadCompression = gzip; // gzip
@@ -752,15 +756,13 @@ Strava:: fixLapSwim(RideFile* ret, QJsonArray laps)
 void
 Strava:: fixSmartRecording(RideFile* ret)
 {
-    QVariant isGarminSmartRecording = appsettings->value(NULL, GC_GARMIN_SMARTRECORD,Qt::Checked);
-    // do nothing if disabled
-    if (isGarminSmartRecording.toInt() == 0) return;
+    if (!garminSmartRecording) return;
 
-    QVariant GarminHWM = appsettings->value(NULL, GC_GARMIN_HWMARK);
+    int highWaterMark = garminHighWaterMark;
     // default to 30 seconds
-    if (GarminHWM.isNull() || GarminHWM.toInt() == 0) GarminHWM.setValue(30);
+    if (highWaterMark == 0) highWaterMark = 30;
     // minimum 90 seconds for swims
-    if (ret->isSwim() && GarminHWM.toInt()<90) GarminHWM.setValue(90);
+    if (ret->isSwim() && highWaterMark < 90) highWaterMark = 90;
 
     // The following fragment was adapted from FixGaps
 
@@ -782,7 +784,7 @@ Strava:: fixSmartRecording(RideFile* ret)
                          && last->lat == point->lat && last->lon == point->lon;
 
             // moved for less than GarminHWM seconds ... interpolate
-            if (!stationary && gap >= 1 && gap <= GarminHWM.toInt()) {
+            if (!stationary && gap >= 1 && gap <= highWaterMark) {
                 int count = gap/ret->recIntSecs();
                 double hrdelta = (point->hr - last->hr) / (double) count;
                 double pwrdelta = (point->watts - last->watts) / (double) count;

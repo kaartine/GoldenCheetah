@@ -25,6 +25,10 @@
 #include <QDateTime>
 #include <QObject>
 #include <QNetworkReply>
+#include <QThread>
+
+#include <deque>
+#include <mutex>
 
 #include <QDialog>
 #include <QCheckBox>
@@ -131,6 +135,9 @@ class CloudService : public QObject {
         }
         void notifyReadComplete(QByteArray *data, QString name, QString message) { emit readComplete(data,name,message); }
 
+        // Stop in-flight operations without deleting the service.
+        virtual void abortRequests();
+
         // list and select an athlete - list will need to block rather than notify asynchronously
         virtual QList<CloudServiceAthlete> listAthletes() { return QList<CloudServiceAthlete>(); }
         virtual bool selectAthlete(CloudServiceAthlete) { return false; }
@@ -176,11 +183,17 @@ class CloudService : public QObject {
             return readdir(path, errors);
         }
 
+        enum compression { none, zip, gzip };
+        typedef enum compression CompressionType;
+
         // UTILITY
         void mapReply(QNetworkReply *reply, QString name) { replymap_.insert(reply,name); }
         QString replyName(QNetworkReply *reply) { return replymap_.value(reply,""); }
         void compressRide(RideFile*ride, QByteArray &data, QString id);
         RideFile *uncompressRide(QByteArray *data, QString id, QStringList &errors);
+        static RideFile *uncompressRide(
+            Context *context, CompressionType compression,
+            const QByteArray &data, QString id, QStringList &errors);
         QString uploadExtension();
         static void sslErrors(QWidget *parent, QNetworkReply* reply ,QList<QSslError> errors);
 
@@ -191,9 +204,6 @@ class CloudService : public QObject {
 
         // PUBLIC INTERFACES. DO NOT REIMPLEMENT
         static bool upload(QWidget *parent, Context *context, CloudService *store, RideItem*);
-
-        enum compression { none, zip, gzip };
-        typedef enum compression CompressionType;
 
         CompressionType uploadCompression;
         CompressionType downloadCompression;
@@ -440,12 +450,14 @@ class CloudServiceEntry
 
 struct CloudServiceDownloadEntry {
 
-    CloudServiceEntry *entry;
-    QByteArray *data;
-    CloudService *provider;
-    enum { Pending, InProgress, Failed, Complete } state;
+    CloudServiceEntry *entry = nullptr;
+    QByteArray *data = nullptr;
+    CloudService *provider = nullptr;
+    enum { Pending, InProgress, Failed, Complete } state = Pending;
 
 };
+
+class CloudServiceAutoDownloadWorker;
 
 class CloudServiceAutoDownload : public QThread {
 
@@ -454,7 +466,7 @@ class CloudServiceAutoDownload : public QThread {
     public:
 
         // automatically downloads from cloud services
-        CloudServiceAutoDownload(Context *context) : context(context), initial(true) {}
+        explicit CloudServiceAutoDownload(Context *context);
         ~CloudServiceAutoDownload() override;
 
         // re-run after inital
@@ -469,21 +481,57 @@ class CloudServiceAutoDownload : public QThread {
         void autoDownload();
 
         // thread worker to generate download requests
-        void run();
+        void run() override;
 
-        // receiver for downloaded files to add to the ridecache
+        // Legacy receiver kept for source compatibility.
         void readComplete(QByteArray*,QString,QString);
 
     private:
 
-        Context *context;
-        bool initial;
+        friend class CloudServiceAutoDownloadWorker;
 
-        // list of files to download
-        QList <CloudServiceDownloadEntry> downloadlist;
+        enum class QueuedEventType { Downloaded, Progress, Finished };
 
-        // list of providers - so we can clean up
-        QList<CloudService*> providers;
+        struct QueuedEvent {
+            QueuedEventType type = QueuedEventType::Progress;
+            quint64 generation = 0;
+            QByteArray data;
+            QString text;
+            CloudService::CompressionType compression = CloudService::none;
+            double progress = 0.0;
+            int current = 0;
+            int total = 0;
+            bool cancelled = false;
+            QMap<QString, QString> expectedSettings;
+            QMap<QString, QString> settingDefaults;
+        };
+
+        void enqueueEvent(QueuedEvent event);
+        void startDownload();
+        void downloaded(
+            quint64 generation, QByteArray data, QString name,
+            CloudService::CompressionType compression,
+            QMap<QString, QString> expectedSettings,
+            QMap<QString, QString> settingDefaults);
+        void downloadProgress(
+            quint64 generation, QString service, double progress,
+            int current, int total);
+        void downloadFinished(quint64 generation, bool cancelled);
+
+    private slots:
+
+        void dispatchQueuedEvents();
+
+    private:
+
+        Context *context = nullptr;
+        bool initial = true;
+        bool downloadActive = false;
+        quint64 generation = 0;
+        CloudServiceAutoDownloadWorker *worker = nullptr;
+        std::mutex queuedEventsMutex;
+        std::deque<QueuedEvent> queuedEvents;
+        bool queuedEventDispatchPending = false;
 };
 
 // all cloud services register at startup and can be accessed by name
@@ -532,39 +580,7 @@ class CloudServiceFactory {
         return returning;
     }
 
-    void saveSettings(CloudService *service, Context *context) {
-
-        QHashIterator<CloudService::CloudServiceSetting,QString> want(service->settings);
-        want.toFront();
-        while(want.hasNext()) {
-            want.next();
-
-            // key might need parsing
-            QString key;
-            if (want.value().contains("::")) key = want.value().split("::").at(0);
-            else key = want.value();
-
-            // get value
-            QString value = service->getSetting(key, "").toString();
-
-            if (value == "") continue;
-
-            // ok, we have a setting
-            appsettings->setCValue(context->athlete->cyclist, key, value);
-
-            #ifdef GC_WANT_ALLDEBUG
-            qDebug()<<"factory save setting:" <<key<< value;
-            #endif
-        }
-
-        // generic settings
-        QString syncstartup = service->getSetting(service->syncOnStartupSettingName(), "").toString();
-        if (syncstartup != "")  appsettings->setCValue(context->athlete->cyclist, service->syncOnStartupSettingName(), syncstartup);
-
-        QString syncimport = service->getSetting(service->syncOnImportSettingName(), "").toString();
-        if (syncimport != "")  appsettings->setCValue(context->athlete->cyclist, service->syncOnImportSettingName(), syncimport);
-
-    }
+    void saveSettings(CloudService *service, Context *context);
 
     CloudService *newService(const QString &name, Context *context) const {
 
@@ -573,7 +589,8 @@ class CloudServiceFactory {
         qDebug()<<"factory instantiate:" << name;
         #endif
         CloudService *returning = services_.value(name)->clone(context);
-
+        returning->setProperty(
+            "_gcAthleteName", context->athlete->cyclist);
 
         // INJECT CONFIGURATION
         QHashIterator<CloudService::CloudServiceSetting, QString> i(returning->settings);
@@ -592,7 +609,12 @@ class CloudServiceFactory {
             if (i.key() == CloudService::Metadata1) { sname = i.value().split("::").at(0); }
 
             // populate from appsetting configuration
-            QVariant value = appsettings->cvalue(context->athlete->cyclist, sname, "");
+            const bool athleteScoped =
+                    sname.startsWith(QStringLiteral("<athlete"));
+            QVariant value = athleteScoped
+                    ? appsettings->cvalue(
+                        context->athlete->cyclist, sname, "")
+                    : appsettings->value(nullptr, sname, "");
 
             // apply default url
             if (i.key() == CloudService::URL && value == "") {
@@ -613,6 +635,13 @@ class CloudServiceFactory {
         returning->configuration.insert(returning->syncOnStartupSettingName(), value);
         value = appsettings->cvalue(context->athlete->cyclist, returning->activeSettingName(), "false").toString();
         returning->configuration.insert(returning->activeSettingName(), value);
+        QVariantMap initialConfiguration;
+        for (auto setting = returning->configuration.cbegin();
+             setting != returning->configuration.cend(); ++setting) {
+            initialConfiguration.insert(setting.key(), setting.value());
+        }
+        returning->setProperty(
+            "_gcInitialConfiguration", initialConfiguration);
 
         // DONE
         return returning;

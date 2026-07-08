@@ -38,9 +38,11 @@
 #include "Train/TrainDB.h"
 #include "Train/VideoWindow.h"
 
+#include <QCoreApplication>
 #include <QHash>
 #include <QMutex>
 #include <QSet>
+#include <QThread>
 
 #include <cstring>
 #include <stdexcept>
@@ -49,6 +51,8 @@
 namespace {
 
 QHash<QString, QVariant> testValues;
+QMutex testValuesMutex;
+int settingsCrossThreadWrites = 0;
 QMutex validContextsMutex;
 QSet<Context *> validContexts;
 bool throwOnAthleteIdWrite = false;
@@ -63,6 +67,8 @@ int legacyDropCalls = 0;
 int libraryInitialiseCalls = 0;
 bool libraryInitialisedBeforeImport = false;
 bool finalizedExpectedImport = false;
+int rideFileOpenCalls = 0;
+QList<QByteArray> rideFilePayloads;
 
 QString settingKey(const QString &athlete, const QString &key)
 {
@@ -92,7 +98,11 @@ bool DataProcessorFactory::autoprocess = true;
 
 void resetAthleteMigrationTestSettings()
 {
-    testValues.clear();
+    {
+        QMutexLocker locker(&testValuesMutex);
+        testValues.clear();
+        settingsCrossThreadWrites = 0;
+    }
     throwOnAthleteIdWrite = false;
     throwOnRideCacheConstruction = false;
     trainDbUpgradeRequired = false;
@@ -107,6 +117,8 @@ void resetAthleteMigrationTestSettings()
     gcroot.clear();
     finalizedExpectedImport = false;
     trainDB = nullptr;
+    rideFileOpenCalls = 0;
+    rideFilePayloads.clear();
 }
 
 void configureAthleteMigrationTrainDbUpgrade(
@@ -133,6 +145,17 @@ bool athleteMigrationFinalizedExpectedImport()
 {
     return finalizedExpectedImport;
 }
+int athleteMigrationRideFileOpenCalls() { return rideFileOpenCalls; }
+QList<QByteArray> athleteMigrationRideFilePayloads()
+{
+    return rideFilePayloads;
+}
+
+int athleteMigrationSettingsCrossThreadWrites()
+{
+    QMutexLocker locker(&testValuesMutex);
+    return settingsCrossThreadWrites;
+}
 
 void setAthleteMigrationThrowOnIdWrite(bool enabled)
 {
@@ -152,22 +175,47 @@ GSettings::~GSettings()
 {
 }
 
-QVariant GSettings::value(const QObject *, const QString, const QVariant def)
+QVariant GSettings::value(
+        const QObject *,
+        const QString key,
+        const QVariant def)
 {
-    return def;
+    QMutexLocker locker(&testValuesMutex);
+    return testValues.value(settingKey(QString(), key), def);
 }
 
-void GSettings::setValue(QString, QVariant)
+void GSettings::setValue(QString key, QVariant value)
 {
+    QMutexLocker locker(&testValuesMutex);
+    if (QCoreApplication::instance()
+        && QThread::currentThread()
+                != QCoreApplication::instance()->thread()) {
+        ++settingsCrossThreadWrites;
+    }
+    testValues.insert(settingKey(QString(), key), value);
+}
+
+void GSettings::remove(const QString &key)
+{
+    QMutexLocker locker(&testValuesMutex);
+    testValues.remove(settingKey(QString(), key));
 }
 
 QVariant GSettings::cvalue(QString athleteName, QString key, QVariant def)
 {
+    QMutexLocker locker(&testValuesMutex);
     return testValues.value(settingKey(athleteName, key), def);
 }
 
 void GSettings::setCValue(QString athleteName, QString key, QVariant value)
 {
+    QMutexLocker locker(&testValuesMutex);
+    if (QCoreApplication::instance()
+        && QThread::currentThread()
+                != QCoreApplication::instance()->thread()) {
+        ++settingsCrossThreadWrites;
+    }
+
     if (throwOnAthleteIdWrite && key == GC_ATHLETE_ID) {
         throw std::runtime_error("injected athlete settings failure");
     }
@@ -608,8 +656,18 @@ RideFileFactory &RideFileFactory::instance()
 QStringList RideFileFactory::suffixes() const { return {}; }
 
 RideFile *RideFileFactory::openRideFile(
-    Context *, QFile &, QStringList &, QList<RideFile *> *) const
+    Context *, QFile &file, QStringList &, QList<RideFile *> *) const
 {
+    ++rideFileOpenCalls;
+    const bool openedHere = !file.isOpen();
+    if (openedHere) file.open(QIODevice::ReadOnly);
+    if (file.isOpen()) {
+        file.seek(0);
+        rideFilePayloads.append(file.readAll());
+    } else {
+        rideFilePayloads.append(QByteArray());
+    }
+    if (openedHere) file.close();
     return nullptr;
 }
 

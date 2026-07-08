@@ -71,6 +71,8 @@ class Strava : public CloudService {
         QNetworkAccessManager *nam;
         QNetworkReply *reply;
         CloudServiceEntry *root_;
+        bool garminSmartRecording = true;
+        int garminHighWaterMark = 30;
 
         QMap<QNetworkReply*, QByteArray*> buffers;
 

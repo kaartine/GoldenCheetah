@@ -16,6 +16,8 @@
  * Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 #include "Nolio.h"
+#include "NolioTokenRefresh.h"
+#include "NetworkReplyWait.h"
 #include "MainWindow.h"
 #include "JsonRideFile.h"
 #include "Athlete.h"
@@ -27,6 +29,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QThread>
 
 #ifndef NOLIO_DEBUG
 #define NOLIO_DEBUG false
@@ -80,12 +83,14 @@ void Nolio::onSslErrors(QNetworkReply *reply, const QList<QSslError>&errors){
 bool Nolio::open(QStringList &errors){
     printd("Nolio::open\n");
 
-    QString refresh_token = appsettings->value(NULL, GC_NOLIO_REFRESH_TOKEN, "").toString();
+    QString refresh_token =
+            getSetting(GC_NOLIO_REFRESH_TOKEN, "").toString();
     if (refresh_token == "") {
         return false;
     }
 
-    QString last_refresh_str = appsettings->value(NULL, GC_NOLIO_LAST_REFRESH, "0").toString();
+    QString last_refresh_str =
+            getSetting(GC_NOLIO_LAST_REFRESH, "0").toString();
     QDateTime last_refresh = QDateTime::fromString(last_refresh_str);
     last_refresh = last_refresh.addSecs(86400); // nolio tokens are valid for one day
     QDateTime now = QDateTime::currentDateTime();
@@ -95,46 +100,99 @@ bool Nolio::open(QStringList &errors){
         return true;
     }
 
-    // get new credentials using refresh_token
-    QNetworkRequest request(QUrl("https://www.nolio.io/api/token/"));
-    request.setRawHeader("Content-Type", "application/x-www-form-urlencoded");
+    const NolioTokenRefreshResult refreshResult =
+            NolioTokenRefreshCoordinator::refresh(
+        refresh_token,
+        [this, refresh_token, now]() {
+            NolioTokenRefreshResult result;
+            QNetworkRequest request(
+                QUrl("https://www.nolio.io/api/token/"));
+            request.setRawHeader(
+                "Content-Type", "application/x-www-form-urlencoded");
 
-    QString authheader = QString("%1:%2").arg(GC_NOLIO_CLIENT_ID).arg(GC_NOLIO_SECRET);
-    request.setRawHeader("Authorization", "Basic " + authheader.toLatin1().toBase64());
+            const QString authheader = QString("%1:%2")
+                    .arg(GC_NOLIO_CLIENT_ID)
+                    .arg(GC_NOLIO_SECRET);
+            request.setRawHeader(
+                "Authorization",
+                "Basic " + authheader.toLatin1().toBase64());
 
-    QString data = QString("grant_type=refresh_token&refresh_token=").append(refresh_token);
+            const QString data =
+                    QString("grant_type=refresh_token&refresh_token=")
+                        .append(refresh_token);
+            QNetworkReply *reply =
+                    nam->post(request, data.toLatin1());
 
-    QNetworkReply* reply = nam->post(request, data.toLatin1());
+            QThread *thread = QThread::currentThread();
+            const NetworkReplyWaitResult waitResult =
+                    waitForNetworkReply(
+                        reply, 30000,
+                        [thread]() {
+                            return thread->isInterruptionRequested();
+                        });
+            if (waitResult == NetworkReplyWaitResult::Interrupted) {
+                result.error = tr("Token refresh cancelled.");
+                reply->deleteLater();
+                return result;
+            }
+            if (waitResult == NetworkReplyWaitResult::TimedOut) {
+                result.error = tr("Token refresh timed out.");
+                reply->deleteLater();
+                return result;
+            }
 
-    // blocking request
-    QEventLoop loop;
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    loop.exec();
+            const int statusCode = reply->attribute(
+                QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            printd("HTTP response code: %d\n", statusCode);
 
-    int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    printd("HTTP response code: %d\n", statusCode);
+            if (reply->error() != QNetworkReply::NoError) {
+                printd("Got error %d\n", reply->error());
+                result.error = reply->errorString();
+                reply->deleteLater();
+                return result;
+            }
 
-    if (reply->error() != 0) {
-        printd("Got error %d\n", reply->error());
-        errors << reply->errorString();
+            const QByteArray response = reply->readAll();
+            reply->deleteLater();
+            printd("Got response: %s\n", response.data());
+
+            QJsonParseError parseError;
+            const QJsonDocument document =
+                    QJsonDocument::fromJson(response, &parseError);
+            if (parseError.error != QJsonParseError::NoError) {
+                result.error = tr("Invalid token response: %1")
+                        .arg(parseError.errorString());
+                return result;
+            }
+
+            result.accessToken =
+                    document.object()["access_token"].toString();
+            result.refreshToken =
+                    document.object()["refresh_token"].toString();
+            if (result.accessToken.isEmpty()) {
+                result.error = tr(
+                    "Token response did not contain an access token.");
+                return result;
+            }
+            if (result.refreshToken.isEmpty())
+                result.refreshToken = refresh_token;
+            result.refreshedAt = now.toString();
+            result.success = true;
+            return result;
+        },
+        []() {
+            return QThread::currentThread()
+                    ->isInterruptionRequested();
+        });
+    if (!refreshResult.success) {
+        if (!refreshResult.error.isEmpty())
+            errors << refreshResult.error;
         return false;
     }
-    QByteArray r = reply->readAll();
-    printd("Got response: %s\n", r.data());
 
-    QJsonParseError parseError;
-    QJsonDocument document = QJsonDocument::fromJson(r, &parseError);
-
-    if (parseError.error != QJsonParseError::NoError) {
-        printd("Parse error!\n");
-        return false;
-    }
-
-    QString new_access_token = document.object()["access_token"].toString();
-    QString new_refresh_token = document.object()["refresh_token"].toString();
-    if (new_access_token != "") appsettings->setValue(GC_NOLIO_ACCESS_TOKEN, new_access_token);
-    if (new_refresh_token != "") appsettings->setValue(GC_NOLIO_REFRESH_TOKEN, new_refresh_token);
-    appsettings->setValue(GC_NOLIO_LAST_REFRESH, now.toString());
+    setSetting(GC_NOLIO_ACCESS_TOKEN, refreshResult.accessToken);
+    setSetting(GC_NOLIO_REFRESH_TOKEN, refreshResult.refreshToken);
+    setSetting(GC_NOLIO_LAST_REFRESH, refreshResult.refreshedAt);
     CloudServiceFactory::instance().saveSettings(this, context);
     return true;
 }
@@ -144,7 +202,8 @@ QList<CloudServiceEntry*> Nolio::readdir(QString path, QStringList &errors, QDat
     QList<CloudServiceEntry*> returning;
 
     // do we have a token
-    QString access_token = appsettings->value(NULL, GC_NOLIO_ACCESS_TOKEN, "").toString();
+    const QString access_token =
+            getSetting(GC_NOLIO_ACCESS_TOKEN, "").toString();
     if (access_token == "") {
         errors << "You must authorise with Nolio first";
         return returning;
@@ -208,7 +267,8 @@ bool Nolio::readFile(QByteArray *data, QString remotename, QString remoteid){
     printd("Nolio::readFile\n");
 
     // do we have a token
-    QString access_token = appsettings->value(NULL, GC_NOLIO_ACCESS_TOKEN, "").toString();
+    const QString access_token =
+            getSetting(GC_NOLIO_ACCESS_TOKEN, "").toString();
     if (access_token == "") {
         return false;
     }
@@ -367,7 +427,8 @@ QList<CloudServiceAthlete> Nolio::listAthletes(){
     printd("Nolio::listAthletes\n");
     QList<CloudServiceAthlete> returning;
 
-    QString access_token = appsettings->value(NULL, GC_NOLIO_ACCESS_TOKEN, "").toString();
+    const QString access_token =
+            getSetting(GC_NOLIO_ACCESS_TOKEN, "").toString();
     if (access_token == "") {
         return returning;
     }

@@ -14,6 +14,7 @@ LIBS += -lz
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug
+DEFINES += GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
 
 isEmpty(GC_UPGRADE_SOURCE) {
     GC_UPGRADE_SOURCE = ../../../src/Core/GcUpgrade.cpp
@@ -30,13 +31,20 @@ isEmpty(GC_CLOUD_SERVICE_SOURCE) {
 SOURCES = testAthleteMigrationSafety.cpp \
           AthleteMigrationTestStubs.cpp \
           CloudAutoDownloadTestSupport.cpp \
+          ../../../src/Cloud/NetworkReplyWait.cpp \
+          ../../../src/Cloud/NolioTokenRefresh.cpp \
+          ../../../src/Cloud/OAuthPKCE.cpp \
           ../../../contrib/qzip/zip.cpp \
           $$GC_UPGRADE_SOURCE \
           $$GC_ATHLETE_SOURCE \
           $$GC_CLOUD_SERVICE_SOURCE
 
-HEADERS = ../../../src/Cloud/CalendarDownload.h \
+HEADERS = CloudAutoDownloadTestSupport.h \
+          ../../../src/Cloud/CalendarDownload.h \
           ../../../src/Cloud/CloudService.h \
+          ../../../src/Cloud/NetworkReplyWait.h \
+          ../../../src/Cloud/NolioTokenRefresh.h \
+          ../../../src/Cloud/OAuthPKCE.h \
           ../../../src/Core/Athlete.h \
           ../../../src/Core/Context.h \
           ../../../src/Core/GcUpgrade.h \

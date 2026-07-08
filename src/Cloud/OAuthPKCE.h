@@ -77,6 +77,16 @@ public:
         int &expiresIn,
         QString &errorString
     );
+    static bool refreshAccessTokenWithTimeout(
+        const QString &tokenUrl,
+        const QString &clientId,
+        const QString &currentRefreshToken,
+        QString &newAccessToken,
+        QString &newRefreshToken,
+        int &expiresIn,
+        QString &errorString,
+        int timeoutMs
+    );
 
 private:
     bool exchangeCodeForTokens(const QString &code, const QString &codeVerifier,

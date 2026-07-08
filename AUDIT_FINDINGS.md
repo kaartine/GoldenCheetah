@@ -714,14 +714,44 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### THREAD-002: Cloud download state is mutated from GUI and worker threads
 
-- Status: OPEN
-- Code: `src/Cloud/CloudService.cpp:1784`,
-  `src/Cloud/CloudService.cpp:1882`, `src/Cloud/CloudService.cpp:1924`
-- Impact: A GUI-affine QThread object and its worker path concurrently iterate,
-  clear, and delete providers and download entries.
-- Test: Exercise immediate, delayed, and timeout completions under TSAN.
-- Fix direction: Move a separate worker QObject to the thread and pass immutable
-  results to the GUI.
+- Status: FIXED
+- Code: `src/Cloud/CloudService.cpp`, `src/Cloud/CloudService.h`,
+  `src/Cloud/NetworkReplyWait.cpp`, `src/Cloud/NetworkReplyWait.h`,
+  `src/Cloud/Nolio.cpp`, `src/Cloud/NolioTokenRefresh.cpp`,
+  `src/Cloud/OAuthPKCE.cpp`, `src/Cloud/Strava.cpp`,
+  `unittests/Core/athleteMigrationSafety`
+- Impact: The GUI-affine QThread object and its worker path concurrently
+  mutated provider, buffer, completion, and settings state. Provider callbacks
+  could synchronously re-enter the next request, cancellation could destroy a
+  provider during its active call, worker code wrote GUI-owned settings, and
+  nested token refresh event loops had no timeout. Concurrent Nolio refreshes
+  could also rotate the same refresh token more than once.
+- Regression test: The production auto-download implementation is linked to
+  controlled providers that complete inline, asynchronously, repeatedly, after
+  timeout, and during cancellation or owner destruction. The suite verifies
+  provider and buffer lifetime, stale-generation rejection, GUI event order,
+  transactional settings conflict handling, empty/custom/default URL
+  semantics across sequential saves, startup-sync payload validation, base
+  network abort, SSL warning thread affinity, Nolio single-flight refresh and
+  cache expiry, and network/OAuth timeout and interruption behavior.
+- Resolution: A dedicated worker QObject owns providers and their buffers in
+  the worker thread. It sends FIFO by-value events to the GUI, rejects stale
+  generations, retires providers only after active callbacks return, and
+  defers queue advancement until inline provider calls unwind. Settings are
+  applied on the GUI thread as compare-and-swap transactions with chained
+  baselines and effective default-URL canonicalization. Base cloud
+  cancellation aborts child replies. Nolio refresh is a cancellable,
+  one-minute cached single flight, while Nolio and OAuth waits share a bounded
+  interruption-aware network helper.
+- Verification: The added tests first exposed reentrant provider calls,
+  retained buffers, duplicate completions, stale results, cross-thread settings
+  writes, rejected URL payloads, repeated Nolio refreshes, and unbounded OAuth
+  waits. The final focused suite passes all 56 tests normally, under strict
+  ASan/UBSan/LSan, and under TSAN. TSAN ran with ASLR disabled and
+  `ignore_noninstrumented_modules=1` for prebuilt Qt; no project suppression was
+  used. The complete matrix passes 1,566 tests in 45 suites with zero failures,
+  skips, or blacklisted tests. The Qt 6.8.3 application builds and reports
+  `V3.8-DEV2605 (5012)` in an isolated offscreen smoke test.
 
 ### MEM-004: PythonDataSeries copy is a double-free/use-after-free
 
@@ -870,6 +900,22 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   ASan/TSan.
 - Fix direction: Snapshot value data on the GUI thread and guard completion with
   owned task state or `QPointer`.
+
+### THREAD-004: Non-cooperative cloud provider calls can still block teardown
+
+- Status: OPEN
+- Code: `src/Cloud/CloudService.cpp`, `src/Cloud/LocalFileStore.cpp`,
+  cloud provider `open`, `home`, `readdir`, and `readFile` implementations
+- Impact: `cancelAndWait()` must join the worker before athlete-owned paths are
+  released. If a provider is stuck inside a synchronous syscall and never
+  returns to observe interruption, athlete close can therefore block forever.
+  Nolio token refresh, OAuth, and active Qt network replies are now bounded, but
+  the generic provider contract still has no universal operation timeout.
+- Test: Block each provider operation in a non-cooperative backend and require
+  bounded teardown without accessing athlete state after close.
+- Fix direction: Give every provider operation an explicit timeout/cancellation
+  contract and move truly non-interruptible I/O behind a killable process or
+  another ownership boundary that does not require unsafe QThread termination.
 
 ### SEC-004: OpenData discovery can redirect the full dataset
 
@@ -1036,6 +1082,19 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Test: Benchmark calendar/compare refresh at 1k/10k/50k activities.
 - Fix direction: Batch metrics/buckets in one scan or maintain incremental daily
   aggregates.
+
+### PERF-007: Cloud GUI handoff queues have no backpressure
+
+- Status: OPEN
+- Code: `src/Cloud/CloudService.cpp`, `src/Cloud/CloudService.h`
+- Impact: Auto-download result/progress events, settings transactions, and
+  queued SSL notifications can accumulate without a count or byte limit while
+  the GUI thread is blocked. A fast or faulty provider can grow memory use and
+  leave a long stale-event tail after cancellation.
+- Test: Flood each handoff while deliberately stalling the GUI and enforce
+  bounded memory, queue depth, cancellation latency, and final-state delivery.
+- Fix direction: Bound queues by generation and bytes, coalesce progress and
+  settings updates, reject superseded work, and apply producer backpressure.
 
 ## Medium
 
@@ -1352,6 +1411,33 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Fix direction: Return `calibration.getSpindownTime()` from
   `ANT::getCalibrationSpindownTime()`. Keep synchronization and coherent
   publication of calibration state under `DEV-003`.
+
+### THREAD-005: Cloud SSL callbacks read a GUI parent in worker threads
+
+- Status: OPEN
+- Code: `src/Cloud/Strava.cpp`, `src/Cloud/Nolio.cpp`, and other provider
+  `onSslErrors` implementations; `src/Cloud/CloudService.cpp`
+- Impact: The base SSL helper now creates warnings on the GUI thread, but each
+  provider first evaluates `context->mainWindow` in its own thread. Concurrent
+  context or window teardown can race that raw GUI pointer read.
+- Test: Deliver SSL errors while closing the athlete and main window under TSAN,
+  requiring no worker-thread GUI access and no warning after owner destruction.
+- Fix direction: Pass only value data or a guarded Context identity from the
+  provider, then resolve the parent entirely on the GUI thread.
+
+### THREAD-006: Nested start listeners can reorder cloud lifecycle signals
+
+- Status: OPEN
+- Code: `src/Cloud/CloudService.cpp` (`CloudServiceAutoDownload::startDownload`)
+- Impact: The worker starts before `autoDownloadStart` finishes notifying all
+  direct listeners. If an early listener runs a nested event loop, a fast worker
+  can deliver `autoDownloadEnd` before later listeners receive the original
+  start signal, leaving observers in the wrong state.
+- Test: Attach multiple start listeners, run a nested loop in the first, and
+  complete the provider inline; every observer must see start before progress
+  or end.
+- Fix direction: Publish start before launching the worker, or hold completion
+  events until start notification has fully unwound.
 
 ## Verification Baseline
 
