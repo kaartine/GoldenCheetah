@@ -223,8 +223,16 @@ contains(DEFINES, "GC_WANT_PYTHON") {
     SOURCES += $$files(Python/SIP/sip*.cpp) Python/SIP/Bindings.cpp
 
     ## Python Embedding & Charts
-    HEADERS += Python/PythonEmbed.h Python/PythonSyntax.h Charts/PythonChart.h
-    SOURCES += Python/PythonEmbed.cpp Python/PythonSyntax.cpp Charts/PythonChart.cpp
+    HEADERS += Python/PythonEmbed.h Python/PythonExecutionGate.h \
+               Python/PythonChartRunState.h Python/PythonChartRunner.h \
+               Python/PythonChartOwner.h \
+               Python/PythonSyntax.h \
+               Charts/PythonChart.h
+    SOURCES += Python/PythonEmbed.cpp Python/PythonExecutionGate.cpp \
+               Python/PythonChartRunState.cpp Python/PythonChartRunner.cpp \
+               Python/PythonChartOwner.cpp \
+               Python/PythonSyntax.cpp \
+               Charts/PythonChart.cpp
 
     ## Python data processors
     HEADERS += FileIO/FixPyScriptsDialog.h FileIO/FixPySettings.h FileIO/FixPyRunner.h \

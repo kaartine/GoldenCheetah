@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QStringList>
 
 #include "FixPyScript.h"
 #include "Context.h"
@@ -13,6 +14,8 @@ struct FixPyRunParams
     RideFile *rideFile;
     RideItem *rideItem;
     QString script;
+    QStringList messages;
+    QString error;
 };
 
 class FixPyRunner : public QObject

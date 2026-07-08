@@ -23,10 +23,14 @@
 #include "Utils.h"
 #include "Settings.h"
 #include <stdexcept>
+#include <type_traits>
+#include <utility>
 
 #include <QtGlobal>
+#include <QCoreApplication>
 #include <QMessageBox>
 #include <QProcess>
+#include <QThread>
 
 #ifdef slots // clashes with python headers
 #undef slots
@@ -41,6 +45,78 @@
 // global instance of embedded python
 PythonEmbed *python;
 PyThreadState *mainThreadState;
+
+namespace {
+
+class PythonGilGuard final
+{
+public:
+    PythonGilGuard() : state_(PyGILState_Ensure()) {}
+    ~PythonGilGuard() { PyGILState_Release(state_); }
+
+    PythonGilGuard(const PythonGilGuard &) = delete;
+    PythonGilGuard &operator=(const PythonGilGuard &) = delete;
+
+private:
+    PyGILState_STATE state_;
+};
+
+template<typename Function>
+class ScopeExit final
+{
+public:
+    explicit ScopeExit(Function function)
+        : function_(std::move(function)) {}
+    ~ScopeExit() { function_(); }
+
+    ScopeExit(const ScopeExit &) = delete;
+    ScopeExit &operator=(const ScopeExit &) = delete;
+
+private:
+    Function function_;
+};
+
+template<typename Function>
+ScopeExit<typename std::decay<Function>::type>
+scopeExit(Function &&function)
+{
+    return ScopeExit<typename std::decay<Function>::type>(
+        std::forward<Function>(function));
+}
+
+thread_local bool pythonRunlineActive = false;
+
+void clearCapturedOutput(PythonEmbed *embed)
+{
+    PyObject *cleared =
+            PyObject_CallFunction(static_cast<PyObject *>(embed->clear), NULL);
+    Py_XDECREF(cleared);
+    PyErr_Clear();
+}
+
+QStringList takeCapturedOutput(PythonEmbed *embed)
+{
+    QStringList messages;
+    PyObject *output = PyObject_GetAttrString(
+        static_cast<PyObject *>(embed->catcher), "value");
+    if (output) {
+        Py_ssize_t size = 0;
+        wchar_t *string = PyUnicode_AsWideCharString(output, &size);
+        if (string) {
+            if (size) messages = QString::fromWCharArray(string).split("\n");
+            PyMem_Free(string);
+            if (!messages.isEmpty()) messages << "\n";
+        }
+        Py_DECREF(output);
+    } else {
+        PyErr_Clear();
+    }
+
+    clearCapturedOutput(embed);
+    return messages;
+}
+
+}
 
 // SIP module with GoldenCheetah Bindings
 extern "C" {
@@ -195,12 +271,15 @@ bool PythonEmbed::pythonInstalled(QString &pybin, QString &pypath, QString PYTHO
     return false;
 }
 
-PythonEmbed::PythonEmbed(const bool verbose, const bool interactive) : verbose(verbose), interactive(interactive)
+PythonEmbed::PythonEmbed(const bool verbose, const bool interactive)
+    : verbose(verbose), interactive(interactive)
 {
+    catcher = NULL;
+    clear = NULL;
     loaded = false;
-    chart = NULL;
-    perspective = NULL;
-    threadid=-1;
+    activeThreadId = 0;
+    activeRunToken = 0;
+    activeCancellationRequested = false;
     name = QString("GoldenCheetah");
 
     // register metatypes used to pass between threads
@@ -348,68 +427,159 @@ PythonEmbed::PythonEmbed(const bool verbose, const bool interactive) : verbose(v
 }
 
 // run on called thread
-void PythonEmbed::runline(ScriptContext scriptContext, QString line)
+PythonRunResult
+PythonEmbed::runline(
+    ScriptContext scriptContext,
+    QString line,
+    std::shared_ptr<std::atomic_bool> cancelled)
 {
-    PyGILState_STATE gstate;
-    gstate = PyGILState_Ensure();
+    PythonRunResult result;
+    const auto cancellationRequested = [&cancelled]() {
+        return cancelled
+                && cancelled->load(std::memory_order_acquire);
+    };
 
-    // Get current thread ID via Python thread functions
-    PyObject* thread = PyImport_ImportModule("_thread");
-    PyObject* get_ident = PyObject_GetAttrString(thread, "get_ident");
-    PyObject* ident = PyObject_CallObject(get_ident, 0);
-    Py_DECREF(get_ident);
-    threadid = PyLong_AsLong(ident);
-    Py_DECREF(ident);
+    if (!loaded) {
+        result.error = QStringLiteral("Python is not available.");
+        result.messages << result.error;
+        return result;
+    }
 
-    // add to the thread/context map
-    contexts.insert(threadid, scriptContext);
+    if (cancellationRequested()) {
+        result.cancelled = true;
+        return result;
+    }
 
-    // run and generate errors etc
-    messages.clear();
+    if (pythonRunlineActive) {
+        result.error =
+                QStringLiteral("Nested Python execution is not supported.");
+        result.messages << result.error;
+        return result;
+    }
+
+    const bool callerHasGil = PyGILState_Check() != 0;
+    const bool guiCaller =
+            QCoreApplication::instance()
+            && QThread::currentThread()
+                == QCoreApplication::instance()->thread();
+    PythonExecutionGate::Lease executionLease;
+    const PythonExecutionGate::Admission admission =
+            executionGate.acquire(
+                callerHasGil || guiCaller, cancelled, executionLease);
+    if (admission == PythonExecutionGate::Admission::Cancelled) {
+        result.cancelled = true;
+        return result;
+    }
+    if (admission == PythonExecutionGate::Admission::Busy) {
+        result.error = QStringLiteral(
+            "Python execution is already active on another thread.");
+        result.messages << result.error;
+        return result;
+    }
+
+    pythonRunlineActive = true;
+    auto releaseThreadGuard = scopeExit([]() {
+        pythonRunlineActive = false;
+    });
+
+    PythonGilGuard gil;
+    const unsigned long currentThreadId = PyThread_get_thread_ident();
+
+    if (contexts.contains(currentThreadId)) {
+        result.error =
+                QStringLiteral("Python run context is already registered.");
+        result.messages << result.error;
+        return result;
+    }
+
+    scriptContext.runResult = &result;
+    contexts.insert(currentThreadId, scriptContext);
+    activeThreadId = currentThreadId;
+    activeRunToken = scriptContext.runToken;
+    activeCancellationRequested = false;
+    executionGate.publishToken(activeRunToken);
+    auto clearActiveRun = scopeExit([this, currentThreadId]() {
+        contexts.remove(currentThreadId);
+        if (activeThreadId == currentThreadId) {
+            executionGate.publishToken(0);
+            activeThreadId = 0;
+            activeRunToken = 0;
+            activeCancellationRequested = false;
+        }
+    });
+
+    clearCapturedOutput(this);
+
+    if (cancellationRequested()) {
+        activeCancellationRequested = true;
+        result.cancelled = true;
+        return result;
+    }
 
     if (scriptContext.interactiveShell) {
         PyObject *m, *d, *v;
         m = PyImport_AddModule("__main__");
         d = PyModule_GetDict(m);
-        v = PyRun_StringFlags(line.toStdString().c_str(), Py_single_input, d, d, 0);
+        const QByteArray encodedLine = line.toUtf8();
+        v = PyRun_StringFlags(
+            encodedLine.constData(), Py_single_input, d, d, 0);
         if (v) Py_DECREF(v);
     } else {
-        PyRun_SimpleString(line.toStdString().c_str());
+        const QByteArray encodedLine = line.toUtf8();
+        PyRun_SimpleString(encodedLine.constData());
     }
 
-    PyErr_Print();
-    PyErr_Clear(); //and clear them !
-
-    // capture results
-    PyObject *output = PyObject_GetAttrString(static_cast<PyObject*>(catcher),"value"); //get the stdout and stderr from our catchOutErr object
-    if (output) {
-        // allocated as unicodeA
-        Py_ssize_t size;
-        wchar_t *string = PyUnicode_AsWideCharString(output, &size);
-        if (string) {
-            if (size) messages = QString::fromWCharArray(string).split("\n");
-            PyMem_Free(string);
-            if (messages.count()) messages << "\n"; // always add a newline after anything
-        }
-
-        // clear results
-        PyObject_CallFunction(static_cast<PyObject*>(clear), NULL);
+    if (activeCancellationRequested
+        && PyErr_ExceptionMatches(PyExc_KeyboardInterrupt)) {
+        PyErr_Clear();
+    } else {
+        PyErr_Print();
+        PyErr_Clear();
     }
 
-    PyGILState_Release(gstate);
-    threadid=-1;
+    result.messages = takeCapturedOutput(this);
+    result.cancelled = activeCancellationRequested
+            || cancellationRequested();
+    return result;
 }
 
-void
-PythonEmbed::cancel()
+quint64
+PythonEmbed::allocateRunToken()
 {
-    if (chart!=NULL && threadid != -1) {
-        PyGILState_STATE gstate;
-        gstate = PyGILState_Ensure();
+    return executionGate.allocateToken();
+}
 
-        // raise an exception to cancel the execution
-        PyThreadState_SetAsyncExc(threadid, PyExc_KeyboardInterrupt);
+bool
+PythonEmbed::cancel(quint64 runToken)
+{
+    if (!loaded || runToken == 0) return false;
 
-        PyGILState_Release(gstate);
+    executionGate.wakeWaiters();
+    if (!executionGate.isPublishedToken(runToken)) {
+        return false;
     }
+
+    PythonGilGuard gil;
+    if (activeThreadId == 0 || runToken != activeRunToken) {
+        return false;
+    }
+    const int affected = PyThreadState_SetAsyncExc(
+        activeThreadId, PyExc_KeyboardInterrupt);
+    if (affected == 1) {
+        activeCancellationRequested = true;
+        return true;
+    }
+    if (affected > 1) {
+        const int rolledBack =
+                PyThreadState_SetAsyncExc(activeThreadId, NULL);
+        if (rolledBack != affected) {
+            qWarning()
+                    << "Python cancellation rollback affected"
+                    << rolledBack << "threads instead of" << affected;
+        }
+    } else {
+        qWarning()
+                << "Python cancellation could not find the active thread";
+    }
+    return false;
 }

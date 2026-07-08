@@ -33,14 +33,18 @@
 
 long Bindings::threadid() const
 {
-    // Get current thread ID via Python thread functions
-    PyObject* thread = PyImport_ImportModule("_thread");
-    PyObject* get_ident = PyObject_GetAttrString(thread, "get_ident");
-    PyObject* ident = PyObject_CallObject(get_ident, 0);
-    Py_DECREF(get_ident);
-    long t = PyLong_AsLong(ident);
-    Py_DECREF(ident);
-    return t;
+    return static_cast<long>(PyThread_get_thread_ident());
+}
+
+namespace {
+
+void addRunFilters(FilterSet &filters, const ScriptContext &context)
+{
+    filters.addFilter(context.contextFiltered, context.contextFilters);
+    filters.addFilter(context.homeFiltered, context.homeFilters);
+    filters.addFilter(context.perspectiveFiltered, context.perspectiveFilters);
+}
+
 }
 
 long Bindings::build() const
@@ -56,7 +60,9 @@ QString Bindings::version() const
 bool
 Bindings::webpage(QString url) const
 {
-    if (!python->chart) return false; // Do nothing when no chart is avaliable
+    const ScriptContext context = python->contexts.value(threadid());
+    if (!context.chartCommandsEnabled || !context.runResult)
+        return false;
 
 #ifdef Q_OS_WIN
     url = url.replace("://C:", ":///C:"); // plotly fails to use enough slashes
@@ -64,15 +70,25 @@ Bindings::webpage(QString url) const
 #endif
 
     QUrl p(url);
-    python->chart->emitUrl(p);
+    context.runResult->chartCommands.append(
+        [p](PythonChart *chart) {
+            chart->emitUrl(p);
+        });
     return true;
 }
 
 bool 
 Bindings::configChart(QString title, int type, bool animate, int pos, bool stack, int orientation) const
 {
-    if (!python->chart) return false; // Do nothing when no chart is avaliable
-    python->chart->emitChart(title, type, animate, pos, stack, orientation);
+    const ScriptContext context = python->contexts.value(threadid());
+    if (!context.chartCommandsEnabled || !context.runResult)
+        return false;
+    context.runResult->chartCommands.append(
+        [title, type, animate, pos, stack, orientation](
+            PythonChart *chart) {
+            chart->emitChart(
+                title, type, animate, pos, stack, orientation);
+        });
     return true;
 }
 
@@ -81,7 +97,9 @@ Bindings::setCurve(QString name, PyObject *xseries, PyObject *yseries, QStringLi
                       QStringList labels,  QStringList colors,
                       int line, int symbol, int size, QString color, int opacity, bool opengl, bool legend, bool datalabels, bool fill) const
 {
-    if (!python->chart) return false; // Do nothing when no chart is avaliable
+    const ScriptContext context = python->contexts.value(threadid());
+    if (!context.chartCommandsEnabled || !context.runResult)
+        return false;
 
     QVector<double>xs, ys;
 
@@ -111,8 +129,15 @@ Bindings::setCurve(QString name, PyObject *xseries, PyObject *yseries, QStringLi
         }
     }
 
-    // now just add via the chart
-    python->chart->emitCurve(name, xs, ys, fseries, xname, yname, labels, colors, line, symbol, size, color, opacity, opengl, legend, datalabels, fill);
+    context.runResult->chartCommands.append(
+        [name, xs, ys, fseries, xname, yname, labels, colors, line,
+         symbol, size, color, opacity, opengl, legend, datalabels, fill](
+            PythonChart *chart) {
+            chart->emitCurve(
+                name, xs, ys, fseries, xname, yname, labels, colors,
+                line, symbol, size, color, opacity, opengl, legend,
+                datalabels, fill);
+        });
     return true;
 }
 
@@ -120,15 +145,25 @@ bool
 Bindings::configAxis(QString name, bool visible, int align, double min, double max,
                       int type, QString labelcolor, QString color, bool log, QStringList categories)
 {
-    if (!python->chart) return false; // Do nothing when no chart is avaliable
-    python->chart->emitAxis(name, visible, align, min, max, type, labelcolor, color, log, categories);
+    const ScriptContext context = python->contexts.value(threadid());
+    if (!context.chartCommandsEnabled || !context.runResult)
+        return false;
+    context.runResult->chartCommands.append(
+        [name, visible, align, min, max, type, labelcolor, color, log,
+         categories](PythonChart *chart) {
+            chart->emitAxis(
+                name, visible, align, min, max, type, labelcolor,
+                color, log, categories);
+        });
     return false;
 }
 
 bool
 Bindings::addAnnotation(QString, QString s1, QString s2, double)
 {
-    if (!python->chart) return false; // Do nothing when no chart is avaliable
+    const ScriptContext context = python->contexts.value(threadid());
+    if (!context.chartCommandsEnabled || !context.runResult)
+        return false;
 
     // we will reuse later but for now just assume its a label
     // will likely need to refactor all of this and create an
@@ -136,7 +171,10 @@ Bindings::addAnnotation(QString, QString s1, QString s2, double)
     // get there !
     QStringList labels;
     labels << s2;
-    python->chart->emitAnnotation(s1, labels);
+    context.runResult->chartCommands.append(
+        [s1, labels](PythonChart *chart) {
+            chart->emitAnnotation(s1, labels);
+        });
 
     return true;
 }
@@ -144,7 +182,8 @@ Bindings::addAnnotation(QString, QString s1, QString s2, double)
 void
 Bindings::result(double value)
 {
-    python->result = value;
+    PythonRunResult *result = python->contexts.value(threadid()).runResult;
+    if (result) result->value = value;
 }
 
 // get athlete data
@@ -482,7 +521,8 @@ Bindings::athleteZones(PyObject* date, QString sport) const
 PyObject*
 Bindings::activities(QString filter) const
 {
-    Context *context = python->contexts.value(threadid()).context;
+    const ScriptContext runContext = python->contexts.value(threadid());
+    Context *context = runContext.context;
 
     if (context && context->athlete && context->athlete->rideCache) {
 
@@ -493,14 +533,12 @@ Bindings::activities(QString filter) const
         // apply any global filters
         Specification specification;
         FilterSet fs;
-        fs.addFilter(context->isfiltered, context->filters);
-        fs.addFilter(context->ishomefiltered, context->homeFilters);
-        if (python->perspective) fs.addFilter(python->perspective->isFiltered(), python->perspective->filterlist(DateRange(QDate(1,1,1970),QDate(31,12,3000))));
+        addRunFilters(fs, runContext);
 
         // did call contain any filters?
         if (filter != "") {
 
-            DataFilter dataFilter(python->chart, context);
+            DataFilter dataFilter(nullptr, context);
             QStringList files;
             dataFilter.parseFilter(context, filter, &files);
             fs.addFilter(true, files);
@@ -1146,7 +1184,8 @@ Bindings::seasonMetrics(bool all, QString filter, bool compare) const
 PyObject*
 Bindings::seasonMetrics(bool all, DateRange range, QString filter) const
 {
-    Context *context = python->contexts.value(threadid()).context;
+    const ScriptContext runContext = python->contexts.value(threadid());
+    Context *context = runContext.context;
     if (context == NULL || context->athlete == NULL || context->athlete->rideCache == NULL) return NULL;
 
     // how many rides to return if we're limiting to the
@@ -1155,14 +1194,12 @@ Bindings::seasonMetrics(bool all, DateRange range, QString filter) const
     // apply any global filters
     Specification specification;
     FilterSet fs;
-    fs.addFilter(context->isfiltered, context->filters);
-    fs.addFilter(context->ishomefiltered, context->homeFilters);
-    if (python->perspective) fs.addFilter(python->perspective->isFiltered(), python->perspective->filterlist(DateRange(QDate(1,1,1970),QDate(31,12,3000))));
+    addRunFilters(fs, runContext);
 
     // did call contain a filter?
     if (filter != "") {
 
-        DataFilter dataFilter(python->chart, context);
+        DataFilter dataFilter(nullptr, context);
         QStringList files;
         dataFilter.parseFilter(context, filter, &files);
         fs.addFilter(true, files);
@@ -1342,7 +1379,8 @@ Bindings::seasonIntervals(QString type, bool compare) const
 PyObject*
 Bindings::seasonIntervals(DateRange range, QString type) const
 {
-    Context *context = python->contexts.value(threadid()).context;
+    const ScriptContext runContext = python->contexts.value(threadid());
+    Context *context = runContext.context;
     if (context == NULL || context->athlete == NULL || context->athlete->rideCache == NULL) return NULL;
 
     const RideMetricFactory &factory = RideMetricFactory::instance();
@@ -1353,9 +1391,7 @@ Bindings::seasonIntervals(DateRange range, QString type) const
     // apply any global filters
     Specification specification;
     FilterSet fs;
-    fs.addFilter(context->isfiltered, context->filters);
-    fs.addFilter(context->ishomefiltered, context->homeFilters);
-    if (python->perspective) fs.addFilter(python->perspective->isFiltered(), python->perspective->filterlist(DateRange(QDate(1,1,1970),QDate(31,12,3000))));
+    addRunFilters(fs, runContext);
     specification.setFilterSet(fs);
 
     // we need to count intervals that are in range...
@@ -1864,7 +1900,8 @@ Bindings::getTag(QString name, PyObject *activity) const
 PythonDataSeries*
 Bindings::metrics(QString metric, bool all, QString filter) const
 {
-    Context *context = python->contexts.value(threadid()).context;
+    const ScriptContext runContext = python->contexts.value(threadid());
+    Context *context = runContext.context;
     if (context == NULL || context->athlete == NULL || context->athlete->rideCache == NULL) return NULL;
 
     // how many rides to return if we're limiting to the
@@ -1874,14 +1911,12 @@ Bindings::metrics(QString metric, bool all, QString filter) const
     // apply any global filters
     Specification specification;
     FilterSet fs;
-    fs.addFilter(context->isfiltered, context->filters);
-    fs.addFilter(context->ishomefiltered, context->homeFilters);
-    if (python->perspective) fs.addFilter(python->perspective->isFiltered(), python->perspective->filterlist(DateRange(QDate(1,1,1970),QDate(31,12,3000))));
+    addRunFilters(fs, runContext);
 
     // did call contain a filter?
     if (filter != "") {
 
-        DataFilter dataFilter(python->chart, context);
+        DataFilter dataFilter(nullptr, context);
         QStringList files;
         dataFilter.parseFilter(context, filter, &files);
         fs.addFilter(true, files);
@@ -2044,7 +2079,8 @@ Bindings::seasonMeanmax(bool all, QString filter, bool compare) const
 PyObject*
 Bindings::seasonMeanmax(bool all, DateRange range, QString filter) const
 {
-    Context *context = python->contexts.value(threadid()).context;
+    const ScriptContext runContext = python->contexts.value(threadid());
+    Context *context = runContext.context;
     if (context == NULL) return NULL;
 
     // construct the date range and then get a ridefilecache
@@ -2054,15 +2090,13 @@ Bindings::seasonMeanmax(bool all, DateRange range, QString filter) const
     QStringList filelist;
     bool filt=false;
 
-    if (python->perspective) {
-        filelist = python->perspective->filterlist(DateRange(QDate(1,1,1970),QDate(31,12,3000)));
-        filt = python->perspective->isFiltered();
-    }
+    filelist = runContext.perspectiveFilters;
+    filt = runContext.perspectiveFiltered;
 
     // if not empty write a filter
     if (filter != "") {
 
-        DataFilter dataFilter(python->chart, context);
+        DataFilter dataFilter(nullptr, context);
         dataFilter.parseFilter(context, filter, &filelist);
         filt=true;
     }
@@ -2495,7 +2529,8 @@ Bindings::seasonPeaks(bool all, DateRange range, QString filter, QList<RideFile:
 {
     if (PyDateTimeAPI == NULL) PyDateTime_IMPORT;// import datetime if necessary
 
-    Context *context = python->contexts.value(threadid()).context;
+    const ScriptContext runContext = python->contexts.value(threadid());
+    Context *context = runContext.context;
     if (context == NULL) return NULL;
 
     // we return a dict
@@ -2505,15 +2540,13 @@ Bindings::seasonPeaks(bool all, DateRange range, QString filter, QList<RideFile:
     // how many rides ?
     Specification specification;
     FilterSet fs;
-    fs.addFilter(context->isfiltered, context->filters);
-    fs.addFilter(context->ishomefiltered, context->homeFilters);
-    if (python->perspective) fs.addFilter(python->perspective->isFiltered(), python->perspective->filterlist(DateRange(QDate(1,1,1970),QDate(31,12,3000))));
+    addRunFilters(fs, runContext);
     specification.setFilterSet(fs);
 
     // did call contain any filters?
     if (filter != "") {
 
-        DataFilter dataFilter(python->chart, context);
+        DataFilter dataFilter(nullptr, context);
         QStringList files;
         dataFilter.parseFilter(context, filter, &files);
         fs.addFilter(true, files);

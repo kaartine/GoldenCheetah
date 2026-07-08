@@ -19,16 +19,29 @@
 #ifndef GC_PYTHONEMBED_H
 #define GC_PYTHONEMBED_H
 
-#include <QWidget>
+#include <QList>
 #include <QString>
 #include <QMap>
 #include <QStringList>
 
+#include <atomic>
+#include <functional>
+#include <memory>
+
+#include "PythonExecutionGate.h"
 #include "RideItem.h"
 #include "Specification.h"
 
 class Context;
 class PythonChart;
+
+struct PythonRunResult {
+    QStringList messages;
+    QString error;
+    QList<std::function<void(PythonChart *)>> chartCommands;
+    double value = 0.0;
+    bool cancelled = false;
+};
 
 class PythonEmbed;
 extern PythonEmbed *python;
@@ -61,6 +74,16 @@ class ScriptContext {
 
         bool readOnly;
         QList<RideFile *> *editedRideFiles;
+
+        quint64 runToken = 0;
+        bool chartCommandsEnabled = false;
+        PythonRunResult *runResult = NULL;
+        bool contextFiltered = false;
+        QStringList contextFilters;
+        bool homeFiltered = false;
+        QStringList homeFilters;
+        bool perspectiveFiltered = false;
+        QStringList perspectiveFilters;
 };
 
 // a plain C++ class, no QObject stuff
@@ -76,9 +99,6 @@ class PythonEmbed {
     static bool pythonInstalled(QString &pybin, QString &pypath, QString PYTHONHOME=QString(""));
     QString pybin, pypath;
 
-    // scripts can set a result value
-    double result;
-
     // catch and clear output - we use void* because we cannot
     // include the python headers here as they redefine the slots
     // mechanism that QT needs in header files. As a result they
@@ -88,30 +108,34 @@ class PythonEmbed {
     void *clear;
 
     // run a single line from console
-    void runline(ScriptContext, QString);
+    PythonRunResult runline(ScriptContext, QString,
+                            std::shared_ptr<std::atomic_bool> cancelled = {});
+
+    // allocate a process-wide unique, nonzero cancellation token
+    quint64 allocateRunToken();
 
     // stop current execution
-    void cancel();
+    bool cancel(quint64 runToken);
 
     // context for caller - can be called in a thread
-    QMap<long, ScriptContext> contexts;
-    Perspective *perspective;
-    PythonChart *chart;
-    QWidget *canvas;
+    QMap<unsigned long, ScriptContext> contexts;
 
     // the program being constructed/parsed
     QStringList program;
-    QStringList messages;
 
     QString name;
     QString version;
 
     bool verbose;
     bool interactive;
-    bool cancelled;
 
     bool loaded;
-    long threadid;
+
+private:
+    PythonExecutionGate executionGate;
+    unsigned long activeThreadId = 0;
+    quint64 activeRunToken;
+    bool activeCancellationRequested;
 };
 
 // embed debugging via 'printd' and enable via PYTHON_DEBUG

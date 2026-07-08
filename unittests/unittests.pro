@@ -34,6 +34,7 @@ equals(GC_UNITTESTS, active) {
 			   Gui/trainPerspectiveState \
 			   Metrics/rideMetadataAtomicSave \
 			   Python/pythonDataSeriesOwnership \
+			   Python/pythonChartLifecycle \
 			   Train/antBurstBounds \
 			   Train/antLifecycle \
 			   Train/antThreadSafety \

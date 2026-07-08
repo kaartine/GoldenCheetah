@@ -34,7 +34,6 @@
 #include "SearchFilterBox.h" // for SearchFilterBox::matches
 #include "Seasons.h" // for SearchFilterBox::matches
 #include <QDebug>
-#include <QMutex>
 #include "lmcurve.h"
 #include "LTMTrend.h" // for LR when copying CP chart filtering mechanism
 #include "WPrime.h" // for LR when copying CP chart filtering mechanism
@@ -48,7 +47,6 @@
 #endif
 #ifdef GC_WANT_PYTHON
 #include "PythonEmbed.h"
-QMutex pythonMutex;
 #endif
 
 #include <gsl/gsl_matrix.h>
@@ -8597,41 +8595,16 @@ DataFilterRuntime::runPythonScript(Context *context, QString script, RideItem *m
 {
     if (python == NULL) return(0);
 
-    // get the lock
-    pythonMutex.lock();
-
-    // return result
-    double result = 0;
-
-    // run it !!
-    python->canvas = NULL;
-    python->chart = NULL;
-    python->result = 0;
-
     try {
-
-        // run it
-        python->runline(ScriptContext(context, m, metrics, spec), script);
-        result = python->result;
+        return python->runline(
+            ScriptContext(context, m, metrics, spec), script).value;
 
     } catch(std::exception& ex) {
         Q_UNUSED(ex)
 
-        python->messages.clear();
-
     } catch(...) {
-
-        python->messages.clear();
-
     }
 
-    // clear context
-    python->canvas = NULL;
-    python->chart = NULL;
-
-    // free up the interpreter
-    pythonMutex.unlock();
-
-    return result;
+    return 0;
 }
 #endif

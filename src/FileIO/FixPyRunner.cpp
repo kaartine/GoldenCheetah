@@ -19,11 +19,13 @@ int FixPyRunner::run(QString source, QString scriptKey, QString &errText)
     // hourglass .. for long running ones this helps user know its busy
     QApplication::setOverrideCursor(Qt::WaitCursor);
 
-    // set to defaults with gc applied
-    python->cancelled = false;
-
     QString line = source;
     int result = 0;
+
+    FixPyRunParams params;
+    params.context = context;
+    params.rideFile = rideFile;
+    params.rideItem = rideItem;
 
     try {
 
@@ -31,10 +33,6 @@ int FixPyRunner::run(QString source, QString scriptKey, QString &errText)
         line = line.replace("$$", scriptKey);
 
         // run it
-        FixPyRunParams params;
-        params.context = context;
-        params.rideFile = rideFile;
-        params.rideItem = rideItem;
         params.script = QString(line);
 
         if (useNewThread) {
@@ -51,19 +49,21 @@ int FixPyRunner::run(QString source, QString scriptKey, QString &errText)
         }
 
         // output on console
-        if (python->messages.count()) {
-            errText = python->messages.join("\n");
+        if (!params.messages.isEmpty()) {
+            errText = params.messages.join("\n");
+        }
+        if (!params.error.isEmpty()) {
+            errText = params.error;
+            result = 2;
         }
 
     } catch(std::exception& ex) {
-        errText = QString("\n%1\n%2").arg(QString(ex.what())).arg(python->messages.join(""));
+        errText = QString("\n%1\n%2").arg(QString(ex.what())).arg(params.messages.join(""));
         result = 2;
     } catch(...) {
-        errText = QString("\nerror: general exception.\n%1").arg(python->messages.join(""));
+        errText = QString("\nerror: general exception.\n%1").arg(params.messages.join(""));
         result = 3;
     }
-
-    python->messages.clear();
 
     // reset cursor
     QApplication::restoreOverrideCursor();
@@ -74,10 +74,13 @@ int FixPyRunner::run(QString source, QString scriptKey, QString &errText)
 void FixPyRunner::execScript(FixPyRunParams *params)
 {
     QList<RideFile *> editedRideFiles;
-    python->canvas = NULL;
-    python->chart = NULL;
-    python->runline(ScriptContext(params->context, params->rideFile, params->rideItem, false,
-                                  false, &editedRideFiles), params->script);
+    const PythonRunResult result = python->runline(
+        ScriptContext(
+            params->context, params->rideFile, params->rideItem, false,
+            false, &editedRideFiles),
+        params->script);
+    params->messages = result.messages;
+    params->error = result.error;
 
     // finish up commands on edited rides
     foreach (RideFile *f, editedRideFiles) {

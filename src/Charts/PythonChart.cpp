@@ -25,9 +25,10 @@
 #include "RideFileCommand.h"
 #include "HelpWhatsThis.h"
 
-#include <QtConcurrent>
-
+#include <QPointer>
 #include <QWebEngineSettings>
+
+#include <utility>
 
 // always pull in after all QT headers
 #ifdef slots
@@ -37,6 +38,33 @@
 
 // unique identifier for each chart
 static int id=0;
+
+namespace {
+
+void snapshotScriptContext(
+    ScriptContext &scriptContext,
+    Context *context,
+    PythonChart *chart)
+{
+    scriptContext.chartCommandsEnabled = chart != nullptr;
+    if (context) {
+        scriptContext.contextFiltered = context->isfiltered;
+        scriptContext.contextFilters = context->filters;
+        scriptContext.homeFiltered = context->ishomefiltered;
+        scriptContext.homeFilters = context->homeFilters;
+    }
+    if (chart && chart->myPerspective) {
+        scriptContext.perspectiveFiltered =
+                chart->myPerspective->isFiltered();
+        scriptContext.perspectiveFilters =
+                chart->myPerspective->filterlist(
+                    DateRange(
+                        QDate(1, 1, 1970),
+                        QDate(31, 12, 3000)));
+    }
+}
+
+}
 
 PythonConsole::PythonConsole(Context *context, PythonHost *pythonHost, QWidget *parent)
     : QTextEdit(parent)
@@ -145,9 +173,6 @@ void PythonConsole::keyPressEvent(QKeyEvent *e)
 
             if (e->key() == Qt::Key_Escape || ctrl) {
 
-                // are we doing something?
-                python->cancel();
-
                 // ESC or ^C needs to clear program and go to next line
                 python->program.clear();
 
@@ -187,13 +212,8 @@ void PythonConsole::keyPressEvent(QKeyEvent *e)
             // lets run it
             //qDebug()<<"RUN:" << line;
 
-            // set the context for the call
-            if (pythonHost->chart()) {
-                python->canvas = pythonHost->chart()->canvas;
-                python->chart = pythonHost->chart();
-                python->perspective = pythonHost->chart()->myPerspective;
-            }
-
+            PythonRunResult runResult;
+            QPointer<PythonChart> chartGuard(pythonHost->chart());
             try {
 
                 // replace $$ with chart identifier (to avoid shared data)
@@ -201,8 +221,18 @@ void PythonConsole::keyPressEvent(QKeyEvent *e)
 
                 bool readOnly = pythonHost->readOnly();
                 QList<RideFile *> editedRideFiles;
-                python->cancelled = false;
-                python->runline(ScriptContext(context, nullptr, nullptr, true, readOnly, &editedRideFiles), line);
+                ScriptContext scriptContext(
+                    context, nullptr, nullptr, true, readOnly,
+                    &editedRideFiles);
+                snapshotScriptContext(
+                    scriptContext, context, chartGuard.data());
+                runResult = python->runline(scriptContext, line);
+
+                if (chartGuard && !runResult.cancelled) {
+                    for (const auto &command : runResult.chartCommands) {
+                        command(chartGuard.data());
+                    }
+                }
 
                 // finish up commands on edited rides
                 foreach (RideFile *f, editedRideFiles) {
@@ -210,27 +240,26 @@ void PythonConsole::keyPressEvent(QKeyEvent *e)
                 }
 
                 // the run command should result in some messages being generated
-                putData(GColor(CPLOTMARKER), python->messages.join(""));
-                python->messages.clear();
+                if (!runResult.messages.isEmpty()) {
+                    putData(
+                        runResult.error.isEmpty()
+                            ? GColor(CPLOTMARKER) : QColor(Qt::red),
+                        runResult.messages.join(""));
+                } else if (!runResult.error.isEmpty()) {
+                    putData(QColor(Qt::red), runResult.error + "\n");
+                }
 
             } catch(std::exception& ex) {
 
                 putData(QColor(Qt::red), QString("%1\n").arg(QString(ex.what())));
-                putData(QColor(Qt::red), python->messages.join("\n"));
-                python->messages.clear();
+                putData(QColor(Qt::red), runResult.messages.join("\n"));
 
             } catch(...) {
 
                 putData(QColor(Qt::red), "error: general exception.\n");
-                putData(QColor(Qt::red), python->messages.join("\n"));
-                python->messages.clear();
+                putData(QColor(Qt::red), runResult.messages.join("\n"));
 
             }
-
-            // clear context
-            python->canvas = NULL;
-            python->perspective = NULL;
-            python->chart = NULL;
         }
 
         // prompt ">"
@@ -280,7 +309,23 @@ void PythonConsole::contextMenuEvent(QContextMenuEvent *e)
     Q_UNUSED(e)
 }
 
-PythonChart::PythonChart(Context *context, bool ridesummary) : GcChartWindow(context), context(context), ridesummary(ridesummary)
+PythonChart::PythonChart(Context *context, bool ridesummary)
+    : GcChartWindow(context)
+    , context(context)
+    , ridesummary(ridesummary)
+    , syntax(nullptr)
+    , owner(
+        {
+            [this]() { return prepareRun(); },
+            [this](bool busy) { setRunBusy(busy); },
+            [this](PythonRunResult result) {
+                applyRunResult(std::move(result));
+            }
+        },
+        execScript,
+        [](quint64 token) {
+            if (python) python->cancel(token);
+        })
 {
     HelpWhatsThis *helpContents = new HelpWhatsThis(this);
     this->setWhatsThis(helpContents->getWhatsThisText(HelpWhatsThis::Chart_Python));
@@ -299,7 +344,6 @@ PythonChart::PythonChart(Context *context, bool ridesummary) : GcChartWindow(con
     // sert no render widget
     canvas=NULL;
     plot=NULL;
-    syntax=NULL;
 
     QVBoxLayout *mainLayout = new QVBoxLayout;
     mainLayout->setSpacing(0);
@@ -391,10 +435,7 @@ PythonChart::PythonChart(Context *context, bool ridesummary) : GcChartWindow(con
         configChanged(CONFIG_APPEARANCE);
 
         // filter ESC so we can stop scripts
-        installEventFilter(this);
-        installEventFilter(console);
-        installEventFilter(splitter);
-        installEventFilter(canvas);
+        if (qApp) qApp->installEventFilter(this);
     } else {
         // not starting
         noPython = new QLabel(tr("Warning: Python is disabled"), this);
@@ -413,6 +454,8 @@ PythonChart::PythonChart(Context *context, bool ridesummary) : GcChartWindow(con
 
 PythonChart::~PythonChart()
 {
+    if (qApp) qApp->removeEventFilter(this);
+    owner.shutdown();
     if (canvas) delete canvas->page();
 }
 
@@ -477,20 +520,17 @@ PythonChart::setWeb(bool x)
 }
 
 bool
-PythonChart::eventFilter(QObject *, QEvent *e)
+PythonChart::eventFilter(QObject *watched, QEvent *e)
 {
-    // running script, just watch of escape
-    if (python->chart) {
-
-        // is it an ESC key?
-        if (e->type() == QEvent::KeyPress && static_cast<QKeyEvent*>(e)->key() == Qt::Key_Escape) {
-            // stop!
-            python->cancel();
-            return true;
+    QWidget *target = qobject_cast<QWidget *>(watched);
+    const bool belongsToChart =
+            target && (target == this || isAncestorOf(target));
+    if (owner.active() && belongsToChart
+        && e->type() == QEvent::KeyPress) {
+        if (static_cast<QKeyEvent *>(e)->key() == Qt::Key_Escape) {
+            owner.cancelCurrent();
         }
-
-        // otherwise lets just ignore it while active
-        return false;
+        return true;
     }
 
     // on resize event scale the display
@@ -573,99 +613,91 @@ PythonChart::setState(QString)
     //if (python && splitter && b != "") splitter->restoreState(QByteArray(b.toLatin1()));
 }
 
-// this is executed in its own thread.
-void
-PythonChart::execScript(PythonChart *chart)
+PythonChartRunInput
+PythonChart::createRunInput()
 {
-    QString line = chart->script->toPlainText();
+    PythonChartRunInput input;
+    input.source = script->toPlainText();
+    input.source.replace("$$", console->chartid);
+    input.token = python->allocateRunToken();
 
-    // replace $$ with chart identifier (to avoid shared data)
-    line = line.replace("$$", chart->console->chartid);
+    ScriptContext scriptContext(context);
+    scriptContext.runToken = input.token;
+    snapshotScriptContext(scriptContext, context, this);
+    input.context = std::make_shared<const ScriptContext>(scriptContext);
+    return input;
+}
 
-    python->runline(ScriptContext(chart->context), line);
+PythonChartOwner::PreparedRun
+PythonChart::prepareRun()
+{
+    PythonChartOwner::PreparedRun prepared;
+    if (!isVisible() || !python || !script) return prepared;
+
+    if (script->toPlainText().isEmpty()) {
+        prepared.action = PythonChartOwner::Action::Clear;
+        return prepared;
+    }
+
+    prepared.action = PythonChartOwner::Action::Run;
+    prepared.input = createRunInput();
+    return prepared;
+}
+
+PythonRunResult
+PythonChart::execScript(
+    PythonChartRunInput input,
+    std::shared_ptr<std::atomic_bool> cancellation)
+{
+    if (!python || !input.context) {
+        PythonRunResult result;
+        result.error = QStringLiteral("Python run context is not available.");
+        result.messages << result.error;
+        return result;
+    }
+
+    return python->runline(*input.context, input.source, cancellation);
 }
 
 void
 PythonChart::runScript()
 {
-    // don't run until we can be seen!
-    if (!isVisible()) return;
+    owner.trigger();
+}
 
-    if (script->toPlainText() != "") {
-
-        // if it is running another for us?
-        if (python->chart == this) python->cancel();
-
-        // hourglass .. for long running ones this helps user know its busy
-        QApplication::setOverrideCursor(Qt::WaitCursor);
-
-        // turn off updates for a sec
-        setUpdatesEnabled(false);
-
-        // run it !!
-        python->canvas = canvas;
-        python->chart = this;
-        python->perspective = myPerspective;
-
-        // set default page size
-        //python->width = python->height = 0; // sets the canvas to the window size
-
-        // set to defaults with gc applied
-        python->cancelled = false;
-
-        try {
-
-            // run it
-            QFutureWatcher<void>watcher;
-            QFuture<void>f= QtConcurrent::run(execScript,this);
-
-            // wait for it to finish -- remember ESC can be pressed to cancel
-            watcher.setFuture(f);
-            QEventLoop loop;
-            connect(&watcher, SIGNAL(finished()), &loop, SLOT(quit()));
-            loop.exec();
-
-            // output on console
-            if (python->messages.count()) {
-                console->putData(GColor(CPLOTMARKER), python->messages.join("\n"));
-                python->messages.clear();
-            }
-
-        } catch(std::exception& ex) {
-
-            console->putData(QColor(Qt::red), QString("\n%1\n").arg(QString(ex.what())));
-            console->putData(QColor(Qt::red), python->messages.join(""));
-            python->messages.clear();
-
-        } catch(...) {
-
-            console->putData(QColor(Qt::red), "\nerror: general exception.\n");
-            console->putData(QColor(Qt::red), python->messages.join(""));
-            python->messages.clear();
-
-        }
-
-        // polish  the chart if needed
-        if (plot) plot->finaliseChart();
-
-        // turn off updates for a sec
-        setUpdatesEnabled(true);
-
-        // reset cursor
-        QApplication::restoreOverrideCursor();
-
-        // if the program expects more we clear it, otherwise
-        // weird things can happen!
-        //python->R->program.clear();
-
-        // scale to fit and center on output
-        //canvas->fitInView(canvas->sceneRect(), Qt::KeepAspectRatio);
-
-        // clear context
-        python->canvas = NULL;
-        python->chart = NULL;
-        python->perspective = NULL;
+void
+PythonChart::applyRunResult(PythonRunResult result)
+{
+    QPointer<PythonChart> chart(this);
+    for (const auto &command : result.chartCommands) {
+        command(chart.data());
+        if (!chart) return;
     }
+
+    if (!result.messages.isEmpty()) {
+        chart->console->putData(
+            result.error.isEmpty()
+                ? GColor(CPLOTMARKER) : QColor(Qt::red),
+            result.messages.join("\n"));
+    } else if (!result.error.isEmpty()) {
+        chart->console->putData(
+            QColor(Qt::red),
+            QString("\n%1\n").arg(result.error));
+    }
+}
+
+void
+PythonChart::setRunBusy(bool busy)
+{
+    if (busy) {
+        setCursor(Qt::WaitCursor);
+        setUpdatesEnabled(false);
+        return;
+    }
+
+    if (plot) plot->finaliseChart();
+    setUpdatesEnabled(true);
+    unsetCursor();
 }
 
 // rendering to a web page

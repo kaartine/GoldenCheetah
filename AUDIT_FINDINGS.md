@@ -891,15 +891,37 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### THREAD-003: Python chart execution races GUI object lifetime
 
-- Status: OPEN
-- Code: `src/Charts/PythonChart.cpp:578`,
-  `src/Charts/PythonChart.cpp:620`, `src/Charts/PythonChart.cpp:626`
-- Impact: Worker code dereferences GUI objects and a raw chart pointer while a
-  nested GUI event loop permits edits and deletion.
-- Test: Run a sleeping script while editing and deleting the chart under
-  ASan/TSan.
-- Fix direction: Snapshot value data on the GUI thread and guard completion with
-  owned task state or `QPointer`.
+- Status: FIXED
+- Code: `src/Charts/PythonChart.cpp`, `src/Python/PythonEmbed.cpp`,
+  `src/Python/PythonChartOwner.cpp`, `src/Python/PythonChartRunner.cpp`,
+  `src/Python/PythonChartRunState.cpp`, `src/Python/PythonExecutionGate.cpp`,
+  and `src/Python/SIP/Bindings.cpp`
+- Impact: Worker code dereferenced GUI objects and a raw chart pointer while a
+  nested GUI event loop allowed the chart to be edited or destroyed. Shared
+  interpreter result, output, context, cancellation, and chart state also let
+  concurrent callers overwrite one another.
+- Resolution: Python chart inputs and filters are snapshotted as values on the
+  GUI thread. An owned asynchronous runner coalesces reruns, rejects stale
+  results, buffers chart commands for GUI-thread application, and cancels and
+  joins its worker before UI teardown. A process-wide execution gate serializes
+  complete interpreter runs, while unique run tokens make cancellation target
+  the exact active run. Other Python callers now consume per-run results rather
+  than shared mutable fields.
+- Verification: `unittests/Python/pythonChartLifecycle` uses the production
+  owner, runner, state, and gate. It deterministically covers source and filter
+  snapshots, latest-only reruns, clear and repeated cancellation, stale-result
+  suppression, GUI-thread callbacks, destructor cancellation and joining, gate
+  waiter cancellation and serialization, and exact tokens. Its 13 QtTest cases
+  pass normally and under ASan/UBSan/LSan and TSan. The Python-enabled
+  application compiles, links, and passes its version smoke test. All 44 active
+  unit-test targets pass; the legacy `seasonParser` fixture must be staged in
+  that test's build working directory.
+- Residual risk: An in-process native extension that permanently retains the
+  GIL or deliberately ignores asynchronous interruption can still make joining
+  unbounded. A hard deadline for such code requires process isolation rather
+  than unsafe thread termination. The broader lifetime of raw `Context`,
+  `RideItem`, and related pointers in `ScriptContext` remains a separate audit
+  concern outside this fix.
 
 ### THREAD-004: Non-cooperative cloud provider calls can still block teardown
 

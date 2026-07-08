@@ -20,6 +20,7 @@
 #define _GC_PythonChart_h 1
 
 #include <PythonEmbed.h>
+#include <PythonChartOwner.h>
 
 #include <QString>
 #include <QDebug>
@@ -150,7 +151,6 @@ class PythonChart : public GcChartWindow, public PythonHost {
         void showWebChanged(int state);
         void runScript();
         void webpage(QUrl);
-        static void execScript(PythonChart *);
 
     protected:
         // enable stopping long running scripts
@@ -160,10 +160,19 @@ class PythonChart : public GcChartWindow, public PythonHost {
         QSplitter *leftsplitter;
 
     private:
+        static PythonRunResult execScript(
+            PythonChartRunInput input,
+            std::shared_ptr<std::atomic_bool> cancellation);
+        PythonChartOwner::PreparedRun prepareRun();
+        PythonChartRunInput createRunInput();
+        void applyRunResult(PythonRunResult result);
+        void setRunBusy(bool busy);
+
         Context *context;
         QString text; // if Rtool not alive
         bool ridesummary;
         QSyntaxHighlighter *syntax;
+        PythonChartOwner owner;
 };
 
 
