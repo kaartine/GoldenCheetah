@@ -72,6 +72,7 @@ RUN apt-get update \
         libxkbfile-dev \
         file \
         patchelf \
+        python3-dev \
         zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
