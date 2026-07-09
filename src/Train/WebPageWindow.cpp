@@ -39,6 +39,12 @@
 #include <QtWebChannel>
 #include <QWebEngineProfile>
 #include <QWebEngineDownloadRequest>
+#include <QDir>
+#include <QFileInfo>
+#include <QMessageBox>
+#include <QPointer>
+#include <QSharedPointer>
+#include <QTemporaryDir>
 
 // overlay helper
 #include "AbstractView.h"
@@ -81,6 +87,38 @@ class WebSchemeHandler : public QWebEngineUrlSchemeHandler
         QWebEngineView *view;
 };
 
+
+namespace {
+
+QString displayOrigin(const QUrl &url)
+{
+    const QString scheme = url.scheme().toLower();
+    if (scheme == QStringLiteral("http")
+        || scheme == QStringLiteral("https")) {
+        QString origin =
+            scheme + QStringLiteral("://") + url.host();
+        if (url.port(-1) != -1) {
+            origin += QStringLiteral(":")
+                + QString::number(url.port());
+        }
+        return origin.left(256);
+    }
+    return scheme + QLatin1Char(':');
+}
+
+QString cleanAbsolutePath(const QString &path)
+{
+    return QDir::cleanPath(
+        QFileInfo(path).absoluteFilePath());
+}
+
+bool isSupportedWebImport(const QString &fileName)
+{
+    return ErgFile::isWorkout(fileName)
+        || RideFileFactory::instance().supportedFormat(fileName);
+}
+
+} // namespace
 
 // declared in main, we only want to use it to get QStyle
 extern QApplication *application;
@@ -243,48 +281,245 @@ WebPageWindow::event(QEvent *event)
     return QWidget::event(event);
 }
 
-void
-WebPageWindow::downloadRequested(QWebEngineDownloadRequest *item)
+WebDownloadImportPolicy::Request
+WebPageWindow::downloadRequest(QWebEngineDownloadRequest *item)
 {
-    // only do it if I am visible, as shared across web page instances
-    if (!amVisible()) return;
+    WebDownloadImportPolicy::Request request;
+    if (!item) {
+        return request;
+    }
 
-    //qDebug()<<"Download Requested:"<<item->path()<<item->url().toString();
+    QWebEnginePage *sourcePage = item->page();
+    request.id = item->id();
+    request.sourcePage =
+        reinterpret_cast<quintptr>(sourcePage);
+    request.expectedPage =
+        reinterpret_cast<quintptr>(
+            view ? view->page() : nullptr);
+    request.pageVisible = amVisible();
+    request.savePageDownload =
+        item->isSavePageDownload();
+    request.totalBytes = item->totalBytes();
+    request.pageUrl =
+        sourcePage ? sourcePage->url() : QUrl();
+    request.downloadUrl = item->url();
+    request.suggestedFileName =
+        item->suggestedFileName();
+    return request;
+}
 
-    //qDebug() << "Format: " <<  item->savePageFormat();
-    //qDebug() << "Path: " << item->path();
-    //qDebug() << "Type: " << item->type();
-    //qDebug() << "MimeType: " << item->mimeType();
+bool
+WebPageWindow::confirmDownload(
+    const WebDownloadImportPolicy::Request &request)
+{
+    const QString fileName =
+        WebDownloadImportPolicy::Gate::safeFileName(
+            request.suggestedFileName);
+    const QString text =
+        tr("The web page at %1 wants to download and import "
+           "%2 from %3.\n\n"
+           "Continue only if you trust this file.")
+            .arg(displayOrigin(request.pageUrl))
+            .arg(fileName)
+            .arg(displayOrigin(request.downloadUrl));
 
-    // lets go get it!
-    filenames.clear();
-    filenames << QDir(item->downloadDirectory()).absoluteFilePath(item->downloadFileName());
+    QMessageBox prompt(
+        QMessageBox::Question,
+        tr("Download and Import"),
+        text,
+        QMessageBox::Yes | QMessageBox::No,
+        this);
+    prompt.setTextFormat(Qt::PlainText);
+    prompt.setDefaultButton(QMessageBox::No);
+    prompt.setEscapeButton(QMessageBox::No);
+    return prompt.exec() == QMessageBox::Yes;
+}
 
-    // set save
-    connect(item, SIGNAL(isFinishedChanged()), this, SLOT(downloadFinished()));
+void
+WebPageWindow::downloadRequested(
+    QWebEngineDownloadRequest *item)
+{
+    if (!item) {
+        return;
+    }
 
-    // kick off download
-    item->accept(); // lets download it!
+    const WebDownloadImportPolicy::Request request =
+        downloadRequest(item);
+    const WebDownloadImportPolicy::Decision preflight =
+        downloadImportGate.handleRequest(
+            request,
+            QString(),
+            WebDownloadImportPolicy::UserDecision::NotAsked);
+
+    if (preflight.action
+        == WebDownloadImportPolicy::RequestAction::Ignore) {
+        return;
+    }
+    if (preflight.action
+        != WebDownloadImportPolicy::RequestAction::Confirm
+        || !isSupportedWebImport(
+            WebDownloadImportPolicy::Gate::safeFileName(
+                request.suggestedFileName))) {
+        downloadImportGate.cancel(request.id);
+        item->cancel();
+        return;
+    }
+
+    QPointer<WebPageWindow> window(this);
+    QPointer<QWebEngineDownloadRequest> download(item);
+    const bool approved = confirmDownload(request);
+    if (!window) {
+        if (download) {
+            download->cancel();
+        }
+        return;
+    }
+    if (!download) {
+        downloadImportGate.cancel(request.id);
+        return;
+    }
+    if (!approved) {
+        downloadImportGate.handleRequest(
+            request,
+            QString(),
+            WebDownloadImportPolicy::UserDecision::Rejected);
+        item->cancel();
+        return;
+    }
+
+    if (item->state()
+            != QWebEngineDownloadRequest::DownloadRequested
+        || !Context::isValid(context)
+        || !context->athlete
+        || !context->athlete->home) {
+        downloadImportGate.cancel(request.id);
+        item->cancel();
+        return;
+    }
+
+    const QString stagingTemplate =
+        context->athlete->home->temp().absoluteFilePath(
+            QStringLiteral("web-download-XXXXXX"));
+    const QSharedPointer<QTemporaryDir> staging =
+        QSharedPointer<QTemporaryDir>::create(stagingTemplate);
+    if (!staging->isValid()) {
+        downloadImportGate.cancel(request.id);
+        item->cancel();
+        QMessageBox::warning(
+            this,
+            tr("Download Failed"),
+            tr("A private temporary directory could not be created."));
+        return;
+    }
+
+    const WebDownloadImportPolicy::Request currentRequest =
+        downloadRequest(item);
+    const WebDownloadImportPolicy::Decision decision =
+        downloadImportGate.handleRequest(
+            currentRequest,
+            staging->path(),
+            WebDownloadImportPolicy::UserDecision::Approved);
+    if (decision.action
+        != WebDownloadImportPolicy::RequestAction::Accept) {
+        item->cancel();
+        return;
+    }
+
+    item->setDownloadDirectory(staging->path());
+    item->setDownloadFileName(decision.fileName);
+    const QString configuredPath = cleanAbsolutePath(
+        QDir(item->downloadDirectory()).absoluteFilePath(
+            item->downloadFileName()));
+    if (configuredPath != decision.filePath) {
+        downloadImportGate.cancel(request.id);
+        item->cancel();
+        return;
+    }
+
+    downloadStaging.insert(request.id, staging);
+    connect(
+        item,
+        &QWebEngineDownloadRequest::isFinishedChanged,
+        this,
+        &WebPageWindow::downloadFinished,
+        Qt::UniqueConnection);
+    connect(
+        item,
+        &QObject::destroyed,
+        this,
+        [this, id = request.id]() {
+            downloadImportGate.cancel(id);
+            downloadStaging.remove(id);
+        });
+
+    item->accept();
 }
 
 void
 WebPageWindow::downloadFinished()
 {
-    // now try and import it (if download failed file won't exist)
-    // dialog is self deleting
-    QStringList rides, workouts;
-    foreach(QString filename, filenames) {
-        if (ErgFile::isWorkout(filename)) workouts << filename;
-        else rides << filename;
+    QWebEngineDownloadRequest *item =
+        qobject_cast<QWebEngineDownloadRequest *>(
+            sender());
+    if (!item || !item->isFinished()) {
+        return;
     }
 
-    if (rides.count()) {
-        RideImportWizard *dialog = new RideImportWizard(rides, context);
-        dialog->process(); // do it!
+    const quint32 id = item->id();
+    const QSharedPointer<QTemporaryDir> staging =
+        downloadStaging.take(id);
+    WebDownloadImportPolicy::Completion completion;
+    completion.id = id;
+    completion.sourcePage =
+        reinterpret_cast<quintptr>(item->page());
+    completion.filePath = cleanAbsolutePath(
+        QDir(item->downloadDirectory()).absoluteFilePath(
+            item->downloadFileName()));
+    completion.finished = item->isFinished();
+    completion.succeeded =
+        item->state()
+        == QWebEngineDownloadRequest::DownloadCompleted;
+
+    const QString fileName =
+        downloadImportGate.takeCompletedImport(completion);
+    if (fileName.isEmpty() || !staging) {
+        if (completion.succeeded) {
+            QMessageBox::warning(
+                this,
+                tr("Download Failed"),
+                tr("The downloaded file could not be verified "
+                   "and was not imported."));
+        }
+        return;
     }
-    if (workouts.count()) {
-        Library::importFiles(context, filenames, LibraryBatchImportConfirmation::forcedDialog);
+    if (!isSupportedWebImport(fileName)) {
+        QMessageBox::warning(
+            this,
+            tr("Unsupported Download"),
+            tr("The downloaded file type is not supported "
+               "for activity or workout import."));
+        return;
     }
+
+    if (ErgFile::isWorkout(fileName)) {
+        Library::importFiles(
+            context,
+            QStringList{fileName},
+            LibraryBatchImportConfirmation::forcedDialog);
+        return;
+    }
+
+    RideImportWizard *dialog =
+        new RideImportWizard(
+            QStringList{fileName}, context);
+    QObject::connect(
+        dialog,
+        &QObject::destroyed,
+        dialog,
+        [staging]() {
+            Q_UNUSED(staging);
+        });
+    dialog->process();
 }
 
 void

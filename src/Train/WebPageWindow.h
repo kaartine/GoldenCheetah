@@ -23,6 +23,8 @@
 #include <QWidget>
 #include <QDialog>
 #include <QNetworkReply>
+#include <QHash>
+#include <QSharedPointer>
 
 #include <string>
 #include <iostream>
@@ -31,6 +33,7 @@
 #include "RideFile.h"
 #include "IntervalItem.h"
 #include "Context.h"
+#include "WebDownloadImportPolicy.h"
 
 #include <QDialog>
 #include <QSslSocket>
@@ -38,6 +41,7 @@
 #include <QWebEngineView>
 
 class QMouseEvent;
+class QTemporaryDir;
 class RideItem;
 class Context;
 class QColor;
@@ -87,9 +91,13 @@ class WebPageWindow : public GcChartWindow
         Context *context;
         QVBoxLayout *layout;
 
-        // downloading
-        QStringList filenames;
-        QMap<QNetworkReply*, QByteArray*> buffers;
+        // Downloads are authorized per page and kept in private staging.
+        WebDownloadImportPolicy::Gate downloadImportGate;
+        QHash<quint32, QSharedPointer<QTemporaryDir>> downloadStaging;
+        WebDownloadImportPolicy::Request downloadRequest(
+            QWebEngineDownloadRequest *item);
+        bool confirmDownload(
+            const WebDownloadImportPolicy::Request &request);
 
         // setting dialog
         QLabel *customUrlLabel;

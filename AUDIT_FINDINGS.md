@@ -1077,15 +1077,36 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-008: Remote WebEngine downloads are automatically imported
 
-- Status: OPEN
-- Code: `src/Train/WebPageWindow.cpp:148`,
-  `src/Train/WebPageWindow.cpp:267`, `src/Train/WebPageWindow.cpp:283`
+- Status: FIXED
+- Code: `src/Train/WebDownloadImportPolicy.cpp`,
+  `src/Train/WebDownloadImportPolicy.h`, `src/Train/WebPageWindow.cpp`
 - Impact: A malicious page using the shared profile can silently drive files
   into complex ride/workout parsers without a trusted origin or user gesture.
-- Test: Trigger downloads from another shared-profile page and script; require
-  explicit confirmation before parsing.
-- Fix direction: Isolate profiles, validate page/origin, quarantine downloads,
-  and require user approval.
+- Test: `unittests/Train/webDownloadImportPolicy` covers foreign and missing
+  page identities, hidden pages, save-page downloads, declared and final size
+  limits, insecure and deceptive URLs, prompt-time request mutation,
+  concurrent requests, staging containment, cancellation, completion replay,
+  path substitution, missing and empty files, symlinks, and safe filenames.
+- Resolution: Every download is bound to the exact originating
+  `QWebEnginePage`; other pages sharing the profile ignore it, while malformed
+  owning-page requests fail closed. Remote page and download URLs require
+  HTTPS, with cleartext HTTP restricted to exact loopback hosts. A plain-text,
+  default-No prompt is required before acceptance. Approved files use a
+  private random temporary directory and a generic sanitized filename. Only
+  one request per page gate can be active, and completion is single-use and
+  revalidates the page, exact path, canonical parent, regular-file type,
+  symlink status, nonempty content, and a 128 MiB limit before invoking a
+  parser. Closing the request or owner removes the staging directory and
+  cancels unfinished state.
+- Verification: The test-first build initially failed because no policy
+  contract existed; focused edge cases then demonstrated unsafe size changes,
+  cleartext remote URLs, missing identities, concurrent requests, and local
+  file relationships before their fixes. All 52 policy tests pass normally
+  and under strict ASan/UBSan/LSan. The release application compiles and
+  links, the signal-lifetime scanner passes, and the complete qmake check
+  passes 1,786 tests in 50 QtTest suites without failures or skips.
+- Scope: Decompression expansion limits remain tracked separately as
+  `PARSE-001`.
 
 ### SEC-009: Map WebChannel is exposed to insecure/untrusted scripts
 

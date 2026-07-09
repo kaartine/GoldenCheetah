@@ -10,6 +10,7 @@ equals(GC_UNITTESTS, active) {
 			   Cloud/oauthCallbackPolicy \
 			   Cloud/openDataEndpointPolicy \
 			   Train/libraryImportFileStager \
+			   Train/webDownloadImportPolicy \
 			   Train/trainDbVersionSafety \
 			   Core/measuresAtomicSave \
 			   Core/rideCacheAtomicSave \
