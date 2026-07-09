@@ -92,6 +92,13 @@ public:
     {
     }
 
+    void setTrustedHtml(const QString &html)
+    {
+        navigationGate_.reset();
+        navigationGate_.authorizeSetHtml();
+        setHtml(html, MapDocumentUrl);
+    }
+
 protected:
     QWebEnginePage *createWindow(WebWindowType type) override
     {
@@ -144,13 +151,25 @@ protected:
     {
         Q_UNUSED(type)
         return isMainFrame
-            && MapPageSecurityPolicy::allowsRequest(
-                MapPageSecurityPolicy::ResourceType::MainFrame,
-                url,
-                MapPageSecurityPolicy::tileEndpoint(
-                    DefaultTileTemplate));
+            && navigationGate_.allowsNavigation(url);
     }
+
+private:
+    MapPageSecurityPolicy::MainFrameNavigationGate
+        navigationGate_;
 };
+
+void setTrustedMapHtml(QWebEngineView *view,
+                       const QString &html)
+{
+    if (!view || !view->page()) {
+        return;
+    }
+
+    auto *page =
+        static_cast<RestrictedMapPage *>(view->page());
+    page->setTrustedHtml(html);
+}
 
 } // namespace
 
@@ -352,9 +371,8 @@ RideMapWindow::RideMapWindow(Context *context, int mapType) : GcChartWindow(cont
             }
         });
 
-    view->page()->setHtml(
-        QStringLiteral("<html></html>"),
-        MapDocumentUrl);
+    setTrustedMapHtml(
+        view, QStringLiteral("<html></html>"));
     layout->addWidget(view);
 
     HelpWhatsThis *help = new HelpWhatsThis(view);
@@ -709,8 +727,7 @@ RideMapWindow::forceReplot()
 {
     if (context->isCompareIntervals) {
         createHtml();
-        view->page()->setHtml(
-            currentPage, MapDocumentUrl);
+        setTrustedMapHtml(view, currentPage);
     } else {
         stale=true;
         rideSelected();
@@ -763,8 +780,7 @@ void RideMapWindow::loadRide()
     createHtml();
     buildPositionList();
 
-    view->page()->setHtml(
-        currentPage, MapDocumentUrl);
+    setTrustedMapHtml(view, currentPage);
 }
 
 void RideMapWindow::updateFrame()
@@ -1573,8 +1589,7 @@ RideMapWindow::compareIntervalsChanged
 
     if (oldCountCompareIntervals == 0 || countCompareIntervals == 0) {
         createHtml();
-        view->page()->setHtml(
-            currentPage, MapDocumentUrl);
+        setTrustedMapHtml(view, currentPage);
     }
 }
 

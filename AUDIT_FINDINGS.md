@@ -1119,8 +1119,9 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   coordinates and interval mutation through WebChannel.
 - Test: `unittests/Charts/mapPageSecurity` covers unsafe map types, tile
   templates and image origins, cleartext and deceptive URLs, exact qrc
-  resource admission, main-frame navigation, CSP nonce validation,
-  JavaScript string encoding, and the bundled Leaflet asset hashes.
+  resource admission, main-frame navigation, single-use `setHtml()`
+  authorization, CSP nonce validation, JavaScript string encoding, and the
+  bundled Leaflet asset hashes.
 - Resolution: The map now uses a dedicated off-the-record WebEngine profile
   with memory-only caching, no persistent cookies or permissions, and no
   shared browser state. Leaflet 1.9.4 and its license/assets are bundled and
@@ -1131,15 +1132,20 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   loopback hosts. A nonce-based CSP denies all other script, connection,
   frame, worker, object, base, and form sources. Navigation, new windows,
   file selection, JavaScript dialogs, context menus, drops, and downloads are
-  blocked on the privileged page.
+  blocked on the privileged page. Qt's internal `setHtml()` `data:` transport
+  is admitted by the request interceptor but accepted by the page only through
+  a single-use authorization that is consumed by any attempted navigation.
 - Verification: Test-first cases failed on the missing policy, remote HTTP
   and script paths, unsafe legacy map selection, broad qrc URLs, and
-  data/about main-frame navigation before their fixes. All 68 focused tests
-  pass normally and under strict ASan/UBSan/LSan. The release application
-  compiles and links, and the complete qmake check passes 1,854 tests in 51
-  QtTest suites without failures or skips. An AppImage usage test opened an
-  isolated copy of an existing athlete profile, selected a GPS activity, and
-  rendered both OpenStreetMap tiles and the route successfully.
+  data/about main-frame navigation before their fixes. A release usage test
+  then exposed that rejecting all `data:` requests also rejected Qt's trusted
+  `setHtml()` transport; the follow-up RED test required a missing single-use
+  navigation gate. All 75 focused tests pass normally and under strict
+  ASan/UBSan/LSan. The release application compiles and links, and the complete
+  qmake check passes 1,861 tests in 51 QtTest suites without failures or skips.
+  A usage test opened an isolated copy of an existing athlete profile, selected
+  a GPS activity, and rendered both OpenStreetMap tiles and the route
+  successfully through the gated path.
 
 ### SEC-010: Interval names are inserted into JavaScript without escaping
 
@@ -1157,7 +1163,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   user-controlled text into quoted JavaScript source.
 - Verification: All encoding cases and the production integration contract
   pass normally and under strict ASan/UBSan/LSan, as well as in the complete
-  1,854-test regression run.
+  1,861-test regression run.
 
 ### SEC-011: Cloud credentials are stored in plaintext settings
 

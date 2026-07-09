@@ -295,12 +295,58 @@ bool allowsRequest(ResourceType resourceType,
         return isAllowedQrcResource(
             resourceType, url);
     }
+    if (resourceType == ResourceType::MainFrame) {
+        return scheme == QStringLiteral("data");
+    }
     if (resourceType == ResourceType::Image
         && scheme == QStringLiteral("data")) {
         return true;
     }
     return resourceType == ResourceType::Image
         && tileEndpoint.allowsImage(url);
+}
+
+bool allowsMainFrameNavigation(const QUrl &url)
+{
+    if (!url.isValid()
+        || url.isRelative()
+        || url.scheme().compare(
+               QStringLiteral("qrc"),
+               Qt::CaseInsensitive) != 0) {
+        return false;
+    }
+
+    return isAllowedQrcResource(
+        ResourceType::MainFrame, url);
+}
+
+void MainFrameNavigationGate::authorizeSetHtml()
+{
+    trustedSetHtmlPending_ = true;
+}
+
+void MainFrameNavigationGate::reset()
+{
+    trustedSetHtmlPending_ = false;
+}
+
+bool MainFrameNavigationGate::allowsNavigation(
+    const QUrl &url)
+{
+    const bool trustedSetHtmlPending =
+        trustedSetHtmlPending_;
+    trustedSetHtmlPending_ = false;
+
+    if (allowsMainFrameNavigation(url)) {
+        return true;
+    }
+
+    return trustedSetHtmlPending
+        && url.isValid()
+        && !url.isRelative()
+        && url.scheme().compare(
+               QStringLiteral("data"),
+               Qt::CaseInsensitive) == 0;
 }
 
 QString javaScriptStringLiteral(const QString &value)

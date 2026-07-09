@@ -67,6 +67,9 @@ private slots:
     void tileEndpointRestrictsImageOrigins();
     void requestPolicyAllowsOnlyLocalAssetsAndTiles_data();
     void requestPolicyAllowsOnlyLocalAssetsAndTiles();
+    void mainFrameNavigationIsRestricted_data();
+    void mainFrameNavigationIsRestricted();
+    void trustedSetHtmlNavigationIsSingleUse();
     void javaScriptStringsAreEncoded_data();
     void javaScriptStringsAreEncoded();
     void contentSecurityPolicyIsNarrow();
@@ -302,10 +305,10 @@ requestPolicyAllowsOnlyLocalAssetsAndTiles_data()
         << QUrl(QStringLiteral(
                "qrc:/images/maps/finish.png"))
         << true;
-    QTest::newRow("data-main-frame")
+    QTest::newRow("set-html-data-main-frame")
         << ResourceType::MainFrame
         << QUrl(QStringLiteral("data:text/html,"))
-        << false;
+        << true;
     QTest::newRow("qrc-map-main-frame")
         << ResourceType::MainFrame
         << QUrl(QStringLiteral("qrc:/web/ride-map"))
@@ -396,6 +399,71 @@ requestPolicyAllowsOnlyLocalAssetsAndTiles()
         MapPageSecurityPolicy::allowsRequest(
             resourceType, url, endpoint),
         allowed);
+}
+
+void
+TestMapPageSecurityPolicy::mainFrameNavigationIsRestricted_data()
+{
+    QTest::addColumn<QUrl>("url");
+    QTest::addColumn<bool>("allowed");
+
+    QTest::newRow("map-document")
+        << QUrl(QStringLiteral("qrc:/web/ride-map")) << true;
+    QTest::newRow("set-html-data")
+        << QUrl(QStringLiteral("data:text/html,")) << false;
+    QTest::newRow("about-blank")
+        << QUrl(QStringLiteral("about:blank")) << false;
+    QTest::newRow("query")
+        << QUrl(QStringLiteral(
+               "qrc:/web/ride-map?unexpected=true"))
+        << false;
+    QTest::newRow("authority")
+        << QUrl(QStringLiteral(
+               "qrc://attacker.invalid/web/ride-map"))
+        << false;
+    QTest::newRow("remote")
+        << QUrl(QStringLiteral("https://attacker.invalid/"))
+        << false;
+}
+
+void
+TestMapPageSecurityPolicy::mainFrameNavigationIsRestricted()
+{
+    QFETCH(QUrl, url);
+    QFETCH(bool, allowed);
+
+    QCOMPARE(
+        MapPageSecurityPolicy::allowsMainFrameNavigation(url),
+        allowed);
+}
+
+void
+TestMapPageSecurityPolicy::trustedSetHtmlNavigationIsSingleUse()
+{
+    const QUrl dataUrl(QStringLiteral("data:text/html,"));
+    const QUrl mapUrl(
+        QStringLiteral("qrc:/web/ride-map"));
+    const QUrl remoteUrl(
+        QStringLiteral("https://attacker.invalid/"));
+    MapPageSecurityPolicy::MainFrameNavigationGate gate;
+
+    QVERIFY(!gate.allowsNavigation(dataUrl));
+    gate.authorizeSetHtml();
+    QVERIFY(gate.allowsNavigation(dataUrl));
+    QVERIFY(!gate.allowsNavigation(dataUrl));
+
+    gate.authorizeSetHtml();
+    QVERIFY(!gate.allowsNavigation(remoteUrl));
+    QVERIFY(!gate.allowsNavigation(dataUrl));
+
+    gate.authorizeSetHtml();
+    QVERIFY(gate.allowsNavigation(mapUrl));
+    QVERIFY(!gate.allowsNavigation(dataUrl));
+
+    gate.authorizeSetHtml();
+    gate.reset();
+    QVERIFY(!gate.allowsNavigation(dataUrl));
+    QVERIFY(gate.allowsNavigation(mapUrl));
 }
 
 void
@@ -583,10 +651,15 @@ TestMapPageSecurityPolicy::mapPageIntegrationKeepsScriptsLocal()
     QVERIFY(source.contains("new QWebEngineProfile(this)"));
     QVERIFY(source.contains("NoPersistentCookies"));
     QVERIFY(source.contains("setUrlRequestInterceptor"));
+    QVERIFY(source.contains(
+        "navigationGate_.allowsNavigation"));
+    QVERIFY(source.contains("setTrustedHtml"));
     QVERIFY(source.contains("leafletScriptUrl"));
     QVERIFY(source.contains("nonce=\\\"%1\\\""));
     QVERIFY(source.count("javaScriptStringLiteral") >= 3);
-    QVERIFY(source.contains("currentPage, MapDocumentUrl"));
+    QCOMPARE(
+        source.count("setTrustedMapHtml(view, currentPage)"),
+        3);
     QVERIFY(source.contains(
         "if (view) delete view->page();"));
 }

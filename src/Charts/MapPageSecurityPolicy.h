@@ -42,11 +42,23 @@ private:
     int port_ = -1;
 };
 
+class MainFrameNavigationGate
+{
+public:
+    void authorizeSetHtml();
+    void reset();
+    bool allowsNavigation(const QUrl &url);
+
+private:
+    bool trustedSetHtmlPending_ = false;
+};
+
 int safeMapType(int requested);
 TileEndpoint tileEndpoint(const QString &tileTemplate);
 bool allowsRequest(ResourceType resourceType,
                    const QUrl &url,
                    const TileEndpoint &tileEndpoint);
+bool allowsMainFrameNavigation(const QUrl &url);
 QString javaScriptStringLiteral(const QString &value);
 QString contentSecurityPolicy(const QString &nonce,
                               const TileEndpoint &tileEndpoint);
