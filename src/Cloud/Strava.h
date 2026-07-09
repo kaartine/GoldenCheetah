@@ -37,6 +37,9 @@ class Strava : public CloudService {
 
         Strava(Context *context);
         CloudService *clone(Context *context) { return new Strava(context); }
+        AutoDownloadExecution autoDownloadExecution() const override
+            { return AutoDownloadExecution::Cooperative; }
+
         ~Strava();
 
         // open/connect and close/disconnect

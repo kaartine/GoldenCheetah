@@ -37,10 +37,18 @@ class Tredict : public CloudService {
 
         Tredict(Context *context);
         CloudService *clone(Context *context) { return new Tredict(context); }
+        AutoDownloadExecution autoDownloadExecution() const override
+            { return AutoDownloadExecution::Cooperative; }
+
         ~Tredict();
 
         int capabilities() const { return OAuth | Upload | Download | Query; }
         int type() const { return Activities | Measures; }
+        StartupMeasuresExecution
+            startupMeasuresExecution() const override
+        {
+            return StartupMeasuresExecution::Tredict;
+        }
 
         bool open(QStringList &errors);
         bool close();

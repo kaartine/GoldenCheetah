@@ -32,6 +32,9 @@ class SportTracks : public CloudService {
 
         SportTracks(Context *context);
         CloudService *clone(Context *context) { return new SportTracks(context); }
+        AutoDownloadExecution autoDownloadExecution() const override
+            { return AutoDownloadExecution::Cooperative; }
+
         ~SportTracks();
 
         QString id() const { return "SportTracks.mobi"; }

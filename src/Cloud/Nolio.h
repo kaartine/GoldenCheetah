@@ -32,6 +32,9 @@ class Nolio : public CloudService {
 
         Nolio(Context *context);
         CloudService *clone(Context *context) { return new Nolio(context); }
+        AutoDownloadExecution autoDownloadExecution() const override
+            { return AutoDownloadExecution::Cooperative; }
+
         ~Nolio();
 
         QString id() const { return "Nolio"; }

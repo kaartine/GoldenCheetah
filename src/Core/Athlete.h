@@ -79,6 +79,9 @@ class Athlete : public QObject
             MainWindow *mainWindow, const QDir &homeDir,
             const std::function<void(Context *)> &publish,
             const std::function<void(Context *)> &rollback);
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+        static void setWaitForRideCacheLoadForTest(bool enabled);
+#endif
         void close();
 
         // basic athlete info
@@ -173,7 +176,13 @@ class Athlete : public QObject
         void loadComplete();
 
     private:
+        void handleRideCacheLoadComplete();
+        void completeInitialLoad();
+        void performLoadComplete();
         void releaseOwnedResources(bool saveCharts) noexcept;
+        bool constructionComplete = false;
+        bool deferredLoadComplete = false;
+        bool loadCompletionStarted = false;
 };
 
 

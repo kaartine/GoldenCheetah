@@ -192,6 +192,9 @@ class Context : public QObject
         // athlete load/close
         void notifyLoadProgress(QString folder, double progress) { emit loadProgress(folder,progress); }
         void notifyLoadCompleted(QString folder, Context *context) { emit loadCompleted(folder,context); } // Athlete loaded
+        void notifyLoadFailed(
+            QString folder, Context *context, QString error)
+            { emit loadFailed(folder, context, error); }
         void notifyAthleteClose(QString folder, Context *context) { emit athleteClose(folder,context); }
         void notifyLoadDone(QString folder, Context *context) { emit loadDone(folder, context); } // MainWindow finished
 
@@ -301,6 +304,7 @@ class Context : public QObject
         // loading an athlete
         void loadProgress(QString,double);
         void loadCompleted(QString, Context*);
+        void loadFailed(QString, Context*, QString);
         void loadDone(QString, Context*);
         void athleteClose(QString, Context*);
 

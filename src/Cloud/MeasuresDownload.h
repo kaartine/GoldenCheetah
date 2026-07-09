@@ -32,6 +32,11 @@
 #include <QDateEdit>
 #include <QLabel>
 #include <QProgressBar>
+#include <QPointer>
+
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+#include <functional>
+#endif
 
 
 class MeasuresDownload : public QDialog
@@ -41,42 +46,55 @@ class MeasuresDownload : public QDialog
 public:
     MeasuresDownload(Context *context, MeasuresGroup *measuresGroup);
     ~MeasuresDownload();
-    static void updateMeasures(Context *context,
+    static bool updateMeasures(Context *context,
                                MeasuresGroup *measuresGroup,
                                QList<Measure>&measures,
-                               bool discardExisting=false);
+                               bool discardExisting=false,
+                               QString *error=nullptr);
     static void autoDownload(Context *context);
+
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+    using AutoDownloadProbe = std::function<bool(
+        Context *, const QString &, QString &,
+        const QDateTime &, const QDateTime &,
+        QList<Measure> &)>;
+    using ManualDownloadProbe = AutoDownloadProbe;
+    static void setAutoDownloadProbeForTest(AutoDownloadProbe probe);
+    static void setManualDownloadProbeForTest(ManualDownloadProbe probe);
+#endif
 
 private:
 
-     Context *context;
+     QPointer<Context> context;
 
-     MeasuresGroup *measuresGroup;
+     MeasuresGroup *measuresGroup = nullptr;
+     QString measuresGroupSymbol;
+     QString measuresGroupName;
 
-     WithingsDownload *withingsDownload;
-     TredictMeasuresDownload *tredictDownload;
-     MeasuresCsvImport *csvFileImport;
+     WithingsDownload *withingsDownload = nullptr;
+     TredictMeasuresDownload *tredictDownload = nullptr;
+     MeasuresCsvImport *csvFileImport = nullptr;
 
-     QPushButton *downloadButton;
-     QPushButton *closeButton;
+     QPushButton *downloadButton = nullptr;
+     QPushButton *closeButton = nullptr;
 
-     QCheckBox *discardExistingMeasures;
+     QCheckBox *discardExistingMeasures = nullptr;
 
      // withings, tredict, csv file
-     QRadioButton *downloadWithings;
-     QRadioButton *downloadTredict;
-     QRadioButton *downloadCSV;
+     QRadioButton *downloadWithings = nullptr;
+     QRadioButton *downloadTredict = nullptr;
+     QRadioButton *downloadCSV = nullptr;
 
      //  all, from last measure, manual date interval
-     QRadioButton *dateRangeAll;
-     QRadioButton *dateRangeLastMeasure;
-     QRadioButton *dateRangeManual;
+     QRadioButton *dateRangeAll = nullptr;
+     QRadioButton *dateRangeLastMeasure = nullptr;
+     QRadioButton *dateRangeManual = nullptr;
 
-     QDateEdit *manualFromDate;
-     QDateEdit *manualToDate;
+     QDateEdit *manualFromDate = nullptr;
+     QDateEdit *manualToDate = nullptr;
 
      // Progress Bar
-     QProgressBar *progressBar;
+     QProgressBar *progressBar = nullptr;
 
      enum source { WITHINGS = 1,
                    TP = 2,

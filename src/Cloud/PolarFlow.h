@@ -41,6 +41,9 @@ class PolarFlow : public CloudService {
 
         PolarFlow(Context *context);
         CloudService *clone(Context *context) { return new PolarFlow(context); }
+        AutoDownloadExecution autoDownloadExecution() const override
+            { return AutoDownloadExecution::Cooperative; }
+
         ~PolarFlow();
 
         QString id() const { return "PolarFlow"; }

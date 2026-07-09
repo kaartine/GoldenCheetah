@@ -21,6 +21,7 @@
 #include "MainWindow.h"
 #include "Settings.h"
 #include "CloudService.h"
+#include "LocalFileStoreProcess.h"
 #include "TrainDB.h"
 #include "Colors.h"
 #include "GcUpgrade.h"
@@ -221,6 +222,12 @@ main(int argc, char *argv[])
 {
     int ret=2; // return code from qapplication, default to error
 
+    if (LocalFileStoreProcess::isHelperInvocation(argc, argv)) {
+        QCoreApplication helperApplication(argc, argv);
+        return LocalFileStoreProcess::runHelper(
+            helperApplication.arguments());
+    }
+
 #ifdef Q_OS_WIN
     // On Windows without console, we try to attach to the parent's console
     // and redirect stderr and stdout on success, to have a more Unix-like
@@ -415,6 +422,10 @@ main(int argc, char *argv[])
 
     // create the application -- only ever ONE regardless of restarts
     application = new QApplication(argc, argv);
+    if (!LocalFileStoreProcess::initializeReaper()) {
+        qWarning()
+            << "Local Store process isolation is unavailable";
+    }
 
 #ifdef Q_OS_WIN
     if (application->style()->name() == "windows11") {
@@ -780,6 +791,9 @@ main(int argc, char *argv[])
 
     } while (restarting);
 
+    if (!LocalFileStoreProcess::shutdownReaper()) {
+        qWarning() << "Local Store helper reaper did not stop cleanly";
+    }
     delete application;
 
     return ret;

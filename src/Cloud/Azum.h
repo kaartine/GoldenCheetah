@@ -14,6 +14,9 @@ class Azum : public CloudService {
 
         Azum(Context *context);
         CloudService *clone(Context *context) { return new Azum(context); }
+        AutoDownloadExecution autoDownloadExecution() const override
+            { return AutoDownloadExecution::Cooperative; }
+
         ~Azum();
 
         QString id() const { return "Azum"; }

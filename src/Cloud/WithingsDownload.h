@@ -23,6 +23,7 @@
 #include <QObject>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
+#include <QUrl>
 
 #include "Context.h"
 #include "Settings.h"
@@ -36,7 +37,15 @@ class WithingsDownload : public QObject
 
 
 public:
-    WithingsDownload(Context *context);
+    struct NetworkOptions {
+        QUrl tokenEndpoint;
+        QUrl measuresEndpoint;
+        int timeoutMs = 30000;
+    };
+
+    explicit WithingsDownload(Context *context);
+    WithingsDownload(
+        Context *context, const NetworkOptions &networkOptions);
     bool getBodyMeasures(QString &error, QDateTime from, QDateTime to, QList<Measure> &data);
 
 signals:
@@ -47,15 +56,11 @@ signals:
 private:
     Context *context;
     QNetworkAccessManager *nam;
-    QString response;
-
-    QEventLoop loop;
-
+    const NetworkOptions networkOptions;
+    bool waitForReply(
+        QNetworkReply *reply, QString &error, QString &response);
     QJsonParseError parse(QString text, QList<Measure> &bodyMeasures);
-    QList<WithingsReading> jsonDocumentToWithingsReading(QJsonDocument withingsJson);
-
-private slots:
-
-    void downloadFinished(QNetworkReply *reply);
+    QList<WithingsReading> jsonDocumentToWithingsReading(
+        QJsonDocument withingsJson);
 };
 #endif

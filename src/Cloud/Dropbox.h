@@ -31,6 +31,9 @@ class Dropbox : public CloudService {
 
         Dropbox(Context *context);
         CloudService *clone(Context *context) { return new Dropbox(context); }
+        AutoDownloadExecution autoDownloadExecution() const override
+            { return AutoDownloadExecution::Cooperative; }
+
         ~Dropbox();
 
         QString id() const { return "Dropbox"; }

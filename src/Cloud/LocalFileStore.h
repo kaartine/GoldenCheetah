@@ -29,38 +29,60 @@ class LocalFileStore : public CloudService {
     public:
 
         LocalFileStore(Context *context);
+        static bool isSupportedPlatform();
         CloudService *clone(Context *context) { return new LocalFileStore(context); }
-        ~LocalFileStore();
+        AutoDownloadExecution autoDownloadExecution() const override
+        {
+#ifdef Q_OS_UNIX
+            return AutoDownloadExecution::ProcessIsolated;
+#else
+            return AutoDownloadExecution::Unsupported;
+#endif
+        }
+        CloudService *cloneForAutoDownload(
+            Context *context) override;
 
-        QString id() const { return "Local Store"; }
-        QString uiName() const { return tr("Local Store"); }
-        QString description() const { return (tr("Sync with a local folder or thumbdrive.")); }
-        QImage logo() const { return QImage(":images/services/localstore.png"); }
+        int capabilities() const override {
+            return isSupportedPlatform()
+                ? Upload | Download | Query
+                : 0;
+        }
+
+        ~LocalFileStore() override;
+
+        QString id() const override { return "Local Store"; }
+        QString uiName() const override { return tr("Local Store"); }
+        QString description() const override
+            { return tr("Sync with a local folder or thumbdrive."); }
+        QImage logo() const override
+            { return QImage(":images/services/localstore.png"); }
 
 
         // open/connect and close/disconnect
-        bool open(QStringList &errors);
-        bool close();
+        bool open(QStringList &errors) override;
+        bool close() override;
 
         // home directory
-        QString home();
+        QString home() override;
 
         // write a file 
-        bool writeFile(QByteArray &data, QString remotename, RideFile *ride);
+        bool writeFile(
+            QByteArray &data, QString remotename, RideFile *ride) override;
 
         // read a file
-        bool readFile(QByteArray *data, QString remotename, QString);
+        bool readFile(
+            QByteArray *data, QString remotename, QString) override;
 
         // create a folder
-        bool createFolder(QString path);
+        bool createFolder(QString path) override;
 
         // dirent style api
-        CloudServiceEntry *root() { return root_; }
-        QList<CloudServiceEntry*> readdir(QString path, QStringList &errors);
+        CloudServiceEntry *root() override { return root_; }
+        QList<CloudServiceEntry *> readdir(
+            QString path, QStringList &errors) override;
 
     private:
-        Context *context;
-        CloudServiceEntry *root_;
+        CloudServiceEntry *root_ = nullptr;
 
 };
 #endif

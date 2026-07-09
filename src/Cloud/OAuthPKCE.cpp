@@ -338,7 +338,8 @@ OAuthPKCE::refreshAccessTokenWithTimeout(
         const QString &currentRefreshToken,
         QString &newAccessToken, QString &newRefreshToken,
         int &expiresIn, QString &error,
-        int timeoutMs)
+        int timeoutMs,
+        const std::function<bool()> &isCancelled)
 {
     QNetworkAccessManager nam;
     QUrlQuery params;
@@ -356,8 +357,9 @@ OAuthPKCE::refreshAccessTokenWithTimeout(
     const NetworkReplyWaitResult waitResult =
             waitForNetworkReply(
                 reply, timeoutMs,
-                [thread]() {
-                    return thread->isInterruptionRequested();
+                [thread, isCancelled]() {
+                    return thread->isInterruptionRequested()
+                        || (isCancelled && isCancelled());
                 });
     if (waitResult == NetworkReplyWaitResult::Interrupted) {
         error = QObject::tr("Token refresh cancelled.");

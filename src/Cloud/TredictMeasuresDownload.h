@@ -23,6 +23,7 @@
 
 #include <QObject>
 #include <QNetworkAccessManager>
+#include <QUrl>
 
 #include "Context.h"
 #include "Measures.h"
@@ -33,7 +34,16 @@ class TredictMeasuresDownload : public QObject
     G_OBJECT
 
 public:
-    TredictMeasuresDownload(Context *context);
+    struct NetworkOptions {
+        QUrl tokenEndpoint;
+        QUrl bodyEndpoint;
+        QUrl hrvEndpoint;
+        int timeoutMs = 30000;
+    };
+
+    explicit TredictMeasuresDownload(Context *context);
+    TredictMeasuresDownload(
+        Context *context, const NetworkOptions &networkOptions);
 
     bool getBodyMeasures(QString &error, QDateTime from, QDateTime to, QList<Measure> &data);
     bool getHrvMeasures(QString &error, QDateTime from, QDateTime to, QList<Measure> &data);
@@ -49,6 +59,7 @@ private:
 
     Context *context;
     QNetworkAccessManager *nam;
+    const NetworkOptions networkOptions;
 };
 
 #endif

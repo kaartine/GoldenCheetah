@@ -2810,6 +2810,7 @@ CloudServiceAutoDownload::startDownload()
     for (const QString &name : factory.serviceNames()) {
         const CloudService *definition = factory.service(name);
         if (!definition) continue;
+        if (!definition->supportsStartupActivityDownload()) continue;
         if (appsettings->cvalue(
                 athlete,
                 definition->syncOnStartupSettingName(),
@@ -2818,9 +2819,10 @@ CloudServiceAutoDownload::startDownload()
             continue;
         }
 
-        hasEnabledService = true;
-        if (CloudService *service = factory.newService(name, context)) {
+        if (CloudService *service =
+                factory.newAutoDownloadService(name, context)) {
             plan.providers.append(service);
+            hasEnabledService = true;
         }
     }
 

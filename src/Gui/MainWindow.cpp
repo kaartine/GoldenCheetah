@@ -30,6 +30,8 @@
 #include <QRect>
 #include <QWebEngineProfile>
 
+#include <stdexcept>
+
 // DATA STRUCTURES
 #include "MainWindow.h"
 #include "Context.h"
@@ -163,8 +165,12 @@ MainWindow::MainWindow(const QDir &home)
     // If this context is stored (or signals/events registered) in any global class instances (e.g. searchBox)
     // then the context in those instances must be updated when the current athlete is changed.
 
-    Context *context = new Context(this);
-    context->athlete = new Athlete(context, home);
+    Context *context = Athlete::createInNewContext(
+        this, home, {}, {});
+    if (!context || !context->athlete) {
+        throw std::runtime_error(
+            "initial athlete load did not produce a valid context");
+    }
 
     QString temp = const_cast<AthleteDirectoryStructure*>(context->athlete->directoryStructure())->temp().absolutePath();
     context->webEngineProfile->setCachePath(temp);
@@ -2035,12 +2041,13 @@ MainWindow::openAthleteTab(QString name)
     if (!home.exists()) return false;
     appsettings->initializeQSettingsAthlete(gcroot, name);
 
+    bool opened = false;
     GcUpgrade v3;
-    return v3.executeAfterConfirmation(home, [&]() {
+    const bool confirmed = v3.executeAfterConfirmation(home, [&]() {
         // save how we are
         saveGCState(currentAthleteTab->context);
 
-        Athlete::createInNewContext(
+        opened = Athlete::createInNewContext(
             this, home,
             [this, name](Context *con) {
                 emit openingAthlete(name, con);
@@ -2051,6 +2058,7 @@ MainWindow::openAthleteTab(QString name)
                 emit closingAthlete(name, con);
             });
     });
+    return confirmed && opened;
 }
 
 void

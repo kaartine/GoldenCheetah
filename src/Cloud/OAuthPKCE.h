@@ -23,6 +23,8 @@
 #include <QString>
 #include <QMap>
 
+#include <functional>
+
 class QNetworkAccessManager;
 
 // Reusable OAuth2 + PKCE authorization flow using a localhost callback
@@ -85,7 +87,8 @@ public:
         QString &newRefreshToken,
         int &expiresIn,
         QString &errorString,
-        int timeoutMs
+        int timeoutMs,
+        const std::function<bool()> &isCancelled = {}
     );
 
 private:

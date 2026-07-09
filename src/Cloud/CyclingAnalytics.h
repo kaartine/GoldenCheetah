@@ -37,6 +37,9 @@ class CyclingAnalytics : public CloudService {
 
         CyclingAnalytics(Context *context);
         CloudService *clone(Context *context) { return new CyclingAnalytics(context); }
+        AutoDownloadExecution autoDownloadExecution() const override
+            { return AutoDownloadExecution::Cooperative; }
+
         ~CyclingAnalytics();
 
         // upload only and authenticates with OAuth tokens

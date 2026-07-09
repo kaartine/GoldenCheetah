@@ -106,6 +106,54 @@ class CloudService : public QObject {
         enum { OAuth=0x01, UserPass=0x02, Upload=0x04, Download=0x08, Query=0x10} capa_;
         virtual int capabilities() const { return OAuth | Upload | Download | Query; }
 
+        // Startup auto-download invokes the synchronous provider API on its
+        // worker thread. Providers must opt in only when every invoked method
+        // observes thread interruption or runs non-interruptible work behind
+        // an ownership boundary that teardown never joins.
+        enum class AutoDownloadExecution {
+            Unsupported,
+            Cooperative,
+            ProcessIsolated
+        };
+        virtual AutoDownloadExecution autoDownloadExecution() const
+            { return AutoDownloadExecution::Unsupported; }
+        virtual CloudService *cloneForAutoDownload(Context *context)
+        {
+            return autoDownloadExecution()
+                        == AutoDownloadExecution::Cooperative
+                ? clone(context)
+                : nullptr;
+        }
+        enum class StartupMeasuresExecution {
+            Unsupported,
+            Withings,
+            Tredict
+        };
+        virtual StartupMeasuresExecution
+            startupMeasuresExecution() const
+        {
+            return StartupMeasuresExecution::Unsupported;
+        }
+        bool supportsStartupMeasuresDownload() const
+        {
+            return startupMeasuresExecution()
+                != StartupMeasuresExecution::Unsupported;
+        }
+        bool supportsStartupActivityDownload() const
+        {
+            return (type() & Activities)
+                && (capabilities() & Download)
+                && autoDownloadExecution()
+                    != AutoDownloadExecution::Unsupported;
+        }
+        bool supportsStartupAutoDownload() const
+        {
+            return supportsStartupActivityDownload()
+                || ((type() & Measures)
+                    && (capabilities() & Download)
+                    && supportsStartupMeasuresDownload());
+        }
+
         // register with type of service
         enum { Activities=0x01, Measures=0x02, Calendar=0x04 } type_;
         virtual int type() const { return Activities; }
@@ -644,6 +692,41 @@ class CloudServiceFactory {
             "_gcInitialConfiguration", initialConfiguration);
 
         // DONE
+        return returning;
+    }
+
+    CloudService *newAutoDownloadService(
+            const QString &name, Context *context) const
+    {
+        const CloudService *definition = services_.value(name, nullptr);
+        if (!definition
+            || !definition->supportsStartupActivityDownload()) {
+            return nullptr;
+        }
+        if (definition->autoDownloadExecution()
+            == CloudService::AutoDownloadExecution::Cooperative) {
+            return newService(name, context);
+        }
+
+        CloudService *configured = newService(name, context);
+        if (!configured) return nullptr;
+        CloudService *returning =
+                configured->cloneForAutoDownload(context);
+        if (!returning
+            || returning->autoDownloadExecution()
+                != CloudService::AutoDownloadExecution::ProcessIsolated) {
+            delete returning;
+            delete configured;
+            return nullptr;
+        }
+
+        returning->configuration = configured->configuration;
+        returning->setProperty(
+            "_gcAthleteName", configured->property("_gcAthleteName"));
+        returning->setProperty(
+            "_gcInitialConfiguration",
+            configured->property("_gcInitialConfiguration"));
+        delete configured;
         return returning;
     }
 

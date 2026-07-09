@@ -586,7 +586,7 @@ AddSettings::initializePage()
         browse->show(); folder->show(); folderLabel->show();
         folder->setText(wizard->cloudService->getSetting(cname, "").toString());
     }
-    if (wizard->cloudService->capabilities() & CloudService::Download) {
+    if (wizard->cloudService->supportsStartupAutoDownload()) {
         QString value = wizard->cloudService->getSetting(wizard->cloudService->syncOnStartupSettingName(), "false").toString();
         syncStartup->setChecked(value == "true");
         syncStartup->show();
@@ -614,7 +614,15 @@ AddSettings::validatePage()
 
     // generic settings, but applied on a per service basis
     wizard->cloudService->setSetting(wizard->cloudService->syncOnImportSettingName(), syncImport->isChecked() ? "true" : "false");
-    wizard->cloudService->setSetting(wizard->cloudService->syncOnStartupSettingName(), syncStartup->isChecked() ? "true" : "false");
+    if (wizard->cloudService->supportsStartupAutoDownload()) {
+        wizard->cloudService->setSetting(
+            wizard->cloudService->syncOnStartupSettingName(),
+            syncStartup->isChecked() ? "true" : "false");
+    } else {
+        wizard->cloudService->setSetting(
+            wizard->cloudService->syncOnStartupSettingName(),
+            QStringLiteral("false"));
+    }
     return true;
 }
 
@@ -708,7 +716,9 @@ AddFinish::initializePage()
         else layout->addRow(new QLabel(label), new QLabel (value));
     }
     QString syncstartup = wizard->cloudService->getSetting(wizard->cloudService->syncOnStartupSettingName(), "").toString();
-    if (syncstartup != "") layout->addRow(new QLabel(tr("Sync on start")), new QLabel (syncstartup));
+    if (wizard->cloudService->supportsStartupAutoDownload()
+        && syncstartup != "")
+        layout->addRow(new QLabel(tr("Sync on start")), new QLabel (syncstartup));
     QString syncimport = wizard->cloudService->getSetting(wizard->cloudService->syncOnImportSettingName(), "").toString();
     if (syncimport != "") layout->addRow(new QLabel(tr("Sync on import")), new QLabel (syncimport));
 }

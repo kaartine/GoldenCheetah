@@ -175,6 +175,11 @@ public:
         return new BlockingCloudService(context, blockingState);
     }
 
+    AutoDownloadExecution autoDownloadExecution() const override
+    {
+        return AutoDownloadExecution::Cooperative;
+    }
+
     QString id() const override
     {
         return QString::fromLatin1(BlockingServiceId);
@@ -278,6 +283,11 @@ public:
     CloudService *clone(Context *context) override
     {
         return new ControlledCloudService(context, controlledState);
+    }
+
+    AutoDownloadExecution autoDownloadExecution() const override
+    {
+        return AutoDownloadExecution::Cooperative;
     }
 
     QString id() const override
@@ -516,6 +526,11 @@ public:
     CloudService *clone(Context *context) override
     {
         return new SuccessfulFollowUpCloudService(context);
+    }
+
+    AutoDownloadExecution autoDownloadExecution() const override
+    {
+        return AutoDownloadExecution::Cooperative;
     }
 
     QString id() const override

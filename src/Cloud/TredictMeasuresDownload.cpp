@@ -17,6 +17,7 @@
  */
 
 #include "TredictMeasuresDownload.h"
+#include "NetworkReplyWait.h"
 #include "OAuthPKCE.h"
 #include "Athlete.h"
 #include "Settings.h"
@@ -28,10 +29,12 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
-#include <QEventLoop>
 #include <QMessageBox>
+#include <QPointer>
+#include <QThread>
 #include <QTimeZone>
 
+#include <QUrlQuery>
 #ifndef TREDICT_DEBUG
 #define TREDICT_DEBUG false
 #endif
@@ -54,9 +57,22 @@
     } while(0)
 #endif
 
-static const QString TREDICT_URL = "https://www.tredict.com";
+TredictMeasuresDownload::TredictMeasuresDownload(Context *context)
+    : TredictMeasuresDownload(
+        context,
+        {QUrl(QStringLiteral(
+             "https://www.tredict.com/user/oauth/v2/token")),
+         QUrl(QStringLiteral(
+             "https://www.tredict.com/api/oauth/v2/bodyvalues")),
+         QUrl(QStringLiteral(
+             "https://www.tredict.com/api/oauth/v2/hrv")),
+         30000})
+{
+}
 
-TredictMeasuresDownload::TredictMeasuresDownload(Context *context) : context(context)
+TredictMeasuresDownload::TredictMeasuresDownload(
+        Context *context, const NetworkOptions &networkOptions)
+    : context(context), networkOptions(networkOptions)
 {
     nam = new QNetworkAccessManager(this);
 }
@@ -64,6 +80,14 @@ TredictMeasuresDownload::TredictMeasuresDownload(Context *context) : context(con
 bool
 TredictMeasuresDownload::refreshToken(QString &error)
 {
+    QPointer<Context> guardedContext(context);
+    QPointer<Athlete> guardedAthlete =
+            guardedContext ? guardedContext->athlete : nullptr;
+    if (guardedContext.isNull() || guardedAthlete.isNull()) {
+        error = tr("Tredict request was cancelled.");
+        return false;
+    }
+
     QString rt = appsettings->cvalue(context->athlete->cyclist, GC_TREDICT_REFRESH_TOKEN, "").toString();
     if (rt.isEmpty()) {
         error = tr("No Tredict authorization token configured. Please authorize in Preferences.");
@@ -72,11 +96,23 @@ TredictMeasuresDownload::refreshToken(QString &error)
 
     QString newAccess, newRefresh, err;
     int expiresIn;
-    if (!OAuthPKCE::refreshAccessToken(
-            TREDICT_URL + "/user/oauth/v2/token",
+    if (!OAuthPKCE::refreshAccessTokenWithTimeout(
+            networkOptions.tokenEndpoint.toString(),
             GC_TREDICT_CLIENT_ID,
-            rt, newAccess, newRefresh, expiresIn, err)) {
+            rt, newAccess, newRefresh, expiresIn, err,
+            networkOptions.timeoutMs,
+            [guardedContext, guardedAthlete]() {
+                return guardedContext.isNull()
+                    || guardedAthlete.isNull()
+                    || guardedContext->athlete
+                        != guardedAthlete.data();
+            })) {
         error = err;
+        return false;
+    }
+
+    if (guardedContext.isNull() || guardedAthlete.isNull()) {
+        error = tr("Tredict request was cancelled.");
         return false;
     }
 
@@ -92,6 +128,14 @@ TredictMeasuresDownload::refreshToken(QString &error)
 QByteArray
 TredictMeasuresDownload::fetchEndpoint(const QString &urlString, QString &error)
 {
+    QPointer<Context> guardedContext(context);
+    QPointer<Athlete> guardedAthlete =
+            guardedContext ? guardedContext->athlete : nullptr;
+    if (guardedContext.isNull() || guardedAthlete.isNull()) {
+        error = tr("Tredict request was cancelled.");
+        return {};
+    }
+
     QString token = appsettings->cvalue(context->athlete->cyclist, GC_TREDICT_TOKEN, "").toString();
     if (token.isEmpty()) {
         error = tr("Not authorized with Tredict.");
@@ -104,15 +148,32 @@ TredictMeasuresDownload::fetchEndpoint(const QString &urlString, QString &error)
     request.setRawHeader("Accept", "application/json;charset=UTF-8");
 
     QNetworkReply *reply = nam->get(request);
+    QThread *thread = QThread::currentThread();
+    const NetworkReplyWaitResult waitResult =
+            waitForNetworkReply(
+                reply, networkOptions.timeoutMs,
+                [guardedContext, guardedAthlete, thread]() {
+                    return guardedContext.isNull()
+                        || guardedAthlete.isNull()
+                        || thread->isInterruptionRequested();
+                });
 
-    QEventLoop loop;
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    loop.exec();
-
+    if (waitResult == NetworkReplyWaitResult::TimedOut) {
+        error = tr("Tredict request timed out.");
+        reply->deleteLater();
+        return {};
+    }
+    if (waitResult == NetworkReplyWaitResult::Interrupted
+        || guardedContext.isNull()
+        || guardedAthlete.isNull()) {
+        error = tr("Tredict request was cancelled.");
+        reply->deleteLater();
+        return {};
+    }
     if (reply->error() != QNetworkReply::NoError) {
         error = reply->errorString();
         reply->deleteLater();
-        return QByteArray();
+        return {};
     }
 
     QByteArray data = reply->readAll();
@@ -132,7 +193,8 @@ TredictMeasuresDownload::getBodyMeasures(QString &error, QDateTime from, QDateTi
 
     emit downloadProgress(30);
 
-    QByteArray r = fetchEndpoint(TREDICT_URL + "/api/oauth/v2/bodyvalues", error);
+    QByteArray r = fetchEndpoint(
+        networkOptions.bodyEndpoint.toString(), error);
     if (r.isEmpty()) return false;
 
     emit downloadProgress(70);
@@ -199,12 +261,15 @@ TredictMeasuresDownload::getHrvMeasures(QString &error, QDateTime from, QDateTim
     emit downloadProgress(30);
 
     // startDate = newest, endDate = oldest (Tredict API convention)
-    QString url = QString("%1/api/oauth/v2/hrv?startDate=%2&endDate=%3")
-        .arg(TREDICT_URL)
-        .arg(to.toUTC().toString(Qt::ISODate))
-        .arg(from.toUTC().toString(Qt::ISODate));
+    QUrl url = networkOptions.hrvEndpoint;
+    QUrlQuery query;
+    query.addQueryItem(
+        QStringLiteral("startDate"), to.toUTC().toString(Qt::ISODate));
+    query.addQueryItem(
+        QStringLiteral("endDate"), from.toUTC().toString(Qt::ISODate));
+    url.setQuery(query);
 
-    QByteArray r = fetchEndpoint(url, error);
+    QByteArray r = fetchEndpoint(url.toString(), error);
     if (r.isEmpty()) return false;
 
     emit downloadProgress(70);

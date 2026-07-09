@@ -23,10 +23,12 @@
 #include "FileIO/CsvRideFile.h"
 #include "FileIO/DataProcessor.h"
 #include "FileIO/JsonRideFile.h"
+#include "FileIO/MeasuresCsvImport.h"
 #include "FileIO/RideAutoImportConfig.h"
 #include "Gui/Colors.h"
 #include "Gui/CompareDateRange.h"
 #include "Gui/CompareInterval.h"
+#include "Gui/HelpWhatsThis.h"
 #include "Gui/MainWindow.h"
 #include "Metrics/HrZones.h"
 #include "Metrics/PaceZones.h"
@@ -40,9 +42,11 @@
 
 #include <QCoreApplication>
 #include <QHash>
+#include <QMessageBox>
 #include <QMutex>
 #include <QSet>
 #include <QThread>
+#include <QTimer>
 
 #include <cstring>
 #include <stdexcept>
@@ -57,7 +61,13 @@ QMutex validContextsMutex;
 QSet<Context *> validContexts;
 bool throwOnAthleteIdWrite = false;
 bool throwOnRideCacheConstruction = false;
+bool emitRideCacheLoadComplete = false;
+bool throwOnChartLoad = false;
+bool measuresWriteFails = false;
+bool includeHrvMeasuresGroup = false;
 bool trainDbUpgradeRequired = false;
+int rideCacheCancelCalls = 0;
+int rideCacheRefreshCalls = 0;
 TrainDB::LegacyMigrationPlan trainDbMigrationPlan;
 LibraryImportResult trainDbImportResult;
 QStringList importedLibraryFiles;
@@ -69,6 +79,7 @@ bool libraryInitialisedBeforeImport = false;
 bool finalizedExpectedImport = false;
 int rideFileOpenCalls = 0;
 QList<QByteArray> rideFilePayloads;
+int calendarDownloadConstructionCalls = 0;
 
 QString settingKey(const QString &athlete, const QString &key)
 {
@@ -105,6 +116,15 @@ void resetAthleteMigrationTestSettings()
     }
     throwOnAthleteIdWrite = false;
     throwOnRideCacheConstruction = false;
+    emitRideCacheLoadComplete = false;
+    throwOnChartLoad = false;
+    measuresWriteFails = false;
+    includeHrvMeasuresGroup = false;
+    Athlete::setWaitForRideCacheLoadForTest(false);
+    MeasuresDownload::setAutoDownloadProbeForTest({});
+    MeasuresDownload::setManualDownloadProbeForTest({});
+    rideCacheCancelCalls = 0;
+    rideCacheRefreshCalls = 0;
     trainDbUpgradeRequired = false;
     trainDbMigrationPlan = {};
     trainDbImportResult = {};
@@ -119,6 +139,12 @@ void resetAthleteMigrationTestSettings()
     trainDB = nullptr;
     rideFileOpenCalls = 0;
     rideFilePayloads.clear();
+    calendarDownloadConstructionCalls = 0;
+}
+
+int athleteMigrationCalendarDownloadConstructionCalls()
+{
+    return calendarDownloadConstructionCalls;
 }
 
 void configureAthleteMigrationTrainDbUpgrade(
@@ -165,6 +191,36 @@ void setAthleteMigrationThrowOnIdWrite(bool enabled)
 void setAthleteMigrationThrowOnRideCacheConstruction(bool enabled)
 {
     throwOnRideCacheConstruction = enabled;
+}
+
+void setAthleteMigrationEmitRideCacheLoadComplete(bool enabled)
+{
+    emitRideCacheLoadComplete = enabled;
+}
+
+void setAthleteMigrationThrowOnChartLoad(bool enabled)
+{
+    throwOnChartLoad = enabled;
+}
+
+void setAthleteMigrationMeasuresWriteFails(bool enabled)
+{
+    measuresWriteFails = enabled;
+}
+
+void setAthleteMigrationIncludeHrvMeasuresGroup(bool enabled)
+{
+    includeHrvMeasuresGroup = enabled;
+}
+
+int athleteMigrationRideCacheCancelCalls()
+{
+    return rideCacheCancelCalls;
+}
+
+int athleteMigrationRideCacheRefreshCalls()
+{
+    return rideCacheRefreshCalls;
 }
 
 GSettings::GSettings(QString, QString)
@@ -487,9 +543,60 @@ Routes::~Routes() = default;
 Measures::Measures(QDir dir, bool withData)
     : dir(dir), withData(withData)
 {
+    MeasuresGroup *body = new MeasuresGroup(dir, withData);
+    body->setSymbol(QStringLiteral("Body"));
+    body->setName(QStringLiteral("Body"));
+    groups.append(body);
+    if (includeHrvMeasuresGroup) {
+        MeasuresGroup *hrv = new MeasuresGroup(dir, withData);
+        hrv->setSymbol(QStringLiteral("Hrv"));
+        hrv->setName(QStringLiteral("Hrv"));
+        groups.append(hrv);
+    }
 }
 
-Measures::~Measures() = default;
+Measures::~Measures()
+{
+    qDeleteAll(groups);
+}
+
+QStringList Measures::getGroupSymbols() const
+{
+    QStringList symbols;
+    for (const MeasuresGroup *group : groups) {
+        if (group) symbols.append(group->getSymbol());
+    }
+    return symbols;
+}
+
+MeasuresGroup *Measures::getGroup(int group)
+{
+    return group >= 0 && group < groups.size()
+        ? groups.at(group)
+        : nullptr;
+}
+
+void MeasuresGroup::setMeasures(QList<Measure> &measures)
+{
+    measures_ = measures;
+}
+
+bool MeasuresGroup::write(
+        QString *error, const AtomicFileWriterFactory &)
+{
+    if (!measuresWriteFails) return true;
+
+    const QString message =
+            QStringLiteral("injected measures write failure");
+    if (error) {
+        *error = message;
+    } else {
+        QMessageBox::critical(
+            nullptr, QStringLiteral("Problem Saving Measures"),
+            message);
+    }
+    return false;
+}
 
 RideCache::RideCache(Context *context)
     : context(context),
@@ -502,6 +609,11 @@ RideCache::RideCache(Context *context)
     if (throwOnRideCacheConstruction) {
         throw std::runtime_error("injected ride cache construction failure");
     }
+    if (emitRideCacheLoadComplete) {
+        QTimer::singleShot(
+            0, this,
+            [this]() { emit loadComplete(); });
+    }
 }
 
 RideCache::~RideCache() = default;
@@ -513,23 +625,58 @@ void RideCache::cleanupThread(RideCacheRefreshThread *) {}
 int RideCache::find(RideItem *) { return -1; }
 void RideCache::configChanged(qint32) {}
 void RideCache::progressing(int) {}
-void RideCache::cancel() {}
+void RideCache::cancel() { ++rideCacheCancelCalls; }
+QList<QDateTime> RideCache::getAllDates() { return {}; }
+void RideCache::refresh() { ++rideCacheRefreshCalls; }
 void RideCache::itemChanged() {}
 void RideCache::garbageCollect() {}
 void RideCache::initEstimates() {}
 void RideCache::addRide(QString, bool, bool, bool, bool) {}
 bool RideCache::removeCurrentRide() { return false; }
 
-void LTMSettings::readChartXML(QDir, bool, QList<LTMSettings> &) {}
+void LTMSettings::readChartXML(QDir, bool, QList<LTMSettings> &)
+{
+    if (throwOnChartLoad)
+        throw std::runtime_error("injected chart load failure");
+}
 void LTMSettings::writeChartXML(QDir, QList<LTMSettings>) {}
 
 void PMCData::invalidate() {}
 
-void MeasuresDownload::autoDownload(Context *) {}
+HelpWhatsThis::HelpWhatsThis(QObject *parent)
+    : QObject(parent)
+{
+}
+
+QString HelpWhatsThis::getWhatsThisText(GCHelp)
+{
+    return {};
+}
+
+bool HelpWhatsThis::eventFilter(QObject *, QEvent *)
+{
+    return false;
+}
+
+MeasuresCsvImport::MeasuresCsvImport(
+        Context *context, QWidget *parent)
+    : context(context), parent(parent)
+{
+}
+
+MeasuresCsvImport::~MeasuresCsvImport() = default;
+
+bool MeasuresCsvImport::getMeasures(
+        MeasuresGroup *, QString &, QDateTime, QDateTime,
+        QList<Measure> &)
+{
+    return false;
+}
 
 CalendarDownload::CalendarDownload(Context *context)
     : context(context), nam(nullptr)
 {
+    ++calendarDownloadConstructionCalls;
 }
 
 bool CalendarDownload::download() { return false; }

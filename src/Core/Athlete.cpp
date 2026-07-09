@@ -54,7 +54,10 @@
 
 #include "Route.h"
 
+#include <atomic>
+#include <exception>
 #include <memory>
+#include <QPointer>
 #include <type_traits>
 #include <utility>
 
@@ -62,6 +65,10 @@
 #include "GcCrashDialog.h" // recovering from a crash?
 
 namespace {
+
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+bool forceRideCacheWaitForTest = false;
+#endif
 
 template<typename Callback>
 class ScopeExit
@@ -91,7 +98,39 @@ ScopeExit<std::decay_t<Callback>> makeScopeExit(Callback &&callback)
         std::forward<Callback>(callback));
 }
 
+struct PendingContextPublication
+{
+    QPointer<Context> context;
+    std::function<void(Context *)> rollback;
+    bool completed = false;
+    bool rolledBack = false;
+};
+
+void failPendingPublication(
+        const std::shared_ptr<PendingContextPublication> &pending)
+{
+    Context *context = pending->context.data();
+    if (!context || pending->completed || pending->rolledBack)
+        return;
+
+    pending->rolledBack = true;
+    QPointer<Context> guardedContext(context);
+    if (pending->rollback) pending->rollback(context);
+    if (!guardedContext) return;
+
+    if (guardedContext->athlete)
+        guardedContext->athlete->deleteLater();
+    guardedContext->deleteLater();
+}
+
 } // namespace
+
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+void Athlete::setWaitForRideCacheLoadForTest(bool enabled)
+{
+    forceRideCacheWaitForTest = enabled;
+}
+#endif
 
 Context *
 Athlete::createInNewContext(
@@ -101,15 +140,92 @@ Athlete::createInNewContext(
 {
     auto newContext = std::make_unique<Context>(mainWindow);
     newContext->athlete = nullptr;
-    const bool publicationStarted = bool(publish);
+    bool publicationActive = false;
+
+    const auto rollbackPublication = [&]() {
+        if (!publicationActive) return;
+        publicationActive = false;
+        QPointer<Context> guardedContext(newContext.get());
+        if (rollback) rollback(guardedContext.data());
+        if (!guardedContext) newContext.release();
+    };
 
     try {
-        if (publish) publish(newContext.get());
-        newContext->athlete = new Athlete(newContext.get(), homeDir);
-    } catch (...) {
-        if (publicationStarted && rollback) {
-            rollback(newContext.get());
+        if (publish) {
+            publicationActive = true;
+            publish(newContext.get());
         }
+        newContext->athlete = new Athlete(newContext.get(), homeDir);
+
+        QPointer<Context> guardedContext(newContext.get());
+        QPointer<Athlete> guardedAthlete(newContext->athlete);
+        bool loadCompleted = false;
+        bool loadFailed = false;
+        const QMetaObject::Connection completionConnection =
+                QObject::connect(
+                    newContext.get(), &Context::loadCompleted,
+                    newContext.get(),
+                    [&loadCompleted](const QString &, Context *) {
+                        loadCompleted = true;
+                    },
+                    Qt::DirectConnection);
+        const QMetaObject::Connection failureConnection =
+                QObject::connect(
+                    newContext.get(), &Context::loadFailed,
+                    newContext.get(),
+                    [&loadFailed](
+                            const QString &, Context *,
+                            const QString &) {
+                        loadFailed = true;
+                    },
+                    Qt::DirectConnection);
+
+        guardedAthlete->completeInitialLoad();
+        if (!guardedContext) {
+            newContext.release();
+            return nullptr;
+        }
+        QObject::disconnect(completionConnection);
+        QObject::disconnect(failureConnection);
+
+        if (loadFailed
+            || !guardedAthlete
+            || guardedContext->athlete != guardedAthlete.data()) {
+            rollbackPublication();
+            if (guardedAthlete) delete guardedAthlete.data();
+            return nullptr;
+        }
+
+        if (!loadCompleted) {
+            auto pending =
+                std::make_shared<PendingContextPublication>();
+            pending->context = guardedContext;
+            if (publicationActive) pending->rollback = rollback;
+
+            QObject::connect(
+                guardedContext, &Context::loadCompleted,
+                guardedContext,
+                [pending](const QString &, Context *) {
+                    pending->completed = true;
+                });
+            QObject::connect(
+                guardedContext, &Context::loadFailed,
+                guardedContext,
+                [pending](
+                        const QString &, Context *,
+                        const QString &) {
+                    failPendingPublication(pending);
+                });
+            QObject::connect(
+                guardedAthlete, &QObject::destroyed,
+                guardedContext,
+                [pending]() {
+                    failPendingPublication(pending);
+                });
+        }
+        publicationActive = false;
+    } catch (...) {
+        rollbackPublication();
         throw;
     }
 
@@ -237,30 +353,120 @@ Athlete::Athlete(Context *context, const QDir &homeDir)
 
     // now most dependencies are in get cache
     QEventLoop loop;
+    std::atomic_bool initialLoadComplete{false};
     rideCache = new RideCache(context);
-    connect(rideCache, SIGNAL(loadComplete()), &loop, SLOT(quit()));
-    connect(rideCache, SIGNAL(loadComplete()), this, SLOT(loadComplete()));
+    connect(
+        rideCache, &RideCache::loadComplete, &loop,
+        [&loop, &initialLoadComplete]() {
+            initialLoadComplete.store(
+                true, std::memory_order_release);
+            loop.quit();
+        },
+        Qt::DirectConnection);
+    connect(
+        rideCache, &RideCache::loadComplete,
+        this, &Athlete::handleRideCacheLoadComplete,
+        Qt::QueuedConnection);
 
     // we need to block on load complete if first (before mainwindow ready)
-    if (context->mainWindow && context->mainWindow->isStarting()) {
+    bool waitForInitialLoad =
+            context->mainWindow && context->mainWindow->isStarting();
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+    waitForInitialLoad =
+            waitForInitialLoad || forceRideCacheWaitForTest;
+#endif
+    if (waitForInitialLoad
+        && !initialLoadComplete.load(
+            std::memory_order_acquire)) {
         loop.exec();
     }
 
+    constructionComplete = true;
     constructionRollback.dismiss();
+    if (initialLoadComplete.load(std::memory_order_acquire))
+        deferredLoadComplete = true;
+}
+
+void
+Athlete::handleRideCacheLoadComplete()
+{
+    if (!constructionComplete) {
+        deferredLoadComplete = true;
+        return;
+    }
+    deferredLoadComplete = true;
+    completeInitialLoad();
+}
+
+void
+Athlete::completeInitialLoad()
+{
+    if (!constructionComplete
+        || !deferredLoadComplete
+        || loadCompletionStarted) {
+        return;
+    }
+    deferredLoadComplete = false;
+    loadComplete();
 }
 
 void
 Athlete::loadComplete()
 {
+    if (loadCompletionStarted) return;
+    loadCompletionStarted = true;
+
+    QPointer<Athlete> guardedAthlete(this);
+    QPointer<Context> guardedContext(context);
+    const QString athleteName = cyclist;
+    const auto notifyFailure =
+        [guardedAthlete, guardedContext, athleteName](
+                const QString &error) {
+            if (!guardedAthlete
+                || !guardedContext
+                || guardedContext->athlete
+                    != guardedAthlete.data()) {
+                return;
+            }
+            guardedContext->notifyLoadFailed(
+                athleteName, guardedContext.data(), error);
+        };
+
+    try {
+        performLoadComplete();
+    } catch (const std::exception &error) {
+        notifyFailure(QString::fromLocal8Bit(error.what()));
+    } catch (...) {
+        notifyFailure(tr("Unknown error while loading athlete."));
+    }
+}
+
+void
+Athlete::performLoadComplete()
+{
+    QPointer<Athlete> guardedAthlete(this);
+    QPointer<Context> guardedContext(context);
+
     // once ridecache is up and running load the rest
     // read athlete's charts.xml and translate etc, it needs to be
     // after RideCache creation to allow for Custom Metrics initialization
     loadCharts();
 
-    // Downloaders
-    MeasuresDownload::autoDownload(context);
+    if (guardedAthlete.isNull()
+        || guardedContext.isNull()
+        || guardedContext->athlete != guardedAthlete.data()) {
+        return;
+    }
 
-    calendarDownload = new CalendarDownload(context);
+    // Downloaders
+    MeasuresDownload::autoDownload(guardedContext.data());
+    if (guardedAthlete.isNull()
+        || guardedContext.isNull()
+        || guardedContext->athlete != guardedAthlete.data()) {
+        return;
+    }
+
+    calendarDownload = new CalendarDownload(guardedContext.data());
 
     // Calendar
 #ifdef GC_HAVE_ICAL

@@ -31,9 +31,14 @@ isEmpty(GC_CLOUD_SERVICE_SOURCE) {
 SOURCES = testAthleteMigrationSafety.cpp \
           AthleteMigrationTestStubs.cpp \
           CloudAutoDownloadTestSupport.cpp \
+          ../../../src/Cloud/LocalFileStore.cpp \
+          ../../../src/Cloud/LocalFileStoreProcess.cpp \
+          ../../../src/Cloud/MeasuresDownload.cpp \
           ../../../src/Cloud/NetworkReplyWait.cpp \
           ../../../src/Cloud/NolioTokenRefresh.cpp \
           ../../../src/Cloud/OAuthPKCE.cpp \
+          ../../../src/Cloud/TredictMeasuresDownload.cpp \
+          ../../../src/Cloud/WithingsDownload.cpp \
           ../../../contrib/qzip/zip.cpp \
           $$GC_UPGRADE_SOURCE \
           $$GC_ATHLETE_SOURCE \
@@ -42,9 +47,14 @@ SOURCES = testAthleteMigrationSafety.cpp \
 HEADERS = CloudAutoDownloadTestSupport.h \
           ../../../src/Cloud/CalendarDownload.h \
           ../../../src/Cloud/CloudService.h \
+          ../../../src/Cloud/LocalFileStore.h \
+          ../../../src/Cloud/LocalFileStoreProcess.h \
+          ../../../src/Cloud/MeasuresDownload.h \
           ../../../src/Cloud/NetworkReplyWait.h \
           ../../../src/Cloud/NolioTokenRefresh.h \
           ../../../src/Cloud/OAuthPKCE.h \
+          ../../../src/Cloud/TredictMeasuresDownload.h \
+          ../../../src/Cloud/WithingsDownload.h \
           ../../../src/Core/Athlete.h \
           ../../../src/Core/Context.h \
           ../../../src/Core/GcUpgrade.h \
@@ -53,6 +63,8 @@ HEADERS = CloudAutoDownloadTestSupport.h \
           ../../../src/Core/RideItem.h \
           ../../../src/Core/Route.h \
           ../../../src/Core/Seasons.h \
+          ../../../src/FileIO/MeasuresCsvImport.h \
+          ../../../src/Gui/HelpWhatsThis.h \
           ../../../src/FileIO/RideAutoImportConfig.h \
           ../../../src/Metrics/HrZones.h \
           ../../../src/Metrics/PaceZones.h \

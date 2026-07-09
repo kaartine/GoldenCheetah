@@ -32,6 +32,9 @@ class SixCycle : public CloudService {
 
         SixCycle(Context *context);
         CloudService *clone(Context *context) { return new SixCycle(context); }
+        AutoDownloadExecution autoDownloadExecution() const override
+            { return AutoDownloadExecution::Cooperative; }
+
         ~SixCycle();
 
         QString id() const { return "Sixcycle"; }

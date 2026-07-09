@@ -607,6 +607,7 @@ HEADERS += Cloud/CalendarDownload.h Cloud/CloudService.h \
            Cloud/AddCloudWizard.h Cloud/Withings.h Cloud/MeasuresDownload.h Cloud/Xert.h \
            Cloud/Azum.h
 
+HEADERS += Cloud/LocalFileStoreProcess.h
 # core data
 HEADERS += Core/Athlete.h Core/Context.h Core/DataFilter.h Core/FreeSearch.h Core/GcCalendarModel.h Core/GcUpgrade.h \
            Core/IdleTimer.h Core/IntervalItem.h Core/NamedSearch.h Core/RideCache.h Core/RideCachePersistence.h Core/RideCacheModel.h Core/RideDB.h \
@@ -723,6 +724,7 @@ SOURCES += Cloud/CalendarDownload.cpp Cloud/CloudService.cpp \
            Cloud/AddCloudWizard.cpp Cloud/Withings.cpp Cloud/MeasuresDownload.cpp Cloud/Xert.cpp \
            Cloud/Azum.cpp
 
+SOURCES += Cloud/LocalFileStoreProcess.cpp
 ## Core Data Structures
 SOURCES += Core/Athlete.cpp Core/Context.cpp Core/DataFilter.cpp Core/FreeSearch.cpp Core/GcUpgrade.cpp Core/IdleTimer.cpp \
            Core/IntervalItem.cpp Core/main.cpp Core/NamedSearch.cpp Core/RideCache.cpp Core/RideCachePersistence.cpp Core/RideCacheRemoval.cpp Core/RideCacheModel.cpp Core/RideItem.cpp \

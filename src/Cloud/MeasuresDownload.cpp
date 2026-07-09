@@ -25,16 +25,53 @@
 #include "CloudService.h"
 
 #include <QList>
+#include <QPointer>
 #include <QMutableListIterator>
 #include <QGroupBox>
 #include <QMessageBox>
 
+#include <utility>
 
-MeasuresDownload::MeasuresDownload(Context *context, MeasuresGroup *measuresGroup) : context(context), measuresGroup(measuresGroup) {
 
-    if (measuresGroup == nullptr) return; // avoid crashes, it should not happen
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+namespace {
+MeasuresDownload::AutoDownloadProbe autoDownloadProbe;
+MeasuresDownload::ManualDownloadProbe manualDownloadProbe;
+}
 
-    setWindowTitle(tr("%1 Measures download").arg(measuresGroup->getName()));
+void MeasuresDownload::setAutoDownloadProbeForTest(
+        AutoDownloadProbe probe)
+{
+    autoDownloadProbe = std::move(probe);
+}
+
+void MeasuresDownload::setManualDownloadProbeForTest(
+        ManualDownloadProbe probe)
+{
+    manualDownloadProbe = std::move(probe);
+}
+#endif
+
+MeasuresDownload::MeasuresDownload(
+        Context *context, MeasuresGroup *measuresGroup)
+    : context(context), measuresGroup(measuresGroup)
+{
+    if (!this->context
+        || !this->context->athlete
+        || !measuresGroup) {
+        return;
+    }
+
+    measuresGroupSymbol = measuresGroup->getSymbol();
+    measuresGroupName = measuresGroup->getName();
+    connect(
+        this->context, &QObject::destroyed,
+        this, &QDialog::reject);
+    connect(
+        this->context->athlete, &QObject::destroyed,
+        this, &QDialog::reject);
+
+    setWindowTitle(tr("%1 Measures download").arg(measuresGroupName));
 
     HelpWhatsThis *help = new HelpWhatsThis(this);
     this->setWhatsThis(help->getWhatsThisText(HelpWhatsThis::MenuBar_Tools_Download_Measures));
@@ -115,11 +152,11 @@ MeasuresDownload::MeasuresDownload(Context *context, MeasuresGroup *measuresGrou
 
     // don't allow options which are not authorized
     downloadWithings->setEnabled((measuresGroup->getSymbol() == "Body") &&
-        (appsettings->cvalue(context->athlete->cyclist, GC_NOKIA_TOKEN, "").toString() !=""));
+        !appsettings->cvalue(context->athlete->cyclist, GC_NOKIA_REFRESH_TOKEN, "").toString().isEmpty());
 
     downloadTredict->setEnabled(
         (measuresGroup->getSymbol() == "Body" || measuresGroup->getSymbol() == "Hrv") &&
-        (appsettings->cvalue(context->athlete->cyclist, GC_TREDICT_TOKEN, "").toString() != ""));
+        !appsettings->cvalue(context->athlete->cyclist, GC_TREDICT_REFRESH_TOKEN, "").toString().isEmpty());
 
     // select the default checked / based on available properties and last selection
     int last_selection = appsettings->cvalue(context->athlete->cyclist, GC_BM_LAST_TYPE, 0).toInt();
@@ -187,103 +224,177 @@ MeasuresDownload::~MeasuresDownload() {
 
 
 void
-MeasuresDownload::download() {
+MeasuresDownload::download()
+{
+    QPointer<MeasuresDownload> guardedDialog(this);
+    QPointer<Context> guardedContext(context);
+    QPointer<Athlete> guardedAthlete =
+            guardedContext ? guardedContext->athlete : nullptr;
+    const QString groupSymbol = measuresGroupSymbol;
+    const QString groupName = measuresGroupName;
+    const auto activeGroup =
+        [guardedContext, guardedAthlete, groupSymbol]() {
+            if (!guardedContext
+                || !guardedAthlete
+                || guardedContext->athlete
+                    != guardedAthlete.data()
+                || !guardedAthlete->measures) {
+                return static_cast<MeasuresGroup *>(nullptr);
+            }
+            const int group =
+                    guardedAthlete->measures->getGroupSymbols()
+                        .indexOf(groupSymbol);
+            return guardedAthlete->measures->getGroup(group);
+        };
 
-   // de-activate the buttons
-   downloadButton->setEnabled(false);
-   closeButton->setEnabled(false);
+    MeasuresGroup *group = activeGroup();
+    if (!group
+        || !downloadButton
+        || !closeButton
+        || !progressBar) {
+        reject();
+        return;
+    }
 
-   progressBar->setMaximum(1);
-   progressBar->setValue(0);
+    downloadButton->setEnabled(false);
+    closeButton->setEnabled(false);
+    progressBar->setMaximum(1);
+    progressBar->setValue(0);
 
-   // do the job
-   if (!measuresGroup) return; // it shouldn't happen, but just in case...
-   QList<Measure> current = measuresGroup->measures();
-   QList<Measure> measures;
-   QDateTime fromDate;
-   QDateTime toDate;
-   QDateTime firstRideDate;
-   QString err = "";
-   bool downloadOk = false;
+    const QList<Measure> current = group->measures();
+    QList<Measure> measures;
+    QDateTime fromDate;
+    QDateTime toDate;
+    QDateTime firstRideDate;
+    QString error;
+    bool downloadOk = false;
 
-   // get the date of first ride as potential "from" value
-   QList<QDateTime> rideDates = context->athlete->rideCache->getAllDates();
-   if (rideDates.count() > 0) {
-       firstRideDate = rideDates.at(0);
-   }  else {
-       firstRideDate = QDateTime::fromMSecsSinceEpoch(0);
-   };
+    RideCache *rideCache = guardedAthlete->rideCache;
+    if (!rideCache) {
+        reject();
+        return;
+    }
+    const QList<QDateTime> rideDates = rideCache->getAllDates();
+    if (!guardedDialog || !activeGroup()) return;
+    firstRideDate = rideDates.isEmpty()
+        ? QDateTime::fromMSecsSinceEpoch(0)
+        : rideDates.first();
 
-   // determine the date range
-   if (dateRangeAll->isChecked()) {
-       fromDate = firstRideDate;
-       toDate = QDateTime::currentDateTimeUtc();
-   } else if (dateRangeLastMeasure->isChecked()) {
-       if (current.count() > 0) {
-           fromDate = current.last().when.addSecs(1);
-       } else {
-           // use a reasonable default
-           fromDate = firstRideDate;
-       }
-       toDate = QDateTime::currentDateTimeUtc();
-   } else if (dateRangeManual->isChecked()) {
-       if (manualFromDate->dateTime() > manualToDate->dateTime()) {
-           QMessageBox::warning(this, tr("%1 Measures").arg(measuresGroup->getName()), tr("Invalid date range - please check your input"));
-           // re-activate the buttons
-           downloadButton->setEnabled(true);
-           closeButton->setEnabled(true);
-           return;
-       }
-       fromDate.setDate(manualFromDate->date());
-       fromDate.setTime(QTime(0,0));
-       toDate.setDate(manualToDate->date());
-   } else return;
-   // to Time is always "end of the day"
-   toDate.setTime(QTime(23,59));
+    if (dateRangeAll->isChecked()) {
+        fromDate = firstRideDate;
+        toDate = QDateTime::currentDateTimeUtc();
+    } else if (dateRangeLastMeasure->isChecked()) {
+        fromDate = current.isEmpty()
+            ? firstRideDate
+            : current.last().when.addSecs(1);
+        toDate = QDateTime::currentDateTimeUtc();
+    } else if (dateRangeManual->isChecked()) {
+        if (manualFromDate->dateTime()
+            > manualToDate->dateTime()) {
+            QMessageBox::warning(
+                this, tr("%1 Measures").arg(groupName),
+                tr("Invalid date range - please check your input"));
+            if (!guardedDialog) return;
+            if (!activeGroup()) {
+                reject();
+                return;
+            }
+            downloadButton->setEnabled(true);
+            closeButton->setEnabled(true);
+            return;
+        }
+        fromDate.setDate(manualFromDate->date());
+        fromDate.setTime(QTime(0, 0));
+        toDate.setDate(manualToDate->date());
+    } else {
+        downloadButton->setEnabled(true);
+        closeButton->setEnabled(true);
+        return;
+    }
+    toDate.setTime(QTime(23, 59));
 
-   // do the download
-   if (downloadWithings->isChecked()) {
-     downloadOk = withingsDownload->getBodyMeasures(err, fromDate, toDate, measures);
-   } else if (downloadTredict->isChecked()) {
-       if (measuresGroup->getSymbol() == "Hrv")
-           downloadOk = tredictDownload->getHrvMeasures(err, fromDate, toDate, measures);
-       else
-           downloadOk = tredictDownload->getBodyMeasures(err, fromDate, toDate, measures);
-   } else if (downloadCSV->isChecked()) {
-       downloadOk = csvFileImport->getMeasures(measuresGroup, err, fromDate, toDate, measures);
-   } else return;
-
-   if (downloadOk) {
-
-       // selection from various source may not be 100% accurate w.r.t. the from/to date filtering
-       // so remove all measures which do not fit the selection from/to interval
-       QMutableListIterator<Measure> i(measures);
-       Measure c;
-       while (i.hasNext()) {
-           c = i.next();
-           if (c.when <= fromDate || c.when >= toDate) {
-               i.remove();
-           }
-       }
-
-       updateMeasures(context, measuresGroup, measures, discardExistingMeasures->isChecked());
-
-#ifdef Q_MAC_OS
-       // since progressBar on MacOS does not show the % values
-       QMessageBox msgBox;
-       msgBox.setText(tr("Download completed."));
-       msgBox.exec();
+    bool handledByProbe = false;
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+    if (manualDownloadProbe) {
+        handledByProbe = true;
+        downloadOk = manualDownloadProbe(
+            guardedContext.data(), groupSymbol, error,
+            fromDate, toDate, measures);
+    }
 #endif
+    if (!handledByProbe) {
+        if (downloadWithings->isChecked()) {
+            downloadOk = withingsDownload->getBodyMeasures(
+                error, fromDate, toDate, measures);
+        } else if (downloadTredict->isChecked()) {
+            downloadOk = groupSymbol == QStringLiteral("Hrv")
+                ? tredictDownload->getHrvMeasures(
+                    error, fromDate, toDate, measures)
+                : tredictDownload->getBodyMeasures(
+                    error, fromDate, toDate, measures);
+        } else if (downloadCSV->isChecked()) {
+            downloadOk = csvFileImport->getMeasures(
+                group, error, fromDate, toDate, measures);
+        } else {
+            downloadButton->setEnabled(true);
+            closeButton->setEnabled(true);
+            return;
+        }
+    }
 
-   } else {
-       // handle error document in err String
-       QMessageBox::warning(this, tr("%1 Measures").arg(measuresGroup->getName()), tr("Downloading of measures failed with error: %1").arg(err));
-   }
+    if (!guardedDialog) return;
+    group = activeGroup();
+    if (!group) {
+        reject();
+        return;
+    }
 
-   // re-activate the buttons
-   downloadButton->setEnabled(true);
-   closeButton->setEnabled(true);
+    if (downloadOk) {
+        QMutableListIterator<Measure> iterator(measures);
+        while (iterator.hasNext()) {
+            const Measure measure = iterator.next();
+            if (measure.when <= fromDate
+                || measure.when >= toDate) {
+                iterator.remove();
+            }
+        }
 
+        QString updateError;
+        downloadOk = updateMeasures(
+            guardedContext.data(), group, measures,
+            discardExistingMeasures->isChecked(), &updateError);
+        if (!downloadOk) error = updateError;
+
+        if (!guardedDialog) return;
+        group = activeGroup();
+        if (!group) {
+            reject();
+            return;
+        }
+    }
+
+    if (downloadOk) {
+#ifdef Q_MAC_OS
+        QMessageBox messageBox;
+        messageBox.setText(tr("Download completed."));
+        messageBox.exec();
+#endif
+    } else {
+        if (error.isEmpty())
+            error = tr("The operation was cancelled.");
+        QMessageBox::warning(
+            this, tr("%1 Measures").arg(groupName),
+            tr("Downloading or saving measures failed with error: %1")
+                .arg(error));
+    }
+
+    if (!guardedDialog) return;
+    if (!activeGroup()) {
+        reject();
+        return;
+    }
+    downloadButton->setEnabled(true);
+    closeButton->setEnabled(true);
 }
 
 void
@@ -296,7 +407,7 @@ MeasuresDownload::close() {
 void
 MeasuresDownload::dateRangeAllSettingChanged(bool checked) {
 
-    if (checked) {
+    if (checked && context && context->athlete) {
         manualFromDate->setEnabled(false);
         manualToDate->setEnabled(false);
         appsettings->setCValue(context->athlete->cyclist, GC_BM_LAST_TIMEFRAME, ALL);
@@ -307,7 +418,7 @@ MeasuresDownload::dateRangeAllSettingChanged(bool checked) {
 void
 MeasuresDownload::dateRangeLastSettingChanged(bool checked) {
 
-    if (checked) {
+    if (checked && context && context->athlete) {
         manualFromDate->setEnabled(false);
         manualToDate->setEnabled(false);
         appsettings->setCValue(context->athlete->cyclist, GC_BM_LAST_TIMEFRAME, LAST);
@@ -317,7 +428,7 @@ MeasuresDownload::dateRangeLastSettingChanged(bool checked) {
 void
 MeasuresDownload::dateRangeManualSettingChanged(bool checked) {
 
-    if (checked) {
+    if (checked && context && context->athlete) {
         manualFromDate->setEnabled(true);
         manualToDate->setEnabled(true);
         appsettings->setCValue(context->athlete->cyclist, GC_BM_LAST_TIMEFRAME, MANUAL);
@@ -327,7 +438,7 @@ MeasuresDownload::dateRangeManualSettingChanged(bool checked) {
 void
 MeasuresDownload::downloadWithingsSettingChanged(bool checked) {
 
-    if (checked) {
+    if (checked && context && context->athlete) {
         appsettings->setCValue(context->athlete->cyclist, GC_BM_LAST_TYPE, WITHINGS);
     }
 }
@@ -336,7 +447,7 @@ MeasuresDownload::downloadWithingsSettingChanged(bool checked) {
 void
 MeasuresDownload::downloadTredictSettingChanged(bool checked) {
 
-    if (checked) {
+    if (checked && context && context->athlete) {
         appsettings->setCValue(context->athlete->cyclist, GC_BM_LAST_TYPE, TREDICT);
     }
 }
@@ -344,7 +455,7 @@ MeasuresDownload::downloadTredictSettingChanged(bool checked) {
 void
 MeasuresDownload::downloadCSVSettingChanged(bool checked) {
 
-    if (checked) {
+    if (checked && context && context->athlete) {
         appsettings->setCValue(context->athlete->cyclist, GC_BM_LAST_TYPE, CSV);
     }
 }
@@ -352,25 +463,67 @@ MeasuresDownload::downloadCSVSettingChanged(bool checked) {
 
 void
 MeasuresDownload::downloadProgressStart(int total) {
-    progressBar->setMaximum(total);
+    if (progressBar) progressBar->setMaximum(total);
 }
 void
 MeasuresDownload::downloadProgress(int current) {
-    progressBar->setValue(current);
+    if (progressBar) progressBar->setValue(current);
 }
 
 void
 MeasuresDownload::downloadProgressEnd(int final) {
-    progressBar->setValue(final);
+    if (progressBar) progressBar->setValue(final);
 }
 
-void
+bool
 MeasuresDownload::updateMeasures(Context *context,
                                  MeasuresGroup *measuresGroup,
                                  QList<Measure>&measures,
-                                 bool discardExisting) {
+                                 bool discardExisting,
+                                 QString *error) {
 
-   QList<Measure> current = measuresGroup->measures();
+   if (error) error->clear();
+   const auto fail = [error](const QString &message) {
+       if (error) *error = message;
+       return false;
+   };
+   if (!measuresGroup) {
+       return fail(tr("The measures group is no longer available."));
+   }
+
+   QPointer<Context> guardedContext(context);
+   QPointer<Athlete> guardedAthlete =
+           guardedContext ? guardedContext->athlete : nullptr;
+   if (guardedContext.isNull()
+       || guardedAthlete.isNull()
+       || guardedContext->athlete != guardedAthlete.data()
+       || !guardedAthlete->measures) {
+       return fail(tr("The athlete is no longer available."));
+   }
+
+   const QString groupSymbol = measuresGroup->getSymbol();
+   const QString groupName = measuresGroup->getName();
+   const auto activeGroup =
+       [guardedContext, guardedAthlete, groupSymbol]() {
+           if (!guardedContext
+               || !guardedAthlete
+               || guardedContext->athlete != guardedAthlete.data()
+               || !guardedAthlete->measures) {
+               return static_cast<MeasuresGroup *>(nullptr);
+           }
+           const int group =
+                   guardedAthlete->measures->getGroupSymbols()
+                       .indexOf(groupSymbol);
+           return guardedAthlete->measures->getGroup(group);
+       };
+
+   MeasuresGroup *group = activeGroup();
+   if (!group || group != measuresGroup) {
+       return fail(tr("The measures group is no longer available."));
+   }
+
+   const QList<Measure> previous = group->measures();
+   QList<Measure> current = previous;
 
    // we discard only if we have new data loaded - otherwise keep what is there
    if (discardExisting) {
@@ -397,21 +550,63 @@ MeasuresDownload::updateMeasures(Context *context,
    }
 
    // update measures in cache and on file store
-   context->athlete->rideCache->cancel();
+   RideCache *rideCache = guardedAthlete->rideCache;
+   if (!rideCache) {
+       return fail(tr("The activity cache is no longer available."));
+   }
+   rideCache->cancel();
+   group = activeGroup();
+   if (!group) {
+       return fail(tr("The operation was cancelled."));
+   }
 
    // store in athlete
-   measuresGroup->setMeasures(measures);
+   group->setMeasures(measures);
 
-   // now save data away if we actually got something !
-   // doing it here means we don't overwrite previous responses
-   // when we fail to get any data (e.g. errors / network problems)
-   measuresGroup->write();
+   QString writeError;
+   if (!group->write(&writeError)) {
+       if (MeasuresGroup *rollbackGroup = activeGroup()) {
+           QList<Measure> rollback = previous;
+           rollbackGroup->setMeasures(rollback);
+       }
+       if (guardedAthlete && guardedAthlete->rideCache) {
+           guardedAthlete->rideCache->refresh();
+       }
+       const QString message =
+           tr("Saving downloaded measures failed: %1")
+               .arg(writeError.isEmpty()
+                        ? tr("Unknown error")
+                        : writeError);
+       qWarning() << tr("%1 Measures")
+           .arg(groupName) << message;
+       return fail(message);
+   }
+   if (!activeGroup()) {
+       return fail(tr("The operation was cancelled."));
+   }
 
    // do a refresh, it will check if needed
-   context->athlete->rideCache->refresh();
+   rideCache = guardedAthlete->rideCache;
+   if (!rideCache) {
+       return fail(tr("The activity cache is no longer available."));
+   }
+   rideCache->refresh();
+   if (!activeGroup()) {
+       return fail(tr("The operation was cancelled."));
+   }
+   return true;
 }
 
 void MeasuresDownload::autoDownload(Context *context) {
+    QPointer<Context> guardedContext(context);
+    QPointer<Athlete> guardedAthlete =
+            guardedContext ? guardedContext->athlete : nullptr;
+    if (guardedContext.isNull()
+        || guardedAthlete.isNull()
+        || guardedContext->athlete != guardedAthlete.data()) {
+        return;
+    }
+
     CloudServiceFactory &factory = CloudServiceFactory::instance();
 
     // iterate over names, as they are sorted alphabetically
@@ -419,14 +614,34 @@ void MeasuresDownload::autoDownload(Context *context) {
 
         // get the service
         const CloudService *s = factory.service(name);
+        if (!s) continue;
+        const auto execution = s->startupMeasuresExecution();
 
         // only ones with the capability we need.
-        if (!(s->type() & CloudService::Measures)) continue;
+        if (!(s->type() & CloudService::Measures)
+            || !(s->capabilities() & CloudService::Download)
+            || !s->supportsStartupMeasuresDownload()) {
+            continue;
+        }
         // only ones with Sync on Startup enabled
         if (appsettings->cvalue(context->athlete->cyclist, s->syncOnStartupSettingName(), "false").toString() != "true") continue;
-        // don't allow options which are not supported or authorized
-        if (!(name == "Withings" && appsettings->cvalue(context->athlete->cyclist, GC_NOKIA_TOKEN, "").toString() !="") ||
-             (name == "Tredict" && appsettings->cvalue(context->athlete->cyclist, GC_TREDICT_TOKEN, "").toString() != "")) continue;
+
+        bool authorized = false;
+        switch (execution) {
+        case CloudService::StartupMeasuresExecution::Withings:
+            authorized = !appsettings->cvalue(
+                context->athlete->cyclist,
+                GC_NOKIA_REFRESH_TOKEN, "").toString().isEmpty();
+            break;
+        case CloudService::StartupMeasuresExecution::Tredict:
+            authorized = !appsettings->cvalue(
+                context->athlete->cyclist,
+                GC_TREDICT_REFRESH_TOKEN, "").toString().isEmpty();
+            break;
+        case CloudService::StartupMeasuresExecution::Unsupported:
+            break;
+        }
+        if (!authorized) continue;
 
         // iterate over measures groups
         foreach(MeasuresGroup* measuresGroup, context->athlete->measures->getGroups()) {
@@ -434,6 +649,15 @@ void MeasuresDownload::autoDownload(Context *context) {
             QString group = measuresGroup->getSymbol();
             // Only supported groups
             if (group != "Body" && group != "Hrv") continue;
+
+            const bool groupSupported =
+                (execution
+                    == CloudService::StartupMeasuresExecution::Withings
+                 && group == "Body")
+                || (execution
+                    == CloudService::StartupMeasuresExecution::Tredict
+                    && (group == "Body" || group == "Hrv"));
+            if (!groupSupported) continue;
 
             QList<Measure> current = measuresGroup->measures();
             QList<Measure> measures;
@@ -463,12 +687,37 @@ void MeasuresDownload::autoDownload(Context *context) {
             toDate.setTime(QTime(23,59));
 
             // do the download
-            if (name == "Withings" && group == "Body") {
-                downloadOk = WithingsDownload(context).getBodyMeasures(err, fromDate, toDate, measures);
-            } else if (name == "Tredict" && group == "Body") {
-                downloadOk = TredictMeasuresDownload(context).getBodyMeasures(err, fromDate, toDate, measures);
-            } else if (name == "Tredict" && group == "Hrv") {
-                downloadOk = TredictMeasuresDownload(context).getHrvMeasures(err, fromDate, toDate, measures);
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+            if (autoDownloadProbe) {
+                downloadOk = autoDownloadProbe(
+                    context, group, err, fromDate, toDate, measures);
+            } else
+#endif
+            switch (execution) {
+            case CloudService::StartupMeasuresExecution::Withings:
+                if (group == "Body") {
+                    downloadOk = WithingsDownload(context).getBodyMeasures(
+                        err, fromDate, toDate, measures);
+                }
+                break;
+            case CloudService::StartupMeasuresExecution::Tredict:
+                if (group == "Body") {
+                    downloadOk = TredictMeasuresDownload(context).getBodyMeasures(
+                        err, fromDate, toDate, measures);
+                } else if (group == "Hrv") {
+                    downloadOk = TredictMeasuresDownload(context).getHrvMeasures(
+                        err, fromDate, toDate, measures);
+                }
+                break;
+            case CloudService::StartupMeasuresExecution::Unsupported:
+                break;
+            }
+
+            if (guardedContext.isNull()
+                || guardedAthlete.isNull()
+                || guardedContext->athlete
+                    != guardedAthlete.data()) {
+                return;
             }
 
             if (downloadOk) {
@@ -483,7 +732,15 @@ void MeasuresDownload::autoDownload(Context *context) {
                     }
                 }
 
-                updateMeasures(context, measuresGroup, measures, false);
+                if (!updateMeasures(
+                        guardedContext.data(), measuresGroup,
+                        measures, false)
+                    && (guardedContext.isNull()
+                        || guardedAthlete.isNull()
+                        || guardedContext->athlete
+                            != guardedAthlete.data())) {
+                    return;
+                }
 
             } else if (!err.isEmpty()){
                 // handle error document in err String

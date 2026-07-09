@@ -40,6 +40,11 @@ class Withings : public CloudService {
 
         // this is a stub only used to setup configuration !
         int type() const { return Measures; }
+        StartupMeasuresExecution
+            startupMeasuresExecution() const override
+        {
+            return StartupMeasuresExecution::Withings;
+        }
         int capabilities() const { return OAuth | Download; }
 
     public slots:

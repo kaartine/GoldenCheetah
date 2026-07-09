@@ -17,6 +17,7 @@
  */
 
 #include "WithingsDownload.h"
+#include "NetworkReplyWait.h"
 #include "WithingsReading.h"
 #include "MainWindow.h"
 #include "Athlete.h"
@@ -24,6 +25,8 @@
 #include "Secrets.h"
 #include "Measures.h"
 #include <QMessageBox>
+#include <QPointer>
+#include <QThread>
 
 #ifndef WITHINGS_DEBUG
 #define WITHINGS_DEBUG false
@@ -47,23 +50,35 @@
     } while(0)
 #endif
 
-WithingsDownload::WithingsDownload(Context *context) : context(context)
+WithingsDownload::WithingsDownload(Context *context)
+    : WithingsDownload(
+        context,
+        {QUrl(QStringLiteral("https://wbsapi.withings.net/v2/oauth2")),
+         QUrl(QStringLiteral("https://wbsapi.withings.net/measure")),
+         30000})
+{
+}
+
+WithingsDownload::WithingsDownload(
+        Context *context, const NetworkOptions &networkOptions)
+    : context(context), networkOptions(networkOptions)
 {
     nam = new QNetworkAccessManager(this);
-    connect(nam, SIGNAL(finished(QNetworkReply*)), this, SLOT(downloadFinished(QNetworkReply*)));
-
 }
 
 bool
 WithingsDownload::getBodyMeasures(QString &error, QDateTime from, QDateTime to, QList<Measure> &data)
 {
-    response = "";
+    if (!context || !context->athlete) {
+        error = tr("Withings request was cancelled.");
+        return false;
+    }
 
-    QString strNokiaToken = "";
+    QString response;
+
     QString strNokiaRefreshToken = "";
     QString access_token = "";
 
-    strNokiaToken = appsettings->cvalue(context->athlete->cyclist, GC_NOKIA_TOKEN).toString();
     strNokiaRefreshToken = appsettings->cvalue(context->athlete->cyclist, GC_NOKIA_REFRESH_TOKEN).toString();
 
     if(strNokiaRefreshToken.isEmpty() || strNokiaRefreshToken == "" || strNokiaRefreshToken == "0" ) {
@@ -91,17 +106,18 @@ WithingsDownload::getBodyMeasures(QString &error, QDateTime from, QDateTime to, 
         postData.addQueryItem("client_secret", GC_NOKIA_CLIENT_SECRET );
         postData.addQueryItem("refresh_token", refresh_token );
 
-        QUrl url = QUrl( "https://wbsapi.withings.net/v2/oauth2" );
+        QUrl url = networkOptions.tokenEndpoint;
 
         emit downloadStarted(100);
 
         QNetworkRequest request(url);
         request.setRawHeader("Content-Type", "application/x-www-form-urlencoded");
-        nam->post(request, postData.toString(QUrl::FullyEncoded).toUtf8());
+        QNetworkReply *tokenReply = nam->post(
+            request, postData.toString(QUrl::FullyEncoded).toUtf8());
         printd("url %s %s\n", url.toString().toStdString().c_str(), postData.toString().toStdString().c_str());
 
-        // blocking request
-        loop.exec(); // we go on after receiving the data in SLOT(onRequestReady(QByteArray))
+        if (!waitForReply(tokenReply, error, response))
+            return false;
 
         printd("response: %s\n", response.toStdString().c_str());
 
@@ -132,19 +148,20 @@ WithingsDownload::getBodyMeasures(QString &error, QDateTime from, QDateTime to, 
                 params.addQueryItem("enddate", QString::number(to.toMSecsSinceEpoch()/1000));
 
 
-                QUrl url = QUrl( "https://wbsapi.withings.net/measure?" + params.toString() );
+                QUrl url = networkOptions.measuresEndpoint;
+                url.setQuery(params);
 
                 printd("URL: %s\n", url.url().toStdString().c_str());
 
                 QNetworkRequest request(url);
                 //request.setRawHeader("Authorization", QString("Bearer %1").arg(access_token).toLatin1());
 
-                nam->get(request);
+                QNetworkReply *measuresReply = nam->get(request);
 
                 emit downloadProgress(50);
 
-                // blocking request
-                loop.exec(); // we go on after receiving the data in SLOT(onRequestReady(QByteArray))
+                if (!waitForReply(measuresReply, error, response))
+                    return false;
 
                 emit downloadEnded(100);
 
@@ -264,11 +281,43 @@ WithingsDownload::jsonDocumentToWithingsReading(QJsonDocument doc) {
     return readings;
 }
 
-// SLOTs for asynchronous calls
-
-void
-WithingsDownload::downloadFinished(QNetworkReply *reply)
+bool WithingsDownload::waitForReply(
+        QNetworkReply *reply,
+        QString &error,
+        QString &response)
 {
-    response = reply->readAll();
-    loop.exit(0);
+    if (!reply) {
+        error = tr("Withings request could not be started.");
+        return false;
+    }
+
+    QPointer<Context> guardedContext(context);
+    QPointer<Athlete> guardedAthlete =
+            guardedContext ? guardedContext->athlete : nullptr;
+    QThread *thread = QThread::currentThread();
+    const NetworkReplyWaitResult waitResult =
+            waitForNetworkReply(
+                reply, networkOptions.timeoutMs,
+                [guardedContext, guardedAthlete, thread]() {
+                    return guardedContext.isNull()
+                        || guardedAthlete.isNull()
+                        || thread->isInterruptionRequested();
+                });
+
+    bool succeeded = false;
+    if (waitResult == NetworkReplyWaitResult::TimedOut) {
+        error = tr("Withings request timed out.");
+    } else if (waitResult
+               == NetworkReplyWaitResult::Interrupted
+               || guardedContext.isNull()
+               || guardedAthlete.isNull()) {
+        error = tr("Withings request was cancelled.");
+    } else if (reply->error() != QNetworkReply::NoError) {
+        error = reply->errorString();
+    } else {
+        response = QString::fromUtf8(reply->readAll());
+        succeeded = true;
+    }
+    reply->deleteLater();
+    return succeeded;
 }

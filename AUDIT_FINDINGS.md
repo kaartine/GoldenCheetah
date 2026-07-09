@@ -925,19 +925,33 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### THREAD-004: Non-cooperative cloud provider calls can still block teardown
 
-- Status: OPEN
-- Code: `src/Cloud/CloudService.cpp`, `src/Cloud/LocalFileStore.cpp`,
-  cloud provider `open`, `home`, `readdir`, and `readFile` implementations
+- Status: FIXED
+- Code: `src/Cloud/CloudService.cpp`, `src/Cloud/CloudService.h`,
+  `src/Cloud/LocalFileStore.cpp`, `src/Cloud/LocalFileStoreProcess.cpp`,
+  `src/Cloud/MeasuresDownload.cpp`, `src/Cloud/WithingsDownload.cpp`,
+  `src/Cloud/TredictMeasuresDownload.cpp`, and `src/Cloud/OAuthPKCE.cpp`
 - Impact: `cancelAndWait()` must join the worker before athlete-owned paths are
-  released. If a provider is stuck inside a synchronous syscall and never
-  returns to observe interruption, athlete close can therefore block forever.
-  Nolio token refresh, OAuth, and active Qt network replies are now bounded, but
-  the generic provider contract still has no universal operation timeout.
-- Test: Block each provider operation in a non-cooperative backend and require
-  bounded teardown without accessing athlete state after close.
-- Fix direction: Give every provider operation an explicit timeout/cancellation
-  contract and move truly non-interruptible I/O behind a killable process or
-  another ownership boundary that does not require unsafe QThread termination.
+  released. A provider stuck inside a synchronous syscall could therefore
+  block athlete close forever.
+- Resolution: Startup activity providers now fail closed unless they explicitly
+  declare a cooperative or process-isolated execution contract. Unsupported,
+  unclassified, and upload-only providers are skipped. The Local Store backend
+  runs startup open, list, and read operations through a bounded helper process
+  with framed input, root confinement, interruption handling, and a dedicated
+  reaper that owns failed termination. Reaper admission closes atomically,
+  pending registrations are retried, and shutdown reaches `Stopped` only after
+  all helpers are drained. Non-Unix Local Store startup sync is disabled rather
+  than falling back to an unbounded in-process call. Startup measures are
+  restricted to Withings and Tredict, whose token and measure requests now have
+  hard deadlines, interruption handling, and guarded athlete ownership.
+- Verification: The new reaper regressions first failed because a quarantined
+  process was not registered again (child exit 33), a failed shutdown was
+  incorrectly marked stopped (41), and a queued dispatch could lose its worker
+  target during thread exit (52). The final focused suite passes all 92 cases
+  normally and under ASan/UBSan/LSan. Six reaper lifecycle cases pass under
+  TSan without suppressions. The Qt 6.8.3 application compiles and links, and
+  the complete qmake check run passes 1,615 tests in 46 QtTest suites with no
+  failures or skips.
 
 ### SEC-004: OpenData discovery can redirect the full dataset
 
