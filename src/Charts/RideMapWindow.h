@@ -32,6 +32,7 @@
 #include "RideFile.h"
 #include "IntervalItem.h"
 #include "Context.h"
+#include "MapPageSecurityPolicy.h"
 
 #include <QDialog>
 
@@ -39,6 +40,8 @@
 #include <QWebEngineView>
 
 class QMouseEvent;
+class QWebEngineProfile;
+class MapPageRequestInterceptor;
 class RideItem;
 class Context;
 class QColor;
@@ -73,6 +76,7 @@ class MapWebBridge : public QObject
 
     public:
         MapWebBridge(Context *context, RideMapWindow *mw) : context(context), mw(mw) {}
+        void resetState();
 
     public slots:
         Q_INVOKABLE void call(int count);
@@ -135,7 +139,10 @@ class RideMapWindow : public GcChartWindow
 
         // set/get properties
         int mapType() const { return mapCombo->currentIndex(); }
-        void setMapType(int x) { mapCombo->setCurrentIndex(x >= 0 && x < mapCombo->count() ? x : OSM); } // default to OSM for invalid mapType, s.t. deprecated Bing
+        void setMapType(int x) {
+            mapCombo->setCurrentIndex(
+                MapPageSecurityPolicy::safeMapType(x));
+        }
 
         bool showIntervals() const { return showInt->isChecked(); }
         void setShowIntervals(bool x) { showInt->setChecked(x); }
@@ -213,6 +220,8 @@ class RideMapWindow : public GcChartWindow
         QVBoxLayout *layout;
 
         QWebEngineView *view;
+        QWebEngineProfile *mapProfile;
+        MapPageRequestInterceptor *requestInterceptor;
         MapWebBridge *webBridge;
 
         RideMapWindow();  // default ctor
@@ -228,6 +237,7 @@ class RideMapWindow : public GcChartWindow
         QString osmTileServerUrlDefault;
 
         QColor GetColor(int watts);
+        QString tileTemplate() const;
         void createHtml();
         void buildPositionList();
 

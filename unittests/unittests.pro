@@ -9,6 +9,7 @@ equals(GC_UNITTESTS, active) {
 			   Core/localApiSecurity \
 			   Cloud/oauthCallbackPolicy \
 			   Cloud/openDataEndpointPolicy \
+			   Charts/mapPageSecurity \
 			   Train/libraryImportFileStager \
 			   Train/webDownloadImportPolicy \
 			   Train/trainDbVersionSafety \

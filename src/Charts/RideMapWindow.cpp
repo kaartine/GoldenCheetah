@@ -45,6 +45,150 @@
 #include "GcOverlayWidget.h"
 #include "IntervalSummaryWindow.h"
 #include <QDebug>
+#include <QMessageBox>
+#include <QMutex>
+#include <QMutexLocker>
+#include <QUuid>
+#include <QWebEngineDownloadRequest>
+#include <QWebEngineProfile>
+#include <QWebEngineUrlRequestInfo>
+#include <QWebEngineUrlRequestInterceptor>
+
+#include <cmath>
+
+namespace {
+
+const QString DefaultTileServer =
+    QStringLiteral("https://{s}.tile.openstreetmap.org");
+const QString DefaultTileTemplate =
+    DefaultTileServer
+    + QStringLiteral("/{z}/{x}/{y}.png");
+const QUrl MapDocumentUrl(
+    QStringLiteral("qrc:/web/ride-map"));
+
+MapPageSecurityPolicy::ResourceType resourceType(
+    QWebEngineUrlRequestInfo::ResourceType type)
+{
+    switch (type) {
+    case QWebEngineUrlRequestInfo::ResourceTypeMainFrame:
+        return MapPageSecurityPolicy::ResourceType::MainFrame;
+    case QWebEngineUrlRequestInfo::ResourceTypeScript:
+        return MapPageSecurityPolicy::ResourceType::Script;
+    case QWebEngineUrlRequestInfo::ResourceTypeStylesheet:
+        return MapPageSecurityPolicy::ResourceType::StyleSheet;
+    case QWebEngineUrlRequestInfo::ResourceTypeImage:
+        return MapPageSecurityPolicy::ResourceType::Image;
+    default:
+        return MapPageSecurityPolicy::ResourceType::Other;
+    }
+}
+
+class RestrictedMapPage : public QWebEnginePage
+{
+public:
+    RestrictedMapPage(QWebEngineProfile *profile,
+                      QObject *parent)
+        : QWebEnginePage(profile, parent)
+    {
+    }
+
+protected:
+    QWebEnginePage *createWindow(WebWindowType type) override
+    {
+        Q_UNUSED(type)
+        return nullptr;
+    }
+
+    QStringList chooseFiles(
+        FileSelectionMode mode,
+        const QStringList &oldFiles,
+        const QStringList &acceptedMimeTypes) override
+    {
+        Q_UNUSED(mode)
+        Q_UNUSED(oldFiles)
+        Q_UNUSED(acceptedMimeTypes)
+        return QStringList();
+    }
+
+    void javaScriptAlert(const QUrl &origin,
+                         const QString &message) override
+    {
+        Q_UNUSED(origin)
+        Q_UNUSED(message)
+    }
+
+    bool javaScriptConfirm(const QUrl &origin,
+                           const QString &message) override
+    {
+        Q_UNUSED(origin)
+        Q_UNUSED(message)
+        return false;
+    }
+
+    bool javaScriptPrompt(const QUrl &origin,
+                          const QString &message,
+                          const QString &defaultValue,
+                          QString *result) override
+    {
+        Q_UNUSED(origin)
+        Q_UNUSED(message)
+        Q_UNUSED(defaultValue)
+        Q_UNUSED(result)
+        return false;
+    }
+
+    bool acceptNavigationRequest(
+        const QUrl &url,
+        NavigationType type,
+        bool isMainFrame) override
+    {
+        Q_UNUSED(type)
+        return isMainFrame
+            && MapPageSecurityPolicy::allowsRequest(
+                MapPageSecurityPolicy::ResourceType::MainFrame,
+                url,
+                MapPageSecurityPolicy::tileEndpoint(
+                    DefaultTileTemplate));
+    }
+};
+
+} // namespace
+
+class MapPageRequestInterceptor
+    : public QWebEngineUrlRequestInterceptor
+{
+public:
+    explicit MapPageRequestInterceptor(QObject *parent)
+        : QWebEngineUrlRequestInterceptor(parent)
+    {
+    }
+
+    void setTileEndpoint(
+        const MapPageSecurityPolicy::TileEndpoint &endpoint)
+    {
+        QMutexLocker locker(&mutex_);
+        endpoint_ = endpoint;
+    }
+
+    void interceptRequest(
+        QWebEngineUrlRequestInfo &info) override
+    {
+        MapPageSecurityPolicy::TileEndpoint endpoint;
+        {
+            QMutexLocker locker(&mutex_);
+            endpoint = endpoint_;
+        }
+        info.block(
+            !MapPageSecurityPolicy::allowsRequest(
+                resourceType(info.resourceType()),
+                info.requestUrl(),
+                endpoint));
+    }
+
+private:
+    QMutex mutex_;
+    MapPageSecurityPolicy::TileEndpoint endpoint_;
+};
 
 RideMapWindow::RideMapWindow(Context *context, int mapType) : GcChartWindow(context), context(context),
                                                        range(-1), current(NULL), firstShow(true), stale(false)
@@ -61,7 +205,6 @@ RideMapWindow::RideMapWindow(Context *context, int mapType) : GcChartWindow(cont
     // map choice
     mapCombo= new QComboBox(this);
     mapCombo->addItem(tr("OpenStreetMap"));
-    mapCombo->addItem(tr("Google"));
 
     setMapType(mapType); // validate mapType and set current index in mapCombo
 
@@ -139,14 +282,79 @@ RideMapWindow::RideMapWindow(Context *context, int mapType) : GcChartWindow(cont
     layout->setContentsMargins(2,0,2,2);
     setChartLayout(layout);
 
+    mapProfile = new QWebEngineProfile(this);
+    mapProfile->setHttpCacheType(
+        QWebEngineProfile::MemoryHttpCache);
+    mapProfile->setHttpCacheMaximumSize(16 * 1024 * 1024);
+    mapProfile->setPersistentCookiesPolicy(
+        QWebEngineProfile::NoPersistentCookies);
+    mapProfile->setPersistentPermissionsPolicy(
+        QWebEngineProfile::PersistentPermissionsPolicy::AskEveryTime);
+    mapProfile->setSpellCheckEnabled(false);
+    mapProfile->setPushServiceEnabled(false);
+
+    requestInterceptor =
+        new MapPageRequestInterceptor(mapProfile);
+    requestInterceptor->setTileEndpoint(
+        MapPageSecurityPolicy::tileEndpoint(
+            DefaultTileTemplate));
+    mapProfile->setUrlRequestInterceptor(
+        requestInterceptor);
+
     view = new QWebEngineView(this);
-    // stop stealing focus!
-    view->settings()->setAttribute(QWebEngineSettings::FocusOnNavigationEnabled, false);
-    view->setPage(new QWebEnginePage(context->webEngineProfile));
+    view->setPage(
+        new RestrictedMapPage(mapProfile, view));
+    QWebEngineSettings *webSettings = view->settings();
+    webSettings->setAttribute(
+        QWebEngineSettings::FocusOnNavigationEnabled, false);
+    webSettings->setAttribute(
+        QWebEngineSettings::JavascriptCanOpenWindows, false);
+    webSettings->setAttribute(
+        QWebEngineSettings::JavascriptCanAccessClipboard, false);
+    webSettings->setAttribute(
+        QWebEngineSettings::LocalStorageEnabled, false);
+    webSettings->setAttribute(
+        QWebEngineSettings::LocalContentCanAccessRemoteUrls, true);
+    webSettings->setAttribute(
+        QWebEngineSettings::LocalContentCanAccessFileUrls, false);
+    webSettings->setAttribute(
+        QWebEngineSettings::HyperlinkAuditingEnabled, false);
+    webSettings->setAttribute(
+        QWebEngineSettings::PluginsEnabled, false);
+    webSettings->setAttribute(
+        QWebEngineSettings::FullScreenSupportEnabled, false);
+    webSettings->setAttribute(
+        QWebEngineSettings::ScreenCaptureEnabled, false);
+    webSettings->setAttribute(
+        QWebEngineSettings::AllowRunningInsecureContent, false);
+    webSettings->setAttribute(
+        QWebEngineSettings::AllowGeolocationOnInsecureOrigins, false);
+    webSettings->setAttribute(
+        QWebEngineSettings::DnsPrefetchEnabled, false);
+    webSettings->setAttribute(
+        QWebEngineSettings::PdfViewerEnabled, false);
+    webSettings->setAttribute(
+        QWebEngineSettings::NavigateOnDropEnabled, false);
+    webSettings->setUnknownUrlSchemePolicy(
+        QWebEngineSettings::DisallowUnknownUrlSchemes);
+    view->setContextMenuPolicy(Qt::NoContextMenu);
     view->setContentsMargins(0,0,0,0);
     view->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     view->setAcceptDrops(false);
-    view->page()->setHtml("<html></html>");
+
+    connect(
+        mapProfile,
+        &QWebEngineProfile::downloadRequested,
+        this,
+        [](QWebEngineDownloadRequest *download) {
+            if (download) {
+                download->cancel();
+            }
+        });
+
+    view->page()->setHtml(
+        QStringLiteral("<html></html>"),
+        MapDocumentUrl);
     layout->addWidget(view);
 
     HelpWhatsThis *help = new HelpWhatsThis(view);
@@ -156,8 +364,8 @@ RideMapWindow::RideMapWindow(Context *context, int mapType) : GcChartWindow(cont
     // file: MyWebEngineView.cpp, MyWebEngineView extends QWebEngineView
     QWebChannel *channel = new QWebChannel(view->page());
 
-    // set the web channel to be used by the page
-    // see http://doc.qt.io/qt-5/qwebenginepage.html#setWebChannel
+    // Only bundled scripts admitted by the request policy can reach
+    // the WebChannel registered on this dedicated page.
     view->page()->setWebChannel(channel);
 
     // register QObjects to be exposed to JavaScript
@@ -248,6 +456,17 @@ RideMapWindow::setCustomTSWidgetVisible(bool value)
     tileCombo->setVisible(value);
     gkeylabel->setVisible(!value);
     gkey->setVisible(!value);
+}
+
+QString
+RideMapWindow::tileTemplate() const
+{
+    const QString requiredPath =
+        QStringLiteral("/{z}/{x}/{y}.png");
+    const QString configured = osmTSUrl->text();
+    return configured.contains(requiredPath)
+        ? configured
+        : configured + requiredPath;
 }
 
 void
@@ -407,8 +626,24 @@ RideMapWindow::hideRouteLineOpacityChanged(int value)
 void
 RideMapWindow::osmCustomTSURLEditingFinished()
 {
+    if (!MapPageSecurityPolicy::tileEndpoint(
+            tileTemplate()).isValid()) {
+        QMessageBox::warning(
+            this,
+            tr("Invalid Tile Server"),
+            tr("Tile server URLs must use HTTPS. "
+               "Cleartext HTTP is allowed only for an exact "
+               "localhost or loopback address."));
+        setTileServerUrlForTileType(osmTS());
+        if (!MapPageSecurityPolicy::tileEndpoint(
+                tileTemplate()).isValid()) {
+            osmTSUrl->setText(DefaultTileServer);
+        }
+        forceReplot();
+        return;
+    }
 
-    // just store the text - even if not changed
+    // Store only a URL accepted by the map request policy.
     switch (osmTS())
     {
     case 0:
@@ -474,7 +709,8 @@ RideMapWindow::forceReplot()
 {
     if (context->isCompareIntervals) {
         createHtml();
-        view->page()->setHtml(currentPage);
+        view->page()->setHtml(
+            currentPage, MapDocumentUrl);
     } else {
         stale=true;
         rideSelected();
@@ -484,6 +720,7 @@ RideMapWindow::forceReplot()
 void
 RideMapWindow::rideSelected()
 {
+    webBridge->resetState();
     if (context->isCompareIntervals) {
         return;
     }
@@ -526,7 +763,8 @@ void RideMapWindow::loadRide()
     createHtml();
     buildPositionList();
 
-    view->page()->setHtml(currentPage);
+    view->page()->setHtml(
+        currentPage, MapDocumentUrl);
 }
 
 void RideMapWindow::updateFrame()
@@ -543,6 +781,26 @@ void RideMapWindow::createHtml()
 {
     RideItem * ride = myRideItem;
     currentPage = "";
+
+    QString activeTileTemplate = tileTemplate();
+    MapPageSecurityPolicy::TileEndpoint endpoint =
+        MapPageSecurityPolicy::tileEndpoint(
+            activeTileTemplate);
+    if (!endpoint.isValid()) {
+        activeTileTemplate = DefaultTileTemplate;
+        endpoint = MapPageSecurityPolicy::tileEndpoint(
+            activeTileTemplate);
+        osmTSUrl->setText(DefaultTileServer);
+    }
+    requestInterceptor->setTileEndpoint(endpoint);
+
+    QString nonce =
+        QUuid::createUuid().toString(
+            QUuid::WithoutBraces);
+    nonce.remove(QLatin1Char('-'));
+    const QString csp =
+        MapPageSecurityPolicy::contentSecurityPolicy(
+            nonce, endpoint);
 
     double minLat = 1000;
     double minLon = 1000;
@@ -561,7 +819,17 @@ void RideMapWindow::createHtml()
             && ! hasComparePositions)
         || (   ! context->isCompareIntervals
             && (!ride || !ride->ride() || ride->ride()->areDataPresent()->lat == false || ride->ride()->areDataPresent()->lon == false))) {
-        currentPage = QString("<STYLE>BODY { background-color: %1; color: %2 }</STYLE><center>%3</center>").arg(bgColor.name()).arg(fgColor.name()).arg(tr("No GPS Data Present"));
+        currentPage =
+            QStringLiteral(
+                "<!DOCTYPE html><html><head>"
+                "<meta http-equiv=\"Content-Security-Policy\" "
+                "content=\"%1\">"
+                "<style>body { background-color: %2; color: %3; }</style>"
+                "</head><body><center>%4</center></body></html>")
+                .arg(csp.toHtmlEscaped(),
+                     bgColor.name(),
+                     fgColor.name(),
+                     tr("No GPS Data Present").toHtmlEscaped());
         setIsBlank(true);
         return;
     } else {
@@ -584,7 +852,8 @@ void RideMapWindow::createHtml()
     currentPage = QString("<!DOCTYPE html> \n"
     "<html>\n"
     "<head>\n"
-    "<meta name=\"referrer\" content=\"strict-origin-when-cross-origin\">\n"
+    "<meta http-equiv=\"Content-Security-Policy\" content=\"%1\">\n"
+    "<meta name=\"referrer\" content=\"no-referrer\">\n"
     "<meta name=\"viewport\" content=\"initial-scale=1.0, user-scalable=yes\"/> \n"
     "<meta http-equiv=\"content-type\" content=\"text/html; charset=UTF-8\"/>\n"
     "<title>Golden Cheetah Map</title>\n"
@@ -592,13 +861,19 @@ void RideMapWindow::createHtml()
     "   html { height: 100% }\n"
     "   body { height: 100%; margin: 0; padding: 0 }\n"
     "   #map-canvas { height: 100% }\n"
-    "</style>\n");
+    "</style>\n").arg(csp.toHtmlEscaped());
 
     // load the js API
     if (mapCombo->currentIndex() == OSM) {
-        // Load leaflet (1.9.4) API
-        currentPage += QString("<link rel=\"stylesheet\" href=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.css\" integrity=\"sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=\" crossorigin=\"\" /> \n"
-                               "<script src=\"https://unpkg.com/leaflet@1.9.4/dist/leaflet.js\" integrity=\"sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=\" crossorigin=\"\"></script>\n");
+        // Leaflet is bundled so no network script can reach WebChannel.
+        currentPage += QString(
+            "<link rel=\"stylesheet\" href=\"%1\" />\n"
+            "<script src=\"%2\"></script>\n")
+                .arg(
+                    MapPageSecurityPolicy::
+                        leafletStyleSheetUrl().toHtmlEscaped(),
+                    MapPageSecurityPolicy::
+                        leafletScriptUrl().toHtmlEscaped());
 
         // Add grayscale filter if required
         if (osmGraySlider->value() > 0) {
@@ -608,23 +883,19 @@ void RideMapWindow::createHtml()
                                    "    }\n"
                                    "</style>\n").arg(osmGraySlider->value() / 10.0);
         }
-    } else if (mapCombo->currentIndex() == GOOGLE) {
-        // Load Google Map v3 API
-        currentPage += QString("<script type=\"text/javascript\" src=\"http://maps.googleapis.com/maps/api/js?key=%1\"></script> \n").arg(gkey->text());
     }
 
     currentPage += QString("<script type=\"text/javascript\" src=\"qrc:///qtwebchannel/qwebchannel.js\"></script>\n");
 
-    currentPage += QString("<script type=\"text/javascript\"> \n"
+    currentPage += QString("<script type=\"text/javascript\" nonce=\"%1\"> \n"
     "var webBridge; \n"
     "window.onload = function () { \n"
-    "<!-- it's a good idea to initialize webchannel after DOM ready, if the code is going to manipulate the DOM -->\n"
     "   new QWebChannel(qt.webChannelTransport, function (channel) { \n"
     "       webBridge = channel.objects.webBridge; \n"
     "       initialize(); \n"
     "   }); \n"
     "}; \n"
-    "</script>");
+    "</script>").arg(nonce);
 
     // fg/bg
     currentPage += QString("<STYLE>BODY { background-color: %1; color: %2 }</STYLE>")
@@ -635,8 +906,8 @@ void RideMapWindow::createHtml()
             "<div id=\"map-canvas\"></div>\n");
 
     // local functions
-    currentPage += QString("<script type=\"text/javascript\">\n"
-                           "var map;\n");  // the map object
+    currentPage += QString("<script type=\"text/javascript\" nonce=\"%1\">\n"
+                           "var map;\n").arg(nonce);  // the map object
     if (context->isCompareIntervals) {
         currentPage += QString("var compareIntervalGroup;\n");  // compare Intervals
     } else {
@@ -963,15 +1234,14 @@ void RideMapWindow::createHtml()
                                arg(maxLat,0,'g',GPS_COORD_TO_STRING).
                                arg(maxLon,0,'g',GPS_COORD_TO_STRING);
 
-        // If provided URL doesn't contain the required part, we add it,
-        // otherwise it is used without changes to allow inclusion of apikey.
-        QString tsReq = "/{z}/{x}/{y}.png";
-        QString tsUrl = osmTSUrl->text().contains(tsReq) ? osmTSUrl->text() : osmTSUrl->text() + tsReq;
+        const QString tileUrl =
+            MapPageSecurityPolicy::javaScriptStringLiteral(
+                activeTileTemplate);
         currentPage += QString(""
-                               "    L.tileLayer('%1', {"
-                               "                 attribution: '&copy; <a href=\"http://openstreetmap.org\">OpenStreetMap</a> contributors',"
+                               "    L.tileLayer(%1, {"
+                               "                 attribution: '&copy; <a href=\"https://openstreetmap.org\">OpenStreetMap</a> contributors',"
                                "                 maxZoom: 18"
-                               "              }).addTo(map);\n").arg(tsUrl);
+                               "              }).addTo(map);\n").arg(tileUrl);
 
         if (context->isCompareIntervals) {
             currentPage += QString(""
@@ -1303,7 +1573,8 @@ RideMapWindow::compareIntervalsChanged
 
     if (oldCountCompareIntervals == 0 || countCompareIntervals == 0) {
         createHtml();
-        view->page()->setHtml(currentPage);
+        view->page()->setHtml(
+            currentPage, MapDocumentUrl);
     }
 }
 
@@ -1408,14 +1679,22 @@ static double distanceBetween(double fromLat, double fromLon, double toLat, doub
 void
 RideMapWindow::createMarkers()
 {
-    if (!showMarkersCk->checkState() || context->isCompareIntervals)
+    if (!showMarkersCk->checkState()
+        || context->isCompareIntervals
+        || !myRideItem
+        || !myRideItem->ride()) {
         return;
+    }
     QString code;
 
     //
     // START / FINISH MARKER
     //
-    const QVector<RideFilePoint *> &points = myRideItem->ride()->dataPoints();
+    const QVector<RideFilePoint *> &points =
+        myRideItem->ride()->dataPoints();
+    if (points.isEmpty()) {
+        return;
+    }
 
     bool loop = distanceBetween(points[0]->lat,
                                 points[0]->lon,
@@ -1536,27 +1815,35 @@ RideMapWindow::createMarkers()
     int interval=0;
     foreach (IntervalItem *x, myRideItem->intervals()) {
 
-        int offset = myRideItem->ride()->intervalBeginSecs(x->start);
+        const int offset =
+            myRideItem->ride()->intervalBeginSecs(x->start);
+        if (offset < 0 || offset >= points.size()) {
+            continue;
+        }
 
         if (mapCombo->currentIndex() == OSM) {
-            QString wPopupText = tr("Interval");
+            const QString tooltip =
+                MapPageSecurityPolicy::javaScriptStringLiteral(
+                    tr("Interval") + QStringLiteral(": ") + x->name);
             code = QString("{ var latlng = new L.LatLng(%1,%2);"
                            "var marker = new L.marker(latlng);"
-                           "marker.bindTooltip('%3: %4').openTooltip();"
-                           "marker.on('click', function(event) { webBridge.toggleInterval(%5); });"
-                           "marker.on('mouseover', function(event) { webBridge.hoverInterval(%5); });"
+                           "marker.bindTooltip(%3).openTooltip();"
+                           "marker.on('click', function(event) { webBridge.toggleInterval(%4); });"
+                           "marker.on('mouseover', function(event) { webBridge.hoverInterval(%4); });"
                            "marker.addTo(map);"
                            "markerList.push(marker);"
                            "}").arg(myRideItem->ride()->dataPoints()[offset]->lat,0,'g',GPS_COORD_TO_STRING)
                            .arg(myRideItem->ride()->dataPoints()[offset]->lon,0,'g',GPS_COORD_TO_STRING)
-                           .arg(wPopupText)
-                           .arg(x->name)
+                           .arg(tooltip)
                            .arg(interval);
         } else if (mapCombo->currentIndex() == GOOGLE) {
+            const QString title =
+                MapPageSecurityPolicy::javaScriptStringLiteral(
+                    x->name);
             code = QString(
                 "{"
                 "   var latlng = new google.maps.LatLng(%1,%2);"
-                "   var marker = new google.maps.Marker({ title: '%3', animation: google.maps.Animation.DROP, position: latlng });"
+                "   var marker = new google.maps.Marker({ title: %3, animation: google.maps.Animation.DROP, position: latlng });"
                 "   marker.setMap(map);"
                 "   markerList.push(marker);" // keep track of those suckers
                 "   google.maps.event.addListener(marker, 'click', function(event) { webBridge.toggleInterval(%4); });"
@@ -1565,7 +1852,7 @@ RideMapWindow::createMarkers()
                 "}")
                                         .arg(myRideItem->ride()->dataPoints()[offset]->lat,0,'g',GPS_COORD_TO_STRING)
                                         .arg(myRideItem->ride()->dataPoints()[offset]->lon,0,'g',GPS_COORD_TO_STRING)
-                                        .arg(x->name)
+                                        .arg(title)
                                         .arg(interval)
                                         ;
         }
@@ -1623,6 +1910,14 @@ void RideMapWindow::zoomInterval(IntervalItem *which)
     view->page()->runJavaScript(code);
 }
 
+void MapWebBridge::resetState()
+{
+    point = nullptr;
+    m_startDrag = false;
+    m_drag = false;
+    selection = 1;
+}
+
 // quick diag, used to debug code only
 void MapWebBridge::call(int count)
 {
@@ -1645,8 +1940,11 @@ MapWebBridge::getLatLons(int i)
 {
     QVariantList latlons;
     RideItem *rideItem = mw->property("ride").value<RideItem*>();
+    if (!rideItem || !rideItem->ride() || i < 0) {
+        return latlons;
+    }
 
-    if (rideItem && i > 0 && rideItem->intervalsSelected().count() >= i) {
+    if (i > 0 && rideItem->intervalsSelected().count() >= i) {
 
         IntervalItem *current = rideItem->intervalsSelected().at(i-1);
 
@@ -1664,7 +1962,7 @@ MapWebBridge::getLatLons(int i)
         }
         return latlons;
 
-    } else if (rideItem) {
+    } else {
 
         // get latlons for entire route
         foreach (RideFilePoint *p1, rideItem->ride()->dataPoints()) {
@@ -1685,6 +1983,12 @@ MapWebBridge::drawOverlays()
         return;
     }
 
+    RideItem *rideItem =
+        mw->property("ride").value<RideItem*>();
+    if (!rideItem || !rideItem->ride()) {
+        return;
+    }
+
     // overlay the markers
     mw->createMarkers();
 
@@ -1692,7 +1996,6 @@ MapWebBridge::drawOverlays()
     mw->drawShadedRoute();
 
     // Get the latest new selection lap number.
-    RideItem *rideItem = mw->property("ride").value<RideItem*>();
     if (rideItem)
     {
         QList<QString> wIntervalNames;
@@ -1731,7 +2034,11 @@ void
 MapWebBridge::toggleInterval(int x)
 {
     RideItem *rideItem = mw->property("ride").value<RideItem*>();
-    if (x < 0 || rideItem->intervals().count() <= x) return;
+    if (!rideItem
+        || x < 0
+        || rideItem->intervals().count() <= x) {
+        return;
+    }
 
     IntervalItem *current = rideItem->intervals().at(x);
     if (current) {
@@ -1744,7 +2051,10 @@ void
 MapWebBridge::hoverInterval(int n)
 {
     RideItem *rideItem = mw->property("ride").value<RideItem*>();
-    if (rideItem && rideItem->ride() && rideItem->intervals().count() > n) {
+    if (rideItem
+        && rideItem->ride()
+        && n >= 0
+        && rideItem->intervals().count() > n) {
         context->notifyIntervalHover(rideItem->intervals().at(n));
     }
 }
@@ -1758,6 +2068,16 @@ RideFilePoint const *
 MapWebBridge::searchPoint(double lat, double lng) const
 {
     RideItem *rideItem = mw->property("ride").value<RideItem*>();
+    if (!rideItem
+        || !rideItem->ride()
+        || !std::isfinite(lat)
+        || !std::isfinite(lng)
+        || lat < -90.0
+        || lat > 90.0
+        || lng < -180.0
+        || lng > 180.0) {
+        return nullptr;
+    }
 
     RideFilePoint *candidate = nullptr;
     double candidateDist = std::numeric_limits<double>::max();
@@ -1765,12 +2085,13 @@ MapWebBridge::searchPoint(double lat, double lng) const
         if (p1->lat == 0 && p1->lon == 0)
             continue;
 
-        double deltaLat = fabs(p1->lat - lat);
-        double deltaLon = fabs(p1->lon - lng);
+        double deltaLat = std::fabs(p1->lat - lat);
+        double deltaLon = std::fabs(p1->lon - lng);
         if (deltaLat < 0.001 && deltaLon < 0.001) {
             // exact distance if of no interest, a rough approximation is sufficient
-            double x = deltaLon * cos(lat);
-            double approxDist = sqrt(x * x + deltaLat * deltaLat);
+            double x = deltaLon * std::cos(lat);
+            double approxDist =
+                std::sqrt(x * x + deltaLat * deltaLat);
             if (approxDist < candidateDist) {
                 candidate = p1;
                 candidateDist = approxDist;
@@ -1785,8 +2106,14 @@ void
 MapWebBridge::hoverPath(double lat, double lng)
 {
     if (point) {
-        RideItem *rideItem = mw->property("ride").value<RideItem*>();
-        QString name = QString(tr("Selection #%1 ")).arg(selection);
+        RideItem *rideItem =
+            mw->property("ride").value<RideItem*>();
+        if (!rideItem || !rideItem->ride()) {
+            resetState();
+            return;
+        }
+        QString name =
+            QString(tr("Selection #%1 ")).arg(selection);
 
         // Check if we are starting to drag a new selection to create a lap.
         if (m_startDrag && !m_drag)
@@ -1860,22 +2187,23 @@ MapWebBridge::clickPath(double lat, double lng)
     } else {
         qDebug() << "MapWebBridge::clickPath(.): No Point near click";
         point = nullptr;
+        m_startDrag = false;
     }
 }
 
 void
 MapWebBridge::mouseup()
 {
-    // clear the temorary highlighter
+    // clear the temporary highlighter
     if (point) {
         mw->clearTempInterval();
-        point = nullptr;
-        if (m_drag) {
-            selection++;
-            m_drag = false;
-        }
-        m_startDrag = false;
     }
+    point = nullptr;
+    if (m_drag) {
+        selection++;
+    }
+    m_drag = false;
+    m_startDrag = false;
 }
 
 

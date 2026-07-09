@@ -1110,26 +1110,54 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-009: Map WebChannel is exposed to insecure/untrusted scripts
 
-- Status: OPEN
-- Code: `src/Charts/RideMapWindow.cpp:161`,
-  `src/Charts/RideMapWindow.cpp:613`, `src/Charts/RideMapWindow.h:81`
+- Status: FIXED
+- Code: `src/Charts/MapPageSecurityPolicy.cpp`,
+  `src/Charts/MapPageSecurityPolicy.h`,
+  `src/Charts/RideMapWindow.cpp`, `src/Charts/RideMapWindow.h`,
+  `src/Resources/map.qrc`
 - Impact: Google Maps JavaScript is loaded over HTTP in a page exposing route
   coordinates and interval mutation through WebChannel.
-- Test: Assert no HTTP subresource loads and untrusted pages cannot resolve or
-  invoke the bridge.
-- Fix direction: Bundle or require HTTPS scripts and isolate third-party code
-  from the privileged bridge.
+- Test: `unittests/Charts/mapPageSecurity` covers unsafe map types, tile
+  templates and image origins, cleartext and deceptive URLs, exact qrc
+  resource admission, main-frame navigation, CSP nonce validation,
+  JavaScript string encoding, and the bundled Leaflet asset hashes.
+- Resolution: The map now uses a dedicated off-the-record WebEngine profile
+  with memory-only caching, no persistent cookies or permissions, and no
+  shared browser state. Leaflet 1.9.4 and its license/assets are bundled and
+  hash-pinned; the legacy Google option and remote script load are removed,
+  with old saved map values falling back to OpenStreetMap. An interceptor
+  admits only exact qrc page/script/style assets and validated tile image
+  origins. Remote tile templates require HTTPS; HTTP is limited to exact
+  loopback hosts. A nonce-based CSP denies all other script, connection,
+  frame, worker, object, base, and form sources. Navigation, new windows,
+  file selection, JavaScript dialogs, context menus, drops, and downloads are
+  blocked on the privileged page.
+- Verification: Test-first cases failed on the missing policy, remote HTTP
+  and script paths, unsafe legacy map selection, broad qrc URLs, and
+  data/about main-frame navigation before their fixes. All 68 focused tests
+  pass normally and under strict ASan/UBSan/LSan. The release application
+  compiles and links, and the complete qmake check passes 1,854 tests in 51
+  QtTest suites without failures or skips. An AppImage usage test opened an
+  isolated copy of an existing athlete profile, selected a GPS activity, and
+  rendered both OpenStreetMap tiles and the route successfully.
 
 ### SEC-010: Interval names are inserted into JavaScript without escaping
 
-- Status: OPEN
-- Code: `src/Charts/RideMapWindow.cpp:1543`
+- Status: FIXED
+- Code: `src/Charts/MapPageSecurityPolicy.cpp`,
+  `src/Charts/RideMapWindow.cpp`
 - Impact: An imported activity can provide an interval name that breaks out of a
   JavaScript string, reads route data through WebChannel, and sends it remotely.
-- Test: Render interval names containing quotes, newlines, and script payloads;
-  verify they remain inert text.
-- Fix direction: Pass structured values through WebChannel/JSON rather than
-  source-code string construction.
+- Test: The map policy suite round-trips quotes, slashes, newlines, NUL, Unicode
+  line separators, HTML metacharacters, and closing-script payloads through a
+  JSON parser and asserts that raw script-breaking characters are absent.
+- Resolution: Dynamic JavaScript strings are serialized through Qt's JSON
+  encoder, with HTML-breaking characters and JavaScript line separators
+  escaped. Interval tooltips/titles and tile templates no longer interpolate
+  user-controlled text into quoted JavaScript source.
+- Verification: All encoding cases and the production integration contract
+  pass normally and under strict ASan/UBSan/LSan, as well as in the complete
+  1,854-test regression run.
 
 ### SEC-011: Cloud credentials are stored in plaintext settings
 
