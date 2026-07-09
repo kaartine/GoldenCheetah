@@ -497,6 +497,8 @@ SOURCES += Cloud/Dropbox.cpp
 HEADERS += Cloud/Dropbox.h
 SOURCES += Cloud/OpenData.cpp
 HEADERS += Cloud/OpenData.h
+SOURCES += Cloud/OpenDataEndpointPolicy.cpp
+HEADERS += Cloud/OpenDataEndpointPolicy.h
 
 SOURCES += Cloud/SixCycle.cpp
 HEADERS += Cloud/SixCycle.h

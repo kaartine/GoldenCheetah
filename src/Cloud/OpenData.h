@@ -29,9 +29,6 @@
 #include <QScrollArea>
 #include <QPushButton>
 
-// we maintain a list of receiving servers here:
-#define OPENDATA_SERVERSURL "http://www.goldencheetah.org/opendata.json"
-
 class OpenData : public QThread {
 
     Q_OBJECT

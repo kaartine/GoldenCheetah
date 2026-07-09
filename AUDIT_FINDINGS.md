@@ -955,15 +955,25 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-004: OpenData discovery can redirect the full dataset
 
-- Status: OPEN (feature is disabled in the current local build)
-- Code: `src/Cloud/OpenData.h:33`, `src/Cloud/OpenData.cpp:175`,
-  `src/Cloud/OpenData.cpp:317`
-- Impact: An HTTP-discovered arbitrary URL receives the opted-in athlete UUID
-  and activity dataset. A network attacker can redirect uploads.
-- Test: Supply a tampered discovery response and verify no request or upload is
-  sent outside a signed HTTPS allowlist.
-- Fix direction: Signed HTTPS discovery, strict host allowlist, and redirect
-  validation.
+- Status: FIXED
+- Code: `src/Cloud/OpenDataEndpointPolicy.h`,
+  `src/Cloud/OpenDataEndpointPolicy.cpp`, `src/Cloud/OpenData.cpp`
+- Impact: An HTTP-discovered arbitrary URL could receive the opted-in athlete
+  UUID and complete activity dataset.
+- Resolution: Discovery now uses a pinned HTTPS URL and is advisory only: it
+  cannot add trust. Server roots must match the compiled HTTPS host, port, and
+  root path exactly, with no userinfo, query, or fragment. Metrics URLs are
+  built only from validated roots. Discovery, ping, and upload requests use
+  manual redirect handling, and only non-redirected 2xx responses succeed.
+  Requests abort after 30 seconds without transferred bytes. Discovery size
+  and server count are bounded.
+- Verification: The test-first target initially failed because the required
+  endpoint-policy API did not exist while production still accepted arbitrary
+  discovery strings. The final policy suite passes 26 cases normally and under
+  ASan/UBSan/LSan, including attacker-only and mixed discovery responses,
+  cleartext/lookalike/wrong-port/path/userinfo URLs, malformed and oversized
+  responses, excessive server counts, and redirect rejection. The release
+  application links and the full check passes 1,641 tests in 47 QtTest suites.
 
 ### SEC-005: Local HTTP API has no authentication or Host validation
 

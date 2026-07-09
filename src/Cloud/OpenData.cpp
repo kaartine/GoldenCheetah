@@ -18,6 +18,7 @@
 
 #include "OpenData.h"
 #include "CloudService.h"
+#include "OpenDataEndpointPolicy.h"
 #include "Settings.h"
 #include "Secrets.h"
 #include "Colors.h"
@@ -26,9 +27,6 @@
 #include <QNetworkRequest>
 #include <QHttpPart>
 #include <QHttpMultiPart>
-
-#include <QJsonDocument>
-#include <QJsonArray>
 
 #include "../qzip/zipwriter.h"
 
@@ -58,6 +56,19 @@
 // 1          31 Mar 2018       Full OpenData Format with json summary and csv sample data
 
 static int OpenDataVersion = 1;
+
+namespace {
+
+bool openDataReplySucceeded(const QNetworkReply *reply)
+{
+    return reply
+        && OpenDataEndpointPolicy::isSuccessfulResponse(
+            reply->error(),
+            reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt(),
+            reply->attribute(QNetworkRequest::RedirectionTargetAttribute).toUrl());
+}
+
+} // namespace
 
 OpenData::OpenData(Context *context) : context(context) {}
 OpenData::~OpenData() {}
@@ -119,34 +130,30 @@ OpenData::run()
     emit progress(step, last, tr("Fetching server list."));
     printd("fetching server list\n");
 
-    QUrl serverlist(OPENDATA_SERVERSURL);
-    QNetworkRequest request(serverlist);
+    const QNetworkRequest request =
+        OpenDataEndpointPolicy::makeRequest(
+            OpenDataEndpointPolicy::discoveryUrl());
     QNetworkReply *reply = nam->get(request);
-
 
     // blocking request
     QEventLoop loop;
     connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
     loop.exec();
 
-    if (reply->error() != QNetworkReply::NoError) {
-        // how did it go?
+    if (!openDataReplySucceeded(reply)) {
         emit progress(step, 0, tr("Network Problem reading server list"));
         delete nam;
         return;
     }
 
-    // did we get a good response ?
-    QByteArray r = reply->readAll();
-    printd("response: %s\n", r.toStdString().c_str());
+    const QByteArray response = reply->readAll();
+    printd("response: %s\n", response.toStdString().c_str());
 
-    // get server list
-    QJsonParseError parseError;
-    QJsonDocument document = QJsonDocument::fromJson(r, &parseError);
-
-    // find a server thats responding, if cannot find then server
-    // will still be an empty string when done
-    if (parseError.error != QJsonParseError::NoError) {
+    QString discoveryError;
+    const QList<QUrl> results =
+        OpenDataEndpointPolicy::allowedServerRootsFromDiscovery(
+            response, &discoveryError);
+    if (!discoveryError.isEmpty()) {
         emit progress(step, 0, tr("Invalid server list, please try again later"));
         printd("invalid server list!");
         delete nam;
@@ -160,51 +167,38 @@ OpenData::run()
     emit progress(step, last, tr("Finding an available server."));
     printd("finding server\n");
 
-    // results ?
-    QJsonObject doc = document.object();
-    QJsonArray results = doc["SERVERS"].toArray();
-    QString server="";
+    QUrl server;
+    for (const QUrl &trying : results) {
+        const QUrl ping = OpenDataEndpointPolicy::metricsUrl(trying);
+        const QNetworkRequest tryserver =
+            OpenDataEndpointPolicy::makeRequest(ping);
+        QNetworkReply *pingReply = nam->get(tryserver);
 
-    // lets look at that then
-    if (results.size()>0) {
+        connect(pingReply, SIGNAL(finished()), &loop, SLOT(quit()));
+        loop.exec();
 
-        for(int i=0; i<results.size(); i++) {
-            QJsonObject each = results.at(i).toObject();
-
-            // get count of files at server as a ping test
-            QString trying = each["url"].toString();
-            QUrl ping(trying + "metrics");
-            QNetworkRequest tryserver(ping);
-
-            // ping the server
-            QNetworkReply *reply = nam->get(tryserver);
-
-            // blocking request
-            connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-            loop.exec();
-
-            // responded?
-            if (reply->error() == QNetworkReply::NoError) {
-                server = trying;
-                #if OPENDATA_DEBUG
-                QByteArray r = reply->readAll();
-                printd("server ping: %s\n", r.toStdString().c_str());
-                #endif
-                break;
-            } else {
-                printd("ping %s failed\n", trying.toStdString().c_str());
-            }
+        if (openDataReplySucceeded(pingReply)) {
+            server = trying;
+            #if OPENDATA_DEBUG
+            const QByteArray pingResponse = pingReply->readAll();
+            printd("server ping: %s\n",
+                   pingResponse.toStdString().c_str());
+            #endif
+            break;
         }
+
+        printd("ping %s failed\n",
+               trying.toString().toStdString().c_str());
     }
 
-    // servers not available
-    if (server == "") {
+    if (server.isEmpty()) {
         printd("Failed to find an available server\n");
         emit progress(step, 0, tr("No servers available, please try later."));
         delete nam;
         return;
     }
-    printd("found a server to post to: %s\n", server.toStdString().c_str());
+    printd("found a server to post to: %s\n",
+           server.toString().toStdString().c_str());
 
     // ----------------------------------------------------------------
     // STEP THREE: Prepare and compress the data to send
@@ -288,8 +282,8 @@ OpenData::run()
     emit progress(step, last, tr("Sending data to server."));
     printd("sending data\n");
 
-    QUrl serverpost(server + "metrics");
-    QNetworkRequest post(serverpost);
+    const QUrl serverpost = OpenDataEndpointPolicy::metricsUrl(server);
+    QNetworkRequest post = OpenDataEndpointPolicy::makeRequest(serverpost);
 
     // send as multipart form data - "secret" field, "id" field and "data" file
     QHttpMultiPart form (QHttpMultiPart::FormDataType);
@@ -322,7 +316,7 @@ OpenData::run()
     loop.exec();
 
     // success?
-    if (reply->error() == QNetworkReply::NoError) {
+    if (openDataReplySucceeded(reply)) {
         QByteArray r = reply->readAll();
         printd("post success %s\n", r.toStdString().c_str());
     } else {

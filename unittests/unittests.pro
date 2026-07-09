@@ -6,6 +6,7 @@ exists(unittests.pri) {
 
 equals(GC_UNITTESTS, active) {
 	SUBDIRS += Core/athleteMigrationSafety \
+			   Cloud/openDataEndpointPolicy \
 			   Train/libraryImportFileStager \
 			   Train/trainDbVersionSafety \
 			   Core/measuresAtomicSave \
