@@ -102,7 +102,10 @@ private slots:
     void successfulWritePublishesCompleteXml();
 
     void readSeasons() {
-        QFile file("seasons.xml");
+        const QString seasonsPath = QFINDTESTDATA("seasons.xml");
+        QVERIFY2(!seasonsPath.isEmpty(), "Unable to locate seasons.xml test data");
+
+        QFile file(seasonsPath);
         QList<Season> seasons = SeasonParser::readSeasons(&file);
 
         QCOMPARE(seasons.size(), 5);

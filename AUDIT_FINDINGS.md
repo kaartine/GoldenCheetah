@@ -1420,6 +1420,19 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Fix direction: Linux/macOS/Windows matrix, build and run all tests, then add
   ASan/UBSan, TSAN where viable, and parser fuzzers.
 
+### CI-002: Season parser test depends on its working directory
+
+- Status: FIXED
+- Code: `unittests/Core/seasonParser/testSeasonParser.cpp:105`
+- Impact: A clean out-of-source release `make check` cannot find
+  `seasons.xml`, so the otherwise passing suite stops at `readSeasons()` and
+  does not execute the remaining tests.
+- Regression test: The unmodified release test failed with zero parsed seasons
+  when run from `build-thread004-release`; after the fix, the focused suite
+  passes 8/8 and the complete registered release suite passes.
+- Fix: Resolve the fixture with QtTest's `QFINDTESTDATA` and fail explicitly if
+  the test data cannot be located.
+
 ### BUILD-001: Release dependencies and tooling are not reproducibly pinned
 
 - Status: OPEN
