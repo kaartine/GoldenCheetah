@@ -590,6 +590,12 @@ class CloudServiceFactory {
     QHash<QString,CloudService*> services_;
     QStringList names_;
 
+    static bool isDecommissionedService(const QString &id)
+    {
+        return id == QStringLiteral("SportPlusHealth")
+            || id == QStringLiteral("TrainingsTageBuch");
+    }
+
     public:
 
     // update settings to new scheme (try and guess which services have
@@ -731,6 +737,10 @@ class CloudServiceFactory {
     }
 
     bool addService(CloudService *service) {
+
+        if (!service || isDecommissionedService(service->id())) {
+            return false;
+        }
 
         // duplicates not welcome
         if(names_.contains(service->id())) return false;

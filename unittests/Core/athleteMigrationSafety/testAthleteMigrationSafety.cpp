@@ -16,7 +16,9 @@
 #include "Cloud/NetworkReplyWait.h"
 #include "Cloud/NolioTokenRefresh.h"
 #include "Cloud/OAuthPKCE.h"
+#include "Cloud/SportsPlusHealth.h"
 #include "Cloud/TredictMeasuresDownload.h"
+#include "Cloud/TrainingsTageBuch.h"
 #include "Cloud/WithingsDownload.h"
 #include "Core/Athlete.h"
 #include "Core/GcUpgrade.h"
@@ -1316,6 +1318,9 @@ private slots:
     void plainQtThreadLifecycleIsJoined();
     void baseCloudAbortStopsRunningReplies();
     void cloudCompressionModesAreExtracted();
+    void decommissionedCloudServicesAreNotRegistered();
+    void factoryRejectsDecommissionedCloudServices();
+    void decommissionedCloudServicesFailClosed();
     void nolioTokenRefreshIsSingleFlight();
     void nolioTokenRefreshCacheExpires();
     void nolioTokenRefreshFollowerCanCancel();
@@ -4761,6 +4766,75 @@ void TestAthleteMigrationSafety::cloudCompressionModesAreExtracted()
     QCOMPARE(extracted.at(0), payload);
     QCOMPARE(extracted.at(1), payload);
     QCOMPARE(extracted.at(2), payload);
+}
+
+void
+TestAthleteMigrationSafety::decommissionedCloudServicesAreNotRegistered()
+{
+    const CloudServiceFactory &factory =
+            CloudServiceFactory::instance();
+
+    QVERIFY(factory.service(
+        QStringLiteral("SportPlusHealth")) == nullptr);
+    QVERIFY(factory.service(
+        QStringLiteral("TrainingsTageBuch")) == nullptr);
+    QVERIFY(!factory.serviceNames().contains(
+        QStringLiteral("SportPlusHealth")));
+    QVERIFY(!factory.serviceNames().contains(
+        QStringLiteral("TrainingsTageBuch")));
+}
+
+void
+TestAthleteMigrationSafety::factoryRejectsDecommissionedCloudServices()
+{
+    CloudServiceFactory &factory =
+            CloudServiceFactory::instance();
+
+    auto sportsPlusHealth =
+            std::make_unique<SportsPlusHealth>(nullptr);
+    const bool sportsPlusHealthAdded =
+            factory.addService(sportsPlusHealth.get());
+    if (sportsPlusHealthAdded) {
+        sportsPlusHealth.release();
+    }
+    QVERIFY(!sportsPlusHealthAdded);
+
+    auto trainingsTageBuch =
+            std::make_unique<TrainingsTageBuch>(nullptr);
+    const bool trainingsTageBuchAdded =
+            factory.addService(trainingsTageBuch.get());
+    if (trainingsTageBuchAdded) {
+        trainingsTageBuch.release();
+    }
+    QVERIFY(!trainingsTageBuchAdded);
+}
+
+void
+TestAthleteMigrationSafety::decommissionedCloudServicesFailClosed()
+{
+    SportsPlusHealth sportsPlusHealth(nullptr);
+    TrainingsTageBuch trainingsTageBuch(nullptr);
+    const std::array<CloudService *, 2> services = {
+        &sportsPlusHealth, &trainingsTageBuch};
+
+    for (CloudService *service : services) {
+        QCOMPARE(service->capabilities(), 0);
+        QVERIFY(service->settings.isEmpty());
+
+        QStringList errors;
+        QVERIFY(!service->open(errors));
+        QVERIFY(!errors.isEmpty());
+
+        QByteArray payload(
+            "private-health-and-activity-payload");
+        const QByteArray originalPayload = payload;
+        QSignalSpy writes(service, &CloudService::writeComplete);
+        QVERIFY(!service->writeFile(
+            payload, QStringLiteral("private-ride"), nullptr));
+        QCOMPARE(payload, originalPayload);
+        QCOMPARE(writes.count(), 0);
+        QVERIFY(service->close());
+    }
 }
 
 void TestAthleteMigrationSafety::nolioTokenRefreshIsSingleFlight()

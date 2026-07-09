@@ -18,51 +18,34 @@
 
 #ifndef GC_SportsPlusHealth_h
 #define GC_SportsPlusHealth_h
+
 #include <QImage>
 
 #include "CloudService.h"
-#include <QNetworkAccessManager>
-#include <QNetworkRequest>
 
-class SportsPlusHealth : public CloudService {
-
+class SportsPlusHealth : public CloudService
+{
     Q_OBJECT
 
-    public:
+public:
+    QString id() const override { return QStringLiteral("SportPlusHealth"); }
+    QString uiName() const override { return tr("SportPlusHealth"); }
+    QString description() const override
+        { return tr("This discontinued service is disabled."); }
+    QImage logo() const override
+        { return QImage(":images/services/sportplushealth.png"); }
 
-        QString id() const { return "SportPlusHealth"; }
-        QString uiName() const { return tr("SportPlusHealth"); }
-        QString description() const { return (tr("Upload to the cycling and running site.")); }
-        QImage logo() const { return QImage(":images/services/sportplushealth.png"); }
+    explicit SportsPlusHealth(Context *context);
+    CloudService *clone(Context *context) override
+        { return new SportsPlusHealth(context); }
+    ~SportsPlusHealth() override = default;
 
-        SportsPlusHealth(Context *context);
-        CloudService *clone(Context *context) { return new SportsPlusHealth(context); }
-        ~SportsPlusHealth();
+    int capabilities() const override { return 0; }
 
-        // upload only and authenticates with a user and password
-        int capabilities() const { return UserPass | Upload; }
-
-        // open/connect and close/disconnect
-        bool open(QStringList &errors);
-        bool close();
-
-        // write a file
-        bool writeFile(QByteArray &data, QString remotename, RideFile *ride);
-
-    public slots:
-
-        // sending data
-        void writeFileCompleted();
-
-    private:
-        Context *context;
-        QNetworkAccessManager *nam;
-        QNetworkReply *reply;
-        CloudServiceEntry *root_;
-
-        QMap<QNetworkReply*, QByteArray*> buffers;
-
-    private slots:
-        void onSslErrors(QNetworkReply *reply, const QList<QSslError>&error);
+    bool open(QStringList &errors) override;
+    bool close() override;
+    bool writeFile(QByteArray &data, QString remotename,
+                   RideFile *ride) override;
 };
+
 #endif

@@ -18,170 +18,34 @@
 
 #ifndef GC_TrainingsTageBuch_h
 #define GC_TrainingsTageBuch_h
+
 #include <QImage>
 
-// Cloud Services and HTTP
 #include "CloudService.h"
-#include <QNetworkAccessManager>
-#include <QNetworkRequest>
 
-// XML parsing
-#include <QUrl>
-#include <QHttpMultiPart>
-#include <QXmlInputSource>
-#include <QXmlSimpleReader>
-#include <QXmlDefaultHandler>
-#include <QNetworkReply>
-#include <QUrlQuery>
-
-class TrainingsTageBuch : public CloudService {
-
+class TrainingsTageBuch : public CloudService
+{
     Q_OBJECT
 
-    public:
-
-        QString id() const { return "TrainingsTageBuch"; }
-        QString uiName() const { return tr("Trainingstagebuch"); }
-        QString description() const { return (tr("Upload to your online and mobile training log.")); }
-        QImage logo() const { return QImage(":images/services/trainingstagebuch.png"); }
-
-        TrainingsTageBuch(Context *context);
-        CloudService *clone(Context *context) { return new TrainingsTageBuch(context); }
-        ~TrainingsTageBuch();
-
-        // upload only and authenticates with a user and password
-        int capabilities() const { return UserPass | Upload; }
-
-        // open/connect and close/disconnect
-        bool open(QStringList &errors);
-        bool close();
-
-        // write a file
-        bool writeFile(QByteArray &data, QString remotename, RideFile *ride);
-
-    public slots:
-
-        // sending data
-        void writeFileCompleted();
-
-    private:
-        Context *context;
-        QNetworkAccessManager *nam;
-        QNetworkReply *reply;
-        CloudServiceEntry *root_;
-
-        QString sessionId;
-        bool proMember;
-
-        QMap<QNetworkReply*, QByteArray*> buffers;
-
-    private slots:
-        void onSslErrors(QNetworkReply *reply, const QList<QSslError>&error);
-};
-
-class TTBParser : public QXmlDefaultHandler
-{
 public:
-    friend class TrainingsTageBuch;
+    QString id() const override { return QStringLiteral("TrainingsTageBuch"); }
+    QString uiName() const override { return tr("Trainingstagebuch"); }
+    QString description() const override
+        { return tr("This discontinued service is disabled."); }
+    QImage logo() const override
+        { return QImage(":images/services/trainingstagebuch.png"); }
 
-    bool startElement( const QString&, const QString&, const QString&,
-        const QXmlAttributes& )
-    {
-        cdata = "";
-        return true;
-    };
+    explicit TrainingsTageBuch(Context *context);
+    CloudService *clone(Context *context) override
+        { return new TrainingsTageBuch(context); }
+    ~TrainingsTageBuch() override = default;
 
-    bool endElement( const QString&, const QString&, const QString& qName )
-    {
-        if( qName == "error" ){
-            error = cdata;
-            return true;
-        }
-        return true;
-    }
+    int capabilities() const override { return 0; }
 
-    bool characters( const QString& str)
-    {
-        cdata += str;
-        return true;
-    };
-
-protected:
-    QString cdata;
-    QString error;
+    bool open(QStringList &errors) override;
+    bool close() override;
+    bool writeFile(QByteArray &data, QString remotename,
+                   RideFile *ride) override;
 };
 
-class TTBSettingsParser : public TTBParser
-{
-public:
-    friend class TrainingsTageBuch;
-
-    TTBSettingsParser() :
-        pro(false),
-        reFalse("\\s*(0|false|no|)\\s*",Qt::CaseInsensitive )
-    {};
-
-    bool endElement( const QString& a, const QString&b, const QString& qName )
-    {
-        if( qName == "pro" ){
-            pro = ! reFalse.exactMatch(cdata);
-            return true;
-
-        } else if( qName == "session" ){
-            session = cdata;
-            return true;
-
-        }
-
-        return TTBParser::endElement( a, b, qName );
-    };
-
-protected:
-    bool    pro;
-    QString session;
-
-    QRegExp reFalse;
-};
-
-class TTBSessionParser : public TTBParser
-{
-public:
-    friend class TrainingsTageBuch;
-
-    bool endElement( const QString& a, const QString&b, const QString& qName )
-    {
-        if( qName == "session" ){
-            session = cdata;
-            return true;
-
-        }
-
-        return TTBParser::endElement( a, b, qName );
-    };
-
-protected:
-    QString session;
-
-};
-
-class TTBUploadParser : public TTBParser
-{
-public:
-    friend class TrainingsTageBuch;
-
-    bool endElement( const QString& a, const QString&b, const QString& qName )
-    {
-        if( qName == "id" ){
-            id = cdata;
-            return true;
-
-        }
-
-        return TTBParser::endElement( a, b, qName );
-    };
-
-protected:
-    QString id;
-
-};
 #endif

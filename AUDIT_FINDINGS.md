@@ -1049,14 +1049,31 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-007: Active legacy providers send credentials and health data over HTTP
 
-- Status: OPEN
-- Code: `src/Cloud/SportsPlusHealth.cpp:55`,
-  `src/Cloud/SportsPlusHealth.cpp:136`,
-  `src/Cloud/TrainingsTageBuch.cpp:53`,
-  `src/Cloud/TrainingsTageBuch.cpp:93`
+- Status: FIXED
+- Code: `src/Cloud/CloudService.h`,
+  `src/Cloud/SportsPlusHealth.cpp`,
+  `src/Cloud/TrainingsTageBuch.cpp`, `src/src.pro`
 - Impact: Network observers can capture credentials and full activity uploads.
-- Test: Ensure HTTP endpoints fail before any credential or payload is sent.
-- Fix direction: Require verified HTTPS or disable obsolete integrations.
+- Test: Verify the discontinued providers cannot be registered, advertise no
+  capabilities or credential settings, and reject both opening and activity
+  uploads without changing the payload or emitting a completion signal.
+- Resolution: SportPlusHealth and Trainingstagebuch are no longer compiled
+  into the application or registered in the cloud-service UI. The factory
+  rejects both legacy IDs to prevent accidental reintroduction. Their retained
+  compatibility classes contain no endpoint, credential, parser, or network
+  code; they expose zero capabilities and fail closed if directly instantiated.
+  This disables the obsolete integrations instead of redirecting private data
+  to an unverified replacement endpoint.
+- Rationale: On 2026-07-09 the former SportPlusHealth API redirected to a
+  parked-domain sales page, while Trainingstagebuch stated that its service
+  closed on 2026-05-01 and its user data was deleted. Neither service offered
+  a supported HTTPS API target suitable for migration.
+- Verification: The test-first cases initially failed because SportPlusHealth
+  was still registered and exposed `UserPass | Upload` capabilities. The
+  final three regression cases pass normally and under strict
+  ASan/UBSan/LSan. The complete `athleteMigrationSafety` suite passes 95
+  tests, the release application compiles and links without either provider,
+  and the complete qmake check passes 1,734 tests in 49 QtTest suites.
 
 ### SEC-008: Remote WebEngine downloads are automatically imported
 

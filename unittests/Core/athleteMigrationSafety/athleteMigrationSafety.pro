@@ -38,7 +38,9 @@ SOURCES = testAthleteMigrationSafety.cpp \
           ../../../src/Cloud/NolioTokenRefresh.cpp \
           ../../../src/Cloud/OAuthCallbackPolicy.cpp \
           ../../../src/Cloud/OAuthPKCE.cpp \
+          ../../../src/Cloud/SportsPlusHealth.cpp \
           ../../../src/Cloud/TredictMeasuresDownload.cpp \
+          ../../../src/Cloud/TrainingsTageBuch.cpp \
           ../../../src/Cloud/WithingsDownload.cpp \
           ../../../contrib/qzip/zip.cpp \
           $$GC_UPGRADE_SOURCE \
@@ -55,7 +57,9 @@ HEADERS = CloudAutoDownloadTestSupport.h \
           ../../../src/Cloud/NolioTokenRefresh.h \
           ../../../src/Cloud/OAuthCallbackPolicy.h \
           ../../../src/Cloud/OAuthPKCE.h \
+          ../../../src/Cloud/SportsPlusHealth.h \
           ../../../src/Cloud/TredictMeasuresDownload.h \
+          ../../../src/Cloud/TrainingsTageBuch.h \
           ../../../src/Cloud/WithingsDownload.h \
           ../../../src/Core/Athlete.h \
           ../../../src/Core/Context.h \
