@@ -22,7 +22,9 @@
 #include "httprequesthandler.h"
 #include "RideItem.h"
 #include "RideMetadata.h"
+#include <QByteArray>
 #include <QDir>
+#include <QtGlobal>
 
 struct listRideSettings {
     bool intervals;
@@ -36,8 +38,10 @@ class APIWebService : public HttpRequestHandler
 
     public:
 
-        // nothing to do in constructor
-        APIWebService(QDir home, QObject *parent=NULL) : HttpRequestHandler(parent), home(home) {}
+        APIWebService(QDir home, QByteArray bearerToken, quint16 port,
+                      QObject *parent=NULL)
+            : HttpRequestHandler(parent), home(home),
+              bearerToken(bearerToken), port(port) {}
 
         // request despatchers
         void service(HttpRequest &request, HttpResponse &response);
@@ -56,6 +60,8 @@ class APIWebService : public HttpRequestHandler
 
     private:
         QDir home;
+        QByteArray bearerToken;
+        quint16 port;
 };
 
 #endif

@@ -1,5 +1,13 @@
 http://localhost:12021              Default base URL
 
+All requests require an Authorization: Bearer <token> header. The random token
+is generated on first API start and stored as bearerToken in the [security]
+section of <athlete-directory>/httpserver.ini. The server is restricted to
+loopback; browser Origin headers must identify the same loopback API port.
+
+Example:
+curl -H "Authorization: Bearer <token>" http://localhost:12021/
+
 /                                   List Athletes
                                     Returns csv of athletes and core data (dob, sex etc)
 

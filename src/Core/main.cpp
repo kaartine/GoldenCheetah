@@ -83,6 +83,7 @@ QApplication *application;
 
 #ifdef GC_WANT_HTTP
 #include "APIWebService.h"
+#include "LocalApiSecurityPolicy.h"
 HttpListener *listener = NULL;
 #endif
 
@@ -671,36 +672,79 @@ main(int argc, char *argv[])
             }
 
             QString httpini = home.absolutePath() + "/httpserver.ini";
-            if (!QFile(httpini).exists()) {
-
-                // read default ini file
-                QFile file(":webservice/httpserver.ini");
-                QString content;
-                if (file.open(QIODevice::ReadOnly)) {
-                    content = file.readAll();
-                    file.close();
-                }
-
-                // write default ini file
-                QFile out(httpini);
-                if (out.open(QIODevice::WriteOnly)) {
-                
-                    out.resize(0);
-                    QTextStream stream(&out);
-                    stream << content;
-                    out.close();
-                }
-            }
-
-            // use the default handler (just get an error page)
-            QSettings* settings=new QSettings(httpini,QSettings::IniFormat,application);
-
             if (listener) {
-                // when changing the Athlete Directory, there is already a listener running
-                // close first to avoid errors
                 listener->close();
+                delete listener;
+                listener = NULL;
             }
-            listener=new HttpListener(settings,new APIWebService(home, application),application);
+
+            QFile defaultFile(":webservice/httpserver.ini");
+            QByteArray defaultSettings;
+            if (defaultFile.open(QIODevice::ReadOnly)) {
+                defaultSettings = defaultFile.readAll();
+            }
+
+            QString securityError;
+            if (!LocalApiSecurityPolicy::ensureSettingsFile(
+                    httpini, defaultSettings, &securityError)) {
+                qCritical()
+                    << "GoldenCheetah API security setup failed:"
+                    << securityError;
+                if (nogui) {
+                    terminate(1);
+                }
+            } else {
+                QSettings *settings =
+                    new QSettings(
+                        httpini,
+                        QSettings::IniFormat,
+                        application);
+                const LocalApiSecurityPolicy::Configuration configuration =
+                    LocalApiSecurityPolicy::prepareServerConfiguration(
+                        *settings, &securityError);
+                if (!configuration.isValid()) {
+                    qCritical()
+                        << "GoldenCheetah API security setup failed:"
+                        << securityError;
+                    if (nogui) {
+                        terminate(1);
+                    }
+                } else {
+                    if (nogui) {
+                        qDebug()
+                            << "Bearer token is stored in"
+                            << httpini
+                            << "under [security] bearerToken.";
+                    }
+
+                    APIWebService *service =
+                        new APIWebService(
+                            home,
+                            configuration.bearerToken,
+                            configuration.port,
+                            application);
+                    listener =
+                        new HttpListener(
+                            settings,
+                            service,
+                            application);
+
+                    if (!listener->isListening()
+                        || !listener->serverAddress().isLoopback()
+                        || listener->serverPort()
+                            != configuration.port) {
+                        qCritical()
+                            << "GoldenCheetah API refused a non-loopback"
+                            << "or incomplete listener.";
+                        listener->close();
+                        delete listener;
+                        listener = NULL;
+                        if (nogui) {
+                            terminate(1);
+                        }
+                    }
+                }
+            }
 
             // if not going on to launch a gui...
             if (nogui) {

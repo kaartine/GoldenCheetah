@@ -17,6 +17,7 @@
  */
 
 #include "APIWebService.h"
+#include "LocalApiSecurityPolicy.h"
 
 #include "Settings.h"
 #include "GcUpgrade.h"
@@ -37,6 +38,32 @@
 void
 APIWebService::service(HttpRequest &request, HttpResponse &response)
 {
+    const LocalApiSecurityPolicy::Decision decision =
+        LocalApiSecurityPolicy::evaluateRequest(
+            request.getHeaderMap(), bearerToken, port);
+    if (decision != LocalApiSecurityPolicy::Decision::Allow) {
+        response.setHeader(
+            QByteArrayLiteral("Cache-Control"),
+            QByteArrayLiteral("no-store"));
+        response.setHeader(
+            QByteArrayLiteral("Content-Type"),
+            QByteArrayLiteral("text/plain; charset=UTF-8"));
+
+        if (decision
+            == LocalApiSecurityPolicy::Decision::RejectAuthorization) {
+            response.setStatus(401);
+            response.setHeader(
+                QByteArrayLiteral("WWW-Authenticate"),
+                QByteArrayLiteral(
+                    "Bearer realm=\"GoldenCheetah API\""));
+            response.write(QByteArrayLiteral("Unauthorized."), true);
+        } else {
+            response.setStatus(403);
+            response.write(QByteArrayLiteral("Forbidden."), true);
+        }
+        return;
+    }
+
     // remove trailing '/' from request, just to be consistent
     QString fullPath = request.getPath();
     while (fullPath.endsWith("/")) fullPath.chop(1);

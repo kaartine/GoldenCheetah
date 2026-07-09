@@ -438,6 +438,8 @@ DEFINES += GC_WANT_HTTP
 
 HEADERS +=  Core/APIWebService.h
 SOURCES +=  Core/APIWebService.cpp
+HEADERS +=  Core/LocalApiSecurityPolicy.h
+SOURCES +=  Core/LocalApiSecurityPolicy.cpp
 
 HEADERS +=  $$HTPATH/httpglobal.h \
             $$HTPATH/httplistener.h \

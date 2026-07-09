@@ -977,15 +977,41 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-005: Local HTTP API has no authentication or Host validation
 
-- Status: OPEN (server is disabled by default)
-- Code: `src/Core/main.cpp:647`, `src/Core/APIWebService.cpp:38`,
-  `contrib/httpserver/httplistener.cpp:36`
-- Impact: When enabled, DNS rebinding can expose demographics, measures, zones,
-  activities, and GPS data to a malicious website.
-- Test: Reject attacker Host/Origin values and missing bearer tokens while
-  allowing authenticated loopback clients.
-- Fix direction: Mandatory random bearer token, loopback-only binding, and
-  strict Host/Origin checks.
+- Status: FIXED
+- Code: `src/Core/LocalApiSecurityPolicy.h`,
+  `src/Core/LocalApiSecurityPolicy.cpp`, `src/Core/APIWebService.cpp`,
+  `src/Core/main.cpp`
+- Impact: When enabled, DNS rebinding could expose demographics, measures,
+  zones, activities, and GPS data to a malicious website.
+- Resolution: The API now generates a 256-bit base64url bearer token, persists
+  it in `httpserver.ini`, and restricts that file to the owner on Unix.
+  Invalid legacy tokens are rotated. New settings files are atomically
+  published without direct-write fallback and with owner-only permissions.
+  Non-regular and symbolic-link settings paths, including dangling links, are
+  rejected before any write. Startup forces the configured host to
+  `127.0.0.1`, verifies that the actual listener is loopback-only, and
+  requires it to use the configured port. Every request
+  must have exactly one valid loopback Host and one matching bearer
+  Authorization header. Optional Origin headers must identify the same
+  loopback API port. Missing, malformed, attacker-controlled, and duplicate
+  security headers fail before athlete data is accessed. Token comparison is
+  constant-time for equal-size tokens. The command-line server reports only
+  the token file location, never the token, and the REST API documentation
+  describes the new requirement.
+- Verification: The test-first target initially failed because the security
+  policy API did not exist. A second regression test reproduced the legacy
+  malformed-INI startup failure before its compatibility fix. A third RED
+  case showed configuration preparation could create a dangling symlink
+  target. Extending it to startup initialization then failed to compile until
+  the atomic initialization policy existed. The final suite passes all 44
+  cases both normally and under ASan/UBSan/LSan. An isolated end-to-end server
+  test returns 401 for missing and wrong tokens, 403 for attacker Host and
+  Origin headers, and 200 for authenticated loopback CLI and browser requests.
+  A process-level startup case rejects a dangling settings symlink with exit 1,
+  preserves the link, and does not create its target. E2E also verifies `0600`
+  settings permissions, forced loopback host, and that the token is absent
+  from logs. The release application links, and the full check passes 1,685
+  tests in 48 QtTest suites.
 
 ### SEC-006: Legacy OAuth callbacks are not bound to the initiating session
 
