@@ -465,6 +465,7 @@ private slots:
     void init()
     {
         IconManager::setBundleCommitHookForTest({});
+        IconManager::setBundleValidationHookForTest({});
         QVERIFY(QDir(root.filePath("profile")).removeRecursively());
         QVERIFY(QDir().mkpath(iconDirectory()));
         const QString baseline = createBundle(
@@ -481,6 +482,7 @@ private slots:
     void cleanup()
     {
         IconManager::setBundleCommitHookForTest({});
+        IconManager::setBundleValidationHookForTest({});
     }
 
     void rejectsTraversalBeforeWriting()
@@ -898,6 +900,9 @@ private slots:
         QVERIFY(QDir().mkpath(outside));
 
         bool rootReplaced = false;
+        bool validationObserved = false;
+        bool validationRejected = false;
+        bool restoredDuringValidation = false;
         QString replacementError;
         IconManager::setBundleCommitHookForTest(
             [this, outside, &rootReplaced, &replacementError](
@@ -923,6 +928,22 @@ private slots:
                 rootReplaced = true;
                 return true;
             });
+        IconManager::setBundleValidationHookForTest(
+            [this, &rootReplaced, &validationObserved,
+             &validationRejected, &restoredDuringValidation,
+             &replacementError](bool targetIsValid) {
+                validationObserved = true;
+                validationRejected = !targetIsValid;
+                if (!rootReplaced)
+                    return;
+                restoredDuringValidation =
+                    removeDirectoryLink(iconDirectory())
+                    && QDir(profileDirectory()).rename(
+                        ".icons-real", ".icons");
+                if (!restoredDuringValidation)
+                    replacementError =
+                        "Could not restore the destination root";
+            });
 
         const QString archive = createBundle(
             "late-root-link.zip",
@@ -933,14 +954,19 @@ private slots:
         QVERIFY(!archive.isEmpty());
         const bool imported = iconManager->importBundle(archive);
         IconManager::setBundleCommitHookForTest({});
+        IconManager::setBundleValidationHookForTest({});
+
+        if (rootReplaced && !restoredDuringValidation) {
+            removeDirectoryLink(iconDirectory());
+            QDir(profileDirectory()).rename(".icons-real", ".icons");
+        }
 
         QVERIFY2(rootReplaced, qPrintable(replacementError));
-#if defined(Q_OS_WIN)
-        QCOMPARE(reparseTag(iconDirectory()),
-                 static_cast<DWORD>(IO_REPARSE_TAG_MOUNT_POINT));
-#endif
-        QVERIFY(removeDirectoryLink(iconDirectory()));
-        QVERIFY(QDir(profileDirectory()).rename(".icons-real", ".icons"));
+        QVERIFY2(validationObserved,
+                 "Final destination validation was not observed");
+        QVERIFY2(validationRejected,
+                 "Redirected destination root passed final validation");
+        QVERIFY2(restoredDuringValidation, qPrintable(replacementError));
         QVERIFY(!imported);
         QVERIFY(!QFileInfo::exists(QDir(outside).filePath("bike.svg")));
         QVERIFY(!QFileInfo::exists(QDir(outside).filePath("mapping.json")));
@@ -958,6 +984,9 @@ private slots:
         QVERIFY(QDir().mkpath(QDir(outside).filePath(".icons")));
 
         bool ancestorReplaced = false;
+        bool validationObserved = false;
+        bool validationRejected = false;
+        bool restoredDuringValidation = false;
         QString replacementError;
         IconManager::setBundleCommitHookForTest(
             [this, profileParent, outside, &ancestorReplaced,
@@ -985,6 +1014,23 @@ private slots:
                 ancestorReplaced = true;
                 return true;
             });
+        IconManager::setBundleValidationHookForTest(
+            [this, profileParent, &ancestorReplaced,
+             &validationObserved, &validationRejected,
+             &restoredDuringValidation,
+             &replacementError](bool targetIsValid) {
+                validationObserved = true;
+                validationRejected = !targetIsValid;
+                if (!ancestorReplaced)
+                    return;
+                restoredDuringValidation =
+                    removeDirectoryLink(profileDirectory())
+                    && QDir(profileParent).rename(
+                        "current-real", "current");
+                if (!restoredDuringValidation)
+                    replacementError =
+                        "Could not restore the destination ancestor";
+            });
 
         const QString archive = createBundle(
             "late-ancestor-link.zip",
@@ -995,15 +1041,19 @@ private slots:
         QVERIFY(!archive.isEmpty());
         const bool imported = iconManager->importBundle(archive);
         IconManager::setBundleCommitHookForTest({});
+        IconManager::setBundleValidationHookForTest({});
+
+        if (ancestorReplaced && !restoredDuringValidation) {
+            removeDirectoryLink(profileDirectory());
+            QDir(profileParent).rename("current-real", "current");
+        }
 
         QVERIFY2(ancestorReplaced, qPrintable(replacementError));
-#if defined(Q_OS_WIN)
-        QCOMPARE(reparseTag(profileDirectory()),
-                 static_cast<DWORD>(IO_REPARSE_TAG_MOUNT_POINT));
-#endif
-        QVERIFY(removeDirectoryLink(profileDirectory()));
-        QVERIFY(QDir(profileParent).rename(
-            "current-real", "current"));
+        QVERIFY2(validationObserved,
+                 "Final ancestor validation was not observed");
+        QVERIFY2(validationRejected,
+                 "Redirected destination ancestor passed final validation");
+        QVERIFY2(restoredDuringValidation, qPrintable(replacementError));
         QVERIFY(!imported);
         QVERIFY(!QFileInfo::exists(
             QDir(outside).filePath(".icons/bike.svg")));

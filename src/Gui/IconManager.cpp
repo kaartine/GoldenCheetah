@@ -146,6 +146,7 @@ struct BundleInstallFile {
 
 #if defined(GC_ICON_BUNDLE_SECURITY_TEST)
 IconManager::BundleCommitHook bundleCommitHook;
+IconManager::BundleValidationHook bundleValidationHook;
 #endif
 
 
@@ -275,7 +276,17 @@ bool replaceFile(const QString &path,
         return false;
     }
 
-    if ((beforeCommit && !beforeCommit()) || !validate()) {
+    if (beforeCommit && !beforeCommit()) {
+        file.cancelWriting();
+        return false;
+    }
+
+    const bool targetIsValid = validate();
+#if defined(GC_ICON_BUNDLE_SECURITY_TEST)
+    if (bundleValidationHook)
+        bundleValidationHook(targetIsValid);
+#endif
+    if (!targetIsValid) {
         file.cancelWriting();
         return false;
     }
@@ -447,6 +458,14 @@ IconManager::setBundleCommitHookForTest
 (BundleCommitHook hook)
 {
     bundleCommitHook = std::move(hook);
+}
+
+
+void
+IconManager::setBundleValidationHookForTest
+(BundleValidationHook hook)
+{
+    bundleValidationHook = std::move(hook);
 }
 #endif
 

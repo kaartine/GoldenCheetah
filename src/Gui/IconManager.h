@@ -64,7 +64,9 @@ public:
 
 #if defined(GC_ICON_BUNDLE_SECURITY_TEST)
     using BundleCommitHook = std::function<bool(const QString &, int)>;
+    using BundleValidationHook = std::function<void(bool)>;
     static void setBundleCommitHookForTest(BundleCommitHook hook);
+    static void setBundleValidationHookForTest(BundleValidationHook hook);
 #endif
 
 private:
