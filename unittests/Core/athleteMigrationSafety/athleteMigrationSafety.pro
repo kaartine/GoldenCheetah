@@ -36,6 +36,7 @@ SOURCES = testAthleteMigrationSafety.cpp \
           ../../../src/Cloud/MeasuresDownload.cpp \
           ../../../src/Cloud/NetworkReplyWait.cpp \
           ../../../src/Cloud/NolioTokenRefresh.cpp \
+          ../../../src/Cloud/OAuthCallbackPolicy.cpp \
           ../../../src/Cloud/OAuthPKCE.cpp \
           ../../../src/Cloud/TredictMeasuresDownload.cpp \
           ../../../src/Cloud/WithingsDownload.cpp \
@@ -52,6 +53,7 @@ HEADERS = CloudAutoDownloadTestSupport.h \
           ../../../src/Cloud/MeasuresDownload.h \
           ../../../src/Cloud/NetworkReplyWait.h \
           ../../../src/Cloud/NolioTokenRefresh.h \
+          ../../../src/Cloud/OAuthCallbackPolicy.h \
           ../../../src/Cloud/OAuthPKCE.h \
           ../../../src/Cloud/TredictMeasuresDownload.h \
           ../../../src/Cloud/WithingsDownload.h \

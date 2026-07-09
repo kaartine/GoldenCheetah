@@ -17,6 +17,7 @@
  */
 
 #include "OAuthPKCE.h"
+#include "OAuthCallbackPolicy.h"
 #include "NetworkReplyWait.h"
 
 #include <QTcpServer>
@@ -26,7 +27,6 @@
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QNetworkReply>
-#include <QRandomGenerator>
 #include <QEventLoop>
 #include <QTimer>
 #include <QThread>
@@ -61,15 +61,7 @@ QString OAuthPKCE::errorString() const { return errorString_; }
 QString
 OAuthPKCE::generateCodeVerifier()
 {
-    // RFC 7636: 32 random bytes -> 43 base64url characters
-    QByteArray random(32, 0);
-    QRandomGenerator *rng = QRandomGenerator::global();
-    for (int i = 0; i < 32; i++)
-        random[i] = static_cast<char>(rng->bounded(256));
-
-    return QString::fromLatin1(
-        random.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals)
-    );
+    return OAuthCallbackPolicy::generateState();
 }
 
 QString
@@ -91,18 +83,23 @@ OAuthPKCE::execute()
     refreshToken_.clear();
     expiresIn_ = 0;
 
+    const QUrl authorizationEndpoint(authorizationUrl_);
+    const QUrl tokenEndpoint(tokenUrl_);
+    if (!OAuthCallbackPolicy::isSecureEndpoint(
+            authorizationEndpoint)
+        || !OAuthCallbackPolicy::isSecureEndpoint(
+            tokenEndpoint)) {
+        errorString_ = tr(
+            "OAuth authorization and token endpoints must use verified HTTPS.");
+        return false;
+    }
+
     // generate PKCE pair
     QString codeVerifier = generateCodeVerifier();
     QString codeChallenge = computeCodeChallenge(codeVerifier);
 
-    // generate random state for CSRF protection
-    QByteArray stateBytes(16, 0);
-    QRandomGenerator *rng = QRandomGenerator::global();
-    for (int i = 0; i < 16; i++)
-        stateBytes[i] = static_cast<char>(rng->bounded(256));
-    QString state = QString::fromLatin1(
-        stateBytes.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals)
-    );
+    const QString state =
+        OAuthCallbackPolicy::generateState();
 
     // start local server on a free port
     QTcpServer server;
@@ -110,18 +107,28 @@ OAuthPKCE::execute()
         errorString_ = tr("Failed to start local HTTP server: %1").arg(server.errorString());
         return false;
     }
-    quint16 port = server.serverPort();
-    QString redirectUri = QString("http://localhost:%1%2").arg(port).arg(callbackPath_);
+    const quint16 port = server.serverPort();
+    const QString redirectUri =
+        QStringLiteral("http://localhost:%1%2")
+            .arg(port)
+            .arg(callbackPath_);
+    OAuthCallbackPolicy::Session callbackSession(
+        QUrl(redirectUri), state);
+    if (!callbackSession.isValid()) {
+        server.close();
+        errorString_ = tr(
+            "OAuth loopback callback configuration is invalid.");
+        return false;
+    }
 
     // build authorization URL
-    QUrl authUrl(authorizationUrl_);
+    QUrl authUrl(authorizationEndpoint);
     QUrlQuery authParams;
     authParams.addQueryItem("client_id", clientId_);
     authParams.addQueryItem("response_type", "code");
     authParams.addQueryItem("redirect_uri", redirectUri);
     authParams.addQueryItem("code_challenge", codeChallenge);
     authParams.addQueryItem("code_challenge_method", "S256");
-    authParams.addQueryItem("state", state);
     if (!scope_.isEmpty())
         authParams.addQueryItem("scope", scope_);
 
@@ -131,6 +138,15 @@ OAuthPKCE::execute()
         authParams.addQueryItem(it.key(), it.value());
     }
     authUrl.setQuery(authParams);
+    QString authorizationError;
+    authUrl =
+        OAuthCallbackPolicy::authorizationUrlWithState(
+            authUrl, state, &authorizationError);
+    if (authUrl.isEmpty()) {
+        server.close();
+        errorString_ = authorizationError;
+        return false;
+    }
 
     // open system browser
     if (!QDesktopServices::openUrl(authUrl)) {
@@ -143,7 +159,6 @@ OAuthPKCE::execute()
     QEventLoop loop;
     QString authCode;
     bool timedOut = false;
-    bool gotCallback = false;
 
     QTimer timer;
     timer.setSingleShot(true);
@@ -153,82 +168,108 @@ OAuthPKCE::execute()
     });
     timer.start(timeout_ * 1000);
 
-    connect(&server, &QTcpServer::newConnection, &server, [this, &server, &state, &gotCallback, &loop, &authCode]() {
-        QTcpSocket *socket = server.nextPendingConnection();
-        if (!socket) return;
-
-        // wait for the request data
-        connect(socket, &QTcpSocket::readyRead, socket, [this, socket, &state, &gotCallback, &loop, &authCode]() {
-            QByteArray requestData = socket->readAll();
-            QString requestLine = QString::fromUtf8(requestData).section("\r\n", 0, 0);
-
-            // parse: GET /callback?code=XXX&state=YYY HTTP/1.1
-            QStringList parts = requestLine.split(' ');
-            if (parts.size() < 2) {
-                socket->close();
-                socket->deleteLater();
+    connect(
+        &server,
+        &QTcpServer::newConnection,
+        &server,
+        [this, &server, &callbackSession, &redirectUri,
+         &loop, &authCode]() {
+            QTcpSocket *socket =
+                server.nextPendingConnection();
+            if (!socket) {
                 return;
             }
 
-            QUrl requestUrl = QUrl("http://localhost" + parts[1]);
-            QUrlQuery query(requestUrl);
+            connect(
+                socket,
+                &QTcpSocket::readyRead,
+                socket,
+                [this, socket, &callbackSession,
+                 &redirectUri, &loop, &authCode]() {
+                    const QByteArray requestData =
+                        socket->readAll();
+                    const QString requestLine =
+                        QString::fromUtf8(requestData)
+                            .section(
+                                QStringLiteral("\r\n"),
+                                0,
+                                0);
+                    const QStringList parts =
+                        requestLine.split(
+                            QLatin1Char(' '));
 
-            QString receivedState = query.queryItemValue("state");
-            if (receivedState != state) {
-                // state mismatch, send error and keep waiting
-                QByteArray response =
-                    "HTTP/1.1 400 Bad Request\r\n"
-                    "Content-Type: text/html\r\n"
-                    "Connection: close\r\n\r\n"
-                    "<html><body><h2>Authorization Failed</h2>"
-                    "<p>State parameter mismatch. Please try again.</p>"
-                    "</body></html>";
-                socket->write(response);
-                socket->flush();
-                socket->disconnectFromHost();
-                socket->deleteLater();
-                return;
-            }
+                    OAuthCallbackPolicy::Outcome outcome;
+                    if (parts.size() == 3
+                        && parts.at(0)
+                            == QStringLiteral("GET")
+                        && parts.at(2).startsWith(
+                            QStringLiteral("HTTP/1."))
+                        && parts.at(1).startsWith(
+                            QLatin1Char('/'))
+                        && !parts.at(1).startsWith(
+                            QStringLiteral("//"))) {
+                        const QUrl requestTarget =
+                            QUrl::fromEncoded(
+                                parts.at(1).toUtf8(),
+                                QUrl::StrictMode);
+                        if (requestTarget.isValid()
+                            && requestTarget.isRelative()
+                            && requestTarget.host().isEmpty()) {
+                            const QUrl callbackUrl =
+                                QUrl(redirectUri)
+                                    .resolved(requestTarget);
+                            outcome =
+                                callbackSession.consume(
+                                    callbackUrl);
+                        }
+                    }
 
-            if (query.hasQueryItem("error")) {
-                errorString_ = query.queryItemValue("error_description");
-                if (errorString_.isEmpty())
-                    errorString_ = query.queryItemValue("error");
+                    QByteArray response;
+                    if (outcome.type
+                        == OAuthCallbackPolicy::OutcomeType::Reject) {
+                        response =
+                            "HTTP/1.1 400 Bad Request\r\n"
+                            "Content-Type: text/html\r\n"
+                            "Connection: close\r\n\r\n"
+                            "<html><body><h2>Authorization Failed</h2>"
+                            "<p>Invalid callback. Please try again.</p>"
+                            "</body></html>";
+                    } else if (
+                        outcome.type
+                        == OAuthCallbackPolicy::OutcomeType::
+                            AuthorizationError) {
+                        errorString_ = outcome.error;
+                        response =
+                            "HTTP/1.1 200 OK\r\n"
+                            "Content-Type: text/html\r\n"
+                            "Connection: close\r\n\r\n"
+                            "<html><body><h2>Authorization Failed</h2>"
+                            "<p>You can close this window.</p>"
+                            "</body></html>";
+                    } else {
+                        authCode = outcome.code;
+                        response =
+                            "HTTP/1.1 200 OK\r\n"
+                            "Content-Type: text/html\r\n"
+                            "Connection: close\r\n\r\n"
+                            "<html><body style=\"font-family:sans-serif;"
+                            "text-align:center;padding:40px\">"
+                            "<h2>Authorization Successful</h2>"
+                            "<p>You can close this window and return to "
+                            "GoldenCheetah.</p></body></html>";
+                    }
 
-                QByteArray response =
-                    "HTTP/1.1 200 OK\r\n"
-                    "Content-Type: text/html\r\n"
-                    "Connection: close\r\n\r\n"
-                    "<html><body><h2>Authorization Failed</h2>"
-                    "<p>You can close this window.</p>"
-                    "</body></html>";
-                socket->write(response);
-                socket->flush();
-                socket->disconnectFromHost();
-                socket->deleteLater();
-                gotCallback = true;
-                loop.quit();
-                return;
-            }
+                    socket->write(response);
+                    socket->flush();
+                    socket->disconnectFromHost();
+                    socket->deleteLater();
 
-            authCode = query.queryItemValue("code");
-
-            QByteArray response =
-                "HTTP/1.1 200 OK\r\n"
-                "Content-Type: text/html\r\n"
-                "Connection: close\r\n\r\n"
-                "<html><body style=\"font-family:sans-serif;text-align:center;padding:40px\">"
-                "<h2>Authorization Successful</h2>"
-                "<p>You can close this window and return to GoldenCheetah.</p>"
-                "</body></html>";
-            socket->write(response);
-            socket->flush();
-            socket->disconnectFromHost();
-            socket->deleteLater();
-            gotCallback = true;
-            loop.quit();
+                    if (outcome.type
+                        != OAuthCallbackPolicy::OutcomeType::Reject) {
+                        loop.quit();
+                    }
+                });
         });
-    });
 
     loop.exec();
     timer.stop();

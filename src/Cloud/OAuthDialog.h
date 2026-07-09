@@ -36,6 +36,12 @@
 #include <QWebEngineProfile>
 #include <QWebEngineCookieStore>
 
+#include <memory>
+
+namespace OAuthCallbackPolicy {
+class Session;
+}
+
 class OAuthDialog : public QDialog
 {
     Q_OBJECT
@@ -79,13 +85,15 @@ private:
     QString baseURL; // can be passed, but typically is blank (used by Todays Plan)
     QString clientsecret; // can be passed, but typicall is blank (used by Todays Plan)
     QString codeVerifier; // PKCE code_verifier, used by Tredict and other PKCE services
+    std::unique_ptr<OAuthCallbackPolicy::Session> callbackSession;
+    QUrl redirectUri;
 
-    QVBoxLayout *layout;
+    QVBoxLayout *layout = nullptr;
 
     // QUrl split into QUrlQuerty in QT5
-    QWebEngineView *view;
+    QWebEngineView *view = nullptr;
 
-    QNetworkAccessManager* manager;
+    QNetworkAccessManager *manager = nullptr;
 
     QUrl url;
 };

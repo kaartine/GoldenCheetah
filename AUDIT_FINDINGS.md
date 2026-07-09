@@ -1015,16 +1015,37 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-006: Legacy OAuth callbacks are not bound to the initiating session
 
-- Status: OPEN
-- Code: `src/Cloud/OAuthDialog.cpp:99`,
-  `src/Cloud/OAuthDialog.cpp:142`, `src/Cloud/OAuthDialog.cpp:221`,
-  `src/Cloud/OAuthDialog.cpp:395`
+- Status: FIXED
+- Code: `src/Cloud/OAuthCallbackPolicy.h`,
+  `src/Cloud/OAuthCallbackPolicy.cpp`, `src/Cloud/OAuthDialog.cpp`,
+  `src/Cloud/OAuthPKCE.cpp`
 - Impact: HTTP callbacks, absent/fixed state, broad URL matching, and accepting
   TLS-handshake failure allow code interception or account-binding CSRF.
-- Test: Reject wrong state, host, path, callback replay, HTTP callbacks, and TLS
-  failures without changing stored credentials.
-- Fix direction: Migrate all providers to system-browser loopback PKCE with
-  random one-time state and exact parsed callback matching.
+- Resolution: Interactive OAuth sessions now use independently generated
+  256-bit base64url state values. A callback session accepts exactly one parsed
+  callback whose scheme, host, port, encoded path, and constant-time-compared
+  state match the initiating request. Missing, duplicate, malformed, mixed
+  code/error, userinfo, fragment, wrong-origin, wrong-path, and replayed
+  callbacks fail before a token request. Remote redirects require HTTPS; HTTP
+  is accepted only for exact loopback redirects. Authorization and token
+  endpoints must use HTTPS. TLS, network, malformed-JSON, non-object JSON, and
+  empty-token failures now reject authorization before any credential setting
+  is changed. Credential-only Xert and RideWithGPS grants use a private
+  application URL instead of a synthetic HTTP callback. The reusable PKCE
+  client now combines the system browser, random one-time state, exact
+  loopback callback parsing, PKCE S256, replay rejection, and HTTPS endpoint
+  validation.
+- Verification: The test-first target initially failed to compile because the
+  callback policy did not exist. Its final 46 cases pass normally and under
+  ASan/UBSan/LSan. They cover random-state generation, exact HTTPS and
+  loopback callbacks, HTTP downgrade, lookalike and wrong hosts, wrong path
+  and port, userinfo, fragments, missing and duplicate parameters,
+  authorization errors, replay, and TLS-handshake failure. The release
+  application compiles and links, the OAuthPKCE-dependent migration suite
+  passes 92 cases, and the complete qmake check passes 1,731 tests in 49
+  QtTest suites. Live sign-in remains a manual compatibility check because
+  provider-side redirect registrations and accounts are not available to the
+  automated test environment.
 
 ### SEC-007: Active legacy providers send credentials and health data over HTTP
 

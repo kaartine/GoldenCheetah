@@ -26,6 +26,7 @@
 #include "TimeUtils.h"
 
 #include "PolarFlow.h"
+#include "OAuthCallbackPolicy.h"
 #include "OAuthPKCE.h"
 
 #include <QJsonParseError>
@@ -91,12 +92,35 @@ OAuthDialog::OAuthDialog(Context *context, OAuthSite site, CloudService *service
     //
     QString urlstr = "";
 
+    switch (site) {
+    case DROPBOX:
+        redirectUri = QUrl(QStringLiteral(
+            "https://goldencheetah.github.io/blank.html"));
+        break;
+    case TREDICT:
+        redirectUri = QUrl(QStringLiteral(
+            "http://localhost/callback"));
+        break;
+    case STRAVA:
+    case CYCLING_ANALYTICS:
+    case NOLIO:
+    case SPORTTRACKS:
+    case WITHINGS:
+    case POLAR:
+    case AZUM:
+        redirectUri = QUrl(QStringLiteral(
+            "https://www.goldencheetah.org/"));
+        break;
+    default:
+        break;
+    }
+
     if (site == STRAVA) {
 
         urlstr = QString("https://www.strava.com/oauth/authorize?");
         urlstr.append("client_id=").append(GC_STRAVA_CLIENT_ID).append("&");
         urlstr.append("scope=read_all,activity:read_all,activity:write&");
-        urlstr.append("redirect_uri=http://www.goldencheetah.org/&");
+        urlstr.append("redirect_uri=https://www.goldencheetah.org/&");
         urlstr.append("response_type=code&");
         urlstr.append("approval_prompt=force");
 
@@ -104,7 +128,7 @@ OAuthDialog::OAuthDialog(Context *context, OAuthSite site, CloudService *service
 
         urlstr = QString("https://www.nolio.io/api/authorize/?");
         urlstr.append("client_id=").append(GC_NOLIO_CLIENT_ID).append("&");
-        urlstr.append("redirect_uri=http://www.goldencheetah.org/&");
+        urlstr.append("redirect_uri=https://www.goldencheetah.org/&");
         urlstr.append("response_type=code");
 
     } else if (site == DROPBOX) {
@@ -122,7 +146,7 @@ OAuthDialog::OAuthDialog(Context *context, OAuthSite site, CloudService *service
         urlstr = QString("https://www.cyclinganalytics.com/api/auth?");
         urlstr.append("client_id=").append(GC_CYCLINGANALYTICS_CLIENT_ID).append("&");
         urlstr.append("scope=modify_rides&");
-        urlstr.append("redirect_uri=http://www.goldencheetah.org/&");
+        urlstr.append("redirect_uri=https://www.goldencheetah.org/&");
         urlstr.append("response_type=code&");
         urlstr.append("approval_prompt=force");
 
@@ -138,8 +162,7 @@ OAuthDialog::OAuthDialog(Context *context, OAuthSite site, CloudService *service
 
         // We only request access to the application data folder, not all files.
         urlstr = QString("https://api.sporttracks.mobi/oauth2/authorize?");
-        urlstr.append("redirect_uri=http://www.goldencheetah.org&");
-        urlstr.append("state=xyzzy&");
+        urlstr.append("redirect_uri=https://www.goldencheetah.org/&");
         urlstr.append("response_type=code&");
         urlstr.append("client_id=").append(GC_SPORTTRACKS_CLIENT_ID);
 
@@ -149,18 +172,19 @@ OAuthDialog::OAuthDialog(Context *context, OAuthSite site, CloudService *service
         urlstr.append("redirect_uri=https://www.goldencheetah.org&");
         urlstr.append("scope=user.info,user.metrics&");
         urlstr.append("response_type=code&");
-        urlstr.append("state=xyzzy&");
         urlstr.append("client_id=").append(GC_NOKIA_CLIENT_ID);
 
     } else if (site == XERT) {
-        urlChanged(QUrl("http://www.goldencheetah.org/?code=0"));
+        urlChanged(QUrl(QStringLiteral(
+            "goldencheetah://credential-grant")));
     } else if (site == RIDEWITHGPS) {
-        urlChanged(QUrl("http://www.goldencheetah.org/?code=0"));
+        urlChanged(QUrl(QStringLiteral(
+            "goldencheetah://credential-grant")));
     } else if (site == AZUM) {
         if (baseURL=="") baseURL=service->getSetting(GC_AZUM_URL, "https://training.azum.com").toString();
         urlstr = QString("%1/oauth/authorize/?").arg(baseURL);
 
-        urlstr.append("redirect_uri=http://www.goldencheetah.org/&");
+        urlstr.append("redirect_uri=https://www.goldencheetah.org/&");
         urlstr.append("response_type=code&");
         urlstr.append("client_id=").append(GC_AZUM_CLIENT_ID);
 
@@ -182,10 +206,33 @@ OAuthDialog::OAuthDialog(Context *context, OAuthSite site, CloudService *service
     // STEP 1: LOGIN AND AUTHORISE THE APPLICATION
     //
     if (site == NOLIO || site == DROPBOX || site == STRAVA || site == CYCLING_ANALYTICS || site == POLAR || site == SPORTTRACKS || site == WITHINGS || site == AZUM || site == TREDICT) {
-        url = QUrl(urlstr);
+        const QString state =
+            OAuthCallbackPolicy::generateState();
+        QString authorizationError;
+        url = OAuthCallbackPolicy::authorizationUrlWithState(
+            QUrl(urlstr), state, &authorizationError);
+        callbackSession =
+            std::make_unique<OAuthCallbackPolicy::Session>(
+                redirectUri, state);
+        if (url.isEmpty()
+            || !callbackSession->isValid()) {
+            noSSLlib = true;
+            QMessageBox authorizationFailure(
+                QMessageBox::Critical,
+                tr("Authorization Error"),
+                authorizationError.isEmpty()
+                    ? tr("The OAuth callback configuration is unsafe.")
+                    : authorizationError);
+            authorizationFailure.exec();
+            return;
+        }
+
+        connect(
+            view,
+            SIGNAL(urlChanged(const QUrl&)),
+            this,
+            SLOT(urlChanged(const QUrl&)));
         view->setUrl(url);
-        // connects
-        connect(view, SIGNAL(urlChanged(const QUrl&)), this, SLOT(urlChanged(const QUrl&)));
     }
 }
 
@@ -214,29 +261,53 @@ void
 OAuthDialog::urlChanged(const QUrl &url)
 {
     QString authheader;
+    QString code;
 
-    // sites that use this scheme
-    if (site == NOLIO || site == DROPBOX || site == STRAVA || site == CYCLING_ANALYTICS || site == POLAR || site == SPORTTRACKS || site == XERT || site == RIDEWITHGPS || site == WITHINGS || site == AZUM || site == TREDICT) {
+    if (site == XERT || site == RIDEWITHGPS) {
+        const QUrl credentialGrantUrl(
+            QStringLiteral(
+                "goldencheetah://credential-grant"));
+        if (url != credentialGrantUrl) {
+            return;
+        }
+        code = QStringLiteral("0");
+    } else {
+        if (!callbackSession) {
+            return;
+        }
 
-        if (url.toString().startsWith("http://www.goldencheetah.org/?state=&code=") ||
-                url.toString().contains("blank.html?code=") ||
-                url.toString().startsWith("https://www.goldencheetah.org/?code=") ||
-                url.toString().startsWith("http://www.goldencheetah.org/?code=") ||
-                url.toString().startsWith("http://localhost/callback?")) {
+        const OAuthCallbackPolicy::Outcome outcome =
+            callbackSession->consume(url);
+        if (outcome.type
+            == OAuthCallbackPolicy::OutcomeType::Reject) {
+            return;
+        }
+        if (outcome.type
+            == OAuthCallbackPolicy::OutcomeType::
+                AuthorizationError) {
+            QMessageBox authorizationError(
+                QMessageBox::Critical,
+                tr("Authorization Error"),
+                outcome.error);
+            authorizationError.exec();
+            reject();
+            return;
+        }
 
-            // stop the WebView from loading the redirect URL (avoids 404 pages)
-            if (view && url.toString().startsWith("http://localhost/")) {
-                view->stop();
-                view->setHtml("<html><body style=\"font-family:sans-serif;text-align:center;padding:40px\">"
-                              "<h2>" + tr("Authorizing...") + "</h2></body></html>");
-            }
+        code = outcome.code;
+        if (view && site == TREDICT) {
+            view->stop();
+            view->setHtml(
+                "<html><body style=\"font-family:sans-serif;"
+                "text-align:center;padding:40px\">"
+                "<h2>" + tr("Authorizing...")
+                + "</h2></body></html>");
+        }
+    }
 
-            QUrlQuery parse(url);
-            QString code=parse.queryItemValue("code");
-
-            QByteArray data;
-            QUrlQuery params;
-            QString urlstr = "";
+    QByteArray data;
+    QUrlQuery params;
+    QString urlstr;
 
             // now get the final token to store
             if (site == DROPBOX) {
@@ -254,7 +325,7 @@ OAuthDialog::urlChanged(const QUrl &url)
             } else if (site == POLAR) {
 
                 urlstr = QString("%1?").arg(GC_POLARFLOW_TOKEN_URL);
-                urlstr.append("redirect_uri=http://www.goldencheetah.org");
+                urlstr.append("redirect_uri=https://www.goldencheetah.org/");
                 params.addQueryItem("grant_type", "authorization_code");
 #if (defined GC_POLARFLOW_CLIENT_ID) && (defined GC_POLARFLOW_CLIENT_SECRET)
                 authheader = QString("%1:%2").arg(GC_POLARFLOW_CLIENT_ID).arg(GC_POLARFLOW_CLIENT_SECRET);
@@ -265,7 +336,7 @@ OAuthDialog::urlChanged(const QUrl &url)
                 urlstr = QString("https://api.sporttracks.mobi/oauth2/token?");
                 params.addQueryItem("client_id", GC_SPORTTRACKS_CLIENT_ID);
                 params.addQueryItem("client_secret", GC_SPORTTRACKS_CLIENT_SECRET);
-                params.addQueryItem("redirect_uri","http://www.goldencheetah.org");
+                params.addQueryItem("redirect_uri","https://www.goldencheetah.org/");
                 params.addQueryItem("grant_type", "authorization_code");
 
             } else if (site == STRAVA) {
@@ -280,7 +351,7 @@ OAuthDialog::urlChanged(const QUrl &url)
 
                 urlstr = QString("https://www.nolio.io/api/token/?");
                 params.addQueryItem("grant_type", "authorization_code");
-                params.addQueryItem("redirect_uri", "http://www.goldencheetah.org/");
+                params.addQueryItem("redirect_uri", "https://www.goldencheetah.org/");
 #if (defined GC_NOLIO_CLIENT_ID) && (defined GC_NOLIO_SECRET)
                 authheader = QString("%1:%2").arg(GC_NOLIO_CLIENT_ID).arg(GC_NOLIO_SECRET);
 #endif
@@ -328,7 +399,7 @@ OAuthDialog::urlChanged(const QUrl &url)
                 } else {
                     params.addQueryItem("client_secret", GC_AZUM_CLIENT_SECRET);
                 }
-                params.addQueryItem("redirect_uri","http://www.goldencheetah.org/");
+                params.addQueryItem("redirect_uri","https://www.goldencheetah.org/");
                 params.addQueryItem("grant_type", "authorization_code");
 
             } else if (site == TREDICT) {
@@ -345,21 +416,32 @@ OAuthDialog::urlChanged(const QUrl &url)
 
             data.append(params.query(QUrl::FullyEncoded).toUtf8());
 
-            // trade-in the temporary access code retrieved by the Call-Back URL for the finale token
-            QUrl url = QUrl(urlstr);
+            // trade in the temporary code only over a verified HTTPS endpoint
+            QUrl tokenUrl(urlstr);
+            if (!OAuthCallbackPolicy::isSecureEndpoint(
+                    tokenUrl)) {
+                QMessageBox endpointError(
+                    QMessageBox::Critical,
+                    tr("Authorization Error"),
+                    tr("The OAuth token endpoint must use verified HTTPS."));
+                endpointError.exec();
+                reject();
+                return;
+            }
 
-            // now get the final token - but ignore errors
             manager = new QNetworkAccessManager(this);
             connect(manager, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
             connect(manager, SIGNAL(finished(QNetworkReply*)), this, SLOT(networkRequestFinished(QNetworkReply*)));
 
             QNetworkReply *reply;
             if (site == RIDEWITHGPS) {
-                url.setQuery(data);
-                QNetworkRequest request = QNetworkRequest(url);
+                tokenUrl.setQuery(data);
+                QNetworkRequest request =
+                    QNetworkRequest(tokenUrl);
                 reply = manager->get(request);
             } else {
-                QNetworkRequest request = QNetworkRequest(url);
+                QNetworkRequest request =
+                    QNetworkRequest(tokenUrl);
                 request.setHeader(QNetworkRequest::ContentTypeHeader,"application/x-www-form-urlencoded");
 
                 // client id and secret are encoded and sent in the header for NOLIO, POLAR and XERT
@@ -374,8 +456,6 @@ OAuthDialog::urlChanged(const QUrl &url)
                 loop.exec();
             }
 
-        }
-    }
 }
 
 //
@@ -389,32 +469,91 @@ void
 OAuthDialog::networkRequestFinished(QNetworkReply *reply)
 {
 
-    // we've been told to ignore responses (used by POLAR, maybe others in future)
-    if (ignore) return;
-    // we can handle SSL handshake errors, if we got here then some kind of protocol was agreed
-    if (reply->error() == QNetworkReply::NoError || reply->error() == QNetworkReply::SslHandshakeFailedError) {
+    // Polar binding reuses this manager after credentials are stored.
+    if (ignore) {
+        return;
+    }
 
-        QByteArray payload = reply->readAll(); // JSON
-        QString refresh_token;
-        QString access_token;
-        QString auth_token;
-        double polar_userid=0;
+    if (!OAuthCallbackPolicy::isSuccessfulTokenReply(
+            reply->error())) {
+        const QString error =
+            tr("Error retrieving access token, %1 (%2)")
+                .arg(reply->errorString())
+                .arg(reply->error());
+        QMessageBox oauthError(
+            QMessageBox::Critical,
+            tr("OAuth Token Error"),
+            error);
+        oauthError.setDetailedText(error);
+        oauthError.exec();
+        reject();
+        return;
+    }
 
-        // parse the response and extract the tokens, pretty much the same for all services
-        // although polar choose to also pass a user id, which is needed for future calls
-        QJsonParseError parseError;
-        QJsonDocument document = QJsonDocument::fromJson(payload, &parseError);
-        if (parseError.error == QJsonParseError::NoError) {
-            refresh_token = document.object()["refresh_token"].toString();
-            access_token = document.object()["access_token"].toString();
-            if (site == POLAR)  polar_userid = document.object()["x_user_id"].toDouble();
-            if (site == RIDEWITHGPS) access_token = document.object()["user"].toObject()["auth_token"].toString();
-            if (site == WITHINGS) {
-                refresh_token = document.object()["body"].toObject()["refresh_token"].toString();
-                access_token = document.object()["body"].toObject()["access_token"].toString();
-            }
+    const QByteArray payload = reply->readAll();
+    QJsonParseError parseError;
+    const QJsonDocument document =
+        QJsonDocument::fromJson(payload, &parseError);
+    if (parseError.error != QJsonParseError::NoError
+        || !document.isObject()) {
+        const QString error =
+            parseError.error == QJsonParseError::NoError
+                ? tr("OAuth token response is not a JSON object.")
+                : tr("Cannot parse OAuth token response: %1")
+                      .arg(parseError.errorString());
+        QMessageBox oauthError(
+            QMessageBox::Critical,
+            tr("OAuth Token Error"),
+            error);
+        oauthError.exec();
+        reject();
+        return;
+    }
+
+    QString refresh_token =
+        document.object()["refresh_token"].toString();
+    QString access_token =
+        document.object()["access_token"].toString();
+    double polar_userid = 0;
+    if (site == POLAR) {
+        polar_userid =
+            document.object()["x_user_id"].toDouble();
+    }
+    if (site == RIDEWITHGPS) {
+        access_token =
+            document.object()["user"]
+                .toObject()["auth_token"]
+                .toString();
+    }
+    if (site == WITHINGS) {
+        refresh_token =
+            document.object()["body"]
+                .toObject()["refresh_token"]
+                .toString();
+        access_token =
+            document.object()["body"]
+                .toObject()["access_token"]
+                .toString();
+    }
+
+    if (access_token.isEmpty()) {
+        QString error =
+            document.object()["error_description"]
+                .toString();
+        if (error.isEmpty()) {
+            error = tr(
+                "OAuth token response does not contain an access token.");
         }
+        QMessageBox oauthError(
+            QMessageBox::Critical,
+            tr("OAuth Token Error"),
+            error);
+        oauthError.exec();
+        reject();
+        return;
+    }
 
+    {
         // now set the tokens etc
         if (site == DROPBOX) {
 
@@ -541,12 +680,6 @@ OAuthDialog::networkRequestFinished(QNetworkReply *reply)
 
         }
 
-    } else {
-            // general error getting response
-            QString error = QString(tr("Error retrieving access token, %1 (%2)")).arg(reply->errorString()).arg(reply->error());
-            QMessageBox oautherr(QMessageBox::Critical, tr("SSL Token Refresh Error"), error);
-            oautherr.setDetailedText(error);
-            oautherr.exec();
     }
 
     // job done, dialog can be closed
