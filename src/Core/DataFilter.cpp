@@ -19,6 +19,7 @@
 #include "Utils.h"
 #include "Statistic.h"
 #include "DataFilter.h"
+#include "DataFilterSafety.h"
 #include "Context.h"
 #include "Athlete.h"
 #include "RideItem.h"
@@ -7336,7 +7337,16 @@ Result Leaf::eval(DataFilterRuntime *df, Leaf *leaf, const Result &x, long it, R
                                 dfrom = earliest.daysTo(pde.from < d.from ? d.from : pde.from);
                                 dto = earliest.daysTo(pde.to > d.to ? d.to : pde.to);
 
-                                double v1, v2;
+                                DataFilterSafety::EstimateValues values;
+                                values.cp = pde.CP;
+                                values.wPrime = pde.WPrime;
+                                values.ftp = pde.FTP;
+                                values.pMax = pde.PMax;
+                                values.dateFrom = dfrom;
+                                values.dateTo = dto;
+
+                                bool durationModelMatched = false;
+                                double durationValue = 0.0;
 
                                 // get a duration
                                 if (toDuration == true) {
@@ -7354,20 +7364,23 @@ Result Leaf::eval(DataFilterRuntime *df, Leaf *leaf, const Result &x, long it, R
                                         pdm->setMinutes(false);
 
                                         // get the model estimate for our duration
-                                        v1=v2 = pdm->y(duration);
+                                        durationValue = pdm->y(duration);
+                                        durationModelMatched = true;
+                                        break;
                                     }
-
-                                } else {
-
-                                    if (parm == "cp") v1=v2=pde.CP;
-                                    if (parm == "w'") v1=v2=pde.WPrime;
-                                    if (parm == "ftp") v1=v2=pde.FTP;
-                                    if (parm == "pmax") v1=v2=pde.PMax;
-                                    if (parm == "date") { v1=dfrom; v2=dto; }
                                 }
 
-                                returning.number() += v1+v2;
-                                returning.asNumeric() << v1 << v2;
+                                const DataFilterSafety::EstimatePair estimate =
+                                    DataFilterSafety::estimatePair(
+                                        parm,
+                                        toDuration,
+                                        durationModelMatched,
+                                        durationValue,
+                                        values);
+                                if (!estimate.valid) continue;
+
+                                returning.number() += estimate.first + estimate.second;
+                                returning.asNumeric() << estimate.first << estimate.second;
                             }
                         }
                         return returning;
@@ -8149,22 +8162,34 @@ Result Leaf::eval(DataFilterRuntime *df, Leaf *leaf, const Result &x, long it, R
                         if (indexes.asNumeric().count()) selected=indexes.asNumeric();
                         else selected << indexes.number();
 
-                        int rindex=0;
+                        qsizetype rindex = 0;
                         for(int i=0; i< selected.count(); i++) {
 
-                            int index=static_cast<int>(selected[i]);
+                            int index = 0;
+                            if (!DataFilterSafety::vectorAssignmentIndex(
+                                    selected.at(i), &index)) {
+                                continue;
+                            }
 
                             // get the next value to apply - needs to work with vectors
                             // and vectors will be repeated if they are too short
-                            double number;
+                            double number = 0.0;
                             QString string;
                             if (rhs.isVector()) {
+                                const qsizetype valueCount =
+                                    rhs.isNumber
+                                        ? rhs.asNumeric().count()
+                                        : rhs.asString().count();
+                                const qsizetype valueIndex =
+                                    DataFilterSafety::repeatedVectorIndex(
+                                        valueCount, rindex);
+                                if (valueIndex < 0) continue;
+                                ++rindex;
+
                                 if (rhs.isNumber) {
-                                    if (rindex > rhs.asNumeric().count()) rindex=0;
-                                    number = rhs.asNumeric()[rindex++];
+                                    number = rhs.asNumeric().at(valueIndex);
                                 } else {
-                                    if (rindex > rhs.asString().count()) rindex=0;
-                                    string = rhs.asString()[rindex++];
+                                    string = rhs.asString().at(valueIndex);
                                 }
                             } else {
                                 if (rhs.isNumber) number = rhs.number();

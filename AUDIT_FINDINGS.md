@@ -911,21 +911,30 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### MEM-014: DataFilter evaluates uninitialized and out-of-range vector data
 
-- Status: OPEN
-- Code: `src/Core/DataFilter.cpp:7339`,
-  `src/Core/DataFilter.cpp:8163`, `src/Core/DataFilter.cpp:8166`
-- Impact: `estimates()` appends uninitialized `v1`/`v2` stack values when
-  no power-duration model or parameter branch matches. Indexed vector
-  assignment resets only when `rindex > count`, then reads `vector[count]`;
-  an empty right-hand vector therefore reads index zero immediately. User
-  formulas can trigger undefined behavior, an out-of-bounds read, corrupted
-  results, or a crash.
-- Test: Evaluate unknown/missing estimate models and parameters, then assign
-  empty, single-element, and repeated numeric/string vectors at the exact wrap
-  boundary under ASan/UBSan.
-- Fix direction: Require a matched model/parameter before appending estimates
-  and return a deterministic empty/error result otherwise. Reject empty
-  right-hand vectors and wrap when `rindex >= count` before indexing.
+- Status: FIXED
+- Code: `src/Core/DataFilter.cpp`, `src/Core/DataFilterSafety.cpp`,
+  `src/Core/DataFilterSafety.h`, and
+  `unittests/Core/dataFilterSafety/`
+- Impact: `estimates()` appended uninitialized `v1`/`v2` stack values
+  when no power-duration model or parameter branch matched. Indexed vector
+  assignment wrapped only when `rindex > count`, so assigning a non-empty
+  right-hand vector to more selected indexes than it contained read
+  `vector[count]` at the exact boundary. Negative, non-finite, or
+  out-of-range selected indexes also reached an undefined floating-to-integer
+  conversion, an overflowing resize, or an out-of-bounds write. User formulas
+  could produce corrupted results or crash the process.
+- Test: The new focused suite covers missing models, unknown parameters, every
+  supported estimate field, duration estimates, exact vector-wrap boundaries,
+  and negative, NaN, infinite, and overflowing target indexes. The test was
+  compile-RED before the production helper existed.
+- Resolution: Estimate pairs are appended only after a model or supported
+  parameter matches. Repeated RHS values now use modulo indexing, and selected
+  indexes must be finite, non-negative, and leave room for `index + 1`
+  before any resize or write.
+- Verification: The focused suite passes 11/11 normally and under strict
+  ASan/UBSan with leak detection. The Qt 6.8.3 production application builds,
+  and the complete release matrix passes 1,941 tests in 53 QtTest suites with
+  zero failures, skips, blacklisted tests, or sanitizer/error markers.
 
 ### THREAD-003: Python chart execution races GUI object lifetime
 
