@@ -443,16 +443,22 @@ extern double scalefactors[];
 class AthleteQSettings {
     public:
 
-      AthleteQSettings() {}
-      ~AthleteQSettings() {}
+      AthleteQSettings()
+          : athlete{nullptr, nullptr, nullptr, nullptr} {}
+      ~AthleteQSettings() {
+          for (QSettings *settings : athlete) delete settings;
+      }
 
       void setQSettings(QSettings* settings, int index) {athlete[index] = settings; }
       QSettings* getQSettings(int index) const { return athlete[index]; }
 
     private:
+      Q_DISABLE_COPY(AthleteQSettings)
       QSettings* athlete[4];  // we support exactly 4 Athlete specific QSettings right now
 
 };
+
+class CredentialSettings;
 
 
 typedef struct {
@@ -529,10 +535,22 @@ public:
 
 private:
     bool newFormat;
-    QSettings *systemsettings;
-    QSettings *oldsystemsettings;
-    QVector<QSettings*> *global;
+    QSettings *systemsettings = nullptr;
+    QSettings *oldsystemsettings = nullptr;
+    QVector<QSettings*> *global = nullptr;
     QHash<QString, AthleteQSettings*> athlete;
+    CredentialSettings *credentialSettings = nullptr;
+    QString globalCredentialScopeId;
+    QHash<QString, QString> athleteCredentialScopeIds;
+
+    QString credentialScopeForGlobal();
+    QString credentialScopeForAthlete(const QString &athleteName);
+    QString credentialScopeForLegacy(const QString &athleteName);
+    void migrateGlobalCredentials();
+    void migrateAthleteCredentials(const QString &athleteName);
+    bool migrateLegacyCredential(const QString &athleteName,
+                                 const QString &credentialKey,
+                                 const QString &storedKey);
 
     // special methods for Migration/Upgrade
     void migrateValue(QString key);
@@ -544,6 +562,8 @@ private:
     void upgradeSystem();
     void upgradeGlobal();
     void upgradeAthlete(QString athleteName);
+
+    Q_DISABLE_COPY(GSettings)
 
 };
 

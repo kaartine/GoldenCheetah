@@ -889,6 +889,44 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Fix: Deep-copy reference points and delete them on removal and destruction.
 - Verification: The focused normal and strict ASan/UBSan/LSan runs pass 5 tests.
 
+### MEM-013: GSettings leaks its owned settings objects
+
+- Status: FIXED
+- Code: `src/Core/Settings.cpp`, `src/Core/Settings.h`
+- Impact: Every destroyed `GSettings` instance leaked its global settings
+  vector, contained `QSettings` objects, athlete wrappers, and their four
+  athlete-specific `QSettings` objects. Reinitializing global/athlete settings
+  also discarded the same owners without deleting them.
+- Test: The real `GSettings` credential-routing and migration tests repeatedly
+  construct, initialize, clear, and destroy both legacy and new-format settings
+  under LeakSanitizer.
+- Resolution: All pointers now have deterministic null initialization.
+  `AthleteQSettings` owns and deletes its four settings objects, while
+  `GSettings` deletes global and athlete collections both during clearing and
+  final teardown. Both owner types are non-copyable.
+- Verification: Before the fix strict LSan reported 39 allocations totaling
+  4,402 bytes. The final 69-test ASan/UBSan/LSan credential suite exits cleanly
+  with leak detection enabled, and the complete release matrix passes 1,930
+  tests.
+
+### MEM-014: DataFilter evaluates uninitialized and out-of-range vector data
+
+- Status: OPEN
+- Code: `src/Core/DataFilter.cpp:7339`,
+  `src/Core/DataFilter.cpp:8163`, `src/Core/DataFilter.cpp:8166`
+- Impact: `estimates()` appends uninitialized `v1`/`v2` stack values when
+  no power-duration model or parameter branch matches. Indexed vector
+  assignment resets only when `rindex > count`, then reads `vector[count]`;
+  an empty right-hand vector therefore reads index zero immediately. User
+  formulas can trigger undefined behavior, an out-of-bounds read, corrupted
+  results, or a crash.
+- Test: Evaluate unknown/missing estimate models and parameters, then assign
+  empty, single-element, and repeated numeric/string vectors at the exact wrap
+  boundary under ASan/UBSan.
+- Fix direction: Require a matched model/parameter before appending estimates
+  and return a deterministic empty/error result otherwise. Reject empty
+  right-hand vectors and wrap when `rindex >= count` before indexing.
+
 ### THREAD-003: Python chart execution races GUI object lifetime
 
 - Status: FIXED
@@ -1167,15 +1205,44 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-011: Cloud credentials are stored in plaintext settings
 
-- Status: OPEN
-- Code: `src/Cloud/CloudService.h:549`, `src/Core/Settings.cpp:432`,
-  `src/Core/Settings.h:386`
-- Impact: Backups or local processes able to read athlete settings obtain
-  reusable access and refresh tokens. File permissions are not hardened in code.
-- Test: Save/migrate a sentinel secret and verify it appears only in a mocked OS
-  credential vault, never in INI files.
-- Fix direction: OS keychain integration with migration; enforce 0700/0600 as an
-  interim defense.
+- Status: FIXED
+- Code: `src/Core/CredentialSettings.cpp`,
+  `src/Core/CredentialStoreQtKeychain.cpp`, `src/Core/Settings.cpp`,
+  `contrib/qtkeychain`, and `.devcontainer/package-appimage.sh`
+- Impact: Backups or local processes able to read athlete settings obtained
+  reusable passwords, access tokens, and refresh tokens. Credential-bearing
+  INI files were also left with process-default permissions.
+- Resolution: All 29 configured credential keys are intercepted by
+  `GSettings` and stored in the native OS credential vault through QtKeychain,
+  with insecure plaintext fallback disabled. Vault identifiers combine a
+  persistent random global/athlete scope with an opaque credential-key hash.
+  Existing plaintext values migrate only after a confirmed vault write, and
+  failed writes remain memory-only while any previous plaintext source is
+  retained and restricted to mode 0600. Scope creation fails closed unless its
+  identifier is persisted. Scope mappings survive both pre- and
+  post-initialization fallback paths. Failed deletion creates a non-secret
+  tombstone so an old vault value cannot reappear on a later launch. Cached
+  success, failure, and absence states do not hide duplicate or later legacy
+  sources. AppImage packaging explicitly includes libsecret and both third-party
+  license files.
+- Test: `unittests/Core/credentialSettings` covers every allowlisted key,
+  native-backend status mapping, disabled insecure fallback, vault precedence,
+  new writes, migration, replacement, deletion retry, duplicate sources,
+  transient failures, stable and unwritable scopes, legacy/new settings
+  routing, and both scope initialization orders. The follow-up tests first
+  reproduced loss of old-format credentials, failed replacement, duplicate
+  plaintext retention, negative-cache masking, deletion resurrection,
+  unpersisted scope IDs, transient empty-value masking, and both scope-order
+  discontinuities before their fixes.
+- Verification: The focused suite passes all 69 tests normally and under strict
+  ASan/UBSan/LSan with leak detection. The complete release matrix passes 1,930
+  tests in 52 QtTest suites with zero failures, skips, blacklisted tests, or
+  sanitizer/error markers. The Qt 6.8.3 production application links and the
+  166,402,552-byte AppImage reports `V3.8-DEV2605 (5012)`; its bundled
+  libsecret dependency chain resolves and its QtKeychain/libsecret licenses are
+  present. Two isolated, network-disabled AppImage launches without a session
+  keyring retried both sentinel migrations on the next process start, retained
+  both values, and hardened the private INI file to mode 0600.
 
 ### SEC-012: Secrets are logged or placed in URLs
 
@@ -1497,6 +1564,20 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Fix direction: Formalize about-to-remove, removal, selection, deleted, selected
   ordering and prevent notifier side effects.
 
+### GUI-003: Power histogram selection guard is inverted
+
+- Status: OPEN
+- Code: `src/Charts/PowerHist.cpp:2401`
+- Impact: The `RideFilePoint*` overload enters its interval loop only when
+  `rideItem` is null and then dereferences it. A null item can therefore
+  crash, while every normal non-null ride skips the loop and reports all point
+  samples as unselected. Selected intervals are missing from the standard
+  power histogram even though the time-based W' balance overload is correct.
+- Test: Exercise the point overload with no ride, a ride with no selected
+  intervals, overlapping selected intervals, and exact sample boundaries.
+- Fix direction: Return false for a null ride/point and iterate selected
+  intervals only when `rideItem` is valid, matching the time-based overload.
+
 ### MAP-001: Map nearest-point longitude scaling uses degrees as radians
 
 - Status: OPEN
@@ -1619,12 +1700,18 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The existing containerized unit suite passed at audit time:
+The complete containerized release matrix after SEC-011 passes:
 
-- 76 passed
-- 0 failed
-- Qt 6.8.3, Ubuntu 24.04 container
+- 52 QtTest suites
+- 1,930 passed
+- 0 failed, skipped, or blacklisted
+- Qt 6.8.3 on Ubuntu 24.04
 
-The suite currently has no direct coverage for the critical archive, parser,
-cloud, device-protocol, persistence, or TrainSidebar state-machine findings.
-No sanitizer, fuzzer, or production-scale profiler run has yet been completed.
+SEC-011's 69 focused tests also pass under strict ASan/UBSan/LSan with leak
+detection, and the packaged AppImage passes isolated startup and two-process
+migration-failure usage tests. Earlier fixed memory/thread findings retain the
+focused sanitizer and TSAN evidence recorded in their entries.
+
+This baseline is not evidence for any remaining OPEN finding. Each open item
+still requires its listed RED regression before implementation. No whole-suite
+fuzzer or production-scale profiler campaign has been completed.

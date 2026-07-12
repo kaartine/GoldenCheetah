@@ -19,12 +19,15 @@
 
 #include <QDir>
 #include "Settings.h"
+#include "CredentialSettings.h"
 #include "MainWindow.h"
 #include "Colors.h"
 #include <QSettings>
 #include <QDebug>
+#include <QtAlgorithms>
 
 #include <QFontDatabase>
+#include <QCryptographicHash>
 
 #ifdef Q_OS_MAC
 int OperatingSystem = OSX;
@@ -69,7 +72,39 @@ enum SettingsFilesIndexAthlete { ATHLETE_GENERAL = 0,
 
 static const QString settingFileNamesGlobal[2] = {"configglobal-general.ini","configglobal-trainmode.ini"};
 static const QString settingFileNamesAthlete[4] = {"athlete-general.ini","athlete-layout.ini","athlete-preferences.ini","athlete-private.ini"};
+static const QString credentialScopeStorageKey =
+    QStringLiteral("credential_store/id");
 
+static QString legacyCredentialScopeStorageKey(
+    const QString &athleteName)
+{
+    const QByteArray identity = athleteName.isEmpty()
+        ? QByteArray("global")
+        : QByteArray("athlete:") + athleteName.toUtf8();
+    const QByteArray digest = QCryptographicHash::hash(
+        identity, QCryptographicHash::Sha256).toHex();
+    return QStringLiteral("credential_store/scopes/")
+        + QString::fromLatin1(digest);
+}
+
+static void mirrorCredentialScope(
+    QSettings *settings,
+    const QString &storageKey,
+    const QString &scopeId)
+{
+    if (!settings || storageKey.isEmpty() || scopeId.isEmpty()
+        || settings->value(storageKey).toString() == scopeId) {
+        return;
+    }
+
+    settings->setValue(storageKey, scopeId);
+    settings->sync();
+    CredentialSettings::hardenSettingsFile(settings);
+    if (settings->status() != QSettings::NoError) {
+        qWarning() << "Cannot persist credential scope mapping:"
+                   << settings->fileName();
+    }
+}
 
 
 static QString DetermineKey(QString & key, int& store, int& fileIndex) {
@@ -105,22 +140,177 @@ static QString DetermineKey(QString & key, int& store, int& fileIndex) {
 // -----------------------------constructor and public instance methods ------------------------//
 
 GSettings::GSettings(QString org, QString app) : newFormat(true){
+    credentialSettings = new CredentialSettings(
+        createPlatformCredentialStore());
     oldsystemsettings = new QSettings(org,app);
     systemsettings = new QSettings(QSettings::IniFormat, QSettings::UserScope, org, app);
     global = new QVector<QSettings*>();
 }
 
 GSettings::GSettings(QString file, QSettings::Format format) : newFormat(false){
+    credentialSettings = new CredentialSettings(
+        createPlatformCredentialStore());
     systemsettings = new QSettings(file,format);
 }
 
 GSettings::~GSettings() {
     syncQSettings();
+    if (global) {
+        qDeleteAll(*global);
+        delete global;
+    }
+    qDeleteAll(athlete);
+    delete oldsystemsettings;
+    delete systemsettings;
+    delete credentialSettings;
+}
+
+QString GSettings::credentialScopeForGlobal()
+{
+    if (!credentialSettings) return QString();
+    if (!newFormat) return credentialScopeForLegacy(QString());
+    if (!global || global->isEmpty()) return QString();
+    if (globalCredentialScopeId.isEmpty()) {
+        const QString preferredScopeId = systemsettings
+            ? systemsettings->value(
+                  legacyCredentialScopeStorageKey(QString())).toString()
+            : QString();
+        globalCredentialScopeId = CredentialSettings::ensureScopeId(
+            global->at(GLOBAL_GENERAL), credentialScopeStorageKey,
+            preferredScopeId);
+        mirrorCredentialScope(
+            systemsettings, legacyCredentialScopeStorageKey(QString()),
+            globalCredentialScopeId);
+    }
+    return globalCredentialScopeId;
+}
+
+QString GSettings::credentialScopeForAthlete(
+    const QString &athleteName)
+{
+    if (!credentialSettings || athleteName.isEmpty()) return QString();
+    if (!newFormat) return credentialScopeForLegacy(athleteName);
+    const auto found = athlete.constFind(athleteName);
+    if (found == athlete.cend()) return QString();
+    QString &scopeId = athleteCredentialScopeIds[athleteName];
+    if (scopeId.isEmpty()) {
+        const QString preferredScopeId = systemsettings
+            ? systemsettings->value(
+                  legacyCredentialScopeStorageKey(
+                      athleteName)).toString()
+            : QString();
+        scopeId = CredentialSettings::ensureScopeId(
+            found.value()->getQSettings(ATHLETE_PRIVATE),
+            credentialScopeStorageKey, preferredScopeId);
+        mirrorCredentialScope(
+            systemsettings, legacyCredentialScopeStorageKey(athleteName),
+            scopeId);
+    }
+    return scopeId;
+}
+
+QString GSettings::credentialScopeForLegacy(
+    const QString &athleteName)
+{
+    if (!credentialSettings || !systemsettings) return QString();
+    return CredentialSettings::ensureScopeId(
+        systemsettings,
+        legacyCredentialScopeStorageKey(athleteName));
+}
+
+bool GSettings::migrateLegacyCredential(
+    const QString &athleteName,
+    const QString &credentialKey,
+    const QString &storedKey)
+{
+    if (!CredentialSettings::isCredentialKey(credentialKey)) {
+        return false;
+    }
+    if (!credentialSettings || !oldsystemsettings) return true;
+
+    QString targetKey = credentialKey;
+    int store;
+    int fileIndex;
+    DetermineKey(targetKey, store, fileIndex);
+    Q_UNUSED(fileIndex)
+
+    QString scopeId;
+    if (store == SETTINGS_GLOBAL) {
+        scopeId = credentialScopeForGlobal();
+    } else if (store == SETTINGS_ATHLETE) {
+        scopeId = credentialScopeForAthlete(athleteName);
+    }
+
+    if (!scopeId.isEmpty()) {
+        credentialSettings->value(
+            oldsystemsettings, scopeId, credentialKey, storedKey,
+            QVariant());
+    } else {
+        CredentialSettings::hardenSettingsFile(oldsystemsettings);
+    }
+    return true;
+}
+
+void GSettings::migrateGlobalCredentials()
+{
+    if (!credentialSettings || !newFormat
+        || !global || global->isEmpty()) return;
+    QSettings *settings = global->at(GLOBAL_GENERAL);
+    credentialSettings->migratePlaintext(
+        settings, credentialScopeForGlobal(),
+        QStringLiteral(GC_QSETTINGS_GLOBAL_GENERAL));
+    for (const QString &key :
+         CredentialSettings::credentialKeysForPrefix(
+             QStringLiteral(GC_QSETTINGS_GLOBAL_GENERAL))) {
+        migrateValue(key);
+    }
+}
+
+void GSettings::migrateAthleteCredentials(
+    const QString &athleteName)
+{
+    if (!credentialSettings || !newFormat) return;
+    const auto found = athlete.constFind(athleteName);
+    if (found == athlete.cend()) return;
+    QSettings *settings =
+        found.value()->getQSettings(ATHLETE_PRIVATE);
+    credentialSettings->migratePlaintext(
+        settings, credentialScopeForAthlete(athleteName),
+        QStringLiteral(GC_QSETTINGS_ATHLETE_PRIVATE));
+    for (const QString &key :
+         CredentialSettings::credentialKeysForPrefix(
+             QStringLiteral(GC_QSETTINGS_ATHLETE_PRIVATE))) {
+        migrateCValue(athleteName, key);
+    }
 }
 
 
 QVariant
 GSettings::value(const QObject * /*me*/, const QString key, const QVariant def) {
+
+    if (credentialSettings
+        && CredentialSettings::isCredentialKey(key)) {
+        QString plaintextKey = key;
+        int store;
+        int file;
+        plaintextKey = DetermineKey(plaintextKey, store, file);
+        if (newFormat) {
+            if (store != SETTINGS_GLOBAL
+                || !global || global->isEmpty()) {
+                return def;
+            }
+            return credentialSettings->value(
+                global->at(file), credentialScopeForGlobal(),
+                key, plaintextKey, def);
+        }
+        if (!key.startsWith(
+                QStringLiteral(GC_QSETTINGS_GLOBAL_GENERAL))) {
+            return def;
+        }
+        return credentialSettings->value(
+            systemsettings, credentialScopeForLegacy(QString()),
+            key, plaintextKey, def);
+    }
 
     QString keyVar = QString(key);
     if (newFormat) {
@@ -149,6 +339,28 @@ GSettings::value(const QObject * /*me*/, const QString key, const QVariant def) 
 void
 GSettings::setValue(QString key, QVariant value)
 {
+    if (credentialSettings
+        && CredentialSettings::isCredentialKey(key)) {
+        QString plaintextKey = key;
+        int store;
+        int file;
+        plaintextKey = DetermineKey(plaintextKey, store, file);
+        if (newFormat) {
+            if (store == SETTINGS_GLOBAL
+                && global && !global->isEmpty()) {
+                credentialSettings->setValue(
+                    global->at(file), credentialScopeForGlobal(),
+                    key, plaintextKey, value);
+            }
+        } else if (key.startsWith(
+                       QStringLiteral(GC_QSETTINGS_GLOBAL_GENERAL))) {
+            credentialSettings->setValue(
+                systemsettings, credentialScopeForLegacy(QString()),
+                key, plaintextKey, value);
+        }
+        return;
+    }
+
     QString keyVar = QString(key);
     if (newFormat) {
         int store;
@@ -176,6 +388,28 @@ GSettings::setValue(QString key, QVariant value)
 void
 GSettings::remove(const QString &key)
 {
+    if (credentialSettings
+        && CredentialSettings::isCredentialKey(key)) {
+        QString plaintextKey = key;
+        int store;
+        int file;
+        plaintextKey = DetermineKey(plaintextKey, store, file);
+        if (newFormat) {
+            if (store == SETTINGS_GLOBAL
+                && global && !global->isEmpty()) {
+                credentialSettings->remove(
+                    global->at(file), credentialScopeForGlobal(),
+                    key, plaintextKey);
+            }
+        } else if (key.startsWith(
+                       QStringLiteral(GC_QSETTINGS_GLOBAL_GENERAL))) {
+            credentialSettings->remove(
+                systemsettings, credentialScopeForLegacy(QString()),
+                key, plaintextKey);
+        }
+        return;
+    }
+
     QString keyVar = QString(key);
     if (newFormat) {
         int store;
@@ -203,6 +437,51 @@ QVariant
 GSettings::cvalue(QString athleteName, QString key, QVariant def) {
 
     if (athleteName.isNull() || athleteName.isEmpty()) return def;
+
+    if (credentialSettings
+        && CredentialSettings::isCredentialKey(key)) {
+        QString plaintextKey = key;
+        int store;
+        int file;
+        plaintextKey = DetermineKey(plaintextKey, store, file);
+        if (newFormat) {
+            if (store == SETTINGS_GLOBAL) {
+                if (!global || global->isEmpty()) return def;
+                return credentialSettings->value(
+                    global->at(file), credentialScopeForGlobal(),
+                    key, plaintextKey, def);
+            }
+            if (store == SETTINGS_ATHLETE) {
+                const auto found = athlete.constFind(athleteName);
+                if (found != athlete.cend()) {
+                    return credentialSettings->value(
+                        found.value()->getQSettings(file),
+                        credentialScopeForAthlete(athleteName),
+                        key, plaintextKey, def);
+                }
+                if (oldsystemsettings) {
+                    const QString legacyKey =
+                        athleteName + QLatin1Char('/') + plaintextKey;
+                    return credentialSettings->value(
+                        oldsystemsettings,
+                        credentialScopeForLegacy(athleteName),
+                        key, legacyKey, def);
+                }
+            }
+            return def;
+        }
+
+        const bool globalCredential =
+            store == SETTINGS_GLOBAL;
+        const QString storedKey = globalCredential
+            ? plaintextKey
+            : athleteName + QLatin1Char('/') + plaintextKey;
+        return credentialSettings->value(
+            systemsettings,
+            credentialScopeForLegacy(
+                globalCredential ? QString() : athleteName),
+            key, storedKey, def);
+    }
 
     QString keyVar = QString(key);
     if (newFormat) {
@@ -237,6 +516,42 @@ GSettings::cvalue(QString athleteName, QString key, QVariant def) {
 
 void
 GSettings::setCValue(QString athleteName, QString key, QVariant value) {
+
+    if (credentialSettings
+        && CredentialSettings::isCredentialKey(key)) {
+        QString plaintextKey = key;
+        int store;
+        int file;
+        plaintextKey = DetermineKey(plaintextKey, store, file);
+        if (newFormat) {
+            if (store == SETTINGS_GLOBAL
+                && global && !global->isEmpty()) {
+                credentialSettings->setValue(
+                    global->at(file), credentialScopeForGlobal(),
+                    key, plaintextKey, value);
+            } else if (store == SETTINGS_ATHLETE) {
+                const auto found = athlete.constFind(athleteName);
+                if (found != athlete.cend()) {
+                    credentialSettings->setValue(
+                        found.value()->getQSettings(file),
+                        credentialScopeForAthlete(athleteName),
+                        key, plaintextKey, value);
+                }
+            }
+        } else {
+            const bool globalCredential =
+                store == SETTINGS_GLOBAL;
+            const QString storedKey = globalCredential
+                ? plaintextKey
+                : athleteName + QLatin1Char('/') + plaintextKey;
+            credentialSettings->setValue(
+                systemsettings,
+                credentialScopeForLegacy(
+                    globalCredential ? QString() : athleteName),
+                key, storedKey, value);
+        }
+        return;
+    }
 
     QString keyVar = QString(key);
     if (newFormat) {
@@ -377,6 +692,7 @@ GSettings::initializeQSettingsGlobal(QString athletesRootDir) {
         upgradeGlobal();
     }
     syncQSettingsGlobal();
+    migrateGlobalCredentials();
 
 }
 
@@ -416,6 +732,7 @@ GSettings::initializeQSettingsAthlete(QString athletesRootDir, QString athleteNa
         }
         syncQSettingsAllAthletes();
     }
+    migrateAthleteCredentials(athleteName);
 }
 
 void
@@ -448,6 +765,8 @@ GSettings::syncQSettingsAllAthletes() {
         i.value()->getQSettings(ATHLETE_LAYOUT)->sync();
         i.value()->getQSettings(ATHLETE_PREFERENCES)->sync();
         i.value()->getQSettings(ATHLETE_PRIVATE)->sync();
+        CredentialSettings::hardenSettingsFile(
+            i.value()->getQSettings(ATHLETE_PRIVATE));
     }
 }
 
@@ -459,6 +778,8 @@ GSettings::syncQSettingsGlobal() {
     if (global->size() == 2) {
         global->at(GLOBAL_GENERAL)->sync();
         global->at(GLOBAL_TRAINMODE)->sync();
+        CredentialSettings::hardenSettingsFile(
+            global->at(GLOBAL_GENERAL));
     };
 }
 
@@ -466,6 +787,7 @@ void
 GSettings::syncQSettings() {
 
     systemsettings->sync();
+    CredentialSettings::hardenSettingsFile(systemsettings);
     syncQSettingsGlobal();
     syncQSettingsAllAthletes();
 
@@ -476,8 +798,13 @@ GSettings::clearGlobalAndAthletes() {
 
     if (!newFormat) return;
     syncQSettings();
+    qDeleteAll(*global);
+    qDeleteAll(athlete);
     global->clear();
     athlete.clear();
+    globalCredentialScopeId.clear();
+    athleteCredentialScopeIds.clear();
+    if (credentialSettings) credentialSettings->clearCache();
 }
 
 
@@ -500,7 +827,8 @@ GSettings::migrateValue(QString key) {
 
     QString oldKey = key;
     oldKey.remove(QRegularExpression("^<.*>"));
-    if (oldsystemsettings->contains(oldKey)) {
+    if (oldsystemsettings->contains(oldKey)
+        && !migrateLegacyCredential(QString(), key, oldKey)) {
         setValue(key, oldsystemsettings->value(oldKey));
     }
 }
@@ -510,8 +838,10 @@ GSettings::migrateCValue(QString athlete, QString key) {
 
     QString oldKey = key;
     oldKey.remove(QRegularExpression("^<.*>"));
-    if (oldsystemsettings->contains(athlete+"/"+oldKey)) {
-        setCValue(athlete, key, oldsystemsettings->value(athlete+"/"+oldKey));
+    const QString storedKey = athlete + QLatin1Char('/') + oldKey;
+    if (oldsystemsettings->contains(storedKey)
+        && !migrateLegacyCredential(athlete, key, storedKey)) {
+        setCValue(athlete, key, oldsystemsettings->value(storedKey));
     }
 }
 
@@ -519,8 +849,10 @@ void
 GSettings::migrateAndRenameCValue(QString athlete, QString wrongKey, QString key) {
 
     wrongKey.remove(QRegularExpression("^<.*>"));
-    if (oldsystemsettings->contains(athlete+"/"+wrongKey)) {
-        setCValue(athlete, key, oldsystemsettings->value(athlete+"/"+wrongKey));
+    const QString storedKey = athlete + QLatin1Char('/') + wrongKey;
+    if (oldsystemsettings->contains(storedKey)
+        && !migrateLegacyCredential(athlete, key, storedKey)) {
+        setCValue(athlete, key, oldsystemsettings->value(storedKey));
     }
 }
 
@@ -529,7 +861,8 @@ GSettings::migrateValueToCValue(QString athlete, QString key) {
 
     QString oldKey = key;
     oldKey.remove(QRegularExpression("^<.*>"));
-    if (oldsystemsettings->contains(oldKey)) {
+    if (oldsystemsettings->contains(oldKey)
+        && !migrateLegacyCredential(athlete, key, oldKey)) {
         setCValue(athlete, key, oldsystemsettings->value(oldKey));
     }
 }
@@ -541,8 +874,9 @@ GSettings::migrateCValueToValue(QString athlete, QString key) {
     if (!contains(key)) {
         QString oldKey = key;
         oldKey.remove(QRegularExpression("^<.*>"));
-        oldKey = athlete+"/"+oldKey;
-        if (oldsystemsettings->contains(oldKey)) {
+        oldKey = athlete + QLatin1Char('/') + oldKey;
+        if (oldsystemsettings->contains(oldKey)
+            && !migrateLegacyCredential(athlete, key, oldKey)) {
             setValue(key, oldsystemsettings->value(oldKey));
         }
     }

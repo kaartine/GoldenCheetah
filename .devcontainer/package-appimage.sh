@@ -50,6 +50,29 @@ rm -rf "${app_dir}"
 mkdir -p "${app_dir}" "${tools_dir}"
 install -m 0755 "${binary}" "${app_dir}/GoldenCheetah"
 install -m 0644 "${repo_root}/src/Resources/images/gc.png" "${app_dir}/gc.png"
+mkdir -p "${app_dir}/usr/share/doc/GoldenCheetah/licenses"
+install -m 0644 "${repo_root}/contrib/qtkeychain/COPYING" \
+    "${app_dir}/usr/share/doc/GoldenCheetah/licenses/QtKeychain-COPYING"
+
+# QtKeychain loads libsecret through QLibrary, so ELF dependency scanners do
+# not see it. Bundle the runtime explicitly or the vault silently disappears
+# on systems without a host libsecret installation.
+libsecret_libdir="$(pkg-config --variable=libdir libsecret-1)"
+libsecret_library="${libsecret_libdir}/libsecret-1.so.0"
+libsecret_copyright="/usr/share/doc/libsecret-1-0/copyright"
+if [[ ! -r "${libsecret_library}" ]]; then
+    echo "libsecret runtime not found: ${libsecret_library}" >&2
+    exit 1
+fi
+if [[ ! -r "${libsecret_copyright}" ]]; then
+    echo "libsecret copyright file not found: ${libsecret_copyright}" >&2
+    exit 1
+fi
+mkdir -p "${app_dir}/usr/lib"
+install -m 0644 "$(readlink -f "${libsecret_library}")" \
+    "${app_dir}/usr/lib/libsecret-1.so.0"
+install -m 0644 "${libsecret_copyright}" \
+    "${app_dir}/usr/share/doc/GoldenCheetah/licenses/libsecret-copyright"
 
 cat >"${app_dir}/GoldenCheetah.desktop" <<'EOF'
 [Desktop Entry]

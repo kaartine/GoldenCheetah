@@ -66,6 +66,7 @@ RUN python3 -m venv /opt/aqt \
 
 RUN apt-get update \
     && apt-get install --no-install-recommends -y \
+        libsecret-1-dev \
         libxcb-icccm4 \
         libxcb-keysyms1 \
         libxcb-shape0 \

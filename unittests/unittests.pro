@@ -6,6 +6,7 @@ exists(unittests.pri) {
 
 equals(GC_UNITTESTS, active) {
 	SUBDIRS += Core/athleteMigrationSafety \
+			   Core/credentialSettings \
 			   Core/localApiSecurity \
 			   Cloud/oauthCallbackPolicy \
 			   Cloud/openDataEndpointPolicy \
