@@ -1255,15 +1255,37 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-012: Secrets are logged or placed in URLs
 
-- Status: OPEN
-- Code: `src/Cloud/Azum.cpp:178`, `src/Cloud/Azum.cpp:310`,
-  `src/Cloud/OAuthDialog.cpp:307`, `src/Cloud/WithingsDownload.cpp:130`
+- Status: FIXED
+- Code: `src/Cloud/CloudCredentialTransport.{h,cpp}`,
+  `src/Cloud/{Azum,OAuthDialog,RideWithGPS,WithingsDownload}.cpp`, and
+  `unittests/Cloud/credentialTransportSafety`
 - Impact: Tokens/passwords can enter terminals, journald, crash reports, proxy
   logs, history, or support bundles.
-- Test: Capture Qt messages and network requests using sentinel credentials and
-  assert no secret occurs in logs or URLs.
-- Fix direction: Remove token logging, centralize redaction, and use
-  Authorization headers/body parameters.
+- Resolution: Removed credential values and raw token, upload, and health-data
+  payloads from the affected provider diagnostics. Withings measure requests
+  now send the access token only as an `Authorization: Bearer` header and the
+  date range in a form-encoded POST body. Ride with GPS credential exchange now
+  uses its documented API v1 token endpoint, API-key header, and JSON request
+  body instead of the legacy credential-bearing URL; the response parser
+  accepts the documented nested token and the legacy form for compatibility.
+  Diagnostics on these paths now contain event metadata only.
+- Test: `unittests/Cloud/credentialTransportSafety` first failed to build
+  because the requested transport helper did not exist. Its sentinel tests now
+  verify exact URLs, headers and bodies, reject every credential from URLs,
+  cover documented and legacy Ride with GPS token responses, and guard the
+  production call sites against the removed logging/query patterns. The
+  existing `athleteMigrationSafety` server now waits for the complete HTTP
+  body and proves the integrated Withings POST method, Bearer header, empty
+  query, and encoded date parameters.
+- Verification: The focused suite passes all 8 tests normally and under strict
+  ASan/UBSan/LSan with leak detection; the focused Withings integration passes,
+  and the Qt 6.8.3 release application compiles and links. Two complete release
+  matrix runs pass 1,949 tests in 54 test projects with zero failures, skips, or
+  blacklisted tests. The 166,402,552-byte AppImage reports
+  `V3.8-DEV2605 (5012)`, has SHA-256
+  `d359a6413c6aed1fdc7934960bb2fdbf675598e2c401ce43d9617c2a5309cecd`,
+  and remained running for its full isolated 15-second GUI smoke test; its only
+  log message was the pre-existing missing Finnish translator notice.
 
 ### PERF-001: Merge activity alignment is O(series * samples^2) on the UI thread
 

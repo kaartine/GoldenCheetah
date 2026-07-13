@@ -31,6 +31,7 @@ isEmpty(GC_CLOUD_SERVICE_SOURCE) {
 SOURCES = testAthleteMigrationSafety.cpp \
           AthleteMigrationTestStubs.cpp \
           CloudAutoDownloadTestSupport.cpp \
+          ../../../src/Cloud/CloudCredentialTransport.cpp \
           ../../../src/Cloud/LocalFileStore.cpp \
           ../../../src/Cloud/LocalFileStoreProcess.cpp \
           ../../../src/Cloud/MeasuresDownload.cpp \
@@ -49,6 +50,7 @@ SOURCES = testAthleteMigrationSafety.cpp \
 
 HEADERS = CloudAutoDownloadTestSupport.h \
           ../../../src/Cloud/CalendarDownload.h \
+          ../../../src/Cloud/CloudCredentialTransport.h \
           ../../../src/Cloud/CloudService.h \
           ../../../src/Cloud/LocalFileStore.h \
           ../../../src/Cloud/LocalFileStoreProcess.h \

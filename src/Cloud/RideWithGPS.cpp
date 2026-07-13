@@ -120,8 +120,6 @@ RideWithGPS::writeFile(QByteArray &, QString remotename, RideFile *ride)
     QDateTime rideDateTime = ride->startTime();
     QString out, data;
 
-    QString username = getSetting(GC_RWGPSUSER).toString();
-    QString password = getSetting(GC_RWGPSPASS).toString();
     QString auth_token = getSetting(GC_RWGPS_AUTH_TOKEN).toString();
 
     // application/json
@@ -190,7 +188,7 @@ RideWithGPS::writeFile(QByteArray &, QString remotename, RideFile *ride)
     out += data.replace("\"","\\\"");
     out += "\"}";
 
-    printd("out:%s\n", out.toLatin1().toStdString().c_str());
+    printd("Upload payload prepared\n");
 
     QUrl url = QUrl("https://ridewithgps.com/trips.json");
     QNetworkRequest request = QNetworkRequest(url);
@@ -216,7 +214,7 @@ RideWithGPS::writeFileCompleted()
     QNetworkReply *reply = static_cast<QNetworkReply*>(QObject::sender());
     QString response = reply->readAll();
 
-    printd("reply:%s\n", response.toStdString().c_str());
+    printd("Upload response received\n");
 
     bool uploadSuccessful = false;
     QString uploadError;

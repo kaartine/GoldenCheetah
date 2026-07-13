@@ -17,6 +17,7 @@
  */
 
 #include "WithingsDownload.h"
+#include "CloudCredentialTransport.h"
 #include "NetworkReplyWait.h"
 #include "WithingsReading.h"
 #include "MainWindow.h"
@@ -114,12 +115,12 @@ WithingsDownload::getBodyMeasures(QString &error, QDateTime from, QDateTime to, 
         request.setRawHeader("Content-Type", "application/x-www-form-urlencoded");
         QNetworkReply *tokenReply = nam->post(
             request, postData.toString(QUrl::FullyEncoded).toUtf8());
-        printd("url %s %s\n", url.toString().toStdString().c_str(), postData.toString().toStdString().c_str());
+        printd("Token request sent\n");
 
         if (!waitForReply(tokenReply, error, response))
             return false;
 
-        printd("response: %s\n", response.toStdString().c_str());
+        printd("Token response received\n");
 
 
         if (response.contains("\"access_token\"", Qt::CaseInsensitive))
@@ -137,26 +138,18 @@ WithingsDownload::getBodyMeasures(QString &error, QDateTime from, QDateTime to, 
                 if (userid != "") appsettings->setCValue(context->athlete->cyclist, GC_WIUSER, userid);
 
 
-                QUrlQuery params;
-
                 emit downloadStarted(100);
 
-                params.addQueryItem("action", "getmeas");
-                //params.addQueryItem("userid", userid);
-                params.addQueryItem("access_token", access_token);
-                params.addQueryItem("startdate", QString::number(from.toMSecsSinceEpoch()/1000));
-                params.addQueryItem("enddate", QString::number(to.toMSecsSinceEpoch()/1000));
+                const CloudCredentialTransport::Request transport =
+                    CloudCredentialTransport::makeWithingsMeasuresRequest(
+                        networkOptions.measuresEndpoint,
+                        access_token,
+                        from,
+                        to);
+                printd("Measures request sent\n");
 
-
-                QUrl url = networkOptions.measuresEndpoint;
-                url.setQuery(params);
-
-                printd("URL: %s\n", url.url().toStdString().c_str());
-
-                QNetworkRequest request(url);
-                //request.setRawHeader("Authorization", QString("Bearer %1").arg(access_token).toLatin1());
-
-                QNetworkReply *measuresReply = nam->get(request);
+                QNetworkReply *measuresReply = nam->post(
+                    transport.request, transport.body);
 
                 emit downloadProgress(50);
 
@@ -168,7 +161,7 @@ WithingsDownload::getBodyMeasures(QString &error, QDateTime from, QDateTime to, 
         }
 
     }
-    printd("response: %s\n", response.toStdString().c_str());
+    printd("Measures response received\n");
 
     QJsonParseError parseResult;
     if (response.contains("\"status\":0", Qt::CaseInsensitive)) {

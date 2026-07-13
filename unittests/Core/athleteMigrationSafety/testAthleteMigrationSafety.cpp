@@ -307,9 +307,31 @@ public:
                                         "gcRequest").toByteArray();
                             request.append(socket->readAll());
                             socket->setProperty("gcRequest", request);
+                            const int headerEnd =
+                                request.indexOf("\r\n\r\n");
                             if (socket->property(
                                     "gcResponded").toBool()
-                                || !request.contains("\r\n\r\n")) {
+                                || headerEnd < 0) {
+                                return;
+                            }
+
+                            int contentLength = 0;
+                            for (const QByteArray &line :
+                                 request.left(headerEnd).split('\n')) {
+                                const QByteArray header =
+                                    line.trimmed();
+                                const QByteArray prefix =
+                                    QByteArrayLiteral(
+                                        "Content-Length:");
+                                if (header.left(prefix.size()).compare(
+                                        prefix,
+                                        Qt::CaseInsensitive) == 0) {
+                                    contentLength = header.mid(
+                                        prefix.size()).trimmed().toInt();
+                                }
+                            }
+                            if (request.size()
+                                < headerEnd + 4 + contentLength) {
                                 return;
                             }
                             socket->setProperty("gcResponded", true);
@@ -322,6 +344,7 @@ public:
                                 paths.append(QString::fromUtf8(
                                     requestLine.at(1)));
                             }
+                            requests.append(request);
 
                             const int index = requestCountValue++;
                             const Response response =
@@ -359,6 +382,7 @@ public:
     bool isListening() const { return server.isListening(); }
     int requestCount() const { return requestCountValue; }
     QStringList requestPaths() const { return paths; }
+    QList<QByteArray> requestBytes() const { return requests; }
     QUrl endpoint(const QString &path) const
     {
         return QUrl(QStringLiteral("http://127.0.0.1:%1%2")
@@ -369,6 +393,7 @@ private:
     QTcpServer server;
     QList<Response> responses;
     QStringList paths;
+    QList<QByteArray> requests;
     int requestCountValue = 0;
 };
 
@@ -5010,12 +5035,15 @@ withingsSuccessfulResponseUpdatesTokensAndMeasures()
     const QString userId = appsettings->cvalue(
         cyclist, GC_WIUSER).toString();
     const QStringList requestPaths = server.requestPaths();
+    const QList<QByteArray> requestBytes =
+        server.requestBytes();
     athleteStorage.destroy();
 
     QVERIFY2(succeeded, qPrintable(error));
     QVERIFY(error.isEmpty());
     QCOMPARE(server.requestCount(), 2);
     QCOMPARE(requestPaths.size(), 2);
+    QCOMPARE(requestBytes.size(), 2);
     QCOMPARE(accessToken, QStringLiteral("access-2"));
     QCOMPARE(refreshToken, QStringLiteral("refresh-2"));
     QCOMPARE(userId, QStringLiteral("42"));
@@ -5030,18 +5058,25 @@ withingsSuccessfulResponseUpdatesTokensAndMeasures()
     QCOMPARE(requestPaths.first(), QStringLiteral("/token"));
     const QUrl measuresRequest(requestPaths.at(1));
     QCOMPARE(measuresRequest.path(), QStringLiteral("/measures"));
-    const QUrlQuery measuresQuery(measuresRequest);
+    QVERIFY(measuresRequest.query().isEmpty());
+    QVERIFY(requestBytes.at(1).startsWith(
+        QByteArrayLiteral("POST /measures HTTP/1.1\r\n")));
+    QVERIFY(requestBytes.at(1).toLower().contains(
+        QByteArrayLiteral(
+            "\r\nauthorization: bearer access-2\r\n")));
+    const int bodyOffset =
+        requestBytes.at(1).indexOf("\r\n\r\n") + 4;
+    QVERIFY(bodyOffset >= 4);
+    const QUrlQuery measuresParameters(QString::fromUtf8(
+        requestBytes.at(1).mid(bodyOffset)));
     QCOMPARE(
-        measuresQuery.queryItemValue(QStringLiteral("action")),
+        measuresParameters.queryItemValue(QStringLiteral("action")),
         QStringLiteral("getmeas"));
     QCOMPARE(
-        measuresQuery.queryItemValue(QStringLiteral("access_token")),
-        QStringLiteral("access-2"));
-    QCOMPARE(
-        measuresQuery.queryItemValue(QStringLiteral("startdate")),
+        measuresParameters.queryItemValue(QStringLiteral("startdate")),
         QString::number(from.toSecsSinceEpoch()));
     QCOMPARE(
-        measuresQuery.queryItemValue(QStringLiteral("enddate")),
+        measuresParameters.queryItemValue(QStringLiteral("enddate")),
         QString::number(to.toSecsSinceEpoch()));
 }
 

@@ -18,6 +18,7 @@
  */
 #include "Secrets.h"
 
+#include "CloudCredentialTransport.h"
 #include "OAuthDialog.h"
 #include "Athlete.h"
 #include "Context.h"
@@ -374,11 +375,8 @@ OAuthDialog::urlChanged(const QUrl &url)
 
                 authheader = QString("%1:%2").arg(GC_XERT_CLIENT_ID).arg(GC_XERT_CLIENT_SECRET);
             } else if (site == RIDEWITHGPS) {
-                urlstr = QString("https://ridewithgps.com/users/current.json");
-                params.addQueryItem("apikey", GC_RWGPS_API_KEY);
-                params.addQueryItem("version", "2");
-                params.addQueryItem("email", service->getSetting(GC_RWGPSUSER, "").toString());
-                params.addQueryItem("password", service->getSetting(GC_RWGPSPASS, "").toString());
+                urlstr = QStringLiteral(
+                    "https://ridewithgps.com/api/v1/auth_tokens");
 
             } else if (site == WITHINGS) {
 
@@ -412,7 +410,9 @@ OAuthDialog::urlChanged(const QUrl &url)
             }
 
             // all services will need us to send the temporary code received
-            params.addQueryItem("code", code);
+            if (site != RIDEWITHGPS) {
+                params.addQueryItem("code", code);
+            }
 
             data.append(params.query(QUrl::FullyEncoded).toUtf8());
 
@@ -435,10 +435,17 @@ OAuthDialog::urlChanged(const QUrl &url)
 
             QNetworkReply *reply;
             if (site == RIDEWITHGPS) {
-                tokenUrl.setQuery(data);
-                QNetworkRequest request =
-                    QNetworkRequest(tokenUrl);
-                reply = manager->get(request);
+                const CloudCredentialTransport::Request transport =
+                    CloudCredentialTransport::
+                        makeRideWithGpsAuthTokenRequest(
+                            tokenUrl,
+                            QStringLiteral(GC_RWGPS_API_KEY),
+                            service->getSetting(
+                                GC_RWGPSUSER, "").toString(),
+                            service->getSetting(
+                                GC_RWGPSPASS, "").toString());
+                reply = manager->post(
+                    transport.request, transport.body);
             } else {
                 QNetworkRequest request =
                     QNetworkRequest(tokenUrl);
@@ -520,10 +527,8 @@ OAuthDialog::networkRequestFinished(QNetworkReply *reply)
             document.object()["x_user_id"].toDouble();
     }
     if (site == RIDEWITHGPS) {
-        access_token =
-            document.object()["user"]
-                .toObject()["auth_token"]
-                .toString();
+        access_token = CloudCredentialTransport::
+            rideWithGpsAuthToken(document.object());
     }
     if (site == WITHINGS) {
         refresh_token =

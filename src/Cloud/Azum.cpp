@@ -118,7 +118,7 @@ Azum::open(QStringList &errors)
     }
 
     QByteArray r = reply->readAll();
-    printd("Got response: %s\n", r.data());
+    printd("Got token response\n");
 
     QJsonParseError parseError;
     QJsonDocument document = QJsonDocument::fromJson(r, &parseError);
@@ -175,7 +175,6 @@ Azum::readdir(QString path, QStringList &errors, QDateTime from, QDateTime to)
     }
 
     QString token = getSetting(GC_AZUM_ACCESS_TOKEN, "").toString();
-    qDebug() << "token" << token;
     QString baseUrl = QString("%1/api/goldencheetah/athletes/%2/activities/?")
           .arg(getSetting(GC_AZUM_URL, "https://training.azum.com").toString())
           .arg(athleteId);
@@ -307,7 +306,6 @@ Azum::listAthletes()
     QString next = QString("%1/api/goldencheetah/athletes/")
           .arg(getSetting(GC_AZUM_URL, "https://training.azum.com").toString());
 
-    qDebug() << "token: " << token;
     do {
         // request using csrf token + session id
         QNetworkRequest request(next);

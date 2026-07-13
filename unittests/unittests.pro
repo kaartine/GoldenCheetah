@@ -9,6 +9,7 @@ equals(GC_UNITTESTS, active) {
 			   Core/credentialSettings \
 			   Core/dataFilterSafety \
 			   Core/localApiSecurity \
+			   Cloud/credentialTransportSafety \
 			   Cloud/oauthCallbackPolicy \
 			   Cloud/openDataEndpointPolicy \
 			   Charts/mapPageSecurity \
