@@ -35,6 +35,7 @@ equals(GC_UNITTESTS, active) {
 			   FileIO/ttsReaderBounds \
 			   FileIO/wkoBounds \
 			   Gui/calendarData \
+			   Gui/mergeActivityDistanceCursor \
 			   Gui/mergeActivityAlignment \
 			   Gui/iconBundleSecurity \
 			   Gui/splitActivitySave \

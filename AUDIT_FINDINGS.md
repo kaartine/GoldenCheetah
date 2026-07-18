@@ -1289,17 +1289,26 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### GUI-004: Distance merge can index past the source activity
 
-- Status: OPEN
-- Code: `src/Gui/MergeActivityWizard.cpp:370`,
-  `src/Gui/MergeActivityWizard.cpp:379`
+- Status: FIXED
+- Code: `src/Gui/MergeActivityDistanceCursor.cpp:27`,
+  `src/Gui/MergeActivityWizard.cpp:315`, `src/Gui/MergeActivityWizard.cpp:357`
 - Impact: When the destination continues beyond the source's final distance, or
   the source is empty, the scan reaches `dataPoints().count()` and then indexes
   that element. Debug builds assert; release builds can crash or access invalid
   memory while combining activities.
-- Test: Merge destination distances `{0, 1, 2}` with source distances
-  `{0, 1}` under ASan, and cover an empty source.
-- Fix direction: Treat source exhaustion as an explicit boundary and never
-  dereference `j` unless it is in range.
+- Test: Exercise exact and in-between destination distances, past-end targets,
+  an empty source, and null source entries. Verify that the cursor stays
+  exhausted and never exposes an invalid index.
+- Resolution: A monotonic source cursor now returns either an in-range sample
+  pointer or null. Distance merge skips interpolation and source-series copies
+  when no source sample covers the destination distance.
+- Verification: The regression project first failed in RED because the
+  production cursor did not exist. The focused normal and strict ASan/UBSan/LSan
+  suites each pass 6 tests. The Qt 6.8.3 release application builds and links
+  both changed production objects. The complete matrix passes 1,971 tests
+  across 56 projects with zero failures, skips, blacklists, or sanitizer reports.
+  The packaged AppImage (`fde4ebafcbd8742e305c826615dcda04403132e8f9610b1506493af29b2aeb46`)
+  also remained running for its full isolated 15-second X11 smoke test.
 
 ### GUI-005: Failed resampling is accepted and later dereferenced
 

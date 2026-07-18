@@ -650,7 +650,7 @@ HEADERS += Gui/AboutDialog.h Gui/AddIntervalDialog.h Gui/AnalysisSidebar.h Gui/C
            Gui/IntervalTreeView.h Gui/LTMSidebar.h Gui/MainWindow.h Gui/NewAthleteWizard.h Gui/Pages.h Gui/RideNavigator.h Gui/RideNavigatorProxy.h \
            Gui/SaveDialogs.h Gui/SearchBox.h Gui/SearchFilterBox.h Gui/SolveCPDialog.h Gui/AthleteTab.h Gui/AbstractView.h Gui/ToolsRhoEstimator.h \
            Gui/Views.h Gui/PerspectiveStateSource.h Gui/TrainPerspectiveState.h Gui/BatchProcessingDialog.h Gui/DownloadRideDialog.h Gui/ManualActivityWizard.h Gui/NewSideBar.h \
-           Gui/MergeActivityAlignment.h Gui/MergeActivityWizard.h Gui/RideImportWizard.h Gui/SplitActivitySave.h Gui/SplitActivityWizard.h Gui/SplitRideData.h \
+           Gui/MergeActivityAlignment.h Gui/MergeActivityDistanceCursor.h Gui/MergeActivityWizard.h Gui/RideImportWizard.h Gui/SplitActivitySave.h Gui/SplitActivityWizard.h Gui/SplitRideData.h \
            Gui/SolverDisplay.h Gui/MetricSelect.h \
            Gui/AddTileWizard.h Gui/NavigationModel.h Gui/AthleteView.h Gui/AthleteConfigDialog.h Gui/AthletePages.h Gui/Perspective.h \
            Gui/PerspectiveDialog.h Gui/SplashScreen.h Gui/StyledItemDelegates.h Gui/MetadataDialog.h Gui/ActionButtonBox.h \
@@ -770,7 +770,7 @@ SOURCES += Gui/AboutDialog.cpp Gui/AddIntervalDialog.cpp Gui/AnalysisSidebar.cpp
            Gui/IntervalTreeView.cpp Gui/LTMSidebar.cpp Gui/MainWindow.cpp Gui/NewAthleteWizard.cpp Gui/Pages.cpp Gui/RideNavigator.cpp Gui/SaveDialogs.cpp \
            Gui/SearchBox.cpp Gui/SearchFilterBox.cpp Gui/SolveCPDialog.cpp Gui/AthleteTab.cpp Gui/AbstractView.cpp Gui/ToolsRhoEstimator.cpp Gui/Views.cpp Gui/PerspectiveStateSource.cpp Gui/TrainPerspectiveState.cpp \
            Gui/BatchProcessingDialog.cpp Gui/DownloadRideDialog.cpp Gui/ManualActivityWizard.cpp Gui/EditUserMetricDialog.cpp Gui/NewSideBar.cpp \
-           Gui/MergeActivityAlignment.cpp Gui/MergeActivityWizard.cpp Gui/RideImportWizard.cpp Gui/SplitActivitySave.cpp Gui/SplitActivityWizard.cpp Gui/SplitRideData.cpp \
+           Gui/MergeActivityAlignment.cpp Gui/MergeActivityDistanceCursor.cpp Gui/MergeActivityWizard.cpp Gui/RideImportWizard.cpp Gui/SplitActivitySave.cpp Gui/SplitActivityWizard.cpp Gui/SplitRideData.cpp \
            Gui/SolverDisplay.cpp Gui/MetricSelect.cpp \
            Gui/AddTileWizard.cpp Gui/NavigationModel.cpp Gui/AthleteView.cpp Gui/AthleteConfigDialog.cpp Gui/AthletePages.cpp Gui/Perspective.cpp \
            Gui/PerspectiveDialog.cpp Gui/SplashScreen.cpp Gui/StyledItemDelegates.cpp Gui/MetadataDialog.cpp Gui/ActionButtonBox.cpp \

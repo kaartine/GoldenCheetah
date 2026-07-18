@@ -25,6 +25,7 @@
 #include "MainWindow.h"
 #include "HelpWhatsThis.h"
 #include "LocationInterpolation.h"
+#include "MergeActivityDistanceCursor.h"
 
 #include <utility>
 
@@ -311,8 +312,8 @@ MergeActivityWizard::mergeRideSamplesByDistance()
     RideFilePoint last;
 
     GeoPointInterpolator gpi;
+    MergeActivityDistance::SourceCursor sourceCursor(ride2->dataPoints());
 
-    int j = 0;  // copy index
     int ii = 0; // interpolation index
     int ride1nextdistanceindex = 0;
     double ride1nextdistance = 0.0;
@@ -353,33 +354,27 @@ MergeActivityWizard::mergeRideSamplesByDistance()
             }
         }
 
-        // Additional samples to interpolator
-        while (gpi.WantsInput(add.km)) {
-            if (ii < ride2->dataPoints().count()) {
-                const RideFilePoint * pii = (ride2->dataPoints()[ii]);
-                geolocation geo(pii->lat, pii->lon, pii->alt);
-                gpi.Push(pii->km, geo);
+        const RideFilePoint *source = sourceCursor.atOrAfter(add.km);
+        if (source) {
+            // Additional samples to interpolator
+            while (gpi.WantsInput(add.km)) {
+                if (ii < ride2->dataPoints().count()) {
+                    const RideFilePoint *point = ride2->dataPoints().at(ii++);
+                    if (!point) continue;
 
-                ii++;
-            } else {
-                gpi.NotifyInputComplete();
-                break;
+                    geolocation geo(point->lat, point->lon, point->alt);
+                    gpi.Push(point->km, geo);
+                } else {
+                    gpi.NotifyInputComplete();
+                    break;
+                }
             }
-        }
 
-        // Maintain ride2 copy index
-        while ((j < ride2->dataPoints().count()) && (ride2->dataPoints()[j]->km < add.km)) {
-            j++;
-        }
+            // Compute interpolated location from current distance.
+            double interpSlope = 0.;
+            geolocation interpLoc = gpi.Location(add.km, interpSlope);
 
-        // Compute interpolated location from current distance.
-        double interpSlope = 0.;
-        geolocation interpLoc = gpi.Location(add.km, interpSlope);
-
-        RideFilePoint source = *(ride2->dataPoints()[j]);
-
-        // fold in ride 2 values
-        {
+            // fold in ride 2 values
             // copy across the data we want
             QMapIterator<RideFile::SeriesType, QCheckBox*> io(rightSeries);
             while (io.hasNext()) {
@@ -401,7 +396,7 @@ MergeActivityWizard::mergeRideSamplesByDistance()
                         add.setValue(io.key(), interpSlope * 100);
                         break;
                     default:
-                        add.setValue(io.key(), source.value(io.key()));
+                        add.setValue(io.key(), source->value(io.key()));
                         break;
                     }
                 }
