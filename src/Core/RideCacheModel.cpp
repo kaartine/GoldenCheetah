@@ -26,6 +26,8 @@
 
 #include "RideCacheModel.h"
 
+#include <algorithm>
+
 
 static constexpr int highestFixed = 6;
 
@@ -140,8 +142,42 @@ RideCacheModel::itemChanged(RideItem *item)
     context->tab->view(1)->sidebar()->update();
 }
 
-void RideCacheModel::beginReset() { beginResetModel(); }
+void RideCacheModel::beginReset()
+{
+    rideCache->invalidateStartupSnapshots();
+    beginResetModel();
+}
+
 void RideCacheModel::endReset() { endResetModel(); }
+
+void RideCacheModel::startInsert(int first, int last)
+{
+    beginInsertRows(QModelIndex(), first, last);
+}
+
+void RideCacheModel::endInsert() { endInsertRows(); }
+
+void RideCacheModel::rowsChanged(QVector<int> rows)
+{
+    if (rows.isEmpty() || columns_ <= 0) return;
+
+    std::sort(rows.begin(), rows.end());
+    rows.erase(std::unique(rows.begin(), rows.end()), rows.end());
+
+    int first = rows.constFirst();
+    int last = first;
+    for (qsizetype index = 1; index < rows.size(); ++index) {
+        if (rows.at(index) == last + 1) {
+            last = rows.at(index);
+            continue;
+        }
+        emit dataChanged(
+            createIndex(first, 0), createIndex(last, columns_ - 1));
+        first = last = rows.at(index);
+    }
+    emit dataChanged(
+        createIndex(first, 0), createIndex(last, columns_ - 1));
+}
 
 void 
 RideCacheModel::itemAdded(RideItem*)
@@ -154,6 +190,7 @@ RideCacheModel::itemAdded(RideItem*)
 void
 RideCacheModel::startRemove(int index)
 {
+    rideCache->invalidateStartupSnapshots();
     beginRemoveRows(QModelIndex(), index, index);
 }
 

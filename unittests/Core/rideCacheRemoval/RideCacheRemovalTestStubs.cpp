@@ -329,6 +329,18 @@ void RideCacheModel::itemAdded(RideItem *) {}
 void RideCacheModel::beginReset() { beginResetModel(); }
 void RideCacheModel::endReset() { endResetModel(); }
 
+void RideCacheModel::startInsert(int first, int last)
+{
+    beginInsertRows(QModelIndex(), first, last);
+}
+
+void RideCacheModel::endInsert()
+{
+    endInsertRows();
+}
+
+void RideCacheModel::rowsChanged(QVector<int>) {}
+
 void RideCacheModel::startRemove(int row)
 {
     beginRemoveRows(QModelIndex(), row, row);

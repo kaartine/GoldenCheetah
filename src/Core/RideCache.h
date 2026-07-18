@@ -24,13 +24,19 @@
 #include "RideFile.h"
 #include "RideItem.h"
 #include "RideCachePersistence.h"
+#include "RideCacheStartup.h"
 #include "PDModel.h"
 
+#include <atomic>
 #include <functional>
+#include <memory>
 
 #include <QVector>
 #include <QThread>
 #include <QPointer>
+#include <QSemaphore>
+#include <QMultiHash>
+#include <QHash>
 
 #include <QFuture>
 #include <QFutureWatcher>
@@ -39,7 +45,9 @@
 class Context;
 class LTMPlot;
 class RideCacheRefreshThread;
+class RideCacheLoader;
 class Specification;
+class RideCacheSnapshotBatch;
 class AthleteBest;
 class RideCacheModel;
 class Estimator;
@@ -90,8 +98,8 @@ class RideCache : public QObject
         // how is update going?
         QMutex updateMutex;
         int updates; // for watching progress
-        int nextRefresh(); // returns -1 when all done
-        void threadCompleted(RideCacheRefreshThread*);
+        int nextRefresh(quint64 generation);
+        void threadCompleted(RideCacheRefreshThread*, quint64 generation);
 
         // the ride list
 	    QVector<RideItem*>&rides() { return rides_; } 
@@ -191,7 +199,7 @@ class RideCache : public QObject
         void postLoad();
         void save(bool opendata=false, QString filename="");
 
-        // clean up refresh threads
+        // Kept for test/link compatibility; completion is generation-aware.
         void cleanupThread(RideCacheRefreshThread *thread);
 
         // find entry quickly
@@ -218,7 +226,8 @@ class RideCache : public QObject
     signals:
 
         void modelProgress(int, int); // let others know when we're refreshing the model estimates
-        void loadComplete(); // when loading the cache completes...
+        void loadComplete(); // the file index and model are ready
+        void startupLoadFinished(); // persisted metadata has been restored
 
         // us telling the world the item changed
         void itemChanged(RideItem*);
@@ -234,7 +243,9 @@ class RideCache : public QObject
         friend class ::RideItem; // adds to deletelist in destructor
         friend class ::NavigationModel; // checks deletelist during redo/undo
         friend class ::RideCacheRefreshThread;
+        friend class ::RideCacheModel;
 
+        friend class ::RideCacheLoader;
         Context *context;
         QDir directory, plannedDirectory;
 
@@ -242,8 +253,8 @@ class RideCache : public QObject
         // delete_ is a list of items to garbage collect (delete later)
         // deletelist is a list of items that no longer exist (deleted)
         QVector<RideItem*> rides_, reverse_, delete_, deletelist;
-        RideCacheModel *model_;
-        bool exiting;
+        RideCacheModel *model_ = nullptr;
+        bool exiting = false;
 	    double progress_; // percent
 
         QVector<RideCacheRefreshThread*> refreshThreads;
@@ -257,6 +268,23 @@ class RideCache : public QObject
             AlreadyArchived
         };
 
+        void appendStartupFiles(
+            const std::shared_ptr<
+                QVector<RideCacheStartup::IndexedFile>> &files);
+        void startupIndexComplete();
+        bool queueStartupSnapshots(
+            const std::shared_ptr<RideCacheSnapshotBatch> &batch);
+        void applyStartupSnapshots(
+            const std::shared_ptr<RideCacheSnapshotBatch> &batch);
+        RideItem *startupItemFor(
+            const QString &fileName,
+            const QDateTime &dateTime) const;
+        void invalidateStartupSnapshots();
+        QStringList startupRideFiles(const QDir &directory) const;
+
+        void startLatestRefresh();
+        void interruptActiveRefresh();
+
         bool removeRideEntry(
             const QString &filenameToDelete,
             RideFileDisposition disposition);
@@ -264,7 +292,19 @@ class RideCache : public QObject
         bool isValidLink(RideItem *item1, RideItem *item2, QString &error);
         RideItem* copyPlannedRideFile(RideItem *sourceItem, const QDate &newDate, const QTime &newTime, QString &error);
 
+        RideCacheStartup::RefreshGeneration refreshGeneration_;
+        QMultiHash<QString, RideItem*> startupItemsByFile_;
+        QHash<RideItem*, int> startupRows_;
+        std::atomic<qsizetype> startupExpectedRideCount_{0};
+        QSemaphore startupSnapshotSlots_{
+            RideCacheStartup::MaximumPendingSnapshotBatches};
+        QThread *startupLoader_ = nullptr;
+        bool startupIndexReady_ = false;
+        bool startupLoadFinished_ = false;
+        bool startupSnapshotsInvalidated_ = false;
         bool isCancelled = false;
+        bool refreshChanged_ = false;
+        bool refreshNotificationActive_ = false;
         QThread *saveThread_ = nullptr;
         QObject *saveWorker_ = nullptr;
 };
@@ -283,7 +323,8 @@ class AthleteBest
 class RideCacheRefreshThread : public QThread
 {
     public:
-        RideCacheRefreshThread(RideCache *cache);
+        RideCacheRefreshThread(
+            RideCache *cache, quint64 generation);
 
     protected:
 
@@ -292,6 +333,7 @@ class RideCacheRefreshThread : public QThread
 
     private:
         QPointer<RideCache> cache;
+        quint64 generation;
 };
 
 #endif // _GC_RideCache_h

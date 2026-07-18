@@ -19,6 +19,7 @@
 
 #include "RideDB.h"
 #include "RideCachePersistence.h"
+#include "RideCacheSnapshot.h"
 #include "RideFileCache.h"
 #include "SpecialFields.h"
 #include "Settings.h"
@@ -86,16 +87,23 @@ ride: '{' rideelement_list '}'                                  {
                                                                         jc->api->writeRideLine(jc->item, jc->request, jc->response);
                                                                     #endif
                                                                     } else {
-                                                                        double progress= round(double(jc->loading++) / double(jc->cache->rides().count()) * 100.0f);
+                                                                        const qsizetype expected = qMax<qsizetype>(1, jc->expectedRides);
+                                                                        const double progress = qMin(
+                                                                            100.0,
+                                                                            round(double(++jc->loading) / double(expected) * 100.0));
                                                                         if (progress > jc->lastProgressUpdate) {
                                                                             jc->context->notifyLoadProgress(jc->folder,progress);
                                                                             jc->lastProgressUpdate = progress;
                                                                         }
 
-                                                                        // find entry and update it
-                                                                        int index=jc->cache->find(&jc->item);
-                                                                        if (index==-1)  qDebug()<<"unable to load:"<<jc->item.fileName<<jc->item.dateTime<<jc->item.weight;
-                                                                        else  jc->cache->rides().at(index)->setFrom(jc->item);
+                                                                        if (jc->parsedRide) {
+                                                                            if (!jc->parsedRide(jc->item)) YYABORT;
+                                                                        } else {
+                                                                            // Legacy synchronous parser caller.
+                                                                            int index=jc->cache->find(&jc->item);
+                                                                            if (index==-1)  qDebug()<<"unable to load:"<<jc->item.fileName<<jc->item.dateTime<<jc->item.weight;
+                                                                            else  jc->cache->rides().at(index)->setFrom(jc->item);
+                                                                        }
                                                                     }
 
                                                                     // now set our ride item clean again, so we don't
@@ -349,6 +357,28 @@ RideCache::load()
         jc->loading = 0;
         jc->lastProgressUpdate = 0.0;
         jc->folder = context->athlete->home->root().canonicalPath();
+        jc->expectedRides = startupExpectedRideCount_.load(
+            std::memory_order_acquire);
+
+        auto snapshotBatch =
+            std::make_shared<RideCacheSnapshotBatch>();
+        jc->parsedRide = [this, &snapshotBatch](RideItem &item) {
+            if (QThread::currentThread()->isInterruptionRequested()) {
+                return false;
+            }
+
+            snapshotBatch->append(
+                RideCacheItemSnapshot::takeFrom(item));
+            if (snapshotBatch->size()
+                >= RideCacheStartup::BatchSize) {
+                if (!queueStartupSnapshots(snapshotBatch)) {
+                    return false;
+                }
+                snapshotBatch =
+                    std::make_shared<RideCacheSnapshotBatch>();
+            }
+            return true;
+        };
 
         // clean item
         jc->item.path = directory.canonicalPath(); // TODO use plannedDirectory for planned
@@ -371,10 +401,19 @@ RideCache::load()
         // parse it
         RideDBparse(jc);
 
+        if (!snapshotBatch->isEmpty()) {
+            queueStartupSnapshots(snapshotBatch);
+        }
+
         // clean up
         RideDBlex_destroy(scanner);
+        for (IntervalItem *interval : jc->item.intervals()) {
+            delete interval;
+        }
+        jc->item.clearIntervals();
 
         // regardless of errors we're done !
+        jc->item.context = nullptr;
         delete jc;
 
         return;

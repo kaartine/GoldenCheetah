@@ -37,6 +37,7 @@ class IntervalSummaryWindow;
 class Context;
 class UserData;
 class ComparePane;
+class RideCacheItemSnapshot;
 
 class RideItem : public QObject
 {
@@ -53,6 +54,7 @@ class RideItem : public QObject
         friend class ::IntervalSummaryWindow;
         friend class ::UserData;
         friend class ::ComparePane;
+        friend class ::RideCacheItemSnapshot;
 
         // ridefile
         RideFile *ride_;

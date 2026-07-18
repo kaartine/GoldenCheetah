@@ -26,6 +26,7 @@
 #include "RideItem.h"
 #include "IntervalItem.h"
 #include <stdio.h>
+#include <functional>
 #include <QDebug>
 #include <QString>
 #include "JsonRideFile.h" // for DATETIME_FORMAT
@@ -72,6 +73,7 @@ struct RideDBContext {
     // naming conventions as yacc/lex -p
     RideItem item;
     IntervalItem interval;
+    std::function<bool(RideItem &)> parsedRide;
 
     // term state data is held in these variables
     QString JsonString;
@@ -82,6 +84,7 @@ struct RideDBContext {
     // is cache/rideDB.json an older version ?
     bool old;
     int loading;
+    qsizetype expectedRides = 0;
 
     // tracks the last progress update sent
     double lastProgressUpdate;

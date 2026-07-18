@@ -1404,13 +1404,38 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### PERF-003: RideCache blocks startup and repeatedly scans the full library
 
-- Status: OPEN
-- Code: `src/Core/RideCache.cpp:111`, `src/Core/Athlete.cpp:180`,
-  `src/Core/RideCache.cpp:708`
-- Impact: Large libraries delay time-to-interactive and configuration changes.
-- Test: Measure cold/warm startup and invalidation at 1k/10k/50k activities.
-- Fix direction: Incremental background loading, generation-based cancellation,
-  and dependency-specific invalidation.
+- Status: FIXED
+- Code: `src/Core/RideCache.cpp`, `src/Core/RideCache.h`,
+  `src/Core/RideCacheModel.cpp`, `src/Core/RideDB.y`,
+  `src/Core/RideCacheSnapshot.cpp`, and
+  `src/Core/RideCacheStartup.h`
+- Impact: Discovering and sorting every activity blocked athlete construction.
+  Restoring the persisted cache then delayed all remaining startup work, while
+  broad configuration changes synchronously cancelled refresh workers and
+  rescanned the complete library.
+- Regression test: The RED build failed because the production startup helper
+  did not exist. The completed focused suite measures cold and warm indexing at
+  1,000, 10,000, and 50,000 activities; verifies 512-item batches and a maximum
+  of four queued snapshot batches; rejects stale snapshot targets; verifies
+  dependency-specific invalidation; and exercises superseded and cancelled
+  refresh generations.
+- Resolution: File discovery, timestamp indexing, and persisted-cache parsing
+  now run on a background loader. The model receives bounded incremental
+  inserts, becomes interactive after the sorted file index is available, and
+  receives move-only cache snapshots through a bounded GUI queue. Snapshots
+  apply only to the same untouched activity. Refresh requests now coalesce by
+  generation, interrupt superseded workers without blocking the GUI, and scan
+  only for metric dependencies; cosmetic metadata and color changes no longer
+  trigger a full metric refresh.
+- Verification: 12 focused tests passed normally and under strict
+  ASan/UBSan/LSan with no sanitizer reports. Fresh production and full release
+  builds succeeded, and all 59 unit-test projects passed (1,999 passed, 0
+  failed, 0 skipped, 0 blacklisted). The 166,451,704-byte AppImage reports
+  `V3.8-DEV2605 (5012)` and has SHA-256
+  `ea734a57d2d96a61420710480ecf94301ecae3afa05e54a2e14a3381890b83cc`.
+  It remained stable for a 20-second isolated X11 launch and a 45-second launch
+  against a copied real athlete profile; neither run produced a crash, cache
+  parser error, or Qt linkage error.
 
 ### PERF-004: DataFilter leaks models and its GSL RNG
 

@@ -17,6 +17,7 @@
  */
 #include "RideCache.h"
 #include "RideCacheBulkMerge.h"
+#include "RideCacheSnapshot.h"
 
 #include "Context.h"
 #include "Athlete.h"
@@ -25,6 +26,7 @@
 #include "Specification.h"
 #include "DataProcessor.h"
 #include "Estimator.h"
+#include "Colors.h"
 
 #include "Route.h"
 
@@ -49,19 +51,90 @@
 #include <QXmlSimpleReader>
 
 // for sorting
-bool rideCacheGreaterThan(const RideItem *a, const RideItem *b) { return a->dateTime > b->dateTime; }
 bool rideCacheLessThan(const RideItem *a, const RideItem *b) { return a->dateTime < b->dateTime; }
+
+QStringList
+RideCache::startupRideFiles(const QDir &directory) const
+{
+    return RideFileFactory::instance().listRideFiles(directory);
+}
 
 class RideCacheLoader : public QThread
 {
 public:
+    explicit RideCacheLoader(RideCache *cache)
+        : QThread(cache),
+          cache(cache),
+          activityDirectory(cache->directory),
+          plannedDirectory(cache->plannedDirectory)
+    {
+    }
 
-    RideCacheLoader(RideCache *cache) : cache(cache) {}
-    void run() { cache->load(); }
+    void run() override
+    {
+        const QString activityPath =
+            activityDirectory.canonicalPath();
+        const QString plannedPath =
+            plannedDirectory.canonicalPath();
+        QVector<RideCacheStartup::IndexedFile> files =
+            RideCacheStartup::buildIndex(
+                cache->startupRideFiles(activityDirectory),
+                activityPath,
+                cache->startupRideFiles(plannedDirectory),
+                plannedPath,
+                [](const QString &name, QDateTime *dateTime) {
+                    return RideFile::parseRideFileName(
+                        name, dateTime);
+                });
+
+        cache->startupExpectedRideCount_.store(
+            files.size(), std::memory_order_release);
+        for (const RideCacheStartup::BatchRange &range :
+             RideCacheStartup::batchRanges(
+                 files.size(),
+                 RideCacheStartup::BatchSize)) {
+            if (isInterruptionRequested()) return;
+            auto batch = std::make_shared<
+                QVector<RideCacheStartup::IndexedFile>>(
+                    files.mid(range.first, range.count));
+            QMetaObject::invokeMethod(
+                cache,
+                [target = cache, batch]() {
+                    if (!target->exiting) {
+                        target->appendStartupFiles(batch);
+                    }
+                },
+                Qt::QueuedConnection);
+        }
+        files.clear();
+        files.squeeze();
+
+        if (isInterruptionRequested()) return;
+
+        QMetaObject::invokeMethod(
+            cache,
+            [target = cache]() {
+                if (!target->exiting) {
+                    target->startupIndexComplete();
+                }
+            },
+            Qt::QueuedConnection);
+
+        cache->load();
+        if (isInterruptionRequested()) return;
+
+        QMetaObject::invokeMethod(
+            cache,
+            [target = cache]() {
+                if (!target->exiting) target->postLoad();
+            },
+            Qt::QueuedConnection);
+    }
 
 private:
-
-        RideCache *cache;
+    RideCache *cache;
+    QDir activityDirectory;
+    QDir plannedDirectory;
 };
 
 RideCache::RideCache(Context *context) : context(context)
@@ -106,70 +179,144 @@ RideCache::RideCache(Context *context) : context(context)
         SpecialFields::getInstance().reloadFields();
     }
 
-    // set the list
-    // populate ride list
-    RideItem *last = NULL;
-    QStringListIterator i(RideFileFactory::instance().listRideFiles(directory));
-    while (i.hasNext()) {
-        QString name = i.next();
-        QDateTime dt;
-        if (RideFile::parseRideFileName(name, &dt)) {
-            last = new RideItem(directory.canonicalPath(), name, dt, context, false);
-
-            connect(last, SIGNAL(rideDataChanged()), this, SLOT(itemChanged()));
-            connect(last, SIGNAL(rideMetadataChanged()), this, SLOT(itemChanged()));
-
-            rides_ << last;
-        }
-    }
-
-    // set the list
-    // populate the planned ride list
-    QStringListIterator j(RideFileFactory::instance().listRideFiles(plannedDirectory));
-    while (j.hasNext()) {
-        QString name = j.next();
-        QDateTime dt;
-        if (RideFile::parseRideFileName(name, &dt)) {
-            last = new RideItem(plannedDirectory.canonicalPath(), name, dt, context, true);
-
-            connect(last, SIGNAL(rideDataChanged()), this, SLOT(itemChanged()));
-            connect(last, SIGNAL(rideMetadataChanged()), this, SLOT(itemChanged()));
-
-            rides_ << last;
-        }
-    }
-
-    // now sort it - we need to use find on it
-    std::sort(rides_.begin(), rides_.end(), rideCacheLessThan);
-
-    // load the store - will unstale once cache restored
-    RideCacheLoader *rideCacheLoader = new RideCacheLoader(this);
-    connect(rideCacheLoader, SIGNAL(finished()), this, SLOT(postLoad()));
-    connect(rideCacheLoader, SIGNAL(finished()), this, SIGNAL(loadComplete()));
-    rideCacheLoader->start();
+    model_ = new RideCacheModel(context, this);
+    first = true;
+    connect(
+        context, SIGNAL(refreshEnd()),
+        this, SLOT(initEstimates()));
+    connect(
+        context, SIGNAL(configChanged(qint32)),
+        this, SLOT(configChanged(qint32)));
 
     saveThread_ = new QThread(this);
     saveWorker_ = new QObject();
     saveWorker_->moveToThread(saveThread_);
     saveThread_->start();
+
+    startupLoader_ = new RideCacheLoader(this);
+    startupLoader_->start();
+}
+
+void
+RideCache::appendStartupFiles(
+    const std::shared_ptr<
+        QVector<RideCacheStartup::IndexedFile>> &files)
+{
+    if (!files || files->isEmpty()) return;
+
+    const int firstRow = rides_.size();
+    model_->startInsert(
+        firstRow, firstRow + files->size() - 1);
+    for (const RideCacheStartup::IndexedFile &file : *files) {
+        QDateTime dateTime = file.dateTime;
+        auto *item = new RideItem(
+            file.path, file.fileName, dateTime,
+            context, file.planned);
+        connect(
+            item, SIGNAL(rideDataChanged()),
+            this, SLOT(itemChanged()));
+        connect(
+            item, SIGNAL(rideMetadataChanged()),
+            this, SLOT(itemChanged()));
+        rides_.append(item);
+        startupItemsByFile_.insert(item->fileName, item);
+        startupRows_.insert(item, rides_.size() - 1);
+    }
+    model_->endInsert();
+}
+
+void
+RideCache::startupIndexComplete()
+{
+    if (startupIndexReady_) return;
+    startupIndexReady_ = true;
+    emit loadComplete();
+}
+
+bool
+RideCache::queueStartupSnapshots(
+    const std::shared_ptr<RideCacheSnapshotBatch> &batch)
+{
+    if (!batch || batch->isEmpty()) return true;
+
+    QThread *loaderThread = QThread::currentThread();
+    while (!startupSnapshotSlots_.tryAcquire(1, 50)) {
+        if (loaderThread->isInterruptionRequested()) return false;
+    }
+
+    const bool queued = QMetaObject::invokeMethod(
+        this,
+        [this, batch]() {
+            if (!exiting) applyStartupSnapshots(batch);
+            startupSnapshotSlots_.release();
+        },
+        Qt::QueuedConnection);
+    if (!queued) {
+        startupSnapshotSlots_.release();
+        loaderThread->requestInterruption();
+    }
+    return queued;
+}
+
+RideItem *
+RideCache::startupItemFor(
+    const QString &fileName,
+    const QDateTime &dateTime) const
+{
+    const QList<RideItem*> candidates =
+        startupItemsByFile_.values(fileName);
+    RideItem *match = nullptr;
+    for (RideItem *item : candidates) {
+        if (!item || item->dateTime != dateTime) continue;
+        if (match) {
+            // The persisted format cannot distinguish identical planned
+            // and completed entries. Refresh both instead of guessing.
+            return nullptr;
+        }
+        match = item;
+    }
+    return match;
+}
+
+void
+RideCache::invalidateStartupSnapshots()
+{
+    if (startupLoadFinished_ || startupSnapshotsInvalidated_) return;
+    startupSnapshotsInvalidated_ = true;
+    startupItemsByFile_.clear();
+    startupRows_.clear();
+}
+
+
+void
+RideCache::applyStartupSnapshots(
+    const std::shared_ptr<RideCacheSnapshotBatch> &batch)
+{
+    if (!batch || batch->isEmpty()) return;
+    if (startupSnapshotsInvalidated_) return;
+
+    QVector<int> changedRows;
+    changedRows.reserve(batch->size());
+    for (RideCacheItemSnapshot &snapshot : batch->snapshots()) {
+        RideItem *item = startupItemFor(
+            snapshot.fileName(), snapshot.dateTime());
+        const int row = startupRows_.value(item, -1);
+        if (item && row >= 0 && snapshot.applyTo(*item)) {
+            changedRows.append(row);
+        }
+    }
+    model_->rowsChanged(changedRows);
 }
 
 void
 RideCache::postLoad()
 {
-    // set model once we have the basics
-    model_ = new RideCacheModel(context, this);
-
-    // after the first ridecache refresh we set initial pd estimates
-    first= true;
-    connect(context, SIGNAL(refreshEnd()), this, SLOT(initEstimates()));
-
-    // now refresh just in case.
+    if (startupLoadFinished_) return;
+    startupLoadFinished_ = true;
+    startupItemsByFile_.clear();
+    startupRows_.clear();
+    emit startupLoadFinished();
     refresh();
-
-    // do we have any stale items ?
-    connect(context, SIGNAL(configChanged(qint32)), this, SLOT(configChanged(qint32)));
-
 }
 
 struct comparerideitem { bool operator()(const RideItem *p1, const RideItem *p2) { return p1->dateTime < p2->dateTime; } };
@@ -190,6 +337,11 @@ RideCache::~RideCache()
 {
     exiting = true;
 
+    if (startupLoader_ && startupLoader_->isRunning()) {
+        startupLoader_->requestInterruption();
+        startupLoader_->wait();
+    }
+
     if (estimator) {
         estimator->stop();
         if (! estimator->wait(5000)) {
@@ -204,12 +356,15 @@ RideCache::~RideCache()
     // cancel any refresh that may be running
     cancel();
 
-    saveThread_->quit();
-    saveThread_->wait();
+    if (saveThread_) {
+        saveThread_->quit();
+        saveThread_->wait();
+    }
     delete saveWorker_;
+    saveWorker_ = nullptr;
 
-    // save to store
-    save();
+    // Preserve the previous complete cache if startup was interrupted.
+    if (startupLoadFinished_) save();
 }
 
 void
@@ -234,30 +389,33 @@ RideCache::initEstimates()
 void
 RideCache::configChanged(qint32 what)
 {
+    const RideCacheStartup::InvalidationPlan plan =
+        RideCacheStartup::planInvalidation(what);
 
-    // if the wbal formula changed invalidate all cached values
-    if (what & CONFIG_WBAL) {
-        foreach(RideItem *item, rides()) {
-            if (item->isOpen()) item->ride()->wstale=true;
+    if (plan.invalidateWbal) {
+        for (RideItem *item : rides_) {
+            if (item->isOpen()) item->ride()->wstale = true;
         }
     }
 
-    // if metadata changed then recompute diary text
-    if (what & CONFIG_FIELDS) {
-        foreach(RideItem *item, rides()) {
-            item->metadata_.insert("Calendar Text", GlobalContext::context()->rideMetadata->calendarText(item));
+    if (plan.rebuildCalendarText) {
+        for (RideItem *item : rides_) {
+            item->metadata_.insert(
+                QStringLiteral("Calendar Text"),
+                GlobalContext::context()->rideMetadata->calendarText(item));
         }
     }
 
-    // if zones or weight has changed refresh metrics
-    // will add more as they come
-    qint32 want = CONFIG_ATHLETE | CONFIG_ZONES | CONFIG_NOTECOLOR | CONFIG_DISCOVERY | CONFIG_GENERAL | CONFIG_USERMETRICS;
-    if (what & want) {
-
-        // restart !
-        cancel();
-        refresh();
+    if (plan.recolor) {
+        for (RideItem *item : rides_) {
+            item->color = GlobalContext::context()->colorEngine->colorFor(
+                item->getText(
+                    GlobalContext::context()->rideMetadata->getColorField(),
+                    QString()));
+        }
     }
+
+    if (plan.refreshMetrics) refresh();
 }
 
 void
@@ -305,6 +463,7 @@ RideCache::addRide(QString name, bool dosignal, bool select, bool useTempActivit
     bool added = false;
     for (int index=0; index < rides_.count(); index++) {
         if (rides_[index]->fileName == last->fileName) {
+            invalidateStartupSnapshots();
             rides_[index] = last;
             added = true;
             break;
@@ -586,70 +745,124 @@ RideCache::writeAsCSV(QString filename)
 }
 
 int
-RideCache::nextRefresh()
+RideCache::nextRefresh(quint64 generation)
 {
-    int returning=-1;
-    updateMutex.lock();
-
-    if (updates < 0) {
-        returning = -1; // force termination by returning -1
-    } else if (updates < reverse_.count()) {
-        returning = updates;
-        updates++;
-        progressing(returning);
+    int returning = -1;
+    int completed = 0;
+    bool reportProgress = false;
+    {
+        QMutexLocker locker(&updateMutex);
+        if (updates >= 0
+            && refreshGeneration_.accepts(generation)
+            && updates < reverse_.count()) {
+            returning = updates++;
+            completed = updates;
+            const int step = qMax(1, reverse_.count() / 10);
+            reportProgress = completed == reverse_.count()
+                || completed % step == 0;
+        }
     }
-    updateMutex.unlock();
-    return(returning);
+
+    if (reportProgress) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, generation, completed]() {
+                bool accepted = false;
+                {
+                    QMutexLocker locker(&updateMutex);
+                    accepted = refreshGeneration_.accepts(generation);
+                }
+                if (accepted) progressing(completed);
+            },
+            Qt::QueuedConnection);
+    }
+    return returning;
 }
 
 
-RideCacheRefreshThread::RideCacheRefreshThread(RideCache *cache)
-: cache(cache)
+RideCacheRefreshThread::RideCacheRefreshThread(
+    RideCache *cache, quint64 generation)
+    : cache(cache), generation(generation)
 {
     QPointer<RideCacheRefreshThread> weakSelf(this);
-    connect(this, &QThread::finished, cache, [weakSelf, c = QPointer<RideCache>(cache)]() {
-        if (weakSelf && c) {
-            c->cleanupThread(weakSelf.data());
-        }
-    }, Qt::QueuedConnection);
+    connect(
+        this, &QThread::finished, cache,
+        [weakSelf, c = QPointer<RideCache>(cache), generation]() {
+            if (weakSelf && c) {
+                c->threadCompleted(weakSelf.data(), generation);
+            }
+        },
+        Qt::QueuedConnection);
 }
 
 void
 RideCache::cleanupThread(RideCacheRefreshThread *thread)
 {
-    thread->wait();
-    delete thread;
+    Q_UNUSED(thread);
 }
 
 void
-RideCache::threadCompleted(RideCacheRefreshThread*thread)
+RideCache::threadCompleted(
+    RideCacheRefreshThread *thread, quint64 generation)
 {
-    updateMutex.lock();
-    refreshThreads.removeOne(thread);
-    bool isLast = refreshThreads.isEmpty();
-    bool cancelled = isCancelled;
-    updateMutex.unlock();
+    bool isLast = false;
+    bool cancelled = false;
+    bool restart = false;
+    bool changed = false;
+    bool notifyEnd = false;
+    {
+        QMutexLocker locker(&updateMutex);
+        if (!refreshThreads.removeOne(thread)) return;
+        isLast = refreshThreads.isEmpty();
+        cancelled = isCancelled;
+        if (isLast) {
+            restart = refreshGeneration_.finish(generation);
+            changed = refreshChanged_;
+            if (!restart) {
+                notifyEnd = refreshNotificationActive_;
+                refreshNotificationActive_ = false;
+            }
+        }
+    }
 
-    if (isLast && ! cancelled) {
-        //fprintf(stderr,"refresh ended\n"); fflush(stderr);
-        context->notifyRefreshEnd();
-        garbageCollect();
-        QMetaObject::invokeMethod(saveWorker_, [this]() {
-            save();
-        }, Qt::QueuedConnection);
+    thread->wait();
+    delete thread;
+
+    if (!isLast || cancelled || exiting) return;
+    if (restart) {
+        startLatestRefresh();
+        return;
+    }
+
+    if (changed) {
+        RideItem *current =
+            const_cast<RideItem*>(context->currentRideItem());
+        if (current) context->notifyRideChanged(current);
+    }
+
+    if (notifyEnd) context->notifyRefreshEnd();
+    garbageCollect();
+    if (changed && saveWorker_) {
+        QMetaObject::invokeMethod(
+            saveWorker_, [this]() { save(); }, Qt::QueuedConnection);
     }
 }
 
 void
 RideCache::progressing(int value)
 {
-    // we're working away, notfy everyone where we got
-    progress_ = 100.0f * (double(value) / double(reverse_.count()));
+    const int total = reverse_.count();
+    if (total <= 0) return;
 
-    // Avoid GUI event queue overflow- update every for every decile
-    if (reverse_.count() && (reverse_.count()/10) && (value == reverse_.count() || value % (reverse_.count()/10) == 1)) {
-        QDate here = reverse_.at(value-1)->dateTime.date();
-        context->notifyRefreshUpdate(here);
+    value = qBound(0, value, total);
+    const double nextProgress =
+        100.0 * (double(value) / double(total));
+    if (nextProgress <= progress_) return;
+
+    progress_ = nextProgress;
+    if (value > 0) {
+        context->notifyRefreshUpdate(
+            reverse_.at(value - 1)->dateTime.date());
     }
 }
 
@@ -657,77 +870,137 @@ RideCache::progressing(int value)
 void
 RideCache::cancel()
 {
-    updateMutex.lock();
-    QVector<RideCacheRefreshThread*> current = refreshThreads;
-    updates = -1;
-    isCancelled = true;
-    updateMutex.unlock();
+    Q_ASSERT(QThread::currentThread() == thread());
 
-    // wait till threads are empty, but use our copy as the master
-    // is going to be changing as threads terminate and we need to be
-    // sure all our threads have stopped before returning.
-    for (RideCacheRefreshThread *thread : current) {
-        thread->requestInterruption();
-        disconnect(thread, &QThread::finished, nullptr, nullptr);
-        thread->wait();
-        delete thread;
+    QVector<RideCacheRefreshThread*> current;
+    {
+        QMutexLocker locker(&updateMutex);
+        current = refreshThreads;
+        refreshThreads.clear();
+        updates = -1;
+        isCancelled = true;
+        refreshGeneration_.cancel();
     }
 
-    updateMutex.lock();
-    isCancelled = false;
-    updateMutex.unlock();
+    for (RideCacheRefreshThread *worker : current) {
+        disconnect(worker, &QThread::finished, nullptr, nullptr);
+        worker->requestInterruption();
+    }
+    for (RideCacheRefreshThread *worker : current) {
+        worker->wait();
+        delete worker;
+    }
+
+    {
+        QMutexLocker locker(&updateMutex);
+        reverse_.clear();
+        refreshChanged_ = false;
+        refreshNotificationActive_ = false;
+        isCancelled = false;
+    }
 }
 
 // check if we need to refresh the metrics then start the thread if needed
 void
 RideCache::refresh()
 {
-    // already on it !
-    if (refreshThreads.count()) return;
-
-    // how many need refreshing ?
-    int staleCount = 0;
-
-    foreach(RideItem *item, rides_) {
-        // ok set stale so we refresh
-        if (item->checkStale())
-            staleCount++;
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(
+            this, &RideCache::refresh, Qt::QueuedConnection);
+        return;
     }
 
-    // start if there is work to do
-    // and future watcher can notify of updates
-    if (staleCount)  {
+    bool active = false;
+    {
+        QMutexLocker locker(&updateMutex);
+        if (exiting || isCancelled) return;
+        refreshGeneration_.request();
+        active = refreshGeneration_.hasActive();
+        if (!active) refreshChanged_ = false;
+    }
 
-        reverse_ = rides_;
-        std::sort(reverse_.begin(), reverse_.end(), rideCacheGreaterThan);
-        //future = QtConcurrent::map(reverse_, itemRefresh);
-        //watcher.setFuture(future);
+    if (active) interruptActiveRefresh();
+    else startLatestRefresh();
+}
 
-        // calculate number of threads and work per thread
-        int maxthreads = QThreadPool::globalInstance()->maxThreadCount();
-        int threads = maxthreads / 2;
-        if (threads==0) threads=1; // need at least one!
-        int n=0;
+void
+RideCache::interruptActiveRefresh()
+{
+    QVector<RideCacheRefreshThread*> current;
+    {
+        QMutexLocker locker(&updateMutex);
+        updates = -1;
+        current = refreshThreads;
+    }
+    for (RideCacheRefreshThread *worker : current) {
+        worker->requestInterruption();
+    }
+}
 
-        // refresh happenning
-        updates = 0;
-        context->notifyRefreshStart();
+void
+RideCache::startLatestRefresh()
+{
+    Q_ASSERT(QThread::currentThread() == thread());
 
-        while(n++ < threads) {
-
-            // if goes past last make it the last
-            RideCacheRefreshThread *thread = new RideCacheRefreshThread(this);
-            refreshThreads << thread;
-            thread->start();
+    quint64 generation = 0;
+    int workerCount = 0;
+    bool empty = false;
+    bool notifyStart = false;
+    {
+        QMutexLocker locker(&updateMutex);
+        if (exiting || isCancelled
+            || refreshGeneration_.hasActive()
+            || !refreshGeneration_.hasPending()) {
+            return;
         }
 
+        generation = refreshGeneration_.beginLatest();
+        reverse_ = rides_;
+        std::reverse(reverse_.begin(), reverse_.end());
+        updates = 0;
+        progress_ = 0;
 
-    } else {
-
-
-        // wait five seconds, so mainwindow can get up and running...
-        QTimer::singleShot(5000, context, SLOT(notifyRefreshEnd()));
+        empty = reverse_.isEmpty();
+        if (empty) {
+            refreshGeneration_.finish(generation);
+        } else {
+            const int capacity = qMax(
+                1,
+                QThreadPool::globalInstance()->maxThreadCount() / 2);
+            workerCount = qMin(capacity, reverse_.count());
+            notifyStart = !refreshNotificationActive_;
+            refreshNotificationActive_ = true;
+        }
     }
+
+    if (empty) {
+        QTimer::singleShot(
+            5000, this, [this, generation]() {
+                bool current = false;
+                {
+                    QMutexLocker locker(&updateMutex);
+                    current = !exiting && !isCancelled
+                        && refreshGeneration_.requested() == generation
+                        && !refreshGeneration_.hasActive()
+                        && !refreshGeneration_.hasPending();
+                }
+                if (current) context->notifyRefreshEnd();
+            });
+        return;
+    }
+
+    QVector<RideCacheRefreshThread*> workers;
+    workers.reserve(workerCount);
+    for (int index = 0; index < workerCount; ++index) {
+        workers.append(
+            new RideCacheRefreshThread(this, generation));
+    }
+    {
+        QMutexLocker locker(&updateMutex);
+        refreshThreads += workers;
+    }
+    for (RideCacheRefreshThread *worker : workers) worker->start();
+    if (notifyStart) context->notifyRefreshStart();
 }
 
 QString
@@ -2064,35 +2337,26 @@ RideCache::copyPlannedRideFile
 // refresh metrics
 void RideCacheRefreshThread::run()
 {
-    while (! isInterruptionRequested()) {
-        int n = cache->nextRefresh();
-        //fprintf(stderr, "refreshing %d of %d\n", n+1, cache->reverse_.count()); fflush(stderr);
-        if (n < 0) {
-            //fprintf(stderr, "worker thread exits!\n"); fflush(stderr);
-            goto exitthread;
-        }
+    while (!isInterruptionRequested()) {
+        RideCache *target = cache.data();
+        if (!target) return;
 
-        if (isInterruptionRequested()) {
-            goto exitthread;
-        }
+        const int index = target->nextRefresh(generation);
+        if (index < 0 || isInterruptionRequested()) return;
 
         RideItem *item = nullptr;
         {
-            QMutexLocker locker(&cache->updateMutex);
-            if (n < cache->reverse_.count()) {
-                item = cache->reverse_[n];
+            QMutexLocker locker(&target->updateMutex);
+            if (target->refreshGeneration_.accepts(generation)
+                && index < target->reverse_.count()) {
+                item = target->reverse_.at(index);
             }
         }
 
-        if (item && item->isstale) {
+        if (item && item->checkStale()) {
             item->refresh();
-            if (item == item->context->currentRideItem()) {
-                item->context->notifyRideChanged(item);
-            }
+            QMutexLocker locker(&target->updateMutex);
+            target->refreshChanged_ = true;
         }
-    }
-exitthread:
-    if (cache) {
-        cache->threadCompleted(this);
     }
 }

@@ -65,6 +65,9 @@ class RideCacheModel : public QAbstractTableModel
         // model reset on add (if needed)
         void beginReset();
         void endReset();
+        void startInsert(int first, int last);
+        void endInsert();
+        void rowsChanged(QVector<int> rows);
 
         // start / end remove
         void startRemove(int);
