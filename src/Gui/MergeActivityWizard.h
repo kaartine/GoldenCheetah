@@ -21,6 +21,7 @@
 
 #include "GoldenCheetah.h"
 #include "RideItem.h"
+#include "MergeActivityAlignment.h"
 #include "RideFile.h"
 #include "RideFile.h"
 #include "Colors.h"
@@ -106,12 +107,20 @@ class MergeActivityWizard : public QWizard
         // methods for combining etc
         void analyse(); // set initial parameters based upon mode/strategy
         void combine(); // combine rides using the current parameters
+        bool startSharedSeriesAnalysis();
+        bool sharedSeriesAnalysisActive() const;
 
     private:
 
         void mergeRideSamplesByDistance();
+        QVector<MergeActivityAlignment::Series> sharedAlignmentSeries() const;
+        void applySharedSeriesAlignment(
+            const MergeActivityAlignment::BatchResult &result);
+        void sharedSeriesAnalysisFinished(
+            const MergeActivityAlignment::BatchResult &result);
 
         SmallPlot *smallPlot1, *smallPlot2;
+        MergeActivityAlignment::Runner *alignmentRunner;
 
         QPushButton *mergeButton;
         QPushButton *uploadButton;
@@ -231,6 +240,7 @@ class MergeStrategy : public QWizardPage
     public:
         MergeStrategy(MergeActivityWizard *);
         void initializePage();
+        void setAlignmentBusy(bool busy);
         bool validate() const { return false; }
         bool isComplete() const { return false; }
         int nextId() const { return next; }

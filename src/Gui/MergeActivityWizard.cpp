@@ -26,6 +26,8 @@
 #include "HelpWhatsThis.h"
 #include "LocationInterpolation.h"
 
+#include <utility>
+
 // minimum R-squared fit when trying to find offsets to
 // merge ride files. Lower numbers mean happier to take
 // and answer that is less likely to be correct, but then
@@ -57,7 +59,10 @@ static const double MINIMUM_R2_FIT = 0.75f;
  *
  *---------------------------------------------------------------------*/
 
-MergeActivityWizard::MergeActivityWizard(Context *context) : QWizard(context->mainWindow), context(context)
+MergeActivityWizard::MergeActivityWizard(Context *context)
+    : QWizard(context->mainWindow)
+    , context(context)
+    , alignmentRunner(new MergeActivityAlignment::Runner(this))
 {
 #ifdef Q_OS_MAC
     setWizardStyle(QWizard::ModernStyle);
@@ -96,6 +101,12 @@ MergeActivityWizard::MergeActivityWizard(Context *context) : QWizard(context->ma
     setPage(50, new MergeStrategy(this)); 
     setPage(60, new MergeAdjust(this)); // might need to rename to adjust
     setPage(1000, new MergeConfirm(this));
+
+    connect(alignmentRunner, &MergeActivityAlignment::Runner::completed,
+            this,
+            &MergeActivityWizard::sharedSeriesAnalysisFinished);
+    connect(this, &QDialog::rejected,
+            alignmentRunner, &MergeActivityAlignment::Runner::cancel);
 }
 
 void
@@ -156,103 +167,12 @@ MergeActivityWizard::analyse()
             break;
 
     case 1: // align on shared series
-            // using a shotgun algorithm
     {
-            // calculate the R2 fit using the current offset
-            // for the first shared series
-            RideFile *base = ride1;
-            RideFile *fit = ride2;
-
-            // always fit smaller to larger
-            int diff = ride1->dataPoints().count() - ride2->dataPoints().count();
-            if (diff < 0) { // ride2 has more points
-                base=ride2;
-                fit= ride1;
-            } else { // ride1 has more points
-                base=ride1;
-                fit=ride2;
-            }
-
-            double bestFit=0.0;
-            int offsetFit=0;
-            RideFile::SeriesType bestSeries=RideFile::none;
-
-            QMapIterator<RideFile::SeriesType, QCheckBox *> i(rightSeries);
-            while(i.hasNext()) {
-                i.next();
-                if (i.key() != RideFile::km && leftSeries.value(i.key(), NULL) != NULL) {
-
-                    // for each shared series look for best fit
-                    RideFile::SeriesType shared = i.key();
-
-                    double bestR2 = 0.0f;
-                    int bestOffset = 0;
-
-                    // no more than shifting by a third of the ride backwards or forwards
-                    for(int offset=-1 * (base->dataPoints().count()/3); 
-                            offset<base->dataPoints().count()/3; 
-                            offset++) {
-
-                        double SStot=0.0f, SSres=0.0f;
-                        double mean =0.0f;
-                        int count=0;
-
-                        for(int i=0; (i+offset)<base->dataPoints().count(); i++) {
-                            if ((i+offset)>0) {
-                                mean += base->dataPoints()[i+offset]->value(shared);
-                            }
-                            count++;
-                        }
-                        mean /= double(count);
-                
-                        for(int i=0; (i+offset)<base->dataPoints().count() && i<fit->dataPoints().count(); i++) {
-                            if((i+offset)>0) {
-                                SSres += pow(base->dataPoints()[i+offset]->value(shared) - fit->dataPoints()[i]->value(shared), 2);
-                                SStot += pow(base->dataPoints()[i+offset]->value(shared) - mean, 2);
-                            }
-                        }
-
-                        double R2= 1.0f - (SSres/SStot);
-                        if (R2 > bestR2) {
-                            bestR2= R2;
-                            bestOffset=offset;
-                        }
-                    }
-
-                    // is this a better fit ?
-                    if (bestR2 > bestFit) {
-                        bestFit=bestR2;
-                        offsetFit=bestOffset;
-                        bestSeries=shared;
-                        Q_UNUSED(bestSeries); // shutup compiler when qDebugs commented out below
-                    }
-                    //qDebug()<<"best R2="<<bestR2<<"at best offset"<<bestOffset<<"with series"<<fit->seriesName(shared);
-                }
-            }
-            //qDebug()<<"THEREFORE: best R2="<<bestFit<<"at best offset"<<offsetFit<<"with series"<<ride1->seriesName(bestSeries);
-
-            // so lets turn that into an offset for ride1 and ride2
-            if (bestFit > MINIMUM_R2_FIT) {
-                if (diff <0) { // ride2 was the base
-                    if (offsetFit<0) {
-                        offset2=offsetFit * -1;
-                        offset1=0;
-                    } else {
-                        offset1=offsetFit;
-                        offset2=0;
-                    }
-                } else {
-                    if (offsetFit<0) {
-                        offset1=offsetFit * -1;
-                        offset2=0;
-                    } else {
-                        offset2=offsetFit;
-                        offset1=0;
-                    }
-                }
-            }
+        const MergeActivityAlignment::BatchResult result =
+            MergeActivityAlignment::findBestSeries(sharedAlignmentSeries());
+        applySharedSeriesAlignment(result);
     }
-            break;
+        break;
 
     case 2: // align begin
             offset1=0;
@@ -279,6 +199,103 @@ MergeActivityWizard::analyse()
         offset2 = 0;
         break;
     }
+}
+
+
+QVector<MergeActivityAlignment::Series>
+MergeActivityWizard::sharedAlignmentSeries() const
+{
+    QVector<MergeActivityAlignment::Series> inputs;
+    if (!ride1 || !ride2) return inputs;
+
+    RideFile *base = ride1;
+    RideFile *fit = ride2;
+    if (base->dataPoints().count() < fit->dataPoints().count()) {
+        qSwap(base, fit);
+    }
+
+    QMapIterator<RideFile::SeriesType, QCheckBox *> iterator(rightSeries);
+    while (iterator.hasNext()) {
+        iterator.next();
+        const RideFile::SeriesType shared = iterator.key();
+        if (shared == RideFile::km ||
+            leftSeries.value(shared, nullptr) == nullptr) {
+            continue;
+        }
+
+        MergeActivityAlignment::Series input;
+        input.key = static_cast<int>(shared);
+        input.base.reserve(base->dataPoints().count());
+        input.fit.reserve(fit->dataPoints().count());
+        for (const RideFilePoint *point : base->dataPoints()) {
+            input.base.append(point->value(shared));
+        }
+        for (const RideFilePoint *point : fit->dataPoints()) {
+            input.fit.append(point->value(shared));
+        }
+        inputs.append(std::move(input));
+    }
+    return inputs;
+}
+
+void
+MergeActivityWizard::applySharedSeriesAlignment(
+    const MergeActivityAlignment::BatchResult &result)
+{
+    offset1 = offset2 = 0;
+    if (!result.valid || result.cancelled ||
+        !(result.rSquared > MINIMUM_R2_FIT)) {
+        return;
+    }
+
+    const bool ride2IsBase =
+        ride2->dataPoints().count() > ride1->dataPoints().count();
+    if (ride2IsBase) {
+        if (result.offset < 0) {
+            offset2 = -result.offset;
+        } else {
+            offset1 = result.offset;
+        }
+    } else {
+        if (result.offset < 0) {
+            offset1 = -result.offset;
+        } else {
+            offset2 = result.offset;
+        }
+    }
+}
+
+bool
+MergeActivityWizard::startSharedSeriesAnalysis()
+{
+    if (!alignmentRunner || alignmentRunner->isRunning()) return false;
+
+    offset1 = offset2 = 0;
+    return alignmentRunner->start(sharedAlignmentSeries());
+}
+
+bool
+MergeActivityWizard::sharedSeriesAnalysisActive() const
+{
+    return alignmentRunner && alignmentRunner->isRunning();
+}
+
+void
+MergeActivityWizard::sharedSeriesAnalysisFinished(
+    const MergeActivityAlignment::BatchResult &result)
+{
+    MergeStrategy *strategyPage =
+        qobject_cast<MergeStrategy *>(page(50));
+    if (strategyPage) strategyPage->setAlignmentBusy(false);
+
+    if (result.cancelled || !isVisible() || currentId() != 50 ||
+        strategy != 1) {
+        return;
+    }
+
+    applySharedSeriesAlignment(result);
+    combine();
+    next();
 }
 
 // Distance merge:
@@ -1042,17 +1059,31 @@ MergeStrategy::MergeStrategy(MergeActivityWizard *parent) : QWizardPage(parent),
 void
 MergeStrategy::initializePage()
 {
+    const bool busy = wizard->sharedSeriesAnalysisActive();
+    setAlignmentBusy(busy);
+
     // are there any shared data -- ignoring time and distance
     bool hasShared = false;
     QMapIterator<RideFile::SeriesType, QCheckBox *> i(wizard->rightSeries);
     while(i.hasNext()) {
         i.next();
-        if (i.key() != RideFile::km && wizard->leftSeries.value(i.key(), NULL) != NULL)
+        if (i.key() != RideFile::km &&
+            wizard->leftSeries.value(i.key(), nullptr) != nullptr) {
             hasShared = true;
+        }
     }
-    shared->setEnabled(hasShared);
+    shared->setEnabled(hasShared && !busy);
 }
-   
+
+void
+MergeStrategy::setAlignmentBusy(bool busy)
+{
+    setEnabled(!busy);
+    label->setText(busy ? tr("Aligning shared data...") : QString());
+    if (QAbstractButton *back = wizard->button(QWizard::BackButton)) {
+        back->setEnabled(!busy);
+    }
+}
 
 void
 MergeStrategy::clicked(QString p)
@@ -1064,21 +1095,22 @@ MergeStrategy::clicked(QString p)
     if (p == "time") {
         wizard->strategy = 0;
     } else if (p == "shared" ) {
-        // where to next ?
-        wizard->strategy = 1; // merge ...
+        wizard->strategy = 1;
+        setAlignmentBusy(true);
+        if (!wizard->startSharedSeriesAnalysis()) {
+            setAlignmentBusy(false);
+        }
+        return;
     } else if (p == "left" ) {
-        wizard->strategy = 2; // merge ...
+        wizard->strategy = 2;
     } else if (p == "right" ) {
-        wizard->strategy = 3; // merge ...
+        wizard->strategy = 3;
     } else if (p == "distance") {
-        wizard->strategy = 4; // merge ...
+        wizard->strategy = 4;
     }
 
-    // now run strategy and get on
     wizard->analyse();
     wizard->combine();
-
-    // lets do this thing !
     next = 60;
     wizard->next();
 }

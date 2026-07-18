@@ -1287,15 +1287,66 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   and remained running for its full isolated 15-second GUI smoke test; its only
   log message was the pre-existing missing Finnish translator notice.
 
-### PERF-001: Merge activity alignment is O(series * samples^2) on the UI thread
+### GUI-004: Distance merge can index past the source activity
 
 - Status: OPEN
-- Code: `src/Gui/MergeActivityWizard.cpp:191`,
-  `src/Gui/MergeActivityWizard.cpp:1077`
-- Impact: Multi-hour activities can execute hundreds of millions of iterations
-  while freezing the UI.
-- Test: Benchmark 1h and 3h fixtures and enforce a bounded UI stall.
-- Fix direction: Coarse-to-fine or FFT correlation in a cancellable worker.
+- Code: `src/Gui/MergeActivityWizard.cpp:370`,
+  `src/Gui/MergeActivityWizard.cpp:379`
+- Impact: When the destination continues beyond the source's final distance, or
+  the source is empty, the scan reaches `dataPoints().count()` and then indexes
+  that element. Debug builds assert; release builds can crash or access invalid
+  memory while combining activities.
+- Test: Merge destination distances `{0, 1, 2}` with source distances
+  `{0, 1}` under ASan, and cover an empty source.
+- Fix direction: Treat source exhaustion as an explicit boundary and never
+  dereference `j` unless it is in range.
+
+### GUI-005: Failed resampling is accepted and later dereferenced
+
+- Status: OPEN
+- Code: `src/Gui/MergeActivityWizard.cpp:123`,
+  `src/Gui/MergeActivityWizard.cpp:763`,
+  `src/Gui/MergeActivityWizard.cpp:927`,
+  `src/Gui/MergeActivityWizard.cpp:1341`, `src/FileIO/RideFile.cpp:3071`,
+  `src/FileIO/RideFile.cpp:3267`
+- Impact: `RideFile::resample()` can return null for short or unresampleable
+  input, but source-selection pages still accept it and later dereference the
+  missing working ride. A one-point activity with a different recording
+  interval deterministically reaches this crash path.
+- Test: Select a one-point, mismatched-interval activity and require rejection
+  without advancing the wizard or dereferencing a null ride.
+- Fix direction: Make `setRide()` report failure, retain the previous valid
+  working copy transactionally, and keep every accepting page on failure.
+
+### PERF-001: Merge activity alignment is O(series * samples^2) on the UI thread
+
+- Status: FIXED
+- Code: `src/Gui/MergeActivityAlignment.cpp`,
+  `src/Gui/MergeActivityAlignment.h`,
+  `src/Gui/MergeActivityWizard.cpp`
+- Impact: Multi-hour activities could execute hundreds of millions of
+  iterations while freezing the UI.
+- Regression test: `unittests/Gui/mergeActivityAlignment` first failed to
+  build because the requested alignment helper did not exist. It now compares
+  short and FFT paths with the exact legacy scorer, covers the 512/513
+  boundary, positive/negative offsets, over 64 tied periodic candidates,
+  zero/constant legacy behavior, cooperative cancellation, worker lifecycle,
+  and bounded one-hour/three-hour runtime and scaling.
+- Fix: Snapshot shared series on the GUI thread, score short inputs exactly,
+  and use GSL radix-2 convolution plus prefix sums for long inputs. A bounded
+  exact-rescore set preserves legacy ordering while reducing normal work to
+  `O(series * samples * log(samples))`. A cooperative `QtConcurrent` runner
+  keeps the wizard responsive, disables conflicting navigation during work,
+  and joins safely on cancellation or destruction.
+- Verification: The focused suite passes all 16 tests normally and under
+  strict ASan/UBSan/LSan with leak detection. The Qt 6.8.3 application compiles
+  and links as a true `-O2`, `QT_NO_DEBUG` release; the complete offscreen
+  matrix passes 1,965 tests in 55 projects with zero failures, skips, or
+  blacklisted tests. The 166,431,224-byte AppImage reports
+  `V3.8-DEV2605 (5012)`, has SHA-256
+  `7fc991fbf1d9574a9670da5642c1109809cc036a77cd74eaf4b08e8923a0ccb8`,
+  and remained running for its full isolated 15-second direct-launch X11 smoke
+  test; its log contained only missing `C` translator notices.
 
 ### PERF-002: Bulk import parses files repeatedly and rebuilds global state
 
@@ -1360,6 +1411,50 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   settings updates, reject superseded work, and apply producer backpressure.
 
 ## Medium
+
+### DATA-002: Merge offsets treat samples as seconds
+
+- Status: OPEN
+- Code: `src/Gui/MergeActivityWizard.h:91`,
+  `src/Gui/MergeActivityWizard.cpp:594`,
+  `src/Gui/MergeActivityWizard.cpp:601`,
+  `src/Gui/MergeActivityWizard.cpp:1229`
+- Impact: Offsets are stored in samples, but interval timestamps and the UI add
+  or display them as seconds. For activities whose recording interval is not
+  one second, merged intervals are shifted by the wrong duration.
+- Test: With `recIntSecs=2`, offset three samples and require interval
+  `[10, 20]` to become `[16, 26]`, including the displayed adjustment.
+- Fix direction: Convert sample offsets through the owning ride's recording
+  interval at every time-based boundary and label only converted seconds.
+
+### DATA-003: Merge leaves XData timestamps unshifted
+
+- Status: OPEN
+- Code: `src/Gui/MergeActivityWizard.cpp:535`,
+  `src/Gui/MergeActivityWizard.cpp:579`
+- Impact: Normal samples are shifted during merge, but XData points are copied
+  with their original timestamps. Auxiliary data therefore becomes
+  permanently misaligned whenever either ride has a nonzero offset.
+- Test: With a two-second recording interval and a three-sample source offset,
+  require a unique source XData point at four seconds to merge at ten seconds.
+- Fix direction: Apply the same sample-to-time offset used by regular points to
+  copied XData and define clipping behavior at negative/terminal boundaries.
+
+### DATA-004: Constant shared series selects an artificial alignment
+
+- Status: OPEN
+- Code: `src/Gui/MergeActivityAlignment.cpp:58`,
+  `src/Gui/MergeActivityAlignment.cpp:88`,
+  `src/Gui/MergeActivityAlignment.cpp:98`,
+  `unittests/Gui/mergeActivityAlignment/testMergeActivityAlignment.cpp:284`
+- Impact: Excluded samples still inflate the legacy mean denominator, so two
+  identical nonzero constant series receive an artificial `R^2=1` and usually
+  select `-floor(samples/3)`. This can override a genuinely alignable varying
+  series and shift the merged activity by minutes.
+- Test: A constant shared series must produce no candidate; in a batch with a
+  correctly shifted varying series, the varying series must determine offset.
+- Fix direction: Reject zero-variance overlap before scoring, use the actual
+  mean count, and keep deterministic tie ordering for valid varying series.
 
 ### PARSE-001: ZIP/GZIP decompression has no resource limits
 
