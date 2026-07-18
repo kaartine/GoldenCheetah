@@ -36,6 +36,7 @@ equals(GC_UNITTESTS, active) {
 			   FileIO/wkoBounds \
 			   Gui/calendarData \
 			   Gui/mergeActivityDistanceCursor \
+			   Gui/mergeActivityRidePreparation \
 			   Gui/mergeActivityAlignment \
 			   Gui/iconBundleSecurity \
 			   Gui/splitActivitySave \

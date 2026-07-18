@@ -3265,7 +3265,10 @@ RideFile::resample(double newRecIntSecs, int /*interpolate*/)
         }
 
         // no data to resample
-        if (splineLookups.count() == 0 || last == 0) return NULL;
+        if (splineLookups.count() == 0 || last == 0) {
+            qDeleteAll(splineLookups);
+            return NULL;
+        }
 
         // we have a bunch of splines so lets add resampled
         // data points to a clone of the current ride (ie. we

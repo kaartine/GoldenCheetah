@@ -100,7 +100,7 @@ class MergeActivityWizard : public QWizard
         RideFile *combined;
 
         // working copies
-        void setRide(RideFile **, RideFile*);
+        bool setRide(RideFile **, RideFile*);
         RideFile *ride1;
         RideFile *ride2;
 

@@ -26,6 +26,7 @@
 #include "HelpWhatsThis.h"
 #include "LocationInterpolation.h"
 #include "MergeActivityDistanceCursor.h"
+#include "MergeActivityRidePreparation.h"
 
 #include <utility>
 
@@ -110,25 +111,11 @@ MergeActivityWizard::MergeActivityWizard(Context *context)
             alignmentRunner, &MergeActivityAlignment::Runner::cancel);
 }
 
-void
+bool
 MergeActivityWizard::setRide(RideFile **here, RideFile *with)
 {
-    // wipe current
-    if (*here) delete *here;
-
-    // set with new resampled / filled
-    // you may be tempted to optimise this out
-    // but by cloning a working copy like this
-    // we start with a clean ride and no derived
-    // data to 'pollute' the process
-    if (with) *here = with->resample(recIntSecs);
-    else *here = NULL;
-
-    // preserve XData
-    if (with && *here) {
-        foreach (XDataSeries *xdata, with->xdata())
-            (*here)->addXData(xdata->name, new XDataSeries(*xdata));
-    }
+    return MergeActivityRidePreparation::replaceWorkingRide(
+        *here, with, recIntSecs);
 }
 
 void 
@@ -755,8 +742,11 @@ MergeSource::importFile(QList<QString> files)
             // did it parse ok?
             if (ride) {
 
-                wizard->setRide(&wizard->ride2, ride);
-                return true;
+                if (wizard->setRide(&wizard->ride2, ride)) {
+                    return true;
+                }
+                errors.append(tr("Error - Activity could not be resampled"));
+                return false;
             }
 
         } else {
@@ -819,9 +809,12 @@ MergeDownload::downloadFiles(QList<DeviceDownloadFile>files)
         // did it parse ok?
         if (ride) {
 
-            wizard->setRide(&wizard->ride2 ,ride);
-            next = 30;
-            wizard->next();
+            if (wizard->setRide(&wizard->ride2, ride)) {
+                next = 30;
+                wizard->next();
+                return;
+            }
+            errors.append(tr("Error - Activity could not be resampled"));
             return;
         } else {
 
@@ -919,8 +912,7 @@ MergeChoose::validatePage()
     RideFile *ride = RideFileFactory::instance().openRideFile(wizard->context, thisfile, errors, &rides);
 
     if (ride && ride->dataPoints().count()) {
-        wizard->setRide(&wizard->ride2, ride);
-        return true;
+        return wizard->setRide(&wizard->ride2, ride);
     }
     return false;
 }

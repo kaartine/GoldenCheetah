@@ -1312,20 +1312,37 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### GUI-005: Failed resampling is accepted and later dereferenced
 
-- Status: OPEN
-- Code: `src/Gui/MergeActivityWizard.cpp:123`,
-  `src/Gui/MergeActivityWizard.cpp:763`,
-  `src/Gui/MergeActivityWizard.cpp:927`,
-  `src/Gui/MergeActivityWizard.cpp:1341`, `src/FileIO/RideFile.cpp:3071`,
-  `src/FileIO/RideFile.cpp:3267`
+- Status: FIXED
+- Code: `src/Gui/MergeActivityRidePreparation.cpp:24`,
+  `src/Gui/MergeActivityWizard.cpp:115`,
+  `src/Gui/MergeActivityWizard.cpp:745`,
+  `src/Gui/MergeActivityWizard.cpp:812`,
+  `src/Gui/MergeActivityWizard.cpp:915`, `src/FileIO/RideFile.cpp:3268`
 - Impact: `RideFile::resample()` can return null for short or unresampleable
   input, but source-selection pages still accept it and later dereference the
   missing working ride. A one-point activity with a different recording
   interval deterministically reaches this crash path.
-- Test: Select a one-point, mismatched-interval activity and require rejection
-  without advancing the wizard or dereferencing a null ride.
-- Fix direction: Make `setRide()` report failure, retain the previous valid
-  working copy transactionally, and keep every accepting page on failure.
+- Test: A one-point, mismatched-interval source must fail preparation while
+  retaining the previous working ride and without emitting its deletion
+  signal. Successful preparation must replace the old ride, preserve samples,
+  and deep-copy XData; a null source must keep the legacy clearing behavior.
+- Resolution: Ride preparation now builds the resampled candidate under RAII,
+  copies XData, and swaps it into the wizard only after all preparation
+  succeeds. `setRide()` reports the result, and import, device download, and
+  existing-activity selection all remain on their current page on failure.
+  The resampler's null-return path also deletes every temporary spline.
+- Verification: The regression project first failed in RED because the
+  production preparation helper did not exist. The focused normal suite passes
+  all 5 tests. Its first strict ASan/UBSan/LSan run exposed four leaked
+  `SplineLookup` allocations on the same null-return path; after adding cleanup,
+  the strict suite passes all 5 tests with leak detection and no sanitizer
+  reports. The Qt 6.8.3 release application builds and links all changed
+  production objects. The complete release matrix passes 1,976 tests across 57
+  projects with zero failures, skips, or blacklisted tests. The packaged
+  AppImage has SHA-256
+  `40624c4534b5923331d1f31834ff6d25370c6af40cda78abba29c833a8343c54`
+  and remained running for its full isolated 15-second X11 smoke test; its only
+  log messages were the expected missing `C` translator notices.
 
 ### PERF-001: Merge activity alignment is O(series * samples^2) on the UI thread
 
