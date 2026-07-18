@@ -37,6 +37,7 @@ equals(GC_UNITTESTS, active) {
 			   Gui/calendarData \
 			   Gui/mergeActivityDistanceCursor \
 			   Gui/mergeActivityRidePreparation \
+			   Gui/rideImportBatch \
 			   Gui/mergeActivityAlignment \
 			   Gui/iconBundleSecurity \
 			   Gui/splitActivitySave \

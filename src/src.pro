@@ -621,7 +621,7 @@ HEADERS += Cloud/CalendarDownload.h Cloud/CloudService.h \
 HEADERS += Cloud/LocalFileStoreProcess.h
 # core data
 HEADERS += Core/Athlete.h Core/Context.h Core/DataFilter.h Core/DataFilterSafety.h Core/FreeSearch.h Core/GcCalendarModel.h Core/GcUpgrade.h \
-           Core/IdleTimer.h Core/IntervalItem.h Core/NamedSearch.h Core/RideCache.h Core/RideCachePersistence.h Core/RideCacheModel.h Core/RideDB.h \
+           Core/IdleTimer.h Core/IntervalItem.h Core/NamedSearch.h Core/RideCache.h Core/RideCacheBulkMerge.h Core/RideCachePersistence.h Core/RideCacheModel.h Core/RideDB.h \
            Core/RideItem.h Core/Route.h Core/RouteParser.h Core/Season.h Core/SeasonDialogs.h Core/Seasons.h Core/Secrets.h Core/Settings.h Core/CredentialSettings.h Core/CredentialStoreQtKeychain.h \
            Core/Specification.h Core/TimeUtils.h Core/Units.h Core/UserData.h Core/Utils.h \
            Core/Measures.h Core/Quadtree.h Core/SplineLookup.h
@@ -650,7 +650,7 @@ HEADERS += Gui/AboutDialog.h Gui/AddIntervalDialog.h Gui/AnalysisSidebar.h Gui/C
            Gui/IntervalTreeView.h Gui/LTMSidebar.h Gui/MainWindow.h Gui/NewAthleteWizard.h Gui/Pages.h Gui/RideNavigator.h Gui/RideNavigatorProxy.h \
            Gui/SaveDialogs.h Gui/SearchBox.h Gui/SearchFilterBox.h Gui/SolveCPDialog.h Gui/AthleteTab.h Gui/AbstractView.h Gui/ToolsRhoEstimator.h \
            Gui/Views.h Gui/PerspectiveStateSource.h Gui/TrainPerspectiveState.h Gui/BatchProcessingDialog.h Gui/DownloadRideDialog.h Gui/ManualActivityWizard.h Gui/NewSideBar.h \
-           Gui/MergeActivityAlignment.h Gui/MergeActivityDistanceCursor.h Gui/MergeActivityRidePreparation.h Gui/MergeActivityWizard.h Gui/RideImportWizard.h Gui/SplitActivitySave.h Gui/SplitActivityWizard.h Gui/SplitRideData.h \
+           Gui/MergeActivityAlignment.h Gui/MergeActivityDistanceCursor.h Gui/MergeActivityRidePreparation.h Gui/MergeActivityWizard.h Gui/RideImportRideStore.h Gui/RideImportWizard.h Gui/SplitActivitySave.h Gui/SplitActivityWizard.h Gui/SplitRideData.h \
            Gui/SolverDisplay.h Gui/MetricSelect.h \
            Gui/AddTileWizard.h Gui/NavigationModel.h Gui/AthleteView.h Gui/AthleteConfigDialog.h Gui/AthletePages.h Gui/Perspective.h \
            Gui/PerspectiveDialog.h Gui/SplashScreen.h Gui/StyledItemDelegates.h Gui/MetadataDialog.h Gui/ActionButtonBox.h \

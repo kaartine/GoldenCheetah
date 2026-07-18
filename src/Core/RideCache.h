@@ -98,6 +98,14 @@ class RideCache : public QObject
 
         // add/remove a ride to the list
         void addRide(QString name, bool dosignal, bool select, bool useTempActivities, bool planned);
+        // Takes ownership of each non-null prepared ride.
+        QVector<RideItem*> addRides(
+            const QStringList &names,
+            const QVector<RideFile*> &preparedRides,
+            bool dosignal,
+            bool select,
+            bool useTempActivities,
+            bool planned);
         bool removeCurrentRide();
         bool removeRide(const QString& filenameToDelete);
         bool removeArchivedRide(const QString& filenameToDelete);

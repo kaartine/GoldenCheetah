@@ -32,6 +32,7 @@
 #include <QItemDelegate>
 #include "Context.h"
 #include "RideAutoImportConfig.h"
+#include "RideImportRideStore.h"
 
 // Dialog class to show filenames, import progress and to capture user input
 // of ride date and time
@@ -80,6 +81,7 @@ private:
     QList <QString> filenames; // list of filenames passed
     int numberOfFiles; // number of files to be processed
     QList <bool> blanks; // record of which have a RideFileReader returned date & time
+    RideImportRideStore parsedRides;
     QDir homeImports; // target directory for source files
     QDir homeActivities; // target directory for .JSON
     QDir tmpActivities; // activitiy .JSON is stored here until rideCache() update was successfull

@@ -1376,13 +1376,31 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### PERF-002: Bulk import parses files repeatedly and rebuilds global state
 
-- Status: OPEN
-- Code: `src/Gui/RideImportWizard.cpp:583`,
-  `src/Gui/RideImportWizard.cpp:1119`, `src/Core/RideCache.cpp:315`
-- Impact: Files are parsed in validation and again during save; each addition can
-  reset/sort the full library on the UI thread.
-- Test: Benchmark 100/1000 FIT imports into a 10k-activity fixture.
-- Fix direction: Parse once in workers and perform a single bulk model merge.
+- Status: FIXED
+- Code: `src/Gui/RideImportWizard.cpp`,
+  `src/Gui/RideImportRideStore.h`, `src/Core/RideCache.cpp`,
+  `src/Core/RideCacheBulkMerge.h`
+- Impact: Imported files were parsed during validation and again during save.
+  Every saved ride could also reset and sort the full activity model on the UI
+  thread.
+- Regression test: The RED build failed because the production batch helpers did
+  not exist. The completed focused suite verifies one parse per successful or
+  failed source, exact parser-call counts for 100- and 1,000-file batches,
+  aligned ownership/error state, and bulk merges of 100 and 1,000 rides into a
+  10,000-ride cache. It also verifies one model reset, bounded comparisons,
+  sorted output, duplicate replacement, and an empty no-op merge.
+- Resolution: Validation now retains each parsed `RideFile` through save,
+  including multi-ride archives and failures. Successful imports are published
+  as one cache batch with one merge/sort/model reset, one selection update, and
+  one estimator refresh while preserving per-ride notifications and abort
+  behavior.
+- Verification: 11 focused tests passed in normal and strict
+  ASan/UBSan/LSan builds with no sanitizer reports. A fresh release build and all
+  58 unit-test projects passed (1,987 passed, 0 failed, 0 skipped, 0
+  blacklisted). The packaged AppImage SHA-256 is
+  `c2a3bc30a2d927e1181f12e3c554cf240218055dcbd8d41ed9cbc08d1c695560`;
+  it remained running for its full isolated 15-second X11 smoke test, whose log
+  contained only missing `C` translator notices.
 
 ### PERF-003: RideCache blocks startup and repeatedly scans the full library
 

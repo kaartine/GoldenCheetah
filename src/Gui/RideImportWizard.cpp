@@ -345,6 +345,7 @@ RideImportWizard::init(QList<QString> original, Context * /*mainWindow*/)
 
         filenames.append(QFileInfo(files[i]).canonicalFilePath());
         blanks.append(true); // by default editable
+        parsedRides.appendPending();
 
         // Filename
         t = new QTableWidgetItem();
@@ -569,7 +570,6 @@ RideImportWizard::process()
         // does the status say Queued?
         if (!tableWidget->item(i,STATUS_COLUMN)->text().startsWith(tr("Error"))) {
 
-              QStringList errors;
               QFile thisfile(filenames[i]);
 
               tableWidget->item(i,STATUS_COLUMN)->setText(tr("Parsing..."));
@@ -581,12 +581,18 @@ RideImportWizard::process()
               QApplication::processEvents();
 
               QList<RideFile*> rides;
-              RideFile *ride = RideFileFactory::instance().openRideFile(context, thisfile, errors, &rides);
+              RideFile *ride = parsedRides.parseOnce(
+                  i, [&](QStringList &parseErrors) {
+                      return RideFileFactory::instance().openRideFile(
+                          context, thisfile, parseErrors, &rides);
+                  });
+              const QStringList errors = parsedRides.errorsAt(i);
 
               // is this an archive of files?
               if (rides.count() > 1) {
 
                  int here = i;
+                 RideFile *primaryRide = parsedRides.takeAndRemove(here);
 
                  // remove current filename from state arrays and tableview
                  filenames.removeAt(here);
@@ -613,15 +619,19 @@ RideImportWizard::process()
                      QString writeError;
                      const bool written = reader.writeRideFile(
                          context, extracted, target, writeError, false);
+                     const int insertAt = here + counter;
                      if (written) {
                          deleteMe.append(fulltarget);
+                         parsedRides.insertParsed(insertAt, extracted, errors);
+                     } else {
+                         delete extracted;
+                         parsedRides.insertParsed(insertAt, nullptr, errors);
                      }
-                     delete extracted;
-                     
+
                      // now add each temporary file ...
-                     filenames.insert(here, fulltarget);
-                     blanks.insert(here, true); // by default editable
-                     tableWidget->insertRow(here+counter);
+                     filenames.insert(insertAt, fulltarget);
+                     blanks.insert(insertAt, true); // by default editable
+                     tableWidget->insertRow(insertAt);
 
                      QTableWidgetItem *t;
 
@@ -669,13 +679,16 @@ RideImportWizard::process()
 
                      tableWidget->adjustSize();
                  }
+                 if (primaryRide && !rides.contains(primaryRide)) {
+                     delete primaryRide;
+                 }
                  QApplication::processEvents();
 
 
                  // progress bar needs to adjust...
                  progressBar->setMaximum(filenames.count()*4);
 
-                 // then go back one and re-parse from there
+                 // process the inserted rows from the same position
                  rides.clear();
    
                  i--;
@@ -740,7 +753,6 @@ RideImportWizard::process()
                    tableWidget->item(i,DISTANCE_COLUMN)->setText(dist);
                    tableWidget->item(i,DISTANCE_COLUMN)->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
-                   delete ride;
                } else {
                    // nope - can't handle this file
                    tableWidget->item(i,STATUS_COLUMN)->setText(tr("Error - ") + errors.join(tr(";")));
@@ -1054,6 +1066,10 @@ RideImportWizard::abortClicked()
     QChar zero = QLatin1Char ( '0' );
 
 
+    QStringList publishedNames;
+    QVector<RideFile*> publishedRides;
+    QVector<int> publishedRows;
+    bool saveAborted = false;
     // Saving now - process the files one-by-one
     for (int i=0; i< filenames.count(); i++) {
 
@@ -1062,7 +1078,7 @@ RideImportWizard::abortClicked()
         tableWidget->item(i,STATUS_COLUMN)->setText(tr("Saving..."));
         tableWidget->setCurrentCell(i,5);
         QApplication::processEvents();
-        if (aborted) { done(0); return; }
+        if (aborted) { saveAborted = true; break; }
         this->repaint();
 
 
@@ -1115,16 +1131,9 @@ RideImportWizard::abortClicked()
         }
 
 
-        // SAVE STEP 5 - open the file with the respective format reader and export as .JSON
-        // to track if addRideCache() has caused an error due to bad data we work with a interim directory for the activities
-        // -- first   export to /tmpactivities
-        // -- second  create RideCache() entry
-        // -- third   move file from /tmpactivities to /activities
-
-        // serialize the file to .JSON
-        QStringList errors;
-        QFile thisfile(filenames[i]);
-        RideFile *ride(RideFileFactory::instance().openRideFile(context, thisfile, errors));
+        // Export the retained, already validated ride as .JSON.
+        const QStringList errors = parsedRides.errorsAt(i);
+        RideFile *ride = parsedRides.at(i);
 
         // did the input file parse ok ? (should be fine here - since it was alrady checked before - but just in case)
         if (ride) {
@@ -1155,39 +1164,17 @@ RideImportWizard::abortClicked()
             QString writeError;
             if (reader.writeRideFile(context, ride, target, writeError, false)) {
                 QString publishError;
-                if (publishActivityBeforeCacheUpdate(
-                        [&](QString &stepError) {
-                            return publishStagedFileSet(
-                                { StagedFilePublication(
-                                    tmpActivitiesFulltarget,
-                                    finalActivitiesFulltarget) },
-                                stepError);
-                        },
-                        [&]() {
-                            context->athlete->addRide(
-                                activitiesTarget,
-                                tableWidget->rowCount() < 20);
-                        },
+                if (publishStagedFileSet(
+                        { StagedFilePublication(
+                            tmpActivitiesFulltarget,
+                            finalActivitiesFulltarget) },
                         publishError)) {
-                    tableWidget->item(i,STATUS_COLUMN)->setText(tr("File Saved"));
-
-                    // try autolinking to planned activity
-                    RideItem *other = context->athlete->rideCache->findSuggestion(context->ride);
-                    RideCache::OperationPreCheck check = context->athlete->rideCache->checkLinkActivities(context->ride, other);
-                    if (check.canProceed && ! check.requiresUserDecision) {
-                        RideCache::OperationResult result = context->athlete->rideCache->linkActivities(context->ride, other);
-                        if (result.success) {
-                            QString error;
-                            if (!context->athlete->rideCache->saveActivities(
-                                    check.affectedItems, error)) {
-                                tableWidget->item(i,STATUS_COLUMN)->setText(
-                                    tr("Warning - File saved, but linked "
-                                       "activity changes could not be saved: %1")
-                                        .arg(error));
-                            }
-                        }
-                    }
-                }  else {
+                    tableWidget->item(i,STATUS_COLUMN)->setText(
+                        tr("File Saved"));
+                    publishedNames.append(activitiesTarget);
+                    publishedRides.append(parsedRides.take(i));
+                    publishedRows.append(i);
+                } else {
                     tableWidget->item(i,STATUS_COLUMN)->setText(
                         tr("Error - Publishing %1 to activities folder: %2")
                             .arg(activitiesTarget, publishError));
@@ -1202,15 +1189,56 @@ RideImportWizard::abortClicked()
             tableWidget->item(i,STATUS_COLUMN)->setText(tr("Error - Import of activitiy file failed"));
         }
 
-        // clear
-        delete ride;
+        delete parsedRides.take(i);
 
         QApplication::processEvents();
-        if (aborted) { done(0); return; }
+        if (aborted) { saveAborted = true; break; }
         progressBar->setValue(progressBar->value()+1);
         this->repaint();
     }
 
+    RideCache *rideCache = context->athlete->rideCache;
+    rideCache->addRides(
+        publishedNames,
+        publishedRides,
+        tableWidget->rowCount() < 20,
+        true,
+        false,
+        false);
+
+    for (qsizetype index = 0; index < publishedNames.size(); ++index) {
+        const int row = publishedRows[index];
+        RideItem *imported = rideCache->getRide(publishedNames[index]);
+        if (!imported) {
+            tableWidget->item(row,STATUS_COLUMN)->setText(
+                tr("Warning - File saved, but activity cache "
+                   "could not be updated"));
+            continue;
+        }
+
+        RideItem *other = rideCache->findSuggestion(imported);
+        RideCache::OperationPreCheck check =
+            rideCache->checkLinkActivities(imported, other);
+        if (check.canProceed && !check.requiresUserDecision) {
+            RideCache::OperationResult result =
+                rideCache->linkActivities(imported, other);
+            if (result.success) {
+                QString error;
+                if (!rideCache->saveActivities(
+                        check.affectedItems, error)) {
+                    tableWidget->item(row,STATUS_COLUMN)->setText(
+                        tr("Warning - File saved, but linked "
+                           "activity changes could not be saved: %1")
+                            .arg(error));
+                }
+            }
+        }
+    }
+
+    if (saveAborted) {
+        done(0);
+        return;
+    }
     // how did we get on in the end then ...
     int completed = 0;
     for (int i=0; i< filenames.count(); i++)

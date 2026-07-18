@@ -16,6 +16,7 @@
  * Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 #include "RideCache.h"
+#include "RideCacheBulkMerge.h"
 
 #include "Context.h"
 #include "Athlete.h"
@@ -339,6 +340,95 @@ RideCache::addRide(QString name, bool dosignal, bool select, bool useTempActivit
 
     // model estimates (lazy refresh)
     estimator->refresh();
+}
+
+QVector<RideItem*>
+RideCache::addRides(
+    const QStringList &names,
+    const QVector<RideFile*> &preparedRides,
+    bool dosignal,
+    bool select,
+    bool useTempActivities,
+    bool planned)
+{
+    RideItem *prior = context->ride;
+    QVector<RideItem*> incoming;
+    incoming.reserve(names.size());
+
+    for (qsizetype index = 0; index < names.size(); ++index) {
+        const QString &name = names[index];
+        RideFile *prepared =
+            index < preparedRides.size() ? preparedRides[index] : nullptr;
+
+        QDateTime dt;
+        if (!RideFile::parseRideFileName(name, &dt)) {
+            delete prepared;
+            continue;
+        }
+
+        QString path;
+        bool itemPlanned = planned;
+        if (useTempActivities) {
+            path = context->athlete->home->tmpActivities().canonicalPath();
+            itemPlanned = false;
+        } else if (planned) {
+            path = plannedDirectory.canonicalPath();
+        } else {
+            path = directory.canonicalPath();
+        }
+
+        RideItem *item = nullptr;
+        if (prepared) {
+            item = new RideItem(prepared, dt, context);
+            item->path = path;
+            item->fileName = name;
+            item->planned = itemPlanned;
+            item->isdirty = false;
+        } else {
+            item = new RideItem(
+                path, name, dt, context, itemPlanned);
+        }
+
+        connect(item, SIGNAL(rideDataChanged()), this, SLOT(itemChanged()));
+        connect(item, SIGNAL(rideMetadataChanged()), this, SLOT(itemChanged()));
+        incoming.append(item);
+    }
+
+    for (qsizetype index = names.size();
+         index < preparedRides.size(); ++index) {
+        delete preparedRides[index];
+    }
+    if (incoming.isEmpty()) return incoming;
+
+    const QVector<RideItem*> replaced =
+        RideCacheBulkMerge::mergeItems(
+            rides_,
+            incoming,
+            [](const RideItem *item) { return item->fileName; },
+            rideCacheLessThan,
+            [this]() { model_->beginReset(); },
+            [this]() { model_->endReset(); });
+    Q_UNUSED(replaced);
+
+    for (RideItem *item : incoming) {
+        item->refresh();
+        item->close();
+        if (dosignal) {
+            context->notifyRideAdded(item);
+        }
+    }
+
+    if (prior) prior->close();
+
+    if (select) {
+        context->ride = incoming.constLast();
+        context->notifyRideSelected(context->ride);
+    } else {
+        context->notifyRideSelected(prior);
+    }
+
+    estimator->refresh();
+    return incoming;
 }
 
 bool
