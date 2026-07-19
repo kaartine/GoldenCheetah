@@ -27,6 +27,7 @@
 #include <QHash>
 #include <QStringList>
 #include <QTextDocument>
+#include "DataFilterResources.h"
 #include "RideCache.h"
 #include "RideFile.h" //for SeriesType
 #include "Utils.h" //for SeriesType
@@ -216,10 +217,14 @@ class DataFilter : public QObject
 {
     Q_OBJECT
 
+    private:
+        DataFilterResourceOwner<PDModel> resources_;
+        void initializeResources();
+
     public:
         DataFilter(QObject *parent, Context *context);
         DataFilter(QObject *parent, Context *context, QString formula);
-        ~DataFilter() { clearFilter(); }
+        ~DataFilter();
 
         // runtime passed by datafilter
         DataFilterRuntime rt;
@@ -236,9 +241,9 @@ class DataFilter : public QObject
         QString signature() { return sig; }
         Leaf *root() { return treeRoot; }
 
-        // for random number generation
-        const gsl_rng_type *T;
-        gsl_rng *r;
+        gsl_rng *randomGenerator() const {
+            return resources_.randomGenerator();
+        }
 
         // RideItem always available and supplies th context
         Result evaluate(RideItem *rideItem, RideFilePoint *p);

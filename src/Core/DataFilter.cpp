@@ -3269,28 +3269,42 @@ void Leaf::validateFilter(Context *context, DataFilterRuntime *df, Leaf *leaf)
     }
 }
 
-DataFilter::DataFilter(QObject *parent, Context *context) : QObject(parent), context(context), treeRoot(NULL), parent_(parent)
+void
+DataFilter::initializeResources()
 {
-    // let folks know who owns this rumtime for signalling
     rt.owner = this;
-    rt.chart = NULL;
-
-    // be sure not to enable this by accident!
+    rt.chart = nullptr;
     rt.isdynamic = false;
 
-    // set up the models we support
-    rt.models << new CP2Model(context);
-    rt.models << new CP3Model(context);
-    rt.models << new MultiModel(context);
-    rt.models << new ExtendedModel(context);
-    rt.models << new WSModel(context);
+    const auto addModel = [this](PDModel *model) {
+        resources_.addModel(model);
+        rt.models << model;
+    };
+    addModel(new CP2Model(context));
+    addModel(new CP3Model(context));
+    addModel(new MultiModel(context));
+    addModel(new ExtendedModel(context));
+    addModel(new WSModel(context));
 
-    // random number generator
     gsl_rng_env_setup();
-    unsigned long mySeed = QDateTime::currentMSecsSinceEpoch();
-    T = gsl_rng_default; // Generator setup
-    r = gsl_rng_alloc (T);
-    gsl_rng_set(r, mySeed);
+    gsl_rng *rng = gsl_rng_alloc(gsl_rng_default);
+    resources_.setRandomGenerator(rng);
+    if (rng) {
+        const unsigned long seed = static_cast<unsigned long>(
+            QDateTime::currentMSecsSinceEpoch());
+        gsl_rng_set(rng, seed);
+    }
+}
+
+DataFilter::~DataFilter()
+{
+    clearFilter();
+    rt.models.clear();
+}
+
+DataFilter::DataFilter(QObject *parent, Context *context) : QObject(parent), context(context), treeRoot(NULL), parent_(parent)
+{
+    initializeResources();
 
     configChanged(CONFIG_FIELDS);
     connect(context, SIGNAL(configChanged(qint32)), this, SLOT(configChanged(qint32)));
@@ -3299,25 +3313,7 @@ DataFilter::DataFilter(QObject *parent, Context *context) : QObject(parent), con
 
 DataFilter::DataFilter(QObject *parent, Context *context, QString formula) : QObject(parent), context(context), treeRoot(NULL), parent_(parent)
 {
-    // let folks know who owns this rumtime for signalling
-    rt.owner = this;
-    rt.chart = NULL;
-
-    // be sure not to enable this by accident!
-    rt.isdynamic = false;
-
-    // set up the models we support
-    rt.models << new CP2Model(context);
-    rt.models << new CP3Model(context);
-    rt.models << new MultiModel(context);
-    rt.models << new ExtendedModel(context);
-    rt.models << new WSModel(context);
-
-    gsl_rng_env_setup();
-    unsigned long mySeed = QDateTime::currentMSecsSinceEpoch();
-    T = gsl_rng_default; // Generator setup
-    r = gsl_rng_alloc (T);
-    gsl_rng_set(r, mySeed);
+    initializeResources();
 
     configChanged(CONFIG_FIELDS);
 
@@ -6216,8 +6212,9 @@ Result Leaf::eval(DataFilterRuntime *df, Leaf *leaf, const Result &x, long it, R
             Result returning(0);
 
             // Random number function based on the GNU Scientific Library
+            gsl_rng *rng = df->owner->randomGenerator();
             while(n>0) {
-                double random = gsl_rng_uniform(df->owner->r); // Generate it!
+                const double random = rng ? gsl_rng_uniform(rng) : 0.0;
                 returning.number() += random;
                 returning.asNumeric() << random;
                 n--;

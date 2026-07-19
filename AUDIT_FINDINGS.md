@@ -1439,12 +1439,29 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### PERF-004: DataFilter leaks models and its GSL RNG
 
-- Status: OPEN
-- Code: `src/Core/DataFilter.cpp:3283`, `src/Core/DataFilter.h:222`
+- Status: FIXED
+- Code: `src/Core/DataFilter.cpp`, `src/Core/DataFilter.h`, and
+  `src/Core/DataFilterResources.h`
 - Impact: Frequently recreated filters retain five model objects plus an RNG,
   increasing memory use during navigation.
-- Test: Create/destroy 10,000 filters under heaptrack/ASan leak detection.
-- Fix direction: RAII ownership, `qDeleteAll(rt.models)`, and `gsl_rng_free`.
+- Regression test: The RED build failed because the production resource owner
+  did not exist. The completed test creates and destroys 10,000 resource sets,
+  each containing five counted models and one real GSL RNG, and verifies that
+  all 50,000 models are destroyed. Strict leak detection covers the RNG.
+- Resolution: `DataFilterResourceOwner` now owns the model objects and GSL RNG,
+  deleting the models with `qDeleteAll` and releasing the RNG with
+  `gsl_rng_free`. Both `DataFilter` constructors use one common initializer,
+  and destruction clears the runtime's non-owning model aliases before the
+  owner releases their targets.
+- Verification: All three focused tests passed normally and under strict
+  ASan/UBSan/LSan with leak detection and no sanitizer reports. A fresh full
+  release build succeeded, and all 60 unit-test projects passed (2,002 passed,
+  0 failed, 0 skipped, 0 blacklisted). The 166,455,800-byte AppImage reports
+  `V3.8-DEV2605 (5012)` and has SHA-256
+  `ad6cba25536acbc84febfc0c160ca86d6eacc1e50befda7f87e6fc0c2fd35b42`.
+  It remained stable for a 15-second isolated X11 launch and a 45-second launch
+  against a copied real athlete profile; neither run produced a crash, cache
+  error, sanitizer report, or Qt linkage error.
 
 ### PERF-005: Navigator filtering is quadratic for large result sets
 
