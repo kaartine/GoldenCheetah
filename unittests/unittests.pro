@@ -45,6 +45,7 @@ equals(GC_UNITTESTS, active) {
 			   Gui/splitActivitySave \
 			   Gui/splitRideData \
 			   Gui/perspectiveStateSource \
+			   Gui/rideNavigatorSearchFilter \
 			   Gui/trainPerspectiveState \
 			   Metrics/rideMetadataAtomicSave \
 			   Python/pythonDataSeriesOwnership \

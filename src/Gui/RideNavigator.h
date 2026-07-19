@@ -25,6 +25,7 @@
 #include "Context.h"
 #include "Settings.h"
 #include "Colors.h"
+#include "RideNavigatorSearchFilter.h"
 
 #include <QTreeView>
 #include <QStyledItemDelegate>
@@ -36,7 +37,6 @@
 
 class ActivityItemDelegate;
 class GroupByModel;
-class SearchFilter;
 class SearchFilterBox;
 class QSortFilterProxyModel;
 class RideNavigatorSortProxyModel;
@@ -50,9 +50,6 @@ class EditUserMetricDialog;
 class EditUserSeriesDialog;
 class OverviewItemConfig;
 class RideMetric;
-
-// Ride Navigator activity list display filter options 
-enum class RideNavFilter { ALL=0, COMPLETED, PLANNED };
 
 //
 // The RideNavigator

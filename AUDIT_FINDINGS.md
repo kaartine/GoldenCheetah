@@ -1465,13 +1465,31 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### PERF-005: Navigator filtering is quadratic for large result sets
 
-- Status: OPEN
-- Code: `src/Gui/RideNavigatorProxy.h:740`,
-  `src/Gui/RideNavigatorProxy.h:765`
+- Status: FIXED
+- Code: `src/Gui/RideNavigatorSearchFilter.h` and
+  `unittests/Gui/rideNavigatorSearchFilter/testRideNavigatorSearchFilter.cpp`
 - Impact: `filterAcceptsRow` performs a linear `QStringList::contains` lookup for
-  every source row.
-- Test: Filter 50k rows with 25k matches and enforce a latency budget.
-- Fix direction: Store matches in `QSet<QString>`.
+  every source row, making large search result sets quadratic.
+- Regression test: The initial RED build failed because the production search
+  filter had no independently testable header. After extracting the unchanged
+  `QStringList` implementation, the functional cases passed but filtering
+  50,000 rows against 25,000 matches took 3,173 ms and failed the 1,000 ms
+  budget. The completed suite verifies exact case-sensitive membership,
+  duplicate matches, search replacement and clearing, and combination with the
+  planned/completed activity filter.
+- Resolution: The actual navigator `SearchFilter` is now independently
+  testable and stores the current filenames in a reserved `QSet<QString>`,
+  replacing each per-row linear lookup with an amortized constant-time lookup
+  while preserving the existing matching semantics.
+- Verification: All five focused QtTest cases passed in 16 ms normally and in
+  69 ms under strict ASan/UBSan/LSan, with no sanitizer reports. A fresh full
+  release build succeeded, and all 61 unit-test projects passed (2,007 passed,
+  0 failed, 0 skipped, 0 blacklisted). The 166,451,704-byte AppImage reports
+  `V3.8-DEV2605 (5012)` and has SHA-256
+  `3302dabf6da1fed9488463306ef3f073b22eb09a104f9786673259637726f302`.
+  It remained stable for a 15-second isolated X11 launch and a 45-second launch
+  against a copied real athlete profile; the logs contained only missing
+  translator notices.
 
 ### PERF-006: Calendar/compare aggregation repeatedly scans the library
 
