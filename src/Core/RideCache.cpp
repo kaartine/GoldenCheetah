@@ -16,6 +16,7 @@
  * Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 #include "RideCache.h"
+#include "RideCacheAggregate.h"
 #include "RideCacheBulkMerge.h"
 #include "RideCacheSnapshot.h"
 
@@ -1003,96 +1004,129 @@ RideCache::startLatestRefresh()
     if (notifyStart) context->notifyRefreshStart();
 }
 
+namespace {
+
+RideCacheAggregate::MetricType aggregateMetricType(
+    const RideMetric *metric)
+{
+    switch (metric->type()) {
+    case RideMetric::Total:
+        return RideCacheAggregate::MetricType::Total;
+    case RideMetric::Peak:
+        return RideCacheAggregate::MetricType::Peak;
+    case RideMetric::Low:
+        return RideCacheAggregate::MetricType::Low;
+    case RideMetric::RunningTotal:
+        return RideCacheAggregate::MetricType::RunningTotal;
+    case RideMetric::MeanSquareRoot:
+        return RideCacheAggregate::MetricType::MeanSquareRoot;
+    case RideMetric::Average:
+    case RideMetric::StdDev:
+    default:
+        return RideCacheAggregate::MetricType::Average;
+    }
+}
+
+} // namespace
+
+QVector<QStringList>
+RideCache::getAggregates(
+    const QStringList &names,
+    const QVector<Specification> &specifications,
+    bool useMetricUnits,
+    bool nofmt)
+{
+    const RideMetricFactory &factory = RideMetricFactory::instance();
+    QVector<const RideMetric*> metrics;
+    QVector<RideCacheAggregate::MetricDefinition> definitions;
+    metrics.reserve(names.size());
+    definitions.reserve(names.size());
+
+    for (const QString &name : names) {
+        const RideMetric *metric = factory.rideMetric(name);
+        RideCacheAggregate::MetricDefinition definition;
+        definition.enabled = metric != nullptr;
+        if (metric) {
+            definition.type = aggregateMetricType(metric);
+            definition.aggregateZero = metric->aggregateZero();
+            definition.divideByCount =
+                metric->type() == RideMetric::Average;
+            definition.excludesValue =
+                metric->symbol() == QStringLiteral("average_temp");
+            definition.excludedValue = RideFile::NA;
+        } else {
+            qDebug() << "unknown metric:" << name;
+        }
+        metrics.append(metric);
+        definitions.append(definition);
+    }
+
+    const RideCacheAggregate::BatchResult batch =
+        RideCacheAggregate::aggregate(
+            rides_,
+            specifications,
+            definitions,
+            [](const Specification &specification, RideItem *item) {
+                return specification.pass(item);
+            },
+            [&](qsizetype metric, RideItem *item) {
+                return item->getForSymbol(names.at(metric));
+            },
+            [&](qsizetype metric, RideItem *item) {
+                return item->getCountForSymbol(names.at(metric));
+            });
+
+    QVector<QStringList> results(specifications.size());
+    for (qsizetype specification = 0;
+         specification < specifications.size();
+         ++specification) {
+        QStringList &values = results[specification];
+        values.reserve(names.size());
+        for (qsizetype metricIndex = 0;
+             metricIndex < metrics.size();
+             ++metricIndex) {
+            const RideMetric *metric = metrics.at(metricIndex);
+            if (!metric) {
+                values.append(
+                    QStringLiteral("%1 unknown").arg(names.at(metricIndex)));
+                continue;
+            }
+
+            const double value = RideCacheAggregate::finalValue(
+                batch.accumulators.at(specification).at(metricIndex),
+                definitions.at(metricIndex));
+            const_cast<RideMetric*>(metric)->setValue(value);
+
+            QString formatted;
+            if (metric->units(useMetricUnits) == QStringLiteral("seconds")
+                || metric->units(useMetricUnits) == tr("seconds")) {
+                formatted = nofmt
+                    ? QStringLiteral("%1").arg(value)
+                    : metric->toString(useMetricUnits);
+            } else {
+                formatted = metric->toString(useMetricUnits);
+            }
+
+            if ((metric->symbol() == QStringLiteral("average_temp")
+                 || metric->symbol() == QStringLiteral("max_temp"))
+                && formatted == QStringLiteral("0.0")) {
+                formatted = QStringLiteral("-");
+            }
+            values.append(formatted);
+        }
+    }
+    return results;
+}
+
 QString
 RideCache::getAggregate(QString name, Specification spec, bool useMetricUnits, bool nofmt)
 {
-    // get the metric details, so we can convert etc
-    const RideMetric *metric = RideMetricFactory::instance().rideMetric(name);
-    if (!metric) {
-        qDebug()<<"unknown metric:"<<name;
-        return QString("%1 unknown").arg(name);
-    }
-
-    // what we will return
-    double rvalue = 0;
-    double rcount = 0; // using double to avoid rounding issues with int when dividing
-
-    // loop through and aggregate
-    foreach (RideItem *item, rides()) {
-
-        // skip filtered rides
-        if (!spec.pass(item)) continue;
-
-        // get this value
-        double value = item->getForSymbol(name);
-        double count = item->getCountForSymbol(name); // for averaging
-
-        // check values are bounded, just in case
-        if (std::isnan(value) || std::isinf(value)) value = 0;
-
-        // do we aggregate zero values ?
-        bool aggZero = metric->aggregateZero();
-
-        // set aggZero to false and value to zero if is temperature and -255
-        if (metric->symbol() == "average_temp" && value == RideFile::NA) {
-            value = 0;
-            aggZero = false;
-        }
-
-        switch (metric->type()) {
-        case RideMetric::RunningTotal:
-        case RideMetric::Total:
-            rvalue += value;
-            break;
-        default:
-        case RideMetric::Average:
-            {
-            // average should be calculated taking into account
-            // the duration of the ride, otherwise high value but
-            // short rides will skew the overall average
-            if (value || aggZero) {
-                rvalue += value*count;
-                rcount += count;
-            }
-            break;
-            }
-        case RideMetric::Low:
-            {
-            if (value < rvalue) rvalue = value;
-            break;
-            }
-        case RideMetric::Peak:
-            {
-            if (value > rvalue) rvalue = value;
-            break;
-            }
-        case RideMetric::MeanSquareRoot:
-            {
-                rvalue = sqrt((pow(rvalue, 2)*rcount + pow(value,2)*count)/(rcount + count));
-                rcount += count;
-                break;
-            }
-        }
-    }
-
-    // now compute the average
-    if (metric->type() == RideMetric::Average) {
-        if (rcount) rvalue = rvalue / rcount;
-    }
-
-    const_cast<RideMetric*>(metric)->setValue(rvalue);
-    // Format appropriately
-    QString result;
-    if (metric->units(useMetricUnits) == "seconds" ||
-        metric->units(useMetricUnits) == tr("seconds")) {
-        if (nofmt) result = QString("%1").arg(rvalue);
-        else result = metric->toString(useMetricUnits);
-
-    } else result = metric->toString(useMetricUnits);
-
-    // 0 temp from aggregate means no values
-    if ((metric->symbol() == "average_temp" || metric->symbol() == "max_temp") && result == "0.0") result = "-";
-    return result;
+    const QVector<QStringList> results = getAggregates(
+        QStringList{name},
+        QVector<Specification>{spec},
+        useMetricUnits,
+        nofmt);
+    return results.value(0).value(0);
 }
 
 bool rideCachesummaryBestGreaterThan(const AthleteBest &s1, const AthleteBest &s2)
@@ -1268,27 +1302,40 @@ RideCache::getRideTypeCounts(Specification specification, int& nActivities,
     }
 }
 
-bool
-RideCache::isMetricRelevantForRides(Specification specification,
-                                    const RideMetric* metric,
-                                    SportRestriction sport)
+QVector<bool>
+RideCache::areMetricsRelevantForRides(
+    const QVector<Specification> &specifications,
+    const QVector<const RideMetric*> &metrics,
+    SportRestriction sport)
 {
-    // loop through and aggregate
-    foreach (RideItem *ride, rides_) {
+    return RideCacheAggregate::metricRelevance(
+        rides_,
+        specifications,
+        metrics.size(),
+        [](const Specification &specification, RideItem *ride) {
+            return specification.pass(ride);
+        },
+        [&](qsizetype metricIndex, RideItem *ride) {
+            if ((sport == OnlyRides) && !ride->isBike) return false;
+            if ((sport == OnlyRuns) && !ride->isRun) return false;
+            if ((sport == OnlySwims) && !ride->isSwim) return false;
+            if ((sport == OnlyXtrains) && !ride->isXtrain) return false;
 
-        // skip filtered rides
-        if (!specification.pass(ride)) continue;
+            const RideMetric *metric = metrics.at(metricIndex);
+            return metric && metric->isRelevantForRide(ride);
+        });
+}
 
-        // skip non selected sports when restriction supplied
-        if ((sport == OnlyRides) && !ride->isBike) continue;
-        if ((sport == OnlyRuns) && !ride->isRun) continue;
-        if ((sport == OnlySwims) && !ride->isSwim) continue;
-        if ((sport == OnlyXtrains) && !ride->isXtrain) continue;
-
-        if (metric->isRelevantForRide(ride)) return true;
-    }
-
-    return false;
+bool
+RideCache::isMetricRelevantForRides(
+    Specification specification,
+    const RideMetric *metric,
+    SportRestriction sport)
+{
+    return areMetricsRelevantForRides(
+        QVector<Specification>{specification},
+        QVector<const RideMetric*>{metric},
+        sport).value(0);
 }
 
 

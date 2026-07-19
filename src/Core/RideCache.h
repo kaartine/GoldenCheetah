@@ -75,6 +75,11 @@ class RideCache : public QObject
 
         // get an aggregate applying the passed spec
         QString getAggregate(QString name, Specification spec, bool useMetricUnits, bool nofmt=false);
+        QVector<QStringList> getAggregates(
+            const QStringList &names,
+            const QVector<Specification> &specifications,
+            bool useMetricUnits,
+            bool nofmt=false);
 
         // get top n bests
         QList<AthleteBest> getBests(QString symbol, int n, Specification specification, bool useMetricUnits=true);
@@ -91,6 +96,10 @@ class RideCache : public QObject
         bool isMetricRelevantForRides(Specification specification,
                                       const RideMetric* metric,
                                       SportRestriction sport=AnySport);
+        QVector<bool> areMetricsRelevantForRides(
+            const QVector<Specification> &specifications,
+            const QVector<const RideMetric*> &metrics,
+            SportRestriction sport=AnySport);
 
         // is running ?
         bool isRunning() { return refreshThreads.count() != 0; }

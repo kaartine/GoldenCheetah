@@ -361,29 +361,91 @@ ComparePane::refreshTable()
 
         QStringList worklist; // metrics to compute
         RideMetricFactory &factory = RideMetricFactory::instance();
+        QStringList candidateSymbols;
+        QVector<const RideMetric*> candidateMetrics;
+        for (const QString &metric : metricColumns) {
+            const RideMetric *rideMetric = factory.rideMetric(metric);
+            if (rideMetric) {
+                candidateSymbols.append(metric);
+                candidateMetrics.append(rideMetric);
+            }
+        }
 
-        foreach(QString metric, metricColumns) {
-
-            // get the metric name
-            const RideMetric *m = factory.rideMetric(metric);
-            if (m) {
-                // Skip metrics not relevant for all ranges in compare pane
-                bool isRelevant = false;
-                foreach(CompareDateRange x, context->compareDateRanges) {
-                    if (x.context->athlete->rideCache->isMetricRelevantForRides(x.specification, m)) {
-                        isRelevant = true;
-                        break;
-                    }
+        QVector<bool> relevant(candidateMetrics.size(), false);
+        QHash<RideCache*, QVector<Specification>> relevanceRequests;
+        for (const CompareDateRange &range : context->compareDateRanges) {
+            RideCache *cache = range.context->athlete->rideCache;
+            relevanceRequests[cache].append(range.specification);
+        }
+        for (auto request = relevanceRequests.cbegin();
+             request != relevanceRequests.cend();
+             ++request) {
+            const QVector<bool> current =
+                request.key()->areMetricsRelevantForRides(
+                    request.value(), candidateMetrics);
+            for (qsizetype metric = 0; metric < relevant.size(); ++metric) {
+                if (current.at(metric)) {
+                    relevant[metric] = true;
                 }
-                if (!isRelevant) continue;
+            }
+        }
 
-                worklist << metric;
-                QString units;
-                if (!(m->units(GlobalContext::context()->useMetricUnits) == "seconds" || m->units(GlobalContext::context()->useMetricUnits) == tr("seconds")))
-                    units = m->units(GlobalContext::context()->useMetricUnits);
-                QString name( Utils::unprotect(m->name()));
-                if (units != "") list << QString("%1 (%2)").arg(name).arg(units);
-                else list << QString("%1").arg(name);
+        for (qsizetype metric = 0;
+             metric < candidateMetrics.size();
+             ++metric) {
+            if (!relevant.at(metric)) continue;
+
+            const RideMetric *rideMetric = candidateMetrics.at(metric);
+            worklist.append(candidateSymbols.at(metric));
+            QString units;
+            if (rideMetric->units(
+                    GlobalContext::context()->useMetricUnits)
+                    != QStringLiteral("seconds")
+                && rideMetric->units(
+                    GlobalContext::context()->useMetricUnits)
+                    != tr("seconds")) {
+                units = rideMetric->units(
+                    GlobalContext::context()->useMetricUnits);
+            }
+            const QString name(Utils::unprotect(rideMetric->name()));
+            if (!units.isEmpty()) {
+                list.append(QStringLiteral("%1 (%2)").arg(name, units));
+            } else {
+                list.append(name);
+            }
+        }
+
+        QVector<QStringList> aggregateValues(
+            context->compareDateRanges.size());
+        QHash<RideCache*, QVector<int>> aggregateRequests;
+        for (int range = 0;
+             range < context->compareDateRanges.size();
+             ++range) {
+            const CompareDateRange &dateRange =
+                context->compareDateRanges.at(range);
+            RideCache *cache =
+                dateRange.sourceContext->athlete->rideCache;
+            aggregateRequests[cache].append(range);
+        }
+        for (auto request = aggregateRequests.cbegin();
+             request != aggregateRequests.cend();
+             ++request) {
+            QVector<Specification> specifications;
+            specifications.reserve(request.value().size());
+            for (int range : request.value()) {
+                specifications.append(
+                    context->compareDateRanges.at(range).specification);
+            }
+            const QVector<QStringList> aggregates =
+                request.key()->getAggregates(
+                    worklist,
+                    specifications,
+                    GlobalContext::context()->useMetricUnits);
+            for (qsizetype index = 0;
+                 index < request.value().size();
+                 ++index) {
+                aggregateValues[request.value().at(index)] =
+                    aggregates.at(index);
             }
         }
 
@@ -402,7 +464,7 @@ ComparePane::refreshTable()
 
         table->setRowCount(context->compareDateRanges.count());
         int counter = 0;
-        foreach(CompareDateRange x, context->compareDateRanges) {
+        for (const CompareDateRange &x : context->compareDateRanges) {
 
             // First few cols always the same
             // check - color - athlete - date - time
@@ -441,10 +503,8 @@ ComparePane::refreshTable()
 
             // metrics
             for(int i = 0; i < worklist.count(); i++) {
-
-                QString value = x.sourceContext->athlete->rideCache->getAggregate(worklist[i], x.specification, GlobalContext::context()->useMetricUnits);
-
                 // add to the table
+                const QString value = aggregateValues.at(counter).at(i);
                 t = new CTableWidgetItem;
                 t->setText(value);
                 t->setFlags(t->flags() & (~Qt::ItemIsEditable));

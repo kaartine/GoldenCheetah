@@ -10,7 +10,8 @@ CONFIG -= debug
 
 SOURCES = testRideCachePerformance.cpp
 
-HEADERS = ../../../src/Core/RideCacheStartup.h
+HEADERS = ../../../src/Core/RideCacheAggregate.h \
+          ../../../src/Core/RideCacheStartup.h
 
 INCLUDEPATH += ../../../src \
                ../../../src/Core

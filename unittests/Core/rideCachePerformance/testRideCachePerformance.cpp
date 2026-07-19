@@ -1,8 +1,28 @@
 #include <QtTest>
 
+#include "RideCacheAggregate.h"
 #include "RideCacheStartup.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
+
+namespace {
+
+struct AggregateItem
+{
+    int bucket = 0;
+    QVector<double> values;
+    QVector<double> counts;
+    QVector<bool> relevant;
+};
+
+struct BucketSpecification
+{
+    int bucket = 0;
+};
+
+} // namespace
 
 class TestRideCachePerformance : public QObject
 {
@@ -17,6 +37,9 @@ private slots:
     void invalidationScope();
     void refreshGenerationsRejectSupersededWork();
     void refreshCancellationSettlesPendingWork();
+    void batchAggregationPreservesMetricSemantics();
+    void batchAggregationScalesWithoutRepeatedMetricReads();
+    void batchedMetricRelevancePreservesUnionSemantics();
 };
 
 void TestRideCachePerformance::startupIndex_data()
@@ -245,6 +268,185 @@ refreshCancellationSettlesPendingWork()
     QCOMPARE(generations.beginLatest(), next);
     QVERIFY(generations.accepts(next));
     QVERIFY(!generations.finish(next));
+}
+
+void TestRideCachePerformance::batchAggregationPreservesMetricSemantics()
+{
+    using MetricType = RideCacheAggregate::MetricType;
+    using MetricDefinition = RideCacheAggregate::MetricDefinition;
+
+    const QVector<MetricDefinition> metrics = {
+        {MetricType::Total, false, false, 0.0, true},
+        {MetricType::RunningTotal, false, false, 0.0, true},
+        {MetricType::Average, false, false, 0.0, true},
+        {MetricType::Average, true, false, 0.0, true},
+        {MetricType::Low, false, false, 0.0, true},
+        {MetricType::Peak, false, false, 0.0, true},
+        {MetricType::MeanSquareRoot, false, false, 0.0, true},
+        {MetricType::Average, false, true, -255.0, true},
+        {MetricType::Average, false, false, 0.0, true, false},
+        {MetricType::Total, false, false, 0.0, false}
+    };
+    const QVector<AggregateItem> items = {
+        {0,
+         {5.0, 5.0, 10.0, 10.0, 5.0, 5.0, 3.0, -255.0, 10.0, 999.0},
+         {1.0, 1.0, 2.0, 2.0, 1.0, 1.0, 2.0, 1.0, 2.0, 1.0},
+         {false, false, true, false, false, false, false, false, true, true}},
+        {0,
+         {7.0, 7.0, 0.0, 0.0, -2.0, 8.0, 4.0, 20.0, 0.0, 999.0},
+         {1.0, 1.0, 4.0, 4.0, 1.0, 1.0, 2.0, 2.0, 4.0, 1.0},
+         {true, false, false, true, false, true, false, true, false, true}},
+        {0,
+         {std::numeric_limits<double>::quiet_NaN(),
+          std::numeric_limits<double>::infinity(),
+          30.0, 30.0, 9.0, 2.0, 0.0, 0.0, 30.0, 999.0},
+         {1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 2.0, 3.0, 1.0, 1.0},
+         {false, true, false, false, true, false, true, false, false, true}}
+    };
+    const QVector<BucketSpecification> specifications = {{0}};
+
+    int valueCalls = 0;
+    int countCalls = 0;
+    const auto result = RideCacheAggregate::aggregate(
+        items,
+        specifications,
+        metrics,
+        [](const BucketSpecification &specification,
+           const AggregateItem &item) {
+            return specification.bucket == item.bucket;
+        },
+        [&](qsizetype metric, const AggregateItem &item) {
+            ++valueCalls;
+            return item.values.at(metric);
+        },
+        [&](qsizetype metric, const AggregateItem &item) {
+            ++countCalls;
+            return item.counts.at(metric);
+        });
+
+    QCOMPARE(result.accumulators.size(), 1);
+    QCOMPARE(result.accumulators.constFirst().size(), metrics.size());
+    const auto value = [&](qsizetype metric) {
+        return RideCacheAggregate::finalValue(
+            result.accumulators.constFirst().at(metric), metrics.at(metric));
+    };
+    QCOMPARE(value(0), 12.0);
+    QCOMPARE(value(1), 12.0);
+    QVERIFY(qAbs(value(2) - (50.0 / 3.0)) < 1e-12);
+    QVERIFY(qAbs(value(3) - (50.0 / 7.0)) < 1e-12);
+    QCOMPARE(value(4), -2.0);
+    QCOMPARE(value(5), 8.0);
+    QVERIFY(qAbs(value(6) - std::sqrt(50.0 / 6.0)) < 1e-12);
+    QCOMPARE(value(7), 20.0);
+    QCOMPARE(value(8), 50.0);
+    QCOMPARE(value(9), 0.0);
+    QCOMPARE(valueCalls, 27);
+    QCOMPARE(countCalls, 27);
+
+}
+
+void TestRideCachePerformance::
+batchAggregationScalesWithoutRepeatedMetricReads()
+{
+    constexpr int RowCount = 50000;
+    constexpr int BucketCount = 52;
+    constexpr int MetricCount = 6;
+    constexpr qint64 BudgetMilliseconds = 2000;
+
+    struct LargeItem { int bucket; };
+    QVector<LargeItem> items;
+    items.reserve(RowCount);
+    for (int row = 0; row < RowCount; ++row) {
+        items.append(LargeItem{row % BucketCount});
+    }
+
+    QVector<BucketSpecification> specifications;
+    specifications.reserve(BucketCount);
+    for (int bucket = 0; bucket < BucketCount; ++bucket) {
+        specifications.append(BucketSpecification{bucket});
+    }
+
+    QVector<RideCacheAggregate::MetricDefinition> metrics;
+    metrics.fill(
+        {RideCacheAggregate::MetricType::Total,
+         false, false, 0.0, true},
+        MetricCount);
+
+    qint64 passCalls = 0;
+    qint64 valueCalls = 0;
+    qint64 countCalls = 0;
+    QElapsedTimer timer;
+    timer.start();
+    const auto result = RideCacheAggregate::aggregate(
+        items,
+        specifications,
+        metrics,
+        [&](const BucketSpecification &specification,
+            const LargeItem &item) {
+            ++passCalls;
+            return specification.bucket == item.bucket;
+        },
+        [&](qsizetype, const LargeItem &) {
+            ++valueCalls;
+            return 1.0;
+        },
+        [&](qsizetype, const LargeItem &) {
+            ++countCalls;
+            return 1.0;
+        });
+    const qint64 elapsed = timer.elapsed();
+
+    QCOMPARE(passCalls, qint64(RowCount) * BucketCount);
+    QCOMPARE(valueCalls, qint64(RowCount) * MetricCount);
+    QCOMPARE(countCalls, qint64(RowCount) * MetricCount);
+    QCOMPARE(result.accumulators.size(), BucketCount);
+    for (int bucket = 0; bucket < BucketCount; ++bucket) {
+        const int expectedRows =
+            (RowCount + BucketCount - 1 - bucket) / BucketCount;
+        for (int metric = 0; metric < MetricCount; ++metric) {
+            QCOMPARE(
+                RideCacheAggregate::finalValue(
+                    result.accumulators.at(bucket).at(metric),
+                    metrics.at(metric)),
+                double(expectedRows));
+        }
+    }
+    QVERIFY2(
+        elapsed < BudgetMilliseconds,
+        qPrintable(
+            QStringLiteral("50k x 52 x 6 batch aggregation took %1 ms")
+                .arg(elapsed)));
+}
+
+void TestRideCachePerformance::
+batchedMetricRelevancePreservesUnionSemantics()
+{
+    const QVector<AggregateItem> items = {
+        {0, {}, {}, {true, false, false, true}},
+        {1, {}, {}, {false, true, false, false}},
+        {2, {}, {}, {false, false, true, true}}
+    };
+    const QVector<BucketSpecification> specifications = {{0}, {2}};
+
+    int passCalls = 0;
+    int relevanceCalls = 0;
+    const QVector<bool> relevant = RideCacheAggregate::metricRelevance(
+        items,
+        specifications,
+        4,
+        [&](const BucketSpecification &specification,
+            const AggregateItem &item) {
+            ++passCalls;
+            return specification.bucket == item.bucket;
+        },
+        [&](qsizetype metric, const AggregateItem &item) {
+            ++relevanceCalls;
+            return item.relevant.at(metric);
+        });
+
+    QCOMPARE(relevant, QVector<bool>({true, false, true, true}));
+    QCOMPARE(passCalls, 5);
+    QCOMPARE(relevanceCalls, 6);
 }
 
 QTEST_GUILESS_MAIN(TestRideCachePerformance)

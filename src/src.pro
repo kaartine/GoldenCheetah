@@ -622,6 +622,7 @@ HEADERS += Cloud/LocalFileStoreProcess.h
 # core data
 HEADERS += Core/Athlete.h Core/ConfigFlags.h Core/Context.h Core/DataFilter.h Core/DataFilterResources.h Core/DataFilterSafety.h Core/FreeSearch.h Core/GcCalendarModel.h Core/GcUpgrade.h \
            Core/IdleTimer.h Core/IntervalItem.h Core/NamedSearch.h Core/RideCache.h Core/RideCacheBulkMerge.h Core/RideCachePersistence.h Core/RideCacheSnapshot.h Core/RideCacheStartup.h Core/RideCacheModel.h Core/RideDB.h \
+           Core/RideCacheAggregate.h \
            Core/RideItem.h Core/Route.h Core/RouteParser.h Core/Season.h Core/SeasonDialogs.h Core/Seasons.h Core/Secrets.h Core/Settings.h Core/CredentialSettings.h Core/CredentialStoreQtKeychain.h \
            Core/Specification.h Core/TimeUtils.h Core/Units.h Core/UserData.h Core/Utils.h \
            Core/Measures.h Core/Quadtree.h Core/SplineLookup.h

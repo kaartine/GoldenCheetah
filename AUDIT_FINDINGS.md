@@ -1493,13 +1493,35 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### PERF-006: Calendar/compare aggregation repeatedly scans the library
 
-- Status: OPEN
-- Code: `src/Core/RideCache.cpp:784`,
-  `src/Charts/CalendarWindow.cpp:1145`
+- Status: FIXED
+- Code: `src/Core/RideCacheAggregate.h`, `src/Core/RideCache.cpp`,
+  `src/Charts/CalendarWindow.cpp`, `src/Gui/ComparePane.cpp`
 - Impact: Each metric and time bucket triggers another full activity scan.
-- Test: Benchmark calendar/compare refresh at 1k/10k/50k activities.
-- Fix direction: Batch metrics/buckets in one scan or maintain incremental daily
-  aggregates.
+- RED test: The existing `rideCachePerformance` suite was extended before the
+  implementation with batch semantic, relevance-union, and 50,000-row scaling
+  cases. The test project referenced the not-yet-existing aggregate helper;
+  qmake warned that the header was missing and compilation failed with exit 2.
+- Regression coverage: The semantic case covers all existing aggregation
+  modes, zero inclusion/exclusion, the temperature sentinel, disabled metrics,
+  non-finite values, and the existing standard-deviation formatting behavior.
+  The 50,000-row, 52-bucket, six-metric case has a two-second budget and proves
+  exact callback counts: 2,600,000 specification checks and only 300,000 value
+  and count reads, eliminating the previous metric multiplier from activity
+  scans. Relevance tests preserve the union of multiple specifications.
+- Resolution: `RideCache` now batches metrics and specifications through one
+  generic traversal while retaining the single-metric compatibility wrappers.
+  Calendar summaries submit every bucket in one request. Compare-season
+  relevance and aggregation requests are grouped by their source cache, then
+  mapped back to the existing table rows.
+- Verification: All 15 focused QtTest cases passed in 80 ms normally and in
+  303 ms under strict ASan/UBSan/LSan, with no sanitizer reports. A fresh full
+  release build succeeded, and all 61 unit-test projects passed (2,010 passed,
+  0 failed, 0 skipped, 0 blacklisted). The 166,480,376-byte AppImage reports
+  `V3.8-DEV2605 (5012)` and has SHA-256
+  `6bc0afb5f0e4a5625afdba6c9b4bbfb71cdbd86810cfd135dd00993d13f7245e`.
+  It remained stable for a 15-second isolated X11 launch and a 45-second launch
+  against a copied real athlete profile; the logs contained only missing
+  translator notices.
 
 ### PERF-007: Cloud GUI handoff queues have no backpressure
 

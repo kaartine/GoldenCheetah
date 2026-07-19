@@ -1127,33 +1127,63 @@ QList<CalendarSummary>
 CalendarWindow::getSummaries
 (const QDate &firstDay, const QDate &lastDay, int timeBucketSize) const
 {
-    QStringList symbols = getSummaryMetricsList();
+    const QStringList symbols = getSummaryMetricsList();
     QList<CalendarSummary> summaries;
-    int numTimeBuckets = firstDay.daysTo(lastDay) / timeBucketSize + 1;
-    bool useMetricUnits = GlobalContext::context()->useMetricUnits;
+    const int numTimeBuckets =
+        firstDay.daysTo(lastDay) / timeBucketSize + 1;
+    const bool useMetricUnits =
+        GlobalContext::context()->useMetricUnits;
 
     const RideMetricFactory &factory = RideMetricFactory::instance();
+    QStringList aggregateSymbols;
+    QVector<const RideMetric*> metrics;
+    aggregateSymbols.reserve(symbols.size());
+    metrics.reserve(symbols.size());
+    for (const QString &symbol : symbols) {
+        const RideMetric *metric = factory.rideMetric(symbol);
+        if (metric) {
+            aggregateSymbols.append(symbol);
+            metrics.append(metric);
+        }
+    }
+
     FilterSet filterSet(context->isfiltered, context->filters);
     filterSet.addFilter(context->ishomefiltered, context->homeFilters);
-    Specification spec;
-    spec.setFilterSet(filterSet);
+    Specification baseSpecification;
+    baseSpecification.setFilterSet(filterSet);
     PlanFilterType planFilterType = PlanFilterType::IncludeAll;
     if (includePlannedCombo->currentIndex() != -1) {
-        planFilterType = includePlannedCombo->currentData().value<PlanFilterType>();
+        planFilterType =
+            includePlannedCombo->currentData().value<PlanFilterType>();
     }
-    spec.setPlanFilter(planFilterType);
+    baseSpecification.setPlanFilter(planFilterType);
+
+    QVector<Specification> specifications;
+    specifications.reserve(numTimeBuckets);
     for (int timeBucket = 0; timeBucket < numTimeBuckets; ++timeBucket) {
-        QDate firstDayOfTimeBucket = firstDay.addDays(timeBucket * timeBucketSize);
-        QDate lastDayOfTimeBucket = firstDayOfTimeBucket.addDays(timeBucketSize - 1);
-        spec.setDateRange(DateRange(firstDayOfTimeBucket, lastDayOfTimeBucket));
+        const QDate firstDayOfTimeBucket =
+            firstDay.addDays(timeBucket * timeBucketSize);
+        const QDate lastDayOfTimeBucket =
+            firstDayOfTimeBucket.addDays(timeBucketSize - 1);
+        Specification specification = baseSpecification;
+        specification.setDateRange(
+            DateRange(firstDayOfTimeBucket, lastDayOfTimeBucket));
+        specifications.append(specification);
+    }
+
+    const QVector<QStringList> aggregates =
+        context->athlete->rideCache->getAggregates(
+            aggregateSymbols, specifications, useMetricUnits);
+    summaries.reserve(numTimeBuckets);
+    for (int timeBucket = 0; timeBucket < numTimeBuckets; ++timeBucket) {
         CalendarSummary summary;
         summary.keyValues.clear();
-        for (const QString &symbol : symbols) {
-            const RideMetric *metric = factory.rideMetric(symbol);
-            if (metric == nullptr) {
-                continue;
-            }
-            QString value = context->athlete->rideCache->getAggregate(symbol, spec, useMetricUnits);
+        const QStringList &values = aggregates.at(timeBucket);
+        for (qsizetype metricIndex = 0;
+             metricIndex < metrics.size();
+             ++metricIndex) {
+            const RideMetric *metric = metrics.at(metricIndex);
+            QString value = values.at(metricIndex);
             if (! metric->isDate() && ! metric->isTime()) {
                 if (value.contains('.')) {
                     while (value.endsWith('0')) {
