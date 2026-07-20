@@ -28,6 +28,7 @@
 #include "MergeActivityDistanceCursor.h"
 #include "MergeActivityRidePreparation.h"
 #include "MergeActivityTimeOffset.h"
+#include "MergeActivityXData.h"
 
 #include <utility>
 
@@ -559,14 +560,33 @@ MergeActivityWizard::combine()
             last = add;
         }
 
-        // Just preserve XData from first ride and add XData from the second,
-        // if not already present, in the future we could let the user to
-        // choose, like for standard series
-        foreach (XDataSeries *xdata, ride1->xdata())
-            combined->addXData(xdata->name, new XDataSeries (*xdata));
+        // Preserve XData on the same shifted and bounded timeline as samples.
+        const bool hasCombinedTimeline = !combined->dataPoints().isEmpty();
+        const double timelineStartSeconds = hasCombinedTimeline
+            ? combined->dataPoints().first()->secs
+            : 0.0;
+        const double timelineStopSeconds = hasCombinedTimeline
+            ? combined->dataPoints().last()->secs
+            : -1.0;
+        foreach (XDataSeries *xdata, ride1->xdata()) {
+            if (!xdata) continue;
+            auto shifted = MergeActivityXData::shiftedCopy(
+                *xdata,
+                offset1,
+                recIntSecs,
+                timelineStartSeconds,
+                timelineStopSeconds);
+            combined->addXData(xdata->name, shifted.release());
+        }
         foreach (XDataSeries *xdata, ride2->xdata()) {
-            if (!combined->xdata().contains(xdata->name))
-                combined->addXData(xdata->name, new XDataSeries (*xdata));
+            if (!xdata || combined->xdata().contains(xdata->name)) continue;
+            auto shifted = MergeActivityXData::shiftedCopy(
+                *xdata,
+                offset2,
+                recIntSecs,
+                timelineStartSeconds,
+                timelineStopSeconds);
+            combined->addXData(xdata->name, shifted.release());
         }
 
         // now realign the intervals, first we need to

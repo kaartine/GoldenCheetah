@@ -1609,16 +1609,42 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DATA-003: Merge leaves XData timestamps unshifted
 
-- Status: OPEN
-- Code: `src/Gui/MergeActivityWizard.cpp:535`,
-  `src/Gui/MergeActivityWizard.cpp:579`
+- Status: FIXED
+- Code: `src/Gui/MergeActivityWizard.cpp`,
+  `src/Gui/MergeActivityXData.h`, `src/Gui/MergeActivityXData.cpp`,
+  `src/src.pro`,
+  `unittests/Gui/mergeActivityXData/mergeActivityXData.pro`,
+  `unittests/Gui/mergeActivityXData/testMergeActivityXData.cpp`,
+  `unittests/unittests.pro`
 - Impact: Normal samples are shifted during merge, but XData points are copied
   with their original timestamps. Auxiliary data therefore becomes
   permanently misaligned whenever either ride has a nonzero offset.
-- Test: With a two-second recording interval and a three-sample source offset,
-  require a unique source XData point at four seconds to merge at ten seconds.
-- Fix direction: Apply the same sample-to-time offset used by regular points to
-  copied XData and define clipping behavior at negative/terminal boundaries.
+- Test-first evidence: The behavior-preserving deep-copy implementation failed
+  three focused regressions (`tst_mergeActivityXData` exit 3): a source point at
+  four seconds remained at four instead of moving to ten, all four boundary
+  probes survived instead of two, and an invalid empty timeline retained a
+  point. The target then passed only after timestamp shifting and clipping were
+  implemented.
+- Regression coverage: With `recIntSecs=2` and a three-sample offset, a unique
+  XData point moves from four to ten seconds while metadata, distance, numeric
+  and string payloads survive a deep copy and the source stays unchanged.
+  Shifted points exactly at the zero and terminal boundaries remain; points
+  outside them, non-finite timestamps, and null entries are excluded. An empty
+  merged timeline preserves series metadata without retaining points.
+- Resolution: Both source rides now deep-copy XData through a shared helper that
+  reuses the sample-to-seconds conversion from DATA-002, applies the owning
+  ride's sample offset, and clips against the inclusive combined sample
+  timeline. Existing first-series-wins behavior for duplicate XData names is
+  unchanged.
+- Verification: All six focused QtTest results passed normally in 0 ms and under
+  strict ASan/UBSan/LSan in 1 ms, with no sanitizer reports. A fresh full
+  release build and all 63 unit-test projects passed (2,027 passed, 0 failed,
+  0 skipped, 0 blacklisted). The 166,492,664-byte AppImage reports
+  `V3.8-DEV2605 (5012)` and has SHA-256
+  `7c7695764ac9a0747af03e31764c8490cf871b03ba4ca7b736fb4be180541b2c`.
+  It remained stable for a 15-second isolated X11 launch and a 45-second launch
+  against a copied real athlete profile; logs contained only translator debug
+  notices.
 
 ### DATA-004: Constant shared series selects an artificial alignment
 

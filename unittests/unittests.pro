@@ -40,6 +40,7 @@ equals(GC_UNITTESTS, active) {
 			   Gui/mergeActivityDistanceCursor \
 			   Gui/mergeActivityRidePreparation \
 			   Gui/mergeActivityTimeOffset \
+			   Gui/mergeActivityXData \
 			   Gui/rideImportBatch \
 			   Gui/mergeActivityAlignment \
 			   Gui/iconBundleSecurity \
