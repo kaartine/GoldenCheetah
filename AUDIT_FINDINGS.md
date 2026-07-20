@@ -1576,18 +1576,36 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DATA-002: Merge offsets treat samples as seconds
 
-- Status: OPEN
-- Code: `src/Gui/MergeActivityWizard.h:91`,
-  `src/Gui/MergeActivityWizard.cpp:594`,
-  `src/Gui/MergeActivityWizard.cpp:601`,
-  `src/Gui/MergeActivityWizard.cpp:1229`
+- Status: FIXED
+- Code: `src/Gui/MergeActivityWizard.cpp`,
+  `src/Gui/MergeActivityTimeOffset.h`,
+  `src/Gui/MergeActivityTimeOffset.cpp`, `src/src.pro`,
+  `unittests/Gui/mergeActivityTimeOffset/mergeActivityTimeOffset.pro`,
+  `unittests/Gui/mergeActivityTimeOffset/testMergeActivityTimeOffset.cpp`,
+  `unittests/unittests.pro`
 - Impact: Offsets are stored in samples, but interval timestamps and the UI add
   or display them as seconds. For activities whose recording interval is not
   one second, merged intervals are shifted by the wrong duration.
-- Test: With `recIntSecs=2`, offset three samples and require interval
-  `[10, 20]` to become `[16, 26]`, including the displayed adjustment.
-- Fix direction: Convert sample offsets through the owning ride's recording
-  interval at every time-based boundary and label only converted seconds.
+- Test-first evidence: The new focused target initially failed to build because
+  `MergeActivityTimeOffset.cpp` did not exist (`make` exit 2). A subsequent
+  zero-adjustment regression failed because the helper returned negative zero
+  and `std::signbit(adjustment)` was true before zero normalization was added.
+- Regression coverage: With `recIntSecs=2`, an offset of three samples shifts
+  interval `[10, 20]` to `[16, 26]` and renders the slider adjustment as
+  `-6 secs`; the opposite slider direction renders `6 secs`. Additional cases
+  cover positive zero and a fractional 0.5-second recording interval.
+- Resolution: Merge offsets remain sample-indexed for data-point selection. A
+  shared pure helper now converts them through `recIntSecs` when shifting
+  interval timestamps or rendering the time adjustment, and normalizes the
+  zero display so the UI cannot render `-0 secs`.
+- Verification: All six focused QtTest results passed normally and under strict
+  ASan/UBSan/LSan, with no sanitizer reports. A fresh full release build and all
+  62 unit-test projects passed (2,021 passed, 0 failed, 0 skipped,
+  0 blacklisted). The 166,496,760-byte AppImage reports
+  `V3.8-DEV2605 (5012)` and has SHA-256
+  `57067168fd1ceae0a25eacaf3e50d85727c832b08b431225a0f30acbd6908dff`.
+  It remained stable for a 15-second isolated X11 launch and a 45-second launch
+  against a copied real athlete profile, with no crash or new runtime error.
 
 ### DATA-003: Merge leaves XData timestamps unshifted
 

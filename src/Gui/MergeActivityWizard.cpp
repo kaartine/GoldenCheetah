@@ -27,6 +27,7 @@
 #include "LocationInterpolation.h"
 #include "MergeActivityDistanceCursor.h"
 #include "MergeActivityRidePreparation.h"
+#include "MergeActivityTimeOffset.h"
 
 #include <utility>
 
@@ -575,15 +576,19 @@ MergeActivityWizard::combine()
         // run through what we got then
         foreach(RideFileInterval *interval, ride1->intervals()) {
             combined->addInterval(interval->type,
-                                  interval->start + offset1,
-                                  interval->stop + offset1, 
+                                  MergeActivityTimeOffset::shiftTimestamp(
+                                      interval->start, offset1, recIntSecs),
+                                  MergeActivityTimeOffset::shiftTimestamp(
+                                      interval->stop, offset1, recIntSecs),
                                   interval->name);
         }
         // run through what we got then
         foreach(RideFileInterval *interval, ride2->intervals()) {
             combined->addInterval(interval->type,
-                                  interval->start + offset2,
-                                  interval->stop + offset2, 
+                                  MergeActivityTimeOffset::shiftTimestamp(
+                                      interval->start, offset2, recIntSecs),
+                                  MergeActivityTimeOffset::shiftTimestamp(
+                                      interval->stop, offset2, recIntSecs),
                                   interval->name);
         }
     }
@@ -1213,7 +1218,9 @@ MergeAdjust::initializePage()
 void 
 MergeAdjust::offsetChanged()
 {
-    offsetLabel->setText(QString("%1 secs").arg(adjustSlider->value() * -1));
+    offsetLabel->setText(QString("%1 secs").arg(
+        MergeActivityTimeOffset::displayAdjustmentSeconds(
+            adjustSlider->value(), wizard->recIntSecs)));
 
     if (adjustSlider->value() < 0) {
         wizard->offset1 = adjustSlider->value() * -1;
