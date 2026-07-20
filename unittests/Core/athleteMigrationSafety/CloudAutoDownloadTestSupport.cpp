@@ -11,6 +11,7 @@
 
 #include "Cloud/CloudService.h"
 
+#include <QCoreApplication>
 #include <QEventLoop>
 #include <QHash>
 #include <QMetaObject>
@@ -52,8 +53,13 @@ struct ControlledCloudState
 {
     explicit ControlledCloudState(
             TestCloudCompletionMode mode,
-            int entryCount)
-        : mode(mode), entryCount(entryCount)
+            int entryCount,
+            int payloadBytes,
+            int settingsUpdateCount)
+        : mode(mode),
+          entryCount(entryCount),
+          payloadBytes(payloadBytes),
+          settingsUpdateCount(settingsUpdateCount)
     {
     }
 
@@ -64,6 +70,8 @@ struct ControlledCloudState
     QSemaphore blockedCallStarted;
     TestCloudCompletionMode mode;
     int entryCount;
+    int payloadBytes;
+    int settingsUpdateCount;
     CloudService *providerAddress = nullptr;
     QThread *guiThread = nullptr;
     QThread *workerThread = nullptr;
@@ -79,10 +87,24 @@ struct ControlledCloudState
     int reentrantReadCalls = 0;
 };
 
+struct SslWarningCaptureState
+{
+    QMutex mutex;
+    bool enabled = false;
+    int calls = 0;
+    quint64 occurrences = 0;
+    quint64 omitted = 0;
+    bool usedGuiThread = true;
+};
+
 BufferProbeState bufferProbe;
 std::shared_ptr<BlockingCloudState> blockingState;
 std::shared_ptr<ControlledCloudState> controlledState;
 std::atomic<int> configuredTimeoutMs{30000};
+std::atomic<int> configuredMaximumQueuedDownloads{8};
+std::atomic<qint64> configuredMaximumQueuedDownloadBytes{
+        qint64(128) * 1024 * 1024};
+SslWarningCaptureState sslWarningCapture;
 
 void resetBufferProbe()
 {
@@ -339,6 +361,22 @@ public:
         }
         if (state
             && state->mode
+                    == TestCloudCompletionMode::QueuedSettingsFlood) {
+            for (int update = 0;
+                 update < state->settingsUpdateCount;
+                 ++update) {
+                setSetting(
+                    QStringLiteral("<athlete-private>controlled/thread"),
+                    QStringLiteral("worker-value-%1").arg(update));
+                setSetting(
+                    QStringLiteral("<global-general>controlled/thread"),
+                    QStringLiteral("global-worker-value-%1").arg(update));
+                CloudServiceFactory::instance().saveSettings(this, context);
+            }
+            return true;
+        }
+        if (state
+            && state->mode
                     == TestCloudCompletionMode::QueuedClearsUrlTwice) {
             setSetting(
                 QStringLiteral("<athlete-private>controlled/url"),
@@ -448,7 +486,11 @@ public:
             reply->deleteLater();
             return true;
         }
-        data->append("not-a-valid-fit");
+        if (state->payloadBytes > 0) {
+            data->append(QByteArray(state->payloadBytes, 'x'));
+        } else {
+            data->append("not-a-valid-fit");
+        }
         if (state->mode == TestCloudCompletionMode::BlockInRead) {
             blockControlledProviderCall(state);
             return true;
@@ -483,6 +525,7 @@ public:
         }
         case TestCloudCompletionMode::Queued:
         case TestCloudCompletionMode::QueuedSettingsTwice:
+        case TestCloudCompletionMode::QueuedSettingsFlood:
         case TestCloudCompletionMode::QueuedClearsUrlTwice:
             QTimer::singleShot(0, this, complete);
             break;
@@ -698,12 +741,24 @@ void configureControlledCloudAutoDownload(
         const QString &athlete,
         TestCloudCompletionMode mode,
         int entryCount,
-        int timeoutMs)
+        int timeoutMs,
+        int payloadBytes,
+        int settingsUpdateCount,
+        int maximumQueuedDownloads,
+        qint64 maximumQueuedDownloadBytes)
 {
     resetBufferProbe();
     configuredTimeoutMs.store(timeoutMs, std::memory_order_relaxed);
-    controlledState =
-            std::make_shared<ControlledCloudState>(mode, entryCount);
+    configuredMaximumQueuedDownloads.store(
+        maximumQueuedDownloads > 0 ? maximumQueuedDownloads : 8,
+        std::memory_order_relaxed);
+    configuredMaximumQueuedDownloadBytes.store(
+        maximumQueuedDownloadBytes > 0
+            ? maximumQueuedDownloadBytes
+            : qint64(128) * 1024 * 1024,
+        std::memory_order_relaxed);
+    controlledState = std::make_shared<ControlledCloudState>(
+        mode, entryCount, payloadBytes, settingsUpdateCount);
     controlledState->guiThread = QThread::currentThread();
     registerControlledService();
 
@@ -812,6 +867,10 @@ void cleanupControlledCloudAutoDownload()
 {
     controlledState.reset();
     configuredTimeoutMs.store(30000, std::memory_order_relaxed);
+    configuredMaximumQueuedDownloads.store(8, std::memory_order_relaxed);
+    configuredMaximumQueuedDownloadBytes.store(
+        qint64(128) * 1024 * 1024,
+        std::memory_order_relaxed);
 }
 
 int cloudAutoDownloadTestBuffersAllocated()
@@ -830,4 +889,78 @@ int cloudAutoDownloadTestBuffersOutstanding()
 {
     QMutexLocker locker(&bufferProbe.mutex);
     return bufferProbe.outstanding.size();
+}
+
+int cloudAutoDownloadMaximumQueuedDownloadsForTest()
+{
+    return configuredMaximumQueuedDownloads.load(
+        std::memory_order_relaxed);
+}
+
+qint64 cloudAutoDownloadMaximumQueuedDownloadBytesForTest()
+{
+    return configuredMaximumQueuedDownloadBytes.load(
+        std::memory_order_relaxed);
+}
+
+void enableCloudSslWarningCapture()
+{
+    QMutexLocker locker(&sslWarningCapture.mutex);
+    sslWarningCapture.enabled = true;
+    sslWarningCapture.calls = 0;
+    sslWarningCapture.occurrences = 0;
+    sslWarningCapture.omitted = 0;
+    sslWarningCapture.usedGuiThread = true;
+}
+
+void disableCloudSslWarningCapture()
+{
+    QMutexLocker locker(&sslWarningCapture.mutex);
+    sslWarningCapture.enabled = false;
+}
+
+bool cloudSslWarningHandledForTest(
+        const QString &title,
+        const QString &message,
+        quint64 occurrences,
+        quint64 omitted)
+{
+    Q_UNUSED(title)
+    Q_UNUSED(message)
+    QMutexLocker locker(&sslWarningCapture.mutex);
+    if (!sslWarningCapture.enabled) return false;
+
+    ++sslWarningCapture.calls;
+    sslWarningCapture.occurrences += occurrences;
+    sslWarningCapture.omitted += omitted;
+    QCoreApplication *application = QCoreApplication::instance();
+    sslWarningCapture.usedGuiThread =
+        sslWarningCapture.usedGuiThread
+        && application
+        && QThread::currentThread() == application->thread();
+    return true;
+}
+
+int cloudSslWarningCaptureCalls()
+{
+    QMutexLocker locker(&sslWarningCapture.mutex);
+    return sslWarningCapture.calls;
+}
+
+quint64 cloudSslWarningCapturedOccurrences()
+{
+    QMutexLocker locker(&sslWarningCapture.mutex);
+    return sslWarningCapture.occurrences;
+}
+
+quint64 cloudSslWarningCapturedOmitted()
+{
+    QMutexLocker locker(&sslWarningCapture.mutex);
+    return sslWarningCapture.omitted;
+}
+
+bool cloudSslWarningCaptureUsedGuiThread()
+{
+    QMutexLocker locker(&sslWarningCapture.mutex);
+    return sslWarningCapture.usedGuiThread;
 }

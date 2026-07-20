@@ -41,6 +41,8 @@
 #include <QThread>
 #include <QTimer>
 
+#include <algorithm>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -60,6 +62,13 @@ int cloudAutoDownloadRequestTimeoutMs();
 void cloudAutoDownloadBufferAllocated(QByteArray *data);
 void cloudAutoDownloadBufferReleased(QByteArray *data);
 bool cloudAutoDownloadProviderAccessed(CloudService *provider);
+int cloudAutoDownloadMaximumQueuedDownloadsForTest();
+qint64 cloudAutoDownloadMaximumQueuedDownloadBytesForTest();
+bool cloudSslWarningHandledForTest(
+    const QString &title,
+    const QString &message,
+    quint64 occurrences,
+    quint64 omitted);
 #endif
 
 //
@@ -74,28 +83,220 @@ struct QueuedSslWarning
 {
     std::string title;
     std::string message;
+    quint64 occurrences = 1;
 };
 
+constexpr int MaximumQueuedSslWarnings = 32;
+constexpr qint64 MaximumQueuedSslWarningBytes =
+        qint64(256) * 1024;
 std::mutex queuedSslWarningsMutex;
 std::vector<QueuedSslWarning> queuedSslWarnings;
+qint64 queuedSslWarningBytes = 0;
+quint64 omittedSslWarningOccurrences = 0;
+bool queuedSslWarningDispatchPending = false;
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+CloudGuiHandoffQueueStats queuedSslWarningStats;
+#endif
+
+void showQueuedSslWarnings();
+
+qint64 saturatedAdd(qint64 current, qint64 addition)
+{
+    if (addition <= 0) return current;
+    const qint64 maximum = std::numeric_limits<qint64>::max();
+    if (current > maximum - addition) return maximum;
+    return current + addition;
+}
+
+quint64 saturatedOccurrenceAdd(quint64 current, quint64 addition)
+{
+    const quint64 maximum = std::numeric_limits<quint64>::max();
+    if (current > maximum - addition) return maximum;
+    return current + addition;
+}
+
+qint64 storedStringBytes(const std::string &value)
+{
+    const size_t maximum = size_t(std::numeric_limits<qint64>::max());
+    return qint64(std::min(value.capacity(), maximum));
+}
+
+qint64 sslWarningBytes(const QueuedSslWarning &warning)
+{
+    qint64 bytes = qint64(sizeof(QueuedSslWarning));
+    bytes = saturatedAdd(bytes, storedStringBytes(warning.title));
+    return saturatedAdd(bytes, storedStringBytes(warning.message));
+}
+
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+void updateSslWarningStatsLocked()
+{
+    queuedSslWarningStats.currentItems =
+            int(queuedSslWarnings.size());
+    queuedSslWarningStats.currentBytes = queuedSslWarningBytes;
+    queuedSslWarningStats.maximumItems = MaximumQueuedSslWarnings;
+    queuedSslWarningStats.maximumBytes =
+            MaximumQueuedSslWarningBytes;
+    queuedSslWarningStats.peakItems = std::max(
+        queuedSslWarningStats.peakItems,
+        queuedSslWarningStats.currentItems);
+    queuedSslWarningStats.peakBytes = std::max(
+        queuedSslWarningStats.peakBytes,
+        queuedSslWarningStats.currentBytes);
+    queuedSslWarningStats.queuedOccurrences = 0;
+    for (const QueuedSslWarning &warning : queuedSslWarnings) {
+        queuedSslWarningStats.queuedOccurrences =
+                saturatedOccurrenceAdd(
+                    queuedSslWarningStats.queuedOccurrences,
+                    warning.occurrences);
+    }
+    queuedSslWarningStats.omittedOccurrences =
+            omittedSslWarningOccurrences;
+}
+#endif
+
+void enqueueSslWarning(
+        QCoreApplication *application,
+        std::string title,
+        std::string message)
+{
+    bool scheduleDispatch = false;
+    {
+        const std::lock_guard<std::mutex> lock(
+            queuedSslWarningsMutex);
+        auto duplicate = std::find_if(
+            queuedSslWarnings.begin(), queuedSslWarnings.end(),
+            [&](const QueuedSslWarning &warning) {
+                return warning.title == title
+                    && warning.message == message;
+            });
+        if (duplicate != queuedSslWarnings.end()) {
+            if (duplicate->occurrences
+                != std::numeric_limits<quint64>::max()) {
+                ++duplicate->occurrences;
+            }
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+            ++queuedSslWarningStats.coalesced;
+#endif
+        } else {
+            QueuedSslWarning warning{
+                std::move(title), std::move(message), 1};
+            const qint64 bytes = sslWarningBytes(warning);
+            if (int(queuedSslWarnings.size())
+                    >= MaximumQueuedSslWarnings
+                || bytes > MaximumQueuedSslWarningBytes
+                || queuedSslWarningBytes
+                    > MaximumQueuedSslWarningBytes - bytes) {
+                if (omittedSslWarningOccurrences
+                    != std::numeric_limits<quint64>::max()) {
+                    ++omittedSslWarningOccurrences;
+                }
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+                ++queuedSslWarningStats.rejected;
+#endif
+            } else {
+                queuedSslWarningBytes += bytes;
+                queuedSslWarnings.push_back(std::move(warning));
+            }
+        }
+
+        if (!queuedSslWarningDispatchPending) {
+            queuedSslWarningDispatchPending = true;
+            scheduleDispatch = true;
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+            ++queuedSslWarningStats.dispatchPosts;
+#endif
+        }
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+        updateSslWarningStatsLocked();
+#endif
+    }
+
+    if (scheduleDispatch) {
+        QMetaObject::invokeMethod(
+            application,
+            []() { showQueuedSslWarnings(); },
+            Qt::QueuedConnection);
+    }
+}
 
 void showQueuedSslWarnings()
 {
     std::vector<QueuedSslWarning> warnings;
+    quint64 omitted = 0;
     {
         const std::lock_guard<std::mutex> lock(
             queuedSslWarningsMutex);
         warnings.swap(queuedSslWarnings);
+        queuedSslWarningBytes = 0;
+        omitted = omittedSslWarningOccurrences;
+        omittedSslWarningOccurrences = 0;
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+        ++queuedSslWarningStats.dispatchCalls;
+        updateSslWarningStatsLocked();
+#endif
     }
 
+    QString title = QObject::tr("HTTP");
+    QStringList messages;
+    quint64 occurrences = 0;
     for (const QueuedSslWarning &warning : warnings) {
+        if (messages.isEmpty()) {
+            title = QString::fromUtf8(
+                warning.title.data(), qsizetype(warning.title.size()));
+        }
+        QString message = QString::fromUtf8(
+            warning.message.data(), qsizetype(warning.message.size()));
+        if (warning.occurrences > 1) {
+            message += QObject::tr("\nRepeated %1 times.")
+                    .arg(warning.occurrences);
+        }
+        messages.append(message);
+        occurrences = saturatedOccurrenceAdd(
+            occurrences, warning.occurrences);
+    }
+    if (omitted > 0) {
+        messages.append(
+            QObject::tr("%1 additional SSL warnings were omitted.")
+                .arg(omitted));
+    }
+
+    const QString message = messages.join(QStringLiteral("\n\n"));
+    bool handledForTest = false;
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+    handledForTest = cloudSslWarningHandledForTest(
+        title, message, occurrences, omitted);
+#endif
+    if (!handledForTest && !message.isEmpty()) {
         QMessageBox::warning(
-            nullptr,
-            QString::fromUtf8(
-                warning.title.data(), qsizetype(warning.title.size())),
-            QString::fromUtf8(
-                warning.message.data(),
-                qsizetype(warning.message.size())));
+            nullptr, title, message);
+    }
+
+    bool scheduleNext = false;
+    {
+        const std::lock_guard<std::mutex> lock(
+            queuedSslWarningsMutex);
+        if (queuedSslWarnings.empty()
+            && omittedSslWarningOccurrences == 0) {
+            queuedSslWarningDispatchPending = false;
+        } else {
+            scheduleNext = true;
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+            ++queuedSslWarningStats.dispatchPosts;
+#endif
+        }
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+        updateSslWarningStatsLocked();
+#endif
+    }
+    if (scheduleNext) {
+        if (QCoreApplication *application =
+                QCoreApplication::instance()) {
+            QMetaObject::invokeMethod(
+                application,
+                []() { showQueuedSslWarnings(); },
+                Qt::QueuedConnection);
+        }
     }
 }
 
@@ -117,12 +318,222 @@ struct QueuedCloudSettingUpdate
 struct QueuedCloudSettingsTransaction
 {
     std::string athlete;
+    std::string source;
     std::vector<QueuedCloudSettingExpectation> expectations;
     std::vector<QueuedCloudSettingUpdate> updates;
 };
 
+constexpr int MaximumQueuedCloudSettingsTransactions = 64;
+constexpr qint64 MaximumQueuedCloudSettingsBytes =
+        qint64(1024) * 1024;
 std::mutex queuedCloudSettingsMutex;
-std::vector<QueuedCloudSettingsTransaction> queuedCloudSettings;
+std::deque<QueuedCloudSettingsTransaction> queuedCloudSettings;
+qint64 queuedCloudSettingsBytes = 0;
+bool queuedCloudSettingsDispatchPending = false;
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+CloudGuiHandoffQueueStats queuedCloudSettingsStats;
+#endif
+
+void dispatchQueuedCloudSettings();
+
+qint64 cloudSettingsTransactionBytes(
+        const QueuedCloudSettingsTransaction &transaction)
+{
+    qint64 bytes = qint64(sizeof(QueuedCloudSettingsTransaction));
+    bytes = saturatedAdd(bytes, storedStringBytes(transaction.athlete));
+    bytes = saturatedAdd(bytes, storedStringBytes(transaction.source));
+    for (const QueuedCloudSettingExpectation &setting
+         : transaction.expectations) {
+        bytes = saturatedAdd(
+            bytes, qint64(sizeof(QueuedCloudSettingExpectation)));
+        bytes = saturatedAdd(bytes, storedStringBytes(setting.key));
+        bytes = saturatedAdd(
+            bytes, storedStringBytes(setting.expectedValue));
+        bytes = saturatedAdd(
+            bytes, storedStringBytes(setting.defaultValue));
+    }
+    for (const QueuedCloudSettingUpdate &setting
+         : transaction.updates) {
+        bytes = saturatedAdd(
+            bytes, qint64(sizeof(QueuedCloudSettingUpdate)));
+        bytes = saturatedAdd(bytes, storedStringBytes(setting.key));
+        bytes = saturatedAdd(bytes, storedStringBytes(setting.value));
+    }
+    return bytes;
+}
+
+bool sameSetting(
+        const QueuedCloudSettingExpectation &left,
+        const QueuedCloudSettingExpectation &right)
+{
+    return left.athleteScoped == right.athleteScoped
+        && left.key == right.key;
+}
+
+bool sameSetting(
+        const QueuedCloudSettingUpdate &left,
+        const QueuedCloudSettingExpectation &right)
+{
+    return left.athleteScoped == right.athleteScoped
+        && left.key == right.key;
+}
+
+bool sameSetting(
+        const QueuedCloudSettingUpdate &left,
+        const QueuedCloudSettingUpdate &right)
+{
+    return left.athleteScoped == right.athleteScoped
+        && left.key == right.key;
+}
+
+bool composeCloudSettingsTransactions(
+        const QueuedCloudSettingsTransaction &pending,
+        const QueuedCloudSettingsTransaction &next,
+        QueuedCloudSettingsTransaction &composed)
+{
+    if (pending.athlete != next.athlete
+        || pending.source != next.source) {
+        return false;
+    }
+
+    for (const QueuedCloudSettingExpectation &expected
+         : next.expectations) {
+        const auto pendingExpectation = std::find_if(
+            pending.expectations.cbegin(), pending.expectations.cend(),
+            [&](const QueuedCloudSettingExpectation &candidate) {
+                return sameSetting(candidate, expected);
+            });
+        if (pendingExpectation == pending.expectations.cend()
+            || pendingExpectation->defaultValue
+                != expected.defaultValue) {
+            return false;
+        }
+
+        std::string virtualValue = pendingExpectation->expectedValue;
+        const auto pendingUpdate = std::find_if(
+            pending.updates.cbegin(), pending.updates.cend(),
+            [&](const QueuedCloudSettingUpdate &candidate) {
+                return sameSetting(candidate, expected);
+            });
+        if (pendingUpdate != pending.updates.cend()) {
+            virtualValue = pendingUpdate->value;
+            if (virtualValue.empty()
+                && !expected.defaultValue.empty()) {
+                virtualValue = expected.defaultValue;
+            }
+        }
+        if (virtualValue != expected.expectedValue) return false;
+    }
+
+    composed = pending;
+    for (const QueuedCloudSettingUpdate &update : next.updates) {
+        auto existing = std::find_if(
+            composed.updates.begin(), composed.updates.end(),
+            [&](const QueuedCloudSettingUpdate &candidate) {
+                return sameSetting(candidate, update);
+            });
+        if (existing == composed.updates.end()) {
+            composed.updates.push_back(update);
+        } else {
+            existing->value = update.value;
+        }
+    }
+    return true;
+}
+
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+void updateCloudSettingsStatsLocked()
+{
+    queuedCloudSettingsStats.currentItems =
+            int(queuedCloudSettings.size());
+    queuedCloudSettingsStats.currentBytes = queuedCloudSettingsBytes;
+    queuedCloudSettingsStats.maximumItems =
+            MaximumQueuedCloudSettingsTransactions;
+    queuedCloudSettingsStats.maximumBytes =
+            MaximumQueuedCloudSettingsBytes;
+    queuedCloudSettingsStats.peakItems = std::max(
+        queuedCloudSettingsStats.peakItems,
+        queuedCloudSettingsStats.currentItems);
+    queuedCloudSettingsStats.peakBytes = std::max(
+        queuedCloudSettingsStats.peakBytes,
+        queuedCloudSettingsStats.currentBytes);
+}
+#endif
+
+bool enqueueCloudSettingsTransaction(
+        QCoreApplication *application,
+        QueuedCloudSettingsTransaction transaction)
+{
+    bool accepted = false;
+    bool scheduleDispatch = false;
+    {
+        const std::lock_guard<std::mutex> lock(
+            queuedCloudSettingsMutex);
+        if (!queuedCloudSettings.empty()) {
+            QueuedCloudSettingsTransaction composed;
+            if (composeCloudSettingsTransactions(
+                    queuedCloudSettings.back(),
+                    transaction,
+                    composed)) {
+                const qint64 previousBytes =
+                    cloudSettingsTransactionBytes(
+                        queuedCloudSettings.back());
+                const qint64 composedBytes =
+                    cloudSettingsTransactionBytes(composed);
+                if (composedBytes <= MaximumQueuedCloudSettingsBytes
+                    && queuedCloudSettingsBytes - previousBytes
+                        <= MaximumQueuedCloudSettingsBytes
+                            - composedBytes) {
+                    queuedCloudSettings.back() = std::move(composed);
+                    queuedCloudSettingsBytes =
+                        queuedCloudSettingsBytes
+                        - previousBytes + composedBytes;
+                    accepted = true;
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+                    ++queuedCloudSettingsStats.coalesced;
+#endif
+                }
+            }
+        }
+
+        if (!accepted) {
+            const qint64 bytes =
+                    cloudSettingsTransactionBytes(transaction);
+            if (int(queuedCloudSettings.size())
+                    < MaximumQueuedCloudSettingsTransactions
+                && bytes <= MaximumQueuedCloudSettingsBytes
+                && queuedCloudSettingsBytes
+                    <= MaximumQueuedCloudSettingsBytes - bytes) {
+                queuedCloudSettingsBytes += bytes;
+                queuedCloudSettings.push_back(std::move(transaction));
+                accepted = true;
+            } else {
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+                ++queuedCloudSettingsStats.rejected;
+#endif
+            }
+        }
+
+        if (accepted && !queuedCloudSettingsDispatchPending) {
+            queuedCloudSettingsDispatchPending = true;
+            scheduleDispatch = true;
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+            ++queuedCloudSettingsStats.dispatchPosts;
+#endif
+        }
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+        updateCloudSettingsStatsLocked();
+#endif
+    }
+
+    if (scheduleDispatch) {
+        QMetaObject::invokeMethod(
+            application,
+            []() { dispatchQueuedCloudSettings(); },
+            Qt::QueuedConnection);
+    }
+    return accepted;
+}
 
 QString storedCloudSetting(
         const QString &athlete,
@@ -140,15 +551,30 @@ QString storedCloudSetting(
     return stored;
 }
 
-void applyQueuedCloudSettings()
+std::vector<QueuedCloudSettingsTransaction>
+takeQueuedCloudSettings()
 {
     std::vector<QueuedCloudSettingsTransaction> transactions;
     {
         const std::lock_guard<std::mutex> lock(
             queuedCloudSettingsMutex);
-        transactions.swap(queuedCloudSettings);
+        transactions.reserve(queuedCloudSettings.size());
+        while (!queuedCloudSettings.empty()) {
+            transactions.push_back(
+                std::move(queuedCloudSettings.front()));
+            queuedCloudSettings.pop_front();
+        }
+        queuedCloudSettingsBytes = 0;
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+        updateCloudSettingsStatsLocked();
+#endif
     }
+    return transactions;
+}
 
+void applyCloudSettingsTransactions(
+        const std::vector<QueuedCloudSettingsTransaction> &transactions)
+{
     for (const QueuedCloudSettingsTransaction &transaction
          : transactions) {
         const QString athlete = QString::fromUtf8(
@@ -192,6 +618,49 @@ void applyQueuedCloudSettings()
     }
 }
 
+void applyQueuedCloudSettings()
+{
+    applyCloudSettingsTransactions(takeQueuedCloudSettings());
+}
+
+void dispatchQueuedCloudSettings()
+{
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+    {
+        const std::lock_guard<std::mutex> lock(
+            queuedCloudSettingsMutex);
+        ++queuedCloudSettingsStats.dispatchCalls;
+    }
+#endif
+    applyQueuedCloudSettings();
+
+    bool scheduleNext = false;
+    {
+        const std::lock_guard<std::mutex> lock(
+            queuedCloudSettingsMutex);
+        if (queuedCloudSettings.empty()) {
+            queuedCloudSettingsDispatchPending = false;
+        } else {
+            scheduleNext = true;
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+            ++queuedCloudSettingsStats.dispatchPosts;
+#endif
+        }
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+        updateCloudSettingsStatsLocked();
+#endif
+    }
+    if (scheduleNext) {
+        if (QCoreApplication *application =
+                QCoreApplication::instance()) {
+            QMetaObject::invokeMethod(
+                application,
+                []() { dispatchQueuedCloudSettings(); },
+                Qt::QueuedConnection);
+        }
+    }
+}
+
 bool cloudSettingsMatch(
         const QString &athlete,
         const QMap<QString, QString> &expectedSettings,
@@ -212,6 +681,47 @@ bool cloudSettingsMatch(
 }
 
 } // namespace
+
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+CloudGuiHandoffQueueStats cloudSettingsQueueStatsForTest()
+{
+    const std::lock_guard<std::mutex> lock(
+        queuedCloudSettingsMutex);
+    updateCloudSettingsStatsLocked();
+    return queuedCloudSettingsStats;
+}
+
+CloudGuiHandoffQueueStats cloudSslWarningQueueStatsForTest()
+{
+    const std::lock_guard<std::mutex> lock(
+        queuedSslWarningsMutex);
+    updateSslWarningStatsLocked();
+    return queuedSslWarningStats;
+}
+
+void resetCloudServiceHandoffQueuesForTest()
+{
+    {
+        const std::lock_guard<std::mutex> lock(
+            queuedCloudSettingsMutex);
+        queuedCloudSettings.clear();
+        queuedCloudSettingsBytes = 0;
+        queuedCloudSettingsDispatchPending = false;
+        queuedCloudSettingsStats = {};
+        updateCloudSettingsStatsLocked();
+    }
+    {
+        const std::lock_guard<std::mutex> lock(
+            queuedSslWarningsMutex);
+        queuedSslWarnings.clear();
+        queuedSslWarningBytes = 0;
+        omittedSslWarningOccurrences = 0;
+        queuedSslWarningDispatchPending = false;
+        queuedSslWarningStats = {};
+        updateSslWarningStatsLocked();
+    }
+}
+#endif
 
 
 // nothing doing in base class, for now
@@ -500,16 +1010,10 @@ CloudService::sslErrors(QWidget* parent, [[maybe_unused]] QNetworkReply* reply ,
         && QThread::currentThread() != application->thread()) {
         const QByteArray titleUtf8 = title.toUtf8();
         const QByteArray messageUtf8 = message.toUtf8();
-        {
-            const std::lock_guard<std::mutex> lock(
-                queuedSslWarningsMutex);
-            queuedSslWarnings.push_back({
-                titleUtf8.toStdString(), messageUtf8.toStdString()});
-        }
-        QMetaObject::invokeMethod(
+        enqueueSslWarning(
             application,
-            []() { showQueuedSslWarnings(); },
-            Qt::QueuedConnection);
+            titleUtf8.toStdString(),
+            messageUtf8.toStdString());
         return;
     }
     QMessageBox::warning(parent, title, message);
@@ -2054,14 +2558,12 @@ CloudServiceFactory::saveSettings(
                 ? clearedUrlDefault
                 : update.value());
     }
-    if (!clearedUrlKey.isEmpty())
-        service->setSetting(clearedUrlKey, clearedUrlDefault);
-
     QCoreApplication *application = QCoreApplication::instance();
     if (application
         && QThread::currentThread() != application->thread()) {
         QueuedCloudSettingsTransaction transaction;
         transaction.athlete = athlete.toUtf8().toStdString();
+        transaction.source = service->id().toUtf8().toStdString();
         QSet<QString> expectedKeys;
         for (auto setting = service->settings.cbegin();
              setting != service->settings.cend(); ++setting) {
@@ -2105,17 +2607,16 @@ CloudServiceFactory::saveSettings(
                         QStringLiteral("<athlete"))});
             }
         }
-        {
-            const std::lock_guard<std::mutex> lock(
-                queuedCloudSettingsMutex);
-            queuedCloudSettings.push_back(std::move(transaction));
+        if (!enqueueCloudSettingsTransaction(
+                application, std::move(transaction))) {
+            qWarning() << "Cloud settings handoff queue is full;"
+                       << "discarding a provider update";
+            return;
         }
+        if (!clearedUrlKey.isEmpty())
+            service->setSetting(clearedUrlKey, clearedUrlDefault);
         service->setProperty(
             "_gcInitialConfiguration", nextConfiguration);
-        QMetaObject::invokeMethod(
-            application,
-            []() { applyQueuedCloudSettings(); },
-            Qt::QueuedConnection);
         return;
     }
 
@@ -2131,6 +2632,8 @@ CloudServiceFactory::saveSettings(
                  << update.key() << update.value();
 #endif
     }
+    if (!clearedUrlKey.isEmpty())
+        service->setSetting(clearedUrlKey, clearedUrlDefault);
     service->setProperty(
         "_gcInitialConfiguration", nextConfiguration);
 }
@@ -2663,24 +3166,200 @@ CloudServiceAutoDownload::CloudServiceAutoDownload(Context *context)
 {
 }
 
-void
+bool
 CloudServiceAutoDownload::enqueueEvent(QueuedEvent event)
 {
+    constexpr int MaximumQueuedProgressEvents = 8;
+
+    if (event.type == QueuedEventType::Downloaded) {
+        qint64 bytes = qint64(sizeof(QueuedEvent));
+        bytes = saturatedAdd(bytes, qint64(event.data.capacity()));
+        const auto addString = [&bytes](const QString &value) {
+            const qint64 maximum =
+                std::numeric_limits<qint64>::max();
+            const qint64 capacity = qint64(value.capacity());
+            const qint64 stringBytes =
+                capacity > maximum / qint64(sizeof(QChar))
+                ? maximum
+                : capacity * qint64(sizeof(QChar));
+            bytes = saturatedAdd(bytes, stringBytes);
+        };
+        addString(event.text);
+        const auto addSettings = [&bytes, &addString](
+                const QMap<QString, QString> &settings) {
+            for (auto setting = settings.cbegin();
+                 setting != settings.cend(); ++setting) {
+                bytes = saturatedAdd(
+                    bytes, qint64(sizeof(QString) * 2));
+                addString(setting.key());
+                addString(setting.value());
+            }
+        };
+        addSettings(event.expectedSettings);
+        addSettings(event.settingDefaults);
+        event.accountedBytes = bytes;
+
+    }
+
     bool scheduleDispatch = false;
     {
-        const std::lock_guard<std::mutex> lock(queuedEventsMutex);
+        std::unique_lock<std::mutex> lock(queuedEventsMutex);
+        const auto isCurrentGeneration = [&]() {
+            return event.generation
+                == generation.load(std::memory_order_acquire);
+        };
+        if (!isCurrentGeneration()) return false;
+
+        if (event.type == QueuedEventType::Downloaded) {
+            if (event.accountedBytes > maximumQueuedDownloadBytes) {
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+                ++rejectedDownloadEvents;
+#endif
+                lock.unlock();
+                qWarning() << "Autodownload: downloaded payload exceeds"
+                           << "the GUI handoff byte limit";
+                return false;
+            }
+            bool waited = false;
+            while (isCurrentGeneration()
+                   && (queuedDownloadEvents
+                           >= maximumQueuedDownloadEvents
+                       || queuedDownloadBytes
+                           > maximumQueuedDownloadBytes
+                               - event.accountedBytes)) {
+                if (!waited) {
+                    waited = true;
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+                    ++queuedEventProducerWaits;
+#endif
+                }
+                queuedEventSpace.wait(lock);
+            }
+            if (!isCurrentGeneration()) return false;
+            ++queuedDownloadEvents;
+            queuedDownloadBytes += event.accountedBytes;
+        } else if (event.type == QueuedEventType::Progress) {
+            int queuedProgressEvents = 0;
+            auto newestProgress = queuedEvents.end();
+            for (auto queued = queuedEvents.begin();
+                 queued != queuedEvents.end(); ++queued) {
+                if (queued->type == QueuedEventType::Progress
+                    && queued->generation == event.generation) {
+                    ++queuedProgressEvents;
+                    newestProgress = queued;
+                }
+            }
+            if (queuedProgressEvents >= MaximumQueuedProgressEvents) {
+                *newestProgress = std::move(event);
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+                ++coalescedProgressEvents;
+                updateQueuedEventPeaksLocked();
+#endif
+                return true;
+            }
+        }
+
         queuedEvents.push_back(std::move(event));
         if (!queuedEventDispatchPending) {
             queuedEventDispatchPending = true;
             scheduleDispatch = true;
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+            ++queuedEventDispatchPosts;
+#endif
         }
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+        updateQueuedEventPeaksLocked();
+#endif
     }
 
     if (scheduleDispatch) {
         QMetaObject::invokeMethod(
             this, "dispatchQueuedEvents", Qt::QueuedConnection);
     }
+    return true;
 }
+
+quint64
+CloudServiceAutoDownload::advanceGenerationAndDiscardQueuedEvents()
+{
+    quint64 nextGeneration = 0;
+    {
+        const std::lock_guard<std::mutex> lock(queuedEventsMutex);
+        nextGeneration = generation.fetch_add(
+            1, std::memory_order_acq_rel) + 1;
+        discardQueuedEventsLocked();
+    }
+    queuedEventSpace.notify_all();
+    return nextGeneration;
+}
+
+void
+CloudServiceAutoDownload::discardQueuedEventsLocked()
+{
+    for (const QueuedEvent &event : queuedEvents) {
+        if (event.type != QueuedEventType::Downloaded) continue;
+        --queuedDownloadEvents;
+        queuedDownloadBytes -= event.accountedBytes;
+    }
+    queuedEvents.clear();
+    queuedDownloadEvents = std::max(0, queuedDownloadEvents);
+    queuedDownloadBytes = std::max(qint64(0), queuedDownloadBytes);
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+    updateQueuedEventPeaksLocked();
+#endif
+}
+
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+void
+CloudServiceAutoDownload::updateQueuedEventPeaksLocked()
+{
+    int queuedProgressEvents = 0;
+    for (const QueuedEvent &event : queuedEvents) {
+        if (event.type == QueuedEventType::Progress)
+            ++queuedProgressEvents;
+    }
+    peakQueuedEvents = std::max(
+        peakQueuedEvents, int(queuedEvents.size()));
+    peakQueuedDownloadEvents = std::max(
+        peakQueuedDownloadEvents, queuedDownloadEvents);
+    peakQueuedProgressEvents = std::max(
+        peakQueuedProgressEvents, queuedProgressEvents);
+    peakQueuedDownloadBytes = std::max(
+        peakQueuedDownloadBytes, queuedDownloadBytes);
+}
+
+CloudAutoDownloadQueueStats
+CloudServiceAutoDownload::queuedEventStatsForTest()
+{
+    constexpr int MaximumQueuedProgressEvents = 8;
+    const std::lock_guard<std::mutex> lock(queuedEventsMutex);
+    int queuedProgressEvents = 0;
+    for (const QueuedEvent &event : queuedEvents) {
+        if (event.type == QueuedEventType::Progress)
+            ++queuedProgressEvents;
+    }
+    updateQueuedEventPeaksLocked();
+
+    CloudAutoDownloadQueueStats stats;
+    stats.currentEvents = int(queuedEvents.size());
+    stats.peakEvents = peakQueuedEvents;
+    stats.currentDownloadEvents = queuedDownloadEvents;
+    stats.peakDownloadEvents = peakQueuedDownloadEvents;
+    stats.maximumDownloadEvents = maximumQueuedDownloadEvents;
+    stats.currentProgressEvents = queuedProgressEvents;
+    stats.peakProgressEvents = peakQueuedProgressEvents;
+    stats.maximumProgressEvents = MaximumQueuedProgressEvents;
+    stats.currentDownloadBytes = queuedDownloadBytes;
+    stats.peakDownloadBytes = peakQueuedDownloadBytes;
+    stats.maximumDownloadBytes = maximumQueuedDownloadBytes;
+    stats.dispatchPosts = queuedEventDispatchPosts;
+    stats.dispatchCalls = queuedEventDispatchCalls;
+    stats.coalescedProgress = coalescedProgressEvents;
+    stats.producerWaits = queuedEventProducerWaits;
+    stats.rejectedDownloads = rejectedDownloadEvents;
+    return stats;
+}
+#endif
 
 void
 CloudServiceAutoDownload::dispatchQueuedEvents()
@@ -2688,6 +3367,9 @@ CloudServiceAutoDownload::dispatchQueuedEvents()
     QueuedEvent event;
     {
         const std::lock_guard<std::mutex> lock(queuedEventsMutex);
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+        ++queuedEventDispatchCalls;
+#endif
         if (queuedEvents.empty()) {
             queuedEventDispatchPending = false;
             return;
@@ -2717,13 +3399,27 @@ CloudServiceAutoDownload::dispatchQueuedEvents()
     if (!guard) return;
 
     bool scheduleNext = false;
+    bool releasedDownloadSpace = false;
     {
         const std::lock_guard<std::mutex> lock(queuedEventsMutex);
+        if (event.type == QueuedEventType::Downloaded) {
+            --queuedDownloadEvents;
+            queuedDownloadBytes -= event.accountedBytes;
+            queuedDownloadEvents = std::max(
+                0, queuedDownloadEvents);
+            queuedDownloadBytes = std::max(
+                qint64(0), queuedDownloadBytes);
+            releasedDownloadSpace = true;
+        }
         if (queuedEvents.empty())
             queuedEventDispatchPending = false;
         else
             scheduleNext = true;
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+        updateQueuedEventPeaksLocked();
+#endif
     }
+    if (releasedDownloadSpace) queuedEventSpace.notify_all();
     if (scheduleNext) {
         QMetaObject::invokeMethod(
             this, "dispatchQueuedEvents", Qt::QueuedConnection);
@@ -2752,7 +3448,7 @@ CloudServiceAutoDownload::~CloudServiceAutoDownload()
 void
 CloudServiceAutoDownload::cancelAndWait()
 {
-    ++generation;
+    advanceGenerationAndDiscardQueuedEvents();
     downloadActive = false;
 
     if (!isRunning()) {
@@ -2796,6 +3492,14 @@ void
 CloudServiceAutoDownload::startDownload()
 {
     if (downloadActive || isRunning() || !Context::isValid(context)) return;
+
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+    maximumQueuedDownloadEvents = std::max(
+        1, cloudAutoDownloadMaximumQueuedDownloadsForTest());
+    maximumQueuedDownloadBytes = std::max(
+        qint64(1),
+        cloudAutoDownloadMaximumQueuedDownloadBytesForTest());
+#endif
 
     CloudAutoDownloadPlan plan;
     plan.now = QDateTime::currentDateTime();
@@ -2854,7 +3558,7 @@ CloudServiceAutoDownload::startDownload()
         }
     }
 
-    plan.generation = ++generation;
+    plan.generation = advanceGenerationAndDiscardQueuedEvents();
     worker = new CloudServiceAutoDownloadWorker(this, std::move(plan));
     worker->moveToThread(this);
 
@@ -2871,7 +3575,8 @@ CloudServiceAutoDownload::downloadProgress(
         int current,
         int total)
 {
-    if (runGeneration != generation || !Context::isValid(context)) return;
+    if (runGeneration != generation.load(std::memory_order_acquire)
+        || !Context::isValid(context)) return;
     context->notifyAutoDownloadProgress(
         service, progress, current, total);
 }
@@ -2881,7 +3586,8 @@ CloudServiceAutoDownload::downloadFinished(
         quint64 runGeneration,
         bool cancelled)
 {
-    if (runGeneration != generation) return;
+    if (runGeneration != generation.load(std::memory_order_acquire))
+        return;
     if (QThread::currentThread() != this) wait();
 
     worker = nullptr;
@@ -2912,7 +3618,8 @@ CloudServiceAutoDownload::downloaded(
         QMap<QString, QString> expectedSettings,
         QMap<QString, QString> settingDefaults)
 {
-    if (runGeneration != generation) return;
+    if (runGeneration != generation.load(std::memory_order_acquire))
+        return;
     QPointer<Context> activeContext(context);
     const auto contextIsValid = [&activeContext]() {
         Context *current = activeContext.data();

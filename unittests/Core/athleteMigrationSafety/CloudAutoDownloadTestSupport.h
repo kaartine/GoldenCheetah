@@ -11,6 +11,7 @@
 #define GC_CLOUD_AUTO_DOWNLOAD_TEST_SUPPORT_H
 
 #include <QString>
+#include <QtGlobal>
 
 class CloudServiceAutoDownload;
 
@@ -19,6 +20,7 @@ enum class TestCloudCompletionMode {
     InlineWithNestedEvents,
     Queued,
     QueuedSettingsTwice,
+    QueuedSettingsFlood,
     QueuedClearsUrlTwice,
     Never,
     Reject,
@@ -39,7 +41,11 @@ void configureControlledCloudAutoDownload(
         const QString &athlete,
         TestCloudCompletionMode mode,
         int entryCount = 1,
-        int timeoutMs = 50);
+        int timeoutMs = 50,
+        int payloadBytes = 0,
+        int settingsUpdateCount = 0,
+        int maximumQueuedDownloads = 0,
+        qint64 maximumQueuedDownloadBytes = 0);
 void disableControlledCloudAutoDownload(const QString &athlete);
 void enableSuccessfulFollowUpCloudAutoDownload(const QString &athlete);
 bool waitForControlledCloudReads(int count, int timeoutMs);
@@ -59,5 +65,20 @@ int cloudAutoDownloadTestBuffersAllocated();
 int cloudAutoDownloadTestBuffersReleased();
 int cloudAutoDownloadTestBuffersOutstanding();
 int athleteMigrationSettingsCrossThreadWrites();
+
+int cloudAutoDownloadMaximumQueuedDownloadsForTest();
+qint64 cloudAutoDownloadMaximumQueuedDownloadBytesForTest();
+
+void enableCloudSslWarningCapture();
+void disableCloudSslWarningCapture();
+bool cloudSslWarningHandledForTest(
+        const QString &title,
+        const QString &message,
+        quint64 occurrences,
+        quint64 omitted);
+int cloudSslWarningCaptureCalls();
+quint64 cloudSslWarningCapturedOccurrences();
+quint64 cloudSslWarningCapturedOmitted();
+bool cloudSslWarningCaptureUsedGuiThread();
 
 #endif

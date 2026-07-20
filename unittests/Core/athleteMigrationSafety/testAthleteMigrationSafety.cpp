@@ -138,6 +138,37 @@ private:
     QSemaphore completionGate;
 };
 
+class SslWarningFloodThread final : public QThread
+{
+public:
+    SslWarningFloodThread(int duplicateCount, int distinctCount)
+        : duplicateCount(duplicateCount), distinctCount(distinctCount)
+    {
+    }
+
+protected:
+    void run() override
+    {
+        const QSslError duplicate(QSslError::SelfSignedCertificate);
+        for (int warning = 0; warning < duplicateCount; ++warning) {
+            CloudService::sslErrors(nullptr, nullptr, {duplicate});
+        }
+        for (int warning = 0; warning < distinctCount; ++warning) {
+            QList<QSslError> errors;
+            const int errorCount = warning + 2;
+            errors.reserve(errorCount);
+            for (int error = 0; error < errorCount; ++error) {
+                errors.append(duplicate);
+            }
+            CloudService::sslErrors(nullptr, nullptr, errors);
+        }
+    }
+
+private:
+    int duplicateCount;
+    int distinctCount;
+};
+
 class OAuthRefreshThread final : public QThread
 {
 public:
@@ -1318,10 +1349,14 @@ private slots:
     void inlineCloudCompletionDoesNotReenterProvider();
     void queuedCloudResultsSurviveWorkerCleanup();
     void naturalCloudCompletionStopsWithoutGuiDispatch();
+    void stalledGuiCoalescesAutoDownloadProgress();
+    void stalledGuiBackpressuresDownloadedPayloads();
+    void cancellationPurgesBackpressuredGeneration();
     void queuedCloudSettingsPreserveNewerValues();
     void queuedCloudSettingsRejectRemovedExpectedValue();
     void sequentialQueuedCloudSettingsPreserveLatestValues();
     void sequentialQueuedCloudSettingsRejectConflictChain();
+    void stalledGuiCoalescesCloudSettingsTransactions();
     void guiCloudSettingsSaveWritesAllScopes();
     void guiCloudSettingsSaveClearsCustomUrl();
     void workerCloudSettingsClearUrlUsesDefault();
@@ -1362,10 +1397,13 @@ private slots:
     void oauthRefreshTimesOut();
     void oauthRefreshHonorsThreadInterruption();
     void sslWarningsAreMarshaledToGuiThread();
+    void stalledGuiBoundsAndCoalescesSslWarnings();
 };
 
 void TestAthleteMigrationSafety::init()
 {
+    resetCloudServiceHandoffQueuesForTest();
+    disableCloudSslWarningCapture();
     resetAthleteMigrationTestSettings();
 }
 
@@ -3626,6 +3664,221 @@ naturalCloudCompletionStopsWithoutGuiDispatch()
 }
 
 void TestAthleteMigrationSafety::
+stalledGuiCoalescesAutoDownloadProgress()
+{
+    constexpr int EntryCount = 4096;
+
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QDir athleteDir(root.path());
+    QVERIFY(createStructuredAthlete(
+        athleteDir, QStringLiteral("CloudProgressBackpressure")));
+    configureAthlete(athleteDir, VERSION_LATEST, true);
+
+    std::unique_ptr<Context> context(createAthleteMigrationTestContext());
+    SeededAthleteStorage athleteStorage;
+    Athlete *athlete = athleteStorage.construct(context.get(), athleteDir);
+    CloudServiceAutoDownload *worker = athlete->cloudAutoDownload;
+
+    configureControlledCloudAutoDownload(
+        athlete->cyclist,
+        TestCloudCompletionMode::Reject,
+        EntryCount,
+        500);
+    QSignalSpy finished(context.get(), &Context::autoDownloadEnd);
+    QSignalSpy progress(context.get(), &Context::autoDownloadProgress);
+    worker->checkDownload();
+
+    const bool allReadsStarted =
+        waitForControlledCloudReads(EntryCount, 15000);
+    const bool providerDestroyed =
+        waitForControlledCloudProviderDestroyed(5000);
+    const bool workerStoppedWithoutGuiDispatch = worker->wait(5000);
+    const CloudAutoDownloadQueueStats stalledStats =
+        worker->queuedEventStatsForTest();
+    const bool delivered = waitUntil(
+        [&finished]() { return finished.count() == 1; }, 5000);
+    const CloudAutoDownloadQueueStats drainedStats =
+        worker->queuedEventStatsForTest();
+
+    bool monotonic = true;
+    int previous = -1;
+    for (const QList<QVariant> &values : progress) {
+        const int current = values.at(2).toInt();
+        monotonic = monotonic && current >= previous;
+        previous = current;
+    }
+    const QList<QVariant> finalProgress =
+        progress.isEmpty() ? QList<QVariant>() : progress.constLast();
+
+    athleteStorage.destroy();
+    cleanupControlledCloudAutoDownload();
+
+    QVERIFY(allReadsStarted);
+    QVERIFY(providerDestroyed);
+    QVERIFY(workerStoppedWithoutGuiDispatch);
+    QVERIFY(delivered);
+    QVERIFY(monotonic);
+    QVERIFY(progress.count() > 0);
+    QVERIFY(progress.count() <= stalledStats.maximumProgressEvents);
+    QCOMPARE(finalProgress.at(2).toInt(), EntryCount);
+    QCOMPARE(finalProgress.at(3).toInt(), EntryCount);
+    QCOMPARE(finalProgress.at(1).toDouble(), 100.0);
+    QVERIFY(stalledStats.currentProgressEvents
+            <= stalledStats.maximumProgressEvents);
+    QVERIFY(stalledStats.peakProgressEvents
+            <= stalledStats.maximumProgressEvents);
+    QVERIFY(stalledStats.coalescedProgress > 0);
+    QCOMPARE(stalledStats.dispatchPosts, quint64(1));
+    QCOMPARE(drainedStats.currentEvents, 0);
+}
+
+void TestAthleteMigrationSafety::
+stalledGuiBackpressuresDownloadedPayloads()
+{
+    constexpr int EntryCount = 6;
+    constexpr int MaximumDownloads = 2;
+    constexpr int PayloadBytes = 32 * 1024;
+    constexpr qint64 MaximumBytes = 1024 * 1024;
+
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QDir athleteDir(root.path());
+    QVERIFY(createStructuredAthlete(
+        athleteDir, QStringLiteral("CloudPayloadBackpressure")));
+    configureAthlete(athleteDir, VERSION_LATEST, true);
+
+    std::unique_ptr<Context> context(createAthleteMigrationTestContext());
+    SeededAthleteStorage athleteStorage;
+    Athlete *athlete = athleteStorage.construct(context.get(), athleteDir);
+    CloudServiceAutoDownload *worker = athlete->cloudAutoDownload;
+
+    configureControlledCloudAutoDownload(
+        athlete->cyclist,
+        TestCloudCompletionMode::Queued,
+        EntryCount,
+        500,
+        PayloadBytes,
+        0,
+        MaximumDownloads,
+        MaximumBytes);
+    QSignalSpy finished(context.get(), &Context::autoDownloadEnd);
+    worker->checkDownload();
+
+    const bool thirdReadStarted =
+        waitForControlledCloudReads(MaximumDownloads + 1, 5000);
+    const bool admittedCompletions =
+        waitForControlledCloudCompletions(MaximumDownloads, 5000);
+    QTest::qSleep(100);
+    const bool extraCompletionBeforeDrain =
+        waitForControlledCloudCompletions(1, 100);
+    const CloudAutoDownloadQueueStats stalledStats =
+        worker->queuedEventStatsForTest();
+    const bool allResultsDelivered = waitUntil(
+        [&finished]() {
+            return finished.count() == 1
+                && athleteMigrationRideFileOpenCalls() == EntryCount;
+        },
+        5000);
+    const bool providerDestroyed =
+        waitForControlledCloudProviderDestroyed(5000);
+    const CloudAutoDownloadQueueStats drainedStats =
+        worker->queuedEventStatsForTest();
+    const int buffersOutstanding =
+        cloudAutoDownloadTestBuffersOutstanding();
+
+    athleteStorage.destroy();
+    cleanupControlledCloudAutoDownload();
+
+    QVERIFY(thirdReadStarted);
+    QVERIFY(admittedCompletions);
+    QVERIFY(!extraCompletionBeforeDrain);
+    QCOMPARE(stalledStats.currentDownloadEvents, MaximumDownloads);
+    QVERIFY(stalledStats.peakDownloadEvents
+            <= stalledStats.maximumDownloadEvents);
+    QVERIFY(stalledStats.peakDownloadBytes
+            <= stalledStats.maximumDownloadBytes);
+    QVERIFY(stalledStats.producerWaits > 0);
+    QVERIFY(allResultsDelivered);
+    QVERIFY(providerDestroyed);
+    QCOMPARE(drainedStats.currentDownloadEvents, 0);
+    QCOMPARE(drainedStats.currentDownloadBytes, qint64(0));
+    QCOMPARE(buffersOutstanding, 0);
+}
+
+void TestAthleteMigrationSafety::
+cancellationPurgesBackpressuredGeneration()
+{
+    constexpr int EntryCount = 10;
+    constexpr int MaximumDownloads = 2;
+    constexpr int PayloadBytes = 32 * 1024;
+
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QDir athleteDir(root.path());
+    QVERIFY(createStructuredAthlete(
+        athleteDir, QStringLiteral("CloudBackpressureCancellation")));
+    configureAthlete(athleteDir, VERSION_LATEST, true);
+
+    std::unique_ptr<Context> context(createAthleteMigrationTestContext());
+    SeededAthleteStorage athleteStorage;
+    Athlete *athlete = athleteStorage.construct(context.get(), athleteDir);
+    CloudServiceAutoDownload *worker = athlete->cloudAutoDownload;
+
+    configureControlledCloudAutoDownload(
+        athlete->cyclist,
+        TestCloudCompletionMode::Queued,
+        EntryCount,
+        500,
+        PayloadBytes,
+        0,
+        MaximumDownloads,
+        1024 * 1024);
+    QSignalSpy finished(context.get(), &Context::autoDownloadEnd);
+    QSignalSpy progress(context.get(), &Context::autoDownloadProgress);
+    worker->checkDownload();
+
+    const bool thirdReadStarted =
+        waitForControlledCloudReads(MaximumDownloads + 1, 5000);
+    const bool admittedCompletions =
+        waitForControlledCloudCompletions(MaximumDownloads, 5000);
+    QTest::qSleep(100);
+    const CloudAutoDownloadQueueStats stalledStats =
+        worker->queuedEventStatsForTest();
+
+    QElapsedTimer timer;
+    timer.start();
+    worker->cancelAndWait();
+    const qint64 cancelElapsedMs = timer.elapsed();
+    const bool providerDestroyed =
+        waitForControlledCloudProviderDestroyed(2000);
+    const CloudAutoDownloadQueueStats cancelledStats =
+        worker->queuedEventStatsForTest();
+    QCoreApplication::sendPostedEvents(worker, QEvent::MetaCall);
+    QCoreApplication::processEvents();
+    const bool workerStopped = !worker->isRunning();
+    const int buffersOutstanding =
+        cloudAutoDownloadTestBuffersOutstanding();
+
+    athleteStorage.destroy();
+    cleanupControlledCloudAutoDownload();
+
+    QVERIFY(thirdReadStarted);
+    QVERIFY(admittedCompletions);
+    QVERIFY(stalledStats.producerWaits > 0);
+    QVERIFY(cancelElapsedMs < 2000);
+    QVERIFY(workerStopped);
+    QVERIFY(providerDestroyed);
+    QCOMPARE(cancelledStats.currentEvents, 0);
+    QCOMPARE(cancelledStats.currentDownloadEvents, 0);
+    QCOMPARE(cancelledStats.currentDownloadBytes, qint64(0));
+    QCOMPARE(progress.count(), 0);
+    QCOMPARE(finished.count(), 0);
+    QCOMPARE(athleteMigrationRideFileOpenCalls(), 0);
+    QCOMPARE(buffersOutstanding, 0);
+}
+
+void TestAthleteMigrationSafety::
 queuedCloudSettingsPreserveNewerValues()
 {
     QTemporaryDir root;
@@ -3837,6 +4090,75 @@ sequentialQueuedCloudSettingsRejectConflictChain()
         athleteValue, QStringLiteral("external-athlete-value"));
     QCOMPARE(globalValue, QStringLiteral("initial-global-value"));
     QCOMPARE(parsedResults, 0);
+}
+
+void TestAthleteMigrationSafety::
+stalledGuiCoalescesCloudSettingsTransactions()
+{
+    constexpr int UpdateCount = 4096;
+
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QDir athleteDir(root.path());
+    QVERIFY(createStructuredAthlete(
+        athleteDir, QStringLiteral("CloudSettingsBackpressure")));
+    configureAthlete(athleteDir, VERSION_LATEST, true);
+
+    std::unique_ptr<Context> context(createAthleteMigrationTestContext());
+    SeededAthleteStorage athleteStorage;
+    Athlete *athlete = athleteStorage.construct(context.get(), athleteDir);
+    CloudServiceAutoDownload *worker = athlete->cloudAutoDownload;
+
+    configureControlledCloudAutoDownload(
+        athlete->cyclist,
+        TestCloudCompletionMode::QueuedSettingsFlood,
+        0,
+        500,
+        0,
+        UpdateCount);
+    QSignalSpy finished(context.get(), &Context::autoDownloadEnd);
+    worker->checkDownload();
+
+    const bool providerDestroyed =
+        waitForControlledCloudProviderDestroyed(15000);
+    const bool workerStoppedWithoutGuiDispatch = worker->wait(5000);
+    const CloudGuiHandoffQueueStats stalledStats =
+        cloudSettingsQueueStatsForTest();
+    const bool finishedDelivered = waitUntil(
+        [&finished]() { return finished.count() == 1; }, 5000);
+    const CloudGuiHandoffQueueStats drainedStats =
+        cloudSettingsQueueStatsForTest();
+    const QString athleteValue = appsettings->cvalue(
+        athlete->cyclist,
+        QStringLiteral("<athlete-private>controlled/thread")).toString();
+    const QString globalValue = appsettings->value(
+        nullptr,
+        QStringLiteral("<global-general>controlled/thread")).toString();
+    const int crossThreadWrites =
+        athleteMigrationSettingsCrossThreadWrites();
+
+    athleteStorage.destroy();
+    cleanupControlledCloudAutoDownload();
+
+    QVERIFY(providerDestroyed);
+    QVERIFY(workerStoppedWithoutGuiDispatch);
+    QCOMPARE(stalledStats.currentItems, 1);
+    QVERIFY(stalledStats.peakItems <= stalledStats.maximumItems);
+    QVERIFY(stalledStats.peakBytes <= stalledStats.maximumBytes);
+    QCOMPARE(stalledStats.dispatchPosts, quint64(1));
+    QCOMPARE(stalledStats.coalesced, quint64(UpdateCount - 1));
+    QCOMPARE(stalledStats.rejected, quint64(0));
+    QVERIFY(finishedDelivered);
+    QCOMPARE(
+        athleteValue,
+        QStringLiteral("worker-value-%1").arg(UpdateCount - 1));
+    QCOMPARE(
+        globalValue,
+        QStringLiteral("global-worker-value-%1").arg(UpdateCount - 1));
+    QCOMPARE(crossThreadWrites, 0);
+    QCOMPARE(drainedStats.currentItems, 0);
+    QCOMPARE(drainedStats.currentBytes, qint64(0));
+    QCOMPARE(drainedStats.dispatchCalls, quint64(1));
 }
 
 void TestAthleteMigrationSafety::guiCloudSettingsSaveWritesAllScopes()
@@ -5674,6 +5996,52 @@ void TestAthleteMigrationSafety::sslWarningsAreMarshaledToGuiThread()
     QVERIFY(joined);
     QVERIFY(warningHandled);
     QVERIFY(shownOnGuiThread);
+}
+
+void TestAthleteMigrationSafety::
+stalledGuiBoundsAndCoalescesSslWarnings()
+{
+    constexpr int DuplicateCount = 4096;
+    constexpr int DistinctCount = 64;
+    constexpr quint64 SubmittedCount = DuplicateCount + DistinctCount;
+
+    enableCloudSslWarningCapture();
+    SslWarningFloodThread worker(DuplicateCount, DistinctCount);
+    worker.start();
+    const bool producerFinishedWithoutGuiDispatch = worker.wait(15000);
+    const CloudGuiHandoffQueueStats stalledStats =
+        cloudSslWarningQueueStatsForTest();
+    const bool warningDelivered = waitUntil(
+        []() { return cloudSslWarningCaptureCalls() == 1; },
+        5000);
+    const quint64 deliveredOccurrences =
+        cloudSslWarningCapturedOccurrences();
+    const quint64 deliveredOmitted =
+        cloudSslWarningCapturedOmitted();
+    const bool usedGuiThread =
+        cloudSslWarningCaptureUsedGuiThread();
+    const CloudGuiHandoffQueueStats drainedStats =
+        cloudSslWarningQueueStatsForTest();
+    disableCloudSslWarningCapture();
+
+    QVERIFY(producerFinishedWithoutGuiDispatch);
+    QVERIFY(stalledStats.currentItems <= stalledStats.maximumItems);
+    QVERIFY(stalledStats.peakItems <= stalledStats.maximumItems);
+    QVERIFY(stalledStats.currentBytes <= stalledStats.maximumBytes);
+    QVERIFY(stalledStats.peakBytes <= stalledStats.maximumBytes);
+    QCOMPARE(stalledStats.dispatchPosts, quint64(1));
+    QVERIFY(stalledStats.coalesced >= quint64(DuplicateCount - 1));
+    QVERIFY(stalledStats.rejected > 0);
+    QCOMPARE(
+        stalledStats.queuedOccurrences
+            + stalledStats.omittedOccurrences,
+        SubmittedCount);
+    QVERIFY(warningDelivered);
+    QVERIFY(usedGuiThread);
+    QCOMPARE(deliveredOccurrences + deliveredOmitted, SubmittedCount);
+    QCOMPARE(drainedStats.currentItems, 0);
+    QCOMPARE(drainedStats.currentBytes, qint64(0));
+    QCOMPARE(drainedStats.dispatchCalls, quint64(1));
 }
 
 int main(int argc, char *argv[])

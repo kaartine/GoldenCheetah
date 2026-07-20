@@ -27,6 +27,8 @@
 #include <QNetworkReply>
 #include <QThread>
 
+#include <atomic>
+#include <condition_variable>
 #include <deque>
 #include <mutex>
 
@@ -53,6 +55,48 @@
 
 class RideItem;
 class CloudServiceEntry;
+
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+struct CloudGuiHandoffQueueStats
+{
+    int currentItems = 0;
+    int peakItems = 0;
+    int maximumItems = 0;
+    qint64 currentBytes = 0;
+    qint64 peakBytes = 0;
+    qint64 maximumBytes = 0;
+    quint64 dispatchPosts = 0;
+    quint64 dispatchCalls = 0;
+    quint64 coalesced = 0;
+    quint64 rejected = 0;
+    quint64 queuedOccurrences = 0;
+    quint64 omittedOccurrences = 0;
+};
+
+struct CloudAutoDownloadQueueStats
+{
+    int currentEvents = 0;
+    int peakEvents = 0;
+    int currentDownloadEvents = 0;
+    int peakDownloadEvents = 0;
+    int maximumDownloadEvents = 0;
+    int currentProgressEvents = 0;
+    int peakProgressEvents = 0;
+    int maximumProgressEvents = 0;
+    qint64 currentDownloadBytes = 0;
+    qint64 peakDownloadBytes = 0;
+    qint64 maximumDownloadBytes = 0;
+    quint64 dispatchPosts = 0;
+    quint64 dispatchCalls = 0;
+    quint64 coalescedProgress = 0;
+    quint64 producerWaits = 0;
+    quint64 rejectedDownloads = 0;
+};
+
+CloudGuiHandoffQueueStats cloudSettingsQueueStatsForTest();
+CloudGuiHandoffQueueStats cloudSslWarningQueueStatsForTest();
+void resetCloudServiceHandoffQueuesForTest();
+#endif
 
 // Representing an Athlete when the service allows for
 // a coach or manager relationship -- i.e. it lists athletes
@@ -523,6 +567,10 @@ class CloudServiceAutoDownload : public QThread {
         // stop any in-flight request and wait for the worker to finish
         void cancelAndWait();
 
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+        CloudAutoDownloadQueueStats queuedEventStatsForTest();
+#endif
+
     public slots:
 
         // external entry point to trigger auto download
@@ -552,9 +600,15 @@ class CloudServiceAutoDownload : public QThread {
             bool cancelled = false;
             QMap<QString, QString> expectedSettings;
             QMap<QString, QString> settingDefaults;
+            qint64 accountedBytes = 0;
         };
 
-        void enqueueEvent(QueuedEvent event);
+        bool enqueueEvent(QueuedEvent event);
+        quint64 advanceGenerationAndDiscardQueuedEvents();
+        void discardQueuedEventsLocked();
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+        void updateQueuedEventPeaksLocked();
+#endif
         void startDownload();
         void downloaded(
             quint64 generation, QByteArray data, QString name,
@@ -575,11 +629,28 @@ class CloudServiceAutoDownload : public QThread {
         Context *context = nullptr;
         bool initial = true;
         bool downloadActive = false;
-        quint64 generation = 0;
+        std::atomic<quint64> generation{0};
         CloudServiceAutoDownloadWorker *worker = nullptr;
         std::mutex queuedEventsMutex;
+        std::condition_variable queuedEventSpace;
         std::deque<QueuedEvent> queuedEvents;
+        int queuedDownloadEvents = 0;
+        qint64 queuedDownloadBytes = 0;
+        int maximumQueuedDownloadEvents = 8;
+        qint64 maximumQueuedDownloadBytes =
+                qint64(128) * 1024 * 1024;
         bool queuedEventDispatchPending = false;
+#ifdef GC_TEST_CLOUD_AUTODOWNLOAD_PROBE
+        int peakQueuedEvents = 0;
+        int peakQueuedDownloadEvents = 0;
+        int peakQueuedProgressEvents = 0;
+        qint64 peakQueuedDownloadBytes = 0;
+        quint64 queuedEventDispatchPosts = 0;
+        quint64 queuedEventDispatchCalls = 0;
+        quint64 coalescedProgressEvents = 0;
+        quint64 queuedEventProducerWaits = 0;
+        quint64 rejectedDownloadEvents = 0;
+#endif
 };
 
 // all cloud services register at startup and can be accessed by name

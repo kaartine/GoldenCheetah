@@ -1525,16 +1525,52 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### PERF-007: Cloud GUI handoff queues have no backpressure
 
-- Status: OPEN
-- Code: `src/Cloud/CloudService.cpp`, `src/Cloud/CloudService.h`
+- Status: FIXED
+- Code: `src/Cloud/CloudService.cpp`, `src/Cloud/CloudService.h`,
+  `unittests/Core/athleteMigrationSafety/CloudAutoDownloadTestSupport.cpp`,
+  `unittests/Core/athleteMigrationSafety/CloudAutoDownloadTestSupport.h`, and
+  `unittests/Core/athleteMigrationSafety/testAthleteMigrationSafety.cpp`
 - Impact: Auto-download result/progress events, settings transactions, and
   queued SSL notifications can accumulate without a count or byte limit while
   the GUI thread is blocked. A fast or faulty provider can grow memory use and
   leave a long stale-event tail after cancellation.
-- Test: Flood each handoff while deliberately stalling the GUI and enforce
-  bounded memory, queue depth, cancellation latency, and final-state delivery.
-- Fix direction: Bound queues by generation and bytes, coalesce progress and
-  settings updates, reject superseded work, and apply producer backpressure.
+- RED test: Five stalled-GUI regression cases were added before the production
+  implementation. A clean focused build compiled the tests and then failed at
+  link time with exit 2 because the bounded-queue APIs and test probes did not
+  exist. The missing symbols covered auto-download queue statistics and the
+  settings/SSL handoff reset and statistics functions.
+- Regression coverage: A 4,096-event progress flood proves an eight-snapshot
+  maximum, one queued GUI dispatch, monotonic delivery, and an exact final
+  100% state. Six 32 KiB payloads under a two-result limit prove producer
+  blocking and exactly-once parsing, while cancellation of a blocked ten-file
+  run completes in under two seconds and leaves no events, signals, imports,
+  or worker buffers. A 4,096-update same-provider settings chain composes to
+  one compare-and-set transaction with the final athlete and global values.
+  Finally, 4,096 duplicate and 64 distinct SSL warnings remain within 32 items
+  and 256 KiB, preserve every occurrence through counts or omissions, and
+  produce one aggregate GUI-thread notification.
+- Resolution: Auto-download now admits at most eight result payloads and
+  128 MiB, retains at most eight progress snapshots, blocks result producers
+  until the GUI releases credit, and purges stale generations while waking
+  blocked producers during cancellation or restart. Payload credit remains
+  charged through GUI parsing. Settings handoff is capped at 64 transactions
+  and 1 MiB; compatible same-athlete/same-provider compare-and-set chains are
+  composed without weakening their first expectation, and overflow fails
+  closed without advancing the provider baseline. SSL handoff retains at most
+  32 distinct warnings and 256 KiB, deduplicates exact messages with occurrence
+  counts, records omissions, and keeps one GUI dispatch outstanding through
+  the aggregate modal warning. SSL errors are still never ignored.
+- Verification: All 100 focused QtTest cases passed normally in 9,794 ms and
+  under strict ASan/UBSan/LSan in 13,112 ms, with no sanitizer reports. The five
+  new concurrency cases also passed under TSan (seven QtTest results including
+  initialization and cleanup) in 2,525 ms with no race report. A fresh full
+  release build succeeded, and all 61 unit-test projects passed (2,015 passed,
+  0 failed, 0 skipped, 0 blacklisted). The 166,496,760-byte AppImage reports
+  `V3.8-DEV2605 (5012)` and has SHA-256
+  `a4ff9affc392e587f83b77a0d0a180cf32b62ad9190fb90836d401050097ed1a`.
+  It remained stable for a 15-second isolated X11 launch and a 45-second launch
+  against a copied real athlete profile; the logs contained only missing
+  translator notices.
 
 ## Medium
 
