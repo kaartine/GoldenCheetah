@@ -31,6 +31,47 @@ constexpr qint64 backupChunkSize = 64 * 1024;
 constexpr quint64 maximumClassicZipValue =
     static_cast<quint64>(std::numeric_limits<quint32>::max()) - 1U;
 
+bool configureTrustedBackupLimits(
+    ZipReader &reader,
+    const AthleteBackupManifest &manifest)
+{
+    if (manifest.size() > std::numeric_limits<int>::max())
+        return false;
+
+    ArchiveResourceLimits limits;
+    limits.maximumEntries =
+        std::max(
+            limits.maximumEntries,
+            static_cast<int>(manifest.size()));
+    limits.maximumCompressionRatio =
+        std::numeric_limits<quint64>::max();
+
+    QIODevice *archive = reader.device();
+    if (!archive || archive->size() < 0)
+        return false;
+    const quint64 archiveSize =
+        static_cast<quint64>(archive->size());
+    limits.maximumCompressedSize =
+        std::max(limits.maximumCompressedSize, archiveSize);
+    limits.maximumMetadataSize =
+        std::max(limits.maximumMetadataSize, archiveSize);
+
+    quint64 totalSize = 0;
+    for (const AthleteBackupArchiveEntry &entry : manifest) {
+        if (entry.size < 0)
+            return false;
+        const quint64 size = static_cast<quint64>(entry.size);
+        if (size > std::numeric_limits<quint64>::max() - totalSize)
+            return false;
+        totalSize += size;
+        limits.maximumEntrySize =
+            std::max(limits.maximumEntrySize, size);
+    }
+    limits.maximumTotalSize =
+        std::max(limits.maximumTotalSize, totalSize);
+    return reader.setResourceLimits(limits);
+}
+
 const QStringList &persistentDirectoryNames()
 {
     static const QStringList names = {
@@ -485,6 +526,10 @@ bool verifyAthleteBackupArchive(
 {
     error.clear();
     ZipReader reader(archivePath);
+    if (!configureTrustedBackupLimits(reader, manifest)) {
+        error = QStringLiteral("Cannot configure backup verification");
+        return false;
+    }
     const QList<ZipReader::FileInfo> files = reader.fileInfoList();
     if (reader.status() != ZipReader::NoError) {
         error = QStringLiteral("Cannot verify the backup archive");

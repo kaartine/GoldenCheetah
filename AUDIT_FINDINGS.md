@@ -1686,13 +1686,58 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### PARSE-001: ZIP/GZIP decompression has no resource limits
 
-- Status: OPEN
-- Code: `contrib/qzip/zip.cpp:874`, `contrib/qzip/zip.cpp:902`,
-  `src/FileIO/RideFile.cpp:839`, `src/FileIO/RideFile.cpp:892`
+- Status: FIXED
+- Code: `contrib/qzip/zip.cpp`, `contrib/qzip/zipreader.h`,
+  `src/FileIO/CompressedActivityFile.cpp`,
+  `src/FileIO/CompressedActivityFile.h`, `src/FileIO/RideFile.cpp`,
+  `src/Cloud/CloudService.cpp`, `src/FileIO/AthleteBackupArchive.cpp`,
+  `src/src.pro`,
+  `unittests/FileIO/archiveSecurity/archiveSecurity.pro`,
+  `unittests/FileIO/archiveSecurity/testArchiveSecurity.cpp`,
+  `unittests/Core/athleteMigrationSafety/athleteMigrationSafety.pro`,
+  `unittests/Core/athleteMigrationSafety/testAthleteMigrationSafety.cpp`,
+  `unittests/FileIO/athleteBackupArchive/athleteBackupArchive.pro`,
+  `unittests/FileIO/athleteBackupArchive/testAthleteBackupArchive.cpp`
 - Impact: Compression bombs can exhaust memory or freeze the UI.
-- Test: Enforce rejection of excessive entry count, entry size, total output, and
-  compression ratio.
-- Fix direction: Bounded streaming to temporary files with CRC/size validation.
+- Test-first evidence: Against the old implementation, the archive suite passed
+  26 tests and failed four resource-limit regressions covering entry count,
+  per-entry output, aggregate output, and compression ratio. Two Cloud import
+  regressions also failed because hostile ZIP and GZIP payloads reached the
+  activity parser. A subsequent review added compressed-input and central
+  metadata budgets first; those three new ZIP/GZIP tests failed before their
+  enforcement was implemented. A final compatibility review reproduced a
+  DOS-created ZIP member without Unix file-type bits; that regression passed
+  two harness checks and failed the import before the compatibility fix.
+- Regression coverage: The shared default policy permits at most 10,000 entries,
+  256 MiB per entry, 1 GiB aggregate output, 1 GiB compressed input, 64 MiB of
+  central-directory metadata, and a 512:1 expansion ratio. Tests cover each
+  budget, truncated and trailing GZIP streams, CRC and declared-size mismatch,
+  stored and deflated ZIP members, standard data-descriptor members, DOS file
+  attributes, encrypted members, malformed local headers, destination rollback,
+  symlinks, and path traversal. Cloud and local activity imports verify that
+  rejected payloads never reach a parser. Backup tests preserve valid large and
+  highly compressible archives.
+- Resolution: GZIP and ZIP extraction now stream in 64 KiB chunks through
+  bounded devices instead of materializing untrusted output in memory. GZIP
+  validates its trailer CRC and size and rejects concatenated or trailing data.
+  ZIP scans the central directory under explicit budgets, validates local and
+  central metadata, sizes, payload bounds, and CRCs while supporting standard
+  data descriptors, then stages every selected member in a temporary directory
+  before committing with `QSaveFile`. A shared compressed-activity helper
+  accepts exactly one non-directory, non-symlink ZIP member, including DOS ZIP
+  files without Unix mode bits, and writes imports to random temporary files.
+  Self-generated athlete backups derive trusted bounds from their manifest and
+  archive size so the generic bomb limits do not break compatible backups.
+- Verification: The final archive, migration, and backup suites passed 46, 102,
+  and 17 tests normally and under strict ASan/UBSan/LSan, with no sanitizer
+  reports. A fresh full release build and all 63 unit-test projects passed
+  (2,052 passed, 0 failed, 0 skipped, 0 blacklisted). The 165,534,200-byte
+  AppImage reports `V3.8-DEV2605 (5012)` and has SHA-256
+  `b4ea2d5da5114e12d87bbad0355752dc7f2cbdfb5e81cf061bda23f587ae6027`.
+  It remained stable for a 15-second clean-profile X11 launch and a 45-second
+  launch against a copied real athlete profile. No linker, WebEngine, migration,
+  or crash error remained; logs contained only known missing translator,
+  optional configuration, Bluetooth capability, and OpenData-secret notices.
 
 ### PARSE-002: CP CSV gaps can expand to billions of points
 

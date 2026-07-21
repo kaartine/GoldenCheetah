@@ -1378,6 +1378,8 @@ private slots:
     void plainQtThreadLifecycleIsJoined();
     void baseCloudAbortStopsRunningReplies();
     void cloudCompressionModesAreExtracted();
+    void cloudCompressionBombsAreRejected_data();
+    void cloudCompressionBombsAreRejected();
     void decommissionedCloudServicesAreNotRegistered();
     void factoryRejectsDecommissionedCloudServices();
     void decommissionedCloudServicesFailClosed();
@@ -5113,6 +5115,58 @@ void TestAthleteMigrationSafety::cloudCompressionModesAreExtracted()
     QCOMPARE(extracted.at(0), payload);
     QCOMPARE(extracted.at(1), payload);
     QCOMPARE(extracted.at(2), payload);
+}
+
+void TestAthleteMigrationSafety::cloudCompressionBombsAreRejected_data()
+{
+    QTest::addColumn<int>("compression");
+    QTest::addColumn<QByteArray>("compressedPayload");
+    QTest::addColumn<QString>("suffix");
+
+    const QByteArray expanded(8 * 1024 * 1024, '\0');
+    const QByteArray zipped = zipPayload(expanded);
+    const QByteArray gzipped = gzipPayload(expanded);
+    QVERIFY(!zipped.isEmpty());
+    QVERIFY(!gzipped.isEmpty());
+
+    QTest::newRow("zip")
+        << int(CloudService::zip) << zipped << QStringLiteral(".zip");
+    QTest::newRow("gzip")
+        << int(CloudService::gzip) << gzipped << QStringLiteral(".gz");
+}
+
+void TestAthleteMigrationSafety::cloudCompressionBombsAreRejected()
+{
+    QFETCH(int, compression);
+    QFETCH(QByteArray, compressedPayload);
+    QFETCH(QString, suffix);
+
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QDir athleteDir(root.path());
+    QVERIFY(createStructuredAthlete(
+        athleteDir, QStringLiteral("CloudCompressionBomb")));
+    configureAthlete(athleteDir, VERSION_LATEST, true);
+
+    std::unique_ptr<Context> context(createAthleteMigrationTestContext());
+    SeededAthleteStorage athleteStorage;
+    athleteStorage.construct(context.get(), athleteDir);
+
+    QStringList errors;
+    const QString name =
+        QStringLiteral("2026_07_08_12_00_00.fit") + suffix;
+    QVERIFY(!CloudService::uncompressRide(
+        context.get(),
+        static_cast<CloudService::CompressionType>(compression),
+        compressedPayload,
+        name,
+        errors));
+
+    athleteStorage.destroy();
+
+    QVERIFY(!errors.isEmpty());
+    QCOMPARE(athleteMigrationRideFileOpenCalls(), 0);
+    QVERIFY(athleteMigrationRideFilePayloads().isEmpty());
 }
 
 void

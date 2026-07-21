@@ -64,6 +64,29 @@ QT_BEGIN_NAMESPACE
 
 class ZipReaderPrivate;
 
+struct ArchiveResourceLimits
+{
+    ArchiveResourceLimits();
+
+    bool isValid() const;
+
+    int maximumEntries;
+    quint64 maximumEntrySize;
+    quint64 maximumTotalSize;
+    quint64 maximumCompressedSize;
+    quint64 maximumMetadataSize;
+    quint64 maximumCompressionRatio;
+};
+
+class GzipReader
+{
+public:
+    static bool uncompress(
+        QIODevice *source,
+        QIODevice *destination,
+        const ArchiveResourceLimits &limits = ArchiveResourceLimits());
+};
+
 class ZipReader
 {
 public:
@@ -99,8 +122,11 @@ public:
     int count() const;
 
     FileInfo entryInfoAt(int index) const;
+    ArchiveResourceLimits resourceLimits() const;
+    bool setResourceLimits(const ArchiveResourceLimits &limits);
     QByteArray fileData(const QString &fileName) const;
     bool fileData(const QString &fileName, QByteArray *data) const;
+    bool extractFile(const QString &fileName, QIODevice *destination) const;
     bool verifyFile(const QString &fileName) const;
     bool extractAll(const QString &destinationDir,
                     QStringList *extractedRelativeFiles = nullptr,

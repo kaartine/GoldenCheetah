@@ -628,7 +628,7 @@ HEADERS += Core/Athlete.h Core/ConfigFlags.h Core/Context.h Core/DataFilter.h Co
            Core/Measures.h Core/Quadtree.h Core/SplineLookup.h
 
 # device and file IO or edit
-HEADERS += FileIO/ArchiveFile.h FileIO/AtomicFileWriter.h FileIO/AthleteBackup.h FileIO/AthleteBackupArchive.h FileIO/Bin2RideFile.h FileIO/BinRideFile.h \
+HEADERS += FileIO/ArchiveFile.h FileIO/AtomicFileWriter.h FileIO/AthleteBackup.h FileIO/AthleteBackupArchive.h FileIO/Bin2RideFile.h FileIO/BinRideFile.h FileIO/CompressedActivityFile.h \
            FileIO/CommPort.h \
            FileIO/Computrainer3dpFile.h FileIO/CsvRideFile.h FileIO/DataProcessor.h FileIO/Device.h  \
            FileIO/FitlogParser.h FileIO/FitlogRideFile.h FileIO/FitRideFile.h FileIO/GcRideFile.h FileIO/GpxParser.h \
@@ -746,7 +746,7 @@ SOURCES += Core/Athlete.cpp Core/Context.cpp Core/DataFilter.cpp Core/DataFilter
            Core/Measures.cpp Core/Quadtree.cpp Core/SplineLookup.cpp
 
 ## File and Device IO and Editing
-SOURCES += FileIO/ArchiveFile.cpp FileIO/AthleteBackup.cpp FileIO/AthleteBackupArchive.cpp FileIO/Bin2RideFile.cpp FileIO/BinRideFile.cpp \
+SOURCES += FileIO/ArchiveFile.cpp FileIO/AthleteBackup.cpp FileIO/AthleteBackupArchive.cpp FileIO/Bin2RideFile.cpp FileIO/BinRideFile.cpp FileIO/CompressedActivityFile.cpp \
            FileIO/CommPort.cpp \
            FileIO/Computrainer3dpFile.cpp FileIO/CsvRideFile.cpp FileIO/DataProcessor.cpp FileIO/Device.cpp \
            FileIO/FitlogParser.cpp FileIO/FitlogRideFile.cpp FileIO/FitRideFile.cpp FileIO/FixAeroPod.cpp FileIO/FixDeriveDistance.cpp \

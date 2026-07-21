@@ -48,11 +48,13 @@
 #include <qdatetime.h>
 #include <qplatformdefs.h>
 #include <qendian.h>
+#include <qbuffer.h>
 #include <qdebug.h>
 #include <qdir.h>
 #include <qhash.h>
 #include <qsavefile.h>
 #include <qset.h>
+#include <qtemporarydir.h>
 
 #include <algorithm>
 #include <limits>
@@ -107,6 +109,87 @@
 #endif
 
 QT_BEGIN_NAMESPACE
+
+ArchiveResourceLimits::ArchiveResourceLimits()
+    : maximumEntries(10000),
+      maximumEntrySize(quint64(256) * 1024 * 1024),
+      maximumTotalSize(quint64(1024) * 1024 * 1024),
+      maximumCompressedSize(quint64(1024) * 1024 * 1024),
+      maximumMetadataSize(quint64(64) * 1024 * 1024),
+      maximumCompressionRatio(512)
+{
+}
+
+bool ArchiveResourceLimits::isValid() const
+{
+    return maximumEntries > 0
+        && maximumEntrySize > 0
+        && maximumTotalSize > 0
+        && maximumCompressedSize > 0
+        && maximumMetadataSize > 0
+        && maximumCompressionRatio > 0;
+}
+
+static bool withinCompressionRatio(
+    quint64 compressedSize,
+    quint64 uncompressedSize,
+    const ArchiveResourceLimits &limits)
+{
+    if (uncompressedSize == 0)
+        return true;
+    if (compressedSize == 0)
+        return false;
+    if (compressedSize
+        > std::numeric_limits<quint64>::max()
+            / limits.maximumCompressionRatio) {
+        return true;
+    }
+    return uncompressedSize
+        <= compressedSize * limits.maximumCompressionRatio;
+}
+
+static bool writeFully(QIODevice *destination,
+                       const char *data,
+                       qint64 size)
+{
+    if (!destination)
+        return true;
+
+    qint64 written = 0;
+    while (written < size) {
+        const qint64 count =
+            destination->write(data + written, size - written);
+        if (count <= 0)
+            return false;
+        written += count;
+    }
+    return true;
+}
+
+static bool copyFully(QIODevice *source,
+                      QIODevice *destination,
+                      qint64 expectedSize)
+{
+    if (!source || !source->isReadable()
+        || !destination || !destination->isWritable()
+        || expectedSize < 0) {
+        return false;
+    }
+
+    QByteArray buffer(64 * 1024, Qt::Uninitialized);
+    qint64 copied = 0;
+    while (copied < expectedSize) {
+        const qint64 requested =
+            qMin(expectedSize - copied, qint64(buffer.size()));
+        const qint64 count = source->read(buffer.data(), requested);
+        if (count <= 0
+            || !writeFully(destination, buffer.constData(), count)) {
+            return false;
+        }
+        copied += count;
+    }
+    return copied == expectedSize && source->atEnd();
+}
 
 static inline uint readUInt(const uchar *data)
 {
@@ -202,39 +285,117 @@ static quint32 permissionsToMode(QFile::Permissions perms)
     return mode;
 }
 
-static int inflate(Bytef *dest, ulong *destLen, const Bytef *source, ulong sourceLen)
+bool GzipReader::uncompress(
+    QIODevice *source,
+    QIODevice *destination,
+    const ArchiveResourceLimits &limits)
 {
-    z_stream stream;
-    int err;
-
-    stream.next_in = (Bytef*)source;
-    stream.avail_in = (uInt)sourceLen;
-    if ((uLong)stream.avail_in != sourceLen)
-        return Z_BUF_ERROR;
-
-    stream.next_out = dest;
-    stream.avail_out = (uInt)*destLen;
-    if ((uLong)stream.avail_out != *destLen)
-        return Z_BUF_ERROR;
-
-    stream.zalloc = (alloc_func)0;
-    stream.zfree = (free_func)0;
-
-    err = inflateInit2(&stream, -MAX_WBITS);
-    if (err != Z_OK)
-        return err;
-
-    err = inflate(&stream, Z_FINISH);
-    if (err != Z_STREAM_END) {
-        inflateEnd(&stream);
-        if (err == Z_NEED_DICT || (err == Z_BUF_ERROR && stream.avail_in == 0))
-            return Z_DATA_ERROR;
-        return err;
+    if (!source || !source->isReadable()
+        || !destination || !destination->isWritable()
+        || !limits.isValid()) {
+        return false;
     }
-    *destLen = stream.total_out;
 
-    err = inflateEnd(&stream);
-    return err;
+    qint64 knownCompressedSize = -1;
+    if (!source->isSequential()) {
+        const qint64 position = source->pos();
+        const qint64 size = source->size();
+        if (position < 0 || size < position)
+            return false;
+        knownCompressedSize = size - position;
+        if (static_cast<quint64>(knownCompressedSize)
+            > limits.maximumCompressedSize) {
+            return false;
+        }
+    }
+
+    z_stream stream;
+    memset(&stream, 0, sizeof(stream));
+    if (inflateInit2(&stream, MAX_WBITS + 16) != Z_OK)
+        return false;
+
+    QByteArray input(64 * 1024, Qt::Uninitialized);
+    QByteArray output(64 * 1024, Qt::Uninitialized);
+    quint64 compressedRead = 0;
+    quint64 producedTotal = 0;
+    bool valid = true;
+    bool streamEnded = false;
+
+    while (valid && !streamEnded) {
+        if (stream.avail_in == 0) {
+            const qint64 count = source->read(input.data(), input.size());
+            if (count < 0) {
+                valid = false;
+                break;
+            }
+            if (count == 0)
+                break;
+
+            const quint64 countBytes = static_cast<quint64>(count);
+            if (compressedRead > limits.maximumCompressedSize
+                || countBytes
+                    > limits.maximumCompressedSize - compressedRead) {
+                valid = false;
+                break;
+            }
+            compressedRead += countBytes;
+            stream.next_in =
+                reinterpret_cast<Bytef *>(input.data());
+            stream.avail_in = static_cast<uInt>(count);
+        }
+
+        const uInt inputBefore = stream.avail_in;
+        stream.next_out = reinterpret_cast<Bytef *>(output.data());
+        stream.avail_out = static_cast<uInt>(output.size());
+        const int result = ::inflate(&stream, Z_NO_FLUSH);
+        const qint64 produced = output.size() - stream.avail_out;
+
+        if (produced > 0) {
+            const quint64 producedBytes =
+                static_cast<quint64>(produced);
+            if (producedTotal > limits.maximumEntrySize
+                || producedBytes
+                    > limits.maximumEntrySize - producedTotal) {
+                valid = false;
+                break;
+            }
+
+            const quint64 nextProducedTotal =
+                producedTotal + producedBytes;
+            if ((knownCompressedSize >= 0
+                    && !withinCompressionRatio(
+                        static_cast<quint64>(knownCompressedSize),
+                        nextProducedTotal,
+                        limits))
+                || !writeFully(
+                    destination, output.constData(), produced)) {
+                valid = false;
+                break;
+            }
+            producedTotal = nextProducedTotal;
+        }
+
+        if (result == Z_STREAM_END) {
+            streamEnded = true;
+            if (stream.avail_in != 0 || !source->atEnd())
+                valid = false;
+        } else if (result != Z_OK) {
+            valid = false;
+        } else if (stream.avail_in == inputBefore && produced == 0) {
+            valid = false;
+        }
+    }
+
+    if (!streamEnded)
+        valid = false;
+    if (valid && knownCompressedSize < 0
+        && !withinCompressionRatio(
+            compressedRead, producedTotal, limits)) {
+        valid = false;
+    }
+    if (inflateEnd(&stream) != Z_OK)
+        valid = false;
+    return valid;
 }
 
 static int deflate (Bytef *dest, ulong *destLen, const Bytef *source, ulong sourceLen)
@@ -452,18 +613,23 @@ class ZipReaderPrivate : public QZipPrivate
 {
 public:
     ZipReaderPrivate(QIODevice *device)
-        : QZipPrivate(device), status(ZipReader::NoError)
+        : QZipPrivate(device), status(ZipReader::NoError), resourceLimits()
     {
     }
 
     ZipReaderPrivate(std::unique_ptr<QIODevice> device)
-        : QZipPrivate(std::move(device)), status(ZipReader::NoError)
+        : QZipPrivate(std::move(device)),
+          status(ZipReader::NoError),
+          resourceLimits()
     {
     }
 
     void scanFiles();
+    int indexOfFile(const QString &fileName) const;
+    bool extractFile(int index, QIODevice *destination);
 
     ZipReader::Status status;
+    ArchiveResourceLimits resourceLimits;
 };
 
 class ZipWriterPrivate : public QZipPrivate
@@ -582,10 +748,15 @@ void ZipReaderPrivate::scanFiles()
     const int entryCount = readUShort(eod.num_dir_entries);
     const quint32 directoryOffset = readUInt(eod.dir_start_offset);
     const quint32 directorySize = readUInt(eod.directory_size);
+    const quint64 metadataSize =
+        static_cast<quint64>(directorySize)
+        + static_cast<quint64>(commentLength);
     if (commentLength != commentLengthFromEnd
         || readUShort(eod.this_disk) != 0
         || readUShort(eod.start_of_directory_disk) != 0
         || readUShort(eod.num_dir_entries_this_disk) != entryCount
+        || entryCount > resourceLimits.maximumEntries
+        || metadataSize > resourceLimits.maximumMetadataSize
         || entryCount == 0xffff
         || directoryOffset == 0xffffffffU
         || directorySize == 0xffffffffU) {
@@ -627,6 +798,8 @@ void ZipReaderPrivate::scanFiles()
             return target->size() == length;
         };
 
+    quint64 totalUncompressedSize = 0;
+    quint64 totalCompressedSize = 0;
     for (int index = 0; index < entryCount; ++index) {
         if (device->pos() < 0
             || device->pos() > directoryEnd
@@ -656,6 +829,27 @@ void ZipReaderPrivate::scanFiles()
             failRead("QZip: incomplete central directory entry");
             return;
         }
+
+        const quint64 compressedSize =
+            readUInt(header.h.compressed_size);
+        const quint64 uncompressedSize =
+            readUInt(header.h.uncompressed_size);
+        if (uncompressedSize > resourceLimits.maximumEntrySize
+            || uncompressedSize
+                > resourceLimits.maximumTotalSize
+                    - totalUncompressedSize
+            || totalCompressedSize
+                > resourceLimits.maximumCompressedSize
+            || compressedSize
+                > resourceLimits.maximumCompressedSize
+                    - totalCompressedSize
+            || !withinCompressionRatio(
+                compressedSize, uncompressedSize, resourceLimits)) {
+            failRead("QZip: archive exceeds resource limits");
+            return;
+        }
+        totalUncompressedSize += uncompressedSize;
+        totalCompressedSize += compressedSize;
 
         ZDEBUG("found file '%s'", header.file_name.data());
         fileHeaders.append(header);
@@ -1249,148 +1443,95 @@ ZipReader::FileInfo ZipReader::entryInfoAt(int index) const
     return fi;
 }
 
-/*!
-    Fetch the file contents from the zip archive and return the uncompressed bytes.
-*/
-QByteArray ZipReader::fileData(const QString &fileName) const
+ArchiveResourceLimits ZipReader::resourceLimits() const
 {
-    QByteArray data;
-    if (!fileData(fileName, &data))
-        return QByteArray();
-    return data;
+    return d->resourceLimits;
 }
 
-bool ZipReader::fileData(const QString &fileName, QByteArray *data) const
+bool ZipReader::setResourceLimits(const ArchiveResourceLimits &limits)
 {
-    if (!data)
-        return false;
-    data->clear();
-
-    d->scanFiles();
-    if (d->status != ZipReader::NoError)
+    if (!limits.isValid())
         return false;
 
-    int index = 0;
-    for (; index < d->fileHeaders.size(); ++index) {
-        if (QString::fromLocal8Bit(d->fileHeaders.at(index).file_name) == fileName)
-            break;
-    }
-    if (index == d->fileHeaders.size())
-        return false;
-
-    const FileHeader header = d->fileHeaders.at(index);
-    const uint compressedSize = readUInt(header.h.compressed_size);
-    const uint uncompressedSize = readUInt(header.h.uncompressed_size);
-    const uint maximumByteArraySize =
-        static_cast<uint>(std::numeric_limits<int>::max());
-    if (compressedSize > maximumByteArraySize
-        || uncompressedSize > maximumByteArraySize) {
-        return false;
-    }
-
-    const uint start = readUInt(header.h.offset_local_header);
-    if (!d->device->seek(start))
-        return false;
-
-    LocalFileHeader localHeader;
-    if (d->device->read(reinterpret_cast<char *>(&localHeader),
-                        sizeof(LocalFileHeader)) != sizeof(LocalFileHeader)
-        || readUInt(localHeader.signature) != 0x04034b50) {
-        return false;
-    }
-
-    const uint skip = readUShort(localHeader.file_name_length)
-        + readUShort(localHeader.extra_field_length);
-    const qint64 payloadPosition = d->device->pos() + skip;
-    if (payloadPosition < d->device->pos()
-        || !d->device->seek(payloadPosition)) {
-        return false;
-    }
-
-    const int compressionMethod = readUShort(localHeader.compression_method);
-    if (compressionMethod != readUShort(header.h.compression_method))
-        return false;
-
-    const QByteArray compressed = d->device->read(compressedSize);
-    if (compressed.size() != static_cast<int>(compressedSize))
-        return false;
-
-    QByteArray uncompressed;
-    if (compressionMethod == 0) {
-        if (compressedSize != uncompressedSize)
-            return false;
-        uncompressed = compressed;
-    } else if (compressionMethod == 8) {
-        uncompressed.resize(qMax(static_cast<int>(uncompressedSize), 1));
-        ulong length = static_cast<ulong>(uncompressed.size());
-        const int result = inflate(
-            reinterpret_cast<uchar *>(uncompressed.data()),
-            &length,
-            reinterpret_cast<const uchar *>(compressed.constData()),
-            compressedSize);
-        if (result != Z_OK || length != uncompressedSize)
-            return false;
-        uncompressed.resize(static_cast<int>(uncompressedSize));
-    } else {
-        return false;
-    }
-
-    uLong checksum = crc32(0L, Z_NULL, 0);
-    checksum = crc32(
-        checksum,
-        reinterpret_cast<const Bytef *>(uncompressed.constData()),
-        static_cast<uInt>(uncompressed.size()));
-    if (static_cast<uint>(checksum) != readUInt(header.h.crc_32))
-        return false;
-
-    *data = uncompressed;
+    d->resourceLimits = limits;
+    d->dirtyFileTree = true;
+    d->fileHeaders.clear();
+    d->comment.clear();
     return true;
 }
 
-bool ZipReader::verifyFile(const QString &fileName) const
+int ZipReaderPrivate::indexOfFile(const QString &fileName) const
 {
-    d->scanFiles();
-    if (d->status != ZipReader::NoError)
-        return false;
-
-    int index = 0;
-    for (; index < d->fileHeaders.size(); ++index) {
-        if (QString::fromLocal8Bit(d->fileHeaders.at(index).file_name)
+    for (int index = 0; index < fileHeaders.size(); ++index) {
+        if (QString::fromLocal8Bit(fileHeaders.at(index).file_name)
             == fileName) {
-            break;
+            return index;
         }
     }
-    if (index == d->fileHeaders.size())
-        return false;
+    return -1;
+}
 
-    const FileHeader header = d->fileHeaders.at(index);
+bool ZipReaderPrivate::extractFile(int index, QIODevice *destination)
+{
+    if (index < 0 || index >= fileHeaders.size()
+        || (destination && !destination->isWritable())) {
+        return false;
+    }
+
+    const FileHeader header = fileHeaders.at(index);
     const quint32 compressedSize = readUInt(header.h.compressed_size);
     const quint32 uncompressedSize = readUInt(header.h.uncompressed_size);
     const quint32 expectedChecksum = readUInt(header.h.crc_32);
     const quint16 compressionMethod =
         readUShort(header.h.compression_method);
-    if (compressionMethod != 0 && compressionMethod != 8)
+    const quint16 generalPurposeBits =
+        readUShort(header.h.general_purpose_bits);
+    if ((compressionMethod != 0 && compressionMethod != 8)
+        || (generalPurposeBits & 0x0001) != 0
+        || uncompressedSize > resourceLimits.maximumEntrySize
+        || !withinCompressionRatio(
+            compressedSize, uncompressedSize, resourceLimits)) {
         return false;
+    }
 
     const qint64 localHeaderPosition =
         readUInt(header.h.offset_local_header);
     if (localHeaderPosition < 0
         || localHeaderPosition
-            > d->start_of_directory
+            > start_of_directory
                 - static_cast<qint64>(sizeof(LocalFileHeader))
-        || !d->device->seek(localHeaderPosition)) {
+        || !device->seek(localHeaderPosition)) {
         return false;
     }
 
     LocalFileHeader localHeader;
-    if (d->device->read(
+    const bool usesDataDescriptor =
+        (generalPurposeBits & 0x0008) != 0;
+    if (device->read(
             reinterpret_cast<char *>(&localHeader),
             sizeof(LocalFileHeader)) != sizeof(LocalFileHeader)
         || readUInt(localHeader.signature) != 0x04034b50
         || readUShort(localHeader.compression_method) != compressionMethod
-        || readUInt(localHeader.crc_32) != expectedChecksum
-        || readUInt(localHeader.compressed_size) != compressedSize
-        || readUInt(localHeader.uncompressed_size) != uncompressedSize) {
+        || readUShort(localHeader.general_purpose_bits)
+            != generalPurposeBits) {
+        return false;
+    }
+    const quint32 localChecksum = readUInt(localHeader.crc_32);
+    const quint32 localCompressedSize =
+        readUInt(localHeader.compressed_size);
+    const quint32 localUncompressedSize =
+        readUInt(localHeader.uncompressed_size);
+    if ((!usesDataDescriptor
+            && (localChecksum != expectedChecksum
+                || localCompressedSize != compressedSize
+                || localUncompressedSize != uncompressedSize))
+        || (usesDataDescriptor
+            && ((localChecksum != 0
+                    && localChecksum != expectedChecksum)
+                || (localCompressedSize != 0
+                    && localCompressedSize != compressedSize)
+                || (localUncompressedSize != 0
+                    && localUncompressedSize != uncompressedSize)))) {
         return false;
     }
 
@@ -1398,20 +1539,20 @@ bool ZipReader::verifyFile(const QString &fileName) const
         readUShort(localHeader.file_name_length);
     const quint16 extraFieldLength =
         readUShort(localHeader.extra_field_length);
-    const QByteArray localFileName = d->device->read(fileNameLength);
+    const QByteArray localFileName = device->read(fileNameLength);
     if (localFileName.size() != fileNameLength
         || localFileName != header.file_name) {
         return false;
     }
 
     const qint64 payloadPosition =
-        d->device->pos() + extraFieldLength;
+        device->pos() + extraFieldLength;
     const qint64 payloadEnd =
         payloadPosition + static_cast<qint64>(compressedSize);
-    if (payloadPosition < d->device->pos()
+    if (payloadPosition < device->pos()
         || payloadEnd < payloadPosition
-        || payloadEnd > d->start_of_directory
-        || !d->device->seek(payloadPosition)) {
+        || payloadEnd > start_of_directory
+        || !device->seek(payloadPosition)) {
         return false;
     }
 
@@ -1428,10 +1569,11 @@ bool ZipReader::verifyFile(const QString &fileName) const
         while (remaining > 0) {
             const qint64 requested = static_cast<qint64>(
                 qMin<quint64>(remaining, input.size()));
-            const qint64 count =
-                d->device->read(input.data(), requested);
-            if (count <= 0)
+            const qint64 count = device->read(input.data(), requested);
+            if (count <= 0
+                || !writeFully(destination, input.constData(), count)) {
                 return false;
+            }
             checksum = ::crc32(
                 checksum,
                 reinterpret_cast<const Bytef *>(input.constData()),
@@ -1451,8 +1593,7 @@ bool ZipReader::verifyFile(const QString &fileName) const
         while (valid && remaining > 0 && !streamEnded) {
             const qint64 requested = static_cast<qint64>(
                 qMin<quint64>(remaining, input.size()));
-            const qint64 count =
-                d->device->read(input.data(), requested);
+            const qint64 count = device->read(input.data(), requested);
             if (count <= 0) {
                 valid = false;
                 break;
@@ -1477,15 +1618,25 @@ bool ZipReader::verifyFile(const QString &fileName) const
                 const qint64 produced =
                     output.size() - stream.avail_out;
                 if (produced > 0) {
+                    const quint64 producedBytes =
+                        static_cast<quint64>(produced);
+                    if (producedTotal
+                            > resourceLimits.maximumEntrySize
+                        || producedTotal > uncompressedSize
+                        || producedBytes
+                            > resourceLimits.maximumEntrySize - producedTotal
+                        || producedBytes
+                            > uncompressedSize - producedTotal
+                        || !writeFully(
+                            destination, output.constData(), produced)) {
+                        valid = false;
+                        break;
+                    }
                     checksum = ::crc32(
                         checksum,
                         reinterpret_cast<const Bytef *>(output.constData()),
                         static_cast<uInt>(produced));
-                    producedTotal += static_cast<quint64>(produced);
-                    if (producedTotal > uncompressedSize) {
-                        valid = false;
-                        break;
-                    }
+                    producedTotal += producedBytes;
                 }
                 if (result == Z_STREAM_END) {
                     streamEnded = true;
@@ -1510,7 +1661,58 @@ bool ZipReader::verifyFile(const QString &fileName) const
 
     return producedTotal == uncompressedSize
         && static_cast<quint32>(checksum) == expectedChecksum
-        && d->device->pos() == payloadEnd;
+        && device->pos() == payloadEnd;
+}
+
+/*!
+    Fetch the file contents from the zip archive and return the uncompressed bytes.
+*/
+QByteArray ZipReader::fileData(const QString &fileName) const
+{
+    QByteArray data;
+    if (!fileData(fileName, &data))
+        return QByteArray();
+    return data;
+}
+
+bool ZipReader::fileData(const QString &fileName, QByteArray *data) const
+{
+    if (!data)
+        return false;
+    data->clear();
+
+    d->scanFiles();
+    if (d->status != ZipReader::NoError)
+        return false;
+
+    QBuffer output(data);
+    if (!output.open(QIODevice::WriteOnly)
+        || !d->extractFile(d->indexOfFile(fileName), &output)) {
+        data->clear();
+        return false;
+    }
+    return true;
+}
+
+bool ZipReader::extractFile(const QString &fileName,
+                            QIODevice *destination) const
+{
+    if (!destination || !destination->isWritable())
+        return false;
+
+    d->scanFiles();
+    if (d->status != ZipReader::NoError)
+        return false;
+
+    return d->extractFile(d->indexOfFile(fileName), destination);
+}
+
+bool ZipReader::verifyFile(const QString &fileName) const
+{
+    d->scanFiles();
+    if (d->status != ZipReader::NoError)
+        return false;
+    return d->extractFile(d->indexOfFile(fileName), nullptr);
 }
 
 struct ZipExtractionEntry
@@ -1518,7 +1720,7 @@ struct ZipExtractionEntry
     ZipReader::FileInfo info;
     QString relativePath;
     bool selected;
-    QByteArray contents;
+    QString stagedFilePath;
 };
 
 static bool isWindowsDeviceName(const QString &component)
@@ -1727,7 +1929,7 @@ bool ZipReader::extractAll(const QString &destinationDir,
         entryTypes.insert(key, fileInfo.isDir);
         const bool selected = !allowedRelativeFiles
             || (!fileInfo.isDir && allowedPaths.contains(relativePath));
-        entries.append({ fileInfo, relativePath, selected, QByteArray() });
+        entries.append({ fileInfo, relativePath, selected, QString() });
 
         if (!destinationPathIsSafe(baseDir, relativePath, fileInfo.isDir))
             return false;
@@ -1749,12 +1951,23 @@ bool ZipReader::extractAll(const QString &destinationDir,
         }
     }
 
+    QTemporaryDir stagingDirectory;
+    if (!stagingDirectory.isValid())
+        return false;
+
     // Validate and decompress selected members before writing anything.
+    int stagingIndex = 0;
     for (ZipExtractionEntry &entry : entries) {
         if (!entry.selected || entry.info.isDir)
             continue;
-        if (!fileData(entry.info.filePath, &entry.contents)
-            || entry.contents.size() != entry.info.size) {
+
+        entry.stagedFilePath = stagingDirectory.filePath(
+            QString::number(stagingIndex++));
+        QFile stagedFile(entry.stagedFilePath);
+        if (!stagedFile.open(QIODevice::WriteOnly | QIODevice::Truncate)
+            || !extractFile(entry.info.filePath, &stagedFile)
+            || !stagedFile.flush()
+            || stagedFile.size() != entry.info.size) {
             return false;
         }
     }
@@ -1813,9 +2026,11 @@ bool ZipReader::extractAll(const QString &destinationDir,
         if (!destinationPathIsSafe(baseDir, entry.relativePath, false))
             return rollback();
 
+        QFile stagedFile(entry.stagedFilePath);
         QSaveFile output(baseDir.absoluteFilePath(entry.relativePath));
-        if (!output.open(QIODevice::WriteOnly)
-            || output.write(entry.contents) != entry.contents.size()) {
+        if (!stagedFile.open(QIODevice::ReadOnly)
+            || !output.open(QIODevice::WriteOnly)
+            || !copyFully(&stagedFile, &output, entry.info.size)) {
             output.cancelWriting();
             return rollback();
         }

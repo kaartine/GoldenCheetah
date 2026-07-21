@@ -19,6 +19,7 @@
  */
 
 #include "RideFile.h"
+#include "CompressedActivityFile.h"
 #include "FilterHRV.h"
 #include "WPrime.h"
 #include "Athlete.h"
@@ -33,10 +34,12 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QTemporaryFile>
 
 #include <QtXml/QtXml>
 #include <algorithm> // for std::lower_bound
 #include <assert.h>
+#include <memory>
 #ifdef Q_CC_MSVC
 #include <float.h>
 #endif
@@ -45,15 +48,6 @@
 #ifdef GC_HAVE_SAMPLERATE
 // we have libsamplerate
 #include <samplerate.h>
-#endif
-
-#include "../qzip/zipwriter.h"
-#include "../qzip/zipreader.h"
-
-#ifdef Q_CC_MSVC
-#include <QtZlib/zlib.h>
-#else
-#include <zlib.h>
 #endif
 
 #define mark() \
@@ -803,55 +797,6 @@ RideFileReader *RideFileFactory::readerForSuffix(QString suffix) const
     return readFuncs_.value(suffix.toLower());
 }
 
-static QByteArray gUncompress(const QByteArray &data)
-{
-    if (data.size() <= 4) {
-        qWarning("gUncompress: Input data is truncated");
-        return QByteArray();
-    }
-
-    QByteArray result;
-
-    int ret;
-    z_stream strm;
-    static const int CHUNK_SIZE = 1024;
-    char out[CHUNK_SIZE];
-
-    /* allocate inflate state */
-    strm.zalloc = Z_NULL;
-    strm.zfree = Z_NULL;
-    strm.opaque = Z_NULL;
-    strm.avail_in = data.size();
-    strm.next_in = (Bytef*)(data.data());
-
-    ret = inflateInit2(&strm, 15 +  16); // gzip decoding
-    if (ret != Z_OK)
-        return QByteArray();
-
-    // run inflate()
-    do {
-        strm.avail_out = CHUNK_SIZE;
-        strm.next_out = (Bytef*)(out);
-
-        ret = inflate(&strm, Z_NO_FLUSH);
-        Q_ASSERT(ret != Z_STREAM_ERROR);  // state not clobbered
-
-        switch (ret) {
-        case Z_NEED_DICT:
-        case Z_DATA_ERROR:
-        case Z_MEM_ERROR:
-            (void)inflateEnd(&strm);
-            return QByteArray();
-        }
-
-        result.append(out, CHUNK_SIZE - strm.avail_out);
-    } while (strm.avail_out == 0);
-
-    // clean up and return
-    inflateEnd(&strm);
-    return result;
-}
-
 RideFile *RideFileFactory::openRideFile(Context *context, QFile &file,
                                            QStringList &errors, QList<RideFile*> *rideList) const
 {
@@ -873,60 +818,45 @@ RideFile *RideFileFactory::openRideFile(Context *context, QFile &file,
         }
     }
 
-    // did we uncompress?
-    QByteArray data;
-    bool uncompressed=false;
-
-    // the result we will return
-    RideFile *result;
-
-    // decompress if its compressed data
-    if (compression == "zip") {
-
-        // open zip and uncompress
-        ZipReader reader(file.fileName());
-        ZipReader::FileInfo info = reader.entryInfoAt(0);
-        data = reader.fileData(info.filePath);
-
-        uncompressed = true;
-
-    }
-
-    // decompress
-    if (compression == "gz") {
-
-        // read and uncompress
-        file.open(QFile::ReadOnly);
-        data = gUncompress(file.readAll());
-        file.close();
-
-        uncompressed = true;
-    }
-
     // do we have a reader for this type of file?
     RideFileReader *reader = readFuncs_.value(suffix.toLower());
     if (!reader) return NULL;
 
-    // if we uncompressed a ride, we need to save to a temporary ride for import
-    if (uncompressed) {
+    RideFile *result = nullptr;
+    if (compression == "zip" || compression == "gz") {
+        if (!context || !context->athlete || !context->athlete->home) {
+            errors << QObject::tr("Activity storage is unavailable.");
+            return nullptr;
+        }
 
-        // create a temporary ride
-        QString tmp = context->athlete->home->temp().absolutePath() + "/" + QFileInfo(file.fileName()).baseName() + "." + suffix;
+        const QString fileTemplate = QDir(
+            context->athlete->home->temp().absolutePath()).filePath(
+                QStringLiteral("gc-ride-XXXXXX.%1").arg(suffix));
+        QTemporaryFile uncompressedFile(fileTemplate);
+        if (!uncompressedFile.open()) {
+            errors << QObject::tr(
+                "Cannot create a temporary activity file.");
+            return nullptr;
+        }
 
-        QFile ufile(tmp); // look at uncompressed version mot the source
-        ufile.open(QFile::ReadWrite);
-        ufile.write(data);
-        ufile.close();
+        auto compressedFile = std::make_unique<QFile>(file.fileName());
+        const CompressedActivityFile::Format format =
+            compression == "zip"
+                ? CompressedActivityFile::Format::Zip
+                : CompressedActivityFile::Format::Gzip;
+        const bool decoded = compressedFile->open(QIODevice::ReadOnly)
+            && CompressedActivityFile::extractSingleFile(
+                std::move(compressedFile), format, &uncompressedFile);
 
-        // open and read the  uncompressed file
-        result = reader->openRideFile(ufile, errors, rideList);
-
-        // now zap the temporary file
-        ufile.remove();
-
+        if (!decoded || !uncompressedFile.flush()) {
+            errors << QObject::tr(
+                "Compressed activity file is invalid or exceeds safety limits.");
+            return nullptr;
+        }
+        uncompressedFile.close();
+        result = reader->openRideFile(
+            uncompressedFile, errors, rideList);
     } else {
-
-        // open and read the file
         result = reader->openRideFile(file, errors, rideList);
     }
 

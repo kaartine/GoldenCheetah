@@ -164,6 +164,7 @@ private slots:
     void zipReportsDirectoryWriteFailure();
     void zipRejectsNullOutputDevice();
     void publicationIsVerifiedAndExact();
+    void verificationAllowsTrustedHighRatioEntry();
     void changedSourceIsNotPublished();
     void corruptPayloadIsRejected();
     void corruptArchiveIsNotPublished();
@@ -408,6 +409,34 @@ void TestAthleteBackupArchive::publicationIsVerifiedAndExact()
     QString verifyError;
     QVERIFY2(verifyAthleteBackupArchive(target, manifest, verifyError),
              qPrintable(verifyError));
+}
+
+void TestAthleteBackupArchive::verificationAllowsTrustedHighRatioEntry()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+
+    const QDir globalHome(temporary.path());
+    QVERIFY(globalHome.mkpath(QStringLiteral("Rider/activities")));
+    const QDir athleteHome(globalHome.filePath(QStringLiteral("Rider")));
+    const QString source = athleteHome.filePath(
+        QStringLiteral("activities/high-ratio.bin"));
+    QVERIFY(writeFile(source, QByteArray(2 * 1024 * 1024, '\0')));
+
+    AthleteBackupManifest manifest;
+    qint64 totalSize = 0;
+    QString error;
+    QVERIFY2(buildAthleteBackupManifest(
+        athleteHome, globalHome, manifest, totalSize, error),
+        qPrintable(error));
+    QCOMPARE(manifest.size(), 1);
+
+    const QString target =
+        globalHome.filePath(QStringLiteral("high-ratio.zip"));
+    QVERIFY2(publishVerifiedAthleteBackup(target, manifest, error),
+             qPrintable(error));
+    QVERIFY2(verifyAthleteBackupArchive(target, manifest, error),
+             qPrintable(error));
 }
 
 void TestAthleteBackupArchive::changedSourceIsNotPublished()
