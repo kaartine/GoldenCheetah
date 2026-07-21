@@ -31,6 +31,7 @@ equals(GC_UNITTESTS, active) {
 			   FileIO/atomicActivitySave \
 			   FileIO/archiveSecurity \
 			   FileIO/athleteBackupArchive \
+			   FileIO/cpCsvImport \
 			   FileIO/powerTapBounds \
 			   FileIO/rideFileOwnership \
 			   FileIO/tacxCafBounds \

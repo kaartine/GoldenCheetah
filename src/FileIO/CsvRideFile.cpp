@@ -19,6 +19,7 @@
  */
 
 #include "CsvRideFile.h"
+#include "CpCsvImport.h"
 #include "Units.h"
 #include "Context.h"
 #include "Athlete.h"
@@ -210,12 +211,10 @@ RideFile *CsvFileReader::openRideFile(QFile &file, QStringList &errors, QList<Ri
     int kphIndex = -1;
     int gctIndex = -1, voIndex =-1;
 
-    double precAvg=0.0;
-    //double precWatts=0.0;
-    double precSecs=0.0;
-    double maxWatts=0.0;
     double lastsecs=0.0;
     double lastkm=0.0;
+    CpCsvImport::Builder cpBuilder;
+    QString cpError;
 
     // RP3 accrual
     int lastinterval=0;
@@ -1081,41 +1080,10 @@ RideFile *CsvFileReader::openRideFile(QFile &file, QStringList &errors, QList<Ri
                      }
                 } else if (csvType == cpexport) {
                     // seconds, value, (model), date
-                    seconds = line.section(',',0,0).toDouble();
-                    if (seconds == precSecs)
-                        continue;
-                    minutes = seconds / 60.0f;
-
-
-                    //seconds = lineno -1 ;
-                    double avgWatts = line.section(',', 1, 1).toDouble();
-                    if ( avgWatts > maxWatts ) {
-                        maxWatts = avgWatts;
+                    if (!cpBuilder.addRow(line, lineno, cpError)) {
+                        eof = true;
+                        break;
                     }
-
-                    //watts = (avgwatts * seconds - precSecs * precWatts) / (seconds - precSecs);
-                    watts = (avgWatts * seconds - precSecs * precAvg) / (seconds - precSecs);
-                    if ( watts > maxWatts ) {
-                        watts = maxWatts;
-                    }
-
-
-                    for (int gap=1; seconds-gap>precSecs; gap++) {
-                        rideFile->appendPoint(seconds-gap, cad, hr, km,
-                                              kph, nm, watts, alt, lon, lat,
-                                              headwind, slope, temp, lrbalance,
-                                              lte, rte, lps, rps,
-                                              0.0, 0.0,
-                                              0.0, 0.0, 0.0, 0.0,
-                                              0.0, 0.0, 0.0, 0.0,
-                                              smo2, thb,
-                                              0.0, 0.0, 0.0, 0.0, interval);
-                    }
-
-                    precAvg = (precAvg * precSecs + (watts>0?watts:0) * (seconds - precSecs)) / seconds;
-                    //qDebug() << seconds << avgwatts << precSecs << precWatts << ":" <<watts << "->" << precAvg;
-                    precSecs = seconds;
-                    //precWatts = avgwatts;
                 } else if (csvType == rowpro) {
                     // RowPro CSV type "Time,Distance,Pace,Watts,Cals,SPM,HR,DutyCycle,Rowfile_Id"
                     //                  0   , 1      , 2  , 3   , 4  , 5 , 6, 7       , 8
@@ -1150,7 +1118,9 @@ RideFile *CsvFileReader::openRideFile(QFile &file, QStringList &errors, QList<Ri
                 if (watts == -1)
                     watts = 0;
 
-               if(csvType == motoactv)
+               if (csvType == cpexport) {
+                    // Validate the complete curve before publishing points.
+               } else if(csvType == motoactv)
                     rideFile->appendPoint(seconds, cad, hr, km,
                                           kph, nm, watts, alt, lon, lat, 0.0,
                                           0.0, temp, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -1372,6 +1342,25 @@ RideFile *CsvFileReader::openRideFile(QFile &file, QStringList &errors, QList<Ri
         }
     }
     file.close();
+
+    if (csvType == cpexport) {
+        if (!cpError.isEmpty() || !cpBuilder.finalize(cpError)) {
+            errors << cpError + QStringLiteral(" File \"")
+                      + file.fileName() + QStringLiteral("\".");
+            delete rideFile;
+            return NULL;
+        }
+
+        for (const CpCsvImport::Segment &segment : cpBuilder.segments()) {
+            for (int second = segment.firstSecond;
+                 second <= segment.lastSecond; ++second) {
+                RideFilePoint point;
+                point.secs = second;
+                point.watts = segment.watts;
+                rideFile->appendPoint(point);
+            }
+        }
+    }
 
     // To estimate the recording interval, take the median of the
     // first 1000 samples and round to nearest millisecond.

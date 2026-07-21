@@ -1741,13 +1741,44 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### PARSE-002: CP CSV gaps can expand to billions of points
 
-- Status: OPEN
-- Code: `src/FileIO/CsvRideFile.cpp:167`,
-  `src/FileIO/CsvRideFile.cpp:1103`
+- Status: FIXED
+- Code: `src/FileIO/CsvRideFile.cpp`, `src/FileIO/CpCsvImport.cpp`,
+  `src/FileIO/CpCsvImport.h`, `src/src.pro`,
+  `unittests/FileIO/cpCsvImport/cpCsvImport.pro`,
+  `unittests/FileIO/cpCsvImport/testCpCsvImport.cpp`,
+  `unittests/unittests.pro`
 - Impact: One attacker-controlled timestamp can consume CPU and memory for a
   billion-iteration expansion.
-- Test: Import huge, negative, non-finite, and non-monotonic timestamps.
-- Fix direction: Global point/duration budgets and no per-second materialization.
+- Test-first evidence: The new focused test target was added before the
+  production helper and initially failed to configure and build because the
+  bounded CP import implementation did not exist. The first strict ordered
+  implementation then passed 21 tests and failed three compatibility
+  regressions for non-monotonic rows and duplicate timestamps. Those failures
+  reproduced ordering used by GoldenCheetah's own filtered and rainbow CP
+  exports before normalization was implemented.
+- Regression coverage: The 24 focused tests cover representative sparse curves,
+  reconstructed cumulative averages, the optional model column, a
+  billion-second timestamp, negative, zero, fractional, non-numeric and
+  non-finite timestamps, non-monotonic rows, matching and conflicting duplicate
+  timestamps, invalid power values, whole-file row and expanded-point budgets,
+  late rollback, and empty input.
+- Resolution: CP rows are now parsed into a compact builder under a 345,600-row
+  budget and a two-day/172,800-point duration budget. Timestamps and values must
+  be finite, timestamps must be positive whole seconds, and power must be
+  non-negative. Finalization stably orders bounded input, coalesces exact
+  duplicates, rejects conflicts, and derives compact power segments using
+  checked extended-precision arithmetic. The complete curve is validated before
+  `RideFile` is mutated; only the final, bounded points are then emitted in
+  ascending order, with no second per-point staging container.
+- Verification: The focused suite passed all 24 tests normally and under strict
+  ASan/UBSan/LSan, with no sanitizer reports. A fresh `-O2` release build and all
+  64 unit-test projects passed (2,076 passed, 0 failed, 0 skipped, 0
+  blacklisted). The 165,640,696-byte AppImage reports `V3.8-DEV2605 (5012)` and
+  has SHA-256
+  `6ffe67dcd1bbdabcf7ee4e417afbabc5cf3b9eef9e5c625440cb4c100191e4b3`.
+  It remained stable for a 15-second clean-profile X11 launch and a 45-second
+  launch against a copied real athlete profile; logs contained only missing
+  translator debug notices.
 
 ### PARSE-003: TCX swim gaps amplify into thousands of points per record
 
