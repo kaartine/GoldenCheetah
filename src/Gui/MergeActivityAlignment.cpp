@@ -60,16 +60,25 @@ ScoreResult directScore(
             result.cancelled = true;
             return result;
         }
-        if (index + offset > 0) {
-            mean += base.at(index + offset);
-        }
+        const int baseIndex = index + offset;
+        if (baseIndex <= 0) continue;
+
+        const double baseValue = base.at(baseIndex);
+        if (!std::isfinite(baseValue)) return result;
+        mean += baseValue;
         ++meanCount;
     }
     if (meanCount == 0) return result;
     mean /= double(meanCount);
+    if (!std::isfinite(mean)) return result;
 
     double residual = 0.0;
     double total = 0.0;
+    double firstBaseValue = 0.0;
+    double firstFitValue = 0.0;
+    bool hasOverlap = false;
+    bool baseVaries = false;
+    bool fitVaries = false;
     for (int index = 0;
          index + offset < base.size() && index < fit.size();
          ++index) {
@@ -77,15 +86,38 @@ ScoreResult directScore(
             result.cancelled = true;
             return result;
         }
-        if (index + offset > 0) {
-            const double baseValue = base.at(index + offset);
-            const double delta = baseValue - fit.at(index);
-            residual += std::pow(delta, 2);
-            total += std::pow(baseValue - mean, 2);
+        const int baseIndex = index + offset;
+        if (baseIndex <= 0) continue;
+
+        const double baseValue = base.at(baseIndex);
+        const double fitValue = fit.at(index);
+        if (!std::isfinite(baseValue) || !std::isfinite(fitValue)) {
+            return result;
         }
+        if (!hasOverlap) {
+            firstBaseValue = baseValue;
+            firstFitValue = fitValue;
+            hasOverlap = true;
+        } else {
+            baseVaries = baseVaries || baseValue != firstBaseValue;
+            fitVaries = fitVaries || fitValue != firstFitValue;
+        }
+
+        const double delta = baseValue - fitValue;
+        const double centered = baseValue - mean;
+        residual += delta * delta;
+        total += centered * centered;
     }
 
+    if (!hasOverlap || !baseVaries || !fitVaries ||
+        !(total > 0.0) || !std::isfinite(residual) ||
+        !std::isfinite(total)) {
+        return result;
+    }
     result.score = 1.0 - residual / total;
+    if (!std::isfinite(result.score)) {
+        result.score = std::numeric_limits<double>::quiet_NaN();
+    }
     return result;
 }
 
@@ -115,8 +147,7 @@ Result directBestOffset(
 
 bool allFiniteConstant(
     const QVector<double> &values,
-    int firstIndex,
-    double *constant)
+    int firstIndex)
 {
     if (firstIndex >= values.size()) return false;
 
@@ -128,7 +159,6 @@ bool allFiniteConstant(
             return false;
         }
     }
-    *constant = first;
     return true;
 }
 
@@ -150,6 +180,15 @@ bool invalidInRange(
     int end)
 {
     return begin < end && prefix.at(end) != prefix.at(begin);
+}
+
+bool variesInRange(
+    const QVector<int> &changes,
+    int begin,
+    int end)
+{
+    return end - begin > 1 &&
+           changes.at(end) != changes.at(begin + 1);
 }
 
 struct Candidate
@@ -200,10 +239,11 @@ Result fftBestOffset(
     QVector<double> scaledFit(fitCount, 0.0);
     QVector<long double> baseSum(baseCount + 1, 0.0L);
     QVector<long double> baseSquares(baseCount + 1, 0.0L);
-    QVector<long double> fitSum(fitCount + 1, 0.0L);
     QVector<long double> fitSquares(fitCount + 1, 0.0L);
     QVector<int> baseInvalid(baseCount + 1, 0);
     QVector<int> fitInvalid(fitCount + 1, 0);
+    QVector<int> baseChanges(baseCount + 1, 0);
+    QVector<int> fitChanges(fitCount + 1, 0);
 
     for (int index = 0; index < baseCount; ++index) {
         if ((index & 4095) == 0 && isCancelled(cancellation)) {
@@ -219,6 +259,9 @@ Result fftBestOffset(
             baseSquares.at(index) + (static_cast<long double>(value) * value);
         baseInvalid[index + 1] =
             baseInvalid.at(index) + ((!finite && index > 0) ? 1 : 0);
+        baseChanges[index + 1] =
+            baseChanges.at(index) +
+            ((index > 0 && base.at(index) != base.at(index - 1)) ? 1 : 0);
     }
     for (int index = 0; index < fitCount; ++index) {
         if ((index & 4095) == 0 && isCancelled(cancellation)) {
@@ -228,24 +271,23 @@ Result fftBestOffset(
         const bool finite = std::isfinite(fit.at(index));
         const double value = finite ? fit.at(index) / commonScale : 0.0;
         scaledFit[index] = value;
-        fitSum[index + 1] = fitSum.at(index) + value;
         fitSquares[index + 1] =
             fitSquares.at(index) + (static_cast<long double>(value) * value);
         fitInvalid[index + 1] =
             fitInvalid.at(index) + (finite ? 0 : 1);
+        fitChanges[index + 1] =
+            fitChanges.at(index) +
+            ((index > 0 && fit.at(index) != fit.at(index - 1)) ? 1 : 0);
     }
 
-    double baseConstantValue = 0.0;
-    double fitConstantValue = 0.0;
-    const bool baseConstant =
-        allFiniteConstant(scaledBase, 1, &baseConstantValue);
-    const bool fitConstant =
-        allFiniteConstant(scaledFit, 0, &fitConstantValue);
+    if (allFiniteConstant(base, 1) || allFiniteConstant(fit, 0)) {
+        return result;
+    }
 
     std::vector<double> convolution;
     std::size_t fftSize = 0;
     int fftStages = 0;
-    if (!baseConstant && !fitConstant) {
+    {
         const std::size_t convolutionCount =
             std::size_t(baseCount) + std::size_t(fitCount) - 1;
         fftSize = nextPowerOfTwo(convolutionCount);
@@ -321,7 +363,6 @@ Result fftBestOffset(
     QVector<Candidate> candidates;
     candidates.reserve(2 * searchRadius);
     double bestApproximate = 0.0;
-    int bestApproximateOffset = 0;
 
     for (int offset = -searchRadius; offset < searchRadius; ++offset) {
         if ((offset & 255) == 0 && isCancelled(cancellation)) {
@@ -341,10 +382,17 @@ Result fftBestOffset(
             invalidInRange(fitInvalid, lower, upper)) {
             continue;
         }
+        if (!variesInRange(baseChanges, baseBegin, baseEnd) ||
+            !variesInRange(fitChanges, lower, upper)) {
+            continue;
+        }
 
+        const int meanCount = baseCount - meanStart;
+        if (meanCount <= 0) continue;
         const long double mean =
             (baseSum.at(baseCount) - baseSum.at(meanStart)) /
-            static_cast<long double>(baseCount - offset);
+            static_cast<long double>(meanCount);
+        if (!std::isfinite(mean)) continue;
         const long double sumBase =
             baseSum.at(baseEnd) - baseSum.at(baseBegin);
         const long double sumBaseSquares =
@@ -354,18 +402,11 @@ Result fftBestOffset(
         const int overlap = upper - lower;
 
         long double cross = 0.0L;
-        if (baseConstant) {
-            cross = static_cast<long double>(baseConstantValue) *
-                    (fitSum.at(upper) - fitSum.at(lower));
-        } else if (fitConstant) {
-            cross = static_cast<long double>(fitConstantValue) * sumBase;
-        } else {
-            const long long convolutionIndex =
-                static_cast<long long>(fitCount - 1) + offset;
-            if (convolutionIndex >= 0 &&
-                std::size_t(convolutionIndex) < convolution.size()) {
-                cross = convolution[std::size_t(convolutionIndex)];
-            }
+        const long long convolutionIndex =
+            static_cast<long long>(fitCount - 1) + offset;
+        if (convolutionIndex >= 0 &&
+            std::size_t(convolutionIndex) < convolution.size()) {
+            cross = convolution[std::size_t(convolutionIndex)];
         }
 
         long double residual =
@@ -374,7 +415,7 @@ Result fftBestOffset(
             sumBaseSquares - 2.0L * mean * sumBase +
             static_cast<long double>(overlap) * mean * mean;
 
-        if (!baseConstant && !fitConstant) {
+        {
             const long double magnitude =
                 std::abs(sumBaseSquares) + std::abs(sumFitSquares) +
                 2.0L * std::abs(cross) + 1.0L;
@@ -390,6 +431,11 @@ Result fftBestOffset(
             }
         }
 
+        if (!(total > 0.0L) || !std::isfinite(residual) ||
+            !std::isfinite(total)) {
+            continue;
+        }
+
         const double score =
             1.0 - double(residual / total);
         if (!std::isfinite(score)) continue;
@@ -400,26 +446,10 @@ Result fftBestOffset(
         candidates.append(candidate);
         if (score > bestApproximate) {
             bestApproximate = score;
-            bestApproximateOffset = offset;
         }
     }
 
     if (!(bestApproximate > 0.0)) return result;
-
-    if (baseConstant || fitConstant) {
-        const ScoreResult exact =
-            directScore(base, fit, bestApproximateOffset, cancellation);
-        if (exact.cancelled) {
-            result.cancelled = true;
-            return result;
-        }
-        if (exact.score > 0.0) {
-            result.valid = true;
-            result.offset = bestApproximateOffset;
-            result.rSquared = exact.score;
-        }
-        return result;
-    }
 
     QVector<int> exactOffsets;
     for (const Candidate &candidate : candidates) {

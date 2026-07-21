@@ -1648,19 +1648,41 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DATA-004: Constant shared series selects an artificial alignment
 
-- Status: OPEN
-- Code: `src/Gui/MergeActivityAlignment.cpp:58`,
-  `src/Gui/MergeActivityAlignment.cpp:88`,
-  `src/Gui/MergeActivityAlignment.cpp:98`,
-  `unittests/Gui/mergeActivityAlignment/testMergeActivityAlignment.cpp:284`
+- Status: FIXED
+- Code: `src/Gui/MergeActivityAlignment.cpp`,
+  `unittests/Gui/mergeActivityAlignment/testMergeActivityAlignment.cpp`
 - Impact: Excluded samples still inflate the legacy mean denominator, so two
   identical nonzero constant series receive an artificial `R^2=1` and usually
   select `-floor(samples/3)`. This can override a genuinely alignable varying
   series and shift the merged activity by minutes.
-- Test: A constant shared series must produce no candidate; in a batch with a
-  correctly shifted varying series, the varying series must determine offset.
-- Fix direction: Reject zero-variance overlap before scoring, use the actual
-  mean count, and keep deterministic tie ordering for valid varying series.
+- Test-first evidence: The expanded focused suite failed five regressions
+  against the old implementation (`tst_mergeActivityAlignment` exit 5): the
+  corrected direct and FFT reference scores disagreed with production, a
+  constant series and a constant overlap both produced candidates, and a
+  constant batch member with key 9 displaced the correctly shifted varying
+  member with key 7.
+- Regression coverage: Constant nonzero series are rejected on both the direct
+  and FFT paths, as are all-zero series and overlaps that are constant even
+  though both complete inputs vary. A batch ignores a constant member in favor
+  of a varying series shifted by 73 samples. Deterministic fixtures cover
+  positive and negative offsets, the direct/FFT boundary, more than 64 tied
+  exact candidates, series tie ordering, cooperative cancellation, runner
+  lifetime, event-loop responsiveness, and one- and three-hour inputs.
+- Resolution: Mean accumulation now counts only samples that actually
+  participate in the legacy base-tail mean. Both exact and FFT scoring reject
+  non-finite values, empty or zero-variance overlaps, and non-positive total
+  variance. The FFT path tracks changes with prefix counters so candidate
+  variance checks remain constant-time, while its exact recheck and strict
+  comparison preserve deterministic offset and series tie ordering.
+- Verification: All 18 focused QtTest results passed normally in 129 ms and
+  under strict ASan/UBSan/LSan in 244 ms, with no sanitizer reports. A fresh
+  full release build and all 63 unit-test projects passed (2,029 passed,
+  0 failed, 0 skipped, 0 blacklisted). The 166,492,664-byte AppImage reports
+  `V3.8-DEV2605 (5012)` and has SHA-256
+  `9a458994c5ed9f79c5968ee62a1da7892a72f0d4118feed6cdcb64e5ce4fe611`.
+  It remained stable for a 15-second clean-profile launch and a 45-second
+  launch against a copied real athlete profile; the logs contained only
+  missing translator debug notices.
 
 ### PARSE-001: ZIP/GZIP decompression has no resource limits
 

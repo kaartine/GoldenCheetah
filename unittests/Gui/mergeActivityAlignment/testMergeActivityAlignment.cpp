@@ -31,7 +31,7 @@ QVector<double> deterministicSignal(int count, quint32 seed = 0x4d595df4U)
     return values;
 }
 
-MergeActivityAlignment::Result legacyBestOffset(
+MergeActivityAlignment::Result referenceBestOffset(
     const QVector<double> &base,
     const QVector<double> &fit)
 {
@@ -42,29 +42,64 @@ MergeActivityAlignment::Result legacyBestOffset(
          ++offset) {
         double mean = 0.0;
         int meanCount = 0;
+        bool finite = true;
         for (int index = 0; index + offset < base.size(); ++index) {
-            if (index + offset > 0) {
-                mean += base.at(index + offset);
+            const int baseIndex = index + offset;
+            if (baseIndex <= 0) continue;
+
+            const double baseValue = base.at(baseIndex);
+            if (!std::isfinite(baseValue)) {
+                finite = false;
+                break;
             }
+            mean += baseValue;
             ++meanCount;
         }
+        if (!finite || meanCount == 0) continue;
         mean /= double(meanCount);
+        if (!std::isfinite(mean)) continue;
 
         double residual = 0.0;
         double total = 0.0;
+        double firstBaseValue = 0.0;
+        double firstFitValue = 0.0;
+        bool hasOverlap = false;
+        bool baseVaries = false;
+        bool fitVaries = false;
         for (int index = 0;
              index + offset < base.size() && index < fit.size();
              ++index) {
-            if (index + offset > 0) {
-                const double baseValue = base.at(index + offset);
-                const double delta = baseValue - fit.at(index);
-                residual += delta * delta;
-                const double centered = baseValue - mean;
-                total += centered * centered;
+            const int baseIndex = index + offset;
+            if (baseIndex <= 0) continue;
+
+            const double baseValue = base.at(baseIndex);
+            const double fitValue = fit.at(index);
+            if (!std::isfinite(baseValue) || !std::isfinite(fitValue)) {
+                finite = false;
+                break;
             }
+            if (!hasOverlap) {
+                firstBaseValue = baseValue;
+                firstFitValue = fitValue;
+                hasOverlap = true;
+            } else {
+                baseVaries = baseVaries || baseValue != firstBaseValue;
+                fitVaries = fitVaries || fitValue != firstFitValue;
+            }
+
+            const double delta = baseValue - fitValue;
+            residual += delta * delta;
+            const double centered = baseValue - mean;
+            total += centered * centered;
         }
 
+        if (!finite || !hasOverlap || !baseVaries || !fitVaries ||
+            !(total > 0.0) || !std::isfinite(residual) ||
+            !std::isfinite(total)) {
+            continue;
+        }
         const double rSquared = 1.0 - residual / total;
+        if (!std::isfinite(rSquared)) continue;
         if (rSquared > result.rSquared) {
             result.valid = true;
             result.offset = offset;
@@ -119,13 +154,15 @@ class TestMergeActivityAlignment : public QObject
 private slots:
     void findsPositiveOffset();
     void findsNegativeOffset();
-    void matchesLegacyAcrossDeterministicFixtures();
-    void matchesLegacyOnFftPath();
-    void matchesLegacyAtDirectFftBoundary();
+    void matchesReferenceAcrossDeterministicFixtures();
+    void matchesReferenceOnFftPath();
+    void matchesReferenceAtDirectFftBoundary();
     void preservesTieOrderBeyondExactCandidateLimit();
-    void preservesLegacyConstantSeriesBehavior();
+    void constantSeriesHasNoWinner();
+    void constantOverlapHasNoWinner();
     void allZeroSeriesHasNoWinner();
     void batchPreservesSeriesTieOrder();
+    void batchIgnoresConstantSeries();
     void cancellationIsCooperative();
     void runnerKeepsEventLoopResponsive();
     void runnerCanBeCancelled();
@@ -161,7 +198,7 @@ void TestMergeActivityAlignment::findsNegativeOffset()
     QVERIFY(std::abs(result.rSquared - 1.0) < 1.0e-9);
 }
 
-void TestMergeActivityAlignment::matchesLegacyAcrossDeterministicFixtures()
+void TestMergeActivityAlignment::matchesReferenceAcrossDeterministicFixtures()
 {
     for (int fixture = 0; fixture < 24; ++fixture) {
         const int baseCount = 64 + fixture * 7;
@@ -175,7 +212,7 @@ void TestMergeActivityAlignment::matchesLegacyAcrossDeterministicFixtures()
         }
 
         const MergeActivityAlignment::Result expected =
-            legacyBestOffset(base, fit);
+            referenceBestOffset(base, fit);
         const MergeActivityAlignment::Result actual =
             MergeActivityAlignment::findBestOffset(base, fit);
 
@@ -190,7 +227,7 @@ void TestMergeActivityAlignment::matchesLegacyAcrossDeterministicFixtures()
     }
 }
 
-void TestMergeActivityAlignment::matchesLegacyOnFftPath()
+void TestMergeActivityAlignment::matchesReferenceOnFftPath()
 {
     const QVector<int> offsets = {-127, -41, 0, 57, 121, 189};
     for (int fixture = 0; fixture < offsets.size(); ++fixture) {
@@ -206,7 +243,7 @@ void TestMergeActivityAlignment::matchesLegacyOnFftPath()
         }
 
         const MergeActivityAlignment::Result expected =
-            legacyBestOffset(series.base, series.fit);
+            referenceBestOffset(series.base, series.fit);
         const MergeActivityAlignment::Result actual =
             MergeActivityAlignment::findBestOffset(series.base, series.fit);
 
@@ -222,7 +259,7 @@ void TestMergeActivityAlignment::matchesLegacyOnFftPath()
     }
 }
 
-void TestMergeActivityAlignment::matchesLegacyAtDirectFftBoundary()
+void TestMergeActivityAlignment::matchesReferenceAtDirectFftBoundary()
 {
     for (int sampleCount : {512, 513}) {
         MergeActivityAlignment::Series series =
@@ -232,7 +269,7 @@ void TestMergeActivityAlignment::matchesLegacyAtDirectFftBoundary()
         }
 
         const MergeActivityAlignment::Result expected =
-            legacyBestOffset(series.base, series.fit);
+            referenceBestOffset(series.base, series.fit);
         const MergeActivityAlignment::Result actual =
             MergeActivityAlignment::findBestOffset(series.base, series.fit);
 
@@ -270,7 +307,7 @@ void TestMergeActivityAlignment::preservesTieOrderBeyondExactCandidateLimit()
     QVERIFY(perfectCandidates > 64);
 
     const MergeActivityAlignment::Result expected =
-        legacyBestOffset(base, fit);
+        referenceBestOffset(base, fit);
     const MergeActivityAlignment::Result actual =
         MergeActivityAlignment::findBestOffset(base, fit);
 
@@ -281,20 +318,36 @@ void TestMergeActivityAlignment::preservesTieOrderBeyondExactCandidateLimit()
     QVERIFY(std::abs(actual.rSquared - expected.rSquared) < 1.0e-8);
 }
 
-void TestMergeActivityAlignment::preservesLegacyConstantSeriesBehavior()
+void TestMergeActivityAlignment::constantSeriesHasNoWinner()
 {
-    const QVector<double> base(1024, 140.0);
-    const QVector<double> fit(700, 140.0);
-    const MergeActivityAlignment::Result expected =
-        legacyBestOffset(base, fit);
+    for (int sampleCount : {512, 1024}) {
+        const QVector<double> base(sampleCount, 140.0);
+        const QVector<double> fit(sampleCount - 300, 140.0);
 
-    const MergeActivityAlignment::Result actual =
+        const MergeActivityAlignment::Result result =
+            MergeActivityAlignment::findBestOffset(base, fit);
+
+        QVERIFY(!result.valid);
+        QVERIFY(!result.cancelled);
+        QCOMPARE(result.offset, 0);
+        QCOMPARE(result.rSquared, 0.0);
+    }
+}
+
+void TestMergeActivityAlignment::constantOverlapHasNoWinner()
+{
+    QVector<double> base(512, 140.0);
+    base[base.size() - 1] = 200.0;
+    QVector<double> fit(10, 140.0);
+    fit[0] = 200.0;
+
+    const MergeActivityAlignment::Result result =
         MergeActivityAlignment::findBestOffset(base, fit);
 
-    QVERIFY(expected.valid);
-    QCOMPARE(actual.valid, expected.valid);
-    QCOMPARE(actual.offset, expected.offset);
-    QCOMPARE(actual.rSquared, expected.rSquared);
+    QVERIFY(!result.valid);
+    QVERIFY(!result.cancelled);
+    QCOMPARE(result.offset, 0);
+    QCOMPARE(result.rSquared, 0.0);
 }
 
 void TestMergeActivityAlignment::allZeroSeriesHasNoWinner()
@@ -325,6 +378,28 @@ void TestMergeActivityAlignment::batchPreservesSeriesTieOrder()
     QVERIFY(!result.cancelled);
     QCOMPARE(result.seriesKey, 7);
     QCOMPARE(result.offset, 31);
+}
+
+void TestMergeActivityAlignment::batchIgnoresConstantSeries()
+{
+    MergeActivityAlignment::Series varying =
+        shiftedSeries(7, 1024, 73, 0x55667788U);
+    for (int index = 0; index < varying.fit.size(); ++index) {
+        varying.fit[index] += 0.01 * std::sin(double(index) * 0.09);
+    }
+
+    MergeActivityAlignment::Series constant;
+    constant.key = 9;
+    constant.base = QVector<double>(1024, 140.0);
+    constant.fit = QVector<double>(724, 140.0);
+
+    const MergeActivityAlignment::BatchResult result =
+        MergeActivityAlignment::findBestSeries({varying, constant});
+
+    QVERIFY(result.valid);
+    QVERIFY(!result.cancelled);
+    QCOMPARE(result.seriesKey, 7);
+    QCOMPARE(result.offset, 73);
 }
 
 void TestMergeActivityAlignment::cancellationIsCooperative()
