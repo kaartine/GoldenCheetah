@@ -33,16 +33,26 @@ class TcxParser : public QXmlDefaultHandler
 
 public:
 
+    static constexpr int MaximumImportPoints = 2 * 24 * 60 * 60;
+
     TcxParser(RideFile* rideFile, QList<RideFile*>*rides);
+    ~TcxParser() override;
 
     bool startElement( const QString&, const QString&, const QString&, const QXmlAttributes& );
     bool endElement( const QString&, const QString&, const QString& );
     bool characters( const QString& );
 
+    bool pointLimitExceeded() const { return pointLimitExceeded_; }
+    QString pointLimitError() const { return pointLimitError_; }
+
     RideFile*	rideFile;
     QList<RideFile*> *rides; // when parsed multiple rides
 
 private:
+
+    bool reservePoints(int count);
+    bool reserveRewriteWork(int count);
+    int expansionPointCount(double duration) const;
 
     QString	buffer;
     QVariant isGarminSmartRecording;
@@ -84,6 +94,11 @@ private:
     double rps;
     double secs;
     bool   badgps;
+
+    int importedPoints = 0;
+    int rewriteWork = 0;
+    bool pointLimitExceeded_ = false;
+    QString pointLimitError_;
 };
 
 #endif // _TcxParser_h

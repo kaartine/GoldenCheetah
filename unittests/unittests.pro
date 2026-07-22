@@ -35,6 +35,7 @@ equals(GC_UNITTESTS, active) {
 			   FileIO/powerTapBounds \
 			   FileIO/rideFileOwnership \
 			   FileIO/tacxCafBounds \
+			   FileIO/tcxPointBudget \
 			   FileIO/ttsReaderBounds \
 			   FileIO/wkoBounds \
 			   Gui/calendarData \

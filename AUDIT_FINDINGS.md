@@ -1803,16 +1803,56 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   `6ffe67dcd1bbdabcf7ee4e417afbabc5cf3b9eef9e5c625440cb4c100191e4b3`.
   It remained stable for a 15-second clean-profile X11 launch and a 45-second
   launch against a copied real athlete profile; logs contained only missing
-  translator debug notices.
+  translator debug notices. A separate direct AppImage run with a disposable
+  copied profile loaded an existing activity and rendered its metrics dashboard;
+  before/after metadata and settings hashes confirmed that the live profile was
+  unchanged. The host screen lock prevented reliable click-through automation,
+  so this verification does not claim an interactive workflow.
 
 ### PARSE-003: TCX swim gaps amplify into thousands of points per record
 
-- Status: OPEN
-- Code: `src/FileIO/TcxParser.cpp:214`,
-  `src/FileIO/TcxParser.cpp:314`, `src/FileIO/TcxParser.cpp:380`
-- Impact: Crafted trackpoints can cause large memory/CPU amplification.
-- Test: Exercise repeated maximum gaps and enforce a whole-file point budget.
-- Fix direction: Avoid synthetic per-second allocation and bound whole-file work.
+- Status: FIXED
+- Code: `src/FileIO/TcxParser.cpp`, `src/FileIO/TcxParser.h`,
+  `src/FileIO/TcxRideFile.cpp`, `unittests/FileIO/tcxPointBudget/`, and
+  `unittests/unittests.pro`
+- Impact: Repeated swim gaps and pause laps expanded independently into
+  thousands of synthetic points. There was no aggregate output or rewrite-work
+  budget, malformed negative pauses could move the swim cursor backward and
+  make later rewrites quadratic, and a late failure could publish earlier
+  activities from the same file. Capped and fractional expansions also dropped
+  the real source endpoint, while consecutive pauses reused a stale trackpoint
+  timestamp.
+- Test-first evidence: The focused target first established ordinary swim and
+  non-swim compatibility plus whole-file rollback. Before the final invariant
+  fix, the expanded RED run passed 9 cases and failed 6: capped gap and pause
+  imports produced 7,501 rather than 7,502 points, a fractional gap produced 6
+  rather than 7, consecutive pauses stopped at second 3 rather than 6, a
+  negative pause emitted a negative SWIM duration, and a corrupt high-water
+  mark produced one point rather than six.
+- Regression coverage: Fifteen behavioral cases cover ordinary interpolation,
+  no-list multi-activity ownership, aggregate and exact 172,800-point budget
+  boundaries, capped and fractional endpoints, capped and consecutive pauses,
+  repeated negative pauses, corrupt settings, disabled smart recording, sparse
+  GPS activities, hostile gap and pause amplification, and atomic rollback.
+- Resolution: TCX import now reserves every generated batch against a
+  172,800-point whole-file budget and bounds swim rewrite work to 345,600
+  visited points. The Garmin high-water mark is normalized to 1-300 seconds,
+  per-event expansion remains bounded, and capped or fractional data retains a
+  sparse real endpoint. Invalid or non-increasing sample time cannot regress
+  parser state; pause expansion is anchored to the Lap timeline and keeps both
+  output and swim cursors monotonic. Parsed activities remain staged until the
+  complete bounded import succeeds, and all staged rides and pending SWIM data
+  are released on rollback or when extra activities are not requested.
+- Verification: The focused suite passes 17/17 both normally and under strict
+  ASan/UBSan/LSan, with no sanitizer report. The related interval-ownership and
+  split suites pass 8/8 and 13/13 under the same sanitizers. A fresh `-O2`
+  release build and all 65 unit-test suites pass 2,096 tests (0 failed, 0
+  skipped, 0 blacklisted). The 166,500,856-byte AppImage reports
+  `V3.8-DEV2605 (5012)` and has SHA-256
+  `87ef807d7d5f43c8e728e8686729991de9c8eebe537d53b0224d1017812bca8b`.
+  It remained stable for a 15-second clean-profile X11 launch and a 45-second
+  launch against a copied real athlete profile; logs contained only missing
+  translator debug notices.
 
 ### PARSE-004: Malformed XML is accepted as a partial activity
 

@@ -36,8 +36,6 @@ static int tcxFileReaderRegistered =
 
 RideFile *TcxFileReader::openRideFile(QFile &file, QStringList &errors, QList<RideFile*>*list) const
 {
-    (void) errors;
-
     if(!file.open(QIODevice::ReadOnly))
         return NULL;
     QByteArray tcx = file.readAll();
@@ -48,7 +46,8 @@ RideFile *TcxFileReader::openRideFile(QFile &file, QStringList &errors, QList<Ri
     rideFile->setDeviceType("Garmin");
     rideFile->setFileFormat("Garmin Training Centre (tcx)");
 
-    TcxParser handler(rideFile, list);
+    QList<RideFile*> parsedRides;
+    TcxParser handler(rideFile, &parsedRides);
 
     QXmlInputSource source = QXmlInputSource();
     source.setData(tcx.trimmed());
@@ -57,9 +56,28 @@ RideFile *TcxFileReader::openRideFile(QFile &file, QStringList &errors, QList<Ri
     reader.setContentHandler (&handler);
     reader.parse (source);
 
+    if (handler.pointLimitExceeded()) {
+        errors << handler.pointLimitError() + QStringLiteral(" File \"")
+                  + file.fileName() + QStringLiteral("\".");
+        if (!parsedRides.contains(rideFile))
+            parsedRides.prepend(rideFile);
+        qDeleteAll(parsedRides);
+        return NULL;
+    }
+
+    if (list) {
+        list->append(parsedRides);
+    } else {
+        for (RideFile *parsedRide : parsedRides) {
+            if (parsedRide != rideFile)
+                delete parsedRide;
+        }
+    }
+
     return rideFile;
 }
 
+#ifndef GC_TCX_READER_ONLY
 QByteArray
 TcxFileReader::toByteArray(Context *context, const RideFile *ride, bool withAlt, bool withWatts, bool withHr, bool withCad) const
 {
@@ -486,3 +504,10 @@ TcxFileReader::writeRideFile(Context *context, const RideFile *ride, QFile &file
     file.close();
     return(true);
 }
+#else
+bool
+TcxFileReader::writeRideFile(Context *, const RideFile *, QFile &) const
+{
+    return false;
+}
+#endif

@@ -26,6 +26,9 @@
 // use stc strtod to bypass Qt toDouble() issues
 #include <stdlib.h>
 
+#include <cmath>
+#include <limits>
+
 // TCX XML Structure uses the following 2 Schema Definitions
 // -- main schema http://www8.garmin.com/xmlschemas/TrainingCenterDatabasev2.xsd
 // -- extension schema http://www8.garmin.com/xmlschemas/ActivityExtensionv2.xsd
@@ -35,10 +38,69 @@ TcxParser::TcxParser (RideFile* rideFile, QList<RideFile*> *rides) : rideFile(ri
 {
     isGarminSmartRecording = appsettings->value(NULL, GC_GARMIN_SMARTRECORD,Qt::Checked);
     GarminHWM = appsettings->value(NULL, GC_GARMIN_HWMARK);
-    if (GarminHWM.isNull() || GarminHWM.toInt() == 0) GarminHWM.setValue(25); // default to 25 seconds.
+    int highWaterMark = GarminHWM.toInt();
+    if (GarminHWM.isNull() || highWaterMark == 0)
+        highWaterMark = 25;
+    GarminHWM.setValue(qBound(1, highWaterMark, 300));
     first = true;
     creator = false;
+    swimXdata = nullptr;
 
+}
+
+TcxParser::~TcxParser()
+{
+    delete swimXdata;
+}
+
+bool
+TcxParser::reservePoints(int count)
+{
+    if (count < 0 || count > MaximumImportPoints - importedPoints) {
+        pointLimitExceeded_ = true;
+        pointLimitError_ = QStringLiteral(
+            "TCX import exceeds the whole-file point limit of %1.")
+                               .arg(MaximumImportPoints);
+        delete swimXdata;
+        swimXdata = nullptr;
+        return false;
+    }
+
+    importedPoints += count;
+    return true;
+}
+
+bool
+TcxParser::reserveRewriteWork(int count)
+{
+    constexpr int MaximumRewriteWork = 2 * MaximumImportPoints;
+    if (count < 0 || count > MaximumRewriteWork - rewriteWork) {
+        pointLimitExceeded_ = true;
+        pointLimitError_ = QStringLiteral(
+            "TCX import exceeds the whole-file point processing limit of %1.")
+                               .arg(MaximumRewriteWork);
+        delete swimXdata;
+        swimXdata = nullptr;
+        return false;
+    }
+
+    rewriteWork += count;
+    return true;
+}
+
+int
+TcxParser::expansionPointCount(double duration) const
+{
+    if (!std::isfinite(duration) || duration <= 0.0)
+        return 0;
+
+    const qint64 highWaterMark = qBound(1, GarminHWM.toInt(), 300);
+    const qint64 perEventLimit = 300 * highWaterMark;
+    const double bounded = qMin(duration, double(perEventLimit));
+    const double points = std::floor(bounded);
+    if (points > MaximumImportPoints)
+        return MaximumImportPoints + 1;
+    return int(points);
 }
 
 bool
@@ -224,6 +286,8 @@ TcxParser::endElement( const QString&, const QString&, const QString& qName)
         if(rideFile->dataPoints().empty()) {
 
             // first point
+            if (!reservePoints(1))
+                return false;
             rideFile->appendPoint(secs, cadence, hr, distance, speed, torque,
                                   power, alt, lon, lat, headwind, 0.0,
                                   RideFile::NA, lrbalance,
@@ -239,6 +303,8 @@ TcxParser::endElement( const QString&, const QString&, const QString& qName)
             // assumption that the change in ride is linear...  :)
             RideFilePoint *prevPoint = rideFile->dataPoints().back();
             double deltaSecs = secs - prevPoint->secs;
+            if (!std::isfinite(deltaSecs) || deltaSecs <= 0.0)
+                return true;
             double deltaCad = cadence - prevPoint->cad;
             double deltaHr = hr - prevPoint->hr;
             double deltaDist = distance - prevPoint->km;
@@ -260,6 +326,8 @@ TcxParser::endElement( const QString&, const QString&, const QString& qName)
             if ((isGarminSmartRecording.toInt() == 0) || (deltaSecs == 1) || (deltaSecs >= GarminHWM.toInt() && swim != Swim)) {
 
                 // no smart recording, or delta exceeds HW treshold, just insert the data
+                if (!reservePoints(1))
+                    return false;
                 rideFile->appendPoint(secs, cadence, hr, distance, speed, torque, power,
                                       alt, lon, lat, headwind, 0.0, RideFile::NA, lrbalance,
                                       lte,rte,lps,rps,
@@ -276,6 +344,12 @@ TcxParser::endElement( const QString&, const QString&, const QString& qName)
                     double deltaSecs = secs - lastLength;
                     double deltaDist = (distance - last_distance) / deltaSecs;
                     double kph = 3600.0 * deltaDist;
+                    const int rewriteStart =
+                        qMax(0, rideFile->timeIndex(lastLength));
+                    const int rewriteCount =
+                        rideFile->dataPoints().size() - rewriteStart;
+                    if (!reserveRewriteWork(rewriteCount))
+                        return false;
                     // length-by-length Swim XData
                     XDataPoint *p = new XDataPoint();
                     p->secs = lastLength;
@@ -284,8 +358,8 @@ TcxParser::endElement( const QString&, const QString&, const QString& qName)
                     p->number[1] = deltaSecs;
                     if (swimXdata) swimXdata->datapoints.append(p);
 
-                    for (int i = rideFile->timeIndex(lastLength);
-                         i>= 0 && i < rideFile->dataPoints().size() &&
+                    for (int i = rewriteStart;
+                         i < rideFile->dataPoints().size() &&
                          rideFile->dataPoints()[i]->secs <= secs;
                          ++i) {
                         rideFile->dataPoints()[i]->kph = kph;
@@ -311,8 +385,14 @@ TcxParser::endElement( const QString&, const QString&, const QString& qName)
                     lastLength = p->secs + deltaSecs;
                 }
                 // or it is pool swimming and we limit expansion for safety
-                for(int i = 1; i <= deltaSecs && i <= 300*GarminHWM.toInt(); i++) {
-                    double weight = i/ deltaSecs;
+                const int interpolationPoints = expansionPointCount(deltaSecs);
+                const bool appendSourceEndpoint =
+                    double(interpolationPoints) < deltaSecs;
+                if (!reservePoints(
+                        interpolationPoints + int(appendSourceEndpoint)))
+                    return false;
+                auto appendInterpolatedPoint = [&](double offset) {
+                    double weight = offset / deltaSecs;
                     double kph = (swim == Swim) ? speed : prevPoint->kph + (deltaSpeed *weight);
                     // need to make sure speed goes to zero
                     kph = kph > 0.35 ? kph : 0;
@@ -321,7 +401,7 @@ TcxParser::endElement( const QString&, const QString&, const QString& qName)
                     //double lat = prevPoint->lat + (deltaLat * weight);
                     //double lon = prevPoint->lon + (deltaLon * weight);
 
-                    rideFile->appendPoint(prevPoint->secs + (deltaSecs * weight),
+                    rideFile->appendPoint(prevPoint->secs + offset,
                                           prevPoint->cad  + (deltaCad * weight),
                                           prevPoint->hr +   (deltaHr * weight),
                                           prevPoint->km + (deltaDist * weight),
@@ -346,8 +426,11 @@ TcxParser::endElement( const QString&, const QString&, const QString& qName)
                                           0.0, // gct
                                           0.0, //tcore
                                           lap);
-                }
-                prevPoint = rideFile->dataPoints().back();
+                };
+                for(int i = 1; i <= interpolationPoints; i++)
+                    appendInterpolatedPoint(i);
+                if (appendSourceEndpoint)
+                    appendInterpolatedPoint(deltaSecs);
             }
         }
         last_distance = distance;
@@ -364,21 +447,45 @@ TcxParser::endElement( const QString&, const QString&, const QString& qName)
             lapTrigger = ltHeartRate;
     } else if (qName == "Lap") {
         // for pool swimming, laps with distance 0 are pauses, without trackpoints
-        // length-by-length Swim XData
-        if (swim == Swim && distance == 0.0) {
+        const double roundedLapSecs = std::round(lapSecs);
+        const double lapStartSecs =
+            double(start_time.msecsTo(lap_start_time)) / 1000.0;
+        const bool validPauseTimeline =
+            start_time.isValid() && lap_start_time.isValid()
+            && std::isfinite(lapSecs) && lapSecs >= 0.0
+            && std::isfinite(roundedLapSecs)
+            && roundedLapSecs
+                   < double(std::numeric_limits<qint64>::max())
+            && std::isfinite(lapStartSecs)
+            && std::isfinite(lapStartSecs + roundedLapSecs);
+        if (swim == Swim && distance == 0.0 && validPauseTimeline) {
+            const double lapEndSecs = lapStartSecs + roundedLapSecs;
+            const double outputStartSecs = rideFile->dataPoints().isEmpty()
+                ? lapStartSecs
+                : qMax(lapStartSecs,
+                       rideFile->dataPoints().constLast()->secs);
+            const double fillDuration = lapEndSecs - outputStartSecs;
+            const int pausePoints =
+                isGarminSmartRecording.toInt()
+                    ? expansionPointCount(fillDuration)
+                    : 0;
+            const bool appendPauseEndpoint =
+                isGarminSmartRecording.toInt() && fillDuration > 0.0
+                && double(pausePoints) < fillDuration;
+            if (!reservePoints(
+                    pausePoints + int(appendPauseEndpoint)))
+                return false;
+
             XDataPoint *p = new XDataPoint();
-            p->secs = secs;
+            p->secs = lapStartSecs;
             p->km = last_distance;
             p->number[0] = 0;
-            p->number[1] = round(lapSecs);
+            p->number[1] = roundedLapSecs;
             if (swimXdata) swimXdata->datapoints.append(p);
-            lastLength = secs + round(lapSecs);
-        }
-        // expand only if Smart Recording is enabled
-        if (swim == Swim && distance == 0 && isGarminSmartRecording.toInt()) {
-            // fill in the pause, partially if too long
-            for(int i = 1; i <= round(lapSecs) && i <= 300*GarminHWM.toInt(); i++)
-                rideFile->appendPoint(secs + i,
+            else delete p;
+
+            auto appendPausePoint = [&](double pointSecs) {
+                rideFile->appendPoint(pointSecs,
                                       0.0,
                                       0.0,
                                       last_distance,
@@ -400,7 +507,18 @@ TcxParser::endElement( const QString&, const QString&, const QString& qName)
                                       0.0, // gct
                                       0.0, // tcore
                                       lap);
-            last_time = last_time.addSecs(round(lapSecs));
+            };
+            for(int i = 1; i <= pausePoints; i++)
+                appendPausePoint(outputStartSecs + i);
+            if (appendPauseEndpoint)
+                appendPausePoint(lapEndSecs);
+
+            lastLength = qMax(lastLength, lapEndSecs);
+            const QDateTime pauseEnd =
+                lap_start_time.addSecs(qint64(roundedLapSecs));
+            if (pauseEnd.isValid()
+                && (!last_time.isValid() || pauseEnd > last_time))
+                last_time = pauseEnd;
         }
 
         QString name;
@@ -423,11 +541,15 @@ TcxParser::endElement( const QString&, const QString&, const QString& qName)
         }
 
         double start = double(start_time.msecsTo(lap_start_time)) / 1000.00f;
-        rideFile->addInterval(RideFileInterval::DEVICE, start, start + lapSecs, name);
+        const double intervalDuration =
+            std::isfinite(lapSecs) && lapSecs >= 0.0 ? lapSecs : 0.0;
+        rideFile->addInterval(RideFileInterval::DEVICE, start,
+                              start + intervalDuration, name);
     } else if (qName == "Activity") {
         // Add length-by-length Swim XData, if present
         if (swimXdata && swimXdata->datapoints.count()>0) {
             rideFile->addXData("SWIM", swimXdata);
+            swimXdata = NULL;
         } else if (swimXdata) {
             delete swimXdata;
             swimXdata = NULL;
