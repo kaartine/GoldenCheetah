@@ -961,6 +961,28 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   all 65 unit-test suites pass 2,096 tests with zero failures, skips, or
   blacklisted tests.
 
+### MEM-016: RideFile leaks and aliases its calibration records
+
+- Status: FIXED
+- Code: `src/FileIO/RideFile.cpp` and
+  `unittests/FileIO/rideFileOwnership/testRideFileOwnership.cpp`
+- Impact: Every imported calibration record leaked when its `RideFile` was
+  destroyed. The pointer-copying constructor also aliased calibration records
+  with the source, so enabling the commented-out destructor cleanup alone
+  would have introduced double frees and dangling pointers.
+- Test-first evidence: The complete JSON regression target passed all 126
+  functional cases before this ownership fix, but strict LSan reported 4,092
+  bytes in 124 allocations. A focused copy-lifetime case then failed pointer
+  independence and leaked its 40-byte calibration record.
+- Resolution: `RideFile(RideFile*)` deep-copies every non-null calibration,
+  and the `RideFile` destructor deletes and clears its owned calibration
+  list.
+- Verification: `rideFileOwnership` passes 10/10 and
+  `jsonImportIntegrity` passes 126/126 both normally and under strict
+  ASan/UBSan/LSan, with no sanitizer report. A fresh `-O2` release build and
+  all 67 unit-test suites pass 2,296 tests (0 failed, 0 skipped, 0
+  blacklisted).
+
 ### THREAD-003: Python chart execution races GUI object lifetime
 
 - Status: FIXED
@@ -1894,12 +1916,31 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### PARSE-005: JSON parser checks the wrong error list
 
-- Status: OPEN
-- Code: `src/FileIO/JsonRideFile.y:80`,
-  `src/FileIO/JsonRideFile.y:445`, `src/FileIO/JsonRideFile.y:452`
-- Impact: Malformed JSON can return a partially populated activity as valid.
-- Test: Syntax errors before/after each major section must reject the ride.
-- Fix direction: Check parser return status and the actual parser error list.
+- Status: FIXED
+- Code: `src/FileIO/JsonRideFile.y`,
+  `unittests/FileIO/jsonImportIntegrity/`, and
+  `unittests/unittests.pro`
+- Impact: The reader ignored the parser return value and then checked the
+  caller's pre-existing `errors` list instead of
+  `JsonContext::JsonRideFileerrors`. Malformed JSON could therefore return a
+  partially populated activity as valid, while a valid activity was rejected
+  if the caller already had an unrelated diagnostic.
+- Test-first evidence: The new target was run against `c28a123`, the parent
+  of the existing parser correction `d33e72fe`. It passed 3 cases and failed
+  123: all 122 malformed documents returned partial activities, and a valid
+  document with a pre-existing caller diagnostic was rejected.
+- Regression coverage: The target imports a complete document, truncates it
+  after 108 structural boundaries and before each of eight major sections,
+  and covers empty input, trailing data, a mismatched root, invalid UTF-8, and
+  caller-error preservation.
+- Resolution: The parser correction in `d33e72fe` requires a successful
+  parser return and an empty parser-owned error list, appends those actual
+  errors to the caller, and destroys partial state before returning null.
+- Verification: `jsonImportIntegrity` passes 126/126 both normally and under
+  strict ASan/UBSan/LSan, with no sanitizer report. The related
+  `rideFileOwnership` suite passes 10/10 in both configurations. A fresh `-O2`
+  release build and all 67 unit-test suites pass 2,296 tests (0 failed, 0
+  skipped, 0 blacklisted).
 
 ### PARSE-006: FIT integrity and truncation checks are incomplete
 
@@ -2250,18 +2291,17 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The complete containerized release matrix after PARSE-004 passes:
+The complete containerized release matrix after PARSE-005 and MEM-016 passes:
 
-- 66 QtTest suites
-- 2,168 passed
+- 67 QtTest suites
+- 2,296 passed
 - 0 failed, skipped, or blacklisted
 - Qt 6.8.3 on Ubuntu 24.04
 
-PARSE-004's 72 focused tests and the related 17 TCX point-budget tests also
-pass under strict ASan/UBSan/LSan with leak detection. The packaged AppImage
-passes isolated direct X11 and display-free offscreen startup tests. Earlier
-fixed memory/thread findings retain the focused sanitizer and TSAN evidence
-recorded in their entries.
+PARSE-005's 126 focused tests and the related 10 RideFile ownership tests also
+pass under strict ASan/UBSan/LSan with leak detection. Earlier fixed
+memory/thread findings retain the focused sanitizer and TSAN evidence recorded
+in their entries.
 
 This baseline is not evidence for any remaining OPEN finding. Each open item
 still requires its listed RED regression before implementation. No whole-suite

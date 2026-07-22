@@ -29,6 +29,8 @@ private slots:
     void destructorReleasesIntervals();
     void copyOwnsIndependentIntervals();
     void clearRebuildAndRemovalReleaseIntervals();
+    void destructorReleasesCalibrations();
+    void copyOwnsIndependentCalibrations();
 };
 
 void TestRideFileOwnership::allConstructorsReleaseSummaryPoints()
@@ -162,6 +164,37 @@ void TestRideFileOwnership::clearRebuildAndRemovalReleaseIntervals()
         RideFileInterval *interval = ride.intervals().constFirst();
         QVERIFY(ride.removeInterval(interval));
     }
+}
+
+void TestRideFileOwnership::destructorReleasesCalibrations()
+{
+    // Repetition makes a missing destructor release deterministic under LSan.
+    for (int iteration = 0; iteration < 32; ++iteration) {
+        RideFile ride;
+        ride.addCalibration(10.0, 123, QStringLiteral("zero"));
+        QCOMPARE(ride.calibrations().size(), 1);
+    }
+}
+
+void TestRideFileOwnership::copyOwnsIndependentCalibrations()
+{
+    RideFile *source = new RideFile;
+    source->addCalibration(10.0, 123, QStringLiteral("zero"));
+
+    const RideFileCalibration *sourceCalibration =
+        source->calibrations().constFirst();
+    RideFile copy(source);
+
+    QCOMPARE(copy.calibrations().size(), 1);
+    const RideFileCalibration *copyCalibration =
+        copy.calibrations().constFirst();
+    QVERIFY(copyCalibration != sourceCalibration);
+    QCOMPARE(copyCalibration->start, 10.0);
+    QCOMPARE(copyCalibration->value, 123);
+    QCOMPARE(copyCalibration->name, QStringLiteral("zero"));
+
+    delete source;
+    QCOMPARE(copyCalibration->name, QStringLiteral("zero"));
 }
 
 QTEST_GUILESS_MAIN(TestRideFileOwnership)

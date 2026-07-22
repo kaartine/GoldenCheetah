@@ -90,7 +90,10 @@ RideFile::RideFile(RideFile *p) :
     foreach (const RideFileInterval *interval, p->intervals_) {
         if (interval) intervals_.append(new RideFileInterval(*interval));
     }
-    calibrations_ = p->calibrations_;
+    foreach (const RideFileCalibration *calibration, p->calibrations_) {
+        if (calibration)
+            calibrations_.append(new RideFileCalibration(*calibration));
+    }
     context = p->context;
 
     command = new RideFileCommand(this);
@@ -124,8 +127,8 @@ RideFile::~RideFile()
     delete maxPoint;
     delete avgPoint;
     delete totalPoint;
-    //foreach(RideFileCalibration *calibration, calibrations_)
-        //delete calibration;
+    qDeleteAll(calibrations_);
+    calibrations_.clear();
     qDeleteAll(intervals_);
     intervals_.clear();
     delete command;
