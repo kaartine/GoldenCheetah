@@ -30,7 +30,6 @@ static int gpxFileReaderRegistered =
 
 RideFile *GpxFileReader::openRideFile(QFile &file, QStringList &errors, QList<RideFile*>*) const
 {
-    (void) errors;
     RideFile *rideFile = new RideFile();
     rideFile->setRecIntSecs(GPX_SAMPLE_INTERVAL);
     //rideFile->setDeviceType("GPS Exchange Format");
@@ -41,7 +40,12 @@ RideFile *GpxFileReader::openRideFile(QFile &file, QStringList &errors, QList<Ri
     QXmlInputSource source (&file);
     QXmlSimpleReader reader;
     reader.setContentHandler (&handler);
-    reader.parse (source);
+    if (!reader.parse(source)) {
+        errors << tr("Could not parse GPX file \"%1\".")
+                      .arg(file.fileName());
+        delete rideFile;
+        return NULL;
+    }
 
     return rideFile;
 }

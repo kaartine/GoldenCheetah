@@ -1856,12 +1856,41 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### PARSE-004: Malformed XML is accepted as a partial activity
 
-- Status: OPEN
-- Code: `src/FileIO/TcxRideFile.cpp:58`,
-  `src/FileIO/GpxRideFile.cpp:44`, `src/FileIO/FitlogRideFile.cpp:49`
-- Impact: Parser callbacks mutate a ride before a malformed tail is ignored.
-- Test: Truncate each XML format at every structural boundary and require reject.
-- Fix direction: Check parse results/error handlers and discard partial state.
+- Status: FIXED
+- Code: `src/FileIO/TcxRideFile.cpp`, `src/FileIO/GpxRideFile.cpp`,
+  `src/FileIO/FitlogRideFile.cpp`, `unittests/FileIO/xmlImportIntegrity/`, and
+  `unittests/unittests.pro`
+- Impact: TCX, GPX, and Fitlog ignored `QXmlSimpleReader::parse()` failure after
+  parser callbacks had already populated an activity. A malformed tail could
+  therefore return partial data as valid. Fitlog also published activities to
+  the caller's list before the complete document was known to be valid, and a
+  valid multi-activity import leaked unrequested extra rides when no list was
+  supplied.
+- Test-first evidence: The new focused target initially passed 9 cases and
+  failed 63. Every truncated or otherwise malformed document returned partial
+  data, malformed TCX and Fitlog multi-activity imports published partial
+  state, and LSan reported a 3,566-byte leak in 23 allocations for an
+  unrequested second Fitlog activity.
+- Regression coverage: The 72-test focused target imports valid minimal TCX,
+  GPX, and Fitlog files; truncates each format at every XML element boundary;
+  adds incomplete trailing markup and mismatched roots; verifies caller-list
+  atomicity; preserves valid multi-activity ordering; and exercises imports
+  that do not request extra activities.
+- Resolution: All three readers now require a successful complete XML parse
+  before returning an activity. TCX and Fitlog stage every parsed ride locally,
+  release all staged state on failure, and publish to the caller only after
+  success. Fitlog also releases successful extra activities that were not
+  requested. TCX retains the more specific aggregate point-budget error when
+  both the parser limit and XML parse result indicate failure.
+- Verification: The focused suite passes 72/72 both normally and under strict
+  ASan/UBSan/LSan, with no sanitizer report. The related TCX point-budget suite
+  passes 17/17 in both configurations. A fresh `-O2` production build and all
+  66 unit-test suites pass 2,168 tests (0 failed, 0 skipped, 0 blacklisted).
+  The 166,259,192-byte AppImage reports `V3.8-DEV2605 (5012)`, has SHA-256
+  `9dd770ee212fcd8e3f5adf2547602dd926c9061b7aa4885e7a72e041d11347c3`,
+  and remained stable for 15-second direct X11 and display-free offscreen
+  launches with clean disposable profiles; both logs contained only missing
+  C-locale translator debug notices.
 
 ### PARSE-005: JSON parser checks the wrong error list
 
@@ -2195,17 +2224,18 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The complete containerized release matrix after SEC-011 passes:
+The complete containerized release matrix after PARSE-004 passes:
 
-- 52 QtTest suites
-- 1,930 passed
+- 66 QtTest suites
+- 2,168 passed
 - 0 failed, skipped, or blacklisted
 - Qt 6.8.3 on Ubuntu 24.04
 
-SEC-011's 69 focused tests also pass under strict ASan/UBSan/LSan with leak
-detection, and the packaged AppImage passes isolated startup and two-process
-migration-failure usage tests. Earlier fixed memory/thread findings retain the
-focused sanitizer and TSAN evidence recorded in their entries.
+PARSE-004's 72 focused tests and the related 17 TCX point-budget tests also
+pass under strict ASan/UBSan/LSan with leak detection. The packaged AppImage
+passes isolated direct X11 and display-free offscreen startup tests. Earlier
+fixed memory/thread findings retain the focused sanitizer and TSAN evidence
+recorded in their entries.
 
 This baseline is not evidence for any remaining OPEN finding. Each open item
 still requires its listed RED regression before implementation. No whole-suite

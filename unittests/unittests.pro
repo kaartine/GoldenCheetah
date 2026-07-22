@@ -36,6 +36,7 @@ equals(GC_UNITTESTS, active) {
 			   FileIO/rideFileOwnership \
 			   FileIO/tacxCafBounds \
 			   FileIO/tcxPointBudget \
+			   FileIO/xmlImportIntegrity \
 			   FileIO/ttsReaderBounds \
 			   FileIO/wkoBounds \
 			   Gui/calendarData \

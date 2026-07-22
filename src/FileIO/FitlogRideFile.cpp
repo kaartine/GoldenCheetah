@@ -35,22 +35,39 @@ static int fitlogFileReaderRegistered =
 
 RideFile *FitlogFileReader::openRideFile(QFile &file, QStringList &errors, QList<RideFile*>*list) const
 {
-    (void) errors;
     RideFile *rideFile = new RideFile();
     rideFile->setRecIntSecs(1.0);
     //rideFile->setDeviceType("SportTracks Fitlog");
     rideFile->setFileFormat("SportTracks (*.fitlog)");
 
-    FitlogParser handler(rideFile, list);
+    QList<RideFile*> parsedRides;
+    FitlogParser handler(rideFile, &parsedRides);
 
     QXmlInputSource source (&file);
     QXmlSimpleReader reader;
     reader.setContentHandler (&handler);
-    reader.parse (source);
+    if (!reader.parse(source)) {
+        errors << QObject::tr("Could not parse Fitlog file \"%1\".")
+                      .arg(file.fileName());
+        if (!parsedRides.contains(rideFile))
+            parsedRides.prepend(rideFile);
+        qDeleteAll(parsedRides);
+        return NULL;
+    }
+
+    if (list) {
+        list->append(parsedRides);
+    } else {
+        for (RideFile *parsedRide : parsedRides) {
+            if (parsedRide != rideFile)
+                delete parsedRide;
+        }
+    }
 
     return rideFile;
 }
 
+#ifndef GC_FITLOG_READER_ONLY
 bool
 FitlogFileReader::writeRideFile(Context *context, const RideFile *ride, QFile &file) const
 {
@@ -245,3 +262,4 @@ FitlogFileReader::writeRideFile(Context *context, const RideFile *ride, QFile &f
     file.close();
     return(true);
 }
+#endif

@@ -54,14 +54,25 @@ RideFile *TcxFileReader::openRideFile(QFile &file, QStringList &errors, QList<Ri
 
     QXmlSimpleReader reader;
     reader.setContentHandler (&handler);
-    reader.parse (source);
+    const bool parsed = reader.parse(source);
+
+    auto discardParsedRides = [&]() {
+        if (!parsedRides.contains(rideFile))
+            parsedRides.prepend(rideFile);
+        qDeleteAll(parsedRides);
+    };
 
     if (handler.pointLimitExceeded()) {
         errors << handler.pointLimitError() + QStringLiteral(" File \"")
                   + file.fileName() + QStringLiteral("\".");
-        if (!parsedRides.contains(rideFile))
-            parsedRides.prepend(rideFile);
-        qDeleteAll(parsedRides);
+        discardParsedRides();
+        return NULL;
+    }
+
+    if (!parsed) {
+        errors << tr("Could not parse TCX file \"%1\".")
+                      .arg(file.fileName());
+        discardParsedRides();
         return NULL;
     }
 
