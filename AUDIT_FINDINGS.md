@@ -2180,6 +2180,32 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Low
 
+### BUILD-002: AppImage omits the Qt offscreen platform plugin
+
+- Status: FIXED
+- Code: `src/Resources/linux/MakeAppImageQt6.sh`
+- Impact: The Qt build provided `libqoffscreen.so`, but `linuxdeployqt` bundled
+  only `libqxcb.so`. The packaged GUI therefore aborted during display-free
+  release and CI smoke tests, forcing every AppImage check to depend on a live
+  X11 session and repeatedly obscuring real startup regressions with the same
+  packaging error.
+- Test-first evidence: A direct launch with a clean profile,
+  `QT_QPA_PLATFORM=offscreen`, and no display exited 134. Qt reported that the
+  offscreen platform plugin could not be found and listed xcb as the only
+  available backend. Inspection confirmed that the build image contained the
+  plugin while the generated AppDir did not.
+- Resolution: Packaging now resolves Qt's plugin directory through `qmake`,
+  fails explicitly if `libqoffscreen.so` is unavailable, and copies it after
+  `linuxdeployqt` deployment. The script also runs the finished AppImage for ten
+  seconds with a disposable HOME and offscreen software rendering; any result
+  other than the expected timeout status rejects the package.
+- Verification: The script passes `bash -n`. The rebuilt AppDir contains both
+  `libqxcb.so` and `libqoffscreen.so`, preserving normal desktop startup while
+  enabling headless execution. The 166,259,192-byte AppImage with SHA-256
+  `9dd770ee212fcd8e3f5adf2547602dd926c9061b7aa4885e7a72e041d11347c3`
+  remained stable for separate 15-second direct X11 and display-free offscreen
+  launches; both clean-profile logs contained only translator debug notices.
+
 ### DEV-007: ANT FE-C spindown result aliases the zero offset
 
 - Status: OPEN

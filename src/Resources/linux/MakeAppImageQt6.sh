@@ -44,6 +44,15 @@ chmod a+x linuxdeployqt-continuous-x86_64.AppImage
 ### Deploy to appdir
 ./linuxdeployqt-continuous-x86_64.AppImage appdir/GoldenCheetah -verbose=2 -bundle-non-qt-libs -exclude-libs=libqsqlmysql,libqsqlpsql,libqsqlmimer,libqsqlodbc,libnss3,libnssutil3,libxcb-dri3.so.0 -unsupported-allow-new-glibc
 
+# linuxdeployqt only detects the desktop xcb backend. Bundle the offscreen
+# backend explicitly so the packaged application can be smoke-tested headless.
+QT_PLUGINS_DIR="$(qmake -query QT_INSTALL_PLUGINS)"
+OFFSCREEN_PLUGIN="$QT_PLUGINS_DIR/platforms/libqoffscreen.so"
+if [ ! -f "$OFFSCREEN_PLUGIN" ]
+then echo "Qt offscreen platform plugin not found: $OFFSCREEN_PLUGIN"; exit 1
+fi
+cp "$OFFSCREEN_PLUGIN" appdir/plugins/platforms/
+
 # Add Python and core modules
 wget --no-verbose https://github.com/niess/python-appimage/releases/download/python3.7/python3.7.17-cp37-cp37m-manylinux1_x86_64.AppImage
 chmod +x python3.7.17-cp37-cp37m-manylinux1_x86_64.AppImage
@@ -78,6 +87,28 @@ echo "Renaming AppImage file to branch and build number ready for deploy"
 export FINAL_NAME=GoldenCheetah_v3.8_x64Qt6.AppImage
 mv -f GoldenCheetah-x86_64.AppImage $FINAL_NAME
 ls -l $FINAL_NAME
+
+### Verify the packaged GUI can initialize without an X11 display
+SMOKE_HOME="$(mktemp -d)"
+SMOKE_LOG="$(mktemp)"
+mkdir -p "$SMOKE_HOME/.config"
+set +e
+HOME="$SMOKE_HOME" XDG_CONFIG_HOME="$SMOKE_HOME/.config" \
+    QT_QPA_PLATFORM=offscreen QT_OPENGL=software \
+    QTWEBENGINE_DISABLE_SANDBOX=1 \
+    timeout --kill-after=2s 10s "./$FINAL_NAME" >"$SMOKE_LOG" 2>&1
+SMOKE_STATUS=$?
+set -e
+if [ "$SMOKE_STATUS" -ne 124 ]
+then
+    cat "$SMOKE_LOG"
+    rm -rf "$SMOKE_HOME"
+    rm -f "$SMOKE_LOG"
+    echo "AppImage offscreen smoke test failed with status $SMOKE_STATUS"
+    exit 1
+fi
+rm -rf "$SMOKE_HOME"
+rm -f "$SMOKE_LOG"
 
 ### Generate version file with SHA
 ./$FINAL_NAME --version 2>GCversionLinuxQt6.txt
