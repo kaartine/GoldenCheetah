@@ -7,28 +7,7 @@
 
 namespace {
 
-void clearIntervals(RideFile &ride)
-{
-    const QList<RideFileInterval *> intervals = ride.intervals();
-    for (RideFileInterval *interval : intervals) {
-        ride.removeInterval(interval);
-        delete interval;
-    }
-}
-
-struct RideDeleter
-{
-    void operator()(RideFile *ride) const
-    {
-        if (!ride) {
-            return;
-        }
-        clearIntervals(*ride);
-        delete ride;
-    }
-};
-
-using OwnedRide = std::unique_ptr<RideFile, RideDeleter>;
+using OwnedRide = std::unique_ptr<RideFile>;
 
 class SourceRide
 {
@@ -66,11 +45,6 @@ public:
             series->datapoints.append(point);
         }
         ride.addXData(series->name, series);
-    }
-
-    ~SourceRide()
-    {
-        clearIntervals(ride);
     }
 
     RideFile ride;

@@ -936,6 +936,31 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   and the complete release matrix passes 1,941 tests in 53 QtTest suites with
   zero failures, skips, blacklisted tests, or sanitizer/error markers.
 
+### MEM-015: RideFile leaks and aliases its interval records
+
+- Status: FIXED
+- Code: `src/FileIO/RideFile.cpp`, `src/FileIO/RideFile.h`,
+  `unittests/FileIO/rideFileOwnership/testRideFileOwnership.cpp`, and
+  `unittests/Gui/splitRideData/testSplitRideData.cpp`
+- Impact: Every imported, rebuilt, removed, or temporary interval leaked. The
+  `RideFile` pointer-copying constructor also aliased interval records with the
+  source, so adding destruction without first changing the copy semantics would
+  cause double frees and cross-copy mutations. `RideFileInterval` additionally
+  declared an unintended, uninitialized enum instance.
+- Test-first evidence: Interval destructor, independent-copy, clear, rebuild,
+  and removal cases were added before the ownership fix. The RED sanitizer run
+  failed pointer independence and LeakSanitizer reported 241 allocations
+  totaling 22,160 bytes. UBSan then exposed the unintended enum instance with
+  the `0xBEBEBEBE` uninitialized-memory pattern.
+- Resolution: `RideFile` deep-copies interval values, owns and deletes them at
+  destruction, clear, rebuild, and removal boundaries, and no longer declares
+  the unused enum instance. The split-ride test now relies on ordinary
+  `RideFile` ownership instead of a compensating custom deleter.
+- Verification: `rideFileOwnership` passes 8/8 and `splitRideData` passes 13/13
+  under strict ASan/UBSan/LSan with no report. The fresh `-O2` release build and
+  all 65 unit-test suites pass 2,096 tests with zero failures, skips, or
+  blacklisted tests.
+
 ### THREAD-003: Python chart execution races GUI object lifetime
 
 - Status: FIXED

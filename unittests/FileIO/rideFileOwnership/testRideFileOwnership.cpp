@@ -11,6 +11,13 @@
 
 #include "RideFile.h"
 
+class TestableRideFile : public RideFile
+{
+public:
+    using RideFile::clearIntervals;
+    using RideFile::fillInIntervals;
+};
+
 class TestRideFileOwnership : public QObject
 {
     Q_OBJECT
@@ -19,6 +26,9 @@ private slots:
     void allConstructorsReleaseSummaryPoints();
     void copyOwnsIndependentReferencePoints();
     void removalsReleaseReferencePoints();
+    void destructorReleasesIntervals();
+    void copyOwnsIndependentIntervals();
+    void clearRebuildAndRemovalReleaseIntervals();
 };
 
 void TestRideFileOwnership::allConstructorsReleaseSummaryPoints()
@@ -84,6 +94,74 @@ void TestRideFileOwnership::removalsReleaseReferencePoints()
 
     ride.removeReference(0);
     QVERIFY(ride.referencePoints().isEmpty());
+}
+
+void TestRideFileOwnership::destructorReleasesIntervals()
+{
+    // Repetition makes a missing destructor release deterministic under LSan.
+    for (int iteration = 0; iteration < 32; ++iteration) {
+        RideFile ride;
+        ride.addInterval(RideFileInterval::DEVICE, 10.0, 20.0,
+                         QStringLiteral("lap"));
+        QCOMPARE(ride.intervals().size(), 1);
+    }
+}
+
+void TestRideFileOwnership::copyOwnsIndependentIntervals()
+{
+    RideFile *source = new RideFile;
+    source->addInterval(RideFileInterval::USER, 10.0, 20.0,
+                        QStringLiteral("effort"), Qt::red, true);
+    source->intervals().constFirst()->setTag(
+        QStringLiteral("source"), QStringLiteral("manual"));
+
+    const RideFileInterval *sourceInterval =
+        source->intervals().constFirst();
+    RideFile copy(source);
+
+    QCOMPARE(copy.intervals().size(), 1);
+    const RideFileInterval *copyInterval = copy.intervals().constFirst();
+    QVERIFY(copyInterval != sourceInterval);
+    QCOMPARE(copyInterval->type, RideFileInterval::USER);
+    QCOMPARE(copyInterval->start, 10.0);
+    QCOMPARE(copyInterval->stop, 20.0);
+    QCOMPARE(copyInterval->name, QStringLiteral("effort"));
+    QCOMPARE(copyInterval->color, QColor(Qt::red));
+    QVERIFY(copyInterval->test);
+    QCOMPARE(copyInterval->getTag(QStringLiteral("source"), QString()),
+             QStringLiteral("manual"));
+
+    delete source;
+    QCOMPARE(copyInterval->name, QStringLiteral("effort"));
+}
+
+void TestRideFileOwnership::clearRebuildAndRemovalReleaseIntervals()
+{
+    for (int iteration = 0; iteration < 32; ++iteration) {
+        TestableRideFile ride;
+        ride.addInterval(RideFileInterval::DEVICE, 1.0, 2.0,
+                         QStringLiteral("discarded"));
+        ride.clearIntervals();
+        QVERIFY(ride.intervals().isEmpty());
+
+        RideFilePoint first;
+        first.secs = 0.0;
+        first.interval = 1;
+        ride.appendPoint(first);
+
+        RideFilePoint second;
+        second.secs = 1.0;
+        second.interval = 2;
+        ride.appendPoint(second);
+
+        ride.addInterval(RideFileInterval::DEVICE, 2.0, 3.0,
+                         QStringLiteral("replaced"));
+        ride.fillInIntervals();
+        QVERIFY(!ride.intervals().isEmpty());
+
+        RideFileInterval *interval = ride.intervals().constFirst();
+        QVERIFY(ride.removeInterval(interval));
+    }
 }
 
 QTEST_GUILESS_MAIN(TestRideFileOwnership)

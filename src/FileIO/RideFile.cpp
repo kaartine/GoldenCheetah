@@ -87,7 +87,9 @@ RideFile::RideFile(RideFile *p) :
     }
     setDeviceType(p->deviceType());
     fileFormat_ = p->fileFormat_;
-    intervals_ = p->intervals_;
+    foreach (const RideFileInterval *interval, p->intervals_) {
+        if (interval) intervals_.append(new RideFileInterval(*interval));
+    }
     calibrations_ = p->calibrations_;
     context = p->context;
 
@@ -124,8 +126,8 @@ RideFile::~RideFile()
     delete totalPoint;
     //foreach(RideFileCalibration *calibration, calibrations_)
         //delete calibration;
-    //foreach(RideFileInterval *interval, intervals_)
-        //delete interval;
+    qDeleteAll(intervals_);
+    intervals_.clear();
     delete command;
     if (wprime_) delete wprime_;
 
@@ -560,6 +562,7 @@ RideFile::formatValueWithUnit(double value, SeriesType series, Conversion conver
 void
 RideFile::clearIntervals()
 {
+    qDeleteAll(intervals_);
     intervals_.clear();
 }
 
@@ -568,7 +571,7 @@ RideFile::fillInIntervals()
 {
     if (dataPoints_.empty())
         return;
-    intervals_.clear();
+    clearIntervals();
     double start = dataPoints().first()->secs;
     int interval = dataPoints().first()->interval;
     const RideFilePoint *point=NULL, *previous=NULL;
@@ -587,7 +590,7 @@ RideFile::removeInterval(RideFileInterval*x)
     int index = intervals_.indexOf(x);
     if (index == -1) return false;
     else {
-        intervals_.removeAt(index);
+        delete intervals_.takeAt(index);
         return true;
     }
 }
