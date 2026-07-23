@@ -1,9 +1,6 @@
 #!/bin/bash
 set -ev
 
-# Python version configuration - update this when upgrading Python
-PYTHON_APPIMAGE_VERSION="3.11.14"
-
 ### This script should be run from GoldenCheetah src directory after build
 cd src
 if [ ! -x ./GoldenCheetah ]; then
@@ -11,7 +8,15 @@ if [ ! -x ./GoldenCheetah ]; then
     exit 1
 fi
 
-### Create AppDir and start populating
+. Resources/linux/AppImagePackagingSupport.sh
+
+if [ "${PYTHON_VERSION:-}" != "$PYTHON_APPIMAGE_SERIES" ]; then
+    echo "Build Python ${PYTHON_VERSION:-unset} does not match packaged Python $PYTHON_APPIMAGE_SERIES"
+    exit 1
+fi
+
+### Create a clean AppDir and start populating
+rm -rf appdir
 mkdir -p appdir
 
 # Executable
@@ -33,24 +38,14 @@ EOF
 cp Resources/images/gc.png appdir/
 
 ### Download current version of linuxdeployqt
-wget --no-verbose -c https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage
-chmod a+x linuxdeployqt-continuous-x86_64.AppImage
+download_file "$LINUXDEPLOYQT_URL" "$LINUXDEPLOYQT_FILE"
+chmod a+x "$LINUXDEPLOYQT_FILE"
 
 ### Deploy to appdir
-./linuxdeployqt-continuous-x86_64.AppImage appdir/GoldenCheetah -verbose=2 -bundle-non-qt-libs -exclude-libs=libqsqlmysql,libqsqlpsql,libqsqlmimer,libqsqlodbc,libnss3,libnssutil3,libxcb-dri3.so.0 -unsupported-allow-new-glibc
+run_packaging_appimage "./$LINUXDEPLOYQT_FILE" appdir/GoldenCheetah -verbose=2 -bundle-non-qt-libs -exclude-libs=libqsqlmysql,libqsqlpsql,libqsqlmimer,libqsqlodbc,libnss3,libnssutil3,libxcb-dri3.so.0 -unsupported-allow-new-glibc
 
 # Add Python and core modules
-PYTHON_APPIMAGE_FILE="python${PYTHON_APPIMAGE_VERSION}-cp${PYTHON_VERSION//./}-cp${PYTHON_VERSION//./}-manylinux_2_28_x86_64.AppImage"
-wget --no-verbose "https://github.com/niess/python-appimage/releases/download/python${PYTHON_VERSION}/${PYTHON_APPIMAGE_FILE}"
-chmod +x "${PYTHON_APPIMAGE_FILE}"
-./"${PYTHON_APPIMAGE_FILE}" --appimage-extract
-rm -f "${PYTHON_APPIMAGE_FILE}"
-export PATH="$(pwd)/squashfs-root/usr/bin:$PATH"
-pip install --upgrade pip
-pip install -q -r Python/requirements.txt
-mv squashfs-root/usr appdir/usr
-mv squashfs-root/opt appdir/opt
-rm -rf squashfs-root
+install_embedded_python "Python/requirements.txt" "appdir"
 
 # Fix RPATH on QtWebEngineProcess and copy missing resources
 patchelf --set-rpath '$ORIGIN/../lib' appdir/libexec/QtWebEngineProcess
@@ -64,13 +59,13 @@ else
 fi
 
 # Generate AppImage
-wget --no-verbose "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
-chmod a+x appimagetool-x86_64.AppImage
-./appimagetool-x86_64.AppImage appdir
+download_file "$APPIMAGETOOL_URL" "$APPIMAGETOOL_FILE"
+chmod a+x "$APPIMAGETOOL_FILE"
+run_packaging_appimage "./$APPIMAGETOOL_FILE" appdir
 
 ### Cleanup
-rm linuxdeployqt-continuous-x86_64.AppImage
-rm appimagetool-x86_64.AppImage
+rm -f "$LINUXDEPLOYQT_FILE"
+rm -f "$APPIMAGETOOL_FILE"
 rm -rf appdir
 
 if [ ! -x ./GoldenCheetah*.AppImage ]; then

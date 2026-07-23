@@ -2219,6 +2219,39 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Fix direction: Pin commits/digests, hash-lock Python dependencies, generate an
   SBOM, and smoke-test AppImage on the oldest supported glibc.
 
+### BUILD-003: AppImage Python runtime is incompatible and its release asset moves
+
+- Status: FIXED
+- Code: `src/Resources/linux/AppImagePackagingSupport.sh`,
+  `src/Resources/linux/MakeAppImageQt6.sh`,
+  `appveyor/linux/after_build.sh`,
+  `unittests/Build/appImagePackaging/testAppImagePackaging.sh`
+- Impact: The local packager embedded Python 3.7 even though the pinned SIP
+  6.15.1 build dependency requires Python 3.10 or newer, so a clean AppImage
+  package failed. The upstream `python3.11` release tag also replaced and
+  deleted its patch-version asset between consecutive package attempts, making
+  a previously successful source URL return 404. Exported source trees had no
+  Git revision for the package metadata, and the development container did not
+  provide every downloader or FUSE tool assumed by the script.
+- Test-first evidence: The first full package failed because pip could not find
+  a SIP 6.15.1 distribution compatible with Python 3.7. A subsequent clean
+  package reproduced the moving-tag failure when the former Python 3.11.14
+  asset disappeared. The shell regression test then failed until the shared
+  helper pinned the final runtime, verified its digest, supported exported
+  source revisions, and scoped extraction mode to packaging tools.
+- Resolution: Both Linux packagers now share one helper that installs the
+  project-controlled Python 3.11.15 AppImage from an immutable release URL,
+  verifies SHA-256 before extraction, supports curl or wget, cleans the AppDir,
+  and validates explicit source revisions when `.git` is absent. The generic
+  `APPIMAGE_EXTRACT_AND_RUN` override applies only to packaging-tool AppImages,
+  so the resulting GoldenCheetah image still launches directly.
+- Verification: The registered packaging test passes in the full release
+  matrix. A clean package completed with Python 3.11.15 and SIP 6.15.1; its
+  281,557,496-byte AppImage has SHA-256
+  `bfaf42a134e0ed6801f2c893ca18253f6b2c7ee66472a573e9e032681759a261`.
+  Separate clean-profile direct X11 and offscreen launches remained running for
+  their 15-second smoke windows with only translator debug notices.
+
 ## Low
 
 ### BUILD-002: AppImage omits the Qt offscreen platform plugin
@@ -2291,12 +2324,16 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The complete containerized release matrix after PARSE-005 and MEM-016 passes:
+The complete containerized release matrix after BUILD-003 passes:
 
 - 67 QtTest suites
 - 2,296 passed
 - 0 failed, skipped, or blacklisted
 - Qt 6.8.3 on Ubuntu 24.04
+
+The registered matrix includes the AppImage packaging consistency test. The
+current local-use release is the BUILD-003 artifact recorded above; the prior
+BUILD-002 artifact remains available as the rollback image.
 
 PARSE-005's 126 focused tests and the related 10 RideFile ownership tests also
 pass under strict ASan/UBSan/LSan with leak detection. Earlier fixed

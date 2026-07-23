@@ -6,12 +6,15 @@ if [ ! -x ./GoldenCheetah ]
 then echo "Build GoldenCheetah and execute from distribution src"; exit 1
 fi
 
+. Resources/linux/AppImagePackagingSupport.sh
+
 qmake --version
 
 echo "Checking GoldenCheetah.app can execute"
 ./GoldenCheetah --version
 
-### Create AppDir and start populating
+### Create a clean AppDir and start populating
+rm -rf appdir
 mkdir -p appdir
 
 # Executable
@@ -38,11 +41,11 @@ cp Resources/images/gc.png appdir/
 #sudo appdir/lib/vlc/vlc-cache-gen appdir/lib/vlc/plugins
 
 ### Download current version of linuxdeployqt
-wget --no-verbose -c https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage
-chmod a+x linuxdeployqt-continuous-x86_64.AppImage
+download_file "$LINUXDEPLOYQT_URL" "$LINUXDEPLOYQT_FILE"
+chmod a+x "$LINUXDEPLOYQT_FILE"
 
 ### Deploy to appdir
-./linuxdeployqt-continuous-x86_64.AppImage appdir/GoldenCheetah -verbose=2 -bundle-non-qt-libs -exclude-libs=libqsqlmysql,libqsqlpsql,libqsqlmimer,libqsqlodbc,libnss3,libnssutil3,libxcb-dri3.so.0 -unsupported-allow-new-glibc
+run_packaging_appimage "./$LINUXDEPLOYQT_FILE" appdir/GoldenCheetah -verbose=2 -bundle-non-qt-libs -exclude-libs=libqsqlmysql,libqsqlpsql,libqsqlmimer,libqsqlodbc,libnss3,libnssutil3,libxcb-dri3.so.0 -unsupported-allow-new-glibc
 
 # linuxdeployqt only detects the desktop xcb backend. Bundle the offscreen
 # backend explicitly so the packaged application can be smoke-tested headless.
@@ -54,29 +57,20 @@ fi
 cp "$OFFSCREEN_PLUGIN" appdir/plugins/platforms/
 
 # Add Python and core modules
-wget --no-verbose https://github.com/niess/python-appimage/releases/download/python3.7/python3.7.17-cp37-cp37m-manylinux1_x86_64.AppImage
-chmod +x python3.7.17-cp37-cp37m-manylinux1_x86_64.AppImage
-./python3.7.17-cp37-cp37m-manylinux1_x86_64.AppImage --appimage-extract
-rm -f python3.7.17-cp37-cp37m-manylinux1_x86_64.AppImage
-export PATH="$(pwd)/squashfs-root/usr/bin:$PATH"
-pip install --upgrade pip
-pip install -q -r Python/requirements.txt
-mv squashfs-root/usr appdir/usr
-mv squashfs-root/opt appdir/opt
-rm -rf squashfs-root
+install_embedded_python "Python/requirements.txt" "appdir"
 
 # Fix RPATH on QtWebEngineProcess and copy missing resources
 patchelf --set-rpath '$ORIGIN/../lib' appdir/libexec/QtWebEngineProcess
 cp -r `qmake -v|awk '/Qt/ { print $6 "/../resources" }' -` appdir
 
 # Generate AppImage
-wget --no-verbose "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
-chmod a+x appimagetool-x86_64.AppImage
-./appimagetool-x86_64.AppImage appdir
+download_file "$APPIMAGETOOL_URL" "$APPIMAGETOOL_FILE"
+chmod a+x "$APPIMAGETOOL_FILE"
+run_packaging_appimage "./$APPIMAGETOOL_FILE" appdir
 
 ### Cleanup
-rm linuxdeployqt-continuous-x86_64.AppImage
-rm appimagetool-x86_64.AppImage
+rm -f "$LINUXDEPLOYQT_FILE"
+rm -f "$APPIMAGETOOL_FILE"
 rm -rf appdir
 
 if [ ! -x ./GoldenCheetah-x86_64.AppImage ]
@@ -112,7 +106,7 @@ rm -f "$SMOKE_LOG"
 
 ### Generate version file with SHA
 ./$FINAL_NAME --version 2>GCversionLinuxQt6.txt
-git log -1 >> GCversionLinuxQt6.txt
+write_source_revision GCversionLinuxQt6.txt
 echo "SHA256 hash of $FINAL_NAME:" >> GCversionLinuxQt6.txt
 shasum -a 256 $FINAL_NAME | cut -f 1 -d ' '  >> GCversionLinuxQt6.txt
 cat GCversionLinuxQt6.txt

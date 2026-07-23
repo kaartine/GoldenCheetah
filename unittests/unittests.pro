@@ -5,7 +5,8 @@ exists(unittests.pri) {
 }
 
 equals(GC_UNITTESTS, active) {
-	SUBDIRS += Core/athleteMigrationSafety \
+	SUBDIRS += Build/appImagePackaging \
+			   Core/athleteMigrationSafety \
 			   Core/credentialSettings \
 			   Core/dataFilterResources \
 			   Core/dataFilterSafety \
