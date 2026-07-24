@@ -2252,6 +2252,41 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   Separate clean-profile direct X11 and offscreen launches remained running for
   their 15-second smoke windows with only translator debug notices.
 
+### CLOUD-001: Local releases advertise Strava OAuth with placeholder credentials
+
+- Status: IN_PROGRESS
+- Code: `src/Core/Secrets.h`, `src/Cloud/OAuthDialog.cpp`,
+  `src/Cloud/Strava.cpp`, `util/add_secrets.ps1`,
+  `.github/workflows/ci.yml`
+- Observed symptom: Connecting Strava in the BUILD-003 AppImage ends with
+  `Error retrieving access token, Host requires authentication (204)` after
+  the user grants access in the browser.
+- Impact: Development and local release builds compile the literal
+  `__GC_STRAVA_CLIENT_SECRET__` fallback while still presenting Strava as an
+  available service. They submit that placeholder with client ID 83, so Strava
+  rejects the authorization-code exchange. The dialog then prints Qt network
+  enum value 204 without the HTTP status or sanitized provider response,
+  making the failure look like an HTTP 204 and hiding the actionable cause.
+- Evidence: The BUILD-003 executable contains the exact placeholder and the
+  configured client ID. The official 8 July 2026 upstream snapshot contains
+  the same client ID but not the placeholder, while this fork has no Actions
+  secret configured. Qt documents 204 as
+  `QNetworkReply::AuthenticationRequiredError`; it is not the HTTP response
+  status. Strava's current authentication documentation still requires a
+  registered client ID and client secret for both token exchange and refresh,
+  and its status page reports the API operational.
+- Regression test: Build token exchange and refresh requests through a shared
+  helper. Require it to reject empty or placeholder credentials before network
+  access, include every current required grant parameter, and derive a
+  sanitized error from HTTP status plus documented JSON fields without ever
+  including secrets, authorization codes, or tokens.
+- Fix direction: Centralize Strava OAuth request and response policy, fail
+  closed with a clear build-configuration message before opening the browser,
+  and make release packaging verify whether Strava support is enabled. Working
+  local Strava integration still requires a legitimate private application
+  secret supplied outside the public source tree; do not recover or publish the
+  secret embedded in an official binary.
+
 ## Low
 
 ### BUILD-002: AppImage omits the Qt offscreen platform plugin
