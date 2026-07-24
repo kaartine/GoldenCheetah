@@ -1345,46 +1345,51 @@ void RideFile::updateMax(RideFilePoint* point)
        maxPoint->tcore = point->tcore;
 }
 
+void RideFile::updateTotal(const RideFilePoint* point, double factor)
+{
+    totalPoint->secs += factor * point->secs;
+    totalPoint->cad += factor * point->cad;
+    totalPoint->hr += factor * point->hr;
+    totalPoint->km += factor * point->km;
+    totalPoint->kph += factor * point->kph;
+    totalPoint->nm += factor * point->nm;
+    totalPoint->watts += factor * point->watts;
+    totalPoint->alt += factor * point->alt;
+    totalPoint->lon += factor * point->lon;
+    totalPoint->lat += factor * point->lat;
+    totalPoint->headwind += factor * point->headwind;
+    totalPoint->slope += factor * point->slope;
+    totalPoint->temp += point->temp == NA ? 0 : factor * point->temp;
+    totalPoint->lte += factor * point->lte;
+    totalPoint->rte += factor * point->rte;
+    totalPoint->lps += factor * point->lps;
+    totalPoint->rps += factor * point->rps;
+    totalPoint->lrbalance += factor * point->lrbalance;
+    totalPoint->lpco += factor * point->lpco;
+    totalPoint->rpco += factor * point->rpco;
+    totalPoint->lppb += factor * point->lppb;
+    totalPoint->rppb += factor * point->rppb;
+    totalPoint->rppe += factor * point->rppe;
+    totalPoint->lpppb += factor * point->lpppb;
+    totalPoint->rpppb += factor * point->rpppb;
+    totalPoint->lpppe += factor * point->lpppe;
+    totalPoint->rpppe += factor * point->rpppe;
+    totalPoint->smo2 += factor * point->smo2;
+    totalPoint->thb += factor * point->thb;
+    totalPoint->o2hb += factor * point->o2hb;
+    totalPoint->hhb += factor * point->hhb;
+    totalPoint->rvert += factor * point->rvert;
+    totalPoint->rcad += factor * point->rcad;
+    totalPoint->rcontact += factor * point->rcontact;
+    totalPoint->gear += factor * point->gear;
+    totalPoint->tcore += factor * point->tcore;
+}
+
 void RideFile::updateAvg(RideFilePoint* point)
 {
     if (point!=NULL) {
         // AVG
-        totalPoint->secs += point->secs;
-        totalPoint->cad += point->cad;
-        totalPoint->hr += point->hr;
-        totalPoint->km += point->km;
-        totalPoint->kph += point->kph;
-        totalPoint->nm += point->nm;
-        totalPoint->watts += point->watts;
-        totalPoint->alt += point->alt;
-        totalPoint->lon += point->lon;
-        totalPoint->lat += point->lat;
-        totalPoint->headwind += point->headwind;
-        totalPoint->slope += point->slope;
-        totalPoint->temp += point->temp == NA ? 0 : point->temp;
-        totalPoint->lte += point->lte;
-        totalPoint->rte += point->rte;
-        totalPoint->lps += point->lps;
-        totalPoint->rps += point->rps;
-        totalPoint->lrbalance += point->lrbalance;
-        totalPoint->lpco += point->lpco;
-        totalPoint->rpco += point->rpco;
-        totalPoint->lppb += point->lppb;
-        totalPoint->rppb += point->rppb;
-        totalPoint->rppe += point->rppe;
-        totalPoint->lpppb += point->lpppb;
-        totalPoint->rpppb += point->rpppb;
-        totalPoint->lpppe += point->lpppe;
-        totalPoint->rpppe += point->rpppe;
-        totalPoint->smo2 += point->smo2;
-        totalPoint->thb += point->thb;
-        totalPoint->o2hb += point->o2hb;
-        totalPoint->hhb += point->hhb;
-        totalPoint->rvert += point->rvert;
-        totalPoint->rcad += point->rcad;
-        totalPoint->rcontact += point->rcontact;
-        totalPoint->gear += point->gear;
-        totalPoint->tcore += point->tcore;
+        updateTotal(point, 1.0);
 
         ++totalCount;
         if (point->temp != NA) ++totalTemp;
@@ -1591,15 +1596,21 @@ void RideFile::appendOrUpdatePoint(double secs, double cad, double hr, double km
                                              rvert, rcad, rcontact, tcore,
                                              interval);
 
+    RideFilePoint replacedPoint;
+    bool replacedExisting = false;
 
     if (!forceAppend) {
 
         int idx = timeIndex(secs);
         if (idx != -1) {
             if (dataPoints_.at(idx)->secs == secs) {
-                updatePoint(point, dataPoints_.at(idx));
-                *dataPoints_.at(idx) = *point;
+                RideFilePoint *existingPoint = dataPoints_.at(idx);
+                replacedPoint = *existingPoint;
+                updatePoint(point, existingPoint);
+                *existingPoint = *point;
                 delete point;
+                point = existingPoint;
+                replacedExisting = true;
             } else {
                 if (dataPoints_.at(idx)->secs > secs)
                     dataPoints_.insert(idx, point);
@@ -1652,7 +1663,15 @@ void RideFile::appendOrUpdatePoint(double secs, double cad, double hr, double km
 
     updateMin(point);
     updateMax(point);
-    updateAvg(point);
+    if (replacedExisting) {
+        updateTotal(&replacedPoint, -1.0);
+        if (replacedPoint.temp != NA) --totalTemp;
+        updateTotal(point, 1.0);
+        if (point->temp != NA) ++totalTemp;
+        updateAvg(NULL);
+    } else {
+        updateAvg(point);
+    }
 }
 
 void RideFile::appendPoint(const RideFilePoint &point)

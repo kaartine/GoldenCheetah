@@ -983,6 +983,29 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   all 67 unit-test suites pass 2,296 tests (0 failed, 0 skipped, 0
   blacklisted).
 
+### MEM-017: Duplicate RideFile updates use a freed point
+
+- Status: FIXED
+- Code: `src/FileIO/RideFile.cpp`, `src/FileIO/RideFile.h`, and
+  `unittests/FileIO/rideFileOwnership/testRideFileOwnership.cpp`
+- Impact: When `appendOrUpdatePoint` merged data into an existing timestamp,
+  it deleted the temporary point and then passed that freed pointer to the
+  minimum, maximum, and average accumulators. FIT files that append heart-rate
+  data in a chained segment exercised this heap-use-after-free. The same path
+  also counted a replacement as an additional sample, corrupting averages.
+- Test-first evidence: The focused regression first failed functionally because
+  one stored 151 bpm sample was reported as 75.5 bpm. The strict sanitizer RED
+  run then stopped at `RideFile::updateMin` with a heap-use-after-free whose
+  allocation and deletion both came from `appendOrUpdatePoint`.
+- Resolution: A duplicate timestamp now keeps using the point owned by
+  `dataPoints_`. Its previous contribution is removed from the aggregate
+  totals and the merged contribution is added without incrementing the sample
+  count; temperature's independent count is adjusted consistently.
+- Verification: `rideFileOwnership` passes 11/11 normally and under strict
+  ASan/UBSan/LSan. The production FIT reader integration passes 8/8 under the
+  same sanitizer settings, including a real three-segment Garmin HRM Swim FIT
+  file, with no sanitizer report.
+
 ### THREAD-003: Python chart execution races GUI object lifetime
 
 - Status: FIXED

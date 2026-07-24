@@ -489,6 +489,7 @@ class RideFile : public QObject // QObject to emit signals
         QVariant getPointFromValue(double value, SeriesType series) const;
         void updateMin(RideFilePoint* point);
         void updateMax(RideFilePoint* point);
+        void updateTotal(const RideFilePoint* point, double factor);
         void updateAvg(SeriesType series, double value);
         void updateAvg(RideFilePoint* point);
 

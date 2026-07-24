@@ -31,6 +31,7 @@ private slots:
     void clearRebuildAndRemovalReleaseIntervals();
     void destructorReleasesCalibrations();
     void copyOwnsIndependentCalibrations();
+    void duplicateTimestampUpdateKeepsOwnedPointAndSummaries();
 };
 
 void TestRideFileOwnership::allConstructorsReleaseSummaryPoints()
@@ -195,6 +196,38 @@ void TestRideFileOwnership::copyOwnsIndependentCalibrations()
 
     delete source;
     QCOMPARE(copyCalibration->name, QStringLiteral("zero"));
+}
+
+void TestRideFileOwnership::duplicateTimestampUpdateKeepsOwnedPointAndSummaries()
+{
+    RideFile ride;
+
+    ride.appendOrUpdatePoint(
+        1.0, 80.0, 0.0, 0.1, 30.0, 0.0, 200.0, 100.0,
+        0.0, 0.0, 0.0, 0.0, RideFile::NA, RideFile::NA,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, false);
+
+    QCOMPARE(ride.dataPoints().size(), 1);
+    const RideFilePoint *const ownedPoint = ride.dataPoints().constFirst();
+
+    ride.appendOrUpdatePoint(
+        1.0, 0.0, 151.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, RideFile::NA, RideFile::NA,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, false);
+
+    QCOMPARE(ride.dataPoints().size(), 1);
+    QCOMPARE(ride.dataPoints().constFirst(), ownedPoint);
+    QCOMPARE(ownedPoint->cad, 80.0);
+    QCOMPARE(ownedPoint->hr, 151.0);
+    QCOMPARE(ownedPoint->watts, 200.0);
+    QCOMPARE(ride.getMinPoint(RideFile::hr).toDouble(), 151.0);
+    QCOMPARE(ride.getAvgPoint(RideFile::hr).toDouble(), 151.0);
+    QCOMPARE(ride.getMaxPoint(RideFile::hr).toDouble(), 151.0);
+    QCOMPARE(ride.getAvgPoint(RideFile::watts).toDouble(), 200.0);
 }
 
 QTEST_GUILESS_MAIN(TestRideFileOwnership)
