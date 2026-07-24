@@ -48,6 +48,8 @@ assert_contains()
 declare -F download_file >/dev/null || fail "download_file helper is missing"
 declare -F run_packaging_appimage >/dev/null ||
     fail "run_packaging_appimage helper is missing"
+declare -F run_packaged_appimage_smoke >/dev/null ||
+    fail "run_packaged_appimage_smoke helper is missing"
 declare -F install_embedded_python >/dev/null ||
     fail "install_embedded_python helper is missing"
 declare -F write_source_revision >/dev/null ||
@@ -57,6 +59,13 @@ declare -F strava_oauth_build_status >/dev/null ||
 
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
+printf '#!/bin/sh\nprintf "%%s" "$APPIMAGE_EXTRACT_AND_RUN"\n' \
+    >"$TEMP_DIR/check-extract-mode"
+chmod +x "$TEMP_DIR/check-extract-mode"
+[ "$(run_packaged_appimage_smoke 2s \
+      "$TEMP_DIR/check-extract-mode")" = "1" ] ||
+    fail "packaged AppImage smoke did not use extraction mode"
+
 REVISION=0123456789abcdef0123456789abcdef01234567
 GC_SOURCE_REVISION=$REVISION write_source_revision "$TEMP_DIR/revision"
 grep -Fxq "commit $REVISION" "$TEMP_DIR/revision" ||
@@ -107,6 +116,7 @@ if grep -Fq 'python3.7' "$LOCAL_PACKAGER"; then
     fail "local AppImage packaging still embeds unsupported Python 3.7"
 fi
 assert_contains "$LOCAL_PACKAGER" 'write_source_revision'
+assert_contains "$LOCAL_PACKAGER" 'run_packaged_appimage_smoke'
 
 bash -n "$SUPPORT"
 echo "PASS: AppImage Python runtime and packaging helpers are consistent"

@@ -92,7 +92,8 @@ set +e
 HOME="$SMOKE_HOME" XDG_CONFIG_HOME="$SMOKE_HOME/.config" \
     QT_QPA_PLATFORM=offscreen QT_OPENGL=software \
     QTWEBENGINE_DISABLE_SANDBOX=1 \
-    timeout --kill-after=2s 10s "./$FINAL_NAME" >"$SMOKE_LOG" 2>&1
+    run_packaged_appimage_smoke --kill-after=2s 10s \
+        "./$FINAL_NAME" >"$SMOKE_LOG" 2>&1
 SMOKE_STATUS=$?
 set -e
 if [ "$SMOKE_STATUS" -ne 124 ]

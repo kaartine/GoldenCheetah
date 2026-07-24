@@ -35,6 +35,11 @@ run_packaging_appimage()
     APPIMAGE_EXTRACT_AND_RUN=1 "$@"
 }
 
+run_packaged_appimage_smoke()
+{
+    APPIMAGE_EXTRACT_AND_RUN=1 timeout "$@"
+}
+
 strava_oauth_build_status()
 {
     local executable=$1

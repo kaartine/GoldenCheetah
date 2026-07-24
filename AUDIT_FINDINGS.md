@@ -2252,6 +2252,31 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   Separate clean-profile direct X11 and offscreen launches remained running for
   their 15-second smoke windows with only translator debug notices.
 
+### BUILD-004: Containerized AppImage validation assumes FUSE
+
+- Status: FIXED
+- Code: `src/Resources/linux/AppImagePackagingSupport.sh`,
+  `src/Resources/linux/MakeAppImageQt6.sh`,
+  `unittests/Build/appImagePackaging/testAppImagePackaging.sh`
+- Impact: AppImage generation can finish successfully and then be rejected by
+  its own offscreen smoke test when the build container has no FUSE device or
+  `fusermount` binary. This blocks otherwise valid containerized releases and
+  encourages setting `APPIMAGE_EXTRACT_AND_RUN` globally, which would mask the
+  direct-launch behavior that the release must still support on the host.
+- Test-first evidence: Packaging commit `0012d7a` produced a 281,528,824-byte
+  image, but its final smoke step exited 127 with `No suitable fusermount
+  binary found`. A shell regression then failed because no packaged-image
+  smoke helper existed; its synthetic executable requires extraction mode to
+  be present in the child environment.
+- Resolution: A shared helper scopes `APPIMAGE_EXTRACT_AND_RUN=1` to the
+  timeout-controlled packaged-image smoke process. Packaging tools retain their
+  separate scoped helper, and normal host launches receive no global override.
+- Verification: The shell regression and `bash -n` pass. The complete matrix
+  still passes 68 QtTest suites and 2,328 tests with no failures, skips, or
+  blacklists. The generated image remained running for the expected ten-second
+  offscreen window in the same FUSE-less container and returned the accepted
+  timeout status; its log contained only PipeWire and locale notices.
+
 ### CLOUD-001: Local releases advertise Strava OAuth with placeholder credentials
 
 - Status: FIXED
