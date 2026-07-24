@@ -1954,6 +1954,38 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Fix direction: Checked unsigned arithmetic, physical-size limits, CRC checks,
   and explicit opt-in partial recovery.
 
+### CLOUD-002: Strava OAuth can still report an authentication-required error
+
+- Status: OPEN
+- Code: `src/Cloud/OAuthDialog.cpp`, `src/Cloud/Strava.cpp`,
+  `src/Cloud/StravaOAuthPolicy.cpp`, and the AppImage build metadata
+- Observed symptom: On 18 July 2026, a Strava connection attempt reported
+  `Error retrieving access token, Host requires authentication (204)`.
+- Impact: Strava authorization cannot be completed, and the current message
+  does not establish whether 204 is Qt's
+  `QNetworkReply::AuthenticationRequiredError`, an HTTP status, a stale or
+  differently configured AppImage, a rejected application credential, or a
+  provider-side OAuth policy change. Treating it as proof that Strava blocked
+  GoldenCheetah would therefore risk fixing the wrong layer.
+- Relationship to CLOUD-001: CLOUD-001 prevents known placeholder credentials
+  from reaching Strava. This recurrence must first prove which executable and
+  credential configuration produced it; it may be a separate failure or an
+  older build following the pre-CLOUD-001 path.
+- Test-first direction: Reproduce token exchanges with mocked success, OAuth
+  rejection, HTTP authentication challenge, transport failure, and malformed
+  provider responses. Require diagnostics to distinguish the HTTP status from
+  the Qt network error and to include bounded, sanitized provider context
+  without exposing authorization codes, tokens, client secrets, or request
+  bodies.
+- Investigation: Record the running AppImage hash and embedded commit, confirm
+  whether Strava credentials are configured without printing their values,
+  inspect the sanitized token-exchange response, and compare the endpoint,
+  redirect URI, grant parameters, application limits, current Strava OAuth
+  documentation, API changelog, and service status.
+- Fix direction: Defer implementation until the runtime provenance and the
+  provider response identify whether the defect is packaging, diagnostics,
+  protocol compatibility, or external application configuration.
+
 ### DUR-005: QSettings migration is not resumable after partial success
 
 - Status: OPEN
