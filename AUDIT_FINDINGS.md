@@ -2267,15 +2267,20 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   image, but its final smoke step exited 127 with `No suitable fusermount
   binary found`. A shell regression then failed because no packaged-image
   smoke helper existed; its synthetic executable requires extraction mode to
-  be present in the child environment.
+  be present in the child environment. After that smoke passed, the next full
+  package exposed a second direct launch: version metadata collection failed
+  with the same exit 127. A source regression failed until that invocation was
+  routed through a scoped extraction helper too.
 - Resolution: A shared helper scopes `APPIMAGE_EXTRACT_AND_RUN=1` to the
   timeout-controlled packaged-image smoke process. Packaging tools retain their
-  separate scoped helper, and normal host launches receive no global override.
+  separate scoped helper, which now also handles packaged-image version
+  metadata. Normal host launches receive no global override.
 - Verification: The shell regression and `bash -n` pass. The complete matrix
   still passes 68 QtTest suites and 2,328 tests with no failures, skips, or
   blacklists. The generated image remained running for the expected ten-second
   offscreen window in the same FUSE-less container and returned the accepted
-  timeout status; its log contained only PipeWire and locale notices.
+  timeout status, and its version query then exited zero through the scoped
+  helper. The logs contained only PipeWire and locale notices.
 
 ### CLOUD-001: Local releases advertise Strava OAuth with placeholder credentials
 

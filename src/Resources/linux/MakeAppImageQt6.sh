@@ -108,7 +108,8 @@ rm -rf "$SMOKE_HOME"
 rm -f "$SMOKE_LOG"
 
 ### Generate version file with SHA
-./$FINAL_NAME --version 2>GCversionLinuxQt6.txt
+run_packaging_appimage "./$FINAL_NAME" --version \
+    2>GCversionLinuxQt6.txt
 write_source_revision GCversionLinuxQt6.txt
 echo "$STRAVA_OAUTH_STATUS" >> GCversionLinuxQt6.txt
 echo "SHA256 hash of $FINAL_NAME:" >> GCversionLinuxQt6.txt

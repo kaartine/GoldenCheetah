@@ -117,6 +117,8 @@ if grep -Fq 'python3.7' "$LOCAL_PACKAGER"; then
 fi
 assert_contains "$LOCAL_PACKAGER" 'write_source_revision'
 assert_contains "$LOCAL_PACKAGER" 'run_packaged_appimage_smoke'
+assert_contains "$LOCAL_PACKAGER" \
+    'run_packaging_appimage "./$FINAL_NAME" --version'
 
 bash -n "$SUPPORT"
 echo "PASS: AppImage Python runtime and packaging helpers are consistent"
