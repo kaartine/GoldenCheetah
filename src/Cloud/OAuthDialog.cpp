@@ -29,6 +29,7 @@
 #include "PolarFlow.h"
 #include "OAuthCallbackPolicy.h"
 #include "OAuthPKCE.h"
+#include "StravaOAuthPolicy.h"
 
 #include <QJsonParseError>
 
@@ -56,12 +57,29 @@ OAuthDialog::OAuthDialog(Context *context, OAuthSite site, CloudService *service
         if (service->id() == "Tredict") site = this->site = TREDICT;
     }
 
+    if (site == STRAVA
+        && !StravaOAuthPolicy::hasUsableCredentials(
+            QStringLiteral(GC_STRAVA_CLIENT_ID),
+            QStringLiteral(GC_STRAVA_CLIENT_SECRET))) {
+        const QString text = tr(
+            "This build does not include configured Strava OAuth credentials. "
+            "Install an official GoldenCheetah release or configure a registered "
+            "Strava client ID and client secret before building.");
+        QMessageBox credentialsMissing(
+            QMessageBox::Critical,
+            tr("Authorization Error"), text);
+        credentialsMissing.exec();
+        authorizationReady = false;
+        return;
+    }
+
     // check if SSL is available - if not - message and end
     if (!QSslSocket::supportsSsl()) {
         QString text = QString(tr("SSL Security Libraries required for 'Authorise' are missing in this installation."));
         QMessageBox sslMissing(QMessageBox::Critical, tr("Authorization Error"), text);
         sslMissing.exec();
         noSSLlib = true;
+        authorizationReady = false;
         return;
     }
 
@@ -342,11 +360,8 @@ OAuthDialog::urlChanged(const QUrl &url)
 
             } else if (site == STRAVA) {
 
-                urlstr = QString("https://www.strava.com/oauth/token?");
-                params.addQueryItem("client_id", GC_STRAVA_CLIENT_ID);
-#ifdef GC_STRAVA_CLIENT_SECRET
-                params.addQueryItem("client_secret", GC_STRAVA_CLIENT_SECRET);
-#endif
+                urlstr = QString(
+                    "https://www.strava.com/oauth/token");
 
             } else if (site == NOLIO) {
 
@@ -410,14 +425,39 @@ OAuthDialog::urlChanged(const QUrl &url)
             }
 
             // all services will need us to send the temporary code received
-            if (site != RIDEWITHGPS) {
+            if (site != RIDEWITHGPS && site != STRAVA) {
                 params.addQueryItem("code", code);
             }
 
-            data.append(params.query(QUrl::FullyEncoded).toUtf8());
+            QUrl tokenUrl;
+            if (site == STRAVA) {
+                const StravaOAuthPolicy::TokenRequest stravaRequest =
+                    StravaOAuthPolicy::authorizationCodeRequest(
+                        QStringLiteral(GC_STRAVA_CLIENT_ID),
+                        QStringLiteral(GC_STRAVA_CLIENT_SECRET),
+                        code);
+                if (!stravaRequest.isValid()) {
+                    QMessageBox requestError(
+                        QMessageBox::Critical,
+                        tr("Authorization Error"),
+                        stravaRequest.error);
+                    requestError.exec();
+                    reject();
+                    return;
+                }
+                tokenUrl = stravaRequest.endpoint;
+                data = stravaRequest.body;
+                tokenRequestSensitiveValues = {
+                    QStringLiteral(GC_STRAVA_CLIENT_SECRET),
+                    code
+                };
+            } else {
+                data.append(
+                    params.query(QUrl::FullyEncoded).toUtf8());
+                tokenUrl = QUrl(urlstr);
+            }
 
             // trade in the temporary code only over a verified HTTPS endpoint
-            QUrl tokenUrl(urlstr);
             if (!OAuthCallbackPolicy::isSecureEndpoint(
                     tokenUrl)) {
                 QMessageBox endpointError(
@@ -481,12 +521,23 @@ OAuthDialog::networkRequestFinished(QNetworkReply *reply)
         return;
     }
 
+    const int httpStatus = reply->attribute(
+        QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray payload = reply->readAll();
+    const QStringList sensitiveValues =
+        tokenRequestSensitiveValues;
+    tokenRequestSensitiveValues.clear();
+
     if (!OAuthCallbackPolicy::isSuccessfulTokenReply(
             reply->error())) {
-        const QString error =
-            tr("Error retrieving access token, %1 (%2)")
-                .arg(reply->errorString())
-                .arg(reply->error());
+        const QString error = site == STRAVA
+            ? StravaOAuthPolicy::tokenFailureMessage(
+                  httpStatus, reply->error(),
+                  reply->errorString(), payload,
+                  sensitiveValues)
+            : tr("Error retrieving access token, %1 (%2)")
+                  .arg(reply->errorString())
+                  .arg(reply->error());
         QMessageBox oauthError(
             QMessageBox::Critical,
             tr("OAuth Token Error"),
@@ -497,7 +548,6 @@ OAuthDialog::networkRequestFinished(QNetworkReply *reply)
         return;
     }
 
-    const QByteArray payload = reply->readAll();
     QJsonParseError parseError;
     const QJsonDocument document =
         QJsonDocument::fromJson(payload, &parseError);
@@ -521,6 +571,21 @@ OAuthDialog::networkRequestFinished(QNetworkReply *reply)
         document.object()["refresh_token"].toString();
     QString access_token =
         document.object()["access_token"].toString();
+    if (site == STRAVA) {
+        const StravaOAuthPolicy::TokenResponse response =
+            StravaOAuthPolicy::parseTokenResponse(payload);
+        if (!response.isValid()) {
+            QMessageBox oauthError(
+                QMessageBox::Critical,
+                tr("OAuth Token Error"),
+                response.error);
+            oauthError.exec();
+            reject();
+            return;
+        }
+        refresh_token = response.refreshToken;
+        access_token = response.accessToken;
+    }
     double polar_userid = 0;
     if (site == POLAR) {
         polar_userid =

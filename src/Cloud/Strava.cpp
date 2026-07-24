@@ -22,6 +22,7 @@
 #include "Athlete.h"
 #include "Settings.h"
 #include "Secrets.h"
+#include "StravaOAuthPolicy.h"
 #include "mvjson.h"
 #include <QByteArray>
 #include <QHttpMultiPart>
@@ -94,27 +95,33 @@ bool
 Strava::open(QStringList &errors)
 {
     printd("Strava::open\n");
-    QString token = getSetting(GC_STRAVA_REFRESH_TOKEN, "").toString();
-    if (token == "") {
+    const QString refreshToken =
+        getSetting(GC_STRAVA_REFRESH_TOKEN, "").toString();
+    if (refreshToken.isEmpty()) {
         errors << tr("No authorisation token configured.");
         return false;
     }
 
     printd("Get access token for this session.\n");
 
-    // refresh endpoint
-    QNetworkRequest request(QUrl("https://www.strava.com/oauth/token?"));
-    request.setRawHeader("Content-Type", "application/x-www-form-urlencoded");
+    const StravaOAuthPolicy::TokenRequest tokenRequest =
+        StravaOAuthPolicy::refreshTokenRequest(
+            QStringLiteral(GC_STRAVA_CLIENT_ID),
+            QStringLiteral(GC_STRAVA_CLIENT_SECRET),
+            refreshToken);
+    if (!tokenRequest.isValid()) {
+        errors << tokenRequest.error;
+        return false;
+    }
 
-    // set params
-    QString data;
-    data += "client_id=" GC_STRAVA_CLIENT_ID;
-    data += "&client_secret=" GC_STRAVA_CLIENT_SECRET;
-    data += "&refresh_token=" + getSetting(GC_STRAVA_REFRESH_TOKEN).toString();
-    data += "&grant_type=refresh_token";
+    QNetworkRequest request(tokenRequest.endpoint);
+    request.setHeader(
+        QNetworkRequest::ContentTypeHeader,
+        QStringLiteral("application/x-www-form-urlencoded"));
 
     // make request
-    QNetworkReply* reply = nam->post(request, data.toLatin1());
+    QNetworkReply* reply = nam->post(
+        request, tokenRequest.body);
 
     // blocking request
     QEventLoop loop;
@@ -123,34 +130,29 @@ Strava::open(QStringList &errors)
 
     int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     printd("HTTP response code: %d\n", statusCode);
+    const QByteArray payload = reply->readAll();
 
     // oops, no dice
     if (reply->error() != 0) {
         printd("Got error %s\n", reply->errorString().toStdString().c_str());
-        errors << reply->errorString();
+        errors << StravaOAuthPolicy::tokenFailureMessage(
+            statusCode, reply->error(),
+            reply->errorString(), payload,
+            {QStringLiteral(GC_STRAVA_CLIENT_SECRET),
+             refreshToken});
         return false;
     }
 
-    // lets extract the access token, and possibly a new refresh token
-    QByteArray r = reply->readAll();
-    printd("Got response: %s\n", r.data());
-
-    QJsonParseError parseError;
-    QJsonDocument document = QJsonDocument::fromJson(r, &parseError);
-
-    // failed to parse result !?
-    if (parseError.error != QJsonParseError::NoError) {
-        printd("Parse error!\n");
-        errors << tr("JSON parser error") << parseError.errorString();
+    const StravaOAuthPolicy::TokenResponse response =
+        StravaOAuthPolicy::parseTokenResponse(payload);
+    if (!response.isValid()) {
+        errors << response.error;
         return false;
     }
-
-    QString access_token = document.object()["access_token"].toString();
-    QString refresh_token = document.object()["refresh_token"].toString();
 
     // update our settings
-    if (access_token != "") setSetting(GC_STRAVA_TOKEN, access_token);
-    if (refresh_token != "") setSetting(GC_STRAVA_REFRESH_TOKEN, refresh_token);
+    setSetting(GC_STRAVA_TOKEN, response.accessToken);
+    setSetting(GC_STRAVA_REFRESH_TOKEN, response.refreshToken);
     setSetting(GC_STRAVA_LAST_REFRESH, QDateTime::currentDateTime());
 
     // get the factory to save our settings permanently

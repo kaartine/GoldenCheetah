@@ -68,6 +68,10 @@ public:
     ~OAuthDialog();
 
     bool sslLibMissing() { return noSSLlib; }
+    bool canAuthorize() const
+    {
+        return authorizationReady && !noSSLlib;
+    }
 
 private slots:
     // Strava/Cyclinganalytics
@@ -78,13 +82,15 @@ private slots:
 
 private:
     Context *context;
-    bool noSSLlib;
-    bool ignore;
+    bool noSSLlib = false;
+    bool authorizationReady = true;
+    bool ignore = false;
     OAuthSite site;
     CloudService *service;
     QString baseURL; // can be passed, but typically is blank (used by Todays Plan)
     QString clientsecret; // can be passed, but typicall is blank (used by Todays Plan)
     QString codeVerifier; // PKCE code_verifier, used by Tredict and other PKCE services
+    QStringList tokenRequestSensitiveValues;
     std::unique_ptr<OAuthCallbackPolicy::Session> callbackSession;
     QUrl redirectUri;
 

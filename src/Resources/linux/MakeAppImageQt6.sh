@@ -12,6 +12,8 @@ qmake --version
 
 echo "Checking GoldenCheetah.app can execute"
 ./GoldenCheetah --version
+STRAVA_OAUTH_STATUS=$(strava_oauth_build_status ./GoldenCheetah)
+echo "$STRAVA_OAUTH_STATUS"
 
 ### Create a clean AppDir and start populating
 rm -rf appdir
@@ -107,6 +109,7 @@ rm -f "$SMOKE_LOG"
 ### Generate version file with SHA
 ./$FINAL_NAME --version 2>GCversionLinuxQt6.txt
 write_source_revision GCversionLinuxQt6.txt
+echo "$STRAVA_OAUTH_STATUS" >> GCversionLinuxQt6.txt
 echo "SHA256 hash of $FINAL_NAME:" >> GCversionLinuxQt6.txt
 shasum -a 256 $FINAL_NAME | cut -f 1 -d ' '  >> GCversionLinuxQt6.txt
 cat GCversionLinuxQt6.txt

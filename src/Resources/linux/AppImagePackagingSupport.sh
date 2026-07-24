@@ -12,6 +12,7 @@ LINUXDEPLOYQT_FILE="linuxdeployqt-continuous-x86_64.AppImage"
 LINUXDEPLOYQT_URL="https://github.com/probonopd/linuxdeployqt/releases/download/continuous/${LINUXDEPLOYQT_FILE}"
 APPIMAGETOOL_FILE="appimagetool-x86_64.AppImage"
 APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/continuous/${APPIMAGETOOL_FILE}"
+STRAVA_CLIENT_SECRET_PLACEHOLDER="__GC_STRAVA_CLIENT_SECRET__"
 
 download_file()
 {
@@ -32,6 +33,31 @@ download_file()
 run_packaging_appimage()
 {
     APPIMAGE_EXTRACT_AND_RUN=1 "$@"
+}
+
+strava_oauth_build_status()
+{
+    local executable=$1
+
+    if [ ! -r "$executable" ]; then
+        echo "Cannot inspect Strava OAuth configuration in $executable" >&2
+        return 1
+    fi
+    if LC_ALL=C grep -aFq \
+        "$STRAVA_CLIENT_SECRET_PLACEHOLDER" "$executable"; then
+        echo "Strava OAuth: unavailable (credentials not configured)"
+        return
+    fi
+    if ! command -v strings >/dev/null 2>&1; then
+        echo "Cannot inspect Qt string literals in $executable" >&2
+        return 1
+    fi
+    if LC_ALL=C strings -a -el "$executable" |
+        LC_ALL=C grep -Fq "$STRAVA_CLIENT_SECRET_PLACEHOLDER"; then
+        echo "Strava OAuth: unavailable (credentials not configured)"
+        return
+    fi
+    echo "Strava OAuth: configured"
 }
 
 write_source_revision()

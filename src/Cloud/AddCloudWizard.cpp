@@ -322,7 +322,7 @@ AddAuth::doAuth()
 
     if (wizard->cloudService->capabilities() & CloudService::OAuth) {
         OAuthDialog *oauthDialog = new OAuthDialog(wizard->context, OAuthDialog::NONE, wizard->cloudService);
-        if (oauthDialog->sslLibMissing()) {
+        if (!oauthDialog->canAuthorize()) {
             delete oauthDialog;
         } else {
             oauthDialog->setWindowModality(Qt::ApplicationModal);

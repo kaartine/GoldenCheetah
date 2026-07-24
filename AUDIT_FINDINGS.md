@@ -2254,10 +2254,11 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### CLOUD-001: Local releases advertise Strava OAuth with placeholder credentials
 
-- Status: IN_PROGRESS
-- Code: `src/Core/Secrets.h`, `src/Cloud/OAuthDialog.cpp`,
-  `src/Cloud/Strava.cpp`, `util/add_secrets.ps1`,
-  `.github/workflows/ci.yml`
+- Status: FIXED
+- Code: `src/Cloud/StravaOAuthPolicy.cpp`,
+  `src/Cloud/OAuthDialog.cpp`, `src/Cloud/Strava.cpp`,
+  `src/Cloud/AddCloudWizard.cpp`,
+  `src/Resources/linux/AppImagePackagingSupport.sh`
 - Observed symptom: Connecting Strava in the BUILD-003 AppImage ends with
   `Error retrieving access token, Host requires authentication (204)` after
   the user grants access in the browser.
@@ -2275,17 +2276,36 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   status. Strava's current authentication documentation still requires a
   registered client ID and client secret for both token exchange and refresh,
   and its status page reports the API operational.
-- Regression test: Build token exchange and refresh requests through a shared
-  helper. Require it to reject empty or placeholder credentials before network
-  access, include every current required grant parameter, and derive a
-  sanitized error from HTTP status plus documented JSON fields without ever
-  including secrets, authorization codes, or tokens.
-- Fix direction: Centralize Strava OAuth request and response policy, fail
-  closed with a clear build-configuration message before opening the browser,
-  and make release packaging verify whether Strava support is enabled. Working
-  local Strava integration still requires a legitimate private application
-  secret supplied outside the public source tree; do not recover or publish the
-  secret embedded in an official binary.
+- Test-first evidence: The first focused build failed because the required
+  Strava OAuth policy did not exist. After the initial helper passed its
+  round-trip cases, a stricter raw-body test failed 30/31 and proved that
+  `QUrlQuery` left `+` ambiguous in form data; the replacement percent-encodes
+  each key and value explicitly. A provider-text boundary test then failed
+  31/32 and proved that truncation before redaction could expose the beginning
+  of a long reflected secret. Finally, the package inspector misclassified the
+  newly linked placeholder build because `QStringLiteral` stored the marker as
+  UTF-16LE; a synthetic Qt-literal shell case reproduced that failure before
+  the inspector was changed.
+- Resolution: One side-effect-free policy now validates credentials, builds
+  authorization-code and refresh forms with every documented grant parameter,
+  bounds and validates token responses, and formats HTTP/provider failures
+  while redacting request secrets. Placeholder builds stop before opening the
+  browser or sending a request and display a build-configuration error. Both
+  token paths use the same policy, no longer log raw token responses, and only
+  persist a complete access/refresh pair. AppImage packaging reports Strava as
+  configured or unavailable without exposing credential values, recognizes
+  both native and Qt string-literal marker encodings, and fails closed if it
+  cannot perform both checks.
+- Verification: All 32 focused cases pass normally and under strict
+  ASan/UBSan/LSan. The application compiles and links with the production
+  `OAuthDialog`, `Strava`, and wizard paths. The complete release matrix passes
+  68 suites and 2,328 tests with no failures, skips, or blacklists. The package
+  status helper identifies the local placeholder binary as unavailable and the
+  official upstream snapshot as configured.
+- External requirement: A working custom Strava integration still requires a
+  legitimate private application secret supplied outside the public tree. The
+  fix deliberately does not recover or publish the credential embedded in an
+  official binary.
 
 ## Low
 
@@ -2359,16 +2379,17 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The complete containerized release matrix after BUILD-003 passes:
+The complete containerized release matrix after CLOUD-001 passes:
 
-- 67 QtTest suites
-- 2,296 passed
+- 68 QtTest suites
+- 2,328 passed
 - 0 failed, skipped, or blacklisted
 - Qt 6.8.3 on Ubuntu 24.04
 
-The registered matrix includes the AppImage packaging consistency test. The
-current local-use release is the BUILD-003 artifact recorded above; the prior
-BUILD-002 artifact remains available as the rollback image.
+The registered matrix includes the AppImage packaging consistency test and the
+32-case Strava OAuth policy suite. Production AppImages are packaged from
+committed source only after this matrix, and the predecessor remains available
+as the rollback image.
 
 PARSE-005's 126 focused tests and the related 10 RideFile ownership tests also
 pass under strict ASan/UBSan/LSan with leak detection. Earlier fixed

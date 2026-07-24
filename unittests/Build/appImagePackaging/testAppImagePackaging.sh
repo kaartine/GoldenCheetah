@@ -52,6 +52,8 @@ declare -F install_embedded_python >/dev/null ||
     fail "install_embedded_python helper is missing"
 declare -F write_source_revision >/dev/null ||
     fail "write_source_revision helper is missing"
+declare -F strava_oauth_build_status >/dev/null ||
+    fail "strava_oauth_build_status helper is missing"
 
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
@@ -68,6 +70,27 @@ if (cd "$TEMP_DIR" && unset GC_SOURCE_REVISION &&
     fail "exported source without a revision was accepted"
 fi
 
+printf 'binary-prefix%s-binary-suffix' \
+    "$STRAVA_CLIENT_SECRET_PLACEHOLDER" >"$TEMP_DIR/unconfigured"
+for ((index = 0;
+      index < ${#STRAVA_CLIENT_SECRET_PLACEHOLDER};
+      ++index)); do
+    printf '%s\0' "${STRAVA_CLIENT_SECRET_PLACEHOLDER:index:1}"
+done >"$TEMP_DIR/unconfigured-utf16le"
+printf 'binary-with-configured-credential' >"$TEMP_DIR/configured"
+[ "$(strava_oauth_build_status "$TEMP_DIR/unconfigured")" = \
+  "Strava OAuth: unavailable (credentials not configured)" ] ||
+    fail "placeholder Strava credentials were not reported unavailable"
+[ "$(strava_oauth_build_status "$TEMP_DIR/unconfigured-utf16le")" = \
+  "Strava OAuth: unavailable (credentials not configured)" ] ||
+    fail "Qt UTF-16LE Strava placeholder was not reported unavailable"
+[ "$(strava_oauth_build_status "$TEMP_DIR/configured")" = \
+  "Strava OAuth: configured" ] ||
+    fail "configured Strava credentials were not reported"
+if strava_oauth_build_status "$TEMP_DIR/missing" >/dev/null 2>&1; then
+    fail "missing executable was accepted for Strava status inspection"
+fi
+
 grep -Eq '^sip[[:space:]]*==[[:space:]]*6\.15\.1$' "$REQUIREMENTS" ||
     fail "test must be reviewed when the pinned SIP version changes"
 
@@ -77,6 +100,7 @@ for packager in "$LOCAL_PACKAGER" "$CI_PACKAGER"; do
         '. Resources/linux/AppImagePackagingSupport.sh'
     assert_contains "$packager" 'install_embedded_python'
     assert_contains "$packager" 'run_packaging_appimage'
+    assert_contains "$packager" 'strava_oauth_build_status'
 done
 
 if grep -Fq 'python3.7' "$LOCAL_PACKAGER"; then

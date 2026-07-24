@@ -9,6 +9,8 @@ if [ ! -x ./GoldenCheetah ]; then
 fi
 
 . Resources/linux/AppImagePackagingSupport.sh
+STRAVA_OAUTH_STATUS=$(strava_oauth_build_status ./GoldenCheetah)
+echo "$STRAVA_OAUTH_STATUS"
 
 if [ "${PYTHON_VERSION:-}" != "$PYTHON_APPIMAGE_SERIES" ]; then
     echo "Build Python ${PYTHON_VERSION:-unset} does not match packaged Python $PYTHON_APPIMAGE_SERIES"

@@ -13,6 +13,7 @@ equals(GC_UNITTESTS, active) {
 			   Core/localApiSecurity \
 			   Cloud/credentialTransportSafety \
 			   Cloud/oauthCallbackPolicy \
+			   Cloud/stravaOAuthPolicy \
 			   Cloud/openDataEndpointPolicy \
 			   Charts/mapPageSecurity \
 			   Train/libraryImportFileStager \
