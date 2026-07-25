@@ -12,7 +12,7 @@ qmake --version
 
 echo "Checking GoldenCheetah.app can execute"
 ./GoldenCheetah --version
-STRAVA_OAUTH_STATUS=$(strava_oauth_build_status ./GoldenCheetah)
+STRAVA_OAUTH_STATUS=$(require_strava_oauth_build ./GoldenCheetah)
 echo "$STRAVA_OAUTH_STATUS"
 
 ### Create a clean AppDir and start populating

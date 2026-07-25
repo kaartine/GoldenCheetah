@@ -48,6 +48,14 @@ strava_oauth_build_status()
         echo "Cannot inspect Strava OAuth configuration in $executable" >&2
         return 1
     fi
+    local appimage_magic
+    appimage_magic=$(dd if="$executable" bs=1 skip=8 count=3 \
+        2>/dev/null | od -An -tx1 | tr -d ' \n')
+    if [ "$appimage_magic" = "414902" ]; then
+        echo "Cannot inspect Strava OAuth configuration in a compressed AppImage;" \
+            "inspect its extracted GoldenCheetah executable." >&2
+        return 1
+    fi
     if LC_ALL=C grep -aFq \
         "$STRAVA_CLIENT_SECRET_PLACEHOLDER" "$executable"; then
         echo "Strava OAuth: unavailable (credentials not configured)"
@@ -63,6 +71,21 @@ strava_oauth_build_status()
         return
     fi
     echo "Strava OAuth: configured"
+}
+
+require_strava_oauth_build()
+{
+    local executable=$1
+    local status
+
+    status=$(strava_oauth_build_status "$executable") || return
+    if [ "$status" != "Strava OAuth: configured" ]; then
+        echo "$status" >&2
+        echo "Refusing to package a release without configured" \
+            "Strava OAuth credentials." >&2
+        return 1
+    fi
+    echo "$status"
 }
 
 write_source_revision()

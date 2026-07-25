@@ -7,6 +7,7 @@ SUPPORT="$REPO_ROOT/src/Resources/linux/AppImagePackagingSupport.sh"
 LOCAL_PACKAGER="$REPO_ROOT/src/Resources/linux/MakeAppImageQt6.sh"
 CI_PACKAGER="$REPO_ROOT/appveyor/linux/after_build.sh"
 REQUIREMENTS="$REPO_ROOT/src/Python/requirements.txt"
+DEV_CONFIG="$REPO_ROOT/.devcontainer/gcconfig.pri"
 
 fail()
 {
@@ -56,6 +57,8 @@ declare -F write_source_revision >/dev/null ||
     fail "write_source_revision helper is missing"
 declare -F strava_oauth_build_status >/dev/null ||
     fail "strava_oauth_build_status helper is missing"
+declare -F require_strava_oauth_build >/dev/null ||
+    fail "require_strava_oauth_build helper is missing"
 
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
@@ -87,6 +90,8 @@ for ((index = 0;
     printf '%s\0' "${STRAVA_CLIENT_SECRET_PLACEHOLDER:index:1}"
 done >"$TEMP_DIR/unconfigured-utf16le"
 printf 'binary-with-configured-credential' >"$TEMP_DIR/configured"
+printf '12345678AI\002compressed-appimage-payload' \
+    >"$TEMP_DIR/packaged.AppImage"
 [ "$(strava_oauth_build_status "$TEMP_DIR/unconfigured")" = \
   "Strava OAuth: unavailable (credentials not configured)" ] ||
     fail "placeholder Strava credentials were not reported unavailable"
@@ -99,6 +104,24 @@ printf 'binary-with-configured-credential' >"$TEMP_DIR/configured"
 if strava_oauth_build_status "$TEMP_DIR/missing" >/dev/null 2>&1; then
     fail "missing executable was accepted for Strava status inspection"
 fi
+if strava_oauth_build_status "$TEMP_DIR/packaged.AppImage" \
+    >/dev/null 2>&1; then
+    fail "compressed AppImage was incorrectly inspected as a raw executable"
+fi
+require_strava_oauth_build "$TEMP_DIR/configured" >/dev/null ||
+    fail "configured Strava credentials were rejected by the release gate"
+if require_strava_oauth_build "$TEMP_DIR/unconfigured" \
+    >/dev/null 2>&1; then
+    fail "release gate accepted placeholder Strava credentials"
+fi
+if require_strava_oauth_build "$TEMP_DIR/unconfigured-utf16le" \
+    >/dev/null 2>&1; then
+    fail "release gate accepted Qt UTF-16LE Strava placeholders"
+fi
+if require_strava_oauth_build "$TEMP_DIR/missing" \
+    >/dev/null 2>&1; then
+    fail "release gate accepted a missing executable"
+fi
 
 grep -Eq '^sip[[:space:]]*==[[:space:]]*6\.15\.1$' "$REQUIREMENTS" ||
     fail "test must be reviewed when the pinned SIP version changes"
@@ -109,7 +132,8 @@ for packager in "$LOCAL_PACKAGER" "$CI_PACKAGER"; do
         '. Resources/linux/AppImagePackagingSupport.sh'
     assert_contains "$packager" 'install_embedded_python'
     assert_contains "$packager" 'run_packaging_appimage'
-    assert_contains "$packager" 'strava_oauth_build_status'
+    assert_contains "$packager" \
+        'require_strava_oauth_build ./GoldenCheetah'
 done
 
 if grep -Fq 'python3.7' "$LOCAL_PACKAGER"; then
@@ -119,6 +143,10 @@ assert_contains "$LOCAL_PACKAGER" 'write_source_revision'
 assert_contains "$LOCAL_PACKAGER" 'run_packaged_appimage_smoke'
 assert_contains "$LOCAL_PACKAGER" \
     'run_packaging_appimage "./$FINAL_NAME" --version'
+assert_contains "$DEV_CONFIG" \
+    '# DEFINES += GC_STRAVA_CLIENT_ID=\\\"your_client_id\\\"'
+assert_contains "$DEV_CONFIG" \
+    '# DEFINES += GC_STRAVA_CLIENT_SECRET=\\\"your_client_secret\\\"'
 
 bash -n "$SUPPORT"
 echo "PASS: AppImage Python runtime and packaging helpers are consistent"

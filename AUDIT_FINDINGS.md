@@ -1995,35 +1995,92 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### CLOUD-002: Strava OAuth can still report an authentication-required error
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Cloud/OAuthDialog.cpp`, `src/Cloud/Strava.cpp`,
-  `src/Cloud/StravaOAuthPolicy.cpp`, and the AppImage build metadata
+  `src/Cloud/StravaOAuthPolicy.cpp`,
+  `src/Resources/linux/AppImagePackagingSupport.sh`,
+  `src/Resources/linux/MakeAppImageQt6.sh`, and
+  `appveyor/linux/after_build.sh`
 - Observed symptom: On 18 July 2026, a Strava connection attempt reported
   `Error retrieving access token, Host requires authentication (204)`.
-- Impact: Strava authorization cannot be completed, and the current message
-  does not establish whether 204 is Qt's
-  `QNetworkReply::AuthenticationRequiredError`, an HTTP status, a stale or
-  differently configured AppImage, a rejected application credential, or a
-  provider-side OAuth policy change. Treating it as proof that Strava blocked
-  GoldenCheetah would therefore risk fixing the wrong layer.
-- Relationship to CLOUD-001: CLOUD-001 prevents known placeholder credentials
-  from reaching Strava. This recurrence must first prove which executable and
-  credential configuration produced it; it may be a separate failure or an
-  older build following the pre-CLOUD-001 path.
-- Test-first direction: Reproduce token exchanges with mocked success, OAuth
-  rejection, HTTP authentication challenge, transport failure, and malformed
-  provider responses. Require diagnostics to distinguish the HTTP status from
-  the Qt network error and to include bounded, sanitized provider context
-  without exposing authorization codes, tokens, client secrets, or request
-  bodies.
-- Investigation: Record the running AppImage hash and embedded commit, confirm
-  whether Strava credentials are configured without printing their values,
-  inspect the sanitized token-exchange response, and compare the endpoint,
-  redirect URI, grant parameters, application limits, current Strava OAuth
-  documentation, API changelog, and service status.
-- Fix direction: Defer implementation until the runtime provenance and the
-  provider response identify whether the defect is packaging, diagnostics,
-  protocol compatibility, or external application configuration.
+- Root cause: `204` was Qt's
+  `QNetworkReply::AuthenticationRequiredError` enum value, not an HTTP status.
+  The failing custom executable contained the build placeholder as its client
+  secret, so Strava correctly rejected the token exchange. The then-current
+  production AppImage had SHA-256
+  `8897d666c17b2d9a0a36df7492b70011459f7021e3978c6547ef013bec39f1ca`;
+  its build metadata identified commit `b30d8de` and explicitly reported
+  `Strava OAuth: unavailable (credentials not configured)`.
+- Provider evidence: The current official Strava authentication documentation
+  still specifies `POST https://www.strava.com/oauth/token` with form-encoded
+  client ID, client secret, authorization code or refresh token, and grant
+  type. A controlled request using a configured upstream release credential
+  and an intentionally invalid authorization code returned HTTP 400 with a
+  `code` error and no client-credential error. This proves the endpoint,
+  request form, and application credential remain accepted; the failure was
+  local packaging rather than a Strava protocol or subscription change.
+- Regression evidence: The packaging test first failed because the release
+  credential gate did not exist. A second RED case reproduced the false
+  `configured` result when a compressed Type 2 AppImage was inspected as if it
+  were a raw executable. A third RED case showed that the development-container
+  example generated numeric macros instead of C++ string literals.
+- Resolution: Both production AppImage packagers now refuse to package a raw
+  GoldenCheetah executable unless Strava OAuth is configured. Status inspection
+  rejects compressed AppImages and requires their extracted executable instead.
+  The development-container example uses qmake's required escaped quoting.
+  Build-only credentials remain in the git-ignored local `gcconfig.pri` with
+  owner-only permissions and are excluded from repository diffs and history.
+- Verification: The packaging regression test and shell syntax checks pass.
+  `stravaOAuthPolicy` passes 32/32 focused tests. A fresh configured release
+  build passes its credential gate, and all 70 QtTest suites pass 2,431 tests
+  (0 failed, 0 skipped, 0 blacklisted); the AppImage packaging test also passes.
+
+### BUILD-005: Production AppImages allow missing Strava credentials
+
+- Status: FIXED
+- Code: `src/Resources/linux/AppImagePackagingSupport.sh`,
+  `src/Resources/linux/MakeAppImageQt6.sh`,
+  `appveyor/linux/after_build.sh`, and
+  `unittests/Build/appImagePackaging/testAppImagePackaging.sh`
+- Impact: Packaging completed successfully with the placeholder client secret,
+  producing a release in which Strava authorization could only fail.
+- Test-first evidence: The new release-gate assertion failed because no
+  `require_strava_oauth_build` helper existed and neither packager called one.
+- Resolution: A shared release gate accepts only the exact configured status,
+  and both production packagers invoke it before creating an AppDir.
+- Verification: ASCII and Qt UTF-16LE placeholders, missing executables, and
+  configured executables are covered; the focused packaging test and full
+  test matrix pass.
+
+### BUILD-006: Compressed AppImage status has a false configured result
+
+- Status: FIXED
+- Code: `src/Resources/linux/AppImagePackagingSupport.sh` and
+  `unittests/Build/appImagePackaging/testAppImagePackaging.sh`
+- Impact: Searching the compressed squashfs payload for a raw placeholder
+  usually found nothing and incorrectly reported `Strava OAuth: configured`.
+- Test-first evidence: A Type 2 AppImage-magic fixture was accepted as a raw
+  configured executable before the correction.
+- Resolution: Status inspection detects the `AI\002` Type 2 marker and fails
+  with an instruction to inspect the extracted GoldenCheetah executable.
+- Verification: The compressed fixture is rejected, a configured raw fixture is
+  accepted, and both real extracted configured and placeholder executables are
+  classified correctly.
+
+### BUILD-007: Development Strava defines lose C++ string quoting
+
+- Status: FIXED
+- Code: `.devcontainer/gcconfig.pri` and
+  `unittests/Build/appImagePackaging/testAppImagePackaging.sh`
+- Impact: Following the example produced numeric preprocessor values. Calls to
+  `QStringLiteral(GC_STRAVA_CLIENT_ID)` and
+  `QStringLiteral(GC_STRAVA_CLIENT_SECRET)` then failed to compile.
+- Test-first evidence: The packaging test failed when it required the same
+  triple-escaped qmake form already documented by `src/gcconfig.pri.in`.
+- Resolution: Both example defines now preserve quoted C++ string literals
+  through qmake and the generated Makefile.
+- Verification: A clean release build reports quoted, non-placeholder defines
+  and compiles successfully; the focused and full test suites pass.
 
 ### DUR-005: QSettings migration is not resumable after partial success
 
