@@ -67,7 +67,7 @@ void enterAndWait(OperationGate &gate)
     std::unique_lock<std::mutex> lock(gate.mutex);
     ++gate.entered;
     gate.condition.notify_all();
-    gate.condition.wait(lock, [&gate] {
+    gate.condition.wait_for(lock, 5s, [&gate] {
         return gate.released;
     });
 }
@@ -98,8 +98,10 @@ private slots:
     void failedResultsAreNotCached();
     void followerCancellationIsPrompt();
     void cachedResultExpires();
+    void expiredCacheUsesLatestRotatedToken();
     void invalidationClearsCompletedCache();
     void invalidationSupersedesActiveLeader();
+    void authorizationInstallSupersedesActiveLeader();
     void thrownOperationFailsClosed();
     void invalidInputAndIncompleteSuccessDoNotPolluteCache();
 };
@@ -295,10 +297,11 @@ sameAccountReplacementTokenWaitsForActiveRefresh()
     });
 
     QThread::msleep(80);
-    QVERIFY2(!replacementStarted.load(),
-             "The same account started two refresh operations concurrently.");
+    const bool serialized = !replacementStarted.load();
     release(gate);
 
+    QVERIFY2(serialized,
+             "The same account started two refresh operations concurrently.");
     QVERIFY(first.get().isValid());
     QVERIFY(replacement.get().isValid());
     QVERIFY(replacementStarted.load());
@@ -461,6 +464,39 @@ void TestStravaTokenRefresh::cachedResultExpires()
     QVERIFY(first.refreshToken != second.refreshToken);
 }
 
+void TestStravaTokenRefresh::expiredCacheUsesLatestRotatedToken()
+{
+    const QString account =
+        uniqueValue(QStringLiteral("canonical-token"));
+    const QString originalToken =
+        uniqueValue(QStringLiteral("refresh-original"));
+    QStringList submittedTokens;
+    int calls = 0;
+    auto operation = [&](const QString &effectiveToken) {
+        submittedTokens.append(effectiveToken);
+        ++calls;
+        return successfulResult(
+            QStringLiteral("access-%1").arg(calls),
+            QStringLiteral("refresh-%1").arg(calls));
+    };
+    const auto neverCancelled = [] {
+        return false;
+    };
+
+    const auto first = StravaTokenRefreshCoordinator::refresh(
+        account, originalToken, operation, neverCancelled, 30ms);
+    QVERIFY(first.isValid());
+    QThread::msleep(80);
+    const auto second = StravaTokenRefreshCoordinator::refresh(
+        account, originalToken, operation, neverCancelled, 30ms);
+
+    QVERIFY(second.isValid());
+    QCOMPARE(calls, 2);
+    QCOMPARE(submittedTokens.size(), 2);
+    QCOMPARE(submittedTokens.at(0), originalToken);
+    QCOMPARE(submittedTokens.at(1), first.refreshToken);
+}
+
 void TestStravaTokenRefresh::invalidationClearsCompletedCache()
 {
     const QString account =
@@ -538,6 +574,53 @@ void TestStravaTokenRefresh::invalidationSupersedesActiveLeader()
         });
     compareResult(retry, expected);
     QCOMPARE(calls.load(), 2);
+}
+
+void TestStravaTokenRefresh::
+authorizationInstallSupersedesActiveLeader()
+{
+    const QString account =
+        uniqueValue(QStringLiteral("authorization-install"));
+    const QString staleToken =
+        uniqueValue(QStringLiteral("refresh-stale"));
+    const StravaTokenRefreshResult staleResult = successfulResult(
+        uniqueValue(QStringLiteral("access-stale")),
+        uniqueValue(QStringLiteral("refresh-stale-out")));
+    const StravaTokenRefreshResult authorizedResult = successfulResult(
+        uniqueValue(QStringLiteral("access-authorized")),
+        uniqueValue(QStringLiteral("refresh-authorized")));
+    OperationGate gate;
+    std::atomic<int> calls{0};
+
+    auto leader = std::async(std::launch::async, [&] {
+        return StravaTokenRefreshCoordinator::refresh(
+            account, staleToken, [&] {
+                ++calls;
+                enterAndWait(gate);
+                return staleResult;
+            });
+    });
+    QVERIFY2(waitForEntered(gate, 1),
+             "The stale refresh operation did not start.");
+
+    QVERIFY(StravaTokenRefreshCoordinator::installAuthorization(
+        account, authorizedResult));
+    release(gate);
+
+    const StravaTokenRefreshResult staleLeader = leader.get();
+    QVERIFY(!staleLeader.isValid());
+    QVERIFY(!staleLeader.error.isEmpty());
+
+    auto mustNotRun = [&] {
+        ++calls;
+        return failedResult(QStringLiteral(
+            "The installed authorization was not reused."));
+    };
+    compareResult(
+        StravaTokenRefreshCoordinator::refresh(
+            account, staleToken, mustNotRun),
+        authorizedResult);
+    QCOMPARE(calls.load(), 1);
 }
 
 void TestStravaTokenRefresh::thrownOperationFailsClosed()
