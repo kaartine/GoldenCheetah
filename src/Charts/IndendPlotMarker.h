@@ -82,6 +82,9 @@ private:
     int m_spacingX;
     int m_spacingY;
 
+#if defined(GC_INDEND_PLOT_MARKER_TEST)
+public:
+#endif
     class Matrix {
         public:
             Matrix(unsigned long rows, unsigned long cols);
@@ -91,10 +94,10 @@ private:
             ~Matrix();
             /** Copy Constructor */
             Matrix(const Matrix& m);
+            /** Copy assignment operator */
+            Matrix& operator=(const Matrix& m);
             /** C++11 Move constructor */
             /* Matrix(Matrix&&); */
-            /**Copy assignment operator */
-            //UNUSED Matrix& operator=(const Matrix&);
             /** C++11 Move assignment operator */
             /* Matrix& operator=(Matrix&&); */
             void set(unsigned long row, unsigned long col, bool value);
@@ -121,10 +124,13 @@ private:
             unsigned long m_cols; ///< number of cols in pixels
             uintptr_t m_canvasId; ///< internal canvasId, needed check if we're on a new plot
             //holds data of where is drawn dimension 1: rows dimension 2: cols
-            //e.g. m_data[y*m_rows+cols]
+            //e.g. m_data[y*m_cols+x]
             // y == rows, x == cols
             bool* m_data;
     };
+#if defined(GC_INDEND_PLOT_MARKER_TEST)
+private:
+#endif
     static Matrix* m_drawnPixels; ///< Matrix of drawn/free Pixels
 };
 

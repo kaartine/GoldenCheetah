@@ -17,49 +17,54 @@
 
 #include <QPainter>
 
+#include <algorithm>
 #include <iostream>       // std::cerr
 #include <stdexcept>      // std::out_of_range
 
 QwtIndPlotMarker::Matrix* QwtIndPlotMarker::m_drawnPixels = new QwtIndPlotMarker::Matrix(1,1);
 
-inline QwtIndPlotMarker::Matrix::Matrix(unsigned long rows, unsigned long cols):
-    m_rows(rows), m_cols(cols)
+QwtIndPlotMarker::Matrix::Matrix(unsigned long rows, unsigned long cols):
+    m_rows(rows),
+    m_cols(cols),
+    m_canvasId(0),
+    m_data(new bool[rows * cols]())
 {
-    m_data = new bool[rows * cols]();
 }
 
-inline QwtIndPlotMarker::Matrix::~Matrix()
+QwtIndPlotMarker::Matrix::~Matrix()
 {
     reset();
 }
 
-QwtIndPlotMarker::Matrix::Matrix(const Matrix& m) {
-
-    if((m_rows!=m.rows())||(m_cols!=m.cols())) {
-        resize(m.rows(),m.cols());
-    }
-
-    for(unsigned long i=0;i<m.rows();i++){
-        for (unsigned long j = 0; j < m.cols(); j++) {
-        m_data[i*m_cols+j]=m(i,j);
-        }
-    }
+QwtIndPlotMarker::Matrix::Matrix(const Matrix& m):
+    m_rows(m.m_rows),
+    m_cols(m.m_cols),
+    m_canvasId(m.m_canvasId),
+    m_data(new bool[m_rows * m_cols])
+{
+    const unsigned long size = m_rows * m_cols;
+    if (size > 0)
+        std::copy_n(m.m_data, size, m_data);
 }
 
-/* UNUSED
-QwtIndPlotMarker::Matrix& QwtIndPlotMarker::Matrix::operator=(const Matrix& m){
-    if((m_rows!=m.rows())||(m_cols!=m.cols())) {
-        resize(m.rows(),m.cols());
+QwtIndPlotMarker::Matrix& QwtIndPlotMarker::Matrix::operator=(const Matrix& m)
+{
+    if (this == &m) {
+        return *this;
     }
 
-    for(unsigned long i=0;i<m.rows();i++){
-        for (unsigned long j = 0; j < m.cols(); j++) {
-        m_data[i*m_cols+j]=m(i,j);
-        }
-    }
+    const unsigned long size = m.m_rows * m.m_cols;
+    bool *data = new bool[size];
+    if (size > 0)
+        std::copy_n(m.m_data, size, data);
+
+    delete[] m_data;
+    m_data = data;
+    m_rows = m.m_rows;
+    m_cols = m.m_cols;
+    m_canvasId = m.m_canvasId;
+    return *this;
 }
-*/
-
 
  /* bool& QwtIndPlotMarker::Matrix::operator() (unsigned long row, unsigned long col) const */
 /* { */
@@ -75,33 +80,28 @@ bool QwtIndPlotMarker::Matrix::operator() (unsigned long row, unsigned long col)
     return m_data[m_cols*row + col];
 }
 
-inline void QwtIndPlotMarker::Matrix::init() {
+void QwtIndPlotMarker::Matrix::init() {
     for (unsigned long i = 0; i < m_cols*m_rows; i++) {
         m_data[i] = false;
     }
 }
 
-inline void QwtIndPlotMarker::Matrix::reset() {
+void QwtIndPlotMarker::Matrix::reset() {
     delete[] m_data;
     m_data = 0;
     m_rows = 0;
     m_cols = 0;
+    m_canvasId = 0;
 }
 
 int QwtIndPlotMarker::Matrix::resize(unsigned long row, unsigned long col) {
-    delete[] m_data;
+    bool *data = new bool[row * col]();
 
-    m_data = new bool[row * col]();
-    if(m_data) {
-        m_rows = row;
-        m_cols = col;
-        init();
-        return 0;
-    }
-    else {
-        throw std::bad_alloc();
-        return -1;
-    }
+    delete[] m_data;
+    m_data = data;
+    m_rows = row;
+    m_cols = col;
+    return 0;
 }
 
 unsigned long QwtIndPlotMarker::Matrix::rows() const {
@@ -118,7 +118,9 @@ void QwtIndPlotMarker::Matrix::setCanvasId(uintptr_t vcanvasId){
     m_canvasId = vcanvasId;
 }
 void QwtIndPlotMarker::Matrix::set(unsigned long row, unsigned long col, bool value) {
-    m_data[m_rows*row+col] = value;
+    if (row >= m_rows || col >= m_cols || !m_data)
+        throw std::out_of_range("set(): invalid index for m_data");
+    m_data[m_cols*row+col] = value;
 }
 
 void QwtIndPlotMarker::Matrix::drawnAt(unsigned long row, unsigned long col, unsigned long ysize, unsigned long xsize){
@@ -440,4 +442,3 @@ int QwtIndPlotMarker::spacingY() const
 void QwtIndPlotMarker::resetDrawnLabels(){
     m_drawnPixels->init();
 }
-

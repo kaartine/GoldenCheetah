@@ -1681,23 +1681,34 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### MEM-019: Indented plot marker starts and copies its matrix from indeterminate state
 
-- Status: OPEN
-- Code: `src/Charts/IndendPlotMarker.cpp:25`,
-  `src/Charts/IndendPlotMarker.cpp:36`,
-  `src/Charts/IndendPlotMarker.cpp:224`, and
-  `src/Charts/IndendPlotMarker.h:85`
+- Status: FIXED
+- Code: `src/Charts/IndendPlotMarker.cpp:26`,
+  `src/Charts/IndendPlotMarker.cpp:39`,
+  `src/Charts/IndendPlotMarker.cpp:50`,
+  `src/Charts/IndendPlotMarker.cpp:89`,
+  `src/Charts/IndendPlotMarker.cpp:97`,
+  `src/Charts/IndendPlotMarker.cpp:120`, and
+  `src/Charts/IndendPlotMarker.h:88`
 - Impact: The shared marker matrix constructor leaves `m_canvasId`
   uninitialized and the first label draw reads it. Its public copy constructor
   also compares uninitialized dimensions and can pass an uninitialized
   `m_data` pointer to `delete[]` through `resize()`. No copy call exists in the
   current tree, but the first-draw read is active and the callable copy path is
   immediate undefined behavior.
-- Evidence: GCC 13 reports `m_rows` used uninitialized in the copy constructor;
-  source tracing additionally finds the reachable uninitialized canvas ID.
-- Test: Draw the first marker under MSan, then copy a populated matrix through
-  a focused test hook under ASan/MSan and verify independent storage.
-- Fix direction: Initialize every member in the normal constructor and either
-  delete the unused copy operations or implement a complete deep copy.
+- Test-first evidence: A focused test constructed the matrix in `0xa5`-filled
+  storage and observed a nonzero initial canvas identity. Copy construction in
+  equally poisoned storage then crashed with `SIGSEGV`. A rectangular matrix
+  exposed the row-stride indexing error, and copy assignment first lost the
+  expected pixel before aborting on a double free.
+- Resolution: Constructors now initialize every member, and the complete Rule
+  of Three performs independent, canvas-preserving deep copies without reading
+  destination storage. Assignment and resize allocate before replacing owned
+  storage, self-assignment is harmless, reset restores the canvas identity, and
+  checked writes use the column stride.
+- Verification: All 7 focused cases pass normally and under
+  ASan/UBSan/LSan with no sanitizer report. A clean GCC 13 release build has 0
+  errors and emits no `IndendPlotMarker` warning, and the complete release
+  matrix passes 72 suites and 2,448 tests (0 failed, skipped, or blacklisted).
 
 ### BLE-006: Kinetic InRide UUID fallback violates aliasing and alignment
 
@@ -2610,15 +2621,16 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 - Status: OPEN
 - Code: release qmake configuration and CI
-- Impact: The clean MEM-018 release build succeeds with 161 warnings from
+- Impact: The clean MEM-019 release build succeeds with 160 warnings from
   project, generated, vendored, and toolchain code. Genuine findings
-  (MEM-019, BLE-006, and GUI-003) appear beside false positives and intentional
+  (BLE-006 and GUI-003) appear beside false positives and intentional
   fallthroughs, making regressions easy to miss.
-- Evidence: Removing MEM-018 reduced the clean count from 162 to 161 without
-  any automated budget check. Remaining project warnings include implicit
-  fallthrough in `GenericLegend.cpp` and `RideMetadata.cpp`, Qt-macro control
-  flow in `Perspective.cpp`, declaration style in `Route.cpp`, and an enum
-  conversion in `FitRideFile.cpp`.
+- Evidence: Removing MEM-018 reduced the clean count from 162 to 161, and
+  fixing MEM-019 reduced it to 160, without any automated budget check.
+  Remaining project warnings include implicit fallthrough in
+  `GenericLegend.cpp` and `RideMetadata.cpp`, Qt-macro control flow in
+  `Perspective.cpp`, declaration style in `Route.cpp`, and an enum conversion
+  in `FitRideFile.cpp`.
 - Test: Classify the current warning set by ownership and compiler version,
   then fail CI on any new project warning and progressively lower the baseline.
 - Fix direction: Make project-owned targets warning-clean with explicit control
@@ -2696,19 +2708,19 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The complete containerized release matrix after MEM-018 passes:
+The complete containerized release matrix after MEM-019 passes:
 
-- 71 QtTest suites
-- 2,441 passed
+- 72 QtTest suites
+- 2,448 passed
 - 0 failed, skipped, or blacklisted
 - Qt 6.8.3 on Ubuntu 24.04
 
 The registered matrix includes the AppImage packaging consistency test and the
 32-case Strava OAuth policy suite. Production AppImages are packaged from
-committed source only after this matrix, and the predecessor remains available
-as the rollback image. The current image reports commit `ae408e6`, configured
-Strava OAuth, and SHA-256
-`168c22a6a978d7056579a002b5d0884155aa11a76b4f4e58748de05a4b22ac69`.
+committed source only after this matrix, the predecessor remains available as
+the rollback image, and the local sidecar records the packaged commit and
+SHA-256 without making repository documentation depend on local artifact
+state.
 
 PARSE-005's 126 focused tests and the related 11 RideFile ownership tests also
 pass under strict ASan/UBSan/LSan with leak detection. Earlier fixed
