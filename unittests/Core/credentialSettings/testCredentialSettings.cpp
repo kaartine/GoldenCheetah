@@ -162,6 +162,7 @@ private slots:
     void writesAndDeletesNeverTouchIni();
     void failedMigrationIsRetriedWithoutCredentialLoss();
     void failedNewCredentialWriteIsMemoryOnly();
+    void checkedCredentialWriteReportsPersistence();
     void failedReplacementPreservesLegacyCredential();
     void failedDeleteIsRetriedWithoutCredentialResurrection();
     void persistedCacheScrubsDuplicatePlaintext();
@@ -174,6 +175,7 @@ private slots:
     void scopeCreationFailsClosedWhenItCannotPersist();
     void migratePlaintextCoversConfiguredCredentials();
     void gsettingsRoutesCredentialsToVault();
+    void gsettingsCheckedCredentialWriteReportsPersistence();
     void newFormatMigrationScrubsLegacyCredential();
     void newFormatFailedMigrationIsRetriedWithoutCredentialLoss();
     void preInitializationMigrationKeepsAthleteScope();
@@ -471,6 +473,42 @@ void TestCredentialSettings::failedNewCredentialWriteIsMemoryOnly()
                  &ini, scope, GC_NOKIA_REFRESH_TOKEN,
                  plainKey(GC_NOKIA_REFRESH_TOKEN), QStringLiteral("missing")),
              QVariant(QStringLiteral("missing")));
+}
+
+void TestCredentialSettings::checkedCredentialWriteReportsPersistence()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString path = temporary.filePath(QStringLiteral("private.ini"));
+    QSettings ini(path, QSettings::IniFormat);
+    const QString scope = CredentialSettings::ensureScopeId(
+        &ini, QStringLiteral("credential_store/id"));
+    const QString sentinel =
+        QStringLiteral("checked-refresh-token");
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->failWrites = true;
+    CredentialSettings credentials(fakeStore(state));
+    QVERIFY(!credentials.setValueChecked(
+        &ini, scope, GC_STRAVA_REFRESH_TOKEN,
+        plainKey(GC_STRAVA_REFRESH_TOKEN), sentinel));
+    QCOMPARE(credentials.value(
+                 &ini, scope, GC_STRAVA_REFRESH_TOKEN,
+                 plainKey(GC_STRAVA_REFRESH_TOKEN),
+                 QStringLiteral("missing")),
+             QVariant(sentinel));
+
+    state->failWrites = false;
+    QVERIFY(credentials.setValueChecked(
+        &ini, scope, GC_STRAVA_REFRESH_TOKEN,
+        plainKey(GC_STRAVA_REFRESH_TOKEN), sentinel));
+
+    CredentialSettings nextSession(fakeStore(state));
+    QCOMPARE(nextSession.value(
+                 &ini, scope, GC_STRAVA_REFRESH_TOKEN,
+                 plainKey(GC_STRAVA_REFRESH_TOKEN),
+                 QStringLiteral("missing")),
+             QVariant(sentinel));
 }
 
 void TestCredentialSettings::failedReplacementPreservesLegacyCredential()
@@ -854,6 +892,41 @@ void TestCredentialSettings::gsettingsRoutesCredentialsToVault()
     QVERIFY(persisted.contains("ordinary-user"));
     QCOMPARE(factoryState()->values.size(), 4);
     verifyOwnerOnlyPermissions(path);
+}
+
+void TestCredentialSettings::
+gsettingsCheckedCredentialWriteReportsPersistence()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString path = temporary.filePath(QStringLiteral("legacy.ini"));
+    const QString athlete = QStringLiteral("Athlete");
+    const QString sentinel =
+        QStringLiteral("checked-gsettings-refresh-token");
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    factoryState()->failWrites = true;
+    {
+        GSettings settings(path, QSettings::IniFormat);
+        QVERIFY(!settings.setCValueChecked(
+            athlete, GC_STRAVA_REFRESH_TOKEN, sentinel));
+        QCOMPARE(settings.cvalue(
+                     athlete, GC_STRAVA_REFRESH_TOKEN,
+                     QStringLiteral("missing")).toString(),
+                 sentinel);
+
+        factoryState()->failWrites = false;
+        QVERIFY(settings.setCValueChecked(
+            athlete, GC_STRAVA_REFRESH_TOKEN, sentinel));
+    }
+
+    {
+        GSettings nextSession(path, QSettings::IniFormat);
+        QCOMPARE(nextSession.cvalue(
+                     athlete, GC_STRAVA_REFRESH_TOKEN,
+                     QStringLiteral("missing")).toString(),
+                 sentinel);
+    }
 }
 
 void TestCredentialSettings::newFormatMigrationScrubsLegacyCredential()
