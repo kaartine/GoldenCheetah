@@ -1439,7 +1439,9 @@ CloudServiceSyncDialog::CloudServiceSyncDialog(Context *context, CloudService *s
 
     // notification when upload/download completes
     connect (store, SIGNAL(writeComplete(QString,QString)), this, SLOT(completedWrite(QString,QString)));
-    connect (store, SIGNAL(readComplete(QByteArray*,QString,QString)), this, SLOT(completedRead(QByteArray*,QString,QString)));
+    connect(
+        store, &CloudService::readComplete,
+        this, &CloudServiceSyncDialog::completedRead);
 
     // combo box
     athleteCombo = new QComboBox(this);
@@ -2208,8 +2210,13 @@ CloudServiceSyncDialog::downloadNext()
 }
 
 void
-CloudServiceSyncDialog::completedRead(QByteArray *data, QString name, QString /*message*/)
+CloudServiceSyncDialog::completedRead(
+        QByteArray *data,
+        QString name,
+        QString message,
+        bool success)
 {
+    std::unique_ptr<QByteArray> ownedData(data);
     QTreeWidget *which = sync ? rideListSync : rideListDown;
     int col = sync ? 7 : 5;
 
@@ -2220,18 +2227,28 @@ CloudServiceSyncDialog::completedRead(QByteArray *data, QString name, QString /*
         return;
     }
 
+    progressBar->setValue(++downloadcounter);
+    QTreeWidgetItem *curr =
+            which->invisibleRootItem()->child(listindex - 1);
+    if (!success || !ownedData) {
+        curr->setText(
+            col,
+            message.isEmpty() ? tr("Download failed.") : message);
+        QApplication::processEvents();
+        if (sync)
+            syncNext();
+        else
+            downloadNext();
+        return;
+    }
+
     // uncompress and parse, note the filename is passed and may be
     // different to what we asked for (sometimes the data is converted
     // from one file format to another).
     QStringList errors;
-    RideFile *ride = store->uncompressRide(data, name, errors);
+    RideFile *ride =
+            store->uncompressRide(ownedData.get(), name, errors);
 
-    // was allocated in before calling readfile
-    delete data;
-
-    progressBar->setValue(++downloadcounter);
-
-    QTreeWidgetItem *curr = which->invisibleRootItem()->child(listindex-1);
     if (ride) {
         if (saveRide(ride, errors) == true) {
             curr->setText(col, tr("Saved"));
@@ -2692,8 +2709,9 @@ public:
                 [this](
                         QByteArray *data,
                         const QString &name,
-                        const QString &message) {
-                    readCompleted(data, name, message);
+                        const QString &message,
+                        bool success) {
+                    readCompleted(data, name, message, success);
                 });
 
             QStringList errors;
@@ -2925,9 +2943,9 @@ private:
     void readCompleted(
             QByteArray *data,
             const QString &name,
-            const QString &message)
+            const QString &message,
+            bool success)
     {
-        Q_UNUSED(message)
         if (!running || isCancelled()) return;
 
         const auto requestIt = requestsByData.constFind(data);
@@ -2939,17 +2957,24 @@ private:
         DownloadRequest *request = requestIt.value();
         if (request->delivered) return;
         request->delivered = true;
-        const CloudService::CompressionType compression =
-                request->provider->downloadCompression;
-        QMap<QString, QString> expectedSettings;
-        QMap<QString, QString> settingDefaults;
-        providerSettingsSnapshot(
-            request->provider, expectedSettings, settingDefaults);
-        QByteArray payload = std::move(*data);
-        postDownloaded(
-            std::move(payload), name, compression,
-            std::move(expectedSettings),
-            std::move(settingDefaults));
+        if (success) {
+            const CloudService::CompressionType compression =
+                    request->provider->downloadCompression;
+            QMap<QString, QString> expectedSettings;
+            QMap<QString, QString> settingDefaults;
+            providerSettingsSnapshot(
+                request->provider, expectedSettings, settingDefaults);
+            QByteArray payload = std::move(*data);
+            postDownloaded(
+                std::move(payload), name, compression,
+                std::move(expectedSettings),
+                std::move(settingDefaults));
+        } else {
+            qWarning() << "Autodownload:" << request->provider->uiName()
+                       << (message.isEmpty()
+                               ? tr("Download failed.")
+                               : message);
+        }
 
         if (activeRequest == request) {
             timeoutTimer.stop();

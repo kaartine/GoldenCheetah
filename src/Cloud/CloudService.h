@@ -225,7 +225,16 @@ class CloudService : public QObject {
         virtual bool readFile(QByteArray *data, QString remotename, QString remoteid) {
             Q_UNUSED(data); Q_UNUSED(remotename); Q_UNUSED(remoteid); return false;
         }
-        void notifyReadComplete(QByteArray *data, QString name, QString message) { emit readComplete(data,name,message); }
+        void notifyReadComplete(
+                QByteArray *data,
+                QString name,
+                QString message,
+                bool success = true)
+        {
+            constexpr qsizetype MaximumMessageLength = 1024;
+            emit readComplete(
+                data, name, message.left(MaximumMessageLength), success);
+        }
 
         // Stop in-flight operations without deleting the service.
         virtual void abortRequests();
@@ -308,7 +317,8 @@ class CloudService : public QObject {
 
     signals:
         void writeComplete(QString id, QString message);
-        void readComplete(QByteArray *data, QString id, QString message);
+        void readComplete(
+            QByteArray *data, QString id, QString message, bool success);
 
     protected:
 
@@ -438,7 +448,8 @@ class CloudServiceSyncDialog : public QDialog
         void selectAllUpChanged(int);
         void selectAllSyncChanged(int);
 
-        void completedRead(QByteArray *data, QString name, QString message);
+        void completedRead(
+            QByteArray *data, QString name, QString message, bool success);
         void completedWrite(QString name,QString message);
     private:
         Context *context;
