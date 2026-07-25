@@ -20,7 +20,9 @@
 #include "Settings.h"
 #include "Units.h"
 #include "Colors.h"
+#include "FixGPSSmoothingSafety.h"
 #include "HelpWhatsThis.h"
+#include <array>
 #include <algorithm>
 #include <QVector>
 #include <QFormLayout>
@@ -29,6 +31,7 @@
 #include "GeometricTools_BSplineCurve.h"
 
 using namespace gte;
+using FixGPSSmoothingSafety::SourceIndexes;
 
 struct AltitudeSmoothingStats
 {
@@ -48,7 +51,9 @@ struct AltitudeSmoothingStats
     }
 };
 
-bool GatherForAltitudeSmoothing(const RideFile *ride, std::vector <Vector2<double>> &controls);
+bool GatherForAltitudeSmoothing(const RideFile *ride,
+                                std::vector<Vector2<double>> &controls,
+                                SourceIndexes &sourceIndexes);
 bool smoothAltitude(const std::vector<Vector2<double>> &inControls, unsigned degree0, double outlierCriteria, unsigned degree1, std::vector<Vector2<double>> & out, AltitudeSmoothingStats &stats);
 
 struct RouteSmoothingStats
@@ -65,7 +70,12 @@ struct RouteSmoothingStats
     }
 };
 
-bool GatherForRouteSmoothing(const RideFile * ride, std::vector<Vector4<double>> &controls, const std::vector<Vector2<double>> smoothedAltitudes);
+bool GatherForRouteSmoothing(
+    const RideFile *ride,
+    std::vector<Vector4<double>> &controls,
+    const std::vector<Vector2<double>> &smoothedAltitudes,
+    const SourceIndexes &smoothedAltitudeSourceIndexes,
+    SourceIndexes &sourceIndexes);
 bool smoothRoute(const std::vector<Vector4<double>> &inControls, unsigned degree0, double outlierCriteria, unsigned degree1, std::vector<Vector4<double>> & out, RouteSmoothingStats &stats);
 
 void ComputeRideFileStats(const RideFile * ride, AltitudeSmoothingStats & stats)
@@ -178,6 +188,7 @@ class FixGPSConfig : public DataProcessorConfig
                 unsigned outlierCount = 0;
 
                 std::vector<Vector2<double>> inControls2, outControls2;
+                SourceIndexes altitudeSourceIndexes;
                 bool fAltitudeSmoothingSuccess = false;
 
                 bool fDoSmoothAltitude = doSmoothAltitude->checkState();
@@ -189,7 +200,8 @@ class FixGPSConfig : public DataProcessorConfig
                     double outlierCriteria = outlierSpinBox->value() / 100.;
 
                     // Test and report effectiveness of smoothing but do not apply changes to ride file.
-                    bool fGathered = GatherForAltitudeSmoothing(ride, inControls2);
+                    bool fGathered = GatherForAltitudeSmoothing(
+                        ride, inControls2, altitudeSourceIndexes);
                     if (fGathered) {
                         fAltitudeSmoothingSuccess = smoothAltitude(inControls2, degree0, outlierCriteria, degree1, outControls2, altitudeSmoothingStats);
                     }
@@ -212,8 +224,11 @@ class FixGPSConfig : public DataProcessorConfig
 
                     // Test and report effectiveness of smoothing but do not apply changes to ride file.
                     std::vector<Vector4<double>> inControls4, outControls4;
+                    SourceIndexes routeSourceIndexes;
 
-                    bool fGathered = GatherForRouteSmoothing(ride, inControls4, outControls2);
+                    bool fGathered = GatherForRouteSmoothing(
+                        ride, inControls4, outControls2,
+                        altitudeSourceIndexes, routeSourceIndexes);
                     if (fGathered) {
                         bool fRouteSmoothingSuccess = smoothRoute(inControls4, degree0Route, outlierCriteriaRoute, degree1Route, outControls4, routeSmoothingStats);
                         if (fRouteSmoothingSuccess) {
@@ -692,9 +707,9 @@ double EvalAtTargetDistance(T_Curve &curve, double targetDistance, double epsilo
         if (evalCount > 100)
             return achievedPrecision;
 
-        T_Pos evalResults[1 + s_iGradientDegree];
+        std::array<T_Pos, T_Curve::SUP_ORDER> evalResults;
 
-        curve.Evaluate(t, s_iGradientDegree, evalResults);
+        curve.Evaluate(t, s_iGradientDegree, evalResults.data());
 
         pos = evalResults[0];
         achievedPrecision = pos[0] - targetDistance;
@@ -799,34 +814,37 @@ bool InterpolateBSplineCurve(const std::vector<T_Pos> &inControls, std::vector<T
     return true;
 }
 
-bool GatherForAltitudeSmoothing(const RideFile *ride, std::vector < Vector2<double>> &controls)
+bool GatherForAltitudeSmoothing(const RideFile *ride,
+                                std::vector<Vector2<double>> &controls,
+                                SourceIndexes &sourceIndexes)
 {
-    controls.resize(0);
-
     bool fHasAlt = ride && ride->areDataPresent()->alt;
-    if (!fHasAlt)
+    if (!fHasAlt) {
+        controls.clear();
+        sourceIndexes.clear();
         return false;
+    }
 
     // If there is location info then avoid using altitude from invalid locations.
     bool fRequireReasonableGeoloc = ride->areDataPresent()->lat && ride->areDataPresent()->lon;
 
-    // Gather distance/altitude pairs
-    for (int i = 0; i < ride->dataPoints().count(); i++) {
-        const RideFilePoint * pi = (ride->dataPoints()[i]);
+    return FixGPSSmoothingSafety::gatherControls<Vector2<double>>(
+        static_cast<std::size_t>(ride->dataPoints().count()),
+        controls, sourceIndexes,
+        [ride, fRequireReasonableGeoloc](
+            std::size_t sourceIndex, Vector2<double> &control) {
+            const RideFilePoint *pi =
+                ride->dataPoints()[static_cast<int>(sourceIndex)];
+            geolocation geoloc(pi->lat, pi->lon, pi->alt);
+            if (fRequireReasonableGeoloc ?
+                    !geoloc.IsReasonableGeoLocation() :
+                    !geoloc.IsReasonableAltitude()) {
+                return false;
+            }
 
-        geolocation geoloc(pi->lat, pi->lon, pi->alt);
-        if (fRequireReasonableGeoloc) {
-            if (!geoloc.IsReasonableGeoLocation())
-                continue;
-        } else {
-            if (!geoloc.IsReasonableAltitude())
-                continue;
-        }
-
-        controls.push_back({ pi->km, pi->alt });
-    }
-
-    return true;
+            control = {pi->km, pi->alt};
+            return true;
+        });
 }
 
 // Smooth ridefile altitude. Return true if outControls populated, otherwise false.
@@ -836,8 +854,10 @@ bool smoothAltitude(const std::vector<Vector2<double>> &inControls, unsigned deg
 
     outControls.resize(0);
 
-    // Spline undefined if degree is less than 3.
-    if (degree0 < 3) return false;
+    if (!FixGPSSmoothingSafety::hasUsableSplineInput(
+            inControls.size(), degree0)) {
+        return false;
+    }
 
     // First thing, check for monotonaity. This smoothing
     // cannot work if distance can decrease. User should
@@ -861,7 +881,9 @@ bool smoothAltitude(const std::vector<Vector2<double>> &inControls, unsigned deg
     // Gather new altitudes for all incoming distances.
     unsigned evalCount = 0;
     bool fSuccess = InterpolateBSplineCurve<DistanceAltitudeBSplineCurve, Vector2<double>>(inControls, outControls, curve, evalCount);
-    if (!fSuccess) {
+    if (!fSuccess ||
+        !FixGPSSmoothingSafety::hasAlignedControlOutput(
+            inControls.size(), outControls.size())) {
         // Translation failed to converge.
         return false;
     }
@@ -894,7 +916,9 @@ bool smoothAltitude(const std::vector<Vector2<double>> &inControls, unsigned deg
 
             // Gather new altitudes for all incoming distances using original inControls sample distances.
             bool fSuccess2 = InterpolateBSplineCurve<DistanceAltitudeBSplineCurve, Vector2<double>>(inControls, outControls, curve2, evalCount);
-            if (!fSuccess2) {
+            if (!fSuccess2 ||
+                !FixGPSSmoothingSafety::hasAlignedControlOutput(
+                    inControls.size(), outControls.size())) {
                 // Translation failed to converge.
                 return false;
             }
@@ -934,7 +958,9 @@ bool smoothAltitude(const std::vector<Vector2<double>> &inControls, unsigned deg
     return true;
 }
 
-double ComputeLocationResultStdDev(std::vector<Vector4<double>> inControls, std::vector<Vector4<double>> outControls)
+double ComputeLocationResultStdDev(
+    const std::vector<Vector4<double>> &inControls,
+    const std::vector<Vector4<double>> &outControls)
 {
     double var = 0;
     for (int i = 0; i < outControls.size(); i++) {
@@ -949,38 +975,59 @@ double ComputeLocationResultStdDev(std::vector<Vector4<double>> inControls, std:
     return sqrt(var);
 }
 
-bool GatherForRouteSmoothing(const RideFile * ride, std::vector<Vector4<double>> &controls, const std::vector<Vector2<double>> smoothedAltitudes)
+bool GatherForRouteSmoothing(
+    const RideFile *ride,
+    std::vector<Vector4<double>> &controls,
+    const std::vector<Vector2<double>> &smoothedAltitudes,
+    const SourceIndexes &smoothedAltitudeSourceIndexes,
+    SourceIndexes &sourceIndexes)
 {
     bool fHasLoc = ride && ride->areDataPresent()->lat && ride->areDataPresent()->lon && ride->areDataPresent()->alt;
-    if (!fHasLoc)
+    if (!fHasLoc) {
+        controls.clear();
+        sourceIndexes.clear();
         return false;
-
-    // The control index for altitude and route may not be the ride point index because ride
-    // contains invalid locations.  Smoothed altitude and smoothed route have synchronized point
-    // indicies because they only access reasonable geolocations. 
-    bool fUseSmoothedAltitudes = smoothedAltitudes.size() > 0;
-    int gatherIndex = 0; // gatherIndex for indexing into array of smoothed altitudes
-
-    // Convert geo to xyz and gather {distance,x,y,z} quads
-    for (int i = 0; i < ride->dataPoints().count(); i++) {
-        const RideFilePoint * pi = (ride->dataPoints()[i]);
-
-        double lat = pi->lat;
-        double lon = pi->lon;
-        double alt = (fUseSmoothedAltitudes) ? smoothedAltitudes[gatherIndex][1] : pi->alt;
-
-        geolocation geoloc(lat, lon, alt);
-
-        if (!geoloc.IsReasonableGeoLocation())
-            continue;
-
-        xyz c = geoloc.toxyz();
-
-        controls.push_back({ pi->km, c.x(), c.y(), c.z() });
-
-        gatherIndex++;
     }
-    return true;
+
+    const std::size_t sourceCount =
+        static_cast<std::size_t>(ride->dataPoints().count());
+    if (!smoothedAltitudes.empty()) {
+        return FixGPSSmoothingSafety::gatherMappedControls(
+            sourceCount, smoothedAltitudeSourceIndexes, smoothedAltitudes,
+            controls, sourceIndexes,
+            [ride](std::size_t sourceIndex,
+                   const Vector2<double> &smoothedAltitude,
+                   Vector4<double> &control) {
+                const RideFilePoint *pi =
+                    ride->dataPoints()[static_cast<int>(sourceIndex)];
+                geolocation geoloc(
+                    pi->lat, pi->lon, smoothedAltitude[1]);
+                if (!geoloc.IsReasonableGeoLocation()) {
+                    return false;
+                }
+
+                xyz converted = geoloc.toxyz();
+                control = {
+                    pi->km, converted.x(), converted.y(), converted.z()};
+                return true;
+            });
+    }
+
+    return FixGPSSmoothingSafety::gatherControls<Vector4<double>>(
+        sourceCount, controls, sourceIndexes,
+        [ride](std::size_t sourceIndex, Vector4<double> &control) {
+            const RideFilePoint *pi =
+                ride->dataPoints()[static_cast<int>(sourceIndex)];
+            geolocation geoloc(pi->lat, pi->lon, pi->alt);
+            if (!geoloc.IsReasonableGeoLocation()) {
+                return false;
+            }
+
+            xyz converted = geoloc.toxyz();
+            control = {
+                pi->km, converted.x(), converted.y(), converted.z()};
+            return true;
+        });
 }
 
 // Smooth ridefile location data. Return true if outControls populated, otherwise false.
@@ -992,7 +1039,10 @@ bool smoothRoute(const std::vector<Vector4<double>> &inControls, unsigned degree
 
     outControls.resize(0);
 
-    if (degree0 < 3) return false;
+    if (!FixGPSSmoothingSafety::hasUsableSplineInput(
+            inControls.size(), degree0)) {
+        return false;
+    }
 
     // Create b-spline curve of desired degree.
     degree0 = std::min(degree0, (unsigned)(inControls.size() - 1));
@@ -1003,7 +1053,9 @@ bool smoothRoute(const std::vector<Vector4<double>> &inControls, unsigned degree
     // Gather new altitudes for all incoming distances.
     unsigned evalCount = 0;
     bool fSuccess = InterpolateBSplineCurve<DistanceXYZBSplineCurve, Vector4<double>>(inControls, outControls, curve, evalCount);
-    if (!fSuccess) {
+    if (!fSuccess ||
+        !FixGPSSmoothingSafety::hasAlignedControlOutput(
+            inControls.size(), outControls.size())) {
         // Translation failed to converge.
         return false;
     }
@@ -1040,7 +1092,9 @@ bool smoothRoute(const std::vector<Vector4<double>> &inControls, unsigned degree
 
             // Gather new altitudes for all incoming distances using original inControls sample distances.
             bool fSuccess2 = InterpolateBSplineCurve<DistanceXYZBSplineCurve, Vector4<double>>(inControls, outControls, curve2, evalCount);
-            if (!fSuccess2) {
+            if (!fSuccess2 ||
+                !FixGPSSmoothingSafety::hasAlignedControlOutput(
+                    inControls.size(), outControls.size())) {
                 // Translation failed to converge.
                 return false;
             }
@@ -1177,20 +1231,31 @@ bool FixGPS::postProcess(RideFile *ride, DataProcessorConfig *config, QString op
     }
 
     std::vector<Vector2<double>> inControls2, outControls2;
+    SourceIndexes altitudeSourceIndexes;
     if (fDoSmoothAltitude) {
         ride->command->startLUW("Smooth Altitude");
 
-        bool fHaveControls = GatherForAltitudeSmoothing(ride, inControls2);
+        bool fHaveControls = GatherForAltitudeSmoothing(
+            ride, inControls2, altitudeSourceIndexes);
         if (fHaveControls) {
             AltitudeSmoothingStats altitudeSmoothingStats;
             smoothingSuccess = smoothAltitude(inControls2, degree0, outlierCriteria, degree1, outControls2, altitudeSmoothingStats);
             if (smoothingSuccess) {
-                // Apply smoothed altitudes onto ride file
-                for (int i = 0; i < ride->dataPoints().count(); i++) {
-                    ride->command->setPointValue(i, RideFile::alt, outControls2[i][1]);
+                smoothingSuccess =
+                    FixGPSSmoothingSafety::applyMappedOutputs(
+                        static_cast<std::size_t>(
+                            ride->dataPoints().count()),
+                        altitudeSourceIndexes, outControls2,
+                        [ride](std::size_t sourceIndex,
+                               const Vector2<double> &output) {
+                            ride->command->setPointValue(
+                                static_cast<int>(sourceIndex),
+                                RideFile::alt, output[1]);
+                        });
+                if (smoothingSuccess) {
+                    // Altitude has been stomped - recompute slope.
+                    fInvalidateSlope = true;
                 }
-                // Altitude has been stomped - recompute slope.
-                fInvalidateSlope = true;
             }
         }
 
@@ -1201,22 +1266,37 @@ bool FixGPS::postProcess(RideFile *ride, DataProcessorConfig *config, QString op
         ride->command->startLUW("Smooth Route");
 
         std::vector<Vector4<double>> inControls4, outControls4;
-        bool fGathered = GatherForRouteSmoothing(ride, inControls4, outControls2);
+        SourceIndexes routeSourceIndexes;
+        bool fGathered = GatherForRouteSmoothing(
+            ride, inControls4, outControls2, altitudeSourceIndexes,
+            routeSourceIndexes);
         if (fGathered) {
             RouteSmoothingStats routeSmoothingStats;
             smoothingSuccess = smoothRoute(inControls4, degree0Route, outlierCriteriaRoute, degree1Route, outControls4, routeSmoothingStats);
             if (smoothingSuccess) {
-                // Apply smoothed location points onto ride file
-                for (int i = 0; i < ride->dataPoints().count(); i++) {
-                    xyz loc(outControls4[i][1], outControls4[i][2], outControls4[i][3]);
-                    geolocation geo = loc.togeolocation();
-
-                    ride->command->setPointValue(i, RideFile::lat, geo.Lat());
-                    ride->command->setPointValue(i, RideFile::lon, geo.Long());
-                    ride->command->setPointValue(i, RideFile::alt, geo.Alt());
+                smoothingSuccess =
+                    FixGPSSmoothingSafety::applyMappedOutputs(
+                        static_cast<std::size_t>(
+                            ride->dataPoints().count()),
+                        routeSourceIndexes, outControls4,
+                        [ride](std::size_t sourceIndex,
+                               const Vector4<double> &output) {
+                            xyz location(
+                                output[1], output[2], output[3]);
+                            geolocation geo = location.togeolocation();
+                            const int rideIndex =
+                                static_cast<int>(sourceIndex);
+                            ride->command->setPointValue(
+                                rideIndex, RideFile::lat, geo.Lat());
+                            ride->command->setPointValue(
+                                rideIndex, RideFile::lon, geo.Long());
+                            ride->command->setPointValue(
+                                rideIndex, RideFile::alt, geo.Alt());
+                        });
+                if (smoothingSuccess) {
+                    // Altitude has been stomped - recompute slope.
+                    fInvalidateSlope = true;
                 }
-                // Altitude has been stomped - recompute slope
-                fInvalidateSlope = true;
             }
         }
 

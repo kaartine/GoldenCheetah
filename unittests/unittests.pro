@@ -36,6 +36,7 @@ equals(GC_UNITTESTS, active) {
 			   FileIO/cpCsvImport \
 			   FileIO/fitImportIntegrity \
 			   FileIO/fitReaderIntegrity \
+			   FileIO/fixGpsSmoothingSafety \
 			   FileIO/jsonImportIntegrity \
 			   FileIO/powerTapBounds \
 			   FileIO/rideFileOwnership \

@@ -1008,10 +1008,11 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### MEM-018: GPS smoothing loses point indexes and reads compacted output out of bounds
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/FileIO/FixGPS.cpp` (`GatherForAltitudeSmoothing`,
   `GatherForRouteSmoothing`, `FixGPSConfig::testClicked`, and
-  `FixGPS::postProcess`)
+  `FixGPS::postProcess`), `src/FileIO/FixGPSSmoothingSafety.h`, and
+  `unittests/FileIO/fixGpsSmoothingSafety/`
 - Impact: The gather functions skip unreasonable locations but retain no map
   from each compacted spline control to its source ride point. Both apply paths
   subsequently index the compacted altitude or route output once for every
@@ -1021,19 +1022,24 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   rejects the current location, so trailing invalid points can overrun that
   input. Empty filtered control sets can be reported as successfully smoothed
   and are then indexed by the preview or apply path.
-- Evidence: A clean GCC 13 `-O2` build reports an array-bounds write in the
-  inlined B-spline evaluation reached from `FixGPS.cpp:697`. Independent source
-  tracing shows the directly reachable compacted-vector mismatches above; the
-  vendored B-spline warning itself still requires a focused reproducer because
-  the instantiated curve marks itself constructed.
-- Regression test: Exercise the production smoothing path with all-invalid,
-  leading, middle, and trailing invalid locations under ASan/UBSan. Require
-  bounded failure for too few controls and exact source-index preservation for
-  every retained point.
-- Fix direction: Carry explicit source indexes alongside altitude and route
-  controls, validate all input/output cardinalities before indexing, apply
-  results only through those maps, and reject control sets too small for the
-  requested spline.
+- Test-first evidence: The focused target first failed to compile because the
+  production safety header did not exist. Its completed ten cases filter
+  leading, middle, and trailing source entries, reject an all-filtered input,
+  preserve indexes through a second mapped filter, reject short, duplicate,
+  descending, out-of-range, and cardinality-mismatched maps before any write,
+  and require at least four controls for a cubic spline.
+- Resolution: Altitude and route controls now carry strictly increasing source
+  indexes through preview, both spline passes, and application. Smoothed
+  altitudes can feed route controls only through a validated aligned map, and
+  output is applied only after its complete cardinality and index map pass.
+  Empty and sub-cubic inputs fail before `size() - 1`, division, or endpoint
+  access. B-spline evaluation allocates the library's full four-entry jet
+  rather than a two-entry array that violated its documented output contract.
+- Verification: All 10 focused cases pass normally and under strict
+  ASan/UBSan/LSan with no sanitizer report. A fresh GCC 13 `-O2` production
+  build emits no `FixGPS` or B-spline array-bounds warning, and the complete
+  release matrix passes 71 suites and 2,441 tests (0 failed, 0 skipped, 0
+  blacklisted).
 
 ### THREAD-003: Python chart execution races GUI object lifetime
 

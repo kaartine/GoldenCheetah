@@ -633,7 +633,7 @@ HEADERS += Core/Athlete.h Core/ConfigFlags.h Core/Context.h Core/DataFilter.h Co
 HEADERS += FileIO/ArchiveFile.h FileIO/AtomicFileWriter.h FileIO/AthleteBackup.h FileIO/AthleteBackupArchive.h FileIO/Bin2RideFile.h FileIO/BinRideFile.h FileIO/CompressedActivityFile.h FileIO/CpCsvImport.h \
            FileIO/CommPort.h \
            FileIO/Computrainer3dpFile.h FileIO/CsvRideFile.h FileIO/DataProcessor.h FileIO/Device.h  \
-           FileIO/FitFileIntegrity.h FileIO/FitlogParser.h FileIO/FitlogRideFile.h FileIO/FitRideFile.h FileIO/GcRideFile.h FileIO/GpxParser.h \
+           FileIO/FitFileIntegrity.h FileIO/FitlogParser.h FileIO/FitlogRideFile.h FileIO/FitRideFile.h FileIO/FixGPSSmoothingSafety.h FileIO/GcRideFile.h FileIO/GpxParser.h \
            FileIO/GpxRideFile.h FileIO/JouleDevice.h FileIO/JsonRideFile.h FileIO/LapsEditor.h FileIO/MacroDevice.h \
            FileIO/ManualRideFile.h FileIO/MoxyDevice.h FileIO/PolarRideFile.h \
            FileIO/PowerTapDevice.h FileIO/PowerTapUtil.h FileIO/PwxRideFile.h FileIO/QuarqParser.h FileIO/QuarqRideFile.h \
