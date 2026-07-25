@@ -1677,6 +1677,56 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   against a copied real athlete profile; the logs contained only missing
   translator notices.
 
+### CLOUD-003: Strava HTTP failures can be imported as successful activities
+
+- Status: OPEN
+- Code: `src/Cloud/Strava.cpp:526`, `src/Cloud/Strava.cpp:568`, and
+  `src/Cloud/Strava.cpp:872`
+- Impact: The activity completion slot neither checks the reply error nor the
+  HTTP status before passing the payload to the activity parser and reporting
+  `Completed`. A Strava 401/403 Fault object is valid JSON, so it is converted
+  into an empty activity with an invalid start time and can be offered for
+  import. A failed stream request is silently ignored, which can also make a
+  superficially successful import omit heart rate and other samples.
+- Evidence: `readFileCompleted()` unconditionally calls `prepareResponse()` and
+  `notifyReadComplete()`. `prepareResponse()` accepts every JSON object without
+  requiring activity identity or timestamps, while `addSamples()` returns
+  silently on any network error. Strava documents 401 and 403 Fault responses
+  for failed API requests.
+- Test: Drive production activity and stream completion paths with controlled
+  401, 403, malformed-2xx, and valid replies. No failed payload may be parsed,
+  published, or reported complete; activity and stream failures must retain
+  their actionable authentication or scope error.
+- Fix direction: Validate transport, HTTP status, content type, JSON shape, and
+  required activity fields before conversion. Propagate one bounded,
+  credential-redacted provider error through the existing completion API and
+  clean up every reply and buffer exactly once.
+
+### THREAD-007: Concurrent Strava refreshes race rotating refresh tokens
+
+- Status: OPEN
+- Code: `src/Cloud/Strava.cpp:95` and
+  `src/Cloud/CloudService.cpp:2437`
+- Impact: Every `Strava::open()` refreshes from the instance's current token.
+  Sync, upload, and auto-download can create independent provider clones and
+  exchange the same refresh token concurrently. Strava invalidates an old
+  refresh token as soon as a new one is returned, so one operation can fail or
+  a later-finishing stale transaction can overwrite the newest credentials.
+- Evidence: The refresh path has no process-wide single flight, generation
+  check, or compare-and-swap result publication. The last-refresh setting is
+  written but never consulted. The official Strava OAuth contract requires
+  clients to retain and subsequently use the most recently returned refresh
+  token.
+- Test: Start two controlled `open()` calls with the same input token, complete
+  their fake exchanges in reverse order, and force both success and failure
+  outcomes. Exactly one exchange may run; every waiter must receive the same
+  result, cancellation must not cancel the leader, and only the newest token
+  pair may be persisted.
+- Fix direction: Add an athlete/token-keyed cancellable single-flight refresh
+  coordinator with a short successful-result cache. Publish credentials with a
+  generation-aware transaction and do not report success until the current
+  pair has been accepted for persistence.
+
 ## Medium
 
 ### MEM-019: Indented plot marker starts and copies its matrix from indeterminate state
@@ -2593,6 +2643,160 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   fix deliberately does not recover or publish the credential embedded in an
   official binary.
 
+### CLOUD-004: Strava authorization ignores the scopes actually granted
+
+- Status: OPEN
+- Code: `src/Cloud/OAuthDialog.cpp:137`,
+  `src/Cloud/OAuthCallbackPolicy.h:25`, and
+  `src/Cloud/StravaOAuthPolicy.cpp:313`
+- Impact: GoldenCheetah requests read, private-activity read, and activity-write
+  scopes but stores the tokens and reports full success without checking what
+  the athlete granted. The connection can therefore appear configured while
+  route, private-activity, upload, or stream operations predictably fail.
+- Evidence: Strava permits athletes to deselect requested scopes. Since 23
+  April 2026 its token response explicitly contains the granted scopes, while
+  the local token parser reads only the access and refresh tokens.
+- Test: Cover missing, empty, duplicate, unknown, and reordered space-delimited
+  scope responses, plus a callback that reports a narrower scope. The result
+  must either reject a connection missing required capabilities or persist the
+  granted set and disable only unsupported operations with a clear warning.
+- Fix direction: Parse scopes into a normalized bounded set, define the minimum
+  set per advertised capability, persist the granted set, and make success and
+  feature availability reflect that set.
+
+### CLOUD-005: Strava token exchanges have no timeout or reply cleanup
+
+- Status: OPEN
+- Code: `src/Cloud/OAuthDialog.cpp:472` and
+  `src/Cloud/Strava.cpp:123`
+- Impact: A refresh reply that never finishes holds `Strava::open()` in a
+  nested event loop indefinitely, blocking sync or upload. The interactive
+  authorization request can likewise leave its dialog permanently pending.
+  Completed refresh replies are retained as manager children until the whole
+  provider is destroyed, so repeated opens accumulate network objects.
+- Evidence: Neither token path starts a deadline or aborts a stalled reply.
+  `Strava::open()` also has no `deleteLater()` on success, parse failure, or
+  network failure, despite the repository already providing the bounded
+  `waitForNetworkReply()` helper.
+- Test: Use a reply that never emits `finished()`, explicit interruption, and
+  repeated successful and failed replies. Each request must abort on its
+  deadline, return a distinct timeout/cancellation error, and leave no finished
+  reply children after deferred deletes are processed.
+- Fix direction: Reuse the bounded interruption-aware wait helper for refresh,
+  add a single-shot deadline to interactive exchange, and use one ownership
+  guard that aborts and schedules every reply for deletion on all exits.
+
+### CLOUD-006: Strava Routes bypasses token refresh and blocks indefinitely
+
+- Status: OPEN
+- Code: `src/Train/StravaRoutesDownload.cpp:103`,
+  `src/Train/StravaRoutesDownload.cpp:319`,
+  `src/Train/StravaRoutesDownload.cpp:344`, and
+  `src/Train/StravaRoutesDownload.cpp:437`
+- Impact: Opening the Routes dialog immediately reads the stored access token
+  and performs athlete, route-list, and GPX requests without refreshing it.
+  Strava access tokens expire after six hours, so the feature fails
+  deterministically unless another Strava operation refreshed recently. Every
+  request also waits in an unbounded nested event loop.
+- Evidence: The route path reads `GC_STRAVA_TOKEN` directly and never invokes
+  `Strava::open()` or a shared token provider. Its 401 path is reduced to an
+  imprecise user-ID or network error.
+- Test: With a stale access token and valid rotating refresh token, opening the
+  dialog must refresh once, persist the returned pair, and use the new access
+  token for every paginated and GPX request. Cover 401, 403, timeout,
+  cancellation, and mid-pagination expiry.
+- Fix direction: Route every Strava feature through one bounded valid-token
+  service, centralize authenticated request/error handling, and remove direct
+  credential reads and raw nested waits from the dialog.
+
+### CLOUD-007: Removing Strava locally does not revoke provider authorization
+
+- Status: OPEN
+- Code: `src/Cloud/Strava.cpp:163` and
+  `src/Gui/AthletePages.cpp:143`
+- Impact: Disabling or removing the local service leaves its access and refresh
+  tokens usable and leaves GoldenCheetah authorized in the athlete's Strava
+  account. Users can reasonably believe the integration was disconnected when
+  only a local active flag changed.
+- Evidence: `Strava::close()` is a no-op and the repository contains no
+  Strava deauthorization call. Strava introduced `POST /oauth/revoke` on 1 June
+  2026 and states that it becomes the only supported revocation endpoint on
+  1 June 2027.
+- Test: A confirmed disconnect must send the documented authenticated revoke
+  request. HTTP 200 clears local credentials; timeout or 503 retains recoverable
+  state and reports that remote authorization may still exist.
+- Fix direction: Make disconnect an explicit, confirmable operation, call the
+  new revoke endpoint over verified HTTPS, and clear vault-backed tokens only
+  after success or an explicit local-only override.
+
+### BUILD-010: AppImage credential gate treats absence of one marker as proof
+
+- Status: OPEN
+- Code: `src/Resources/linux/AppImagePackagingSupport.sh:43` and
+  `unittests/Build/appImagePackaging/testAppImagePackaging.sh:85`
+- Impact: Packaging claims Strava OAuth is configured whenever one literal
+  placeholder is absent. A non-GoldenCheetah executable, missing or invalid
+  client ID, empty or generic placeholder secret, stripped Strava code, and
+  Type 1 AppImage can therefore pass the production gate.
+- Evidence: A controlled `/bin/true` fixture and a Type 1 AppImage are both
+  classified as configured. The C++ policy additionally validates numeric ID,
+  nonempty bounded secret, and generic build placeholders, but the shell gate
+  cannot invoke that policy.
+- Test: Reject non-ELF and wrong executables, both compressed AppImage types,
+  invalid IDs, empty/generic placeholders, and binaries without Strava support.
+  Build real configured and placeholder test executables and recheck the
+  extracted executable from the completed AppImage.
+- Fix direction: Add a credential-free runtime build-status command backed by
+  `StravaOAuthPolicy::hasUsableCredentials()`, require the expected application
+  identity, and make both packagers query that command before and after
+  packaging.
+
+### BUILD-011: AppImage metadata is not bound to the binary source revision
+
+- Status: OPEN
+- Code: `src/Resources/linux/AppImagePackagingSupport.sh:91`,
+  `src/Resources/linux/MakeAppImageQt6.sh:110`, and release orchestration
+- Impact: `GC_SOURCE_REVISION` is checked only for hash syntax. Packaging does
+  not prove that the commit exists, the worktree was clean, or the supplied
+  binary was built from that tree. A plausible but incorrect revision can be
+  written beside an unrelated image.
+- Evidence: The local release workflow preserves a mode-0600 sidecar and hashes
+  the transferred AppImage, but the repository packager does not bind the
+  revision to a raw-binary hash or place a verifiable manifest in the image.
+  AppVeyor does not generate the same sidecar.
+- Test: Package a binary from revision A while claiming revision B and require
+  rejection. Verify a manifest containing source revision, raw ELF hash,
+  AppImage hash, toolchain identity, and boolean OAuth status across atomic
+  `latest`/`previous` rotation.
+- Fix direction: Build and package from a clean, identified source export;
+  generate one canonical manifest before deployment, embed the non-recursive
+  fields in the image, and verify source, binary, image, and sidecar hashes at
+  promotion time.
+
+### SEC-013: A desktop AppImage cannot keep its Strava client secret private
+
+- Status: OPEN
+- Code: `src/Core/Secrets.h`, `src/gcconfig.pri`, generated Makefiles, and
+  configured GoldenCheetah executables
+- Impact: A configured native client embeds its reusable application secret in
+  the executable. Anyone receiving that binary can recover the value and
+  impersonate the application, potentially consuming rate limits or causing
+  provider sanctions that affect every user of that client identity.
+- Evidence: The configured value can be matched between the private qmake
+  configuration and the extracted AppImage ELF without source access. Strava's
+  OAuth documentation calls the client secret private, but its current desktop
+  flow still requires it for code exchange and does not document PKCE.
+  Verbose qmake builds can additionally place it in command lines, logs, and
+  generated Makefiles; remote build directories have been restricted to mode
+  0700 as an operational mitigation.
+- Test: Scan release payloads and build artifacts for sentinel credentials,
+  verify restrictive permissions on unavoidable intermediates, and exercise a
+  public-client or brokered flow without a reusable secret in the binary.
+- Fix direction: Prefer a provider-supported PKCE/public-client flow. Until one
+  exists, choose explicitly between per-user registered applications and a
+  narrowly scoped server-side exchange service; neither obfuscating the binary
+  nor keeping only the source define private solves distribution exposure.
+
 ## Low
 
 ### BUILD-008: Qt 6.8.3 reports impossible QVariant inline-storage overflows
@@ -2705,6 +2909,23 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   or end.
 - Fix direction: Publish start before launching the worker, or hold completion
   events until start notification has fully unwound.
+
+### CLOUD-008: Strava API host migration is still duplicated in call sites
+
+- Status: OPEN
+- Code: `src/Cloud/Strava.cpp` and
+  `src/Train/StravaRoutesDownload.cpp`
+- Impact: Strava announced that its API base URL is changing from
+  `https://www.strava.com/api/v3` to `https://api-v3.strava.com`, with the new
+  host available from 4 January 2027. The current host is repeated throughout
+  activity, stream, upload, athlete, route, and GPX paths, making a deadline
+  migration easy to miss or apply inconsistently.
+- Test: Enumerate every Strava API request through one endpoint policy and
+  verify allowed HTTPS hosts, paths, redirects, and a provider-controlled
+  migration switch without changing OAuth hosts.
+- Fix direction: Centralize API URL construction now, retain the documented
+  current host until Strava opens the replacement, then validate and switch in
+  one place before the provider's removal deadline is announced.
 
 ## Verification Baseline
 
