@@ -14,6 +14,7 @@ equals(GC_UNITTESTS, active) {
 			   Cloud/credentialTransportSafety \
 			   Cloud/oauthCallbackPolicy \
 			   Cloud/stravaOAuthPolicy \
+			   Cloud/stravaApiReplyPolicy \
 			   Cloud/openDataEndpointPolicy \
 			   Charts/indendPlotMarkerMatrix \
 			   Charts/mapPageSecurity \
