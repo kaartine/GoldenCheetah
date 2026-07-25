@@ -1006,6 +1006,35 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   same sanitizer settings, including a real three-segment Garmin HRM Swim FIT
   file, with no sanitizer report.
 
+### MEM-018: GPS smoothing loses point indexes and reads compacted output out of bounds
+
+- Status: OPEN
+- Code: `src/FileIO/FixGPS.cpp` (`GatherForAltitudeSmoothing`,
+  `GatherForRouteSmoothing`, `FixGPSConfig::testClicked`, and
+  `FixGPS::postProcess`)
+- Impact: The gather functions skip unreasonable locations but retain no map
+  from each compacted spline control to its source ride point. Both apply paths
+  subsequently index the compacted altitude or route output once for every
+  original ride point. A ride containing an invalid location can therefore
+  read past the output vector or write smoothed data onto the wrong point.
+  Route gathering also reads a compacted smoothed-altitude entry before it
+  rejects the current location, so trailing invalid points can overrun that
+  input. Empty filtered control sets can be reported as successfully smoothed
+  and are then indexed by the preview or apply path.
+- Evidence: A clean GCC 13 `-O2` build reports an array-bounds write in the
+  inlined B-spline evaluation reached from `FixGPS.cpp:697`. Independent source
+  tracing shows the directly reachable compacted-vector mismatches above; the
+  vendored B-spline warning itself still requires a focused reproducer because
+  the instantiated curve marks itself constructed.
+- Regression test: Exercise the production smoothing path with all-invalid,
+  leading, middle, and trailing invalid locations under ASan/UBSan. Require
+  bounded failure for too few controls and exact source-index preservation for
+  every retained point.
+- Fix direction: Carry explicit source indexes alongside altitude and route
+  controls, validate all input/output cardinalities before indexing, apply
+  results only through those maps, and reject control sets too small for the
+  requested spline.
+
 ### THREAD-003: Python chart execution races GUI object lifetime
 
 - Status: FIXED
