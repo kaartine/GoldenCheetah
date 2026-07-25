@@ -34,6 +34,8 @@ equals(GC_UNITTESTS, active) {
 			   FileIO/archiveSecurity \
 			   FileIO/athleteBackupArchive \
 			   FileIO/cpCsvImport \
+			   FileIO/fitImportIntegrity \
+			   FileIO/fitReaderIntegrity \
 			   FileIO/jsonImportIntegrity \
 			   FileIO/powerTapBounds \
 			   FileIO/rideFileOwnership \

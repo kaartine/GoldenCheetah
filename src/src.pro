@@ -633,7 +633,7 @@ HEADERS += Core/Athlete.h Core/ConfigFlags.h Core/Context.h Core/DataFilter.h Co
 HEADERS += FileIO/ArchiveFile.h FileIO/AtomicFileWriter.h FileIO/AthleteBackup.h FileIO/AthleteBackupArchive.h FileIO/Bin2RideFile.h FileIO/BinRideFile.h FileIO/CompressedActivityFile.h FileIO/CpCsvImport.h \
            FileIO/CommPort.h \
            FileIO/Computrainer3dpFile.h FileIO/CsvRideFile.h FileIO/DataProcessor.h FileIO/Device.h  \
-           FileIO/FitlogParser.h FileIO/FitlogRideFile.h FileIO/FitRideFile.h FileIO/GcRideFile.h FileIO/GpxParser.h \
+           FileIO/FitFileIntegrity.h FileIO/FitlogParser.h FileIO/FitlogRideFile.h FileIO/FitRideFile.h FileIO/GcRideFile.h FileIO/GpxParser.h \
            FileIO/GpxRideFile.h FileIO/JouleDevice.h FileIO/JsonRideFile.h FileIO/LapsEditor.h FileIO/MacroDevice.h \
            FileIO/ManualRideFile.h FileIO/MoxyDevice.h FileIO/PolarRideFile.h \
            FileIO/PowerTapDevice.h FileIO/PowerTapUtil.h FileIO/PwxRideFile.h FileIO/QuarqParser.h FileIO/QuarqRideFile.h \
@@ -751,7 +751,7 @@ SOURCES += Core/Athlete.cpp Core/Context.cpp Core/DataFilter.cpp Core/DataFilter
 SOURCES += FileIO/ArchiveFile.cpp FileIO/AthleteBackup.cpp FileIO/AthleteBackupArchive.cpp FileIO/Bin2RideFile.cpp FileIO/BinRideFile.cpp FileIO/CompressedActivityFile.cpp FileIO/CpCsvImport.cpp \
            FileIO/CommPort.cpp \
            FileIO/Computrainer3dpFile.cpp FileIO/CsvRideFile.cpp FileIO/DataProcessor.cpp FileIO/Device.cpp \
-           FileIO/FitlogParser.cpp FileIO/FitlogRideFile.cpp FileIO/FitRideFile.cpp FileIO/FixAeroPod.cpp FileIO/FixDeriveDistance.cpp \
+           FileIO/FitFileIntegrity.cpp FileIO/FitlogParser.cpp FileIO/FitlogRideFile.cpp FileIO/FitRideFile.cpp FileIO/FixAeroPod.cpp FileIO/FixDeriveDistance.cpp \
            FileIO/FixDeriveHeadwind.cpp FileIO/FixDerivePower.cpp FileIO/FixDeriveTorque.cpp FileIO/FixElevation.cpp FileIO/FixLapSwim.cpp \
            FileIO/FixFreewheeling.cpp FileIO/FixGaps.cpp FileIO/FixGPS.cpp FileIO/FixRunningCadence.cpp FileIO/FixRunningPower.cpp \
            FileIO/FixHRSpikes.cpp FileIO/FixMoxy.cpp FileIO/FixPower.cpp FileIO/FixSmO2.cpp FileIO/FixSpeed.cpp FileIO/FixSpikes.cpp \

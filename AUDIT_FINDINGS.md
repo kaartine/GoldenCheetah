@@ -1967,15 +1967,31 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### PARSE-006: FIT integrity and truncation checks are incomplete
 
-- Status: OPEN
-- Code: `src/FileIO/FitRideFile.cpp:4054`,
-  `src/FileIO/FitRideFile.cpp:4074`, `src/FileIO/FitRideFile.cpp:4693`,
-  `src/FileIO/FitRideFile.cpp:4710`
+- Status: FIXED
+- Code: `src/FileIO/FitFileIntegrity.cpp`,
+  `src/FileIO/FitFileIntegrity.h`, and `src/FileIO/FitRideFile.cpp`
 - Impact: Length narrowing, ignored CRCs, and partial recovery can accept corrupt
   files and inconsistent data.
-- Test: Wrong lengths, header/data CRCs, and truncation must fail by default.
-- Fix direction: Checked unsigned arithmetic, physical-size limits, CRC checks,
-  and explicit opt-in partial recovery.
+- Regression evidence: The test-first `fitImportIntegrity` target initially failed
+  because the integrity implementation did not exist. Its independent FIT encoder
+  and CRC implementation then exercised valid 12- and 14-byte headers, optional
+  zero header CRCs, chained files, malformed signatures, wrong declared lengths,
+  invalid header and file CRCs, trailing bytes, every truncation boundary, closed
+  devices, position restoration, record accounting, and the 512 MiB physical-size
+  limit. `fitReaderIntegrity` drives the real parser through valid, corrupt,
+  truncated, semantically overrun, and chained inputs and verifies that failures
+  return no partial `RideFile`.
+- Resolution: A streaming, overflow-safe validator now checks every chained FIT
+  segment before parsing and restores the input position. The parser uses 64-bit
+  record budgets, rejects physical or semantic overruns, reads all chained
+  segments without the binary-unsafe `canReadLine()` gate, and keeps the ride and
+  XData objects under RAII ownership until successful transfer.
+- Verification: `fitImportIntegrity` passes 94/94 and `fitReaderIntegrity` passes
+  8/8 in release and strict ASan/UBSan/LSan configurations. The integrity suite
+  accepts all 41 repository FIT fixtures, including the three-segment Garmin HRM
+  swim fixture. A fresh release build succeeds, the AppImage packaging check
+  passes, and all 70 QtTest suites pass 2,431 tests (0 failed, 0 skipped, 0
+  blacklisted) with the offscreen Qt platform.
 
 ### CLOUD-002: Strava OAuth can still report an authentication-required error
 

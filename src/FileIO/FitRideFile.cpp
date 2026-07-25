@@ -19,6 +19,7 @@
  */
 
 #include "FitRideFile.h"
+#include "FitFileIntegrity.h"
 #include "Settings.h"
 #include "RideItem.h"
 #include "Specification.h"
@@ -36,6 +37,7 @@
 #include <sstream>
 #include <time.h>
 #include <limits>
+#include <memory>
 #include <cmath>
 
 #define FIT_DEBUG               false // debug traces true/false- can generate many MB of logs
@@ -494,13 +496,13 @@ struct FitFileParser
     double last_altitude; // to avoid problems when records lacks altitude
     QVariant isGarminSmartRecording;
     QVariant GarminHWM;
-    XDataSeries *weatherXdata;
-    XDataSeries *gearsXdata;
-    XDataSeries *positionXdata;
-    XDataSeries *swimXdata;
-    XDataSeries *deveXdata;
-    XDataSeries *extraXdata;
-    XDataSeries *hrvXdata;
+    std::unique_ptr<XDataSeries> weatherXdata;
+    std::unique_ptr<XDataSeries> gearsXdata;
+    std::unique_ptr<XDataSeries> positionXdata;
+    std::unique_ptr<XDataSeries> swimXdata;
+    std::unique_ptr<XDataSeries> deveXdata;
+    std::unique_ptr<XDataSeries> extraXdata;
+    std::unique_ptr<XDataSeries> hrvXdata;
     QMap<int, QString> deviceInfos, session_device_info_;
     QList<QString> dataInfos, session_data_info_;
 
@@ -1681,40 +1683,22 @@ struct FitFileParser
     void appendXData(RideFile *rf) {
         if (rf == nullptr) { return; }
 
-        if (!weatherXdata->datapoints.empty())
-            rf->addXData("WEATHER", weatherXdata);
-        else
-            delete weatherXdata;
+        const auto append = [rf](const QString &name,
+                                 std::unique_ptr<XDataSeries> &series) {
+            if (!series->datapoints.empty()) {
+                rf->addXData(name, series.release());
+            } else {
+                series.reset();
+            }
+        };
 
-        if (!swimXdata->datapoints.empty())
-            rf->addXData("SWIM", swimXdata);
-        else
-            delete swimXdata;
-
-        if (!hrvXdata->datapoints.empty())
-            rf->addXData("HRV", hrvXdata);
-        else
-            delete hrvXdata;
-
-        if (!gearsXdata->datapoints.empty())
-            rf->addXData("GEARS", gearsXdata);
-        else
-            delete gearsXdata;
-
-        if (!positionXdata->datapoints.empty())
-            rf->addXData("POSITION", positionXdata);
-        else
-            delete positionXdata;
-
-        if (!deveXdata->datapoints.empty())
-            rf->addXData("DEVELOPER", deveXdata);
-        else
-            delete deveXdata;
-
-        if (!extraXdata->datapoints.empty())
-            rf->addXData("EXTRA", extraXdata);
-        else
-            delete extraXdata;
+        append(QStringLiteral("WEATHER"), weatherXdata);
+        append(QStringLiteral("SWIM"), swimXdata);
+        append(QStringLiteral("HRV"), hrvXdata);
+        append(QStringLiteral("GEARS"), gearsXdata);
+        append(QStringLiteral("POSITION"), positionXdata);
+        append(QStringLiteral("DEVELOPER"), deveXdata);
+        append(QStringLiteral("EXTRA"), extraXdata);
     }
 
     RideFile *splitSessions(QList<RideFile*> *rides) {
@@ -4025,7 +4009,7 @@ genericnext:
     //
     // As of November 2023 the FIT protocol is v32
     //
-    void read_header(bool &stop, QStringList &errors, int &data_size) {
+    void read_header(bool &stop, QStringList &errors, qint64 &data_size) {
 
         stop = false;
         try {
@@ -4035,6 +4019,7 @@ genericnext:
             if (header_size != 12 && header_size != 14) {
                 errors << QString("bad header size: %1 (we only support 12 or 14)").arg(header_size);
                 stop = true;
+                return;
             }
 
             // protocol version should be 1 or 2
@@ -4067,11 +4052,10 @@ genericnext:
             }
 
             // read the rest of the header
-            int header_crc=0;
             if (header_size == 14) {
-                header_crc = read_uint16(false);
+                (void) read_uint16(false);
             }
-            Q_UNUSED(header_crc); // we don't check since its optional anyway
+            // Header and file CRCs were checked before parsing began.
 
         } catch (TruncatedRead &e) {
             Q_UNUSED(e)
@@ -4604,6 +4588,32 @@ genericnext:
         return count;
     }
 
+    bool read_data_section(qint64 data_size, int segment) {
+        qint64 remaining = data_size;
+        try {
+            while (remaining > 0) {
+                bool stop = false;
+                const int consumed = read_record(stop, errors);
+                if (stop) {
+                    return false;
+                }
+                if (!FitFileIntegrity::consumeRecordBytes(
+                        remaining, consumed)) {
+                    errors << QString(
+                        "FIT segment %1 record exceeds its declared data section")
+                        .arg(segment);
+                    return false;
+                }
+            }
+        } catch (TruncatedRead &e) {
+            Q_UNUSED(e)
+            errors << QString("truncated FIT segment %1 data section")
+                .arg(segment);
+            return false;
+        }
+        return true;
+    }
+
     //
     // MAIN ENTRY POINT INTO PARSER
     //
@@ -4618,17 +4628,24 @@ genericnext:
         if (GarminHWM.isNull() || GarminHWM.toInt() == 0) GarminHWM.setValue(25); // default to 25 seconds.
 
         // start
-        rideFile = new RideFile;
+        if (!file.isOpen() && !file.open(QIODevice::ReadOnly)) {
+            errors << QString("could not open FIT file: %1")
+                .arg(file.errorString());
+            return nullptr;
+        }
+        if (!file.isReadable() || !file.seek(0)) {
+            errors << "could not position FIT file for reading";
+            file.close();
+            return nullptr;
+        }
+
+        std::unique_ptr<RideFile> rideOwner(new RideFile);
+        rideFile = rideOwner.get();
         rideFile->setDeviceType("Garmin FIT");
         rideFile->setFileFormat("Flexible and Interoperable Data Transfer (FIT)");
         rideFile->setRecIntSecs(1.0); // this is a terrible assumption!
-        if (!file.open(QIODevice::ReadOnly)) {
-            delete rideFile;
-            return NULL;
-        }
 
-        int data_size = 0;
-        weatherXdata = new XDataSeries();
+        weatherXdata = std::make_unique<XDataSeries>();
         weatherXdata->name = "WEATHER";
         weatherXdata->valuename << "WINDSPEED";
         weatherXdata->unitname << "kph";
@@ -4639,7 +4656,7 @@ genericnext:
         weatherXdata->valuename << "HUMIDITY";
         weatherXdata->unitname << "relative humidity";
 
-        swimXdata = new XDataSeries();
+        swimXdata = std::make_unique<XDataSeries>();
         swimXdata->name = "SWIM";
         swimXdata->valuename << "TYPE";
         swimXdata->unitname << "stroketype";
@@ -4648,12 +4665,12 @@ genericnext:
         swimXdata->valuename << "STROKES";
         swimXdata->unitname << "";
 
-        hrvXdata = new XDataSeries();
+        hrvXdata = std::make_unique<XDataSeries>();
         hrvXdata->name = "HRV";
         hrvXdata->valuename << "R-R";
         hrvXdata->unitname << "msecs";
 
-        gearsXdata = new XDataSeries();
+        gearsXdata = std::make_unique<XDataSeries>();
         gearsXdata->name = "GEARS";
         gearsXdata->valuename << "FRONT";
         gearsXdata->unitname << "t";
@@ -4664,150 +4681,95 @@ genericnext:
         gearsXdata->valuename << "REAR-NUM";
         gearsXdata->unitname << "";
 
-        positionXdata = new XDataSeries();
+        positionXdata = std::make_unique<XDataSeries>();
         positionXdata->name = "POSITION";
         positionXdata->valuename << "POSITION";
         positionXdata->unitname << "positiontype";
 
-        deveXdata = new XDataSeries();
+        deveXdata = std::make_unique<XDataSeries>();
         deveXdata->name = "DEVELOPER";
 
-        extraXdata = new XDataSeries();
+        extraXdata = std::make_unique<XDataSeries>();
         extraXdata->name = "EXTRA";
 
-        bool stop = false;
-        bool truncated = false;
-
-        // read the header
-        read_header(stop, errors, data_size);
-
-        if (!stop) {
-
-            int bytes_read = 0;
+        int segment = 0;
+        while (!file.atEnd()) {
+            ++segment;
+            bool stop = false;
+            qint64 data_size = 0;
+            read_header(stop, errors, data_size);
+            if (stop || !read_data_section(data_size, segment)) {
+                file.close();
+                rideFile = nullptr;
+                return nullptr;
+            }
 
             try {
-                while (!stop && (bytes_read < data_size)) {
-                    bytes_read += read_record(stop, errors);
-                }
-            }
-            catch (TruncatedRead &e) {
+                (void) read_uint16(false);
+            } catch (TruncatedRead &e) {
                 Q_UNUSED(e)
-                errors << "truncated file body";
-                //file.close();
-                //delete rideFile;
-                //return NULL;
-                truncated = true;
+                errors << QString("truncated FIT segment %1 file CRC")
+                    .arg(segment);
+                file.close();
+                rideFile = nullptr;
+                return nullptr;
             }
         }
-        if (stop) {
-            file.close();
-            delete rideFile;
-            return NULL;
+
+        foreach(int num, unknown_global_msg_nums)
+            qDebug() << QString("FitRideFile: unknown global message number %1; ignoring it").arg(num);
+        foreach(int num, unknown_record_fields)
+            qDebug() << QString("FitRideFile: unknown record field %1; ignoring it").arg(num);
+        foreach(int num, unknown_base_type)
+            qDebug() << QString("FitRideFile: unknown base type %1; skipped").arg(num);
+
+        setRideFileDeviceInfo(rideFile, deviceInfos);
+        setRideFileDataInfo(rideFile, dataInfos);
+
+        // CIQINFO
+        if (local_deve_fields_app.count()>0) {
+
+            foreach(FitDeveApp deve_app, local_deve_fields_app) {
+                CIQinfo info(deve_app.app_id.c_str(),
+                             deve_app.dev_data_id,
+                             deve_app.app_version);
+
+                foreach(FitFieldDefinition deve_field, deve_app.fields) {
+                    info.fields << CIQfield(deve_field.message.c_str(), //always record atm
+                                            deve_field.name.c_str(),
+                                            deve_field.native,
+                                            deve_field.num,
+                                            FITbasetypes[deve_field.type],
+                                            deve_field.unit.c_str(),
+                                            deve_field.scale,
+                                            deve_field.offset);
+                }
+                rideFile->addCIQ(info);
+            }
+            //add ciq infos as tag
+
+            if (!rideFile->ciqinfo().empty() ) {
+
+                QString ciqString = CIQinfo::listToJson( rideFile->ciqinfo());
+
+                QString escaped = QJsonValue(ciqString).toVariant().toString();
+
+                rideFile->setTag("CIQ", escaped );
+            }
         }
-        else {
-            if (!truncated) {
-                try {
-                    int crc = read_uint16( false ); // always littleEndian
-                    (void) crc;
-                }
-                catch (TruncatedRead &e) {
-                    Q_UNUSED(e)
-                    errors << "truncated file body";
-                    return NULL;
-                }
 
-                // second file ?
-                try {
-                    while (file.canReadLine()) {
-                        read_header(stop, errors, data_size);
-                        if (!stop) {
+        file.close();
 
-                            int bytes_read = 0;
+        appendXData(rideFile);
 
-                            try {
-                                while (!stop && (bytes_read < data_size)) {
-                                    bytes_read += read_record(stop, errors);
-                                }
-                            }
-                            catch (TruncatedRead &e) {
-                                Q_UNUSED(e)
-                                errors << "truncated second file body";
-                            }
-                        }
-                        if (!truncated) {
-                            try {
-                                int crc = read_uint16( false ); // always littleEndian
-                                (void) crc;
-                            }
-                            catch (TruncatedRead &e) {
-                                Q_UNUSED(e)
-                                errors << "truncated file body";
-                                return NULL;
-                            }
-                        }
-                    }
-                }
-                catch (TruncatedRead &e) {
-                    Q_UNUSED(e)
-                }
-
-            }
-
-            foreach(int num, unknown_global_msg_nums)
-                qDebug() << QString("FitRideFile: unknown global message number %1; ignoring it").arg(num);
-            foreach(int num, unknown_record_fields)
-                qDebug() << QString("FitRideFile: unknown record field %1; ignoring it").arg(num);
-            foreach(int num, unknown_base_type)
-                qDebug() << QString("FitRideFile: unknown base type %1; skipped").arg(num);
-
-            setRideFileDeviceInfo(rideFile, deviceInfos);
-            setRideFileDataInfo(rideFile, dataInfos);
-
-            // CIQINFO
-            if (local_deve_fields_app.count()>0) {
-
-                foreach(FitDeveApp deve_app, local_deve_fields_app) {
-                    CIQinfo info(deve_app.app_id.c_str(),
-                                 deve_app.dev_data_id,
-                                 deve_app.app_version);
-
-                    foreach(FitFieldDefinition deve_field, deve_app.fields) {
-                        info.fields << CIQfield(deve_field.message.c_str(), //always record atm
-                                                deve_field.name.c_str(),
-                                                deve_field.native,
-                                                deve_field.num,
-                                                FITbasetypes[deve_field.type],
-                                                deve_field.unit.c_str(),
-                                                deve_field.scale,
-                                                deve_field.offset);
-                    }
-                    rideFile->addCIQ(info);
-                }
-                //add ciq infos as tag
-
-                if (!rideFile->ciqinfo().empty() ) {
-
-                    QString ciqString = CIQinfo::listToJson( rideFile->ciqinfo());
-
-                    QString escaped = QJsonValue(ciqString).toVariant().toString();
-
-                    rideFile->setTag("CIQ", escaped );
-                }
-            }
-
-            file.close();
-
-            appendXData(rideFile);
-
-            if (rideFile->xdata("SWIM")) {
-                // Build synthetic kph, km and cad sample data for Lap Swims
-                DataProcessor* fixLapDP = DataProcessorFactory::instance().getProcessors(true).value("::FixLapSwim");
-                if (fixLapDP) fixLapDP->postProcess(rideFile, NULL, "NEW");
-                else qDebug()<<"Fix Lap Swim Data Processor not found.";
-            }
-
-            return rideFile;
+        if (rideFile->xdata("SWIM")) {
+            // Build synthetic kph, km and cad sample data for Lap Swims
+            DataProcessor* fixLapDP = DataProcessorFactory::instance().getProcessors(true).value("::FixLapSwim");
+            if (fixLapDP) fixLapDP->postProcess(rideFile, NULL, "NEW");
+            else qDebug()<<"Fix Lap Swim Data Processor not found.";
         }
+
+        return rideOwner.release();
     }
 };
 
@@ -4818,6 +4780,25 @@ genericnext:
 //
 RideFile *FitFileReader::openRideFile(QFile &file, QStringList &errors, QList<RideFile*> *rides) const
 {
+    if (!file.isOpen() && !file.open(QIODevice::ReadOnly)) {
+        errors << QString("could not open FIT file: %1")
+            .arg(file.errorString());
+        return nullptr;
+    }
+
+    const FitFileIntegrity::ValidationResult integrity =
+        FitFileIntegrity::validate(file);
+    if (!integrity.valid) {
+        errors << integrity.error;
+        file.close();
+        return nullptr;
+    }
+    if (!file.seek(0)) {
+        errors << "could not position FIT file for reading";
+        file.close();
+        return nullptr;
+    }
+
     // prepare the metadata first
     loadMetadata();
 
@@ -4835,6 +4816,7 @@ RideFile *FitFileReader::openRideFile(QFile &file, QStringList &errors, QList<Ri
 //              when sharing data with the cloud or other applications
 //
 
+#ifndef GC_FIT_READER_ONLY
 void write_int8(QByteArray* array, fit_value_t value) {
     array->append(value);
 }
@@ -5561,5 +5543,16 @@ FitFileReader::writeRideFile(Context *context, const RideFile *ride, QFile &file
     file.close();
     return(true);
 }
+#else
+QByteArray
+FitFileReader::toByteArray(Context *, const RideFile *, bool, bool, bool, bool) const
+{
+    return {};
+}
 
-
+bool
+FitFileReader::writeRideFile(Context *, const RideFile *, QFile &) const
+{
+    return false;
+}
+#endif
