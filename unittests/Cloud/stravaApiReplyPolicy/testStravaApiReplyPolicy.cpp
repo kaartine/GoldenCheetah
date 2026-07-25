@@ -14,7 +14,8 @@ StravaApiReplyPolicy::Result validate(
     QNetworkReply::NetworkError networkError =
         QNetworkReply::NoError,
     const QString &networkErrorString = QString(),
-    const QStringList &sensitiveValues = {})
+    const QStringList &sensitiveValues = {},
+    const QString &contentType = QString())
 {
     return StravaApiReplyPolicy::validate(
         kind,
@@ -22,7 +23,8 @@ StravaApiReplyPolicy::Result validate(
         networkError,
         networkErrorString,
         payload,
-        sensitiveValues);
+        sensitiveValues,
+        contentType);
 }
 
 void verifyRejected(const StravaApiReplyPolicy::Result &result)
@@ -49,6 +51,8 @@ private slots:
     void rejectsInvalidActivityFields_data();
     void rejectsInvalidActivityFields();
     void rejectsFaultObjectReturnedWithSuccessStatus();
+    void rejectsHttpFailureWithValidActivityShape();
+    void validatesContentType();
     void rejectsMalformedStreams_data();
     void rejectsMalformedStreams();
     void rejectsOversizedPayload();
@@ -242,6 +246,57 @@ rejectsFaultObjectReturnedWithSuccessStatus()
                  QStringLiteral("Rate Limit Exceeded"),
                  Qt::CaseInsensitive),
              qPrintable(result.error));
+}
+
+void TestStravaApiReplyPolicy::
+rejectsHttpFailureWithValidActivityShape()
+{
+    const QByteArray payload = R"json({
+        "id": 14567890123,
+        "start_date_local": "2026-07-25T18:42:00Z"
+    })json";
+
+    const auto result = validate(
+        StravaApiReplyPolicy::PayloadKind::Activity,
+        payload,
+        503,
+        QNetworkReply::NoError);
+
+    verifyRejected(result);
+    QVERIFY2(result.error.contains(QStringLiteral("HTTP 503")),
+             qPrintable(result.error));
+}
+
+void TestStravaApiReplyPolicy::validatesContentType()
+{
+    const QByteArray payload = R"json({
+        "id": 14567890123,
+        "start_date_local": "2026-07-25T18:42:00Z"
+    })json";
+
+    const auto jsonResult = validate(
+        StravaApiReplyPolicy::PayloadKind::Activity,
+        payload,
+        200,
+        QNetworkReply::NoError,
+        QString(),
+        {},
+        QStringLiteral("application/json; charset=utf-8"));
+    QVERIFY2(jsonResult.isValid(), qPrintable(jsonResult.error));
+
+    const auto htmlResult = validate(
+        StravaApiReplyPolicy::PayloadKind::Activity,
+        payload,
+        200,
+        QNetworkReply::NoError,
+        QString(),
+        {},
+        QStringLiteral("text/html"));
+    verifyRejected(htmlResult);
+    QVERIFY2(htmlResult.error.contains(
+                 QStringLiteral("content type"),
+                 Qt::CaseInsensitive),
+             qPrintable(htmlResult.error));
 }
 
 void TestStravaApiReplyPolicy::rejectsMalformedStreams_data()

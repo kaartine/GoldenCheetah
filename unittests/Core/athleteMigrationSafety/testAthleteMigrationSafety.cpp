@@ -1367,6 +1367,7 @@ private slots:
     void progressCallbackCanDestroyDownloader();
     void timedOutCloudReadReleasesBuffer();
     void rejectedCloudReadReleasesBufferPromptly();
+    void failedCloudCompletionSkipsPayloadAndAdvancesQueue();
     void duplicateCloudCompletionIsAppliedOnceAcrossRepeatedRuns();
     void providerCancellationDoesNotDestroyActiveCall_data();
     void providerCancellationDoesNotDestroyActiveCall();
@@ -4642,6 +4643,76 @@ void TestAthleteMigrationSafety::rejectedCloudReadReleasesBufferPromptly()
     QCOMPARE(buffersAllocated, 1);
     QCOMPARE(buffersReleased, 1);
     QCOMPARE(buffersOutstanding, 0);
+}
+
+void TestAthleteMigrationSafety::
+failedCloudCompletionSkipsPayloadAndAdvancesQueue()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QDir athleteDir(root.path());
+    QVERIFY(createStructuredAthlete(
+            athleteDir, QStringLiteral("CloudFailedCompletion")));
+    configureAthlete(athleteDir, VERSION_LATEST, true);
+
+    std::unique_ptr<Context> context(createAthleteMigrationTestContext());
+    SeededAthleteStorage athleteStorage;
+    Athlete *athlete = athleteStorage.construct(context.get(), athleteDir);
+
+    configureControlledCloudAutoDownload(
+        athlete->cyclist,
+        TestCloudCompletionMode::FailedCompletionThenSuccess,
+        2, 1000);
+    QSignalSpy finished(context.get(), &Context::autoDownloadEnd);
+    const bool spyValid = finished.isValid();
+    QElapsedTimer timer;
+    timer.start();
+    athlete->cloudAutoDownload->checkDownload();
+
+    const bool bothReadsStarted =
+            waitForControlledCloudReads(2, 5000);
+    const bool bothCompletionsEmitted =
+            waitForControlledCloudCompletions(2, 5000);
+    const bool providerDestroyed =
+            waitForControlledCloudProviderDestroyed(5000);
+    const bool finishedWithoutTimeout = waitUntil(
+            [&finished]() { return finished.count() == 1; }, 250);
+    const qint64 elapsedMs = timer.elapsed();
+    const QList<QByteArray> parsedPayloads =
+            athleteMigrationRideFilePayloads();
+    const int buffersAllocated = cloudAutoDownloadTestBuffersAllocated();
+    const int buffersReleased = cloudAutoDownloadTestBuffersReleased();
+    const int buffersOutstanding = cloudAutoDownloadTestBuffersOutstanding();
+    const int requestsCreated = controlledCloudRequestsCreated();
+    const int requestsDestroyed = controlledCloudRequestsDestroyed();
+    const int repliesCreated = controlledCloudRepliesCreated();
+    const int repliesDestroyed = controlledCloudRepliesDestroyed();
+
+    athleteStorage.destroy();
+    cleanupControlledCloudAutoDownload();
+
+    QVERIFY(spyValid);
+    QVERIFY2(bothReadsStarted,
+             "failed completion did not advance to the next request");
+    QVERIFY2(bothCompletionsEmitted,
+             "controlled provider did not complete both requests");
+    QVERIFY2(providerDestroyed,
+             "failed-completion provider was not destroyed");
+    QVERIFY2(finishedWithoutTimeout,
+             "failed completion waited for the request timeout");
+    QVERIFY2(elapsedMs < 1000,
+             "failed completion did not advance promptly");
+    QCOMPARE(parsedPayloads.size(), 1);
+    QCOMPARE(
+        parsedPayloads.first(),
+        controlledCloudSuccessfulActivityPayload());
+    QCOMPARE(buffersAllocated, 2);
+    QCOMPARE(buffersReleased, 2);
+    QCOMPARE(buffersOutstanding, 0);
+    QCOMPARE(requestsCreated, 2);
+    QCOMPARE(requestsDestroyed, 2);
+    QCOMPARE(repliesCreated, 2);
+    QCOMPARE(repliesDestroyed, 2);
 }
 
 void TestAthleteMigrationSafety::

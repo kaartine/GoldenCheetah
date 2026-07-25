@@ -10,6 +10,7 @@
 #ifndef GC_CLOUD_AUTO_DOWNLOAD_TEST_SUPPORT_H
 #define GC_CLOUD_AUTO_DOWNLOAD_TEST_SUPPORT_H
 
+#include <QByteArray>
 #include <QString>
 #include <QtGlobal>
 
@@ -25,6 +26,7 @@ enum class TestCloudCompletionMode {
     Never,
     Reject,
     Duplicate,
+    FailedCompletionThenSuccess,
     BlockInOpen,
     BlockInDirectory,
     BlockInRead,
@@ -59,6 +61,11 @@ int controlledCloudAbortCalls();
 int controlledCloudBaseReplyAbortCalls();
 int controlledCloudProviderOperations();
 int controlledCloudReentrantReadCalls();
+int controlledCloudRequestsCreated();
+int controlledCloudRequestsDestroyed();
+int controlledCloudRepliesCreated();
+int controlledCloudRepliesDestroyed();
+QByteArray controlledCloudSuccessfulActivityPayload();
 void cleanupControlledCloudAutoDownload();
 
 int cloudAutoDownloadTestBuffersAllocated();

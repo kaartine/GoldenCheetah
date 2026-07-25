@@ -32,6 +32,20 @@ namespace {
 constexpr auto BlockingServiceId = "LifecycleBlockingCloud";
 constexpr auto ControlledServiceId = "ControlledLifecycleCloud";
 constexpr auto SuccessfulFollowUpServiceId = "ZSuccessfulFollowUpCloud";
+constexpr auto FailedCompletionActivityPayload =
+        "{\"RIDE\":{\"STARTTIME\":\"2026/07/26 06:00:00 UTC\","
+        "\"RECINTSECS\":1,\"DEVICETYPE\":\"Controlled test provider\","
+        "\"IDENTIFIER\":\"failed-completion\","
+        "\"TAGS\":{\"Sport\":\"Bike\"},"
+        "\"SAMPLES\":[{\"SECS\":0,\"KM\":0,\"WATTS\":175,\"HR\":120},"
+        "{\"SECS\":1,\"KM\":0.01,\"WATTS\":180,\"HR\":121}]}}";
+constexpr auto SuccessfulCompletionActivityPayload =
+        "{\"RIDE\":{\"STARTTIME\":\"2026/07/26 06:01:00 UTC\","
+        "\"RECINTSECS\":1,\"DEVICETYPE\":\"Controlled test provider\","
+        "\"IDENTIFIER\":\"successful-completion\","
+        "\"TAGS\":{\"Sport\":\"Bike\"},"
+        "\"SAMPLES\":[{\"SECS\":0,\"KM\":0,\"WATTS\":185,\"HR\":122},"
+        "{\"SECS\":1,\"KM\":0.01,\"WATTS\":190,\"HR\":123}]}}";
 
 struct BufferProbeState
 {
@@ -85,6 +99,10 @@ struct ControlledCloudState
     int crossThreadProviderAccesses = 0;
     int destroyedProviderAccesses = 0;
     int reentrantReadCalls = 0;
+    int requestsCreated = 0;
+    int requestsDestroyed = 0;
+    int repliesCreated = 0;
+    int repliesDestroyed = 0;
 };
 
 struct SslWarningCaptureState
@@ -163,6 +181,67 @@ public:
             QMutexLocker locker(&state->mutex);
             ++state->baseReplyAbortCalls;
         }
+        setFinished(true);
+        emit finished();
+    }
+
+protected:
+    qint64 readData(char *, qint64) override { return -1; }
+
+private:
+    std::shared_ptr<ControlledCloudState> state;
+};
+
+class ControlledRequestLifetime final
+{
+public:
+    explicit ControlledRequestLifetime(
+            std::shared_ptr<ControlledCloudState> state)
+        : state(std::move(state))
+    {
+        QMutexLocker locker(&this->state->mutex);
+        ++this->state->requestsCreated;
+    }
+
+    ~ControlledRequestLifetime()
+    {
+        QMutexLocker locker(&state->mutex);
+        ++state->requestsDestroyed;
+    }
+
+private:
+    std::shared_ptr<ControlledCloudState> state;
+};
+
+class ControlledCompletionReply final : public QNetworkReply
+{
+public:
+    ControlledCompletionReply(
+            QObject *parent,
+            std::shared_ptr<ControlledCloudState> state)
+        : QNetworkReply(parent), state(std::move(state))
+    {
+        setOpenMode(QIODevice::ReadOnly);
+        QMutexLocker locker(&this->state->mutex);
+        ++this->state->repliesCreated;
+    }
+
+    ~ControlledCompletionReply() override
+    {
+        QMutexLocker locker(&state->mutex);
+        ++state->repliesDestroyed;
+    }
+
+    void abort() override
+    {
+        if (isFinished()) return;
+        setFinished(true);
+        emit finished();
+    }
+
+    void finish()
+    {
+        if (isFinished()) return;
         setFinished(true);
         emit finished();
     }
@@ -443,7 +522,11 @@ public:
             entry->name =
                     now.addSecs(-i).toString(
                             QStringLiteral("yyyy_MM_dd_HH_mm_ss")) +
-                    QStringLiteral(".fit");
+                    (state->mode
+                            == TestCloudCompletionMode::
+                                FailedCompletionThenSuccess
+                        ? QStringLiteral(".json")
+                        : QStringLiteral(".fit"));
             entry->id = QStringLiteral("controlled-%1").arg(i);
             entry->isDir = false;
             entries.append(entry);
@@ -454,7 +537,7 @@ public:
     bool readFile(
             QByteArray *data,
             QString remoteName,
-            QString) override
+            QString remoteId) override
     {
         recordControlledProviderAccess(state);
         if (!state) return false;
@@ -465,6 +548,35 @@ public:
             state->workerThread = QThread::currentThread();
         }
         state->reads.release();
+        if (state->mode
+                == TestCloudCompletionMode::FailedCompletionThenSuccess) {
+            const bool succeeded =
+                    remoteId == QStringLiteral("controlled-1");
+            data->append(
+                succeeded
+                    ? SuccessfulCompletionActivityPayload
+                    : FailedCompletionActivityPayload);
+            auto requestLifetime =
+                    std::make_shared<ControlledRequestLifetime>(state);
+            auto *reply = new ControlledCompletionReply(this, state);
+            QTimer::singleShot(
+                0, this,
+                [this, data, remoteName, succeeded, reply,
+                 requestLifetime = std::move(requestLifetime),
+                 state = state]() {
+                    Q_UNUSED(requestLifetime)
+                    notifyReadComplete(
+                        data, remoteName,
+                        succeeded
+                            ? QStringLiteral("Completed.")
+                            : QStringLiteral("Controlled read failure."),
+                        succeeded);
+                    state->completions.release();
+                    reply->finish();
+                    reply->deleteLater();
+                });
+            return true;
+        }
         if (state->mode == TestCloudCompletionMode::BlockInBaseAbort) {
             auto *reply = new BaseAbortReply(this, state);
             QEventLoop loop;
@@ -536,6 +648,8 @@ public:
         case TestCloudCompletionMode::Duplicate:
             complete();
             complete();
+            break;
+        case TestCloudCompletionMode::FailedCompletionThenSuccess:
             break;
         case TestCloudCompletionMode::BlockInCompletion:
             QTimer::singleShot(
@@ -861,6 +975,39 @@ int controlledCloudReentrantReadCalls()
     if (!controlledState) return 0;
     QMutexLocker locker(&controlledState->mutex);
     return controlledState->reentrantReadCalls;
+}
+
+int controlledCloudRequestsCreated()
+{
+    if (!controlledState) return 0;
+    QMutexLocker locker(&controlledState->mutex);
+    return controlledState->requestsCreated;
+}
+
+int controlledCloudRequestsDestroyed()
+{
+    if (!controlledState) return 0;
+    QMutexLocker locker(&controlledState->mutex);
+    return controlledState->requestsDestroyed;
+}
+
+int controlledCloudRepliesCreated()
+{
+    if (!controlledState) return 0;
+    QMutexLocker locker(&controlledState->mutex);
+    return controlledState->repliesCreated;
+}
+
+int controlledCloudRepliesDestroyed()
+{
+    if (!controlledState) return 0;
+    QMutexLocker locker(&controlledState->mutex);
+    return controlledState->repliesDestroyed;
+}
+
+QByteArray controlledCloudSuccessfulActivityPayload()
+{
+    return QByteArray(SuccessfulCompletionActivityPayload);
 }
 
 void cleanupControlledCloudAutoDownload()
