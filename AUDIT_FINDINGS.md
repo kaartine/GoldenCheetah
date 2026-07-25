@@ -1679,6 +1679,44 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Medium
 
+### MEM-019: Indented plot marker starts and copies its matrix from indeterminate state
+
+- Status: OPEN
+- Code: `src/Charts/IndendPlotMarker.cpp:25`,
+  `src/Charts/IndendPlotMarker.cpp:36`,
+  `src/Charts/IndendPlotMarker.cpp:224`, and
+  `src/Charts/IndendPlotMarker.h:85`
+- Impact: The shared marker matrix constructor leaves `m_canvasId`
+  uninitialized and the first label draw reads it. Its public copy constructor
+  also compares uninitialized dimensions and can pass an uninitialized
+  `m_data` pointer to `delete[]` through `resize()`. No copy call exists in the
+  current tree, but the first-draw read is active and the callable copy path is
+  immediate undefined behavior.
+- Evidence: GCC 13 reports `m_rows` used uninitialized in the copy constructor;
+  source tracing additionally finds the reachable uninitialized canvas ID.
+- Test: Draw the first marker under MSan, then copy a populated matrix through
+  a focused test hook under ASan/MSan and verify independent storage.
+- Fix direction: Initialize every member in the normal constructor and either
+  delete the unused copy operations or implement a complete deep copy.
+
+### BLE-006: Kinetic InRide UUID fallback violates aliasing and alignment
+
+- Status: OPEN
+- Code: `src/Train/KurtInRide.cpp:127`,
+  `src/Train/KurtInRide.cpp:165`
+- Impact: When Qt cannot provide a Bluetooth address, notably on macOS, the
+  Kinetic InRide system ID fallback reads a `quint128` object through a
+  `uint64_t*`. The incompatible and potentially under-aligned typed access is
+  undefined behavior under optimization and can derive the wrong six-byte ID,
+  breaking telemetry decoding and calibration commands.
+- Evidence: The clean GCC 13 `-O2` build emits `-Wstrict-aliasing` on the exact
+  fallback read. The normal address path does not use the cast.
+- Test: Build device-info fixtures with a known address and with a null address
+  plus known UUID; require exact six-byte IDs under optimized ASan/UBSan builds.
+- Fix direction: Copy the UUID bytes into the integer with `memcpy` (or derive
+  the six output bytes directly) without typed aliasing or alignment
+  assumptions.
+
 ### DATA-002: Merge offsets treat samples as seconds
 
 - Status: FIXED
@@ -1788,6 +1826,47 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   It remained stable for a 15-second clean-profile launch and a 45-second
   launch against a copied real athlete profile; the logs contained only
   missing translator debug notices.
+
+### DATA-005: zones() validation and evaluation disagree on literals
+
+- Status: OPEN
+- Code: `src/Core/DataFilter.cpp:1994`,
+  `src/Core/DataFilter.cpp:4127`
+- Impact: `zones()` accepts series and field names case-insensitively but
+  evaluates them with case-sensitive comparisons, so expressions such as
+  `zones(POWER,NAME)` are accepted and silently return empty data. Invalid
+  literals inside a nested expression can also escape validation because the
+  validator sets its own `inerror` member instead of `leaf->inerror`.
+- Evidence: Exhaustive branch tracing proves the adjacent GCC
+  `maybe-uninitialized` diagnostics are false positives: every pointer and
+  `metricpace` read is dominated by its matching `series` assignment, while an
+  unknown series keeps every dereferencing loop disabled. The case and error
+  target mismatches are independent reachable logic defects.
+- Test: Parse and evaluate root and nested valid, mixed-case, unknown-series,
+  and unknown-field calls, requiring canonical literals or an explicit error.
+- Fix direction: Lowercase accepted literals in the AST, set errors on the
+  validated leaf, and defensively initialize the branch-local pointers and
+  pace flag so GCC can verify the same invariant.
+
+### DATA-006: Voronoi annotations accept duplicate and non-finite sites
+
+- Status: OPEN
+- Code: `src/Core/DataFilter.cpp:6486`,
+  `src/Charts/GenericPlot.cpp:1457`,
+  `contrib/voronoi/Voronoi.cpp:39`, and
+  `contrib/voronoi/Voronoi.cpp:413`
+- Impact: Formula-provided Voronoi centers are checked only for an even numeric
+  count. Duplicate sites can make the bisector divide by zero, while NaN or
+  infinite coordinates invalidate sorting and geometry invariants. Non-finite
+  lines can then reach the chart renderer.
+- Evidence: The clean build's `newintstar.y may be uninitialized` diagnostic
+  is a false positive because `PQempty()` gates every read. The separate
+  duplicate/non-finite input paths are directly reachable through
+  `annotate(voronoi, centers)`.
+- Test: Cover duplicate, collinear, NaN, infinite, and randomized finite sites;
+  reject invalid input or require every emitted endpoint to remain finite.
+- Fix direction: Validate finiteness and deduplicate sites before invoking the
+  legacy algorithm, then guard zero-length bisectors defensively.
 
 ### PARSE-001: ZIP/GZIP decompression has no resource limits
 
@@ -2301,6 +2380,9 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   crash, while every normal non-null ride skips the loop and reports all point
   samples as unselected. Selected intervals are missing from the standard
   power histogram even though the time-based W' balance overload is correct.
+- Evidence: GCC 13 diagnoses that the loop calls a member function through a
+  null `this` pointer. The adjacent time-based overload has the intended
+  positive guard.
 - Test: Exercise the point overload with no ride, a ride with no selected
   intervals, overlapping selected intervals, and exact sample boundaries.
 - Fix direction: Return false for a null ride/point and iterate selected
@@ -2502,6 +2584,48 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Low
 
+### BUILD-008: Qt 6.8.3 reports impossible QVariant inline-storage overflows
+
+- Status: OPEN
+- Code: `src/Charts/GoldenCheetah.cpp:969`,
+  `src/Charts/GoldenCheetah.cpp:1166`,
+  `src/Gui/Perspective.cpp:1642`, and the Qt 6.8.3 build image
+- Impact: GCC emits repeated `-Warray-bounds` diagnostics while moving the
+  large `LTMSettings` metatype from a temporary `QVariant`. The warnings mask
+  real bounds diagnostics such as MEM-018, but this specific path is not a
+  GoldenCheetah memory error: Qt heap-allocates types larger than its inline
+  variant storage.
+- Evidence: A minimal large-`QString` metatype reproduces the warning only
+  through Qt 6.8.3's rvalue `QVariant::value()`. The lvalue form and strict
+  ASan/UBSan/LSan execution are clean. Qt fixed the impossible generated branch
+  in QTBUG-140064 (qtbase commit `46feeec`).
+- Test: Compile the minimal large-metatype reproducer at
+  `-O2 -Werror=array-bounds` and exercise chart property serialization under
+  ASan/UBSan.
+- Fix direction: Upgrade or backport Qt's header-only fix. A local
+  `const QVariant` intermediate is an acceptable temporary workaround; do not
+  suppress `-Warray-bounds` globally.
+
+### BUILD-009: Release builds have no project-warning gate
+
+- Status: OPEN
+- Code: release qmake configuration and CI
+- Impact: The clean MEM-018 release build succeeds with 161 warnings from
+  project, generated, vendored, and toolchain code. Genuine findings
+  (MEM-019, BLE-006, and GUI-003) appear beside false positives and intentional
+  fallthroughs, making regressions easy to miss.
+- Evidence: Removing MEM-018 reduced the clean count from 162 to 161 without
+  any automated budget check. Remaining project warnings include implicit
+  fallthrough in `GenericLegend.cpp` and `RideMetadata.cpp`, Qt-macro control
+  flow in `Perspective.cpp`, declaration style in `Route.cpp`, and an enum
+  conversion in `FitRideFile.cpp`.
+- Test: Classify the current warning set by ownership and compiler version,
+  then fail CI on any new project warning and progressively lower the baseline.
+- Fix direction: Make project-owned targets warning-clean with explicit control
+  flow and conversions, backport BUILD-008, and quarantine unavoidable
+  generated/vendor diagnostics with narrow source- and compiler-specific
+  suppressions.
+
 ### BUILD-002: AppImage omits the Qt offscreen platform plugin
 
 - Status: FIXED
@@ -2572,19 +2696,21 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The complete containerized release matrix after CLOUD-001 passes:
+The complete containerized release matrix after MEM-018 passes:
 
-- 68 QtTest suites
-- 2,328 passed
+- 71 QtTest suites
+- 2,441 passed
 - 0 failed, skipped, or blacklisted
 - Qt 6.8.3 on Ubuntu 24.04
 
 The registered matrix includes the AppImage packaging consistency test and the
 32-case Strava OAuth policy suite. Production AppImages are packaged from
 committed source only after this matrix, and the predecessor remains available
-as the rollback image.
+as the rollback image. The current image reports commit `ae408e6`, configured
+Strava OAuth, and SHA-256
+`168c22a6a978d7056579a002b5d0884155aa11a76b4f4e58748de05a4b22ac69`.
 
-PARSE-005's 126 focused tests and the related 10 RideFile ownership tests also
+PARSE-005's 126 focused tests and the related 11 RideFile ownership tests also
 pass under strict ASan/UBSan/LSan with leak detection. Earlier fixed
 memory/thread findings retain the focused sanitizer and TSAN evidence recorded
 in their entries.
