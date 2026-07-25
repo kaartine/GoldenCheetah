@@ -1679,9 +1679,14 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### CLOUD-003: Strava HTTP failures can be imported as successful activities
 
-- Status: OPEN
-- Code: `src/Cloud/Strava.cpp:526`, `src/Cloud/Strava.cpp:568`, and
-  `src/Cloud/Strava.cpp:872`
+- Status: FIXED
+- Code: `src/Cloud/Strava.cpp:576`, `src/Cloud/Strava.cpp:591`,
+  `src/Cloud/Strava.cpp:662`, `src/Cloud/Strava.cpp:998`,
+  `src/Cloud/StravaApiReplyPolicy.cpp:224`,
+  `src/Cloud/StravaApiReplyPolicy.cpp:255`,
+  `src/Cloud/StravaApiReplyPolicy.cpp:328`,
+  `src/Cloud/CloudService.h:228`, and
+  `src/Cloud/CloudService.cpp:2943`
 - Impact: The activity completion slot neither checks the reply error nor the
   HTTP status before passing the payload to the activity parser and reporting
   `Completed`. A Strava 401/403 Fault object is valid JSON, so it is converted
@@ -1701,6 +1706,28 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   required activity fields before conversion. Propagate one bounded,
   credential-redacted provider error through the existing completion API and
   clean up every reply and buffer exactly once.
+- Test-first evidence: The first policy build failed because the production
+  reply validator did not exist. A controlled provider then failed to compile
+  against the missing four-argument completion contract. After those RED
+  cases, malformed location and numeric stream fixtures failed 2/11 because
+  the initial validator accepted them, and a transport failure after HTTP 200
+  failed separately because it was incorrectly described as `HTTP 200`.
+- Resolution: Activity and stream replies are now bounded before buffering and
+  validated for transport status, HTTP status, JSON content type, document
+  shape, required activity identity and date, stream shape, sample type, and
+  consistent sample count. Provider failures become bounded,
+  credential-redacted failure completions; neither manual sync nor
+  auto-download parses or imports those payloads. Both response layers remove
+  their reply maps and schedule every reply for deletion. Stream conversion
+  now iterates the validated sample count, so an empty stream list terminates
+  without points and a normal stream no longer gains a trailing blank sample.
+- Verification: All 34 focused policy cases pass normally and under
+  ASan/UBSan/LSan. The full 103-case athlete migration and cloud-lifecycle
+  suite passes both normally and under the same sanitizers, including exact
+  buffer, request, and reply lifetime checks. The production application
+  compiles and links with 0 errors and 0 warnings, and the complete release
+  matrix passes 73 suites and 2,483 tests with no failures, skips, or
+  blacklists.
 
 ### THREAD-007: Concurrent Strava refreshes race rotating refresh tokens
 

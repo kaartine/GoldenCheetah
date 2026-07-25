@@ -3,7 +3,10 @@ CONFIG += c++17
 
 TARGET = testStravaApiReplyPolicy
 
-SOURCES = testStravaApiReplyPolicy.cpp
+SOURCES = testStravaApiReplyPolicy.cpp \
+          ../../../src/Cloud/StravaApiReplyPolicy.cpp
+
+HEADERS = ../../../src/Cloud/StravaApiReplyPolicy.h
 
 include(../../unittests.pri)
 

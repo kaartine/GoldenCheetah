@@ -46,6 +46,7 @@ private slots:
     void rejectsStravaFault_data();
     void rejectsStravaFault();
     void reportsTransportErrorWithoutHttpStatus();
+    void reportsTransportErrorWithSuccessStatus();
     void rejectsMalformedOrNonObjectActivity_data();
     void rejectsMalformedOrNonObjectActivity();
     void rejectsInvalidActivityFields_data();
@@ -83,6 +84,7 @@ void TestStravaApiReplyPolicy::acceptsEmptyStreams()
 
     QVERIFY2(result.isValid(), qPrintable(result.error));
     QCOMPARE(result.error, QString());
+    QCOMPARE(result.sampleCount, qsizetype(0));
 }
 
 void TestStravaApiReplyPolicy::acceptsHeartRateStream()
@@ -102,6 +104,7 @@ void TestStravaApiReplyPolicy::acceptsHeartRateStream()
 
     QVERIFY2(result.isValid(), qPrintable(result.error));
     QCOMPARE(result.error, QString());
+    QCOMPARE(result.sampleCount, qsizetype(4));
 }
 
 void TestStravaApiReplyPolicy::rejectsStravaFault_data()
@@ -161,6 +164,25 @@ void TestStravaApiReplyPolicy::reportsTransportErrorWithoutHttpStatus()
              qPrintable(result.error));
     QVERIFY2(!result.error.contains(QStringLiteral("HTTP"),
                                     Qt::CaseInsensitive),
+             qPrintable(result.error));
+}
+
+void TestStravaApiReplyPolicy::
+reportsTransportErrorWithSuccessStatus()
+{
+    const auto result = validate(
+        StravaApiReplyPolicy::PayloadKind::Activity,
+        QByteArrayLiteral("{}"),
+        200,
+        QNetworkReply::RemoteHostClosedError,
+        QStringLiteral("Connection closed early"));
+
+    verifyRejected(result);
+    QVERIFY2(result.error.contains(
+                 QStringLiteral("Connection closed early"),
+                 Qt::CaseInsensitive),
+             qPrintable(result.error));
+    QVERIFY2(!result.error.contains(QStringLiteral("HTTP 200")),
              qPrintable(result.error));
 }
 
@@ -318,6 +340,16 @@ void TestStravaApiReplyPolicy::rejectsMalformedStreams_data()
     QTest::newRow("non-array-data")
         << QByteArrayLiteral(
                R"json([{"type":"heartrate","data":"120"}])json");
+    QTest::newRow("mismatched-sample-counts")
+        << QByteArrayLiteral(
+               R"json([{"type":"time","data":[0,1]},)"
+               R"json({"type":"heartrate","data":[120]}])json");
+    QTest::newRow("short-latlng-sample")
+        << QByteArrayLiteral(
+               R"json([{"type":"latlng","data":[[60.1]]}])json");
+    QTest::newRow("non-numeric-known-stream")
+        << QByteArrayLiteral(
+               R"json([{"type":"heartrate","data":["fast"]}])json");
 }
 
 void TestStravaApiReplyPolicy::rejectsMalformedStreams()

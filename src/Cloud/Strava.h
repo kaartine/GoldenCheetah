@@ -79,9 +79,10 @@ class Strava : public CloudService {
 
         QMap<QNetworkReply*, QByteArray*> buffers;
 
-        QByteArray* prepareResponse(QByteArray* data);
+        bool prepareResponse(QByteArray *data, QString &error);
 
-        void addSamples(RideFile* ret, QString remoteid);
+        bool addSamples(
+            RideFile *ret, const QString &remoteid, QString &error);
         void fixLapSwim(RideFile* ret, QJsonArray laps);
         void fixSmartRecording(RideFile* ret);
 
