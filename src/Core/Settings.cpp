@@ -778,19 +778,74 @@ GSettings::initializeQSettingsNewAthlete(QString athletesRootDir, QString athlet
 void
 GSettings::syncQSettingsAllAthletes() {
 
-    if (!newFormat) return;
+    syncQSettingsAllAthletesChecked();
+}
 
+bool
+GSettings::syncQSettingsAllAthletesChecked() {
+
+    if (!newFormat) {
+        if (!systemsettings) return false;
+        systemsettings->sync();
+        CredentialSettings::hardenSettingsFile(systemsettings);
+        return systemsettings->status() == QSettings::NoError;
+    }
+
+    bool synced = true;
     QHashIterator<QString, AthleteQSettings*> i(athlete);
     i.toFront();
     while (i.hasNext())
     { i.next();
-        i.value()->getQSettings(ATHLETE_GENERAL)->sync();
-        i.value()->getQSettings(ATHLETE_LAYOUT)->sync();
-        i.value()->getQSettings(ATHLETE_PREFERENCES)->sync();
-        i.value()->getQSettings(ATHLETE_PRIVATE)->sync();
+        for (int file = ATHLETE_GENERAL;
+             file <= ATHLETE_PRIVATE;
+             ++file) {
+            QSettings *settings =
+                i.value()->getQSettings(file);
+            settings->sync();
+            if (settings->status() != QSettings::NoError)
+                synced = false;
+        }
         CredentialSettings::hardenSettingsFile(
             i.value()->getQSettings(ATHLETE_PRIVATE));
     }
+    return synced;
+}
+
+bool
+GSettings::syncCValueChecked(
+    const QString &athleteName,
+    const QString &key)
+{
+    if (!newFormat) {
+        if (!systemsettings) return false;
+        systemsettings->sync();
+        CredentialSettings::hardenSettingsFile(
+            systemsettings);
+        return systemsettings->status()
+            == QSettings::NoError;
+    }
+
+    int store;
+    int file;
+    QString keyVar = key;
+    keyVar = DetermineKey(keyVar, store, file);
+    Q_UNUSED(keyVar)
+    if (store != SETTINGS_ATHLETE)
+        return false;
+
+    const auto found = athlete.constFind(athleteName);
+    if (found == athlete.cend())
+        return false;
+
+    QSettings *settings =
+        found.value()->getQSettings(file);
+    if (!settings) return false;
+    settings->sync();
+    if (file == ATHLETE_PRIVATE) {
+        CredentialSettings::hardenSettingsFile(
+            settings);
+    }
+    return settings->status() == QSettings::NoError;
 }
 
 void

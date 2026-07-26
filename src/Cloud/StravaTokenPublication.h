@@ -54,6 +54,27 @@ struct PublicationResult
     }
 };
 
+enum class RemovalStatus
+{
+    Cleared,
+    CleanupPending,
+    Conflict,
+    StorageFailure,
+    InvalidInput
+};
+
+struct RemovalResult
+{
+    RemovalStatus status = RemovalStatus::InvalidInput;
+    QString error;
+
+    bool isSuccess() const
+    {
+        return status == RemovalStatus::Cleared
+            || status == RemovalStatus::CleanupPending;
+    }
+};
+
 struct PublicationCallbacks
 {
     std::function<TokenPair()> readCurrent;
@@ -74,6 +95,11 @@ PublicationResult publish(
     const QString &expectedRefreshToken,
     const TokenPair &replacement,
     const QString &refreshedAt,
+    PublicationMode mode,
+    const PublicationCallbacks &callbacks);
+
+RemovalResult remove(
+    const QString &expectedRefreshToken,
     PublicationMode mode,
     const PublicationCallbacks &callbacks);
 

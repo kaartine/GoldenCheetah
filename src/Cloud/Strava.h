@@ -27,6 +27,7 @@
 
 class QNetworkReply;
 class QNetworkAccessManager;
+class StravaAuthorizedRequest;
 
 class Strava : public CloudService {
 
@@ -54,6 +55,10 @@ class Strava : public CloudService {
             QStringList &errors,
             const CancellationCheck &cancelled);
         bool close();
+        bool supportsAccountDisconnect() const override
+            { return true; }
+        AccountDisconnectOperation accountDisconnectOperation(
+            AccountDisconnectMode mode) const override;
         StravaAuthenticatedSession::Result authenticatedGet(
             const QUrl &url,
             qsizetype maximumBytes,
@@ -91,10 +96,16 @@ class Strava : public CloudService {
         int garminHighWaterMark = 30;
 
         QMap<QNetworkReply*, QByteArray*> buffers;
+        QHash<
+            QNetworkReply *,
+            std::shared_ptr<StravaAuthorizedRequest>>
+            requestPermits;
         std::unique_ptr<StravaAuthenticatedSession>
             authenticatedSession;
 
         bool prepareResponse(QByteArray *data, QString &error);
+        QString sharedAccountKey() const;
+        void initializeSharedAuthorizationStatus() const;
         void ensureAuthenticatedSession();
         StravaAuthenticatedSession::Grant refreshAccessGrant(
             const QString &rejectedAccessToken,

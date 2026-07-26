@@ -17,6 +17,8 @@
 #include <QPair>
 #include <QSet>
 
+#include <algorithm>
+
 namespace {
 
 constexpr qsizetype MaximumClientIdLength = 20;
@@ -134,7 +136,15 @@ StravaOAuthPolicy::TokenRequest makeTokenRequest(
 QString redactAndBound(QString value,
                        const QStringList &sensitiveValues)
 {
-    for (const QString &sensitive : sensitiveValues) {
+    QStringList orderedValues = sensitiveValues;
+    std::sort(
+        orderedValues.begin(),
+        orderedValues.end(),
+        [](const QString &left, const QString &right) {
+            return left.size() > right.size();
+        });
+
+    for (const QString &sensitive : orderedValues) {
         if (sensitive.isEmpty()) {
             continue;
         }
@@ -145,6 +155,13 @@ QString redactAndBound(QString value,
             QUrl::toPercentEncoding(sensitive));
         if (encoded != sensitive) {
             value.replace(encoded,
+                          QStringLiteral("[redacted]"),
+                          Qt::CaseInsensitive);
+        }
+        const QString base64 = QString::fromLatin1(
+            sensitive.toUtf8().toBase64());
+        if (!base64.isEmpty() && base64 != sensitive) {
+            value.replace(base64,
                           QStringLiteral("[redacted]"),
                           Qt::CaseSensitive);
         }
@@ -387,6 +404,57 @@ TokenRequest refreshTokenRequest(
         QStringLiteral("refresh_token"));
 }
 
+RevocationRequest revocationRequest(
+    const QString &clientId,
+    const QString &clientSecret,
+    const QString &token,
+    RevocationTokenType tokenType)
+{
+    RevocationRequest request;
+    if (!hasUsableCredentials(clientId, clientSecret)) {
+        request.error = QStringLiteral(
+            "Strava OAuth credentials are not configured in this build.");
+        return request;
+    }
+    if (!isUsableOpaqueValue(token)) {
+        request.error = QStringLiteral(
+            "The Strava revocation token is missing or malformed.");
+        return request;
+    }
+
+    QString tokenTypeHint;
+    switch (tokenType) {
+    case RevocationTokenType::AccessToken:
+        tokenTypeHint = QStringLiteral("access_token");
+        break;
+    case RevocationTokenType::RefreshToken:
+        tokenTypeHint = QStringLiteral("refresh_token");
+        break;
+    default:
+        request.error = QStringLiteral(
+            "The Strava revocation token type is invalid.");
+        return request;
+    }
+
+    QByteArray basicCredentials = clientId.toUtf8();
+    basicCredentials.append(':');
+    basicCredentials.append(clientSecret.toUtf8());
+
+    request.endpoint = QUrl(QStringLiteral(
+        "https://www.strava.com/oauth/revoke"));
+    request.method = QByteArrayLiteral("POST");
+    request.authorizationHeader =
+        QByteArrayLiteral("Basic ")
+        + basicCredentials.toBase64();
+    request.contentTypeHeader = QByteArrayLiteral(
+        "application/x-www-form-urlencoded");
+    request.body = formEncode({
+        {QStringLiteral("token"), token},
+        {QStringLiteral("token_type_hint"), tokenTypeHint}
+    });
+    return request;
+}
+
 QString tokenFailureMessage(
     int httpStatus,
     QNetworkReply::NetworkError networkError,
@@ -408,6 +476,49 @@ QString tokenFailureMessage(
         }
         message = QStringLiteral(
             "Strava token request failed. Network error: %1.")
+                      .arg(transport);
+    }
+
+    const QString provider =
+        providerErrorSummary(payload, sensitiveValues);
+    if (!provider.isEmpty()) {
+        message.append(QLatin1Char(' '));
+        message.append(provider);
+        message.append(QLatin1Char('.'));
+    } else if (httpStatus >= 100
+               && httpStatus <= 599) {
+        const QString transport = redactAndBound(
+            networkErrorString, sensitiveValues);
+        if (!transport.isEmpty()) {
+            message.append(QLatin1Char(' '));
+            message.append(transport);
+            message.append(QLatin1Char('.'));
+        }
+    }
+    return message.left(MaximumFailureMessageLength);
+}
+
+QString revocationFailureMessage(
+    int httpStatus,
+    QNetworkReply::NetworkError networkError,
+    const QString &networkErrorString,
+    const QByteArray &payload,
+    const QStringList &sensitiveValues)
+{
+    QString message;
+    if (httpStatus >= 100 && httpStatus <= 599) {
+        message = QStringLiteral(
+            "Strava revocation request failed (HTTP %1).")
+                      .arg(httpStatus);
+    } else {
+        QString transport = redactAndBound(
+            networkErrorString, sensitiveValues);
+        if (transport.isEmpty()) {
+            transport = QStringLiteral("code %1")
+                            .arg(static_cast<int>(networkError));
+        }
+        message = QStringLiteral(
+            "Strava revocation request failed. Network error: %1.")
                       .arg(transport);
     }
 

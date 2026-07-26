@@ -30,6 +30,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <mutex>
 
 #include <QDialog>
@@ -205,6 +206,38 @@ class CloudService : public QObject {
         // open/connect and close/disconnect
         virtual bool open(QStringList &errors) { Q_UNUSED(errors); return false; }
         virtual bool close() { return false; }
+
+        enum class AccountDisconnectMode
+        {
+            RevokeRemote,
+            LocalOnly
+        };
+        struct AccountDisconnectResult
+        {
+            bool disconnected = false;
+            bool cleanupPending = false;
+            bool remoteAuthorizationMayRemain = true;
+            QString error;
+
+            bool isSuccess() const
+            {
+                return disconnected && error.isEmpty();
+            }
+        };
+        using AccountDisconnectCancellation =
+            std::function<bool()>;
+        using AccountDisconnectIrreversible =
+            std::function<void()>;
+        using AccountDisconnectOperation =
+            std::function<AccountDisconnectResult(
+                const AccountDisconnectCancellation &,
+                const AccountDisconnectIrreversible &)>;
+        virtual bool supportsAccountDisconnect() const
+            { return false; }
+        virtual AccountDisconnectOperation
+            accountDisconnectOperation(
+                AccountDisconnectMode) const
+            { return {}; }
 
         // what is the path to the home directory on this store
         virtual QString home() { return "/"; }

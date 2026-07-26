@@ -53,6 +53,8 @@
 #include "Measures.h"
 #include "StyledItemDelegates.h"
 
+class ActionButtonBox;
+
 class MeasuresPage : public QWidget
 {
     Q_OBJECT
@@ -218,6 +220,7 @@ class CredentialsPage : public QScrollArea
 
         Context *context;
         QTreeWidget *accounts;
+        ActionButtonBox *actionButtons;
 
 };
 

@@ -72,6 +72,14 @@ int cloudAutoDownloadTestBuffersAllocated();
 int cloudAutoDownloadTestBuffersReleased();
 int cloudAutoDownloadTestBuffersOutstanding();
 int athleteMigrationSettingsCrossThreadWrites();
+int athleteMigrationSettingsSyncCalls();
+void setAthleteMigrationSettingsSyncFails(bool enabled);
+void setAthleteMigrationSettingsSyncFailureCall(int call);
+void setAthleteMigrationUnrelatedSettingsSyncFails(
+    bool enabled);
+void setAthleteMigrationBlockStravaCredentialWrite(bool enabled);
+bool waitForAthleteMigrationStravaCredentialWrite(int timeoutMs);
+void releaseAthleteMigrationStravaCredentialWrite();
 
 int cloudAutoDownloadMaximumQueuedDownloadsForTest();
 qint64 cloudAutoDownloadMaximumQueuedDownloadBytesForTest();

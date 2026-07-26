@@ -18,10 +18,17 @@
 
 #include "Athlete.h"
 #include <QtGui>
+#include <QtConcurrent>
+#include <QFutureWatcher>
 #include <QIntValidator>
+#include <QPointer>
+#include <QProgressDialog>
+#include <QPushButton>
 
 #include <assert.h>
 #include <algorithm>
+#include <atomic>
+#include <memory>
 
 #include "AthletePages.h"
 #include "Units.h"
@@ -59,7 +66,9 @@
 //
 // Passwords page
 //
-CredentialsPage::CredentialsPage(Context *context) : context(context)
+CredentialsPage::CredentialsPage(Context *context)
+    : context(context),
+      actionButtons(nullptr)
 {
     setBackgroundRole(QPalette::Base);
     QGridLayout *mainLayout = new QGridLayout(this);
@@ -74,7 +83,9 @@ CredentialsPage::CredentialsPage(Context *context) : context(context)
     accounts->setIndentation(0);
     accounts->setAlternatingRowColors(true);
 
-    ActionButtonBox *actionButtons = new ActionButtonBox(ActionButtonBox::EditGroup | ActionButtonBox::AddDeleteGroup);
+    actionButtons = new ActionButtonBox(
+        ActionButtonBox::EditGroup
+        | ActionButtonBox::AddDeleteGroup);
 
     mainLayout->addWidget(accounts, 0,0);
     mainLayout->addWidget(actionButtons, 1,0);
@@ -143,21 +154,259 @@ CredentialsPage::addClicked()
 void
 CredentialsPage::deleteClicked()
 {
-    // delete current
     if (accounts->selectedItems().count() == 0) return;
 
-    // does it exist?
-    const CloudService *service = CloudServiceFactory::instance().service(accounts->selectedItems().first()->text(2));
-    if (service) {
+    const QString serviceId =
+        accounts->selectedItems().first()->text(2);
+    const CloudService *service =
+        CloudServiceFactory::instance().service(serviceId);
+    if (!service) return;
 
-        // set it inactive
-        appsettings->setCValue(context->athlete->cyclist, service->activeSettingName(), false);
-        appsettings->setCValue(context->athlete->cyclist, service->syncOnStartupSettingName(), false);
-        appsettings->setCValue(context->athlete->cyclist, service->syncOnImportSettingName(), false);
-
-        // reset
+    if (!service->supportsAccountDisconnect()) {
+        appsettings->setCValue(
+            context->athlete->cyclist,
+            service->activeSettingName(),
+            false);
+        appsettings->setCValue(
+            context->athlete->cyclist,
+            service->syncOnStartupSettingName(),
+            false);
+        appsettings->setCValue(
+            context->athlete->cyclist,
+            service->syncOnImportSettingName(),
+            false);
         resetList();
+        return;
     }
+
+    QMessageBox confirmation(
+        QMessageBox::Warning,
+        tr("Disconnect Strava"),
+        tr("Disconnecting from Strava revokes GoldenCheetah's "
+           "access before removing the local credentials. "
+           "Removing locally leaves the Strava authorization "
+           "active."),
+        QMessageBox::Cancel,
+        this);
+    QAbstractButton *disconnectButton = confirmation.addButton(
+        tr("Disconnect from Strava"),
+        QMessageBox::AcceptRole);
+    QAbstractButton *localButton = confirmation.addButton(
+        tr("Remove locally"),
+        QMessageBox::DestructiveRole);
+    confirmation.exec();
+
+    CloudService::AccountDisconnectMode mode;
+    if (confirmation.clickedButton() == disconnectButton) {
+        mode =
+            CloudService::AccountDisconnectMode::RevokeRemote;
+    } else if (confirmation.clickedButton() == localButton) {
+        mode = CloudService::AccountDisconnectMode::LocalOnly;
+    } else {
+        return;
+    }
+
+    std::unique_ptr<CloudService> configured(
+        CloudServiceFactory::instance().newService(
+            serviceId, context));
+    if (!configured) {
+        QMessageBox::warning(
+            this,
+            tr("Strava Disconnect"),
+            tr("The Strava account configuration is unavailable."));
+        return;
+    }
+
+    CloudService::AccountDisconnectOperation operation =
+        configured->accountDisconnectOperation(mode);
+    configured.reset();
+    if (!operation) {
+        QMessageBox::warning(
+            this,
+            tr("Strava Disconnect"),
+            tr("The Strava disconnect operation is unavailable."));
+        return;
+    }
+
+    const auto cancellation =
+        std::make_shared<std::atomic_bool>(false);
+    const auto irreversibleStarted =
+        std::make_shared<std::atomic_bool>(false);
+    const std::shared_ptr<QObject> irreversibleContext(
+        new QObject,
+        [](QObject *object) {
+            object->deleteLater();
+        });
+    const QString irreversibleText =
+        tr("Finishing Strava disconnect...");
+    QProgressDialog *progress = new QProgressDialog(
+        tr("Disconnecting from Strava..."),
+        tr("Cancel"),
+        0,
+        0,
+        this);
+    progress->setAutoClose(false);
+    progress->setAutoReset(false);
+    progress->setWindowTitle(tr("Strava Disconnect"));
+    progress->setWindowModality(Qt::ApplicationModal);
+    progress->setMinimumDuration(0);
+    connect(
+        progress,
+        &QProgressDialog::canceled,
+        progress,
+        [progress,
+         cancellation,
+         irreversibleStarted,
+         irreversibleText] {
+            if (irreversibleStarted->load(
+                    std::memory_order_acquire)) {
+                progress->setLabelText(irreversibleText);
+                progress->setCancelButton(nullptr);
+                progress->show();
+                return;
+            }
+            cancellation->store(
+                true, std::memory_order_relaxed);
+        });
+    connect(
+        this,
+        &QObject::destroyed,
+        progress,
+        [cancellation] {
+            cancellation->store(
+                true, std::memory_order_relaxed);
+        });
+
+    auto *watcher = new QFutureWatcher<
+        CloudService::AccountDisconnectResult>(this);
+    const QString athlete = context->athlete->cyclist;
+    const QString activeSetting =
+        service->activeSettingName();
+    const QString startupSetting =
+        service->syncOnStartupSettingName();
+    const QString importSetting =
+        service->syncOnImportSettingName();
+    const QPointer<QProgressDialog> guardedProgress(
+        progress);
+    connect(
+        watcher,
+        &QFutureWatcher<
+            CloudService::AccountDisconnectResult>::finished,
+        this,
+        [this,
+         watcher,
+         guardedProgress,
+         irreversibleContext,
+         athlete,
+         activeSetting,
+         startupSetting,
+         importSetting] {
+            CloudService::AccountDisconnectResult result;
+            try {
+                result = watcher->result();
+            } catch (...) {
+                result.error = tr(
+                    "The Strava disconnect operation failed "
+                    "unexpectedly.");
+            }
+            Q_UNUSED(irreversibleContext)
+            watcher->deleteLater();
+            accounts->setEnabled(true);
+            actionButtons->setEnabled(true);
+            if (guardedProgress) {
+                guardedProgress->close();
+                guardedProgress->deleteLater();
+            }
+
+            if (!result.isSuccess()) {
+                QString error = result.error;
+                if (error.isEmpty()) {
+                    error = tr(
+                        "The Strava account could not be "
+                        "disconnected.");
+                }
+                if (result.remoteAuthorizationMayRemain) {
+                    error.append(QLatin1Char('\n'));
+                    error.append(tr(
+                        "Strava may still authorize "
+                        "GoldenCheetah. Retry the disconnect or "
+                        "revoke access in Strava."));
+                }
+                QMessageBox::warning(
+                    this, tr("Strava Disconnect"), error);
+                return;
+            }
+
+            appsettings->setCValue(
+                athlete, activeSetting, false);
+            appsettings->setCValue(
+                athlete, startupSetting, false);
+            appsettings->setCValue(
+                athlete, importSetting, false);
+            resetList();
+
+            if (result.cleanupPending && result.remoteAuthorizationMayRemain) {
+                QMessageBox::warning(
+                    this,
+                    tr("Strava Disconnect"),
+                    tr("The local Strava credentials were removed and "
+                       "local account cleanup is still pending. "
+                       "GoldenCheetah may "
+                       "still be authorized in Strava."));
+            } else if (result.cleanupPending) {
+                QMessageBox::warning(
+                    this,
+                    tr("Strava Disconnect"),
+                    tr("Strava access was revoked, but local "
+                       "account cleanup is still pending."));
+            } else if (
+                result.remoteAuthorizationMayRemain) {
+                QMessageBox::information(
+                    this,
+                    tr("Strava Disconnect"),
+                    tr("The local Strava credentials were "
+                       "removed. GoldenCheetah may still be "
+                       "authorized in Strava."));
+            }
+        });
+    accounts->setEnabled(false);
+    actionButtons->setEnabled(false);
+    QFuture<CloudService::AccountDisconnectResult> future =
+        QtConcurrent::run(
+            [operation,
+             cancellation,
+             irreversibleStarted,
+             irreversibleContext,
+             guardedProgress,
+             irreversibleText] {
+                return operation(
+                    [cancellation] {
+                        return cancellation->load(
+                            std::memory_order_relaxed);
+                    },
+                    [irreversibleStarted,
+                     irreversibleContext,
+                     guardedProgress,
+                     irreversibleText] {
+                        irreversibleStarted->store(
+                            true,
+                            std::memory_order_release);
+                        QMetaObject::invokeMethod(
+                            irreversibleContext.get(),
+                            [guardedProgress,
+                             irreversibleText] {
+                                if (!guardedProgress)
+                                    return;
+                                guardedProgress->setLabelText(
+                                    irreversibleText);
+                                guardedProgress->setCancelButton(nullptr);
+                                guardedProgress->show();
+                            },
+                            Qt::QueuedConnection);
+                    });
+            });
+    watcher->setFuture(future);
+    progress->show();
 }
 
 void

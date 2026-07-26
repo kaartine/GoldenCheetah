@@ -12,6 +12,7 @@
 
 #include <QByteArray>
 #include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QString>
 #include <QStringList>
 #include <QUrl>
@@ -46,6 +47,39 @@ struct TokenResponse {
     }
 };
 
+enum class RevocationTokenType {
+    AccessToken,
+    RefreshToken
+};
+
+struct RevocationRequest {
+    QUrl endpoint;
+    QByteArray method;
+    QByteArray authorizationHeader;
+    QByteArray contentTypeHeader;
+    QByteArray body;
+    QNetworkRequest::RedirectPolicy redirectPolicy =
+        QNetworkRequest::ManualRedirectPolicy;
+    QString error;
+
+    bool isValid() const
+    {
+        return error.isEmpty()
+            && endpoint == QUrl(QStringLiteral(
+                "https://www.strava.com/oauth/revoke"))
+            && method == QByteArrayLiteral("POST")
+            && authorizationHeader.startsWith(
+                QByteArrayLiteral("Basic "))
+            && authorizationHeader.size()
+                > QByteArrayLiteral("Basic ").size()
+            && contentTypeHeader == QByteArrayLiteral(
+                "application/x-www-form-urlencoded")
+            && !body.isEmpty()
+            && redirectPolicy
+                == QNetworkRequest::ManualRedirectPolicy;
+    }
+};
+
 bool hasUsableCredentials(const QString &clientId,
                           const QString &clientSecret);
 TokenRequest authorizationCodeRequest(
@@ -56,7 +90,18 @@ TokenRequest refreshTokenRequest(
     const QString &clientId,
     const QString &clientSecret,
     const QString &refreshToken);
+RevocationRequest revocationRequest(
+    const QString &clientId,
+    const QString &clientSecret,
+    const QString &token,
+    RevocationTokenType tokenType);
 QString tokenFailureMessage(
+    int httpStatus,
+    QNetworkReply::NetworkError networkError,
+    const QString &networkErrorString,
+    const QByteArray &payload,
+    const QStringList &sensitiveValues);
+QString revocationFailureMessage(
     int httpStatus,
     QNetworkReply::NetworkError networkError,
     const QString &networkErrorString,

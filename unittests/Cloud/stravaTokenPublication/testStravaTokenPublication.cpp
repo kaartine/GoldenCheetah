@@ -79,6 +79,7 @@ private slots:
     void timestampFailureCanBeRetriedWithoutConflict();
     void authoritativePublicationReplacesUnrelatedGrant();
     void removalClearsCredentialsAndTimestamp();
+    void alreadyClearedRemovalCanBeRetried();
     void removalConflictDoesNotWrite();
     void pendingVaultCleanupStillRemovesLogicalCredentials();
     void accessibleCredentialAfterRemovalFailureFailsClosed();
@@ -294,6 +295,24 @@ removalClearsCredentialsAndTimestamp()
             QStringLiteral("timestamp"),
             QStringLiteral("read")
         }));
+}
+
+void TestStravaTokenPublication::
+alreadyClearedRemovalCanBeRetried()
+{
+    FakeStore store;
+    store.stored = {};
+
+    const RemovalResult result = remove(
+        QStringLiteral("refresh-previous"),
+        PublicationMode::CompareAndSwap,
+        store.callbacks());
+
+    QVERIFY(result.isSuccess());
+    QCOMPARE(result.status, RemovalStatus::Cleared);
+    QVERIFY(store.stored.accessToken.isEmpty());
+    QVERIFY(store.stored.refreshToken.isEmpty());
+    QVERIFY(!store.timestampPresent);
 }
 
 void TestStravaTokenPublication::removalConflictDoesNotWrite()

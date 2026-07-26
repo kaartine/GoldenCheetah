@@ -176,6 +176,7 @@ private slots:
     void migratePlaintextCoversConfiguredCredentials();
     void gsettingsRoutesCredentialsToVault();
     void gsettingsCheckedCredentialWriteReportsPersistence();
+    void gsettingsSyncsOnlyRequestedAthleteFile();
     void newFormatMigrationScrubsLegacyCredential();
     void newFormatFailedMigrationIsRetriedWithoutCredentialLoss();
     void preInitializationMigrationKeepsAthleteScope();
@@ -927,6 +928,71 @@ gsettingsCheckedCredentialWriteReportsPersistence()
                      QStringLiteral("missing")).toString(),
                  sentinel);
     }
+}
+
+void TestCredentialSettings::
+gsettingsSyncsOnlyRequestedAthleteFile()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(
+        QSettings::NativeFormat,
+        QSettings::UserScope,
+        temporary.path());
+    QSettings::setPath(
+        QSettings::IniFormat,
+        QSettings::UserScope,
+        temporary.path());
+    const QString organization =
+        QStringLiteral("CredentialTargetedSync-")
+        + QUuid::createUuid().toString(
+            QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString first = QStringLiteral("First");
+    const QString second = QStringLiteral("Second");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("athletes"));
+    QVERIFY(QDir().mkpath(
+        athleteRoot
+        + QStringLiteral("/First/config")));
+    QVERIFY(QDir().mkpath(
+        athleteRoot
+        + QStringLiteral("/Second/config")));
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    GSettings settings(organization, application);
+    settings.initializeQSettingsGlobal(athleteRoot);
+    settings.initializeQSettingsAthlete(
+        athleteRoot, first);
+    settings.initializeQSettingsAthlete(
+        athleteRoot, second);
+    settings.setCValue(
+        first,
+        GC_STRAVA_AUTHORIZATION_STATE,
+        QStringLiteral("authorization_pending"));
+    settings.setCValue(
+        second,
+        GC_STRAVA_AUTHORIZATION_STATE,
+        QStringLiteral("active"));
+
+    QVERIFY(settings.syncCValueChecked(
+        first, GC_STRAVA_AUTHORIZATION_STATE));
+    const QString firstPrivate = athleteRoot
+        + QStringLiteral(
+            "/First/config/athlete-private.ini");
+    const QString secondPrivate = athleteRoot
+        + QStringLiteral(
+            "/Second/config/athlete-private.ini");
+    QVERIFY(fileContents(firstPrivate).contains(
+        "authorization_pending"));
+    QVERIFY(!fileContents(secondPrivate).contains(
+        "authorization_state"));
+    QVERIFY(!settings.syncCValueChecked(
+        QStringLiteral("Missing"),
+        GC_STRAVA_AUTHORIZATION_STATE));
+    QVERIFY(!settings.syncCValueChecked(
+        first, GC_SETTINGS_MAIN_GEOM));
 }
 
 void TestCredentialSettings::newFormatMigrationScrubsLegacyCredential()

@@ -48,7 +48,10 @@
 #include <QThread>
 #include <QTimer>
 
+#include <chrono>
 #include <cstring>
+#include <condition_variable>
+#include <mutex>
 #include <stdexcept>
 #include <utility>
 
@@ -57,6 +60,15 @@ namespace {
 QHash<QString, QVariant> testValues;
 QMutex testValuesMutex;
 int settingsCrossThreadWrites = 0;
+bool settingsSyncFails = false;
+int settingsSyncCalls = 0;
+int settingsSyncFailureCall = 0;
+bool unrelatedSettingsSyncFails = false;
+std::mutex stravaCredentialWriteMutex;
+std::condition_variable stravaCredentialWriteCondition;
+bool blockStravaCredentialWrite = false;
+bool stravaCredentialWriteEntered = false;
+bool stravaCredentialWriteReleased = false;
 QMutex validContextsMutex;
 QSet<Context *> validContexts;
 bool throwOnAthleteIdWrite = false;
@@ -113,8 +125,20 @@ void resetAthleteMigrationTestSettings()
         QMutexLocker locker(&testValuesMutex);
         testValues.clear();
         settingsCrossThreadWrites = 0;
+        settingsSyncFails = false;
+        settingsSyncCalls = 0;
+        settingsSyncFailureCall = 0;
+        unrelatedSettingsSyncFails = false;
     }
     throwOnAthleteIdWrite = false;
+    {
+        const std::lock_guard<std::mutex> lock(
+            stravaCredentialWriteMutex);
+        blockStravaCredentialWrite = false;
+        stravaCredentialWriteEntered = false;
+        stravaCredentialWriteReleased = true;
+    }
+    stravaCredentialWriteCondition.notify_all();
     throwOnRideCacheConstruction = false;
     emitRideCacheLoadComplete = false;
     throwOnChartLoad = false;
@@ -181,6 +205,61 @@ int athleteMigrationSettingsCrossThreadWrites()
 {
     QMutexLocker locker(&testValuesMutex);
     return settingsCrossThreadWrites;
+}
+
+int athleteMigrationSettingsSyncCalls()
+{
+    QMutexLocker locker(&testValuesMutex);
+    return settingsSyncCalls;
+}
+
+void setAthleteMigrationSettingsSyncFails(bool enabled)
+{
+    QMutexLocker locker(&testValuesMutex);
+    settingsSyncFails = enabled;
+}
+
+void setAthleteMigrationSettingsSyncFailureCall(int call)
+{
+    QMutexLocker locker(&testValuesMutex);
+    settingsSyncFailureCall = call;
+}
+
+void setAthleteMigrationUnrelatedSettingsSyncFails(
+    bool enabled)
+{
+    QMutexLocker locker(&testValuesMutex);
+    unrelatedSettingsSyncFails = enabled;
+}
+
+void setAthleteMigrationBlockStravaCredentialWrite(bool enabled)
+{
+    const std::lock_guard<std::mutex> lock(
+        stravaCredentialWriteMutex);
+    blockStravaCredentialWrite = enabled;
+    stravaCredentialWriteEntered = false;
+    stravaCredentialWriteReleased = !enabled;
+}
+
+bool waitForAthleteMigrationStravaCredentialWrite(
+    int timeoutMs)
+{
+    std::unique_lock<std::mutex> lock(
+        stravaCredentialWriteMutex);
+    return stravaCredentialWriteCondition.wait_for(
+        lock,
+        std::chrono::milliseconds(timeoutMs),
+        [] { return stravaCredentialWriteEntered; });
+}
+
+void releaseAthleteMigrationStravaCredentialWrite()
+{
+    {
+        const std::lock_guard<std::mutex> lock(
+            stravaCredentialWriteMutex);
+        stravaCredentialWriteReleased = true;
+    }
+    stravaCredentialWriteCondition.notify_all();
 }
 
 void setAthleteMigrationThrowOnIdWrite(bool enabled)
@@ -287,6 +366,17 @@ void GSettings::setCValue(QString athleteName, QString key, QVariant value)
 bool GSettings::setCValueChecked(
     QString athleteName, QString key, QVariant value)
 {
+    if (key == GC_STRAVA_REFRESH_TOKEN) {
+        std::unique_lock<std::mutex> lock(
+            stravaCredentialWriteMutex);
+        if (blockStravaCredentialWrite) {
+            stravaCredentialWriteEntered = true;
+            stravaCredentialWriteCondition.notify_all();
+            stravaCredentialWriteCondition.wait(
+                lock,
+                [] { return stravaCredentialWriteReleased; });
+        }
+    }
     setCValue(athleteName, key, value);
     return true;
 }
@@ -298,6 +388,31 @@ bool GSettings::contains(const QString &) const
 
 void GSettings::initializeQSettingsAthlete(QString, QString)
 {
+}
+
+void GSettings::syncQSettingsAllAthletes()
+{
+}
+
+bool GSettings::syncQSettingsAllAthletesChecked()
+{
+    QMutexLocker locker(&testValuesMutex);
+    ++settingsSyncCalls;
+    return !settingsSyncFails
+        && !unrelatedSettingsSyncFails
+        && (settingsSyncFailureCall <= 0
+            || settingsSyncCalls != settingsSyncFailureCall);
+}
+
+bool GSettings::syncCValueChecked(
+    const QString &,
+    const QString &)
+{
+    QMutexLocker locker(&testValuesMutex);
+    ++settingsSyncCalls;
+    return !settingsSyncFails
+        && (settingsSyncFailureCall <= 0
+            || settingsSyncCalls != settingsSyncFailureCall);
 }
 
 AppearanceSettings GSettings::defaultAppearanceSettings()

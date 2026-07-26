@@ -36,6 +36,7 @@
 #include <QWebEngineProfile>
 #include <QWebEngineCookieStore>
 
+#include <cstdint>
 #include <memory>
 
 namespace OAuthCallbackPolicy {
@@ -93,6 +94,7 @@ private:
     QString clientsecret; // can be passed, but typicall is blank (used by Todays Plan)
     QString codeVerifier; // PKCE code_verifier, used by Tredict and other PKCE services
     QStringList tokenRequestSensitiveValues;
+    std::uint64_t stravaAuthorizationEpoch = 0;
     std::unique_ptr<OAuthCallbackPolicy::Session> callbackSession;
     QUrl redirectUri;
 

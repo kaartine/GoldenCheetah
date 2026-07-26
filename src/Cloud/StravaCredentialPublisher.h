@@ -26,6 +26,18 @@ struct Request
     QString refreshedAt;
     StravaTokenPublication::PublicationMode mode =
         StravaTokenPublication::PublicationMode::CompareAndSwap;
+    bool activatesAuthorization = false;
+    bool clearsRemoteGrantUncertainty = false;
+
+    bool isValid() const;
+};
+
+struct RemovalRequest
+{
+    QString accountKey;
+    QString expectedRefreshToken;
+    StravaTokenPublication::PublicationMode mode =
+        StravaTokenPublication::PublicationMode::CompareAndSwap;
 
     bool isValid() const;
 };
@@ -34,6 +46,18 @@ using CancellationCheck = std::function<bool()>;
 
 StravaTokenPublication::PublicationResult publish(
     const Request &request,
+    int timeoutMs = 30000,
+    const CancellationCheck &cancelled = {});
+bool markAuthorizationPending(
+    const QString &accountKey,
+    int timeoutMs = 30000,
+    const CancellationCheck &cancelled = {});
+bool markRevocationPending(
+    const QString &accountKey,
+    int timeoutMs = 30000,
+    const CancellationCheck &cancelled = {});
+StravaTokenPublication::RemovalResult remove(
+    const RemovalRequest &request,
     int timeoutMs = 30000,
     const CancellationCheck &cancelled = {});
 

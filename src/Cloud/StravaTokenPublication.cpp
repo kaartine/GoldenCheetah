@@ -13,6 +13,13 @@ namespace StravaTokenPublication {
 
 namespace {
 
+constexpr int MaximumErrorLength = 1024;
+
+QString boundedError(const QString &error)
+{
+    return error.left(MaximumErrorLength);
+}
+
 PublicationResult invalidInput()
 {
     return {
@@ -26,6 +33,43 @@ PublicationResult storageFailure()
     return {
         PublicationStatus::StorageFailure,
         QStringLiteral("Strava credentials could not be stored securely.")
+    };
+}
+
+RemovalResult invalidRemovalInput()
+{
+    return {
+        RemovalStatus::InvalidInput,
+        boundedError(QStringLiteral(
+            "Strava credential removal inputs are invalid."))
+    };
+}
+
+RemovalResult removalConflict()
+{
+    return {
+        RemovalStatus::Conflict,
+        boundedError(QStringLiteral(
+            "Newer Strava credentials are already configured."))
+    };
+}
+
+RemovalResult removalStorageFailure()
+{
+    return {
+        RemovalStatus::StorageFailure,
+        boundedError(QStringLiteral(
+            "Strava credentials could not be removed securely."))
+    };
+}
+
+RemovalResult cleanupPending()
+{
+    return {
+        RemovalStatus::CleanupPending,
+        boundedError(QStringLiteral(
+            "Strava credentials were removed, but secure storage "
+            "cleanup is still pending."))
     };
 }
 
@@ -81,6 +125,74 @@ PublicationResult publish(
     } catch (...) {
         return storageFailure();
     }
+}
+
+RemovalResult remove(
+    const QString &expectedRefreshToken,
+    PublicationMode mode,
+    const PublicationCallbacks &callbacks)
+{
+    const bool supportedMode =
+        mode == PublicationMode::CompareAndSwap
+        || mode == PublicationMode::Authoritative;
+    if (!supportedMode
+        || !callbacks.isValid()
+        || (mode == PublicationMode::CompareAndSwap
+            && expectedRefreshToken.isEmpty())) {
+        return invalidRemovalInput();
+    }
+
+    TokenPair current;
+    try {
+        current = callbacks.readCurrent();
+    } catch (...) {
+        return removalStorageFailure();
+    }
+
+    if (mode == PublicationMode::CompareAndSwap
+        && !current.refreshToken.isEmpty()
+        && current.refreshToken != expectedRefreshToken) {
+        return removalConflict();
+    }
+
+    bool physicalFailure = false;
+    try {
+        physicalFailure =
+            !callbacks.writeRefreshToken(QString());
+    } catch (...) {
+        physicalFailure = true;
+    }
+    try {
+        if (!callbacks.writeAccessToken(QString()))
+            physicalFailure = true;
+    } catch (...) {
+        physicalFailure = true;
+    }
+    try {
+        if (!callbacks.writeTimestamp(QString()))
+            physicalFailure = true;
+    } catch (...) {
+        physicalFailure = true;
+    }
+
+    TokenPair remaining;
+    try {
+        remaining = callbacks.readCurrent();
+    } catch (...) {
+        return removalStorageFailure();
+    }
+
+    if (!remaining.accessToken.isEmpty()
+        || !remaining.refreshToken.isEmpty()) {
+        return removalStorageFailure();
+    }
+    if (physicalFailure)
+        return cleanupPending();
+
+    return {
+        RemovalStatus::Cleared,
+        QString()
+    };
 }
 
 } // namespace StravaTokenPublication

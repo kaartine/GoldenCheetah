@@ -2941,23 +2941,191 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### CLOUD-007: Removing Strava locally does not revoke provider authorization
 
-- Status: OPEN
-- Code: `src/Cloud/Strava.cpp:163` and
-  `src/Gui/AthletePages.cpp:143`
+- Status: FIXED
+- Code: `src/Cloud/CloudService.h`, `src/Cloud/Strava.cpp`,
+  `src/Cloud/StravaAccountRemoval.cpp`,
+  `src/Cloud/StravaRevocationClient.cpp`,
+  `src/Cloud/StravaCredentialPublisher.cpp`,
+  `src/Cloud/StravaTokenPublication.cpp`,
+  `src/Cloud/StravaTokenRefresh.cpp`, `src/Core/Settings.cpp`, and
+  `src/Gui/AthletePages.cpp`
 - Impact: Disabling or removing the local service leaves its access and refresh
   tokens usable and leaves GoldenCheetah authorized in the athlete's Strava
   account. Users can reasonably believe the integration was disconnected when
   only a local active flag changed.
-- Evidence: `Strava::close()` is a no-op and the repository contains no
-  Strava deauthorization call. Strava introduced `POST /oauth/revoke` on 1 June
-  2026 and states that it becomes the only supported revocation endpoint on
-  1 June 2027.
-- Test: A confirmed disconnect must send the documented authenticated revoke
-  request. HTTP 200 clears local credentials; timeout or 503 retains recoverable
-  state and reports that remote authorization may still exist.
-- Fix direction: Make disconnect an explicit, confirmable operation, call the
-  new revoke endpoint over verified HTTPS, and clear vault-backed tokens only
-  after success or an explicit local-only override.
+- Test-first evidence: Commit `f35476c` added failing contracts for the absent
+  revocation client, account-removal coordinator, generic disconnect API, and
+  settings wiring before production implementation. Commit `12edd06` then
+  captured the review-discovered fail-open cases: placeholder OAuth credentials
+  mutating authorization state, uncertain refresh publication admitting an old
+  token, pending persistence racing an active refresh, cancellation before the
+  durable transition, access-token revocation reporting false uncertainty, and
+  loss of a successful remote result after local cleanup failure. Additional
+  RED cases required persisted restart evidence for a remotely uncertain grant,
+  atomic marker transitions, and OAuth preservation of an overlapping
+  refresh's uncertainty. Commit `bf01688` added failing contracts for the
+  irreversible disconnect boundary and a known rotated grant. Commit `92c7c1a`
+  then captured cancellation/timeout state recovery, provider-token versus
+  local-CAS-token separation, fail-closed remote uncertainty, the progress
+  callback lifetime, and the GUI exception boundary before those fixes.
+  Commit `e482d0c` added the remaining RED contract for restoring a progress
+  dialog when Cancel races the irreversible phase transition.
+- Resolution: Removing Strava is now an explicit, confirmable asynchronous
+  operation with separate remote-disconnect and local-only choices. Remote
+  removal sends the authenticated revocation request over verified HTTPS and
+  accepts only HTTP 200. It blocks new API permits, advances the athlete grant
+  epoch, drains or aborts active requests and refreshes, and then persists the
+  fail-closed pending state before any remote mutation. This ordering prevents
+  an older refresh publication from restoring durable active state after the
+  pending commit. Cancellation or timeout before that commit now reconciles the
+  in-memory canonical token and cache with the latest durable pair, leaving a
+  safe active grant usable. After the commit, cancellation is intentionally
+  ignored, the UI removes its Cancel control, and the operation completes.
+  Placeholder build credentials fail before any state change.
+  An ambiguous refresh publication immediately blocks new requests in the
+  current process and remains pending across restart. The latest observed token
+  is used only for the provider request, while the durable token remains the
+  local compare-and-swap expectation. Credentials are cleared only after a
+  provider-confirmed HTTP 200 response or an explicit local-only override, and
+  a successful remote result is retained if local cleanup subsequently fails.
+  Access- and refresh-token revocation are both treated as revoking the
+  associated grant, as specified by Strava. Successful refresh, OAuth
+  activation, and removal publish their related state with targeted settings
+  synchronization. Pre-revocation failures preserve remote uncertainty. The UI
+  reports that uncertainty and local cleanup failures without claiming remote
+  success where none is known, uses a stable GUI-thread context for phase
+  updates, and catches asynchronous service exceptions.
+- Verification: The 364 focused coordinator, publication, OAuth, settings,
+  account-removal, session, and migration cases pass normally and again under
+  strict ASan/UBSan/LSan with leak detection. All 50 coordinator cases also
+  pass under ThreadSanitizer with uninstrumented Qt modules excluded. The
+  complete application build, AppImage packaging consistency check, and
+  top-level test matrix pass.
+
+### CLOUD-009: Strava removal conflated provider and local CAS tokens
+
+- Status: FIXED
+- Code: `src/Cloud/StravaTokenRefresh.cpp` and
+  `src/Cloud/StravaAccountRemoval.cpp`
+- Impact: After a provider rotation whose local publication failed, removal
+  correctly selected the newest observed token for remote revocation but also
+  used it as the local credential-removal compare-and-swap expectation. The
+  durable store still held the older token, so provider revocation could
+  succeed while local cleanup always conflicted and remained pending.
+- Test-first evidence: Commit `92c7c1a` reproduced the mismatch by requiring
+  the rotated token at the provider boundary and the durable token at the
+  publisher boundary.
+- Resolution: The coordinator now passes separate remote and durable tokens in
+  one removal transaction. The provider gets the latest known grant token;
+  local compare-and-swap uses the token that actually committed durably.
+- Verification: All 16 account-removal cases pass normally and under strict
+  ASan/UBSan/LSan, and the complete matrix passes.
+
+### THREAD-012: Aborted Strava removal could retain a stale canonical token
+
+- Status: FIXED
+- Code: `src/Cloud/StravaTokenRefresh.cpp`
+- Impact: A refresh completing while removal drained requests could publish a
+  new durable pair but have its caller result rejected by `removalInFlight`.
+  Cancellation or timeout before the pending commit then restored active state
+  without updating the canonical token or stale cache. A later refresh could
+  send the superseded token and fail the otherwise active account.
+- Test-first evidence: Commit `92c7c1a` added deterministic cancellation and
+  timeout rows that held an active request, completed a rotating refresh during
+  removal, aborted removal, and observed the old token on retry.
+- Resolution: Every pre-commit removal-abort path reconciles canonical state
+  with the durable token, remembers that token, and discards a cache whose pair
+  no longer matches durable storage.
+- Verification: Both RED rows pass in the 50-case normal, sanitizer, and
+  ThreadSanitizer coordinator runs.
+
+### MEM-021: Strava phase callback could target a destroyed progress dialog
+
+- Status: FIXED
+- Code: `src/Gui/AthletePages.cpp`
+- Impact: A worker checked a cross-thread `QPointer` and then separately passed
+  its raw widget pointer to `QMetaObject::invokeMethod`. Destruction between
+  those operations could make the invocation target dangling during settings
+  page or application teardown.
+- Test-first evidence: Commit `92c7c1a` forbade the raw `QPointer` invocation
+  target and required an independently owned GUI context before the fix.
+- Resolution: The worker retains a shared, GUI-affine `QObject` context for the
+  queued phase update. The progress-dialog `QPointer` is dereferenced only
+  inside the GUI-thread callback. A shared irreversible flag also prevents a
+  late visible Cancel action from changing operation state, and the queued
+  phase update restores a dialog hidden by a boundary-racing Cancel before
+  removing its Cancel control.
+- Verification: The UI source contract and complete application build pass.
+  Runtime widget lifecycle coverage remains tracked by `TEST-001`.
+
+### CLOUD-010: Pre-revocation failures suppressed remote uncertainty
+
+- Status: FIXED
+- Code: `src/Cloud/StravaTokenRefresh.cpp` and
+  `src/Cloud/StravaAccountRemoval.cpp`
+- Impact: Cancellation, drain timeout, pending-state persistence failure, and
+  a throwing removal operation defaulted `remoteAuthorizationMayRemain` to
+  false even though provider revocation had not been confirmed. The UI could
+  omit the warning that Strava might still authorize GoldenCheetah.
+- Test-first evidence: Commit `92c7c1a` added failing cancellation, timeout,
+  pending-storage, and throwing-operation expectations.
+- Resolution: Coordinator-generated removal failures now default to
+  fail-closed remote uncertainty. Explicit provider success can still preserve
+  a known false value across a subsequent local-cleanup failure.
+- Verification: The coordinator and account-removal suites pass normally and
+  under strict sanitizers.
+
+### DUR-009: Partial Strava credential publication has no automatic recovery
+
+- Status: OPEN
+- Code: `src/Cloud/StravaTokenPublication.cpp`,
+  `src/Cloud/StravaCredentialPublisher.cpp`, and `src/Cloud/Strava.cpp`
+- Impact: Refresh-token rotation must persist the new refresh token before the
+  corresponding access token. If the later access-token or timestamp write
+  fails, the coordinator correctly leaves authorization pending, but
+  production does not schedule recovery. The in-process coordinator still
+  knows the observed pair and the publication primitive can retry, but a
+  restart loses that evidence and requires reauthorization or disconnection.
+- Test: Inject a one-time access-token or timestamp persistence failure,
+  restart against the same settings and vault, and require deterministic
+  recovery without admitting API requests until the complete pair is active.
+- Fix direction: Persist a minimal secure recovery journal for the observed
+  pair and retry publication during startup. Never mark the grant active until
+  every credential and metadata write has committed and synchronized.
+
+### THREAD-010: Strava grant coordination is process-local
+
+- Status: OPEN
+- Code: `src/Cloud/StravaTokenRefresh.cpp` and
+  `src/Cloud/StravaCredentialPublisher.cpp`
+- Impact: Static mutexes, registries, epochs, and request permits coordinate
+  service clones only inside one GoldenCheetah process. Two processes using the
+  same athlete profile can concurrently rotate, revoke, install, or publish a
+  grant and defeat the otherwise serialized state machine.
+- Test: Run independent subprocesses against one disposable athlete settings
+  tree and fake provider. Force overlapping refresh, OAuth, and removal
+  operations and require one durable ordering with no stale token publication.
+- Fix direction: Add a per-athlete interprocess lease around remote grant
+  mutation and credential publication, backed by a durable generation checked
+  before and after each network transition.
+
+### THREAD-011: Started Strava settings commits can block callers indefinitely
+
+- Status: OPEN
+- Code: `src/Cloud/StravaCredentialPublisher.cpp`
+  (`runOnSettingsThread`)
+- Impact: Cancellation and deadline handling can abandon an operation that has
+  not started on the settings thread. Once the GUI thread begins a credential
+  write, the caller waits for its definitive result even after the deadline.
+  This avoids reporting timeout while a mutation can later commit silently,
+  but an indefinitely blocked credential backend can hang a worker or
+  application teardown.
+- Test: Block a settings backend after the GUI-side operation starts, then
+  cancel and expire the deadline. Require bounded owner teardown and a durable,
+  explicit unknown or pending result that startup recovery can resolve.
+- Fix direction: Use a bounded or cancellable storage backend, or move the
+  durable operation to an owned worker with a recoverable transaction identity.
+  Do not return timeout while an untracked mutation can still commit.
 
 ### BUILD-010: AppImage credential gate treats absence of one marker as proof
 
@@ -3054,6 +3222,24 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   nor keeping only the source define private solves distribution exposure.
 
 ## Low
+
+### TEST-001: Strava disconnect UI lifetime coverage is source-only
+
+- Status: OPEN
+- Code: `src/Gui/AthletePages.cpp` and
+  `unittests/Cloud/stravaOAuthPolicy/testStravaOAuthPolicy.cpp`
+- Impact: The implementation guards the page and progress dialog lifetimes,
+  owns the watcher beneath the page, binds completion to a context object, and
+  shares cancellation state. However, the current UI regression only inspects
+  source wiring. A future refactor could reintroduce a callback after page
+  destruction or leave controls disabled without failing a runtime test.
+- Test: Instantiate the credentials page with an injectable fake disconnect
+  operation. Cover cancellation, page destruction while pending, provider
+  failure, local-cleanup uncertainty, and success; verify callback lifetime,
+  button state, and resulting settings in every path.
+- Fix direction: Inject the disconnect operation behind the existing service
+  contract and add a Qt widget lifecycle suite using a disposable athlete
+  profile.
 
 ### BUILD-008: Qt 6.8.3 reports impossible QVariant inline-storage overflows
 
