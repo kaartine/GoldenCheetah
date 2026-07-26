@@ -127,9 +127,11 @@ QString inride_command_result_to_string(inride_command_result r) {
 void inride_BTDeviceInfoToSystemID(const QBluetoothDeviceInfo &devinfo, uint8_t systemID[6]) {
 
     const QBluetoothAddress addr = devinfo.address();
-    uint64_t addr64 = 0;
     if (!addr.isNull()) {
-        addr64 = addr.toUInt64();
+        const quint64 address = addr.toUInt64();
+        for (int i = 0; i < 6; ++i) {
+            systemID[i] = static_cast<uint8_t>(address >> (i * 8));
+        }
     } else {
         // Mac doesn't 'have' bt addresses so use uuid instead?
         // I have no idea if its the same on mac. If this doesn't
@@ -155,26 +157,12 @@ void inride_BTDeviceInfoToSystemID(const QBluetoothDeviceInfo &devinfo, uint8_t 
 
         // Perhaps there's a quick easy way for this to also work on mac using
         // device uuid?
-        
-        QBluetoothUuid uuid = devinfo.deviceUuid();
-
-        quint128 be_uuid128 = uuid.toUInt128();
-
-// GC minimum Qt required for v3.8 is Qt6.5.3
-#if QT_VERSION < 0x060600
-        addr64 = *(uint64_t*)be_uuid128.data;
-#else
-        addr64 = *(uint64_t*)&be_uuid128;
-#endif
+        const QByteArray uuidBytes = devinfo.deviceUuid().toRfc4122();
+        for (int i = 0; i < 6; ++i) {
+            systemID[i] = static_cast<uint8_t>(
+                static_cast<unsigned char>(uuidBytes.at(i)));
+        }
     }
-
-    uint8_t* paddr64 = (uint8_t*)&addr64;
-
-    int dIdx = 0;
-    for (int i = 0; i < 6; i++) {
-        systemID[dIdx++] = paddr64[i];
-    }
-
 
     qDebug() << "SystemID: " << Qt::hex << systemID[0] << systemID[1] << systemID[2] << systemID[3] << systemID[4] << systemID[5];
 }

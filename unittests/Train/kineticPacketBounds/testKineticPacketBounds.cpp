@@ -27,6 +27,8 @@ class TestKineticPacketBounds : public QObject
     Q_OBJECT
 
 private slots:
+    void inrideSystemIdUsesBluetoothAddress();
+    void inrideSystemIdFallsBackToDeviceUuid();
     void inrideConfigLengths_data();
     void inrideConfigLengths();
     void inridePowerLengths_data();
@@ -38,6 +40,33 @@ private slots:
     void smartControlPointerParserLengths_data();
     void smartControlPointerParserLengths();
 };
+
+static QByteArray inrideSystemId(const QBluetoothDeviceInfo &deviceInfo)
+{
+    uint8_t systemId[6] = {};
+    inride_BTDeviceInfoToSystemID(deviceInfo, systemId);
+    return QByteArray(reinterpret_cast<const char *>(systemId), sizeof(systemId));
+}
+
+void TestKineticPacketBounds::inrideSystemIdUsesBluetoothAddress()
+{
+    const QBluetoothDeviceInfo deviceInfo(
+        QBluetoothAddress(QStringLiteral("01:23:45:67:89:AB")),
+        QStringLiteral("InRide"), 0);
+
+    QCOMPARE(inrideSystemId(deviceInfo), QByteArray::fromHex("ab8967452301"));
+}
+
+void TestKineticPacketBounds::inrideSystemIdFallsBackToDeviceUuid()
+{
+    const QBluetoothDeviceInfo deviceInfo(
+        QBluetoothUuid(QStringLiteral(
+            "{8091a2b3-c4d5-e6f7-8899-aabbccddeeff}")),
+        QStringLiteral("InRide"), 0);
+    QVERIFY(deviceInfo.address().isNull());
+
+    QCOMPARE(inrideSystemId(deviceInfo), QByteArray::fromHex("8091a2b3c4d5"));
+}
 
 static void addLengthRows(int minimum, int maximum)
 {

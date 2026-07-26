@@ -1821,21 +1821,28 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### BLE-006: Kinetic InRide UUID fallback violates aliasing and alignment
 
-- Status: OPEN
-- Code: `src/Train/KurtInRide.cpp:127`,
-  `src/Train/KurtInRide.cpp:165`
+- Status: FIXED
+- Code: `src/Train/KurtInRide.cpp`,
+  `unittests/Train/kineticPacketBounds/kineticPacketBounds.pro`,
+  `unittests/Train/kineticPacketBounds/testKineticPacketBounds.cpp`
 - Impact: When Qt cannot provide a Bluetooth address, notably on macOS, the
   Kinetic InRide system ID fallback reads a `quint128` object through a
   `uint64_t*`. The incompatible and potentially under-aligned typed access is
   undefined behavior under optimization and can derive the wrong six-byte ID,
   breaking telemetry decoding and calibration commands.
-- Evidence: The clean GCC 13 `-O2` build emits `-Wstrict-aliasing` on the exact
-  fallback read. The normal address path does not use the cast.
-- Test: Build device-info fixtures with a known address and with a null address
-  plus known UUID; require exact six-byte IDs under optimized ASan/UBSan builds.
-- Fix direction: Copy the UUID bytes into the integer with `memcpy` (or derive
-  the six output bytes directly) without typed aliasing or alignment
-  assumptions.
+- Test-first evidence: Device-info fixtures cover a known Bluetooth address and
+  a null address plus a UUID whose first six bytes have their high bits set.
+  With optimized GCC 13.3 and `-Werror=strict-aliasing`, the RED build stopped
+  at the type-punned `uint64_t` fallback read before the production fix.
+- Resolution: The address path now derives its six least-significant bytes with
+  explicit shifts, independent of host byte order. The UUID fallback copies the
+  first six RFC 4122 bytes without typed aliasing or alignment assumptions.
+  A GCC-only optimized warning gate prevents the unsafe cast from returning.
+- Verification: All 114 focused QtTest results pass normally and under
+  ASan/UBSan/LSan, including exact address and UUID byte assertions. The full
+  application links, and the complete matrix passes 79 test programs and 2,699
+  tests with zero failures, skips, or blacklisted results. The replacement API
+  is available in the project's minimum supported Qt 6.5.3.
 
 ### DATA-002: Merge offsets treat samples as seconds
 
