@@ -35,6 +35,7 @@ struct TokenRequest {
 struct TokenResponse {
     QString accessToken;
     QString refreshToken;
+    QStringList grantedScopes;
     QString error;
 
     bool isValid() const
@@ -62,6 +63,8 @@ QString tokenFailureMessage(
     const QByteArray &payload,
     const QStringList &sensitiveValues);
 TokenResponse parseTokenResponse(const QByteArray &payload);
+TokenResponse parseAuthorizationResponse(
+    const QByteArray &payload);
 
 } // namespace StravaOAuthPolicy
 

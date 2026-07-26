@@ -15,16 +15,20 @@
 #include <QJsonParseError>
 #include <QList>
 #include <QPair>
+#include <QSet>
 
 namespace {
 
 constexpr qsizetype MaximumClientIdLength = 20;
 constexpr qsizetype MaximumOpaqueValueLength = 8 * 1024;
 constexpr qsizetype MaximumErrorPayloadLength = 64 * 1024;
+constexpr qsizetype MaximumScopeValueLength = 2 * 1024;
+constexpr qsizetype MaximumScopeTokenLength = 128;
 constexpr qsizetype MaximumProviderInputLength = 4 * 1024;
 constexpr qsizetype MaximumProviderTextLength = 256;
 constexpr qsizetype MaximumFailureMessageLength = 1024;
 constexpr int MaximumProviderErrors = 3;
+constexpr int MaximumGrantedScopes = 64;
 
 bool isDecimalClientId(const QString &value)
 {
@@ -233,6 +237,122 @@ QString providerErrorSummary(
     return parts.join(QStringLiteral(". "));
 }
 
+StravaOAuthPolicy::TokenResponse parseTokenPayload(
+    const QByteArray &payload,
+    QJsonObject *parsedObject)
+{
+    StravaOAuthPolicy::TokenResponse response;
+    if (payload.isEmpty()
+        || payload.size() > MaximumErrorPayloadLength) {
+        response.error = QStringLiteral(
+            "Strava returned an invalid token response.");
+        return response;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument document =
+        QJsonDocument::fromJson(payload, &parseError);
+    if (parseError.error != QJsonParseError::NoError
+        || !document.isObject()) {
+        response.error = QStringLiteral(
+            "Strava returned an invalid token response.");
+        return response;
+    }
+
+    const QJsonObject object = document.object();
+    const QJsonValue access =
+        object.value(QStringLiteral("access_token"));
+    const QJsonValue refresh =
+        object.value(QStringLiteral("refresh_token"));
+    if (!access.isString() || !refresh.isString()
+        || !isUsableOpaqueValue(access.toString())
+        || !isUsableOpaqueValue(refresh.toString())) {
+        response.error = QStringLiteral(
+            "Strava token response is missing required tokens.");
+        return response;
+    }
+
+    response.accessToken = access.toString();
+    response.refreshToken = refresh.toString();
+    if (parsedObject) *parsedObject = object;
+    return response;
+}
+
+bool isScopeTokenCharacter(const QChar character)
+{
+    const ushort code = character.unicode();
+    return code == 0x21
+        || (code >= 0x23 && code <= 0x5b)
+        || (code >= 0x5d && code <= 0x7e);
+}
+
+bool parseGrantedScopes(
+    const QJsonValue &value,
+    QStringList &grantedScopes,
+    QString &error)
+{
+    if (!value.isString()) {
+        error = QStringLiteral(
+            "Strava authorization did not return granted permissions.");
+        return false;
+    }
+
+    const QString encoded = value.toString();
+    if (encoded.trimmed().isEmpty()
+        || encoded.size() > MaximumScopeValueLength) {
+        error = QStringLiteral(
+            "Strava returned invalid authorization permissions.");
+        return false;
+    }
+
+    const QStringList rawScopes =
+        encoded.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (rawScopes.isEmpty()
+        || rawScopes.size() > MaximumGrantedScopes) {
+        error = QStringLiteral(
+            "Strava returned invalid authorization permissions.");
+        return false;
+    }
+
+    QSet<QString> seen;
+    for (const QString &scope : rawScopes) {
+        if (scope.isEmpty()
+            || scope.size() > MaximumScopeTokenLength) {
+            error = QStringLiteral(
+                "Strava returned invalid authorization permissions.");
+            return false;
+        }
+        for (const QChar character : scope) {
+            if (!isScopeTokenCharacter(character)) {
+                error = QStringLiteral(
+                    "Strava returned invalid authorization permissions.");
+                return false;
+            }
+        }
+        if (!seen.contains(scope)) {
+            seen.insert(scope);
+            grantedScopes.append(scope);
+        }
+    }
+    grantedScopes.sort(Qt::CaseSensitive);
+
+    QStringList missing;
+    for (const QString &required : {
+             QStringLiteral("read_all"),
+             QStringLiteral("activity:read_all"),
+             QStringLiteral("activity:write")}) {
+        if (!seen.contains(required)) missing.append(required);
+    }
+    if (!missing.isEmpty()) {
+        error = QStringLiteral(
+            "Strava authorization is missing required permissions: %1.")
+                    .arg(missing.join(QStringLiteral(", ")));
+        grantedScopes.clear();
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 namespace StravaOAuthPolicy {
@@ -312,39 +432,27 @@ QString tokenFailureMessage(
 
 TokenResponse parseTokenResponse(const QByteArray &payload)
 {
-    TokenResponse response;
-    if (payload.isEmpty()
-        || payload.size() > MaximumErrorPayloadLength) {
-        response.error = QStringLiteral(
-            "Strava returned an invalid token response.");
-        return response;
-    }
+    return parseTokenPayload(payload, nullptr);
+}
 
-    QJsonParseError parseError;
-    const QJsonDocument document =
-        QJsonDocument::fromJson(payload, &parseError);
-    if (parseError.error != QJsonParseError::NoError
-        || !document.isObject()) {
-        response.error = QStringLiteral(
-            "Strava returned an invalid token response.");
-        return response;
-    }
+TokenResponse parseAuthorizationResponse(
+    const QByteArray &payload)
+{
+    QJsonObject object;
+    TokenResponse response =
+        parseTokenPayload(payload, &object);
+    if (!response.isValid()) return response;
 
-    const QJsonObject object = document.object();
-    const QJsonValue access =
-        object.value(QStringLiteral("access_token"));
-    const QJsonValue refresh =
-        object.value(QStringLiteral("refresh_token"));
-    if (!access.isString() || !refresh.isString()
-        || !isUsableOpaqueValue(access.toString())
-        || !isUsableOpaqueValue(refresh.toString())) {
-        response.error = QStringLiteral(
-            "Strava token response is missing required tokens.");
-        return response;
+    QString error;
+    if (!parseGrantedScopes(
+            object.value(QStringLiteral("scope")),
+            response.grantedScopes,
+            error)) {
+        response.accessToken.clear();
+        response.refreshToken.clear();
+        response.grantedScopes.clear();
+        response.error = error;
     }
-
-    response.accessToken = access.toString();
-    response.refreshToken = refresh.toString();
     return response;
 }
 

@@ -575,7 +575,7 @@ OAuthDialog::networkRequestFinished(QNetworkReply *reply)
         document.object()["access_token"].toString();
     if (site == STRAVA) {
         const StravaOAuthPolicy::TokenResponse response =
-            StravaOAuthPolicy::parseTokenResponse(payload);
+            StravaOAuthPolicy::parseAuthorizationResponse(payload);
         if (!response.isValid()) {
             QMessageBox oauthError(
                 QMessageBox::Critical,

@@ -578,6 +578,8 @@ oauthGrantSupersedesRefreshAndPublishesDurably()
     const QByteArray source = sourceContents(
         "../../../src/Cloud/OAuthDialog.cpp");
     QVERIFY(!source.isEmpty());
+    QVERIFY(source.contains(
+        "StravaOAuthPolicy::parseAuthorizationResponse(payload)"));
 
     const qsizetype start = source.lastIndexOf(
         "} else if (site == STRAVA) {");

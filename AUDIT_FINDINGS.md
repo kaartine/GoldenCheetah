@@ -2700,10 +2700,10 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### CLOUD-004: Strava authorization ignores the scopes actually granted
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Cloud/OAuthDialog.cpp:137`,
-  `src/Cloud/OAuthCallbackPolicy.h:25`, and
-  `src/Cloud/StravaOAuthPolicy.cpp:313`
+  `src/Cloud/OAuthDialog.cpp:576`, and
+  `src/Cloud/StravaOAuthPolicy.cpp:240`
 - Impact: GoldenCheetah requests read, private-activity read, and activity-write
   scopes but stores the tokens and reports full success without checking what
   the athlete granted. The connection can therefore appear configured while
@@ -2718,6 +2718,26 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Fix direction: Parse scopes into a normalized bounded set, define the minimum
   set per advertised capability, persist the granted set, and make success and
   feature availability reflect that set.
+- Test-first evidence: Commit `321519d` added authorization-scope cases before
+  production support. Its focused build failed at compile time because
+  `parseAuthorizationResponse()` and a granted-scope result did not exist.
+  The cases cover missing, null, array, empty, blank, wrong-case, tab-delimited,
+  oversized, excessive, and each individually missing required permission,
+  plus reordered, duplicate, and unknown future scopes.
+- Resolution: Authorization-code responses now use a dedicated parser while
+  refresh responses retain their scope-free format. Scope input is bounded to
+  2 KiB, 64 entries, and 128 bytes per RFC-compatible token, normalized to a
+  sorted unique set, and compared case-sensitively with the exact three scopes
+  GoldenCheetah requests. Unknown extra scopes remain forward-compatible.
+  Missing or malformed grants clear both tokens and report the missing
+  permissions before any credential publication. Since the current Strava
+  provider advertises upload, download, query, and route behavior as one
+  service, partial grants are rejected instead of presenting unsupported
+  operations as available.
+- Verification: All 47 focused OAuth, token, scope, and production-wiring cases
+  pass normally and under strict ASan/UBSan/LSan. The complete application
+  compiles and links, and the full normal matrix passes 75 suites and 2,530
+  tests with no failures, skips, or blacklists.
 
 ### CLOUD-005: Interactive Strava token exchange has no timeout or reply cleanup
 
