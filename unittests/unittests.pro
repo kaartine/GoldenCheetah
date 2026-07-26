@@ -13,6 +13,7 @@ equals(GC_UNITTESTS, active) {
 			   Core/localApiSecurity \
 			   Cloud/credentialTransportSafety \
 			   Cloud/oauthCallbackPolicy \
+			   Cloud/oauthTokenReplyController \
 			   Cloud/stravaOAuthPolicy \
 			   Cloud/stravaApiReplyPolicy \
 			   Cloud/stravaTokenRefresh \
