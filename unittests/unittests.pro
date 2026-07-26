@@ -16,6 +16,7 @@ equals(GC_UNITTESTS, active) {
 			   Cloud/stravaOAuthPolicy \
 			   Cloud/stravaApiReplyPolicy \
 			   Cloud/stravaTokenRefresh \
+			   Cloud/stravaTokenPublication \
 			   Cloud/openDataEndpointPolicy \
 			   Charts/indendPlotMarkerMatrix \
 			   Charts/mapPageSecurity \
