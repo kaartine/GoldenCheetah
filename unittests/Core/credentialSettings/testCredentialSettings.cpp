@@ -712,6 +712,7 @@ private slots:
     void credentialStateDurabilityFailureFailsClosed_data();
     void credentialStateDurabilityFailureFailsClosed();
     void credentialStateAncestorSyncFailureFailsClosed();
+    void partialCredentialStateAncestryFailsClosed();
     void reissuedDeleteResumesDurableTransaction();
     void reportedMarkerFailureRecoversDurableMarker();
     void failedMarkerPersistenceLeavesPreparationState();
@@ -3373,6 +3374,65 @@ credentialStateAncestorSyncFailureFailsClosed()
         plaintextKey));
     QCOMPARE(state->removes, 1);
     QVERIFY(!state->values.contains(vaultKey));
+}
+
+void TestCredentialSettings::
+partialCredentialStateAncestryFailsClosed()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Unix directory permissions are required");
+#else
+    QTemporaryDir stateTemporary;
+    QTemporaryDir settingsTemporary;
+    QVERIFY(stateTemporary.isValid());
+    QVERIFY(settingsTemporary.isValid());
+    const QString partial =
+        stateTemporary.filePath(QStringLiteral("partial"));
+    QVERIFY(QDir().mkpath(partial));
+    const QString stateRoot =
+        QDir(partial).filePath(
+            QStringLiteral("missing/state-root"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings settings(
+        settingsTemporary.filePath(
+            QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->values.insert(
+        vaultKey, QStringLiteral("credential-to-preserve"));
+    CredentialSettings credentials(fakeStore(state));
+    QVERIFY(QFile::setPermissions(
+        stateTemporary.path(),
+        QFileDevice::WriteOwner
+            | QFileDevice::ExeOwner));
+    const bool removed = credentials.removeChecked(
+        &settings, scope, GC_STRAVA_TOKEN,
+        plaintextKey);
+    QVERIFY(QFile::setPermissions(
+        stateTemporary.path(),
+        QFileDevice::ReadOwner
+            | QFileDevice::WriteOwner
+            | QFileDevice::ExeOwner));
+
+    QVERIFY(!removed);
+    QCOMPARE(state->removes, 0);
+    QCOMPARE(
+        state->values.value(vaultKey),
+        QStringLiteral("credential-to-preserve"));
+    QVERIFY(credentials.removeChecked(
+        &settings, scope, GC_STRAVA_TOKEN,
+        plaintextKey));
+    QCOMPARE(state->removes, 1);
+    QVERIFY(!state->values.contains(vaultKey));
+#endif
 }
 
 void TestCredentialSettings::
