@@ -501,6 +501,10 @@ public:
     // 2 Variants are supported - still the "old" one where ALL properties are in ONE .INI file and the
     // new one were the properties are distributed as explained above (this is to keep compatibility)
     GSettings(QString org, QString app);
+    GSettings(QString org,
+              QString app,
+              QSettings::Format legacyFormat,
+              QSettings::Format targetFormat);
     GSettings(QString file, QSettings::Format format);
     ~GSettings();
 
@@ -543,6 +547,7 @@ public:
 
 private:
     bool newFormat;
+    QSettings::Format newSettingsFormat = QSettings::IniFormat;
     QSettings *systemsettings = nullptr;
     QSettings *oldsystemsettings = nullptr;
     QVector<QSettings*> *global = nullptr;

@@ -43,6 +43,7 @@ double scalefactors[13] = { 0.5f, 0.6f, 0.8, 0.9, 1.0f, 1.1f, 1.25f, 1.5f, 2.0f,
 
 // -------------- Initializer for the "extern" variable "appsettings" ----------------//
 
+#ifndef GC_SETTINGS_NO_GLOBAL_INSTANCE
 static GSettings *GetApplicationSettings()
 {
   GSettings *settings;
@@ -54,6 +55,7 @@ static GSettings *GetApplicationSettings()
     settings = new GSettings(home.absolutePath()+"/gc", QSettings::IniFormat);
   return settings;
 }
+#endif
 
 // local static helper routines
 
@@ -139,15 +141,36 @@ static QString DetermineKey(QString & key, int& store, int& fileIndex) {
 
 // -----------------------------constructor and public instance methods ------------------------//
 
-GSettings::GSettings(QString org, QString app) : newFormat(true){
+GSettings::GSettings(QString org, QString app)
+    : GSettings(
+          org,
+          app,
+          QSettings::NativeFormat,
+          QSettings::IniFormat)
+{
+}
+
+GSettings::GSettings(
+    QString org,
+    QString app,
+    QSettings::Format legacyFormat,
+    QSettings::Format targetFormat)
+    : newFormat(true),
+      newSettingsFormat(targetFormat)
+{
     credentialSettings = new CredentialSettings(
         createPlatformCredentialStore());
-    oldsystemsettings = new QSettings(org,app);
-    systemsettings = new QSettings(QSettings::IniFormat, QSettings::UserScope, org, app);
+    oldsystemsettings = new QSettings(
+        legacyFormat, QSettings::UserScope, org, app);
+    systemsettings = new QSettings(
+        targetFormat, QSettings::UserScope, org, app);
     global = new QVector<QSettings*>();
 }
 
-GSettings::GSettings(QString file, QSettings::Format format) : newFormat(false){
+GSettings::GSettings(QString file, QSettings::Format format)
+    : newFormat(false),
+      newSettingsFormat(format)
+{
     credentialSettings = new CredentialSettings(
         createPlatformCredentialStore());
     systemsettings = new QSettings(file,format);
@@ -701,8 +724,14 @@ GSettings::initializeQSettingsGlobal(QString athletesRootDir) {
 
     if (global->isEmpty()) {
 
-        global->append(new QSettings(athletesRootDir+"/"+settingFileNamesGlobal[GLOBAL_GENERAL],QSettings::IniFormat));
-        global->append(new QSettings(athletesRootDir+"/"+settingFileNamesGlobal[GLOBAL_TRAINMODE],QSettings::IniFormat));
+        global->append(new QSettings(
+            athletesRootDir + "/"
+                + settingFileNamesGlobal[GLOBAL_GENERAL],
+            newSettingsFormat));
+        global->append(new QSettings(
+            athletesRootDir + "/"
+                + settingFileNamesGlobal[GLOBAL_TRAINMODE],
+            newSettingsFormat));
 
     }
 
@@ -766,10 +795,26 @@ GSettings::initializeQSettingsNewAthlete(QString athletesRootDir, QString athlet
     // create the Athlete QSettings - they MUST not exist yet
     AthleteQSettings* athleteSettings = new AthleteQSettings();
     QString baseName = athletesRootDir + "/" + athleteName + "/config/";
-    athleteSettings->setQSettings(new QSettings(baseName+settingFileNamesAthlete[ATHLETE_GENERAL], QSettings::IniFormat), ATHLETE_GENERAL );
-    athleteSettings->setQSettings(new QSettings(baseName+settingFileNamesAthlete[ATHLETE_LAYOUT], QSettings::IniFormat), ATHLETE_LAYOUT );
-    athleteSettings->setQSettings(new QSettings(baseName+settingFileNamesAthlete[ATHLETE_PREFERENCES], QSettings::IniFormat), ATHLETE_PREFERENCES );
-    athleteSettings->setQSettings(new QSettings(baseName+settingFileNamesAthlete[ATHLETE_PRIVATE], QSettings::IniFormat), ATHLETE_PRIVATE );
+    athleteSettings->setQSettings(
+        new QSettings(
+            baseName + settingFileNamesAthlete[ATHLETE_GENERAL],
+            newSettingsFormat),
+        ATHLETE_GENERAL);
+    athleteSettings->setQSettings(
+        new QSettings(
+            baseName + settingFileNamesAthlete[ATHLETE_LAYOUT],
+            newSettingsFormat),
+        ATHLETE_LAYOUT);
+    athleteSettings->setQSettings(
+        new QSettings(
+            baseName + settingFileNamesAthlete[ATHLETE_PREFERENCES],
+            newSettingsFormat),
+        ATHLETE_PREFERENCES);
+    athleteSettings->setQSettings(
+        new QSettings(
+            baseName + settingFileNamesAthlete[ATHLETE_PRIVATE],
+            newSettingsFormat),
+        ATHLETE_PRIVATE);
     athlete.insert(athleteName, athleteSettings);
 
 }
@@ -1294,4 +1339,8 @@ breakout:
 //----------------------------------------------------------------------------------------------//
 
 // initialise with no athlete
+#ifdef GC_SETTINGS_NO_GLOBAL_INSTANCE
+GSettings *appsettings = nullptr;
+#else
 GSettings *appsettings = GetApplicationSettings();
+#endif
