@@ -495,6 +495,8 @@ void TestStravaTokenRefresh::expiredCacheUsesLatestRotatedToken()
     QCOMPARE(submittedTokens.size(), 2);
     QCOMPARE(submittedTokens.at(0), originalToken);
     QCOMPARE(submittedTokens.at(1), first.refreshToken);
+    QCOMPARE(first.sourceRefreshToken, originalToken);
+    QCOMPARE(second.sourceRefreshToken, first.refreshToken);
 }
 
 void TestStravaTokenRefresh::invalidationClearsCompletedCache()
@@ -620,6 +622,12 @@ authorizationInstallSupersedesActiveLeader()
         StravaTokenRefreshCoordinator::refresh(
             account, staleToken, mustNotRun),
         authorizedResult);
+    const StravaTokenRefreshResult installed =
+        StravaTokenRefreshCoordinator::refresh(
+            account, staleToken, mustNotRun);
+    QCOMPARE(
+        installed.sourceRefreshToken,
+        authorizedResult.refreshToken);
     QCOMPARE(calls.load(), 1);
 }
 
