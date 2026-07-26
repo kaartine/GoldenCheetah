@@ -20,6 +20,7 @@
 #include "Statistic.h"
 #include "DataFilter.h"
 #include "DataFilterSafety.h"
+#include "DataFilterZones.h"
 #include "Context.h"
 #include "Athlete.h"
 #include "RideItem.h"
@@ -1993,27 +1994,10 @@ void Leaf::validateFilter(Context *context, DataFilterRuntime *df, Leaf *leaf)
 
                 } else if (leaf->function == "zones") {
 
-                    // need exactly 2 symbols
-                    if (leaf->fparms.count() != 2 ||
-                        leaf->fparms[0]->type != Leaf::Symbol ||
-                        leaf->fparms[1]->type != Leaf::Symbol) {
-                        leaf->inerror = true;
-
-                    } else {
-
-                        QRegExp reseries("^(hr|power|pace|fatigue)$", Qt::CaseInsensitive);
-                        QRegExp refield("^(name|description|units|low|high|time|percent)$", Qt::CaseInsensitive);
-
-                        // lets check the combinations
-                        QString series = *leaf->fparms[0]->lvalue.n;
-                        QString field = *leaf->fparms[1]->lvalue.n;
-
-                        if (!reseries.exactMatch(series)) inerror=true;
-                        if (!refield.exactMatch(field)) inerror=true;
-                    }
-
                     // same error for any badly formed function call
-                    if (leaf->inerror) DataFiltererrors << QString(tr("zones(hr|power|pace|fatigue, name|description|low|high|units|time|percent) needs 2 specific parameters"));
+                    if (!DataFilterZones::validate(leaf)) {
+                        DataFiltererrors << QString(tr("zones(hr|power|pace|fatigue, name|description|low|high|units|time|percent) needs 2 specific parameters"));
+                    }
 
                 } else if (leaf->function == "exists") {
 
@@ -3311,6 +3295,25 @@ DataFilter::DataFilter(QObject *parent, Context *context) : QObject(parent), con
     //connect(context, SIGNAL(rideSelected(RideItem*)), this, SLOT(dynamicParse()));
 }
 
+static void validateParsedTree(Leaf *&treeRoot,
+                               Context *validationContext,
+                               DataFilterRuntime *runtime)
+{
+    if (!treeRoot || !DataFiltererrors.isEmpty()) {
+        treeRoot = nullptr;
+        return;
+    }
+
+    treeRoot->validateFilter(validationContext, runtime, treeRoot);
+    const int missedZoneErrors = DataFilterZones::validateTree(treeRoot);
+    for (int i = 0; i < missedZoneErrors; ++i) {
+        DataFiltererrors << Leaf::tr(
+            "zones(hr|power|pace|fatigue, "
+            "name|description|low|high|units|time|percent) "
+            "needs 2 specific parameters");
+    }
+}
+
 DataFilter::DataFilter(QObject *parent, Context *context, QString formula) : QObject(parent), context(context), treeRoot(NULL), parent_(parent)
 {
     initializeResources();
@@ -3326,11 +3329,7 @@ DataFilter::DataFilter(QObject *parent, Context *context, QString formula) : QOb
     DataFilter_clearString();
     treeRoot = DataFilterroot;
 
-    // if it parsed (syntax) then check logic (semantics)
-    if (treeRoot && DataFiltererrors.count() == 0)
-        treeRoot->validateFilter(context, &rt, treeRoot);
-    else
-        treeRoot=NULL;
+    validateParsedTree(treeRoot, context, &rt);
 
     errors = DataFiltererrors;
 }
@@ -3415,9 +3414,7 @@ QStringList DataFilter::check(QString query)
     // save away the results
     treeRoot = DataFilterroot;
 
-    // if it passed syntax lets check semantics
-    if (treeRoot && DataFiltererrors.count() == 0) treeRoot->validateFilter(context, &rt, treeRoot);
-    else treeRoot = NULL;
+    validateParsedTree(treeRoot, context, &rt);
 
     // ok, did it pass all tests?
     if (!treeRoot || DataFiltererrors.count() > 0) { // nope
@@ -3456,9 +3453,7 @@ QStringList DataFilter::parseFilter(Context *context, QString query, QStringList
     // save away the results
     treeRoot = DataFilterroot;
 
-    // if it passed syntax lets check semantics
-    if (treeRoot && DataFiltererrors.count() == 0) treeRoot->validateFilter(context, &rt, treeRoot);
-    else treeRoot = NULL;
+    validateParsedTree(treeRoot, context, &rt);
 
     // ok, did it pass all tests?
     if (!treeRoot || DataFiltererrors.count() > 0) { // nope
@@ -4126,8 +4121,11 @@ Result Leaf::eval(DataFilterRuntime *df, Leaf *leaf, const Result &x, long it, R
         // zone descriptions and high / lows, but not cp/cv, w'/d' et al
         if (leaf->function == "zones") {
             // parms
-            QString series = *leaf->fparms[0]->lvalue.n;
-            QString field = *leaf->fparms[1]->lvalue.n;
+            const DataFilterSafety::ZoneArguments arguments =
+                DataFilterZones::arguments(leaf);
+            if (!arguments.valid) return Result(0);
+            const QString &series = arguments.series;
+            const QString &field = arguments.field;
 
             // what we will ultimately return
             QVector<QString> strings;
@@ -4141,9 +4139,9 @@ Result Leaf::eval(DataFilterRuntime *df, Leaf *leaf, const Result &x, long it, R
             // loop, so lets get the control variables here
             QString sport;
             QDate date;
-            const Zones *powerzones;
-            const HrZones *hrzones;
-            const PaceZones *pacezones;
+            const Zones *powerzones = nullptr;
+            const HrZones *hrzones = nullptr;
+            const PaceZones *pacezones = nullptr;
 
             // which sport and date?
             if (d == DateRange()) {
@@ -4164,14 +4162,14 @@ Result Leaf::eval(DataFilterRuntime *df, Leaf *leaf, const Result &x, long it, R
             QString metricprefix;
 
             // metric/imperial pace setting for runs and swims
-            bool metricpace;
+            bool metricpace = false;
 
             // setup
             if (series == "power") {
 
                 // power zones are for Run or Bike, but not Swim
                 powerzones = m->context->athlete->zones(sport);
-                range= powerzones->whichRange(date);
+                range = powerzones->whichRange(date);
                 if (range >= 0) nzones = powerzones->numZones(range);
                 metricprefix = "time_in_zone_L";
 
@@ -4179,7 +4177,7 @@ Result Leaf::eval(DataFilterRuntime *df, Leaf *leaf, const Result &x, long it, R
 
                 // hr zones are also for run or bike, but not Swim
                 hrzones = m->context->athlete->hrZones(sport);
-                range= hrzones->whichRange(date);
+                range = hrzones->whichRange(date);
                 if (range >= 0) nzones = hrzones->numZones(range);
                 metricprefix = "time_in_zone_H";
 
@@ -4187,10 +4185,12 @@ Result Leaf::eval(DataFilterRuntime *df, Leaf *leaf, const Result &x, long it, R
 
                 // pace zones are for run or swim
                 pacezones = m->context->athlete->paceZones(sport == "Swim");
-                range= pacezones->whichRange(date);
+                range = pacezones->whichRange(date);
                 if (range >= 0) nzones = pacezones->numZones(range);
                 metricprefix = "time_in_zone_P";
-                metricpace = appsettings->value(nullptr, pacezones->paceSetting(), GlobalContext::context()->useMetricUnits).toBool();
+                metricpace = appsettings->value(
+                    nullptr, pacezones->paceSetting(),
+                    GlobalContext::context()->useMetricUnits).toBool();
 
             } else if (series == "fatigue") {
 

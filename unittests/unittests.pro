@@ -10,6 +10,7 @@ equals(GC_UNITTESTS, active) {
 			   Core/credentialSettings \
 			   Core/dataFilterResources \
 			   Core/dataFilterSafety \
+			   Core/dataFilterZones \
 			   Core/localApiSecurity \
 			   Cloud/credentialTransportSafety \
 			   Cloud/oauthCallbackPolicy \

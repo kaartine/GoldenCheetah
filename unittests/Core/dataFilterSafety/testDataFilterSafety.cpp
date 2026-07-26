@@ -10,6 +10,10 @@ class TestDataFilterSafety : public QObject
     Q_OBJECT
 
 private slots:
+    void zoneArguments_data();
+    void zoneArguments();
+    void zoneArgumentsRejectUnknownLiterals_data();
+    void zoneArgumentsRejectUnknownLiterals();
     void repeatedVectorIndexWrapsAtBoundary();
     void vectorAssignmentIndexRejectsUnsafeValues();
     void estimatePairRejectsUnmatchedInputs();
@@ -17,6 +21,88 @@ private slots:
     void estimatePairMapsFields();
     void estimatePairMapsDuration();
 };
+
+void TestDataFilterSafety::zoneArguments_data()
+{
+    QTest::addColumn<QString>("series");
+    QTest::addColumn<QString>("field");
+    QTest::addColumn<QString>("expectedSeries");
+    QTest::addColumn<QString>("expectedField");
+
+    const QStringList seriesValues = {
+        QStringLiteral("hr"),
+        QStringLiteral("power"),
+        QStringLiteral("pace"),
+        QStringLiteral("fatigue")
+    };
+    const QStringList fieldValues = {
+        QStringLiteral("name"),
+        QStringLiteral("description"),
+        QStringLiteral("units"),
+        QStringLiteral("low"),
+        QStringLiteral("high"),
+        QStringLiteral("time"),
+        QStringLiteral("percent")
+    };
+
+    for (const QString &series : seriesValues) {
+        for (const QString &field : fieldValues) {
+            const QByteArray rowName =
+                QStringLiteral("%1-%2").arg(series, field).toLatin1();
+            QTest::newRow(rowName.constData())
+                << series << field << series << field;
+        }
+    }
+
+    QTest::newRow("mixed-case")
+        << QStringLiteral("PoWeR") << QStringLiteral("NaMe")
+        << QStringLiteral("power") << QStringLiteral("name");
+}
+
+void TestDataFilterSafety::zoneArguments()
+{
+    QFETCH(QString, series);
+    QFETCH(QString, field);
+    QFETCH(QString, expectedSeries);
+    QFETCH(QString, expectedField);
+
+    const DataFilterSafety::ZoneArguments result =
+        DataFilterSafety::zoneArguments(series, field);
+
+    QVERIFY(result.valid);
+    QCOMPARE(result.series, expectedSeries);
+    QCOMPARE(result.field, expectedField);
+}
+
+void TestDataFilterSafety::zoneArgumentsRejectUnknownLiterals_data()
+{
+    QTest::addColumn<QString>("series");
+    QTest::addColumn<QString>("field");
+
+    QTest::newRow("unknown-series")
+        << QStringLiteral("watts") << QStringLiteral("name");
+    QTest::newRow("unknown-field")
+        << QStringLiteral("power") << QStringLiteral("colour");
+    QTest::newRow("both-unknown")
+        << QStringLiteral("watts") << QStringLiteral("colour");
+    QTest::newRow("empty-series")
+        << QString() << QStringLiteral("name");
+    QTest::newRow("empty-field")
+        << QStringLiteral("power") << QString();
+}
+
+void TestDataFilterSafety::zoneArgumentsRejectUnknownLiterals()
+{
+    QFETCH(QString, series);
+    QFETCH(QString, field);
+
+    const DataFilterSafety::ZoneArguments result =
+        DataFilterSafety::zoneArguments(series, field);
+
+    QVERIFY(!result.valid);
+    QVERIFY(result.series.isEmpty());
+    QVERIFY(result.field.isEmpty());
+}
 
 void TestDataFilterSafety::repeatedVectorIndexWrapsAtBoundary()
 {

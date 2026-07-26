@@ -234,6 +234,8 @@ function_def:
 
         symbol block                            { $$ = $2; 
                                                   $$->function = *($1->lvalue.n);
+                                                  delete $1->lvalue.n;
+                                                  delete $1;
                                                 }
         ;
 
@@ -458,6 +460,8 @@ expr:
                                                   $3->loc = @1.first_column;
                                                   $3->leng = @4.last_column;
                                                   $3->function = *($1->lvalue.n);
+                                                  delete $1->lvalue.n;
+                                                  delete $1;
                                                   $$ = $3;
                                                 }
         | symbol '(' ')'                        { /* need to convert symbol to function */

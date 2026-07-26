@@ -14,6 +14,31 @@
 
 namespace DataFilterSafety {
 
+ZoneArguments zoneArguments(const QString &series, const QString &field)
+{
+    const QString normalizedSeries = series.toLower();
+    const QString normalizedField = field.toLower();
+
+    const bool knownSeries =
+        normalizedSeries == QStringLiteral("hr")
+        || normalizedSeries == QStringLiteral("power")
+        || normalizedSeries == QStringLiteral("pace")
+        || normalizedSeries == QStringLiteral("fatigue");
+    const bool knownField =
+        normalizedField == QStringLiteral("name")
+        || normalizedField == QStringLiteral("description")
+        || normalizedField == QStringLiteral("units")
+        || normalizedField == QStringLiteral("low")
+        || normalizedField == QStringLiteral("high")
+        || normalizedField == QStringLiteral("time")
+        || normalizedField == QStringLiteral("percent");
+
+    if (!knownSeries || !knownField) {
+        return {};
+    }
+    return {true, normalizedSeries, normalizedField};
+}
+
 EstimatePair estimatePair(const QString &parameter,
                           bool durationRequested,
                           bool durationModelMatched,

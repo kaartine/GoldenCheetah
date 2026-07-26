@@ -15,6 +15,12 @@
 
 namespace DataFilterSafety {
 
+struct ZoneArguments {
+    bool valid = false;
+    QString series;
+    QString field;
+};
+
 struct EstimateValues {
     double cp = 0.0;
     double wPrime = 0.0;
@@ -30,6 +36,7 @@ struct EstimatePair {
     double second = 0.0;
 };
 
+ZoneArguments zoneArguments(const QString &series, const QString &field);
 EstimatePair estimatePair(const QString &parameter,
                           bool durationRequested,
                           bool durationModelMatched,

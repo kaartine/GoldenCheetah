@@ -1956,9 +1956,15 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DATA-005: zones() validation and evaluation disagree on literals
 
-- Status: OPEN
-- Code: `src/Core/DataFilter.cpp:1994`,
-  `src/Core/DataFilter.cpp:4127`
+- Status: FIXED
+- Code: `src/Core/DataFilter.cpp`, `src/Core/DataFilterSafety.cpp`,
+  `src/Core/DataFilterSafety.h`, `src/Core/DataFilterZones.cpp`,
+  `src/Core/DataFilterZones.h`, `src/src.pro`,
+  `unittests/Core/dataFilterSafety/testDataFilterSafety.cpp`,
+  `unittests/Core/dataFilterZones/DataFilterParserTestStubs.cpp`,
+  `unittests/Core/dataFilterZones/dataFilterZones.pro`,
+  `unittests/Core/dataFilterZones/testDataFilterZones.cpp`, and
+  `unittests/unittests.pro`
 - Impact: `zones()` accepts series and field names case-insensitively but
   evaluates them with case-sensitive comparisons, so expressions such as
   `zones(POWER,NAME)` are accepted and silently return empty data. Invalid
@@ -1969,11 +1975,33 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   `metricpace` read is dominated by its matching `series` assignment, while an
   unknown series keeps every dereferencing loop disabled. The case and error
   target mismatches are independent reachable logic defects.
-- Test: Parse and evaluate root and nested valid, mixed-case, unknown-series,
-  and unknown-field calls, requiring canonical literals or an explicit error.
-- Fix direction: Lowercase accepted literals in the AST, set errors on the
-  validated leaf, and defensively initialize the branch-local pointers and
-  pace flag so GCC can verify the same invariant.
+- Test-first evidence: The first focused build failed because the new
+  `ZoneArguments` contract did not exist. A second test target using the real
+  Flex/Bison grammar then failed because the AST-level `DataFilterZones`
+  adapter was absent. These RED builds established both the complete literal
+  matrix and parser-produced root and nested AST cases before the production
+  implementation. Independent review then found that parent functions such as
+  `cumsum()` did not traverse their parameters during semantic validation.
+  A malformed-AST regression crashed with `SIGSEGV` at the unchecked null
+  parameter, and the skipped-parent regression failed to compile until the
+  complete-tree validation API existed.
+- Resolution: A single normalizer now validates all four series and seven
+  fields and returns canonical lowercase values. Validation writes those
+  values back to the parsed AST and marks the exact leaf being checked;
+  evaluation independently normalizes defensively before dispatch. Malformed
+  calls, including null AST members, return an empty numeric result instead of
+  indexing invalid parameters. After the existing parent-specific semantic
+  validation, a complete ownership-aware AST pass canonicalizes every
+  remaining nested call and reports only newly discovered invalid leaves. All
+  three formula parse/check entry points use that pass. Branch-local zone
+  pointers and the pace-unit flag are explicitly initialized without changing
+  the existing zone lookup behavior.
+- Verification: All 45 literal-helper results and all 31 parser/AST results
+  pass normally and under ASan/UBSan/LSan with no sanitizer report. The AST
+  suite directly covers every child-ownership route handled by `Leaf::clear`.
+  The full release application links to a 536,090,168-byte binary, and the
+  complete matrix passes 80 test programs and 2,764 tests with zero failures,
+  skips, or blacklisted results.
 
 ### DATA-006: Voronoi annotations accept duplicate and non-finite sites
 
@@ -1994,6 +2022,32 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   reject invalid input or require every emitted endpoint to remain finite.
 - Fix direction: Validate finiteness and deduplicate sites before invoking the
   legacy algorithm, then guard zero-length bisectors defensively.
+
+### DATA-007: Function parsing leaks consumed symbol nodes
+
+- Status: FIXED
+- Code: `src/Core/DataFilter.y`,
+  `unittests/Core/dataFilterZones/DataFilterParserTestStubs.cpp`,
+  `unittests/Core/dataFilterZones/dataFilterZones.pro`, and
+  `unittests/Core/dataFilterZones/testDataFilterZones.cpp`
+- Impact: Every generic function call with parameters leaked the temporary
+  symbol node holding its function name. Function definitions leaked the same
+  node through an adjacent grammar action, so repeated formula parsing grew
+  process memory even after each syntax tree was destroyed.
+- Test-first evidence: The parser integration tests first passed all 10
+  functional assertions but exited with LeakSanitizer failure. LSan reported
+  1,712 leaked bytes in 30 allocations rooted at the `SYMBOL` grammar action;
+  nested calls leaked one node and one string per consumed function name.
+- Resolution: Both grammar actions now copy the function name and immediately
+  release the consumed symbol string and node. The no-argument function action
+  continues to reuse its symbol node and therefore retains its existing
+  ownership path.
+- Verification: Parser-produced parameterized calls, nested calls, a function
+  definition, and a syntax error after successful function reduction now pass
+  in the 31-case parser/AST suite normally and under ASan/UBSan/LSan without
+  leaks, use-after-free, or double-free. The full release application links,
+  and the complete matrix passes 80 test programs and 2,764 tests with zero
+  failures, skips, or blacklisted results.
 
 ### PARSE-001: ZIP/GZIP decompression has no resource limits
 
