@@ -37,6 +37,7 @@ struct FakeStoreState
     CredentialStore::Status failedReadStatus =
         CredentialStore::Status::Unavailable;
     bool failWrites = false;
+    bool commitFailedWrites = false;
     bool failRemoves = false;
     int reads = 0;
     int writes = 0;
@@ -77,6 +78,9 @@ public:
         ++state_->writes;
         if (state_->beforeWrite) state_->beforeWrite();
         if (state_->failWrites) {
+            if (state_->commitFailedWrites) {
+                state_->values.insert(key, value);
+            }
             if (error) *error = QStringLiteral("unavailable");
             return Status::Unavailable;
         }
@@ -628,6 +632,17 @@ private slots:
     void completedDeletionPersistsGlobalTombstone();
     void replacementRecoveryFinalizesCommittedVaultWrite();
     void incompleteReplacementBlocksPlaintextMigration();
+    void stalePendingRemovalDoesNotDeleteReplacementAcrossSources();
+    void stalePendingRemovalDoesNotDeleteOrdinaryWrite();
+    void activeStateBlocksDuplicateMigrationAfterExternalVaultLoss();
+    void orphanedDeletePreparationDoesNotRemoveCredential();
+    void preparedDeleteWithMarkerCompletes();
+    void deletionCommitFailureRetriesWithoutResurrection();
+    void replacementCommitFailureRecoversWithoutRewrite();
+    void failedReplacementResultRecoversCommittedSecret();
+    void failedOrdinaryWriteResultRecoversCommittedSecret();
+    void transientReplacementReadKeepsDeletionState();
+    void malformedDeletionStateFailsClosed();
     void failedDeleteIsRetriedWithoutCredentialResurrection();
     void failedDeleteIsRetriedInSameSession();
     void failedDeleteMarkerWriteDefersDeletionUntilDurable();
@@ -718,6 +733,14 @@ void TestCredentialSettings::cleanupTestCase()
 void TestCredentialSettings::init()
 {
     credentialScrubFaultState() = {};
+    if (!ownedCredentialStateRoot_.isEmpty()) {
+        QDir stateDirectory(QDir(ownedCredentialStateRoot_)
+            .filePath(QStringLiteral(
+                "GoldenCheetah/credential-locks")));
+        if (stateDirectory.exists()) {
+            QVERIFY(stateDirectory.removeRecursively());
+        }
+    }
 }
 
 void TestCredentialSettings::credentialClassification_data()
@@ -1602,7 +1625,7 @@ cachedCredentialTracksOtherInstanceRemoval()
                  &settings, scope, GC_STRAVA_TOKEN,
                  plaintextKey, QStringLiteral("missing")),
              QVariant(QStringLiteral("missing")));
-    QCOMPARE(state->reads, 2);
+    QCOMPARE(state->reads, 1);
 }
 
 void TestCredentialSettings::
@@ -2436,9 +2459,17 @@ completedDeletionPersistsGlobalTombstone()
     QVERIFY(credentials.setValueChecked(
         &settings, scope, GC_STRAVA_TOKEN, plaintextKey,
         QStringLiteral("replacement-credential")));
-    QVERIFY(!QFileInfo::exists(deletionPath));
+    QCOMPARE(fileContents(deletionPath),
+             QByteArrayLiteral("active\n"));
     QCOMPARE(state->values.value(vaultKey),
              QStringLiteral("replacement-credential"));
+
+    QVERIFY(credentials.removeChecked(
+        &settings, scope, GC_STRAVA_TOKEN, plaintextKey));
+    QCOMPARE(fileContents(deletionPath),
+             QByteArrayLiteral("deleted\n"));
+    QCOMPARE(state->removes, 2);
+    QVERIFY(!state->values.contains(vaultKey));
 }
 
 void TestCredentialSettings::
@@ -2480,7 +2511,8 @@ replacementRecoveryFinalizesCommittedVaultWrite()
     QCOMPARE(state->writes, 0);
     QCOMPARE(state->removes, 0);
     QVERIFY(!settings.contains(plaintextKey));
-    QVERIFY(!QFileInfo::exists(deletionPath));
+    QCOMPARE(fileContents(deletionPath),
+             QByteArrayLiteral("active\n"));
 }
 
 void TestCredentialSettings::
@@ -2529,7 +2561,599 @@ incompleteReplacementBlocksPlaintextMigration()
     QCOMPARE(state->writes, 1);
     QCOMPARE(state->values.value(vaultKey),
              QStringLiteral("replacement-credential"));
-    QVERIFY(!QFileInfo::exists(deletionPath));
+    QCOMPARE(fileContents(deletionPath),
+             QByteArrayLiteral("active\n"));
+}
+
+void TestCredentialSettings::
+stalePendingRemovalDoesNotDeleteReplacementAcrossSources()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot = temporary.filePath(
+        QStringLiteral("credential-state"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings staleSource(
+        temporary.filePath(QStringLiteral("stale.ini")),
+        QSettings::IniFormat);
+    QSettings currentSource(
+        temporary.filePath(QStringLiteral("current.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    const QString removalKey =
+        pendingRemovalTestKey(scope, GC_STRAVA_TOKEN);
+    const QString deletionPath = credentialOperationFile(
+        stateRoot, vaultKey, QStringLiteral(".deletion"));
+    staleSource.setValue(removalKey, true);
+    staleSource.sync();
+    QCOMPARE(staleSource.status(), QSettings::NoError);
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->values.insert(
+        vaultKey, QStringLiteral("old-credential"));
+    CredentialSettings credentials(fakeStore(state));
+    QVERIFY(credentials.removeChecked(
+        &currentSource, scope, GC_STRAVA_TOKEN,
+        plaintextKey));
+    QVERIFY(credentials.setValueChecked(
+        &currentSource, scope, GC_STRAVA_TOKEN,
+        plaintextKey, QStringLiteral("replacement-credential")));
+    QCOMPARE(state->removes, 1);
+    QCOMPARE(fileContents(deletionPath),
+             QByteArrayLiteral("active\n"));
+
+    CredentialSettings restarted(fakeStore(state));
+    QCOMPARE(restarted.value(
+                 &staleSource, scope, GC_STRAVA_TOKEN,
+                 plaintextKey, QStringLiteral("missing")),
+             QVariant(QStringLiteral("replacement-credential")));
+    QCOMPARE(state->removes, 1);
+    QVERIFY(!staleSource.contains(removalKey));
+    QCOMPARE(state->values.value(vaultKey),
+             QStringLiteral("replacement-credential"));
+}
+
+void TestCredentialSettings::
+stalePendingRemovalDoesNotDeleteOrdinaryWrite()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot = temporary.filePath(
+        QStringLiteral("credential-state"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings staleSource(
+        temporary.filePath(QStringLiteral("stale.ini")),
+        QSettings::IniFormat);
+    QSettings currentSource(
+        temporary.filePath(QStringLiteral("current.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    const QString removalKey =
+        pendingRemovalTestKey(scope, GC_STRAVA_TOKEN);
+    const QString deletionPath = credentialOperationFile(
+        stateRoot, vaultKey, QStringLiteral(".deletion"));
+    staleSource.setValue(removalKey, true);
+    staleSource.sync();
+    QCOMPARE(staleSource.status(), QSettings::NoError);
+
+    auto state = std::make_shared<FakeStoreState>();
+    CredentialSettings credentials(fakeStore(state));
+    QVERIFY(credentials.setValueChecked(
+        &currentSource, scope, GC_STRAVA_TOKEN,
+        plaintextKey, QStringLiteral("new-credential")));
+    QCOMPARE(fileContents(deletionPath),
+             QByteArrayLiteral("active\n"));
+
+    CredentialSettings restarted(fakeStore(state));
+    QCOMPARE(restarted.value(
+                 &staleSource, scope, GC_STRAVA_TOKEN,
+                 plaintextKey, QStringLiteral("missing")),
+             QVariant(QStringLiteral("new-credential")));
+    QCOMPARE(state->writes, 1);
+    QCOMPARE(state->removes, 0);
+    QVERIFY(!staleSource.contains(removalKey));
+    QCOMPARE(state->values.value(vaultKey),
+             QStringLiteral("new-credential"));
+}
+
+void TestCredentialSettings::
+activeStateBlocksDuplicateMigrationAfterExternalVaultLoss()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot = temporary.filePath(
+        QStringLiteral("credential-state"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings currentSource(
+        temporary.filePath(QStringLiteral("current.ini")),
+        QSettings::IniFormat);
+    QSettings duplicateSource(
+        temporary.filePath(QStringLiteral("duplicate.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    const QString deletionPath = credentialOperationFile(
+        stateRoot, vaultKey, QStringLiteral(".deletion"));
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->values.insert(
+        vaultKey, QStringLiteral("old-credential"));
+    CredentialSettings credentials(fakeStore(state));
+    QVERIFY(credentials.removeChecked(
+        &currentSource, scope, GC_STRAVA_TOKEN,
+        plaintextKey));
+    QVERIFY(credentials.setValueChecked(
+        &currentSource, scope, GC_STRAVA_TOKEN,
+        plaintextKey, QStringLiteral("replacement-credential")));
+    QCOMPARE(fileContents(deletionPath),
+             QByteArrayLiteral("active\n"));
+    QCOMPARE(state->writes, 1);
+
+    state->values.remove(vaultKey);
+    duplicateSource.setValue(
+        plaintextKey, QStringLiteral("stale-duplicate"));
+    duplicateSource.sync();
+    QCOMPARE(duplicateSource.status(), QSettings::NoError);
+    CredentialSettings restarted(fakeStore(state));
+    QCOMPARE(restarted.value(
+                 &duplicateSource, scope, GC_STRAVA_TOKEN,
+                 plaintextKey, QStringLiteral("missing")),
+             QVariant(QStringLiteral("missing")));
+    QCOMPARE(state->writes, 1);
+    QVERIFY(!duplicateSource.contains(plaintextKey));
+    QVERIFY(!state->values.contains(vaultKey));
+}
+
+void TestCredentialSettings::
+orphanedDeletePreparationDoesNotRemoveCredential()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot = temporary.filePath(
+        QStringLiteral("credential-state"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings settings(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    const QString deletionPath = credentialOperationFile(
+        stateRoot, vaultKey, QStringLiteral(".deletion"));
+    QVERIFY(writePrivateStateFile(
+        deletionPath, QByteArrayLiteral("preparing\n")));
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->values.insert(
+        vaultKey, QStringLiteral("credential-to-preserve"));
+    CredentialSettings credentials(fakeStore(state));
+    QCOMPARE(credentials.value(
+                 &settings, scope, GC_STRAVA_TOKEN,
+                 plaintextKey, QStringLiteral("missing")),
+             QVariant(QStringLiteral("missing")));
+    QCOMPARE(state->reads, 0);
+    QCOMPARE(state->removes, 0);
+    QCOMPARE(state->values.value(vaultKey),
+             QStringLiteral("credential-to-preserve"));
+
+    QVERIFY(credentials.setValueChecked(
+        &settings, scope, GC_STRAVA_TOKEN,
+        plaintextKey, QStringLiteral("replacement-credential")));
+    QCOMPARE(state->writes, 1);
+    QCOMPARE(state->removes, 0);
+    QCOMPARE(state->values.value(vaultKey),
+             QStringLiteral("replacement-credential"));
+    QCOMPARE(fileContents(deletionPath),
+             QByteArrayLiteral("active\n"));
+}
+
+void TestCredentialSettings::
+preparedDeleteWithMarkerCompletes()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot = temporary.filePath(
+        QStringLiteral("credential-state"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings settings(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    const QString removalKey =
+        pendingRemovalTestKey(scope, GC_STRAVA_TOKEN);
+    const QString deletionPath = credentialOperationFile(
+        stateRoot, vaultKey, QStringLiteral(".deletion"));
+    QVERIFY(writePrivateStateFile(
+        deletionPath, QByteArrayLiteral("preparing\n")));
+    settings.setValue(removalKey, true);
+    settings.sync();
+    QCOMPARE(settings.status(), QSettings::NoError);
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->values.insert(
+        vaultKey, QStringLiteral("credential-to-delete"));
+    CredentialSettings credentials(fakeStore(state));
+    QCOMPARE(credentials.value(
+                 &settings, scope, GC_STRAVA_TOKEN,
+                 plaintextKey, QStringLiteral("missing")),
+             QVariant(QStringLiteral("missing")));
+    QCOMPARE(state->removes, 1);
+    QVERIFY(!state->values.contains(vaultKey));
+    QVERIFY(!settings.contains(removalKey));
+    QCOMPARE(fileContents(deletionPath),
+             QByteArrayLiteral("deleted\n"));
+}
+
+void TestCredentialSettings::
+deletionCommitFailureRetriesWithoutResurrection()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot = temporary.filePath(
+        QStringLiteral("credential-state"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings deletionSource(
+        temporary.filePath(QStringLiteral("deletion.ini")),
+        QSettings::IniFormat);
+    QSettings duplicateSource(
+        temporary.filePath(QStringLiteral("duplicate.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    const QString deletionPath = credentialOperationFile(
+        stateRoot, vaultKey, QStringLiteral(".deletion"));
+    const QString backupPath =
+        deletionPath + QStringLiteral(".fault-backup");
+    duplicateSource.setValue(
+        plaintextKey, QStringLiteral("stale-duplicate"));
+    duplicateSource.sync();
+    QCOMPARE(duplicateSource.status(), QSettings::NoError);
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->values.insert(
+        vaultKey, QStringLiteral("credential-to-delete"));
+    bool faultInjected = false;
+    state->beforeRemove = [&]() {
+        if (faultInjected)
+            return;
+        faultInjected = true;
+        QVERIFY(QFile::rename(deletionPath, backupPath));
+        QVERIFY(QDir().mkdir(deletionPath));
+    };
+    CredentialSettings credentials(fakeStore(state));
+    QVERIFY(!credentials.removeChecked(
+        &deletionSource, scope, GC_STRAVA_TOKEN,
+        plaintextKey));
+    QVERIFY(!state->values.contains(vaultKey));
+    QVERIFY(QFileInfo(deletionPath).isDir());
+    QVERIFY(QDir(deletionPath).removeRecursively());
+    QVERIFY(QFile::rename(backupPath, deletionPath));
+    QCOMPARE(fileContents(deletionPath),
+             QByteArrayLiteral("deleting\n"));
+
+    CredentialSettings restarted(fakeStore(state));
+    QCOMPARE(restarted.value(
+                 &duplicateSource, scope, GC_STRAVA_TOKEN,
+                 plaintextKey, QStringLiteral("missing")),
+             QVariant(QStringLiteral("missing")));
+    QCOMPARE(state->removes, 2);
+    QCOMPARE(fileContents(deletionPath),
+             QByteArrayLiteral("deleted\n"));
+    QVERIFY(!duplicateSource.contains(plaintextKey));
+}
+
+void TestCredentialSettings::
+replacementCommitFailureRecoversWithoutRewrite()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot = temporary.filePath(
+        QStringLiteral("credential-state"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings settings(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    const QString deletionPath = credentialOperationFile(
+        stateRoot, vaultKey, QStringLiteral(".deletion"));
+    const QString backupPath =
+        deletionPath + QStringLiteral(".fault-backup");
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->values.insert(
+        vaultKey, QStringLiteral("old-credential"));
+    CredentialSettings credentials(fakeStore(state));
+    QVERIFY(credentials.removeChecked(
+        &settings, scope, GC_STRAVA_TOKEN, plaintextKey));
+    bool faultInjected = false;
+    state->beforeWrite = [&]() {
+        if (faultInjected)
+            return;
+        faultInjected = true;
+        QVERIFY(QFile::rename(deletionPath, backupPath));
+        QVERIFY(QDir().mkdir(deletionPath));
+    };
+    QVERIFY(!credentials.setValueChecked(
+        &settings, scope, GC_STRAVA_TOKEN, plaintextKey,
+        QStringLiteral("replacement-credential")));
+    QCOMPARE(state->values.value(vaultKey),
+             QStringLiteral("replacement-credential"));
+    QCOMPARE(state->writes, 1);
+    QVERIFY(QFileInfo(deletionPath).isDir());
+    QVERIFY(QDir(deletionPath).removeRecursively());
+    QVERIFY(QFile::rename(backupPath, deletionPath));
+    QCOMPARE(fileContents(deletionPath),
+             QByteArrayLiteral("replacing\n"));
+
+    CredentialSettings restarted(fakeStore(state));
+    QCOMPARE(restarted.value(
+                 &settings, scope, GC_STRAVA_TOKEN,
+                 plaintextKey, QStringLiteral("missing")),
+             QVariant(QStringLiteral("replacement-credential")));
+    QCOMPARE(state->writes, 1);
+    QCOMPARE(state->removes, 1);
+    QCOMPARE(fileContents(deletionPath),
+             QByteArrayLiteral("active\n"));
+}
+
+void TestCredentialSettings::
+failedReplacementResultRecoversCommittedSecret()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot = temporary.filePath(
+        QStringLiteral("credential-state"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings settings(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    const QString deletionPath = credentialOperationFile(
+        stateRoot, vaultKey, QStringLiteral(".deletion"));
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->values.insert(
+        vaultKey, QStringLiteral("old-credential"));
+    auto credentials = std::make_unique<CredentialSettings>(
+        fakeStore(state));
+    QVERIFY(credentials->removeChecked(
+        &settings, scope, GC_STRAVA_TOKEN, plaintextKey));
+    state->failWrites = true;
+    state->commitFailedWrites = true;
+    QVERIFY(!credentials->setValueChecked(
+        &settings, scope, GC_STRAVA_TOKEN, plaintextKey,
+        QStringLiteral("committed-replacement")));
+    QCOMPARE(state->values.value(vaultKey),
+             QStringLiteral("committed-replacement"));
+    QCOMPARE(fileContents(deletionPath),
+             QByteArrayLiteral("replacing\n"));
+    QCOMPARE(credentials->value(
+                 &settings, scope, GC_STRAVA_TOKEN,
+                 plaintextKey, QStringLiteral("missing")),
+             QVariant(QStringLiteral("committed-replacement")));
+    QCOMPARE(state->reads, 0);
+
+    credentials.reset();
+    state->failWrites = false;
+    state->commitFailedWrites = false;
+    credentials = std::make_unique<CredentialSettings>(
+        fakeStore(state));
+    QCOMPARE(credentials->value(
+                 &settings, scope, GC_STRAVA_TOKEN,
+                 plaintextKey, QStringLiteral("missing")),
+             QVariant(QStringLiteral("committed-replacement")));
+    QCOMPARE(state->reads, 1);
+    QCOMPARE(state->writes, 1);
+    QCOMPARE(state->removes, 1);
+    QCOMPARE(fileContents(deletionPath),
+             QByteArrayLiteral("active\n"));
+}
+
+void TestCredentialSettings::
+failedOrdinaryWriteResultRecoversCommittedSecret()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot = temporary.filePath(
+        QStringLiteral("credential-state"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings currentSource(
+        temporary.filePath(QStringLiteral("current.ini")),
+        QSettings::IniFormat);
+    QSettings staleSource(
+        temporary.filePath(QStringLiteral("stale.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    const QString removalKey =
+        pendingRemovalTestKey(scope, GC_STRAVA_TOKEN);
+    const QString deletionPath = credentialOperationFile(
+        stateRoot, vaultKey, QStringLiteral(".deletion"));
+    staleSource.setValue(removalKey, true);
+    staleSource.sync();
+    QCOMPARE(staleSource.status(), QSettings::NoError);
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->failWrites = true;
+    state->commitFailedWrites = true;
+    auto credentials = std::make_unique<CredentialSettings>(
+        fakeStore(state));
+    QVERIFY(!credentials->setValueChecked(
+        &currentSource, scope, GC_STRAVA_TOKEN,
+        plaintextKey, QStringLiteral("committed-credential")));
+    QCOMPARE(state->values.value(vaultKey),
+             QStringLiteral("committed-credential"));
+    QCOMPARE(fileContents(deletionPath),
+             QByteArrayLiteral("updating\n"));
+
+    credentials.reset();
+    state->failWrites = false;
+    state->commitFailedWrites = false;
+    credentials = std::make_unique<CredentialSettings>(
+        fakeStore(state));
+    QCOMPARE(credentials->value(
+                 &currentSource, scope, GC_STRAVA_TOKEN,
+                 plaintextKey, QStringLiteral("missing")),
+             QVariant(QStringLiteral("committed-credential")));
+    QCOMPARE(fileContents(deletionPath),
+             QByteArrayLiteral("active\n"));
+    QCOMPARE(credentials->value(
+                 &staleSource, scope, GC_STRAVA_TOKEN,
+                 plaintextKey, QStringLiteral("missing")),
+             QVariant(QStringLiteral("committed-credential")));
+    QCOMPARE(state->writes, 1);
+    QCOMPARE(state->removes, 0);
+    QVERIFY(!staleSource.contains(removalKey));
+}
+
+void TestCredentialSettings::
+transientReplacementReadKeepsDeletionState()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot = temporary.filePath(
+        QStringLiteral("credential-state"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings settings(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    const QString deletionPath = credentialOperationFile(
+        stateRoot, vaultKey, QStringLiteral(".deletion"));
+    QVERIFY(writePrivateStateFile(
+        deletionPath, QByteArrayLiteral("replacing\n")));
+    settings.setValue(
+        plaintextKey, QStringLiteral("stale-duplicate"));
+    settings.sync();
+    QCOMPARE(settings.status(), QSettings::NoError);
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->failReads = true;
+    CredentialSettings credentials(fakeStore(state));
+    QCOMPARE(credentials.value(
+                 &settings, scope, GC_STRAVA_TOKEN,
+                 plaintextKey, QStringLiteral("missing")),
+             QVariant(QStringLiteral("missing")));
+    QCOMPARE(state->reads, 1);
+    QCOMPARE(state->writes, 0);
+    QCOMPARE(state->removes, 0);
+    QVERIFY(!settings.contains(plaintextKey));
+    QCOMPARE(fileContents(deletionPath),
+             QByteArrayLiteral("replacing\n"));
+
+    state->failReads = false;
+    QCOMPARE(credentials.value(
+                 &settings, scope, GC_STRAVA_TOKEN,
+                 plaintextKey, QStringLiteral("missing")),
+             QVariant(QStringLiteral("missing")));
+    QCOMPARE(state->reads, 2);
+    QCOMPARE(fileContents(deletionPath),
+             QByteArrayLiteral("replacing\n"));
+}
+
+void TestCredentialSettings::
+malformedDeletionStateFailsClosed()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot = temporary.filePath(
+        QStringLiteral("credential-state"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings settings(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    const QString deletionPath = credentialOperationFile(
+        stateRoot, vaultKey, QStringLiteral(".deletion"));
+    const QString plaintext =
+        QStringLiteral("plaintext-credential");
+    settings.setValue(plaintextKey, plaintext);
+    settings.sync();
+    QCOMPARE(settings.status(), QSettings::NoError);
+    QVERIFY(writePrivateStateFile(
+        deletionPath, QByteArrayLiteral("unknown-state\n")));
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->values.insert(
+        vaultKey, QStringLiteral("vault-credential"));
+    CredentialSettings credentials(fakeStore(state));
+    QCOMPARE(credentials.value(
+                 &settings, scope, GC_STRAVA_TOKEN,
+                 plaintextKey, QStringLiteral("missing")),
+             QVariant(QStringLiteral("missing")));
+    QVERIFY(!credentials.setValueChecked(
+        &settings, scope, GC_STRAVA_TOKEN,
+        plaintextKey, QStringLiteral("replacement")));
+    QVERIFY(!credentials.removeChecked(
+        &settings, scope, GC_STRAVA_TOKEN, plaintextKey));
+    QCOMPARE(state->reads, 0);
+    QCOMPARE(state->writes, 0);
+    QCOMPARE(state->removes, 0);
+    QCOMPARE(settings.value(plaintextKey).toString(),
+             plaintext);
+    QCOMPARE(state->values.value(vaultKey),
+             QStringLiteral("vault-credential"));
 }
 
 void TestCredentialSettings::failedDeleteIsRetriedWithoutCredentialResurrection()
