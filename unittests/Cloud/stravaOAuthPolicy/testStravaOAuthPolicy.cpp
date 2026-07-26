@@ -90,6 +90,9 @@ private slots:
     void rejectsUnavailableCredentials_data();
     void rejectsUnavailableCredentials();
     void acceptsConfiguredCredentials();
+    void reportsMachineReadableBuildStatus_data();
+    void reportsMachineReadableBuildStatus();
+    void mainExposesCredentialFreeBuildStatus();
     void buildsAuthorizationCodeRequest();
     void encodesAuthorizationCodeRequestValues();
     void rejectsInvalidAuthorizationCodeRequest_data();
@@ -153,6 +156,65 @@ void TestStravaOAuthPolicy::acceptsConfiguredCredentials()
 {
     QVERIFY(StravaOAuthPolicy::hasUsableCredentials(
         ClientId, ClientSecret));
+}
+
+void TestStravaOAuthPolicy::reportsMachineReadableBuildStatus_data()
+{
+    QTest::addColumn<QString>("clientId");
+    QTest::addColumn<QString>("clientSecret");
+    QTest::addColumn<QByteArray>("oauthStatus");
+
+    QTest::newRow("configured")
+        << ClientId << ClientSecret
+        << QByteArray("configured");
+    QTest::newRow("missing-id")
+        << QString() << ClientSecret
+        << QByteArray("unavailable");
+    QTest::newRow("invalid-id")
+        << QStringLiteral("client-83") << ClientSecret
+        << QByteArray("unavailable");
+    QTest::newRow("missing-secret")
+        << ClientId << QString()
+        << QByteArray("unavailable");
+    QTest::newRow("specific-placeholder")
+        << ClientId
+        << QStringLiteral("__GC_STRAVA_CLIENT_SECRET__")
+        << QByteArray("unavailable");
+    QTest::newRow("generic-placeholder")
+        << ClientId << QStringLiteral("__MISSING_SECRET__")
+        << QByteArray("unavailable");
+}
+
+void TestStravaOAuthPolicy::reportsMachineReadableBuildStatus()
+{
+    QFETCH(QString, clientId);
+    QFETCH(QString, clientSecret);
+    QFETCH(QByteArray, oauthStatus);
+
+    const QByteArray expected =
+        QByteArrayLiteral(
+            "goldencheetah_build_status=1\n"
+            "application=GoldenCheetah\n"
+            "strava_support=enabled\n"
+            "strava_oauth=")
+        + oauthStatus + '\n';
+    QCOMPARE(
+        StravaOAuthPolicy::buildStatusReport(
+            clientId, clientSecret),
+        expected);
+}
+
+void TestStravaOAuthPolicy::mainExposesCredentialFreeBuildStatus()
+{
+    const QByteArray source = sourceContents(
+        "../../../src/Core/main.cpp");
+    QVERIFY(!source.isEmpty());
+    QVERIFY(source.contains(
+        "\"--goldencheetah-build-status\""));
+    QVERIFY(source.contains(
+        "StravaOAuthPolicy::buildStatusReport("));
+    QVERIFY(source.contains("GC_STRAVA_CLIENT_ID"));
+    QVERIFY(source.contains("GC_STRAVA_CLIENT_SECRET"));
 }
 
 void TestStravaOAuthPolicy::buildsAuthorizationCodeRequest()

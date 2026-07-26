@@ -82,41 +82,90 @@ if (cd "$TEMP_DIR" && unset GC_SOURCE_REVISION &&
     fail "exported source without a revision was accepted"
 fi
 
-printf 'binary-prefix%s-binary-suffix' \
-    "$STRAVA_CLIENT_SECRET_PLACEHOLDER" >"$TEMP_DIR/unconfigured"
-for ((index = 0;
-      index < ${#STRAVA_CLIENT_SECRET_PLACEHOLDER};
-      ++index)); do
-    printf '%s\0' "${STRAVA_CLIENT_SECRET_PLACEHOLDER:index:1}"
-done >"$TEMP_DIR/unconfigured-utf16le"
-printf 'binary-with-configured-credential' >"$TEMP_DIR/configured"
-printf '12345678AI\002compressed-appimage-payload' \
-    >"$TEMP_DIR/packaged.AppImage"
+cat >"$TEMP_DIR/status-probe.c" <<'EOF'
+#include <stdio.h>
+#include <string.h>
+
+int main(int argc, char **argv)
+{
+    if (argc != 2
+        || strcmp(
+            argv[1],
+            "--goldencheetah-build-status") != 0) {
+        return 64;
+    }
+
+    fputs(
+        "goldencheetah_build_status=1\n"
+        "application=GoldenCheetah\n",
+        stdout);
+    if (strstr(argv[0], "no-strava") == NULL) {
+        fputs("strava_support=enabled\n", stdout);
+    }
+    if (strstr(argv[0], "malformed") != NULL) {
+        fputs("strava_oauth=maybe\n", stdout);
+    } else if (strstr(argv[0], "unconfigured") != NULL) {
+        fputs("strava_oauth=unavailable\n", stdout);
+    } else {
+        fputs("strava_oauth=configured\n", stdout);
+    }
+    return strstr(argv[0], "bad-exit") == NULL ? 0 : 1;
+}
+EOF
+"${CC:-cc}" -std=c99 -Wall -Wextra -Werror \
+    "$TEMP_DIR/status-probe.c" -o "$TEMP_DIR/configured"
+cp "$TEMP_DIR/configured" "$TEMP_DIR/unconfigured"
+cp "$TEMP_DIR/configured" "$TEMP_DIR/malformed"
+cp "$TEMP_DIR/configured" "$TEMP_DIR/no-strava"
+cp "$TEMP_DIR/configured" "$TEMP_DIR/bad-exit"
+
+printf '\177ELF\002\001\001\000AI\001compressed-appimage-payload' \
+    >"$TEMP_DIR/type1.AppImage"
+printf '\177ELF\002\001\001\000AI\002compressed-appimage-payload' \
+    >"$TEMP_DIR/type2.AppImage"
+chmod +x "$TEMP_DIR/type1.AppImage" "$TEMP_DIR/type2.AppImage"
+
 [ "$(strava_oauth_build_status "$TEMP_DIR/unconfigured")" = \
   "Strava OAuth: unavailable (credentials not configured)" ] ||
-    fail "placeholder Strava credentials were not reported unavailable"
-[ "$(strava_oauth_build_status "$TEMP_DIR/unconfigured-utf16le")" = \
-  "Strava OAuth: unavailable (credentials not configured)" ] ||
-    fail "Qt UTF-16LE Strava placeholder was not reported unavailable"
+    fail "runtime-unavailable Strava credentials were not reported unavailable"
 [ "$(strava_oauth_build_status "$TEMP_DIR/configured")" = \
   "Strava OAuth: configured" ] ||
     fail "configured Strava credentials were not reported"
 if strava_oauth_build_status "$TEMP_DIR/missing" >/dev/null 2>&1; then
     fail "missing executable was accepted for Strava status inspection"
 fi
-if strava_oauth_build_status "$TEMP_DIR/packaged.AppImage" \
+if strava_oauth_build_status /bin/true >/dev/null 2>&1; then
+    fail "an unrelated ELF executable was accepted as GoldenCheetah"
+fi
+if strava_oauth_build_status "$TEMP_DIR/malformed" \
     >/dev/null 2>&1; then
-    fail "compressed AppImage was incorrectly inspected as a raw executable"
+    fail "a malformed build-status response was accepted"
+fi
+if strava_oauth_build_status "$TEMP_DIR/no-strava" \
+    >/dev/null 2>&1; then
+    fail "a binary without reported Strava support was accepted"
+fi
+if strava_oauth_build_status "$TEMP_DIR/bad-exit" \
+    >/dev/null 2>&1; then
+    fail "a failed build-status command was accepted"
+fi
+if strava_oauth_build_status "$TEMP_DIR/status-probe.c" \
+    >/dev/null 2>&1; then
+    fail "a non-ELF file was accepted for Strava status inspection"
+fi
+if strava_oauth_build_status "$TEMP_DIR/type1.AppImage" \
+    >/dev/null 2>&1; then
+    fail "a Type 1 AppImage was inspected as a raw executable"
+fi
+if strava_oauth_build_status "$TEMP_DIR/type2.AppImage" \
+    >/dev/null 2>&1; then
+    fail "a Type 2 AppImage was inspected as a raw executable"
 fi
 require_strava_oauth_build "$TEMP_DIR/configured" >/dev/null ||
     fail "configured Strava credentials were rejected by the release gate"
 if require_strava_oauth_build "$TEMP_DIR/unconfigured" \
     >/dev/null 2>&1; then
-    fail "release gate accepted placeholder Strava credentials"
-fi
-if require_strava_oauth_build "$TEMP_DIR/unconfigured-utf16le" \
-    >/dev/null 2>&1; then
-    fail "release gate accepted Qt UTF-16LE Strava placeholders"
+    fail "release gate accepted unavailable Strava credentials"
 fi
 if require_strava_oauth_build "$TEMP_DIR/missing" \
     >/dev/null 2>&1; then
