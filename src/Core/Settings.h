@@ -550,12 +550,15 @@ private:
     QSettings::Format newSettingsFormat = QSettings::IniFormat;
     QSettings *systemsettings = nullptr;
     QSettings *oldsystemsettings = nullptr;
+    QString preparedSystemMigrationState;
+    bool systemMigrationStateDurable = true;
     QVector<QSettings*> *global = nullptr;
     QHash<QString, AthleteQSettings*> athlete;
     CredentialSettings *credentialSettings = nullptr;
     QString globalCredentialScopeId;
     QHash<QString, QString> athleteCredentialScopeIds;
 
+    bool ensureSystemMigrationStateDurable();
     QString credentialScopeForGlobal();
     QString credentialScopeForAthlete(const QString &athleteName);
     QString credentialScopeForLegacy(const QString &athleteName);
@@ -564,6 +567,9 @@ private:
     bool migrateLegacyCredential(const QString &athleteName,
                                  const QString &credentialKey,
                                  const QString &storedKey);
+    bool containsValueTarget(QString key) const;
+    bool containsCValueTarget(const QString &athleteName,
+                              QString key) const;
 
     // special methods for Migration/Upgrade
     void migrateValue(QString key);

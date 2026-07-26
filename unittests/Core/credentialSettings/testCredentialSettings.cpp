@@ -334,6 +334,8 @@ private slots:
     void gsettingsRoutesCredentialsToVault();
     void gsettingsCheckedCredentialWriteReportsPersistence();
     void gsettingsSyncsOnlyRequestedAthleteFile();
+    void constructionDoesNotPersistMigrationState();
+    void systemFallbackDoesNotSuppressUserMigration();
     void credentialMetadataDoesNotSuppressSystemMigration();
     void markerlessEstablishedSettingsAreAdoptedWithoutBackfill();
     void partialSystemMigrationResumesWithoutOverwrite();
@@ -341,6 +343,8 @@ private slots:
     void partialGlobalMigrationResumesWithoutOverwrite();
     void partialAthleteMigrationResumesWithoutOverwrite_data();
     void partialAthleteMigrationResumesWithoutOverwrite();
+    void dynamicLegacyKeysMigrateToTheirExactTargets();
+    void unknownMigrationStateFailsClosed();
     void migrationSyncFailuresResumeAfterRestart_data();
     void migrationSyncFailuresResumeAfterRestart();
     void newFormatMigrationScrubsLegacyCredential();
@@ -1247,6 +1251,140 @@ gsettingsSyncsOnlyRequestedAthleteFile()
 }
 
 void TestCredentialSettings::
+constructionDoesNotPersistMigrationState()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(
+        QSettings::NativeFormat,
+        QSettings::UserScope,
+        temporary.path());
+    QSettings::setPath(
+        QSettings::IniFormat,
+        QSettings::UserScope,
+        temporary.path());
+
+    const QString organization =
+        QStringLiteral("MigrationConstruction-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application = QStringLiteral("GoldenCheetahTest");
+    QString targetPath;
+    {
+        QSettings target(
+            QSettings::IniFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        targetPath = target.fileName();
+    }
+    QVERIFY(!QFileInfo::exists(targetPath));
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    {
+        GSettings settings(organization, application);
+    }
+
+    QVERIFY(!QFileInfo::exists(targetPath));
+}
+
+void TestCredentialSettings::
+systemFallbackDoesNotSuppressUserMigration()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString legacyPath =
+        temporary.filePath(QStringLiteral("legacy-user"));
+    const QString targetUserPath =
+        temporary.filePath(QStringLiteral("target-user"));
+    const QString targetSystemPath =
+        temporary.filePath(QStringLiteral("target-system"));
+    QVERIFY(QDir().mkpath(legacyPath));
+    QVERIFY(QDir().mkpath(targetUserPath));
+    QVERIFY(QDir().mkpath(targetSystemPath));
+
+    QSettings::setPath(
+        QSettings::NativeFormat,
+        QSettings::UserScope,
+        legacyPath);
+    QSettings::setPath(
+        QSettings::IniFormat,
+        QSettings::UserScope,
+        targetUserPath);
+    QSettings::setPath(
+        QSettings::IniFormat,
+        QSettings::SystemScope,
+        targetSystemPath);
+
+    const QString organization =
+        QStringLiteral("MigrationFallback-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application = QStringLiteral("GoldenCheetahTest");
+    const QString migratedKey =
+        plainKey(GC_SETTINGS_LAST_IMPORT_PATH);
+    const QString legacyValue =
+        QStringLiteral("user-legacy-value");
+    const QString fallbackValue =
+        QStringLiteral("system-fallback-value");
+    QString userFile;
+
+    {
+        QSettings legacy(
+            QSettings::NativeFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        legacy.setValue(migratedKey, legacyValue);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+    }
+    {
+        QSettings fallback(
+            QSettings::IniFormat,
+            QSettings::SystemScope,
+            organization,
+            application);
+        fallback.setValue(migratedKey, fallbackValue);
+        fallback.sync();
+        QCOMPARE(fallback.status(), QSettings::NoError);
+    }
+    {
+        QSettings target(
+            QSettings::IniFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        userFile = target.fileName();
+    }
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    {
+        GSettings settings(organization, application);
+        QVERIFY(settings.contains(
+            GC_SETTINGS_LAST_IMPORT_PATH));
+        QCOMPARE(
+            settings.value(
+                nullptr,
+                GC_SETTINGS_LAST_IMPORT_PATH).toString(),
+            fallbackValue);
+        settings.migrateQSettingsSystem();
+        QCOMPARE(
+            settings.value(
+                nullptr,
+                GC_SETTINGS_LAST_IMPORT_PATH).toString(),
+            legacyValue);
+    }
+
+    QSettings userTarget(userFile, QSettings::IniFormat);
+    QCOMPARE(
+        userTarget.value(migratedKey).toString(),
+        legacyValue);
+    QCOMPARE(
+        userTarget.value(
+            legacySystemMigrationMarkerKey).toString(),
+        legacyMigrationComplete);
+}
+
+void TestCredentialSettings::
 credentialMetadataDoesNotSuppressSystemMigration()
 {
     QTemporaryDir temporary;
@@ -1271,10 +1409,13 @@ credentialMetadataDoesNotSuppressSystemMigration()
         plainKey(GC_SETTINGS_LAST_IMPORT_PATH);
     const QString migratedValue =
         QStringLiteral("legacy-bootstrap-value");
+    const QString startupFont =
+        QStringLiteral("startup-font-write");
     QString systemPath;
     {
         QSettings legacy(organization, application);
         legacy.setValue(migratedKey, migratedValue);
+        legacy.setValue(plainKey(GC_START_HTTP), true);
         legacy.sync();
         QCOMPARE(legacy.status(), QSettings::NoError);
     }
@@ -1290,6 +1431,7 @@ credentialMetadataDoesNotSuppressSystemMigration()
     factoryState() = std::make_shared<FakeStoreState>();
     {
         GSettings settings(organization, application);
+        settings.setValue(GC_FONT_DEFAULT, startupFont);
         settings.initializeQSettingsGlobal(athleteRoot);
         {
             QSettings metadata(systemPath, QSettings::IniFormat);
@@ -1304,6 +1446,12 @@ credentialMetadataDoesNotSuppressSystemMigration()
         }
         settings.migrateQSettingsSystem();
         QCOMPARE(
+            settings.value(nullptr, GC_FONT_DEFAULT).toString(),
+            startupFont);
+        QCOMPARE(
+            settings.value(nullptr, GC_START_HTTP).toBool(),
+            true);
+        QCOMPARE(
             settings.value(
                 nullptr,
                 GC_SETTINGS_LAST_IMPORT_PATH).toString(),
@@ -1311,6 +1459,9 @@ credentialMetadataDoesNotSuppressSystemMigration()
     }
 
     QSettings migrated(systemPath, QSettings::IniFormat);
+    QCOMPARE(
+        migrated.value(plainKey(GC_FONT_DEFAULT)).toString(),
+        startupFont);
     QCOMPARE(migrated.value(migratedKey).toString(), migratedValue);
     QCOMPARE(
         migrated.value(legacySystemMigrationMarkerKey).toString(),
@@ -1539,7 +1690,7 @@ partialGlobalMigrationResumesWithoutOverwrite()
     const int legacyTrain = 2;
     const QString targetGeneral =
         QStringLiteral("new-general-value");
-    const int targetTrain = 7;
+    const int targetTrain = 0;
     {
         QSettings legacy(organization, application);
         legacy.setValue(generalKey, legacyGeneral);
@@ -1594,6 +1745,7 @@ partialGlobalMigrationResumesWithoutOverwrite()
         train.value(trainKey).toInt(),
         partialFile == QStringLiteral("train")
             ? targetTrain : legacyTrain);
+    QVERIFY(train.contains(trainKey));
     QCOMPARE(
         general.value(legacyGlobalMigrationMarkerKey).toString(),
         legacyMigrationComplete);
@@ -1747,6 +1899,166 @@ partialAthleteMigrationResumesWithoutOverwrite()
     QCOMPARE(
         general.value(legacyAthleteMigrationMarkerKey).toString(),
         legacyMigrationComplete);
+}
+
+void TestCredentialSettings::
+dynamicLegacyKeysMigrateToTheirExactTargets()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(
+        QSettings::NativeFormat,
+        QSettings::UserScope,
+        temporary.path());
+    QSettings::setPath(
+        QSettings::IniFormat,
+        QSettings::UserScope,
+        temporary.path());
+
+    const QString organization =
+        QStringLiteral("DynamicMigration-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application = QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("athletes"));
+    const QString configPath = athleteRoot
+        + QStringLiteral("/Athlete/config");
+    QVERIFY(QDir().mkpath(configPath));
+
+    const QString dpKey = QStringLiteral("dp/custom/apply");
+    const QString colmapKey = QStringLiteral("colmap/custom");
+    const QString deviceNameKey =
+        plainKey(GC_DEV_NAME) + QStringLiteral("1");
+    const QString renamedKey =
+        plainKey(GC_NAVHEADINGWIDTHS);
+    const QString splitterSizeKey =
+        plainKey(GC_SETTINGS_SPLITTER_SIZES);
+    const QString splitterStateKey =
+        QStringLiteral("splitter/analysis/hide");
+
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(dpKey, QStringLiteral("dynamic-dp"));
+        legacy.setValue(
+            colmapKey, QStringLiteral("dynamic-column"));
+        legacy.setValue(plainKey(GC_DEV_COUNT), 1);
+        legacy.setValue(
+            deviceNameKey, QStringLiteral("dynamic-trainer"));
+        legacy.setValue(
+            athleteName
+                + QStringLiteral("/bavigator/headingwidths"),
+            QStringLiteral("12,34"));
+        legacy.setValue(
+            athleteName + QLatin1Char('/') + splitterSizeKey,
+            QByteArray("splitter-sizes"));
+        legacy.setValue(
+            athleteName + QLatin1Char('/') + splitterStateKey,
+            false);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+    }
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    {
+        GSettings settings(organization, application);
+        settings.initializeQSettingsGlobal(athleteRoot);
+        settings.initializeQSettingsAthlete(
+            athleteRoot, athleteName);
+    }
+
+    QSettings globalGeneral(
+        athleteRoot + QStringLiteral("/configglobal-general.ini"),
+        QSettings::IniFormat);
+    QCOMPARE(
+        globalGeneral.value(dpKey).toString(),
+        QStringLiteral("dynamic-dp"));
+    QCOMPARE(
+        globalGeneral.value(colmapKey).toString(),
+        QStringLiteral("dynamic-column"));
+
+    QSettings globalTrain(
+        athleteRoot + QStringLiteral("/configglobal-trainmode.ini"),
+        QSettings::IniFormat);
+    QCOMPARE(globalTrain.value(plainKey(GC_DEV_COUNT)).toInt(), 1);
+    QCOMPARE(
+        globalTrain.value(deviceNameKey).toString(),
+        QStringLiteral("dynamic-trainer"));
+
+    QSettings athletePreferences(
+        configPath + QStringLiteral("/athlete-preferences.ini"),
+        QSettings::IniFormat);
+    QCOMPARE(
+        athletePreferences.value(renamedKey).toString(),
+        QStringLiteral("12,34"));
+
+    QSettings athleteLayout(
+        configPath + QStringLiteral("/athlete-layout.ini"),
+        QSettings::IniFormat);
+    QCOMPARE(
+        athleteLayout.value(splitterSizeKey).toByteArray(),
+        QByteArray("splitter-sizes"));
+    QVERIFY(athleteLayout.contains(splitterStateKey));
+    QCOMPARE(
+        athleteLayout.value(splitterStateKey).toBool(),
+        false);
+}
+
+void TestCredentialSettings::unknownMigrationStateFailsClosed()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(
+        QSettings::NativeFormat,
+        QSettings::UserScope,
+        temporary.path());
+    QSettings::setPath(
+        QSettings::IniFormat,
+        QSettings::UserScope,
+        temporary.path());
+
+    const QString organization =
+        QStringLiteral("UnknownMigrationState-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application = QStringLiteral("GoldenCheetahTest");
+    const QString migratedKey =
+        plainKey(GC_SETTINGS_LAST_IMPORT_PATH);
+    const QString unknownState = QStringLiteral("future-state");
+    QString targetPath;
+
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(
+            migratedKey, QStringLiteral("must-not-migrate"));
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+    }
+    {
+        QSettings target(
+            QSettings::IniFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        target.setValue(
+            legacySystemMigrationMarkerKey, unknownState);
+        target.sync();
+        QCOMPARE(target.status(), QSettings::NoError);
+        targetPath = target.fileName();
+    }
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    {
+        GSettings settings(organization, application);
+        settings.migrateQSettingsSystem();
+        QVERIFY(!settings.contains(
+            GC_SETTINGS_LAST_IMPORT_PATH));
+    }
+
+    QSettings target(targetPath, QSettings::IniFormat);
+    QCOMPARE(
+        target.value(legacySystemMigrationMarkerKey).toString(),
+        unknownState);
+    QVERIFY(!target.contains(migratedKey));
 }
 
 void TestCredentialSettings::
@@ -1939,6 +2251,9 @@ migrationSyncFailuresResumeAfterRestart()
         migrationFormatFaultState();
     fault = {};
     fault.failurePoint = failurePoint;
+    fault.enabled =
+        scope == QStringLiteral("system")
+        && failurePoint == QStringLiteral("system-start");
     factoryState() = std::make_shared<FakeStoreState>();
     {
         GSettings settings(
@@ -1958,6 +2273,25 @@ migrationSyncFailuresResumeAfterRestart()
             settings.initializeQSettingsAthlete(
                 athleteRoot,
                 athleteName);
+        }
+        if (failurePoint.endsWith(
+                QStringLiteral("-start"))) {
+            fault.enabled = false;
+            if (scope == QStringLiteral("system")) {
+                settings.setValue(
+                    GC_FONT_DEFAULT,
+                    QStringLiteral("post-failure-system-write"));
+            } else if (scope == QStringLiteral("global")) {
+                settings.setValue(
+                    GC_WARNEXIT,
+                    false);
+            } else {
+                settings.setCValue(
+                    athleteName,
+                    GC_DOB,
+                    QDate(2000, 1, 1));
+            }
+            settings.syncQSettings();
         }
     }
     fault.enabled = false;

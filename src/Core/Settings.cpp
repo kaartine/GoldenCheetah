@@ -76,6 +76,167 @@ static const QString settingFileNamesGlobal[2] = {"configglobal-general.ini","co
 static const QString settingFileNamesAthlete[4] = {"athlete-general.ini","athlete-layout.ini","athlete-preferences.ini","athlete-private.ini"};
 static const QString credentialScopeStorageKey =
     QStringLiteral("credential_store/id");
+static const QString legacySystemMigrationMarkerKey =
+    QStringLiteral("migration/legacy_qsettings_v1/system_state");
+static const QString legacyGlobalMigrationMarkerKey =
+    QStringLiteral("migration/legacy_qsettings_v1/global_state");
+static const QString legacyAthleteMigrationMarkerKey =
+    QStringLiteral("migration/legacy_qsettings_v1/athlete_state");
+static const QString legacyMigrationStarted =
+    QStringLiteral("started");
+static const QString legacyMigrationComplete =
+    QStringLiteral("complete");
+
+class ScopedQSettingsFallbackDisabler
+{
+public:
+    explicit ScopedQSettingsFallbackDisabler(QSettings *settings)
+        : settings(settings),
+          fallbacksEnabled(
+              settings && settings->fallbacksEnabled())
+    {
+        if (settings)
+            settings->setFallbacksEnabled(false);
+    }
+
+    ~ScopedQSettingsFallbackDisabler()
+    {
+        if (settings)
+            settings->setFallbacksEnabled(fallbacksEnabled);
+    }
+
+private:
+    QSettings *settings;
+    bool fallbacksEnabled;
+    Q_DISABLE_COPY(ScopedQSettingsFallbackDisabler)
+};
+
+static bool isMigrationMetadataKey(const QString &key)
+{
+    return key.startsWith(QStringLiteral("credential_store/"))
+        || key.startsWith(QStringLiteral("migration/"));
+}
+
+static bool hasApplicationSettings(
+    const QList<QSettings *> &settingsFiles,
+    const QStringList &ignoredKeys = {},
+    bool preserveMacSingleKeyBehavior = false)
+{
+    int applicationKeys = 0;
+    for (QSettings *settings : settingsFiles) {
+        if (!settings) continue;
+        for (const QString &key : settings->allKeys()) {
+            if (!isMigrationMetadataKey(key)
+                && !ignoredKeys.contains(key)) {
+                ++applicationKeys;
+            }
+        }
+    }
+#ifdef Q_OS_MAC
+    if (preserveMacSingleKeyBehavior && applicationKeys <= 1)
+        return false;
+#else
+    Q_UNUSED(preserveMacSingleKeyBehavior)
+#endif
+    return applicationKeys > 0;
+}
+
+static bool syncMigrationTargets(
+    const QList<QSettings *> &settingsFiles)
+{
+    bool success = true;
+    for (QSettings *settings : settingsFiles) {
+        if (!settings) {
+            success = false;
+            continue;
+        }
+        settings->sync();
+        if (settings->status() != QSettings::NoError)
+            success = false;
+    }
+    return success;
+}
+
+static bool persistMigrationState(
+    QSettings *settings,
+    const QString &key,
+    const QString &state)
+{
+    if (!settings || key.isEmpty() || state.isEmpty())
+        return false;
+
+    const bool hadPrevious = settings->contains(key);
+    const QVariant previous = settings->value(key);
+    settings->setValue(key, state);
+    settings->sync();
+    if (settings->status() == QSettings::NoError)
+        return true;
+
+    // A later application sync must not persist a markerless partial target.
+    if (state == legacyMigrationStarted)
+        return false;
+
+    if (hadPrevious) {
+        settings->setValue(key, previous);
+    } else {
+        settings->remove(key);
+    }
+    return false;
+}
+
+template <typename CopyValues>
+static bool runLegacyMigration(
+    QSettings *markerSettings,
+    const QString &markerKey,
+    const QList<QSettings *> &scopeSettings,
+    const QList<QSettings *> &syncTargets,
+    const CopyValues &copyValues,
+    const QStringList &ignoredApplicationKeys = {},
+    bool preserveMacSingleKeyBehavior = false)
+{
+    if (!markerSettings)
+        return false;
+
+    const QString state =
+        markerSettings->value(markerKey).toString();
+    if (state == legacyMigrationComplete)
+        return true;
+    if (!state.isEmpty()
+        && state != legacyMigrationStarted) {
+        qWarning()
+            << "Unsupported legacy settings migration state in"
+            << markerSettings->fileName();
+        return false;
+    }
+
+    if (state.isEmpty()
+        && hasApplicationSettings(
+            scopeSettings,
+            ignoredApplicationKeys,
+            preserveMacSingleKeyBehavior)) {
+        return syncMigrationTargets(syncTargets)
+            && persistMigrationState(
+                markerSettings,
+                markerKey,
+                legacyMigrationComplete);
+    }
+
+    if (state.isEmpty()
+        && !persistMigrationState(
+            markerSettings,
+            markerKey,
+            legacyMigrationStarted)) {
+        return false;
+    }
+
+    copyValues();
+    if (!syncMigrationTargets(syncTargets))
+        return false;
+    return persistMigrationState(
+        markerSettings,
+        markerKey,
+        legacyMigrationComplete);
+}
 
 static QString legacyCredentialScopeStorageKey(
     const QString &athleteName)
@@ -164,6 +325,29 @@ GSettings::GSettings(
         legacyFormat, QSettings::UserScope, org, app);
     systemsettings = new QSettings(
         targetFormat, QSettings::UserScope, org, app);
+    {
+        ScopedQSettingsFallbackDisabler exactTarget(systemsettings);
+        const bool hasMarker = systemsettings->contains(
+            legacySystemMigrationMarkerKey);
+        preparedSystemMigrationState =
+            systemsettings->value(
+                legacySystemMigrationMarkerKey).toString();
+        systemMigrationStateDurable =
+            systemsettings->status() == QSettings::NoError
+            && hasMarker
+            && (preparedSystemMigrationState
+                    == legacyMigrationStarted
+                || preparedSystemMigrationState
+                    == legacyMigrationComplete);
+        if (systemsettings->status() == QSettings::NoError
+            && !hasMarker) {
+            preparedSystemMigrationState =
+                hasApplicationSettings(
+                    {systemsettings}, {}, true)
+                    ? legacyMigrationComplete
+                    : legacyMigrationStarted;
+        }
+    }
     global = new QVector<QSettings*>();
 }
 
@@ -188,22 +372,57 @@ GSettings::~GSettings() {
     delete credentialSettings;
 }
 
+bool GSettings::ensureSystemMigrationStateDurable()
+{
+    if (!newFormat)
+        return true;
+    if (preparedSystemMigrationState
+            != legacyMigrationStarted
+        && preparedSystemMigrationState
+            != legacyMigrationComplete) {
+        return false;
+    }
+    if (systemMigrationStateDurable)
+        return true;
+
+    ScopedQSettingsFallbackDisabler exactTarget(systemsettings);
+    systemsettings->setValue(
+        legacySystemMigrationMarkerKey,
+        preparedSystemMigrationState);
+    systemsettings->sync();
+    systemMigrationStateDurable =
+        systemsettings->status() == QSettings::NoError;
+    return systemMigrationStateDurable;
+}
+
 QString GSettings::credentialScopeForGlobal()
 {
     if (!credentialSettings) return QString();
     if (!newFormat) return credentialScopeForLegacy(QString());
     if (!global || global->isEmpty()) return QString();
+    if (!ensureSystemMigrationStateDurable()) return QString();
     if (globalCredentialScopeId.isEmpty()) {
-        const QString preferredScopeId = systemsettings
-            ? systemsettings->value(
-                  legacyCredentialScopeStorageKey(QString())).toString()
-            : QString();
+        QString preferredScopeId;
+        {
+            ScopedQSettingsFallbackDisabler exactTarget(
+                systemsettings);
+            preferredScopeId = systemsettings
+                ? systemsettings->value(
+                      legacyCredentialScopeStorageKey(
+                          QString())).toString()
+                : QString();
+        }
         globalCredentialScopeId = CredentialSettings::ensureScopeId(
             global->at(GLOBAL_GENERAL), credentialScopeStorageKey,
             preferredScopeId);
-        mirrorCredentialScope(
-            systemsettings, legacyCredentialScopeStorageKey(QString()),
-            globalCredentialScopeId);
+        {
+            ScopedQSettingsFallbackDisabler exactTarget(
+                systemsettings);
+            mirrorCredentialScope(
+                systemsettings,
+                legacyCredentialScopeStorageKey(QString()),
+                globalCredentialScopeId);
+        }
     }
     return globalCredentialScopeId;
 }
@@ -213,21 +432,32 @@ QString GSettings::credentialScopeForAthlete(
 {
     if (!credentialSettings || athleteName.isEmpty()) return QString();
     if (!newFormat) return credentialScopeForLegacy(athleteName);
+    if (!ensureSystemMigrationStateDurable()) return QString();
     const auto found = athlete.constFind(athleteName);
     if (found == athlete.cend()) return QString();
     QString &scopeId = athleteCredentialScopeIds[athleteName];
     if (scopeId.isEmpty()) {
-        const QString preferredScopeId = systemsettings
-            ? systemsettings->value(
-                  legacyCredentialScopeStorageKey(
-                      athleteName)).toString()
-            : QString();
+        QString preferredScopeId;
+        {
+            ScopedQSettingsFallbackDisabler exactTarget(
+                systemsettings);
+            preferredScopeId = systemsettings
+                ? systemsettings->value(
+                      legacyCredentialScopeStorageKey(
+                          athleteName)).toString()
+                : QString();
+        }
         scopeId = CredentialSettings::ensureScopeId(
             found.value()->getQSettings(ATHLETE_PRIVATE),
             credentialScopeStorageKey, preferredScopeId);
-        mirrorCredentialScope(
-            systemsettings, legacyCredentialScopeStorageKey(athleteName),
-            scopeId);
+        {
+            ScopedQSettingsFallbackDisabler exactTarget(
+                systemsettings);
+            mirrorCredentialScope(
+                systemsettings,
+                legacyCredentialScopeStorageKey(athleteName),
+                scopeId);
+        }
     }
     return scopeId;
 }
@@ -236,6 +466,12 @@ QString GSettings::credentialScopeForLegacy(
     const QString &athleteName)
 {
     if (!credentialSettings || !systemsettings) return QString();
+    if (newFormat
+        && !ensureSystemMigrationStateDurable()) {
+        return QString();
+    }
+    ScopedQSettingsFallbackDisabler exactTarget(
+        newFormat ? systemsettings : nullptr);
     return CredentialSettings::ensureScopeId(
         systemsettings,
         legacyCredentialScopeStorageKey(athleteName));
@@ -398,6 +634,8 @@ GSettings::setValueChecked(QString key, QVariant value)
         keyVar = DetermineKey(keyVar, store, file);
         switch (store) {
         case SETTINGS_SYSTEM:
+            if (!ensureSystemMigrationStateDurable())
+                break;
             systemsettings->setValue(keyVar,value);
             written = true;
             break;
@@ -451,6 +689,8 @@ GSettings::remove(const QString &key)
         keyVar = DetermineKey(keyVar, store, file);
         switch (store) {
         case SETTINGS_SYSTEM:
+            if (!ensureSystemMigrationStateDurable())
+                return;
             systemsettings->remove(keyVar);
             break;
         case SETTINGS_GLOBAL:
@@ -681,7 +921,6 @@ GSettings::contains(const QString & key) const {
         switch (store) {
         case SETTINGS_SYSTEM:
             return systemsettings->contains(keyVar);
-            break;
         case SETTINGS_GLOBAL:
             return global->at(file)->contains(keyVar);
             break;
@@ -697,23 +936,72 @@ GSettings::contains(const QString & key) const {
     return false;
 }
 
+bool GSettings::containsValueTarget(QString key) const
+{
+    if (!newFormat) {
+        key.remove(QRegularExpression("^<.*>"));
+        return systemsettings->contains(key);
+    }
+
+    int store;
+    int file;
+    key = DetermineKey(key, store, file);
+    switch (store) {
+    case SETTINGS_SYSTEM: {
+        ScopedQSettingsFallbackDisabler exactTarget(
+            systemsettings);
+        return systemsettings->contains(key);
+    }
+    case SETTINGS_GLOBAL:
+        return global->at(file)->contains(key);
+    case SETTINGS_ATHLETE:
+        return false;
+    }
+    return false;
+}
+
+bool GSettings::containsCValueTarget(
+    const QString &athleteName,
+    QString key) const
+{
+    if (!newFormat || athleteName.isEmpty())
+        return false;
+
+    int store;
+    int file;
+    key = DetermineKey(key, store, file);
+    if (store != SETTINGS_ATHLETE)
+        return false;
+
+    const auto found = athlete.constFind(athleteName);
+    return found != athlete.cend()
+        && found.value()->getQSettings(file)
+        && found.value()->getQSettings(file)->contains(key);
+}
+
 void
 GSettings::migrateQSettingsSystem() {
 
     if (!newFormat) return;
 
-    // do the migration for the System Settings - if not yet done
-    // - System is only migrated once per PC (since it only exists once
-
-    bool migrateMac = false;
-    QStringList currentKeys = systemsettings->allKeys();
-#ifdef Q_OS_MAC
-    migrateMac = true;
-#endif
-    if (currentKeys.size() == 0 || (migrateMac && currentKeys.size() == 1)) {
-        upgradeSystem();
-        systemsettings->sync();
+    if (!ensureSystemMigrationStateDurable()) {
+        qWarning()
+            << "Cannot persist legacy system migration state";
+        CredentialSettings::hardenSettingsFile(systemsettings);
+        return;
     }
+
+    ScopedQSettingsFallbackDisabler exactTarget(systemsettings);
+    const QList<QSettings *> systemFiles = {systemsettings};
+    if (!runLegacyMigration(
+            systemsettings,
+            legacySystemMigrationMarkerKey,
+            systemFiles,
+            systemFiles,
+            [this] { upgradeSystem(); })) {
+        qWarning() << "Legacy system settings migration is incomplete";
+    }
+    CredentialSettings::hardenSettingsFile(systemsettings);
 }
 
 
@@ -735,13 +1023,28 @@ GSettings::initializeQSettingsGlobal(QString athletesRootDir) {
 
     }
 
-    // do the migration for the AthleteDir / Global Settings  if not yet done
-    // - Global is migrated to the root of ANY AthleteDirectory if it does not yet exist
-    //   this is too support migration if a user has multiple AthleteDirectories in place
-    //   but also creates a default like his previous old-style directory when new AthleteDirectory is created
+    if (!ensureSystemMigrationStateDurable()) {
+        qWarning()
+            << "Cannot persist legacy system migration state";
+        return;
+    }
 
-    if (global->at(GLOBAL_GENERAL)->allKeys().isEmpty() && global->at(GLOBAL_TRAINMODE)->allKeys().isEmpty()) {
-        upgradeGlobal();
+    const QList<QSettings *> globalFiles = {
+        global->at(GLOBAL_GENERAL),
+        global->at(GLOBAL_TRAINMODE)
+    };
+    const QList<QSettings *> syncTargets = {
+        systemsettings,
+        global->at(GLOBAL_GENERAL),
+        global->at(GLOBAL_TRAINMODE)
+    };
+    if (!runLegacyMigration(
+            global->at(GLOBAL_GENERAL),
+            legacyGlobalMigrationMarkerKey,
+            globalFiles,
+            syncTargets,
+            [this] { upgradeGlobal(); })) {
+        qWarning() << "Legacy global settings migration is incomplete";
     }
     syncQSettingsGlobal();
     migrateGlobalCredentials();
@@ -764,26 +1067,49 @@ GSettings::initializeQSettingsAthlete(QString athletesRootDir, QString athleteNa
         return; // athlete has not yet been migrated and /config does not exist - so wait until next time
     }
 
-    // create the New Athlete QSettings (if they do not yet exists and migrate the old data if required)
-
-    QHash<QString, AthleteQSettings*>::const_iterator i = athlete.find(athleteName);
-    if (i == athlete.end()) {
-
+    bool initialized = false;
+    if (athlete.constFind(athleteName) == athlete.cend()) {
         initializeQSettingsNewAthlete(athletesRootDir, athleteName);
-
-        QHash<QString, AthleteQSettings*>::const_iterator i2 = athlete.find(athleteName);
-        // do the upgrade for the Athlete Properties - but only if the Settings are currently empty - don't overwrite anything
-        if (i2 != athlete.end()) {
-            if (i2.value()->getQSettings(ATHLETE_GENERAL)->allKeys().isEmpty() &&
-                    i2.value()->getQSettings(ATHLETE_LAYOUT)->allKeys().isEmpty() &&
-                    i2.value()->getQSettings(ATHLETE_PREFERENCES)->allKeys().isEmpty() &&
-                    i2.value()->getQSettings(ATHLETE_PRIVATE)->allKeys().isEmpty() ) {
-                upgradeAthlete(athleteName);
-
-            }
-        }
-        syncQSettingsAllAthletes();
+        initialized = true;
     }
+
+    const auto found = athlete.constFind(athleteName);
+    if (found != athlete.cend()) {
+        AthleteQSettings *athleteSettings = found.value();
+        const QList<QSettings *> athleteFiles = {
+            athleteSettings->getQSettings(ATHLETE_GENERAL),
+            athleteSettings->getQSettings(ATHLETE_LAYOUT),
+            athleteSettings->getQSettings(ATHLETE_PREFERENCES),
+            athleteSettings->getQSettings(ATHLETE_PRIVATE)
+        };
+        if (global && global->size() == 2) {
+            const QList<QSettings *> syncTargets = {
+                global->at(GLOBAL_GENERAL),
+                athleteSettings->getQSettings(ATHLETE_GENERAL),
+                athleteSettings->getQSettings(ATHLETE_LAYOUT),
+                athleteSettings->getQSettings(ATHLETE_PREFERENCES),
+                athleteSettings->getQSettings(ATHLETE_PRIVATE)
+            };
+            if (!runLegacyMigration(
+                    athleteSettings->getQSettings(ATHLETE_GENERAL),
+                    legacyAthleteMigrationMarkerKey,
+                    athleteFiles,
+                    syncTargets,
+                    [this, athleteName] {
+                        upgradeAthlete(athleteName);
+                    })) {
+                qWarning()
+                    << "Legacy athlete settings migration is incomplete";
+            }
+        } else {
+            qWarning()
+                << "Cannot migrate athlete settings before global settings";
+        }
+        CredentialSettings::hardenSettingsFile(
+            athleteSettings->getQSettings(ATHLETE_PRIVATE));
+    }
+    if (initialized)
+        syncQSettingsAllAthletes();
     migrateAthleteCredentials(athleteName);
 }
 
@@ -950,8 +1276,11 @@ GSettings::migrateValue(QString key) {
 
     QString oldKey = key;
     oldKey.remove(QRegularExpression("^<.*>"));
-    if (oldsystemsettings->contains(oldKey)
-        && !migrateLegacyCredential(QString(), key, oldKey)) {
+    if (!oldsystemsettings->contains(oldKey))
+        return;
+    if (migrateLegacyCredential(QString(), key, oldKey))
+        return;
+    if (!containsValueTarget(key)) {
         setValue(key, oldsystemsettings->value(oldKey));
     }
 }
@@ -962,8 +1291,11 @@ GSettings::migrateCValue(QString athlete, QString key) {
     QString oldKey = key;
     oldKey.remove(QRegularExpression("^<.*>"));
     const QString storedKey = athlete + QLatin1Char('/') + oldKey;
-    if (oldsystemsettings->contains(storedKey)
-        && !migrateLegacyCredential(athlete, key, storedKey)) {
+    if (!oldsystemsettings->contains(storedKey))
+        return;
+    if (migrateLegacyCredential(athlete, key, storedKey))
+        return;
+    if (!containsCValueTarget(athlete, key)) {
         setCValue(athlete, key, oldsystemsettings->value(storedKey));
     }
 }
@@ -973,8 +1305,11 @@ GSettings::migrateAndRenameCValue(QString athlete, QString wrongKey, QString key
 
     wrongKey.remove(QRegularExpression("^<.*>"));
     const QString storedKey = athlete + QLatin1Char('/') + wrongKey;
-    if (oldsystemsettings->contains(storedKey)
-        && !migrateLegacyCredential(athlete, key, storedKey)) {
+    if (!oldsystemsettings->contains(storedKey))
+        return;
+    if (migrateLegacyCredential(athlete, key, storedKey))
+        return;
+    if (!containsCValueTarget(athlete, key)) {
         setCValue(athlete, key, oldsystemsettings->value(storedKey));
     }
 }
@@ -984,8 +1319,11 @@ GSettings::migrateValueToCValue(QString athlete, QString key) {
 
     QString oldKey = key;
     oldKey.remove(QRegularExpression("^<.*>"));
-    if (oldsystemsettings->contains(oldKey)
-        && !migrateLegacyCredential(athlete, key, oldKey)) {
+    if (!oldsystemsettings->contains(oldKey))
+        return;
+    if (migrateLegacyCredential(athlete, key, oldKey))
+        return;
+    if (!containsCValueTarget(athlete, key)) {
         setCValue(athlete, key, oldsystemsettings->value(oldKey));
     }
 }
@@ -993,16 +1331,17 @@ GSettings::migrateValueToCValue(QString athlete, QString key) {
 void
 GSettings::migrateCValueToValue(QString athlete, QString key) {
 
-    // only migrate if the value does not yet exist on the target INI file
-    if (!contains(key)) {
-        QString oldKey = key;
-        oldKey.remove(QRegularExpression("^<.*>"));
-        oldKey = athlete + QLatin1Char('/') + oldKey;
-        if (oldsystemsettings->contains(oldKey)
-            && !migrateLegacyCredential(athlete, key, oldKey)) {
-            setValue(key, oldsystemsettings->value(oldKey));
-        }
-    }
+    if (containsValueTarget(key))
+        return;
+
+    QString oldKey = key;
+    oldKey.remove(QRegularExpression("^<.*>"));
+    oldKey = athlete + QLatin1Char('/') + oldKey;
+    if (!oldsystemsettings->contains(oldKey))
+        return;
+    if (migrateLegacyCredential(athlete, key, oldKey))
+        return;
+    setValue(key, oldsystemsettings->value(oldKey));
 }
 
 

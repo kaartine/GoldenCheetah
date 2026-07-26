@@ -1786,6 +1786,37 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   links the complete application and test tree. The full normal matrix passes
   75 suites and 2,517 tests with no failures, skips, or blacklists.
 
+### SEC-016: Transient vault reads can overwrite an unknown newer credential
+
+- Status: OPEN
+- Code: `src/Core/CredentialSettings.cpp`
+- Impact: When a vault read returns `Unavailable` or `Failed` and a legacy
+  plaintext credential exists, migration currently writes that plaintext value
+  into the vault. A transient backend failure cannot prove the vault entry is
+  absent, so this can overwrite a newer token or password that the process was
+  temporarily unable to read.
+- Test: Seed a newer fake-vault credential and an older plaintext source, make
+  the first vault read return each transient status, and assert zero vault
+  writes, no plaintext removal, no success cache entry, and a successful retry
+  after the backend recovers.
+- Fix direction: Permit migration writes only after an authoritative
+  `NotFound`. Treat `Unavailable` and `Failed` as retryable read failures that
+  preserve every source without mutating the vault.
+
+### SEC-017: Credential scopes alias same-named athletes in different roots
+
+- Status: OPEN
+- Code: `src/Core/Settings.cpp`
+- Impact: Legacy credential-scope mapping hashes only the athlete name. Two
+  independent athlete roots containing the same directory name can therefore
+  adopt one vault scope and expose or overwrite each other's cloud credentials.
+- Test: Initialize same-named athletes in two isolated roots, store distinct
+  credentials, restart through both pre- and post-initialization paths, and
+  require distinct stable vault identifiers with no cross-profile reads.
+- Fix direction: Bind new scope mappings to a durable root/profile identity
+  while preserving existing single-root mappings through an explicit,
+  fail-closed migration policy.
+
 ## Medium
 
 ### MEM-019: Indented plot marker starts and copies its matrix from indeterminate state
@@ -2459,13 +2490,43 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-005: QSettings migration is not resumable after partial success
 
-- Status: OPEN
-- Code: `src/Core/Settings.cpp:384`, `src/Core/Settings.cpp:213`
+- Status: FIXED
+- Code: `src/Core/Settings.cpp`, `src/Core/Settings.h`, and
+  `unittests/Core/credentialSettings/testCredentialSettings.cpp`
 - Impact: Any partially populated new settings file suppresses remaining legacy
   migration, making configuration and credentials appear lost.
-- Test: Fail each migration write/sync point and restart migration.
-- Fix direction: Idempotent per-key migration plus a completion marker written
-  only after all `sync()`/`status()` checks succeed.
+- Test-first evidence: The original implementation passed 77 focused cases and
+  failed 24 restart cases. Follow-up RED cases reproduced normal startup font
+  writes suppressing system migration, one-time `started` sync failures being
+  lost to later application writes, a `SystemScope` fallback suppressing the
+  exact user-file migration, constructor-only disk mutation, and a temporary
+  regression in the public fallback-aware `contains()` contract.
+- Resolution: System, global, and athlete scopes now use versioned
+  `started`/`complete` states. A system state is prepared without constructor
+  I/O and persisted before the first real system write. Each allowlisted value
+  is copied only when its exact destination file lacks the key, preserving
+  empty strings, false, and zero. Global-to-system and athlete-to-global writes
+  participate in checked synchronization, and `complete` is persisted only
+  after every target reports `QSettings::NoError`. A failed `started` write
+  remains in the in-memory settings map so a later successful application sync
+  cannot publish a markerless partial target. Migration target checks ignore
+  Qt fallback locations while the public runtime API retains normal fallback
+  semantics. Credential vault sweeps remain outside the legacy marker so they
+  continue retrying independently.
+- Verification: The 105-case focused suite passes normally and under strict
+  ASan/UBSan/LSan with leak detection. It covers all 15 scope participant and
+  marker write failures, one-time failure followed by a same-process settings
+  write, restart recovery, real startup ordering, exact fallback handling,
+  marker rollout, unknown states, dynamic device/data-processor/column keys,
+  athlete key renaming, splitter keys, and cross-store values. The production
+  application compiles and links as a 536,217,336-byte ELF. The complete
+  out-of-source matrix runs 2,819 cases across 81 QtTest programs: 2,817 pass,
+  none fail, and two source-contract checks skip as tracked by `TEST-002`.
+- Residual: A markerless partial profile created before this state protocol is
+  indistinguishable from an established profile where the user deliberately
+  removed old settings. Such profiles are conservatively adopted as complete
+  to avoid resurrecting stale legacy values; automatic historical repair
+  requires an explicit user-selected repair policy.
 
 ### DUR-006: RideCache background save lacks an immutable snapshot
 
@@ -3238,6 +3299,22 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   pair and retry publication during startup. Never mark the grant active until
   every credential and metadata write has committed and synchronized.
 
+### DUR-010: Credential-scope mirror failure is not propagated
+
+- Status: OPEN
+- Code: `src/Core/Settings.cpp`
+- Impact: `mirrorCredentialScope()` logs a failed system-settings sync but its
+  callers still cache and return the scope identifier. A later legacy or
+  pre-initialization path can then select a different scope after restart,
+  while credential migration may already have written to the first scope.
+- Test: Inject system scope-mirror write and sync failures for global and
+  athlete mappings. Require an empty/failure result, no cached scope, no vault
+  write, no plaintext removal, and deterministic recovery after restart.
+- Fix direction: Return and propagate checked mirror durability. Do not expose
+  or cache a newly selected scope, migrate credentials, or scrub a source until
+  both its canonical target mapping and required compatibility mirror are
+  durable.
+
 ### THREAD-010: Strava grant coordination is process-local
 
 - Status: OPEN
@@ -3476,6 +3553,25 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Fix direction: Inject the disconnect operation behind the existing service
   contract and add a Qt widget lifecycle suite using a disposable athlete
   profile.
+
+### TEST-002: Source-contract tests skip in out-of-source builds
+
+- Status: OPEN
+- Code: `unittests/Core/signalSafety/testPatternDetection.cpp`,
+  `unittests/Core/signalSafety/testTreeSafety.cpp`, and their source-checking
+  scripts
+- Impact: A clean out-of-source `make check` silently skips both unsafe
+  connection and unsafe tree-child source checks. CI can therefore report a
+  green full matrix without enforcing these two contracts.
+- Evidence: The clean DUR-005 verification matrix ran 81 QtTest programs and
+  reported 2,817 passes, no failures, and two skips: `testUnsafeConnects()`
+  could not find `check_unsafe_connects.py`, and `testUnsafeChildAccess()`
+  could not find `check_unsafe_tree_child.py`.
+- Test: Run the two suites from a clean build directory and require both source
+  checks to execute without `QSKIP`.
+- Fix direction: Resolve the scripts through `QFINDTESTDATA`, a compile-time
+  source-root path, or copy them into the test runtime directory as part of the
+  build.
 
 ### BUILD-008: Qt 6.8.3 reports impossible QVariant inline-storage overflows
 
