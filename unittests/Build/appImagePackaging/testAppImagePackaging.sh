@@ -64,6 +64,14 @@ declare -F strava_oauth_appimage_status >/dev/null ||
     fail "strava_oauth_appimage_status helper is missing"
 declare -F require_strava_oauth_appimage >/dev/null ||
     fail "require_strava_oauth_appimage helper is missing"
+declare -F install_linux_keychain_runtime >/dev/null ||
+    fail "install_linux_keychain_runtime helper is missing"
+declare -F linux_keychain_runtime_status >/dev/null ||
+    fail "linux_keychain_runtime_status helper is missing"
+declare -F linux_keychain_appimage_status >/dev/null ||
+    fail "linux_keychain_appimage_status helper is missing"
+declare -F require_linux_keychain_appimage >/dev/null ||
+    fail "require_linux_keychain_appimage helper is missing"
 
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
@@ -160,6 +168,58 @@ cp "$TEMP_DIR/configured" "$TEMP_DIR/oversized"
 cp "$TEMP_DIR/configured" "$TEMP_DIR/missing-newline"
 cp "$TEMP_DIR/configured" "$TEMP_DIR/extra-newline"
 
+mkdir -p "$TEMP_DIR/libsecret/lib" "$TEMP_DIR/libsecret/bin"
+cat >"$TEMP_DIR/libsecret/libsecret-fixture.c" <<'EOF'
+int gc_libsecret_fixture(void)
+{
+    return 0;
+}
+EOF
+"${CC:-cc}" -std=c99 -Wall -Wextra -Werror -shared -fPIC \
+    -Wl,-soname,libsecret-1.so.0 \
+    "$TEMP_DIR/libsecret/libsecret-fixture.c" \
+    -o "$TEMP_DIR/libsecret/lib/libsecret-1.so.0.0"
+ln -s libsecret-1.so.0.0 \
+    "$TEMP_DIR/libsecret/lib/libsecret-1.so.0"
+cat >"$TEMP_DIR/libsecret/bin/pkg-config" <<EOF
+#!/bin/sh
+[ "\$1" = "--variable=libdir" ] &&
+    [ "\$2" = "libsecret-1" ] || exit 1
+printf '%s\n' "$TEMP_DIR/libsecret/lib"
+EOF
+chmod +x "$TEMP_DIR/libsecret/bin/pkg-config"
+printf 'fixture libsecret copyright\n' \
+    >"$TEMP_DIR/libsecret/copyright"
+printf 'fixture QtKeychain license\n' \
+    >"$TEMP_DIR/libsecret/QtKeychain-COPYING"
+
+KEYCHAIN_APPDIR="$TEMP_DIR/keychain.AppDir"
+PATH="$TEMP_DIR/libsecret/bin:$PATH" \
+    LIBSECRET_COPYRIGHT_FILE="$TEMP_DIR/libsecret/copyright" \
+    install_linux_keychain_runtime \
+        "$KEYCHAIN_APPDIR" \
+        "$TEMP_DIR/libsecret/QtKeychain-COPYING"
+[ "$(linux_keychain_runtime_status "$KEYCHAIN_APPDIR")" = \
+  "Linux keychain runtime: bundled" ] ||
+    fail "installed Linux keychain runtime was not reported"
+cmp "$TEMP_DIR/libsecret/lib/libsecret-1.so.0.0" \
+    "$KEYCHAIN_APPDIR/usr/lib/libsecret-1.so.0" ||
+    fail "resolved libsecret runtime was not copied exactly"
+cmp "$TEMP_DIR/libsecret/copyright" \
+    "$KEYCHAIN_APPDIR/usr/share/doc/GoldenCheetah/licenses/libsecret-copyright" ||
+    fail "libsecret copyright was not copied exactly"
+cmp "$TEMP_DIR/libsecret/QtKeychain-COPYING" \
+    "$KEYCHAIN_APPDIR/usr/share/doc/GoldenCheetah/licenses/QtKeychain-COPYING" ||
+    fail "QtKeychain license was not copied exactly"
+
+rm "$KEYCHAIN_APPDIR/usr/share/doc/GoldenCheetah/licenses/libsecret-copyright"
+if linux_keychain_runtime_status "$KEYCHAIN_APPDIR" \
+    >/dev/null 2>&1; then
+    fail "Linux keychain runtime without its copyright was accepted"
+fi
+cp "$TEMP_DIR/libsecret/copyright" \
+    "$KEYCHAIN_APPDIR/usr/share/doc/GoldenCheetah/licenses/libsecret-copyright"
+
 printf '\177ELF\002\001\001\000AI\001compressed-appimage-payload' \
     >"$TEMP_DIR/type1.AppImage"
 printf '\177ELF\002\001\001\000AI\002compressed-appimage-payload' \
@@ -239,6 +299,17 @@ run_packaging_appimage()
         "squashfs-root/$GC_TEST_APPIMAGE_ENTRY_NAME"
     ln -s "$GC_TEST_APPIMAGE_ENTRY_NAME" \
         squashfs-root/AppRun
+    if [ -n "${GC_TEST_APPIMAGE_LIBSECRET:-}" ]; then
+        mkdir -p \
+            squashfs-root/usr/lib \
+            squashfs-root/usr/share/doc/GoldenCheetah/licenses
+        cp "$GC_TEST_APPIMAGE_LIBSECRET" \
+            squashfs-root/usr/lib/libsecret-1.so.0
+        cp "$GC_TEST_APPIMAGE_LIBSECRET_COPYRIGHT" \
+            squashfs-root/usr/share/doc/GoldenCheetah/licenses/libsecret-copyright
+        cp "$GC_TEST_APPIMAGE_QTKEYCHAIN_LICENSE" \
+            squashfs-root/usr/share/doc/GoldenCheetah/licenses/QtKeychain-COPYING
+    fi
 }
 
 [ "$(strava_oauth_appimage_status "$TEMP_DIR/type2.AppImage")" = \
@@ -269,6 +340,31 @@ if strava_oauth_appimage_status "$TEMP_DIR/type1.AppImage" \
     fail "unsupported Type 1 AppImage extraction was accepted"
 fi
 
+GC_TEST_APPIMAGE_LIBSECRET="$TEMP_DIR/libsecret/lib/libsecret-1.so.0.0"
+GC_TEST_APPIMAGE_LIBSECRET_COPYRIGHT="$TEMP_DIR/libsecret/copyright"
+GC_TEST_APPIMAGE_QTKEYCHAIN_LICENSE="$TEMP_DIR/libsecret/QtKeychain-COPYING"
+[ "$(linux_keychain_appimage_status "$TEMP_DIR/type2.AppImage")" = \
+  "Linux keychain runtime: bundled" ] ||
+    fail "packaged Linux keychain runtime was not reported"
+require_linux_keychain_appimage "$TEMP_DIR/type2.AppImage" \
+    >/dev/null ||
+    fail "packaged Linux keychain runtime was rejected"
+
+GC_TEST_APPIMAGE_LIBSECRET_COPYRIGHT="$TEMP_DIR/missing-copyright"
+if linux_keychain_appimage_status "$TEMP_DIR/type2.AppImage" \
+    >/dev/null 2>&1; then
+    fail "packaged Linux keychain runtime without copyright was accepted"
+fi
+if require_linux_keychain_appimage "$TEMP_DIR/type2.AppImage" \
+    >/dev/null 2>&1; then
+    fail "release gate accepted a keychain runtime without copyright"
+fi
+GC_TEST_APPIMAGE_LIBSECRET=
+if linux_keychain_appimage_status "$TEMP_DIR/type2.AppImage" \
+    >/dev/null 2>&1; then
+    fail "packaged image without libsecret was accepted"
+fi
+
 assert_contains "$SUPPORT" \
     'trap cleanup_status_home EXIT'
 assert_contains "$SUPPORT" \
@@ -291,6 +387,10 @@ for packager in "$LOCAL_PACKAGER" "$CI_PACKAGER" "$DEV_PACKAGER"; do
     bash -n "$packager"
     assert_contains "$packager" \
         'require_strava_oauth_appimage'
+    assert_contains "$packager" \
+        'install_linux_keychain_runtime'
+    assert_contains "$packager" \
+        'require_linux_keychain_appimage'
 done
 
 if grep -Fq 'python3.7' "$LOCAL_PACKAGER"; then

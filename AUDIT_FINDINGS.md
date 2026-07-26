@@ -3195,7 +3195,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### BUILD-012: Primary AppImage packaging omits the libsecret runtime
 
-- Status: OPEN
+- Status: IN_PROGRESS
 - Code: `src/Resources/linux/MakeAppImageQt6.sh`,
   `src/Resources/linux/AppImagePackagingSupport.sh`, and
   `.devcontainer/package-appimage.sh`
@@ -3210,6 +3210,11 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   primary-package artifact contained the offscreen plugin and embedded Python
   but no `libsecret-1.so.0`; it worked locally only because the host provides
   that library.
+- Test-first evidence: The packaging fixture now requires a shared libsecret
+  installer, AppDir and completed-AppImage status checks, exact runtime and
+  license copies, fail-closed missing-license behavior, and use of the shared
+  pre- and post-package gates by every AppImage path. The RED run fails at the
+  first absent helper, `install_linux_keychain_runtime`.
 - Test: Package from an environment that has libsecret available only at build
   time, inspect the finished AppImage for the library and license, resolve its
   transitive dependencies, and exercise a sentinel vault write in an isolated
