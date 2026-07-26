@@ -49,6 +49,12 @@ assert_contains()
 [ "$PYTHON_APPIMAGE_URL" = \
   "https://github.com/kaartine/GoldenCheetah/releases/download/appimage-build-deps-v1/$PYTHON_APPIMAGE_FILE" ] ||
     fail "embedded Python URL is not the project-controlled immutable asset"
+[ "${QTKEYCHAIN_LICENSE_SHA256:-}" = \
+  "ca46b73d5159548ab52834db51f195aa3d1f277f020e9dca92f4beb21b468a50" ] ||
+    fail "QtKeychain license digest is not the reviewed content"
+[ "${LGPL21_LICENSE_SHA256:-}" = \
+  "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551" ] ||
+    fail "LGPL-2.1 digest is not the reviewed content"
 
 declare -F download_file >/dev/null || fail "download_file helper is missing"
 declare -F run_packaging_appimage >/dev/null ||
@@ -228,6 +234,28 @@ remove_linux_keychain_deploy_probe "$DEPLOY_PROBE"
     fail "Linux keychain deploy probe was not removed"
 
 mkdir -p "$TEMP_DIR/libsecret/lib" "$TEMP_DIR/libsecret/bin"
+
+build_fixture_dependency()
+{
+    local soname=$1
+    local symbol=$2
+    local source="$TEMP_DIR/libsecret/${soname}.c"
+
+    printf 'void %s(void) {}\n' "$symbol" >"$source"
+    "${CC:-cc}" -std=c99 -Wall -Wextra -Werror -shared -fPIC \
+        -Wl,-soname,"$soname" \
+        "$source" -o "$TEMP_DIR/libsecret/lib/$soname"
+}
+
+build_fixture_dependency \
+    libglib-2.0.so.0 gc_glib_dependency
+build_fixture_dependency \
+    libgio-2.0.so.0 gc_gio_dependency
+build_fixture_dependency \
+    libgobject-2.0.so.0 gc_gobject_dependency
+build_fixture_dependency \
+    libgcrypt.so.20 gc_gcrypt_dependency
+
 cat >"$TEMP_DIR/libsecret/libsecret-fixture.c" <<'EOF'
 #define LIBSECRET_SYMBOL(name) void name(void) {}
 LIBSECRET_SYMBOL(secret_password_lookup)
@@ -238,10 +266,25 @@ LIBSECRET_SYMBOL(secret_password_clear)
 LIBSECRET_SYMBOL(secret_password_clear_finish)
 LIBSECRET_SYMBOL(secret_password_free)
 LIBSECRET_SYMBOL(secret_error_get_quark)
+extern void gc_glib_dependency(void);
+extern void gc_gio_dependency(void);
+extern void gc_gobject_dependency(void);
+extern void gc_gcrypt_dependency(void);
+void gc_use_dependencies(void)
+{
+    gc_glib_dependency();
+    gc_gio_dependency();
+    gc_gobject_dependency();
+    gc_gcrypt_dependency();
+}
 EOF
 "${CC:-cc}" -std=c99 -Wall -Wextra -Werror -shared -fPIC \
     -Wl,-soname,libsecret-1.so.0 \
     "$TEMP_DIR/libsecret/libsecret-fixture.c" \
+    "$TEMP_DIR/libsecret/lib/libglib-2.0.so.0" \
+    "$TEMP_DIR/libsecret/lib/libgio-2.0.so.0" \
+    "$TEMP_DIR/libsecret/lib/libgobject-2.0.so.0" \
+    "$TEMP_DIR/libsecret/lib/libgcrypt.so.20" \
     -o "$TEMP_DIR/libsecret/lib/libsecret-1.so.0.0"
 cat >"$TEMP_DIR/libsecret/incomplete-fixture.c" <<'EOF'
 void secret_password_lookup(void) {}
@@ -250,6 +293,23 @@ EOF
     -Wl,-soname,libsecret-1.so.0 \
     "$TEMP_DIR/libsecret/incomplete-fixture.c" \
     -o "$TEMP_DIR/libsecret/incomplete-libsecret-1.so.0"
+cat >"$TEMP_DIR/libsecret/undefined-fixture.c" <<'EOF'
+#define LIBSECRET_REFERENCE(name) \
+    extern void name(void); \
+    void *name##_reference = (void *)&name
+LIBSECRET_REFERENCE(secret_password_lookup);
+LIBSECRET_REFERENCE(secret_password_lookup_finish);
+LIBSECRET_REFERENCE(secret_password_store);
+LIBSECRET_REFERENCE(secret_password_store_finish);
+LIBSECRET_REFERENCE(secret_password_clear);
+LIBSECRET_REFERENCE(secret_password_clear_finish);
+LIBSECRET_REFERENCE(secret_password_free);
+LIBSECRET_REFERENCE(secret_error_get_quark);
+EOF
+"${CC:-cc}" -std=c99 -Wall -Wextra -Werror -shared -fPIC \
+    -Wl,-soname,libsecret-1.so.0 \
+    "$TEMP_DIR/libsecret/undefined-fixture.c" \
+    -o "$TEMP_DIR/libsecret/undefined-libsecret-1.so.0"
 ln -s libsecret-1.so.0.0 \
     "$TEMP_DIR/libsecret/lib/libsecret-1.so.0"
 cat >"$TEMP_DIR/libsecret/bin/pkg-config" <<EOF
@@ -259,20 +319,33 @@ cat >"$TEMP_DIR/libsecret/bin/pkg-config" <<EOF
 printf '%s\n' "$TEMP_DIR/libsecret/lib"
 EOF
 chmod +x "$TEMP_DIR/libsecret/bin/pkg-config"
-printf 'fixture libsecret copyright\n' \
-    >"$TEMP_DIR/libsecret/copyright"
-printf 'fixture QtKeychain license\n' \
-    >"$TEMP_DIR/libsecret/QtKeychain-COPYING"
-printf 'fixture complete LGPL-2.1 license\n' \
-    >"$TEMP_DIR/libsecret/LGPL-2.1"
+cat >"$TEMP_DIR/libsecret/copyright" <<'EOF'
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: libsecret
+Files: *
+License: LGPL-2.1+
+ GNU Lesser General Public License
+EOF
+QTKEYCHAIN_LICENSE_FIXTURE="$REPO_ROOT/contrib/qtkeychain/COPYING"
+LGPL21_LICENSE_FIXTURE="/usr/share/common-licenses/LGPL-2.1"
+[ -r "$QTKEYCHAIN_LICENSE_FIXTURE" ] ||
+    fail "reviewed QtKeychain license fixture is missing"
+[ -r "$LGPL21_LICENSE_FIXTURE" ] ||
+    fail "reviewed LGPL-2.1 license fixture is missing"
 
 KEYCHAIN_APPDIR="$TEMP_DIR/keychain.AppDir"
+mkdir -p "$KEYCHAIN_APPDIR/lib"
+cp "$TEMP_DIR/libsecret/lib/libglib-2.0.so.0" \
+    "$TEMP_DIR/libsecret/lib/libgio-2.0.so.0" \
+    "$TEMP_DIR/libsecret/lib/libgobject-2.0.so.0" \
+    "$TEMP_DIR/libsecret/lib/libgcrypt.so.20" \
+    "$KEYCHAIN_APPDIR/lib/"
 PATH="$TEMP_DIR/libsecret/bin:$PATH" \
     LIBSECRET_COPYRIGHT_FILE="$TEMP_DIR/libsecret/copyright" \
-    LIBSECRET_LICENSE_FILE="$TEMP_DIR/libsecret/LGPL-2.1" \
+    LIBSECRET_LICENSE_FILE="$LGPL21_LICENSE_FIXTURE" \
     install_linux_keychain_runtime \
         "$KEYCHAIN_APPDIR" \
-        "$TEMP_DIR/libsecret/QtKeychain-COPYING"
+        "$QTKEYCHAIN_LICENSE_FIXTURE"
 [ "$(linux_keychain_runtime_status "$KEYCHAIN_APPDIR")" = \
   "Linux keychain runtime: bundled" ] ||
     fail "installed Linux keychain runtime was not reported"
@@ -282,28 +355,54 @@ cmp "$TEMP_DIR/libsecret/lib/libsecret-1.so.0.0" \
 cmp "$TEMP_DIR/libsecret/copyright" \
     "$KEYCHAIN_APPDIR/usr/share/doc/GoldenCheetah/licenses/libsecret-copyright" ||
     fail "libsecret copyright was not copied exactly"
-cmp "$TEMP_DIR/libsecret/QtKeychain-COPYING" \
+cmp "$QTKEYCHAIN_LICENSE_FIXTURE" \
     "$KEYCHAIN_APPDIR/usr/share/doc/GoldenCheetah/licenses/QtKeychain-COPYING" ||
     fail "QtKeychain license was not copied exactly"
-cmp "$TEMP_DIR/libsecret/LGPL-2.1" \
+cmp "$LGPL21_LICENSE_FIXTURE" \
     "$KEYCHAIN_APPDIR/usr/share/doc/GoldenCheetah/licenses/LGPL-2.1" ||
     fail "complete LGPL-2.1 license was not copied exactly"
+LC_ALL=C readelf -d "$KEYCHAIN_APPDIR/lib/libsecret-1.so.0" |
+    grep -Eq '\((RPATH|RUNPATH)\).*\[\$ORIGIN\]' ||
+    fail "bundled libsecret does not resolve dependencies from its directory"
+KEYCHAIN_LDD_OUTPUT=$(
+    env -u LD_LIBRARY_PATH LC_ALL=C \
+        ldd "$KEYCHAIN_APPDIR/lib/libsecret-1.so.0"
+)
+for dependency in \
+    libglib-2.0.so.0 \
+    libgio-2.0.so.0 \
+    libgobject-2.0.so.0 \
+    libgcrypt.so.20; do
+    printf '%s\n' "$KEYCHAIN_LDD_OUTPUT" |
+        grep -Fq -- \
+            "$dependency => $KEYCHAIN_APPDIR/lib/$dependency " ||
+        fail "$dependency did not resolve from the AppDir"
+done
 
 INCOMPLETE_APPDIR="$TEMP_DIR/incomplete-keychain.AppDir"
-mkdir -p \
-    "$INCOMPLETE_APPDIR/lib" \
-    "$INCOMPLETE_APPDIR/usr/share/doc/GoldenCheetah/licenses"
+cp -a "$KEYCHAIN_APPDIR" "$INCOMPLETE_APPDIR"
 cp "$TEMP_DIR/libsecret/incomplete-libsecret-1.so.0" \
     "$INCOMPLETE_APPDIR/lib/libsecret-1.so.0"
-cp "$TEMP_DIR/libsecret/copyright" \
-    "$TEMP_DIR/libsecret/QtKeychain-COPYING" \
-    "$TEMP_DIR/libsecret/LGPL-2.1" \
-    "$INCOMPLETE_APPDIR/usr/share/doc/GoldenCheetah/licenses/"
-mv "$INCOMPLETE_APPDIR/usr/share/doc/GoldenCheetah/licenses/copyright" \
-    "$INCOMPLETE_APPDIR/usr/share/doc/GoldenCheetah/licenses/libsecret-copyright"
 if linux_keychain_runtime_status "$INCOMPLETE_APPDIR" \
     >/dev/null 2>&1; then
     fail "libsecret runtime without required QtKeychain symbols was accepted"
+fi
+
+UNDEFINED_APPDIR="$TEMP_DIR/undefined-keychain.AppDir"
+cp -a "$KEYCHAIN_APPDIR" "$UNDEFINED_APPDIR"
+cp "$TEMP_DIR/libsecret/undefined-libsecret-1.so.0" \
+    "$UNDEFINED_APPDIR/lib/libsecret-1.so.0"
+if linux_keychain_runtime_status "$UNDEFINED_APPDIR" \
+    >/dev/null 2>&1; then
+    fail "undefined QtKeychain symbols were accepted as implementations"
+fi
+
+MISSING_DEPENDENCY_APPDIR="$TEMP_DIR/missing-dependency-keychain.AppDir"
+cp -a "$KEYCHAIN_APPDIR" "$MISSING_DEPENDENCY_APPDIR"
+rm "$MISSING_DEPENDENCY_APPDIR/lib/libgcrypt.so.20"
+if linux_keychain_runtime_status "$MISSING_DEPENDENCY_APPDIR" \
+    >/dev/null 2>&1; then
+    fail "libsecret runtime with a host-only dependency was accepted"
 fi
 
 ESCAPED_APPDIR="$TEMP_DIR/escaped-keychain.AppDir"
@@ -323,6 +422,31 @@ if linux_keychain_runtime_status "$KEYCHAIN_APPDIR" \
 fi
 cp "$TEMP_DIR/libsecret/copyright" \
     "$KEYCHAIN_APPDIR/usr/share/doc/GoldenCheetah/licenses/libsecret-copyright"
+
+WRONG_LICENSE_APPDIR="$TEMP_DIR/wrong-license-keychain.AppDir"
+cp -a "$KEYCHAIN_APPDIR" "$WRONG_LICENSE_APPDIR"
+printf 'wrong\n' \
+    >"$WRONG_LICENSE_APPDIR/usr/share/doc/GoldenCheetah/licenses/LGPL-2.1"
+if linux_keychain_runtime_status "$WRONG_LICENSE_APPDIR" \
+    >/dev/null 2>&1; then
+    fail "incorrect LGPL-2.1 license content was accepted"
+fi
+cp -a "$KEYCHAIN_APPDIR" "$TEMP_DIR/wrong-qt-license-keychain.AppDir"
+printf 'wrong\n' \
+    >"$TEMP_DIR/wrong-qt-license-keychain.AppDir/usr/share/doc/GoldenCheetah/licenses/QtKeychain-COPYING"
+if linux_keychain_runtime_status \
+    "$TEMP_DIR/wrong-qt-license-keychain.AppDir" \
+    >/dev/null 2>&1; then
+    fail "incorrect QtKeychain license content was accepted"
+fi
+cp -a "$KEYCHAIN_APPDIR" "$TEMP_DIR/wrong-copyright-keychain.AppDir"
+printf 'wrong\n' \
+    >"$TEMP_DIR/wrong-copyright-keychain.AppDir/usr/share/doc/GoldenCheetah/licenses/libsecret-copyright"
+if linux_keychain_runtime_status \
+    "$TEMP_DIR/wrong-copyright-keychain.AppDir" \
+    >/dev/null 2>&1; then
+    fail "incorrect libsecret copyright content was accepted"
+fi
 
 printf '\177ELF\002\001\001\000AI\001compressed-appimage-payload' \
     >"$TEMP_DIR/type1.AppImage"
@@ -409,6 +533,12 @@ run_packaging_appimage()
             squashfs-root/usr/share/doc/GoldenCheetah/licenses
         cp "$GC_TEST_APPIMAGE_LIBSECRET" \
             squashfs-root/lib/libsecret-1.so.0
+        cp \
+            "$GC_TEST_APPIMAGE_DEPENDENCY_DIR/libglib-2.0.so.0" \
+            "$GC_TEST_APPIMAGE_DEPENDENCY_DIR/libgio-2.0.so.0" \
+            "$GC_TEST_APPIMAGE_DEPENDENCY_DIR/libgobject-2.0.so.0" \
+            "$GC_TEST_APPIMAGE_DEPENDENCY_DIR/libgcrypt.so.20" \
+            squashfs-root/lib/
         cp "$GC_TEST_APPIMAGE_LIBSECRET_COPYRIGHT" \
             squashfs-root/usr/share/doc/GoldenCheetah/licenses/libsecret-copyright
         cp "$GC_TEST_APPIMAGE_QTKEYCHAIN_LICENSE" \
@@ -447,9 +577,10 @@ if strava_oauth_appimage_status "$TEMP_DIR/type1.AppImage" \
 fi
 
 GC_TEST_APPIMAGE_LIBSECRET="$TEMP_DIR/libsecret/lib/libsecret-1.so.0.0"
+GC_TEST_APPIMAGE_DEPENDENCY_DIR="$TEMP_DIR/libsecret/lib"
 GC_TEST_APPIMAGE_LIBSECRET_COPYRIGHT="$TEMP_DIR/libsecret/copyright"
-GC_TEST_APPIMAGE_QTKEYCHAIN_LICENSE="$TEMP_DIR/libsecret/QtKeychain-COPYING"
-GC_TEST_APPIMAGE_LIBSECRET_LICENSE="$TEMP_DIR/libsecret/LGPL-2.1"
+GC_TEST_APPIMAGE_QTKEYCHAIN_LICENSE="$QTKEYCHAIN_LICENSE_FIXTURE"
+GC_TEST_APPIMAGE_LIBSECRET_LICENSE="$LGPL21_LICENSE_FIXTURE"
 [ "$(linux_keychain_entrypoint_status "$TEMP_DIR/configured-entry")" = \
   "Linux keychain runtime: available" ] ||
     fail "compiled and available Linux keychain entrypoint was not reported"

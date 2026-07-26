@@ -23,7 +23,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-001: Remote default layouts can execute Python or R code
 
-- Status: FIXED
+- Status: IN_PROGRESS
 - Code: `src/Core/GcUpgrade.h:142`, `src/Gui/AbstractView.cpp:352`,
   `src/Gui/AbstractView.cpp:1016`, `src/Gui/AbstractView.cpp:1037`,
   `src/Charts/PythonChart.cpp:578`
@@ -3195,10 +3195,13 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### BUILD-012: Primary AppImage packaging omits the libsecret runtime
 
-- Status: IN_PROGRESS
+- Status: FIXED
 - Code: `src/Resources/linux/MakeAppImageQt6.sh`,
   `src/Resources/linux/AppImagePackagingSupport.sh`, and
-  `.devcontainer/package-appimage.sh`
+  `.devcontainer/package-appimage.sh`,
+  `appveyor/linux/after_build.sh`, `appveyor/linux/install.sh`,
+  `src/Core/CredentialStoreQtKeychain.cpp`, `src/Core/main.cpp`, and
+  `contrib/qtkeychain/qtkeychain/libsecret.cpp`
 - Impact: On a Linux desktop without a host `libsecret-1.so.0`, QtKeychain
   cannot open the native credential vault. GoldenCheetah fails closed instead
   of writing new plaintext credentials, but OAuth setup, token rotation, and
@@ -3225,15 +3228,37 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   exposing that QLibrary did not use the executable's RUNPATH for this
   `dlopen`. Follow-up RED tests require the runtime in the executable's
   `lib/` directory, a contained regular-file resolver, and explicit
-  QtKeychain use of that validated path.
-- Test: Package from an environment that has libsecret available only at build
-  time, inspect the finished AppImage for the library and license, resolve its
-  transitive dependencies, and exercise a sentinel vault write in an isolated
-  runtime without host library fallback.
-- Fix direction: Move explicit dynamically loaded runtime deployment into one
-  shared packaging helper used by every AppImage path. Fail packaging unless
-  the finished image contains libsecret, its license, and a successful
-  isolated QtKeychain probe.
+  QtKeychain use of that validated path. Final review added RED contracts for
+  payload-origin resolution of the GLib/GIO/GObject/libgcrypt chain, defined
+  `GLOBAL FUNC` symbols rather than `UND` names, reviewed QtKeychain and
+  LGPL-2.1 digests, and meaningful libsecret copyright content. The new
+  fixture first fails because the reviewed license digest constants are
+  absent.
+- Resolution: Every AppImage path now uses one shared installer and
+  completed-image gate. A temporary `DT_NEEDED` probe makes linuxdeployqt
+  discover libsecret's dependency chain and is removed before image creation.
+  The installer resolves the real library through pkg-config, installs it in
+  the executable's `lib/` runtime directory, and includes the distribution
+  copyright, full LGPL-2.1 text, and QtKeychain license. The payload gate
+  rejects links or files escaping the AppDir, validates the ELF SONAME and all
+  eight symbols resolved by QtKeychain, resolves the real AppRun entrypoint,
+  and executes an exact bounded status protocol. GoldenCheetah reports
+  compile-time `HAVE_LIBSECRET` separately from the specific libsecret
+  backend's runtime availability. It validates the bundled regular file and
+  passes its canonical absolute path to the vendored QtKeychain loader, so the
+  package does not depend on host QLibrary fallback. AppVeyor now installs the
+  required development and pkg-config packages.
+- Verification: The packaging fixture matrix passes all installer, payload,
+  symbol, license, symlink, AppRun, compile-support, runtime-availability, and
+  packaging-path contracts. CredentialSettings passes 77 cases normally and
+  under ASan/UBSan/LSan, the full application links, and the complete
+  top-level test matrix passes. The old production image is rejected because
+  libsecret is absent. A real new primary AppImage passes both release gates;
+  contains no deployment probe; includes all three license files; and has no
+  unresolved libsecret dependencies. Most importantly, its real AppRun still
+  reports `libsecret_runtime=available` when both host libsecret paths are
+  replaced by empty bind mounts, reproducing the earlier RED setup
+  without host fallback.
 
 ### SEC-013: A desktop AppImage cannot keep its Strava client secret private
 

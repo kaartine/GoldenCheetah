@@ -316,6 +316,7 @@ void TestCredentialSettings::linuxKeychainRuntimeStatusReport()
 void TestCredentialSettings::
 bundledLinuxRuntimePathRequiresContainedRegularFile()
 {
+#ifdef Q_OS_LINUX
     QTemporaryDir applicationDir;
     QTemporaryDir outsideDir;
     QVERIFY(applicationDir.isValid());
@@ -348,6 +349,10 @@ bundledLinuxRuntimePathRequiresContainedRegularFile()
     QVERIFY(QFileInfo(libraryPath).isSymLink());
     QVERIFY(CredentialStoreQtKeychainDetail::
         bundledLinuxRuntimePath(applicationDir.path()).isEmpty());
+#else
+    QVERIFY(CredentialStoreQtKeychainDetail::
+        bundledLinuxRuntimePath(QStringLiteral("/unused")).isEmpty());
+#endif
 }
 
 void TestCredentialSettings::keychainJobsDisablePlaintextFallback()
