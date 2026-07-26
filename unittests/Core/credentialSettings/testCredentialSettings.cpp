@@ -171,6 +171,56 @@ bool writePersistentSettings(
     return stream.status() == QDataStream::Ok;
 }
 
+struct CredentialScrubFaultState
+{
+    bool enabled = false;
+    QString plaintextKey;
+    int rejectedWrites = 0;
+};
+
+CredentialScrubFaultState &credentialScrubFaultState()
+{
+    static CredentialScrubFaultState state;
+    return state;
+}
+
+bool writeCredentialScrubFaultSettings(
+    QIODevice &device,
+    const QSettings::SettingsMap &settings)
+{
+    CredentialScrubFaultState &state =
+        credentialScrubFaultState();
+    if (state.enabled
+        && !state.plaintextKey.isEmpty()
+        && !settings.contains(state.plaintextKey)) {
+        ++state.rejectedWrites;
+        return false;
+    }
+    return writePersistentSettings(device, settings);
+}
+
+QSettings::Format credentialScrubTestFormat()
+{
+    static const QSettings::Format format =
+        QSettings::registerFormat(
+            QStringLiteral("gc-credential-scrub"),
+            readPersistentSettings,
+            writeCredentialScrubFaultSettings);
+    return format;
+}
+
+QSettings::SettingsMap persistedSettingsMap(
+    const QString &path,
+    bool *readable = nullptr)
+{
+    QFile file(path);
+    QSettings::SettingsMap settings;
+    const bool success = file.open(QIODevice::ReadOnly)
+        && readPersistentSettings(file, settings);
+    if (readable) *readable = success;
+    return settings;
+}
+
 QString migrationWritePoint(
     const QSettings::SettingsMap &settings)
 {
@@ -326,6 +376,8 @@ private slots:
     void failedDeleteIsRetriedWithoutCredentialResurrection();
     void persistedCacheScrubsDuplicatePlaintext();
     void unpersistedCachePreservesDuplicatePlaintext();
+    void failedPlaintextScrubIsRetried_data();
+    void failedPlaintextScrubIsRetried();
     void negativeCacheDoesNotHideLegacyCredential();
     void emptyPlaintextDoesNotCacheTransientVaultFailure();
     void transientReadFailureIsRetried();
@@ -914,6 +966,87 @@ void TestCredentialSettings::unpersistedCachePreservesDuplicatePlaintext()
              QVariant(sentinel));
     QVERIFY(first.contains(plaintextKey));
     QVERIFY(second.contains(plaintextKey));
+}
+
+void TestCredentialSettings::failedPlaintextScrubIsRetried_data()
+{
+    QTest::addColumn<bool>("preexistingVault");
+    QTest::addColumn<bool>("newCredentialSession");
+
+    QTest::newRow("vault-same-session") << true << false;
+    QTest::newRow("vault-new-session") << true << true;
+    QTest::newRow("migration-same-session") << false << false;
+    QTest::newRow("migration-new-session") << false << true;
+}
+
+void TestCredentialSettings::failedPlaintextScrubIsRetried()
+{
+    QFETCH(bool, preexistingVault);
+    QFETCH(bool, newCredentialSession);
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString path =
+        temporary.filePath(QStringLiteral("private.gc-credential-scrub"));
+    const QSettings::Format format = credentialScrubTestFormat();
+    QVERIFY(format != QSettings::InvalidFormat);
+    QSettings ini(path, format);
+    const QString scope = CredentialSettings::ensureScopeId(
+        &ini, QStringLiteral("credential_store/id"));
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString legacySecret = QStringLiteral("legacy-secret");
+    const QString vaultSecret = preexistingVault
+        ? QStringLiteral("current-vault-secret")
+        : legacySecret;
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    ini.setValue(plaintextKey, legacySecret);
+    ini.sync();
+    QCOMPARE(ini.status(), QSettings::NoError);
+
+    auto state = std::make_shared<FakeStoreState>();
+    if (preexistingVault) {
+        state->values.insert(vaultKey, vaultSecret);
+    }
+    CredentialScrubFaultState &fault =
+        credentialScrubFaultState();
+    fault = {};
+    fault.enabled = true;
+    fault.plaintextKey = plaintextKey;
+
+    auto credentials = std::make_unique<CredentialSettings>(
+        fakeStore(state));
+    QCOMPARE(credentials->value(
+                 &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(vaultSecret));
+    QCOMPARE(fault.rejectedWrites, 1);
+    QCOMPARE(state->writes, preexistingVault ? 0 : 1);
+    QCOMPARE(state->values.value(vaultKey), vaultSecret);
+
+    bool readable = false;
+    QSettings::SettingsMap persisted =
+        persistedSettingsMap(path, &readable);
+    QVERIFY(readable);
+    QCOMPARE(persisted.value(plaintextKey).toString(),
+             legacySecret);
+
+    fault.enabled = false;
+    if (newCredentialSession) {
+        credentials = std::make_unique<CredentialSettings>(
+            fakeStore(state));
+    }
+    QCOMPARE(credentials->value(
+                 &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(vaultSecret));
+    QCOMPARE(state->writes, preexistingVault ? 0 : 1);
+    QCOMPARE(state->values.value(vaultKey), vaultSecret);
+
+    persisted = persistedSettingsMap(path, &readable);
+    QVERIFY(readable);
+    QVERIFY(!persisted.contains(plaintextKey));
+    fault = {};
 }
 
 void TestCredentialSettings::negativeCacheDoesNotHideLegacyCredential()
