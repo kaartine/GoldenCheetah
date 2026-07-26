@@ -224,9 +224,22 @@ cp "$TEMP_DIR/configured" "$TEMP_DIR/extra-newline"
 cp "$TEMP_DIR/configured" "$TEMP_DIR/GoldenCheetah"
 cat >"$TEMP_DIR/app-run-wrapper" <<'EOF'
 #!/bin/sh
-exec "$(dirname -- "$0")/GoldenCheetah" "$@"
+: "${APPDIR:?}" "${APPIMAGE:?}" "${OWD:?}"
+[ -d "$APPDIR" ] && [ -f "$APPIMAGE" ] && [ -d "$OWD" ] || exit 65
+exec "$APPDIR/GoldenCheetah" "$@"
 EOF
 chmod +x "$TEMP_DIR/app-run-wrapper"
+mkdir "$TEMP_DIR/host-loader-override"
+printf 'invalid host override\n' \
+    >"$TEMP_DIR/host-loader-override/libc.so.6"
+[ "$(LD_LIBRARY_PATH="$TEMP_DIR/host-loader-override" \
+      strava_oauth_build_status "$TEMP_DIR/configured")" = \
+  "Strava OAuth: configured" ] ||
+    fail "Strava status inherited an external library override"
+[ "$(LD_LIBRARY_PATH="$TEMP_DIR/host-loader-override" \
+      linux_keychain_entrypoint_status "$TEMP_DIR/configured-entry")" = \
+  "Linux keychain runtime: available" ] ||
+    fail "keychain status inherited an external library override"
 
 DEPLOY_PROBE=$(create_linux_keychain_deploy_probe \
     "$TEMP_DIR/configured" "$TEMP_DIR")
@@ -295,6 +308,10 @@ build_fixture_dependency \
     libgobject-2.0.so.0 gc_gobject_dependency
 build_fixture_dependency \
     libgpg-error.so.0 gc_gpg_error_dependency
+build_fixture_dependency \
+    libgc-absolute.so.1 gc_absolute_dependency
+build_fixture_dependency \
+    libgc-linked.so.1 gc_linked_dependency
 cat >"$TEMP_DIR/libsecret/libgcrypt-fixture.c" <<'EOF'
 extern void gc_gpg_error_dependency(void);
 void gc_gcrypt_dependency(void)
@@ -537,6 +554,31 @@ if linux_keychain_runtime_status "$HOST_DEPENDENCY_APPDIR" \
     fail "libsecret runtime with an unexpected host dependency was accepted"
 fi
 
+ABSOLUTE_DEPENDENCY_APPDIR="$TEMP_DIR/absolute-dependency-keychain.AppDir"
+cp -a "$KEYCHAIN_APPDIR" "$ABSOLUTE_DEPENDENCY_APPDIR"
+patchelf --add-needed \
+    "$TEMP_DIR/libsecret/lib/libgc-absolute.so.1" \
+    "$ABSOLUTE_DEPENDENCY_APPDIR/lib/libsecret-1.so.0"
+if linux_keychain_runtime_status "$ABSOLUTE_DEPENDENCY_APPDIR" \
+    >/dev/null 2>&1; then
+    fail "an absolute dependency outside the AppDir was accepted"
+fi
+
+LINKED_DEPENDENCY_APPDIR="$TEMP_DIR/linked-dependency-keychain.AppDir"
+LINKED_DEPENDENCY_OUTSIDE="$TEMP_DIR/linked-dependency-outside"
+cp -a "$KEYCHAIN_APPDIR" "$LINKED_DEPENDENCY_APPDIR"
+mkdir "$LINKED_DEPENDENCY_OUTSIDE"
+cp "$TEMP_DIR/libsecret/lib/libgc-linked.so.1" \
+    "$LINKED_DEPENDENCY_OUTSIDE/libgc-linked.so.1"
+ln -s "$LINKED_DEPENDENCY_OUTSIDE/libgc-linked.so.1" \
+    "$LINKED_DEPENDENCY_APPDIR/lib/libgc-linked.so.1"
+patchelf --add-needed libgc-linked.so.1 \
+    "$LINKED_DEPENDENCY_APPDIR/lib/libsecret-1.so.0"
+if linux_keychain_runtime_status "$LINKED_DEPENDENCY_APPDIR" \
+    >/dev/null 2>&1; then
+    fail "a linked dependency escaping the AppDir was accepted"
+fi
+
 ESCAPED_APPDIR="$TEMP_DIR/escaped-keychain.AppDir"
 cp -a "$KEYCHAIN_APPDIR" "$ESCAPED_APPDIR"
 rm "$ESCAPED_APPDIR/lib/libsecret-1.so.0"
@@ -659,6 +701,16 @@ GC_TEST_APPIMAGE_ENTRY="$TEMP_DIR/configured-entry"
 GC_TEST_APPIMAGE_ENTRY_NAME="configured-entry"
 run_packaging_appimage()
 {
+    [ -z "${LD_LIBRARY_PATH+x}" ] ||
+        fail "AppImage extraction inherited LD_LIBRARY_PATH"
+    [ -z "${LD_PRELOAD+x}" ] ||
+        fail "AppImage extraction inherited LD_PRELOAD"
+    [ -z "${APPDIR+x}" ] ||
+        fail "AppImage extraction inherited APPDIR"
+    [ -z "${APPIMAGE+x}" ] ||
+        fail "AppImage extraction inherited APPIMAGE"
+    [ -z "${OWD+x}" ] ||
+        fail "AppImage extraction inherited OWD"
     [ "$2" = "--appimage-extract" ] ||
         fail "AppImage status did not request extraction"
     mkdir -p squashfs-root
@@ -699,7 +751,15 @@ require_strava_oauth_appimage "$TEMP_DIR/type2.AppImage" \
 
 GC_TEST_APPIMAGE_ENTRY="$TEMP_DIR/app-run-wrapper"
 GC_TEST_APPIMAGE_ENTRY_NAME="app-run-wrapper"
-[ "$(strava_oauth_appimage_status "$TEMP_DIR/type2.AppImage")" = \
+WRAPPED_STRAVA_STATUS=$(
+    APPDIR="$TEMP_DIR/stale-appdir" \
+        APPIMAGE="$TEMP_DIR/stale.AppImage" \
+        OWD="$TEMP_DIR/stale-owd" \
+        LD_LIBRARY_PATH="$TEMP_DIR/host-loader-override" \
+        LD_PRELOAD="$KEYCHAIN_APPDIR/lib/libglib-2.0.so.0" \
+        strava_oauth_appimage_status "$TEMP_DIR/type2.AppImage"
+)
+[ "$WRAPPED_STRAVA_STATUS" = \
   "Strava OAuth: configured" ] ||
     fail "a valid shell AppRun wrapper was rejected for Strava status"
 
@@ -725,14 +785,17 @@ if strava_oauth_appimage_status "$TEMP_DIR/type1.AppImage" \
 fi
 
 GC_TEST_APPIMAGE_LIBSECRET="$KEYCHAIN_APPDIR/lib/libsecret-1.so.0"
-GC_TEST_APPIMAGE_DEPENDENCY_DIR="$TEMP_DIR/libsecret/lib"
+GC_TEST_APPIMAGE_DEPENDENCY_DIR="$KEYCHAIN_APPDIR/lib"
 GC_TEST_APPIMAGE_LIBSECRET_COPYRIGHT="$TEMP_DIR/libsecret/copyright"
 GC_TEST_APPIMAGE_QTKEYCHAIN_LICENSE="$QTKEYCHAIN_LICENSE_FIXTURE"
 GC_TEST_APPIMAGE_LIBSECRET_LICENSE="$LGPL21_LICENSE_FIXTURE"
 [ "$(linux_keychain_entrypoint_status "$TEMP_DIR/configured-entry")" = \
   "Linux keychain runtime: available" ] ||
     fail "compiled and available Linux keychain entrypoint was not reported"
-[ "$(linux_keychain_entrypoint_status "$TEMP_DIR/app-run-wrapper")" = \
+[ "$(APPDIR="$TEMP_DIR" \
+      APPIMAGE="$TEMP_DIR/type2.AppImage" \
+      OWD="$TEMP_DIR" \
+      linux_keychain_entrypoint_status "$TEMP_DIR/app-run-wrapper")" = \
   "Linux keychain runtime: available" ] ||
     fail "a valid shell AppRun wrapper was rejected for keychain status"
 [ "$(linux_keychain_appimage_status "$TEMP_DIR/type2.AppImage")" = \
@@ -744,7 +807,13 @@ require_linux_keychain_appimage "$TEMP_DIR/type2.AppImage" \
 
 GC_TEST_APPIMAGE_ENTRY="$TEMP_DIR/app-run-wrapper"
 GC_TEST_APPIMAGE_ENTRY_NAME="app-run-wrapper"
-[ "$(linux_keychain_appimage_status "$TEMP_DIR/type2.AppImage")" = \
+WRAPPED_KEYCHAIN_STATUS=$(
+    APPDIR="$TEMP_DIR/stale-appdir" \
+        APPIMAGE="$TEMP_DIR/stale.AppImage" \
+        OWD="$TEMP_DIR/stale-owd" \
+        linux_keychain_appimage_status "$TEMP_DIR/type2.AppImage"
+)
+[ "$WRAPPED_KEYCHAIN_STATUS" = \
   "Linux keychain runtime: bundled" ] ||
     fail "packaged shell AppRun wrapper was rejected for keychain status"
 GC_TEST_APPIMAGE_ENTRY="$TEMP_DIR/configured-entry"
@@ -830,6 +899,7 @@ assert_contains "$MAIN_SOURCE" \
 assert_contains "$LIBSECRET_SOURCE" \
     'GC_QTKEYCHAIN_LIBSECRET_PATH'
 assert_contains "$APPVEYOR_INSTALL" 'libsecret-1-dev'
+assert_contains "$APPVEYOR_INSTALL" 'libgpg-error-dev'
 assert_contains "$APPVEYOR_INSTALL" 'pkg-config'
 
 bash -n "$SUPPORT"

@@ -3239,7 +3239,14 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   notices were not required, linked installer destinations could be written
   before rejection, and deploy-probe cleanup needed an explicit regression
   contract. That cleanup contract passes on the current Bash implementation;
-  the first new RED failure is the absent bundled libgpg-error runtime.
+  the first new RED failure is the absent bundled libgpg-error runtime. The
+  expanded fixture then covers unexpected host and unresolved dependencies,
+  linked library and license directories, shell entrypoints, copyright
+  notices, and hostile loader environment overrides. Final follow-up review
+  found that absolute `DT_NEEDED` paths and linked extra dependencies still
+  bypassed the generic parser, AppImage runtime variables were not emulated for
+  shell wrappers, and extraction itself inherited loader overrides. Additional
+  RED contracts cover those paths before promotion.
 - Resolution: Every AppImage path now uses one shared installer and
   completed-image gate. A temporary `DT_NEEDED` probe makes linuxdeployqt
   discover libsecret's dependency chain and is removed before image creation.
@@ -3247,15 +3254,21 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   the executable's `lib/` runtime directory with a `$ORIGIN` dependency path,
   and includes the distribution copyright, full LGPL-2.1 text, and QtKeychain
   license. The payload gate rejects links or files escaping the AppDir,
-  validates the ELF SONAME and all eight defined `GLOBAL FUNC` symbols resolved
-  by QtKeychain, requires GLib, GIO, GObject, and libgcrypt to resolve from the
-  payload, checks reviewed license digests and copyright markers, resolves the
-  real AppRun entrypoint, and executes an exact bounded status protocol.
-  GoldenCheetah reports compile-time `HAVE_LIBSECRET` separately from the
-  specific libsecret backend's runtime availability. It validates the bundled
-  regular file and passes its canonical absolute path to the vendored
-  QtKeychain loader, so the package does not depend on host QLibrary fallback.
-  AppVeyor now installs the required development and pkg-config packages.
+  validates the ELF SONAME and all eight defined `GLOBAL FUNC` symbols
+  resolved by QtKeychain, and requires GLib, GIO, GObject, libgcrypt, and
+  libgpg-error to resolve from the payload. Every other dependency must either
+  resolve from the payload or belong to a narrow Linux ABI allowlist; unresolved
+  and unexpected host libraries fail the release. The installer rejects linked
+  destination components before writing, adds `$ORIGIN` to libgcrypt, and
+  checks reviewed license digests plus copyright markers and notices. The
+  completed-image gate resolves the real AppRun entrypoint, accepts ELF and
+  shebang wrappers, clears loader overrides, and executes an exact bounded
+  status protocol. GoldenCheetah reports compile-time `HAVE_LIBSECRET`
+  separately from the specific libsecret backend's runtime availability. It
+  validates the bundled regular file and passes its canonical absolute path to
+  the vendored QtKeychain loader, so the package does not depend on host
+  QLibrary fallback. AppVeyor now installs the required development and
+  pkg-config packages.
 - Verification: The packaging fixture matrix passes all installer, payload,
   symbol, license, symlink, AppRun, compile-support, runtime-availability, and
   packaging-path contracts. CredentialSettings passes 77 cases normally and
@@ -3264,10 +3277,11 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   failures or skips. The old production image is rejected because libsecret is
   absent. A real new primary AppImage passes both release gates; contains no
   deployment probe; includes all three license files; has no unresolved
-  libsecret dependencies; and resolves GLib, GIO, GObject, and libgcrypt from
-  its own `lib/` directory. Most importantly, its real AppRun still reports
-  `libsecret_runtime=available` when both host libsecret paths are replaced by
-  empty bind mounts, reproducing the earlier RED setup without host fallback.
+  libsecret dependencies; and resolves GLib, GIO, GObject, libgcrypt, and
+  libgpg-error from its own `lib/` directory. Most importantly, its real AppRun
+  still reports `libsecret_runtime=available` when both host libsecret paths,
+  the host libgpg-error SONAME, and its versioned target are replaced by empty
+  bind mounts, reproducing the earlier RED setup without host fallback.
 
 ### SEC-013: A desktop AppImage cannot keep its Strava client secret private
 
