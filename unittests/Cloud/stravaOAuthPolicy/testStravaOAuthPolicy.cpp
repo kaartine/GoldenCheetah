@@ -59,6 +59,12 @@ QUrlQuery formBody(const StravaOAuthPolicy::TokenRequest &request)
     return QUrlQuery(QString::fromUtf8(request.body));
 }
 
+QUrlQuery formBody(
+    const StravaOAuthPolicy::RevocationRequest &request)
+{
+    return QUrlQuery(QString::fromUtf8(request.body));
+}
+
 void verifyOnlyKeys(const QUrlQuery &query,
                     const QStringList &expected)
 {
@@ -91,6 +97,11 @@ private slots:
     void buildsRefreshTokenRequest();
     void rejectsInvalidRefreshTokenRequest_data();
     void rejectsInvalidRefreshTokenRequest();
+    void buildsRefreshTokenRevocationRequest();
+    void encodesRevocationRequestValues();
+    void rejectsInvalidRevocationRequest_data();
+    void rejectsInvalidRevocationRequest();
+    void reportsBoundedRedactedRevocationFailures();
     void reportsHttpStatusInsteadOfQtEnum();
     void redactsSensitiveProviderText();
     void redactsSensitiveTextAcrossInputBoundary();
@@ -105,6 +116,8 @@ private slots:
     void rejectsInvalidAuthorizationScopes();
     void serviceOpenUsesCoordinatedDurableRefresh();
     void oauthGrantSupersedesRefreshAndPublishesDurably();
+    void serviceDisconnectRevokesBeforeCredentialRemoval();
+    void credentialsPageOffersExplicitStravaDisconnectModes();
 };
 
 void TestStravaOAuthPolicy::rejectsUnavailableCredentials_data()
@@ -281,6 +294,140 @@ void TestStravaOAuthPolicy::rejectsInvalidRefreshTokenRequest()
     QVERIFY(request.endpoint.isEmpty());
     QVERIFY(request.body.isEmpty());
     QVERIFY(!request.error.isEmpty());
+}
+
+void TestStravaOAuthPolicy::buildsRefreshTokenRevocationRequest()
+{
+    const auto request =
+        StravaOAuthPolicy::revocationRequest(
+            ClientId,
+            ClientSecret,
+            RefreshToken,
+            StravaOAuthPolicy::RevocationTokenType::RefreshToken);
+
+    QVERIFY2(request.isValid(), qPrintable(request.error));
+    QCOMPARE(
+        request.endpoint,
+        QUrl(QStringLiteral(
+            "https://www.strava.com/oauth/revoke")));
+    QVERIFY(!request.endpoint.hasQuery());
+    QCOMPARE(
+        request.authorizationHeader,
+        QByteArrayLiteral("Basic ")
+            + QStringLiteral("%1:%2")
+                  .arg(ClientId, ClientSecret)
+                  .toUtf8()
+                  .toBase64());
+
+    const QUrlQuery query = formBody(request);
+    verifyOnlyKeys(
+        query,
+        {QStringLiteral("token"),
+         QStringLiteral("token_type_hint")});
+    QCOMPARE(
+        query.queryItemValue(QStringLiteral("token")),
+        RefreshToken);
+    QCOMPARE(
+        query.queryItemValue(QStringLiteral("token_type_hint")),
+        QStringLiteral("refresh_token"));
+    QVERIFY(!request.body.contains(ClientId.toUtf8()));
+    QVERIFY(!request.body.contains(ClientSecret.toUtf8()));
+}
+
+void TestStravaOAuthPolicy::encodesRevocationRequestValues()
+{
+    const QString token =
+        QStringLiteral("refresh/+?&= token");
+    const auto request =
+        StravaOAuthPolicy::revocationRequest(
+            ClientId,
+            ClientSecret,
+            token,
+            StravaOAuthPolicy::RevocationTokenType::RefreshToken);
+
+    QVERIFY2(request.isValid(), qPrintable(request.error));
+    QCOMPARE(
+        formBody(request).queryItemValue(
+            QStringLiteral("token")),
+        token);
+    QVERIFY(request.body.contains(
+        QByteArrayLiteral("refresh%2F%2B%3F%26%3D%20token")));
+}
+
+void TestStravaOAuthPolicy::rejectsInvalidRevocationRequest_data()
+{
+    QTest::addColumn<QString>("clientId");
+    QTest::addColumn<QString>("clientSecret");
+    QTest::addColumn<QString>("token");
+
+    QTest::newRow("missing-client-id")
+        << QString() << ClientSecret << RefreshToken;
+    QTest::newRow("placeholder-secret")
+        << ClientId
+        << QStringLiteral("__GC_STRAVA_CLIENT_SECRET__")
+        << RefreshToken;
+    QTest::newRow("missing-token")
+        << ClientId << ClientSecret << QString();
+    QTest::newRow("control-character")
+        << ClientId << ClientSecret
+        << QStringLiteral("token\nheader");
+}
+
+void TestStravaOAuthPolicy::rejectsInvalidRevocationRequest()
+{
+    QFETCH(QString, clientId);
+    QFETCH(QString, clientSecret);
+    QFETCH(QString, token);
+
+    const auto request =
+        StravaOAuthPolicy::revocationRequest(
+            clientId,
+            clientSecret,
+            token,
+            StravaOAuthPolicy::RevocationTokenType::RefreshToken);
+
+    QVERIFY(!request.isValid());
+    QVERIFY(request.endpoint.isEmpty());
+    QVERIFY(request.authorizationHeader.isEmpty());
+    QVERIFY(request.body.isEmpty());
+    QVERIFY(!request.error.isEmpty());
+}
+
+void TestStravaOAuthPolicy::
+reportsBoundedRedactedRevocationFailures()
+{
+    const QString token =
+        QStringLiteral("revocation-token-sentinel");
+    const QString secret =
+        QStringLiteral("revocation-secret-sentinel");
+    const QByteArray payload = QStringLiteral(
+        R"json({"message":"failed %1 %2"})json")
+            .arg(token, secret)
+            .toUtf8();
+
+    const QString httpFailure =
+        StravaOAuthPolicy::revocationFailureMessage(
+            503,
+            QNetworkReply::ServiceUnavailableError,
+            QStringLiteral("provider rejected %1").arg(token),
+            payload,
+            {token, secret});
+    QVERIFY(httpFailure.contains(QStringLiteral("HTTP 503")));
+    QVERIFY(!httpFailure.contains(token));
+    QVERIFY(!httpFailure.contains(secret));
+    QVERIFY(httpFailure.size() <= 1024);
+
+    const QString transportFailure =
+        StravaOAuthPolicy::revocationFailureMessage(
+            0,
+            QNetworkReply::TimeoutError,
+            QStringLiteral("timeout %1").arg(token),
+            QByteArray(),
+            {token, secret});
+    QVERIFY(transportFailure.contains(
+        QStringLiteral("Network error")));
+    QVERIFY(!transportFailure.contains(token));
+    QVERIFY(transportFailure.size() <= 1024);
 }
 
 void TestStravaOAuthPolicy::reportsHttpStatusInsteadOfQtEnum()
@@ -576,6 +723,22 @@ serviceOpenUsesCoordinatedDurableRefresh()
     QVERIFY(!open.contains("QEventLoop"));
     QVERIFY(!open.contains(
         "CloudServiceFactory::instance().saveSettings"));
+
+    const qsizetype refreshOperation =
+        open.indexOf("refreshOperation =");
+    const qsizetype durablePublication =
+        open.indexOf(
+            "StravaCredentialPublisher::publish(");
+    const qsizetype coordinatedRefresh =
+        open.indexOf(
+            "StravaTokenRefreshCoordinator::refresh(");
+    QVERIFY(refreshOperation >= 0);
+    QVERIFY(durablePublication > refreshOperation);
+    QVERIFY(coordinatedRefresh > durablePublication);
+    QCOMPARE(
+        open.count(
+            "StravaCredentialPublisher::publish("),
+        1);
 }
 
 void TestStravaOAuthPolicy::
@@ -616,10 +779,77 @@ oauthGrantSupersedesRefreshAndPublishesDurably()
     QVERIFY(branch.contains("_gcAthleteName"));
     QVERIFY(branch.contains(
         "PublicationMode::Authoritative"));
+    QVERIFY(branch.contains(
+        "publication.activatesAuthorization = true"));
     QVERIFY(invalidate >= 0);
     QVERIFY(publish > invalidate);
     QVERIFY(install > publish);
     QVERIFY(updateClone > install);
+}
+
+void TestStravaOAuthPolicy::
+serviceDisconnectRevokesBeforeCredentialRemoval()
+{
+    const QByteArray removal = sourceContents(
+        "../../../src/Cloud/StravaAccountRemoval.cpp");
+    QVERIFY(!removal.isEmpty());
+    QVERIFY(removal.contains(
+        "StravaTokenRefreshCoordinator::removeAuthorization("));
+    QVERIFY(removal.contains(
+        "StravaCredentialPublisher::markRevocationPending("));
+    QVERIFY(removal.contains(
+        "StravaOAuthPolicy::revocationRequest("));
+    QVERIFY(removal.contains(
+        "QNetworkRequest::ManualRedirectPolicy"));
+    QVERIFY(removal.contains(
+        "StravaCredentialPublisher::remove("));
+    QVERIFY(removal.contains("httpStatus == 200"));
+    QVERIFY(!removal.contains("Bearer "));
+
+    const QByteArray service = sourceContents(
+        "../../../src/Cloud/Strava.cpp");
+    QVERIFY(!service.isEmpty());
+    const QByteArray close = sourceSection(
+        service,
+        "Strava::close()",
+        "Strava::readdir(");
+    QVERIFY(!close.isEmpty());
+    QVERIFY(!close.contains("/oauth/revoke"));
+    QVERIFY(!close.contains("removeAuthorization("));
+
+    QCOMPARE(
+        service.count(
+            "StravaTokenRefreshCoordinator::authorizationUsable("),
+        5);
+}
+
+void TestStravaOAuthPolicy::
+credentialsPageOffersExplicitStravaDisconnectModes()
+{
+    const QByteArray source = sourceContents(
+        "../../../src/Gui/AthletePages.cpp");
+    QVERIFY(!source.isEmpty());
+    const QByteArray deletion = sourceSection(
+        source,
+        "CredentialsPage::deleteClicked()",
+        "CredentialsPage::editClicked()");
+    QVERIFY(!deletion.isEmpty());
+    QVERIFY(deletion.contains(
+        "supportsAccountDisconnect()"));
+    QVERIFY(deletion.contains(
+        "accountDisconnectOperation("));
+    QVERIFY(deletion.contains("QtConcurrent::run("));
+    QVERIFY(deletion.contains("QProgressDialog"));
+    QVERIFY(deletion.contains("Disconnect from Strava"));
+    QVERIFY(deletion.contains("Remove locally"));
+    QVERIFY(deletion.contains("QMessageBox::Cancel"));
+
+    const qsizetype operation = deletion.indexOf(
+        "accountDisconnectOperation(");
+    const qsizetype deactivate = deletion.indexOf(
+        "activeSettingName()");
+    QVERIFY(operation >= 0);
+    QVERIFY(deactivate > operation);
 }
 
 QTEST_MAIN(TestStravaOAuthPolicy)

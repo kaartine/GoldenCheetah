@@ -1,5 +1,6 @@
 #include "Cloud/StravaAuthenticatedSession.h"
 #include "Cloud/StravaNetworkReply.h"
+#include "Cloud/StravaRevocationClient.h"
 
 #include <QCoreApplication>
 #include <QEvent>
@@ -155,6 +156,12 @@ private slots:
     void transportThrowingCancellationAbortsAndDeletesReply();
     void transportDestroyedPendingReplyReturnsInvalid();
     void transportOversizeAbortsAndDeletesReply();
+    void revocationPassesBoundedRequestToTransport();
+    void revocationAcceptsOnlyHttp200_data();
+    void revocationAcceptsOnlyHttp200();
+    void revocationRejectsTransportFailures_data();
+    void revocationRejectsTransportFailures();
+    void revocationRedactsCredentialsAndThrownOperations();
 };
 
 void TestStravaAuthenticatedSession::
@@ -677,6 +684,189 @@ transportOversizeAbortsAndDeletesReply()
     QVERIFY(result.payload.isEmpty());
     deliverDeferredDeletes();
     QVERIFY(guard.isNull());
+}
+
+void TestStravaAuthenticatedSession::
+revocationPassesBoundedRequestToTransport()
+{
+    int calls = 0;
+    StravaOAuthPolicy::RevocationRequest observedRequest;
+    qsizetype observedMaximum = 0;
+    StravaRevocationClient client(
+        [&](const StravaOAuthPolicy::RevocationRequest &request,
+            qsizetype maximumBytes,
+            const StravaRevocationClient::CancellationCheck &) {
+            ++calls;
+            observedRequest = request;
+            observedMaximum = maximumBytes;
+            return response(200, QByteArray());
+        });
+
+    const auto result = client.revoke(
+        QStringLiteral("83"),
+        QStringLiteral("synthetic-client-secret"),
+        QStringLiteral("synthetic-refresh-token"),
+        StravaOAuthPolicy::RevocationTokenType::RefreshToken);
+
+    QVERIFY2(result.isSuccess(), qPrintable(result.error));
+    QCOMPARE(calls, 1);
+    QCOMPARE(
+        observedRequest.endpoint,
+        QUrl(QStringLiteral(
+            "https://www.strava.com/oauth/revoke")));
+    QVERIFY(observedRequest.authorizationHeader.startsWith(
+        QByteArrayLiteral("Basic ")));
+    QVERIFY(!observedRequest.endpoint.hasQuery());
+    QVERIFY(observedRequest.body.contains(
+        QByteArrayLiteral("token_type_hint=refresh_token")));
+    QCOMPARE(
+        observedMaximum,
+        StravaRevocationClient::MaximumResponseBytes);
+}
+
+void TestStravaAuthenticatedSession::
+revocationAcceptsOnlyHttp200_data()
+{
+    QTest::addColumn<int>("httpStatus");
+    QTest::addColumn<bool>("expectedSuccess");
+
+    QTest::newRow("ok") << 200 << true;
+    QTest::newRow("no-content") << 204 << false;
+    QTest::newRow("moved") << 301 << false;
+    QTest::newRow("temporary-redirect") << 307 << false;
+    QTest::newRow("bad-request") << 400 << false;
+    QTest::newRow("unauthorized") << 401 << false;
+    QTest::newRow("rate-limited") << 429 << false;
+    QTest::newRow("unavailable") << 503 << false;
+}
+
+void TestStravaAuthenticatedSession::
+revocationAcceptsOnlyHttp200()
+{
+    QFETCH(int, httpStatus);
+    QFETCH(bool, expectedSuccess);
+
+    StravaRevocationClient client(
+        [httpStatus](
+            const StravaOAuthPolicy::RevocationRequest &,
+            qsizetype,
+            const StravaRevocationClient::CancellationCheck &) {
+            HttpResult result = response(
+                httpStatus, QByteArray());
+            if (httpStatus >= 400) {
+                result.networkError =
+                    QNetworkReply::ProtocolInvalidOperationError;
+                result.networkErrorString =
+                    QStringLiteral("Synthetic HTTP failure");
+            }
+            return result;
+        });
+    const auto result = client.revoke(
+        QStringLiteral("83"),
+        QStringLiteral("synthetic-client-secret"),
+        QStringLiteral("synthetic-refresh-token"),
+        StravaOAuthPolicy::RevocationTokenType::RefreshToken);
+
+    QCOMPARE(result.isSuccess(), expectedSuccess);
+    if (!expectedSuccess) {
+        QVERIFY(!result.error.isEmpty());
+        QVERIFY(result.error.size() <= 1024);
+    }
+}
+
+void TestStravaAuthenticatedSession::
+revocationRejectsTransportFailures_data()
+{
+    QTest::addColumn<StravaNetworkReply::Failure>("failure");
+
+    QTest::newRow("timeout")
+        << StravaNetworkReply::Failure::TimedOut;
+    QTest::newRow("cancelled")
+        << StravaNetworkReply::Failure::Cancelled;
+    QTest::newRow("oversized")
+        << StravaNetworkReply::Failure::Oversized;
+    QTest::newRow("invalid")
+        << StravaNetworkReply::Failure::Invalid;
+}
+
+void TestStravaAuthenticatedSession::
+revocationRejectsTransportFailures()
+{
+    QFETCH(StravaNetworkReply::Failure, failure);
+
+    StravaRevocationClient client(
+        [failure](
+            const StravaOAuthPolicy::RevocationRequest &,
+            qsizetype,
+            const StravaRevocationClient::CancellationCheck &) {
+            HttpResult result;
+            result.failure = failure;
+            result.networkError =
+                QNetworkReply::UnknownNetworkError;
+            result.networkErrorString =
+                QStringLiteral("Synthetic transport failure");
+            return result;
+        });
+    const auto result = client.revoke(
+        QStringLiteral("83"),
+        QStringLiteral("synthetic-client-secret"),
+        QStringLiteral("synthetic-refresh-token"),
+        StravaOAuthPolicy::RevocationTokenType::RefreshToken);
+
+    QVERIFY(!result.isSuccess());
+    QVERIFY(!result.error.isEmpty());
+    QVERIFY(result.error.size() <= 1024);
+}
+
+void TestStravaAuthenticatedSession::
+revocationRedactsCredentialsAndThrownOperations()
+{
+    const QString secret =
+        QStringLiteral("sensitive-revocation-secret");
+    const QString token =
+        QStringLiteral("sensitive-revocation-token");
+    StravaRevocationClient redacting(
+        [&](const StravaOAuthPolicy::RevocationRequest &request,
+            qsizetype,
+            const StravaRevocationClient::CancellationCheck &) {
+            HttpResult result;
+            result.networkError =
+                QNetworkReply::UnknownNetworkError;
+            result.networkErrorString =
+                QStringLiteral("%1 %2 %3")
+                    .arg(
+                        token,
+                        secret,
+                        QString::fromLatin1(
+                            request.authorizationHeader));
+            return result;
+        });
+    const auto redacted = redacting.revoke(
+        QStringLiteral("83"),
+        secret,
+        token,
+        StravaOAuthPolicy::RevocationTokenType::RefreshToken);
+    QVERIFY(!redacted.isSuccess());
+    QVERIFY(!redacted.error.contains(token));
+    QVERIFY(!redacted.error.contains(secret));
+    QVERIFY(!redacted.error.contains(QStringLiteral("Basic ")));
+
+    StravaRevocationClient throwing(
+        [](const StravaOAuthPolicy::RevocationRequest &,
+           qsizetype,
+           const StravaRevocationClient::CancellationCheck &)
+            -> HttpResult {
+            throw 1;
+        });
+    const auto thrown = throwing.revoke(
+        QStringLiteral("83"),
+        secret,
+        token,
+        StravaOAuthPolicy::RevocationTokenType::RefreshToken);
+    QVERIFY(!thrown.isSuccess());
+    QVERIFY(!thrown.error.isEmpty());
+    QVERIFY(!thrown.error.contains(token));
+    QVERIFY(!thrown.error.contains(secret));
 }
 
 QTEST_GUILESS_MAIN(TestStravaAuthenticatedSession)

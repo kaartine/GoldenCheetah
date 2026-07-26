@@ -23,6 +23,9 @@ struct FakeStore
     bool failRefresh = false;
     bool failAccess = false;
     bool failTimestamp = false;
+    bool clearRefreshOnFailure = false;
+    bool clearAccessOnFailure = false;
+    bool timestampPresent = true;
 
     PublicationCallbacks callbacks()
     {
@@ -33,19 +36,29 @@ struct FakeStore
             },
             [this](const QString &value) {
                 calls.append(QStringLiteral("refresh"));
-                if (failRefresh) return false;
+                if (failRefresh) {
+                    if (value.isEmpty() && clearRefreshOnFailure)
+                        stored.refreshToken.clear();
+                    return false;
+                }
                 stored.refreshToken = value;
                 return true;
             },
             [this](const QString &value) {
                 calls.append(QStringLiteral("access"));
-                if (failAccess) return false;
+                if (failAccess) {
+                    if (value.isEmpty() && clearAccessOnFailure)
+                        stored.accessToken.clear();
+                    return false;
+                }
                 stored.accessToken = value;
                 return true;
             },
-            [this](const QString &) {
+            [this](const QString &value) {
                 calls.append(QStringLiteral("timestamp"));
-                return !failTimestamp;
+                if (failTimestamp) return false;
+                timestampPresent = !value.isEmpty();
+                return true;
             }
         };
     }
@@ -65,6 +78,10 @@ private slots:
     void accessFailureCanBeRetriedWithoutConflict();
     void timestampFailureCanBeRetriedWithoutConflict();
     void authoritativePublicationReplacesUnrelatedGrant();
+    void removalClearsCredentialsAndTimestamp();
+    void removalConflictDoesNotWrite();
+    void pendingVaultCleanupStillRemovesLogicalCredentials();
+    void accessibleCredentialAfterRemovalFailureFailsClosed();
     void invalidInputsDoNotInvokeCallbacks();
     void callbackExceptionFailsClosed();
 };
@@ -250,6 +267,116 @@ authoritativePublicationReplacesUnrelatedGrant()
     QCOMPARE(result.status, PublicationStatus::Saved);
     QCOMPARE(store.stored.accessToken, replacement.accessToken);
     QCOMPARE(store.stored.refreshToken, replacement.refreshToken);
+}
+
+void TestStravaTokenPublication::
+removalClearsCredentialsAndTimestamp()
+{
+    FakeStore store;
+    store.stored = pair(QStringLiteral("current"));
+
+    const RemovalResult result = remove(
+        store.stored.refreshToken,
+        PublicationMode::CompareAndSwap,
+        store.callbacks());
+
+    QVERIFY(result.isSuccess());
+    QCOMPARE(result.status, RemovalStatus::Cleared);
+    QVERIFY(store.stored.accessToken.isEmpty());
+    QVERIFY(store.stored.refreshToken.isEmpty());
+    QVERIFY(!store.timestampPresent);
+    QCOMPARE(
+        store.calls,
+        QStringList({
+            QStringLiteral("read"),
+            QStringLiteral("refresh"),
+            QStringLiteral("access"),
+            QStringLiteral("timestamp"),
+            QStringLiteral("read")
+        }));
+}
+
+void TestStravaTokenPublication::removalConflictDoesNotWrite()
+{
+    FakeStore store;
+    store.stored = pair(QStringLiteral("newer"));
+
+    const RemovalResult result = remove(
+        QStringLiteral("refresh-stale"),
+        PublicationMode::CompareAndSwap,
+        store.callbacks());
+
+    QVERIFY(!result.isSuccess());
+    QCOMPARE(result.status, RemovalStatus::Conflict);
+    QCOMPARE(
+        store.stored.accessToken,
+        QStringLiteral("access-newer"));
+    QCOMPARE(
+        store.stored.refreshToken,
+        QStringLiteral("refresh-newer"));
+    QVERIFY(store.timestampPresent);
+    QCOMPARE(
+        store.calls,
+        QStringList({QStringLiteral("read")}));
+}
+
+void TestStravaTokenPublication::
+pendingVaultCleanupStillRemovesLogicalCredentials()
+{
+    FakeStore store;
+    store.stored = pair(QStringLiteral("current"));
+    store.failRefresh = true;
+    store.failAccess = true;
+    store.clearRefreshOnFailure = true;
+    store.clearAccessOnFailure = true;
+
+    const RemovalResult result = remove(
+        store.stored.refreshToken,
+        PublicationMode::CompareAndSwap,
+        store.callbacks());
+
+    QVERIFY(result.isSuccess());
+    QCOMPARE(result.status, RemovalStatus::CleanupPending);
+    QVERIFY(store.stored.accessToken.isEmpty());
+    QVERIFY(store.stored.refreshToken.isEmpty());
+    QVERIFY(!store.timestampPresent);
+    QCOMPARE(
+        store.calls,
+        QStringList({
+            QStringLiteral("read"),
+            QStringLiteral("refresh"),
+            QStringLiteral("access"),
+            QStringLiteral("timestamp"),
+            QStringLiteral("read")
+        }));
+}
+
+void TestStravaTokenPublication::
+accessibleCredentialAfterRemovalFailureFailsClosed()
+{
+    FakeStore store;
+    store.stored = pair(QStringLiteral("current"));
+    store.failRefresh = true;
+
+    const RemovalResult result = remove(
+        store.stored.refreshToken,
+        PublicationMode::CompareAndSwap,
+        store.callbacks());
+
+    QVERIFY(!result.isSuccess());
+    QCOMPARE(result.status, RemovalStatus::StorageFailure);
+    QVERIFY(!store.stored.refreshToken.isEmpty());
+    QVERIFY(store.stored.accessToken.isEmpty());
+    QVERIFY(!store.timestampPresent);
+    QCOMPARE(
+        store.calls,
+        QStringList({
+            QStringLiteral("read"),
+            QStringLiteral("refresh"),
+            QStringLiteral("access"),
+            QStringLiteral("timestamp"),
+            QStringLiteral("read")
+        }));
 }
 
 void TestStravaTokenPublication::

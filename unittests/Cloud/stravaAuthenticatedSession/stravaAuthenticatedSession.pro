@@ -5,11 +5,15 @@ TARGET = testStravaAuthenticatedSession
 
 SOURCES = testStravaAuthenticatedSession.cpp \
           ../../../src/Cloud/StravaAuthenticatedSession.cpp \
+          ../../../src/Cloud/StravaRevocationClient.cpp \
           ../../../src/Cloud/StravaNetworkReply.cpp \
+          ../../../src/Cloud/StravaOAuthPolicy.cpp \
           ../../../src/Cloud/NetworkReplyWait.cpp
 
 HEADERS = ../../../src/Cloud/StravaAuthenticatedSession.h \
+          ../../../src/Cloud/StravaRevocationClient.h \
           ../../../src/Cloud/StravaNetworkReply.h \
+          ../../../src/Cloud/StravaOAuthPolicy.h \
           ../../../src/Cloud/NetworkReplyWait.h
 
 include(../../unittests.pri)
