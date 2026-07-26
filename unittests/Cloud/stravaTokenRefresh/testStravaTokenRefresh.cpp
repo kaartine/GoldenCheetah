@@ -140,12 +140,13 @@ private slots:
     void failedAuthorizationRemovalStaysFailClosed();
     void successfulAuthorizationRemovalInvalidatesGrant();
     void removalWaitCanBeCancelledPromptly();
+    void cancellationAfterPendingStillCompletesRemoval();
     void explicitAuthorizationReopensPendingAccount();
     void persistedNonActiveStateCannotBeReopenedByStaleClone();
     void installedGrantSupersedesStaleCloneState();
     void authorizationSnapshotCannotTearTokenPairAndEpoch();
     void oauthCompletionCannotCrossRemovalEpoch();
-    void ambiguousRefreshKeepsRemoteWarning();
+    void knownRotatedGrantRevocationClearsRemoteWarning();
     void persistedPendingAuthorizationRetainsRevocationEvidence();
     void storedAuthorizationStateFailsClosed_data();
     void storedAuthorizationStateFailsClosed();
@@ -1335,13 +1336,17 @@ failedPendingPersistenceKeepsObservedRotation()
                     return successfulRemoval();
                 });
     });
-    QVERIFY2(waitForEntered(pendingGate, 1),
-             "The pending-state write did not start.");
 
+    QTRY_VERIFY_WITH_TIMEOUT(
+        !StravaTokenRefreshCoordinator::
+            authorizationUsable(account),
+        1000);
     release(refreshGate);
     const StravaTokenRefreshResult interruptedRefresh =
         refresh.get();
     QVERIFY(!interruptedRefresh.isValid());
+    QVERIFY2(waitForEntered(pendingGate, 1),
+             "The pending-state write did not start.");
     release(pendingGate);
     QVERIFY(!removal.get().isSuccess());
 
@@ -1442,11 +1447,14 @@ authorizationRemovalRejectsUndispatchedRequest()
                 });
     });
 
-    QTRY_COMPARE_WITH_TIMEOUT(
+    QTRY_VERIFY_WITH_TIMEOUT(
+        !StravaTokenRefreshCoordinator::
+            authorizationUsable(account),
+        1000);
+    QCOMPARE(
         StravaTokenRefreshCoordinator::authorizationStatus(
             account),
-        StravaAuthorizationStatus::RevocationPending,
-        1000);
+        StravaAuthorizationStatus::Active);
     QVERIFY(!request.authorizeDispatch());
     QVERIFY(removal.get().isSuccess());
     QCOMPARE(removalCalls.load(), 1);
@@ -1612,6 +1620,42 @@ removalWaitCanBeCancelledPromptly()
         refresh.get();
     QVERIFY(completedRefresh.isValid());
     compareResult(completedRefresh, rotated);
+}
+
+void TestStravaTokenRefresh::
+cancellationAfterPendingStillCompletesRemoval()
+{
+    const QString account =
+        uniqueValue(QStringLiteral("remove-after-pending"));
+    const QString refreshToken =
+        uniqueValue(QStringLiteral("refresh-current"));
+    std::atomic<bool> cancelled{false};
+    std::atomic<int> removalCalls{0};
+
+    const StravaAuthorizationRemovalResult removed =
+        StravaTokenRefreshCoordinator::removeAuthorization(
+            account,
+            refreshToken,
+            [&] {
+                cancelled = true;
+                return true;
+            },
+            [&](const QString &) {
+                ++removalCalls;
+                return successfulRemoval();
+            },
+            [&] { return cancelled.load(); },
+            1s);
+
+    QVERIFY2(
+        removed.isSuccess(),
+        "Cancellation after durable pending state must not "
+        "strand the disconnect before remote revocation.");
+    QCOMPARE(removalCalls.load(), 1);
+    QCOMPARE(
+        StravaTokenRefreshCoordinator::authorizationStatus(
+            account),
+        StravaAuthorizationStatus::Revoked);
 }
 
 void TestStravaTokenRefresh::
@@ -1841,7 +1885,7 @@ oauthCompletionCannotCrossRemovalEpoch()
 }
 
 void TestStravaTokenRefresh::
-ambiguousRefreshKeepsRemoteWarning()
+knownRotatedGrantRevocationClearsRemoteWarning()
 {
     const QString account =
         uniqueValue(QStringLiteral("ambiguous-rotation"));
@@ -1849,6 +1893,10 @@ ambiguousRefreshKeepsRemoteWarning()
         uniqueValue(QStringLiteral("refresh-current"));
     StravaTokenRefreshResult ambiguous = failedResult(
         QStringLiteral("The refresh reply was lost."));
+    ambiguous.accessToken =
+        uniqueValue(QStringLiteral("access-rotated"));
+    ambiguous.refreshToken =
+        uniqueValue(QStringLiteral("refresh-rotated"));
     ambiguous.remoteGrantMayHaveRotated = true;
 
     const StravaTokenRefreshResult refresh =
@@ -1858,16 +1906,22 @@ ambiguousRefreshKeepsRemoteWarning()
             [&] { return ambiguous; });
     QVERIFY(!refresh.isValid());
 
+    QString revokedToken;
     const StravaAuthorizationRemovalResult removed =
         StravaTokenRefreshCoordinator::removeAuthorization(
             account,
             refreshToken,
             [] { return true; },
-            [](const QString &) {
+            [&revokedToken](const QString &effectiveRefreshToken) {
+                revokedToken = effectiveRefreshToken;
                 return successfulRemoval();
             });
     QVERIFY(removed.isSuccess());
-    QVERIFY(removed.remoteAuthorizationMayRemain);
+    QCOMPARE(revokedToken, ambiguous.refreshToken);
+    QVERIFY2(
+        !removed.remoteAuthorizationMayRemain,
+        "Revoking the latest known rotated token must clear "
+        "the remote-authorization warning.");
 }
 
 void TestStravaTokenRefresh::
