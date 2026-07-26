@@ -29,6 +29,7 @@
 #include "PolarFlow.h"
 #include "OAuthCallbackPolicy.h"
 #include "OAuthPKCE.h"
+#include "OAuthTokenReplyController.h"
 #include "StravaCredentialPublisher.h"
 #include "StravaOAuthPolicy.h"
 #include "StravaTokenRefresh.h"
@@ -38,6 +39,14 @@
 OAuthDialog::OAuthDialog(Context *context, OAuthSite site, CloudService *service, QString baseURL, QString clientsecret) :
     context(context), site(site), service(service), baseURL(baseURL), clientsecret(clientsecret)
 {
+    tokenReplyController =
+        std::make_unique<OAuthTokenReplyController>(this);
+    connect(
+        this, &QDialog::rejected,
+        this, [this] {
+            tokenRequestSensitiveValues.clear();
+            tokenReplyController->cancel();
+        });
 
     setAttribute(Qt::WA_DeleteOnClose);
     setWindowTitle(tr("OAuth"));
@@ -259,6 +268,7 @@ OAuthDialog::OAuthDialog(Context *context, OAuthSite site, CloudService *service
 
 OAuthDialog::~OAuthDialog()
 {
+  tokenReplyController->cancel();
   if (view) delete view->page();
   delete view;  // view was constructed without a parent to delete it
 }
@@ -473,7 +483,10 @@ OAuthDialog::urlChanged(const QUrl &url)
 
             manager = new QNetworkAccessManager(this);
             connect(manager, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
-            connect(manager, SIGNAL(finished(QNetworkReply*)), this, SLOT(networkRequestFinished(QNetworkReply*)));
+            connect(
+                manager, &QNetworkAccessManager::finished,
+                this, &OAuthDialog::networkRequestFinished,
+                Qt::QueuedConnection);
 
             QNetworkReply *reply;
             if (site == RIDEWITHGPS) {
@@ -498,6 +511,21 @@ OAuthDialog::urlChanged(const QUrl &url)
                 reply = manager->post(request, data);
 
             }
+            if (!reply
+                || !tokenReplyController->start(reply, 30000)) {
+                if (reply) {
+                    reply->abort();
+                    reply->deleteLater();
+                }
+                tokenRequestSensitiveValues.clear();
+                QMessageBox requestError(
+                    QMessageBox::Critical,
+                    tr("OAuth Token Error"),
+                    tr("The OAuth token request could not be started."));
+                requestError.exec();
+                reject();
+                return;
+            }
             // services without web login need blocking requests
             if (site == XERT || site == RIDEWITHGPS) {
                 QEventLoop loop;
@@ -517,6 +545,30 @@ OAuthDialog::urlChanged(const QUrl &url)
 void
 OAuthDialog::networkRequestFinished(QNetworkReply *reply)
 {
+    if (!reply) return;
+
+    const OAuthTokenReplyController::Completion completion =
+        tokenReplyController->complete(reply);
+    if (completion
+        == OAuthTokenReplyController::Completion::Cancelled) {
+        tokenRequestSensitiveValues.clear();
+        return;
+    }
+    if (completion
+        == OAuthTokenReplyController::Completion::Untracked) {
+        return;
+    }
+    if (completion
+        == OAuthTokenReplyController::Completion::TimedOut) {
+        tokenRequestSensitiveValues.clear();
+        QMessageBox oauthError(
+            QMessageBox::Critical,
+            tr("OAuth Token Error"),
+            tr("The OAuth token request timed out."));
+        oauthError.exec();
+        reject();
+        return;
+    }
 
     // Polar binding reuses this manager after credentials are stored.
     if (ignore) {
@@ -526,20 +578,24 @@ OAuthDialog::networkRequestFinished(QNetworkReply *reply)
     const int httpStatus = reply->attribute(
         QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const QByteArray payload = reply->readAll();
+    const QNetworkReply::NetworkError networkError =
+        reply->error();
+    const QString networkErrorString =
+        reply->errorString();
     const QStringList sensitiveValues =
         tokenRequestSensitiveValues;
     tokenRequestSensitiveValues.clear();
 
     if (!OAuthCallbackPolicy::isSuccessfulTokenReply(
-            reply->error())) {
+            networkError)) {
         const QString error = site == STRAVA
             ? StravaOAuthPolicy::tokenFailureMessage(
-                  httpStatus, reply->error(),
-                  reply->errorString(), payload,
+                  httpStatus, networkError,
+                  networkErrorString, payload,
                   sensitiveValues)
             : tr("Error retrieving access token, %1 (%2)")
-                  .arg(reply->errorString())
-                  .arg(reply->error());
+                  .arg(networkErrorString)
+                  .arg(networkError);
         QMessageBox oauthError(
             QMessageBox::Critical,
             tr("OAuth Token Error"),

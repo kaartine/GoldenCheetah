@@ -580,6 +580,13 @@ oauthGrantSupersedesRefreshAndPublishesDurably()
     QVERIFY(!source.isEmpty());
     QVERIFY(source.contains(
         "StravaOAuthPolicy::parseAuthorizationResponse(payload)"));
+    QVERIFY(source.contains(
+        "tokenReplyController->start(reply, 30000)"));
+    QVERIFY(source.contains(
+        "tokenReplyController->complete(reply)"));
+    QVERIFY(source.contains(
+        "OAuthTokenReplyController::Completion::TimedOut"));
+    QVERIFY(source.contains("Qt::QueuedConnection"));
 
     const qsizetype start = source.lastIndexOf(
         "} else if (site == STRAVA) {");

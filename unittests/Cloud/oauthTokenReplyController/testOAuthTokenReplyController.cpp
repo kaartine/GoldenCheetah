@@ -10,7 +10,8 @@
 class ControlledReply final : public QNetworkReply
 {
 public:
-    ControlledReply()
+    explicit ControlledReply(int *externalAbortCalls = nullptr)
+        : externalAbortCalls(externalAbortCalls)
     {
         setOpenMode(QIODevice::ReadOnly);
     }
@@ -18,6 +19,7 @@ public:
     void abort() override
     {
         ++abortCalls;
+        if (externalAbortCalls) ++*externalAbortCalls;
         if (isFinished()) return;
         setError(
             QNetworkReply::OperationCanceledError,
@@ -40,6 +42,9 @@ protected:
     {
         return -1;
     }
+
+private:
+    int *externalAbortCalls;
 };
 
 namespace {
@@ -85,7 +90,9 @@ void TestOAuthTokenReplyController::
 normalCompletionStopsDeadline()
 {
     OAuthTokenReplyController controller(this);
-    QPointer<ControlledReply> reply = new ControlledReply();
+    int abortCalls = 0;
+    QPointer<ControlledReply> reply =
+        new ControlledReply(&abortCalls);
     OAuthTokenReplyController::Completion completion =
         OAuthTokenReplyController::Completion::Untracked;
     connect(reply, &QNetworkReply::finished, this, [&] {
@@ -98,6 +105,7 @@ normalCompletionStopsDeadline()
         completion
         == OAuthTokenReplyController::Completion::Finished);
     QTest::qWait(80);
+    QCOMPARE(abortCalls, 0);
     processDeferredDeletes();
     QVERIFY(reply.isNull());
 }
@@ -106,7 +114,9 @@ void TestOAuthTokenReplyController::
 timeoutAbortsAndClassifiesReply()
 {
     OAuthTokenReplyController controller(this);
-    QPointer<ControlledReply> reply = new ControlledReply();
+    int abortCalls = 0;
+    QPointer<ControlledReply> reply =
+        new ControlledReply(&abortCalls);
     QSignalSpy finished(reply, &QNetworkReply::finished);
     OAuthTokenReplyController::Completion completion =
         OAuthTokenReplyController::Completion::Untracked;
@@ -119,7 +129,7 @@ timeoutAbortsAndClassifiesReply()
     QVERIFY(
         completion
         == OAuthTokenReplyController::Completion::TimedOut);
-    QCOMPARE(reply->abortCalls, 1);
+    QCOMPARE(abortCalls, 1);
     processDeferredDeletes();
     QVERIFY(reply.isNull());
 }
@@ -128,7 +138,9 @@ void TestOAuthTokenReplyController::
 cancellationAbortsWithoutBecomingTimeout()
 {
     OAuthTokenReplyController controller(this);
-    QPointer<ControlledReply> reply = new ControlledReply();
+    int abortCalls = 0;
+    QPointer<ControlledReply> reply =
+        new ControlledReply(&abortCalls);
     OAuthTokenReplyController::Completion completion =
         OAuthTokenReplyController::Completion::Untracked;
     connect(reply, &QNetworkReply::finished, this, [&] {
@@ -140,7 +152,7 @@ cancellationAbortsWithoutBecomingTimeout()
     QVERIFY(
         completion
         == OAuthTokenReplyController::Completion::Cancelled);
-    QCOMPARE(reply->abortCalls, 1);
+    QCOMPARE(abortCalls, 1);
     QTest::qWait(80);
     processDeferredDeletes();
     QVERIFY(reply.isNull());

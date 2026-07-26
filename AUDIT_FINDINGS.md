@@ -2741,9 +2741,11 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### CLOUD-005: Interactive Strava token exchange has no timeout or reply cleanup
 
-- Status: OPEN
-- Code: `src/Cloud/OAuthDialog.cpp:474` and
-  `src/Cloud/OAuthDialog.cpp:518`
+- Status: FIXED
+- Code: `src/Cloud/OAuthDialog.cpp:484`,
+  `src/Cloud/OAuthDialog.cpp:514`,
+  `src/Cloud/OAuthDialog.cpp:546`, and
+  `src/Cloud/OAuthTokenReplyController.cpp:15`
 - Impact: An interactive authorization reply that never finishes can leave the
   dialog permanently pending. Completed replies remain manager children until
   the dialog is destroyed, which complicates every early error path.
@@ -2758,6 +2760,28 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Fix direction: Give the interactive exchange an owned single-shot deadline
   and one cleanup path that disconnects, aborts when needed, and schedules the
   reply for deletion before accepting or rejecting the dialog.
+- Test-first evidence: Commit `82a948b` added a dedicated controller suite
+  before the implementation. Its qmake step found the project, then `make`
+  failed because `OAuthTokenReplyController.{h,cpp}` did not exist. The tests
+  cover invalid starts, normal completion, a real timer deadline, explicit
+  cancellation, overlapping requests, untracked replies, and 100 sequential
+  replies. The first GREEN run also exposed and removed a test-side
+  use-after-delete instead of weakening deferred-deletion coverage.
+- Resolution: Every interactive token POST now enters one reply controller
+  with a 30-second deadline. Timeout and user cancellation abort only the
+  tracked reply and remain distinguishable; cancellation closes silently while
+  timeout reports its own error. Completion stops the timer and schedules every
+  tracked or untracked reply for deletion. Manager completion is queued so an
+  abort cannot re-enter modal UI or deferred deletion from inside the reply's
+  call stack. Start failure and dialog destruction clear sensitive request
+  context and fail closed. The same bounded lifecycle also protects the other
+  OAuth providers sharing this dialog. The refresh half remains covered by the
+  bounded `Strava::open()` path from THREAD-007.
+- Verification: All 9 reply-controller cases and 47 Strava
+  OAuth/policy/production-wiring cases pass normally and under strict
+  ASan/UBSan/LSan. The complete application and updated test topology compile
+  and link, and the full normal matrix passes 76 suites and 2,539 tests with no
+  failures, skips, or blacklists.
 
 ### CLOUD-006: Strava Routes bypasses token refresh and blocks indefinitely
 

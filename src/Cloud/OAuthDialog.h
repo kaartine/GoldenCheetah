@@ -42,6 +42,8 @@ namespace OAuthCallbackPolicy {
 class Session;
 }
 
+class OAuthTokenReplyController;
+
 class OAuthDialog : public QDialog
 {
     Q_OBJECT
@@ -100,6 +102,8 @@ private:
     QWebEngineView *view = nullptr;
 
     QNetworkAccessManager *manager = nullptr;
+    std::unique_ptr<OAuthTokenReplyController>
+        tokenReplyController;
 
     QUrl url;
 };
