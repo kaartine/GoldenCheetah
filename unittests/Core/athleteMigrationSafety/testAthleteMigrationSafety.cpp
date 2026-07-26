@@ -17,6 +17,7 @@
 #include "Cloud/NolioTokenRefresh.h"
 #include "Cloud/OAuthPKCE.h"
 #include "Cloud/SportsPlusHealth.h"
+#include "Cloud/StravaCredentialPublisher.h"
 #include "Cloud/TredictMeasuresDownload.h"
 #include "Cloud/TrainingsTageBuch.h"
 #include "Cloud/WithingsDownload.h"
@@ -282,6 +283,40 @@ private:
     QSemaphore &releaseOperation;
     mutable std::mutex resultMutex;
     NolioTokenRefreshResult resultValue;
+};
+
+class StravaPublicationThread final : public QThread
+{
+public:
+    StravaPublicationThread(
+        StravaCredentialPublisher::Request request,
+        int timeoutMs)
+        : request(std::move(request)),
+          timeoutMs(timeoutMs)
+    {
+    }
+
+    StravaTokenPublication::PublicationResult result() const
+    {
+        const std::lock_guard<std::mutex> lock(resultMutex);
+        return resultValue;
+    }
+
+protected:
+    void run() override
+    {
+        const StravaTokenPublication::PublicationResult published =
+            StravaCredentialPublisher::publish(
+                request, timeoutMs);
+        const std::lock_guard<std::mutex> lock(resultMutex);
+        resultValue = published;
+    }
+
+private:
+    StravaCredentialPublisher::Request request;
+    int timeoutMs;
+    mutable std::mutex resultMutex;
+    StravaTokenPublication::PublicationResult resultValue;
 };
 
 class AbortProbeReply final : public QNetworkReply
@@ -1359,6 +1394,8 @@ private slots:
     void stalledGuiCoalescesCloudSettingsTransactions();
     void guiCloudSettingsSaveWritesAllScopes();
     void guiCloudSettingsSaveClearsCustomUrl();
+    void stravaCredentialsPublishOnGuiThread();
+    void timedOutStravaPublicationCannotWriteLater();
     void workerCloudSettingsClearUrlUsesDefault();
     void defaultCloudUrlDoesNotInvalidatePayload();
     void emptyCloudUrlUsesDefault();
@@ -4260,6 +4297,100 @@ void TestAthleteMigrationSafety::guiCloudSettingsSaveClearsCustomUrl()
     cleanupControlledCloudAutoDownload();
 
     QCOMPARE(storedUrl, QString());
+}
+
+void TestAthleteMigrationSafety::stravaCredentialsPublishOnGuiThread()
+{
+    const QString athlete =
+        QStringLiteral("StravaPublicationAthlete");
+    const QString oldAccess = QStringLiteral("access-old");
+    const QString oldRefresh = QStringLiteral("refresh-old");
+    const QString newAccess = QStringLiteral("access-new");
+    const QString newRefresh = QStringLiteral("refresh-new");
+    appsettings->setCValue(athlete, GC_STRAVA_TOKEN, oldAccess);
+    appsettings->setCValue(
+        athlete, GC_STRAVA_REFRESH_TOKEN, oldRefresh);
+
+    StravaCredentialPublisher::Request request;
+    request.accountKey = athlete;
+    request.expectedRefreshToken = oldRefresh;
+    request.replacement = {newAccess, newRefresh};
+    request.refreshedAt = QStringLiteral("timestamp-new");
+    request.mode =
+        StravaTokenPublication::PublicationMode::CompareAndSwap;
+
+    StravaPublicationThread worker(request, 2000);
+    worker.start();
+    const bool completed = waitUntil(
+        [&worker]() { return worker.isFinished(); }, 5000);
+    const bool joined = worker.wait(5000);
+    const StravaTokenPublication::PublicationResult result =
+        worker.result();
+
+    QVERIFY(completed);
+    QVERIFY(joined);
+    QVERIFY(result.isSuccess());
+    QCOMPARE(
+        result.status,
+        StravaTokenPublication::PublicationStatus::Saved);
+    QCOMPARE(
+        appsettings->cvalue(
+            athlete, GC_STRAVA_TOKEN, QString()).toString(),
+        newAccess);
+    QCOMPARE(
+        appsettings->cvalue(
+            athlete, GC_STRAVA_REFRESH_TOKEN, QString()).toString(),
+        newRefresh);
+    QCOMPARE(
+        appsettings->cvalue(
+            athlete, GC_STRAVA_LAST_REFRESH, QString()).toString(),
+        QStringLiteral("timestamp-new"));
+    QCOMPARE(athleteMigrationSettingsCrossThreadWrites(), 0);
+}
+
+void TestAthleteMigrationSafety::
+timedOutStravaPublicationCannotWriteLater()
+{
+    const QString athlete =
+        QStringLiteral("StravaPublicationTimeoutAthlete");
+    const QString oldAccess = QStringLiteral("access-old");
+    const QString oldRefresh = QStringLiteral("refresh-old");
+    appsettings->setCValue(athlete, GC_STRAVA_TOKEN, oldAccess);
+    appsettings->setCValue(
+        athlete, GC_STRAVA_REFRESH_TOKEN, oldRefresh);
+
+    StravaCredentialPublisher::Request request;
+    request.accountKey = athlete;
+    request.expectedRefreshToken = oldRefresh;
+    request.replacement = {
+        QStringLiteral("access-late"),
+        QStringLiteral("refresh-late")
+    };
+    request.refreshedAt = QStringLiteral("timestamp-late");
+    request.mode =
+        StravaTokenPublication::PublicationMode::CompareAndSwap;
+
+    StravaPublicationThread worker(request, 50);
+    worker.start();
+    const bool joinedWithoutGuiDispatch = worker.wait(2000);
+    const StravaTokenPublication::PublicationResult result =
+        worker.result();
+    QCoreApplication::processEvents();
+
+    QVERIFY(joinedWithoutGuiDispatch);
+    QCOMPARE(
+        result.status,
+        StravaTokenPublication::PublicationStatus::StorageFailure);
+    QVERIFY(!result.isSuccess());
+    QCOMPARE(
+        appsettings->cvalue(
+            athlete, GC_STRAVA_TOKEN, QString()).toString(),
+        oldAccess);
+    QCOMPARE(
+        appsettings->cvalue(
+            athlete, GC_STRAVA_REFRESH_TOKEN, QString()).toString(),
+        oldRefresh);
+    QCOMPARE(athleteMigrationSettingsCrossThreadWrites(), 0);
 }
 
 void TestAthleteMigrationSafety::workerCloudSettingsClearUrlUsesDefault()

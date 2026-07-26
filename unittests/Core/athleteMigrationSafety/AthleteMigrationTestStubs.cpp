@@ -251,6 +251,12 @@ void GSettings::setValue(QString key, QVariant value)
     testValues.insert(settingKey(QString(), key), value);
 }
 
+bool GSettings::setValueChecked(QString key, QVariant value)
+{
+    setValue(key, value);
+    return true;
+}
+
 void GSettings::remove(const QString &key)
 {
     QMutexLocker locker(&testValuesMutex);
@@ -276,6 +282,13 @@ void GSettings::setCValue(QString athleteName, QString key, QVariant value)
         throw std::runtime_error("injected athlete settings failure");
     }
     testValues.insert(settingKey(athleteName, key), value);
+}
+
+bool GSettings::setCValueChecked(
+    QString athleteName, QString key, QVariant value)
+{
+    setCValue(athleteName, key, value);
+    return true;
 }
 
 bool GSettings::contains(const QString &) const

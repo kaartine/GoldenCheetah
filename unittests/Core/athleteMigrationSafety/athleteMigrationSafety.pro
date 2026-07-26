@@ -40,6 +40,8 @@ SOURCES = testAthleteMigrationSafety.cpp \
           ../../../src/Cloud/OAuthCallbackPolicy.cpp \
           ../../../src/Cloud/OAuthPKCE.cpp \
           ../../../src/Cloud/SportsPlusHealth.cpp \
+          ../../../src/Cloud/StravaCredentialPublisher.cpp \
+          ../../../src/Cloud/StravaTokenPublication.cpp \
           ../../../src/Cloud/TredictMeasuresDownload.cpp \
           ../../../src/Cloud/TrainingsTageBuch.cpp \
           ../../../src/Cloud/WithingsDownload.cpp \
@@ -61,6 +63,8 @@ HEADERS = CloudAutoDownloadTestSupport.h \
           ../../../src/Cloud/OAuthCallbackPolicy.h \
           ../../../src/Cloud/OAuthPKCE.h \
           ../../../src/Cloud/SportsPlusHealth.h \
+          ../../../src/Cloud/StravaCredentialPublisher.h \
+          ../../../src/Cloud/StravaTokenPublication.h \
           ../../../src/Cloud/TredictMeasuresDownload.h \
           ../../../src/Cloud/TrainingsTageBuch.h \
           ../../../src/Cloud/WithingsDownload.h \
