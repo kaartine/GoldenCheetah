@@ -339,6 +339,12 @@ GSettings::value(const QObject * /*me*/, const QString key, const QVariant def) 
 void
 GSettings::setValue(QString key, QVariant value)
 {
+    setValueChecked(key, value);
+}
+
+bool
+GSettings::setValueChecked(QString key, QVariant value)
+{
     if (credentialSettings
         && CredentialSettings::isCredentialKey(key)) {
         QString plaintextKey = key;
@@ -348,19 +354,20 @@ GSettings::setValue(QString key, QVariant value)
         if (newFormat) {
             if (store == SETTINGS_GLOBAL
                 && global && !global->isEmpty()) {
-                credentialSettings->setValue(
+                return credentialSettings->setValueChecked(
                     global->at(file), credentialScopeForGlobal(),
                     key, plaintextKey, value);
             }
         } else if (key.startsWith(
                        QStringLiteral(GC_QSETTINGS_GLOBAL_GENERAL))) {
-            credentialSettings->setValue(
+            return credentialSettings->setValueChecked(
                 systemsettings, credentialScopeForLegacy(QString()),
                 key, plaintextKey, value);
         }
-        return;
+        return false;
     }
 
+    bool written = false;
     QString keyVar = QString(key);
     if (newFormat) {
         int store;
@@ -369,9 +376,11 @@ GSettings::setValue(QString key, QVariant value)
         switch (store) {
         case SETTINGS_SYSTEM:
             systemsettings->setValue(keyVar,value);
+            written = true;
             break;
         case SETTINGS_GLOBAL:
             global->at(file)->setValue(keyVar,value);
+            written = true;
             break;
         case SETTINGS_ATHLETE:
             qDebug() << "SetValue key, keyVar, store:" << key << ":" << keyVar  << ": " << store; // error cases on code configuration
@@ -381,8 +390,10 @@ GSettings::setValue(QString key, QVariant value)
     } else {
         keyVar.remove(QRegularExpression("^<.*>"));
         systemsettings->setValue(keyVar, value);
+        written = true;
     }
 
+    return written;
 }
 
 void
@@ -515,7 +526,15 @@ GSettings::cvalue(QString athleteName, QString key, QVariant def) {
 }
 
 void
-GSettings::setCValue(QString athleteName, QString key, QVariant value) {
+GSettings::setCValue(QString athleteName, QString key, QVariant value)
+{
+    setCValueChecked(athleteName, key, value);
+}
+
+bool
+GSettings::setCValueChecked(
+    QString athleteName, QString key, QVariant value)
+{
 
     if (credentialSettings
         && CredentialSettings::isCredentialKey(key)) {
@@ -526,13 +545,13 @@ GSettings::setCValue(QString athleteName, QString key, QVariant value) {
         if (newFormat) {
             if (store == SETTINGS_GLOBAL
                 && global && !global->isEmpty()) {
-                credentialSettings->setValue(
+                return credentialSettings->setValueChecked(
                     global->at(file), credentialScopeForGlobal(),
                     key, plaintextKey, value);
             } else if (store == SETTINGS_ATHLETE) {
                 const auto found = athlete.constFind(athleteName);
                 if (found != athlete.cend()) {
-                    credentialSettings->setValue(
+                    return credentialSettings->setValueChecked(
                         found.value()->getQSettings(file),
                         credentialScopeForAthlete(athleteName),
                         key, plaintextKey, value);
@@ -544,15 +563,16 @@ GSettings::setCValue(QString athleteName, QString key, QVariant value) {
             const QString storedKey = globalCredential
                 ? plaintextKey
                 : athleteName + QLatin1Char('/') + plaintextKey;
-            credentialSettings->setValue(
+            return credentialSettings->setValueChecked(
                 systemsettings,
                 credentialScopeForLegacy(
                     globalCredential ? QString() : athleteName),
                 key, storedKey, value);
         }
-        return;
+        return false;
     }
 
+    bool written = false;
     QString keyVar = QString(key);
     if (newFormat) {
         int store;
@@ -567,14 +587,17 @@ GSettings::setCValue(QString athleteName, QString key, QVariant value) {
                 break;
             case SETTINGS_ATHLETE:
                 i.value()->getQSettings(file)->setValue(keyVar, value);
+                written = true;
                 break;
             }
         } // if we do have have the athlete - then we do not store anything
     } else {
         keyVar.remove(QRegularExpression("^<.*>"));
         systemsettings->setValue(athleteName + "/" + keyVar,value);
+        written = true;
 
     }
+    return written;
 }
 
 // other functions unsed from QSettings which GSettings needs to implement

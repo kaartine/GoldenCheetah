@@ -64,10 +64,19 @@ public:
                   const QString &credentialKey,
                   const QString &plaintextKey,
                   const QVariant &value);
+    bool setValueChecked(QSettings *settings,
+                         const QString &scopeId,
+                         const QString &credentialKey,
+                         const QString &plaintextKey,
+                         const QVariant &value);
     void remove(QSettings *settings,
                 const QString &scopeId,
                 const QString &credentialKey,
                 const QString &plaintextKey);
+    bool removeChecked(QSettings *settings,
+                       const QString &scopeId,
+                       const QString &credentialKey,
+                       const QString &plaintextKey);
     void migratePlaintext(QSettings *settings,
                           const QString &scopeId,
                           const QString &prefix);

@@ -505,12 +505,14 @@ public:
     // standard access to global config
     QVariant value(const QObject *me, const QString key, const QVariant def = 0);
     void setValue(QString key, QVariant value);
+    bool setValueChecked(QString key, QVariant value);
     void remove(const QString &key);
 
     // access to athleteName specific config
     QVariant cvalue(QString athleteName, QString key, QVariant def = 0);
 
     void setCValue(QString athleteName, QString key, QVariant value);
+    bool setCValueChecked(QString athleteName, QString key, QVariant value);
 
     // add QSettings methods - which cannot be inherited since not a single, but multiple QSettings make GSettings
     QStringList allKeys() const;

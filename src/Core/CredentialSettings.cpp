@@ -250,9 +250,20 @@ void CredentialSettings::setValue(
     const QString &plaintextKey,
     const QVariant &value)
 {
+    setValueChecked(
+        settings, scopeId, credentialKey, plaintextKey, value);
+}
+
+bool CredentialSettings::setValueChecked(
+    QSettings *settings,
+    const QString &scopeId,
+    const QString &credentialKey,
+    const QString &plaintextKey,
+    const QVariant &value)
+{
     if (!settings || scopeId.isEmpty()
         || !isCredentialKey(credentialKey)) {
-        return;
+        return false;
     }
 
     const QString key = vaultKey(scopeId, credentialKey);
@@ -260,8 +271,8 @@ void CredentialSettings::setValue(
         pendingRemovalKey(scopeId, credentialKey);
     const QString secret = value.toString();
     if (secret.isEmpty()) {
-        remove(settings, scopeId, credentialKey, plaintextKey);
-        return;
+        return removeChecked(
+            settings, scopeId, credentialKey, plaintextKey);
     }
 
     QString error;
@@ -279,6 +290,7 @@ void CredentialSettings::setValue(
         hardenSettingsFile(settings);
     }
     cache(key, {true, secret, persisted});
+    return persisted;
 }
 
 void CredentialSettings::remove(
@@ -287,9 +299,19 @@ void CredentialSettings::remove(
     const QString &credentialKey,
     const QString &plaintextKey)
 {
+    removeChecked(
+        settings, scopeId, credentialKey, plaintextKey);
+}
+
+bool CredentialSettings::removeChecked(
+    QSettings *settings,
+    const QString &scopeId,
+    const QString &credentialKey,
+    const QString &plaintextKey)
+{
     if (!settings || scopeId.isEmpty()
         || !isCredentialKey(credentialKey)) {
-        return;
+        return false;
     }
 
     scrubPlaintext(settings, plaintextKey);
@@ -300,8 +322,10 @@ void CredentialSettings::remove(
     const CredentialStore::Status status = store_
         ? store_->remove(key, &error)
         : CredentialStore::Status::Unavailable;
-    if (status == CredentialStore::Status::Success
-        || status == CredentialStore::Status::NotFound) {
+    const bool persisted =
+        status == CredentialStore::Status::Success
+        || status == CredentialStore::Status::NotFound;
+    if (persisted) {
         scrubPlaintext(settings, removalKey);
     } else {
         settings->setValue(removalKey, true);
@@ -311,6 +335,7 @@ void CredentialSettings::remove(
             QStringLiteral("remove"), credentialKey, error);
     }
     cache(key, CacheEntry());
+    return persisted;
 }
 
 void CredentialSettings::migratePlaintext(
