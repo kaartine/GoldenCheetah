@@ -2005,23 +2005,33 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DATA-006: Voronoi annotations accept duplicate and non-finite sites
 
-- Status: OPEN
-- Code: `src/Core/DataFilter.cpp:6486`,
-  `src/Charts/GenericPlot.cpp:1457`,
-  `contrib/voronoi/Voronoi.cpp:39`, and
-  `contrib/voronoi/Voronoi.cpp:413`
+- Status: FIXED
+- Code: `src/Charts/GenericPlot.cpp`, `contrib/voronoi/Voronoi.cpp`,
+  `contrib/voronoi/Voronoi.h`,
+  `unittests/Charts/voronoiSafety/testVoronoiSafety.cpp`,
+  `unittests/Charts/voronoiSafety/voronoiSafety.pro`, and
+  `unittests/unittests.pro`
 - Impact: Formula-provided Voronoi centers are checked only for an even numeric
   count. Duplicate sites can make the bisector divide by zero, while NaN or
   infinite coordinates invalidate sorting and geometry invariants. Non-finite
   lines can then reach the chart renderer.
-- Evidence: The clean build's `newintstar.y may be uninitialized` diagnostic
-  is a false positive because `PQempty()` gates every read. The separate
-  duplicate/non-finite input paths are directly reachable through
-  `annotate(voronoi, centers)`.
-- Test: Cover duplicate, collinear, NaN, infinite, and randomized finite sites;
-  reject invalid input or require every emitted endpoint to remain finite.
-- Fix direction: Validate finiteness and deduplicate sites before invoking the
-  legacy algorithm, then guard zero-length bisectors defensively.
+- Test-first evidence: The first focused build failed because `addSite()` did
+  not report rejected input. With only that interface added, 4 tests passed and
+  7 failed: NaN, both infinities, a value beyond `float`, exact duplicates, and
+  coordinates that collapse to the same stored `float` were all accepted.
+  Subsequent RED cases exposed a non-finite intersection, the missing
+  `run()` result contract, and the zero-width hash calculation used by vertical
+  collinear sites.
+- Resolution: Sites are range-checked before conversion, stored-coordinate
+  duplicates are rejected, and the chart requires equal coordinate-vector
+  lengths plus at least two accepted sites. Invalid annotations now skip only
+  themselves rather than all later annotations. The sweep reports failure,
+  clears partial output, guards zero-width buckets and zero-length bisectors,
+  aborts when a geometry invariant fails, and never emits a non-finite line.
+- Verification: All 27 focused results pass normally and under strict
+  ASan/UBSan/LSan with leak detection. A fresh release application links to a
+  536,103,744-byte binary. The complete offscreen matrix passes 81 test
+  projects and 2,791 tests with zero failures, skips, or blacklisted results.
 
 ### DATA-007: Function parsing leaks consumed symbol nodes
 
@@ -2048,6 +2058,76 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   leaks, use-after-free, or double-free. The full release application links,
   and the complete matrix passes 80 test programs and 2,764 tests with zero
   failures, skips, or blacklisted results.
+
+### DATA-008: Voronoi allocator accounting starts indeterminate
+
+- Status: FIXED
+- Code: `contrib/voronoi/Voronoi.cpp`,
+  `unittests/Charts/voronoiSafety/testVoronoiSafety.cpp`
+- Impact: The constructor initialized only three mode flags. Allocation
+  accounting, search counters, bounds, and internal pointers retained whatever
+  bytes occupied the object. The first allocation added its size to an
+  indeterminate signed integer, which is undefined behavior and could also
+  produce misleading diagnostics.
+- Test-first evidence: A placement-new regression poisoned object storage with
+  `0xa5` before construction. The old constructor left `siteidx`, `ntry`,
+  `totalsearch`, and `total_alloc` at `-1515870811` instead of zero.
+- Resolution: The initializer list now establishes every scalar, pointer, and
+  freelist member before the first allocator operation. The sweep's cached
+  priority point is also value-initialized defensively.
+- Verification: Constructor accounting is covered directly in the 27-result
+  normal and sanitizer suites. The full release build and 2,791-test matrix
+  pass.
+
+### DATA-009: Large finite Voronoi coordinates overflow float intermediates
+
+- Status: FIXED
+- Code: `contrib/voronoi/Voronoi.cpp`,
+  `contrib/voronoi/Voronoi.h`,
+  `unittests/Charts/voronoiSafety/testVoronoiSafety.cpp`
+- Impact: Coordinates such as `1e20` are finite and representable as `float`,
+  but distance squares, intersections, side predicates, clipping, and plot
+  margins performed intermediate arithmetic in `float`. They could overflow
+  or change sweep ordering even when every input and final result was valid.
+- Test-first evidence: Three new large-coordinate regressions failed together:
+  a representable intersection was discarded, a finite distance became
+  infinite, and `right_of()` returned the opposite result. Independent review
+  then found a subtler binary32 counterexample near `FLT_MAX`; the focused
+  suite passed 26 cases but failed that exact predicate because arithmetic was
+  rounded before assignment to a `double`.
+- Resolution: Bisectors, intersections, distances, side predicates, queue
+  priorities, plot bounds, and clipping now use explicitly promoted `double`
+  intermediates. Every conversion back to legacy `float` storage is checked,
+  queue insertion is failure-atomic, and unrepresentable geometry aborts the
+  diagram with no partial lines.
+- Verification: Exact binary32 boundary fixtures, large finite diagrams,
+  invalid priorities, unrepresentable intersections and bisectors, randomized
+  sites, and finite-output invariants all pass in the 27-result focused suite
+  normally and under ASan/UBSan/LSan. Independent final review found no
+  remaining blocker. The full release build and 2,791-test matrix pass.
+
+### MEM-022: Voronoi copying and sweep reuse alias arena storage
+
+- Status: FIXED
+- Code: `contrib/voronoi/Voronoi.cpp`,
+  `contrib/voronoi/Voronoi.h`,
+  `unittests/Charts/voronoiSafety/testVoronoiSafety.cpp`
+- Impact: The implicit copy operations duplicated raw arena pointers and the
+  allocation list, so destroying both objects could free the same blocks
+  twice. A second sweep or post-sweep `addSite()` could also inspect site
+  records already returned to the freelist while `sites` retained their
+  addresses.
+- Test-first evidence: The ownership trait regression failed because `Voronoi`
+  was copy-constructible and copy-assignable. After copy ownership was closed,
+  a lifecycle regression still failed because `addSite()` accepted a new point
+  after a completed sweep.
+- Resolution: Copy construction and assignment are deleted. A sweep may start
+  only once; all later runs and site additions are rejected. A failed
+  precondition with fewer than two sites remains recoverable, while any
+  actually started sweep, successful or failed, consumes the instance.
+- Verification: Compile-time ownership checks and successful, insufficient,
+  and failed sweep transitions pass normally and under ASan/UBSan/LSan. The
+  full release build and 2,791-test matrix pass.
 
 ### PARSE-001: ZIP/GZIP decompression has no resource limits
 

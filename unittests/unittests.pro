@@ -24,6 +24,7 @@ equals(GC_UNITTESTS, active) {
 			   Cloud/openDataEndpointPolicy \
 			   Charts/indendPlotMarkerMatrix \
 			   Charts/mapPageSecurity \
+			   Charts/voronoiSafety \
 			   Train/libraryImportFileStager \
 			   Train/stravaRoutesClient \
 			   Train/webDownloadImportPolicy \

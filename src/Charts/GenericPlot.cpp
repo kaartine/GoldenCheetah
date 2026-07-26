@@ -32,6 +32,7 @@
 #include "GenericAnnotations.h"
 
 #include "gsl/gsl_fit.h"
+#include <algorithm>
 #include <limits>
 
 // used to format dates/times on axes
@@ -1456,14 +1457,16 @@ GenericPlot::plotAnnotations(GenericSeriesInfo &seriesinfo)
 
         case GenericAnnotationInfo::Voronoi:
         {
-            if (annotation.vx.count() < 2) return;
+            if (annotation.vx.count() < 2
+                || annotation.vx.count() != annotation.vy.count()) break;
 
             Voronoi v;
+            int acceptedSites = 0;
             for(int i=0; i<annotation.vx.count(); i++)  {
                 QPointF point(annotation.vx[i],annotation.vy[i]);
-                v.addSite(point);
+                if (v.addSite(point)) ++acceptedSites;
             }
-            v.run(QRectF());
+            if (acceptedSites < 2 || !v.run(QRectF())) break;
 #if 0
     // how many lines?
     fprintf(stderr, "voronoi diagram curve '%s' has %d lines\n", annotation.vname.toStdString().c_str(),v.lines().count()); fflush(stderr);

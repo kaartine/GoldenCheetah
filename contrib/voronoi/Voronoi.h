@@ -73,9 +73,11 @@ class Voronoi {
 
         Voronoi();
         ~Voronoi();
+        Voronoi(const Voronoi &) = delete;
+        Voronoi &operator=(const Voronoi &) = delete;
 
-        void addSite(QPointF point);
-        void run(QRectF boundingRect);
+        bool addSite(QPointF point);
+        bool run(QRectF boundingRect);
 
         // the output is a vector of lines to draw
         QList<QLineF> &lines() { return output; }
@@ -84,6 +86,7 @@ class Voronoi {
 
         // original global variables
         int triangulate, plot, debug, nsites, siteidx ;
+        bool sweepStarted ;
         float xmin, xmax, ymin, ymax ;
 
         int ELhashsize ;
@@ -129,11 +132,11 @@ class Voronoi {
         Site * intersect(Halfedge * el1, Halfedge * el2);
         int right_of(Halfedge * el, Point * p);
         void endpoint(Edge * e, int lr, Site * s);
-        float dist(Site * s, Site * t);
+        double dist(Site * s, Site * t);
         void makevertex(Site * v);
         void deref(Site * v);
         void ref(Site * v);
-        void PQinsert(Halfedge * he, Site * v, float offset);
+        bool PQinsert(Halfedge * he, Site * v, double offset);
         void PQdelete(Halfedge * he);
         int PQbucket(Halfedge * he);
         int PQempty(void);
@@ -149,7 +152,7 @@ class Voronoi {
 
         // output functions (not used in GC)
         void openpl(void);
-        void line(float ax, float ay, float bx, float by);
+        void line(double ax, double ay, double bx, double by);
         void circle(float ax, float ay, float radius);
         void range(float pxmin, float pxmax, float pymin, float pymax);
         void out_bisector(Edge * e);
@@ -157,7 +160,7 @@ class Voronoi {
         void out_vertex(Site * v);
         void out_site(Site * s);
         void out_triple(Site * s1, Site * s2, Site * s3);
-        void plotinit(void);
+        bool plotinit(void);
         void clip_line(Edge * e);
 
 };

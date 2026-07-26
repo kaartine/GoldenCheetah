@@ -1,11 +1,49 @@
 /* refactor of Steven Future's algorithm from original C to C++ class */
 
 #include "Voronoi.h"
+#include <algorithm>
+#include <cmath>
+#include <limits>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 
-Voronoi::Voronoi()
+Voronoi::Voronoi() :
+    triangulate(0),
+    plot(1),
+    debug(0),
+    nsites(0),
+    siteidx(0),
+    sweepStarted(false),
+    xmin(0.0f),
+    xmax(0.0f),
+    ymin(0.0f),
+    ymax(0.0f),
+    ELhashsize(0),
+    bottomsite(nullptr),
+    hfl{nullptr, 0},
+    ELleftend(nullptr),
+    ELrightend(nullptr),
+    ELhash(nullptr),
+    ntry(0),
+    totalsearch(0),
+    deltax(0.0f),
+    deltay(0.0f),
+    nedges(0),
+    sqrt_nsites(0),
+    nvertices(0),
+    sfl{nullptr, 0},
+    efl{nullptr, 0},
+    PQmin(0),
+    PQcount(0),
+    PQhashsize(0),
+    PQhash(nullptr),
+    total_alloc(0),
+    pxmin(0.0f),
+    pxmax(0.0f),
+    pymin(0.0f),
+    pymax(0.0f),
+    cradius(0.0f)
 {
     // old controls essentially in main.c
     //
@@ -20,10 +58,6 @@ Voronoi::Voronoi()
     // well when there are lots of cells ie, running kmeans with
     // 30 or even 100 clusters.
     //
-    triangulate = 0; // tesselate (we don't support this)
-    plot = 1; // call "plotting functions" - we use this
-    debug = 0; // set to 1 to get lots of debug
-
     // malloc lists are maintained and zapped in constructors
     freeinit(&sfl, sizeof(Site));
 }
@@ -35,15 +69,37 @@ Voronoi::~Voronoi()
 }
 
 // add a site to the list, refactoring what used to be in main.c
-void
+bool
 Voronoi::addSite(QPointF point)
 {
+    if (sweepStarted) return false;
+
+    const double sourceX = point.x();
+    const double sourceY = point.y();
+    const double maximum = std::numeric_limits<float>::max();
+    if (!std::isfinite(sourceX)
+        || !std::isfinite(sourceY)
+        || sourceX < -maximum
+        || sourceX > maximum
+        || sourceY < -maximum
+        || sourceY > maximum) {
+        return false;
+    }
+    const float x = static_cast<float>(sourceX);
+    const float y = static_cast<float>(sourceY);
+
+    for (const Site *site : sites) {
+        if (site->coord.x == x && site->coord.y == y) {
+            return false;
+        }
+    }
+
     // as originally in main.c
     Site *p = (Site*)getfree(&sfl);
 
     // initialise the site details
-    p->coord.x = point.x();
-    p->coord.y = point.y();
+    p->coord.x = x;
+    p->coord.y = y;
     p->refcnt=0;
     p->sitenbr=sites.count();
     sites.append(p);
@@ -51,17 +107,19 @@ Voronoi::addSite(QPointF point)
     // keep tabs on xmin, xmax etc
     if (sites.count() == 1) {
         // first
-        xmin = point.x();
-        xmax = point.x();
-        ymin = point.y();
-        ymax = point.y();
+        xmin = x;
+        xmax = x;
+        ymin = y;
+        ymax = y;
     } else {
         // update
-        if (point.x() < xmin) xmin = point.x();
-        if (point.y() < ymin) ymin = point.y();
-        if (point.x() > xmax) xmax = point.x();
-        if (point.y() > ymax) ymax = point.y();
+        if (x < xmin) xmin = x;
+        if (y < ymin) ymin = y;
+        if (x > xmax) xmax = x;
+        if (y > ymax) ymax = y;
     }
+
+    return true;
 }
 
 // sites need to be sorted, originally in main.c
@@ -96,11 +154,26 @@ static bool mySiteSort(const void * vs1, const void * vs2)
  ***/
 
 // main entry point, originally voronoi()
-void
+bool
 Voronoi::run(QRectF /* boundingRect */)
     {
+    output.clear();
+
     // need at least 2 sites to make any sense
-    if (sites.count() < 2) return;
+    if (sweepStarted || sites.count() < 2) {
+        return false;
+    }
+    sweepStarted = true;
+
+    const double width = static_cast<double>(xmax) - xmin;
+    const double height = static_cast<double>(ymax) - ymin;
+    const double maxPlotSpan =
+        std::numeric_limits<float>::max() / 1.1;
+    if (!std::isfinite(width)
+        || !std::isfinite(height)
+        || std::max(width, height) > maxPlotSpan) {
+        return false;
+    }
 
     // sort the sites
     std::sort(sites.begin(), sites.end(), mySiteSort);
@@ -110,11 +183,13 @@ Voronoi::run(QRectF /* boundingRect */)
 
     // was done in main.c previously
     geominit();
-    plotinit();
+    if (!plotinit()) {
+        return false;
+    }
 
     // now into the original sources
     Site *newsite, * bot, * top, * temp, * p, * v ;
-    Point newintstar ;
+    Point newintstar{} ;
     int pm ;
     Halfedge * lbnd, * rbnd, * llbnd, * rrbnd, * bisector ;
     Edge * e ;
@@ -144,13 +219,22 @@ smallest */
         rbnd = ELright(lbnd) ;
         bot = rightreg(lbnd) ;
         e = bisect(bot, newsite) ;
+        if (e == (Edge *)NULL)
+            {
+            output.clear() ;
+            return false ;
+            }
         bisector = HEcreate(e, voronoi_le) ;
         ELinsert(lbnd, bisector) ;
         p = intersect(lbnd, bisector) ;
         if (p != (Site *)NULL)
             {
             PQdelete(lbnd) ;
-            PQinsert(lbnd, p, dist(p,newsite)) ;
+            if (!PQinsert(lbnd, p, dist(p,newsite)))
+                {
+                output.clear() ;
+                return false ;
+                }
             }
         lbnd = bisector ;
         bisector = HEcreate(e, voronoi_re) ;
@@ -158,7 +242,11 @@ smallest */
         p = intersect(bisector, rbnd) ;
         if (p != (Site *)NULL)
             {
-            PQinsert(bisector, p, dist(p,newsite)) ;
+            if (!PQinsert(bisector, p, dist(p,newsite)))
+                {
+                output.clear() ;
+                return false ;
+                }
             }
         newsite = siteindex < sites.count() ? sites[siteindex++] : NULL;
         }
@@ -187,6 +275,12 @@ smallest */
                 pm = voronoi_re ;
                 }
             e = bisect(bot, top) ;
+            if (e == (Edge *)NULL)
+                {
+                deref(v) ;
+                output.clear() ;
+                return false ;
+                }
             bisector = HEcreate(e, pm) ;
             ELinsert(llbnd, bisector) ;
             endpoint(e, voronoi_re-pm, v) ;
@@ -195,12 +289,20 @@ smallest */
             if (p  != (Site *) NULL)
                 {
                 PQdelete(llbnd) ;
-                PQinsert(llbnd, p, dist(p,bot)) ;
+                if (!PQinsert(llbnd, p, dist(p,bot)))
+                    {
+                    output.clear() ;
+                    return false ;
+                    }
                 }
             p = intersect(bisector, rrbnd) ;
             if (p != (Site *) NULL)
                 {
-                PQinsert(bisector, p, dist(p,bot)) ;
+                if (!PQinsert(bisector, p, dist(p,bot)))
+                    {
+                    output.clear() ;
+                    return false ;
+                    }
                 }
             }
         else
@@ -216,6 +318,7 @@ smallest */
         e = lbnd->ELedge ;
         out_ep(e) ;
         }
+    return true ;
     }
 
 void
@@ -295,14 +398,26 @@ Voronoi::ELleftbnd(Point * p)
     Halfedge * he ;
 
     /* Use hash table to get close to desired halfedge */
-    bucket = (p->x - xmin) / deltax * ELhashsize ;
-    if (bucket < 0)
+    if (deltax <= 0.0f)
         {
         bucket = 0 ;
         }
-    if (bucket >= ELhashsize)
+    else
         {
-        bucket = ELhashsize - 1 ;
+        const double scaled =
+            (static_cast<double>(p->x) - xmin) / deltax * ELhashsize ;
+        if (!std::isfinite(scaled) || scaled <= 0.0)
+            {
+            bucket = 0 ;
+            }
+        else if (scaled >= ELhashsize)
+            {
+            bucket = ELhashsize - 1 ;
+            }
+        else
+            {
+            bucket = static_cast<int>(scaled) ;
+            }
         }
     he = ELgethash(bucket) ;
     if  (he == (Halfedge *)NULL)
@@ -407,8 +522,47 @@ Voronoi::geominit(void)
 Edge *
 Voronoi::bisect(Site * s1, Site * s2)
     {
-    float dx, dy, adx, ady ;
+    double dx, dy, adx, ady, a, b, c ;
     Edge * newedge ;
+
+    if (s1 == (Site *)NULL || s2 == (Site *)NULL)
+        {
+        return (Edge *)NULL ;
+        }
+
+    dx = static_cast<double>(s2->coord.x) - s1->coord.x ;
+    dy = static_cast<double>(s2->coord.y) - s1->coord.y ;
+    adx = std::abs(dx) ;
+    ady = std::abs(dy) ;
+    if (!std::isfinite(dx) || !std::isfinite(dy)
+        || (adx == 0.0 && ady == 0.0))
+        {
+        return (Edge *)NULL ;
+        }
+
+    c = static_cast<double>(s1->coord.x) * dx
+        + static_cast<double>(s1->coord.y) * dy
+        + (dx*dx + dy*dy) * 0.5 ;
+    if (adx > ady)
+        {
+        a = 1.0 ;
+        b = dy/dx ;
+        c /= dx ;
+        }
+    else
+        {
+        b = 1.0 ;
+        a = dx/dy ;
+        c /= dy ;
+        }
+
+    if (!std::isfinite(a)
+        || !std::isfinite(b)
+        || !std::isfinite(c)
+        || std::abs(c) > std::numeric_limits<float>::max())
+        {
+        return (Edge *)NULL ;
+        }
 
     newedge = (Edge *)getfree(&efl) ;
     newedge->reg[0] = s1 ;
@@ -416,24 +570,9 @@ Voronoi::bisect(Site * s1, Site * s2)
     ref(s1) ;
     ref(s2) ;
     newedge->ep[0] = newedge->ep[1] = (Site *)NULL ;
-    dx = s2->coord.x - s1->coord.x ;
-    dy = s2->coord.y - s1->coord.y ;
-    adx = dx>0 ? dx : -dx ;
-    ady = dy>0 ? dy : -dy ;
-    newedge->c = s1->coord.x * dx + s1->coord.y * dy + (dx*dx +
-dy*dy) * 0.5 ;
-    if (adx > ady)
-        {
-        newedge->a = 1.0 ;
-        newedge->b = dy/dx ;
-        newedge->c /= dx ;
-        }
-    else
-        {
-        newedge->b = 1.0 ;
-        newedge->a = dx/dy ;
-        newedge->c /= dy ;
-        }
+    newedge->a = static_cast<float>(a) ;
+    newedge->b = static_cast<float>(b) ;
+    newedge->c = static_cast<float>(c) ;
     newedge->edgenbr = nedges ;
     out_bisector(newedge) ;
     nedges++ ;
@@ -445,7 +584,7 @@ Voronoi::intersect(Halfedge * el1, Halfedge * el2)
     {
     Edge * e1, * e2, * e ;
     Halfedge * el ;
-    float d, xint, yint ;
+    double d, xint, yint ;
     int right_of_site ;
     Site * v ;
 
@@ -459,13 +598,26 @@ Voronoi::intersect(Halfedge * el1, Halfedge * el2)
         {
         return ((Site *)NULL) ;
         }
-    d = (e1->a * e2->b) - (e1->b * e2->a) ;
+    d = static_cast<double>(e1->a) * e2->b
+        - static_cast<double>(e1->b) * e2->a ;
     if ((-1.0e-10 < d) && (d < 1.0e-10))
         {
         return ((Site *)NULL) ;
         }
-    xint = (e1->c * e2->b - e2->c * e1->b) / d ;
-    yint = (e2->c * e1->a - e1->c * e2->a) / d ;
+    xint = (static_cast<double>(e1->c) * e2->b
+        - static_cast<double>(e2->c) * e1->b) / d ;
+    yint = (static_cast<double>(e2->c) * e1->a
+        - static_cast<double>(e1->c) * e2->a) / d ;
+    const double maximum = std::numeric_limits<float>::max() ;
+    if (!std::isfinite(xint)
+        || !std::isfinite(yint)
+        || xint < -maximum
+        || xint > maximum
+        || yint < -maximum
+        || yint > maximum)
+        {
+        return ((Site *)NULL) ;
+        }
     if ((e1->reg[1]->coord.y < e2->reg[1]->coord.y) ||
         (e1->reg[1]->coord.y == e2->reg[1]->coord.y &&
         e1->reg[1]->coord.x < e2->reg[1]->coord.x))
@@ -486,8 +638,8 @@ Voronoi::intersect(Halfedge * el1, Halfedge * el2)
         }
     v = (Site *)getfree(&sfl) ;
     v->refcnt = 0 ;
-    v->coord.x = xint ;
-    v->coord.y = yint ;
+    v->coord.x = static_cast<float>(xint) ;
+    v->coord.y = static_cast<float>(yint) ;
     return (v) ;
     }
 
@@ -499,7 +651,7 @@ Voronoi::right_of(Halfedge * el, Point * p)
     Edge * e ;
     Site * topsite ;
     int right_of_site, above, fast ;
-    float dxp, dyp, dxs, t1, t2, t3, yl ;
+    double dxp, dyp, dxs, t1, t2, t3, yl ;
 
     e = el->ELedge ;
     topsite = e->reg[1] ;
@@ -514,8 +666,8 @@ Voronoi::right_of(Halfedge * el, Point * p)
         }
     if (e->a == 1.0)
         {
-        dyp = p->y - topsite->coord.y ;
-        dxp = p->x - topsite->coord.x ;
+        dyp = static_cast<double>(p->y) - topsite->coord.y ;
+        dxp = static_cast<double>(p->x) - topsite->coord.x ;
         fast = 0 ;
         if ((!right_of_site & (e->b < 0.0)) ||
          (right_of_site & (e->b >= 0.0)))
@@ -524,7 +676,8 @@ Voronoi::right_of(Halfedge * el, Point * p)
             }
         else
             {
-            above = ((p->x + p->y * e->b) > (e->c)) ;
+            above = ((static_cast<double>(p->x)
+                + static_cast<double>(p->y) * e->b) > (e->c)) ;
             if (e->b < 0.0)
                 {
                 above = !above ;
@@ -536,11 +689,13 @@ Voronoi::right_of(Halfedge * el, Point * p)
             }
         if (!fast)
             {
-            dxs = topsite->coord.x - (e->reg[0])->coord.x ;
-            above = (e->b * (dxp*dxp - dyp*dyp))
+            dxs = static_cast<double>(topsite->coord.x)
+                - (e->reg[0])->coord.x ;
+            above = (static_cast<double>(e->b)
+                    * (dxp*dxp - dyp*dyp))
                     <
                     (dxs * dyp * (1.0 + 2.0 * dxp /
-                    dxs + e->b * e->b)) ;
+                    dxs + static_cast<double>(e->b) * e->b)) ;
             if (e->b < 0.0)
                 {
                 above = !above ;
@@ -549,10 +704,11 @@ Voronoi::right_of(Halfedge * el, Point * p)
         }
     else  /*** e->b == 1.0 ***/
         {
-        yl = e->c - e->a * p->x ;
-        t1 = p->y - yl ;
-        t2 = p->x - topsite->coord.x ;
-        t3 = yl - topsite->coord.y ;
+        yl = static_cast<double>(e->c)
+            - static_cast<double>(e->a) * p->x ;
+        t1 = static_cast<double>(p->y) - yl ;
+        t2 = static_cast<double>(p->x) - topsite->coord.x ;
+        t3 = yl - static_cast<double>(topsite->coord.y) ;
         above = ((t1*t1) > ((t2 * t2) + (t3 * t3))) ;
         }
     return (el->ELpm == voronoi_le ? above : !above) ;
@@ -573,14 +729,19 @@ Voronoi::endpoint(Edge * e, int lr, Site * s)
     makefree((Freenode *)e, (Freelist *) &efl) ;
     }
 
-float
+double
 Voronoi::dist(Site * s, Site * t)
     {
-    float dx,dy ;
+    if (s == (Site *)NULL || t == (Site *)NULL)
+        {
+        return std::numeric_limits<double>::infinity() ;
+        }
 
-    dx = s->coord.x - t->coord.x ;
-    dy = s->coord.y - t->coord.y ;
-    return (sqrt(dx*dx + dy*dy)) ;
+    const double dx =
+        static_cast<double>(s->coord.x) - t->coord.x ;
+    const double dy =
+        static_cast<double>(s->coord.y) - t->coord.y ;
+    return std::hypot(dx, dy) ;
     }
 
 void
@@ -606,14 +767,29 @@ Voronoi::ref(Site * v)
     }
 
 
-void
-Voronoi::PQinsert(Halfedge * he, Site * v, float offset)
+bool
+Voronoi::PQinsert(Halfedge * he, Site * v, double offset)
     {
     Halfedge * last, * next ;
 
+    const double ystar =
+        v == (Site *)NULL
+            ? std::numeric_limits<double>::infinity()
+            : static_cast<double>(v->coord.y) + offset ;
+    const double maximum = std::numeric_limits<float>::max() ;
+    if (he == (Halfedge *)NULL
+        || v == (Site *)NULL
+        || !std::isfinite(offset)
+        || !std::isfinite(ystar)
+        || ystar < -maximum
+        || ystar > maximum)
+        {
+        return false ;
+        }
+
     he->vertex = v ;
     ref(v) ;
-    he->ystar = v->coord.y + offset ;
+    he->ystar = static_cast<float>(ystar) ;
     last = &PQhash[ PQbucket(he)] ;
     while ((next = last->PQnext) != (Halfedge *)NULL &&
       (he->ystar  > next->ystar  ||
@@ -625,6 +801,7 @@ Voronoi::PQinsert(Halfedge * he, Site * v, float offset)
     he->PQnext = last->PQnext ;
     last->PQnext = he ;
     PQcount++ ;
+    return true ;
     }
 
 void
@@ -651,17 +828,33 @@ Voronoi::PQbucket(Halfedge * he)
     {
     int bucket ;
 
-
-    if	    (he->ystar < ymin)  bucket = 0;
-    else if (he->ystar >= ymax) bucket = PQhashsize-1;
-    else 			bucket = (he->ystar - ymin)/deltay * PQhashsize;
-    if (bucket < 0)
+    if (!std::isfinite(he->ystar)
+        || deltay <= 0.0f
+        || he->ystar < ymin)
         {
         bucket = 0 ;
         }
-    if (bucket >= PQhashsize)
+    else if (he->ystar >= ymax)
         {
         bucket = PQhashsize-1 ;
+        }
+    else
+        {
+        const double scaled =
+            (static_cast<double>(he->ystar) - ymin)
+                / deltay * PQhashsize ;
+        if (!std::isfinite(scaled) || scaled <= 0.0)
+            {
+            bucket = 0 ;
+            }
+        else if (scaled >= PQhashsize)
+            {
+            bucket = PQhashsize - 1 ;
+            }
+        else
+            {
+            bucket = static_cast<int>(scaled) ;
+            }
         }
     if (bucket < PQmin)
         {
@@ -772,9 +965,16 @@ Voronoi::openpl(void)
     }
 
 void
-Voronoi::line(float ax, float ay, float bx, float by)
+Voronoi::line(double ax, double ay, double bx, double by)
     {
-        output << QLineF(QPointF(ax,ay), QPointF(bx,by));
+    if (!std::isfinite(ax)
+        || !std::isfinite(ay)
+        || !std::isfinite(bx)
+        || !std::isfinite(by))
+        {
+        return ;
+        }
+    output << QLineF(QPointF(ax,ay), QPointF(bx,by));
     }
 
 void
@@ -865,28 +1065,47 @@ Voronoi::out_triple(Site * s1, Site * s2, Site * s3)
         }
     }
 
-void
+bool
 Voronoi::plotinit(void)
     {
-    float dx, dy, d ;
+    const double dy = static_cast<double>(ymax) - ymin ;
+    const double dx = static_cast<double>(xmax) - xmin ;
+    const double d = std::max(dx, dy) * 1.1 ;
+    const double plotXMin = xmin - (d-dx) / 2.0 ;
+    const double plotXMax = xmax + (d-dx) / 2.0 ;
+    const double plotYMin = ymin - (d-dy) / 2.0 ;
+    const double plotYMax = ymax + (d-dy) / 2.0 ;
+    const double radius = (plotXMax - plotXMin) / 350.0 ;
+    const double maximum = std::numeric_limits<float>::max() ;
 
-    dy = ymax - ymin ;
-    dx = xmax - xmin ;
-    d = ( dx > dy ? dx : dy) * 1.1 ;
-    pxmin = xmin - (d-dx) / 2.0 ;
-    pxmax = xmax + (d-dx) / 2.0 ;
-    pymin = ymin - (d-dy) / 2.0 ;
-    pymax = ymax + (d-dy) / 2.0 ;
-    cradius = (pxmax - pxmin) / 350.0 ;
+    const double values[] = {
+        plotXMin, plotXMax, plotYMin, plotYMax, radius
+    } ;
+    for (const double value : values)
+        {
+        if (!std::isfinite(value)
+            || value < -maximum
+            || value > maximum)
+            {
+            return false ;
+            }
+        }
+
+    pxmin = static_cast<float>(plotXMin) ;
+    pxmax = static_cast<float>(plotXMax) ;
+    pymin = static_cast<float>(plotYMin) ;
+    pymax = static_cast<float>(plotYMax) ;
+    cradius = static_cast<float>(radius) ;
     openpl() ;
     range(pxmin, pymin, pxmax, pymax) ;
+    return true ;
     }
 
 void
 Voronoi::clip_line(Edge * e)
     {
     Site * s1, * s2 ;
-    float x1, x2, y1, y2 ;
+    double x1, x2, y1, y2 ;
 
     if (e->a == 1.0 && e->b >= 0.0)
         {
