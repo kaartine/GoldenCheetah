@@ -12,6 +12,9 @@ LINUXDEPLOYQT_FILE="linuxdeployqt-continuous-x86_64.AppImage"
 LINUXDEPLOYQT_URL="https://github.com/probonopd/linuxdeployqt/releases/download/continuous/${LINUXDEPLOYQT_FILE}"
 APPIMAGETOOL_FILE="appimagetool-x86_64.AppImage"
 APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/continuous/${APPIMAGETOOL_FILE}"
+QTKEYCHAIN_LICENSE_SHA256="ca46b73d5159548ab52834db51f195aa3d1f277f020e9dca92f4beb21b468a50"
+LGPL21_LICENSE_SHA256="dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+
 download_file()
 {
     local url=$1
@@ -30,18 +33,24 @@ download_file()
 
 run_packaging_appimage()
 {
-    APPIMAGE_EXTRACT_AND_RUN=1 "$@"
+    APPIMAGE_EXTRACT_AND_RUN=1 \
+        env -u APPDIR -u APPIMAGE -u OWD \
+            -u LD_LIBRARY_PATH -u LD_PRELOAD "$@"
 }
 
 run_packaged_appimage_smoke()
 {
-    APPIMAGE_EXTRACT_AND_RUN=1 timeout "$@"
+    APPIMAGE_EXTRACT_AND_RUN=1 \
+        env -u APPDIR -u APPIMAGE -u OWD \
+            -u LD_LIBRARY_PATH -u LD_PRELOAD timeout "$@"
 }
 
 strava_oauth_build_status()
 (
     local executable=$1
+    local allow_script_entrypoint=${2:-false}
     local status_home=
+    local LD_LIBRARY_PATH= LD_PRELOAD=
 
     cleanup_status_home()
     {
@@ -60,21 +69,28 @@ strava_oauth_build_status()
         echo "Cannot inspect Strava OAuth configuration in $executable" >&2
         return 1
     fi
-    local elf_magic
+    local elf_magic script_magic
     elf_magic=$(dd if="$executable" bs=1 count=4 \
         2>/dev/null | od -An -tx1 | tr -d ' \n')
     if [ "$elf_magic" != "7f454c46" ]; then
-        echo "Strava OAuth build status requires an ELF executable." >&2
-        return 1
+        script_magic=$(dd if="$executable" bs=1 count=2 \
+            2>/dev/null | od -An -tx1 | tr -d ' \n')
+        if [ "$allow_script_entrypoint" != "true" ] ||
+           [ "$script_magic" != "2321" ]; then
+            echo "Strava OAuth build status requires an ELF executable." >&2
+            return 1
+        fi
     fi
-    local appimage_magic
-    appimage_magic=$(dd if="$executable" bs=1 skip=8 count=3 \
-        2>/dev/null | od -An -tx1 | tr -d ' \n')
-    if [ "$appimage_magic" = "414901" ] ||
-       [ "$appimage_magic" = "414902" ]; then
-        echo "Cannot inspect Strava OAuth configuration in a compressed AppImage;" \
-            "inspect its extracted GoldenCheetah executable." >&2
-        return 1
+    if [ "$elf_magic" = "7f454c46" ]; then
+        local appimage_magic
+        appimage_magic=$(dd if="$executable" bs=1 skip=8 count=3 \
+            2>/dev/null | od -An -tx1 | tr -d ' \n')
+        if [ "$appimage_magic" = "414901" ] ||
+           [ "$appimage_magic" = "414902" ]; then
+            echo "Cannot inspect Strava OAuth configuration in a compressed AppImage;" \
+                "inspect its extracted GoldenCheetah executable." >&2
+            return 1
+        fi
     fi
 
     local report captured status_file command_status
@@ -94,8 +110,9 @@ strava_oauth_build_status()
         ulimit -f 8
         HOME="$status_home" \
             XDG_CONFIG_HOME="$status_home/.config" \
-            LC_ALL=C timeout --signal=TERM --kill-after=2s 10s \
-            "$executable" --goldencheetah-build-status
+            LC_ALL=C env -u LD_LIBRARY_PATH -u LD_PRELOAD \
+            timeout --signal=TERM --kill-after=2s 10s \
+                "$executable" --goldencheetah-build-status
     ) >"$status_file" 2>/dev/null; then
         command_status=0
     else
@@ -160,6 +177,11 @@ strava_oauth_appimage_status()
 (
     local image=$1
     local extract_dir=
+    local original_working_dir
+    local APPDIR= APPIMAGE= OWD=
+    local LD_LIBRARY_PATH= LD_PRELOAD=
+
+    original_working_dir=$(pwd -P) || return
 
     cleanup_extract_dir()
     {
@@ -216,7 +238,10 @@ strava_oauth_appimage_status()
         return 1
         ;;
     esac
-    strava_oauth_build_status "$app_root/AppRun"
+    APPDIR="$app_root" \
+        APPIMAGE="$image_path" \
+        OWD="$original_working_dir" \
+        strava_oauth_build_status "$app_root/AppRun" true
 )
 
 require_strava_oauth_appimage()
@@ -229,6 +254,640 @@ require_strava_oauth_appimage()
         echo "$status" >&2
         echo "Refusing to publish an AppImage without configured" \
             "Strava OAuth credentials." >&2
+        return 1
+    fi
+    echo "$status"
+}
+
+file_matches_sha256()
+{
+    local file=$1
+    local expected=$2
+    local actual
+
+    actual=$(sha256sum -- "$file" 2>/dev/null |
+        awk '{ print $1 }') || return
+    [ "$actual" = "$expected" ]
+}
+
+libsecret_copyright_is_valid()
+{
+    local copyright=$1
+
+    grep -Fqx -- "Upstream-Name: libsecret" "$copyright" &&
+        grep -Eq '^Copyright:[[:space:]]*[^[:space:]]' "$copyright" &&
+        grep -Eq '^License: LGPL-2\.1\+' "$copyright" &&
+        grep -Fq -- "GNU Lesser General Public" "$copyright" &&
+        grep -Fq -- \
+            "License as published by the Free Software Foundation" "$copyright"
+}
+
+linux_keychain_payload_library_is_valid()
+{
+    local app_root=$1
+    local library=$2
+    local resolved
+
+    if [ -L "$library" ] ||
+       [ ! -f "$library" ] || [ ! -r "$library" ]; then
+        return 1
+    fi
+    resolved=$(readlink -f -- "$library") || return
+    case "$resolved" in
+    "$app_root"/lib/*) [ "$resolved" = "$library" ] ;;
+    *) return 1 ;;
+    esac
+}
+
+linux_system_library_path_is_valid()
+{
+    local library=$1
+    local resolved
+
+    case "$library" in
+    /lib/*|/lib64/*|/usr/lib/*|/usr/lib64/*) ;;
+    *) return 1 ;;
+    esac
+    resolved=$(readlink -f -- "$library") || return
+    case "$resolved" in
+    /lib/*|/lib64/*|/usr/lib/*|/usr/lib64/*)
+        [ -f "$resolved" ] && [ -r "$resolved" ]
+        ;;
+    *) return 1 ;;
+    esac
+}
+
+linux_keychain_runtime_status()
+{
+    local appdir=$1
+    local app_root
+    app_root=$(cd -- "$appdir" && pwd -P) || {
+        echo "Linux keychain AppDir is missing." >&2
+        return 1
+    }
+    local library="$app_root/lib/libsecret-1.so.0"
+    local license_dir="$app_root/usr/share/doc/GoldenCheetah/licenses"
+    local libsecret_copyright="$license_dir/libsecret-copyright"
+    local qtkeychain_license="$license_dir/QtKeychain-COPYING"
+    local libsecret_license="$license_dir/LGPL-2.1"
+    local dependencies="
+libglib-2.0.so.0
+libgio-2.0.so.0
+libgobject-2.0.so.0
+libgcrypt.so.20
+libgpg-error.so.0"
+
+    if [ -L "$library" ] ||
+       [ ! -f "$library" ] || [ ! -r "$library" ]; then
+        echo "Bundled libsecret runtime is missing." >&2
+        return 1
+    fi
+    local payload resolved_payload
+    for payload in \
+        "$library" \
+        "$libsecret_copyright" \
+        "$qtkeychain_license" \
+        "$libsecret_license"; do
+        if [ -L "$payload" ] || [ ! -f "$payload" ]; then
+            echo "Linux keychain payload contains a missing or linked file." >&2
+            return 1
+        fi
+        resolved_payload=$(readlink -f -- "$payload") || return
+        case "$resolved_payload" in
+        "$app_root"/*) ;;
+        *)
+            echo "Linux keychain payload resolves outside its AppDir." >&2
+            return 1
+            ;;
+        esac
+    done
+    local dependency
+    for dependency in $dependencies; do
+        payload="$app_root/lib/$dependency"
+        if [ -L "$payload" ] ||
+           [ ! -f "$payload" ] || [ ! -r "$payload" ]; then
+            echo "Bundled libsecret dependency is missing." >&2
+            return 1
+        fi
+        resolved_payload=$(readlink -f -- "$payload") || return
+        case "$resolved_payload" in
+        "$app_root"/lib/*) ;;
+        *)
+            echo "Bundled libsecret dependency escapes the AppDir." >&2
+            return 1
+            ;;
+        esac
+    done
+
+    local elf_magic
+    elf_magic=$(dd if="$library" bs=1 count=4 \
+        2>/dev/null | od -An -tx1 | tr -d ' \n')
+    if [ "$elf_magic" != "7f454c46" ]; then
+        echo "Bundled libsecret runtime is not an ELF library." >&2
+        return 1
+    fi
+    if ! LC_ALL=C readelf -d "$library" 2>/dev/null |
+        grep -Eq '\(SONAME\).*\[libsecret-1\.so\.0\]'; then
+        echo "Bundled libsecret runtime has an unexpected SONAME." >&2
+        return 1
+    fi
+    if ! LC_ALL=C readelf -d "$library" 2>/dev/null |
+        grep -Eq '\((RPATH|RUNPATH)\).*\[\$ORIGIN\]'; then
+        echo "Bundled libsecret runtime has no local dependency path." >&2
+        return 1
+    fi
+    local dynamic_symbols required_symbol
+    dynamic_symbols=$(LC_ALL=C readelf --wide --dyn-syms \
+        "$library" 2>/dev/null) || {
+        echo "Cannot inspect bundled libsecret symbols." >&2
+        return 1
+    }
+    for required_symbol in \
+        secret_password_lookup \
+        secret_password_lookup_finish \
+        secret_password_store \
+        secret_password_store_finish \
+        secret_password_clear \
+        secret_password_clear_finish \
+        secret_password_free \
+        secret_error_get_quark; do
+        if ! printf '%s\n' "$dynamic_symbols" |
+            awk -v symbol="$required_symbol" '
+                $4 == "FUNC" && $5 == "GLOBAL" &&
+                $7 != "UND" && $8 == symbol { found = 1 }
+                END { exit !found }
+            '; then
+            echo "Bundled libsecret runtime is missing a required symbol." >&2
+            return 1
+        fi
+    done
+    local ldd_output expected_dependency
+    ldd_output=$(env -u LD_LIBRARY_PATH -u LD_PRELOAD \
+        LC_ALL=C ldd "$library" 2>/dev/null) || {
+        echo "Cannot resolve bundled libsecret dependencies." >&2
+        return 1
+    }
+    for dependency in $dependencies; do
+        expected_dependency="$dependency => $app_root/lib/$dependency "
+        if ! printf '%s\n' "$ldd_output" |
+            grep -Fq -- "$expected_dependency"; then
+            echo "A libsecret dependency resolves outside the AppDir." >&2
+            return 1
+        fi
+    done
+    local dependency_arrow dependency_path dependency_tail
+    while read -r dependency dependency_arrow dependency_path \
+        dependency_tail; do
+        if [ -z "$dependency" ]; then
+            continue
+        fi
+        if [ "$dependency_arrow" = "=>" ]; then
+            if [ "$dependency_path" = "not" ]; then
+                echo "A bundled libsecret dependency is unresolved." >&2
+                return 1
+            fi
+            if linux_keychain_payload_library_is_valid \
+                "$app_root" "$dependency_path"; then
+                continue
+            fi
+            case "$dependency" in
+            libc.so.6|libdl.so.2|libgcc_s.so.1|libm.so.6|\
+            libpthread.so.0|libresolv.so.2|librt.so.1|libz.so.1)
+                if linux_system_library_path_is_valid \
+                    "$dependency_path"; then
+                    continue
+                fi
+                ;;
+            esac
+            echo "An unexpected dependency resolves outside the AppDir." >&2
+            return 1
+        fi
+        case "$dependency" in
+        linux-vdso.so.1|linux-gate.so.1) continue ;;
+        /*)
+            if linux_keychain_payload_library_is_valid \
+                "$app_root" "$dependency"; then
+                continue
+            fi
+            dependency_path=${dependency##*/}
+            case "$dependency_path" in
+            ld-linux*.so.*)
+                if linux_system_library_path_is_valid "$dependency"; then
+                    continue
+                fi
+                ;;
+            esac
+            ;;
+        esac
+        echo "An unrecognized libsecret dependency was reported." >&2
+        return 1
+    done <<<"$ldd_output"
+    if ! libsecret_copyright_is_valid \
+        "$libsecret_copyright"; then
+        echo "Bundled libsecret copyright is invalid." >&2
+        return 1
+    fi
+    if ! file_matches_sha256 \
+        "$qtkeychain_license" "$QTKEYCHAIN_LICENSE_SHA256"; then
+        echo "Bundled QtKeychain license is invalid." >&2
+        return 1
+    fi
+    if ! file_matches_sha256 \
+        "$libsecret_license" "$LGPL21_LICENSE_SHA256"; then
+        echo "Bundled LGPL-2.1 license is invalid." >&2
+        return 1
+    fi
+    echo "Linux keychain runtime: bundled"
+}
+
+prepare_contained_appdir_directory()
+(
+    local appdir=$1
+    local relative=$2
+
+    if [ -L "$appdir" ] || [ ! -d "$appdir" ]; then
+        echo "Linux keychain AppDir must be a regular directory." >&2
+        return 1
+    fi
+    case "$relative" in
+    ""|/*|..|../*|*/..|*/../*)
+        echo "Invalid Linux keychain AppDir directory path." >&2
+        return 1
+        ;;
+    esac
+
+    local app_root current component resolved
+    app_root=$(cd -- "$appdir" && pwd -P) || return
+    current=$app_root
+    local IFS=/
+    for component in $relative; do
+        [ -n "$component" ] || continue
+        current="$current/$component"
+        if [ -L "$current" ]; then
+            echo "Linux keychain AppDir directory is a symlink." >&2
+            return 1
+        fi
+        if [ -e "$current" ]; then
+            if [ ! -d "$current" ]; then
+                echo "Linux keychain AppDir path is not a directory." >&2
+                return 1
+            fi
+        elif ! mkdir -- "$current"; then
+            return 1
+        fi
+    done
+    resolved=$(cd -- "$current" && pwd -P) || return
+    if [ "$resolved" != "$app_root/$relative" ]; then
+        echo "Linux keychain AppDir directory escapes its root." >&2
+        return 1
+    fi
+    printf '%s\n' "$resolved"
+)
+
+install_regular_keychain_payload()
+{
+    local source=$1
+    local destination=$2
+
+    if [ -L "$destination" ] ||
+       { [ -e "$destination" ] && [ ! -f "$destination" ]; }; then
+        echo "Linux keychain payload destination is not a regular file." >&2
+        return 1
+    fi
+    install -m 0644 "$source" "$destination"
+}
+
+install_linux_keychain_runtime()
+{
+    local appdir=$1
+    local qtkeychain_license=$2
+    local libsecret_copyright=${LIBSECRET_COPYRIGHT_FILE:-}
+    local libsecret_license=${LIBSECRET_LICENSE_FILE:-}
+    local libsecret_libdir library resolved_library
+    local gpg_error_libdir gpg_error_library resolved_gpg_error
+    local lib_dir libgcrypt license_dir
+
+    if [ -z "$libsecret_copyright" ]; then
+        libsecret_copyright=/usr/share/doc/libsecret-1-0/copyright
+    fi
+    if [ -z "$libsecret_license" ]; then
+        libsecret_license=/usr/share/common-licenses/LGPL-2.1
+    fi
+    libsecret_libdir=$(pkg-config --variable=libdir libsecret-1) || {
+        echo "Cannot resolve the libsecret runtime directory." >&2
+        return 1
+    }
+    library="$libsecret_libdir/libsecret-1.so.0"
+    resolved_library=$(readlink -f -- "$library") || {
+        echo "Cannot resolve the libsecret runtime: $library" >&2
+        return 1
+    }
+    if [ ! -f "$resolved_library" ] || [ ! -r "$resolved_library" ]; then
+        echo "libsecret runtime not found: $resolved_library" >&2
+        return 1
+    fi
+    gpg_error_libdir=$(pkg-config --variable=libdir gpg-error) || {
+        echo "Cannot resolve the libgpg-error runtime directory." >&2
+        return 1
+    }
+    gpg_error_library="$gpg_error_libdir/libgpg-error.so.0"
+    resolved_gpg_error=$(readlink -f -- "$gpg_error_library") || {
+        echo "Cannot resolve the libgpg-error runtime:" \
+            "$gpg_error_library" >&2
+        return 1
+    }
+    if [ ! -f "$resolved_gpg_error" ] ||
+       [ ! -r "$resolved_gpg_error" ]; then
+        echo "libgpg-error runtime not found: $resolved_gpg_error" >&2
+        return 1
+    fi
+    if ! libsecret_copyright_is_valid \
+        "$libsecret_copyright"; then
+        echo "libsecret copyright file is invalid: $libsecret_copyright" >&2
+        return 1
+    fi
+    if ! file_matches_sha256 \
+        "$qtkeychain_license" "$QTKEYCHAIN_LICENSE_SHA256"; then
+        echo "QtKeychain license is invalid: $qtkeychain_license" >&2
+        return 1
+    fi
+    if ! file_matches_sha256 \
+        "$libsecret_license" "$LGPL21_LICENSE_SHA256"; then
+        echo "LGPL-2.1 license is invalid: $libsecret_license" >&2
+        return 1
+    fi
+
+    lib_dir=$(prepare_contained_appdir_directory \
+        "$appdir" lib) || return
+    license_dir=$(prepare_contained_appdir_directory \
+        "$appdir" usr/share/doc/GoldenCheetah/licenses) || return
+    libgcrypt="$lib_dir/libgcrypt.so.20"
+    if [ -L "$libgcrypt" ] ||
+       [ ! -f "$libgcrypt" ] || [ ! -r "$libgcrypt" ]; then
+        echo "Bundled libgcrypt runtime is missing." >&2
+        return 1
+    fi
+
+    install_regular_keychain_payload \
+        "$resolved_library" "$lib_dir/libsecret-1.so.0" || return
+    install_regular_keychain_payload \
+        "$resolved_gpg_error" "$lib_dir/libgpg-error.so.0" || return
+    patchelf --set-rpath '$ORIGIN' \
+        "$lib_dir/libsecret-1.so.0"
+    patchelf --set-rpath '$ORIGIN' "$libgcrypt"
+    install_regular_keychain_payload \
+        "$libsecret_copyright" \
+        "$license_dir/libsecret-copyright" || return
+    install_regular_keychain_payload \
+        "$qtkeychain_license" \
+        "$license_dir/QtKeychain-COPYING" || return
+    install_regular_keychain_payload \
+        "$libsecret_license" \
+        "$license_dir/LGPL-2.1" || return
+    linux_keychain_runtime_status "$appdir"
+}
+
+create_linux_keychain_deploy_probe()
+{
+    local executable=$1
+    local directory=$2
+    local probe="$directory/.goldencheetah-libsecret-deploy-probe"
+
+    if [ ! -f "$executable" ] || [ ! -r "$executable" ] ||
+       [ ! -x "$executable" ]; then
+        echo "Cannot create a libsecret deploy probe from $executable" >&2
+        return 1
+    fi
+    if [ ! -d "$directory" ] || [ -e "$probe" ]; then
+        echo "Cannot create the libsecret deploy probe in $directory" >&2
+        return 1
+    fi
+    if ! install -m 0755 "$executable" "$probe"; then
+        return 1
+    fi
+    if ! patchelf --add-needed libsecret-1.so.0 "$probe"; then
+        rm -f -- "$probe"
+        return 1
+    fi
+    if ! LC_ALL=C readelf -d "$probe" 2>/dev/null |
+        grep -Eq '\(NEEDED\).*\[libsecret-1\.so\.0\]'; then
+        rm -f -- "$probe"
+        echo "The libsecret deploy probe has no DT_NEEDED entry." >&2
+        return 1
+    fi
+    printf '%s\n' "$probe"
+}
+
+remove_linux_keychain_deploy_probe()
+{
+    local probe=$1
+    case "$probe" in
+    */.goldencheetah-libsecret-deploy-probe) ;;
+    *)
+        echo "Refusing to remove an unexpected deploy probe path." >&2
+        return 1
+        ;;
+    esac
+    rm -f -- "$probe"
+}
+
+run_linuxdeployqt_with_keychain_probe()
+(
+    local executable=$1
+    local appdir=$2
+    shift 2
+    local probe command_status
+
+    probe=$(create_linux_keychain_deploy_probe \
+        "$executable" "$appdir") || return
+    cleanup_linux_keychain_deploy_probe()
+    {
+        if [ -n "$probe" ]; then
+            remove_linux_keychain_deploy_probe "$probe"
+        fi
+    }
+    trap cleanup_linux_keychain_deploy_probe EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    if run_packaging_appimage "$@" "-executable=$probe"; then
+        command_status=0
+    else
+        command_status=$?
+    fi
+    if ! remove_linux_keychain_deploy_probe "$probe"; then
+        return 1
+    fi
+    probe=
+    return "$command_status"
+)
+
+linux_keychain_entrypoint_status()
+(
+    local executable=$1
+    local status_home=
+    local LD_LIBRARY_PATH= LD_PRELOAD=
+
+    cleanup_keychain_status_home()
+    {
+        if [ -n "$status_home" ]; then
+            rm -rf -- "$status_home"
+            status_home=
+        fi
+    }
+    trap cleanup_keychain_status_home EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+
+    if [ ! -f "$executable" ] || [ ! -r "$executable" ] ||
+       [ ! -x "$executable" ]; then
+        echo "Cannot inspect the Linux keychain entrypoint." >&2
+        return 1
+    fi
+    local elf_magic script_magic
+    elf_magic=$(dd if="$executable" bs=1 count=4 \
+        2>/dev/null | od -An -tx1 | tr -d ' \n')
+    if [ "$elf_magic" != "7f454c46" ]; then
+        script_magic=$(dd if="$executable" bs=1 count=2 \
+            2>/dev/null | od -An -tx1 | tr -d ' \n')
+        if [ "$script_magic" != "2321" ]; then
+            echo "Linux keychain status requires an ELF or script entrypoint." >&2
+            return 1
+        fi
+    fi
+
+    local report captured status_file command_status expected_report
+    status_home=$(mktemp -d) || return
+    mkdir -p "$status_home/.config" || return
+    status_file="$status_home/keychain-status"
+    if ! (
+        umask 077
+        : >"$status_file"
+    ); then
+        return 1
+    fi
+    if (
+        ulimit -c 0
+        ulimit -f 8
+        HOME="$status_home" \
+            XDG_CONFIG_HOME="$status_home/.config" \
+            QTKEYCHAIN_BACKEND=libsecret \
+            LC_ALL=C env -u LD_LIBRARY_PATH -u LD_PRELOAD \
+            timeout --signal=TERM --kill-after=2s 10s "$executable" \
+                --goldencheetah-linux-keychain-status
+    ) >"$status_file" 2>/dev/null; then
+        command_status=0
+    else
+        command_status=$?
+    fi
+    captured=$(
+        cat "$status_file" 2>/dev/null
+        printf x
+    )
+    report=${captured%x}
+    if [ "$command_status" -ne 0 ]; then
+        echo "GoldenCheetah keychain-status command failed." >&2
+        return 1
+    fi
+    expected_report=$(
+        printf '%s\n' \
+            "goldencheetah_linux_keychain_status=1" \
+            "application=GoldenCheetah" \
+            "libsecret_compile_support=enabled" \
+            "libsecret_runtime=available"
+        printf x
+    )
+    expected_report=${expected_report%x}
+    if [ "$report" != "$expected_report" ]; then
+        echo "GoldenCheetah returned an unavailable keychain status." >&2
+        return 1
+    fi
+    echo "Linux keychain runtime: available"
+)
+
+linux_keychain_appimage_status()
+(
+    local image=$1
+    local extract_dir=
+    local original_working_dir
+    local APPDIR= APPIMAGE= OWD=
+    local LD_LIBRARY_PATH= LD_PRELOAD=
+
+    original_working_dir=$(pwd -P) || return
+
+    cleanup_keychain_extract_dir()
+    {
+        if [ -n "$extract_dir" ]; then
+            rm -rf -- "$extract_dir"
+            extract_dir=
+        fi
+    }
+    trap cleanup_keychain_extract_dir EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+
+    if [ ! -f "$image" ] || [ ! -r "$image" ] ||
+       [ ! -x "$image" ]; then
+        echo "Cannot inspect the Linux keychain runtime in $image" >&2
+        return 1
+    fi
+    local appimage_magic
+    appimage_magic=$(dd if="$image" bs=1 skip=8 count=3 \
+        2>/dev/null | od -An -tx1 | tr -d ' \n')
+    if [ "$appimage_magic" != "414902" ]; then
+        echo "Linux keychain package status requires a Type 2 AppImage." >&2
+        return 1
+    fi
+
+    local image_dir image_name image_path app_root entrypoint status
+    image_dir=$(cd -- "$(dirname -- "$image")" && pwd) || return
+    image_name=$(basename -- "$image") || return
+    image_path="$image_dir/$image_name"
+    extract_dir=$(mktemp -d) || return
+    app_root="$extract_dir/squashfs-root"
+
+    if (
+        cd "$extract_dir" || exit
+        run_packaging_appimage \
+            "$image_path" --appimage-extract \
+            >/dev/null 2>&1 || exit
+    ); then
+        status=0
+    else
+        status=$?
+    fi
+    if [ "$status" -ne 0 ]; then
+        return "$status"
+    fi
+    linux_keychain_runtime_status "$app_root" >/dev/null || return
+    entrypoint=$(readlink -f "$app_root/AppRun") || return
+    case "$entrypoint" in
+    "$app_root"/*) ;;
+    *)
+        echo "AppImage AppRun resolves outside its payload." >&2
+        return 1
+        ;;
+    esac
+    APPDIR="$app_root" \
+        APPIMAGE="$image_path" \
+        OWD="$original_working_dir" \
+        linux_keychain_entrypoint_status "$app_root/AppRun" \
+            >/dev/null || return
+    echo "Linux keychain runtime: bundled"
+)
+
+require_linux_keychain_appimage()
+{
+    local image=$1
+    local status
+
+    status=$(linux_keychain_appimage_status "$image") || return
+    if [ "$status" != "Linux keychain runtime: bundled" ]; then
+        echo "$status" >&2
+        echo "Refusing to publish an AppImage without the Linux" \
+            "keychain runtime and licenses." >&2
         return 1
     fi
     echo "$status"

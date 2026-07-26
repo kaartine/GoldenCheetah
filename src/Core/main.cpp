@@ -29,6 +29,7 @@
 #include "PowerProfile.h"
 #include "GcCrashDialog.h" // for versionHTML
 #include "OverviewItems.h"
+#include "CredentialStoreQtKeychain.h"
 #include "Secrets.h"
 #include "StravaOAuthPolicy.h"
 
@@ -242,17 +243,33 @@ main(int argc, char *argv[])
 #endif
 
     for (int index = 1; index < argc; ++index) {
-        if (QByteArray(argv[index])
-                != QByteArrayLiteral(
-                    "--goldencheetah-build-status")) {
-            continue;
-        }
+        const QByteArray argument(argv[index]);
+        const bool buildStatus =
+            argument == QByteArrayLiteral(
+                "--goldencheetah-build-status");
+        const bool keychainStatus =
+            argument == QByteArrayLiteral(
+                "--goldencheetah-linux-keychain-status");
+        if (!buildStatus && !keychainStatus) continue;
         if (argc != 2) return EXIT_FAILURE;
 
-        const QByteArray report =
-            StravaOAuthPolicy::buildStatusReport(
+        QByteArray report;
+        if (buildStatus) {
+            report = StravaOAuthPolicy::buildStatusReport(
                 QStringLiteral(GC_STRAVA_CLIENT_ID),
                 QStringLiteral(GC_STRAVA_CLIENT_SECRET));
+        } else {
+            QCoreApplication statusApplication(argc, argv);
+            CredentialStoreQtKeychainDetail::
+                configureBundledLinuxRuntime(
+                    statusApplication.applicationDirPath());
+            report = CredentialStoreQtKeychainDetail::
+                linuxRuntimeStatusReport(
+                    CredentialStoreQtKeychainDetail::
+                        linuxLibSecretCompileSupport(),
+                    CredentialStoreQtKeychainDetail::
+                        linuxLibSecretRuntimeAvailable());
+        }
         const size_t written = fwrite(
             report.constData(),
             1,
@@ -447,6 +464,8 @@ main(int argc, char *argv[])
 
     // create the application -- only ever ONE regardless of restarts
     application = new QApplication(argc, argv);
+    CredentialStoreQtKeychainDetail::configureBundledLinuxRuntime(
+        application->applicationDirPath());
     if (!LocalFileStoreProcess::initializeReaper()) {
         qWarning()
             << "Local Store process isolation is unavailable";

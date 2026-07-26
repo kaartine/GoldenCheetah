@@ -701,15 +701,15 @@ GC_TEST_APPIMAGE_ENTRY="$TEMP_DIR/configured-entry"
 GC_TEST_APPIMAGE_ENTRY_NAME="configured-entry"
 run_packaging_appimage()
 {
-    [ -z "${LD_LIBRARY_PATH+x}" ] ||
+    [ -z "${LD_LIBRARY_PATH:-}" ] ||
         fail "AppImage extraction inherited LD_LIBRARY_PATH"
-    [ -z "${LD_PRELOAD+x}" ] ||
+    [ -z "${LD_PRELOAD:-}" ] ||
         fail "AppImage extraction inherited LD_PRELOAD"
-    [ -z "${APPDIR+x}" ] ||
+    [ -z "${APPDIR:-}" ] ||
         fail "AppImage extraction inherited APPDIR"
-    [ -z "${APPIMAGE+x}" ] ||
+    [ -z "${APPIMAGE:-}" ] ||
         fail "AppImage extraction inherited APPIMAGE"
-    [ -z "${OWD+x}" ] ||
+    [ -z "${OWD:-}" ] ||
         fail "AppImage extraction inherited OWD"
     [ "$2" = "--appimage-extract" ] ||
         fail "AppImage status did not request extraction"

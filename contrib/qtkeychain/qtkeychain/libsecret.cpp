@@ -13,6 +13,7 @@
 
 #include "libsecret_p.h"
 
+#include <QFile>
 #include <QLibrary>
 
 #if defined(HAVE_LIBSECRET)
@@ -291,7 +292,17 @@ bool LibSecretKeyring::deletePassword(const QString &key, const QString &service
 #endif
 }
 
-LibSecretKeyring::LibSecretKeyring() : QLibrary(QLatin1String("secret-1"), 0)
+static QString libSecretLibraryName()
+{
+    const QByteArray configured =
+        qgetenv("GC_QTKEYCHAIN_LIBSECRET_PATH");
+    return configured.isEmpty()
+        ? QStringLiteral("secret-1")
+        : QFile::decodeName(configured);
+}
+
+LibSecretKeyring::LibSecretKeyring()
+    : QLibrary(libSecretLibraryName(), 0)
 {
 #ifdef HAVE_LIBSECRET
     if (load()) {

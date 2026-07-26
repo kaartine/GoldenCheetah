@@ -44,10 +44,19 @@ download_file "$LINUXDEPLOYQT_URL" "$LINUXDEPLOYQT_FILE"
 chmod a+x "$LINUXDEPLOYQT_FILE"
 
 ### Deploy to appdir
-run_packaging_appimage "./$LINUXDEPLOYQT_FILE" appdir/GoldenCheetah -verbose=2 -bundle-non-qt-libs -exclude-libs=libqsqlmysql,libqsqlpsql,libqsqlmimer,libqsqlodbc,libnss3,libnssutil3,libxcb-dri3.so.0 -unsupported-allow-new-glibc
+run_linuxdeployqt_with_keychain_probe \
+    ./GoldenCheetah appdir \
+    "./$LINUXDEPLOYQT_FILE" appdir/GoldenCheetah \
+    -verbose=2 -bundle-non-qt-libs \
+    -exclude-libs=libqsqlmysql,libqsqlpsql,libqsqlmimer,libqsqlodbc,libnss3,libnssutil3,libxcb-dri3.so.0 \
+    -unsupported-allow-new-glibc
 
 # Add Python and core modules
 install_embedded_python "Python/requirements.txt" "appdir"
+
+# Add the dynamically loaded Linux credential-vault runtime and licenses
+install_linux_keychain_runtime \
+    "appdir" "../contrib/qtkeychain/COPYING"
 
 # Fix RPATH on QtWebEngineProcess and copy missing resources
 patchelf --set-rpath '$ORIGIN/../lib' appdir/libexec/QtWebEngineProcess
@@ -80,5 +89,8 @@ mv GoldenCheetah*.AppImage ../GoldenCheetah_v3.8_x64.AppImage
 STRAVA_OAUTH_STATUS=$(require_strava_oauth_appimage \
     ../GoldenCheetah_v3.8_x64.AppImage)
 echo "$STRAVA_OAUTH_STATUS"
+KEYCHAIN_RUNTIME_STATUS=$(require_linux_keychain_appimage \
+    ../GoldenCheetah_v3.8_x64.AppImage)
+echo "$KEYCHAIN_RUNTIME_STATUS"
 
 exit

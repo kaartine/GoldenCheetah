@@ -47,7 +47,12 @@ download_file "$LINUXDEPLOYQT_URL" "$LINUXDEPLOYQT_FILE"
 chmod a+x "$LINUXDEPLOYQT_FILE"
 
 ### Deploy to appdir
-run_packaging_appimage "./$LINUXDEPLOYQT_FILE" appdir/GoldenCheetah -verbose=2 -bundle-non-qt-libs -exclude-libs=libqsqlmysql,libqsqlpsql,libqsqlmimer,libqsqlodbc,libnss3,libnssutil3,libxcb-dri3.so.0 -unsupported-allow-new-glibc
+run_linuxdeployqt_with_keychain_probe \
+    ./GoldenCheetah appdir \
+    "./$LINUXDEPLOYQT_FILE" appdir/GoldenCheetah \
+    -verbose=2 -bundle-non-qt-libs \
+    -exclude-libs=libqsqlmysql,libqsqlpsql,libqsqlmimer,libqsqlodbc,libnss3,libnssutil3,libxcb-dri3.so.0 \
+    -unsupported-allow-new-glibc
 
 # linuxdeployqt only detects the desktop xcb backend. Bundle the offscreen
 # backend explicitly so the packaged application can be smoke-tested headless.
@@ -60,6 +65,10 @@ cp "$OFFSCREEN_PLUGIN" appdir/plugins/platforms/
 
 # Add Python and core modules
 install_embedded_python "Python/requirements.txt" "appdir"
+
+# Add the dynamically loaded Linux credential-vault runtime and licenses
+install_linux_keychain_runtime \
+    "appdir" "../contrib/qtkeychain/COPYING"
 
 # Fix RPATH on QtWebEngineProcess and copy missing resources
 patchelf --set-rpath '$ORIGIN/../lib' appdir/libexec/QtWebEngineProcess
@@ -85,6 +94,8 @@ mv -f GoldenCheetah-x86_64.AppImage $FINAL_NAME
 ls -l $FINAL_NAME
 STRAVA_OAUTH_STATUS=$(require_strava_oauth_appimage "./$FINAL_NAME")
 echo "$STRAVA_OAUTH_STATUS"
+KEYCHAIN_RUNTIME_STATUS=$(require_linux_keychain_appimage "./$FINAL_NAME")
+echo "$KEYCHAIN_RUNTIME_STATUS"
 
 ### Verify the packaged GUI can initialize without an X11 display
 SMOKE_HOME="$(mktemp -d)"

@@ -3195,7 +3195,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### BUILD-012: Primary AppImage packaging omits the libsecret runtime
 
-- Status: IN PROGRESS
+- Status: FIXED
 - Code: `src/Resources/linux/MakeAppImageQt6.sh`,
   `src/Resources/linux/AppImagePackagingSupport.sh`, and
   `.devcontainer/package-appimage.sh`,
@@ -3257,12 +3257,14 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   validates the ELF SONAME and all eight defined `GLOBAL FUNC` symbols
   resolved by QtKeychain, and requires GLib, GIO, GObject, libgcrypt, and
   libgpg-error to resolve from the payload. Every other dependency must either
-  resolve from the payload or belong to a narrow Linux ABI allowlist; unresolved
-  and unexpected host libraries fail the release. The installer rejects linked
+  resolve as a canonical regular payload file or belong to a narrow Linux ABI
+  allowlist; unresolved, absolute outside, linked outside, unrecognized, and
+  unexpected host libraries fail the release. The installer rejects linked
   destination components before writing, adds `$ORIGIN` to libgcrypt, and
   checks reviewed license digests plus copyright markers and notices. The
   completed-image gate resolves the real AppRun entrypoint, accepts ELF and
-  shebang wrappers, clears loader overrides, and executes an exact bounded
+  shebang wrappers, supplies `APPDIR`, `APPIMAGE`, and `OWD`, clears loader and
+  stale AppImage overrides before extraction, and executes an exact bounded
   status protocol. GoldenCheetah reports compile-time `HAVE_LIBSECRET`
   separately from the specific libsecret backend's runtime availability. It
   validates the bundled regular file and passes its canonical absolute path to
@@ -3281,7 +3283,10 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   libgpg-error from its own `lib/` directory. Most importantly, its real AppRun
   still reports `libsecret_runtime=available` when both host libsecret paths,
   the host libgpg-error SONAME, and its versioned target are replaced by empty
-  bind mounts, reproducing the earlier RED setup without host fallback.
+  bind mounts, reproducing the earlier RED setup without host fallback. The
+  final boundary fixture, primary package gates, and complete 2,697-case matrix
+  all pass after canonical dependency parsing and AppImage environment
+  emulation.
 
 ### SEC-013: A desktop AppImage cannot keep its Strava client secret private
 
