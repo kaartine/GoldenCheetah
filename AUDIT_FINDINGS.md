@@ -1847,8 +1847,10 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-019: Failed plaintext scrubbing is cached as successful
 
-- Status: OPEN
-- Code: `src/Core/CredentialSettings.cpp`
+- Status: FIXED
+- Code: `src/Core/CredentialSettings.cpp`,
+  `src/Core/CredentialSettings.h`, and
+  `unittests/Core/credentialSettings/testCredentialSettings.cpp`
 - Impact: `scrubPlaintext()` ignores `QSettings::sync()` status. After a failed
   removal sync, the in-memory key is absent while the secret can remain on
   disk; callers then cache the vault result as persisted and may never retry
@@ -1859,6 +1861,48 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Fix direction: Return and propagate checked scrub durability. Do not publish
   a persisted cache state until deletion has synchronized, and retain an
   explicit retry state whenever secure cleanup is incomplete.
+- Test-first evidence: Fault-injecting settings backends left plaintext,
+  pending-removal markers, and sticky caller status durable after reported
+  failures. The RED cases reproduced missed same-process retries, restart
+  resurrection, stale positive and negative caches, cross-instance and
+  cross-process replacements, grouped settings, path aliases, and concurrent
+  credential operations.
+- Resolution: Credential metadata now uses fresh exact `QSettings` instances,
+  disables fallbacks, requires atomic sync, checks status and postconditions,
+  and preserves the caller's active group. Delete intent is committed before
+  plaintext or vault removal, and incomplete cleanup remains retryable.
+  Nonblocking process-local admission and a per-vault `QLockFile` prevent
+  nested-event-loop deadlocks and overlapping processes. Each cache entry is
+  bound to a random, atomically committed revision stored in owner-only
+  persistent application data; every vault mutation advances that revision
+  first, and missing or corrupt revisions get a new baseline before cache
+  trust. Scope locks use canonical filesystem identities and normalized
+  Windows registry identities.
+- Verification: All 150 focused credential cases pass normally, under
+  ThreadSanitizer, and under ASan/UBSan/LSan with leak detection. Three
+  independent final reviews reported no blocker. The complete out-of-source
+  matrix runs 2,864 cases across 81 QtTest programs: 2,862 pass, none fail,
+  and the two source-contract checks tracked by `TEST-002` skip. The
+  production application links as a 536,296,904-byte ELF and remains alive
+  through an eight-second offscreen smoke test with an empty temporary home.
+
+### SEC-020: A second plaintext source can reverse credential deletion
+
+- Status: OPEN
+- Code: `src/Core/CredentialSettings.cpp` and `src/Core/Settings.cpp`
+- Impact: A successful delete scrubs only the plaintext key supplied for that
+  operation. If another legacy or fallback settings source still contains the
+  same credential for the same vault scope, a later read can migrate that
+  duplicate back into the vault and reverse the user's explicit deletion.
+- Test: Store one vault credential and duplicate plaintext copies in two exact
+  settings sources, delete through one source, reconstruct all settings and
+  credential objects, then read through the other source. Require no vault
+  write, no returned credential, durable cleanup of every known copy, and a
+  later explicit checked replacement to succeed.
+- Fix direction: Persist a per-vault deletion tombstone that survives
+  successful backend removal and takes precedence over every plaintext
+  migration source. Clear it only after a checked replacement has committed,
+  and enumerate or journal all known legacy sources so cleanup is resumable.
 
 ## Medium
 
@@ -3360,8 +3404,10 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-011: Failed vault deletion is not retried in the same process
 
-- Status: OPEN
-- Code: `src/Core/CredentialSettings.cpp`
+- Status: FIXED
+- Code: `src/Core/CredentialSettings.cpp`,
+  `src/Core/CredentialSettings.h`, and
+  `unittests/Core/credentialSettings/testCredentialSettings.cpp`
 - Impact: `removeChecked()` records a negative cache entry when vault deletion
   fails. A subsequent `value()` sees the durable pending-removal marker but
   returns through that cache entry before retrying the backend, so recovery is
@@ -3372,6 +3418,18 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Fix direction: Pending removal must take precedence over negative cache
   entries. Cache only a durable deletion result, or invalidate the entry before
   each retry while preserving memory-only replacement semantics.
+- Resolution: Reads inspect the exact durable pending-removal marker before
+  any cache entry. A failed removal leaves that marker intact, advances no
+  visible success state, and retries plaintext cleanup plus vault deletion on
+  the next read in the same process or after restart. Successful deletion
+  clears the marker only after the backend result is durable, while cache
+  revisions invalidate stale positive, negative, and memory-only entries
+  across instances and cooperating processes.
+- Verification: The same-process and restart deletion regressions, revision
+  failure cases for write/migration/removal, subprocess cache transitions, and
+  the complete 150-case credential suite pass in normal, TSAN, and strict
+  ASan/UBSan/LSan builds. The complete matrix passes 2,862 of 2,864 cases with
+  zero failures and the two `TEST-002` source-contract skips.
 
 ### THREAD-010: Strava grant coordination is process-local
 

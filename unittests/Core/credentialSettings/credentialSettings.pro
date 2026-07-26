@@ -46,9 +46,19 @@ INCLUDEPATH += ../../../src \
 QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
 QMAKE_LFLAGS += -Wl,--gc-sections
 
-sanitize:!msvc {
+sanitize:!tsan:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \
                       -fno-omit-frame-pointer \
                       -fno-sanitize-recover=all
     QMAKE_LFLAGS += -fsanitize=address,undefined
+}
+
+tsan:!msvc {
+    QMAKE_CXXFLAGS += -fsanitize=thread \
+                      -fno-omit-frame-pointer \
+                      -fno-pie \
+                      -O1 \
+                      -g
+    QMAKE_LFLAGS += -fsanitize=thread \
+                    -no-pie
 }

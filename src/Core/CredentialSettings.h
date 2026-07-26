@@ -1,6 +1,7 @@
 #ifndef _GC_CredentialSettings_h
 #define _GC_CredentialSettings_h 1
 
+#include <QByteArray>
 #include <QHash>
 #include <QMutex>
 #include <QString>
@@ -87,16 +88,28 @@ private:
         bool present = false;
         QString value;
         bool persisted = false;
+        QByteArray revision;
     };
 
     bool cached(const QString &key, CacheEntry *entry) const;
     void cache(const QString &key, const CacheEntry &entry);
+    void invalidateCache(const QString &key);
     static QString plaintextKey(const QString &credentialKey);
     static QString pendingRemovalKey(
         const QString &scopeId,
         const QString &credentialKey);
-    static void scrubPlaintext(QSettings *settings,
-                               const QString &key);
+    bool persistPendingRemoval(
+        QSettings *settings,
+        const QString &removalKey);
+    bool completePendingRemoval(
+        QSettings *settings,
+        const QString &vaultKey,
+        const QString &credentialKey,
+        const QString &plaintextKey,
+        const QString &removalKey,
+        const QString &revisionPath);
+    bool scrubPlaintext(QSettings *settings,
+                        const QString &key);
     static void reportStoreError(const QString &operation,
                                  const QString &credentialKey,
                                  const QString &error);
