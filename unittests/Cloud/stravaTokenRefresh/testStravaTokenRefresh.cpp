@@ -33,12 +33,16 @@ StravaTokenRefreshResult successfulResult(
     const QString &accessToken,
     const QString &refreshToken)
 {
-    return {true, accessToken, refreshToken, QString()};
+    return {
+        true, accessToken, refreshToken, QString(), QString()
+    };
 }
 
 StravaTokenRefreshResult failedResult(const QString &error)
 {
-    return {false, QString(), QString(), error};
+    return {
+        false, QString(), QString(), error, QString()
+    };
 }
 
 bool waitForEntered(OperationGate &gate,
@@ -694,6 +698,7 @@ invalidInputAndIncompleteSuccessDoNotPolluteCache()
                 true,
                 QString(),
                 uniqueValue(QStringLiteral("refresh-incomplete")),
+                QString(),
                 QString()};
         });
     QVERIFY(!missingAccess.isValid());
@@ -704,6 +709,7 @@ invalidInputAndIncompleteSuccessDoNotPolluteCache()
             return StravaTokenRefreshResult{
                 true,
                 uniqueValue(QStringLiteral("access-incomplete")),
+                QString(),
                 QString(),
                 QString()};
         });

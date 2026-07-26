@@ -22,8 +22,11 @@
 #include "Athlete.h"
 #include "Settings.h"
 #include "Secrets.h"
+#include "NetworkReplyWait.h"
 #include "StravaApiReplyPolicy.h"
+#include "StravaCredentialPublisher.h"
 #include "StravaOAuthPolicy.h"
+#include "StravaTokenRefresh.h"
 #include "mvjson.h"
 #include <QByteArray>
 #include <QHttpMultiPart>
@@ -31,6 +34,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QThread>
 
 #include <memory>
 
@@ -143,68 +147,145 @@ bool
 Strava::open(QStringList &errors)
 {
     printd("Strava::open\n");
-    const QString refreshToken =
+    const QString configuredRefreshToken =
         getSetting(GC_STRAVA_REFRESH_TOKEN, "").toString();
-    if (refreshToken.isEmpty()) {
+    if (configuredRefreshToken.isEmpty()) {
         errors << tr("No authorisation token configured.");
         return false;
     }
 
+    const QString accountKey =
+        property("_gcAthleteName").toString();
+    if (accountKey.trimmed().isEmpty()) {
+        errors << tr("The Strava account identity is unavailable.");
+        return false;
+    }
+
     printd("Get access token for this session.\n");
+    const auto interrupted = [] {
+        return QThread::currentThread()
+            ->isInterruptionRequested();
+    };
+    const StravaTokenRefreshResult refreshResult =
+        StravaTokenRefreshCoordinator::refresh(
+            accountKey,
+            configuredRefreshToken,
+            [this, interrupted](
+                    const QString &effectiveRefreshToken) {
+                StravaTokenRefreshResult result;
+                const StravaOAuthPolicy::TokenRequest tokenRequest =
+                    StravaOAuthPolicy::refreshTokenRequest(
+                        QStringLiteral(GC_STRAVA_CLIENT_ID),
+                        QStringLiteral(GC_STRAVA_CLIENT_SECRET),
+                        effectiveRefreshToken);
+                if (!tokenRequest.isValid()) {
+                    result.error = tokenRequest.error;
+                    return result;
+                }
 
-    const StravaOAuthPolicy::TokenRequest tokenRequest =
-        StravaOAuthPolicy::refreshTokenRequest(
-            QStringLiteral(GC_STRAVA_CLIENT_ID),
-            QStringLiteral(GC_STRAVA_CLIENT_SECRET),
-            refreshToken);
-    if (!tokenRequest.isValid()) {
-        errors << tokenRequest.error;
+                QNetworkRequest request(tokenRequest.endpoint);
+                request.setHeader(
+                    QNetworkRequest::ContentTypeHeader,
+                    QStringLiteral(
+                        "application/x-www-form-urlencoded"));
+                QNetworkReply *tokenReply =
+                    nam->post(request, tokenRequest.body);
+                if (!tokenReply) {
+                    result.error = tr(
+                        "The Strava token request could not be started.");
+                    return result;
+                }
+
+                const NetworkReplyWaitResult waitResult =
+                    waitForNetworkReply(
+                        tokenReply, 30000, interrupted);
+                if (waitResult
+                    == NetworkReplyWaitResult::Interrupted) {
+                    result.error =
+                        tr("Strava token refresh was cancelled.");
+                    tokenReply->deleteLater();
+                    return result;
+                }
+                if (waitResult
+                    == NetworkReplyWaitResult::TimedOut) {
+                    result.error =
+                        tr("Strava token refresh timed out.");
+                    tokenReply->deleteLater();
+                    return result;
+                }
+
+                const int statusCode = tokenReply->attribute(
+                    QNetworkRequest::HttpStatusCodeAttribute).toInt();
+                printd("HTTP response code: %d\n", statusCode);
+                const QByteArray payload = tokenReply->readAll();
+                if (tokenReply->error()
+                    != QNetworkReply::NoError) {
+                    printd(
+                        "Got error %s\n",
+                        tokenReply->errorString()
+                            .toStdString().c_str());
+                    result.error =
+                        StravaOAuthPolicy::tokenFailureMessage(
+                            statusCode,
+                            tokenReply->error(),
+                            tokenReply->errorString(),
+                            payload,
+                            {
+                                QStringLiteral(
+                                    GC_STRAVA_CLIENT_SECRET),
+                                effectiveRefreshToken
+                            });
+                    tokenReply->deleteLater();
+                    return result;
+                }
+
+                const StravaOAuthPolicy::TokenResponse response =
+                    StravaOAuthPolicy::parseTokenResponse(payload);
+                tokenReply->deleteLater();
+                if (!response.isValid()) {
+                    result.error = response.error;
+                    return result;
+                }
+                result.success = true;
+                result.accessToken = response.accessToken;
+                result.refreshToken = response.refreshToken;
+                return result;
+            },
+            interrupted);
+    if (!refreshResult.isValid()) {
+        errors << (refreshResult.error.isEmpty()
+            ? tr("Strava token refresh failed.")
+            : refreshResult.error);
         return false;
     }
 
-    QNetworkRequest request(tokenRequest.endpoint);
-    request.setHeader(
-        QNetworkRequest::ContentTypeHeader,
-        QStringLiteral("application/x-www-form-urlencoded"));
-
-    // make request
-    QNetworkReply* reply = nam->post(
-        request, tokenRequest.body);
-
-    // blocking request
-    QEventLoop loop;
-    connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-    loop.exec();
-
-    int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    printd("HTTP response code: %d\n", statusCode);
-    const QByteArray payload = reply->readAll();
-
-    // oops, no dice
-    if (reply->error() != 0) {
-        printd("Got error %s\n", reply->errorString().toStdString().c_str());
-        errors << StravaOAuthPolicy::tokenFailureMessage(
-            statusCode, reply->error(),
-            reply->errorString(), payload,
-            {QStringLiteral(GC_STRAVA_CLIENT_SECRET),
-             refreshToken});
+    const QString refreshedAt =
+        QDateTime::currentDateTime().toString(Qt::ISODateWithMs);
+    StravaCredentialPublisher::Request publication;
+    publication.accountKey = accountKey;
+    publication.expectedRefreshToken =
+        refreshResult.sourceRefreshToken;
+    publication.replacement = {
+        refreshResult.accessToken,
+        refreshResult.refreshToken
+    };
+    publication.refreshedAt = refreshedAt;
+    publication.mode =
+        StravaTokenPublication::PublicationMode::CompareAndSwap;
+    const StravaTokenPublication::PublicationResult published =
+        StravaCredentialPublisher::publish(
+            publication, 30000, interrupted);
+    if (!published.isSuccess()) {
+        errors << (published.error.isEmpty()
+            ? tr("Strava credentials could not be stored securely.")
+            : published.error);
         return false;
     }
 
-    const StravaOAuthPolicy::TokenResponse response =
-        StravaOAuthPolicy::parseTokenResponse(payload);
-    if (!response.isValid()) {
-        errors << response.error;
-        return false;
-    }
-
-    // update our settings
-    setSetting(GC_STRAVA_TOKEN, response.accessToken);
-    setSetting(GC_STRAVA_REFRESH_TOKEN, response.refreshToken);
-    setSetting(GC_STRAVA_LAST_REFRESH, QDateTime::currentDateTime());
-
-    // get the factory to save our settings permanently
-    CloudServiceFactory::instance().saveSettings(this, context);
+    setSetting(GC_STRAVA_TOKEN, refreshResult.accessToken);
+    setSetting(
+        GC_STRAVA_REFRESH_TOKEN, refreshResult.refreshToken);
+    setSetting(GC_STRAVA_LAST_REFRESH, refreshedAt);
     return true;
 }
 

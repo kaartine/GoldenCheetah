@@ -65,7 +65,9 @@ RefreshRegistry &registry()
 
 StravaTokenRefreshResult failure(const QString &error)
 {
-    return {false, QString(), QString(), error};
+    return {
+        false, QString(), QString(), error, QString()
+    };
 }
 
 StravaTokenRefreshResult cancelledResult()
@@ -96,6 +98,7 @@ StravaTokenRefreshResult normalized(
     if (!result.success) {
         result.accessToken.clear();
         result.refreshToken.clear();
+        result.sourceRefreshToken.clear();
         if (result.error.isEmpty()) {
             result.error =
                 QStringLiteral("Strava token refresh failed.");
@@ -298,6 +301,10 @@ StravaTokenRefreshCoordinator::refresh(
             || flight->generation != state->generation) {
             result = supersededResult();
         } else if (result.isValid()) {
+            if (result.sourceRefreshToken.isEmpty()) {
+                result.sourceRefreshToken =
+                    flight->effectiveToken;
+            }
             rememberToken(*state, flight->requestedToken);
             rememberToken(*state, flight->effectiveToken);
             rememberToken(*state, result.refreshToken);
@@ -322,10 +329,12 @@ bool StravaTokenRefreshCoordinator::installAuthorization(
     const QString &accountKey,
     const StravaTokenRefreshResult &authorization)
 {
-    const StravaTokenRefreshResult result =
+    StravaTokenRefreshResult result =
         normalized(authorization);
     if (accountKey.trimmed().isEmpty() || !result.isValid())
         return false;
+    if (result.sourceRefreshToken.isEmpty())
+        result.sourceRefreshToken = result.refreshToken;
 
     RefreshRegistry &value = registry();
     std::shared_ptr<RefreshFlight> active;

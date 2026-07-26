@@ -1731,9 +1731,12 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### THREAD-007: Concurrent Strava refreshes race rotating refresh tokens
 
-- Status: OPEN
-- Code: `src/Cloud/Strava.cpp:95` and
-  `src/Cloud/CloudService.cpp:2437`
+- Status: FIXED
+- Code: `src/Cloud/Strava.cpp:147`,
+  `src/Cloud/OAuthDialog.cpp:683`,
+  `src/Cloud/StravaTokenRefresh.cpp:218`,
+  `src/Cloud/StravaTokenPublication.cpp:31`, and
+  `src/Cloud/StravaCredentialPublisher.cpp:66`
 - Impact: Every `Strava::open()` refreshes from the instance's current token.
   Sync, upload, and auto-download can create independent provider clones and
   exchange the same refresh token concurrently. Strava invalidates an old
@@ -1753,6 +1756,31 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   coordinator with a short successful-result cache. Publish credentials with a
   generation-aware transaction and do not report success until the current
   pair has been accepted for persistence.
+- Test-first evidence: The first coordinator test failed to compile because no
+  single-flight API existed. Follow-up RED tests reproduced same-account token
+  rotation, stale snapshots, cache expiry, cancellation, invalidation, and a
+  new OAuth grant superseding an active refresh. Separate storage tests first
+  failed on missing checked writes, compare-and-swap publication, GUI-thread
+  credential handoff, and the exact refresh token submitted to Strava. Finally,
+  commit `caf59b2` ran against the old production wiring: 32 policy cases
+  passed and the two new `Strava::open()`/OAuth integration contracts failed.
+- Resolution: Refreshes now use one per-athlete single flight, a one-minute
+  successful-result cache, a bounded set of rotating-token aliases, and a
+  generation that invalidates stale work. Different athletes can still refresh
+  concurrently. Results retain the exact refresh token submitted to Strava,
+  and publication compares that token with the current durable value before
+  writing refresh token, access token, and timestamp in order. Checked
+  credential writes are marshalled to the settings thread with bounded,
+  cancellable waits; a timed-out queued write is abandoned. Interactive OAuth
+  publication is authoritative, supersedes active refreshes, and installs the
+  new grant before updating the wizard clone. `Strava::open()` reports success
+  only after the complete pair has been durably accepted.
+- Verification: All 17 coordinator cases and 34 OAuth/policy/integration cases
+  pass normally and under strict ASan/UBSan/LSan. The 11 publication cases,
+  71 checked-credential cases, and 105 athlete/cloud handoff cases also pass
+  normally and under the same sanitizers. A fresh release build compiles and
+  links the complete application and test tree. The full normal matrix passes
+  75 suites and 2,517 tests with no failures, skips, or blacklists.
 
 ## Medium
 
@@ -2691,27 +2719,25 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   set per advertised capability, persist the granted set, and make success and
   feature availability reflect that set.
 
-### CLOUD-005: Strava token exchanges have no timeout or reply cleanup
+### CLOUD-005: Interactive Strava token exchange has no timeout or reply cleanup
 
 - Status: OPEN
-- Code: `src/Cloud/OAuthDialog.cpp:472` and
-  `src/Cloud/Strava.cpp:123`
-- Impact: A refresh reply that never finishes holds `Strava::open()` in a
-  nested event loop indefinitely, blocking sync or upload. The interactive
-  authorization request can likewise leave its dialog permanently pending.
-  Completed refresh replies are retained as manager children until the whole
-  provider is destroyed, so repeated opens accumulate network objects.
-- Evidence: Neither token path starts a deadline or aborts a stalled reply.
-  `Strava::open()` also has no `deleteLater()` on success, parse failure, or
-  network failure, despite the repository already providing the bounded
-  `waitForNetworkReply()` helper.
-- Test: Use a reply that never emits `finished()`, explicit interruption, and
-  repeated successful and failed replies. Each request must abort on its
-  deadline, return a distinct timeout/cancellation error, and leave no finished
-  reply children after deferred deletes are processed.
-- Fix direction: Reuse the bounded interruption-aware wait helper for refresh,
-  add a single-shot deadline to interactive exchange, and use one ownership
-  guard that aborts and schedules every reply for deletion on all exits.
+- Code: `src/Cloud/OAuthDialog.cpp:474` and
+  `src/Cloud/OAuthDialog.cpp:518`
+- Impact: An interactive authorization reply that never finishes can leave the
+  dialog permanently pending. Completed replies remain manager children until
+  the dialog is destroyed, which complicates every early error path.
+- Evidence: The interactive token request starts no deadline and retains the
+  raw reply through a manager-wide `finished` signal. The refresh half was
+  resolved with THREAD-007: `Strava::open()` now uses a 30-second
+  interruption-aware wait and schedules its reply for deletion on every exit.
+- Test: Drive the interactive exchange with a reply that never emits
+  `finished()`, explicit dialog cancellation, and repeated successful and
+  failed replies. Each request must abort on its deadline or cancellation and
+  leave no reply children after deferred deletes are processed.
+- Fix direction: Give the interactive exchange an owned single-shot deadline
+  and one cleanup path that disconnects, aborts when needed, and schedules the
+  reply for deletion before accepting or rejecting the dialog.
 
 ### CLOUD-006: Strava Routes bypasses token refresh and blocks indefinitely
 

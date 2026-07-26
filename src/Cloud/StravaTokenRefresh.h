@@ -21,6 +21,7 @@ struct StravaTokenRefreshResult
     QString accessToken;
     QString refreshToken;
     QString error;
+    QString sourceRefreshToken;
 
     bool isValid() const;
 };

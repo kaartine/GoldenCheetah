@@ -29,7 +29,9 @@
 #include "PolarFlow.h"
 #include "OAuthCallbackPolicy.h"
 #include "OAuthPKCE.h"
+#include "StravaCredentialPublisher.h"
 #include "StravaOAuthPolicy.h"
+#include "StravaTokenRefresh.h"
 
 #include <QJsonParseError>
 
@@ -680,9 +682,70 @@ OAuthDialog::networkRequestFinished(QNetworkReply *reply)
 
         } else if (site == STRAVA) {
 
+            const QString accountKey = service
+                ? service->property(
+                      "_gcAthleteName").toString()
+                : QString();
+            if (accountKey.trimmed().isEmpty()) {
+                QMessageBox oauthError(
+                    QMessageBox::Critical,
+                    tr("OAuth Token Error"),
+                    tr("The Strava account identity is unavailable."));
+                oauthError.exec();
+                reject();
+                return;
+            }
+
+            const QString refreshedAt =
+                QDateTime::currentDateTime()
+                    .toString(Qt::ISODateWithMs);
+            StravaTokenRefreshCoordinator::invalidate(accountKey);
+            StravaCredentialPublisher::Request publication;
+            publication.accountKey = accountKey;
+            publication.expectedRefreshToken =
+                service->getSetting(
+                    GC_STRAVA_REFRESH_TOKEN, QString()).toString();
+            publication.replacement = {
+                access_token,
+                refresh_token
+            };
+            publication.refreshedAt = refreshedAt;
+            publication.mode =
+                StravaTokenPublication::PublicationMode::Authoritative;
+            const StravaTokenPublication::PublicationResult published =
+                StravaCredentialPublisher::publish(publication);
+            if (!published.isSuccess()) {
+                QMessageBox oauthError(
+                    QMessageBox::Critical,
+                    tr("OAuth Token Error"),
+                    published.error.isEmpty()
+                        ? tr("Strava credentials could not be stored securely.")
+                        : published.error);
+                oauthError.exec();
+                reject();
+                return;
+            }
+
+            StravaTokenRefreshResult authorization;
+            authorization.success = true;
+            authorization.accessToken = access_token;
+            authorization.refreshToken = refresh_token;
+            authorization.sourceRefreshToken = refresh_token;
+            if (!StravaTokenRefreshCoordinator::
+                    installAuthorization(
+                        accountKey, authorization)) {
+                QMessageBox oauthError(
+                    QMessageBox::Critical,
+                    tr("OAuth Token Error"),
+                    tr("The new Strava authorization could not be activated."));
+                oauthError.exec();
+                reject();
+                return;
+            }
+
             service->setSetting(GC_STRAVA_TOKEN, access_token);
             service->setSetting(GC_STRAVA_REFRESH_TOKEN, refresh_token);
-            service->setSetting(GC_STRAVA_LAST_REFRESH, QDateTime::currentDateTime());
+            service->setSetting(GC_STRAVA_LAST_REFRESH, refreshedAt);
             QString info = QString(tr("Strava authorization was successful."));
             QMessageBox information(QMessageBox::Information, tr("Information"), info);
             information.exec();
