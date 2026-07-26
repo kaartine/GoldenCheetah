@@ -11,6 +11,7 @@ APPVEYOR_INSTALL="$REPO_ROOT/appveyor/linux/install.sh"
 REQUIREMENTS="$REPO_ROOT/src/Python/requirements.txt"
 DEV_CONFIG="$REPO_ROOT/.devcontainer/gcconfig.pri"
 MAIN_SOURCE="$REPO_ROOT/src/Core/main.cpp"
+LIBSECRET_SOURCE="$REPO_ROOT/contrib/qtkeychain/qtkeychain/libsecret.cpp"
 
 fail()
 {
@@ -22,7 +23,7 @@ assert_contains()
 {
     local file=$1
     local pattern=$2
-    grep -Fq "$pattern" "$file" ||
+    grep -Fq -- "$pattern" "$file" ||
         fail "$file does not contain: $pattern"
 }
 
@@ -80,6 +81,8 @@ declare -F create_linux_keychain_deploy_probe >/dev/null ||
     fail "create_linux_keychain_deploy_probe helper is missing"
 declare -F remove_linux_keychain_deploy_probe >/dev/null ||
     fail "remove_linux_keychain_deploy_probe helper is missing"
+declare -F run_linuxdeployqt_with_keychain_probe >/dev/null ||
+    fail "run_linuxdeployqt_with_keychain_probe helper is missing"
 
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
@@ -274,7 +277,7 @@ PATH="$TEMP_DIR/libsecret/bin:$PATH" \
   "Linux keychain runtime: bundled" ] ||
     fail "installed Linux keychain runtime was not reported"
 cmp "$TEMP_DIR/libsecret/lib/libsecret-1.so.0.0" \
-    "$KEYCHAIN_APPDIR/usr/lib/libsecret-1.so.0" ||
+    "$KEYCHAIN_APPDIR/lib/libsecret-1.so.0" ||
     fail "resolved libsecret runtime was not copied exactly"
 cmp "$TEMP_DIR/libsecret/copyright" \
     "$KEYCHAIN_APPDIR/usr/share/doc/GoldenCheetah/licenses/libsecret-copyright" ||
@@ -288,10 +291,10 @@ cmp "$TEMP_DIR/libsecret/LGPL-2.1" \
 
 INCOMPLETE_APPDIR="$TEMP_DIR/incomplete-keychain.AppDir"
 mkdir -p \
-    "$INCOMPLETE_APPDIR/usr/lib" \
+    "$INCOMPLETE_APPDIR/lib" \
     "$INCOMPLETE_APPDIR/usr/share/doc/GoldenCheetah/licenses"
 cp "$TEMP_DIR/libsecret/incomplete-libsecret-1.so.0" \
-    "$INCOMPLETE_APPDIR/usr/lib/libsecret-1.so.0"
+    "$INCOMPLETE_APPDIR/lib/libsecret-1.so.0"
 cp "$TEMP_DIR/libsecret/copyright" \
     "$TEMP_DIR/libsecret/QtKeychain-COPYING" \
     "$TEMP_DIR/libsecret/LGPL-2.1" \
@@ -305,9 +308,9 @@ fi
 
 ESCAPED_APPDIR="$TEMP_DIR/escaped-keychain.AppDir"
 cp -a "$KEYCHAIN_APPDIR" "$ESCAPED_APPDIR"
-rm "$ESCAPED_APPDIR/usr/lib/libsecret-1.so.0"
+rm "$ESCAPED_APPDIR/lib/libsecret-1.so.0"
 ln -s "$TEMP_DIR/libsecret/lib/libsecret-1.so.0.0" \
-    "$ESCAPED_APPDIR/usr/lib/libsecret-1.so.0"
+    "$ESCAPED_APPDIR/lib/libsecret-1.so.0"
 if linux_keychain_runtime_status "$ESCAPED_APPDIR" \
     >/dev/null 2>&1; then
     fail "libsecret symlink escaping the AppDir was accepted"
@@ -402,10 +405,10 @@ run_packaging_appimage()
         squashfs-root/AppRun
     if [ -n "${GC_TEST_APPIMAGE_LIBSECRET:-}" ]; then
         mkdir -p \
-            squashfs-root/usr/lib \
+            squashfs-root/lib \
             squashfs-root/usr/share/doc/GoldenCheetah/licenses
         cp "$GC_TEST_APPIMAGE_LIBSECRET" \
-            squashfs-root/usr/lib/libsecret-1.so.0
+            squashfs-root/lib/libsecret-1.so.0
         cp "$GC_TEST_APPIMAGE_LIBSECRET_COPYRIGHT" \
             squashfs-root/usr/share/doc/GoldenCheetah/licenses/libsecret-copyright
         cp "$GC_TEST_APPIMAGE_QTKEYCHAIN_LICENSE" \
@@ -516,9 +519,7 @@ for packager in "$LOCAL_PACKAGER" "$CI_PACKAGER" "$DEV_PACKAGER"; do
     assert_contains "$packager" \
         'require_linux_keychain_appimage'
     assert_contains "$packager" \
-        'create_linux_keychain_deploy_probe'
-    assert_contains "$packager" \
-        'remove_linux_keychain_deploy_probe'
+        'run_linuxdeployqt_with_keychain_probe'
 done
 
 if grep -Fq 'python3.7' "$LOCAL_PACKAGER"; then
@@ -534,6 +535,10 @@ assert_contains "$DEV_CONFIG" \
     '# DEFINES += GC_STRAVA_CLIENT_SECRET=\\\"your_client_secret\\\"'
 assert_contains "$MAIN_SOURCE" \
     '--goldencheetah-linux-keychain-status'
+assert_contains "$MAIN_SOURCE" \
+    'configureBundledLinuxRuntime'
+assert_contains "$LIBSECRET_SOURCE" \
+    'GC_QTKEYCHAIN_LIBSECRET_PATH'
 assert_contains "$APPVEYOR_INSTALL" 'libsecret-1-dev'
 assert_contains "$APPVEYOR_INSTALL" 'pkg-config'
 

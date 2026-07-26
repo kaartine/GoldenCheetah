@@ -157,6 +157,7 @@ private slots:
     void keychainStatusMapping();
     void linuxKeychainRuntimeStatusReport_data();
     void linuxKeychainRuntimeStatusReport();
+    void bundledLinuxRuntimePathRequiresContainedRegularFile();
     void keychainJobsDisablePlaintextFallback();
     void platformStoreRoundTripsOrFailsClosed();
     void plaintextMigratesToVault();
@@ -310,6 +311,43 @@ void TestCredentialSettings::linuxKeychainRuntimeStatusReport()
         CredentialStoreQtKeychainDetail::linuxRuntimeStatusReport(
             compileSupport, runtimeAvailable),
         expected);
+}
+
+void TestCredentialSettings::
+bundledLinuxRuntimePathRequiresContainedRegularFile()
+{
+    QTemporaryDir applicationDir;
+    QTemporaryDir outsideDir;
+    QVERIFY(applicationDir.isValid());
+    QVERIFY(outsideDir.isValid());
+    QVERIFY(QDir(applicationDir.path()).mkpath(
+        QStringLiteral("lib")));
+
+    const QString libraryPath = applicationDir.filePath(
+        QStringLiteral("lib/libsecret-1.so.0"));
+    QVERIFY(CredentialStoreQtKeychainDetail::
+        bundledLinuxRuntimePath(applicationDir.path()).isEmpty());
+
+    QFile library(libraryPath);
+    QVERIFY(library.open(QIODevice::WriteOnly));
+    QCOMPARE(library.write("fixture"), qint64(7));
+    library.close();
+    QCOMPARE(
+        CredentialStoreQtKeychainDetail::bundledLinuxRuntimePath(
+            applicationDir.path()),
+        QFileInfo(libraryPath).canonicalFilePath());
+
+    QVERIFY(QFile::remove(libraryPath));
+    const QString outsidePath = outsideDir.filePath(
+        QStringLiteral("libsecret-1.so.0"));
+    QFile outside(outsidePath);
+    QVERIFY(outside.open(QIODevice::WriteOnly));
+    QCOMPARE(outside.write("outside"), qint64(7));
+    outside.close();
+    QVERIFY(QFile::link(outsidePath, libraryPath));
+    QVERIFY(QFileInfo(libraryPath).isSymLink());
+    QVERIFY(CredentialStoreQtKeychainDetail::
+        bundledLinuxRuntimePath(applicationDir.path()).isEmpty());
 }
 
 void TestCredentialSettings::keychainJobsDisablePlaintextFallback()

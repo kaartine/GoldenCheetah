@@ -3220,7 +3220,12 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   compiled and runtime-available libsecret status from the actual entrypoint,
   and AppVeyor build dependencies. The shell fixture fails at the absent
   entrypoint gate, while the CredentialSettings test fails to compile at the
-  absent pure status-report function.
+  absent pure status-report function. A packaged runtime then returned
+  `libsecret_runtime=unavailable` when both host libsecret paths were hidden,
+  exposing that QLibrary did not use the executable's RUNPATH for this
+  `dlopen`. Follow-up RED tests require the runtime in the executable's
+  `lib/` directory, a contained regular-file resolver, and explicit
+  QtKeychain use of that validated path.
 - Test: Package from an environment that has libsecret available only at build
   time, inspect the finished AppImage for the library and license, resolve its
   transitive dependencies, and exercise a sentinel vault write in an isolated
