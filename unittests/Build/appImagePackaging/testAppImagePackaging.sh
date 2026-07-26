@@ -6,6 +6,7 @@ REPO_ROOT=$(cd -- "$SCRIPT_DIR/../../.." && pwd)
 SUPPORT="$REPO_ROOT/src/Resources/linux/AppImagePackagingSupport.sh"
 LOCAL_PACKAGER="$REPO_ROOT/src/Resources/linux/MakeAppImageQt6.sh"
 CI_PACKAGER="$REPO_ROOT/appveyor/linux/after_build.sh"
+DEV_PACKAGER="$REPO_ROOT/.devcontainer/package-appimage.sh"
 REQUIREMENTS="$REPO_ROOT/src/Python/requirements.txt"
 DEV_CONFIG="$REPO_ROOT/.devcontainer/gcconfig.pri"
 
@@ -59,6 +60,10 @@ declare -F strava_oauth_build_status >/dev/null ||
     fail "strava_oauth_build_status helper is missing"
 declare -F require_strava_oauth_build >/dev/null ||
     fail "require_strava_oauth_build helper is missing"
+declare -F strava_oauth_appimage_status >/dev/null ||
+    fail "strava_oauth_appimage_status helper is missing"
+declare -F require_strava_oauth_appimage >/dev/null ||
+    fail "require_strava_oauth_appimage helper is missing"
 
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
@@ -172,6 +177,44 @@ if require_strava_oauth_build "$TEMP_DIR/missing" \
     fail "release gate accepted a missing executable"
 fi
 
+GC_TEST_APPIMAGE_INNER="$TEMP_DIR/configured"
+run_packaging_appimage()
+{
+    [ "$2" = "--appimage-extract" ] ||
+        fail "AppImage status did not request extraction"
+    [ "$3" = "GoldenCheetah" ] ||
+        fail "AppImage status extracted an unexpected payload"
+    mkdir -p squashfs-root
+    cp "$GC_TEST_APPIMAGE_INNER" \
+        squashfs-root/GoldenCheetah
+}
+
+[ "$(strava_oauth_appimage_status "$TEMP_DIR/type2.AppImage")" = \
+  "Strava OAuth: configured" ] ||
+    fail "configured packaged GoldenCheetah was not reported"
+require_strava_oauth_appimage "$TEMP_DIR/type2.AppImage" \
+    >/dev/null ||
+    fail "configured packaged GoldenCheetah was rejected"
+
+GC_TEST_APPIMAGE_INNER="$TEMP_DIR/unconfigured"
+[ "$(strava_oauth_appimage_status "$TEMP_DIR/type2.AppImage")" = \
+  "Strava OAuth: unavailable (credentials not configured)" ] ||
+    fail "unavailable packaged GoldenCheetah was not reported"
+if require_strava_oauth_appimage "$TEMP_DIR/type2.AppImage" \
+    >/dev/null 2>&1; then
+    fail "release gate accepted an unavailable packaged GoldenCheetah"
+fi
+
+GC_TEST_APPIMAGE_INNER="$TEMP_DIR/malformed"
+if strava_oauth_appimage_status "$TEMP_DIR/type2.AppImage" \
+    >/dev/null 2>&1; then
+    fail "malformed packaged GoldenCheetah status was accepted"
+fi
+if strava_oauth_appimage_status "$TEMP_DIR/type1.AppImage" \
+    >/dev/null 2>&1; then
+    fail "unsupported Type 1 AppImage extraction was accepted"
+fi
+
 grep -Eq '^sip[[:space:]]*==[[:space:]]*6\.15\.1$' "$REQUIREMENTS" ||
     fail "test must be reviewed when the pinned SIP version changes"
 
@@ -183,6 +226,12 @@ for packager in "$LOCAL_PACKAGER" "$CI_PACKAGER"; do
     assert_contains "$packager" 'run_packaging_appimage'
     assert_contains "$packager" \
         'require_strava_oauth_build ./GoldenCheetah'
+done
+
+for packager in "$LOCAL_PACKAGER" "$CI_PACKAGER" "$DEV_PACKAGER"; do
+    bash -n "$packager"
+    assert_contains "$packager" \
+        'require_strava_oauth_appimage'
 done
 
 if grep -Fq 'python3.7' "$LOCAL_PACKAGER"; then
