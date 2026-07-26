@@ -141,6 +141,8 @@ void TestStravaOAuthPolicy::rejectsUnavailableCredentials_data()
         << QStringLiteral("__GC_STRAVA_CLIENT_SECRET__");
     QTest::newRow("generic-build-placeholder")
         << ClientId << QStringLiteral("__MISSING_SECRET__");
+    QTest::newRow("documented-config-placeholder")
+        << ClientId << QStringLiteral("your_client_secret");
 }
 
 void TestStravaOAuthPolicy::rejectsUnavailableCredentials()
@@ -182,6 +184,9 @@ void TestStravaOAuthPolicy::reportsMachineReadableBuildStatus_data()
         << QByteArray("unavailable");
     QTest::newRow("generic-placeholder")
         << ClientId << QStringLiteral("__MISSING_SECRET__")
+        << QByteArray("unavailable");
+    QTest::newRow("documented-config-placeholder")
+        << ClientId << QStringLiteral("your_client_secret")
         << QByteArray("unavailable");
 }
 

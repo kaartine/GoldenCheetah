@@ -83,6 +83,8 @@ echo "Renaming AppImage file to branch and build number ready for deploy"
 export FINAL_NAME=GoldenCheetah_v3.8_x64Qt6.AppImage
 mv -f GoldenCheetah-x86_64.AppImage $FINAL_NAME
 ls -l $FINAL_NAME
+STRAVA_OAUTH_STATUS=$(require_strava_oauth_appimage "./$FINAL_NAME")
+echo "$STRAVA_OAUTH_STATUS"
 
 ### Verify the packaged GUI can initialize without an X11 display
 SMOKE_HOME="$(mktemp -d)"

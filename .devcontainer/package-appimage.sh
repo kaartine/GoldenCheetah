@@ -14,6 +14,9 @@ qt_dir="${QTDIR:-/opt/Qt/6.8.3/gcc_64}"
 linuxdeployqt_url="${LINUXDEPLOYQT_URL:-https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage}"
 appimagetool_url="${APPIMAGETOOL_URL:-https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage}"
 
+# shellcheck source=/dev/null
+. "${repo_root}/src/Resources/linux/AppImagePackagingSupport.sh"
+
 download_tool() {
     local url="$1"
     local target="$2"
@@ -45,6 +48,9 @@ if [[ ! -x "${qt_dir}/bin/qmake" ]]; then
     echo "Qt installation not found: ${qt_dir}" >&2
     exit 1
 fi
+
+strava_oauth_status="$(require_strava_oauth_build "${binary}")"
+echo "${strava_oauth_status}"
 
 rm -rf "${app_dir}"
 mkdir -p "${app_dir}" "${tools_dir}"
@@ -115,6 +121,8 @@ fi
 
 rm -f "${output}"
 ARCH=x86_64 "${appimagetool_dir}/squashfs-root/AppRun" "${app_dir}" "${output}"
+strava_oauth_status="$(require_strava_oauth_appimage "${output}")"
+echo "${strava_oauth_status}"
 
 echo "AppDir: ${app_dir}"
 echo "AppImage: ${output}"

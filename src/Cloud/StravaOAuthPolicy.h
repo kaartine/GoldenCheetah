@@ -82,6 +82,8 @@ struct RevocationRequest {
 
 bool hasUsableCredentials(const QString &clientId,
                           const QString &clientSecret);
+QByteArray buildStatusReport(const QString &clientId,
+                             const QString &clientSecret);
 TokenRequest authorizationCodeRequest(
     const QString &clientId,
     const QString &clientSecret,

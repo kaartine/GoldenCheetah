@@ -3129,25 +3129,47 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### BUILD-010: AppImage credential gate treats absence of one marker as proof
 
-- Status: OPEN
-- Code: `src/Resources/linux/AppImagePackagingSupport.sh:43` and
-  `unittests/Build/appImagePackaging/testAppImagePackaging.sh:85`
+- Status: FIXED
+- Code: `src/Cloud/StravaOAuthPolicy.cpp`, `src/Core/main.cpp`,
+  `src/Resources/linux/AppImagePackagingSupport.sh`,
+  `src/Resources/linux/MakeAppImageQt6.sh`,
+  `appveyor/linux/after_build.sh`, and
+  `.devcontainer/package-appimage.sh`
 - Impact: Packaging claims Strava OAuth is configured whenever one literal
   placeholder is absent. A non-GoldenCheetah executable, missing or invalid
   client ID, empty or generic placeholder secret, stripped Strava code, and
   Type 1 AppImage can therefore pass the production gate.
-- Evidence: A controlled `/bin/true` fixture and a Type 1 AppImage are both
-  classified as configured. The C++ policy additionally validates numeric ID,
-  nonempty bounded secret, and generic build placeholders, but the shell gate
-  cannot invoke that policy.
-- Test: Reject non-ELF and wrong executables, both compressed AppImage types,
-  invalid IDs, empty/generic placeholders, and binaries without Strava support.
-  Build real configured and placeholder test executables and recheck the
-  extracted executable from the completed AppImage.
-- Fix direction: Add a credential-free runtime build-status command backed by
-  `StravaOAuthPolicy::hasUsableCredentials()`, require the expected application
-  identity, and make both packagers query that command before and after
-  packaging.
+- Test-first evidence: Commit `87da8ff` replaced marker fixtures with
+  executable status probes and added failing contracts for the absent C++
+  report, `/bin/true`, malformed or failed reports, missing Strava support,
+  executable non-ELF input, and Type 1 and Type 2 images passed to the raw
+  gate. Commit `dc75820` then required a separate completed-AppImage gate and
+  post-package checks in every packaging path before their implementation.
+  Follow-up RED rows captured the documented `your_client_secret` placeholder,
+  byte-exact final-newline validation, `AppRun` versus an unrelated side
+  binary, and signal cleanup before those refinements.
+- Resolution: GoldenCheetah now exposes an exact, versioned
+  `--goldencheetah-build-status` report before GUI or settings initialization.
+  Its Strava value is produced by the same
+  `StravaOAuthPolicy::hasUsableCredentials()` policy as runtime OAuth and
+  reveals no credential value, fragment, length, or digest. The raw gate
+  requires a regular executable ELF, rejects both AppImage magic versions,
+  executes the status command with a deadline and isolated profile, bounds its
+  output in a private temporary file, and accepts only the exact application,
+  Strava-support, and configured protocol. The completed-image gate accepts
+  only Type 2, extracts the complete payload into a private temporary
+  directory, resolves `AppRun`, rejects an entrypoint escaping the payload,
+  and applies the same raw gate to the actual entrypoint. Local, AppVeyor, and
+  development-container packagers now check both the source executable and
+  final AppImage.
+- Verification: The packaging fixture matrix passes, including unrelated and
+  malformed ELF files, executable non-ELF input, oversized output, failed
+  status execution, missing Strava support, unavailable credentials, both raw
+  AppImage types, and extracted configured/unavailable images. All 65 OAuth
+  policy and source-wiring cases pass normally and under strict
+  ASan/UBSan/LSan. A fully linked configured GoldenCheetah passes the raw gate,
+  rejects extra status arguments without entering the GUI, and the complete
+  top-level test matrix passes.
 
 ### BUILD-011: AppImage metadata is not bound to the binary source revision
 

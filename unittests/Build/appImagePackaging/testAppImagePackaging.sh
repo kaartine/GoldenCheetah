@@ -100,29 +100,65 @@ int main(int argc, char **argv)
         return 64;
     }
 
+#ifdef GC_STATUS_MODE
+    const char *mode = GC_STATUS_MODE;
+#else
+    const char *mode = argv[0];
+#endif
+
     fputs(
         "goldencheetah_build_status=1\n"
         "application=GoldenCheetah\n",
         stdout);
-    if (strstr(argv[0], "no-strava") == NULL) {
+    if (strstr(mode, "no-strava") == NULL) {
         fputs("strava_support=enabled\n", stdout);
     }
-    if (strstr(argv[0], "malformed") != NULL) {
+    if (strstr(mode, "oversized") != NULL) {
+        for (int index = 0; index < 10000; ++index) {
+            fputc('x', stdout);
+        }
+        return 0;
+    }
+    if (strstr(mode, "missing-newline") != NULL) {
+        fputs("strava_oauth=configured", stdout);
+        return 0;
+    }
+    if (strstr(mode, "extra-newline") != NULL) {
+        fputs("strava_oauth=configured\n\n", stdout);
+        return 0;
+    }
+    if (strstr(mode, "malformed") != NULL) {
         fputs("strava_oauth=maybe\n", stdout);
-    } else if (strstr(argv[0], "unconfigured") != NULL) {
+    } else if (strstr(mode, "unconfigured") != NULL) {
         fputs("strava_oauth=unavailable\n", stdout);
     } else {
         fputs("strava_oauth=configured\n", stdout);
     }
-    return strstr(argv[0], "bad-exit") == NULL ? 0 : 1;
+    return strstr(mode, "bad-exit") == NULL ? 0 : 1;
 }
 EOF
 "${CC:-cc}" -std=c99 -Wall -Wextra -Werror \
     "$TEMP_DIR/status-probe.c" -o "$TEMP_DIR/configured"
+"${CC:-cc}" -std=c99 -Wall -Wextra -Werror \
+    -DGC_STATUS_MODE='"configured"' \
+    "$TEMP_DIR/status-probe.c" \
+    -o "$TEMP_DIR/configured-entry"
+"${CC:-cc}" -std=c99 -Wall -Wextra -Werror \
+    -DGC_STATUS_MODE='"unconfigured"' \
+    "$TEMP_DIR/status-probe.c" \
+    -o "$TEMP_DIR/unconfigured-entry"
+"${CC:-cc}" -std=c99 -Wall -Wextra -Werror \
+    -DGC_STATUS_MODE='"malformed"' \
+    "$TEMP_DIR/status-probe.c" \
+    -o "$TEMP_DIR/malformed-entry"
+chmod +x "$TEMP_DIR/status-probe.c"
 cp "$TEMP_DIR/configured" "$TEMP_DIR/unconfigured"
 cp "$TEMP_DIR/configured" "$TEMP_DIR/malformed"
 cp "$TEMP_DIR/configured" "$TEMP_DIR/no-strava"
 cp "$TEMP_DIR/configured" "$TEMP_DIR/bad-exit"
+cp "$TEMP_DIR/configured" "$TEMP_DIR/oversized"
+cp "$TEMP_DIR/configured" "$TEMP_DIR/missing-newline"
+cp "$TEMP_DIR/configured" "$TEMP_DIR/extra-newline"
 
 printf '\177ELF\002\001\001\000AI\001compressed-appimage-payload' \
     >"$TEMP_DIR/type1.AppImage"
@@ -154,6 +190,18 @@ if strava_oauth_build_status "$TEMP_DIR/bad-exit" \
     >/dev/null 2>&1; then
     fail "a failed build-status command was accepted"
 fi
+if strava_oauth_build_status "$TEMP_DIR/oversized" \
+    >/dev/null 2>&1; then
+    fail "an oversized build-status response was accepted"
+fi
+if strava_oauth_build_status "$TEMP_DIR/missing-newline" \
+    >/dev/null 2>&1; then
+    fail "a build-status response without its final newline was accepted"
+fi
+if strava_oauth_build_status "$TEMP_DIR/extra-newline" \
+    >/dev/null 2>&1; then
+    fail "a build-status response with trailing blank lines was accepted"
+fi
 if strava_oauth_build_status "$TEMP_DIR/status-probe.c" \
     >/dev/null 2>&1; then
     fail "a non-ELF file was accepted for Strava status inspection"
@@ -177,16 +225,20 @@ if require_strava_oauth_build "$TEMP_DIR/missing" \
     fail "release gate accepted a missing executable"
 fi
 
-GC_TEST_APPIMAGE_INNER="$TEMP_DIR/configured"
+GC_TEST_APPIMAGE_SIDECAR="$TEMP_DIR/configured"
+GC_TEST_APPIMAGE_ENTRY="$TEMP_DIR/configured-entry"
+GC_TEST_APPIMAGE_ENTRY_NAME="configured-entry"
 run_packaging_appimage()
 {
     [ "$2" = "--appimage-extract" ] ||
         fail "AppImage status did not request extraction"
-    [ "$3" = "GoldenCheetah" ] ||
-        fail "AppImage status extracted an unexpected payload"
     mkdir -p squashfs-root
-    cp "$GC_TEST_APPIMAGE_INNER" \
+    cp "$GC_TEST_APPIMAGE_SIDECAR" \
         squashfs-root/GoldenCheetah
+    cp "$GC_TEST_APPIMAGE_ENTRY" \
+        "squashfs-root/$GC_TEST_APPIMAGE_ENTRY_NAME"
+    ln -s "$GC_TEST_APPIMAGE_ENTRY_NAME" \
+        squashfs-root/AppRun
 }
 
 [ "$(strava_oauth_appimage_status "$TEMP_DIR/type2.AppImage")" = \
@@ -196,7 +248,8 @@ require_strava_oauth_appimage "$TEMP_DIR/type2.AppImage" \
     >/dev/null ||
     fail "configured packaged GoldenCheetah was rejected"
 
-GC_TEST_APPIMAGE_INNER="$TEMP_DIR/unconfigured"
+GC_TEST_APPIMAGE_ENTRY="$TEMP_DIR/unconfigured-entry"
+GC_TEST_APPIMAGE_ENTRY_NAME="unconfigured-entry"
 [ "$(strava_oauth_appimage_status "$TEMP_DIR/type2.AppImage")" = \
   "Strava OAuth: unavailable (credentials not configured)" ] ||
     fail "unavailable packaged GoldenCheetah was not reported"
@@ -205,7 +258,8 @@ if require_strava_oauth_appimage "$TEMP_DIR/type2.AppImage" \
     fail "release gate accepted an unavailable packaged GoldenCheetah"
 fi
 
-GC_TEST_APPIMAGE_INNER="$TEMP_DIR/malformed"
+GC_TEST_APPIMAGE_ENTRY="$TEMP_DIR/malformed-entry"
+GC_TEST_APPIMAGE_ENTRY_NAME="malformed-entry"
 if strava_oauth_appimage_status "$TEMP_DIR/type2.AppImage" \
     >/dev/null 2>&1; then
     fail "malformed packaged GoldenCheetah status was accepted"
@@ -214,6 +268,11 @@ if strava_oauth_appimage_status "$TEMP_DIR/type1.AppImage" \
     >/dev/null 2>&1; then
     fail "unsupported Type 1 AppImage extraction was accepted"
 fi
+
+assert_contains "$SUPPORT" \
+    'trap cleanup_status_home EXIT'
+assert_contains "$SUPPORT" \
+    'trap cleanup_extract_dir EXIT'
 
 grep -Eq '^sip[[:space:]]*==[[:space:]]*6\.15\.1$' "$REQUIREMENTS" ||
     fail "test must be reviewed when the pinned SIP version changes"

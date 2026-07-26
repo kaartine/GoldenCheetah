@@ -49,6 +49,11 @@ bool isDecimalClientId(const QString &value)
 
 bool isBuildPlaceholder(const QString &value)
 {
+    if (value.trimmed().compare(
+            QStringLiteral("your_client_secret"),
+            Qt::CaseInsensitive) == 0) {
+        return true;
+    }
     if (value.size() < 4
         || !value.startsWith(QStringLiteral("__"))
         || !value.endsWith(QStringLiteral("__"))) {
@@ -380,6 +385,20 @@ bool hasUsableCredentials(const QString &clientId,
     return isDecimalClientId(clientId)
         && isUsableOpaqueValue(clientSecret)
         && !isBuildPlaceholder(clientSecret);
+}
+
+QByteArray buildStatusReport(const QString &clientId,
+                             const QString &clientSecret)
+{
+    QByteArray report = QByteArrayLiteral(
+        "goldencheetah_build_status=1\n"
+        "application=GoldenCheetah\n"
+        "strava_support=enabled\n"
+        "strava_oauth=");
+    report += hasUsableCredentials(clientId, clientSecret)
+        ? QByteArrayLiteral("configured\n")
+        : QByteArrayLiteral("unavailable\n");
+    return report;
 }
 
 TokenRequest authorizationCodeRequest(

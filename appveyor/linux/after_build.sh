@@ -77,5 +77,8 @@ fi
 
 echo "Renaming AppImage file to version number ready for deploy"
 mv GoldenCheetah*.AppImage ../GoldenCheetah_v3.8_x64.AppImage
+STRAVA_OAUTH_STATUS=$(require_strava_oauth_appimage \
+    ../GoldenCheetah_v3.8_x64.AppImage)
+echo "$STRAVA_OAUTH_STATUS"
 
 exit

@@ -29,6 +29,8 @@
 #include "PowerProfile.h"
 #include "GcCrashDialog.h" // for versionHTML
 #include "OverviewItems.h"
+#include "Secrets.h"
+#include "StravaOAuthPolicy.h"
 
 #include <QApplication>
 #include <QtGui>
@@ -238,6 +240,28 @@ main(int argc, char *argv[])
         freopen("CONOUT$", "w", stdout);
     }
 #endif
+
+    for (int index = 1; index < argc; ++index) {
+        if (QByteArray(argv[index])
+                != QByteArrayLiteral(
+                    "--goldencheetah-build-status")) {
+            continue;
+        }
+        if (argc != 2) return EXIT_FAILURE;
+
+        const QByteArray report =
+            StravaOAuthPolicy::buildStatusReport(
+                QStringLiteral(GC_STRAVA_CLIENT_ID),
+                QStringLiteral(GC_STRAVA_CLIENT_SECRET));
+        const size_t written = fwrite(
+            report.constData(),
+            1,
+            static_cast<size_t>(report.size()),
+            stdout);
+        return written == static_cast<size_t>(report.size())
+            ? EXIT_SUCCESS
+            : EXIT_FAILURE;
+    }
 
     //
     // PROCESS COMMAND LINE SWITCHES
