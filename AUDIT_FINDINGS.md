@@ -1788,20 +1788,32 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-016: Transient vault reads can overwrite an unknown newer credential
 
-- Status: OPEN
-- Code: `src/Core/CredentialSettings.cpp`
-- Impact: When a vault read returns `Unavailable` or `Failed` and a legacy
-  plaintext credential exists, migration currently writes that plaintext value
-  into the vault. A transient backend failure cannot prove the vault entry is
-  absent, so this can overwrite a newer token or password that the process was
+- Status: FIXED
+- Code: `src/Core/CredentialSettings.cpp` and
+  `unittests/Core/credentialSettings/testCredentialSettings.cpp`
+- Impact: When a vault read returned `Unavailable` or `Failed` and a legacy
+  plaintext credential existed, migration wrote that plaintext value into the
+  vault. A transient backend failure cannot prove the vault entry is absent, so
+  this could overwrite a newer token or password that the process was
   temporarily unable to read.
-- Test: Seed a newer fake-vault credential and an older plaintext source, make
-  the first vault read return each transient status, and assert zero vault
-  writes, no plaintext removal, no success cache entry, and a successful retry
-  after the backend recovers.
-- Fix direction: Permit migration writes only after an authoritative
-  `NotFound`. Treat `Unavailable` and `Failed` as retryable read failures that
-  preserve every source without mutating the vault.
+- Test-first evidence: With a newer fake-vault credential and older plaintext
+  source, both `Unavailable` and `Failed` rows returned the stale plaintext and
+  failed the new regression. The focused program otherwise passed 105 cases.
+- Resolution: A legacy migration write is now permitted only after an
+  authoritative `NotFound`. `Unavailable` and `Failed` preserve both sources,
+  return the caller's default, create no cache entry, and retry the vault read
+  after recovery. A complementary recovery case verifies that a later
+  `NotFound` still migrates a legitimate plaintext-only credential exactly
+  once.
+- Verification: The focused credential suite passes all 108 cases normally and
+  under ASan/UBSan/LSan with leak detection. The complete out-of-source matrix
+  runs 2,822 cases across 81 QtTest programs: 2,820 pass, none fail, and the two
+  source-contract checks tracked by `TEST-002` skip. The production application
+  links as a 536,217,440-byte ELF and remains alive through an eight-second
+  offscreen smoke test with an empty temporary home.
+- Residual: An entry created concurrently after a successful `NotFound` can
+  still race the migration write; that independent atomicity gap is tracked by
+  `SEC-018`.
 
 ### SEC-017: Credential scopes alias same-named athletes in different roots
 
@@ -1816,6 +1828,37 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Fix direction: Bind new scope mappings to a durable root/profile identity
   while preserving existing single-root mappings through an explicit,
   fail-closed migration policy.
+
+### SEC-018: Credential migration uses a non-atomic check-then-write
+
+- Status: OPEN
+- Code: `src/Core/CredentialSettings.cpp` and the `CredentialStore` contract
+- Impact: Migration reads `NotFound` and then performs a normal overwriting
+  write. Another thread or process can publish a newer credential between those
+  operations, after which the stale plaintext migration overwrites it despite
+  the successful initial read.
+- Test: Add a fake-store hook that installs a newer value immediately after
+  returning `NotFound`; require migration to preserve that value, retain the
+  plaintext source until the outcome is known, and retry safely.
+- Fix direction: Extend the credential-store contract with an atomic
+  create-if-absent or compare-and-set operation and implement it per backend.
+  A process mutex can reduce local races but is not a cross-process substitute
+  for backend atomicity.
+
+### SEC-019: Failed plaintext scrubbing is cached as successful
+
+- Status: OPEN
+- Code: `src/Core/CredentialSettings.cpp`
+- Impact: `scrubPlaintext()` ignores `QSettings::sync()` status. After a failed
+  removal sync, the in-memory key is absent while the secret can remain on
+  disk; callers then cache the vault result as persisted and may never retry
+  scrubbing in that process.
+- Test: Reject the settings write used to remove a plaintext credential, reopen
+  the file to prove the secret remains, restore writes, and require both
+  same-process and restart paths to remove it without altering the vault value.
+- Fix direction: Return and propagate checked scrub durability. Do not publish
+  a persisted cache state until deletion has synchronized, and retain an
+  explicit retry state whenever secure cleanup is incomplete.
 
 ## Medium
 
@@ -3314,6 +3357,21 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   or cache a newly selected scope, migrate credentials, or scrub a source until
   both its canonical target mapping and required compatibility mirror are
   durable.
+
+### DUR-011: Failed vault deletion is not retried in the same process
+
+- Status: OPEN
+- Code: `src/Core/CredentialSettings.cpp`
+- Impact: `removeChecked()` records a negative cache entry when vault deletion
+  fails. A subsequent `value()` sees the durable pending-removal marker but
+  returns through that cache entry before retrying the backend, so recovery is
+  delayed until restart or explicit cache clearing.
+- Test: Fail a vault removal, recover the backend without reconstructing
+  `CredentialSettings`, read the credential again, and require a second removal
+  attempt, cleared pending marker, and no credential resurrection.
+- Fix direction: Pending removal must take precedence over negative cache
+  entries. Cache only a durable deletion result, or invalidate the entry before
+  each retry while preserving memory-only replacement semantics.
 
 ### THREAD-010: Strava grant coordination is process-local
 

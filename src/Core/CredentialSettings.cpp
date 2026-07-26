@@ -215,6 +215,16 @@ QVariant CredentialSettings::value(
             return defaultValue;
         }
 
+        // Only an authoritative miss permits a migration write. A transient
+        // read failure may be hiding a newer credential already in the vault.
+        if (result.status != CredentialStore::Status::NotFound) {
+            reportStoreError(
+                QStringLiteral("read"), credentialKey,
+                result.error);
+            hardenSettingsFile(settings);
+            return defaultValue;
+        }
+
         QString error;
         const CredentialStore::Status writeStatus = store_
             ? store_->write(key, legacy, &error)

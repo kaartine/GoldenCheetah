@@ -331,6 +331,7 @@ private slots:
     void transientReadFailureIsRetried();
     void transientReadDoesNotOverwriteNewerCredential_data();
     void transientReadDoesNotOverwriteNewerCredential();
+    void transientReadBeforeMissingCredentialRetriesMigration();
     void scopesAreIsolated();
     void scopeIdentifiersAreStableAndValidated();
     void scopeCreationFailsClosedWhenItCannotPersist();
@@ -1059,6 +1060,45 @@ transientReadDoesNotOverwriteNewerCredential()
     QCOMPARE(state->reads, 2);
     QCOMPARE(state->writes, 0);
     QCOMPARE(state->values.value(vaultKey), currentSecret);
+    QVERIFY(!ini.contains(plaintextKey));
+}
+
+void TestCredentialSettings::
+transientReadBeforeMissingCredentialRetriesMigration()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings ini(temporary.filePath(QStringLiteral("private.ini")),
+                  QSettings::IniFormat);
+    const QString scope = CredentialSettings::ensureScopeId(
+        &ini, QStringLiteral("credential_store/id"));
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString legacySecret = QStringLiteral("legacy-secret");
+    ini.setValue(plaintextKey, legacySecret);
+    ini.sync();
+
+    auto state = std::make_shared<FakeStoreState>();
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    state->failReads = true;
+    CredentialSettings credentials(fakeStore(state));
+
+    QCOMPARE(credentials.value(
+                 &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(QStringLiteral("missing")));
+    QCOMPARE(state->reads, 1);
+    QCOMPARE(state->writes, 0);
+    QVERIFY(ini.contains(plaintextKey));
+
+    state->failReads = false;
+    QCOMPARE(credentials.value(
+                 &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(legacySecret));
+    QCOMPARE(state->reads, 2);
+    QCOMPARE(state->writes, 1);
+    QCOMPARE(state->values.value(vaultKey), legacySecret);
     QVERIFY(!ini.contains(plaintextKey));
 }
 
