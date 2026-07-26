@@ -22,6 +22,7 @@ equals(GC_UNITTESTS, active) {
 			   Charts/indendPlotMarkerMatrix \
 			   Charts/mapPageSecurity \
 			   Train/libraryImportFileStager \
+			   Train/stravaRoutesClient \
 			   Train/webDownloadImportPolicy \
 			   Train/trainDbVersionSafety \
 			   Core/measuresAtomicSave \
