@@ -23,10 +23,11 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-001: Remote default layouts can execute Python or R code
 
-- Status: IN_PROGRESS
-- Code: `src/Core/GcUpgrade.h:142`, `src/Gui/AbstractView.cpp:352`,
-  `src/Gui/AbstractView.cpp:1016`, `src/Gui/AbstractView.cpp:1037`,
-  `src/Charts/PythonChart.cpp:578`
+- Status: FIXED
+- Code: `src/Gui/AbstractView.cpp`,
+  `src/Gui/PerspectiveStateSource.cpp`,
+  `src/Gui/PerspectiveStateSource.h`,
+  `src/Charts/PythonChart.cpp`
 - Impact: Default perspective XML is downloaded over HTTP. The XML selects a
   chart type and sets arbitrary string properties, including executable Python
   and R chart scripts. A network attacker can gain code execution when a user
@@ -41,8 +42,11 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   packaged `:/xml` resources, whitelists the four application view names, and
   keeps normal saved-state loading explicit.
 - Verification: The regression test first failed because the trusted loader did
-  not exist. Its five QtTest cases pass, the application builds, and the full
-  suite passes 81 tests with zero failures.
+  not exist. All five QtTest cases pass in normal and
+  ASan/UBSan/LSan-instrumented builds. The application links, and the full test
+  matrix passes 79 test programs and 2,697 tests with zero failures or skips.
+  The reset path contains no network API references, and all four whitelisted
+  perspective files are present in the packaged resource manifest.
 
 ### SEC-002: ZIP extraction permits path traversal and symlink escape
 
