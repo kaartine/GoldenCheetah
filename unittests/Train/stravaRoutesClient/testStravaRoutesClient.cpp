@@ -440,6 +440,12 @@ void TestStravaRoutesClient::validatesGpxResponse_data()
         << QByteArrayLiteral("<TrainingCenterDatabase/>")
         << QStringLiteral("application/xml")
         << false;
+    QTest::newRow("doctype")
+        << QByteArrayLiteral(
+               "<!DOCTYPE gpx [<!ENTITY value \"expanded\">]>"
+               "<gpx>&value;</gpx>")
+        << QStringLiteral("application/gpx+xml")
+        << false;
 }
 
 void TestStravaRoutesClient::validatesGpxResponse()
@@ -494,6 +500,11 @@ productionWiringHidesCredentialsAndBoundsWork()
     QVERIFY(routes.contains("authenticatedGet("));
     QVERIFY(routes.contains("Qt::UserRole"));
     QVERIFY(!routes.contains("setText(4"));
+    QVERIFY(routes.contains("QTemporaryFile temporaryFile("));
+    QVERIFY(!routes.contains(
+        "temporaryDirectory.filePath(fileBasename)"));
+    QVERIFY(routes.contains("QTimer::singleShot("));
+    QVERIFY(!routes.contains("\n    refreshClicked();"));
 
     const qsizetype readPosition =
         routes.indexOf("readFile(");
@@ -509,6 +520,14 @@ productionWiringHidesCredentialsAndBoundsWork()
         "StravaAuthenticatedSession"));
     QVERIFY(strava.contains(
         "refreshAfterRejectedAccessToken("));
+
+    const QByteArray stravaHeader = sourceContents(
+        "../../../src/Cloud/Strava.h");
+    QVERIFY(!stravaHeader.isEmpty());
+    QVERIFY(stravaHeader.contains(
+        "QNetworkAccessManager *nam = nullptr;"));
+    QVERIFY(stravaHeader.contains(
+        "QNetworkReply *reply = nullptr;"));
 }
 
 QTEST_MAIN(TestStravaRoutesClient)

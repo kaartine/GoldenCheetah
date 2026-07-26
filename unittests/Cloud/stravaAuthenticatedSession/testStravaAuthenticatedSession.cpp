@@ -140,14 +140,20 @@ private slots:
     void obtainsGrantBeforeFirstRequestAndReusesIt();
     void grantPublicationFailurePreventsRequest();
     void unauthorizedRefreshesAndRetriesExactlyOnce();
+    void reentrantGrantInstallationUsesReplacementToken();
     void secondUnauthorizedStops();
     void forbiddenDoesNotRefresh();
+    void rejectsUntrustedOrigins_data();
+    void rejectsUntrustedOrigins();
     void propagatesBoundedFailures_data();
     void propagatesBoundedFailures();
     void redactsAccessTokenFromNetworkErrors();
+    void redactsCandidateAccessTokenFromGrantErrors();
     void transportCollectsAndDeletesSuccessfulReply();
     void transportTimeoutAbortsAndDeletesReply();
     void transportCancellationAbortsAndDeletesReply();
+    void transportThrowingCancellationAbortsAndDeletesReply();
+    void transportDestroyedPendingReplyReturnsInvalid();
     void transportOversizeAbortsAndDeletesReply();
 };
 
@@ -268,6 +274,55 @@ unauthorizedRefreshesAndRetriesExactlyOnce()
         }));
 }
 
+void TestStravaAuthenticatedSession::
+reentrantGrantInstallationUsesReplacementToken()
+{
+    int grantCalls = 0;
+    bool replacementInstalled = false;
+    QStringList requestTokens;
+    std::unique_ptr<StravaAuthenticatedSession> session;
+    session = std::make_unique<StravaAuthenticatedSession>(
+        [&](const QString &rejected,
+            const StravaAuthenticatedSession::CancellationCheck &) {
+            ++grantCalls;
+            if (!rejected.isEmpty()) {
+                Grant result;
+                result.error = QStringLiteral(
+                    "The replacement token must not be refreshed.");
+                return result;
+            }
+            return grant(QStringLiteral("access-a"));
+        },
+        [&](const QUrl &,
+            const QString &accessToken,
+            qsizetype,
+            const StravaAuthenticatedSession::CancellationCheck &) {
+            requestTokens.append(accessToken);
+            if (requestTokens.size() == 1) {
+                replacementInstalled =
+                    session->installGrant(
+                        grant(QStringLiteral("access-b")));
+                return response(401);
+            }
+            return response();
+        });
+
+    const auto result = session->get(
+        QUrl(QStringLiteral(
+            "https://www.strava.com/api/v3/athlete")),
+        4096);
+
+    QVERIFY2(result.isValid(), qPrintable(result.error));
+    QVERIFY(replacementInstalled);
+    QCOMPARE(grantCalls, 1);
+    QCOMPARE(
+        requestTokens,
+        QStringList({
+            QStringLiteral("access-a"),
+            QStringLiteral("access-b")
+        }));
+}
+
 void TestStravaAuthenticatedSession::secondUnauthorizedStops()
 {
     int grantCalls = 0;
@@ -325,6 +380,56 @@ void TestStravaAuthenticatedSession::forbiddenDoesNotRefresh()
     QVERIFY(result.error.contains(QStringLiteral("HTTP 403")));
     QCOMPARE(grantCalls, 1);
     QCOMPARE(requestCalls, 1);
+}
+
+void TestStravaAuthenticatedSession::rejectsUntrustedOrigins_data()
+{
+    QTest::addColumn<QUrl>("url");
+
+    QTest::newRow("cleartext")
+        << QUrl(QStringLiteral(
+               "http://www.strava.com/api/v3/athlete"));
+    QTest::newRow("foreign-host")
+        << QUrl(QStringLiteral(
+               "https://example.test/api/v3/athlete"));
+    QTest::newRow("foreign-port")
+        << QUrl(QStringLiteral(
+               "https://www.strava.com:444/api/v3/athlete"));
+    QTest::newRow("userinfo")
+        << QUrl(QStringLiteral(
+               "https://user@www.strava.com/api/v3/athlete"));
+    QTest::newRow("oauth-path")
+        << QUrl(QStringLiteral(
+               "https://www.strava.com/oauth/token"));
+    QTest::newRow("api-prefix-lookalike")
+        << QUrl(QStringLiteral(
+               "https://www.strava.com/api/v30/athlete"));
+}
+
+void TestStravaAuthenticatedSession::rejectsUntrustedOrigins()
+{
+    QFETCH(QUrl, url);
+    int grantCalls = 0;
+    int requestCalls = 0;
+    StravaAuthenticatedSession session(
+        [&](const QString &,
+            const StravaAuthenticatedSession::CancellationCheck &) {
+            ++grantCalls;
+            return grant(QStringLiteral("access"));
+        },
+        [&](const QUrl &,
+            const QString &,
+            qsizetype,
+            const StravaAuthenticatedSession::CancellationCheck &) {
+            ++requestCalls;
+            return response();
+        });
+
+    const auto result = session.get(url, 4096);
+
+    QVERIFY(!result.isValid());
+    QCOMPARE(grantCalls, 0);
+    QCOMPARE(requestCalls, 0);
 }
 
 void TestStravaAuthenticatedSession::
@@ -410,6 +515,42 @@ redactsAccessTokenFromNetworkErrors()
 }
 
 void TestStravaAuthenticatedSession::
+redactsCandidateAccessTokenFromGrantErrors()
+{
+    const QString candidateToken =
+        QStringLiteral("sensitive-candidate-token");
+    int requestCalls = 0;
+    StravaAuthenticatedSession session(
+        [candidateToken](
+            const QString &,
+            const StravaAuthenticatedSession::CancellationCheck &) {
+            Grant result;
+            result.accessToken = candidateToken;
+            result.error = QStringLiteral(
+                "Credential provider rejected %1.")
+                    .arg(candidateToken);
+            return result;
+        },
+        [&](const QUrl &,
+            const QString &,
+            qsizetype,
+            const StravaAuthenticatedSession::CancellationCheck &) {
+            ++requestCalls;
+            return response();
+        });
+
+    const auto result = session.get(
+        QUrl(QStringLiteral(
+            "https://www.strava.com/api/v3/athlete")),
+        4096);
+
+    QVERIFY(!result.isValid());
+    QVERIFY(!result.error.contains(candidateToken));
+    QVERIFY(result.error.contains(QStringLiteral("[redacted]")));
+    QCOMPARE(requestCalls, 0);
+}
+
+void TestStravaAuthenticatedSession::
 transportCollectsAndDeletesSuccessfulReply()
 {
     const auto state = std::make_shared<ReplyState>();
@@ -473,6 +614,48 @@ transportCancellationAbortsAndDeletesReply()
 }
 
 void TestStravaAuthenticatedSession::
+transportThrowingCancellationAbortsAndDeletesReply()
+{
+    const auto state = std::make_shared<ReplyState>();
+    auto *reply = new ControlledReply(QByteArray(), state);
+    QPointer<ControlledReply> guard(reply);
+
+    const HttpResult result =
+        StravaNetworkReply::collect(
+            reply, 4096, 1000, []() -> bool {
+                throw 1;
+            });
+
+    QCOMPARE(
+        result.failure,
+        StravaNetworkReply::Failure::Cancelled);
+    QCOMPARE(state->aborts, 1);
+    deliverDeferredDeletes();
+    QVERIFY(guard.isNull());
+}
+
+void TestStravaAuthenticatedSession::
+transportDestroyedPendingReplyReturnsInvalid()
+{
+    const auto state = std::make_shared<ReplyState>();
+    auto *reply = new ControlledReply(QByteArray(), state);
+    QPointer<ControlledReply> guard(reply);
+    QTimer::singleShot(0, [reply] {
+        delete reply;
+    });
+
+    const HttpResult result =
+        StravaNetworkReply::collect(
+            reply, 4096, 1000);
+
+    QCOMPARE(
+        result.failure,
+        StravaNetworkReply::Failure::Invalid);
+    QCOMPARE(state->aborts, 0);
+    QVERIFY(guard.isNull());
+}
+
+void TestStravaAuthenticatedSession::
 transportOversizeAbortsAndDeletesReply()
 {
     const auto state = std::make_shared<ReplyState>();
@@ -496,5 +679,5 @@ transportOversizeAbortsAndDeletesReply()
     QVERIFY(guard.isNull());
 }
 
-QTEST_APPLESS_MAIN(TestStravaAuthenticatedSession)
+QTEST_GUILESS_MAIN(TestStravaAuthenticatedSession)
 #include "testStravaAuthenticatedSession.moc"

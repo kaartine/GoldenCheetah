@@ -515,6 +515,10 @@ SOURCES += Cloud/Nolio.cpp
 HEADERS += Cloud/Nolio.h
 SOURCES += Cloud/NetworkReplyWait.cpp
 HEADERS += Cloud/NetworkReplyWait.h
+SOURCES += Cloud/StravaNetworkReply.cpp
+HEADERS += Cloud/StravaNetworkReply.h
+SOURCES += Cloud/StravaAuthenticatedSession.cpp
+HEADERS += Cloud/StravaAuthenticatedSession.h
 SOURCES += Cloud/OAuthTokenReplyController.cpp
 HEADERS += Cloud/OAuthTokenReplyController.h
 SOURCES += Cloud/CloudCredentialTransport.cpp
@@ -704,7 +708,7 @@ HEADERS += Train/AddDeviceWizard.h Train/CalibrationData.h Train/ComputrainerCon
            Train/Library.h Train/LibraryParser.h Train/MeterWidget.h Train/NullController.h Train/RealtimeController.h \
            Train/RealtimeData.h Train/RealtimePlot.h Train/RealtimePlotWindow.h Train/RemoteControl.h Train/SpinScanPlot.h \
            Train/SpinScanPlotWindow.h Train/SpinScanPolarPlot.h Train/GarminServiceHelper.h Train/PhysicsUtility.h Train/BicycleSim.h \
-           Train/PolynomialRegression.h Train/MultiRegressionizer.h Train/StravaRoutesDownload.h \
+           Train/PolynomialRegression.h Train/MultiRegressionizer.h Train/StravaRoutesClient.h Train/StravaRoutesDownload.h \
            Train/HtmlTrainingBridge.h \
            Train/VideoSyncFileBase.h Train/ErgFileBase.h \
            Train/ModelFilter.h Train/MultiFilterProxyModel.h Train/WorkoutFilter.h Train/FilterEditor.h \
@@ -824,7 +828,7 @@ SOURCES += Train/AddDeviceWizard.cpp Train/CalibrationData.cpp Train/Computraine
            Train/Library.cpp Train/LibraryImportFileStager.cpp Train/WebDownloadImportPolicy.cpp Train/LibraryParser.cpp Train/MeterWidget.cpp Train/NullController.cpp Train/RealtimeController.cpp \
            Train/RealtimeData.cpp Train/RealtimePlot.cpp Train/RealtimePlotWindow.cpp Train/RemoteControl.cpp Train/SpinScanPlot.cpp \
            Train/SpinScanPlotWindow.cpp Train/SpinScanPolarPlot.cpp Train/GarminServiceHelper.cpp Train/PhysicsUtility.cpp Train/BicycleSim.cpp \
-           Train/PolynomialRegression.cpp Train/StravaRoutesDownload.cpp \
+           Train/PolynomialRegression.cpp Train/StravaRoutesClient.cpp Train/StravaRoutesDownload.cpp \
            Train/VideoSyncFileBase.cpp Train/ErgFileBase.cpp \
            Train/ModelFilter.cpp Train/MultiFilterProxyModel.cpp Train/WorkoutFilter.cpp Train/FilterEditor.cpp \
            Train/WorkoutFilterBox.cpp Train/TagBar.cpp Train/TagWidget.cpp \

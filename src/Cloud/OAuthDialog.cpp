@@ -505,6 +505,11 @@ OAuthDialog::urlChanged(const QUrl &url)
                 QNetworkRequest request =
                     QNetworkRequest(tokenUrl);
                 request.setHeader(QNetworkRequest::ContentTypeHeader,"application/x-www-form-urlencoded");
+                if (site == STRAVA) {
+                    request.setAttribute(
+                        QNetworkRequest::RedirectPolicyAttribute,
+                        QNetworkRequest::SameOriginRedirectPolicy);
+                }
 
                 // client id and secret are encoded and sent in the header for NOLIO, POLAR and XERT
                 if (site == NOLIO || site == POLAR || site == XERT)  request.setRawHeader("Authorization", "Basic " +  authheader.toLatin1().toBase64());

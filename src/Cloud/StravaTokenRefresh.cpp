@@ -160,6 +160,127 @@ bool cacheMatches(
         || state.knownTokens.contains(inputRefreshToken);
 }
 
+StravaTokenRefreshResult coordinatedRefresh(
+    const QString &accountKey,
+    const QString &inputRefreshToken,
+    const QString &rejectedAccessToken,
+    const StravaTokenRefreshCoordinator::
+        CanonicalRefreshOperation &operation,
+    const StravaTokenRefreshCoordinator::
+        CancellationCheck &cancelled,
+    std::chrono::milliseconds cacheLifetime)
+{
+    const bool followsRejectedAccess =
+        !rejectedAccessToken.isEmpty();
+    if (accountKey.trimmed().isEmpty()
+        || inputRefreshToken.isEmpty()
+        || !operation) {
+        return failure(
+            QStringLiteral("Strava token refresh inputs are invalid."));
+    }
+    if (cancellationRequested(cancelled))
+        return cancelledResult();
+
+    RefreshRegistry &value = registry();
+    std::shared_ptr<AccountState> state;
+    std::shared_ptr<RefreshFlight> flight;
+
+    for (;;) {
+        std::unique_lock<std::mutex> lock(value.mutex);
+        state = accountState(value, accountKey);
+
+        if (state->cache.present
+            && state->cache.generation != state->generation) {
+            clearCache(*state);
+        }
+        if (state->cache.present
+            && !cacheIsFresh(state->cache, cacheLifetime)) {
+            clearCache(*state);
+        }
+        if (state->cache.present
+            && cacheMatches(*state, inputRefreshToken)
+            && (!followsRejectedAccess
+                || state->cache.result.accessToken
+                    != rejectedAccessToken)) {
+            return state->cache.result;
+        }
+
+        if (!state->activeFlight) {
+            flight = std::make_shared<RefreshFlight>();
+            flight->requestedToken = inputRefreshToken;
+            flight->effectiveToken =
+                state->canonicalToken.isEmpty()
+                    ? inputRefreshToken
+                    : state->canonicalToken;
+            flight->generation = state->generation;
+            state->activeFlight = flight;
+            if (state->canonicalToken.isEmpty()) {
+                state->canonicalToken = inputRefreshToken;
+                rememberToken(*state, inputRefreshToken);
+            }
+            break;
+        }
+
+        flight = state->activeFlight;
+        while (!flight->complete && !flight->superseded) {
+            flight->condition.wait_for(
+                lock, std::chrono::milliseconds(10));
+            if (flight->complete || flight->superseded)
+                break;
+            lock.unlock();
+            const bool shouldCancel =
+                cancellationRequested(cancelled);
+            lock.lock();
+            if (shouldCancel) return cancelledResult();
+        }
+        if (flight->superseded && !flight->complete)
+            return supersededResult();
+        if (followsRejectedAccess)
+            return flight->result;
+        if (flight->requestedToken == inputRefreshToken
+            || flight->effectiveToken == inputRefreshToken) {
+            return flight->result;
+        }
+    }
+
+    StravaTokenRefreshResult result;
+    try {
+        result = normalized(operation(flight->effectiveToken));
+    } catch (...) {
+        result = failure(
+            QStringLiteral("Strava token refresh failed."));
+    }
+
+    {
+        const std::lock_guard<std::mutex> lock(value.mutex);
+        if (flight->superseded
+            || flight->generation != state->generation) {
+            result = supersededResult();
+        } else if (result.isValid()) {
+            if (result.sourceRefreshToken.isEmpty()) {
+                result.sourceRefreshToken =
+                    flight->effectiveToken;
+            }
+            rememberToken(*state, flight->requestedToken);
+            rememberToken(*state, flight->effectiveToken);
+            rememberToken(*state, result.refreshToken);
+            state->canonicalToken = result.refreshToken;
+            state->cache.present = cacheLifetime.count() > 0;
+            state->cache.authoritative = false;
+            state->cache.generation = state->generation;
+            state->cache.result = result;
+            state->cache.storedAt =
+                std::chrono::steady_clock::now();
+        }
+        flight->result = result;
+        flight->complete = true;
+        if (state->activeFlight == flight)
+            state->activeFlight.reset();
+    }
+    flight->condition.notify_all();
+    return result;
+}
+
 } // namespace
 
 bool StravaTokenRefreshResult::isValid() const
@@ -222,107 +343,54 @@ StravaTokenRefreshCoordinator::refresh(
     const CancellationCheck &cancelled,
     std::chrono::milliseconds cacheLifetime)
 {
-    if (accountKey.trimmed().isEmpty()
-        || inputRefreshToken.isEmpty()
-        || !operation) {
-        return failure(
-            QStringLiteral("Strava token refresh inputs are invalid."));
+    return coordinatedRefresh(
+        accountKey,
+        inputRefreshToken,
+        QString(),
+        operation,
+        cancelled,
+        cacheLifetime);
+}
+
+StravaTokenRefreshResult
+StravaTokenRefreshCoordinator::
+refreshAfterRejectedAccessToken(
+    const QString &accountKey,
+    const QString &inputRefreshToken,
+    const QString &rejectedAccessToken,
+    const CanonicalRefreshOperation &operation,
+    const CancellationCheck &cancelled)
+{
+    return refreshAfterRejectedAccessToken(
+        accountKey,
+        inputRefreshToken,
+        rejectedAccessToken,
+        operation,
+        cancelled,
+        std::chrono::minutes(1));
+}
+
+StravaTokenRefreshResult
+StravaTokenRefreshCoordinator::
+refreshAfterRejectedAccessToken(
+    const QString &accountKey,
+    const QString &inputRefreshToken,
+    const QString &rejectedAccessToken,
+    const CanonicalRefreshOperation &operation,
+    const CancellationCheck &cancelled,
+    std::chrono::milliseconds cacheLifetime)
+{
+    if (rejectedAccessToken.isEmpty()) {
+        return failure(QStringLiteral(
+            "The rejected Strava access token is missing."));
     }
-    if (cancellationRequested(cancelled)) return cancelledResult();
-
-    RefreshRegistry &value = registry();
-    std::shared_ptr<AccountState> state;
-    std::shared_ptr<RefreshFlight> flight;
-
-    for (;;) {
-        std::unique_lock<std::mutex> lock(value.mutex);
-        state = accountState(value, accountKey);
-
-        if (state->cache.present
-            && state->cache.generation != state->generation) {
-            clearCache(*state);
-        }
-        if (state->cache.present
-            && !cacheIsFresh(state->cache, cacheLifetime)) {
-            clearCache(*state);
-        }
-        if (state->cache.present
-            && cacheMatches(*state, inputRefreshToken)) {
-            return state->cache.result;
-        }
-
-        if (!state->activeFlight) {
-            flight = std::make_shared<RefreshFlight>();
-            flight->requestedToken = inputRefreshToken;
-            flight->effectiveToken =
-                state->canonicalToken.isEmpty()
-                    ? inputRefreshToken
-                    : state->canonicalToken;
-            flight->generation = state->generation;
-            state->activeFlight = flight;
-            if (state->canonicalToken.isEmpty()) {
-                state->canonicalToken = inputRefreshToken;
-                rememberToken(*state, inputRefreshToken);
-            }
-            break;
-        }
-
-        flight = state->activeFlight;
-        while (!flight->complete && !flight->superseded) {
-            flight->condition.wait_for(
-                lock, std::chrono::milliseconds(10));
-            if (flight->complete || flight->superseded)
-                break;
-            lock.unlock();
-            const bool shouldCancel =
-                cancellationRequested(cancelled);
-            lock.lock();
-            if (shouldCancel) return cancelledResult();
-        }
-        if (flight->superseded && !flight->complete)
-            return supersededResult();
-        if (flight->requestedToken == inputRefreshToken
-            || flight->effectiveToken == inputRefreshToken) {
-            return flight->result;
-        }
-    }
-
-    StravaTokenRefreshResult result;
-    try {
-        result = normalized(operation(flight->effectiveToken));
-    } catch (...) {
-        result = failure(
-            QStringLiteral("Strava token refresh failed."));
-    }
-
-    {
-        const std::lock_guard<std::mutex> lock(value.mutex);
-        if (flight->superseded
-            || flight->generation != state->generation) {
-            result = supersededResult();
-        } else if (result.isValid()) {
-            if (result.sourceRefreshToken.isEmpty()) {
-                result.sourceRefreshToken =
-                    flight->effectiveToken;
-            }
-            rememberToken(*state, flight->requestedToken);
-            rememberToken(*state, flight->effectiveToken);
-            rememberToken(*state, result.refreshToken);
-            state->canonicalToken = result.refreshToken;
-            state->cache.present = cacheLifetime.count() > 0;
-            state->cache.authoritative = false;
-            state->cache.generation = state->generation;
-            state->cache.result = result;
-            state->cache.storedAt =
-                std::chrono::steady_clock::now();
-        }
-        flight->result = result;
-        flight->complete = true;
-        if (state->activeFlight == flight)
-            state->activeFlight.reset();
-    }
-    flight->condition.notify_all();
-    return result;
+    return coordinatedRefresh(
+        accountKey,
+        inputRefreshToken,
+        rejectedAccessToken,
+        operation,
+        cancelled,
+        cacheLifetime);
 }
 
 bool StravaTokenRefreshCoordinator::installAuthorization(

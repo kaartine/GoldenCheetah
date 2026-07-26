@@ -1433,6 +1433,7 @@ private slots:
     void tredictTokenRefreshHandlesAthleteDeletion();
     void networkReplyWaitTimesOut();
     void networkReplyWaitPrefersPreexistingInterruption();
+    void networkReplyWaitReportsDestroyedReply();
     void oauthRefreshHandlesImmediateReply();
     void oauthRefreshTimesOut();
     void oauthRefreshHonorsThreadInterruption();
@@ -6088,6 +6089,24 @@ networkReplyWaitPrefersPreexistingInterruption()
 
     QVERIFY(result == NetworkReplyWaitResult::Interrupted);
     QCOMPARE(reply.abortCalls(), 1);
+}
+
+void TestAthleteMigrationSafety::
+networkReplyWaitReportsDestroyedReply()
+{
+    auto *reply = new AbortProbeReply(nullptr);
+    QPointer<AbortProbeReply> guardedReply(reply);
+    QTimer::singleShot(0, [reply] {
+        delete reply;
+    });
+
+    const NetworkReplyWaitResult result =
+        waitForNetworkReply(reply, 1000);
+
+    QCOMPARE(
+        result,
+        NetworkReplyWaitResult::Destroyed);
+    QVERIFY(guardedReply.isNull());
 }
 
 void TestAthleteMigrationSafety::oauthRefreshHandlesImmediateReply()

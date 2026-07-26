@@ -18,7 +18,8 @@ enum class NetworkReplyWaitResult
 {
     Finished,
     TimedOut,
-    Interrupted
+    Interrupted,
+    Destroyed
 };
 
 NetworkReplyWaitResult waitForNetworkReply(

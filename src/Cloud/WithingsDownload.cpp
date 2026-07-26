@@ -287,10 +287,11 @@ bool WithingsDownload::waitForReply(
     QPointer<Context> guardedContext(context);
     QPointer<Athlete> guardedAthlete =
             guardedContext ? guardedContext->athlete : nullptr;
+    QPointer<QNetworkReply> guardedReply(reply);
     QThread *thread = QThread::currentThread();
     const NetworkReplyWaitResult waitResult =
             waitForNetworkReply(
-                reply, networkOptions.timeoutMs,
+                guardedReply, networkOptions.timeoutMs,
                 [guardedContext, guardedAthlete, thread]() {
                     return guardedContext.isNull()
                         || guardedAthlete.isNull()
@@ -298,19 +299,25 @@ bool WithingsDownload::waitForReply(
                 });
 
     bool succeeded = false;
-    if (waitResult == NetworkReplyWaitResult::TimedOut) {
+    if (waitResult == NetworkReplyWaitResult::Destroyed
+        || guardedReply.isNull()) {
+        error = tr("Withings reply ended unexpectedly.");
+        return false;
+    } else if (waitResult == NetworkReplyWaitResult::TimedOut) {
         error = tr("Withings request timed out.");
     } else if (waitResult
                == NetworkReplyWaitResult::Interrupted
                || guardedContext.isNull()
                || guardedAthlete.isNull()) {
         error = tr("Withings request was cancelled.");
-    } else if (reply->error() != QNetworkReply::NoError) {
-        error = reply->errorString();
+    } else if (guardedReply->error()
+               != QNetworkReply::NoError) {
+        error = guardedReply->errorString();
     } else {
-        response = QString::fromUtf8(reply->readAll());
+        response = QString::fromUtf8(
+            guardedReply->readAll());
         succeeded = true;
     }
-    reply->deleteLater();
+    guardedReply->deleteLater();
     return succeeded;
 }

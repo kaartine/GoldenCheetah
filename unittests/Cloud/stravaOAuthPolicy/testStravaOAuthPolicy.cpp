@@ -550,6 +550,10 @@ serviceOpenUsesCoordinatedDurableRefresh()
     const QByteArray source = sourceContents(
         "../../../src/Cloud/Strava.cpp");
     QVERIFY(!source.isEmpty());
+    QCOMPARE(
+        source.count(
+            "QNetworkRequest::SameOriginRedirectPolicy"),
+        6);
 
     const QByteArray open = sourceSection(
         source,
@@ -567,6 +571,8 @@ serviceOpenUsesCoordinatedDurableRefresh()
     QVERIFY(open.contains(
         "refreshResult.sourceRefreshToken"));
     QVERIFY(open.contains("tokenReply->deleteLater()"));
+    QVERIFY(open.contains(
+        "NetworkReplyWaitResult::Destroyed"));
     QVERIFY(!open.contains("QEventLoop"));
     QVERIFY(!open.contains(
         "CloudServiceFactory::instance().saveSettings"));
@@ -580,6 +586,8 @@ oauthGrantSupersedesRefreshAndPublishesDurably()
     QVERIFY(!source.isEmpty());
     QVERIFY(source.contains(
         "StravaOAuthPolicy::parseAuthorizationResponse(payload)"));
+    QVERIFY(source.contains(
+        "QNetworkRequest::SameOriginRedirectPolicy"));
     QVERIFY(source.contains(
         "tokenReplyController->start(reply, 30000)"));
     QVERIFY(source.contains(

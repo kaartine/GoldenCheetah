@@ -20,6 +20,10 @@
 #define GC_Strava_h
 
 #include "CloudService.h"
+#include "StravaAuthenticatedSession.h"
+
+#include <functional>
+#include <memory>
 
 class QNetworkReply;
 class QNetworkAccessManager;
@@ -43,8 +47,17 @@ class Strava : public CloudService {
         ~Strava();
 
         // open/connect and close/disconnect
-        bool open(QStringList &errors);
+        bool open(QStringList &errors) override;
+        using CancellationCheck =
+            StravaAuthenticatedSession::CancellationCheck;
+        bool open(
+            QStringList &errors,
+            const CancellationCheck &cancelled);
         bool close();
+        StravaAuthenticatedSession::Result authenticatedGet(
+            const QUrl &url,
+            qsizetype maximumBytes,
+            const CancellationCheck &cancelled = {});
 
         //virtual int capabilities() const { return OAuth | Upload | Download | Query ; } // Default
 
@@ -71,15 +84,26 @@ class Strava : public CloudService {
 
     private:
         Context *context;
-        QNetworkAccessManager *nam;
-        QNetworkReply *reply;
+        QNetworkAccessManager *nam = nullptr;
+        QNetworkReply *reply = nullptr;
         CloudServiceEntry *root_;
         bool garminSmartRecording = true;
         int garminHighWaterMark = 30;
 
         QMap<QNetworkReply*, QByteArray*> buffers;
+        std::unique_ptr<StravaAuthenticatedSession>
+            authenticatedSession;
 
         bool prepareResponse(QByteArray *data, QString &error);
+        void ensureAuthenticatedSession();
+        StravaAuthenticatedSession::Grant refreshAccessGrant(
+            const QString &rejectedAccessToken,
+            const CancellationCheck &cancelled);
+        StravaNetworkReply::Result performAuthenticatedGet(
+            const QUrl &url,
+            const QString &accessToken,
+            qsizetype maximumBytes,
+            const CancellationCheck &cancelled);
 
         bool addSamples(
             RideFile *ret, const QString &remoteid, QString &error);

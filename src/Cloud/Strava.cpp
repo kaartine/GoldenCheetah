@@ -25,6 +25,7 @@
 #include "NetworkReplyWait.h"
 #include "StravaApiReplyPolicy.h"
 #include "StravaCredentialPublisher.h"
+#include "StravaNetworkReply.h"
 #include "StravaOAuthPolicy.h"
 #include "StravaTokenRefresh.h"
 #include "mvjson.h"
@@ -34,6 +35,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QPointer>
 #include <QThread>
 
 #include <memory>
@@ -146,32 +148,109 @@ Strava::onSslErrors(QNetworkReply *reply, const QList<QSslError>&errors)
 bool
 Strava::open(QStringList &errors)
 {
+    return open(errors, {});
+}
+
+bool
+Strava::open(
+    QStringList &errors,
+    const CancellationCheck &cancelled)
+{
     printd("Strava::open\n");
+    ensureAuthenticatedSession();
+    const StravaAuthenticatedSession::Grant grant =
+        refreshAccessGrant(QString(), cancelled);
+    if (!grant.isValid()) {
+        errors << (grant.error.isEmpty()
+            ? tr("Strava token refresh failed.")
+            : grant.error);
+        return false;
+    }
+    if (!authenticatedSession->installGrant(grant)) {
+        errors << tr("Strava token refresh returned an invalid grant.");
+        return false;
+    }
+    return true;
+}
+
+void Strava::ensureAuthenticatedSession()
+{
+    if (authenticatedSession)
+        return;
+    authenticatedSession =
+        std::make_unique<StravaAuthenticatedSession>(
+            [this](
+                const QString &rejectedAccessToken,
+                const CancellationCheck &cancelled) {
+                return refreshAccessGrant(
+                    rejectedAccessToken, cancelled);
+            },
+            [this](
+                const QUrl &url,
+                const QString &accessToken,
+                qsizetype maximumBytes,
+                const CancellationCheck &cancelled) {
+                return performAuthenticatedGet(
+                    url,
+                    accessToken,
+                    maximumBytes,
+                    cancelled);
+            });
+}
+
+StravaAuthenticatedSession::Result
+Strava::authenticatedGet(
+    const QUrl &url,
+    qsizetype maximumBytes,
+    const CancellationCheck &cancelled)
+{
+    ensureAuthenticatedSession();
+    return authenticatedSession->get(
+        url, maximumBytes, cancelled);
+}
+
+StravaAuthenticatedSession::Grant
+Strava::refreshAccessGrant(
+    const QString &rejectedAccessToken,
+    const CancellationCheck &cancelled)
+{
+    StravaAuthenticatedSession::Grant grant;
+    if (!nam) {
+        grant.error =
+            tr("The Strava network service is unavailable.");
+        return grant;
+    }
     const QString configuredRefreshToken =
         getSetting(GC_STRAVA_REFRESH_TOKEN, "").toString();
     if (configuredRefreshToken.isEmpty()) {
-        errors << tr("No authorisation token configured.");
-        return false;
+        grant.error = tr("No authorisation token configured.");
+        return grant;
     }
 
     const QString accountKey =
         property("_gcAthleteName").toString();
     if (accountKey.trimmed().isEmpty()) {
-        errors << tr("The Strava account identity is unavailable.");
-        return false;
+        grant.error =
+            tr("The Strava account identity is unavailable.");
+        return grant;
     }
 
     printd("Get access token for this session.\n");
-    const auto interrupted = [] {
-        return QThread::currentThread()
-            ->isInterruptionRequested();
+    const auto interrupted = [&cancelled] {
+        if (QThread::currentThread()
+                ->isInterruptionRequested()) {
+            return true;
+        }
+        if (!cancelled) return false;
+        try {
+            return cancelled();
+        } catch (...) {
+            return true;
+        }
     };
-    const StravaTokenRefreshResult refreshResult =
-        StravaTokenRefreshCoordinator::refresh(
-            accountKey,
-            configuredRefreshToken,
-            [this, interrupted](
-                    const QString &effectiveRefreshToken) {
+    const auto refreshOperation =
+        [this, interrupted](
+                const QString &effectiveRefreshToken) {
                 StravaTokenRefreshResult result;
                 const StravaOAuthPolicy::TokenRequest tokenRequest =
                     StravaOAuthPolicy::refreshTokenRequest(
@@ -188,6 +267,9 @@ Strava::open(QStringList &errors)
                     QNetworkRequest::ContentTypeHeader,
                     QStringLiteral(
                         "application/x-www-form-urlencoded"));
+                request.setAttribute(
+                    QNetworkRequest::RedirectPolicyAttribute,
+                    QNetworkRequest::SameOriginRedirectPolicy);
                 QNetworkReply *tokenReply =
                     nam->post(request, tokenRequest.body);
                 if (!tokenReply) {
@@ -195,10 +277,21 @@ Strava::open(QStringList &errors)
                         "The Strava token request could not be started.");
                     return result;
                 }
+                QPointer<QNetworkReply> guardedTokenReply(
+                    tokenReply);
 
                 const NetworkReplyWaitResult waitResult =
                     waitForNetworkReply(
-                        tokenReply, 30000, interrupted);
+                        guardedTokenReply,
+                        30000,
+                        interrupted);
+                if (waitResult
+                        == NetworkReplyWaitResult::Destroyed
+                    || guardedTokenReply.isNull()) {
+                    result.error = tr(
+                        "The Strava token reply ended unexpectedly.");
+                    return result;
+                }
                 if (waitResult
                     == NetworkReplyWaitResult::Interrupted) {
                     result.error =
@@ -250,13 +343,26 @@ Strava::open(QStringList &errors)
                 result.accessToken = response.accessToken;
                 result.refreshToken = response.refreshToken;
                 return result;
-            },
-            interrupted);
+            };
+    const StravaTokenRefreshResult refreshResult =
+        rejectedAccessToken.isEmpty()
+            ? StravaTokenRefreshCoordinator::refresh(
+                accountKey,
+                configuredRefreshToken,
+                refreshOperation,
+                interrupted)
+            : StravaTokenRefreshCoordinator::
+                refreshAfterRejectedAccessToken(
+                    accountKey,
+                    configuredRefreshToken,
+                    rejectedAccessToken,
+                    refreshOperation,
+                    interrupted);
     if (!refreshResult.isValid()) {
-        errors << (refreshResult.error.isEmpty()
+        grant.error = refreshResult.error.isEmpty()
             ? tr("Strava token refresh failed.")
-            : refreshResult.error);
-        return false;
+            : refreshResult.error;
+        return grant;
     }
 
     const QString refreshedAt =
@@ -276,17 +382,66 @@ Strava::open(QStringList &errors)
         StravaCredentialPublisher::publish(
             publication, 30000, interrupted);
     if (!published.isSuccess()) {
-        errors << (published.error.isEmpty()
+        grant.error = published.error.isEmpty()
             ? tr("Strava credentials could not be stored securely.")
-            : published.error);
-        return false;
+            : published.error;
+        return grant;
     }
 
     setSetting(GC_STRAVA_TOKEN, refreshResult.accessToken);
     setSetting(
         GC_STRAVA_REFRESH_TOKEN, refreshResult.refreshToken);
     setSetting(GC_STRAVA_LAST_REFRESH, refreshedAt);
-    return true;
+    grant.accessToken = refreshResult.accessToken;
+    return grant;
+}
+
+StravaNetworkReply::Result
+Strava::performAuthenticatedGet(
+    const QUrl &url,
+    const QString &accessToken,
+    qsizetype maximumBytes,
+    const CancellationCheck &cancelled)
+{
+    StravaNetworkReply::Result result;
+    if (!nam) {
+        result.failure =
+            StravaNetworkReply::Failure::Invalid;
+        result.networkError =
+            QNetworkReply::UnknownNetworkError;
+        result.networkErrorString =
+            tr("The Strava network service is unavailable.");
+        return result;
+    }
+
+    QNetworkRequest request(url);
+    request.setRawHeader(
+        "Authorization",
+        QByteArrayLiteral("Bearer ")
+            + accessToken.toUtf8());
+    request.setTransferTimeout(30000);
+    request.setAttribute(
+        QNetworkRequest::RedirectPolicyAttribute,
+        QNetworkRequest::SameOriginRedirectPolicy);
+    request.setAttribute(
+        QNetworkRequest::AutoDeleteReplyOnFinishAttribute,
+        false);
+
+    QNetworkReply *networkReply = nam->get(request);
+    if (!networkReply) {
+        result.failure =
+            StravaNetworkReply::Failure::Invalid;
+        result.networkError =
+            QNetworkReply::UnknownNetworkError;
+        result.networkErrorString =
+            tr("The Strava request could not be started.");
+        return result;
+    }
+    return StravaNetworkReply::collect(
+        networkReply,
+        maximumBytes,
+        30000,
+        cancelled);
 }
 
 bool
@@ -333,6 +488,9 @@ Strava::readdir(QString path, QStringList &errors, QDateTime from, QDateTime to)
         // request using the bearer token
         QNetworkRequest request(url);
         request.setRawHeader("Authorization", (QString("Bearer %1").arg(token)).toLatin1());
+        request.setAttribute(
+            QNetworkRequest::RedirectPolicyAttribute,
+            QNetworkRequest::SameOriginRedirectPolicy);
 
         QNetworkReply *reply = nam->get(request);
 
@@ -418,6 +576,9 @@ Strava::readFile(QByteArray *data, QString remotename, QString remoteid)
     QNetworkRequest request(url);
     request.setRawHeader("Authorization", (QString("Bearer %1").arg(token)).toLatin1());
     request.setRawHeader("Accept", "application/json");
+    request.setAttribute(
+        QNetworkRequest::RedirectPolicyAttribute,
+        QNetworkRequest::SameOriginRedirectPolicy);
 
     // put the file
     QNetworkReply *reply = nam->get(request);
@@ -450,6 +611,9 @@ Strava::writeFile(QByteArray &data, QString remotename, RideFile *ride)
     QUrl url = manual ?  QUrl( "https://www.strava.com/api/v3/activities" )
                       :  QUrl( "https://www.strava.com/api/v3/uploads" );
     QNetworkRequest request = QNetworkRequest(url);
+    request.setAttribute(
+        QNetworkRequest::RedirectPolicyAttribute,
+        QNetworkRequest::SameOriginRedirectPolicy);
 
     //QString boundary = QString::number(QRandomGenerator::global()->generate() * (90000000000) / (RAND_MAX + 1) + 10000000000, 16);
     QString boundary = QVariant(QRandomGenerator::global()->generate()).toString() +
@@ -770,6 +934,9 @@ Strava::addSamples(
         "Authorization",
         QStringLiteral("Bearer %1").arg(token).toLatin1());
     request.setRawHeader("Accept", "application/json");
+    request.setAttribute(
+        QNetworkRequest::RedirectPolicyAttribute,
+        QNetworkRequest::SameOriginRedirectPolicy);
 
     QNetworkReply *reply = nam->get(request);
     QByteArray payload;

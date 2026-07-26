@@ -29,6 +29,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QPointer>
 #include <QThread>
 
 #ifndef NOLIO_DEBUG
@@ -122,14 +123,26 @@ bool Nolio::open(QStringList &errors){
                         .append(refresh_token);
             QNetworkReply *reply =
                     nam->post(request, data.toLatin1());
+            if (!reply) {
+                result.error = tr(
+                    "Token refresh could not be started.");
+                return result;
+            }
+            QPointer<QNetworkReply> guardedReply(reply);
 
             QThread *thread = QThread::currentThread();
             const NetworkReplyWaitResult waitResult =
                     waitForNetworkReply(
-                        reply, 30000,
+                        guardedReply, 30000,
                         [thread]() {
                             return thread->isInterruptionRequested();
                         });
+            if (waitResult == NetworkReplyWaitResult::Destroyed
+                || guardedReply.isNull()) {
+                result.error = tr(
+                    "Token refresh reply ended unexpectedly.");
+                return result;
+            }
             if (waitResult == NetworkReplyWaitResult::Interrupted) {
                 result.error = tr("Token refresh cancelled.");
                 reply->deleteLater();

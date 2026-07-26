@@ -148,36 +148,46 @@ TredictMeasuresDownload::fetchEndpoint(const QString &urlString, QString &error)
     request.setRawHeader("Accept", "application/json;charset=UTF-8");
 
     QNetworkReply *reply = nam->get(request);
+    if (!reply) {
+        error = tr("Tredict request could not be started.");
+        return {};
+    }
+    QPointer<QNetworkReply> guardedReply(reply);
     QThread *thread = QThread::currentThread();
     const NetworkReplyWaitResult waitResult =
             waitForNetworkReply(
-                reply, networkOptions.timeoutMs,
+                guardedReply, networkOptions.timeoutMs,
                 [guardedContext, guardedAthlete, thread]() {
                     return guardedContext.isNull()
                         || guardedAthlete.isNull()
                         || thread->isInterruptionRequested();
                 });
 
+    if (waitResult == NetworkReplyWaitResult::Destroyed
+        || guardedReply.isNull()) {
+        error = tr("Tredict reply ended unexpectedly.");
+        return {};
+    }
     if (waitResult == NetworkReplyWaitResult::TimedOut) {
         error = tr("Tredict request timed out.");
-        reply->deleteLater();
+        guardedReply->deleteLater();
         return {};
     }
     if (waitResult == NetworkReplyWaitResult::Interrupted
         || guardedContext.isNull()
         || guardedAthlete.isNull()) {
         error = tr("Tredict request was cancelled.");
-        reply->deleteLater();
+        guardedReply->deleteLater();
         return {};
     }
-    if (reply->error() != QNetworkReply::NoError) {
-        error = reply->errorString();
-        reply->deleteLater();
+    if (guardedReply->error() != QNetworkReply::NoError) {
+        error = guardedReply->errorString();
+        guardedReply->deleteLater();
         return {};
     }
 
-    QByteArray data = reply->readAll();
-    reply->deleteLater();
+    QByteArray data = guardedReply->readAll();
+    guardedReply->deleteLater();
     return data;
 }
 

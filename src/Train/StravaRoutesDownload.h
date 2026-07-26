@@ -24,6 +24,7 @@
 #include "Units.h"
 
 #include "TrainSidebar.h"
+#include "StravaRoutesClient.h"
 
 #include <QtGui>
 #include <QTableWidget>
@@ -33,14 +34,12 @@
 #include <QListIterator>
 #include <QDebug>
 
-struct StravaRoutesListEntry{
-    QString routeId;
-    QString name;
-    QString description;
-};
+#include <memory>
 
 // Dialog class to show filenames, import progress and to capture user input
 // of ride date and time
+
+class Strava;
 
 class StravaRoutesDownload : public QDialog
 {
@@ -50,6 +49,7 @@ class StravaRoutesDownload : public QDialog
 
 public:
     StravaRoutesDownload(Context *context);
+    ~StravaRoutesDownload() override;
 
     QTreeWidget *files; // choose files to export
 
@@ -61,17 +61,20 @@ private slots:
     void allClicked();
     void refreshClicked();
 
-    void onSslErrors(QNetworkReply *reply, const QList<QSslError>&error);
-
 private:
 
     void downloadFiles();
-    QString getAthleteId(QString token);
-    QList<StravaRoutesListEntry*> getFileList(QString &error);
-    bool readFile(QByteArray *data, int routeId);
+    QList<StravaRouteSummary> getFileList(QString &error);
+    bool readFile(
+        QByteArray *data,
+        const QString &routeId,
+        QString *error);
+    void closeEvent(QCloseEvent *event) override;
 
     Context *context;
     bool aborted;
+    bool busy;
+    bool closeWhenIdle;
 
     QCheckBox *all;
 
@@ -81,10 +84,7 @@ private:
     int downloads, fails;
     QLabel *status;
 
-    QNetworkAccessManager *nam;
-    QNetworkReply *reply;
-
-
+    std::unique_ptr<Strava> stravaService;
+    std::unique_ptr<StravaRoutesClient> routesClient;
 };
 #endif // _StravaRoutesDownload_h
-

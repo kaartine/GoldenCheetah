@@ -2785,11 +2785,11 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### CLOUD-006: Strava Routes bypasses token refresh and blocks indefinitely
 
-- Status: OPEN
-- Code: `src/Train/StravaRoutesDownload.cpp:103`,
-  `src/Train/StravaRoutesDownload.cpp:319`,
-  `src/Train/StravaRoutesDownload.cpp:344`, and
-  `src/Train/StravaRoutesDownload.cpp:437`
+- Status: FIXED
+- Code: `src/Cloud/Strava.cpp`, `src/Cloud/StravaAuthenticatedSession.cpp`,
+  `src/Cloud/StravaNetworkReply.cpp`, `src/Cloud/StravaTokenRefresh.cpp`,
+  `src/Train/StravaRoutesClient.cpp`, and
+  `src/Train/StravaRoutesDownload.cpp`
 - Impact: Opening the Routes dialog immediately reads the stored access token
   and performs athlete, route-list, and GPX requests without refreshing it.
   Strava access tokens expire after six hours, so the feature fails
@@ -2798,13 +2798,146 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Evidence: The route path reads `GC_STRAVA_TOKEN` directly and never invokes
   `Strava::open()` or a shared token provider. Its 401 path is reduced to an
   imprecise user-ID or network error.
-- Test: With a stale access token and valid rotating refresh token, opening the
-  dialog must refresh once, persist the returned pair, and use the new access
-  token for every paginated and GPX request. Cover 401, 403, timeout,
-  cancellation, and mid-pagination expiry.
-- Fix direction: Route every Strava feature through one bounded valid-token
-  service, centralize authenticated request/error handling, and remove direct
-  credential reads and raw nested waits from the dialog.
+- Resolution: Routes now uses a configured `Strava` service and a private
+  authenticated session. The session obtains and durably publishes a grant
+  before its first request, snapshots the token used by each attempt, and
+  performs exactly one coordinated refresh and retry after HTTP 401. A 403 is
+  reported without token rotation. The access token never crosses into Train
+  or UI code. Real replies have a 30-second hard deadline, cancellation,
+  bounded payload collection, guarded destruction, and one cleanup path.
+  Athlete and route JSON, content types, pagination, 64-bit `id_str` values,
+  duplicate IDs, GPX media types, XML structure, DTDs, and payload sizes are
+  validated before use. The dialog defers its initial request until its modal
+  event loop is active, stores IDs in `Qt::UserRole`, stages GPX in a private
+  `QTemporaryFile`, commits final files with `QSaveFile`, and holds a database
+  transaction only while importing.
+- Verification: The RED cases reproduced stale-token use, duplicate refreshes,
+  unbounded waits, token leakage, malformed and oversized responses, unsafe
+  reply destruction, and reentrant token replacement. The final focused suites
+  pass 21 token-refresh, 25 authenticated-session, 47 OAuth-policy, and 31
+  Routes cases normally and under strict ASan/UBSan/LSan where applicable. The
+  related 106-case athlete/cloud-lifecycle sanitizer suite also passes. The
+  Qt 6.8.3 application compiles and links, and the complete release matrix
+  passes 78 suites and 2,600 tests with no failures, skips, or blacklists.
+
+### MEM-020: Network reply wait can outlive and dereference its reply
+
+- Status: FIXED
+- Code: `src/Cloud/NetworkReplyWait.cpp`, `src/Cloud/Strava.cpp`,
+  `src/Cloud/Nolio.cpp`, `src/Cloud/OAuthPKCE.cpp`,
+  `src/Cloud/WithingsDownload.cpp`, and
+  `src/Cloud/TredictMeasuresDownload.cpp`
+- Impact: If a pending reply or its manager is destroyed inside the nested
+  event loop, the timeout and interruption callbacks dereference a freed raw
+  pointer. Even after those callbacks were guarded, the wait returned
+  `Finished`, allowing token-refresh callers to read the destroyed reply.
+- Evidence: The RED controlled-reply test deleted a pending reply on the next
+  event-loop turn. The original code crashed in the timeout callback after
+  about one second. A second source-contract test showed that Strava refresh
+  did not distinguish destruction from completion.
+- Resolution: The wait owns a `QPointer`, quits on `destroyed`, guards every
+  abort, and returns an explicit `Destroyed` result. All current callers check
+  that result and their own guarded pointer before reading or deleting a reply.
+  A throwing interruption callback is treated as cancellation.
+- Verification: Destruction, timeout, and pre-existing interruption pass as
+  direct contract tests. The complete 106-case athlete/cloud-lifecycle suite
+  passes under strict ASan/UBSan/LSan, including Nolio, PKCE, Withings,
+  Tredict, and Strava publication paths.
+
+### SEC-014: Strava Routes stages private GPX in predictable files
+
+- Status: FIXED
+- Code: `src/Train/StravaRoutesClient.cpp` and
+  `src/Train/StravaRoutesDownload.cpp`
+- Impact: Route GPX can reveal precise home and travel locations. The old
+  implementation used a deterministic temporary name with default file
+  permissions and also included the provider-supplied route name in the final
+  path. Concurrent local access, collisions, path separators, and stale files
+  could expose data or redirect the write.
+- Resolution: Route IDs are validated positive 64-bit decimal values and the
+  final basename is derived only from that ID. Temporary GPX uses a random
+  owner-private `QTemporaryFile` with automatic removal, and final replacement
+  is atomic through `QSaveFile`.
+- Verification: The filename suite rejects traversal input and requires a
+  leaf-only result. Production wiring requires `QTemporaryFile` and rejects the
+  former deterministic path. Valid and hostile GPX cases pass normally and
+  under strict ASan/UBSan/LSan.
+
+### SEC-015: Strava credentials can follow cross-origin HTTPS redirects
+
+- Status: FIXED
+- Code: `src/Cloud/OAuthDialog.cpp`, `src/Cloud/Strava.cpp`, and
+  `src/Cloud/StravaAuthenticatedSession.cpp`
+- Impact: Qt follows HTTPS-to-HTTPS redirects by default, including redirects
+  to another host. Strava requests carry the client secret, refresh token, or
+  bearer token, so accepting an unexpected cross-origin redirect can expose
+  credentials. See the
+  [Qt 6.5 redirect policy](https://doc.qt.io/qt-6.5/qnetworkrequest.html#RedirectPolicy-enum).
+- Resolution: Every credential-bearing request in `Strava.cpp` and the
+  interactive Strava token exchange uses `SameOriginRedirectPolicy`. The
+  authenticated session also rejects every URL outside the current exact
+  HTTPS API origin, default TLS port, and `/api/v3` path.
+- Verification: Production wiring requires the policy on all six Strava
+  request sites and the interactive exchange. Data-driven tests reject
+  cleartext, foreign hosts, foreign ports, userinfo, OAuth paths, and API-prefix
+  lookalikes before a grant or network operation can run.
+
+### GUI-006: Strava Routes performs network work before the dialog is visible
+
+- Status: FIXED
+- Code: `src/Train/StravaRoutesDownload.cpp`
+- Impact: The constructor immediately entered a nested network wait before
+  `MainWindow` called `exec()`. The dialog was invisible, its cancellation
+  controls were unavailable, and nested GUI events could re-enter the menu.
+- Resolution: Initial refresh is posted with a context-bound zero-delay timer.
+  It begins only after construction has returned and the modal event loop is
+  active; destruction automatically cancels the callback.
+- Verification: Production wiring requires the deferred timer and forbids the
+  direct constructor call. The full application and complete matrix pass.
+
+### THREAD-009: Reentrant Strava requests can refresh the wrong token
+
+- Status: FIXED
+- Code: `src/Cloud/StravaAuthenticatedSession.cpp`
+- Impact: A nested event loop can install token B while a request made with
+  token A is pending. The old response path reread the mutable member after a
+  401 and could report B as rejected, rotate it unnecessarily, or fail to
+  redact A from an error.
+- Resolution: Each attempt snapshots its token for transport, rejection, and
+  redaction. If a valid replacement was installed reentrantly, the session
+  retries that replacement without invoking the refresh provider.
+- Verification: The RED test installs token B from inside token A's request,
+  returns 401, and requires requests A then B with only the initial grant call.
+  All 25 session cases pass normally and under strict ASan/UBSan/LSan.
+
+### THREAD-008: Strava refresh followers can still freeze the GUI
+
+- Status: OPEN
+- Code: `src/Cloud/StravaTokenRefresh.cpp` and
+  `src/Train/StravaRoutesDownload.cpp`
+- Impact: A Routes request on the GUI thread can join an in-flight refresh by
+  waiting on a condition variable. Although the leader's real network request
+  is bounded to 30 seconds, GUI events are not processed while the follower
+  waits, so Close and Abort cannot update the cancellation flag during that
+  interval.
+- Test: Hold a worker refresh open, join it from the GUI through the Routes
+  path, post Close, and require prompt cancellation without waiting for the
+  leader's deadline.
+- Fix direction: Expose asynchronous shared-flight completion or move the
+  complete Routes request off the GUI thread. Do not solve this by pumping
+  arbitrary nested GUI events inside the coordinator.
+
+### PERF-008: Strava route imports no longer share one database transaction
+
+- Status: OPEN
+- Code: `src/Train/StravaRoutesDownload.cpp`
+- Impact: Removing network waits from the original long transaction fixed lock
+  duration, but each successfully downloaded route now starts and commits its
+  own LUW. Importing many routes loses the previous batching benefit.
+- Test: Import a representative multi-route set and compare transaction count
+  and elapsed import time while proving no network wait occurs inside an LUW.
+- Fix direction: Separate bounded download and validation from a short batched
+  import phase, with bounded memory and correct partial-cancellation behavior.
 
 ### CLOUD-007: Removing Strava locally does not revoke provider authorization
 

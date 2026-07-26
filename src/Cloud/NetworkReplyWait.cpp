@@ -11,6 +11,7 @@
 
 #include <QEventLoop>
 #include <QNetworkReply>
+#include <QPointer>
 #include <QTimer>
 
 NetworkReplyWaitResult
@@ -19,16 +20,23 @@ waitForNetworkReply(
         int timeoutMs,
         const std::function<bool()> &interrupted)
 {
-    if (!reply) return NetworkReplyWaitResult::Finished;
+    QPointer<QNetworkReply> guardedReply(reply);
+    if (!guardedReply)
+        return NetworkReplyWaitResult::Finished;
 
     const auto interruptionRequested = [&interrupted]() {
-        return interrupted && interrupted();
+        if (!interrupted) return false;
+        try {
+            return interrupted();
+        } catch (...) {
+            return true;
+        }
     };
     if (interruptionRequested()) {
-        reply->abort();
+        guardedReply->abort();
         return NetworkReplyWaitResult::Interrupted;
     }
-    if (reply->isFinished())
+    if (guardedReply->isFinished())
         return NetworkReplyWaitResult::Finished;
 
     QEventLoop loop;
@@ -38,21 +46,30 @@ waitForNetworkReply(
     interruptionTimer.setInterval(10);
     bool timedOut = false;
     bool wasInterrupted = false;
+    bool wasDestroyed = false;
 
     QObject::connect(
-        reply, &QNetworkReply::finished,
+        guardedReply, &QNetworkReply::finished,
         &loop, &QEventLoop::quit);
+    QObject::connect(
+        guardedReply, &QObject::destroyed,
+        &loop, [&]() {
+            wasDestroyed = true;
+            loop.quit();
+        });
     QObject::connect(
         &timeoutTimer, &QTimer::timeout, &loop, [&]() {
             timedOut = true;
-            reply->abort();
+            if (guardedReply)
+                guardedReply->abort();
             loop.quit();
         });
     QObject::connect(
         &interruptionTimer, &QTimer::timeout, &loop, [&]() {
             if (!interruptionRequested()) return;
             wasInterrupted = true;
-            reply->abort();
+            if (guardedReply)
+                guardedReply->abort();
             loop.quit();
         });
 
@@ -66,5 +83,7 @@ waitForNetworkReply(
         return NetworkReplyWaitResult::Interrupted;
     if (timedOut)
         return NetworkReplyWaitResult::TimedOut;
+    if (wasDestroyed)
+        return NetworkReplyWaitResult::Destroyed;
     return NetworkReplyWaitResult::Finished;
 }

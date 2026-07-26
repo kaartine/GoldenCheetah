@@ -59,6 +59,22 @@ public:
         const CancellationCheck &cancelled,
         std::chrono::milliseconds cacheLifetime);
 
+    static StravaTokenRefreshResult
+    refreshAfterRejectedAccessToken(
+        const QString &accountKey,
+        const QString &inputRefreshToken,
+        const QString &rejectedAccessToken,
+        const CanonicalRefreshOperation &operation,
+        const CancellationCheck &cancelled = {});
+    static StravaTokenRefreshResult
+    refreshAfterRejectedAccessToken(
+        const QString &accountKey,
+        const QString &inputRefreshToken,
+        const QString &rejectedAccessToken,
+        const CanonicalRefreshOperation &operation,
+        const CancellationCheck &cancelled,
+        std::chrono::milliseconds cacheLifetime);
+
     static bool installAuthorization(
         const QString &accountKey,
         const StravaTokenRefreshResult &authorization);

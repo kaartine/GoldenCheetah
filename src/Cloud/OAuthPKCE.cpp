@@ -27,6 +27,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QNetworkReply>
+#include <QPointer>
 #include <QEventLoop>
 #include <QTimer>
 #include <QThread>
@@ -307,14 +308,26 @@ OAuthPKCE::exchangeCodeForTokens(const QString &code, const QString &codeVerifie
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/x-www-form-urlencoded");
 
     QNetworkReply *reply = nam.post(request, params.query(QUrl::FullyEncoded).toUtf8());
+    if (!reply) {
+        errorString_ = tr(
+            "Token exchange could not be started.");
+        return false;
+    }
+    QPointer<QNetworkReply> guardedReply(reply);
 
     QThread *thread = QThread::currentThread();
     const NetworkReplyWaitResult waitResult =
             waitForNetworkReply(
-                reply, timeout_ * 1000,
+                guardedReply, timeout_ * 1000,
                 [thread]() {
                     return thread->isInterruptionRequested();
                 });
+    if (waitResult == NetworkReplyWaitResult::Destroyed
+        || guardedReply.isNull()) {
+        errorString_ = tr(
+            "Token exchange reply ended unexpectedly.");
+        return false;
+    }
     if (waitResult == NetworkReplyWaitResult::Interrupted) {
         errorString_ = tr("Token exchange cancelled.");
         reply->deleteLater();
@@ -393,15 +406,27 @@ OAuthPKCE::refreshAccessTokenWithTimeout(
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/x-www-form-urlencoded");
 
     QNetworkReply *reply = nam.post(request, params.query(QUrl::FullyEncoded).toUtf8());
+    if (!reply) {
+        error = QObject::tr(
+            "Token refresh could not be started.");
+        return false;
+    }
+    QPointer<QNetworkReply> guardedReply(reply);
 
     QThread *thread = QThread::currentThread();
     const NetworkReplyWaitResult waitResult =
             waitForNetworkReply(
-                reply, timeoutMs,
+                guardedReply, timeoutMs,
                 [thread, isCancelled]() {
                     return thread->isInterruptionRequested()
                         || (isCancelled && isCancelled());
                 });
+    if (waitResult == NetworkReplyWaitResult::Destroyed
+        || guardedReply.isNull()) {
+        error = QObject::tr(
+            "Token refresh reply ended unexpectedly.");
+        return false;
+    }
     if (waitResult == NetworkReplyWaitResult::Interrupted) {
         error = QObject::tr("Token refresh cancelled.");
         reply->deleteLater();
