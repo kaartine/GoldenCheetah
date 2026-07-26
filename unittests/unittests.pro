@@ -14,6 +14,7 @@ equals(GC_UNITTESTS, active) {
 			   Cloud/credentialTransportSafety \
 			   Cloud/oauthCallbackPolicy \
 			   Cloud/oauthTokenReplyController \
+			   Cloud/stravaAuthenticatedSession \
 			   Cloud/stravaOAuthPolicy \
 			   Cloud/stravaApiReplyPolicy \
 			   Cloud/stravaTokenRefresh \

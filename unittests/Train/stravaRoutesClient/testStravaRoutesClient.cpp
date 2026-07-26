@@ -1,43 +1,31 @@
 #include "Train/StravaRoutesClient.h"
 
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QNetworkReply>
 #include <QTest>
 #include <QUrlQuery>
 
-#include <functional>
-
 namespace {
 
-using HttpResult = StravaRoutesClient::HttpResult;
-using TokenResult = StravaRoutesClient::TokenResult;
+using GetResult = StravaAuthenticatedSession::Result;
 
-HttpResult success(
+GetResult success(
     const QByteArray &payload,
     const QString &contentType = QStringLiteral("application/json"))
 {
-    HttpResult result;
-    result.httpStatus = 200;
+    GetResult result;
     result.payload = payload;
     result.contentType = contentType;
     return result;
 }
 
-HttpResult httpFailure(
-    int status,
-    QNetworkReply::NetworkError networkError)
+GetResult failure(const QString &error)
 {
-    HttpResult result;
-    result.httpStatus = status;
-    result.networkError = networkError;
-    result.networkErrorString =
-        QStringLiteral("Synthetic provider failure");
-    result.payload = QByteArrayLiteral(
-        R"json({"message":"Authorization Error","errors":[]})json");
-    result.contentType = QStringLiteral("application/json");
+    GetResult result;
+    result.error = error;
     return result;
 }
 
@@ -68,14 +56,18 @@ QByteArray routesPayload(
             QString::number(firstId + quint64(index)),
             QStringLiteral("Route %1").arg(index)));
     }
-    return QJsonDocument(routes).toJson(QJsonDocument::Compact);
+    return QJsonDocument(routes).toJson(
+        QJsonDocument::Compact);
 }
 
-TokenResult token(const QString &value)
+QByteArray sourceContents(const char *relativePath)
 {
-    TokenResult result;
-    result.accessToken = value;
-    return result;
+    const QString path = QFINDTESTDATA(relativePath);
+    if (path.isEmpty()) return {};
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) return {};
+    return file.readAll();
 }
 
 } // namespace
@@ -85,93 +77,88 @@ class TestStravaRoutesClient : public QObject
     Q_OBJECT
 
 private slots:
-    void refreshesBeforeRequestsAndReusesAccessToken();
+    void usesAuthenticatedGetForListAndGpx();
     void paginatesAndPreserves64BitRouteIds();
-    void refreshesOnceAfterMidPaginationUnauthorized();
-    void doesNotRetryForbidden();
-    void doesNotRetryASecondUnauthorized();
-    void reportsTimeoutAndCancellation_data();
-    void reportsTimeoutAndCancellation();
+    void requestsEmptyPageAfterFullFinalPage();
+    void discardsPartialRoutesAfterPageFailure();
+    void propagatesAuthenticatedFailure_data();
+    void propagatesAuthenticatedFailure();
     void observesCancellationBetweenPages();
     void rejectsMalformedResponses_data();
     void rejectsMalformedResponses();
     void rejectsOversizedResponses();
+    void limitsPagination();
     void validatesRouteIdBeforeGpxRequest_data();
     void validatesRouteIdBeforeGpxRequest();
-    void redactsAccessTokenFromErrors();
-    void productionWiringUsesSharedRefreshAndBoundedWait();
+    void validatesGpxResponse_data();
+    void validatesGpxResponse();
+    void buildsLeafOnlyWorkoutFileNames();
+    void productionWiringHidesCredentialsAndBoundsWork();
 };
 
-void TestStravaRoutesClient::
-refreshesBeforeRequestsAndReusesAccessToken()
+void TestStravaRoutesClient::usesAuthenticatedGetForListAndGpx()
 {
-    int tokenCalls = 0;
     int requestCalls = 0;
+    bool invalidMaximum = false;
+    bool unexpectedUrl = false;
     StravaRoutesClient client(
-        [&](bool forceRefresh,
-            const StravaRoutesClient::CancellationCheck &) {
-            ++tokenCalls;
-            QVERIFY(!forceRefresh);
-            return token(QStringLiteral("fresh-access"));
-        },
         [&](const QUrl &url,
-            const QString &accessToken,
             qsizetype maximumBytes,
             const StravaRoutesClient::CancellationCheck &) {
             ++requestCalls;
-            QCOMPARE(accessToken, QStringLiteral("fresh-access"));
-            QVERIFY(maximumBytes > 0);
+            invalidMaximum |= maximumBytes <= 0;
             if (url.path().endsWith(QStringLiteral("/athlete")))
                 return success(athletePayload());
             if (url.path().contains(QStringLiteral("/athletes/")))
                 return success(routesPayload(1));
-            QCOMPARE(
-                url.path(),
-                QStringLiteral("/api/v3/routes/1000/export_gpx"));
+            unexpectedUrl |= url.path()
+                != QStringLiteral(
+                    "/api/v3/routes/1000/export_gpx");
             return success(
-                QByteArrayLiteral("<gpx/>"),
+                QByteArrayLiteral(
+                    R"xml(<gpx version="1.1"></gpx>)xml"),
                 QStringLiteral("application/gpx+xml"));
         });
 
     const auto routes = client.listRoutes();
     QVERIFY2(routes.isValid(), qPrintable(routes.error));
     QCOMPARE(routes.routes.size(), 1);
-    QCOMPARE(routes.routes.first().routeId, QStringLiteral("1000"));
+    QCOMPARE(
+        routes.routes.first().routeId,
+        QStringLiteral("1000"));
 
-    const auto gpx = client.downloadGpx(QStringLiteral("1000"));
+    const auto gpx = client.downloadGpx(
+        QStringLiteral("1000"));
     QVERIFY2(gpx.isValid(), qPrintable(gpx.error));
-    QCOMPARE(gpx.payload, QByteArrayLiteral("<gpx/>"));
-    QCOMPARE(tokenCalls, 1);
     QCOMPARE(requestCalls, 3);
+    QVERIFY(!invalidMaximum);
+    QVERIFY(!unexpectedUrl);
 }
 
-void TestStravaRoutesClient::paginatesAndPreserves64BitRouteIds()
+void TestStravaRoutesClient::
+paginatesAndPreserves64BitRouteIds()
 {
     constexpr auto LargeRouteId = "9223372036854775700";
     int pageRequests = 0;
     StravaRoutesClient client(
-        [](bool,
-           const StravaRoutesClient::CancellationCheck &) {
-            return token(QStringLiteral("access"));
-        },
         [&](const QUrl &url,
-            const QString &,
             qsizetype,
             const StravaRoutesClient::CancellationCheck &) {
             if (url.path().endsWith(QStringLiteral("/athlete")))
                 return success(athletePayload());
 
             ++pageRequests;
-            const int page =
-                QUrlQuery(url).queryItemValue(
-                    QStringLiteral("page")).toInt();
-            if (page == 1)
+            const int page = QUrlQuery(url)
+                .queryItemValue(QStringLiteral("page"))
+                .toInt();
+            if (page == 1) {
                 return success(routesPayload(
                     StravaRoutesClient::PageSize));
+            }
 
             QJsonArray finalPage;
             finalPage.append(routeObject(
-                QStringLiteral(LargeRouteId)));
+                QString::fromLatin1(LargeRouteId)));
             return success(
                 QJsonDocument(finalPage)
                     .toJson(QJsonDocument::Compact));
@@ -185,171 +172,103 @@ void TestStravaRoutesClient::paginatesAndPreserves64BitRouteIds()
         StravaRoutesClient::PageSize + 1);
     QCOMPARE(
         result.routes.last().routeId,
-        QStringLiteral(LargeRouteId));
+        QString::fromLatin1(LargeRouteId));
     QCOMPARE(pageRequests, 2);
 }
 
 void TestStravaRoutesClient::
-refreshesOnceAfterMidPaginationUnauthorized()
+requestsEmptyPageAfterFullFinalPage()
 {
-    QList<bool> refreshRequests;
-    int pageTwoAttempts = 0;
+    int pageRequests = 0;
     StravaRoutesClient client(
-        [&](bool forceRefresh,
-            const StravaRoutesClient::CancellationCheck &) {
-            refreshRequests.append(forceRefresh);
-            return token(forceRefresh
-                ? QStringLiteral("rotated-access")
-                : QStringLiteral("initial-access"));
-        },
         [&](const QUrl &url,
-            const QString &accessToken,
             qsizetype,
             const StravaRoutesClient::CancellationCheck &) {
             if (url.path().endsWith(QStringLiteral("/athlete")))
                 return success(athletePayload());
-
-            const int page =
-                QUrlQuery(url).queryItemValue(
-                    QStringLiteral("page")).toInt();
-            if (page == 1)
-                return success(routesPayload(
-                    StravaRoutesClient::PageSize));
-
-            ++pageTwoAttempts;
-            if (pageTwoAttempts == 1) {
-                QCOMPARE(
-                    accessToken,
-                    QStringLiteral("initial-access"));
-                return httpFailure(
-                    401,
-                    QNetworkReply::AuthenticationRequiredError);
-            }
-            QCOMPARE(
-                accessToken,
-                QStringLiteral("rotated-access"));
-            return success(routesPayload(1, 9000));
+            ++pageRequests;
+            return success(pageRequests == 1
+                ? routesPayload(StravaRoutesClient::PageSize)
+                : QByteArrayLiteral("[]"));
         });
 
-    const auto routes = client.listRoutes();
+    const auto result = client.listRoutes();
 
-    QVERIFY2(routes.isValid(), qPrintable(routes.error));
+    QVERIFY2(result.isValid(), qPrintable(result.error));
     QCOMPARE(
-        routes.routes.size(),
-        StravaRoutesClient::PageSize + 1);
-    QCOMPARE(refreshRequests, QList<bool>({false, true}));
-    QCOMPARE(pageTwoAttempts, 2);
-}
-
-void TestStravaRoutesClient::doesNotRetryForbidden()
-{
-    int tokenCalls = 0;
-    int requestCalls = 0;
-    StravaRoutesClient client(
-        [&](bool,
-            const StravaRoutesClient::CancellationCheck &) {
-            ++tokenCalls;
-            return token(QStringLiteral("access"));
-        },
-        [&](const QUrl &,
-            const QString &,
-            qsizetype,
-            const StravaRoutesClient::CancellationCheck &) {
-            ++requestCalls;
-            return httpFailure(
-                403, QNetworkReply::ContentAccessDenied);
-        });
-
-    const auto result = client.listRoutes();
-
-    QVERIFY(!result.isValid());
-    QVERIFY(result.error.contains(QStringLiteral("HTTP 403")));
-    QCOMPARE(tokenCalls, 1);
-    QCOMPARE(requestCalls, 1);
-}
-
-void TestStravaRoutesClient::doesNotRetryASecondUnauthorized()
-{
-    int tokenCalls = 0;
-    int requestCalls = 0;
-    StravaRoutesClient client(
-        [&](bool forceRefresh,
-            const StravaRoutesClient::CancellationCheck &) {
-            QCOMPARE(forceRefresh, tokenCalls == 1);
-            ++tokenCalls;
-            return token(QStringLiteral("access-%1").arg(tokenCalls));
-        },
-        [&](const QUrl &,
-            const QString &,
-            qsizetype,
-            const StravaRoutesClient::CancellationCheck &) {
-            ++requestCalls;
-            return httpFailure(
-                401,
-                QNetworkReply::AuthenticationRequiredError);
-        });
-
-    const auto result = client.listRoutes();
-
-    QVERIFY(!result.isValid());
-    QVERIFY(result.error.contains(QStringLiteral("HTTP 401")));
-    QCOMPARE(tokenCalls, 2);
-    QCOMPARE(requestCalls, 2);
+        result.routes.size(),
+        StravaRoutesClient::PageSize);
+    QCOMPARE(pageRequests, 2);
 }
 
 void TestStravaRoutesClient::
-reportsTimeoutAndCancellation_data()
+discardsPartialRoutesAfterPageFailure()
 {
-    QTest::addColumn<StravaRoutesClient::RequestFailure>(
-        "failure");
-    QTest::addColumn<QString>("message");
-
-    QTest::newRow("timeout")
-        << StravaRoutesClient::RequestFailure::TimedOut
-        << QStringLiteral("timed out");
-    QTest::newRow("cancelled")
-        << StravaRoutesClient::RequestFailure::Cancelled
-        << QStringLiteral("cancelled");
-}
-
-void TestStravaRoutesClient::reportsTimeoutAndCancellation()
-{
-    QFETCH(StravaRoutesClient::RequestFailure, failure);
-    QFETCH(QString, message);
-
+    int pageRequests = 0;
     StravaRoutesClient client(
-        [](bool,
-           const StravaRoutesClient::CancellationCheck &) {
-            return token(QStringLiteral("access"));
-        },
-        [failure](const QUrl &,
-                  const QString &,
-                  qsizetype,
-                  const StravaRoutesClient::CancellationCheck &) {
-            HttpResult result;
-            result.failure = failure;
-            return result;
+        [&](const QUrl &url,
+            qsizetype,
+            const StravaRoutesClient::CancellationCheck &) {
+            if (url.path().endsWith(QStringLiteral("/athlete")))
+                return success(athletePayload());
+            ++pageRequests;
+            if (pageRequests == 1) {
+                return success(routesPayload(
+                    StravaRoutesClient::PageSize));
+            }
+            return failure(QStringLiteral(
+                "Synthetic authenticated page failure."));
         });
 
     const auto result = client.listRoutes();
 
     QVERIFY(!result.isValid());
-    QVERIFY2(
-        result.error.contains(message, Qt::CaseInsensitive),
-        qPrintable(result.error));
+    QVERIFY(result.routes.isEmpty());
+    QVERIFY(result.error.contains(
+        QStringLiteral("page failure")));
+    QCOMPARE(pageRequests, 2);
 }
 
-void TestStravaRoutesClient::observesCancellationBetweenPages()
+void TestStravaRoutesClient::
+propagatesAuthenticatedFailure_data()
+{
+    QTest::addColumn<QString>("error");
+
+    QTest::newRow("forbidden")
+        << QStringLiteral(
+               "Strava request failed (HTTP 403).");
+    QTest::newRow("timeout")
+        << QStringLiteral(
+               "Strava request timed out.");
+    QTest::newRow("cancelled")
+        << QStringLiteral(
+               "Strava request was cancelled.");
+}
+
+void TestStravaRoutesClient::propagatesAuthenticatedFailure()
+{
+    QFETCH(QString, error);
+    StravaRoutesClient client(
+        [error](
+            const QUrl &,
+            qsizetype,
+            const StravaRoutesClient::CancellationCheck &) {
+            return failure(error);
+        });
+
+    const auto result = client.listRoutes();
+
+    QVERIFY(!result.isValid());
+    QCOMPARE(result.error, error);
+}
+
+void TestStravaRoutesClient::
+observesCancellationBetweenPages()
 {
     int requestCalls = 0;
     bool cancelled = false;
     StravaRoutesClient client(
-        [](bool,
-           const StravaRoutesClient::CancellationCheck &) {
-            return token(QStringLiteral("access"));
-        },
         [&](const QUrl &url,
-            const QString &,
             qsizetype,
             const StravaRoutesClient::CancellationCheck &) {
             ++requestCalls;
@@ -364,6 +283,7 @@ void TestStravaRoutesClient::observesCancellationBetweenPages()
         client.listRoutes([&] { return cancelled; });
 
     QVERIFY(!result.isValid());
+    QVERIFY(result.routes.isEmpty());
     QVERIFY(result.error.contains(
         QStringLiteral("cancelled"), Qt::CaseInsensitive));
     QCOMPARE(requestCalls, 2);
@@ -374,12 +294,18 @@ void TestStravaRoutesClient::rejectsMalformedResponses_data()
     QTest::addColumn<QByteArray>("athlete");
     QTest::addColumn<QByteArray>("routes");
 
+    QTest::newRow("empty-athlete")
+        << QByteArray()
+        << QByteArrayLiteral("[]");
     QTest::newRow("athlete-json")
         << QByteArrayLiteral("{")
         << QByteArrayLiteral("[]");
     QTest::newRow("athlete-id")
         << QByteArrayLiteral(R"json({"id":"not-a-number"})json")
         << QByteArrayLiteral("[]");
+    QTest::newRow("empty-routes")
+        << athletePayload()
+        << QByteArray();
     QTest::newRow("routes-object")
         << athletePayload()
         << QByteArrayLiteral("{}");
@@ -398,13 +324,8 @@ void TestStravaRoutesClient::rejectsMalformedResponses()
     QFETCH(QByteArray, athlete);
     QFETCH(QByteArray, routes);
     StravaRoutesClient client(
-        [](bool,
-           const StravaRoutesClient::CancellationCheck &) {
-            return token(QStringLiteral("access"));
-        },
         [athlete, routes](
             const QUrl &url,
-            const QString &,
             qsizetype,
             const StravaRoutesClient::CancellationCheck &) {
             return success(
@@ -415,23 +336,18 @@ void TestStravaRoutesClient::rejectsMalformedResponses()
     const auto result = client.listRoutes();
 
     QVERIFY(!result.isValid());
+    QVERIFY(result.routes.isEmpty());
     QVERIFY(!result.error.isEmpty());
 }
 
 void TestStravaRoutesClient::rejectsOversizedResponses()
 {
     StravaRoutesClient client(
-        [](bool,
-           const StravaRoutesClient::CancellationCheck &) {
-            return token(QStringLiteral("access"));
-        },
         [](const QUrl &,
-           const QString &,
            qsizetype maximumBytes,
            const StravaRoutesClient::CancellationCheck &) {
-            HttpResult result = success(
+            return success(
                 QByteArray(maximumBytes + 1, 'x'));
-            return result;
         });
 
     const auto result = client.listRoutes();
@@ -439,6 +355,32 @@ void TestStravaRoutesClient::rejectsOversizedResponses()
     QVERIFY(!result.isValid());
     QVERIFY(result.error.contains(
         QStringLiteral("oversized"), Qt::CaseInsensitive));
+}
+
+void TestStravaRoutesClient::limitsPagination()
+{
+    int pageRequests = 0;
+    StravaRoutesClient client(
+        [&](const QUrl &url,
+            qsizetype,
+            const StravaRoutesClient::CancellationCheck &) {
+            if (url.path().endsWith(QStringLiteral("/athlete")))
+                return success(athletePayload());
+            ++pageRequests;
+            return success(routesPayload(
+                StravaRoutesClient::PageSize,
+                quint64(pageRequests) * 100000));
+        });
+
+    const auto result = client.listRoutes();
+
+    QVERIFY(!result.isValid());
+    QVERIFY(result.routes.isEmpty());
+    QVERIFY(result.error.contains(
+        QStringLiteral("safety limit")));
+    QCOMPARE(
+        pageRequests,
+        StravaRoutesClient::MaximumPages);
 }
 
 void TestStravaRoutesClient::
@@ -454,85 +396,119 @@ validatesRouteIdBeforeGpxRequest_data()
         << QStringLiteral("9223372036854775808");
 }
 
-void TestStravaRoutesClient::validatesRouteIdBeforeGpxRequest()
+void TestStravaRoutesClient::
+validatesRouteIdBeforeGpxRequest()
 {
     QFETCH(QString, routeId);
-    int tokenCalls = 0;
     int requestCalls = 0;
     StravaRoutesClient client(
-        [&](bool,
-            const StravaRoutesClient::CancellationCheck &) {
-            ++tokenCalls;
-            return token(QStringLiteral("access"));
-        },
         [&](const QUrl &,
-            const QString &,
             qsizetype,
             const StravaRoutesClient::CancellationCheck &) {
             ++requestCalls;
-            return success(QByteArrayLiteral("<gpx/>"));
+            return success(
+                QByteArrayLiteral("<gpx/>"),
+                QStringLiteral("application/gpx+xml"));
         });
 
     const auto result = client.downloadGpx(routeId);
 
     QVERIFY(!result.isValid());
-    QCOMPARE(tokenCalls, 0);
     QCOMPARE(requestCalls, 0);
 }
 
-void TestStravaRoutesClient::redactsAccessTokenFromErrors()
+void TestStravaRoutesClient::validatesGpxResponse_data()
 {
-    const QString secret = QStringLiteral("sensitive-access-token");
+    QTest::addColumn<QByteArray>("payload");
+    QTest::addColumn<QString>("contentType");
+    QTest::addColumn<bool>("valid");
+
+    QTest::newRow("valid")
+        << QByteArrayLiteral(
+               R"xml(<?xml version="1.0"?><gpx version="1.1"></gpx>)xml")
+        << QStringLiteral("application/gpx+xml")
+        << true;
+    QTest::newRow("wrong-type")
+        << QByteArrayLiteral("<gpx/>")
+        << QStringLiteral("text/plain")
+        << false;
+    QTest::newRow("malformed")
+        << QByteArrayLiteral("<gpx>")
+        << QStringLiteral("application/gpx+xml")
+        << false;
+    QTest::newRow("wrong-root")
+        << QByteArrayLiteral("<TrainingCenterDatabase/>")
+        << QStringLiteral("application/xml")
+        << false;
+}
+
+void TestStravaRoutesClient::validatesGpxResponse()
+{
+    QFETCH(QByteArray, payload);
+    QFETCH(QString, contentType);
+    QFETCH(bool, valid);
     StravaRoutesClient client(
-        [secret](bool,
-                 const StravaRoutesClient::CancellationCheck &) {
-            return token(secret);
-        },
-        [secret](const QUrl &,
-                 const QString &,
-                 qsizetype,
-                 const StravaRoutesClient::CancellationCheck &) {
-            HttpResult result;
-            result.networkError =
-                QNetworkReply::RemoteHostClosedError;
-            result.networkErrorString =
-                QStringLiteral("connection failed for %1").arg(secret);
-            return result;
+        [payload, contentType](
+            const QUrl &,
+            qsizetype,
+            const StravaRoutesClient::CancellationCheck &) {
+            return success(payload, contentType);
         });
 
-    const auto result = client.listRoutes();
+    const auto result =
+        client.downloadGpx(QStringLiteral("42"));
 
-    QVERIFY(!result.isValid());
-    QVERIFY(!result.error.contains(secret));
-    QVERIFY(result.error.contains(QStringLiteral("[redacted]")));
+    QCOMPARE(result.isValid(), valid);
+    if (!valid)
+        QVERIFY(!result.error.isEmpty());
+}
+
+void TestStravaRoutesClient::buildsLeafOnlyWorkoutFileNames()
+{
+    const QString name =
+        StravaRoutesClient::workoutFileName(
+            QStringLiteral("9223372036854775700"));
+
+    QCOMPARE(
+        name,
+        QStringLiteral(
+            "Strava-Route-9223372036854775700.gpx"));
+    QCOMPARE(QFileInfo(name).fileName(), name);
+    QVERIFY(StravaRoutesClient::workoutFileName(
+        QStringLiteral("../route")).isEmpty());
 }
 
 void TestStravaRoutesClient::
-productionWiringUsesSharedRefreshAndBoundedWait()
+productionWiringHidesCredentialsAndBoundsWork()
 {
-    const QString sourceRoot =
-        QString::fromUtf8(SRCDIR) + QStringLiteral("../../../src/");
-    QFile routesSource(
-        sourceRoot + QStringLiteral("Train/StravaRoutesDownload.cpp"));
-    QVERIFY(routesSource.open(QIODevice::ReadOnly));
-    const QByteArray routes = routesSource.readAll();
+    const QByteArray routes = sourceContents(
+        "../../../src/Train/StravaRoutesDownload.cpp");
+    QVERIFY(!routes.isEmpty());
 
     QVERIFY(!routes.contains("QEventLoop"));
     QVERIFY(!routes.contains("GC_STRAVA_TOKEN"));
-    QVERIFY(routes.contains("waitForNetworkReply("));
-    QVERIFY(routes.contains("30000"));
-    QVERIFY(routes.contains("deleteLater()"));
-    QVERIFY(routes.contains(
-        "StravaTokenRefreshCoordinator::invalidate("));
-    QVERIFY(routes.contains("open(errors, cancellation)"));
+    QVERIFY(!routes.contains("Authorization"));
+    QVERIFY(!routes.contains("waitForNetworkReply("));
+    QVERIFY(!routes.contains(
+        "StravaTokenRefreshCoordinator"));
+    QVERIFY(routes.contains("authenticatedGet("));
+    QVERIFY(routes.contains("Qt::UserRole"));
+    QVERIFY(!routes.contains("setText(4"));
 
-    QFile stravaSource(
-        sourceRoot + QStringLiteral("Cloud/Strava.cpp"));
-    QVERIFY(stravaSource.open(QIODevice::ReadOnly));
-    const QByteArray strava = stravaSource.readAll();
+    const qsizetype readPosition =
+        routes.indexOf("readFile(");
+    const qsizetype transactionPosition =
+        routes.indexOf("trainDB->startLUW()", readPosition);
+    QVERIFY(readPosition >= 0);
+    QVERIFY(transactionPosition > readPosition);
+
+    const QByteArray strava = sourceContents(
+        "../../../src/Cloud/Strava.cpp");
+    QVERIFY(!strava.isEmpty());
     QVERIFY(strava.contains(
-        "bool\nStrava::open(\n    QStringList &errors,\n"
-        "    const CancellationCheck &cancelled)"));
+        "StravaAuthenticatedSession"));
+    QVERIFY(strava.contains(
+        "refreshAfterRejectedAccessToken("));
 }
 
 QTEST_MAIN(TestStravaRoutesClient)

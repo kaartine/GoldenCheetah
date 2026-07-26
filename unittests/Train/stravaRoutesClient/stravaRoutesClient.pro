@@ -6,7 +6,9 @@ TARGET = testStravaRoutesClient
 SOURCES = testStravaRoutesClient.cpp \
           ../../../src/Train/StravaRoutesClient.cpp
 
-HEADERS = ../../../src/Train/StravaRoutesClient.h
+HEADERS = ../../../src/Train/StravaRoutesClient.h \
+          ../../../src/Cloud/StravaAuthenticatedSession.h \
+          ../../../src/Cloud/StravaNetworkReply.h
 
 include(../../unittests.pri)
 

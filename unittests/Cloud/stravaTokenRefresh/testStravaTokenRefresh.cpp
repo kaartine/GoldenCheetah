@@ -106,6 +106,10 @@ private slots:
     void invalidationClearsCompletedCache();
     void invalidationSupersedesActiveLeader();
     void authorizationInstallSupersedesActiveLeader();
+    void rejectedAccessConcurrentCallersRefreshOnce();
+    void lateRejectedAccessCallerReusesNewerGrant();
+    void rejectingCurrentRotatedAccessRefreshesAgain();
+    void rejectedAccessRefreshesDifferentAccountsConcurrently();
     void thrownOperationFailsClosed();
     void invalidInputAndIncompleteSuccessDoNotPolluteCache();
 };
@@ -633,6 +637,236 @@ authorizationInstallSupersedesActiveLeader()
         installed.sourceRefreshToken,
         authorizedResult.refreshToken);
     QCOMPARE(calls.load(), 1);
+}
+
+void TestStravaTokenRefresh::
+rejectedAccessConcurrentCallersRefreshOnce()
+{
+    const QString account =
+        uniqueValue(QStringLiteral("rejected-concurrent"));
+    const QString originalRefresh =
+        uniqueValue(QStringLiteral("refresh-original"));
+    const StravaTokenRefreshResult initial = successfulResult(
+        uniqueValue(QStringLiteral("access-rejected")),
+        uniqueValue(QStringLiteral("refresh-current")));
+    compareResult(
+        StravaTokenRefreshCoordinator::refresh(
+            account, originalRefresh, [&] {
+                return initial;
+            }),
+        initial);
+
+    const StravaTokenRefreshResult expected = successfulResult(
+        uniqueValue(QStringLiteral("access-replacement")),
+        uniqueValue(QStringLiteral("refresh-replacement")));
+    OperationGate gate;
+    std::atomic<int> calls{0};
+    auto operation = [&](const QString &) {
+        ++calls;
+        enterAndWait(gate);
+        return expected;
+    };
+
+    std::vector<std::future<StravaTokenRefreshResult>> callers;
+    callers.emplace_back(std::async(
+        std::launch::async,
+        [&] {
+            return StravaTokenRefreshCoordinator::
+                refreshAfterRejectedAccessToken(
+                    account,
+                    initial.refreshToken,
+                    initial.accessToken,
+                    operation);
+        }));
+    QVERIFY2(waitForEntered(gate, 1),
+             "The rejected-token refresh did not start.");
+
+    for (int index = 0; index < 7; ++index) {
+        callers.emplace_back(std::async(
+            std::launch::async,
+            [&] {
+                return StravaTokenRefreshCoordinator::
+                    refreshAfterRejectedAccessToken(
+                        account,
+                        originalRefresh,
+                        initial.accessToken,
+                        operation);
+            }));
+    }
+
+    QThread::msleep(80);
+    release(gate);
+    for (auto &caller : callers)
+        compareResult(caller.get(), expected);
+    QCOMPARE(calls.load(), 1);
+}
+
+void TestStravaTokenRefresh::
+lateRejectedAccessCallerReusesNewerGrant()
+{
+    const QString account =
+        uniqueValue(QStringLiteral("rejected-late"));
+    const QString originalRefresh =
+        uniqueValue(QStringLiteral("refresh-original"));
+    const StravaTokenRefreshResult initial = successfulResult(
+        uniqueValue(QStringLiteral("access-rejected")),
+        uniqueValue(QStringLiteral("refresh-current")));
+    compareResult(
+        StravaTokenRefreshCoordinator::refresh(
+            account, originalRefresh, [&] {
+                return initial;
+            }),
+        initial);
+
+    const StravaTokenRefreshResult replacement = successfulResult(
+        uniqueValue(QStringLiteral("access-replacement")),
+        uniqueValue(QStringLiteral("refresh-replacement")));
+    std::atomic<int> calls{0};
+    compareResult(
+        StravaTokenRefreshCoordinator::
+            refreshAfterRejectedAccessToken(
+                account,
+                initial.refreshToken,
+                initial.accessToken,
+                [&](const QString &) {
+                    ++calls;
+                    return replacement;
+                }),
+        replacement);
+
+    const auto mustNotRun = [&](const QString &) {
+        ++calls;
+        return failedResult(QStringLiteral(
+            "A late 401 started a second token rotation."));
+    };
+    compareResult(
+        StravaTokenRefreshCoordinator::
+            refreshAfterRejectedAccessToken(
+                account,
+                originalRefresh,
+                initial.accessToken,
+                mustNotRun),
+        replacement);
+    QCOMPARE(calls.load(), 1);
+}
+
+void TestStravaTokenRefresh::
+rejectingCurrentRotatedAccessRefreshesAgain()
+{
+    const QString account =
+        uniqueValue(QStringLiteral("rejected-current"));
+    const QString originalRefresh =
+        uniqueValue(QStringLiteral("refresh-original"));
+    const StravaTokenRefreshResult first = successfulResult(
+        uniqueValue(QStringLiteral("access-first")),
+        uniqueValue(QStringLiteral("refresh-first")));
+    const StravaTokenRefreshResult second = successfulResult(
+        uniqueValue(QStringLiteral("access-second")),
+        uniqueValue(QStringLiteral("refresh-second")));
+    const StravaTokenRefreshResult third = successfulResult(
+        uniqueValue(QStringLiteral("access-third")),
+        uniqueValue(QStringLiteral("refresh-third")));
+    compareResult(
+        StravaTokenRefreshCoordinator::refresh(
+            account, originalRefresh, [&] {
+                return first;
+            }),
+        first);
+
+    int calls = 0;
+    const auto operation = [&](const QString &) {
+        ++calls;
+        return calls == 1 ? second : third;
+    };
+    compareResult(
+        StravaTokenRefreshCoordinator::
+            refreshAfterRejectedAccessToken(
+                account,
+                first.refreshToken,
+                first.accessToken,
+                operation),
+        second);
+    compareResult(
+        StravaTokenRefreshCoordinator::
+            refreshAfterRejectedAccessToken(
+                account,
+                second.refreshToken,
+                second.accessToken,
+                operation),
+        third);
+    QCOMPARE(calls, 2);
+}
+
+void TestStravaTokenRefresh::
+rejectedAccessRefreshesDifferentAccountsConcurrently()
+{
+    const QString firstAccount =
+        uniqueValue(QStringLiteral("rejected-account-a"));
+    const QString secondAccount =
+        uniqueValue(QStringLiteral("rejected-account-b"));
+    const QString firstRefresh =
+        uniqueValue(QStringLiteral("refresh-a"));
+    const QString secondRefresh =
+        uniqueValue(QStringLiteral("refresh-b"));
+    const StravaTokenRefreshResult firstInitial = successfulResult(
+        uniqueValue(QStringLiteral("access-a")),
+        uniqueValue(QStringLiteral("refresh-a-current")));
+    const StravaTokenRefreshResult secondInitial = successfulResult(
+        uniqueValue(QStringLiteral("access-b")),
+        uniqueValue(QStringLiteral("refresh-b-current")));
+    QVERIFY(StravaTokenRefreshCoordinator::refresh(
+        firstAccount, firstRefresh,
+        [&] { return firstInitial; }).isValid());
+    QVERIFY(StravaTokenRefreshCoordinator::refresh(
+        secondAccount, secondRefresh,
+        [&] { return secondInitial; }).isValid());
+
+    OperationGate gate;
+    std::atomic<bool> overlapped{false};
+    const auto operation = [&](const QString &label) {
+        return [&, label](const QString &) {
+            {
+                std::unique_lock<std::mutex> lock(gate.mutex);
+                ++gate.entered;
+                gate.condition.notify_all();
+                if (gate.condition.wait_for(
+                        lock, 1s,
+                        [&] { return gate.entered >= 2; })) {
+                    overlapped = true;
+                }
+            }
+            return successfulResult(
+                uniqueValue(
+                    QStringLiteral("replacement-access-")
+                    + label),
+                uniqueValue(
+                    QStringLiteral("replacement-refresh-")
+                    + label));
+        };
+    };
+
+    auto first = std::async(std::launch::async, [&] {
+        return StravaTokenRefreshCoordinator::
+            refreshAfterRejectedAccessToken(
+                firstAccount,
+                firstInitial.refreshToken,
+                firstInitial.accessToken,
+                operation(QStringLiteral("a")));
+    });
+    auto second = std::async(std::launch::async, [&] {
+        return StravaTokenRefreshCoordinator::
+            refreshAfterRejectedAccessToken(
+                secondAccount,
+                secondInitial.refreshToken,
+                secondInitial.accessToken,
+                operation(QStringLiteral("b")));
+    });
+
+    QVERIFY(first.get().isValid());
+    QVERIFY(second.get().isValid());
+    QVERIFY2(overlapped.load(),
+             "Rejected-token refreshes for different accounts "
+             "were serialized.");
 }
 
 void TestStravaTokenRefresh::thrownOperationFailsClosed()
