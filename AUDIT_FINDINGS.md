@@ -2826,6 +2826,32 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   fields in the image, and verify source, binary, image, and sidecar hashes at
   promotion time.
 
+### BUILD-012: Primary AppImage packaging omits the libsecret runtime
+
+- Status: OPEN
+- Code: `src/Resources/linux/MakeAppImageQt6.sh`,
+  `src/Resources/linux/AppImagePackagingSupport.sh`, and
+  `.devcontainer/package-appimage.sh`
+- Impact: On a Linux desktop without a host `libsecret-1.so.0`, QtKeychain
+  cannot open the native credential vault. GoldenCheetah fails closed instead
+  of writing new plaintext credentials, but OAuth setup, token rotation, and
+  legacy-credential migration cannot complete durably.
+- Evidence: QtKeychain loads `secret-1` through `QLibrary`, so
+  `linuxdeployqt` cannot discover it from the ELF dependency graph. The
+  development-container packager compensates by copying the resolved library
+  and license, but the primary Qt6 packager does not call that logic. A fresh
+  primary-package artifact contained the offscreen plugin and embedded Python
+  but no `libsecret-1.so.0`; it worked locally only because the host provides
+  that library.
+- Test: Package from an environment that has libsecret available only at build
+  time, inspect the finished AppImage for the library and license, resolve its
+  transitive dependencies, and exercise a sentinel vault write in an isolated
+  runtime without host library fallback.
+- Fix direction: Move explicit dynamically loaded runtime deployment into one
+  shared packaging helper used by every AppImage path. Fail packaging unless
+  the finished image contains libsecret, its license, and a successful
+  isolated QtKeychain probe.
+
 ### SEC-013: A desktop AppImage cannot keep its Strava client secret private
 
 - Status: OPEN
