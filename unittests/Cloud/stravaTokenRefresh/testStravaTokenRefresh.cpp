@@ -141,6 +141,8 @@ private slots:
     void successfulAuthorizationRemovalInvalidatesGrant();
     void removalWaitCanBeCancelledPromptly();
     void cancellationAfterPendingStillCompletesRemoval();
+    void abortedRemovalReconcilesCompletedRefresh_data();
+    void abortedRemovalReconcilesCompletedRefresh();
     void explicitAuthorizationReopensPendingAccount();
     void persistedNonActiveStateCannotBeReopenedByStaleClone();
     void installedGrantSupersedesStaleCloneState();
@@ -482,7 +484,7 @@ failedPublicationBlocksRequestGrant()
             });
     QVERIFY(removed.isSuccess());
     QCOMPARE(removedToken, unpublished.refreshToken);
-    QVERIFY(removed.remoteAuthorizationMayRemain);
+    QVERIFY(!removed.remoteAuthorizationMayRemain);
 }
 
 void TestStravaTokenRefresh::followerCancellationIsPrompt()
@@ -1656,6 +1658,112 @@ cancellationAfterPendingStillCompletesRemoval()
         StravaTokenRefreshCoordinator::authorizationStatus(
             account),
         StravaAuthorizationStatus::Revoked);
+}
+
+void TestStravaTokenRefresh::
+abortedRemovalReconcilesCompletedRefresh_data()
+{
+    QTest::addColumn<bool>("cancelRemoval");
+
+    QTest::newRow("cancelled") << true;
+    QTest::newRow("timed-out") << false;
+}
+
+void TestStravaTokenRefresh::
+abortedRemovalReconcilesCompletedRefresh()
+{
+    QFETCH(bool, cancelRemoval);
+
+    const QString account =
+        uniqueValue(QStringLiteral("aborted-remove-refresh"));
+    const StravaTokenRefreshResult durable = successfulResult(
+        uniqueValue(QStringLiteral("access-durable")),
+        uniqueValue(QStringLiteral("refresh-durable")));
+    const StravaTokenRefreshResult rotated = successfulResult(
+        uniqueValue(QStringLiteral("access-rotated")),
+        uniqueValue(QStringLiteral("refresh-rotated")));
+    QVERIFY(StravaTokenRefreshCoordinator::installAuthorization(
+        account, durable));
+
+    StravaAuthorizedRequest activeRequest =
+        StravaTokenRefreshCoordinator::
+            beginAuthorizedRequest(account);
+    QVERIFY(activeRequest.isValid());
+    QVERIFY(activeRequest.authorizeDispatch());
+
+    OperationGate refreshGate;
+    auto refresh = std::async(std::launch::async, [&] {
+        return StravaTokenRefreshCoordinator::
+            refreshAfterRejectedAccessToken(
+                account,
+                durable.refreshToken,
+                durable.accessToken,
+                [&](const QString &) {
+                    enterAndWait(refreshGate);
+                    return rotated;
+                });
+    });
+    QVERIFY2(waitForEntered(refreshGate, 1),
+             "The refresh operation did not start.");
+
+    std::atomic<bool> cancelled{false};
+    std::atomic<int> pendingCalls{0};
+    std::atomic<int> removalCalls{0};
+    auto removal = std::async(std::launch::async, [&] {
+        return StravaTokenRefreshCoordinator::
+            removeAuthorization(
+                account,
+                durable.refreshToken,
+                [&] {
+                    ++pendingCalls;
+                    return true;
+                },
+                [&](const QString &) {
+                    ++removalCalls;
+                    return successfulRemoval();
+                },
+                [&] { return cancelled.load(); },
+                cancelRemoval ? 5s : 500ms);
+    });
+
+    QTRY_VERIFY_WITH_TIMEOUT(
+        !StravaTokenRefreshCoordinator::
+            authorizationUsable(account),
+        1000);
+    release(refreshGate);
+    const StravaTokenRefreshResult interruptedRefresh =
+        refresh.get();
+    QVERIFY(!interruptedRefresh.isValid());
+    if (cancelRemoval)
+        cancelled = true;
+
+    const StravaAuthorizationRemovalResult aborted =
+        removal.get();
+    QVERIFY(!aborted.isSuccess());
+    QCOMPARE(pendingCalls.load(), 0);
+    QCOMPARE(removalCalls.load(), 0);
+    QCOMPARE(
+        StravaTokenRefreshCoordinator::authorizationStatus(
+            account),
+        StravaAuthorizationStatus::Active);
+    activeRequest.release();
+
+    QString effectiveToken;
+    const StravaTokenRefreshResult retried =
+        StravaTokenRefreshCoordinator::
+            refreshAfterRejectedAccessToken(
+            account,
+            durable.refreshToken,
+            durable.accessToken,
+            [&](const QString &token) {
+                effectiveToken = token;
+                return successfulResult(
+                    uniqueValue(QStringLiteral("access-retry")),
+                    uniqueValue(QStringLiteral("refresh-retry")));
+            });
+    QVERIFY(retried.isValid());
+    QCOMPARE(effectiveToken, rotated.refreshToken);
+    QVERIFY(aborted.remoteAuthorizationMayRemain);
 }
 
 void TestStravaTokenRefresh::

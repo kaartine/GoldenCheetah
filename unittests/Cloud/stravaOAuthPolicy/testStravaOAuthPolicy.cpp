@@ -921,7 +921,22 @@ credentialsPageOffersExplicitStravaDisconnectModes()
     QVERIFY(deletion.contains("setCancelButton(nullptr)"));
     QVERIFY(deletion.contains("Qt::QueuedConnection"));
     QVERIFY(deletion.contains("irreversible"));
+    QVERIFY(deletion.contains(
+        "std::shared_ptr<QObject>"));
+    QVERIFY(deletion.contains("irreversibleContext.get()"));
+    QVERIFY(deletion.contains("irreversibleStarted->load("));
+    QVERIFY(!deletion.contains("guardedProgress.data(),"));
     QVERIFY(!deletion.contains("account was disabled"));
+
+    const qsizetype resultCall =
+        deletion.indexOf("watcher->result()");
+    const qsizetype resultTry =
+        deletion.lastIndexOf("try {", resultCall);
+    const qsizetype resultCatch =
+        deletion.indexOf("catch (...)", resultCall);
+    QVERIFY(resultCall >= 0);
+    QVERIFY(resultTry >= 0);
+    QVERIFY(resultCatch > resultCall);
 }
 
 QTEST_MAIN(TestStravaOAuthPolicy)
