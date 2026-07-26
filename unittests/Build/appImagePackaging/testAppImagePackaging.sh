@@ -7,8 +7,10 @@ SUPPORT="$REPO_ROOT/src/Resources/linux/AppImagePackagingSupport.sh"
 LOCAL_PACKAGER="$REPO_ROOT/src/Resources/linux/MakeAppImageQt6.sh"
 CI_PACKAGER="$REPO_ROOT/appveyor/linux/after_build.sh"
 DEV_PACKAGER="$REPO_ROOT/.devcontainer/package-appimage.sh"
+APPVEYOR_INSTALL="$REPO_ROOT/appveyor/linux/install.sh"
 REQUIREMENTS="$REPO_ROOT/src/Python/requirements.txt"
 DEV_CONFIG="$REPO_ROOT/.devcontainer/gcconfig.pri"
+MAIN_SOURCE="$REPO_ROOT/src/Core/main.cpp"
 
 fail()
 {
@@ -72,6 +74,12 @@ declare -F linux_keychain_appimage_status >/dev/null ||
     fail "linux_keychain_appimage_status helper is missing"
 declare -F require_linux_keychain_appimage >/dev/null ||
     fail "require_linux_keychain_appimage helper is missing"
+declare -F linux_keychain_entrypoint_status >/dev/null ||
+    fail "linux_keychain_entrypoint_status helper is missing"
+declare -F create_linux_keychain_deploy_probe >/dev/null ||
+    fail "create_linux_keychain_deploy_probe helper is missing"
+declare -F remove_linux_keychain_deploy_probe >/dev/null ||
+    fail "remove_linux_keychain_deploy_probe helper is missing"
 
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
@@ -101,18 +109,47 @@ cat >"$TEMP_DIR/status-probe.c" <<'EOF'
 
 int main(int argc, char **argv)
 {
-    if (argc != 2
-        || strcmp(
-            argv[1],
-            "--goldencheetah-build-status") != 0) {
-        return 64;
-    }
-
 #ifdef GC_STATUS_MODE
     const char *mode = GC_STATUS_MODE;
 #else
     const char *mode = argv[0];
 #endif
+
+    if (argc != 2) {
+        return 64;
+    }
+    if (strcmp(
+            argv[1],
+            "--goldencheetah-linux-keychain-status") == 0) {
+        fputs(
+            "goldencheetah_linux_keychain_status=1\n"
+            "application=GoldenCheetah\n",
+            stdout);
+        if (strstr(mode, "keychain-disabled") != NULL) {
+            fputs(
+                "libsecret_compile_support=disabled\n"
+                "libsecret_runtime=unavailable\n",
+                stdout);
+        } else if (strstr(
+                       mode,
+                       "keychain-unavailable") != NULL) {
+            fputs(
+                "libsecret_compile_support=enabled\n"
+                "libsecret_runtime=unavailable\n",
+                stdout);
+        } else {
+            fputs(
+                "libsecret_compile_support=enabled\n"
+                "libsecret_runtime=available\n",
+                stdout);
+        }
+        return 0;
+    }
+    if (strcmp(
+            argv[1],
+            "--goldencheetah-build-status") != 0) {
+        return 64;
+    }
 
     fputs(
         "goldencheetah_build_status=1\n"
@@ -159,6 +196,14 @@ EOF
     -DGC_STATUS_MODE='"malformed"' \
     "$TEMP_DIR/status-probe.c" \
     -o "$TEMP_DIR/malformed-entry"
+"${CC:-cc}" -std=c99 -Wall -Wextra -Werror \
+    -DGC_STATUS_MODE='"keychain-disabled"' \
+    "$TEMP_DIR/status-probe.c" \
+    -o "$TEMP_DIR/keychain-disabled-entry"
+"${CC:-cc}" -std=c99 -Wall -Wextra -Werror \
+    -DGC_STATUS_MODE='"keychain-unavailable"' \
+    "$TEMP_DIR/status-probe.c" \
+    -o "$TEMP_DIR/keychain-unavailable-entry"
 chmod +x "$TEMP_DIR/status-probe.c"
 cp "$TEMP_DIR/configured" "$TEMP_DIR/unconfigured"
 cp "$TEMP_DIR/configured" "$TEMP_DIR/malformed"
@@ -168,17 +213,40 @@ cp "$TEMP_DIR/configured" "$TEMP_DIR/oversized"
 cp "$TEMP_DIR/configured" "$TEMP_DIR/missing-newline"
 cp "$TEMP_DIR/configured" "$TEMP_DIR/extra-newline"
 
+DEPLOY_PROBE=$(create_linux_keychain_deploy_probe \
+    "$TEMP_DIR/configured" "$TEMP_DIR")
+[ -x "$DEPLOY_PROBE" ] ||
+    fail "Linux keychain deploy probe was not created"
+LC_ALL=C readelf -d "$DEPLOY_PROBE" |
+    grep -Eq '\(NEEDED\).*\[libsecret-1\.so\.0\]' ||
+    fail "Linux keychain deploy probe does not require libsecret"
+remove_linux_keychain_deploy_probe "$DEPLOY_PROBE"
+[ ! -e "$DEPLOY_PROBE" ] ||
+    fail "Linux keychain deploy probe was not removed"
+
 mkdir -p "$TEMP_DIR/libsecret/lib" "$TEMP_DIR/libsecret/bin"
 cat >"$TEMP_DIR/libsecret/libsecret-fixture.c" <<'EOF'
-int gc_libsecret_fixture(void)
-{
-    return 0;
-}
+#define LIBSECRET_SYMBOL(name) void name(void) {}
+LIBSECRET_SYMBOL(secret_password_lookup)
+LIBSECRET_SYMBOL(secret_password_lookup_finish)
+LIBSECRET_SYMBOL(secret_password_store)
+LIBSECRET_SYMBOL(secret_password_store_finish)
+LIBSECRET_SYMBOL(secret_password_clear)
+LIBSECRET_SYMBOL(secret_password_clear_finish)
+LIBSECRET_SYMBOL(secret_password_free)
+LIBSECRET_SYMBOL(secret_error_get_quark)
 EOF
 "${CC:-cc}" -std=c99 -Wall -Wextra -Werror -shared -fPIC \
     -Wl,-soname,libsecret-1.so.0 \
     "$TEMP_DIR/libsecret/libsecret-fixture.c" \
     -o "$TEMP_DIR/libsecret/lib/libsecret-1.so.0.0"
+cat >"$TEMP_DIR/libsecret/incomplete-fixture.c" <<'EOF'
+void secret_password_lookup(void) {}
+EOF
+"${CC:-cc}" -std=c99 -Wall -Wextra -Werror -shared -fPIC \
+    -Wl,-soname,libsecret-1.so.0 \
+    "$TEMP_DIR/libsecret/incomplete-fixture.c" \
+    -o "$TEMP_DIR/libsecret/incomplete-libsecret-1.so.0"
 ln -s libsecret-1.so.0.0 \
     "$TEMP_DIR/libsecret/lib/libsecret-1.so.0"
 cat >"$TEMP_DIR/libsecret/bin/pkg-config" <<EOF
@@ -192,10 +260,13 @@ printf 'fixture libsecret copyright\n' \
     >"$TEMP_DIR/libsecret/copyright"
 printf 'fixture QtKeychain license\n' \
     >"$TEMP_DIR/libsecret/QtKeychain-COPYING"
+printf 'fixture complete LGPL-2.1 license\n' \
+    >"$TEMP_DIR/libsecret/LGPL-2.1"
 
 KEYCHAIN_APPDIR="$TEMP_DIR/keychain.AppDir"
 PATH="$TEMP_DIR/libsecret/bin:$PATH" \
     LIBSECRET_COPYRIGHT_FILE="$TEMP_DIR/libsecret/copyright" \
+    LIBSECRET_LICENSE_FILE="$TEMP_DIR/libsecret/LGPL-2.1" \
     install_linux_keychain_runtime \
         "$KEYCHAIN_APPDIR" \
         "$TEMP_DIR/libsecret/QtKeychain-COPYING"
@@ -211,6 +282,36 @@ cmp "$TEMP_DIR/libsecret/copyright" \
 cmp "$TEMP_DIR/libsecret/QtKeychain-COPYING" \
     "$KEYCHAIN_APPDIR/usr/share/doc/GoldenCheetah/licenses/QtKeychain-COPYING" ||
     fail "QtKeychain license was not copied exactly"
+cmp "$TEMP_DIR/libsecret/LGPL-2.1" \
+    "$KEYCHAIN_APPDIR/usr/share/doc/GoldenCheetah/licenses/LGPL-2.1" ||
+    fail "complete LGPL-2.1 license was not copied exactly"
+
+INCOMPLETE_APPDIR="$TEMP_DIR/incomplete-keychain.AppDir"
+mkdir -p \
+    "$INCOMPLETE_APPDIR/usr/lib" \
+    "$INCOMPLETE_APPDIR/usr/share/doc/GoldenCheetah/licenses"
+cp "$TEMP_DIR/libsecret/incomplete-libsecret-1.so.0" \
+    "$INCOMPLETE_APPDIR/usr/lib/libsecret-1.so.0"
+cp "$TEMP_DIR/libsecret/copyright" \
+    "$TEMP_DIR/libsecret/QtKeychain-COPYING" \
+    "$TEMP_DIR/libsecret/LGPL-2.1" \
+    "$INCOMPLETE_APPDIR/usr/share/doc/GoldenCheetah/licenses/"
+mv "$INCOMPLETE_APPDIR/usr/share/doc/GoldenCheetah/licenses/copyright" \
+    "$INCOMPLETE_APPDIR/usr/share/doc/GoldenCheetah/licenses/libsecret-copyright"
+if linux_keychain_runtime_status "$INCOMPLETE_APPDIR" \
+    >/dev/null 2>&1; then
+    fail "libsecret runtime without required QtKeychain symbols was accepted"
+fi
+
+ESCAPED_APPDIR="$TEMP_DIR/escaped-keychain.AppDir"
+cp -a "$KEYCHAIN_APPDIR" "$ESCAPED_APPDIR"
+rm "$ESCAPED_APPDIR/usr/lib/libsecret-1.so.0"
+ln -s "$TEMP_DIR/libsecret/lib/libsecret-1.so.0.0" \
+    "$ESCAPED_APPDIR/usr/lib/libsecret-1.so.0"
+if linux_keychain_runtime_status "$ESCAPED_APPDIR" \
+    >/dev/null 2>&1; then
+    fail "libsecret symlink escaping the AppDir was accepted"
+fi
 
 rm "$KEYCHAIN_APPDIR/usr/share/doc/GoldenCheetah/licenses/libsecret-copyright"
 if linux_keychain_runtime_status "$KEYCHAIN_APPDIR" \
@@ -309,6 +410,8 @@ run_packaging_appimage()
             squashfs-root/usr/share/doc/GoldenCheetah/licenses/libsecret-copyright
         cp "$GC_TEST_APPIMAGE_QTKEYCHAIN_LICENSE" \
             squashfs-root/usr/share/doc/GoldenCheetah/licenses/QtKeychain-COPYING
+        cp "$GC_TEST_APPIMAGE_LIBSECRET_LICENSE" \
+            squashfs-root/usr/share/doc/GoldenCheetah/licenses/LGPL-2.1
     fi
 }
 
@@ -343,6 +446,10 @@ fi
 GC_TEST_APPIMAGE_LIBSECRET="$TEMP_DIR/libsecret/lib/libsecret-1.so.0.0"
 GC_TEST_APPIMAGE_LIBSECRET_COPYRIGHT="$TEMP_DIR/libsecret/copyright"
 GC_TEST_APPIMAGE_QTKEYCHAIN_LICENSE="$TEMP_DIR/libsecret/QtKeychain-COPYING"
+GC_TEST_APPIMAGE_LIBSECRET_LICENSE="$TEMP_DIR/libsecret/LGPL-2.1"
+[ "$(linux_keychain_entrypoint_status "$TEMP_DIR/configured-entry")" = \
+  "Linux keychain runtime: available" ] ||
+    fail "compiled and available Linux keychain entrypoint was not reported"
 [ "$(linux_keychain_appimage_status "$TEMP_DIR/type2.AppImage")" = \
   "Linux keychain runtime: bundled" ] ||
     fail "packaged Linux keychain runtime was not reported"
@@ -359,6 +466,23 @@ if require_linux_keychain_appimage "$TEMP_DIR/type2.AppImage" \
     >/dev/null 2>&1; then
     fail "release gate accepted a keychain runtime without copyright"
 fi
+
+GC_TEST_APPIMAGE_LIBSECRET_COPYRIGHT="$TEMP_DIR/libsecret/copyright"
+GC_TEST_APPIMAGE_ENTRY="$TEMP_DIR/keychain-disabled-entry"
+GC_TEST_APPIMAGE_ENTRY_NAME="keychain-disabled-entry"
+if linux_keychain_appimage_status "$TEMP_DIR/type2.AppImage" \
+    >/dev/null 2>&1; then
+    fail "packaged binary without compiled libsecret support was accepted"
+fi
+GC_TEST_APPIMAGE_ENTRY="$TEMP_DIR/keychain-unavailable-entry"
+GC_TEST_APPIMAGE_ENTRY_NAME="keychain-unavailable-entry"
+if linux_keychain_appimage_status "$TEMP_DIR/type2.AppImage" \
+    >/dev/null 2>&1; then
+    fail "packaged binary with unavailable libsecret runtime was accepted"
+fi
+
+GC_TEST_APPIMAGE_ENTRY="$TEMP_DIR/configured-entry"
+GC_TEST_APPIMAGE_ENTRY_NAME="configured-entry"
 GC_TEST_APPIMAGE_LIBSECRET=
 if linux_keychain_appimage_status "$TEMP_DIR/type2.AppImage" \
     >/dev/null 2>&1; then
@@ -391,6 +515,10 @@ for packager in "$LOCAL_PACKAGER" "$CI_PACKAGER" "$DEV_PACKAGER"; do
         'install_linux_keychain_runtime'
     assert_contains "$packager" \
         'require_linux_keychain_appimage'
+    assert_contains "$packager" \
+        'create_linux_keychain_deploy_probe'
+    assert_contains "$packager" \
+        'remove_linux_keychain_deploy_probe'
 done
 
 if grep -Fq 'python3.7' "$LOCAL_PACKAGER"; then
@@ -404,6 +532,10 @@ assert_contains "$DEV_CONFIG" \
     '# DEFINES += GC_STRAVA_CLIENT_ID=\\\"your_client_id\\\"'
 assert_contains "$DEV_CONFIG" \
     '# DEFINES += GC_STRAVA_CLIENT_SECRET=\\\"your_client_secret\\\"'
+assert_contains "$MAIN_SOURCE" \
+    '--goldencheetah-linux-keychain-status'
+assert_contains "$APPVEYOR_INSTALL" 'libsecret-1-dev'
+assert_contains "$APPVEYOR_INSTALL" 'pkg-config'
 
 bash -n "$SUPPORT"
 echo "PASS: AppImage Python runtime and packaging helpers are consistent"

@@ -3214,7 +3214,13 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   installer, AppDir and completed-AppImage status checks, exact runtime and
   license copies, fail-closed missing-license behavior, and use of the shared
   pre- and post-package gates by every AppImage path. The RED run fails at the
-  first absent helper, `install_linux_keychain_runtime`.
+  first absent helper, `install_linux_keychain_runtime`. Independent review
+  then added RED contracts for the eight QtKeychain symbols, AppDir-contained
+  files, a complete LGPL-2.1 license, a temporary `DT_NEEDED` deployment probe,
+  compiled and runtime-available libsecret status from the actual entrypoint,
+  and AppVeyor build dependencies. The shell fixture fails at the absent
+  entrypoint gate, while the CredentialSettings test fails to compile at the
+  absent pure status-report function.
 - Test: Package from an environment that has libsecret available only at build
   time, inspect the finished AppImage for the library and license, resolve its
   transitive dependencies, and exercise a sentinel vault write in an isolated

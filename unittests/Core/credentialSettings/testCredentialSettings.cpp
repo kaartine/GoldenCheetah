@@ -155,6 +155,8 @@ private slots:
     void credentialClassification();
     void keychainStatusMapping_data();
     void keychainStatusMapping();
+    void linuxKeychainRuntimeStatusReport_data();
+    void linuxKeychainRuntimeStatusReport();
     void keychainJobsDisablePlaintextFallback();
     void platformStoreRoundTripsOrFailsClosed();
     void plaintextMigratesToVault();
@@ -265,6 +267,49 @@ void TestCredentialSettings::keychainStatusMapping()
     QFETCH(int, status);
     QCOMPARE(int(CredentialStoreQtKeychainDetail::statusForError(
                  QKeychain::Error(error))), status);
+}
+
+void TestCredentialSettings::linuxKeychainRuntimeStatusReport_data()
+{
+    QTest::addColumn<bool>("compileSupport");
+    QTest::addColumn<bool>("runtimeAvailable");
+    QTest::addColumn<QByteArray>("expected");
+
+    const QByteArray prefix(
+        "goldencheetah_linux_keychain_status=1\n"
+        "application=GoldenCheetah\n");
+    QTest::newRow("enabled-and-available")
+        << true << true
+        << prefix
+            + "libsecret_compile_support=enabled\n"
+              "libsecret_runtime=available\n";
+    QTest::newRow("enabled-but-unavailable")
+        << true << false
+        << prefix
+            + "libsecret_compile_support=enabled\n"
+              "libsecret_runtime=unavailable\n";
+    QTest::newRow("disabled")
+        << false << false
+        << prefix
+            + "libsecret_compile_support=disabled\n"
+              "libsecret_runtime=unavailable\n";
+    QTest::newRow("disabled-ignores-runtime")
+        << false << true
+        << prefix
+            + "libsecret_compile_support=disabled\n"
+              "libsecret_runtime=unavailable\n";
+}
+
+void TestCredentialSettings::linuxKeychainRuntimeStatusReport()
+{
+    QFETCH(bool, compileSupport);
+    QFETCH(bool, runtimeAvailable);
+    QFETCH(QByteArray, expected);
+
+    QCOMPARE(
+        CredentialStoreQtKeychainDetail::linuxRuntimeStatusReport(
+            compileSupport, runtimeAvailable),
+        expected);
 }
 
 void TestCredentialSettings::keychainJobsDisablePlaintextFallback()
