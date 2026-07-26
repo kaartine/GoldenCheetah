@@ -808,7 +808,7 @@ serviceDisconnectRevokesBeforeCredentialRemoval()
         "../../../src/Cloud/StravaAccountRemoval.cpp");
     QVERIFY(!removal.isEmpty());
     QVERIFY(removal.contains(
-        "StravaTokenRefreshCoordinator::removeAuthorization("));
+        "removeAuthorizationTransaction("));
     QVERIFY(removal.contains(
         "markRevocationPending("));
     QVERIFY(removal.contains(
@@ -927,6 +927,16 @@ credentialsPageOffersExplicitStravaDisconnectModes()
     QVERIFY(deletion.contains("irreversibleStarted->load("));
     QVERIFY(!deletion.contains("guardedProgress.data(),"));
     QVERIFY(!deletion.contains("account was disabled"));
+
+    const qsizetype phaseContext =
+        deletion.indexOf("irreversibleContext.get()");
+    const qsizetype phaseQueued =
+        deletion.indexOf("Qt::QueuedConnection", phaseContext);
+    QVERIFY(phaseContext >= 0);
+    QVERIFY(phaseQueued > phaseContext);
+    const QByteArray phaseUpdate = deletion.mid(
+        phaseContext, phaseQueued - phaseContext);
+    QVERIFY(phaseUpdate.contains("guardedProgress->show()"));
 
     const qsizetype resultCall =
         deletion.indexOf("watcher->result()");
