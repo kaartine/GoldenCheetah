@@ -1,6 +1,7 @@
 #include "Cloud/StravaOAuthPolicy.h"
 
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkReply>
@@ -11,6 +12,23 @@ namespace {
 
 const QString ClientId = QStringLiteral("83");
 const QString ClientSecret = QStringLiteral("synthetic-client-secret");
+const QString AccessToken =
+    QStringLiteral("synthetic-access-token");
+const QString RefreshToken =
+    QStringLiteral("synthetic-refresh-token");
+
+QByteArray authorizationPayload(const QJsonValue &scope)
+{
+    QJsonObject object{
+        {QStringLiteral("access_token"), AccessToken},
+        {QStringLiteral("refresh_token"), RefreshToken}
+    };
+    if (!scope.isUndefined()) {
+        object.insert(QStringLiteral("scope"), scope);
+    }
+    return QJsonDocument(object).toJson(
+        QJsonDocument::Compact);
+}
 
 QByteArray sourceContents(const char *relativePath)
 {
@@ -82,6 +100,9 @@ private slots:
     void parsesSuccessfulTokenResponse();
     void rejectsInvalidTokenResponse_data();
     void rejectsInvalidTokenResponse();
+    void parsesGrantedAuthorizationScopes();
+    void rejectsInvalidAuthorizationScopes_data();
+    void rejectsInvalidAuthorizationScopes();
     void serviceOpenUsesCoordinatedDurableRefresh();
     void oauthGrantSupersedesRefreshAndPublishesDurably();
 };
@@ -431,6 +452,96 @@ void TestStravaOAuthPolicy::rejectsInvalidTokenResponse()
         QStringLiteral("synthetic-access-token")));
     QVERIFY(!response.error.contains(
         QStringLiteral("synthetic-refresh-token")));
+}
+
+void TestStravaOAuthPolicy::parsesGrantedAuthorizationScopes()
+{
+    const auto response =
+        StravaOAuthPolicy::parseAuthorizationResponse(
+            authorizationPayload(QStringLiteral(
+                "activity:write future:read read_all "
+                "activity:read_all read_all")));
+
+    QVERIFY2(response.isValid(), qPrintable(response.error));
+    QCOMPARE(response.accessToken, AccessToken);
+    QCOMPARE(response.refreshToken, RefreshToken);
+    QCOMPARE(
+        response.grantedScopes,
+        QStringList({
+            QStringLiteral("activity:read_all"),
+            QStringLiteral("activity:write"),
+            QStringLiteral("future:read"),
+            QStringLiteral("read_all")
+        }));
+}
+
+void TestStravaOAuthPolicy::
+rejectsInvalidAuthorizationScopes_data()
+{
+    QTest::addColumn<QByteArray>("payload");
+
+    QTest::newRow("missing")
+        << authorizationPayload(QJsonValue::Undefined);
+    QTest::newRow("null")
+        << authorizationPayload(QJsonValue::Null);
+    QTest::newRow("array")
+        << authorizationPayload(QJsonArray{
+               QStringLiteral("read_all"),
+               QStringLiteral("activity:read_all"),
+               QStringLiteral("activity:write")
+           });
+    QTest::newRow("empty")
+        << authorizationPayload(QString());
+    QTest::newRow("blank")
+        << authorizationPayload(QStringLiteral("   "));
+    QTest::newRow("missing-route-read")
+        << authorizationPayload(QStringLiteral(
+               "activity:read_all activity:write"));
+    QTest::newRow("missing-activity-read")
+        << authorizationPayload(QStringLiteral(
+               "read_all activity:write"));
+    QTest::newRow("missing-upload")
+        << authorizationPayload(QStringLiteral(
+               "read_all activity:read_all"));
+    QTest::newRow("case-sensitive")
+        << authorizationPayload(QStringLiteral(
+               "READ_ALL activity:read_all activity:write"));
+    QTest::newRow("tab-delimited")
+        << authorizationPayload(QStringLiteral(
+               "read_all\tactivity:read_all\tactivity:write"));
+    QTest::newRow("oversized")
+        << authorizationPayload(
+               QString(4096, QLatin1Char('A')));
+
+    QStringList excessiveScopes{
+        QStringLiteral("read_all"),
+        QStringLiteral("activity:read_all"),
+        QStringLiteral("activity:write")
+    };
+    for (int index = 0; index < 65; ++index) {
+        excessiveScopes.append(
+            QStringLiteral("future:%1").arg(index));
+    }
+    QTest::newRow("too-many")
+        << authorizationPayload(
+               excessiveScopes.join(QLatin1Char(' ')));
+}
+
+void TestStravaOAuthPolicy::rejectsInvalidAuthorizationScopes()
+{
+    QFETCH(QByteArray, payload);
+
+    const auto response =
+        StravaOAuthPolicy::parseAuthorizationResponse(payload);
+
+    QVERIFY(!response.isValid());
+    QVERIFY(response.accessToken.isEmpty());
+    QVERIFY(response.refreshToken.isEmpty());
+    QVERIFY(response.grantedScopes.isEmpty());
+    QVERIFY(!response.error.isEmpty());
+    QVERIFY(!response.error.contains(AccessToken));
+    QVERIFY(!response.error.contains(RefreshToken));
+    QVERIFY(response.error.size() <= 1024);
 }
 
 void TestStravaOAuthPolicy::
