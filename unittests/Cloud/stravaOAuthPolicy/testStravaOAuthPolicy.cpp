@@ -1,5 +1,6 @@
 #include "Cloud/StravaOAuthPolicy.h"
 
+#include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkReply>
@@ -10,6 +11,30 @@ namespace {
 
 const QString ClientId = QStringLiteral("83");
 const QString ClientSecret = QStringLiteral("synthetic-client-secret");
+
+QByteArray sourceContents(const char *relativePath)
+{
+    const QString path = QFINDTESTDATA(relativePath);
+    if (path.isEmpty()) return {};
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) return {};
+    return file.readAll();
+}
+
+QByteArray sourceSection(
+    const QByteArray &source,
+    const QByteArray &startMarker,
+    const QByteArray &endMarker)
+{
+    const qsizetype start = source.indexOf(startMarker);
+    if (start < 0) return {};
+
+    const qsizetype end = source.indexOf(
+        endMarker, start + startMarker.size());
+    if (end < 0) return {};
+    return source.mid(start, end - start);
+}
 
 QUrlQuery formBody(const StravaOAuthPolicy::TokenRequest &request)
 {
@@ -57,6 +82,8 @@ private slots:
     void parsesSuccessfulTokenResponse();
     void rejectsInvalidTokenResponse_data();
     void rejectsInvalidTokenResponse();
+    void serviceOpenUsesCoordinatedDurableRefresh();
+    void oauthGrantSupersedesRefreshAndPublishesDurably();
 };
 
 void TestStravaOAuthPolicy::rejectsUnavailableCredentials_data()
@@ -404,6 +431,67 @@ void TestStravaOAuthPolicy::rejectsInvalidTokenResponse()
         QStringLiteral("synthetic-access-token")));
     QVERIFY(!response.error.contains(
         QStringLiteral("synthetic-refresh-token")));
+}
+
+void TestStravaOAuthPolicy::
+serviceOpenUsesCoordinatedDurableRefresh()
+{
+    const QByteArray source = sourceContents(
+        "../../../src/Cloud/Strava.cpp");
+    QVERIFY(!source.isEmpty());
+
+    const QByteArray open = sourceSection(
+        source,
+        "Strava::open(QStringList &errors)",
+        "Strava::close()");
+    QVERIFY(!open.isEmpty());
+    QVERIFY(open.contains("_gcAthleteName"));
+    QVERIFY(open.contains(
+        "StravaTokenRefreshCoordinator::refresh("));
+    QVERIFY(open.contains("waitForNetworkReply("));
+    QVERIFY(open.contains(
+        "StravaCredentialPublisher::publish("));
+    QVERIFY(open.contains(
+        "PublicationMode::CompareAndSwap"));
+    QVERIFY(open.contains(
+        "refreshResult.sourceRefreshToken"));
+    QVERIFY(open.contains("tokenReply->deleteLater()"));
+    QVERIFY(!open.contains("QEventLoop"));
+    QVERIFY(!open.contains(
+        "CloudServiceFactory::instance().saveSettings"));
+}
+
+void TestStravaOAuthPolicy::
+oauthGrantSupersedesRefreshAndPublishesDurably()
+{
+    const QByteArray source = sourceContents(
+        "../../../src/Cloud/OAuthDialog.cpp");
+    QVERIFY(!source.isEmpty());
+
+    const qsizetype start = source.lastIndexOf(
+        "} else if (site == STRAVA) {");
+    QVERIFY(start >= 0);
+    const qsizetype end = source.indexOf(
+        "} else if (site == CYCLING_ANALYTICS) {", start);
+    QVERIFY(end > start);
+    const QByteArray branch = source.mid(start, end - start);
+
+    const qsizetype invalidate = branch.indexOf(
+        "StravaTokenRefreshCoordinator::invalidate(");
+    const qsizetype publish = branch.indexOf(
+        "StravaCredentialPublisher::publish(");
+    const qsizetype install = branch.indexOf(
+        "installAuthorization(");
+    const qsizetype updateClone = branch.indexOf(
+        "service->setSetting(GC_STRAVA_TOKEN");
+
+    QVERIFY(branch.contains("_gcAthleteName"));
+    QVERIFY(branch.contains(
+        "PublicationMode::Authoritative"));
+    QVERIFY(invalidate >= 0);
+    QVERIFY(publish > invalidate);
+    QVERIFY(install > publish);
+    QVERIFY(updateClone > install);
 }
 
 QTEST_MAIN(TestStravaOAuthPolicy)
