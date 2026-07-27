@@ -1027,6 +1027,8 @@ private slots:
     void malformedRootIdentityFailsClosed();
     void malformedAthleteScopeFailsClosed();
     void escapedAthleteCredentialPathsFailClosed();
+    void danglingAthletePrivateSymlinkFailsClosed();
+    void invalidAthleteDoesNotDisableValidCredentials();
     void windowsAthleteJunctionFailsClosed();
     void preInitializationUsesLocalAthleteScope();
     void clearedRootDoesNotRetainAthleteScope();
@@ -10738,6 +10740,109 @@ escapedAthleteCredentialPathsFailClosed()
 #endif
     QVERIFY(factoryState()->values.isEmpty());
     QCOMPARE(factoryState()->writes, 0);
+}
+
+void TestCredentialSettings::
+danglingAthletePrivateSymlinkFailsClosed()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("This regression requires a dangling symlink");
+#else
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialDanglingPrivate-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("library"));
+    const QString configPath =
+        QDir(athleteRoot).filePath(
+            QStringLiteral("Athlete/config"));
+    const QString privatePath =
+        QDir(configPath).filePath(
+            QStringLiteral("athlete-private.ini"));
+    const QString outsidePath =
+        temporary.filePath(
+            QStringLiteral("outside/private.ini"));
+    QVERIFY(QDir().mkpath(configPath));
+    QVERIFY(QDir().mkpath(
+        QFileInfo(outsidePath).absolutePath()));
+    QVERIFY(QFile::link(outsidePath, privatePath));
+    QVERIFY(QFileInfo(privatePath).isSymLink());
+    QVERIFY(!QFileInfo::exists(outsidePath));
+
+    factoryState() =
+        std::make_shared<FakeStoreState>();
+    GSettings settings(organization, application);
+    settings.initializeQSettingsGlobal(athleteRoot);
+    settings.initializeQSettingsAthlete(
+        athleteRoot, athleteName);
+
+    QVERIFY(!settings.setCValueChecked(
+        athleteName, GC_STRAVA_TOKEN,
+        QStringLiteral("must-not-be-stored")));
+    QVERIFY(!QFileInfo::exists(outsidePath));
+    QVERIFY(QFileInfo(privatePath).isSymLink());
+    QVERIFY(factoryState()->values.isEmpty());
+    QCOMPARE(factoryState()->writes, 0);
+#endif
+}
+
+void TestCredentialSettings::
+invalidAthleteDoesNotDisableValidCredentials()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialInvalidAthlete-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString secret =
+        QStringLiteral("valid-athlete-token");
+    const QString replacement =
+        QStringLiteral("valid-athlete-refresh-token");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("library"));
+    QVERIFY(QDir().mkpath(
+        QDir(athleteRoot).filePath(
+            QStringLiteral("Athlete/config"))));
+
+    factoryState() =
+        std::make_shared<FakeStoreState>();
+    GSettings settings(organization, application);
+    settings.initializeQSettingsGlobal(athleteRoot);
+    settings.initializeQSettingsAthlete(
+        athleteRoot, athleteName);
+    QVERIFY(settings.setCValueChecked(
+        athleteName, GC_STRAVA_TOKEN, secret));
+
+    settings.initializeQSettingsAthlete(
+        athleteRoot, QStringLiteral("../outside"));
+
+    QCOMPARE(
+        settings.cvalue(
+            athleteName, GC_STRAVA_TOKEN,
+            QStringLiteral("missing")).toString(),
+        secret);
+    QVERIFY(settings.setCValueChecked(
+        athleteName, GC_STRAVA_REFRESH_TOKEN,
+        replacement));
+    QCOMPARE(factoryState()->values.size(), 2);
 }
 
 void TestCredentialSettings::
