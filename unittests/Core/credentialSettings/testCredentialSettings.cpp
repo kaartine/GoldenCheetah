@@ -1009,6 +1009,8 @@ private slots:
     void newFormatRootlessCredentialRemainsAfterStoreRecovery();
     void authorizedLegacyPlaintextMigration_data();
     void authorizedLegacyPlaintextMigration();
+    void authorizedLegacyGlobalPlaintextMigration_data();
+    void authorizedLegacyGlobalPlaintextMigration();
     void globalCredentialsInDifferentRootsHaveIsolatedScopes();
     void sameNamedAthletesInDifferentRootsHaveIsolatedScopes();
     void preUpgradeCopiedCredentialScopesFailClosed_data();
@@ -9265,6 +9267,126 @@ authorizedLegacyPlaintextMigration()
         factoryState()->values.value(
             CredentialSettings::vaultKey(
                 scope, GC_RWGPSPASS)),
+        secret);
+}
+
+void TestCredentialSettings::
+authorizedLegacyGlobalPlaintextMigration_data()
+{
+    QTest::addColumn<bool>("failFirstWrite");
+    QTest::newRow("first-attempt") << false;
+    QTest::newRow("retry-after-store-recovery") << true;
+}
+
+void TestCredentialSettings::
+authorizedLegacyGlobalPlaintextMigration()
+{
+    QFETCH(bool, failFirstWrite);
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialAuthorizedGlobal-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString legacyKey =
+        plainKey(GC_NOLIO_REFRESH_TOKEN);
+    const QString secret =
+        QStringLiteral("authorized-global-refresh-token");
+    const QString scope =
+        QStringLiteral("96969696-9696-4696-8696-969696969696");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("athletes"));
+    const QString globalPath =
+        QDir(athleteRoot).filePath(
+            QStringLiteral(
+                "configglobal-general.ini"));
+    QVERIFY(QDir().mkpath(athleteRoot));
+
+    QString legacyPath;
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(legacyKey, secret);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+        legacyPath = legacy.fileName();
+    }
+    {
+        QSettings global(
+            globalPath, QSettings::IniFormat);
+        global.setValue(
+            QStringLiteral("credential_store/id"),
+            scope);
+        global.sync();
+        QCOMPARE(global.status(), QSettings::NoError);
+    }
+    {
+        QSettings system(
+            QSettings::IniFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        system.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        system.setValue(
+            legacyCredentialScopeMappingKey(
+                QString()),
+            scope);
+        system.sync();
+        QCOMPARE(system.status(), QSettings::NoError);
+    }
+
+    factoryState() =
+        std::make_shared<FakeStoreState>();
+    factoryState()->failWrites = failFirstWrite;
+    {
+        GSettings settings(organization, application);
+        settings.initializeQSettingsGlobal(athleteRoot);
+        QCOMPARE(
+            settings.value(
+                nullptr, GC_NOLIO_REFRESH_TOKEN,
+                QStringLiteral("missing")).toString(),
+            secret);
+        settings.syncQSettings();
+    }
+
+    if (failFirstWrite) {
+        QSettings retained(organization, application);
+        QCOMPARE(
+            retained.value(legacyKey).toString(),
+            secret);
+        QVERIFY(fileContents(legacyPath).contains(
+            secret.toUtf8()));
+        QVERIFY(factoryState()->values.isEmpty());
+
+        factoryState()->failWrites = false;
+        GSettings retry(organization, application);
+        retry.initializeQSettingsGlobal(athleteRoot);
+        QCOMPARE(
+            retry.value(
+                nullptr, GC_NOLIO_REFRESH_TOKEN,
+                QStringLiteral("missing")).toString(),
+            secret);
+        retry.syncQSettings();
+    }
+
+    QSettings scrubbed(organization, application);
+    QVERIFY(!scrubbed.contains(legacyKey));
+    QVERIFY(!fileContents(legacyPath).contains(
+        secret.toUtf8()));
+    QVERIFY(!fileContents(globalPath).contains(
+        secret.toUtf8()));
+    QCOMPARE(factoryState()->values.size(), 1);
+    QCOMPARE(
+        factoryState()->values.value(
+            CredentialSettings::vaultKey(
+                scope, GC_NOLIO_REFRESH_TOKEN)),
         secret);
 }
 
