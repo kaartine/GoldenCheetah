@@ -2046,7 +2046,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### BLE-007: Silent heart-rate streams are not recovered independently
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Train/BT40Device.cpp`, `src/Train/BT40Device.h`,
   `src/Train/BT40Controller.cpp`, `src/Train/BluetoothTelemetryRouter.cpp`, and
   `unittests/Train/bt40Lifecycle`
@@ -2059,8 +2059,9 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   system Bluetooth-adapter reset, but no adapter or trainer interruption
   explains the seven isolated heart-rate gaps. The sensor resumes after a
   manual application reconnect and does not show the same behavior in other
-  applications.
-- Root cause: Raw BLE `connected` currently publishes `connectionRestored`,
+  applications. A later independent recording reproduced multiple 15-53 second
+  heart-rate gaps while trainer telemetry remained available.
+- Root cause: Raw BLE `connected` previously published `connectionRestored`,
   stops reconnect timing, and clears rediscovery before HR service discovery or
   CCC subscription succeeds. Five-second telemetry expiry only clears the
   displayed value; invalid services, missing HR characteristics/descriptors,
@@ -2072,31 +2073,112 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   invalid service, missing characteristic/descriptor, descriptor-write error,
   and a connection error stuck in Connecting; and retain rediscovery until a
   usable HR stream exists.
-- Fix direction: Track heart-rate stream readiness and last-notification time
-  separately from the Qt link state. On silence or incomplete subscription,
-  clear only the affected source, force stale active links through teardown,
-  and restart bounded service discovery or link recovery without disturbing an
-  active trainer.
+- Test-first evidence: The RED lifecycle builds accepted a raw connection as
+  restored, retained stale samples, skipped queued disconnects, repeatedly
+  reused failed or stuck controllers, cancelled rediscovery too early, and
+  crashed on a null service object. A slow but progressing connection was also
+  torn down on the first retry tick.
+- Resolution: Heart-rate stream readiness is now independent of the Qt link
+  state. A 15-second startup watchdog and 10-second sample watchdog require an
+  actual valid heart-rate notification before publishing restoration. Silence,
+  incomplete GATT discovery, an invalid service, a missing measurement or CCC
+  descriptor, subscription failure, and connection errors clear only that
+  telemetry source and enter bounded recovery. Active links are closed before
+  reconnect, rediscovery remains pending until samples resume, and a manual
+  disconnect cancels pending scans. Three failed connection attempts or stalled
+  retry ticks replace the low-energy controller while preserving the configured
+  address type.
+- Verification: All 50 lifecycle cases pass normally, under strict
+  ASan/UBSan/LSan, and under TSan with uninstrumented Qt modules excluded. The
+  full Qt 6.8.3 application links, all 79 test programs pass, and the production
+  binary remains running in an isolated offscreen smoke test with a clean home
+  directory.
 
 ### BLE-008: Bluetooth adapter resets leave BLE devices without recovery
 
 - Status: OPEN
 - Code: `src/Train/BT40Device.cpp`, `src/Train/BT40Controller.cpp`, and
   `unittests/Train/bt40Lifecycle`
-- Impact: `InvalidBluetoothAdapterError` does not request rediscovery, scans
-  return while the adapter is invalid, and the low-energy controller is not
-  recreated. After a USB adapter reset, trainer and sensor telemetry can remain
-  unavailable until the application or connection is restarted manually.
+- Impact: Scans return while the local adapter is invalid, with no
+  adapter-availability backoff or controller-wide recovery coordinator. After
+  a USB adapter reset, trainer and sensor telemetry can remain unavailable until
+  the application or connection is restarted manually.
 - Evidence: One captured workout has a 15-second gap across trainer and
   heart-rate telemetry at the same time as an operating-system Bluetooth USB
   adapter reset. This is separate from the seven heart-rate-only gaps tracked
   by `BLE-007`.
+- Partial resolution: `InvalidBluetoothAdapterError` now enters bounded
+  heart-rate recovery, preserves the remote address type, and eventually
+  replaces that device's controller. Adapter restoration and trainer recovery
+  are still not coordinated end to end.
 - Test: Invalidate the adapter during an active connection, restore it, and
   require bounded rescanning, controller recreation, and independent recovery
   of all configured BLE devices without a user disconnect/connect cycle.
 - Fix direction: Keep adapter-invalid devices pending, retry adapter discovery
   with backoff, and recreate per-device controllers only after a valid adapter
   is available.
+
+### BLE-009: Low-energy controller handoff overlaps BlueZ connections
+
+- Status: FIXED
+- Code: `src/Train/BT40Device.cpp`, `src/Train/BT40Device.h`, and
+  `unittests/Train/bt40Lifecycle`
+- Impact: Replacing a failed controller while its connection still exists can
+  overlap two BlueZ connection attempts for one physical device. Deleting the
+  old controller directly from its synchronous error callback can also destroy
+  the active signal sender, while a controller that never emits `disconnected`
+  can otherwise remain allocated indefinitely.
+- Test-first evidence: The RED fake-controller tests observed overlapping live
+  controllers, synchronous sender destruction, and unbounded retirement. They
+  also exercised manual disconnect and device destruction during the handoff.
+- Resolution: Replacement is now a two-phase handoff. The stale controller is
+  detached from the device, disconnected from callbacks, and retired with
+  `deleteLater`; a fresh controller is created only from the stale controller's
+  queued `destroyed` completion. Shutdown retirement has a 30-second fallback,
+  and manual disconnect or device destruction cancels a pending replacement.
+- Verification: The focused 50-case normal, ASan/UBSan/LSan, and TSan runs
+  report no overlap, synchronous destruction, leak, or race. The full build and
+  79-program matrix pass.
+
+### BLE-010: Stale GATT callbacks can mutate a replacement connection
+
+- Status: FIXED
+- Code: `src/Train/BT40Device.cpp`, `src/Train/BT40Device.h`, and
+  `unittests/Train/bt40Lifecycle`
+- Impact: Queued controller or service callbacks can arrive after disconnect or
+  replacement and publish stale heart-rate data, cancel recovery, or mutate
+  current trainer state. A null result from `createServiceObject` was appended
+  and later dereferenced during service scanning.
+- Test-first evidence: A queued old-service notification restored telemetry
+  after disconnect, queued controller signals changed recovery state, and the
+  null-service fixture crashed with `SIGSEGV`.
+- Resolution: Controller callbacks now require the current sender and a
+  compatible controller state. Service callbacks require membership in the
+  current GATT service set, and services are disconnected and cleared at every
+  link transition. Null service objects are logged and ignored.
+- Verification: Real 8-bit and 16-bit heart-rate notification payloads still
+  route through the production callback, while stale and malformed callbacks
+  are ignored. All focused sanitizer runs, the full build, and the complete
+  test matrix pass.
+
+### BLE-011: Trainer control-service pruning leaks and depends on discovery order
+
+- Status: FIXED
+- Code: `src/Train/BT40Device.cpp` and
+  `unittests/Train/bt40Lifecycle`
+- Impact: When a lower-priority controllable service is discovered after the
+  selected higher-priority service, it remains active. Services removed in the
+  opposite order were detached from the list without being deleted. A
+  multi-service trainer can therefore retain conflicting control paths and leak
+  service objects on each discovery.
+- Test-first evidence: Data-driven RED cases exercised both discovery orders
+  and required every discarded service object to be destroyed.
+- Resolution: The scan now keeps exactly one highest-priority controllable
+  service regardless of discovery order, removes it from initialization state,
+  disconnects its callbacks, and deletes every discarded object.
+- Verification: Both ordering cases pass with exact destruction counts in the
+  focused normal and sanitizer suites; the full application and test matrix
+  also pass.
 
 ### DATA-002: Merge offsets treat samples as seconds
 

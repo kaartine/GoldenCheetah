@@ -74,6 +74,7 @@ public:
     static int disconnectCallCount();
     static int discoverCallCount();
     static int destructionCount();
+    static int liveControllerCount();
     static int overlappingConnectCallCount();
     static int synchronousErrorDestructionCount();
     static RemoteAddressType lastRemoteAddressType();

@@ -112,6 +112,7 @@ private slots:
     void scanFinished();
     void deviceScanError(QBluetoothDeviceDiscoveryAgent::Error);
     void rescanDevice();
+    void cancelDeviceRescan();
     void deviceConnectionRestored();
 
 private:

@@ -142,6 +142,7 @@ int QLowEnergyController::connectCallCount() { return connectCalls; }
 int QLowEnergyController::disconnectCallCount() { return disconnectCalls; }
 int QLowEnergyController::discoverCallCount() { return discoverCalls; }
 int QLowEnergyController::destructionCount() { return destructions; }
+int QLowEnergyController::liveControllerCount() { return liveControllers; }
 int QLowEnergyController::overlappingConnectCallCount()
 {
     return overlappingConnectCalls;

@@ -218,26 +218,22 @@ BT40Controller::addDevice(const QBluetoothDeviceInfo &info)
                 // On MacOS there's no address, so check deviceUuid
                 if (dev->deviceInfo().deviceUuid() == info.deviceUuid())
                 {
-                    if (devicesAwaitingRediscovery.remove(dev)) {
+                    dev->updateDeviceInfo(info);
+                    if (devicesAwaitingRediscovery.contains(dev)) {
                         qDebug() << "Rediscovered Bluetooth device" << info.name()
                                  << info.deviceUuid();
                         dev->connectDevice();
-                        if (allConfiguredDevicesFound() && discoveryAgent->isActive()) {
-                            discoveryAgent->stop();
-                        }
                     }
                     return;
                 }
             } else {
                 if (dev->deviceInfo().address() == info.address())
                 {
-                    if (devicesAwaitingRediscovery.remove(dev)) {
+                    dev->updateDeviceInfo(info);
+                    if (devicesAwaitingRediscovery.contains(dev)) {
                         qDebug() << "Rediscovered Bluetooth device" << info.name()
                                  << info.address();
                         dev->connectDevice();
-                        if (allConfiguredDevicesFound() && discoveryAgent->isActive()) {
-                            discoveryAgent->stop();
-                        }
                     }
                     return;
                 }
@@ -274,6 +270,8 @@ BT40Controller::addDevice(const QBluetoothDeviceInfo &info)
                 connect(dev, &BT40Device::setNotification, this, &BT40Controller::setNotification);
                 connect(dev, &BT40Device::reconnectScanRequested,
                         this, &BT40Controller::rescanDevice);
+                connect(dev, &BT40Device::reconnectScanCancelled,
+                        this, &BT40Controller::cancelDeviceRescan);
                 connect(dev, &BT40Device::connectionRestored,
                         this, &BT40Controller::deviceConnectionRestored);
                 dev->connectDevice();
@@ -371,6 +369,20 @@ BT40Controller::rescanDevice()
     missingDeviceNoticeShown = true;
     scanRetryTimer->stop();
     startScan();
+}
+
+void
+BT40Controller::cancelDeviceRescan()
+{
+    BT40Device *device = qobject_cast<BT40Device*>(sender());
+    if (!device || !devicesAwaitingRediscovery.remove(device)) return;
+
+    qDebug() << "Cancelled Bluetooth rediscovery for"
+             << device->deviceInfo().name();
+    if (allConfiguredDevicesFound()) {
+        resetScanRetryState();
+        if (discoveryAgent->isActive()) discoveryAgent->stop();
+    }
 }
 
 void

@@ -46,6 +46,10 @@ constexpr BluetoothTelemetryPriority DedicatedTelemetry =
         BluetoothTelemetryPriority::DedicatedSensor;
 constexpr BluetoothTelemetryPriority TrainerTelemetry =
         BluetoothTelemetryPriority::Trainer;
+constexpr int HeartRateStartupTimeoutMs = 15000;
+constexpr int HeartRateSilenceTimeoutMs = 10000;
+constexpr int ControllerReplacementAttempt = 3;
+constexpr int StaleControllerRetirementMs = 30000;
 }
 
 QMap<QBluetoothUuid, btle_sensor_type_t> BT40Device::supportedServices = {
@@ -99,6 +103,13 @@ BT40Device::trainerControlAllowed() const
     return BluetoothDeviceTypes::allowsTrainerControl(deviceRole);
 }
 
+bool
+BT40Device::isHeartRateOnly() const
+{
+    return deviceRole
+            == BluetoothDeviceTypes::DeviceRole::HeartRateOnly;
+}
+
 BluetoothDeviceTypes::LinkState
 BT40Device::linkState() const
 {
@@ -110,6 +121,21 @@ BT40Device::linkState() const
         return BluetoothDeviceTypes::LinkState::Closing;
     }
     return BluetoothDeviceTypes::LinkState::Active;
+}
+
+bool
+BT40Device::heartRateLinkCanStream() const
+{
+    if (!m_control) return false;
+
+    switch (m_control->state()) {
+    case QLowEnergyController::ConnectedState:
+    case QLowEnergyController::DiscoveringState:
+    case QLowEnergyController::DiscoveredState:
+        return true;
+    default:
+        return false;
+    }
 }
 
 bool
@@ -146,12 +172,7 @@ BT40Device::BT40Device(BT40Controller *parent, QBluetoothDeviceInfo devinfo,
     : QObject(parent), parentController(parent), m_currentDevice(devinfo),
       m_control(nullptr), deviceRole(role)
 {
-    m_control = QLowEnergyController::createCentral(m_currentDevice, this);
-    connect(m_control, SIGNAL(connected()), this, SLOT(deviceConnected()), Qt::QueuedConnection);
-    connect(m_control, SIGNAL(errorOccurred(QLowEnergyController::Error)), this, SLOT(controllerError(QLowEnergyController::Error)));
-    connect(m_control, SIGNAL(disconnected()), this, SLOT(deviceDisconnected()), Qt::QueuedConnection);
-    connect(m_control, SIGNAL(serviceDiscovered(QBluetoothUuid)), this, SLOT(serviceDiscovered(QBluetoothUuid)), Qt::QueuedConnection);
-    connect(m_control, SIGNAL(discoveryFinished()), this, SLOT(serviceScanDone()), Qt::QueuedConnection);
+    createLowEnergyController();
 
     connected = false;
     remoteAddressType = QLowEnergyController::RandomAddress;
@@ -184,9 +205,82 @@ BT40Device::BT40Device(BT40Controller *parent, QBluetoothDeviceInfo devinfo,
     reconnectTimer = new QTimer(this);
     reconnectTimer->setInterval(5000); // 5 seconds
     connect(reconnectTimer, SIGNAL(timeout()), this, SLOT(attemptReconnect()));
+    heartRateWatchdogTimer = new QTimer(this);
+    heartRateWatchdogTimer->setSingleShot(true);
+    connect(heartRateWatchdogTimer, &QTimer::timeout,
+            this, &BT40Device::heartRateWatchdogExpired);
     reconnectAttempts = 0;
+    reconnectStallTicks = 0;
     reconnectNoticeShown = false;
+    heartRateStreamActive = false;
+    heartRateRecoveryPending = false;
+    heartRateDisconnectRequested = false;
+    controllerReplacementPending = false;
     shuttingDown = false;
+}
+
+void
+BT40Device::createLowEnergyController()
+{
+    m_control = QLowEnergyController::createCentral(m_currentDevice, this);
+    connect(m_control, SIGNAL(connected()), this, SLOT(deviceConnected()), Qt::QueuedConnection);
+    connect(m_control, SIGNAL(errorOccurred(QLowEnergyController::Error)), this, SLOT(controllerError(QLowEnergyController::Error)));
+    connect(m_control, SIGNAL(disconnected()), this, SLOT(deviceDisconnected()), Qt::QueuedConnection);
+    connect(m_control, SIGNAL(serviceDiscovered(QBluetoothUuid)), this, SLOT(serviceDiscovered(QBluetoothUuid)), Qt::QueuedConnection);
+    connect(m_control, SIGNAL(discoveryFinished()), this, SLOT(serviceScanDone()), Qt::QueuedConnection);
+}
+
+void
+BT40Device::clearGattServices()
+{
+    initializedServices.clear();
+    while (!m_services.isEmpty()) {
+        QLowEnergyService *service = m_services.takeLast();
+        if (!service) continue;
+        service->disconnect(this);
+        delete service;
+    }
+
+    has_power = false;
+    has_controllable_service = false;
+    loadType = Load_None;
+    loadService = nullptr;
+    loadCharacteristic = QLowEnergyCharacteristic();
+    commandQueue.clear();
+    commandRetry = 0;
+    ftmsDeviceInfo = FtmsDeviceInformation();
+    ftmsTargetController.reset();
+}
+
+void
+BT40Device::retireLowEnergyController(
+        QLowEnergyController *control,
+        BluetoothDeviceTypes::LinkState state)
+{
+    if (!control) return;
+    control->disconnect(this);
+
+    if (state == BluetoothDeviceTypes::LinkState::Unconnected) {
+        delete control;
+        return;
+    }
+
+    control->setParent(QCoreApplication::instance());
+    connect(control, &QLowEnergyController::disconnected,
+            control, &QObject::deleteLater, Qt::UniqueConnection);
+
+    QTimer *retirementTimer = new QTimer(control);
+    retirementTimer->setObjectName(
+            QStringLiteral("bt40-stale-controller-retirement"));
+    retirementTimer->setSingleShot(true);
+    connect(retirementTimer, &QTimer::timeout,
+            control, &QObject::deleteLater);
+    retirementTimer->start(StaleControllerRetirementMs);
+
+    if (BluetoothDeviceTypes::shouldDisconnect(state)
+            && state != BluetoothDeviceTypes::LinkState::Closing) {
+        control->disconnectFromDevice();
+    }
 }
 
 BT40Device::~BT40Device()
@@ -201,44 +295,33 @@ BT40Device::shutdown()
     shuttingDown = true;
     connected = false;
     reconnectTimer->stop();
+    heartRateWatchdogTimer->stop();
     reconnectAttempts = 0;
+    reconnectStallTicks = 0;
     reconnectNoticeShown = false;
+    heartRateStreamActive = false;
+    heartRateRecoveryPending = false;
+    heartRateDisconnectRequested = false;
+    controllerReplacementPending = false;
 
-    initializedServices.clear();
-    while (!m_services.isEmpty()) {
-        QLowEnergyService *service = m_services.takeLast();
-        service->disconnect(this);
-        delete service;
-    }
-    loadService = nullptr;
-    commandQueue.clear();
+    clearGattServices();
 
     if (!m_control) return;
 
     const BluetoothDeviceTypes::LinkState state = linkState();
     QLowEnergyController *control = m_control;
     m_control = nullptr;
-    control->disconnect(this);
-
-    if (state == BluetoothDeviceTypes::LinkState::Unconnected) {
-        delete control;
-        return;
-    }
-
-    // BlueZ and Qt can still deliver callbacks while a link is closing. Keep
-    // the controller alive outside this device until Qt confirms disconnect.
-    control->setParent(QCoreApplication::instance());
-    connect(control, &QLowEnergyController::disconnected,
-            control, &QObject::deleteLater, Qt::UniqueConnection);
-    if (BluetoothDeviceTypes::shouldDisconnect(state)) {
-        control->disconnectFromDevice();
-    }
+    retireLowEnergyController(control, state);
 }
 
 void
 BT40Device::connectDevice()
 {
     if (shuttingDown || !m_control) return;
+    if (isHeartRateOnly() && heartRateRecoveryPending
+            && heartRateDisconnectRequested) {
+        return;
+    }
     if (!BluetoothDeviceTypes::shouldConnect(true, linkState())) return;
 
     qDebug() << "Connecting to device" << m_currentDevice.name() << " "
@@ -246,6 +329,8 @@ BT40Device::connectDevice()
              << (remoteAddressType == QLowEnergyController::RandomAddress ? "random" : "public") << "address";
     m_control->setRemoteAddressType(remoteAddressType);
     addressTypeChangedAfterFailure = false;
+    heartRateDisconnectRequested = false;
+    reconnectStallTicks = 0;
     connected = true;
     m_control->connectToDevice();
 }
@@ -255,8 +340,15 @@ BT40Device::disconnectDevice()
 {
     connected = false;
     reconnectTimer->stop();
+    heartRateWatchdogTimer->stop();
     reconnectAttempts = 0;
+    reconnectStallTicks = 0;
     reconnectNoticeShown = false;
+    heartRateStreamActive = false;
+    heartRateRecoveryPending = false;
+    heartRateDisconnectRequested = false;
+    controllerReplacementPending = false;
+    emit reconnectScanCancelled();
     if (shuttingDown) return;
     if (!m_control || !BluetoothDeviceTypes::shouldDisconnect(linkState())) return;
 
@@ -267,38 +359,43 @@ BT40Device::disconnectDevice()
 void
 BT40Device::deviceConnected()
 {
-    if (shuttingDown || !m_control) return;
+    if (shuttingDown || !m_control
+            || sender() != m_control
+            || m_control->state()
+                    != QLowEnergyController::ConnectedState) {
+        return;
+    }
     qDebug() << "Connected to device" << m_currentDevice.name() << " " << m_currentDevice.deviceUuid()
              << "using" << (remoteAddressType == QLowEnergyController::RandomAddress ? "random" : "public")
              << "address";
     addressTypeConfirmed = true;
     addressTypeChangedAfterFailure = false;
-    emit connectionRestored();
+    heartRateDisconnectRequested = false;
 
-    // Service objects become invalid after a disconnect. Recreate them from
-    // the new connection instead of retaining stale notification handlers.
-    initializedServices.clear();
-    while (!m_services.isEmpty()) {
-        delete m_services.takeLast();
-    }
-    has_power = false;
-    has_controllable_service = false;
-    loadType = Load_None;
-    loadService = nullptr;
-    loadCharacteristic = QLowEnergyCharacteristic();
-    commandQueue.clear();
-    ftmsDeviceInfo = FtmsDeviceInformation();
-    ftmsTargetController.reset();
-    
-    const bool wasReconnecting = reconnectTimer->isActive() || reconnectNoticeShown;
+    clearGattServices();
+
+    const bool wasReconnecting = reconnectTimer->isActive()
+            || reconnectNoticeShown || heartRateRecoveryPending;
     if (reconnectTimer->isActive()) {
         reconnectTimer->stop();
     }
-    reconnectAttempts = 0;
-    if (wasReconnecting) {
-        emit setNotification(tr("Reconnected to %1").arg(m_currentDevice.name()), 3);
+    reconnectStallTicks = 0;
+    heartRateSeen = false;
+    heartRateStreamActive = false;
+    if (isHeartRateOnly()) {
+        heartRateRecoveryPending = wasReconnecting;
+        heartRateWatchdogTimer->start(
+                HeartRateStartupTimeoutMs);
+    } else {
+        reconnectAttempts = 0;
+        emit connectionRestored();
+        if (wasReconnecting) {
+            emit setNotification(
+                    tr("Reconnected to %1")
+                            .arg(m_currentDevice.name()), 3);
+        }
+        reconnectNoticeShown = false;
     }
-    reconnectNoticeShown = false;
     
     m_control->discoverServices();
 }
@@ -306,17 +403,21 @@ BT40Device::deviceConnected()
 void
 BT40Device::controllerError(QLowEnergyController::Error error)
 {
-    if (shuttingDown || !m_control) return;
+    if (shuttingDown || !m_control
+            || sender() != m_control) return;
     qWarning() << "Controller Error:" << error << "for device" << m_currentDevice.name() << " " << m_currentDevice.deviceUuid();
 
-    const bool connectionFailure =
+    const bool addressTypeFailure =
             error == QLowEnergyController::UnknownRemoteDeviceError ||
             error == QLowEnergyController::NetworkError ||
             error == QLowEnergyController::ConnectionError ||
             error == QLowEnergyController::RemoteHostClosedError ||
             error == QLowEnergyController::UnknownError;
+    const bool connectionFailure =
+            addressTypeFailure ||
+            error == QLowEnergyController::InvalidBluetoothAdapterError;
 
-    if (connected && !addressTypeConfirmed && connectionFailure &&
+    if (connected && !addressTypeConfirmed && addressTypeFailure &&
         !addressTypeChangedAfterFailure) {
         remoteAddressType = remoteAddressType == QLowEnergyController::RandomAddress
                 ? QLowEnergyController::PublicAddress
@@ -326,10 +427,18 @@ BT40Device::controllerError(QLowEnergyController::Error error)
                  << (remoteAddressType == QLowEnergyController::RandomAddress ? "random" : "public") << "address";
     }
 
-    if (connected && connectionFailure) emit reconnectScanRequested();
+    if (connected && connectionFailure) {
+        if (isHeartRateOnly()) {
+            beginHeartRateRecovery(
+                    tr("Bluetooth heart-rate connection failed"));
+        } else {
+            emit reconnectScanRequested();
+        }
+    }
 
     if (connected && !reconnectTimer->isActive()) {
-        reconnectAttempts = 0;
+        if (!isHeartRateOnly())
+            reconnectAttempts = 0;
         if (!reconnectNoticeShown) {
             emit setNotification(tr("Unable to connect to %1, retrying...").arg(m_currentDevice.name()), 3);
             reconnectNoticeShown = true;
@@ -341,26 +450,41 @@ BT40Device::controllerError(QLowEnergyController::Error error)
 void
 BT40Device::deviceDisconnected()
 {
-    if (shuttingDown || !parentController) return;
+    if (shuttingDown || !parentController
+            || sender() != m_control
+            || !m_control
+            || m_control->state()
+                    != QLowEnergyController::UnconnectedState) {
+        return;
+    }
     qDebug() << "Lost connection to" << m_currentDevice.name() << " " << m_currentDevice.deviceUuid();
     heartRateSeen = false;
+    heartRateStreamActive = false;
+    heartRateWatchdogTimer->stop();
+    heartRateDisconnectRequested = false;
+    reconnectStallTicks = 0;
     trainerDataSeen = false;
 
     parentController->removeTelemetrySource(this);
-
-    // Stop sending load setting commands
-    loadType = Load_None;
-    ftmsDeviceInfo = FtmsDeviceInformation();
-    ftmsTargetController.reset();
+    clearGattServices();
 
     // Try to reconnect if the connection was lost inadvertently
     if (connected) {
-        reconnectAttempts = 0;
+        const bool recoveryAlreadyPending =
+                heartRateRecoveryPending;
+        if (isHeartRateOnly()) {
+            heartRateRecoveryPending = true;
+            if (!recoveryAlreadyPending)
+                reconnectAttempts = 0;
+        } else {
+            reconnectAttempts = 0;
+        }
         if (!reconnectNoticeShown) {
             emit setNotification(tr("Lost connection to %1, attempting to reconnect...").arg(m_currentDevice.name()), 3);
             reconnectNoticeShown = true;
         }
-        emit reconnectScanRequested();
+        if (!recoveryAlreadyPending)
+            emit reconnectScanRequested();
         reconnectTimer->start();
         attemptReconnect(); // Try immediately first
     }
@@ -369,11 +493,25 @@ BT40Device::deviceDisconnected()
 void
 BT40Device::serviceDiscovered(QBluetoothUuid uuid)
 {
-    if (shuttingDown || !m_control) return;
+    if (shuttingDown || !m_control
+            || sender() != m_control
+            || (m_control->state()
+                        != QLowEnergyController::DiscoveringState
+                && m_control->state()
+                        != QLowEnergyController::DiscoveredState)) {
+        return;
+    }
 
     if (supportedServices.contains(uuid) && acceptsService(uuid)) {
         QLowEnergyService *service = m_control->createServiceObject(uuid, this);
-        m_services.append(service);
+        if (service) {
+            m_services.append(service);
+        } else {
+            qWarning() << "Unable to create Bluetooth service"
+                       << uuid << "for device"
+                       << m_currentDevice.name()
+                       << m_currentDevice.deviceUuid();
+        }
     }
 
 }
@@ -381,15 +519,20 @@ BT40Device::serviceDiscovered(QBluetoothUuid uuid)
 void
 BT40Device::serviceScanDone()
 {
-    if (shuttingDown) return;
+    if (shuttingDown || !m_control || sender() != m_control
+            || m_control->state()
+                    != QLowEnergyController::DiscoveredState) {
+        return;
+    }
     qDebug() << "Service scan done for device" << m_currentDevice.name() << " " << m_currentDevice.deviceUuid();
     has_power = false;
+    has_controllable_service = false;
     bool has_csc = false;
     QLowEnergyService* csc_service=NULL;
 
     for (int index = m_services.size() - 1; index >= 0; --index) {
         QLowEnergyService *service = m_services.at(index);
-        if (!acceptsService(service->serviceUuid())) {
+        if (!service || !acceptsService(service->serviceUuid())) {
             m_services.removeAt(index);
             delete service;
         }
@@ -425,6 +568,8 @@ BT40Device::serviceScanDone()
                 {
                     toRemove.append(prio); // Don't use the lower prio service
                     prio = curr;
+                } else {
+                    toRemove.append(curr);
                 }
             } else { // No previous controllable service found, so store this one
                 prio = curr;
@@ -444,6 +589,9 @@ BT40Device::serviceScanDone()
     foreach (QLowEnergyService* const &service, toRemove) {
         qDebug() << "Removing service with UUID " << service->serviceUuid() << " from services since a higher priority controllable service was found.";
         m_services.removeAll(service);
+        initializedServices.remove(service);
+        service->disconnect(this);
+        delete service;
     }
 
 
@@ -488,6 +636,22 @@ BT40Device::serviceScanDone()
             qDebug() << "Ignoring the CSC service for device" << m_currentDevice.name() << " " << m_currentDevice.deviceUuid();
         }
     }
+
+    if (isHeartRateOnly()) {
+        const QBluetoothUuid heartRateService(
+                QBluetoothUuid::ServiceClassUuid::HeartRate);
+        bool foundHeartRateService = false;
+        for (QLowEnergyService *service : m_services) {
+            if (service->serviceUuid() == heartRateService) {
+                foundHeartRateService = true;
+                break;
+            }
+        }
+        if (!foundHeartRateService) {
+            beginHeartRateRecovery(
+                    tr("Bluetooth heart-rate service is unavailable"));
+        }
+    }
 }
 
 void
@@ -496,10 +660,23 @@ BT40Device::serviceStateChanged(QLowEnergyService::ServiceState s)
     if (shuttingDown) return;
     qDebug() << "service state changed " << s << "for device" << m_currentDevice.name() << " " << m_currentDevice.deviceUuid();
 
+    QLowEnergyService *const service =
+            qobject_cast<QLowEnergyService *>(sender());
+    const bool heartRateService =
+            service
+            && m_services.contains(service)
+            && service->serviceUuid()
+                    == QBluetoothUuid(
+                        QBluetoothUuid::ServiceClassUuid::HeartRate);
+    if (s == QLowEnergyService::InvalidService
+            && isHeartRateOnly() && heartRateService) {
+        beginHeartRateRecovery(
+                tr("Bluetooth heart-rate service became invalid"));
+        return;
+    }
+
     if (s == QLowEnergyService::RemoteServiceDiscovered) {
 
-        QLowEnergyService *const service =
-                qobject_cast<QLowEnergyService *>(sender());
         if (!service || !m_services.contains(service) ||
             service->state() != s || initializedServices.contains(service) ||
             !acceptsService(service->serviceUuid())) {
@@ -511,10 +688,35 @@ BT40Device::serviceStateChanged(QLowEnergyService::ServiceState s)
                 QList<QLowEnergyCharacteristic> characteristics;
                 if (service->serviceUuid() == QBluetoothUuid(QBluetoothUuid::ServiceClassUuid::HeartRate)) {
 
+                    const QLowEnergyCharacteristic characteristic =
+                            service->characteristic(
+                                    QBluetoothUuid(
+                                            QBluetoothUuid::CharacteristicType::
+                                                    HeartRateMeasurement));
+                    if (!characteristic.isValid()) {
+                        if (isHeartRateOnly()) {
+                            beginHeartRateRecovery(
+                                    tr("Bluetooth heart-rate measurement is unavailable"));
+                        }
+                        return;
+                    }
+                    const QLowEnergyDescriptor notificationDesc =
+                            characteristic.descriptor(
+                                    QBluetoothUuid::DescriptorType::
+                                            ClientCharacteristicConfiguration);
+                    if (!notificationDesc.isValid()) {
+                        if (isHeartRateOnly()) {
+                            beginHeartRateRecovery(
+                                    tr("Bluetooth heart-rate notifications are unavailable"));
+                        }
+                        return;
+                    }
                     emit setNotification(tr("Connected to device / service: ") + m_currentDevice.name() + 
                                 " / HeartRate", 4);
-                    characteristics.append(service->characteristic(
-                    QBluetoothUuid(QBluetoothUuid::CharacteristicType::HeartRateMeasurement)));
+                    service->writeDescriptor(
+                            notificationDesc,
+                            QByteArray::fromHex("0100"));
+                    return;
 
                 } else if (service->serviceUuid() == QBluetoothUuid(QBluetoothUuid::ServiceClassUuid::CyclingPower)) {
 
@@ -702,6 +904,15 @@ void
 BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &value)
 {
     if (shuttingDown || !parentController) return;
+    QLowEnergyService *sourceService =
+            qobject_cast<QLowEnergyService *>(sender());
+    if (!sourceService || !m_services.contains(sourceService))
+        return;
+    if (isHeartRateOnly()
+            && (heartRateDisconnectRequested
+                || !heartRateLinkCanStream())) {
+        return;
+    }
     QObject *parent = parentController.data();
     if (deviceRole == BluetoothDeviceTypes::DeviceRole::HeartRateOnly &&
         c.uuid() != QBluetoothUuid(
@@ -744,6 +955,7 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
                                  .arg(m_currentDevice.name()).arg(heartRate), 4);
             heartRateSeen = true;
         }
+        heartRateStreamReady();
         dynamic_cast<BT40Controller*>(parent)->setBPM(
                 this, heartRate, DedicatedTelemetry);
 
@@ -1165,10 +1377,22 @@ void
 BT40Device::serviceError(QLowEnergyService::ServiceError e)
 {
     if (shuttingDown) return;
+    QLowEnergyService *service =
+            qobject_cast<QLowEnergyService *>(sender());
+    if (!service || !m_services.contains(service))
+        return;
+    const bool heartRateService =
+            service->serviceUuid()
+                    == QBluetoothUuid(
+                        QBluetoothUuid::ServiceClassUuid::HeartRate);
     switch (e) {
     case QLowEnergyService::DescriptorWriteError:
         {
             qWarning() << "Failed to enable BTLE notifications" << "for device" << m_currentDevice.name() << " " << m_currentDevice.deviceUuid();;
+            if (isHeartRateOnly() && heartRateService) {
+                beginHeartRateRecovery(
+                        tr("Bluetooth heart-rate subscription failed"));
+            }
         }
         break;
 
@@ -1195,10 +1419,37 @@ BT40Device::attemptReconnect()
         // User manually disconnected, stop trying
         reconnectTimer->stop();
         reconnectAttempts = 0;
+        reconnectStallTicks = 0;
         return;
     }
     
-    if (!BluetoothDeviceTypes::shouldReconnect(connected, linkState())) return;
+    if (isHeartRateOnly() && heartRateRecoveryPending) {
+        const BluetoothDeviceTypes::LinkState state =
+                linkState();
+        if (state
+                == BluetoothDeviceTypes::LinkState::Unconnected) {
+            heartRateDisconnectRequested = false;
+            reconnectStallTicks = 0;
+            ++reconnectAttempts;
+            if (reconnectAttempts
+                    >= ControllerReplacementAttempt) {
+                replaceLowEnergyController();
+                return;
+            }
+            connectDevice();
+            return;
+        }
+
+        ++reconnectStallTicks;
+        if (reconnectStallTicks
+                >= ControllerReplacementAttempt) {
+            replaceLowEnergyController();
+        }
+        return;
+    }
+
+    if (!BluetoothDeviceTypes::shouldReconnect(
+                connected, linkState())) return;
 
     reconnectAttempts++;
     qDebug() << "Reconnection attempt" << reconnectAttempts << "for device" << m_currentDevice.name();
@@ -1207,9 +1458,148 @@ BT40Device::attemptReconnect()
 }
 
 void
+BT40Device::heartRateStreamReady()
+{
+    if (shuttingDown || !connected || !isHeartRateOnly())
+        return;
+    if (heartRateDisconnectRequested
+            || !heartRateLinkCanStream()) {
+        return;
+    }
+
+    const bool newlyReady = !heartRateStreamActive;
+    heartRateStreamActive = true;
+    heartRateRecoveryPending = false;
+    heartRateDisconnectRequested = false;
+    reconnectTimer->stop();
+    reconnectAttempts = 0;
+    reconnectStallTicks = 0;
+    heartRateWatchdogTimer->start(
+            HeartRateSilenceTimeoutMs);
+    if (!newlyReady)
+        return;
+
+    emit connectionRestored();
+    if (reconnectNoticeShown) {
+        emit setNotification(
+                tr("Reconnected to %1")
+                        .arg(m_currentDevice.name()), 3);
+    }
+    reconnectNoticeShown = false;
+}
+
+void
+BT40Device::heartRateWatchdogExpired()
+{
+    if (shuttingDown || !connected || !isHeartRateOnly())
+        return;
+    beginHeartRateRecovery(
+            heartRateStreamActive
+                    ? tr("Bluetooth heart-rate data stopped")
+                    : tr("Bluetooth heart-rate stream did not start"));
+}
+
+void
+BT40Device::beginHeartRateRecovery(
+        const QString &reason)
+{
+    if (shuttingDown || !connected || !m_control
+            || !isHeartRateOnly()) {
+        return;
+    }
+
+    const bool firstRequest = !heartRateRecoveryPending;
+    heartRateRecoveryPending = true;
+    heartRateStreamActive = false;
+    heartRateSeen = false;
+    heartRateWatchdogTimer->stop();
+    if (parentController)
+        parentController->removeTelemetrySource(this);
+
+    if (firstRequest) {
+        reconnectAttempts = 0;
+        reconnectStallTicks = 0;
+        qWarning() << reason << "for device"
+                   << m_currentDevice.name()
+                   << m_currentDevice.deviceUuid();
+        emit reconnectScanRequested();
+        if (!reconnectNoticeShown) {
+            emit setNotification(
+                    tr("%1; reconnecting...")
+                            .arg(reason), 4);
+            reconnectNoticeShown = true;
+        }
+    }
+    if (!reconnectTimer->isActive())
+        reconnectTimer->start();
+
+    if (linkState()
+            == BluetoothDeviceTypes::LinkState::Active
+            && !heartRateDisconnectRequested) {
+        heartRateDisconnectRequested = true;
+        m_control->disconnectFromDevice();
+    } else if (linkState()
+            == BluetoothDeviceTypes::LinkState::Closing) {
+        heartRateDisconnectRequested = true;
+    } else if (linkState()
+            == BluetoothDeviceTypes::LinkState::Unconnected) {
+        attemptReconnect();
+    }
+}
+
+void
+BT40Device::replaceLowEnergyController()
+{
+    if (shuttingDown || !connected || !m_control
+            || controllerReplacementPending) {
+        return;
+    }
+
+    QLowEnergyController *stale = m_control;
+    const BluetoothDeviceTypes::LinkState staleState =
+            linkState();
+    m_control = nullptr;
+    controllerReplacementPending = true;
+    stale->disconnect(this);
+    clearGattServices();
+
+    stale->setParent(QCoreApplication::instance());
+    connect(stale, &QObject::destroyed,
+            this,
+            &BT40Device::completeLowEnergyControllerReplacement,
+            Qt::QueuedConnection);
+    if (BluetoothDeviceTypes::shouldDisconnect(staleState)
+            && staleState
+                    != BluetoothDeviceTypes::LinkState::Closing) {
+        stale->disconnectFromDevice();
+    }
+    stale->deleteLater();
+}
+
+void
+BT40Device::completeLowEnergyControllerReplacement()
+{
+    if (!controllerReplacementPending)
+        return;
+    controllerReplacementPending = false;
+    if (shuttingDown || !connected || m_control)
+        return;
+
+    createLowEnergyController();
+    addressTypeConfirmed = false;
+    heartRateDisconnectRequested = false;
+    reconnectAttempts = 0;
+    reconnectStallTicks = 0;
+    connectDevice();
+}
+
+void
 BT40Device::confirmedDescriptorWrite(const QLowEnergyDescriptor &d, const QByteArray &value)
 {
     if (shuttingDown) return;
+    QLowEnergyService *service =
+            qobject_cast<QLowEnergyService *>(sender());
+    if (!service || !m_services.contains(service)) return;
     if (!d.isValid()) return;
 
     if (value == QByteArray::fromHex("0000")) {
@@ -1222,9 +1612,19 @@ BT40Device::confirmedDescriptorWrite(const QLowEnergyDescriptor &d, const QByteA
 }
 
 void
+BT40Device::updateDeviceInfo(
+        const QBluetoothDeviceInfo &devinfo)
+{
+    m_currentDevice = devinfo;
+}
+
+void
 BT40Device::confirmedCharacteristicWrite(const QLowEnergyCharacteristic &c, const QByteArray &value)
 {
     if (shuttingDown) return;
+    QLowEnergyService *service =
+            qobject_cast<QLowEnergyService *>(sender());
+    if (!service || !m_services.contains(service)) return;
     qDebug() << "BTLE wrote to " << m_currentDevice.name() << " " << c.uuid() << value.toHex(':');
     if(loadType == Wahoo_Kickr) commandWritten();
 }

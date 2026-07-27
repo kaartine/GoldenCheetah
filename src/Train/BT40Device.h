@@ -57,6 +57,7 @@ public:
     void disconnectDevice();
     static QMap<QBluetoothUuid, btle_sensor_type_t> supportedServices;
     QBluetoothDeviceInfo deviceInfo() const;
+    void updateDeviceInfo(const QBluetoothDeviceInfo &devinfo);
 
     void setLoad(double);
     void setGradient(double);
@@ -89,10 +90,14 @@ private slots:
                                       const QByteArray &value);
     void serviceError(QLowEnergyService::ServiceError e);
     void attemptReconnect();
+    void heartRateStreamReady();
+    void heartRateWatchdogExpired();
+    void completeLowEnergyControllerReplacement();
 
 signals:
     void setNotification(QString msg, int timeout);
     void reconnectScanRequested();
+    void reconnectScanCancelled();
     void connectionRestored();
 private:
     QPointer<BT40Controller> parentController;
@@ -139,12 +144,27 @@ private:
     bool addressTypeConfirmed;
     bool addressTypeChangedAfterFailure;
     QTimer *reconnectTimer;
+    QTimer *heartRateWatchdogTimer;
     int reconnectAttempts;
+    int reconnectStallTicks;
     bool reconnectNoticeShown;
+    bool heartRateStreamActive;
+    bool heartRateRecoveryPending;
+    bool heartRateDisconnectRequested;
+    bool controllerReplacementPending;
     bool shuttingDown;
+    bool isHeartRateOnly() const;
     bool acceptsService(const QBluetoothUuid &uuid) const;
     bool trainerControlAllowed() const;
     BluetoothDeviceTypes::LinkState linkState() const;
+    bool heartRateLinkCanStream() const;
+    void createLowEnergyController();
+    void replaceLowEnergyController();
+    void retireLowEnergyController(
+            QLowEnergyController *control,
+            BluetoothDeviceTypes::LinkState state);
+    void clearGattServices();
+    void beginHeartRateRecovery(const QString &reason);
     bool writeTrainerCharacteristic(
             QLowEnergyService *service, const QLowEnergyCharacteristic &characteristic,
             const QByteArray &value,

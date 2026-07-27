@@ -1,0 +1,45 @@
+/*
+ * Deterministic QLowEnergyCharacteristic test double for BT40 lifecycle tests.
+ */
+
+#ifndef GC_TEST_QLOWENERGYCHARACTERISTIC_H
+#define GC_TEST_QLOWENERGYCHARACTERISTIC_H
+
+#include "QLowEnergyDescriptor"
+
+#include <QBluetoothUuid>
+#include <QMetaType>
+
+class QLowEnergyCharacteristic
+{
+public:
+    QLowEnergyCharacteristic() = default;
+    explicit QLowEnergyCharacteristic(
+            const QBluetoothUuid &uuid, bool hasNotificationDescriptor) :
+        characteristicUuid(uuid), valid(true),
+        hasNotificationDescriptor(hasNotificationDescriptor)
+    {
+    }
+
+    bool isValid() const { return valid; }
+    QBluetoothUuid uuid() const { return characteristicUuid; }
+    QLowEnergyDescriptor descriptor(const QBluetoothUuid &uuid) const
+    {
+        if (!valid || !hasNotificationDescriptor
+                || uuid != QBluetoothUuid(
+                        QBluetoothUuid::DescriptorType::
+                                ClientCharacteristicConfiguration)) {
+            return QLowEnergyDescriptor();
+        }
+        return QLowEnergyDescriptor(uuid);
+    }
+
+private:
+    QBluetoothUuid characteristicUuid;
+    bool valid = false;
+    bool hasNotificationDescriptor = false;
+};
+
+Q_DECLARE_METATYPE(QLowEnergyCharacteristic)
+
+#endif
