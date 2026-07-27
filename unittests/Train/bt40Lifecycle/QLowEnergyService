@@ -88,6 +88,11 @@ public:
         emit stateChanged(state);
     }
 
+    void emitErrorForTest(ServiceError error)
+    {
+        emit errorOccurred(error);
+    }
+
 signals:
     void stateChanged(QLowEnergyService::ServiceState state);
     void characteristicChanged(const QLowEnergyCharacteristic &characteristic,
