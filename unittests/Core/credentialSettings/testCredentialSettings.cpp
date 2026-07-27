@@ -8476,6 +8476,21 @@ void TestCredentialSettings::newFormatMigrationScrubsLegacyCredential()
         QStringLiteral("athletes"));
     QVERIFY(QDir().mkpath(
         athleteRoot + QStringLiteral("/Athlete/config")));
+    const QString localScope =
+        QStringLiteral("44444444-4444-4444-8444-444444444444");
+    {
+        QSettings privateSettings(
+            athleteRoot
+                + QStringLiteral(
+                    "/Athlete/config/athlete-private.ini"),
+            QSettings::IniFormat);
+        privateSettings.setValue(
+            QStringLiteral("credential_store/id"),
+            localScope);
+        privateSettings.sync();
+        QCOMPARE(privateSettings.status(),
+                 QSettings::NoError);
+    }
     factoryState() = std::make_shared<FakeStoreState>();
     {
         GSettings settings(organization, application);
@@ -8496,6 +8511,10 @@ void TestCredentialSettings::newFormatMigrationScrubsLegacyCredential()
         + QStringLiteral("/Athlete/config/athlete-private.ini");
     QVERIFY(!fileContents(privatePath).contains(sentinel.toUtf8()));
     QCOMPARE(factoryState()->values.size(), 1);
+    QCOMPARE(factoryState()->values.value(
+                 CredentialSettings::vaultKey(
+                     localScope, GC_RWGPSPASS)),
+             sentinel);
 }
 
 void TestCredentialSettings::newFormatFailedMigrationIsRetriedWithoutCredentialLoss()
@@ -8526,6 +8545,21 @@ void TestCredentialSettings::newFormatFailedMigrationIsRetriedWithoutCredentialL
         QStringLiteral("athletes"));
     QVERIFY(QDir().mkpath(
         athleteRoot + QStringLiteral("/Athlete/config")));
+    const QString localScope =
+        QStringLiteral("55555555-5555-4555-8555-555555555555");
+    {
+        QSettings privateSettings(
+            athleteRoot
+                + QStringLiteral(
+                    "/Athlete/config/athlete-private.ini"),
+            QSettings::IniFormat);
+        privateSettings.setValue(
+            QStringLiteral("credential_store/id"),
+            localScope);
+        privateSettings.sync();
+        QCOMPARE(privateSettings.status(),
+                 QSettings::NoError);
+    }
     factoryState() = std::make_shared<FakeStoreState>();
     factoryState()->failWrites = true;
     {
@@ -8566,6 +8600,10 @@ void TestCredentialSettings::newFormatFailedMigrationIsRetriedWithoutCredentialL
     QVERIFY(!migrated.contains(legacyKey));
     QVERIFY(!fileContents(legacyPath).contains(sentinel.toUtf8()));
     QCOMPARE(factoryState()->values.size(), 1);
+    QCOMPARE(factoryState()->values.value(
+                 CredentialSettings::vaultKey(
+                     localScope, GC_RWGPSPASS)),
+             sentinel);
 }
 
 void TestCredentialSettings::
