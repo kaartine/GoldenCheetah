@@ -24,8 +24,8 @@
 #include <utility>
 
 #ifdef Q_OS_WIN
-#include <aclapi.h>
 #include <qt_windows.h>
+#include <aclapi.h>
 #endif
 
 #include "Core/CredentialSettings.h"
@@ -764,36 +764,31 @@ bool windowsDirectoryHasOwnerOnlyAcl(
             &descriptorRevision)
         && (control & SE_DACL_PROTECTED);
     bool valid = owner && ::EqualSid(owner, userSid)
-        && acl && protectedDacl;
+        && acl && protectedDacl
+        && acl->AceCount == 1;
     bool currentUserAllowed = false;
     if (valid) {
-        for (DWORD index = 0;
-             index < acl->AceCount; ++index) {
-            void *rawAce = nullptr;
-            if (!::GetAce(acl, index, &rawAce)) {
-                valid = false;
-                break;
-            }
-            auto *header =
-                static_cast<ACE_HEADER *>(rawAce);
-            if (header->AceType
-                != ACCESS_ALLOWED_ACE_TYPE) {
-                continue;
-            }
+        void *rawAce = nullptr;
+        if (!::GetAce(acl, 0, &rawAce)) {
+            valid = false;
+        } else {
+            auto *header = static_cast<ACE_HEADER *>(rawAce);
             auto *ace =
                 static_cast<ACCESS_ALLOWED_ACE *>(
                     rawAce);
             PSID trustee = &ace->SidStart;
-            if (!::IsValidSid(trustee)
+            if (header->AceType
+                    != ACCESS_ALLOWED_ACE_TYPE
+                || !::IsValidSid(trustee)
                 || !::EqualSid(trustee, userSid)
                 || (header->AceFlags
                     & INHERITED_ACE)
                 || (ace->Mask & FILE_ALL_ACCESS)
                     != FILE_ALL_ACCESS) {
                 valid = false;
-                break;
+            } else {
+                currentUserAllowed = true;
             }
-            currentUserAllowed = true;
         }
     }
     ::LocalFree(descriptor);
@@ -886,6 +881,8 @@ private slots:
     void symlinkedCredentialStateDirectoryFailsClosed();
     void windowsCredentialDirectoriesUseOwnerOnlyAcl();
     void windowsWritableCredentialRootFailsClosed();
+    void windowsExistingWritableCredentialDirectoryFailsClosed_data();
+    void windowsExistingWritableCredentialDirectoryFailsClosed();
     void reissuedDeleteResumesDurableTransaction();
     void reportedMarkerFailureRecoversDurableMarker();
     void failedMarkerPersistenceLeavesPreparationState();
@@ -4468,6 +4465,72 @@ windowsWritableCredentialRootFailsClosed()
         QStringLiteral("credential-to-preserve"));
     QVERIFY(setWindowsDirectoryAcl(
         stateRoot, false));
+#endif
+}
+
+void TestCredentialSettings::
+windowsExistingWritableCredentialDirectoryFailsClosed_data()
+{
+#ifndef Q_OS_WIN
+    QTest::addColumn<bool>("writableApplication");
+    QTest::newRow("Windows DACLs unavailable") << false;
+#else
+    QTest::addColumn<bool>("writableApplication");
+    QTest::newRow("application") << true;
+    QTest::newRow("credential-locks") << false;
+#endif
+}
+
+void TestCredentialSettings::
+windowsExistingWritableCredentialDirectoryFailsClosed()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Windows DACLs are required");
+#else
+    QFETCH(bool, writableApplication);
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot = temporary.filePath(
+        QStringLiteral("credential-state"));
+    const QString applicationPath = QDir(stateRoot).filePath(
+        QStringLiteral("GoldenCheetah"));
+    const QString lockPath = QDir(applicationPath).filePath(
+        QStringLiteral("credential-locks"));
+    QVERIFY(QDir().mkpath(lockPath));
+    QVERIFY(setWindowsDirectoryAcl(stateRoot, false));
+    QVERIFY(setWindowsDirectoryAcl(
+        applicationPath, writableApplication));
+    QVERIFY(setWindowsDirectoryAcl(
+        lockPath, !writableApplication));
+
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings settings(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    auto state = std::make_shared<FakeStoreState>();
+    state->values.insert(
+        vaultKey, QStringLiteral("credential-to-preserve"));
+    CredentialSettings credentials(fakeStore(state));
+
+    QVERIFY(!credentials.setValueChecked(
+        &settings, scope, GC_STRAVA_TOKEN,
+        plaintextKey, QStringLiteral("replacement")));
+    QCOMPARE(state->reads, 0);
+    QCOMPARE(state->writes, 0);
+    QCOMPARE(state->removes, 0);
+    QCOMPARE(
+        state->values.value(vaultKey),
+        QStringLiteral("credential-to-preserve"));
+    QVERIFY(!windowsDirectoryHasOwnerOnlyAcl(
+        writableApplication
+            ? applicationPath : lockPath));
 #endif
 }
 
