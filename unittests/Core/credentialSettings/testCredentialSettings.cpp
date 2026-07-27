@@ -1999,7 +1999,7 @@ supersededUpdateInvalidatesMemoryOnlyCache()
         QStringLiteral("first-memory-credential")));
     const QByteArray firstTransaction =
         credentialPhaseTransaction(
-            deletionPath, QByteArrayLiteral("updating"));
+            deletionPath, QByteArrayLiteral("creating"));
     QVERIFY(!firstTransaction.isEmpty());
     QCOMPARE(first.value(
                  &settings, scope, GC_STRAVA_TOKEN,
@@ -2016,7 +2016,7 @@ supersededUpdateInvalidatesMemoryOnlyCache()
         QStringLiteral("superseding-credential")));
     const QByteArray secondTransaction =
         credentialPhaseTransaction(
-            deletionPath, QByteArrayLiteral("updating"));
+            deletionPath, QByteArrayLiteral("creating"));
     QVERIFY(!secondTransaction.isEmpty());
     QVERIFY(secondTransaction != firstTransaction);
     QVERIFY(QDir(revisionPath).removeRecursively());
@@ -3794,7 +3794,15 @@ credentialCrashRecoveryAcrossProcesses()
                 plaintextKey,
                 QStringLiteral("new-credential")));
         }
-        QVERIFY(!duplicate.contains(plaintextKey));
+        if (operation == QStringLiteral("create")
+            && expected
+                == QStringLiteral("legacy-credential")) {
+            QCOMPARE(
+                duplicate.value(plaintextKey).toString(),
+                expected);
+        } else {
+            QVERIFY(!duplicate.contains(plaintextKey));
+        }
         return;
     }
 
@@ -3818,6 +3826,14 @@ credentialCrashRecoveryAcrossProcesses()
          "vault:removed", "missing", false},
         {"delete-deleted", "delete",
          "deletion:deleted", "missing", false},
+        {"create-state", "create",
+         "deletion:creating", "legacy-credential", false},
+        {"create-vault", "create",
+         "vault:written", "new-credential", false},
+        {"create-revision", "create",
+         "write:final-revision", "new-credential", false},
+        {"create-active", "create",
+         "deletion:active", "new-credential", false},
         {"update-state", "update",
          "deletion:updating", "active-credential", false},
         {"update-vault", "update",
@@ -3894,20 +3910,34 @@ credentialCrashRecoveryAcrossProcesses()
                 QFile::encodeName(stateRoot));
             QSettings current(
                 settingsPath, QSettings::IniFormat);
-            CredentialSettings bootstrap(
-                std::make_unique<FileCredentialStore>(
-                    vaultPath));
-            QVERIFY2(bootstrap.setValueChecked(
-                         &current, scope, GC_STRAVA_TOKEN,
-                         plaintextKey,
-                         QStringLiteral("active-credential")),
-                     testCase.name);
             if (QByteArray(testCase.operation)
-                == QByteArrayLiteral("replace")) {
-                QVERIFY2(bootstrap.removeChecked(
+                == QByteArrayLiteral("create")) {
+                current.setValue(
+                    plaintextKey,
+                    QStringLiteral("legacy-credential"));
+                current.sync();
+                QCOMPARE(
+                    current.status(),
+                    QSettings::NoError);
+            } else {
+                CredentialSettings bootstrap(
+                    std::make_unique<FileCredentialStore>(
+                        vaultPath));
+                QVERIFY2(bootstrap.setValueChecked(
                              &current, scope,
-                             GC_STRAVA_TOKEN, plaintextKey),
+                             GC_STRAVA_TOKEN,
+                             plaintextKey,
+                             QStringLiteral(
+                                 "active-credential")),
                          testCase.name);
+                if (QByteArray(testCase.operation)
+                    == QByteArrayLiteral("replace")) {
+                    QVERIFY2(bootstrap.removeChecked(
+                                 &current, scope,
+                                 GC_STRAVA_TOKEN,
+                                 plaintextKey),
+                             testCase.name);
+                }
             }
         }
         {
@@ -3915,7 +3945,10 @@ credentialCrashRecoveryAcrossProcesses()
                 duplicatePath, QSettings::IniFormat);
             duplicate.setValue(
                 plaintextKey,
-                QStringLiteral("stale-duplicate"));
+                QByteArray(testCase.operation)
+                        == QByteArrayLiteral("create")
+                    ? QStringLiteral("legacy-credential")
+                    : QStringLiteral("stale-duplicate"));
             duplicate.sync();
             QCOMPARE(duplicate.status(), QSettings::NoError);
         }
@@ -3983,6 +4016,13 @@ credentialCrashRecoveryAcrossProcesses()
             vault.read(vaultKey);
         if (QByteArray(testCase.operation)
             == QByteArrayLiteral("delete")) {
+            QCOMPARE(int(final.status),
+                     int(CredentialStore::Status::NotFound));
+        } else if (QByteArray(testCase.operation)
+                       == QByteArrayLiteral("create")
+                   && QByteArray(testCase.point)
+                       == QByteArrayLiteral(
+                           "deletion:creating")) {
             QCOMPARE(int(final.status),
                      int(CredentialStore::Status::NotFound));
         } else {
@@ -4716,7 +4756,7 @@ finalRevisionFailureRecoversCommittedWrite()
             deletionPath,
             replacement
                 ? QByteArrayLiteral("replacing")
-                : QByteArrayLiteral("updating"));
+                : QByteArrayLiteral("creating"));
     QVERIFY(!transaction.isEmpty());
     QVERIFY(QDir(revisionPath).removeRecursively());
     QVERIFY(QFile::rename(
@@ -4835,7 +4875,7 @@ failedOrdinaryWriteResultRecoversCommittedSecret()
     QCOMPARE(state->values.value(vaultKey),
              QStringLiteral("committed-credential"));
     QVERIFY(credentialPhaseIs(
-        deletionPath, QByteArrayLiteral("updating")));
+        deletionPath, QByteArrayLiteral("creating")));
 
     credentials.reset();
     state->failWrites = false;
