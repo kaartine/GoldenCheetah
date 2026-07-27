@@ -985,6 +985,9 @@ private slots:
     void transientReadFailureIsRetried();
     void transientReadDoesNotOverwriteNewerCredential_data();
     void transientReadDoesNotOverwriteNewerCredential();
+    void migrationDoesNotOverwriteCredentialCreatedAfterMiss();
+    void migrationCollisionReadFailureRetainsPlaintextAndRetries();
+    void creatingMigrationDoesNotOverwriteCredentialCreatedAfterMiss();
     void transientReadBeforeMissingCredentialRetriesMigration();
     void scopesAreIsolated();
     void scopeIdentifiersAreStableAndValidated();
@@ -7384,6 +7387,141 @@ transientReadDoesNotOverwriteNewerCredential()
     QCOMPARE(state->writes, 0);
     QCOMPARE(state->values.value(vaultKey), currentSecret);
     QVERIFY(!ini.contains(plaintextKey));
+}
+
+void TestCredentialSettings::
+migrationDoesNotOverwriteCredentialCreatedAfterMiss()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings ini(temporary.filePath(QStringLiteral("private.ini")),
+                  QSettings::IniFormat);
+    const QString scope = CredentialSettings::ensureScopeId(
+        &ini, QStringLiteral("credential_store/id"));
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString staleSecret = QStringLiteral("stale-plaintext");
+    const QString currentSecret = QStringLiteral("current-vault-secret");
+    ini.setValue(plaintextKey, staleSecret);
+    ini.sync();
+    QCOMPARE(ini.status(), QSettings::NoError);
+
+    auto state = std::make_shared<FakeStoreState>();
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    bool published = false;
+    state->beforeWrite = [&] {
+        if (published)
+            return;
+        published = true;
+        state->values.insert(vaultKey, currentSecret);
+    };
+    CredentialSettings credentials(fakeStore(state));
+
+    QCOMPARE(credentials.value(
+                 &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(currentSecret));
+    QCOMPARE(state->values.value(vaultKey), currentSecret);
+    QVERIFY(!ini.contains(plaintextKey));
+}
+
+void TestCredentialSettings::
+migrationCollisionReadFailureRetainsPlaintextAndRetries()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString path =
+        temporary.filePath(QStringLiteral("private.ini"));
+    QSettings ini(path, QSettings::IniFormat);
+    const QString scope = CredentialSettings::ensureScopeId(
+        &ini, QStringLiteral("credential_store/id"));
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString staleSecret = QStringLiteral("stale-plaintext");
+    const QString currentSecret = QStringLiteral("current-vault-secret");
+    ini.setValue(plaintextKey, staleSecret);
+    ini.sync();
+    QCOMPARE(ini.status(), QSettings::NoError);
+
+    auto state = std::make_shared<FakeStoreState>();
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    bool published = false;
+    state->beforeWrite = [&] {
+        if (published)
+            return;
+        published = true;
+        state->values.insert(vaultKey, currentSecret);
+        state->failReads = true;
+    };
+    CredentialSettings credentials(fakeStore(state));
+
+    QCOMPARE(credentials.value(
+                 &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(QStringLiteral("missing")));
+    QCOMPARE(state->values.value(vaultKey), currentSecret);
+    QVERIFY(ini.contains(plaintextKey));
+    QCOMPARE(ini.value(plaintextKey).toString(), staleSecret);
+    QVERIFY(fileContents(path).contains(staleSecret.toUtf8()));
+
+    state->failReads = false;
+    QCOMPARE(credentials.value(
+                 &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(currentSecret));
+    QCOMPARE(state->values.value(vaultKey), currentSecret);
+    QVERIFY(!ini.contains(plaintextKey));
+}
+
+void TestCredentialSettings::
+creatingMigrationDoesNotOverwriteCredentialCreatedAfterMiss()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot = temporary.filePath(
+        QStringLiteral("credential-state"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings ini(temporary.filePath(QStringLiteral("private.ini")),
+                  QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString staleSecret = QStringLiteral("stale-plaintext");
+    const QString currentSecret = QStringLiteral("current-vault-secret");
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    const QString deletionPath = credentialOperationFile(
+        stateRoot, vaultKey, QStringLiteral(".deletion"));
+    QByteArray transaction;
+    QVERIFY(writeCredentialPhaseFile(
+        deletionPath, QByteArrayLiteral("creating"),
+        &transaction));
+    ini.setValue(plaintextKey, staleSecret);
+    ini.sync();
+    QCOMPARE(ini.status(), QSettings::NoError);
+
+    auto state = std::make_shared<FakeStoreState>();
+    bool published = false;
+    state->beforeWrite = [&] {
+        if (published)
+            return;
+        published = true;
+        state->values.insert(vaultKey, currentSecret);
+    };
+    CredentialSettings credentials(fakeStore(state));
+
+    QCOMPARE(credentials.value(
+                 &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(currentSecret));
+    QCOMPARE(state->values.value(vaultKey), currentSecret);
+    QVERIFY(!ini.contains(plaintextKey));
+    QCOMPARE(
+        credentialPhaseTransaction(
+            deletionPath, QByteArrayLiteral("active")),
+        transaction);
 }
 
 void TestCredentialSettings::
