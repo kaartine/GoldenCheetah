@@ -709,6 +709,49 @@ private slots:
         delete device;
     }
 
+    void stuckHeartRateLinkGetsFreshController()
+    {
+        BT40Controller controller(nullptr, nullptr);
+        BT40Device *device = createDevice(
+                &controller,
+                BluetoothDeviceTypes::DeviceRole::HeartRateOnly);
+        QPointer<QLowEnergyController> staleLink =
+                device->findChild<QLowEnergyController *>();
+        QVERIFY(staleLink);
+
+        device->connectDevice();
+        QCOMPARE(QLowEnergyController::connectCallCount(), 1);
+        staleLink->setStateForTest(
+                QLowEnergyController::ConnectingState);
+        staleLink->emitErrorForTest(
+                QLowEnergyController::ConnectionError);
+
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            QVERIFY(QMetaObject::invokeMethod(
+                    device, "attemptReconnect",
+                    Qt::DirectConnection));
+        }
+
+        QCOMPARE(QLowEnergyController::disconnectCallCount(), 1);
+        QCOMPARE(QLowEnergyController::connectCallCount(), 2);
+        QLowEnergyController *freshLink =
+                device->findChild<QLowEnergyController *>();
+        QVERIFY(freshLink);
+        QVERIFY(freshLink != staleLink);
+
+        staleLink->setStateForTest(
+                QLowEnergyController::UnconnectedState);
+        staleLink->emitDisconnectedForTest();
+        QCoreApplication::sendPostedEvents(
+                nullptr, QEvent::DeferredDelete);
+        QVERIFY(staleLink.isNull());
+
+        device->disconnectDevice();
+        freshLink->setStateForTest(
+                QLowEnergyController::UnconnectedState);
+        delete device;
+    }
+
     void rediscoveryRemainsPendingUntilHeartRateStreams()
     {
         const QBluetoothDeviceInfo original = lifecycleDeviceInfo();
