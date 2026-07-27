@@ -1817,17 +1817,45 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-017: Credential scopes alias same-named athletes in different roots
 
-- Status: OPEN
-- Code: `src/Core/Settings.cpp`
+- Status: FIXED
+- Code: `src/Core/CredentialSettings.cpp`,
+  `src/Core/CredentialSettings.h`, `src/Core/Settings.cpp`,
+  `src/Core/Settings.h`, `src/Core/main.cpp`, and
+  `unittests/Core/credentialSettings/testCredentialSettings.cpp`
 - Impact: Legacy credential-scope mapping hashes only the athlete name. Two
   independent athlete roots containing the same directory name can therefore
   adopt one vault scope and expose or overwrite each other's cloud credentials.
-- Test: Initialize same-named athletes in two isolated roots, store distinct
-  credentials, restart through both pre- and post-initialization paths, and
-  require distinct stable vault identifiers with no cross-profile reads.
-- Fix direction: Bind new scope mappings to a durable root/profile identity
-  while preserving existing single-root mappings through an explicit,
-  fail-closed migration policy.
+  Copied roots and athlete directories could also reuse fresh local bindings
+  when their external provenance was not checked.
+- Test-first evidence: RED coverage initializes same-named athletes in
+  independent roots, copies bound roots and profiles, removes location claims,
+  exercises pre- and post-initialization access, and injects failures at every
+  identity, claim, binding, and plaintext-migration commit point. Before the
+  production fix, same-named roots resolved to one scope, copied fresh bindings
+  could bootstrap missing claims, invalid athlete paths disabled a valid active
+  root, and authorized legacy global and athlete credentials did not migrate
+  safely through interrupted writes.
+- Resolution: New credentials are bound to random durable root, profile, and
+  scope identities. System-level location claims bind those identities to
+  canonical paths and parent identities; existing fresh bindings must match
+  pre-existing claims, while only newly generated or explicitly authorized
+  legacy identities may create claims. Exact settings paths reject traversal,
+  symlinks, dangling links, and Windows reparse points. Legacy plaintext
+  migration and binding recovery remain fail closed unless the selected root
+  and system claims establish provenance. Command-line and server roots are
+  resolved before global settings and credential scopes are initialized.
+- Verification: The focused suite passes 241 tests normally, under
+  ASan/UBSan/LSan, and under ThreadSanitizer, with zero failures or sanitizer
+  reports; five Windows-only ACL/junction cases skip on Linux. MinGW syntax
+  checks pass for all changed Core translation units. A complete Qt 6.8 build
+  succeeds and all 79 QtTest programs pass with zero failures.
+- Residual: Deliberate library moves need a future authenticated rebind
+  workflow. Interrupted fresh enrollment is tracked separately by `SEC-021`.
+  Same-user filesystem replacement races and unprovable custom legacy-root
+  provenance can deny credential access but cannot authorize a copied root.
+  Runtime NTFS ACL and junction behavior still requires a Windows worker;
+  current Windows verification is cross-compilation plus source-level
+  coverage.
 
 ### SEC-018: Credential migration uses a non-atomic check-then-write
 
@@ -1938,6 +1966,26 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   NTFS CI run; MinGW validates compilation but cannot execute those WinAPI
   contracts on this Linux build host.
 
+### SEC-021: Interrupted fresh credential enrollment is not recoverable
+
+- Status: OPEN
+- Code: `src/Core/CredentialSettings.cpp` and `src/Core/Settings.cpp`
+- Impact: Fresh root identities and scope bindings are persisted before their
+  system location claims. A crash or transient claim-write failure in between
+  leaves valid local metadata that is deliberately forbidden from recreating a
+  missing claim. Every later attempt therefore fails closed until metadata is
+  repaired manually. Credentials are not exposed, but new credential
+  enrollment and access can be denied permanently.
+- Test: Persist a generated root identity and each partial fresh binding state,
+  interrupt before the corresponding root, profile, or scope claim, then retry
+  in the same process and after reconstruction. Require recovery without
+  permitting a copied root or profile to bootstrap claims, and preserve
+  plaintext until migration can complete.
+- Fix direction: Publish system claims before local fresh metadata, or persist a
+  system-side enrollment intent that uniquely binds the canonical location and
+  generated identities. Recovery authority must live outside the copied root;
+  an invocation-local `created` flag is insufficient.
+
 ## Medium
 
 ### MEM-019: Indented plot marker starts and copies its matrix from indeterminate state
@@ -1995,6 +2043,60 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   application links, and the complete matrix passes 79 test programs and 2,699
   tests with zero failures, skips, or blacklisted results. The replacement API
   is available in the project's minimum supported Qt 6.5.3.
+
+### BLE-007: Silent heart-rate streams are not recovered independently
+
+- Status: OPEN
+- Code: `src/Train/BT40Device.cpp`, `src/Train/BT40Device.h`,
+  `src/Train/BT40Controller.cpp`, `src/Train/BluetoothTelemetryRouter.cpp`, and
+  `unittests/Train/bt40Lifecycle`
+- Impact: A Bluetooth heart-rate link can remain logically connected after
+  notifications stop. The Train view then records repeated zero-heart-rate
+  periods until a manual disconnect/connect cycle, even though trainer
+  telemetry continues.
+- Evidence: One captured workout contains seven heart-rate-only gaps lasting
+  33-53 seconds. A separate 15-second all-telemetry gap aligns with an operating
+  system Bluetooth-adapter reset, but no adapter or trainer interruption
+  explains the seven isolated heart-rate gaps. The sensor resumes after a
+  manual application reconnect and does not show the same behavior in other
+  applications.
+- Root cause: Raw BLE `connected` currently publishes `connectionRestored`,
+  stops reconnect timing, and clears rediscovery before HR service discovery or
+  CCC subscription succeeds. Five-second telemetry expiry only clears the
+  displayed value; invalid services, missing HR characteristics/descriptors,
+  and descriptor-write errors do not enter recovery. Reconnect callbacks also
+  do nothing while Qt remains in any Connecting, Connected, Discovering, or
+  Discovered state.
+- Test: Require HR silence while link-connected to start bounded recovery; keep
+  `connectionRestored` absent until HR subscription or a valid sample; cover
+  invalid service, missing characteristic/descriptor, descriptor-write error,
+  and a connection error stuck in Connecting; and retain rediscovery until a
+  usable HR stream exists.
+- Fix direction: Track heart-rate stream readiness and last-notification time
+  separately from the Qt link state. On silence or incomplete subscription,
+  clear only the affected source, force stale active links through teardown,
+  and restart bounded service discovery or link recovery without disturbing an
+  active trainer.
+
+### BLE-008: Bluetooth adapter resets leave BLE devices without recovery
+
+- Status: OPEN
+- Code: `src/Train/BT40Device.cpp`, `src/Train/BT40Controller.cpp`, and
+  `unittests/Train/bt40Lifecycle`
+- Impact: `InvalidBluetoothAdapterError` does not request rediscovery, scans
+  return while the adapter is invalid, and the low-energy controller is not
+  recreated. After a USB adapter reset, trainer and sensor telemetry can remain
+  unavailable until the application or connection is restarted manually.
+- Evidence: One captured workout has a 15-second gap across trainer and
+  heart-rate telemetry at the same time as an operating-system Bluetooth USB
+  adapter reset. This is separate from the seven heart-rate-only gaps tracked
+  by `BLE-007`.
+- Test: Invalidate the adapter during an active connection, restore it, and
+  require bounded rescanning, controller recreation, and independent recovery
+  of all configured BLE devices without a user disconnect/connect cycle.
+- Fix direction: Keep adapter-invalid devices pending, retry adapter discovery
+  with backoff, and recreate per-device controllers only after a valid adapter
+  is available.
 
 ### DATA-002: Merge offsets treat samples as seconds
 
@@ -3791,6 +3893,23 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   `9dd770ee212fcd8e3f5adf2547602dd926c9061b7aa4885e7a72e041d11347c3`
   remained stable for separate 15-second direct X11 and display-free offscreen
   launches; both clean-profile logs contained only translator debug notices.
+
+### BUILD-013: Qt 6.8 MOC sees an incomplete RideItem property type
+
+- Status: FIXED
+- Code: `src/Metrics/RideMetadata.h`
+- Impact: `RideMetadata` exposes `RideItem*` through `Q_PROPERTY` and stores it
+  in `QPointer`, but the header provides only the project's forward declaration
+  to MOC. Qt 6.8 generates metatype code that requires the complete type, so a
+  full application build can fail in generated `moc_RideMetadata.cpp`.
+- Test-first evidence: The full Qt 6.8 build failed while compiling the
+  generated metadata translation unit because `RideItem` was incomplete.
+  Focused Core-only builds did not compile that generated application target
+  and therefore did not expose the defect.
+- Resolution: `Q_MOC_INCLUDE("RideItem.h")` gives MOC the complete property
+  type without introducing a normal C++ include dependency into the header.
+- Verification: The complete Qt 6.8 application build succeeds and all 79
+  QtTest programs pass with zero failures.
 
 ### DEV-007: ANT FE-C spindown result aliases the zero offset
 
