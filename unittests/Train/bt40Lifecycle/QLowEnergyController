@@ -74,6 +74,9 @@ public:
     static int disconnectCallCount();
     static int discoverCallCount();
     static int destructionCount();
+    static int overlappingConnectCallCount();
+    static int synchronousErrorDestructionCount();
+    static RemoteAddressType lastRemoteAddressType();
     static void failNextServiceCreation();
 
 signals:
@@ -91,6 +94,11 @@ private:
     static int disconnectCalls;
     static int discoverCalls;
     static int destructions;
+    static int liveControllers;
+    static int overlappingConnectCalls;
+    static int errorEmissionDepth;
+    static int synchronousErrorDestructions;
+    static RemoteAddressType lastAddressType;
     static bool failServiceCreation;
 };
 

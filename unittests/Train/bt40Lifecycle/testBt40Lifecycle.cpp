@@ -882,12 +882,14 @@ private slots:
         QVERIFY(freshLink != initialLink);
         QCOMPARE(QLowEnergyController::connectCallCount(), 4);
 
-        initialLink->setStateForTest(
-                QLowEnergyController::UnconnectedState);
-        initialLink->emitDisconnectedForTest();
-        QCoreApplication::sendPostedEvents(
-                nullptr, QEvent::DeferredDelete);
-        QVERIFY(initialLink.isNull());
+        if (!initialLink.isNull()) {
+            initialLink->setStateForTest(
+                    QLowEnergyController::UnconnectedState);
+            initialLink->emitDisconnectedForTest();
+            QCoreApplication::sendPostedEvents(
+                    nullptr, QEvent::DeferredDelete);
+            QVERIFY(initialLink.isNull());
+        }
 
         device->disconnectDevice();
         freshLink->setStateForTest(
@@ -919,6 +921,60 @@ private slots:
         device->disconnectDevice();
         link->setStateForTest(QLowEnergyController::UnconnectedState);
         delete device;
+    }
+
+    void queuedDisconnectIsProcessedBeforeRediscoveryReconnect()
+    {
+        const QBluetoothDeviceInfo original = lifecycleDeviceInfo();
+        DeviceConfiguration config;
+        config.type = DEV_BT40_HEARTRATE;
+        config.deviceProfile =
+                original.name() + QLatin1Char(';')
+                + original.address().toString() + QLatin1Char(';')
+                + original.deviceUuid().toString();
+
+        BT40Controller controller(nullptr, &config);
+        QCOMPARE(controller.start(), 0);
+        BT40Device *device = addControllerDevice(&controller);
+        QVERIFY(device);
+        QLowEnergyController *link =
+                device->findChild<QLowEnergyController *>();
+        QVERIFY(link);
+
+        link->setStateForTest(QLowEnergyController::ConnectedState);
+        link->emitConnectedForTest();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
+        const QBluetoothUuid heartRateService(
+                QBluetoothUuid::ServiceClassUuid::HeartRate);
+        link->emitServiceDiscoveredForTest(heartRateService);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
+        QPointer<QLowEnergyService> staleService =
+                findService(device, heartRateService);
+        QVERIFY(staleService);
+        QVERIFY(QMetaObject::invokeMethod(
+                device, "heartRateStreamReady", Qt::DirectConnection));
+        QVERIFY(QMetaObject::invokeMethod(
+                device, "heartRateWatchdogExpired", Qt::DirectConnection));
+
+        link->setStateForTest(QLowEnergyController::UnconnectedState);
+        link->emitDisconnectedForTest();
+        QBluetoothDeviceInfo refreshed(
+                original.address(),
+                QStringLiteral("Rediscovered before disconnect callback"), 0);
+        refreshed.setCoreConfigurations(
+                QBluetoothDeviceInfo::LowEnergyCoreConfiguration);
+        QVERIFY(QMetaObject::invokeMethod(
+                &controller, "addDevice", Qt::DirectConnection,
+                Q_ARG(QBluetoothDeviceInfo, refreshed)));
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
+
+        const bool staleServiceWasCleared = staleService.isNull();
+        link->setStateForTest(QLowEnergyController::UnconnectedState);
+        QCOMPARE(controller.stop(), 0);
+        QVERIFY(staleServiceWasCleared);
     }
 
     void slowHeartRateConnectionIsNotCancelledAtFirstRetryTick()
@@ -998,6 +1054,151 @@ private slots:
         delete device;
     }
 
+    void replacementNeverConnectsOverlappingController()
+    {
+        BT40Controller controller(nullptr, nullptr);
+        BT40Device *device = createDevice(
+                &controller,
+                BluetoothDeviceTypes::DeviceRole::HeartRateOnly);
+        QPointer<QLowEnergyController> staleLink =
+                device->findChild<QLowEnergyController *>();
+        QVERIFY(staleLink);
+
+        device->connectDevice();
+        staleLink->setStateForTest(
+                QLowEnergyController::ConnectingState);
+        staleLink->emitErrorForTest(
+                QLowEnergyController::ConnectionError);
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            QVERIFY(QMetaObject::invokeMethod(
+                    device, "attemptReconnect",
+                    Qt::DirectConnection));
+        }
+        const int overlappingConnects =
+                QLowEnergyController::overlappingConnectCallCount();
+
+        if (!staleLink.isNull()) {
+            staleLink->setStateForTest(
+                    QLowEnergyController::UnconnectedState);
+            staleLink->emitDisconnectedForTest();
+        }
+        QCoreApplication::sendPostedEvents(
+                nullptr, QEvent::DeferredDelete);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
+
+        QLowEnergyController *freshLink =
+                device->findChild<QLowEnergyController *>(
+                        QString(), Qt::FindDirectChildrenOnly);
+        QVERIFY(freshLink);
+        device->disconnectDevice();
+        freshLink->setStateForTest(
+                QLowEnergyController::UnconnectedState);
+        delete device;
+
+        QCOMPARE(overlappingConnects, 0);
+    }
+
+    void directErrorsNeverDeleteTheirSignalSenderSynchronously()
+    {
+        BT40Controller controller(nullptr, nullptr);
+        BT40Device *device = createDevice(
+                &controller,
+                BluetoothDeviceTypes::DeviceRole::HeartRateOnly);
+        QPointer<QLowEnergyController> initialLink =
+                device->findChild<QLowEnergyController *>();
+        QVERIFY(initialLink);
+
+        device->connectDevice();
+        for (int failure = 0; failure < 3; ++failure) {
+            QVERIFY(initialLink);
+            initialLink->setStateForTest(
+                    QLowEnergyController::UnconnectedState);
+            initialLink->emitErrorForTest(
+                    QLowEnergyController::ConnectionError);
+        }
+        const int synchronousDestructions =
+                QLowEnergyController::
+                        synchronousErrorDestructionCount();
+
+        QCoreApplication::sendPostedEvents(
+                nullptr, QEvent::DeferredDelete);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
+        QLowEnergyController *freshLink =
+                device->findChild<QLowEnergyController *>(
+                        QString(), Qt::FindDirectChildrenOnly);
+        QVERIFY(freshLink);
+        device->disconnectDevice();
+        freshLink->setStateForTest(
+                QLowEnergyController::UnconnectedState);
+        delete device;
+
+        QCOMPARE(synchronousDestructions, 0);
+    }
+
+    void invalidAdapterErrorStartsHeartRateRecovery()
+    {
+        BT40Controller controller(nullptr, nullptr);
+        BT40Device *device = createDevice(
+                &controller,
+                BluetoothDeviceTypes::DeviceRole::HeartRateOnly);
+        QLowEnergyController *link =
+                device->findChild<QLowEnergyController *>();
+        QVERIFY(link);
+        QSignalSpy rediscoverySpy(
+                device, &BT40Device::reconnectScanRequested);
+
+        device->connectDevice();
+        link->setStateForTest(QLowEnergyController::UnconnectedState);
+        link->emitErrorForTest(
+                QLowEnergyController::InvalidBluetoothAdapterError);
+        const int rediscoveryRequests = rediscoverySpy.count();
+
+        device->disconnectDevice();
+        link->setStateForTest(
+                QLowEnergyController::UnconnectedState);
+        delete device;
+
+        QCOMPARE(rediscoveryRequests, 1);
+    }
+
+    void trainerReconnectPreservesConfirmedAddressType()
+    {
+        BT40Controller controller(nullptr, nullptr);
+        BT40Device *device = createDevice(&controller);
+        QLowEnergyController *link =
+                device->findChild<QLowEnergyController *>();
+        QVERIFY(link);
+
+        device->connectDevice();
+        link->setStateForTest(QLowEnergyController::ConnectedState);
+        link->emitConnectedForTest();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
+        link->setStateForTest(QLowEnergyController::UnconnectedState);
+        link->emitDisconnectedForTest();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
+
+        link->setStateForTest(QLowEnergyController::ConnectingState);
+        link->emitErrorForTest(
+                QLowEnergyController::ConnectionError);
+        link->setStateForTest(QLowEnergyController::UnconnectedState);
+        QVERIFY(QMetaObject::invokeMethod(
+                device, "attemptReconnect", Qt::DirectConnection));
+        const QLowEnergyController::RemoteAddressType addressType =
+                QLowEnergyController::lastRemoteAddressType();
+
+        device->disconnectDevice();
+        link->setStateForTest(
+                QLowEnergyController::UnconnectedState);
+        delete device;
+
+        QCOMPARE(addressType,
+                 QLowEnergyController::RandomAddress);
+    }
+
     void rediscoveryRemainsPendingUntilHeartRateStreams()
     {
         const QBluetoothDeviceInfo original = lifecycleDeviceInfo();
@@ -1035,6 +1236,10 @@ private slots:
                 &controller, "scanFinished", Qt::DirectConnection));
         QCOMPARE(notificationSpy.count(), 0);
 
+        link->setStateForTest(QLowEnergyController::ConnectedState);
+        link->emitConnectedForTest();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
         QVERIFY(QMetaObject::invokeMethod(
                 device, "heartRateStreamReady", Qt::DirectConnection));
         QVERIFY(QMetaObject::invokeMethod(
