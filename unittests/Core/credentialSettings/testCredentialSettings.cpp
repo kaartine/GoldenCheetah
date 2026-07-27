@@ -8,6 +8,8 @@
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
@@ -1021,6 +1023,8 @@ private slots:
     void invalidCredentialRootSwitchFailsClosed();
     void copiedCredentialRootFailsClosed();
     void copiedAthleteCredentialProfileFailsClosed();
+    void existingFreshRootCannotBootstrapMissingClaims();
+    void existingFreshAthleteCannotBootstrapMissingClaims();
     void unavailableClaimedRootCannotBeReboundByCopy();
     void symlinkedGlobalCredentialSettingsFailClosed();
     void localAthleteScopeIsPreservedWithoutCrossRootAdoption();
@@ -10297,6 +10301,270 @@ copiedAthleteCredentialProfileFailsClosed()
                  originalName, GC_STRAVA_TOKEN,
                  missing).toString(),
              secret);
+}
+
+void TestCredentialSettings::
+existingFreshRootCannotBootstrapMissingClaims()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialFreshRootClaims-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString secret =
+        QStringLiteral("fresh-root-token");
+    const QString missing = QStringLiteral("missing");
+    const QString originalRoot =
+        temporary.filePath(QStringLiteral("original"));
+    const QString copiedRoot =
+        temporary.filePath(QStringLiteral("copied"));
+    QVERIFY(QDir().mkpath(originalRoot));
+    QVERIFY(QDir().mkpath(copiedRoot));
+
+    factoryState() =
+        std::make_shared<FakeStoreState>();
+    {
+        GSettings original(organization, application);
+        original.initializeQSettingsGlobal(originalRoot);
+        QVERIFY(original.setValueChecked(
+            GC_NOLIO_ACCESS_TOKEN, secret));
+        original.syncQSettings();
+    }
+    const QHash<QString, QString> before =
+        factoryState()->values;
+
+    const QDir source(originalRoot);
+    for (const QString &fileName :
+         source.entryList(
+             QDir::Files | QDir::Hidden
+                 | QDir::System)) {
+        QVERIFY(QFile::copy(
+            source.filePath(fileName),
+            QDir(copiedRoot).filePath(fileName)));
+    }
+
+    QHash<QString, QVariant> claims;
+    {
+        QSettings system(
+            QSettings::IniFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        const QString prefix =
+            QStringLiteral(
+                "credential_store/location_claims/");
+        for (const QString &key : system.allKeys()) {
+            if (key.startsWith(prefix))
+                claims.insert(key, system.value(key));
+        }
+        QVERIFY(claims.size() >= 2);
+        for (auto claim = claims.cbegin();
+             claim != claims.cend(); ++claim) {
+            system.remove(claim.key());
+        }
+        system.sync();
+        QCOMPARE(system.status(), QSettings::NoError);
+    }
+
+    {
+        GSettings copied(organization, application);
+        copied.initializeQSettingsGlobal(copiedRoot);
+        QCOMPARE(
+            copied.value(
+                nullptr, GC_NOLIO_ACCESS_TOKEN,
+                missing).toString(),
+            missing);
+        QVERIFY(!copied.setValueChecked(
+            GC_NOLIO_ACCESS_TOKEN,
+            QStringLiteral("must-not-be-stored")));
+    }
+    QCOMPARE(factoryState()->values, before);
+
+    {
+        QSettings system(
+            QSettings::IniFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        const QString prefix =
+            QStringLiteral(
+                "credential_store/location_claims/");
+        QVERIFY(system.allKeys().filter(prefix).isEmpty());
+        for (auto claim = claims.cbegin();
+             claim != claims.cend(); ++claim) {
+            system.setValue(
+                claim.key(), claim.value());
+        }
+        system.sync();
+        QCOMPARE(system.status(), QSettings::NoError);
+    }
+    {
+        GSettings original(organization, application);
+        original.initializeQSettingsGlobal(originalRoot);
+        QCOMPARE(
+            original.value(
+                nullptr, GC_NOLIO_ACCESS_TOKEN,
+                missing).toString(),
+            secret);
+    }
+}
+
+void TestCredentialSettings::
+existingFreshAthleteCannotBootstrapMissingClaims()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialFreshAthleteClaims-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString originalName = QStringLiteral("Athlete");
+    const QString copiedName = QStringLiteral("Clone");
+    const QString secret =
+        QStringLiteral("fresh-athlete-token");
+    const QString missing = QStringLiteral("missing");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("library"));
+    const QString originalPath =
+        QDir(athleteRoot).filePath(originalName);
+    const QString copiedPath =
+        QDir(athleteRoot).filePath(copiedName);
+    const QString originalConfig =
+        QDir(originalPath).filePath(
+            QStringLiteral("config"));
+    const QString copiedConfig =
+        QDir(copiedPath).filePath(
+            QStringLiteral("config"));
+    QVERIFY(QDir().mkpath(originalConfig));
+    QVERIFY(QDir().mkpath(copiedConfig));
+
+    factoryState() =
+        std::make_shared<FakeStoreState>();
+    {
+        GSettings original(organization, application);
+        original.initializeQSettingsGlobal(athleteRoot);
+        original.initializeQSettingsAthlete(
+            athleteRoot, originalName);
+        QVERIFY(original.setCValueChecked(
+            originalName, GC_STRAVA_TOKEN, secret));
+        original.syncQSettings();
+    }
+    const QHash<QString, QString> before =
+        factoryState()->values;
+    QVERIFY(QFile::copy(
+        QDir(originalConfig).filePath(
+            QStringLiteral("athlete-private.ini")),
+        QDir(copiedConfig).filePath(
+            QStringLiteral("athlete-private.ini"))));
+
+    QHash<QString, QVariant> athleteClaims;
+    {
+        QSettings system(
+            QSettings::IniFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        const QString prefix =
+            QStringLiteral(
+                "credential_store/location_claims/");
+        const QString canonicalOriginal =
+            QFileInfo(originalPath).canonicalFilePath();
+        for (const QString &key : system.allKeys()) {
+            if (!key.startsWith(prefix))
+                continue;
+            const QJsonDocument document =
+                QJsonDocument::fromJson(
+                    system.value(key).toByteArray());
+            if (document.isObject()
+                && document.object().value(
+                    QStringLiteral(
+                        "directory_path")).toString()
+                    == canonicalOriginal) {
+                athleteClaims.insert(
+                    key, system.value(key));
+            }
+        }
+        QCOMPARE(athleteClaims.size(), 2);
+        for (auto claim = athleteClaims.cbegin();
+             claim != athleteClaims.cend(); ++claim) {
+            system.remove(claim.key());
+        }
+        system.sync();
+        QCOMPARE(system.status(), QSettings::NoError);
+    }
+
+    {
+        GSettings copied(organization, application);
+        copied.initializeQSettingsGlobal(athleteRoot);
+        copied.initializeQSettingsAthlete(
+            athleteRoot, copiedName);
+        QCOMPARE(
+            copied.cvalue(
+                copiedName, GC_STRAVA_TOKEN,
+                missing).toString(),
+            missing);
+        QVERIFY(!copied.setCValueChecked(
+            copiedName, GC_STRAVA_TOKEN,
+            QStringLiteral("must-not-be-stored")));
+    }
+    QCOMPARE(factoryState()->values, before);
+
+    {
+        QSettings system(
+            QSettings::IniFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        const QString canonicalCopied =
+            QFileInfo(copiedPath).canonicalFilePath();
+        for (const QString &key : system.allKeys()) {
+            if (!key.startsWith(
+                    QStringLiteral(
+                        "credential_store/location_claims/"))) {
+                continue;
+            }
+            const QJsonDocument document =
+                QJsonDocument::fromJson(
+                    system.value(key).toByteArray());
+            QVERIFY(
+                !document.isObject()
+                || document.object().value(
+                    QStringLiteral(
+                        "directory_path")).toString()
+                    != canonicalCopied);
+        }
+        for (auto claim = athleteClaims.cbegin();
+             claim != athleteClaims.cend(); ++claim) {
+            system.setValue(
+                claim.key(), claim.value());
+        }
+        system.sync();
+        QCOMPARE(system.status(), QSettings::NoError);
+    }
+    {
+        GSettings original(organization, application);
+        original.initializeQSettingsGlobal(athleteRoot);
+        original.initializeQSettingsAthlete(
+            athleteRoot, originalName);
+        QCOMPARE(
+            original.cvalue(
+                originalName, GC_STRAVA_TOKEN,
+                missing).toString(),
+            secret);
+    }
 }
 
 void TestCredentialSettings::
