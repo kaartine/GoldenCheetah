@@ -9,6 +9,7 @@ int QLowEnergyController::connectCalls = 0;
 int QLowEnergyController::disconnectCalls = 0;
 int QLowEnergyController::discoverCalls = 0;
 int QLowEnergyController::destructions = 0;
+bool QLowEnergyController::failServiceCreation = false;
 
 QLowEnergyController *
 QLowEnergyController::createCentral(const QBluetoothDeviceInfo &, QObject *parent)
@@ -61,6 +62,10 @@ QLowEnergyService *
 QLowEnergyController::createServiceObject(
         const QBluetoothUuid &serviceUuid, QObject *parent)
 {
+    if (failServiceCreation) {
+        failServiceCreation = false;
+        return nullptr;
+    }
     return new QLowEnergyService(serviceUuid, parent ? parent : this);
 }
 
@@ -108,9 +113,16 @@ QLowEnergyController::resetTestCounters()
     disconnectCalls = 0;
     discoverCalls = 0;
     destructions = 0;
+    failServiceCreation = false;
 }
 
 int QLowEnergyController::connectCallCount() { return connectCalls; }
 int QLowEnergyController::disconnectCallCount() { return disconnectCalls; }
 int QLowEnergyController::discoverCallCount() { return discoverCalls; }
 int QLowEnergyController::destructionCount() { return destructions; }
+
+void
+QLowEnergyController::failNextServiceCreation()
+{
+    failServiceCreation = true;
+}

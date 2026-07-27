@@ -54,6 +54,7 @@ public:
         QObject(parent), uuid(uuid)
     {
     }
+    ~QLowEnergyService() override { ++destructions; }
 
     ServiceState state() const { return currentState; }
     QBluetoothUuid serviceUuid() const { return uuid; }
@@ -81,6 +82,8 @@ public:
     }
 
     int discoverCallCount() const { return discoverCalls; }
+    static int destructionCount() { return destructions; }
+    static void resetTestCounters() { destructions = 0; }
 
     void emitStateChangedForTest(ServiceState state)
     {
@@ -110,6 +113,7 @@ private:
     ServiceState currentState = RemoteService;
     mutable QHash<QBluetoothUuid, int> characteristicLookups;
     int discoverCalls = 0;
+    inline static int destructions = 0;
 };
 
 #endif

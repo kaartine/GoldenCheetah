@@ -74,6 +74,7 @@ public:
     static int disconnectCallCount();
     static int discoverCallCount();
     static int destructionCount();
+    static void failNextServiceCreation();
 
 signals:
     void connected();
@@ -90,6 +91,7 @@ private:
     static int disconnectCalls;
     static int discoverCalls;
     static int destructions;
+    static bool failServiceCreation;
 };
 
 #endif
