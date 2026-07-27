@@ -540,6 +540,12 @@ QSettings::SettingsMap persistedSettingsMap(
 QString migrationWritePoint(
     const QSettings::SettingsMap &settings)
 {
+    if (settings.contains(
+            QStringLiteral(
+                "credential_store/binding_v2"))) {
+        return QStringLiteral("credential-binding");
+    }
+
     const QString systemState = settings
         .value(legacySystemMigrationMarkerKey).toString();
     const QString globalState = settings
@@ -989,6 +995,7 @@ private slots:
     void preUpgradeCopiedCredentialScopesFailClosed_data();
     void preUpgradeCopiedCredentialScopesFailClosed();
     void preUpgradeCopiedAthleteScopeFailsClosedWhenOpenedFirst();
+    void legacyClaimsSurviveLocalBindingWriteFailure();
     void switchingCredentialRootsClearsScopedState();
     void invalidCredentialRootSwitchFailsClosed();
     void copiedCredentialRootFailsClosed();
@@ -9509,6 +9516,191 @@ preUpgradeCopiedAthleteScopeFailsClosedWhenOpenedFirst()
 }
 
 void TestCredentialSettings::
+legacyClaimsSurviveLocalBindingWriteFailure()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QSettings::Format legacyFormat =
+        legacyMigrationTestFormat();
+    const QSettings::Format targetFormat =
+        targetMigrationTestFormat();
+    QVERIFY(legacyFormat != QSettings::InvalidFormat);
+    QVERIFY(targetFormat != QSettings::InvalidFormat);
+    QSettings::setPath(
+        legacyFormat, QSettings::UserScope,
+        temporary.path());
+    QSettings::setPath(
+        targetFormat, QSettings::UserScope,
+        temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialBindingRecovery-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application = QStringLiteral("GoldenCheetahTest");
+    const QString originalName = QStringLiteral("Athlete");
+    const QString copiedName = QStringLiteral("Clone");
+    const QString missing = QStringLiteral("missing");
+    const QString scope =
+        QStringLiteral("57575757-5757-4575-8575-575757575757");
+    const QString secret =
+        QStringLiteral("binding-recovery-token");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("library"));
+    const QString originalPrivate = QDir(athleteRoot).filePath(
+        QStringLiteral("Athlete/config/athlete-private.ini"));
+    const QString copiedPrivate = QDir(athleteRoot).filePath(
+        QStringLiteral("Clone/config/athlete-private.ini"));
+    QVERIFY(QDir().mkpath(
+        QFileInfo(originalPrivate).absolutePath()));
+    QVERIFY(QDir().mkpath(
+        QFileInfo(copiedPrivate).absolutePath()));
+    {
+        QSettings original(
+            originalPrivate, targetFormat);
+        original.setValue(
+            QStringLiteral("credential_store/id"),
+            scope);
+        original.sync();
+        QCOMPARE(original.status(), QSettings::NoError);
+    }
+    {
+        QSettings systemSettings(
+            targetFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        systemSettings.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        systemSettings.setValue(
+            legacyCredentialScopeMappingKey(
+                originalName),
+            scope);
+        systemSettings.setValue(
+            legacyCredentialScopeMappingKey(
+                copiedName),
+            scope);
+        systemSettings.sync();
+        QCOMPARE(systemSettings.status(),
+                 QSettings::NoError);
+    }
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_REFRESH_TOKEN);
+    factoryState()->values.insert(vaultKey, secret);
+    const QHash<QString, QString> before =
+        factoryState()->values;
+    MigrationFormatFaultState &fault =
+        migrationFormatFaultState();
+    fault = {};
+    fault.failurePoint =
+        QStringLiteral("credential-binding");
+    {
+        GSettings original(
+            organization, application,
+            legacyFormat, targetFormat);
+        original.initializeQSettingsGlobal(athleteRoot);
+        fault.enabled = true;
+        original.initializeQSettingsAthlete(
+            athleteRoot, originalName);
+        QCOMPARE(original.cvalue(
+                     originalName,
+                     GC_STRAVA_REFRESH_TOKEN,
+                     missing).toString(),
+                 missing);
+        QSettings liveClaims(
+            targetFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        const QStringList liveClaimKeys =
+            liveClaims.allKeys().filter(
+                QStringLiteral(
+                    "credential_store/location_claims/"));
+        QVERIFY2(
+            liveClaimKeys.size() >= 3,
+            qPrintable(QStringLiteral(
+                "Expected live root, profile, and scope claims; found %1")
+                           .arg(liveClaimKeys.size())));
+    }
+    fault.enabled = false;
+    QVERIFY(fault.rejectedWrites > 0);
+    {
+        QSettings claims(
+            targetFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        QCOMPARE(
+            claims.value(
+                plainKey(GC_HOMEDIR)).toString(),
+            athleteRoot);
+        QCOMPARE(
+            claims.value(
+                legacyCredentialScopeMappingKey(
+                    originalName)).toString(),
+            scope);
+        const QStringList claimKeys =
+            claims.allKeys().filter(
+                QStringLiteral(
+                    "credential_store/location_claims/"));
+        QVERIFY2(
+            claimKeys.size() >= 3,
+            qPrintable(QStringLiteral(
+                "Expected root, profile, and scope claims; found %1")
+                           .arg(claimKeys.size())));
+    }
+    {
+        QSettings incomplete(
+            originalPrivate, targetFormat);
+        QCOMPARE(
+            incomplete.value(
+                QStringLiteral(
+                    "credential_store/id")).toString(),
+            scope);
+        QVERIFY(!incomplete.contains(
+            QStringLiteral(
+                "credential_store/binding_v2")));
+    }
+    QVERIFY(QFile::copy(
+        originalPrivate, copiedPrivate));
+
+    {
+        GSettings copied(
+            organization, application,
+            legacyFormat, targetFormat);
+        copied.initializeQSettingsGlobal(athleteRoot);
+        copied.initializeQSettingsAthlete(
+            athleteRoot, copiedName);
+        QCOMPARE(copied.cvalue(
+                     copiedName,
+                     GC_STRAVA_REFRESH_TOKEN,
+                     missing).toString(),
+                 missing);
+        QVERIFY(!copied.setCValueChecked(
+            copiedName, GC_STRAVA_REFRESH_TOKEN,
+            QStringLiteral("must-not-be-stored")));
+    }
+    QCOMPARE(factoryState()->values, before);
+
+    {
+        GSettings original(
+            organization, application,
+            legacyFormat, targetFormat);
+        original.initializeQSettingsGlobal(athleteRoot);
+        original.initializeQSettingsAthlete(
+            athleteRoot, originalName);
+        QCOMPARE(original.cvalue(
+                     originalName,
+                     GC_STRAVA_REFRESH_TOKEN,
+                     missing).toString(),
+                 secret);
+    }
+    QCOMPARE(factoryState()->values, before);
+    fault = {};
+}
+
+void TestCredentialSettings::
 switchingCredentialRootsClearsScopedState()
 {
     QTemporaryDir temporary;
@@ -10541,9 +10733,8 @@ preInitializationUsesLocalAthleteScope()
     QCOMPARE(factoryState()->values.size(), 1);
     QCOMPARE(factoryState()->values.value(vaultKey),
              vaultSecret);
-    QSettings retained(organization, application);
-    QCOMPARE(retained.value(legacyKey).toString(),
-             legacySecret);
+    QSettings scrubbed(organization, application);
+    QVERIFY(!scrubbed.contains(legacyKey));
 }
 
 void TestCredentialSettings::clearedRootDoesNotRetainAthleteScope()
