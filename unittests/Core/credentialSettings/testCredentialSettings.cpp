@@ -980,6 +980,9 @@ private slots:
     void sameNamedAthletesInDifferentRootsHaveIsolatedScopes();
     void localAthleteScopeIsPreservedWithoutCrossRootAdoption();
     void ambiguousLegacyAthleteScopeFailsClosed();
+    void ambiguousLegacyPlaintextFailsClosed();
+    void malformedRootIdentityFailsClosed();
+    void malformedAthleteScopeFailsClosed();
     void preInitializationMigrationKeepsAthleteScope();
     void clearedRootDoesNotRetainAthleteScope();
 
@@ -8932,6 +8935,158 @@ ambiguousLegacyAthleteScopeFailsClosed()
              legacySecret);
 }
 
+void TestCredentialSettings::
+ambiguousLegacyPlaintextFailsClosed()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialAmbiguousPlaintext-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application = QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString legacyKey = athleteName + QLatin1Char('/')
+        + plainKey(GC_STRAVA_REFRESH_TOKEN);
+    const QString legacySecret =
+        QStringLiteral("ambiguous-plaintext-refresh-token");
+    const QString missing = QStringLiteral("missing");
+    QString legacyPath;
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(legacyKey, legacySecret);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+        legacyPath = legacy.fileName();
+    }
+
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("library"));
+    QVERIFY(QDir().mkpath(
+        athleteRoot + QStringLiteral("/Athlete/config")));
+    factoryState() = std::make_shared<FakeStoreState>();
+
+    {
+        GSettings settings(organization, application);
+        settings.initializeQSettingsGlobal(athleteRoot);
+        QCOMPARE(settings.cvalue(
+                     athleteName, GC_STRAVA_REFRESH_TOKEN,
+                     missing).toString(),
+                 missing);
+        settings.initializeQSettingsAthlete(
+            athleteRoot, athleteName);
+        QCOMPARE(settings.cvalue(
+                     athleteName, GC_STRAVA_REFRESH_TOKEN,
+                     missing).toString(),
+                 missing);
+    }
+
+    QSettings retained(organization, application);
+    QCOMPARE(retained.value(legacyKey).toString(),
+             legacySecret);
+    QVERIFY(fileContents(legacyPath).contains(
+        legacySecret.toUtf8()));
+    QVERIFY(factoryState()->values.isEmpty());
+}
+
+void TestCredentialSettings::
+malformedRootIdentityFailsClosed()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialMalformedRoot-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application = QStringLiteral("GoldenCheetahTest");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("library"));
+    QVERIFY(QDir().mkpath(athleteRoot));
+    const QString globalPath = athleteRoot
+        + QStringLiteral("/configglobal-general.ini");
+    {
+        QSettings global(globalPath, QSettings::IniFormat);
+        global.setValue(
+            QStringLiteral("credential_store/root_id"),
+            QStringLiteral("../invalid"));
+        global.sync();
+        QCOMPARE(global.status(), QSettings::NoError);
+    }
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    GSettings settings(organization, application);
+    settings.initializeQSettingsGlobal(athleteRoot);
+    QVERIFY(!settings.setValueChecked(
+        GC_NOLIO_ACCESS_TOKEN,
+        QStringLiteral("must-not-be-stored")));
+    QVERIFY(factoryState()->values.isEmpty());
+
+    QSettings global(globalPath, QSettings::IniFormat);
+    QCOMPARE(global.value(
+                 QStringLiteral(
+                     "credential_store/root_id")).toString(),
+             QStringLiteral("../invalid"));
+}
+
+void TestCredentialSettings::
+malformedAthleteScopeFailsClosed()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialMalformedAthlete-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application = QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("library"));
+    const QString privatePath = athleteRoot
+        + QStringLiteral(
+            "/Athlete/config/athlete-private.ini");
+    QVERIFY(QDir().mkpath(
+        athleteRoot + QStringLiteral("/Athlete/config")));
+    {
+        QSettings privateSettings(
+            privatePath, QSettings::IniFormat);
+        privateSettings.setValue(
+            QStringLiteral("credential_store/id"),
+            QStringLiteral("../invalid"));
+        privateSettings.sync();
+        QCOMPARE(privateSettings.status(),
+                 QSettings::NoError);
+    }
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    GSettings settings(organization, application);
+    settings.initializeQSettingsGlobal(athleteRoot);
+    settings.initializeQSettingsAthlete(
+        athleteRoot, athleteName);
+    QVERIFY(!settings.setCValueChecked(
+        athleteName, GC_STRAVA_REFRESH_TOKEN,
+        QStringLiteral("must-not-be-stored")));
+    QVERIFY(factoryState()->values.isEmpty());
+
+    QSettings privateSettings(
+        privatePath, QSettings::IniFormat);
+    QCOMPARE(privateSettings.value(
+                 QStringLiteral(
+                     "credential_store/id")).toString(),
+             QStringLiteral("../invalid"));
+}
+
 void TestCredentialSettings::preInitializationMigrationKeepsAthleteScope()
 {
     QTemporaryDir temporary;
@@ -8958,6 +9113,21 @@ void TestCredentialSettings::preInitializationMigrationKeepsAthleteScope()
         QStringLiteral("athletes"));
     QVERIFY(QDir().mkpath(
         athleteRoot + QStringLiteral("/Athlete/config")));
+    const QString localScope =
+        QStringLiteral("33333333-3333-4333-8333-333333333333");
+    {
+        QSettings privateSettings(
+            athleteRoot
+                + QStringLiteral(
+                    "/Athlete/config/athlete-private.ini"),
+            QSettings::IniFormat);
+        privateSettings.setValue(
+            QStringLiteral("credential_store/id"),
+            localScope);
+        privateSettings.sync();
+        QCOMPARE(privateSettings.status(),
+                 QSettings::NoError);
+    }
     factoryState() = std::make_shared<FakeStoreState>();
     {
         GSettings settings(organization, application);
@@ -8979,6 +9149,11 @@ void TestCredentialSettings::preInitializationMigrationKeepsAthleteScope()
                  sentinel);
     }
     QCOMPARE(factoryState()->values.size(), 1);
+    QCOMPARE(factoryState()->values.value(
+                 CredentialSettings::vaultKey(
+                     localScope,
+                     GC_STRAVA_REFRESH_TOKEN)),
+             sentinel);
 }
 
 void TestCredentialSettings::clearedRootDoesNotRetainAthleteScope()
