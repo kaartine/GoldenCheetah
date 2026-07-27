@@ -712,6 +712,9 @@ private slots:
     void credentialTransactionMetadataContainsNoSecrets();
     void credentialStateDurabilityFailureFailsClosed_data();
     void credentialStateDurabilityFailureFailsClosed();
+    void credentialPostMutationDurabilityFailure_data();
+    void credentialPostMutationDurabilityFailure();
+    void credentialCrashRecoveryAcrossProcesses();
     void credentialStateAncestorSyncFailureFailsClosed();
     void partialCredentialStateAncestryFailsClosed();
     void unsafeCredentialStateAncestorFailsClosed();
@@ -3394,6 +3397,441 @@ credentialStateDurabilityFailureFailsClosed()
     QCOMPARE(state->removes, 0);
     QVERIFY(credentialPhaseIs(
         deletionPath, QByteArrayLiteral("active")));
+}
+
+void TestCredentialSettings::
+credentialPostMutationDurabilityFailure_data()
+{
+    QTest::addColumn<QByteArray>("operation");
+    QTest::addColumn<QByteArray>("failure");
+    QTest::addColumn<QByteArray>("expectedPhase");
+
+    for (const QByteArray &stage :
+         {QByteArrayLiteral("file"),
+          QByteArrayLiteral("directory")}) {
+        const auto row = [&stage](
+            const char *name,
+            const QByteArray &operation,
+            int ordinal,
+            const QByteArray &phase) {
+            QTest::newRow(
+                (QByteArray(name) + '-' + stage).constData())
+                << operation
+                << stage + ':' + QByteArray::number(ordinal)
+                << phase;
+        };
+        row("delete-before-vault", "delete", 3, "deleting");
+        row("delete-after-vault", "delete", 4, "deleted");
+        row("update-final-revision", "update", 3, "updating");
+        row("update-active", "update", 4, "active");
+        row("replace-final-revision", "replace", 3, "replacing");
+        row("replace-active", "replace", 4, "active");
+        row("migration-revision", "migration", 2, "");
+    }
+}
+
+void TestCredentialSettings::
+credentialPostMutationDurabilityFailure()
+{
+    QFETCH(QByteArray, operation);
+    QFETCH(QByteArray, failure);
+    QFETCH(QByteArray, expectedPhase);
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot = temporary.filePath(
+        QStringLiteral("credential-state"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings currentSource(
+        temporary.filePath(QStringLiteral("current.ini")),
+        QSettings::IniFormat);
+    QSettings duplicateSource(
+        temporary.filePath(QStringLiteral("duplicate.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    const QString deletionPath = credentialOperationFile(
+        stateRoot, vaultKey, QStringLiteral(".deletion"));
+    auto state = std::make_shared<FakeStoreState>();
+    CredentialSettings credentials(fakeStore(state));
+
+    if (operation == QByteArrayLiteral("migration")) {
+        currentSource.setValue(
+            plaintextKey, QStringLiteral("legacy-credential"));
+        currentSource.sync();
+        QCOMPARE(currentSource.status(), QSettings::NoError);
+        {
+            ScopedEnvironmentVariable durabilityFailure(
+                QByteArrayLiteral(
+                    "GC_CREDENTIAL_TEST_DURABILITY_FAILURE"),
+                failure);
+            QCOMPARE(credentials.value(
+                         &currentSource, scope,
+                         GC_STRAVA_TOKEN, plaintextKey,
+                         QStringLiteral("missing")),
+                     QVariant(QStringLiteral(
+                         "legacy-credential")));
+        }
+        QCOMPARE(state->writes, 0);
+        QVERIFY(currentSource.contains(plaintextKey));
+        QCOMPARE(credentials.value(
+                     &currentSource, scope, GC_STRAVA_TOKEN,
+                     plaintextKey, QStringLiteral("missing")),
+                 QVariant(QStringLiteral("legacy-credential")));
+        QCOMPARE(state->writes, 1);
+        QVERIFY(!currentSource.contains(plaintextKey));
+        return;
+    }
+
+    state->values.insert(
+        vaultKey, QStringLiteral("old-credential"));
+    if (operation == QByteArrayLiteral("update")
+        || operation == QByteArrayLiteral("replace")) {
+        QVERIFY(credentials.setValueChecked(
+            &currentSource, scope, GC_STRAVA_TOKEN,
+            plaintextKey, QStringLiteral("active-credential")));
+        if (operation == QByteArrayLiteral("replace")) {
+            QVERIFY(credentials.removeChecked(
+                &currentSource, scope, GC_STRAVA_TOKEN,
+                plaintextKey));
+            QVERIFY(credentialPhaseIs(
+                deletionPath, QByteArrayLiteral("deleted")));
+        }
+    }
+    duplicateSource.setValue(
+        plaintextKey, QStringLiteral("stale-duplicate"));
+    duplicateSource.sync();
+    QCOMPARE(duplicateSource.status(), QSettings::NoError);
+
+    bool operationResult = false;
+    {
+        ScopedEnvironmentVariable durabilityFailure(
+            QByteArrayLiteral(
+                "GC_CREDENTIAL_TEST_DURABILITY_FAILURE"),
+            failure);
+        if (operation == QByteArrayLiteral("delete")) {
+            operationResult = credentials.removeChecked(
+                &currentSource, scope, GC_STRAVA_TOKEN,
+                plaintextKey);
+        } else {
+            operationResult = credentials.setValueChecked(
+                &currentSource, scope, GC_STRAVA_TOKEN,
+                plaintextKey, QStringLiteral("new-credential"));
+        }
+    }
+    QVERIFY(!operationResult);
+    QVERIFY(credentialPhaseIs(deletionPath, expectedPhase));
+
+    if (operation == QByteArrayLiteral("delete")) {
+        const bool vaultWasRemoved =
+            expectedPhase == QByteArrayLiteral("deleted");
+        QCOMPARE(state->values.contains(vaultKey),
+                 !vaultWasRemoved);
+        CredentialSettings restarted(fakeStore(state));
+        QCOMPARE(restarted.value(
+                     &duplicateSource, scope, GC_STRAVA_TOKEN,
+                     plaintextKey, QStringLiteral("missing")),
+                 QVariant(QStringLiteral("missing")));
+        QVERIFY(!duplicateSource.contains(plaintextKey));
+        QVERIFY(!state->values.contains(vaultKey));
+        QVERIFY(credentialPhaseIs(
+            deletionPath, QByteArrayLiteral("deleted")));
+        return;
+    }
+
+    QCOMPARE(
+        state->values.value(vaultKey),
+        QStringLiteral("new-credential"));
+    const int writesAfterOperation = state->writes;
+    CredentialSettings restarted(fakeStore(state));
+    QCOMPARE(restarted.value(
+                 &duplicateSource, scope, GC_STRAVA_TOKEN,
+                 plaintextKey, QStringLiteral("missing")),
+             QVariant(QStringLiteral("new-credential")));
+    QCOMPARE(state->writes, writesAfterOperation);
+    QVERIFY(!duplicateSource.contains(plaintextKey));
+    QVERIFY(credentialPhaseIs(
+        deletionPath, QByteArrayLiteral("active")));
+}
+
+void TestCredentialSettings::
+credentialCrashRecoveryAcrossProcesses()
+{
+    const QString childAction =
+        qEnvironmentVariable("GC_CREDENTIAL_CRASH_ACTION");
+    if (!childAction.isEmpty()) {
+        const QString settingsPath = qEnvironmentVariable(
+            "GC_CREDENTIAL_CRASH_SETTINGS");
+        const QString duplicatePath = qEnvironmentVariable(
+            "GC_CREDENTIAL_CRASH_DUPLICATE");
+        const QString vaultPath = qEnvironmentVariable(
+            "GC_CREDENTIAL_CRASH_VAULT");
+        const QString scope = qEnvironmentVariable(
+            "GC_CREDENTIAL_CRASH_SCOPE");
+        const QString operation = qEnvironmentVariable(
+            "GC_CREDENTIAL_CRASH_OPERATION");
+        QVERIFY(!settingsPath.isEmpty());
+        QVERIFY(!duplicatePath.isEmpty());
+        QVERIFY(!vaultPath.isEmpty());
+        QVERIFY(!scope.isEmpty());
+        QVERIFY(!operation.isEmpty());
+        const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+
+        if (childAction == QStringLiteral("crash")) {
+            QSettings settings(
+                settingsPath, QSettings::IniFormat);
+            CredentialSettings credentials(
+                std::make_unique<FileCredentialStore>(
+                    vaultPath));
+            if (operation == QStringLiteral("delete")) {
+                credentials.removeChecked(
+                    &settings, scope, GC_STRAVA_TOKEN,
+                    plaintextKey);
+            } else {
+                credentials.setValueChecked(
+                    &settings, scope, GC_STRAVA_TOKEN,
+                    plaintextKey,
+                    QStringLiteral("new-credential"));
+            }
+            QFAIL("Configured credential crash point was not reached");
+        }
+
+        QCOMPARE(childAction, QStringLiteral("recover"));
+        QSettings duplicate(
+            duplicatePath, QSettings::IniFormat);
+        CredentialSettings credentials(
+            std::make_unique<FileCredentialStore>(
+                vaultPath));
+        const QString expected = qEnvironmentVariable(
+            "GC_CREDENTIAL_CRASH_EXPECTED");
+        const QVariant observed = credentials.value(
+            &duplicate, scope, GC_STRAVA_TOKEN,
+            plaintextKey, QStringLiteral("missing"));
+        QCOMPARE(observed, QVariant(expected));
+        if (operation == QStringLiteral("delete")) {
+            QVERIFY(credentials.removeChecked(
+                &duplicate, scope, GC_STRAVA_TOKEN,
+                plaintextKey));
+            QCOMPARE(credentials.value(
+                         &duplicate, scope,
+                         GC_STRAVA_TOKEN, plaintextKey,
+                         QStringLiteral("missing")),
+                     QVariant(QStringLiteral("missing")));
+        } else if (operation == QStringLiteral("replace")
+                   && expected
+                       == QStringLiteral("missing")) {
+            QVERIFY(credentials.setValueChecked(
+                &duplicate, scope, GC_STRAVA_TOKEN,
+                plaintextKey,
+                QStringLiteral("new-credential")));
+        }
+        QVERIFY(!duplicate.contains(plaintextKey));
+        return;
+    }
+
+    struct CrashCase {
+        const char *name;
+        const char *operation;
+        const char *point;
+        const char *expected;
+        bool dropMarker;
+    };
+    const QList<CrashCase> cases = {
+        {"delete-preparing", "delete",
+         "deletion:preparing", "missing", false},
+        {"delete-marker", "delete",
+         "pending-removal", "missing", false},
+        {"delete-lost-marker", "delete",
+         "pending-removal", "missing", true},
+        {"delete-deleting", "delete",
+         "deletion:deleting", "missing", false},
+        {"delete-vault", "delete",
+         "vault:removed", "missing", false},
+        {"delete-deleted", "delete",
+         "deletion:deleted", "missing", false},
+        {"update-state", "update",
+         "deletion:updating", "active-credential", false},
+        {"update-vault", "update",
+         "vault:written", "new-credential", false},
+        {"update-revision", "update",
+         "write:final-revision", "new-credential", false},
+        {"update-active", "update",
+         "deletion:active", "new-credential", false},
+        {"replace-state", "replace",
+         "deletion:replacing", "missing", false},
+        {"replace-vault", "replace",
+         "vault:written", "new-credential", false},
+        {"replace-revision", "replace",
+         "write:final-revision", "new-credential", false},
+        {"replace-active", "replace",
+         "deletion:active", "new-credential", false}
+    };
+
+    const auto runChild = [](
+        const QProcessEnvironment &environment,
+        int expectedExit,
+        QByteArray *output) {
+        QProcess child;
+        child.setProgram(
+            QCoreApplication::applicationFilePath());
+        child.setArguments({
+            QStringLiteral(
+                "credentialCrashRecoveryAcrossProcesses")
+        });
+        child.setProcessEnvironment(environment);
+        child.setProcessChannelMode(
+            QProcess::MergedChannels);
+        child.start();
+        if (!child.waitForStarted(5000)) {
+            if (output) *output = child.errorString().toUtf8();
+            return false;
+        }
+        if (!child.waitForFinished(15000)) {
+            child.kill();
+            child.waitForFinished();
+            if (output) {
+                *output = child.readAll()
+                    + child.errorString().toUtf8();
+            }
+            return false;
+        }
+        if (output) *output = child.readAll();
+        return child.exitStatus() == QProcess::NormalExit
+            && child.exitCode() == expectedExit;
+    };
+
+    for (const CrashCase &testCase : cases) {
+        QTemporaryDir temporary;
+        QVERIFY2(temporary.isValid(), testCase.name);
+        const QString stateRoot = temporary.filePath(
+            QStringLiteral("credential-state"));
+        const QString settingsPath = temporary.filePath(
+            QStringLiteral("current.ini"));
+        const QString duplicatePath = temporary.filePath(
+            QStringLiteral("duplicate.ini"));
+        const QString vaultPath = temporary.filePath(
+            QStringLiteral("vault.ini"));
+        const QString scope =
+            QUuid::createUuid().toString(
+                QUuid::WithoutBraces);
+        const QString plaintextKey =
+            plainKey(GC_STRAVA_TOKEN);
+        const QString vaultKey = CredentialSettings::vaultKey(
+            scope, GC_STRAVA_TOKEN);
+        {
+            ScopedEnvironmentVariable stateRootEnvironment(
+                QByteArrayLiteral(
+                    "GC_CREDENTIAL_TEST_STATE_ROOT"),
+                QFile::encodeName(stateRoot));
+            QSettings current(
+                settingsPath, QSettings::IniFormat);
+            CredentialSettings bootstrap(
+                std::make_unique<FileCredentialStore>(
+                    vaultPath));
+            QVERIFY2(bootstrap.setValueChecked(
+                         &current, scope, GC_STRAVA_TOKEN,
+                         plaintextKey,
+                         QStringLiteral("active-credential")),
+                     testCase.name);
+            if (QByteArray(testCase.operation)
+                == QByteArrayLiteral("replace")) {
+                QVERIFY2(bootstrap.removeChecked(
+                             &current, scope,
+                             GC_STRAVA_TOKEN, plaintextKey),
+                         testCase.name);
+            }
+        }
+        {
+            QSettings duplicate(
+                duplicatePath, QSettings::IniFormat);
+            duplicate.setValue(
+                plaintextKey,
+                QStringLiteral("stale-duplicate"));
+            duplicate.sync();
+            QCOMPARE(duplicate.status(), QSettings::NoError);
+        }
+
+        QProcessEnvironment crashEnvironment =
+            QProcessEnvironment::systemEnvironment();
+        crashEnvironment.insert(
+            QStringLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+            stateRoot);
+        crashEnvironment.insert(
+            QStringLiteral("GC_CREDENTIAL_CRASH_ACTION"),
+            QStringLiteral("crash"));
+        crashEnvironment.insert(
+            QStringLiteral("GC_CREDENTIAL_CRASH_SETTINGS"),
+            settingsPath);
+        crashEnvironment.insert(
+            QStringLiteral("GC_CREDENTIAL_CRASH_DUPLICATE"),
+            duplicatePath);
+        crashEnvironment.insert(
+            QStringLiteral("GC_CREDENTIAL_CRASH_VAULT"),
+            vaultPath);
+        crashEnvironment.insert(
+            QStringLiteral("GC_CREDENTIAL_CRASH_SCOPE"),
+            scope);
+        crashEnvironment.insert(
+            QStringLiteral("GC_CREDENTIAL_CRASH_OPERATION"),
+            QString::fromLatin1(testCase.operation));
+        crashEnvironment.insert(
+            QStringLiteral("GC_CREDENTIAL_TEST_CRASH_POINT"),
+            QString::fromLatin1(testCase.point));
+        QByteArray childOutput;
+        QVERIFY2(runChild(
+                     crashEnvironment, 86, &childOutput),
+                 childOutput.constData());
+
+        if (testCase.dropMarker) {
+            QSettings current(
+                settingsPath, QSettings::IniFormat);
+            current.remove(pendingRemovalTestKey(
+                scope, GC_STRAVA_TOKEN));
+            current.remove(pendingRemovalGenerationTestKey(
+                scope, GC_STRAVA_TOKEN));
+            current.sync();
+            QCOMPARE(current.status(), QSettings::NoError);
+        }
+
+        QProcessEnvironment recoveryEnvironment =
+            crashEnvironment;
+        recoveryEnvironment.remove(
+            QStringLiteral(
+                "GC_CREDENTIAL_TEST_CRASH_POINT"));
+        recoveryEnvironment.insert(
+            QStringLiteral("GC_CREDENTIAL_CRASH_ACTION"),
+            QStringLiteral("recover"));
+        recoveryEnvironment.insert(
+            QStringLiteral("GC_CREDENTIAL_CRASH_EXPECTED"),
+            QString::fromLatin1(testCase.expected));
+        childOutput.clear();
+        QVERIFY2(runChild(
+                     recoveryEnvironment, 0, &childOutput),
+                 childOutput.constData());
+
+        FileCredentialStore vault(vaultPath);
+        const CredentialStore::ReadResult final =
+            vault.read(vaultKey);
+        if (QByteArray(testCase.operation)
+            == QByteArrayLiteral("delete")) {
+            QCOMPARE(int(final.status),
+                     int(CredentialStore::Status::NotFound));
+        } else {
+            QCOMPARE(int(final.status),
+                     int(CredentialStore::Status::Success));
+            QCOMPARE(
+                final.value,
+                QByteArray(testCase.point)
+                        == QByteArrayLiteral(
+                            "deletion:updating")
+                    ? QStringLiteral("active-credential")
+                    : QStringLiteral("new-credential"));
+        }
+    }
 }
 
 void TestCredentialSettings::
