@@ -988,6 +988,7 @@ private slots:
     void migrationDoesNotOverwriteCredentialCreatedAfterMiss();
     void migrationCollisionReadFailureRetainsPlaintextAndRetries();
     void creatingMigrationDoesNotOverwriteCredentialCreatedAfterMiss();
+    void failedMigrationDoesNotCacheOverNewerCredential();
     void transientReadBeforeMissingCredentialRetriesMigration();
     void scopesAreIsolated();
     void scopeIdentifiersAreStableAndValidated();
@@ -7522,6 +7523,44 @@ creatingMigrationDoesNotOverwriteCredentialCreatedAfterMiss()
         credentialPhaseTransaction(
             deletionPath, QByteArrayLiteral("active")),
         transaction);
+}
+
+void TestCredentialSettings::
+failedMigrationDoesNotCacheOverNewerCredential()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings ini(temporary.filePath(QStringLiteral("private.ini")),
+                  QSettings::IniFormat);
+    const QString scope = CredentialSettings::ensureScopeId(
+        &ini, QStringLiteral("credential_store/id"));
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString staleSecret = QStringLiteral("stale-plaintext");
+    const QString currentSecret = QStringLiteral("current-vault-secret");
+    ini.setValue(plaintextKey, staleSecret);
+    ini.sync();
+    QCOMPARE(ini.status(), QSettings::NoError);
+
+    auto state = std::make_shared<FakeStoreState>();
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    state->failWrites = true;
+    CredentialSettings credentials(fakeStore(state));
+
+    QCOMPARE(credentials.value(
+                 &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(staleSecret));
+    QVERIFY(ini.contains(plaintextKey));
+
+    state->failWrites = false;
+    state->values.insert(vaultKey, currentSecret);
+    QCOMPARE(credentials.value(
+                 &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(currentSecret));
+    QCOMPARE(state->values.value(vaultKey), currentSecret);
+    QVERIFY(!ini.contains(plaintextKey));
 }
 
 void TestCredentialSettings::
