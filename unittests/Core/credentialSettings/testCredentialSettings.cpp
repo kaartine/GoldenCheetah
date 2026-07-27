@@ -246,6 +246,18 @@ QString plainKey(QString key)
     return key;
 }
 
+QString legacyCredentialScopeMappingKey(
+    const QString &athleteName)
+{
+    const QByteArray identity = athleteName.isEmpty()
+        ? QByteArray("global")
+        : QByteArray("athlete:") + athleteName.toUtf8();
+    const QByteArray digest = QCryptographicHash::hash(
+        identity, QCryptographicHash::Sha256).toHex();
+    return QStringLiteral("credential_store/scopes/")
+        + QString::fromLatin1(digest);
+}
+
 QString pendingRemovalTestKey(
     const QString &scope,
     const QString &credentialKey)
@@ -964,9 +976,12 @@ private slots:
     void migrationSyncFailuresResumeAfterRestart();
     void newFormatMigrationScrubsLegacyCredential();
     void newFormatFailedMigrationIsRetriedWithoutCredentialLoss();
+    void globalCredentialsInDifferentRootsHaveIsolatedScopes();
     void sameNamedAthletesInDifferentRootsHaveIsolatedScopes();
+    void localAthleteScopeIsPreservedWithoutCrossRootAdoption();
+    void ambiguousLegacyAthleteScopeFailsClosed();
     void preInitializationMigrationKeepsAthleteScope();
-    void postInitializationFallbackKeepsAthleteScope();
+    void clearedRootDoesNotRetainAthleteScope();
 
 private:
     QString ownedCredentialStateRoot_;
@@ -8551,6 +8566,87 @@ void TestCredentialSettings::newFormatFailedMigrationIsRetriedWithoutCredentialL
 }
 
 void TestCredentialSettings::
+globalCredentialsInDifferentRootsHaveIsolatedScopes()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialGlobalRootIsolation-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application = QStringLiteral("GoldenCheetahTest");
+    const QString firstSecret =
+        QStringLiteral("first-root-global-token");
+    const QString secondSecret =
+        QStringLiteral("second-root-global-token");
+    const QString missing = QStringLiteral("missing");
+    const QString firstRoot =
+        temporary.filePath(QStringLiteral("first-library"));
+    const QString secondRoot =
+        temporary.filePath(QStringLiteral("second-library"));
+    QVERIFY(QDir().mkpath(firstRoot));
+    QVERIFY(QDir().mkpath(secondRoot));
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    QString firstScope;
+    {
+        GSettings first(organization, application);
+        first.initializeQSettingsGlobal(firstRoot);
+        QVERIFY(first.setValueChecked(
+            GC_NOLIO_ACCESS_TOKEN, firstSecret));
+        QSettings globalSettings(
+            firstRoot
+                + QStringLiteral("/configglobal-general.ini"),
+            QSettings::IniFormat);
+        firstScope = globalSettings.value(
+            QStringLiteral("credential_store/id")).toString();
+        QVERIFY(!QUuid(firstScope).isNull());
+    }
+
+    QString secondScope;
+    {
+        GSettings second(organization, application);
+        second.initializeQSettingsGlobal(secondRoot);
+        QCOMPARE(second.value(
+                     nullptr, GC_NOLIO_ACCESS_TOKEN,
+                     missing).toString(),
+                 missing);
+        QVERIFY(second.setValueChecked(
+            GC_NOLIO_ACCESS_TOKEN, secondSecret));
+        QSettings globalSettings(
+            secondRoot
+                + QStringLiteral("/configglobal-general.ini"),
+            QSettings::IniFormat);
+        secondScope = globalSettings.value(
+            QStringLiteral("credential_store/id")).toString();
+        QVERIFY(!QUuid(secondScope).isNull());
+        QVERIFY(secondScope != firstScope);
+    }
+
+    const QString firstVaultKey = CredentialSettings::vaultKey(
+        firstScope, GC_NOLIO_ACCESS_TOKEN);
+    const QString secondVaultKey = CredentialSettings::vaultKey(
+        secondScope, GC_NOLIO_ACCESS_TOKEN);
+    QCOMPARE(factoryState()->values.value(firstVaultKey),
+             firstSecret);
+    QCOMPARE(factoryState()->values.value(secondVaultKey),
+             secondSecret);
+
+    {
+        GSettings firstRestart(organization, application);
+        firstRestart.initializeQSettingsGlobal(firstRoot);
+        QCOMPARE(firstRestart.value(
+                     nullptr, GC_NOLIO_ACCESS_TOKEN,
+                     missing).toString(),
+                 firstSecret);
+    }
+}
+
+void TestCredentialSettings::
 sameNamedAthletesInDifferentRootsHaveIsolatedScopes()
 {
     QTemporaryDir temporary;
@@ -8662,6 +8758,180 @@ sameNamedAthletesInDifferentRootsHaveIsolatedScopes()
     }
 }
 
+void TestCredentialSettings::
+localAthleteScopeIsPreservedWithoutCrossRootAdoption()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialLocalScopeMigration-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application = QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString legacyScope =
+        QStringLiteral("11111111-1111-4111-8111-111111111111");
+    const QString sentinel =
+        QStringLiteral("locally-bound-refresh-token");
+    const QString missing = QStringLiteral("missing");
+    const QString firstRoot =
+        temporary.filePath(QStringLiteral("first-library"));
+    const QString secondRoot =
+        temporary.filePath(QStringLiteral("second-library"));
+    QVERIFY(QDir().mkpath(
+        firstRoot + QStringLiteral("/Athlete/config")));
+    QVERIFY(QDir().mkpath(
+        secondRoot + QStringLiteral("/Athlete/config")));
+
+    {
+        QSettings privateSettings(
+            firstRoot
+                + QStringLiteral(
+                    "/Athlete/config/athlete-private.ini"),
+            QSettings::IniFormat);
+        privateSettings.setValue(
+            QStringLiteral("credential_store/id"),
+            legacyScope);
+        privateSettings.sync();
+        QCOMPARE(privateSettings.status(), QSettings::NoError);
+    }
+    {
+        QSettings systemSettings(
+            QSettings::IniFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        systemSettings.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            legacyScope);
+        systemSettings.sync();
+        QCOMPARE(systemSettings.status(), QSettings::NoError);
+    }
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    factoryState()->values.insert(
+        CredentialSettings::vaultKey(
+            legacyScope, GC_STRAVA_REFRESH_TOKEN),
+        sentinel);
+    {
+        GSettings first(organization, application);
+        first.initializeQSettingsGlobal(firstRoot);
+        QCOMPARE(first.cvalue(
+                     athleteName, GC_STRAVA_REFRESH_TOKEN,
+                     missing).toString(),
+                 sentinel);
+        first.initializeQSettingsAthlete(
+            firstRoot, athleteName);
+        QCOMPARE(first.cvalue(
+                     athleteName, GC_STRAVA_REFRESH_TOKEN,
+                     missing).toString(),
+                 sentinel);
+    }
+
+    QString secondScope;
+    {
+        GSettings second(organization, application);
+        second.initializeQSettingsGlobal(secondRoot);
+        second.initializeQSettingsAthlete(
+            secondRoot, athleteName);
+        QCOMPARE(second.cvalue(
+                     athleteName, GC_STRAVA_REFRESH_TOKEN,
+                     missing).toString(),
+                 missing);
+        QSettings privateSettings(
+            secondRoot
+                + QStringLiteral(
+                    "/Athlete/config/athlete-private.ini"),
+            QSettings::IniFormat);
+        secondScope = privateSettings.value(
+            QStringLiteral("credential_store/id")).toString();
+        QVERIFY(!QUuid(secondScope).isNull());
+        QVERIFY(secondScope != legacyScope);
+    }
+
+    QSettings preserved(
+        firstRoot
+            + QStringLiteral(
+                "/Athlete/config/athlete-private.ini"),
+        QSettings::IniFormat);
+    QCOMPARE(preserved.value(
+                 QStringLiteral("credential_store/id")).toString(),
+             legacyScope);
+}
+
+void TestCredentialSettings::
+ambiguousLegacyAthleteScopeFailsClosed()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialAmbiguousScope-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application = QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString legacyScope =
+        QStringLiteral("22222222-2222-4222-8222-222222222222");
+    const QString legacySecret =
+        QStringLiteral("ambiguous-legacy-refresh-token");
+    const QString missing = QStringLiteral("missing");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("library"));
+    QVERIFY(QDir().mkpath(
+        athleteRoot + QStringLiteral("/Athlete/config")));
+
+    {
+        QSettings systemSettings(
+            QSettings::IniFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        systemSettings.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            legacyScope);
+        systemSettings.sync();
+        QCOMPARE(systemSettings.status(), QSettings::NoError);
+    }
+    factoryState() = std::make_shared<FakeStoreState>();
+    const QString legacyVaultKey = CredentialSettings::vaultKey(
+        legacyScope, GC_STRAVA_REFRESH_TOKEN);
+    factoryState()->values.insert(
+        legacyVaultKey, legacySecret);
+
+    GSettings settings(organization, application);
+    settings.initializeQSettingsGlobal(athleteRoot);
+    QCOMPARE(settings.cvalue(
+                 athleteName, GC_STRAVA_REFRESH_TOKEN,
+                 missing).toString(),
+             missing);
+    settings.initializeQSettingsAthlete(
+        athleteRoot, athleteName);
+    QCOMPARE(settings.cvalue(
+                 athleteName, GC_STRAVA_REFRESH_TOKEN,
+                 missing).toString(),
+             missing);
+
+    QSettings privateSettings(
+        athleteRoot
+            + QStringLiteral(
+                "/Athlete/config/athlete-private.ini"),
+        QSettings::IniFormat);
+    const QString freshScope = privateSettings.value(
+        QStringLiteral("credential_store/id")).toString();
+    QVERIFY(!QUuid(freshScope).isNull());
+    QVERIFY(freshScope != legacyScope);
+    QCOMPARE(factoryState()->values.value(legacyVaultKey),
+             legacySecret);
+}
+
 void TestCredentialSettings::preInitializationMigrationKeepsAthleteScope()
 {
     QTemporaryDir temporary;
@@ -8711,7 +8981,7 @@ void TestCredentialSettings::preInitializationMigrationKeepsAthleteScope()
     QCOMPARE(factoryState()->values.size(), 1);
 }
 
-void TestCredentialSettings::postInitializationFallbackKeepsAthleteScope()
+void TestCredentialSettings::clearedRootDoesNotRetainAthleteScope()
 {
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
@@ -8743,6 +9013,13 @@ void TestCredentialSettings::postInitializationFallbackKeepsAthleteScope()
              sentinel);
 
     settings.clearGlobalAndAthletes();
+    QCOMPARE(settings.cvalue(
+                 athleteName, GC_STRAVA_TOKEN,
+                 QStringLiteral("missing")).toString(),
+             QStringLiteral("missing"));
+    settings.initializeQSettingsGlobal(athleteRoot);
+    settings.initializeQSettingsAthlete(
+        athleteRoot, athleteName);
     QCOMPARE(settings.cvalue(
                  athleteName, GC_STRAVA_TOKEN,
                  QStringLiteral("missing")).toString(),
