@@ -33,6 +33,8 @@
 #include <QCompleter>
 #include <QMessageBox>
 
+Q_MOC_INCLUDE("RideItem.h")
+
 // field types
 enum class GcFieldType : int {
     NO_FIELD_SET = -1,
