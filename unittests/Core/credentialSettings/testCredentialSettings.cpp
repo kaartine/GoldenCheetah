@@ -23,6 +23,11 @@
 #include <thread>
 #include <utility>
 
+#ifdef Q_OS_WIN
+#include <aclapi.h>
+#include <qt_windows.h>
+#endif
+
 #include "Core/CredentialSettings.h"
 #include "Core/CredentialStoreQtKeychain.h"
 #include "Core/Settings.h"
@@ -638,6 +643,164 @@ void verifyOwnerOnlyPermissions(const QString &path)
 #endif
 }
 
+#ifdef Q_OS_WIN
+bool currentWindowsUserSid(
+    QByteArray *storage,
+    PSID *sid)
+{
+    if (!storage || !sid)
+        return false;
+    HANDLE token = nullptr;
+    if (!::OpenProcessToken(
+            ::GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        return false;
+    }
+    DWORD required = 0;
+    ::GetTokenInformation(
+        token, TokenUser, nullptr, 0, &required);
+    if (::GetLastError() != ERROR_INSUFFICIENT_BUFFER
+        || required == 0) {
+        ::CloseHandle(token);
+        return false;
+    }
+    storage->resize(int(required));
+    const bool read = ::GetTokenInformation(
+        token, TokenUser, storage->data(), required,
+        &required);
+    ::CloseHandle(token);
+    if (!read)
+        return false;
+    auto *user = reinterpret_cast<TOKEN_USER *>(
+        storage->data());
+    if (!::IsValidSid(user->User.Sid))
+        return false;
+    *sid = user->User.Sid;
+    return true;
+}
+
+bool setWindowsDirectoryAcl(
+    const QString &path,
+    bool allowEveryone)
+{
+    QByteArray userStorage;
+    PSID userSid = nullptr;
+    if (!currentWindowsUserSid(
+            &userStorage, &userSid)) {
+        return false;
+    }
+    BYTE everyoneStorage[SECURITY_MAX_SID_SIZE];
+    DWORD everyoneSize = sizeof(everyoneStorage);
+    if (allowEveryone
+        && !::CreateWellKnownSid(
+            WinWorldSid, nullptr, everyoneStorage,
+            &everyoneSize)) {
+        return false;
+    }
+
+    EXPLICIT_ACCESSW access[2] = {};
+    access[0].grfAccessPermissions = FILE_ALL_ACCESS;
+    access[0].grfAccessMode = SET_ACCESS;
+    access[0].grfInheritance =
+        SUB_CONTAINERS_AND_OBJECTS_INHERIT;
+    ::BuildTrusteeWithSidW(
+        &access[0].Trustee, userSid);
+    ULONG count = 1;
+    if (allowEveryone) {
+        access[1].grfAccessPermissions =
+            FILE_ALL_ACCESS;
+        access[1].grfAccessMode = SET_ACCESS;
+        access[1].grfInheritance =
+            SUB_CONTAINERS_AND_OBJECTS_INHERIT;
+        ::BuildTrusteeWithSidW(
+            &access[1].Trustee, everyoneStorage);
+        count = 2;
+    }
+
+    PACL acl = nullptr;
+    const DWORD aclResult = ::SetEntriesInAclW(
+        count, access, nullptr, &acl);
+    if (aclResult != ERROR_SUCCESS)
+        return false;
+    QString nativePath = QDir::toNativeSeparators(path);
+    const DWORD result = ::SetNamedSecurityInfoW(
+        reinterpret_cast<LPWSTR>(
+            nativePath.data()),
+        SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION
+            | PROTECTED_DACL_SECURITY_INFORMATION,
+        nullptr, nullptr, acl, nullptr);
+    ::LocalFree(acl);
+    return result == ERROR_SUCCESS;
+}
+
+bool windowsDirectoryHasOwnerOnlyAcl(
+    const QString &path)
+{
+    QByteArray userStorage;
+    PSID userSid = nullptr;
+    if (!currentWindowsUserSid(
+            &userStorage, &userSid)) {
+        return false;
+    }
+
+    PSID owner = nullptr;
+    PACL acl = nullptr;
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    QString nativePath = QDir::toNativeSeparators(path);
+    const DWORD result = ::GetNamedSecurityInfoW(
+        reinterpret_cast<LPWSTR>(
+            nativePath.data()),
+        SE_FILE_OBJECT,
+        OWNER_SECURITY_INFORMATION
+            | DACL_SECURITY_INFORMATION,
+        &owner, nullptr, &acl, nullptr, &descriptor);
+    if (result != ERROR_SUCCESS)
+        return false;
+    SECURITY_DESCRIPTOR_CONTROL control = 0;
+    DWORD descriptorRevision = 0;
+    const bool protectedDacl =
+        ::GetSecurityDescriptorControl(
+            descriptor, &control,
+            &descriptorRevision)
+        && (control & SE_DACL_PROTECTED);
+    bool valid = owner && ::EqualSid(owner, userSid)
+        && acl && protectedDacl;
+    bool currentUserAllowed = false;
+    if (valid) {
+        for (DWORD index = 0;
+             index < acl->AceCount; ++index) {
+            void *rawAce = nullptr;
+            if (!::GetAce(acl, index, &rawAce)) {
+                valid = false;
+                break;
+            }
+            auto *header =
+                static_cast<ACE_HEADER *>(rawAce);
+            if (header->AceType
+                != ACCESS_ALLOWED_ACE_TYPE) {
+                continue;
+            }
+            auto *ace =
+                static_cast<ACCESS_ALLOWED_ACE *>(
+                    rawAce);
+            PSID trustee = &ace->SidStart;
+            if (!::IsValidSid(trustee)
+                || !::EqualSid(trustee, userSid)
+                || (header->AceFlags
+                    & INHERITED_ACE)
+                || (ace->Mask & FILE_ALL_ACCESS)
+                    != FILE_ALL_ACCESS) {
+                valid = false;
+                break;
+            }
+            currentUserAllowed = true;
+        }
+    }
+    ::LocalFree(descriptor);
+    return valid && currentUserAllowed;
+}
+#endif
+
 } // namespace
 
 std::unique_ptr<CredentialStore>
@@ -720,6 +883,8 @@ private slots:
     void unsafeCredentialStateAncestorFailsClosed();
     void insecureCredentialStateRootFailsClosed();
     void symlinkedCredentialStateDirectoryFailsClosed();
+    void windowsCredentialDirectoriesUseOwnerOnlyAcl();
+    void windowsWritableCredentialRootFailsClosed();
     void reissuedDeleteResumesDurableTransaction();
     void reportedMarkerFailureRecoversDurableMarker();
     void failedMarkerPersistenceLeavesPreparationState();
@@ -4113,6 +4278,87 @@ symlinkedCredentialStateDirectoryFailsClosed()
     QCOMPARE(
         state->values.value(vaultKey),
         QStringLiteral("credential-to-preserve"));
+#endif
+}
+
+void TestCredentialSettings::
+windowsCredentialDirectoriesUseOwnerOnlyAcl()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Windows DACLs are required");
+#else
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot = temporary.filePath(
+        QStringLiteral("credential-state"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings settings(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    CredentialSettings credentials(
+        std::make_unique<FileCredentialStore>(
+            temporary.filePath(QStringLiteral("vault.ini"))));
+    QVERIFY(credentials.setValueChecked(
+        &settings, scope, GC_STRAVA_TOKEN,
+        plainKey(GC_STRAVA_TOKEN),
+        QStringLiteral("credential")));
+
+    const QString applicationPath =
+        QDir(stateRoot).filePath(
+            QStringLiteral("GoldenCheetah"));
+    const QString lockPath =
+        QDir(applicationPath).filePath(
+            QStringLiteral("credential-locks"));
+    QVERIFY(windowsDirectoryHasOwnerOnlyAcl(
+        applicationPath));
+    QVERIFY(windowsDirectoryHasOwnerOnlyAcl(lockPath));
+#endif
+}
+
+void TestCredentialSettings::
+windowsWritableCredentialRootFailsClosed()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Windows DACLs are required");
+#else
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot = temporary.filePath(
+        QStringLiteral("credential-state"));
+    QVERIFY(QDir().mkpath(stateRoot));
+    QVERIFY(setWindowsDirectoryAcl(
+        stateRoot, true));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings settings(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    auto state = std::make_shared<FakeStoreState>();
+    state->values.insert(
+        vaultKey, QStringLiteral("credential-to-preserve"));
+    CredentialSettings credentials(fakeStore(state));
+
+    QVERIFY(!credentials.removeChecked(
+        &settings, scope, GC_STRAVA_TOKEN,
+        plaintextKey));
+    QCOMPARE(state->reads, 0);
+    QCOMPARE(state->writes, 0);
+    QCOMPARE(state->removes, 0);
+    QCOMPARE(
+        state->values.value(vaultKey),
+        QStringLiteral("credential-to-preserve"));
+    QVERIFY(setWindowsDirectoryAcl(
+        stateRoot, false));
 #endif
 }
 

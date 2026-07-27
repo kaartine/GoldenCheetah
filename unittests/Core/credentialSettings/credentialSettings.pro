@@ -30,6 +30,8 @@ HEADERS = ../../../src/Core/CredentialSettings.h \
 
 include(../../../contrib/qtkeychain/qtkeychain.pri)
 
+win32:LIBS += -ladvapi32
+
 INCLUDEPATH += ../../../src \
                ../../../contrib/qtkeychain \
                ../../../src/ANT \
