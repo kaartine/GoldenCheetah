@@ -857,6 +857,7 @@ private slots:
     void failedNewCredentialWriteIsMemoryOnly();
     void checkedCredentialWriteReportsPersistence();
     void failedReplacementPreservesLegacyCredential();
+    void creatingRecoveryFindsLegacyInOtherSource();
     void duplicatePlaintextDoesNotResurrectDeletedCredential();
     void failedDeleteIntentAppliesAcrossPlaintextSources();
     void deletionStatePersistenceFailurePreservesVault();
@@ -2030,7 +2031,7 @@ supersededUpdateInvalidatesMemoryOnlyCache()
              QVariant(QStringLiteral("missing")));
     QCOMPARE(state->reads, 1);
     QVERIFY(credentialPhaseIs(
-        deletionPath, QByteArrayLiteral("active")));
+        deletionPath, QByteArrayLiteral("creating")));
 }
 
 void TestCredentialSettings::
@@ -2663,6 +2664,79 @@ void TestCredentialSettings::failedReplacementPreservesLegacyCredential()
                  &ini, scope, GC_NOKIA_REFRESH_TOKEN, plaintextKey,
                  QStringLiteral("missing")),
              QVariant(oldSecret));
+}
+
+void TestCredentialSettings::
+creatingRecoveryFindsLegacyInOtherSource()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot = temporary.filePath(
+        QStringLiteral("credential-state"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings currentSource(
+        temporary.filePath(QStringLiteral("current.ini")),
+        QSettings::IniFormat);
+    QSettings legacySource(
+        temporary.filePath(QStringLiteral("legacy.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey =
+        plainKey(GC_NOKIA_REFRESH_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_NOKIA_REFRESH_TOKEN);
+    const QString deletionPath = credentialOperationFile(
+        stateRoot, vaultKey, QStringLiteral(".deletion"));
+    legacySource.setValue(
+        plaintextKey, QStringLiteral("legacy-credential"));
+    legacySource.sync();
+    QCOMPARE(legacySource.status(), QSettings::NoError);
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->failWrites = true;
+    {
+        CredentialSettings writer(fakeStore(state));
+        QVERIFY(!writer.setValueChecked(
+            &currentSource, scope, GC_NOKIA_REFRESH_TOKEN,
+            plaintextKey,
+            QStringLiteral("memory-only-credential")));
+        QCOMPARE(writer.value(
+                     &currentSource, scope,
+                     GC_NOKIA_REFRESH_TOKEN, plaintextKey,
+                     QStringLiteral("missing")),
+                 QVariant(QStringLiteral(
+                     "memory-only-credential")));
+    }
+    QVERIFY(credentialPhaseIs(
+        deletionPath, QByteArrayLiteral("creating")));
+    QCOMPARE(state->writes, 1);
+
+    state->failWrites = false;
+    CredentialSettings restarted(fakeStore(state));
+    QCOMPARE(restarted.value(
+                 &currentSource, scope,
+                 GC_NOKIA_REFRESH_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(QStringLiteral("missing")));
+    QCOMPARE(state->writes, 1);
+    QVERIFY(credentialPhaseIs(
+        deletionPath, QByteArrayLiteral("creating")));
+
+    QCOMPARE(restarted.value(
+                 &legacySource, scope,
+                 GC_NOKIA_REFRESH_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(QStringLiteral("legacy-credential")));
+    QCOMPARE(state->writes, 2);
+    QCOMPARE(
+        state->values.value(vaultKey),
+        QStringLiteral("legacy-credential"));
+    QVERIFY(!legacySource.contains(plaintextKey));
+    QVERIFY(credentialPhaseIs(
+        deletionPath, QByteArrayLiteral("active")));
 }
 
 void TestCredentialSettings::
@@ -3794,15 +3868,7 @@ credentialCrashRecoveryAcrossProcesses()
                 plaintextKey,
                 QStringLiteral("new-credential")));
         }
-        if (operation == QStringLiteral("create")
-            && expected
-                == QStringLiteral("legacy-credential")) {
-            QCOMPARE(
-                duplicate.value(plaintextKey).toString(),
-                expected);
-        } else {
-            QVERIFY(!duplicate.contains(plaintextKey));
-        }
+        QVERIFY(!duplicate.contains(plaintextKey));
         return;
     }
 
@@ -4018,23 +4084,23 @@ credentialCrashRecoveryAcrossProcesses()
             == QByteArrayLiteral("delete")) {
             QCOMPARE(int(final.status),
                      int(CredentialStore::Status::NotFound));
-        } else if (QByteArray(testCase.operation)
-                       == QByteArrayLiteral("create")
-                   && QByteArray(testCase.point)
-                       == QByteArrayLiteral(
-                           "deletion:creating")) {
-            QCOMPARE(int(final.status),
-                     int(CredentialStore::Status::NotFound));
         } else {
             QCOMPARE(int(final.status),
                      int(CredentialStore::Status::Success));
-            QCOMPARE(
-                final.value,
-                QByteArray(testCase.point)
-                        == QByteArrayLiteral(
-                            "deletion:updating")
-                    ? QStringLiteral("active-credential")
-                    : QStringLiteral("new-credential"));
+            QString expectedFinal =
+                QStringLiteral("new-credential");
+            if (QByteArray(testCase.point)
+                == QByteArrayLiteral(
+                    "deletion:updating")) {
+                expectedFinal =
+                    QStringLiteral("active-credential");
+            } else if (QByteArray(testCase.point)
+                       == QByteArrayLiteral(
+                           "deletion:creating")) {
+                expectedFinal =
+                    QStringLiteral("legacy-credential");
+            }
+            QCOMPARE(final.value, expectedFinal);
         }
     }
 }
