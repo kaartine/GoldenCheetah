@@ -89,6 +89,7 @@ private:
         QString value;
         bool persisted = false;
         QByteArray revision;
+        QByteArray transaction;
     };
 
     bool cached(const QString &key, CacheEntry *entry) const;
@@ -100,14 +101,16 @@ private:
         const QString &credentialKey);
     bool persistPendingRemoval(
         QSettings *settings,
-        const QString &removalKey);
+        const QString &removalKey,
+        const QByteArray &generation);
     bool completePendingRemoval(
         QSettings *settings,
         const QString &vaultKey,
         const QString &credentialKey,
         const QString &plaintextKey,
         const QString &removalKey,
-        const QString &revisionPath);
+        const QString &revisionPath,
+        const QString &deletionPath);
     bool scrubPlaintext(QSettings *settings,
                         const QString &key);
     static void reportStoreError(const QString &operation,

@@ -121,7 +121,7 @@ win32 {
 
     RC_FILE = Resources/win32/windowsico.rc
     INCLUDEPATH += Resources/win32 $${QT_INSTALL_PREFIX}/src/3rdparty/zlib
-    LIBS += -lws2_32
+    LIBS += -lws2_32 -ladvapi32
 
 } else {
 

@@ -1888,7 +1888,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-020: A second plaintext source can reverse credential deletion
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Core/CredentialSettings.cpp` and `src/Core/Settings.cpp`
 - Impact: A successful delete scrubs only the plaintext key supplied for that
   operation. If another legacy or fallback settings source still contains the
@@ -1903,6 +1903,40 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   successful backend removal and takes precedence over every plaintext
   migration source. Clear it only after a checked replacement has committed,
   and enumerate or journal all known legacy sources so cleanup is resumable.
+- Test-first evidence: The committed RED series reproduced cross-source
+  resurrection after a completed delete, failed marker and plaintext scrubs,
+  stale process caches, revision and directory durability failures, process
+  crashes at every mutation boundary, incomplete initial and replacement
+  writes, and delete preparations that lost their creation/update ancestry.
+  The final lineage regressions in `c08d257` failed in both the same-source and
+  cross-source creation cases while the active-credential anti-resurrection
+  control remained green. Windows contracts in `4931849`, `4e87cd2`, and
+  `3be8314` were committed before the corresponding ACL and handle changes.
+- Resolution: Every vault key now has secret-free, atomically replaced
+  transaction state and a generation-bound settings marker. Delete intent,
+  revision changes, plaintext cleanup, vault mutation, and final state are
+  ordered so a restart can resume without resurrecting a deleted credential or
+  discarding a recoverable legacy credential. Distinct creation, update, and
+  post-deletion replacement phases preserve ancestry across failed operations;
+  legacy `preparing` state remains readable and resolves conservatively as an
+  update. Cache entries are tied to durable revisions and transactions, and a
+  canonical per-vault process lock serializes competing processes. Unix writes
+  flush files and every newly created ancestor; Windows uses write-through
+  replacement, persistent-ACL volumes, protected owner-only inheritable DACLs,
+  no-follow file access, and retained root/application/lock directory handles
+  that deny rename or replacement during an operation. Existing permissive
+  private directories fail closed instead of making their prior contents
+  trusted by retroactive hardening.
+- Verification: The focused credential program passes 205 cases normally,
+  under strict ASan/UBSan/LSan, and under ThreadSanitizer, with no failures and
+  four Windows-only skips on Linux. Both the production file and Windows test
+  branches pass a MinGW C++17 syntax build. The complete out-of-source matrix
+  runs 81 QtTest programs: 2,917 cases pass, none fail, and six
+  platform/source-contract cases skip. The complete Linux application links as
+  a 536,376,608-byte ELF.
+- Residual: The Windows-only ACL tests still require a native, non-administrator
+  NTFS CI run; MinGW validates compilation but cannot execute those WinAPI
+  contracts on this Linux build host.
 
 ## Medium
 
