@@ -621,6 +621,67 @@ private slots:
         delete device;
     }
 
+    void staleHeartRateSampleCannotCancelRecovery()
+    {
+        BT40Controller controller(nullptr, nullptr);
+        BT40Device *device = createDevice(
+                &controller,
+                BluetoothDeviceTypes::DeviceRole::HeartRateOnly);
+        QLowEnergyController *link =
+                device->findChild<QLowEnergyController *>();
+        QVERIFY(link);
+
+        device->connectDevice();
+        link->setStateForTest(QLowEnergyController::ConnectedState);
+        link->emitConnectedForTest();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
+        QVERIFY(QMetaObject::invokeMethod(
+                device, "heartRateStreamReady", Qt::DirectConnection));
+
+        QSignalSpy restoredSpy(device, &BT40Device::connectionRestored);
+        QVERIFY(QMetaObject::invokeMethod(
+                device, "heartRateWatchdogExpired", Qt::DirectConnection));
+        QVERIFY(QMetaObject::invokeMethod(
+                device, "heartRateStreamReady", Qt::DirectConnection));
+        QCOMPARE(restoredSpy.count(), 0);
+
+        device->disconnectDevice();
+        link->setStateForTest(QLowEnergyController::UnconnectedState);
+        delete device;
+    }
+
+    void manualHeartRateDisconnectCancelsWatchdog()
+    {
+        BT40Controller controller(nullptr, nullptr);
+        BT40Device *device = createDevice(
+                &controller,
+                BluetoothDeviceTypes::DeviceRole::HeartRateOnly);
+        QLowEnergyController *link =
+                device->findChild<QLowEnergyController *>();
+        QVERIFY(link);
+        QSignalSpy rediscoverySpy(
+                device, &BT40Device::reconnectScanRequested);
+
+        device->connectDevice();
+        link->setStateForTest(QLowEnergyController::ConnectedState);
+        link->emitConnectedForTest();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+        QCoreApplication::processEvents();
+        QVERIFY(QMetaObject::invokeMethod(
+                device, "heartRateStreamReady", Qt::DirectConnection));
+
+        device->disconnectDevice();
+        QCOMPARE(QLowEnergyController::disconnectCallCount(), 1);
+        QVERIFY(QMetaObject::invokeMethod(
+                device, "heartRateWatchdogExpired", Qt::DirectConnection));
+        QCOMPARE(rediscoverySpy.count(), 0);
+        QCOMPARE(QLowEnergyController::disconnectCallCount(), 1);
+
+        link->setStateForTest(QLowEnergyController::UnconnectedState);
+        delete device;
+    }
+
     void heartRateGattFailureStartsRecovery_data()
     {
         QTest::addColumn<int>("failure");
