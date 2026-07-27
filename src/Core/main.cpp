@@ -609,6 +609,37 @@ main(int argc, char *argv[])
             }
         }
 
+        QVariant commandLineAthlete;
+        bool commandLineSelection = false;
+        if (args.count() == 2) {
+            commandLineSelection = true;
+            if (server) {
+                const QFileInfo requestedRoot(args.at(1));
+                if (!requestedRoot.isDir()) {
+                    qCritical()
+                        << "Invalid athlete library root:"
+                        << args.at(1);
+                    terminate(1);
+                }
+                home = QDir(
+                    requestedRoot.canonicalFilePath());
+            } else {
+                commandLineAthlete = args.at(1);
+            }
+        } else if (args.count() == 3) {
+            commandLineSelection = true;
+            const QFileInfo requestedRoot(args.at(1));
+            if (!requestedRoot.isDir()) {
+                qCritical()
+                    << "Invalid athlete library root:"
+                    << args.at(1);
+                terminate(1);
+            }
+            home = QDir(
+                requestedRoot.canonicalFilePath());
+            commandLineAthlete = args.at(2);
+        }
+
         // set global root directory
         gcroot = home.canonicalPath();
         appsettings->initializeQSettingsGlobal(gcroot);
@@ -662,24 +693,10 @@ main(int argc, char *argv[])
         trainDB = new TrainDB(home);
 
         // lets do what the command line says ...
-        QVariant lastOpened;
-        if(args.count() == 2) { // $ ./GoldenCheetah Mark -or- ./GoldenCheetah --server ~/athletedir
-
-            // athlete
-            if (!server) lastOpened = args.at(1);
-            else home.cd(args.at(1));
-
-        } else if (args.count() == 3) { // $ ./GoldenCheetah ~/Athletes Mark
-
-            // first parameter is a folder that exists?
-            if (QFileInfo(args.at(1)).isDir()) {
-                home.cd(args.at(1));
-            }
-
-            // folder and athlete
-            lastOpened = args.at(2);
-
-        } else if (appsettings->value(NULL, GC_OPENLASTATHLETE, true).toBool()) {
+        QVariant lastOpened = commandLineAthlete;
+        if (!commandLineSelection
+            && appsettings->value(
+                NULL, GC_OPENLASTATHLETE, true).toBool()) {
 
             // no parameters passed lets open the last athlete we worked with
             lastOpened = appsettings->value(NULL, GC_SETTINGS_LAST);

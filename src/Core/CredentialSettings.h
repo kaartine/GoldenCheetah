@@ -42,15 +42,63 @@ std::unique_ptr<CredentialStore> createPlatformCredentialStore();
 class CredentialSettings
 {
 public:
+    enum class ScopeBindingStatus {
+        Success,
+        Unavailable,
+        Conflict
+    };
+
+    enum class LocationClaimStatus {
+        Success,
+        Unavailable,
+        Conflict
+    };
+
+    struct ScopeBindingResult {
+        ScopeBindingStatus status =
+            ScopeBindingStatus::Unavailable;
+        QString profileId;
+        QString scopeId;
+        bool legacyLocalScope = false;
+        bool created = false;
+
+        bool succeeded() const
+        {
+            return status == ScopeBindingStatus::Success;
+        }
+    };
+
     explicit CredentialSettings(
         std::unique_ptr<CredentialStore> store);
 
     static bool isCredentialKey(const QString &key);
     static QStringList credentialKeysForPrefix(
         const QString &prefix);
+    static QString ensureIdentityId(
+        QSettings *settings,
+        const QString &storageKey,
+        const QString &recoveryBindingKey =
+            QString(),
+        bool *created = nullptr);
     static QString ensureScopeId(QSettings *settings,
                                  const QString &storageKey,
                                  const QString &preferredScopeId = QString());
+    static ScopeBindingResult ensureScopeBinding(
+        QSettings *settings,
+        const QString &rootId,
+        const QString &bindingKey,
+        const QString &scopeKey,
+        const QString &authorizedLegacyScopeId =
+            QString(),
+        const QString &authorizedLegacyProfileId =
+            QString());
+    static LocationClaimStatus ensureLocationClaim(
+        QSettings *settings,
+        const QString &claimKey,
+        const QString &identityId,
+        const QString &parentId,
+        const QString &directoryPath,
+        bool allowCreate = true);
     static QString vaultKey(const QString &scopeId,
                             const QString &credentialKey);
     static void hardenSettingsFile(QSettings *settings);

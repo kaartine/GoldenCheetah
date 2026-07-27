@@ -555,12 +555,30 @@ private:
     QVector<QSettings*> *global = nullptr;
     QHash<QString, AthleteQSettings*> athlete;
     CredentialSettings *credentialSettings = nullptr;
-    QString globalCredentialScopeId;
-    QHash<QString, QString> athleteCredentialScopeIds;
+    QString activeAthletesRoot;
+    QString credentialRootIdentityId;
+    bool credentialRootBlocked = false;
 
     bool ensureSystemMigrationStateDurable();
-    QString credentialScopeForGlobal();
-    QString credentialScopeForAthlete(const QString &athleteName);
+    bool ensureCredentialRootReady();
+    bool claimCredentialProfile(
+        const QString &athleteName,
+        const QString &profileId,
+        bool allowCreate);
+    bool claimCredentialScope(
+        const QString &scopeId,
+        const QString &ownerId,
+        const QString &directoryPath,
+        bool allowCreate);
+    QString authorizedLegacyCredentialScope(
+        const QString &athleteName);
+    QString athletePrivateSettingsPath(
+        const QString &athleteName) const;
+    QString credentialScopeForGlobal(
+        bool *authorizedLegacy = nullptr);
+    QString credentialScopeForAthlete(
+        const QString &athleteName,
+        bool *authorizedLegacy = nullptr);
     QString credentialScopeForLegacy(const QString &athleteName);
     void migrateGlobalCredentials();
     void migrateAthleteCredentials(const QString &athleteName);

@@ -8,6 +8,9 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
 #include <QLockFile>
 #include <QMutex>
 #include <QMutexLocker>
@@ -110,8 +113,12 @@ bool credentialPathIsRedirected(
     const QString path = information.absoluteFilePath();
     const DWORD attributes = ::GetFileAttributesW(
         reinterpret_cast<LPCWSTR>(path.utf16()));
-    return attributes != INVALID_FILE_ATTRIBUTES
-        && (attributes & FILE_ATTRIBUTE_REPARSE_POINT);
+    if (attributes == INVALID_FILE_ATTRIBUTES) {
+        const DWORD error = ::GetLastError();
+        return error != ERROR_FILE_NOT_FOUND
+            && error != ERROR_PATH_NOT_FOUND;
+    }
+    return attributes & FILE_ATTRIBUTE_REPARSE_POINT;
 #else
     return false;
 #endif
@@ -1890,6 +1897,192 @@ bool writeExactSetting(
         && exact->value(key) == value;
 }
 
+bool canonicalUuidString(
+    const QString &value,
+    QString *canonical)
+{
+    const QUuid id(value);
+    if (id.isNull())
+        return false;
+    if (canonical) {
+        *canonical =
+            id.toString(QUuid::WithoutBraces);
+    }
+    return true;
+}
+
+struct ParsedScopeBinding
+{
+    bool valid = false;
+    QString rootId;
+    QString profileId;
+    QString scopeId;
+    bool legacyLocalScope = false;
+};
+
+QString serializedScopeBinding(
+    const QString &rootId,
+    const QString &profileId,
+    const QString &scopeId,
+    bool legacyLocalScope)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("version"), 2);
+    object.insert(QStringLiteral("root_id"), rootId);
+    object.insert(QStringLiteral("profile_id"), profileId);
+    object.insert(QStringLiteral("scope_id"), scopeId);
+    object.insert(
+        QStringLiteral("origin"),
+        legacyLocalScope
+            ? QStringLiteral("legacy_local")
+            : QStringLiteral("fresh"));
+    return QString::fromUtf8(
+        QJsonDocument(object).toJson(
+            QJsonDocument::Compact));
+}
+
+ParsedScopeBinding parseScopeBinding(
+    const QVariant &stored)
+{
+    QJsonParseError error;
+    const QJsonDocument document =
+        QJsonDocument::fromJson(
+            stored.toString().toUtf8(), &error);
+    if (error.error != QJsonParseError::NoError
+        || !document.isObject()) {
+        return {};
+    }
+
+    const QJsonObject object = document.object();
+    const QJsonValue version =
+        object.value(QStringLiteral("version"));
+    if (!version.isDouble()
+        || version.toDouble() != 2.0
+        || !object.value(
+                QStringLiteral("root_id")).isString()
+        || !object.value(
+                QStringLiteral("profile_id")).isString()
+        || !object.value(
+                QStringLiteral("scope_id")).isString()
+        || !object.value(
+                QStringLiteral("origin")).isString()) {
+        return {};
+    }
+
+    QString rootId;
+    QString profileId;
+    QString scopeId;
+    if (!canonicalUuidString(
+            object.value(
+                QStringLiteral("root_id")).toString(),
+            &rootId)
+        || !canonicalUuidString(
+            object.value(
+                QStringLiteral("profile_id")).toString(),
+            &profileId)
+        || !canonicalUuidString(
+            object.value(
+                QStringLiteral("scope_id")).toString(),
+            &scopeId)) {
+        return {};
+    }
+
+    const QString origin = object.value(
+        QStringLiteral("origin")).toString();
+    if (origin != QStringLiteral("fresh")
+        && origin != QStringLiteral("legacy_local")) {
+        return {};
+    }
+    return {
+        true,
+        rootId,
+        profileId,
+        scopeId,
+        origin == QStringLiteral("legacy_local")
+    };
+}
+
+struct ParsedLocationClaim
+{
+    bool valid = false;
+    QString identityId;
+    QString parentId;
+    QString directoryPath;
+};
+
+QString serializedLocationClaim(
+    const QString &identityId,
+    const QString &parentId,
+    const QString &directoryPath)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("version"), 1);
+    object.insert(
+        QStringLiteral("identity_id"), identityId);
+    object.insert(
+        QStringLiteral("parent_id"), parentId);
+    object.insert(
+        QStringLiteral("directory_path"), directoryPath);
+    return QString::fromUtf8(
+        QJsonDocument(object).toJson(
+            QJsonDocument::Compact));
+}
+
+ParsedLocationClaim parseLocationClaim(
+    const QVariant &stored)
+{
+    QJsonParseError error;
+    const QJsonDocument document =
+        QJsonDocument::fromJson(
+            stored.toString().toUtf8(), &error);
+    if (error.error != QJsonParseError::NoError
+        || !document.isObject()) {
+        return {};
+    }
+    const QJsonObject object = document.object();
+    const QJsonValue version =
+        object.value(QStringLiteral("version"));
+    if (!version.isDouble()
+        || version.toDouble() != 1.0
+        || !object.value(
+                QStringLiteral("identity_id")).isString()
+        || !object.value(
+                QStringLiteral("parent_id")).isString()
+        || !object.value(
+                QStringLiteral("directory_path")).isString()) {
+        return {};
+    }
+
+    QString identityId;
+    if (!canonicalUuidString(
+            object.value(
+                QStringLiteral("identity_id")).toString(),
+            &identityId)) {
+        return {};
+    }
+    const QString storedParent = object.value(
+        QStringLiteral("parent_id")).toString();
+    QString parentId;
+    if (!storedParent.isEmpty()
+        && !canonicalUuidString(
+            storedParent, &parentId)) {
+        return {};
+    }
+    const QString directoryPath = QDir::cleanPath(
+        object.value(
+            QStringLiteral("directory_path")).toString());
+    if (directoryPath.isEmpty()
+        || !QDir::isAbsolutePath(directoryPath)) {
+        return {};
+    }
+    return {
+        true,
+        identityId,
+        parentId,
+        directoryPath
+    };
+}
+
 bool removeExactSetting(
     QSettings *settings,
     const QString &key)
@@ -2130,6 +2323,78 @@ QStringList CredentialSettings::credentialKeysForPrefix(
     return result;
 }
 
+QString CredentialSettings::ensureIdentityId(
+    QSettings *settings,
+    const QString &storageKey,
+    const QString &recoveryBindingKey,
+    bool *created)
+{
+    if (created)
+        *created = false;
+    if (!settings || storageKey.isEmpty())
+        return {};
+    const QString settingsIdentity =
+        canonicalSettingsFileName(settings);
+    if (settingsIdentity.isEmpty())
+        return {};
+    CredentialOperationGuard operation(
+        QStringLiteral("identity\n")
+        + settingsIdentity + QLatin1Char('\n')
+        + settings->group() + QLatin1Char('\n')
+        + storageKey);
+    if (!operation)
+        return {};
+
+    const ExactSetting storedSetting =
+        readExactSetting(settings, storageKey);
+    if (!storedSetting.readable)
+        return {};
+    if (storedSetting.present) {
+        const QString stored =
+            storedSetting.value.toString();
+        QString identity;
+        if (!canonicalUuidString(stored, &identity))
+            return {};
+        if (stored != identity
+            && !writeExactSetting(
+                settings, storageKey, identity)) {
+            return {};
+        }
+        return identity;
+    }
+
+    QString identity;
+    if (!recoveryBindingKey.isEmpty()) {
+        const ExactSetting recovery =
+            readExactSetting(
+                settings, recoveryBindingKey);
+        if (!recovery.readable)
+            return {};
+        if (recovery.present) {
+            const ParsedScopeBinding binding =
+                parseScopeBinding(recovery.value);
+            if (!binding.valid)
+                return {};
+            identity = binding.rootId;
+        }
+    }
+    const bool generated = identity.isEmpty();
+    if (generated) {
+        identity =
+            QUuid::createUuid().toString(
+                QUuid::WithoutBraces);
+    }
+    if (!writeExactSetting(
+            settings, storageKey, identity)) {
+        qWarning() << "Cannot persist credential identity:"
+                   << settings->fileName();
+        return {};
+    }
+    if (created)
+        *created = generated;
+    return identity;
+}
+
 QString CredentialSettings::ensureScopeId(
     QSettings *settings,
     const QString &storageKey,
@@ -2175,6 +2440,305 @@ QString CredentialSettings::ensureScopeId(
         return QString();
     }
     return scopeId;
+}
+
+CredentialSettings::ScopeBindingResult
+CredentialSettings::ensureScopeBinding(
+    QSettings *settings,
+    const QString &rootId,
+    const QString &bindingKey,
+    const QString &scopeKey,
+    const QString &authorizedLegacyScopeId,
+    const QString &authorizedLegacyProfileId)
+{
+    ScopeBindingResult unavailable;
+    if (!settings || bindingKey.isEmpty()
+        || scopeKey.isEmpty()) {
+        return unavailable;
+    }
+
+    QString canonicalRootId;
+    if (!canonicalUuidString(
+            rootId, &canonicalRootId)) {
+        return {
+            ScopeBindingStatus::Conflict,
+            {}, {}
+        };
+    }
+    const QString settingsIdentity =
+        canonicalSettingsFileName(settings);
+    if (settingsIdentity.isEmpty())
+        return unavailable;
+    CredentialOperationGuard operation(
+        QStringLiteral("scope-binding\n")
+        + settingsIdentity + QLatin1Char('\n')
+        + settings->group() + QLatin1Char('\n')
+        + bindingKey + QLatin1Char('\n')
+        + scopeKey);
+    if (!operation)
+        return unavailable;
+
+    std::unique_ptr<QSettings> exact =
+        freshExactSettings(settings);
+    if (!exact)
+        return unavailable;
+    exact->sync();
+    if (exact->status() != QSettings::NoError)
+        return unavailable;
+
+    const bool bindingPresent =
+        exact->contains(bindingKey);
+    const bool scopePresent =
+        exact->contains(scopeKey);
+    ParsedScopeBinding binding;
+    if (bindingPresent) {
+        binding = parseScopeBinding(
+            exact->value(bindingKey));
+        if (!binding.valid
+            || binding.rootId != canonicalRootId) {
+            return {
+                ScopeBindingStatus::Conflict,
+                {}, {}
+            };
+        }
+        if (binding.legacyLocalScope) {
+            QString authorizedScope;
+            QString authorizedProfile;
+            if (!canonicalUuidString(
+                    authorizedLegacyScopeId,
+                    &authorizedScope)
+                || authorizedScope
+                    != binding.scopeId
+                || !canonicalUuidString(
+                    authorizedLegacyProfileId,
+                    &authorizedProfile)
+                || authorizedProfile
+                    != binding.profileId) {
+                return {
+                    ScopeBindingStatus::Conflict,
+                    {}, {}
+                };
+            }
+        }
+    }
+
+    QString storedScope;
+    if (scopePresent
+        && !canonicalUuidString(
+            exact->value(scopeKey).toString(),
+            &storedScope)) {
+        return {
+            ScopeBindingStatus::Conflict,
+            {}, {}
+        };
+    }
+    if (bindingPresent && scopePresent
+        && storedScope != binding.scopeId) {
+        return {
+            ScopeBindingStatus::Conflict,
+            {}, {}
+        };
+    }
+
+    if (!bindingPresent) {
+        if (scopePresent) {
+            QString authorizedScope;
+            QString authorizedProfile;
+            if (!canonicalUuidString(
+                    authorizedLegacyScopeId,
+                    &authorizedScope)
+                || authorizedScope != storedScope
+                || !canonicalUuidString(
+                    authorizedLegacyProfileId,
+                    &authorizedProfile)) {
+                return {
+                    ScopeBindingStatus::Conflict,
+                    {}, {}
+                };
+            }
+            binding.profileId = authorizedProfile;
+        }
+        binding.valid = true;
+        binding.rootId = canonicalRootId;
+        if (binding.profileId.isEmpty()) {
+            binding.profileId =
+                QUuid::createUuid().toString(
+                    QUuid::WithoutBraces);
+        }
+        binding.scopeId = scopePresent
+            ? storedScope
+            : QUuid::createUuid().toString(
+                  QUuid::WithoutBraces);
+        binding.legacyLocalScope =
+            scopePresent;
+    }
+
+    const QString serialized =
+        serializedScopeBinding(
+            binding.rootId,
+            binding.profileId,
+            binding.scopeId,
+            binding.legacyLocalScope);
+    const bool needsWrite =
+        !scopePresent
+        || exact->value(scopeKey).toString()
+            != binding.scopeId
+        || !bindingPresent
+        || exact->value(bindingKey).toString()
+            != serialized;
+    if (needsWrite) {
+        const QVariant previousScope =
+            exact->value(scopeKey);
+        const QVariant previousBinding =
+            exact->value(bindingKey);
+        exact->setValue(scopeKey, binding.scopeId);
+        exact->setValue(bindingKey, serialized);
+        exact->sync();
+        hardenSettingsFile(settings);
+        if (exact->status() != QSettings::NoError) {
+            if (scopePresent)
+                exact->setValue(
+                    scopeKey, previousScope);
+            else
+                exact->remove(scopeKey);
+            if (bindingPresent)
+                exact->setValue(
+                    bindingKey, previousBinding);
+            else
+                exact->remove(bindingKey);
+            exact->sync();
+            return unavailable;
+        }
+    }
+
+    std::unique_ptr<QSettings> verified =
+        freshExactSettings(settings);
+    if (!verified)
+        return unavailable;
+    verified->sync();
+    if (verified->status() != QSettings::NoError
+        || !verified->contains(bindingKey)
+        || !verified->contains(scopeKey)) {
+        return unavailable;
+    }
+    const ParsedScopeBinding persisted =
+        parseScopeBinding(
+            verified->value(bindingKey));
+    QString persistedScope;
+    if (!persisted.valid
+        || persisted.rootId != canonicalRootId
+        || !canonicalUuidString(
+            verified->value(scopeKey).toString(),
+            &persistedScope)
+        || persistedScope != persisted.scopeId
+        || persisted.profileId != binding.profileId
+        || persisted.scopeId != binding.scopeId
+        || persisted.legacyLocalScope
+            != binding.legacyLocalScope) {
+        return {
+            ScopeBindingStatus::Conflict,
+            {}, {}
+        };
+    }
+
+    return {
+        ScopeBindingStatus::Success,
+        persisted.profileId,
+        persisted.scopeId,
+        persisted.legacyLocalScope,
+        !bindingPresent
+    };
+}
+
+CredentialSettings::LocationClaimStatus
+CredentialSettings::ensureLocationClaim(
+    QSettings *settings,
+    const QString &claimKey,
+    const QString &identityId,
+    const QString &parentId,
+    const QString &directoryPath,
+    bool allowCreate)
+{
+    if (!settings || claimKey.isEmpty()
+        || directoryPath.isEmpty()) {
+        return LocationClaimStatus::Unavailable;
+    }
+
+    QString canonicalIdentityId;
+    QString canonicalParentId;
+    if (!canonicalUuidString(
+            identityId, &canonicalIdentityId)
+        || (!parentId.isEmpty()
+            && !canonicalUuidString(
+                parentId, &canonicalParentId))) {
+        return LocationClaimStatus::Conflict;
+    }
+    const QFileInfo directory(directoryPath);
+    const QString canonicalDirectory =
+        directory.isDir()
+            ? directory.canonicalFilePath()
+            : QString();
+    if (canonicalDirectory.isEmpty())
+        return LocationClaimStatus::Unavailable;
+
+    const QString settingsIdentity =
+        canonicalSettingsFileName(settings);
+    if (settingsIdentity.isEmpty())
+        return LocationClaimStatus::Unavailable;
+    CredentialOperationGuard operation(
+        QStringLiteral("location-claim\n")
+        + settingsIdentity + QLatin1Char('\n')
+        + settings->group() + QLatin1Char('\n')
+        + claimKey);
+    if (!operation)
+        return LocationClaimStatus::Unavailable;
+
+    const ExactSetting stored =
+        readExactSetting(settings, claimKey);
+    if (!stored.readable)
+        return LocationClaimStatus::Unavailable;
+    if (stored.present) {
+        const ParsedLocationClaim claim =
+            parseLocationClaim(stored.value);
+        if (!claim.valid
+            || claim.identityId
+                != canonicalIdentityId
+            || claim.parentId
+                != canonicalParentId
+            || claim.directoryPath
+                != canonicalDirectory) {
+            return LocationClaimStatus::Conflict;
+        }
+    } else if (!allowCreate) {
+        return LocationClaimStatus::Conflict;
+    }
+
+    const QString serialized =
+        serializedLocationClaim(
+            canonicalIdentityId,
+            canonicalParentId,
+            canonicalDirectory);
+    if (!stored.present
+        || stored.value.toString() != serialized) {
+        if (!writeExactSetting(
+                settings, claimKey, serialized)) {
+            return LocationClaimStatus::Unavailable;
+        }
+    }
+
+    const ExactSetting verified =
+        readExactSetting(settings, claimKey);
+    if (!verified.readable || !verified.present)
+        return LocationClaimStatus::Unavailable;
+    const ParsedLocationClaim claim =
+        parseLocationClaim(verified.value);
+    if (!claim.valid
+        || claim.identityId != canonicalIdentityId
+        || claim.parentId != canonicalParentId
+        || claim.directoryPath != canonicalDirectory) {
+        return LocationClaimStatus::Conflict;
+    }
+    return LocationClaimStatus::Success;
 }
 
 QString CredentialSettings::vaultKey(
