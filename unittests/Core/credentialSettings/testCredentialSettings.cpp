@@ -613,8 +613,24 @@ bool writeFaultInjectingSettings(
         && settings.contains(
             QStringLiteral(
                 "credential_store/binding_v2"));
+    bool rejectsLocationClaim = false;
+    if (state.failurePoint
+            == QStringLiteral(
+                "credential-location-claim")) {
+        const QString prefix =
+            QStringLiteral(
+                "credential_store/location_claims/");
+        for (auto entry = settings.cbegin();
+             entry != settings.cend(); ++entry) {
+            if (entry.key().startsWith(prefix)) {
+                rejectsLocationClaim = true;
+                break;
+            }
+        }
+    }
     if (state.enabled
         && (rejectsCredentialBinding
+            || rejectsLocationClaim
             || migrationWritePoint(settings)
                 == state.failurePoint)) {
         ++state.rejectedWrites;
@@ -866,6 +882,7 @@ private slots:
     void identityIdsAreStableAndMalformedValuesFailClosed();
     void scopeBindingsAreStableAndRootBound();
     void scopeBindingsRejectUnconfirmedLegacyScopes();
+    void persistedLegacyBindingsRequireAuthorization();
     void malformedScopeBindingsFailClosed_data();
     void malformedScopeBindingsFailClosed();
     void locationClaimsRejectCopiesAndUnconfirmedMoves();
@@ -987,6 +1004,7 @@ private slots:
     void unknownMigrationStateFailsClosed();
     void migrationSyncFailuresResumeAfterRestart_data();
     void migrationSyncFailuresResumeAfterRestart();
+    void credentialClaimFailureDoesNotBlockGlobalMigration();
     void newFormatRootlessCredentialIsRetained();
     void newFormatRootlessCredentialRemainsAfterStoreRecovery();
     void authorizedLegacyPlaintextMigration_data();
@@ -1985,6 +2003,74 @@ scopeBindingsRejectUnconfirmedLegacyScopes()
     QVERIFY(rejected.scopeId.isEmpty());
     QVERIFY(!settings.contains(bindingKey));
     QCOMPARE(settings.value(scopeKey).toString(), legacyScope);
+}
+
+void TestCredentialSettings::
+persistedLegacyBindingsRequireAuthorization()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString bindingKey =
+        QStringLiteral("credential_store/binding_v2");
+    const QString scopeKey =
+        QStringLiteral("credential_store/id");
+    const QString root =
+        QStringLiteral("91919191-9191-4191-8191-919191919191");
+    const QString legacyProfile =
+        QStringLiteral("92929292-9292-4292-8292-929292929292");
+    const QString legacyScope =
+        QStringLiteral("93939393-9393-4393-8393-939393939393");
+    QSettings settings(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    settings.setValue(scopeKey, legacyScope);
+    settings.sync();
+    QCOMPARE(settings.status(), QSettings::NoError);
+
+    const CredentialSettings::ScopeBindingResult created =
+        CredentialSettings::ensureScopeBinding(
+            &settings, root, bindingKey, scopeKey,
+            legacyScope, legacyProfile);
+    QVERIFY(created.succeeded());
+    QVERIFY(created.legacyLocalScope);
+    QCOMPARE(created.profileId, legacyProfile);
+    QCOMPARE(created.scopeId, legacyScope);
+
+    const CredentialSettings::ScopeBindingResult missing =
+        CredentialSettings::ensureScopeBinding(
+            &settings, root, bindingKey, scopeKey);
+    QCOMPARE(
+        missing.status,
+        CredentialSettings::ScopeBindingStatus::Conflict);
+
+    const CredentialSettings::ScopeBindingResult wrongScope =
+        CredentialSettings::ensureScopeBinding(
+            &settings, root, bindingKey, scopeKey,
+            QStringLiteral(
+                "94949494-9494-4494-8494-949494949494"),
+            legacyProfile);
+    QCOMPARE(
+        wrongScope.status,
+        CredentialSettings::ScopeBindingStatus::Conflict);
+
+    const CredentialSettings::ScopeBindingResult wrongProfile =
+        CredentialSettings::ensureScopeBinding(
+            &settings, root, bindingKey, scopeKey,
+            legacyScope,
+            QStringLiteral(
+                "95959595-9595-4595-8595-959595959595"));
+    QCOMPARE(
+        wrongProfile.status,
+        CredentialSettings::ScopeBindingStatus::Conflict);
+
+    const CredentialSettings::ScopeBindingResult confirmed =
+        CredentialSettings::ensureScopeBinding(
+            &settings, root, bindingKey, scopeKey,
+            legacyScope, legacyProfile);
+    QVERIFY(confirmed.succeeded());
+    QVERIFY(confirmed.legacyLocalScope);
+    QCOMPARE(confirmed.profileId, legacyProfile);
+    QCOMPARE(confirmed.scopeId, legacyScope);
 }
 
 void TestCredentialSettings::
@@ -8794,6 +8880,98 @@ migrationSyncFailuresResumeAfterRestart()
                 plainKey(GC_RWGPSUSER)).toString(),
             athletePrivateValue);
     }
+}
+
+void TestCredentialSettings::
+credentialClaimFailureDoesNotBlockGlobalMigration()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QSettings::Format legacyFormat =
+        legacyMigrationTestFormat();
+    const QSettings::Format targetFormat =
+        targetMigrationTestFormat();
+    QVERIFY(legacyFormat != QSettings::InvalidFormat);
+    QVERIFY(targetFormat != QSettings::InvalidFormat);
+    QSettings::setPath(
+        legacyFormat, QSettings::UserScope,
+        temporary.path());
+    QSettings::setPath(
+        targetFormat, QSettings::UserScope,
+        temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialClaimMigration-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString globalValue =
+        QStringLiteral("ordinary-global-setting");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("athletes"));
+    QVERIFY(QDir().mkpath(athleteRoot));
+
+    {
+        QSettings legacy(
+            legacyFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        legacy.setValue(plainKey(GC_START_HTTP), true);
+        legacy.setValue(
+            plainKey(GC_TABBAR), globalValue);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+    }
+    {
+        QSettings system(
+            targetFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        system.setValue(
+            legacySystemMigrationMarkerKey,
+            legacyMigrationComplete);
+        system.sync();
+        QCOMPARE(system.status(), QSettings::NoError);
+    }
+
+    MigrationFormatFaultState &fault =
+        migrationFormatFaultState();
+    fault = {};
+    fault.failurePoint =
+        QStringLiteral(
+            "credential-location-claim");
+    fault.enabled = true;
+    factoryState() =
+        std::make_shared<FakeStoreState>();
+
+    GSettings settings(
+        organization, application,
+        legacyFormat, targetFormat);
+    settings.initializeQSettingsGlobal(athleteRoot);
+    fault.enabled = false;
+    QVERIFY(fault.rejectedWrites > 0);
+    QCOMPARE(
+        settings.value(
+            nullptr, GC_TABBAR,
+            QStringLiteral("missing")).toString(),
+        globalValue);
+
+    const QString globalPath =
+        QDir(athleteRoot).filePath(
+            QStringLiteral(
+                "configglobal-general.ini"));
+    QSettings migrated(globalPath, targetFormat);
+    QCOMPARE(
+        migrated.value(
+            legacyGlobalMigrationMarkerKey).toString(),
+        legacyMigrationComplete);
+    QCOMPARE(
+        migrated.value(
+            plainKey(GC_TABBAR)).toString(),
+        globalValue);
+    fault = {};
 }
 
 void TestCredentialSettings::
