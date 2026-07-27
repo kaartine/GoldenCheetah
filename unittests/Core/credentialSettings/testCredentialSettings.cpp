@@ -680,7 +680,8 @@ bool currentWindowsUserSid(
 
 bool setWindowsDirectoryAcl(
     const QString &path,
-    bool allowEveryone)
+    bool allowEveryone,
+    bool inheritable = true)
 {
     QByteArray userStorage;
     PSID userSid = nullptr;
@@ -700,8 +701,9 @@ bool setWindowsDirectoryAcl(
     EXPLICIT_ACCESSW access[2] = {};
     access[0].grfAccessPermissions = FILE_ALL_ACCESS;
     access[0].grfAccessMode = SET_ACCESS;
-    access[0].grfInheritance =
-        SUB_CONTAINERS_AND_OBJECTS_INHERIT;
+    access[0].grfInheritance = inheritable
+        ? SUB_CONTAINERS_AND_OBJECTS_INHERIT
+        : NO_INHERITANCE;
     ::BuildTrusteeWithSidW(
         &access[0].Trustee, userSid);
     ULONG count = 1;
@@ -709,8 +711,9 @@ bool setWindowsDirectoryAcl(
         access[1].grfAccessPermissions =
             FILE_ALL_ACCESS;
         access[1].grfAccessMode = SET_ACCESS;
-        access[1].grfInheritance =
-            SUB_CONTAINERS_AND_OBJECTS_INHERIT;
+        access[1].grfInheritance = inheritable
+            ? SUB_CONTAINERS_AND_OBJECTS_INHERIT
+            : NO_INHERITANCE;
         ::BuildTrusteeWithSidW(
             &access[1].Trustee, everyoneStorage);
         count = 2;
@@ -783,6 +786,14 @@ bool windowsDirectoryHasOwnerOnlyAcl(
                 || !::EqualSid(trustee, userSid)
                 || (header->AceFlags
                     & INHERITED_ACE)
+                || (header->AceFlags
+                    & (OBJECT_INHERIT_ACE
+                       | CONTAINER_INHERIT_ACE))
+                    != (OBJECT_INHERIT_ACE
+                        | CONTAINER_INHERIT_ACE)
+                || (header->AceFlags
+                    & (INHERIT_ONLY_ACE
+                       | NO_PROPAGATE_INHERIT_ACE))
                 || (ace->Mask & FILE_ALL_ACCESS)
                     != FILE_ALL_ACCESS) {
                 valid = false;
@@ -883,6 +894,8 @@ private slots:
     void windowsWritableCredentialRootFailsClosed();
     void windowsExistingWritableCredentialDirectoryFailsClosed_data();
     void windowsExistingWritableCredentialDirectoryFailsClosed();
+    void windowsNonInheritableCredentialDirectoryFailsClosed_data();
+    void windowsNonInheritableCredentialDirectoryFailsClosed();
     void reissuedDeleteResumesDurableTransaction();
     void reportedMarkerFailureRecoversDurableMarker();
     void failedMarkerPersistenceLeavesPreparationState();
@@ -3620,7 +3633,8 @@ credentialStateDurabilityFailureFailsClosed()
         state->values.value(vaultKey),
         QStringLiteral("credential-to-preserve"));
     QVERIFY(credentialPhaseIs(
-        deletionPath, QByteArrayLiteral("preparing")));
+        deletionPath,
+        QByteArrayLiteral("preparing-creation")));
     QCOMPARE(credentials.value(
                  &settings, scope, GC_STRAVA_TOKEN,
                  plaintextKey, QStringLiteral("missing")),
@@ -4535,6 +4549,71 @@ windowsExistingWritableCredentialDirectoryFailsClosed()
 }
 
 void TestCredentialSettings::
+windowsNonInheritableCredentialDirectoryFailsClosed_data()
+{
+    QTest::addColumn<bool>("targetApplication");
+#ifndef Q_OS_WIN
+    QTest::newRow("Windows DACLs unavailable") << false;
+#else
+    QTest::newRow("application") << true;
+    QTest::newRow("credential-locks") << false;
+#endif
+}
+
+void TestCredentialSettings::
+windowsNonInheritableCredentialDirectoryFailsClosed()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Windows DACLs are required");
+#else
+    QFETCH(bool, targetApplication);
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot = temporary.filePath(
+        QStringLiteral("credential-state"));
+    const QString applicationPath = QDir(stateRoot).filePath(
+        QStringLiteral("GoldenCheetah"));
+    const QString lockPath = QDir(applicationPath).filePath(
+        QStringLiteral("credential-locks"));
+    QVERIFY(QDir().mkpath(lockPath));
+    QVERIFY(setWindowsDirectoryAcl(stateRoot, false));
+    QVERIFY(setWindowsDirectoryAcl(
+        applicationPath, false, !targetApplication));
+    QVERIFY(setWindowsDirectoryAcl(
+        lockPath, false, targetApplication));
+
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings settings(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    auto state = std::make_shared<FakeStoreState>();
+    state->values.insert(
+        vaultKey, QStringLiteral("credential-to-preserve"));
+    CredentialSettings credentials(fakeStore(state));
+
+    QVERIFY(!credentials.setValueChecked(
+        &settings, scope, GC_STRAVA_TOKEN,
+        plaintextKey, QStringLiteral("replacement")));
+    QCOMPARE(state->reads, 0);
+    QCOMPARE(state->writes, 0);
+    QCOMPARE(state->removes, 0);
+    QCOMPARE(
+        state->values.value(vaultKey),
+        QStringLiteral("credential-to-preserve"));
+    QVERIFY(!windowsDirectoryHasOwnerOnlyAcl(
+        targetApplication
+            ? applicationPath : lockPath));
+#endif
+}
+
+void TestCredentialSettings::
 reissuedDeleteResumesDurableTransaction()
 {
     QTemporaryDir temporary;
@@ -4637,7 +4716,8 @@ reportedMarkerFailureRecoversDurableMarker()
             settings.value(generationKey)
                 .toString().toLatin1()));
         QVERIFY(credentialPhaseIs(
-            deletionPath, QByteArrayLiteral("preparing")));
+            deletionPath,
+            QByteArrayLiteral("preparing-creation")));
     }
 
     QSettings restartedSettings(
@@ -4695,7 +4775,8 @@ failedMarkerPersistenceLeavesPreparationState()
     QCOMPARE(state->values.value(vaultKey),
              QStringLiteral("credential-to-preserve"));
     QVERIFY(credentialPhaseIs(
-        deletionPath, QByteArrayLiteral("preparing")));
+        deletionPath,
+        QByteArrayLiteral("preparing-creation")));
     fault = {};
 }
 
@@ -4718,6 +4799,9 @@ failedCreationDeletePreparationPreservesLegacyCredential()
         scope, GC_STRAVA_TOKEN);
     const QString removalKey =
         pendingRemovalTestKey(scope, GC_STRAVA_TOKEN);
+    const QString generationKey =
+        pendingRemovalGenerationTestKey(
+            scope, GC_STRAVA_TOKEN);
     const QString legacy =
         QStringLiteral("legacy-before-failed-delete");
 
@@ -4740,6 +4824,15 @@ failedCreationDeletePreparationPreservesLegacyCredential()
             plaintextKey));
         QCOMPARE(state->removes, 0);
         fault = {};
+    }
+    {
+        QSettings cleanup(
+            settingsPath, credentialScrubTestFormat());
+        cleanup.remove(removalKey);
+        cleanup.remove(generationKey);
+        cleanup.sync();
+        QCOMPARE(cleanup.status(), QSettings::NoError);
+        QCOMPARE(cleanup.value(plaintextKey).toString(), legacy);
     }
 
     state->failWrites = true;
@@ -4786,6 +4879,9 @@ failedCreationDeletePreparationFindsLegacyInOtherSource()
         scope, GC_STRAVA_TOKEN);
     const QString removalKey =
         pendingRemovalTestKey(scope, GC_STRAVA_TOKEN);
+    const QString generationKey =
+        pendingRemovalGenerationTestKey(
+            scope, GC_STRAVA_TOKEN);
     const QString legacy =
         QStringLiteral("legacy-in-second-source");
 
@@ -4810,6 +4906,14 @@ failedCreationDeletePreparationFindsLegacyInOtherSource()
             plaintextKey));
         QCOMPARE(state->removes, 0);
         fault = {};
+    }
+    {
+        QSettings cleanup(
+            deletionPath, credentialScrubTestFormat());
+        cleanup.remove(removalKey);
+        cleanup.remove(generationKey);
+        cleanup.sync();
+        QCOMPARE(cleanup.status(), QSettings::NoError);
     }
 
     state->failWrites = true;
@@ -4856,6 +4960,9 @@ failedActiveDeletePreparationBlocksDuplicateResurrection()
         scope, GC_STRAVA_TOKEN);
     const QString removalKey =
         pendingRemovalTestKey(scope, GC_STRAVA_TOKEN);
+    const QString generationKey =
+        pendingRemovalGenerationTestKey(
+            scope, GC_STRAVA_TOKEN);
 
     auto state = std::make_shared<FakeStoreState>();
     {
@@ -4884,6 +4991,14 @@ failedActiveDeletePreparationBlocksDuplicateResurrection()
             plaintextKey));
         QCOMPARE(state->removes, 0);
         fault = {};
+    }
+    {
+        QSettings cleanup(
+            deletionPath, credentialScrubTestFormat());
+        cleanup.remove(removalKey);
+        cleanup.remove(generationKey);
+        cleanup.sync();
+        QCOMPARE(cleanup.status(), QSettings::NoError);
     }
 
     state->failWrites = true;
