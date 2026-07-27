@@ -540,12 +540,6 @@ QSettings::SettingsMap persistedSettingsMap(
 QString migrationWritePoint(
     const QSettings::SettingsMap &settings)
 {
-    if (settings.contains(
-            QStringLiteral(
-                "credential_store/binding_v2"))) {
-        return QStringLiteral("credential-binding");
-    }
-
     const QString systemState = settings
         .value(legacySystemMigrationMarkerKey).toString();
     const QString globalState = settings
@@ -613,9 +607,16 @@ bool writeFaultInjectingSettings(
 {
     MigrationFormatFaultState &state =
         migrationFormatFaultState();
+    const bool rejectsCredentialBinding =
+        state.failurePoint
+            == QStringLiteral("credential-binding")
+        && settings.contains(
+            QStringLiteral(
+                "credential_store/binding_v2"));
     if (state.enabled
-        && migrationWritePoint(settings)
-            == state.failurePoint) {
+        && (rejectsCredentialBinding
+            || migrationWritePoint(settings)
+                == state.failurePoint)) {
         ++state.rejectedWrites;
         return false;
     }
