@@ -709,6 +709,53 @@ private slots:
         delete device;
     }
 
+    void rediscoveryRemainsPendingUntilHeartRateStreams()
+    {
+        const QBluetoothDeviceInfo original = lifecycleDeviceInfo();
+        DeviceConfiguration config;
+        config.type = DEV_BT40_HEARTRATE;
+        config.deviceProfile =
+                original.name() + QLatin1Char(';')
+                + original.address().toString() + QLatin1Char(';')
+                + original.deviceUuid().toString();
+
+        BT40Controller controller(nullptr, &config);
+        QCOMPARE(controller.start(), 0);
+        BT40Device *device = addControllerDevice(&controller);
+        QVERIFY(device);
+        QLowEnergyController *link =
+                device->findChild<QLowEnergyController *>();
+        QVERIFY(link);
+        QVERIFY(QMetaObject::invokeMethod(
+                device, "reconnectScanRequested", Qt::DirectConnection));
+
+        QBluetoothDeviceInfo refreshed(
+                original.address(),
+                QStringLiteral("Refreshed lifecycle device"), 0);
+        refreshed.setCoreConfigurations(
+                QBluetoothDeviceInfo::LowEnergyCoreConfiguration);
+        QSignalSpy notificationSpy(
+                &controller, &RealtimeController::setNotification);
+        QVERIFY(QMetaObject::invokeMethod(
+                &controller, "addDevice", Qt::DirectConnection,
+                Q_ARG(QBluetoothDeviceInfo, refreshed)));
+
+        QCOMPARE(device->deviceInfo().name(), refreshed.name());
+        notificationSpy.clear();
+        QVERIFY(QMetaObject::invokeMethod(
+                &controller, "scanFinished", Qt::DirectConnection));
+        QCOMPARE(notificationSpy.count(), 0);
+
+        QVERIFY(QMetaObject::invokeMethod(
+                device, "heartRateStreamReady", Qt::DirectConnection));
+        QVERIFY(QMetaObject::invokeMethod(
+                &controller, "scanFinished", Qt::DirectConnection));
+        QCOMPARE(notificationSpy.count(), 1);
+
+        link->setStateForTest(QLowEnergyController::UnconnectedState);
+        QCOMPARE(controller.stop(), 0);
+    }
+
     void manualDisconnectSuppressesReconnect()
     {
         BT40Controller controller(nullptr, nullptr);
