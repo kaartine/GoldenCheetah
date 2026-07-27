@@ -713,6 +713,8 @@ private slots:
     void credentialStateDurabilityFailureFailsClosed();
     void credentialStateAncestorSyncFailureFailsClosed();
     void partialCredentialStateAncestryFailsClosed();
+    void insecureCredentialStateRootFailsClosed();
+    void symlinkedCredentialStateDirectoryFailsClosed();
     void reissuedDeleteResumesDurableTransaction();
     void reportedMarkerFailureRecoversDurableMarker();
     void failedMarkerPersistenceLeavesPreparationState();
@@ -3363,6 +3365,9 @@ credentialStateAncestorSyncFailureFailsClosed()
         QVERIFY(!credentials.removeChecked(
             &settings, scope, GC_STRAVA_TOKEN,
             plaintextKey));
+        QVERIFY(!credentials.removeChecked(
+            &settings, scope, GC_STRAVA_TOKEN,
+            plaintextKey));
     }
     QCOMPARE(state->removes, 0);
     QCOMPARE(
@@ -3432,6 +3437,118 @@ partialCredentialStateAncestryFailsClosed()
         plaintextKey));
     QCOMPARE(state->removes, 1);
     QVERIFY(!state->values.contains(vaultKey));
+#endif
+}
+
+void TestCredentialSettings::
+insecureCredentialStateRootFailsClosed()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Unix directory permissions are required");
+#else
+    QTemporaryDir stateTemporary;
+    QTemporaryDir settingsTemporary;
+    QVERIFY(stateTemporary.isValid());
+    QVERIFY(settingsTemporary.isValid());
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateTemporary.path()));
+    QSettings settings(
+        settingsTemporary.filePath(
+            QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->values.insert(
+        vaultKey, QStringLiteral("credential-to-preserve"));
+    CredentialSettings credentials(fakeStore(state));
+    QVERIFY(QFile::setPermissions(
+        stateTemporary.path(),
+        QFileDevice::ReadOwner
+            | QFileDevice::WriteOwner
+            | QFileDevice::ExeOwner
+            | QFileDevice::WriteGroup));
+    QCOMPARE(credentials.value(
+                 &settings, scope, GC_STRAVA_TOKEN,
+                 plaintextKey, QStringLiteral("missing")),
+             QVariant(QStringLiteral("missing")));
+    QVERIFY(!credentials.setValueChecked(
+        &settings, scope, GC_STRAVA_TOKEN,
+        plaintextKey, QStringLiteral("replacement")));
+    QVERIFY(!credentials.removeChecked(
+        &settings, scope, GC_STRAVA_TOKEN,
+        plaintextKey));
+    QVERIFY(QFile::setPermissions(
+        stateTemporary.path(),
+        QFileDevice::ReadOwner
+            | QFileDevice::WriteOwner
+            | QFileDevice::ExeOwner));
+
+    QCOMPARE(state->reads, 0);
+    QCOMPARE(state->writes, 0);
+    QCOMPARE(state->removes, 0);
+    QCOMPARE(
+        state->values.value(vaultKey),
+        QStringLiteral("credential-to-preserve"));
+#endif
+}
+
+void TestCredentialSettings::
+symlinkedCredentialStateDirectoryFailsClosed()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Unix symbolic links are required");
+#else
+    QTemporaryDir stateTemporary;
+    QTemporaryDir targetTemporary;
+    QTemporaryDir settingsTemporary;
+    QVERIFY(stateTemporary.isValid());
+    QVERIFY(targetTemporary.isValid());
+    QVERIFY(settingsTemporary.isValid());
+    const QString applicationPath =
+        stateTemporary.filePath(
+            QStringLiteral("GoldenCheetah"));
+    QVERIFY(QFile::link(
+        targetTemporary.path(), applicationPath));
+    QVERIFY(QFileInfo(applicationPath).isSymLink());
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateTemporary.path()));
+    QSettings settings(
+        settingsTemporary.filePath(
+            QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->values.insert(
+        vaultKey, QStringLiteral("credential-to-preserve"));
+    CredentialSettings credentials(fakeStore(state));
+    QCOMPARE(credentials.value(
+                 &settings, scope, GC_STRAVA_TOKEN,
+                 plaintextKey, QStringLiteral("missing")),
+             QVariant(QStringLiteral("missing")));
+    QVERIFY(!credentials.setValueChecked(
+        &settings, scope, GC_STRAVA_TOKEN,
+        plaintextKey, QStringLiteral("replacement")));
+    QVERIFY(!credentials.removeChecked(
+        &settings, scope, GC_STRAVA_TOKEN,
+        plaintextKey));
+    QCOMPARE(state->reads, 0);
+    QCOMPARE(state->writes, 0);
+    QCOMPARE(state->removes, 0);
+    QCOMPARE(
+        state->values.value(vaultKey),
+        QStringLiteral("credential-to-preserve"));
 #endif
 }
 
