@@ -242,62 +242,78 @@ class ReplaceAtomicFileWriter final : public AtomicFileWriter
 public:
     explicit ReplaceAtomicFileWriter(const QString &targetPath)
         : targetPath_(targetPath),
-          file_(QDir(QFileInfo(targetPath).absolutePath()).filePath(
-              QStringLiteral(".%1.XXXXXX.tmp")
-                  .arg(QFileInfo(targetPath).fileName())))
+          file_(std::make_unique<QTemporaryFile>(
+              QDir(QFileInfo(targetPath).absolutePath()).filePath(
+                  QStringLiteral(".%1.XXXXXX.tmp")
+                      .arg(QFileInfo(targetPath).fileName()))))
     {
     }
 
     bool open() override
     {
-        if (!file_.open()) {
-            error_ = file_.errorString();
+        if (!file_ || !file_->open()) {
+            error_ = file_
+                ? file_->errorString()
+                : QStringLiteral(
+                      "Atomic replacement is no longer available");
             return false;
         }
+        temporaryPath_ = file_->fileName();
         return true;
     }
 
     qint64 write(const QByteArray &data) override
     {
-        return file_.write(data);
+        return file_ ? file_->write(data) : -1;
     }
 
     bool flush() override
     {
-        if (!file_.flush()) {
+        if (!file_ || !file_->flush()) {
             return false;
         }
         error_.clear();
-        return syncFileDevice(file_, error_);
+        return syncFileDevice(*file_, error_);
     }
 
     bool commit() override
     {
-        const QString temporaryPath = file_.fileName();
-        file_.close();
-        if (!publishAtomicReplacement(
-                temporaryPath, targetPath_, error_)) {
-            file_.remove();
+        if (!file_ || temporaryPath_.isEmpty()) {
+            error_ = QStringLiteral(
+                "Atomic replacement is not open");
             return false;
         }
-        file_.setAutoRemove(false);
+        file_->setAutoRemove(false);
+        file_.reset();
+        if (!publishAtomicReplacement(
+                temporaryPath_, targetPath_, error_)) {
+            QFile::remove(temporaryPath_);
+            return false;
+        }
         return true;
     }
 
     void cancelWriting() override
     {
-        file_.close();
-        file_.remove();
+        file_.reset();
     }
 
     QString errorString() const override
     {
-        return error_.isEmpty() ? file_.errorString() : error_;
+        if (!error_.isEmpty())
+            return error_;
+        return file_ ? file_->errorString() : QString();
+    }
+
+    QString temporaryPath() const
+    {
+        return file_ ? file_->fileName() : temporaryPath_;
     }
 
 private:
     QString targetPath_;
-    QTemporaryFile file_;
+    std::unique_ptr<QTemporaryFile> file_;
+    QString temporaryPath_;
     QString error_;
 };
 
@@ -390,9 +406,10 @@ public:
         const QString &targetPath,
         AtomicPublishFunction publish = publishAtomicNew)
         : targetPath_(targetPath),
-          file_(QDir(QFileInfo(targetPath).absolutePath()).filePath(
-              QStringLiteral(".%1.XXXXXX.tmp")
-                  .arg(QFileInfo(targetPath).fileName()))),
+          file_(std::make_unique<QTemporaryFile>(
+              QDir(QFileInfo(targetPath).absolutePath()).filePath(
+                  QStringLiteral(".%1.XXXXXX.tmp")
+                      .arg(QFileInfo(targetPath).fileName())))),
           publish_(std::move(publish))
     {
     }
@@ -403,37 +420,51 @@ public:
             error_ = QStringLiteral("The target activity already exists");
             return false;
         }
-        if (!file_.open()) {
-            error_ = file_.errorString();
+        if (!file_ || !file_->open()) {
+            error_ = file_
+                ? file_->errorString()
+                : QStringLiteral(
+                      "Atomic publication is no longer available");
             return false;
         }
+        temporaryPath_ = file_->fileName();
         return true;
     }
 
     qint64 write(const QByteArray &data) override
     {
-        return file_.write(data);
+        return file_ ? file_->write(data) : -1;
     }
 
     bool flush() override
     {
-        if (!file_.flush()) {
+        if (!file_ || !file_->flush()) {
             return false;
         }
         error_.clear();
-        return syncFileDevice(file_, error_);
+        return syncFileDevice(*file_, error_);
     }
 
     bool commit() override
     {
-        const QString temporaryPath = file_.fileName();
-        file_.close();
+        if (!file_ || temporaryPath_.isEmpty()) {
+            error_ = QStringLiteral(
+                "Atomic publication is not open");
+            return false;
+        }
+        file_->setAutoRemove(false);
+        file_.reset();
         bool targetPublished = false;
-        if (!publish_ || !publish_(
-                temporaryPath, targetPath_, targetPublished, error_)) {
+        const bool published = publish_ && publish_(
+            temporaryPath_, targetPath_,
+            targetPublished, error_);
+        if (!published || !targetPublished) {
             if (!publish_ && error_.isEmpty()) {
                 error_ = QStringLiteral(
                     "Cannot publish the new activity file");
+            } else if (published && error_.isEmpty()) {
+                error_ = QStringLiteral(
+                    "The activity publisher did not create the target");
             }
             const auto appendError = [&](const QString &detail) {
                 if (!error_.isEmpty()) error_ += QStringLiteral("; ");
@@ -451,9 +482,9 @@ public:
                     }
                 }
             }
-            const QFileInfo staging(temporaryPath);
+            const QFileInfo staging(temporaryPath_);
             if (staging.exists() || staging.isSymLink()) {
-                if (file_.remove()) {
+                if (QFile::remove(temporaryPath_)) {
                     directoryChanged = true;
                 } else {
                     appendError(QStringLiteral(
@@ -468,21 +499,19 @@ public:
             }
             return false;
         }
-        if (targetPublished) {
-            file_.setAutoRemove(false);
-        }
         return true;
     }
 
     void cancelWriting() override
     {
-        file_.close();
-        file_.remove();
+        file_.reset();
     }
 
     QString errorString() const override
     {
-        return error_.isEmpty() ? file_.errorString() : error_;
+        if (!error_.isEmpty())
+            return error_;
+        return file_ ? file_->errorString() : QString();
     }
 
 private:
@@ -493,7 +522,8 @@ private:
     }
 
     QString targetPath_;
-    QTemporaryFile file_;
+    std::unique_ptr<QTemporaryFile> file_;
+    QString temporaryPath_;
     AtomicPublishFunction publish_;
     QString error_;
 };

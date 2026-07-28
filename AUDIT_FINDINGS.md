@@ -2041,22 +2041,63 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-022: Same-file credential cleanup can delete a newer or last copy
 
-- Status: OPEN
-- Code: `src/Core/CredentialSettings.cpp`
+- Status: FIXED
+- Code: `src/Core/CredentialSettings.cpp`,
+  `src/Core/CredentialSettings.h`, `src/FileIO/AtomicFileWriter.h`,
+  `unittests/Core/credentialSettings/testCredentialSettings.cpp`, and
+  `unittests/FileIO/atomicActivitySave/testAtomicActivitySave.cpp`
 - Impact: Credential migration and canonical reads take a plaintext or vault
   snapshot and later scrub the plaintext key without atomically binding those
   operations. Another writer can replace the plaintext after the snapshot and
   have its newer value deleted, or an external actor can remove the vault value
   after its successful read and leave cleanup removing the last remaining
   credential copy.
-- Test: Pause after the confirming vault read but before plaintext cleanup.
-  Replace the plaintext with a distinct newer value in one case and remove the
-  vault value in another, then require cleanup to retain the changed or last
-  copy in the same process and after restart.
-- Fix direction: Use a compare-and-delete operation over an exact settings
-  snapshot, and bind vault confirmation plus source cleanup to recoverable
-  generation metadata. Any changed source value or unconfirmed vault state must
-  retain plaintext and retry rather than scrub.
+- Test-first evidence: The initial fresh-snapshot regressions failed in three
+  independent ways: a concurrent replacement was deleted, a plaintext key
+  hidden by QSettings' stale negative cache survived cleanup, and a crash left a
+  named plaintext snapshot behind. Reverting the direct scrub preflight also
+  made `plaintextRemovalBypassesStaleNegativeCache` delete the vault while
+  retaining plaintext. Earlier authorization coverage proved that an unrelated
+  nonempty vault value could authorize deletion and that persisted intent could
+  delete a replacement after restart. The shared atomic-writer regression
+  rejects a publisher that reports success without publishing its target.
+  Windows-only crash coverage requires every retained serialized plaintext copy
+  to have a protected, non-inherited, owner-only DACL; that contract exposed and
+  fixed a crash point placed before final DACL hardening.
+- Resolution: Same-file cleanup now runs under the settings lock and atomically
+  replaces a complete exact settings map. Secret-free `intent`, `authorized`,
+  `conflict`, and `complete` sidecar phases bind recovery to the canonical
+  settings/key identity and a source generation. Persisted authorization alone
+  never permits deletion of mismatched plaintext: that exceptional path also
+  requires the initiating call's stack-local target secret, an unchanged source
+  generation, and a final matching vault read. Normal cleanup reads the source
+  twice through secure fresh file handles, bypassing QSettings caches, and
+  refuses symlink/reparse, hard-link, metadata, or content changes. Unix parsing
+  uses an owner-only private scratch directory and an immediately unlinked
+  descriptor exposed through a unique `/proc/self/fd` or `/dev/fd` path.
+  Windows staging is hardened before plaintext is written or made
+  crash-observable, and open native temporary-file handles are destroyed before
+  `MoveFileExW`. Scratch cleanup is globally locked and recovers directories
+  only after acquiring their active lock or proving the same-host owner process
+  dead. Atomic publication now also rejects a successful callback that did not
+  report the target as published.
+- Verification: The final focused credential program passes 326 cases normally,
+  under ASan/UBSan/LSan, and under ThreadSanitizer, with no failures, sanitizer
+  reports, or races and seven platform-only skips on Linux. Production and test
+  Windows branches pass a MinGW64 C++17 syntax check. The atomic activity-save
+  program passes 72 cases with no skips. The complete out-of-source matrix runs
+  81 QtTest programs: 3,070 cases pass, none fail, and seven platform cases
+  skip. The complete Linux application links as a 536,628,600-byte ELF.
+- Residual: The final successful vault read is the cleanup linearization point;
+  an arbitrary out-of-band vault deletion after it cannot be coordinated
+  without backend compare-and-swap or lease support. Writers that bypass the
+  settings lock, parent-directory replacement, hard-link creation, and metadata
+  ABA remain outside the cooperating-writer contract. Native non-administrator
+  NTFS execution is still required for the Windows DACL, sharing, and
+  `MoveFileExW` runtime branches; MinGW validates syntax only. Native macOS CI is
+  still needed for the `/dev/fd` parsing path. A process crash may retain a
+  private scratch directory until the next credential snapshot operation;
+  dead-process recovery is covered on Linux.
 
 ### THREAD-013: Timed-out QtKeychain jobs can mutate the vault later
 

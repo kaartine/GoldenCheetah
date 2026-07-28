@@ -18,15 +18,20 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QStringList>
+#include <QSysInfo>
+#include <QTemporaryDir>
+#include <QTemporaryFile>
 #include <QUuid>
 
 #include <cerrno>
+#include <atomic>
 #include <cstring>
 #include <cstdlib>
 #include <utility>
 
 #ifdef Q_OS_UNIX
 #include <fcntl.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -45,6 +50,7 @@ bool credentialDirectoryTreeIsDurable(
     const QString &directoryPath,
     const QString &existingAncestorPath,
     bool force);
+void credentialCrashPoint(const QByteArray &point);
 
 #ifdef Q_OS_WIN
 bool windowsCredentialRootIsSafe(const QString &path);
@@ -118,7 +124,36 @@ bool credentialPathIsRedirected(
         return error != ERROR_FILE_NOT_FOUND
             && error != ERROR_PATH_NOT_FOUND;
     }
-    return attributes & FILE_ATTRIBUTE_REPARSE_POINT;
+    if (attributes & FILE_ATTRIBUTE_REPARSE_POINT)
+        return true;
+    if (attributes & FILE_ATTRIBUTE_DIRECTORY)
+        return false;
+    const HANDLE file = ::CreateFileW(
+        reinterpret_cast<LPCWSTR>(path.utf16()),
+        FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE
+            | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL
+            | FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr);
+    if (!file || file == INVALID_HANDLE_VALUE)
+        return true;
+    BY_HANDLE_FILE_INFORMATION fileInformation = {};
+    const bool safe =
+        ::GetFileInformationByHandle(
+            file, &fileInformation)
+        && fileInformation.nNumberOfLinks == 1;
+    ::CloseHandle(file);
+    return !safe;
+#elif defined(Q_OS_UNIX)
+    struct stat fileInformation;
+    const QByteArray path = QFile::encodeName(
+        information.absoluteFilePath());
+    if (::lstat(path.constData(), &fileInformation) != 0)
+        return errno != ENOENT;
+    return S_ISREG(fileInformation.st_mode)
+        && fileInformation.st_nlink != 1;
 #else
     return false;
 #endif
@@ -352,7 +387,9 @@ bool windowsCurrentUserAcl(
     QByteArray *userStorage,
     QByteArray *aclStorage,
     PSID *userSid,
-    PACL *acl)
+    PACL *acl,
+    BYTE inheritanceFlags =
+        CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE)
 {
     if (!userStorage || !aclStorage
         || !userSid || !acl
@@ -372,8 +409,7 @@ bool windowsCurrentUserAcl(
                *acl, aclSize, ACL_REVISION)
         && ::AddAccessAllowedAceEx(
             *acl, ACL_REVISION,
-            CONTAINER_INHERIT_ACE
-                | OBJECT_INHERIT_ACE,
+            inheritanceFlags,
             FILE_ALL_ACCESS, *userSid);
 }
 
@@ -705,6 +741,105 @@ bool windowsHandleIsPrivateCredentialDirectory(
         ::LocalFree(descriptor);
     return safe && userAllowed
         && allowedAceCount == 1;
+}
+
+bool windowsHandleIsPrivateCredentialFile(HANDLE handle)
+{
+    BY_HANDLE_FILE_INFORMATION fileInformation = {};
+    if (!windowsHandleIsUnredirectedFile(handle)
+        || !windowsHandleSupportsPersistentAcls(handle)
+        || !::GetFileInformationByHandle(
+            handle, &fileInformation)
+        || fileInformation.nNumberOfLinks != 1) {
+        return false;
+    }
+
+    QByteArray userStorage;
+    PSID userSid = nullptr;
+    if (!currentWindowsUserSid(
+            &userStorage, &userSid)) {
+        return false;
+    }
+    PSID owner = nullptr;
+    PACL acl = nullptr;
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    const DWORD result = ::GetSecurityInfo(
+        handle, SE_FILE_OBJECT,
+        OWNER_SECURITY_INFORMATION
+            | DACL_SECURITY_INFORMATION,
+        &owner, nullptr, &acl, nullptr,
+        &descriptor);
+    if (result != ERROR_SUCCESS)
+        return false;
+
+    SECURITY_DESCRIPTOR_CONTROL control = 0;
+    DWORD revision = 0;
+    bool safe = owner && ::EqualSid(owner, userSid)
+        && acl && acl->AceCount == 1
+        && ::GetSecurityDescriptorControl(
+            descriptor, &control, &revision)
+        && (control & SE_DACL_PROTECTED);
+    if (safe) {
+        void *rawAce = nullptr;
+        if (!::GetAce(acl, 0, &rawAce)) {
+            safe = false;
+        } else {
+            auto *header =
+                static_cast<ACE_HEADER *>(rawAce);
+            auto *ace =
+                static_cast<ACCESS_ALLOWED_ACE *>(
+                    rawAce);
+            safe = header->AceType
+                    == ACCESS_ALLOWED_ACE_TYPE
+                && !(header->AceFlags
+                     & (INHERITED_ACE
+                        | OBJECT_INHERIT_ACE
+                        | CONTAINER_INHERIT_ACE
+                        | INHERIT_ONLY_ACE
+                        | NO_PROPAGATE_INHERIT_ACE))
+                && ::IsValidSid(&ace->SidStart)
+                && ::EqualSid(&ace->SidStart, userSid)
+                && (ace->Mask & FILE_ALL_ACCESS)
+                    == FILE_ALL_ACCESS;
+        }
+    }
+    if (descriptor)
+        ::LocalFree(descriptor);
+    return safe;
+}
+
+bool hardenWindowsCredentialFile(const QString &path)
+{
+    ScopedWindowsHandle file =
+        openWindowsCredentialFile(
+            path,
+            FILE_READ_ATTRIBUTES | READ_CONTROL
+                | WRITE_DAC);
+    if (!file.isValid()
+        || !windowsHandleIsUnredirectedFile(
+            file.get())
+        || !windowsHandleSupportsPersistentAcls(
+            file.get())) {
+        return false;
+    }
+
+    QByteArray userStorage;
+    QByteArray aclStorage;
+    PSID userSid = nullptr;
+    PACL acl = nullptr;
+    if (!windowsCurrentUserAcl(
+            &userStorage, &aclStorage,
+            &userSid, &acl, 0)) {
+        return false;
+    }
+    const DWORD result = ::SetSecurityInfo(
+        file.get(), SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION
+            | PROTECTED_DACL_SECURITY_INFORMATION,
+        nullptr, nullptr, acl, nullptr);
+    return result == ERROR_SUCCESS
+        && windowsHandleIsPrivateCredentialFile(
+            file.get());
 }
 
 bool validateWindowsPrivateCredentialDirectory(
@@ -1098,6 +1233,250 @@ QString credentialStateDirectory()
     return stablePath;
 }
 
+bool credentialScratchDirectoryIsPrivate(
+    const QString &path)
+{
+#ifdef Q_OS_WIN
+    return validateWindowsPrivateCredentialDirectory(path);
+#else
+    return credentialRootIsSecure(QFileInfo(path));
+#endif
+}
+
+QString credentialScratchRoot(
+#ifdef Q_OS_WIN
+    ScopedWindowsHandle *rootDirectoryHandle,
+    ScopedWindowsHandle *applicationDirectoryHandle,
+    ScopedWindowsHandle *lockDirectoryHandle
+#endif
+)
+{
+#ifdef Q_OS_WIN
+    return credentialStateDirectory(
+        rootDirectoryHandle,
+        applicationDirectoryHandle,
+        lockDirectoryHandle);
+#else
+    return credentialStateDirectory();
+#endif
+}
+
+QString credentialScratchCleanupLockPath(
+    const QString &root)
+{
+    return QDir(root).filePath(
+        QStringLiteral(
+            ".gc-credential-scratch-cleanup.lock"));
+}
+
+bool credentialScratchLockOwnerIsRunning(
+    QLockFile *lock)
+{
+    if (!lock)
+        return true;
+    qint64 processId = 0;
+    QString hostName;
+    QString applicationName;
+    const bool readable = lock->getLockInfo(
+            &processId, &hostName,
+            &applicationName);
+    if (!readable || processId <= 0
+        || hostName != QSysInfo::machineHostName()) {
+        return true;
+    }
+    Q_UNUSED(applicationName)
+#ifdef Q_OS_UNIX
+    errno = 0;
+    const int processResult = ::kill(
+        static_cast<pid_t>(processId), 0);
+    if (processResult == 0) {
+        return true;
+    }
+    return errno != ESRCH;
+#elif defined(Q_OS_WIN)
+    if (processId > static_cast<qint64>(MAXDWORD))
+        return true;
+    ScopedWindowsHandle process(::OpenProcess(
+        SYNCHRONIZE, FALSE,
+        static_cast<DWORD>(processId)));
+    if (!process.isValid())
+        return ::GetLastError() != ERROR_INVALID_PARAMETER;
+    return ::WaitForSingleObject(
+               process.get(), 0) == WAIT_TIMEOUT;
+#else
+    return true;
+#endif
+}
+
+void removeStaleCredentialScratchDirectories(
+    const QString &root)
+{
+    const QFileInfoList entries = QDir(root).entryInfoList(
+        QStringList{
+            QStringLiteral(
+                ".gc-credential-scratch-*")
+        },
+        QDir::Dirs | QDir::Hidden
+            | QDir::NoDotAndDotDot
+            | QDir::NoSymLinks);
+    for (const QFileInfo &entry : entries) {
+        const QString path = entry.absoluteFilePath();
+        const bool privateDirectory =
+            credentialScratchDirectoryIsPrivate(path);
+        if (!privateDirectory)
+            continue;
+        QLockFile activeLock(
+            QDir(path).filePath(
+                QStringLiteral(".active.lock")));
+        activeLock.setStaleLockTime(0);
+        bool acquired = activeLock.tryLock(0);
+        if (!acquired
+            && !credentialScratchLockOwnerIsRunning(
+                &activeLock)
+            && QFile::remove(
+                QDir(path).filePath(
+                    QStringLiteral(".active.lock")))) {
+            acquired = activeLock.tryLock(0);
+        }
+        if (!acquired)
+            continue;
+        activeLock.unlock();
+        QDir(path).removeRecursively();
+    }
+}
+
+class CredentialScratchDirectory
+{
+public:
+    CredentialScratchDirectory()
+    {
+        root_ = credentialScratchRoot(
+#ifdef Q_OS_WIN
+            &rootDirectoryHandle_,
+            &applicationDirectoryHandle_,
+            &lockDirectoryHandle_
+#endif
+        );
+        if (root_.isEmpty())
+            return;
+
+        QLockFile cleanupLock(
+            credentialScratchCleanupLockPath(root_));
+        cleanupLock.setStaleLockTime(0);
+        if (!cleanupLock.tryLock(5000)) {
+            if (credentialScratchLockOwnerIsRunning(
+                    &cleanupLock)
+                || !QFile::remove(
+                    credentialScratchCleanupLockPath(
+                        root_))
+                || !cleanupLock.tryLock(5000)) {
+                return;
+            }
+        }
+        credentialCrashPoint(
+            QByteArrayLiteral(
+                "cleanup:scratch-lock-acquired"));
+        removeStaleCredentialScratchDirectories(root_);
+
+        static const QString processNonce =
+            QUuid::createUuid().toString(
+                QUuid::WithoutBraces);
+        static std::atomic<quint64> sequence{0};
+        const quint64 current =
+            sequence.fetch_add(
+                1, std::memory_order_relaxed);
+#ifdef Q_OS_WIN
+        for (int attempt = 0; attempt < 16; ++attempt) {
+            const QString name = QStringLiteral(
+                ".gc-credential-scratch-%1-%2-%3")
+                .arg(processNonce)
+                .arg(current)
+                .arg(QUuid::createUuid().toString(
+                    QUuid::WithoutBraces));
+            bool created = false;
+            if (createWindowsCredentialDirectory(
+                    root_, name, &created)
+                && created) {
+                path_ = QDir(root_).filePath(name);
+                break;
+            }
+        }
+#else
+        directory_ = std::make_unique<QTemporaryDir>(
+            QDir(root_).filePath(
+                QStringLiteral(
+                    ".gc-credential-scratch-%1-%2-XXXXXX")
+                    .arg(processNonce)
+                    .arg(current)));
+        if (!directory_->isValid()
+            || !credentialScratchDirectoryIsPrivate(
+                directory_->path())) {
+            directory_.reset();
+            return;
+        }
+        path_ = directory_->path();
+#endif
+        if (path_.isEmpty()
+            || !credentialScratchDirectoryIsPrivate(path_)) {
+            directory_.reset();
+            return;
+        }
+
+        activeLock_ = std::make_unique<QLockFile>(
+            QDir(path_).filePath(
+                QStringLiteral(".active.lock")));
+        activeLock_->setStaleLockTime(0);
+        if (!activeLock_->tryLock(0)) {
+            activeLock_.reset();
+            directory_.reset();
+            return;
+        }
+#ifndef Q_OS_WIN
+        directory_->setAutoRemove(false);
+#endif
+        valid_ = true;
+    }
+
+    ~CredentialScratchDirectory()
+    {
+        if (path_.isEmpty())
+            return;
+        QLockFile cleanupLock(
+            credentialScratchCleanupLockPath(root_));
+        cleanupLock.setStaleLockTime(0);
+        const bool cleanupLocked =
+            cleanupLock.tryLock(5000);
+        if (activeLock_ && activeLock_->isLocked())
+            activeLock_->unlock();
+        QDir(path_).removeRecursively();
+        if (cleanupLocked)
+            cleanupLock.unlock();
+    }
+
+    bool isValid() const
+    {
+        return valid_;
+    }
+
+    QString path() const
+    {
+        return valid_ ? path_ : QString();
+    }
+
+private:
+    bool valid_ = false;
+    QString root_;
+    QString path_;
+    std::unique_ptr<QTemporaryDir> directory_;
+    std::unique_ptr<QLockFile> activeLock_;
+#ifdef Q_OS_WIN
+    ScopedWindowsHandle rootDirectoryHandle_;
+    ScopedWindowsHandle applicationDirectoryHandle_;
+    ScopedWindowsHandle lockDirectoryHandle_;
+#endif
+    Q_DISABLE_COPY(CredentialScratchDirectory)
+};
+
 QString canonicalSettingsFileName(QSettings *settings)
 {
     if (!settings || settings->fileName().isEmpty())
@@ -1194,6 +1573,44 @@ public:
     QString deletionPath() const
     {
         return stateBasePath_ + QStringLiteral(".deletion");
+    }
+
+    QString cleanupPath(
+        QSettings *settings,
+        const QString &plaintextKey) const
+    {
+        const QString settingsIdentity =
+            canonicalSettingsFileName(settings);
+        if (stateBasePath_.isEmpty()
+            || settingsIdentity.isEmpty()
+            || plaintextKey.isEmpty()) {
+            return {};
+        }
+        const QString group = settings->group();
+        QString absoluteKey = group.isEmpty()
+            ? plaintextKey
+            : group + QLatin1Char('/') + plaintextKey;
+#ifdef Q_OS_WIN
+        if (settings->format() == QSettings::IniFormat)
+            absoluteKey = absoluteKey.toCaseFolded();
+#endif
+        QByteArray sourceIdentity =
+            QByteArrayLiteral("v1");
+        const auto appendField =
+            [&sourceIdentity](const QByteArray &field) {
+                sourceIdentity.append('\0');
+                sourceIdentity.append(
+                    QByteArray::number(field.size()));
+                sourceIdentity.append('\0');
+                sourceIdentity.append(field);
+            };
+        appendField(settingsIdentity.toUtf8());
+        appendField(absoluteKey.toUtf8());
+        const QByteArray digest = QCryptographicHash::hash(
+            sourceIdentity, QCryptographicHash::Sha256).toHex();
+        return stateBasePath_ + QLatin1Char('.')
+            + QString::fromLatin1(digest)
+            + QStringLiteral(".cleanup");
     }
 
 private:
@@ -1530,10 +1947,13 @@ bool credentialDirectoryTreeIsDurable(
 #endif
 }
 
-bool syncCredentialFile(const QString &path)
+bool syncCredentialFile(
+    const QString &path,
+    const QByteArray &failureStage =
+        QByteArrayLiteral("file"))
 {
     if (credentialDurabilityFailure(
-            QByteArrayLiteral("file"))) {
+            failureStage)) {
         return false;
     }
 #ifdef Q_OS_UNIX
@@ -1569,10 +1989,13 @@ bool syncCredentialFile(const QString &path)
 #endif
 }
 
-bool syncCredentialDirectory(const QString &path)
+bool syncCredentialDirectory(
+    const QString &path,
+    const QByteArray &failureStage =
+        QByteArrayLiteral("directory"))
 {
     if (credentialDurabilityFailure(
-            QByteArrayLiteral("directory"))) {
+            failureStage)) {
         return false;
     }
 #ifdef Q_OS_UNIX
@@ -1584,10 +2007,16 @@ bool syncCredentialDirectory(const QString &path)
 #endif
 }
 
-bool credentialFileIsDurable(const QString &path)
+bool credentialFileIsDurable(
+    const QString &path,
+    const QByteArray &fileFailureStage =
+        QByteArrayLiteral("file"),
+    const QByteArray &directoryFailureStage =
+        QByteArrayLiteral("directory"))
 {
-    return syncCredentialFile(path)
-        && syncCredentialDirectory(path);
+    return syncCredentialFile(path, fileFailureStage)
+        && syncCredentialDirectory(
+            path, directoryFailureStage);
 }
 
 bool replaceCredentialFile(
@@ -1665,6 +2094,274 @@ bool readCredentialFile(
     }
     *contents = read;
     return true;
+}
+
+QByteArray credentialSourceFingerprint(
+    const QString &path)
+{
+    QByteArray metadata = QByteArrayLiteral("v1");
+    const auto appendField = [&metadata](quint64 value) {
+        metadata.append('\0');
+        metadata.append(QByteArray::number(value));
+    };
+#ifdef Q_OS_UNIX
+    struct stat information;
+    const QByteArray encoded = QFile::encodeName(path);
+    if (::lstat(encoded.constData(), &information) != 0
+        || !S_ISREG(information.st_mode)
+        || information.st_nlink != 1) {
+        return {};
+    }
+    metadata.append(QByteArrayLiteral("\0unix"));
+    appendField(static_cast<quint64>(information.st_dev));
+    appendField(static_cast<quint64>(information.st_ino));
+    appendField(static_cast<quint64>(information.st_size));
+#ifdef Q_OS_DARWIN
+    appendField(static_cast<quint64>(
+        information.st_mtimespec.tv_sec));
+    appendField(static_cast<quint64>(
+        information.st_mtimespec.tv_nsec));
+#else
+    appendField(static_cast<quint64>(
+        information.st_mtim.tv_sec));
+    appendField(static_cast<quint64>(
+        information.st_mtim.tv_nsec));
+#endif
+#elif defined(Q_OS_WIN)
+    ScopedWindowsHandle file =
+        openWindowsCredentialFile(path, FILE_READ_ATTRIBUTES);
+    BY_HANDLE_FILE_INFORMATION information;
+    if (!file.isValid()
+        || !windowsHandleIsUnredirectedFile(file.get())
+        || !::GetFileInformationByHandle(
+            file.get(), &information)
+        || information.nNumberOfLinks != 1) {
+        return {};
+    }
+    metadata.append(QByteArrayLiteral("\0windows"));
+    appendField(static_cast<quint64>(
+        information.dwVolumeSerialNumber));
+    appendField(
+        (static_cast<quint64>(
+             information.nFileIndexHigh) << 32)
+        | information.nFileIndexLow);
+    appendField(
+        (static_cast<quint64>(
+             information.nFileSizeHigh) << 32)
+        | information.nFileSizeLow);
+    appendField(
+        (static_cast<quint64>(
+             information.ftLastWriteTime.dwHighDateTime) << 32)
+        | information.ftLastWriteTime.dwLowDateTime);
+#else
+    Q_UNUSED(path)
+    return {};
+#endif
+    return QCryptographicHash::hash(
+        metadata, QCryptographicHash::Sha256).toHex();
+}
+
+bool isCredentialSourceFingerprint(
+    const QByteArray &value)
+{
+    if (value.size() != 64)
+        return false;
+    for (const char character : value) {
+        if (!((character >= '0' && character <= '9')
+              || (character >= 'a' && character <= 'f'))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+enum class PlaintextCleanupPhase
+{
+    Intent,
+    Authorized,
+    Conflict,
+    Complete
+};
+
+QByteArray plaintextCleanupPhaseName(
+    PlaintextCleanupPhase phase)
+{
+    switch (phase) {
+    case PlaintextCleanupPhase::Intent:
+        return QByteArrayLiteral("intent");
+    case PlaintextCleanupPhase::Authorized:
+        return QByteArrayLiteral("authorized");
+    case PlaintextCleanupPhase::Conflict:
+        return QByteArrayLiteral("conflict");
+    case PlaintextCleanupPhase::Complete:
+        return QByteArrayLiteral("complete");
+    }
+    return {};
+}
+
+PlaintextCleanupPhase plaintextCleanupPhase(
+    const QByteArray &name,
+    bool *valid)
+{
+    if (valid) *valid = true;
+    if (name == QByteArrayLiteral("intent"))
+        return PlaintextCleanupPhase::Intent;
+    if (name == QByteArrayLiteral("authorized"))
+        return PlaintextCleanupPhase::Authorized;
+    if (name == QByteArrayLiteral("conflict"))
+        return PlaintextCleanupPhase::Conflict;
+    if (name == QByteArrayLiteral("complete"))
+        return PlaintextCleanupPhase::Complete;
+    if (valid) *valid = false;
+    return PlaintextCleanupPhase::Conflict;
+}
+
+struct PlaintextCleanupState
+{
+    bool readable = false;
+    bool present = false;
+    PlaintextCleanupPhase phase =
+        PlaintextCleanupPhase::Conflict;
+    QByteArray transaction;
+    QByteArray sourceFingerprint;
+};
+
+QByteArray plaintextCleanupContents(
+    PlaintextCleanupPhase phase,
+    const QByteArray &transaction,
+    const QByteArray &sourceFingerprint)
+{
+    const QByteArray phaseName =
+        plaintextCleanupPhaseName(phase);
+    const bool hasFingerprint =
+        phase == PlaintextCleanupPhase::Intent
+        || phase == PlaintextCleanupPhase::Authorized;
+    const QByteArray fingerprint =
+        hasFingerprint
+        ? sourceFingerprint : QByteArrayLiteral("-");
+    if (phaseName.isEmpty()
+        || !isCredentialTransaction(transaction)
+        || (hasFingerprint
+            && !isCredentialSourceFingerprint(
+                sourceFingerprint))) {
+        return {};
+    }
+    return QByteArrayLiteral("v1 ") + phaseName
+        + QByteArrayLiteral(" ") + transaction
+        + QByteArrayLiteral(" ") + fingerprint
+        + QByteArrayLiteral("\n");
+}
+
+PlaintextCleanupState readPlaintextCleanupState(
+    const QString &path)
+{
+    if (path.isEmpty())
+        return {};
+    const QFileInfo information(path);
+    if (credentialPathIsRedirected(information))
+        return {};
+    if (!information.exists())
+        return {
+            true, false, PlaintextCleanupPhase::Conflict,
+            QByteArray(), QByteArray()
+        };
+    if (!information.isFile())
+        return {};
+
+    QByteArray contents;
+    if (!readCredentialFile(path, 160, &contents))
+        return {};
+    const QList<QByteArray> fields =
+        contents.trimmed().split(' ');
+    if (fields.size() != 4
+        || fields.at(0) != QByteArrayLiteral("v1")
+        || !isCredentialTransaction(fields.at(2))) {
+        return {};
+    }
+    bool validPhase = false;
+    const PlaintextCleanupPhase phase =
+        plaintextCleanupPhase(fields.at(1), &validPhase);
+    const bool hasFingerprint =
+        phase == PlaintextCleanupPhase::Intent
+        || phase == PlaintextCleanupPhase::Authorized;
+    const QByteArray fingerprint =
+        hasFingerprint
+        ? fields.at(3) : QByteArray();
+    if (!validPhase
+        || (!hasFingerprint
+            && fields.at(3) != QByteArrayLiteral("-"))
+        || contents != plaintextCleanupContents(
+            phase, fields.at(2), fingerprint)) {
+        return {};
+    }
+    return {true, true, phase, fields.at(2), fingerprint};
+}
+
+bool writePlaintextCleanupState(
+    const QString &path,
+    PlaintextCleanupPhase phase,
+    const QByteArray &transaction,
+    const QByteArray &sourceFingerprint = QByteArray())
+{
+    const QByteArray contents = plaintextCleanupContents(
+        phase, transaction, sourceFingerprint);
+    if (path.isEmpty() || contents.isEmpty())
+        return false;
+    const QFileInfo existing(path);
+    if (credentialPathIsRedirected(existing)
+        || (existing.exists() && !existing.isFile())) {
+        return false;
+    }
+    if (!replaceCredentialFile(path, contents))
+        return false;
+#ifdef Q_OS_UNIX
+    if (!QFile::setPermissions(
+            path,
+            QFileDevice::ReadOwner
+            | QFileDevice::WriteOwner)) {
+        return false;
+    }
+#endif
+    if (!credentialFileIsDurable(
+            path,
+            QByteArrayLiteral("cleanup-file"),
+            QByteArrayLiteral("cleanup-directory"))) {
+        return false;
+    }
+    const PlaintextCleanupState persisted =
+        readPlaintextCleanupState(path);
+    const bool committed = persisted.readable
+        && persisted.present
+        && persisted.phase == phase
+        && persisted.transaction == transaction
+        && persisted.sourceFingerprint
+            == ((phase == PlaintextCleanupPhase::Intent
+                 || phase == PlaintextCleanupPhase::Authorized)
+                ? sourceFingerprint : QByteArray());
+    if (committed) {
+        credentialCrashPoint(
+            QByteArrayLiteral("cleanup:")
+            + plaintextCleanupPhaseName(phase));
+    }
+    return committed;
+}
+
+bool authorizePlaintextCleanupState(
+    const QString &path,
+    const QByteArray &transaction)
+{
+    const PlaintextCleanupState state =
+        readPlaintextCleanupState(path);
+    if (!state.readable || !state.present
+        || state.phase != PlaintextCleanupPhase::Intent
+        || state.transaction != transaction
+        || !isCredentialSourceFingerprint(
+            state.sourceFingerprint)) {
+        return false;
+    }
+    return writePlaintextCleanupState(
+        path, PlaintextCleanupPhase::Authorized,
+        transaction, state.sourceFingerprint);
 }
 
 CredentialDeletionState readCredentialDeletionState(
@@ -2083,19 +2780,407 @@ ParsedLocationClaim parseLocationClaim(
     };
 }
 
-bool removeExactSetting(
+QString absoluteExactSettingKey(
     QSettings *settings,
     const QString &key)
 {
-    std::unique_ptr<QSettings> exact =
-        freshExactSettings(settings);
-    if (!exact)
+    if (!settings)
+        return {};
+    const QString group = settings->group();
+    return group.isEmpty()
+        ? key
+        : group + QLatin1Char('/') + key;
+}
+
+bool exactSettingKeysEqual(
+    QSettings::Format format,
+    const QString &left,
+    const QString &right)
+{
+#ifdef Q_OS_WIN
+    if (format == QSettings::IniFormat) {
+        return left.compare(
+                   right, Qt::CaseInsensitive) == 0;
+    }
+#else
+    Q_UNUSED(format)
+#endif
+    return left == right;
+}
+
+constexpr qint64 maximumCredentialSettingsBytes =
+    64LL * 1024LL * 1024LL;
+
+bool openPrivateCredentialTemporaryFile(
+    QTemporaryFile *file)
+{
+    if (!file || !file->open())
         return false;
-    exact->remove(key);
-    exact->sync();
-    CredentialSettings::hardenSettingsFile(settings);
-    return exact->status() == QSettings::NoError
-        && !exact->contains(key);
+#ifdef Q_OS_WIN
+    if (!hardenWindowsCredentialFile(file->fileName()))
+        return false;
+#else
+    if (!file->setPermissions(
+            QFileDevice::ReadOwner
+            | QFileDevice::WriteOwner)) {
+        return false;
+    }
+#endif
+    return true;
+}
+
+struct ExactSettingsSnapshot
+{
+    bool readable = false;
+    bool sourcePresent = false;
+    QSettings::SettingsMap values;
+    QByteArray sourceFingerprint;
+};
+
+ExactSettingsSnapshot readExactSettingsSnapshot(
+    const QString &sourcePath,
+    QSettings::Format format)
+{
+    const QFileInfo sourceInformation(sourcePath);
+    if (sourcePath.isEmpty()
+        || credentialPathIsRedirected(sourceInformation)) {
+        return {};
+    }
+    if (!sourceInformation.exists())
+        return {true, false, {}, {}};
+    if (!sourceInformation.isFile())
+        return {};
+
+    const QByteArray fingerprintBefore =
+        credentialSourceFingerprint(sourcePath);
+    QByteArray contents;
+    QByteArray verification;
+    if (!isCredentialSourceFingerprint(fingerprintBefore)
+        || !readCredentialFile(
+            sourcePath,
+            maximumCredentialSettingsBytes + 1,
+            &contents)
+        || contents.size()
+            > maximumCredentialSettingsBytes
+        || !readCredentialFile(
+            sourcePath,
+            maximumCredentialSettingsBytes + 1,
+            &verification)
+        || contents != verification
+        || credentialSourceFingerprint(sourcePath)
+            != fingerprintBefore) {
+        return {};
+    }
+
+    QSettings::SettingsMap values;
+    const auto parseSnapshot =
+        [format](
+            const QString &path,
+            QSettings::SettingsMap *parsedValues) {
+            if (!parsedValues)
+                return false;
+            QSettings parsed(path, format);
+            parsed.setFallbacksEnabled(false);
+            parsed.setAtomicSyncRequired(true);
+            parsed.sync();
+            if (parsed.status() != QSettings::NoError)
+                return false;
+            const QStringList keys = parsed.allKeys();
+            for (const QString &key : keys)
+                parsedValues->insert(
+                    key, parsed.value(key));
+            return parsed.status() == QSettings::NoError;
+        };
+
+    CredentialScratchDirectory scratch;
+    if (!scratch.isValid())
+        return {};
+    auto staging = std::make_unique<QTemporaryFile>(
+        QDir(scratch.path()).filePath(
+            QStringLiteral(
+                ".gc-credential-snapshot-XXXXXX.tmp")));
+    staging->setAutoRemove(true);
+    if (!openPrivateCredentialTemporaryFile(staging.get()))
+        return {};
+
+#ifdef Q_OS_UNIX
+    const QString namedPath = staging->fileName();
+    const QByteArray encodedNamedPath =
+        QFile::encodeName(namedPath);
+    if (::unlink(encodedNamedPath.constData()) != 0)
+        return {};
+    staging->setAutoRemove(false);
+    struct stat anonymousInformation;
+    if (::fstat(
+            staging->handle(), &anonymousInformation) != 0
+        || !S_ISREG(anonymousInformation.st_mode)
+        || anonymousInformation.st_nlink != 0) {
+        return {};
+    }
+    if (staging->write(contents) != contents.size()
+        || !staging->flush()) {
+        return {};
+    }
+#ifdef GC_CREDENTIAL_STORE_CUSTOM_FACTORY
+    if (qEnvironmentVariableIsSet(
+            "GC_CREDENTIAL_TEST_FIXED_SNAPSHOT_TIME")) {
+        const struct timespec fixedTime[2] = {
+            {1700000000, 123456789},
+            {1700000000, 123456789}
+        };
+        if (::futimens(
+                staging->handle(), fixedTime) != 0) {
+            return {};
+        }
+    }
+#endif
+    if (!staging->seek(0))
+        return {};
+    credentialCrashPoint(
+        QByteArrayLiteral("cleanup:snapshot-staged"));
+    QString descriptorDirectory;
+    if (QFileInfo::exists(
+            QStringLiteral("/proc/self/fd"))) {
+        descriptorDirectory =
+            QStringLiteral("/proc/self/fd");
+    } else if (QFileInfo::exists(
+                   QStringLiteral("/dev/fd"))) {
+        descriptorDirectory = QStringLiteral("/dev/fd");
+    } else {
+        return {};
+    }
+    const QString descriptorPath =
+        QDir(descriptorDirectory).filePath(
+            QString::number(staging->handle()));
+    const QString descriptorAlias =
+        QDir(scratch.path()).filePath(
+            QStringLiteral("snapshot-view"));
+    const QByteArray encodedDescriptorPath =
+        QFile::encodeName(descriptorPath);
+    const QByteArray encodedDescriptorAlias =
+        QFile::encodeName(descriptorAlias);
+    if (::symlink(
+            encodedDescriptorPath.constData(),
+            encodedDescriptorAlias.constData()) != 0) {
+        return {};
+    }
+    const bool parsed =
+        parseSnapshot(descriptorAlias, &values);
+    if (::unlink(encodedDescriptorAlias.constData()) != 0
+        || !parsed) {
+        return {};
+    }
+#elif defined(Q_OS_WIN)
+    const QString namedPath = staging->fileName();
+    if (staging->write(contents) != contents.size()
+        || !staging->flush()
+        || !hardenWindowsCredentialFile(namedPath)) {
+        return {};
+    }
+    if (!parseSnapshot(namedPath, &values))
+        return {};
+    staging->setAutoRemove(false);
+    staging.reset();
+    if (!QFile::remove(namedPath))
+        return {};
+    credentialCrashPoint(
+        QByteArrayLiteral("cleanup:snapshot-staged"));
+#else
+    Q_UNUSED(contents)
+    return {};
+#endif
+
+    return {
+        true, true, values, fingerprintBefore
+    };
+}
+
+bool exactSettingsSnapshotValue(
+    const ExactSettingsSnapshot &snapshot,
+    QSettings::Format format,
+    const QString &key,
+    QVariant *value = nullptr)
+{
+    for (auto entry = snapshot.values.cbegin();
+         entry != snapshot.values.cend(); ++entry) {
+        if (!exactSettingKeysEqual(
+                format, entry.key(), key)) {
+            continue;
+        }
+        if (value) *value = entry.value();
+        return true;
+    }
+    return false;
+}
+
+ExactSetting readCredentialPlaintextSetting(
+    QSettings *settings,
+    const QString &key)
+{
+    if (!settings || key.isEmpty())
+        return {};
+    std::unique_ptr<QSettings> synchronized =
+        freshExactSettings(settings);
+    if (!synchronized)
+        return {};
+    synchronized->sync();
+    if (synchronized->status() != QSettings::NoError)
+        return {};
+#ifdef Q_OS_WIN
+    if (settings->format() == QSettings::NativeFormat
+        || settings->format()
+            == QSettings::Registry32Format
+        || settings->format()
+            == QSettings::Registry64Format) {
+        const bool present = synchronized->contains(key);
+        return {
+            true,
+            present,
+            present
+                ? synchronized->value(key) : QVariant()
+        };
+    }
+#endif
+    synchronized.reset();
+
+    const ExactSettingsSnapshot snapshot =
+        readExactSettingsSnapshot(
+            settings->fileName(), settings->format());
+    if (!snapshot.readable)
+        return {};
+    QVariant value;
+    const bool present = exactSettingsSnapshotValue(
+        snapshot, settings->format(),
+        absoluteExactSettingKey(settings, key), &value);
+    return {true, present, present ? value : QVariant()};
+}
+
+bool serializeExactSettingsMap(
+    const QString &targetPath,
+    QSettings::Format format,
+    const QSettings::SettingsMap &settings,
+    QByteArray *contents)
+{
+    if (!contents)
+        return false;
+    Q_UNUSED(targetPath)
+
+    CredentialScratchDirectory scratch;
+    if (!scratch.isValid())
+        return false;
+    auto staging = std::make_unique<QTemporaryFile>(
+        QDir(scratch.path()).filePath(
+            QStringLiteral(
+                ".gc-credential-settings-XXXXXX.tmp")));
+    staging->setAutoRemove(true);
+    if (!openPrivateCredentialTemporaryFile(staging.get()))
+        return false;
+    const QString stagingPath = staging->fileName();
+    staging->setAutoRemove(false);
+    staging.reset();
+
+    {
+        QSettings serialized(stagingPath, format);
+        serialized.setFallbacksEnabled(false);
+        serialized.setAtomicSyncRequired(true);
+        for (auto entry = settings.cbegin();
+             entry != settings.cend(); ++entry) {
+            serialized.setValue(entry.key(), entry.value());
+        }
+        serialized.sync();
+        if (serialized.status() != QSettings::NoError)
+            return false;
+    }
+
+#ifdef Q_OS_WIN
+    if (!hardenWindowsCredentialFile(stagingPath)) {
+        return false;
+    }
+#else
+    if (!QFile::setPermissions(
+            stagingPath,
+            QFileDevice::ReadOwner
+            | QFileDevice::WriteOwner)) {
+        return false;
+    }
+#endif
+    credentialCrashPoint(
+        QByteArrayLiteral("cleanup:settings-serialized"));
+    QFile serializedFile(stagingPath);
+    if (!serializedFile.open(QIODevice::ReadOnly)
+        || serializedFile.size() < 0
+        || serializedFile.size()
+            > maximumCredentialSettingsBytes) {
+        return false;
+    }
+    *contents = serializedFile.readAll();
+    return serializedFile.error() == QFileDevice::NoError
+        && contents->size() == serializedFile.size();
+}
+
+bool replaceExactSettingsMap(
+    QSettings *settings,
+    const QSettings::SettingsMap &values,
+    QString *error)
+{
+    if (error) error->clear();
+    if (!settings || settings->fileName().isEmpty()) {
+        if (error) {
+            *error = QStringLiteral(
+                "Credential settings path is unavailable");
+        }
+        return false;
+    }
+
+    QByteArray serialized;
+    if (!serializeExactSettingsMap(
+            settings->fileName(), settings->format(),
+            values, &serialized)) {
+        if (error) {
+            *error = QStringLiteral(
+                "Cannot stage credential settings");
+        }
+        return false;
+    }
+
+    ReplaceAtomicFileWriter replacement(settings->fileName());
+    if (!replacement.open()
+#ifdef Q_OS_WIN
+        || !hardenWindowsCredentialFile(
+            replacement.temporaryPath())
+#endif
+        || replacement.write(serialized)
+            != serialized.size()
+        || !replacement.flush()) {
+        replacement.cancelWriting();
+        if (error) {
+            *error = QStringLiteral(
+                "Cannot stage credential settings replacement");
+        }
+        return false;
+    }
+    if (!replacement.commit()) {
+        replacement.cancelWriting();
+        if (error) {
+            *error = QStringLiteral(
+                "Cannot publish credential settings replacement: %1")
+                .arg(replacement.errorString());
+        }
+        return false;
+    }
+
+    const bool hardened =
+        CredentialSettings::hardenSettingsFile(settings);
+    const bool durable =
+        credentialFileIsDurable(settings->fileName());
+    if (!hardened || !durable) {
+        if (error) {
+            *error = QStringLiteral(
+                "Credential settings replacement is not durable");
+        }
+        return false;
+    }
+    return true;
 }
 
 QString pendingRemovalGenerationKey(
@@ -2761,6 +3846,14 @@ bool CredentialSettings::hardenSettingsFile(QSettings *settings)
     if (!before.exists()) return true;
     if (!before.isFile() || before.isSymLink())
         return false;
+    struct stat beforeInformation;
+    const QByteArray encoded = QFile::encodeName(fileName);
+    if (::lstat(
+            encoded.constData(), &beforeInformation) != 0
+        || !S_ISREG(beforeInformation.st_mode)
+        || beforeInformation.st_nlink != 1) {
+        return false;
+    }
     const QString canonicalPath =
         before.canonicalFilePath();
     if (canonicalPath.isEmpty())
@@ -2773,6 +3866,7 @@ bool CredentialSettings::hardenSettingsFile(QSettings *settings)
         return false;
     }
     const QFileInfo after(fileName);
+    struct stat afterInformation;
     const QFileDevice::Permissions forbidden =
         QFileDevice::ReadGroup
         | QFileDevice::WriteGroup
@@ -2783,10 +3877,46 @@ bool CredentialSettings::hardenSettingsFile(QSettings *settings)
     const bool hardened =
         after.isFile() && !after.isSymLink()
         && after.canonicalFilePath() == canonicalPath
+        && ::lstat(
+               encoded.constData(), &afterInformation) == 0
+        && S_ISREG(afterInformation.st_mode)
+        && afterInformation.st_nlink == 1
+        && afterInformation.st_dev
+            == beforeInformation.st_dev
+        && afterInformation.st_ino
+            == beforeInformation.st_ino
         && !(after.permissions() & forbidden);
     if (!hardened) {
         qWarning() << "Cannot verify settings file permissions:"
                    << fileName;
+    }
+    return hardened;
+#elif defined(Q_OS_WIN)
+    if (!settings)
+        return false;
+    if (settings->format() == QSettings::NativeFormat
+        || settings->format()
+            == QSettings::Registry32Format
+        || settings->format()
+            == QSettings::Registry64Format) {
+        return true;
+    }
+    const QString fileName = settings->fileName();
+    if (fileName.isEmpty())
+        return false;
+    const QFileInfo information(fileName);
+    if (!information.exists())
+        return true;
+    if (!information.isFile()
+        || credentialPathIsRedirected(information)) {
+        return false;
+    }
+    const bool hardened =
+        hardenWindowsCredentialFile(fileName);
+    if (!hardened) {
+        qWarning()
+            << "Cannot restrict settings file DACL:"
+            << fileName;
     }
     return hardened;
 #else
@@ -2817,6 +3947,10 @@ QVariant CredentialSettings::value(
     CredentialOperationGuard operation(key);
     if (!operation)
         return defaultValue;
+    const QString cleanupPath =
+        operation.cleanupPath(settings, plaintextKey);
+    if (cleanupPath.isEmpty())
+        return defaultValue;
     CredentialDeletionState deletion =
         readCredentialDeletionState(operation.deletionPath());
     if (!deletion.readable) {
@@ -2837,7 +3971,8 @@ QVariant CredentialSettings::value(
         == PendingRemovalDisposition::Current) {
         completePendingRemoval(
             settings, key, credentialKey, plaintextKey,
-            removalKey, operation.revisionPath(),
+            removalKey, cleanupPath,
+            operation.revisionPath(),
             operation.deletionPath());
         return defaultValue;
     }
@@ -2858,7 +3993,8 @@ QVariant CredentialSettings::value(
         == CredentialDeletionPhase::Deleting) {
         completePendingRemoval(
             settings, key, credentialKey, plaintextKey,
-            removalKey, operation.revisionPath(),
+            removalKey, cleanupPath,
+            operation.revisionPath(),
             operation.deletionPath());
         return defaultValue;
     }
@@ -2866,15 +4002,26 @@ QVariant CredentialSettings::value(
         == CredentialDeletionPhase::Deleted) {
         completePendingRemoval(
             settings, key, credentialKey, plaintextKey,
-            removalKey, operation.revisionPath(),
+            removalKey, cleanupPath,
+            operation.revisionPath(),
             operation.deletionPath());
         return defaultValue;
     }
 
     const ExactSetting plaintext =
-        readExactSetting(settings, plaintextKey);
+        readCredentialPlaintextSetting(
+            settings, plaintextKey);
     if (!plaintext.readable)
         return defaultValue;
+    const QString expectedPlaintext =
+        plaintext.present
+        ? plaintext.value.toString() : QString();
+    if (!preparePlaintextCleanup(
+            settings, plaintextKey, cleanupPath,
+            expectedPlaintext)) {
+        invalidateCache(key);
+        return defaultValue;
+    }
 
     const CredentialRevision revision =
         currentCredentialRevision(operation.revisionPath());
@@ -2910,8 +4057,27 @@ QVariant CredentialSettings::value(
                   QStringLiteral("No credential store")};
         if (result.status
             == CredentialStore::Status::Success) {
-            const bool scrubbed = !plaintext.present
-                || scrubPlaintext(settings, plaintextKey);
+            bool scrubbed = !plaintext.present;
+            CredentialStore::ReadResult confirmed = result;
+            if (plaintext.present) {
+                confirmed = scrubPlaintextMatchingVault(
+                    settings, plaintextKey, key,
+                    cleanupPath,
+                    plaintext.value.toString(),
+                    result, &scrubbed,
+                    deletion.transaction);
+            }
+            if (confirmed.status
+                != CredentialStore::Status::Success) {
+                invalidateCache(key);
+                if (confirmed.status
+                    != CredentialStore::Status::NotFound) {
+                    reportStoreError(
+                        QStringLiteral("read"), credentialKey,
+                        confirmed.error);
+                }
+                return defaultValue;
+            }
             QByteArray finalRevision;
             if (scrubbed
                 && finalizeCredentialWrite(
@@ -2919,7 +4085,7 @@ QVariant CredentialSettings::value(
                     operation.deletionPath(),
                     deletion.transaction,
                     &finalRevision)) {
-                entry = {true, result.value, true,
+                entry = {true, confirmed.value, true,
                          finalRevision,
                          deletion.transaction};
                 cache(key, entry);
@@ -2928,7 +4094,7 @@ QVariant CredentialSettings::value(
             }
             if (confirmedVaultValue)
                 *confirmedVaultValue = true;
-            return result.value;
+            return confirmed.value;
         }
         invalidateCache(key);
         if (result.status
@@ -2945,7 +4111,12 @@ QVariant CredentialSettings::value(
         const QString legacy =
             plaintext.value.toString();
         if (legacy.isEmpty()) {
-            scrubPlaintext(settings, plaintextKey);
+            bool scrubbed = false;
+            scrubPlaintextMatchingVault(
+                settings, plaintextKey, key,
+                cleanupPath,
+                legacy,
+                result, &scrubbed);
             return defaultValue;
         }
 
@@ -2979,11 +4150,26 @@ QVariant CredentialSettings::value(
             credentialCrashPoint(
                 QByteArrayLiteral("vault:written"));
         }
-        if (!scrubPlaintext(settings, plaintextKey)) {
+        bool scrubbed = false;
+        const CredentialStore::ReadResult confirmed =
+            scrubPlaintextMatchingVault(
+                settings, plaintextKey, key,
+                cleanupPath,
+                legacy,
+                migrated, &scrubbed,
+                deletion.transaction);
+        if (confirmed.status
+                != CredentialStore::Status::Success
+            || !scrubbed) {
             invalidateCache(key);
-            if (confirmedVaultValue)
+            if (confirmedVaultValue
+                && confirmed.status
+                    == CredentialStore::Status::Success) {
                 *confirmedVaultValue = true;
-            return migrated.value;
+            }
+            return confirmed.status
+                    == CredentialStore::Status::Success
+                ? QVariant(confirmed.value) : defaultValue;
         }
         QByteArray finalRevision;
         if (!finalizeCredentialWrite(
@@ -2994,24 +4180,18 @@ QVariant CredentialSettings::value(
             invalidateCache(key);
             if (confirmedVaultValue)
                 *confirmedVaultValue = true;
-            return migrated.value;
+            return confirmed.value;
         }
-        cache(key, {true, migrated.value, true,
+        cache(key, {true, confirmed.value, true,
                     finalRevision,
                     deletion.transaction});
         if (confirmedVaultValue)
             *confirmedVaultValue = true;
-        return migrated.value;
+        return confirmed.value;
     }
 
     if (deletion.phase
         == CredentialDeletionPhase::Replacing) {
-        const bool scrubbed = !plaintext.present
-            || scrubPlaintext(settings, plaintextKey);
-        if (!scrubbed) {
-            invalidateCache(key);
-            return defaultValue;
-        }
         if (haveCached && entry.present
             && !entry.persisted) {
             return entry.value;
@@ -3025,13 +4205,35 @@ QVariant CredentialSettings::value(
                   QStringLiteral("No credential store")};
         if (result.status
             == CredentialStore::Status::Success) {
+            bool scrubbed = !plaintext.present;
+            CredentialStore::ReadResult confirmed = result;
+            if (plaintext.present) {
+                confirmed = scrubPlaintextMatchingVault(
+                    settings, plaintextKey, key,
+                    cleanupPath,
+                    plaintext.value.toString(),
+                    result, &scrubbed,
+                    deletion.transaction);
+            }
+            if (confirmed.status
+                != CredentialStore::Status::Success) {
+                invalidateCache(key);
+                if (confirmed.status
+                    != CredentialStore::Status::NotFound) {
+                    reportStoreError(
+                        QStringLiteral("read"), credentialKey,
+                        confirmed.error);
+                }
+                return defaultValue;
+            }
             QByteArray finalRevision;
-            if (finalizeCredentialWrite(
+            if (scrubbed
+                && finalizeCredentialWrite(
                     operation.revisionPath(),
                     operation.deletionPath(),
                     deletion.transaction,
                     &finalRevision)) {
-                entry = {true, result.value, true,
+                entry = {true, confirmed.value, true,
                          finalRevision,
                          deletion.transaction};
                 cache(key, entry);
@@ -3040,7 +4242,7 @@ QVariant CredentialSettings::value(
             }
             if (confirmedVaultValue)
                 *confirmedVaultValue = true;
-            return result.value;
+            return confirmed.value;
         }
         invalidateCache(key);
         if (result.status
@@ -3067,8 +4269,27 @@ QVariant CredentialSettings::value(
                   QStringLiteral("No credential store")};
         if (result.status
             == CredentialStore::Status::Success) {
-            const bool scrubbed = !plaintext.present
-                || scrubPlaintext(settings, plaintextKey);
+            bool scrubbed = !plaintext.present;
+            CredentialStore::ReadResult confirmed = result;
+            if (plaintext.present) {
+                confirmed = scrubPlaintextMatchingVault(
+                    settings, plaintextKey, key,
+                    cleanupPath,
+                    plaintext.value.toString(),
+                    result, &scrubbed,
+                    deletion.transaction);
+            }
+            if (confirmed.status
+                != CredentialStore::Status::Success) {
+                invalidateCache(key);
+                if (confirmed.status
+                    != CredentialStore::Status::NotFound) {
+                    reportStoreError(
+                        QStringLiteral("read"), credentialKey,
+                        confirmed.error);
+                }
+                return defaultValue;
+            }
             QByteArray finalRevision;
             if (scrubbed
                 && finalizeCredentialWrite(
@@ -3076,7 +4297,7 @@ QVariant CredentialSettings::value(
                     operation.deletionPath(),
                     deletion.transaction,
                     &finalRevision)) {
-                entry = {true, result.value, true,
+                entry = {true, confirmed.value, true,
                          finalRevision,
                          deletion.transaction};
                 cache(key, entry);
@@ -3085,7 +4306,7 @@ QVariant CredentialSettings::value(
             }
             if (confirmedVaultValue)
                 *confirmedVaultValue = true;
-            return result.value;
+            return confirmed.value;
         }
         if (result.status
             != CredentialStore::Status::NotFound) {
@@ -3096,8 +4317,15 @@ QVariant CredentialSettings::value(
             return defaultValue;
         }
 
-        const bool scrubbed = !plaintext.present
-            || scrubPlaintext(settings, plaintextKey);
+        bool scrubbed = !plaintext.present;
+        if (plaintext.present
+            && plaintext.value.toString().isEmpty()) {
+            scrubPlaintextMatchingVault(
+                settings, plaintextKey, key,
+                cleanupPath,
+                plaintext.value.toString(),
+                result, &scrubbed);
+        }
         QByteArray finalRevision;
         if (scrubbed
             && finalizeCredentialWrite(
@@ -3116,18 +4344,12 @@ QVariant CredentialSettings::value(
 
     if (deletion.phase
         == CredentialDeletionPhase::Active) {
-        const bool scrubbed = !plaintext.present
-            || scrubPlaintext(settings, plaintextKey);
-        if (!scrubbed) {
-            invalidateCache(key);
-            return defaultValue;
-        }
         if (haveCached && entry.present
             && !entry.persisted) {
             invalidateCache(key);
             haveCached = false;
         }
-        if (haveCached) {
+        if (haveCached && !plaintext.present) {
             if (confirmedVaultValue
                 && entry.present && entry.persisted) {
                 *confirmedVaultValue = true;
@@ -3144,22 +4366,43 @@ QVariant CredentialSettings::value(
                   QStringLiteral("No credential store")};
         if (result.status
             == CredentialStore::Status::Success) {
-            entry = {true, result.value, true,
+            bool scrubbed = !plaintext.present;
+            CredentialStore::ReadResult confirmed = result;
+            if (plaintext.present) {
+                confirmed = scrubPlaintextMatchingVault(
+                    settings, plaintextKey, key,
+                    cleanupPath,
+                    plaintext.value.toString(),
+                    result, &scrubbed);
+            }
+            if (confirmed.status
+                != CredentialStore::Status::Success) {
+                invalidateCache(key);
+                if (confirmed.status
+                    != CredentialStore::Status::NotFound) {
+                    reportStoreError(
+                        QStringLiteral("read"), credentialKey,
+                        confirmed.error);
+                }
+                return defaultValue;
+            }
+            entry = {true, confirmed.value, true,
                      revision.value,
                      deletion.transaction};
-            if (revision.readable) {
+            if (revision.readable && scrubbed) {
                 cache(key, entry);
             } else {
                 invalidateCache(key);
             }
             if (confirmedVaultValue)
                 *confirmedVaultValue = true;
-            return result.value;
+            return confirmed.value;
         }
         invalidateCache(key);
         if (result.status
             == CredentialStore::Status::NotFound) {
-            if (revision.readable) {
+            if (revision.readable
+                && !plaintext.present) {
                 cache(key, {false, QString(), false,
                             revision.value,
                             deletion.transaction});
@@ -3173,9 +4416,12 @@ QVariant CredentialSettings::value(
     }
 
     if (haveCached) {
-        if (entry.persisted && plaintext.present) {
-            scrubPlaintext(settings, plaintextKey);
+        if (plaintext.present) {
+            invalidateCache(key);
+            haveCached = false;
         }
+    }
+    if (haveCached) {
         if (entry.present) {
             if (confirmedVaultValue && entry.persisted)
                 *confirmedVaultValue = true;
@@ -3191,10 +4437,28 @@ QVariant CredentialSettings::value(
               CredentialStore::Status::Unavailable,
               QString(), QStringLiteral("No credential store")};
     if (result.status == CredentialStore::Status::Success) {
-        entry = {true, result.value, true,
+        bool scrubbed = !plaintext.present;
+        CredentialStore::ReadResult confirmed = result;
+        if (plaintext.present) {
+            confirmed = scrubPlaintextMatchingVault(
+                settings, plaintextKey, key,
+                cleanupPath,
+                plaintext.value.toString(),
+                result, &scrubbed);
+        }
+        if (confirmed.status
+            != CredentialStore::Status::Success) {
+            invalidateCache(key);
+            if (confirmed.status
+                != CredentialStore::Status::NotFound) {
+                reportStoreError(
+                    QStringLiteral("read"), credentialKey,
+                    confirmed.error);
+            }
+            return defaultValue;
+        }
+        entry = {true, confirmed.value, true,
                  revision.value, QByteArray()};
-        const bool scrubbed =
-            scrubPlaintext(settings, plaintextKey);
         if (revision.readable && scrubbed) {
             cache(key, entry);
         } else {
@@ -3208,9 +4472,20 @@ QVariant CredentialSettings::value(
     if (plaintext.present) {
         const QString legacy = plaintext.value.toString();
         if (legacy.isEmpty()) {
-            const bool scrubbed =
-                scrubPlaintext(settings, plaintextKey);
-            if (result.status
+            bool scrubbed = false;
+            const CredentialStore::ReadResult confirmed =
+                scrubPlaintextMatchingVault(
+                    settings, plaintextKey, key,
+                    cleanupPath,
+                    legacy,
+                    result, &scrubbed);
+            if (confirmed.status
+                == CredentialStore::Status::Success) {
+                if (confirmedVaultValue)
+                    *confirmedVaultValue = true;
+                return confirmed.value;
+            }
+            if (confirmed.status
                 == CredentialStore::Status::NotFound) {
                 if (scrubbed && revision.readable) {
                     entry.revision = revision.value;
@@ -3222,7 +4497,7 @@ QVariant CredentialSettings::value(
                 invalidateCache(key);
                 reportStoreError(
                     QStringLiteral("read"), credentialKey,
-                    result.error);
+                    confirmed.error);
             }
             return defaultValue;
         }
@@ -3267,9 +4542,21 @@ QVariant CredentialSettings::value(
             return fallbackAllowed
                 ? QVariant(legacy) : defaultValue;
         }
-        entry = {true, migrated.value, true,
+        bool scrubbed = false;
+        const CredentialStore::ReadResult confirmed =
+            scrubPlaintextMatchingVault(
+                settings, plaintextKey, key,
+                cleanupPath,
+                legacy,
+                migrated, &scrubbed);
+        if (confirmed.status
+            != CredentialStore::Status::Success) {
+            invalidateCache(key);
+            return defaultValue;
+        }
+        entry = {true, confirmed.value, true,
                  migrationRevision, QByteArray()};
-        if (scrubPlaintext(settings, plaintextKey)) {
+        if (scrubbed) {
             cache(key, entry);
         } else {
             invalidateCache(key);
@@ -3318,6 +4605,10 @@ bool CredentialSettings::setValueChecked(
     CredentialOperationGuard operation(key);
     if (!operation)
         return false;
+    const QString cleanupPath =
+        operation.cleanupPath(settings, plaintextKey);
+    if (cleanupPath.isEmpty())
+        return false;
     CredentialDeletionState deletion =
         readCredentialDeletionState(operation.deletionPath());
     if (!deletion.readable) {
@@ -3327,6 +4618,25 @@ bool CredentialSettings::setValueChecked(
     const QString removalKey =
         pendingRemovalKey(scopeId, credentialKey);
     const QString secret = value.toString();
+    if (!secret.isEmpty()) {
+        const ExactSetting plaintext =
+            readCredentialPlaintextSetting(
+                settings, plaintextKey);
+        if (!plaintext.readable) {
+            invalidateCache(key);
+            return false;
+        }
+        const QString expectedPlaintext =
+            plaintext.present
+            ? plaintext.value.toString() : QString();
+        if (!preparePlaintextCleanup(
+                settings, plaintextKey,
+                cleanupPath, expectedPlaintext,
+                true)) {
+            invalidateCache(key);
+            return false;
+        }
+    }
     if (secret.isEmpty()) {
         if (deletion.phase
                 == CredentialDeletionPhase::Deleting
@@ -3334,7 +4644,7 @@ bool CredentialSettings::setValueChecked(
                 == CredentialDeletionPhase::Deleted) {
             return completePendingRemoval(
                 settings, key, credentialKey,
-                plaintextKey, removalKey,
+                plaintextKey, removalKey, cleanupPath,
                 operation.revisionPath(),
                 operation.deletionPath());
         }
@@ -3360,7 +4670,7 @@ bool CredentialSettings::setValueChecked(
         }
         return completePendingRemoval(
             settings, key, credentialKey,
-            plaintextKey, removalKey,
+            plaintextKey, removalKey, cleanupPath,
             operation.revisionPath(),
             operation.deletionPath());
     }
@@ -3377,7 +4687,7 @@ bool CredentialSettings::setValueChecked(
         == PendingRemovalDisposition::Current) {
         if (!completePendingRemoval(
                 settings, key, credentialKey,
-                plaintextKey, removalKey,
+                plaintextKey, removalKey, cleanupPath,
                 operation.revisionPath(),
                 operation.deletionPath())) {
             return false;
@@ -3399,7 +4709,7 @@ bool CredentialSettings::setValueChecked(
         == CredentialDeletionPhase::Deleting) {
         if (!completePendingRemoval(
                 settings, key, credentialKey,
-                plaintextKey, removalKey,
+                plaintextKey, removalKey, cleanupPath,
                 operation.revisionPath(),
                 operation.deletionPath())) {
             return false;
@@ -3414,6 +4724,22 @@ bool CredentialSettings::setValueChecked(
         credentialWritePhaseFor(deletion.phase);
     const QByteArray transaction =
         newCredentialTransaction();
+    const ExactSetting plaintextAtWrite =
+        readCredentialPlaintextSetting(
+            settings, plaintextKey);
+    if (!plaintextAtWrite.readable) {
+        invalidateCache(key);
+        return false;
+    }
+    const QString expectedPlaintext =
+        plaintextAtWrite.present
+        ? plaintextAtWrite.value.toString() : QString();
+    if (!preparePlaintextCleanup(
+            settings, plaintextKey, cleanupPath,
+            expectedPlaintext, true, transaction)) {
+        invalidateCache(key);
+        return false;
+    }
     if (!writeCredentialDeletionState(
             operation.deletionPath(), writePhase,
             transaction)) {
@@ -3438,10 +4764,27 @@ bool CredentialSettings::setValueChecked(
         : CredentialStore::Status::Unavailable;
     const bool persisted = status == CredentialStore::Status::Success;
     bool scrubbed = false;
+    CredentialStore::ReadResult confirmed{
+        status,
+        persisted ? secret : QString(),
+        error
+    };
     if (persisted) {
         credentialCrashPoint(
             QByteArrayLiteral("vault:written"));
-        scrubbed = scrubPlaintext(settings, plaintextKey);
+        const bool requiresAuthorization =
+            plaintextAtWrite.present
+            && !expectedPlaintext.isEmpty();
+        if (requiresAuthorization
+            && !authorizePlaintextCleanupState(
+                cleanupPath, transaction)) {
+            invalidateCache(key);
+            return false;
+        }
+        confirmed = scrubPlaintextMatchingVault(
+            settings, plaintextKey, key, cleanupPath,
+            expectedPlaintext, confirmed, &scrubbed,
+            transaction, secret);
     } else {
         reportStoreError(
             QStringLiteral("write"), credentialKey, error);
@@ -3452,8 +4795,22 @@ bool CredentialSettings::setValueChecked(
                     transaction});
         return false;
     }
-    if (!scrubbed) {
+    if (confirmed.status
+            != CredentialStore::Status::Success
+        || confirmed.value != secret
+        || !scrubbed) {
         invalidateCache(key);
+        if (confirmed.status
+                != CredentialStore::Status::Success) {
+            reportStoreError(
+                QStringLiteral("write"), credentialKey,
+                confirmed.error);
+        } else if (confirmed.value != secret) {
+            reportStoreError(
+                QStringLiteral("write"), credentialKey,
+                QStringLiteral(
+                    "Credential was superseded before cleanup"));
+        }
         return false;
     }
 
@@ -3503,6 +4860,7 @@ bool CredentialSettings::completePendingRemoval(
     const QString &credentialKey,
     const QString &plaintextKey,
     const QString &removalKey,
+    const QString &cleanupPath,
     const QString &revisionPath,
     const QString &deletionPath)
 {
@@ -3572,7 +4930,8 @@ bool CredentialSettings::completePendingRemoval(
                     "Cannot read credential revision"));
             return false;
         }
-        if (!scrubPlaintext(settings, plaintextKey))
+        if (!scrubPlaintext(
+                settings, plaintextKey, cleanupPath))
             return false;
 
         QString error;
@@ -3612,7 +4971,8 @@ bool CredentialSettings::completePendingRemoval(
                     "Cannot read credential revision"));
             return false;
         }
-        if (!scrubPlaintext(settings, plaintextKey))
+        if (!scrubPlaintext(
+                settings, plaintextKey, cleanupPath))
             return false;
     } else {
         return false;
@@ -3653,7 +5013,8 @@ void CredentialSettings::migratePlaintext(
     for (const QString &key : credentialKeysForPrefix(prefix)) {
         const QString storedKey = plaintextKey(key);
         const ExactSetting stored =
-            readExactSetting(settings, storedKey);
+            readCredentialPlaintextSetting(
+                settings, storedKey);
         if (stored.readable && stored.present) {
             value(settings, scopeId, key, storedKey, QVariant());
         }
@@ -3709,23 +5070,637 @@ QString CredentialSettings::pendingRemovalKey(
         + QString::fromLatin1(digest);
 }
 
+bool CredentialSettings::preparePlaintextCleanup(
+    QSettings *settings,
+    const QString &key,
+    const QString &cleanupPath,
+    const QString &expectedPlaintext,
+    bool replaceInvalidState,
+    const QByteArray &writeTransaction)
+{
+    const auto fail = [settings](const QString &error) {
+        qWarning() << "Cannot prepare credential settings cleanup:"
+                   << (settings
+                       ? settings->fileName() : QString())
+                   << error;
+        return false;
+    };
+    if (!settings || key.isEmpty()
+        || cleanupPath.isEmpty()
+        || (!writeTransaction.isEmpty()
+            && !isCredentialTransaction(
+                writeTransaction))) {
+        return fail(QStringLiteral("invalid cleanup identity"));
+    }
+#ifdef Q_OS_WIN
+    if (settings->format() == QSettings::NativeFormat) {
+        return fail(QStringLiteral(
+            "native settings cleanup is unavailable"));
+    }
+#endif
+
+    std::unique_ptr<QSettings> synchronized =
+        freshExactSettings(settings);
+    if (!synchronized)
+        return fail(QStringLiteral(
+            "cannot open credential settings"));
+    synchronized->sync();
+    if (synchronized->status() != QSettings::NoError) {
+        return fail(QStringLiteral(
+            "cannot synchronize credential settings"));
+    }
+
+    const QString fileName = settings->fileName();
+    const QString absoluteKey =
+        absoluteExactSettingKey(settings, key);
+    if (fileName.isEmpty() || absoluteKey.isEmpty()) {
+        return fail(QStringLiteral(
+            "credential settings path is unavailable"));
+    }
+
+    synchronized.reset();
+    const ExactSettingsSnapshot preflight =
+        readExactSettingsSnapshot(
+            fileName, settings->format());
+    if (!preflight.readable)
+        return fail(QStringLiteral(
+            "cannot read credential settings"));
+    const bool synchronizedSourcePresent =
+        exactSettingsSnapshotValue(
+            preflight, settings->format(),
+            absoluteKey);
+    const PlaintextCleanupState observedState =
+        readPlaintextCleanupState(cleanupPath);
+    if (writeTransaction.isEmpty()
+        && !synchronizedSourcePresent
+        && observedState.readable
+        && (!observedState.present
+            || observedState.phase
+                == PlaintextCleanupPhase::Complete)) {
+        return true;
+    }
+
+    if (!preflight.sourcePresent
+        && !synchronizedSourcePresent) {
+        const PlaintextCleanupState &state =
+            observedState;
+        if (!state.readable && !replaceInvalidState) {
+            return fail(QStringLiteral(
+                "cannot read cleanup generation"));
+        }
+        const QByteArray transaction =
+            !writeTransaction.isEmpty()
+            ? writeTransaction
+            : (state.readable && state.present
+                   ? state.transaction
+                   : newCredentialTransaction());
+        if (writeTransaction.isEmpty()
+            && state.readable
+            && (!state.present
+                || state.phase
+                    == PlaintextCleanupPhase::Complete)) {
+            return true;
+        }
+        if (!writePlaintextCleanupState(
+                cleanupPath,
+                PlaintextCleanupPhase::Complete,
+                transaction)) {
+            return fail(QStringLiteral(
+                "cannot complete absent cleanup source"));
+        }
+        return true;
+    }
+
+    QLockFile settingsLock(
+        fileName + QStringLiteral(".lock"));
+    if (!settingsLock.tryLock(5000)) {
+        return fail(QStringLiteral(
+            "credential settings are busy"));
+    }
+
+    if (!hardenSettingsFile(settings)) {
+        return fail(QStringLiteral(
+            "cannot secure credential settings"));
+    }
+    const ExactSettingsSnapshot exact =
+        readExactSettingsSnapshot(
+            fileName, settings->format());
+    if (!exact.readable) {
+        return fail(QStringLiteral(
+            "cannot read credential settings"));
+    }
+
+    const PlaintextCleanupState state =
+        readPlaintextCleanupState(cleanupPath);
+    if (!state.readable && !replaceInvalidState) {
+        return fail(QStringLiteral(
+            "cannot read cleanup generation"));
+    }
+    const QByteArray transaction =
+        !writeTransaction.isEmpty()
+        ? writeTransaction
+        : (state.readable && state.present
+               ? state.transaction
+               : newCredentialTransaction());
+
+    QVariant currentPlaintextValue;
+    if (!exactSettingsSnapshotValue(
+            exact, settings->format(), absoluteKey,
+            &currentPlaintextValue)) {
+        if (writeTransaction.isEmpty()
+            && state.readable
+            && (!state.present
+                || state.phase
+                    == PlaintextCleanupPhase::Complete)) {
+            return true;
+        }
+        if (!writePlaintextCleanupState(
+                cleanupPath,
+                PlaintextCleanupPhase::Complete,
+                transaction)) {
+            return fail(QStringLiteral(
+                "cannot complete vanished cleanup source"));
+        }
+        return true;
+    }
+
+    const QString currentPlaintext =
+        currentPlaintextValue.toString();
+    if (currentPlaintext != expectedPlaintext) {
+        if (!writePlaintextCleanupState(
+                cleanupPath,
+                PlaintextCleanupPhase::Conflict,
+                transaction)) {
+            return fail(QStringLiteral(
+                "cannot preserve changed cleanup source"));
+        }
+        return false;
+    }
+
+    const QByteArray fingerprint =
+        exact.sourceFingerprint;
+    if (!isCredentialSourceFingerprint(fingerprint)) {
+        return fail(QStringLiteral(
+            "cannot identify credential settings generation"));
+    }
+
+    if (!writeTransaction.isEmpty()) {
+        if (!writePlaintextCleanupState(
+                cleanupPath,
+                PlaintextCleanupPhase::Intent,
+                transaction, fingerprint)) {
+            return fail(QStringLiteral(
+                "cannot bind cleanup intent to credential write"));
+        }
+        return true;
+    }
+
+    if (!state.readable) {
+        if (!writePlaintextCleanupState(
+                cleanupPath,
+                PlaintextCleanupPhase::Intent,
+                transaction, fingerprint)) {
+            return fail(QStringLiteral(
+                "cannot replace invalid cleanup generation"));
+        }
+        return true;
+    }
+    if (!state.present) {
+        if (!writePlaintextCleanupState(
+                cleanupPath,
+                PlaintextCleanupPhase::Intent,
+                transaction, fingerprint)) {
+            return fail(QStringLiteral(
+                "cannot persist cleanup intent"));
+        }
+        return true;
+    }
+    if (state.phase == PlaintextCleanupPhase::Intent
+        || state.phase
+            == PlaintextCleanupPhase::Authorized) {
+        if (state.sourceFingerprint == fingerprint)
+            return true;
+        if (!writePlaintextCleanupState(
+                cleanupPath,
+                PlaintextCleanupPhase::Conflict,
+                transaction)) {
+            return fail(QStringLiteral(
+                "cannot preserve changed settings generation"));
+        }
+        return true;
+    }
+    if (state.phase == PlaintextCleanupPhase::Complete) {
+        if (!writePlaintextCleanupState(
+                cleanupPath,
+                PlaintextCleanupPhase::Conflict,
+                transaction)) {
+            return fail(QStringLiteral(
+                "cannot preserve reappeared cleanup source"));
+        }
+    }
+    return true;
+}
+
 bool CredentialSettings::scrubPlaintext(
     QSettings *settings,
-    const QString &key)
+    const QString &key,
+    const QString &cleanupPath)
 {
-    if (!settings || key.isEmpty()) return false;
     const ExactSetting stored =
-        readExactSetting(settings, key);
+        readCredentialPlaintextSetting(settings, key);
     if (!stored.readable)
         return false;
-    if (!stored.present)
-        return true;
+    if (!stored.present) {
+        const PlaintextCleanupState state =
+            readPlaintextCleanupState(cleanupPath);
+        const QByteArray transaction =
+            state.readable && state.present
+            ? state.transaction : newCredentialTransaction();
+        const bool complete = writePlaintextCleanupState(
+            cleanupPath,
+            PlaintextCleanupPhase::Complete,
+            transaction);
+        if (!complete) {
+            qWarning()
+                << "Cannot persist credential settings cleanup:"
+                << (settings
+                    ? settings->fileName() : QString())
+                << "cannot normalize cleanup generation";
+        }
+        return complete;
+    }
+    const QString expected = stored.value.toString();
+    if (!preparePlaintextCleanup(
+            settings, key, cleanupPath, expected, true)) {
+        return false;
+    }
 
-    if (removeExactSetting(settings, key))
-        return true;
-    qWarning() << "Cannot persist credential settings cleanup:"
-               << settings->fileName();
-    return false;
+    const auto fail = [settings](const QString &error) {
+        qWarning() << "Cannot persist credential settings cleanup:"
+                   << (settings
+                       ? settings->fileName() : QString())
+                   << error;
+        return false;
+    };
+    if (!settings || key.isEmpty()
+        || cleanupPath.isEmpty()) {
+        return fail(QStringLiteral("invalid cleanup identity"));
+    }
+
+    const QString fileName = settings->fileName();
+    const QString absoluteKey =
+        absoluteExactSettingKey(settings, key);
+    if (fileName.isEmpty() || absoluteKey.isEmpty()) {
+        return fail(QStringLiteral(
+            "credential settings path is unavailable"));
+    }
+    std::unique_ptr<QSettings> synchronized =
+        freshExactSettings(settings);
+    if (!synchronized) {
+        return fail(QStringLiteral(
+            "cannot open credential settings"));
+    }
+    synchronized->sync();
+    if (synchronized->status() != QSettings::NoError) {
+        return fail(QStringLiteral(
+            "cannot synchronize credential settings"));
+    }
+    synchronized.reset();
+    QLockFile settingsLock(
+        fileName + QStringLiteral(".lock"));
+    if (!settingsLock.tryLock(5000)) {
+        return fail(QStringLiteral(
+            "credential settings are busy"));
+    }
+
+    if (!hardenSettingsFile(settings)) {
+        return fail(QStringLiteral(
+            "cannot secure credential settings"));
+    }
+    const ExactSettingsSnapshot exact =
+        readExactSettingsSnapshot(
+            fileName, settings->format());
+    if (!exact.readable) {
+        return fail(QStringLiteral(
+            "cannot read credential settings"));
+    }
+    const PlaintextCleanupState state =
+        readPlaintextCleanupState(cleanupPath);
+    if (!state.readable) {
+        return fail(QStringLiteral(
+            "cannot read cleanup generation"));
+    }
+    const QByteArray transaction =
+        state.present
+        ? state.transaction : newCredentialTransaction();
+    QVariant currentPlaintext;
+    if (!exactSettingsSnapshotValue(
+            exact, settings->format(), absoluteKey,
+            &currentPlaintext)) {
+        return writePlaintextCleanupState(
+            cleanupPath,
+            PlaintextCleanupPhase::Complete,
+            transaction);
+    }
+    if (currentPlaintext.toString() != expected) {
+        writePlaintextCleanupState(
+            cleanupPath,
+            PlaintextCleanupPhase::Conflict,
+            transaction);
+        return fail(QStringLiteral(
+            "cleanup source changed"));
+    }
+
+    QSettings::SettingsMap retained;
+    for (auto entry = exact.values.cbegin();
+         entry != exact.values.cend(); ++entry) {
+        if (!exactSettingKeysEqual(
+                settings->format(),
+                entry.key(), absoluteKey)) {
+            retained.insert(entry.key(), entry.value());
+        }
+    }
+
+    QString replacementError;
+    if (!replaceExactSettingsMap(
+            settings, retained, &replacementError)) {
+        return fail(replacementError);
+    }
+    credentialCrashPoint(
+        QByteArrayLiteral("cleanup:source-removed"));
+    const ExactSettingsSnapshot verified =
+        readExactSettingsSnapshot(
+            fileName, settings->format());
+    if (!verified.readable
+        || exactSettingsSnapshotValue(
+            verified, settings->format(),
+            absoluteKey)) {
+        return fail(QStringLiteral(
+            "credential settings cleanup could not be verified"));
+    }
+    if (!writePlaintextCleanupState(
+            cleanupPath,
+            PlaintextCleanupPhase::Complete,
+            transaction)) {
+        return fail(QStringLiteral(
+            "cannot commit cleanup generation"));
+    }
+    settingsLock.unlock();
+    std::unique_ptr<QSettings> refreshed =
+        freshExactSettings(settings);
+    if (refreshed) refreshed->sync();
+    return true;
+}
+
+CredentialStore::ReadResult
+CredentialSettings::scrubPlaintextMatchingVault(
+    QSettings *settings,
+    const QString &plaintextKey,
+    const QString &vaultKey,
+    const QString &cleanupPath,
+    const QString &expectedPlaintext,
+    const CredentialStore::ReadResult &knownVault,
+    bool *scrubbed,
+    const QByteArray &authoritativeTransaction,
+    const QString &authoritativeVaultValue)
+{
+    if (scrubbed) *scrubbed = false;
+    CredentialStore::ReadResult confirmed = knownVault;
+    if (!settings || plaintextKey.isEmpty()
+        || vaultKey.isEmpty()
+        || cleanupPath.isEmpty()
+        || (!authoritativeTransaction.isEmpty()
+            && !isCredentialTransaction(
+                authoritativeTransaction))
+        || (!authoritativeVaultValue.isEmpty()
+            && authoritativeTransaction.isEmpty())) {
+        confirmed.error =
+            QStringLiteral("Invalid credential cleanup");
+        return confirmed;
+    }
+    const auto cleanupFailure =
+        [&confirmed, settings](
+            const QString &error) {
+            qWarning()
+                << "Cannot persist credential settings cleanup:"
+                << (settings
+                    ? settings->fileName() : QString())
+                << error;
+            if (confirmed.error.isEmpty()) {
+                confirmed.error = error;
+            } else {
+                confirmed.error += QStringLiteral("; ") + error;
+            }
+            return confirmed;
+        };
+
+#ifdef Q_OS_WIN
+    if (settings->format() == QSettings::NativeFormat) {
+        return cleanupFailure(QStringLiteral(
+            "Conditional native settings cleanup is unavailable"));
+    }
+#endif
+
+    const QString fileName = settings->fileName();
+    const QString absoluteKey =
+        absoluteExactSettingKey(settings, plaintextKey);
+    if (fileName.isEmpty() || absoluteKey.isEmpty()) {
+        return cleanupFailure(
+            QStringLiteral("Credential settings path is unavailable"));
+    }
+
+    if (!expectedPlaintext.isEmpty()) {
+        if (knownVault.status
+                != CredentialStore::Status::Success
+            || knownVault.value.isEmpty()) {
+            return knownVault;
+        }
+        confirmed = store_
+            ? store_->read(vaultKey)
+            : CredentialStore::ReadResult{
+                  CredentialStore::Status::Unavailable,
+                  QString(),
+                  QStringLiteral("No credential store")};
+        if (confirmed.status
+                != CredentialStore::Status::Success
+            || confirmed.value.isEmpty()) {
+            return confirmed;
+        }
+    }
+
+    std::unique_ptr<QSettings> synchronized =
+        freshExactSettings(settings);
+    if (!synchronized) {
+        return cleanupFailure(
+            QStringLiteral("Cannot open credential settings"));
+    }
+    synchronized->sync();
+    if (synchronized->status() != QSettings::NoError) {
+        return cleanupFailure(
+            QStringLiteral("Cannot synchronize credential settings"));
+    }
+    synchronized.reset();
+
+    QLockFile settingsLock(
+        fileName + QStringLiteral(".lock"));
+    if (!settingsLock.tryLock(5000)) {
+        return cleanupFailure(
+            QStringLiteral("Credential settings are busy"));
+    }
+
+    if (!hardenSettingsFile(settings)) {
+        return cleanupFailure(
+            QStringLiteral("Cannot secure credential settings"));
+    }
+    const ExactSettingsSnapshot exact =
+        readExactSettingsSnapshot(
+            fileName, settings->format());
+    if (!exact.readable) {
+        return cleanupFailure(
+            QStringLiteral("Cannot read credential settings"));
+    }
+
+    PlaintextCleanupState state =
+        readPlaintextCleanupState(cleanupPath);
+    if (!state.readable) {
+        return cleanupFailure(
+            QStringLiteral("Cannot read cleanup generation"));
+    }
+    const QByteArray transaction =
+        state.present
+        ? state.transaction : newCredentialTransaction();
+
+    QVariant plaintextVariant;
+    if (!exactSettingsSnapshotValue(
+            exact, settings->format(), absoluteKey,
+            &plaintextVariant)) {
+        const bool complete =
+            writePlaintextCleanupState(
+                cleanupPath,
+                PlaintextCleanupPhase::Complete,
+                transaction);
+        if (scrubbed) *scrubbed = complete;
+        if (!complete) {
+            return cleanupFailure(QStringLiteral(
+                "Cannot complete credential cleanup generation"));
+        }
+        return confirmed;
+    }
+
+    const QString plaintextValue =
+        plaintextVariant.toString();
+    if (plaintextValue != expectedPlaintext) {
+        if (!writePlaintextCleanupState(
+                cleanupPath,
+                PlaintextCleanupPhase::Conflict,
+                transaction)) {
+            return cleanupFailure(QStringLiteral(
+                "Cannot persist credential cleanup conflict"));
+        }
+        return confirmed;
+    }
+
+    const QByteArray fingerprint =
+        exact.sourceFingerprint;
+    if (!isCredentialSourceFingerprint(fingerprint)) {
+        return cleanupFailure(QStringLiteral(
+            "Cannot identify credential settings generation"));
+    }
+
+    const bool generationMatches = state.present
+        && (state.phase == PlaintextCleanupPhase::Intent
+            || state.phase
+                == PlaintextCleanupPhase::Authorized)
+        && state.sourceFingerprint == fingerprint;
+    const bool authorizedReplacement =
+        !authoritativeTransaction.isEmpty()
+        && !authoritativeVaultValue.isEmpty()
+        && state.present
+        && state.phase == PlaintextCleanupPhase::Authorized
+        && state.transaction == authoritativeTransaction
+        && generationMatches
+        && confirmed.status
+            == CredentialStore::Status::Success
+        && confirmed.value == authoritativeVaultValue;
+    if (!state.present
+        || ((state.phase == PlaintextCleanupPhase::Intent
+             || state.phase
+                 == PlaintextCleanupPhase::Authorized)
+            && !generationMatches)
+        || state.phase == PlaintextCleanupPhase::Complete) {
+        if (!writePlaintextCleanupState(
+                cleanupPath,
+                PlaintextCleanupPhase::Conflict,
+                transaction)) {
+            return cleanupFailure(QStringLiteral(
+                "Cannot persist credential cleanup conflict"));
+        }
+        state = {
+            true, true, PlaintextCleanupPhase::Conflict,
+            transaction, QByteArray()
+        };
+    }
+
+    const bool confirmedCopy = confirmed.status
+            == CredentialStore::Status::Success
+        && !confirmed.value.isEmpty();
+    const bool protectedCopyMatches =
+        confirmedCopy
+        && confirmed.value == plaintextValue;
+    if (!plaintextValue.isEmpty()
+        && !protectedCopyMatches
+        && !authorizedReplacement) {
+        if (state.phase != PlaintextCleanupPhase::Conflict
+            && !writePlaintextCleanupState(
+                cleanupPath,
+                PlaintextCleanupPhase::Conflict,
+                transaction)) {
+            return cleanupFailure(QStringLiteral(
+                "Cannot persist mismatched credential cleanup conflict"));
+        }
+        return confirmed;
+    }
+
+    QSettings::SettingsMap retained;
+    for (auto entry = exact.values.cbegin();
+         entry != exact.values.cend(); ++entry) {
+        if (!exactSettingKeysEqual(
+                settings->format(),
+                entry.key(), absoluteKey)) {
+            retained.insert(entry.key(), entry.value());
+        }
+    }
+
+    QString replacementError;
+    if (!replaceExactSettingsMap(
+            settings, retained, &replacementError)) {
+        return cleanupFailure(replacementError);
+    }
+    credentialCrashPoint(
+        QByteArrayLiteral("cleanup:source-removed"));
+
+    const ExactSettingsSnapshot verified =
+        readExactSettingsSnapshot(
+            fileName, settings->format());
+    const bool removed = verified.readable
+        && !exactSettingsSnapshotValue(
+            verified, settings->format(),
+            absoluteKey);
+    const bool complete = removed
+        && writePlaintextCleanupState(
+            cleanupPath,
+            PlaintextCleanupPhase::Complete,
+            transaction);
+    settingsLock.unlock();
+    std::unique_ptr<QSettings> refreshed =
+        freshExactSettings(settings);
+    if (refreshed) refreshed->sync();
+    if (scrubbed) *scrubbed = complete;
+    if (!complete && confirmed.error.isEmpty()) {
+        return cleanupFailure(QStringLiteral(
+            "Credential settings cleanup could not be verified"));
+    }
+    return confirmed;
 }
 
 CredentialStore::ReadResult

@@ -203,6 +203,7 @@ private slots:
     void atomicWriterRejectsCollisionAtCommit();
     void atomicWriterRejectsLockedTarget();
     void newWriterRollsBackPartialPublishFailure();
+    void newWriterRejectsSuccessfulNoPublish();
     void stagedFileSetPublishesAll();
     void publicationFailureSkipsCacheUpdate();
     void publicationSuccessUpdatesCacheAfterPublish();
@@ -643,6 +644,34 @@ void TestAtomicActivitySave::newWriterRollsBackPartialPublishFailure()
     QVERIFY(!QFile::exists(path));
     QVERIFY(QDir(dir.path()).entryList(
         QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot).isEmpty());
+}
+
+void TestAtomicActivitySave::newWriterRejectsSuccessfulNoPublish()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path =
+        dir.filePath(QStringLiteral("activity.json"));
+    const AtomicPublishFunction noPublish =
+        [](const QString &, const QString &,
+           bool &, QString &) {
+            return true;
+        };
+
+    NewAtomicFileWriter writer(path, noPublish);
+    QVERIFY(writer.open());
+    const QByteArray contents("complete activity");
+    QCOMPARE(writer.write(contents),
+             static_cast<qint64>(contents.size()));
+    QVERIFY(writer.flush());
+    QVERIFY(!writer.commit());
+    QVERIFY(writer.errorString().contains(
+        QStringLiteral("did not create"),
+        Qt::CaseInsensitive));
+    QVERIFY(!QFile::exists(path));
+    QVERIFY(QDir(dir.path()).entryList(
+        QDir::Files | QDir::Hidden
+            | QDir::NoDotAndDotDot).isEmpty());
 }
 
 void TestAtomicActivitySave::stagedFileSetPublishesAll()

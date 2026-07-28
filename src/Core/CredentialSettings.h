@@ -182,10 +182,32 @@ private:
         const QString &credentialKey,
         const QString &plaintextKey,
         const QString &removalKey,
+        const QString &cleanupPath,
         const QString &revisionPath,
         const QString &deletionPath);
-    bool scrubPlaintext(QSettings *settings,
-                        const QString &key);
+    bool preparePlaintextCleanup(
+        QSettings *settings,
+        const QString &key,
+        const QString &cleanupPath,
+        const QString &expectedPlaintext,
+        bool replaceInvalidState = false,
+        const QByteArray &writeTransaction = QByteArray());
+    bool scrubPlaintext(
+        QSettings *settings,
+        const QString &key,
+        const QString &cleanupPath);
+    CredentialStore::ReadResult
+    scrubPlaintextMatchingVault(
+        QSettings *settings,
+        const QString &plaintextKey,
+        const QString &vaultKey,
+        const QString &cleanupPath,
+        const QString &expectedPlaintext,
+        const CredentialStore::ReadResult &knownVault,
+        bool *scrubbed,
+        const QByteArray &authoritativeTransaction =
+            QByteArray(),
+        const QString &authoritativeVaultValue = QString());
     CredentialStore::ReadResult createAndConfirmMigrationValue(
         const QString &key,
         const QString &legacyValue,
