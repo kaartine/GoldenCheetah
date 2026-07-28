@@ -28,9 +28,14 @@ struct JobResult
     QString errorString;
 };
 
-JobResult unavailableResult(const QString &error)
+JobResult unavailableResult(
+    const QString &error)
 {
-    return {QKeychain::NoBackendAvailable, QString(), error};
+    return {
+        QKeychain::NoBackendAvailable,
+        QString(),
+        error
+    };
 }
 
 template<typename Job, typename Configure, typename Extract>
@@ -66,7 +71,11 @@ JobResult executeJobOnCurrentThread(const QString &key,
     }
 
     timeout.stop();
-    return {job->error(), extract(job.get()), job->errorString()};
+    return {
+        job->error(),
+        extract(job.get()),
+        job->errorString()
+    };
 }
 
 template<typename Job, typename Configure, typename Extract>
@@ -81,7 +90,8 @@ JobResult executeJob(const QString &key,
     }
 
     const auto operation = [&]() {
-        return executeJobOnCurrentThread<Job>(key, configure, extract);
+        return executeJobOnCurrentThread<Job>(
+            key, configure, extract);
     };
     if (QThread::currentThread() == application->thread()) {
         return operation();
@@ -118,6 +128,19 @@ public:
                 status == Status::Success
                     ? result.value : QString(),
                 result.errorString};
+    }
+
+    CreateResult createIfAbsent(
+        const QString &key,
+        const QString &value) override
+    {
+        Q_UNUSED(key)
+        Q_UNUSED(value)
+        return {
+            CreateStatus::Unsupported,
+            QStringLiteral(
+                "Credential backend does not support atomic creation")
+        };
     }
 
     Status write(const QString &key,

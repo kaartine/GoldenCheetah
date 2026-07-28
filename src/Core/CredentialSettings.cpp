@@ -2751,20 +2751,47 @@ QString CredentialSettings::vaultKey(
         + QString::fromLatin1(digest);
 }
 
-void CredentialSettings::hardenSettingsFile(QSettings *settings)
+bool CredentialSettings::hardenSettingsFile(QSettings *settings)
 {
 #ifdef Q_OS_UNIX
-    if (!settings) return;
+    if (!settings) return false;
     const QString fileName = settings->fileName();
-    if (fileName.isEmpty() || !QFileInfo::exists(fileName)) return;
+    if (fileName.isEmpty()) return false;
+    const QFileInfo before(fileName);
+    if (!before.exists()) return true;
+    if (!before.isFile() || before.isSymLink())
+        return false;
+    const QString canonicalPath =
+        before.canonicalFilePath();
+    if (canonicalPath.isEmpty())
+        return false;
     if (!QFile::setPermissions(
             fileName,
             QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
         qWarning() << "Cannot restrict settings file permissions:"
                    << fileName;
+        return false;
     }
+    const QFileInfo after(fileName);
+    const QFileDevice::Permissions forbidden =
+        QFileDevice::ReadGroup
+        | QFileDevice::WriteGroup
+        | QFileDevice::ExeGroup
+        | QFileDevice::ReadOther
+        | QFileDevice::WriteOther
+        | QFileDevice::ExeOther;
+    const bool hardened =
+        after.isFile() && !after.isSymLink()
+        && after.canonicalFilePath() == canonicalPath
+        && !(after.permissions() & forbidden);
+    if (!hardened) {
+        qWarning() << "Cannot verify settings file permissions:"
+                   << fileName;
+    }
+    return hardened;
 #else
     Q_UNUSED(settings)
+    return true;
 #endif
 }
 
@@ -2773,8 +2800,14 @@ QVariant CredentialSettings::value(
     const QString &scopeId,
     const QString &credentialKey,
     const QString &plaintextKey,
-    const QVariant &defaultValue)
+    const QVariant &defaultValue,
+    bool *authoritativeMiss,
+    bool *confirmedVaultValue)
 {
+    if (authoritativeMiss)
+        *authoritativeMiss = false;
+    if (confirmedVaultValue)
+        *confirmedVaultValue = false;
     if (!settings || scopeId.isEmpty()
         || !isCredentialKey(credentialKey)) {
         return defaultValue;
@@ -2893,6 +2926,8 @@ QVariant CredentialSettings::value(
             } else {
                 invalidateCache(key);
             }
+            if (confirmedVaultValue)
+                *confirmedVaultValue = true;
             return result.value;
         }
         invalidateCache(key);
@@ -2925,26 +2960,30 @@ QVariant CredentialSettings::value(
             hardenSettingsFile(settings);
             return legacy;
         }
-        QString error;
-        const CredentialStore::Status writeStatus = store_
-            ? store_->write(key, legacy, &error)
-            : CredentialStore::Status::Unavailable;
-        if (writeStatus
+        bool created = false;
+        bool fallbackAllowed = false;
+        const CredentialStore::ReadResult migrated =
+            createAndConfirmMigrationValue(
+                key, legacy, &created, &fallbackAllowed);
+        if (migrated.status
             != CredentialStore::Status::Success) {
             reportStoreError(
                 QStringLiteral("migrate"), credentialKey,
-                error);
-            cache(key, {true, legacy, false,
-                        migrationRevision,
-                        deletion.transaction});
+                migrated.error);
+            invalidateCache(key);
             hardenSettingsFile(settings);
-            return legacy;
+            return fallbackAllowed
+                ? QVariant(legacy) : defaultValue;
         }
-        credentialCrashPoint(
-            QByteArrayLiteral("vault:written"));
+        if (created) {
+            credentialCrashPoint(
+                QByteArrayLiteral("vault:written"));
+        }
         if (!scrubPlaintext(settings, plaintextKey)) {
             invalidateCache(key);
-            return legacy;
+            if (confirmedVaultValue)
+                *confirmedVaultValue = true;
+            return migrated.value;
         }
         QByteArray finalRevision;
         if (!finalizeCredentialWrite(
@@ -2953,12 +2992,16 @@ QVariant CredentialSettings::value(
                 deletion.transaction,
                 &finalRevision)) {
             invalidateCache(key);
-            return legacy;
+            if (confirmedVaultValue)
+                *confirmedVaultValue = true;
+            return migrated.value;
         }
-        cache(key, {true, legacy, true,
+        cache(key, {true, migrated.value, true,
                     finalRevision,
                     deletion.transaction});
-        return legacy;
+        if (confirmedVaultValue)
+            *confirmedVaultValue = true;
+        return migrated.value;
     }
 
     if (deletion.phase
@@ -2995,6 +3038,8 @@ QVariant CredentialSettings::value(
             } else {
                 invalidateCache(key);
             }
+            if (confirmedVaultValue)
+                *confirmedVaultValue = true;
             return result.value;
         }
         invalidateCache(key);
@@ -3038,6 +3083,8 @@ QVariant CredentialSettings::value(
             } else {
                 invalidateCache(key);
             }
+            if (confirmedVaultValue)
+                *confirmedVaultValue = true;
             return result.value;
         }
         if (result.status
@@ -3081,6 +3128,10 @@ QVariant CredentialSettings::value(
             haveCached = false;
         }
         if (haveCached) {
+            if (confirmedVaultValue
+                && entry.present && entry.persisted) {
+                *confirmedVaultValue = true;
+            }
             return entry.present
                 ? QVariant(entry.value) : defaultValue;
         }
@@ -3101,6 +3152,8 @@ QVariant CredentialSettings::value(
             } else {
                 invalidateCache(key);
             }
+            if (confirmedVaultValue)
+                *confirmedVaultValue = true;
             return result.value;
         }
         invalidateCache(key);
@@ -3123,9 +3176,13 @@ QVariant CredentialSettings::value(
         if (entry.persisted && plaintext.present) {
             scrubPlaintext(settings, plaintextKey);
         }
-        if (entry.present || !plaintext.present) {
-            return entry.present ? QVariant(entry.value) : defaultValue;
+        if (entry.present) {
+            if (confirmedVaultValue && entry.persisted)
+                *confirmedVaultValue = true;
+            return QVariant(entry.value);
         }
+        if (!plaintext.present && !authoritativeMiss)
+            return defaultValue;
     }
 
     const CredentialStore::ReadResult result = store_
@@ -3143,6 +3200,8 @@ QVariant CredentialSettings::value(
         } else {
             invalidateCache(key);
         }
+        if (confirmedVaultValue)
+            *confirmedVaultValue = true;
         return entry.value;
     }
 
@@ -3191,27 +3250,32 @@ QVariant CredentialSettings::value(
             return legacy;
         }
 
-        QString error;
-        const CredentialStore::Status writeStatus = store_
-            ? store_->write(key, legacy, &error)
-            : CredentialStore::Status::Unavailable;
-        const bool migrated =
-            writeStatus == CredentialStore::Status::Success;
-        if (!migrated) {
+        bool created = false;
+        bool fallbackAllowed = false;
+        const CredentialStore::ReadResult migrated =
+            createAndConfirmMigrationValue(
+                key, legacy, &created, &fallbackAllowed);
+        Q_UNUSED(created)
+        if (migrated.status
+            != CredentialStore::Status::Success) {
             reportStoreError(
                 QStringLiteral("migrate"), credentialKey,
-                error.isEmpty() ? result.error : error);
+                migrated.error.isEmpty()
+                    ? result.error : migrated.error);
+            invalidateCache(key);
             hardenSettingsFile(settings);
+            return fallbackAllowed
+                ? QVariant(legacy) : defaultValue;
         }
-        entry = {true, legacy, migrated,
+        entry = {true, migrated.value, true,
                  migrationRevision, QByteArray()};
-        if (!migrated) {
-            cache(key, entry);
-        } else if (scrubPlaintext(settings, plaintextKey)) {
+        if (scrubPlaintext(settings, plaintextKey)) {
             cache(key, entry);
         } else {
             invalidateCache(key);
         }
+        if (confirmedVaultValue)
+            *confirmedVaultValue = true;
         return entry.value;
     }
 
@@ -3221,6 +3285,8 @@ QVariant CredentialSettings::value(
     } else if (revision.readable) {
         entry.revision = revision.value;
         cache(key, entry);
+        if (authoritativeMiss)
+            *authoritativeMiss = true;
     }
     return defaultValue;
 }
@@ -3660,6 +3726,73 @@ bool CredentialSettings::scrubPlaintext(
     qWarning() << "Cannot persist credential settings cleanup:"
                << settings->fileName();
     return false;
+}
+
+CredentialStore::ReadResult
+CredentialSettings::createAndConfirmMigrationValue(
+    const QString &key,
+    const QString &legacyValue,
+    bool *created,
+    bool *fallbackAllowed)
+{
+    if (created) *created = false;
+    if (fallbackAllowed) *fallbackAllowed = false;
+    if (!store_) {
+        if (fallbackAllowed) *fallbackAllowed = true;
+        return {
+            CredentialStore::Status::NotFound,
+            QString(),
+            QStringLiteral("No credential store")
+        };
+    }
+
+    const CredentialStore::CreateResult creation =
+        store_->createIfAbsent(key, legacyValue);
+    if (created) {
+        *created = creation.status
+            == CredentialStore::CreateStatus::Created;
+    }
+
+    CredentialStore::ReadResult confirmed =
+        store_->read(key);
+    if (confirmed.status
+        == CredentialStore::Status::Success) {
+        return confirmed;
+    }
+
+    QString error = confirmed.error;
+    if (!creation.error.isEmpty()) {
+        if (!error.isEmpty())
+            error += QStringLiteral("; ");
+        error += creation.error;
+    }
+
+    const bool definitelyNotCreated =
+        creation.status
+            == CredentialStore::CreateStatus::Unsupported
+        || creation.status
+            == CredentialStore::CreateStatus::Unavailable
+        || creation.status
+            == CredentialStore::CreateStatus::Failed;
+    if (confirmed.status
+            == CredentialStore::Status::NotFound
+        && definitelyNotCreated) {
+        if (fallbackAllowed) *fallbackAllowed = true;
+        confirmed.error = error;
+        return confirmed;
+    }
+
+    if (error.isEmpty()) {
+        error = QStringLiteral(
+            "Credential creation outcome could not be confirmed");
+    }
+    if (confirmed.status
+        == CredentialStore::Status::NotFound) {
+        confirmed.status =
+            CredentialStore::Status::Unavailable;
+    }
+    confirmed.error = error;
+    return confirmed;
 }
 
 void CredentialSettings::reportStoreError(

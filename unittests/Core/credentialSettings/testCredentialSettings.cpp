@@ -10,6 +10,7 @@
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLockFile>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QRegularExpression>
@@ -41,15 +42,25 @@ struct FakeStoreState
 {
     QHash<QString, QString> values;
     bool failReads = false;
+    int failNextReads = 0;
     CredentialStore::Status failedReadStatus =
         CredentialStore::Status::Unavailable;
+    bool supportCreates = true;
+    bool indeterminateCreates = false;
+    bool commitIndeterminateCreates = false;
+    QString indeterminateCommittedValue;
+    bool failedCreates = false;
     bool failWrites = false;
     bool commitFailedWrites = false;
     bool failRemoves = false;
     int reads = 0;
     int writes = 0;
+    int creates = 0;
+    int overwrites = 0;
     int removes = 0;
+    QString removeAfterReadKey;
     std::function<void()> beforeRead;
+    std::function<void()> beforeCreateIfAbsent;
     std::function<void()> beforeWrite;
     std::function<void()> beforeRemove;
 };
@@ -67,15 +78,76 @@ public:
     {
         ++state_->reads;
         if (state_->beforeRead) state_->beforeRead();
-        if (state_->failReads) {
+        if (state_->failReads
+            || state_->failNextReads > 0) {
+            if (state_->failNextReads > 0)
+                --state_->failNextReads;
             return {state_->failedReadStatus, QString(),
                     QStringLiteral("unavailable")};
         }
         if (!state_->values.contains(key)) {
             return {Status::NotFound, QString(), QString()};
         }
-        return {Status::Success, state_->values.value(key),
-                QString()};
+        const QString value = state_->values.value(key);
+        if (state_->removeAfterReadKey == key) {
+            state_->removeAfterReadKey.clear();
+            state_->values.remove(key);
+        }
+        return {Status::Success, value, QString()};
+    }
+
+    CreateResult createIfAbsent(
+        const QString &key,
+        const QString &value) override
+    {
+        ++state_->writes;
+        ++state_->creates;
+        if (!state_->supportCreates) {
+            return {
+                CreateStatus::Unsupported,
+                QStringLiteral("unsupported")
+            };
+        }
+        if (state_->beforeCreateIfAbsent) {
+            state_->beforeCreateIfAbsent();
+        }
+        if (state_->values.contains(key)) {
+            return {CreateStatus::AlreadyExists, QString()};
+        }
+        if (state_->indeterminateCreates) {
+            if (state_->commitIndeterminateCreates) {
+                state_->values.insert(
+                    key,
+                    state_->indeterminateCommittedValue.isNull()
+                        ? value
+                        : state_->indeterminateCommittedValue);
+            }
+            return {
+                CreateStatus::Indeterminate,
+                QStringLiteral("indeterminate")
+            };
+        }
+        if (state_->failedCreates) {
+            return {
+                CreateStatus::Failed,
+                QStringLiteral("failed")
+            };
+        }
+        if (state_->failWrites) {
+            if (state_->commitFailedWrites) {
+                state_->values.insert(key, value);
+                return {
+                    CreateStatus::Indeterminate,
+                    QStringLiteral("indeterminate")
+                };
+            }
+            return {
+                CreateStatus::Unavailable,
+                QStringLiteral("unavailable")
+            };
+        }
+        state_->values.insert(key, value);
+        return {CreateStatus::Created, QString()};
     }
 
     Status write(const QString &key,
@@ -83,6 +155,7 @@ public:
                  QString *error) override
     {
         ++state_->writes;
+        ++state_->overwrites;
         if (state_->beforeWrite) state_->beforeWrite();
         if (state_->failWrites) {
             if (state_->commitFailedWrites) {
@@ -115,8 +188,14 @@ private:
 class FileCredentialStore : public CredentialStore
 {
 public:
-    explicit FileCredentialStore(QString path)
-        : path_(std::move(path))
+    explicit FileCredentialStore(
+        QString path,
+        std::function<void()> afterMissingUnderLock = {},
+        std::function<void()> lockContended = {})
+        : path_(std::move(path)),
+          afterMissingUnderLock_(
+              std::move(afterMissingUnderLock)),
+          lockContended_(std::move(lockContended))
     {
     }
 
@@ -136,10 +215,62 @@ public:
                 settings.value(key).toString(), QString()};
     }
 
+    CreateResult createIfAbsent(
+        const QString &key,
+        const QString &value) override
+    {
+        QLockFile lock(
+            path_ + QStringLiteral(".credential-store.lock"));
+        if (!lock.tryLock(0)) {
+            if (lockContended_)
+                lockContended_();
+            if (!lock.tryLock(5000)) {
+                return {
+                    CreateStatus::Unavailable,
+                    QStringLiteral("vault lock failed")
+                };
+            }
+        }
+
+        QSettings settings(path_, QSettings::IniFormat);
+        settings.setFallbacksEnabled(false);
+        settings.sync();
+        if (settings.status() != QSettings::NoError) {
+            return {
+                CreateStatus::Unavailable,
+                QStringLiteral("vault read failed")
+            };
+        }
+        if (settings.contains(key)) {
+            return {CreateStatus::AlreadyExists, QString()};
+        }
+        if (afterMissingUnderLock_)
+            afterMissingUnderLock_();
+
+        settings.setValue(key, value);
+        settings.sync();
+        const bool written =
+            settings.status() == QSettings::NoError
+            && settings.value(key).toString() == value;
+        return written
+            ? CreateResult{
+                CreateStatus::Created, QString()}
+            : CreateResult{
+                CreateStatus::Indeterminate,
+                QStringLiteral("vault create failed")};
+    }
+
     Status write(const QString &key,
                  const QString &value,
                  QString *error) override
     {
+        QLockFile lock(
+            path_ + QStringLiteral(".credential-store.lock"));
+        if (!lock.tryLock(5000)) {
+            if (error) *error =
+                QStringLiteral("vault lock failed");
+            return Status::Unavailable;
+        }
         QSettings settings(path_, QSettings::IniFormat);
         settings.setFallbacksEnabled(false);
         settings.setValue(key, value);
@@ -156,6 +287,13 @@ public:
     Status remove(const QString &key,
                   QString *error) override
     {
+        QLockFile lock(
+            path_ + QStringLiteral(".credential-store.lock"));
+        if (!lock.tryLock(5000)) {
+            if (error) *error =
+                QStringLiteral("vault lock failed");
+            return Status::Unavailable;
+        }
         QSettings settings(path_, QSettings::IniFormat);
         settings.setFallbacksEnabled(false);
         settings.remove(key);
@@ -171,6 +309,8 @@ public:
 
 private:
     QString path_;
+    std::function<void()> afterMissingUnderLock_;
+    std::function<void()> lockContended_;
 };
 
 class ScopedEnvironmentVariable
@@ -282,6 +422,18 @@ QString pendingRemovalGenerationTestKey(
     return QStringLiteral(
         "credential_store/pending_remove_generation/")
         + marker.mid(prefix.size());
+}
+
+QString legacyFallbackBlockTestKey(
+    const QString &scope,
+    const QString &credentialKey)
+{
+    const QByteArray digest = QCryptographicHash::hash(
+        scope.toUtf8() + '\n' + credentialKey.toUtf8(),
+        QCryptographicHash::Sha256).toHex();
+    return QStringLiteral(
+        "credential_store/legacy_fallback_blocks/")
+        + QString::fromLatin1(digest);
 }
 
 QByteArray fileContents(const QString &path)
@@ -630,9 +782,25 @@ bool writeFaultInjectingSettings(
             }
         }
     }
+    bool rejectsLegacyFallbackBlock = false;
+    if (state.failurePoint
+            == QStringLiteral(
+                "credential-fallback-block")) {
+        const QString prefix =
+            QStringLiteral(
+                "credential_store/legacy_fallback_blocks/");
+        for (auto entry = settings.cbegin();
+             entry != settings.cend(); ++entry) {
+            if (entry.key().startsWith(prefix)) {
+                rejectsLegacyFallbackBlock = true;
+                break;
+            }
+        }
+    }
     if (state.enabled
         && (rejectsCredentialBinding
             || rejectsLocationClaim
+            || rejectsLegacyFallbackBlock
             || migrationWritePoint(settings)
                 == state.failurePoint)) {
         ++state.rejectedWrites;
@@ -874,6 +1042,8 @@ private slots:
     void bundledLinuxRuntimePathRequiresContainedRegularFile();
     void keychainJobsDisablePlaintextFallback();
     void platformStoreRoundTripsOrFailsClosed();
+    void platformCreateIfAbsentIsBoundedAndUnsupported();
+    void fileStoreCreateIfAbsentIsAtomicAcrossProcesses();
     void vaultCallsDoNotMutateFallbackState();
     void credentialOperationsAreSerialized();
     void reentrantCredentialOperationFailsFast();
@@ -987,8 +1157,18 @@ private slots:
     void transientReadDoesNotOverwriteNewerCredential();
     void migrationDoesNotOverwriteCredentialCreatedAfterMiss();
     void migrationCollisionReadFailureRetainsPlaintextAndRetries();
+    void definiteMigrationOutcomeRequiresConfirmation_data();
+    void definiteMigrationOutcomeRequiresConfirmation();
     void creatingMigrationDoesNotOverwriteCredentialCreatedAfterMiss();
+    void creatingMigrationCollisionReadFailureRetainsTransaction();
+    void creatingMigrationUnsupportedRetainsTransactionAndRetries();
     void failedMigrationDoesNotCacheOverNewerCredential();
+    void transientMigrationCreateFailureRetriesInSameSession();
+    void failedMigrationCreateRetainsPlaintextAndRetries();
+    void unsupportedMigrationRetainsPlaintextAndRetries();
+    void indeterminateMigrationCommitIsConfirmed();
+    void indeterminateMigrationMissFailsClosedAndRetries();
+    void indeterminateMigrationReadFailureRetainsPlaintext();
     void transientReadBeforeMissingCredentialRetriesMigration();
     void scopesAreIsolated();
     void scopeIdentifiersAreStableAndValidated();
@@ -1013,10 +1193,24 @@ private slots:
     void credentialClaimFailureDoesNotBlockGlobalMigration();
     void newFormatRootlessCredentialIsRetained();
     void newFormatRootlessCredentialRemainsAfterStoreRecovery();
-    void authorizedLegacyPlaintextMigration_data();
-    void authorizedLegacyPlaintextMigration();
-    void authorizedLegacyGlobalPlaintextMigration_data();
-    void authorizedLegacyGlobalPlaintextMigration();
+    void authorizedLegacyPlaintextRequiresAuthoritativeVaultMiss_data();
+    void authorizedLegacyPlaintextRequiresAuthoritativeVaultMiss();
+    void authorizedLegacyGlobalPlaintextRequiresAuthoritativeVaultMiss_data();
+    void authorizedLegacyGlobalPlaintextRequiresAuthoritativeVaultMiss();
+    void targetCredentialUseBlocksLegacyFallback_data();
+    void targetCredentialUseBlocksLegacyFallback();
+    void targetPlaintextPrecedesLegacyAfterTransientVaultFailure();
+    void emptyTargetPlaintextBlocksLegacyAcrossRestart_data();
+    void emptyTargetPlaintextBlocksLegacyAcrossRestart();
+    void failedFallbackMarkerPersistenceFailsClosedAndRetries_data();
+    void failedFallbackMarkerPersistenceFailsClosedAndRetries();
+    void legacyPlaintextRequiresMatchingSourceRoot();
+    void legacyPlaintextRequiresMatchingSourceScope();
+    void legacyCredentialScopeUsesOneExactSnapshot();
+    void authorizedLegacyFallbackUsesOneExactSnapshot();
+    void targetAppearingDuringLegacyFallbackTakesPrecedence();
+    void canonicalVaultReadRetainsAuthorizedLegacyDuplicate();
+    void vanishedCanonicalRetainsAuthorizedLegacyDuplicate();
     void globalCredentialsInDifferentRootsHaveIsolatedScopes();
     void sameNamedAthletesInDifferentRootsHaveIsolatedScopes();
     void preUpgradeCopiedCredentialScopesFailClosed_data();
@@ -1076,6 +1270,10 @@ void TestCredentialSettings::cleanupTestCase()
 void TestCredentialSettings::init()
 {
     credentialScrubFaultState() = {};
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+    GSettings::setCredentialLegacyScopeSnapshotHook({});
+    GSettings::setCredentialLegacyValueSnapshotHook({});
+#endif
     if (!ownedCredentialStateRoot_.isEmpty()) {
         QDir stateDirectory(QDir(ownedCredentialStateRoot_)
             .filePath(QStringLiteral(
@@ -1301,6 +1499,236 @@ void TestCredentialSettings::platformStoreRoundTripsOrFailsClosed()
              int(CredentialStore::Status::Success));
     QCOMPARE(int(store->read(key).status),
              int(CredentialStore::Status::NotFound));
+}
+
+void TestCredentialSettings::
+platformCreateIfAbsentIsBoundedAndUnsupported()
+{
+    std::unique_ptr<CredentialStore> store =
+        createQtKeychainCredentialStore();
+    QVERIFY(store);
+    const QString key = QStringLiteral("credential-create-test/")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString firstSecret = QStringLiteral("first-value-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+
+    const CredentialStore::CreateResult first =
+        store->createIfAbsent(key, firstSecret);
+    QCOMPARE(
+        int(first.status),
+        int(CredentialStore::CreateStatus::Unsupported));
+}
+
+void TestCredentialSettings::
+fileStoreCreateIfAbsentIsAtomicAcrossProcesses()
+{
+    if (qEnvironmentVariableIsSet(
+            "GC_CREDENTIAL_CREATE_CHILD")) {
+        const QString vaultPath = qEnvironmentVariable(
+            "GC_CREDENTIAL_CREATE_VAULT");
+        const QString key = qEnvironmentVariable(
+            "GC_CREDENTIAL_CREATE_KEY");
+        const QString value = qEnvironmentVariable(
+            "GC_CREDENTIAL_CREATE_VALUE");
+        const QString readyPath = qEnvironmentVariable(
+            "GC_CREDENTIAL_CREATE_READY");
+        const QString startPath = qEnvironmentVariable(
+            "GC_CREDENTIAL_CREATE_START");
+        const QString resultPath = qEnvironmentVariable(
+            "GC_CREDENTIAL_CREATE_RESULT");
+        const QString missingPath = qEnvironmentVariable(
+            "GC_CREDENTIAL_CREATE_MISSING");
+        const QString releasePath = qEnvironmentVariable(
+            "GC_CREDENTIAL_CREATE_RELEASE");
+        const QString contentionPath = qEnvironmentVariable(
+            "GC_CREDENTIAL_CREATE_CONTENTION");
+        QVERIFY(!vaultPath.isEmpty());
+        QVERIFY(!key.isEmpty());
+        QVERIFY(!value.isEmpty());
+        QVERIFY(!readyPath.isEmpty());
+        QVERIFY(!startPath.isEmpty());
+        QVERIFY(!resultPath.isEmpty());
+        QVERIFY(writeSignalFile(readyPath));
+        QVERIFY(waitForFile(startPath, 5000));
+
+        bool coordinationSucceeded = true;
+        FileCredentialStore store(
+            vaultPath,
+            [&] {
+                if (missingPath.isEmpty())
+                    return;
+                coordinationSucceeded =
+                    writeSignalFile(missingPath)
+                    && (releasePath.isEmpty()
+                        || waitForFile(releasePath, 5000));
+            },
+            [&] {
+                if (!contentionPath.isEmpty()) {
+                    coordinationSucceeded =
+                        coordinationSucceeded
+                        && writeSignalFile(contentionPath);
+                }
+            });
+        const CredentialStore::CreateResult result =
+            store.createIfAbsent(key, value);
+        QVERIFY(coordinationSucceeded);
+        QVERIFY(result.status
+                    == CredentialStore::CreateStatus::Created
+                || result.status
+                    == CredentialStore::CreateStatus::AlreadyExists);
+        QVERIFY(writePrivateStateFile(
+            resultPath,
+            QByteArray::number(int(result.status))));
+        return;
+    }
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString vaultPath =
+        temporary.filePath(QStringLiteral("vault.ini"));
+    const QString key = QStringLiteral("shared-key");
+    const QString firstValue = QStringLiteral("first-value");
+    const QString secondValue = QStringLiteral("second-value");
+    const QString firstStart =
+        temporary.filePath(QStringLiteral("first-start"));
+    const QString secondStart =
+        temporary.filePath(QStringLiteral("second-start"));
+    const QString firstReady =
+        temporary.filePath(QStringLiteral("first-ready"));
+    const QString secondReady =
+        temporary.filePath(QStringLiteral("second-ready"));
+    const QString firstResult =
+        temporary.filePath(QStringLiteral("first-result"));
+    const QString secondResult =
+        temporary.filePath(QStringLiteral("second-result"));
+    const QString firstMissing =
+        temporary.filePath(QStringLiteral("first-missing"));
+    const QString secondMissing =
+        temporary.filePath(QStringLiteral("second-missing"));
+    const QString releaseFirst =
+        temporary.filePath(QStringLiteral("release-first"));
+    const QString secondContention =
+        temporary.filePath(QStringLiteral("second-contention"));
+
+    const auto configureChild = [&](
+        QProcess *child,
+        const QString &value,
+        const QString &ready,
+        const QString &start,
+        const QString &result,
+        const QString &missing,
+        const QString &release,
+        const QString &contention) {
+        QProcessEnvironment environment =
+            QProcessEnvironment::systemEnvironment();
+        environment.insert(
+            QStringLiteral("GC_CREDENTIAL_CREATE_CHILD"),
+            QStringLiteral("1"));
+        environment.insert(
+            QStringLiteral("GC_CREDENTIAL_CREATE_VAULT"),
+            vaultPath);
+        environment.insert(
+            QStringLiteral("GC_CREDENTIAL_CREATE_KEY"),
+            key);
+        environment.insert(
+            QStringLiteral("GC_CREDENTIAL_CREATE_VALUE"),
+            value);
+        environment.insert(
+            QStringLiteral("GC_CREDENTIAL_CREATE_READY"),
+            ready);
+        environment.insert(
+            QStringLiteral("GC_CREDENTIAL_CREATE_START"),
+            start);
+        environment.insert(
+            QStringLiteral("GC_CREDENTIAL_CREATE_RESULT"),
+            result);
+        environment.insert(
+            QStringLiteral("GC_CREDENTIAL_CREATE_MISSING"),
+            missing);
+        environment.insert(
+            QStringLiteral("GC_CREDENTIAL_CREATE_RELEASE"),
+            release);
+        environment.insert(
+            QStringLiteral("GC_CREDENTIAL_CREATE_CONTENTION"),
+            contention);
+        child->setProcessEnvironment(environment);
+        child->setProgram(
+            QCoreApplication::applicationFilePath());
+        child->setArguments({
+            QStringLiteral(
+                "fileStoreCreateIfAbsentIsAtomicAcrossProcesses"),
+            QStringLiteral("-silent")
+        });
+    };
+
+    QProcess first;
+    QProcess second;
+    configureChild(
+        &first, firstValue, firstReady, firstStart,
+        firstResult, firstMissing, releaseFirst, QString());
+    configureChild(
+        &second, secondValue, secondReady, secondStart,
+        secondResult, secondMissing, QString(),
+        secondContention);
+    first.start();
+    QVERIFY2(first.waitForStarted(5000),
+             qPrintable(first.errorString()));
+    QVERIFY2(waitForFile(firstReady, 5000, &first),
+             first.readAll().constData());
+    QVERIFY(writeSignalFile(firstStart));
+    QVERIFY2(waitForFile(firstMissing, 5000, &first),
+             first.readAll().constData());
+
+    second.start();
+    QVERIFY2(second.waitForStarted(5000),
+             qPrintable(second.errorString()));
+    QVERIFY2(waitForFile(secondReady, 5000, &second),
+             second.readAll().constData());
+    QVERIFY(writeSignalFile(secondStart));
+    QVERIFY2(waitForFile(secondContention, 5000, &second),
+             second.readAll().constData());
+    QCOMPARE(second.state(), QProcess::Running);
+    QVERIFY(writeSignalFile(releaseFirst));
+    QVERIFY2(first.waitForFinished(10000),
+             qPrintable(first.errorString()));
+    QVERIFY2(second.waitForFinished(10000),
+             qPrintable(second.errorString()));
+    const QByteArray firstOutput = first.readAll();
+    const QByteArray secondOutput = second.readAll();
+    QVERIFY2(first.exitStatus() == QProcess::NormalExit
+                 && first.exitCode() == 0,
+             firstOutput.constData());
+    QVERIFY2(second.exitStatus() == QProcess::NormalExit
+                 && second.exitCode() == 0,
+             secondOutput.constData());
+
+    bool firstParsed = false;
+    bool secondParsed = false;
+    const int firstStatus =
+        fileContents(firstResult).trimmed().toInt(
+            &firstParsed);
+    const int secondStatus =
+        fileContents(secondResult).trimmed().toInt(
+            &secondParsed);
+    QVERIFY(firstParsed);
+    QVERIFY(secondParsed);
+    const int created =
+        int(CredentialStore::CreateStatus::Created);
+    const int alreadyExists =
+        int(CredentialStore::CreateStatus::AlreadyExists);
+    QCOMPARE(firstStatus, created);
+    QCOMPARE(secondStatus, alreadyExists);
+    QVERIFY(!QFileInfo::exists(secondMissing));
+
+    FileCredentialStore store(vaultPath);
+    const CredentialStore::ReadResult final =
+        store.read(key);
+    QCOMPARE(
+        int(final.status),
+        int(CredentialStore::Status::Success));
+    QCOMPARE(
+        final.value,
+        firstValue);
 }
 
 void TestCredentialSettings::vaultCallsDoNotMutateFallbackState()
@@ -2768,7 +3196,7 @@ credentialRevisionFailureBlocksMigration()
                  &settings, scope, GC_STRAVA_TOKEN,
                  plaintextKey, QStringLiteral("missing")),
              QVariant(secret));
-    QCOMPARE(state->reads, 2);
+    QCOMPARE(state->reads, 3);
     QCOMPARE(state->writes, 1);
     QCOMPARE(state->values.value(vaultKey), secret);
     QVERIFY(!settings.contains(plaintextKey));
@@ -6548,7 +6976,7 @@ failedMigrationScrubInvalidatesNegativeCache()
                  &legacy, scope, GC_STRAVA_TOKEN, plaintextKey,
                  QStringLiteral("missing")),
              QVariant(secret));
-    QCOMPARE(state->reads, 2);
+    QCOMPARE(state->reads, 3);
     QCOMPARE(state->writes, 1);
     QCOMPARE(state->values.value(vaultKey), secret);
 
@@ -6557,7 +6985,7 @@ failedMigrationScrubInvalidatesNegativeCache()
                  &legacy, scope, GC_STRAVA_TOKEN, plaintextKey,
                  QStringLiteral("missing")),
              QVariant(secret));
-    QCOMPARE(state->reads, 3);
+    QCOMPARE(state->reads, 4);
     QCOMPARE(state->writes, 1);
 
     bool readable = false;
@@ -7410,7 +7838,7 @@ migrationDoesNotOverwriteCredentialCreatedAfterMiss()
     const QString vaultKey = CredentialSettings::vaultKey(
         scope, GC_STRAVA_TOKEN);
     bool published = false;
-    state->beforeWrite = [&] {
+    state->beforeCreateIfAbsent = [&] {
         if (published)
             return;
         published = true;
@@ -7422,6 +7850,9 @@ migrationDoesNotOverwriteCredentialCreatedAfterMiss()
                  &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
                  QStringLiteral("missing")),
              QVariant(currentSecret));
+    QCOMPARE(state->reads, 2);
+    QCOMPARE(state->creates, 1);
+    QCOMPARE(state->overwrites, 0);
     QCOMPARE(state->values.value(vaultKey), currentSecret);
     QVERIFY(!ini.contains(plaintextKey));
 }
@@ -7447,7 +7878,7 @@ migrationCollisionReadFailureRetainsPlaintextAndRetries()
     const QString vaultKey = CredentialSettings::vaultKey(
         scope, GC_STRAVA_TOKEN);
     bool published = false;
-    state->beforeWrite = [&] {
+    state->beforeCreateIfAbsent = [&] {
         if (published)
             return;
         published = true;
@@ -7460,6 +7891,9 @@ migrationCollisionReadFailureRetainsPlaintextAndRetries()
                  &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
                  QStringLiteral("missing")),
              QVariant(QStringLiteral("missing")));
+    QCOMPARE(state->reads, 2);
+    QCOMPARE(state->creates, 1);
+    QCOMPARE(state->overwrites, 0);
     QCOMPARE(state->values.value(vaultKey), currentSecret);
     QVERIFY(ini.contains(plaintextKey));
     QCOMPARE(ini.value(plaintextKey).toString(), staleSecret);
@@ -7470,7 +7904,82 @@ migrationCollisionReadFailureRetainsPlaintextAndRetries()
                  &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
                  QStringLiteral("missing")),
              QVariant(currentSecret));
+    QCOMPARE(state->reads, 3);
+    QCOMPARE(state->creates, 1);
+    QCOMPARE(state->overwrites, 0);
     QCOMPARE(state->values.value(vaultKey), currentSecret);
+    QVERIFY(!ini.contains(plaintextKey));
+}
+
+void TestCredentialSettings::
+definiteMigrationOutcomeRequiresConfirmation_data()
+{
+    QTest::addColumn<bool>("collision");
+    QTest::newRow("created-then-missing") << false;
+    QTest::newRow("already-exists-then-missing") << true;
+}
+
+void TestCredentialSettings::
+definiteMigrationOutcomeRequiresConfirmation()
+{
+    QFETCH(bool, collision);
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings ini(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope = CredentialSettings::ensureScopeId(
+        &ini, QStringLiteral("credential_store/id"));
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString legacySecret =
+        QStringLiteral("legacy-secret");
+    const QString competingSecret =
+        QStringLiteral("competing-secret");
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    ini.setValue(plaintextKey, legacySecret);
+    ini.sync();
+    QCOMPARE(ini.status(), QSettings::NoError);
+
+    auto state = std::make_shared<FakeStoreState>();
+    if (collision) {
+        state->beforeCreateIfAbsent = [
+            state, vaultKey, competingSecret] {
+                state->values.insert(
+                    vaultKey, competingSecret);
+            };
+    }
+    state->beforeRead = [state, vaultKey] {
+        if (state->reads == 2)
+            state->values.remove(vaultKey);
+    };
+    CredentialSettings credentials(fakeStore(state));
+
+    QCOMPARE(
+        credentials.value(
+            &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+            QStringLiteral("missing")),
+        QVariant(QStringLiteral("missing")));
+    QCOMPARE(state->reads, 2);
+    QCOMPARE(state->creates, 1);
+    QCOMPARE(state->overwrites, 0);
+    QVERIFY(!state->values.contains(vaultKey));
+    QCOMPARE(ini.value(plaintextKey).toString(),
+             legacySecret);
+
+    state->beforeRead = {};
+    state->beforeCreateIfAbsent = {};
+    QCOMPARE(
+        credentials.value(
+            &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+            QStringLiteral("missing")),
+        QVariant(legacySecret));
+    QCOMPARE(state->reads, 4);
+    QCOMPARE(state->creates, 2);
+    QCOMPARE(state->overwrites, 0);
+    QCOMPARE(state->values.value(vaultKey),
+             legacySecret);
     QVERIFY(!ini.contains(plaintextKey));
 }
 
@@ -7505,7 +8014,7 @@ creatingMigrationDoesNotOverwriteCredentialCreatedAfterMiss()
 
     auto state = std::make_shared<FakeStoreState>();
     bool published = false;
-    state->beforeWrite = [&] {
+    state->beforeCreateIfAbsent = [&] {
         if (published)
             return;
         published = true;
@@ -7517,7 +8026,149 @@ creatingMigrationDoesNotOverwriteCredentialCreatedAfterMiss()
                  &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
                  QStringLiteral("missing")),
              QVariant(currentSecret));
+    QCOMPARE(state->reads, 2);
+    QCOMPARE(state->creates, 1);
+    QCOMPARE(state->overwrites, 0);
     QCOMPARE(state->values.value(vaultKey), currentSecret);
+    QVERIFY(!ini.contains(plaintextKey));
+    QCOMPARE(
+        credentialPhaseTransaction(
+            deletionPath, QByteArrayLiteral("active")),
+        transaction);
+}
+
+void TestCredentialSettings::
+creatingMigrationCollisionReadFailureRetainsTransaction()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot =
+        temporary.filePath(QStringLiteral("credential-state"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings ini(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope = CredentialSettings::ensureScopeId(
+        &ini, QStringLiteral("credential_store/id"));
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString staleSecret =
+        QStringLiteral("stale-plaintext");
+    const QString currentSecret =
+        QStringLiteral("current-vault-secret");
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    const QString deletionPath = credentialOperationFile(
+        stateRoot, vaultKey, QStringLiteral(".deletion"));
+    QByteArray transaction;
+    QVERIFY(writeCredentialPhaseFile(
+        deletionPath, QByteArrayLiteral("creating"),
+        &transaction));
+    ini.setValue(plaintextKey, staleSecret);
+    ini.sync();
+    QCOMPARE(ini.status(), QSettings::NoError);
+
+    auto state = std::make_shared<FakeStoreState>();
+    bool published = false;
+    state->beforeCreateIfAbsent = [&] {
+        if (published)
+            return;
+        published = true;
+        state->values.insert(vaultKey, currentSecret);
+        state->failReads = true;
+    };
+    CredentialSettings credentials(fakeStore(state));
+
+    QCOMPARE(credentials.value(
+                 &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(QStringLiteral("missing")));
+    QCOMPARE(state->reads, 2);
+    QCOMPARE(state->creates, 1);
+    QCOMPARE(state->overwrites, 0);
+    QVERIFY(ini.contains(plaintextKey));
+    QCOMPARE(
+        credentialPhaseTransaction(
+            deletionPath, QByteArrayLiteral("creating")),
+        transaction);
+
+    state->failReads = false;
+    QCOMPARE(credentials.value(
+                 &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(currentSecret));
+    QCOMPARE(state->reads, 3);
+    QCOMPARE(state->creates, 1);
+    QCOMPARE(state->overwrites, 0);
+    QVERIFY(!ini.contains(plaintextKey));
+    QCOMPARE(
+        credentialPhaseTransaction(
+            deletionPath, QByteArrayLiteral("active")),
+        transaction);
+}
+
+void TestCredentialSettings::
+creatingMigrationUnsupportedRetainsTransactionAndRetries()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot = temporary.filePath(
+        QStringLiteral("credential-state"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings ini(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString legacySecret =
+        QStringLiteral("legacy-secret");
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    const QString deletionPath = credentialOperationFile(
+        stateRoot, vaultKey, QStringLiteral(".deletion"));
+    QByteArray transaction;
+    QVERIFY(writeCredentialPhaseFile(
+        deletionPath, QByteArrayLiteral("creating"),
+        &transaction));
+    ini.setValue(plaintextKey, legacySecret);
+    ini.sync();
+    QCOMPARE(ini.status(), QSettings::NoError);
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->supportCreates = false;
+    CredentialSettings credentials(fakeStore(state));
+
+    QCOMPARE(
+        credentials.value(
+            &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+            QStringLiteral("missing")),
+        QVariant(legacySecret));
+    QCOMPARE(state->reads, 2);
+    QCOMPARE(state->creates, 1);
+    QCOMPARE(state->overwrites, 0);
+    QVERIFY(!state->values.contains(vaultKey));
+    QCOMPARE(ini.value(plaintextKey).toString(),
+             legacySecret);
+    QCOMPARE(
+        credentialPhaseTransaction(
+            deletionPath, QByteArrayLiteral("creating")),
+        transaction);
+
+    state->supportCreates = true;
+    QCOMPARE(
+        credentials.value(
+            &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+            QStringLiteral("missing")),
+        QVariant(legacySecret));
+    QCOMPARE(state->reads, 4);
+    QCOMPARE(state->creates, 2);
+    QCOMPARE(state->overwrites, 0);
+    QCOMPARE(state->values.value(vaultKey),
+             legacySecret);
     QVERIFY(!ini.contains(plaintextKey));
     QCOMPARE(
         credentialPhaseTransaction(
@@ -7551,7 +8202,14 @@ failedMigrationDoesNotCacheOverNewerCredential()
                  &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
                  QStringLiteral("missing")),
              QVariant(staleSecret));
+    QCOMPARE(state->reads, 2);
+    QCOMPARE(state->creates, 1);
+    QCOMPARE(state->overwrites, 0);
+    QVERIFY(!state->values.contains(vaultKey));
     QVERIFY(ini.contains(plaintextKey));
+    QCOMPARE(
+        ini.value(plaintextKey).toString(),
+        staleSecret);
 
     state->failWrites = false;
     state->values.insert(vaultKey, currentSecret);
@@ -7559,7 +8217,281 @@ failedMigrationDoesNotCacheOverNewerCredential()
                  &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
                  QStringLiteral("missing")),
              QVariant(currentSecret));
+    QCOMPARE(state->reads, 3);
+    QCOMPARE(state->creates, 1);
+    QCOMPARE(state->overwrites, 0);
     QCOMPARE(state->values.value(vaultKey), currentSecret);
+    QVERIFY(!ini.contains(plaintextKey));
+}
+
+void TestCredentialSettings::
+transientMigrationCreateFailureRetriesInSameSession()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings ini(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope = CredentialSettings::ensureScopeId(
+        &ini, QStringLiteral("credential_store/id"));
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString legacySecret =
+        QStringLiteral("legacy-secret");
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    ini.setValue(plaintextKey, legacySecret);
+    ini.sync();
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->failWrites = true;
+    CredentialSettings credentials(fakeStore(state));
+
+    QCOMPARE(credentials.value(
+                 &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(legacySecret));
+    QCOMPARE(state->reads, 2);
+    QCOMPARE(state->creates, 1);
+    QCOMPARE(state->overwrites, 0);
+    QVERIFY(ini.contains(plaintextKey));
+
+    state->failWrites = false;
+    QCOMPARE(credentials.value(
+                 &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(legacySecret));
+    QCOMPARE(state->reads, 4);
+    QCOMPARE(state->creates, 2);
+    QCOMPARE(state->overwrites, 0);
+    QCOMPARE(state->values.value(vaultKey), legacySecret);
+    QVERIFY(!ini.contains(plaintextKey));
+}
+
+void TestCredentialSettings::
+failedMigrationCreateRetainsPlaintextAndRetries()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings ini(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope = CredentialSettings::ensureScopeId(
+        &ini, QStringLiteral("credential_store/id"));
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString legacySecret =
+        QStringLiteral("legacy-secret");
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    ini.setValue(plaintextKey, legacySecret);
+    ini.sync();
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->failedCreates = true;
+    CredentialSettings credentials(fakeStore(state));
+
+    QCOMPARE(
+        credentials.value(
+            &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+            QStringLiteral("missing")),
+        QVariant(legacySecret));
+    QCOMPARE(state->reads, 2);
+    QCOMPARE(state->creates, 1);
+    QCOMPARE(state->overwrites, 0);
+    QVERIFY(!state->values.contains(vaultKey));
+    QCOMPARE(ini.value(plaintextKey).toString(),
+             legacySecret);
+
+    state->failedCreates = false;
+    QCOMPARE(
+        credentials.value(
+            &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+            QStringLiteral("missing")),
+        QVariant(legacySecret));
+    QCOMPARE(state->reads, 4);
+    QCOMPARE(state->creates, 2);
+    QCOMPARE(state->overwrites, 0);
+    QCOMPARE(state->values.value(vaultKey),
+             legacySecret);
+    QVERIFY(!ini.contains(plaintextKey));
+}
+
+void TestCredentialSettings::
+unsupportedMigrationRetainsPlaintextAndRetries()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings ini(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope = CredentialSettings::ensureScopeId(
+        &ini, QStringLiteral("credential_store/id"));
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString legacySecret =
+        QStringLiteral("legacy-secret");
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    ini.setValue(plaintextKey, legacySecret);
+    ini.sync();
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->supportCreates = false;
+    CredentialSettings credentials(fakeStore(state));
+
+    for (int attempt = 1; attempt <= 2; ++attempt) {
+        QCOMPARE(credentials.value(
+                     &ini, scope, GC_STRAVA_TOKEN,
+                     plaintextKey,
+                     QStringLiteral("missing")),
+                 QVariant(legacySecret));
+        QCOMPARE(state->reads, attempt * 2);
+        QCOMPARE(state->creates, attempt);
+        QCOMPARE(state->overwrites, 0);
+        QVERIFY(!state->values.contains(vaultKey));
+        QCOMPARE(
+            ini.value(plaintextKey).toString(),
+            legacySecret);
+    }
+
+    state->supportCreates = true;
+    QCOMPARE(credentials.value(
+                 &ini, scope, GC_STRAVA_TOKEN,
+                 plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(legacySecret));
+    QCOMPARE(state->reads, 6);
+    QCOMPARE(state->creates, 3);
+    QCOMPARE(state->overwrites, 0);
+    QCOMPARE(state->values.value(vaultKey),
+             legacySecret);
+    QVERIFY(!ini.contains(plaintextKey));
+}
+
+void TestCredentialSettings::
+indeterminateMigrationCommitIsConfirmed()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings ini(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope = CredentialSettings::ensureScopeId(
+        &ini, QStringLiteral("credential_store/id"));
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString legacySecret =
+        QStringLiteral("legacy-secret");
+    const QString canonicalSecret =
+        QStringLiteral("canonical-secret");
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    ini.setValue(plaintextKey, legacySecret);
+    ini.sync();
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->indeterminateCreates = true;
+    state->commitIndeterminateCreates = true;
+    state->indeterminateCommittedValue =
+        canonicalSecret;
+    CredentialSettings credentials(fakeStore(state));
+
+    QCOMPARE(credentials.value(
+                 &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(canonicalSecret));
+    QCOMPARE(state->reads, 2);
+    QCOMPARE(state->creates, 1);
+    QCOMPARE(state->overwrites, 0);
+    QCOMPARE(state->values.value(vaultKey), canonicalSecret);
+    QVERIFY(!ini.contains(plaintextKey));
+}
+
+void TestCredentialSettings::
+indeterminateMigrationMissFailsClosedAndRetries()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings ini(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope = CredentialSettings::ensureScopeId(
+        &ini, QStringLiteral("credential_store/id"));
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString legacySecret =
+        QStringLiteral("legacy-secret");
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    ini.setValue(plaintextKey, legacySecret);
+    ini.sync();
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->indeterminateCreates = true;
+    CredentialSettings credentials(fakeStore(state));
+
+    QCOMPARE(credentials.value(
+                 &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(QStringLiteral("missing")));
+    QCOMPARE(state->reads, 2);
+    QCOMPARE(state->creates, 1);
+    QCOMPARE(state->overwrites, 0);
+    QVERIFY(!state->values.contains(vaultKey));
+    QVERIFY(ini.contains(plaintextKey));
+
+    state->indeterminateCreates = false;
+    QCOMPARE(credentials.value(
+                 &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(legacySecret));
+    QCOMPARE(state->reads, 4);
+    QCOMPARE(state->creates, 2);
+    QCOMPARE(state->overwrites, 0);
+    QCOMPARE(state->values.value(vaultKey), legacySecret);
+    QVERIFY(!ini.contains(plaintextKey));
+}
+
+void TestCredentialSettings::
+indeterminateMigrationReadFailureRetainsPlaintext()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings ini(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope = CredentialSettings::ensureScopeId(
+        &ini, QStringLiteral("credential_store/id"));
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString legacySecret =
+        QStringLiteral("legacy-secret");
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    ini.setValue(plaintextKey, legacySecret);
+    ini.sync();
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->indeterminateCreates = true;
+    state->commitIndeterminateCreates = true;
+    state->beforeCreateIfAbsent = [&] {
+        state->failReads = true;
+    };
+    CredentialSettings credentials(fakeStore(state));
+
+    QCOMPARE(credentials.value(
+                 &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(QStringLiteral("missing")));
+    QCOMPARE(state->reads, 2);
+    QCOMPARE(state->creates, 1);
+    QCOMPARE(state->overwrites, 0);
+    QCOMPARE(state->values.value(vaultKey), legacySecret);
+    QVERIFY(ini.contains(plaintextKey));
+
+    state->failReads = false;
+    QCOMPARE(credentials.value(
+                 &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(legacySecret));
+    QCOMPARE(state->reads, 3);
+    QCOMPARE(state->creates, 1);
+    QCOMPARE(state->overwrites, 0);
     QVERIFY(!ini.contains(plaintextKey));
 }
 
@@ -7596,7 +8528,7 @@ transientReadBeforeMissingCredentialRetriesMigration()
                  &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
                  QStringLiteral("missing")),
              QVariant(legacySecret));
-    QCOMPARE(state->reads, 2);
+    QCOMPARE(state->reads, 3);
     QCOMPARE(state->writes, 1);
     QCOMPARE(state->values.value(vaultKey), legacySecret);
     QVERIFY(!ini.contains(plaintextKey));
@@ -9331,17 +10263,17 @@ newFormatRootlessCredentialRemainsAfterStoreRecovery()
 }
 
 void TestCredentialSettings::
-authorizedLegacyPlaintextMigration_data()
+authorizedLegacyPlaintextRequiresAuthoritativeVaultMiss_data()
 {
-    QTest::addColumn<bool>("failFirstWrite");
-    QTest::newRow("first-attempt") << false;
-    QTest::newRow("retry-after-store-recovery") << true;
+    QTest::addColumn<bool>("vaultUnavailable");
+    QTest::newRow("vault-miss") << false;
+    QTest::newRow("vault-unavailable") << true;
 }
 
 void TestCredentialSettings::
-authorizedLegacyPlaintextMigration()
+authorizedLegacyPlaintextRequiresAuthoritativeVaultMiss()
 {
-    QFETCH(bool, failFirstWrite);
+    QFETCH(bool, vaultUnavailable);
 
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
@@ -9372,6 +10304,11 @@ authorizedLegacyPlaintextMigration()
     QString legacyPath;
     {
         QSettings legacy(organization, application);
+        legacy.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        legacy.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            scope);
         legacy.setValue(legacyKey, secret);
         legacy.sync();
         QCOMPARE(legacy.status(), QSettings::NoError);
@@ -9404,65 +10341,90 @@ authorizedLegacyPlaintextMigration()
     }
 
     factoryState() = std::make_shared<FakeStoreState>();
-    factoryState()->failWrites = failFirstWrite;
+    factoryState()->failReads = vaultUnavailable;
     {
         GSettings settings(organization, application);
         settings.initializeQSettingsGlobal(athleteRoot);
         settings.initializeQSettingsAthlete(
             athleteRoot, athleteName);
-        QCOMPARE(settings.cvalue(
-                     athleteName, GC_RWGPSPASS,
-                     QStringLiteral("missing")).toString(),
-                 secret);
+        QCOMPARE(
+            settings.cvalue(
+                athleteName, GC_RWGPSPASS,
+                QStringLiteral("missing")).toString(),
+            vaultUnavailable
+                ? QStringLiteral("missing")
+                : secret);
+        if (vaultUnavailable) {
+            const QString updatedSecret =
+                QStringLiteral(
+                    "updated-authorized-legacy-password");
+            QSettings legacy(organization, application);
+            legacy.setValue(legacyKey, updatedSecret);
+            legacy.sync();
+            QCOMPARE(legacy.status(), QSettings::NoError);
+            QCOMPARE(settings.cvalue(
+                         athleteName, GC_RWGPSPASS,
+                         QStringLiteral("missing")).toString(),
+                     QStringLiteral("missing"));
+
+            legacy.remove(legacyKey);
+            legacy.sync();
+            QCOMPARE(legacy.status(), QSettings::NoError);
+            QCOMPARE(settings.cvalue(
+                         athleteName, GC_RWGPSPASS,
+                         QStringLiteral("missing")).toString(),
+                     QStringLiteral("missing"));
+
+            legacy.setValue(legacyKey, secret);
+            legacy.sync();
+            QCOMPARE(legacy.status(), QSettings::NoError);
+            QCOMPARE(settings.cvalue(
+                         athleteName, GC_RWGPSPASS,
+                         QStringLiteral("missing")).toString(),
+                     QStringLiteral("missing"));
+        }
         settings.syncQSettings();
     }
 
-    if (failFirstWrite) {
-        QSettings retained(organization, application);
-        QCOMPARE(retained.value(legacyKey).toString(),
-                 secret);
-        QVERIFY(fileContents(legacyPath).contains(
-            secret.toUtf8()));
-        QVERIFY(factoryState()->values.isEmpty());
-
-        factoryState()->failWrites = false;
+    {
         GSettings retry(organization, application);
         retry.initializeQSettingsGlobal(athleteRoot);
         retry.initializeQSettingsAthlete(
             athleteRoot, athleteName);
-        QCOMPARE(retry.cvalue(
-                     athleteName, GC_RWGPSPASS,
-                     QStringLiteral("missing")).toString(),
-                 secret);
+        QCOMPARE(
+            retry.cvalue(
+                athleteName, GC_RWGPSPASS,
+                QStringLiteral("missing")).toString(),
+            vaultUnavailable
+                ? QStringLiteral("missing")
+                : secret);
         retry.syncQSettings();
     }
 
-    QSettings scrubbed(organization, application);
-    QVERIFY(!scrubbed.contains(legacyKey));
-    QVERIFY(!fileContents(legacyPath).contains(
+    QSettings retained(organization, application);
+    QCOMPARE(retained.value(legacyKey).toString(),
+             secret);
+    QVERIFY(fileContents(legacyPath).contains(
         secret.toUtf8()));
     QVERIFY(!fileContents(privatePath).contains(
         secret.toUtf8()));
-    QCOMPARE(factoryState()->values.size(), 1);
-    QCOMPARE(
-        factoryState()->values.value(
-            CredentialSettings::vaultKey(
-                scope, GC_RWGPSPASS)),
-        secret);
+    QCOMPARE(factoryState()->creates, 0);
+    QCOMPARE(factoryState()->overwrites, 0);
+    QVERIFY(factoryState()->values.isEmpty());
 }
 
 void TestCredentialSettings::
-authorizedLegacyGlobalPlaintextMigration_data()
+authorizedLegacyGlobalPlaintextRequiresAuthoritativeVaultMiss_data()
 {
-    QTest::addColumn<bool>("failFirstWrite");
-    QTest::newRow("first-attempt") << false;
-    QTest::newRow("retry-after-store-recovery") << true;
+    QTest::addColumn<bool>("vaultUnavailable");
+    QTest::newRow("vault-miss") << false;
+    QTest::newRow("vault-unavailable") << true;
 }
 
 void TestCredentialSettings::
-authorizedLegacyGlobalPlaintextMigration()
+authorizedLegacyGlobalPlaintextRequiresAuthoritativeVaultMiss()
 {
-    QFETCH(bool, failFirstWrite);
+    QFETCH(bool, vaultUnavailable);
 
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
@@ -9493,6 +10455,11 @@ authorizedLegacyGlobalPlaintextMigration()
     QString legacyPath;
     {
         QSettings legacy(organization, application);
+        legacy.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        legacy.setValue(
+            legacyCredentialScopeMappingKey(QString()),
+            scope);
         legacy.setValue(legacyKey, secret);
         legacy.sync();
         QCOMPARE(legacy.status(), QSettings::NoError);
@@ -9525,7 +10492,7 @@ authorizedLegacyGlobalPlaintextMigration()
 
     factoryState() =
         std::make_shared<FakeStoreState>();
-    factoryState()->failWrites = failFirstWrite;
+    factoryState()->failReads = vaultUnavailable;
     {
         GSettings settings(organization, application);
         settings.initializeQSettingsGlobal(athleteRoot);
@@ -9533,42 +10500,1479 @@ authorizedLegacyGlobalPlaintextMigration()
             settings.value(
                 nullptr, GC_NOLIO_REFRESH_TOKEN,
                 QStringLiteral("missing")).toString(),
-            secret);
+            vaultUnavailable
+                ? QStringLiteral("missing")
+                : secret);
         settings.syncQSettings();
     }
 
-    if (failFirstWrite) {
-        QSettings retained(organization, application);
-        QCOMPARE(
-            retained.value(legacyKey).toString(),
-            secret);
-        QVERIFY(fileContents(legacyPath).contains(
-            secret.toUtf8()));
-        QVERIFY(factoryState()->values.isEmpty());
-
-        factoryState()->failWrites = false;
+    {
         GSettings retry(organization, application);
         retry.initializeQSettingsGlobal(athleteRoot);
         QCOMPARE(
             retry.value(
                 nullptr, GC_NOLIO_REFRESH_TOKEN,
                 QStringLiteral("missing")).toString(),
-            secret);
+            vaultUnavailable
+                ? QStringLiteral("missing")
+                : secret);
         retry.syncQSettings();
     }
 
-    QSettings scrubbed(organization, application);
-    QVERIFY(!scrubbed.contains(legacyKey));
-    QVERIFY(!fileContents(legacyPath).contains(
+    QSettings retained(organization, application);
+    QCOMPARE(retained.value(legacyKey).toString(),
+             secret);
+    QVERIFY(fileContents(legacyPath).contains(
         secret.toUtf8()));
     QVERIFY(!fileContents(globalPath).contains(
         secret.toUtf8()));
-    QCOMPARE(factoryState()->values.size(), 1);
+    QCOMPARE(factoryState()->creates, 0);
+    QCOMPARE(factoryState()->overwrites, 0);
+    QVERIFY(factoryState()->values.isEmpty());
+}
+
+void TestCredentialSettings::
+targetCredentialUseBlocksLegacyFallback_data()
+{
+    QTest::addColumn<int>("action");
+    QTest::newRow("canonical-read") << 0;
+    QTest::newRow("explicit-write") << 1;
+    QTest::newRow("explicit-delete") << 2;
+    QTest::newRow("canonical-after-cached-miss") << 3;
+    QTest::newRow("memory-only-read-does-not-commit-marker") << 4;
+}
+
+void TestCredentialSettings::
+targetCredentialUseBlocksLegacyFallback()
+{
+    QFETCH(int, action);
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialTargetUse-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString plaintextKey = plainKey(GC_RWGPSPASS);
+    const QString legacyKey =
+        athleteName + QLatin1Char('/') + plaintextKey;
+    const QString legacySecret =
+        QStringLiteral("older-legacy-password");
+    const QString canonicalSecret =
+        QStringLiteral("canonical-password");
+    const QString replacementSecret =
+        QStringLiteral("replacement-password");
+    const QString scope =
+        QStringLiteral("7e7e7e7e-7e7e-4e7e-8e7e-7e7e7e7e7e7e");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("athletes"));
+    const QString privatePath = QDir(athleteRoot).filePath(
+        QStringLiteral(
+            "Athlete/config/athlete-private.ini"));
+    QVERIFY(QDir().mkpath(
+        QFileInfo(privatePath).absolutePath()));
+
+    QString legacyPath;
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        legacy.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            scope);
+        legacy.setValue(legacyKey, legacySecret);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+        legacyPath = legacy.fileName();
+    }
+    {
+        QSettings target(
+            privatePath, QSettings::IniFormat);
+        target.setValue(
+            QStringLiteral("credential_store/id"),
+            scope);
+        target.sync();
+        QCOMPARE(target.status(), QSettings::NoError);
+    }
+    {
+        QSettings system(
+            QSettings::IniFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        system.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        system.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            scope);
+        system.sync();
+        QCOMPARE(system.status(), QSettings::NoError);
+    }
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_RWGPSPASS);
+    if (action != 1 && action != 3 && action != 4) {
+        factoryState()->values.insert(
+            vaultKey, canonicalSecret);
+    }
+
+    {
+        GSettings settings(organization, application);
+        settings.initializeQSettingsGlobal(athleteRoot);
+        settings.initializeQSettingsAthlete(
+            athleteRoot, athleteName);
+
+        if (action == 0) {
+            QCOMPARE(
+                settings.cvalue(
+                    athleteName, GC_RWGPSPASS,
+                    QStringLiteral("missing")).toString(),
+                canonicalSecret);
+            factoryState()->values.remove(vaultKey);
+        } else if (action == 1) {
+            QVERIFY(settings.setCValueChecked(
+                athleteName, GC_RWGPSPASS,
+                replacementSecret));
+            factoryState()->values.remove(vaultKey);
+        } else if (action == 2) {
+            QVERIFY(settings.setCValueChecked(
+                athleteName, GC_RWGPSPASS, QString()));
+        } else if (action == 3) {
+            QCOMPARE(
+                settings.cvalue(
+                    athleteName, GC_RWGPSPASS,
+                    QStringLiteral("missing")).toString(),
+                legacySecret);
+            factoryState()->values.insert(
+                vaultKey, canonicalSecret);
+            QCOMPARE(
+                settings.cvalue(
+                    athleteName, GC_RWGPSPASS,
+                    QStringLiteral("missing")).toString(),
+                canonicalSecret);
+            factoryState()->values.remove(vaultKey);
+        } else {
+            factoryState()->failWrites = true;
+            QVERIFY(!settings.setCValueChecked(
+                athleteName, GC_RWGPSPASS,
+                replacementSecret));
+            factoryState()->failWrites = false;
+            {
+                QSettings target(
+                    privatePath, QSettings::IniFormat);
+                target.remove(
+                    legacyFallbackBlockTestKey(
+                        scope, GC_RWGPSPASS));
+                target.sync();
+                QCOMPARE(
+                    target.status(),
+                    QSettings::NoError);
+            }
+            QCOMPARE(
+                settings.cvalue(
+                    athleteName, GC_RWGPSPASS,
+                    QStringLiteral("missing")).toString(),
+                replacementSecret);
+        }
+    }
+
+    QVERIFY(factoryState()->values.isEmpty());
+    {
+        QSettings target(
+            privatePath, QSettings::IniFormat);
+        QCOMPARE(
+            target.value(
+                legacyFallbackBlockTestKey(
+                    scope, GC_RWGPSPASS),
+                false).toBool(),
+            action != 4);
+    }
+    {
+        QSettings retained(organization, application);
+        QCOMPARE(retained.value(legacyKey).toString(),
+                 legacySecret);
+    }
+    QVERIFY(fileContents(legacyPath).contains(
+        legacySecret.toUtf8()));
+
+    {
+        GSettings restarted(organization, application);
+        restarted.initializeQSettingsGlobal(athleteRoot);
+        restarted.initializeQSettingsAthlete(
+            athleteRoot, athleteName);
+        QCOMPARE(
+            restarted.cvalue(
+                athleteName, GC_RWGPSPASS,
+                QStringLiteral("missing")).toString(),
+            QStringLiteral("missing"));
+    }
+}
+
+void TestCredentialSettings::
+targetPlaintextPrecedesLegacyAfterTransientVaultFailure()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialTargetPrecedence-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString plaintextKey = plainKey(GC_RWGPSPASS);
+    const QString legacyKey =
+        athleteName + QLatin1Char('/') + plaintextKey;
+    const QString targetSecret =
+        QStringLiteral("newer-target-password");
+    const QString legacySecret =
+        QStringLiteral("older-legacy-password");
+    const QString scope =
+        QStringLiteral("a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("athletes"));
+    const QString privatePath = QDir(athleteRoot).filePath(
+        QStringLiteral(
+            "Athlete/config/athlete-private.ini"));
+    QVERIFY(QDir().mkpath(
+        QFileInfo(privatePath).absolutePath()));
+
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        legacy.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            scope);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+    }
+    {
+        QSettings privateSettings(
+            privatePath, QSettings::IniFormat);
+        privateSettings.setValue(
+            QStringLiteral("credential_store/id"),
+            scope);
+        privateSettings.sync();
+        QCOMPARE(privateSettings.status(),
+                 QSettings::NoError);
+    }
+    {
+        QSettings system(
+            QSettings::IniFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        system.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        system.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            scope);
+        system.sync();
+        QCOMPARE(system.status(), QSettings::NoError);
+    }
+
+    factoryState() =
+        std::make_shared<FakeStoreState>();
+    GSettings settings(organization, application);
+    settings.initializeQSettingsGlobal(athleteRoot);
+    settings.initializeQSettingsAthlete(
+        athleteRoot, athleteName);
+
+    {
+        QSettings target(
+            privatePath, QSettings::IniFormat);
+        target.setValue(plaintextKey, targetSecret);
+        target.sync();
+        QCOMPARE(target.status(), QSettings::NoError);
+    }
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(legacyKey, legacySecret);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+    }
+
+    factoryState()->reads = 0;
+    factoryState()->writes = 0;
+    factoryState()->creates = 0;
+    factoryState()->overwrites = 0;
+    factoryState()->failNextReads = 1;
+    QCOMPARE(
+        settings.cvalue(
+            athleteName, GC_RWGPSPASS,
+            QStringLiteral("missing")).toString(),
+        QStringLiteral("missing"));
+    QCOMPARE(factoryState()->creates, 0);
+    QVERIFY(factoryState()->values.isEmpty());
+    {
+        QSettings target(
+            privatePath, QSettings::IniFormat);
+        QCOMPARE(
+            target.value(plaintextKey).toString(),
+            targetSecret);
+    }
+    {
+        QSettings legacy(organization, application);
+        QCOMPARE(
+            legacy.value(legacyKey).toString(),
+            legacySecret);
+    }
+
+    QCOMPARE(
+        settings.cvalue(
+            athleteName, GC_RWGPSPASS,
+            QStringLiteral("missing")).toString(),
+        targetSecret);
+    QCOMPARE(factoryState()->creates, 1);
+    QCOMPARE(factoryState()->overwrites, 0);
     QCOMPARE(
         factoryState()->values.value(
             CredentialSettings::vaultKey(
-                scope, GC_NOLIO_REFRESH_TOKEN)),
-        secret);
+                scope, GC_RWGPSPASS)),
+        targetSecret);
+    {
+        QSettings target(
+            privatePath, QSettings::IniFormat);
+        QVERIFY(!target.contains(plaintextKey));
+    }
+    {
+        QSettings legacy(organization, application);
+        QCOMPARE(
+            legacy.value(legacyKey).toString(),
+            legacySecret);
+    }
+}
+
+void TestCredentialSettings::
+emptyTargetPlaintextBlocksLegacyAcrossRestart_data()
+{
+    QTest::addColumn<bool>("preexistingTarget");
+    QTest::newRow("preexisting-target") << true;
+    QTest::newRow("late-target") << false;
+}
+
+void TestCredentialSettings::
+emptyTargetPlaintextBlocksLegacyAcrossRestart()
+{
+    QFETCH(bool, preexistingTarget);
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialEmptyTarget-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString plaintextKey = plainKey(GC_RWGPSPASS);
+    const QString legacyKey =
+        athleteName + QLatin1Char('/') + plaintextKey;
+    const QString legacySecret =
+        QStringLiteral("superseded-legacy-password");
+    const QString scope =
+        QStringLiteral("f6f6f6f6-f6f6-46f6-86f6-f6f6f6f6f6f6");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("athletes"));
+    const QString privatePath = QDir(athleteRoot).filePath(
+        QStringLiteral(
+            "Athlete/config/athlete-private.ini"));
+    QVERIFY(QDir().mkpath(
+        QFileInfo(privatePath).absolutePath()));
+
+    QString legacyPath;
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        legacy.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            scope);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+        legacyPath = legacy.fileName();
+    }
+    {
+        QSettings privateSettings(
+            privatePath, QSettings::IniFormat);
+        privateSettings.setValue(
+            QStringLiteral("credential_store/id"),
+            scope);
+        privateSettings.sync();
+        QCOMPARE(privateSettings.status(),
+                 QSettings::NoError);
+    }
+    {
+        QSettings system(
+            QSettings::IniFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        system.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        system.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            scope);
+        system.sync();
+        QCOMPARE(system.status(), QSettings::NoError);
+    }
+
+    if (preexistingTarget) {
+        QSettings target(
+            privatePath, QSettings::IniFormat);
+        target.setValue(plaintextKey, QString());
+        target.sync();
+        QCOMPARE(target.status(), QSettings::NoError);
+
+        QSettings legacy(organization, application);
+        legacy.setValue(legacyKey, legacySecret);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+    }
+
+    factoryState() =
+        std::make_shared<FakeStoreState>();
+    factoryState()->reads = 0;
+    factoryState()->writes = 0;
+    factoryState()->creates = 0;
+    factoryState()->overwrites = 0;
+    {
+        GSettings settings(organization, application);
+        settings.initializeQSettingsGlobal(athleteRoot);
+        settings.initializeQSettingsAthlete(
+            athleteRoot, athleteName);
+
+        if (!preexistingTarget) {
+            QSettings target(
+                privatePath, QSettings::IniFormat);
+            target.setValue(plaintextKey, QString());
+            target.sync();
+            QCOMPARE(target.status(),
+                     QSettings::NoError);
+
+            QSettings legacy(organization, application);
+            legacy.setValue(legacyKey, legacySecret);
+            legacy.sync();
+            QCOMPARE(legacy.status(),
+                     QSettings::NoError);
+        }
+
+        for (int read = 0; read < 2; ++read) {
+            QCOMPARE(
+                settings.cvalue(
+                    athleteName, GC_RWGPSPASS,
+                    QStringLiteral("missing")).toString(),
+                QStringLiteral("missing"));
+        }
+        QCOMPARE(factoryState()->creates, 0);
+        QCOMPARE(factoryState()->overwrites, 0);
+        QVERIFY(factoryState()->values.isEmpty());
+    }
+
+    {
+        GSettings restarted(organization, application);
+        restarted.initializeQSettingsGlobal(athleteRoot);
+        restarted.initializeQSettingsAthlete(
+            athleteRoot, athleteName);
+        QCOMPARE(
+            restarted.cvalue(
+                athleteName, GC_RWGPSPASS,
+                QStringLiteral("missing")).toString(),
+            QStringLiteral("missing"));
+    }
+    QCOMPARE(factoryState()->creates, 0);
+    QCOMPARE(factoryState()->overwrites, 0);
+    QVERIFY(factoryState()->values.isEmpty());
+    {
+        QSettings protectedTarget(
+            privatePath, QSettings::IniFormat);
+        QVERIFY(protectedTarget.value(
+            legacyFallbackBlockTestKey(
+                scope, GC_RWGPSPASS),
+            false).toBool());
+        QVERIFY(!protectedTarget.contains(plaintextKey));
+    }
+    {
+        QSettings retained(organization, application);
+        QCOMPARE(retained.value(legacyKey).toString(),
+                 legacySecret);
+    }
+    QVERIFY(fileContents(legacyPath).contains(
+        legacySecret.toUtf8()));
+}
+
+void TestCredentialSettings::
+failedFallbackMarkerPersistenceFailsClosedAndRetries_data()
+{
+    QTest::addColumn<bool>("canonicalTarget");
+    QTest::addColumn<bool>("sameProcessRetry");
+    QTest::newRow("empty-target-restart")
+        << false << false;
+    QTest::newRow("canonical-target-restart")
+        << true << false;
+    QTest::newRow("canonical-target-same-process")
+        << true << true;
+}
+
+void TestCredentialSettings::
+failedFallbackMarkerPersistenceFailsClosedAndRetries()
+{
+    QFETCH(bool, canonicalTarget);
+    QFETCH(bool, sameProcessRetry);
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QSettings::Format legacyFormat =
+        legacyMigrationTestFormat();
+    const QSettings::Format targetFormat =
+        targetMigrationTestFormat();
+    QVERIFY(legacyFormat != QSettings::InvalidFormat);
+    QVERIFY(targetFormat != QSettings::InvalidFormat);
+    QSettings::setPath(
+        legacyFormat, QSettings::UserScope,
+        temporary.path());
+    QSettings::setPath(
+        targetFormat, QSettings::UserScope,
+        temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialFallbackMarker-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString plaintextKey = plainKey(GC_RWGPSPASS);
+    const QString legacyKey =
+        athleteName + QLatin1Char('/') + plaintextKey;
+    const QString legacySecret =
+        QStringLiteral("superseded-legacy-password");
+    const QString canonicalSecret =
+        QStringLiteral("canonical-password");
+    const QString scope =
+        QStringLiteral("6d6d6d6d-6d6d-4d6d-8d6d-6d6d6d6d6d6d");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("athletes"));
+    const QString privatePath = QDir(athleteRoot).filePath(
+        QStringLiteral(
+            "Athlete/config/athlete-private.ini"));
+    QVERIFY(QDir().mkpath(
+        QFileInfo(privatePath).absolutePath()));
+
+    {
+        QSettings legacy(
+            legacyFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        legacy.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        legacy.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            scope);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+    }
+    {
+        QSettings target(privatePath, targetFormat);
+        target.setValue(
+            QStringLiteral("credential_store/id"),
+            scope);
+        target.sync();
+        QCOMPARE(target.status(), QSettings::NoError);
+    }
+    {
+        QSettings system(
+            targetFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        system.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        system.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            scope);
+        system.sync();
+        QCOMPARE(system.status(), QSettings::NoError);
+    }
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_RWGPSPASS);
+    MigrationFormatFaultState &fault =
+        migrationFormatFaultState();
+    fault = {};
+    {
+        GSettings settings(
+            organization, application,
+            legacyFormat, targetFormat);
+        settings.initializeQSettingsGlobal(athleteRoot);
+        settings.initializeQSettingsAthlete(
+            athleteRoot, athleteName);
+        if (canonicalTarget) {
+            factoryState()->values.insert(
+                vaultKey, canonicalSecret);
+        } else {
+            QSettings target(privatePath, targetFormat);
+            target.setValue(plaintextKey, QString());
+            target.sync();
+            QCOMPARE(target.status(), QSettings::NoError);
+        }
+        {
+            QSettings legacy(
+                legacyFormat,
+                QSettings::UserScope,
+                organization,
+                application);
+            legacy.setValue(legacyKey, legacySecret);
+            legacy.sync();
+            QCOMPARE(legacy.status(), QSettings::NoError);
+        }
+
+        fault.failurePoint =
+            QStringLiteral("credential-fallback-block");
+        fault.enabled = true;
+        QCOMPARE(
+            settings.cvalue(
+                athleteName, GC_RWGPSPASS,
+                QStringLiteral("missing")).toString(),
+            QStringLiteral("missing"));
+        QCOMPARE(factoryState()->creates, 0);
+        QCOMPARE(factoryState()->overwrites, 0);
+        if (canonicalTarget) {
+            QCOMPARE(factoryState()->values.value(vaultKey),
+                     canonicalSecret);
+        } else {
+            QVERIFY(factoryState()->values.isEmpty());
+        }
+        if (sameProcessRetry) {
+            fault.enabled = false;
+            QCOMPARE(
+                settings.cvalue(
+                    athleteName, GC_RWGPSPASS,
+                    QStringLiteral("missing")).toString(),
+                canonicalSecret);
+        }
+    }
+    fault.enabled = false;
+    QVERIFY(fault.rejectedWrites > 0);
+
+    const QString blockKey = legacyFallbackBlockTestKey(
+        scope, GC_RWGPSPASS);
+    {
+        bool readable = false;
+        const QSettings::SettingsMap unprotectedTarget =
+            persistedSettingsMap(privatePath, &readable);
+        QVERIFY(readable);
+        QCOMPARE(
+            unprotectedTarget.contains(blockKey),
+            sameProcessRetry);
+        QCOMPARE(
+            unprotectedTarget.contains(plaintextKey),
+            !canonicalTarget);
+        if (!canonicalTarget) {
+            QCOMPARE(
+                unprotectedTarget.value(
+                    plaintextKey).toString(),
+                QString());
+        }
+    }
+    {
+        QSettings retained(
+            legacyFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        QCOMPARE(retained.value(legacyKey).toString(),
+                 legacySecret);
+    }
+
+    {
+        GSettings retry(
+            organization, application,
+            legacyFormat, targetFormat);
+        retry.initializeQSettingsGlobal(athleteRoot);
+        retry.initializeQSettingsAthlete(
+            athleteRoot, athleteName);
+        QCOMPARE(
+            retry.cvalue(
+                athleteName, GC_RWGPSPASS,
+                QStringLiteral("missing")).toString(),
+            canonicalTarget
+                ? canonicalSecret
+                : QStringLiteral("missing"));
+    }
+    {
+        bool readable = false;
+        const QSettings::SettingsMap protectedTarget =
+            persistedSettingsMap(privatePath, &readable);
+        QVERIFY(readable);
+        QVERIFY(protectedTarget.value(
+            blockKey, false).toBool());
+        QVERIFY(!protectedTarget.contains(plaintextKey));
+    }
+    {
+        QSettings retained(
+            legacyFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        QCOMPARE(retained.value(legacyKey).toString(),
+                 legacySecret);
+    }
+    QCOMPARE(factoryState()->creates, 0);
+    QCOMPARE(factoryState()->overwrites, 0);
+    if (canonicalTarget) {
+        QCOMPARE(factoryState()->values.value(vaultKey),
+                 canonicalSecret);
+    } else {
+        QVERIFY(factoryState()->values.isEmpty());
+    }
+    fault = {};
+}
+
+void TestCredentialSettings::
+legacyPlaintextRequiresMatchingSourceRoot()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialLegacyRoot-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString legacyKey = athleteName + QLatin1Char('/')
+        + plainKey(GC_RWGPSPASS);
+    const QString secret =
+        QStringLiteral("different-root-password");
+    const QString scope =
+        QStringLiteral("b2b2b2b2-b2b2-42b2-82b2-b2b2b2b2b2b2");
+    const QString activeRoot =
+        temporary.filePath(QStringLiteral("active"));
+    const QString otherRoot =
+        temporary.filePath(QStringLiteral("other"));
+    const QString privatePath = QDir(activeRoot).filePath(
+        QStringLiteral(
+            "Athlete/config/athlete-private.ini"));
+    QVERIFY(QDir().mkpath(
+        QFileInfo(privatePath).absolutePath()));
+    QVERIFY(QDir().mkpath(otherRoot));
+
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(
+            plainKey(GC_HOMEDIR), otherRoot);
+        legacy.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            scope);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+    }
+    {
+        QSettings privateSettings(
+            privatePath, QSettings::IniFormat);
+        privateSettings.setValue(
+            QStringLiteral("credential_store/id"),
+            scope);
+        privateSettings.sync();
+        QCOMPARE(privateSettings.status(),
+                 QSettings::NoError);
+    }
+    {
+        QSettings system(
+            QSettings::IniFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        system.setValue(
+            plainKey(GC_HOMEDIR), activeRoot);
+        system.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            scope);
+        system.sync();
+        QCOMPARE(system.status(), QSettings::NoError);
+    }
+
+    factoryState() =
+        std::make_shared<FakeStoreState>();
+    GSettings settings(organization, application);
+    settings.initializeQSettingsGlobal(activeRoot);
+    settings.initializeQSettingsAthlete(
+        activeRoot, athleteName);
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(legacyKey, secret);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+    }
+    factoryState()->reads = 0;
+    factoryState()->writes = 0;
+    factoryState()->creates = 0;
+    factoryState()->overwrites = 0;
+
+    QCOMPARE(
+        settings.cvalue(
+            athleteName, GC_RWGPSPASS,
+            QStringLiteral("missing")).toString(),
+        QStringLiteral("missing"));
+    QCOMPARE(factoryState()->creates, 0);
+    QCOMPARE(factoryState()->overwrites, 0);
+    QVERIFY(factoryState()->values.isEmpty());
+    QSettings retained(organization, application);
+    QCOMPARE(retained.value(legacyKey).toString(),
+             secret);
+}
+
+void TestCredentialSettings::
+legacyPlaintextRequiresMatchingSourceScope()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialLegacyScope-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString legacyKey = athleteName + QLatin1Char('/')
+        + plainKey(GC_RWGPSPASS);
+    const QString secret =
+        QStringLiteral("different-scope-password");
+    const QString scope =
+        QStringLiteral("d4d4d4d4-d4d4-44d4-84d4-d4d4d4d4d4d4");
+    const QString otherScope =
+        QStringLiteral("e5e5e5e5-e5e5-45e5-85e5-e5e5e5e5e5e5");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("athletes"));
+    const QString privatePath = QDir(athleteRoot).filePath(
+        QStringLiteral(
+            "Athlete/config/athlete-private.ini"));
+    QVERIFY(QDir().mkpath(
+        QFileInfo(privatePath).absolutePath()));
+
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        legacy.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            otherScope);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+    }
+    {
+        QSettings privateSettings(
+            privatePath, QSettings::IniFormat);
+        privateSettings.setValue(
+            QStringLiteral("credential_store/id"),
+            scope);
+        privateSettings.sync();
+        QCOMPARE(privateSettings.status(),
+                 QSettings::NoError);
+    }
+    {
+        QSettings system(
+            QSettings::IniFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        system.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        system.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            scope);
+        system.sync();
+        QCOMPARE(system.status(), QSettings::NoError);
+    }
+
+    factoryState() =
+        std::make_shared<FakeStoreState>();
+    GSettings settings(organization, application);
+    settings.initializeQSettingsGlobal(athleteRoot);
+    settings.initializeQSettingsAthlete(
+        athleteRoot, athleteName);
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(legacyKey, secret);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+    }
+    factoryState()->reads = 0;
+    factoryState()->writes = 0;
+    factoryState()->creates = 0;
+    factoryState()->overwrites = 0;
+
+    QCOMPARE(
+        settings.cvalue(
+            athleteName, GC_RWGPSPASS,
+            QStringLiteral("missing")).toString(),
+        QStringLiteral("missing"));
+    QCOMPARE(factoryState()->creates, 0);
+    QCOMPARE(factoryState()->overwrites, 0);
+    QVERIFY(factoryState()->values.isEmpty());
+    QSettings retained(organization, application);
+    QCOMPARE(retained.value(legacyKey).toString(),
+             secret);
+}
+
+void TestCredentialSettings::
+legacyCredentialScopeUsesOneExactSnapshot()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialScopeSnapshot-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString originalScope =
+        QStringLiteral("18181818-1818-4818-8818-181818181818");
+    const QString changedScope =
+        QStringLiteral("29292929-2929-4929-8929-292929292929");
+    const QString originalRoot =
+        temporary.filePath(QStringLiteral("original"));
+    const QString changedRoot =
+        temporary.filePath(QStringLiteral("changed"));
+    QVERIFY(QDir().mkpath(originalRoot));
+    QVERIFY(QDir().mkpath(changedRoot));
+
+    {
+        QSettings system(
+            QSettings::IniFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        system.setValue(
+            plainKey(GC_HOMEDIR), originalRoot);
+        system.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            originalScope);
+        system.sync();
+        QCOMPARE(system.status(), QSettings::NoError);
+    }
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    GSettings settings(organization, application);
+    settings.initializeQSettingsGlobal(originalRoot);
+
+    GSettings::setCredentialLegacyScopeSnapshotHook(
+        [organization, application, athleteName,
+         changedRoot, changedScope] {
+            QSettings changed(
+                QSettings::IniFormat,
+                QSettings::UserScope,
+                organization,
+                application);
+            changed.setValue(
+                plainKey(GC_HOMEDIR), changedRoot);
+            changed.setValue(
+                legacyCredentialScopeMappingKey(athleteName),
+                changedScope);
+            changed.sync();
+        });
+
+    QCOMPARE(
+        settings.credentialLegacyScopeForTest(athleteName),
+        originalScope);
+}
+
+void TestCredentialSettings::
+authorizedLegacyFallbackUsesOneExactSnapshot()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialValueSnapshot-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString plaintextKey = plainKey(GC_RWGPSPASS);
+    const QString legacyKey =
+        athleteName + QLatin1Char('/') + plaintextKey;
+    const QString originalSecret =
+        QStringLiteral("authorized-snapshot-password");
+    const QString changedSecret =
+        QStringLiteral("changed-after-authorization-password");
+    const QString scope =
+        QStringLiteral("3a3a3a3a-3a3a-4a3a-8a3a-3a3a3a3a3a3a");
+    const QString changedScope =
+        QStringLiteral("4b4b4b4b-4b4b-4b4b-8b4b-4b4b4b4b4b4b");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("athletes"));
+    const QString changedRoot =
+        temporary.filePath(QStringLiteral("changed"));
+    const QString privatePath = QDir(athleteRoot).filePath(
+        QStringLiteral(
+            "Athlete/config/athlete-private.ini"));
+    QVERIFY(QDir().mkpath(
+        QFileInfo(privatePath).absolutePath()));
+    QVERIFY(QDir().mkpath(changedRoot));
+
+    QString legacyPath;
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        legacy.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            scope);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+        legacyPath = legacy.fileName();
+    }
+    {
+        QSettings privateSettings(
+            privatePath, QSettings::IniFormat);
+        privateSettings.setValue(
+            QStringLiteral("credential_store/id"),
+            scope);
+        privateSettings.sync();
+        QCOMPARE(privateSettings.status(),
+                 QSettings::NoError);
+    }
+    {
+        QSettings system(
+            QSettings::IniFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        system.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        system.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            scope);
+        system.sync();
+        QCOMPARE(system.status(), QSettings::NoError);
+    }
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    GSettings settings(organization, application);
+    settings.initializeQSettingsGlobal(athleteRoot);
+    settings.initializeQSettingsAthlete(
+        athleteRoot, athleteName);
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(legacyKey, originalSecret);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+#ifndef Q_OS_WIN
+        QVERIFY(QFile::setPermissions(
+            legacyPath,
+            QFileDevice::ReadOwner
+            | QFileDevice::WriteOwner
+            | QFileDevice::ReadGroup
+            | QFileDevice::ReadOther));
+#endif
+    }
+
+    GSettings::setCredentialLegacyValueSnapshotHook(
+        [organization, application, athleteName,
+         legacyKey, legacyPath, changedRoot, changedScope,
+         changedSecret] {
+            verifyOwnerOnlyPermissions(legacyPath);
+            QSettings changed(organization, application);
+            changed.setValue(
+                plainKey(GC_HOMEDIR), changedRoot);
+            changed.setValue(
+                legacyCredentialScopeMappingKey(athleteName),
+                changedScope);
+            changed.setValue(legacyKey, changedSecret);
+            changed.sync();
+        });
+
+    QCOMPARE(
+        settings.cvalue(
+            athleteName, GC_RWGPSPASS,
+            QStringLiteral("missing")).toString(),
+        originalSecret);
+    verifyOwnerOnlyPermissions(legacyPath);
+    QCOMPARE(factoryState()->creates, 0);
+    QCOMPARE(factoryState()->overwrites, 0);
+    QVERIFY(factoryState()->values.isEmpty());
+
+    QSettings retained(organization, application);
+    QCOMPARE(retained.value(legacyKey).toString(),
+             changedSecret);
+}
+
+void TestCredentialSettings::
+targetAppearingDuringLegacyFallbackTakesPrecedence()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialLateTarget-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString plaintextKey = plainKey(GC_RWGPSPASS);
+    const QString legacyKey =
+        athleteName + QLatin1Char('/') + plaintextKey;
+    const QString legacySecret =
+        QStringLiteral("older-legacy-password");
+    const QString targetSecret =
+        QStringLiteral("newer-target-password");
+    const QString scope =
+        QStringLiteral("5c5c5c5c-5c5c-4c5c-8c5c-5c5c5c5c5c5c");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("athletes"));
+    const QString privatePath = QDir(athleteRoot).filePath(
+        QStringLiteral(
+            "Athlete/config/athlete-private.ini"));
+    QVERIFY(QDir().mkpath(
+        QFileInfo(privatePath).absolutePath()));
+
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        legacy.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            scope);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+    }
+    {
+        QSettings privateSettings(
+            privatePath, QSettings::IniFormat);
+        privateSettings.setValue(
+            QStringLiteral("credential_store/id"),
+            scope);
+        privateSettings.sync();
+        QCOMPARE(privateSettings.status(),
+                 QSettings::NoError);
+    }
+    {
+        QSettings system(
+            QSettings::IniFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        system.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        system.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            scope);
+        system.sync();
+        QCOMPARE(system.status(), QSettings::NoError);
+    }
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    GSettings settings(organization, application);
+    settings.initializeQSettingsGlobal(athleteRoot);
+    settings.initializeQSettingsAthlete(
+        athleteRoot, athleteName);
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(legacyKey, legacySecret);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+    }
+
+    GSettings::setCredentialLegacyValueSnapshotHook(
+        [privatePath, plaintextKey, targetSecret] {
+            QSettings target(
+                privatePath, QSettings::IniFormat);
+            target.setValue(plaintextKey, targetSecret);
+            target.sync();
+        });
+
+    QCOMPARE(
+        settings.cvalue(
+            athleteName, GC_RWGPSPASS,
+            QStringLiteral("missing")).toString(),
+        QStringLiteral("missing"));
+    QCOMPARE(factoryState()->creates, 0);
+    QCOMPARE(factoryState()->overwrites, 0);
+    QVERIFY(factoryState()->values.isEmpty());
+    {
+        QSettings target(
+            privatePath, QSettings::IniFormat);
+        QCOMPARE(target.value(plaintextKey).toString(),
+                 targetSecret);
+    }
+    {
+        QSettings retained(organization, application);
+        QCOMPARE(retained.value(legacyKey).toString(),
+                 legacySecret);
+    }
+
+    QCOMPARE(
+        settings.cvalue(
+            athleteName, GC_RWGPSPASS,
+            QStringLiteral("missing")).toString(),
+        targetSecret);
+    QCOMPARE(factoryState()->creates, 1);
+    QCOMPARE(factoryState()->overwrites, 0);
+    QCOMPARE(
+        factoryState()->values.value(
+            CredentialSettings::vaultKey(
+                scope, GC_RWGPSPASS)),
+        targetSecret);
+    QSettings retained(organization, application);
+    QCOMPARE(retained.value(legacyKey).toString(),
+             legacySecret);
+}
+
+void TestCredentialSettings::
+canonicalVaultReadRetainsAuthorizedLegacyDuplicate()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialLegacyDuplicate-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString legacyKey = athleteName + QLatin1Char('/')
+        + plainKey(GC_RWGPSPASS);
+    const QString canonicalSecret =
+        QStringLiteral("canonical-password");
+    const QString duplicateSecret =
+        canonicalSecret;
+    const QString scope =
+        QStringLiteral("c3c3c3c3-c3c3-43c3-83c3-c3c3c3c3c3c3");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("athletes"));
+    const QString privatePath = QDir(athleteRoot).filePath(
+        QStringLiteral(
+            "Athlete/config/athlete-private.ini"));
+    QVERIFY(QDir().mkpath(
+        QFileInfo(privatePath).absolutePath()));
+
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        legacy.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            scope);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+    }
+    {
+        QSettings privateSettings(
+            privatePath, QSettings::IniFormat);
+        privateSettings.setValue(
+            QStringLiteral("credential_store/id"),
+            scope);
+        privateSettings.sync();
+        QCOMPARE(privateSettings.status(),
+                 QSettings::NoError);
+    }
+    {
+        QSettings system(
+            QSettings::IniFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        system.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        system.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            scope);
+        system.sync();
+        QCOMPARE(system.status(), QSettings::NoError);
+    }
+
+    factoryState() =
+        std::make_shared<FakeStoreState>();
+    factoryState()->values.insert(
+        CredentialSettings::vaultKey(
+            scope, GC_RWGPSPASS),
+        canonicalSecret);
+    GSettings settings(organization, application);
+    settings.initializeQSettingsGlobal(athleteRoot);
+    settings.initializeQSettingsAthlete(
+        athleteRoot, athleteName);
+
+    QString legacyPath;
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(legacyKey, duplicateSecret);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+        legacyPath = legacy.fileName();
+    }
+    QVERIFY(fileContents(legacyPath).contains(
+        duplicateSecret.toUtf8()));
+
+    QCOMPARE(
+        settings.cvalue(
+            athleteName, GC_RWGPSPASS,
+            QStringLiteral("missing")).toString(),
+        canonicalSecret);
+
+    QSettings observed(organization, application);
+    QCOMPARE(observed.value(legacyKey).toString(),
+             duplicateSecret);
+    QVERIFY(fileContents(legacyPath).contains(
+        duplicateSecret.toUtf8()));
+    QCOMPARE(
+        factoryState()->values.value(
+            CredentialSettings::vaultKey(
+                scope, GC_RWGPSPASS)),
+        canonicalSecret);
+    QCOMPARE(factoryState()->creates, 0);
+    QCOMPARE(factoryState()->overwrites, 0);
+    QCOMPARE(factoryState()->removes, 0);
+}
+
+void TestCredentialSettings::
+vanishedCanonicalRetainsAuthorizedLegacyDuplicate()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialLegacyVanished-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString legacyKey = athleteName + QLatin1Char('/')
+        + plainKey(GC_RWGPSPASS);
+    const QString canonicalSecret =
+        QStringLiteral("vanishing-canonical-password");
+    const QString duplicateSecret =
+        QStringLiteral("retained-legacy-password");
+    const QString scope =
+        QStringLiteral("f6f6f6f6-f6f6-46f6-86f6-f6f6f6f6f6f6");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("athletes"));
+    const QString privatePath = QDir(athleteRoot).filePath(
+        QStringLiteral(
+            "Athlete/config/athlete-private.ini"));
+    QVERIFY(QDir().mkpath(
+        QFileInfo(privatePath).absolutePath()));
+
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        legacy.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            scope);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+    }
+    {
+        QSettings privateSettings(
+            privatePath, QSettings::IniFormat);
+        privateSettings.setValue(
+            QStringLiteral("credential_store/id"),
+            scope);
+        privateSettings.sync();
+        QCOMPARE(privateSettings.status(),
+                 QSettings::NoError);
+    }
+    {
+        QSettings system(
+            QSettings::IniFormat,
+            QSettings::UserScope,
+            organization,
+            application);
+        system.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        system.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            scope);
+        system.sync();
+        QCOMPARE(system.status(), QSettings::NoError);
+    }
+
+    factoryState() =
+        std::make_shared<FakeStoreState>();
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_RWGPSPASS);
+    factoryState()->values.insert(
+        vaultKey, canonicalSecret);
+    factoryState()->removeAfterReadKey = vaultKey;
+    GSettings settings(organization, application);
+    settings.initializeQSettingsGlobal(athleteRoot);
+    settings.initializeQSettingsAthlete(
+        athleteRoot, athleteName);
+
+    QString legacyPath;
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(legacyKey, duplicateSecret);
+        legacy.sync();
+        QCOMPARE(legacy.status(), QSettings::NoError);
+        legacyPath = legacy.fileName();
+    }
+    QVERIFY(fileContents(legacyPath).contains(
+        duplicateSecret.toUtf8()));
+
+    QCOMPARE(
+        settings.cvalue(
+            athleteName, GC_RWGPSPASS,
+            QStringLiteral("missing")).toString(),
+        canonicalSecret);
+    QVERIFY(!factoryState()->values.contains(vaultKey));
+    QSettings retained(organization, application);
+    QCOMPARE(retained.value(legacyKey).toString(),
+             duplicateSecret);
+    QVERIFY(fileContents(legacyPath).contains(
+        duplicateSecret.toUtf8()));
+    QCOMPARE(factoryState()->creates, 0);
+    QCOMPARE(factoryState()->overwrites, 0);
+    QCOMPARE(factoryState()->removes, 0);
 }
 
 void TestCredentialSettings::
@@ -11518,18 +13922,23 @@ preInitializationUsesLocalAthleteScope()
         QStringLiteral("ambiguous-early-plaintext");
     const QString vaultSecret =
         QStringLiteral("local-scope-vault-token");
-    {
-        QSettings legacy(organization, application);
-        legacy.setValue(legacyKey, legacySecret);
-        legacy.sync();
-    }
-
     const QString athleteRoot = temporary.filePath(
         QStringLiteral("athletes"));
     QVERIFY(QDir().mkpath(
         athleteRoot + QStringLiteral("/Athlete/config")));
     const QString localScope =
         QStringLiteral("33333333-3333-4333-8333-333333333333");
+    {
+        QSettings legacy(organization, application);
+        legacy.setValue(
+            plainKey(GC_HOMEDIR), athleteRoot);
+        legacy.setValue(
+            legacyCredentialScopeMappingKey(athleteName),
+            localScope);
+        legacy.setValue(legacyKey, legacySecret);
+        legacy.sync();
+    }
+
     {
         QSettings privateSettings(
             athleteRoot
@@ -11584,8 +13993,9 @@ preInitializationUsesLocalAthleteScope()
     QCOMPARE(factoryState()->values.size(), 1);
     QCOMPARE(factoryState()->values.value(vaultKey),
              vaultSecret);
-    QSettings scrubbed(organization, application);
-    QVERIFY(!scrubbed.contains(legacyKey));
+    QSettings retained(organization, application);
+    QCOMPARE(retained.value(legacyKey).toString(),
+             legacySecret);
 }
 
 void TestCredentialSettings::clearedRootDoesNotRetainAthleteScope()

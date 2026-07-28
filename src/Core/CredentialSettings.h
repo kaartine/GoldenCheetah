@@ -22,14 +22,37 @@ public:
         Failed
     };
 
+    enum class CreateStatus {
+        // The value was created and the operation is complete.
+        Created,
+        // A value already existed and was not changed.
+        AlreadyExists,
+        // No create operation was attempted.
+        Unsupported,
+        // The operation completed without changing the store.
+        Unavailable,
+        // The operation is complete, but it may have committed the value.
+        Indeterminate,
+        // The operation completed without changing the store.
+        Failed
+    };
+
     struct ReadResult {
         Status status = Status::Failed;
         QString value;
         QString error;
     };
 
+    struct CreateResult {
+        CreateStatus status = CreateStatus::Failed;
+        QString error;
+    };
+
     virtual ~CredentialStore() = default;
     virtual ReadResult read(const QString &key) = 0;
+    virtual CreateResult createIfAbsent(
+        const QString &key,
+        const QString &value) = 0;
     virtual Status write(const QString &key,
                          const QString &value,
                          QString *error) = 0;
@@ -101,13 +124,15 @@ public:
         bool allowCreate = true);
     static QString vaultKey(const QString &scopeId,
                             const QString &credentialKey);
-    static void hardenSettingsFile(QSettings *settings);
+    static bool hardenSettingsFile(QSettings *settings);
 
     QVariant value(QSettings *settings,
                    const QString &scopeId,
                    const QString &credentialKey,
                    const QString &plaintextKey,
-                   const QVariant &defaultValue);
+                   const QVariant &defaultValue,
+                   bool *authoritativeMiss = nullptr,
+                   bool *confirmedVaultValue = nullptr);
     void setValue(QSettings *settings,
                   const QString &scopeId,
                   const QString &credentialKey,
@@ -161,6 +186,11 @@ private:
         const QString &deletionPath);
     bool scrubPlaintext(QSettings *settings,
                         const QString &key);
+    CredentialStore::ReadResult createAndConfirmMigrationValue(
+        const QString &key,
+        const QString &legacyValue,
+        bool *created,
+        bool *fallbackAllowed);
     static void reportStoreError(const QString &operation,
                                  const QString &credentialKey,
                                  const QString &error);

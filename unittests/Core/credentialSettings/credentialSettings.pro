@@ -12,7 +12,8 @@ include(../../unittests.pri)
 CONFIG += console testcase c++17 release
 CONFIG -= debug
 DEFINES += GC_CREDENTIAL_STORE_CUSTOM_FACTORY \
-           GC_SETTINGS_NO_GLOBAL_INSTANCE
+           GC_SETTINGS_NO_GLOBAL_INSTANCE \
+           GC_CREDENTIAL_TEST_HOOKS
 
 unix:!android:!macx {
     PRECOMPILED_HEADER = ../../../src/stable.h

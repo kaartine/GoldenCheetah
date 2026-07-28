@@ -23,6 +23,10 @@
 #include <QDebug>
 #include <QRect>
 
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+#include <functional>
+#endif
+
 
 /*
  *  Global GC Properties which are not stored as GSettings are defined here
@@ -545,6 +549,15 @@ public:
     // reset appearance settings like theme, font, color and geometry
     static AppearanceSettings defaultAppearanceSettings();
 
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+    static void setCredentialLegacyScopeSnapshotHook(
+        std::function<void()> hook);
+    static void setCredentialLegacyValueSnapshotHook(
+        std::function<void()> hook);
+    QString credentialLegacyScopeForTest(
+        const QString &athleteName);
+#endif
+
 private:
     bool newFormat;
     QSettings::Format newSettingsFormat = QSettings::IniFormat;
@@ -582,9 +595,17 @@ private:
     QString credentialScopeForLegacy(const QString &athleteName);
     void migrateGlobalCredentials();
     void migrateAthleteCredentials(const QString &athleteName);
-    bool migrateLegacyCredential(const QString &athleteName,
-                                 const QString &credentialKey,
-                                 const QString &storedKey);
+    bool suppressAutomaticLegacyCredentialMigration(
+        const QString &credentialKey);
+    QVariant credentialValueWithLegacyFallback(
+        QSettings *target,
+        const QString &scopeId,
+        const QString &credentialKey,
+        const QString &plaintextKey,
+        const QString &legacyStoredKey,
+        const QString &legacyScopeKey,
+        bool authorizedLegacy,
+        const QVariant &defaultValue);
     bool containsValueTarget(QString key) const;
     bool containsCValueTarget(const QString &athleteName,
                               QString key) const;

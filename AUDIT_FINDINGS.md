@@ -1859,19 +1859,72 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-018: Credential migration uses a non-atomic check-then-write
 
-- Status: OPEN
-- Code: `src/Core/CredentialSettings.cpp` and the `CredentialStore` contract
+- Status: FIXED
+- Code: `src/Core/CredentialSettings.cpp`,
+  `src/Core/CredentialSettings.h`, `src/Core/CredentialStoreQtKeychain.cpp`,
+  `src/Core/Settings.cpp`, `src/Core/Settings.h`,
+  `unittests/Core/credentialSettings/credentialSettings.pro`, and
+  `unittests/Core/credentialSettings/testCredentialSettings.cpp`
 - Impact: Migration reads `NotFound` and then performs a normal overwriting
   write. Another thread or process can publish a newer credential between those
   operations, after which the stale plaintext migration overwrites it despite
-  the successful initial read.
-- Test: Add a fake-store hook that installs a newer value immediately after
-  returning `NotFound`; require migration to preserve that value, retain the
-  plaintext source until the outcome is known, and retry safely.
-- Fix direction: Extend the credential-store contract with an atomic
-  create-if-absent or compare-and-set operation and implement it per backend.
-  A process mutex can reduce local races but is not a cross-process substitute
-  for backend atomicity.
+  the successful initial read. A second legacy source could also win after a
+  transient target-vault failure, a copied source could be accepted without
+  matching the active root and scope in one snapshot, and an explicitly empty
+  target could resurrect an older password on the next read or restart.
+- Test-first evidence: Commits `353a512` and `6be0f37` first made a newer value
+  appear between the authoritative miss and migration, failed the confirming
+  read, and exercised an interrupted creating transaction; the old normal write
+  overwrote the newer value or cached the wrong result. Later RED rows proved
+  that root, scope, and value could come from different source snapshots, a
+  target could appear during fallback, a transient vault failure or cached
+  negative result could return an older legacy password over a canonical value,
+  and pre-existing or late empty targets could resurrect a superseded
+  credential after restart. Fault rows also rejected fallback-marker writes and
+  distinguished confirmed vault values from memory-only failed writes.
+- Resolution: `CredentialStore` now distinguishes atomic creation outcomes from
+  overwriting writes. Migration uses only `createIfAbsent()`, then re-reads and
+  returns the canonical value; collision, indeterminate, transient, and
+  confirming-read failures never call the overwrite path or scrub the source
+  prematurely. The production QtKeychain adapter reports atomic creation as
+  unsupported immediately because its current cross-platform job API cannot
+  guarantee both create-only semantics and bounded completion. That safe
+  fallback keeps the plaintext source usable and retryable instead of
+  reintroducing the race. A process-locked file backend proves the contract
+  with two simultaneous creators and a deterministic lock-contention
+  acknowledgement.
+- Source precedence: Cross-file legacy credential content is now a read-only
+  fallback. It is eligible only after a live authoritative vault `NotFound`,
+  and only when selected root, scope mapping, and credential coexist in one
+  readable exact source snapshot. Exact target presence and explicit target
+  operations commit a credential-specific durable block marker; empty targets
+  remain blocked after their plaintext key is scrubbed and across restart.
+  Canonical reads fail closed until that marker is durable, and memory-only
+  failed writes are not mistaken for confirmed vault values. Marker and legacy
+  files are hardened and verified owner-only before use on Unix. No cross-file
+  plaintext is automatically migrated or deleted because the vault and source
+  cannot participate in one atomic transaction.
+- Verification: The focused program reports 275 passes, zero failures, and five
+  expected Windows-only skips normally, under strict ASan/UBSan/LSan with leak
+  detection, and under TSan with narrow uninstrumented-Qt event-loop
+  suppressions. The production atomic-create probe returns `Unsupported`, while
+  the two-process file fixture admits exactly one creator without overwrite.
+  The full Qt 6.8.3 application links to a 536,194,112-byte executable, exits
+  successfully from `--version`, and remains alive through an eight-second
+  offscreen smoke test with an isolated empty home. The complete matrix runs 81
+  QtTest suites: 3,018 passed, zero failed, five expected Windows-only skips,
+  and zero blacklisted.
+- Residual: Automatic legacy-to-vault migration remains disabled on production
+  backends until a platform adapter can provide a bounded, truly atomic
+  create-only primitive. Cross-file plaintext is retained by design; Unix use
+  fails closed if owner-only permissions cannot be verified, while native
+  Windows permission behavior still needs a runtime worker. If durable marker
+  creation fails, the current read returns the default and retries later; if
+  the canonical value disappears before a successful retry, no durable
+  precedence decision exists. A target appearing after the final exact
+  recheck can cause one stale fallback read but no vault, marker, or source
+  mutation. Same-file cleanup and late QtKeychain completion risks are tracked
+  separately below.
 
 ### SEC-019: Failed plaintext scrubbing is cached as successful
 
@@ -1986,7 +2039,60 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   generated identities. Recovery authority must live outside the copied root;
   an invocation-local `created` flag is insufficient.
 
+### SEC-022: Same-file credential cleanup can delete a newer or last copy
+
+- Status: OPEN
+- Code: `src/Core/CredentialSettings.cpp`
+- Impact: Credential migration and canonical reads take a plaintext or vault
+  snapshot and later scrub the plaintext key without atomically binding those
+  operations. Another writer can replace the plaintext after the snapshot and
+  have its newer value deleted, or an external actor can remove the vault value
+  after its successful read and leave cleanup removing the last remaining
+  credential copy.
+- Test: Pause after the confirming vault read but before plaintext cleanup.
+  Replace the plaintext with a distinct newer value in one case and remove the
+  vault value in another, then require cleanup to retain the changed or last
+  copy in the same process and after restart.
+- Fix direction: Use a compare-and-delete operation over an exact settings
+  snapshot, and bind vault confirmation plus source cleanup to recoverable
+  generation metadata. Any changed source value or unconfirmed vault state must
+  retain plaintext and retry rather than scrub.
+
+### THREAD-013: Timed-out QtKeychain jobs can mutate the vault later
+
+- Status: OPEN
+- Code: `src/Core/CredentialStoreQtKeychain.cpp`
+- Impact: A timed-out QtKeychain job is switched to auto-delete and released
+  while its backend operation continues. The caller receives `Unavailable` and
+  releases the per-credential operation lock, but a timed-out write or removal
+  can still complete later and reorder against a retry, replacement, or delete.
+- Test: Delay fake read, write, and remove jobs beyond the timeout, start a
+  conflicting operation after the reported failure, and then release the first
+  job. Require no late vault mutation or callback after the operation guard has
+  ended.
+- Fix direction: Provide backend cancellation with a terminal acknowledgement,
+  or retain serialized ownership until the job reaches a terminal state. An
+  indeterminate mutation needs durable recovery state rather than a definite
+  `Unavailable` result.
+
 ## Medium
+
+### SEC-023: External vault mutations bypass credential cache revisions
+
+- Status: OPEN
+- Code: `src/Core/CredentialSettings.cpp`
+- Impact: Cache entries are invalidated by GoldenCheetah's revision sidecar, but
+  direct keychain changes by another application do not advance that revision.
+  Normal reads can therefore return a stale positive or negative value until a
+  local mutation, cache clear, or restart. SEC-018 now bypasses cached misses
+  when authorizing cross-file fallback, but ordinary credential reads retain
+  the broader stale-cache behavior.
+- Test: Prime positive and negative cache entries, mutate the fake vault without
+  touching the revision sidecar, and require the next policy-relevant read to
+  observe the external value or deletion.
+- Fix direction: Add backend change notifications or a backend generation to
+  the cache key. Where neither is available, use bounded cache lifetimes or
+  live reads for decisions that can expose, overwrite, or delete credentials.
 
 ### MEM-019: Indented plot marker starts and copies its matrix from indeterminate state
 
@@ -4054,11 +4160,12 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The complete containerized release matrix after MEM-019 passes:
+The complete containerized release matrix after SEC-018 passes:
 
-- 72 QtTest suites
-- 2,448 passed
-- 0 failed, skipped, or blacklisted
+- 81 QtTest suites
+- 3,018 passed
+- 0 failed or blacklisted
+- 5 expected Windows-only skips on Linux
 - Qt 6.8.3 on Ubuntu 24.04
 
 The registered matrix includes the AppImage packaging consistency test and the
