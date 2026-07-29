@@ -2180,6 +2180,34 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   explicit uncertainty, not bounded completion of a wedged native backend; the
   broader availability problem remains tracked by `THREAD-011`.
 
+### THREAD-015: OpenData export traverses live athlete state from its worker
+
+- Status: OPEN
+- Code: `src/Cloud/OpenData.cpp`, `src/Cloud/OpenData.h`, and
+  `src/Core/RideDB.y`
+- Impact: `OpenData::run()` retains a raw `Context *` and calls
+  `RideCache::save(true)`, traverses `RideCache::rides()`, dereferences
+  `RideItem` paths, opens ride files, and updates athlete settings from its
+  `QThread`. Concurrent ride edits, cache destruction, athlete closure, or
+  application shutdown can therefore race the export, produce an inconsistent
+  archive, or dereference destroyed objects. The heap-allocated thread has no
+  owner or `deleteLater()` connection, so its QObject lifetime is also
+  unbounded after completion.
+- Evidence: Static review during `DUR-006` confirmed that normal RideCache
+  persistence now snapshots on the owner thread, while the separate OpenData
+  path still reads the live cache and athlete graph in its worker. It is
+  deliberately not routed through the new normal-save worker because OpenData
+  also exports source activity files and athlete metadata.
+- Test: Capture an OpenData export request, mutate and destroy its source
+  athlete/cache, and require the worker to finish a valid deterministic archive
+  under ThreadSanitizer. Cover athlete closure, application shutdown,
+  cancellation during file export, and worker object destruction.
+- Fix direction: Capture all export metadata and stable activity inputs on the
+  owner thread, then give the worker values or explicitly owned immutable
+  handles only. The worker must not retain `Context`, `Athlete`, `RideCache`, or
+  `RideItem` pointers. Add cooperative cancellation, bounded joining, and
+  explicit QObject ownership and deletion.
+
 ## Medium
 
 ### SEC-023: External vault mutations bypass credential cache revisions
@@ -3145,14 +3173,51 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-006: RideCache background save lacks an immutable snapshot
 
-- Status: OPEN
-- Code: `src/Core/RideCache.cpp:673`, `src/Core/RideDB.y:481`,
-  `src/Core/RideDB.y:369`
+- Status: FIXED
+- Code: `src/Core/RideCache.cpp`, `src/Core/RideCache.h`,
+  `src/Core/RideCacheStartup.h`, `src/Core/RideDB.y`,
+  `src/Core/RideCacheBackgroundSaver.cpp`,
+  `src/Core/RideCacheBackgroundSaver.h`,
+  `src/Core/RideCacheSaveCapture.cpp`,
+  `src/Core/RideCacheSaveCapture.h`,
+  `src/Core/RideCacheSaveSnapshot.cpp`,
+  `src/Core/RideCacheSaveSnapshot.h`, and
+  `unittests/Core/rideCacheSaveSnapshot`
 - Impact: Concurrent import/delete/metadata edits can race serialization and
-  produce inconsistent or malformed cache JSON.
-- Test: Mutate the cache during save under TSAN and validate every output file.
-- Fix direction: Snapshot on the owning thread, serialize the snapshot to
-  `QSaveFile` in the worker.
+  produce inconsistent or malformed cache JSON, dereference deleted cache
+  objects, publish a canceled refresh generation as current, or lose a
+  requested save target during refresh or shutdown.
+- Test-first evidence: The first focused target did not compile because no
+  snapshot API existed. Successive RED regressions then exposed absent
+  cancellation-target policy, refresh barriers, pending-generation handling,
+  bounded refresh and write waits, injected writer failures, stale-item
+  exclusion, timeout target retention, and saver reentrancy protection. A final
+  failure-path review also found that a test assertion could abandon a blocked
+  writer before releasing its gate; the test was corrected before the complete
+  rerun.
+- Resolution: RideCache now captures a value-only snapshot on its owner thread
+  and serializes it through a FIFO `std::thread` worker with atomic
+  publication. Synchronous saves settle the current refresh and every pending
+  generation before capture; asynchronous targets are deferred while refresh
+  is active and later flushed. Superseded and canceled results remain stale,
+  stale or discarded rides are never persisted as clean, and the stable
+  notification boundary prevents a refresh from starting between notification
+  delivery and capture. Refresh and write waits use aggregate 30-second
+  deadlines. A timed-out synchronous waiter abandons only its wait, not the
+  queued FIFO write, and later failures remain reportable through `drain()`.
+  Shutdown cancels and joins refresh work, flushes retained targets, drains and
+  stops the saver, and performs the final safe save.
+- Verification: The focused program passes all 29 cases normally, under strict
+  ASan/UBSan/LSan with leak detection, and under ThreadSanitizer without
+  suppressions. It also passes 20 consecutive normal runs. A clean release
+  application and every registered test target compile and link. The exact
+  final matrix runs 82 QtTest programs: 3,225 cases pass, none fail or
+  blacklist, and seven expected platform-only cases skip on Linux. All three
+  new production translation units pass a MinGW64 C++17 syntax check.
+  Independent reviews found no remaining production blocker in this change.
+- Residual: The OpenData exporter has a separate live-object worker path and is
+  tracked by `THREAD-015`. Native Windows and macOS runtime behavior still
+  requires their platform CI; the MinGW check validates syntax only.
 
 ### DUR-007: Split transactions have no restart recovery journal
 
@@ -4364,10 +4429,10 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The complete containerized release matrix after SEC-023 passes:
+The complete containerized release matrix after DUR-006 passes:
 
-- 81 QtTest suites
-- 3,167 passed
+- 82 QtTest suites
+- 3,225 passed
 - 0 failed or blacklisted
 - 7 expected platform-only skips on Linux
 - Qt 6.8.3 on Ubuntu 24.04
@@ -4379,8 +4444,10 @@ the rollback image, and the local sidecar records the packaged commit and
 SHA-256 without making repository documentation depend on local artifact
 state.
 
-PARSE-005's 126 focused tests and the related 11 RideFile ownership tests also
-pass under strict ASan/UBSan/LSan with leak detection. Earlier fixed
+`DUR-006` additionally passes its 29-case focused suite under strict
+ASan/UBSan/LSan with leak detection and ThreadSanitizer without suppressions,
+plus 20 consecutive normal runs. `PARSE-005`'s 126 focused tests and the related
+11 RideFile ownership tests retain their sanitizer evidence. Earlier fixed
 memory/thread findings retain the focused sanitizer and TSAN evidence recorded
 in their entries.
 

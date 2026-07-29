@@ -46,12 +46,17 @@ class Context;
 class LTMPlot;
 class RideCacheRefreshThread;
 class RideCacheLoader;
+class RideCacheBackgroundSaver;
 class Specification;
 class RideCacheSnapshotBatch;
 class AthleteBest;
 class RideCacheModel;
 class Estimator;
 class Banister;
+
+namespace RideCacheSave {
+struct Snapshot;
+}
 
 class RideCache : public QObject
 {
@@ -293,6 +298,14 @@ class RideCache : public QObject
 
         void startLatestRefresh();
         void interruptActiveRefresh();
+        bool settleRefreshForSave(QString &error);
+        std::shared_ptr<const RideCacheSave::Snapshot>
+            captureSaveSnapshot(const QString &targetPath);
+        bool enqueueSaveSnapshot(
+            const std::shared_ptr<
+                const RideCacheSave::Snapshot> &snapshot);
+        void queueBackgroundSave(
+            const QString &targetPath = QString());
 
         bool removeRideEntry(
             const QString &filenameToDelete,
@@ -314,8 +327,10 @@ class RideCache : public QObject
         bool isCancelled = false;
         bool refreshChanged_ = false;
         bool refreshNotificationActive_ = false;
-        QThread *saveThread_ = nullptr;
-        QObject *saveWorker_ = nullptr;
+        bool saveSnapshotBoundary_ = false;
+        QStringList pendingSaveTargets_;
+        std::shared_ptr<RideCacheBackgroundSaver>
+            backgroundSaver_;
 };
 
 class AthleteBest
@@ -331,6 +346,8 @@ class AthleteBest
 
 class RideCacheRefreshThread : public QThread
 {
+    friend class RideCache;
+
     public:
         RideCacheRefreshThread(
             RideCache *cache, quint64 generation);

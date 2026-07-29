@@ -31,6 +31,7 @@ equals(GC_UNITTESTS, active) {
 			   Train/trainDbVersionSafety \
 			   Core/measuresAtomicSave \
 			   Core/rideCacheAtomicSave \
+			   Core/rideCacheSaveSnapshot \
 			   Core/rideCachePerformance \
 			   Core/rideCacheRemoval \
 			   Core/seasonOffset \

@@ -18,7 +18,10 @@
  */
 
 #include "RideDB.h"
+#include "RideCacheBackgroundSaver.h"
 #include "RideCachePersistence.h"
+#include "RideCacheSaveCapture.h"
+#include "RideCacheSaveSnapshot.h"
 #include "RideCacheSnapshot.h"
 #include "RideFileCache.h"
 #include "SpecialFields.h"
@@ -520,8 +523,73 @@ QString ConstructNameNumberNumberString(QString s0, QString name, QString s1, do
 //          d = json.load(json_data)
 //      print(len(d["RIDES"])
 //
+std::shared_ptr<const RideCacheSave::Snapshot>
+RideCache::captureSaveSnapshot(const QString &targetPath)
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    {
+        QMutexLocker locker(&updateMutex);
+        Q_ASSERT(
+            refreshThreads.isEmpty()
+            && !refreshGeneration_.hasActive());
+    }
+
+    const RideMetricFactory &factory = RideMetricFactory::instance();
+    QVector<RideCacheSave::MetricDefinition> metrics;
+    metrics.reserve(factory.metricCount());
+    for (int metricIndex = 0;
+         metricIndex < factory.metricCount();
+         ++metricIndex) {
+        const QString name = factory.metricName(metricIndex);
+        const RideMetric *metric = factory.rideMetric(name);
+        metrics.append({
+            name,
+            metric ? metric->index() : -1,
+            metric && metric->aggregateZero()
+        });
+    }
+    return std::make_shared<const RideCacheSave::Snapshot>(
+        RideCacheSave::capture(
+            QStringLiteral(RIDEDB_VERSION),
+            targetPath,
+            metrics,
+            rides_));
+}
+
 void RideCache::save(bool opendata, QString filename)
 {
+    if (!opendata
+        && QThread::currentThread() == thread()
+        && backgroundSaver_
+        && backgroundSaver_->isRunning()) {
+        const QString targetPath = filename.isEmpty()
+            ? context->athlete->home->cache().filePath(
+                  QStringLiteral("rideDB.json"))
+            : filename;
+
+        QString workerError;
+        if (!settleRefreshForSave(workerError)) {
+            {
+                QMutexLocker locker(&updateMutex);
+                RideCacheSave::deferTarget(
+                    pendingSaveTargets_, true, targetPath);
+            }
+            qWarning().noquote()
+                << "Cannot save ride cache synchronously:"
+                << workerError << "- save deferred";
+            return;
+        }
+
+        const std::shared_ptr<const RideCacheSave::Snapshot> snapshot =
+            captureSaveSnapshot(targetPath);
+        if (!backgroundSaver_->writeAndWait(
+                snapshot, workerError)) {
+            qWarning().noquote()
+                << "Cannot save ride cache:" << workerError;
+        }
+        return;
+    }
+
     QString error;
     if (!saveToFile(opendata, filename, error)) {
         qWarning().noquote() << "Cannot save ride cache:" << error;
@@ -540,6 +608,34 @@ bool RideCache::saveToFile(
                        .arg(context->athlete->home->cache().canonicalPath())
                        .arg("rideDB.json");
     if (!filename.isEmpty()) path = filename;
+
+    if (!opendata) {
+        if (QThread::currentThread() != thread()) {
+            error = QStringLiteral(
+                "Ride cache snapshots must be captured on the owner thread");
+            return false;
+        }
+        {
+            QMutexLocker locker(&updateMutex);
+            if (!refreshThreads.isEmpty()
+                || refreshGeneration_.hasActive()
+                || saveSnapshotBoundary_) {
+                error = QStringLiteral(
+                    "Cannot capture the ride cache during an active refresh");
+                return false;
+            }
+        }
+        if (backgroundSaver_
+            && backgroundSaver_->isRunning()) {
+            if (!backgroundSaver_->drain(&error)) {
+                return false;
+            }
+        }
+        const std::shared_ptr<const RideCacheSave::Snapshot> snapshot =
+            captureSaveSnapshot(path);
+        return RideCacheSave::write(
+            *snapshot, error, writerFactory);
+    }
 
     QByteArray document;
     QBuffer rideDB(&document);

@@ -17,7 +17,10 @@
  */
 #include "RideCache.h"
 #include "RideCacheAggregate.h"
+#include "RideCacheBackgroundSaver.h"
 #include "RideCacheBulkMerge.h"
+#include "RideCacheSaveCapture.h"
+#include "RideCacheSaveSnapshot.h"
 #include "RideCacheSnapshot.h"
 
 #include "Context.h"
@@ -189,13 +192,81 @@ RideCache::RideCache(Context *context) : context(context)
         context, SIGNAL(configChanged(qint32)),
         this, SLOT(configChanged(qint32)));
 
-    saveThread_ = new QThread(this);
-    saveWorker_ = new QObject();
-    saveWorker_->moveToThread(saveThread_);
-    saveThread_->start();
+    backgroundSaver_ =
+        std::make_shared<RideCacheBackgroundSaver>();
 
     startupLoader_ = new RideCacheLoader(this);
     startupLoader_->start();
+}
+
+void
+RideCache::queueBackgroundSave(const QString &requestedTargetPath)
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    if (!backgroundSaver_) return;
+
+    const QString targetPath = requestedTargetPath.isEmpty()
+        ? context->athlete->home->cache().filePath(
+              QStringLiteral("rideDB.json"))
+        : requestedTargetPath;
+    {
+        QMutexLocker locker(&updateMutex);
+        if (RideCacheSave::deferTarget(
+                pendingSaveTargets_,
+                !refreshThreads.isEmpty()
+                    || refreshGeneration_.hasActive()
+                    || saveSnapshotBoundary_,
+                targetPath)) {
+            return;
+        }
+    }
+
+    const std::shared_ptr<const RideCacheSave::Snapshot> snapshot =
+        captureSaveSnapshot(targetPath);
+    enqueueSaveSnapshot(snapshot);
+}
+
+bool
+RideCache::settleRefreshForSave(QString &error)
+{
+    Q_ASSERT(QThread::currentThread() == thread());
+    return RideCacheSave::settleRefreshBarrier(
+        [this]() {
+            RideCacheSave::RefreshBarrierState state;
+            QMutexLocker locker(&updateMutex);
+            state.workers.reserve(refreshThreads.size());
+            for (RideCacheRefreshThread *worker : refreshThreads) {
+                state.workers.append(worker);
+            }
+            state.hasActiveGeneration =
+                refreshGeneration_.hasActive();
+            state.hasPendingGeneration =
+                refreshGeneration_.hasPending();
+            state.stableCaptureBoundary =
+                saveSnapshotBoundary_;
+            return state;
+        },
+        [this](QThread *thread) {
+            auto *worker =
+                static_cast<RideCacheRefreshThread*>(thread);
+            threadCompleted(worker, worker->generation);
+        },
+        [this]() {
+            startLatestRefresh();
+        },
+        error);
+}
+
+bool
+RideCache::enqueueSaveSnapshot(
+    const std::shared_ptr<const RideCacheSave::Snapshot> &snapshot)
+{
+    if (!backgroundSaver_ || !snapshot) return false;
+    const bool queued = backgroundSaver_->enqueue(snapshot);
+    if (!queued) {
+        qWarning() << "Cannot queue ride cache snapshot save";
+    }
+    return queued;
 }
 
 void
@@ -357,12 +428,15 @@ RideCache::~RideCache()
     // cancel any refresh that may be running
     cancel();
 
-    if (saveThread_) {
-        saveThread_->quit();
-        saveThread_->wait();
+    if (backgroundSaver_) {
+        QString error;
+        if (backgroundSaver_->isRunning()
+            && !backgroundSaver_->drain(&error)) {
+            qWarning().noquote() << error;
+        }
+        backgroundSaver_->stop();
+        backgroundSaver_.reset();
     }
-    delete saveWorker_;
-    saveWorker_ = nullptr;
 
     // Preserve the previous complete cache if startup was interrupted.
     if (startupLoadFinished_) save();
@@ -811,6 +885,7 @@ RideCache::threadCompleted(
     bool restart = false;
     bool changed = false;
     bool notifyEnd = false;
+    QStringList pendingSaveTargets;
     {
         QMutexLocker locker(&updateMutex);
         if (!refreshThreads.removeOne(thread)) return;
@@ -822,6 +897,9 @@ RideCache::threadCompleted(
             if (!restart) {
                 notifyEnd = refreshNotificationActive_;
                 refreshNotificationActive_ = false;
+                if (!cancelled && !exiting) {
+                    saveSnapshotBoundary_ = true;
+                }
             }
         }
     }
@@ -835,6 +913,7 @@ RideCache::threadCompleted(
         return;
     }
 
+    garbageCollect();
     if (changed) {
         RideItem *current =
             const_cast<RideItem*>(context->currentRideItem());
@@ -842,11 +921,33 @@ RideCache::threadCompleted(
     }
 
     if (notifyEnd) context->notifyRefreshEnd();
-    garbageCollect();
-    if (changed && saveWorker_) {
-        QMetaObject::invokeMethod(
-            saveWorker_, [this]() { save(); }, Qt::QueuedConnection);
+
+    {
+        QMutexLocker locker(&updateMutex);
+        pendingSaveTargets =
+            RideCacheSave::takeDeferredTargets(
+                pendingSaveTargets_);
     }
+    const QString defaultTarget =
+        context->athlete->home->cache().filePath(
+            QStringLiteral("rideDB.json"));
+    if (changed
+        && !pendingSaveTargets.contains(defaultTarget)) {
+        pendingSaveTargets.append(defaultTarget);
+    }
+    for (const QString &targetPath : pendingSaveTargets) {
+        enqueueSaveSnapshot(captureSaveSnapshot(targetPath));
+    }
+
+    bool startDeferredRefresh = false;
+    {
+        QMutexLocker locker(&updateMutex);
+        saveSnapshotBoundary_ = false;
+        startDeferredRefresh =
+            refreshGeneration_.hasPending()
+            && !refreshGeneration_.hasActive();
+    }
+    if (startDeferredRefresh) startLatestRefresh();
 }
 
 void
@@ -874,6 +975,7 @@ RideCache::cancel()
     Q_ASSERT(QThread::currentThread() == thread());
 
     QVector<RideCacheRefreshThread*> current;
+    QStringList pendingSaveTargets;
     {
         QMutexLocker locker(&updateMutex);
         current = refreshThreads;
@@ -892,12 +994,24 @@ RideCache::cancel()
         delete worker;
     }
 
+    const QString defaultSaveTarget =
+        context->athlete->home->cache().filePath(
+            QStringLiteral("rideDB.json"));
     {
         QMutexLocker locker(&updateMutex);
         reverse_.clear();
         refreshChanged_ = false;
         refreshNotificationActive_ = false;
         isCancelled = false;
+        pendingSaveTargets =
+            RideCacheSave::takeDeferredTargetsForCancellation(
+                pendingSaveTargets_,
+                defaultSaveTarget,
+                exiting,
+                startupLoadFinished_);
+    }
+    for (const QString &targetPath : pendingSaveTargets) {
+        queueBackgroundSave(targetPath);
     }
 }
 
@@ -912,14 +1026,17 @@ RideCache::refresh()
     }
 
     bool active = false;
+    bool deferStart = false;
     {
         QMutexLocker locker(&updateMutex);
         if (exiting || isCancelled) return;
         refreshGeneration_.request();
         active = refreshGeneration_.hasActive();
+        deferStart = saveSnapshotBoundary_;
         if (!active) refreshChanged_ = false;
     }
 
+    if (deferStart) return;
     if (active) interruptActiveRefresh();
     else startLatestRefresh();
 }
@@ -2403,7 +2520,14 @@ void RideCacheRefreshThread::run()
         if (item && item->checkStale()) {
             item->refresh();
             QMutexLocker locker(&target->updateMutex);
-            target->refreshChanged_ = true;
+            const auto disposition =
+                RideCacheStartup::refreshResultDisposition(
+                    target->refreshGeneration_.accepts(
+                        generation));
+            item->isstale = disposition.keepStale;
+            if (disposition.markCacheChanged) {
+                target->refreshChanged_ = true;
+            }
         }
     }
 }

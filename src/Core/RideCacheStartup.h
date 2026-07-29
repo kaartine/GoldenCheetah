@@ -206,6 +206,21 @@ private:
     quint64 completed_ = 0;
 };
 
+struct RefreshResultDisposition
+{
+    bool keepStale = false;
+    bool markCacheChanged = false;
+};
+
+inline RefreshResultDisposition refreshResultDisposition(
+    bool generationAccepted)
+{
+    return {
+        !generationAccepted,
+        generationAccepted
+    };
+}
+
 } // namespace RideCacheStartup
 
 #endif // GC_RIDECACHESTARTUP_H
