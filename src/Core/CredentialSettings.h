@@ -12,6 +12,23 @@
 
 class QSettings;
 
+namespace CredentialSettingsDetail {
+
+enum class BackendMutationMarkerStatus {
+    Absent,
+    Pending,
+    Invalid
+};
+
+BackendMutationMarkerStatus backendMutationMarkerStatus(
+    const QString &mutationLockPath);
+bool createBackendMutationMarker(
+    const QString &mutationLockPath);
+bool removeBackendMutationMarker(
+    const QString &mutationLockPath);
+
+} // namespace CredentialSettingsDetail
+
 class CredentialStore
 {
 public:
@@ -19,6 +36,8 @@ public:
         Success,
         NotFound,
         Unavailable,
+        // The operation may still complete or may already have committed.
+        Indeterminate,
         Failed
     };
 
@@ -56,8 +75,25 @@ public:
     virtual Status write(const QString &key,
                          const QString &value,
                          QString *error) = 0;
+    virtual Status writeCoordinated(
+        const QString &key,
+        const QString &value,
+        QString *error,
+        const QString &mutationLockPath)
+    {
+        Q_UNUSED(mutationLockPath)
+        return write(key, value, error);
+    }
     virtual Status remove(const QString &key,
                           QString *error) = 0;
+    virtual Status removeCoordinated(
+        const QString &key,
+        QString *error,
+        const QString &mutationLockPath)
+    {
+        Q_UNUSED(mutationLockPath)
+        return remove(key, error);
+    }
 };
 
 std::unique_ptr<CredentialStore> createPlatformCredentialStore();
@@ -238,7 +274,8 @@ private:
         const QString &removalKey,
         const QString &cleanupPath,
         const QString &revisionPath,
-        const QString &deletionPath);
+        const QString &deletionPath,
+        const QString &mutationLockPath);
     bool preparePlaintextCleanup(
         QSettings *settings,
         const QString &key,

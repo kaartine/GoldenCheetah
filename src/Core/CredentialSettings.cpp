@@ -1645,6 +1645,32 @@ public:
         return stateBasePath_ + QStringLiteral(".deletion");
     }
 
+    QString backendMutationLockPath() const
+    {
+        return stateBasePath_
+            + QStringLiteral(".backend.lock");
+    }
+
+    bool backendMutationIdle() const
+    {
+        if (stateBasePath_.isEmpty())
+            return false;
+        const QString lockPath =
+            backendMutationLockPath();
+        if (CredentialSettingsDetail::
+                backendMutationMarkerStatus(lockPath)
+            != CredentialSettingsDetail::
+                BackendMutationMarkerStatus::Absent) {
+            return false;
+        }
+        QLockFile lock(lockPath);
+        lock.setStaleLockTime(0);
+        if (!lock.tryLock(0))
+            return false;
+        lock.unlock();
+        return true;
+    }
+
     QString cleanupPath(
         QSettings *settings,
         const QString &plaintextKey) const
@@ -3912,6 +3938,100 @@ const QSet<QString> &credentialKeys()
 
 } // namespace
 
+namespace {
+
+const QByteArray backendMutationMarkerContents =
+    QByteArrayLiteral(
+        "goldencheetah_backend_mutation_pending=1\n");
+
+QString backendMutationMarkerPath(
+    const QString &mutationLockPath)
+{
+    return mutationLockPath.isEmpty()
+        ? QString()
+        : mutationLockPath + QStringLiteral(".pending");
+}
+
+} // namespace
+
+CredentialSettingsDetail::BackendMutationMarkerStatus
+CredentialSettingsDetail::backendMutationMarkerStatus(
+    const QString &mutationLockPath)
+{
+    const QString path =
+        backendMutationMarkerPath(mutationLockPath);
+    if (path.isEmpty())
+        return BackendMutationMarkerStatus::Invalid;
+    const QFileInfo information(path);
+    if (credentialPathIsRedirected(information))
+        return BackendMutationMarkerStatus::Invalid;
+    if (!information.exists())
+        return BackendMutationMarkerStatus::Absent;
+    if (!information.isFile())
+        return BackendMutationMarkerStatus::Invalid;
+
+    QByteArray contents;
+    if (!readCredentialFile(
+            path, backendMutationMarkerContents.size(),
+            &contents)
+        || contents != backendMutationMarkerContents) {
+        return BackendMutationMarkerStatus::Invalid;
+    }
+    return BackendMutationMarkerStatus::Pending;
+}
+
+bool CredentialSettingsDetail::createBackendMutationMarker(
+    const QString &mutationLockPath)
+{
+    const QString path =
+        backendMutationMarkerPath(mutationLockPath);
+    if (backendMutationMarkerStatus(mutationLockPath)
+            != BackendMutationMarkerStatus::Absent
+        || !replaceCredentialFile(
+            path, backendMutationMarkerContents)) {
+        return false;
+    }
+#ifdef Q_OS_UNIX
+    if (!QFile::setPermissions(
+            path,
+            QFileDevice::ReadOwner
+            | QFileDevice::WriteOwner)) {
+        return false;
+    }
+#endif
+    return credentialFileIsDurable(
+               path,
+               QByteArrayLiteral(
+                   "backend-marker-file"),
+               QByteArrayLiteral(
+                   "backend-marker-directory"))
+        && backendMutationMarkerStatus(
+               mutationLockPath)
+            == BackendMutationMarkerStatus::Pending;
+}
+
+bool CredentialSettingsDetail::removeBackendMutationMarker(
+    const QString &mutationLockPath)
+{
+    const QString path =
+        backendMutationMarkerPath(mutationLockPath);
+    if (backendMutationMarkerStatus(mutationLockPath)
+            != BackendMutationMarkerStatus::Pending
+        || credentialDurabilityFailure(
+            QByteArrayLiteral(
+                "backend-marker-remove"))
+        || !QFile::remove(path)
+        || !syncCredentialDirectory(
+            path,
+            QByteArrayLiteral(
+                "backend-marker-remove-directory"))) {
+        return false;
+    }
+    return backendMutationMarkerStatus(
+               mutationLockPath)
+        == BackendMutationMarkerStatus::Absent;
+}
+
 CredentialSettings::CredentialSettings(
     std::unique_ptr<CredentialStore> store)
     : store_(std::move(store))
@@ -5168,6 +5288,10 @@ QVariant CredentialSettings::value(
     CredentialOperationGuard operation(key);
     if (!operation)
         return defaultValue;
+    if (!operation.backendMutationIdle()) {
+        invalidateCache(key);
+        return defaultValue;
+    }
     const QString cleanupPath =
         operation.cleanupPath(settings, plaintextKey);
     if (cleanupPath.isEmpty())
@@ -5194,7 +5318,8 @@ QVariant CredentialSettings::value(
             settings, key, credentialKey, plaintextKey,
             removalKey, cleanupPath,
             operation.revisionPath(),
-            operation.deletionPath());
+            operation.deletionPath(),
+            operation.backendMutationLockPath());
         return defaultValue;
     }
     if ((disposition
@@ -5216,7 +5341,8 @@ QVariant CredentialSettings::value(
             settings, key, credentialKey, plaintextKey,
             removalKey, cleanupPath,
             operation.revisionPath(),
-            operation.deletionPath());
+            operation.deletionPath(),
+            operation.backendMutationLockPath());
         return defaultValue;
     }
     if (deletion.phase
@@ -5225,7 +5351,8 @@ QVariant CredentialSettings::value(
             settings, key, credentialKey, plaintextKey,
             removalKey, cleanupPath,
             operation.revisionPath(),
-            operation.deletionPath());
+            operation.deletionPath(),
+            operation.backendMutationLockPath());
         return defaultValue;
     }
 
@@ -5826,6 +5953,10 @@ bool CredentialSettings::setValueChecked(
     CredentialOperationGuard operation(key);
     if (!operation)
         return false;
+    if (!operation.backendMutationIdle()) {
+        invalidateCache(key);
+        return false;
+    }
     const QString cleanupPath =
         operation.cleanupPath(settings, plaintextKey);
     if (cleanupPath.isEmpty())
@@ -5867,7 +5998,8 @@ bool CredentialSettings::setValueChecked(
                 settings, key, credentialKey,
                 plaintextKey, removalKey, cleanupPath,
                 operation.revisionPath(),
-                operation.deletionPath());
+                operation.deletionPath(),
+                operation.backendMutationLockPath());
         }
 
         QByteArray transaction =
@@ -5893,7 +6025,8 @@ bool CredentialSettings::setValueChecked(
             settings, key, credentialKey,
             plaintextKey, removalKey, cleanupPath,
             operation.revisionPath(),
-            operation.deletionPath());
+            operation.deletionPath(),
+            operation.backendMutationLockPath());
     }
 
     const PendingRemoval pending =
@@ -5910,7 +6043,8 @@ bool CredentialSettings::setValueChecked(
                 settings, key, credentialKey,
                 plaintextKey, removalKey, cleanupPath,
                 operation.revisionPath(),
-                operation.deletionPath())) {
+                operation.deletionPath(),
+                operation.backendMutationLockPath())) {
             return false;
         }
         deletion = readCredentialDeletionState(
@@ -5932,7 +6066,8 @@ bool CredentialSettings::setValueChecked(
                 settings, key, credentialKey,
                 plaintextKey, removalKey, cleanupPath,
                 operation.revisionPath(),
-                operation.deletionPath())) {
+                operation.deletionPath(),
+                operation.backendMutationLockPath())) {
             return false;
         }
         deletion = readCredentialDeletionState(
@@ -5981,7 +6116,9 @@ bool CredentialSettings::setValueChecked(
 
     QString error;
     const CredentialStore::Status status = store_
-        ? store_->write(key, secret, &error)
+        ? store_->writeCoordinated(
+              key, secret, &error,
+              operation.backendMutationLockPath())
         : CredentialStore::Status::Unavailable;
     const bool persisted = status == CredentialStore::Status::Success;
     bool scrubbed = false;
@@ -6012,8 +6149,13 @@ bool CredentialSettings::setValueChecked(
         hardenSettingsFile(settings);
     }
     if (!persisted) {
-        cache(key, {true, secret, false, revision,
-                    transaction});
+        if (status
+            == CredentialStore::Status::Indeterminate) {
+            invalidateCache(key);
+        } else {
+            cache(key, {true, secret, false, revision,
+                        transaction});
+        }
         return false;
     }
     if (confirmed.status
@@ -6083,7 +6225,8 @@ bool CredentialSettings::completePendingRemoval(
     const QString &removalKey,
     const QString &cleanupPath,
     const QString &revisionPath,
-    const QString &deletionPath)
+    const QString &deletionPath,
+    const QString &mutationLockPath)
 {
     CredentialDeletionState deletion =
         readCredentialDeletionState(deletionPath);
@@ -6157,7 +6300,8 @@ bool CredentialSettings::completePendingRemoval(
 
         QString error;
         const CredentialStore::Status status = store_
-            ? store_->remove(key, &error)
+            ? store_->removeCoordinated(
+                  key, &error, mutationLockPath)
             : CredentialStore::Status::Unavailable;
         if (status != CredentialStore::Status::Success
             && status != CredentialStore::Status::NotFound) {

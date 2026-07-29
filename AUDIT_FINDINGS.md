@@ -2136,20 +2136,49 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### THREAD-013: Timed-out QtKeychain jobs can mutate the vault later
 
-- Status: OPEN
-- Code: `src/Core/CredentialStoreQtKeychain.cpp`
+- Status: FIXED
+- Code: `src/Core/CredentialSettings.cpp`,
+  `src/Core/CredentialSettings.h`,
+  `src/Core/CredentialStoreQtKeychain.cpp`,
+  `src/Core/CredentialStoreQtKeychain.h`, and
+  `unittests/Core/credentialSettings/testCredentialSettings.cpp`
 - Impact: A timed-out QtKeychain job is switched to auto-delete and released
   while its backend operation continues. The caller receives `Unavailable` and
   releases the per-credential operation lock, but a timed-out write or removal
   can still complete later and reorder against a retry, replacement, or delete.
-- Test: Delay fake read, write, and remove jobs beyond the timeout, start a
-  conflicting operation after the reported failure, and then release the first
-  job. Require no late vault mutation or callback after the operation guard has
-  ended.
-- Fix direction: Provide backend cancellation with a terminal acknowledgement,
-  or retain serialized ownership until the job reaches a terminal state. An
-  indeterminate mutation needs durable recovery state rather than a definite
-  `Unavailable` result.
+- Test-first evidence: The initial delayed-job regression passed only two of
+  eight cases. Three timed-out mutation cases incorrectly returned a definite
+  result, never-finishing write and remove subprocesses exceeded their
+  watchdogs, and a second write started while the first backend lease was
+  active. A direct ThreadSanitizer run then found a separate race between the
+  GUI-thread result publication and the waiting worker's stack read.
+- Resolution: QtKeychain operations now retain a process-wide owner token until
+  the backend emits its terminal signal. Mutations additionally hold a
+  cross-process `QLockFile` and an owner-only, atomically published and
+  directory-synced pending marker before the backend starts. A mutation timeout
+  returns the new `Indeterminate` status, preserves both leases, invalidates the
+  in-memory secret cache, and blocks reads, retries, and cleanup state changes
+  until terminal acknowledgement. A stale or destroyed job cannot release a
+  newer owner, and marker creation, validation, or removal failure remains
+  quarantined. The worker handoff now publishes its result under an explicit
+  mutex before the blocking invocation returns.
+- Verification: The final credential program passes 410 cases with zero
+  failures and seven Linux platform skips. The final 52-case timeout,
+  serialization, marker, process-crash, and cache matrix passes both strict
+  ASan/UBSan/LSan and ThreadSanitizer runs with no reports or races. Final
+  production and test sources pass MinGW64 C++17 syntax checks. The complete
+  out-of-source matrix runs 81 QtTest programs: 3,154 cases pass, none fail or
+  blacklist, and seven platform cases skip. One earlier normal full run hit an
+  unrelated enrollment snapshot comparison; the affected global and athlete
+  cases then passed 20 isolated repetitions and a clean full rerun without
+  semantic divergence.
+- Residual: A process crash during an in-flight mutation intentionally leaves
+  the durable marker fail-closed; automatic reconciliation of that
+  indeterminate backend outcome is not implemented. Native Windows Credential
+  Manager calls may block synchronously on the GUI thread, and worker dispatch
+  still uses a blocking queued invocation. This fix guarantees ordering and
+  explicit uncertainty, not bounded completion of a wedged native backend; the
+  broader availability problem remains tracked by `THREAD-011`.
 
 ## Medium
 
@@ -4236,10 +4265,10 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The complete containerized release matrix after SEC-021 passes:
+The complete containerized release matrix after THREAD-013 passes:
 
 - 81 QtTest suites
-- 3,126 passed
+- 3,154 passed
 - 0 failed or blacklisted
 - 7 expected platform-only skips on Linux
 - Qt 6.8.3 on Ubuntu 24.04

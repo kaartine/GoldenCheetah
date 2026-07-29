@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QDirIterator>
 #include <QElapsedTimer>
+#include <QEvent>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -13,6 +14,7 @@
 #include <QLockFile>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QPointer>
 #include <QRegularExpression>
 #include <QSettings>
 #include <QTemporaryDir>
@@ -337,11 +339,19 @@ public:
 
     ~ScopedEnvironmentVariable()
     {
+        reset();
+    }
+
+    void reset()
+    {
+        if (!active_)
+            return;
         if (existed_) {
             qputenv(name_.constData(), previous_);
         } else {
             qunsetenv(name_.constData());
         }
+        active_ = false;
     }
 
     Q_DISABLE_COPY(ScopedEnvironmentVariable)
@@ -350,6 +360,7 @@ private:
     QByteArray name_;
     bool existed_;
     QByteArray previous_;
+    bool active_ = true;
 };
 
 class ScopedUnsetEnvironmentVariable
@@ -1498,6 +1509,7 @@ private slots:
     void initTestCase();
     void cleanupTestCase();
     void init();
+    void cleanup();
     void credentialClassification_data();
     void credentialClassification();
     void keychainStatusMapping_data();
@@ -1506,6 +1518,25 @@ private slots:
     void linuxKeychainRuntimeStatusReport();
     void bundledLinuxRuntimePathRequiresContainedRegularFile();
     void keychainJobsDisablePlaintextFallback();
+    void timedOutKeychainMutationRetainsSerialization_data();
+    void timedOutKeychainMutationRetainsSerialization();
+    void timedOutKeychainMutationIsBounded_data();
+    void timedOutKeychainMutationIsBounded();
+    void timedOutKeychainReadRetainsSerialization_data();
+    void timedOutKeychainReadRetainsSerialization();
+    void destroyedTimedOutReadReleasesGate();
+    void staleTimedOutKeychainJobCannotReleaseNewOwner();
+    void destroyedTimedOutMutationRemainsQuarantined();
+    void keychainMarkerCreationFailureBlocksBackend_data();
+    void keychainMarkerCreationFailureBlocksBackend();
+    void keychainMarkerCleanupFailureRemainsQuarantined_data();
+    void keychainMarkerCleanupFailureRemainsQuarantined();
+    void timedOutKeychainMutationFromWorkerIsBounded();
+    void timedOutKeychainMutationBlocksCredentialStateUntilTerminal();
+    void timedOutKeychainMutationLeaseIsCrossProcess_data();
+    void timedOutKeychainMutationLeaseIsCrossProcess();
+    void invalidKeychainMutationMarkerBlocksCredentialState_data();
+    void invalidKeychainMutationMarkerBlocksCredentialState();
     void platformStoreRoundTripsOrFailsClosed();
     void platformCreateIfAbsentIsBoundedAndUnsupported();
     void fileStoreCreateIfAbsentIsAtomicAcrossProcesses();
@@ -1513,6 +1544,7 @@ private slots:
     void credentialOperationsAreSerialized();
     void reentrantCredentialOperationFailsFast();
     void credentialProcessLockIsExclusive();
+    void activeKeychainMutationLeaseBlocksCredentialState();
     void activeCredentialProcessLockDoesNotExpire();
     void scopeCreationIsSerialized();
     void scopeProcessLockCanonicalizesAliases();
@@ -1801,6 +1833,7 @@ void TestCredentialSettings::init()
 #ifdef GC_CREDENTIAL_TEST_HOOKS
     GSettings::setCredentialLegacyScopeSnapshotHook({});
     GSettings::setCredentialLegacyValueSnapshotHook({});
+    CredentialStoreQtKeychainDetail::resetJobTestHooks();
 #endif
     if (!ownedCredentialStateRoot_.isEmpty()) {
         QDir stateDirectory(QDir(ownedCredentialStateRoot_)
@@ -1810,6 +1843,14 @@ void TestCredentialSettings::init()
             QVERIFY(stateDirectory.removeRecursively());
         }
     }
+}
+
+void TestCredentialSettings::cleanup()
+{
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+    CredentialStoreQtKeychainDetail::resetJobTestHooks();
+    CredentialStoreQtKeychainDetail::resetJobGateForTest();
+#endif
 }
 
 void TestCredentialSettings::credentialClassification_data()
@@ -1995,6 +2036,1316 @@ void TestCredentialSettings::keychainJobsDisablePlaintextFallback()
     QVERIFY(!job.autoDelete());
 }
 
+void TestCredentialSettings::
+timedOutKeychainMutationRetainsSerialization_data()
+{
+    QTest::addColumn<bool>("firstRemove");
+    QTest::addColumn<bool>("conflictRemove");
+    QTest::addColumn<bool>("firstCommits");
+
+    QTest::newRow("write-then-write")
+        << false << false << true;
+    QTest::newRow("write-then-remove")
+        << false << true << true;
+    QTest::newRow("remove-then-write")
+        << true << false << true;
+    QTest::newRow("failed-write-then-write")
+        << false << false << false;
+    QTest::newRow("failed-remove-then-write")
+        << true << false << false;
+}
+
+void TestCredentialSettings::
+timedOutKeychainMutationRetainsSerialization()
+{
+    QFETCH(bool, firstRemove);
+    QFETCH(bool, conflictRemove);
+    QFETCH(bool, firstCommits);
+
+    std::unique_ptr<CredentialStore> store =
+        createQtKeychainCredentialStore();
+    QVERIFY(store);
+    QTemporaryDir leaseDirectory;
+    QVERIFY(leaseDirectory.isValid());
+
+    const QString key = QStringLiteral("timeout-mutation");
+    const QString mutationLockPath =
+        leaseDirectory.filePath(
+            QStringLiteral("mutation.lock"));
+    const QString firstValue = QStringLiteral("first");
+    const QString replacement = QStringLiteral("replacement");
+    QString vaultValue =
+        firstRemove ? QStringLiteral("original") : QString();
+    bool vaultContainsKey = firstRemove;
+    int startedJobs = 0;
+    int startedAtConflict = -1;
+    bool firstReturned = false;
+    bool firstReturnedAtConflict = false;
+    bool firstMutationWasLate = false;
+    bool delayedReleased = false;
+    bool timeoutObserved = false;
+    bool backendLeaseHeldAtConflict = false;
+    bool markerPublishedBeforeStart = true;
+    CredentialStore::Status conflictStatus =
+        CredentialStore::Status::Failed;
+    QPointer<QKeychain::Job> delayedJob;
+
+    CredentialStoreQtKeychainDetail::setJobTimeoutForTest(20);
+    CredentialStoreQtKeychainDetail::setJobStartHookForTest(
+        [&](QKeychain::Job *job) {
+            ++startedJobs;
+            markerPublishedBeforeStart =
+                markerPublishedBeforeStart
+                && CredentialSettingsDetail::
+                       backendMutationMarkerStatus(
+                           mutationLockPath)
+                    == CredentialSettingsDetail::
+                       BackendMutationMarkerStatus::Pending;
+            if (startedJobs == 1) {
+                delayedJob = job;
+                return true;
+            }
+            if (qobject_cast<QKeychain::DeletePasswordJob *>(
+                    job)) {
+                vaultContainsKey = false;
+                vaultValue.clear();
+            } else {
+                vaultContainsKey = true;
+                vaultValue = replacement;
+            }
+            job->emitFinished();
+            return true;
+        });
+
+    CredentialStoreQtKeychainDetail::
+        setJobTimeoutHookForTest(
+            [&](QKeychain::Job *job) {
+                timeoutObserved = job == delayedJob;
+                QMetaObject::invokeMethod(
+                    this,
+                    [&]() {
+                        firstReturnedAtConflict =
+                            firstReturned;
+                        QLockFile backendProbe(
+                            mutationLockPath);
+                        backendProbe.setStaleLockTime(0);
+                        backendLeaseHeldAtConflict =
+                            !backendProbe.tryLock(0);
+                        if (backendProbe.isLocked())
+                            backendProbe.unlock();
+                        QString error;
+                        conflictStatus =
+                            conflictRemove
+                            ? store->removeCoordinated(
+                                  key, &error,
+                                  mutationLockPath)
+                            : store->writeCoordinated(
+                                  key, replacement,
+                                  &error,
+                                  mutationLockPath);
+                        startedAtConflict = startedJobs;
+                        QMetaObject::invokeMethod(
+                            this,
+                            [&]() {
+                                delayedReleased = true;
+                                firstMutationWasLate =
+                                    firstReturned;
+                                if (firstCommits) {
+                                    if (firstRemove) {
+                                        vaultContainsKey = false;
+                                        vaultValue.clear();
+                                    } else {
+                                        vaultContainsKey = true;
+                                        vaultValue = firstValue;
+                                    }
+                                }
+                                if (delayedJob) {
+                                    if (firstCommits) {
+                                        delayedJob->emitFinished();
+                                    } else {
+                                        delayedJob
+                                            ->emitFinishedWithError(
+                                                QKeychain::OtherError,
+                                                QStringLiteral(
+                                                    "delayed failure"));
+                                    }
+                                }
+                            },
+                            Qt::QueuedConnection);
+                    },
+                    Qt::QueuedConnection);
+            });
+
+    QString error;
+    const CredentialStore::Status firstStatus =
+        firstRemove
+        ? store->removeCoordinated(
+              key, &error, mutationLockPath)
+        : store->writeCoordinated(
+              key, firstValue, &error,
+              mutationLockPath);
+    firstReturned = true;
+
+    QTRY_VERIFY_WITH_TIMEOUT(delayedReleased, 1000);
+    const CredentialStore::Status retryStatus =
+        store->writeCoordinated(
+            key, replacement, &error,
+            mutationLockPath);
+    CredentialStoreQtKeychainDetail::resetJobTestHooks();
+
+    QVERIFY(timeoutObserved);
+    QVERIFY(markerPublishedBeforeStart);
+    QCOMPARE(firstStatus,
+             CredentialStore::Status::Indeterminate);
+    QVERIFY(firstReturnedAtConflict);
+    QVERIFY(firstMutationWasLate);
+    QVERIFY(backendLeaseHeldAtConflict);
+    QCOMPARE(conflictStatus,
+             CredentialStore::Status::Unavailable);
+    QCOMPARE(startedAtConflict, 1);
+    QCOMPARE(retryStatus, CredentialStore::Status::Success);
+    QVERIFY(vaultContainsKey);
+    QCOMPARE(vaultValue, replacement);
+}
+
+void TestCredentialSettings::
+timedOutKeychainMutationIsBounded_data()
+{
+    QTest::addColumn<bool>("remove");
+
+    QTest::newRow("write") << false;
+    QTest::newRow("remove") << true;
+}
+
+void TestCredentialSettings::
+timedOutKeychainMutationIsBounded()
+{
+    QFETCH(bool, remove);
+
+    if (qEnvironmentVariableIsSet(
+            "GC_KEYCHAIN_TIMEOUT_CHILD")) {
+        std::unique_ptr<CredentialStore> store =
+            createQtKeychainCredentialStore();
+        QVERIFY(store);
+        QTemporaryDir leaseDirectory;
+        QVERIFY(leaseDirectory.isValid());
+        const QString mutationLockPath =
+            leaseDirectory.filePath(
+                QStringLiteral("mutation.lock"));
+        int startedJobs = 0;
+        QPointer<QKeychain::Job> delayedJob;
+        CredentialStoreQtKeychainDetail::
+            setJobTimeoutForTest(20);
+        CredentialStoreQtKeychainDetail::
+            setJobStartHookForTest(
+                [&](QKeychain::Job *job) {
+                    ++startedJobs;
+                    delayedJob = job;
+                    return true;
+                });
+
+        QString error;
+        const CredentialStore::Status status =
+            remove
+            ? store->removeCoordinated(
+                  QStringLiteral("bounded-remove"),
+                  &error, mutationLockPath)
+            : store->writeCoordinated(
+                  QStringLiteral("bounded-write"),
+                  QStringLiteral("value"),
+                  &error, mutationLockPath);
+        QLockFile activeProbe(mutationLockPath);
+        activeProbe.setStaleLockTime(0);
+        const bool backendLeaseHeld =
+            !activeProbe.tryLock(0);
+        if (activeProbe.isLocked())
+            activeProbe.unlock();
+        if (delayedJob) {
+            delayedJob->emitFinishedWithError(
+                QKeychain::OtherError,
+                QStringLiteral("test completion"));
+        }
+        QCoreApplication::sendPostedEvents(
+            nullptr, QEvent::DeferredDelete);
+        CredentialStoreQtKeychainDetail::
+            resetJobTestHooks();
+        QLockFile releasedProbe(mutationLockPath);
+        releasedProbe.setStaleLockTime(0);
+        const bool backendLeaseReleased =
+            releasedProbe.tryLock(0);
+        if (releasedProbe.isLocked())
+            releasedProbe.unlock();
+
+        QCOMPARE(status,
+                 CredentialStore::Status::Indeterminate);
+        QCOMPARE(startedJobs, 1);
+        QVERIFY(backendLeaseHeld);
+        QVERIFY(backendLeaseReleased);
+        return;
+    }
+
+    QProcess child;
+    QProcessEnvironment environment =
+        QProcessEnvironment::systemEnvironment();
+    environment.insert(
+        QStringLiteral("GC_KEYCHAIN_TIMEOUT_CHILD"),
+        QStringLiteral("1"));
+    child.setProcessEnvironment(environment);
+    child.setProgram(
+        QCoreApplication::applicationFilePath());
+    child.setArguments({
+        QStringLiteral(
+            "timedOutKeychainMutationIsBounded:%1")
+            .arg(QString::fromLatin1(
+                QTest::currentDataTag())),
+        QStringLiteral("-silent")
+    });
+    child.start();
+    QVERIFY2(child.waitForStarted(5000),
+             qPrintable(child.errorString()));
+    const bool finished =
+        child.waitForFinished(3000);
+    if (!finished) {
+        child.kill();
+        child.waitForFinished();
+    }
+    const QByteArray output = child.readAll();
+    QVERIFY2(finished, output.constData());
+    QVERIFY2(child.exitStatus()
+                 == QProcess::NormalExit,
+             output.constData());
+    QVERIFY2(child.exitCode() == 0,
+             output.constData());
+}
+
+void TestCredentialSettings::
+timedOutKeychainReadRetainsSerialization_data()
+{
+    QTest::addColumn<bool>("terminalError");
+
+    QTest::newRow("late-success") << false;
+    QTest::newRow("late-error") << true;
+}
+
+void TestCredentialSettings::
+timedOutKeychainReadRetainsSerialization()
+{
+    QFETCH(bool, terminalError);
+
+    std::unique_ptr<CredentialStore> store =
+        createQtKeychainCredentialStore();
+    std::unique_ptr<CredentialStore> competingStore =
+        createQtKeychainCredentialStore();
+    QVERIFY(store);
+    QVERIFY(competingStore);
+    QTemporaryDir leaseDirectory;
+    QVERIFY(leaseDirectory.isValid());
+
+    const QString key = QStringLiteral("timeout-read");
+    const QString replacement = QStringLiteral("replacement");
+    const QString mutationLockPath =
+        leaseDirectory.filePath(
+            QStringLiteral("mutation.lock"));
+    QString vaultValue;
+    int startedJobs = 0;
+    int startedAtConflict = -1;
+    bool firstReturned = false;
+    bool firstReturnedAtConflict = false;
+    bool delayedReleased = false;
+    CredentialStore::Status conflictStatus =
+        CredentialStore::Status::Failed;
+    QPointer<QKeychain::Job> delayedJob;
+
+    CredentialStoreQtKeychainDetail::setJobTimeoutForTest(20);
+    CredentialStoreQtKeychainDetail::setJobStartHookForTest(
+        [&](QKeychain::Job *job) {
+            ++startedJobs;
+            if (startedJobs == 1) {
+                delayedJob = job;
+                return true;
+            }
+            vaultValue = replacement;
+            job->emitFinished();
+            return true;
+        });
+
+    const CredentialStore::ReadResult firstResult =
+        store->read(key);
+    firstReturned = true;
+    store.reset();
+
+    QString error;
+    firstReturnedAtConflict = firstReturned;
+    conflictStatus =
+        competingStore->writeCoordinated(
+            key, replacement, &error,
+            mutationLockPath);
+    startedAtConflict = startedJobs;
+    delayedReleased = true;
+    if (delayedJob) {
+        if (terminalError) {
+            delayedJob->emitFinishedWithError(
+                QKeychain::EntryNotFound,
+                QStringLiteral(
+                    "delayed read completed"));
+        } else {
+            delayedJob->emitFinished();
+        }
+    }
+    const CredentialStore::Status retryStatus =
+        competingStore->writeCoordinated(
+            key, replacement, &error,
+            mutationLockPath);
+    CredentialStoreQtKeychainDetail::resetJobTestHooks();
+
+    QCOMPARE(firstResult.status,
+             CredentialStore::Status::Unavailable);
+    QVERIFY(delayedReleased);
+    QVERIFY(firstReturnedAtConflict);
+    QCOMPARE(conflictStatus,
+             CredentialStore::Status::Unavailable);
+    QCOMPARE(startedAtConflict, 1);
+    QCOMPARE(retryStatus, CredentialStore::Status::Success);
+    QCOMPARE(vaultValue, replacement);
+}
+
+void TestCredentialSettings::
+destroyedTimedOutReadReleasesGate()
+{
+    std::unique_ptr<CredentialStore> store =
+        createQtKeychainCredentialStore();
+    QVERIFY(store);
+
+    int startedJobs = 0;
+    QPointer<QKeychain::Job> delayedJob;
+    CredentialStoreQtKeychainDetail::
+        setJobTimeoutForTest(20);
+    CredentialStoreQtKeychainDetail::
+        setJobStartHookForTest(
+            [&](QKeychain::Job *job) {
+                ++startedJobs;
+                if (startedJobs == 1) {
+                    delayedJob = job;
+                    return true;
+                }
+                job->emitFinished();
+                return true;
+            });
+
+    const CredentialStore::ReadResult readResult =
+        store->read(QStringLiteral("destroyed-read"));
+    const bool readStarted = delayedJob;
+    delete delayedJob.data();
+    QString error;
+    const CredentialStore::Status retryStatus =
+        store->write(
+            QStringLiteral("after-destroyed-read"),
+            QStringLiteral("value"), &error);
+    CredentialStoreQtKeychainDetail::
+        resetJobTestHooks();
+
+    QCOMPARE(readResult.status,
+             CredentialStore::Status::Unavailable);
+    QVERIFY(readStarted);
+    QVERIFY(delayedJob.isNull());
+    QCOMPARE(retryStatus,
+             CredentialStore::Status::Success);
+    QCOMPARE(startedJobs, 2);
+}
+
+void TestCredentialSettings::
+staleTimedOutKeychainJobCannotReleaseNewOwner()
+{
+    std::unique_ptr<CredentialStore> store =
+        createQtKeychainCredentialStore();
+    QVERIFY(store);
+
+    QPointer<QKeychain::Job> firstJob;
+    QPointer<QKeychain::Job> secondJob;
+    int startedJobs = 0;
+    CredentialStoreQtKeychainDetail::setJobTimeoutForTest(20);
+    CredentialStoreQtKeychainDetail::setJobStartHookForTest(
+        [&](QKeychain::Job *job) {
+            ++startedJobs;
+            if (startedJobs == 1) {
+                firstJob = job;
+                return true;
+            }
+            if (startedJobs == 2) {
+                secondJob = job;
+                return true;
+            }
+            job->emitFinished();
+            return true;
+        });
+
+    const CredentialStore::ReadResult firstResult =
+        store->read(QStringLiteral("first-timeout"));
+    const bool firstStarted = firstJob;
+    if (firstJob) {
+        firstJob->emitFinishedWithError(
+            QKeychain::EntryNotFound,
+            QStringLiteral("first read completed"));
+    }
+
+    const CredentialStore::ReadResult secondResult =
+        store->read(QStringLiteral("second-timeout"));
+    const bool secondStarted = secondJob;
+    QCoreApplication::sendPostedEvents(
+        nullptr, QEvent::DeferredDelete);
+    const bool firstDestroyed = firstJob.isNull();
+
+    QString error;
+    const CredentialStore::Status blockedStatus =
+        store->write(
+            QStringLiteral("blocked-by-second"),
+            QStringLiteral("replacement"),
+            &error);
+    const int startedWhileSecondActive = startedJobs;
+
+    if (secondJob) {
+        secondJob->emitFinishedWithError(
+            QKeychain::EntryNotFound,
+            QStringLiteral("second read completed"));
+    }
+    const CredentialStore::Status retryStatus =
+        store->write(
+            QStringLiteral("after-second"),
+            QStringLiteral("replacement"),
+            &error);
+    CredentialStoreQtKeychainDetail::resetJobTestHooks();
+
+    QCOMPARE(firstResult.status,
+             CredentialStore::Status::Unavailable);
+    QVERIFY(firstStarted);
+    QCOMPARE(secondResult.status,
+             CredentialStore::Status::Unavailable);
+    QVERIFY(secondStarted);
+    QVERIFY(firstDestroyed);
+    QCOMPARE(blockedStatus,
+             CredentialStore::Status::Unavailable);
+    QCOMPARE(startedWhileSecondActive, 2);
+    QCOMPARE(retryStatus, CredentialStore::Status::Success);
+    QCOMPARE(startedJobs, 3);
+}
+
+void TestCredentialSettings::
+destroyedTimedOutMutationRemainsQuarantined()
+{
+    std::unique_ptr<CredentialStore> store =
+        createQtKeychainCredentialStore();
+    QVERIFY(store);
+    QTemporaryDir leaseDirectory;
+    QVERIFY(leaseDirectory.isValid());
+    const QString mutationLockPath =
+        leaseDirectory.filePath(
+            QStringLiteral("mutation.lock"));
+
+    int startedJobs = 0;
+    QPointer<QKeychain::Job> delayedJob;
+    CredentialStoreQtKeychainDetail::
+        setJobTimeoutForTest(20);
+    CredentialStoreQtKeychainDetail::
+        setJobStartHookForTest(
+            [&](QKeychain::Job *job) {
+                ++startedJobs;
+                delayedJob = job;
+                return true;
+            });
+
+    QString error;
+    const CredentialStore::Status firstStatus =
+        store->writeCoordinated(
+            QStringLiteral("destroyed-mutation"),
+            QStringLiteral("value"),
+            &error, mutationLockPath);
+    const bool firstStarted = delayedJob;
+    delete delayedJob.data();
+
+    QLockFile backendProbe(mutationLockPath);
+    backendProbe.setStaleLockTime(0);
+    const bool backendLeaseHeld =
+        !backendProbe.tryLock(0);
+    if (backendProbe.isLocked())
+        backendProbe.unlock();
+    const CredentialStore::Status blockedStatus =
+        store->writeCoordinated(
+            QStringLiteral("blocked-after-destroy"),
+            QStringLiteral("replacement"),
+            &error, mutationLockPath);
+    const int startedWhileQuarantined = startedJobs;
+
+    CredentialStoreQtKeychainDetail::
+        resetJobGateForTest();
+    CredentialStoreQtKeychainDetail::
+        resetJobTestHooks();
+
+    QCOMPARE(firstStatus,
+             CredentialStore::Status::Indeterminate);
+    QVERIFY(firstStarted);
+    QVERIFY(delayedJob.isNull());
+    QVERIFY(backendLeaseHeld);
+    QCOMPARE(blockedStatus,
+             CredentialStore::Status::Unavailable);
+    QCOMPARE(startedWhileQuarantined, 1);
+}
+
+void TestCredentialSettings::
+keychainMarkerCreationFailureBlocksBackend_data()
+{
+    QTest::addColumn<QByteArray>("failureStage");
+
+    QTest::newRow("marker-file-sync")
+        << QByteArrayLiteral("backend-marker-file");
+    QTest::newRow("marker-directory-sync")
+        << QByteArrayLiteral("backend-marker-directory");
+}
+
+void TestCredentialSettings::
+keychainMarkerCreationFailureBlocksBackend()
+{
+    QFETCH(QByteArray, failureStage);
+
+    std::unique_ptr<CredentialStore> store =
+        createQtKeychainCredentialStore();
+    QVERIFY(store);
+    QTemporaryDir leaseDirectory;
+    QVERIFY(leaseDirectory.isValid());
+    const QString mutationLockPath =
+        leaseDirectory.filePath(
+            QStringLiteral("mutation.lock"));
+
+    int startedJobs = 0;
+    CredentialStoreQtKeychainDetail::
+        setJobStartHookForTest(
+            [&](QKeychain::Job *job) {
+                ++startedJobs;
+                job->emitFinished();
+                return true;
+            });
+    ScopedEnvironmentVariable durabilityFailure(
+        QByteArrayLiteral(
+            "GC_CREDENTIAL_TEST_DURABILITY_FAILURE"),
+        failureStage);
+
+    QString error;
+    const CredentialStore::Status firstStatus =
+        store->writeCoordinated(
+            QStringLiteral("marker-creation"),
+            QStringLiteral("value"),
+            &error, mutationLockPath);
+    const auto markerStatus =
+        CredentialSettingsDetail::
+            backendMutationMarkerStatus(
+                mutationLockPath);
+    QLockFile backendProbe(mutationLockPath);
+    backendProbe.setStaleLockTime(0);
+    const bool backendLeaseReleased =
+        backendProbe.tryLock(0);
+    if (backendProbe.isLocked())
+        backendProbe.unlock();
+    const CredentialStore::Status blockedStatus =
+        store->writeCoordinated(
+            QStringLiteral("blocked-by-marker"),
+            QStringLiteral("replacement"),
+            &error, mutationLockPath);
+    const int startedBeforeCleanup = startedJobs;
+
+    durabilityFailure.reset();
+    const bool markerRemoved =
+        CredentialSettingsDetail::
+            removeBackendMutationMarker(
+                mutationLockPath);
+    const CredentialStore::Status retryStatus =
+        store->writeCoordinated(
+            QStringLiteral("after-cleanup"),
+            QStringLiteral("replacement"),
+            &error, mutationLockPath);
+    CredentialStoreQtKeychainDetail::
+        resetJobTestHooks();
+
+    QCOMPARE(firstStatus,
+             CredentialStore::Status::Unavailable);
+    QCOMPARE(
+        markerStatus,
+        CredentialSettingsDetail::
+            BackendMutationMarkerStatus::Pending);
+    QVERIFY(backendLeaseReleased);
+    QCOMPARE(blockedStatus,
+             CredentialStore::Status::Unavailable);
+    QCOMPARE(startedBeforeCleanup, 0);
+    QVERIFY(markerRemoved);
+    QCOMPARE(retryStatus, CredentialStore::Status::Success);
+    QCOMPARE(startedJobs, 1);
+    QCOMPARE(
+        CredentialSettingsDetail::
+            backendMutationMarkerStatus(
+                mutationLockPath),
+        CredentialSettingsDetail::
+            BackendMutationMarkerStatus::Absent);
+}
+
+void TestCredentialSettings::
+keychainMarkerCleanupFailureRemainsQuarantined_data()
+{
+    QTest::addColumn<QByteArray>("failureStage");
+    QTest::addColumn<bool>("markerRemains");
+
+    QTest::newRow("before-unlink")
+        << QByteArrayLiteral("backend-marker-remove")
+        << true;
+    QTest::newRow("after-unlink-before-directory-sync")
+        << QByteArrayLiteral(
+               "backend-marker-remove-directory")
+        << false;
+}
+
+void TestCredentialSettings::
+keychainMarkerCleanupFailureRemainsQuarantined()
+{
+    QFETCH(QByteArray, failureStage);
+    QFETCH(bool, markerRemains);
+
+    std::unique_ptr<CredentialStore> store =
+        createQtKeychainCredentialStore();
+    QVERIFY(store);
+    QTemporaryDir leaseDirectory;
+    QVERIFY(leaseDirectory.isValid());
+    const QString mutationLockPath =
+        leaseDirectory.filePath(
+            QStringLiteral("mutation.lock"));
+
+    int startedJobs = 0;
+    CredentialStoreQtKeychainDetail::
+        setJobStartHookForTest(
+            [&](QKeychain::Job *job) {
+                ++startedJobs;
+                job->emitFinished();
+                return true;
+            });
+    ScopedEnvironmentVariable durabilityFailure(
+        QByteArrayLiteral(
+            "GC_CREDENTIAL_TEST_DURABILITY_FAILURE"),
+        failureStage);
+
+    QString error;
+    const CredentialStore::Status firstStatus =
+        store->writeCoordinated(
+            QStringLiteral("marker-cleanup"),
+            QStringLiteral("value"),
+            &error, mutationLockPath);
+    const auto markerStatus =
+        CredentialSettingsDetail::
+            backendMutationMarkerStatus(
+                mutationLockPath);
+    QLockFile backendProbe(mutationLockPath);
+    backendProbe.setStaleLockTime(0);
+    const bool backendLeaseHeld =
+        !backendProbe.tryLock(0);
+    if (backendProbe.isLocked())
+        backendProbe.unlock();
+    const CredentialStore::Status blockedStatus =
+        store->writeCoordinated(
+            QStringLiteral("blocked-by-marker"),
+            QStringLiteral("replacement"),
+            &error, mutationLockPath);
+    const int startedWhileQuarantined = startedJobs;
+
+    durabilityFailure.reset();
+    CredentialStoreQtKeychainDetail::
+        resetJobGateForTest();
+    CredentialStoreQtKeychainDetail::
+        resetJobTestHooks();
+    const auto markerAfterReset =
+        CredentialSettingsDetail::
+            backendMutationMarkerStatus(
+                mutationLockPath);
+
+    QCOMPARE(firstStatus,
+             CredentialStore::Status::Indeterminate);
+    QCOMPARE(
+        markerStatus,
+        markerRemains
+            ? CredentialSettingsDetail::
+                  BackendMutationMarkerStatus::Pending
+            : CredentialSettingsDetail::
+                  BackendMutationMarkerStatus::Absent);
+    QVERIFY(backendLeaseHeld);
+    QCOMPARE(blockedStatus,
+             CredentialStore::Status::Unavailable);
+    QCOMPARE(startedWhileQuarantined, 1);
+    QCOMPARE(
+        markerAfterReset,
+        CredentialSettingsDetail::
+            BackendMutationMarkerStatus::Absent);
+}
+
+void TestCredentialSettings::
+timedOutKeychainMutationFromWorkerIsBounded()
+{
+    if (!qEnvironmentVariableIsSet(
+            "GC_KEYCHAIN_WORKER_TIMEOUT_CHILD")) {
+        QProcess child;
+        QProcessEnvironment environment =
+            QProcessEnvironment::systemEnvironment();
+        environment.insert(
+            QStringLiteral(
+                "GC_KEYCHAIN_WORKER_TIMEOUT_CHILD"),
+            QStringLiteral("1"));
+        child.setProcessEnvironment(environment);
+        child.setProgram(
+            QCoreApplication::applicationFilePath());
+        child.setArguments({
+            QStringLiteral(
+                "timedOutKeychainMutationFromWorkerIsBounded"),
+            QStringLiteral("-silent")
+        });
+        child.start();
+        QVERIFY2(child.waitForStarted(5000),
+                 qPrintable(child.errorString()));
+        const bool finished =
+            child.waitForFinished(3000);
+        if (!finished) {
+            child.kill();
+            child.waitForFinished();
+        }
+        const QByteArray output = child.readAll();
+        QVERIFY2(finished, output.constData());
+        QVERIFY2(
+            child.exitStatus() == QProcess::NormalExit,
+            output.constData());
+        QVERIFY2(child.exitCode() == 0,
+                 output.constData());
+        return;
+    }
+
+    std::unique_ptr<CredentialStore> store =
+        createQtKeychainCredentialStore();
+    QVERIFY(store);
+    QTemporaryDir leaseDirectory;
+    QVERIFY(leaseDirectory.isValid());
+    const QString mutationLockPath =
+        leaseDirectory.filePath(
+            QStringLiteral("mutation.lock"));
+
+    QPointer<QKeychain::Job> delayedJob;
+    CredentialStoreQtKeychainDetail::
+        setJobTimeoutForTest(20);
+    CredentialStoreQtKeychainDetail::
+        setJobStartHookForTest(
+            [&](QKeychain::Job *job) {
+                delayedJob = job;
+                return true;
+            });
+
+    std::atomic<bool> returned{false};
+    CredentialStore::Status status =
+        CredentialStore::Status::Failed;
+    QString error;
+    std::thread worker([&]() {
+        status = store->writeCoordinated(
+            QStringLiteral("worker-mutation"),
+            QStringLiteral("value"),
+            &error, mutationLockPath);
+        returned.store(true);
+    });
+    QElapsedTimer wait;
+    wait.start();
+    while (!returned.load()
+           && wait.elapsed() < 1000) {
+        QCoreApplication::processEvents(
+            QEventLoop::AllEvents, 10);
+        QTest::qWait(1);
+    }
+    const bool returnedInTime = returned.load();
+    if (!returnedInTime && delayedJob) {
+        delayedJob->emitFinishedWithError(
+            QKeychain::OtherError,
+            QStringLiteral("worker timeout cleanup"));
+    }
+    worker.join();
+
+    const bool jobStillActive = delayedJob;
+    if (delayedJob) {
+        delayedJob->emitFinishedWithError(
+            QKeychain::OtherError,
+            QStringLiteral("worker completion"));
+    }
+    QCoreApplication::sendPostedEvents(
+        nullptr, QEvent::DeferredDelete);
+    CredentialStoreQtKeychainDetail::
+        resetJobTestHooks();
+
+    QCOMPARE(status,
+             CredentialStore::Status::Indeterminate);
+    QVERIFY(returnedInTime);
+    QVERIFY(jobStillActive);
+}
+
+void TestCredentialSettings::
+timedOutKeychainMutationBlocksCredentialStateUntilTerminal()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot =
+        temporary.filePath(
+            QStringLiteral("credential-state"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings settings(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(
+            QUuid::WithoutBraces);
+    const QString plaintextKey =
+        plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey =
+        CredentialSettings::vaultKey(
+            scope, GC_STRAVA_TOKEN);
+    const QString deletionPath =
+        credentialOperationFile(
+            stateRoot, vaultKey,
+            QStringLiteral(".deletion"));
+    const QString firstValue =
+        QStringLiteral("first-value");
+    const QString replacement =
+        QStringLiteral("replacement");
+
+    int startedJobs = 0;
+    QString fakeVaultValue;
+    QPointer<QKeychain::Job> delayedJob;
+    CredentialStoreQtKeychainDetail::
+        setJobTimeoutForTest(20);
+    CredentialStoreQtKeychainDetail::
+        setJobStartHookForTest(
+            [&](QKeychain::Job *job) {
+                ++startedJobs;
+                if (startedJobs == 1) {
+                    delayedJob = job;
+                    return true;
+                }
+                fakeVaultValue = replacement;
+                job->emitFinished();
+                return true;
+            });
+
+    CredentialSettings credentials(
+        createQtKeychainCredentialStore());
+    const bool firstPersisted =
+        credentials.setValueChecked(
+            &settings, scope, GC_STRAVA_TOKEN,
+            plaintextKey, firstValue);
+    const QByteArray firstTransaction =
+        credentialPhaseTransaction(
+            deletionPath,
+            QByteArrayLiteral("creating"));
+    const QVariant valueWhilePending =
+        credentials.value(
+            &settings, scope, GC_STRAVA_TOKEN,
+            plaintextKey,
+            QStringLiteral("operation-pending"));
+    const bool replacementWhilePending =
+        credentials.setValueChecked(
+            &settings, scope, GC_STRAVA_TOKEN,
+            plaintextKey, replacement);
+    const QByteArray transactionWhilePending =
+        credentialPhaseTransaction(
+            deletionPath,
+            QByteArrayLiteral("creating"));
+    const int jobsWhilePending = startedJobs;
+
+    const bool firstJobActive = delayedJob;
+    if (delayedJob) {
+        fakeVaultValue = firstValue;
+        delayedJob->emitFinished();
+    }
+    QCoreApplication::sendPostedEvents(
+        nullptr, QEvent::DeferredDelete);
+    const bool replacementPersisted =
+        credentials.setValueChecked(
+            &settings, scope, GC_STRAVA_TOKEN,
+            plaintextKey, replacement);
+    const bool activeAfterReplacement =
+        credentialPhaseIs(
+            deletionPath, QByteArrayLiteral("active"));
+    CredentialStoreQtKeychainDetail::
+        resetJobTestHooks();
+
+    QVERIFY(!firstPersisted);
+    QVERIFY(!firstTransaction.isEmpty());
+    QCOMPARE(
+        valueWhilePending,
+        QVariant(QStringLiteral("operation-pending")));
+    QVERIFY(!replacementWhilePending);
+    QCOMPARE(transactionWhilePending, firstTransaction);
+    QCOMPARE(jobsWhilePending, 1);
+    QVERIFY(firstJobActive);
+    QVERIFY(replacementPersisted);
+    QCOMPARE(startedJobs, 2);
+    QCOMPARE(fakeVaultValue, replacement);
+    QVERIFY(activeAfterReplacement);
+}
+
+void TestCredentialSettings::
+timedOutKeychainMutationLeaseIsCrossProcess_data()
+{
+    QTest::addColumn<bool>("crash");
+    QTest::addColumn<bool>("remove");
+
+    QTest::newRow("write-terminal")
+        << false << false;
+    QTest::newRow("remove-terminal")
+        << false << true;
+    QTest::newRow("write-crash")
+        << true << false;
+    QTest::newRow("remove-crash")
+        << true << true;
+}
+
+void TestCredentialSettings::
+timedOutKeychainMutationLeaseIsCrossProcess()
+{
+    QFETCH(bool, crash);
+    QFETCH(bool, remove);
+
+    if (qEnvironmentVariableIsSet(
+            "GC_KEYCHAIN_LEASE_CHILD")) {
+        const QString settingsPath =
+            qEnvironmentVariable(
+                "GC_KEYCHAIN_LEASE_SETTINGS");
+        const QString scope =
+            qEnvironmentVariable(
+                "GC_KEYCHAIN_LEASE_SCOPE");
+        const QString readyPath =
+            qEnvironmentVariable(
+                "GC_KEYCHAIN_LEASE_READY");
+        const QString releasePath =
+            qEnvironmentVariable(
+                "GC_KEYCHAIN_LEASE_RELEASE");
+        QVERIFY(!settingsPath.isEmpty());
+        QVERIFY(!scope.isEmpty());
+        QVERIFY(!readyPath.isEmpty());
+        QVERIFY(!releasePath.isEmpty());
+
+        const QString stateRoot =
+            qEnvironmentVariable(
+                "GC_CREDENTIAL_TEST_STATE_ROOT");
+        const QString vaultKey =
+            CredentialSettings::vaultKey(
+                scope, GC_STRAVA_TOKEN);
+        const QString mutationLockPath =
+            credentialOperationFile(
+                stateRoot, vaultKey,
+                QStringLiteral(".backend.lock"));
+        QPointer<QKeychain::Job> delayedJob;
+        bool markerPublishedBeforeStart = false;
+        CredentialStoreQtKeychainDetail::
+            setJobTimeoutForTest(20);
+        CredentialStoreQtKeychainDetail::
+            setJobStartHookForTest(
+                [&](QKeychain::Job *job) {
+                    markerPublishedBeforeStart =
+                        CredentialSettingsDetail::
+                            backendMutationMarkerStatus(
+                                mutationLockPath)
+                        == CredentialSettingsDetail::
+                            BackendMutationMarkerStatus::Pending;
+                    delayedJob = job;
+                    return true;
+                });
+        QSettings settings(
+            settingsPath, QSettings::IniFormat);
+        CredentialSettings credentials(
+            createQtKeychainCredentialStore());
+        const bool persisted =
+            remove
+            ? credentials.removeChecked(
+                  &settings, scope, GC_STRAVA_TOKEN,
+                  plainKey(GC_STRAVA_TOKEN))
+            : credentials.setValueChecked(
+                  &settings, scope, GC_STRAVA_TOKEN,
+                  plainKey(GC_STRAVA_TOKEN),
+                  QStringLiteral("child-value"));
+        const bool jobActive = delayedJob;
+        const bool readyWritten =
+            !persisted && jobActive
+            && markerPublishedBeforeStart
+            && writeSignalFile(readyPath);
+        if (!readyWritten) {
+            if (delayedJob) {
+                delayedJob->emitFinishedWithError(
+                    QKeychain::OtherError,
+                    QStringLiteral("child cleanup"));
+            }
+            QVERIFY(readyWritten);
+            return;
+        }
+
+        if (crash)
+            std::_Exit(87);
+
+        const bool released =
+            waitForFile(releasePath, 5000);
+        if (delayedJob) {
+            delayedJob->emitFinishedWithError(
+                QKeychain::OtherError,
+                QStringLiteral("child terminal"));
+        }
+        QCoreApplication::sendPostedEvents(
+            nullptr, QEvent::DeferredDelete);
+        QVERIFY(released);
+        return;
+    }
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot =
+        temporary.filePath(
+            QStringLiteral("credential-state"));
+    const QString settingsPath =
+        temporary.filePath(
+            QStringLiteral("private.ini"));
+    const QString readyPath =
+        temporary.filePath(
+            QStringLiteral("child-ready"));
+    const QString releasePath =
+        temporary.filePath(
+            QStringLiteral("child-release"));
+    const QString scope =
+        QUuid::createUuid().toString(
+            QUuid::WithoutBraces);
+    const QString vaultKey =
+        CredentialSettings::vaultKey(
+            scope, GC_STRAVA_TOKEN);
+    const QString mutationLockPath =
+        credentialOperationFile(
+            stateRoot, vaultKey,
+            QStringLiteral(".backend.lock"));
+
+    QProcess child;
+    QProcessEnvironment environment =
+        QProcessEnvironment::systemEnvironment();
+    environment.insert(
+        QStringLiteral("GC_KEYCHAIN_LEASE_CHILD"),
+        QStringLiteral("1"));
+    environment.insert(
+        QStringLiteral("GC_KEYCHAIN_LEASE_SETTINGS"),
+        settingsPath);
+    environment.insert(
+        QStringLiteral("GC_KEYCHAIN_LEASE_SCOPE"),
+        scope);
+    environment.insert(
+        QStringLiteral("GC_KEYCHAIN_LEASE_READY"),
+        readyPath);
+    environment.insert(
+        QStringLiteral("GC_KEYCHAIN_LEASE_RELEASE"),
+        releasePath);
+    environment.insert(
+        QStringLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        stateRoot);
+    child.setProcessEnvironment(environment);
+    child.setProgram(
+        QCoreApplication::applicationFilePath());
+    child.setArguments({
+        QStringLiteral(
+            "timedOutKeychainMutationLeaseIsCrossProcess:%1")
+            .arg(QString::fromLatin1(
+                QTest::currentDataTag())),
+        QStringLiteral("-silent")
+    });
+    child.start();
+    QVERIFY2(child.waitForStarted(5000),
+             qPrintable(child.errorString()));
+    const bool childReady =
+        waitForFile(readyPath, 5000, &child);
+    QByteArray childOutput = child.readAll();
+    QVERIFY2(childReady, childOutput.constData());
+
+    if (crash) {
+        QVERIFY2(child.waitForFinished(5000),
+                 qPrintable(child.errorString()));
+        childOutput += child.readAll();
+        QVERIFY2(
+            child.exitStatus() == QProcess::NormalExit,
+            childOutput.constData());
+        QCOMPARE(child.exitCode(), 87);
+    }
+
+    QCOMPARE(
+        CredentialSettingsDetail::
+            backendMutationMarkerStatus(
+                mutationLockPath),
+        CredentialSettingsDetail::
+            BackendMutationMarkerStatus::Pending);
+
+    QLockFile backendProbe(mutationLockPath);
+    backendProbe.setStaleLockTime(0);
+    const bool backendLockAcquired =
+        backendProbe.tryLock(crash ? 1000 : 0);
+    if (backendProbe.isLocked())
+        backendProbe.unlock();
+    QCOMPARE(backendLockAcquired, crash);
+
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings settings(
+        settingsPath, QSettings::IniFormat);
+    auto state = std::make_shared<FakeStoreState>();
+    CredentialSettings credentials(fakeStore(state));
+    const bool blockedWrite =
+        credentials.setValueChecked(
+            &settings, scope, GC_STRAVA_TOKEN,
+            plainKey(GC_STRAVA_TOKEN),
+            QStringLiteral("parent-value"));
+    QVERIFY(!blockedWrite);
+    QCOMPARE(state->writes, 0);
+    QCOMPARE(state->removes, 0);
+
+    if (crash)
+        return;
+
+    QVERIFY(writeSignalFile(releasePath));
+    QVERIFY2(child.waitForFinished(10000),
+             qPrintable(child.errorString()));
+    childOutput += child.readAll();
+    QVERIFY2(child.exitStatus()
+                 == QProcess::NormalExit,
+             childOutput.constData());
+    QVERIFY2(child.exitCode() == 0,
+             childOutput.constData());
+    QCOMPARE(
+        CredentialSettingsDetail::
+            backendMutationMarkerStatus(
+                mutationLockPath),
+        CredentialSettingsDetail::
+            BackendMutationMarkerStatus::Absent);
+    QVERIFY(credentials.setValueChecked(
+        &settings, scope, GC_STRAVA_TOKEN,
+        plainKey(GC_STRAVA_TOKEN),
+        QStringLiteral("parent-value")));
+    QCOMPARE(state->writes, 1);
+    QCOMPARE(state->removes, remove ? 1 : 0);
+}
+
+void TestCredentialSettings::
+invalidKeychainMutationMarkerBlocksCredentialState_data()
+{
+    QTest::addColumn<int>("fixture");
+
+    QTest::newRow("malformed") << 0;
+    QTest::newRow("truncated") << 1;
+    QTest::newRow("directory") << 2;
+#ifdef Q_OS_UNIX
+    QTest::newRow("symbolic-link") << 3;
+    QTest::newRow("hard-link") << 4;
+#endif
+}
+
+void TestCredentialSettings::
+invalidKeychainMutationMarkerBlocksCredentialState()
+{
+    QFETCH(int, fixture);
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot =
+        temporary.filePath(
+            QStringLiteral("credential-state"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings settings(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(
+            QUuid::WithoutBraces);
+    const QString vaultKey =
+        CredentialSettings::vaultKey(
+            scope, GC_STRAVA_TOKEN);
+    const QString mutationLockPath =
+        credentialOperationFile(
+            stateRoot, vaultKey,
+            QStringLiteral(".backend.lock"));
+    const QString markerPath =
+        mutationLockPath + QStringLiteral(".pending");
+    const QByteArray validMarker =
+        QByteArrayLiteral(
+            "goldencheetah_backend_mutation_pending=1\n");
+    QVERIFY(QDir().mkpath(
+        QFileInfo(markerPath).absolutePath()));
+
+    if (fixture == 0) {
+        QVERIFY(writePrivateStateFile(
+            markerPath,
+            QByteArrayLiteral("not-a-valid-marker\n")));
+    } else if (fixture == 1) {
+        QVERIFY(writePrivateStateFile(
+            markerPath, validMarker.chopped(1)));
+    } else if (fixture == 2) {
+        QVERIFY(QDir().mkpath(markerPath));
+#ifdef Q_OS_UNIX
+    } else {
+        const QString targetPath =
+            temporary.filePath(
+                fixture == 3
+                    ? QStringLiteral("symlink-target")
+                    : QStringLiteral("hardlink-target"));
+        QVERIFY(writePrivateStateFile(
+            targetPath, validMarker));
+        const QByteArray encodedTarget =
+            QFile::encodeName(targetPath);
+        const QByteArray encodedMarker =
+            QFile::encodeName(markerPath);
+        const int linkResult = fixture == 3
+            ? ::symlink(
+                  encodedTarget.constData(),
+                  encodedMarker.constData())
+            : ::link(
+                  encodedTarget.constData(),
+                  encodedMarker.constData());
+        QCOMPARE(linkResult, 0);
+#endif
+    }
+
+    auto state = std::make_shared<FakeStoreState>();
+    state->values.insert(
+        vaultKey, QStringLiteral("existing-secret"));
+    CredentialSettings credentials(fakeStore(state));
+    const QVariant observed = credentials.value(
+        &settings, scope, GC_STRAVA_TOKEN,
+        plainKey(GC_STRAVA_TOKEN),
+        QStringLiteral("blocked"));
+    const bool writeSucceeded =
+        credentials.setValueChecked(
+            &settings, scope, GC_STRAVA_TOKEN,
+            plainKey(GC_STRAVA_TOKEN),
+            QStringLiteral("replacement"));
+    const bool removalSucceeded =
+        credentials.removeChecked(
+            &settings, scope, GC_STRAVA_TOKEN,
+            plainKey(GC_STRAVA_TOKEN));
+
+    QCOMPARE(
+        CredentialSettingsDetail::
+            backendMutationMarkerStatus(
+                mutationLockPath),
+        CredentialSettingsDetail::
+            BackendMutationMarkerStatus::Invalid);
+    QCOMPARE(observed,
+             QVariant(QStringLiteral("blocked")));
+    QVERIFY(!writeSucceeded);
+    QVERIFY(!removalSucceeded);
+    QCOMPARE(state->reads, 0);
+    QCOMPARE(state->writes, 0);
+    QCOMPARE(state->removes, 0);
+    QCOMPARE(state->values.value(vaultKey),
+             QStringLiteral("existing-secret"));
+}
+
 void TestCredentialSettings::platformStoreRoundTripsOrFailsClosed()
 {
     std::unique_ptr<CredentialStore> store =
@@ -2015,6 +3366,8 @@ void TestCredentialSettings::platformStoreRoundTripsOrFailsClosed()
 
     if (writeStatus != CredentialStore::Status::Success) {
         QVERIFY(writeStatus == CredentialStore::Status::Unavailable
+                || writeStatus
+                    == CredentialStore::Status::Indeterminate
                 || writeStatus == CredentialStore::Status::Failed);
         return;
     }
@@ -2549,6 +3902,66 @@ void TestCredentialSettings::credentialProcessLockIsExclusive()
         &settings, scope, GC_STRAVA_TOKEN,
         plainKey(GC_STRAVA_TOKEN),
         QStringLiteral("parent-secret")));
+    QCOMPARE(state->writes, 1);
+}
+
+void TestCredentialSettings::
+activeKeychainMutationLeaseBlocksCredentialState()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot =
+        temporary.filePath(
+            QStringLiteral("credential-state"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings settings(
+        temporary.filePath(QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(
+            QUuid::WithoutBraces);
+    const QString vaultKey =
+        CredentialSettings::vaultKey(
+            scope, GC_STRAVA_TOKEN);
+    const QString lockPath = credentialOperationFile(
+        stateRoot, vaultKey,
+        QStringLiteral(".backend.lock"));
+    const QString lockDirectory =
+        QFileInfo(lockPath).absolutePath();
+    QVERIFY(QDir().mkpath(lockDirectory));
+#ifdef Q_OS_UNIX
+    QVERIFY(QFile::setPermissions(
+        QDir(stateRoot).filePath(
+            QStringLiteral("GoldenCheetah")),
+        QFileDevice::ReadOwner
+        | QFileDevice::WriteOwner
+        | QFileDevice::ExeOwner));
+    QVERIFY(QFile::setPermissions(
+        lockDirectory,
+        QFileDevice::ReadOwner
+        | QFileDevice::WriteOwner
+        | QFileDevice::ExeOwner));
+#endif
+
+    QLockFile backendLease(lockPath);
+    backendLease.setStaleLockTime(0);
+    QVERIFY(backendLease.tryLock(0));
+
+    auto state = std::make_shared<FakeStoreState>();
+    CredentialSettings credentials(fakeStore(state));
+    QVERIFY(!credentials.setValueChecked(
+        &settings, scope, GC_STRAVA_TOKEN,
+        plainKey(GC_STRAVA_TOKEN),
+        QStringLiteral("blocked-secret")));
+    QCOMPARE(state->writes, 0);
+
+    backendLease.unlock();
+    QVERIFY(credentials.setValueChecked(
+        &settings, scope, GC_STRAVA_TOKEN,
+        plainKey(GC_STRAVA_TOKEN),
+        QStringLiteral("persisted-secret")));
     QCOMPARE(state->writes, 1);
 }
 
