@@ -51,6 +51,9 @@ run_linuxdeployqt_with_keychain_probe \
     -exclude-libs=libqsqlmysql,libqsqlpsql,libqsqlmimer,libqsqlodbc,libnss3,libnssutil3,libxcb-dri3.so.0 \
     -unsupported-allow-new-glibc
 
+# linuxdeployqt only detects the desktop xcb backend.
+install_qt_offscreen_plugin qmake appdir
+
 # Add Python and core modules
 install_embedded_python "Python/requirements.txt" "appdir"
 
@@ -92,5 +95,8 @@ echo "$STRAVA_OAUTH_STATUS"
 KEYCHAIN_RUNTIME_STATUS=$(require_linux_keychain_appimage \
     ../GoldenCheetah_v3.8_x64.AppImage)
 echo "$KEYCHAIN_RUNTIME_STATUS"
+OFFSCREEN_RUNTIME_STATUS=$(require_qt_offscreen_appimage \
+    ../GoldenCheetah_v3.8_x64.AppImage)
+echo "$OFFSCREEN_RUNTIME_STATUS"
 
 exit

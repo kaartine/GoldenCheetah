@@ -4328,7 +4328,11 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 ### BUILD-002: AppImage omits the Qt offscreen platform plugin
 
 - Status: FIXED
-- Code: `src/Resources/linux/MakeAppImageQt6.sh`
+- Code: `src/Resources/linux/AppImagePackagingSupport.sh`,
+  `src/Resources/linux/MakeAppImageQt6.sh`,
+  `appveyor/linux/after_build.sh`,
+  `.devcontainer/package-appimage.sh`, and
+  `unittests/Build/appImagePackaging/testAppImagePackaging.sh`
 - Impact: The Qt build provided `libqoffscreen.so`, but `linuxdeployqt` bundled
   only `libqxcb.so`. The packaged GUI therefore aborted during display-free
   release and CI smoke tests, forcing every AppImage check to depend on a live
@@ -4338,18 +4342,23 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   `QT_QPA_PLATFORM=offscreen`, and no display exited 134. Qt reported that the
   offscreen platform plugin could not be found and listed xcb as the only
   available backend. Inspection confirmed that the build image contained the
-  plugin while the generated AppDir did not.
-- Resolution: Packaging now resolves Qt's plugin directory through `qmake`,
-  fails explicitly if `libqoffscreen.so` is unavailable, and copies it after
-  `linuxdeployqt` deployment. The script also runs the finished AppImage for ten
-  seconds with a disposable HOME and offscreen software rendering; any result
-  other than the expected timeout status rejects the package.
-- Verification: The script passes `bash -n`. The rebuilt AppDir contains both
-  `libqxcb.so` and `libqoffscreen.so`, preserving normal desktop startup while
-  enabling headless execution. The 166,259,192-byte AppImage with SHA-256
-  `9dd770ee212fcd8e3f5adf2547602dd926c9061b7aa4885e7a72e041d11347c3`
-  remained stable for separate 15-second direct X11 and display-free offscreen
-  launches; both clean-profile logs contained only translator debug notices.
+  plugin while the generated AppDir did not. A later release attempt exposed
+  that the first fix covered only the local packager: the devcontainer image
+  again exited 127 with xcb as its only platform. The expanded packaging test
+  then failed RED because no shared offscreen installer existed.
+- Resolution: Shared packaging support now resolves Qt's plugin directory
+  through `qmake`, rejects a missing source or linked destination, copies and
+  verifies `libqoffscreen.so`, and runs the finished image for ten seconds with
+  a disposable HOME, no display, extraction mode, and software rendering. The
+  local, AppVeyor CI, and devcontainer packagers all call both shared gates
+  after `linuxdeployqt`; a packager can no longer silently omit the plugin or
+  skip the runtime check.
+- Verification: All five affected shell files pass `bash -n`. The focused
+  packaging program exercises successful and missing-plugin installation,
+  accepted timeout, rejected startup failure, and all three packager contracts,
+  then passes completely. A rebuilt devcontainer AppImage passes its embedded
+  Strava OAuth, Linux keychain, and Qt offscreen runtime gates; its AppDir
+  contains 260 files, one more than the failing package.
 
 ### BUILD-013: Qt 6.8 MOC sees an incomplete RideItem property type
 

@@ -90,6 +90,8 @@ run_linuxdeployqt_with_keychain_probe \
     -exclude-libs=libqsqlmysql,libqsqlpsql,libqsqlmimer,libqsqlodbc,libnss3,libnssutil3,libxcb-dri3.so.0 \
     -unsupported-allow-new-glibc
 
+install_qt_offscreen_plugin "${qt_dir}/bin/qmake" "${app_dir}"
+
 install_linux_keychain_runtime \
     "${app_dir}" "${repo_root}/contrib/qtkeychain/COPYING"
 
@@ -107,6 +109,9 @@ strava_oauth_status="$(require_strava_oauth_appimage "${output}")"
 echo "${strava_oauth_status}"
 keychain_runtime_status="$(require_linux_keychain_appimage "${output}")"
 echo "${keychain_runtime_status}"
+offscreen_runtime_status="$(
+    require_qt_offscreen_appimage "${output}")"
+echo "${offscreen_runtime_status}"
 
 echo "AppDir: ${app_dir}"
 echo "AppImage: ${output}"

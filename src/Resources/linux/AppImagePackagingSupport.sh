@@ -45,6 +45,117 @@ run_packaged_appimage_smoke()
             -u LD_LIBRARY_PATH -u LD_PRELOAD timeout "$@"
 }
 
+install_qt_offscreen_plugin()
+{
+    local qmake_command=$1
+    local app_dir=$2
+    local qmake_path qt_plugins_dir source_plugin
+    local plugins_dir target_dir target_plugin
+
+    qmake_path=$(command -v -- "$qmake_command") || {
+        echo "Qt qmake executable not found: $qmake_command" >&2
+        return 1
+    }
+    if [ ! -x "$qmake_path" ]; then
+        echo "Qt qmake executable is not runnable: $qmake_path" >&2
+        return 1
+    fi
+    qt_plugins_dir=$(
+        "$qmake_path" -query QT_INSTALL_PLUGINS
+    ) || {
+        echo "Cannot resolve the Qt plugin directory." >&2
+        return 1
+    }
+    case "$qt_plugins_dir" in
+    ""|*'
+'*)
+        echo "Qt returned an invalid plugin directory." >&2
+        return 1
+        ;;
+    esac
+
+    source_plugin="$qt_plugins_dir/platforms/libqoffscreen.so"
+    if [ ! -f "$source_plugin" ] || [ ! -r "$source_plugin" ]; then
+        echo "Qt offscreen platform plugin not found: $source_plugin" >&2
+        return 1
+    fi
+    if [ ! -d "$app_dir" ] || [ -L "$app_dir" ]; then
+        echo "Invalid AppDir for the Qt offscreen plugin: $app_dir" >&2
+        return 1
+    fi
+
+    plugins_dir="$app_dir/plugins"
+    target_dir="$plugins_dir/platforms"
+    if [ -L "$plugins_dir" ] || [ -L "$target_dir" ]; then
+        echo "Refusing a linked AppDir platform plugin directory." >&2
+        return 1
+    fi
+    mkdir -p -- "$target_dir" || return
+    target_plugin="$target_dir/libqoffscreen.so"
+    install -m 0755 -- "$source_plugin" "$target_plugin" || return
+    if [ ! -f "$target_plugin" ] ||
+       ! cmp -s -- "$source_plugin" "$target_plugin"; then
+        echo "Qt offscreen platform plugin was not installed intact." >&2
+        return 1
+    fi
+    echo "Qt offscreen plugin: bundled"
+}
+
+require_qt_offscreen_appimage()
+(
+    local image=$1
+    local smoke_duration=${2:-10s}
+    local smoke_home= smoke_log=
+
+    cleanup_offscreen_smoke()
+    {
+        if [ -n "$smoke_home" ]; then
+            rm -rf -- "$smoke_home"
+            smoke_home=
+        fi
+        if [ -n "$smoke_log" ]; then
+            rm -f -- "$smoke_log"
+            smoke_log=
+        fi
+    }
+    trap cleanup_offscreen_smoke EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+
+    if [ ! -f "$image" ] || [ ! -r "$image" ] ||
+       [ ! -x "$image" ]; then
+        echo "Cannot smoke-test Qt offscreen runtime in $image" >&2
+        return 1
+    fi
+    smoke_home=$(mktemp -d) || return
+    smoke_log=$(mktemp) || return
+    mkdir -p "$smoke_home/.config" "$smoke_home/.cache" || return
+
+    local status
+    if HOME="$smoke_home" \
+       XDG_CONFIG_HOME="$smoke_home/.config" \
+       XDG_CACHE_HOME="$smoke_home/.cache" \
+       DISPLAY= WAYLAND_DISPLAY= \
+       QT_QPA_PLATFORM=offscreen \
+       QT_OPENGL=software \
+       LIBGL_ALWAYS_SOFTWARE=1 \
+       QTWEBENGINE_DISABLE_SANDBOX=1 \
+       run_packaged_appimage_smoke \
+           --kill-after=2s "$smoke_duration" "$image" \
+           >"$smoke_log" 2>&1; then
+        status=0
+    else
+        status=$?
+    fi
+    if [ "$status" -ne 124 ]; then
+        cat "$smoke_log" >&2
+        echo "AppImage Qt offscreen smoke failed with status $status" >&2
+        return 1
+    fi
+    echo "Qt offscreen runtime: available"
+)
+
 strava_oauth_build_status()
 (
     local executable=$1

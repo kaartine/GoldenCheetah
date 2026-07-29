@@ -54,14 +54,8 @@ run_linuxdeployqt_with_keychain_probe \
     -exclude-libs=libqsqlmysql,libqsqlpsql,libqsqlmimer,libqsqlodbc,libnss3,libnssutil3,libxcb-dri3.so.0 \
     -unsupported-allow-new-glibc
 
-# linuxdeployqt only detects the desktop xcb backend. Bundle the offscreen
-# backend explicitly so the packaged application can be smoke-tested headless.
-QT_PLUGINS_DIR="$(qmake -query QT_INSTALL_PLUGINS)"
-OFFSCREEN_PLUGIN="$QT_PLUGINS_DIR/platforms/libqoffscreen.so"
-if [ ! -f "$OFFSCREEN_PLUGIN" ]
-then echo "Qt offscreen platform plugin not found: $OFFSCREEN_PLUGIN"; exit 1
-fi
-cp "$OFFSCREEN_PLUGIN" appdir/plugins/platforms/
+# linuxdeployqt only detects the desktop xcb backend.
+install_qt_offscreen_plugin qmake appdir
 
 # Add Python and core modules
 install_embedded_python "Python/requirements.txt" "appdir"
@@ -96,29 +90,9 @@ STRAVA_OAUTH_STATUS=$(require_strava_oauth_appimage "./$FINAL_NAME")
 echo "$STRAVA_OAUTH_STATUS"
 KEYCHAIN_RUNTIME_STATUS=$(require_linux_keychain_appimage "./$FINAL_NAME")
 echo "$KEYCHAIN_RUNTIME_STATUS"
-
-### Verify the packaged GUI can initialize without an X11 display
-SMOKE_HOME="$(mktemp -d)"
-SMOKE_LOG="$(mktemp)"
-mkdir -p "$SMOKE_HOME/.config"
-set +e
-HOME="$SMOKE_HOME" XDG_CONFIG_HOME="$SMOKE_HOME/.config" \
-    QT_QPA_PLATFORM=offscreen QT_OPENGL=software \
-    QTWEBENGINE_DISABLE_SANDBOX=1 \
-    run_packaged_appimage_smoke --kill-after=2s 10s \
-        "./$FINAL_NAME" >"$SMOKE_LOG" 2>&1
-SMOKE_STATUS=$?
-set -e
-if [ "$SMOKE_STATUS" -ne 124 ]
-then
-    cat "$SMOKE_LOG"
-    rm -rf "$SMOKE_HOME"
-    rm -f "$SMOKE_LOG"
-    echo "AppImage offscreen smoke test failed with status $SMOKE_STATUS"
-    exit 1
-fi
-rm -rf "$SMOKE_HOME"
-rm -f "$SMOKE_LOG"
+OFFSCREEN_RUNTIME_STATUS=$(
+    require_qt_offscreen_appimage "./$FINAL_NAME")
+echo "$OFFSCREEN_RUNTIME_STATUS"
 
 ### Generate version file with SHA
 run_packaging_appimage "./$FINAL_NAME" --version \

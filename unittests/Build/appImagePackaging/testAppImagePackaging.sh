@@ -61,6 +61,10 @@ declare -F run_packaging_appimage >/dev/null ||
     fail "run_packaging_appimage helper is missing"
 declare -F run_packaged_appimage_smoke >/dev/null ||
     fail "run_packaged_appimage_smoke helper is missing"
+declare -F install_qt_offscreen_plugin >/dev/null ||
+    fail "install_qt_offscreen_plugin helper is missing"
+declare -F require_qt_offscreen_appimage >/dev/null ||
+    fail "require_qt_offscreen_appimage helper is missing"
 declare -F install_embedded_python >/dev/null ||
     fail "install_embedded_python helper is missing"
 declare -F write_source_revision >/dev/null ||
@@ -98,6 +102,54 @@ chmod +x "$TEMP_DIR/check-extract-mode"
 [ "$(run_packaged_appimage_smoke 2s \
       "$TEMP_DIR/check-extract-mode")" = "1" ] ||
     fail "packaged AppImage smoke did not use extraction mode"
+
+mkdir -p \
+    "$TEMP_DIR/qt-plugins/platforms" \
+    "$TEMP_DIR/offscreen-appdir/plugins/platforms"
+printf 'offscreen fixture\n' \
+    >"$TEMP_DIR/qt-plugins/platforms/libqoffscreen.so"
+cat >"$TEMP_DIR/fake-qmake" <<EOF
+#!/bin/sh
+test "\$1" = "-query" &&
+    test "\$2" = "QT_INSTALL_PLUGINS" || exit 64
+printf '%s\\n' "$TEMP_DIR/qt-plugins"
+EOF
+chmod +x "$TEMP_DIR/fake-qmake"
+install_qt_offscreen_plugin \
+    "$TEMP_DIR/fake-qmake" "$TEMP_DIR/offscreen-appdir"
+cmp \
+    "$TEMP_DIR/qt-plugins/platforms/libqoffscreen.so" \
+    "$TEMP_DIR/offscreen-appdir/plugins/platforms/libqoffscreen.so" ||
+    fail "offscreen plugin was not copied from qmake's plugin directory"
+
+mv \
+    "$TEMP_DIR/qt-plugins/platforms/libqoffscreen.so" \
+    "$TEMP_DIR/qt-plugins/platforms/libqoffscreen.so.missing"
+if install_qt_offscreen_plugin \
+    "$TEMP_DIR/fake-qmake" "$TEMP_DIR/offscreen-appdir" \
+    >/dev/null 2>&1; then
+    fail "missing Qt offscreen plugin was accepted"
+fi
+
+cat >"$TEMP_DIR/offscreen-smoke" <<'EOF'
+#!/bin/sh
+test "$APPIMAGE_EXTRACT_AND_RUN" = "1" || exit 65
+test "$QT_QPA_PLATFORM" = "offscreen" || exit 66
+test "$QT_OPENGL" = "software" || exit 67
+sleep 5
+EOF
+chmod +x "$TEMP_DIR/offscreen-smoke"
+[ "$(require_qt_offscreen_appimage \
+      "$TEMP_DIR/offscreen-smoke" 0.1s)" = \
+  "Qt offscreen runtime: available" ] ||
+    fail "offscreen AppImage smoke did not accept a running image"
+printf '#!/bin/sh\nexit 127\n' >"$TEMP_DIR/offscreen-failure"
+chmod +x "$TEMP_DIR/offscreen-failure"
+if require_qt_offscreen_appimage \
+    "$TEMP_DIR/offscreen-failure" 0.1s \
+    >/dev/null 2>&1; then
+    fail "offscreen AppImage smoke accepted an initialization failure"
+fi
 
 REVISION=0123456789abcdef0123456789abcdef01234567
 GC_SOURCE_REVISION=$REVISION write_source_revision "$TEMP_DIR/revision"
@@ -879,13 +931,16 @@ for packager in "$LOCAL_PACKAGER" "$CI_PACKAGER" "$DEV_PACKAGER"; do
         'require_linux_keychain_appimage'
     assert_contains "$packager" \
         'run_linuxdeployqt_with_keychain_probe'
+    assert_contains "$packager" \
+        'install_qt_offscreen_plugin'
+    assert_contains "$packager" \
+        'require_qt_offscreen_appimage'
 done
 
 if grep -Fq 'python3.7' "$LOCAL_PACKAGER"; then
     fail "local AppImage packaging still embeds unsupported Python 3.7"
 fi
 assert_contains "$LOCAL_PACKAGER" 'write_source_revision'
-assert_contains "$LOCAL_PACKAGER" 'run_packaged_appimage_smoke'
 assert_contains "$LOCAL_PACKAGER" \
     'run_packaging_appimage "./$FINAL_NAME" --version'
 assert_contains "$DEV_CONFIG" \
