@@ -1,0 +1,82 @@
+/*
+ * Deterministic QBluetoothDeviceDiscoveryAgent test double for BT40 lifecycle
+ * tests.
+ */
+
+#ifndef GC_TEST_QBLUETOOTHDEVICEDISCOVERYAGENT_H
+#define GC_TEST_QBLUETOOTHDEVICEDISCOVERYAGENT_H
+
+#include <QBluetoothAddress>
+#include <QBluetoothDeviceInfo>
+#include <QFlags>
+#include <QObject>
+
+class QBluetoothDeviceDiscoveryAgent : public QObject
+{
+    Q_OBJECT
+
+public:
+    enum DiscoveryMethod {
+        NoMethod = 0x0,
+        ClassicMethod = 0x01,
+        LowEnergyMethod = 0x02
+    };
+    Q_DECLARE_FLAGS(DiscoveryMethods, DiscoveryMethod)
+    Q_FLAG(DiscoveryMethods)
+
+    enum Error {
+        NoError = 0,
+        InputOutputError = 1,
+        PoweredOffError = 2,
+        InvalidBluetoothAdapterError = 3,
+        UnsupportedPlatformError = 4,
+        UnsupportedDiscoveryMethod = 5,
+        LocationServiceTurnedOffError = 6,
+        MissingPermissionsError = 7,
+        UnknownError = 100
+    };
+    Q_ENUM(Error)
+
+    explicit QBluetoothDeviceDiscoveryAgent(QObject *parent = nullptr);
+    ~QBluetoothDeviceDiscoveryAgent() override;
+
+    bool isActive() const;
+    void setLowEnergyDiscoveryTimeout(int timeout);
+    int lowEnergyDiscoveryTimeout() const;
+
+    void emitDeviceDiscoveredForTest(const QBluetoothDeviceInfo &info);
+    void emitErrorForTest(Error error);
+    void emitFinishedForTest();
+    void emitCanceledForTest();
+
+    static void resetTestState();
+    static void setStopCompletesForTest(bool completes);
+    static int startCallCount();
+    static int stopCallCount();
+    static int liveAgentCount();
+
+public slots:
+    void start();
+    void start(DiscoveryMethods methods);
+    void stop();
+
+signals:
+    void canceled();
+    void deviceDiscovered(const QBluetoothDeviceInfo &info);
+    void errorOccurred(QBluetoothDeviceDiscoveryAgent::Error error);
+    void finished();
+
+private:
+    bool active = false;
+    int discoveryTimeoutMs = 0;
+
+    static int startCalls;
+    static int stopCalls;
+    static int liveAgents;
+    static bool stopCompletes;
+};
+
+Q_DECLARE_OPERATORS_FOR_FLAGS(
+        QBluetoothDeviceDiscoveryAgent::DiscoveryMethods)
+
+#endif

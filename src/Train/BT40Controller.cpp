@@ -25,15 +25,31 @@
 namespace {
 constexpr int InitialScanRetryDelayMs = 2000;
 constexpr int MaximumScanRetryDelayMs = 30000;
+
+bool isPermanentDiscoveryError(
+        QBluetoothDeviceDiscoveryAgent::Error error)
+{
+    switch (error) {
+    case QBluetoothDeviceDiscoveryAgent::MissingPermissionsError:
+    case QBluetoothDeviceDiscoveryAgent::UnsupportedPlatformError:
+    case QBluetoothDeviceDiscoveryAgent::UnsupportedDiscoveryMethod:
+    case QBluetoothDeviceDiscoveryAgent::LocationServiceTurnedOffError:
+        return true;
+    default:
+        return false;
+    }
+}
 }
 
 BT40Controller::BT40Controller(TrainSidebar *parent, DeviceConfiguration *dc) : RealtimeController(parent, dc)
 {
-    localDevice = new QBluetoothLocalDevice(this);
-    discoveryAgent = new QBluetoothDeviceDiscoveryAgent(this);
-    discoveryAgent->setLowEnergyDiscoveryTimeout(20000);
+    localDevice = nullptr;
+    discoveryAgent = nullptr;
     localDc = dc;
     running = false;
+    adapterRecoveryPending = false;
+    bluetoothStackRefreshNeeded = false;
+    bluetoothStackGeneration = 0;
     load = 0;
     gradient = 0;
     mode = RT_MODE_SLOPE;
@@ -58,12 +74,7 @@ BT40Controller::BT40Controller(TrainSidebar *parent, DeviceConfiguration *dc) : 
         }
     }
 
-    connect(discoveryAgent, SIGNAL(deviceDiscovered(const QBluetoothDeviceInfo&)),
-	    this, SLOT(addDevice(const QBluetoothDeviceInfo&)));
-    connect(discoveryAgent, SIGNAL(errorOccurred(QBluetoothDeviceDiscoveryAgent::Error)),
-	    this, SLOT(deviceScanError(QBluetoothDeviceDiscoveryAgent::Error)));
-    connect(discoveryAgent, SIGNAL(finished()), this, SLOT(scanFinished()));
-    connect(discoveryAgent, SIGNAL(canceled()), this, SLOT(scanFinished()));
+    createBluetoothStack();
 
     scanRetryTimer = new QTimer(this);
     scanRetryTimer->setSingleShot(true);
@@ -76,6 +87,63 @@ BT40Controller::BT40Controller(TrainSidebar *parent, DeviceConfiguration *dc) : 
 BT40Controller::~BT40Controller()
 {
     stop();
+}
+
+void
+BT40Controller::createBluetoothStack()
+{
+    localDevice = new QBluetoothLocalDevice(this);
+    discoveryAgent = new QBluetoothDeviceDiscoveryAgent(this);
+    discoveryAgent->setLowEnergyDiscoveryTimeout(20000);
+
+    const quint64 generation = ++bluetoothStackGeneration;
+    connect(discoveryAgent,
+            &QBluetoothDeviceDiscoveryAgent::deviceDiscovered,
+            this,
+            [this, generation](const QBluetoothDeviceInfo &info) {
+                if (!running
+                        || generation != bluetoothStackGeneration) {
+                    return;
+                }
+                addDevice(info);
+            });
+    connect(discoveryAgent,
+            &QBluetoothDeviceDiscoveryAgent::errorOccurred,
+            this,
+            [this, generation](
+                    QBluetoothDeviceDiscoveryAgent::Error error) {
+                if (!running
+                        || generation != bluetoothStackGeneration) {
+                    return;
+                }
+                deviceScanError(error);
+            });
+    const auto finishScan = [this, generation]() {
+        if (!running || generation != bluetoothStackGeneration) {
+            return;
+        }
+        scanFinished();
+    };
+    connect(discoveryAgent,
+            &QBluetoothDeviceDiscoveryAgent::finished,
+            this, finishScan);
+    connect(discoveryAgent,
+            &QBluetoothDeviceDiscoveryAgent::canceled,
+            this, finishScan);
+}
+
+void
+BT40Controller::recreateBluetoothStack()
+{
+    if (discoveryAgent) {
+        discoveryAgent->disconnect(this);
+        if (discoveryAgent->isActive()) discoveryAgent->stop();
+        delete discoveryAgent;
+        discoveryAgent = nullptr;
+    }
+    delete localDevice;
+    localDevice = nullptr;
+    createBluetoothStack();
 }
 
 void
@@ -111,6 +179,8 @@ BT40Controller::start()
     appliedTelemetryAvailable.fill(false);
     telemetryClock.restart();
     running = true;
+    adapterRecoveryPending = false;
+    devicesAwaitingRediscovery.clear();
     resetScanRetryState();
     startScan();
     return 0;
@@ -119,7 +189,26 @@ BT40Controller::start()
 void
 BT40Controller::startScan()
 {
-    if (!running || !localDevice->isValid() || discoveryAgent->isActive()) return;
+    if (!running) return;
+
+    if (bluetoothStackRefreshNeeded) {
+        recreateBluetoothStack();
+        bluetoothStackRefreshNeeded = false;
+    }
+
+    if (discoveryAgent->isActive()) return;
+
+    if (!localDevice->isValid()) {
+        if (!localDc) {
+            bluetoothStackRefreshNeeded = true;
+            emit setNotification(
+                    tr("Bluetooth adapter is unavailable"), 4);
+            emit scanFinished(false);
+            return;
+        }
+        enterAdapterRecovery(false);
+        return;
+    }
 
     qDebug() << "Starting Bluetooth Low Energy scan";
     discoveryAgent->start(QBluetoothDeviceDiscoveryAgent::LowEnergyMethod);
@@ -150,6 +239,8 @@ BT40Controller::stop()
     const QList<BT40Device *> ownedDevices = devices;
     devices.clear();
     devicesAwaitingRediscovery.clear();
+    adapterRecoveryPending = false;
+    bluetoothStackRefreshNeeded = true;
 
     foreach (BT40Device *device, ownedDevices) {
         if (!device) continue;
@@ -207,6 +298,12 @@ void BT40Controller::pushRealtimeData(RealtimeData &) { } // update realtime dat
 void
 BT40Controller::addDevice(const QBluetoothDeviceInfo &info)
 {
+    QObject *signalSource = sender();
+    if (signalSource
+            && (signalSource != discoveryAgent || !running)) {
+        return;
+    }
+
     if (info.coreConfigurations() & QBluetoothDeviceInfo::LowEnergyCoreConfiguration) {
         // Check if device is already created for this uuid/address
         // At least on MacOS the deviceDiscovered signal can/will be sent multiple times
@@ -222,7 +319,11 @@ BT40Controller::addDevice(const QBluetoothDeviceInfo &info)
                     if (devicesAwaitingRediscovery.contains(dev)) {
                         qDebug() << "Rediscovered Bluetooth device" << info.name()
                                  << info.deviceUuid();
-                        dev->connectDevice();
+                        if (dev->isSuspendedForAdapterReset()) {
+                            dev->resumeAfterAdapterReset();
+                        } else {
+                            dev->connectDevice();
+                        }
                     }
                     return;
                 }
@@ -233,7 +334,11 @@ BT40Controller::addDevice(const QBluetoothDeviceInfo &info)
                     if (devicesAwaitingRediscovery.contains(dev)) {
                         qDebug() << "Rediscovered Bluetooth device" << info.name()
                                  << info.address();
-                        dev->connectDevice();
+                        if (dev->isSuspendedForAdapterReset()) {
+                            dev->resumeAfterAdapterReset();
+                        } else {
+                            dev->connectDevice();
+                        }
                     }
                     return;
                 }
@@ -274,6 +379,8 @@ BT40Controller::addDevice(const QBluetoothDeviceInfo &info)
                         this, &BT40Controller::cancelDeviceRescan);
                 connect(dev, &BT40Device::connectionRestored,
                         this, &BT40Controller::deviceConnectionRestored);
+                connect(dev, &BT40Device::adapterUnavailable,
+                        this, &BT40Controller::deviceAdapterUnavailable);
                 dev->connectDevice();
 
                 if (allConfiguredDevicesFound() && discoveryAgent->isActive()) {
@@ -338,6 +445,40 @@ BT40Controller::resetScanRetryState()
 }
 
 void
+BT40Controller::enterAdapterRecovery(bool failureAlreadyReported)
+{
+    if (!running || !localDc) return;
+
+    if (!adapterRecoveryPending) {
+        scanRetryTimer->stop();
+        scanRetryDelayMs = InitialScanRetryDelayMs;
+    }
+    adapterRecoveryPending = true;
+    bluetoothStackRefreshNeeded = true;
+
+    foreach (BT40Device *device, devices) {
+        if (!device) continue;
+        if (device->suspendForAdapterReset()) {
+            devicesAwaitingRediscovery.insert(device);
+        } else {
+            devicesAwaitingRediscovery.remove(device);
+        }
+    }
+
+    if (failureAlreadyReported) {
+        missingDeviceNoticeShown = true;
+    }
+
+    if (discoveryAgent->isActive()) {
+        discoveryAgent->stop();
+    }
+    if (!scanRetryTimer->isActive()) {
+        scheduleScanRetry(
+                tr("Bluetooth adapter unavailable; retrying in background"));
+    }
+}
+
+void
 BT40Controller::scheduleScanRetry(const QString &firstNotice)
 {
     if (!running || !localDc || allConfiguredDevicesFound()) return;
@@ -364,11 +505,24 @@ BT40Controller::rescanDevice()
                  << device->deviceInfo().name();
     }
 
+    if (device->isSuspendedForAdapterReset()) {
+        enterAdapterRecovery(true);
+        return;
+    }
+
     // BT40Device already reports the connection loss once. Keep the
     // controller's subsequent background scans quiet.
     missingDeviceNoticeShown = true;
     scanRetryTimer->stop();
     startScan();
+}
+
+void
+BT40Controller::deviceAdapterUnavailable()
+{
+    BT40Device *device = qobject_cast<BT40Device*>(sender());
+    if (!running || !localDc || !device || !devices.contains(device)) return;
+    enterAdapterRecovery(true);
 }
 
 void
@@ -380,6 +534,7 @@ BT40Controller::cancelDeviceRescan()
     qDebug() << "Cancelled Bluetooth rediscovery for"
              << device->deviceInfo().name();
     if (allConfiguredDevicesFound()) {
+        adapterRecoveryPending = false;
         resetScanRetryState();
         if (discoveryAgent->isActive()) discoveryAgent->stop();
     }
@@ -394,6 +549,7 @@ BT40Controller::deviceConnectionRestored()
     qDebug() << "Bluetooth connection restored for"
              << device->deviceInfo().name();
     if (allConfiguredDevicesFound()) {
+        adapterRecoveryPending = false;
         resetScanRetryState();
         if (discoveryAgent->isActive()) discoveryAgent->stop();
     }
@@ -402,6 +558,8 @@ BT40Controller::deviceConnectionRestored()
 void
 BT40Controller::scanFinished()
 {
+    if (sender() && sender() != discoveryAgent) return;
+
     const bool foundAnyDevices = !devices.isEmpty();
 
     if (!running) {
@@ -433,7 +591,43 @@ BT40Controller::scanFinished()
 void
 BT40Controller::deviceScanError(QBluetoothDeviceDiscoveryAgent::Error error)
 {
+    if (sender() && sender() != discoveryAgent) return;
+
     qWarning() << "Error while scanning BT devices:" << error;
+    if (!running) return;
+
+    if (!localDc) {
+        scanRetryTimer->stop();
+        if (error
+                    == QBluetoothDeviceDiscoveryAgent::
+                            InvalidBluetoothAdapterError
+                || error
+                    == QBluetoothDeviceDiscoveryAgent::
+                            PoweredOffError) {
+            bluetoothStackRefreshNeeded = true;
+        }
+        emit setNotification(
+                tr("Bluetooth scanning is unavailable; check system permissions and settings"),
+                4);
+        emit scanFinished(!devices.isEmpty());
+        return;
+    }
+
+    if (isPermanentDiscoveryError(error)) {
+        scanRetryTimer->stop();
+        missingDeviceNoticeShown = true;
+        emit setNotification(
+                tr("Bluetooth scanning is unavailable; check system permissions and settings"),
+                4);
+        return;
+    }
+
+    if (error == QBluetoothDeviceDiscoveryAgent::InvalidBluetoothAdapterError
+            || error == QBluetoothDeviceDiscoveryAgent::PoweredOffError) {
+        enterAdapterRecovery(false);
+        return;
+    }
+
     if (running && localDc && !allConfiguredDevicesFound()) {
         scheduleScanRetry(tr("Bluetooth scan unavailable; retrying in background"));
     }

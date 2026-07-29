@@ -2386,7 +2386,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### BLE-008: Bluetooth adapter resets leave BLE devices without recovery
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Train/BT40Device.cpp`, `src/Train/BT40Controller.cpp`, and
   `unittests/Train/bt40Lifecycle`
 - Impact: Scans return while the local adapter is invalid, with no
@@ -2397,16 +2397,36 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   heart-rate telemetry at the same time as an operating-system Bluetooth USB
   adapter reset. This is separate from the seven heart-rate-only gaps tracked
   by `BLE-007`.
-- Partial resolution: `InvalidBluetoothAdapterError` now enters bounded
-  heart-rate recovery, preserves the remote address type, and eventually
-  replaces that device's controller. Adapter restoration and trainer recovery
-  are still not coordinated end to end.
-- Test: Invalidate the adapter during an active connection, restore it, and
-  require bounded rescanning, controller recreation, and independent recovery
-  of all configured BLE devices without a user disconnect/connect cycle.
-- Fix direction: Keep adapter-invalid devices pending, retry adapter discovery
-  with backoff, and recreate per-device controllers only after a valid adapter
-  is available.
+- Test-first evidence: Deterministic trainer and heart-rate rows first failed
+  because an invalid local adapter left no scan retry armed. Additional RED
+  cases reproduced endless retries for permanent discovery errors, controller
+  churn before adapter recovery, stale queued callbacks across stop/start,
+  pairing scans that never completed, and recovery of one missing peer
+  suspending an already healthy device. Later RED cases showed a deliberately
+  disconnected peer being reconnected, a trainer being reported restored
+  before GATT readiness, and a slope target being written to the retired
+  service and then omitted after recovery.
+- Resolution: Adapter errors now suspend device-level reconnect attempts,
+  clear their telemetry sources, block stale trainer-control writes, and leave
+  only devices with an active connection request pending behind the
+  controller's bounded 2-30 second scan backoff. Adapter-invalid recovery and
+  each training session after a stop recreate the local-adapter and discovery
+  objects; a stack-generation guard rejects queued discovery, error, finish,
+  and cancellation callbacks from retired scanners. A configured identity
+  must be rediscovered through a valid adapter before its low-energy controller
+  is replaced and reconnected with the preserved address type. Trainer
+  recovery remains watched until a usable non-heart-rate GATT service is ready,
+  and the current slope target is then sent to the replacement service.
+  Recovery remains independent per device. Permission, unsupported-platform,
+  unsupported-method, and disabled-location errors stop background retries and
+  require user action.
+- Verification: All 76 BLE lifecycle cases pass normally, in 20 consecutive
+  normal runs, under strict ASan/UBSan/LSan, and under TSan with uninstrumented
+  Qt modules excluded. MinGW syntax checks pass for all four changed production
+  and test translation units. The full Qt 6.8.3 application links and remains
+  running in an isolated offscreen smoke test with a clean home directory. The
+  complete matrix reports 81 test programs, 3,196 passes, zero failures, seven
+  skips, and 81 finish markers.
 
 ### BLE-009: Low-energy controller handoff overlaps BlueZ connections
 

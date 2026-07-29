@@ -14,6 +14,7 @@ CONFIG -= debug
 
 SOURCES = testBt40Lifecycle.cpp \
           Bt40LifecycleTestStubs.cpp \
+          FakeBluetoothDiscovery.cpp \
           FakeLowEnergyController.cpp \
           ../../../src/Train/RealtimeData.cpp \
           ../../../src/Train/RealtimeController.cpp \
@@ -29,6 +30,8 @@ HEADERS = ../../../src/Train/RealtimeController.h \
           ../../../src/Train/BT40Controller.h \
           ../../../src/Train/BT40Device.h \
           ../../../src/Train/VMProWidget.h \
+          QBluetoothDeviceDiscoveryAgent \
+          QBluetoothLocalDevice \
           QLowEnergyCharacteristic \
           QLowEnergyController \
           QLowEnergyDescriptor \
@@ -46,9 +49,19 @@ INCLUDEPATH += ../../../src \
                ../../../src/Train \
                ../../../qwt/src
 
-sanitize:!msvc {
+sanitize:!tsan:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \
                       -fno-omit-frame-pointer \
                       -fno-sanitize-recover=all
     QMAKE_LFLAGS += -fsanitize=address,undefined
+}
+
+linux:tsan:!msvc {
+    QMAKE_CXXFLAGS += -fsanitize=thread \
+                      -fno-omit-frame-pointer \
+                      -fno-pie \
+                      -O1 \
+                      -g
+    QMAKE_LFLAGS += -fsanitize=thread \
+                    -no-pie
 }

@@ -114,11 +114,15 @@ private slots:
     void rescanDevice();
     void cancelDeviceRescan();
     void deviceConnectionRestored();
+    void deviceAdapterUnavailable();
 
 private:
     bool deviceAllowed(const QBluetoothDeviceInfo& info);
     bool isHeartRateOnly() const;
     bool allConfiguredDevicesFound() const;
+    void createBluetoothStack();
+    void recreateBluetoothStack();
+    void enterAdapterRecovery(bool failureAlreadyReported);
     void resetScanRetryState();
     void scheduleScanRetry(const QString &firstNotice);
     qint64 telemetryNowMs() const;
@@ -145,6 +149,9 @@ private:
     int scanRetryDelayMs;
     bool missingDeviceNoticeShown;
     bool running;
+    bool adapterRecoveryPending;
+    bool bluetoothStackRefreshNeeded;
+    quint64 bluetoothStackGeneration;
     QSet<BT40Device*> devicesAwaitingRediscovery;
 
     double load;

@@ -1,0 +1,33 @@
+/*
+ * Deterministic QBluetoothLocalDevice test double for BT40 lifecycle tests.
+ */
+
+#ifndef GC_TEST_QBLUETOOTHLOCALDEVICE_H
+#define GC_TEST_QBLUETOOTHLOCALDEVICE_H
+
+#include <QObject>
+
+class QBluetoothLocalDevice : public QObject
+{
+    Q_OBJECT
+
+public:
+    explicit QBluetoothLocalDevice(QObject *parent = nullptr);
+    ~QBluetoothLocalDevice() override;
+
+    bool isValid() const;
+
+    static void resetTestState();
+    static void setAdapterValidForTest(bool valid);
+    static int liveDeviceCount();
+
+private:
+    bool validAtCreation;
+    int creationGeneration;
+
+    static bool adapterAvailable;
+    static int adapterGeneration;
+    static int liveDevices;
+};
+
+#endif

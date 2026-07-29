@@ -55,6 +55,9 @@ public:
                                       const QBluetoothUuid &uuid);
     void connectDevice();
     void disconnectDevice();
+    bool suspendForAdapterReset();
+    void resumeAfterAdapterReset();
+    bool isSuspendedForAdapterReset() const;
     static QMap<QBluetoothUuid, btle_sensor_type_t> supportedServices;
     QBluetoothDeviceInfo deviceInfo() const;
     void updateDeviceInfo(const QBluetoothDeviceInfo &devinfo);
@@ -92,6 +95,7 @@ private slots:
     void attemptReconnect();
     void heartRateStreamReady();
     void heartRateWatchdogExpired();
+    void trainerGattReady();
     void completeLowEnergyControllerReplacement();
 
 signals:
@@ -99,6 +103,7 @@ signals:
     void reconnectScanRequested();
     void reconnectScanCancelled();
     void connectionRestored();
+    void adapterUnavailable();
 private:
     QPointer<BT40Controller> parentController;
     QBluetoothDeviceInfo m_currentDevice;
@@ -152,6 +157,8 @@ private:
     bool heartRateRecoveryPending;
     bool heartRateDisconnectRequested;
     bool controllerReplacementPending;
+    bool adapterAvailable;
+    bool adapterResetRecoveryPending;
     bool shuttingDown;
     bool isHeartRateOnly() const;
     bool acceptsService(const QBluetoothUuid &uuid) const;
