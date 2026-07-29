@@ -1526,9 +1526,10 @@ QString canonicalSettingsFileName(QSettings *settings)
 }
 
 constexpr int enrollmentOperationWaitMilliseconds = 5000;
+constexpr int credentialReadProcessWaitMilliseconds = 5000;
 
 #ifdef GC_CREDENTIAL_TEST_HOOKS
-bool writeCredentialEnrollmentTestSignal(
+bool writeCredentialTestSignal(
     const char *environmentName)
 {
     const QString path =
@@ -1557,7 +1558,7 @@ bool holdCredentialEnrollmentTestLock()
     }
     if (enteredPath.isEmpty()
         || releasePath.isEmpty()
-        || !writeCredentialEnrollmentTestSignal(
+        || !writeCredentialTestSignal(
             "GC_CREDENTIAL_TEST_ENROLLMENT_LOCK_ENTERED")) {
         return false;
     }
@@ -1568,6 +1569,38 @@ bool holdCredentialEnrollmentTestLock()
         QThread::msleep(10);
     }
     return QFileInfo::exists(releasePath);
+}
+
+void signalCredentialOperationLockContentionForTest(
+    const QString &operationId)
+{
+    if (operationId.startsWith(
+            QStringLiteral("location-authority\n"))) {
+        writeCredentialTestSignal(
+            "GC_CREDENTIAL_TEST_ENROLLMENT_LOCK_CONTENDED");
+    }
+
+    const QString expectedOperationId =
+        qEnvironmentVariable(
+            "GC_CREDENTIAL_TEST_OPERATION_LOCK_ID");
+    if (!expectedOperationId.isEmpty()
+        && operationId == expectedOperationId) {
+        writeCredentialTestSignal(
+            "GC_CREDENTIAL_TEST_OPERATION_LOCK_CONTENDED");
+    }
+}
+
+void signalCredentialOperationLockAcquiredForTest(
+    const QString &operationId)
+{
+    const QString expectedOperationId =
+        qEnvironmentVariable(
+            "GC_CREDENTIAL_TEST_OPERATION_LOCK_ID");
+    if (!expectedOperationId.isEmpty()
+        && operationId == expectedOperationId) {
+        writeCredentialTestSignal(
+            "GC_CREDENTIAL_TEST_OPERATION_LOCK_ACQUIRED");
+    }
 }
 #endif
 
@@ -1604,13 +1637,8 @@ public:
         if (processWaitMilliseconds > 0) {
             if (!processLock_->tryLock(0)) {
 #ifdef GC_CREDENTIAL_TEST_HOOKS
-                if (operationId.startsWith(
-                        QStringLiteral(
-                            "location-authority\n"))) {
-                    writeCredentialEnrollmentTestSignal(
-                        "GC_CREDENTIAL_TEST_"
-                        "ENROLLMENT_LOCK_CONTENDED");
-                }
+                signalCredentialOperationLockContentionForTest(
+                    operationId);
 #endif
                 if (!processLock_->tryLock(
                         processWaitMilliseconds)) {
@@ -1618,9 +1646,17 @@ public:
                 }
             }
         } else if (!processLock_->tryLock(0)) {
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+            signalCredentialOperationLockContentionForTest(
+                operationId);
+#endif
             return;
         }
         admitted_ = true;
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+        signalCredentialOperationLockAcquiredForTest(
+            operationId);
+#endif
     }
 
     ~CredentialOperationGuard()
@@ -5329,7 +5365,8 @@ QVariant CredentialSettings::value(
     }
 
     const QString key = vaultKey(scopeId, credentialKey);
-    CredentialOperationGuard operation(key);
+    CredentialOperationGuard operation(
+        key, credentialReadProcessWaitMilliseconds);
     if (!operation)
         return defaultValue;
     if (!operation.backendMutationIdle()) {

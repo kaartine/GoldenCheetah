@@ -2227,7 +2227,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### THREAD-014: Contended credential reads fail immediately during migration
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Core/CredentialSettings.cpp`,
   `src/Core/Settings.cpp`, and
   `unittests/Core/credentialSettings/testCredentialSettings.cpp`
@@ -2243,14 +2243,40 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   bindings; only the losing child observed `missing`. The focused enrollment
   API serialization test remains clean, isolating the race to the later
   credential operation lock.
-- Test: Add deterministic per-vault lock hooks, hold the exact credential lock
-  in one child, start a reader in another process, signal verified contention,
-  then release the owner. The reader must return the stored secret rather than
-  fail immediately with its default.
-- Fix direction: Give only credential reads a named, bounded process-lock wait
-  while retaining immediate same-process reentrancy failure and fail-fast
-  mutation semantics. Timeout and an active `THREAD-013` backend marker must
-  continue to fail closed.
+- Test-first evidence: A parent process acquired the exact hashed per-vault
+  `QLockFile`, and the child signalled its failed immediate acquisition from
+  inside `CredentialOperationGuard`. Before the fix, the owner-release row
+  returned `missing` instead of the stored secret, while the timeout row
+  returned after 7 ms instead of waiting for the bounded lease. Both rows
+  failed deterministically.
+- Resolution: Credential reads now pass the named five-second
+  `credentialReadProcessWaitMilliseconds` bound to
+  `CredentialOperationGuard`. The guard still attempts the process lock
+  immediately before waiting. Its process-local mutex remains a non-blocking
+  `tryLock`, and mutations continue using the zero-wait default, so reentrant
+  calls and writes remain fail-fast. Exact-operation test signals distinguish
+  contention, successful admission, and timeout. The live-vault evidence flags
+  are cleared before lock acquisition, and the existing backend mutation
+  marker and lease checks still run only after admission.
+- Verification: The final focused lock, reentrancy, marker, timeout, and
+  athlete-enrollment matrix passes all 16 cases normally, under strict
+  ASan/UBSan/LSan, and under TSan without sanitizer or race reports. The full
+  normal and strict sanitizer credential programs each pass 426 cases with
+  zero failures and seven Windows-only skips. Ten consecutive normal and ten
+  consecutive strict sanitizer runs of the previously intermittent athlete
+  enrollment row pass. Both changed translation units pass MinGW64 C++17
+  syntax checks. Independent reviews found no production-code blocker and
+  their test determinism findings were incorporated. The complete
+  out-of-source matrix runs 81 QtTest programs: 3,170 cases pass, none fail or
+  blacklist, and seven Windows-only cases skip.
+- Residual: A cross-process read can block its caller for up to five seconds
+  and is not cancellable inside `QLockFile::tryLock`. The process-global
+  credential mutex is held during that wait, so unrelated credential
+  operations in the same process fail immediately. Startup migration can
+  accumulate one bounded wait for each independently contended plaintext
+  credential. A same-user process can also hold the private lock repeatedly;
+  the hardened state directory prevents cross-user interference but not
+  same-user denial of service.
 
 ### MEM-019: Indented plot marker starts and copies its matrix from indeterminate state
 

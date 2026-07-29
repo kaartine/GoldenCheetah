@@ -1544,6 +1544,8 @@ private slots:
     void credentialOperationsAreSerialized();
     void reentrantCredentialOperationFailsFast();
     void credentialProcessLockIsExclusive();
+    void contendedCredentialReadWaitsForOwner_data();
+    void contendedCredentialReadWaitsForOwner();
     void activeKeychainMutationLeaseBlocksCredentialState();
     void activeCredentialProcessLockDoesNotExpire();
     void scopeCreationIsSerialized();
@@ -3750,10 +3752,14 @@ reentrantCredentialOperationFailsFast()
     auto state = std::make_shared<FakeStoreState>();
     CredentialSettings credentials(fakeStore(state));
     QVariant reentrantValue;
+    qint64 reentrantElapsed = -1;
     state->beforeWrite = [&] {
+        QElapsedTimer timer;
+        timer.start();
         reentrantValue = credentials.value(
             &ini, scope, GC_STRAVA_TOKEN, plaintextKey,
             QStringLiteral("operation-busy"));
+        reentrantElapsed = timer.elapsed();
     };
 
     QVERIFY(credentials.setValueChecked(
@@ -3761,6 +3767,8 @@ reentrantCredentialOperationFailsFast()
         QStringLiteral("written-secret")));
     QCOMPARE(reentrantValue,
              QVariant(QStringLiteral("operation-busy")));
+    QVERIFY(reentrantElapsed >= 0);
+    QVERIFY(reentrantElapsed < 2000);
     QCOMPARE(state->reads, 0);
     QCOMPARE(state->writes, 1);
 }
@@ -3919,6 +3927,217 @@ void TestCredentialSettings::credentialProcessLockIsExclusive()
 }
 
 void TestCredentialSettings::
+contendedCredentialReadWaitsForOwner_data()
+{
+    QTest::addColumn<bool>("releaseOwner");
+    QTest::addColumn<bool>("backendQuarantined");
+    QTest::newRow("owner-releases") << true << false;
+    QTest::newRow("timeout") << false << false;
+    QTest::newRow("pending-backend-marker") << true << true;
+}
+
+void TestCredentialSettings::
+contendedCredentialReadWaitsForOwner()
+{
+    QFETCH(bool, releaseOwner);
+    QFETCH(bool, backendQuarantined);
+
+    const QString settingsPath = qEnvironmentVariable(
+        "GC_CREDENTIAL_READ_LOCK_SETTINGS");
+    if (!settingsPath.isEmpty()) {
+        const QString scope = qEnvironmentVariable(
+            "GC_CREDENTIAL_READ_LOCK_SCOPE");
+        QVERIFY(!scope.isEmpty());
+
+        const QString missing = QStringLiteral("missing");
+        const QString secret = QStringLiteral("stored-secret");
+        const QString vaultKey = CredentialSettings::vaultKey(
+            scope, GC_STRAVA_TOKEN);
+        auto state = std::make_shared<FakeStoreState>();
+        state->values.insert(vaultKey, secret);
+        QSettings settings(settingsPath, QSettings::IniFormat);
+        CredentialSettings credentials(fakeStore(state));
+        QElapsedTimer timer;
+        timer.start();
+        bool authoritativeMiss = true;
+        bool confirmedVaultValue = true;
+        const QVariant value = credentials.value(
+            &settings, scope, GC_STRAVA_TOKEN,
+            plainKey(GC_STRAVA_TOKEN), missing,
+            CredentialSettings::ReadPolicy::RequireLiveVault,
+            &authoritativeMiss, &confirmedVaultValue);
+
+        const bool expectSecret =
+            releaseOwner && !backendQuarantined;
+        QCOMPARE(value, QVariant(
+            expectSecret ? secret : missing));
+        QVERIFY(!authoritativeMiss);
+        QCOMPARE(confirmedVaultValue, expectSecret);
+        if (!releaseOwner) {
+            QVERIFY2(
+                timer.elapsed() >= 4500,
+                qPrintable(QStringLiteral(
+                    "contended read returned after %1 ms")
+                    .arg(timer.elapsed())));
+            QVERIFY2(
+                timer.elapsed() < 10000,
+                qPrintable(QStringLiteral(
+                    "contended read timed out after %1 ms")
+                    .arg(timer.elapsed())));
+        }
+        QCOMPARE(state->reads, expectSecret ? 1 : 0);
+        QCOMPARE(state->writes, 0);
+        QCOMPARE(state->removes, 0);
+        QCOMPARE(state->values.value(vaultKey), secret);
+        return;
+    }
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString stateRoot = temporary.filePath(
+        QStringLiteral("credential-state"));
+    const QString privateSettingsPath = temporary.filePath(
+        QStringLiteral("private.ini"));
+    const QString scope = QUuid::createUuid().toString(
+        QUuid::WithoutBraces);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    const QString missing = QStringLiteral("missing");
+    const QString contentionPath = temporary.filePath(
+        QStringLiteral("credential-lock-contended"));
+    const QString acquiredPath = temporary.filePath(
+        QStringLiteral("credential-lock-acquired"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+
+    {
+        QSettings settings(
+            privateSettingsPath, QSettings::IniFormat);
+        settings.setValue(QStringLiteral("seed"), true);
+        settings.sync();
+        QCOMPARE(settings.status(), QSettings::NoError);
+        auto state = std::make_shared<FakeStoreState>();
+        CredentialSettings credentials(fakeStore(state));
+        QCOMPARE(credentials.value(
+                     &settings, scope, GC_STRAVA_TOKEN,
+                     plainKey(GC_STRAVA_TOKEN), missing),
+                 QVariant(missing));
+    }
+
+    const QString lockPath = credentialOperationFile(
+        stateRoot, vaultKey, QStringLiteral(".lock"));
+    QVERIFY(QFileInfo::exists(
+        QFileInfo(lockPath).absolutePath()));
+    QLockFile owner(lockPath);
+    owner.setStaleLockTime(0);
+    QVERIFY(owner.tryLock(0));
+
+    const QString backendLockPath = credentialOperationFile(
+        stateRoot, vaultKey, QStringLiteral(".backend.lock"));
+    std::unique_ptr<QLockFile> backendLease;
+    if (backendQuarantined) {
+        backendLease = std::make_unique<QLockFile>(
+            backendLockPath);
+        backendLease->setStaleLockTime(0);
+        QVERIFY(backendLease->tryLock(0));
+        QVERIFY(CredentialSettingsDetail::
+            createBackendMutationMarker(backendLockPath));
+    }
+
+    QProcess child;
+    QProcessEnvironment environment =
+        QProcessEnvironment::systemEnvironment();
+    environment.insert(
+        QStringLiteral("GC_CREDENTIAL_READ_LOCK_SETTINGS"),
+        privateSettingsPath);
+    environment.insert(
+        QStringLiteral("GC_CREDENTIAL_READ_LOCK_SCOPE"),
+        scope);
+    environment.insert(
+        QStringLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        stateRoot);
+    environment.insert(
+        QStringLiteral(
+            "GC_CREDENTIAL_TEST_OPERATION_LOCK_ID"),
+        vaultKey);
+    environment.insert(
+        QStringLiteral(
+            "GC_CREDENTIAL_TEST_OPERATION_LOCK_CONTENDED"),
+        contentionPath);
+    environment.insert(
+        QStringLiteral(
+            "GC_CREDENTIAL_TEST_OPERATION_LOCK_ACQUIRED"),
+        acquiredPath);
+    child.setProcessEnvironment(environment);
+    child.setProgram(QCoreApplication::applicationFilePath());
+    child.setArguments({
+        QStringLiteral(
+            "contendedCredentialReadWaitsForOwner:")
+            + QString::fromLatin1(QTest::currentDataTag()),
+        QStringLiteral("-silent")
+    });
+    child.start();
+    QVERIFY2(child.waitForStarted(5000),
+             qPrintable(child.errorString()));
+    const bool contended =
+        waitForFile(contentionPath, 5000, &child);
+    QByteArray childOutput = child.readAll();
+    QVERIFY2(contended, childOutput.constData());
+
+    bool acquired = false;
+    if (releaseOwner) {
+        QCOMPARE(child.state(), QProcess::Running);
+        owner.unlock();
+        acquired = waitForFile(
+            acquiredPath, 5000, &child);
+    }
+    QVERIFY2(child.waitForFinished(15000),
+             qPrintable(child.errorString()));
+    if (owner.isLocked())
+        owner.unlock();
+    childOutput += child.readAll();
+    QCOMPARE(acquired, releaseOwner);
+    QCOMPARE(QFileInfo::exists(acquiredPath), releaseOwner);
+    QVERIFY2(child.exitStatus() == QProcess::NormalExit,
+             childOutput.constData());
+    QVERIFY2(child.exitCode() == 0,
+             childOutput.constData());
+
+    if (backendQuarantined) {
+        QCOMPARE(
+            CredentialSettingsDetail::
+                backendMutationMarkerStatus(backendLockPath),
+            CredentialSettingsDetail::
+                BackendMutationMarkerStatus::Pending);
+        QVERIFY(CredentialSettingsDetail::
+            removeBackendMutationMarker(backendLockPath));
+        backendLease->unlock();
+
+        QSettings settings(
+            privateSettingsPath, QSettings::IniFormat);
+        auto state = std::make_shared<FakeStoreState>();
+        state->values.insert(
+            vaultKey, QStringLiteral("stored-secret"));
+        CredentialSettings credentials(fakeStore(state));
+        bool authoritativeMiss = true;
+        bool confirmedVaultValue = false;
+        QCOMPARE(credentials.value(
+                     &settings, scope, GC_STRAVA_TOKEN,
+                     plainKey(GC_STRAVA_TOKEN),
+                     QStringLiteral("missing"),
+                     CredentialSettings::ReadPolicy::
+                         RequireLiveVault,
+                     &authoritativeMiss,
+                     &confirmedVaultValue),
+                 QVariant(QStringLiteral("stored-secret")));
+        QVERIFY(!authoritativeMiss);
+        QVERIFY(confirmedVaultValue);
+        QCOMPARE(state->reads, 1);
+    }
+}
+
+void TestCredentialSettings::
 activeKeychainMutationLeaseBlocksCredentialState()
 {
     QTemporaryDir temporary;
@@ -3963,11 +4182,22 @@ activeKeychainMutationLeaseBlocksCredentialState()
     QVERIFY(backendLease.tryLock(0));
 
     auto state = std::make_shared<FakeStoreState>();
+    state->values.insert(
+        vaultKey, QStringLiteral("existing-secret"));
     CredentialSettings credentials(fakeStore(state));
+    QElapsedTimer rejectionTimer;
+    rejectionTimer.start();
+    QCOMPARE(credentials.value(
+                 &settings, scope, GC_STRAVA_TOKEN,
+                 plainKey(GC_STRAVA_TOKEN),
+                 QStringLiteral("blocked")),
+             QVariant(QStringLiteral("blocked")));
+    QVERIFY(rejectionTimer.elapsed() < 2000);
     QVERIFY(!credentials.setValueChecked(
         &settings, scope, GC_STRAVA_TOKEN,
         plainKey(GC_STRAVA_TOKEN),
         QStringLiteral("blocked-secret")));
+    QCOMPARE(state->reads, 0);
     QCOMPARE(state->writes, 0);
 
     backendLease.unlock();
