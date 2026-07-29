@@ -91,18 +91,47 @@ public:
         }
     };
 
+    struct LocationEnrollmentResult {
+        LocationClaimStatus status =
+            LocationClaimStatus::Unavailable;
+        QString identityId;
+        bool pending = false;
+
+        bool succeeded() const
+        {
+            return status == LocationClaimStatus::Success;
+        }
+    };
+
+    struct LocalMetadataSnapshot {
+        bool readable = false;
+        bool identityPresent = false;
+        QVariant identity;
+        bool bindingPresent = false;
+        QVariant binding;
+        bool scopePresent = false;
+        QVariant scope;
+    };
+
     explicit CredentialSettings(
         std::unique_ptr<CredentialStore> store);
 
     static bool isCredentialKey(const QString &key);
     static QStringList credentialKeysForPrefix(
         const QString &prefix);
+    static LocalMetadataSnapshot readLocalMetadata(
+        QSettings *settings,
+        const QString &identityKey,
+        const QString &bindingKey,
+        const QString &scopeKey);
     static QString ensureIdentityId(
         QSettings *settings,
         const QString &storageKey,
         const QString &recoveryBindingKey =
             QString(),
-        bool *created = nullptr);
+        bool *created = nullptr,
+        const QString &preferredIdentityId =
+            QString());
     static QString ensureScopeId(QSettings *settings,
                                  const QString &storageKey,
                                  const QString &preferredScopeId = QString());
@@ -114,6 +143,10 @@ public:
         const QString &authorizedLegacyScopeId =
             QString(),
         const QString &authorizedLegacyProfileId =
+            QString(),
+        const QString &preferredProfileId =
+            QString(),
+        const QString &preferredScopeId =
             QString());
     static LocationClaimStatus ensureLocationClaim(
         QSettings *settings,
@@ -122,6 +155,27 @@ public:
         const QString &parentId,
         const QString &directoryPath,
         bool allowCreate = true);
+    static LocationEnrollmentResult
+    ensureLocationEnrollment(
+        QSettings *settings,
+        const QByteArray &kind,
+        const QString &existingIdentityId,
+        const QString &parentId,
+        const QString &directoryPath,
+        bool allowCreate);
+    static bool completeLocationEnrollment(
+        QSettings *settings,
+        const QByteArray &kind,
+        const QString &identityId,
+        const QString &parentId,
+        const QString &directoryPath,
+        QSettings *localSettings,
+        const QString &localIdentityKey,
+        const QString &localBindingKey,
+        const QString &localScopeKey,
+        const QString &expectedLocalRootId,
+        const QString &expectedLocalProfileId,
+        const QString &expectedLocalScopeId);
     static QString vaultKey(const QString &scopeId,
                             const QString &credentialKey);
     static bool hardenSettingsFile(QSettings *settings);

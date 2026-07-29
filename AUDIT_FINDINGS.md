@@ -2021,23 +2021,58 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-021: Interrupted fresh credential enrollment is not recoverable
 
-- Status: OPEN
-- Code: `src/Core/CredentialSettings.cpp` and `src/Core/Settings.cpp`
+- Status: FIXED
+- Code: `src/Core/CredentialSettings.cpp`, `src/Core/CredentialSettings.h`,
+  `src/Core/Settings.cpp`, `src/Core/Settings.h`, and
+  `unittests/Core/credentialSettings/testCredentialSettings.cpp`
 - Impact: Fresh root identities and scope bindings are persisted before their
   system location claims. A crash or transient claim-write failure in between
   leaves valid local metadata that is deliberately forbidden from recreating a
   missing claim. Every later attempt therefore fails closed until metadata is
   repaired manually. Credentials are not exposed, but new credential
   enrollment and access can be denied permanently.
-- Test: Persist a generated root identity and each partial fresh binding state,
-  interrupt before the corresponding root, profile, or scope claim, then retry
-  in the same process and after reconstruction. Require recovery without
-  permitting a copied root or profile to bootstrap claims, and preserve
-  plaintext until migration can complete.
-- Fix direction: Publish system claims before local fresh metadata, or persist a
-  system-side enrollment intent that uniquely binds the canonical location and
-  generated identities. Recovery authority must live outside the copied root;
-  an invocation-local `created` flag is insufficient.
+- Test-first evidence: Fifteen process-exit injection points initially exposed
+  non-recoverable root, global-scope, athlete-profile, and athlete-scope
+  publication windows. The first metadata-loss matrix passed only 8 of 14
+  cases, and its partial recovery implementation then exposed unsafe
+  reenrollment when both local identifiers were absent. Independent RED tests
+  also reproduced two competing parents for one pending location, acceptance
+  of a canonical claim stored under the wrong key, incomplete tuple validation
+  during completion, and fresh enrollment beside a canonical same-location
+  claim owned by another parent. The last case returned `Success` before the
+  parent-conflict fix. A deterministic two-process test now makes exactly one
+  enrollment API call per child and proves actual lock contention separately
+  for root, global scope, athlete profile, and athlete scope.
+- Resolution: Fresh enrollment now creates a durable, canonical-location-bound
+  intent and claim in an external authority before publishing local metadata.
+  Completion atomically converts the intent to a permanent location binding
+  only after an exact local root/profile/scope tuple is visible. Whole-map
+  settings transactions bypass stale `QSettings` caches, use a cross-process
+  lock with bounded waiting, atomically replace the authority file, harden its
+  ownership and link semantics, flush the file and required ancestors, and
+  refresh the caller only after durable publication. Restart recovery reuses
+  the pending identity, reconstructs either missing half of otherwise
+  authenticated local metadata, and refuses reenrollment when both local
+  identity components are gone. Canonical claims, intents, and permanent
+  bindings authenticate their hashed storage keys and reject malformed
+  records, copied locations, competing parents, symlink/reparse aliases, and
+  hard-linked authority files without mutating plaintext or the vault.
+- Verification: The complete credential program passes 382 cases normally and
+  the same 382 cases under strict ASan/UBSan/LSan with leak detection; neither
+  run has failures and both have seven platform-only skips. A 58-case SEC-021
+  ThreadSanitizer matrix passes without a race report. Both the production file
+  and all Windows test branches pass a MinGW C++17 syntax build. The complete
+  out-of-source matrix runs 81 QtTest programs: 3,126 cases pass, none fail or
+  are blacklisted, and seven platform-contract cases skip. The complete Linux
+  application links as a 536,721,920-byte ELF.
+- Residual: Location ownership intentionally uses a canonical pathname rather
+  than a persistent filesystem object identifier, so replacing a directory at
+  the identical pathname is outside this same-user recovery boundary. The
+  Windows authority-junction, hard-link, case-alias, ACL, and write-through
+  contracts compile under MinGW but still require execution on native,
+  non-administrator NTFS CI. A process that holds the authority lock longer
+  than the bounded wait causes a transient fail-closed result and a later
+  retry, not an unbounded UI stall.
 
 ### SEC-022: Same-file credential cleanup can delete a newer or last copy
 
@@ -4201,12 +4236,12 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The complete containerized release matrix after SEC-018 passes:
+The complete containerized release matrix after SEC-021 passes:
 
 - 81 QtTest suites
-- 3,018 passed
+- 3,126 passed
 - 0 failed or blacklisted
-- 5 expected Windows-only skips on Linux
+- 7 expected platform-only skips on Linux
 - Qt 6.8.3 on Ubuntu 24.04
 
 The registered matrix includes the AppImage packaging consistency test and the

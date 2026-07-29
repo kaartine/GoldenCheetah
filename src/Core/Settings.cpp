@@ -296,6 +296,45 @@ static QString canonicalExistingDirectory(
     return information.canonicalFilePath();
 }
 
+static QString normalizedFileSystemPath(
+    const QString &path)
+{
+    QString normalized = QDir::fromNativeSeparators(
+        QDir::cleanPath(path));
+#ifdef Q_OS_WIN
+    normalized = normalized.toCaseFolded();
+#endif
+    return normalized;
+}
+
+static bool credentialAuthorityIsExternal(
+    QSettings *authority,
+    const QString &athletesRoot)
+{
+    if (!authority || authority->fileName().isEmpty())
+        return false;
+    const QString canonicalRoot =
+        canonicalExistingDirectory(athletesRoot);
+    const QFileInfo authorityInformation(
+        authority->fileName());
+    const QString canonicalAuthority =
+        authorityInformation.isFile()
+        ? authorityInformation.canonicalFilePath()
+        : QString();
+    if (canonicalRoot.isEmpty()
+        || canonicalAuthority.isEmpty()) {
+        return false;
+    }
+
+    const QString root =
+        normalizedFileSystemPath(canonicalRoot);
+    const QString candidate =
+        normalizedFileSystemPath(canonicalAuthority);
+    return candidate != root
+        && !candidate.startsWith(
+            root + QLatin1Char('/'));
+}
+
 static bool fileSystemPathIsRedirected(
     const QFileInfo &information)
 {
@@ -337,6 +376,7 @@ struct ExactSettingPresence
 {
     bool readable = false;
     bool present = false;
+    QVariant value;
 };
 
 enum class LegacyCredentialFallbackDisposition
@@ -357,7 +397,41 @@ static ExactSettingPresence exactSettingPresence(
     exact->sync();
     if (exact->status() != QSettings::NoError)
         return {};
-    return {true, exact->contains(key)};
+    const bool present = exact->contains(key);
+    return {
+        true,
+        present,
+        present ? exact->value(key) : QVariant()
+    };
+}
+
+struct ExactCredentialMetadata
+{
+    bool readable = false;
+    bool bindingPresent = false;
+    QVariant binding;
+    bool scopePresent = false;
+    QVariant scope;
+};
+
+static ExactCredentialMetadata exactCredentialMetadata(
+    QSettings *settings)
+{
+    const CredentialSettings::LocalMetadataSnapshot
+        snapshot =
+            CredentialSettings::readLocalMetadata(
+                settings, QString(),
+                credentialScopeBindingStorageKey,
+                credentialScopeStorageKey);
+    if (!snapshot.readable)
+        return {};
+    return {
+        true,
+        snapshot.bindingPresent,
+        snapshot.binding,
+        snapshot.scopePresent,
+        snapshot.scope
+    };
 }
 
 static bool persistLegacyCredentialFallbackBlock(
@@ -485,21 +559,15 @@ static QSettings *globalSettingsAt(
 static QString unboundLocalCredentialScope(
     QSettings *settings)
 {
-    std::unique_ptr<QSettings> exact =
-        freshExactSettings(settings);
-    if (!exact)
-        return {};
-    exact->sync();
-    if (exact->status() != QSettings::NoError
-        || exact->contains(
-            credentialScopeBindingStorageKey)
-        || !exact->contains(
-            credentialScopeStorageKey)) {
+    const ExactCredentialMetadata metadata =
+        exactCredentialMetadata(settings);
+    if (!metadata.readable
+        || metadata.bindingPresent
+        || !metadata.scopePresent) {
         return {};
     }
     const QUuid identifier(
-        exact->value(
-            credentialScopeStorageKey).toString());
+        metadata.scope.toString());
     return identifier.isNull()
         ? QString()
         : identifier.toString(
@@ -872,8 +940,20 @@ bool GSettings::ensureCredentialRootReady()
     if (!newFormat || !credentialSettings
         || !systemsettings || !globalGeneral
         || activeAthletesRoot.isEmpty()
-        || credentialRootBlocked
-        || !ensureSystemMigrationStateDurable()) {
+        || credentialRootBlocked) {
+        return false;
+    }
+    if (!ensureSystemMigrationStateDurable())
+        return false;
+    if (!credentialAuthorityIsExternal(
+            systemsettings, activeAthletesRoot)
+        || !CredentialSettings::hardenSettingsFile(
+            systemsettings)) {
+        credentialRootBlocked = true;
+        credentialSettings->clearCache();
+        qWarning()
+            << "Credential enrollment authority is not"
+            << "external to the active library root";
         return false;
     }
 
@@ -892,13 +972,55 @@ bool GSettings::ensureCredentialRootReady()
         return false;
     }
 
-    bool rootIdentityCreated = false;
-    const QString currentRootId =
-        CredentialSettings::ensureIdentityId(
-            globalGeneral,
-            credentialRootIdentityStorageKey,
-            credentialScopeBindingStorageKey,
-            &rootIdentityCreated);
+    const CredentialSettings::LocalMetadataSnapshot
+        rootMetadata =
+            CredentialSettings::readLocalMetadata(
+                globalGeneral,
+                credentialRootIdentityStorageKey,
+                credentialScopeBindingStorageKey,
+                QString());
+    if (!rootMetadata.readable) {
+        return false;
+    }
+    const bool freshRoot =
+        !rootMetadata.identityPresent
+        && !rootMetadata.bindingPresent;
+    CredentialSettings::LocationEnrollmentResult
+        enrollment;
+    QString currentRootId;
+    if (freshRoot) {
+        enrollment =
+            CredentialSettings::
+                ensureLocationEnrollment(
+                    systemsettings,
+                    QByteArrayLiteral("root"),
+                    QString(), QString(),
+                    activeAthletesRoot, true);
+        if (!enrollment.succeeded())
+            return false;
+        currentRootId =
+            CredentialSettings::ensureIdentityId(
+                globalGeneral,
+                credentialRootIdentityStorageKey,
+                credentialScopeBindingStorageKey,
+                nullptr,
+                enrollment.identityId);
+    } else {
+        currentRootId =
+            CredentialSettings::ensureIdentityId(
+                globalGeneral,
+                credentialRootIdentityStorageKey,
+                credentialScopeBindingStorageKey);
+        if (currentRootId.isEmpty())
+            return false;
+        enrollment =
+            CredentialSettings::
+                ensureLocationEnrollment(
+                    systemsettings,
+                    QByteArrayLiteral("root"),
+                    currentRootId, QString(),
+                    activeAthletesRoot, false);
+    }
     if (currentRootId.isEmpty())
         return false;
     if (!credentialRootIdentityId.isEmpty()
@@ -909,18 +1031,7 @@ bool GSettings::ensureCredentialRootReady()
             << "Credential library identity changed";
         return false;
     }
-
-    const CredentialSettings::LocationClaimStatus claim =
-        CredentialSettings::ensureLocationClaim(
-            systemsettings,
-            credentialLocationClaimStorageKey(
-                QByteArrayLiteral("root"),
-                currentRootId),
-            currentRootId,
-            QString(),
-            activeAthletesRoot,
-            rootIdentityCreated);
-    if (claim
+    if (enrollment.status
         == CredentialSettings::
             LocationClaimStatus::Conflict) {
         credentialRootBlocked = true;
@@ -929,9 +1040,23 @@ bool GSettings::ensureCredentialRootReady()
             << "bound to another location";
         return false;
     }
-    if (claim
+    if (enrollment.status
         != CredentialSettings::
             LocationClaimStatus::Success) {
+        return false;
+    }
+    if (enrollment.identityId != currentRootId
+        || (enrollment.pending
+            && !CredentialSettings::
+                completeLocationEnrollment(
+                    systemsettings,
+                    QByteArrayLiteral("root"),
+                    currentRootId, QString(),
+                    activeAthletesRoot,
+                    globalGeneral,
+                    credentialRootIdentityStorageKey,
+                    QString(), QString(),
+                    QString(), QString(), QString()))) {
         return false;
     }
     credentialRootIdentityId = currentRootId;
@@ -1085,38 +1210,112 @@ QString GSettings::credentialScopeForGlobal(
         authorizedLegacyScope.isEmpty()
             ? QString()
             : credentialRootIdentityId;
-    if (!localLegacyScope.isEmpty()) {
-        if (localLegacyScope
-                != authorizedLegacyScope
-            || !claimCredentialScope(
+    const ExactCredentialMetadata metadata =
+        exactCredentialMetadata(globalGeneral);
+    if (!metadata.readable)
+        return {};
+    const bool authorizedUnboundLegacy =
+        !localLegacyScope.isEmpty()
+        && localLegacyScope
+            == authorizedLegacyScope
+        && !authorizedLegacyProfile.isEmpty();
+    CredentialSettings::LocationEnrollmentResult
+        enrollment;
+    CredentialSettings::ScopeBindingResult binding;
+    if (authorizedUnboundLegacy) {
+        if (!claimCredentialScope(
                 localLegacyScope,
                 credentialRootIdentityId,
                 activeAthletesRoot,
                 true)) {
             return {};
         }
+        binding =
+            CredentialSettings::ensureScopeBinding(
+                globalGeneral,
+                credentialRootIdentityId,
+                credentialScopeBindingStorageKey,
+                credentialScopeStorageKey,
+                authorizedLegacyScope,
+                authorizedLegacyProfile);
+    } else if (metadata.bindingPresent) {
+        binding =
+            CredentialSettings::ensureScopeBinding(
+                globalGeneral,
+                credentialRootIdentityId,
+                credentialScopeBindingStorageKey,
+                credentialScopeStorageKey,
+                authorizedLegacyScope,
+                authorizedLegacyProfile);
+        if (binding.succeeded()
+            && binding.legacyLocalScope) {
+            if (!claimCredentialScope(
+                    binding.scopeId,
+                    credentialRootIdentityId,
+                    activeAthletesRoot,
+                    true)) {
+                return {};
+            }
+        } else if (binding.succeeded()) {
+            enrollment =
+                CredentialSettings::
+                    ensureLocationEnrollment(
+                        systemsettings,
+                        QByteArrayLiteral("scope"),
+                        binding.scopeId,
+                        credentialRootIdentityId,
+                        activeAthletesRoot, false);
+        }
+    } else {
+        const bool fresh =
+            !metadata.bindingPresent
+            && !metadata.scopePresent;
+        enrollment =
+            CredentialSettings::
+                ensureLocationEnrollment(
+                    systemsettings,
+                    QByteArrayLiteral("scope"),
+                    metadata.scopePresent
+                        ? metadata.scope.toString()
+                        : QString(),
+                    credentialRootIdentityId,
+                    activeAthletesRoot, fresh);
+        if (!enrollment.succeeded())
+            return {};
+        binding =
+            CredentialSettings::ensureScopeBinding(
+                globalGeneral,
+                credentialRootIdentityId,
+                credentialScopeBindingStorageKey,
+                credentialScopeStorageKey,
+                authorizedLegacyScope,
+                authorizedLegacyProfile,
+                credentialRootIdentityId,
+                enrollment.identityId);
     }
-    const CredentialSettings::ScopeBindingResult binding =
-        CredentialSettings::ensureScopeBinding(
-            globalGeneral,
-            credentialRootIdentityId,
-            credentialScopeBindingStorageKey,
-            credentialScopeStorageKey,
-            authorizedLegacyScope,
-            authorizedLegacyProfile);
     if (!binding.succeeded()) {
         qWarning()
             << "Cannot resolve global credential binding";
         return {};
     }
-    const bool allowClaimCreation =
-        binding.created
-        || binding.legacyLocalScope;
-    if (!claimCredentialScope(
-            binding.scopeId,
-            credentialRootIdentityId,
-            activeAthletesRoot,
-            allowClaimCreation)) {
+    if (!binding.legacyLocalScope
+        && (!enrollment.succeeded()
+            || enrollment.identityId
+                != binding.scopeId
+            || (enrollment.pending
+                && !CredentialSettings::
+                    completeLocationEnrollment(
+                        systemsettings,
+                        QByteArrayLiteral("scope"),
+                        binding.scopeId,
+                        credentialRootIdentityId,
+                        activeAthletesRoot,
+                        globalGeneral, QString(),
+                        credentialScopeBindingStorageKey,
+                        credentialScopeStorageKey,
+                        credentialRootIdentityId,
+                        credentialRootIdentityId,
+                        binding.scopeId)))) {
         return {};
     }
     if (authorizedLegacy)
@@ -1148,6 +1347,19 @@ QString GSettings::credentialScopeForAthlete(
         found.value()->getQSettings(ATHLETE_PRIVATE);
     const QString expectedPath =
         athletePrivateSettingsPath(athleteName);
+    return credentialScopeForAthleteSettings(
+        athleteName, privateSettings,
+        expectedPath, authorizedLegacy);
+}
+
+QString GSettings::credentialScopeForAthleteSettings(
+    const QString &athleteName,
+    QSettings *privateSettings,
+    const QString &expectedPath,
+    bool *authorizedLegacy)
+{
+    if (authorizedLegacy)
+        *authorizedLegacy = false;
     if (!privateSettings || expectedPath.isEmpty()
         || QDir::cleanPath(
                QFileInfo(
@@ -1161,21 +1373,33 @@ QString GSettings::credentialScopeForAthlete(
             << "the active library root";
         return {};
     }
+    if (!ensureCredentialRootReady())
+        return {};
+    const QString configPath =
+        QFileInfo(expectedPath).absolutePath();
+    const QString athletePath =
+        QFileInfo(configPath).absolutePath();
     const QString authorizedLegacyScope =
         authorizedLegacyCredentialScope(athleteName);
     const QString localLegacyScope =
         unboundLocalCredentialScope(privateSettings);
     const QString authorizedLegacyProfile =
         authorizedLegacyScope;
-    if (!localLegacyScope.isEmpty()) {
-        if (localLegacyScope
-                != authorizedLegacyScope) {
-            return {};
-        }
-        const QString configPath =
-            QFileInfo(expectedPath).absolutePath();
-        const QString athletePath =
-            QFileInfo(configPath).absolutePath();
+    const ExactCredentialMetadata metadata =
+        exactCredentialMetadata(privateSettings);
+    if (!metadata.readable)
+        return {};
+    const bool authorizedUnboundLegacy =
+        !localLegacyScope.isEmpty()
+        && localLegacyScope
+            == authorizedLegacyScope
+        && !authorizedLegacyProfile.isEmpty();
+    CredentialSettings::LocationEnrollmentResult
+        profileEnrollment;
+    CredentialSettings::LocationEnrollmentResult
+        scopeEnrollment;
+    CredentialSettings::ScopeBindingResult binding;
+    if (authorizedUnboundLegacy) {
         if (!claimCredentialProfile(
                 athleteName,
                 authorizedLegacyProfile,
@@ -1187,37 +1411,131 @@ QString GSettings::credentialScopeForAthlete(
                 true)) {
             return {};
         }
+        binding =
+            CredentialSettings::ensureScopeBinding(
+                privateSettings,
+                credentialRootIdentityId,
+                credentialScopeBindingStorageKey,
+                credentialScopeStorageKey,
+                authorizedLegacyScope,
+                authorizedLegacyProfile);
+    } else if (metadata.bindingPresent) {
+        binding =
+            CredentialSettings::ensureScopeBinding(
+                privateSettings,
+                credentialRootIdentityId,
+                credentialScopeBindingStorageKey,
+                credentialScopeStorageKey,
+                authorizedLegacyScope,
+                authorizedLegacyProfile);
+        if (binding.succeeded()
+            && binding.legacyLocalScope) {
+            if (!claimCredentialProfile(
+                    athleteName,
+                    binding.profileId, true)
+                || !claimCredentialScope(
+                    binding.scopeId,
+                    binding.profileId,
+                    athletePath, true)) {
+                return {};
+            }
+        } else if (binding.succeeded()) {
+            profileEnrollment =
+                CredentialSettings::
+                    ensureLocationEnrollment(
+                        systemsettings,
+                        QByteArrayLiteral("profile"),
+                        binding.profileId,
+                        credentialRootIdentityId,
+                        athletePath, false);
+            if (profileEnrollment.succeeded()) {
+                scopeEnrollment =
+                    CredentialSettings::
+                        ensureLocationEnrollment(
+                            systemsettings,
+                            QByteArrayLiteral("scope"),
+                            binding.scopeId,
+                            binding.profileId,
+                            athletePath, false);
+            }
+        }
+    } else {
+        const bool fresh =
+            !metadata.bindingPresent
+            && !metadata.scopePresent;
+        profileEnrollment =
+            CredentialSettings::
+                ensureLocationEnrollment(
+                    systemsettings,
+                    QByteArrayLiteral("profile"),
+                    QString(),
+                    credentialRootIdentityId,
+                    athletePath, fresh);
+        if (!profileEnrollment.succeeded())
+            return {};
+        scopeEnrollment =
+            CredentialSettings::
+                ensureLocationEnrollment(
+                    systemsettings,
+                    QByteArrayLiteral("scope"),
+                    metadata.scopePresent
+                        ? metadata.scope.toString()
+                        : QString(),
+                    profileEnrollment.identityId,
+                    athletePath, fresh);
+        if (!scopeEnrollment.succeeded())
+            return {};
+        binding =
+            CredentialSettings::ensureScopeBinding(
+                privateSettings,
+                credentialRootIdentityId,
+                credentialScopeBindingStorageKey,
+                credentialScopeStorageKey,
+                authorizedLegacyScope,
+                authorizedLegacyProfile,
+                profileEnrollment.identityId,
+                scopeEnrollment.identityId);
     }
-    const CredentialSettings::ScopeBindingResult binding =
-        CredentialSettings::ensureScopeBinding(
-            privateSettings,
-            credentialRootIdentityId,
-            credentialScopeBindingStorageKey,
-            credentialScopeStorageKey,
-            authorizedLegacyScope,
-            authorizedLegacyProfile);
     if (!binding.succeeded()) {
         qWarning()
             << "Cannot resolve athlete credential binding";
         return {};
     }
-    const bool allowClaimCreation =
-        binding.created
-        || binding.legacyLocalScope;
-    if (!claimCredentialProfile(
-            athleteName, binding.profileId,
-            allowClaimCreation)) {
-        return {};
-    }
-    const QString configPath =
-        QFileInfo(expectedPath).absolutePath();
-    const QString athletePath =
-        QFileInfo(configPath).absolutePath();
-    if (!claimCredentialScope(
-            binding.scopeId,
-            binding.profileId,
-            athletePath,
-            allowClaimCreation)) {
+    if (!binding.legacyLocalScope
+        && (!profileEnrollment.succeeded()
+            || !scopeEnrollment.succeeded()
+            || profileEnrollment.identityId
+                != binding.profileId
+            || scopeEnrollment.identityId
+                != binding.scopeId
+            || (scopeEnrollment.pending
+                && !CredentialSettings::
+                    completeLocationEnrollment(
+                        systemsettings,
+                        QByteArrayLiteral("scope"),
+                        binding.scopeId,
+                        binding.profileId,
+                        athletePath,
+                        privateSettings, QString(),
+                        credentialScopeBindingStorageKey,
+                        credentialScopeStorageKey,
+                        credentialRootIdentityId,
+                        binding.profileId,
+                        binding.scopeId))
+            || (profileEnrollment.pending
+                && !CredentialSettings::
+                    completeLocationEnrollment(
+                        systemsettings,
+                        QByteArrayLiteral("profile"),
+                        binding.profileId,
+                        credentialRootIdentityId,
+                        athletePath,
+                        privateSettings, QString(),
+                        credentialScopeBindingStorageKey,
+                        credentialScopeStorageKey,
+                        credentialRootIdentityId,
+                        binding.profileId,
+                        binding.scopeId)))) {
         return {};
     }
     if (authorizedLegacy)
@@ -1640,89 +1958,28 @@ GSettings::cvalue(QString athleteName, QString key, QVariant def) {
                             athleteName),
                         authorizedLegacy, def);
                 }
-                if (!ensureCredentialRootReady())
-                    return def;
                 const QString privatePath =
                     athletePrivateSettingsPath(athleteName);
                 if (!privatePath.isEmpty()
-                    && !credentialRootIdentityId.isEmpty()
                     && !credentialRootBlocked) {
                     QSettings privateSettings(
                         privatePath, newSettingsFormat);
-                    const QString authorizedLegacyScope =
-                        authorizedLegacyCredentialScope(
-                            athleteName);
-                    const QString localLegacyScope =
-                        unboundLocalCredentialScope(
-                            &privateSettings);
-                    const QString authorizedLegacyProfile =
-                        authorizedLegacyScope;
-                    if (!localLegacyScope.isEmpty()) {
-                        if (localLegacyScope
-                                != authorizedLegacyScope) {
-                            return def;
-                        }
-                        const QString configPath =
-                            QFileInfo(privatePath)
-                                .absolutePath();
-                        const QString athletePath =
-                            QFileInfo(configPath)
-                                .absolutePath();
-                        if (!claimCredentialProfile(
-                                athleteName,
-                                authorizedLegacyProfile,
-                                true)
-                            || !claimCredentialScope(
-                                localLegacyScope,
-                                authorizedLegacyProfile,
-                                athletePath,
-                                true)) {
-                            return def;
-                        }
-                    }
-                    const CredentialSettings::ScopeBindingResult
-                        binding =
-                            CredentialSettings::
-                                ensureScopeBinding(
-                                    &privateSettings,
-                                    credentialRootIdentityId,
-                                    credentialScopeBindingStorageKey,
-                                    credentialScopeStorageKey,
-                                    authorizedLegacyScope,
-                                    authorizedLegacyProfile);
-                    if (!binding.succeeded())
-                        return def;
-                    const bool allowClaimCreation =
-                        binding.created
-                        || binding.legacyLocalScope;
-                    if (!claimCredentialProfile(
+                    bool authorizedLegacy = false;
+                    const QString scopeId =
+                        credentialScopeForAthleteSettings(
                             athleteName,
-                            binding.profileId,
-                            allowClaimCreation)) {
-                        return def;
-                    }
-                    const QString configPath =
-                        QFileInfo(privatePath)
-                            .absolutePath();
-                    const QString athletePath =
-                        QFileInfo(configPath)
-                            .absolutePath();
-                    if (!claimCredentialScope(
-                            binding.scopeId,
-                            binding.profileId,
-                            athletePath,
-                            allowClaimCreation)) {
-                        return def;
-                    }
+                            &privateSettings,
+                            privatePath,
+                            &authorizedLegacy);
                     return credentialValueWithLegacyFallback(
                         &privateSettings,
-                        binding.scopeId,
+                        scopeId,
                         key, plaintextKey,
                         athleteName + QLatin1Char('/')
                             + plaintextKey,
                         legacyCredentialScopeStorageKey(
                             athleteName),
-                        binding.legacyLocalScope, def);
+                        authorizedLegacy, def);
                 }
             }
             return def;

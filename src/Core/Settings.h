@@ -592,6 +592,11 @@ private:
     QString credentialScopeForAthlete(
         const QString &athleteName,
         bool *authorizedLegacy = nullptr);
+    QString credentialScopeForAthleteSettings(
+        const QString &athleteName,
+        QSettings *privateSettings,
+        const QString &expectedPath,
+        bool *authorizedLegacy = nullptr);
     QString credentialScopeForLegacy(const QString &athleteName);
     void migrateGlobalCredentials();
     void migrateAthleteCredentials(const QString &athleteName);

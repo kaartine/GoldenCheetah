@@ -16,6 +16,7 @@
 #include <QRegularExpression>
 #include <QSettings>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QUuid>
 
 #include <algorithm>
@@ -394,6 +395,337 @@ QString plainKey(QString key)
 {
     key.remove(QRegularExpression(QStringLiteral("^<.*>")));
     return key;
+}
+
+QHash<QString, QVariant> settingsValuesWithPrefix(
+    QSettings *settings,
+    const QString &prefix)
+{
+    QHash<QString, QVariant> values;
+    if (!settings)
+        return values;
+    for (const QString &key :
+         settings->allKeys().filter(prefix)) {
+        values.insert(key, settings->value(key));
+    }
+    return values;
+}
+
+struct TestLocationRecord
+{
+    bool valid = false;
+    QString kind;
+    QString identityId;
+    QString parentId;
+    QString directoryPath;
+};
+
+TestLocationRecord parseTestLocationRecord(
+    const QVariant &stored)
+{
+    QJsonParseError error;
+    const QJsonDocument document =
+        QJsonDocument::fromJson(
+            stored.toString().toUtf8(), &error);
+    if (error.error != QJsonParseError::NoError
+        || !document.isObject()) {
+        return {};
+    }
+    const QJsonObject object = document.object();
+    if (object.size() != 5
+        || object.value(
+                QStringLiteral("version")).toInt()
+            != 1
+        || !object.value(
+                QStringLiteral("kind")).isString()
+        || !object.value(
+                QStringLiteral("identity_id")).isString()
+        || !object.value(
+                QStringLiteral("parent_id")).isString()
+        || !object.value(
+                QStringLiteral("directory_path")).isString()) {
+        return {};
+    }
+    const QString kind =
+        object.value(
+            QStringLiteral("kind")).toString();
+    if (kind != QStringLiteral("root")
+        && kind != QStringLiteral("profile")
+        && kind != QStringLiteral("scope")) {
+        return {};
+    }
+    const QString identityId =
+        object.value(
+            QStringLiteral("identity_id")).toString();
+    const QString parentId =
+        object.value(
+            QStringLiteral("parent_id")).toString();
+    const QString directoryPath =
+        object.value(
+            QStringLiteral("directory_path")).toString();
+    const QUuid identity(identityId);
+    const QUuid parent(parentId);
+    if (identity.isNull()
+        || identity.toString(QUuid::WithoutBraces)
+            != identityId
+        || (!parentId.isEmpty()
+            && (parent.isNull()
+                || parent.toString(
+                       QUuid::WithoutBraces)
+                    != parentId))
+        || !QDir::isAbsolutePath(directoryPath)
+        || QDir::cleanPath(directoryPath)
+            != directoryPath) {
+        return {};
+    }
+    return {
+        true, kind, identityId,
+        parentId, directoryPath
+    };
+}
+
+TestLocationRecord parseTestLocationClaim(
+    const QVariant &stored)
+{
+    QJsonParseError error;
+    const QJsonDocument document =
+        QJsonDocument::fromJson(
+            stored.toString().toUtf8(), &error);
+    if (error.error != QJsonParseError::NoError
+        || !document.isObject()) {
+        return {};
+    }
+    const QJsonObject object = document.object();
+    if (object.size() != 4
+        || object.value(
+                QStringLiteral("version")).toInt()
+            != 1
+        || !object.value(
+                QStringLiteral("identity_id")).isString()
+        || !object.value(
+                QStringLiteral("parent_id")).isString()
+        || !object.value(
+                QStringLiteral("directory_path")).isString()) {
+        return {};
+    }
+    const QString identityId =
+        object.value(
+            QStringLiteral("identity_id")).toString();
+    const QString parentId =
+        object.value(
+            QStringLiteral("parent_id")).toString();
+    const QString directoryPath =
+        object.value(
+            QStringLiteral("directory_path")).toString();
+    const QUuid identity(identityId);
+    const QUuid parent(parentId);
+    if (identity.isNull()
+        || identity.toString(QUuid::WithoutBraces)
+            != identityId
+        || (!parentId.isEmpty()
+            && (parent.isNull()
+                || parent.toString(
+                       QUuid::WithoutBraces)
+                    != parentId))
+        || !QDir::isAbsolutePath(directoryPath)
+        || QDir::cleanPath(directoryPath)
+            != directoryPath) {
+        return {};
+    }
+    return {
+        true, QString(), identityId,
+        parentId, directoryPath
+    };
+}
+
+struct TestScopeBinding
+{
+    bool valid = false;
+    QString rootId;
+    QString profileId;
+    QString scopeId;
+    QString origin;
+};
+
+TestScopeBinding parseTestScopeBinding(
+    const QVariant &stored)
+{
+    QJsonParseError error;
+    const QJsonDocument document =
+        QJsonDocument::fromJson(
+            stored.toString().toUtf8(), &error);
+    if (error.error != QJsonParseError::NoError
+        || !document.isObject()) {
+        return {};
+    }
+    const QJsonObject object = document.object();
+    if (object.size() != 5
+        || object.value(
+                QStringLiteral("version")).toInt()
+            != 2
+        || !object.value(
+                QStringLiteral("root_id")).isString()
+        || !object.value(
+                QStringLiteral("profile_id")).isString()
+        || !object.value(
+                QStringLiteral("scope_id")).isString()
+        || !object.value(
+                QStringLiteral("origin")).isString()) {
+        return {};
+    }
+    const QString rootId =
+        object.value(
+            QStringLiteral("root_id")).toString();
+    const QString profileId =
+        object.value(
+            QStringLiteral("profile_id")).toString();
+    const QString scopeId =
+        object.value(
+            QStringLiteral("scope_id")).toString();
+    const QString origin =
+        object.value(
+            QStringLiteral("origin")).toString();
+    const QUuid root(rootId);
+    const QUuid profile(profileId);
+    const QUuid scope(scopeId);
+    if (root.isNull()
+        || root.toString(QUuid::WithoutBraces)
+            != rootId
+        || profile.isNull()
+        || profile.toString(QUuid::WithoutBraces)
+            != profileId
+        || scope.isNull()
+        || scope.toString(QUuid::WithoutBraces)
+            != scopeId
+        || (origin != QStringLiteral("fresh")
+            && origin
+                != QStringLiteral("legacy_local"))) {
+        return {};
+    }
+    return {
+        true, rootId, profileId,
+        scopeId, origin
+    };
+}
+
+QString testLocationClaimKey(
+    const QByteArray &kind,
+    const QString &identityId)
+{
+    const QByteArray digest = QCryptographicHash::hash(
+        kind + '\n' + identityId.toUtf8(),
+        QCryptographicHash::Sha256).toHex();
+    return QStringLiteral(
+        "credential_store/location_claims/")
+        + QString::fromLatin1(digest);
+}
+
+QString testLocationEnrollmentKey(
+    const QByteArray &kind,
+    const QString &parentId,
+    const QString &directoryPath)
+{
+    QByteArray identity = QByteArrayLiteral("v1");
+    const auto appendField =
+        [&identity](const QByteArray &field) {
+            identity.append('\0');
+            identity.append(
+                QByteArray::number(field.size()));
+            identity.append('\0');
+            identity.append(field);
+        };
+    appendField(kind);
+    appendField(parentId.toUtf8());
+    appendField(directoryPath.toUtf8());
+    const QByteArray digest = QCryptographicHash::hash(
+        identity, QCryptographicHash::Sha256).toHex();
+    return QStringLiteral(
+        "credential_store/location_enrollments/")
+        + QString::fromLatin1(digest);
+}
+
+QString testLocationBindingKey(
+    const QByteArray &kind,
+    const QString &directoryPath)
+{
+    QByteArray identity = QByteArrayLiteral("v1");
+    const auto appendField =
+        [&identity](const QByteArray &field) {
+            identity.append('\0');
+            identity.append(
+                QByteArray::number(field.size()));
+            identity.append('\0');
+            identity.append(field);
+        };
+    appendField(kind);
+    appendField(directoryPath.toUtf8());
+    const QByteArray digest = QCryptographicHash::hash(
+        identity, QCryptographicHash::Sha256).toHex();
+    return QStringLiteral(
+        "credential_store/location_bindings/")
+        + QString::fromLatin1(digest);
+}
+
+QString testLocationClaimPayload(
+    const QString &identityId,
+    const QString &parentId,
+    const QString &directoryPath)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("version"), 1);
+    object.insert(
+        QStringLiteral("identity_id"), identityId);
+    object.insert(
+        QStringLiteral("parent_id"), parentId);
+    object.insert(
+        QStringLiteral("directory_path"),
+        directoryPath);
+    return QString::fromUtf8(
+        QJsonDocument(object).toJson(
+            QJsonDocument::Compact));
+}
+
+QString testLocationRecordPayload(
+    const QByteArray &kind,
+    const QString &identityId,
+    const QString &parentId,
+    const QString &directoryPath)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("version"), 1);
+    object.insert(
+        QStringLiteral("kind"),
+        QString::fromLatin1(kind));
+    object.insert(
+        QStringLiteral("identity_id"), identityId);
+    object.insert(
+        QStringLiteral("parent_id"), parentId);
+    object.insert(
+        QStringLiteral("directory_path"),
+        directoryPath);
+    return QString::fromUtf8(
+        QJsonDocument(object).toJson(
+            QJsonDocument::Compact));
+}
+
+QString testScopeBindingPayload(
+    const QString &rootId,
+    const QString &profileId,
+    const QString &scopeId)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("version"), 2);
+    object.insert(QStringLiteral("root_id"), rootId);
+    object.insert(
+        QStringLiteral("profile_id"), profileId);
+    object.insert(
+        QStringLiteral("scope_id"), scopeId);
+    object.insert(
+        QStringLiteral("origin"),
+        QStringLiteral("fresh"));
+    return QString::fromUtf8(
+        QJsonDocument(object).toJson(
+            QJsonDocument::Compact));
 }
 
 QString legacyCredentialScopeMappingKey(
@@ -832,6 +1164,25 @@ bool writeFaultInjectingSettings(
                 break;
             }
         }
+    } else if (state.failurePoint.startsWith(
+                   QStringLiteral(
+                       "credential-location-claim-count-"))) {
+        bool validCount = false;
+        const int rejectedCount = state.failurePoint.mid(
+            QStringLiteral(
+                "credential-location-claim-count-").size())
+                                      .toInt(&validCount);
+        int claimCount = 0;
+        const QString prefix =
+            QStringLiteral(
+                "credential_store/location_claims/");
+        for (auto entry = settings.cbegin();
+             entry != settings.cend(); ++entry) {
+            if (entry.key().startsWith(prefix))
+                ++claimCount;
+        }
+        rejectsLocationClaim =
+            validCount && claimCount == rejectedCount;
     }
     bool rejectsLegacyFallbackBlock = false;
     if (state.failurePoint
@@ -1124,6 +1475,13 @@ bool windowsFileHasOwnerOnlyAcl(const QString &path)
 std::unique_ptr<CredentialStore>
 createPlatformCredentialStore()
 {
+    const QString enrollmentVault =
+        qEnvironmentVariable(
+            "GC_ENROLLMENT_TEST_VAULT");
+    if (!enrollmentVault.isEmpty()) {
+        return std::make_unique<FileCredentialStore>(
+            enrollmentVault);
+    }
     return fakeStore(factoryState());
 }
 
@@ -1165,6 +1523,14 @@ private slots:
     void malformedScopeBindingsFailClosed_data();
     void malformedScopeBindingsFailClosed();
     void locationClaimsRejectCopiesAndUnconfirmedMoves();
+    void pendingLocationEnrollmentRejectsCompetingParent();
+    void canonicalLocationClaimRejectsCompetingParent();
+    void misplacedLocationClaimCannotAuthorizeBackfill();
+    void malformedLocationAuthorityRecordsFailClosed_data();
+    void malformedLocationAuthorityRecordsFailClosed();
+    void locationEnrollmentCompletionRequiresLocalMetadata();
+    void locationEnrollmentCompletionRequiresFullLocalBinding_data();
+    void locationEnrollmentCompletionRequiresFullLocalBinding();
     void persistedCachesTrackOtherInstances_data();
     void persistedCachesTrackOtherInstances();
     void cachedCredentialTracksOtherInstanceRemoval();
@@ -1337,6 +1703,22 @@ private slots:
     void migrationSyncFailuresResumeAfterRestart_data();
     void migrationSyncFailuresResumeAfterRestart();
     void credentialClaimFailureDoesNotBlockGlobalMigration();
+    void interruptedFreshEnrollmentRecovers_data();
+    void interruptedFreshEnrollmentRecovers();
+    void pendingEnrollmentIntentIsPathBound_data();
+    void pendingEnrollmentIntentIsPathBound();
+    void locationEnrollmentIsSerializedAcrossProcesses_data();
+    void locationEnrollmentIsSerializedAcrossProcesses();
+    void freshEnrollmentIsSerializedAcrossProcesses_data();
+    void freshEnrollmentIsSerializedAcrossProcesses();
+    void freshEnrollmentCrashRecoveryAcrossProcesses();
+    void credentialEnrollmentAuthorityMustBeExternal();
+    void credentialEnrollmentAuthorityAliasesFailClosed_data();
+    void credentialEnrollmentAuthorityAliasesFailClosed();
+    void completedLocationCannotBeReenrolledWithoutLocalMetadata_data();
+    void completedLocationCannotBeReenrolledWithoutLocalMetadata();
+    void legacyLocationClaimsAreBackfilled_data();
+    void legacyLocationClaimsAreBackfilled();
     void newFormatRootlessCredentialIsRetained();
     void newFormatRootlessCredentialRemainsAfterStoreRecovery();
     void authorizedLegacyPlaintextRequiresAuthoritativeVaultMiss_data();
@@ -2796,6 +3178,565 @@ locationClaimsRejectCopiesAndUnconfirmedMoves()
             &registry, claimKey, identity,
             QString(), original),
         CredentialSettings::LocationClaimStatus::Success);
+}
+
+void TestCredentialSettings::
+pendingLocationEnrollmentRejectsCompetingParent()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString directory =
+        temporary.filePath(QStringLiteral("athlete"));
+    QVERIFY(QDir().mkpath(directory));
+    QSettings authority(
+        temporary.filePath(
+            QStringLiteral("authority.ini")),
+        QSettings::IniFormat);
+    const QString firstParent =
+        QStringLiteral(
+            "11111111-1111-4111-8111-111111111111");
+    const QString secondParent =
+        QStringLiteral(
+            "22222222-2222-4222-8222-222222222222");
+
+    const CredentialSettings::LocationEnrollmentResult
+        first =
+            CredentialSettings::
+                ensureLocationEnrollment(
+                    &authority,
+                    QByteArrayLiteral("scope"),
+                    QString(), firstParent,
+                    directory, true);
+    QVERIFY(first.succeeded());
+    QVERIFY(first.pending);
+    authority.sync();
+    const QByteArray authorityBefore =
+        fileContents(authority.fileName());
+    const QHash<QString, QVariant> valuesBefore =
+        settingsValuesWithPrefix(
+            &authority,
+            QStringLiteral("credential_store/"));
+
+    const CredentialSettings::LocationEnrollmentResult
+        competing =
+            CredentialSettings::
+                ensureLocationEnrollment(
+                    &authority,
+                    QByteArrayLiteral("scope"),
+                    QString(), secondParent,
+                    directory, true);
+    QCOMPARE(
+        competing.status,
+        CredentialSettings::
+            LocationClaimStatus::Conflict);
+    QVERIFY(competing.identityId.isEmpty());
+    QVERIFY(!competing.pending);
+    authority.sync();
+    QCOMPARE(
+        settingsValuesWithPrefix(
+            &authority,
+            QStringLiteral("credential_store/")),
+        valuesBefore);
+    QCOMPARE(
+        fileContents(authority.fileName()),
+        authorityBefore);
+}
+
+void TestCredentialSettings::
+canonicalLocationClaimRejectsCompetingParent()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString directory =
+        temporary.filePath(QStringLiteral("athlete"));
+    QVERIFY(QDir().mkpath(directory));
+    const QString canonicalDirectory =
+        QFileInfo(directory).canonicalFilePath();
+    QVERIFY(!canonicalDirectory.isEmpty());
+    QSettings authority(
+        temporary.filePath(
+            QStringLiteral("authority.ini")),
+        QSettings::IniFormat);
+    const QByteArray kind = QByteArrayLiteral("scope");
+    const QString firstParent =
+        QStringLiteral(
+            "11111111-1111-4111-8111-111111111111");
+    const QString secondParent =
+        QStringLiteral(
+            "22222222-2222-4222-8222-222222222222");
+    const QString identity =
+        QStringLiteral(
+            "33333333-3333-4333-8333-333333333333");
+    authority.setValue(
+        testLocationClaimKey(kind, identity),
+        testLocationClaimPayload(
+            identity, firstParent, canonicalDirectory));
+    authority.sync();
+    QCOMPARE(authority.status(), QSettings::NoError);
+    const QByteArray authorityBefore =
+        fileContents(authority.fileName());
+    const QHash<QString, QVariant> valuesBefore =
+        settingsValuesWithPrefix(
+            &authority,
+            QStringLiteral("credential_store/"));
+
+    const CredentialSettings::LocationEnrollmentResult
+        competing =
+            CredentialSettings::
+                ensureLocationEnrollment(
+                    &authority, kind, QString(),
+                    secondParent, directory, true);
+    QCOMPARE(
+        competing.status,
+        CredentialSettings::
+            LocationClaimStatus::Conflict);
+    QVERIFY(competing.identityId.isEmpty());
+    QVERIFY(!competing.pending);
+    authority.sync();
+    QCOMPARE(
+        settingsValuesWithPrefix(
+            &authority,
+            QStringLiteral("credential_store/")),
+        valuesBefore);
+    QCOMPARE(
+        fileContents(authority.fileName()),
+        authorityBefore);
+}
+
+void TestCredentialSettings::
+misplacedLocationClaimCannotAuthorizeBackfill()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString directory =
+        temporary.filePath(QStringLiteral("athlete"));
+    QVERIFY(QDir().mkpath(directory));
+    const QString canonicalDirectory =
+        QFileInfo(directory).canonicalFilePath();
+    QVERIFY(!canonicalDirectory.isEmpty());
+    QSettings authority(
+        temporary.filePath(
+            QStringLiteral("authority.ini")),
+        QSettings::IniFormat);
+    const QString parent =
+        QStringLiteral(
+            "33333333-3333-4333-8333-333333333333");
+    const QString identity =
+        QStringLiteral(
+            "44444444-4444-4444-8444-444444444444");
+    const QString wrongClaimKey =
+        QStringLiteral(
+            "credential_store/location_claims/")
+        + QString(64, QLatin1Char('0'));
+    QVERIFY(
+        wrongClaimKey
+        != testLocationClaimKey(
+            QByteArrayLiteral("scope"), identity));
+    authority.setValue(
+        wrongClaimKey,
+        testLocationClaimPayload(
+            identity, parent, canonicalDirectory));
+    authority.sync();
+    QCOMPARE(
+        authority.status(), QSettings::NoError);
+    const QByteArray authorityBefore =
+        fileContents(authority.fileName());
+    const QHash<QString, QVariant> valuesBefore =
+        settingsValuesWithPrefix(
+            &authority,
+            QStringLiteral("credential_store/"));
+
+    const CredentialSettings::LocationEnrollmentResult
+        enrollment =
+            CredentialSettings::
+                ensureLocationEnrollment(
+                    &authority,
+                    QByteArrayLiteral("scope"),
+                    identity, parent,
+                    directory, false);
+    QCOMPARE(
+        enrollment.status,
+        CredentialSettings::
+            LocationClaimStatus::Conflict);
+    authority.sync();
+    QCOMPARE(
+        settingsValuesWithPrefix(
+            &authority,
+            QStringLiteral("credential_store/")),
+        valuesBefore);
+    QCOMPARE(
+        fileContents(authority.fileName()),
+        authorityBefore);
+    QVERIFY(authority.allKeys()
+                .filter(QStringLiteral(
+                    "credential_store/"
+                    "location_bindings/"))
+                .isEmpty());
+}
+
+void TestCredentialSettings::
+malformedLocationAuthorityRecordsFailClosed_data()
+{
+    QTest::addColumn<QString>("mode");
+    QTest::newRow("malformed-enrollment")
+        << QStringLiteral("malformed-enrollment");
+    QTest::newRow("conflicting-enrollment-kind")
+        << QStringLiteral(
+               "conflicting-enrollment-kind");
+    QTest::newRow("conflicting-enrollment-identity")
+        << QStringLiteral(
+               "conflicting-enrollment-identity");
+    QTest::newRow("malformed-binding")
+        << QStringLiteral("malformed-binding");
+    QTest::newRow("conflicting-binding-parent")
+        << QStringLiteral(
+               "conflicting-binding-parent");
+    QTest::newRow("malformed-canonical-claim")
+        << QStringLiteral(
+               "malformed-canonical-claim");
+}
+
+void TestCredentialSettings::
+malformedLocationAuthorityRecordsFailClosed()
+{
+    QFETCH(QString, mode);
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString directory =
+        temporary.filePath(QStringLiteral("athlete"));
+    QVERIFY(QDir().mkpath(directory));
+    const QString canonicalDirectory =
+        QFileInfo(directory).canonicalFilePath();
+    QVERIFY(!canonicalDirectory.isEmpty());
+    QSettings authority(
+        temporary.filePath(
+            QStringLiteral("authority.ini")),
+        QSettings::IniFormat);
+    const QByteArray kind = QByteArrayLiteral("scope");
+    const QString parent =
+        QStringLiteral(
+            "99999999-9999-4999-8999-999999999999");
+    const QString otherParent =
+        QStringLiteral(
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    const QString identity =
+        QStringLiteral(
+            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+    const QString otherIdentity =
+        QStringLiteral(
+            "cccccccc-cccc-4ccc-8ccc-cccccccccccc");
+    QString key;
+    QString payload;
+    if (mode.contains(QStringLiteral("enrollment"))) {
+        key = testLocationEnrollmentKey(
+            kind, parent, canonicalDirectory);
+        if (mode
+                == QStringLiteral(
+                    "malformed-enrollment")) {
+            payload = QStringLiteral("{}");
+        } else if (mode
+                       == QStringLiteral(
+                           "conflicting-enrollment-kind")) {
+            payload = testLocationRecordPayload(
+                QByteArrayLiteral("profile"),
+                identity, parent,
+                canonicalDirectory);
+        } else {
+            payload = testLocationRecordPayload(
+                kind, otherIdentity, parent,
+                canonicalDirectory);
+        }
+    } else if (mode.contains(
+                   QStringLiteral("binding"))) {
+        key = testLocationBindingKey(
+            kind, canonicalDirectory);
+        payload =
+            mode == QStringLiteral(
+                        "malformed-binding")
+                ? QStringLiteral("{}")
+                : testLocationRecordPayload(
+                      kind, identity, otherParent,
+                      canonicalDirectory);
+    } else {
+        key = testLocationClaimKey(kind, identity);
+        payload = QStringLiteral("{}");
+    }
+    authority.setValue(key, payload);
+    authority.sync();
+    QCOMPARE(
+        authority.status(), QSettings::NoError);
+    const QByteArray authorityBefore =
+        fileContents(authority.fileName());
+    const QHash<QString, QVariant> valuesBefore =
+        settingsValuesWithPrefix(
+            &authority,
+            QStringLiteral("credential_store/"));
+
+    const CredentialSettings::LocationEnrollmentResult
+        enrollment =
+            CredentialSettings::
+                ensureLocationEnrollment(
+                    &authority, kind, identity,
+                    parent, directory, false);
+    QCOMPARE(
+        enrollment.status,
+        CredentialSettings::
+            LocationClaimStatus::Conflict);
+    authority.sync();
+    QCOMPARE(
+        settingsValuesWithPrefix(
+            &authority,
+            QStringLiteral("credential_store/")),
+        valuesBefore);
+    QCOMPARE(
+        fileContents(authority.fileName()),
+        authorityBefore);
+}
+
+void TestCredentialSettings::
+locationEnrollmentCompletionRequiresLocalMetadata()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString directory =
+        temporary.filePath(QStringLiteral("library"));
+    QVERIFY(QDir().mkpath(directory));
+    QSettings authority(
+        temporary.filePath(
+            QStringLiteral("authority.ini")),
+        QSettings::IniFormat);
+    QSettings local(
+        temporary.filePath(QStringLiteral("local.ini")),
+        QSettings::IniFormat);
+    const QString identityKey =
+        QStringLiteral("credential_store/root_id");
+
+    const CredentialSettings::LocationEnrollmentResult
+        enrollment =
+            CredentialSettings::
+                ensureLocationEnrollment(
+                    &authority,
+                    QByteArrayLiteral("root"),
+                    QString(), QString(),
+                    directory, true);
+    QVERIFY(enrollment.succeeded());
+    QVERIFY(enrollment.pending);
+    authority.sync();
+    const QByteArray authorityBefore =
+        fileContents(authority.fileName());
+    const QHash<QString, QVariant> valuesBefore =
+        settingsValuesWithPrefix(
+            &authority,
+            QStringLiteral("credential_store/"));
+    QVERIFY(!CredentialSettings::
+        completeLocationEnrollment(
+            &authority,
+            QByteArrayLiteral("root"),
+            enrollment.identityId,
+            QString(), directory,
+            &local, identityKey,
+            QString(), QString(),
+            QString(), QString(), QString()));
+    authority.sync();
+    QCOMPARE(
+        settingsValuesWithPrefix(
+            &authority,
+            QStringLiteral("credential_store/")),
+        valuesBefore);
+    QCOMPARE(
+        fileContents(authority.fileName()),
+        authorityBefore);
+    QVERIFY(!authority.allKeys()
+                 .filter(QStringLiteral(
+                     "credential_store/"
+                     "location_enrollments/"))
+                 .isEmpty());
+
+    local.setValue(
+        identityKey,
+        QStringLiteral(
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"));
+    local.sync();
+    QVERIFY(!CredentialSettings::
+        completeLocationEnrollment(
+            &authority,
+            QByteArrayLiteral("root"),
+            enrollment.identityId,
+            QString(), directory,
+            &local, identityKey,
+            QString(), QString(),
+            QString(), QString(), QString()));
+    authority.sync();
+    QCOMPARE(
+        settingsValuesWithPrefix(
+            &authority,
+            QStringLiteral("credential_store/")),
+        valuesBefore);
+    QCOMPARE(
+        fileContents(authority.fileName()),
+        authorityBefore);
+
+    local.setValue(identityKey, enrollment.identityId);
+    local.sync();
+    QVERIFY(CredentialSettings::
+        completeLocationEnrollment(
+            &authority,
+            QByteArrayLiteral("root"),
+            enrollment.identityId,
+            QString(), directory,
+            &local, identityKey,
+            QString(), QString(),
+            QString(), QString(), QString()));
+    authority.sync();
+    QVERIFY(authority.allKeys()
+                .filter(QStringLiteral(
+                    "credential_store/"
+                    "location_enrollments/"))
+                .isEmpty());
+    QCOMPARE(
+        authority.allKeys()
+            .filter(QStringLiteral(
+                "credential_store/location_bindings/"))
+            .size(),
+        1);
+}
+
+void TestCredentialSettings::
+locationEnrollmentCompletionRequiresFullLocalBinding_data()
+{
+    QTest::addColumn<QByteArray>("kind");
+    QTest::addColumn<QString>("tamperMode");
+    QTest::newRow("profile-scope-changed")
+        << QByteArrayLiteral("profile")
+        << QStringLiteral("scope-changed");
+    QTest::newRow("profile-binding-missing")
+        << QByteArrayLiteral("profile")
+        << QStringLiteral("binding-missing");
+    QTest::newRow("profile-scope-missing")
+        << QByteArrayLiteral("profile")
+        << QStringLiteral("scope-missing");
+    QTest::newRow("profile-scope-mismatch")
+        << QByteArrayLiteral("profile")
+        << QStringLiteral("scope-mismatch");
+    QTest::newRow("scope-root-changed")
+        << QByteArrayLiteral("scope")
+        << QStringLiteral("root-changed");
+    QTest::newRow("scope-binding-missing")
+        << QByteArrayLiteral("scope")
+        << QStringLiteral("binding-missing");
+    QTest::newRow("scope-scope-missing")
+        << QByteArrayLiteral("scope")
+        << QStringLiteral("scope-missing");
+    QTest::newRow("scope-scope-mismatch")
+        << QByteArrayLiteral("scope")
+        << QStringLiteral("scope-mismatch");
+}
+
+void TestCredentialSettings::
+locationEnrollmentCompletionRequiresFullLocalBinding()
+{
+    QFETCH(QByteArray, kind);
+    QFETCH(QString, tamperMode);
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString directory =
+        temporary.filePath(QStringLiteral("athlete"));
+    QVERIFY(QDir().mkpath(directory));
+    QSettings authority(
+        temporary.filePath(
+            QStringLiteral("authority.ini")),
+        QSettings::IniFormat);
+    QSettings local(
+        temporary.filePath(QStringLiteral("local.ini")),
+        QSettings::IniFormat);
+    const QString rootId =
+        QStringLiteral(
+            "55555555-5555-4555-8555-555555555555");
+    const QString fixedProfileId =
+        QStringLiteral(
+            "66666666-6666-4666-8666-666666666666");
+    const QString fixedScopeId =
+        QStringLiteral(
+            "77777777-7777-4777-8777-777777777777");
+    const QString changedId =
+        QStringLiteral(
+            "88888888-8888-4888-8888-888888888888");
+    const QString parentId =
+        kind == QByteArrayLiteral("profile")
+            ? rootId : fixedProfileId;
+    const CredentialSettings::LocationEnrollmentResult
+        enrollment =
+            CredentialSettings::
+                ensureLocationEnrollment(
+                    &authority, kind,
+                    QString(), parentId,
+                    directory, true);
+    QVERIFY(enrollment.succeeded());
+    QVERIFY(enrollment.pending);
+
+    const QString profileId =
+        kind == QByteArrayLiteral("profile")
+            ? enrollment.identityId
+            : fixedProfileId;
+    const QString scopeId =
+        kind == QByteArrayLiteral("scope")
+            ? enrollment.identityId
+            : fixedScopeId;
+    const QString localRootId =
+        tamperMode == QStringLiteral("root-changed")
+            ? changedId : rootId;
+    const QString localScopeId =
+        tamperMode == QStringLiteral("scope-changed")
+            || tamperMode
+                == QStringLiteral("scope-mismatch")
+            ? changedId : scopeId;
+    const QString bindingKey =
+        QStringLiteral(
+            "credential_store/binding_v2");
+    const QString scopeKey =
+        QStringLiteral("credential_store/id");
+    if (tamperMode
+            != QStringLiteral("binding-missing")) {
+        local.setValue(
+            bindingKey,
+            testScopeBindingPayload(
+                localRootId, profileId,
+                tamperMode
+                        == QStringLiteral(
+                            "scope-mismatch")
+                    ? scopeId : localScopeId));
+    }
+    if (tamperMode
+            != QStringLiteral("scope-missing")) {
+        local.setValue(scopeKey, localScopeId);
+    }
+    local.sync();
+    QCOMPARE(local.status(), QSettings::NoError);
+    authority.sync();
+    const QByteArray authorityBefore =
+        fileContents(authority.fileName());
+    const QHash<QString, QVariant> valuesBefore =
+        settingsValuesWithPrefix(
+            &authority,
+            QStringLiteral("credential_store/"));
+
+    QVERIFY(!CredentialSettings::
+        completeLocationEnrollment(
+            &authority, kind,
+            enrollment.identityId,
+            parentId, directory,
+            &local, QString(),
+            bindingKey, scopeKey,
+            rootId, profileId, scopeId));
+    authority.sync();
+    QCOMPARE(
+        settingsValuesWithPrefix(
+            &authority,
+            QStringLiteral("credential_store/")),
+        valuesBefore);
+    QCOMPARE(
+        fileContents(authority.fileName()),
+        authorityBefore);
 }
 
 void TestCredentialSettings::
@@ -13095,6 +14036,3166 @@ credentialClaimFailureDoesNotBlockGlobalMigration()
             plainKey(GC_TABBAR)).toString(),
         globalValue);
     fault = {};
+}
+
+void TestCredentialSettings::
+interruptedFreshEnrollmentRecovers_data()
+{
+    QTest::addColumn<QString>("stage");
+    QTest::addColumn<int>("rejectedClaimCount");
+    QTest::addColumn<bool>("athleteEnrollment");
+    QTest::addColumn<bool>("sameProcessRetry");
+
+    QTest::newRow("root-same-process")
+        << QStringLiteral("root") << 1 << false << true;
+    QTest::newRow("root-reconstructed")
+        << QStringLiteral("root") << 1 << false << false;
+    QTest::newRow("global-scope-same-process")
+        << QStringLiteral("global") << 2 << false << true;
+    QTest::newRow("global-scope-reconstructed")
+        << QStringLiteral("global") << 2 << false << false;
+    QTest::newRow("athlete-profile-same-process")
+        << QStringLiteral("athlete-profile")
+        << 3 << true << true;
+    QTest::newRow("athlete-profile-reconstructed")
+        << QStringLiteral("athlete-profile")
+        << 3 << true << false;
+    QTest::newRow("athlete-scope-same-process")
+        << QStringLiteral("athlete-scope")
+        << 4 << true << true;
+    QTest::newRow("athlete-scope-reconstructed")
+        << QStringLiteral("athlete-scope")
+        << 4 << true << false;
+}
+
+void TestCredentialSettings::
+interruptedFreshEnrollmentRecovers()
+{
+    QFETCH(QString, stage);
+    QFETCH(int, rejectedClaimCount);
+    QFETCH(bool, athleteEnrollment);
+    QFETCH(bool, sameProcessRetry);
+
+    struct FaultReset
+    {
+        ~FaultReset()
+        {
+            migrationFormatFaultState() = {};
+        }
+    } faultReset;
+    Q_UNUSED(faultReset)
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QSettings::Format legacyFormat =
+        legacyMigrationTestFormat();
+    const QSettings::Format targetFormat =
+        targetMigrationTestFormat();
+    QVERIFY(legacyFormat != QSettings::InvalidFormat);
+    QVERIFY(targetFormat != QSettings::InvalidFormat);
+    QSettings::setPath(
+        legacyFormat, QSettings::UserScope,
+        temporary.path());
+    QSettings::setPath(
+        targetFormat, QSettings::UserScope,
+        temporary.path());
+
+    const QString organization =
+        QStringLiteral("CredentialFreshEnrollment-")
+        + QUuid::createUuid().toString(
+            QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("library"));
+    const QString athletePath =
+        QDir(athleteRoot).filePath(athleteName);
+    const QString athleteConfig =
+        QDir(athletePath).filePath(
+            QStringLiteral("config"));
+    QVERIFY(QDir().mkpath(athleteConfig));
+
+    const QString globalPath =
+        QDir(athleteRoot).filePath(
+            QStringLiteral(
+                "configglobal-general.ini"));
+    const QString athletePrivatePath =
+        QDir(athleteConfig).filePath(
+            QStringLiteral("athlete-private.ini"));
+    const QString plaintextKey = athleteEnrollment
+        ? plainKey(GC_STRAVA_TOKEN)
+        : plainKey(GC_NOLIO_ACCESS_TOKEN);
+    const QString secret = athleteEnrollment
+        ? QStringLiteral("interrupted-athlete-secret")
+        : QStringLiteral("interrupted-global-secret");
+    const QString settingsPath = athleteEnrollment
+        ? athletePrivatePath : globalPath;
+    {
+        QSettings plaintext(settingsPath, targetFormat);
+        plaintext.setFallbacksEnabled(false);
+        plaintext.setValue(plaintextKey, secret);
+        plaintext.sync();
+        QCOMPARE(plaintext.status(), QSettings::NoError);
+    }
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    auto createSettings = [&] {
+        return std::make_unique<GSettings>(
+            organization, application,
+            legacyFormat, targetFormat);
+    };
+    std::unique_ptr<GSettings> settings =
+        createSettings();
+    if (athleteEnrollment)
+        settings->initializeQSettingsGlobal(athleteRoot);
+
+    MigrationFormatFaultState &fault =
+        migrationFormatFaultState();
+    fault = {};
+    fault.failurePoint =
+        QStringLiteral(
+            "credential-location-claim-count-%1")
+            .arg(rejectedClaimCount);
+    fault.enabled = true;
+    if (athleteEnrollment) {
+        settings->initializeQSettingsAthlete(
+            athleteRoot, athleteName);
+    } else {
+        settings->initializeQSettingsGlobal(athleteRoot);
+    }
+    fault.enabled = false;
+    QVERIFY(fault.rejectedWrites > 0);
+    QVERIFY(factoryState()->values.isEmpty());
+
+    {
+        QSettings retained(settingsPath, targetFormat);
+        retained.setFallbacksEnabled(false);
+        retained.sync();
+        QCOMPARE(retained.status(), QSettings::NoError);
+        QCOMPARE(retained.value(plaintextKey).toString(),
+                 secret);
+        if (stage == QStringLiteral("root")) {
+            QVERIFY(!retained.contains(
+                QStringLiteral(
+                    "credential_store/root_id")));
+            QVERIFY(!retained.contains(
+                QStringLiteral(
+                    "credential_store/binding_v2")));
+        } else if (stage == QStringLiteral("global")) {
+            QVERIFY(retained.contains(
+                QStringLiteral(
+                    "credential_store/root_id")));
+            QVERIFY(!retained.contains(
+                QStringLiteral(
+                    "credential_store/binding_v2")));
+            QVERIFY(!retained.contains(
+                QStringLiteral(
+                    "credential_store/id")));
+        } else {
+            QVERIFY(!retained.contains(
+                QStringLiteral(
+                    "credential_store/binding_v2")));
+            QVERIFY(!retained.contains(
+                QStringLiteral(
+                    "credential_store/id")));
+        }
+    }
+    {
+        QSettings system(
+            targetFormat, QSettings::UserScope,
+            organization, application);
+        system.setFallbacksEnabled(false);
+        system.sync();
+        QCOMPARE(system.status(), QSettings::NoError);
+        const QString claimPrefix =
+            QStringLiteral(
+                "credential_store/location_claims/");
+        const QString enrollmentPrefix =
+            QStringLiteral(
+                "credential_store/location_enrollments/");
+        QCOMPARE(
+            system.allKeys().filter(claimPrefix).size(),
+            rejectedClaimCount - 1);
+        QVERIFY(!system.allKeys()
+                     .filter(enrollmentPrefix)
+                     .isEmpty());
+    }
+
+    if (!sameProcessRetry) {
+        settings.reset();
+        settings = createSettings();
+        if (athleteEnrollment) {
+            settings->initializeQSettingsGlobal(
+                athleteRoot);
+        }
+    }
+    if (athleteEnrollment) {
+        settings->initializeQSettingsAthlete(
+            athleteRoot, athleteName);
+    } else {
+        settings->initializeQSettingsGlobal(athleteRoot);
+    }
+
+    const QVariant recovered = athleteEnrollment
+        ? settings->cvalue(
+              athleteName, GC_STRAVA_TOKEN,
+              QStringLiteral("missing"))
+        : settings->value(
+              nullptr, GC_NOLIO_ACCESS_TOKEN,
+              QStringLiteral("missing"));
+    QCOMPARE(recovered.toString(), secret);
+    QSettings recoveredLocal(
+        settingsPath, targetFormat);
+    recoveredLocal.setFallbacksEnabled(false);
+    recoveredLocal.sync();
+    const QString recoveredScopeId =
+        recoveredLocal.value(
+            QStringLiteral(
+                "credential_store/id")).toString();
+    QVERIFY(!QUuid(recoveredScopeId).isNull());
+    const QString expectedVaultKey =
+        CredentialSettings::vaultKey(
+            recoveredScopeId,
+            athleteEnrollment
+                ? QStringLiteral(GC_STRAVA_TOKEN)
+                : QStringLiteral(
+                      GC_NOLIO_ACCESS_TOKEN));
+    QCOMPARE(factoryState()->values.size(), 1);
+    QCOMPARE(
+        factoryState()->values.value(
+            expectedVaultKey),
+        secret);
+    {
+        QSettings migrated(settingsPath, targetFormat);
+        migrated.setFallbacksEnabled(false);
+        migrated.sync();
+        QCOMPARE(migrated.status(), QSettings::NoError);
+        QVERIFY(!migrated.contains(plaintextKey));
+    }
+    {
+        QSettings system(
+            targetFormat, QSettings::UserScope,
+            organization, application);
+        system.setFallbacksEnabled(false);
+        system.sync();
+        QCOMPARE(system.status(), QSettings::NoError);
+        QVERIFY(system.allKeys()
+                    .filter(QStringLiteral(
+                        "credential_store/"
+                        "location_enrollments/"))
+                    .isEmpty());
+        const int expectedClaims =
+            athleteEnrollment ? 4 : 2;
+        QCOMPARE(
+            system.allKeys()
+                .filter(QStringLiteral(
+                    "credential_store/location_claims/"))
+                .size(),
+            expectedClaims);
+    }
+}
+
+void TestCredentialSettings::
+pendingEnrollmentIntentIsPathBound_data()
+{
+    QTest::addColumn<QString>("stage");
+    QTest::addColumn<int>("rejectedClaimCount");
+    QTest::addColumn<bool>("athleteEnrollment");
+
+    QTest::newRow("root")
+        << QStringLiteral("root") << 1 << false;
+    QTest::newRow("global")
+        << QStringLiteral("global") << 2 << false;
+    QTest::newRow("athlete-profile")
+        << QStringLiteral("athlete-profile")
+        << 3 << true;
+    QTest::newRow("athlete-scope")
+        << QStringLiteral("athlete-scope")
+        << 4 << true;
+}
+
+void TestCredentialSettings::
+pendingEnrollmentIntentIsPathBound()
+{
+    QFETCH(QString, stage);
+    QFETCH(int, rejectedClaimCount);
+    QFETCH(bool, athleteEnrollment);
+    struct FaultReset
+    {
+        ~FaultReset()
+        {
+            migrationFormatFaultState() = {};
+        }
+    } faultReset;
+    Q_UNUSED(faultReset)
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QSettings::Format legacyFormat =
+        legacyMigrationTestFormat();
+    const QSettings::Format targetFormat =
+        targetMigrationTestFormat();
+    QVERIFY(legacyFormat != QSettings::InvalidFormat);
+    QVERIFY(targetFormat != QSettings::InvalidFormat);
+    const QString legacyPath =
+        temporary.filePath(QStringLiteral("legacy"));
+    const QString authorityPath =
+        temporary.filePath(QStringLiteral("authority"));
+    QVERIFY(QDir().mkpath(legacyPath));
+    QVERIFY(QDir().mkpath(authorityPath));
+    QSettings::setPath(
+        legacyFormat, QSettings::UserScope,
+        legacyPath);
+    QSettings::setPath(
+        targetFormat, QSettings::UserScope,
+        authorityPath);
+
+    const QString organization =
+        QStringLiteral("CredentialPendingCopy-")
+        + QUuid::createUuid().toString(
+            QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString athleteName =
+        QStringLiteral("Athlete");
+    const QString originalRoot =
+        temporary.filePath(QStringLiteral("original"));
+    const QString originalConfig =
+        QDir(originalRoot).filePath(
+            athleteName + QStringLiteral("/config"));
+    QVERIFY(QDir().mkpath(originalConfig));
+    const QString globalPath =
+        QDir(originalRoot).filePath(
+            QStringLiteral(
+                "configglobal-general.ini"));
+    const QString athletePath =
+        QDir(originalConfig).filePath(
+            QStringLiteral(
+                "athlete-private.ini"));
+    const QString settingsPath = athleteEnrollment
+        ? athletePath : globalPath;
+    const QString plaintextKey = athleteEnrollment
+        ? plainKey(GC_STRAVA_TOKEN)
+        : plainKey(GC_NOLIO_ACCESS_TOKEN);
+    const QString secret = athleteEnrollment
+        ? QStringLiteral("pending-athlete-copy-secret")
+        : QStringLiteral("pending-global-copy-secret");
+    {
+        QSettings plaintext(settingsPath, targetFormat);
+        plaintext.setFallbacksEnabled(false);
+        plaintext.setValue(plaintextKey, secret);
+        plaintext.sync();
+        QCOMPARE(
+            plaintext.status(),
+            QSettings::NoError);
+    }
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    {
+        GSettings interrupted(
+            organization, application,
+            legacyFormat, targetFormat);
+        if (athleteEnrollment) {
+            interrupted.initializeQSettingsGlobal(
+                originalRoot);
+        }
+        MigrationFormatFaultState &fault =
+            migrationFormatFaultState();
+        fault = {};
+        fault.failurePoint =
+            QStringLiteral(
+                "credential-location-claim-count-%1")
+                .arg(rejectedClaimCount);
+        fault.enabled = true;
+        if (athleteEnrollment) {
+            interrupted.initializeQSettingsAthlete(
+                originalRoot, athleteName);
+        } else {
+            interrupted.initializeQSettingsGlobal(
+                originalRoot);
+        }
+        fault.enabled = false;
+        QVERIFY(fault.rejectedWrites > 0);
+    }
+    QVERIFY(factoryState()->values.isEmpty());
+
+    const QString enrollmentPrefix =
+        QStringLiteral(
+            "credential_store/location_enrollments/");
+    QHash<QString, QVariant> pendingBefore;
+    QSet<QString> pendingIdentityIds;
+    {
+        QSettings authority(
+            targetFormat, QSettings::UserScope,
+            organization, application);
+        authority.setFallbacksEnabled(false);
+        authority.sync();
+        pendingBefore = settingsValuesWithPrefix(
+            &authority, enrollmentPrefix);
+        QVERIFY(!pendingBefore.isEmpty());
+        for (const QVariant &stored :
+             pendingBefore) {
+            QJsonParseError error;
+            const QJsonDocument document =
+                QJsonDocument::fromJson(
+                    stored.toString().toUtf8(), &error);
+            QVERIFY(error.error
+                        == QJsonParseError::NoError
+                    && document.isObject());
+            const QString identity =
+                document.object().value(
+                    QStringLiteral(
+                        "identity_id")).toString();
+            QVERIFY(!QUuid(identity).isNull());
+            pendingIdentityIds.insert(identity);
+        }
+    }
+
+    QString copiedEvidence;
+    if (athleteEnrollment) {
+        const QString copiedName =
+            QStringLiteral("Clone");
+        const QString copiedConfig =
+            QDir(originalRoot).filePath(
+                copiedName + QStringLiteral("/config"));
+        const QString copiedPrivate =
+            QDir(copiedConfig).filePath(
+                QStringLiteral(
+                    "athlete-private.ini"));
+        QVERIFY(QDir().mkpath(copiedConfig));
+        QVERIFY(QFile::copy(
+            athletePath, copiedPrivate));
+        GSettings copied(
+            organization, application,
+            legacyFormat, targetFormat);
+        copied.initializeQSettingsGlobal(originalRoot);
+        copied.initializeQSettingsAthlete(
+            originalRoot, copiedName);
+        copied.cvalue(
+            copiedName, GC_STRAVA_TOKEN,
+            QStringLiteral("missing"));
+        QSettings copiedLocal(
+            copiedPrivate, targetFormat);
+        copiedLocal.setFallbacksEnabled(false);
+        copiedLocal.sync();
+        copiedEvidence += copiedLocal.value(
+            QStringLiteral(
+                "credential_store/binding_v2"))
+                                  .toString();
+        copiedEvidence += copiedLocal.value(
+            QStringLiteral(
+                "credential_store/id")).toString();
+    } else {
+        const QString copiedRoot =
+            temporary.filePath(QStringLiteral("copy"));
+        QVERIFY(QDir().mkpath(copiedRoot));
+        const QString copiedGlobal =
+            QDir(copiedRoot).filePath(
+                QStringLiteral(
+                    "configglobal-general.ini"));
+        QVERIFY(QFile::copy(
+            globalPath, copiedGlobal));
+        GSettings copied(
+            organization, application,
+            legacyFormat, targetFormat);
+        copied.initializeQSettingsGlobal(copiedRoot);
+        copied.value(
+            nullptr, GC_NOLIO_ACCESS_TOKEN,
+            QStringLiteral("missing"));
+        QSettings copiedLocal(
+            copiedGlobal, targetFormat);
+        copiedLocal.setFallbacksEnabled(false);
+        copiedLocal.sync();
+        copiedEvidence += copiedLocal.value(
+            QStringLiteral(
+                "credential_store/root_id"))
+                                  .toString();
+        copiedEvidence += copiedLocal.value(
+            QStringLiteral(
+                "credential_store/binding_v2"))
+                                  .toString();
+        copiedEvidence += copiedLocal.value(
+            QStringLiteral(
+                "credential_store/id")).toString();
+    }
+    for (const QString &pendingIdentity :
+         pendingIdentityIds) {
+        QVERIFY(!copiedEvidence.contains(
+            pendingIdentity));
+    }
+    {
+        QSettings authority(
+            targetFormat, QSettings::UserScope,
+            organization, application);
+        authority.setFallbacksEnabled(false);
+        authority.sync();
+        QCOMPARE(
+            settingsValuesWithPrefix(
+                &authority, enrollmentPrefix),
+            pendingBefore);
+    }
+
+    {
+        GSettings recovered(
+            organization, application,
+            legacyFormat, targetFormat);
+        recovered.initializeQSettingsGlobal(
+            originalRoot);
+        if (athleteEnrollment) {
+            recovered.initializeQSettingsAthlete(
+                originalRoot, athleteName);
+        }
+        const QVariant observed = athleteEnrollment
+            ? recovered.cvalue(
+                  athleteName, GC_STRAVA_TOKEN,
+                  QStringLiteral("missing"))
+            : recovered.value(
+                  nullptr, GC_NOLIO_ACCESS_TOKEN,
+                  QStringLiteral("missing"));
+        QCOMPARE(observed.toString(), secret);
+    }
+    {
+        QSettings authority(
+            targetFormat, QSettings::UserScope,
+            organization, application);
+        authority.setFallbacksEnabled(false);
+        authority.sync();
+        QVERIFY(settingsValuesWithPrefix(
+                    &authority, enrollmentPrefix)
+                    .isEmpty());
+    }
+}
+
+void TestCredentialSettings::
+locationEnrollmentIsSerializedAcrossProcesses_data()
+{
+    QTest::addColumn<QString>("kind");
+    QTest::addColumn<QString>("parentId");
+    QTest::addColumn<bool>("athleteDirectory");
+
+    const QString rootId =
+        QStringLiteral(
+            "11111111-1111-4111-8111-111111111111");
+    const QString profileId =
+        QStringLiteral(
+            "22222222-2222-4222-8222-222222222222");
+    QTest::newRow("root")
+        << QStringLiteral("root") << QString() << false;
+    QTest::newRow("global-scope")
+        << QStringLiteral("scope") << rootId << false;
+    QTest::newRow("athlete-profile")
+        << QStringLiteral("profile") << rootId << true;
+    QTest::newRow("athlete-scope")
+        << QStringLiteral("scope") << profileId << true;
+}
+
+void TestCredentialSettings::
+locationEnrollmentIsSerializedAcrossProcesses()
+{
+    const QString childAction = qEnvironmentVariable(
+        "GC_LOCATION_ENROLLMENT_SERIAL_ACTION");
+    if (!childAction.isEmpty()) {
+        QCOMPARE(childAction, QStringLiteral("child"));
+        const QString authorityPath = qEnvironmentVariable(
+            "GC_LOCATION_ENROLLMENT_SERIAL_AUTHORITY");
+        const QString directoryPath = qEnvironmentVariable(
+            "GC_LOCATION_ENROLLMENT_SERIAL_DIRECTORY");
+        const QString kind = qEnvironmentVariable(
+            "GC_LOCATION_ENROLLMENT_SERIAL_KIND");
+        const QString parentId = qEnvironmentVariable(
+            "GC_LOCATION_ENROLLMENT_SERIAL_PARENT");
+        const QString resultPath = qEnvironmentVariable(
+            "GC_LOCATION_ENROLLMENT_SERIAL_RESULT");
+        QVERIFY(!authorityPath.isEmpty());
+        QVERIFY(!directoryPath.isEmpty());
+        QVERIFY(!kind.isEmpty());
+        QVERIFY(!resultPath.isEmpty());
+
+        QSettings authority(
+            authorityPath, QSettings::IniFormat);
+        authority.setFallbacksEnabled(false);
+        const CredentialSettings::LocationEnrollmentResult
+            enrollment =
+                CredentialSettings::
+                    ensureLocationEnrollment(
+                        &authority, kind.toLatin1(),
+                        QString(), parentId,
+                        directoryPath, true);
+        QJsonObject result;
+        result.insert(
+            QStringLiteral("status"),
+            static_cast<int>(enrollment.status));
+        result.insert(
+            QStringLiteral("identity_id"),
+            enrollment.identityId);
+        result.insert(
+            QStringLiteral("pending"),
+            enrollment.pending);
+        QVERIFY(writePrivateStateFile(
+            resultPath,
+            QJsonDocument(result).toJson(
+                QJsonDocument::Compact)));
+        return;
+    }
+
+    QFETCH(QString, kind);
+    QFETCH(QString, parentId);
+    QFETCH(bool, athleteDirectory);
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString library =
+        temporary.filePath(QStringLiteral("library"));
+    const QString athlete =
+        QDir(library).filePath(QStringLiteral("Athlete"));
+    QVERIFY(QDir().mkpath(athlete));
+    const QString directory =
+        athleteDirectory ? athlete : library;
+    const QString canonicalDirectory =
+        QFileInfo(directory).canonicalFilePath();
+    QVERIFY(!canonicalDirectory.isEmpty());
+    const QString authorityPath =
+        temporary.filePath(
+            QStringLiteral("authority.ini"));
+    const QString stateRoot =
+        temporary.filePath(
+            QStringLiteral("credential-state"));
+    const QString lockEntered =
+        temporary.filePath(
+            QStringLiteral("lock-entered"));
+    const QString lockRelease =
+        temporary.filePath(
+            QStringLiteral("lock-release"));
+    const QString lockContended =
+        temporary.filePath(
+            QStringLiteral("lock-contended"));
+    const QString firstResult =
+        temporary.filePath(
+            QStringLiteral("first-result"));
+    const QString secondResult =
+        temporary.filePath(
+            QStringLiteral("second-result"));
+
+    QProcessEnvironment environment =
+        QProcessEnvironment::systemEnvironment();
+    environment.insert(
+        QStringLiteral(
+            "GC_CREDENTIAL_TEST_STATE_ROOT"),
+        stateRoot);
+    environment.insert(
+        QStringLiteral(
+            "GC_LOCATION_ENROLLMENT_SERIAL_ACTION"),
+        QStringLiteral("child"));
+    environment.insert(
+        QStringLiteral(
+            "GC_LOCATION_ENROLLMENT_SERIAL_AUTHORITY"),
+        authorityPath);
+    environment.insert(
+        QStringLiteral(
+            "GC_LOCATION_ENROLLMENT_SERIAL_DIRECTORY"),
+        directory);
+    environment.insert(
+        QStringLiteral(
+            "GC_LOCATION_ENROLLMENT_SERIAL_KIND"),
+        kind);
+    environment.insert(
+        QStringLiteral(
+            "GC_LOCATION_ENROLLMENT_SERIAL_PARENT"),
+        parentId);
+    environment.remove(
+        QStringLiteral(
+            "GC_CREDENTIAL_TEST_"
+            "ENROLLMENT_LOCK_ENTERED"));
+    environment.remove(
+        QStringLiteral(
+            "GC_CREDENTIAL_TEST_"
+            "ENROLLMENT_LOCK_RELEASE"));
+    environment.remove(
+        QStringLiteral(
+            "GC_CREDENTIAL_TEST_"
+            "ENROLLMENT_LOCK_CONTENDED"));
+    environment.remove(
+        QStringLiteral(
+            "GC_LOCATION_ENROLLMENT_SERIAL_RESULT"));
+
+    QProcess first;
+    QProcess second;
+    const auto configureChild =
+        [&](QProcess *child,
+            const QProcessEnvironment &childEnvironment) {
+        child->setProgram(
+            QCoreApplication::applicationFilePath());
+        child->setArguments({
+            QStringLiteral(
+                "locationEnrollmentIsSerializedAcrossProcesses:")
+                + QString::fromUtf8(
+                    QTest::currentDataTag())
+        });
+        child->setProcessEnvironment(childEnvironment);
+        child->setProcessChannelMode(
+            QProcess::MergedChannels);
+    };
+    QProcessEnvironment firstEnvironment = environment;
+    firstEnvironment.insert(
+        QStringLiteral(
+            "GC_CREDENTIAL_TEST_"
+            "ENROLLMENT_LOCK_ENTERED"),
+        lockEntered);
+    firstEnvironment.insert(
+        QStringLiteral(
+            "GC_CREDENTIAL_TEST_"
+            "ENROLLMENT_LOCK_RELEASE"),
+        lockRelease);
+    firstEnvironment.insert(
+        QStringLiteral(
+            "GC_LOCATION_ENROLLMENT_SERIAL_RESULT"),
+        firstResult);
+    QProcessEnvironment secondEnvironment = environment;
+    secondEnvironment.insert(
+        QStringLiteral(
+            "GC_CREDENTIAL_TEST_"
+            "ENROLLMENT_LOCK_CONTENDED"),
+        lockContended);
+    secondEnvironment.insert(
+        QStringLiteral(
+            "GC_LOCATION_ENROLLMENT_SERIAL_RESULT"),
+        secondResult);
+    configureChild(&first, firstEnvironment);
+    configureChild(&second, secondEnvironment);
+
+    first.start();
+    QVERIFY2(
+        first.waitForStarted(5000),
+        qPrintable(first.errorString()));
+    QVERIFY2(
+        waitForFile(lockEntered, 10000, &first),
+        first.readAll().constData());
+    second.start();
+    QVERIFY2(
+        second.waitForStarted(5000),
+        qPrintable(second.errorString()));
+    QVERIFY2(
+        waitForFile(lockContended, 10000, &second),
+        second.readAll().constData());
+    QCOMPARE(first.state(), QProcess::Running);
+    QCOMPARE(second.state(), QProcess::Running);
+    QVERIFY(writeSignalFile(lockRelease));
+
+    bool childrenSucceeded = true;
+    QByteArray childDiagnostics;
+    for (QProcess *child : {&first, &second}) {
+        if (!child->waitForFinished(30000)) {
+            child->kill();
+            child->waitForFinished();
+            childrenSucceeded = false;
+        }
+        childDiagnostics += child->readAll();
+        if (child->exitStatus()
+                != QProcess::NormalExit
+            || child->exitCode() != 0) {
+            childrenSucceeded = false;
+        }
+    }
+    if (!childrenSucceeded)
+        QFAIL(childDiagnostics.constData());
+
+    const QByteArray firstEnrollment =
+        fileContents(firstResult);
+    const QByteArray secondEnrollment =
+        fileContents(secondResult);
+    QVERIFY(!firstEnrollment.isEmpty());
+    QCOMPARE(secondEnrollment, firstEnrollment);
+    QJsonParseError resultError;
+    const QJsonDocument resultDocument =
+        QJsonDocument::fromJson(
+            firstEnrollment, &resultError);
+    QVERIFY(
+        resultError.error == QJsonParseError::NoError
+        && resultDocument.isObject());
+    const QJsonObject result = resultDocument.object();
+    QCOMPARE(
+        result.value(QStringLiteral("status")).toInt(),
+        static_cast<int>(
+            CredentialSettings::
+                LocationClaimStatus::Success));
+    const QString identityId =
+        result.value(
+            QStringLiteral("identity_id")).toString();
+    QVERIFY(!QUuid(identityId).isNull());
+    QVERIFY(result.value(
+                QStringLiteral("pending")).toBool());
+
+    QSettings authority(
+        authorityPath, QSettings::IniFormat);
+    authority.setFallbacksEnabled(false);
+    authority.sync();
+    QCOMPARE(authority.status(), QSettings::NoError);
+    const QHash<QString, QVariant> enrollments =
+        settingsValuesWithPrefix(
+            &authority,
+            QStringLiteral(
+                "credential_store/location_enrollments/"));
+    const QHash<QString, QVariant> claims =
+        settingsValuesWithPrefix(
+            &authority,
+            QStringLiteral(
+                "credential_store/location_claims/"));
+    QCOMPARE(enrollments.size(), 1);
+    QCOMPARE(claims.size(), 1);
+    QVERIFY(settingsValuesWithPrefix(
+                &authority,
+                QStringLiteral(
+                    "credential_store/location_bindings/"))
+                .isEmpty());
+    const TestLocationRecord enrollment =
+        parseTestLocationRecord(
+            enrollments.cbegin().value());
+    QVERIFY(enrollment.valid);
+    QCOMPARE(enrollment.kind, kind);
+    QCOMPARE(enrollment.identityId, identityId);
+    QCOMPARE(enrollment.parentId, parentId);
+    QCOMPARE(
+        enrollment.directoryPath,
+        canonicalDirectory);
+    const TestLocationRecord claim =
+        parseTestLocationClaim(
+            claims.cbegin().value());
+    QVERIFY(claim.valid);
+    QCOMPARE(claim.identityId, identityId);
+    QCOMPARE(claim.parentId, parentId);
+    QCOMPARE(
+        claim.directoryPath,
+        canonicalDirectory);
+}
+
+void TestCredentialSettings::
+freshEnrollmentIsSerializedAcrossProcesses_data()
+{
+    QTest::addColumn<bool>("athleteEnrollment");
+    QTest::newRow("global") << false;
+    QTest::newRow("athlete") << true;
+}
+
+void TestCredentialSettings::
+freshEnrollmentIsSerializedAcrossProcesses()
+{
+    const QString childAction = qEnvironmentVariable(
+        "GC_ENROLLMENT_SERIAL_ACTION");
+    if (!childAction.isEmpty()) {
+        QCOMPARE(childAction, QStringLiteral("child"));
+        const QString legacyPath = qEnvironmentVariable(
+            "GC_ENROLLMENT_SERIAL_LEGACY_PATH");
+        const QString authorityPath = qEnvironmentVariable(
+            "GC_ENROLLMENT_SERIAL_AUTHORITY_PATH");
+        const QString athleteRoot = qEnvironmentVariable(
+            "GC_ENROLLMENT_SERIAL_ATHLETE_ROOT");
+        const QString organization = qEnvironmentVariable(
+            "GC_ENROLLMENT_SERIAL_ORGANIZATION");
+        const QString application = qEnvironmentVariable(
+            "GC_ENROLLMENT_SERIAL_APPLICATION");
+        const QString secret = qEnvironmentVariable(
+            "GC_ENROLLMENT_SERIAL_SECRET");
+        const QString resultPath = qEnvironmentVariable(
+            "GC_ENROLLMENT_SERIAL_RESULT");
+        const bool athleteEnrollment =
+            qEnvironmentVariableIntValue(
+                "GC_ENROLLMENT_SERIAL_ATHLETE") != 0;
+        QVERIFY(!legacyPath.isEmpty());
+        QVERIFY(!authorityPath.isEmpty());
+        QVERIFY(!athleteRoot.isEmpty());
+        QVERIFY(!organization.isEmpty());
+        QVERIFY(!application.isEmpty());
+        QVERIFY(!secret.isEmpty());
+        QVERIFY(!resultPath.isEmpty());
+
+        const QSettings::Format legacyFormat =
+            legacyMigrationTestFormat();
+        const QSettings::Format targetFormat =
+            targetMigrationTestFormat();
+        QVERIFY(legacyFormat != QSettings::InvalidFormat);
+        QVERIFY(targetFormat != QSettings::InvalidFormat);
+        QSettings::setPath(
+            legacyFormat, QSettings::UserScope,
+            legacyPath);
+        QSettings::setPath(
+            targetFormat, QSettings::UserScope,
+            authorityPath);
+
+        GSettings settings(
+            organization, application,
+            legacyFormat, targetFormat);
+        settings.initializeQSettingsGlobal(
+            athleteRoot);
+        if (athleteEnrollment) {
+            settings.initializeQSettingsAthlete(
+                athleteRoot,
+                QStringLiteral("Athlete"));
+        }
+        const QVariant observed = athleteEnrollment
+            ? settings.cvalue(
+                  QStringLiteral("Athlete"),
+                  GC_STRAVA_TOKEN,
+                  QStringLiteral("missing"))
+            : settings.value(
+                  nullptr,
+                  GC_NOLIO_ACCESS_TOKEN,
+                  QStringLiteral("missing"));
+        QCOMPARE(observed.toString(), secret);
+
+        const QString globalPath =
+            QDir(athleteRoot).filePath(
+                QStringLiteral(
+                    "configglobal-general.ini"));
+        const QString athletePath =
+            QDir(athleteRoot).filePath(
+                QStringLiteral(
+                    "Athlete/config/"
+                    "athlete-private.ini"));
+        QSettings global(
+            globalPath, targetFormat);
+        global.setFallbacksEnabled(false);
+        global.sync();
+        QJsonObject result;
+        result.insert(
+            QStringLiteral("root_id"),
+            global.value(
+                QStringLiteral(
+                    "credential_store/root_id"))
+                .toString());
+        result.insert(
+            QStringLiteral("global_binding"),
+            global.value(
+                QStringLiteral(
+                    "credential_store/binding_v2"))
+                .toString());
+        result.insert(
+            QStringLiteral("global_scope"),
+            global.value(
+                QStringLiteral(
+                    "credential_store/id"))
+                .toString());
+        if (athleteEnrollment) {
+            QSettings athlete(
+                athletePath, targetFormat);
+            athlete.setFallbacksEnabled(false);
+            athlete.sync();
+            result.insert(
+                QStringLiteral("athlete_binding"),
+                athlete.value(
+                    QStringLiteral(
+                        "credential_store/"
+                        "binding_v2"))
+                    .toString());
+            result.insert(
+                QStringLiteral("athlete_scope"),
+                athlete.value(
+                    QStringLiteral(
+                        "credential_store/id"))
+                    .toString());
+        }
+        QVERIFY(writePrivateStateFile(
+            resultPath,
+            QJsonDocument(result).toJson(
+                QJsonDocument::Compact)));
+        return;
+    }
+
+    QFETCH(bool, athleteEnrollment);
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QSettings::Format legacyFormat =
+        legacyMigrationTestFormat();
+    const QSettings::Format targetFormat =
+        targetMigrationTestFormat();
+    QVERIFY(legacyFormat != QSettings::InvalidFormat);
+    QVERIFY(targetFormat != QSettings::InvalidFormat);
+
+    const QString legacyPath =
+        temporary.filePath(QStringLiteral("legacy"));
+    const QString authorityPath =
+        temporary.filePath(QStringLiteral("authority"));
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("library"));
+    const QString athleteConfig =
+        QDir(athleteRoot).filePath(
+            QStringLiteral("Athlete/config"));
+    const QString stateRoot =
+        temporary.filePath(
+            QStringLiteral("credential-state"));
+    const QString vaultPath =
+        temporary.filePath(QStringLiteral("vault.ini"));
+    const QString lockEntered =
+        temporary.filePath(
+            QStringLiteral("lock-entered"));
+    const QString lockRelease =
+        temporary.filePath(
+            QStringLiteral("lock-release"));
+    const QString lockContended =
+        temporary.filePath(
+            QStringLiteral("lock-contended"));
+    const QString firstResult =
+        temporary.filePath(
+            QStringLiteral("first-result"));
+    const QString secondResult =
+        temporary.filePath(
+            QStringLiteral("second-result"));
+    QVERIFY(QDir().mkpath(legacyPath));
+    QVERIFY(QDir().mkpath(authorityPath));
+    QVERIFY(QDir().mkpath(athleteConfig));
+    QSettings::setPath(
+        legacyFormat, QSettings::UserScope,
+        legacyPath);
+    QSettings::setPath(
+        targetFormat, QSettings::UserScope,
+        authorityPath);
+
+    const QString organization =
+        QStringLiteral("CredentialConcurrentEnrollment-")
+        + QUuid::createUuid().toString(
+            QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString globalPath =
+        QDir(athleteRoot).filePath(
+            QStringLiteral(
+                "configglobal-general.ini"));
+    const QString athletePath =
+        QDir(athleteConfig).filePath(
+            QStringLiteral(
+                "athlete-private.ini"));
+    const QString settingsPath = athleteEnrollment
+        ? athletePath : globalPath;
+    const QString plaintextKey = athleteEnrollment
+        ? plainKey(GC_STRAVA_TOKEN)
+        : plainKey(GC_NOLIO_ACCESS_TOKEN);
+    const QString secret = athleteEnrollment
+        ? QStringLiteral(
+              "concurrent-athlete-secret")
+        : QStringLiteral(
+              "concurrent-global-secret");
+    {
+        QSettings plaintext(settingsPath, targetFormat);
+        plaintext.setFallbacksEnabled(false);
+        plaintext.setValue(plaintextKey, secret);
+        plaintext.sync();
+        QCOMPARE(
+            plaintext.status(),
+            QSettings::NoError);
+    }
+
+    QProcessEnvironment environment =
+        QProcessEnvironment::systemEnvironment();
+    environment.insert(
+        QStringLiteral(
+            "GC_CREDENTIAL_TEST_STATE_ROOT"),
+        stateRoot);
+    environment.insert(
+        QStringLiteral("GC_ENROLLMENT_TEST_VAULT"),
+        vaultPath);
+    environment.insert(
+        QStringLiteral(
+            "GC_ENROLLMENT_SERIAL_ACTION"),
+        QStringLiteral("child"));
+    environment.insert(
+        QStringLiteral(
+            "GC_ENROLLMENT_SERIAL_LEGACY_PATH"),
+        legacyPath);
+    environment.insert(
+        QStringLiteral(
+            "GC_ENROLLMENT_SERIAL_AUTHORITY_PATH"),
+        authorityPath);
+    environment.insert(
+        QStringLiteral(
+            "GC_ENROLLMENT_SERIAL_ATHLETE_ROOT"),
+        athleteRoot);
+    environment.insert(
+        QStringLiteral(
+            "GC_ENROLLMENT_SERIAL_ORGANIZATION"),
+        organization);
+    environment.insert(
+        QStringLiteral(
+            "GC_ENROLLMENT_SERIAL_APPLICATION"),
+        application);
+    environment.insert(
+        QStringLiteral(
+            "GC_ENROLLMENT_SERIAL_SECRET"),
+        secret);
+    environment.insert(
+        QStringLiteral(
+            "GC_ENROLLMENT_SERIAL_ATHLETE"),
+        athleteEnrollment
+            ? QStringLiteral("1")
+            : QStringLiteral("0"));
+    environment.remove(
+        QStringLiteral(
+            "GC_CREDENTIAL_TEST_"
+            "ENROLLMENT_LOCK_ENTERED"));
+    environment.remove(
+        QStringLiteral(
+            "GC_CREDENTIAL_TEST_"
+            "ENROLLMENT_LOCK_RELEASE"));
+    environment.remove(
+        QStringLiteral(
+            "GC_CREDENTIAL_TEST_"
+            "ENROLLMENT_LOCK_CONTENDED"));
+    environment.remove(
+        QStringLiteral(
+            "GC_ENROLLMENT_SERIAL_RESULT"));
+
+    QProcess first;
+    QProcess second;
+    const auto configureChild =
+        [&](QProcess *child,
+            const QProcessEnvironment &childEnvironment) {
+        child->setProgram(
+            QCoreApplication::applicationFilePath());
+        child->setArguments({
+            QStringLiteral(
+                "freshEnrollmentIsSerializedAcrossProcesses:")
+                + (athleteEnrollment
+                       ? QStringLiteral("athlete")
+                       : QStringLiteral("global"))
+        });
+        child->setProcessEnvironment(
+            childEnvironment);
+        child->setProcessChannelMode(
+            QProcess::MergedChannels);
+    };
+    QProcessEnvironment firstEnvironment = environment;
+    firstEnvironment.insert(
+        QStringLiteral(
+            "GC_CREDENTIAL_TEST_"
+            "ENROLLMENT_LOCK_ENTERED"),
+        lockEntered);
+    firstEnvironment.insert(
+        QStringLiteral(
+            "GC_CREDENTIAL_TEST_"
+            "ENROLLMENT_LOCK_RELEASE"),
+        lockRelease);
+    firstEnvironment.insert(
+        QStringLiteral(
+            "GC_ENROLLMENT_SERIAL_RESULT"),
+        firstResult);
+    QProcessEnvironment secondEnvironment = environment;
+    secondEnvironment.insert(
+        QStringLiteral(
+            "GC_CREDENTIAL_TEST_"
+            "ENROLLMENT_LOCK_CONTENDED"),
+        lockContended);
+    secondEnvironment.insert(
+        QStringLiteral(
+            "GC_ENROLLMENT_SERIAL_RESULT"),
+        secondResult);
+    configureChild(&first, firstEnvironment);
+    configureChild(&second, secondEnvironment);
+
+    first.start();
+    QVERIFY2(
+        first.waitForStarted(5000),
+        qPrintable(first.errorString()));
+    QVERIFY2(
+        waitForFile(lockEntered, 10000, &first),
+        first.readAll().constData());
+    second.start();
+    QVERIFY2(
+        second.waitForStarted(5000),
+        qPrintable(second.errorString()));
+    QVERIFY2(
+        waitForFile(lockContended, 10000, &second),
+        second.readAll().constData());
+    QCOMPARE(first.state(), QProcess::Running);
+    QCOMPARE(second.state(), QProcess::Running);
+    QVERIFY(writeSignalFile(lockRelease));
+
+    bool childrenSucceeded = true;
+    QByteArray childDiagnostics;
+    for (QProcess *child : {&first, &second}) {
+        if (!child->waitForFinished(60000)) {
+            child->kill();
+            child->waitForFinished();
+            childrenSucceeded = false;
+        }
+        const QByteArray output = child->readAll();
+        childDiagnostics += output;
+        if (child->exitStatus()
+                != QProcess::NormalExit
+            || child->exitCode() != 0) {
+            childrenSucceeded = false;
+        }
+    }
+    if (!childrenSucceeded) {
+        QSettings authority(
+            targetFormat, QSettings::UserScope,
+            organization, application);
+        authority.setFallbacksEnabled(false);
+        authority.sync();
+        childDiagnostics += "\nauthority:\n";
+        for (const QString &key : authority.allKeys()) {
+            childDiagnostics += key.toUtf8()
+                + '='
+                + authority.value(key).toString().toUtf8()
+                + '\n';
+        }
+        childDiagnostics += "global:\n"
+            + fileContents(globalPath)
+            + "\nathlete:\n"
+            + fileContents(athletePath);
+        QFAIL(childDiagnostics.constData());
+    }
+    const QByteArray firstEnrollment =
+        fileContents(firstResult);
+    const QByteArray secondEnrollment =
+        fileContents(secondResult);
+    QVERIFY(!firstEnrollment.isEmpty());
+    QCOMPARE(secondEnrollment, firstEnrollment);
+    QJsonParseError enrollmentError;
+    const QJsonDocument enrollmentDocument =
+        QJsonDocument::fromJson(
+            firstEnrollment, &enrollmentError);
+    QVERIFY(
+        enrollmentError.error
+                == QJsonParseError::NoError
+            && enrollmentDocument.isObject());
+
+    QString scopeId;
+    {
+        QSettings local(settingsPath, targetFormat);
+        local.setFallbacksEnabled(false);
+        local.sync();
+        QCOMPARE(local.status(), QSettings::NoError);
+        QVERIFY(!local.contains(plaintextKey));
+        scopeId = local.value(
+            QStringLiteral(
+                "credential_store/id")).toString();
+        QVERIFY(!QUuid(scopeId).isNull());
+        QVERIFY(local.contains(
+            QStringLiteral(
+                "credential_store/binding_v2")));
+    }
+    {
+        QSettings authority(
+            targetFormat, QSettings::UserScope,
+            organization, application);
+        authority.setFallbacksEnabled(false);
+        authority.sync();
+        QVERIFY(authority.allKeys()
+                    .filter(QStringLiteral(
+                        "credential_store/"
+                        "location_enrollments/"))
+                    .isEmpty());
+        QCOMPARE(
+            authority.allKeys()
+                .filter(QStringLiteral(
+                    "credential_store/"
+                    "location_bindings/"))
+                .size(),
+            athleteEnrollment ? 4 : 2);
+        QCOMPARE(
+            authority.allKeys()
+                .filter(QStringLiteral(
+                    "credential_store/"
+                    "location_claims/"))
+                .size(),
+            athleteEnrollment ? 4 : 2);
+    }
+    FileCredentialStore vault(vaultPath);
+    const QString expectedVaultKey =
+        CredentialSettings::vaultKey(
+            scopeId,
+            athleteEnrollment
+                ? QStringLiteral(GC_STRAVA_TOKEN)
+                : QStringLiteral(
+                      GC_NOLIO_ACCESS_TOKEN));
+    const CredentialStore::ReadResult stored =
+        vault.read(expectedVaultKey);
+    QCOMPARE(
+        stored.status,
+        CredentialStore::Status::Success);
+    QCOMPARE(stored.value, secret);
+    {
+        QSettings rawVault(
+            vaultPath, QSettings::IniFormat);
+        rawVault.setFallbacksEnabled(false);
+        rawVault.sync();
+        QCOMPARE(
+            rawVault.allKeys(),
+            QStringList({expectedVaultKey}));
+    }
+
+    ScopedEnvironmentVariable stateEnvironment(
+        QByteArrayLiteral(
+            "GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    ScopedEnvironmentVariable vaultEnvironment(
+        QByteArrayLiteral(
+            "GC_ENROLLMENT_TEST_VAULT"),
+        QFile::encodeName(vaultPath));
+    GSettings restarted(
+        organization, application,
+        legacyFormat, targetFormat);
+    restarted.initializeQSettingsGlobal(athleteRoot);
+    if (athleteEnrollment) {
+        restarted.initializeQSettingsAthlete(
+            athleteRoot,
+            QStringLiteral("Athlete"));
+    }
+    const QVariant observed = athleteEnrollment
+        ? restarted.cvalue(
+              QStringLiteral("Athlete"),
+              GC_STRAVA_TOKEN,
+              QStringLiteral("missing"))
+        : restarted.value(
+              nullptr, GC_NOLIO_ACCESS_TOKEN,
+              QStringLiteral("missing"));
+    QCOMPARE(observed.toString(), secret);
+}
+
+void TestCredentialSettings::
+freshEnrollmentCrashRecoveryAcrossProcesses()
+{
+    const QString childAction = qEnvironmentVariable(
+        "GC_ENROLLMENT_CRASH_ACTION");
+    if (!childAction.isEmpty()) {
+        QCOMPARE(childAction, QStringLiteral("crash"));
+        const QString legacyPath = qEnvironmentVariable(
+            "GC_ENROLLMENT_CRASH_LEGACY_PATH");
+        const QString authorityPath = qEnvironmentVariable(
+            "GC_ENROLLMENT_CRASH_AUTHORITY_PATH");
+        const QString athleteRoot = qEnvironmentVariable(
+            "GC_ENROLLMENT_CRASH_ATHLETE_ROOT");
+        const QString organization = qEnvironmentVariable(
+            "GC_ENROLLMENT_CRASH_ORGANIZATION");
+        const QString application = qEnvironmentVariable(
+            "GC_ENROLLMENT_CRASH_APPLICATION");
+        const QString stage = qEnvironmentVariable(
+            "GC_ENROLLMENT_CRASH_STAGE");
+        const QByteArray crashPoint = qgetenv(
+            "GC_ENROLLMENT_CRASH_POINT");
+        QVERIFY(!legacyPath.isEmpty());
+        QVERIFY(!authorityPath.isEmpty());
+        QVERIFY(!athleteRoot.isEmpty());
+        QVERIFY(!organization.isEmpty());
+        QVERIFY(!application.isEmpty());
+        QVERIFY(!stage.isEmpty());
+        QVERIFY(!crashPoint.isEmpty());
+
+        const QSettings::Format legacyFormat =
+            legacyMigrationTestFormat();
+        const QSettings::Format targetFormat =
+            targetMigrationTestFormat();
+        QVERIFY(legacyFormat != QSettings::InvalidFormat);
+        QVERIFY(targetFormat != QSettings::InvalidFormat);
+        QSettings::setPath(
+            legacyFormat, QSettings::UserScope,
+            legacyPath);
+        QSettings::setPath(
+            targetFormat, QSettings::UserScope,
+            authorityPath);
+
+        qunsetenv("GC_CREDENTIAL_TEST_CRASH_POINT");
+        GSettings settings(
+            organization, application,
+            legacyFormat, targetFormat);
+        if (stage == QStringLiteral("athlete")) {
+            settings.initializeQSettingsGlobal(
+                athleteRoot);
+            qputenv(
+                "GC_CREDENTIAL_TEST_CRASH_POINT",
+                crashPoint);
+            settings.initializeQSettingsAthlete(
+                athleteRoot,
+                QStringLiteral("Athlete"));
+        } else {
+            qputenv(
+                "GC_CREDENTIAL_TEST_CRASH_POINT",
+                crashPoint);
+            settings.initializeQSettingsGlobal(
+                athleteRoot);
+        }
+        QFAIL("Configured enrollment crash was not reached");
+    }
+
+    struct CrashCase {
+        const char *name;
+        const char *stage;
+        const char *point;
+        int expectedEnrollments;
+        int expectedClaims;
+        int expectedBindings;
+        int expectedEntities;
+        bool rootPublished;
+        bool globalBindingPublished;
+        bool athleteBindingPublished;
+    };
+    const QList<CrashCase> cases = {
+        {"root-intent", "root",
+         "enrollment:root-intent",
+         1, 0, 0, 1, false, false, false},
+        {"root-claim", "root",
+         "enrollment:root-claim",
+         1, 1, 0, 1, false, false, false},
+        {"root-identity", "root",
+         "enrollment:identity-published",
+         1, 1, 0, 1, true, false, false},
+        {"root-complete", "root",
+         "enrollment:root-complete",
+         0, 1, 1, 1, true, false, false},
+        {"global-intent", "global",
+         "enrollment:scope-intent",
+         1, 1, 1, 2, true, false, false},
+        {"global-claim", "global",
+         "enrollment:scope-claim",
+         1, 2, 1, 2, true, false, false},
+        {"global-binding", "global",
+         "enrollment:binding-published",
+         1, 2, 1, 2, true, true, false},
+        {"global-complete", "global",
+         "enrollment:scope-complete",
+         0, 2, 2, 2, true, true, false},
+        {"athlete-profile-intent", "athlete",
+         "enrollment:profile-intent",
+         1, 2, 2, 3, true, true, false},
+        {"athlete-profile-claim", "athlete",
+         "enrollment:profile-claim",
+         1, 3, 2, 3, true, true, false},
+        {"athlete-scope-intent", "athlete",
+         "enrollment:scope-intent",
+         2, 3, 2, 4, true, true, false},
+        {"athlete-scope-claim", "athlete",
+         "enrollment:scope-claim",
+         2, 4, 2, 4, true, true, false},
+        {"athlete-binding", "athlete",
+         "enrollment:binding-published",
+         2, 4, 2, 4, true, true, true},
+        {"athlete-scope-complete", "athlete",
+         "enrollment:scope-complete",
+         1, 4, 3, 4, true, true, true},
+        {"athlete-profile-complete", "athlete",
+         "enrollment:profile-complete",
+         0, 4, 4, 4, true, true, true}
+    };
+
+    for (const CrashCase &testCase : cases) {
+        QTemporaryDir temporary;
+        QVERIFY2(temporary.isValid(), testCase.name);
+        const QSettings::Format legacyFormat =
+            legacyMigrationTestFormat();
+        const QSettings::Format targetFormat =
+            targetMigrationTestFormat();
+        QVERIFY2(
+            legacyFormat != QSettings::InvalidFormat,
+            testCase.name);
+        QVERIFY2(
+            targetFormat != QSettings::InvalidFormat,
+            testCase.name);
+
+        const QString legacyPath =
+            temporary.filePath(
+                QStringLiteral("legacy"));
+        const QString authorityPath =
+            temporary.filePath(
+                QStringLiteral("authority"));
+        const QString athleteRoot =
+            temporary.filePath(
+                QStringLiteral("library"));
+        const QString athleteConfig =
+            QDir(athleteRoot).filePath(
+                QStringLiteral("Athlete/config"));
+        const QString stateRoot =
+            temporary.filePath(
+                QStringLiteral("credential-state"));
+        const QString vaultPath =
+            temporary.filePath(
+                QStringLiteral("vault.ini"));
+        QVERIFY2(QDir().mkpath(legacyPath), testCase.name);
+        QVERIFY2(QDir().mkpath(authorityPath), testCase.name);
+        QVERIFY2(QDir().mkpath(athleteConfig), testCase.name);
+        QSettings::setPath(
+            legacyFormat, QSettings::UserScope,
+            legacyPath);
+        QSettings::setPath(
+            targetFormat, QSettings::UserScope,
+            authorityPath);
+
+        const QString organization =
+            QStringLiteral("CredentialCrashEnrollment-")
+            + QUuid::createUuid().toString(
+                QUuid::WithoutBraces);
+        const QString application =
+            QStringLiteral("GoldenCheetahTest");
+        const bool athleteStage =
+            QByteArray(testCase.stage)
+                == QByteArrayLiteral("athlete");
+        const QString globalPath =
+            QDir(athleteRoot).filePath(
+                QStringLiteral(
+                    "configglobal-general.ini"));
+        const QString athletePath =
+            QDir(athleteConfig).filePath(
+                QStringLiteral(
+                    "athlete-private.ini"));
+        const QString plaintextKey = athleteStage
+            ? plainKey(GC_STRAVA_TOKEN)
+            : plainKey(GC_NOLIO_ACCESS_TOKEN);
+        const QString secret = athleteStage
+            ? QStringLiteral(
+                  "athlete-crash-recovery-secret")
+            : QStringLiteral(
+                  "global-crash-recovery-secret");
+        const QString settingsPath = athleteStage
+            ? athletePath : globalPath;
+        {
+            QSettings plaintext(
+                settingsPath, targetFormat);
+            plaintext.setFallbacksEnabled(false);
+            plaintext.setValue(plaintextKey, secret);
+            plaintext.sync();
+            QCOMPARE(
+                plaintext.status(),
+                QSettings::NoError);
+        }
+
+        QProcessEnvironment environment =
+            QProcessEnvironment::systemEnvironment();
+        environment.remove(
+            QStringLiteral(
+                "GC_CREDENTIAL_TEST_CRASH_POINT"));
+        environment.insert(
+            QStringLiteral(
+                "GC_CREDENTIAL_TEST_STATE_ROOT"),
+            stateRoot);
+        environment.insert(
+            QStringLiteral(
+                "GC_ENROLLMENT_TEST_VAULT"),
+            vaultPath);
+        environment.insert(
+            QStringLiteral(
+                "GC_ENROLLMENT_CRASH_ACTION"),
+            QStringLiteral("crash"));
+        environment.insert(
+            QStringLiteral(
+                "GC_ENROLLMENT_CRASH_LEGACY_PATH"),
+            legacyPath);
+        environment.insert(
+            QStringLiteral(
+                "GC_ENROLLMENT_CRASH_AUTHORITY_PATH"),
+            authorityPath);
+        environment.insert(
+            QStringLiteral(
+                "GC_ENROLLMENT_CRASH_ATHLETE_ROOT"),
+            athleteRoot);
+        environment.insert(
+            QStringLiteral(
+                "GC_ENROLLMENT_CRASH_ORGANIZATION"),
+            organization);
+        environment.insert(
+            QStringLiteral(
+                "GC_ENROLLMENT_CRASH_APPLICATION"),
+            application);
+        environment.insert(
+            QStringLiteral(
+                "GC_ENROLLMENT_CRASH_STAGE"),
+            QString::fromLatin1(testCase.stage));
+        environment.insert(
+            QStringLiteral(
+                "GC_ENROLLMENT_CRASH_POINT"),
+            QString::fromLatin1(testCase.point));
+
+        QProcess child;
+        child.setProgram(
+            QCoreApplication::applicationFilePath());
+        child.setArguments({
+            QStringLiteral(
+                "freshEnrollmentCrashRecoveryAcrossProcesses")
+        });
+        child.setProcessEnvironment(environment);
+        child.setProcessChannelMode(
+            QProcess::MergedChannels);
+        child.start();
+        QVERIFY2(
+            child.waitForStarted(5000),
+            testCase.name);
+        if (!child.waitForFinished(30000)) {
+            child.kill();
+            child.waitForFinished();
+            QFAIL(testCase.name);
+        }
+        const QByteArray childOutput = child.readAll();
+        QVERIFY2(
+            child.exitStatus() == QProcess::NormalExit
+                && child.exitCode() == 86,
+            childOutput.constData());
+
+        const QString canonicalRoot =
+            QFileInfo(athleteRoot).canonicalFilePath();
+        const QString canonicalAthlete =
+            QFileInfo(
+                QDir(athleteRoot).filePath(
+                    QStringLiteral("Athlete")))
+                .canonicalFilePath();
+        QVERIFY2(!canonicalRoot.isEmpty(), testCase.name);
+        QVERIFY2(!canonicalAthlete.isEmpty(), testCase.name);
+        const QString enrollmentPrefix =
+            QStringLiteral(
+                "credential_store/location_enrollments/");
+        const QString claimPrefix =
+            QStringLiteral(
+                "credential_store/location_claims/");
+        const QString bindingPrefix =
+            QStringLiteral(
+                "credential_store/location_bindings/");
+        QHash<QString, TestLocationRecord> entities;
+        QHash<QString, QString> pendingEntityIds;
+        {
+            QSettings authority(
+                targetFormat,
+                QSettings::UserScope,
+                organization,
+                application);
+            authority.setFallbacksEnabled(false);
+            authority.sync();
+            QCOMPARE(
+                authority.status(),
+                QSettings::NoError);
+            const QHash<QString, QVariant> enrollments =
+                settingsValuesWithPrefix(
+                    &authority, enrollmentPrefix);
+            const QHash<QString, QVariant> claims =
+                settingsValuesWithPrefix(
+                    &authority, claimPrefix);
+            const QHash<QString, QVariant> bindings =
+                settingsValuesWithPrefix(
+                    &authority, bindingPrefix);
+            QCOMPARE(
+                enrollments.size(),
+                testCase.expectedEnrollments);
+            QCOMPARE(
+                claims.size(),
+                testCase.expectedClaims);
+            QCOMPARE(
+                bindings.size(),
+                testCase.expectedBindings);
+
+            const auto entityName =
+                [&](const TestLocationRecord &record) {
+                    if (record.kind
+                            == QStringLiteral("root")
+                        && record.parentId.isEmpty()
+                        && record.directoryPath
+                            == canonicalRoot) {
+                        return QStringLiteral("root");
+                    }
+                    if (record.kind
+                            == QStringLiteral("profile")
+                        && record.directoryPath
+                            == canonicalAthlete) {
+                        return QStringLiteral(
+                            "athlete-profile");
+                    }
+                    if (record.kind
+                            == QStringLiteral("scope")
+                        && record.directoryPath
+                            == canonicalRoot) {
+                        return QStringLiteral(
+                            "global-scope");
+                    }
+                    if (record.kind
+                            == QStringLiteral("scope")
+                        && record.directoryPath
+                            == canonicalAthlete) {
+                        return QStringLiteral(
+                            "athlete-scope");
+                    }
+                    return QString();
+                };
+            for (const QVariant &stored : bindings) {
+                QVERIFY2(
+                    !stored.toString().contains(secret),
+                    testCase.name);
+                const TestLocationRecord record =
+                    parseTestLocationRecord(stored);
+                const QString entity =
+                    entityName(record);
+                QVERIFY2(
+                    record.valid
+                        && !entity.isEmpty()
+                        && !entities.contains(entity),
+                    testCase.name);
+                entities.insert(entity, record);
+            }
+            for (const QVariant &stored : enrollments) {
+                QVERIFY2(
+                    !stored.toString().contains(secret),
+                    testCase.name);
+                const TestLocationRecord record =
+                    parseTestLocationRecord(stored);
+                const QString entity =
+                    entityName(record);
+                QVERIFY2(
+                    record.valid
+                        && !entity.isEmpty()
+                        && !entities.contains(entity),
+                    testCase.name);
+                entities.insert(entity, record);
+                pendingEntityIds.insert(
+                    entity, record.identityId);
+            }
+            QCOMPARE(
+                entities.size(),
+                testCase.expectedEntities);
+            QVERIFY2(
+                entities.contains(
+                    QStringLiteral("root")),
+                testCase.name);
+            if (testCase.expectedEntities >= 2) {
+                QVERIFY2(
+                    entities.contains(
+                        QStringLiteral(
+                            "global-scope")),
+                    testCase.name);
+                QCOMPARE(
+                    entities.value(
+                        QStringLiteral(
+                            "global-scope"))
+                        .parentId,
+                    entities.value(
+                        QStringLiteral("root"))
+                        .identityId);
+            }
+            if (testCase.expectedEntities >= 3) {
+                QVERIFY2(
+                    entities.contains(
+                        QStringLiteral(
+                            "athlete-profile")),
+                    testCase.name);
+                QCOMPARE(
+                    entities.value(
+                        QStringLiteral(
+                            "athlete-profile"))
+                        .parentId,
+                    entities.value(
+                        QStringLiteral("root"))
+                        .identityId);
+            }
+            if (testCase.expectedEntities >= 4) {
+                QVERIFY2(
+                    entities.contains(
+                        QStringLiteral(
+                            "athlete-scope")),
+                    testCase.name);
+                QCOMPARE(
+                    entities.value(
+                        QStringLiteral(
+                            "athlete-scope"))
+                        .parentId,
+                    entities.value(
+                        QStringLiteral(
+                            "athlete-profile"))
+                        .identityId);
+            }
+
+            QSet<QString> claimedIdentities;
+            for (const QVariant &stored : claims) {
+                QVERIFY2(
+                    !stored.toString().contains(secret),
+                    testCase.name);
+                const TestLocationRecord claim =
+                    parseTestLocationClaim(stored);
+                QVERIFY2(claim.valid, testCase.name);
+                QString matchingEntity;
+                for (auto entity = entities.cbegin();
+                     entity != entities.cend();
+                     ++entity) {
+                    if (entity.value().identityId
+                            == claim.identityId
+                        && entity.value().parentId
+                            == claim.parentId
+                        && entity.value().directoryPath
+                            == claim.directoryPath) {
+                        matchingEntity = entity.key();
+                        break;
+                    }
+                }
+                QVERIFY2(
+                    !matchingEntity.isEmpty()
+                        && !claimedIdentities.contains(
+                            claim.identityId),
+                    testCase.name);
+                claimedIdentities.insert(
+                    claim.identityId);
+            }
+            QCOMPARE(
+                claimedIdentities.size(),
+                testCase.expectedClaims);
+        }
+        const QString rootId =
+            entities.value(
+                QStringLiteral("root")).identityId;
+        {
+            QSettings local(globalPath, targetFormat);
+            local.setFallbacksEnabled(false);
+            local.sync();
+            QCOMPARE(
+                local.status(), QSettings::NoError);
+            QCOMPARE(
+                local.contains(
+                    QStringLiteral(
+                        "credential_store/root_id")),
+                testCase.rootPublished);
+            if (testCase.rootPublished) {
+                QCOMPARE(
+                    local.value(
+                        QStringLiteral(
+                            "credential_store/root_id"))
+                        .toString(),
+                    rootId);
+            }
+            QCOMPARE(
+                local.contains(
+                    QStringLiteral(
+                        "credential_store/binding_v2")),
+                testCase.globalBindingPublished);
+            QCOMPARE(
+                local.contains(
+                    QStringLiteral(
+                        "credential_store/id")),
+                testCase.globalBindingPublished);
+            if (testCase.globalBindingPublished) {
+                const TestScopeBinding binding =
+                    parseTestScopeBinding(
+                        local.value(
+                            QStringLiteral(
+                                "credential_store/"
+                                "binding_v2")));
+                QVERIFY2(binding.valid, testCase.name);
+                QCOMPARE(binding.rootId, rootId);
+                QCOMPARE(binding.profileId, rootId);
+                QCOMPARE(
+                    binding.scopeId,
+                    entities.value(
+                        QStringLiteral(
+                            "global-scope"))
+                        .identityId);
+                QCOMPARE(
+                    binding.origin,
+                    QStringLiteral("fresh"));
+                QCOMPARE(
+                    local.value(
+                        QStringLiteral(
+                            "credential_store/id"))
+                        .toString(),
+                    binding.scopeId);
+            }
+        }
+        {
+            QSettings local(athletePath, targetFormat);
+            local.setFallbacksEnabled(false);
+            local.sync();
+            QCOMPARE(
+                local.status(), QSettings::NoError);
+            QCOMPARE(
+                local.contains(
+                    QStringLiteral(
+                        "credential_store/binding_v2")),
+                testCase.athleteBindingPublished);
+            QCOMPARE(
+                local.contains(
+                    QStringLiteral(
+                        "credential_store/id")),
+                testCase.athleteBindingPublished);
+            if (testCase.athleteBindingPublished) {
+                const TestScopeBinding binding =
+                    parseTestScopeBinding(
+                        local.value(
+                            QStringLiteral(
+                                "credential_store/"
+                                "binding_v2")));
+                QVERIFY2(binding.valid, testCase.name);
+                QCOMPARE(binding.rootId, rootId);
+                QCOMPARE(
+                    binding.profileId,
+                    entities.value(
+                        QStringLiteral(
+                            "athlete-profile"))
+                        .identityId);
+                QCOMPARE(
+                    binding.scopeId,
+                    entities.value(
+                        QStringLiteral(
+                            "athlete-scope"))
+                        .identityId);
+                QCOMPARE(
+                    binding.origin,
+                    QStringLiteral("fresh"));
+                QCOMPARE(
+                    local.value(
+                        QStringLiteral(
+                            "credential_store/id"))
+                        .toString(),
+                    binding.scopeId);
+            }
+        }
+        {
+            QSettings plaintext(
+                settingsPath, targetFormat);
+            plaintext.setFallbacksEnabled(false);
+            plaintext.sync();
+            QCOMPARE(
+                plaintext.status(), QSettings::NoError);
+            QCOMPARE(
+                plaintext.value(plaintextKey).toString(),
+                secret);
+        }
+        {
+            QSettings vault(
+                vaultPath, QSettings::IniFormat);
+            vault.setFallbacksEnabled(false);
+            vault.sync();
+            QCOMPARE(
+                vault.status(), QSettings::NoError);
+            QVERIFY2(
+                vault.allKeys().isEmpty(),
+                testCase.name);
+        }
+
+        ScopedEnvironmentVariable stateEnvironment(
+            QByteArrayLiteral(
+                "GC_CREDENTIAL_TEST_STATE_ROOT"),
+            QFile::encodeName(stateRoot));
+        ScopedEnvironmentVariable vaultEnvironment(
+            QByteArrayLiteral(
+                "GC_ENROLLMENT_TEST_VAULT"),
+            QFile::encodeName(vaultPath));
+        {
+            GSettings recovered(
+                organization, application,
+                legacyFormat, targetFormat);
+            recovered.initializeQSettingsGlobal(
+                athleteRoot);
+            if (athleteStage) {
+                recovered.initializeQSettingsAthlete(
+                    athleteRoot,
+                    QStringLiteral("Athlete"));
+            }
+            const QVariant observed = athleteStage
+                ? recovered.cvalue(
+                      QStringLiteral("Athlete"),
+                      GC_STRAVA_TOKEN,
+                      QStringLiteral("missing"))
+                : recovered.value(
+                      nullptr,
+                      GC_NOLIO_ACCESS_TOKEN,
+                      QStringLiteral("missing"));
+            QCOMPARE(observed.toString(), secret);
+        }
+        {
+            GSettings restarted(
+                organization, application,
+                legacyFormat, targetFormat);
+            restarted.initializeQSettingsGlobal(
+                athleteRoot);
+            if (athleteStage) {
+                restarted.initializeQSettingsAthlete(
+                    athleteRoot,
+                    QStringLiteral("Athlete"));
+            }
+            const QVariant observed = athleteStage
+                ? restarted.cvalue(
+                      QStringLiteral("Athlete"),
+                      GC_STRAVA_TOKEN,
+                      QStringLiteral("missing"))
+                : restarted.value(
+                      nullptr,
+                      GC_NOLIO_ACCESS_TOKEN,
+                      QStringLiteral("missing"));
+            QCOMPARE(observed.toString(), secret);
+        }
+
+        QHash<QString, TestLocationRecord>
+            finalEntities;
+        {
+            QSettings authority(
+                targetFormat,
+                QSettings::UserScope,
+                organization,
+                application);
+            authority.setFallbacksEnabled(false);
+            authority.sync();
+            QCOMPARE(
+                authority.status(),
+                QSettings::NoError);
+            QVERIFY(
+                settingsValuesWithPrefix(
+                    &authority, enrollmentPrefix)
+                    .isEmpty());
+            const QHash<QString, QVariant> bindings =
+                settingsValuesWithPrefix(
+                    &authority, bindingPrefix);
+            const QHash<QString, QVariant> claims =
+                settingsValuesWithPrefix(
+                    &authority, claimPrefix);
+            QCOMPARE(
+                bindings.size(),
+                athleteStage ? 4 : 2);
+            QCOMPARE(
+                claims.size(),
+                athleteStage ? 4 : 2);
+            for (const QVariant &stored : bindings) {
+                const TestLocationRecord record =
+                    parseTestLocationRecord(stored);
+                QVERIFY2(record.valid, testCase.name);
+                QString entity;
+                if (record.kind
+                        == QStringLiteral("root")
+                    && record.directoryPath
+                        == canonicalRoot) {
+                    entity = QStringLiteral("root");
+                } else if (record.kind
+                               == QStringLiteral("scope")
+                           && record.directoryPath
+                               == canonicalRoot) {
+                    entity =
+                        QStringLiteral("global-scope");
+                } else if (record.kind
+                               == QStringLiteral("profile")
+                           && record.directoryPath
+                               == canonicalAthlete) {
+                    entity = QStringLiteral(
+                        "athlete-profile");
+                } else if (record.kind
+                               == QStringLiteral("scope")
+                           && record.directoryPath
+                               == canonicalAthlete) {
+                    entity =
+                        QStringLiteral("athlete-scope");
+                }
+                QVERIFY2(
+                    !entity.isEmpty()
+                        && !finalEntities.contains(
+                            entity),
+                    testCase.name);
+                finalEntities.insert(entity, record);
+            }
+            QVERIFY2(
+                finalEntities.contains(
+                    QStringLiteral("root"))
+                    && finalEntities.contains(
+                        QStringLiteral(
+                            "global-scope")),
+                testCase.name);
+            QCOMPARE(
+                finalEntities.value(
+                    QStringLiteral("global-scope"))
+                    .parentId,
+                finalEntities.value(
+                    QStringLiteral("root"))
+                    .identityId);
+            if (athleteStage) {
+                QVERIFY2(
+                    finalEntities.contains(
+                        QStringLiteral(
+                            "athlete-profile"))
+                        && finalEntities.contains(
+                            QStringLiteral(
+                                "athlete-scope")),
+                    testCase.name);
+                QCOMPARE(
+                    finalEntities.value(
+                        QStringLiteral(
+                            "athlete-profile"))
+                        .parentId,
+                    finalEntities.value(
+                        QStringLiteral("root"))
+                        .identityId);
+                QCOMPARE(
+                    finalEntities.value(
+                        QStringLiteral(
+                            "athlete-scope"))
+                        .parentId,
+                    finalEntities.value(
+                        QStringLiteral(
+                            "athlete-profile"))
+                        .identityId);
+            }
+            QSet<QString> claimedIdentities;
+            for (const QVariant &stored : claims) {
+                const TestLocationRecord claim =
+                    parseTestLocationClaim(stored);
+                QVERIFY2(claim.valid, testCase.name);
+                bool matched = false;
+                for (const TestLocationRecord &record :
+                     finalEntities) {
+                    if (record.identityId
+                            == claim.identityId
+                        && record.parentId
+                            == claim.parentId
+                        && record.directoryPath
+                            == claim.directoryPath) {
+                        matched = true;
+                        break;
+                    }
+                }
+                QVERIFY2(
+                    matched
+                        && !claimedIdentities.contains(
+                            claim.identityId),
+                    testCase.name);
+                claimedIdentities.insert(
+                    claim.identityId);
+            }
+            QCOMPARE(
+                claimedIdentities.size(),
+                finalEntities.size());
+        }
+        for (auto pending =
+                 pendingEntityIds.cbegin();
+             pending != pendingEntityIds.cend();
+             ++pending) {
+            QVERIFY2(
+                finalEntities.contains(pending.key()),
+                testCase.name);
+            QCOMPARE(
+                finalEntities.value(
+                    pending.key()).identityId,
+                pending.value());
+        }
+
+        QString scopeId;
+        {
+            QSettings local(
+                settingsPath, targetFormat);
+            local.setFallbacksEnabled(false);
+            local.sync();
+            QCOMPARE(
+                local.status(),
+                QSettings::NoError);
+            QVERIFY(!local.contains(plaintextKey));
+            scopeId = local.value(
+                QStringLiteral(
+                    "credential_store/id")).toString();
+            QVERIFY(!QUuid(scopeId).isNull());
+            const TestScopeBinding binding =
+                parseTestScopeBinding(
+                    local.value(
+                        QStringLiteral(
+                            "credential_store/"
+                            "binding_v2")));
+            QVERIFY2(binding.valid, testCase.name);
+            QCOMPARE(
+                binding.rootId,
+                finalEntities.value(
+                    QStringLiteral("root"))
+                    .identityId);
+            QCOMPARE(
+                binding.profileId,
+                athleteStage
+                    ? finalEntities.value(
+                          QStringLiteral(
+                              "athlete-profile"))
+                          .identityId
+                    : binding.rootId);
+            QCOMPARE(
+                binding.scopeId,
+                finalEntities.value(
+                    athleteStage
+                        ? QStringLiteral(
+                              "athlete-scope")
+                        : QStringLiteral(
+                              "global-scope"))
+                    .identityId);
+            QCOMPARE(scopeId, binding.scopeId);
+        }
+        {
+            QSettings global(
+                globalPath, targetFormat);
+            global.setFallbacksEnabled(false);
+            global.sync();
+            QCOMPARE(
+                global.value(
+                    QStringLiteral(
+                        "credential_store/root_id"))
+                    .toString(),
+                finalEntities.value(
+                    QStringLiteral("root"))
+                    .identityId);
+            const TestScopeBinding binding =
+                parseTestScopeBinding(
+                    global.value(
+                        QStringLiteral(
+                            "credential_store/"
+                            "binding_v2")));
+            QVERIFY2(binding.valid, testCase.name);
+            QCOMPARE(binding.rootId, binding.profileId);
+            QCOMPARE(
+                binding.scopeId,
+                finalEntities.value(
+                    QStringLiteral("global-scope"))
+                    .identityId);
+        }
+
+        FileCredentialStore vault(vaultPath);
+        const CredentialStore::ReadResult stored =
+            vault.read(CredentialSettings::vaultKey(
+                scopeId,
+                athleteStage
+                    ? QStringLiteral(GC_STRAVA_TOKEN)
+                    : QStringLiteral(
+                          GC_NOLIO_ACCESS_TOKEN)));
+        QCOMPARE(
+            stored.status,
+            CredentialStore::Status::Success);
+        QCOMPARE(stored.value, secret);
+    }
+}
+
+void TestCredentialSettings::
+credentialEnrollmentAuthorityMustBeExternal()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QSettings::Format legacyFormat =
+        legacyMigrationTestFormat();
+    const QSettings::Format targetFormat =
+        targetMigrationTestFormat();
+    QVERIFY(legacyFormat != QSettings::InvalidFormat);
+    QVERIFY(targetFormat != QSettings::InvalidFormat);
+
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("library"));
+    QVERIFY(QDir().mkpath(athleteRoot));
+    QSettings::setPath(
+        legacyFormat, QSettings::UserScope,
+        temporary.filePath(QStringLiteral("legacy")));
+    QSettings::setPath(
+        targetFormat, QSettings::UserScope,
+        athleteRoot);
+
+    const QString organization =
+        QStringLiteral("CredentialInternalAuthority-")
+        + QUuid::createUuid().toString(
+            QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString globalPath =
+        QDir(athleteRoot).filePath(
+            QStringLiteral(
+                "configglobal-general.ini"));
+    const QString plaintextKey =
+        plainKey(GC_NOLIO_ACCESS_TOKEN);
+    const QString secret =
+        QStringLiteral("internal-authority-secret");
+    {
+        QSettings plaintext(globalPath, targetFormat);
+        plaintext.setFallbacksEnabled(false);
+        plaintext.setValue(plaintextKey, secret);
+        plaintext.sync();
+        QCOMPARE(plaintext.status(), QSettings::NoError);
+    }
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    {
+        GSettings settings(
+            organization, application,
+            legacyFormat, targetFormat);
+        settings.initializeQSettingsGlobal(athleteRoot);
+        QCOMPARE(
+            settings.value(
+                nullptr, GC_NOLIO_ACCESS_TOKEN,
+                QStringLiteral("missing")).toString(),
+            QStringLiteral("missing"));
+        QVERIFY(!settings.setValueChecked(
+            GC_NOLIO_ACCESS_TOKEN,
+            QStringLiteral("must-not-be-stored")));
+    }
+    QVERIFY(factoryState()->values.isEmpty());
+
+    {
+        QSettings retained(globalPath, targetFormat);
+        retained.setFallbacksEnabled(false);
+        retained.sync();
+        QCOMPARE(retained.status(), QSettings::NoError);
+        QCOMPARE(retained.value(plaintextKey).toString(),
+                 secret);
+        QVERIFY(!retained.contains(
+            QStringLiteral(
+                "credential_store/root_id")));
+        QVERIFY(!retained.contains(
+            QStringLiteral(
+                "credential_store/binding_v2")));
+    }
+    {
+        QSettings internalAuthority(
+            targetFormat, QSettings::UserScope,
+            organization, application);
+        internalAuthority.setFallbacksEnabled(false);
+        internalAuthority.sync();
+        QCOMPARE(
+            QFileInfo(internalAuthority.fileName())
+                .canonicalFilePath()
+                .startsWith(
+                    QFileInfo(athleteRoot)
+                        .canonicalFilePath()
+                    + QDir::separator()),
+            true);
+        QVERIFY(internalAuthority.allKeys()
+                    .filter(QStringLiteral(
+                        "credential_store/"
+                        "location_claims/"))
+                    .isEmpty());
+        QVERIFY(internalAuthority.allKeys()
+                    .filter(QStringLiteral(
+                        "credential_store/"
+                        "location_enrollments/"))
+                    .isEmpty());
+        QVERIFY(internalAuthority.allKeys()
+                    .filter(QStringLiteral(
+                        "credential_store/"
+                        "location_bindings/"))
+                    .isEmpty());
+    }
+}
+
+void TestCredentialSettings::
+credentialEnrollmentAuthorityAliasesFailClosed_data()
+{
+    QTest::addColumn<QString>("aliasMode");
+#ifdef Q_OS_UNIX
+    QTest::newRow("symlink-directory")
+        << QStringLiteral("symlink-directory");
+#endif
+#if defined(Q_OS_UNIX) || defined(Q_OS_WIN)
+    QTest::newRow("hardlink-file")
+        << QStringLiteral("hardlink-file");
+#endif
+#ifdef Q_OS_WIN
+    QTest::newRow("junction-directory")
+        << QStringLiteral("junction-directory");
+    QTest::newRow("case-alias")
+        << QStringLiteral("case-alias");
+#endif
+}
+
+void TestCredentialSettings::
+credentialEnrollmentAuthorityAliasesFailClosed()
+{
+    QFETCH(QString, aliasMode);
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QSettings::Format legacyFormat =
+        legacyMigrationTestFormat();
+    const QSettings::Format targetFormat =
+        targetMigrationTestFormat();
+    QVERIFY(legacyFormat != QSettings::InvalidFormat);
+    QVERIFY(targetFormat != QSettings::InvalidFormat);
+
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("Library"));
+    const QString legacyPath =
+        temporary.filePath(QStringLiteral("legacy"));
+    const QString outsideAuthority =
+        temporary.filePath(
+            QStringLiteral("outside-authority"));
+    const QString insideAuthority =
+        QDir(athleteRoot).filePath(
+            QStringLiteral("authority"));
+    QVERIFY(QDir().mkpath(athleteRoot));
+    QVERIFY(QDir().mkpath(legacyPath));
+    QSettings::setPath(
+        legacyFormat, QSettings::UserScope,
+        legacyPath);
+
+    QString configuredAuthorityPath;
+    if (aliasMode
+            == QStringLiteral("symlink-directory")) {
+        QVERIFY(QDir().mkpath(insideAuthority));
+        configuredAuthorityPath =
+            temporary.filePath(
+                QStringLiteral("authority-alias"));
+        QVERIFY(QFile::link(
+            insideAuthority,
+            configuredAuthorityPath));
+        QVERIFY(QFileInfo(
+                    configuredAuthorityPath)
+                    .isSymLink());
+    } else if (aliasMode
+                   == QStringLiteral(
+                       "junction-directory")) {
+#ifdef Q_OS_WIN
+        QVERIFY(QDir().mkpath(insideAuthority));
+        configuredAuthorityPath =
+            temporary.filePath(
+                QStringLiteral("authority-junction"));
+        QProcess junction;
+        junction.start(
+            QStringLiteral("cmd.exe"),
+            {
+                QStringLiteral("/c"),
+                QStringLiteral("mklink"),
+                QStringLiteral("/J"),
+                QDir::toNativeSeparators(
+                    configuredAuthorityPath),
+                QDir::toNativeSeparators(
+                    insideAuthority)
+            });
+        QVERIFY2(
+            junction.waitForFinished(10000),
+            qPrintable(junction.errorString()));
+        const QByteArray output =
+            junction.readAllStandardOutput()
+            + junction.readAllStandardError();
+        QVERIFY2(
+            junction.exitStatus()
+                    == QProcess::NormalExit
+                && junction.exitCode() == 0,
+            output.constData());
+        const DWORD attributes = GetFileAttributesW(
+            reinterpret_cast<LPCWSTR>(
+                QDir::toNativeSeparators(
+                    configuredAuthorityPath)
+                    .utf16()));
+        QVERIFY(
+            attributes != INVALID_FILE_ATTRIBUTES);
+        QVERIFY(
+            attributes & FILE_ATTRIBUTE_REPARSE_POINT);
+#else
+        QFAIL("Authority junction row requires Windows");
+#endif
+    } else if (aliasMode
+                   == QStringLiteral("case-alias")) {
+        configuredAuthorityPath =
+            QDir(temporary.path()).filePath(
+                QStringLiteral("library"));
+    } else {
+        QVERIFY(QDir().mkpath(outsideAuthority));
+        configuredAuthorityPath =
+            outsideAuthority;
+    }
+    QSettings::setPath(
+        targetFormat, QSettings::UserScope,
+        configuredAuthorityPath);
+
+    const QString organization =
+        QStringLiteral("CredentialAuthorityAlias-")
+        + QUuid::createUuid().toString(
+            QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    QSettings authority(
+        targetFormat, QSettings::UserScope,
+        organization, application);
+    authority.setFallbacksEnabled(false);
+    authority.setValue(
+        QStringLiteral("sentinel"),
+        QStringLiteral("unchanged"));
+    authority.setValue(
+        legacySystemMigrationMarkerKey,
+        legacyMigrationComplete);
+    authority.sync();
+    QCOMPARE(
+        authority.status(), QSettings::NoError);
+
+    if (aliasMode
+            == QStringLiteral("hardlink-file")) {
+#ifdef Q_OS_UNIX
+        const QString linkedAuthority =
+            QDir(insideAuthority).filePath(
+                QStringLiteral("authority-link"));
+        QVERIFY(QDir().mkpath(insideAuthority));
+        const QByteArray source =
+            QFile::encodeName(authority.fileName());
+        const QByteArray target =
+            QFile::encodeName(linkedAuthority);
+        QCOMPARE(
+            ::link(
+                source.constData(),
+                target.constData()),
+            0);
+#elif defined(Q_OS_WIN)
+        const QString linkedAuthority =
+            QDir(insideAuthority).filePath(
+                QStringLiteral("authority-link"));
+        QVERIFY(QDir().mkpath(insideAuthority));
+        const BOOL linked = CreateHardLinkW(
+            reinterpret_cast<LPCWSTR>(
+                QDir::toNativeSeparators(
+                    linkedAuthority).utf16()),
+            reinterpret_cast<LPCWSTR>(
+                QDir::toNativeSeparators(
+                    authority.fileName()).utf16()),
+            nullptr);
+        const DWORD error =
+            linked ? ERROR_SUCCESS : GetLastError();
+        QVERIFY2(
+            linked,
+            qPrintable(
+                QStringLiteral(
+                    "CreateHardLinkW failed: %1")
+                    .arg(error)));
+#else
+        QFAIL(
+            "Hard-link alias row requires Unix or Windows");
+#endif
+    }
+    const QByteArray authorityBefore =
+        fileContents(authority.fileName());
+
+    const QString globalPath =
+        QDir(athleteRoot).filePath(
+            QStringLiteral(
+                "configglobal-general.ini"));
+    const QString plaintextKey =
+        plainKey(GC_NOLIO_ACCESS_TOKEN);
+    const QString secret =
+        QStringLiteral("authority-alias-secret");
+    {
+        QSettings plaintext(
+            globalPath, targetFormat);
+        plaintext.setFallbacksEnabled(false);
+        plaintext.setValue(plaintextKey, secret);
+        plaintext.sync();
+        QCOMPARE(
+            plaintext.status(), QSettings::NoError);
+    }
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    GSettings settings(
+        organization, application,
+        legacyFormat, targetFormat);
+    settings.initializeQSettingsGlobal(athleteRoot);
+    QCOMPARE(
+        settings.value(
+            nullptr, GC_NOLIO_ACCESS_TOKEN,
+            QStringLiteral("missing")).toString(),
+        QStringLiteral("missing"));
+    QVERIFY(!settings.setValueChecked(
+        GC_NOLIO_ACCESS_TOKEN,
+        QStringLiteral("must-not-be-stored")));
+    QVERIFY(factoryState()->values.isEmpty());
+
+    {
+        QSettings retained(globalPath, targetFormat);
+        retained.setFallbacksEnabled(false);
+        retained.sync();
+        QCOMPARE(
+            retained.value(plaintextKey).toString(),
+            secret);
+        QVERIFY(!retained.contains(
+            QStringLiteral(
+                "credential_store/root_id")));
+        QVERIFY(!retained.contains(
+            QStringLiteral(
+                "credential_store/binding_v2")));
+    }
+    authority.sync();
+    QCOMPARE(
+        authority.value(
+            QStringLiteral("sentinel")).toString(),
+        QStringLiteral("unchanged"));
+    for (const QString &prefix : {
+             QStringLiteral(
+                 "credential_store/location_claims/"),
+             QStringLiteral(
+                 "credential_store/location_enrollments/"),
+             QStringLiteral(
+                 "credential_store/location_bindings/")}) {
+        QVERIFY(settingsValuesWithPrefix(
+                    &authority, prefix)
+                    .isEmpty());
+    }
+    QCOMPARE(
+        fileContents(authority.fileName()),
+        authorityBefore);
+}
+
+void TestCredentialSettings::
+completedLocationCannotBeReenrolledWithoutLocalMetadata_data()
+{
+    QTest::addColumn<bool>("athleteCredential");
+    QTest::addColumn<bool>("legacyClaimsOnly");
+    QTest::addColumn<QString>("lossMode");
+    QTest::addColumn<bool>("recoverable");
+
+    QTest::newRow("completed-global-both")
+        << false << false << QStringLiteral("both")
+        << false;
+    QTest::newRow("completed-global-binding")
+        << false << false << QStringLiteral("binding")
+        << true;
+    QTest::newRow("completed-global-scope")
+        << false << false << QStringLiteral("scope")
+        << true;
+    QTest::newRow("claim-only-global-both")
+        << false << true << QStringLiteral("both")
+        << false;
+    QTest::newRow("claim-only-global-binding")
+        << false << true << QStringLiteral("binding")
+        << true;
+    QTest::newRow("claim-only-global-scope")
+        << false << true << QStringLiteral("scope")
+        << true;
+    QTest::newRow("completed-global-root-and-binding")
+        << false << false
+        << QStringLiteral("root-and-binding") << false;
+    QTest::newRow("claim-only-global-root-and-binding")
+        << false << true
+        << QStringLiteral("root-and-binding") << false;
+    QTest::newRow("completed-athlete-both")
+        << true << false << QStringLiteral("both")
+        << false;
+    QTest::newRow("completed-athlete-binding")
+        << true << false << QStringLiteral("binding")
+        << true;
+    QTest::newRow("completed-athlete-scope")
+        << true << false << QStringLiteral("scope")
+        << true;
+    QTest::newRow("claim-only-athlete-both")
+        << true << true << QStringLiteral("both")
+        << false;
+    QTest::newRow("claim-only-athlete-binding")
+        << true << true << QStringLiteral("binding")
+        << true;
+    QTest::newRow("claim-only-athlete-scope")
+        << true << true << QStringLiteral("scope")
+        << true;
+}
+
+void TestCredentialSettings::
+completedLocationCannotBeReenrolledWithoutLocalMetadata()
+{
+    QFETCH(bool, athleteCredential);
+    QFETCH(bool, legacyClaimsOnly);
+    QFETCH(QString, lossMode);
+    QFETCH(bool, recoverable);
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QSettings::Format legacyFormat =
+        legacyMigrationTestFormat();
+    const QSettings::Format targetFormat =
+        targetMigrationTestFormat();
+    QVERIFY(legacyFormat != QSettings::InvalidFormat);
+    QVERIFY(targetFormat != QSettings::InvalidFormat);
+    const QString legacyPath =
+        temporary.filePath(QStringLiteral("legacy"));
+    const QString authorityPath =
+        temporary.filePath(QStringLiteral("authority"));
+    QVERIFY(QDir().mkpath(legacyPath));
+    QVERIFY(QDir().mkpath(authorityPath));
+    QSettings::setPath(
+        legacyFormat, QSettings::UserScope,
+        legacyPath);
+    QSettings::setPath(
+        targetFormat, QSettings::UserScope,
+        authorityPath);
+
+    const QString organization =
+        QStringLiteral("CredentialLostMetadata-")
+        + QUuid::createUuid().toString(
+            QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("library"));
+    const QString athleteConfig =
+        QDir(athleteRoot).filePath(
+            QStringLiteral("Athlete/config"));
+    QVERIFY(QDir().mkpath(athleteConfig));
+    const QString globalPath =
+        QDir(athleteRoot).filePath(
+            QStringLiteral(
+                "configglobal-general.ini"));
+    const QString athletePath =
+        QDir(athleteConfig).filePath(
+            QStringLiteral("athlete-private.ini"));
+    const QString settingsPath = athleteCredential
+        ? athletePath : globalPath;
+    const QString credentialKey = athleteCredential
+        ? QStringLiteral(GC_STRAVA_TOKEN)
+        : QStringLiteral(GC_NOLIO_ACCESS_TOKEN);
+    const QString plaintextKey =
+        plainKey(credentialKey);
+    const QString originalSecret =
+        athleteCredential
+            ? QStringLiteral(
+                  "completed-athlete-location-secret")
+            : QStringLiteral(
+                  "completed-global-location-secret");
+    const QString replacementSecret =
+        QStringLiteral("must-not-be-reenrolled");
+    {
+        QSettings plaintext(settingsPath, targetFormat);
+        plaintext.setFallbacksEnabled(false);
+        plaintext.setValue(
+            plaintextKey, originalSecret);
+        plaintext.sync();
+        QCOMPARE(
+            plaintext.status(),
+            QSettings::NoError);
+    }
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    {
+        GSettings enrolled(
+            organization, application,
+            legacyFormat, targetFormat);
+        enrolled.initializeQSettingsGlobal(athleteRoot);
+        if (athleteCredential) {
+            enrolled.initializeQSettingsAthlete(
+                athleteRoot,
+                QStringLiteral("Athlete"));
+        }
+        const QVariant observed = athleteCredential
+            ? enrolled.cvalue(
+                  QStringLiteral("Athlete"),
+                  GC_STRAVA_TOKEN,
+                  QStringLiteral("missing"))
+            : enrolled.value(
+                  nullptr, GC_NOLIO_ACCESS_TOKEN,
+                  QStringLiteral("missing"));
+        QCOMPARE(observed.toString(), originalSecret);
+    }
+    const QHash<QString, QString> vaultBefore =
+        factoryState()->values;
+    QCOMPARE(vaultBefore.size(), 1);
+
+    const QString rootKey =
+        QStringLiteral("credential_store/root_id");
+    const QString localBindingKey =
+        QStringLiteral(
+            "credential_store/binding_v2");
+    const QString localScopeKey =
+        QStringLiteral("credential_store/id");
+    QString originalRootId;
+    {
+        QSettings global(globalPath, targetFormat);
+        global.setFallbacksEnabled(false);
+        global.sync();
+        originalRootId =
+            global.value(rootKey).toString();
+        QVERIFY(!QUuid(originalRootId).isNull());
+    }
+    QVariant originalBinding;
+    QString originalScopeId;
+    {
+        QSettings local(settingsPath, targetFormat);
+        local.setFallbacksEnabled(false);
+        local.sync();
+        originalBinding =
+            local.value(localBindingKey);
+        originalScopeId =
+            local.value(localScopeKey).toString();
+        const TestScopeBinding parsed =
+            parseTestScopeBinding(originalBinding);
+        QVERIFY(parsed.valid);
+        QCOMPARE(parsed.rootId, originalRootId);
+        QCOMPARE(parsed.scopeId, originalScopeId);
+        QCOMPARE(parsed.origin, QStringLiteral("fresh"));
+    }
+    const QString expectedVaultKey =
+        CredentialSettings::vaultKey(
+            originalScopeId, credentialKey);
+    QCOMPARE(
+        vaultBefore.value(expectedVaultKey),
+        originalSecret);
+
+    QSettings authority(
+        targetFormat, QSettings::UserScope,
+        organization, application);
+    authority.setFallbacksEnabled(false);
+    authority.sync();
+    const QString bindingPrefix =
+        QStringLiteral(
+            "credential_store/location_bindings/");
+    const QString claimPrefix =
+        QStringLiteral(
+            "credential_store/location_claims/");
+    const QString enrollmentPrefix =
+        QStringLiteral(
+            "credential_store/location_enrollments/");
+    const bool removeRoot =
+        lossMode
+        == QStringLiteral("root-and-binding");
+    const bool removeBinding =
+        lossMode == QStringLiteral("both")
+        || lossMode == QStringLiteral("binding")
+        || removeRoot;
+    const bool removeScope =
+        lossMode == QStringLiteral("both")
+        || lossMode == QStringLiteral("scope");
+    const QHash<QString, QVariant> completedBindings =
+        settingsValuesWithPrefix(
+            &authority, bindingPrefix);
+    const QHash<QString, QVariant> claimsBefore =
+        settingsValuesWithPrefix(
+            &authority, claimPrefix);
+    QCOMPARE(
+        completedBindings.size(),
+        athleteCredential ? 4 : 2);
+    QCOMPARE(
+        claimsBefore.size(),
+        athleteCredential ? 4 : 2);
+    QVERIFY(settingsValuesWithPrefix(
+                &authority, enrollmentPrefix)
+                .isEmpty());
+    QHash<QString, QVariant> legacyBindings =
+        completedBindings;
+    if (legacyClaimsOnly) {
+        const QString canonicalRoot =
+            QFileInfo(athleteRoot)
+                .canonicalFilePath();
+        const QString canonicalAthlete =
+            QFileInfo(
+                QDir(athleteRoot).filePath(
+                    QStringLiteral("Athlete")))
+                .canonicalFilePath();
+        for (auto binding =
+                 completedBindings.cbegin();
+             binding != completedBindings.cend();
+             ++binding) {
+            const TestLocationRecord record =
+                parseTestLocationRecord(
+                    binding.value());
+            QVERIFY(record.valid);
+            const bool targetBinding =
+                athleteCredential
+                    ? record.directoryPath
+                        == canonicalAthlete
+                    : record.kind
+                            == QStringLiteral("scope")
+                        && record.directoryPath
+                            == canonicalRoot;
+            const bool rootBinding =
+                removeRoot
+                && record.kind
+                    == QStringLiteral("root")
+                && record.directoryPath
+                    == canonicalRoot;
+            if (targetBinding || rootBinding) {
+                authority.remove(binding.key());
+                legacyBindings.remove(binding.key());
+            }
+        }
+        authority.sync();
+        QCOMPARE(
+            authority.status(), QSettings::NoError);
+        QCOMPARE(
+            settingsValuesWithPrefix(
+                &authority, bindingPrefix),
+            legacyBindings);
+        QCOMPARE(
+            legacyBindings.size(),
+            athleteCredential ? 2
+                              : (removeRoot ? 0 : 1));
+        if (removeRoot) {
+            for (auto binding =
+                     legacyBindings.cbegin();
+                 binding != legacyBindings.cend();
+                 ++binding) {
+                const TestLocationRecord record =
+                    parseTestLocationRecord(
+                        binding.value());
+                QVERIFY(record.valid);
+                QVERIFY(record.kind
+                        != QStringLiteral("root"));
+            }
+        }
+    }
+    const QByteArray authorityBefore =
+        fileContents(authority.fileName());
+
+    {
+        QSettings damaged(settingsPath, targetFormat);
+        damaged.setFallbacksEnabled(false);
+        if (removeRoot)
+            damaged.remove(rootKey);
+        if (removeBinding) {
+            damaged.remove(localBindingKey);
+        }
+        if (removeScope) {
+            damaged.remove(localScopeKey);
+        }
+        damaged.setValue(
+            plaintextKey, replacementSecret);
+        damaged.sync();
+        QCOMPARE(
+            damaged.status(),
+            QSettings::NoError);
+    }
+
+    {
+        GSettings rejected(
+            organization, application,
+            legacyFormat, targetFormat);
+        rejected.initializeQSettingsGlobal(athleteRoot);
+        if (athleteCredential) {
+            rejected.initializeQSettingsAthlete(
+                athleteRoot,
+                QStringLiteral("Athlete"));
+        }
+        const QVariant observed = athleteCredential
+            ? rejected.cvalue(
+                  QStringLiteral("Athlete"),
+                  GC_STRAVA_TOKEN,
+                  QStringLiteral("missing"))
+            : rejected.value(
+                  nullptr, GC_NOLIO_ACCESS_TOKEN,
+                  QStringLiteral("missing"));
+        QCOMPARE(
+            observed.toString(),
+            recoverable
+                ? originalSecret
+                : QStringLiteral("missing"));
+        if (!recoverable) {
+            const bool stored = athleteCredential
+                ? rejected.setCValueChecked(
+                      QStringLiteral("Athlete"),
+                      GC_STRAVA_TOKEN,
+                      QStringLiteral(
+                          "must-not-be-stored"))
+                : rejected.setValueChecked(
+                      GC_NOLIO_ACCESS_TOKEN,
+                      QStringLiteral(
+                          "must-not-be-stored"));
+            QVERIFY(!stored);
+        }
+    }
+    QCOMPARE(factoryState()->values, vaultBefore);
+
+    {
+        QSettings retained(settingsPath, targetFormat);
+        retained.setFallbacksEnabled(false);
+        retained.sync();
+        QCOMPARE(
+            retained.contains(localBindingKey),
+            recoverable || !removeBinding);
+        QCOMPARE(
+            retained.contains(localScopeKey),
+            recoverable || !removeScope);
+        if (recoverable) {
+            QCOMPARE(
+                retained.value(localBindingKey),
+                originalBinding);
+            QCOMPARE(
+                retained.value(
+                    localScopeKey).toString(),
+                originalScopeId);
+        } else {
+            QCOMPARE(
+                retained.value(
+                    plaintextKey).toString(),
+                replacementSecret);
+            if (!removeBinding) {
+                QCOMPARE(
+                    retained.value(localBindingKey),
+                    originalBinding);
+            }
+            if (!removeScope) {
+                QCOMPARE(
+                    retained.value(
+                        localScopeKey).toString(),
+                    originalScopeId);
+            }
+        }
+    }
+    {
+        QSettings global(globalPath, targetFormat);
+        global.setFallbacksEnabled(false);
+        global.sync();
+        QCOMPARE(global.contains(rootKey), !removeRoot);
+        if (!removeRoot) {
+            QCOMPARE(
+                global.value(rootKey).toString(),
+                originalRootId);
+        }
+    }
+    authority.sync();
+    QCOMPARE(
+        settingsValuesWithPrefix(
+            &authority, claimPrefix),
+        claimsBefore);
+    QVERIFY(settingsValuesWithPrefix(
+                &authority, enrollmentPrefix)
+                .isEmpty());
+    const QHash<QString, QVariant> expectedBindings =
+        legacyClaimsOnly && !recoverable
+            ? legacyBindings
+            : completedBindings;
+    QCOMPARE(
+        settingsValuesWithPrefix(
+            &authority, bindingPrefix),
+        expectedBindings);
+    if (!legacyClaimsOnly || !recoverable) {
+        QCOMPARE(
+            fileContents(authority.fileName()),
+            authorityBefore);
+    }
+}
+
+void TestCredentialSettings::
+legacyLocationClaimsAreBackfilled_data()
+{
+    QTest::addColumn<bool>("athleteCredential");
+    QTest::newRow("global") << false;
+    QTest::newRow("athlete") << true;
+}
+
+void TestCredentialSettings::
+legacyLocationClaimsAreBackfilled()
+{
+    QFETCH(bool, athleteCredential);
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QSettings::Format legacyFormat =
+        legacyMigrationTestFormat();
+    const QSettings::Format targetFormat =
+        targetMigrationTestFormat();
+    QVERIFY(legacyFormat != QSettings::InvalidFormat);
+    QVERIFY(targetFormat != QSettings::InvalidFormat);
+    const QString legacyPath =
+        temporary.filePath(QStringLiteral("legacy"));
+    const QString authorityPath =
+        temporary.filePath(QStringLiteral("authority"));
+    const QString athleteRoot =
+        temporary.filePath(QStringLiteral("library"));
+    const QString athleteConfig =
+        QDir(athleteRoot).filePath(
+            QStringLiteral("Athlete/config"));
+    QVERIFY(QDir().mkpath(legacyPath));
+    QVERIFY(QDir().mkpath(authorityPath));
+    QVERIFY(QDir().mkpath(athleteConfig));
+    QSettings::setPath(
+        legacyFormat, QSettings::UserScope,
+        legacyPath);
+    QSettings::setPath(
+        targetFormat, QSettings::UserScope,
+        authorityPath);
+
+    const QString organization =
+        QStringLiteral("CredentialClaimBackfill-")
+        + QUuid::createUuid().toString(
+            QUuid::WithoutBraces);
+    const QString application =
+        QStringLiteral("GoldenCheetahTest");
+    const QString globalPath =
+        QDir(athleteRoot).filePath(
+            QStringLiteral(
+                "configglobal-general.ini"));
+    const QString privatePath =
+        QDir(athleteConfig).filePath(
+            QStringLiteral(
+                "athlete-private.ini"));
+    const QString settingsPath = athleteCredential
+        ? privatePath : globalPath;
+    const QString plaintextKey = athleteCredential
+        ? plainKey(GC_STRAVA_TOKEN)
+        : plainKey(GC_NOLIO_ACCESS_TOKEN);
+    const QString secret = athleteCredential
+        ? QStringLiteral("backfilled-athlete-secret")
+        : QStringLiteral("backfilled-global-secret");
+    {
+        QSettings plaintext(settingsPath, targetFormat);
+        plaintext.setFallbacksEnabled(false);
+        plaintext.setValue(plaintextKey, secret);
+        plaintext.sync();
+        QCOMPARE(
+            plaintext.status(),
+            QSettings::NoError);
+    }
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    {
+        GSettings current(
+            organization, application,
+            legacyFormat, targetFormat);
+        current.initializeQSettingsGlobal(athleteRoot);
+        if (athleteCredential) {
+            current.initializeQSettingsAthlete(
+                athleteRoot,
+                QStringLiteral("Athlete"));
+        }
+        const QVariant observed = athleteCredential
+            ? current.cvalue(
+                  QStringLiteral("Athlete"),
+                  GC_STRAVA_TOKEN,
+                  QStringLiteral("missing"))
+            : current.value(
+                  nullptr, GC_NOLIO_ACCESS_TOKEN,
+                  QStringLiteral("missing"));
+        QCOMPARE(observed.toString(), secret);
+    }
+    const QHash<QString, QString> vaultBefore =
+        factoryState()->values;
+
+    QSettings authority(
+        targetFormat, QSettings::UserScope,
+        organization, application);
+    authority.setFallbacksEnabled(false);
+    authority.sync();
+    const QString claimPrefix =
+        QStringLiteral(
+            "credential_store/location_claims/");
+    const QString bindingPrefix =
+        QStringLiteral(
+            "credential_store/location_bindings/");
+    const QHash<QString, QVariant> claimsBefore =
+        settingsValuesWithPrefix(
+            &authority, claimPrefix);
+    QCOMPARE(
+        claimsBefore.size(),
+        athleteCredential ? 4 : 2);
+    const QHash<QString, QVariant> bindingsBefore =
+        settingsValuesWithPrefix(
+            &authority, bindingPrefix);
+    const QStringList bindingKeys =
+        authority.allKeys().filter(bindingPrefix);
+    QCOMPARE(
+        bindingKeys.size(),
+        athleteCredential ? 4 : 2);
+    for (const QString &key : bindingKeys)
+        authority.remove(key);
+    authority.sync();
+    QCOMPARE(
+        authority.status(),
+        QSettings::NoError);
+    QVERIFY(settingsValuesWithPrefix(
+                &authority, bindingPrefix)
+                .isEmpty());
+
+    {
+        GSettings upgraded(
+            organization, application,
+            legacyFormat, targetFormat);
+        upgraded.initializeQSettingsGlobal(athleteRoot);
+        if (athleteCredential) {
+            upgraded.initializeQSettingsAthlete(
+                athleteRoot,
+                QStringLiteral("Athlete"));
+        }
+        const QVariant observed = athleteCredential
+            ? upgraded.cvalue(
+                  QStringLiteral("Athlete"),
+                  GC_STRAVA_TOKEN,
+                  QStringLiteral("missing"))
+            : upgraded.value(
+                  nullptr, GC_NOLIO_ACCESS_TOKEN,
+                  QStringLiteral("missing"));
+        QCOMPARE(observed.toString(), secret);
+    }
+    QCOMPARE(factoryState()->values, vaultBefore);
+    authority.sync();
+    QCOMPARE(
+        settingsValuesWithPrefix(
+            &authority, claimPrefix),
+        claimsBefore);
+    QCOMPARE(
+        settingsValuesWithPrefix(
+            &authority, bindingPrefix),
+        bindingsBefore);
+    QVERIFY(authority.allKeys()
+                .filter(QStringLiteral(
+                    "credential_store/"
+                    "location_enrollments/"))
+                .isEmpty());
 }
 
 void TestCredentialSettings::

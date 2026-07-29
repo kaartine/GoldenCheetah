@@ -6,6 +6,9 @@
 #include <QCryptographicHash>
 #include <QDebug>
 #include <QDir>
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+#include <QElapsedTimer>
+#endif
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
@@ -21,6 +24,9 @@
 #include <QSysInfo>
 #include <QTemporaryDir>
 #include <QTemporaryFile>
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+#include <QThread>
+#endif
 #include <QUuid>
 
 #include <cerrno>
@@ -1518,11 +1524,58 @@ QString canonicalSettingsFileName(QSettings *settings)
         + QDir::cleanPath(file.absoluteFilePath());
 }
 
+constexpr int enrollmentOperationWaitMilliseconds = 5000;
+
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+bool writeCredentialEnrollmentTestSignal(
+    const char *environmentName)
+{
+    const QString path =
+        qEnvironmentVariable(environmentName);
+    if (path.isEmpty())
+        return true;
+    QFile signal(path);
+    return signal.open(
+               QIODevice::WriteOnly
+               | QIODevice::Truncate)
+        && signal.write("ready") == 5
+        && signal.flush();
+}
+
+bool holdCredentialEnrollmentTestLock()
+{
+    const QString enteredPath =
+        qEnvironmentVariable(
+            "GC_CREDENTIAL_TEST_ENROLLMENT_LOCK_ENTERED");
+    const QString releasePath =
+        qEnvironmentVariable(
+            "GC_CREDENTIAL_TEST_ENROLLMENT_LOCK_RELEASE");
+    if (enteredPath.isEmpty()
+        && releasePath.isEmpty()) {
+        return true;
+    }
+    if (enteredPath.isEmpty()
+        || releasePath.isEmpty()
+        || !writeCredentialEnrollmentTestSignal(
+            "GC_CREDENTIAL_TEST_ENROLLMENT_LOCK_ENTERED")) {
+        return false;
+    }
+    QElapsedTimer timer;
+    timer.start();
+    while (!QFileInfo::exists(releasePath)
+           && timer.elapsed() < 15000) {
+        QThread::msleep(10);
+    }
+    return QFileInfo::exists(releasePath);
+}
+#endif
+
 class CredentialOperationGuard
 {
 public:
     explicit CredentialOperationGuard(
-        const QString &operationId)
+        const QString &operationId,
+        int processWaitMilliseconds = 0)
     {
         if (!credentialOperationMutex().tryLock())
             return;
@@ -1547,8 +1600,25 @@ public:
         processLock_ = std::make_unique<QLockFile>(
             stateBasePath_ + QStringLiteral(".lock"));
         processLock_->setStaleLockTime(0);
-        if (!processLock_->tryLock(0))
+        if (processWaitMilliseconds > 0) {
+            if (!processLock_->tryLock(0)) {
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+                if (operationId.startsWith(
+                        QStringLiteral(
+                            "location-authority\n"))) {
+                    writeCredentialEnrollmentTestSignal(
+                        "GC_CREDENTIAL_TEST_"
+                        "ENROLLMENT_LOCK_CONTENDED");
+                }
+#endif
+                if (!processLock_->tryLock(
+                        processWaitMilliseconds)) {
+                    return;
+                }
+            }
+        } else if (!processLock_->tryLock(0)) {
             return;
+        }
         admitted_ = true;
     }
 
@@ -2780,6 +2850,179 @@ ParsedLocationClaim parseLocationClaim(
     };
 }
 
+bool validLocationEnrollmentKind(
+    const QByteArray &kind)
+{
+    return kind == QByteArrayLiteral("root")
+        || kind == QByteArrayLiteral("profile")
+        || kind == QByteArrayLiteral("scope");
+}
+
+QString canonicalLocationDirectory(
+    const QString &directoryPath)
+{
+    const QFileInfo directory(directoryPath);
+    return directory.isDir()
+        ? directory.canonicalFilePath()
+        : QString();
+}
+
+QString locationClaimStorageKey(
+    const QByteArray &kind,
+    const QString &identityId)
+{
+    const QByteArray digest = QCryptographicHash::hash(
+        kind + '\n' + identityId.toUtf8(),
+        QCryptographicHash::Sha256).toHex();
+    return QStringLiteral(
+        "credential_store/location_claims/")
+        + QString::fromLatin1(digest);
+}
+
+QString locationEnrollmentStorageKey(
+    const QByteArray &kind,
+    const QString &parentId,
+    const QString &directoryPath)
+{
+    QByteArray identity = QByteArrayLiteral("v1");
+    const auto appendField =
+        [&identity](const QByteArray &field) {
+            identity.append('\0');
+            identity.append(
+                QByteArray::number(field.size()));
+            identity.append('\0');
+            identity.append(field);
+        };
+    appendField(kind);
+    appendField(parentId.toUtf8());
+    appendField(directoryPath.toUtf8());
+    const QByteArray digest = QCryptographicHash::hash(
+        identity, QCryptographicHash::Sha256).toHex();
+    return QStringLiteral(
+        "credential_store/location_enrollments/")
+        + QString::fromLatin1(digest);
+}
+
+QString locationBindingStorageKey(
+    const QByteArray &kind,
+    const QString &directoryPath)
+{
+    QByteArray identity = QByteArrayLiteral("v1");
+    const auto appendField =
+        [&identity](const QByteArray &field) {
+            identity.append('\0');
+            identity.append(
+                QByteArray::number(field.size()));
+            identity.append('\0');
+            identity.append(field);
+        };
+    appendField(kind);
+    appendField(directoryPath.toUtf8());
+    const QByteArray digest = QCryptographicHash::hash(
+        identity, QCryptographicHash::Sha256).toHex();
+    return QStringLiteral(
+        "credential_store/location_bindings/")
+        + QString::fromLatin1(digest);
+}
+
+struct ParsedLocationEnrollment
+{
+    bool valid = false;
+    QByteArray kind;
+    QString identityId;
+    QString parentId;
+    QString directoryPath;
+};
+
+QString serializedLocationEnrollment(
+    const QByteArray &kind,
+    const QString &identityId,
+    const QString &parentId,
+    const QString &directoryPath)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("version"), 1);
+    object.insert(
+        QStringLiteral("kind"),
+        QString::fromLatin1(kind));
+    object.insert(
+        QStringLiteral("identity_id"), identityId);
+    object.insert(
+        QStringLiteral("parent_id"), parentId);
+    object.insert(
+        QStringLiteral("directory_path"), directoryPath);
+    return QString::fromUtf8(
+        QJsonDocument(object).toJson(
+            QJsonDocument::Compact));
+}
+
+ParsedLocationEnrollment parseLocationEnrollment(
+    const QVariant &stored)
+{
+    QJsonParseError error;
+    const QJsonDocument document =
+        QJsonDocument::fromJson(
+            stored.toString().toUtf8(), &error);
+    if (error.error != QJsonParseError::NoError
+        || !document.isObject()) {
+        return {};
+    }
+    const QJsonObject object = document.object();
+    const QJsonValue version =
+        object.value(QStringLiteral("version"));
+    if (object.size() != 5
+        || !version.isDouble()
+        || version.toDouble() != 1.0
+        || !object.value(
+                QStringLiteral("kind")).isString()
+        || !object.value(
+                QStringLiteral("identity_id")).isString()
+        || !object.value(
+                QStringLiteral("parent_id")).isString()
+        || !object.value(
+                QStringLiteral("directory_path")).isString()) {
+        return {};
+    }
+
+    const QByteArray kind = object.value(
+        QStringLiteral("kind")).toString().toLatin1();
+    if (!validLocationEnrollmentKind(kind)
+        || QString::fromLatin1(kind)
+            != object.value(
+                QStringLiteral("kind")).toString()) {
+        return {};
+    }
+    QString identityId;
+    if (!canonicalUuidString(
+            object.value(
+                QStringLiteral("identity_id")).toString(),
+            &identityId)) {
+        return {};
+    }
+    const QString storedParent = object.value(
+        QStringLiteral("parent_id")).toString();
+    QString parentId;
+    if (!storedParent.isEmpty()
+        && !canonicalUuidString(
+            storedParent, &parentId)) {
+        return {};
+    }
+    if ((kind == QByteArrayLiteral("root"))
+            != parentId.isEmpty()) {
+        return {};
+    }
+    const QString directoryPath = QDir::cleanPath(
+        object.value(
+            QStringLiteral("directory_path")).toString());
+    if (directoryPath.isEmpty()
+        || !QDir::isAbsolutePath(directoryPath)) {
+        return {};
+    }
+    return {
+        true, kind, identityId, parentId, directoryPath
+    };
+}
+
 QString absoluteExactSettingKey(
     QSettings *settings,
     const QString &key)
@@ -2798,7 +3041,10 @@ bool exactSettingKeysEqual(
     const QString &right)
 {
 #ifdef Q_OS_WIN
-    if (format == QSettings::IniFormat) {
+    if (format == QSettings::IniFormat
+        || format == QSettings::NativeFormat
+        || format == QSettings::Registry32Format
+        || format == QSettings::Registry64Format) {
         return left.compare(
                    right, Qt::CaseInsensitive) == 0;
     }
@@ -3183,6 +3429,286 @@ bool replaceExactSettingsMap(
     return true;
 }
 
+class DurableExactSettingsTransaction
+{
+public:
+    explicit DurableExactSettingsTransaction(
+        QSettings *settings)
+        : settings_(settings)
+    {
+        if (!settings_ || settings_->fileName().isEmpty())
+            return;
+#ifdef Q_OS_WIN
+        registry_ =
+            settings_->format() == QSettings::NativeFormat
+            || settings_->format()
+                == QSettings::Registry32Format
+            || settings_->format()
+                == QSettings::Registry64Format;
+#endif
+        if (registry_) {
+            registrySettings_ =
+                freshExactSettings(settings_);
+            if (!registrySettings_)
+                return;
+            registrySettings_->sync();
+            valid_ = registrySettings_->status()
+                    == QSettings::NoError
+                && CredentialSettings::hardenSettingsFile(
+                    registrySettings_.get());
+            return;
+        }
+
+        std::unique_ptr<QSettings> synchronized =
+            freshExactSettings(settings_);
+        if (!synchronized)
+            return;
+        synchronized->sync();
+        if (synchronized->status() != QSettings::NoError)
+            return;
+        synchronized.reset();
+
+        lock_ = std::make_unique<QLockFile>(
+            settings_->fileName()
+            + QStringLiteral(".lock"));
+        if (!lock_->tryLock(5000))
+            return;
+
+        const QFileInfo source(settings_->fileName());
+        if (source.exists()
+            && !CredentialSettings::hardenSettingsFile(
+                settings_)) {
+            return;
+        }
+        snapshot_ = readExactSettingsSnapshot(
+            settings_->fileName(),
+            settings_->format());
+        valid_ = snapshot_.readable;
+    }
+
+    bool isValid() const
+    {
+        return valid_;
+    }
+
+    ExactSetting value(const QString &key) const
+    {
+        if (!valid_ || key.isEmpty())
+            return {};
+        if (registry_) {
+            const bool present =
+                registrySettings_->contains(key);
+            return {
+                true,
+                present,
+                present
+                    ? registrySettings_->value(key)
+                    : QVariant()
+            };
+        }
+        QVariant stored;
+        const bool present =
+            exactSettingsSnapshotValue(
+                snapshot_, settings_->format(),
+                absoluteExactSettingKey(settings_, key),
+                &stored);
+        return {
+            true, present,
+            present ? stored : QVariant()
+        };
+    }
+
+    QSettings::SettingsMap entriesWithPrefix(
+        const QString &prefix) const
+    {
+        QSettings::SettingsMap entries;
+        if (!valid_ || prefix.isEmpty())
+            return entries;
+        Qt::CaseSensitivity sensitivity =
+            Qt::CaseSensitive;
+#ifdef Q_OS_WIN
+        if (registry_
+            || settings_->format()
+                == QSettings::IniFormat) {
+            sensitivity = Qt::CaseInsensitive;
+        }
+#endif
+        if (registry_) {
+            for (const QString &key :
+                 registrySettings_->allKeys()) {
+                if (key.startsWith(
+                        prefix, sensitivity)) {
+                    entries.insert(
+                        absoluteExactSettingKey(
+                            settings_, key),
+                        registrySettings_->value(key));
+                }
+            }
+            return entries;
+        }
+
+        const QString absolutePrefix =
+            absoluteExactSettingKey(
+                settings_, prefix);
+        for (auto entry = snapshot_.values.cbegin();
+             entry != snapshot_.values.cend(); ++entry) {
+            if (entry.key().startsWith(
+                    absolutePrefix, sensitivity)) {
+                entries.insert(
+                    entry.key(), entry.value());
+            }
+        }
+        return entries;
+    }
+
+    bool replaceValues(
+        const QSettings::SettingsMap &updates,
+        const QStringList &removals = {})
+    {
+        if (!valid_)
+            return false;
+        if (registry_) {
+            for (const QString &key : removals)
+                registrySettings_->remove(key);
+            for (auto entry = updates.cbegin();
+                 entry != updates.cend(); ++entry) {
+                registrySettings_->setValue(
+                    entry.key(), entry.value());
+            }
+            registrySettings_->sync();
+            if (registrySettings_->status()
+                    != QSettings::NoError
+                || !CredentialSettings::hardenSettingsFile(
+                    registrySettings_.get())) {
+                return false;
+            }
+            for (const QString &key : removals) {
+                if (registrySettings_->contains(key))
+                    return false;
+            }
+            for (auto entry = updates.cbegin();
+                 entry != updates.cend(); ++entry) {
+                if (!registrySettings_->contains(
+                        entry.key())
+                    || registrySettings_->value(
+                           entry.key())
+                        != entry.value()) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        QSettings::SettingsMap replacement =
+            snapshot_.values;
+        const auto removeEquivalent =
+            [this, &replacement](
+                const QString &relativeKey) {
+                const QString absoluteKey =
+                    absoluteExactSettingKey(
+                        settings_, relativeKey);
+                for (auto entry = replacement.begin();
+                     entry != replacement.end();) {
+                    if (exactSettingKeysEqual(
+                            settings_->format(),
+                            entry.key(), absoluteKey)) {
+                        entry = replacement.erase(entry);
+                    } else {
+                        ++entry;
+                    }
+                }
+                return absoluteKey;
+            };
+        for (const QString &key : removals)
+            removeEquivalent(key);
+        for (auto entry = updates.cbegin();
+             entry != updates.cend(); ++entry) {
+            const QString absoluteKey =
+                removeEquivalent(entry.key());
+            if (absoluteKey.isEmpty())
+                return false;
+            replacement.insert(
+                absoluteKey, entry.value());
+        }
+
+        if (replacement != snapshot_.values) {
+            QString error;
+            if (!replaceExactSettingsMap(
+                    settings_, replacement, &error)) {
+                return false;
+            }
+        } else if (!ensureDurable()) {
+            return false;
+        }
+
+        const ExactSettingsSnapshot verified =
+            readExactSettingsSnapshot(
+                settings_->fileName(),
+                settings_->format());
+        if (!verified.readable)
+            return false;
+        for (const QString &key : removals) {
+            if (exactSettingsSnapshotValue(
+                    verified, settings_->format(),
+                    absoluteExactSettingKey(
+                        settings_, key))) {
+                return false;
+            }
+        }
+        for (auto entry = updates.cbegin();
+             entry != updates.cend(); ++entry) {
+            QVariant stored;
+            if (!exactSettingsSnapshotValue(
+                    verified, settings_->format(),
+                    absoluteExactSettingKey(
+                        settings_, entry.key()),
+                    &stored)
+                || stored != entry.value()) {
+                return false;
+            }
+        }
+        snapshot_ = verified;
+        return true;
+    }
+
+    bool ensureDurable() const
+    {
+        if (!valid_)
+            return false;
+        if (registry_) {
+            registrySettings_->sync();
+            return registrySettings_->status()
+                    == QSettings::NoError
+                && CredentialSettings::hardenSettingsFile(
+                    registrySettings_.get());
+        }
+        return CredentialSettings::hardenSettingsFile(
+                   settings_)
+            && credentialFileIsDurable(
+                settings_->fileName());
+    }
+
+    bool refreshCaller()
+    {
+        if (!valid_ || !settings_)
+            return false;
+        if (lock_ && lock_->isLocked())
+            lock_->unlock();
+        settings_->sync();
+        return settings_->status()
+            == QSettings::NoError;
+    }
+
+private:
+    QSettings *settings_ = nullptr;
+    bool valid_ = false;
+    bool registry_ = false;
+    std::unique_ptr<QSettings> registrySettings_;
+    std::unique_ptr<QLockFile> lock_;
+    ExactSettingsSnapshot snapshot_;
+    Q_DISABLE_COPY(DurableExactSettingsTransaction)
+};
+
 QString pendingRemovalGenerationKey(
     const QString &removalKey)
 {
@@ -3408,16 +3934,75 @@ QStringList CredentialSettings::credentialKeysForPrefix(
     return result;
 }
 
+CredentialSettings::LocalMetadataSnapshot
+CredentialSettings::readLocalMetadata(
+    QSettings *settings,
+    const QString &identityKey,
+    const QString &bindingKey,
+    const QString &scopeKey)
+{
+    if (!settings
+        || (identityKey.isEmpty()
+            && bindingKey.isEmpty()
+            && scopeKey.isEmpty())) {
+        return {};
+    }
+    const QString settingsIdentity =
+        canonicalSettingsFileName(settings);
+    if (settingsIdentity.isEmpty())
+        return {};
+    CredentialOperationGuard operation(
+        QStringLiteral("metadata-snapshot\n")
+        + settingsIdentity + QLatin1Char('\n')
+        + settings->group(),
+        enrollmentOperationWaitMilliseconds);
+    if (!operation)
+        return {};
+    DurableExactSettingsTransaction transaction(
+        settings);
+    if (!transaction.isValid())
+        return {};
+
+    const ExactSetting identity = identityKey.isEmpty()
+        ? ExactSetting{true, false, {}}
+        : transaction.value(identityKey);
+    const ExactSetting binding = bindingKey.isEmpty()
+        ? ExactSetting{true, false, {}}
+        : transaction.value(bindingKey);
+    const ExactSetting scope = scopeKey.isEmpty()
+        ? ExactSetting{true, false, {}}
+        : transaction.value(scopeKey);
+    if (!identity.readable
+        || !binding.readable
+        || !scope.readable) {
+        return {};
+    }
+    return {
+        true,
+        identity.present, identity.value,
+        binding.present, binding.value,
+        scope.present, scope.value
+    };
+}
+
 QString CredentialSettings::ensureIdentityId(
     QSettings *settings,
     const QString &storageKey,
     const QString &recoveryBindingKey,
-    bool *created)
+    bool *created,
+    const QString &preferredIdentityId)
 {
     if (created)
         *created = false;
     if (!settings || storageKey.isEmpty())
         return {};
+    QString canonicalPreferredIdentity;
+    if (!preferredIdentityId.isEmpty()
+        && !canonicalUuidString(
+            preferredIdentityId,
+            &canonicalPreferredIdentity)) {
+        return {};
+    }
     const QString settingsIdentity =
         canonicalSettingsFileName(settings);
     if (settingsIdentity.isEmpty())
@@ -3426,12 +4011,17 @@ QString CredentialSettings::ensureIdentityId(
         QStringLiteral("identity\n")
         + settingsIdentity + QLatin1Char('\n')
         + settings->group() + QLatin1Char('\n')
-        + storageKey);
+        + storageKey,
+        enrollmentOperationWaitMilliseconds);
     if (!operation)
         return {};
 
+    DurableExactSettingsTransaction transaction(
+        settings);
+    if (!transaction.isValid())
+        return {};
     const ExactSetting storedSetting =
-        readExactSetting(settings, storageKey);
+        transaction.value(storageKey);
     if (!storedSetting.readable)
         return {};
     if (storedSetting.present) {
@@ -3440,10 +4030,29 @@ QString CredentialSettings::ensureIdentityId(
         QString identity;
         if (!canonicalUuidString(stored, &identity))
             return {};
-        if (stored != identity
-            && !writeExactSetting(
-                settings, storageKey, identity)) {
+        if (!canonicalPreferredIdentity.isEmpty()
+            && identity
+                != canonicalPreferredIdentity) {
             return {};
+        }
+        const bool normalized = stored != identity;
+        if (normalized
+            && !transaction.replaceValues(
+                {{storageKey, identity}})) {
+            return {};
+        }
+        if (!canonicalPreferredIdentity.isEmpty()
+            && !transaction.ensureDurable()) {
+            return {};
+        }
+        if (normalized
+            && !transaction.refreshCaller()) {
+            return {};
+        }
+        if (!canonicalPreferredIdentity.isEmpty()) {
+            credentialCrashPoint(
+                QByteArrayLiteral(
+                    "enrollment:identity-published"));
         }
         return identity;
     }
@@ -3451,8 +4060,7 @@ QString CredentialSettings::ensureIdentityId(
     QString identity;
     if (!recoveryBindingKey.isEmpty()) {
         const ExactSetting recovery =
-            readExactSetting(
-                settings, recoveryBindingKey);
+            transaction.value(recoveryBindingKey);
         if (!recovery.readable)
             return {};
         if (recovery.present) {
@@ -3463,17 +4071,30 @@ QString CredentialSettings::ensureIdentityId(
             identity = binding.rootId;
         }
     }
-    const bool generated = identity.isEmpty();
-    if (generated) {
-        identity =
-            QUuid::createUuid().toString(
-                QUuid::WithoutBraces);
+    if (!identity.isEmpty()
+        && !canonicalPreferredIdentity.isEmpty()
+        && identity != canonicalPreferredIdentity) {
+        return {};
     }
-    if (!writeExactSetting(
-            settings, storageKey, identity)) {
+    const bool generated = identity.isEmpty();
+    if (generated)
+        identity = canonicalPreferredIdentity;
+    if (identity.isEmpty()) {
+        identity = QUuid::createUuid().toString(
+            QUuid::WithoutBraces);
+    }
+    if (!transaction.replaceValues(
+            {{storageKey, identity}})) {
         qWarning() << "Cannot persist credential identity:"
                    << settings->fileName();
         return {};
+    }
+    if (!transaction.refreshCaller())
+        return {};
+    if (!canonicalPreferredIdentity.isEmpty()) {
+        credentialCrashPoint(
+            QByteArrayLiteral(
+                "enrollment:identity-published"));
     }
     if (created)
         *created = generated;
@@ -3534,7 +4155,9 @@ CredentialSettings::ensureScopeBinding(
     const QString &bindingKey,
     const QString &scopeKey,
     const QString &authorizedLegacyScopeId,
-    const QString &authorizedLegacyProfileId)
+    const QString &authorizedLegacyProfileId,
+    const QString &preferredProfileId,
+    const QString &preferredScopeId)
 {
     ScopeBindingResult unavailable;
     if (!settings || bindingKey.isEmpty()
@@ -3550,6 +4173,23 @@ CredentialSettings::ensureScopeBinding(
             {}, {}
         };
     }
+    QString canonicalPreferredProfile;
+    QString canonicalPreferredScope;
+    const bool preferredBinding =
+        !preferredProfileId.isEmpty()
+        || !preferredScopeId.isEmpty();
+    if (preferredBinding
+        && (!canonicalUuidString(
+                preferredProfileId,
+                &canonicalPreferredProfile)
+            || !canonicalUuidString(
+                preferredScopeId,
+                &canonicalPreferredScope))) {
+        return {
+            ScopeBindingStatus::Conflict,
+            {}, {}
+        };
+    }
     const QString settingsIdentity =
         canonicalSettingsFileName(settings);
     if (settingsIdentity.isEmpty())
@@ -3559,28 +4199,45 @@ CredentialSettings::ensureScopeBinding(
         + settingsIdentity + QLatin1Char('\n')
         + settings->group() + QLatin1Char('\n')
         + bindingKey + QLatin1Char('\n')
-        + scopeKey);
+        + scopeKey,
+        enrollmentOperationWaitMilliseconds);
     if (!operation)
         return unavailable;
 
-    std::unique_ptr<QSettings> exact =
-        freshExactSettings(settings);
-    if (!exact)
+    DurableExactSettingsTransaction transaction(
+        settings);
+    if (!transaction.isValid())
         return unavailable;
-    exact->sync();
-    if (exact->status() != QSettings::NoError)
+    const ExactSetting storedBinding =
+        transaction.value(bindingKey);
+    const ExactSetting storedScopeSetting =
+        transaction.value(scopeKey);
+    if (!storedBinding.readable
+        || !storedScopeSetting.readable) {
         return unavailable;
+    }
 
     const bool bindingPresent =
-        exact->contains(bindingKey);
+        storedBinding.present;
     const bool scopePresent =
-        exact->contains(scopeKey);
+        storedScopeSetting.present;
     ParsedScopeBinding binding;
     if (bindingPresent) {
         binding = parseScopeBinding(
-            exact->value(bindingKey));
+            storedBinding.value);
         if (!binding.valid
             || binding.rootId != canonicalRootId) {
+            return {
+                ScopeBindingStatus::Conflict,
+                {}, {}
+            };
+        }
+        if (preferredBinding
+            && (binding.profileId
+                    != canonicalPreferredProfile
+                || binding.scopeId
+                    != canonicalPreferredScope
+                || binding.legacyLocalScope)) {
             return {
                 ScopeBindingStatus::Conflict,
                 {}, {}
@@ -3610,7 +4267,7 @@ CredentialSettings::ensureScopeBinding(
     QString storedScope;
     if (scopePresent
         && !canonicalUuidString(
-            exact->value(scopeKey).toString(),
+            storedScopeSetting.value.toString(),
             &storedScope)) {
         return {
             ScopeBindingStatus::Conflict,
@@ -3627,35 +4284,50 @@ CredentialSettings::ensureScopeBinding(
 
     if (!bindingPresent) {
         if (scopePresent) {
-            QString authorizedScope;
-            QString authorizedProfile;
-            if (!canonicalUuidString(
-                    authorizedLegacyScopeId,
-                    &authorizedScope)
-                || authorizedScope != storedScope
-                || !canonicalUuidString(
-                    authorizedLegacyProfileId,
-                    &authorizedProfile)) {
-                return {
-                    ScopeBindingStatus::Conflict,
-                    {}, {}
-                };
+            if (preferredBinding) {
+                if (storedScope
+                    != canonicalPreferredScope) {
+                    return {
+                        ScopeBindingStatus::Conflict,
+                        {}, {}
+                    };
+                }
+                binding.profileId =
+                    canonicalPreferredProfile;
+            } else {
+                QString authorizedScope;
+                QString authorizedProfile;
+                if (!canonicalUuidString(
+                        authorizedLegacyScopeId,
+                        &authorizedScope)
+                    || authorizedScope != storedScope
+                    || !canonicalUuidString(
+                        authorizedLegacyProfileId,
+                        &authorizedProfile)) {
+                    return {
+                        ScopeBindingStatus::Conflict,
+                        {}, {}
+                    };
+                }
+                binding.profileId = authorizedProfile;
             }
-            binding.profileId = authorizedProfile;
         }
         binding.valid = true;
         binding.rootId = canonicalRootId;
         if (binding.profileId.isEmpty()) {
-            binding.profileId =
-                QUuid::createUuid().toString(
-                    QUuid::WithoutBraces);
+            binding.profileId = preferredBinding
+                ? canonicalPreferredProfile
+                : QUuid::createUuid().toString(
+                      QUuid::WithoutBraces);
         }
         binding.scopeId = scopePresent
             ? storedScope
-            : QUuid::createUuid().toString(
-                  QUuid::WithoutBraces);
+            : (preferredBinding
+                   ? canonicalPreferredScope
+                   : QUuid::createUuid().toString(
+                         QUuid::WithoutBraces));
         binding.legacyLocalScope =
-            scopePresent;
+            scopePresent && !preferredBinding;
     }
 
     const QString serialized =
@@ -3666,54 +4338,41 @@ CredentialSettings::ensureScopeBinding(
             binding.legacyLocalScope);
     const bool needsWrite =
         !scopePresent
-        || exact->value(scopeKey).toString()
+        || storedScopeSetting.value.toString()
             != binding.scopeId
         || !bindingPresent
-        || exact->value(bindingKey).toString()
+        || storedBinding.value.toString()
             != serialized;
     if (needsWrite) {
-        const QVariant previousScope =
-            exact->value(scopeKey);
-        const QVariant previousBinding =
-            exact->value(bindingKey);
-        exact->setValue(scopeKey, binding.scopeId);
-        exact->setValue(bindingKey, serialized);
-        exact->sync();
-        hardenSettingsFile(settings);
-        if (exact->status() != QSettings::NoError) {
-            if (scopePresent)
-                exact->setValue(
-                    scopeKey, previousScope);
-            else
-                exact->remove(scopeKey);
-            if (bindingPresent)
-                exact->setValue(
-                    bindingKey, previousBinding);
-            else
-                exact->remove(bindingKey);
-            exact->sync();
+        if (!transaction.replaceValues({
+                {scopeKey, binding.scopeId},
+                {bindingKey, serialized}
+            })) {
             return unavailable;
         }
+    } else if (preferredBinding
+               && !transaction.ensureDurable()) {
+        return unavailable;
     }
 
-    std::unique_ptr<QSettings> verified =
-        freshExactSettings(settings);
-    if (!verified)
-        return unavailable;
-    verified->sync();
-    if (verified->status() != QSettings::NoError
-        || !verified->contains(bindingKey)
-        || !verified->contains(scopeKey)) {
+    const ExactSetting verifiedBinding =
+        transaction.value(bindingKey);
+    const ExactSetting verifiedScope =
+        transaction.value(scopeKey);
+    if (!verifiedBinding.readable
+        || !verifiedScope.readable
+        || !verifiedBinding.present
+        || !verifiedScope.present) {
         return unavailable;
     }
     const ParsedScopeBinding persisted =
         parseScopeBinding(
-            verified->value(bindingKey));
+            verifiedBinding.value);
     QString persistedScope;
     if (!persisted.valid
         || persisted.rootId != canonicalRootId
         || !canonicalUuidString(
-            verified->value(scopeKey).toString(),
+            verifiedScope.value.toString(),
             &persistedScope)
         || persistedScope != persisted.scopeId
         || persisted.profileId != binding.profileId
@@ -3724,6 +4383,15 @@ CredentialSettings::ensureScopeBinding(
             ScopeBindingStatus::Conflict,
             {}, {}
         };
+    }
+    if (needsWrite
+        && !transaction.refreshCaller()) {
+        return unavailable;
+    }
+    if (preferredBinding) {
+        credentialCrashPoint(
+            QByteArrayLiteral(
+                "enrollment:binding-published"));
     }
 
     return {
@@ -3758,11 +4426,8 @@ CredentialSettings::ensureLocationClaim(
                 parentId, &canonicalParentId))) {
         return LocationClaimStatus::Conflict;
     }
-    const QFileInfo directory(directoryPath);
     const QString canonicalDirectory =
-        directory.isDir()
-            ? directory.canonicalFilePath()
-            : QString();
+        canonicalLocationDirectory(directoryPath);
     if (canonicalDirectory.isEmpty())
         return LocationClaimStatus::Unavailable;
 
@@ -3771,15 +4436,19 @@ CredentialSettings::ensureLocationClaim(
     if (settingsIdentity.isEmpty())
         return LocationClaimStatus::Unavailable;
     CredentialOperationGuard operation(
-        QStringLiteral("location-claim\n")
+        QStringLiteral("location-authority\n")
         + settingsIdentity + QLatin1Char('\n')
-        + settings->group() + QLatin1Char('\n')
-        + claimKey);
+        + settings->group(),
+        enrollmentOperationWaitMilliseconds);
     if (!operation)
         return LocationClaimStatus::Unavailable;
 
+    DurableExactSettingsTransaction transaction(
+        settings);
+    if (!transaction.isValid())
+        return LocationClaimStatus::Unavailable;
     const ExactSetting stored =
-        readExactSetting(settings, claimKey);
+        transaction.value(claimKey);
     if (!stored.readable)
         return LocationClaimStatus::Unavailable;
     if (stored.present) {
@@ -3803,16 +4472,18 @@ CredentialSettings::ensureLocationClaim(
             canonicalIdentityId,
             canonicalParentId,
             canonicalDirectory);
-    if (!stored.present
-        || stored.value.toString() != serialized) {
-        if (!writeExactSetting(
-                settings, claimKey, serialized)) {
+    const bool needsWrite =
+        !stored.present
+        || stored.value.toString() != serialized;
+    if (needsWrite) {
+        if (!transaction.replaceValues(
+                {{claimKey, serialized}})) {
             return LocationClaimStatus::Unavailable;
         }
     }
 
     const ExactSetting verified =
-        readExactSetting(settings, claimKey);
+        transaction.value(claimKey);
     if (!verified.readable || !verified.present)
         return LocationClaimStatus::Unavailable;
     const ParsedLocationClaim claim =
@@ -3823,7 +4494,557 @@ CredentialSettings::ensureLocationClaim(
         || claim.directoryPath != canonicalDirectory) {
         return LocationClaimStatus::Conflict;
     }
+    if (needsWrite
+        && !transaction.refreshCaller()) {
+        return LocationClaimStatus::Unavailable;
+    }
     return LocationClaimStatus::Success;
+}
+
+CredentialSettings::LocationEnrollmentResult
+CredentialSettings::ensureLocationEnrollment(
+    QSettings *settings,
+    const QByteArray &kind,
+    const QString &existingIdentityId,
+    const QString &parentId,
+    const QString &directoryPath,
+    bool allowCreate)
+{
+    LocationEnrollmentResult unavailable;
+    if (!settings
+        || !validLocationEnrollmentKind(kind)) {
+        return unavailable;
+    }
+
+    QString canonicalParentId;
+    if ((!parentId.isEmpty()
+            && !canonicalUuidString(
+                parentId, &canonicalParentId))
+        || ((kind == QByteArrayLiteral("root"))
+            != canonicalParentId.isEmpty())) {
+        return {
+            LocationClaimStatus::Conflict, {}, false
+        };
+    }
+    QString canonicalExistingIdentity;
+    if (!existingIdentityId.isEmpty()
+        && !canonicalUuidString(
+            existingIdentityId,
+            &canonicalExistingIdentity)) {
+        return {
+            LocationClaimStatus::Conflict, {}, false
+        };
+    }
+    const QString canonicalDirectory =
+        canonicalLocationDirectory(directoryPath);
+    if (canonicalDirectory.isEmpty())
+        return unavailable;
+    const QString settingsIdentity =
+        canonicalSettingsFileName(settings);
+    if (settingsIdentity.isEmpty())
+        return unavailable;
+
+    const QString enrollmentKey =
+        locationEnrollmentStorageKey(
+            kind, canonicalParentId,
+            canonicalDirectory);
+    const QString bindingKey =
+        locationBindingStorageKey(
+            kind, canonicalDirectory);
+    QString identityId =
+        canonicalExistingIdentity;
+    bool pending = false;
+    bool authorityChanged = false;
+    {
+        CredentialOperationGuard operation(
+            QStringLiteral("location-authority\n")
+            + settingsIdentity + QLatin1Char('\n')
+            + settings->group(),
+            enrollmentOperationWaitMilliseconds);
+        if (!operation)
+            return unavailable;
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+        if (!holdCredentialEnrollmentTestLock())
+            return unavailable;
+#endif
+        DurableExactSettingsTransaction transaction(
+            settings);
+        if (!transaction.isValid())
+            return unavailable;
+
+        const QSettings::SettingsMap
+            pendingEnrollments =
+                transaction.entriesWithPrefix(
+                    QStringLiteral(
+                        "credential_store/"
+                        "location_enrollments/"));
+        for (auto pendingEnrollment =
+                 pendingEnrollments.cbegin();
+             pendingEnrollment
+                 != pendingEnrollments.cend();
+             ++pendingEnrollment) {
+            const ParsedLocationEnrollment pendingRecord =
+                parseLocationEnrollment(
+                    pendingEnrollment.value());
+            if (!pendingRecord.valid)
+                continue;
+            const QString expectedKey =
+                absoluteExactSettingKey(
+                    settings,
+                    locationEnrollmentStorageKey(
+                        pendingRecord.kind,
+                        pendingRecord.parentId,
+                        pendingRecord.directoryPath));
+            if (!exactSettingKeysEqual(
+                    settings->format(),
+                    pendingEnrollment.key(),
+                    expectedKey)
+                || pendingRecord.kind != kind
+                || pendingRecord.directoryPath
+                    != canonicalDirectory) {
+                continue;
+            }
+            if (pendingRecord.parentId
+                    != canonicalParentId
+                || (!identityId.isEmpty()
+                    && pendingRecord.identityId
+                        != identityId)) {
+                return {
+                    LocationClaimStatus::Conflict,
+                    {}, false
+                };
+            }
+        }
+
+        const ExactSetting storedBinding =
+            transaction.value(bindingKey);
+        const ExactSetting stored =
+            transaction.value(enrollmentKey);
+        if (!storedBinding.readable
+            || !stored.readable) {
+            return unavailable;
+        }
+
+        if (storedBinding.present) {
+            const ParsedLocationEnrollment binding =
+                parseLocationEnrollment(
+                    storedBinding.value);
+            if (!binding.valid
+                || binding.kind != kind
+                || binding.parentId
+                    != canonicalParentId
+                || binding.directoryPath
+                    != canonicalDirectory) {
+                return {
+                    LocationClaimStatus::Conflict,
+                    {}, false
+                };
+            }
+            if (identityId.isEmpty()) {
+                if (allowCreate) {
+                    return {
+                        LocationClaimStatus::Conflict,
+                        {}, false
+                    };
+                }
+                identityId = binding.identityId;
+            } else if (binding.identityId
+                           != identityId) {
+                return {
+                    LocationClaimStatus::Conflict,
+                    {}, false
+                };
+            }
+        }
+        if (stored.present) {
+            const ParsedLocationEnrollment enrollment =
+                parseLocationEnrollment(stored.value);
+            if (!enrollment.valid
+                || enrollment.kind != kind
+                || enrollment.parentId
+                    != canonicalParentId
+                || enrollment.directoryPath
+                    != canonicalDirectory
+                || (!identityId.isEmpty()
+                    && enrollment.identityId
+                        != identityId)) {
+                return {
+                    LocationClaimStatus::Conflict,
+                    {}, false
+                };
+            }
+            identityId = enrollment.identityId;
+            pending = true;
+        } else if (!storedBinding.present) {
+            QString matchingClaimIdentity;
+            const QSettings::SettingsMap storedClaims =
+                transaction.entriesWithPrefix(
+                    QStringLiteral(
+                        "credential_store/"
+                        "location_claims/"));
+            for (auto storedClaim =
+                     storedClaims.cbegin();
+                 storedClaim != storedClaims.cend();
+                 ++storedClaim) {
+                const ParsedLocationClaim claim =
+                    parseLocationClaim(
+                        storedClaim.value());
+                const QString expectedClaimKey =
+                    claim.valid
+                        ? absoluteExactSettingKey(
+                              settings,
+                              locationClaimStorageKey(
+                                  kind,
+                                  claim.identityId))
+                        : QString();
+                if (!claim.valid
+                    || !exactSettingKeysEqual(
+                        settings->format(),
+                        storedClaim.key(),
+                        expectedClaimKey)
+                    || claim.directoryPath
+                        != canonicalDirectory) {
+                    continue;
+                }
+                if (claim.parentId
+                    != canonicalParentId) {
+                    return {
+                        LocationClaimStatus::Conflict,
+                        {}, false
+                    };
+                }
+                if ((!identityId.isEmpty()
+                        && claim.identityId
+                            != identityId)
+                    || (!matchingClaimIdentity.isEmpty()
+                        && matchingClaimIdentity
+                            != claim.identityId)) {
+                    return {
+                        LocationClaimStatus::Conflict,
+                        {}, false
+                    };
+                }
+                matchingClaimIdentity =
+                    claim.identityId;
+            }
+            if (allowCreate
+                && !matchingClaimIdentity.isEmpty()) {
+                return {
+                    LocationClaimStatus::Conflict,
+                    {}, false
+                };
+            }
+            if (identityId.isEmpty()
+                && !allowCreate
+                && !matchingClaimIdentity.isEmpty()) {
+                identityId = matchingClaimIdentity;
+            }
+
+            if (!identityId.isEmpty()) {
+                if (allowCreate) {
+                    return {
+                        LocationClaimStatus::Conflict,
+                        {}, false
+                    };
+                }
+                if (!matchingClaimIdentity.isEmpty()) {
+                    const QString serialized =
+                        serializedLocationEnrollment(
+                            kind, identityId,
+                            canonicalParentId,
+                            canonicalDirectory);
+                    if (!transaction.replaceValues(
+                            {{bindingKey, serialized}})) {
+                        return unavailable;
+                    }
+                    authorityChanged = true;
+                }
+            } else if (allowCreate) {
+                identityId =
+                    QUuid::createUuid().toString(
+                        QUuid::WithoutBraces);
+                const QString serialized =
+                    serializedLocationEnrollment(
+                        kind, identityId,
+                        canonicalParentId,
+                        canonicalDirectory);
+                if (!transaction.replaceValues(
+                        {{enrollmentKey, serialized}})) {
+                    return unavailable;
+                }
+                pending = true;
+                authorityChanged = true;
+            } else {
+                return {
+                    LocationClaimStatus::Conflict,
+                    {}, false
+                };
+            }
+        } else if (identityId.isEmpty()
+                   || allowCreate) {
+            return {
+                LocationClaimStatus::Conflict,
+                {}, false
+            };
+        }
+        if (authorityChanged
+            && !transaction.refreshCaller()) {
+            return unavailable;
+        }
+    }
+    if (pending) {
+        credentialCrashPoint(
+            QByteArrayLiteral("enrollment:")
+            + kind + QByteArrayLiteral("-intent"));
+    }
+
+    const LocationClaimStatus claim =
+        ensureLocationClaim(
+            settings,
+            locationClaimStorageKey(
+                kind, identityId),
+            identityId,
+            canonicalParentId,
+            canonicalDirectory,
+            pending);
+    if (pending
+        && claim == LocationClaimStatus::Success) {
+        credentialCrashPoint(
+            QByteArrayLiteral("enrollment:")
+            + kind + QByteArrayLiteral("-claim"));
+    }
+    return {claim, identityId, pending};
+}
+
+bool CredentialSettings::completeLocationEnrollment(
+    QSettings *settings,
+    const QByteArray &kind,
+    const QString &identityId,
+    const QString &parentId,
+    const QString &directoryPath,
+    QSettings *localSettings,
+    const QString &localIdentityKey,
+    const QString &localBindingKey,
+    const QString &localScopeKey,
+    const QString &expectedLocalRootId,
+    const QString &expectedLocalProfileId,
+    const QString &expectedLocalScopeId)
+{
+    if (!settings
+        || !localSettings
+        || !validLocationEnrollmentKind(kind)) {
+        return false;
+    }
+    const bool rootEnrollment =
+        kind == QByteArrayLiteral("root");
+    if ((rootEnrollment
+            && (localIdentityKey.isEmpty()
+                || !localBindingKey.isEmpty()
+                || !localScopeKey.isEmpty()
+                || !expectedLocalRootId.isEmpty()
+                || !expectedLocalProfileId.isEmpty()
+                || !expectedLocalScopeId.isEmpty()))
+        || (!rootEnrollment
+            && (!localIdentityKey.isEmpty()
+                || localBindingKey.isEmpty()
+                || localScopeKey.isEmpty()))) {
+        return false;
+    }
+    QString canonicalIdentityId;
+    QString canonicalParentId;
+    QString canonicalLocalRootId;
+    QString canonicalLocalProfileId;
+    QString canonicalLocalScopeId;
+    if (!canonicalUuidString(
+            identityId, &canonicalIdentityId)
+        || (!parentId.isEmpty()
+            && !canonicalUuidString(
+                parentId, &canonicalParentId))
+        || ((kind == QByteArrayLiteral("root"))
+            != canonicalParentId.isEmpty())
+        || (!rootEnrollment
+            && (!canonicalUuidString(
+                    expectedLocalRootId,
+                    &canonicalLocalRootId)
+                || !canonicalUuidString(
+                    expectedLocalProfileId,
+                    &canonicalLocalProfileId)
+                || !canonicalUuidString(
+                    expectedLocalScopeId,
+                    &canonicalLocalScopeId)))) {
+        return false;
+    }
+    if (!rootEnrollment
+        && ((kind == QByteArrayLiteral("profile")
+                && (canonicalParentId
+                        != canonicalLocalRootId
+                    || canonicalIdentityId
+                        != canonicalLocalProfileId))
+            || (kind == QByteArrayLiteral("scope")
+                && (canonicalParentId
+                        != canonicalLocalProfileId
+                    || canonicalIdentityId
+                        != canonicalLocalScopeId)))) {
+        return false;
+    }
+    const QString canonicalDirectory =
+        canonicalLocationDirectory(directoryPath);
+    const QString settingsIdentity =
+        canonicalSettingsFileName(settings);
+    if (canonicalDirectory.isEmpty()
+        || settingsIdentity.isEmpty()) {
+        return false;
+    }
+
+    CredentialOperationGuard operation(
+        QStringLiteral("location-authority\n")
+        + settingsIdentity + QLatin1Char('\n')
+        + settings->group(),
+        enrollmentOperationWaitMilliseconds);
+    if (!operation)
+        return false;
+    DurableExactSettingsTransaction transaction(
+        settings);
+    if (!transaction.isValid())
+        return false;
+
+    const QString claimKey =
+        locationClaimStorageKey(
+            kind, canonicalIdentityId);
+    const ExactSetting storedClaim =
+        transaction.value(claimKey);
+    if (!storedClaim.readable
+        || !storedClaim.present) {
+        return false;
+    }
+    const ParsedLocationClaim claim =
+        parseLocationClaim(storedClaim.value);
+    if (!claim.valid
+        || claim.identityId != canonicalIdentityId
+        || claim.parentId != canonicalParentId
+        || claim.directoryPath
+            != canonicalDirectory) {
+        return false;
+    }
+
+    const QString enrollmentKey =
+        locationEnrollmentStorageKey(
+            kind, canonicalParentId,
+            canonicalDirectory);
+    const QString bindingKey =
+        locationBindingStorageKey(
+            kind, canonicalDirectory);
+    const ExactSetting storedBinding =
+        transaction.value(bindingKey);
+    const ExactSetting storedEnrollment =
+        transaction.value(enrollmentKey);
+    if (!storedBinding.readable
+        || !storedEnrollment.readable) {
+        return false;
+    }
+    if (storedBinding.present) {
+        const ParsedLocationEnrollment binding =
+            parseLocationEnrollment(
+                storedBinding.value);
+        if (!binding.valid
+            || binding.kind != kind
+            || binding.identityId
+                != canonicalIdentityId
+            || binding.parentId
+                != canonicalParentId
+            || binding.directoryPath
+                != canonicalDirectory) {
+            return false;
+        }
+    }
+    if (storedEnrollment.present) {
+        const ParsedLocationEnrollment enrollment =
+            parseLocationEnrollment(
+                storedEnrollment.value);
+        if (!enrollment.valid
+            || enrollment.kind != kind
+            || enrollment.identityId
+                != canonicalIdentityId
+            || enrollment.parentId
+                != canonicalParentId
+            || enrollment.directoryPath
+                != canonicalDirectory) {
+            return false;
+        }
+    } else if (!storedBinding.present) {
+        return false;
+    }
+
+    DurableExactSettingsTransaction local(
+        localSettings);
+    if (!local.isValid())
+        return false;
+    if (rootEnrollment) {
+        const ExactSetting storedIdentity =
+            local.value(localIdentityKey);
+        QString persistedIdentity;
+        if (!storedIdentity.readable
+            || !storedIdentity.present
+            || !canonicalUuidString(
+                storedIdentity.value.toString(),
+                &persistedIdentity)
+            || persistedIdentity
+                != canonicalIdentityId) {
+            return false;
+        }
+    } else {
+        const ExactSetting storedLocalBinding =
+            local.value(localBindingKey);
+        const ExactSetting storedLocalScope =
+            local.value(localScopeKey);
+        if (!storedLocalBinding.readable
+            || !storedLocalBinding.present
+            || !storedLocalScope.readable
+            || !storedLocalScope.present) {
+            return false;
+        }
+        const ParsedScopeBinding localBinding =
+            parseScopeBinding(
+                storedLocalBinding.value);
+        QString localScope;
+        if (!localBinding.valid
+            || !canonicalUuidString(
+                storedLocalScope.value.toString(),
+                &localScope)
+            || localScope
+                != canonicalLocalScopeId
+            || localBinding.rootId
+                != canonicalLocalRootId
+            || localBinding.profileId
+                != canonicalLocalProfileId
+            || localBinding.scopeId
+                != canonicalLocalScopeId) {
+            return false;
+        }
+    }
+    if (!local.ensureDurable())
+        return false;
+
+    if (storedEnrollment.present) {
+        const QString serializedBinding =
+            serializedLocationEnrollment(
+                kind, canonicalIdentityId,
+                canonicalParentId,
+                canonicalDirectory);
+        if (!transaction.replaceValues(
+                {{bindingKey, serializedBinding}},
+                {enrollmentKey})) {
+            return false;
+        }
+        if (!transaction.refreshCaller())
+            return false;
+    }
+    if (!local.refreshCaller())
+        return false;
+    credentialCrashPoint(
+        QByteArrayLiteral("enrollment:")
+        + kind + QByteArrayLiteral("-complete"));
+    return true;
 }
 
 QString CredentialSettings::vaultKey(
