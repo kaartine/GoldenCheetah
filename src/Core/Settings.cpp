@@ -1610,6 +1610,9 @@ QVariant GSettings::credentialValueWithLegacyFallback(
     const QVariant current = credentialSettings->value(
         target, scopeId, credentialKey, plaintextKey,
         QVariant(),
+        legacyCandidate
+            ? CredentialSettings::ReadPolicy::RequireLiveVault
+            : CredentialSettings::ReadPolicy::AllowFreshCache,
         legacyCandidate ? &authoritativeMiss : nullptr,
         &confirmedVaultValue);
     const ExactSettingPresence after =

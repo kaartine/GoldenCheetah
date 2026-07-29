@@ -31,6 +31,7 @@
 
 #include <cerrno>
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <cstdlib>
 #include <utility>
@@ -3944,6 +3945,27 @@ const QByteArray backendMutationMarkerContents =
     QByteArrayLiteral(
         "goldencheetah_backend_mutation_pending=1\n");
 
+constexpr qint64 credentialCacheLifetimeMs = 30000;
+
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+std::atomic<qint64> credentialCacheNowOverrideMs{-1};
+#endif
+
+qint64 credentialCacheNowMs()
+{
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+    const qint64 overridden =
+        credentialCacheNowOverrideMs.load(
+            std::memory_order_relaxed);
+    if (overridden >= 0)
+        return overridden;
+#endif
+    return std::chrono::duration_cast<
+        std::chrono::milliseconds>(
+            std::chrono::steady_clock::now()
+                .time_since_epoch()).count();
+}
+
 QString backendMutationMarkerPath(
     const QString &mutationLockPath)
 {
@@ -4031,6 +4053,27 @@ bool CredentialSettingsDetail::removeBackendMutationMarker(
                mutationLockPath)
         == BackendMutationMarkerStatus::Absent;
 }
+
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+void CredentialSettingsDetail::setCredentialCacheNowForTest(
+    qint64 nowMs)
+{
+    credentialCacheNowOverrideMs.store(
+        nowMs, std::memory_order_relaxed);
+}
+
+void CredentialSettingsDetail::resetCredentialCacheNowForTest()
+{
+    credentialCacheNowOverrideMs.store(
+        -1, std::memory_order_relaxed);
+}
+
+qint64 CredentialSettingsDetail::
+credentialCacheLifetimeMsForTest()
+{
+    return credentialCacheLifetimeMs;
+}
+#endif
 
 CredentialSettings::CredentialSettings(
     std::unique_ptr<CredentialStore> store)
@@ -5272,6 +5315,7 @@ QVariant CredentialSettings::value(
     const QString &credentialKey,
     const QString &plaintextKey,
     const QVariant &defaultValue,
+    ReadPolicy policy,
     bool *authoritativeMiss,
     bool *confirmedVaultValue)
 {
@@ -5375,7 +5419,8 @@ QVariant CredentialSettings::value(
         currentCredentialRevision(operation.revisionPath());
     CacheEntry entry;
     bool haveCached =
-        revision.readable && cached(key, &entry);
+        revision.readable
+        && cached(key, &entry, policy);
     if (haveCached && entry.revision != revision.value) {
         invalidateCache(key);
         haveCached = false;
@@ -5775,8 +5820,10 @@ QVariant CredentialSettings::value(
                 *confirmedVaultValue = true;
             return QVariant(entry.value);
         }
-        if (!plaintext.present && !authoritativeMiss)
+        if (!plaintext.present
+            && policy == ReadPolicy::AllowFreshCache) {
             return defaultValue;
+        }
     }
 
     const CredentialStore::ReadResult result = store_
@@ -6394,11 +6441,26 @@ void CredentialSettings::clearCache()
 
 bool CredentialSettings::cached(
     const QString &key,
-    CacheEntry *entry) const
+    CacheEntry *entry,
+    ReadPolicy policy)
 {
     QMutexLocker locker(&cacheMutex_);
-    const auto found = cache_.constFind(key);
-    if (found == cache_.cend()) return false;
+    auto found = cache_.find(key);
+    if (found == cache_.end()) return false;
+    const bool memoryOnly =
+        found->present && !found->persisted;
+    if (!memoryOnly) {
+        const qint64 nowMs = credentialCacheNowMs();
+        const bool expired =
+            nowMs < found->cachedAtMs
+            || nowMs - found->cachedAtMs
+                >= credentialCacheLifetimeMs;
+        if (policy == ReadPolicy::RequireLiveVault
+            || expired) {
+            cache_.erase(found);
+            return false;
+        }
+    }
     if (entry) *entry = found.value();
     return true;
 }
@@ -6408,7 +6470,9 @@ void CredentialSettings::cache(
     const CacheEntry &entry)
 {
     QMutexLocker locker(&cacheMutex_);
-    cache_.insert(key, entry);
+    CacheEntry cachedEntry = entry;
+    cachedEntry.cachedAtMs = credentialCacheNowMs();
+    cache_.insert(key, cachedEntry);
 }
 
 void CredentialSettings::invalidateCache(const QString &key)

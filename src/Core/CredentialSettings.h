@@ -27,6 +27,12 @@ bool createBackendMutationMarker(
 bool removeBackendMutationMarker(
     const QString &mutationLockPath);
 
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+void setCredentialCacheNowForTest(qint64 nowMs);
+void resetCredentialCacheNowForTest();
+qint64 credentialCacheLifetimeMsForTest();
+#endif
+
 } // namespace CredentialSettingsDetail
 
 class CredentialStore
@@ -101,6 +107,13 @@ std::unique_ptr<CredentialStore> createPlatformCredentialStore();
 class CredentialSettings
 {
 public:
+    enum class ReadPolicy {
+        AllowFreshCache,
+        // Pending memory-only writes remain visible but cannot provide
+        // authoritative vault evidence.
+        RequireLiveVault
+    };
+
     enum class ScopeBindingStatus {
         Success,
         Unavailable,
@@ -221,6 +234,8 @@ public:
                    const QString &credentialKey,
                    const QString &plaintextKey,
                    const QVariant &defaultValue,
+                   ReadPolicy policy =
+                       ReadPolicy::AllowFreshCache,
                    bool *authoritativeMiss = nullptr,
                    bool *confirmedVaultValue = nullptr);
     void setValue(QSettings *settings,
@@ -253,9 +268,13 @@ private:
         bool persisted = false;
         QByteArray revision;
         QByteArray transaction;
+        qint64 cachedAtMs = 0;
     };
 
-    bool cached(const QString &key, CacheEntry *entry) const;
+    bool cached(
+        const QString &key,
+        CacheEntry *entry,
+        ReadPolicy policy);
     void cache(const QString &key, const CacheEntry &entry);
     void invalidateCache(const QString &key);
     static QString plaintextKey(const QString &credentialKey);

@@ -2184,20 +2184,73 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-023: External vault mutations bypass credential cache revisions
 
-- Status: OPEN
-- Code: `src/Core/CredentialSettings.cpp`
+- Status: FIXED
+- Code: `src/Core/CredentialSettings.cpp`,
+  `src/Core/CredentialSettings.h`, `src/Core/Settings.cpp`, and
+  `unittests/Core/credentialSettings/testCredentialSettings.cpp`
 - Impact: Cache entries are invalidated by GoldenCheetah's revision sidecar, but
   direct keychain changes by another application do not advance that revision.
   Normal reads can therefore return a stale positive or negative value until a
   local mutation, cache clear, or restart. SEC-018 now bypasses cached misses
   when authorizing cross-file fallback, but ordinary credential reads retain
   the broader stale-cache behavior.
-- Test: Prime positive and negative cache entries, mutate the fake vault without
-  touching the revision sidecar, and require the next policy-relevant read to
-  observe the external value or deletion.
-- Fix direction: Add backend change notifications or a backend generation to
-  the cache key. Where neither is available, use bounded cache lifetimes or
-  live reads for decisions that can expose, overwrite, or delete credentials.
+- Test-first evidence: With a deterministic monotonic test clock but no expiry
+  behavior, external replacement, deletion, insertion after a cached miss, and
+  a backend error after expiry produced four failures and only the three
+  setup/memory-only cases passed. A second RED matrix showed that an
+  authoritative read still returned a fresh cached positive after external
+  replacement or deletion: three cases passed and two failed.
+- Resolution: Persisted positive and all negative cache entries now carry a
+  monotonic insertion timestamp and expire after 30 seconds. Lookup checks and
+  erases an expired entry under the cache mutex; clock rollback also expires
+  it. A failed live refresh remains fail-closed and never revives the stale
+  value. GoldenCheetah revision changes still invalidate immediately.
+  `ReadPolicy::RequireLiveVault` explicitly bypasses vault-backed positive and
+  negative cache entries for legacy-fallback authorization. Pending
+  memory-only writes remain visible without expiry but cannot report live-vault
+  evidence or authorize fallback.
+- Verification: The final credential program passes 423 cases normally with
+  zero failures and seven Linux platform skips. The final SEC-023 cache,
+  policy, revision, process-mutation, and serialization matrix passes 29 cases
+  under strict ASan/UBSan/LSan and 29 under ThreadSanitizer with no reports or
+  races. A full strict sanitizer run passed 422 cases and had one independent
+  `THREAD-014` failure, with seven skips and no sanitizer report. Final
+  production and test sources pass MinGW64 C++17 syntax checks. The complete
+  out-of-source matrix runs 81 QtTest programs: 3,167 cases pass, none fail or
+  blacklist, and seven platform cases skip.
+- Residual: Ordinary reads may remain stale for up to 30 seconds of monotonic
+  runtime, potentially plus system suspend time. A non-cooperating application
+  can still mutate the vault immediately after a live read; eliminating that
+  race requires backend notifications, generations, or compare-and-swap.
+  Pending memory-only values intentionally remain process-lifetime state until
+  their transaction is resolved.
+
+### THREAD-014: Contended credential reads fail immediately during migration
+
+- Status: OPEN
+- Code: `src/Core/CredentialSettings.cpp`,
+  `src/Core/Settings.cpp`, and
+  `unittests/Core/credentialSettings/testCredentialSettings.cpp`
+- Impact: `CredentialSettings::value()` attempts the per-vault process lock
+  with a zero timeout. During concurrent fresh-athlete initialization, one
+  process can hold that lock while migrating and durably scrubbing plaintext;
+  another process then skips both migration and its immediate read and reports
+  the credential as missing even though the first process completes normally.
+- Evidence: `freshEnrollmentIsSerializedAcrossProcesses(athlete)` failed once
+  during earlier normal verification, failed again in a full strict sanitizer
+  run, and reproduced on iteration four of an isolated strict sanitizer loop.
+  The failing snapshot contained complete root, profile, and scope claims and
+  bindings; only the losing child observed `missing`. The focused enrollment
+  API serialization test remains clean, isolating the race to the later
+  credential operation lock.
+- Test: Add deterministic per-vault lock hooks, hold the exact credential lock
+  in one child, start a reader in another process, signal verified contention,
+  then release the owner. The reader must return the stored secret rather than
+  fail immediately with its default.
+- Fix direction: Give only credential reads a named, bounded process-lock wait
+  while retaining immediate same-process reentrancy failure and fail-fast
+  mutation semantics. Timeout and an active `THREAD-013` backend marker must
+  continue to fail closed.
 
 ### MEM-019: Indented plot marker starts and copies its matrix from indeterminate state
 
@@ -4265,10 +4318,10 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The complete containerized release matrix after THREAD-013 passes:
+The complete containerized release matrix after SEC-023 passes:
 
 - 81 QtTest suites
-- 3,154 passed
+- 3,167 passed
 - 0 failed or blacklisted
 - 7 expected platform-only skips on Linux
 - Qt 6.8.3 on Ubuntu 24.04
