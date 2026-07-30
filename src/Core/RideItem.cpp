@@ -530,10 +530,14 @@ RideItem::checkStale()
                 if (timestamp < QFileInfo(file).lastModified().toSecsSinceEpoch()) {
 
                     // if timestamp has changed then check crc
-                    unsigned long fcrc = RideFile::computeFileCRC(fullPath);
+                    unsigned int fcrc = 0;
+                    const bool crcRead =
+                        RideFile::computeFileCRC(
+                            fullPath, fcrc);
 
-                    if (crc == 0 || crc != fcrc) {
-                        crc = fcrc; // update as expensive to calculate
+                    if (!crcRead || crc == 0 || crc != fcrc) {
+                        if (crcRead)
+                            crc = fcrc; // update as expensive to calculate
                         isstale = true;
                     }
                 }

@@ -230,7 +230,12 @@ class RideFile : public QObject // QObject to emit signals
         friend struct FitFileParser;
 
         // utility
-        static unsigned int computeFileCRC(QString); 
+        static bool computeFileCRC(
+            const QString &filename,
+            unsigned int &checksum);
+        Q_DECL_DEPRECATED_X(
+            "Use computeFileCRC(filename, checksum) to distinguish errors")
+        static unsigned int computeFileCRC(QString filename);
         void updateDataTag();
 
         // Constructor / Destructor

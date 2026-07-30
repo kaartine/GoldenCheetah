@@ -14,6 +14,7 @@ DEFINES += GC_FIT_READER_ONLY
 SOURCES = testFitReaderIntegrity.cpp \
           FitReaderIntegrityTestStubs.cpp \
           $$PWD/../../../src/FileIO/RideFile.cpp \
+          $$PWD/../../../src/FileIO/RideFileCRC.cpp \
           $$PWD/../../../src/FileIO/RideFileCommand.cpp \
           $$PWD/../../../src/FileIO/FitFileIntegrity.cpp \
           $$PWD/../../../src/FileIO/FitRideFile.cpp

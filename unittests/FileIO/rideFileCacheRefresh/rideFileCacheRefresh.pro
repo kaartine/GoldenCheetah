@@ -14,6 +14,7 @@ DEFINES += GC_RIDE_FILE_CACHE_TEST_HOOKS
 SOURCES = testRideFileCacheRefresh.cpp \
           RideFileCacheRefreshTestStubs.cpp \
           ../../../src/FileIO/RideFile.cpp \
+          ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCommand.cpp \
           ../../../src/FileIO/RideFileCache.cpp \
           ../../../src/FileIO/RideFileCacheIntegrity.cpp \

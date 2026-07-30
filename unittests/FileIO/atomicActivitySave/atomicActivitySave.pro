@@ -14,6 +14,7 @@ SOURCES = testAtomicActivitySave.cpp \
           ApplicationSaveTestStubs.cpp \
           ../../../src/Core/RideCache.cpp \
           ../../../src/FileIO/RideFile.cpp \
+          ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCommand.cpp \
           JsonRideFileTestStubs.cpp \
           ../../../src/Gui/SaveDialogs.cpp

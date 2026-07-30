@@ -58,6 +58,7 @@ equals(GC_UNITTESTS, active) {
 			   FileIO/rideFileCacheIntegrity \
 			   FileIO/rideFileCacheRefresh \
 			   FileIO/rideFileCacheWriteError \
+			   FileIO/rideFileCrc \
 			   FileIO/rideFileOwnership \
 			   FileIO/tacxCafBounds \
 			   FileIO/tcxPointBudget \

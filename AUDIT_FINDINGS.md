@@ -2313,20 +2313,45 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### PARSE-008: Activity CRC trusts a mutable file size and buffers the whole file
 
-- Status: OPEN
-- Code: `src/FileIO/RideFile.cpp`
+- Status: FIXED
+- Code: `src/FileIO/RideFileCRC.cpp`, `src/FileIO/RideFileCRC.h`,
+  `src/FileIO/RideFile.cpp`, `src/FileIO/RideFile.h`,
+  `src/FileIO/RideFileCache.cpp`, and `src/Core/RideItem.cpp`
 - Impact: `RideFile::computeFileCRC()` allocates the file's complete reported
   size, ignores the raw-read result, and checksums that full allocation. A very
   large or sparse activity can exhaust memory. If the file shrinks or a read
   fails after sizing, the checksum includes an uninitialized tail and becomes
   nondeterministic.
-- Test: Exercise a bounded CRC input seam with exact, short, failed, and
-  size-changing reads, and verify a large sparse source is processed with
-  constant bounded memory. Preserve the checksum produced for stable existing
-  files.
-- Fix direction: Compute the same CRC incrementally from fixed-size chunks,
-  require exact read/error semantics, and verify the source snapshot did not
-  change before publishing the checksum.
+- Test-first evidence: The new CRC suite initially had no bounded input seam or
+  native snapshot hooks. Its RED cases then exposed premature EOF, failed and
+  size-changing reads, a missing pre-read size limit, atomic path replacement,
+  overwrite with restored mtime, and incomplete Windows identity policy. A
+  cache refresh with a missing source also invoked its writer before the caller
+  was made fail-closed. Finally, a MinGW fixture that lets the first Qt header
+  select a Vista target failed on `FILE_ID_INFO` before the Windows include
+  order was corrected.
+- Resolution: CRC-16/ISO-3309 is now computed in 64 KiB chunks with exact
+  short-read, trailing-byte, error, and position-restoration checks. Sources
+  larger than 512 MiB are rejected before reading. File CRC publication
+  requires matching native handle and path snapshots before and after the
+  stream: device/inode/size/nanosecond mtime and ctime on POSIX, and stable
+  file identity/size/write/change time on Windows. Windows 8+ uses
+  `FILE_ID_INFO`; explicitly older targets safely use the legacy volume and
+  file-index identity. Active callers use a checked result API and fail closed;
+  the deprecated value-only adapter remains for source compatibility. Cache
+  refresh still computes valid in-memory arrays when source CRC capture fails
+  but skips persistence, and `RideItem` preserves its prior CRC on failure.
+- Verification: The 32-case CRC suite passes normally, under strict
+  ASan/UBSan/LSan with leak detection, and under ThreadSanitizer without
+  suppressions. The related 13-case ownership and nine-case cache-refresh
+  suites retain normal and sanitizer coverage. The reusable MinGW syntax test
+  passes both an include-order fixture and an explicit Windows Vista target.
+  The production application build and the complete matrix below pass from the
+  final source state.
+- Residual: A 16-bit checksum has unavoidable collisions, and a source can
+  still change after final validation; the CPX remains a disposable local
+  cache rather than authoritative activity data. Separate cache invariants are
+  tracked as `DATA-012`, `DATA-011`, and `PERF-010`.
 
 ### DATA-010: Planned and completed activities can alias one CPX cache
 
@@ -2361,7 +2386,41 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   completed-activity APIs for compatibility. New code with a `RideItem` must
   use the item-aware overload.
 
+### DATA-012: CPX CRC is not bound to the in-memory RideFile
+
+- Status: OPEN
+- Code: `src/FileIO/RideFileCache.cpp:905`,
+  `src/Core/RideItem.cpp:261`
+- Impact: CPX persistence hashes the activity pathname but computes its payload
+  from an independently held `RideFile`. A dirty or otherwise unprovenanced
+  in-memory ride can therefore be persisted under the unchanged on-disk file's
+  CRC. A later reload can accept derived arrays that do not describe the source
+  activity named by the cache header.
+- Test: Create source A and a modified in-memory ride B. B must retain usable
+  in-memory arrays but must not invoke the CPX writer. Add a clean,
+  source-provenanced control and a source-changed-after-parse case.
+- Fix direction: Attach immutable source provenance to a parsed ride, invalidate
+  it on modification, and persist CPX only while a fresh stable source
+  fingerprint still matches that provenance. Dirty and unprovenanced rides must
+  remain memory-only.
+
 ## Medium
+
+### DATA-011: CPX freshness trusts source mtime instead of its stored CRC
+
+- Status: OPEN
+- Code: `src/FileIO/RideFileCache.cpp:134`,
+  `src/FileIO/RideFileCache.cpp:227`, `src/Core/RideItem.cpp:529`
+- Impact: A CPX is accepted without calculating its source CRC whenever the
+  source mtime is equal to or older than the cache mtime. Restored mtimes,
+  coarse timestamp resolution, and copied older files can therefore retain
+  stale derived data despite the checked CRC implementation.
+- Test: Build a CPX for source A, overwrite the source with B, restore or
+  equalize its mtime, and require both construction and `checkStale()` to reject
+  the old CPX.
+- Fix direction: Require a successful stable CRC match before accepting CPX.
+  A later optimization may persist native high-resolution identity metadata
+  and hash only when that complete metadata differs.
 
 ### DUR-012: CPX refresh can publish torn files and stale in-memory arrays
 
@@ -4533,6 +4592,18 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Low
 
+### PERF-010: A valid zero activity CRC remains an unknown sentinel
+
+- Status: OPEN
+- Code: `src/Core/RideItem.cpp:538`
+- Impact: ISO-3309 CRC value zero is valid, but `RideItem` treats every stored
+  zero as unknown. An unchanged activity with such a checksum is conservatively
+  refreshed whenever its timestamp changes.
+- Test: Store a known-valid zero checksum for non-empty bytes, touch the
+  unchanged source, and require no redundant refresh.
+- Fix direction: Persist a separate CRC-valid flag or optional state. Treat
+  legacy zero values without that state as unknown once.
+
 ### PERF-009: OpenData capture can monopolize the GUI thread
 
 - Status: OPEN
@@ -4771,11 +4842,10 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The complete containerized release matrix through `MEM-023` and `THREAD-016`
-passes:
+The complete containerized release matrix through `PARSE-008` passes:
 
-- 91 QtTest suites
-- 3,351 passed
+- 92 QtTest suites
+- 3,385 passed
 - 0 failed or blacklisted
 - 12 expected platform-only skips on Linux
 - Qt 6.8.3 on Ubuntu 24.04
@@ -4789,10 +4859,11 @@ state.
 
 `DUR-006` additionally passes its 29-case focused suite under strict
 ASan/UBSan/LSan with leak detection and ThreadSanitizer without suppressions,
-plus 20 consecutive normal runs. `PARSE-005`'s 126 focused tests and the related
-12 RideFile ownership tests retain their sanitizer evidence. Earlier fixed
-memory/thread findings retain the focused sanitizer and TSAN evidence recorded
-in their entries.
+plus 20 consecutive normal runs. `PARSE-008` additionally passes its 32-case
+focused suite under both sanitizer configurations and its MinGW header-order
+check. `PARSE-005`'s 126 focused tests and the related 13 RideFile ownership
+tests retain their sanitizer evidence. Earlier fixed memory/thread findings
+retain the focused sanitizer and TSAN evidence recorded in their entries.
 
 This baseline is not evidence for any remaining OPEN finding. Each open item
 still requires its listed RED regression before implementation. No whole-suite

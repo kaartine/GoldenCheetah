@@ -13,6 +13,7 @@ CONFIG -= debug
 SOURCES = testRideFileOwnership.cpp \
           RideFileOwnershipTestStubs.cpp \
           ../../../src/FileIO/RideFile.cpp \
+          ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCommand.cpp
 
 HEADERS = ../../../src/FileIO/RideFile.h \

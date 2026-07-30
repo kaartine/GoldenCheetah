@@ -21,6 +21,7 @@
 #include "RideFile.h"
 #include "CompressedActivityFile.h"
 #include "FilterHRV.h"
+#include "RideFileCRC.h"
 #include "WPrime.h"
 #include "Athlete.h"
 #include "DataProcessor.h"
@@ -34,6 +35,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QFileInfo>
 #include <QTemporaryFile>
 
 #include <QtXml/QtXml>
@@ -149,24 +151,27 @@ void RideFile::setStartTime(const QDateTime &value) {
     startTime_ = value;
 }
 
+bool
+RideFile::computeFileCRC(
+    const QString &filename,
+    unsigned int &checksum)
+{
+    quint16 computed = 0;
+    if (!RideFileCRC::computeFile(
+            filename, computed)) {
+        return false;
+    }
+
+    checksum = computed;
+    return true;
+}
+
 unsigned int
 RideFile::computeFileCRC(QString filename)
 {
-    QFile file(filename);
-    QFileInfo fileinfo(file);
-
-    // open file
-    if (!file.open(QFile::ReadOnly)) return 0;
-
-    // allocate space
-    QScopedArrayPointer<char> data(new char[file.size()]);
-
-    // read entire file into memory
-    QDataStream rawstream(&file);
-    rawstream.readRawData(&data[0], file.size());
-    file.close();
-
-    return qChecksum(QByteArrayView(&data[0], file.size()));
+    unsigned int checksum = 0;
+    computeFileCRC(filename, checksum);
+    return checksum;
 }
 
 void

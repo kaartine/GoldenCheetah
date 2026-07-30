@@ -141,6 +141,7 @@ private slots:
     void temporaryActivityComputesWithoutPersistentCache();
     void plannedAndCompletedActivitiesUseSeparateCaches();
     void batchReadDiscardsRowAfterMidReadFailure();
+    void crcReadFailureSkipsPersistence();
     void concurrentPersistenceFailuresKeepComputedResults();
 };
 
@@ -318,6 +319,40 @@ TestRideFileCacheRefresh::batchReadDiscardsRowAfterMidReadFailure()
         !RideFileCache::readBestRowForTest(
             input, requests, values));
     QVERIFY(values.isEmpty());
+}
+
+void
+TestRideFileCacheRefresh::crcReadFailureSkipsPersistence()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    RideFile ride;
+    RideFileCache cache(
+        &ride,
+        RideFileCache::SkipInitialComputeForTest {});
+    int writeCalls = 0;
+    int reportCalls = 0;
+
+    const bool persisted = cache.refreshCacheForTest(
+        directory.filePath(QStringLiteral("missing.fit")),
+        directory.filePath(QStringLiteral("cache/missing.cpx")),
+        [&](const QString &,
+            const RideFileCacheIntegrity::CacheWriteOperation &,
+            QString *error) {
+            ++writeCalls;
+            if (error)
+                *error = QStringLiteral("unexpected write");
+            return false;
+        },
+        [&](const QString &, const QString &) {
+            ++reportCalls;
+        });
+
+    QVERIFY(!persisted);
+    QCOMPARE(writeCalls, 0);
+    QCOMPARE(reportCalls, 0);
+    QVERIFY(!cache.incomplete);
 }
 
 void

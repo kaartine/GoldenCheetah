@@ -14,6 +14,7 @@ SOURCES = testMergeActivityRidePreparation.cpp \
           MergeActivityRidePreparationTestStubs.cpp \
           ../../../src/Gui/MergeActivityRidePreparation.cpp \
           ../../../src/FileIO/RideFile.cpp \
+          ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCommand.cpp \
           ../../../src/Core/SplineLookup.cpp
 

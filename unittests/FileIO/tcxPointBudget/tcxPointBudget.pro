@@ -14,6 +14,7 @@ DEFINES += GC_TCX_READER_ONLY
 SOURCES = testTcxPointBudget.cpp \
           TcxPointBudgetTestStubs.cpp \
           ../../../src/FileIO/RideFile.cpp \
+          ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCommand.cpp \
           ../../../src/FileIO/TcxParser.cpp \
           ../../../src/FileIO/TcxRideFile.cpp

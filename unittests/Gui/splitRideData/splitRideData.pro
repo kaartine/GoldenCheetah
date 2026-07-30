@@ -14,6 +14,7 @@ SOURCES = testSplitRideData.cpp \
           SplitRideDataTestStubs.cpp \
           ../../../src/Gui/SplitRideData.cpp \
           ../../../src/FileIO/RideFile.cpp \
+          ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCommand.cpp
 
 HEADERS = ../../../src/Gui/SplitRideData.h \

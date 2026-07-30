@@ -36,6 +36,7 @@ private slots:
     void copyOwnsIndependentCalibrations();
     void duplicateTimestampUpdateKeepsOwnedPointAndSummaries();
     void fileCrcReleasesItsReadStream();
+    void fileCrcDistinguishesEmptyFileFromReadFailure();
 };
 
 void TestRideFileOwnership::allConstructorsReleaseSummaryPoints()
@@ -248,8 +249,33 @@ void TestRideFileOwnership::fileCrcReleasesItsReadStream()
 
     const unsigned int expected = qChecksum(QByteArrayView(contents));
     // Repetition makes the stream leak deterministic under LSan.
-    for (int iteration = 0; iteration < 64; ++iteration)
-        QCOMPARE(RideFile::computeFileCRC(path), expected);
+    for (int iteration = 0; iteration < 64; ++iteration) {
+        unsigned int checksum = 0;
+        QVERIFY(RideFile::computeFileCRC(
+            path, checksum));
+        QCOMPARE(checksum, expected);
+    }
+}
+
+void TestRideFileOwnership::fileCrcDistinguishesEmptyFileFromReadFailure()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString emptyPath =
+        directory.filePath(QStringLiteral("empty.fit"));
+    QFile emptyFile(emptyPath);
+    QVERIFY(emptyFile.open(QIODevice::WriteOnly));
+    emptyFile.close();
+
+    unsigned int checksum = 0xbeef;
+    QVERIFY(RideFile::computeFileCRC(emptyPath, checksum));
+    QCOMPARE(checksum, 0U);
+
+    checksum = 0xbeef;
+    QVERIFY(!RideFile::computeFileCRC(
+        directory.filePath(QStringLiteral("missing.fit")),
+        checksum));
+    QCOMPARE(checksum, 0xbeefU);
 }
 
 QTEST_GUILESS_MAIN(TestRideFileOwnership)

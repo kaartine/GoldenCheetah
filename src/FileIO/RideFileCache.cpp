@@ -119,11 +119,21 @@ RideFileCache::RideFileCache(Context *context, QString fileName, double weight, 
 
             const bool cacheValid =
                 RideFileCacheIntegrity::inspectCache(cacheFile, head);
+            bool sourceCrcMatches = false;
+            if (cacheValid
+                && rideFileInfo.lastModified()
+                    > cacheFileInfo.lastModified()) {
+                unsigned int sourceCrc = 0;
+                sourceCrcMatches =
+                    RideFile::computeFileCRC(
+                        rideFileName, sourceCrc)
+                    && head.crc == sourceCrc;
+            }
 
             // its more recent -or- the crc is the same
             if (cacheValid &&
                 (rideFileInfo.lastModified() <= cacheFileInfo.lastModified() ||
-                 head.crc == RideFile::computeFileCRC(rideFileName))) {
+                 sourceCrcMatches)) {
 
                 // it is the same ?
                 if (head.version == RideFileCacheVersion && head.WEIGHT == weight) {
@@ -202,11 +212,21 @@ RideFileCache::checkStale(Context *context, RideItem*item)
 
             const bool cacheValid =
                 RideFileCacheIntegrity::inspectCache(cacheFile, head);
+            bool sourceCrcMatches = false;
+            if (cacheValid
+                && rideFileInfo.lastModified()
+                    > cacheFileInfo.lastModified()) {
+                unsigned int sourceCrc = 0;
+                sourceCrcMatches =
+                    RideFile::computeFileCRC(
+                        rideFileName, sourceCrc)
+                    && head.crc == sourceCrc;
+            }
 
             // its more recent -or- the crc is the same
             if (cacheValid &&
                 (rideFileInfo.lastModified() <= cacheFileInfo.lastModified() ||
-                 head.crc == RideFile::computeFileCRC(rideFileName))) {
+                 sourceCrcMatches)) {
 
                 // it is the same ?
                 if (head.version == RideFileCacheVersion && head.WEIGHT == item->getWeight()) {
@@ -882,13 +902,20 @@ bool
 RideFileCache::refreshCache(
     const PersistenceOperations *operations)
 {
-    // set head crc
-    crc = RideFile::computeFileCRC(rideFileName);
+    unsigned int sourceCrc = 0;
+    const bool sourceCrcAvailable =
+        RideFile::computeFileCRC(
+            rideFileName, sourceCrc);
 
     // Recompute before persistence so a cache write failure does not discard
     // otherwise valid in-memory results.
     if (!compute())
         return false;
+    if (!sourceCrcAvailable)
+        return false;
+
+    // Publish only a checksum captured from a stable source snapshot.
+    crc = sourceCrc;
 
     QDir().mkpath(QFileInfo(cacheFileName).absolutePath());
     QString writeError;

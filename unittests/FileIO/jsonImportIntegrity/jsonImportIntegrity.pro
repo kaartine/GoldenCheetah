@@ -13,6 +13,7 @@ CONFIG -= debug
 SOURCES = testJsonImportIntegrity.cpp \
           JsonImportIntegrityTestStubs.cpp \
           ../../../src/FileIO/RideFile.cpp \
+          ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCommand.cpp
 
 HEADERS = TestJsonImportIntegrity.h \
