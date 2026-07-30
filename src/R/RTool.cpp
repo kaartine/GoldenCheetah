@@ -2946,7 +2946,12 @@ RTool::dfForDateRangePeaks(bool all, DateRange range, SEXP filter, QList<RideFil
 
                     // for each series/duration independently its pretty quick since it lseeks to
                     // the actual value, so /should't/ be too expensive.........
-                    REAL(vector)[index++] = RideFileCache::best(item->context, item->fileName, pseries, pduration);
+                    REAL(vector)[index++] =
+                        RideFileCache::best(
+                            item->context,
+                            item,
+                            pseries,
+                            pduration);
                 }
             }
 

@@ -2607,7 +2607,15 @@ Bindings::seasonPeaks(bool all, DateRange range, QString filter, QList<RideFile:
 
                     // for each series/duration independently its pretty quick since it lseeks to
                     // the actual value, so /should't/ be too expensive.........
-                    PyList_SET_ITEM(list, index++, PyFloat_FromDouble(RideFileCache::best(item->context, item->fileName, pseries, pduration)));
+                    PyList_SET_ITEM(
+                        list,
+                        index++,
+                        PyFloat_FromDouble(
+                            RideFileCache::best(
+                                item->context,
+                                item,
+                                pseries,
+                                pduration)));
                 }
             }
 

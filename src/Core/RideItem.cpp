@@ -39,6 +39,7 @@
 #include <QMap>
 #include <QMapIterator>
 #include <QByteArray>
+#include <QDir>
 
 // used to create a temporary ride item that is not in the cache and just
 // used to enable using the same calling semantics in things like the
@@ -257,7 +258,12 @@ RideFileCache *
 RideItem::fileCache()
 {
     if (!fileCache_) {
-        fileCache_ = new RideFileCache(context, fileName, getWeight(), ride());
+        fileCache_ = new RideFileCache(
+            context,
+            RideFileCacheIntegrity::activitySourcePath(
+                path, fileName),
+            getWeight(),
+            ride());
         if (isDirty()) fileCache_->refresh(ride_); // refresh from what we have now !
     }
     return fileCache_;
@@ -515,7 +521,9 @@ RideItem::checkStale()
             } else {
 
                 // or has file content changed ?
-                QString fullPath =  QString(context->athlete->home->activities().absolutePath()) + "/" + fileName;
+                const QString fullPath =
+                    RideFileCacheIntegrity::activitySourcePath(
+                        path, fileName);
                 QFile file(fullPath);
 
                 // has timestamp changed ?
@@ -649,7 +657,13 @@ RideItem::refresh()
         else paceZoneRange = -1;
 
         // RideFile cache refresh before metrics, as meanmax may be used in user formulas
-        RideFileCache updater(context, context->athlete->home->activities().canonicalPath() + "/" + fileName, getWeight(), ride_, true);
+        RideFileCache updater(
+            context,
+            RideFileCacheIntegrity::activitySourcePath(
+                path, fileName),
+            getWeight(),
+            ride_,
+            true);
 
         // refresh metrics etc
         const RideMetricFactory &factory = RideMetricFactory::instance();

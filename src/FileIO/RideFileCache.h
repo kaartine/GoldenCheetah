@@ -19,16 +19,20 @@
 #ifndef _GC_RideFileCache_h
 #define _GC_RideFileCache_h 1
 #include "RideFile.h"
+#include "RideFileCacheIntegrity.h"
 #include <QString>
 #include <QDataStream>
+#include <QPair>
 #include <QVector>
-#include <QThread>
+
+#include <thread>
 
 class Context;
 class RideFile;
 class RideBest;
 class MetricDetail;
 class Specification;
+class RideItem;
 
 #include "GoldenCheetah.h"
 
@@ -41,7 +45,6 @@ typedef double data_t;
 // arrays when plotting CP curves and histograms. It is precoputed
 // to save time and cached in a file .cpx
 //
-static const unsigned int RideFileCacheVersion = 25;
 // revision history:
 // version  date         description
 // 1        29-Apr-11    Initial - header, mean-max & distribution data blocks
@@ -80,49 +83,6 @@ static const unsigned int RideFileCacheVersion = 25;
 // field which is endian sensitive is the count field
 // which will always be written in local format since these
 // files are local caches we do not worry about endianness
-struct RideFileCacheHeader {
-
-    unsigned int version;
-    unsigned int crc;
-
-    unsigned int wattsMeanMaxCount,
-                 hrMeanMaxCount,
-                 cadMeanMaxCount,
-                 nmMeanMaxCount,
-                 kphMeanMaxCount,
-                 kphdMeanMaxCount,
-                 wattsdMeanMaxCount,
-                 caddMeanMaxCount,
-                 nmdMeanMaxCount,
-                 hrdMeanMaxCount,
-                 xPowerMeanMaxCount,
-                 npMeanMaxCount,
-                 vamMeanMaxCount,
-                 wattsKgMeanMaxCount,
-                 aPowerMeanMaxCount,
-                 aPowerKgMeanMaxCount,
-                 wattsDistCount,
-                 hrDistCount,
-                 cadDistCount,
-                 gearDistCount,
-                 nmDistrCount,
-                 kphDistCount,
-                 xPowerDistCount,
-                 npDistCount,
-                 wattsKgDistCount,
-                 aPowerDistCount,
-                 smo2DistCount,
-                 wbalDistCount;
-
-    int LTHR, // used to calculate Time in Zone (TIZ)
-        CP;   // used to calculate Time in Zone (TIZ)
-    double CV;   // used to calculate Time in Zone (TIZ)
-    double WEIGHT; // weight in kg x 10 used for w/kg
-    double WPRIME; // W' used from config used to calculate (TIZ)
-                
-};
-
-
 // Each block of data is an array of uint32_t (32-bit "local-endian")
 // integers so the "count" setting within the block definition tells
 // us how long it is so we can read in one instruction and reference
@@ -186,12 +146,43 @@ class RideFileCache
         // just from a raw ride file class (usually for intervals)
         RideFileCache(RideFile*);
 
+#ifdef GC_RIDE_FILE_CACHE_TEST_HOOKS
+        struct SkipInitialComputeForTest {};
+        RideFileCache(RideFile*, SkipInitialComputeForTest);
+        struct NoPersistentTargetForTest {
+            double weight = 75.0;
+        };
+        RideFileCache(RideFile*, NoPersistentTargetForTest);
+        static double bestForActivityForTest(
+            const QString &cacheRoot,
+            const QString &completedRoot,
+            const QString &plannedRoot,
+            const QString &sourceActivityPath,
+            RideFile::SeriesType series,
+            int duration);
+        static int tizForActivityForTest(
+            const QString &cacheRoot,
+            const QString &completedRoot,
+            const QString &plannedRoot,
+            const QString &sourceActivityPath,
+            RideFile::SeriesType series,
+            int zone);
+        static bool readBestRowForTest(
+            QIODevice &input,
+            const QVector<
+                QPair<RideFile::SeriesType, int>>
+                &requests,
+            QVector<double> &values);
+#endif
+
         // get a single best or time in zone value from the cache file
         // intended to be very fast (using lseek to jump direct to the value requested
         static int rank(Context *context, RideFile::SeriesType series, int duration, 
                         double value, Specification spec, int &of);
         static double best(Context *context, QString fileName, RideFile::SeriesType series, int duration);
+        static double best(Context *context, const RideItem *item, RideFile::SeriesType series, int duration);
         static int tiz(Context *context, QString fileName, RideFile::SeriesType series, int zone);
+        static int tiz(Context *context, const RideItem *item, RideFile::SeriesType series, int zone);
 
         // get all the bests passed and return a list of summary metrics, like the DBAccess
         // function but using CPX files as the source
@@ -232,14 +223,16 @@ class RideFileCache
     protected:
 
         void refreshCache();              // compute arrays and update cache
-        void readCache();                 // just read from saved file and setup arrays
+        bool readCache();                 // just read from saved file and setup arrays
         void serialize(QDataStream *out); // write to file
 
-        void compute();             // compute all arrays
+        bool compute();             // compute all arrays
+        bool computeWithoutPersistentCache(bool refresh, double weight);
 
         // NOW replaced computeMeanMax with MeanMaxComputer class see bottom of file
         //void computeMeanMax(QVector<float>&, RideFile::SeriesType);      // compute mean max arrays
         void computeDistribution(QVector<float>&, RideFile::SeriesType); // compute the distributions
+        void clearPublishedArrays();
 
 
     private:
@@ -405,11 +398,26 @@ struct cpintdata {
 };
 
 // the mean-max computer ... runs in a thread
-class MeanMaxComputer : public QThread
+class MeanMaxComputer
 {
     public:
         MeanMaxComputer(RideFile *ride, QVector<float>&array, RideFile::SeriesType series)
         : ride(ride), array(array), series(series) {}
+        ~MeanMaxComputer() { wait(); }
+
+        void start()
+        {
+            if (!worker.joinable())
+                worker = std::thread([this]() { run(); });
+        }
+
+        bool wait()
+        {
+            if (worker.joinable())
+                worker.join();
+            return true;
+        }
+
         void run();
 
     private:
@@ -419,5 +427,6 @@ class MeanMaxComputer : public QThread
         QVector<data_t> integratedArray;
 
         RideFile::SeriesType series;
+        std::thread worker;
 };
 #endif // _GC_RideFileCache_h

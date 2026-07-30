@@ -55,6 +55,8 @@ equals(GC_UNITTESTS, active) {
 			   FileIO/fixGpsSmoothingSafety \
 			   FileIO/jsonImportIntegrity \
 			   FileIO/powerTapBounds \
+			   FileIO/rideFileCacheIntegrity \
+			   FileIO/rideFileCacheRefresh \
 			   FileIO/rideFileOwnership \
 			   FileIO/tacxCafBounds \
 			   FileIO/tcxPointBudget \

@@ -6943,14 +6943,18 @@ Result Leaf::eval(DataFilterRuntime *df, Leaf *leaf, const Result &x, long it, R
 
                 if (m == NULL) return Result(0); // no ride then no context
 
-                return Result(RideFileCache::best(m->context, m->fileName, leaf->seriesType, duration));
+                return Result(RideFileCache::best(
+                    m->context, m,
+                    leaf->seriesType, duration));
             }
 
             if (leaf->function == "tiz") { // duration is really zone number
 
                 if (m == NULL) return Result(0); // no ride then no context
 
-                return Result(RideFileCache::tiz(m->context, m->fileName, leaf->seriesType, duration));
+                return Result(RideFileCache::tiz(
+                    m->context, m,
+                    leaf->seriesType, duration));
             }
         }
 
