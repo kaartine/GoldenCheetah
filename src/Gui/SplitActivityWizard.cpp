@@ -831,8 +831,14 @@ SplitConfirm::validatePage()
     if (!wizard->keepOriginal) {
         QTreeWidgetItem *sourceRow =
             wizard->files->invisibleRootItem()->child(0);
-        if (wizard->context->athlete->rideCache
-                ->removeArchivedRide(wizard->sourceFileName)) {
+        RideItem *sourceItem =
+            wizard->context->athlete->rideCache
+                ->getRide(
+                    wizard->sourceFileName,
+                    false);
+        if (sourceItem
+            && wizard->context->athlete->rideCache
+                ->removeArchivedRide(sourceItem)) {
             if (sourceRow) sourceRow->setText(5, tr("Removed"));
         } else {
             if (sourceRow) {

@@ -2420,7 +2420,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   suite, and 22-case refresh/integration suite pass normally, under strict
   ASan/UBSan/LSan with leak detection, and under ThreadSanitizer without
   suppressions. The MinGW header-order syntax test, complete Qt 6.8.3 release
-  build, and 92-suite matrix also pass; the matrix reports 3,411 passed, zero
+  build, and 92-program matrix also pass; the matrix reports 3,411 passed, zero
   failed or blacklisted, and 12 expected Linux skips.
 - Residual: An external source can still change after the final validator and
   before `QSaveFile` renames the CPX. The installed cache is self-detecting and
@@ -2436,21 +2436,88 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DATA-013: Planned CPX lifecycle operations use the completed namespace
 
-- Status: OPEN
-- Code: `src/Core/RideCacheRemoval.cpp:121-128`,
-  `src/Core/RideCache.cpp:745-750`,
-  `src/Core/RideCache.cpp:2291-2298`, and
-  `src/FileIO/RideFileCacheIntegrity.cpp:1047-1084`
+- Status: FIXED
+- Code: `src/Core/RideCacheRemoval.cpp`,
+  `src/Core/RideCache.h`,
+  `src/Core/RideCache.cpp`, and
+  `src/FileIO/RideFileCacheIntegrity.cpp`
 - Impact: Planned CPX files now live below `cache/planned`, but single and
   batch deletion and rename still address `cache/<base>.cpx`. Deleting or
   renaming a planned activity therefore leaves its real CPX behind and can
   delete or rename a completed activity's same-basename CPX instead.
-- Test: Create planned and completed activities with the same basename and
-  distinct CPX files. Deleting or renaming either activity must affect only
-  the CPX selected by `cachePathForActivity()`.
-- Fix direction: Route CPX deletion and rename through the canonical
-  source-aware cache-path helper while preserving the existing placement rules
-  for unrelated notes and CPI files.
+- Test-first evidence: Against the unchanged implementation,
+  `plannedRemovalDeletesOnlyPlannedCpx()` failed with six prior cases passing:
+  the completed CPX was empty after deletion instead of retaining its distinct
+  fixture contents. Companion regressions cover batch deletion and rename with
+  planned and completed activities sharing one basename.
+- Resolution: One source-aware helper constructs the planned or completed
+  activity path and delegates CPX placement to
+  `cachePathForActivity()`. Single and batch removal now share the same
+  derived-file cleanup path, and rename addresses the old and new CPX only in
+  the selected namespace. Notes and CPI retain their established root-cache
+  placement.
+- Verification: The focused removal program reports 16 passes: 14 substantive
+  slots plus QtTest initialization and cleanup. It passes normally, under
+  strict ASan/UBSan/LSan with leak detection, and under ThreadSanitizer without
+  suppressions. The complete Qt 6.8.3 release build and successful 92-program
+  offscreen matrix also pass; the matrix reports 3,442 passed, zero failed or
+  blacklisted, and 12 expected Linux skips.
+- Residual: Derived-file rename errors remain ignored after the activity file
+  has moved and are tracked by `DATA-016`. Archive and cleanup failures remain
+  non-transactional and are tracked by `DATA-018`.
+
+### DATA-017: Filename-only removal can select the wrong activity namespace
+
+- Status: FIXED
+- Code: `src/Core/RideCacheRemoval.cpp`,
+  `src/Core/RideCache.h`,
+  `src/Charts/CalendarWindow.cpp`,
+  `src/Gui/BatchProcessingDialog.cpp`,
+  `src/Gui/PlanWizards.cpp`,
+  `src/Gui/SplitActivityWizard.cpp`, and
+  `src/Planning/PlanBundle.cpp`
+- Impact: Startup retains planned and completed activities with the exact same
+  filename and orders the completed item first, but removal searches only by
+  filename. Removing the planned item can therefore archive the completed
+  source, remove its completed CPX, and leave the requested planned activity
+  untouched. Current-ride removal can make the same wrong selection.
+- Test-first evidence: With the namespace fix but before the identity change,
+  the focused program reported 11 passes and two failures.
+  `currentRemovalUsesSelectedNamespace()` left the planned item instead of the
+  completed item, and `ambiguousFilenameRemovalFailsClosed()` showed that the
+  legacy filename-only call returned success instead of rejecting the
+  collision.
+- Resolution: Single, current, archived, calendar, plan, split, and explicit
+  batch paths now carry `RideItem*` identity through removal. Batch processing
+  uses its stored `(filename, planned)` identity. Lookup and model mutation
+  compare the complete identity, while compatibility wrappers accept a
+  filename only when it resolves to exactly one live item and otherwise fail
+  closed. Batch removal snapshots its input before mutating the live ride list,
+  so even an aliased `rides()` argument has defined iteration semantics.
+- Verification: Exact-name collision tests cover selected-current removal,
+  legacy single and batch rejection, explicit namespace lookup, and explicit
+  batch identity. They are
+  included in DATA-013's 16-pass normal, ASan/UBSan/LSan, and ThreadSanitizer
+  runs, the complete release build, and the 92-program matrix.
+
+### DATA-018: Activity deletion reports success after archival failure
+
+- Status: OPEN
+- Code: `src/Core/RideCacheRemoval.cpp:48-75` and
+  `src/Core/RideCacheRemoval.cpp:233-353`
+- Impact: Removal evicts the item from the model and deletes any previous
+  backup before moving the source to the backup directory. If that move fails,
+  the operation shows a dialog but continues deleting derived files and
+  returns success. The live source may become invisible until restart, the
+  previous backup is lost, and missing-source failures can leave no recoverable
+  activity copy. Derived-file deletion errors are also ignored.
+- Test: Inject failures before backup replacement, during source archival, and
+  during each derived-file cleanup. The item, source, prior backup, and
+  sidecars must remain in a defined recoverable state and the API must report
+  failure.
+- Fix direction: Stage and durably commit the archive before mutating the model
+  or caches, preserve the prior backup until commit, and make cleanup outcomes
+  explicit with rollback or a surfaced recovery state.
 
 ## Medium
 
@@ -2487,7 +2554,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Verification: The 44-case integrity and 34-case refresh/integration suites
   pass normally, under strict ASan/UBSan/LSan with leak detection, and under
   ThreadSanitizer without suppressions. The MinGW header-order syntax check,
-  complete Qt 6.8.3 release build, and successful 92-suite offscreen matrix
+  complete Qt 6.8.3 release build, and successful 92-program offscreen matrix
   also pass.
 - Residual: The CPX digest detects accidental corruption but is unkeyed and is
   not an authenticity boundary against an attacker who can rewrite local
@@ -2531,6 +2598,22 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Fix direction: Bind aggregate reuse to a library/activity generation that
   changes with source mutations, or implement a bounded set-snapshot protocol
   that verifies every member belongs to one stable generation before publish.
+
+### DATA-016: Activity rename ignores derived-file rename failures
+
+- Status: OPEN
+- Code: `src/Core/RideCacheRemoval.cpp:358-421`
+- Impact: The activity source is renamed first, but failures to rename notes,
+  CPI, or CPX files are ignored and the operation still reports success. A
+  destination collision or filesystem error can therefore detach metadata,
+  leave stale cache artifacts, or expose an unrelated same-basename sidecar
+  under the renamed activity.
+- Test: Pre-create each destination sidecar and inject rename failures after
+  the source move. The operation must either publish one consistent artifact
+  set or report the partial outcome without losing the original metadata.
+- Fix direction: Stage and commit the source and metadata as one rollback-aware
+  transaction. Derived CPX data may be invalidated instead of moved, but notes
+  must not be silently detached and every failure must be surfaced.
 
 ### METRIC-004: Ride best ranking is sorted in the wrong direction
 
@@ -5003,27 +5086,31 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The complete containerized release matrix with `DATA-011` passes:
+The complete containerized release matrix with `DATA-013` and `DATA-017`
+passes:
 
-- 92 QtTest suites
-- 3,432 passed
+- 92 QtTest executables
+- 3,442 passed
 - 0 failed or blacklisted
 - 12 expected platform-only skips on Linux
 - Qt 6.8.3 on Ubuntu 24.04
 
-The registered matrix includes the AppImage packaging consistency test and the
-32-case Strava OAuth policy suite. Production AppImages are packaged from
-committed source only after this matrix, the predecessor remains available as
-the rollback image, and the local sidecar records the packaged commit and
-SHA-256 without making repository documentation depend on local artifact
-state.
+The check run also includes the AppImage packaging consistency check and builds
+its compile-only SIP prerequisite. The registered matrix includes the 32-case
+Strava OAuth policy suite. Production AppImages are packaged from committed
+source only after this matrix, the predecessor remains available as the
+rollback image, and the local sidecar records the packaged commit and SHA-256
+without making repository documentation depend on local artifact state.
 
 `DATA-011` additionally passes its 44-case integrity and 34-case
 refresh/integration suites normally, under strict ASan/UBSan/LSan with leak
 detection, and under ThreadSanitizer without suppressions, plus its MinGW
 header-order check. The timing-sensitive credential enrollment coverage
 recorded as `TEST-004` failed two of nine observations and passed in the
-successful complete matrix; it does not touch the DATA-011 code paths.
+successful `DATA-013` complete matrix; it does not touch either code path.
+`DATA-013` and `DATA-017` additionally pass their 16-pass removal program
+normally, under strict ASan/UBSan/LSan with leak detection, and under
+ThreadSanitizer without suppressions.
 `DATA-012` additionally passes 98 focused cases under strict
 ASan/UBSan/LSan with leak detection and ThreadSanitizer without suppressions,
 plus its MinGW header-order check. `DUR-006` additionally passes its 29-case

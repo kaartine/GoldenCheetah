@@ -710,7 +710,11 @@ BatchProcessingDialog::deleteFiles() {
 
             files->setCurrentItem(current);
 
-            if (context->athlete->rideCache->removeRide(current->text(1))) {
+            if (context->athlete->rideCache
+                    ->removeRide(
+                        current->text(1),
+                        current->data(
+                            1, Qt::UserRole).toBool())) {
                 current->setText(4, tr("Deleted"));
                 processed++;
             } else {
@@ -858,4 +862,3 @@ BatchProcessingDialog::failedToProcessEntry(QTreeWidgetItem* current) {
     current->setText(4, tr("Failed to process activity"));
     fails++;
 }
-

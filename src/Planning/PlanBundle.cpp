@@ -373,7 +373,8 @@ PlanBundleReader::importBundle
             }
         }
     }
-    context->athlete->rideCache->removeRides(toDelete, false);
+    context->athlete->rideCache->removeRides(
+        getRideItemsToRemove(), false);
     for (const RideFileSelection &entry : rideFiles) {
         if (entry.selected) {
             if (! processWorkout(entry.getRideFile())) {

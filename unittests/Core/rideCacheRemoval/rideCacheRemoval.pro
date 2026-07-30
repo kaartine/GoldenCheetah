@@ -9,9 +9,12 @@ include(../../unittests.pri)
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug
+DEFINES += GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
 
 SOURCES = testRideCacheRemoval.cpp \
           RideCacheRemovalTestStubs.cpp \
+          ../../../src/FileIO/RideFileCRC.cpp \
+          ../../../src/FileIO/RideFileCacheIntegrity.cpp \
           ../../../src/Core/RideCacheRemoval.cpp
 
 HEADERS = ../../../src/Core/Athlete.h \
@@ -19,6 +22,8 @@ HEADERS = ../../../src/Core/Athlete.h \
           ../../../src/Core/RideCache.h \
           ../../../src/Core/RideCacheModel.h \
           ../../../src/Core/RideItem.h \
+          ../../../src/FileIO/RideFileCRC.h \
+          ../../../src/FileIO/RideFileCacheIntegrity.h \
           ../../../src/Metrics/Estimator.h
 
 INCLUDEPATH += ../../../src \

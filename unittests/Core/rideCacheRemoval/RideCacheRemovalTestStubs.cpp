@@ -14,6 +14,29 @@
 #include <cstring>
 #include <utility>
 
+namespace {
+
+int rideCacheRefreshCount = 0;
+int estimatorRefreshCount = 0;
+
+} // namespace
+
+void resetRideCacheRemovalRefreshCounts()
+{
+    rideCacheRefreshCount = 0;
+    estimatorRefreshCount = 0;
+}
+
+int rideCacheRemovalRefreshCount()
+{
+    return rideCacheRefreshCount;
+}
+
+int rideCacheRemovalEstimatorRefreshCount()
+{
+    return estimatorRefreshCount;
+}
+
 GlobalContext::GlobalContext()
     : rideMetadata(nullptr),
       colorEngine(nullptr),
@@ -361,7 +384,7 @@ Estimator::~Estimator() = default;
 
 void Estimator::run() {}
 void Estimator::stop() {}
-void Estimator::refresh() {}
+void Estimator::refresh() { ++estimatorRefreshCount; }
 void Estimator::calculate() {}
 
 Performance Estimator::getPerformanceForDate(QDate, QString)
@@ -404,7 +427,7 @@ void RideCache::cancel() {}
 void RideCache::itemChanged() {}
 void RideCache::garbageCollect() {}
 void RideCache::initEstimates() {}
-void RideCache::refresh() {}
+void RideCache::refresh() { ++rideCacheRefreshCount; }
 
 RideItem *RideCache::getLinkedActivity(RideItem *)
 {

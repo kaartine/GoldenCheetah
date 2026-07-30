@@ -598,7 +598,7 @@ RepeatPlanWizard::done
         }
         context->tab->setNoSwitch(true);
         for (RideItem *rideItem : deletionList) {
-            context->athlete->rideCache->removeRide(rideItem->fileName);
+            context->athlete->rideCache->removeRide(rideItem);
         }
         RideCache::OperationPreCheck check = context->athlete->rideCache->checkCopyPlannedActivities(planList);
         if (check.canProceed) {

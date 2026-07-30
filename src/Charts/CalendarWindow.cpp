@@ -396,8 +396,13 @@ CalendarWindow::CalendarWindow(Context *context)
         QMessageBox::StandardButton res = QMessageBox::question(this, tr("Delete Activity"), tr("Are you sure you want to delete %1?").arg(activity.reference));
         if (res == QMessageBox::Yes) {
             if (unlinkActivities(activity)) {
+                RideItem *rideItem = getRideItem(activity);
+                if (!rideItem) {
+                    updateActivities();
+                    return;
+                }
                 this->context->tab->setNoSwitch(true);
-                this->context->athlete->rideCache->removeRide(activity.reference);
+                this->context->athlete->rideCache->removeRide(rideItem);
                 this->context->tab->setNoSwitch(false);
             }
 

@@ -15,36 +15,228 @@
 #include "DataProcessor.h"
 #include "Estimator.h"
 #include "RideCacheModel.h"
+#include "RideFileCacheIntegrity.h"
+
+QString
+RideCache::cpxCachePathForActivity(
+    const QString &fileName,
+    bool isPlanned) const
+{
+    if (!context
+        || !context->athlete
+        || !context->athlete->home) {
+        return {};
+    }
+
+    AthleteDirectoryStructure *home =
+        context->athlete->home;
+    const QString sourcePath =
+        RideFileCacheIntegrity::activitySourcePath(
+            (isPlanned
+                 ? home->planned()
+                 : home->activities())
+                .absolutePath(),
+            fileName);
+    return RideFileCacheIntegrity::
+        cachePathForActivity(
+            home->cache().absolutePath(),
+            home->activities().absolutePath(),
+            home->planned().absolutePath(),
+            sourcePath);
+}
+
+void
+RideCache::removeDerivedFiles(
+    const QString &fileName,
+    bool isPlanned)
+{
+    const QString baseName =
+        QFileInfo(fileName).baseName();
+    if (baseName.isEmpty())
+        return;
+
+    for (const QString &extension :
+         {QStringLiteral("notes"),
+          QStringLiteral("cpi")}) {
+        QFile::remove(
+            context->athlete->home
+                ->cache()
+                .filePath(
+                    baseName
+                    + QLatin1Char('.')
+                    + extension));
+    }
+
+    const QString cpxPath =
+        cpxCachePathForActivity(
+            fileName, isPlanned);
+    if (!cpxPath.isEmpty())
+        QFile::remove(cpxPath);
+}
 
 bool
 RideCache::removeCurrentRide()
 {
     if (!context->ride) return false;
-    return removeRide(context->ride->fileName);
+    return removeRide(context->ride);
 }
 
 bool
 RideCache::removeRide(const QString &filenameToDelete)
 {
+    RideItem *ride =
+        uniqueRideForFileName(filenameToDelete);
+    if (!ride) {
+        qDebug()
+            << "ERROR: delete not found or ambiguous:"
+            << filenameToDelete;
+        return false;
+    }
+    return removeRide(ride);
+}
+
+bool
+RideCache::removeRide(
+    const QString &filenameToDelete,
+    bool planned)
+{
+    RideItem *ride =
+        uniqueRideForIdentity(
+            filenameToDelete, planned);
+    if (!ride) {
+        qDebug()
+            << "ERROR: delete identity not found or ambiguous:"
+            << filenameToDelete << planned;
+        return false;
+    }
+    return removeRide(ride);
+}
+
+bool
+RideCache::removeRide(RideItem *rideToDelete)
+{
     return removeRideEntry(
-        filenameToDelete, RideFileDisposition::Archive);
+        rideToDelete, RideFileDisposition::Archive);
 }
 
 bool
 RideCache::removeArchivedRide(const QString &filenameToDelete)
 {
+    RideItem *ride =
+        uniqueRideForFileName(filenameToDelete);
+    if (!ride) {
+        qDebug()
+            << "ERROR: archived delete not found or ambiguous:"
+            << filenameToDelete;
+        return false;
+    }
+    return removeArchivedRide(ride);
+}
+
+bool
+RideCache::removeArchivedRide(RideItem *rideToDelete)
+{
     return removeRideEntry(
-        filenameToDelete, RideFileDisposition::AlreadyArchived);
+        rideToDelete,
+        RideFileDisposition::AlreadyArchived);
+}
+
+bool
+RideCache::removeRides(
+    const QStringList &filenamesToDelete,
+    bool triggerRefresh)
+{
+    QList<RideItem*> ridesToDelete;
+    ridesToDelete.reserve(
+        filenamesToDelete.size());
+    for (const QString &fileName :
+         filenamesToDelete) {
+        RideItem *ride =
+            uniqueRideForFileName(fileName);
+        if (!ride) {
+            qDebug()
+                << "ERROR: delete not found or ambiguous:"
+                << fileName;
+            continue;
+        }
+        if (!ridesToDelete.contains(ride))
+            ridesToDelete.append(ride);
+    }
+    return removeRides(
+        ridesToDelete, triggerRefresh);
+}
+
+bool
+RideCache::removeRides(
+    const QList<RideItem*> &ridesToDelete,
+    bool triggerRefresh)
+{
+    const QList<RideItem*> pending =
+        ridesToDelete;
+    if (pending.isEmpty()) return false;
+
+    cancel();
+    bool anyDeleted = false;
+    for (RideItem *ride : pending) {
+        anyDeleted =
+            removeRideEntry(
+                ride,
+                RideFileDisposition::Archive,
+                false)
+            || anyDeleted;
+    }
+
+    if (anyDeleted && triggerRefresh) {
+        refresh();
+        estimator->refresh();
+    }
+    return anyDeleted;
+}
+
+RideItem *
+RideCache::uniqueRideForFileName(
+    const QString &fileName) const
+{
+    if (fileName.isEmpty()) return nullptr;
+
+    RideItem *match = nullptr;
+    for (RideItem *ride : rides_) {
+        if (!ride || ride->fileName != fileName)
+            continue;
+        if (match) return nullptr;
+        match = ride;
+    }
+    return match;
+}
+
+RideItem *
+RideCache::uniqueRideForIdentity(
+    const QString &fileName,
+    bool planned) const
+{
+    if (fileName.isEmpty()) return nullptr;
+
+    RideItem *match = nullptr;
+    for (RideItem *ride : rides_) {
+        if (!ride
+            || ride->fileName != fileName
+            || ride->planned != planned) {
+            continue;
+        }
+        if (match) return nullptr;
+        match = ride;
+    }
+    return match;
 }
 
 bool
 RideCache::removeRideEntry(
-    const QString &filenameToDelete,
-    RideFileDisposition disposition)
+    RideItem *rideToDelete,
+    RideFileDisposition disposition,
+    bool triggerRefresh)
 {
 
-    // if there is no file activity to delete then return
-    if (filenameToDelete.isEmpty()) return false;
+    if (!rideToDelete) return false;
 
     RideItem* select = NULL; // ride to select once its gone
     RideItem* todelete = NULL;
@@ -57,7 +249,7 @@ RideCache::removeRideEntry(
 
         RideItem* rideI = rides_[index];
 
-        if (rideI->fileName == filenameToDelete) {
+        if (rideI == rideToDelete) {
 
             // bingo!
             todelete = rideI;
@@ -73,13 +265,18 @@ RideCache::removeRideEntry(
 
     // WTAF!?
     if (!todelete) {
-        qDebug()<<"ERROR: delete not found.";
+        qDebug()
+            << "ERROR: delete item not found:"
+            << rideToDelete;
         return false;
     }
+    if (todelete->fileName.isEmpty())
+        return false;
+    const QString filenameToDelete =
+        todelete->fileName;
 
     // If this activity is linked, unlink it first
     if (todelete->hasLinkedActivity()) {
-        QString linkedFileName = todelete->getLinkedFileName();
         RideItem *linkedItem = getLinkedActivity(todelete);
         if (linkedItem) {
             linkedItem->clearLinkedFileName();
@@ -118,19 +315,15 @@ RideCache::removeRideEntry(
         }
     }
 
-    // remove any other derived/additional files; notes, cpi etc (they can only exist in /cache )
-    QStringList extras;
-    extras << "notes" << "cpi" << "cpx";
-    foreach (QString extension, extras) {
-
-        QString deleteMe = QFileInfo(filenameToDelete).baseName() + "." + extension;
-        QFile::remove(context->athlete->home->cache().canonicalPath() + "/" + deleteMe);
-    }
+    removeDerivedFiles(
+        filenameToDelete,
+        todelete->planned);
 
     if (select) {
 
         // we don't want the whole delete, select next flicker
-        context->mainWindow->setUpdatesEnabled(false);
+        if (context->mainWindow)
+            context->mainWindow->setUpdatesEnabled(false);
 
         // select a different ride
         context->ride = select;
@@ -139,7 +332,8 @@ RideCache::removeRideEntry(
         context->notifyRideDeleted(todelete);
 
         // now we can update
-        context->mainWindow->setUpdatesEnabled(true);
+        if (context->mainWindow)
+            context->mainWindow->setUpdatesEnabled(true);
         QApplication::processEvents();
 
         // now select another ride
@@ -150,10 +344,79 @@ RideCache::removeRideEntry(
         context->notifyRideSelected(context->ride);
     }
 
-    refresh();
-    // model estimates (lazy refresh)
-    estimator->refresh();
+    if (triggerRefresh) {
+        refresh();
+        // model estimates (lazy refresh)
+        estimator->refresh();
+    }
 
     return true;
 
+}
+
+bool
+RideCache::renameRideFiles(
+    const QString &oldFileName,
+    const QString &newFileName,
+    bool isPlanned,
+    QString &error)
+{
+    const QFileInfo oldInfo(oldFileName);
+    const QFileInfo newInfo(newFileName);
+
+    const QDir activeDir =
+        isPlanned
+        ? plannedDirectory
+        : directory;
+    const QString oldPath =
+        activeDir.filePath(oldFileName);
+    const QString newPath =
+        activeDir.filePath(newFileName);
+
+    if (!QFile::rename(oldPath, newPath)) {
+        error = tr(
+            "Failed to rename activity file from %1 to %2")
+                    .arg(oldFileName, newFileName);
+        return false;
+    }
+
+    for (const QString &extension :
+         {QStringLiteral("notes"),
+          QStringLiteral("cpi")}) {
+        const QString oldExtPath =
+            context->athlete->home
+                ->cache()
+                .filePath(
+                    oldInfo.baseName()
+                    + QLatin1Char('.')
+                    + extension);
+        const QString newExtPath =
+            context->athlete->home
+                ->cache()
+                .filePath(
+                    newInfo.baseName()
+                    + QLatin1Char('.')
+                    + extension);
+        if (oldExtPath != newExtPath
+            && QFile::exists(oldExtPath)) {
+            QFile::rename(
+                oldExtPath, newExtPath);
+        }
+    }
+
+    const QString oldCpxPath =
+        cpxCachePathForActivity(
+            oldFileName, isPlanned);
+    const QString newCpxPath =
+        cpxCachePathForActivity(
+            newFileName, isPlanned);
+    if (!oldCpxPath.isEmpty()
+        && !newCpxPath.isEmpty()
+        && oldCpxPath != newCpxPath
+        && QFile::exists(oldCpxPath)) {
+        QFile::rename(
+            oldCpxPath, newCpxPath);
+    }
+
+    return true;
 }

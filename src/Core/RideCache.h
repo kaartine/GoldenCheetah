@@ -133,8 +133,28 @@ class RideCache : public QObject
             bool planned);
         bool removeCurrentRide();
         bool removeRide(const QString& filenameToDelete);
+        bool removeRide(
+            const QString &filenameToDelete,
+            bool planned);
+        bool removeRide(RideItem *rideToDelete);
         bool removeArchivedRide(const QString& filenameToDelete);
+        bool removeArchivedRide(RideItem *rideToDelete);
         bool removeRides(const QStringList &filenamesToDelete, bool triggerRefresh = true);
+        bool removeRides(const QList<RideItem*> &ridesToDelete, bool triggerRefresh = true);
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+        bool renameRideFilesForTest(
+            const QString &oldFileName,
+            const QString &newFileName,
+            bool isPlanned,
+            QString &error)
+        {
+            return renameRideFiles(
+                oldFileName,
+                newFileName,
+                isPlanned,
+                error);
+        }
+#endif
 
         // export metrics in CSV format
         void writeAsCSV(QString filename);
@@ -311,9 +331,21 @@ class RideCache : public QObject
         void queueBackgroundSave(
             const QString &targetPath = QString());
 
+        RideItem *uniqueRideForFileName(
+            const QString &fileName) const;
+        RideItem *uniqueRideForIdentity(
+            const QString &fileName,
+            bool planned) const;
         bool removeRideEntry(
-            const QString &filenameToDelete,
-            RideFileDisposition disposition);
+            RideItem *rideToDelete,
+            RideFileDisposition disposition,
+            bool triggerRefresh = true);
+        QString cpxCachePathForActivity(
+            const QString &fileName,
+            bool isPlanned) const;
+        void removeDerivedFiles(
+            const QString &fileName,
+            bool isPlanned);
         bool renameRideFiles(const QString& oldFileName, const QString& newFileName, bool isPlanned, QString &error);
         bool isValidLink(RideItem *item1, RideItem *item2, QString &error);
         RideItem* copyPlannedRideFile(RideItem *sourceItem, const QDate &newDate, const QTime &newTime, QString &error);
