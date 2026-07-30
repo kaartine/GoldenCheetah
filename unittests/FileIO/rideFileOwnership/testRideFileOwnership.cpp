@@ -9,6 +9,9 @@
 
 #include <QtTest>
 
+#include <QFile>
+#include <QTemporaryDir>
+
 #include "RideFile.h"
 
 class TestableRideFile : public RideFile
@@ -32,6 +35,7 @@ private slots:
     void destructorReleasesCalibrations();
     void copyOwnsIndependentCalibrations();
     void duplicateTimestampUpdateKeepsOwnedPointAndSummaries();
+    void fileCrcReleasesItsReadStream();
 };
 
 void TestRideFileOwnership::allConstructorsReleaseSummaryPoints()
@@ -228,6 +232,24 @@ void TestRideFileOwnership::duplicateTimestampUpdateKeepsOwnedPointAndSummaries(
     QCOMPARE(ride.getAvgPoint(RideFile::hr).toDouble(), 151.0);
     QCOMPARE(ride.getMaxPoint(RideFile::hr).toDouble(), 151.0);
     QCOMPARE(ride.getAvgPoint(RideFile::watts).toDouble(), 200.0);
+}
+
+void TestRideFileOwnership::fileCrcReleasesItsReadStream()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("activity.fit"));
+    const QByteArray contents("GoldenCheetah CRC regression");
+
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    QCOMPARE(file.write(contents), contents.size());
+    file.close();
+
+    const unsigned int expected = qChecksum(QByteArrayView(contents));
+    // Repetition makes the stream leak deterministic under LSan.
+    for (int iteration = 0; iteration < 64; ++iteration)
+        QCOMPARE(RideFile::computeFileCRC(path), expected);
 }
 
 QTEST_GUILESS_MAIN(TestRideFileOwnership)

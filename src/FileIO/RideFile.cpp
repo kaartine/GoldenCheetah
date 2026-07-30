@@ -162,8 +162,8 @@ RideFile::computeFileCRC(QString filename)
     QScopedArrayPointer<char> data(new char[file.size()]);
 
     // read entire file into memory
-    QDataStream *rawstream(new QDataStream(&file));
-    rawstream->readRawData(&data[0], file.size());
+    QDataStream rawstream(&file);
+    rawstream.readRawData(&data[0], file.size());
     file.close();
 
     return qChecksum(QByteArrayView(&data[0], file.size()));

@@ -2311,6 +2311,23 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   and recomputed from the source activity; they are never treated as
   authoritative workout data.
 
+### PARSE-008: Activity CRC trusts a mutable file size and buffers the whole file
+
+- Status: OPEN
+- Code: `src/FileIO/RideFile.cpp`
+- Impact: `RideFile::computeFileCRC()` allocates the file's complete reported
+  size, ignores the raw-read result, and checksums that full allocation. A very
+  large or sparse activity can exhaust memory. If the file shrinks or a read
+  fails after sizing, the checksum includes an uninitialized tail and becomes
+  nondeterministic.
+- Test: Exercise a bounded CRC input seam with exact, short, failed, and
+  size-changing reads, and verify a large sparse source is processed with
+  constant bounded memory. Preserve the checksum produced for stable existing
+  files.
+- Fix direction: Compute the same CRC incrementally from fixed-size chunks,
+  require exact read/error semantics, and verify the source snapshot did not
+  change before publishing the checksum.
+
 ### DATA-010: Planned and completed activities can alias one CPX cache
 
 - Status: FIXED
@@ -2544,6 +2561,29 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   ASan/UBSan/LSan with no sanitizer report. A clean GCC 13 release build has 0
   errors and emits no `IndendPlotMarker` warning, and the complete release
   matrix passes 72 suites and 2,448 tests (0 failed, skipped, or blacklisted).
+
+### MEM-023: File CRC computation leaks its read stream
+
+- Status: FIXED
+- Code: `src/FileIO/RideFile.cpp` and
+  `unittests/FileIO/rideFileOwnership/testRideFileOwnership.cpp`
+- Impact: Every `RideFile::computeFileCRC()` call allocated a `QDataStream`
+  without an owner or matching delete. Activity discovery and each CPX cache
+  validation or refresh therefore leaked one stream for the process lifetime.
+- Test-first evidence: The ownership suite repeated CRC calculation 64 times.
+  All 12 functional cases passed, but strict ASan/UBSan/LSan terminated the
+  original implementation after reporting 2,048 leaked bytes in 64 allocations
+  rooted at `RideFile::computeFileCRC()`.
+- Resolution: The stream now has automatic storage duration and is destroyed
+  when CRC calculation returns. File opening, reading, and checksum behavior
+  are otherwise unchanged.
+- Verification: The final 12-case ownership suite passes normally and under
+  strict ASan/UBSan/LSan with leak detection. The eight-case concurrent CPX
+  refresh suite that originally exposed the leak also passes under the same
+  sanitizer configuration.
+- Residual: CRC calculation still buffers the complete source file and does not
+  distinguish a short read from normal content. Those I/O and resource-limit
+  concerns are outside this ownership fix.
 
 ### BLE-006: Kinetic InRide UUID fallback violates aliasing and alignment
 
