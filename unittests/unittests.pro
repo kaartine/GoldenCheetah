@@ -22,6 +22,11 @@ equals(GC_UNITTESTS, active) {
 			   Cloud/stravaTokenRefresh \
 			   Cloud/stravaTokenPublication \
 			   Cloud/openDataEndpointPolicy \
+			   Cloud/openDataCaptureUtils \
+			   Cloud/openDataCaptureStateMachine \
+			   Cloud/openDataExport \
+			   Cloud/openDataSummaryStatistics \
+			   Cloud/openDataTransport \
 			   Charts/indendPlotMarkerMatrix \
 			   Charts/mapPageSecurity \
 			   Charts/voronoiSafety \

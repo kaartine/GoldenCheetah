@@ -24,10 +24,14 @@
 #include "RideCacheSaveSnapshot.h"
 #include "RideCacheSnapshot.h"
 #include "RideFileCache.h"
+#include "OpenDataCaptureUtils.h"
+#include "OpenDataSummaryStatistics.h"
 #include "SpecialFields.h"
 #include "Settings.h"
 
 #include <QBuffer>
+#include <QDir>
+#include <utility>
 #ifdef GC_WANT_HTTP
 #include "APIWebService.h"
 #endif
@@ -423,7 +427,7 @@ RideCache::load()
     }
 }
 
-// Escape special characters (JSON compliance)
+// Escape special characters (legacy rideDB token format)
 static QString protect(const QString string)
 {
     QString s = string;
@@ -436,9 +440,8 @@ static QString protect(const QString string)
     s.replace("\f", "\\f");  // formfeed
     s.replace("/", "\\/");   // solidus
 
-    // add a trailing space to avoid conflicting with GC special tokens
-    s += " "; 
-
+    // Legacy rideDB strings retain their token-disambiguating suffix.
+    s += " ";
     return s;
 }
 
@@ -604,17 +607,18 @@ bool RideCache::saveToFile(
 {
     error.clear();
 
+    if (QThread::currentThread() != thread()) {
+        error = QStringLiteral(
+            "Ride cache exports must be captured on the owner thread");
+        return false;
+    }
+
     QString path = QString("%1/%2")
                        .arg(context->athlete->home->cache().canonicalPath())
                        .arg("rideDB.json");
     if (!filename.isEmpty()) path = filename;
 
     if (!opendata) {
-        if (QThread::currentThread() != thread()) {
-            error = QStringLiteral(
-                "Ride cache snapshots must be captured on the owner thread");
-            return false;
-        }
         {
             QMutexLocker locker(&updateMutex);
             if (!refreshThreads.isEmpty()
@@ -636,6 +640,8 @@ bool RideCache::saveToFile(
         return RideCacheSave::write(
             *snapshot, error, writerFactory);
     }
+
+    if (!settleForOpenDataSnapshot(error)) return false;
 
     QByteArray document;
     QBuffer rideDB(&document);
@@ -671,12 +677,11 @@ bool RideCache::saveToFile(
         bool firstRide = true;
         foreach(RideItem *item, rides()) {
 
-            // skip if not loaded/refreshed, a special case
-            // if saving during an initial refresh
-            if (item->metrics().count() == 0) continue;
-
-            // don't save files with discarded changes at exit
-            if (item->skipsave == true) continue;
+            if (!OpenDataCaptureUtils::includeActivityInSnapshot(
+                    !item->metrics().isEmpty(),
+                    item->skipsave)) {
+                continue;
+            }
 
             // comma separate each ride
             if (!firstRide) stream << ",\n";
@@ -712,8 +717,14 @@ bool RideCache::saveToFile(
             } else {
 
                 // need to know what data was collected
-                stream << "\t\t\"data\":\"" <<item->getText("Data","") <<"\",\n";
-                stream << "\t\t\"sport\":\"" <<item->getText("Sport","") <<"\",\n";
+                stream << "\t\t\"data\":"
+                       << OpenDataCaptureUtils::jsonStringLiteral(
+                              item->getText("Data",""))
+                       << ",\n";
+                stream << "\t\t\"sport\":"
+                       << OpenDataCaptureUtils::jsonStringLiteral(
+                              item->getText("Sport",""))
+                       << ",\n";
             }
 
             // pre-computed metrics
@@ -724,6 +735,8 @@ bool RideCache::saveToFile(
             const QVector<double> &counts = item->counts();
             for(int i=0; i<factory.metricCount(); i++) {
                 QString name = factory.metricName(i);
+                const QString metricKey =
+                    OpenDataCaptureUtils::jsonStringLiteral(name);
                 int index = factory.rideMetric(name)->index();
 
                 // don't output 0, nan or inf values, they're set to 0 by default
@@ -737,17 +750,17 @@ bool RideCache::saveToFile(
                     // if stdmean or variance is non-zero we write all 4
                     if (item->stdmeans().value(index, 0.0f) || item->stdvariances().value(index, 0.0f)) {
 
-                        stream << "\t\t\t\"" << name << "\":[\"" << QString("%1").arg(metrics[index], 0, 'f', 5) <<"\",\""
+                        stream << "\t\t\t" << metricKey << ":[\"" << QString("%1").arg(metrics[index], 0, 'f', 5) <<"\",\""
                                                                    << QString("%1").arg(counts[index], 0, 'f', 5) << "\",\""
                                                                    << QString("%1").arg(item->stdmeans().value(index, 0.0f), 0, 'f', 5) << "\",\""
                                                                    << QString("%1").arg(item->stdvariances().value(index, 0.0f), 0, 'f', 5) <<"\"]";
                     } else if (counts[index] == 0) {
                         // if count is 0 don't write it
-						stream << ConstructNameNumberString(QString("\t\t\t\""), name,
-                            QString("\":\""), metrics[index], QString("\""));
+						stream << ConstructNameNumberString(QString("\t\t\t"), metricKey,
+                            QString(":\""), metrics[index], QString("\""));
                     } else {
-					    stream << ConstructNameNumberNumberString(QString("\t\t\t\""), name,
-                            QString("\":[\""), metrics[index], QString("\",\""), counts[index], QString("\"]"));
+					    stream << ConstructNameNumberNumberString(QString("\t\t\t"), metricKey,
+                            QString(":[\""), metrics[index], QString("\",\""), counts[index], QString("\"]"));
                     }
                 }
             }
@@ -760,110 +773,75 @@ bool RideCache::saveToFile(
                 if (data.contains("P") || data.contains("H") || data.contains("S") || data.contains("C")) {
 
                     // get the cache -- may refresh if its out of data, so this might take a while ....
-                    RideFileCache *cache =  new RideFileCache(context, item->fileName, item->weight, NULL, false, true);
+                    const QString allowedRoot =
+                        (item->planned
+                             ? context->athlete->home->planned()
+                             : context->athlete->home->activities())
+                            .absolutePath();
+                    const QString sourcePath =
+                        OpenDataCaptureUtils::activitySourcePath(
+                            allowedRoot,
+                            item->path,
+                            item->fileName);
+                    if (sourcePath.isEmpty()) {
+                        error = QStringLiteral(
+                            "Invalid OpenData activity path");
+                        return false;
+                    }
+                    RideFileCache *cache =
+                        new RideFileCache(
+                            context,
+                            sourcePath,
+                            item->weight,
+                            NULL,
+                            false,
+                            false);
 
-                    QList<RideFile::SeriesType> list;
-                    if (data.contains("P")) list <<RideFile::watts;
-                    if (data.contains("H")) list <<RideFile::hr;
-                    if (data.contains("S")) list <<RideFile::kph;
-                    if (data.contains("C")) list <<RideFile::cad;
+                    OpenDataSummaryStatistics::Statistics statistics;
+                    statistics.complete = !cache->incomplete;
+                    if (statistics.complete) {
+                        QList<RideFile::SeriesType> list;
+                        if (data.contains("P")) list << RideFile::watts;
+                        if (data.contains("H")) list << RideFile::hr;
+                        if (data.contains("S")) list << RideFile::kph;
+                        if (data.contains("C")) list << RideFile::cad;
 
-                    // output distribution for each series
-                    foreach(RideFile::SeriesType x, list) {
-
-                        QVector<double> &array = cache->distributionArray(x);
-                        int split= x==RideFile::cad ? 5 : 10; // set bin size to use
-                        int div=   x==RideFile::kph ? 10 : 1; // speed needs to be divided by 10 to get kph
-
-                        // distribution arrays:
-                        // power_dist_bins:[ n1, n2, n3 ... ],
-                        // power_dist:[ p1, p2, p3 ... ]
-                        //
-                        // the bins are always 10w wide, so we aggregate the data from
-                        // the ridefilecache before outputting the bin starts and values
-                        QVector<int> bins, totals;
-
-                        // lets aggregates
-                        int count=0;
-                        double total=0;
-                        for(int i=0; i< array.count(); i++) {
-
-                            // save value away
-                            if (count==split) {
-                                if (total > 0) { // need a value !
-                                    bins << i-split;
-                                    totals << total;
-                                }
-                                count=0;
-                                total=0;
-                            }
-
-                            total += array[i];
-                            count++;
+                        foreach(RideFile::SeriesType x, list) {
+                            OpenDataSummaryStatistics::Distribution distribution;
+                            distribution.type =
+                                RideFile::seriesName(x, true).toLower();
+                            distribution.values =
+                                cache->distributionArray(x);
+                            distribution.binSize =
+                                x == RideFile::cad ? 5 : 10;
+                            distribution.divisor =
+                                x == RideFile::kph ? 10 : 1;
+                            statistics.distributions.append(
+                                std::move(distribution));
                         }
-
-                        // add last partial bin
-                        if (total > 0 && count > 0) {
-                            bins << array.count()-count;
-                            totals << total;
-                        }
-
-                        // series name
-                        QString type=RideFile::seriesName(x, true).toLower();
-
-                        // now write the distribution and the bins
-                        if (bins.count()) {
-
-                            // totals
-                            stream << ",\n\t\t\t\""<<type<<"_dist\":[" ;
-                            for(int i=0; i < totals.count(); i++) {
-                                stream<< QString("%1").arg(totals[i]);
-                                if (i+1 != bins.count()) stream<<", ";
-                            }
-                            stream << " ]";
-
-                            // bins
-                            stream << ",\n\t\t\t\""<<type<<"_dist_bins\":[" ;
-                            for(int i=0; i < bins.count(); i++) {
-                                stream<< QString("%1").arg(bins[i] > 0 ? bins[i] / div : 0);
-                                if (i+1 != bins.count()) stream<<", ";
-                            }
-                            stream << " ]";
-
+                        if (data.contains("P")) {
+                            statistics.powerMeanMax =
+                                cache->meanMaxArray(RideFile::watts);
+                            statistics.meanMaxDurations =
+                                mmp_durations;
                         }
                     }
 
-                    // MMP - We want to try and keep some of the resolution as this is likely to be filtered
-                    //       and/or aggregated in some fashion by the user. So we choose to keep resolution
-                    //       high at short durations and low at long durations with the points at which the
-                    //       resolution degrades at some point after a physiological boundary.
-                    //
-                    // power_mmp - the mean max values
-                    // power_mmp_secs - the mean max durations
-                    if (data.contains("P")) {
-
-                        QVector<double> &array = cache->meanMaxArray(RideFile::watts);
-
-                        if (array.count() > 0) {
-
-                            // power_mmp
-                            stream << ",\n\t\t\t\"power_mmp\":[" ;
-                            for (int i=0; i<mmp_durations.count() && mmp_durations[i] < array.count(); i++) {
-                                if (i>0) stream << ", "; // for all but first value add comma
-                                stream<< QString("%1").arg(array[mmp_durations[i]], 0, 'f', 0);
-                            }
-                            stream << " ]";
-
-                            // power_mmp_secs
-                            stream << ",\n\t\t\t\"power_mmp_secs\":[" ;
-                            for (int i=0; i<mmp_durations.count() && mmp_durations[i] < array.count(); i++) {
-                                if (i>0) stream << ", "; // for all but first value add comma
-                                stream<< QString("%1").arg(mmp_durations[i]);
-                            }
-                            stream << " ]";
-                        }
-                    }
+                    QString statisticsError;
+                    const bool statisticsWritten =
+                        OpenDataSummaryStatistics::append(
+                            statistics,
+                            stream,
+                            statisticsError);
                     delete cache;
+                    if (!statisticsWritten) {
+                        error = QStringLiteral(
+                            "Cannot export OpenData statistics for %1: %2")
+                                    .arg(
+                                        item->fileName,
+                                        statisticsError);
+                        return false;
+                    }
                 }
 
             }
@@ -894,13 +872,26 @@ bool RideCache::saveToFile(
                 QMap<QString, QStringList>::const_iterator i;
                 for (i=item->xdata().constBegin(); i != item->xdata().constEnd(); i++) {
 
-                    stream << "\t\t\t\"" << i.key() << "\":[ ";
+                    if (opendata) {
+                        stream << "\t\t\t"
+                               << OpenDataCaptureUtils::jsonStringLiteral(
+                                      i.key())
+                               << ":[ ";
+                    } else {
+                        stream << "\t\t\t\"" << i.key() << "\":[ ";
+                    }
                     bool first=true;
                     foreach(QString x, i.value()) {
                         if (!first) {
                             stream << ", ";
                         }
-                        stream << "\"" << protect(x) << "\"";
+                        if (opendata) {
+                            stream
+                                << OpenDataCaptureUtils::jsonStringLiteral(
+                                       x);
+                        } else {
+                            stream << "\"" << protect(x) << "\"";
+                        }
                         first=false;
                     }
 
@@ -962,6 +953,8 @@ bool RideCache::saveToFile(
                         const QVector<double> &itemCounts = item->counts();
                         for(int i=0; i<factory.metricCount(); i++) {
                             QString name = factory.metricName(i);
+                            const QString metricKey =
+                                OpenDataCaptureUtils::jsonStringLiteral(name);
                             int index = factory.rideMetric(name)->index();
         
                             // don't output 0 values, they're set to 0 by default
@@ -973,18 +966,18 @@ bool RideCache::saveToFile(
 
                                 if (interval->stdmeans().value(index, 0.0f) || interval->stdvariances().value(index, 0.0f)) {
 
-                                    stream << "\t\t\t\t\"" << name << "\": [ \"" << QString("%1").arg(intervalMetrics[index], 0, 'f', 5) <<"\",\""
+                                    stream << "\t\t\t\t" << metricKey << ": [ \"" << QString("%1").arg(intervalMetrics[index], 0, 'f', 5) <<"\",\""
                                                                                << QString("%1").arg(intervalCounts[index], 0, 'f', 5) << "\",\""
                                                                                << QString("%1").arg(interval->stdmeans().value(index, 0.0f), 0, 'f', 5) << "\",\""
                                                                                << QString("%1").arg(interval->stdvariances().value(index, 0.0f), 0, 'f', 5) <<"\"]";
 
                                 // if count is 0 don't write it
                                 } else if (intervalCounts[index] == 0) {
-                                    stream << ConstructNameNumberString(QString("\t\t\t\""), name,
-                                        QString("\":\""), intervalMetrics[index], QString("\""));
+                                    stream << ConstructNameNumberString(QString("\t\t\t"), metricKey,
+                                        QString(":\""), intervalMetrics[index], QString("\""));
                                 } else {
-                                    stream << ConstructNameNumberNumberString(QString("\t\t\t\""), name,
-                                        QString("\":[\""), intervalMetrics[index], QString("\",\""), intervalCounts[index], QString("\"]"));
+                                    stream << ConstructNameNumberNumberString(QString("\t\t\t"), metricKey,
+                                        QString(":[\""), intervalMetrics[index], QString("\",\""), intervalCounts[index], QString("\"]"));
                                 }
                             }
                         }

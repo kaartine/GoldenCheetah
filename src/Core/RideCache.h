@@ -108,6 +108,9 @@ class RideCache : public QObject
 
         // is running ?
         bool isRunning() { return refreshThreads.count() != 0; }
+        bool isStartupLoadFinished() const {
+            return startupLoadFinished_;
+        }
 
         // how is update going?
         QMutex updateMutex;
@@ -205,6 +208,7 @@ class RideCache : public QObject
             bool opendata, const QString &filename, QString &error,
             const AtomicFileWriterFactory &writerFactory =
                 qSaveFileWriterFactory());
+        bool settleForOpenDataSnapshot(QString &error);
 
     public slots:
 

@@ -258,6 +258,18 @@ RideCache::settleRefreshForSave(QString &error)
 }
 
 bool
+RideCache::settleForOpenDataSnapshot(QString &error)
+{
+    error.clear();
+    if (QThread::currentThread() != thread()) {
+        error = QStringLiteral(
+            "OpenData snapshots must be settled on the owner thread");
+        return false;
+    }
+    return settleRefreshForSave(error);
+}
+
+bool
 RideCache::enqueueSaveSnapshot(
     const std::shared_ptr<const RideCacheSave::Snapshot> &snapshot)
 {

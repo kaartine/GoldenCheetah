@@ -19,46 +19,16 @@
 #ifndef GC_OpenData_h
 #define GC_OpenData_h
 
-#include "Athlete.h"
 #include "Context.h"
-#include "RideCache.h"
 
-#include <QThread>
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
+#include <QDialog>
 #include <QScrollArea>
 #include <QPushButton>
 
-class OpenData : public QThread {
-
-    Q_OBJECT
-
-    public:
-
-        OpenData(Context *context);
-        ~OpenData();
-
-        // check if time to ask or send data
-        static void check(Context *);
-
-        // posting - done via a thread
-        void postData() { start(); }
-        void run();
-
-    signals:
-
-        // Progress indicator with end user message
-        // n > 0 processing a step
-        // x == 0 error at step n
-        // n == 0 finished
-        void progress(int n, int x, QString message);
-
-    protected:
-
-        Context *context;
-
-    private slots:
-        void onSslErrors(QNetworkReply *reply, const QList<QSslError>&error);
+class OpenData
+{
+public:
+    static void check(Context *);
 };
 
 class OpenDataDialog : public QDialog
