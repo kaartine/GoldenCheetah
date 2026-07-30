@@ -2182,8 +2182,14 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### THREAD-015: OpenData export traverses live athlete state from its worker
 
-- Status: OPEN
-- Code: `src/Cloud/OpenData.cpp`, `src/Cloud/OpenData.h`, and
+- Status: FIXED
+- Code: `src/Cloud/OpenData.cpp`, `src/Cloud/OpenData.h`,
+  `src/Cloud/OpenDataCaptureStateMachine.*`,
+  `src/Cloud/OpenDataCaptureUtils.*`, `src/Cloud/OpenDataExport.*`,
+  `src/Cloud/OpenDataSummaryStatistics.*`,
+  `src/Cloud/OpenDataTransport.*`,
+  `src/Cloud/OpenDataTemporaryArchive.*`,
+  `src/Cloud/OpenDataUploadWorker.*`, `src/Core/RideCache.h`, and
   `src/Core/RideDB.y`
 - Impact: `OpenData::run()` retains a raw `Context *` and calls
   `RideCache::save(true)`, traverses `RideCache::rides()`, dereferences
@@ -2193,22 +2199,224 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   archive, or dereference destroyed objects. The heap-allocated thread has no
   owner or `deleteLater()` connection, so its QObject lifetime is also
   unbounded after completion.
-- Evidence: Static review during `DUR-006` confirmed that normal RideCache
-  persistence now snapshots on the owner thread, while the separate OpenData
-  path still reads the live cache and athlete graph in its worker. It is
-  deliberately not routed through the new normal-save worker because OpenData
-  also exports source activity files and athlete metadata.
-- Test: Capture an OpenData export request, mutate and destroy its source
-  athlete/cache, and require the worker to finish a valid deterministic archive
-  under ThreadSanitizer. Cover athlete closure, application shutdown,
-  cancellation during file export, and worker object destruction.
-- Fix direction: Capture all export metadata and stable activity inputs on the
-  owner thread, then give the worker values or explicitly owned immutable
-  handles only. The worker must not retain `Context`, `Athlete`, `RideCache`, or
-  `RideItem` pointers. Add cooperative cancellation, bounded joining, and
-  explicit QObject ownership and deletion.
+- Test-first evidence: The new request, lifecycle, capture-state, source
+  identity, short-I/O, archive, cancellation, late-cancellation, receiver
+  deletion, and owner-thread regressions initially failed to compile against
+  the monolithic worker or exposed the missing behavior. A separate ordering
+  regression demonstrated that the summary could be captured before the source
+  manifest, permitting a stale summary to be paired with newer activity files.
+  Final review then reproduced the inverse race: startup refresh settlement
+  could mutate metrics after the manifest. Same-inode, same-size content
+  replacement with a restored mtime also passed the metadata-only identity
+  check, and a renamed Unix workspace survived lease cleanup.
+- Resolution: Capture is now an owner-thread state machine. It waits for startup
+  loading and all pending refresh generations to settle, records every selected
+  source path and SHA-256 identity before writing the summary, copies and hashes
+  the exact raw source bytes through short-I/O loops, and revalidates identities
+  before publication. Compressed inputs are verified before decompression.
+  Unix leases retain a directory descriptor and remove renamed workspaces by
+  inode. The worker receives only an immutable request and archive path, owns
+  its native thread, supports cooperative cancellation and joining, linearizes
+  terminal success against late cancellation, and never retains athlete graph
+  pointers. Archive construction, validation, transport, summary aggregation,
+  temporary storage, and lifecycle policy are separated into focused modules.
+- Verification: The final OpenData export program passes 30 cases normally and
+  30 under strict ASan/UBSan/LSan, with five Windows-only skips and no sanitizer
+  report. Its 13-case worker-state matrix passes ThreadSanitizer without
+  suppressions. The 17-case capture utility matrix also passes strict
+  ASan/UBSan/LSan. The Qt 6.8.3 application builds, and the complete out-of-source
+  matrix passes 89 programs and 3,331 cases with zero failures or blacklisting
+  and 12 expected platform skips.
+- Residual: The two native Qt network-event-loop tests pass normally and under
+  ASan, but an uninstrumented Qt 6.8.3 library produces a ThreadSanitizer
+  file-descriptor report between `QCoreApplication::postEvent` and
+  `QEventDispatcherUNIX`; the worker-state TSAN run therefore excludes those
+  two tests rather than suppressing the report. Owner-thread refresh settlement,
+  source hashing, parsing, CSV generation, summary generation, and validation
+  can still pause the UI and observe cancellation only between state-machine
+  advances; this is tracked by `PERF-009`.
+
+### SEC-024: OpenData temporary archives lack verified Windows isolation
+
+- Status: FIXED
+- Code: `src/Cloud/OpenDataTemporaryArchive.cpp`,
+  `src/Cloud/OpenDataTemporaryArchive.h`, and
+  `unittests/Cloud/openDataExport/testOpenDataExport.cpp`
+- Impact: Windows workspace creation supplied a private ACL but never verified
+  that the filesystem persisted it. The lease retained only path strings, so
+  the directory could be renamed or replaced between validation and file
+  creation. A failed `CreateDirectoryW` path also removed the requested name
+  unconditionally, which could delete a pre-existing empty directory created by
+  a racing process.
+- Test-first evidence: Windows-only regressions cover persistent owner-only
+  protected ACLs, rejection after replacing a file DACL with a public one,
+  active-directory rename denial, abandoned non-private workspace rejection,
+  and preservation of a pre-existing directory after failed creation. The
+  deterministic pre-existing-name regression first failed to link because no
+  isolated creation seam existed.
+- Resolution: A lease now retains a no-share-delete directory handle from
+  successful creation through cleanup. Workspace and child handles reject
+  reparse points, require exact case-preserving paths, verify persistent ACL
+  support plus one protected owner-only ACE, and use handle-based delete
+  disposition. Child files remain delete-pending until validation and ownership
+  transfer complete. Post-create validation failures remove the exact empty
+  directory through its retained handle when that handle resolves to the
+  expected path. Abandoned cleanup requires the same private workspace ACL and
+  never traverses directories or reparse points. Unix leases retain a directory
+  descriptor, clean children through `unlinkat()`, and locate a renamed
+  workspace by device and inode before removing it.
+- Verification: The portable and Unix paths pass the 30-case normal and strict
+  ASan/UBSan/LSan OpenData export suites. Five Windows-specific cases are
+  registered and skipped on Linux. The production Windows link already includes
+  `Advapi32`; native Windows runtime execution remains required before claiming
+  platform coverage.
+- Residual: Win32 `CreateDirectoryW` does not atomically return a directory
+  handle. A same-user process that guesses the random UUID could replace the
+  directory in the narrow interval before `CreateFileW`; removing that
+  same-privilege race would require native NT object-manager APIs. If the
+  post-create handle cannot be opened or resolves to a different path, cleanup
+  still refuses path-based deletion of a possible replacement.
+
+### PARSE-007: CPX readers trust attacker-sized and truncated cache layouts
+
+- Status: FIXED
+- Code: `src/FileIO/RideFileCache.cpp`,
+  `src/FileIO/RideFileCache.h`,
+  `src/FileIO/RideFileCacheIntegrity.cpp`, and
+  `src/FileIO/RideFileCacheIntegrity.h`
+- Impact: CPX headers supplied unchecked unsigned block counts to allocation,
+  offset, seek, and raw-read operations. Truncated headers and payloads,
+  arithmetic overflow, growth during a read, or a short scalar read could
+  consume excessive memory, read an unintended block, or publish a partially
+  overwritten value. Multi-value consumers could combine valid values and
+  synthetic zeroes from one changing cache into a result row.
+- Test-first evidence: Malformed-header, count-abuse, exact-size, short-read,
+  growth, invalid-index, scalar failure-atomicity, sticky-failure, single-pass
+  validation, and batch-row regressions failed against the original raw
+  `QDataStream` paths or first exposed the missing failure state.
+- Resolution: `RideFileCacheIntegrity` now inspects the complete native CPX
+  layout under checked 64-bit arithmetic, enforces a 256 MiB ceiling, requires
+  exact file size and exact reads, and verifies size again after each read.
+  `PartialReader` validates once, publishes scalars only after a complete read,
+  becomes permanently invalid after seek, truncation, or mutation failure, and
+  causes batch consumers to discard the entire affected row. All constructor,
+  block, zone, best, TIZ, and aggregate read paths fail closed through the same
+  layout model.
+- Verification: The focused integrity program passes 31 normal cases and the
+  refresh/integration program passes seven. Strict sanitizer, ThreadSanitizer,
+  application, and complete-matrix results are recorded in the final
+  verification baseline below.
+- Residual: CPX remains a native-endian, native-layout local cache format rather
+  than a portable interchange format. Invalid or obsolete caches are ignored
+  and recomputed from the source activity; they are never treated as
+  authoritative workout data.
+
+### DATA-010: Planned and completed activities can alias one CPX cache
+
+- Status: FIXED
+- Code: `src/FileIO/RideFileCache.cpp`,
+  `src/FileIO/RideFileCacheIntegrity.cpp`, `src/Core/RideItem.cpp`,
+  `src/Core/DataFilter.cpp`, `src/R/RTool.cpp`, and
+  `src/Python/SIP/Bindings.cpp`
+- Impact: Most callers derived a cache filename from the activity basename
+  under the completed-activity cache directory. A planned and a completed
+  activity with the same filename could therefore overwrite or read each
+  other's mean-max and time-in-zone values. `RideItem` stale checks and refresh
+  paths also rebuilt source paths from the completed directory even when the
+  item belonged elsewhere.
+- Test-first evidence: Path regressions first demonstrated the completed and
+  planned collision, rejected traversal and outside-root sources, and covered
+  canonical matching through a symlinked activity root. A final fixture writes
+  two real CPX files for identical planned/completed filenames and requires
+  both `best` and `tiz` reads to return their distinct values.
+- Resolution: Cache paths are now derived from a validated canonical source
+  path. Completed activities retain the historical cache namespace while
+  planned activities use `cache/planned`. `RideItem` stale, refresh, and
+  file-cache paths preserve the item's actual directory. Item-aware `best` and
+  `tiz` overloads are used by ranking, DataFilter, R, and Python callers.
+  Temporary or purely in-memory rides compute without persistence when no safe
+  completed/planned cache target exists.
+- Verification: The seven-case refresh/integration program covers fixed-zone
+  refresh, repeated refresh, memory-only calculation, namespace separation,
+  actual best/TIZ values, and atomic batch failure. The complete build and
+  matrix results are recorded below.
+- Residual: The legacy filename-only `best` and `tiz` overloads remain
+  completed-activity APIs for compatibility. New code with a `RideItem` must
+  use the item-aware overload.
 
 ## Medium
+
+### DUR-012: CPX refresh can publish torn files and stale in-memory arrays
+
+- Status: FIXED
+- Code: `src/FileIO/RideFileCache.cpp`,
+  `src/FileIO/RideFileCache.h`, and
+  `src/FileIO/RideFileCacheIntegrity.cpp`
+- Impact: Direct replacement of a CPX file exposed partial headers and payloads
+  to concurrent readers if serialization or the process failed. Failed cache
+  reads and repeated refreshes could retain arrays from an earlier activity,
+  fixed-size zone arrays were not reliably restored, and the normalized-power
+  distribution count was serialized from the wrong array.
+- Test-first evidence: Atomic replacement tests preserve an existing file after
+  an injected write failure and replace it only after success. Refresh
+  regressions clear poisoned arrays, restore every fixed zone size, and prove a
+  second refresh does not retain old values. Exact read/growth failures require
+  an empty incomplete result.
+- Resolution: CPX writes use `QSaveFile` commit semantics. Computation clears
+  all published arrays before work, restores fixed zone storage, fixes the
+  normalized-power count, and marks a cache complete only after successful
+  computation or complete validated loading. Persistence failure leaves valid
+  in-memory results available without publishing a torn file.
+- Verification: The focused refresh/integration program passes seven normal
+  cases and the integrity program passes 31. Final sanitizer and complete-suite
+  evidence is recorded in the verification baseline.
+- Residual: A cache write failure is still reported through legacy UI code. Its
+  process-wide warning state and GUI-thread ownership are tracked separately by
+  `THREAD-016`.
+
+### THREAD-017: Mean-max worker completion is opaque to ThreadSanitizer
+
+- Status: FIXED
+- Code: `src/FileIO/RideFileCache.h`
+- Impact: Mean-max calculation used stack-owned `QThread` subclasses and
+  `QThread::wait()`. Qt 6.8.3 documents that wait as a complete Linux join, but
+  its unsanitized private wait-condition implementation did not expose the
+  happens-before edge to the instrumented application. ThreadSanitizer emitted
+  38 apparent cross-test stack, container, and wait-condition races, aborting
+  strict validation before it could distinguish application races. This was a
+  sanitizer visibility defect rather than evidence that Qt violated its
+  runtime contract.
+- Test-first evidence: The seven-case CPX refresh/integration program passed
+  functionally but produced 38 ThreadSanitizer reports with the original
+  `QThread` workers. The reports included recycled `MeanMaxComputer` and
+  `RideFile` stack locations plus Qt's internal `QWaitCondition` destruction.
+- Resolution: `MeanMaxComputer` now owns a `std::thread`, joins it explicitly,
+  and also joins during destruction. Existing synchronous `run()` callers keep
+  their behavior, while asynchronous computation now has a sanitizer-visible
+  standard join.
+- Verification: The unchanged seven-case refresh/integration program and the
+  31-case integrity program both pass strict ThreadSanitizer execution with no
+  reports.
+- Residual: Worker outputs remain disjoint, but the shared source `RideFile`
+  must remain immutable for the duration of mean-max computation as required by
+  the existing synchronous cache API.
+
+### THREAD-016: CPX write-error reporting races and may open UI off-thread
+
+- Status: OPEN
+- Code: `src/FileIO/RideFileCache.cpp`
+- Impact: `RideFileCache::refreshCache()` guards its one-time warning with an
+  unsynchronized function-static `bool` and constructs a modal `QMessageBox`
+  directly on whichever thread performs the refresh. Concurrent refreshes can
+  race the flag, and a worker-thread failure can invoke QWidget code outside
+  the GUI thread or block background processing indefinitely.
+- Test: Inject a failing CPX writer into simultaneous refreshes. Under
+  ThreadSanitizer require one owner-thread notification, no data race, no modal
+  widget on a worker, and valid in-memory calculations for every failed
+  persistence attempt.
+- Fix direction: Return or signal a structured persistence error from the
+  cache layer. Coalesce notifications under synchronized owner-thread state and
+  let the GUI decide whether and how to display a non-blocking warning.
 
 ### SEC-023: External vault mutations bypass credential cache revisions
 
@@ -4245,6 +4453,31 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Low
 
+### PERF-009: OpenData capture can monopolize the GUI thread
+
+- Status: OPEN
+- Code: `src/Cloud/OpenData.cpp`, `src/Core/RideDB.y`, and
+  `src/Cloud/OpenDataSummaryStatistics.cpp`
+- Impact: The thread-safety fix for `THREAD-015` deliberately captures the
+  athlete graph and computes export summaries on its owner thread. Large
+  athlete histories can therefore make the application unresponsive while
+  refresh generations settle and paths, metadata, source SHA-256 hashes,
+  activity parsing, CSV data, distributions, and summary statistics are
+  collected, even though archive construction and upload continue in a worker.
+- Evidence: The capture state machine processes the selected ride set
+  synchronously before releasing the immutable request to the worker. Current
+  tests prove owner-thread access and snapshot ordering, but do not bound
+  event-loop latency or memory growth for production-sized histories.
+- Test: Drive capture with a large deterministic ride set while recording event
+  processing latency and peak memory. Require bounded owner-thread work per
+  event-loop turn and bounded cancellation latency inside a source operation,
+  while preserving refresh-before-manifest, manifest-before-summary, and
+  source-identity guarantees from `THREAD-015`.
+- Fix direction: Split capture into resumable owner-thread batches, or publish
+  an immutable cache snapshot maintained outside the export path. Revalidate
+  every captured source before publication and keep all athlete graph access on
+  its owning thread.
+
 ### TEST-001: Strava disconnect UI lifetime coverage is source-only
 
 - Status: OPEN
@@ -4281,6 +4514,26 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Fix direction: Resolve the scripts through `QFINDTESTDATA`, a compile-time
   source-root path, or copy them into the test runtime directory as part of the
   build.
+
+### TEST-003: Compressed OpenData reader suffixes lack end-to-end coverage
+
+- Status: OPEN
+- Code: `src/Cloud/OpenData.cpp`,
+  `src/Cloud/OpenDataCaptureUtils.cpp`, and
+  `src/FileIO/CompressedActivityFile.cpp`
+- Impact: The export path derives an uncompressed temporary filename from
+  `.fit.zip` or `.json.gz`, verifies and copies the compressed bytes, extracts
+  them, and asks `RideFileFactory` to select a reader from that temporary
+  suffix. Helper and decompressor tests cover the pieces, but a future suffix
+  or handoff regression could make compressed activities fail only during a
+  real OpenData export.
+- Test: Build representative minimal FIT-in-ZIP and JSON-in-Gzip activities in
+  a private temporary workspace, run the production snapshot/decompression
+  handoff, and require `RideFileFactory` to parse both through the derived
+  `.fit` and `.json` paths without touching athlete data.
+- Fix direction: Expose the source-to-parser snapshot operation behind a small
+  injectable boundary and add an integration test using the real
+  `CompressedActivityFile` and `RideFileFactory` implementations.
 
 ### BUILD-008: Qt 6.8.3 reports impossible QVariant inline-storage overflows
 
@@ -4438,12 +4691,13 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The complete containerized release matrix after DUR-006 passes:
+The complete containerized release matrix after the OpenData and CPX fixes
+passes:
 
-- 82 QtTest suites
-- 3,225 passed
+- 89 QtTest suites
+- 3,331 passed
 - 0 failed or blacklisted
-- 7 expected platform-only skips on Linux
+- 12 expected platform-only skips on Linux
 - Qt 6.8.3 on Ubuntu 24.04
 
 The registered matrix includes the AppImage packaging consistency test and the
