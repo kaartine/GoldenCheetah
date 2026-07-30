@@ -17,7 +17,6 @@
  */
 
 #include "RideFileCache.h"
-#include "MainWindow.h"
 #include "Context.h"
 #include "Athlete.h"
 #include "RideCache.h"
@@ -31,7 +30,6 @@
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
-#include <QMessageBox>
 #include <QtAlgorithms> // for qStableSort
 
 #include <limits>
@@ -582,6 +580,27 @@ RideFileCache::RideFileCache(
     computeWithoutPersistentCache(
         true, target.weight);
 }
+
+bool
+RideFileCache::refreshCacheForTest(
+    const QString &sourcePath,
+    const QString &cachePath,
+    const std::function<bool(
+        const QString &,
+        const RideFileCacheIntegrity::CacheWriteOperation &,
+        QString *)> &writeCache,
+    const std::function<void(
+        const QString &,
+        const QString &)> &reportError)
+{
+    rideFileName = sourcePath;
+    cacheFileName = cachePath;
+    const PersistenceOperations operations {
+        writeCache,
+        reportError
+    };
+    return refreshCache(&operations);
+}
 #endif
 
 int
@@ -859,23 +878,21 @@ RideFileCache::createCacheFor(RideFile*rideFile)
 //
 // COMPUTATION
 //
-void
-RideFileCache::refreshCache()
+bool
+RideFileCache::refreshCache(
+    const PersistenceOperations *operations)
 {
-    static bool writeerror=false;
-
     // set head crc
     crc = RideFile::computeFileCRC(rideFileName);
 
     // Recompute before persistence so a cache write failure does not discard
     // otherwise valid in-memory results.
     if (!compute())
-        return;
+        return false;
 
     QDir().mkpath(QFileInfo(cacheFileName).absolutePath());
     QString writeError;
-    const bool persisted = RideFileCacheIntegrity::writeCacheAtomically(
-        cacheFileName,
+    const RideFileCacheIntegrity::CacheWriteOperation serializeCache =
         [this](QIODevice &output, QString *error) {
             QDataStream outFile(&output);
             serialize(&outFile);
@@ -884,8 +901,17 @@ RideFileCache::refreshCache()
             if (error)
                 *error = QStringLiteral("Cannot serialize CPX cache");
             return false;
-        },
-        &writeError);
+        };
+    const bool persisted =
+        operations && operations->writeCache
+        ? operations->writeCache(
+              cacheFileName,
+              serializeCache,
+              &writeError)
+        : RideFileCacheIntegrity::writeCacheAtomically(
+              cacheFileName,
+              serializeCache,
+              &writeError);
 
     if (persisted) {
         // invalidate any incore cache of aggregate
@@ -898,25 +924,21 @@ RideFileCache::refreshCache()
                 context->athlete->cpxCache.removeAt(i);
             } else i++;
         }
-
-
-    } else if (writeerror == false) {
-
-        // popup the first time...
-        writeerror = true;
-        QMessageBox err;
-        QString errMessage =
-            QString("Cannot create cache file %1: %2.")
-                .arg(cacheFileName, writeError);
-        err.setText(errMessage);
-        err.setIcon(QMessageBox::Warning);
-        err.exec();
-        return;
-
+        return true;
     } else {
-
-        // send a console message instead...
-        qDebug()<<"cannot create cache file"<<cacheFileName;
+        if (!operations) {
+            qWarning().noquote()
+                << QStringLiteral("Cannot create cache file %1: %2.")
+                       .arg(cacheFileName, writeError);
+        }
+        if (operations && operations->reportError) {
+            operations->reportError(
+                cacheFileName, writeError);
+        } else if (context) {
+            context->reportCacheWriteFailure(
+                cacheFileName, writeError);
+        }
+        return false;
     }
 }
 

@@ -15,6 +15,12 @@
 
 #include <QString>
 
+void Context::reportCacheWriteFailure(
+    const QString &,
+    const QString &)
+{
+}
+
 namespace Utils {
 
 QString RidefileUnEscape(QString value)

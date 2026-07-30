@@ -9,16 +9,26 @@
 
 #include "RideFile.h"
 #include "RideFileCache.h"
+#include "RideFileCacheWriteError.h"
 
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QTemporaryDir>
 #include <QTest>
+#include <QThread>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <mutex>
+#include <thread>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -131,6 +141,7 @@ private slots:
     void temporaryActivityComputesWithoutPersistentCache();
     void plannedAndCompletedActivitiesUseSeparateCaches();
     void batchReadDiscardsRowAfterMidReadFailure();
+    void concurrentPersistenceFailuresKeepComputedResults();
 };
 
 void TestRideFileCacheRefresh::refreshRestoresFixedZoneStorage()
@@ -307,6 +318,127 @@ TestRideFileCacheRefresh::batchReadDiscardsRowAfterMidReadFailure()
         !RideFileCache::readBestRowForTest(
             input, requests, values));
     QVERIFY(values.isEmpty());
+}
+
+void
+TestRideFileCacheRefresh::concurrentPersistenceFailuresKeepComputedResults()
+{
+    constexpr int WorkerCount = 4;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QVector<QString> sourcePaths;
+    QVector<QString> cachePaths;
+    for (int index = 0; index < WorkerCount; ++index) {
+        const QString sourcePath =
+            directory.filePath(
+                QStringLiteral("source-%1.fit").arg(index));
+        QFile source(sourcePath);
+        QVERIFY(source.open(QIODevice::WriteOnly));
+        source.close();
+        sourcePaths.append(sourcePath);
+        cachePaths.append(
+            directory.filePath(
+                QStringLiteral("cache/%1.cpx").arg(index)));
+    }
+
+    RideFileCacheWriteErrorCoordinator coordinator;
+    QMutex deliveryMutex;
+    QVector<RideFileCacheWriteErrorCoordinator::Delivery> deliveries;
+    const auto dispatch =
+        [&](RideFileCacheWriteErrorCoordinator::Delivery delivery) {
+            QMutexLocker locker(&deliveryMutex);
+            deliveries.append(std::move(delivery));
+            return true;
+        };
+    int notificationCount = 0;
+    QThread *notificationThread = nullptr;
+    const auto notify = [&](const QString &) {
+        ++notificationCount;
+        notificationThread = QThread::currentThread();
+    };
+
+    std::atomic<int> writeCalls {0};
+    std::atomic<int> reportCalls {0};
+    std::atomic<int> completeResults {0};
+    std::atomic<int> ready {0};
+    std::atomic<bool> start {false};
+    std::mutex writerGateMutex;
+    std::condition_variable writerGateChanged;
+    int writersReady = 0;
+    bool releaseWriters = false;
+    bool writerGateTimedOut = false;
+    std::vector<std::thread> workers;
+    workers.reserve(WorkerCount);
+    for (int index = 0; index < WorkerCount; ++index) {
+        workers.emplace_back([&, index]() {
+            ready.fetch_add(1, std::memory_order_release);
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            RideFile ride;
+            RideFileCache cache(
+                &ride,
+                RideFileCache::SkipInitialComputeForTest {});
+            const bool persisted = cache.refreshCacheForTest(
+                sourcePaths.at(index),
+                cachePaths.at(index),
+                [&](const QString &,
+                    const RideFileCacheIntegrity::CacheWriteOperation &,
+                    QString *error) {
+                    writeCalls.fetch_add(
+                        1, std::memory_order_relaxed);
+                    {
+                        std::unique_lock<std::mutex> lock(
+                            writerGateMutex);
+                        ++writersReady;
+                        if (writersReady == WorkerCount) {
+                            releaseWriters = true;
+                            writerGateChanged.notify_all();
+                        } else if (!writerGateChanged.wait_for(
+                                       lock,
+                                       std::chrono::seconds(5),
+                                       [&]() { return releaseWriters; })) {
+                            writerGateTimedOut = true;
+                            releaseWriters = true;
+                            lock.unlock();
+                            writerGateChanged.notify_all();
+                        }
+                    }
+                    if (error)
+                        *error = QStringLiteral("injected write failure");
+                    return false;
+                },
+                [&](const QString &path, const QString &error) {
+                    reportCalls.fetch_add(
+                        1, std::memory_order_relaxed);
+                    coordinator.report(
+                        path, error, dispatch, notify);
+                });
+            if (!persisted && !cache.incomplete)
+                completeResults.fetch_add(
+                    1, std::memory_order_relaxed);
+        });
+    }
+    while (ready.load(std::memory_order_acquire) != WorkerCount)
+        std::this_thread::yield();
+    start.store(true, std::memory_order_release);
+    for (std::thread &worker : workers)
+        worker.join();
+
+    QCOMPARE(writeCalls.load(), WorkerCount);
+    QCOMPARE(reportCalls.load(), WorkerCount);
+    QCOMPARE(completeResults.load(), WorkerCount);
+    QCOMPARE(notificationCount, 0);
+    QVERIFY(!writerGateTimedOut);
+
+    RideFileCacheWriteErrorCoordinator::Delivery delivery;
+    {
+        QMutexLocker locker(&deliveryMutex);
+        QCOMPARE(deliveries.size(), 1);
+        delivery = std::move(deliveries.front());
+    }
+    delivery();
+    QCOMPARE(notificationCount, 1);
+    QCOMPARE(notificationThread, QThread::currentThread());
 }
 
 QTEST_GUILESS_MAIN(TestRideFileCacheRefresh)

@@ -59,6 +59,7 @@ class ColorEngine;
 class ModelFilter;
 class QWebEngineProfile;
 class HtmlTrainingBridge;
+class RideFileCacheWriteErrorCoordinator;
 
 class GlobalContext : public QObject
 {
@@ -120,6 +121,9 @@ class Context : public QObject
         bool scopehighlighted;
 
         HtmlTrainingBridge *getHtmlTrainingBridge();
+        void reportCacheWriteFailure(
+            const QString &cachePath,
+            const QString &detail);
 
         // ride item
         RideItem *rideItem() const { return ride; }
@@ -282,6 +286,7 @@ class Context : public QObject
 
     private:
         HtmlTrainingBridge *m_HtmlTrainingBridge;
+        RideFileCacheWriteErrorCoordinator *cacheWriteErrorCoordinator_;
 
     signals:
 
@@ -319,6 +324,7 @@ class Context : public QObject
         void refreshEnd();
         void refreshUpdate(QDate);
         void estimatesRefreshed();
+        void cacheWriteFailed(const QString &message);
 
         // cloud download
         void autoDownloadStart();

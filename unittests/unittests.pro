@@ -57,12 +57,14 @@ equals(GC_UNITTESTS, active) {
 			   FileIO/powerTapBounds \
 			   FileIO/rideFileCacheIntegrity \
 			   FileIO/rideFileCacheRefresh \
+			   FileIO/rideFileCacheWriteError \
 			   FileIO/rideFileOwnership \
 			   FileIO/tacxCafBounds \
 			   FileIO/tcxPointBudget \
 			   FileIO/xmlImportIntegrity \
 			   FileIO/ttsReaderBounds \
 			   FileIO/wkoBounds \
+			   Gui/cacheWriteWarning \
 			   Gui/calendarData \
 			   Gui/mergeActivityDistanceCursor \
 			   Gui/mergeActivityRidePreparation \

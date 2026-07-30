@@ -2420,20 +2420,60 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### THREAD-016: CPX write-error reporting races and may open UI off-thread
 
-- Status: OPEN
-- Code: `src/FileIO/RideFileCache.cpp`
+- Status: FIXED
+- Code: `src/FileIO/RideFileCache.cpp`,
+  `src/FileIO/RideFileCacheWriteError.cpp`,
+  `src/FileIO/RideFileCacheWriteError.h`, `src/Core/Context.cpp`,
+  `src/Core/Context.h`, `src/Gui/CacheWriteWarning.cpp`,
+  `src/Gui/CacheWriteWarning.h`, `src/Gui/MainWindow.cpp`,
+  `src/Gui/MainWindow.h`,
+  `unittests/FileIO/rideFileCacheRefresh/testRideFileCacheRefresh.cpp`,
+  `unittests/FileIO/rideFileCacheWriteError/testRideFileCacheWriteError.cpp`,
+  and `unittests/Gui/cacheWriteWarning/testCacheWriteWarning.cpp`
 - Impact: `RideFileCache::refreshCache()` guards its one-time warning with an
   unsynchronized function-static `bool` and constructs a modal `QMessageBox`
   directly on whichever thread performs the refresh. Concurrent refreshes can
   race the flag, and a worker-thread failure can invoke QWidget code outside
   the GUI thread or block background processing indefinitely.
-- Test: Inject a failing CPX writer into simultaneous refreshes. Under
-  ThreadSanitizer require one owner-thread notification, no data race, no modal
-  widget on a worker, and valid in-memory calculations for every failed
-  persistence attempt.
-- Fix direction: Return or signal a structured persistence error from the
-  cache layer. Coalesce notifications under synchronized owner-thread state and
-  let the GUI decide whether and how to display a non-blocking warning.
+- Test-first evidence: The coordinator regression initially failed to compile
+  because no synchronized error model existed, and the integration regression
+  then failed to compile because the real refresh path had no injectable
+  persistence boundary. A later deterministic race test produced five passes
+  and one failure: a second report was incorrectly coalesced while the first
+  dispatch was still pending and was lost when that dispatch failed. The
+  owner-lifetime test and widget-level test each failed their first build
+  because no shared receiver-bound queue or testable GUI warning boundary
+  existed. A final reentrancy regression produced 11 passes and one failure
+  because a nested report waited for its own dispatch to finish. The bounded
+  retry regression then produced 12 passes and one failure after observing four
+  dispatch attempts instead of two. Delivery-construction and post-delivery
+  exception regressions finally produced 13 passes and two failures by exposing
+  a stuck dispatch state and a retained pending callback.
+- Resolution: The cache layer now computes before persistence, returns the
+  persistence result, retains valid in-memory values after write failure, and
+  reports value-only error data through `Context`. A mutex-protected,
+  non-blocking coordinator distinguishes dispatch in progress from an accepted
+  notification. The first report arriving during dispatch is retained as a
+  value-only pending message; a failed dispatch retries that message once
+  through the active owner's callback pair, while an accepted dispatch
+  coalesces it. Generation checks reject stale retained deliveries, and
+  synchronous, exceptional, and reentrant dispatch paths leave a retryable
+  state without retaining another caller's callbacks. Qt queues delivery
+  against the owning `Context`, so destruction cancels the callback.
+  `MainWindow` delegates to a tested GUI helper that shows an owner-bound,
+  delete-on-close, non-modal warning.
+- Verification: The final coordinator program passes all 15 cases normally,
+  under strict ASan/UBSan/LSan, and under ThreadSanitizer, plus 100 consecutive
+  normal runs. The real four-worker CPX refresh program passes all eight cases
+  in the same three configurations while preserving every computed in-memory
+  result after injected write failure. The widget program passes all three
+  cases normally and under strict ASan/UBSan/LSan. The complete release matrix
+  passes 91 QtTest programs and 3,351 cases with zero failures or blacklisting
+  and 12 expected Linux platform skips.
+- Residual: Each cache failure remains visible in the warning log, while only
+  the first successfully queued failure per `Context` opens a dialog.
+  As elsewhere in the cache worker contract, callers must not invoke a raw
+  `Context` after its owning athlete has begun destruction.
 
 ### SEC-023: External vault mutations bypass credential cache revisions
 
@@ -4731,11 +4771,11 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The complete containerized release matrix after the OpenData and CPX fixes
+The complete containerized release matrix through `MEM-023` and `THREAD-016`
 passes:
 
-- 89 QtTest suites
-- 3,331 passed
+- 91 QtTest suites
+- 3,351 passed
 - 0 failed or blacklisted
 - 12 expected platform-only skips on Linux
 - Qt 6.8.3 on Ubuntu 24.04
@@ -4750,7 +4790,7 @@ state.
 `DUR-006` additionally passes its 29-case focused suite under strict
 ASan/UBSan/LSan with leak detection and ThreadSanitizer without suppressions,
 plus 20 consecutive normal runs. `PARSE-005`'s 126 focused tests and the related
-11 RideFile ownership tests retain their sanitizer evidence. Earlier fixed
+12 RideFile ownership tests retain their sanitizer evidence. Earlier fixed
 memory/thread findings retain the focused sanitizer and TSAN evidence recorded
 in their entries.
 

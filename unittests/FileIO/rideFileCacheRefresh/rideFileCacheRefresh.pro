@@ -16,12 +16,14 @@ SOURCES = testRideFileCacheRefresh.cpp \
           ../../../src/FileIO/RideFile.cpp \
           ../../../src/FileIO/RideFileCommand.cpp \
           ../../../src/FileIO/RideFileCache.cpp \
-          ../../../src/FileIO/RideFileCacheIntegrity.cpp
+          ../../../src/FileIO/RideFileCacheIntegrity.cpp \
+          ../../../src/FileIO/RideFileCacheWriteError.cpp
 
 HEADERS = ../../../src/FileIO/RideFile.h \
           ../../../src/FileIO/RideFileCommand.h \
           ../../../src/FileIO/RideFileCache.h \
-          ../../../src/FileIO/RideFileCacheIntegrity.h
+          ../../../src/FileIO/RideFileCacheIntegrity.h \
+          ../../../src/FileIO/RideFileCacheWriteError.h
 
 INCLUDEPATH += ../../../src \
                ../../../src/ANT \

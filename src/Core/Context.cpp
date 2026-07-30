@@ -28,11 +28,14 @@
 #include "SpecialFields.h"
 #include "DataFilter.h"
 #include "HtmlTrainingBridge.h"
+#include "RideFileCacheWriteError.h"
 
 #include <QXmlInputSource>
 #include <QXmlSimpleReader>
 #include <QMutex>
 #include <QWebEngineProfile>
+
+#include <utility>
 
 
 static QList<Context*> _contexts;
@@ -150,8 +153,12 @@ Context::Context(MainWindow *mainWindow): mainWindow(mainWindow)
     isCompareIntervals = isCompareDateRanges = false;
     isRunning = isPaused = false;
     m_HtmlTrainingBridge = nullptr;
+    cacheWriteErrorCoordinator_ =
+        new RideFileCacheWriteErrorCoordinator;
 
     connect(this, SIGNAL(loadProgress(QString, double)), mainWindow, SLOT(loadProgress(QString, double)));
+    connect(this, SIGNAL(cacheWriteFailed(QString)),
+            mainWindow, SLOT(cacheWriteFailed(QString)));
 
 #ifdef GC_HAS_CLOUD_DB
     cdbChartListDialog = NULL;
@@ -177,8 +184,33 @@ Context::getHtmlTrainingBridge()
 
 Context::~Context()
 {
+    delete cacheWriteErrorCoordinator_;
     int i=_contexts.indexOf(this);
     if (i >= 0) _contexts.removeAt(i);
+}
+
+void
+Context::reportCacheWriteFailure(
+    const QString &cachePath,
+    const QString &detail)
+{
+    const auto result = cacheWriteErrorCoordinator_->report(
+        cachePath,
+        detail,
+        [this](
+            RideFileCacheWriteErrorCoordinator::Delivery delivery) {
+            return RideFileCacheWriteErrorCoordinator::queueForOwner(
+                this,
+                std::move(delivery));
+        },
+        [this](const QString &message) {
+            emit cacheWriteFailed(message);
+        });
+    if (result
+        == RideFileCacheWriteErrorCoordinator::ReportResult::DispatchFailed) {
+        qWarning().noquote()
+            << "Cannot queue CPX cache write failure notification";
+    }
 }
 
 void 
@@ -218,4 +250,3 @@ Context::notifyConfigChanged(qint32 state)
     emit configChanged(state);
     QApplication::restoreOverrideCursor();
 }
-

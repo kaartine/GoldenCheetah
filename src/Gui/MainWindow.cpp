@@ -34,6 +34,7 @@
 
 // DATA STRUCTURES
 #include "MainWindow.h"
+#include "CacheWriteWarning.h"
 #include "Context.h"
 #include "Athlete.h"
 #include "AthleteView.h"
@@ -2729,6 +2730,12 @@ MainWindow::loadProgress
     }
 }
 
+void
+MainWindow::cacheWriteFailed(const QString &message)
+{
+    CacheWriteWarning::show(this, message);
+}
+
 
 void
 MainWindow::addIntervals()
@@ -2899,5 +2906,3 @@ MainWindow::setSyncMenu()
         }
     }
 }
-
-

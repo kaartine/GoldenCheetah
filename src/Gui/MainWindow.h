@@ -164,6 +164,7 @@ class MainWindow : public QMainWindow
         void support();
 
         void loadProgress(QString folder, double progress);
+        void cacheWriteFailed(const QString &message);
 
 
         // perspective selected

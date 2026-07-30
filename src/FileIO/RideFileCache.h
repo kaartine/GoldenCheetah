@@ -173,6 +173,16 @@ class RideFileCache
                 QPair<RideFile::SeriesType, int>>
                 &requests,
             QVector<double> &values);
+        bool refreshCacheForTest(
+            const QString &sourcePath,
+            const QString &cachePath,
+            const std::function<bool(
+                const QString &,
+                const RideFileCacheIntegrity::CacheWriteOperation &,
+                QString *)> &writeCache,
+            const std::function<void(
+                const QString &,
+                const QString &)> &reportError);
 #endif
 
         // get a single best or time in zone value from the cache file
@@ -222,7 +232,18 @@ class RideFileCache
 
     protected:
 
-        void refreshCache();              // compute arrays and update cache
+        struct PersistenceOperations {
+            std::function<bool(
+                const QString &,
+                const RideFileCacheIntegrity::CacheWriteOperation &,
+                QString *)> writeCache;
+            std::function<void(
+                const QString &,
+                const QString &)> reportError;
+        };
+
+        bool refreshCache(
+            const PersistenceOperations *operations = nullptr);
         bool readCache();                 // just read from saved file and setup arrays
         void serialize(QDataStream *out); // write to file
 
