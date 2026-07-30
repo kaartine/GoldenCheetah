@@ -10,6 +10,7 @@
 #include "RideFileCacheIntegrity.h"
 
 #include <QBuffer>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QTest>
@@ -33,7 +34,47 @@ QByteArray cacheBytes(const RideFileCacheHeader &header,
 {
     QByteArray bytes(reinterpret_cast<const char *>(&header),
                      sizeof(header));
+    const qint64 sourceByteSize = 4;
+    bytes.append(
+        reinterpret_cast<const char *>(
+            &sourceByteSize),
+        sizeof(sourceByteSize));
+    bytes.append(
+        RideFileCRC::Sha256Size,
+        static_cast<char>(0x5a));
     bytes.append(payloadFloatCount * static_cast<int>(sizeof(float)), '\0');
+    bytes.append(
+        QCryptographicHash::hash(
+            bytes,
+            QCryptographicHash::Sha256));
+    return bytes;
+}
+
+void resealCache(QByteArray &bytes)
+{
+    QVERIFY(
+        bytes.size()
+        >= RideFileCacheIntegrity::
+            CacheFooterBytes);
+    bytes.chop(
+        RideFileCacheIntegrity::
+            CacheFooterBytes);
+    bytes.append(
+        QCryptographicHash::hash(
+            bytes,
+            QCryptographicHash::Sha256));
+}
+
+QByteArray legacyCacheBytes(
+    const RideFileCacheHeader &header)
+{
+    QByteArray bytes(
+        reinterpret_cast<const char *>(&header),
+        sizeof(header));
+    bytes.append(
+        FixedZoneFloatCount
+            * static_cast<int>(sizeof(float)),
+        '\0');
     return bytes;
 }
 
@@ -180,6 +221,133 @@ private:
     qint64 position_ = 0;
 };
 
+class ReplacingOnSecondZeroSeekDevice : public QIODevice
+{
+public:
+    ReplacingOnSecondZeroSeekDevice(
+        QByteArray initial,
+        QByteArray replacement)
+        : initial_(std::move(initial))
+        , replacement_(std::move(replacement))
+    {
+        Q_ASSERT(initial_.size() == replacement_.size());
+        open(QIODevice::ReadOnly);
+    }
+
+    qint64 size() const override
+    {
+        return initial_.size();
+    }
+
+    bool seek(qint64 position) override
+    {
+        if (position < 0 || position > initial_.size())
+            return false;
+        if (position == 0 && ++zeroSeekCount_ == 2)
+            replaced_ = true;
+        position_ = position;
+        return QIODevice::seek(position);
+    }
+
+protected:
+    qint64 readData(char *data, qint64 maximumSize) override
+    {
+        const QByteArray &bytes =
+            replaced_ ? replacement_ : initial_;
+        const qint64 available =
+            static_cast<qint64>(bytes.size()) - position_;
+        const qint64 count =
+            std::min(maximumSize, available);
+        if (count <= 0)
+            return 0;
+        std::memcpy(
+            data,
+            bytes.constData() + position_,
+            static_cast<size_t>(count));
+        position_ += count;
+        return count;
+    }
+
+    qint64 writeData(const char *, qint64) override
+    {
+        return -1;
+    }
+
+private:
+    QByteArray initial_;
+    QByteArray replacement_;
+    qint64 position_ = 0;
+    int zeroSeekCount_ = 0;
+    bool replaced_ = false;
+};
+
+class SparseCountingDevice : public QIODevice
+{
+public:
+    explicit SparseCountingDevice(
+        qint64 declaredSize)
+        : declaredSize_(declaredSize)
+    {
+        open(
+            QIODevice::ReadOnly
+            | QIODevice::Unbuffered);
+    }
+
+    qint64 size() const override
+    {
+        return declaredSize_;
+    }
+
+    bool seek(qint64 position) override
+    {
+        if (position < 0
+            || position > declaredSize_) {
+            return false;
+        }
+        position_ = position;
+        return QIODevice::seek(position);
+    }
+
+    qint64 bytesRead() const
+    {
+        return bytesRead_;
+    }
+
+protected:
+    qint64 readData(
+        char *data,
+        qint64 maximumSize) override
+    {
+        const qint64 count =
+            std::min({
+                maximumSize,
+                declaredSize_ - position_,
+                qint64(4096)
+            });
+        if (count <= 0)
+            return 0;
+        std::memset(
+            data,
+            0,
+            static_cast<size_t>(count));
+        position_ += count;
+        bytesRead_ += count;
+        return count;
+    }
+
+    qint64 writeData(
+        const char *,
+        qint64) override
+    {
+        return -1;
+    }
+
+private:
+    qint64 declaredSize_;
+    qint64 position_ = 0;
+    qint64 bytesRead_ = 0;
+};
+
 class SeekCountingBuffer : public QBuffer
 {
 public:
@@ -210,6 +378,7 @@ class TestRideFileCacheIntegrity : public QObject
 private slots:
     void acceptsValidMinimalFormat();
     void acceptsNonUniformBlockLayout();
+    void rejectsLegacyV25Cache();
     void inspectionAcceptsValidLayout();
     void inspectionRejectsTruncatedPayload();
     void rejectsTruncatedHeader_data();
@@ -219,6 +388,13 @@ private slots:
     void rejectsUnsignedCountAbuse_data();
     void rejectsUnsignedCountAbuse();
     void rejectsExtraPayload();
+    void rejectsSameSizePayloadCorruption();
+    void rejectsCorruptCacheDigest();
+    void rejectsInvalidSourceByteSize();
+    void rejectsOutOfRangeLegacyCrc();
+    void validatesSerializableLayout();
+    void rejectsLargeInvalidCacheAfterHeader();
+    void rejectsReplacementBetweenPayloadAndDigest();
     void rejectsShortReadAfterExactSizeValidation();
     void rejectsGrowthAfterLayoutValidation();
     void clearsOutputAfterFailure();
@@ -226,6 +402,7 @@ private slots:
     void readsValidatedBlockAndZoneValues();
     void partialReaderValidatesOnceForMultipleReads();
     void partialReadsRejectInvalidIndexAndLayout();
+    void partialReaderCorruptDigestIsAtomic();
     void partialReaderShortReadIsAtomicAndSticky();
     void partialReaderGrowthIsAtomicAndSticky();
     void atomicWritePreservesExistingFileOnFailure();
@@ -281,20 +458,54 @@ void TestRideFileCacheIntegrity::acceptsNonUniformBlockLayout()
     QCOMPARE(data.blocks[RideFileCacheIntegrity::NpDistribution].size(), 1);
 }
 
+void TestRideFileCacheIntegrity::rejectsLegacyV25Cache()
+{
+    RideFileCacheHeader header {};
+    header.version = 25;
+    RideFileCacheIntegrity::CacheData data;
+
+    QVERIFY(!readBytes(
+        legacyCacheBytes(header), data));
+    QVERIFY(!data.complete);
+    verifyEmpty(data);
+}
+
 void TestRideFileCacheIntegrity::inspectionAcceptsValidLayout()
 {
     RideFileCacheHeader expected = validHeader();
-    expected.crc = 0x12345678U;
+    expected.crc = 0x5678U;
     expected.wattsMeanMaxCount = 2;
     RideFileCacheHeader inspected {};
+    RideFileCRC::ContentFingerprint
+        sourceFingerprint;
     QString error;
 
-    QVERIFY2(inspectBytes(cacheBytes(expected, FixedZoneFloatCount + 2),
-                          inspected, &error),
-             qPrintable(error));
+    QByteArray bytes =
+        cacheBytes(
+            expected,
+            FixedZoneFloatCount + 2);
+    QBuffer input(&bytes);
+    QVERIFY(input.open(QIODevice::ReadOnly));
+    QVERIFY2(
+        RideFileCacheIntegrity::inspectCache(
+            input,
+            inspected,
+            sourceFingerprint,
+            &error),
+        qPrintable(error));
     QCOMPARE(inspected.version, expected.version);
     QCOMPARE(inspected.crc, expected.crc);
     QCOMPARE(inspected.wattsMeanMaxCount, expected.wattsMeanMaxCount);
+    QCOMPARE(sourceFingerprint.byteSize, qint64(4));
+    QCOMPARE(
+        sourceFingerprint.sha256,
+        QByteArray(
+            RideFileCRC::Sha256Size,
+            static_cast<char>(0x5a)));
+    QCOMPARE(
+        sourceFingerprint.legacyCrc16,
+        static_cast<quint16>(
+            expected.crc));
 }
 
 void TestRideFileCacheIntegrity::inspectionRejectsTruncatedPayload()
@@ -313,7 +524,10 @@ void TestRideFileCacheIntegrity::rejectsTruncatedHeader_data()
     QTest::newRow("empty") << 0;
     QTest::newRow("one-byte") << 1;
     QTest::newRow("last-header-byte") <<
-        static_cast<int>(sizeof(RideFileCacheHeader)) - 1;
+        static_cast<int>(
+            RideFileCacheIntegrity::
+                CachePreambleBytes)
+            - 1;
 }
 
 void TestRideFileCacheIntegrity::rejectsTruncatedHeader()
@@ -334,7 +548,10 @@ void TestRideFileCacheIntegrity::rejectsTruncatedPayload_data()
     const RideFileCacheHeader header = validHeader();
     const QByteArray complete = cacheBytes(header);
     QTest::newRow("missing-all") <<
-        complete.left(static_cast<int>(sizeof(header)));
+        complete.left(
+            static_cast<int>(
+                RideFileCacheIntegrity::
+                    CachePreambleBytes));
     QTest::newRow("missing-last-byte") << complete.chopped(1);
 
     RideFileCacheHeader oneBlock = header;
@@ -385,6 +602,182 @@ void TestRideFileCacheIntegrity::rejectsExtraPayload()
     verifyEmpty(data);
 }
 
+void
+TestRideFileCacheIntegrity::
+rejectsSameSizePayloadCorruption()
+{
+    RideFileCacheHeader header = validHeader();
+    header.wattsMeanMaxCount = 1;
+    QByteArray bytes =
+        cacheBytes(
+            header,
+            FixedZoneFloatCount + 1);
+    setFloat(
+        bytes,
+        RideFileCacheIntegrity::CachePreambleBytes,
+        250.0f);
+    resealCache(bytes);
+
+    RideFileCacheIntegrity::CacheData data;
+    QVERIFY(readBytes(bytes, data));
+
+    bytes[
+        RideFileCacheIntegrity::
+            CachePreambleBytes] ^= 0x01;
+    QVERIFY(!readBytes(bytes, data));
+    QVERIFY(!data.complete);
+    verifyEmpty(data);
+}
+
+void
+TestRideFileCacheIntegrity::
+rejectsCorruptCacheDigest()
+{
+    QByteArray bytes =
+        cacheBytes(validHeader());
+    bytes[bytes.size() - 1] ^= 0x01;
+    RideFileCacheIntegrity::CacheData data;
+
+    QVERIFY(!readBytes(bytes, data));
+    QVERIFY(!data.complete);
+    verifyEmpty(data);
+}
+
+void
+TestRideFileCacheIntegrity::
+rejectsInvalidSourceByteSize()
+{
+    QByteArray bytes =
+        cacheBytes(validHeader());
+    const qint64 invalidSize = -1;
+    std::memcpy(
+        bytes.data()
+            + sizeof(RideFileCacheHeader),
+        &invalidSize,
+        sizeof(invalidSize));
+    resealCache(bytes);
+    RideFileCacheIntegrity::CacheData data;
+
+    QVERIFY(!readBytes(bytes, data));
+    QVERIFY(!data.complete);
+    verifyEmpty(data);
+}
+
+void
+TestRideFileCacheIntegrity::
+rejectsOutOfRangeLegacyCrc()
+{
+    RideFileCacheHeader header =
+        validHeader();
+    header.crc = 0x10000U;
+    RideFileCacheIntegrity::CacheData data;
+
+    QVERIFY(!readBytes(
+        cacheBytes(header), data));
+    QVERIFY(!data.complete);
+    verifyEmpty(data);
+}
+
+void
+TestRideFileCacheIntegrity::
+validatesSerializableLayout()
+{
+    RideFileCacheHeader header =
+        validHeader();
+    QString error;
+    QVERIFY2(
+        RideFileCacheIntegrity::
+            validateCacheLayout(
+                header, &error),
+        qPrintable(error));
+
+    header.wattsMeanMaxCount =
+        std::numeric_limits<quint32>::max();
+    QVERIFY(
+        !RideFileCacheIntegrity::
+            validateCacheLayout(
+                header, &error));
+    QVERIFY(!error.isEmpty());
+}
+
+void
+TestRideFileCacheIntegrity::
+rejectsLargeInvalidCacheAfterHeader()
+{
+    SparseCountingDevice input(
+        256LL * 1024 * 1024);
+    RideFileCacheIntegrity::CacheData data;
+
+    QVERIFY(
+        !RideFileCacheIntegrity::readCache(
+            input, data));
+    QCOMPARE(
+        input.bytesRead(),
+        static_cast<qint64>(
+            sizeof(RideFileCacheHeader)));
+    QVERIFY(!data.complete);
+    verifyEmpty(data);
+}
+
+void
+TestRideFileCacheIntegrity::
+rejectsReplacementBetweenPayloadAndDigest()
+{
+    RideFileCacheHeader header =
+        validHeader();
+    header.wattsMeanMaxCount = 1;
+    QByteArray replacement =
+        cacheBytes(
+            header,
+            FixedZoneFloatCount + 1);
+    setFloat(
+        replacement,
+        RideFileCacheIntegrity::
+            CachePreambleBytes,
+        222.0f);
+    resealCache(replacement);
+
+    QByteArray invalidInitial =
+        replacement;
+    setFloat(
+        invalidInitial,
+        RideFileCacheIntegrity::
+            CachePreambleBytes,
+        111.0f);
+
+    ReplacingOnSecondZeroSeekDevice
+        fullInput(
+            invalidInitial,
+            replacement);
+    RideFileCacheIntegrity::CacheData data;
+    const bool fullRead =
+        RideFileCacheIntegrity::readCache(
+            fullInput, data);
+    QVERIFY(fullRead);
+    QCOMPARE(
+        data.blocks[
+            RideFileCacheIntegrity::
+                WattsMeanMax]
+            .constFirst(),
+        222.0f);
+
+    ReplacingOnSecondZeroSeekDevice
+        partialInput(
+            invalidInitial,
+            replacement);
+    float value = 999.0f;
+    const bool partialRead =
+        RideFileCacheIntegrity::
+            readBlockValue(
+                partialInput,
+                RideFileCacheIntegrity::
+                    WattsMeanMax,
+                0,
+                value);
+    QVERIFY(partialRead);
+    QCOMPARE(value, 222.0f);
+}
+
 void TestRideFileCacheIntegrity::rejectsShortReadAfterExactSizeValidation()
 {
     const QByteArray bytes = cacheBytes(validHeader());
@@ -427,11 +820,13 @@ void TestRideFileCacheIntegrity::readsValidatedBlockWithoutLoadingOtherBlocks()
     header.hrMeanMaxCount = 1;
     QByteArray bytes =
         cacheBytes(header, FixedZoneFloatCount + 4);
-    const qint64 payload = sizeof(header);
+    const qint64 payload =
+        RideFileCacheIntegrity::CachePreambleBytes;
     setFloat(bytes, payload, 250.0f);
     setFloat(bytes, payload + sizeof(float), 240.0f);
     setFloat(bytes, payload + 2 * sizeof(float), 321.0f);
     setFloat(bytes, payload + 3 * sizeof(float), 155.0f);
+    resealCache(bytes);
 
     QBuffer input(&bytes);
     QVERIFY(input.open(QIODevice::ReadOnly));
@@ -452,12 +847,14 @@ void TestRideFileCacheIntegrity::readsValidatedBlockAndZoneValues()
     header.wattsMeanMaxCount = 2;
     QByteArray bytes =
         cacheBytes(header, FixedZoneFloatCount + 2);
-    const qint64 payload = sizeof(header);
+    const qint64 payload =
+        RideFileCacheIntegrity::CachePreambleBytes;
     setFloat(bytes, payload + sizeof(float), 240.0f);
     const qint64 zones = payload + 2 * sizeof(float);
     const qint64 heartRateZoneThree =
         zones + (10 + 4 + 2) * static_cast<qint64>(sizeof(float));
     setFloat(bytes, heartRateZoneThree, 93.0f);
+    resealCache(bytes);
 
     QBuffer input(&bytes);
     QVERIFY(input.open(QIODevice::ReadOnly));
@@ -490,10 +887,12 @@ TestRideFileCacheIntegrity::partialReaderValidatesOnceForMultipleReads()
     header.hrMeanMaxCount = 1;
     QByteArray bytes =
         cacheBytes(header, FixedZoneFloatCount + 3);
-    const qint64 payload = sizeof(header);
+    const qint64 payload =
+        RideFileCacheIntegrity::CachePreambleBytes;
     setFloat(bytes, payload, 250.0f);
     setFloat(bytes, payload + sizeof(float), 240.0f);
     setFloat(bytes, payload + 2 * sizeof(float), 155.0f);
+    resealCache(bytes);
 
     SeekCountingBuffer input(&bytes);
     QVERIFY(input.open(QIODevice::ReadOnly));
@@ -511,17 +910,23 @@ TestRideFileCacheIntegrity::partialReaderValidatesOnceForMultipleReads()
                  value,
                  &error),
              qPrintable(error));
-    QCOMPARE(value, 240.0f);
+    QCOMPARE(value, 0.0f);
+    float heartRateValue = 0.0f;
     QVERIFY2(reader.readBlockValue(
                  RideFileCacheIntegrity::HrMeanMax,
                  0,
-                 value,
+                 heartRateValue,
                  &error),
              qPrintable(error));
-    QCOMPARE(value, 155.0f);
+    QCOMPARE(heartRateValue, 0.0f);
+    QVERIFY2(
+        reader.finish(&error),
+        qPrintable(error));
+    QCOMPARE(value, 240.0f);
+    QCOMPARE(heartRateValue, 155.0f);
     QCOMPARE(
         input.zeroSeekCount() - initialZeroSeeks,
-        1);
+        2);
 }
 
 void TestRideFileCacheIntegrity::partialReadsRejectInvalidIndexAndLayout()
@@ -549,27 +954,76 @@ void TestRideFileCacheIntegrity::partialReadsRejectInvalidIndexAndLayout()
 }
 
 void
+TestRideFileCacheIntegrity::
+partialReaderCorruptDigestIsAtomic()
+{
+    RideFileCacheHeader header =
+        validHeader();
+    header.wattsMeanMaxCount = 1;
+    QByteArray bytes =
+        cacheBytes(
+            header,
+            FixedZoneFloatCount + 1);
+    setFloat(
+        bytes,
+        RideFileCacheIntegrity::
+            CachePreambleBytes,
+        123.456f);
+    resealCache(bytes);
+    bytes[bytes.size() - 1] ^= 0x01;
+
+    QBuffer input(&bytes);
+    QVERIFY(input.open(
+        QIODevice::ReadOnly));
+    QString error;
+    RideFileCacheIntegrity::PartialReader
+        reader(input, &error);
+    QVERIFY2(
+        reader.isValid(),
+        qPrintable(error));
+
+    float value = 999.0f;
+    QVERIFY(
+        reader.readBlockValue(
+            RideFileCacheIntegrity::
+                WattsMeanMax,
+            0,
+            value,
+            &error));
+    QCOMPARE(value, 0.0f);
+    QVERIFY(!reader.finish(&error));
+    QCOMPARE(value, 0.0f);
+    QVERIFY(!reader.isValid());
+}
+
+void
 TestRideFileCacheIntegrity::partialReaderShortReadIsAtomicAndSticky()
 {
     RideFileCacheHeader header = validHeader();
     header.wattsMeanMaxCount = 1;
     QByteArray bytes =
         cacheBytes(header, FixedZoneFloatCount + 1);
-    setFloat(bytes, sizeof(header), 123.456f);
+    setFloat(
+        bytes,
+        RideFileCacheIntegrity::CachePreambleBytes,
+        123.456f);
+    resealCache(bytes);
     ShortReadDevice input(
         bytes,
-        static_cast<qint64>(sizeof(header)) + 2);
+        RideFileCacheIntegrity::CachePreambleBytes
+            + 2);
     QString error;
     RideFileCacheIntegrity::PartialReader reader(input, &error);
     QVERIFY2(reader.isValid(), qPrintable(error));
 
     float value = 123.0f;
-    QVERIFY(!reader.readBlockValue(
+    QVERIFY(reader.readBlockValue(
         RideFileCacheIntegrity::WattsMeanMax,
         0,
         value,
         &error));
     QCOMPARE(value, 0.0f);
+    QVERIFY(!reader.finish(&error));
     QVERIFY(!reader.isValid());
 
     value = 456.0f;
@@ -588,7 +1042,11 @@ TestRideFileCacheIntegrity::partialReaderGrowthIsAtomicAndSticky()
     header.wattsMeanMaxCount = 1;
     QByteArray bytes =
         cacheBytes(header, FixedZoneFloatCount + 1);
-    setFloat(bytes, sizeof(header), 123.456f);
+    setFloat(
+        bytes,
+        RideFileCacheIntegrity::CachePreambleBytes,
+        123.456f);
+    resealCache(bytes);
     bytes.append('\0');
     GrowingDevice input(bytes);
     QString error;
@@ -596,12 +1054,13 @@ TestRideFileCacheIntegrity::partialReaderGrowthIsAtomicAndSticky()
     QVERIFY2(reader.isValid(), qPrintable(error));
 
     float value = 123.0f;
-    QVERIFY(!reader.readBlockValue(
+    QVERIFY(reader.readBlockValue(
         RideFileCacheIntegrity::WattsMeanMax,
         0,
         value,
         &error));
     QCOMPARE(value, 0.0f);
+    QVERIFY(!reader.finish(&error));
     QVERIFY(!reader.isValid());
 }
 

@@ -10,6 +10,9 @@
 #ifndef _GC_RideFileCacheIntegrity_h
 #define _GC_RideFileCacheIntegrity_h 1
 
+#include "RideFileCRC.h"
+
+#include <QByteArray>
 #include <QIODevice>
 #include <QString>
 #include <QVector>
@@ -17,7 +20,7 @@
 #include <array>
 #include <functional>
 
-static const unsigned int RideFileCacheVersion = 25;
+static const unsigned int RideFileCacheVersion = 26;
 
 struct RideFileCacheHeader {
     unsigned int version;
@@ -60,6 +63,14 @@ struct RideFileCacheHeader {
 };
 
 namespace RideFileCacheIntegrity {
+
+inline constexpr qint64 CachePreambleBytes =
+    static_cast<qint64>(
+        sizeof(RideFileCacheHeader))
+    + static_cast<qint64>(sizeof(qint64))
+    + static_cast<qint64>(RideFileCRC::Sha256Size);
+inline constexpr qint64 CacheFooterBytes =
+    static_cast<qint64>(RideFileCRC::Sha256Size);
 
 enum Block {
     WattsMeanMax,
@@ -107,6 +118,7 @@ enum ZoneBlock {
 struct CacheData {
     bool complete = false;
     RideFileCacheHeader header {};
+    RideFileCRC::ContentFingerprint sourceFingerprint;
     std::array<QVector<float>, BlockCount> blocks;
     std::array<QVector<float>, ZoneBlockCount> zones;
 
@@ -114,6 +126,14 @@ struct CacheData {
     bool isEmpty() const;
 };
 
+bool validateCacheLayout(
+    const RideFileCacheHeader &header,
+    QString *error = nullptr);
+
+// Construction validates the bounded preamble. Read requests are queued; their
+// output objects must keep a stable address and outlive finish(), which
+// authenticates one forward stream and publishes every requested value
+// atomically. The one-shot helpers below do this automatically.
 class PartialReader final
 {
 public:
@@ -126,8 +146,14 @@ public:
 
     bool isValid() const;
     const RideFileCacheHeader &header() const;
+    const RideFileCRC::ContentFingerprint &
+    sourceFingerprint() const;
     bool readBlock(
         Block block,
+        QVector<float> &output,
+        QString *error = nullptr);
+    bool readZoneBlock(
+        ZoneBlock block,
         QVector<float> &output,
         QString *error = nullptr);
     bool readBlockValue(
@@ -140,18 +166,45 @@ public:
         qsizetype index,
         float &output,
         QString *error = nullptr);
+    bool finish(QString *error = nullptr);
 
 private:
+    struct PendingRead {
+        qint64 firstFloat = 0;
+        qint64 count = 0;
+        QVector<float> *vectorOutput = nullptr;
+        float *scalarOutput = nullptr;
+        QVector<float> staged;
+    };
+
+    bool queueRead(
+        qint64 firstFloat,
+        qint64 count,
+        QVector<float> *vectorOutput,
+        float *scalarOutput,
+        QString *error);
+    void clearPendingOutputs();
+
     QIODevice *input_ = nullptr;
+    QByteArray preamble_;
     RideFileCacheHeader header_ {};
+    RideFileCRC::ContentFingerprint sourceFingerprint_;
     std::array<quint32, BlockCount> counts_ {};
+    QVector<PendingRead> pendingReads_;
     qint64 expectedSize_ = 0;
     bool valid_ = false;
+    bool finished_ = false;
 };
 
 bool inspectCache(QIODevice &input,
                   RideFileCacheHeader &header,
                   QString *error = nullptr);
+
+bool inspectCache(
+    QIODevice &input,
+    RideFileCacheHeader &header,
+    RideFileCRC::ContentFingerprint &sourceFingerprint,
+    QString *error = nullptr);
 
 bool readCache(QIODevice &input, CacheData &output, QString *error = nullptr);
 

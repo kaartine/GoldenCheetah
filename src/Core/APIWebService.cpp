@@ -492,14 +492,34 @@ APIWebService::listMMP(QString athlete, QStringList paths, HttpRequest &request,
         if (beforep != "") before = QDate::fromString(beforep,"yyyy/MM/dd");
 
         int secs=0;
-        foreach(float value, RideFileCache::meanMaxFor(home.absolutePath() + "/" + athlete + "/cache", series, since, before)) {
+        const QDir athleteRoot(
+            QDir(home.absolutePath())
+                .filePath(athlete));
+        foreach(float value, RideFileCache::meanMaxFor(
+                    athleteRoot.filePath("activities"),
+                    athleteRoot.filePath("cache"),
+                    series,
+                    since,
+                    before)) {
             if (secs >0) response.bwrite(QString("%1, %2\n").arg(secs).arg(value).toLocal8Bit());
             secs++;
         }
 
 
     } else {
-        QString CPXfilename = home.absolutePath() + "/" + athlete + "/cache/" + QFileInfo(filename).completeBaseName() + ".cpx";
+        const QDir athleteRoot(
+            QDir(home.absolutePath())
+                .filePath(athlete));
+        const QString sourceFilename =
+            athleteRoot.filePath(
+                QStringLiteral("activities/")
+                + filename);
+        const QString CPXfilename =
+            athleteRoot.filePath(
+                QStringLiteral("cache/")
+                + QFileInfo(filename)
+                      .completeBaseName()
+                + QStringLiteral(".cpx"));
 
         // header
         response.bwrite("secs, ");
@@ -508,7 +528,10 @@ APIWebService::listMMP(QString athlete, QStringList paths, HttpRequest &request,
 
         if (QFileInfo(CPXfilename).exists()) {
             int secs=0;
-            foreach(float value, RideFileCache::meanMaxFor(CPXfilename, series)) {
+            foreach(float value, RideFileCache::meanMaxFor(
+                        sourceFilename,
+                        CPXfilename,
+                        series)) {
                 if (secs >0) response.bwrite(QString("%1, %2\n").arg(secs).arg(value).toLocal8Bit());
                 secs++;
             }

@@ -9,14 +9,18 @@
 
 #include "RideFileCacheIntegrity.h"
 
+#include <QByteArrayView>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFileInfo>
 #include <QSaveFile>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <limits>
 #include <new>
+#include <type_traits>
 #include <utility>
 
 namespace {
@@ -28,6 +32,66 @@ constexpr int FixedZoneSizes[RideFileCacheIntegrity::ZoneBlockCount] = {
 
 static_assert(sizeof(float) == 4,
               "The CPX cache format requires 32-bit floats");
+static_assert(sizeof(double) == 8,
+              "The CPX cache format requires 64-bit doubles");
+static_assert(sizeof(int) == 4,
+              "The CPX cache format requires 32-bit ints");
+static_assert(sizeof(unsigned int) == 4,
+              "The CPX cache format requires 32-bit unsigned ints");
+static_assert(sizeof(qint64) == 8,
+              "The CPX cache format requires 64-bit qint64");
+static_assert(std::numeric_limits<float>::is_iec559
+                  && std::numeric_limits<double>::is_iec559,
+              "The CPX cache format requires IEEE-754 floats");
+static_assert(
+    std::is_standard_layout_v<RideFileCacheHeader>,
+    "The CPX cache header must have a stable native layout");
+static_assert(
+    std::is_trivially_copyable_v<RideFileCacheHeader>,
+    "The CPX cache header must be copied as raw bytes");
+static_assert(sizeof(RideFileCacheHeader) == 152,
+              "Unexpected CPX cache header size");
+
+#define GC_CPX_ASSERT_OFFSET(member, expected) \
+    static_assert( \
+        offsetof(RideFileCacheHeader, member) == expected, \
+        "Unexpected CPX cache header offset")
+GC_CPX_ASSERT_OFFSET(version, 0);
+GC_CPX_ASSERT_OFFSET(crc, 4);
+GC_CPX_ASSERT_OFFSET(wattsMeanMaxCount, 8);
+GC_CPX_ASSERT_OFFSET(hrMeanMaxCount, 12);
+GC_CPX_ASSERT_OFFSET(cadMeanMaxCount, 16);
+GC_CPX_ASSERT_OFFSET(nmMeanMaxCount, 20);
+GC_CPX_ASSERT_OFFSET(kphMeanMaxCount, 24);
+GC_CPX_ASSERT_OFFSET(kphdMeanMaxCount, 28);
+GC_CPX_ASSERT_OFFSET(wattsdMeanMaxCount, 32);
+GC_CPX_ASSERT_OFFSET(caddMeanMaxCount, 36);
+GC_CPX_ASSERT_OFFSET(nmdMeanMaxCount, 40);
+GC_CPX_ASSERT_OFFSET(hrdMeanMaxCount, 44);
+GC_CPX_ASSERT_OFFSET(xPowerMeanMaxCount, 48);
+GC_CPX_ASSERT_OFFSET(npMeanMaxCount, 52);
+GC_CPX_ASSERT_OFFSET(vamMeanMaxCount, 56);
+GC_CPX_ASSERT_OFFSET(wattsKgMeanMaxCount, 60);
+GC_CPX_ASSERT_OFFSET(aPowerMeanMaxCount, 64);
+GC_CPX_ASSERT_OFFSET(aPowerKgMeanMaxCount, 68);
+GC_CPX_ASSERT_OFFSET(wattsDistCount, 72);
+GC_CPX_ASSERT_OFFSET(hrDistCount, 76);
+GC_CPX_ASSERT_OFFSET(cadDistCount, 80);
+GC_CPX_ASSERT_OFFSET(gearDistCount, 84);
+GC_CPX_ASSERT_OFFSET(nmDistrCount, 88);
+GC_CPX_ASSERT_OFFSET(kphDistCount, 92);
+GC_CPX_ASSERT_OFFSET(xPowerDistCount, 96);
+GC_CPX_ASSERT_OFFSET(npDistCount, 100);
+GC_CPX_ASSERT_OFFSET(wattsKgDistCount, 104);
+GC_CPX_ASSERT_OFFSET(aPowerDistCount, 108);
+GC_CPX_ASSERT_OFFSET(smo2DistCount, 112);
+GC_CPX_ASSERT_OFFSET(wbalDistCount, 116);
+GC_CPX_ASSERT_OFFSET(LTHR, 120);
+GC_CPX_ASSERT_OFFSET(CP, 124);
+GC_CPX_ASSERT_OFFSET(CV, 128);
+GC_CPX_ASSERT_OFFSET(WEIGHT, 136);
+GC_CPX_ASSERT_OFFSET(WPRIME, 144);
+#undef GC_CPX_ASSERT_OFFSET
 
 void setError(QString *error, const QString &message)
 {
@@ -83,7 +147,8 @@ bool addFloatsToSize(qint64 count, qint64 &size)
 
 bool expectedCacheSize(const RideFileCacheHeader &header, qint64 &size)
 {
-    size = sizeof(header);
+    size = RideFileCacheIntegrity::CachePreambleBytes
+        + RideFileCacheIntegrity::CacheFooterBytes;
     const std::array<quint32, RideFileCacheIntegrity::BlockCount> counts =
         blockCounts(header);
     for (const quint32 count : counts) {
@@ -103,37 +168,11 @@ bool readExactly(QIODevice &input, char *destination, qint64 size)
     while (offset < size) {
         const qint64 count =
             input.read(destination + offset, size - offset);
-        if (count <= 0)
+        if (count <= 0
+            || count > size - offset) {
             return false;
+        }
         offset += count;
-    }
-    return true;
-}
-
-bool readFloatRange(QIODevice &input,
-                    qint64 firstFloat,
-                    qint64 count,
-                    float *destination,
-                    qint64 expectedSize,
-                    QString *error)
-{
-    const qint64 byteOffset =
-        static_cast<qint64>(sizeof(RideFileCacheHeader))
-        + firstFloat * static_cast<qint64>(sizeof(float));
-    const qint64 byteCount =
-        count * static_cast<qint64>(sizeof(float));
-    if (!input.seek(byteOffset)) {
-        setError(error, QStringLiteral("Cannot seek within CPX cache"));
-        return false;
-    }
-    if (!readExactly(input, reinterpret_cast<char *>(destination),
-                     byteCount)) {
-        setError(error, QStringLiteral("CPX cache block is truncated"));
-        return false;
-    }
-    if (input.size() != expectedSize) {
-        setError(error, QStringLiteral("CPX cache changed while reading"));
-        return false;
     }
     return true;
 }
@@ -214,6 +253,8 @@ void CacheData::clear()
 {
     complete = false;
     header = RideFileCacheHeader {};
+    sourceFingerprint =
+        RideFileCRC::ContentFingerprint {};
     for (QVector<float> &block : blocks)
         block.clear();
     for (QVector<float> &zone : zones)
@@ -231,14 +272,61 @@ bool CacheData::isEmpty() const
                zones.cbegin(), zones.cend(),
                [](const QVector<float> &zone) {
                    return zone.isEmpty();
-               });
+           });
+}
+
+bool validateCacheLayout(
+    const RideFileCacheHeader &header,
+    QString *error)
+{
+    if (error)
+        error->clear();
+    if (header.version
+        != RideFileCacheVersion) {
+        setError(
+            error,
+            QStringLiteral(
+                "Unsupported CPX cache version"));
+        return false;
+    }
+    if (header.crc
+        > std::numeric_limits<quint16>::max()) {
+        setError(
+            error,
+            QStringLiteral(
+                "CPX cache legacy checksum is invalid"));
+        return false;
+    }
+    qint64 expectedSize = 0;
+    if (!expectedCacheSize(
+            header, expectedSize)) {
+        setError(
+            error,
+            QStringLiteral(
+                "Invalid CPX cache block size"));
+        return false;
+    }
+    return true;
 }
 
 bool inspectCache(QIODevice &input,
                   RideFileCacheHeader &header,
                   QString *error)
 {
+    RideFileCRC::ContentFingerprint sourceFingerprint;
+    return inspectCache(
+        input, header, sourceFingerprint, error);
+}
+
+bool inspectCache(
+    QIODevice &input,
+    RideFileCacheHeader &header,
+    RideFileCRC::ContentFingerprint &sourceFingerprint,
+    QString *error)
+{
     header = RideFileCacheHeader {};
+    sourceFingerprint =
+        RideFileCRC::ContentFingerprint {};
     if (error)
         error->clear();
 
@@ -252,7 +340,7 @@ bool inspectCache(QIODevice &input,
     }
 
     const qint64 actualSize = input.size();
-    if (actualSize < static_cast<qint64>(sizeof(RideFileCacheHeader))) {
+    if (actualSize < CachePreambleBytes) {
         setError(error, QStringLiteral("CPX cache header is truncated"));
         return false;
     }
@@ -271,14 +359,52 @@ bool inspectCache(QIODevice &input,
         setError(error, QStringLiteral("CPX cache header is truncated"));
         return false;
     }
-    if (inspected.version != RideFileCacheVersion) {
-        setError(error, QStringLiteral("Unsupported CPX cache version"));
+    if (!validateCacheLayout(
+            inspected, error)) {
+        return false;
+    }
+
+    qint64 sourceByteSize = -1;
+    QByteArray sourceSha256(
+        RideFileCRC::Sha256Size,
+        Qt::Uninitialized);
+    if (!readExactly(
+            input,
+            reinterpret_cast<char *>(
+                &sourceByteSize),
+            sizeof(sourceByteSize))
+        || !readExactly(
+            input,
+            sourceSha256.data(),
+            sourceSha256.size())) {
+        setError(
+            error,
+            QStringLiteral(
+                "CPX cache source fingerprint is truncated"));
+        return false;
+    }
+
+    RideFileCRC::ContentFingerprint inspectedSource;
+    inspectedSource.byteSize = sourceByteSize;
+    inspectedSource.sha256 =
+        std::move(sourceSha256);
+    inspectedSource.legacyCrc16 =
+        static_cast<quint16>(inspected.crc);
+    if (!inspectedSource.isValid()) {
+        setError(
+            error,
+            QStringLiteral(
+                "CPX cache source fingerprint is invalid"));
         return false;
     }
 
     qint64 expectedSize = 0;
-    if (!expectedCacheSize(inspected, expectedSize)) {
-        setError(error, QStringLiteral("Invalid CPX cache block size"));
+    if (!expectedCacheSize(
+            inspected, expectedSize)) {
+        setError(
+            error,
+            QStringLiteral(
+                "Invalid CPX cache block size"));
         return false;
     }
     if (actualSize != expectedSize) {
@@ -287,6 +413,8 @@ bool inspectCache(QIODevice &input,
     }
 
     header = inspected;
+    sourceFingerprint =
+        std::move(inspectedSource);
     return true;
 }
 
@@ -295,8 +423,13 @@ PartialReader::PartialReader(
     QString *error)
     : input_(&input)
 {
-    if (!inspectCache(input, header_, error))
+    if (!inspectCache(
+            input,
+            header_,
+            sourceFingerprint_,
+            error)) {
         return;
+    }
     counts_ = blockCounts(header_);
     if (!expectedCacheSize(
             header_, expectedSize_)) {
@@ -304,6 +437,38 @@ PartialReader::PartialReader(
             error,
             QStringLiteral(
                 "Invalid CPX cache block size"));
+        return;
+    }
+    try {
+        preamble_.reserve(
+            static_cast<qsizetype>(
+                CachePreambleBytes));
+        preamble_.append(
+            reinterpret_cast<const char *>(
+                &header_),
+            sizeof(header_));
+        const qint64 sourceByteSize =
+            sourceFingerprint_.byteSize;
+        preamble_.append(
+            reinterpret_cast<const char *>(
+                &sourceByteSize),
+            sizeof(sourceByteSize));
+        preamble_.append(
+            sourceFingerprint_.sha256);
+    } catch (const std::bad_alloc &) {
+        valid_ = false;
+        setError(
+            error,
+            QStringLiteral(
+                "Cannot retain CPX cache preamble"));
+        return;
+    }
+    if (preamble_.size()
+        != CachePreambleBytes) {
+        setError(
+            error,
+            QStringLiteral(
+                "Invalid CPX cache preamble"));
         return;
     }
     valid_ = true;
@@ -320,6 +485,12 @@ PartialReader::header() const
     return header_;
 }
 
+const RideFileCRC::ContentFingerprint &
+PartialReader::sourceFingerprint() const
+{
+    return sourceFingerprint_;
+}
+
 bool PartialReader::readBlock(
     Block block,
     QVector<float> &output,
@@ -331,6 +502,7 @@ bool PartialReader::readBlock(
     qint64 firstFloat = 0;
     qint64 count = 0;
     if (!valid_
+        || finished_
         || !blockLocation(
             counts_, block, firstFloat, count)) {
         setError(
@@ -339,30 +511,40 @@ bool PartialReader::readBlock(
                 "Invalid CPX cache block"));
         return false;
     }
+    return queueRead(
+        firstFloat,
+        count,
+        &output,
+        nullptr,
+        error);
+}
 
-    QVector<float> loaded;
-    try {
-        loaded.resize(
-            static_cast<qsizetype>(count));
-    } catch (const std::bad_alloc &) {
+bool PartialReader::readZoneBlock(
+    ZoneBlock block,
+    QVector<float> &output,
+    QString *error)
+{
+    output.clear();
+    if (error)
+        error->clear();
+    qint64 firstFloat = 0;
+    qint64 count = 0;
+    if (!valid_
+        || finished_
+        || !zoneLocation(
+            counts_, block, firstFloat, count)) {
         setError(
             error,
             QStringLiteral(
-                "Cannot allocate CPX cache block"));
+                "Invalid CPX cache zone block"));
         return false;
     }
-    if (!readFloatRange(
-            *input_,
-            firstFloat,
-            count,
-            loaded.data(),
-            expectedSize_,
-            error)) {
-        valid_ = false;
-        return false;
-    }
-    output = std::move(loaded);
-    return true;
+    return queueRead(
+        firstFloat,
+        count,
+        &output,
+        nullptr,
+        error);
 }
 
 bool PartialReader::readBlockValue(
@@ -377,6 +559,7 @@ bool PartialReader::readBlockValue(
     qint64 firstFloat = 0;
     qint64 count = 0;
     if (!valid_
+        || finished_
         || !blockLocation(
             counts_, block, firstFloat, count)
         || index < 0
@@ -387,19 +570,12 @@ bool PartialReader::readBlockValue(
                 "Invalid CPX cache block index"));
         return false;
     }
-    float loaded = 0.0f;
-    if (!readFloatRange(
-            *input_,
-            firstFloat + index,
-            1,
-            &loaded,
-            expectedSize_,
-            error)) {
-        valid_ = false;
-        return false;
-    }
-    output = loaded;
-    return true;
+    return queueRead(
+        firstFloat + index,
+        1,
+        nullptr,
+        &output,
+        error);
 }
 
 bool PartialReader::readZoneValue(
@@ -414,6 +590,7 @@ bool PartialReader::readZoneValue(
     qint64 firstFloat = 0;
     qint64 count = 0;
     if (!valid_
+        || finished_
         || !zoneLocation(
             counts_, block, firstFloat, count)
         || index < 0
@@ -424,18 +601,253 @@ bool PartialReader::readZoneValue(
                 "Invalid CPX cache zone index"));
         return false;
     }
-    float loaded = 0.0f;
-    if (!readFloatRange(
-            *input_,
-            firstFloat + index,
-            1,
-            &loaded,
-            expectedSize_,
-            error)) {
-        valid_ = false;
+    return queueRead(
+        firstFloat + index,
+        1,
+        nullptr,
+        &output,
+        error);
+}
+
+bool PartialReader::queueRead(
+    qint64 firstFloat,
+    qint64 count,
+    QVector<float> *vectorOutput,
+    float *scalarOutput,
+    QString *error)
+{
+    const qint64 byteOffset =
+        CachePreambleBytes
+        + firstFloat
+            * static_cast<qint64>(
+                sizeof(float));
+    const qint64 byteCount =
+        count
+        * static_cast<qint64>(
+            sizeof(float));
+    if (!valid_
+        || finished_
+        || firstFloat < 0
+        || count < 0
+        || (vectorOutput == nullptr)
+            == (scalarOutput == nullptr)
+        || (scalarOutput && count != 1)
+        || byteOffset < CachePreambleBytes
+        || byteCount
+            > expectedSize_
+                - CacheFooterBytes
+                - byteOffset) {
+        setError(
+            error,
+            QStringLiteral(
+                "Invalid CPX cache read request"));
         return false;
     }
-    output = loaded;
+
+    PendingRead pending;
+    pending.firstFloat = firstFloat;
+    pending.count = count;
+    pending.vectorOutput = vectorOutput;
+    pending.scalarOutput = scalarOutput;
+    try {
+        pendingReads_.append(
+            std::move(pending));
+    } catch (const std::bad_alloc &) {
+        valid_ = false;
+        setError(
+            error,
+            QStringLiteral(
+                "Cannot queue CPX cache read"));
+        return false;
+    }
+    return true;
+}
+
+void PartialReader::clearPendingOutputs()
+{
+    for (PendingRead &pending :
+         pendingReads_) {
+        if (pending.vectorOutput)
+            pending.vectorOutput->clear();
+        if (pending.scalarOutput)
+            *pending.scalarOutput = 0.0f;
+    }
+}
+
+bool PartialReader::finish(QString *error)
+{
+    if (error)
+        error->clear();
+    if (!valid_) {
+        setError(
+            error,
+            QStringLiteral(
+                "Invalid CPX cache reader"));
+        return false;
+    }
+    if (finished_)
+        return true;
+
+    const auto fail = [this]() {
+        clearPendingOutputs();
+        valid_ = false;
+        return false;
+    };
+    if (!input_
+        || input_->size() != expectedSize_
+        || !input_->seek(0)) {
+        setError(
+            error,
+            QStringLiteral(
+                "CPX cache changed before authenticated reading"));
+        return fail();
+    }
+
+    try {
+        for (PendingRead &pending :
+             pendingReads_) {
+            pending.staged.resize(
+                static_cast<qsizetype>(
+                    pending.count));
+        }
+    } catch (const std::bad_alloc &) {
+        setError(
+            error,
+            QStringLiteral(
+                "Cannot allocate staged CPX cache outputs"));
+        return fail();
+    }
+
+    QCryptographicHash hash(
+        QCryptographicHash::Sha256);
+    QByteArray buffer(
+        static_cast<int>(
+            RideFileCRC::ReadChunkSize),
+        Qt::Uninitialized);
+    const qint64 protectedBytes =
+        expectedSize_ - CacheFooterBytes;
+    qint64 streamOffset = 0;
+    while (streamOffset
+           < protectedBytes) {
+        const qint64 requested =
+            std::min(
+                protectedBytes
+                    - streamOffset,
+                static_cast<qint64>(
+                    buffer.size()));
+        const qint64 received =
+            input_->read(
+                buffer.data(),
+                requested);
+        if (received <= 0
+            || received > requested) {
+            setError(
+                error,
+                QStringLiteral(
+                    "CPX cache authenticated stream is truncated"));
+            return fail();
+        }
+
+        hash.addData(
+            QByteArrayView(
+                buffer.constData(),
+                received));
+        if (streamOffset
+            < preamble_.size()) {
+            const qint64 compared =
+                std::min(
+                    received,
+                    static_cast<qint64>(
+                        preamble_.size())
+                        - streamOffset);
+            if (std::memcmp(
+                    buffer.constData(),
+                    preamble_.constData()
+                        + streamOffset,
+                    static_cast<size_t>(
+                        compared))
+                != 0) {
+                setError(
+                    error,
+                    QStringLiteral(
+                        "CPX cache preamble changed while reading"));
+                return fail();
+            }
+        }
+
+        const qint64 streamEnd =
+            streamOffset + received;
+        for (PendingRead &pending :
+             pendingReads_) {
+            const qint64 pendingStart =
+                CachePreambleBytes
+                + pending.firstFloat
+                    * static_cast<qint64>(
+                        sizeof(float));
+            const qint64 pendingEnd =
+                pendingStart
+                + pending.count
+                    * static_cast<qint64>(
+                        sizeof(float));
+            const qint64 overlapStart =
+                std::max(
+                    streamOffset,
+                    pendingStart);
+            const qint64 overlapEnd =
+                std::min(
+                    streamEnd,
+                    pendingEnd);
+            if (overlapStart
+                >= overlapEnd) {
+                continue;
+            }
+            std::memcpy(
+                reinterpret_cast<char *>(
+                    pending.staged.data())
+                    + overlapStart
+                    - pendingStart,
+                buffer.constData()
+                    + overlapStart
+                    - streamOffset,
+                static_cast<size_t>(
+                    overlapEnd
+                    - overlapStart));
+        }
+        streamOffset = streamEnd;
+    }
+
+    QByteArray storedDigest(
+        RideFileCRC::Sha256Size,
+        Qt::Uninitialized);
+    const QByteArray digest =
+        hash.result();
+    if (!readExactly(
+            *input_,
+            storedDigest.data(),
+            storedDigest.size())
+        || input_->pos() != expectedSize_
+        || input_->size() != expectedSize_
+        || storedDigest != digest) {
+        setError(
+            error,
+            QStringLiteral(
+                "CPX cache digest does not match its authenticated stream"));
+        return fail();
+    }
+
+    for (PendingRead &pending :
+         pendingReads_) {
+        if (pending.vectorOutput) {
+            *pending.vectorOutput =
+                std::move(
+                    pending.staged);
+        } else {
+            *pending.scalarOutput =
+                pending.staged.constFirst();
+        }
+    }
+    pendingReads_.clear();
+    finished_ = true;
     return true;
 }
 
@@ -445,51 +857,40 @@ bool readCache(QIODevice &input, CacheData &output, QString *error)
     if (error)
         error->clear();
 
-    RideFileCacheHeader header {};
-    if (!inspectCache(input, header, error))
+    PartialReader reader(
+        input, error);
+    if (!reader.isValid())
         return false;
-
-    const std::array<quint32, BlockCount> counts = blockCounts(header);
-    qint64 expectedSize = 0;
-    if (!expectedCacheSize(header, expectedSize)) {
-        setError(error, QStringLiteral("Invalid CPX cache block size"));
-        return false;
-    }
 
     CacheData loaded;
-    loaded.header = header;
-    try {
-        for (int index = 0; index < BlockCount; ++index)
-            loaded.blocks[index].resize(static_cast<qsizetype>(counts[index]));
-        for (int index = 0; index < ZoneBlockCount; ++index)
-            loaded.zones[index].resize(FixedZoneSizes[index]);
-    } catch (const std::bad_alloc &) {
-        setError(error, QStringLiteral("Cannot allocate CPX cache arrays"));
-        return false;
-    }
-
-    for (QVector<float> &block : loaded.blocks) {
-        const qint64 bytes =
-            static_cast<qint64>(block.size()) * sizeof(float);
-        if (!readExactly(input, reinterpret_cast<char *>(block.data()),
-                         bytes)) {
-            setError(error, QStringLiteral("CPX cache block is truncated"));
+    loaded.header =
+        reader.header();
+    loaded.sourceFingerprint =
+        reader.sourceFingerprint();
+    for (int index = 0;
+         index < BlockCount;
+         ++index) {
+        if (!reader.readBlock(
+                static_cast<Block>(
+                    index),
+                loaded.blocks[index],
+                error)) {
             return false;
         }
     }
-    for (QVector<float> &zone : loaded.zones) {
-        const qint64 bytes =
-            static_cast<qint64>(zone.size()) * sizeof(float);
-        if (!readExactly(input, reinterpret_cast<char *>(zone.data()),
-                         bytes)) {
-            setError(error, QStringLiteral("CPX cache zone is truncated"));
+    for (int index = 0;
+         index < ZoneBlockCount;
+         ++index) {
+        if (!reader.readZoneBlock(
+                static_cast<ZoneBlock>(
+                    index),
+                loaded.zones[index],
+                error)) {
             return false;
         }
     }
-    if (input.pos() != expectedSize || input.size() != expectedSize) {
-        setError(error, QStringLiteral("CPX cache payload was not read exactly"));
+    if (!reader.finish(error))
         return false;
-    }
 
     loaded.complete = true;
     output = std::move(loaded);
@@ -503,9 +904,15 @@ bool readBlock(QIODevice &input,
 {
     output.clear();
     PartialReader reader(input, error);
-    return reader.isValid()
-        && reader.readBlock(
-            block, output, error);
+    QVector<float> loaded;
+    if (!reader.isValid()
+        || !reader.readBlock(
+            block, loaded, error)
+        || !reader.finish(error)) {
+        return false;
+    }
+    output = std::move(loaded);
+    return true;
 }
 
 bool readBlockValue(QIODevice &input,
@@ -516,9 +923,15 @@ bool readBlockValue(QIODevice &input,
 {
     output = 0.0f;
     PartialReader reader(input, error);
-    return reader.isValid()
-        && reader.readBlockValue(
-            block, index, output, error);
+    float loaded = 0.0f;
+    if (!reader.isValid()
+        || !reader.readBlockValue(
+            block, index, loaded, error)
+        || !reader.finish(error)) {
+        return false;
+    }
+    output = loaded;
+    return true;
 }
 
 bool readZoneValue(QIODevice &input,
@@ -529,9 +942,15 @@ bool readZoneValue(QIODevice &input,
 {
     output = 0.0f;
     PartialReader reader(input, error);
-    return reader.isValid()
-        && reader.readZoneValue(
-            block, index, output, error);
+    float loaded = 0.0f;
+    if (!reader.isValid()
+        || !reader.readZoneValue(
+            block, index, loaded, error)
+        || !reader.finish(error)) {
+        return false;
+    }
+    output = loaded;
+    return true;
 }
 
 bool writeCacheAtomically(const QString &path,

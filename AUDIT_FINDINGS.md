@@ -2423,31 +2423,142 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   build, and 92-suite matrix also pass; the matrix reports 3,411 passed, zero
   failed or blacklisted, and 12 expected Linux skips.
 - Residual: An external source can still change after the final validator and
-  before `QSaveFile` renames the CPX, and cache reads still trust legacy
-  freshness rules; `DATA-011` tracks persisting and verifying a strong digest
-  in the CPX format. Zone/configuration changes are not part of the same
-  transaction. CSV/Polar sidecar rides deliberately forgo persistent CPX, and
-  verified refresh performs a second parse/compute. Arbitrary concurrent
-  mutation of one `RideFile` remains an application-level data race even
-  though unmatched payloads are no longer persisted.
+  before `QSaveFile` renames the CPX. The installed cache is self-detecting and
+  will be rejected after such a race, but the refresh can still report
+  successful persistence that immediately requires rebuilding. `DATA-011`
+  now binds every accepted cache read to a strong source fingerprint and
+  authenticated CPX stream. Zone/configuration changes are not part of the
+  same transaction and are tracked by `DATA-014`. CSV/Polar sidecar rides
+  deliberately forgo persistent CPX, and verified refresh performs a second
+  parse/compute. Arbitrary concurrent mutation of one `RideFile` remains an
+  application-level data race even though unmatched payloads are no longer
+  persisted.
+
+### DATA-013: Planned CPX lifecycle operations use the completed namespace
+
+- Status: OPEN
+- Code: `src/Core/RideCacheRemoval.cpp:121-128`,
+  `src/Core/RideCache.cpp:745-750`,
+  `src/Core/RideCache.cpp:2291-2298`, and
+  `src/FileIO/RideFileCacheIntegrity.cpp:1047-1084`
+- Impact: Planned CPX files now live below `cache/planned`, but single and
+  batch deletion and rename still address `cache/<base>.cpx`. Deleting or
+  renaming a planned activity therefore leaves its real CPX behind and can
+  delete or rename a completed activity's same-basename CPX instead.
+- Test: Create planned and completed activities with the same basename and
+  distinct CPX files. Deleting or renaming either activity must affect only
+  the CPX selected by `cachePathForActivity()`.
+- Fix direction: Route CPX deletion and rename through the canonical
+  source-aware cache-path helper while preserving the existing placement rules
+  for unrelated notes and CPI files.
 
 ## Medium
 
 ### DATA-011: CPX freshness trusts source mtime instead of its stored CRC
 
-- Status: OPEN
-- Code: `src/FileIO/RideFileCache.cpp:134`,
-  `src/FileIO/RideFileCache.cpp:227`, `src/Core/RideItem.cpp:529`
+- Status: FIXED
+- Code: `src/FileIO/RideFileCache.cpp`,
+  `src/FileIO/RideFileCache.h`,
+  `src/FileIO/RideFileCacheIntegrity.cpp`,
+  `src/FileIO/RideFileCacheIntegrity.h`, and
+  `src/Core/APIWebService.cpp`
 - Impact: A CPX is accepted without calculating its source CRC whenever the
   source mtime is equal to or older than the cache mtime. Restored mtimes,
   coarse timestamp resolution, and copied older files can therefore retain
-  stale derived data despite the checked CRC implementation.
-- Test: Build a CPX for source A, overwrite the source with B, restore or
-  equalize its mtime, and require both construction and `checkStale()` to reject
-  the old CPX.
-- Fix direction: Require a successful stable CRC match before accepting CPX.
-  A later optimization may persist native high-resolution identity metadata
-  and hash only when that complete metadata differs.
+  stale derived data despite the checked CRC implementation. Fast scalar,
+  batch, API, rank, and in-memory aggregate paths also bypassed the constructor
+  checks and could publish unauthenticated arrays.
+- Test-first evidence: RED regressions replaced a source while restoring an
+  equal or older mtime, removed it, and constructed a deliberate CRC16
+  collision. Separate cases corrupted same-size CPX payloads and digests,
+  replaced the CPX between payload extraction and digest verification, exposed
+  partial-reader output before final authentication, and exercised best/TIZ,
+  API, batch, rank, and aggregate bypasses. Counting devices proved malformed
+  or missing CPX files do not hash their source and a valid scalar read uses
+  one CPX pass and one source pass.
+- Resolution: CPX format 26 stores the stable source byte count and SHA-256
+  fingerprint and appends a SHA-256 digest over the complete preceding CPX
+  stream. Readers validate the bounded preamble before allocation, stage all
+  requested values privately, authenticate one forward stream, and publish
+  outputs atomically only after the footer, final size, and source fingerprint
+  match. Every constructor, stale check, scalar, batch, API, rank, and
+  aggregate path now uses the source-bound reader. Version 25 caches are
+  rejected for a one-time rebuild.
+- Verification: The 44-case integrity and 34-case refresh/integration suites
+  pass normally, under strict ASan/UBSan/LSan with leak detection, and under
+  ThreadSanitizer without suppressions. The MinGW header-order syntax check,
+  complete Qt 6.8.3 release build, and successful 92-suite offscreen matrix
+  also pass.
+- Residual: The CPX digest detects accidental corruption but is unkeyed and is
+  not an authenticity boundary against an attacker who can rewrite local
+  cache files. Source and cache validation is a point-in-time guarantee;
+  aggregate-set races are tracked by `DATA-015`. Weight and analysis
+  configuration are tracked by `DATA-014`, refresh memory duplication by
+  `PERF-011`, and the final write-side source/commit window remains documented
+  under `DATA-012`.
+
+### DATA-014: CPX reuse does not consistently bind weight and analysis inputs
+
+- Status: OPEN
+- Code: `src/FileIO/RideFileCache.cpp:113-181`,
+  `src/FileIO/RideFileCache.cpp:416-523`,
+  `src/FileIO/RideFileCache.cpp:2147-2165`, and
+  `src/FileIO/RideFileCache.cpp:3068-3268`
+- Impact: Item-aware mutable best/TIZ calls verify the current athlete weight,
+  but filename and const-item overloads, the single-file mean-max helper, and
+  in-memory aggregate reuse can accept source-authentic CPX values after weight
+  changes. Zone/profile/configuration inputs that affect derived arrays are not
+  represented in the persisted source identity. W/kg and zone-dependent
+  results can therefore remain stale while the activity bytes are unchanged.
+- Test: Change weight and zone/configuration generations after creating a valid
+  CPX and require every public fast path and aggregate reuse path either to
+  reject it or to prove that the requested series is independent of the
+  changed input.
+- Fix direction: Define one explicit analysis-input fingerprint or generation,
+  persist it in CPX, and require it through a single item-aware read contract.
+  Keep legacy overloads only as wrappers that can resolve all required inputs.
+
+### DATA-015: Aggregate source validation has a set-wide TOCTOU window
+
+- Status: OPEN
+- Code: `src/FileIO/RideFileCache.cpp:113-130` and
+  `src/FileIO/RideFileCache.cpp:2147-2165`
+- Impact: Cached aggregate reuse hashes source bindings sequentially. Source A
+  can change after its comparison while source B is being hashed, allowing an
+  aggregate derived from A's old contents to be returned after A has changed.
+- Test: Pause validation after source A, replace A while source B is read, and
+  require aggregate reuse to reject the mixed-generation source set.
+- Fix direction: Bind aggregate reuse to a library/activity generation that
+  changes with source mutations, or implement a bounded set-snapshot protocol
+  that verifies every member belongs to one stable generation before publish.
+
+### METRIC-004: Ride best ranking is sorted in the wrong direction
+
+- Status: OPEN
+- Code: `src/FileIO/RideFileCache.cpp:2846-2884`
+- Impact: `rank()` sorts values ascending and returns the first value less than
+  or equal to the candidate. For values 100, 200, and 300, a candidate of 250
+  is therefore reported as rank 1 instead of rank 2; most non-minimum results
+  collapse to the top rank.
+- Test: Cover top, middle, bottom, ties, and rejected-cache rows with a fixed
+  best-value set and define the `of` and insertion-rank semantics explicitly.
+- Fix direction: Rank a descending sequence with a tie policy shared by the UI
+  consumers, using a standard bound operation instead of the current loop.
+
+### PERF-011: Verified CPX refresh duplicates full caches and payloads
+
+- Status: OPEN
+- Code: `src/FileIO/RideFileCache.cpp:1096-1196`
+- Impact: Verified refresh retains the original `RideFileCache`, a second
+  independently parsed cache, and two complete serialized `QByteArray`
+  payloads at once. Long activities with large mean-max and distribution
+  arrays can create a substantial avoidable memory peak.
+- Test: Exercise a large synthetic cache through verified refresh and assert
+  that comparison and persistence remain bounded to one serialized payload
+  plus a fixed-size streaming buffer.
+- Fix direction: Serialize one side through a streaming comparator or digest
+  sink, then stream the accepted payload to `QSaveFile` without retaining two
+  full byte arrays.
 
 ### DUR-012: CPX refresh can publish torn files and stale in-memory arrays
 
@@ -4713,6 +4824,29 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   injectable boundary and add an integration test using the real
   `CompressedActivityFile` and `RideFileFactory` implementations.
 
+### TEST-004: Concurrent credential enrollment coverage is timing-sensitive
+
+- Status: OPEN
+- Code: `src/Core/CredentialSettings.cpp:1608-1661`,
+  `src/Core/CredentialSettings.cpp:4715-4805`, and
+  `unittests/Core/credentialSettings/testCredentialSettings.cpp:16963-17341`
+- Impact: The full matrix can intermittently fail while comparing the two
+  process snapshots from concurrent fresh athlete enrollment. The current
+  whole-JSON `QCOMPARE` elides the differing suffix, so a failure does not show
+  which persisted field diverged and cannot distinguish a product consistency
+  bug from a test-observation race.
+- Evidence: The unchanged DATA-011 candidate failed the athlete row once in
+  the full matrix and once in an isolated rerun, then passed a JUnit rerun,
+  five consecutive isolated reruns, and the next complete matrix: two failures
+  and seven passes without source or binary changes.
+- Test: Compare and report every parsed enrollment field independently, then
+  use deterministic barriers around the root, profile, and scope transactions
+  to reproduce the divergent schedule.
+- Fix direction: First make the failure diagnostic and schedule deterministic.
+  If the snapshots reflect real intermediate product state, extend the
+  enrollment transaction or publish a committed generation; otherwise move
+  the observation behind the protocol's actual completion boundary.
+
 ### BUILD-008: Qt 6.8.3 reports impossible QVariant inline-storage overflows
 
 - Status: OPEN
@@ -4869,10 +5003,10 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The complete containerized release matrix through `DATA-012` passes:
+The complete containerized release matrix with `DATA-011` passes:
 
 - 92 QtTest suites
-- 3,411 passed
+- 3,432 passed
 - 0 failed or blacklisted
 - 12 expected platform-only skips on Linux
 - Qt 6.8.3 on Ubuntu 24.04
@@ -4884,6 +5018,12 @@ the rollback image, and the local sidecar records the packaged commit and
 SHA-256 without making repository documentation depend on local artifact
 state.
 
+`DATA-011` additionally passes its 44-case integrity and 34-case
+refresh/integration suites normally, under strict ASan/UBSan/LSan with leak
+detection, and under ThreadSanitizer without suppressions, plus its MinGW
+header-order check. The timing-sensitive credential enrollment coverage
+recorded as `TEST-004` failed two of nine observations and passed in the
+successful complete matrix; it does not touch the DATA-011 code paths.
 `DATA-012` additionally passes 98 focused cases under strict
 ASan/UBSan/LSan with leak detection and ThreadSanitizer without suppressions,
 plus its MinGW header-order check. `DUR-006` additionally passes its 29-case

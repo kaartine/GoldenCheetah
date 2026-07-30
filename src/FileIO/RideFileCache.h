@@ -71,25 +71,22 @@ typedef double data_t;
 // 23       14-Jun-15    Added W'bal TiZ and Distribution
 // 24       15-Jun-15    Fix percentify error on W'bal Distribution
 // 25       19-Dec-16    Added aPower
+// 26       30-Jul-26    Bind source SHA-256 and protect complete cache contents
 
 // The cache file (.cpx) has a binary format:
 // 1 x Header data - describing the version and contents of the cache
+// 1 x Source byte size and SHA-256 fingerprint
 // n x Blocks - meanmax or distribution arrays
 // 1 x Watts TIZ - 10 floats
 // 1 x Heartrate TIZ - 10 floats
 // 1 x W'Bal TIX - 10 floats
+// 1 x SHA-256 digest covering every preceding cache byte
 
-// The header is written directly to disk, the only
-// field which is endian sensitive is the count field
-// which will always be written in local format since these
-// files are local caches we do not worry about endianness
-// Each block of data is an array of uint32_t (32-bit "local-endian")
-// integers so the "count" setting within the block definition tells
-// us how long it is so we can read in one instruction and reference
-// it directly. Of course, this means that for data series that require
-// decimal places (e.g. speed) they are stored multiplied by 10^dp.
-// so 27.1 is stored as 271, 27.454 is stored as 27454, 100.0001 is
-// stored as 1000001.
+// The native header, source size, and float arrays are written directly
+// in the host ABI and byte order. CPX files are disposable local caches,
+// so incompatible builds reject and recompute them rather than treating
+// them as a portable interchange format. Decimal series are stored as
+// scaled floats; the block count determines each array's length.
 
 // So that none of the plots need to understand the format of this
 // cache file this class is repsonsible for supplying the pre-computed
@@ -137,8 +134,16 @@ class RideFileCache
         static void fastSearch(QVector<int>&input, QVector<int>&ride_bests, QVector<int>&ride_offsets);
 
         // used by the API - get MM for any series for an activity or date range
-        static QVector<float> meanMaxFor(QString cachFilename, RideFile::SeriesType series);
-        static QVector<float> meanMaxFor(QString cacheDir, RideFile::SeriesType series, QDate from, QDate to);
+        static QVector<float> meanMaxFor(
+            const QString &sourceFilename,
+            const QString &cacheFilename,
+            RideFile::SeriesType series);
+        static QVector<float> meanMaxFor(
+            const QString &activityDir,
+            const QString &cacheDir,
+            RideFile::SeriesType series,
+            QDate from,
+            QDate to);
 
         // not actually a copy constructor -- but we call it IN the constructor.
         RideFileCache(RideFileCache *other) { *this = *other; }
@@ -173,6 +178,28 @@ class RideFileCache
                 QPair<RideFile::SeriesType, int>>
                 &requests,
             QVector<double> &values);
+        static bool readBestRowForSourceForTest(
+            const QString &sourcePath,
+            const QString &cachePath,
+            const QVector<
+                QPair<RideFile::SeriesType, int>>
+                &requests,
+            QVector<double> &values);
+        static bool cacheIsCurrentForSourceForTest(
+            const QString &sourcePath,
+            const QString &cachePath,
+            double weight);
+        static void setSourceBoundReadHookForTest(
+            std::function<void()> hook);
+        static void resetSourceFingerprintReadCountForTest();
+        static int sourceFingerprintReadCountForTest();
+        static bool sourceBindingsAreCurrentForTest(
+            const QVector<
+                QPair<
+                    QString,
+                    RideFileCRC::
+                        ContentFingerprint>>
+                &bindings);
         bool refreshCacheForTest(
             const QString &sourcePath,
             const QString &cachePath,
@@ -202,8 +229,10 @@ class RideFileCache
         static int rank(Context *context, RideFile::SeriesType series, int duration, 
                         double value, Specification spec, int &of);
         static double best(Context *context, QString fileName, RideFile::SeriesType series, int duration);
+        static double best(Context *context, RideItem *item, RideFile::SeriesType series, int duration);
         static double best(Context *context, const RideItem *item, RideFile::SeriesType series, int duration);
         static int tiz(Context *context, QString fileName, RideFile::SeriesType series, int zone);
+        static int tiz(Context *context, RideItem *item, RideFile::SeriesType series, int zone);
         static int tiz(Context *context, const RideItem *item, RideFile::SeriesType series, int zone);
 
         // get all the bests passed and return a list of summary metrics, like the DBAccess
@@ -258,8 +287,11 @@ class RideFileCache
 
         bool refreshCache(
             const PersistenceOperations *operations = nullptr);
-        bool readCache();                 // just read from saved file and setup arrays
-        void serialize(QDataStream *out); // write to file
+        bool readCache(double expectedWeight);
+        bool serialize(
+            QDataStream *out,
+            const RideFileCRC::ContentFingerprint
+                &sourceFingerprint);
 
         bool compute();             // compute all arrays
         bool computeWithoutPersistentCache(bool refresh, double weight);
@@ -276,6 +308,15 @@ class RideFileCache
         QString rideFileName; // filename of ride
         QString cacheFileName; // filename of cache file
         RideFile *ride;
+        RideFileCRC::ContentFingerprint
+            sourceFingerprint_;
+        QVector<
+            QPair<
+                QString,
+                RideFileCRC::ContentFingerprint>>
+            aggregateSourceBindings_;
+        bool aggregateSourceBindingsComplete_ =
+            false;
 
         // used for zoning
         int CP;

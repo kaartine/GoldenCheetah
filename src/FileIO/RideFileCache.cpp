@@ -27,10 +27,13 @@
 #include "LTMSettings.h" // getAllBestsFor needs this
 
 #include <cmath> // for pow()
+#include <QByteArrayView>
 #include <QBuffer>
+#include <QCryptographicHash>
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
+#include <QSet>
 #include <QtAlgorithms> // for qStableSort
 
 #include <limits>
@@ -48,6 +51,137 @@ static const double cadDelta   = 1.0;
 static const double gearDelta  = 0.01; //RideFileCache creates POW(10) * decimals section
 static const double smo2Delta  = 1;
 static const double wbalDelta  = 1;
+
+#ifdef GC_RIDE_FILE_CACHE_TEST_HOOKS
+static thread_local std::function<void()>
+    sourceBoundReadHookForTest;
+static thread_local int
+    sourceFingerprintReadsForTest = 0;
+#endif
+
+static bool computeSourceFingerprint(
+    const QString &sourcePath,
+    RideFileCRC::ContentFingerprint
+        &fingerprint)
+{
+#ifdef GC_RIDE_FILE_CACHE_TEST_HOOKS
+    ++sourceFingerprintReadsForTest;
+#endif
+    return RideFileCRC::
+        computeFileFingerprint(
+            sourcePath, fingerprint);
+}
+
+template<typename Operation>
+static bool withCurrentSource(
+    const QString &sourcePath,
+    RideFileCRC::ContentFingerprint *verifiedFingerprint,
+    Operation &&operation)
+{
+#ifdef GC_RIDE_FILE_CACHE_TEST_HOOKS
+    std::function<void()> sourceMutationHook =
+        std::move(
+            sourceBoundReadHookForTest);
+    sourceBoundReadHookForTest = {};
+#endif
+
+    RideFileCRC::ContentFingerprint
+        cacheFingerprint;
+    if (!operation(cacheFingerprint)
+        || !cacheFingerprint.isValid()) {
+        return false;
+    }
+
+#ifdef GC_RIDE_FILE_CACHE_TEST_HOOKS
+    if (sourceMutationHook)
+        sourceMutationHook();
+#endif
+
+    RideFileCRC::ContentFingerprint current;
+    if (!computeSourceFingerprint(
+            sourcePath, current)
+        || current != cacheFingerprint) {
+        return false;
+    }
+
+    if (verifiedFingerprint)
+        *verifiedFingerprint =
+            std::move(current);
+    return true;
+}
+
+static bool sourceBindingsAreCurrent(
+    const QVector<
+        QPair<
+            QString,
+            RideFileCRC::ContentFingerprint>>
+        &bindings)
+{
+    for (const auto &binding : bindings) {
+        RideFileCRC::ContentFingerprint
+            current;
+        if (!RideFileCRC::
+                computeFileFingerprint(
+                    binding.first,
+                    current)
+            || current != binding.second) {
+            return false;
+        }
+    }
+    return true;
+}
+
+template<typename Operation>
+static bool readSourceBoundPartialCache(
+    const QString &sourcePath,
+    const QString &cachePath,
+    const double *expectedWeight,
+    RideFileCRC::ContentFingerprint *verifiedFingerprint,
+    Operation &&operation)
+{
+    return withCurrentSource(
+        sourcePath,
+        verifiedFingerprint,
+        [&](RideFileCRC::ContentFingerprint
+                &cacheFingerprint) {
+            QFile cacheFile(cachePath);
+            if (!cacheFile.open(
+                    QIODevice::ReadOnly
+                    | QIODevice::Unbuffered)) {
+                return false;
+            }
+
+            RideFileCacheIntegrity::PartialReader
+                reader(cacheFile);
+            if (!reader.isValid()
+                || (expectedWeight
+                    && reader.header().WEIGHT
+                        != *expectedWeight)
+                || !operation(reader)
+                || !reader.finish()) {
+                return false;
+            }
+            cacheFingerprint =
+                reader.sourceFingerprint();
+            return true;
+        });
+}
+
+static bool cacheIsCurrentForSource(
+    const QString &sourcePath,
+    const QString &cachePath,
+    double weight)
+{
+    return readSourceBoundPartialCache(
+        sourcePath,
+        cachePath,
+        &weight,
+        nullptr,
+        [](RideFileCacheIntegrity::
+               PartialReader &) {
+            return true;
+        });
+}
 
 
 // cache from ride
@@ -98,7 +232,6 @@ RideFileCache::RideFileCache(Context *context, QString fileName, double weight, 
     wbalTimeInZone.resize(4); // 0-25, 25-50, 50-75, 75% +
 
     // Get info for ride file and cache file
-    QFileInfo rideFileInfo(rideFileName);
     const QString cacheRoot =
         context->athlete->home->cache().absolutePath();
     cacheFileName = RideFileCacheIntegrity::cachePathForActivity(
@@ -110,48 +243,13 @@ RideFileCache::RideFileCache(Context *context, QString fileName, double weight, 
         computeWithoutPersistentCache(refresh, weight);
         return;
     }
-    QFileInfo cacheFileInfo(cacheFileName);
-
-    // is it up-to-date?
-    if (cacheFileInfo.exists() && cacheFileInfo.size() >= (int)sizeof(struct RideFileCacheHeader)) {
-
-        // we have a file, it is more recent than the ride file
-        // but is it the latest version?
-        RideFileCacheHeader head {};
-        QFile cacheFile(cacheFileName);
-        if (cacheFile.open(QIODevice::ReadOnly) == true) {
-
-            const bool cacheValid =
-                RideFileCacheIntegrity::inspectCache(cacheFile, head);
-            bool sourceCrcMatches = false;
-            if (cacheValid
-                && rideFileInfo.lastModified()
-                    > cacheFileInfo.lastModified()) {
-                unsigned int sourceCrc = 0;
-                sourceCrcMatches =
-                    RideFile::computeFileCRC(
-                        rideFileName, sourceCrc)
-                    && head.crc == sourceCrc;
-            }
-
-            // its more recent -or- the crc is the same
-            if (cacheValid &&
-                (rideFileInfo.lastModified() <= cacheFileInfo.lastModified() ||
-                 sourceCrcMatches)) {
-
-                // it is the same ?
-                if (head.version == RideFileCacheVersion && head.WEIGHT == weight) {
-
-                    // WE'RE GOOD
-                    if (check || readCache())
-                        return;
-                } else {
-                    // for debug only
-                    //qDebug()<<"refresh because version ("<<RideFileCacheVersion<<","<<head.version<<")"
-                    //        << " weight ("<< weight <<"," <<head.WEIGHT<<")";
-                }
-            }
-        }
+    if ((check
+         && cacheIsCurrentForSource(
+             rideFileName,
+             cacheFileName,
+             weight))
+        || (!check && readCache(weight))) {
+        return;
     }
 
     // NEED TO UPDATE!!
@@ -195,7 +293,6 @@ RideFileCache::checkStale(Context *context, RideItem*item)
         RideFileCacheIntegrity::activitySourcePath(
             item->path, item->fileName);
 
-    QFileInfo rideFileInfo(rideFileName);
     const QString cacheFileName =
         RideFileCacheIntegrity::cachePathForActivity(
             context->athlete->home->cache().absolutePath(),
@@ -203,47 +300,10 @@ RideFileCache::checkStale(Context *context, RideItem*item)
             context->athlete->home->planned().absolutePath(),
             rideFileName);
 
-    QFileInfo cacheFileInfo(cacheFileName);
-
-    // is it up-to-date?
-    if (cacheFileInfo.exists() && cacheFileInfo.size() >= (int)sizeof(struct RideFileCacheHeader)) {
-
-        // we have a file, it is more recent than the ride file
-        // but is it the latest version?
-        RideFileCacheHeader head {};
-        QFile cacheFile(cacheFileName);
-        if (cacheFile.open(QIODevice::ReadOnly) == true) {
-
-            const bool cacheValid =
-                RideFileCacheIntegrity::inspectCache(cacheFile, head);
-            bool sourceCrcMatches = false;
-            if (cacheValid
-                && rideFileInfo.lastModified()
-                    > cacheFileInfo.lastModified()) {
-                unsigned int sourceCrc = 0;
-                sourceCrcMatches =
-                    RideFile::computeFileCRC(
-                        rideFileName, sourceCrc)
-                    && head.crc == sourceCrc;
-            }
-
-            // its more recent -or- the crc is the same
-            if (cacheValid &&
-                (rideFileInfo.lastModified() <= cacheFileInfo.lastModified() ||
-                 sourceCrcMatches)) {
-
-                // it is the same ?
-                if (head.version == RideFileCacheVersion && head.WEIGHT == item->getWeight()) {
-
-                    // WE'RE GOOD
-                    return false;
-                }
-            }
-        }
-    }
-
-    // its stale !
-    return true;
+    return !cacheIsCurrentForSource(
+        rideFileName,
+        cacheFileName,
+        item->getWeight());
 }
 
 static bool meanMaxBlockForSeries(
@@ -326,7 +386,7 @@ static bool zoneBlockForSeries(
     }
 }
 
-static QString cachePathForRideItem(
+static QString sourcePathForRideItem(
     Context *context,
     const RideItem *item)
 {
@@ -334,12 +394,23 @@ static QString cachePathForRideItem(
         || !item) {
         return {};
     }
+    return RideFileCacheIntegrity::activitySourcePath(
+        item->path, item->fileName);
+}
+
+static QString cachePathForRideItem(
+    Context *context,
+    const RideItem *item)
+{
+    const QString sourcePath =
+        sourcePathForRideItem(context, item);
+    if (sourcePath.isEmpty())
+        return {};
     return RideFileCacheIntegrity::cachePathForActivity(
         context->athlete->home->cache().absolutePath(),
         context->athlete->home->activities().absolutePath(),
         context->athlete->home->planned().absolutePath(),
-        RideFileCacheIntegrity::activitySourcePath(
-            item->path, item->fileName));
+        sourcePath);
 }
 
 QVector<float> RideFileCache::meanMaxPowerFor(Context *context, QVector<float> &wpk, QDate from, QDate to, QVector<QDate>*dates, QString sport)
@@ -412,9 +483,6 @@ QVector<float> RideFileCache::meanMaxPowerFor(Context *context, QVector<float> &
 
 QVector<float> RideFileCache::meanMaxPowerFor(Context *context, QVector<float>&wpk, QString fileName)
 {
-    QElapsedTimer start;
-    start.start();
-
     QVector<float> returning;
 
     const QString cacheFilename =
@@ -427,23 +495,29 @@ QVector<float> RideFileCache::meanMaxPowerFor(Context *context, QVector<float>&w
         wpk.clear();
         return returning;
     }
-    QFile cacheFile(cacheFilename);
-    if (cacheFile.open(QIODevice::ReadOnly)) {
-        RideFileCacheIntegrity::PartialReader reader(
-            cacheFile);
-        if (reader.isValid()
-            && reader.readBlock(
-                RideFileCacheIntegrity::WattsMeanMax,
-                returning)
-            && reader.readBlock(
-                RideFileCacheIntegrity::WattsKgMeanMax,
-                wpk)) {
-            for (float &value : wpk)
-                value /= 100.0f;
-            return returning;
-        }
+    QVector<float> loaded;
+    QVector<float> loadedWpk;
+    if (readSourceBoundPartialCache(
+            fileName,
+            cacheFilename,
+            nullptr,
+            nullptr,
+            [&](RideFileCacheIntegrity::
+                    PartialReader &reader) {
+                return reader.readBlock(
+                           RideFileCacheIntegrity::
+                               WattsMeanMax,
+                           loaded)
+                    && reader.readBlock(
+                           RideFileCacheIntegrity::
+                               WattsKgMeanMax,
+                           loadedWpk);
+            })) {
+        for (float &value : loadedWpk)
+            value /= 100.0f;
+        wpk = std::move(loadedWpk);
+        return loaded;
     }
-    returning.clear();
     wpk.clear();
 
     // will be empty if no up to date cache
@@ -453,54 +527,98 @@ QVector<float> RideFileCache::meanMaxPowerFor(Context *context, QVector<float>&w
 
 // the next 2 are used by the API web services to extract meanmax data from the cache
 
-// API bests for a ride
-QVector<float> RideFileCache::meanMaxFor(QString cacheFilename, RideFile::SeriesType series)
+static bool meanMaxForSource(
+    const QString &sourceFilename,
+    const QString &cacheFilename,
+    RideFile::SeriesType series,
+    QVector<float> &values)
 {
-    QElapsedTimer start;
-    start.start();
-
-    QVector<float> returning;
-
+    values.clear();
     RideFileCacheIntegrity::Block block;
     if (!meanMaxBlockForSeries(series, block))
-        return returning;
+        return false;
 
-    QFile cacheFile(cacheFilename);
-    if (cacheFile.open(QIODevice::ReadOnly))
-        RideFileCacheIntegrity::readBlock(cacheFile, block, returning);
+    QVector<float> loaded;
+    if (!readSourceBoundPartialCache(
+            sourceFilename,
+            cacheFilename,
+            nullptr,
+            nullptr,
+            [&](RideFileCacheIntegrity::
+                    PartialReader &reader) {
+                return reader.readBlock(
+                    block, loaded);
+            })) {
+        return false;
+    }
 
-    // will be empty if no up to date cache
+    values = std::move(loaded);
+    return true;
+}
+
+// API bests for a ride
+QVector<float> RideFileCache::meanMaxFor(
+    const QString &sourceFilename,
+    const QString &cacheFilename,
+    RideFile::SeriesType series)
+{
+    QVector<float> returning;
+    meanMaxForSource(
+        sourceFilename,
+        cacheFilename,
+        series,
+        returning);
     return returning;
 
 }
 
 // API bests for a date range
-QVector<float> RideFileCache::meanMaxFor(QString cacheDir, RideFile::SeriesType series, QDate from, QDate to)
+QVector<float> RideFileCache::meanMaxFor(
+    const QString &activityDir,
+    const QString &cacheDir,
+    RideFile::SeriesType series,
+    QDate from,
+    QDate to)
 {
-    QElapsedTimer start;
-    start.start();
-
     bool first = true;
     QVector<float> returning;
 
-    // loop through all CPX files
-    foreach(QString cacheFilename, QDir(cacheDir).entryList(QDir::Files)) {
-
-        // is it a cpx file ?
-        if (!cacheFilename.endsWith(".cpx")) continue;
-   
-        // is it big enough ? 
-        if (QFileInfo(cacheDir + "/" + cacheFilename).size() < (int)sizeof(struct RideFileCacheHeader)) continue;
-
-        // lets check it parses ok ?
+    QSet<QString> visitedBasenames;
+    foreach(QString activityFilename,
+            QDir(activityDir).entryList(
+                QDir::Files | QDir::NoDotAndDotDot)) {
         QDateTime dt;
-        if (!RideFile::parseRideFileName(cacheFilename, &dt)) continue; 
+        if (!RideFile::parseRideFileName(
+                activityFilename, &dt)) {
+            continue;
+        }
 
         // in range?
         if (dt.date() < from || dt.date() > to) continue;
 
+        const QFileInfo activityInfo(
+            QDir(activityDir).filePath(
+                activityFilename));
+        const QString basename =
+            activityInfo.baseName();
+        if (basename.isEmpty()
+            || visitedBasenames.contains(
+                basename)) {
+            continue;
+        }
+
         // get data
-        QVector<float> current = RideFileCache::meanMaxFor(cacheDir + "/" + cacheFilename, series);
+        QVector<float> current;
+        if (!meanMaxForSource(
+                activityInfo.absoluteFilePath(),
+                QDir(cacheDir).filePath(
+                    basename
+                    + QStringLiteral(".cpx")),
+                series,
+                current)) {
+            continue;
+        }
+        visitedBasenames.insert(basename);
 
         // first ?
         if (first) {
@@ -571,6 +689,49 @@ RideFileCache::RideFileCache(RideFile *ride) :
 }
 
 #ifdef GC_RIDE_FILE_CACHE_TEST_HOOKS
+bool
+RideFileCache::cacheIsCurrentForSourceForTest(
+    const QString &sourcePath,
+    const QString &cachePath,
+    double weight)
+{
+    return cacheIsCurrentForSource(
+        sourcePath, cachePath, weight);
+}
+
+void
+RideFileCache::setSourceBoundReadHookForTest(
+    std::function<void()> hook)
+{
+    sourceBoundReadHookForTest =
+        std::move(hook);
+}
+
+void
+RideFileCache::
+resetSourceFingerprintReadCountForTest()
+{
+    sourceFingerprintReadsForTest = 0;
+}
+
+int
+RideFileCache::
+sourceFingerprintReadCountForTest()
+{
+    return sourceFingerprintReadsForTest;
+}
+
+bool
+RideFileCache::sourceBindingsAreCurrentForTest(
+    const QVector<
+        QPair<
+            QString,
+            RideFileCRC::ContentFingerprint>>
+        &bindings)
+{
+    return sourceBindingsAreCurrent(bindings);
+}
+
 RideFileCache::RideFileCache(
     RideFile *ride,
     SkipInitialComputeForTest)
@@ -956,21 +1117,40 @@ RideFileCache::refreshCache(
 
     // Publish only data derived from this stable source fingerprint.
     crc = sourceFingerprint.crc;
+    RideFileCRC::ContentFingerprint
+        persistedSourceFingerprint;
+    persistedSourceFingerprint.byteSize =
+        sourceFingerprint.size;
+    persistedSourceFingerprint.sha256 =
+        sourceFingerprint.sha256;
+    persistedSourceFingerprint.legacyCrc16 =
+        sourceFingerprint.crc;
+    if (!persistedSourceFingerprint.isValid())
+        return false;
 
     const auto serializeSnapshot =
-        [](RideFileCache &cache, QByteArray &payload) {
+        [](RideFileCache &cache,
+           const RideFileCRC::ContentFingerprint
+               &source,
+           QByteArray &payload) {
             payload.clear();
             QBuffer output(&payload);
             if (!output.open(QIODevice::WriteOnly))
                 return false;
             QDataStream stream(&output);
-            cache.serialize(&stream);
-            return stream.status() == QDataStream::Ok;
+            return cache.serialize(
+                       &stream, source)
+                && stream.status()
+                    == QDataStream::Ok;
         };
 
     QByteArray payload;
-    if (!serializeSnapshot(*this, payload))
+    if (!serializeSnapshot(
+            *this,
+            persistedSourceFingerprint,
+            payload)) {
         return false;
+    }
 
     QStringList verificationErrors;
     QFile verificationSource(rideFileName);
@@ -989,10 +1169,14 @@ RideFileCache::refreshCache(
     verifiedCache.crc = sourceFingerprint.crc;
     QByteArray verifiedPayload;
     if (!serializeSnapshot(
-            verifiedCache, verifiedPayload)
+            verifiedCache,
+            persistedSourceFingerprint,
+            verifiedPayload)
         || payload != verifiedPayload) {
         return false;
     }
+    sourceFingerprint_ =
+        persistedSourceFingerprint;
 
     QDir().mkpath(QFileInfo(cacheFileName).absolutePath());
     QString writeError;
@@ -1960,11 +2144,26 @@ RideFileCache::RideFileCache(Context *context, QDate start, QDate end, bool filt
 
         // oh and not if we're onhome and homefiltered
         if ((onhome && !context->ishomefiltered) || !onhome) {
-            foreach(RideFileCache *p, context->athlete->cpxCache) {
+            for (int index = 0;
+                 index
+                     < context->athlete
+                           ->cpxCache.count();) {
+                RideFileCache *p =
+                    context->athlete
+                        ->cpxCache.at(index);
                 if (p->start == start && p->end == end) {
-                    *this = *p;
-                    return;
+                    if (p->aggregateSourceBindingsComplete_
+                        && sourceBindingsAreCurrent(
+                            p->aggregateSourceBindings_)) {
+                        *this = *p;
+                        return;
+                    }
+                    delete p;
+                    context->athlete
+                        ->cpxCache.removeAt(index);
+                    continue;
                 }
+                ++index;
             }
         }
     }
@@ -2031,10 +2230,14 @@ RideFileCache::RideFileCache(Context *context, QDate start, QDate end, bool filt
 
             // get its cached values (will NOT! refresh if needed...)
             // the true means it will check only
+            const QString sourcePath =
+                RideFileCacheIntegrity::
+                    activitySourcePath(
+                        item->path,
+                        item->fileName);
             RideFileCache rideCache(
                 context,
-                RideFileCacheIntegrity::activitySourcePath(
-                    item->path, item->fileName),
+                sourcePath,
                 item->getWeight(),
                 NULL,
                 false,
@@ -2042,7 +2245,15 @@ RideFileCache::RideFileCache(Context *context, QDate start, QDate end, bool filt
             if (rideCache.incomplete == true) {
                 // ack, data not available !
                 incomplete = true;
+            } else if (!rideCache
+                            .sourceFingerprint_
+                            .isValid()) {
+                incomplete = true;
             } else {
+                aggregateSourceBindings_.append({
+                    sourcePath,
+                    rideCache.sourceFingerprint_
+                });
 
                 // lets aggregate
                 meanMaxAggregate(wattsMeanMaxDouble, rideCache.wattsMeanMaxDouble, wattsMeanMaxDate, rideDate);
@@ -2093,6 +2304,8 @@ RideFileCache::RideFileCache(Context *context, QDate start, QDate end, bool filt
 
     // set the cursor back to normal
     context->mainWindow->setCursor(Qt::ArrowCursor);
+    aggregateSourceBindingsComplete_ =
+        !incomplete;
 
     // lets add to the cache for others to re-use -- but not if filtered or incomplete
     if (incomplete == false && !context->isfiltered && (!context->ishomefiltered || !onhome) && !filter) {
@@ -2151,9 +2364,20 @@ QVector<float> &RideFileCache::heatMeanMaxArray()
 //
 // PERSISTANCE
 //
-void
-RideFileCache::serialize(QDataStream *out)
+bool
+RideFileCache::serialize(
+    QDataStream *out,
+    const RideFileCRC::ContentFingerprint
+        &sourceFingerprint)
 {
+    if (!out
+        || !out->device()
+        || !sourceFingerprint.isValid()
+        || crc
+            != sourceFingerprint.legacyCrc16) {
+        return false;
+    }
+
     RideFileCacheHeader head {};
 
     // write header
@@ -2165,83 +2389,216 @@ RideFileCache::serialize(QDataStream *out)
     head.CV = CV;
     head.WEIGHT = WEIGHT;
 
-    head.wattsMeanMaxCount = wattsMeanMax.size();
-    head.hrMeanMaxCount = hrMeanMax.size();
-    head.cadMeanMaxCount = cadMeanMax.size();
-    head.nmMeanMaxCount = nmMeanMax.size();
-    head.kphMeanMaxCount = kphMeanMax.size();
-    head.kphdMeanMaxCount = kphdMeanMax.size();
-    head.wattsdMeanMaxCount = wattsdMeanMax.size();
-    head.caddMeanMaxCount = caddMeanMax.size();
-    head.nmdMeanMaxCount = nmdMeanMax.size();
-    head.hrdMeanMaxCount = hrdMeanMax.size();
-    head.xPowerMeanMaxCount = xPowerMeanMax.size();
-    head.npMeanMaxCount = npMeanMax.size();
-    head.vamMeanMaxCount = vamMeanMax.size();
-    head.wattsKgMeanMaxCount = wattsKgMeanMax.size();
-    head.aPowerMeanMaxCount = aPowerMeanMax.size();
-    head.aPowerKgMeanMaxCount = aPowerKgMeanMax.size();
-    head.wattsDistCount = wattsDistribution.size();
-    head.xPowerDistCount = xPowerDistribution.size();
-    head.npDistCount = npDistribution.size();
-    head.hrDistCount = hrDistribution.size();
-    head.cadDistCount = cadDistribution.size();
-    head.gearDistCount = gearDistribution.size();
-    head.nmDistrCount = nmDistribution.size();
-    head.kphDistCount = kphDistribution.size();
-    head.wattsKgDistCount = wattsKgDistribution.size();
-    head.aPowerDistCount = aPowerDistribution.size();
-    head.smo2DistCount = smo2Distribution.size();
-    head.wbalDistCount = wbalDistribution.size();
+    const auto assignCount =
+        [](qsizetype count,
+           unsigned int &destination) {
+            if (count < 0
+                || static_cast<quint64>(count)
+                    > std::numeric_limits<
+                          unsigned int>::max()) {
+                return false;
+            }
+            destination =
+                static_cast<unsigned int>(count);
+            return true;
+        };
+    if (!assignCount(
+            wattsMeanMax.size(),
+            head.wattsMeanMaxCount)
+        || !assignCount(
+            hrMeanMax.size(),
+            head.hrMeanMaxCount)
+        || !assignCount(
+            cadMeanMax.size(),
+            head.cadMeanMaxCount)
+        || !assignCount(
+            nmMeanMax.size(),
+            head.nmMeanMaxCount)
+        || !assignCount(
+            kphMeanMax.size(),
+            head.kphMeanMaxCount)
+        || !assignCount(
+            kphdMeanMax.size(),
+            head.kphdMeanMaxCount)
+        || !assignCount(
+            wattsdMeanMax.size(),
+            head.wattsdMeanMaxCount)
+        || !assignCount(
+            caddMeanMax.size(),
+            head.caddMeanMaxCount)
+        || !assignCount(
+            nmdMeanMax.size(),
+            head.nmdMeanMaxCount)
+        || !assignCount(
+            hrdMeanMax.size(),
+            head.hrdMeanMaxCount)
+        || !assignCount(
+            xPowerMeanMax.size(),
+            head.xPowerMeanMaxCount)
+        || !assignCount(
+            npMeanMax.size(),
+            head.npMeanMaxCount)
+        || !assignCount(
+            vamMeanMax.size(),
+            head.vamMeanMaxCount)
+        || !assignCount(
+            wattsKgMeanMax.size(),
+            head.wattsKgMeanMaxCount)
+        || !assignCount(
+            aPowerMeanMax.size(),
+            head.aPowerMeanMaxCount)
+        || !assignCount(
+            aPowerKgMeanMax.size(),
+            head.aPowerKgMeanMaxCount)
+        || !assignCount(
+            wattsDistribution.size(),
+            head.wattsDistCount)
+        || !assignCount(
+            hrDistribution.size(),
+            head.hrDistCount)
+        || !assignCount(
+            cadDistribution.size(),
+            head.cadDistCount)
+        || !assignCount(
+            gearDistribution.size(),
+            head.gearDistCount)
+        || !assignCount(
+            nmDistribution.size(),
+            head.nmDistrCount)
+        || !assignCount(
+            kphDistribution.size(),
+            head.kphDistCount)
+        || !assignCount(
+            xPowerDistribution.size(),
+            head.xPowerDistCount)
+        || !assignCount(
+            npDistribution.size(),
+            head.npDistCount)
+        || !assignCount(
+            wattsKgDistribution.size(),
+            head.wattsKgDistCount)
+        || !assignCount(
+            aPowerDistribution.size(),
+            head.aPowerDistCount)
+        || !assignCount(
+            smo2Distribution.size(),
+            head.smo2DistCount)
+        || !assignCount(
+            wbalDistribution.size(),
+            head.wbalDistCount)
+        || wattsTimeInZone.size() != 10
+        || wattsCPTimeInZone.size() != 4
+        || hrTimeInZone.size() != 10
+        || hrCPTimeInZone.size() != 4
+        || paceTimeInZone.size() != 10
+        || paceCPTimeInZone.size() != 4
+        || wbalTimeInZone.size() != 4
+        || !RideFileCacheIntegrity::
+                validateCacheLayout(head)) {
+        return false;
+    }
 
-    out->writeRawData((const char *) &head, sizeof(head));
+    bool writeSucceeded = true;
+    QCryptographicHash cacheHash(
+        QCryptographicHash::Sha256);
+    const auto writeRaw =
+        [&](const void *data, qsizetype bytes) {
+            if (!writeSucceeded)
+                return;
+            if (bytes < 0
+                || bytes
+                    > std::numeric_limits<int>::max()
+                || (bytes > 0 && !data)) {
+                writeSucceeded = false;
+                return;
+            }
+            const auto *raw =
+                static_cast<const char *>(data);
+            if (out->writeRawData(
+                    raw,
+                    static_cast<int>(bytes))
+                != bytes) {
+                writeSucceeded = false;
+                return;
+            }
+            cacheHash.addData(
+                QByteArrayView(raw, bytes));
+        };
+
+    writeRaw(&head, sizeof(head));
+    const qint64 sourceByteSize =
+        sourceFingerprint.byteSize;
+    writeRaw(
+        &sourceByteSize,
+        sizeof(sourceByteSize));
+    writeRaw(
+        sourceFingerprint.sha256.constData(),
+        sourceFingerprint.sha256.size());
 
     // write meanmax
-    out->writeRawData((const char *) wattsMeanMax.data(), sizeof(float) * wattsMeanMax.size());
-    out->writeRawData((const char *) wattsKgMeanMax.data(), sizeof(float) * wattsKgMeanMax.size());
-    out->writeRawData((const char *) hrMeanMax.data(), sizeof(float) * hrMeanMax.size());
-    out->writeRawData((const char *) cadMeanMax.data(), sizeof(float) * cadMeanMax.size());
-    out->writeRawData((const char *) nmMeanMax.data(), sizeof(float) * nmMeanMax.size());
-    out->writeRawData((const char *) kphMeanMax.data(), sizeof(float) * kphMeanMax.size());
-    out->writeRawData((const char *) kphdMeanMax.data(), sizeof(float) * kphdMeanMax.size());
-    out->writeRawData((const char *) wattsdMeanMax.data(), sizeof(float) * wattsdMeanMax.size());
-    out->writeRawData((const char *) caddMeanMax.data(), sizeof(float) * caddMeanMax.size());
-    out->writeRawData((const char *) nmdMeanMax.data(), sizeof(float) * nmdMeanMax.size());
-    out->writeRawData((const char *) hrdMeanMax.data(), sizeof(float) * hrdMeanMax.size());
-    out->writeRawData((const char *) xPowerMeanMax.data(), sizeof(float) * xPowerMeanMax.size());
-    out->writeRawData((const char *) npMeanMax.data(), sizeof(float) * npMeanMax.size());
-    out->writeRawData((const char *) vamMeanMax.data(), sizeof(float) * vamMeanMax.size());
-    out->writeRawData((const char *) aPowerMeanMax.data(), sizeof(float) * aPowerMeanMax.size());
-    out->writeRawData((const char *) aPowerKgMeanMax.data(), sizeof(float) * aPowerKgMeanMax.size());
+    writeRaw(wattsMeanMax.data(), sizeof(float) * wattsMeanMax.size());
+    writeRaw(wattsKgMeanMax.data(), sizeof(float) * wattsKgMeanMax.size());
+    writeRaw(hrMeanMax.data(), sizeof(float) * hrMeanMax.size());
+    writeRaw(cadMeanMax.data(), sizeof(float) * cadMeanMax.size());
+    writeRaw(nmMeanMax.data(), sizeof(float) * nmMeanMax.size());
+    writeRaw(kphMeanMax.data(), sizeof(float) * kphMeanMax.size());
+    writeRaw(kphdMeanMax.data(), sizeof(float) * kphdMeanMax.size());
+    writeRaw(wattsdMeanMax.data(), sizeof(float) * wattsdMeanMax.size());
+    writeRaw(caddMeanMax.data(), sizeof(float) * caddMeanMax.size());
+    writeRaw(nmdMeanMax.data(), sizeof(float) * nmdMeanMax.size());
+    writeRaw(hrdMeanMax.data(), sizeof(float) * hrdMeanMax.size());
+    writeRaw(xPowerMeanMax.data(), sizeof(float) * xPowerMeanMax.size());
+    writeRaw(npMeanMax.data(), sizeof(float) * npMeanMax.size());
+    writeRaw(vamMeanMax.data(), sizeof(float) * vamMeanMax.size());
+    writeRaw(aPowerMeanMax.data(), sizeof(float) * aPowerMeanMax.size());
+    writeRaw(aPowerKgMeanMax.data(), sizeof(float) * aPowerKgMeanMax.size());
 
 
     // write dist
-    out->writeRawData((const char *) wattsDistribution.data(), sizeof(float) * wattsDistribution.size());
-    out->writeRawData((const char *) hrDistribution.data(), sizeof(float) * hrDistribution.size());
-    out->writeRawData((const char *) cadDistribution.data(), sizeof(float) * cadDistribution.size());
-    out->writeRawData((const char *) gearDistribution.data(), sizeof(float) * gearDistribution.size());
-    out->writeRawData((const char *) nmDistribution.data(), sizeof(float) * nmDistribution.size());
-    out->writeRawData((const char *) kphDistribution.data(), sizeof(float) * kphDistribution.size());
-    out->writeRawData((const char *) xPowerDistribution.data(), sizeof(float) * xPowerDistribution.size());
-    out->writeRawData((const char *) npDistribution.data(), sizeof(float) * npDistribution.size());
-    out->writeRawData((const char *) wattsKgDistribution.data(), sizeof(float) * wattsKgDistribution.size());
-    out->writeRawData((const char *) aPowerDistribution.data(), sizeof(float) * aPowerDistribution.size());
-    out->writeRawData((const char *) smo2Distribution.data(), sizeof(float) * smo2Distribution.size());
-    out->writeRawData((const char *) wbalDistribution.data(), sizeof(float) * wbalDistribution.size());
+    writeRaw(wattsDistribution.data(), sizeof(float) * wattsDistribution.size());
+    writeRaw(hrDistribution.data(), sizeof(float) * hrDistribution.size());
+    writeRaw(cadDistribution.data(), sizeof(float) * cadDistribution.size());
+    writeRaw(gearDistribution.data(), sizeof(float) * gearDistribution.size());
+    writeRaw(nmDistribution.data(), sizeof(float) * nmDistribution.size());
+    writeRaw(kphDistribution.data(), sizeof(float) * kphDistribution.size());
+    writeRaw(xPowerDistribution.data(), sizeof(float) * xPowerDistribution.size());
+    writeRaw(npDistribution.data(), sizeof(float) * npDistribution.size());
+    writeRaw(wattsKgDistribution.data(), sizeof(float) * wattsKgDistribution.size());
+    writeRaw(aPowerDistribution.data(), sizeof(float) * aPowerDistribution.size());
+    writeRaw(smo2Distribution.data(), sizeof(float) * smo2Distribution.size());
+    writeRaw(wbalDistribution.data(), sizeof(float) * wbalDistribution.size());
 
     // time in zone
-    out->writeRawData((const char *) wattsTimeInZone.data(), sizeof(float) * wattsTimeInZone.size());
-    out->writeRawData((const char *) wattsCPTimeInZone.data(), sizeof(float) * wattsCPTimeInZone.size());
-    out->writeRawData((const char *) hrTimeInZone.data(), sizeof(float) * hrTimeInZone.size());
-    out->writeRawData((const char *) hrCPTimeInZone.data(), sizeof(float) * hrCPTimeInZone.size());
-    out->writeRawData((const char *) paceTimeInZone.data(), sizeof(float) * paceTimeInZone.size());
-    out->writeRawData((const char *) paceCPTimeInZone.data(), sizeof(float) * paceCPTimeInZone.size());
-    out->writeRawData((const char *) wbalTimeInZone.data(), sizeof(float) * wbalTimeInZone.size());
+    writeRaw(wattsTimeInZone.data(), sizeof(float) * wattsTimeInZone.size());
+    writeRaw(wattsCPTimeInZone.data(), sizeof(float) * wattsCPTimeInZone.size());
+    writeRaw(hrTimeInZone.data(), sizeof(float) * hrTimeInZone.size());
+    writeRaw(hrCPTimeInZone.data(), sizeof(float) * hrCPTimeInZone.size());
+    writeRaw(paceTimeInZone.data(), sizeof(float) * paceTimeInZone.size());
+    writeRaw(paceCPTimeInZone.data(), sizeof(float) * paceCPTimeInZone.size());
+    writeRaw(wbalTimeInZone.data(), sizeof(float) * wbalTimeInZone.size());
+
+    const QByteArray cacheDigest =
+        cacheHash.result();
+    if (writeSucceeded
+        && out->writeRawData(
+               cacheDigest.constData(),
+               cacheDigest.size())
+            != cacheDigest.size()) {
+        writeSucceeded = false;
+    }
+
+    return writeSucceeded
+        && out->status() == QDataStream::Ok;
 }
 
 void
 RideFileCache::clearPublishedArrays()
 {
+    sourceFingerprint_ =
+        RideFileCRC::ContentFingerprint {};
+    aggregateSourceBindings_.clear();
+    aggregateSourceBindingsComplete_ = false;
+
     wattsMeanMax.clear();
     heatMeanMax.clear();
     hrMeanMax.clear();
@@ -2314,18 +2671,39 @@ RideFileCache::clearPublishedArrays()
 }
 
 bool
-RideFileCache::readCache()
+RideFileCache::readCache(double expectedWeight)
 {
     clearPublishedArrays();
     incomplete = true;
-
-    QFile cacheFile(cacheFileName);
-    if (!cacheFile.open(QIODevice::ReadOnly))
-        return false;
+    sourceFingerprint_ =
+        RideFileCRC::ContentFingerprint {};
 
     RideFileCacheIntegrity::CacheData data;
-    if (!RideFileCacheIntegrity::readCache(cacheFile, data))
+    RideFileCRC::ContentFingerprint
+        verifiedFingerprint;
+    if (!withCurrentSource(
+            rideFileName,
+            &verifiedFingerprint,
+            [&](RideFileCRC::
+                    ContentFingerprint
+                        &cacheFingerprint) {
+                QFile cacheFile(cacheFileName);
+                if (!cacheFile.open(
+                        QIODevice::ReadOnly)
+                    || !RideFileCacheIntegrity::
+                           readCache(
+                               cacheFile,
+                               data)
+                    || data.header.WEIGHT
+                        != expectedWeight) {
+                    return false;
+                }
+                cacheFingerprint =
+                    data.sourceFingerprint;
+                return true;
+            })) {
         return false;
+    }
 
     crc = data.header.crc;
     LTHR = data.header.LTHR;
@@ -2333,6 +2711,8 @@ RideFileCache::readCache()
     CV = data.header.CV;
     WEIGHT = data.header.WEIGHT;
     WPRIME = data.header.WPRIME;
+    sourceFingerprint_ =
+        std::move(verifiedFingerprint);
 
     wattsMeanMax = std::move(
         data.blocks[RideFileCacheIntegrity::WattsMeanMax]);
@@ -2455,6 +2835,14 @@ void RideFileCache::doubleArrayForDistribution(QVector<double> &into, QVector<fl
     return;
 }
 
+static bool bestForCache(
+    const QString &sourceFileName,
+    const QString &cacheFileName,
+    RideFile::SeriesType series,
+    int duration,
+    const double *expectedWeight,
+    double &result);
+
 // get a list of all values for the spec, series and duration and see where the value ranks
 int RideFileCache::rank(Context *context, RideFile::SeriesType series, int duration, 
          double value, Specification spec, int &of)
@@ -2465,9 +2853,20 @@ int RideFileCache::rank(Context *context, RideFile::SeriesType series, int durat
     foreach(RideItem*item, context->athlete->rideCache->rides()) {
         if (!spec.pass(item)) continue;
 
-        // get the best for this one
-        values << RideFileCache::best(
-            context, item, series, duration);
+        double bestValue = 0;
+        const double expectedWeight =
+            item->getWeight();
+        if (bestForCache(
+                sourcePathForRideItem(
+                    context, item),
+                cachePathForRideItem(
+                    context, item),
+                series,
+                duration,
+                &expectedWeight,
+                bestValue)) {
+            values << bestValue;
+        }
     }
 
     // sort the list
@@ -2484,74 +2883,155 @@ int RideFileCache::rank(Context *context, RideFile::SeriesType series, int durat
     return values.count();
 }
 
-static double bestForCache(
+static bool bestForCache(
+    const QString &sourceFileName,
     const QString &cacheFileName,
     RideFile::SeriesType series,
-    int duration)
+    int duration,
+    const double *expectedWeight,
+    double &result)
 {
-    QFile cacheFile(cacheFileName);
+    result = 0;
     RideFileCacheIntegrity::Block block;
-    float value = 0.0f;
     if (!meanMaxBlockForSeries(series, block)
-        || !cacheFile.open(QIODevice::ReadOnly | QIODevice::Unbuffered)
-        || !RideFileCacheIntegrity::readBlockValue(
-               cacheFile, block, duration, value)) {
-        return 0;
+        || duration < 0) {
+        return false;
     }
 
+    float loaded = 0.0f;
+    if (!readSourceBoundPartialCache(
+            sourceFileName,
+            cacheFileName,
+            expectedWeight,
+            nullptr,
+            [&](RideFileCacheIntegrity::
+                    PartialReader &reader) {
+                return reader.readBlockValue(
+                    block, duration, loaded);
+            })) {
+        return false;
+    }
     const double divisor =
         pow(10, RideFileCache::decimalsFor(series));
-    return value / divisor;
+    result = loaded / divisor;
+    return true;
 }
 
-static double bestForActivity(
+static bool bestForActivity(
     const QString &cacheRoot,
     const QString &completedRoot,
     const QString &plannedRoot,
     const QString &sourceActivityPath,
     RideFile::SeriesType series,
-    int duration)
+    int duration,
+    const double *expectedWeight,
+    double &result)
 {
     return bestForCache(
+        sourceActivityPath,
         RideFileCacheIntegrity::cachePathForActivity(
             cacheRoot,
             completedRoot,
             plannedRoot,
             sourceActivityPath),
         series,
-        duration);
+        duration,
+        expectedWeight,
+        result);
 }
 
-static bool readBestRow(
+static bool queueBestRow(
     RideFileCacheIntegrity::PartialReader &reader,
+    const QVector<
+        QPair<RideFile::SeriesType, int>>
+        &requests,
+    QVector<float> &rawValues,
+    QVector<bool> &requestedValues)
+{
+    rawValues.fill(
+        0.0f, requests.size());
+    requestedValues.fill(
+        false, requests.size());
+    if (!reader.isValid())
+        return false;
+    for (qsizetype index = 0;
+         index < requests.size();
+         ++index) {
+        const auto &request =
+            requests.at(index);
+        RideFileCacheIntegrity::Block block;
+        if (request.second >= 0
+            && meanMaxBlockForSeries(
+                request.first, block)
+            && reader.readBlockValue(
+                block,
+                request.second,
+                rawValues[index])) {
+            requestedValues[index] = true;
+        } else if (!reader.isValid()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void convertBestRow(
+    const QVector<
+        QPair<RideFile::SeriesType, int>>
+        &requests,
+    const QVector<float> &rawValues,
+    const QVector<bool> &requestedValues,
+    QVector<double> &values)
+{
+    values.resize(requests.size());
+    for (qsizetype index = 0;
+         index < requests.size();
+         ++index) {
+        values[index] =
+            requestedValues.at(index)
+            ? rawValues.at(index)
+                / pow(
+                    10,
+                    RideFileCache::decimalsFor(
+                        requests.at(index)
+                            .first))
+            : 0.0;
+    }
+}
+
+static bool readBestRowForSource(
+    const QString &sourceFileName,
+    const QString &cacheFileName,
+    const double *expectedWeight,
     const QVector<
         QPair<RideFile::SeriesType, int>>
         &requests,
     QVector<double> &values)
 {
     values.clear();
-    if (!reader.isValid())
+    QVector<float> rawValues;
+    QVector<bool> requestedValues;
+    if (!readSourceBoundPartialCache(
+            sourceFileName,
+            cacheFileName,
+            expectedWeight,
+            nullptr,
+            [&](RideFileCacheIntegrity::
+                    PartialReader &reader) {
+                return queueBestRow(
+                    reader,
+                    requests,
+                    rawValues,
+                    requestedValues);
+            })) {
         return false;
-    values.reserve(requests.size());
-    for (const auto &request : requests) {
-        float value = 0.0f;
-        RideFileCacheIntegrity::Block block;
-        if (request.second >= 0
-            && meanMaxBlockForSeries(
-                request.first, block)
-            && reader.readBlockValue(
-                block, request.second, value)) {
-            value /= pow(
-                10,
-                RideFileCache::decimalsFor(
-                    request.first));
-        }
-        if (!reader.isValid()) {
-            values.clear();
-            return false;
-        }
-        values.append(value);
     }
+
+    convertBestRow(
+        requests,
+        rawValues,
+        requestedValues,
+        values);
     return true;
 }
 
@@ -2564,8 +3044,23 @@ static bool readBestRow(
     QVector<double> &values)
 {
     RideFileCacheIntegrity::PartialReader reader(input);
-    return readBestRow(
-        reader, requests, values);
+    QVector<float> rawValues;
+    QVector<bool> requestedValues;
+    if (!queueBestRow(
+            reader,
+            requests,
+            rawValues,
+            requestedValues)
+        || !reader.finish()) {
+        values.clear();
+        return false;
+    }
+    convertBestRow(
+        requests,
+        rawValues,
+        requestedValues,
+        values);
+    return true;
 }
 #endif
 
@@ -2582,7 +3077,8 @@ RideFileCache::best(
                 ->activities()
                 .absolutePath(),
             filename);
-    return bestForActivity(
+    double result = 0;
+    bestForActivity(
         context->athlete->home
             ->cache()
             .absolutePath(),
@@ -2594,7 +3090,32 @@ RideFileCache::best(
             .absolutePath(),
         sourcePath,
         series,
-        duration);
+        duration,
+        nullptr,
+        result);
+    return result;
+}
+
+double
+RideFileCache::best(
+    Context *context,
+    RideItem *item,
+    RideFile::SeriesType series,
+    int duration)
+{
+    const QString sourcePath =
+        sourcePathForRideItem(context, item);
+    const double expectedWeight =
+        item ? item->getWeight() : 0.0;
+    double result = 0;
+    bestForCache(
+        sourcePath,
+        cachePathForRideItem(context, item),
+        series,
+        duration,
+        item ? &expectedWeight : nullptr,
+        result);
+    return result;
 }
 
 double
@@ -2604,47 +3125,71 @@ RideFileCache::best(
     RideFile::SeriesType series,
     int duration)
 {
-    return bestForCache(
+    double result = 0;
+    bestForCache(
+        sourcePathForRideItem(context, item),
         cachePathForRideItem(context, item),
         series,
-        duration);
+        duration,
+        nullptr,
+        result);
+    return result;
 }
 
-static int tizForCache(
+static bool tizForCache(
+    const QString &sourceFileName,
     const QString &cacheFileName,
     RideFile::SeriesType series,
-    int zone)
+    int zone,
+    const double *expectedWeight,
+    int &result)
 {
-    if (zone < 1 || zone > 10) return 0;
+    result = 0;
+    if (zone < 1 || zone > 10)
+        return false;
 
-    QFile cacheFile(cacheFileName);
     RideFileCacheIntegrity::ZoneBlock block;
-    float value = 0.0f;
-    if (!zoneBlockForSeries(series, block)
-        || !cacheFile.open(QIODevice::ReadOnly | QIODevice::Unbuffered)
-        || !RideFileCacheIntegrity::readZoneValue(
-               cacheFile, block, zone - 1, value)) {
-        return 0;
+    if (!zoneBlockForSeries(series, block))
+        return false;
+
+    float loaded = 0.0f;
+    if (!readSourceBoundPartialCache(
+            sourceFileName,
+            cacheFileName,
+            expectedWeight,
+            nullptr,
+            [&](RideFileCacheIntegrity::
+                    PartialReader &reader) {
+                return reader.readZoneValue(
+                    block, zone - 1, loaded);
+            })) {
+        return false;
     }
-    return value;
+    result = loaded;
+    return true;
 }
 
-static int tizForActivity(
+static bool tizForActivity(
     const QString &cacheRoot,
     const QString &completedRoot,
     const QString &plannedRoot,
     const QString &sourceActivityPath,
     RideFile::SeriesType series,
-    int zone)
+    int zone,
+    const double *expectedWeight,
+    int &result)
 {
     return tizForCache(
+        sourceActivityPath,
         RideFileCacheIntegrity::cachePathForActivity(
             cacheRoot,
             completedRoot,
             plannedRoot,
             sourceActivityPath),
         series,
-        zone);
+        zone,
+        expectedWeight,
+        result);
 }
 
 int
@@ -2660,7 +3205,8 @@ RideFileCache::tiz(
                 ->activities()
                 .absolutePath(),
             filename);
-    return tizForActivity(
+    int result = 0;
+    tizForActivity(
         context->athlete->home
             ->cache()
             .absolutePath(),
@@ -2672,7 +3218,32 @@ RideFileCache::tiz(
             .absolutePath(),
         sourcePath,
         series,
-        zone);
+        zone,
+        nullptr,
+        result);
+    return result;
+}
+
+int
+RideFileCache::tiz(
+    Context *context,
+    RideItem *item,
+    RideFile::SeriesType series,
+    int zone)
+{
+    const QString sourcePath =
+        sourcePathForRideItem(context, item);
+    const double expectedWeight =
+        item ? item->getWeight() : 0.0;
+    int result = 0;
+    tizForCache(
+        sourcePath,
+        cachePathForRideItem(context, item),
+        series,
+        zone,
+        item ? &expectedWeight : nullptr,
+        result);
+    return result;
 }
 
 int
@@ -2682,10 +3253,15 @@ RideFileCache::tiz(
     RideFile::SeriesType series,
     int zone)
 {
-    return tizForCache(
+    int result = 0;
+    tizForCache(
+        sourcePathForRideItem(context, item),
         cachePathForRideItem(context, item),
         series,
-        zone);
+        zone,
+        nullptr,
+        result);
+    return result;
 }
 
 #ifdef GC_RIDE_FILE_CACHE_TEST_HOOKS
@@ -2698,13 +3274,17 @@ RideFileCache::bestForActivityForTest(
     RideFile::SeriesType series,
     int duration)
 {
-    return bestForActivity(
+    double result = 0;
+    bestForActivity(
         cacheRoot,
         completedRoot,
         plannedRoot,
         sourceActivityPath,
         series,
-        duration);
+        duration,
+        nullptr,
+        result);
+    return result;
 }
 
 int
@@ -2716,13 +3296,17 @@ RideFileCache::tizForActivityForTest(
     RideFile::SeriesType series,
     int zone)
 {
-    return tizForActivity(
+    int result = 0;
+    tizForActivity(
         cacheRoot,
         completedRoot,
         plannedRoot,
         sourceActivityPath,
         series,
-        zone);
+        zone,
+        nullptr,
+        result);
+    return result;
 }
 
 bool
@@ -2735,6 +3319,23 @@ RideFileCache::readBestRowForTest(
 {
     return readBestRow(
         input, requests, values);
+}
+
+bool
+RideFileCache::readBestRowForSourceForTest(
+    const QString &sourcePath,
+    const QString &cachePath,
+    const QVector<
+        QPair<RideFile::SeriesType, int>>
+        &requests,
+    QVector<double> &values)
+{
+    return readBestRowForSource(
+        sourcePath,
+        cachePath,
+        nullptr,
+        requests,
+        values);
 }
 #endif
 
@@ -2794,19 +3395,17 @@ RideFileCache::getAllBestsFor(Context *context, QList<MetricDetail> metrics, Spe
         const QString cacheFileName =
             cachePathForRideItem(context, ride);
         if (cacheFileName.isEmpty()) continue;
-        QFile cacheFile(cacheFileName);
-
-        // open ok ?
-        if (cacheFile.open(QIODevice::ReadOnly | QIODevice::Unbuffered) == false) continue;
-
-        RideFileCacheIntegrity::PartialReader reader(
-            cacheFile);
-        if (!reader.isValid()) {
-            continue;
-        }
+        const QString sourceFileName =
+            sourcePathForRideItem(context, ride);
+        const double expectedWeight =
+            ride->getWeight();
         QVector<double> values;
-        if (!readBestRow(
-                reader, requests, values)) {
+        if (!readBestRowForSource(
+                sourceFileName,
+                cacheFileName,
+                &expectedWeight,
+                requests,
+                values)) {
             continue;
         }
 
@@ -2825,9 +3424,6 @@ RideFileCache::getAllBestsFor(Context *context, QList<MetricDetail> metrics, Spe
 
         // add to the results
         results << add;
-
-        // close CPX file
-        cacheFile.close();
     }
 
     // all done, return results
@@ -2851,37 +3447,31 @@ RideFileCache::getAllBestsFor(Context *context, RideFile::SeriesType series, int
         const QString cacheFileName =
             cachePathForRideItem(context, ride);
         if (cacheFileName.isEmpty()) continue;
-        QFile cacheFile(cacheFileName);
-
-        // open ok ?
-        if (cacheFile.open(QIODevice::ReadOnly | QIODevice::Unbuffered) == false) continue;
-
-        RideFileCacheIntegrity::PartialReader reader(
-            cacheFile);
-        if (!reader.isValid()) {
+        const QString sourceFileName =
+            sourcePathForRideItem(context, ride);
+        const double expectedWeight =
+            ride->getWeight();
+        QVector<double> values;
+        QVector<
+            QPair<RideFile::SeriesType, int>>
+            requests;
+        if (series != RideFile::none)
+            requests.append({series, duration});
+        if (!readBestRowForSource(
+                sourceFileName,
+                cacheFileName,
+                &expectedWeight,
+                requests,
+                values)) {
             continue;
         }
 
         if (series == RideFile::none) {
-
             double date= earliest.daysTo(ride->dateTime.date());
             results << date;
-
         } else {
-
-            QVector<double> values;
-            if (!readBestRow(
-                    reader,
-                    {{series, duration}},
-                    values)) {
-                continue;
-            }
             results << values.constFirst();
-
         }
-
-        // close CPX file
-        cacheFile.close();
     }
 
     // all done, return results

@@ -14,6 +14,7 @@
 
 #include <QByteArrayView>
 #include <QBuffer>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -38,6 +39,102 @@ namespace {
 
 constexpr int FixedZoneFloatCount =
     10 + 4 + 10 + 4 + 10 + 4 + 4;
+
+QByteArray bytesForValue(quint32 value)
+{
+    QByteArray bytes(4, '\0');
+    bytes[0] = static_cast<char>(value & 0xff);
+    bytes[1] = static_cast<char>((value >> 8) & 0xff);
+    bytes[2] = static_cast<char>((value >> 16) & 0xff);
+    bytes[3] = static_cast<char>((value >> 24) & 0xff);
+    return bytes;
+}
+
+QPair<QByteArray, QByteArray> crc16Collision()
+{
+    std::vector<int> firstSeen(1 << 16, -1);
+    for (quint32 value = 0; value <= (1U << 16); ++value) {
+        const QByteArray candidate = bytesForValue(value);
+        const quint16 checksum =
+            qChecksum(QByteArrayView(candidate));
+        if (firstSeen[checksum] >= 0) {
+            return {
+                bytesForValue(
+                    static_cast<quint32>(
+                        firstSeen[checksum])),
+                candidate
+            };
+        }
+        firstSeen[checksum] =
+            static_cast<int>(value);
+    }
+    return {};
+}
+
+void makeSourceOlderThanCache(
+    const QString &sourcePath,
+    const QString &cachePath)
+{
+    const QDateTime oldTime =
+        QFileInfo(cachePath).lastModified().addSecs(-60);
+    QFile source(sourcePath);
+    QVERIFY(source.open(QIODevice::ReadWrite));
+    QVERIFY(source.setFileTime(
+        oldTime,
+        QFileDevice::FileModificationTime));
+    source.close();
+    QVERIFY(
+        QFileInfo(sourcePath).lastModified()
+        <= QFileInfo(cachePath).lastModified());
+}
+
+void setModificationTime(
+    const QString &path,
+    const QDateTime &time)
+{
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::ReadWrite));
+    QVERIFY(file.setFileTime(
+        time,
+        QFileDevice::FileModificationTime));
+}
+
+QByteArray readFileBytes(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return {};
+    return file.readAll();
+}
+
+void writeFileBytes(
+    const QString &path,
+    const QByteArray &bytes)
+{
+    QFile file(path);
+    QVERIFY(file.open(
+        QIODevice::WriteOnly
+        | QIODevice::Truncate));
+    QCOMPARE(
+        file.write(bytes),
+        static_cast<qint64>(
+            bytes.size()));
+}
+
+void resealCacheBytes(QByteArray &bytes)
+{
+    QVERIFY(
+        bytes.size()
+        >= RideFileCacheIntegrity::
+            CacheFooterBytes);
+    bytes.chop(
+        RideFileCacheIntegrity::
+            CacheFooterBytes);
+    bytes.append(
+        QCryptographicHash::hash(
+            bytes,
+            QCryptographicHash::Sha256));
+}
 
 class ProvenanceTestReader final : public RideFileReader
 {
@@ -168,10 +265,10 @@ void registerProvenanceTestReader()
         &provenanceTestReader());
 }
 
-class FailOnThirdReadDevice : public QIODevice
+class FailOnFifthReadDevice : public QIODevice
 {
 public:
-    explicit FailOnThirdReadDevice(QByteArray bytes)
+    explicit FailOnFifthReadDevice(QByteArray bytes)
         : bytes_(std::move(bytes))
     {
         open(
@@ -198,13 +295,17 @@ protected:
         qint64 maximumSize) override
     {
         ++readCalls_;
-        if (readCalls_ >= 3)
+        if (readCalls_ >= 5)
             return -1;
         const qint64 available =
             static_cast<qint64>(bytes_.size())
             - position_;
         const qint64 count =
-            std::min(maximumSize, available);
+            std::min({
+                maximumSize,
+                available,
+                qint64(32)
+            });
         if (count <= 0)
             return 0;
         std::memcpy(
@@ -252,34 +353,54 @@ private:
 void writeCacheFixture(
     const QString &path,
     float best,
-    float timeInZone)
+    float timeInZone,
+    const QByteArray &sourceBytes = {},
+    double weight = 0.0)
 {
     QVERIFY(QDir().mkpath(
         QFileInfo(path).absolutePath()));
     RideFileCacheHeader header {};
     header.version = RideFileCacheVersion;
+    header.crc = qChecksum(
+        QByteArrayView(sourceBytes));
+    header.WEIGHT = weight;
     header.wattsMeanMaxCount = 2;
     QVector<float> payload(
         2 + FixedZoneFloatCount, 0.0f);
     payload[1] = best;
     payload[2] = timeInZone;
 
+    QByteArray cacheBytes(
+        reinterpret_cast<const char *>(&header),
+        sizeof(header));
+    const qint64 sourceByteSize =
+        sourceBytes.size();
+    cacheBytes.append(
+        reinterpret_cast<const char *>(
+            &sourceByteSize),
+        sizeof(sourceByteSize));
+    const QByteArray sourceSha256 =
+        QCryptographicHash::hash(
+            sourceBytes,
+            QCryptographicHash::Sha256);
+    cacheBytes.append(sourceSha256);
+    cacheBytes.append(
+        reinterpret_cast<const char *>(
+            payload.constData()),
+        static_cast<qsizetype>(
+            payload.size() * sizeof(float)));
+    cacheBytes.append(
+        QCryptographicHash::hash(
+            cacheBytes,
+            QCryptographicHash::Sha256));
+
     QFile file(path);
     QVERIFY(file.open(
         QIODevice::WriteOnly | QIODevice::Truncate));
     QCOMPARE(
-        file.write(
-            reinterpret_cast<const char *>(&header),
-            sizeof(header)),
-        static_cast<qint64>(sizeof(header)));
-    QCOMPARE(
-        file.write(
-            reinterpret_cast<const char *>(
-                payload.constData()),
-            static_cast<qint64>(
-                payload.size() * sizeof(float))),
+        file.write(cacheBytes),
         static_cast<qint64>(
-            payload.size() * sizeof(float)));
+            cacheBytes.size()));
     file.close();
 }
 
@@ -298,6 +419,18 @@ private slots:
     void plannedAndCompletedActivitiesUseSeparateCaches();
     void batchReadDiscardsRowAfterMidReadFailure();
     void crcReadFailureSkipsPersistence();
+    void restoredMtimeSourceChangeRejectsCache();
+    void missingSourceRejectsCache();
+    void crc16CollisionRejectsCache();
+    void matchingSourceAcceptedRegardlessOfMtime();
+    void sourceChangeDuringReadRejectsResults();
+    void failedReadConsumesSourceMutationHook();
+    void sourceFingerprintReadsAreNotAmplified();
+    void corruptPayloadRejectsFastReaders();
+    void sourceFingerprintMismatchRejectsFastReaders();
+    void apiReadersRejectChangedSource();
+    void batchReadersRejectChangedSource();
+    void aggregateBindingsRejectChangedSource();
     void factoryCapturesSourceProvenance();
     void factoryLeavesUnauditedReaderUnprovenanced();
     void factoryLeavesPathDependentReaderUnprovenanced();
@@ -500,6 +633,37 @@ TestRideFileCacheRefresh::plannedAndCompletedActivitiesUseSeparateCaches()
             RideFile::watts,
             1),
         22);
+
+    const QString completedCache =
+        QDir(cacheRoot).filePath(
+            QStringLiteral(
+                "2026_07_29_12_00_00.cpx"));
+    QVERIFY(completedFile.open(QIODevice::WriteOnly));
+    QCOMPARE(
+        completedFile.write(
+            QByteArrayLiteral("changed")),
+        qint64(7));
+    completedFile.close();
+    makeSourceOlderThanCache(
+        completedSource, completedCache);
+    QCOMPARE(
+        RideFileCache::bestForActivityForTest(
+            cacheRoot,
+            completedRoot,
+            plannedRoot,
+            completedSource,
+            RideFile::watts,
+            1),
+        0.0);
+    QCOMPARE(
+        RideFileCache::tizForActivityForTest(
+            cacheRoot,
+            completedRoot,
+            plannedRoot,
+            completedSource,
+            RideFile::watts,
+            1),
+        0);
 }
 
 void
@@ -515,12 +679,24 @@ TestRideFileCacheRefresh::batchReadDiscardsRowAfterMidReadFailure()
     QByteArray bytes(
         reinterpret_cast<const char *>(&header),
         sizeof(header));
+    const qint64 sourceByteSize = 0;
+    bytes.append(
+        reinterpret_cast<const char *>(
+            &sourceByteSize),
+        sizeof(sourceByteSize));
+    bytes.append(
+        RideFileCRC::Sha256Size,
+        '\0');
     bytes.append(
         reinterpret_cast<const char *>(
             payload.constData()),
         static_cast<qsizetype>(
             payload.size() * sizeof(float)));
-    FailOnThirdReadDevice input(std::move(bytes));
+    bytes.append(
+        QCryptographicHash::hash(
+            bytes,
+            QCryptographicHash::Sha256));
+    FailOnFifthReadDevice input(std::move(bytes));
     const QVector<
         QPair<RideFile::SeriesType, int>>
         requests = {
@@ -567,6 +743,679 @@ TestRideFileCacheRefresh::crcReadFailureSkipsPersistence()
     QCOMPARE(writeCalls, 0);
     QCOMPARE(reportCalls, 0);
     QVERIFY(!cache.incomplete);
+}
+
+void
+TestRideFileCacheRefresh::
+restoredMtimeSourceChangeRejectsCache()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath =
+        directory.filePath(QStringLiteral("source.fit"));
+    const QString cachePath =
+        directory.filePath(QStringLiteral("cache/source.cpx"));
+    const QByteArray original =
+        QByteArrayLiteral("source-a");
+    const QByteArray replacement =
+        QByteArrayLiteral("source-b");
+    QCOMPARE(original.size(), replacement.size());
+
+    QFile source(sourcePath);
+    QVERIFY(source.open(QIODevice::WriteOnly));
+    QCOMPARE(source.write(original), qint64(original.size()));
+    source.close();
+
+    constexpr double Weight = 75.0;
+    writeCacheFixture(
+        cachePath, 100.0f, 30.0f,
+        original, Weight);
+    QVERIFY(RideFileCache::
+        cacheIsCurrentForSourceForTest(
+            sourcePath, cachePath, Weight));
+
+    QVERIFY(source.open(
+        QIODevice::WriteOnly
+        | QIODevice::Truncate));
+    QCOMPARE(
+        source.write(replacement),
+        qint64(replacement.size()));
+    source.close();
+
+    const QDateTime cacheTime =
+        QFileInfo(cachePath).lastModified();
+    setModificationTime(
+        sourcePath,
+        cacheTime.addSecs(60));
+    QVERIFY(!RideFileCache::
+        cacheIsCurrentForSourceForTest(
+            sourcePath, cachePath, Weight));
+    setModificationTime(
+        sourcePath, cacheTime);
+    QVERIFY(!RideFileCache::
+        cacheIsCurrentForSourceForTest(
+            sourcePath, cachePath, Weight));
+    makeSourceOlderThanCache(
+        sourcePath, cachePath);
+
+    QVERIFY(!RideFileCache::
+        cacheIsCurrentForSourceForTest(
+            sourcePath, cachePath, Weight));
+}
+
+void
+TestRideFileCacheRefresh::missingSourceRejectsCache()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath =
+        directory.filePath(QStringLiteral("missing.fit"));
+    const QString cachePath =
+        directory.filePath(QStringLiteral("cache/missing.cpx"));
+    constexpr double Weight = 75.0;
+    writeCacheFixture(
+        cachePath, 100.0f, 30.0f,
+        QByteArrayLiteral("unavailable"),
+        Weight);
+
+    QVERIFY(!QFileInfo::exists(sourcePath));
+    QVERIFY(!RideFileCache::
+        cacheIsCurrentForSourceForTest(
+            sourcePath, cachePath, Weight));
+}
+
+void
+TestRideFileCacheRefresh::crc16CollisionRejectsCache()
+{
+    const auto collision = crc16Collision();
+    const QByteArray &original = collision.first;
+    const QByteArray &replacement = collision.second;
+    QVERIFY(!original.isEmpty());
+    QVERIFY(original != replacement);
+    QCOMPARE(original.size(), replacement.size());
+    QCOMPARE(
+        qChecksum(QByteArrayView(original)),
+        qChecksum(QByteArrayView(replacement)));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath =
+        directory.filePath(QStringLiteral("source.fit"));
+    const QString cachePath =
+        directory.filePath(QStringLiteral("cache/source.cpx"));
+    QFile source(sourcePath);
+    QVERIFY(source.open(QIODevice::WriteOnly));
+    QCOMPARE(
+        source.write(original),
+        qint64(original.size()));
+    source.close();
+
+    constexpr double Weight = 75.0;
+    writeCacheFixture(
+        cachePath, 100.0f, 30.0f,
+        original, Weight);
+
+    QVERIFY(source.open(
+        QIODevice::WriteOnly
+        | QIODevice::Truncate));
+    QCOMPARE(
+        source.write(replacement),
+        qint64(replacement.size()));
+    source.close();
+    makeSourceOlderThanCache(
+        sourcePath, cachePath);
+
+    QVERIFY(!RideFileCache::
+        cacheIsCurrentForSourceForTest(
+            sourcePath, cachePath, Weight));
+}
+
+void
+TestRideFileCacheRefresh::
+matchingSourceAcceptedRegardlessOfMtime()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath =
+        directory.filePath(
+            QStringLiteral("source.fit"));
+    const QString cachePath =
+        directory.filePath(
+            QStringLiteral("cache/source.cpx"));
+    const QByteArray sourceBytes =
+        QByteArrayLiteral("source-a");
+    writeFileBytes(sourcePath, sourceBytes);
+    constexpr double Weight = 75.0;
+    writeCacheFixture(
+        cachePath,
+        100.0f,
+        30.0f,
+        sourceBytes,
+        Weight);
+
+    const QDateTime baseline =
+        QDateTime::currentDateTimeUtc()
+            .addSecs(-120);
+    setModificationTime(
+        cachePath, baseline);
+    setModificationTime(
+        sourcePath,
+        baseline.addSecs(60));
+    QVERIFY(RideFileCache::
+        cacheIsCurrentForSourceForTest(
+            sourcePath, cachePath, Weight));
+
+    setModificationTime(
+        sourcePath, baseline);
+    QVERIFY(RideFileCache::
+        cacheIsCurrentForSourceForTest(
+            sourcePath, cachePath, Weight));
+
+    setModificationTime(
+        sourcePath,
+        baseline.addSecs(-60));
+    QVERIFY(RideFileCache::
+        cacheIsCurrentForSourceForTest(
+            sourcePath, cachePath, Weight));
+    QVERIFY(!RideFileCache::
+        cacheIsCurrentForSourceForTest(
+            sourcePath,
+            cachePath,
+            Weight + 1.0));
+}
+
+void
+TestRideFileCacheRefresh::
+sourceChangeDuringReadRejectsResults()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString cacheRoot =
+        directory.filePath(
+            QStringLiteral("cache"));
+    const QString completedRoot =
+        directory.filePath(
+            QStringLiteral("activities"));
+    const QString plannedRoot =
+        directory.filePath(
+            QStringLiteral("planned"));
+    QVERIFY(QDir().mkpath(cacheRoot));
+    QVERIFY(QDir().mkpath(completedRoot));
+    QVERIFY(QDir().mkpath(plannedRoot));
+    const QString fileName =
+        QStringLiteral(
+            "2026_07_29_12_00_00.fit");
+    const QString sourcePath =
+        QDir(completedRoot).filePath(
+            fileName);
+    const QString cachePath =
+        QDir(cacheRoot).filePath(
+            QStringLiteral(
+                "2026_07_29_12_00_00.cpx"));
+    const QByteArray original =
+        QByteArrayLiteral("source-a");
+    const QByteArray replacement =
+        QByteArrayLiteral("source-b");
+    writeFileBytes(sourcePath, original);
+    writeCacheFixture(
+        cachePath,
+        210.0f,
+        11.0f,
+        original);
+
+    RideFileCache::
+        setSourceBoundReadHookForTest(
+            [sourcePath, replacement]() {
+                writeFileBytes(
+                    sourcePath,
+                    replacement);
+            });
+    QCOMPARE(
+        RideFileCache::bestForActivityForTest(
+            cacheRoot,
+            completedRoot,
+            plannedRoot,
+            sourcePath,
+            RideFile::watts,
+            1),
+        0.0);
+    QCOMPARE(
+        readFileBytes(sourcePath),
+        replacement);
+}
+
+void
+TestRideFileCacheRefresh::
+failedReadConsumesSourceMutationHook()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString cacheRoot =
+        directory.filePath(
+            QStringLiteral("cache"));
+    const QString completedRoot =
+        directory.filePath(
+            QStringLiteral("activities"));
+    const QString plannedRoot =
+        directory.filePath(
+            QStringLiteral("planned"));
+    QVERIFY(QDir().mkpath(cacheRoot));
+    QVERIFY(QDir().mkpath(completedRoot));
+    QVERIFY(QDir().mkpath(plannedRoot));
+    const QString sourcePath =
+        QDir(completedRoot).filePath(
+            QStringLiteral(
+                "2026_07_29_12_00_00.fit"));
+    const QString missingPath =
+        QDir(completedRoot).filePath(
+            QStringLiteral(
+                "2026_07_28_12_00_00.fit"));
+    const QString cachePath =
+        QDir(cacheRoot).filePath(
+            QStringLiteral(
+                "2026_07_29_12_00_00.cpx"));
+    const QByteArray sourceBytes =
+        QByteArrayLiteral("source-a");
+    writeFileBytes(
+        sourcePath, sourceBytes);
+    writeCacheFixture(
+        cachePath,
+        210.0f,
+        11.0f,
+        sourceBytes);
+
+    bool hookRan = false;
+    RideFileCache::
+        setSourceBoundReadHookForTest(
+            [&hookRan]() {
+                hookRan = true;
+            });
+    QCOMPARE(
+        RideFileCache::bestForActivityForTest(
+            cacheRoot,
+            completedRoot,
+            plannedRoot,
+            missingPath,
+            RideFile::watts,
+            1),
+        0.0);
+    QVERIFY(!hookRan);
+
+    QCOMPARE(
+        RideFileCache::bestForActivityForTest(
+            cacheRoot,
+            completedRoot,
+            plannedRoot,
+            sourcePath,
+            RideFile::watts,
+            1),
+        210.0);
+    QVERIFY(!hookRan);
+}
+
+void
+TestRideFileCacheRefresh::
+sourceFingerprintReadsAreNotAmplified()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString cacheRoot =
+        directory.filePath(
+            QStringLiteral("cache"));
+    const QString completedRoot =
+        directory.filePath(
+            QStringLiteral("activities"));
+    const QString plannedRoot =
+        directory.filePath(
+            QStringLiteral("planned"));
+    QVERIFY(QDir().mkpath(cacheRoot));
+    QVERIFY(QDir().mkpath(completedRoot));
+    QVERIFY(QDir().mkpath(plannedRoot));
+    const QString sourcePath =
+        QDir(completedRoot).filePath(
+            QStringLiteral(
+                "2026_07_29_12_00_00.fit"));
+    const QString cachePath =
+        QDir(cacheRoot).filePath(
+            QStringLiteral(
+                "2026_07_29_12_00_00.cpx"));
+    const QByteArray sourceBytes =
+        QByteArrayLiteral("source-a");
+    writeFileBytes(
+        sourcePath, sourceBytes);
+
+    RideFileCache::
+        resetSourceFingerprintReadCountForTest();
+    QCOMPARE(
+        RideFileCache::bestForActivityForTest(
+            cacheRoot,
+            completedRoot,
+            plannedRoot,
+            sourcePath,
+            RideFile::watts,
+            1),
+        0.0);
+    QCOMPARE(
+        RideFileCache::
+            sourceFingerprintReadCountForTest(),
+        0);
+
+    writeCacheFixture(
+        cachePath,
+        210.0f,
+        11.0f,
+        sourceBytes);
+    RideFileCache::
+        resetSourceFingerprintReadCountForTest();
+    QCOMPARE(
+        RideFileCache::bestForActivityForTest(
+            cacheRoot,
+            completedRoot,
+            plannedRoot,
+            sourcePath,
+            RideFile::watts,
+            1),
+        210.0);
+    QCOMPARE(
+        RideFileCache::
+            sourceFingerprintReadCountForTest(),
+        1);
+}
+
+void
+TestRideFileCacheRefresh::
+corruptPayloadRejectsFastReaders()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString cacheRoot =
+        directory.filePath(
+            QStringLiteral("cache"));
+    const QString completedRoot =
+        directory.filePath(
+            QStringLiteral("activities"));
+    const QString plannedRoot =
+        directory.filePath(
+            QStringLiteral("planned"));
+    QVERIFY(QDir().mkpath(cacheRoot));
+    QVERIFY(QDir().mkpath(completedRoot));
+    QVERIFY(QDir().mkpath(plannedRoot));
+    const QString sourcePath =
+        QDir(completedRoot).filePath(
+            QStringLiteral(
+                "2026_07_29_12_00_00.fit"));
+    const QString cachePath =
+        QDir(cacheRoot).filePath(
+            QStringLiteral(
+                "2026_07_29_12_00_00.cpx"));
+    const QByteArray sourceBytes =
+        QByteArrayLiteral("source-a");
+    writeFileBytes(
+        sourcePath, sourceBytes);
+    writeCacheFixture(
+        cachePath,
+        210.0f,
+        11.0f,
+        sourceBytes);
+    QCOMPARE(
+        RideFileCache::bestForActivityForTest(
+            cacheRoot,
+            completedRoot,
+            plannedRoot,
+            sourcePath,
+            RideFile::watts,
+            1),
+        210.0);
+
+    QByteArray cacheBytes =
+        readFileBytes(cachePath);
+    const qsizetype valueOffset =
+        RideFileCacheIntegrity::
+            CachePreambleBytes
+        + static_cast<qsizetype>(
+            sizeof(float));
+    QVERIFY(valueOffset < cacheBytes.size());
+    cacheBytes[valueOffset] ^= 0x01;
+    writeFileBytes(
+        cachePath, cacheBytes);
+
+    QCOMPARE(
+        RideFileCache::bestForActivityForTest(
+            cacheRoot,
+            completedRoot,
+            plannedRoot,
+            sourcePath,
+            RideFile::watts,
+            1),
+        0.0);
+    QCOMPARE(
+        RideFileCache::tizForActivityForTest(
+            cacheRoot,
+            completedRoot,
+            plannedRoot,
+            sourcePath,
+            RideFile::watts,
+            1),
+        0);
+}
+
+void
+TestRideFileCacheRefresh::
+sourceFingerprintMismatchRejectsFastReaders()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString cacheRoot =
+        directory.filePath(
+            QStringLiteral("cache"));
+    const QString completedRoot =
+        directory.filePath(
+            QStringLiteral("activities"));
+    const QString plannedRoot =
+        directory.filePath(
+            QStringLiteral("planned"));
+    QVERIFY(QDir().mkpath(cacheRoot));
+    QVERIFY(QDir().mkpath(completedRoot));
+    QVERIFY(QDir().mkpath(plannedRoot));
+    const QString sourcePath =
+        QDir(completedRoot).filePath(
+            QStringLiteral(
+                "2026_07_29_12_00_00.fit"));
+    const QString cachePath =
+        QDir(cacheRoot).filePath(
+            QStringLiteral(
+                "2026_07_29_12_00_00.cpx"));
+    const QByteArray sourceBytes =
+        QByteArrayLiteral("source-a");
+    writeFileBytes(
+        sourcePath, sourceBytes);
+    writeCacheFixture(
+        cachePath,
+        210.0f,
+        11.0f,
+        sourceBytes);
+
+    QByteArray cacheBytes =
+        readFileBytes(cachePath);
+    const qsizetype sourceDigestOffset =
+        sizeof(RideFileCacheHeader)
+        + sizeof(qint64);
+    QVERIFY(
+        sourceDigestOffset
+        < cacheBytes.size());
+    cacheBytes[sourceDigestOffset] ^=
+        0x01;
+    resealCacheBytes(cacheBytes);
+    writeFileBytes(
+        cachePath, cacheBytes);
+
+    QCOMPARE(
+        RideFileCache::bestForActivityForTest(
+            cacheRoot,
+            completedRoot,
+            plannedRoot,
+            sourcePath,
+            RideFile::watts,
+            1),
+        0.0);
+}
+
+void
+TestRideFileCacheRefresh::
+apiReadersRejectChangedSource()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString activityDir =
+        directory.filePath(
+            QStringLiteral("activities"));
+    const QString cacheDir =
+        directory.filePath(
+            QStringLiteral("cache"));
+    QVERIFY(QDir().mkpath(activityDir));
+    QVERIFY(QDir().mkpath(cacheDir));
+    const QString sourcePath =
+        QDir(activityDir).filePath(
+            QStringLiteral(
+                "2026_07_29_12_00_00.fit"));
+    const QString cachePath =
+        QDir(cacheDir).filePath(
+            QStringLiteral(
+                "2026_07_29_12_00_00.cpx"));
+    const QByteArray original =
+        QByteArrayLiteral("source-a");
+    const QByteArray replacement =
+        QByteArrayLiteral("source-b");
+    writeFileBytes(sourcePath, original);
+    writeCacheFixture(
+        cachePath,
+        210.0f,
+        11.0f,
+        original);
+
+    const QVector<float> single =
+        RideFileCache::meanMaxFor(
+            sourcePath,
+            cachePath,
+            RideFile::watts);
+    QCOMPARE(single.size(), 2);
+    QCOMPARE(single.at(1), 210.0f);
+    const QVector<float> range =
+        RideFileCache::meanMaxFor(
+            activityDir,
+            cacheDir,
+            RideFile::watts,
+            QDate(2026, 7, 29),
+            QDate(2026, 7, 29));
+    QCOMPARE(range.size(), 2);
+    QCOMPARE(range.at(1), 210.0f);
+
+    writeFileBytes(
+        sourcePath, replacement);
+    makeSourceOlderThanCache(
+        sourcePath, cachePath);
+    QVERIFY(
+        RideFileCache::meanMaxFor(
+            sourcePath,
+            cachePath,
+            RideFile::watts)
+            .isEmpty());
+    QVERIFY(
+        RideFileCache::meanMaxFor(
+            activityDir,
+            cacheDir,
+            RideFile::watts,
+            QDate(2026, 7, 29),
+            QDate(2026, 7, 29))
+            .isEmpty());
+}
+
+void
+TestRideFileCacheRefresh::
+batchReadersRejectChangedSource()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath =
+        directory.filePath(
+            QStringLiteral("source.fit"));
+    const QString cachePath =
+        directory.filePath(
+            QStringLiteral("cache/source.cpx"));
+    const QByteArray original =
+        QByteArrayLiteral("source-a");
+    const QByteArray replacement =
+        QByteArrayLiteral("source-b");
+    writeFileBytes(sourcePath, original);
+    writeCacheFixture(
+        cachePath,
+        210.0f,
+        11.0f,
+        original);
+    const QVector<
+        QPair<RideFile::SeriesType, int>>
+        requests = {
+            {RideFile::watts, 1}
+        };
+    QVector<double> values;
+    QVERIFY(
+        RideFileCache::
+            readBestRowForSourceForTest(
+                sourcePath,
+                cachePath,
+                requests,
+                values));
+    QCOMPARE(values, QVector<double>({210.0}));
+
+    writeFileBytes(
+        sourcePath, replacement);
+    values = {999.0};
+    QVERIFY(
+        !RideFileCache::
+            readBestRowForSourceForTest(
+                sourcePath,
+                cachePath,
+                requests,
+                values));
+    QVERIFY(values.isEmpty());
+}
+
+void
+TestRideFileCacheRefresh::
+aggregateBindingsRejectChangedSource()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath =
+        directory.filePath(
+            QStringLiteral("source.fit"));
+    writeFileBytes(
+        sourcePath,
+        QByteArrayLiteral("source-a"));
+    RideFileCRC::ContentFingerprint
+        fingerprint;
+    QVERIFY(
+        RideFileCRC::computeFileFingerprint(
+            sourcePath, fingerprint));
+    const QVector<
+        QPair<
+            QString,
+            RideFileCRC::ContentFingerprint>>
+        bindings = {
+            {sourcePath, fingerprint}
+        };
+    QVERIFY(
+        RideFileCache::
+            sourceBindingsAreCurrentForTest(
+                bindings));
+
+    writeFileBytes(
+        sourcePath,
+        QByteArrayLiteral("source-b"));
+    QVERIFY(
+        !RideFileCache::
+            sourceBindingsAreCurrentForTest(
+                bindings));
 }
 
 void
@@ -814,6 +1663,19 @@ savedRideRebindsAndPersistsAtomically()
         data.header.crc,
         static_cast<unsigned int>(
             qChecksum(QByteArrayView(sourceBytes))));
+    QCOMPARE(
+        data.sourceFingerprint.byteSize,
+        static_cast<qint64>(
+            sourceBytes.size()));
+    QCOMPARE(
+        data.sourceFingerprint.sha256,
+        QCryptographicHash::hash(
+            sourceBytes,
+            QCryptographicHash::Sha256));
+    QCOMPARE(
+        data.sourceFingerprint.legacyCrc16,
+        qChecksum(
+            QByteArrayView(sourceBytes)));
 }
 
 void

@@ -6,9 +6,11 @@ CONFIG += console testcase c++17 release
 CONFIG -= debug
 
 SOURCES = testRideFileCacheIntegrity.cpp \
+          ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCacheIntegrity.cpp
 
-HEADERS = ../../../src/FileIO/RideFileCacheIntegrity.h
+HEADERS = ../../../src/FileIO/RideFileCRC.h \
+          ../../../src/FileIO/RideFileCacheIntegrity.h
 
 INCLUDEPATH += ../../../src/FileIO
 
