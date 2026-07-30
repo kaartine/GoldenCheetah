@@ -2388,21 +2388,48 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DATA-012: CPX CRC is not bound to the in-memory RideFile
 
-- Status: OPEN
-- Code: `src/FileIO/RideFileCache.cpp:905`,
-  `src/Core/RideItem.cpp:261`
+- Status: FIXED
+- Code: `src/FileIO/RideFileCRC.cpp`, `src/FileIO/RideFile.cpp`,
+  `src/FileIO/RideFileCache.cpp`,
+  `src/FileIO/RideFileCacheIntegrity.cpp`, `src/Core/RideItem.cpp`, and
+  the built-in `RideFileReader` declarations
 - Impact: CPX persistence hashes the activity pathname but computes its payload
   from an independently held `RideFile`. A dirty or otherwise unprovenanced
   in-memory ride can therefore be persisted under the unchanged on-disk file's
   CRC. A later reload can accept derived arrays that do not describe the source
   activity named by the cache header.
-- Test: Create source A and a modified in-memory ride B. B must retain usable
-  in-memory arrays but must not invoke the CPX writer. Add a clean,
-  source-provenanced control and a source-changed-after-parse case.
-- Fix direction: Attach immutable source provenance to a parsed ride, invalidate
-  it on modification, and persist CPX only while a fresh stable source
-  fingerprint still matches that provenance. Dirty and unprovenanced rides must
-  remain memory-only.
+- Test-first evidence: The original refresh path attempted persistence for a
+  raw point mutation whose derived payload no longer matched the source.
+  Additional RED cases exposed unprovenanced save handling, source replacement
+  immediately before commit, blocking FIFO opens, a source rewrite after
+  staging, unaudited readers receiving staged paths, and a zero-W-prime
+  distribution writing a nonzero bin.
+- Resolution: Stable regular files are copied into a private stage while
+  computing a size-bound SHA-256 fingerprint and the legacy CRC16. Native file
+  identity and timestamps are checked around both source reads; staged bytes
+  are independently rehashed before and after parsing. Readers now fail closed
+  to their original path unless explicitly audited as single-file readers, so
+  CSV/Polar sidecar inputs and unknown readers remain unprovenanced.
+  Parsed rides retain the strong source provenance only after postprocessing,
+  invalidate it on modification, and rebind it through the same reader policy
+  after save or revert. CPX refresh still computes usable in-memory results,
+  but persistence additionally requires matching provenance, an independent
+  fresh parse with byte-identical serialized payload, and a final source check
+  after the temporary CPX is flushed and immediately before atomic commit.
+- Verification: The 41-case fingerprint/staging suite, 35-case CPX integrity
+  suite, and 22-case refresh/integration suite pass normally, under strict
+  ASan/UBSan/LSan with leak detection, and under ThreadSanitizer without
+  suppressions. The MinGW header-order syntax test, complete Qt 6.8.3 release
+  build, and 92-suite matrix also pass; the matrix reports 3,411 passed, zero
+  failed or blacklisted, and 12 expected Linux skips.
+- Residual: An external source can still change after the final validator and
+  before `QSaveFile` renames the CPX, and cache reads still trust legacy
+  freshness rules; `DATA-011` tracks persisting and verifying a strong digest
+  in the CPX format. Zone/configuration changes are not part of the same
+  transaction. CSV/Polar sidecar rides deliberately forgo persistent CPX, and
+  verified refresh performs a second parse/compute. Arbitrary concurrent
+  mutation of one `RideFile` remains an application-level data race even
+  though unmatched payloads are no longer persisted.
 
 ## Medium
 
@@ -4842,10 +4869,10 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The complete containerized release matrix through `PARSE-008` passes:
+The complete containerized release matrix through `DATA-012` passes:
 
 - 92 QtTest suites
-- 3,385 passed
+- 3,411 passed
 - 0 failed or blacklisted
 - 12 expected platform-only skips on Linux
 - Qt 6.8.3 on Ubuntu 24.04
@@ -4857,7 +4884,10 @@ the rollback image, and the local sidecar records the packaged commit and
 SHA-256 without making repository documentation depend on local artifact
 state.
 
-`DUR-006` additionally passes its 29-case focused suite under strict
+`DATA-012` additionally passes 98 focused cases under strict
+ASan/UBSan/LSan with leak detection and ThreadSanitizer without suppressions,
+plus its MinGW header-order check. `DUR-006` additionally passes its 29-case
+focused suite under strict
 ASan/UBSan/LSan with leak detection and ThreadSanitizer without suppressions,
 plus 20 consecutive normal runs. `PARSE-008` additionally passes its 32-case
 focused suite under both sanitizer configurations and its MinGW header-order

@@ -106,6 +106,7 @@ struct RideFileReader
     virtual ~RideFileReader() {}
     virtual RideFile *openRideFile(QFile &, QStringList &,
                                    QList<RideFile *> * = 0) const = 0;
+    virtual bool requiresOriginalSourcePath() const { return true; }
     virtual bool hasWrite() const { return false; }
     virtual bool writeRideFile(Context *, const RideFile *, QFile &) const
     {

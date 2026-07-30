@@ -40,6 +40,7 @@
 #include <QMapIterator>
 #include <QByteArray>
 #include <QDir>
+#include <QFileInfo>
 
 // used to create a temporary ride item that is not in the cache and just
 // used to enable using the same calling semantics in things like the
@@ -399,6 +400,7 @@ RideItem::modified()
 void
 RideItem::saved()
 {
+    rebindSourceProvenance();
     setDirty(false);
     isstale=true;
     refresh(); // update !
@@ -408,14 +410,29 @@ RideItem::saved()
 void
 RideItem::reverted()
 {
+    rebindSourceProvenance();
     setDirty(false);
     isstale=true;
     refresh();
 }
 
 void
+RideItem::rebindSourceProvenance()
+{
+    if (!ride_)
+        return;
+
+    const QString sourcePath =
+        RideFileCacheIntegrity::activitySourcePath(
+            path, fileName);
+    ride_->rebindSourceProvenance(sourcePath);
+}
+
+void
 RideItem::setDirty(bool val)
 {
+    if (val && ride_)
+        ride_->invalidateSourceProvenance();
     if (isdirty == val) return; // np change
 
     isdirty = val;

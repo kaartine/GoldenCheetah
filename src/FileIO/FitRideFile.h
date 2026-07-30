@@ -25,6 +25,7 @@
 struct FitFileReader : public RideFileReader {
 
     virtual RideFile *openRideFile(QFile &file, QStringList &errors, QList<RideFile*> *rides = 0) const;
+    bool requiresOriginalSourcePath() const override { return false; }
 
     QByteArray toByteArray(Context *context, const RideFile *ride, bool withAlt, bool withWatts, bool withHr, bool withCad) const;
     bool writeRideFile(Context *context, const RideFile *ride, QFile &file) const;
@@ -118,4 +119,3 @@ struct FITmanufacturer { int manu; QString name; };
 struct FITmessage { int num; QString desc; };
 
 #endif // _FitRideFile_h
-

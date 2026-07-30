@@ -27,6 +27,7 @@
 #include "LTMSettings.h" // getAllBestsFor needs this
 
 #include <cmath> // for pow()
+#include <QBuffer>
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
@@ -51,7 +52,10 @@ static const double wbalDelta  = 1;
 
 // cache from ride
 RideFileCache::RideFileCache(Context *context, QString fileName, double weight, RideFile *passedride, bool check, bool refresh) :
-               incomplete(false), context(context), rideFileName(fileName), ride(passedride)
+               crc(0), incomplete(false), context(context),
+               rideFileName(fileName), ride(passedride),
+               CP(0), WPRIME(0), LTHR(0), CV(0.0), WEIGHT(0.0),
+               filter(false), onhome(false)
 {
     // resize all the arrays to zero
     wattsMeanMax.resize(0);
@@ -514,7 +518,10 @@ QVector<float> RideFileCache::meanMaxFor(QString cacheDir, RideFile::SeriesType 
 }
 
 RideFileCache::RideFileCache(RideFile *ride) :
-               incomplete(true), context(ride->context), rideFileName(""), ride(ride)
+               crc(0), incomplete(true), context(ride->context),
+               rideFileName(""), ride(ride),
+               CP(0), WPRIME(0), LTHR(0), CV(0.0), WEIGHT(0.0),
+               filter(false), onhome(false)
 {
     // resize all the arrays to zero
     wattsMeanMax.resize(0);
@@ -568,7 +575,7 @@ RideFileCache::RideFileCache(
     RideFile *ride,
     SkipInitialComputeForTest)
     : incomplete(true)
-    , context(nullptr)
+    , context(ride ? ride->context : nullptr)
     , rideFileName()
     , cacheFileName()
     , ride(ride)
@@ -576,7 +583,7 @@ RideFileCache::RideFileCache(
     , WPRIME(0)
     , LTHR(0)
     , CV(0.0)
-    , WEIGHT(0.0)
+    , WEIGHT(ride ? ride->getWeight() : 0.0)
     , filter(false)
     , onhome(false)
 {
@@ -608,6 +615,35 @@ RideFileCache::refreshCacheForTest(
     const std::function<bool(
         const QString &,
         const RideFileCacheIntegrity::CacheWriteOperation &,
+        QString *)> &writeCache,
+    const std::function<void(
+        const QString &,
+        const QString &)> &reportError)
+{
+    rideFileName = sourcePath;
+    cacheFileName = cachePath;
+    const PersistenceOperations operations {
+        [writeCache](
+                const QString &path,
+                const RideFileCacheIntegrity::CacheWriteOperation &write,
+                const RideFileCacheIntegrity::
+                    CachePreCommitValidator &,
+                QString *error) {
+            return writeCache(path, write, error);
+        },
+        reportError
+    };
+    return refreshCache(&operations);
+}
+
+bool
+RideFileCache::refreshCacheWithValidatorForTest(
+    const QString &sourcePath,
+    const QString &cachePath,
+    const std::function<bool(
+        const QString &,
+        const RideFileCacheIntegrity::CacheWriteOperation &,
+        const RideFileCacheIntegrity::CachePreCommitValidator &,
         QString *)> &writeCache,
     const std::function<void(
         const QString &,
@@ -902,57 +938,135 @@ bool
 RideFileCache::refreshCache(
     const PersistenceOperations *operations)
 {
-    unsigned int sourceCrc = 0;
-    const bool sourceCrcAvailable =
-        RideFile::computeFileCRC(
-            rideFileName, sourceCrc);
-
     // Recompute before persistence so a cache write failure does not discard
     // otherwise valid in-memory results.
+    if (ride)
+        ride->recalculateDerivedSeries();
     if (!compute())
         return false;
-    if (!sourceCrcAvailable)
+
+    RideFile::SourceFingerprint sourceFingerprint;
+    if (!ride
+        || !RideFile::captureSourceFingerprint(
+            rideFileName, sourceFingerprint)
+        || !ride->sourceProvenanceMatches(
+            sourceFingerprint)) {
+        return false;
+    }
+
+    // Publish only data derived from this stable source fingerprint.
+    crc = sourceFingerprint.crc;
+
+    const auto serializeSnapshot =
+        [](RideFileCache &cache, QByteArray &payload) {
+            payload.clear();
+            QBuffer output(&payload);
+            if (!output.open(QIODevice::WriteOnly))
+                return false;
+            QDataStream stream(&output);
+            cache.serialize(&stream);
+            return stream.status() == QDataStream::Ok;
+        };
+
+    QByteArray payload;
+    if (!serializeSnapshot(*this, payload))
         return false;
 
-    // Publish only a checksum captured from a stable source snapshot.
-    crc = sourceCrc;
+    QStringList verificationErrors;
+    QFile verificationSource(rideFileName);
+    std::unique_ptr<RideFile> verifiedRide(
+        RideFileFactory::instance().openRideFile(
+            context,
+            verificationSource,
+            verificationErrors));
+    if (!verifiedRide
+        || !verifiedRide->sourceProvenanceMatches(
+            sourceFingerprint)) {
+        return false;
+    }
+
+    RideFileCache verifiedCache(verifiedRide.get());
+    verifiedCache.crc = sourceFingerprint.crc;
+    QByteArray verifiedPayload;
+    if (!serializeSnapshot(
+            verifiedCache, verifiedPayload)
+        || payload != verifiedPayload) {
+        return false;
+    }
 
     QDir().mkpath(QFileInfo(cacheFileName).absolutePath());
     QString writeError;
     const RideFileCacheIntegrity::CacheWriteOperation serializeCache =
-        [this](QIODevice &output, QString *error) {
-            QDataStream outFile(&output);
-            serialize(&outFile);
-            if (outFile.status() == QDataStream::Ok)
-                return true;
-            if (error)
-                *error = QStringLiteral("Cannot serialize CPX cache");
-            return false;
+        [&payload](QIODevice &output, QString *error) {
+            qint64 written = 0;
+            while (written < payload.size()) {
+                const qint64 count = output.write(
+                    payload.constData() + written,
+                    payload.size() - written);
+                if (count <= 0) {
+                    if (error) {
+                        *error = QStringLiteral(
+                            "Cannot serialize CPX cache");
+                    }
+                    return false;
+                }
+                written += count;
+            }
+            return true;
         };
+    bool sourceValidationRejected = false;
+    const RideFileCacheIntegrity::CachePreCommitValidator
+        validateBeforeCommit =
+            [this,
+             sourceFingerprint,
+             &sourceValidationRejected](QString *error) {
+                RideFile::SourceFingerprint current;
+                const bool valid =
+                    ride
+                    && ride->sourceProvenanceMatches(
+                        sourceFingerprint)
+                    && RideFile::captureSourceFingerprint(
+                        rideFileName, current)
+                    && current == sourceFingerprint;
+                if (!valid) {
+                    sourceValidationRejected = true;
+                    if (error) {
+                        *error = QStringLiteral(
+                            "Activity source changed before CPX cache commit");
+                    }
+                }
+                return valid;
+            };
     const bool persisted =
         operations && operations->writeCache
         ? operations->writeCache(
               cacheFileName,
               serializeCache,
+              validateBeforeCommit,
               &writeError)
         : RideFileCacheIntegrity::writeCacheAtomically(
               cacheFileName,
               serializeCache,
+              validateBeforeCommit,
               &writeError);
 
     if (persisted) {
         // invalidate any incore cache of aggregate
         // that contains this ride in its date range
         QDate date = ride->startTime().date();
-        for (int i=0; i<context->athlete->cpxCache.count();) {
-            if (date >= context->athlete->cpxCache.at(i)->start &&
-                date <= context->athlete->cpxCache.at(i)->end) {
-                delete context->athlete->cpxCache.at(i);
-                context->athlete->cpxCache.removeAt(i);
-            } else i++;
+        if (context && context->athlete) {
+            for (int i=0; i<context->athlete->cpxCache.count();) {
+                if (date >= context->athlete->cpxCache.at(i)->start &&
+                    date <= context->athlete->cpxCache.at(i)->end) {
+                    delete context->athlete->cpxCache.at(i);
+                    context->athlete->cpxCache.removeAt(i);
+                } else i++;
+            }
         }
         return true;
     } else {
+        if (sourceValidationRejected)
+            return false;
         if (!operations) {
             qWarning().noquote()
                 << QStringLiteral("Cannot create cache file %1: %2.")
@@ -1651,9 +1765,23 @@ RideFileCache::computeDistribution(QVector<float> &array, RideFile::SeriesType s
     if (ride->isDataPresent(needSeries) == false) return;
 
     // get zones that apply, if any
-    int zoneRange = context->athlete->zones(ride->sport()) ? context->athlete->zones(ride->sport())->whichRange(ride->startTime().date()) : -1;
-    int hrZoneRange = context->athlete->hrZones(ride->sport()) ? context->athlete->hrZones(ride->sport())->whichRange(ride->startTime().date()) : -1;
-    int paceZoneRange = context->athlete->paceZones(ride->isSwim()) ? context->athlete->paceZones(ride->isSwim())->whichRange(ride->startTime().date()) : -1;
+    const Athlete *athlete =
+        context ? context->athlete : nullptr;
+    int zoneRange =
+        athlete && athlete->zones(ride->sport())
+        ? athlete->zones(ride->sport())->whichRange(
+              ride->startTime().date())
+        : -1;
+    int hrZoneRange =
+        athlete && athlete->hrZones(ride->sport())
+        ? athlete->hrZones(ride->sport())->whichRange(
+              ride->startTime().date())
+        : -1;
+    int paceZoneRange =
+        athlete && athlete->paceZones(ride->isSwim())
+        ? athlete->paceZones(ride->isSwim())->whichRange(
+              ride->startTime().date())
+        : -1;
 
     CP=0;
     int AeTP=0;
@@ -1695,6 +1823,9 @@ RideFileCache::computeDistribution(QVector<float> &array, RideFile::SeriesType s
         // set timeinzone to zero
         wbalTimeInZone.fill(0.0f, 4);
         array.fill(0.0f);
+
+        if (WPRIME <= 0)
+            return;
 
         // lets count them first then turn into percentages
         // after we have traversed all the data
@@ -1813,7 +1944,10 @@ static void distAggregate(QVector<double> &into, QVector<double> &other)
 }
 
 RideFileCache::RideFileCache(Context *context, QDate start, QDate end, bool filter, QStringList files, bool onhome, RideItem *rideItem)
-               : start(start), end(end), incomplete(false), context(context), rideFileName(""), ride(0)
+               : start(start), end(end), crc(0), incomplete(false),
+                 context(context), rideFileName(""), ride(0),
+                 CP(0), WPRIME(0), LTHR(0), CV(0.0), WEIGHT(0.0),
+                 filter(filter), onhome(onhome)
 {
 
     // remember parameters for getting heat
@@ -2020,7 +2154,7 @@ QVector<float> &RideFileCache::heatMeanMaxArray()
 void
 RideFileCache::serialize(QDataStream *out)
 {
-    RideFileCacheHeader head;
+    RideFileCacheHeader head {};
 
     // write header
     head.version = RideFileCacheVersion;

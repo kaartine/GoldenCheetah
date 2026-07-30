@@ -29,6 +29,7 @@
 
 struct TacxCafFileReader : public RideFileReader {
     virtual RideFile *openRideFile(QFile &file, QStringList &errors, QList<RideFile*>* = 0) const;
+    bool requiresOriginalSourcePath() const override { return false; }
     virtual bool hasWrite() const { return false; }
 };
 

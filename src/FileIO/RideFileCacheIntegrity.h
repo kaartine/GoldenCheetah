@@ -175,9 +175,19 @@ bool readZoneValue(QIODevice &input,
 using CacheWriteOperation =
     std::function<bool(QIODevice &output, QString *error)>;
 
+// Runs after the temporary file is flushed and immediately before commit.
+using CachePreCommitValidator =
+    std::function<bool(QString *error)>;
+
 bool writeCacheAtomically(const QString &path,
                           const CacheWriteOperation &write,
                           QString *error = nullptr);
+
+bool writeCacheAtomically(
+    const QString &path,
+    const CacheWriteOperation &write,
+    const CachePreCommitValidator &validateBeforeCommit,
+    QString *error);
 
 QString activitySourcePath(
     const QString &activityDirectory,

@@ -538,6 +538,16 @@ bool writeCacheAtomically(const QString &path,
                           const CacheWriteOperation &write,
                           QString *error)
 {
+    return writeCacheAtomically(
+        path, write, CachePreCommitValidator {}, error);
+}
+
+bool writeCacheAtomically(
+    const QString &path,
+    const CacheWriteOperation &write,
+    const CachePreCommitValidator &validateBeforeCommit,
+    QString *error)
+{
     if (error)
         error->clear();
     if (path.isEmpty() || !write) {
@@ -564,6 +574,27 @@ bool writeCacheAtomically(const QString &path,
         output.cancelWriting();
         setError(error, deviceError);
         return false;
+    }
+    if (!output.flush()) {
+        const QString deviceError = output.errorString();
+        output.cancelWriting();
+        setError(error, deviceError.isEmpty()
+                            ? QStringLiteral("Cannot flush CPX cache")
+                            : deviceError);
+        return false;
+    }
+    if (validateBeforeCommit) {
+        QString validationError;
+        if (!validateBeforeCommit(&validationError)) {
+            output.cancelWriting();
+            setError(
+                error,
+                validationError.isEmpty()
+                    ? QStringLiteral(
+                          "CPX cache pre-commit validation failed")
+                    : validationError);
+            return false;
+        }
     }
     if (!output.commit()) {
         setError(error, output.errorString());

@@ -9,7 +9,8 @@ include(../../unittests.pri)
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug
-DEFINES += GC_RIDE_FILE_CACHE_TEST_HOOKS
+DEFINES += GC_RIDE_FILE_CACHE_TEST_HOOKS \
+           GC_RIDE_FILE_SOURCE_PROVENANCE_TEST_HOOKS
 
 SOURCES = testRideFileCacheRefresh.cpp \
           RideFileCacheRefreshTestStubs.cpp \

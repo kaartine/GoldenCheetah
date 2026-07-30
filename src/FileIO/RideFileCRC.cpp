@@ -29,14 +29,20 @@
 
 #include <QByteArray>
 #include <QByteArrayView>
+#include <QCryptographicHash>
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QIODevice>
+#include <QTemporaryDir>
 
 #include <algorithm>
 #include <cstring>
+#include <memory>
+#include <utility>
 
 #if defined(Q_OS_UNIX)
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -113,6 +119,118 @@ public:
 private:
     quint16 state_ = 0xffff;
 };
+
+template<typename ChunkConsumer>
+bool consumeExact(
+    QIODevice &input,
+    qint64 expectedSize,
+    const RideFileCRC::SnapshotValidator &snapshotIsCurrent,
+    const RideFileCRC::ChunkObserver &afterChunk,
+    ChunkConsumer &&consumeChunk)
+{
+    if (!input.isOpen()
+        || !input.isReadable()
+        || input.isSequential()
+        || expectedSize < 0
+        || expectedSize > RideFileCRC::MaximumSourceSize) {
+        return false;
+    }
+
+    PositionRestorer restorePosition(input);
+    if (!restorePosition.isValid()
+        || !input.seek(0)) {
+        return false;
+    }
+
+    if (snapshotIsCurrent && !snapshotIsCurrent())
+        return false;
+
+    QByteArray buffer(
+        static_cast<int>(RideFileCRC::ReadChunkSize),
+        Qt::Uninitialized);
+    qint64 remaining = expectedSize;
+    while (remaining > 0) {
+        const qint64 requested = std::min(
+            remaining, RideFileCRC::ReadChunkSize);
+        qint64 received = 0;
+        while (received < requested) {
+            const qint64 count = input.read(
+                buffer.data() + received,
+                requested - received);
+            if (count <= 0
+                || count > requested - received
+                || !consumeChunk(QByteArrayView(
+                    buffer.constData() + received,
+                    count))) {
+                return false;
+            }
+            received += count;
+        }
+        remaining -= received;
+        if (afterChunk)
+            afterChunk(expectedSize - remaining);
+    }
+
+    char trailingByte = 0;
+    const qint64 trailingRead =
+        input.read(&trailingByte, 1);
+    return trailingRead == 0
+        && input.atEnd()
+        && input.size() == expectedSize
+        && (!snapshotIsCurrent || snapshotIsCurrent())
+        && restorePosition.restore();
+}
+
+bool computeFingerprintExactImpl(
+    QIODevice &input,
+    qint64 expectedSize,
+    RideFileCRC::ContentFingerprint &fingerprint,
+    const RideFileCRC::SnapshotValidator &snapshotIsCurrent,
+    const RideFileCRC::ChunkObserver &afterChunk)
+{
+    Iso3309Checksum crc16;
+    QCryptographicHash sha256(QCryptographicHash::Sha256);
+    if (!consumeExact(
+            input,
+            expectedSize,
+            snapshotIsCurrent,
+            afterChunk,
+            [&](QByteArrayView bytes) {
+                crc16.update(bytes);
+                sha256.addData(bytes);
+                return true;
+            })) {
+        return false;
+    }
+
+    RideFileCRC::ContentFingerprint computed;
+    computed.byteSize = expectedSize;
+    computed.sha256 = sha256.result();
+    computed.legacyCrc16 = crc16.result();
+    if (!computed.isValid())
+        return false;
+
+    fingerprint = std::move(computed);
+    return true;
+}
+
+bool writeAll(
+    QIODevice &output,
+    QByteArrayView bytes)
+{
+    qint64 written = 0;
+    while (written < bytes.size()) {
+        const qint64 count = output.write(
+            bytes.data() + written,
+            bytes.size() - written);
+        if (count <= 0
+            || count > bytes.size() - written) {
+            return false;
+        }
+        written += count;
+    }
+    return true;
+}
 
 struct WindowsFileIdentity
 {
@@ -349,30 +467,71 @@ bool captureNativeSnapshot(
 
 #endif
 
+bool openRegularFileReadOnly(
+    const QString &path,
+    QFile &file)
+{
+#if defined(Q_OS_UNIX)
+    int flags = O_RDONLY | O_NONBLOCK;
+#ifdef O_CLOEXEC
+    flags |= O_CLOEXEC;
+#endif
+    const QByteArray encodedPath =
+        QFile::encodeName(path);
+    const int descriptor =
+        ::open(encodedPath.constData(), flags);
+    if (descriptor < 0)
+        return false;
+
+    struct stat status {};
+    if (::fstat(descriptor, &status) != 0
+        || !S_ISREG(status.st_mode)) {
+        ::close(descriptor);
+        return false;
+    }
+
+    if (!file.open(
+            descriptor,
+            QIODevice::ReadOnly,
+            QFileDevice::AutoCloseHandle)) {
+        ::close(descriptor);
+        return false;
+    }
+    return true;
+#else
+    return file.open(QIODevice::ReadOnly);
+#endif
+}
+
 bool capturePathSnapshot(
     const QString &path,
     NativeFileSnapshot &snapshot)
 {
     QFile current(path);
-    return current.open(QIODevice::ReadOnly)
+    return openRegularFileReadOnly(path, current)
         && captureNativeSnapshot(current, snapshot);
 }
 
-bool computeFileImpl(
+template<typename Consumer>
+bool consumeStableFile(
     const QString &filename,
-    quint16 &checksum,
     const std::function<void()> &afterInitialSnapshot,
-    const RideFileCRC::ChunkObserver &afterChunk)
+    Consumer &&consume)
 {
     const QString absolutePath =
         QFileInfo(filename).absoluteFilePath();
     QFile input(absolutePath);
-    if (!input.open(QIODevice::ReadOnly))
+    if (!openRegularFileReadOnly(
+            absolutePath, input)) {
         return false;
+    }
 
     NativeFileSnapshot initial;
-    if (!captureNativeSnapshot(input, initial))
+    if (!captureNativeSnapshot(input, initial)
+        || initial.size < 0
+        || initial.size > RideFileCRC::MaximumSourceSize) {
         return false;
+    }
 
     if (afterInitialSnapshot)
         afterInitialSnapshot();
@@ -384,15 +543,8 @@ bool computeFileImpl(
         return false;
     }
 
-    quint16 computed = 0;
-    if (!RideFileCRC::computeExact(
-            input,
-            initial.size,
-            computed,
-            {},
-            afterChunk)) {
+    if (!consume(input, initial.size))
         return false;
-    }
 
     NativeFileSnapshot finalHandle;
     NativeFileSnapshot finalPath;
@@ -405,7 +557,230 @@ bool computeFileImpl(
         return false;
     }
 
+    return true;
+}
+
+bool computeFileImpl(
+    const QString &filename,
+    quint16 &checksum,
+    const std::function<void()> &afterInitialSnapshot,
+    const RideFileCRC::ChunkObserver &afterChunk)
+{
+    quint16 computed = 0;
+    if (!consumeStableFile(
+            filename,
+            afterInitialSnapshot,
+            [&](QFile &input, qint64 expectedSize) {
+                return RideFileCRC::computeExact(
+                    input,
+                    expectedSize,
+                    computed,
+                    {},
+                    afterChunk);
+            })) {
+        return false;
+    }
+
     checksum = computed;
+    return true;
+}
+
+bool computeFileFingerprintImpl(
+    const QString &filename,
+    RideFileCRC::ContentFingerprint &fingerprint,
+    const std::function<void()> &afterInitialSnapshot,
+    const RideFileCRC::ChunkObserver &afterChunk)
+{
+    RideFileCRC::ContentFingerprint computed;
+    if (!consumeStableFile(
+            filename,
+            afterInitialSnapshot,
+            [&](QFile &input, qint64 expectedSize) {
+                return computeFingerprintExactImpl(
+                    input,
+                    expectedSize,
+                    computed,
+                    {},
+                    afterChunk);
+            })) {
+        return false;
+    }
+
+    fingerprint = std::move(computed);
+    return true;
+}
+
+bool computeStagedFingerprint(
+    QFile &staged,
+    qint64 expectedSize,
+    RideFileCRC::ContentFingerprint &fingerprint,
+    NativeFileSnapshot &snapshot)
+{
+    NativeFileSnapshot initialHandle;
+    NativeFileSnapshot initialPath;
+    const QString path =
+        QFileInfo(staged.fileName()).absoluteFilePath();
+    if (!captureNativeSnapshot(
+            staged, initialHandle)
+        || initialHandle.size != expectedSize
+        || !capturePathSnapshot(
+            path, initialPath)
+        || !(initialHandle == initialPath)) {
+        return false;
+    }
+
+    RideFileCRC::ContentFingerprint computed;
+    if (!computeFingerprintExactImpl(
+            staged,
+            expectedSize,
+            computed,
+            {},
+            {})) {
+        return false;
+    }
+
+    NativeFileSnapshot finalHandle;
+    NativeFileSnapshot finalPath;
+    if (!captureNativeSnapshot(
+            staged, finalHandle)
+        || !(initialHandle == finalHandle)
+        || !capturePathSnapshot(
+            path, finalPath)
+        || !(initialHandle == finalPath)) {
+        return false;
+    }
+
+    fingerprint = std::move(computed);
+    snapshot = initialHandle;
+    return true;
+}
+
+QString stagedDirectoryTemplate()
+{
+    return QDir(
+        QDir::tempPath()).filePath(
+            QStringLiteral("gc-ride-source-XXXXXX"));
+}
+
+bool captureFileImpl(
+    const QString &filename,
+    std::unique_ptr<QTemporaryDir> &stagedDirectory,
+    std::unique_ptr<QFile> &stagedFile,
+    RideFileCRC::ContentFingerprint &fingerprint,
+    const std::function<void()> &afterInitialSnapshot,
+    const RideFileCRC::ChunkObserver &afterChunk,
+    const std::function<void()> &afterSourceCopied)
+{
+    std::unique_ptr<QTemporaryDir> candidateDirectory;
+    std::unique_ptr<QFile> candidateFile;
+    RideFileCRC::ContentFingerprint candidateFingerprint;
+    NativeFileSnapshot candidateSnapshot;
+    const bool captured = consumeStableFile(
+        filename,
+        afterInitialSnapshot,
+        [&](QFile &input, qint64 expectedSize) {
+            auto directory =
+                std::make_unique<QTemporaryDir>(
+                    stagedDirectoryTemplate());
+            const QString sourceName =
+                QFileInfo(filename).fileName();
+            if (!directory->isValid()
+                || sourceName.isEmpty()) {
+                return false;
+            }
+
+            auto temporary = std::make_unique<QFile>(
+                QDir(directory->path()).filePath(
+                    sourceName));
+            if (!temporary->open(
+                    QIODevice::ReadWrite
+                    | QIODevice::NewOnly)) {
+                return false;
+            }
+
+            Iso3309Checksum copiedCrc16;
+            QCryptographicHash copiedSha256(
+                QCryptographicHash::Sha256);
+            if (!consumeExact(
+                    input,
+                    expectedSize,
+                    {},
+                    afterChunk,
+                    [&](QByteArrayView bytes) {
+                        if (!writeAll(*temporary, bytes))
+                            return false;
+                        copiedCrc16.update(bytes);
+                        copiedSha256.addData(bytes);
+                        return true;
+                    })
+                || !temporary->flush()
+                || temporary->size() != expectedSize) {
+                return false;
+            }
+
+            RideFileCRC::ContentFingerprint copiedFingerprint;
+            copiedFingerprint.byteSize = expectedSize;
+            copiedFingerprint.sha256 =
+                copiedSha256.result();
+            copiedFingerprint.legacyCrc16 =
+                copiedCrc16.result();
+            if (!copiedFingerprint.isValid())
+                return false;
+
+            temporary->close();
+            if (!temporary->open(QIODevice::ReadOnly)) {
+                return false;
+            }
+
+            RideFileCRC::ContentFingerprint stagedFingerprint;
+            if (!computeStagedFingerprint(
+                    *temporary,
+                    expectedSize,
+                    stagedFingerprint,
+                    candidateSnapshot)
+                || stagedFingerprint
+                    != copiedFingerprint) {
+                return false;
+            }
+            temporary->close();
+
+            if (afterSourceCopied)
+                afterSourceCopied();
+
+            RideFileCRC::ContentFingerprint sourceAfterCopy;
+            if (!computeFingerprintExactImpl(
+                    input,
+                    expectedSize,
+                    sourceAfterCopy,
+                    {},
+                    {})
+                || sourceAfterCopy
+                    != copiedFingerprint) {
+                return false;
+            }
+
+            candidateDirectory = std::move(directory);
+            candidateFile = std::move(temporary);
+            candidateFingerprint =
+                std::move(stagedFingerprint);
+            return true;
+        });
+    if (!captured)
+        return false;
+
+    NativeFileSnapshot finalStagedPath;
+    if (!candidateDirectory
+        || !candidateFile
+        || !capturePathSnapshot(
+            candidateFile->fileName(),
+            finalStagedPath)
+        || !(candidateSnapshot == finalStagedPath)) {
+        return false;
+    }
+
+    stagedDirectory = std::move(candidateDirectory);
+    stagedFile = std::move(candidateFile);
+    fingerprint = std::move(candidateFingerprint);
     return true;
 }
 
@@ -432,6 +807,94 @@ WindowsFileIdentity windowsIdentityForTest(
 
 namespace RideFileCRC {
 
+bool ContentFingerprint::isValid() const
+{
+    return byteSize >= 0
+        && byteSize <= MaximumSourceSize
+        && sha256.size() == Sha256Size;
+}
+
+bool ContentFingerprint::operator==(
+    const ContentFingerprint &other) const
+{
+    return byteSize == other.byteSize
+        && sha256 == other.sha256
+        && legacyCrc16 == other.legacyCrc16;
+}
+
+StagedSource::StagedSource() = default;
+StagedSource::~StagedSource() = default;
+StagedSource::StagedSource(
+    StagedSource &&other) noexcept = default;
+StagedSource &StagedSource::operator=(
+    StagedSource &&other) noexcept
+{
+    if (this == &other)
+        return *this;
+
+    stagedFile_.reset();
+    stagedDirectory_.reset();
+    fingerprint_ = ContentFingerprint {};
+
+    stagedDirectory_ =
+        std::move(other.stagedDirectory_);
+    stagedFile_ = std::move(other.stagedFile_);
+    fingerprint_ = std::move(other.fingerprint_);
+    other.fingerprint_ = ContentFingerprint {};
+    return *this;
+}
+
+bool StagedSource::isValid() const
+{
+    return stagedDirectory_
+        && stagedFile_
+        && fingerprint_.isValid();
+}
+
+QFile *StagedSource::fileForReading()
+{
+    return isValid()
+        ? stagedFile_.get()
+        : nullptr;
+}
+
+const QFile *StagedSource::fileForReading() const
+{
+    return isValid()
+        ? stagedFile_.get()
+        : nullptr;
+}
+
+const ContentFingerprint &StagedSource::fingerprint() const
+{
+    return fingerprint_;
+}
+
+bool captureFile(
+    const QString &filename,
+    StagedSource &captured)
+{
+    std::unique_ptr<QTemporaryDir> stagedDirectory;
+    std::unique_ptr<QFile> stagedFile;
+    ContentFingerprint fingerprint;
+    if (!captureFileImpl(
+            filename,
+            stagedDirectory,
+            stagedFile,
+            fingerprint,
+            {},
+            {},
+            {})) {
+        return false;
+    }
+
+    captured.stagedFile_ = std::move(stagedFile);
+    captured.stagedDirectory_ =
+        std::move(stagedDirectory);
+    captured.fingerprint_ = std::move(fingerprint);
+    return true;
+}
+
 bool compute(
     QIODevice &input,
     quint16 &checksum,
@@ -451,59 +914,16 @@ bool computeExact(
     const SnapshotValidator &snapshotIsCurrent,
     const ChunkObserver &afterChunk)
 {
-    if (!input.isOpen()
-        || !input.isReadable()
-        || input.isSequential()
-        || expectedSize < 0
-        || expectedSize > MaximumSourceSize) {
-        return false;
-    }
-
-    PositionRestorer restorePosition(input);
-    if (!restorePosition.isValid()
-        || !input.seek(0)) {
-        return false;
-    }
-
-    if (snapshotIsCurrent && !snapshotIsCurrent()) {
-        return false;
-    }
-
-    QByteArray buffer(
-        static_cast<int>(ReadChunkSize),
-        Qt::Uninitialized);
     Iso3309Checksum accumulator;
-    qint64 remaining = expectedSize;
-    while (remaining > 0) {
-        const qint64 requested =
-            std::min(remaining, ReadChunkSize);
-        qint64 received = 0;
-        while (received < requested) {
-            const qint64 count = input.read(
-                buffer.data() + received,
-                requested - received);
-            if (count <= 0
-                || count > requested - received) {
-                return false;
-            }
-            accumulator.update(QByteArrayView(
-                buffer.constData() + received,
-                count));
-            received += count;
-        }
-        remaining -= received;
-        if (afterChunk)
-            afterChunk(expectedSize - remaining);
-    }
-
-    char trailingByte = 0;
-    const qint64 trailingRead =
-        input.read(&trailingByte, 1);
-    if (trailingRead != 0
-        || !input.atEnd()
-        || input.size() != expectedSize
-        || (snapshotIsCurrent && !snapshotIsCurrent())
-        || !restorePosition.restore()) {
+    if (!consumeExact(
+            input,
+            expectedSize,
+            snapshotIsCurrent,
+            afterChunk,
+            [&](QByteArrayView bytes) {
+                accumulator.update(bytes);
+                return true;
+            })) {
         return false;
     }
 
@@ -517,6 +937,30 @@ bool computeFile(
 {
     return computeFileImpl(
         filename, checksum, {}, {});
+}
+
+bool computeFingerprint(
+    QIODevice &input,
+    ContentFingerprint &fingerprint,
+    const SnapshotValidator &snapshotIsCurrent)
+{
+    return computeFingerprintExactImpl(
+        input,
+        input.size(),
+        fingerprint,
+        snapshotIsCurrent,
+        {});
+}
+
+bool computeFileFingerprint(
+    const QString &filename,
+    ContentFingerprint &fingerprint)
+{
+    return computeFileFingerprintImpl(
+        filename,
+        fingerprint,
+        {},
+        {});
 }
 
 #ifdef GC_RIDE_FILE_CRC_TEST_HOOKS
@@ -544,6 +988,32 @@ bool computeFileForTest(
         checksum,
         hooks.afterInitialSnapshot,
         hooks.afterChunk);
+}
+
+bool captureFileForTest(
+    const QString &filename,
+    StagedSource &captured,
+    const FileTestHooks &hooks)
+{
+    std::unique_ptr<QTemporaryDir> stagedDirectory;
+    std::unique_ptr<QFile> stagedFile;
+    ContentFingerprint fingerprint;
+    if (!captureFileImpl(
+            filename,
+            stagedDirectory,
+            stagedFile,
+            fingerprint,
+            hooks.afterInitialSnapshot,
+            hooks.afterChunk,
+            hooks.afterSourceCopied)) {
+        return false;
+    }
+
+    captured.stagedFile_ = std::move(stagedFile);
+    captured.stagedDirectory_ =
+        std::move(stagedDirectory);
+    captured.fingerprint_ = std::move(fingerprint);
+    return true;
 }
 #endif
 

@@ -27,8 +27,8 @@ class PolarFileReader : public RideFileReader {
     public:
 
     virtual RideFile *openRideFile(QFile &file, QStringList &errors, QList<RideFile*>* = 0) const; 
+    bool requiresOriginalSourcePath() const override { return true; }
     bool hasWrite() const { return false; }
 };
 
 #endif // _PolarRideFile_h
-

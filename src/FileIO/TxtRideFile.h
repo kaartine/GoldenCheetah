@@ -24,6 +24,7 @@
 
 struct TxtFileReader : public RideFileReader {
     virtual RideFile *openRideFile(QFile &file, QStringList &errors, QList<RideFile*>* = 0) const; 
+    bool requiresOriginalSourcePath() const override { return false; }
     bool hasWrite() const { return false; }
 };
 

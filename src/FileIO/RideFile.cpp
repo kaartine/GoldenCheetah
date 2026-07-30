@@ -35,7 +35,9 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QDir>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QTemporaryFile>
 
 #include <QtXml/QtXml>
@@ -63,7 +65,8 @@
 const QChar deltaChar(0x0394);
 
 RideFile::RideFile(const QDateTime &startTime, double recIntSecs) :
-            wstale(true), startTime_(startTime), recIntSecs_(recIntSecs),
+            context(nullptr), wstale(true),
+            startTime_(startTime), recIntSecs_(recIntSecs),
             data(NULL), wprime_(NULL),
             weight_(0), totalCount(0), totalTemp(0), dstale(true)
 {
@@ -79,7 +82,8 @@ RideFile::RideFile(const QDateTime &startTime, double recIntSecs) :
 // when constructing a temporary ridefile when computing intervals
 // and we want to get special fields and ESPECIALLY "CP" and "Weight"
 RideFile::RideFile(RideFile *p) :
-    wstale(true), recIntSecs_(p->recIntSecs_), data(NULL), wprime_(NULL),
+    context(p->context), wstale(true),
+    recIntSecs_(p->recIntSecs_), data(NULL), wprime_(NULL),
     weight_(p->weight_), totalCount(0), totalTemp(0), dstale(true)
 {
     startTime_ = p->startTime_;
@@ -96,8 +100,6 @@ RideFile::RideFile(RideFile *p) :
         if (calibration)
             calibrations_.append(new RideFileCalibration(*calibration));
     }
-    context = p->context;
-
     command = new RideFileCommand(this);
     minPoint = new RideFilePoint();
     maxPoint = new RideFilePoint();
@@ -107,7 +109,8 @@ RideFile::RideFile(RideFile *p) :
 }
 
 RideFile::RideFile() : 
-    wstale(true), recIntSecs_(0.0), data(NULL), wprime_(NULL),
+    context(nullptr), wstale(true),
+    recIntSecs_(0.0), data(NULL), wprime_(NULL),
     weight_(0), totalCount(0), totalTemp(0), dstale(true)
 {
     command = new RideFileCommand(this);
@@ -148,8 +151,113 @@ RideFile::~RideFile()
 }
 
 void RideFile::setStartTime(const QDateTime &value) {
+    invalidateSourceProvenance();
     startTime_ = value;
 }
+
+bool
+RideFile::captureSourceFingerprint(
+    const QString &filename,
+    SourceFingerprint &fingerprint)
+{
+    fingerprint = SourceFingerprint {};
+    const QString canonicalBefore =
+        QFileInfo(filename).canonicalFilePath();
+    if (canonicalBefore.isEmpty()) {
+        return false;
+    }
+
+    RideFileCRC::ContentFingerprint content;
+    if (!RideFileCRC::computeFileFingerprint(
+            filename, content)) {
+        return false;
+    }
+
+    const QString canonicalAfter =
+        QFileInfo(filename).canonicalFilePath();
+    if (canonicalAfter.isEmpty()
+        || canonicalAfter != canonicalBefore) {
+        return false;
+    }
+
+    fingerprint.canonicalPath =
+        QDir::cleanPath(canonicalAfter);
+    fingerprint.size = content.byteSize;
+    fingerprint.sha256 = content.sha256;
+    fingerprint.crc = content.legacyCrc16;
+    return true;
+}
+
+bool
+RideFile::sourceProvenanceMatches(
+    const SourceFingerprint &fingerprint) const
+{
+    return sourceProvenance_.isValid()
+        && fingerprint.isValid()
+        && sourceProvenance_ == fingerprint;
+}
+
+bool
+RideFile::bindSourceProvenance(
+    const QString &filename)
+{
+    SourceFingerprint fingerprint;
+    if (!captureSourceFingerprint(
+            filename, fingerprint)) {
+        invalidateSourceProvenance();
+        return false;
+    }
+
+    sourceProvenance_ = std::move(fingerprint);
+    return true;
+}
+
+void
+RideFile::rebindSourceProvenance(
+    const QString &filename)
+{
+    RideFileReader *reader =
+        RideFileFactory::instance().readerForSuffix(
+            QFileInfo(filename).suffix());
+    if (reader
+        && !reader->requiresOriginalSourcePath()) {
+        bindSourceProvenance(filename);
+    } else {
+        invalidateSourceProvenance();
+    }
+}
+
+void
+RideFile::invalidateSourceProvenance()
+{
+    sourceProvenance_ = SourceFingerprint {};
+}
+
+#ifdef GC_RIDE_FILE_SOURCE_PROVENANCE_TEST_HOOKS
+bool
+RideFile::sourceProvenanceMatchesForTest(
+    const QString &filename) const
+{
+    SourceFingerprint fingerprint;
+    return captureSourceFingerprint(
+               filename, fingerprint)
+        && sourceProvenanceMatches(fingerprint);
+}
+
+bool
+RideFile::bindSourceProvenanceForTest(
+    const QString &filename)
+{
+    return bindSourceProvenance(filename);
+}
+
+void
+RideFile::rebindSourceProvenanceForTest(
+    const QString &filename)
+{
+    rebindSourceProvenance(filename);
+}
+#endif
 
 bool
 RideFile::computeFileCRC(
@@ -833,6 +941,35 @@ RideFile *RideFileFactory::openRideFile(Context *context, QFile &file,
     RideFileReader *reader = readFuncs_.value(suffix.toLower());
     if (!reader) return NULL;
 
+    RideFile::SourceFingerprint sourceFingerprint;
+    RideFileCRC::StagedSource stagedSource;
+    const bool mayStageSource =
+        !reader->requiresOriginalSourcePath();
+    bool sourceFingerprintAvailable = false;
+    if (mayStageSource) {
+        const QString canonicalBefore =
+            QFileInfo(file.fileName()).canonicalFilePath();
+        if (!canonicalBefore.isEmpty()
+            && RideFileCRC::captureFile(
+                file.fileName(), stagedSource)) {
+            const QString canonicalAfter =
+                QFileInfo(file.fileName()).canonicalFilePath();
+            if (!canonicalAfter.isEmpty()
+                && canonicalAfter == canonicalBefore) {
+                const RideFileCRC::ContentFingerprint &content =
+                    stagedSource.fingerprint();
+                sourceFingerprint.canonicalPath =
+                    QDir::cleanPath(canonicalAfter);
+                sourceFingerprint.size = content.byteSize;
+                sourceFingerprint.sha256 = content.sha256;
+                sourceFingerprint.crc =
+                    content.legacyCrc16;
+                sourceFingerprintAvailable =
+                    sourceFingerprint.isValid();
+            }
+        }
+    }
+
     RideFile *result = nullptr;
     if (compression == "zip" || compression == "gz") {
         if (!context || !context->athlete || !context->athlete->home) {
@@ -850,7 +987,12 @@ RideFile *RideFileFactory::openRideFile(Context *context, QFile &file,
             return nullptr;
         }
 
-        auto compressedFile = std::make_unique<QFile>(file.fileName());
+        const QString compressedPath =
+            sourceFingerprintAvailable
+            ? stagedSource.fileForReading()->fileName()
+            : file.fileName();
+        auto compressedFile =
+            std::make_unique<QFile>(compressedPath);
         const CompressedActivityFile::Format format =
             compression == "zip"
                 ? CompressedActivityFile::Format::Zip
@@ -868,7 +1010,23 @@ RideFile *RideFileFactory::openRideFile(Context *context, QFile &file,
         result = reader->openRideFile(
             uncompressedFile, errors, rideList);
     } else {
-        result = reader->openRideFile(file, errors, rideList);
+        QFile *readerSource =
+            sourceFingerprintAvailable
+            ? stagedSource.fileForReading()
+            : &file;
+        result = reader->openRideFile(
+            *readerSource, errors, rideList);
+    }
+
+    if (sourceFingerprintAvailable) {
+        RideFileCRC::ContentFingerprint stagedAfterParse;
+        if (!RideFileCRC::computeFileFingerprint(
+                stagedSource.fileForReading()->fileName(),
+                stagedAfterParse)
+            || stagedAfterParse
+                != stagedSource.fingerprint()) {
+            sourceFingerprintAvailable = false;
+        }
     }
 
     // if it was successful, lets post process the file
@@ -922,10 +1080,21 @@ RideFile *RideFileFactory::openRideFile(Context *context, QFile &file,
         // yyyy-MM-dd-hh-mm-ss.extension
         // or yyyy_MM_dd_hh_mm_ss.extension
         // year is the only one matching for 4 digits, the rest can either be 1 or 2 digits.
-        QRegExp rx ("^((\\d{4})[-_](\\d{1,2})[-_](\\d{1,2})[-_](\\d{1,2})[-_](\\d{1,2})[-_](\\d{1,2}))\\.(.+)$");
-        if (rx.exactMatch(fileInfo.fileName())) {
-            QDate date(rx.cap(2).toInt(), rx.cap(3).toInt(),rx.cap(4).toInt());
-            QTime time(rx.cap(5).toInt(), rx.cap(6).toInt(),rx.cap(7).toInt());
+        const QRegularExpression rx(
+            QStringLiteral(
+                "^((\\d{4})[-_](\\d{1,2})[-_](\\d{1,2})[-_]"
+                "(\\d{1,2})[-_](\\d{1,2})[-_](\\d{1,2}))\\.(.+)$"));
+        const QRegularExpressionMatch fileNameMatch =
+            rx.match(fileInfo.fileName());
+        if (fileNameMatch.hasMatch()) {
+            QDate date(
+                fileNameMatch.captured(2).toInt(),
+                fileNameMatch.captured(3).toInt(),
+                fileNameMatch.captured(4).toInt());
+            QTime time(
+                fileNameMatch.captured(5).toInt(),
+                fileNameMatch.captured(6).toInt(),
+                fileNameMatch.captured(7).toInt());
             QDateTime datetime(date, time);
             result->setStartTime(datetime);
         }
@@ -1076,6 +1245,9 @@ RideFile *RideFileFactory::openRideFile(Context *context, QFile &file,
             }
         }
 #endif
+
+        if (sourceFingerprintAvailable)
+            result->sourceProvenance_ = sourceFingerprint;
     }
 
     return result;
@@ -2351,6 +2523,7 @@ RideFile::emitReverted()
 void
 RideFile::emitModified()
 {
+    invalidateSourceProvenance();
     weight_ = 0;
     wstale = dstale = true;
     emit modified();
@@ -2510,9 +2683,14 @@ RideFile::recalculateDerivedSeries(bool force)
     double anTISS = 0.0f;
 
     // set WPrime and CP
-    if (context->athlete->zones(sport())) {
-        int zoneRange = context->athlete->zones(sport())->whichRange(startTime().date());
-        CP = zoneRange >= 0 ? context->athlete->zones(sport())->getCP(zoneRange) : 0;
+    Athlete *athlete =
+        context ? context->athlete : nullptr;
+    if (athlete && athlete->zones(sport())) {
+        int zoneRange = athlete->zones(sport())->whichRange(
+            startTime().date());
+        CP = zoneRange >= 0
+            ? athlete->zones(sport())->getCP(zoneRange)
+            : 0;
         //WPRIME = zoneRange >= 0 ? context->athlete->zones(sport())->getWprime(zoneRange) : 0;
 
         // did we override CP in metadata / metrics ?
@@ -2522,7 +2700,14 @@ RideFile::recalculateDerivedSeries(bool force)
 
     // wheelsize - use meta, then config then drop to 2100
     double wheelsize = getTag(tr("Wheelsize"), "0.0").toDouble();
-    if (wheelsize == 0) wheelsize = appsettings->cvalue(context->athlete->cyclist, GC_WHEELSIZE, 2100).toInt();
+    if (wheelsize == 0 && athlete && appsettings) {
+        wheelsize = appsettings->cvalue(
+            athlete->cyclist,
+            GC_WHEELSIZE,
+            2100).toInt();
+    }
+    if (wheelsize == 0)
+        wheelsize = 2100;
     wheelsize /= 1000.00f; // need it in meters
 
     // last point looked at
@@ -3351,7 +3536,14 @@ RideFile::resample(double newRecIntSecs, int /*interpolate*/)
 double 
 RideFile::getWeight()
 {
-    return context->athlete->getWeight(startTime_.date(), this);
+    if (context && context->athlete)
+        return context->athlete->getWeight(
+            startTime_.date(), this);
+
+    const double taggedWeight =
+        getTag(QStringLiteral("Weight"),
+               QStringLiteral("75.0")).toDouble();
+    return taggedWeight > 0.0 ? taggedWeight : 75.0;
 }
 
 double 

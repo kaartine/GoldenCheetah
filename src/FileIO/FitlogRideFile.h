@@ -24,9 +24,9 @@
 
 struct FitlogFileReader : public RideFileReader {
     virtual RideFile *openRideFile(QFile &file, QStringList &errors, QList<RideFile*>* = 0) const; 
+    bool requiresOriginalSourcePath() const override { return false; }
     bool writeRideFile(Context *context, const RideFile *ride, QFile &file) const;
     bool hasWrite() const { return true; }
 };
 
 #endif // _FitlogRideFile_h
-

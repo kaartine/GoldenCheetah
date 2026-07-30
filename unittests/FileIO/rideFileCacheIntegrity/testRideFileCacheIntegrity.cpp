@@ -230,6 +230,10 @@ private slots:
     void partialReaderGrowthIsAtomicAndSticky();
     void atomicWritePreservesExistingFileOnFailure();
     void atomicWriteReplacesExistingFileOnSuccess();
+    void atomicWriteRejectsInvalidatedSourceBeforeCommit();
+    void atomicWriteCommitsAfterPreCommitValidation();
+    void atomicWriteSkipsValidationAfterSerializationFailure();
+    void atomicWriteReportsDefaultPreCommitValidationError();
     void validatesActivitySourcePath();
     void separatesPlannedAndCompletedCachePaths();
     void matchesCanonicalSourceUnderSymlinkedRoot();
@@ -649,6 +653,159 @@ void TestRideFileCacheIntegrity::atomicWriteReplacesExistingFileOnSuccess()
     QFile persisted(path);
     QVERIFY(persisted.open(QIODevice::ReadOnly));
     QCOMPARE(persisted.readAll(), QByteArray("replacement"));
+}
+
+void
+TestRideFileCacheIntegrity::atomicWriteRejectsInvalidatedSourceBeforeCommit()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("ride.cpx"));
+    {
+        QFile existing(path);
+        QVERIFY(existing.open(QIODevice::WriteOnly));
+        QCOMPARE(existing.write("existing"), qint64(8));
+    }
+
+    int sourceGeneration = 1;
+    const int serializedSourceGeneration = sourceGeneration;
+    bool serializationFinished = false;
+    bool validatorCalled = false;
+    bool destinationReadableDuringValidation = false;
+    QByteArray destinationDuringValidation;
+    QString error;
+
+    QVERIFY(!RideFileCacheIntegrity::writeCacheAtomically(
+        path,
+        [&](QIODevice &output, QString *) {
+            if (output.write("replacement") != qint64(11))
+                return false;
+            serializationFinished = true;
+            ++sourceGeneration;
+            return true;
+        },
+        [&](QString *validationError) {
+            validatorCalled = true;
+            QFile destination(path);
+            destinationReadableDuringValidation =
+                destination.open(QIODevice::ReadOnly);
+            if (destinationReadableDuringValidation)
+                destinationDuringValidation = destination.readAll();
+
+            const bool sourceIsCurrent =
+                sourceGeneration == serializedSourceGeneration;
+            if (!sourceIsCurrent && validationError) {
+                *validationError = QStringLiteral(
+                    "Activity source changed before CPX cache commit");
+            }
+            return serializationFinished && sourceIsCurrent;
+        },
+        &error));
+
+    QVERIFY(serializationFinished);
+    QVERIFY(validatorCalled);
+    QVERIFY(destinationReadableDuringValidation);
+    QCOMPARE(destinationDuringValidation, QByteArray("existing"));
+    QCOMPARE(
+        error,
+        QStringLiteral(
+            "Activity source changed before CPX cache commit"));
+
+    QFile persisted(path);
+    QVERIFY(persisted.open(QIODevice::ReadOnly));
+    QCOMPARE(persisted.readAll(), QByteArray("existing"));
+}
+
+void
+TestRideFileCacheIntegrity::atomicWriteCommitsAfterPreCommitValidation()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("ride.cpx"));
+    {
+        QFile existing(path);
+        QVERIFY(existing.open(QIODevice::WriteOnly));
+        QCOMPARE(existing.write("existing"), qint64(8));
+    }
+
+    bool serializationFinished = false;
+    bool validatorCalled = false;
+    QByteArray destinationDuringValidation;
+    QString error;
+    QVERIFY2(RideFileCacheIntegrity::writeCacheAtomically(
+                 path,
+                 [&](QIODevice &output, QString *) {
+                     serializationFinished =
+                         output.write("replacement") == qint64(11);
+                     return serializationFinished;
+                 },
+                 [&](QString *) {
+                     validatorCalled = true;
+                     QFile destination(path);
+                     if (!destination.open(QIODevice::ReadOnly))
+                         return false;
+                     destinationDuringValidation = destination.readAll();
+                     return serializationFinished;
+                 },
+                 &error),
+             qPrintable(error));
+
+    QVERIFY(validatorCalled);
+    QCOMPARE(destinationDuringValidation, QByteArray("existing"));
+    QFile persisted(path);
+    QVERIFY(persisted.open(QIODevice::ReadOnly));
+    QCOMPARE(persisted.readAll(), QByteArray("replacement"));
+}
+
+void
+TestRideFileCacheIntegrity::atomicWriteSkipsValidationAfterSerializationFailure()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("ride.cpx"));
+    bool validatorCalled = false;
+    QString error;
+
+    QVERIFY(!RideFileCacheIntegrity::writeCacheAtomically(
+        path,
+        [](QIODevice &output, QString *) {
+            return output.write("partial") == qint64(7) && false;
+        },
+        [&](QString *) {
+            validatorCalled = true;
+            return true;
+        },
+        &error));
+
+    QVERIFY(!validatorCalled);
+    QCOMPARE(error, QStringLiteral("Cannot serialize CPX cache"));
+    QVERIFY(!QFile::exists(path));
+}
+
+void
+TestRideFileCacheIntegrity::
+atomicWriteReportsDefaultPreCommitValidationError()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("ride.cpx"));
+    QString error;
+
+    QVERIFY(!RideFileCacheIntegrity::writeCacheAtomically(
+        path,
+        [](QIODevice &output, QString *) {
+            return output.write("complete") == qint64(8);
+        },
+        [](QString *) {
+            return false;
+        },
+        &error));
+
+    QCOMPARE(
+        error,
+        QStringLiteral(
+            "CPX cache pre-commit validation failed"));
+    QVERIFY(!QFile::exists(path));
 }
 
 void TestRideFileCacheIntegrity::validatesActivitySourcePath()

@@ -183,6 +183,18 @@ class RideFileCache
             const std::function<void(
                 const QString &,
                 const QString &)> &reportError);
+        bool refreshCacheWithValidatorForTest(
+            const QString &sourcePath,
+            const QString &cachePath,
+            const std::function<bool(
+                const QString &,
+                const RideFileCacheIntegrity::CacheWriteOperation &,
+                const RideFileCacheIntegrity::
+                    CachePreCommitValidator &,
+                QString *)> &writeCache,
+            const std::function<void(
+                const QString &,
+                const QString &)> &reportError);
 #endif
 
         // get a single best or time in zone value from the cache file
@@ -236,6 +248,8 @@ class RideFileCache
             std::function<bool(
                 const QString &,
                 const RideFileCacheIntegrity::CacheWriteOperation &,
+                const RideFileCacheIntegrity::
+                    CachePreCommitValidator &,
                 QString *)> writeCache;
             std::function<void(
                 const QString &,

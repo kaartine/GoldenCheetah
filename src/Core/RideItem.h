@@ -82,6 +82,7 @@ class RideItem : public QObject
         QMap<QString, QVector<double> > userCache;
 
         unsigned long metaCRC();
+        void rebindSourceProvenance();
 
     public slots:
         void modified();

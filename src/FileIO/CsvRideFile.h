@@ -29,6 +29,7 @@ struct CsvFileReader : public RideFileReader {
     typedef enum csvtypes CsvType;
 
     virtual RideFile *openRideFile(QFile &file, QStringList &errors, QList<RideFile*>* = 0) const; 
+    bool requiresOriginalSourcePath() const override { return true; }
 
     // standard calling semantics - will write as powertap csv
     bool writeRideFile(Context *context, const RideFile *ride, QFile &file) const
@@ -40,4 +41,3 @@ struct CsvFileReader : public RideFileReader {
 };
 
 #endif // _CsvRideFile_h
-

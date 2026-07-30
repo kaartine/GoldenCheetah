@@ -19,6 +19,7 @@
 #ifndef _RideFile_h
 #define _RideFile_h
 #include "GoldenCheetah.h"
+#include "RideFileCRC.h"
 
 #include <QDate>
 #include <QDir>
@@ -31,6 +32,7 @@
 
 class RideItem;
 class RideCache;
+class RideFileCache;
 class Specification;
 class IntervalItem;
 class WPrime;
@@ -201,6 +203,7 @@ class RideFile : public QObject // QObject to emit signals
 
         friend class RideFileCommand; // tells us we were modified
         friend class RideCache; // tells us if wbal is stale
+        friend class RideFileCache; // validates CPX source provenance
         friend class RideItem; // derived/wbal stale
         friend class IntervalItem; // access intervals 
         friend class MainWindow; // tells us we were modified
@@ -236,6 +239,14 @@ class RideFile : public QObject // QObject to emit signals
         Q_DECL_DEPRECATED_X(
             "Use computeFileCRC(filename, checksum) to distinguish errors")
         static unsigned int computeFileCRC(QString filename);
+#ifdef GC_RIDE_FILE_SOURCE_PROVENANCE_TEST_HOOKS
+        bool sourceProvenanceMatchesForTest(
+            const QString &filename) const;
+        bool bindSourceProvenanceForTest(
+            const QString &filename);
+        void rebindSourceProvenanceForTest(
+            const QString &filename);
+#endif
         void updateDataTag();
 
         // Constructor / Destructor
@@ -472,6 +483,39 @@ class RideFile : public QObject // QObject to emit signals
 
     private:
 
+        struct SourceFingerprint {
+            QString canonicalPath;
+            qint64 size = -1;
+            QByteArray sha256;
+            quint16 crc = 0;
+
+            bool isValid() const {
+                return !canonicalPath.isEmpty()
+                    && size >= 0
+                    && sha256.size()
+                        == RideFileCRC::Sha256Size;
+            }
+            bool operator==(
+                const SourceFingerprint &other) const {
+                return canonicalPath == other.canonicalPath
+                    && size == other.size
+                    && sha256 == other.sha256
+                    && crc == other.crc;
+            }
+        };
+
+        static bool captureSourceFingerprint(
+            const QString &filename,
+            SourceFingerprint &fingerprint);
+        bool sourceProvenanceMatches(
+            const SourceFingerprint &fingerprint) const;
+        bool bindSourceProvenance(
+            const QString &filename);
+        void rebindSourceProvenance(
+            const QString &filename);
+        void invalidateSourceProvenance();
+
+        SourceFingerprint sourceProvenance_;
         QString id_; // global uuid@goldencheetah.org
         QDateTime startTime_;  // time of day that the ride started
         double recIntSecs_;    // recording interval in seconds
@@ -669,6 +713,7 @@ public:
 struct RideFileReader {
     virtual ~RideFileReader() {}
     virtual RideFile *openRideFile(QFile &file, QStringList &errors, QList<RideFile*>* = 0) const = 0;
+    virtual bool requiresOriginalSourcePath() const { return true; }
 
     // if hasWrite capability should re-implement writeRideFile and hasWrite
     virtual bool hasWrite() const { return false; }

@@ -26,6 +26,7 @@
 
 struct PwxFileReader : public RideFileReader {
     virtual RideFile *openRideFile(QFile &file, QStringList &errors, QList<RideFile*>* = 0) const; 
+    bool requiresOriginalSourcePath() const override { return false; }
     bool writeRideFile(Context *, const RideFile *ride, QFile &file) const;
     virtual RideFile *PwxFromDomDoc(QDomDocument doc, QStringList &errors) const;
     bool hasWrite() const { return true; }

@@ -8,12 +8,75 @@
  */
 
 #include "Athlete.h"
+#include "CompressedActivityFile.h"
+#include "Context.h"
+#include "FilterHRV.h"
 #include "HrZones.h"
 #include "PaceZones.h"
+#include "Settings.h"
 #include "WPrime.h"
 #include "Zones.h"
 
 #include <QString>
+
+GSettings::GSettings(QString, QString)
+    : newFormat(false)
+{
+}
+
+GSettings::~GSettings()
+{
+}
+
+QVariant
+GSettings::value(
+    const QObject *,
+    const QString,
+    const QVariant defaultValue)
+{
+    return defaultValue;
+}
+
+QVariant
+GSettings::cvalue(
+    QString,
+    QString,
+    QVariant defaultValue)
+{
+    return defaultValue;
+}
+
+static GSettings testSettings(
+    QStringLiteral("GoldenCheetah"),
+    QStringLiteral("RideFileCacheRefreshTest"));
+GSettings *appsettings = &testSettings;
+
+GlobalContext *
+GlobalContext::context()
+{
+    return nullptr;
+}
+
+namespace CompressedActivityFile {
+
+bool extractSingleFile(
+    std::unique_ptr<QIODevice>,
+    Format,
+    QIODevice *)
+{
+    return false;
+}
+
+} // namespace CompressedActivityFile
+
+void FilterHrv(
+    XDataSeries *,
+    double,
+    double,
+    double,
+    int)
+{
+}
 
 void Context::reportCacheWriteFailure(
     const QString &,

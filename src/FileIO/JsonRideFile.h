@@ -43,6 +43,7 @@ struct JsonFileReader : public RideFileReader {
     }
 
     virtual RideFile *openRideFile(QFile &file, QStringList &errors, QList<RideFile*>* = 0) const; 
+    bool requiresOriginalSourcePath() const override { return false; }
     RideFile *fromByteArray(const QByteArray &bytes,
                             QStringList &errors) const;
     QByteArray toByteArray(Context *context, const RideFile *ride, bool withAlt, bool withWatts, bool withHr, bool withCad) const;
@@ -58,4 +59,3 @@ private:
 };
 
 #endif // _JsonRideFile_h
-

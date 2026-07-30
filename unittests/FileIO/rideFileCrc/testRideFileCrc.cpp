@@ -11,6 +11,7 @@
 
 #include <QBuffer>
 #include <QByteArrayView>
+#include <QCryptographicHash>
 #include <QFile>
 #include <QFileInfo>
 #include <QIODevice>
@@ -23,10 +24,14 @@
 #include <functional>
 #include <limits>
 #include <utility>
+#include <vector>
 
 #if defined(Q_OS_UNIX)
 #include <fcntl.h>
+#include <signal.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #endif
 
 namespace {
@@ -213,6 +218,28 @@ bool compute(const QByteArray &bytes, quint16 &checksum)
     return RideFileCRC::compute(input, checksum);
 }
 
+bool computeFingerprint(
+    const QByteArray &bytes,
+    RideFileCRC::ContentFingerprint &fingerprint)
+{
+    QBuffer input;
+    input.setData(bytes);
+    if (!input.open(QIODevice::ReadOnly))
+        return false;
+    return RideFileCRC::computeFingerprint(
+        input, fingerprint);
+}
+
+QByteArray bytesForValue(quint32 value)
+{
+    QByteArray bytes(4, '\0');
+    bytes[0] = static_cast<char>(value & 0xff);
+    bytes[1] = static_cast<char>((value >> 8) & 0xff);
+    bytes[2] = static_cast<char>((value >> 16) & 0xff);
+    bytes[3] = static_cast<char>((value >> 24) & 0xff);
+    return bytes;
+}
+
 } // namespace
 
 class TestRideFileCrc : public QObject
@@ -243,6 +270,15 @@ private slots:
     void fileSnapshotRejectsGrowthAfterFirstChunk();
     void fileSnapshotRejectsShrinkAfterFirstChunk();
     void fileSnapshotRejectsNonRegularInput();
+    void fileSnapshotRejectsFifoWithoutBlocking();
+    void fingerprintFailureLeavesOutputUnchanged();
+    void captureProvidesStableStagedBytes();
+    void captureFailureLeavesOutputUnchanged();
+    void fingerprintDistinguishesSameSizeContent();
+    void fingerprintDistinguishesCrc16Collision();
+    void captureRejectsSourceRewriteAfterCopy();
+    void captureRejectsAtomicReplacement();
+    void captureRejectsTruncation();
 };
 
 void TestRideFileCrc::matchesStandardVectors_data()
@@ -779,6 +815,359 @@ void TestRideFileCrc::fileSnapshotRejectsNonRegularInput()
     QVERIFY(!RideFileCRC::computeFileForTest(
         directory.path(), checksum, {}));
     QCOMPARE(checksum, quint16(0xbeef));
+}
+
+void TestRideFileCrc::fileSnapshotRejectsFifoWithoutBlocking()
+{
+#if defined(Q_OS_UNIX)
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path =
+        directory.filePath(QStringLiteral("activity.fifo"));
+    const QByteArray nativePath = QFile::encodeName(path);
+    QCOMPARE(::mkfifo(nativePath.constData(), 0600), 0);
+
+    const pid_t child = ::fork();
+    QVERIFY(child >= 0);
+    if (child == 0) {
+        ::alarm(2);
+        quint16 checksum = 0xbeef;
+        const bool computed =
+            RideFileCRC::computeFile(path, checksum);
+        ::_exit(
+            !computed && checksum == quint16(0xbeef)
+            ? EXIT_SUCCESS
+            : EXIT_FAILURE);
+    }
+
+    int status = 0;
+    QCOMPARE(::waitpid(child, &status, 0), child);
+    QVERIFY2(
+        WIFEXITED(status),
+        "FIFO source blocked until the child alarm fired");
+    QCOMPARE(WEXITSTATUS(status), EXIT_SUCCESS);
+#else
+    QSKIP("FIFO behavior is Unix-specific");
+#endif
+}
+
+void TestRideFileCrc::fingerprintFailureLeavesOutputUnchanged()
+{
+    RideFileCRC::ContentFingerprint original;
+    original.byteSize = 7;
+    original.sha256 = QByteArray(
+        RideFileCRC::Sha256Size, '\x5a');
+    original.legacyCrc16 = 0x1234;
+    QVERIFY(original.isValid());
+
+    QBuffer closed;
+    closed.setData(QByteArrayLiteral("closed"));
+    RideFileCRC::ContentFingerprint fingerprint = original;
+
+    QVERIFY(!RideFileCRC::computeFingerprint(
+        closed, fingerprint));
+    QVERIFY(fingerprint == original);
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString missing =
+        directory.filePath(QStringLiteral("missing.fit"));
+    QVERIFY(!RideFileCRC::computeFileFingerprint(
+        missing, fingerprint));
+    QVERIFY(fingerprint == original);
+}
+
+void TestRideFileCrc::captureProvidesStableStagedBytes()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path =
+        directory.filePath(QStringLiteral("stable.fit"));
+    const QByteArray original(
+        RideFileCRC::ReadChunkSize + 17, '\x6b');
+    QFile source(path);
+    QVERIFY(source.open(QIODevice::WriteOnly));
+    QCOMPARE(source.write(original), original.size());
+    source.close();
+
+    RideFileCRC::StagedSource captured;
+    QVERIFY(RideFileCRC::captureFile(path, captured));
+    QVERIFY(captured.isValid());
+    QFile *staged = captured.fileForReading();
+    QVERIFY(staged);
+    QVERIFY(!staged->isOpen());
+    QVERIFY(staged->fileName() != path);
+    QCOMPARE(
+        QFileInfo(staged->fileName()).fileName(),
+        QFileInfo(path).fileName());
+
+    QVERIFY(source.open(
+        QIODevice::WriteOnly | QIODevice::Truncate));
+    const QByteArray replacement(original.size(), '\x19');
+    QCOMPARE(
+        source.write(replacement),
+        replacement.size());
+    source.close();
+
+    QVERIFY(staged->open(QIODevice::ReadOnly));
+    QCOMPARE(staged->readAll(), original);
+    staged->close();
+
+    const RideFileCRC::ContentFingerprint &fingerprint =
+        captured.fingerprint();
+    QCOMPARE(
+        fingerprint.byteSize,
+        static_cast<qint64>(original.size()));
+    QCOMPARE(
+        fingerprint.sha256,
+        QCryptographicHash::hash(
+            original, QCryptographicHash::Sha256));
+    QCOMPARE(
+        fingerprint.legacyCrc16,
+        qChecksum(QByteArrayView(original)));
+}
+
+void TestRideFileCrc::captureFailureLeavesOutputUnchanged()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path =
+        directory.filePath(QStringLiteral("valid.fit"));
+    QFile source(path);
+    QVERIFY(source.open(QIODevice::WriteOnly));
+    QCOMPARE(
+        source.write(QByteArrayLiteral("activity")),
+        qint64(8));
+    source.close();
+
+    RideFileCRC::StagedSource captured;
+    QVERIFY(RideFileCRC::captureFile(path, captured));
+    QFile *const originalFile =
+        captured.fileForReading();
+    QVERIFY(originalFile);
+    const QString originalStagedPath =
+        originalFile->fileName();
+    const RideFileCRC::ContentFingerprint originalFingerprint =
+        captured.fingerprint();
+
+    const QString missing =
+        directory.filePath(QStringLiteral("missing.fit"));
+    QVERIFY(!RideFileCRC::captureFile(missing, captured));
+    QVERIFY(captured.isValid());
+    QCOMPARE(captured.fileForReading(), originalFile);
+    QCOMPARE(
+        captured.fileForReading()->fileName(),
+        originalStagedPath);
+    QVERIFY(
+        captured.fingerprint()
+        == originalFingerprint);
+    QVERIFY(QFileInfo::exists(originalStagedPath));
+
+    RideFileCRC::StagedSource invalid;
+    QVERIFY(!RideFileCRC::captureFile(missing, invalid));
+    QVERIFY(!invalid.isValid());
+    QVERIFY(!invalid.fileForReading());
+    QVERIFY(!invalid.fingerprint().isValid());
+}
+
+void TestRideFileCrc::fingerprintDistinguishesSameSizeContent()
+{
+    const QByteArray first =
+        QByteArrayLiteral("source-alpha");
+    const QByteArray second =
+        QByteArrayLiteral("source-omega");
+    QCOMPARE(first.size(), second.size());
+
+    RideFileCRC::ContentFingerprint firstFingerprint;
+    RideFileCRC::ContentFingerprint secondFingerprint;
+    QVERIFY(computeFingerprint(first, firstFingerprint));
+    QVERIFY(computeFingerprint(second, secondFingerprint));
+
+    QCOMPARE(
+        firstFingerprint.byteSize,
+        secondFingerprint.byteSize);
+    QVERIFY(
+        firstFingerprint.sha256
+        != secondFingerprint.sha256);
+    QVERIFY(firstFingerprint != secondFingerprint);
+}
+
+void TestRideFileCrc::fingerprintDistinguishesCrc16Collision()
+{
+    std::vector<int> firstSeen(1 << 16, -1);
+    QByteArray first;
+    QByteArray second;
+    for (quint32 value = 0; value <= (1U << 16); ++value) {
+        const QByteArray candidate = bytesForValue(value);
+        const quint16 checksum =
+            qChecksum(QByteArrayView(candidate));
+        if (firstSeen[checksum] >= 0) {
+            first = bytesForValue(
+                static_cast<quint32>(
+                    firstSeen[checksum]));
+            second = candidate;
+            break;
+        }
+        firstSeen[checksum] =
+            static_cast<int>(value);
+    }
+
+    QVERIFY(!first.isEmpty());
+    QVERIFY(first != second);
+    QCOMPARE(first.size(), second.size());
+
+    RideFileCRC::ContentFingerprint firstFingerprint;
+    RideFileCRC::ContentFingerprint secondFingerprint;
+    QVERIFY(computeFingerprint(first, firstFingerprint));
+    QVERIFY(computeFingerprint(second, secondFingerprint));
+    QCOMPARE(
+        firstFingerprint.legacyCrc16,
+        secondFingerprint.legacyCrc16);
+    QCOMPARE(
+        firstFingerprint.byteSize,
+        secondFingerprint.byteSize);
+    QVERIFY(
+        firstFingerprint.sha256
+        != secondFingerprint.sha256);
+    QVERIFY(firstFingerprint != secondFingerprint);
+}
+
+void TestRideFileCrc::captureRejectsSourceRewriteAfterCopy()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path =
+        directory.filePath(QStringLiteral("rewrite.fit"));
+    const QByteArray original(
+        RideFileCRC::ReadChunkSize + 17, '\x21');
+    const QByteArray replacement(
+        original.size(), '\x72');
+    QFile source(path);
+    QVERIFY(source.open(QIODevice::WriteOnly));
+    QCOMPARE(source.write(original), original.size());
+    source.close();
+
+    RideFileCRC::StagedSource captured;
+    QVERIFY(RideFileCRC::captureFile(path, captured));
+    QFile *const originalStagedFile =
+        captured.fileForReading();
+    QVERIFY(originalStagedFile);
+    const QString originalStagedPath =
+        originalStagedFile->fileName();
+    const RideFileCRC::ContentFingerprint originalFingerprint =
+        captured.fingerprint();
+
+    bool rewriteCompleted = false;
+    RideFileCRC::FileTestHooks hooks;
+    hooks.afterSourceCopied = [&]() {
+        QFile current(path);
+        rewriteCompleted =
+            current.open(
+                QIODevice::WriteOnly
+                | QIODevice::Truncate)
+            && current.write(replacement)
+                == replacement.size();
+        current.close();
+    };
+
+    const bool captureSucceeded =
+        RideFileCRC::captureFileForTest(
+            path, captured, hooks);
+
+    QVERIFY(rewriteCompleted);
+    QVERIFY(!captureSucceeded);
+    QCOMPARE(
+        captured.fileForReading(),
+        originalStagedFile);
+    QCOMPARE(
+        captured.fileForReading()->fileName(),
+        originalStagedPath);
+    QVERIFY(
+        captured.fingerprint()
+        == originalFingerprint);
+    QVERIFY(QFileInfo::exists(originalStagedPath));
+}
+
+void TestRideFileCrc::captureRejectsAtomicReplacement()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path =
+        directory.filePath(QStringLiteral("replace.fit"));
+    const QByteArray original(
+        RideFileCRC::ReadChunkSize * 2 + 17, '\x33');
+    const QByteArray replacement(
+        original.size(), '\x44');
+    QFile source(path);
+    QVERIFY(source.open(QIODevice::WriteOnly));
+    QCOMPARE(source.write(original), original.size());
+    source.close();
+
+    QSaveFile stagedReplacement(path);
+    QVERIFY(stagedReplacement.open(QIODevice::WriteOnly));
+    QCOMPARE(
+        stagedReplacement.write(replacement),
+        replacement.size());
+    bool replacementAttempted = false;
+    bool replacementCommitted = false;
+    RideFileCRC::FileTestHooks hooks;
+    hooks.afterChunk = [&](qint64 totalRead) {
+        if (!replacementAttempted
+            && totalRead >= RideFileCRC::ReadChunkSize) {
+            replacementAttempted = true;
+            replacementCommitted =
+                stagedReplacement.commit();
+        }
+    };
+    RideFileCRC::StagedSource captured;
+
+    const bool captureSucceeded =
+        RideFileCRC::captureFileForTest(
+            path, captured, hooks);
+    QVERIFY(replacementAttempted);
+    if (!replacementCommitted)
+        QSKIP("Platform did not permit replacing an open file");
+    QVERIFY(!captureSucceeded);
+    QVERIFY(!captured.isValid());
+}
+
+void TestRideFileCrc::captureRejectsTruncation()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path =
+        directory.filePath(QStringLiteral("truncate.fit"));
+    const QByteArray original(
+        RideFileCRC::ReadChunkSize * 2 + 17, '\x55');
+    QFile source(path);
+    QVERIFY(source.open(QIODevice::WriteOnly));
+    QCOMPARE(source.write(original), original.size());
+    source.close();
+
+    bool truncationAttempted = false;
+    bool truncated = false;
+    RideFileCRC::FileTestHooks hooks;
+    hooks.afterChunk = [&](qint64 totalRead) {
+        if (!truncationAttempted
+            && totalRead >= RideFileCRC::ReadChunkSize) {
+            truncationAttempted = true;
+            QFile current(path);
+            truncated =
+                current.open(QIODevice::ReadWrite)
+                && current.resize(
+                    RideFileCRC::ReadChunkSize + 1);
+        }
+    };
+    RideFileCRC::StagedSource captured;
+
+    const bool captureSucceeded =
+        RideFileCRC::captureFileForTest(
+            path, captured, hooks);
+    QVERIFY(truncationAttempted);
+    if (!truncated)
+        QSKIP("Platform did not permit truncating an open file");
+    QVERIFY(!captureSucceeded);
+    QVERIFY(!captured.isValid());
 }
 
 QTEST_GUILESS_MAIN(TestRideFileCrc)
