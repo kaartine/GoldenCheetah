@@ -122,6 +122,11 @@ class MainWindow : public QMainWindow
         static bool saveSilent(
             Context *, RideItem *, QString *error = nullptr,
             const ActivitySaveOperations *operations = nullptr);
+        static bool saveLinkedActivitiesTransaction(
+            Context *, const QString &athleteRoot,
+            const QList<RideItem *> &, QString &error,
+            const std::function<ActivitySaveOperations(RideItem *)>
+                &operationsProvider);
 
     protected:
 

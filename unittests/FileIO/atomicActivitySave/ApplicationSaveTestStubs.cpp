@@ -1,6 +1,7 @@
 #include "DataProcessor.h"
 #include "Estimator.h"
 #include "MainWindow.h"
+#include "RideCache.h"
 #include "RideItem.h"
 #include "Settings.h"
 
@@ -285,5 +286,9 @@ GSettings testSettings(QStringLiteral("GoldenCheetah"),
 GSettings *appsettings = &testSettings;
 
 void Estimator::refresh()
+{
+}
+
+void RideCache::itemSaved(RideItem *)
 {
 }

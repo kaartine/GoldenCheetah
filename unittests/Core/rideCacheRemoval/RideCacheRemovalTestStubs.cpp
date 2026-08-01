@@ -1,5 +1,6 @@
 #include "LTMSettings.h"
 #include "LinkedActivityRemovalJournal.h"
+#include "LinkedActivitySaveJournal.h"
 #include "Athlete.h"
 #include "Context.h"
 #include "DataProcessor.h"
@@ -782,9 +783,13 @@ RideCache::RideCache(Context *cacheContext)
       estimator(new Estimator(cacheContext)),
       first(false)
 {
-    LinkedActivityRemoval::Journal::reconcileAll(
-        cacheContext->athlete->home->root().absolutePath(),
-        startupRecoveryError_);
+    if (LinkedActivityRemoval::Journal::reconcileAll(
+            cacheContext->athlete->home->root().absolutePath(),
+            startupRecoveryError_)) {
+        LinkedActivitySave::Journal::reconcileAll(
+            cacheContext->athlete->home->root().absolutePath(),
+            startupRecoveryError_);
+    }
 }
 
 RideCache::~RideCache()

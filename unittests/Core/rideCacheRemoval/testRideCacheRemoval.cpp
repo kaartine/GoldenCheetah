@@ -4,6 +4,7 @@
 #include "Context.h"
 #include "AtomicFileWriter.h"
 #include "LinkedActivityRemovalJournal.h"
+#include "LinkedActivitySaveJournal.h"
 #include "RideCache.h"
 #include "RideCacheModel.h"
 #include "RideItem.h"
@@ -331,7 +332,11 @@ private slots:
     void linkedRollbackSaveFailureReportsRecoveryPath();
     void linkedRollbackPrecedesCompensationSerialization();
     void concurrentLinkedRemovalJournalsAreSerialized();
+    void activeLinkedSaveAndRemovalShareAthleteLease();
     void abandonedLinkedRemovalJournalBlocksNextTransaction();
+    void pendingLinkedSaveJournalBlocksDeletionTransaction();
+    void startupReconcilesAbandonedLinkedSaveJournal();
+    void startupReportsCorruptLinkedSaveJournal();
     void prepareRestrictsExistingTransactionDirectories();
     void startupRestrictsExistingTransactionDirectories();
     void oversizedUnreadableJournalControlFileFailsBeforeRead_data();
@@ -2378,6 +2383,69 @@ concurrentLinkedRemovalJournalsAreSerialized()
 }
 
 void TestRideCacheRemoval::
+activeLinkedSaveAndRemovalShareAthleteLease()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QString peerPath = fixture.plannedActivityPath(secondName());
+    writeFixture(sourcePath, QByteArray("source"));
+    writeFixture(peerPath, QByteArray("peer"));
+    LinkedActivitySave::Specification saveSpecification;
+    saveSpecification.athleteRoot = fixture.temporary.path();
+    saveSpecification.entries = {
+        {sourcePath,
+         fixture.activityPath(thirdName()),
+         sourcePath + QStringLiteral(".save-bak"),
+         false},
+        {peerPath,
+         fixture.plannedActivityPath(thirdName()),
+         peerPath + QStringLiteral(".save-bak"),
+         false}};
+    const LinkedActivityRemoval::Specification removalSpecification{
+        fixture.athlete->home->root().absolutePath(),
+        sourcePath,
+        fixture.backupPath(firstName()),
+        peerPath,
+        {}};
+
+    QString error;
+    std::shared_ptr<LinkedActivitySave::Journal> save =
+        LinkedActivitySave::Journal::prepare(
+            saveSpecification, error);
+    QVERIFY2(save, qPrintable(error));
+
+    error.clear();
+    const std::shared_ptr<LinkedActivityRemoval::Journal> blockedRemoval =
+        LinkedActivityRemoval::Journal::prepare(
+            removalSpecification, error);
+    QVERIFY(!blockedRemoval);
+    QVERIFY2(
+        error.contains(QStringLiteral("already"), Qt::CaseInsensitive),
+        qPrintable(error));
+    error.clear();
+    QVERIFY2(save->cleanupAfterRollback(error), qPrintable(error));
+    save.reset();
+
+    std::shared_ptr<LinkedActivityRemoval::Journal> removal =
+        LinkedActivityRemoval::Journal::prepare(
+            removalSpecification, error);
+    QVERIFY2(removal, qPrintable(error));
+
+    error.clear();
+    const std::shared_ptr<LinkedActivitySave::Journal> blockedSave =
+        LinkedActivitySave::Journal::prepare(
+            saveSpecification, error);
+    QVERIFY(!blockedSave);
+    QVERIFY2(
+        error.contains(QStringLiteral("already"), Qt::CaseInsensitive),
+        qPrintable(error));
+    error.clear();
+    QVERIFY2(removal->cleanupAfterRollback(error), qPrintable(error));
+}
+
+void TestRideCacheRemoval::
 abandonedLinkedRemovalJournalBlocksNextTransaction()
 {
     Fixture fixture;
@@ -2423,6 +2491,130 @@ abandonedLinkedRemovalJournalBlocksNextTransaction()
         LinkedActivityRemoval::Journal::prepare(specification, error);
     QVERIFY2(next, qPrintable(error));
     QVERIFY2(next->cleanupAfterRollback(error), qPrintable(error));
+}
+
+void TestRideCacheRemoval::
+pendingLinkedSaveJournalBlocksDeletionTransaction()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QString peerPath = fixture.plannedActivityPath(secondName());
+    writeFixture(sourcePath, QByteArray("source"));
+    writeFixture(peerPath, QByteArray("peer"));
+
+    const QString pending = QDir(fixture.temporary.path()).filePath(
+        QStringLiteral(".gc-transactions/linked-save/")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces).toLower());
+    QVERIFY(QDir().mkpath(pending));
+
+    const LinkedActivityRemoval::Specification specification = {
+        fixture.temporary.path(),
+        sourcePath,
+        fixture.backupPath(firstName()),
+        peerPath,
+        {}};
+    QString error;
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(specification, error);
+    QVERIFY(!journal);
+    QVERIFY2(
+        error.contains(QStringLiteral("recovery"), Qt::CaseInsensitive),
+        qPrintable(error));
+}
+
+void TestRideCacheRemoval::
+startupReconcilesAbandonedLinkedSaveJournal()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    std::unique_ptr<Context> context(new Context(nullptr));
+    std::unique_ptr<Athlete> athlete(
+        new Athlete(context.get(), QDir(temporary.path())));
+
+    const QString firstPath = athlete->home->activities().filePath(
+        firstName());
+    const QString secondPath = athlete->home->planned().filePath(
+        secondName());
+    writeFixture(firstPath, QByteArray("first-old"));
+    writeFixture(secondPath, QByteArray("second-old"));
+    LinkedActivitySave::Specification specification;
+    specification.athleteRoot = temporary.path();
+    specification.entries = {
+        {firstPath,
+         athlete->home->activities().filePath(thirdName()),
+         firstPath + QStringLiteral(".bak"),
+         false},
+        {secondPath,
+         athlete->home->planned().filePath(thirdName()),
+         secondPath + QStringLiteral(".bak"),
+         false}};
+    QString error;
+    std::shared_ptr<LinkedActivitySave::Journal> abandoned =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(abandoned, qPrintable(error));
+    const QString journalPath = abandoned->directoryPath();
+    abandoned.reset();
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    std::unique_ptr<RideCache> cache(new RideCache(context.get()));
+    athlete->rideCache = cache.get();
+    QVERIFY2(
+        cache->startupRecoveryError().isEmpty(),
+        qPrintable(cache->startupRecoveryError()));
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QCOMPARE(readBytes(firstPath), QByteArray("first-old"));
+    QCOMPARE(readBytes(secondPath), QByteArray("second-old"));
+}
+
+void TestRideCacheRemoval::
+startupReportsCorruptLinkedSaveJournal()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    std::unique_ptr<Context> context(new Context(nullptr));
+    std::unique_ptr<Athlete> athlete(
+        new Athlete(context.get(), QDir(temporary.path())));
+
+    const QString firstPath = athlete->home->activities().filePath(
+        firstName());
+    const QString secondPath = athlete->home->planned().filePath(
+        secondName());
+    writeFixture(firstPath, QByteArray("first-old"));
+    writeFixture(secondPath, QByteArray("second-old"));
+    LinkedActivitySave::Specification specification;
+    specification.athleteRoot = temporary.path();
+    specification.entries = {
+        {firstPath,
+         athlete->home->activities().filePath(thirdName()),
+         firstPath + QStringLiteral(".bak"),
+         false},
+        {secondPath,
+         athlete->home->planned().filePath(thirdName()),
+         secondPath + QStringLiteral(".bak"),
+         false}};
+    QString error;
+    std::shared_ptr<LinkedActivitySave::Journal> abandoned =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(abandoned, qPrintable(error));
+    const QString journalPath = abandoned->directoryPath();
+    abandoned.reset();
+    writeFixture(
+        QDir(journalPath).filePath(QStringLiteral("manifest.json")),
+        QByteArray("{}\n"));
+
+    std::unique_ptr<RideCache> cache(new RideCache(context.get()));
+    athlete->rideCache = cache.get();
+    QVERIFY2(
+        !cache->startupRecoveryError().isEmpty(),
+        "Corrupt linked-save recovery must stop athlete startup");
+    QVERIFY2(
+        cache->startupRecoveryError().contains(
+            QStringLiteral("journal"), Qt::CaseInsensitive),
+        qPrintable(cache->startupRecoveryError()));
+    QVERIFY(QFileInfo::exists(journalPath));
+    QCOMPARE(readBytes(firstPath), QByteArray("first-old"));
+    QCOMPARE(readBytes(secondPath), QByteArray("second-old"));
 }
 
 void TestRideCacheRemoval::

@@ -250,6 +250,18 @@ struct ActivitySaveOperations
     bool persistCompletesDurableTransaction = false;
 };
 
+using ActivitySaveOperationsProvider =
+    std::function<ActivitySaveOperations(RideItem *)>;
+
+enum class LinkedActivitySaveRequirement {
+    NotRequired,
+    Required,
+    Invalid
+};
+
+LinkedActivitySaveRequirement linkedActivitySaveRequirement(
+    const QList<RideItem *> &items, QString &error);
+
 bool saveActivityTransaction(Context *context, RideFile *ride,
                              const QString &targetPath,
                              const ActivitySaveOperations &operations,
@@ -315,6 +327,8 @@ class SaveOnExitDialogWidget : public QDialog
         virtual bool saveRide(RideItem *rideItem);
         virtual void reportSaveError(const QString &error);
         virtual QList<RideItem *> currentDirtyActivities() const;
+        virtual RideItem *linkedActivityForSaveGroup(
+            RideItem *rideItem) const;
 
     private:
         struct DirtyActivity
@@ -383,6 +397,8 @@ using OperationPreflightValidate =
     std::function<bool(QString &)>;
 using OperationPreflightReload =
     std::function<RideFile *(RideItem *)>;
+using OperationPreflightFilenameChange =
+    std::function<bool(RideItem *, QString *)>;
 
 struct ProceedDialogSavedActivity
 {
@@ -416,6 +432,11 @@ guardOperationPreflightItems(
 extern bool resolveOperationPreflightItems(
     const GuardedOperationPreflightItems &guardedItems,
     QList<RideItem*> &items,
+    QString &error);
+extern RideItem *findOperationPreflightLinkedActivity(
+    RideItem *source,
+    const GuardedOperationPreflightItems &activities,
+    const OperationPreflightFilenameChange &filenameWillChange,
     QString &error);
 
 extern bool saveOperationPreflightActivities(

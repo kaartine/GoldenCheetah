@@ -32,6 +32,7 @@
 #include "Settings.h"
 #include "SaveDialogs.h"
 #include "DataProcessor.h"
+#include "LinkedActivitySaveJournal.h"
 
 static ActivitySaveWorkflow::Identity
 activitySaveIdentity(const RideItem *item)
@@ -112,6 +113,436 @@ runDefaultSaveProcessors(RideFile *ride, QString &error)
         error = QObject::tr("An activity processor failed");
         return false;
     }
+    return true;
+}
+
+namespace {
+
+struct ActivitySavePathPlan
+{
+    RideItem *item = nullptr;
+    QString sourcePath;
+    QString targetPath;
+    QString backupPath;
+    QString targetFileName;
+    bool convert = false;
+    bool pathChanges = false;
+};
+
+bool buildActivitySavePathPlan(
+    RideItem *item, ActivitySavePathPlan &plan, QString &error)
+{
+    plan = {};
+    if (!item || !item->ride(false)
+        || item->path.isEmpty() || item->fileName.isEmpty()) {
+        error = QObject::tr("Cannot prepare an activity path for saving");
+        return false;
+    }
+    plan.item = item;
+    plan.sourcePath = QFileInfo(
+        QDir(item->path).filePath(item->fileName)).absoluteFilePath();
+    const QFileInfo sourceInfo(plan.sourcePath);
+    plan.convert = sourceInfo.completeSuffix().compare(
+                       QStringLiteral("json"), Qt::CaseInsensitive) != 0;
+
+    const QDateTime rideDateTime = item->ride(false)->startTime();
+    const QChar zero = QLatin1Char('0');
+    const QString datedBaseName = QStringLiteral("%1_%2_%3_%4_%5_%6")
+        .arg(rideDateTime.date().year(), 4, 10, zero)
+        .arg(rideDateTime.date().month(), 2, 10, zero)
+        .arg(rideDateTime.date().day(), 2, 10, zero)
+        .arg(rideDateTime.time().hour(), 2, 10, zero)
+        .arg(rideDateTime.time().minute(), 2, 10, zero)
+        .arg(rideDateTime.time().second(), 2, 10, zero);
+    const bool keepCurrentPath =
+        !plan.convert && sourceInfo.baseName() == datedBaseName;
+    plan.targetPath = keepCurrentPath
+        ? plan.sourcePath
+        : QDir(sourceInfo.absolutePath()).filePath(
+              datedBaseName + QStringLiteral(".json"));
+    plan.targetPath = QFileInfo(plan.targetPath).absoluteFilePath();
+    plan.targetFileName = QFileInfo(plan.targetPath).fileName();
+    plan.backupPath = plan.sourcePath + QStringLiteral(".bak");
+    plan.pathChanges = atomicFilePathKey(plan.sourcePath)
+        != atomicFilePathKey(plan.targetPath);
+    return true;
+}
+
+bool collectActivitySavePathPlans(
+    const QList<RideItem *> &items,
+    QList<ActivitySavePathPlan> &plans,
+    QString &error)
+{
+    plans.clear();
+    QSet<RideItem *> seen;
+    for (RideItem *item : items) {
+        if (!item) {
+            error = QObject::tr("No activity given");
+            return false;
+        }
+        if (seen.contains(item) || !item->isDirty()) continue;
+        seen.insert(item);
+        ActivitySavePathPlan plan;
+        if (!buildActivitySavePathPlan(item, plan, error)) return false;
+        plans.append(plan);
+    }
+    return true;
+}
+
+int linkedPlanIndex(
+    const QList<ActivitySavePathPlan> &plans,
+    int sourceIndex,
+    const QString &linkedFileName,
+    bool useTargetNames)
+{
+    int match = -1;
+    for (int index = 0; index < plans.size(); ++index) {
+        if (index == sourceIndex
+            || plans.at(index).item->planned
+                == plans.at(sourceIndex).item->planned) {
+            continue;
+        }
+        const QString candidate = useTargetNames
+            ? plans.at(index).targetFileName
+            : plans.at(index).item->fileName;
+        if (candidate != linkedFileName) continue;
+        if (match >= 0) return -2;
+        match = index;
+    }
+    return match;
+}
+
+void appendSaveError(QString &error, const QString &detail)
+{
+    if (detail.isEmpty()) return;
+    if (!error.isEmpty()) error += QStringLiteral("; ");
+    error += detail;
+}
+
+} // namespace
+
+LinkedActivitySaveRequirement linkedActivitySaveRequirement(
+    const QList<RideItem *> &items, QString &error)
+{
+    error.clear();
+    QList<ActivitySavePathPlan> plans;
+    if (!collectActivitySavePathPlans(items, plans, error)) {
+        return LinkedActivitySaveRequirement::Invalid;
+    }
+    if (plans.size() < 2) {
+        return LinkedActivitySaveRequirement::NotRequired;
+    }
+
+    bool required = false;
+    for (int index = 0; index < plans.size(); ++index) {
+        const ActivitySavePathPlan &plan = plans.at(index);
+        const QString linkedFileName = plan.item->getLinkedFileName();
+        if (linkedFileName.isEmpty()) continue;
+
+        const int linkedIndex = linkedPlanIndex(
+            plans, index, linkedFileName, true);
+        if (linkedIndex == -2) {
+            error = QObject::tr(
+                "The linked activity target filename is ambiguous");
+            return LinkedActivitySaveRequirement::Invalid;
+        }
+        if (linkedIndex < 0) {
+            if (!plan.pathChanges) continue;
+            const int oldLinkedIndex = linkedPlanIndex(
+                plans, index, linkedFileName, false);
+            error = oldLinkedIndex >= 0
+                ? QObject::tr(
+                    "Linked activity filenames were not updated before saving")
+                : QObject::tr(
+                    "The complete linked activity pair is not available for saving");
+            return LinkedActivitySaveRequirement::Invalid;
+        }
+
+        const ActivitySavePathPlan &linked = plans.at(linkedIndex);
+        if (linked.item->getLinkedFileName() != plan.targetFileName) {
+            error = QObject::tr(
+                "The linked activity filenames are not reciprocal");
+            return LinkedActivitySaveRequirement::Invalid;
+        }
+        required = required || plan.pathChanges || linked.pathChanges;
+    }
+    return required
+        ? LinkedActivitySaveRequirement::Required
+        : LinkedActivitySaveRequirement::NotRequired;
+}
+
+bool MainWindow::saveLinkedActivitiesTransaction(
+    Context *context,
+    const QString &athleteRoot,
+    const QList<RideItem *> &items,
+    QString &error,
+    const ActivitySaveOperationsProvider &operationsProvider)
+{
+    error.clear();
+    const bool contextRequired = context != nullptr;
+    QPointer<Context> guardedContext(context);
+    QPointer<Athlete> guardedAthlete(
+        guardedContext ? guardedContext->athlete : nullptr);
+    QPointer<RideCache> guardedCache(
+        guardedAthlete ? guardedAthlete->rideCache : nullptr);
+    if (linkedActivitySaveRequirement(items, error)
+            != LinkedActivitySaveRequirement::Required) {
+        if (error.isEmpty()) {
+            error = QObject::tr(
+                "The activities do not require a linked save transaction");
+        }
+        return false;
+    }
+
+    QList<ActivitySavePathPlan> plans;
+    if (!collectActivitySavePathPlans(items, plans, error)) return false;
+
+    struct GuardedEntry
+    {
+        ActivitySavePathPlan plan;
+        QPointer<RideItem> item;
+        QPointer<RideFile> ride;
+        ActivitySaveWorkflow::Identity identity;
+        QString linkedFileName;
+        bool hadHistory = false;
+        QString previousHistory;
+    };
+    QList<GuardedEntry> guarded;
+    guarded.reserve(plans.size());
+    LinkedActivitySave::Specification specification;
+    specification.athleteRoot = athleteRoot;
+    for (const ActivitySavePathPlan &plan : std::as_const(plans)) {
+        RideFile *const ride = plan.item->ride(false);
+        GuardedEntry entry;
+        entry.plan = plan;
+        entry.item = plan.item;
+        entry.ride = ride;
+        entry.identity = activitySaveIdentity(plan.item);
+        entry.linkedFileName = plan.item->getLinkedFileName();
+        entry.hadHistory = ride->tags().contains(
+            QStringLiteral("Change History"));
+        entry.previousHistory = ride->getTag(
+            QStringLiteral("Change History"), QString());
+        guarded.append(entry);
+        specification.entries.append({
+            plan.sourcePath,
+            plan.targetPath,
+            plan.backupPath,
+            plan.convert});
+    }
+
+    const auto ownersAreCurrent = [&]() {
+        return !contextRequired
+            || (guardedContext && guardedAthlete && guardedCache
+                && guardedContext->athlete == guardedAthlete.data()
+                && guardedAthlete->rideCache == guardedCache.data());
+    };
+    const auto entryIsCurrent = [&](const GuardedEntry &entry) {
+        if (!entry.item || !entry.ride
+            || entry.item->ride(false) != entry.ride.data()
+            || activitySaveIdentity(entry.item.data()).fileName
+                != entry.identity.fileName
+            || activitySaveIdentity(entry.item.data()).path
+                != entry.identity.path
+            || activitySaveIdentity(entry.item.data()).planned
+                != entry.identity.planned
+            || entry.item->getLinkedFileName()
+                != entry.linkedFileName) {
+            return false;
+        }
+        if (!ownersAreCurrent()
+            || (contextRequired
+                && !activitySaveCacheContainsUniqueIdentity(
+                    guardedCache.data(),
+                    entry.item.data(),
+                    entry.identity))) {
+            return false;
+        }
+        ActivitySavePathPlan current;
+        QString ignored;
+        return buildActivitySavePathPlan(
+                   entry.item.data(), current, ignored)
+            && atomicFilePathKey(current.sourcePath)
+                == atomicFilePathKey(entry.plan.sourcePath)
+            && atomicFilePathKey(current.targetPath)
+                == atomicFilePathKey(entry.plan.targetPath);
+    };
+    const auto batchIsCurrent = [&]() {
+        return std::all_of(
+            guarded.cbegin(), guarded.cend(), entryIsCurrent);
+    };
+    const auto restoreHistories = [&]() {
+        const QString historyKey = QStringLiteral("Change History");
+        for (const GuardedEntry &entry : std::as_const(guarded)) {
+            if (!entry.ride) continue;
+            if (entry.hadHistory) {
+                entry.ride->setTag(historyKey, entry.previousHistory);
+            } else {
+                entry.ride->removeTag(historyKey);
+            }
+        }
+    };
+
+    std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    if (!journal) return false;
+
+    bool staged = true;
+    QList<ActivitySaveOperations> preparedOperations;
+    preparedOperations.reserve(guarded.size());
+    QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+    for (int index = 0; index < guarded.size(); ++index) {
+        GuardedEntry &entry = guarded[index];
+        if (!batchIsCurrent()) {
+            error = QObject::tr(
+                "A linked activity changed while preparing the save transaction");
+            staged = false;
+            break;
+        }
+
+        ActivitySaveOperations operations = operationsProvider
+            ? operationsProvider(entry.item.data())
+            : ActivitySaveOperations();
+        if (!operations.writerFactory) {
+            operations.writerFactory = qSaveFileWriterFactory();
+        }
+        if (!operationsProvider && !operations.stage) {
+            operations.stage = runDefaultSaveProcessors;
+        }
+        const std::function<bool(RideFile *, QString &)> requestedStage =
+            operations.stage;
+        QString stageError;
+        if (!batchIsCurrent()
+            || entry.ride.data() != entry.item->ride(false)) {
+            error = QObject::tr(
+                "A linked activity changed before save processing");
+            staged = false;
+            break;
+        }
+        const bool processed = !requestedStage
+            || requestedStage(entry.ride.data(), stageError);
+        if (!processed || !batchIsCurrent()) {
+            error = stageError.isEmpty()
+                ? QObject::tr(
+                    "A linked activity changed during save processing")
+                : stageError;
+            staged = false;
+            break;
+        }
+
+        operations.stage =
+            [index, &guarded, &batchIsCurrent](
+                RideFile *ride, QString &stageError) {
+                if (!batchIsCurrent()
+                    || ride != guarded.at(index).ride.data()) {
+                    stageError = QObject::tr(
+                        "A linked activity changed before serialization");
+                    return false;
+                }
+                return true;
+            };
+        operations.allowTargetReplacement = false;
+        operations.targetLockHeld = false;
+        operations.persistCompletesDurableTransaction = false;
+        operations.finalize =
+            [journal, index, &batchIsCurrent](QString &stepError) {
+                if (!batchIsCurrent()) {
+                    stepError = QObject::tr(
+                        "A linked activity changed before staging completed");
+                    return false;
+                }
+                return journal->recordStaged(index, stepError);
+            };
+        operations.rollback = ActivitySaveStep();
+        operations.markClean = [] {};
+
+        preparedOperations.append(operations);
+    }
+
+    for (int index = 0; staged && index < guarded.size(); ++index) {
+        GuardedEntry &entry = guarded[index];
+        if (!batchIsCurrent()) {
+            error = QObject::tr(
+                "A linked activity changed before serialization");
+            staged = false;
+            break;
+        }
+        QString itemError;
+        if (!saveActivityTransaction(
+                guardedContext.data(),
+                entry.ride.data(),
+                journal->stagingPath(index),
+                preparedOperations.at(index),
+                itemError)) {
+            error = itemError.isEmpty()
+                ? QObject::tr("A linked activity could not be staged")
+                : itemError;
+            staged = false;
+            break;
+        }
+    }
+
+    bool committed = false;
+    if (staged && batchIsCurrent()) {
+        committed = journal->publishAndCommit(error);
+        if (!committed && journal->hasCommitMarker()) {
+            QString recoveryError;
+            if (journal->cleanupAfterCommit(recoveryError)) {
+                committed = true;
+            } else {
+                appendSaveError(error, recoveryError);
+            }
+        }
+    } else if (staged && error.isEmpty()) {
+        error = QObject::tr(
+            "A linked activity changed before the transaction was published");
+    }
+
+    if (!committed) {
+        restoreHistories();
+        QString rollbackError;
+        if (!journal->hasCommitMarker()
+            && !journal->cleanupAfterRollback(rollbackError)) {
+            appendSaveError(error, rollbackError);
+            appendSaveError(
+                error,
+                QObject::tr(
+                    "Linked activity recovery is required before continuing"));
+        }
+        QGuiApplication::restoreOverrideCursor();
+        return false;
+    }
+
+    for (GuardedEntry &entry : guarded) {
+        if (!entry.item || !entry.ride
+            || entry.item->ride(false) != entry.ride.data()) {
+            continue;
+        }
+        entry.item->setFileName(
+            QFileInfo(entry.plan.targetPath).absolutePath(),
+            entry.plan.targetFileName);
+        entry.ride->emitSaved();
+
+        QFile notesFile(
+            QDir(QFileInfo(entry.plan.sourcePath).absolutePath()).filePath(
+                QFileInfo(entry.plan.sourcePath).baseName()
+                + QStringLiteral(".notes")));
+        if (notesFile.exists()) notesFile.remove();
+    }
+
+    QString cleanupError;
+    if (!journal->cleanupAfterCommit(cleanupError)) {
+        appendSaveError(error, cleanupError);
+        appendSaveError(
+            error,
+            QObject::tr("Linked activity recovery cleanup remains pending"));
+    }
+    QPointer<Estimator> estimator(
+        guardedCache && ownersAreCurrent()
+            ? guardedCache->estimator
+            : nullptr);
+    if (estimator) estimator->refresh();
+    QGuiApplication::restoreOverrideCursor();
     return true;
 }
 
@@ -468,20 +899,7 @@ MainWindow::saveRideSingleDialog(
                     "The activity collection is no longer available");
                 return false;
             }
-            return RideCache::saveActivities(
-                guardedContext.data(), items, saveError,
-                [](Context *saveContext, RideItem *saveItem,
-                   QString *itemError) {
-                    return MainWindow::saveSilent(
-                        saveContext, saveItem, itemError);
-                },
-                [guardedCache](RideItem *savedItem) {
-                    if (!guardedCache) return;
-                    QMetaObject::invokeMethod(
-                        guardedCache.data(), "itemSaved",
-                        Qt::DirectConnection,
-                        Q_ARG(RideItem *, savedItem));
-                });
+            return guardedCache->saveActivities(items, saveError);
         };
     }
 
@@ -649,33 +1067,16 @@ MainWindow::saveSilent(Context *context, RideItem *rideItem, QString *error,
         return false;
     }
 
-    const QString sourcePath =
-        QFileInfo(QDir(expectedIdentity.path).filePath(
-            expectedIdentity.fileName))
-            .absoluteFilePath();
+    ActivitySavePathPlan pathPlan;
+    if (!buildActivitySavePathPlan(
+            guardedItem.data(), pathPlan, saveError)) {
+        return false;
+    }
+    const QString sourcePath = pathPlan.sourcePath;
     const QFileInfo sourceInfo(sourcePath);
-    const bool convert = sourceInfo.completeSuffix().compare(
-                             QStringLiteral("json"), Qt::CaseInsensitive) != 0;
-
-    const QDateTime rideDateTime =
-        guardedRide->startTime();
-    const QChar zero = QLatin1Char('0');
-    const QString datedBaseName = QStringLiteral("%1_%2_%3_%4_%5_%6")
-        .arg(rideDateTime.date().year(), 4, 10, zero)
-        .arg(rideDateTime.date().month(), 2, 10, zero)
-        .arg(rideDateTime.date().day(), 2, 10, zero)
-        .arg(rideDateTime.time().hour(), 2, 10, zero)
-        .arg(rideDateTime.time().minute(), 2, 10, zero)
-        .arg(rideDateTime.time().second(), 2, 10, zero);
-
-    const bool keepCurrentPath =
-        !convert && sourceInfo.baseName() == datedBaseName;
-    const QString targetPath = keepCurrentPath
-        ? sourcePath
-        : QDir(sourceInfo.absolutePath()).filePath(
-              datedBaseName + QStringLiteral(".json"));
-    const bool pathChanges =
-        QDir::cleanPath(sourcePath) != QDir::cleanPath(targetPath);
+    const bool convert = pathPlan.convert;
+    const QString targetPath = pathPlan.targetPath;
+    const bool pathChanges = pathPlan.pathChanges;
 
     AtomicFileLockSet transactionLocks;
     if (!transactionLocks.lock(
@@ -1090,6 +1491,13 @@ SaveOnExitDialogWidget::currentDirtyActivities() const
     return dirty;
 }
 
+RideItem *
+SaveOnExitDialogWidget::linkedActivityForSaveGroup(
+    RideItem *rideItem) const
+{
+    return cache ? cache->getLinkedActivity(rideItem) : nullptr;
+}
+
 void
 SaveOnExitDialogWidget::appendDirtyActivity(RideItem *rideItem)
 {
@@ -1219,14 +1627,30 @@ SaveOnExitDialogWidget::saveClicked()
             if (!rideItem->isDirty()) {
                 continue;
             }
+            QList<QPointer<RideItem>> saveGroup = {
+                QPointer<RideItem>(rideItem)};
+            RideItem *const linked =
+                dialog->linkedActivityForSaveGroup(rideItem);
+            if (linked && linked != rideItem) {
+                saveGroup.append(QPointer<RideItem>(linked));
+            }
             const bool saved = dialog->saveRide(rideItem);
             if (!dialog) return;
             if (!saved) return;
-            dialog->dirtyList[i].completed = true;
-            if (dialog->dirtyList.at(i).item) {
-                dialog->dirtyList[i].identity =
-                    activitySaveIdentity(
-                        dialog->dirtyList.at(i).item.data());
+            for (DirtyActivity &activity : dialog->dirtyList) {
+                const bool belongsToSaveGroup = std::any_of(
+                    saveGroup.cbegin(), saveGroup.cend(),
+                    [&activity](const QPointer<RideItem> &candidate) {
+                        return candidate
+                            && candidate == activity.item;
+                    });
+                if (!belongsToSaveGroup || !activity.item
+                    || activity.item->isDirty()) {
+                    continue;
+                }
+                activity.completed = true;
+                activity.identity = activitySaveIdentity(
+                    activity.item.data());
             }
         } else {
             skippedRows.append(i);
@@ -1466,6 +1890,56 @@ reloadOperationPreflightActivities(
     return true;
 }
 
+RideItem *
+findOperationPreflightLinkedActivity(
+    RideItem *source,
+    const GuardedOperationPreflightItems &activities,
+    const OperationPreflightFilenameChange &filenameWillChange,
+    QString &error)
+{
+    error.clear();
+    QPointer<RideItem> guardedSource(source);
+    if (!guardedSource || !filenameWillChange) {
+        error = QObject::tr(
+            "Cannot search for a linked activity");
+        return nullptr;
+    }
+
+    QPointer<RideItem> match;
+    const QString linkedFileName =
+        guardedSource->getLinkedFileName();
+    for (const GuardedOperationPreflightItem &candidateGuard :
+         activities) {
+        QPointer<RideItem> candidate(candidateGuard.data());
+        if (!candidate || candidate == guardedSource
+            || candidate->planned == guardedSource->planned
+            || !candidateGuard.matches()) {
+            continue;
+        }
+        QString candidateNewFilename;
+        const bool candidateChanges = filenameWillChange(
+            candidate.data(), &candidateNewFilename);
+        if (!guardedSource || !candidate
+            || !candidateGuard.matches()) {
+            error = QObject::tr(
+                "An activity changed while searching for its linked activity");
+            return nullptr;
+        }
+        if (candidate->fileName != linkedFileName
+            && (!candidateChanges
+                || candidateNewFilename != linkedFileName)) {
+            continue;
+        }
+        if (match) {
+            error = QObject::tr(
+                "The linked activity pair is ambiguous");
+            return nullptr;
+        }
+        match = candidate;
+    }
+    return match.data();
+}
+
 
 RideFile *
 reloadDiscardedActivity(RideItem *item)
@@ -1563,50 +2037,37 @@ proceedDialog
                                 "The activity collection is no longer available");
                             return false;
                         }
-                        return RideCache::saveActivities(
-                            guardedContext.data(), items,
-                            saveError,
-                            [&savedActivities](
-                               Context *saveContext,
-                               RideItem *saveItem,
-                               QString *itemError) {
-                                QPointer<RideItem> guardedItem(
-                                    saveItem);
-                                const bool saved =
-                                    MainWindow::saveSilent(
-                                        saveContext, saveItem,
-                                        itemError);
-                                if (saved && guardedItem) {
-                                    ProceedDialogSavedActivity evidence;
-                                    evidence.item = guardedItem;
-                                    evidence.identity =
-                                        activitySaveIdentity(
-                                            guardedItem.data());
-                                    savedActivities.erase(
-                                        std::remove_if(
-                                            savedActivities.begin(),
-                                            savedActivities.end(),
-                                            [guardedItem](
-                                                const ProceedDialogSavedActivity &existing) {
-                                                return existing.item
-                                                    == guardedItem;
-                                            }),
-                                        savedActivities.end());
-                                    savedActivities.append(evidence);
-                                }
-                                return saved;
-                            },
-                            [guardedCache](
-                                RideItem *savedItem) {
-                                if (!guardedCache) return;
-                                QMetaObject::invokeMethod(
-                                    guardedCache.data(),
-                                    "itemSaved",
-                                    Qt::DirectConnection,
-                                    Q_ARG(
-                                        RideItem *,
-                                        savedItem));
-                            });
+                        QList<QPointer<RideItem>> guardedItems;
+                        for (RideItem *item : items) {
+                            guardedItems.append(QPointer<RideItem>(item));
+                        }
+                        if (!guardedCache->saveActivities(
+                                items, saveError)) {
+                            return false;
+                        }
+                        for (const QPointer<RideItem> &guardedItem :
+                             std::as_const(guardedItems)) {
+                            if (!guardedItem) {
+                                saveError = QObject::tr(
+                                    "A saved activity is no longer available");
+                                return false;
+                            }
+                            ProceedDialogSavedActivity evidence;
+                            evidence.item = guardedItem;
+                            evidence.identity = activitySaveIdentity(
+                                guardedItem.data());
+                            savedActivities.erase(
+                                std::remove_if(
+                                    savedActivities.begin(),
+                                    savedActivities.end(),
+                                    [guardedItem](
+                                        const ProceedDialogSavedActivity &existing) {
+                                        return existing.item == guardedItem;
+                                    }),
+                                savedActivities.end());
+                            savedActivities.append(evidence);
+                        }
+                        return true;
                     },
                     error, operationAvailable)) {
                 if (!guardedContext) return false;
@@ -1716,6 +2177,18 @@ relinkRideItems
             "An activity changed while checking its linked activity"))) {
         return false;
     }
+    if (!linkedItem && expectsLinkedActivity) {
+        linkedItem = findOperationPreflightLinkedActivity(
+            source.data(),
+            activities,
+            [mainWindow](RideItem *candidate, QString *newFilename) {
+                return mainWindow
+                    && mainWindow->filenameWillChange(
+                        candidate, newFilename);
+            },
+            error);
+        if (!error.isEmpty()) return false;
+    }
     const ActivitySaveWorkflow::Identity linkedIdentity =
         activitySaveIdentity(linkedItem.data());
     const bool linkedItemRequired =
@@ -1732,8 +2205,11 @@ relinkRideItems
             || linkedItem == source
             || !itemIsCurrent(
                 linkedItem, linkedIdentity)
-            || linkedItem->getLinkedFileName()
-                != source->fileName)) {
+            || (linkedItem->getLinkedFileName()
+                    != source->fileName
+                && (!hasNewFilename
+                    || linkedItem->getLinkedFileName()
+                        != newFilename)))) {
         error = QObject::tr(
             "The linked activity pair is missing or inconsistent");
         return false;

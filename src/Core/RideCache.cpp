@@ -25,6 +25,7 @@
 #include "RideCacheSnapshot.h"
 #include "SaveDialogs.h"
 #include "LinkedActivityRemovalJournal.h"
+#include "LinkedActivitySaveJournal.h"
 
 #include "Context.h"
 #include "Athlete.h"
@@ -199,6 +200,14 @@ RideCache::RideCache(Context *context) : context(context)
         this, SLOT(configChanged(qint32)));
 
     if (!LinkedActivityRemoval::Journal::reconcileAll(
+            context->athlete->home->root().absolutePath(),
+            startupRecoveryError_)) {
+        qCritical().noquote()
+            << "Activity recovery must be completed before loading:"
+            << startupRecoveryError_;
+        return;
+    }
+    if (!LinkedActivitySave::Journal::reconcileAll(
             context->athlete->home->root().absolutePath(),
             startupRecoveryError_)) {
         qCritical().noquote()
@@ -2253,6 +2262,62 @@ RideCache::saveActivities
 (QList<RideItem*> items, QString &error)
 {
     const QPointer<RideCache> guardedCache(this);
+    const LinkedActivitySaveRequirement requirement =
+        linkedActivitySaveRequirement(items, error);
+    if (requirement == LinkedActivitySaveRequirement::Invalid) {
+        return false;
+    }
+    if (requirement == LinkedActivitySaveRequirement::Required) {
+        QList<QPointer<RideItem>> savedItems;
+        QSet<RideItem *> seen;
+        for (RideItem *item : std::as_const(items)) {
+            if (!item || seen.contains(item) || !item->isDirty()) continue;
+            seen.insert(item);
+            savedItems.append(QPointer<RideItem>(item));
+        }
+        if (!MainWindow::saveLinkedActivitiesTransaction(
+                context,
+                context->athlete->home->root().absolutePath(),
+                items,
+                error,
+                ActivitySaveOperationsProvider())) {
+            return false;
+        }
+        for (const QPointer<RideItem> &saved : std::as_const(savedItems)) {
+            if (!guardedCache) {
+                error = QObject::tr(
+                    "The activity collection disappeared while announcing a linked save");
+                return false;
+            }
+            if (!saved) continue;
+            const QString fileName = saved->fileName;
+            const QString path = saved->path;
+            const bool planned = saved->planned;
+            QMetaObject::invokeMethod(
+                guardedCache.data(), "itemSaved",
+                Qt::DirectConnection,
+                Q_ARG(RideItem *, saved.data()));
+            if (!guardedCache) {
+                error = QObject::tr(
+                    "The activity collection disappeared while announcing a linked save");
+                return false;
+            }
+            if (!saved) {
+                error = QObject::tr(
+                    "A linked activity disappeared while announcing its save");
+                return false;
+            }
+            if (saved
+                && (saved->fileName != fileName
+                    || saved->path != path
+                    || saved->planned != planned)) {
+                error = QObject::tr(
+                    "A linked activity identity changed while announcing its save");
+                return false;
+            }
+        }
+        return true;
+    }
     return RideCache::saveActivities(
         context, items, error,
         [](Context *saveContext, RideItem *saveItem, QString *saveError) {

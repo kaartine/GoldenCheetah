@@ -1411,11 +1411,13 @@ MainWindow::filenameWillChange(RideItem *rideItem, QString *newName) const
                                     .arg(ridedatetime.time().hour(), 2, 10, zero)
                                     .arg(ridedatetime.time().minute(), 2, 10, zero)
                                     .arg(ridedatetime.time().second(), 2, 10, zero);
+    const bool convertsToJson = currentFI.completeSuffix().compare(
+        QStringLiteral("json"), Qt::CaseInsensitive) != 0;
     if (newName != nullptr) {
-        *newName = targetnosuffix + "." + currentFI.suffix();
+        *newName = targetnosuffix + QStringLiteral(".json");
     }
 
-    return currentFI.baseName() != targetnosuffix;
+    return convertsToJson || currentFI.baseName() != targetnosuffix;
 }
 
 

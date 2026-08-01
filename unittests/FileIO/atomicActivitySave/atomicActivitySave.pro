@@ -9,9 +9,11 @@ include(../../unittests.pri)
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug
+DEFINES += GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
 
 SOURCES = testAtomicActivitySave.cpp \
           ApplicationSaveTestStubs.cpp \
+          ../../../src/Core/LinkedActivitySaveJournal.cpp \
           ../../../src/Core/RideCache.cpp \
           ../../../src/FileIO/RideFile.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
@@ -20,6 +22,7 @@ SOURCES = testAtomicActivitySave.cpp \
           ../../../src/Gui/SaveDialogs.cpp
 
 HEADERS = ../../../src/Core/RideItem.h \
+          ../../../src/Core/LinkedActivitySaveJournal.h \
           ../../../src/FileIO/RideFile.h \
           ../../../src/FileIO/RideFileCommand.h \
           ../../../src/FileIO/JsonRideFile.h \

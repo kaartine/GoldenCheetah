@@ -2,11 +2,19 @@
 
 #include "AtomicFileWriter.h"
 #include "JsonRideFile.h"
+#include "LinkedActivitySaveJournal.h"
 #include "RideCache.h"
 #include "SaveDialogs.h"
 
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QProcess>
+#include <QProcessEnvironment>
 #include <QTemporaryDir>
+
+#include <cstdlib>
 
 void resetAtomicActivitySaveProcessorStub();
 void setAtomicActivitySaveProcessorFailure(bool enabled);
@@ -17,6 +25,21 @@ void setAtomicActivitySaveSetRideAction(
     RideItem *rideItem, std::function<void()> action);
 void setAtomicActivitySaveCloseAction(
     RideItem *rideItem, std::function<void()> action);
+
+void linkedActivitySaveTransitionReached(const char *transition)
+{
+    const QByteArray requested = qgetenv(
+        "GC_LINKED_ACTIVITY_SAVE_CRASH_PHASE");
+    if (requested.isEmpty() || requested != transition) return;
+    static QHash<QByteArray, int> occurrences;
+    const int occurrence = ++occurrences[requested];
+    bool valid = false;
+    const int requestedOccurrence = qEnvironmentVariableIntValue(
+        "GC_LINKED_ACTIVITY_SAVE_CRASH_OCCURRENCE", &valid);
+    if (occurrence == (valid ? requestedOccurrence : 1)) {
+        std::_Exit(86);
+    }
+}
 
 namespace {
 
@@ -157,6 +180,7 @@ public:
 
     QHash<RideItem *, bool> results;
     QHash<RideItem *, std::function<void()>> saveActions;
+    QHash<RideItem *, RideItem *> linkedActivities;
     QList<RideItem *> calls;
     std::function<void()> saveAction;
     int errorReports = 0;
@@ -200,6 +224,12 @@ protected:
         ++errorReports;
     }
 
+    RideItem *linkedActivityForSaveGroup(
+        RideItem *rideItem) const override
+    {
+        return linkedActivities.value(rideItem, nullptr);
+    }
+
 private:
     QList<QPointer<RideItem>> trackedActivities;
 };
@@ -226,6 +256,33 @@ void writeFixture(const QString &path, const QByteArray &bytes)
              qPrintable(file.errorString()));
     QCOMPARE(file.write(bytes), static_cast<qint64>(bytes.size()));
     QVERIFY(file.flush());
+}
+
+LinkedActivitySave::Specification linkedSaveJournalSpecification(
+    const QString &root)
+{
+    LinkedActivitySave::Specification specification;
+    specification.athleteRoot = root;
+    specification.entries = {
+        {QDir(root).filePath(QStringLiteral("first-old.json")),
+         QDir(root).filePath(QStringLiteral("first-new.json")),
+         QDir(root).filePath(QStringLiteral("first-old.json.bak")),
+         false},
+        {QDir(root).filePath(QStringLiteral("second-old.json")),
+         QDir(root).filePath(QStringLiteral("second-new.json")),
+         QDir(root).filePath(QStringLiteral("second-old.json.bak")),
+         false}};
+    return specification;
+}
+
+void writeLinkedSaveJournalSources(const QString &root)
+{
+    writeFixture(
+        QDir(root).filePath(QStringLiteral("first-old.json")),
+        QByteArray("first old generation"));
+    writeFixture(
+        QDir(root).filePath(QStringLiteral("second-old.json")),
+        QByteArray("second old generation"));
 }
 
 } // namespace
@@ -295,6 +352,33 @@ private slots:
     void defaultProcessorFailurePreservesFileAndDirtyState();
     void mainWindowConvertsSourceAfterCommit();
     void mainWindowRenamesJsonAfterCommit();
+    void linkedFilenameSaveFailureNeverPublishesPrefix();
+    void linkedFilenameSavePublishesCompletePair();
+    void linkedConversionPublishesCompletePairAndBackup();
+    void linkedBatchProcessesAllBeforeSerializing();
+    void linkedBatchProcessorFailureLeavesCompleteOldGeneration();
+    void linkedBatchStopsWhenPeerDestroyedDuringProcessing();
+    void linkedSaveRequirementRejectsUnpreparedRenames();
+    void pendingLinkedRemovalJournalBlocksLinkedSaveTransaction();
+    void concurrentLinkedSaveJournalsAreSerialized();
+    void abandonedLinkedSaveJournalBlocksNextTransaction();
+    void linkedSaveJournalLocksCompleteProductionPathSet_data();
+    void linkedSaveJournalLocksCompleteProductionPathSet();
+    void linkedSaveJournalRejectsUnsafePathGraphs_data();
+    void linkedSaveJournalRejectsUnsafePathGraphs();
+    void linkedSavePublicationPreservesExternalChanges_data();
+    void linkedSavePublicationPreservesExternalChanges();
+    void linkedSaveRecoveryRejectsUnsafeJournalEntries_data();
+    void linkedSaveRecoveryRejectsUnsafeJournalEntries();
+    void linkedSavePreManifestRecoveryRejectsUnknownEntries_data();
+    void linkedSavePreManifestRecoveryRejectsUnknownEntries();
+    void linkedSaveOversizedControlFileFailsBeforeRead_data();
+    void linkedSaveOversizedControlFileFailsBeforeRead();
+    void linkedSaveTransactionDirectoriesArePrivate();
+    void linkedSaveRecoveryRestrictsExistingDirectories();
+    void linkedSaveRecoveryWithoutJournalAllowsSymlinkedRoot();
+    void linkedFilenameSaveCrashRecoversCompleteGeneration_data();
+    void linkedFilenameSaveCrashRecoversCompleteGeneration();
     void mainWindowRejectsTargetCollision();
     void mainWindowHoldsSourceAndTargetLocks();
     void mainWindowFinalizeFailureRemainsRetryable();
@@ -306,6 +390,7 @@ private slots:
     void mainWindowSaveSilentPreservesUppercaseJsonPath();
     void mainWindowSaveRideSingleDialogPropagatesResult();
     void preflightSaveRelinksCompleteActivitySetBeforeSaving();
+    void preflightFindsLinkedPeerByPredictedFilename();
     void preflightItemsRejectDestroyedActivity();
     void preflightRelinkRejectsDestroyedActivity();
     void preflightRejectsIdentityMutationDuringLaterRelink();
@@ -321,6 +406,7 @@ private slots:
     void saveSingleDialogRejectsActivityDestroyedDuringFailedSave();
     void saveSingleDialogSurvivesParentDestroyedDuringSave();
     void saveOnExitDialogStopsUntilAllSelectedSave();
+    void saveOnExitCompletesRenamedLinkedSaveGroup();
     void saveOnExitDialogDoesNotAcceptRedirtiedCompletedActivity();
     void saveOnExitDialogDoesNotAcceptNewDirtyActivity();
     void saveOnExitDialogDefersSkippedStateUntilSuccess();
@@ -2379,6 +2465,1506 @@ void TestAtomicActivitySave::mainWindowRenamesJsonAfterCommit()
     QVERIFY(!item.isDirty());
 }
 
+void TestAtomicActivitySave::linkedFilenameSaveFailureNeverPublishesPrefix()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QDateTime firstOldTime(QDate(2026, 7, 6), QTime(8, 30));
+    const QDateTime secondOldTime(QDate(2026, 7, 7), QTime(9, 45));
+    const QDateTime firstNewTime(QDate(2026, 7, 8), QTime(10, 15));
+    const QDateTime secondNewTime(QDate(2026, 7, 9), QTime(11, 20));
+    const QString firstOldName =
+        activityFileName(firstOldTime, QStringLiteral("json"));
+    const QString secondOldName =
+        activityFileName(secondOldTime, QStringLiteral("json"));
+    const QString firstNewName =
+        activityFileName(firstNewTime, QStringLiteral("json"));
+    const QString secondNewName =
+        activityFileName(secondNewTime, QStringLiteral("json"));
+
+    RideFile firstRide(firstOldTime, 1.0);
+    RideFile secondRide(secondOldTime, 1.0);
+    firstRide.setTag(QStringLiteral("Linked Filename"), secondOldName);
+    secondRide.setTag(QStringLiteral("Linked Filename"), firstOldName);
+
+    JsonFileReader json;
+    QString error;
+    QFile firstOldFile(dir.filePath(firstOldName));
+    QVERIFY2(json.writeRideFile(
+                 nullptr, &firstRide, firstOldFile, error),
+             qPrintable(error));
+    QFile secondOldFile(dir.filePath(secondOldName));
+    QVERIFY2(json.writeRideFile(
+                 nullptr, &secondRide, secondOldFile, error),
+             qPrintable(error));
+
+    firstRide.setTag(
+        QStringLiteral("Change History"),
+        QStringLiteral("existing first history"));
+    firstRide.setStartTime(firstNewTime);
+    secondRide.setStartTime(secondNewTime);
+    firstRide.setTag(QStringLiteral("Linked Filename"), secondNewName);
+    secondRide.setTag(QStringLiteral("Linked Filename"), firstNewName);
+
+    RideItem firstItem(&firstRide, nullptr);
+    RideItem secondItem(&secondRide, nullptr);
+    firstItem.path = dir.path();
+    firstItem.fileName = firstOldName;
+    secondItem.path = dir.path();
+    secondItem.fileName = secondOldName;
+    secondItem.planned = true;
+    firstItem.setLinkedFileName(secondNewName);
+    secondItem.setLinkedFileName(firstNewName);
+    firstItem.setDirty(true);
+    secondItem.setDirty(true);
+
+    const AtomicFileWriterFactory realWriter = qSaveFileWriterFactory();
+    const ActivitySaveOperationsProvider operationsProvider =
+        [&](RideItem *item) {
+        ActivitySaveOperations operations;
+        operations.writerFactory =
+            item == &secondItem
+            ? AtomicFileWriterFactory(
+                  [](const QString &path, AtomicFileMode) {
+                      return std::unique_ptr<AtomicFileWriter>(
+                          new FaultInjectingWriter(
+                              path, FailurePoint::Commit));
+                  })
+            : realWriter;
+        return operations;
+    };
+
+    QVERIFY(!MainWindow::saveLinkedActivitiesTransaction(
+        nullptr,
+        dir.path(),
+        { &firstItem, &secondItem },
+        error,
+        operationsProvider));
+
+    const bool completeOldPair =
+        QFileInfo::exists(dir.filePath(firstOldName))
+        && QFileInfo::exists(dir.filePath(secondOldName))
+        && !QFileInfo::exists(dir.filePath(firstNewName))
+        && !QFileInfo::exists(dir.filePath(secondNewName));
+    const bool completeNewPair =
+        !QFileInfo::exists(dir.filePath(firstOldName))
+        && !QFileInfo::exists(dir.filePath(secondOldName))
+        && QFileInfo::exists(dir.filePath(firstNewName))
+        && QFileInfo::exists(dir.filePath(secondNewName));
+    QVERIFY2(
+        completeOldPair || completeNewPair,
+        "A linked save must not leave only a successful publication prefix");
+    QVERIFY(firstItem.isDirty());
+    QVERIFY(secondItem.isDirty());
+    QCOMPARE(
+        firstRide.getTag(QStringLiteral("Change History"), QString()),
+        QStringLiteral("existing first history"));
+    QVERIFY(!secondRide.tags().contains(QStringLiteral("Change History")));
+}
+
+void TestAtomicActivitySave::linkedFilenameSavePublishesCompletePair()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QDateTime firstOldTime(QDate(2026, 7, 6), QTime(8, 30));
+    const QDateTime secondOldTime(QDate(2026, 7, 7), QTime(9, 45));
+    const QDateTime firstNewTime(QDate(2026, 7, 8), QTime(10, 15));
+    const QDateTime secondNewTime(QDate(2026, 7, 9), QTime(11, 20));
+    const QString firstOldName =
+        activityFileName(firstOldTime, QStringLiteral("json"));
+    const QString secondOldName =
+        activityFileName(secondOldTime, QStringLiteral("json"));
+    const QString firstNewName =
+        activityFileName(firstNewTime, QStringLiteral("json"));
+    const QString secondNewName =
+        activityFileName(secondNewTime, QStringLiteral("json"));
+
+    RideFile firstRide(firstOldTime, 1.0);
+    RideFile secondRide(secondOldTime, 1.0);
+    firstRide.setTag(QStringLiteral("Linked Filename"), secondOldName);
+    secondRide.setTag(QStringLiteral("Linked Filename"), firstOldName);
+    JsonFileReader json;
+    QString error;
+    QFile firstOldFile(dir.filePath(firstOldName));
+    QVERIFY2(json.writeRideFile(
+                 nullptr, &firstRide, firstOldFile, error),
+             qPrintable(error));
+    QFile secondOldFile(dir.filePath(secondOldName));
+    QVERIFY2(json.writeRideFile(
+                 nullptr, &secondRide, secondOldFile, error),
+             qPrintable(error));
+
+    firstRide.setStartTime(firstNewTime);
+    secondRide.setStartTime(secondNewTime);
+    RideItem firstItem(&firstRide, nullptr);
+    RideItem secondItem(&secondRide, nullptr);
+    firstItem.path = dir.path();
+    firstItem.fileName = firstOldName;
+    secondItem.path = dir.path();
+    secondItem.fileName = secondOldName;
+    secondItem.planned = true;
+    firstItem.setLinkedFileName(secondNewName);
+    secondItem.setLinkedFileName(firstNewName);
+    firstItem.setDirty(true);
+    secondItem.setDirty(true);
+
+    QVERIFY2(MainWindow::saveLinkedActivitiesTransaction(
+                 nullptr,
+                 dir.path(),
+                 { &firstItem, &secondItem },
+                 error,
+                 ActivitySaveOperationsProvider()),
+             qPrintable(error));
+    QVERIFY(error.isEmpty());
+    QVERIFY(!QFileInfo::exists(dir.filePath(firstOldName)));
+    QVERIFY(!QFileInfo::exists(dir.filePath(secondOldName)));
+    QVERIFY(QFileInfo::exists(dir.filePath(firstNewName)));
+    QVERIFY(QFileInfo::exists(dir.filePath(secondNewName)));
+    QCOMPARE(firstItem.fileName, firstNewName);
+    QCOMPARE(secondItem.fileName, secondNewName);
+    QVERIFY(!firstItem.isDirty());
+    QVERIFY(!secondItem.isDirty());
+
+    const auto linkedFilename = [&](const QString &path) {
+        QStringList parseErrors;
+        QFile input(path);
+        std::unique_ptr<RideFile> parsed(
+            json.openRideFile(input, parseErrors));
+        if (!parsed) return QString();
+        return parsed->getTag(
+            QStringLiteral("Linked Filename"), QString());
+    };
+    QCOMPARE(
+        linkedFilename(dir.filePath(firstNewName)), secondNewName);
+    QCOMPARE(
+        linkedFilename(dir.filePath(secondNewName)), firstNewName);
+
+    const QDir journalRoot(
+        dir.filePath(QStringLiteral(".gc-transactions/linked-save")));
+    QVERIFY(!journalRoot.exists()
+        || journalRoot.entryList(
+            QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot).isEmpty());
+}
+
+void TestAtomicActivitySave::
+linkedConversionPublishesCompletePairAndBackup()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString importedName = QStringLiteral("import.fit");
+    const QByteArray importedBytes("original imported activity");
+    const QByteArray previousBackup("previous imported backup");
+    const QString importedPath = dir.filePath(importedName);
+    writeFixture(importedPath, importedBytes);
+    writeFixture(
+        importedPath + QStringLiteral(".bak"), previousBackup);
+
+    const QDateTime completedTime(QDate(2026, 7, 10), QTime(6, 30));
+    const QDateTime plannedOldTime(QDate(2026, 7, 11), QTime(7, 45));
+    const QDateTime plannedNewTime(QDate(2026, 7, 12), QTime(8, 15));
+    const QString completedNewName =
+        activityFileName(completedTime, QStringLiteral("json"));
+    const QString plannedOldName =
+        activityFileName(plannedOldTime, QStringLiteral("json"));
+    const QString plannedNewName =
+        activityFileName(plannedNewTime, QStringLiteral("json"));
+
+    RideFile completedRide(completedTime, 1.0);
+    RideFile plannedRide(plannedOldTime, 1.0);
+    plannedRide.setTag(QStringLiteral("Linked Filename"), importedName);
+    JsonFileReader json;
+    QString error;
+    QFile plannedOldFile(dir.filePath(plannedOldName));
+    QVERIFY2(json.writeRideFile(
+                 nullptr, &plannedRide, plannedOldFile, error),
+             qPrintable(error));
+    plannedRide.setStartTime(plannedNewTime);
+
+    RideItem completedItem(&completedRide, nullptr);
+    RideItem plannedItem(&plannedRide, nullptr);
+    completedItem.path = dir.path();
+    completedItem.fileName = importedName;
+    plannedItem.path = dir.path();
+    plannedItem.fileName = plannedOldName;
+    plannedItem.planned = true;
+    completedItem.setLinkedFileName(plannedNewName);
+    plannedItem.setLinkedFileName(completedNewName);
+    completedItem.setDirty(true);
+    plannedItem.setDirty(true);
+
+    QVERIFY2(MainWindow::saveLinkedActivitiesTransaction(
+                 nullptr,
+                 dir.path(),
+                 { &completedItem, &plannedItem },
+                 error,
+                 ActivitySaveOperationsProvider()),
+             qPrintable(error));
+    QVERIFY(!QFileInfo::exists(importedPath));
+    QCOMPARE(
+        readAll(importedPath + QStringLiteral(".bak")), importedBytes);
+    QVERIFY(QFileInfo::exists(dir.filePath(completedNewName)));
+    QVERIFY(!QFileInfo::exists(dir.filePath(plannedOldName)));
+    QVERIFY(QFileInfo::exists(dir.filePath(plannedNewName)));
+
+    const auto linkedFilename = [&](const QString &path) {
+        QStringList parseErrors;
+        QFile input(path);
+        std::unique_ptr<RideFile> parsed(
+            json.openRideFile(input, parseErrors));
+        if (!parsed) return QString();
+        return parsed->getTag(
+            QStringLiteral("Linked Filename"), QString());
+    };
+    QCOMPARE(
+        linkedFilename(dir.filePath(completedNewName)), plannedNewName);
+    QCOMPARE(
+        linkedFilename(dir.filePath(plannedNewName)), completedNewName);
+}
+
+void TestAtomicActivitySave::linkedBatchProcessesAllBeforeSerializing()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QDateTime firstNewTime(QDate(2026, 7, 8), QTime(10, 15));
+    const QDateTime secondNewTime(QDate(2026, 7, 9), QTime(11, 20));
+    const QString firstOldName = QStringLiteral("first-old.json");
+    const QString secondOldName = QStringLiteral("second-old.json");
+    const QString firstNewName =
+        activityFileName(firstNewTime, QStringLiteral("json"));
+    const QString secondNewName =
+        activityFileName(secondNewTime, QStringLiteral("json"));
+    writeFixture(dir.filePath(firstOldName), QByteArray("first old"));
+    writeFixture(dir.filePath(secondOldName), QByteArray("second old"));
+
+    RideFile firstRide(firstNewTime, 1.0);
+    RideFile secondRide(secondNewTime, 1.0);
+    RideItem firstItem(&firstRide, nullptr);
+    RideItem secondItem(&secondRide, nullptr);
+    firstItem.path = dir.path();
+    firstItem.fileName = firstOldName;
+    secondItem.path = dir.path();
+    secondItem.fileName = secondOldName;
+    secondItem.planned = true;
+    firstItem.setLinkedFileName(secondNewName);
+    secondItem.setLinkedFileName(firstNewName);
+    firstItem.setDirty(true);
+    secondItem.setDirty(true);
+
+    QHash<RideItem *, int> stageCalls;
+    const ActivitySaveOperationsProvider provider =
+        [&](RideItem *item) {
+            ActivitySaveOperations operations;
+            operations.writerFactory = qSaveFileWriterFactory();
+            operations.stage = [&, item](RideFile *, QString &) {
+                ++stageCalls[item];
+                if (item == &secondItem) {
+                    firstRide.setTag(
+                        QStringLiteral("Peer Processor"),
+                        QStringLiteral("included"));
+                }
+                return true;
+            };
+            return operations;
+        };
+    QString error;
+    QVERIFY2(MainWindow::saveLinkedActivitiesTransaction(
+                 nullptr,
+                 dir.path(),
+                 { &firstItem, &secondItem },
+                 error,
+                 provider),
+             qPrintable(error));
+    QCOMPARE(stageCalls.value(&firstItem), 1);
+    QCOMPARE(stageCalls.value(&secondItem), 1);
+
+    JsonFileReader json;
+    QStringList parseErrors;
+    QFile input(dir.filePath(firstNewName));
+    std::unique_ptr<RideFile> parsed(
+        json.openRideFile(input, parseErrors));
+    QVERIFY2(parsed != nullptr,
+             qPrintable(parseErrors.join(QStringLiteral("; "))));
+    QCOMPARE(
+        parsed->getTag(QStringLiteral("Peer Processor"), QString()),
+        QStringLiteral("included"));
+}
+
+void TestAtomicActivitySave::
+linkedBatchProcessorFailureLeavesCompleteOldGeneration()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QDateTime firstNewTime(QDate(2026, 7, 8), QTime(10, 15));
+    const QDateTime secondNewTime(QDate(2026, 7, 9), QTime(11, 20));
+    const QString firstOldName = QStringLiteral("first-old.json");
+    const QString secondOldName = QStringLiteral("second-old.json");
+    const QString firstNewName =
+        activityFileName(firstNewTime, QStringLiteral("json"));
+    const QString secondNewName =
+        activityFileName(secondNewTime, QStringLiteral("json"));
+    const QByteArray firstOld("first old generation");
+    const QByteArray secondOld("second old generation");
+    writeFixture(dir.filePath(firstOldName), firstOld);
+    writeFixture(dir.filePath(secondOldName), secondOld);
+
+    RideFile firstRide(firstNewTime, 1.0);
+    RideFile secondRide(secondNewTime, 1.0);
+    firstRide.setTag(
+        QStringLiteral("Change History"),
+        QStringLiteral("existing first history"));
+    RideItem firstItem(&firstRide, nullptr);
+    RideItem secondItem(&secondRide, nullptr);
+    firstItem.path = dir.path();
+    firstItem.fileName = firstOldName;
+    secondItem.path = dir.path();
+    secondItem.fileName = secondOldName;
+    secondItem.planned = true;
+    firstItem.setLinkedFileName(secondNewName);
+    secondItem.setLinkedFileName(firstNewName);
+    firstItem.setDirty(true);
+    secondItem.setDirty(true);
+
+    QHash<RideItem *, int> stageCalls;
+    const ActivitySaveOperationsProvider provider =
+        [&](RideItem *item) {
+            ActivitySaveOperations operations;
+            operations.writerFactory = qSaveFileWriterFactory();
+            operations.stage = [&, item](RideFile *, QString &stageError) {
+                ++stageCalls[item];
+                if (item == &secondItem) {
+                    stageError = QStringLiteral("injected peer processor failure");
+                    return false;
+                }
+                return true;
+            };
+            return operations;
+        };
+    QString error;
+    QVERIFY(!MainWindow::saveLinkedActivitiesTransaction(
+        nullptr,
+        dir.path(),
+        {&firstItem, &secondItem},
+        error,
+        provider));
+    QVERIFY2(
+        error.contains(QStringLiteral("processor"), Qt::CaseInsensitive),
+        qPrintable(error));
+    QCOMPARE(stageCalls.value(&firstItem), 1);
+    QCOMPARE(stageCalls.value(&secondItem), 1);
+    QCOMPARE(readAll(dir.filePath(firstOldName)), firstOld);
+    QCOMPARE(readAll(dir.filePath(secondOldName)), secondOld);
+    QVERIFY(!QFileInfo::exists(dir.filePath(firstNewName)));
+    QVERIFY(!QFileInfo::exists(dir.filePath(secondNewName)));
+    QVERIFY(firstItem.isDirty());
+    QVERIFY(secondItem.isDirty());
+    QCOMPARE(
+        firstRide.getTag(QStringLiteral("Change History"), QString()),
+        QStringLiteral("existing first history"));
+    QVERIFY(!secondRide.tags().contains(QStringLiteral("Change History")));
+}
+
+void TestAtomicActivitySave::
+linkedBatchStopsWhenPeerDestroyedDuringProcessing()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QDateTime firstNewTime(QDate(2026, 7, 8), QTime(10, 15));
+    const QDateTime secondNewTime(QDate(2026, 7, 9), QTime(11, 20));
+    const QString firstOldName = QStringLiteral("first-old.json");
+    const QString secondOldName = QStringLiteral("second-old.json");
+    const QString firstNewName =
+        activityFileName(firstNewTime, QStringLiteral("json"));
+    const QString secondNewName =
+        activityFileName(secondNewTime, QStringLiteral("json"));
+    const QByteArray firstOld("first old generation");
+    const QByteArray secondOld("second old generation");
+    writeFixture(dir.filePath(firstOldName), firstOld);
+    writeFixture(dir.filePath(secondOldName), secondOld);
+
+    RideFile firstRide(firstNewTime, 1.0);
+    RideFile secondRide(secondNewTime, 1.0);
+    RideItem firstItem(&firstRide, nullptr);
+    QPointer<RideItem> secondItem(new RideItem(&secondRide, nullptr));
+    firstItem.path = dir.path();
+    firstItem.fileName = firstOldName;
+    secondItem->path = dir.path();
+    secondItem->fileName = secondOldName;
+    secondItem->planned = true;
+    firstItem.setLinkedFileName(secondNewName);
+    secondItem->setLinkedFileName(firstNewName);
+    firstItem.setDirty(true);
+    secondItem->setDirty(true);
+    RideItem *const secondRaw = secondItem.data();
+
+    int stageCalls = 0;
+    const ActivitySaveOperationsProvider provider =
+        [&](RideItem *item) {
+            ActivitySaveOperations operations;
+            operations.writerFactory = qSaveFileWriterFactory();
+            operations.stage = [&, item](RideFile *, QString &) {
+                ++stageCalls;
+                if (item == &firstItem) delete secondRaw;
+                return true;
+            };
+            return operations;
+        };
+    QString error;
+    QVERIFY(!MainWindow::saveLinkedActivitiesTransaction(
+        nullptr,
+        dir.path(),
+        {&firstItem, secondRaw},
+        error,
+        provider));
+    QVERIFY(secondItem.isNull());
+    QCOMPARE(stageCalls, 1);
+    QVERIFY2(
+        error.contains(QStringLiteral("changed"), Qt::CaseInsensitive),
+        qPrintable(error));
+    QCOMPARE(readAll(dir.filePath(firstOldName)), firstOld);
+    QCOMPARE(readAll(dir.filePath(secondOldName)), secondOld);
+    QVERIFY(!QFileInfo::exists(dir.filePath(firstNewName)));
+    QVERIFY(!QFileInfo::exists(dir.filePath(secondNewName)));
+    QVERIFY(firstItem.isDirty());
+}
+
+void TestAtomicActivitySave::
+linkedSaveRequirementRejectsUnpreparedRenames()
+{
+    const QDateTime firstOldTime(QDate(2026, 7, 6), QTime(8, 30));
+    const QDateTime secondOldTime(QDate(2026, 7, 7), QTime(9, 45));
+    RideFile firstRide(QDateTime(QDate(2026, 7, 8), QTime(10, 15)), 1.0);
+    RideFile secondRide(QDateTime(QDate(2026, 7, 9), QTime(11, 20)), 1.0);
+    RideItem firstItem(&firstRide, nullptr);
+    RideItem secondItem(&secondRide, nullptr);
+    firstItem.path = QStringLiteral("/tmp");
+    firstItem.fileName =
+        activityFileName(firstOldTime, QStringLiteral("json"));
+    secondItem.path = QStringLiteral("/tmp");
+    secondItem.fileName =
+        activityFileName(secondOldTime, QStringLiteral("json"));
+    secondItem.planned = true;
+    firstItem.setLinkedFileName(secondItem.fileName);
+    secondItem.setLinkedFileName(firstItem.fileName);
+    firstItem.setDirty(true);
+    secondItem.setDirty(true);
+
+    QString error;
+    QCOMPARE(
+        linkedActivitySaveRequirement(
+            { &firstItem, &secondItem }, error),
+        LinkedActivitySaveRequirement::Invalid);
+    QVERIFY2(
+        error.contains(QStringLiteral("not updated"), Qt::CaseInsensitive),
+        qPrintable(error));
+}
+
+void TestAtomicActivitySave::
+pendingLinkedRemovalJournalBlocksLinkedSaveTransaction()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString firstSource = dir.filePath(QStringLiteral("first.json"));
+    const QString secondSource = dir.filePath(QStringLiteral("second.json"));
+    writeFixture(firstSource, QByteArray("first"));
+    writeFixture(secondSource, QByteArray("second"));
+    const QString pending = dir.filePath(
+        QStringLiteral(".gc-transactions/linked-removal/")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces).toLower());
+    QVERIFY(QDir().mkpath(pending));
+
+    LinkedActivitySave::Specification specification;
+    specification.athleteRoot = dir.path();
+    specification.entries = {
+        {firstSource,
+         dir.filePath(QStringLiteral("first-new.json")),
+         firstSource + QStringLiteral(".bak"),
+         false},
+        {secondSource,
+         dir.filePath(QStringLiteral("second-new.json")),
+         secondSource + QStringLiteral(".bak"),
+         false}};
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY(!journal);
+    QVERIFY2(
+        error.contains(QStringLiteral("recovery"), Qt::CaseInsensitive),
+        qPrintable(error));
+}
+
+void TestAtomicActivitySave::
+concurrentLinkedSaveJournalsAreSerialized()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    std::shared_ptr<LinkedActivitySave::Journal> first =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(first, qPrintable(error));
+
+    error.clear();
+    const std::shared_ptr<LinkedActivitySave::Journal> concurrent =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY(!concurrent);
+    QVERIFY2(
+        error.contains(QStringLiteral("active"), Qt::CaseInsensitive),
+        qPrintable(error));
+
+    error.clear();
+    QVERIFY2(first->cleanupAfterRollback(error), qPrintable(error));
+    first.reset();
+
+    error.clear();
+    const std::shared_ptr<LinkedActivitySave::Journal> next =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(next, qPrintable(error));
+    QVERIFY2(next->cleanupAfterRollback(error), qPrintable(error));
+}
+
+void TestAtomicActivitySave::
+abandonedLinkedSaveJournalBlocksNextTransaction()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    std::shared_ptr<LinkedActivitySave::Journal> abandoned =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(abandoned, qPrintable(error));
+    const QString journalPath = abandoned->directoryPath();
+    abandoned.reset();
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    error.clear();
+    const std::shared_ptr<LinkedActivitySave::Journal> blocked =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY(!blocked);
+    QVERIFY2(
+        error.contains(QStringLiteral("recovery"), Qt::CaseInsensitive),
+        qPrintable(error));
+
+    error.clear();
+    QVERIFY2(
+        LinkedActivitySave::Journal::reconcileAll(dir.path(), error),
+        qPrintable(error));
+    QVERIFY(!QFileInfo::exists(journalPath));
+
+    error.clear();
+    const std::shared_ptr<LinkedActivitySave::Journal> next =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(next, qPrintable(error));
+    QVERIFY2(next->cleanupAfterRollback(error), qPrintable(error));
+}
+
+void TestAtomicActivitySave::
+linkedSaveJournalLocksCompleteProductionPathSet_data()
+{
+    QTest::addColumn<int>("entryIndex");
+    QTest::addColumn<QString>("role");
+
+    for (int index = 0; index < 2; ++index) {
+        for (const QString &role : {
+                 QStringLiteral("source"),
+                 QStringLiteral("target"),
+                 QStringLiteral("backup")}) {
+            QTest::newRow(
+                qPrintable(QStringLiteral("entry-%1-%2")
+                               .arg(index + 1)
+                               .arg(role)))
+                << index << role;
+        }
+    }
+}
+
+void TestAtomicActivitySave::
+linkedSaveJournalLocksCompleteProductionPathSet()
+{
+    QFETCH(int, entryIndex);
+    QFETCH(QString, role);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+    const LinkedActivitySave::EntrySpecification &entry =
+        specification.entries.at(entryIndex);
+    const QString path = role == QStringLiteral("source")
+        ? entry.sourcePath
+        : role == QStringLiteral("target")
+            ? entry.targetPath
+            : entry.backupPath;
+
+    AtomicFileLockSet competingLock;
+    QString error;
+    QVERIFY2(competingLock.lock({path}, error), qPrintable(error));
+
+    error.clear();
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY(!journal);
+    QVERIFY2(
+        error.contains(QStringLiteral("already"), Qt::CaseInsensitive),
+        qPrintable(error));
+}
+
+void TestAtomicActivitySave::
+linkedSaveJournalRejectsUnsafePathGraphs_data()
+{
+    QTest::addColumn<QString>("pathCase");
+
+    QTest::newRow("duplicate-source")
+        << QStringLiteral("duplicate-source");
+    QTest::newRow("duplicate-target")
+        << QStringLiteral("duplicate-target");
+    QTest::newRow("duplicate-backup")
+        << QStringLiteral("duplicate-backup");
+    QTest::newRow("cross-target-source")
+        << QStringLiteral("cross-target-source");
+    QTest::newRow("cross-backup-source")
+        << QStringLiteral("cross-backup-source");
+    QTest::newRow("same-entry-backup-source")
+        << QStringLiteral("same-entry-backup-source");
+    QTest::newRow("cross-backup-target")
+        << QStringLiteral("cross-backup-target");
+    QTest::newRow("existing-target")
+        << QStringLiteral("existing-target");
+    QTest::newRow("outside-root")
+        << QStringLiteral("outside-root");
+    QTest::newRow("transaction-namespace")
+        << QStringLiteral("transaction-namespace");
+    QTest::newRow("symlink-source")
+        << QStringLiteral("symlink-source");
+    QTest::newRow("symlink-parent")
+        << QStringLiteral("symlink-parent");
+}
+
+void TestAtomicActivitySave::
+linkedSaveJournalRejectsUnsafePathGraphs()
+{
+    QFETCH(QString, pathCase);
+
+    QTemporaryDir dir;
+    QTemporaryDir outside;
+    QVERIFY(dir.isValid());
+    QVERIFY(outside.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    if (pathCase == QStringLiteral("duplicate-source")) {
+        specification.entries[1].sourcePath =
+            specification.entries.at(0).sourcePath;
+    } else if (pathCase == QStringLiteral("duplicate-target")) {
+        specification.entries[1].targetPath =
+            specification.entries.at(0).targetPath;
+    } else if (pathCase == QStringLiteral("duplicate-backup")) {
+        specification.entries[1].backupPath =
+            specification.entries.at(0).backupPath;
+    } else if (pathCase == QStringLiteral("cross-target-source")) {
+        specification.entries[0].targetPath =
+            specification.entries.at(1).sourcePath;
+    } else if (pathCase == QStringLiteral("cross-backup-source")) {
+        specification.entries[1].backupPath =
+            specification.entries.at(0).sourcePath;
+    } else if (pathCase == QStringLiteral("same-entry-backup-source")) {
+        specification.entries[0].backupPath =
+            specification.entries.at(0).sourcePath;
+    } else if (pathCase == QStringLiteral("cross-backup-target")) {
+        specification.entries[1].backupPath =
+            specification.entries.at(0).targetPath;
+    } else if (pathCase == QStringLiteral("existing-target")) {
+        writeFixture(
+            specification.entries.at(0).targetPath,
+            QByteArray("unrelated target"));
+    } else if (pathCase == QStringLiteral("outside-root")) {
+        const QString outsideSource = outside.filePath(
+            QStringLiteral("outside.json"));
+        writeFixture(outsideSource, QByteArray("outside"));
+        specification.entries[0].sourcePath = outsideSource;
+    } else if (pathCase == QStringLiteral("transaction-namespace")) {
+        const QString transactionSource = dir.filePath(
+            QStringLiteral(".gc-transactions/attacker/source.json"));
+        QVERIFY(QDir().mkpath(QFileInfo(transactionSource).absolutePath()));
+        writeFixture(transactionSource, QByteArray("transaction data"));
+        specification.entries[0].sourcePath = transactionSource;
+    } else if (pathCase == QStringLiteral("symlink-source")) {
+        const QString realSource = dir.filePath(
+            QStringLiteral("real-source.json"));
+        const QString linkedSource = dir.filePath(
+            QStringLiteral("linked-source.json"));
+        writeFixture(realSource, QByteArray("real source"));
+        if (!QFile::link(realSource, linkedSource)) {
+            QSKIP("Symbolic links are unavailable");
+        }
+        specification.entries[0].sourcePath = linkedSource;
+    } else if (pathCase == QStringLiteral("symlink-parent")) {
+        const QString realParent = dir.filePath(QStringLiteral("real-parent"));
+        const QString linkedParent = dir.filePath(
+            QStringLiteral("linked-parent"));
+        QVERIFY(QDir().mkpath(realParent));
+        writeFixture(
+            QDir(realParent).filePath(QStringLiteral("source.json")),
+            QByteArray("source under linked parent"));
+        if (!QFile::link(realParent, linkedParent)) {
+            QSKIP("Directory symbolic links are unavailable");
+        }
+        specification.entries[0].sourcePath =
+            QDir(linkedParent).filePath(QStringLiteral("source.json"));
+    }
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY(journal == nullptr);
+    QVERIFY2(!error.isEmpty(), qPrintable(pathCase));
+    QCOMPARE(
+        readAll(dir.filePath(QStringLiteral("first-old.json"))),
+        QByteArray("first old generation"));
+    QCOMPARE(
+        readAll(dir.filePath(QStringLiteral("second-old.json"))),
+        QByteArray("second old generation"));
+
+    const QDir journalRoot(dir.filePath(
+        QStringLiteral(".gc-transactions/linked-save")));
+    QVERIFY(!journalRoot.exists()
+        || journalRoot.entryList(
+            QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot).isEmpty());
+}
+
+void TestAtomicActivitySave::
+linkedSavePublicationPreservesExternalChanges_data()
+{
+    QTest::addColumn<QString>("role");
+
+    QTest::newRow("source") << QStringLiteral("source");
+    QTest::newRow("target") << QStringLiteral("target");
+    QTest::newRow("backup") << QStringLiteral("backup");
+}
+
+void TestAtomicActivitySave::
+linkedSavePublicationPreservesExternalChanges()
+{
+    QFETCH(QString, role);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+    if (role == QStringLiteral("backup")) {
+        writeFixture(
+            specification.entries.at(0).backupPath,
+            QByteArray("previous backup"));
+    }
+
+    QString error;
+    std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    for (int index = 0; index < journal->entryCount(); ++index) {
+        writeFixture(
+            journal->stagingPath(index),
+            QByteArray("staged generation ")
+                + QByteArray::number(index));
+        QVERIFY2(journal->recordStaged(index, error), qPrintable(error));
+    }
+
+    const LinkedActivitySave::EntrySpecification &first =
+        specification.entries.at(0);
+    const QString changedPath = role == QStringLiteral("source")
+        ? first.sourcePath
+        : role == QStringLiteral("target")
+            ? first.targetPath
+            : first.backupPath;
+    const QByteArray external("concurrent external contents");
+    writeFixture(changedPath, external);
+
+    error.clear();
+    QVERIFY(!journal->publishAndCommit(error));
+    QVERIFY2(!error.isEmpty(), qPrintable(role));
+    QCOMPARE(readAll(changedPath), external);
+    QVERIFY(!journal->hasCommitMarker());
+
+    error.clear();
+    QVERIFY(!journal->cleanupAfterRollback(error));
+    QVERIFY2(!error.isEmpty(), qPrintable(role));
+    QCOMPARE(readAll(changedPath), external);
+    QVERIFY(QFileInfo::exists(journalPath));
+}
+
+void TestAtomicActivitySave::
+linkedSaveRecoveryRejectsUnsafeJournalEntries_data()
+{
+    QTest::addColumn<QString>("entryCase");
+
+    QTest::newRow("unknown-file") << QStringLiteral("unknown-file");
+    QTest::newRow("nested-directory") << QStringLiteral("nested-directory");
+    QTest::newRow("symbolic-link") << QStringLiteral("symbolic-link");
+    QTest::newRow("malformed-manifest")
+        << QStringLiteral("malformed-manifest");
+    QTest::newRow("manifest-unknown-key")
+        << QStringLiteral("manifest-unknown-key");
+    QTest::newRow("manifest-path-traversal")
+        << QStringLiteral("manifest-path-traversal");
+    QTest::newRow("manifest-duplicate-target")
+        << QStringLiteral("manifest-duplicate-target");
+    QTest::newRow("manifest-id-mismatch")
+        << QStringLiteral("manifest-id-mismatch");
+    QTest::newRow("invalid-commit-marker")
+        << QStringLiteral("invalid-commit-marker");
+    QTest::newRow("tampered-source-copy")
+        << QStringLiteral("tampered-source-copy");
+    QTest::newRow("tampered-staged-file")
+        << QStringLiteral("tampered-staged-file");
+}
+
+void TestAtomicActivitySave::
+linkedSaveRecoveryRejectsUnsafeJournalEntries()
+{
+    QFETCH(QString, entryCase);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+    QString error;
+    std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+
+    if (entryCase == QStringLiteral("unknown-file")) {
+        writeFixture(
+            QDir(journalPath).filePath(QStringLiteral("attacker.data")),
+            QByteArray("unknown"));
+    } else if (entryCase == QStringLiteral("nested-directory")) {
+        QVERIFY(QDir().mkdir(
+            QDir(journalPath).filePath(QStringLiteral("nested"))));
+    } else if (entryCase == QStringLiteral("symbolic-link")) {
+        const QString sentinel = dir.filePath(QStringLiteral("sentinel"));
+        const QString linked = QDir(journalPath).filePath(
+            QStringLiteral("linked-entry"));
+        writeFixture(sentinel, QByteArray("sentinel"));
+        if (!QFile::link(sentinel, linked)) {
+            QSKIP("Symbolic links are unavailable");
+        }
+    } else if (entryCase == QStringLiteral("malformed-manifest")) {
+        writeFixture(
+            QDir(journalPath).filePath(QStringLiteral("manifest.json")),
+            QByteArray("{}\n"));
+    } else if (entryCase.startsWith(QStringLiteral("manifest-"))) {
+        const QString manifestPath = QDir(journalPath).filePath(
+            QStringLiteral("manifest.json"));
+        QJsonParseError parseError;
+        const QJsonDocument document = QJsonDocument::fromJson(
+            readAll(manifestPath), &parseError);
+        QCOMPARE(parseError.error, QJsonParseError::NoError);
+        QVERIFY(document.isObject());
+        QJsonObject root = document.object();
+        if (entryCase == QStringLiteral("manifest-unknown-key")) {
+            root.insert(QStringLiteral("unexpected"), true);
+        } else if (entryCase
+                   == QStringLiteral("manifest-path-traversal")) {
+            QJsonArray entries =
+                root.value(QStringLiteral("entries")).toArray();
+            QJsonObject entry = entries.at(0).toObject();
+            QJsonObject source =
+                entry.value(QStringLiteral("source")).toObject();
+            source.insert(
+                QStringLiteral("path"),
+                QStringLiteral("../outside.json"));
+            entry.insert(QStringLiteral("source"), source);
+            entries.replace(0, entry);
+            root.insert(QStringLiteral("entries"), entries);
+        } else if (entryCase
+                   == QStringLiteral("manifest-duplicate-target")) {
+            QJsonArray entries =
+                root.value(QStringLiteral("entries")).toArray();
+            QJsonObject second = entries.at(1).toObject();
+            second.insert(
+                QStringLiteral("target"),
+                entries.at(0).toObject().value(
+                    QStringLiteral("target")));
+            entries.replace(1, second);
+            root.insert(QStringLiteral("entries"), entries);
+        } else if (entryCase
+                   == QStringLiteral("manifest-id-mismatch")) {
+            root.insert(
+                QStringLiteral("id"),
+                QUuid::createUuid()
+                    .toString(QUuid::WithoutBraces)
+                    .toLower());
+        }
+        QByteArray contents =
+            QJsonDocument(root).toJson(QJsonDocument::Compact);
+        contents.append('\n');
+        writeFixture(manifestPath, contents);
+    } else if (entryCase == QStringLiteral("invalid-commit-marker")) {
+        writeFixture(
+            QDir(journalPath).filePath(QStringLiteral("COMMITTED")),
+            QByteArray("not committed\n"));
+    } else if (entryCase == QStringLiteral("tampered-source-copy")) {
+        writeFixture(
+            QDir(journalPath).filePath(QStringLiteral("source-0000.old")),
+            QByteArray("tampered source"));
+    } else if (entryCase == QStringLiteral("tampered-staged-file")) {
+        writeFixture(journal->stagingPath(0), QByteArray("staged"));
+        QVERIFY2(journal->recordStaged(0, error), qPrintable(error));
+        writeFixture(journal->stagingPath(0), QByteArray("tampered stage"));
+    }
+    journal.reset();
+
+    error.clear();
+    QVERIFY(!LinkedActivitySave::Journal::reconcileAll(dir.path(), error));
+    QVERIFY2(!error.isEmpty(), qPrintable(entryCase));
+    QVERIFY(QFileInfo::exists(journalPath));
+    QCOMPARE(
+        readAll(dir.filePath(QStringLiteral("first-old.json"))),
+        QByteArray("first old generation"));
+    QCOMPARE(
+        readAll(dir.filePath(QStringLiteral("second-old.json"))),
+        QByteArray("second old generation"));
+}
+
+void TestAtomicActivitySave::
+linkedSavePreManifestRecoveryRejectsUnknownEntries_data()
+{
+    QTest::addColumn<QString>("fileName");
+
+    QTest::newRow("embedded-manifest-name")
+        << QStringLiteral("attacker-manifest.json-data");
+    QTest::newRow("invalid-manifest-temporary")
+        << QStringLiteral(".manifest.json.attack.tmp.extra");
+}
+
+void TestAtomicActivitySave::
+linkedSavePreManifestRecoveryRejectsUnknownEntries()
+{
+    QFETCH(QString, fileName);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    QString error;
+    std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(
+            linkedSaveJournalSpecification(dir.path()), error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString manifestPath = QDir(journalPath).filePath(
+        QStringLiteral("manifest.json"));
+    const QString unknownPath = QDir(journalPath).filePath(fileName);
+    journal.reset();
+    QVERIFY(QFile::remove(manifestPath));
+    writeFixture(unknownPath, QByteArray("unknown pre-manifest entry"));
+
+    error.clear();
+    QVERIFY(!LinkedActivitySave::Journal::reconcileAll(dir.path(), error));
+    QVERIFY2(
+        error.contains(QStringLiteral("unknown"), Qt::CaseInsensitive),
+        qPrintable(error));
+    QVERIFY(QFileInfo::exists(journalPath));
+    QCOMPARE(
+        readAll(unknownPath),
+        QByteArray("unknown pre-manifest entry"));
+    QCOMPARE(
+        readAll(dir.filePath(QStringLiteral("first-old.json"))),
+        QByteArray("first old generation"));
+    QCOMPARE(
+        readAll(dir.filePath(QStringLiteral("second-old.json"))),
+        QByteArray("second old generation"));
+}
+
+void TestAtomicActivitySave::
+linkedSaveOversizedControlFileFailsBeforeRead_data()
+{
+    QTest::addColumn<QString>("relativePath");
+    QTest::addColumn<qint64>("size");
+    QTest::addColumn<bool>("removeManifest");
+
+    QTest::newRow("manifest")
+        << QStringLiteral("manifest.json")
+        << static_cast<qint64>(4 * 1024 * 1024 + 1) << false;
+    QTest::newRow("commit-marker")
+        << QStringLiteral("COMMITTED")
+        << static_cast<qint64>(129) << false;
+    QTest::newRow("manifest-temporary")
+        << QStringLiteral(".manifest.json.attack.tmp")
+        << static_cast<qint64>(4 * 1024 * 1024 + 1) << false;
+    QTest::newRow("commit-marker-temporary")
+        << QStringLiteral(".COMMITTED.attack.tmp")
+        << static_cast<qint64>(129) << false;
+    QTest::newRow("manifest-lock")
+        << QStringLiteral(".manifest.json.lock")
+        << static_cast<qint64>(64 * 1024 + 1) << false;
+    QTest::newRow("pre-manifest-commit-marker")
+        << QStringLiteral("COMMITTED")
+        << static_cast<qint64>(129) << true;
+    QTest::newRow("pre-manifest-temporary")
+        << QStringLiteral(".manifest.json.attack.tmp")
+        << static_cast<qint64>(4 * 1024 * 1024 + 1) << true;
+}
+
+void TestAtomicActivitySave::
+linkedSaveOversizedControlFileFailsBeforeRead()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Unix file permissions are required");
+#else
+    QFETCH(QString, relativePath);
+    QFETCH(qint64, size);
+    QFETCH(bool, removeManifest);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    QString error;
+    std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(
+            linkedSaveJournalSpecification(dir.path()), error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString controlPath = QDir(journalPath).filePath(relativePath);
+    const QString manifestPath = QDir(journalPath).filePath(
+        QStringLiteral("manifest.json"));
+    journal.reset();
+    if (removeManifest) QVERIFY(QFile::remove(manifestPath));
+
+    QFile control(controlPath);
+    QVERIFY2(
+        control.open(QIODevice::WriteOnly | QIODevice::Truncate),
+        qPrintable(control.errorString()));
+    QVERIFY(control.resize(size));
+    control.close();
+    QVERIFY(QFile::setPermissions(
+        controlPath, QFileDevice::Permissions()));
+
+    QFile readabilityProbe(controlPath);
+    if (readabilityProbe.open(QIODevice::ReadOnly)) {
+        readabilityProbe.close();
+        QFile::setPermissions(
+            controlPath,
+            QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        QSKIP("The test process can bypass Unix file permissions");
+    }
+
+    error.clear();
+    QVERIFY(!LinkedActivitySave::Journal::reconcileAll(dir.path(), error));
+    QVERIFY2(
+        error.contains(QStringLiteral("unexpectedly large")),
+        qPrintable(error));
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    QFile::setPermissions(
+        controlPath,
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+#endif
+}
+
+void TestAtomicActivitySave::
+linkedSaveTransactionDirectoriesArePrivate()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Unix directory permissions are required");
+#else
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const QString transactionsPath = dir.filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString namespacePath = QDir(transactionsPath).filePath(
+        QStringLiteral("linked-save"));
+    QVERIFY(QDir().mkpath(namespacePath));
+    const QFileDevice::Permissions broadPermissions =
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner
+        | QFileDevice::ExeOwner | QFileDevice::ReadGroup
+        | QFileDevice::WriteGroup | QFileDevice::ExeGroup
+        | QFileDevice::ReadOther | QFileDevice::WriteOther
+        | QFileDevice::ExeOther;
+    QVERIFY(QFile::setPermissions(transactionsPath, broadPermissions));
+    QVERIFY(QFile::setPermissions(namespacePath, broadPermissions));
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(
+            linkedSaveJournalSpecification(dir.path()), error);
+    QVERIFY2(journal, qPrintable(error));
+
+    const QFileDevice::Permissions nonOwnerPermissions =
+        QFileDevice::ReadGroup | QFileDevice::WriteGroup
+        | QFileDevice::ExeGroup | QFileDevice::ReadOther
+        | QFileDevice::WriteOther | QFileDevice::ExeOther;
+    for (const QString &path :
+         {transactionsPath, namespacePath, journal->directoryPath()}) {
+        const QFileDevice::Permissions permissions =
+            QFileInfo(path).permissions();
+        QCOMPARE(
+            permissions & nonOwnerPermissions,
+            QFileDevice::Permissions());
+        QVERIFY(permissions.testFlag(QFileDevice::ReadOwner));
+        QVERIFY(permissions.testFlag(QFileDevice::WriteOwner));
+        QVERIFY(permissions.testFlag(QFileDevice::ExeOwner));
+    }
+    QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+#endif
+}
+
+void TestAtomicActivitySave::
+linkedSaveRecoveryRestrictsExistingDirectories()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Unix directory permissions are required");
+#else
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    QString error;
+    std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(
+            linkedSaveJournalSpecification(dir.path()), error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    journal.reset();
+
+    const QString transactionsPath = dir.filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString namespacePath = QDir(transactionsPath).filePath(
+        QStringLiteral("linked-save"));
+    const QFileDevice::Permissions broadPermissions =
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner
+        | QFileDevice::ExeOwner | QFileDevice::ReadGroup
+        | QFileDevice::WriteGroup | QFileDevice::ExeGroup
+        | QFileDevice::ReadOther | QFileDevice::WriteOther
+        | QFileDevice::ExeOther;
+    for (const QString &path :
+         {transactionsPath, namespacePath, journalPath}) {
+        QVERIFY(QFile::setPermissions(path, broadPermissions));
+    }
+    writeFixture(
+        QDir(journalPath).filePath(QStringLiteral("manifest.json")),
+        QByteArray("{}\n"));
+
+    error.clear();
+    QVERIFY(!LinkedActivitySave::Journal::reconcileAll(dir.path(), error));
+    QVERIFY2(!error.isEmpty(), "A corrupt manifest must stop recovery");
+
+    const QFileDevice::Permissions nonOwnerPermissions =
+        QFileDevice::ReadGroup | QFileDevice::WriteGroup
+        | QFileDevice::ExeGroup | QFileDevice::ReadOther
+        | QFileDevice::WriteOther | QFileDevice::ExeOther;
+    for (const QString &path :
+         {transactionsPath, namespacePath, journalPath}) {
+        const QFileDevice::Permissions permissions =
+            QFileInfo(path).permissions();
+        QCOMPARE(
+            permissions & nonOwnerPermissions,
+            QFileDevice::Permissions());
+        QVERIFY(permissions.testFlag(QFileDevice::ReadOwner));
+        QVERIFY(permissions.testFlag(QFileDevice::WriteOwner));
+        QVERIFY(permissions.testFlag(QFileDevice::ExeOwner));
+    }
+#endif
+}
+
+void TestAtomicActivitySave::
+linkedSaveRecoveryWithoutJournalAllowsSymlinkedRoot()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString actualRoot = dir.filePath(
+        QStringLiteral("actual-athlete"));
+    const QString linkedRoot = dir.filePath(
+        QStringLiteral("linked-athlete"));
+    QVERIFY(QDir().mkpath(actualRoot));
+    if (!QFile::link(actualRoot, linkedRoot)) {
+        QSKIP("Directory symbolic links are unavailable");
+    }
+
+    QString error;
+    QVERIFY2(
+        LinkedActivitySave::Journal::reconcileAll(
+            linkedRoot, error),
+        qPrintable(error));
+}
+
+void TestAtomicActivitySave::
+linkedFilenameSaveCrashRecoversCompleteGeneration_data()
+{
+    QTest::addColumn<QString>("crashPhase");
+    QTest::addColumn<int>("crashOccurrence");
+    QTest::addColumn<bool>("committed");
+    QTest::addColumn<bool>("conversion");
+
+    QTest::newRow("directory-created")
+        << QStringLiteral("linked-save-directory-created")
+        << 1 << false << false;
+    QTest::newRow("source-copy-one")
+        << QStringLiteral("linked-save-source-copy-published")
+        << 1 << false << false;
+    QTest::newRow("source-copy-two")
+        << QStringLiteral("linked-save-source-copy-published")
+        << 2 << false << false;
+    QTest::newRow("initial-manifest")
+        << QStringLiteral("linked-save-initial-manifest-published")
+        << 1 << false << false;
+    QTest::newRow("stage-one")
+        << QStringLiteral("linked-save-stage-recorded")
+        << 1 << false << false;
+    QTest::newRow("stage-two")
+        << QStringLiteral("linked-save-stage-recorded")
+        << 2 << false << false;
+    QTest::newRow("target-one")
+        << QStringLiteral("linked-save-target-published")
+        << 1 << false << false;
+    QTest::newRow("target-two")
+        << QStringLiteral("linked-save-target-published")
+        << 2 << false << false;
+    QTest::newRow("source-retired-one")
+        << QStringLiteral("linked-save-source-retired")
+        << 1 << false << false;
+    QTest::newRow("source-retired-two")
+        << QStringLiteral("linked-save-source-retired")
+        << 2 << false << false;
+    QTest::newRow("commit-marker")
+        << QStringLiteral("linked-save-commit-marker")
+        << 1 << true << false;
+    QTest::newRow("manifest-removed")
+        << QStringLiteral("linked-save-manifest-removed")
+        << 1 << true << false;
+    for (int occurrence = 1; occurrence <= 4; ++occurrence) {
+        QTest::newRow(qPrintable(QStringLiteral("cleanup-%1").arg(occurrence)))
+            << QStringLiteral("linked-save-cleanup-file")
+            << occurrence << true << false;
+    }
+    QTest::newRow("commit-marker-removed")
+        << QStringLiteral("linked-save-commit-marker-removed")
+        << 1 << true << false;
+    QTest::newRow("directory-removed")
+        << QStringLiteral("linked-save-directory-removed")
+        << 1 << true << false;
+    QTest::newRow("conversion-backup-copy")
+        << QStringLiteral("linked-save-backup-copy-published")
+        << 1 << false << true;
+    QTest::newRow("conversion-backup-published")
+        << QStringLiteral("linked-save-backup-published")
+        << 1 << false << true;
+    QTest::newRow("conversion-source-retired")
+        << QStringLiteral("linked-save-source-retired")
+        << 1 << false << true;
+    QTest::newRow("conversion-commit-marker")
+        << QStringLiteral("linked-save-commit-marker")
+        << 1 << true << true;
+}
+
+void TestAtomicActivitySave::
+linkedFilenameSaveCrashRecoversCompleteGeneration()
+{
+    QFETCH(QString, crashPhase);
+    QFETCH(int, crashOccurrence);
+    QFETCH(bool, committed);
+    QFETCH(bool, conversion);
+
+    static const char RootEnvironment[] =
+        "GC_LINKED_ACTIVITY_SAVE_CRASH_ROOT";
+    static const char ModeEnvironment[] =
+        "GC_LINKED_ACTIVITY_SAVE_CRASH_MODE";
+    const QString root = qEnvironmentVariable(RootEnvironment);
+    const QString mode = qEnvironmentVariable(ModeEnvironment);
+
+    const QDateTime firstOldTime(QDate(2026, 7, 6), QTime(8, 30));
+    const QDateTime secondOldTime(QDate(2026, 7, 7), QTime(9, 45));
+    const QDateTime firstNewTime(QDate(2026, 7, 8), QTime(10, 15));
+    const QDateTime secondNewTime(QDate(2026, 7, 9), QTime(11, 20));
+    const QString firstOldName = conversion
+        ? QStringLiteral("import.fit")
+        : activityFileName(firstOldTime, QStringLiteral("json"));
+    const QString secondOldName =
+        activityFileName(secondOldTime, QStringLiteral("json"));
+    const QString firstNewName =
+        activityFileName(firstNewTime, QStringLiteral("json"));
+    const QString secondNewName =
+        activityFileName(secondNewTime, QStringLiteral("json"));
+
+    if (!root.isEmpty()) {
+        if (mode == QStringLiteral("recover")) {
+            QString recoveryError;
+            if (!LinkedActivitySave::Journal::reconcileAll(
+                    root, recoveryError)) {
+                std::_Exit(87);
+            }
+            return;
+        }
+
+        RideFile firstRide(firstNewTime, 1.0);
+        RideFile secondRide(secondNewTime, 1.0);
+        RideItem firstItem(&firstRide, nullptr);
+        RideItem secondItem(&secondRide, nullptr);
+        firstItem.path = root;
+        firstItem.fileName = firstOldName;
+        secondItem.path = root;
+        secondItem.fileName = secondOldName;
+        secondItem.planned = true;
+        firstItem.setLinkedFileName(secondNewName);
+        secondItem.setLinkedFileName(firstNewName);
+        firstItem.setDirty(true);
+        secondItem.setDirty(true);
+        QString saveError;
+        MainWindow::saveLinkedActivitiesTransaction(
+            nullptr,
+            root,
+            { &firstItem, &secondItem },
+            saveError,
+            ActivitySaveOperationsProvider());
+        QFAIL("The linked-save child did not stop at the requested transition");
+    }
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    JsonFileReader json;
+    QString error;
+    RideFile secondOldRide(secondOldTime, 1.0);
+    secondOldRide.setTag(QStringLiteral("Linked Filename"), firstOldName);
+    const QByteArray importedOriginal("original imported activity");
+    const QByteArray previousBackup("previous imported backup");
+    if (conversion) {
+        writeFixture(
+            temporary.filePath(firstOldName), importedOriginal);
+        writeFixture(
+            temporary.filePath(firstOldName) + QStringLiteral(".bak"),
+            previousBackup);
+    } else {
+        RideFile firstOldRide(firstOldTime, 1.0);
+        firstOldRide.setTag(
+            QStringLiteral("Linked Filename"), secondOldName);
+        QFile firstOldFile(temporary.filePath(firstOldName));
+        QVERIFY2(json.writeRideFile(
+                     nullptr, &firstOldRide, firstOldFile, error),
+                 qPrintable(error));
+    }
+    QFile secondOldFile(temporary.filePath(secondOldName));
+    QVERIFY2(json.writeRideFile(
+                 nullptr, &secondOldRide, secondOldFile, error),
+             qPrintable(error));
+
+    const auto runChild = [&](const QString &childMode,
+                              const QString &requestedPhase) {
+        QProcess child;
+        QProcessEnvironment environment =
+            QProcessEnvironment::systemEnvironment();
+        environment.remove(QStringLiteral(
+            "GC_LINKED_ACTIVITY_SAVE_CRASH_PHASE"));
+        environment.remove(QStringLiteral(
+            "GC_LINKED_ACTIVITY_SAVE_CRASH_OCCURRENCE"));
+        environment.insert(
+            QString::fromLatin1(RootEnvironment), temporary.path());
+        environment.insert(
+            QString::fromLatin1(ModeEnvironment), childMode);
+        environment.insert(
+            QStringLiteral("QT_QPA_PLATFORM"), QStringLiteral("offscreen"));
+        if (!requestedPhase.isEmpty()) {
+            environment.insert(
+                QStringLiteral("GC_LINKED_ACTIVITY_SAVE_CRASH_PHASE"),
+                requestedPhase);
+            environment.insert(
+                QStringLiteral("GC_LINKED_ACTIVITY_SAVE_CRASH_OCCURRENCE"),
+                QString::number(crashOccurrence));
+        }
+        child.setProcessEnvironment(environment);
+        child.start(
+            QCoreApplication::applicationFilePath(),
+            {QStringLiteral(
+                "linkedFilenameSaveCrashRecoversCompleteGeneration:%1")
+                 .arg(QString::fromLatin1(QTest::currentDataTag()))});
+        if (!child.waitForStarted(5000)) {
+            return qMakePair(-1, child.errorString());
+        }
+        if (!child.waitForFinished(15000)) {
+            child.kill();
+            child.waitForFinished();
+            return qMakePair(-2, QStringLiteral("child timed out"));
+        }
+        return qMakePair(
+            child.exitCode(), QString::fromUtf8(child.readAll()));
+    };
+
+    const auto crashed = runChild(QStringLiteral("crash"), crashPhase);
+    QCOMPARE(crashed.first, 86);
+    const auto recovered = runChild(QStringLiteral("recover"), QString());
+    QCOMPARE(recovered.first, 0);
+
+    const QString firstOldPath = temporary.filePath(firstOldName);
+    const QString secondOldPath = temporary.filePath(secondOldName);
+    const QString firstNewPath = temporary.filePath(firstNewName);
+    const QString secondNewPath = temporary.filePath(secondNewName);
+    if (committed) {
+        QVERIFY(!QFileInfo::exists(firstOldPath));
+        QVERIFY(!QFileInfo::exists(secondOldPath));
+        QVERIFY(QFileInfo::exists(firstNewPath));
+        QVERIFY(QFileInfo::exists(secondNewPath));
+        if (conversion) {
+            QCOMPARE(
+                readAll(firstOldPath + QStringLiteral(".bak")),
+                importedOriginal);
+        }
+    } else {
+        QVERIFY(QFileInfo::exists(firstOldPath));
+        QVERIFY(QFileInfo::exists(secondOldPath));
+        QVERIFY(!QFileInfo::exists(firstNewPath));
+        QVERIFY(!QFileInfo::exists(secondNewPath));
+        if (conversion) {
+            QCOMPARE(readAll(firstOldPath), importedOriginal);
+            QCOMPARE(
+                readAll(firstOldPath + QStringLiteral(".bak")),
+                previousBackup);
+        }
+    }
+
+    const auto linkedFilename = [&](const QString &path) {
+        QStringList parseErrors;
+        QFile input(path);
+        std::unique_ptr<RideFile> parsed(
+            json.openRideFile(input, parseErrors));
+        if (!parsed) return QString();
+        return parsed->getTag(QStringLiteral("Linked Filename"), QString());
+    };
+    const QString firstPath = committed ? firstNewPath : firstOldPath;
+    const QString secondPath = committed ? secondNewPath : secondOldPath;
+    if (committed || !conversion) {
+        QCOMPARE(
+            linkedFilename(firstPath),
+            committed ? secondNewName : secondOldName);
+    }
+    QCOMPARE(
+        linkedFilename(secondPath),
+        committed ? firstNewName : firstOldName);
+    const QByteArray firstGeneration = readAll(firstPath);
+    const QByteArray secondGeneration = readAll(secondPath);
+
+    const auto recoveredAgain = runChild(
+        QStringLiteral("recover"), QString());
+    QCOMPARE(recoveredAgain.first, 0);
+    QCOMPARE(readAll(firstPath), firstGeneration);
+    QCOMPARE(readAll(secondPath), secondGeneration);
+
+    const QDir journalRoot(temporary.filePath(
+        QStringLiteral(".gc-transactions/linked-save")));
+    QVERIFY(!journalRoot.exists()
+        || journalRoot.entryList(
+            QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot).isEmpty());
+}
+
 void TestAtomicActivitySave::mainWindowRejectsTargetCollision()
 {
     QTemporaryDir dir;
@@ -2775,6 +4361,70 @@ preflightSaveRelinksCompleteActivitySetBeforeSaving()
     QCOMPARE(
         savedItems,
         QList<RideItem*>({&target, &linked}));
+}
+
+void TestAtomicActivitySave::
+preflightFindsLinkedPeerByPredictedFilename()
+{
+    RideItem first(nullptr, nullptr);
+    first.fileName = QStringLiteral("first-old.json");
+    first.path = QStringLiteral("/activities");
+    first.planned = false;
+    RideItem second(nullptr, nullptr);
+    second.fileName = QStringLiteral("second-old.json");
+    second.path = QStringLiteral("/planned");
+    second.planned = true;
+    const QString firstNew = QStringLiteral("first-new.json");
+    const QString secondNew = QStringLiteral("second-new.json");
+    first.setLinkedFileName(secondNew);
+    second.setLinkedFileName(firstNew);
+    const GuardedOperationPreflightItems activities =
+        guardOperationPreflightItems({&first, &second});
+    const OperationPreflightFilenameChange predict =
+        [&](RideItem *item, QString *newFilename) {
+            if (newFilename) {
+                *newFilename = item == &first
+                    ? firstNew : secondNew;
+            }
+            return item == &first || item == &second;
+        };
+
+    QString error;
+    QCOMPARE(
+        findOperationPreflightLinkedActivity(
+            &first, activities, predict, error),
+        &second);
+    QVERIFY(error.isEmpty());
+    QCOMPARE(
+        findOperationPreflightLinkedActivity(
+            &second, activities, predict, error),
+        &first);
+    QVERIFY(error.isEmpty());
+
+    RideItem ambiguous(nullptr, nullptr);
+    ambiguous.fileName = QStringLiteral("third-old.json");
+    ambiguous.path = QStringLiteral("/planned");
+    ambiguous.planned = true;
+    const GuardedOperationPreflightItems ambiguousActivities =
+        guardOperationPreflightItems({&first, &second, &ambiguous});
+    const OperationPreflightFilenameChange ambiguousPredict =
+        [&](RideItem *item, QString *newFilename) {
+            if (newFilename) {
+                *newFilename = item == &first
+                    ? firstNew : secondNew;
+            }
+            return true;
+        };
+    error.clear();
+    QVERIFY(findOperationPreflightLinkedActivity(
+                &first,
+                ambiguousActivities,
+                ambiguousPredict,
+                error)
+            == nullptr);
+    QVERIFY2(
+        error.contains(QStringLiteral("ambiguous"), Qt::CaseInsensitive),
+        qPrintable(error));
 }
 
 void TestAtomicActivitySave::
@@ -3196,6 +4846,57 @@ saveOnExitDialogStopsUntilAllSelectedSave()
     QCOMPARE(dialog.result(), int(QDialog::Accepted));
     QCOMPARE(dialog.calls, QList<RideItem *>({&second}));
     QVERIFY(!second.isDirty());
+}
+
+void TestAtomicActivitySave::
+saveOnExitCompletesRenamedLinkedSaveGroup()
+{
+    RideItem first(nullptr, nullptr);
+    first.fileName = QStringLiteral("first-old.json");
+    first.path = QStringLiteral("/activities");
+    first.setDirty(true);
+    RideItem second(nullptr, nullptr);
+    second.fileName = QStringLiteral("second-old.json");
+    second.path = QStringLiteral("/planned");
+    second.planned = true;
+    second.setDirty(true);
+    RideItem failing(nullptr, nullptr);
+    failing.fileName = QStringLiteral("failing.json");
+    failing.path = QStringLiteral("/activities");
+    failing.setDirty(true);
+
+    TestSaveOnExitDialog dialog({&first, &second, &failing});
+    dialog.linkedActivities.insert(&first, &second);
+    dialog.linkedActivities.insert(&second, &first);
+    dialog.results.insert(&first, true);
+    dialog.results.insert(&failing, false);
+    dialog.saveActions.insert(&first, [&] {
+        first.fileName = QStringLiteral("first-new.json");
+        second.fileName = QStringLiteral("second-new.json");
+        first.setDirty(false);
+        second.setDirty(false);
+    });
+    dialog.setResult(42);
+
+    dialog.saveClicked();
+
+    QCOMPARE(dialog.result(), 42);
+    QCOMPARE(
+        dialog.calls,
+        QList<RideItem *>({&first, &failing}));
+    QVERIFY(!first.isDirty());
+    QVERIFY(!second.isDirty());
+    QVERIFY(failing.isDirty());
+    QCOMPARE(dialog.errorReports, 0);
+
+    dialog.calls.clear();
+    dialog.results.insert(&failing, true);
+    dialog.saveClicked();
+
+    QCOMPARE(dialog.result(), int(QDialog::Accepted));
+    QCOMPARE(dialog.calls, QList<RideItem *>({&failing}));
+    QCOMPARE(dialog.errorReports, 0);
+    QVERIFY(!failing.isDirty());
 }
 
 void TestAtomicActivitySave::

@@ -2588,7 +2588,8 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   not attempted. Reentrant model callbacks now remove the target at its current
   valid index and never move it into a row that disappeared during the signal.
   Linked deletion rejects a peer whose production save would change its
-  filename, leaving filename-changing reciprocal publication to `DATA-021`.
+  filename; atomic filename-changing reciprocal publication is now completed
+  by `DATA-021`.
   Every post-save boundary still requires the same guarded peer to remain
   uniquely cached in its original namespace with a regular, non-symlink source.
   Selection is made valid before `rideDeleted`, and the notifier no
@@ -2630,9 +2631,9 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   file branch passes a MinGW64 C++17 syntax check; native Windows durability
   remains `DUR-014`.
 - Residual: Ordinary process-crash reconciliation is tracked by `DUR-013`, plan
-  replacement/import atomicity by `DATA-020`, multi-activity save atomicity by
-  `DATA-021`, Windows directory durability by `DUR-014`, hard-link portability
-  by `PORT-001`, and non-cooperating pathname replacement by `SEC-025`.
+  replacement/import atomicity by `DATA-020`, Windows directory durability by
+  `DUR-014`, hard-link portability by `PORT-001`, and non-cooperating pathname
+  replacement by `SEC-025`.
 
 ### DATA-019: Linked metadata and activity deletion are separate transactions
 
@@ -2688,29 +2689,76 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   AppImage packaging policy and compile-only SIP targets also pass.
 - Residual: Ordinary unlinked deletion restart recovery remains `DUR-013`;
   Windows directory durability remains `DUR-014`; non-cooperating pathname
-  replacement remains `SEC-025`; filename-changing reciprocal saves remain
-  `DATA-021`; production linked-JSON persistence coverage remains `TEST-006`;
-  and the peer writer's extra full-payload buffer is tracked by `PERF-012`.
+  replacement remains `SEC-025`; production linked-deletion JSON persistence
+  coverage remains `TEST-006`; and the peer writer's extra full-payload buffer
+  is tracked by `PERF-012`.
 
 ### DATA-021: Filename-changing linked saves are not one transaction
 
-- Status: OPEN
-- Code: `src/Gui/SaveDialogs.cpp` and `src/Core/RideCache.cpp`
+- Status: FIXED
+- Code: `src/Core/LinkedActivitySaveJournal.cpp`,
+  `src/Core/LinkedActivitySaveJournal.h`,
+  `src/Core/LinkedActivityRemovalJournal.cpp`, `src/Core/RideCache.cpp`,
+  `src/Gui/MainWindow.cpp`, `src/Gui/MainWindow.h`,
+  `src/Gui/SaveDialogs.cpp`, `src/Gui/SaveDialogs.h`, and the focused atomic
+  save and RideCache-removal test projects
 - Impact: Save preflight updates both reciprocal filenames in memory and then
   saves the activity set sequentially. If one conversion or rename commits and
   a later peer save fails, the successful file can persist a link to a filename
   that was never published. The caller reports failure, but there is no rollback
   to one complete old or new linked pair. Linked deletion now rejects a peer
   whose save would change its filename, but ordinary linked save workflows still
-  have this runtime partial-save defect; it is distinct from the fixed deletion
+  had this runtime partial-save defect; it was distinct from the fixed deletion
   crash window in `DATA-019`.
-- Test: Use two real linked JSON activities whose timestamps force both names to
-  change, fail each stage/publish/finalize point for the second save, and restart.
-  Require either the complete old pair or complete new pair with reciprocal
-  filenames, never one successful prefix.
-- Fix direction: Build one staged multi-activity save set containing both files
-  and their final link metadata, lock the complete path graph, publish it under
-  one finalizer, and roll back or reconcile the complete generation.
+- Test-first evidence: The original real-JSON regression failed after the first
+  renamed peer was published and the second writer failed, leaving a successful
+  prefix instead of one complete generation. A second RED test showed that the
+  first activity was serialized before the second activity's save processor
+  could mutate it. Security review then produced two RED rows in which
+  unreadable, oversized `.manifest.json.*.tmp` and `.COMMITTED.*.tmp` files were
+  opened before their 4 MiB and 128-byte limits were checked. Two further RED
+  rows showed that pre-manifest recovery accepted an embedded
+  `manifest.json` substring and a malformed manifest-temporary suffix as data,
+  then silently removed them. All four defects were fixed without weakening
+  their tests.
+- Resolution: Filename-changing reciprocal saves now use a private
+  `.gc-transactions/linked-save/<uuid>` journal. A strict versioned manifest
+  records root-relative source, target, and backup roles plus exact sizes and
+  SHA-256 digests for the old source, prior backup, and staged new generation.
+  The save and removal journals share one athlete-wide lease, reject unresolved
+  work in either namespace, and hold the complete source/target/backup lock
+  graph. Every requested save processor runs and is revalidated exactly once
+  before any activity is serialized; only after every staged JSON and manifest
+  update is durable does publication begin. Before the synced `COMMITTED`
+  marker, failure or restart restores the complete old generation and prior
+  backups. After the marker, recovery installs every staged target, publishes
+  conversion backups, retires every superseded source, and then removes the
+  journal. Recovery is idempotent and fail-closed for malformed schemas,
+  traversal, overlapping roles, symlinks, unknown entries, changed production
+  files, oversized control files, unsafe permissions, or incomplete staging.
+  RideCache reconciles removal and save journals before indexing activities and
+  exposes a recovery failure through `startupRecoveryError`. Save preflight can
+  resolve a peer by either its current or predicted new filename, and Save on
+  Exit updates both rows' completed identities after one linked batch commit.
+- Verification: The focused atomic-save suite passes 193 cases normally, under
+  strict ASan/UBSan/LSan, and under ThreadSanitizer. Its subprocess matrix covers
+  18 ordinary rename transitions and four conversion-specific transitions,
+  including prior-backup capture, backup publication, source retirement, and
+  the commit marker; every recovery is repeated and yields one reciprocal old
+  or new pair. The removal/startup suite passes 151 cases normally and under
+  ThreadSanitizer. Its DATA-021-specific rows are strict-LSan-clean; the complete
+  ASan/UBSan run passes functionally and retains only the documented 256-byte Qt
+  model-destruction leak in `TEST-007`. Existing save/deletion workflow, Split
+  data/publication, and athlete startup suites pass 15, 28, 31, 33, and 116
+  cases. The complete Qt 6.8.3 application compiles and links, both its
+  disposable-HOME offscreen version check and timed event-loop startup succeed,
+  and all changed production translation units pass a MinGW64 C++17 syntax
+  check.
+- Residual: Windows cannot durably sync directory entries (`DUR-014`), and a
+  non-cooperating process can still replace a checked pathname outside the
+  cooperative lock protocol (`SEC-025`). `TEST-006` continues to track the
+  separate production linked-deletion persistence fixture; this fix does cover
+  ordinary linked-save persistence with real reciprocal JSON files.
 
 ### DATA-020: Plan replacement and import are not all-or-nothing
 

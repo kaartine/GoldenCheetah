@@ -366,24 +366,35 @@ bool ensureTransactionNamespace(
 }
 
 bool transactionNamespaceIsReady(
-    const QString &namespacePath, QString &error)
+    const QString &root,
+    const QString &namespacePath,
+    QString &error)
 {
-    const QFileInfoList entries = QDir(namespacePath).entryInfoList(
-        QDir::AllEntries | QDir::NoDotAndDotDot
-            | QDir::Hidden | QDir::System,
-        QDir::Name);
-    for (const QFileInfo &entry : entries) {
-        const QString name = entry.fileName();
-        if (entry.isFile() && !entry.isSymLink()
-            && name.startsWith(QLatin1Char('.'))
-            && name.endsWith(QStringLiteral(".lock"))) {
-            const QString lockedId = name.mid(1, name.size() - 6);
-            if (validTransactionId(lockedId)) continue;
-        }
+    const QStringList namespaces = {
+        namespacePath,
+        QDir(root).filePath(
+            QStringLiteral(".gc-transactions/linked-save"))};
+    for (const QString &candidate : namespaces) {
+        const QFileInfo candidateInfo(candidate);
+        if (!candidateInfo.exists() && !candidateInfo.isSymLink()) continue;
+        if (!ensurePrivateDirectory(candidate, error)) return false;
+        const QFileInfoList entries = QDir(candidate).entryInfoList(
+            QDir::AllEntries | QDir::NoDotAndDotDot
+                | QDir::Hidden | QDir::System,
+            QDir::Name);
+        for (const QFileInfo &entry : entries) {
+            const QString name = entry.fileName();
+            if (entry.isFile() && !entry.isSymLink()
+                && name.startsWith(QLatin1Char('.'))
+                && name.endsWith(QStringLiteral(".lock"))) {
+                const QString lockedId = name.mid(1, name.size() - 6);
+                if (validTransactionId(lockedId)) continue;
+            }
 
-        error = QStringLiteral(
-            "Pending linked activity recovery must be completed before starting another deletion");
-        return false;
+            error = QStringLiteral(
+                "Pending linked activity recovery must be completed before starting another transaction");
+            return false;
+        }
     }
     return true;
 }
@@ -2386,7 +2397,8 @@ std::shared_ptr<Journal> Journal::prepare(
     }
     QString namespacePath;
     if (!ensureTransactionNamespace(root, namespacePath, error)) return {};
-    if (!transactionNamespaceIsReady(namespacePath, error)) return {};
+    if (!transactionNamespaceIsReady(
+            root, namespacePath, error)) return {};
     const QString journalPath = QDir(namespacePath).filePath(id);
     if (!ensurePrivateDirectory(journalPath, error)) return {};
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
