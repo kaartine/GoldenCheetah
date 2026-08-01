@@ -367,6 +367,8 @@ Athlete::Athlete(Context *context, const QDir &homeDir)
         rideCache, &RideCache::loadComplete,
         this, &Athlete::handleRideCacheLoadComplete,
         Qt::QueuedConnection);
+    startupLoadError =
+        rideCache->startupRecoveryError();
 
     // we need to block on load complete if first (before mainwindow ready)
     bool waitForInitialLoad =
@@ -376,6 +378,7 @@ Athlete::Athlete(Context *context, const QDir &homeDir)
             waitForInitialLoad || forceRideCacheWaitForTest;
 #endif
     if (waitForInitialLoad
+        && startupLoadError.isEmpty()
         && !initialLoadComplete.load(
             std::memory_order_acquire)) {
         loop.exec();
@@ -383,8 +386,11 @@ Athlete::Athlete(Context *context, const QDir &homeDir)
 
     constructionComplete = true;
     constructionRollback.dismiss();
-    if (initialLoadComplete.load(std::memory_order_acquire))
+    if (!startupLoadError.isEmpty()
+        || initialLoadComplete.load(
+            std::memory_order_acquire)) {
         deferredLoadComplete = true;
+    }
 }
 
 void
@@ -419,6 +425,15 @@ Athlete::loadComplete()
     QPointer<Athlete> guardedAthlete(this);
     QPointer<Context> guardedContext(context);
     const QString athleteName = cyclist;
+    if (!startupLoadError.isEmpty()) {
+        if (guardedContext
+            && guardedContext->athlete == this) {
+            guardedContext->notifyLoadFailed(
+                athleteName, guardedContext.data(),
+                startupLoadError);
+        }
+        return;
+    }
     const auto notifyFailure =
         [guardedAthlete, guardedContext, athleteName](
                 const QString &error) {

@@ -114,6 +114,9 @@ class RideCache : public QObject
         bool isStartupLoadFinished() const {
             return startupLoadFinished_;
         }
+        QString startupRecoveryError() const {
+            return startupRecoveryError_;
+        }
 
         // how is update going?
         QMutex updateMutex;
@@ -293,6 +296,10 @@ class RideCache : public QObject
         using ActivitySavedFunction = std::function<void(RideItem *)>;
 
         bool saveActivity(RideItem *item, QString &error);
+        bool saveActivity(
+            RideItem *item,
+            QString &error,
+            const AtomicFileWriterFactory &writerFactory);
         bool saveActivities(QList<RideItem*> items, QString &error);
         static bool saveActivity(
             Context *context, RideItem *item, QString &error,
@@ -445,6 +452,7 @@ class RideCache : public QObject
         QThread *startupLoader_ = nullptr;
         bool startupIndexReady_ = false;
         bool startupLoadFinished_ = false;
+        QString startupRecoveryError_;
         bool startupSnapshotsInvalidated_ = false;
         bool isCancelled = false;
         bool refreshChanged_ = false;

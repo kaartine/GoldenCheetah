@@ -183,6 +183,7 @@ class Athlete : public QObject
         bool constructionComplete = false;
         bool deferredLoadComplete = false;
         bool loadCompletionStarted = false;
+        QString startupLoadError;
 };
 
 

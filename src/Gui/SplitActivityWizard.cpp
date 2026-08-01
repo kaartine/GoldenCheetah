@@ -27,6 +27,7 @@
 #include "SaveDialogs.h"
 #include "HelpWhatsThis.h"
 
+#include <QCoreApplication>
 #include <QPointer>
 
 
@@ -37,6 +38,13 @@ static const double defaultMinimumGap = 1; // 1 minute
 static const double defaultMinimumSegmentSize = 5; // 5 minutes
 
 namespace {
+
+QString linkedSourceRemovalBlockingReason()
+{
+    return QCoreApplication::translate(
+        "SplitActivityWizard",
+        "This activity is linked to another activity. Remove the link or select \"Keep original\" before splitting.");
+}
 
 SplitActivitySourceIdentity splitSourceIdentity(
     const RideItem *item)
@@ -776,6 +784,14 @@ SplitKeep::validatePage()
             guardedCache, guardedHome,
             source, expectedSource);
     };
+    if (!splitActivitySourceRemovalAllowed(
+            guardedWizard->keepOriginal,
+            source && source->hasLinkedActivity())) {
+        QMessageBox::warning(
+            page.data(), tr("Split Activity"),
+            linkedSourceRemovalBlockingReason());
+        return false;
+    }
     return prepareSplitSourceBeforeSelection(
         guardedWizard->keepOriginal,
         sourceIsCurrent,
@@ -846,6 +862,13 @@ SplitKeep::setWarning()
         if (!source) {
             warning->setText(
                 tr("The source activity is no longer available."));
+            return;
+        }
+
+        if (!splitActivitySourceRemovalAllowed(
+                false, source->hasLinkedActivity())) {
+            warning->setText(
+                linkedSourceRemovalBlockingReason());
             return;
         }
 
@@ -1149,6 +1172,14 @@ SplitConfirm::validatePage()
             tr("The source activity changed before the split was confirmed."));
         return false;
     }
+    if (!splitActivitySourceRemovalAllowed(
+            keepOriginal,
+            source && source->hasLinkedActivity())) {
+        QMessageBox::warning(
+            page.data(), tr("Split Activity"),
+            linkedSourceRemovalBlockingReason());
+        return false;
+    }
 
     if (QMessageBox::question(
             page.data(), tr("Confirm"),
@@ -1165,6 +1196,14 @@ SplitConfirm::validatePage()
         QMessageBox::critical(
             page.data(), tr("Split Activity"),
             tr("The source activity changed while confirming the split."));
+        return false;
+    }
+    if (!splitActivitySourceRemovalAllowed(
+            keepOriginal,
+            source && source->hasLinkedActivity())) {
+        QMessageBox::warning(
+            page.data(), tr("Split Activity"),
+            linkedSourceRemovalBlockingReason());
         return false;
     }
 
@@ -1254,6 +1293,14 @@ SplitConfirm::validatePage()
     }
 
     if (!sourceIsCurrent()) return false;
+    if (!splitActivitySourceRemovalAllowed(
+            keepOriginal,
+            source && source->hasLinkedActivity())) {
+        QMessageBox::warning(
+            page.data(), tr("Split Activity"),
+            linkedSourceRemovalBlockingReason());
+        return false;
+    }
 
     QStringList publishedFileNames;
     QString error;

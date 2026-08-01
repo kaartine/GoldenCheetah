@@ -74,6 +74,7 @@ QSet<Context *> validContexts;
 bool throwOnAthleteIdWrite = false;
 bool throwOnRideCacheConstruction = false;
 bool emitRideCacheLoadComplete = false;
+QString rideCacheStartupRecoveryError;
 bool throwOnChartLoad = false;
 bool measuresWriteFails = false;
 bool includeHrvMeasuresGroup = false;
@@ -141,6 +142,7 @@ void resetAthleteMigrationTestSettings()
     stravaCredentialWriteCondition.notify_all();
     throwOnRideCacheConstruction = false;
     emitRideCacheLoadComplete = false;
+    rideCacheStartupRecoveryError.clear();
     throwOnChartLoad = false;
     measuresWriteFails = false;
     includeHrvMeasuresGroup = false;
@@ -275,6 +277,12 @@ void setAthleteMigrationThrowOnRideCacheConstruction(bool enabled)
 void setAthleteMigrationEmitRideCacheLoadComplete(bool enabled)
 {
     emitRideCacheLoadComplete = enabled;
+}
+
+void setAthleteMigrationRideCacheStartupRecoveryError(
+    const QString &error)
+{
+    rideCacheStartupRecoveryError = error;
 }
 
 void setAthleteMigrationThrowOnChartLoad(bool enabled)
@@ -737,6 +745,7 @@ RideCache::RideCache(Context *context)
     if (throwOnRideCacheConstruction) {
         throw std::runtime_error("injected ride cache construction failure");
     }
+    startupRecoveryError_ = rideCacheStartupRecoveryError;
     if (emitRideCacheLoadComplete) {
         QTimer::singleShot(
             0, this,

@@ -66,6 +66,13 @@ inline bool splitActivitySourceSnapshotIsCurrent(
         && expectedContent.revision == currentContent.revision;
 }
 
+inline bool splitActivitySourceRemovalAllowed(
+    bool keepOriginal,
+    bool sourceHasLinkedActivity)
+{
+    return keepOriginal || !sourceHasLinkedActivity;
+}
+
 using SplitSourcePreflight =
     std::function<bool()>;
 using SplitSourceRefresh =

@@ -93,6 +93,8 @@ private slots:
     void keptSourceNeedsNoRemovalPreflight();
     void changedSourceIsRejectedBeforeRemovalPreflight();
     void sourceChangedDuringRemovalPreflightDoesNotRefresh();
+    void linkedSourceRemovalPolicy_data();
+    void linkedSourceRemovalPolicy();
     void sourceIdentityAcceptsExactMatch();
     void sourceIdentityRequiresLiveWorkflowOwners_data();
     void sourceIdentityRequiresLiveWorkflowOwners();
@@ -197,6 +199,32 @@ sourceChangedDuringRemovalPreflightDoesNotRefresh()
         [&] { ++refreshCalls; }));
 
     QCOMPARE(refreshCalls, 0);
+}
+
+void TestSplitRideData::linkedSourceRemovalPolicy_data()
+{
+    QTest::addColumn<bool>("keepOriginal");
+    QTest::addColumn<bool>("hasLinkedActivity");
+    QTest::addColumn<bool>("allowed");
+
+    QTest::newRow("remove-linked-source")
+        << false << true << false;
+    QTest::newRow("keep-linked-source")
+        << true << true << true;
+    QTest::newRow("remove-unlinked-source")
+        << false << false << true;
+}
+
+void TestSplitRideData::linkedSourceRemovalPolicy()
+{
+    QFETCH(bool, keepOriginal);
+    QFETCH(bool, hasLinkedActivity);
+    QFETCH(bool, allowed);
+
+    QCOMPARE(
+        splitActivitySourceRemovalAllowed(
+            keepOriginal, hasLinkedActivity),
+        allowed);
 }
 
 void TestSplitRideData::sourceIdentityAcceptsExactMatch()

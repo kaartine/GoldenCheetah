@@ -2587,11 +2587,11 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   disappears, it preserves completed results and marks every remaining request
   not attempted. Reentrant model callbacks now remove the target at its current
   valid index and never move it into a row that disappeared during the signal.
-  A successful linked save may adopt a changed filename only when the same
-  guarded peer remains uniquely cached in the original namespace and its new
-  source is a regular, non-symlink file in the expected cache directory. Delete
-  callers similarly adopt a valid post-save identity before their final guarded
-  removal. Selection is made valid before `rideDeleted`, and the notifier no
+  Linked deletion rejects a peer whose production save would change its
+  filename, leaving filename-changing reciprocal publication to `DATA-021`.
+  Every post-save boundary still requires the same guarded peer to remain
+  uniquely cached in its original namespace with a regular, non-symlink source.
+  Selection is made valid before `rideDeleted`, and the notifier no
   longer selects the removed object. Nested model callbacks re-resolve both the
   target row and selection before each removal signal; nested deletion is
   rejected while a model transaction is active. Staging cleanup failure is a
@@ -2603,9 +2603,9 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   setters, and activity identity across nested callbacks. A path-changing save
   whose owner disappears rolls back the new target so the old and new identities
   cannot coexist. Save-on-Exit repeatedly reconciles newly dirty and re-dirtied
-  rows, and Discard succeeds only after a guarded reload. Saved-rename adoption
-  requires evidence that the exact row was saved plus unique cache membership,
-  the original namespace, and a regular non-symlink source in the cache directory.
+  rows, and Discard succeeds only after a guarded reload. Any peer identity
+  change observed during linked deletion requires recovery; the fixed-path
+  deletion workflow never adopts a renamed peer.
   Repeat Plan requires a non-empty, freshly resolved copy set before target
   removal, its pages resolve owners through the guarded wizard, and the shared
   plan reader stores its context as `QPointer`. Plan selection and gap changes
@@ -2629,28 +2629,68 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   policy check and compile-only SIP prerequisite pass. The changed Windows atomic
   file branch passes a MinGW64 C++17 syntax check; native Windows durability
   remains `DUR-014`.
-- Residual: Process-crash reconciliation is tracked by `DUR-013`, linked
-  metadata atomicity by `DATA-019`, plan replacement/import atomicity by
-  `DATA-020`, multi-activity save atomicity by `DATA-021`, Windows directory
-  durability by `DUR-014`, hard-link portability by `PORT-001`, and
-  non-cooperating pathname replacement by `SEC-025`.
+- Residual: Ordinary process-crash reconciliation is tracked by `DUR-013`, plan
+  replacement/import atomicity by `DATA-020`, multi-activity save atomicity by
+  `DATA-021`, Windows directory durability by `DUR-014`, hard-link portability
+  by `PORT-001`, and non-cooperating pathname replacement by `SEC-025`.
 
 ### DATA-019: Linked metadata and activity deletion are separate transactions
 
-- Status: OPEN
-- Code: `src/Core/RideCacheRemoval.cpp` and linked deletion callers
+- Status: FIXED
+- Code: `src/Core/LinkedActivityRemovalJournal.cpp`,
+  `src/Core/LinkedActivityRemovalJournal.h`, `src/Core/RideCacheRemoval.cpp`,
+  `src/Core/RideCache.cpp`, `src/Core/Athlete.cpp`,
+  `src/Gui/SplitActivityWizard.cpp`, and the focused removal, athlete-startup,
+  and Split test projects
 - Impact: Runtime rejection now restores the linked peer and reports a failed
   restoration, but the peer save necessarily precedes the source storage
   transaction. A process or power loss in that interval can persist a cleared
   peer while the still-live target retains its reciprocal link. A later manual
   recovery is then required even though every activity byte remains available.
-- Test: Run linked deletion in a subprocess and terminate immediately after the
-  peer save and at each subsequent durable storage transition. On restart,
-  require either a reciprocal pair or a committed deletion with an unlinked
-  survivor, including injected peer-save and restore-save failures.
-- Fix direction: Include the linked metadata update in the persisted deletion
-  manifest, stage the survivor rewrite, and reconcile both metadata and source
-  storage from one transaction state before loading activities.
+- Test-first evidence: The original subprocess crash after the peer save left
+  the survivor durably unlinked while the target source remained live. Added
+  failpoints then exposed six non-idempotent cleanup interruptions. Independent
+  RED regressions showed compensation serializing before the exact peer bytes
+  were restored, startup recovery failure not reaching the athlete load-failure
+  rollback, two live transactions acquiring the same athlete, abandoned
+  journals allowing a successor transaction, and existing journal directories
+  retaining broad permissions. Five oversized control-file rows also showed
+  manifest, marker, and temporary files being opened before their limits were
+  enforced. Four final crash rows initially exited normally because journal
+  directory creation, `peer.old`, initial-manifest publication, and the peer
+  file commit had no precise transition hooks.
+- Resolution: Linked deletion now uses one private, athlete-root transaction
+  namespace and a strict versioned JSON manifest containing root-relative roles,
+  sizes, and SHA-256 snapshots for the source, prior backup, peer generations,
+  and derived files. The journal separately preserves the exact prior peer and
+  staged peer bytes. An athlete-wide process lease spans peer staging,
+  the existing storage transaction, the durable `COMMITTED` decision marker,
+  and cleanup; unresolved journals block a successor transaction. Before the
+  marker, restart or runtime compensation restores the complete old pair and
+  prior backup. After the marker, recovery completes the deletion, preserves the
+  archived source, installs the unlinked survivor, and removes derived and
+  transaction files. Every transition is file- and parent-directory-synced on
+  Unix, snapshot-validated, idempotent across repeated recovery, bounded for
+  journal control files, and fail-closed for unknown entries, symbolic links,
+  path traversal, overlapping roles, or non-private transaction directories.
+  RideCache reconciles synchronously before scanning activities; a failure
+  aborts athlete publication through the normal load-failure signal. Linked
+  archived removal and filename-changing peer saves are rejected before
+  mutation, while Split can remove a source only after its link is removed or
+  when `Keep original` is selected.
+- Verification: The focused removal suite passes 147 cases normally. Its 41
+  DATA-019 security, serialization, lease, startup, and crash/recovery cases pass
+  under strict ASan/UBSan/LSan and under ThreadSanitizer without reports. Split
+  data passes 31 cases and athlete/startup safety passes 116. The complete Qt
+  6.8.3 application compiles and links, and its disposable-HOME offscreen
+  version smoke test exits successfully. The 99-target offscreen matrix reports
+  3,705 passed, zero failed or blacklisted, and 12 expected Linux skips; its
+  AppImage packaging policy and compile-only SIP targets also pass.
+- Residual: Ordinary unlinked deletion restart recovery remains `DUR-013`;
+  Windows directory durability remains `DUR-014`; non-cooperating pathname
+  replacement remains `SEC-025`; filename-changing reciprocal saves remain
+  `DATA-021`; production linked-JSON persistence coverage remains `TEST-006`;
+  and the peer writer's extra full-payload buffer is tracked by `PERF-012`.
 
 ### DATA-021: Filename-changing linked saves are not one transaction
 
@@ -2660,8 +2700,10 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   saves the activity set sequentially. If one conversion or rename commits and
   a later peer save fails, the successful file can persist a link to a filename
   that was never published. The caller reports failure, but there is no rollback
-  to one complete old or new linked pair. This runtime partial-save defect is
-  distinct from the deletion crash window in `DATA-019`.
+  to one complete old or new linked pair. Linked deletion now rejects a peer
+  whose save would change its filename, but ordinary linked save workflows still
+  have this runtime partial-save defect; it is distinct from the fixed deletion
+  crash window in `DATA-019`.
 - Test: Use two real linked JSON activities whose timestamps force both names to
   change, fail each stage/publish/finalize point for the second save, and restart.
   Require either the complete old pair or complete new pair with reciprocal
@@ -2691,18 +2733,20 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 ### DUR-013: Activity deletion recovery files are not reconciled on restart
 
 - Status: OPEN
-- Code: `src/Core/RideCacheRemoval.cpp` and RideCache startup
-- Impact: Runtime failures retain verified canonical and transaction-specific
-  recovery copies and return their paths, but a process exit between durable
-  transitions has no result object. Startup does not classify `.gc-copy-*`,
-  `.gc-previous-*`, or `.gc-remove-*` files, so recoverable data can remain
-  orphaned and require manual inspection.
+- Code: the ordinary, unlinked path in `src/Core/RideCacheRemoval.cpp` and
+  RideCache startup
+- Impact: `DATA-019` now journals and reconciles linked deletion, but ordinary
+  unlinked deletion still retains only verified canonical and
+  transaction-specific recovery copies. A process exit between its durable
+  transitions has no result object, and startup does not classify its
+  `.gc-copy-*`, `.gc-previous-*`, or `.gc-remove-*` files. Recoverable data can
+  therefore remain orphaned and require manual inspection.
 - Test: Terminate a deletion subprocess after every file and directory sync,
   restart the same athlete, and require deterministic completion or rollback
   while preserving the newest source and every pre-existing backup.
-- Fix direction: Persist a fsynced manifest with roles, hashes, and transition
-  state in a private transaction directory, then reconcile incomplete deletion
-  transactions before RideCache scans activities.
+- Fix direction: Generalize the fsynced manifest and startup reconciler from
+  `DATA-019` to the ordinary deletion path, retaining its role hashes and
+  transition decision while omitting the linked-peer generation.
 
 ### DUR-014: Windows deletion does not durably sync directory entries
 
@@ -2746,7 +2790,9 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 ### SEC-025: Activity deletion pathname checks remain TOCTOU-prone
 
 - Status: OPEN
-- Code: `src/Core/RideCacheRemoval.cpp` and `src/FileIO/AtomicFileWriter.h`
+- Code: `src/Core/RideCacheRemoval.cpp`,
+  `src/Core/LinkedActivityRemovalJournal.cpp`, and
+  `src/FileIO/AtomicFileWriter.h`
 - Impact: Unsafe names, final symlinks, and planned-backup symlinks are rejected,
   snapshots are hashed, and cooperative writers share path locks. A separate
   local process can still replace a parent or directory entry between
@@ -5189,6 +5235,31 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   every captured source before publication and keep all athlete graph access on
   its owning thread.
 
+### PERF-012: Linked-removal peer staging duplicates the serialized activity
+
+- Status: OPEN
+- Code: `src/Core/LinkedActivityRemovalJournal.cpp`,
+  `src/FileIO/JsonRideFile.y`, and `src/FileIO/AtomicFileWriter.h`
+- Impact: JSON save already materializes the complete survivor payload, and the
+  atomic helper retains the prior file bytes for compensation. The journal peer
+  writer additionally appends every serialized byte to another `QByteArray`
+  before publishing its durable staging file. A large linked activity therefore
+  adds one full-payload allocation on the GUI thread and can amplify memory
+  pressure during deletion.
+- Evidence: `JournalPeerWriter::write()` copies each successful delegate write
+  into `accumulated_`, and `commit()` passes that complete buffer to a second
+  atomic writer. The crash tests prove byte equality but do not bound peak
+  memory.
+- Test: Feed a large deterministic payload through an instrumented peer writer
+  in small chunks and record its maximum retained bytes. Require journal-owned
+  buffering to remain bounded by a fixed chunk while preserving the existing
+  crash matrix and exact old/new snapshots.
+- Fix direction: Open a create-new staging writer alongside the peer's atomic
+  replacement, tee and hash each serializer chunk into both, flush and publish
+  the staging file first, update the manifest, and only then commit the peer.
+  Remove `accumulated_`; broader whole-JSON serialization can be addressed
+  separately.
+
 ### TEST-001: Strava disconnect UI lifetime coverage is source-only
 
 - Status: OPEN
@@ -5299,10 +5370,11 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   `unittests/Core/rideCacheRemoval/testRideCacheRemoval.cpp`,
   `src/Core/RideItem.cpp`, and `src/Gui/SaveDialogs.cpp`
 - Impact: The focused suite now thoroughly checks deletion state-machine and
-  reentrancy invariants, but its link setters and `saveActivity()` stub mutate
-  memory without loading or writing a real activity. It does not prove that real
-  linked JSON metadata, filename conversion, save processors, and cache signals
-  preserve the same compensation behavior.
+  reentrancy invariants and persists deterministic old/new peer bytes through
+  the real journal writer, but its link setters and `saveActivity()` serializer
+  remain test stubs. It does not load and rewrite reciprocal metadata through a
+  production `RideItem`, `JsonFileReader`, save processors, and cache signals,
+  so that complete integration contract is not yet proved.
 - Test: Create a disposable athlete with two reciprocal real JSON activities and
   execute production setters and saves through each deletion failpoint. Reopen
   the files and cache after success, rejection, rollback, and recovery-required
@@ -5521,12 +5593,12 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The complete containerized release matrix with `DATA-018` and `GUI-007` passes:
+The complete containerized release matrix with `DATA-019` passes:
 
 - 97 QtTest executables
 - 1 AppImage packaging check
 - 1 compile-only generated-SIP prerequisite
-- 3,661 passed
+- 3,705 passed
 - 0 failed or blacklisted
 - 12 expected platform-only skips on Linux
 - Qt 6.8.3 on Ubuntu 24.04
@@ -5567,6 +5639,14 @@ the only LSan exception: two synchronously destructive Qt model test rows each
 retain 128 bytes of Qt 6.8.3 bookkeeping while remaining ASan/UBSan- and
 TSAN-clean. The changed Windows atomic-file branch passes its MinGW64 syntax
 check.
+
+`DATA-019` additionally passes its final 147-case removal suite normally. Its
+41 focused journal security, ordering, lease, startup, and 28-point
+crash/recovery cases pass under strict ASan/UBSan/LSan and ThreadSanitizer
+without reports. The related Split and athlete/startup suites pass 31 and 116
+cases. The production application links and its disposable-HOME offscreen smoke
+test exits successfully. Native Windows crash durability remains `DUR-014` and
+was not inferred from the Linux or historical MinGW checks.
 
 This baseline is not evidence for any remaining OPEN finding. Each open item
 still requires its listed RED regression before implementation. No whole-suite

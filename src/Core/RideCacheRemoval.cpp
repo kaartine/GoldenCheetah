@@ -17,6 +17,7 @@
 #include "AtomicFileWriter.h"
 #include "RideCacheModel.h"
 #include "RideFileCacheIntegrity.h"
+#include "LinkedActivityRemovalJournal.h"
 
 #include <QPointer>
 #include <QTemporaryFile>
@@ -32,6 +33,10 @@ void rideCacheRemovalMutateBeforeMove(
     const QString &targetPath);
 bool rideCacheRemovalShouldFailSync(
     const QString &path);
+void rideCacheRemovalTransitionReached(
+    const char *transition);
+bool rideCacheRemovalLinkedSaveKeepsPath(
+    RideItem *item);
 #endif
 
 namespace {
@@ -298,6 +303,95 @@ bool copyRemovalSource(
     return true;
 }
 
+bool copyRemovalSourceToPath(
+    const RemovalFileSnapshot &source,
+    const QString &stagingPath,
+    QString &error)
+{
+    if (stagingPath.isEmpty()
+        || removalEntryExists(stagingPath)) {
+        error = QObject::tr(
+            "The activity backup staging path is unavailable");
+        return false;
+    }
+
+    QFile input(source.path);
+    if (!input.open(QIODevice::ReadOnly)) {
+        error = QObject::tr(
+            "Cannot read the activity source: %1")
+                    .arg(input.errorString());
+        return false;
+    }
+
+    NewAtomicFileWriter output(stagingPath);
+    if (!output.open()) {
+        error = QObject::tr(
+            "Cannot create the activity backup staging file: %1")
+                    .arg(output.errorString());
+        return false;
+    }
+
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    qint64 copied = 0;
+    while (!input.atEnd()) {
+        const QByteArray chunk = input.read(1024 * 1024);
+        if (chunk.isEmpty()
+            && input.error()
+                != QFileDevice::NoError) {
+            error = QObject::tr(
+                "Cannot read the activity source: %1")
+                        .arg(input.errorString());
+            output.cancelWriting();
+            return false;
+        }
+        if (output.write(chunk) != chunk.size()) {
+            error = QObject::tr(
+                "Cannot write the activity backup staging file: %1")
+                        .arg(output.errorString());
+            output.cancelWriting();
+            return false;
+        }
+        copied += chunk.size();
+        hash.addData(chunk);
+    }
+    if (!output.flush()) {
+        error = QObject::tr(
+            "Cannot flush the activity backup staging file: %1")
+                    .arg(output.errorString());
+        output.cancelWriting();
+        return false;
+    }
+    if (copied != source.contents.size
+        || hash.result() != source.contents.digest) {
+        error = QObject::tr(
+            "The copied activity backup does not match the source");
+        output.cancelWriting();
+        return false;
+    }
+    if (!output.commit()) {
+        error = QObject::tr(
+            "Cannot publish the activity backup staging file: %1")
+                    .arg(output.errorString());
+        return false;
+    }
+    if (!syncRemovalDirectory(stagingPath, error))
+        return false;
+
+    QString verifyError;
+    if (!atomicFileMatchesSnapshot(
+            stagingPath, source.contents,
+            verifyError)
+        || !atomicFileMatchesSnapshot(
+            source.path, source.contents,
+            verifyError)) {
+        error = QObject::tr(
+            "The activity source changed while it was being copied: %1")
+                    .arg(verifyError);
+        return false;
+    }
+    return true;
+}
+
 bool removeRemovalFile(
     const QString &path,
     const QString &hookPath)
@@ -332,7 +426,9 @@ public:
         QString backupPath,
         QStringList derivedPaths,
         bool archiveSource,
-        RemovalPrepareFunction prepare)
+        RemovalPrepareFunction prepare,
+        std::shared_ptr<
+            LinkedActivityRemoval::Journal> journal = {})
         : source_({
               std::move(sourcePath),
               QObject::tr("activity source"),
@@ -345,9 +441,12 @@ public:
               {}}),
           archiveSource_(archiveSource),
           prepare_(std::move(prepare)),
+          journal_(std::move(journal)),
           transactionId_(
-              QUuid::createUuid().toString(
-                  QUuid::WithoutBraces))
+              journal_
+              ? journal_->transactionId()
+              : QUuid::createUuid().toString(
+                    QUuid::WithoutBraces))
     {
         derived_.reserve(derivedPaths.size());
         for (QString &path : derivedPaths) {
@@ -358,14 +457,20 @@ public:
                 {}});
         }
         if (archiveSource_) {
-            sourceTombstone_ =
-                source_.path
-                + QStringLiteral(".gc-remove-")
-                + transactionId_;
-            previousBackup_ =
-                backup_.path
-                + QStringLiteral(".gc-previous-")
-                + transactionId_;
+            sourceTombstone_ = journal_
+                ? journal_->sourceTombstonePath()
+                : source_.path
+                    + QStringLiteral(".gc-remove-")
+                    + transactionId_;
+            previousBackup_ = journal_
+                ? journal_->previousBackupPath()
+                : backup_.path
+                    + QStringLiteral(".gc-previous-")
+                    + transactionId_;
+            if (journal_) {
+                backupStaging_ =
+                    journal_->backupStagingPath();
+            }
         }
     }
 
@@ -387,12 +492,21 @@ public:
             return result;
         }
 
-        if (!copyRemovalSource(
-                source_, backup_.path,
-                backupStaging_, result.error)) {
+        const bool sourceCopied = journal_
+            ? copyRemovalSourceToPath(
+                  source_, backupStaging_,
+                  result.error)
+            : copyRemovalSource(
+                  source_, backup_.path,
+                  backupStaging_, result.error);
+        if (!sourceCopied) {
             cleanupUnpublishedStaging(result);
             return result;
         }
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+        rideCacheRemovalTransitionReached(
+            "backup-staged");
+#endif
 
         if (!revalidateBeforeCommit(result.error)) {
             cleanupUnpublishedStaging(result);
@@ -436,6 +550,10 @@ public:
                 result.error = syncError;
                 return rollbackResult(result.error);
             }
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+            rideCacheRemovalTransitionReached(
+                "previous-backup-preserved");
+#endif
         }
 
         QString moveError;
@@ -468,6 +586,10 @@ public:
             result.error = syncError;
             return rollbackResult(result.error);
         }
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+        rideCacheRemovalTransitionReached(
+            "backup-published");
+#endif
 
         if (!moveRemovalFile(
                 source_.path,
@@ -495,6 +617,33 @@ public:
                 source_.path, syncError)) {
             result.error = syncError;
             return rollbackResult(result.error);
+        }
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+        rideCacheRemovalTransitionReached(
+            "source-tombstoned");
+#endif
+
+        if (journal_) {
+            QString commitError;
+            if (!journal_->markCommitted(
+                    commitError)) {
+                result.error = commitError.isEmpty()
+                    ? QObject::tr(
+                        "Cannot commit the linked activity deletion journal")
+                    : commitError;
+                if (journal_->hasCommitMarker()) {
+                    result.status = RideCache::RemovalStatus::
+                        CommittedCleanupPending;
+                    result.recoveryPaths =
+                        journal_->recoveryPaths();
+                    return result;
+                }
+                return rollbackResult(result.error);
+            }
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+            rideCacheRemovalTransitionReached(
+                "commit-marker");
+#endif
         }
 
         result.status =
@@ -627,6 +776,10 @@ private:
                 result.error, syncError);
             return false;
         }
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+        rideCacheRemovalTransitionReached(
+            "cleanup-file");
+#endif
         return true;
     }
 
@@ -1033,6 +1186,8 @@ private:
     QVector<RemovalFileSnapshot> derived_;
     bool archiveSource_ = false;
     RemovalPrepareFunction prepare_;
+    std::shared_ptr<
+        LinkedActivityRemoval::Journal> journal_;
     QString transactionId_;
     QString backupStaging_;
     QString sourceTombstone_;
@@ -1048,14 +1203,17 @@ StorageRemovalResult removeRideFilesFromStorage(
     const QString &backupPath,
     const QStringList &derivedPaths,
     bool archiveSource,
-    RemovalPrepareFunction prepare)
+    RemovalPrepareFunction prepare,
+    std::shared_ptr<
+        LinkedActivityRemoval::Journal> journal = {})
 {
     return ActivityRemovalTransaction(
         sourcePath,
         backupPath,
         derivedPaths,
         archiveSource,
-        std::move(prepare)).execute();
+        std::move(prepare),
+        std::move(journal)).execute();
 }
 
 bool runRemovalDeleteProcessor(
@@ -1082,6 +1240,42 @@ bool runRemovalDeleteProcessor(
         return false;
     }
     return true;
+}
+
+bool linkedRemovalPeerSaveKeepsPath(
+    RideItem *item,
+    QString &error)
+{
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    if (rideCacheRemovalLinkedSaveKeepsPath(item))
+        return true;
+#else
+    if (item) {
+        RideFile *const ride = item->ride();
+        const QFileInfo source(
+            QDir(item->path).filePath(item->fileName));
+        if (ride
+            && source.completeSuffix().compare(
+                   QStringLiteral("json"),
+                   Qt::CaseInsensitive) == 0) {
+            const QDateTime dateTime = ride->startTime();
+            const QChar zero = QLatin1Char('0');
+            const QString expectedBaseName =
+                QStringLiteral("%1_%2_%3_%4_%5_%6")
+                    .arg(dateTime.date().year(), 4, 10, zero)
+                    .arg(dateTime.date().month(), 2, 10, zero)
+                    .arg(dateTime.date().day(), 2, 10, zero)
+                    .arg(dateTime.time().hour(), 2, 10, zero)
+                    .arg(dateTime.time().minute(), 2, 10, zero)
+                    .arg(dateTime.time().second(), 2, 10, zero);
+            if (source.baseName() == expectedBaseName)
+                return true;
+        }
+    }
+#endif
+    error = QObject::tr(
+        "The linked activity must be saved as a correctly named JSON activity before deletion");
+    return false;
 }
 
 void appendRemovalResultError(
@@ -2091,6 +2285,8 @@ RideCache::removeRideEntry(
     bool linkedExpectedPlanned = false;
     bool linkedItemWasSaved = false;
     bool linkedIdentityChanged = false;
+    std::shared_ptr<
+        LinkedActivityRemoval::Journal> linkedJournal;
 
     const auto appendRecoveryPath =
         [&result](const QString &path) {
@@ -2216,19 +2412,38 @@ RideCache::removeRideEntry(
         [&appendRecoveryPath,
          &currentLinkedSourcePath,
          &linkedOriginalSourcePath,
-         &sourcePath] {
+         &sourcePath,
+         &linkedJournal] {
             appendRecoveryPath(sourcePath);
             appendRecoveryPath(
                 linkedOriginalSourcePath);
             appendRecoveryPath(
                 currentLinkedSourcePath());
+            if (linkedJournal) {
+                for (const QString &path :
+                     linkedJournal->recoveryPaths()) {
+                    appendRecoveryPath(path);
+                }
+            }
         };
     const auto restoreLinkedPeer =
         [guardedCache, operationOwnersAreStable,
          deletionTargetIsStable,
          &linkedItem, &linkedFileName,
          &linkedIdentityMatches,
-         &acceptLinkedIdentity](QString &error) {
+         &acceptLinkedIdentity,
+         &linkedJournal](QString &error) {
+            if (linkedJournal) {
+                QString journalError;
+                if (!linkedJournal->cleanupAfterRollback(
+                        journalError)) {
+                    error = journalError.isEmpty()
+                        ? QObject::tr(
+                            "The linked activity deletion journal could not be rolled back")
+                        : journalError;
+                    return false;
+                }
+            }
             if (!operationOwnersAreStable()) {
                 error = QObject::tr(
                     "The activity collection disappeared before the linked activity could be restored");
@@ -2329,6 +2544,16 @@ RideCache::removeRideEntry(
         return result;
     }
     if (todelete->hasLinkedActivity()) {
+        if (!archiveSource) {
+            result.error = tr(
+                "A linked activity cannot be removed after its source has already been archived");
+            appendRemovalItemResult(
+                result, filenameToDelete,
+                plannedToDelete,
+                RemovalStatus::Rejected,
+                result.error);
+            return result;
+        }
         linkedItem =
             linkCheck.affectedItems.value(1);
         if (!linkedItem
@@ -2378,6 +2603,56 @@ RideCache::removeRideEntry(
                 result.error);
             return result;
         }
+        QString linkedSavePathError;
+        if (!linkedRemovalPeerSaveKeepsPath(
+                linkedItem.data(),
+                linkedSavePathError)) {
+            result.error = linkedSavePathError;
+            appendRemovalItemResult(
+                result, filenameToDelete,
+                plannedToDelete,
+                RemovalStatus::Rejected,
+                result.error);
+            return result;
+        }
+        QString journalError;
+        linkedJournal =
+            LinkedActivityRemoval::Journal::prepare(
+                {
+                    guardedAthlete->home->root()
+                        .absolutePath(),
+                    sourcePath,
+                    backupPath,
+                    linkedOriginalSourcePath,
+                    derivedPaths
+                },
+                journalError);
+        if (!linkedJournal
+            || !linkedJournal->validateOriginalStorage(
+                journalError)) {
+            result.error = journalError.isEmpty()
+                ? tr(
+                    "The linked activity deletion journal could not be prepared")
+                : journalError;
+            if (linkedJournal) {
+                QString cleanupError;
+                if (!linkedJournal->cleanupAfterRollback(
+                        cleanupError)) {
+                    requireLinkedRecovery(
+                        cleanupError.isEmpty()
+                        ? tr(
+                            "The incomplete linked activity deletion journal requires recovery")
+                        : cleanupError);
+                }
+            }
+            appendRemovalItemResult(
+                result, filenameToDelete,
+                plannedToDelete,
+                result.status,
+                result.error,
+                result.recoveryPaths);
+            return result;
+        }
         linkedFileName =
             linkedItem->getLinkedFileName();
         linkedItem->clearLinkedFileName();
@@ -2400,9 +2675,25 @@ RideCache::removeRideEntry(
         if (!deletionTargetIsStable()
             || !sidecarOwnershipIsStable()) {
             QString restoreError;
-            restoreLinkedPeer(restoreError);
+            const bool linkRestored =
+                restoreLinkedPeer(restoreError);
+            QString journalCleanupError;
+            const bool journalCleaned =
+                linkRestored
+                && deletionTargetIsStable()
+                && !linkedIdentityChanged
+                && linkedJournal->cleanupAfterRollback(
+                    journalCleanupError);
             requireLinkedRecovery(tr(
                 "The deletion target changed while its linked activity was being updated"));
+            if (!journalCleaned) {
+                appendRemovalResultError(
+                    result,
+                    journalCleanupError.isEmpty()
+                    ? tr(
+                        "The linked activity deletion journal requires recovery")
+                    : journalCleanupError);
+            }
             appendRemovalResultError(
                 result, restoreError);
             appendRemovalItemResult(
@@ -2419,13 +2710,23 @@ RideCache::removeRideEntry(
             QString restoreError;
             const bool linkRestored =
                 restoreLinkedPeer(restoreError);
+            QString journalCleanupError;
+            const bool journalCleaned =
+                linkRestored
+                && deletionTargetIsStable()
+                && !linkedIdentityChanged
+                && linkedJournal->cleanupAfterRollback(
+                    journalCleanupError);
             if (!linkRestored
                 || !deletionTargetIsStable()
-                || linkedIdentityChanged) {
+                || linkedIdentityChanged
+                || !journalCleaned) {
                 requireLinkedRecovery(tr(
                     "The linked activity could not be restored after its reciprocal link changed"));
                 appendRemovalResultError(
                     result, restoreError);
+                appendRemovalResultError(
+                    result, journalCleanupError);
             }
             appendRemovalItemResult(
                 result, filenameToDelete,
@@ -2437,7 +2738,9 @@ RideCache::removeRideEntry(
         }
         QString linkError;
         if (!guardedCache->saveActivity(
-                linkedItem.data(), linkError)) {
+                linkedItem.data(), linkError,
+                linkedJournal->peerWriterFactory(
+                    qSaveFileWriterFactory()))) {
             result.error = linkError.isEmpty()
                 ? tr("The linked activity could not be updated")
                 : linkError;
@@ -2445,9 +2748,22 @@ RideCache::removeRideEntry(
             const bool linkRestored =
                 restoreLinkedPeer(
                     linkRollbackError);
+            bool journalCleaned = false;
+            if (linkRestored
+                && deletionTargetIsStable()
+                && !linkedIdentityChanged) {
+                QString journalCleanupError;
+                journalCleaned =
+                    linkedJournal->cleanupAfterRollback(
+                        journalCleanupError);
+                appendRemovalError(
+                    linkRollbackError,
+                    journalCleanupError);
+            }
             if (!linkRestored
                 || !deletionTargetIsStable()
-                || linkedIdentityChanged) {
+                || linkedIdentityChanged
+                || !journalCleaned) {
                 requireLinkedRecovery(
                     linkRollbackError.isEmpty()
                     ? tr("The linked activity could not be restored")
@@ -2462,6 +2778,10 @@ RideCache::removeRideEntry(
             return result;
         }
         linkedItemWasSaved = true;
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+        rideCacheRemovalTransitionReached(
+            "peer-published");
+#endif
         linkedIdentityError.clear();
         const bool linkedIdentityAccepted =
             acceptLinkedIdentity(
@@ -2490,9 +2810,27 @@ RideCache::removeRideEntry(
         if (!deletionTargetIsStable()
             || !sidecarOwnershipIsStable()) {
             QString restoreError;
-            restoreLinkedPeer(restoreError);
+            const bool linkRestored =
+                restoreLinkedPeer(restoreError);
+            bool journalCleaned = false;
+            if (linkRestored
+                && deletionTargetIsStable()
+                && !linkedIdentityChanged) {
+                QString journalCleanupError;
+                journalCleaned =
+                    linkedJournal->cleanupAfterRollback(
+                        journalCleanupError);
+                appendRemovalError(
+                    restoreError,
+                    journalCleanupError);
+            }
             requireLinkedRecovery(tr(
                 "The deletion target changed while its linked activity was being saved"));
+            if (!journalCleaned) {
+                appendRemovalResultError(
+                    result,
+                    tr("The linked activity deletion journal requires recovery"));
+            }
             appendRemovalResultError(
                 result, restoreError);
             appendRemovalItemResult(
@@ -2600,13 +2938,30 @@ RideCache::removeRideEntry(
             return true;
         };
 
-    const StorageRemovalResult storage =
+    StorageRemovalResult storage =
         removeRideFilesFromStorage(
             sourcePath,
             backupPath,
             derivedPaths,
             archiveSource,
-            prepareRemoval);
+            prepareRemoval,
+            linkedJournal);
+    if (storage.committed()
+        && linkedJournal) {
+        QString cleanupError;
+        if (!linkedJournal->cleanupAfterCommit(
+                cleanupError)) {
+            storage.status = RemovalStatus::
+                CommittedCleanupPending;
+            appendRemovalError(
+                storage.error, cleanupError);
+            for (const QString &path :
+                 linkedJournal->recoveryPaths()) {
+                addRecoveryPath(
+                    storage.recoveryPaths, path);
+            }
+        }
+    }
     if (!storage.committed()) {
         result.status = storage.status;
         result.error = storage.error.isEmpty()
@@ -2620,9 +2975,26 @@ RideCache::removeRideEntry(
             const bool linkRestored =
                 restoreLinkedPeer(
                     linkRollbackError);
+            bool journalCleaned = false;
+            if (linkRestored
+                && storage.status
+                    != RemovalStatus::RecoveryRequired
+                && deletionTargetIsStable()
+                && !linkedIdentityChanged) {
+                QString journalCleanupError;
+                journalCleaned = linkedJournal
+                    && linkedJournal->cleanupAfterRollback(
+                        journalCleanupError);
+                appendRemovalError(
+                    linkRollbackError,
+                    journalCleanupError);
+            }
             if (!linkRestored
                 || !deletionTargetIsStable()
-                || linkedIdentityChanged) {
+                || linkedIdentityChanged
+                || (storage.status
+                        != RemovalStatus::RecoveryRequired
+                    && !journalCleaned)) {
                 requireLinkedRecovery(
                     linkRollbackError.isEmpty()
                     ? tr("The linked activity could not be restored")

@@ -23,6 +23,8 @@
 #include "RideCacheSaveCapture.h"
 #include "RideCacheSaveSnapshot.h"
 #include "RideCacheSnapshot.h"
+#include "SaveDialogs.h"
+#include "LinkedActivityRemovalJournal.h"
 
 #include "Context.h"
 #include "Athlete.h"
@@ -55,6 +57,8 @@
 #include <QXmlInputSource>
 #include <QXmlSimpleReader>
 #include <QPointer>
+
+#include <exception>
 
 // for sorting
 bool rideCacheLessThan(const RideItem *a, const RideItem *b) { return a->dateTime < b->dateTime; }
@@ -193,6 +197,15 @@ RideCache::RideCache(Context *context) : context(context)
     connect(
         context, SIGNAL(configChanged(qint32)),
         this, SLOT(configChanged(qint32)));
+
+    if (!LinkedActivityRemoval::Journal::reconcileAll(
+            context->athlete->home->root().absolutePath(),
+            startupRecoveryError_)) {
+        qCritical().noquote()
+            << "Activity recovery must be completed before loading:"
+            << startupRecoveryError_;
+        return;
+    }
 
     backgroundSaver_ =
         std::make_shared<RideCacheBackgroundSaver>();
@@ -2105,6 +2118,52 @@ RideCache::saveActivity
         [](Context *saveContext, RideItem *saveItem, QString *saveError) {
             return MainWindow::saveSilent(
                 saveContext, saveItem, saveError);
+        },
+        [guardedCache](RideItem *savedItem) {
+            if (guardedCache)
+                emit guardedCache->itemSaved(savedItem);
+        },
+        guardedCache.data());
+}
+
+
+bool
+RideCache::saveActivity
+(RideItem *item, QString &error,
+ const AtomicFileWriterFactory &writerFactory)
+{
+    ActivitySaveOperations operations;
+    operations.writerFactory = writerFactory;
+    operations.stage = [](RideFile *ride, QString &stageError) {
+        try {
+            DataProcessorFactory::instance().autoProcess(
+                ride,
+                QStringLiteral("Save"),
+                QStringLiteral("UPDATE"));
+        } catch (const QString &detail) {
+            stageError = detail;
+            return false;
+        } catch (const std::exception &exception) {
+            stageError = QString::fromLocal8Bit(
+                exception.what());
+            return false;
+        } catch (...) {
+            stageError = QObject::tr(
+                "An activity processor failed");
+            return false;
+        }
+        return true;
+    };
+
+    const QPointer<RideCache> guardedCache(this);
+    return RideCache::saveActivity(
+        context, item, error,
+        [operations](Context *saveContext,
+                     RideItem *saveItem,
+                     QString *saveError) {
+            return MainWindow::saveSilent(
+                saveContext, saveItem, saveError,
+                &operations);
         },
         [guardedCache](RideItem *savedItem) {
             if (guardedCache)

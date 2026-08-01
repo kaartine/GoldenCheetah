@@ -75,6 +75,8 @@ void resetAthleteMigrationTestSettings();
 void setAthleteMigrationThrowOnIdWrite(bool enabled);
 void setAthleteMigrationThrowOnRideCacheConstruction(bool enabled);
 void setAthleteMigrationEmitRideCacheLoadComplete(bool enabled);
+void setAthleteMigrationRideCacheStartupRecoveryError(
+    const QString &error);
 void setAthleteMigrationThrowOnChartLoad(bool enabled);
 void setAthleteMigrationMeasuresWriteFails(bool enabled);
 void setAthleteMigrationIncludeHrvMeasuresGroup(bool enabled);
@@ -1404,6 +1406,7 @@ private slots:
     void measureProviderDispatchRespectsExecutionContract();
     void constructorDefersLoadCompleteUntilFullyConstructed();
     void factoryCompletesObservedRideCacheBeforeReturning();
+    void startupRecoveryFailureRollsBackPublishedContext();
     void deferredLoadDeletionRollsBackPublishedContext();
     void nestedMeasuresDownloadDeletionStopsLoadComplete();
     void measuresWriteFailureDoesNotEnterNestedDialog();
@@ -2145,6 +2148,53 @@ factoryCompletesObservedRideCacheBeforeReturning()
 
     QVERIFY(context);
     QCOMPARE(calendarConstructions, 1);
+}
+
+void TestAthleteMigrationSafety::
+startupRecoveryFailureRollsBackPublishedContext()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QDir athleteDir(root.path());
+    QVERIFY(createStructuredAthlete(
+        athleteDir, QStringLiteral("StartupRecoveryFailure")));
+    configureAthlete(athleteDir, VERSION_LATEST, true);
+
+    const QString injectedError = QStringLiteral(
+        "injected linked activity recovery failure");
+    setAthleteMigrationRideCacheStartupRecoveryError(
+        injectedError);
+    Context *published = nullptr;
+    bool rolledBack = false;
+    int failures = 0;
+    QString reportedError;
+    Context *context = Athlete::createInNewContext(
+        nullptr, athleteDir,
+        [&](Context *candidate) {
+            published = candidate;
+            QObject::connect(
+                candidate, &Context::loadFailed,
+                candidate,
+                [&](const QString &, Context *,
+                    const QString &error) {
+                    ++failures;
+                    reportedError = error;
+                },
+                Qt::DirectConnection);
+        },
+        [&](Context *candidate) {
+            rolledBack = candidate == published;
+        });
+    const bool returnedContext = context != nullptr;
+    if (context) {
+        delete context->athlete;
+        delete context;
+    }
+
+    QVERIFY(!returnedContext);
+    QVERIFY(rolledBack);
+    QCOMPARE(failures, 1);
+    QCOMPARE(reportedError, injectedError);
 }
 
 void TestAthleteMigrationSafety::

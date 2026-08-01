@@ -1,4 +1,5 @@
 #include "LTMSettings.h"
+#include "LinkedActivityRemovalJournal.h"
 #include "Athlete.h"
 #include "Context.h"
 #include "DataProcessor.h"
@@ -14,6 +15,7 @@
 #include <QSet>
 
 #include <cstring>
+#include <cstdlib>
 #include <functional>
 #include <utility>
 
@@ -43,6 +45,12 @@ std::function<void()> removalSaveAction;
 QString removalSaveRenameFileName;
 QString removalSaveRenameTargetDirectory;
 QString removalSaveRenameTargetFileName;
+QString removalPersistedSaveFileName;
+QByteArray removalPersistedSaveContents;
+QString removalDirectPersistFileName;
+int removalDirectPersistCall = 0;
+int removalDirectPersistCallCount = 0;
+QByteArray removalDirectPersistContents;
 RideFile *removalLastProcessedRide = nullptr;
 bool removalProcessorFailure = false;
 std::function<void()> removalProcessorAction;
@@ -50,6 +58,7 @@ std::function<void()> removalLinkMutationAction;
 int removalLinkMutationCall = 0;
 int removalLinkMutationTriggerCall = 0;
 int removalCancelCount = 0;
+int removalTransitionOccurrence = 0;
 
 } // namespace
 
@@ -79,6 +88,12 @@ void resetRideCacheRemovalRefreshCounts()
     removalSaveRenameFileName.clear();
     removalSaveRenameTargetDirectory.clear();
     removalSaveRenameTargetFileName.clear();
+    removalPersistedSaveFileName.clear();
+    removalPersistedSaveContents.clear();
+    removalDirectPersistFileName.clear();
+    removalDirectPersistCall = 0;
+    removalDirectPersistCallCount = 0;
+    removalDirectPersistContents.clear();
     removalLastProcessedRide = nullptr;
     removalProcessorFailure = false;
     removalProcessorAction = {};
@@ -86,6 +101,7 @@ void resetRideCacheRemovalRefreshCounts()
     removalLinkMutationCall = 0;
     removalLinkMutationTriggerCall = 0;
     removalCancelCount = 0;
+    removalTransitionOccurrence = 0;
 }
 
 int rideCacheRemovalRefreshCount()
@@ -238,6 +254,27 @@ bool rideCacheRemovalShouldFailSync(const QString &path)
     return true;
 }
 
+void rideCacheRemovalTransitionReached(
+    const char *transition)
+{
+    const QByteArray requested =
+        qgetenv("GC_RIDE_CACHE_REMOVAL_CRASH_PHASE");
+    if (!requested.isEmpty()
+        && requested == transition) {
+        ++removalTransitionOccurrence;
+        bool validOccurrence = false;
+        const int requestedOccurrence =
+            qEnvironmentVariableIntValue(
+                "GC_RIDE_CACHE_REMOVAL_CRASH_OCCURRENCE",
+                &validOccurrence);
+        if (!validOccurrence
+            || requestedOccurrence
+                == removalTransitionOccurrence) {
+            std::_Exit(86);
+        }
+    }
+}
+
 void setRideCacheRemovalSaveFailureFileName(
     const QString &fileName)
 {
@@ -293,6 +330,34 @@ void setRideCacheRemovalSuccessfulSaveRename(
     removalSaveRenameFileName = fileName;
     removalSaveRenameTargetDirectory = targetDirectory;
     removalSaveRenameTargetFileName = targetFileName;
+}
+
+void setRideCacheRemovalPersistedSaveContents(
+    const QString &fileName,
+    const QByteArray &contents)
+{
+    removalPersistedSaveFileName = fileName;
+    removalPersistedSaveContents = contents;
+}
+
+void setRideCacheRemovalPersistedSaveContentsOnCall(
+    const QString &fileName,
+    int call,
+    const QByteArray &contents)
+{
+    removalDirectPersistFileName = fileName;
+    removalDirectPersistCall = call;
+    removalDirectPersistCallCount = 0;
+    removalDirectPersistContents = contents;
+}
+
+bool rideCacheRemovalLinkedSaveKeepsPath(
+    RideItem *item)
+{
+    return item
+        && (removalSaveRenameFileName.isEmpty()
+            || item->fileName
+                != removalSaveRenameFileName);
 }
 
 RideFile *rideCacheRemovalLastProcessedRide()
@@ -717,6 +782,9 @@ RideCache::RideCache(Context *cacheContext)
       estimator(new Estimator(cacheContext)),
       first(false)
 {
+    LinkedActivityRemoval::Journal::reconcileAll(
+        cacheContext->athlete->home->root().absolutePath(),
+        startupRecoveryError_);
 }
 
 RideCache::~RideCache()
@@ -811,7 +879,62 @@ bool RideCache::saveActivity(RideItem *item, QString &error)
             action();
         }
     }
+    if (item
+        && item->fileName
+            == removalDirectPersistFileName) {
+        ++removalDirectPersistCallCount;
+        if (removalDirectPersistCallCount
+                == removalDirectPersistCall) {
+            QFile file(QDir(item->path).filePath(item->fileName));
+            if (!file.open(
+                    QIODevice::WriteOnly
+                    | QIODevice::Truncate)
+                || file.write(removalDirectPersistContents)
+                    != removalDirectPersistContents.size()
+                || !file.flush()) {
+                error = file.errorString();
+                return false;
+            }
+        }
+    }
     return true;
+}
+
+bool RideCache::saveActivity(
+    RideItem *item,
+    QString &error,
+    const AtomicFileWriterFactory &writerFactory)
+{
+    const QString originalFileName = item
+        ? item->fileName : QString();
+    if (!saveActivity(item, error))
+        return false;
+    if (!item) {
+        error = QStringLiteral("No activity given");
+        return false;
+    }
+
+    const QString targetPath =
+        QDir(item->path).filePath(item->fileName);
+    QByteArray contents;
+    if (originalFileName
+            == removalPersistedSaveFileName) {
+        contents = removalPersistedSaveContents;
+    } else {
+        QFile source(targetPath);
+        if (!source.open(QIODevice::ReadOnly)) {
+            error = source.errorString();
+            return false;
+        }
+        contents = source.readAll();
+        if (source.error() != QFileDevice::NoError) {
+            error = source.errorString();
+            return false;
+        }
+    }
+    return writeFileAtomically(
+        targetPath, contents, writerFactory,
+        error, true);
 }
 
 DataProcessorFactory *DataProcessorFactory::instance_ = nullptr;

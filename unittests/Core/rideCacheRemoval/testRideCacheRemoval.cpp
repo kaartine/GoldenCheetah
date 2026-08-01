@@ -3,6 +3,7 @@
 #include "Athlete.h"
 #include "Context.h"
 #include "AtomicFileWriter.h"
+#include "LinkedActivityRemovalJournal.h"
 #include "RideCache.h"
 #include "RideCacheModel.h"
 #include "RideItem.h"
@@ -11,7 +12,10 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QDirIterator>
 #include <QMessageBox>
+#include <QProcess>
+#include <QProcessEnvironment>
 #include <QTemporaryDir>
 #include <QTimer>
 
@@ -59,6 +63,13 @@ void setRideCacheRemovalSuccessfulSaveRename(
     const QString &fileName,
     const QString &targetDirectory,
     const QString &targetFileName);
+void setRideCacheRemovalPersistedSaveContents(
+    const QString &fileName,
+    const QByteArray &contents);
+void setRideCacheRemovalPersistedSaveContentsOnCall(
+    const QString &fileName,
+    int call,
+    const QByteArray &contents);
 RideFile *rideCacheRemovalLastProcessedRide();
 void setRideCacheRemovalProcessorFailure(bool fail);
 void setRideCacheRemovalProcessorAction(
@@ -268,10 +279,11 @@ private slots:
     void plannedBackupDirectorySyncFailureIsRetried();
     void plannedBackupSymlinkIsRejected();
     void linkedSaveFailureRejectsRemoval();
+    void linkedArchivedRemovalRejectsBeforePeerMutation();
     void unsafeLinkedPeerIdentityRejectsBeforeSave_data();
     void unsafeLinkedPeerIdentityRejectsBeforeSave();
     void incomingReferenceToLinkedPeerRejectsBeforeSave();
-    void linkedSuccessfulSaveRenameAllowsDeletion();
+    void linkedSaveRenameIsRejectedBeforeMutation();
     void linkedSaveCompensationFailureRequiresRecovery();
     void linkedPeerDeletionDuringMetadataChangeRequiresRecovery();
     void linkedPeerDeletionDuringCompensationRequiresRecovery_data();
@@ -317,6 +329,16 @@ private slots:
     void sharedLegacySidecarsSurviveNamespaceRemoval();
     void linkedRecoveryRequiredRestoresPair();
     void linkedRollbackSaveFailureReportsRecoveryPath();
+    void linkedRollbackPrecedesCompensationSerialization();
+    void concurrentLinkedRemovalJournalsAreSerialized();
+    void abandonedLinkedRemovalJournalBlocksNextTransaction();
+    void prepareRestrictsExistingTransactionDirectories();
+    void startupRestrictsExistingTransactionDirectories();
+    void oversizedUnreadableJournalControlFileFailsBeforeRead_data();
+    void oversizedUnreadableJournalControlFileFailsBeforeRead();
+    void startupWithoutJournalAllowsSymlinkedAthleteRoot();
+    void linkedDeletionCrashAfterPeerSaveRecoversOnRestart_data();
+    void linkedDeletionCrashAfterPeerSaveRecoversOnRestart();
     void processorFailureIsReportedWithoutRemoval();
     void processorReorderingDoesNotRemoveWrongRow();
     void sidecarOwnerIntroducedBeforeCommitRejectsRemoval();
@@ -947,6 +969,45 @@ void TestRideCacheRemoval::linkedSaveFailureRejectsRemoval()
 }
 
 void TestRideCacheRemoval::
+linkedArchivedRemovalRejectsBeforePeerMutation()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target =
+        fixture.addRide(firstName(), true);
+    RideItem *peer =
+        fixture.addPlannedRide(secondName(), false);
+    target->setLinkedFileName(secondName());
+    peer->setLinkedFileName(firstName());
+
+    const QByteArray targetContents("target activity");
+    const QByteArray peerContents("peer activity");
+    const QString targetPath =
+        fixture.activityPath(firstName());
+    const QString peerPath =
+        fixture.plannedActivityPath(secondName());
+    writeFixture(targetPath, targetContents);
+    writeFixture(peerPath, peerContents);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeArchivedRideResult(target);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::Rejected);
+    QCOMPARE(result.affectedCount, 0);
+    QVERIFY(result.error.contains(
+        QStringLiteral("already been archived")));
+    QCOMPARE(rideCacheRemovalSaveCallCount(), 0);
+    QCOMPARE(fixture.cache->count(), 2);
+    QCOMPARE(fixture.context->ride, target);
+    QCOMPARE(target->getLinkedFileName(), secondName());
+    QCOMPARE(peer->getLinkedFileName(), firstName());
+    QCOMPARE(readBytes(targetPath), targetContents);
+    QCOMPARE(readBytes(peerPath), peerContents);
+}
+
+void TestRideCacheRemoval::
 unsafeLinkedPeerIdentityRejectsBeforeSave_data()
 {
     QTest::addColumn<QString>("identityCase");
@@ -1075,7 +1136,7 @@ incomingReferenceToLinkedPeerRejectsBeforeSave()
 }
 
 void TestRideCacheRemoval::
-linkedSuccessfulSaveRenameAllowsDeletion()
+linkedSaveRenameIsRejectedBeforeMutation()
 {
     Fixture fixture;
     QVERIFY(fixture.initialize());
@@ -1106,24 +1167,26 @@ linkedSuccessfulSaveRenameAllowsDeletion()
 
     QCOMPARE(
         result.status,
-        RideCache::RemovalStatus::Committed);
-    QVERIFY(result.allLogicallyRemoved());
-    QCOMPARE(result.affectedCount, 1);
-    QVERIFY(result.error.isEmpty());
+        RideCache::RemovalStatus::Rejected);
+    QVERIFY(!result.allLogicallyRemoved());
+    QCOMPARE(result.affectedCount, 0);
+    QVERIFY(result.error.contains(
+        QStringLiteral("correctly named JSON")));
     QVERIFY(result.recoveryPaths.isEmpty());
-    QCOMPARE(fixture.cache->count(), 1);
-    QCOMPARE(fixture.cache->rides().constFirst(), linked);
-    QCOMPARE(fixture.context->ride, linked);
-    QCOMPARE(linked->fileName, thirdName());
-    QCOMPARE(linked->path, linkedDirectory);
+    QCOMPARE(rideCacheRemovalSaveCallCount(), 0);
+    QCOMPARE(fixture.cache->count(), 2);
+    QCOMPARE(fixture.context->ride, target);
+    QCOMPARE(linked->fileName, secondName());
+    QCOMPARE(linked->path,
+             QFileInfo(oldLinkedPath).absolutePath());
     QVERIFY(linked->planned);
-    QVERIFY(linked->getLinkedFileName().isEmpty());
-    QVERIFY(!QFileInfo::exists(targetPath));
-    QCOMPARE(
-        readBytes(fixture.backupPath(firstName())),
-        targetContents);
-    QVERIFY(!QFileInfo::exists(oldLinkedPath));
-    QCOMPARE(readBytes(newLinkedPath), linkedContents);
+    QCOMPARE(target->getLinkedFileName(), secondName());
+    QCOMPARE(linked->getLinkedFileName(), firstName());
+    QCOMPARE(readBytes(targetPath), targetContents);
+    QCOMPARE(readBytes(oldLinkedPath), linkedContents);
+    QVERIFY(!QFileInfo::exists(newLinkedPath));
+    QVERIFY(!QFileInfo::exists(
+        fixture.backupPath(firstName())));
 }
 
 void TestRideCacheRemoval::
@@ -1403,7 +1466,7 @@ linkedRenameBeforeStorageRollbackRequiresRecovery()
     QCOMPARE(result.affectedCount, 0);
     QCOMPARE(fixture.cache->count(), 2);
     QCOMPARE(readBytes(targetPath), QByteArray("target activity"));
-    QVERIFY(!QFileInfo::exists(oldLinkedPath));
+    QCOMPARE(readBytes(oldLinkedPath), QByteArray("linked activity"));
     QCOMPARE(readBytes(newLinkedPath), QByteArray("linked activity"));
     QVERIFY(result.recoveryPaths.contains(targetPath));
     QVERIFY(result.recoveryPaths.contains(newLinkedPath));
@@ -2220,6 +2283,712 @@ linkedRollbackSaveFailureReportsRecoveryPath()
     QCOMPARE(
         linked->getLinkedFileName(), firstName());
     QVERIFY(result.recoveryPaths.contains(linkedPath));
+}
+
+void TestRideCacheRemoval::
+linkedRollbackPrecedesCompensationSerialization()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target =
+        fixture.addRide(firstName(), true);
+    RideItem *linked =
+        fixture.addPlannedRide(secondName(), false);
+    target->setLinkedFileName(secondName());
+    linked->setLinkedFileName(firstName());
+
+    const QString sourcePath =
+        fixture.activityPath(firstName());
+    const QString linkedPath =
+        fixture.plannedActivityPath(secondName());
+    writeFixture(sourcePath, QByteArray("target-linked"));
+    writeFixture(linkedPath, QByteArray("peer-linked"));
+    setRideCacheRemovalPersistedSaveContents(
+        secondName(), QByteArray("peer-unlinked"));
+    setRideCacheRemovalPersistedSaveContentsOnCall(
+        secondName(), 2,
+        QByteArray("peer-linked-with-save-history"));
+    setRideCacheRemovalMoveFailurePath(sourcePath);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::RolledBack);
+    QCOMPARE(result.affectedCount, 0);
+    QVERIFY(result.recoveryPaths.isEmpty());
+    QCOMPARE(fixture.cache->count(), 2);
+    QCOMPARE(target->getLinkedFileName(), secondName());
+    QCOMPARE(linked->getLinkedFileName(), firstName());
+    QCOMPARE(readBytes(sourcePath), QByteArray("target-linked"));
+    QCOMPARE(
+        readBytes(linkedPath),
+        QByteArray("peer-linked-with-save-history"));
+    QVERIFY(!QFileInfo::exists(
+        fixture.backupPath(firstName())));
+}
+
+void TestRideCacheRemoval::
+concurrentLinkedRemovalJournalsAreSerialized()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    const QString sourcePath =
+        fixture.activityPath(firstName());
+    const QString peerPath =
+        fixture.plannedActivityPath(secondName());
+    const QString backupPath =
+        fixture.backupPath(firstName());
+    writeFixture(sourcePath, QByteArray("source"));
+    writeFixture(peerPath, QByteArray("peer"));
+
+    const LinkedActivityRemoval::Specification specification{
+        fixture.athlete->home->root().absolutePath(),
+        sourcePath,
+        backupPath,
+        peerPath,
+        {}};
+    QString error;
+    std::shared_ptr<LinkedActivityRemoval::Journal> first =
+        LinkedActivityRemoval::Journal::prepare(
+            specification, error);
+    QVERIFY2(first, qPrintable(error));
+
+    error.clear();
+    const std::shared_ptr<LinkedActivityRemoval::Journal> concurrent =
+        LinkedActivityRemoval::Journal::prepare(
+            specification, error);
+    QVERIFY(!concurrent);
+    QVERIFY(error.contains(
+        QStringLiteral("already"),
+        Qt::CaseInsensitive));
+
+    error.clear();
+    QVERIFY2(first->cleanupAfterRollback(error), qPrintable(error));
+    first.reset();
+
+    error.clear();
+    const std::shared_ptr<LinkedActivityRemoval::Journal> next =
+        LinkedActivityRemoval::Journal::prepare(
+            specification, error);
+    QVERIFY2(next, qPrintable(error));
+    QVERIFY2(next->cleanupAfterRollback(error), qPrintable(error));
+}
+
+void TestRideCacheRemoval::
+abandonedLinkedRemovalJournalBlocksNextTransaction()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QString peerPath = fixture.plannedActivityPath(secondName());
+    const QString backupPath = fixture.backupPath(firstName());
+    writeFixture(sourcePath, QByteArray("source"));
+    writeFixture(peerPath, QByteArray("peer"));
+
+    const LinkedActivityRemoval::Specification specification{
+        fixture.athlete->home->root().absolutePath(),
+        sourcePath,
+        backupPath,
+        peerPath,
+        {}};
+    QString error;
+    std::shared_ptr<LinkedActivityRemoval::Journal> abandoned =
+        LinkedActivityRemoval::Journal::prepare(specification, error);
+    QVERIFY2(abandoned, qPrintable(error));
+    const QString abandonedPath = abandoned->directoryPath();
+    abandoned.reset();
+    QVERIFY(QFileInfo::exists(abandonedPath));
+
+    error.clear();
+    const std::shared_ptr<LinkedActivityRemoval::Journal> blocked =
+        LinkedActivityRemoval::Journal::prepare(specification, error);
+    QVERIFY(!blocked);
+    QVERIFY2(
+        error.contains(QStringLiteral("recovery"), Qt::CaseInsensitive),
+        qPrintable(error));
+
+    error.clear();
+    QVERIFY2(
+        LinkedActivityRemoval::Journal::reconcileAll(
+            fixture.athlete->home->root().absolutePath(), error),
+        qPrintable(error));
+    QVERIFY(!QFileInfo::exists(abandonedPath));
+
+    error.clear();
+    const std::shared_ptr<LinkedActivityRemoval::Journal> next =
+        LinkedActivityRemoval::Journal::prepare(specification, error);
+    QVERIFY2(next, qPrintable(error));
+    QVERIFY2(next->cleanupAfterRollback(error), qPrintable(error));
+}
+
+void TestRideCacheRemoval::
+prepareRestrictsExistingTransactionDirectories()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Unix directory permissions are required");
+#else
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QString peerPath = fixture.plannedActivityPath(secondName());
+    writeFixture(sourcePath, QByteArray("source"));
+    writeFixture(peerPath, QByteArray("peer"));
+
+    const QString transactionsPath = QDir(fixture.temporary.path()).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString namespacePath = QDir(transactionsPath).filePath(
+        QStringLiteral("linked-removal"));
+    QVERIFY(QDir().mkpath(namespacePath));
+    const QFileDevice::Permissions broadPermissions =
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner
+        | QFileDevice::ExeOwner | QFileDevice::ReadGroup
+        | QFileDevice::WriteGroup | QFileDevice::ExeGroup
+        | QFileDevice::ReadOther | QFileDevice::WriteOther
+        | QFileDevice::ExeOther;
+    QVERIFY(QFile::setPermissions(transactionsPath, broadPermissions));
+    QVERIFY(QFile::setPermissions(namespacePath, broadPermissions));
+
+    QString error;
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), peerPath, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+
+    const QFileDevice::Permissions nonOwnerPermissions =
+        QFileDevice::ReadGroup | QFileDevice::WriteGroup
+        | QFileDevice::ExeGroup | QFileDevice::ReadOther
+        | QFileDevice::WriteOther | QFileDevice::ExeOther;
+    for (const QString &path :
+         {transactionsPath, namespacePath, journal->directoryPath()}) {
+        const QFileDevice::Permissions permissions =
+            QFileInfo(path).permissions();
+        QCOMPARE(
+            permissions & nonOwnerPermissions,
+            QFileDevice::Permissions());
+        QVERIFY(permissions.testFlag(QFileDevice::ReadOwner));
+        QVERIFY(permissions.testFlag(QFileDevice::WriteOwner));
+        QVERIFY(permissions.testFlag(QFileDevice::ExeOwner));
+    }
+
+    QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+#endif
+}
+
+void TestRideCacheRemoval::
+startupRestrictsExistingTransactionDirectories()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Unix directory permissions are required");
+#else
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QString peerPath = fixture.plannedActivityPath(secondName());
+    writeFixture(sourcePath, QByteArray("source"));
+    writeFixture(peerPath, QByteArray("peer"));
+
+    QString error;
+    std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), peerPath, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    journal.reset();
+
+    const QString transactionsPath = QDir(fixture.temporary.path()).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString namespacePath = QDir(transactionsPath).filePath(
+        QStringLiteral("linked-removal"));
+    const QFileDevice::Permissions broadPermissions =
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner
+        | QFileDevice::ExeOwner | QFileDevice::ReadGroup
+        | QFileDevice::WriteGroup | QFileDevice::ExeGroup
+        | QFileDevice::ReadOther | QFileDevice::WriteOther
+        | QFileDevice::ExeOther;
+    for (const QString &path :
+         {transactionsPath, namespacePath, journalPath}) {
+        QVERIFY(QFile::setPermissions(path, broadPermissions));
+    }
+    writeFixture(
+        QDir(journalPath).filePath(QStringLiteral("manifest.json")),
+        QByteArray("{}\n"));
+
+    error.clear();
+    QVERIFY(!LinkedActivityRemoval::Journal::reconcileAll(
+        fixture.temporary.path(), error));
+    QVERIFY(!error.isEmpty());
+
+    const QFileDevice::Permissions nonOwnerPermissions =
+        QFileDevice::ReadGroup | QFileDevice::WriteGroup
+        | QFileDevice::ExeGroup | QFileDevice::ReadOther
+        | QFileDevice::WriteOther | QFileDevice::ExeOther;
+    for (const QString &path :
+         {transactionsPath, namespacePath, journalPath}) {
+        const QFileDevice::Permissions permissions =
+            QFileInfo(path).permissions();
+        QCOMPARE(
+            permissions & nonOwnerPermissions,
+            QFileDevice::Permissions());
+        QVERIFY(permissions.testFlag(QFileDevice::ReadOwner));
+        QVERIFY(permissions.testFlag(QFileDevice::WriteOwner));
+        QVERIFY(permissions.testFlag(QFileDevice::ExeOwner));
+    }
+#endif
+}
+
+void TestRideCacheRemoval::
+oversizedUnreadableJournalControlFileFailsBeforeRead_data()
+{
+    QTest::addColumn<QString>("relativePath");
+    QTest::addColumn<bool>("removeManifest");
+
+    QTest::newRow("manifest")
+        << QStringLiteral("manifest.json") << false;
+    QTest::newRow("commit-marker")
+        << QStringLiteral("COMMITTED") << false;
+    QTest::newRow("manifest-temporary")
+        << QStringLiteral(".manifest.json.attack.tmp") << false;
+    QTest::newRow("pre-manifest-commit-marker")
+        << QStringLiteral("COMMITTED") << true;
+    QTest::newRow("pre-manifest-temporary")
+        << QStringLiteral(".manifest.json.attack.tmp") << true;
+}
+
+void TestRideCacheRemoval::
+oversizedUnreadableJournalControlFileFailsBeforeRead()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Unix file permissions are required");
+#else
+    QFETCH(QString, relativePath);
+    QFETCH(bool, removeManifest);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QString peerPath = fixture.plannedActivityPath(secondName());
+    writeFixture(sourcePath, QByteArray("source"));
+    writeFixture(peerPath, QByteArray("peer"));
+
+    QString error;
+    std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), peerPath, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString controlPath = QDir(journal->directoryPath()).filePath(
+        relativePath);
+    const QString manifestPath = QDir(journal->directoryPath()).filePath(
+        QStringLiteral("manifest.json"));
+    journal.reset();
+    if (removeManifest) QVERIFY(QFile::remove(manifestPath));
+
+    QFile control(controlPath);
+    QVERIFY2(
+        control.open(QIODevice::WriteOnly | QIODevice::Truncate),
+        qPrintable(control.errorString()));
+    QVERIFY(control.resize(4 * 1024 * 1024 + 1));
+    control.close();
+    QVERIFY(QFile::setPermissions(
+        controlPath, QFileDevice::Permissions()));
+
+    QFile readabilityProbe(controlPath);
+    if (readabilityProbe.open(QIODevice::ReadOnly)) {
+        readabilityProbe.close();
+        QFile::setPermissions(
+            controlPath,
+            QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+        QSKIP("The test process can bypass Unix file permissions");
+    }
+
+    error.clear();
+    QVERIFY(!LinkedActivityRemoval::Journal::reconcileAll(
+        fixture.temporary.path(), error));
+    QVERIFY2(
+        error.contains(QStringLiteral("unexpectedly large")),
+        qPrintable(error));
+
+    QFile::setPermissions(
+        controlPath,
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+#endif
+}
+
+void TestRideCacheRemoval::
+startupWithoutJournalAllowsSymlinkedAthleteRoot()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString actualRoot =
+        QDir(temporary.path()).filePath(
+            QStringLiteral("actual-athlete"));
+    const QString linkedRoot =
+        QDir(temporary.path()).filePath(
+            QStringLiteral("linked-athlete"));
+    QVERIFY(QDir().mkpath(actualRoot));
+    if (!QFile::link(actualRoot, linkedRoot)) {
+        QSKIP("Directory symbolic links are unavailable");
+    }
+
+    QString error;
+    QVERIFY2(
+        LinkedActivityRemoval::Journal::reconcileAll(
+            linkedRoot, error),
+        qPrintable(error));
+}
+
+void TestRideCacheRemoval::
+linkedDeletionCrashAfterPeerSaveRecoversOnRestart_data()
+{
+    QTest::addColumn<QString>("crashPhase");
+    QTest::addColumn<int>("crashOccurrence");
+    QTest::addColumn<QString>("recoveryCrashPhase");
+    QTest::addColumn<bool>("committed");
+
+    QTest::newRow("journal-directory-created")
+        << QStringLiteral("journal-directory-created")
+        << 1 << QString() << false;
+    QTest::newRow("journal-peer-old-published")
+        << QStringLiteral("journal-peer-old-published")
+        << 1 << QString() << false;
+    QTest::newRow("journal-initial-manifest-published")
+        << QStringLiteral("journal-initial-manifest-published")
+        << 1 << QString() << false;
+    QTest::newRow("peer-published")
+        << QStringLiteral("peer-published") << 1 << QString() << false;
+    QTest::newRow("peer-staging-published")
+        << QStringLiteral("peer-staging-published")
+        << 1 << QString() << false;
+    QTest::newRow("peer-manifest-published")
+        << QStringLiteral("peer-manifest-published")
+        << 1 << QString() << false;
+    QTest::newRow("peer-file-committed")
+        << QStringLiteral("peer-file-committed")
+        << 1 << QString() << false;
+    QTest::newRow("backup-staged")
+        << QStringLiteral("backup-staged") << 1 << QString() << false;
+    QTest::newRow("previous-backup-preserved")
+        << QStringLiteral("previous-backup-preserved") << 1 << QString() << false;
+    QTest::newRow("backup-published")
+        << QStringLiteral("backup-published") << 1 << QString() << false;
+    QTest::newRow("source-tombstoned")
+        << QStringLiteral("source-tombstoned") << 1 << QString() << false;
+    QTest::newRow("commit-marker")
+        << QStringLiteral("commit-marker") << 1 << QString() << true;
+    for (int occurrence = 1; occurrence <= 5; ++occurrence) {
+        QTest::newRow(
+            qPrintable(QStringLiteral("cleanup-%1")
+                .arg(occurrence)))
+            << QStringLiteral("cleanup-file")
+            << occurrence << QString() << true;
+    }
+    for (const QString &phase :
+         {QStringLiteral("journal-commit-marker-removed"),
+          QStringLiteral("journal-peer-staging-removed"),
+          QStringLiteral("journal-peer-old-removed"),
+          QStringLiteral("journal-manifest-removed"),
+          QStringLiteral("journal-directory-removed")}) {
+        QTest::newRow(qPrintable(phase))
+            << phase << 1 << QString() << true;
+    }
+    QTest::newRow("rollback-journal-peer-old-removed")
+        << QStringLiteral("peer-published")
+        << 1
+        << QStringLiteral("journal-peer-old-removed")
+        << false;
+    QTest::newRow("rollback-journal-manifest-removed")
+        << QStringLiteral("peer-published")
+        << 1
+        << QStringLiteral("journal-manifest-removed")
+        << false;
+    QTest::newRow("rollback-peer-staging-removed")
+        << QStringLiteral("peer-published")
+        << 1
+        << QStringLiteral("rollback-peer-staging-removed")
+        << false;
+    QTest::newRow("rollback-backup-staging-removed")
+        << QStringLiteral("backup-staged")
+        << 1
+        << QStringLiteral("rollback-backup-staging-removed")
+        << false;
+    QTest::newRow("rollback-source-tombstone-removed")
+        << QStringLiteral("source-tombstoned")
+        << 1
+        << QStringLiteral("rollback-source-tombstone-removed")
+        << false;
+    QTest::newRow("rollback-previous-backup-removed")
+        << QStringLiteral("source-tombstoned")
+        << 1
+        << QStringLiteral("rollback-previous-backup-removed")
+        << false;
+}
+
+void TestRideCacheRemoval::
+linkedDeletionCrashAfterPeerSaveRecoversOnRestart()
+{
+    QFETCH(QString, crashPhase);
+    QFETCH(int, crashOccurrence);
+    QFETCH(QString, recoveryCrashPhase);
+    QFETCH(bool, committed);
+
+    static const char RootEnvironment[] =
+        "GC_RIDE_CACHE_REMOVAL_CRASH_ROOT";
+    static const char ModeEnvironment[] =
+        "GC_RIDE_CACHE_REMOVAL_CRASH_MODE";
+    const QString root = qEnvironmentVariable(
+        RootEnvironment);
+    const QString mode = qEnvironmentVariable(
+        ModeEnvironment);
+
+    if (!root.isEmpty()) {
+        std::unique_ptr<Context> context(
+            new Context(nullptr));
+        std::unique_ptr<Athlete> athlete(
+            new Athlete(context.get(), QDir(root)));
+        std::unique_ptr<RideCache> cache(
+            new RideCache(context.get()));
+        athlete->rideCache = cache.get();
+
+        if (mode == QStringLiteral("recover")) {
+            if (!cache->startupRecoveryError().isEmpty())
+                std::_Exit(87);
+            return;
+        }
+
+        RideItem *target = new RideItem(
+            nullptr, context.get());
+        target->fileName = firstName();
+        target->path =
+            athlete->home->activities().absolutePath();
+        RideItem *peer = new RideItem(
+            nullptr, context.get());
+        peer->fileName = secondName();
+        peer->path =
+            athlete->home->planned().absolutePath();
+        peer->planned = true;
+        cache->mutableRidesForRemovalTest().append(target);
+        cache->mutableRidesForRemovalTest().append(peer);
+        context->ride = target;
+        target->setLinkedFileName(secondName());
+        peer->setLinkedFileName(firstName());
+
+        const QString targetPath =
+            athlete->home->activities().filePath(
+                firstName());
+        const QString peerPath =
+            athlete->home->planned().filePath(
+                secondName());
+        writeFixture(
+            targetPath,
+            QByteArray("target-linked-to-peer"));
+        writeFixture(
+            peerPath,
+            QByteArray("peer-linked-to-target"));
+        writeFixture(
+            athlete->home->fileBackup().filePath(
+                firstName() + QStringLiteral(".bak")),
+            QByteArray("previous-backup"));
+        const QString targetBaseName =
+            QFileInfo(firstName()).baseName();
+        for (const QString &extension :
+             {QStringLiteral("cpx"),
+              QStringLiteral("cpi"),
+              QStringLiteral("notes")}) {
+            writeFixture(
+                athlete->home->cache().filePath(
+                    targetBaseName + QLatin1Char('.')
+                    + extension),
+                extension.toLatin1() + "-derived");
+        }
+        setRideCacheRemovalPersistedSaveContents(
+            secondName(), QByteArray("peer-unlinked"));
+
+        cache->removeRideResult(target);
+        QFAIL("linked deletion child did not stop at the requested transition");
+    }
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const auto runChild =
+        [&](const QString &childMode,
+            const QString &requestedCrashPhase) {
+            QProcess child;
+            QProcessEnvironment environment =
+                QProcessEnvironment::systemEnvironment();
+            environment.remove(QStringLiteral(
+                "GC_RIDE_CACHE_REMOVAL_CRASH_PHASE"));
+            environment.remove(QStringLiteral(
+                "GC_RIDE_CACHE_REMOVAL_CRASH_OCCURRENCE"));
+            environment.insert(
+                RootEnvironment, temporary.path());
+            environment.insert(
+                ModeEnvironment, childMode);
+            environment.insert(
+                QStringLiteral("QT_QPA_PLATFORM"),
+                QStringLiteral("offscreen"));
+            if (!requestedCrashPhase.isEmpty()) {
+                environment.insert(
+                    QStringLiteral(
+                        "GC_RIDE_CACHE_REMOVAL_CRASH_PHASE"),
+                    requestedCrashPhase);
+                environment.insert(
+                    QStringLiteral(
+                        "GC_RIDE_CACHE_REMOVAL_CRASH_OCCURRENCE"),
+                    QString::number(crashOccurrence));
+            }
+            child.setProcessEnvironment(environment);
+            child.start(
+                QCoreApplication::applicationFilePath(),
+                {QStringLiteral(
+                    "linkedDeletionCrashAfterPeerSaveRecoversOnRestart:%1")
+                    .arg(QString::fromLatin1(
+                        QTest::currentDataTag()))});
+            if (!child.waitForStarted(5000)) {
+                return qMakePair(
+                    -1, child.errorString());
+            }
+            if (!child.waitForFinished(10000)) {
+                child.kill();
+                child.waitForFinished();
+                return qMakePair(
+                    -2, QStringLiteral("child timed out"));
+            }
+            return qMakePair(
+                child.exitCode(),
+                QString::fromUtf8(child.readAll()));
+        };
+
+    const auto crashed = runChild(
+        QStringLiteral("crash"), crashPhase);
+    QCOMPARE(crashed.first, 86);
+
+    if (!recoveryCrashPhase.isEmpty()) {
+        const auto recoveryCrashed = runChild(
+            QStringLiteral("recover"),
+            recoveryCrashPhase);
+        QCOMPARE(recoveryCrashed.first, 86);
+    }
+
+    const auto recovered = runChild(
+        QStringLiteral("recover"), QString());
+    QCOMPARE(recovered.first, 0);
+
+    const QByteArray targetAfterRecovery =
+        readBytes(
+            QDir(temporary.path())
+                .filePath(QStringLiteral(
+                    "activities/2026_07_06_08_00_00.json")));
+    const QByteArray peerAfterRecovery =
+        readBytes(
+            QDir(temporary.path())
+                .filePath(QStringLiteral(
+                    "planned/2026_07_06_09_00_00.json")));
+
+    const auto recoveredAgain = runChild(
+        QStringLiteral("recover"), QString());
+    QCOMPARE(recoveredAgain.first, 0);
+
+    const QString targetPath =
+        QDir(temporary.path()).filePath(
+            QStringLiteral(
+                "activities/2026_07_06_08_00_00.json"));
+    const QString peerPath =
+        QDir(temporary.path()).filePath(
+            QStringLiteral(
+                "planned/2026_07_06_09_00_00.json"));
+    const QString backupPath =
+        QDir(temporary.path()).filePath(
+            QStringLiteral(
+                "bak/2026_07_06_08_00_00.json.bak"));
+    if (committed) {
+        QVERIFY(!QFileInfo::exists(targetPath));
+        QCOMPARE(
+            readBytes(peerPath),
+            QByteArray("peer-unlinked"));
+        QCOMPARE(
+            readBytes(backupPath),
+            QByteArray("target-linked-to-peer"));
+    } else {
+        QCOMPARE(
+            readBytes(targetPath),
+            QByteArray("target-linked-to-peer"));
+        QCOMPARE(
+            readBytes(peerPath),
+            QByteArray("peer-linked-to-target"));
+        QCOMPARE(
+            readBytes(backupPath),
+            QByteArray("previous-backup"));
+    }
+    QCOMPARE(
+        readBytes(
+            QDir(temporary.path())
+                .filePath(QStringLiteral(
+                    "activities/2026_07_06_08_00_00.json"))),
+        targetAfterRecovery);
+    QCOMPARE(
+        readBytes(
+            QDir(temporary.path())
+                .filePath(QStringLiteral(
+                    "planned/2026_07_06_09_00_00.json"))),
+        peerAfterRecovery);
+
+    const QString targetBaseName =
+        QFileInfo(firstName()).baseName();
+    for (const QString &extension :
+         {QStringLiteral("cpx"),
+          QStringLiteral("cpi"),
+          QStringLiteral("notes")}) {
+        const QString derivedPath =
+            QDir(temporary.path()).filePath(
+                QStringLiteral("cache/")
+                + targetBaseName + QLatin1Char('.')
+                + extension);
+        if (committed) {
+            QVERIFY(!QFileInfo::exists(derivedPath));
+        } else {
+            QCOMPARE(
+                readBytes(derivedPath),
+                extension.toLatin1() + "-derived");
+        }
+    }
+
+    const QDir transactionRoot(
+        QDir(temporary.path()).filePath(
+            QStringLiteral(
+                ".gc-transactions/linked-removal")));
+    QVERIFY(!transactionRoot.exists()
+        || transactionRoot.entryList(
+            QDir::Dirs | QDir::Hidden
+                | QDir::NoDotAndDotDot).isEmpty());
+    QDirIterator artifacts(
+        temporary.path(),
+        QDir::Files | QDir::Hidden
+            | QDir::NoDotAndDotDot,
+        QDirIterator::Subdirectories);
+    while (artifacts.hasNext()) {
+        const QString path = artifacts.next();
+        const QString name = QFileInfo(path).fileName();
+        const bool transactionSidecar =
+            name.contains(QStringLiteral(".gc-linked-new-"))
+            || name.contains(QStringLiteral(".gc-copy-"))
+            || name.contains(QStringLiteral(".gc-remove-"))
+            || name.contains(QStringLiteral(".gc-previous-"));
+        QVERIFY2(
+            !transactionSidecar
+                || name.endsWith(QStringLiteral(".lock")),
+            qPrintable(path));
+    }
 }
 
 void TestRideCacheRemoval::

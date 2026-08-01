@@ -15,6 +15,7 @@ SOURCES = testRideCacheRemoval.cpp \
           RideCacheRemovalTestStubs.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCacheIntegrity.cpp \
+          ../../../src/Core/LinkedActivityRemovalJournal.cpp \
           ../../../src/Core/RideCacheRemoval.cpp
 
 HEADERS = ../../../src/Core/Athlete.h \
@@ -22,6 +23,7 @@ HEADERS = ../../../src/Core/Athlete.h \
           ../../../src/Core/RideCache.h \
           ../../../src/Core/RideCacheModel.h \
           ../../../src/Core/RideItem.h \
+          ../../../src/Core/LinkedActivityRemovalJournal.h \
           ../../../src/FileIO/RideFileCRC.h \
           ../../../src/FileIO/RideFileCacheIntegrity.h \
           ../../../src/Metrics/Estimator.h
@@ -41,10 +43,20 @@ INCLUDEPATH += ../../../src \
 QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
 QMAKE_LFLAGS += -Wl,--gc-sections
 
-sanitize:!msvc {
+sanitize:!tsan:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \
                       -fno-omit-frame-pointer \
                       -fno-sanitize=vptr \
                       -fno-sanitize-recover=all
     QMAKE_LFLAGS += -fsanitize=address,undefined
+}
+
+tsan:!msvc {
+    QMAKE_CXXFLAGS += -fsanitize=thread \
+                      -fno-omit-frame-pointer \
+                      -fno-pie \
+                      -O1 \
+                      -g
+    QMAKE_LFLAGS += -fsanitize=thread \
+                    -no-pie
 }
