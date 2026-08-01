@@ -25,6 +25,7 @@
 #include "RideItem.h"
 #include "RideFile.h"
 #include "JsonRideFile.h"
+#include "SplitActivityWorkflow.h"
 #include "Units.h"
 #include "Colors.h"
 
@@ -32,6 +33,7 @@
 #include <QDoubleSpinBox>
 #include <QCheckBox>
 #include <QMessageBox>
+#include <QPointer>
 #include <QLabel>
 #include <QTreeWidget>
 
@@ -40,6 +42,9 @@
 
 class SplitSelect;
 class SplitBackground;
+class Athlete;
+class AthleteDirectoryStructure;
+class RideCache;
 
 class SplitActivityWizard : public QWizard
 {
@@ -48,10 +53,17 @@ class SplitActivityWizard : public QWizard
 public:
     SplitActivityWizard(Context *context);
 
-    Context *context;
+    QPointer<Context> context;
+    QPointer<Athlete> athlete;
+    QPointer<RideCache> rideCache;
+    QPointer<AthleteDirectoryStructure> home;
     bool keepOriginal;
-    RideItem *rideItem;
-    QString sourceFileName;
+    QPointer<RideItem> rideItem;
+    SplitActivitySourceIdentity sourceIdentity;
+    SplitActivityContentSnapshot sourceContentSnapshot;
+
+    SplitActivityContentSnapshot
+        currentSourceContentSnapshot() const;
 
     int minimumGap,
         minimumSegmentSize;
@@ -82,6 +94,13 @@ signals:
 
 private slots:
 
+private:
+    void bindSourceRideContent(RideFile *ride);
+    void invalidateSourceRideContent();
+
+    QPointer<RideFile> trackedSourceRide;
+    quint64 sourceContentRevision = 0;
+    QList<QMetaObject::Connection> sourceContentConnections;
 };
 
 class SplitWelcome : public QWizardPage
@@ -101,6 +120,7 @@ class SplitKeep : public QWizardPage
 
     public:
         SplitKeep(SplitActivityWizard *);
+        bool validatePage();
         QLabel *warning;
 
     public slots:
@@ -183,7 +203,16 @@ class SplitBackground: public QwtPlotItem
                         const QwtScaleMap &xMap, const QwtScaleMap &,
                         const QRectF &rect) const
         {
-            RideItem *rideItem = parent->rideItem;
+            RideItem *rideItem = parent
+                ? parent->rideItem.data()
+                : nullptr;
+            RideFile *ride = rideItem
+                ? rideItem->ride()
+                : nullptr;
+            if (!ride
+                || ride->dataPoints().isEmpty()) {
+                return;
+            }
 
             double lastmark = -1;
             int segment = 0;
@@ -204,7 +233,7 @@ class SplitBackground: public QwtPlotItem
 
                 if (lastmark == -1) {
                     // before first mark
-                    if (mark > rideItem->ride()->dataPoints().at(0)->secs) {
+                    if (mark > ride->dataPoints().at(0)->secs) {
                         r.setTop(1000);
                         r.setBottom(0);
                         r.setLeft(xMap.transform(0));
@@ -236,13 +265,13 @@ class SplitBackground: public QwtPlotItem
 
             // is there some space to the right -- if none selected this
             // will shade the entire ride gray since lastmark will be -1
-            if (lastmark < (rideItem->ride()->dataPoints().last()->secs-rideItem->ride()->recIntSecs())) {
+            if (lastmark < (ride->dataPoints().last()->secs-ride->recIntSecs())) {
 
                 QRect r;
                 r.setTop(1000);
                 r.setBottom(0);
                 r.setLeft(xMap.transform(lastmark));
-                r.setRight(xMap.transform(rideItem->ride()->dataPoints().last()->secs-rideItem->ride()->recIntSecs()));
+                r.setRight(xMap.transform(ride->dataPoints().last()->secs-ride->recIntSecs()));
                 painter->fillRect(r, Qt::lightGray);
             }
         }

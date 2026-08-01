@@ -67,6 +67,7 @@ class AthleteTab: public QWidget
         // set Ride
         void setRide(RideItem*);
         void setNoSwitch(bool x) { noswitch = x; }
+        bool noSwitch() const { return noswitch; }
 
         // tile mode
         void setTiled(bool);

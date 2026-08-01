@@ -20,6 +20,7 @@
 
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QPointer>
 
 #include "MainWindow.h"
 #include "AthleteTab.h"
@@ -37,6 +38,117 @@
 
 #define HLO "<h4>"
 #define HLC "</h4>"
+
+namespace {
+
+using CalendarActivityIdentity =
+    ActivityDeletionWorkflow::Identity;
+
+CalendarActivityIdentity calendarActivityIdentity(
+    const RideItem *item)
+{
+    return item
+        ? CalendarActivityIdentity{
+              item->fileName, item->path, item->planned}
+        : CalendarActivityIdentity{};
+}
+
+bool calendarWorkflowOwnersAreCurrent(
+    const QPointer<Context> &context,
+    const QPointer<Athlete> &athlete,
+    const QPointer<RideCache> &cache)
+{
+    return context
+        && athlete
+        && cache
+        && context->athlete == athlete.data()
+        && athlete->rideCache == cache.data();
+}
+
+bool calendarWorkflowItemIsCurrent(
+    const QPointer<Context> &context,
+    const QPointer<Athlete> &athlete,
+    const QPointer<RideCache> &cache,
+    const QPointer<RideItem> &guardedItem,
+    const CalendarActivityIdentity &expected)
+{
+    if (!calendarWorkflowOwnersAreCurrent(
+            context, athlete, cache)) {
+        return false;
+    }
+    RideItem *const item = guardedItem.data();
+    const CalendarActivityIdentity current =
+        calendarActivityIdentity(item);
+    if (!item
+        || !ActivityDeletionWorkflow::
+            cacheContainsUniqueIdentity(
+                cache.data(), item, current)) {
+        return false;
+    }
+    return !expected.fileName.isEmpty()
+        && !expected.path.isEmpty()
+        && current.fileName == expected.fileName
+        && current.path == expected.path
+        && current.planned == expected.planned;
+}
+
+bool calendarWorkflowAdoptSavedIdentity(
+    const QPointer<Context> &context,
+    const QPointer<Athlete> &athlete,
+    const QPointer<RideCache> &cache,
+    const QPointer<RideItem> &guardedItem,
+    const ProceedDialogResult &dialogResult,
+    CalendarActivityIdentity &expected)
+{
+    if (!calendarWorkflowOwnersAreCurrent(
+            context, athlete, cache)) {
+        return false;
+    }
+    RideItem *const item = guardedItem.data();
+    const CalendarActivityIdentity current =
+        calendarActivityIdentity(item);
+    ActivityDeletionWorkflow::State state;
+    state.workflowAvailable = context;
+    state.viewAvailable = context;
+    state.contextAvailable = context;
+    state.athleteAvailable = athlete;
+    state.cacheAvailable = cache;
+    state.relationshipsMatch =
+        calendarWorkflowOwnersAreCurrent(
+            context, athlete, cache);
+    state.itemAvailable = item;
+    state.itemInCache = item && cache
+        && ActivityDeletionWorkflow::
+            cacheContainsUniqueIdentity(
+                cache.data(), item, current);
+    if (ActivityDeletionWorkflow::isCurrent(
+            state, expected, current)) {
+        return true;
+    }
+
+    ActivitySaveWorkflow::Identity savedIdentity;
+    const bool itemWasSaved =
+        dialogResult.savedIdentityFor(
+            item, savedIdentity);
+    const ActivityDeletionWorkflow::
+        SavedIdentityEvidence evidence{
+            itemWasSaved,
+            CalendarActivityIdentity{
+                savedIdentity.fileName,
+                savedIdentity.path,
+                savedIdentity.planned}};
+    if (!athlete || !athlete->home) return false;
+    const QString cacheDirectory =
+        (expected.planned
+            ? athlete->home->planned()
+            : athlete->home->activities())
+            .absolutePath();
+    return ActivityDeletionWorkflow::adoptSavedIdentity(
+        state, current, evidence,
+        cacheDirectory, expected);
+}
+
+} // namespace
 
 
 //////////////////////////////////////////////////////////////////////////////
@@ -393,21 +505,141 @@ CalendarWindow::CalendarWindow(Context *context)
         wizard.exec();
     });
     connect(calendar, &Calendar::delActivity, this, [this](CalendarEntry activity) {
-        QMessageBox::StandardButton res = QMessageBox::question(this, tr("Delete Activity"), tr("Are you sure you want to delete %1?").arg(activity.reference));
+        QPointer<CalendarWindow> window(this);
+        const QPointer<Context> guardedContext(
+            this->context);
+        const QPointer<Athlete> guardedAthlete(
+            guardedContext
+                ? guardedContext->athlete
+                : nullptr);
+        const QPointer<RideCache> guardedCache(
+            guardedAthlete
+                ? guardedAthlete->rideCache
+                : nullptr);
+        const QPointer<AthleteTab> guardedTab(
+            guardedContext
+                ? guardedContext->tab
+                : nullptr);
+        const auto ownersAreCurrent = [&] {
+            return window
+                && calendarWorkflowOwnersAreCurrent(
+                guardedContext, guardedAthlete,
+                guardedCache)
+                && guardedTab
+                && guardedContext->tab
+                    == guardedTab.data();
+        };
+
+        QPointer<RideItem> deletionItem(
+            ownersAreCurrent()
+                ? window->getRideItem(activity)
+                : nullptr);
+        RideItem *const originalItem =
+            deletionItem.data();
+        if (!originalItem) {
+            if (window && ownersAreCurrent())
+                window->updateActivities();
+            return;
+        }
+        CalendarActivityIdentity expected =
+            calendarActivityIdentity(originalItem);
+
+        QMessageBox::StandardButton res = QMessageBox::question(
+            window.data(), tr("Delete Activity"),
+            tr("Are you sure you want to delete %1?")
+                .arg(activity.reference));
+        if (!window || !ownersAreCurrent()) return;
         if (res == QMessageBox::Yes) {
-            if (unlinkActivities(activity)) {
-                RideItem *rideItem = getRideItem(activity);
-                if (!rideItem) {
-                    updateActivities();
-                    return;
+            RideItem *rideItem = deletionItem.data();
+            if (!calendarWorkflowItemIsCurrent(
+                    guardedContext, guardedAthlete,
+                    guardedCache, deletionItem,
+                    expected)) {
+                return;
+            }
+            const RideCache::OperationPreCheck check =
+                guardedCache->checkRemovalLinks(
+                    rideItem);
+            if (!window
+                || !ownersAreCurrent()
+                || !calendarWorkflowItemIsCurrent(
+                    guardedContext, guardedAthlete,
+                    guardedCache, deletionItem,
+                    expected)) {
+                return;
+            }
+            if (!check.canProceed) {
+                QMessageBox::warning(
+                    window.data(), tr("Delete Activity"),
+                    check.blockingReason);
+                return;
+            }
+            ProceedDialogResult dialogResult;
+            if (!proceedDialog(
+                    guardedContext.data(), check,
+                    &dialogResult)
+                || !window
+                || !ownersAreCurrent()) {
+                return;
+            }
+            if (!calendarWorkflowAdoptSavedIdentity(
+                    guardedContext, guardedAthlete,
+                    guardedCache, deletionItem,
+                    dialogResult,
+                    expected)) {
+                return;
+            }
+
+            const RideCache::OperationPreCheck recheck =
+                guardedCache->checkRemovalLinks(
+                    deletionItem.data());
+            if (!window
+                || !ownersAreCurrent()
+                || !calendarWorkflowItemIsCurrent(
+                    guardedContext, guardedAthlete,
+                    guardedCache, deletionItem,
+                    expected)) {
+                return;
+            }
+            if (!recheck.canProceed
+                || recheck.requiresUserDecision) {
+                QMessageBox::warning(
+                    window.data(), tr("Delete Activity"),
+                    recheck.blockingReason.isEmpty()
+                        ? tr("The activity changed while preparing deletion.")
+                        : recheck.blockingReason);
+                return;
+            }
+
+            const bool previousNoSwitch =
+                guardedTab->noSwitch();
+            guardedTab->setNoSwitch(true);
+            const RideCache::RemovalResult result =
+                guardedCache->removeRideResult(
+                    deletionItem.data());
+            if (guardedTab) {
+                guardedTab->setNoSwitch(
+                    previousNoSwitch);
+            }
+            if (!result.cleanlyCompleted()) {
+                const QString summary = result.allLogicallyRemoved()
+                    ? tr("The activity was deleted, but cleanup requires attention.")
+                    : result.requiresRecovery()
+                        ? tr("The activity storage requires manual recovery.")
+                        : tr("The activity could not be deleted.");
+                if (window) {
+                    QMessageBox::warning(
+                        window.data(),
+                        tr("Delete Activity"),
+                        QStringLiteral("%1\n\n%2")
+                            .arg(summary, result.error));
                 }
-                this->context->tab->setNoSwitch(true);
-                this->context->athlete->rideCache->removeRide(rideItem);
-                this->context->tab->setNoSwitch(false);
             }
 
             // Context::rideDeleted is not always emitted, therefore forcing the update
-            updateActivities();
+            if (window && ownersAreCurrent()) {
+                window->updateActivities();
+            }
         }
     });
     connect(calendar, &Calendar::moveActivity, this, [this](CalendarEntry activity, const QDate &srcDay, const QDate &destDay, const QTime &destTime) {
@@ -442,22 +674,156 @@ CalendarWindow::CalendarWindow(Context *context)
     connect(calendar, &Calendar::editPhase, this, &CalendarWindow::editPhase);
     connect(calendar, &Calendar::delPhase, this, &CalendarWindow::delPhase);
     connect(calendar, &Calendar::saveChanges, this, [this](const CalendarEntry &entry) {
-        RideItem *item = getRideItem(entry, false);
-        if (item != nullptr) {
-            QString error;
-            QList<RideItem*> activities;
-            activities << item;
-            relinkRideItems(this->context, item, activities);
-            this->context->athlete->rideCache->saveActivities(activities, error);
+        QPointer<CalendarWindow> window(this);
+        const QPointer<Context> guardedContext(
+            this->context);
+        const QPointer<Athlete> guardedAthlete(
+            guardedContext
+                ? guardedContext->athlete
+                : nullptr);
+        const QPointer<RideCache> guardedCache(
+            guardedAthlete
+                ? guardedAthlete->rideCache
+                : nullptr);
+        if (!window
+            || !calendarWorkflowOwnersAreCurrent(
+                guardedContext, guardedAthlete,
+                guardedCache)) {
+            return;
+        }
+
+        QPointer<RideItem> guardedItem(
+            window->getRideItem(entry, false));
+        RideItem *const item = guardedItem.data();
+        if (!item) return;
+        const CalendarActivityIdentity expected =
+            calendarActivityIdentity(item);
+        if (!calendarWorkflowItemIsCurrent(
+                guardedContext, guardedAthlete,
+                guardedCache, guardedItem,
+                expected)) {
+            return;
+        }
+
+        QString error;
+        const bool saved = saveOperationPreflightActivities(
+            guardOperationPreflightItems({item}),
+            [guardedContext, guardedAthlete,
+             guardedCache](
+                RideItem *saveItem,
+                GuardedOperationPreflightItems &activities,
+                QString &relinkError) {
+                QPointer<RideItem> guardedSaveItem(
+                    saveItem);
+                if (!calendarWorkflowOwnersAreCurrent(
+                        guardedContext, guardedAthlete,
+                        guardedCache)
+                    || !guardedSaveItem
+                    || !guardedCache->rides().contains(
+                        guardedSaveItem.data())) {
+                    relinkError = QObject::tr(
+                        "An activity is no longer available for saving");
+                    return false;
+                }
+                const bool relinked = relinkRideItems(
+                    guardedContext.data(),
+                    guardedSaveItem.data(),
+                    activities, relinkError);
+                if (!calendarWorkflowOwnersAreCurrent(
+                        guardedContext, guardedAthlete,
+                        guardedCache)
+                    || !guardedSaveItem
+                    || !guardedCache->rides().contains(
+                        guardedSaveItem.data())) {
+                    relinkError = QObject::tr(
+                        "The activity collection changed while preparing the save");
+                    return false;
+                }
+                return relinked;
+            },
+            [guardedContext, guardedAthlete,
+             guardedCache](
+                const QList<RideItem*> &activities,
+                QString &saveError) {
+                if (!calendarWorkflowOwnersAreCurrent(
+                        guardedContext, guardedAthlete,
+                        guardedCache)) {
+                    saveError = QObject::tr(
+                        "The activity collection is no longer available");
+                    return false;
+                }
+                for (RideItem *activity : activities) {
+                    if (!activity
+                        || !guardedCache->rides().contains(
+                            activity)) {
+                        saveError = QObject::tr(
+                            "An activity changed while preparing the save");
+                        return false;
+                    }
+                }
+                return guardedCache->saveActivities(
+                    activities, saveError);
+            },
+            error);
+        if (!window
+            || !calendarWorkflowOwnersAreCurrent(
+                guardedContext, guardedAthlete,
+                guardedCache)) {
+            return;
+        }
+        if (!saved) {
+            QMessageBox::warning(
+                window.data(), tr("Save Activity"),
+                error);
         }
     });
     connect(calendar, &Calendar::discardChanges, this, [this](const CalendarEntry &entry) {
-        RideItem *item = getRideItem(entry, false);
-        if (item != nullptr) {
-            item->close();
-            item->ride();
-            item->setStartTime(item->ride()->startTime());
+        const QPointer<Context> guardedContext(
+            this->context);
+        const QPointer<Athlete> guardedAthlete(
+            guardedContext
+                ? guardedContext->athlete
+                : nullptr);
+        const QPointer<RideCache> guardedCache(
+            guardedAthlete
+                ? guardedAthlete->rideCache
+                : nullptr);
+        if (!calendarWorkflowOwnersAreCurrent(
+                guardedContext, guardedAthlete,
+                guardedCache)) {
+            return;
         }
+        QPointer<RideItem> guardedItem(
+            getRideItem(entry, false));
+        RideItem *item = guardedItem.data();
+        if (!item) return;
+        const CalendarActivityIdentity expected =
+            calendarActivityIdentity(item);
+        if (!calendarWorkflowItemIsCurrent(
+                guardedContext, guardedAthlete,
+                guardedCache, guardedItem,
+                expected)) {
+            return;
+        }
+
+        item->close();
+        if (!calendarWorkflowItemIsCurrent(
+                guardedContext, guardedAthlete,
+                guardedCache, guardedItem,
+                expected)) {
+            return;
+        }
+        RideFile *const ride =
+            guardedItem->ride();
+        if (!ride
+            || !calendarWorkflowItemIsCurrent(
+                guardedContext, guardedAthlete,
+                guardedCache, guardedItem,
+                expected)) {
+            return;
+        }
+        guardedItem->setStartTime(
+            ride->startTime());
     });
 
     QTimer::singleShot(0, this, [this]() {

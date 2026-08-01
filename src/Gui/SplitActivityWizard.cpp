@@ -18,12 +18,16 @@
 
 #include "SplitActivityWizard.h"
 #include "SplitActivitySave.h"
+#include "SplitActivityWorkflow.h"
 #include "SplitRideData.h"
 #include "MainWindow.h"
 #include "Athlete.h"
 #include "Context.h"
 #include "RideCache.h"
+#include "SaveDialogs.h"
 #include "HelpWhatsThis.h"
+
+#include <QPointer>
 
 
 // Minimum gap in recording to find a natural break to split
@@ -32,8 +36,140 @@ static const double defaultMinimumGap = 1; // 1 minute
 // Minimum size of segment to identify as a new ride
 static const double defaultMinimumSegmentSize = 5; // 5 minutes
 
+namespace {
+
+SplitActivitySourceIdentity splitSourceIdentity(
+    const RideItem *item)
+{
+    return item
+        ? SplitActivitySourceIdentity{
+              item->fileName, item->path, item->planned}
+        : SplitActivitySourceIdentity{};
+}
+
+bool splitWorkflowOwnersAreCurrent(
+    const QPointer<Context> &context,
+    const QPointer<Athlete> &athlete,
+    const QPointer<RideCache> &cache,
+    const QPointer<AthleteDirectoryStructure> &home)
+{
+    return context
+        && athlete
+        && cache
+        && home
+        && context->athlete == athlete.data()
+        && athlete->rideCache == cache.data()
+        && athlete->home == home.data();
+}
+
+bool splitWorkflowSourceIsCurrent(
+    const QPointer<Context> &context,
+    const QPointer<Athlete> &athlete,
+    const QPointer<RideCache> &cache,
+    const QPointer<AthleteDirectoryStructure> &home,
+    const QPointer<RideItem> &source,
+    const SplitActivitySourceIdentity &expected)
+{
+    const bool ownersCurrent =
+        splitWorkflowOwnersAreCurrent(
+            context, athlete, cache, home);
+    RideItem *const item = source.data();
+    const bool sourceInCache = ownersCurrent
+        && item
+        && cache->rides().contains(item);
+    return splitActivitySourceIsCurrent(
+        ownersCurrent, ownersCurrent,
+        item != nullptr, sourceInCache,
+        expected, splitSourceIdentity(item));
+}
+
+bool splitWorkflowSourceSnapshotIsCurrent(
+    const QPointer<Context> &context,
+    const QPointer<Athlete> &athlete,
+    const QPointer<RideCache> &cache,
+    const QPointer<AthleteDirectoryStructure> &home,
+    const QPointer<RideItem> &source,
+    const SplitActivitySourceIdentity &expectedIdentity,
+    const SplitActivityContentSnapshot &expectedContent,
+    const SplitActivityContentSnapshot &currentContent)
+{
+    const bool ownersCurrent =
+        splitWorkflowOwnersAreCurrent(
+            context, athlete, cache, home);
+    RideItem *const item = source.data();
+    const bool sourceInCache = ownersCurrent
+        && item
+        && cache->rides().contains(item);
+    return splitActivitySourceSnapshotIsCurrent(
+        ownersCurrent, ownersCurrent,
+        item != nullptr, sourceInCache,
+        expectedIdentity, splitSourceIdentity(item),
+        expectedContent, currentContent);
+}
+
+} // namespace
+
+void SplitActivityWizard::bindSourceRideContent(RideFile *ride)
+{
+    if (trackedSourceRide.data() == ride) return;
+
+    for (const QMetaObject::Connection &connection :
+         sourceContentConnections) {
+        disconnect(connection);
+    }
+    sourceContentConnections.clear();
+    trackedSourceRide = ride;
+    ++sourceContentRevision;
+    if (!ride) return;
+
+    sourceContentConnections.append(connect(
+        ride, &RideFile::modified,
+        this, &SplitActivityWizard::invalidateSourceRideContent));
+    sourceContentConnections.append(connect(
+        ride, &RideFile::saved,
+        this, &SplitActivityWizard::invalidateSourceRideContent));
+    sourceContentConnections.append(connect(
+        ride, &RideFile::reverted,
+        this, &SplitActivityWizard::invalidateSourceRideContent));
+    sourceContentConnections.append(connect(
+        ride, &RideFile::deleted,
+        this, &SplitActivityWizard::invalidateSourceRideContent));
+    sourceContentConnections.append(connect(
+        ride, &QObject::destroyed, this, [this] {
+            trackedSourceRide.clear();
+            sourceContentConnections.clear();
+            ++sourceContentRevision;
+        }));
+}
+
+void SplitActivityWizard::invalidateSourceRideContent()
+{
+    ++sourceContentRevision;
+}
+
+SplitActivityContentSnapshot
+SplitActivityWizard::currentSourceContentSnapshot() const
+{
+    RideItem *const item = rideItem.data();
+    RideFile *const currentRide = item
+        ? item->ride()
+        : nullptr;
+    return {
+        reinterpret_cast<quintptr>(currentRide),
+        sourceContentRevision};
+}
+
 // Main wizard
-SplitActivityWizard::SplitActivityWizard(Context *context) : QWizard(context->mainWindow), context(context)
+SplitActivityWizard::SplitActivityWizard(Context *context)
+    : QWizard(context ? context->mainWindow : nullptr),
+      context(context),
+      athlete(context ? context->athlete : nullptr),
+      rideCache(context && context->athlete
+          ? context->athlete->rideCache
+          : nullptr),
+      home(context && context->athlete
+          ? context->athlete->home
+          : nullptr)
 {
 #ifdef Q_OS_MAX
     setWizardStyle(QWizard::ModernStyle);
@@ -54,8 +190,25 @@ SplitActivityWizard::SplitActivityWizard(Context *context) : QWizard(context->ma
     this->setWhatsThis(help->getWhatsThisText(HelpWhatsThis::MenuBar_Activity_SplitRide));
 
     // set ride - unconst since we will wipe it away eventually
-    rideItem = const_cast<RideItem*>(context->currentRideItem());
-    sourceFileName = rideItem ? rideItem->fileName : QString();
+    rideItem = context
+        ? const_cast<RideItem*>(context->currentRideItem())
+        : nullptr;
+    sourceIdentity = splitSourceIdentity(
+        rideItem.data());
+    bindSourceRideContent(
+        rideItem ? rideItem->ride() : nullptr);
+    if (rideItem) {
+        connect(
+            rideItem, &RideItem::rideDataChanged,
+            this, [this] {
+                ++sourceContentRevision;
+                bindSourceRideContent(
+                    rideItem ? rideItem->ride() : nullptr);
+            });
+        connect(
+            rideItem, &RideItem::rideMetadataChanged,
+            this, &SplitActivityWizard::invalidateSourceRideContent);
+    }
 
     // Set sensible defaults
     keepOriginal = false;
@@ -106,7 +259,7 @@ SplitActivityWizard::SplitActivityWizard(Context *context) : QWizard(context->ma
     // just the hr and power as a plot
     smallPlot = new SmallPlot(this);
     smallPlot->setFixedHeight(100);
-    smallPlot->setData(rideItem);
+    smallPlot->setData(rideItem.data());
 
     bg = new SplitBackground(this);
     bg->attach(smallPlot);
@@ -124,6 +277,16 @@ SplitActivityWizard::SplitActivityWizard(Context *context) : QWizard(context->ma
 void
 SplitActivityWizard::setIntervalsList(SplitSelect *selector)
 {
+    RideItem *const sourceItem = rideItem.data();
+    RideFile *const sourceRide = sourceItem
+        ? sourceItem->ride()
+        : nullptr;
+    if (!sourceRide
+        || sourceRide->dataPoints().isEmpty()) {
+        intervals->clear();
+        return;
+    }
+
     // didn't change so no need to rebuild
     if (usedMinimumGap == minimumGap && usedMinimumSegmentSize == minimumSegmentSize) return;
 
@@ -149,7 +312,7 @@ SplitActivityWizard::setIntervalsList(SplitSelect *selector)
     bool first = true;
 
     int counter = 0;
-    foreach (RideFilePoint *p, rideItem->ride()->dataPoints()) {
+    foreach (RideFilePoint *p, sourceRide->dataPoints()) {
 
         if (first == true) {
 
@@ -194,7 +357,7 @@ SplitActivityWizard::setIntervalsList(SplitSelect *selector)
     // in the resulting file
     foreach(RideFileInterval *p, gaps) { delete p; } gaps.clear(); // wip old ones
 
-    double lastsecs = rideItem->ride()->dataPoints().first()->secs;
+    double lastsecs = sourceRide->dataPoints().first()->secs;
     int gapnum = 0;
     foreach(RideFileInterval *ride, segments) {
         if (ride->start > lastsecs) {
@@ -213,14 +376,14 @@ SplitActivityWizard::setIntervalsList(SplitSelect *selector)
         }
         lastsecs = ride->stop;
     }
-    if (lastsecs < rideItem->ride()->dataPoints().last()->secs) {
+    if (lastsecs < sourceRide->dataPoints().last()->secs) {
         // gap at the end
         gapnum++;
 
         // add to gap list
         RideFileInterval *gap = new RideFileInterval(RideFileInterval::USER,
                                                      lastsecs,
-                                                     rideItem->ride()->dataPoints().last()->secs,
+                                                     sourceRide->dataPoints().last()->secs,
                                                      QString(tr("Gap in recording #%1")).arg(gapnum), Qt::black, false);
         gaps.append(gap);
 
@@ -230,12 +393,12 @@ SplitActivityWizard::setIntervalsList(SplitSelect *selector)
 
     // first entry in list should always be entire file
     // so we can mark the start and stop for splitting
-    segments.insert(0, new RideFileInterval(RideFileInterval::USER, rideItem->ride()->dataPoints().first()->secs,
-                                     rideItem->ride()->dataPoints().last()->secs,
+    segments.insert(0, new RideFileInterval(RideFileInterval::USER, sourceRide->dataPoints().first()->secs,
+                                     sourceRide->dataPoints().last()->secs,
                                      tr("Entire Activity"), Qt::black, false));
 
     // now fold in the ride intervals
-    segments.append(rideItem->ride()->intervals());
+    segments.append(sourceRide->intervals());
 
     // now lets sort the segments in start order
     std::sort(segments.begin(), segments.end());
@@ -298,8 +461,8 @@ SplitActivityWizard::setIntervalsList(SplitSelect *selector)
                         .arg(secs%60,2,10,zero));
 
         // interval distance
-        double distance = rideItem->ride()->timeToDistance(interval->stop) - 
-                          rideItem->ride()->timeToDistance(interval->start);
+        double distance = sourceRide->timeToDistance(interval->stop) -
+                          sourceRide->timeToDistance(interval->start);
         add->setText(5, QString("%1 %2")
                         .arg(distance * (GlobalContext::context()->useMetricUnits ? 1 : MILES_PER_KM), 0, 'f', 2)
                         .arg(GlobalContext::context()->useMetricUnits ? "km" : "mi"));
@@ -308,8 +471,8 @@ SplitActivityWizard::setIntervalsList(SplitSelect *selector)
         add->setText(6, interval->name);
 
         // hiddden columns with dataPoint from/to
-        add->setText(7, QString("%1").arg(rideItem->ride()->timeIndex(interval->start)));
-        add->setText(8, QString("%1").arg(rideItem->ride()->timeIndex(interval->stop)));
+        add->setText(7, QString("%1").arg(sourceRide->timeIndex(interval->start)));
+        add->setText(8, QString("%1").arg(sourceRide->timeIndex(interval->stop)));
 
         counter++;
     }
@@ -324,19 +487,25 @@ SplitActivityWizard::setFilesList()
 
     // fold in current ride -- if we are removing
     if (keepOriginal == false) {
+        RideItem *const sourceItem = rideItem.data();
+        RideFile *const sourceRide = sourceItem
+            ? sourceItem->ride()
+            : nullptr;
+        if (!sourceRide) return;
+
         // we will wipe the original file
         QTreeWidgetItem *add = new QTreeWidgetItem(files->invisibleRootItem());
 
-        add->setText(0, rideItem->fileName);
-        add->setText(1, rideItem->ride()->startTime().toString(tr("dd MMM yyyy")));
-        add->setText(2, rideItem->ride()->startTime().toString("hh:mm:ss"));
+        add->setText(0, sourceItem->fileName);
+        add->setText(1, sourceRide->startTime().toString(tr("dd MMM yyyy")));
+        add->setText(2, sourceRide->startTime().toString("hh:mm:ss"));
 
         // get duration and distance, yuk, dup of code below, and from RideImportWizard
         int secs=0;
         double km=0;
-        if (!rideItem->ride()->dataPoints().isEmpty() && rideItem->ride()->dataPoints().last() != NULL) {
-            if (!secs) secs = rideItem->ride()->dataPoints().last()->secs;
-            if (!km) km = rideItem->ride()->dataPoints().last()->km;
+        if (!sourceRide->dataPoints().isEmpty() && sourceRide->dataPoints().last() != NULL) {
+            if (!secs) secs = sourceRide->dataPoints().last()->secs;
+            if (!km) km = sourceRide->dataPoints().last()->km;
         }
 
         // set duration
@@ -412,7 +581,11 @@ SplitActivityWizard::setFilesList()
 QString
 SplitActivityWizard::hasBackup(QString filename)
 {
-    QString backupFilename = context->athlete->home->fileBackup().canonicalPath() + "/" + filename + ".bak";
+    if (!splitWorkflowOwnersAreCurrent(
+            context, athlete, rideCache, home)) {
+        return QString();
+    }
+    QString backupFilename = home->fileBackup().canonicalPath() + "/" + filename + ".bak";
 
     if (QFile(backupFilename).exists()) {
 
@@ -428,6 +601,10 @@ QStringList
 SplitActivityWizard::conflicts(QDateTime datetime)
 {
     QStringList returning;
+    if (!splitWorkflowOwnersAreCurrent(
+            context, athlete, rideCache, home)) {
+        return returning;
+    }
 
     // Check if an existing ride has the same starttime
     QChar zero = QLatin1Char('0');
@@ -442,7 +619,7 @@ SplitActivityWizard::conflicts(QDateTime datetime)
     // now make a regexp for all know ride types
     foreach(QString suffix, RideFileFactory::instance().suffixes()) {
 
-        QString conflict = context->athlete->home->activities().canonicalPath() + "/" + targetnosuffix + "." + suffix;
+        QString conflict = home->activities().canonicalPath() + "/" + targetnosuffix + "." + suffix;
         if (QFile(conflict).exists()) returning << conflict;
     }
     return returning;
@@ -573,12 +750,106 @@ SplitKeep::keepOriginalChanged()
     setWarning();
 }
 
+bool
+SplitKeep::validatePage()
+{
+    QPointer<SplitKeep> page(this);
+    QPointer<SplitActivityWizard> guardedWizard(
+        wizard);
+    if (!guardedWizard) return false;
+
+    const QPointer<Context> guardedContext(
+        guardedWizard->context);
+    const QPointer<Athlete> guardedAthlete(
+        guardedWizard->athlete);
+    const QPointer<RideCache> guardedCache(
+        guardedWizard->rideCache);
+    const QPointer<AthleteDirectoryStructure> guardedHome(
+        guardedWizard->home);
+    QPointer<RideItem> source(
+        guardedWizard->rideItem.data());
+    const SplitActivitySourceIdentity expectedSource =
+        guardedWizard->sourceIdentity;
+    const auto sourceIsCurrent = [&] {
+        return splitWorkflowSourceIsCurrent(
+            guardedContext, guardedAthlete,
+            guardedCache, guardedHome,
+            source, expectedSource);
+    };
+    return prepareSplitSourceBeforeSelection(
+        guardedWizard->keepOriginal,
+        sourceIsCurrent,
+        [&] {
+            if (!page || !guardedWizard
+                || !sourceIsCurrent()) {
+                QMessageBox::warning(
+                    page.data(), tr("Split Activity"),
+                    tr("The source activity is no longer available."));
+                return false;
+            }
+            const RideCache::OperationPreCheck check =
+                guardedCache->checkRemovalLinks(
+                    source.data());
+            if (!page || !guardedWizard
+                || !sourceIsCurrent()) {
+                return false;
+            }
+            if (!check.canProceed) {
+                QMessageBox::warning(
+                    page.data(), tr("Split Activity"),
+                    check.blockingReason);
+                return false;
+            }
+            if (!proceedDialog(
+                    guardedContext.data(), check)
+                || !page || !guardedWizard
+                || !sourceIsCurrent()) {
+                return false;
+            }
+            const RideCache::OperationPreCheck recheck =
+                guardedCache->checkRemovalLinks(
+                    source.data());
+            if (!page || !guardedWizard
+                || !sourceIsCurrent()) {
+                return false;
+            }
+            if (!recheck.canProceed
+                || recheck.requiresUserDecision) {
+                QMessageBox::warning(
+                    page.data(), tr("Split Activity"),
+                    recheck.blockingReason.isEmpty()
+                        ? tr("The source activity changed while preparing the split.")
+                        : recheck.blockingReason);
+                return false;
+            }
+            return true;
+        },
+        [&] {
+            if (!page || !guardedWizard
+                || !sourceIsCurrent()) {
+                return;
+            }
+            guardedWizard->rideItem = source.data();
+            guardedWizard->usedMinimumGap = -1;
+            guardedWizard->usedMinimumSegmentSize = -1;
+            guardedWizard->smallPlot->setData(
+                source.data());
+        });
+}
+
 void
 SplitKeep::setWarning()
 {
     if (!keepOriginal->isChecked()) {
+        RideItem *const source =
+            wizard->rideItem.data();
+        if (!source) {
+            warning->setText(
+                tr("The source activity is no longer available."));
+            return;
+        }
 
-        if (wizard->hasBackup(wizard->rideItem->fileName) != "") {
+        if (wizard->hasBackup(source->fileName) != "") {
 
             warning->setText(tr("WARNING: The current activity will be backed up and "
                              "removed, but a backup already exists. The existing "
@@ -604,6 +875,11 @@ SplitSelect::SplitSelect(SplitActivityWizard *parent) : QWizardPage(parent), wiz
 void
 SplitSelect::initializePage()
 {
+    if (!wizard->rideItem) {
+        wizard->intervals->clear();
+        refreshMarkers();
+        return;
+    }
     wizard->setIntervalsList(this);
     refreshMarkers();
 }
@@ -620,6 +896,18 @@ SplitSelect::refreshMarkers()
     wizard->markers.clear();
     wizard->marks.clear(); // dataPoint indexes
 
+    RideItem *const sourceItem =
+        wizard->rideItem.data();
+    RideFile *const sourceRide = sourceItem
+        ? sourceItem->ride()
+        : nullptr;
+    if (!sourceRide) {
+        wizard->smallPlot->replot();
+        return;
+    }
+    const auto &dataPoints =
+        sourceRide->dataPoints();
+
     // now refresh them
     for(int i=0; i<wizard->intervals->invisibleRootItem()->childCount(); i++) {
 
@@ -629,7 +917,9 @@ SplitSelect::refreshMarkers()
         if (static_cast<QCheckBox*>(wizard->intervals->itemWidget(current,0))->isChecked()) {
 
             long index = current->text(7).toInt();
-            double point = wizard->rideItem->ride()->dataPoints().at(index)->secs;
+            if (index < 0 || index >= dataPoints.size())
+                continue;
+            double point = dataPoints.at(index)->secs;
 
             wizard->marks.append(index);
             QwtPlotMarker *add = new QwtPlotMarker;
@@ -647,7 +937,9 @@ SplitSelect::refreshMarkers()
         if (static_cast<QCheckBox*>(wizard->intervals->itemWidget(current,2))->isChecked()) {
 
             long index = current->text(8).toInt();
-            double point = wizard->rideItem->ride()->dataPoints().at(index)->secs;
+            if (index < 0 || index >= dataPoints.size())
+                continue;
+            double point = dataPoints.at(index)->secs;
 
             wizard->marks.append(index);
             QwtPlotMarker *add = new QwtPlotMarker;
@@ -688,6 +980,19 @@ SplitConfirm::initializePage()
         delete ride;
     }
     wizard->activities.clear();
+    wizard->sourceContentSnapshot = {};
+
+    RideItem *const sourceItem =
+        wizard->rideItem.data();
+    RideFile *const sourceRide = sourceItem
+        ? sourceItem->ride()
+        : nullptr;
+    if (!sourceRide) {
+        wizard->setFilesList();
+        return;
+    }
+    const auto &dataPoints =
+        sourceRide->dataPoints();
 
     // create a sorted list of markers, since we
     // may have duplicates and the sequence is
@@ -703,17 +1008,24 @@ SplitConfirm::initializePage()
         if (mark == lastmark) continue;
 
         if (lastmark != -1) {
+            if (lastmark < 0
+                || lastmark >= dataPoints.size()
+                || mark < 0
+                || mark >= dataPoints.size()) {
+                lastmark = mark;
+                continue;
+            }
 
             // ignore gaps!
-            if (!wizard->bg->isGap(wizard->rideItem->ride()->dataPoints().at(lastmark)->secs/60.0,
-                                   wizard->rideItem->ride()->dataPoints().at(mark)->secs/60.0)) {
+            if (!wizard->bg->isGap(dataPoints.at(lastmark)->secs/60.0,
+                                   dataPoints.at(mark)->secs/60.0)) {
 
                 const SplitSegmentEnd segmentEnd =
                     mark == points.constLast()
                         ? SplitSegmentEnd::Include
                         : SplitSegmentEnd::Exclude;
                 RideFile *add = extractSplitRideSegment(
-                    *wizard->rideItem->ride(), lastmark, mark, segmentEnd);
+                    *sourceRide, lastmark, mark, segmentEnd);
                 wizard->activities.append(add);
             }
         }
@@ -743,127 +1055,316 @@ SplitConfirm::initializePage()
     }
 
     wizard->setFilesList();
+    wizard->sourceContentSnapshot =
+        wizard->currentSourceContentSnapshot();
 }
 
 
 bool
 SplitConfirm::validatePage()
 {
-    if (wizard->activities.isEmpty()) {
+    QPointer<SplitConfirm> page(this);
+    QPointer<SplitActivityWizard> guardedWizard(
+        wizard);
+    if (!guardedWizard) return false;
+
+    const QPointer<Context> guardedContext(
+        guardedWizard->context);
+    const QPointer<Athlete> guardedAthlete(
+        guardedWizard->athlete);
+    const QPointer<RideCache> guardedCache(
+        guardedWizard->rideCache);
+    const QPointer<AthleteDirectoryStructure> guardedHome(
+        guardedWizard->home);
+    QPointer<RideItem> source(
+        guardedWizard->rideItem.data());
+    const SplitActivitySourceIdentity expectedSource =
+        guardedWizard->sourceIdentity;
+    const SplitActivityContentSnapshot expectedContent =
+        guardedWizard->sourceContentSnapshot;
+    const bool keepOriginal =
+        guardedWizard->keepOriginal;
+
+    const auto ownersAreCurrent = [&] {
+        return splitWorkflowOwnersAreCurrent(
+            guardedContext, guardedAthlete,
+            guardedCache, guardedHome);
+    };
+    const auto sourceIsCurrent = [&] {
+        return guardedWizard
+            && splitWorkflowSourceSnapshotIsCurrent(
+            guardedContext, guardedAthlete,
+            guardedCache, guardedHome,
+            source, expectedSource, expectedContent,
+            guardedWizard->currentSourceContentSnapshot());
+    };
+    const auto setSourceStatus =
+        [guardedWizard](const QString &status) {
+            if (!guardedWizard
+                || !guardedWizard->files) {
+                return;
+            }
+            QTreeWidgetItem *const row =
+                guardedWizard->files
+                    ->invisibleRootItem()->child(0);
+            if (row) row->setText(5, status);
+        };
+    const auto finishWithRecovery =
+        [&](const QString &message) {
+            if (guardedWizard) {
+                if (!keepOriginal) {
+                    setSourceStatus(
+                        tr("Recovery required"));
+                }
+                guardedWizard->done = true;
+            }
+            if (page) {
+                page->setTitle(
+                    tr("Recovery Required"));
+                page->setSubTitle(
+                    tr("Split files saved; activity cleanup requires attention"));
+                QMessageBox::critical(
+                    page.data(), tr("Split Activity"),
+                    message);
+            }
+            return true;
+        };
+
+    if (guardedWizard->activities.isEmpty()) {
         QMessageBox::warning(
-            this, tr("Split Activity"),
+            page.data(), tr("Split Activity"),
             tr("Select at least two split markers before continuing."));
         return false;
     }
-    if (wizard->sourceFileName.isEmpty()) {
+    if (expectedSource.fileName.isEmpty()
+        || expectedSource.path.isEmpty()) {
         QMessageBox::critical(
-            this, tr("Split Activity"),
+            page.data(), tr("Split Activity"),
             tr("The source activity is no longer available."));
+        return false;
+    }
+    if (!sourceIsCurrent()) {
+        QMessageBox::critical(
+            page.data(), tr("Split Activity"),
+            tr("The source activity changed before the split was confirmed."));
         return false;
     }
 
     if (QMessageBox::question(
-            this, tr("Confirm"),
+            page.data(), tr("Confirm"),
             tr("%1 file(s) will be created.\n\n"
                "Are you sure you wish to proceed?")
-                .arg(wizard->activities.count()),
+                .arg(guardedWizard->activities.count()),
             QMessageBox::Ok | QMessageBox::Cancel,
             QMessageBox::Cancel) != QMessageBox::Ok) {
         return false;
     }
 
+    if (!page || !guardedWizard) return false;
+    if (!sourceIsCurrent()) {
+        QMessageBox::critical(
+            page.data(), tr("Split Activity"),
+            tr("The source activity changed while confirming the split."));
+        return false;
+    }
+
+    if (!keepOriginal) {
+        const RideCache::OperationPreCheck check =
+            guardedCache->checkRemovalLinks(
+                source.data());
+        if (!page || !guardedWizard
+            || !sourceIsCurrent()) {
+            return false;
+        }
+        if (!check.canProceed
+            || check.requiresUserDecision) {
+            QMessageBox::warning(
+                page.data(), tr("Split Activity"),
+                check.blockingReason.isEmpty()
+                    ? tr("The source activity changed while preparing the split.")
+                    : check.blockingReason);
+            return false;
+        }
+    }
+
     const QDir activitiesDirectory =
-        wizard->context->athlete->home->activities();
-    const QString sourcePath = activitiesDirectory.filePath(
-        wizard->sourceFileName);
+        guardedHome->activities();
+    const QString sourcePath =
+        QDir(expectedSource.path).filePath(
+            expectedSource.fileName);
     const QString backupPath =
-        wizard->context->athlete->home->fileBackup().filePath(
-            wizard->sourceFileName + QStringLiteral(".bak"));
+        guardedHome->fileBackup().filePath(
+            expectedSource.fileName
+                + QStringLiteral(".bak"));
 
     QList<SplitActivityOutput> outputs;
-    const int offset = wizard->keepOriginal ? 0 : 1;
+    const int offset = keepOriginal ? 0 : 1;
     for (int index = 0;
-         index < wizard->activities.count(); ++index) {
+         index < guardedWizard->activities.count(); ++index) {
         QTreeWidgetItem *row =
-            wizard->files->invisibleRootItem()->child(index + offset);
+            guardedWizard->files
+                ->invisibleRootItem()->child(index + offset);
         if (!row) {
             QMessageBox::critical(
-                this, tr("Split Activity"),
+                page.data(), tr("Split Activity"),
                 tr("The split activity file list is incomplete."));
             return false;
         }
 
-        RideFile *ride = wizard->activities.at(index);
+        RideFile *ride =
+            guardedWizard->activities.at(index);
         SplitActivityOutput output;
         output.fileName = row->text(0);
         output.stage =
-            [context = wizard->context, ride](
+            [guardedWizard, guardedContext,
+             guardedAthlete, guardedCache,
+             guardedHome, source, expectedSource,
+             expectedContent, ride](
                 const QString &stagingPath, QString &stageError) {
+                if (!guardedWizard
+                    || !splitWorkflowSourceSnapshotIsCurrent(
+                        guardedContext, guardedAthlete,
+                        guardedCache, guardedHome,
+                        source, expectedSource, expectedContent,
+                        guardedWizard->currentSourceContentSnapshot())) {
+                    stageError = QObject::tr(
+                        "The source activity changed before the split could be saved");
+                    return false;
+                }
                 JsonFileReader reader;
                 QFile stagingFile(stagingPath);
-                return reader.writeRideFile(
-                    context, ride, stagingFile,
+                const bool written = reader.writeRideFile(
+                    guardedContext.data(), ride, stagingFile,
                     stageError, false);
+                if (!guardedWizard
+                    || !splitWorkflowSourceSnapshotIsCurrent(
+                        guardedContext, guardedAthlete,
+                        guardedCache, guardedHome,
+                        source, expectedSource, expectedContent,
+                        guardedWizard->currentSourceContentSnapshot())) {
+                    if (stageError.isEmpty()) {
+                        stageError = QObject::tr(
+                            "The activity collection changed while saving the split");
+                    }
+                    return false;
+                }
+                return written;
             };
         outputs.append(output);
     }
+
+    if (!sourceIsCurrent()) return false;
 
     QStringList publishedFileNames;
     QString error;
     if (!saveSplitActivityFiles(
             activitiesDirectory, sourcePath, backupPath,
-            outputs, wizard->keepOriginal,
+            outputs, keepOriginal,
             publishedFileNames, error)) {
-        QMessageBox::critical(
-            this, tr("Split Activity"),
-            tr("The activity could not be split.\n\n%1")
-                .arg(error));
+        if (page) {
+            QMessageBox::critical(
+                page.data(), tr("Split Activity"),
+                tr("The activity could not be split.\n\n%1")
+                    .arg(error));
+        }
         return false;
+    }
+
+    if (!page || !guardedWizard) return true;
+    if (!sourceIsCurrent()) {
+        return finishWithRecovery(
+            tr("The split files were saved, but the original activity or its activity collection changed before cleanup. Do not retry the split."));
     }
 
     if (!error.isEmpty()) {
         QMessageBox::warning(
-            this, tr("Split Activity"),
+            page.data(), tr("Split Activity"),
             tr("The files were saved with a recovery warning.\n\n%1")
                 .arg(error));
+        if (!page || !guardedWizard) return true;
+        if (!sourceIsCurrent()) {
+            return finishWithRecovery(
+                tr("The split files were saved, but the original activity or its activity collection changed while recovery information was shown. Do not retry the split."));
+        }
     }
 
-    if (!wizard->keepOriginal) {
-        QTreeWidgetItem *sourceRow =
-            wizard->files->invisibleRootItem()->child(0);
-        RideItem *sourceItem =
-            wizard->context->athlete->rideCache
-                ->getRide(
-                    wizard->sourceFileName,
-                    false);
-        if (sourceItem
-            && wizard->context->athlete->rideCache
-                ->removeArchivedRide(sourceItem)) {
-            if (sourceRow) sourceRow->setText(5, tr("Removed"));
-        } else {
-            if (sourceRow) {
-                sourceRow->setText(5, tr("Restart required"));
-            }
+    bool removalNeedsAttention = false;
+    if (!keepOriginal) {
+        if (!sourceIsCurrent()) {
+            return finishWithRecovery(
+                tr("The split files were saved, but the original activity changed before the activity list could be updated. Do not retry the split."));
+        }
+
+        const RideCache::RemovalResult removal =
+            guardedCache->removeArchivedRideResult(
+                source.data());
+        if (!page || !guardedWizard) return true;
+        if (!ownersAreCurrent()) {
+            return finishWithRecovery(
+                tr("The split files were saved, but the activity collection changed during cleanup. Do not retry the split."));
+        }
+
+        if (removal.cleanlyCompleted()) {
+            setSourceStatus(tr("Removed"));
+        } else if (removal.allLogicallyRemoved()) {
+            setSourceStatus(
+                tr("Removed with warning"));
             QMessageBox::warning(
-                this, tr("Split Activity"),
-                tr("The files were saved, but the activity list "
-                   "could not be updated. Restart GoldenCheetah "
-                   "to reload the activities."));
+                page.data(), tr("Split Activity"),
+                tr("The files were saved and the original activity "
+                   "was removed, but cleanup requires attention.\n\n%1")
+                    .arg(removal.error));
+        } else {
+            removalNeedsAttention = true;
+            setSourceStatus(
+                tr("Recovery required"));
+            QMessageBox::critical(
+                page.data(), tr("Split Activity"),
+                tr("The split files were saved and the original was archived, "
+                   "but activity cleanup did not finish. Do not retry the split. "
+                   "The activity list or linked metadata may require manual "
+                   "recovery.\n\n%1")
+                    .arg(removal.error));
+        }
+
+        if (!page || !guardedWizard) return true;
+        if (!ownersAreCurrent()) {
+            return finishWithRecovery(
+                tr("The split files were saved, but the activity collection changed while cleanup information was shown. Do not retry the split."));
         }
     }
 
     for (int index = 0;
          index < publishedFileNames.count(); ++index) {
-        QTreeWidgetItem *row =
-            wizard->files->invisibleRootItem()->child(index + offset);
-        if (row) row->setText(5, tr("Saved"));
-        wizard->context->athlete->addRide(
+        if (!ownersAreCurrent()
+            || (keepOriginal
+                && !sourceIsCurrent())) {
+            return finishWithRecovery(
+                tr("The split files were saved, but the activity collection changed before all new activities could be loaded. Do not retry the split."));
+        }
+        guardedAthlete->addRide(
             publishedFileNames.at(index), true);
+        if (!page || !guardedWizard) return true;
+        if (!ownersAreCurrent()
+            || (keepOriginal
+                && !sourceIsCurrent())) {
+            return finishWithRecovery(
+                tr("The split files were saved, but the activity collection changed while loading the new activities. Do not retry the split."));
+        }
+        QTreeWidgetItem *row =
+            guardedWizard->files
+                ->invisibleRootItem()->child(index + offset);
+        if (row) row->setText(5, tr("Saved"));
     }
 
-    setTitle(tr("Completed"));
-    setSubTitle(tr("Split Activity Completed"));
-    wizard->done = true;
+    if (!page || !guardedWizard) return true;
+    page->setTitle(removalNeedsAttention
+        ? tr("Recovery Required")
+        : tr("Completed"));
+    page->setSubTitle(removalNeedsAttention
+        ? tr("Split files saved; activity cleanup requires attention")
+        : tr("Split Activity Completed"));
+    guardedWizard->done = true;
     return true;
 }
 

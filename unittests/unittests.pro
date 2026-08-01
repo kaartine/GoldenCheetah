@@ -36,6 +36,7 @@ equals(GC_UNITTESTS, active) {
 			   Train/trainDbVersionSafety \
 			   Core/measuresAtomicSave \
 			   Core/rideCacheAtomicSave \
+			   Core/rideCacheCallbackGuard \
 			   Core/rideCacheSaveSnapshot \
 			   Core/rideCachePerformance \
 			   Core/rideCacheRemoval \
@@ -65,6 +66,8 @@ equals(GC_UNITTESTS, active) {
 			   FileIO/xmlImportIntegrity \
 			   FileIO/ttsReaderBounds \
 			   FileIO/wkoBounds \
+			   Gui/activityDeletionWorkflow \
+			   Gui/activitySaveWorkflow \
 			   Gui/cacheWriteWarning \
 			   Gui/calendarData \
 			   Gui/mergeActivityDistanceCursor \
@@ -72,6 +75,7 @@ equals(GC_UNITTESTS, active) {
 			   Gui/mergeActivityTimeOffset \
 			   Gui/mergeActivityXData \
 			   Gui/rideImportBatch \
+			   Gui/repeatPlanWorkflow \
 			   Gui/mergeActivityAlignment \
 			   Gui/iconBundleSecurity \
 			   Gui/splitActivitySave \
@@ -80,6 +84,7 @@ equals(GC_UNITTESTS, active) {
 			   Gui/rideNavigatorSearchFilter \
 			   Gui/trainPerspectiveState \
 			   Metrics/rideMetadataAtomicSave \
+			   Planning/planBundleReaderLifetime \
 			   Python/pythonDataSeriesOwnership \
 			   Python/pythonChartLifecycle \
 			   Train/antBurstBounds \

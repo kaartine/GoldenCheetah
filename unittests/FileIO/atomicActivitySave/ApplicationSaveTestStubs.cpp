@@ -4,6 +4,7 @@
 #include "RideItem.h"
 #include "Settings.h"
 
+#include <functional>
 #include <QHash>
 #include <stdexcept>
 #include <utility>
@@ -13,6 +14,21 @@ namespace {
 QHash<QString, QVariant> settingsValues;
 int autoProcessCalls = 0;
 bool throwFromAutoProcess = false;
+QHash<RideItem *, std::function<void()>> setDirtyActions;
+QHash<RideItem *, std::function<void()>> setRideActions;
+QHash<RideItem *, std::function<void()>> closeActions;
+
+void runSetterAction(
+    QHash<RideItem *, std::function<void()>> &actions,
+    RideItem *rideItem)
+{
+    const auto found = actions.find(rideItem);
+    if (found == actions.end()) return;
+
+    const std::function<void()> action = found.value();
+    actions.erase(found);
+    if (action) action();
+}
 
 } // namespace
 
@@ -56,6 +72,8 @@ RideItem::RideItem(RideFile *ride, Context *rideContext)
         connect(ride_, &RideFile::modified, this, &RideItem::modified);
         connect(ride_, &RideFile::saved, this, &RideItem::saved);
         connect(ride_, &RideFile::reverted, this, &RideItem::reverted);
+        connect(ride_, &QObject::destroyed,
+                this, &RideItem::rideFileDestroyed);
     }
 }
 
@@ -71,6 +89,15 @@ RideFile *RideItem::ride(bool)
     return ride_;
 }
 
+void RideItem::close()
+{
+    if (ride_) {
+        disconnect(ride_, nullptr, this, nullptr);
+        ride_ = nullptr;
+    }
+    runSetterAction(closeActions, this);
+}
+
 void RideItem::setRide(RideFile *ride)
 {
     if (ride_) {
@@ -81,13 +108,22 @@ void RideItem::setRide(RideFile *ride)
         connect(ride_, &RideFile::modified, this, &RideItem::modified);
         connect(ride_, &RideFile::saved, this, &RideItem::saved);
         connect(ride_, &RideFile::reverted, this, &RideItem::reverted);
+        connect(ride_, &QObject::destroyed,
+                this, &RideItem::rideFileDestroyed);
     }
     setDirty(true);
+    runSetterAction(setRideActions, this);
 }
 
 void RideItem::setDirty(bool dirty)
 {
     isdirty = dirty;
+    runSetterAction(setDirtyActions, this);
+}
+
+void RideItem::rideFileDestroyed(QObject *rideFile)
+{
+    if (ride_ == rideFile) ride_ = nullptr;
 }
 
 void RideItem::setFileName(QString ridePath, QString rideFileName)
@@ -178,6 +214,27 @@ void resetAtomicActivitySaveProcessorStub()
 {
     autoProcessCalls = 0;
     throwFromAutoProcess = false;
+    setDirtyActions.clear();
+    setRideActions.clear();
+    closeActions.clear();
+}
+
+void setAtomicActivitySaveSetDirtyAction(
+    RideItem *rideItem, std::function<void()> action)
+{
+    setDirtyActions.insert(rideItem, std::move(action));
+}
+
+void setAtomicActivitySaveSetRideAction(
+    RideItem *rideItem, std::function<void()> action)
+{
+    setRideActions.insert(rideItem, std::move(action));
+}
+
+void setAtomicActivitySaveCloseAction(
+    RideItem *rideItem, std::function<void()> action)
+{
+    closeActions.insert(rideItem, std::move(action));
 }
 
 void setAtomicActivitySaveProcessorFailure(bool enabled)

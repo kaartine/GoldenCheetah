@@ -18,8 +18,13 @@
 
 #include "PlanBundle.h"
 
+#include <QPointer>
+
+#include <utility>
+
 #include "Athlete.h"
 #include "AthleteTab.h"
+#include "RideCache.h"
 #include "TrainDB.h"
 #include "ErgFile.h"
 
@@ -264,6 +269,13 @@ PlanBundleReader::loadBundle
     reset();
     lastValidationResult.reset();
 
+    if (!context) {
+        lastValidationResult.addError(
+            QObject::tr(
+                "The athlete was closed before the plan could be loaded"));
+        return lastValidationResult;
+    }
+
     QFileInfo fileInfo(bundlePath);
     if (! fileInfo.isFile()) {
         lastValidationResult.addError(QObject::tr("Path is not a file"));
@@ -326,10 +338,6 @@ PlanBundleReader::loadBundle
         return lastValidationResult;
     }
 
-    for (RideFileSelection &rideFileSelection : rideFiles) {
-        rideFileSelection.targetDateTime = rideFileSelection.targetDateTime.addDays(daysToAdd);
-    }
-
     return lastValidationResult;
 }
 
@@ -364,31 +372,102 @@ PlanBundleReader::importBundle
         return lastImportResult;
     }
 
+    QPointer<Context> guardedContext(context);
+    QPointer<Athlete> guardedAthlete(
+        guardedContext ? guardedContext->athlete : nullptr);
+    QPointer<RideCache> guardedCache(
+        guardedAthlete ? guardedAthlete->rideCache : nullptr);
+    const auto ownersValid = [&]() {
+        return guardedContext && guardedAthlete
+            && guardedCache
+            && context == guardedContext.data()
+            && guardedContext->athlete
+                == guardedAthlete.data()
+            && guardedAthlete->rideCache
+                == guardedCache.data();
+    };
+    const auto requireOwners = [&]() {
+        if (ownersValid())
+            return true;
+        lastImportResult.addError(
+            QObject::tr(
+                "The athlete was closed during plan import"));
+        return false;
+    };
+    if (!requireOwners())
+        return lastImportResult;
+
     findConflicts();
+    if (!requireOwners())
+        return lastImportResult;
     if (existingLinked.count() > 0) {
         for (const RideFileSelection &entry : rideFiles) {
-            if (entry.selected && existingLinked.contains(entry.getRideFile()->startTime())) {
-                lastImportResult.addError(QObject::tr("Bundle can't be imported: Conflicts with linked planned activity on %1").arg(entry.getRideFile()->startTime().toString()));
+            const PlanImportScheduleActivity activity {
+                entry.getRideFile()->startTime(), entry.selected};
+            if (planImportHasLinkedConflict(
+                    activity, entry.targetDateTime,
+                    existingLinked)) {
+                lastImportResult.addError(QObject::tr("Bundle can't be imported: Conflicts with linked planned activity on %1").arg(entry.targetDateTime.toString()));
                 return lastImportResult;
             }
         }
     }
-    context->athlete->rideCache->removeRides(
-        getRideItemsToRemove(), false);
+    const QList<RideItem*> ridesToRemove =
+        getRideItemsToRemove();
+    if (!requireOwners())
+        return lastImportResult;
+    if (!ridesToRemove.isEmpty()) {
+        const RideCache::RemovalResult removal =
+            guardedCache->removeRidesResult(
+                ridesToRemove, false);
+        if (!requireOwners())
+            return lastImportResult;
+        if (!removal.allLogicallyRemoved()) {
+            lastImportResult.addError(
+                removal.error.isEmpty()
+                ? QObject::tr(
+                    "Failed to remove conflicting activities")
+                : removal.error);
+            if (removal.affectedCount > 0)
+                guardedCache->refresh();
+            return lastImportResult;
+        }
+        if (!removal.cleanlyCompleted()) {
+            lastImportResult.addWarning(
+                removal.error);
+        }
+    }
     for (const RideFileSelection &entry : rideFiles) {
         if (entry.selected) {
-            if (! processWorkout(entry.getRideFile())) {
+            if (!requireOwners())
+                return lastImportResult;
+            const bool workoutProcessed =
+                processWorkout(entry.getRideFile());
+            if (!requireOwners())
+                return lastImportResult;
+            if (!workoutProcessed) {
                 lastImportResult.addWarning(QObject::tr("Failed to process the attached workout"));
             }
-            if (cleanAndCopyActivity(entry.getRideFile())) {
-                context->athlete->rideCache->addRide(entry.getRideFile()->getTag("Filename", ""), true, false, false, true);
-            } else {
+            const bool activityCopied = cleanAndCopyActivity(
+                entry.getRideFile(), entry.targetDateTime);
+            if (!requireOwners())
+                return lastImportResult;
+            if (!activityCopied) {
                 lastImportResult.addError(QObject::tr("Failed to import activity"));
                 return lastImportResult;
             }
+            guardedCache->addRide(
+                entry.getRideFile()->getTag("Filename", ""),
+                true, false, false, true);
+            if (!requireOwners())
+                return lastImportResult;
         }
     }
-    context->athlete->rideCache->refresh();
+    if (!requireOwners())
+        return lastImportResult;
+    guardedCache->refresh();
+    if (!requireOwners())
+        return lastImportResult;
 
     return lastImportResult;
 }
@@ -449,6 +528,10 @@ PlanBundleReader::getRideItemsToRemove
 () const
 {
     QList<RideItem*> rideItems;
+    if (!context || !context->athlete
+        || !context->athlete->rideCache) {
+        return rideItems;
+    }
     for (RideItem *rideItem : context->athlete->rideCache->rides()) {
         if (   rideItem == nullptr
             || ! rideItem->planned
@@ -478,6 +561,20 @@ PlanBundleReader::setIncludeGapDays
 {
     this->includeGapDays = includeGapDays;
     calculateRange();
+}
+
+
+bool
+PlanBundleReader::setActivitySelected
+(int index, bool selected)
+{
+    if (index < 0 || index >= rideFiles.size())
+        return false;
+    if (rideFiles[index].selected == selected)
+        return true;
+    rideFiles[index].selected = selected;
+    calculateRange();
+    return true;
 }
 
 
@@ -533,42 +630,29 @@ void
 PlanBundleReader::calculateRange
 ()
 {
-    if (rideFiles.count() == 0) {
-        return;
+    QList<PlanImportScheduleActivity> activities;
+    activities.reserve(rideFiles.size());
+    for (const RideFileSelection &selection :
+         std::as_const(rideFiles)) {
+        activities.append({
+            selection.getRideFile()->startTime(),
+            selection.selected});
     }
-
-    QDate firstActivityDate = rideFiles.first().getRideFile()->startTime().date();
-    QDate lastActivityDate = rideFiles.last().getRideFile()->startTime().date();
-
-    if (includeGapDays) {
-        int activitySpan = firstActivityDate.daysTo(lastActivityDate) + 1;
-        duration = activitySpan + metadata.frontGapDays + metadata.backGapDays;
-        daysToAdd = firstActivityDate.daysTo(targetRangeStart) + metadata.frontGapDays;
-    } else {
-        QDate firstSelected;
-        QDate lastSelected;
-        for (const RideFileSelection &ride : rideFiles) {
-            if (! ride.selected) {
-                continue;
-            }
-            QDate rideDate = ride.getRideFile()->startTime().date();
-            if (! firstSelected.isValid() || rideDate < firstSelected) {
-                firstSelected = rideDate;
-            }
-            if (! lastSelected.isValid() || rideDate > lastSelected) {
-                lastSelected = rideDate;
-            }
-        }
-        if (! firstSelected.isValid()) {
-            duration = 0;
-            targetRangeEnd = targetRangeStart;
-            findConflicts();
-            return;
-        }
-        duration = firstSelected.daysTo(lastSelected) + 1;
-        daysToAdd = firstSelected.daysTo(targetRangeStart);
+    const PlanImportSchedule schedule =
+        calculatePlanImportSchedule(
+            activities, targetRangeStart,
+            includeGapDays, metadata.frontGapDays,
+            metadata.backGapDays);
+    duration = schedule.durationDays;
+    daysToAdd = schedule.daysToAdd;
+    targetRangeEnd = schedule.targetRangeEnd;
+    for (int index = 0;
+         index < rideFiles.size()
+         && index < schedule.targetDateTimes.size();
+         ++index) {
+        rideFiles[index].targetDateTime =
+            schedule.targetDateTimes[index];
     }
-    targetRangeEnd = targetRangeStart.addDays(duration - 1);
 
     findConflicts();
 }
@@ -581,6 +665,11 @@ PlanBundleReader::findConflicts
 {
     toDelete.clear();
     existingLinked.clear();
+    if (getNumSelectedActivities() == 0
+        || !context || !context->athlete
+        || !context->athlete->rideCache) {
+        return;
+    }
     for (RideItem *rideItem : context->athlete->rideCache->rides()) {
         if (   rideItem == nullptr
             || ! rideItem->planned
@@ -599,9 +688,10 @@ PlanBundleReader::findConflicts
 
 bool
 PlanBundleReader::cleanAndCopyActivity
-(RideFile *rideFile) const
+(RideFile *rideFile, const QDateTime &targetDateTime) const
 {
-    QString targetFileName = updateTags(rideFile, rideFile->startTime().date().addDays(daysToAdd), metadata.name);
+    QString targetFileName = updateTags(
+        rideFile, targetDateTime.date(), metadata.name);
 
     Zones const * const zones = context->athlete->zones(rideFile->getTag("Sport", ""));
     if (zones != nullptr) {
@@ -811,7 +901,8 @@ PlanBundle::exportBundle
     metadata.copyright = description.copyright;
 
     std::pair<int, int> copied = writeActivities(context, description, plannedDir, workoutDir, metadata);
-    if (copied.first > 0) {
+    if (planExportCopiedAllActivities(
+            description.activityFiles.size(), copied.first)) {
         ZipWriter zipWriter(description.planFile);
         if (zipWriter.status() != ZipWriter::NoError) {
             return false;

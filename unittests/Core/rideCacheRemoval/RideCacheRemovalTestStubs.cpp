@@ -9,15 +9,47 @@
 #include "RideItem.h"
 
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QSet>
 
 #include <cstring>
+#include <functional>
 #include <utility>
 
 namespace {
 
 int rideCacheRefreshCount = 0;
 int estimatorRefreshCount = 0;
+QString removalCleanupFailurePath;
+QString removalMoveFailurePath;
+QString removalMoveFailureTargetPath;
+QString removalPartialMoveFailurePath;
+QString removalPartialMoveFailureTargetPath;
+bool removalPartialMoveRemovesSource = false;
+QString removalMoveMutationPath;
+QByteArray removalMoveMutationContents;
+QString removalMoveActionPath;
+std::function<void()> removalMoveAction;
+QString removalSyncFailurePath;
+int removalSyncFailureCount = 0;
+QString removalSaveFailureFileName;
+QSet<int> removalSaveFailureCalls;
+int removalSaveCallCount = 0;
+QString removalSaveActionFileName;
+int removalSaveActionCall = 0;
+int removalSaveActionCallCount = 0;
+std::function<void()> removalSaveAction;
+QString removalSaveRenameFileName;
+QString removalSaveRenameTargetDirectory;
+QString removalSaveRenameTargetFileName;
+RideFile *removalLastProcessedRide = nullptr;
+bool removalProcessorFailure = false;
+std::function<void()> removalProcessorAction;
+std::function<void()> removalLinkMutationAction;
+int removalLinkMutationCall = 0;
+int removalLinkMutationTriggerCall = 0;
+int removalCancelCount = 0;
 
 } // namespace
 
@@ -25,6 +57,35 @@ void resetRideCacheRemovalRefreshCounts()
 {
     rideCacheRefreshCount = 0;
     estimatorRefreshCount = 0;
+    removalCleanupFailurePath.clear();
+    removalMoveFailurePath.clear();
+    removalMoveFailureTargetPath.clear();
+    removalPartialMoveFailurePath.clear();
+    removalPartialMoveFailureTargetPath.clear();
+    removalPartialMoveRemovesSource = false;
+    removalMoveMutationPath.clear();
+    removalMoveMutationContents.clear();
+    removalMoveActionPath.clear();
+    removalMoveAction = {};
+    removalSyncFailurePath.clear();
+    removalSyncFailureCount = 0;
+    removalSaveFailureFileName.clear();
+    removalSaveFailureCalls.clear();
+    removalSaveCallCount = 0;
+    removalSaveActionFileName.clear();
+    removalSaveActionCall = 0;
+    removalSaveActionCallCount = 0;
+    removalSaveAction = {};
+    removalSaveRenameFileName.clear();
+    removalSaveRenameTargetDirectory.clear();
+    removalSaveRenameTargetFileName.clear();
+    removalLastProcessedRide = nullptr;
+    removalProcessorFailure = false;
+    removalProcessorAction = {};
+    removalLinkMutationAction = {};
+    removalLinkMutationCall = 0;
+    removalLinkMutationTriggerCall = 0;
+    removalCancelCount = 0;
 }
 
 int rideCacheRemovalRefreshCount()
@@ -35,6 +96,242 @@ int rideCacheRemovalRefreshCount()
 int rideCacheRemovalEstimatorRefreshCount()
 {
     return estimatorRefreshCount;
+}
+
+void setRideCacheRemovalCleanupFailurePath(const QString &path)
+{
+    removalCleanupFailurePath = path;
+}
+
+bool rideCacheRemovalShouldFailCleanup(const QString &path)
+{
+    return !removalCleanupFailurePath.isEmpty()
+        && path == removalCleanupFailurePath;
+}
+
+void setRideCacheRemovalMoveFailurePath(const QString &path)
+{
+    removalMoveFailurePath = path;
+}
+
+bool rideCacheRemovalShouldFailMove(
+    const QString &sourcePath,
+    const QString &targetPath)
+{
+    if ((!removalPartialMoveFailurePath.isEmpty()
+         && sourcePath == removalPartialMoveFailurePath)
+        || (!removalPartialMoveFailureTargetPath.isEmpty()
+            && targetPath
+                == removalPartialMoveFailureTargetPath)) {
+        removalPartialMoveFailurePath.clear();
+        removalPartialMoveFailureTargetPath.clear();
+        QFile::copy(sourcePath, targetPath);
+        if (removalPartialMoveRemovesSource)
+            QFile::remove(sourcePath);
+        removalPartialMoveRemovesSource = false;
+        return true;
+    }
+    if (!removalMoveFailurePath.isEmpty()
+        && sourcePath == removalMoveFailurePath) {
+        return true;
+    }
+    if (!removalMoveFailureTargetPath.isEmpty()
+        && targetPath
+            == removalMoveFailureTargetPath) {
+        removalMoveFailureTargetPath.clear();
+        return true;
+    }
+    return false;
+}
+
+void setRideCacheRemovalMoveFailureTargetPath(
+    const QString &path)
+{
+    removalMoveFailureTargetPath = path;
+}
+
+void setRideCacheRemovalPartialMoveFailurePath(
+    const QString &path,
+    bool removeSource)
+{
+    removalPartialMoveFailurePath = path;
+    removalPartialMoveFailureTargetPath.clear();
+    removalPartialMoveRemovesSource = removeSource;
+}
+
+void setRideCacheRemovalPartialMoveFailureTargetPath(
+    const QString &path,
+    bool removeSource)
+{
+    removalPartialMoveFailurePath.clear();
+    removalPartialMoveFailureTargetPath = path;
+    removalPartialMoveRemovesSource = removeSource;
+}
+
+void setRideCacheRemovalMoveMutation(
+    const QString &path,
+    const QByteArray &contents)
+{
+    removalMoveMutationPath = path;
+    removalMoveMutationContents = contents;
+}
+
+void setRideCacheRemovalMoveAction(
+    const QString &path,
+    const std::function<void()> &action)
+{
+    removalMoveActionPath = path;
+    removalMoveAction = action;
+}
+
+void rideCacheRemovalMutateBeforeMove(
+    const QString &sourcePath,
+    const QString &)
+{
+    if (!removalMoveActionPath.isEmpty()
+        && sourcePath == removalMoveActionPath
+        && removalMoveAction) {
+        removalMoveActionPath.clear();
+        const std::function<void()> action =
+            std::move(removalMoveAction);
+        removalMoveAction = {};
+        action();
+    }
+    if (removalMoveMutationPath.isEmpty()
+        || sourcePath != removalMoveMutationPath) {
+        return;
+    }
+
+    removalMoveMutationPath.clear();
+    QFile file(sourcePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return;
+    file.write(removalMoveMutationContents);
+    file.flush();
+}
+
+void setRideCacheRemovalSyncFailurePath(const QString &path)
+{
+    removalSyncFailurePath = path;
+    removalSyncFailureCount = 1;
+}
+
+void setRideCacheRemovalSyncFailureCount(
+    const QString &path,
+    int count)
+{
+    removalSyncFailurePath = path;
+    removalSyncFailureCount = count;
+}
+
+bool rideCacheRemovalShouldFailSync(const QString &path)
+{
+    if (removalSyncFailurePath.isEmpty()
+        || path != removalSyncFailurePath) {
+        return false;
+    }
+    --removalSyncFailureCount;
+    if (removalSyncFailureCount <= 0) {
+        removalSyncFailurePath.clear();
+        removalSyncFailureCount = 0;
+    }
+    return true;
+}
+
+void setRideCacheRemovalSaveFailureFileName(
+    const QString &fileName)
+{
+    removalSaveFailureFileName = fileName;
+    removalSaveFailureCalls = {1};
+    removalSaveCallCount = 0;
+}
+
+void setRideCacheRemovalSaveFailureOnCall(
+    const QString &fileName,
+    int call)
+{
+    removalSaveFailureFileName = fileName;
+    removalSaveFailureCalls = {call};
+    removalSaveCallCount = 0;
+}
+
+void setRideCacheRemovalSaveFailureCalls(
+    const QString &fileName,
+    const QSet<int> &calls)
+{
+    removalSaveFailureFileName = fileName;
+    removalSaveFailureCalls = calls;
+    removalSaveCallCount = 0;
+}
+
+int rideCacheRemovalSaveCallCount()
+{
+    return removalSaveCallCount;
+}
+
+int rideCacheRemovalCancelCount()
+{
+    return removalCancelCount;
+}
+
+void setRideCacheRemovalSaveActionOnCall(
+    const QString &fileName,
+    int call,
+    const std::function<void()> &action)
+{
+    removalSaveActionFileName = fileName;
+    removalSaveActionCall = call;
+    removalSaveActionCallCount = 0;
+    removalSaveAction = action;
+}
+
+void setRideCacheRemovalSuccessfulSaveRename(
+    const QString &fileName,
+    const QString &targetDirectory,
+    const QString &targetFileName)
+{
+    removalSaveRenameFileName = fileName;
+    removalSaveRenameTargetDirectory = targetDirectory;
+    removalSaveRenameTargetFileName = targetFileName;
+}
+
+RideFile *rideCacheRemovalLastProcessedRide()
+{
+    return removalLastProcessedRide;
+}
+
+void setRideCacheRemovalProcessorFailure(bool fail)
+{
+    removalProcessorFailure = fail;
+}
+
+void setRideCacheRemovalProcessorAction(
+    const std::function<void()> &action)
+{
+    removalProcessorAction = action;
+}
+
+void setRideCacheRemovalLinkMutationActionOnCall(
+    int call,
+    const std::function<void()> &action)
+{
+    removalLinkMutationAction = action;
+    removalLinkMutationCall = 0;
+    removalLinkMutationTriggerCall = call;
+}
+
+void runRideCacheRemovalLinkMutationAction()
+{
+    if (!removalLinkMutationAction) return;
+    ++removalLinkMutationCall;
+    if (removalLinkMutationCall
+        != removalLinkMutationTriggerCall) {
+        return;
+    }
+    const std::function<void()> action =
+        std::move(removalLinkMutationAction);
+    removalLinkMutationTriggerCall = 0;
+    action();
 }
 
 GlobalContext::GlobalContext()
@@ -273,7 +570,19 @@ RideItem::~RideItem() = default;
 
 RideFile *RideItem::ride(bool)
 {
+    if (ride_
+        && !path.isEmpty()
+        && !QFileInfo(
+                QDir(path).filePath(fileName))
+                .isFile()) {
+        return nullptr;
+    }
     return ride_;
+}
+
+void RideItem::close()
+{
+    ride_ = nullptr;
 }
 
 QString RideItem::getLinkedFileName() const
@@ -284,11 +593,13 @@ QString RideItem::getLinkedFileName() const
 void RideItem::setLinkedFileName(const QString &fileName)
 {
     metadata_.insert(QStringLiteral("Linked Filename"), fileName);
+    runRideCacheRemovalLinkMutationAction();
 }
 
 void RideItem::clearLinkedFileName()
 {
     metadata_.remove(QStringLiteral("Linked Filename"));
+    runRideCacheRemovalLinkMutationAction();
 }
 
 bool RideItem::hasLinkedActivity() const
@@ -299,6 +610,10 @@ bool RideItem::hasLinkedActivity() const
 void RideItem::modified() {}
 void RideItem::reverted() {}
 void RideItem::saved() {}
+void RideItem::rideFileDestroyed(QObject *rideFile)
+{
+    if (ride_ == rideFile) ride_ = nullptr;
+}
 void RideItem::notifyRideDataChanged() {}
 void RideItem::notifyRideMetadataChanged() {}
 
@@ -423,19 +738,79 @@ void RideCache::cleanupThread(RideCacheRefreshThread *) {}
 int RideCache::find(RideItem *) { return -1; }
 void RideCache::configChanged(qint32) {}
 void RideCache::progressing(int) {}
-void RideCache::cancel() {}
+void RideCache::cancel() { ++removalCancelCount; }
 void RideCache::itemChanged() {}
 void RideCache::garbageCollect() {}
 void RideCache::initEstimates() {}
 void RideCache::refresh() { ++rideCacheRefreshCount; }
 
-RideItem *RideCache::getLinkedActivity(RideItem *)
+RideItem *RideCache::getLinkedActivity(RideItem *item)
 {
+    if (!item) return nullptr;
+    const QString linkedFileName =
+        item->getLinkedFileName();
+    for (RideItem *candidate : rides_) {
+        if (candidate
+            && candidate != item
+            && candidate->planned
+                != item->planned
+            && candidate->fileName
+                == linkedFileName) {
+            return candidate;
+        }
+    }
     return nullptr;
 }
 
-bool RideCache::saveActivity(RideItem *, QString &)
+bool RideCache::saveActivity(RideItem *item, QString &error)
 {
+    if (item
+        && item->fileName
+            == removalSaveFailureFileName) {
+        ++removalSaveCallCount;
+        if (removalSaveFailureCalls.contains(
+                removalSaveCallCount)) {
+            error = QStringLiteral(
+                "injected linked activity save failure");
+            return false;
+        }
+    }
+    if (item
+        && item->fileName
+            == removalSaveRenameFileName) {
+        const QString targetDirectory =
+            removalSaveRenameTargetDirectory;
+        const QString targetFileName =
+            removalSaveRenameTargetFileName;
+        const QString sourcePath =
+            QDir(item->path).filePath(item->fileName);
+        const QString targetPath =
+            QDir(targetDirectory).filePath(targetFileName);
+        removalSaveRenameFileName.clear();
+        removalSaveRenameTargetDirectory.clear();
+        removalSaveRenameTargetFileName.clear();
+        if (!QDir().mkpath(targetDirectory)
+            || !QFile::rename(sourcePath, targetPath)) {
+            error = QStringLiteral(
+                "injected linked activity save rename failed");
+            return false;
+        }
+        item->path = targetDirectory;
+        item->fileName = targetFileName;
+    }
+    if (item
+        && item->fileName
+            == removalSaveActionFileName) {
+        ++removalSaveActionCallCount;
+        if (removalSaveActionCallCount
+                == removalSaveActionCall
+            && removalSaveAction) {
+            const std::function<void()> action =
+                std::move(removalSaveAction);
+            removalSaveActionCall = 0;
+            action();
+        }
+    }
     return true;
 }
 
@@ -448,7 +823,18 @@ DataProcessorFactory &DataProcessorFactory::instance()
     return *instance_;
 }
 
-bool DataProcessorFactory::autoProcess(RideFile *, QString, QString)
+bool DataProcessorFactory::autoProcess(
+    RideFile *ride, QString, QString)
 {
+    if (removalProcessorFailure)
+        throw QStringLiteral(
+            "injected activity processor failure");
+    if (removalProcessorAction) {
+        const std::function<void()> action =
+            std::move(removalProcessorAction);
+        removalProcessorAction = {};
+        action();
+    }
+    removalLastProcessedRide = ride;
     return false;
 }

@@ -19,6 +19,7 @@
 #include "RideCacheAggregate.h"
 #include "RideCacheBackgroundSaver.h"
 #include "RideCacheBulkMerge.h"
+#include "RideCacheCallbackGuard.h"
 #include "RideCacheSaveCapture.h"
 #include "RideCacheSaveSnapshot.h"
 #include "RideCacheSnapshot.h"
@@ -53,6 +54,7 @@
 #include "SpecialFields.h"
 #include <QXmlInputSource>
 #include <QXmlSimpleReader>
+#include <QPointer>
 
 // for sorting
 bool rideCacheLessThan(const RideItem *a, const RideItem *b) { return a->dateTime < b->dateTime; }
@@ -528,7 +530,7 @@ RideCache::itemChanged()
 void
 RideCache::addRide(QString name, bool dosignal, bool select, bool useTempActivities, bool planned)
 {
-    RideItem *prior = context->ride;
+    QPointer<RideItem> prior(context->ride);
 
     // ignore malformed names
     QDateTime dt;
@@ -568,7 +570,12 @@ RideCache::addRide(QString name, bool dosignal, bool select, bool useTempActivit
     // refresh metrics for *this ride only*
     last->refresh();
 
-    if (dosignal) context->notifyRideAdded(last); // here so emitted BEFORE rideSelected is emitted!
+    const RideCacheCallbackGuard callbackGuard(
+        this, context, last, estimator);
+    if (dosignal) {
+        context->notifyRideAdded(last); // emitted before rideSelected
+        if (!callbackGuard.allAlive()) return;
+    }
 
     // free up memory from last one, which is no biggie when importing
     // a single ride, but means we don't exhaust memory when we import
@@ -581,8 +588,10 @@ RideCache::addRide(QString name, bool dosignal, bool select, bool useTempActivit
         context->notifyRideSelected(last);
     } else{
         // notify everyone to select the one we were already on
-        context->notifyRideSelected(prior);
+        context->notifyRideSelected(prior.data());
     }
+
+    if (!callbackGuard.allAlive()) return;
 
     // model estimates (lazy refresh)
     estimator->refresh();
@@ -2090,13 +2099,18 @@ bool
 RideCache::saveActivity
 (RideItem *item, QString &error)
 {
+    const QPointer<RideCache> guardedCache(this);
     return RideCache::saveActivity(
         context, item, error,
         [](Context *saveContext, RideItem *saveItem, QString *saveError) {
             return MainWindow::saveSilent(
                 saveContext, saveItem, saveError);
         },
-        [this](RideItem *savedItem) { emit itemSaved(savedItem); });
+        [guardedCache](RideItem *savedItem) {
+            if (guardedCache)
+                emit guardedCache->itemSaved(savedItem);
+        },
+        guardedCache.data());
 }
 
 
@@ -2104,28 +2118,72 @@ bool
 RideCache::saveActivity
 (Context *context, RideItem *item, QString &error,
  const SaveActivityFunction &save,
- const ActivitySavedFunction &notifySaved)
+ const ActivitySavedFunction &notifySaved,
+ QObject *operationOwner)
 {
     error.clear();
-    if (!item) {
+    const bool contextRequired = context != nullptr;
+    const QPointer<Context> guardedContext(context);
+    const bool ownerRequired = operationOwner != nullptr;
+    const QPointer<QObject> guardedOwner(operationOwner);
+    QPointer<RideItem> guardedItem(item);
+    const auto operationIsAvailable = [&] {
+        return (!contextRequired || guardedContext)
+            && (!ownerRequired || guardedOwner);
+    };
+    const auto rejectUnavailableOperation = [&] {
+        if (operationIsAvailable()) return false;
+        if (error.isEmpty()) {
+            error = QObject::tr(
+                "The activity collection disappeared while saving");
+        }
+        return true;
+    };
+
+    if (rejectUnavailableOperation()) return false;
+    if (!guardedItem) {
         error = QObject::tr("No activity given");
         return false;
     }
-    if (!item->isDirty()) {
+    if (!guardedItem->isDirty()) {
         return true;
     }
     if (!save) {
         error = QObject::tr("No activity save operation available");
         return false;
     }
-    if (!save(context, item, &error)) {
+    const bool saved = save(
+        guardedContext.data(), guardedItem.data(), &error);
+    if (rejectUnavailableOperation()) return false;
+    if (!guardedItem) {
+        error = QObject::tr(
+            "The activity disappeared while it was being saved");
+        return false;
+    }
+    if (!saved) {
         if (error.isEmpty()) {
             error = QObject::tr("The activity could not be saved");
         }
         return false;
     }
     if (notifySaved) {
-        notifySaved(item);
+        const QString savedFileName = guardedItem->fileName;
+        const QString savedPath = guardedItem->path;
+        const bool savedPlanned = guardedItem->planned;
+        notifySaved(guardedItem.data());
+        if (rejectUnavailableOperation()) return false;
+        if (!guardedItem) {
+            error = QObject::tr(
+                "The activity disappeared while announcing its save");
+            return false;
+        }
+        if (guardedItem->fileName != savedFileName
+            || guardedItem->path != savedPath
+            || guardedItem->planned != savedPlanned) {
+            error = QObject::tr(
+                "The activity identity changed while announcing its save");
+            return false;
+        }
     }
     return true;
 }
@@ -2135,13 +2193,18 @@ bool
 RideCache::saveActivities
 (QList<RideItem*> items, QString &error)
 {
+    const QPointer<RideCache> guardedCache(this);
     return RideCache::saveActivities(
         context, items, error,
         [](Context *saveContext, RideItem *saveItem, QString *saveError) {
             return MainWindow::saveSilent(
                 saveContext, saveItem, saveError);
         },
-        [this](RideItem *savedItem) { emit itemSaved(savedItem); });
+        [guardedCache](RideItem *savedItem) {
+            if (guardedCache)
+                emit guardedCache->itemSaved(savedItem);
+        },
+        guardedCache.data());
 }
 
 
@@ -2149,22 +2212,89 @@ bool
 RideCache::saveActivities
 (Context *context, const QList<RideItem *> &items, QString &error,
  const SaveActivityFunction &save,
- const ActivitySavedFunction &notifySaved)
+ const ActivitySavedFunction &notifySaved,
+ QObject *operationOwner)
 {
     error.clear();
     QStringList failed;
+    const bool contextRequired = context != nullptr;
+    const QPointer<Context> guardedContext(context);
+    const bool ownerRequired = operationOwner != nullptr;
+    const QPointer<QObject> guardedOwner(operationOwner);
+    const auto operationIsAvailable = [&] {
+        return (!contextRequired || guardedContext)
+            && (!ownerRequired || guardedOwner);
+    };
+    const auto unavailableFailure = [] {
+        return QObject::tr(
+            "<activity collection> (collection disappeared while saving)");
+    };
 
+    if (!operationIsAvailable()) {
+        error = QObject::tr(
+            "The activity collection is no longer available");
+        return false;
+    }
+
+    struct SaveRequest
+    {
+        QPointer<RideItem> item;
+        QString fileName;
+        QString path;
+        bool planned = false;
+    };
+    QList<SaveRequest> requests;
+    requests.reserve(items.size());
+    QSet<RideItem*> requestedItems;
     for (RideItem *item : items) {
+        if (!item) {
+            requests.append(SaveRequest{});
+            continue;
+        }
+        if (requestedItems.contains(item)) continue;
+        requestedItems.insert(item);
+        requests.append({
+            QPointer<RideItem>(item),
+            item->fileName,
+            item->path,
+            item->planned});
+    }
+
+    for (const SaveRequest &request :
+         std::as_const(requests)) {
+        if (!operationIsAvailable()) {
+            failed << unavailableFailure();
+            break;
+        }
+        RideItem *const item =
+            request.item.data();
+        if (!item
+            || item->fileName != request.fileName
+            || item->path != request.path
+            || item->planned != request.planned) {
+            failed << (request.fileName.isEmpty()
+                ? QObject::tr("<unknown activity>")
+                : QStringLiteral("%1 (%2)")
+                    .arg(
+                        request.fileName,
+                        QObject::tr(
+                            "activity changed before it could be saved")));
+            continue;
+        }
         QString itemError;
         if (!RideCache::saveActivity(
-                context, item, itemError, save, notifySaved)) {
+                guardedContext.data(), item, itemError,
+                save, notifySaved, guardedOwner.data())) {
             const QString fileName =
-                item ? item->fileName : QObject::tr("<unknown activity>");
+                request.fileName.isEmpty()
+                ? QObject::tr("<unknown activity>")
+                : request.fileName;
             if (itemError.isEmpty()) {
                 failed << fileName;
             } else {
                 failed << QStringLiteral("%1 (%2)").arg(fileName, itemError);
             }
+            if (!operationIsAvailable()) break;
         }
     }
     if (!failed.isEmpty()) {

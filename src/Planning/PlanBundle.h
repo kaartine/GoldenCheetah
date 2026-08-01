@@ -24,6 +24,8 @@
 #include <QStringList>
 #include <QDateTime>
 #include <QList>
+#include <QPointer>
+#include <QSet>
 
 #include "RideFile.h"
 #include "RideItem.h"
@@ -83,6 +85,94 @@ struct PlanResult {
 };
 
 
+struct PlanImportScheduleActivity {
+    QDateTime sourceDateTime;
+    bool selected = true;
+};
+
+
+struct PlanImportSchedule {
+    QList<QDateTime> targetDateTimes;
+    QDate targetRangeEnd;
+    int durationDays = 0;
+    int daysToAdd = 0;
+};
+
+
+inline PlanImportSchedule calculatePlanImportSchedule(
+    const QList<PlanImportScheduleActivity> &activities,
+    const QDate &targetRangeStart,
+    bool includeGapDays,
+    int frontGapDays,
+    int backGapDays)
+{
+    PlanImportSchedule schedule;
+    schedule.targetRangeEnd = targetRangeStart;
+    if (activities.isEmpty()) return schedule;
+
+    QDate firstActivity;
+    QDate lastActivity;
+    QDate firstSelected;
+    QDate lastSelected;
+    for (const PlanImportScheduleActivity &activity : activities) {
+        const QDate date = activity.sourceDateTime.date();
+        if (!firstActivity.isValid() || date < firstActivity)
+            firstActivity = date;
+        if (!lastActivity.isValid() || date > lastActivity)
+            lastActivity = date;
+        if (!activity.selected) continue;
+        if (!firstSelected.isValid() || date < firstSelected)
+            firstSelected = date;
+        if (!lastSelected.isValid() || date > lastSelected)
+            lastSelected = date;
+    }
+
+    if (includeGapDays) {
+        schedule.durationDays =
+            firstActivity.daysTo(lastActivity) + 1
+            + frontGapDays + backGapDays;
+        schedule.daysToAdd =
+            firstActivity.daysTo(targetRangeStart) + frontGapDays;
+    } else if (firstSelected.isValid()) {
+        schedule.durationDays =
+            firstSelected.daysTo(lastSelected) + 1;
+        schedule.daysToAdd =
+            firstSelected.daysTo(targetRangeStart);
+    }
+    if (schedule.durationDays > 0) {
+        schedule.targetRangeEnd = targetRangeStart.addDays(
+            schedule.durationDays - 1);
+    }
+
+    if (!includeGapDays && !firstSelected.isValid()) {
+        schedule.daysToAdd =
+            firstActivity.daysTo(targetRangeStart);
+    }
+    for (const PlanImportScheduleActivity &activity : activities) {
+        schedule.targetDateTimes.append(
+            activity.sourceDateTime.addDays(schedule.daysToAdd));
+    }
+    return schedule;
+}
+
+
+inline bool planImportHasLinkedConflict(
+    const PlanImportScheduleActivity &activity,
+    const QDateTime &targetDateTime,
+    const QSet<QDateTime> &existingLinked)
+{
+    return activity.selected
+        && existingLinked.contains(targetDateTime);
+}
+
+
+inline bool planExportCopiedAllActivities(
+    qsizetype requested, int copied)
+{
+    return requested > 0 && copied == requested;
+}
+
+
 class RideFileSelection {
 public:
     RideFileSelection(RideFile *rideFile, bool sel, const QDateTime &dt);
@@ -118,6 +208,7 @@ public:
     QList<RideItem*> getRideItemsToRemove() const;
     bool isIncludeGapDays() const;
     void setIncludeGapDays(bool includeGapDays);
+    bool setActivitySelected(int index, bool selected);
     const QSet<QDateTime> &getExistingLinked() const;
 
     PlanResult getLastValidationResult() const;
@@ -126,7 +217,7 @@ public:
     QList<RideFileSelection> rideFiles;
 
 private:
-    Context *context;
+    QPointer<Context> context;
     PlanMetadata metadata;
     QTemporaryDir *tempDir = nullptr;
     PlanResult lastValidationResult;
@@ -145,7 +236,9 @@ private:
     void reset();
     void calculateRange();
     void findConflicts();
-    bool cleanAndCopyActivity(RideFile *rideFile) const;
+    bool cleanAndCopyActivity(
+        RideFile *rideFile,
+        const QDateTime &targetDateTime) const;
     bool processWorkout(RideFile *rideFile);
     void validate();
 };

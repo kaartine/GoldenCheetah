@@ -2,19 +2,70 @@
 
 #include "Athlete.h"
 #include "Context.h"
+#include "AtomicFileWriter.h"
 #include "RideCache.h"
+#include "RideCacheModel.h"
 #include "RideItem.h"
 
+#include <QAbstractItemModelTester>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QMessageBox>
 #include <QTemporaryDir>
+#include <QTimer>
 
+#include <functional>
 #include <memory>
 
 void resetRideCacheRemovalRefreshCounts();
 int rideCacheRemovalRefreshCount();
 int rideCacheRemovalEstimatorRefreshCount();
+void setRideCacheRemovalCleanupFailurePath(const QString &path);
+void setRideCacheRemovalMoveFailurePath(const QString &path);
+void setRideCacheRemovalMoveFailureTargetPath(
+    const QString &path);
+void setRideCacheRemovalPartialMoveFailurePath(
+    const QString &path,
+    bool removeSource);
+void setRideCacheRemovalPartialMoveFailureTargetPath(
+    const QString &path,
+    bool removeSource);
+void setRideCacheRemovalMoveMutation(
+    const QString &path,
+    const QByteArray &contents);
+void setRideCacheRemovalMoveAction(
+    const QString &path,
+    const std::function<void()> &action);
+void setRideCacheRemovalSyncFailurePath(const QString &path);
+void setRideCacheRemovalSyncFailureCount(
+    const QString &path,
+    int count);
+void setRideCacheRemovalSaveFailureFileName(
+    const QString &fileName);
+void setRideCacheRemovalSaveFailureOnCall(
+    const QString &fileName,
+    int call);
+void setRideCacheRemovalSaveFailureCalls(
+    const QString &fileName,
+    const QSet<int> &calls);
+int rideCacheRemovalSaveCallCount();
+int rideCacheRemovalCancelCount();
+void setRideCacheRemovalSaveActionOnCall(
+    const QString &fileName,
+    int call,
+    const std::function<void()> &action);
+void setRideCacheRemovalSuccessfulSaveRename(
+    const QString &fileName,
+    const QString &targetDirectory,
+    const QString &targetFileName);
+RideFile *rideCacheRemovalLastProcessedRide();
+void setRideCacheRemovalProcessorFailure(bool fail);
+void setRideCacheRemovalProcessorAction(
+    const std::function<void()> &action);
+void setRideCacheRemovalLinkMutationActionOnCall(
+    int call,
+    const std::function<void()> &action);
 
 namespace {
 
@@ -54,10 +105,54 @@ QByteArray readBytes(const QString &path)
 bool cacheContains(const RideCache &cache, const QString &fileName)
 {
     for (const RideItem *item :
-         const_cast<RideCache &>(cache).rides()) {
+         cache.rides()) {
         if (item && item->fileName == fileName) return true;
     }
     return false;
+}
+
+QStringList stagedFilesFor(const QString &originalPath)
+{
+    const QFileInfo original(originalPath);
+    const QDir directory(original.absolutePath());
+    const QStringList names = directory.entryList(
+        {original.fileName()
+             + QStringLiteral(".gc-remove-*")},
+        QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot);
+    QStringList paths;
+    paths.reserve(names.size());
+    for (const QString &name : names) {
+        paths.append(directory.filePath(name));
+    }
+    return paths;
+}
+
+QStringList recoveryFilesFor(
+    const QString &originalPath,
+    const QString &marker)
+{
+    const QFileInfo original(originalPath);
+    const QDir directory(original.absolutePath());
+    const QStringList names = directory.entryList(
+        {original.fileName() + marker
+             + QStringLiteral("*")},
+        QDir::Files | QDir::Hidden
+            | QDir::NoDotAndDotDot);
+    QStringList paths;
+    paths.reserve(names.size());
+    for (const QString &name : names)
+        paths.append(directory.filePath(name));
+    return paths;
+}
+
+void dismissNextMessageBox()
+{
+    QTimer::singleShot(0, [] {
+        QMessageBox *messageBox =
+            qobject_cast<QMessageBox *>(
+                QApplication::activeModalWidget());
+        if (messageBox) messageBox->accept();
+    });
 }
 
 struct Fixture
@@ -75,12 +170,29 @@ struct Fixture
             && athlete->home->cache().exists();
     }
 
-    RideItem *addRide(const QString &fileName, bool current)
+    RideItem *addRide(
+        const QString &fileName,
+        bool current,
+        RideFile *ride = nullptr)
     {
-        RideItem *item = new RideItem(nullptr, context.get());
+        RideItem *item = new RideItem(ride, context.get());
         item->fileName = fileName;
-        cache->rides().append(item);
+        item->path = athlete->home->activities().absolutePath();
+        cache->mutableRidesForRemovalTest().append(item);
         if (current) context->ride = item;
+        return item;
+    }
+
+    RideItem *addPlannedRide(
+        const QString &fileName,
+        bool current,
+        RideFile *ride = nullptr)
+    {
+        RideItem *item =
+            addRide(fileName, current, ride);
+        item->planned = true;
+        item->path =
+            athlete->home->planned().absolutePath();
         return item;
     }
 
@@ -98,6 +210,15 @@ struct Fixture
     {
         return athlete->home->fileBackup().filePath(
             fileName + QStringLiteral(".bak"));
+    }
+
+    QString plannedBackupPath(const QString &fileName) const
+    {
+        return QDir(
+            athlete->home->fileBackup().filePath(
+                QStringLiteral("planned")))
+            .filePath(
+                fileName + QStringLiteral(".bak"));
     }
 
     QString cachePath(const QString &fileName, const QString &extension) const
@@ -134,12 +255,93 @@ class TestRideCacheRemoval : public QObject
 private slots:
     void archivedRemovalEvictsNamedRideWithoutMovingFiles();
     void ordinaryRemovalArchivesFileAndReplacesBackup();
+    void archiveFailurePreservesCacheAndFiles();
+    void backupReplacementFailurePreservesCacheAndFiles();
+    void backupStagingFailureRollsBackFiles();
+    void sourceArchiveFailureRollsBackFiles();
+    void sourceMutationBeforeArchiveRollsBackFiles();
+    void unsafeFilenameFailsClosed();
+    void sourceDirectoryMismatchIsRejected();
+    void duplicateFullIdentityFailsClosed();
+    void plannedAndCompletedBackupsUseSeparateNamespaces();
+    void plannedBackupDirectorySyncFailurePreservesActivity();
+    void plannedBackupDirectorySyncFailureIsRetried();
+    void plannedBackupSymlinkIsRejected();
+    void linkedSaveFailureRejectsRemoval();
+    void unsafeLinkedPeerIdentityRejectsBeforeSave_data();
+    void unsafeLinkedPeerIdentityRejectsBeforeSave();
+    void incomingReferenceToLinkedPeerRejectsBeforeSave();
+    void linkedSuccessfulSaveRenameAllowsDeletion();
+    void linkedSaveCompensationFailureRequiresRecovery();
+    void linkedPeerDeletionDuringMetadataChangeRequiresRecovery();
+    void linkedPeerDeletionDuringCompensationRequiresRecovery_data();
+    void linkedPeerDeletionDuringCompensationRequiresRecovery();
+    void targetDeletionDuringLinkedMetadataChangeRequiresRecovery();
+    void targetMutationDuringStorageRollbackRequiresRecovery_data();
+    void targetMutationDuringStorageRollbackRequiresRecovery();
+    void linkedRenameBeforeStorageRollbackRequiresRecovery();
+    void linkedReplacementDuringClearIsRestored();
+    void dirtyLinkedPeerRequiresPreflight();
+    void brokenLinkedPairRejectsRemoval();
+    void incomingLinkedReferenceRejectsRemoval();
+    void sameNamespaceIncomingLinkRejectsRemoval();
+    void removalLinkPreflightAllowsUnlinkedActivity();
+    void dataProcessorReceivesLoadedRideBeforeArchive();
+    void linkedRideClosedDuringMetadataChangeIsNotReused();
+    void sourceSymlinkIsRejected();
+    void lockedSourceIsRejected();
+    void derivedFilesAreNotMovedBeforeCommit_data();
+    void derivedFilesAreNotMovedBeforeCommit();
+    void derivedMutationBeforeStagingRollsBackFiles();
+    void directorySyncFailureRollsBackFiles();
+    void rollbackFailureRequiresRecovery();
+    void sourceRestoreSyncFailureRetainsPublishedBackup();
+    void failedPreviousBackupMovePartialStateRollsBack_data();
+    void failedPreviousBackupMovePartialStateRollsBack();
+    void failedBackupPublishPartialMoveRollsBack_data();
+    void failedBackupPublishPartialMoveRollsBack();
+    void failedSourceMovePartialStateRollsBack_data();
+    void failedSourceMovePartialStateRollsBack();
+    void batchStopsAfterRecoveryRequired();
+    void derivedCleanupFailurePreservesCacheAndFiles_data();
+    void derivedCleanupFailurePreservesCacheAndFiles();
+    void committedCleanupFailureLeavesRecoveryFile_data();
+    void committedCleanupFailureLeavesRecoveryFile();
+    void cleanupPendingBoolReportsLogicalRemoval();
+    void previousBackupCleanupFailureIsExplicit();
+    void sourceCleanupFailureIsExplicit();
+    void archivedCleanupFailurePreservesCacheAndFiles();
+    void batchRemovalReportsPartialFailure();
+    void stagingCleanupFailureRequiresRecoveryAndStopsBatch();
+    void partialBatchBoolPreservesAnySuccessContract();
+    void sharedLegacySidecarsSurviveNamespaceRemoval();
+    void linkedRecoveryRequiredRestoresPair();
+    void linkedRollbackSaveFailureReportsRecoveryPath();
+    void processorFailureIsReportedWithoutRemoval();
+    void processorReorderingDoesNotRemoveWrongRow();
+    void sidecarOwnerIntroducedBeforeCommitRejectsRemoval();
+    void modelRemovalSignalSiblingRemovalDoesNotUseInvalidIndex();
+    void modelRemovalSignalKeepsSelectionValid_data();
+    void modelRemovalSignalKeepsSelectionValid();
+    void modelRemovalSignalDestructionDoesNotExposeDanglingItem_data();
+    void modelRemovalSignalDestructionDoesNotExposeDanglingItem();
+    void modelSignalOwnerDestructionDoesNotContinue_data();
+    void modelSignalOwnerDestructionDoesNotContinue();
+    void batchModelSignalOwnerDestructionDoesNotContinue_data();
+    void batchModelSignalOwnerDestructionDoesNotContinue();
     void currentRideRemovalUsesOrdinaryArchivePath();
+    void nonCurrentRemovalNotifiesDeletionAndPreservesSelection();
+    void batchRemovingAllRidesClearsSelection();
     void missingRideIsRejectedWithoutTouchingFiles();
     void plannedRemovalDeletesOnlyPlannedCpx();
     void plannedBatchRemovalDeletesOnlyPlannedCpx();
     void batchRemovalRefreshesOnce();
+    void singleRemovalCancelsRefreshBeforeProcessing();
     void batchRemovalSnapshotsAliasedRideList();
+    void batchRejectsReentrantIdentityMutation();
+    void batchSurvivesReentrantPendingDeletion();
+    void stalePointerOverloadsRejectWithoutDereference_data();
+    void stalePointerOverloadsRejectWithoutDereference();
     void currentRemovalUsesSelectedNamespace();
     void ambiguousFilenameRemovalFailsClosed();
     void explicitNamespaceRemovalUsesIdentity();
@@ -189,18 +391,2810 @@ void TestRideCacheRemoval::ordinaryRemovalArchivesFileAndReplacesBackup()
         fixture.backupPath(firstName()),
         QByteArray("previous backup"));
 
-    QVERIFY(fixture.cache->removeRide(firstName()));
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(firstName());
+    QVERIFY2(
+        result.cleanlyCompleted(),
+        qPrintable(result.error));
+    QCOMPARE(result.affectedCount, 1);
+    QVERIFY(result.error.isEmpty());
 
     QCOMPARE(fixture.cache->count(), 0);
     QVERIFY(!QFileInfo::exists(fixture.activityPath(firstName())));
     QCOMPARE(readBytes(fixture.backupPath(firstName())), original);
 }
 
-void TestRideCacheRemoval::currentRideRemovalUsesOrdinaryArchivePath()
+void TestRideCacheRemoval::archiveFailurePreservesCacheAndFiles()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), true);
+
+    const QByteArray previousBackup("previous backup");
+    const QByteArray notes("derived notes");
+    const QByteArray cpi("derived cpi");
+    const QByteArray cpx("derived cpx");
+    writeFixture(
+        fixture.backupPath(firstName()),
+        previousBackup);
+    writeFixture(
+        fixture.cachePath(
+            firstName(), QStringLiteral("notes")),
+        notes);
+    writeFixture(
+        fixture.cachePath(
+            firstName(), QStringLiteral("cpi")),
+        cpi);
+    writeFixture(
+        fixture.cachePath(
+            firstName(), QStringLiteral("cpx")),
+        cpx);
+
+    dismissNextMessageBox();
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+    QVERIFY(!result.allLogicallyRemoved());
+    QCOMPARE(result.affectedCount, 0);
+    QVERIFY(!result.error.isEmpty());
+
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), item);
+    QCOMPARE(fixture.context->ride, item);
+    QVERIFY(!QFileInfo::exists(
+        fixture.activityPath(firstName())));
+    QCOMPARE(
+        readBytes(fixture.backupPath(firstName())),
+        previousBackup);
+    QCOMPARE(
+        readBytes(fixture.cachePath(
+            firstName(), QStringLiteral("notes"))),
+        notes);
+    QCOMPARE(
+        readBytes(fixture.cachePath(
+            firstName(), QStringLiteral("cpi"))),
+        cpi);
+    QCOMPARE(
+        readBytes(fixture.cachePath(
+            firstName(), QStringLiteral("cpx"))),
+        cpx);
+    QCOMPARE(rideCacheRemovalRefreshCount(), 0);
+    QCOMPARE(
+        rideCacheRemovalEstimatorRefreshCount(), 0);
+}
+
+void TestRideCacheRemoval::
+backupReplacementFailurePreservesCacheAndFiles()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), true);
+
+    const QByteArray activity("live activity");
+    const QByteArray notes("derived notes");
+    const QString backupDirectory =
+        fixture.backupPath(firstName());
+    const QString backupSentinel =
+        QDir(backupDirectory).filePath(
+            QStringLiteral("sentinel"));
+    writeFixture(
+        fixture.activityPath(firstName()),
+        activity);
+    writeFixture(backupSentinel, QByteArray("keep backup directory"));
+    writeFixture(
+        fixture.cachePath(
+            firstName(), QStringLiteral("notes")),
+        notes);
+
+    dismissNextMessageBox();
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+    QVERIFY(!result.allLogicallyRemoved());
+    QCOMPARE(result.affectedCount, 0);
+    QVERIFY(!result.error.isEmpty());
+
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), item);
+    QCOMPARE(fixture.context->ride, item);
+    QCOMPARE(
+        readBytes(fixture.activityPath(firstName())),
+        activity);
+    QVERIFY(QFileInfo(backupDirectory).isDir());
+    QCOMPARE(
+        readBytes(backupSentinel),
+        QByteArray("keep backup directory"));
+    QCOMPARE(
+        readBytes(fixture.cachePath(
+            firstName(), QStringLiteral("notes"))),
+        notes);
+    QCOMPARE(rideCacheRemovalRefreshCount(), 0);
+    QCOMPARE(
+        rideCacheRemovalEstimatorRefreshCount(), 0);
+}
+
+void TestRideCacheRemoval::backupStagingFailureRollsBackFiles()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), true);
+
+    const QByteArray activity("live activity");
+    const QByteArray previousBackup("previous backup");
+    const QByteArray notes("derived notes");
+    writeFixture(
+        fixture.activityPath(firstName()),
+        activity);
+    writeFixture(
+        fixture.backupPath(firstName()),
+        previousBackup);
+    writeFixture(
+        fixture.cachePath(
+            firstName(), QStringLiteral("notes")),
+        notes);
+    setRideCacheRemovalMoveFailurePath(
+        fixture.backupPath(firstName()));
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+
+    QVERIFY(!result.allLogicallyRemoved());
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), item);
+    QCOMPARE(
+        readBytes(fixture.activityPath(firstName())),
+        activity);
+    QCOMPARE(
+        readBytes(fixture.backupPath(firstName())),
+        previousBackup);
+    QCOMPARE(
+        readBytes(fixture.cachePath(
+            firstName(), QStringLiteral("notes"))),
+        notes);
+    QVERIFY(stagedFilesFor(
+        fixture.backupPath(firstName())).isEmpty());
+    QVERIFY(stagedFilesFor(
+        fixture.cachePath(
+            firstName(), QStringLiteral("notes"))).isEmpty());
+}
+
+void TestRideCacheRemoval::sourceArchiveFailureRollsBackFiles()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), true);
+
+    const QByteArray activity("live activity");
+    const QByteArray previousBackup("previous backup");
+    const QByteArray cpi("derived cpi");
+    writeFixture(
+        fixture.activityPath(firstName()),
+        activity);
+    writeFixture(
+        fixture.backupPath(firstName()),
+        previousBackup);
+    writeFixture(
+        fixture.cachePath(
+            firstName(), QStringLiteral("cpi")),
+        cpi);
+    setRideCacheRemovalMoveFailurePath(
+        fixture.activityPath(firstName()));
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+
+    QVERIFY(!result.allLogicallyRemoved());
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), item);
+    QCOMPARE(
+        readBytes(fixture.activityPath(firstName())),
+        activity);
+    QCOMPARE(
+        readBytes(fixture.backupPath(firstName())),
+        previousBackup);
+    QCOMPARE(
+        readBytes(fixture.cachePath(
+            firstName(), QStringLiteral("cpi"))),
+        cpi);
+    QVERIFY(stagedFilesFor(
+        fixture.backupPath(firstName())).isEmpty());
+    QVERIFY(stagedFilesFor(
+        fixture.cachePath(
+            firstName(), QStringLiteral("cpi"))).isEmpty());
+}
+
+void TestRideCacheRemoval::
+sourceMutationBeforeArchiveRollsBackFiles()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), true);
+
+    const QByteArray activity("live activity");
+    const QByteArray concurrentActivity(
+        "concurrently replaced activity");
+    const QByteArray previousBackup("previous backup");
+    const QByteArray notes("derived notes");
+    writeFixture(
+        fixture.activityPath(firstName()),
+        activity);
+    writeFixture(
+        fixture.backupPath(firstName()),
+        previousBackup);
+    writeFixture(
+        fixture.cachePath(
+            firstName(), QStringLiteral("notes")),
+        notes);
+    setRideCacheRemovalMoveMutation(
+        fixture.activityPath(firstName()),
+        concurrentActivity);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+
+    QVERIFY(!result.allLogicallyRemoved());
+    QCOMPARE(result.affectedCount, 0);
+    QVERIFY(!result.error.isEmpty());
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), item);
+    QCOMPARE(fixture.context->ride, item);
+    QCOMPARE(
+        readBytes(fixture.activityPath(firstName())),
+        concurrentActivity);
+    QCOMPARE(
+        readBytes(fixture.backupPath(firstName())),
+        previousBackup);
+    QCOMPARE(
+        readBytes(fixture.cachePath(
+            firstName(), QStringLiteral("notes"))),
+        notes);
+    QVERIFY(stagedFilesFor(
+        fixture.backupPath(firstName())).isEmpty());
+    QVERIFY(stagedFilesFor(
+        fixture.cachePath(
+            firstName(), QStringLiteral("notes"))).isEmpty());
+}
+
+void TestRideCacheRemoval::unsafeFilenameFailsClosed()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString unsafeName =
+        QStringLiteral("../outside.json");
+    RideItem *item =
+        fixture.addRide(unsafeName, true);
+    const QString outsidePath =
+        QDir(fixture.temporary.path())
+            .filePath(QStringLiteral("outside.json"));
+    const QByteArray contents("outside activity");
+    writeFixture(outsidePath, contents);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+
+    QVERIFY(!result.allLogicallyRemoved());
+    QCOMPARE(result.affectedCount, 0);
+    QVERIFY(!result.error.isEmpty());
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), item);
+    QCOMPARE(readBytes(outsidePath), contents);
+    QVERIFY(!QFileInfo::exists(
+        QDir(fixture.temporary.path())
+            .filePath(QStringLiteral("outside.json.bak"))));
+}
+
+void TestRideCacheRemoval::sourceDirectoryMismatchIsRejected()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), true);
+
+    const QString alternateDirectory =
+        QDir(fixture.temporary.path()).filePath(
+            QStringLiteral("alternate-activities"));
+    const QString itemSourcePath =
+        QDir(alternateDirectory).filePath(firstName());
+    const QString namespaceSourcePath =
+        fixture.activityPath(firstName());
+    const QByteArray itemContents("item source activity");
+    const QByteArray namespaceContents("namespace activity");
+    item->path = alternateDirectory;
+    writeFixture(itemSourcePath, itemContents);
+    writeFixture(namespaceSourcePath, namespaceContents);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::Rejected);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), item);
+    QCOMPARE(fixture.context->ride, item);
+    QCOMPARE(readBytes(itemSourcePath), itemContents);
+    QCOMPARE(readBytes(namespaceSourcePath), namespaceContents);
+    QVERIFY(!QFileInfo::exists(
+        fixture.backupPath(firstName())));
+}
+
+void TestRideCacheRemoval::duplicateFullIdentityFailsClosed()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target = fixture.addRide(firstName(), true);
+    RideItem *duplicate = fixture.addRide(firstName(), false);
+    const QByteArray contents("shared source activity");
+    const QString sourcePath = fixture.activityPath(firstName());
+    writeFixture(sourcePath, contents);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(result.status, RideCache::RemovalStatus::Rejected);
+    QCOMPARE(result.affectedCount, 0);
+    QVERIFY(!result.error.isEmpty());
+    QCOMPARE(fixture.cache->count(), 2);
+    QVERIFY(fixture.cache->rides().contains(target));
+    QVERIFY(fixture.cache->rides().contains(duplicate));
+    QCOMPARE(fixture.context->ride, target);
+    QCOMPARE(readBytes(sourcePath), contents);
+    QVERIFY(!QFileInfo::exists(fixture.backupPath(firstName())));
+}
+
+void TestRideCacheRemoval::
+plannedAndCompletedBackupsUseSeparateNamespaces()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *completed =
+        fixture.addRide(firstName(), false);
+    RideItem *planned =
+        fixture.addPlannedRide(firstName(), true);
+    planned->path =
+        fixture.athlete->home->planned().absolutePath();
+
+    const QByteArray completedContents(
+        "completed activity");
+    const QByteArray plannedContents(
+        "planned activity");
+    writeFixture(
+        fixture.activityPath(firstName()),
+        completedContents);
+    writeFixture(
+        fixture.plannedActivityPath(firstName()),
+        plannedContents);
+
+    QVERIFY(fixture.cache->removeRide(planned));
+    QVERIFY(fixture.cache->removeRide(completed));
+
+    QCOMPARE(fixture.cache->count(), 0);
+    QCOMPARE(
+        readBytes(fixture.backupPath(firstName())),
+        completedContents);
+    QCOMPARE(
+        readBytes(fixture.plannedBackupPath(firstName())),
+        plannedContents);
+}
+
+void TestRideCacheRemoval::
+plannedBackupDirectorySyncFailurePreservesActivity()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *planned =
+        fixture.addRide(firstName(), true);
+    planned->planned = true;
+    planned->path =
+        fixture.athlete->home->planned().absolutePath();
+
+    const QByteArray contents("planned activity");
+    const QString sourcePath =
+        fixture.plannedActivityPath(firstName());
+    const QString backupDirectory =
+        QFileInfo(
+            fixture.plannedBackupPath(firstName()))
+            .absolutePath();
+    QVERIFY(!QFileInfo::exists(backupDirectory));
+    writeFixture(sourcePath, contents);
+    setRideCacheRemovalSyncFailurePath(
+        backupDirectory);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(planned);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::Rejected);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.context->ride, planned);
+    QCOMPARE(readBytes(sourcePath), contents);
+    QVERIFY(!QFileInfo::exists(
+        fixture.plannedBackupPath(firstName())));
+}
+
+void TestRideCacheRemoval::
+plannedBackupDirectorySyncFailureIsRetried()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *planned =
+        fixture.addPlannedRide(firstName(), true);
+    const QString sourcePath =
+        fixture.plannedActivityPath(firstName());
+    const QString backupPath =
+        fixture.plannedBackupPath(firstName());
+    const QString backupDirectory =
+        QFileInfo(backupPath).absolutePath();
+    writeFixture(sourcePath, QByteArray("planned activity"));
+    setRideCacheRemovalSyncFailureCount(
+        backupDirectory, 2);
+
+    const RideCache::RemovalResult first =
+        fixture.cache->removeRideResult(planned);
+    QCOMPARE(
+        first.status,
+        RideCache::RemovalStatus::Rejected);
+    QCOMPARE(readBytes(sourcePath), QByteArray("planned activity"));
+    QVERIFY(!QFileInfo::exists(backupPath));
+
+    const RideCache::RemovalResult second =
+        fixture.cache->removeRideResult(planned);
+    QCOMPARE(
+        second.status,
+        RideCache::RemovalStatus::Rejected);
+    QCOMPARE(readBytes(sourcePath), QByteArray("planned activity"));
+    QVERIFY(!QFileInfo::exists(backupPath));
+
+    const RideCache::RemovalResult third =
+        fixture.cache->removeRideResult(planned);
+    QCOMPARE(
+        third.status,
+        RideCache::RemovalStatus::Committed);
+    QCOMPARE(fixture.cache->count(), 0);
+    QVERIFY(!QFileInfo::exists(sourcePath));
+    QCOMPARE(readBytes(backupPath), QByteArray("planned activity"));
+}
+
+void TestRideCacheRemoval::plannedBackupSymlinkIsRejected()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *planned =
+        fixture.addRide(firstName(), true);
+    planned->planned = true;
+    planned->path =
+        fixture.athlete->home->planned().absolutePath();
+
+    const QByteArray contents("planned activity");
+    const QString sourcePath =
+        fixture.plannedActivityPath(firstName());
+    const QString backupDirectory =
+        QFileInfo(
+            fixture.plannedBackupPath(firstName()))
+            .absolutePath();
+    const QString outsideDirectory =
+        QDir(fixture.temporary.path()).filePath(
+            QStringLiteral("outside-backups"));
+    QVERIFY(QDir().mkpath(outsideDirectory));
+    if (!QFile::link(
+            outsideDirectory, backupDirectory)) {
+        QSKIP("Directory symbolic links are unavailable");
+    }
+    writeFixture(sourcePath, contents);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(planned);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::Rejected);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.context->ride, planned);
+    QCOMPARE(readBytes(sourcePath), contents);
+    QVERIFY(!QFileInfo::exists(
+        QDir(outsideDirectory).filePath(
+            firstName() + QStringLiteral(".bak"))));
+}
+
+void TestRideCacheRemoval::linkedSaveFailureRejectsRemoval()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target =
+        fixture.addRide(firstName(), true);
+    RideItem *linked =
+        fixture.addPlannedRide(secondName(), false);
+    target->setLinkedFileName(secondName());
+    linked->setLinkedFileName(firstName());
+
+    const QByteArray targetContents(
+        "target activity");
+    const QByteArray linkedContents(
+        "linked activity");
+    writeFixture(
+        fixture.activityPath(firstName()),
+        targetContents);
+    writeFixture(
+        fixture.plannedActivityPath(secondName()),
+        linkedContents);
+    setRideCacheRemovalSaveFailureFileName(
+        secondName());
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QVERIFY(!result.allLogicallyRemoved());
+    QCOMPARE(result.affectedCount, 0);
+    QVERIFY(!result.error.isEmpty());
+    QCOMPARE(fixture.cache->count(), 2);
+    QCOMPARE(fixture.context->ride, target);
+    QCOMPARE(
+        target->getLinkedFileName(), secondName());
+    QCOMPARE(
+        linked->getLinkedFileName(), firstName());
+    QCOMPARE(
+        readBytes(fixture.activityPath(firstName())),
+        targetContents);
+    QCOMPARE(
+        readBytes(fixture.plannedActivityPath(secondName())),
+        linkedContents);
+    QCOMPARE(rideCacheRemovalSaveCallCount(), 2);
+    QVERIFY(!QFileInfo::exists(
+        fixture.backupPath(firstName())));
+}
+
+void TestRideCacheRemoval::
+unsafeLinkedPeerIdentityRejectsBeforeSave_data()
+{
+    QTest::addColumn<QString>("identityCase");
+
+    QTest::newRow("unsafe-name")
+        << QStringLiteral("unsafe-name");
+    QTest::newRow("outside-path")
+        << QStringLiteral("outside-path");
+    QTest::newRow("symlink-source")
+        << QStringLiteral("symlink-source");
+    QTest::newRow("non-regular-source")
+        << QStringLiteral("non-regular-source");
+    QTest::newRow("wrong-namespace")
+        << QStringLiteral("wrong-namespace");
+}
+
+void TestRideCacheRemoval::
+unsafeLinkedPeerIdentityRejectsBeforeSave()
+{
+    QFETCH(QString, identityCase);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target = fixture.addRide(firstName(), true);
+    RideItem *linked =
+        fixture.addPlannedRide(secondName(), false);
+
+    const QByteArray targetContents("target activity");
+    const QByteArray sentinelContents("linked sentinel");
+    const QString targetPath =
+        fixture.activityPath(firstName());
+    QString linkedSourcePath =
+        fixture.plannedActivityPath(secondName());
+    QString sentinelPath = linkedSourcePath;
+
+    if (identityCase == QStringLiteral("unsafe-name")) {
+        linked->fileName = QStringLiteral("../outside-linked.json");
+        linkedSourcePath = QDir(linked->path).filePath(linked->fileName);
+        sentinelPath = QDir::cleanPath(linkedSourcePath);
+        writeFixture(sentinelPath, sentinelContents);
+    } else if (identityCase == QStringLiteral("outside-path")) {
+        linked->path = QDir(fixture.temporary.path()).filePath(
+            QStringLiteral("outside"));
+        linkedSourcePath = QDir(linked->path).filePath(linked->fileName);
+        sentinelPath = linkedSourcePath;
+        writeFixture(sentinelPath, sentinelContents);
+    } else if (identityCase == QStringLiteral("symlink-source")) {
+        sentinelPath = QDir(fixture.temporary.path()).filePath(
+            QStringLiteral("outside/symlink-sentinel.json"));
+        writeFixture(sentinelPath, sentinelContents);
+        QVERIFY(QFile::link(sentinelPath, linkedSourcePath));
+        QVERIFY(QFileInfo(linkedSourcePath).isSymLink());
+    } else if (identityCase
+               == QStringLiteral("non-regular-source")) {
+        QVERIFY(QDir().mkpath(linkedSourcePath));
+        sentinelPath = QDir(linkedSourcePath).filePath(
+            QStringLiteral("sentinel"));
+        writeFixture(sentinelPath, sentinelContents);
+    } else {
+        linked->path = fixture.athlete->home
+            ->activities().absolutePath();
+        linkedSourcePath =
+            fixture.activityPath(secondName());
+        sentinelPath = linkedSourcePath;
+        writeFixture(sentinelPath, sentinelContents);
+    }
+
+    target->setLinkedFileName(linked->fileName);
+    linked->setLinkedFileName(firstName());
+    writeFixture(targetPath, targetContents);
+    setRideCacheRemovalSaveFailureFileName(linked->fileName);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(rideCacheRemovalSaveCallCount(), 0);
+    QCOMPARE(result.status, RideCache::RemovalStatus::Rejected);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 2);
+    QCOMPARE(target->getLinkedFileName(), linked->fileName);
+    QCOMPARE(linked->getLinkedFileName(), firstName());
+    QCOMPARE(readBytes(targetPath), targetContents);
+    QCOMPARE(readBytes(sentinelPath), sentinelContents);
+    QVERIFY(!QFileInfo::exists(fixture.backupPath(firstName())));
+}
+
+void TestRideCacheRemoval::
+incomingReferenceToLinkedPeerRejectsBeforeSave()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target = fixture.addRide(firstName(), true);
+    RideItem *linked =
+        fixture.addPlannedRide(secondName(), false);
+    RideItem *incoming = fixture.addRide(thirdName(), false);
+    target->setLinkedFileName(secondName());
+    linked->setLinkedFileName(firstName());
+    incoming->setLinkedFileName(secondName());
+
+    const QByteArray targetContents("target activity");
+    const QByteArray linkedContents("linked activity");
+    const QByteArray incomingContents("incoming activity");
+    writeFixture(fixture.activityPath(firstName()), targetContents);
+    writeFixture(
+        fixture.plannedActivityPath(secondName()), linkedContents);
+    writeFixture(fixture.activityPath(thirdName()), incomingContents);
+    setRideCacheRemovalSaveFailureFileName(secondName());
+
+    const RideCache::OperationPreCheck check =
+        fixture.cache->checkRemovalLinks(target);
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QVERIFY(!check.canProceed);
+    QCOMPARE(result.status, RideCache::RemovalStatus::Rejected);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(rideCacheRemovalSaveCallCount(), 0);
+    QCOMPARE(fixture.cache->count(), 3);
+    QCOMPARE(linked->getLinkedFileName(), firstName());
+    QCOMPARE(incoming->getLinkedFileName(), secondName());
+    QCOMPARE(readBytes(fixture.activityPath(firstName())), targetContents);
+    QCOMPARE(
+        readBytes(fixture.plannedActivityPath(secondName())),
+        linkedContents);
+    QCOMPARE(readBytes(fixture.activityPath(thirdName())), incomingContents);
+}
+
+void TestRideCacheRemoval::
+linkedSuccessfulSaveRenameAllowsDeletion()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target =
+        fixture.addRide(firstName(), true);
+    RideItem *linked =
+        fixture.addPlannedRide(secondName(), false);
+    target->setLinkedFileName(secondName());
+    linked->setLinkedFileName(firstName());
+
+    const QByteArray targetContents("target activity");
+    const QByteArray linkedContents("linked activity");
+    const QString targetPath =
+        fixture.activityPath(firstName());
+    const QString oldLinkedPath =
+        fixture.plannedActivityPath(secondName());
+    const QString newLinkedPath =
+        fixture.plannedActivityPath(thirdName());
+    const QString linkedDirectory =
+        QFileInfo(newLinkedPath).absolutePath();
+    writeFixture(targetPath, targetContents);
+    writeFixture(oldLinkedPath, linkedContents);
+    setRideCacheRemovalSuccessfulSaveRename(
+        secondName(), linkedDirectory, thirdName());
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::Committed);
+    QVERIFY(result.allLogicallyRemoved());
+    QCOMPARE(result.affectedCount, 1);
+    QVERIFY(result.error.isEmpty());
+    QVERIFY(result.recoveryPaths.isEmpty());
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), linked);
+    QCOMPARE(fixture.context->ride, linked);
+    QCOMPARE(linked->fileName, thirdName());
+    QCOMPARE(linked->path, linkedDirectory);
+    QVERIFY(linked->planned);
+    QVERIFY(linked->getLinkedFileName().isEmpty());
+    QVERIFY(!QFileInfo::exists(targetPath));
+    QCOMPARE(
+        readBytes(fixture.backupPath(firstName())),
+        targetContents);
+    QVERIFY(!QFileInfo::exists(oldLinkedPath));
+    QCOMPARE(readBytes(newLinkedPath), linkedContents);
+}
+
+void TestRideCacheRemoval::
+linkedSaveCompensationFailureRequiresRecovery()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target =
+        fixture.addRide(firstName(), true);
+    RideItem *linked =
+        fixture.addPlannedRide(secondName(), false);
+    target->setLinkedFileName(secondName());
+    linked->setLinkedFileName(firstName());
+
+    const QString targetPath =
+        fixture.activityPath(firstName());
+    const QString linkedPath =
+        fixture.plannedActivityPath(secondName());
+    writeFixture(targetPath, QByteArray("target activity"));
+    writeFixture(linkedPath, QByteArray("linked activity"));
+    setRideCacheRemovalSaveFailureCalls(
+        secondName(), QSet<int>{1, 2});
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::RecoveryRequired);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 2);
+    QCOMPARE(
+        target->getLinkedFileName(), secondName());
+    QCOMPARE(
+        linked->getLinkedFileName(), firstName());
+    QCOMPARE(rideCacheRemovalSaveCallCount(), 2);
+    QVERIFY(result.recoveryPaths.contains(linkedPath));
+    QCOMPARE(readBytes(targetPath), QByteArray("target activity"));
+    QCOMPARE(readBytes(linkedPath), QByteArray("linked activity"));
+}
+
+void TestRideCacheRemoval::
+linkedPeerDeletionDuringMetadataChangeRequiresRecovery()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target =
+        fixture.addRide(firstName(), true);
+    RideItem *linked =
+        fixture.addPlannedRide(secondName(), false);
+    target->setLinkedFileName(secondName());
+    linked->setLinkedFileName(firstName());
+
+    const QString targetPath =
+        fixture.activityPath(firstName());
+    const QString linkedPath =
+        fixture.plannedActivityPath(secondName());
+    writeFixture(targetPath, QByteArray("target activity"));
+    writeFixture(linkedPath, QByteArray("linked activity"));
+    setRideCacheRemovalLinkMutationActionOnCall(
+        1,
+        [&fixture, linked] {
+            fixture.cache->mutableRidesForRemovalTest().removeOne(linked);
+            delete linked;
+        });
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::RecoveryRequired);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), target);
+    QCOMPARE(readBytes(targetPath), QByteArray("target activity"));
+    QCOMPARE(readBytes(linkedPath), QByteArray("linked activity"));
+    QVERIFY(result.recoveryPaths.contains(linkedPath));
+    QVERIFY(!QFileInfo::exists(
+        fixture.backupPath(firstName())));
+}
+
+void TestRideCacheRemoval::
+linkedPeerDeletionDuringCompensationRequiresRecovery_data()
+{
+    QTest::addColumn<bool>("storageFailure");
+
+    QTest::newRow("initial-save-compensation") << false;
+    QTest::newRow("storage-rollback-compensation") << true;
+}
+
+void TestRideCacheRemoval::
+linkedPeerDeletionDuringCompensationRequiresRecovery()
+{
+    QFETCH(bool, storageFailure);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target =
+        fixture.addRide(firstName(), true);
+    RideItem *linked =
+        fixture.addPlannedRide(secondName(), false);
+    target->setLinkedFileName(secondName());
+    linked->setLinkedFileName(firstName());
+
+    const QString targetPath =
+        fixture.activityPath(firstName());
+    const QString linkedPath =
+        fixture.plannedActivityPath(secondName());
+    writeFixture(targetPath, QByteArray("target activity"));
+    writeFixture(linkedPath, QByteArray("linked activity"));
+    if (storageFailure) {
+        setRideCacheRemovalMoveFailurePath(targetPath);
+    } else {
+        setRideCacheRemovalSaveFailureOnCall(
+            secondName(), 1);
+    }
+    setRideCacheRemovalLinkMutationActionOnCall(
+        2,
+        [&fixture, linked] {
+            fixture.cache->mutableRidesForRemovalTest().removeOne(linked);
+            delete linked;
+        });
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::RecoveryRequired);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), target);
+    QCOMPARE(readBytes(targetPath), QByteArray("target activity"));
+    QCOMPARE(readBytes(linkedPath), QByteArray("linked activity"));
+    QVERIFY(result.recoveryPaths.contains(linkedPath));
+}
+
+void TestRideCacheRemoval::
+targetDeletionDuringLinkedMetadataChangeRequiresRecovery()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target =
+        fixture.addRide(firstName(), true);
+    RideItem *linked =
+        fixture.addPlannedRide(secondName(), false);
+    target->setLinkedFileName(secondName());
+    linked->setLinkedFileName(firstName());
+
+    const QString targetPath =
+        fixture.activityPath(firstName());
+    const QString linkedPath =
+        fixture.plannedActivityPath(secondName());
+    writeFixture(targetPath, QByteArray("target activity"));
+    writeFixture(linkedPath, QByteArray("linked activity"));
+    setRideCacheRemovalLinkMutationActionOnCall(
+        1,
+        [&fixture, target] {
+            fixture.cache->mutableRidesForRemovalTest().removeOne(target);
+            delete target;
+        });
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::RecoveryRequired);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), linked);
+    QCOMPARE(
+        linked->getLinkedFileName(), firstName());
+    QCOMPARE(readBytes(targetPath), QByteArray("target activity"));
+    QCOMPARE(readBytes(linkedPath), QByteArray("linked activity"));
+    QVERIFY(result.recoveryPaths.contains(targetPath));
+    QVERIFY(!QFileInfo::exists(
+        fixture.backupPath(firstName())));
+}
+
+void TestRideCacheRemoval::
+targetMutationDuringStorageRollbackRequiresRecovery_data()
+{
+    QTest::addColumn<bool>("mutateInProcessor");
+
+    QTest::newRow("delete-processor") << true;
+    QTest::newRow("link-compensation") << false;
+}
+
+void TestRideCacheRemoval::
+targetMutationDuringStorageRollbackRequiresRecovery()
+{
+    QFETCH(bool, mutateInProcessor);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideFile *const loadedRide = mutateInProcessor
+        ? reinterpret_cast<RideFile *>(quintptr(1))
+        : nullptr;
+    RideItem *target =
+        fixture.addRide(firstName(), true, loadedRide);
+    RideItem *linked =
+        fixture.addPlannedRide(secondName(), false);
+    target->setLinkedFileName(secondName());
+    linked->setLinkedFileName(firstName());
+
+    const QString targetPath =
+        fixture.activityPath(firstName());
+    const QString linkedPath =
+        fixture.plannedActivityPath(secondName());
+    writeFixture(targetPath, QByteArray("target activity"));
+    writeFixture(linkedPath, QByteArray("linked activity"));
+
+    const auto mutateTarget = [target] {
+        target->fileName = thirdName();
+    };
+    if (mutateInProcessor) {
+        setRideCacheRemovalProcessorAction(mutateTarget);
+    } else {
+        setRideCacheRemovalMoveFailurePath(targetPath);
+        setRideCacheRemovalLinkMutationActionOnCall(
+            2, mutateTarget);
+    }
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::RecoveryRequired);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 2);
+    QCOMPARE(target->fileName, thirdName());
+    QCOMPARE(linked->getLinkedFileName(), firstName());
+    QCOMPARE(readBytes(targetPath), QByteArray("target activity"));
+    QCOMPARE(readBytes(linkedPath), QByteArray("linked activity"));
+    QVERIFY(result.recoveryPaths.contains(targetPath));
+    QVERIFY(result.recoveryPaths.contains(linkedPath));
+}
+
+void TestRideCacheRemoval::
+linkedRenameBeforeStorageRollbackRequiresRecovery()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target =
+        fixture.addRide(firstName(), true);
+    RideItem *linked =
+        fixture.addPlannedRide(secondName(), false);
+    target->setLinkedFileName(secondName());
+    linked->setLinkedFileName(firstName());
+
+    const QString targetPath =
+        fixture.activityPath(firstName());
+    const QString oldLinkedPath =
+        fixture.plannedActivityPath(secondName());
+    const QString newLinkedPath =
+        fixture.plannedActivityPath(thirdName());
+    writeFixture(targetPath, QByteArray("target activity"));
+    writeFixture(oldLinkedPath, QByteArray("linked activity"));
+    setRideCacheRemovalSaveActionOnCall(
+        secondName(), 1,
+        [linked, oldLinkedPath, newLinkedPath] {
+            QVERIFY(QFile::rename(
+                oldLinkedPath, newLinkedPath));
+            linked->fileName = thirdName();
+        });
+    setRideCacheRemovalMoveFailurePath(targetPath);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::RecoveryRequired);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 2);
+    QCOMPARE(readBytes(targetPath), QByteArray("target activity"));
+    QVERIFY(!QFileInfo::exists(oldLinkedPath));
+    QCOMPARE(readBytes(newLinkedPath), QByteArray("linked activity"));
+    QVERIFY(result.recoveryPaths.contains(targetPath));
+    QVERIFY(result.recoveryPaths.contains(newLinkedPath));
+}
+
+void TestRideCacheRemoval::linkedReplacementDuringClearIsRestored()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target =
+        fixture.addRide(firstName(), true);
+    RideItem *linked =
+        fixture.addPlannedRide(secondName(), false);
+    target->setLinkedFileName(secondName());
+    linked->setLinkedFileName(firstName());
+
+    const QString targetPath =
+        fixture.activityPath(firstName());
+    const QString linkedPath =
+        fixture.plannedActivityPath(secondName());
+    writeFixture(targetPath, QByteArray("target activity"));
+    writeFixture(linkedPath, QByteArray("linked activity"));
+    setRideCacheRemovalLinkMutationActionOnCall(
+        1,
+        [linked] {
+            linked->setLinkedFileName(thirdName());
+        });
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::Rejected);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 2);
+    QCOMPARE(target->getLinkedFileName(), secondName());
+    QCOMPARE(linked->getLinkedFileName(), firstName());
+    QCOMPARE(readBytes(targetPath), QByteArray("target activity"));
+    QCOMPARE(readBytes(linkedPath), QByteArray("linked activity"));
+    QVERIFY(!QFileInfo::exists(
+        fixture.backupPath(firstName())));
+}
+
+void TestRideCacheRemoval::dirtyLinkedPeerRequiresPreflight()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target =
+        fixture.addRide(firstName(), true);
+    RideItem *linked =
+        fixture.addPlannedRide(secondName(), false);
+    target->setLinkedFileName(secondName());
+    linked->setLinkedFileName(firstName());
+    linked->isdirty = true;
+
+    const QByteArray targetContents("target activity");
+    const QByteArray linkedContents("linked activity");
+    writeFixture(
+        fixture.activityPath(firstName()),
+        targetContents);
+    writeFixture(
+        fixture.plannedActivityPath(secondName()),
+        linkedContents);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::Rejected);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 2);
+    QCOMPARE(
+        target->getLinkedFileName(), secondName());
+    QCOMPARE(
+        linked->getLinkedFileName(), firstName());
+    QCOMPARE(
+        readBytes(fixture.activityPath(firstName())),
+        targetContents);
+    QCOMPARE(
+        readBytes(fixture.plannedActivityPath(secondName())),
+        linkedContents);
+    QVERIFY(!QFileInfo::exists(
+        fixture.backupPath(firstName())));
+}
+
+void TestRideCacheRemoval::
+incomingLinkedReferenceRejectsRemoval()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target =
+        fixture.addRide(firstName(), true);
+    RideItem *incoming =
+        fixture.addPlannedRide(secondName(), false);
+    incoming->setLinkedFileName(firstName());
+
+    const QString targetPath =
+        fixture.activityPath(firstName());
+    const QString incomingPath =
+        fixture.plannedActivityPath(secondName());
+    writeFixture(targetPath, QByteArray("target activity"));
+    writeFixture(incomingPath, QByteArray("incoming activity"));
+
+    const RideCache::OperationPreCheck check =
+        fixture.cache->checkRemovalLinks(target);
+    QVERIFY(!check.canProceed);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::Rejected);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 2);
+    QCOMPARE(
+        incoming->getLinkedFileName(), firstName());
+    QCOMPARE(readBytes(targetPath), QByteArray("target activity"));
+    QCOMPARE(readBytes(incomingPath), QByteArray("incoming activity"));
+    QVERIFY(!QFileInfo::exists(
+        fixture.backupPath(firstName())));
+}
+
+void TestRideCacheRemoval::
+sameNamespaceIncomingLinkRejectsRemoval()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target =
+        fixture.addRide(firstName(), true);
+    RideItem *incoming =
+        fixture.addRide(secondName(), false);
+    incoming->setLinkedFileName(firstName());
+
+    const QString targetPath =
+        fixture.activityPath(firstName());
+    const QString incomingPath =
+        fixture.activityPath(secondName());
+    writeFixture(targetPath, QByteArray("target activity"));
+    writeFixture(incomingPath, QByteArray("incoming activity"));
+
+    const RideCache::OperationPreCheck check =
+        fixture.cache->checkRemovalLinks(target);
+    QVERIFY(!check.canProceed);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::Rejected);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 2);
+    QCOMPARE(
+        incoming->getLinkedFileName(), firstName());
+    QCOMPARE(readBytes(targetPath), QByteArray("target activity"));
+    QCOMPARE(readBytes(incomingPath), QByteArray("incoming activity"));
+    QVERIFY(!QFileInfo::exists(
+        fixture.backupPath(firstName())));
+}
+
+void TestRideCacheRemoval::
+removalLinkPreflightAllowsUnlinkedActivity()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item =
+        fixture.addRide(firstName(), true);
+
+    const RideCache::OperationPreCheck check =
+        fixture.cache->checkRemovalLinks(item);
+
+    QVERIFY(check.canProceed);
+    QVERIFY(!check.requiresUserDecision);
+    QCOMPARE(
+        check.affectedItems,
+        QList<RideItem*>({item}));
+    QVERIFY(check.dirtyItems.isEmpty());
+}
+
+void TestRideCacheRemoval::brokenLinkedPairRejectsRemoval()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideFile *const loadedRide =
+        reinterpret_cast<RideFile *>(quintptr(1));
+    RideItem *target =
+        fixture.addRide(
+            firstName(), true, loadedRide);
+    target->setLinkedFileName(secondName());
+    const QByteArray contents("target activity");
+    writeFixture(
+        fixture.activityPath(firstName()),
+        contents);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::Rejected);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.context->ride, target);
+    QCOMPARE(
+        target->getLinkedFileName(), secondName());
+    QCOMPARE(
+        readBytes(fixture.activityPath(firstName())),
+        contents);
+    QVERIFY(!QFileInfo::exists(
+        fixture.backupPath(firstName())));
+    QVERIFY(
+        rideCacheRemovalLastProcessedRide()
+        == nullptr);
+}
+
+void TestRideCacheRemoval::
+dataProcessorReceivesLoadedRideBeforeArchive()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideFile *const loadedRide =
+        reinterpret_cast<RideFile *>(quintptr(1));
+    fixture.addRide(
+        firstName(), true, loadedRide);
+    writeFixture(
+        fixture.activityPath(firstName()),
+        QByteArray("activity"));
+
+    QVERIFY(fixture.cache->removeRide(firstName()));
+
+    QVERIFY(
+        rideCacheRemovalLastProcessedRide()
+        == loadedRide);
+}
+
+void TestRideCacheRemoval::
+linkedRideClosedDuringMetadataChangeIsNotReused()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideFile *const originallyLoadedRide =
+        reinterpret_cast<RideFile *>(quintptr(1));
+    RideItem *target = fixture.addRide(
+        firstName(), true, originallyLoadedRide);
+    RideItem *linked =
+        fixture.addPlannedRide(secondName(), false);
+    target->setLinkedFileName(secondName());
+    linked->setLinkedFileName(firstName());
+    writeFixture(
+        fixture.activityPath(firstName()),
+        QByteArray("target activity"));
+    writeFixture(
+        fixture.plannedActivityPath(secondName()),
+        QByteArray("linked activity"));
+    setRideCacheRemovalLinkMutationActionOnCall(
+        1, [target] { target->close(); });
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QVERIFY2(result.cleanlyCompleted(), qPrintable(result.error));
+    QVERIFY(
+        rideCacheRemovalLastProcessedRide()
+        != originallyLoadedRide);
+}
+
+void TestRideCacheRemoval::sourceSymlinkIsRejected()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item =
+        fixture.addRide(firstName(), true);
+    const QString outsidePath =
+        QDir(fixture.temporary.path())
+            .filePath(QStringLiteral("outside-source"));
+    const QByteArray contents("outside contents");
+    writeFixture(outsidePath, contents);
+    if (!QFile::link(
+            outsidePath,
+            fixture.activityPath(firstName()))) {
+        QSKIP("Symbolic links are unavailable");
+    }
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::Rejected);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 1);
+    QVERIFY(QFileInfo(
+        fixture.activityPath(firstName())).isSymLink());
+    QCOMPARE(readBytes(outsidePath), contents);
+    QVERIFY(!QFileInfo::exists(
+        fixture.backupPath(firstName())));
+}
+
+void TestRideCacheRemoval::lockedSourceIsRejected()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item =
+        fixture.addRide(firstName(), true);
+    const QByteArray contents("activity");
+    const QString sourcePath =
+        fixture.activityPath(firstName());
+    writeFixture(sourcePath, contents);
+    QLockFile lock(atomicFileLockPath(sourcePath));
+    lock.setStaleLockTime(0);
+    QVERIFY(lock.tryLock(0));
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::Rejected);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(readBytes(sourcePath), contents);
+    QVERIFY(!QFileInfo::exists(
+        fixture.backupPath(firstName())));
+}
+
+void TestRideCacheRemoval::
+derivedFilesAreNotMovedBeforeCommit_data()
+{
+    QTest::addColumn<QString>("failingExtension");
+
+    QTest::newRow("cpx") << QStringLiteral("cpx");
+    QTest::newRow("cpi") << QStringLiteral("cpi");
+    QTest::newRow("notes") << QStringLiteral("notes");
+}
+
+void TestRideCacheRemoval::
+derivedFilesAreNotMovedBeforeCommit()
+{
+    QFETCH(QString, failingExtension);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), true);
+
+    const QByteArray activity("live activity");
+    const QByteArray previousBackup("previous backup");
+    writeFixture(
+        fixture.activityPath(firstName()),
+        activity);
+    writeFixture(
+        fixture.backupPath(firstName()),
+        previousBackup);
+
+    const QStringList extensions = {
+        QStringLiteral("cpx"),
+        QStringLiteral("cpi"),
+        QStringLiteral("notes")
+    };
+    for (const QString &extension : extensions) {
+        writeFixture(
+            fixture.cachePath(firstName(), extension),
+            extension.toLatin1() + " contents");
+    }
+    setRideCacheRemovalMoveFailurePath(
+        fixture.cachePath(
+            firstName(), failingExtension));
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+
+    QVERIFY2(
+        result.cleanlyCompleted(),
+        qPrintable(result.error));
+    QCOMPARE(result.affectedCount, 1);
+    QCOMPARE(fixture.cache->count(), 0);
+    QVERIFY(!QFileInfo::exists(
+        fixture.activityPath(firstName())));
+    QCOMPARE(
+        readBytes(fixture.backupPath(firstName())),
+        activity);
+    for (const QString &extension : extensions) {
+        const QString path =
+            fixture.cachePath(firstName(), extension);
+        QVERIFY(!QFileInfo::exists(path));
+        QVERIFY(stagedFilesFor(path).isEmpty());
+    }
+    Q_UNUSED(item);
+    Q_UNUSED(previousBackup);
+}
+
+void TestRideCacheRemoval::
+derivedMutationBeforeStagingRollsBackFiles()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), true);
+
+    const QByteArray activity("live activity");
+    const QByteArray previousBackup("previous backup");
+    const QByteArray notes("derived notes");
+    const QByteArray concurrentNotes(
+        "concurrently replaced notes");
+    const QString notesPath =
+        fixture.cachePath(
+            firstName(), QStringLiteral("notes"));
+    writeFixture(
+        fixture.activityPath(firstName()),
+        activity);
+    writeFixture(
+        fixture.backupPath(firstName()),
+        previousBackup);
+    writeFixture(notesPath, notes);
+    setRideCacheRemovalMoveMutation(
+        notesPath, concurrentNotes);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+
+    QVERIFY(!result.allLogicallyRemoved());
+    QCOMPARE(result.affectedCount, 0);
+    QVERIFY(!result.error.isEmpty());
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), item);
+    QCOMPARE(
+        readBytes(fixture.activityPath(firstName())),
+        activity);
+    QCOMPARE(
+        readBytes(fixture.backupPath(firstName())),
+        previousBackup);
+    QCOMPARE(readBytes(notesPath), concurrentNotes);
+    QVERIFY(stagedFilesFor(notesPath).isEmpty());
+    QVERIFY(stagedFilesFor(
+        fixture.backupPath(firstName())).isEmpty());
+}
+
+void TestRideCacheRemoval::
+directorySyncFailureRollsBackFiles()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), true);
+
+    const QByteArray activity("live activity");
+    const QByteArray previousBackup("previous backup");
+    writeFixture(
+        fixture.activityPath(firstName()),
+        activity);
+    writeFixture(
+        fixture.backupPath(firstName()),
+        previousBackup);
+    setRideCacheRemovalSyncFailurePath(
+        fixture.activityPath(firstName()));
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+
+    QVERIFY(!result.allLogicallyRemoved());
+    QCOMPARE(result.affectedCount, 0);
+    QVERIFY(!result.error.isEmpty());
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), item);
+    QCOMPARE(fixture.context->ride, item);
+    QCOMPARE(
+        readBytes(fixture.activityPath(firstName())),
+        activity);
+    QCOMPARE(
+        readBytes(fixture.backupPath(firstName())),
+        previousBackup);
+    QVERIFY(stagedFilesFor(
+        fixture.backupPath(firstName())).isEmpty());
+}
+
+void TestRideCacheRemoval::rollbackFailureRequiresRecovery()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), true);
+
+    const QByteArray activity("live activity");
+    const QByteArray previousBackup("previous backup");
+    const QString sourcePath =
+        fixture.activityPath(firstName());
+    writeFixture(sourcePath, activity);
+    writeFixture(
+        fixture.backupPath(firstName()),
+        previousBackup);
+    setRideCacheRemovalSyncFailurePath(sourcePath);
+    setRideCacheRemovalMoveFailureTargetPath(
+        sourcePath);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::RecoveryRequired);
+    QVERIFY(result.requiresRecovery());
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.context->ride, item);
+    QVERIFY(!QFileInfo::exists(sourcePath));
+    const QStringList sourceRecovery =
+        stagedFilesFor(sourcePath);
+    QCOMPARE(sourceRecovery.size(), 1);
+    QCOMPARE(
+        readBytes(sourceRecovery.constFirst()),
+        activity);
+    QCOMPARE(
+        readBytes(fixture.backupPath(firstName())),
+        activity);
+    const QStringList previousRecovery =
+        recoveryFilesFor(
+            fixture.backupPath(firstName()),
+            QStringLiteral(".gc-previous-"));
+    QCOMPARE(previousRecovery.size(), 1);
+    QCOMPARE(
+        readBytes(previousRecovery.constFirst()),
+        previousBackup);
+    QVERIFY(result.recoveryPaths.contains(
+        sourceRecovery.constFirst()));
+    QVERIFY(result.recoveryPaths.contains(
+        fixture.backupPath(firstName())));
+    QVERIFY(result.recoveryPaths.contains(
+        previousRecovery.constFirst()));
+}
+
+void TestRideCacheRemoval::
+sourceRestoreSyncFailureRetainsPublishedBackup()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), true);
+
+    const QByteArray activity("live activity");
+    const QByteArray previousBackup("previous backup");
+    const QString sourcePath =
+        fixture.activityPath(firstName());
+    const QString backupPath =
+        fixture.backupPath(firstName());
+    writeFixture(sourcePath, activity);
+    writeFixture(backupPath, previousBackup);
+    setRideCacheRemovalSyncFailureCount(
+        sourcePath, 2);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::RecoveryRequired);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(readBytes(sourcePath), activity);
+    QCOMPARE(readBytes(backupPath), activity);
+    const QStringList previousRecovery =
+        recoveryFilesFor(
+            backupPath,
+            QStringLiteral(".gc-previous-"));
+    QCOMPARE(previousRecovery.size(), 1);
+    QCOMPARE(
+        readBytes(previousRecovery.constFirst()),
+        previousBackup);
+    QVERIFY(result.recoveryPaths.contains(backupPath));
+    QVERIFY(result.recoveryPaths.contains(
+        previousRecovery.constFirst()));
+}
+
+void TestRideCacheRemoval::
+failedPreviousBackupMovePartialStateRollsBack_data()
+{
+    QTest::addColumn<bool>("removeSource");
+
+    QTest::newRow("target-created") << false;
+    QTest::newRow("target-created-source-removed") << true;
+}
+
+void TestRideCacheRemoval::
+failedPreviousBackupMovePartialStateRollsBack()
+{
+    QFETCH(bool, removeSource);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), true);
+
+    const QByteArray activity("live activity");
+    const QByteArray previousBackup("previous backup");
+    const QString sourcePath =
+        fixture.activityPath(firstName());
+    const QString backupPath =
+        fixture.backupPath(firstName());
+    writeFixture(sourcePath, activity);
+    writeFixture(backupPath, previousBackup);
+    setRideCacheRemovalPartialMoveFailurePath(
+        backupPath, removeSource);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::RolledBack);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(readBytes(sourcePath), activity);
+    QCOMPARE(readBytes(backupPath), previousBackup);
+    QVERIFY(recoveryFilesFor(
+        backupPath,
+        QStringLiteral(".gc-previous-")).isEmpty());
+    QVERIFY(result.recoveryPaths.isEmpty());
+}
+
+void TestRideCacheRemoval::
+failedBackupPublishPartialMoveRollsBack_data()
+{
+    QTest::addColumn<bool>("removeSource");
+
+    QTest::newRow("target-created") << false;
+    QTest::newRow("target-created-source-removed") << true;
+}
+
+void TestRideCacheRemoval::
+failedBackupPublishPartialMoveRollsBack()
+{
+    QFETCH(bool, removeSource);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), true);
+
+    const QByteArray activity("live activity");
+    const QByteArray previousBackup("previous backup");
+    const QString sourcePath =
+        fixture.activityPath(firstName());
+    const QString backupPath =
+        fixture.backupPath(firstName());
+    writeFixture(sourcePath, activity);
+    writeFixture(backupPath, previousBackup);
+    setRideCacheRemovalPartialMoveFailureTargetPath(
+        backupPath, removeSource);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::RolledBack);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(readBytes(sourcePath), activity);
+    QCOMPARE(readBytes(backupPath), previousBackup);
+    QVERIFY(recoveryFilesFor(
+        backupPath,
+        QStringLiteral(".gc-previous-")).isEmpty());
+    QVERIFY(result.recoveryPaths.isEmpty());
+}
+
+void TestRideCacheRemoval::
+failedSourceMovePartialStateRollsBack_data()
+{
+    QTest::addColumn<bool>("removeSource");
+
+    QTest::newRow("target-created") << false;
+    QTest::newRow("target-created-source-removed") << true;
+}
+
+void TestRideCacheRemoval::
+failedSourceMovePartialStateRollsBack()
+{
+    QFETCH(bool, removeSource);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), true);
+
+    const QByteArray activity("live activity");
+    const QByteArray previousBackup("previous backup");
+    const QString sourcePath =
+        fixture.activityPath(firstName());
+    const QString backupPath =
+        fixture.backupPath(firstName());
+    writeFixture(sourcePath, activity);
+    writeFixture(backupPath, previousBackup);
+    setRideCacheRemovalPartialMoveFailurePath(
+        sourcePath, removeSource);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::RolledBack);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(readBytes(sourcePath), activity);
+    QCOMPARE(readBytes(backupPath), previousBackup);
+    QVERIFY(stagedFilesFor(sourcePath).isEmpty());
+    QVERIFY(recoveryFilesFor(
+        backupPath,
+        QStringLiteral(".gc-previous-")).isEmpty());
+    QVERIFY(result.recoveryPaths.isEmpty());
+}
+
+void TestRideCacheRemoval::batchStopsAfterRecoveryRequired()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *first =
+        fixture.addRide(firstName(), true);
+    RideItem *second =
+        fixture.addRide(secondName(), false);
+    const QString firstPath =
+        fixture.activityPath(firstName());
+    const QString secondPath =
+        fixture.activityPath(secondName());
+    writeFixture(firstPath, QByteArray("first activity"));
+    writeFixture(secondPath, QByteArray("second activity"));
+    setRideCacheRemovalSyncFailurePath(firstPath);
+    setRideCacheRemovalMoveFailureTargetPath(firstPath);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRidesResult(
+            QList<RideItem*>{first, second});
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::RecoveryRequired);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(result.requestedCount, 2);
+    QCOMPARE(result.items.size(), 2);
+    QCOMPARE(
+        result.items.at(0).status,
+        RideCache::RemovalStatus::RecoveryRequired);
+    QCOMPARE(
+        result.items.at(1).status,
+        RideCache::RemovalStatus::NotAttempted);
+    QCOMPARE(fixture.cache->count(), 2);
+    QCOMPARE(readBytes(secondPath), QByteArray("second activity"));
+    QVERIFY(!QFileInfo::exists(
+        fixture.backupPath(secondName())));
+    QCOMPARE(rideCacheRemovalRefreshCount(), 0);
+    QCOMPARE(
+        rideCacheRemovalEstimatorRefreshCount(), 0);
+}
+
+void TestRideCacheRemoval::linkedRecoveryRequiredRestoresPair()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target =
+        fixture.addRide(firstName(), true);
+    RideItem *linked =
+        fixture.addPlannedRide(secondName(), false);
+    target->setLinkedFileName(secondName());
+    linked->setLinkedFileName(firstName());
+
+    const QString sourcePath =
+        fixture.activityPath(firstName());
+    writeFixture(sourcePath, QByteArray("target activity"));
+    writeFixture(
+        fixture.plannedActivityPath(secondName()),
+        QByteArray("linked activity"));
+    setRideCacheRemovalSyncFailurePath(sourcePath);
+    setRideCacheRemovalMoveFailureTargetPath(sourcePath);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::RecoveryRequired);
+    QCOMPARE(fixture.cache->count(), 2);
+    QCOMPARE(
+        target->getLinkedFileName(), secondName());
+    QCOMPARE(
+        linked->getLinkedFileName(), firstName());
+}
+
+void TestRideCacheRemoval::
+linkedRollbackSaveFailureReportsRecoveryPath()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target =
+        fixture.addRide(firstName(), true);
+    RideItem *linked =
+        fixture.addPlannedRide(secondName(), false);
+    target->setLinkedFileName(secondName());
+    linked->setLinkedFileName(firstName());
+
+    const QString sourcePath =
+        fixture.activityPath(firstName());
+    const QString linkedPath =
+        fixture.plannedActivityPath(secondName());
+    writeFixture(sourcePath, QByteArray("target activity"));
+    writeFixture(linkedPath, QByteArray("linked activity"));
+    setRideCacheRemovalSaveFailureOnCall(
+        secondName(), 2);
+    setRideCacheRemovalSyncFailurePath(sourcePath);
+    setRideCacheRemovalMoveFailureTargetPath(sourcePath);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::RecoveryRequired);
+    QCOMPARE(fixture.cache->count(), 2);
+    QCOMPARE(
+        target->getLinkedFileName(), secondName());
+    QCOMPARE(
+        linked->getLinkedFileName(), firstName());
+    QVERIFY(result.recoveryPaths.contains(linkedPath));
+}
+
+void TestRideCacheRemoval::
+processorFailureIsReportedWithoutRemoval()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideFile *const loadedRide =
+        reinterpret_cast<RideFile *>(quintptr(1));
+    RideItem *item = fixture.addRide(
+        firstName(), true, loadedRide);
+    const QByteArray activity("activity");
+    const QString sourcePath =
+        fixture.activityPath(firstName());
+    writeFixture(sourcePath, activity);
+    setRideCacheRemovalProcessorFailure(true);
+
+    RideCache::RemovalResult result;
+    bool exceptionEscaped = false;
+    try {
+        result = fixture.cache->removeRideResult(item);
+    } catch (...) {
+        exceptionEscaped = true;
+    }
+
+    QVERIFY(!exceptionEscaped);
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::Rejected);
+    QCOMPARE(result.affectedCount, 0);
+    QVERIFY(!result.error.isEmpty());
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.context->ride, item);
+    QCOMPARE(readBytes(sourcePath), activity);
+    QVERIFY(!QFileInfo::exists(
+        fixture.backupPath(firstName())));
+}
+
+void TestRideCacheRemoval::
+processorReorderingDoesNotRemoveWrongRow()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideFile *const loadedRide =
+        reinterpret_cast<RideFile *>(quintptr(1));
+    RideItem *target = fixture.addRide(
+        firstName(), true, loadedRide);
+    RideItem *survivor =
+        fixture.addRide(secondName(), false);
+    RideItem *intruder =
+        fixture.addRide(thirdName(), false);
+    writeFixture(
+        fixture.activityPath(firstName()),
+        QByteArray("target activity"));
+    setRideCacheRemovalProcessorAction(
+        [&fixture] {
+            fixture.cache->mutableRidesForRemovalTest().move(2, 0);
+        });
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    const int countAfterRemoval =
+        fixture.cache->count();
+    const bool targetStillCached =
+        fixture.cache->rides().contains(target);
+    const bool survivorStillCached =
+        fixture.cache->rides().contains(survivor);
+    const bool intruderStillCached =
+        fixture.cache->rides().contains(intruder);
+    if (targetStillCached)
+        fixture.cache->mutableRidesForRemovalTest().removeOne(target);
+    if (!intruderStillCached)
+        delete intruder;
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::Committed);
+    QCOMPARE(result.affectedCount, 1);
+    QCOMPARE(countAfterRemoval, 2);
+    QVERIFY(!targetStillCached);
+    QVERIFY(survivorStillCached);
+    QVERIFY(intruderStillCached);
+    QCOMPARE(fixture.context->ride, survivor);
+    QCOMPARE(
+        readBytes(fixture.backupPath(firstName())),
+        QByteArray("target activity"));
+}
+
+void TestRideCacheRemoval::
+sidecarOwnerIntroducedBeforeCommitRejectsRemoval()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideFile *const loadedRide =
+        reinterpret_cast<RideFile *>(quintptr(1));
+    RideItem *target = fixture.addRide(
+        firstName(), true, loadedRide);
+    const QString peerName =
+        QFileInfo(firstName()).completeBaseName()
+        + QStringLiteral(".fit");
+    const QString targetPath = fixture.activityPath(firstName());
+    const QString peerPath = fixture.activityPath(peerName);
+    const QString notesPath =
+        fixture.cachePath(firstName(), QStringLiteral("notes"));
+    const QString cpiPath =
+        fixture.cachePath(firstName(), QStringLiteral("cpi"));
+    const QByteArray targetContents("target activity");
+    const QByteArray peerContents("peer activity");
+    const QByteArray notesContents("shared notes");
+    const QByteArray cpiContents("shared cache");
+    writeFixture(targetPath, targetContents);
+    writeFixture(peerPath, peerContents);
+    writeFixture(notesPath, notesContents);
+    writeFixture(cpiPath, cpiContents);
+    QPointer<RideItem> introducedOwner;
+    setRideCacheRemovalProcessorAction(
+        [&fixture, &introducedOwner, &peerName] {
+            introducedOwner = fixture.addRide(peerName, false);
+        });
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(result.status, RideCache::RemovalStatus::Rejected);
+    QCOMPARE(result.affectedCount, 0);
+    QVERIFY(!result.error.isEmpty());
+    QVERIFY(introducedOwner);
+    QCOMPARE(fixture.cache->count(), 2);
+    QVERIFY(fixture.cache->rides().contains(target));
+    QVERIFY(fixture.cache->rides().contains(introducedOwner.data()));
+    QCOMPARE(fixture.context->ride, target);
+    QCOMPARE(readBytes(targetPath), targetContents);
+    QCOMPARE(readBytes(peerPath), peerContents);
+    QCOMPARE(readBytes(notesPath), notesContents);
+    QCOMPARE(readBytes(cpiPath), cpiContents);
+    QVERIFY(!QFileInfo::exists(fixture.backupPath(firstName())));
+}
+
+void TestRideCacheRemoval::
+modelRemovalSignalSiblingRemovalDoesNotUseInvalidIndex()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *survivor = fixture.addRide(firstName(), false);
+    RideItem *target = fixture.addRide(secondName(), true);
+    QAbstractItemModelTester modelTester(
+        fixture.cache->model(),
+        QAbstractItemModelTester::FailureReportingMode::QtTest);
+    writeFixture(
+        fixture.activityPath(secondName()),
+        QByteArray("target activity"));
+    bool reentered = false;
+    RideCache::RemovalResult nestedResult;
+    connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::rowsAboutToBeRemoved,
+        [&] {
+            if (reentered) return;
+            reentered = true;
+            nestedResult =
+                fixture.cache->removeArchivedRideResult(survivor);
+        });
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(result.status, RideCache::RemovalStatus::Committed);
+    QCOMPARE(result.affectedCount, 1);
+    QCOMPARE(
+        nestedResult.status,
+        RideCache::RemovalStatus::Rejected);
+    QCOMPARE(nestedResult.affectedCount, 0);
+    QVERIFY(!fixture.cache->rides().contains(target));
+    QVERIFY(fixture.cache->rides().contains(survivor));
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.context->ride, survivor);
+    QCOMPARE(
+        readBytes(fixture.backupPath(secondName())),
+        QByteArray("target activity"));
+}
+
+void TestRideCacheRemoval::
+modelRemovalSignalKeepsSelectionValid_data()
+{
+    QTest::addColumn<bool>("destroyBeforeRowRemoval");
+
+    QTest::newRow("rows-about-to-be-removed") << true;
+    QTest::newRow("rows-removed") << false;
+}
+
+void TestRideCacheRemoval::
+modelRemovalSignalKeepsSelectionValid()
+{
+    QFETCH(bool, destroyBeforeRowRemoval);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target = fixture.addRide(firstName(), true);
+    RideItem *survivor = fixture.addRide(secondName(), false);
+    const QPointer<RideItem> guardedTarget(target);
+    bool observerRan = false;
+    QString observedSelection;
+    const auto destroyTarget = [target] { delete target; };
+    const auto observeSelection = [&] {
+        observerRan = true;
+        RideItem *const selected = fixture.context->ride;
+        QVERIFY(selected != nullptr);
+        observedSelection = selected->fileName;
+    };
+    if (destroyBeforeRowRemoval) {
+        connect(
+            fixture.cache->model(),
+            &QAbstractItemModel::rowsAboutToBeRemoved,
+            destroyTarget);
+        connect(
+            fixture.cache->model(),
+            &QAbstractItemModel::rowsAboutToBeRemoved,
+            observeSelection);
+    } else {
+        connect(
+            fixture.cache->model(),
+            &QAbstractItemModel::rowsRemoved,
+            destroyTarget);
+        connect(
+            fixture.cache->model(),
+            &QAbstractItemModel::rowsRemoved,
+            observeSelection);
+    }
+    writeFixture(
+        fixture.activityPath(firstName()),
+        QByteArray("target activity"));
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(result.status, RideCache::RemovalStatus::Committed);
+    QCOMPARE(result.affectedCount, 1);
+    QVERIFY(observerRan);
+    QCOMPARE(observedSelection, secondName());
+    QVERIFY(guardedTarget.isNull());
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), survivor);
+    QCOMPARE(fixture.context->ride, survivor);
+}
+
+void TestRideCacheRemoval::
+modelRemovalSignalDestructionDoesNotExposeDanglingItem_data()
+{
+    QTest::addColumn<bool>("destroyBeforeRowRemoval");
+
+    QTest::newRow("rows-about-to-be-removed") << true;
+    QTest::newRow("rows-removed") << false;
+}
+
+void TestRideCacheRemoval::
+modelRemovalSignalDestructionDoesNotExposeDanglingItem()
+{
+    QFETCH(bool, destroyBeforeRowRemoval);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target =
+        fixture.addRide(firstName(), true);
+    RideItem *survivor =
+        fixture.addRide(secondName(), false);
+    RideItem *const targetAddress = target;
+    const QPointer<RideItem> guardedTarget(target);
+    bool danglingNotification = false;
+
+    const auto destroyTarget =
+        [target] { delete target; };
+    if (destroyBeforeRowRemoval) {
+        connect(
+            fixture.cache->model(),
+            &QAbstractItemModel::rowsAboutToBeRemoved,
+            destroyTarget);
+    } else {
+        connect(
+            fixture.cache->model(),
+            &QAbstractItemModel::rowsRemoved,
+            destroyTarget);
+    }
+    connect(
+        fixture.context.get(),
+        &Context::rideDeleted,
+        [&](RideItem *deleted) {
+            danglingNotification =
+                guardedTarget.isNull()
+                && deleted == targetAddress;
+        });
+    writeFixture(
+        fixture.activityPath(firstName()),
+        QByteArray("target activity"));
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::Committed);
+    QCOMPARE(result.affectedCount, 1);
+    QVERIFY(guardedTarget.isNull());
+    QVERIFY(!danglingNotification);
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), survivor);
+    QCOMPARE(fixture.context->ride, survivor);
+}
+
+void TestRideCacheRemoval::
+modelSignalOwnerDestructionDoesNotContinue_data()
+{
+    QTest::addColumn<bool>("destroyCache");
+    QTest::addColumn<bool>("destroyBeforeRowRemoval");
+
+    QTest::newRow("cache-rows-about-to-be-removed")
+        << true << true;
+    QTest::newRow("cache-rows-removed")
+        << true << false;
+    QTest::newRow("context-rows-about-to-be-removed")
+        << false << true;
+    QTest::newRow("context-rows-removed")
+        << false << false;
+}
+
+void TestRideCacheRemoval::
+modelSignalOwnerDestructionDoesNotContinue()
+{
+    QFETCH(bool, destroyCache);
+    QFETCH(bool, destroyBeforeRowRemoval);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target = fixture.addRide(firstName(), true);
+    RideItem *survivor = fixture.addRide(secondName(), false);
+    RideCache *const cache = fixture.cache.get();
+    QPointer<RideCache> cacheGuard(cache);
+    QPointer<Context> contextGuard(fixture.context.get());
+    QPointer<RideItem> targetGuard(target);
+    QPointer<RideItem> survivorGuard(survivor);
+    writeFixture(
+        fixture.activityPath(firstName()),
+        QByteArray("target activity"));
+
+    const auto destroyOwner = [&fixture, destroyCache, target, survivor] {
+        if (destroyCache) {
+            fixture.athlete->rideCache = nullptr;
+            fixture.context->ride = nullptr;
+            delete fixture.cache.release();
+            return;
+        }
+        target->context = nullptr;
+        survivor->context = nullptr;
+        fixture.athlete->context = nullptr;
+        delete fixture.context.release();
+    };
+    if (destroyBeforeRowRemoval) {
+        connect(
+            cache->model(),
+            &QAbstractItemModel::rowsAboutToBeRemoved,
+            destroyOwner);
+    } else {
+        connect(
+            cache->model(),
+            &QAbstractItemModel::rowsRemoved,
+            destroyOwner);
+    }
+
+    const RideCache::RemovalResult result =
+        cache->removeRideResult(target);
+
+    QCOMPARE(result.status, RideCache::RemovalStatus::Committed);
+    QCOMPARE(result.affectedCount, 1);
+    if (destroyCache) {
+        QVERIFY(cacheGuard.isNull());
+        QVERIFY(contextGuard);
+        QVERIFY(targetGuard.isNull());
+        QVERIFY(survivorGuard.isNull());
+        QCOMPARE(contextGuard->ride, nullptr);
+    } else {
+        QVERIFY(contextGuard.isNull());
+        QVERIFY(cacheGuard);
+        QCOMPARE(cacheGuard->count(), 1);
+        QCOMPARE(cacheGuard->rides().constFirst(), survivor);
+        QVERIFY(!cacheGuard->rides().contains(target));
+    }
+    QCOMPARE(
+        readBytes(fixture.backupPath(firstName())),
+        QByteArray("target activity"));
+}
+
+void TestRideCacheRemoval::
+batchModelSignalOwnerDestructionDoesNotContinue_data()
+{
+    QTest::addColumn<bool>("destroyCache");
+    QTest::addColumn<bool>("destroyBeforeRowRemoval");
+
+    QTest::newRow("cache-rows-about-to-be-removed")
+        << true << true;
+    QTest::newRow("cache-rows-removed")
+        << true << false;
+    QTest::newRow("context-rows-about-to-be-removed")
+        << false << true;
+    QTest::newRow("context-rows-removed")
+        << false << false;
+}
+
+void TestRideCacheRemoval::
+batchModelSignalOwnerDestructionDoesNotContinue()
+{
+    QFETCH(bool, destroyCache);
+    QFETCH(bool, destroyBeforeRowRemoval);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target = fixture.addRide(firstName(), true);
+    RideItem *survivor = fixture.addRide(secondName(), false);
+    RideCache *const cache = fixture.cache.get();
+    QPointer<RideCache> cacheGuard(cache);
+    QPointer<Context> contextGuard(fixture.context.get());
+    QPointer<RideItem> targetGuard(target);
+    QPointer<RideItem> survivorGuard(survivor);
+    writeFixture(
+        fixture.activityPath(firstName()),
+        QByteArray("target activity"));
+    writeFixture(
+        fixture.activityPath(secondName()),
+        QByteArray("survivor activity"));
+
+    const auto destroyOwner =
+        [&fixture, destroyCache, target, survivor] {
+            if (destroyCache) {
+                fixture.athlete->rideCache = nullptr;
+                fixture.context->ride = nullptr;
+                delete fixture.cache.release();
+                return;
+            }
+            target->context = nullptr;
+            survivor->context = nullptr;
+            fixture.athlete->context = nullptr;
+            delete fixture.context.release();
+        };
+    if (destroyBeforeRowRemoval) {
+        connect(
+            cache->model(),
+            &QAbstractItemModel::rowsAboutToBeRemoved,
+            destroyOwner);
+    } else {
+        connect(
+            cache->model(),
+            &QAbstractItemModel::rowsRemoved,
+            destroyOwner);
+    }
+
+    const RideCache::RemovalResult result =
+        cache->removeRidesResult(
+            QList<RideItem*>{target, survivor});
+
+    QCOMPARE(result.requestedCount, 2);
+    QCOMPARE(result.affectedCount, 1);
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::PartiallyCommitted);
+    QCOMPARE(result.items.size(), 2);
+    QVERIFY(result.items.at(0).logicallyRemoved());
+    QCOMPARE(
+        result.items.at(1).status,
+        RideCache::RemovalStatus::NotAttempted);
+    QVERIFY(!result.error.isEmpty());
+    QCOMPARE(rideCacheRemovalRefreshCount(), 0);
+    QCOMPARE(rideCacheRemovalEstimatorRefreshCount(), 0);
+    QCOMPARE(
+        readBytes(fixture.backupPath(firstName())),
+        QByteArray("target activity"));
+    QCOMPARE(
+        readBytes(fixture.activityPath(secondName())),
+        QByteArray("survivor activity"));
+    if (destroyCache) {
+        QVERIFY(cacheGuard.isNull());
+        QVERIFY(contextGuard);
+        QVERIFY(targetGuard.isNull());
+        QVERIFY(survivorGuard.isNull());
+    } else {
+        QVERIFY(contextGuard.isNull());
+        QVERIFY(cacheGuard);
+        QCOMPARE(cacheGuard->count(), 1);
+        QCOMPARE(cacheGuard->rides().constFirst(), survivor);
+    }
+}
+
+void TestRideCacheRemoval::
+derivedCleanupFailurePreservesCacheAndFiles_data()
+{
+    QTest::addColumn<QString>("failingExtension");
+
+    QTest::newRow("notes") << QStringLiteral("notes");
+    QTest::newRow("cpi") << QStringLiteral("cpi");
+    QTest::newRow("cpx") << QStringLiteral("cpx");
+}
+
+void TestRideCacheRemoval::
+derivedCleanupFailurePreservesCacheAndFiles()
+{
+    QFETCH(QString, failingExtension);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), true);
+
+    const QByteArray activity("live activity");
+    const QByteArray previousBackup("previous backup");
+    writeFixture(
+        fixture.activityPath(firstName()),
+        activity);
+    writeFixture(
+        fixture.backupPath(firstName()),
+        previousBackup);
+
+    const QStringList extensions = {
+        QStringLiteral("notes"),
+        QStringLiteral("cpi"),
+        QStringLiteral("cpx")
+    };
+    for (const QString &extension : extensions) {
+        const QString path =
+            fixture.cachePath(firstName(), extension);
+        if (extension == failingExtension) {
+            writeFixture(
+                QDir(path).filePath(
+                    QStringLiteral("sentinel")),
+                QByteArray("keep derived directory"));
+        } else {
+            writeFixture(
+                path,
+                extension.toLatin1() + " contents");
+        }
+    }
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+    QVERIFY(!result.allLogicallyRemoved());
+    QCOMPARE(result.affectedCount, 0);
+    QVERIFY(!result.error.isEmpty());
+
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), item);
+    QCOMPARE(fixture.context->ride, item);
+    QCOMPARE(
+        readBytes(fixture.activityPath(firstName())),
+        activity);
+    QCOMPARE(
+        readBytes(fixture.backupPath(firstName())),
+        previousBackup);
+    for (const QString &extension : extensions) {
+        const QString path =
+            fixture.cachePath(firstName(), extension);
+        if (extension == failingExtension) {
+            QVERIFY(QFileInfo(path).isDir());
+            QCOMPARE(
+                readBytes(QDir(path).filePath(
+                    QStringLiteral("sentinel"))),
+                QByteArray("keep derived directory"));
+        } else {
+            QCOMPARE(
+                readBytes(path),
+                extension.toLatin1() + " contents");
+        }
+    }
+    QCOMPARE(rideCacheRemovalRefreshCount(), 0);
+    QCOMPARE(
+        rideCacheRemovalEstimatorRefreshCount(), 0);
+}
+
+void TestRideCacheRemoval::
+committedCleanupFailureLeavesRecoveryFile_data()
+{
+    QTest::addColumn<QString>("failingExtension");
+
+    QTest::newRow("notes") << QStringLiteral("notes");
+    QTest::newRow("cpi") << QStringLiteral("cpi");
+    QTest::newRow("cpx") << QStringLiteral("cpx");
+}
+
+void TestRideCacheRemoval::
+committedCleanupFailureLeavesRecoveryFile()
+{
+    QFETCH(QString, failingExtension);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), true);
+
+    const QByteArray activity("live activity");
+    const QByteArray previousBackup("previous backup");
+    writeFixture(
+        fixture.activityPath(firstName()),
+        activity);
+    writeFixture(
+        fixture.backupPath(firstName()),
+        previousBackup);
+
+    const QStringList extensions = {
+        QStringLiteral("notes"),
+        QStringLiteral("cpi"),
+        QStringLiteral("cpx")
+    };
+    for (const QString &extension : extensions) {
+        writeFixture(
+            fixture.cachePath(firstName(), extension),
+            extension.toLatin1() + " contents");
+    }
+    const QString failingPath =
+        fixture.cachePath(
+            firstName(), failingExtension);
+    setRideCacheRemovalCleanupFailurePath(failingPath);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+    QVERIFY(result.allLogicallyRemoved());
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::
+            CommittedCleanupPending);
+    QCOMPARE(result.affectedCount, 1);
+    QVERIFY(result.error.contains(failingPath));
+
+    QCOMPARE(fixture.cache->count(), 0);
+    QVERIFY(!QFileInfo::exists(
+        fixture.activityPath(firstName())));
+    QCOMPARE(
+        readBytes(fixture.backupPath(firstName())),
+        activity);
+    QCOMPARE(
+        readBytes(failingPath),
+        failingExtension.toLatin1() + " contents");
+    QVERIFY(result.recoveryPaths.contains(
+        failingPath));
+    QVERIFY(stagedFilesFor(
+        fixture.backupPath(firstName())).isEmpty());
+    QCOMPARE(rideCacheRemovalRefreshCount(), 1);
+    QCOMPARE(
+        rideCacheRemovalEstimatorRefreshCount(), 1);
+}
+
+void TestRideCacheRemoval::
+cleanupPendingBoolReportsLogicalRemoval()
 {
     Fixture fixture;
     QVERIFY(fixture.initialize());
     fixture.addRide(firstName(), true);
+    const QString notesPath =
+        fixture.cachePath(
+            firstName(), QStringLiteral("notes"));
+    writeFixture(
+        fixture.activityPath(firstName()),
+        QByteArray("activity"));
+    writeFixture(notesPath, QByteArray("notes"));
+    setRideCacheRemovalCleanupFailurePath(notesPath);
+
+    QVERIFY(fixture.cache->removeRide(firstName()));
+
+    QCOMPARE(fixture.cache->count(), 0);
+    QCOMPARE(readBytes(notesPath), QByteArray("notes"));
+}
+
+void TestRideCacheRemoval::
+previousBackupCleanupFailureIsExplicit()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), true);
+    const QByteArray activity("activity");
+    const QByteArray previousBackup("previous backup");
+    const QString backupPath =
+        fixture.backupPath(firstName());
+    writeFixture(
+        fixture.activityPath(firstName()), activity);
+    writeFixture(backupPath, previousBackup);
+    setRideCacheRemovalCleanupFailurePath(backupPath);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::
+            CommittedCleanupPending);
+    QVERIFY(result.allLogicallyRemoved());
+    QCOMPARE(readBytes(backupPath), activity);
+    const QStringList recovery =
+        recoveryFilesFor(
+            backupPath,
+            QStringLiteral(".gc-previous-"));
+    QCOMPARE(recovery.size(), 1);
+    QCOMPARE(
+        readBytes(recovery.constFirst()),
+        previousBackup);
+    QVERIFY(result.recoveryPaths.contains(
+        recovery.constFirst()));
+}
+
+void TestRideCacheRemoval::sourceCleanupFailureIsExplicit()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), true);
+    const QByteArray activity("activity");
+    const QString sourcePath =
+        fixture.activityPath(firstName());
+    writeFixture(sourcePath, activity);
+    setRideCacheRemovalCleanupFailurePath(sourcePath);
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::
+            CommittedCleanupPending);
+    QVERIFY(result.allLogicallyRemoved());
+    QVERIFY(!QFileInfo::exists(sourcePath));
+    const QStringList recovery =
+        stagedFilesFor(sourcePath);
+    QCOMPARE(recovery.size(), 1);
+    QCOMPARE(
+        readBytes(recovery.constFirst()),
+        activity);
+    QVERIFY(result.recoveryPaths.contains(
+        recovery.constFirst()));
+}
+
+void TestRideCacheRemoval::
+archivedCleanupFailurePreservesCacheAndFiles()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), true);
+
+    const QByteArray archived("archived activity");
+    const QString cpxDirectory =
+        fixture.cachePath(
+            firstName(), QStringLiteral("cpx"));
+    writeFixture(
+        fixture.backupPath(firstName()),
+        archived);
+    writeFixture(
+        QDir(cpxDirectory).filePath(
+            QStringLiteral("sentinel")),
+        QByteArray("keep cpx directory"));
+
+    QVERIFY(!fixture.cache->removeArchivedRide(item));
+
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), item);
+    QCOMPARE(fixture.context->ride, item);
+    QCOMPARE(
+        readBytes(fixture.backupPath(firstName())),
+        archived);
+    QVERIFY(QFileInfo(cpxDirectory).isDir());
+    QCOMPARE(
+        readBytes(QDir(cpxDirectory).filePath(
+            QStringLiteral("sentinel"))),
+        QByteArray("keep cpx directory"));
+    QCOMPARE(rideCacheRemovalRefreshCount(), 0);
+    QCOMPARE(
+        rideCacheRemovalEstimatorRefreshCount(), 0);
+}
+
+void TestRideCacheRemoval::batchRemovalReportsPartialFailure()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *failed = fixture.addRide(firstName(), false);
+    RideItem *removed = fixture.addRide(secondName(), true);
+
+    const QByteArray previousBackup("previous backup");
+    const QByteArray removedActivity("removable activity");
+    writeFixture(
+        fixture.backupPath(firstName()),
+        previousBackup);
+    writeFixture(
+        fixture.activityPath(secondName()),
+        removedActivity);
+
+    dismissNextMessageBox();
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRidesResult(
+            QList<RideItem*>{failed, removed});
+    QVERIFY(!result.allLogicallyRemoved());
+    QCOMPARE(result.affectedCount, 1);
+    QVERIFY(!result.error.isEmpty());
+
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), failed);
+    QCOMPARE(
+        readBytes(fixture.backupPath(firstName())),
+        previousBackup);
+    QCOMPARE(
+        readBytes(fixture.backupPath(secondName())),
+        removedActivity);
+    QCOMPARE(rideCacheRemovalRefreshCount(), 1);
+    QCOMPARE(
+        rideCacheRemovalEstimatorRefreshCount(), 1);
+}
+
+void TestRideCacheRemoval::
+stagingCleanupFailureRequiresRecoveryAndStopsBatch()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *first = fixture.addRide(firstName(), true);
+    RideItem *second = fixture.addRide(secondName(), false);
+    const QString firstPath = fixture.activityPath(firstName());
+    const QString secondPath = fixture.activityPath(secondName());
+    const QString firstBackup = fixture.backupPath(firstName());
+    const QByteArray firstContents("first activity");
+    const QByteArray changedContents("concurrent replacement");
+    const QByteArray secondContents("second activity");
+    const QByteArray retainedContents("retained staging sentinel");
+    writeFixture(firstPath, firstContents);
+    writeFixture(secondPath, secondContents);
+
+    QString retainedStagingPath;
+    setRideCacheRemovalMoveAction(
+        firstPath,
+        [&] {
+            const QFileInfo backupInfo(firstBackup);
+            QDir backupDirectory(backupInfo.absolutePath());
+            const QStringList stagingNames = backupDirectory.entryList(
+                {QStringLiteral(".%1.gc-copy-*")
+                     .arg(backupInfo.fileName())},
+                QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot);
+            QCOMPARE(stagingNames.size(), 1);
+            retainedStagingPath =
+                backupDirectory.filePath(stagingNames.constFirst());
+            QVERIFY(QFile::remove(retainedStagingPath));
+            QVERIFY(QDir().mkdir(retainedStagingPath));
+            writeFixture(
+                QDir(retainedStagingPath).filePath(
+                    QStringLiteral("sentinel")),
+                retainedContents);
+            writeFixture(firstPath, changedContents);
+        });
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRidesResult(
+            QList<RideItem*>{first, second}, false);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::RecoveryRequired);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(result.requestedCount, 2);
+    QCOMPARE(result.items.size(), 2);
+    QCOMPARE(
+        result.items.at(0).status,
+        RideCache::RemovalStatus::RecoveryRequired);
+    QCOMPARE(
+        result.items.at(1).status,
+        RideCache::RemovalStatus::NotAttempted);
+    QVERIFY(!retainedStagingPath.isEmpty());
+    QVERIFY(result.recoveryPaths.contains(retainedStagingPath));
+    QCOMPARE(
+        readBytes(QDir(retainedStagingPath).filePath(
+            QStringLiteral("sentinel"))),
+        retainedContents);
+    QCOMPARE(readBytes(firstPath), changedContents);
+    QCOMPARE(readBytes(secondPath), secondContents);
+    QVERIFY(!QFileInfo::exists(fixture.backupPath(secondName())));
+    QCOMPARE(fixture.cache->count(), 2);
+}
+
+void TestRideCacheRemoval::
+partialBatchBoolPreservesAnySuccessContract()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *missing =
+        fixture.addRide(firstName(), false);
+    fixture.addRide(secondName(), true);
+    const QByteArray activity("removable activity");
+    writeFixture(
+        fixture.activityPath(secondName()),
+        activity);
+
+    QVERIFY(fixture.cache->removeRides(
+        QStringList{firstName(), secondName()}));
+
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), missing);
+    QCOMPARE(
+        readBytes(fixture.backupPath(secondName())),
+        activity);
+}
+
+void TestRideCacheRemoval::
+sharedLegacySidecarsSurviveNamespaceRemoval()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *completed =
+        fixture.addRide(firstName(), false);
+    RideItem *planned =
+        fixture.addPlannedRide(firstName(), true);
+
+    const QByteArray completedActivity(
+        "completed activity");
+    const QByteArray plannedActivity(
+        "planned activity");
+    const QByteArray notes("shared notes");
+    const QByteArray cpi("shared cpi");
+    writeFixture(
+        fixture.activityPath(firstName()),
+        completedActivity);
+    writeFixture(
+        fixture.plannedActivityPath(firstName()),
+        plannedActivity);
+    writeFixture(
+        fixture.cachePath(
+            firstName(), QStringLiteral("notes")),
+        notes);
+    writeFixture(
+        fixture.cachePath(
+            firstName(), QStringLiteral("cpi")),
+        cpi);
+
+    QVERIFY(fixture.cache->removeRide(planned));
+
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), completed);
+    QCOMPARE(
+        readBytes(fixture.activityPath(firstName())),
+        completedActivity);
+    QVERIFY(!QFileInfo::exists(
+        fixture.plannedActivityPath(firstName())));
+    QCOMPARE(
+        readBytes(
+            fixture.plannedBackupPath(firstName())),
+        plannedActivity);
+    QCOMPARE(
+        readBytes(fixture.cachePath(
+            firstName(), QStringLiteral("notes"))),
+        notes);
+    QCOMPARE(
+        readBytes(fixture.cachePath(
+            firstName(), QStringLiteral("cpi"))),
+        cpi);
+}
+
+void TestRideCacheRemoval::currentRideRemovalUsesOrdinaryArchivePath()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item =
+        fixture.addRide(firstName(), true);
+
+    QStringList events;
+    RideItem *deletedItem = nullptr;
+    RideItem *selectedItem =
+        reinterpret_cast<RideItem *>(quintptr(1));
+    connect(
+        fixture.context.get(),
+        &Context::rideDeleted,
+        [&](RideItem *deleted) {
+            events.append(QStringLiteral("deleted"));
+            deletedItem = deleted;
+            QVERIFY(fixture.context->ride == nullptr);
+        });
+    connect(
+        fixture.context.get(),
+        &Context::rideSelected,
+        [&](RideItem *selected) {
+            events.append(QStringLiteral("selected"));
+            selectedItem = selected;
+        });
 
     const QByteArray original("current original");
     writeFixture(fixture.activityPath(firstName()), original);
@@ -208,8 +3202,109 @@ void TestRideCacheRemoval::currentRideRemovalUsesOrdinaryArchivePath()
     QVERIFY(fixture.cache->removeCurrentRide());
 
     QCOMPARE(fixture.cache->count(), 0);
+    QCOMPARE(fixture.context->ride, nullptr);
+    QCOMPARE(deletedItem, item);
+    QCOMPARE(selectedItem, nullptr);
+    const QStringList expectedEvents = {
+        QStringLiteral("deleted"),
+        QStringLiteral("selected")
+    };
+    QCOMPARE(events, expectedEvents);
     QVERIFY(!QFileInfo::exists(fixture.activityPath(firstName())));
     QCOMPARE(readBytes(fixture.backupPath(firstName())), original);
+}
+
+void TestRideCacheRemoval::
+nonCurrentRemovalNotifiesDeletionAndPreservesSelection()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *selected =
+        fixture.addRide(firstName(), true);
+    RideItem *target =
+        fixture.addRide(secondName(), false);
+
+    QStringList events;
+    RideItem *deletedItem = nullptr;
+    RideItem *selectedItem = nullptr;
+    connect(
+        fixture.context.get(),
+        &Context::rideDeleted,
+        [&](RideItem *deleted) {
+            events.append(QStringLiteral("deleted"));
+            deletedItem = deleted;
+            QCOMPARE(fixture.context->ride, selected);
+        });
+    connect(
+        fixture.context.get(),
+        &Context::rideSelected,
+        [&](RideItem *ride) {
+            events.append(QStringLiteral("selected"));
+            selectedItem = ride;
+        });
+    writeFixture(
+        fixture.activityPath(secondName()),
+        QByteArray("target activity"));
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::Committed);
+    QCOMPARE(fixture.context->ride, selected);
+    QCOMPARE(deletedItem, target);
+    QCOMPARE(selectedItem, selected);
+    const QStringList expectedEvents = {
+        QStringLiteral("deleted"),
+        QStringLiteral("selected")
+    };
+    QCOMPARE(events, expectedEvents);
+}
+
+void TestRideCacheRemoval::batchRemovingAllRidesClearsSelection()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *first =
+        fixture.addRide(firstName(), true);
+    RideItem *second =
+        fixture.addRide(secondName(), false);
+    writeFixture(
+        fixture.activityPath(firstName()),
+        QByteArray("first activity"));
+    writeFixture(
+        fixture.activityPath(secondName()),
+        QByteArray("second activity"));
+
+    QStringList events;
+    connect(
+        fixture.context.get(),
+        &Context::rideDeleted,
+        [&](RideItem *) {
+            events.append(QStringLiteral("deleted"));
+        });
+    connect(
+        fixture.context.get(),
+        &Context::rideSelected,
+        [&](RideItem *) {
+            events.append(QStringLiteral("selected"));
+        });
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRidesResult(
+            QList<RideItem*>{first, second});
+
+    QVERIFY(result.allLogicallyRemoved());
+    QCOMPARE(fixture.cache->count(), 0);
+    QCOMPARE(fixture.context->ride, nullptr);
+    const QStringList expectedEvents = {
+        QStringLiteral("deleted"),
+        QStringLiteral("selected"),
+        QStringLiteral("deleted"),
+        QStringLiteral("selected")
+    };
+    QCOMPARE(events, expectedEvents);
 }
 
 void TestRideCacheRemoval::missingRideIsRejectedWithoutTouchingFiles()
@@ -232,8 +3327,7 @@ void TestRideCacheRemoval::plannedRemovalDeletesOnlyPlannedCpx()
 {
     Fixture fixture;
     QVERIFY(fixture.initialize());
-    RideItem *planned = fixture.addRide(firstName(), false);
-    planned->planned = true;
+    fixture.addPlannedRide(firstName(), false);
     fixture.addRide(secondName(), true);
 
     const QString completedCpx =
@@ -262,9 +3356,7 @@ plannedBatchRemovalDeletesOnlyPlannedCpx()
 {
     Fixture fixture;
     QVERIFY(fixture.initialize());
-    RideItem *planned =
-        fixture.addRide(firstName(), false);
-    planned->planned = true;
+    fixture.addPlannedRide(firstName(), false);
     fixture.addRide(secondName(), true);
 
     const QString plannedActivity =
@@ -359,6 +3451,33 @@ void TestRideCacheRemoval::batchRemovalRefreshesOnce()
 }
 
 void TestRideCacheRemoval::
+singleRemovalCancelsRefreshBeforeProcessing()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideFile *const loadedRide =
+        reinterpret_cast<RideFile *>(quintptr(1));
+    RideItem *target =
+        fixture.addRide(firstName(), true, loadedRide);
+    writeFixture(
+        fixture.activityPath(firstName()),
+        QByteArray("target activity"));
+    bool processorObservedCancellation = false;
+    setRideCacheRemovalProcessorAction(
+        [&] {
+            processorObservedCancellation =
+                rideCacheRemovalCancelCount() == 1;
+        });
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(result.status, RideCache::RemovalStatus::Committed);
+    QCOMPARE(rideCacheRemovalCancelCount(), 1);
+    QVERIFY(processorObservedCancellation);
+}
+
+void TestRideCacheRemoval::
 batchRemovalSnapshotsAliasedRideList()
 {
     Fixture fixture;
@@ -393,15 +3512,132 @@ batchRemovalSnapshotsAliasedRideList()
 }
 
 void TestRideCacheRemoval::
+batchRejectsReentrantIdentityMutation()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *first =
+        fixture.addRide(firstName(), true);
+    RideItem *second =
+        fixture.addRide(secondName(), false);
+    const QString firstPath =
+        fixture.activityPath(firstName());
+    const QString secondPath =
+        fixture.activityPath(secondName());
+    const QString replacementPath =
+        fixture.activityPath(thirdName());
+    writeFixture(firstPath, QByteArray("first activity"));
+    writeFixture(secondPath, QByteArray("second activity"));
+    writeFixture(replacementPath, QByteArray("replacement activity"));
+    connect(
+        fixture.context.get(),
+        &Context::rideDeleted,
+        [first, second](RideItem *deleted) {
+            if (deleted == first)
+                second->fileName = thirdName();
+        });
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRidesResult(
+            QList<RideItem*>{first, second});
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::PartiallyCommitted);
+    QCOMPARE(result.affectedCount, 1);
+    QCOMPARE(result.requestedCount, 2);
+    QCOMPARE(result.items.size(), 2);
+    QCOMPARE(
+        result.items.at(1).status,
+        RideCache::RemovalStatus::Rejected);
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->rides().constFirst(), second);
+    QCOMPARE(readBytes(secondPath), QByteArray("second activity"));
+    QCOMPARE(
+        readBytes(replacementPath),
+        QByteArray("replacement activity"));
+}
+
+void TestRideCacheRemoval::
+batchSurvivesReentrantPendingDeletion()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *first =
+        fixture.addRide(firstName(), true);
+    RideItem *second =
+        fixture.addRide(secondName(), false);
+    const QString firstPath =
+        fixture.activityPath(firstName());
+    const QString secondPath =
+        fixture.activityPath(secondName());
+    writeFixture(firstPath, QByteArray("first activity"));
+    writeFixture(secondPath, QByteArray("second activity"));
+    connect(
+        fixture.context.get(),
+        &Context::rideDeleted,
+        [&fixture, first, second](RideItem *deleted) {
+            if (deleted != first) return;
+            fixture.cache->mutableRidesForRemovalTest().removeOne(second);
+            delete second;
+        });
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRidesResult(
+            QList<RideItem*>{first, second});
+
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::PartiallyCommitted);
+    QCOMPARE(result.affectedCount, 1);
+    QCOMPARE(result.requestedCount, 2);
+    QCOMPARE(result.items.size(), 2);
+    QCOMPARE(
+        result.items.at(1).status,
+        RideCache::RemovalStatus::Rejected);
+    QCOMPARE(fixture.cache->count(), 0);
+    QCOMPARE(readBytes(secondPath), QByteArray("second activity"));
+}
+
+void TestRideCacheRemoval::
+stalePointerOverloadsRejectWithoutDereference_data()
+{
+    QTest::addColumn<bool>("batch");
+
+    QTest::newRow("single") << false;
+    QTest::newRow("batch") << true;
+}
+
+void TestRideCacheRemoval::
+stalePointerOverloadsRejectWithoutDereference()
+{
+    QFETCH(bool, batch);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *stale = new RideItem(nullptr, nullptr);
+    delete stale;
+
+    const RideCache::RemovalResult result = batch
+        ? fixture.cache->removeRidesResult(
+            QList<RideItem*>{stale}, false)
+        : fixture.cache->removeRideResult(stale);
+
+    QCOMPARE(result.status, RideCache::RemovalStatus::Rejected);
+    QCOMPARE(result.requestedCount, 1);
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(result.items.size(), 1);
+    QCOMPARE(fixture.cache->count(), 0);
+}
+
+void TestRideCacheRemoval::
 currentRemovalUsesSelectedNamespace()
 {
     Fixture fixture;
     QVERIFY(fixture.initialize());
     RideItem *completed =
         fixture.addRide(firstName(), false);
-    RideItem *planned =
-        fixture.addRide(firstName(), true);
-    planned->planned = true;
+    fixture.addPlannedRide(firstName(), true);
 
     const QByteArray completedActivity(
         "completed activity");
@@ -439,7 +3675,8 @@ currentRemovalUsesSelectedNamespace()
         fixture.plannedActivityPath(
             firstName())));
     QCOMPARE(
-        readBytes(fixture.backupPath(firstName())),
+        readBytes(
+            fixture.plannedBackupPath(firstName())),
         plannedActivity);
     QCOMPARE(
         readBytes(
@@ -461,8 +3698,7 @@ ambiguousFilenameRemovalFailsClosed()
     RideItem *completed =
         fixture.addRide(firstName(), true);
     RideItem *planned =
-        fixture.addRide(firstName(), false);
-    planned->planned = true;
+        fixture.addPlannedRide(firstName(), false);
     fixture.context->ride = nullptr;
 
     const QByteArray completedActivity(
@@ -529,9 +3765,7 @@ explicitNamespaceRemovalUsesIdentity()
     QVERIFY(fixture.initialize());
     RideItem *completed =
         fixture.addRide(firstName(), true);
-    RideItem *planned =
-        fixture.addRide(firstName(), false);
-    planned->planned = true;
+    fixture.addPlannedRide(firstName(), false);
 
     const QByteArray completedActivity(
         "completed activity");
@@ -586,8 +3820,7 @@ explicitBatchRemovalUsesItemIdentity()
     RideItem *completed =
         fixture.addRide(firstName(), true);
     RideItem *planned =
-        fixture.addRide(firstName(), false);
-    planned->planned = true;
+        fixture.addPlannedRide(firstName(), false);
 
     const QByteArray completedActivity(
         "completed activity");

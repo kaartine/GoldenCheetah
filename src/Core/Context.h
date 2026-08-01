@@ -245,7 +245,7 @@ class Context : public QObject
 
         void notifyRideSelected(RideItem*x) { ride=x; rideSelected(x); }
         void notifyRideAdded(RideItem *x) { ride=x; rideAdded(x); }
-        void notifyRideDeleted(RideItem *x) { ride=x; rideDeleted(x); }
+        void notifyRideDeleted(RideItem *x) { rideDeleted(x); }
         void notifyRideChanged(RideItem *x) { rideChanged(x); }
         void notifyRideSaved(RideItem *x) { rideSaved(x); }
 

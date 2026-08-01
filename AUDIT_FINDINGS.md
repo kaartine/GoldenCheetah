@@ -2502,22 +2502,336 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DATA-018: Activity deletion reports success after archival failure
 
-- Status: OPEN
-- Code: `src/Core/RideCacheRemoval.cpp:48-75` and
-  `src/Core/RideCacheRemoval.cpp:233-353`
+- Status: FIXED
+- Code: `src/Core/RideCacheRemoval.cpp`, `src/Core/RideCache.cpp`,
+  `src/Core/RideCache.h`, `src/Core/RideCacheCallbackGuard.h`,
+  `src/Core/RideItem.cpp`, `src/Core/RideItem.h`, `src/Core/Context.h`,
+  `src/Gui/SaveDialogs.cpp`,
+  `src/Gui/SaveDialogs.h`,
+  `src/Charts/CalendarWindow.cpp`, `src/Gui/MainWindow.cpp`,
+  `src/Gui/BatchProcessingDialog.cpp`, `src/Gui/BatchProcessingDialog.h`,
+  `src/Gui/PlanWizards.cpp`, `src/Gui/PlanWizards.h`,
+  `src/Gui/SplitActivityWizard.cpp`, `src/Gui/SplitActivityWizard.h`,
+  `src/Gui/SplitActivityWorkflow.h`, `src/Planning/PlanBundle.cpp`, and the
+  focused Core, FileIO, and Gui test projects
 - Impact: Removal evicts the item from the model and deletes any previous
   backup before moving the source to the backup directory. If that move fails,
   the operation shows a dialog but continues deleting derived files and
   returns success. The live source may become invisible until restart, the
   previous backup is lost, and missing-source failures can leave no recoverable
   activity copy. Derived-file deletion errors are also ignored.
-- Test: Inject failures before backup replacement, during source archival, and
-  during each derived-file cleanup. The item, source, prior backup, and
-  sidecars must remain in a defined recoverable state and the API must report
-  failure.
-- Fix direction: Stage and durably commit the archive before mutating the model
-  or caches, preserve the prior backup until commit, and make cleanup outcomes
-  explicit with rollback or a surfaced recovery state.
+- Test-first evidence: Initial failpoint rows exposed source and derived-file
+  mutation windows plus an ignored directory-sync failure. Expanded RED cases
+  then covered unsafe names, planned/completed backup aliasing, linked-save
+  failure, missing loaded ride data, locks, symlinks, every cleanup target, and
+  batch stop semantics. A final rollback review produced 11 simultaneous RED
+  failures: source restore and restore-sync failures replaced the only current
+  backup with an older one, all three atomic moves mishandled partial effects,
+  linked recovery left a half-unlinked pair, processor exceptions escaped, and
+  the compatibility batch boolean changed meaning. Separate RED runs proved
+  that a first-use planned-backup directory was not parent-synced and accepted
+  a symlink outside the backup namespace. Independent final review added RED
+  cases for a failed directory-sync retry, same-namespace incoming links,
+  signal-time selection, linked-peer or target destruction during metadata and
+  compensation callbacks, peer rename before rollback, and mutation or
+  destruction of a later batch target. The selected normal run reported six
+  failures, three linked rows crashed, and strict ASan found the batch
+  use-after-free at the raw pending pointer. A final four-row RED regression
+  then showed that destroying the cache or context from the first item's model
+  removal signal made the batch coordinator continue through the deleted
+  `RideCache` and crash in its final estimator refresh. Follow-up adversarial
+  review found an ASan heap-buffer-overflow when a model-removal callback first
+  removed an earlier sibling, because the original target index had become the
+  new vector size. A real linked-save rename also returned
+  `RecoveryRequired` after an otherwise successful deletion, while delete
+  callers rejected a legitimate post-save activity identity. Separate RED
+  save-dialog runs reported two passes and ten failures and reproduced
+  heap-use-after-free in both Save Single and Save on Exit when their nested
+  save callbacks destroyed the dialog. Transaction tests also showed that a
+  durable save was reported as failed when finalization or `markClean` destroyed
+  the saved ride. Repeat Plan could reach target removal with an empty copy set,
+  and a shared plan reader could retain a raw, destroyed `Context*`. The final
+  adversarial pass rejected unsafe linked-peer identities and incoming links to
+  either member before any save, exposed invalid nested model-removal ranges and
+  a deleted selection during model signals, and showed that staging cleanup was
+  misclassified as a partial commit. It also reproduced a missing single-item
+  refresh cancellation and ASan use-after-free in stale single and batch pointer
+  overloads. Save-on-Exit accepted rows dirtied after its original snapshot,
+  Discard accepted failed reloads, candidate setters could destroy an owner, and
+  a path-changing save could leave duplicate activity identities when its owner
+  disappeared at commit. Plan target changes left stale ranges/conflicts, partial
+  exports were accepted, and Split did not reject in-place RideFile mutation.
+- Resolution: Deletion now locks and snapshots every source, backup, and owned
+  sidecar; copies and hashes the source into a same-directory fsynced staging
+  file; preserves an existing backup under a transaction-specific recovery
+  name; publishes and verifies the new backup; and only then moves and syncs
+  the source tombstone. The model changes only after that durable storage
+  commit. Rollback first restores, hashes, and syncs the source and will not
+  remove the verified new backup until that invariant holds. It reconciles
+  partial move states from the filesystem rather than trusting a failed return
+  value. Planned and completed backups have separate namespaces, and the
+  planned namespace is a checked real directory whose parent entry is synced
+  before every use. Derived files are snapshot-validated and removed only
+  after commit. Explicit per-item and batch results distinguish rejection,
+  rollback, clean commit, cleanup pending, partial commit, recovery required,
+  and not attempted. Legacy single-item booleans report logical removal while
+  legacy batch booleans retain their historical any-success contract. DELETE
+  processors run only after storage preconditions and staging succeed, with all
+  exceptions converted to rejection. Linked peers must be reciprocal and
+  clean. Every reentrant metadata/save boundary revalidates guarded target and
+  peer identities; runtime rollback restores only the original peer identity
+  and otherwise reports recovery with old and current paths. Batch requests
+  snapshot guarded object identity before any signal. The batch coordinator
+  also guards and revalidates its cache, context, athlete, model, and estimator
+  ownership chain across every nested removal and refresh boundary; if an owner
+  disappears, it preserves completed results and marks every remaining request
+  not attempted. Reentrant model callbacks now remove the target at its current
+  valid index and never move it into a row that disappeared during the signal.
+  A successful linked save may adopt a changed filename only when the same
+  guarded peer remains uniquely cached in the original namespace and its new
+  source is a regular, non-symlink file in the expected cache directory. Delete
+  callers similarly adopt a valid post-save identity before their final guarded
+  removal. Selection is made valid before `rideDeleted`, and the notifier no
+  longer selects the removed object. Nested model callbacks re-resolve both the
+  target row and selection before each removal signal; nested deletion is
+  rejected while a model transaction is active. Staging cleanup failure is a
+  recovery-required outcome that stops a batch, and single removal cancels an
+  active refresh before processors or storage mutation. Legacy pointer overloads
+  resolve unique live membership without dereferencing a stale pointer. Save
+  transactions retain a successful same-path commit after finalization, skip
+  `markClean` if the ride disappeared, and guard dialog instances, candidate
+  setters, and activity identity across nested callbacks. A path-changing save
+  whose owner disappears rolls back the new target so the old and new identities
+  cannot coexist. Save-on-Exit repeatedly reconciles newly dirty and re-dirtied
+  rows, and Discard succeeds only after a guarded reload. Saved-rename adoption
+  requires evidence that the exact row was saved plus unique cache membership,
+  the original namespace, and a regular non-symlink source in the cache directory.
+  Repeat Plan requires a non-empty, freshly resolved copy set before target
+  removal, its pages resolve owners through the guarded wizard, and the shared
+  plan reader stores its context as `QPointer`. Plan selection and gap changes
+  recalculate target times, ranges, and conflicts; linked conflicts use the
+  target time, and partial exports fail while leaving the wizard open. Split
+  snapshots both RideFile identity and its revision across modal and publication
+  boundaries. RideCache callback continuations use a shared owner guard. UI
+  callers surface cleanup and recovery outcomes; batch recovery stops and marks
+  remaining rows not attempted.
+- Verification: The focused removal program passes all 107 cases normally,
+  under ASan/UBSan, and under ThreadSanitizer without race reports. Strict LSan
+  is clean except for the two deliberately synchronous Qt model-destruction
+  rows documented by `TEST-007`; those rows remain ASan/UBSan- and TSAN-clean.
+  Atomic save passes 115 cases under strict ASan/UBSan/LSan and under TSAN.
+  Split data and publication pass 28 and 33 cases, and the deletion, save,
+  Repeat Plan, plan-reader lifetime, and cache-callback contract suites pass 28,
+  15, 17, 7, and 3 cases under both sanitizer configurations. The complete Qt
+  6.8.3 production application compiles and links, its disposable-HOME offscreen
+  smoke test passes, and the 99-target offscreen matrix reports 3,661 passed,
+  zero failed or blacklisted, and 12 expected Linux skips. The AppImage packaging
+  policy check and compile-only SIP prerequisite pass. The changed Windows atomic
+  file branch passes a MinGW64 C++17 syntax check; native Windows durability
+  remains `DUR-014`.
+- Residual: Process-crash reconciliation is tracked by `DUR-013`, linked
+  metadata atomicity by `DATA-019`, plan replacement/import atomicity by
+  `DATA-020`, multi-activity save atomicity by `DATA-021`, Windows directory
+  durability by `DUR-014`, hard-link portability by `PORT-001`, and
+  non-cooperating pathname replacement by `SEC-025`.
+
+### DATA-019: Linked metadata and activity deletion are separate transactions
+
+- Status: OPEN
+- Code: `src/Core/RideCacheRemoval.cpp` and linked deletion callers
+- Impact: Runtime rejection now restores the linked peer and reports a failed
+  restoration, but the peer save necessarily precedes the source storage
+  transaction. A process or power loss in that interval can persist a cleared
+  peer while the still-live target retains its reciprocal link. A later manual
+  recovery is then required even though every activity byte remains available.
+- Test: Run linked deletion in a subprocess and terminate immediately after the
+  peer save and at each subsequent durable storage transition. On restart,
+  require either a reciprocal pair or a committed deletion with an unlinked
+  survivor, including injected peer-save and restore-save failures.
+- Fix direction: Include the linked metadata update in the persisted deletion
+  manifest, stage the survivor rewrite, and reconcile both metadata and source
+  storage from one transaction state before loading activities.
+
+### DATA-021: Filename-changing linked saves are not one transaction
+
+- Status: OPEN
+- Code: `src/Gui/SaveDialogs.cpp` and `src/Core/RideCache.cpp`
+- Impact: Save preflight updates both reciprocal filenames in memory and then
+  saves the activity set sequentially. If one conversion or rename commits and
+  a later peer save fails, the successful file can persist a link to a filename
+  that was never published. The caller reports failure, but there is no rollback
+  to one complete old or new linked pair. This runtime partial-save defect is
+  distinct from the deletion crash window in `DATA-019`.
+- Test: Use two real linked JSON activities whose timestamps force both names to
+  change, fail each stage/publish/finalize point for the second save, and restart.
+  Require either the complete old pair or complete new pair with reciprocal
+  filenames, never one successful prefix.
+- Fix direction: Build one staged multi-activity save set containing both files
+  and their final link metadata, lock the complete path graph, publish it under
+  one finalizer, and roll back or reconcile the complete generation.
+
+### DATA-020: Plan replacement and import are not all-or-nothing
+
+- Status: OPEN
+- Code: `src/Gui/PlanWizards.cpp`, `src/Planning/PlanBundle.cpp`, and
+  `src/Core/RideCache.cpp`
+- Impact: Repeat Plan removes the existing target range before copying the new
+  activities, and bundle import removes conflicts before processing all new
+  workouts. Copy, parse, or write failure can therefore leave the previous plan
+  gone and only a prefix of the replacement installed. Partial copy is now
+  reported, but there is no automatic rollback.
+- Test: Cover target replacement, overlapping source/target ranges, every
+  deletion and copy failpoint, partial bundle parsing/writes, and restart after
+  each transition. Require the complete old plan or complete new plan, never a
+  mixture.
+- Fix direction: Stage and validate the complete replacement set first, publish
+  it with a durable manifest, then retire conflicts; rollback or startup
+  reconciliation must restore one complete generation.
+
+### DUR-013: Activity deletion recovery files are not reconciled on restart
+
+- Status: OPEN
+- Code: `src/Core/RideCacheRemoval.cpp` and RideCache startup
+- Impact: Runtime failures retain verified canonical and transaction-specific
+  recovery copies and return their paths, but a process exit between durable
+  transitions has no result object. Startup does not classify `.gc-copy-*`,
+  `.gc-previous-*`, or `.gc-remove-*` files, so recoverable data can remain
+  orphaned and require manual inspection.
+- Test: Terminate a deletion subprocess after every file and directory sync,
+  restart the same athlete, and require deterministic completion or rollback
+  while preserving the newest source and every pre-existing backup.
+- Fix direction: Persist a fsynced manifest with roles, hashes, and transition
+  state in a private transaction directory, then reconcile incomplete deletion
+  transactions before RideCache scans activities.
+
+### DUR-014: Windows deletion does not durably sync directory entries
+
+- Status: OPEN
+- Code: `src/FileIO/AtomicFileWriter.h` and
+  `src/Core/RideCacheRemoval.cpp`
+- Impact: `syncParentDirectory()` is a successful no-op outside Unix. Windows
+  file handles are flushed and `MoveFileExW` uses `MOVEFILE_WRITE_THROUGH`, but
+  planned-backup directory creation and all directory-entry cleanup transitions
+  lack the durability barrier that the deletion protocol assumes. A power loss
+  can therefore violate the documented committed/rolled-back state even when
+  runtime calls all returned success.
+- Test: Run the deletion failpoint state machine on native Windows with forced
+  termination after every create, move, remove, and file flush, then restart and
+  verify the newest source and prior backup remain recoverable.
+- Fix direction: Define a Windows-specific durable publication protocol using
+  write-through operations plus a flushed transaction manifest and startup
+  reconciliation; do not claim directory-fsync equivalence where Windows does
+  not provide it.
+
+### DUR-015: Failed planned-backup directory sync was not retried
+
+- Status: FIXED
+- Code: `src/Core/RideCacheRemoval.cpp` and
+  `unittests/Core/rideCacheRemoval/testRideCacheRemoval.cpp`
+- Impact: The planned backup namespace was parent-synced only when its directory
+  was first created. If that sync failed, the directory remained present, so a
+  retry skipped the durability barrier and could proceed as though the directory
+  entry had been committed. A power loss could then lose the namespace after an
+  apparently successful activity deletion.
+- Test-first evidence: A failpoint that rejected two consecutive sync attempts
+  showed the second removal reaching the transaction because the existing
+  directory suppressed the retry.
+- Resolution: Every planned deletion now validates the real directory and syncs
+  its parent entry before using the namespace, regardless of whether this call
+  created the directory. The regression rejects both injected failures without
+  changing the source and commits only after the third, successful sync.
+- Verification: Included in the focused removal program and its final normal and
+  sanitizer runs recorded under `DATA-018`.
+
+### SEC-025: Activity deletion pathname checks remain TOCTOU-prone
+
+- Status: OPEN
+- Code: `src/Core/RideCacheRemoval.cpp` and `src/FileIO/AtomicFileWriter.h`
+- Impact: Unsafe names, final symlinks, and planned-backup symlinks are rejected,
+  snapshots are hashed, and cooperative writers share path locks. A separate
+  local process can still replace a parent or directory entry between
+  `QFileInfo`, open, hash, and move operations. Path-based cleanup can then act
+  on a different object or outside the intended athlete namespace.
+- Test: Use a non-cooperating process to exchange parent directories and final
+  entries at every open/move/remove failpoint on Unix and Windows. Verify that
+  no external object is read, overwritten, or deleted.
+- Fix direction: Use directory-handle-relative no-follow operations and stable
+  file identities (`openat2`/`O_NOFOLLOW` plus `renameat` on Unix and checked
+  directory/file handles on Windows), then revalidate identities at commit and
+  cleanup.
+
+### GUI-007: Modal activity workflows retained dangling RideItem pointers
+
+- Status: FIXED
+- Code: `src/Core/RideCache.cpp`, `src/Core/RideCacheCallbackGuard.h`,
+  `src/Gui/SaveDialogs.cpp`, `src/Gui/SaveDialogs.h`,
+  `src/Gui/MainWindow.cpp`, `src/Charts/CalendarWindow.cpp`,
+  `src/Gui/BatchProcessingDialog.cpp`, `src/Gui/PlanWizards.cpp`,
+  `src/Gui/PlanWizards.h`, `src/Gui/SplitActivityWizard.cpp`,
+  `src/Gui/SplitActivityWizard.h`, `src/Gui/SplitActivityWorkflow.h`, and
+  `src/Planning/PlanBundle.cpp`
+- Impact: Save/Discard preflight, Save-and-Convert, Save-on-Exit, the first delete
+  confirmation, and Split wizard pages all retained raw `RideItem*` values across
+  nested event loops. A queued removal could cause use-after-free, save a dangling
+  item, or continue a split using a different/no-longer-cached source. Linked Save
+  could also dereference a peer whose ride failed to load.
+- Test-first evidence: The first guarded-preflight test did not compile because
+  no lifetime API existed; after adding the declaration it rejected a destroyed
+  item. Two additional RED dialog tests showed Save-and-Convert accepted a
+  destroyed item and Save-on-Exit invoked its virtual save with a dangling
+  pointer. Core linked and batch callback tests separately crashed or failed
+  before their guards were added. Follow-up RED rows showed that Save-on-Exit
+  accepted newly dirty and re-dirtied activities, Discard accepted a failed
+  reload and could outlive an activity destroyed by `close()`, and candidate
+  setters could destroy the current or replacement row. Split accepted an
+  in-place RideFile revision change, and a cache callback could continue after
+  one of its owners was destroyed.
+- Resolution: Modal inputs are captured as `QPointer` before each event loop and
+  resolved again before Save or Discard. Save dialogs and Save All retain guarded
+  snapshots, reject detached or identity-mutated rows, and do not dereference a
+  dialog after a nested save callback destroys it. A save that durably commits
+  on the same path before its ride disappears remains successful, while a
+  path-changing save rolls back its new target if ownership disappears. The
+  Save-on-Exit worklist is reconciled after every callback, including newly dirty
+  and re-dirtied rows, and its abandon path marks the same complete set. Discard
+  requires a successful guarded reload. Candidate saves revalidate every owner
+  after save and setter callbacks. Delete guards both Context and item before its
+  first confirmation and adopts only a valid current cache identity after Save
+  renames the activity.
+  Split owns a guarded source, checks cache identity after confirmation and before
+  post-publish eviction, verifies both RideFile identity and revision at each
+  boundary, and every page/plot handles a missing ride. Filename prediction now
+  fails closed for null or unloadable rides. Repeat Plan pages resolve their
+  cache through the guarded wizard, PlanBundleReader tracks a destroyed Context,
+  and cache callback continuations use one owner guard.
+- Verification: The directly testable save/preflight paths pass in the 115-case
+  atomic-save program, linked and batch callbacks pass in the 107-case removal
+  program, split paths pass their 28- and 33-case programs, and the deletion,
+  save, Repeat Plan, plan-reader, and callback contracts pass 28, 15, 17, 7, and
+  3 cases. These focused suites pass under ASan/UBSan and under TSAN; all except
+  the two Qt model rows in `TEST-007` are also strict-LSan-clean. The complete
+  production application and 99-target matrix pass. Real MainWindow, Calendar,
+  Batch, Repeat Plan, PlanBundle, and Split dialog interaction remains tracked
+  by `TEST-005`.
+
+### GUI-010: Other Calendar modal workflows retain mutable owner state
+
+- Status: OPEN
+- Code: `src/Charts/CalendarWindow.cpp`
+- Impact: Manual Activity, Repeat/Import/Export Plan, Filter Similar, activity
+  linking, and season event/phase dialogs run nested event loops while retaining
+  raw `Context`, `AthleteTab`, `RideItem`, `Season`, `Phase`, or `SeasonEvent`
+  state. Closing or replacing the athlete from a queued callback can invalidate
+  those objects. The add/repeat/import paths also restore `noSwitch` to `false`
+  unconditionally, which can clear an outer navigation guard or modify a newly
+  selected tab.
+- Test: With a disposable athlete profile, destroy or replace each owner from a
+  modal callback and mutate the selected activity or season container before
+  acceptance. Require a clean cancellation, no write through stale pointers, and
+  exact restoration of the original tab's prior navigation state.
+- Fix direction: Snapshot value identities before each dialog, guard the complete
+  owner chain with `QPointer`, resolve mutable records again after acceptance,
+  and use an owner-aware RAII lease that restores the original `noSwitch` value.
 
 ## Medium
 
@@ -3817,6 +4131,26 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   immutable generation and atomically switch one manifest instead of deleting
   rollback targets by pathname.
 
+### PORT-001: Unix atomic-new publication requires hard-link support
+
+- Status: OPEN
+- Code: `src/FileIO/AtomicFileWriter.h` and
+  `src/Core/RideCacheRemoval.cpp`
+- Impact: Unix no-replace publication is implemented as `link(2)` followed by
+  `unlink(2)`. Athlete libraries on filesystems that reject hard links cannot
+  publish new save, split, backup-archive, or deletion transaction files even
+  though each staging file is deliberately created in its target directory.
+  Activity and backup directories being on different filesystems is not itself a
+  deletion failure: deletion copies and verifies the source into the backup
+  namespace and performs each atomic move within one directory.
+- Test: Exercise save, split, backup-archive, and deletion publication on a Unix
+  filesystem that rejects hard links. Require a safe supported no-replace
+  primitive or an explicit preflight error before metadata changes.
+- Fix direction: Prefer a native no-replace rename primitive such as Linux
+  `renameat2(RENAME_NOREPLACE)` where available, retain the current partial-effect
+  reconciliation contract, and define a verified target-directory staging
+  fallback for Unix platforms without either primitive.
+
 ### DB-001: VideoSync import uses video-table helpers
 
 - Status: OPEN
@@ -3931,15 +4265,20 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### GUI-002: Ride deletion can retain a deleted current selection
 
-- Status: OPEN
-- Code: `src/Core/RideCache.cpp:377`, `src/Core/RideCache.cpp:439`,
-  `src/Core/Context.h:257`
+- Status: FIXED
+- Code: `src/Core/RideCacheRemoval.cpp` and `src/Core/Context.h`
 - Impact: Deleting the final/current ride can leave the deleted object selected;
   some non-current deletions also omit the deletion signal.
-- Test: Delete first, middle, final, current, and non-current rides and verify
-  signal order plus a valid/null selection.
-- Fix direction: Formalize about-to-remove, removal, selection, deleted, selected
-  ordering and prevent notifier side effects.
+- Test-first evidence: The new current and non-current deletion callbacks checked
+  `context->ride` synchronously inside `rideDeleted`. Both failed because the
+  notifier temporarily selected the already-removed target even though final
+  state looked valid.
+- Resolution: Removal chooses and validates the surviving/null selection before
+  publishing `rideDeleted`, revalidates it after reentrant callbacks, and then
+  publishes `rideSelected`. `notifyRideDeleted` no longer mutates selection.
+- Verification: Signal order, signal-time state, current/non-current removal,
+  all-rides batch removal, and final selection pass in the 107-case removal
+  program. Full widget navigation remains tracked by `TEST-005`.
 
 ### GUI-003: Power histogram selection guard is inverted
 
@@ -4930,6 +5269,102 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   enrollment transaction or publish a committed generation; otherwise move
   the observation behind the protocol's actual completion boundary.
 
+### TEST-005: Activity deletion caller workflows lack widget-level coverage
+
+- Status: OPEN
+- Code: `src/Gui/MainWindow.cpp`, `src/Charts/CalendarWindow.cpp`,
+  `src/Gui/BatchProcessingDialog.cpp`, `src/Gui/PlanWizards.cpp`,
+  `src/Gui/SplitActivityWizard.cpp`, and `src/Planning/PlanBundle.cpp`
+- Impact: Core deletion statuses, rollback, dirty-peer rejection, and batch stop
+  semantics have deterministic unit and sanitizer coverage. Extracted contracts
+  also cover Save/Discard preflight, Save Single/Save on Exit lifetime, split
+  source identity, deletion owner identity, Repeat Plan owner lifetime, and
+  import-reader retention. The real surrounding widgets are still verified only
+  by compilation and manual use. A UI refactor could hide `RecoveryRequired`,
+  close Repeat Plan with an incorrect
+  result, retry a committed split, or bypass Save/Discard/Cancel without failing
+  the core suite.
+- Test: Use disposable athlete profiles and injectable removal/copy services to
+  cover MainWindow and Calendar linked Save/Discard/Cancel, batch cleanup and
+  recovery summaries plus remaining rows, Repeat Plan replacement and partial
+  copy, Split preflight and post-commit recovery, and PlanBundle partial import.
+- Fix direction: Extract the orchestration services from widgets, retain the
+  real Qt dialogs in a small offscreen lifecycle suite, and assert both visible
+  state and disposable on-disk results without touching a user profile.
+
+### TEST-006: Linked-deletion tests stub production metadata persistence
+
+- Status: OPEN
+- Code: `unittests/Core/rideCacheRemoval/RideCacheRemovalTestStubs.cpp`,
+  `unittests/Core/rideCacheRemoval/testRideCacheRemoval.cpp`,
+  `src/Core/RideItem.cpp`, and `src/Gui/SaveDialogs.cpp`
+- Impact: The focused suite now thoroughly checks deletion state-machine and
+  reentrancy invariants, but its link setters and `saveActivity()` stub mutate
+  memory without loading or writing a real activity. It does not prove that real
+  linked JSON metadata, filename conversion, save processors, and cache signals
+  preserve the same compensation behavior.
+- Test: Create a disposable athlete with two reciprocal real JSON activities and
+  execute production setters and saves through each deletion failpoint. Reopen
+  the files and cache after success, rejection, rollback, and recovery-required
+  outcomes and verify both persisted links and filenames.
+- Fix direction: Keep the fast failpoint unit suite, then add a small production
+  integration fixture around real RideItem loading and atomic save services.
+
+### TEST-007: Synchronous model-owner destruction leaves Qt removal bookkeeping
+
+- Status: OPEN
+- Code: `unittests/Core/rideCacheRemoval/testRideCacheRemoval.cpp`,
+  `unittests/Core/rideCacheRemoval/RideCacheRemovalTestStubs.cpp`, and
+  `src/Core/RideCacheRemoval.cpp`
+- Impact: The single- and batch-removal lifetime regressions deliberately delete
+  `RideCache` synchronously from
+  `QAbstractItemModel::rowsAboutToBeRemoved`. Qt 6.8.3 then retains two 64-byte
+  `QArrayData` allocations from each interrupted model-removal operation. ASan
+  and UBSan find no invalid access, all functional assertions pass, and the
+  other rows are leak-clean, but these two adversarial rows cannot pass strict
+  LSan without hiding a broad Qt allocation signature.
+- Evidence: The complete 107-case instrumented run reaches zero test failures and
+  then LSan reports 256 bytes in four direct allocations. Separate strict-LSan
+  runs isolate 128 bytes in two allocations to each of
+  `modelSignalOwnerDestructionDoesNotContinue(cache-rows-about-to-be-removed)`
+  and
+  `batchModelSignalOwnerDestructionDoesNotContinue(cache-rows-about-to-be-removed)`.
+  The same binary's other six single- and batch-owner-destruction rows and every
+  other test function pass with leak detection enabled.
+- Test: Reduce the case to a minimal Qt model that is synchronously destroyed by
+  its `rowsAboutToBeRemoved` listener and run it against supported Qt versions.
+  Keep the production lifetime row under ASan/UBSan even if Qt documents direct
+  sender destruction during this signal as unsupported.
+- Fix direction: Prefer deferred owner destruction in real UI shutdown paths and
+  either adopt an upstream Qt fix or redesign the model transaction so its owner
+  cannot be synchronously destroyed mid-notification. Do not suppress all
+  `QArrayData::allocate` leaks.
+
+### GUI-008: Repeat Plan cleared an outer navigation guard
+
+- Status: FIXED
+- Code: `src/Gui/AthleteTab.h` and `src/Gui/PlanWizards.cpp`
+- Impact: Calendar disabled automatic view switching around the Repeat Plan
+  dialog, but the wizard unconditionally set the shared boolean to false before
+  returning. A nested selection callback could switch views inside the caller's
+  still-active guarded scope.
+- Resolution: AthleteTab exposes the current guard value and Repeat Plan restores
+  that exact prior value instead of assuming false.
+- Verification: The complete production application compiles; nested real-widget
+  behavior remains part of `TEST-005`.
+
+### GUI-009: Batch save failures were labelled as user cancellation
+
+- Status: FIXED
+- Code: `src/Gui/BatchProcessingDialog.cpp`
+- Impact: A false Save/Discard preflight result includes reported I/O failures,
+  but the final status always said the user aborted processing, obscuring a real
+  write failure.
+- Resolution: The shared terminal status now says processing stopped without
+  inventing a cause; the originating save warning retains the actual error.
+- Verification: The complete production application compiles; visible batch
+  status coverage remains part of `TEST-005`.
+
 ### BUILD-008: Qt 6.8.3 reports impossible QVariant inline-storage overflows
 
 - Status: OPEN
@@ -5086,11 +5521,12 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The complete containerized release matrix with `DATA-013` and `DATA-017`
-passes:
+The complete containerized release matrix with `DATA-018` and `GUI-007` passes:
 
-- 92 QtTest executables
-- 3,442 passed
+- 97 QtTest executables
+- 1 AppImage packaging check
+- 1 compile-only generated-SIP prerequisite
+- 3,661 passed
 - 0 failed or blacklisted
 - 12 expected platform-only skips on Linux
 - Qt 6.8.3 on Ubuntu 24.04
@@ -5106,8 +5542,9 @@ without making repository documentation depend on local artifact state.
 refresh/integration suites normally, under strict ASan/UBSan/LSan with leak
 detection, and under ThreadSanitizer without suppressions, plus its MinGW
 header-order check. The timing-sensitive credential enrollment coverage
-recorded as `TEST-004` failed two of nine observations and passed in the
-successful `DATA-013` complete matrix; it does not touch either code path.
+recorded as `TEST-004` previously failed two of nine observations. It passed in
+the previous and current complete matrices, bringing the record to two failures
+and nine passes in eleven observations; it does not touch either code path.
 `DATA-013` and `DATA-017` additionally pass their 16-pass removal program
 normally, under strict ASan/UBSan/LSan with leak detection, and under
 ThreadSanitizer without suppressions.
@@ -5121,6 +5558,15 @@ focused suite under both sanitizer configurations and its MinGW header-order
 check. `PARSE-005`'s 126 focused tests and the related 13 RideFile ownership
 tests retain their sanitizer evidence. Earlier fixed memory/thread findings
 retain the focused sanitizer and TSAN evidence recorded in their entries.
+
+`DATA-018` additionally passes its 107-case removal suite under ASan/UBSan and
+TSAN, its 115-case atomic-save suite under strict ASan/UBSan/LSan and TSAN, and
+the related 28-, 33-, 28-, 15-, 17-, 7-, and 3-case split, lifecycle,
+plan-reader, and callback suites under both configurations. `TEST-007` records
+the only LSan exception: two synchronously destructive Qt model test rows each
+retain 128 bytes of Qt 6.8.3 bookkeeping while remaining ASan/UBSan- and
+TSAN-clean. The changed Windows atomic-file branch passes its MinGW64 syntax
+check.
 
 This baseline is not evidence for any remaining OPEN finding. Each open item
 still requires its listed RED regression before implementation. No whole-suite

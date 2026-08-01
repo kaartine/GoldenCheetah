@@ -11,6 +11,12 @@
 void resetAtomicActivitySaveProcessorStub();
 void setAtomicActivitySaveProcessorFailure(bool enabled);
 int atomicActivitySaveProcessorCalls();
+void setAtomicActivitySaveSetDirtyAction(
+    RideItem *rideItem, std::function<void()> action);
+void setAtomicActivitySaveSetRideAction(
+    RideItem *rideItem, std::function<void()> action);
+void setAtomicActivitySaveCloseAction(
+    RideItem *rideItem, std::function<void()> action);
 
 namespace {
 
@@ -116,15 +122,20 @@ public:
     bool saveResult = true;
     int saveCalls = 0;
     int errorReports = 0;
+    std::function<void()> saveAction;
 
 protected:
     bool saveRide(QString &error) override
     {
         ++saveCalls;
-        if (!saveResult) {
+        const bool result = saveResult;
+        const std::function<void()> action = saveAction;
+        saveAction = {};
+        if (action) action();
+        if (!result) {
             error = QStringLiteral("injected dialog save failure");
         }
-        return saveResult;
+        return result;
     }
 
     void reportSaveError(const QString &) override
@@ -139,21 +150,58 @@ public:
     explicit TestSaveOnExitDialog(const QList<RideItem *> &rides)
         : SaveOnExitDialogWidget(nullptr, nullptr, rides)
     {
+        for (RideItem *ride : rides) {
+            trackedActivities.append(QPointer<RideItem>(ride));
+        }
     }
 
     QHash<RideItem *, bool> results;
+    QHash<RideItem *, std::function<void()>> saveActions;
     QList<RideItem *> calls;
+    std::function<void()> saveAction;
+    int errorReports = 0;
+
+    void trackActivity(RideItem *rideItem)
+    {
+        trackedActivities.append(QPointer<RideItem>(rideItem));
+    }
 
 protected:
+    QList<RideItem *> currentDirtyActivities() const override
+    {
+        QList<RideItem *> dirty;
+        for (const QPointer<RideItem> &activity : trackedActivities) {
+            if (activity && activity->isDirty()) {
+                dirty.append(activity.data());
+            }
+        }
+        return dirty;
+    }
+
     bool saveRide(RideItem *rideItem) override
     {
         calls.append(rideItem);
+        QPointer<RideItem> guardedRide(rideItem);
         const bool result = results.value(rideItem, true);
-        if (result) {
-            rideItem->setDirty(false);
+        std::function<void()> action = saveActions.take(rideItem);
+        if (!action) {
+            action = saveAction;
+            saveAction = {};
+        }
+        if (action) action();
+        if (result && guardedRide) {
+            guardedRide->setDirty(false);
         }
         return result;
     }
+
+    void reportSaveError(const QString &) override
+    {
+        ++errorReports;
+    }
+
+private:
+    QList<QPointer<RideItem>> trackedActivities;
 };
 
 QString activityFileName(const QDateTime &startTime, const QString &suffix)
@@ -231,10 +279,19 @@ private slots:
     void jsonRoundTripsReferenceAndSampleState();
     void saveHelpersRejectInvalidOperations();
     void successfulTransactionPreservesLiveObjectState();
+    void transactionRemainsCommittedWhenWriterCommitDestroysRide();
+    void transactionRollsBackPathChangeWhenWriterCommitDestroysRide();
+    void transactionRemainsCommittedWhenMarkCleanDestroysRide();
+    void transactionRemainsCommittedWhenFinalizeDestroysRide();
     void transactionPreservesZeroValuedSeriesPresence();
     void processorFailureSkipsWriteAndKeepsDirty();
     void failedSaveRestoresHistoryUntilCommit();
     void candidateSaveTransfersOnlyAfterSuccess();
+    void candidateSaveRejectsCurrentDestroyedBySave();
+    void candidateSaveRejectsCandidateDestroyedBySave();
+    void candidateSaveRejectsReplacementDestroyedBySave();
+    void candidateSaveRejectsCandidateDestroyedBySetDirty();
+    void candidateSaveRejectsCurrentDestroyedBySetRide();
     void defaultProcessorFailurePreservesFileAndDirtyState();
     void mainWindowConvertsSourceAfterCommit();
     void mainWindowRenamesJsonAfterCommit();
@@ -242,14 +299,45 @@ private slots:
     void mainWindowHoldsSourceAndTargetLocks();
     void mainWindowFinalizeFailureRemainsRetryable();
     void mainWindowRejectsSourceChangedDuringSave();
+    void mainWindowRejectsIdentityChangedByProcessor_data();
+    void mainWindowRejectsIdentityChangedByProcessor();
+    void mainWindowSurvivesItemDestroyedByProcessor();
     void mainWindowSaveSilentPropagatesFailure();
     void mainWindowSaveSilentPreservesUppercaseJsonPath();
     void mainWindowSaveRideSingleDialogPropagatesResult();
+    void preflightSaveRelinksCompleteActivitySetBeforeSaving();
+    void preflightItemsRejectDestroyedActivity();
+    void preflightRelinkRejectsDestroyedActivity();
+    void preflightRejectsIdentityMutationDuringLaterRelink();
+    void preflightRejectsDestroyedOwnerDuringRelink();
+    void preflightRejectsDestroyedOwnerDuringSave();
+    void discardReloadFailureIsRejected();
+    void discardReloadSurvivesActivityDestroyedByClose();
     void saveSingleDialogSaveAndAbandon();
+    void saveSingleDialogRejectsDestroyedActivity();
+    void saveSingleDialogRejectsIdentityMutation_data();
+    void saveSingleDialogRejectsIdentityMutation();
+    void saveSingleDialogCommitsWhenActivityDestroyedDuringSave();
+    void saveSingleDialogRejectsActivityDestroyedDuringFailedSave();
+    void saveSingleDialogSurvivesParentDestroyedDuringSave();
     void saveOnExitDialogStopsUntilAllSelectedSave();
+    void saveOnExitDialogDoesNotAcceptRedirtiedCompletedActivity();
+    void saveOnExitDialogDoesNotAcceptNewDirtyActivity();
     void saveOnExitDialogDefersSkippedStateUntilSuccess();
+    void saveOnExitAbandonMarksRedirtiedCompletedActivity();
+    void saveOnExitAbandonMarksNewDirtyActivity();
+    void saveOnExitDialogRejectsIdentityMutation_data();
+    void saveOnExitDialogRejectsIdentityMutation();
+    void saveOnExitDialogRejectsDestroyedActivity();
+    void saveOnExitDialogCommitsWhenActivityDestroyedDuringSave();
+    void saveOnExitDialogSurvivesParentDestroyedDuringSave();
     void rideCacheSaveActivityPropagatesFailure();
+    void rideCacheSaveActivityRejectsDestructionDuringSave();
     void rideCacheSaveActivitiesAggregatesFailures();
+    void rideCacheSaveActivitiesSurviveReentrantNextDeletion_data();
+    void rideCacheSaveActivitiesSurviveReentrantNextDeletion();
+    void rideCacheSaveActivitiesStopWhenOwnerDestroyed_data();
+    void rideCacheSaveActivitiesStopWhenOwnerDestroyed();
 };
 
 void TestAtomicActivitySave::cleanup()
@@ -1570,6 +1658,181 @@ void TestAtomicActivitySave::successfulTransactionPreservesLiveObjectState()
     QCOMPARE(ride.ciqinfo().constFirst().fields.size(), 1);
 }
 
+
+void TestAtomicActivitySave::
+transactionRemainsCommittedWhenWriterCommitDestroysRide()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path =
+        dir.filePath(QStringLiteral("activity.json"));
+    RideFile *ride = new RideFile(
+        QDateTime(QDate(2026, 8, 1), QTime(11, 30)),
+        1.0);
+    QPointer<RideFile> guardedRide(ride);
+    bool finalizeCalled = false;
+    bool markCleanCalled = false;
+    bool rollbackCalled = false;
+
+    ActivitySaveOperations operations;
+    operations.writerFactory =
+        [&](const QString &target, AtomicFileMode) {
+            return std::unique_ptr<AtomicFileWriter>(
+                new FaultInjectingWriter(
+                    target, FailurePoint::None,
+                    [&] {
+                        delete ride;
+                        ride = nullptr;
+                    }));
+        };
+    operations.persistCompletesDurableTransaction = true;
+    operations.finalize = [&](QString &) {
+        finalizeCalled = true;
+        return true;
+    };
+    operations.markClean = [&] {
+        markCleanCalled = true;
+    };
+    operations.rollback = [&](QString &) {
+        rollbackCalled = true;
+        return QFile::remove(path);
+    };
+
+    QString error;
+    QVERIFY2(saveActivityTransaction(
+        nullptr, ride, path, operations, error),
+        qPrintable(error));
+    QVERIFY(guardedRide.isNull());
+    QVERIFY(!finalizeCalled);
+    QVERIFY(!markCleanCalled);
+    QVERIFY(!rollbackCalled);
+    QVERIFY(error.isEmpty());
+    QVERIFY(QFileInfo(path).isFile());
+    QVERIFY(!readAll(path).isEmpty());
+}
+
+void TestAtomicActivitySave::
+transactionRollsBackPathChangeWhenWriterCommitDestroysRide()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString sourcePath =
+        dir.filePath(QStringLiteral("activity.fit"));
+    const QString targetPath =
+        dir.filePath(QStringLiteral("activity.json"));
+    const QByteArray original("legacy source");
+    writeFixture(sourcePath, original);
+    RideFile *ride = new RideFile(
+        QDateTime(QDate(2026, 8, 1), QTime(11, 45)),
+        1.0);
+    QPointer<RideFile> guardedRide(ride);
+    bool finalizeCalled = false;
+    bool markCleanCalled = false;
+    bool rollbackCalled = false;
+
+    ActivitySaveOperations operations;
+    operations.writerFactory =
+        [&](const QString &target, AtomicFileMode) {
+            return std::unique_ptr<AtomicFileWriter>(
+                new FaultInjectingWriter(
+                    target, FailurePoint::None,
+                    [&] {
+                        delete ride;
+                        ride = nullptr;
+                    }));
+        };
+    operations.allowTargetReplacement = false;
+    operations.finalize = [&](QString &) {
+        finalizeCalled = true;
+        return true;
+    };
+    operations.markClean = [&] {
+        markCleanCalled = true;
+    };
+    operations.rollback = [&](QString &rollbackError) {
+        rollbackCalled = true;
+        if (QFile::remove(targetPath)) return true;
+        rollbackError = QStringLiteral(
+            "cannot remove unfinalized target");
+        return false;
+    };
+
+    QString error;
+    QVERIFY(!saveActivityTransaction(
+        nullptr, ride, targetPath,
+        operations, error));
+    QVERIFY(guardedRide.isNull());
+    QVERIFY(!finalizeCalled);
+    QVERIFY(!markCleanCalled);
+    QVERIFY(rollbackCalled);
+    QVERIFY(!error.isEmpty());
+    QCOMPARE(readAll(sourcePath), original);
+    QVERIFY(!QFile::exists(targetPath));
+}
+
+void TestAtomicActivitySave::
+transactionRemainsCommittedWhenMarkCleanDestroysRide()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path =
+        dir.filePath(QStringLiteral("activity.json"));
+    RideFile *ride = new RideFile(
+        QDateTime(QDate(2026, 8, 1), QTime(12, 0)),
+        1.0);
+    QPointer<RideFile> guardedRide(ride);
+
+    ActivitySaveOperations operations;
+    operations.writerFactory = qSaveFileWriterFactory();
+    operations.finalize = [](QString &) { return true; };
+    operations.markClean = [&]() {
+        delete ride;
+        ride = nullptr;
+    };
+
+    QString error;
+    QVERIFY2(saveActivityTransaction(
+        nullptr, ride, path, operations, error),
+        qPrintable(error));
+    QVERIFY(guardedRide.isNull());
+    QVERIFY(error.isEmpty());
+    QVERIFY(QFile::exists(path));
+}
+
+void TestAtomicActivitySave::
+transactionRemainsCommittedWhenFinalizeDestroysRide()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path =
+        dir.filePath(QStringLiteral("activity.json"));
+    RideFile *ride = new RideFile(
+        QDateTime(QDate(2026, 8, 1), QTime(12, 30)),
+        1.0);
+    QPointer<RideFile> guardedRide(ride);
+    bool markCleanCalled = false;
+
+    ActivitySaveOperations operations;
+    operations.writerFactory = qSaveFileWriterFactory();
+    operations.finalize = [&](QString &) {
+        delete ride;
+        ride = nullptr;
+        return true;
+    };
+    operations.markClean = [&]() {
+        markCleanCalled = true;
+    };
+
+    QString error;
+    QVERIFY2(saveActivityTransaction(
+        nullptr, ride, path, operations, error),
+        qPrintable(error));
+    QVERIFY(guardedRide.isNull());
+    QVERIFY(!markCleanCalled);
+    QVERIFY(error.isEmpty());
+    QVERIFY(QFile::exists(path));
+}
+
 void TestAtomicActivitySave::transactionPreservesZeroValuedSeriesPresence()
 {
     QTemporaryDir dir;
@@ -1835,6 +2098,155 @@ candidateSaveTransfersOnlyAfterSuccess()
     QCOMPARE(current.fileName, QStringLiteral("replacement.json"));
     QVERIFY(!current.isDirty());
     QVERIFY(candidate.ride(false) == nullptr);
+}
+
+void TestAtomicActivitySave::
+candidateSaveRejectsCurrentDestroyedBySave()
+{
+    RideFile *original = new RideFile(
+        QDateTime(QDate(2026, 7, 6), QTime(8, 30)), 1.0);
+    RideFile *replacement = new RideFile(
+        QDateTime(QDate(2026, 7, 6), QTime(8, 30)), 1.0);
+    QPointer<RideItem> current = new RideItem(original, nullptr);
+    QPointer<RideItem> candidate = new RideItem(replacement, nullptr);
+    current->path = QStringLiteral("/activities");
+    current->fileName = QStringLiteral("activity.json");
+
+    QString error;
+    QVERIFY(!saveActivityCandidate(
+        current.data(), candidate.data(), replacement,
+        [&](RideItem *, QString &) {
+            delete current.data();
+            return true;
+        },
+        error));
+    QVERIFY(current.isNull());
+    QVERIFY(candidate);
+    QVERIFY(!error.isEmpty());
+
+    delete candidate.data();
+    delete replacement;
+    delete original;
+}
+
+void TestAtomicActivitySave::
+candidateSaveRejectsCandidateDestroyedBySave()
+{
+    RideFile *original = new RideFile(
+        QDateTime(QDate(2026, 7, 6), QTime(8, 30)), 1.0);
+    RideFile *replacement = new RideFile(
+        QDateTime(QDate(2026, 7, 6), QTime(8, 30)), 1.0);
+    QPointer<RideItem> current = new RideItem(original, nullptr);
+    QPointer<RideItem> candidate = new RideItem(replacement, nullptr);
+    current->path = QStringLiteral("/activities");
+    current->fileName = QStringLiteral("activity.json");
+
+    QString error;
+    QVERIFY(!saveActivityCandidate(
+        current.data(), candidate.data(), replacement,
+        [&](RideItem *, QString &) {
+            delete candidate.data();
+            return true;
+        },
+        error));
+    QVERIFY(candidate.isNull());
+    QVERIFY(current);
+    QVERIFY(!error.isEmpty());
+
+    delete current.data();
+    delete replacement;
+    delete original;
+}
+
+void TestAtomicActivitySave::
+candidateSaveRejectsReplacementDestroyedBySave()
+{
+    RideFile *original = new RideFile(
+        QDateTime(QDate(2026, 7, 6), QTime(8, 30)), 1.0);
+    QPointer<RideFile> replacement = new RideFile(
+        QDateTime(QDate(2026, 7, 6), QTime(8, 30)), 1.0);
+    QPointer<RideItem> current = new RideItem(original, nullptr);
+    QPointer<RideItem> candidate =
+        new RideItem(replacement.data(), nullptr);
+    current->path = QStringLiteral("/activities");
+    current->fileName = QStringLiteral("activity.json");
+
+    QString error;
+    QVERIFY(!saveActivityCandidate(
+        current.data(), candidate.data(), replacement.data(),
+        [&](RideItem *, QString &) {
+            delete replacement.data();
+            return true;
+        },
+        error));
+    QVERIFY(replacement.isNull());
+    QVERIFY(current);
+    QVERIFY(candidate);
+    QVERIFY(!error.isEmpty());
+
+    delete candidate.data();
+    delete current.data();
+    delete original;
+}
+
+void TestAtomicActivitySave::
+candidateSaveRejectsCandidateDestroyedBySetDirty()
+{
+    RideFile *original = new RideFile(
+        QDateTime(QDate(2026, 7, 6), QTime(8, 30)), 1.0);
+    RideFile *replacement = new RideFile(
+        QDateTime(QDate(2026, 7, 6), QTime(8, 30)), 1.0);
+    QPointer<RideItem> current = new RideItem(original, nullptr);
+    QPointer<RideItem> candidate = new RideItem(replacement, nullptr);
+    current->path = QStringLiteral("/activities");
+    current->fileName = QStringLiteral("activity.json");
+    setAtomicActivitySaveSetDirtyAction(
+        candidate.data(), [&] { delete candidate.data(); });
+
+    int saveCalls = 0;
+    QString error;
+    QVERIFY(!saveActivityCandidate(
+        current.data(), candidate.data(), replacement,
+        [&](RideItem *, QString &) {
+            ++saveCalls;
+            return true;
+        },
+        error));
+    QVERIFY(candidate.isNull());
+    QCOMPARE(saveCalls, 0);
+    QVERIFY(!error.isEmpty());
+
+    delete current.data();
+    delete replacement;
+    delete original;
+}
+
+void TestAtomicActivitySave::
+candidateSaveRejectsCurrentDestroyedBySetRide()
+{
+    RideFile *original = new RideFile(
+        QDateTime(QDate(2026, 7, 6), QTime(8, 30)), 1.0);
+    RideFile *replacement = new RideFile(
+        QDateTime(QDate(2026, 7, 6), QTime(8, 30)), 1.0);
+    QPointer<RideItem> current = new RideItem(original, nullptr);
+    QPointer<RideItem> candidate = new RideItem(replacement, nullptr);
+    current->path = QStringLiteral("/activities");
+    current->fileName = QStringLiteral("activity.json");
+    setAtomicActivitySaveSetRideAction(
+        current.data(), [&] { delete current.data(); });
+
+    QString error;
+    QVERIFY(!saveActivityCandidate(
+        current.data(), candidate.data(), replacement,
+        [](RideItem *, QString &) { return true; },
+        error));
+    QVERIFY(current.isNull());
+    QVERIFY(candidate);
+    QVERIFY(!error.isEmpty());
+
+    delete candidate.data();
+    delete replacement;
+    delete original;
 }
 
 void TestAtomicActivitySave::
@@ -2312,10 +2724,270 @@ mainWindowSaveRideSingleDialogPropagatesResult()
              QStringLiteral("injected collection save failure"));
 }
 
+void TestAtomicActivitySave::
+preflightSaveRelinksCompleteActivitySetBeforeSaving()
+{
+    RideItem target(nullptr, nullptr);
+    target.fileName = QStringLiteral("target.fit");
+    target.setDirty(true);
+    RideItem linked(nullptr, nullptr);
+    linked.fileName = QStringLiteral("linked.fit");
+
+    QStringList events;
+    QList<RideItem*> savedItems;
+    bool receivedExpectedTarget = false;
+    QString error;
+    const bool saved = saveOperationPreflightActivities(
+        guardOperationPreflightItems(
+            QList<RideItem*>{&target}),
+        [&](RideItem *item,
+            GuardedOperationPreflightItems &items,
+            QString &) {
+            events.append(QStringLiteral("relink"));
+            receivedExpectedTarget =
+                item == &target;
+            target.setLinkedFileName(
+                QStringLiteral("linked.json"));
+            linked.setLinkedFileName(
+                QStringLiteral("target.json"));
+            items.append(
+                GuardedOperationPreflightItem(&linked));
+            items.append(
+                GuardedOperationPreflightItem(&target));
+            return true;
+        },
+        [&](const QList<RideItem*> &items,
+            QString &) {
+            events.append(QStringLiteral("save"));
+            savedItems = items;
+            return true;
+        },
+        error);
+
+    QVERIFY(saved);
+    QVERIFY(error.isEmpty());
+    QVERIFY(receivedExpectedTarget);
+    QCOMPARE(
+        events,
+        QStringList({
+            QStringLiteral("relink"),
+            QStringLiteral("save")}));
+    QCOMPARE(
+        savedItems,
+        QList<RideItem*>({&target, &linked}));
+}
+
+void TestAtomicActivitySave::
+preflightItemsRejectDestroyedActivity()
+{
+    RideItem *item = new RideItem(nullptr, nullptr);
+    const GuardedOperationPreflightItems guarded =
+        guardOperationPreflightItems(
+            QList<RideItem*>{item});
+    delete item;
+
+    QList<RideItem*> resolved;
+    QString error;
+    QVERIFY(!resolveOperationPreflightItems(
+        guarded, resolved, error));
+    QVERIFY(resolved.isEmpty());
+    QVERIFY(!error.isEmpty());
+}
+
+void TestAtomicActivitySave::
+preflightRelinkRejectsDestroyedActivity()
+{
+    RideItem *item = new RideItem(nullptr, nullptr);
+    item->fileName = QStringLiteral("activity.fit");
+    const GuardedOperationPreflightItems guarded =
+        guardOperationPreflightItems(
+            QList<RideItem*>{item});
+    bool saveCalled = false;
+    QString error;
+
+    const bool saved = saveOperationPreflightActivities(
+        guarded,
+        [&](RideItem *,
+            GuardedOperationPreflightItems &,
+            QString &) {
+            delete item;
+            item = nullptr;
+            return true;
+        },
+        [&](const QList<RideItem*> &, QString &) {
+            saveCalled = true;
+            return true;
+        },
+        error);
+
+    QVERIFY(!saved);
+    QVERIFY(!saveCalled);
+    QVERIFY(!error.isEmpty());
+}
+
+
+void TestAtomicActivitySave::
+preflightRejectsIdentityMutationDuringLaterRelink()
+{
+    RideItem first(nullptr, nullptr);
+    first.fileName = QStringLiteral("first.fit");
+    first.path = QStringLiteral("/activities");
+    RideItem second(nullptr, nullptr);
+    second.fileName = QStringLiteral("second.fit");
+    second.path = QStringLiteral("/activities");
+    int relinkCalls = 0;
+    bool saveCalled = false;
+    QString error;
+
+    const bool saved = saveOperationPreflightActivities(
+        guardOperationPreflightItems(
+            QList<RideItem*>{&first, &second}),
+        [&](RideItem *,
+            GuardedOperationPreflightItems &,
+            QString &) {
+            ++relinkCalls;
+            if (relinkCalls == 2) {
+                first.fileName =
+                    QStringLiteral("replacement.fit");
+            }
+            return true;
+        },
+        [&](const QList<RideItem*> &, QString &) {
+            saveCalled = true;
+            return true;
+        },
+        error);
+
+    QVERIFY(!saved);
+    QCOMPARE(relinkCalls, 2);
+    QVERIFY(!saveCalled);
+    QVERIFY(error.contains(
+        QStringLiteral("changed"),
+        Qt::CaseInsensitive));
+}
+
+void TestAtomicActivitySave::
+preflightRejectsDestroyedOwnerDuringRelink()
+{
+    RideItem item(nullptr, nullptr);
+    item.fileName = QStringLiteral("activity.fit");
+    QObject *owner = new QObject;
+    QPointer<QObject> guardedOwner(owner);
+    bool saveCalled = false;
+    QString error;
+
+    const bool saved = saveOperationPreflightActivities(
+        guardOperationPreflightItems(
+            QList<RideItem*>{&item}),
+        [&](RideItem *,
+            GuardedOperationPreflightItems &,
+            QString &) {
+            delete owner;
+            owner = nullptr;
+            return true;
+        },
+        [&](const QList<RideItem*> &, QString &) {
+            saveCalled = true;
+            return true;
+        },
+        error,
+        [&](QString &validationError) {
+            if (guardedOwner) return true;
+            validationError = QStringLiteral(
+                "operation owner was destroyed");
+            return false;
+        });
+
+    QVERIFY(!saved);
+    QVERIFY(!saveCalled);
+    QCOMPARE(error, QStringLiteral(
+        "operation owner was destroyed"));
+}
+
+void TestAtomicActivitySave::
+preflightRejectsDestroyedOwnerDuringSave()
+{
+    RideItem item(nullptr, nullptr);
+    item.fileName = QStringLiteral("activity.fit");
+    QObject *owner = new QObject;
+    QPointer<QObject> guardedOwner(owner);
+    int saveCalls = 0;
+    QString error;
+
+    const bool saved = saveOperationPreflightActivities(
+        guardOperationPreflightItems(
+            QList<RideItem*>{&item}),
+        [](RideItem *,
+           GuardedOperationPreflightItems &,
+           QString &) {
+            return true;
+        },
+        [&](const QList<RideItem*> &, QString &) {
+            ++saveCalls;
+            delete owner;
+            owner = nullptr;
+            return true;
+        },
+        error,
+        [&](QString &validationError) {
+            if (guardedOwner) return true;
+            validationError = QStringLiteral(
+                "operation owner was destroyed");
+            return false;
+        });
+
+    QVERIFY(!saved);
+    QCOMPARE(saveCalls, 1);
+    QCOMPARE(error, QStringLiteral(
+        "operation owner was destroyed"));
+}
+
+void TestAtomicActivitySave::discardReloadFailureIsRejected()
+{
+    RideItem item(nullptr, nullptr);
+    item.fileName = QStringLiteral("activity.fit");
+    item.path = QStringLiteral("/activities");
+    const GuardedOperationPreflightItems guardedItems =
+        guardOperationPreflightItems({&item});
+    int reloadCalls = 0;
+    bool expectedItemSeen = false;
+    QString error;
+
+    QVERIFY(!reloadOperationPreflightActivities(
+        guardedItems,
+        [&](RideItem *reloadItem) -> RideFile * {
+            expectedItemSeen = reloadItem == &item;
+            ++reloadCalls;
+            return nullptr;
+        },
+        error));
+    QCOMPARE(reloadCalls, 1);
+    QVERIFY(expectedItemSeen);
+    QVERIFY(error.contains(
+        QStringLiteral("reload"),
+        Qt::CaseInsensitive));
+}
+
+void TestAtomicActivitySave::
+discardReloadSurvivesActivityDestroyedByClose()
+{
+    QPointer<RideItem> item =
+        new RideItem(nullptr, nullptr);
+    setAtomicActivitySaveCloseAction(
+        item.data(), [&] { delete item.data(); });
+
+    RideFile *const reloaded =
+        reloadDiscardedActivity(item.data());
+
+    QVERIFY(item.isNull());
+    QVERIFY(reloaded == nullptr);
+}
+
 void TestAtomicActivitySave::saveSingleDialogSaveAndAbandon()
 {
     RideItem item(nullptr, nullptr);
     item.fileName = QStringLiteral("activity.fit");
+    item.path = QStringLiteral("/activities");
     item.setDirty(true);
 
     TestSaveSingleDialog saveDialog(&item);
@@ -2329,6 +3001,9 @@ void TestAtomicActivitySave::saveSingleDialogSaveAndAbandon()
     QVERIFY(item.isDirty());
 
     saveDialog.saveResult = true;
+    saveDialog.saveAction = [&item]() {
+        item.fileName = QStringLiteral("converted.json");
+    };
     saveDialog.saveClicked();
     QCOMPARE(saveDialog.result(), int(QDialog::Accepted));
     QVERIFY(saveDialog.mayProceed());
@@ -2344,18 +3019,169 @@ void TestAtomicActivitySave::saveSingleDialogSaveAndAbandon()
 }
 
 void TestAtomicActivitySave::
+saveSingleDialogRejectsDestroyedActivity()
+{
+    RideItem *item = new RideItem(nullptr, nullptr);
+    item->fileName = QStringLiteral("activity.fit");
+    item->path = QStringLiteral("/activities");
+    item->setDirty(true);
+    TestSaveSingleDialog dialog(item);
+    dialog.setResult(42);
+    delete item;
+
+    dialog.saveClicked();
+
+    QCOMPARE(dialog.result(), 42);
+    QVERIFY(!dialog.mayProceed());
+    QCOMPARE(dialog.saveCalls, 0);
+    QCOMPARE(dialog.errorReports, 1);
+}
+
+void TestAtomicActivitySave::
+saveSingleDialogRejectsIdentityMutation_data()
+{
+    QTest::addColumn<QString>("fileName");
+    QTest::addColumn<QString>("path");
+    QTest::addColumn<bool>("planned");
+
+    QTest::newRow("filename")
+        << QStringLiteral("replacement.fit")
+        << QStringLiteral("/activities") << false;
+    QTest::newRow("path")
+        << QStringLiteral("activity.fit")
+        << QStringLiteral("/detached") << false;
+    QTest::newRow("namespace")
+        << QStringLiteral("activity.fit")
+        << QStringLiteral("/activities") << true;
+}
+
+void TestAtomicActivitySave::
+saveSingleDialogRejectsIdentityMutation()
+{
+    QFETCH(QString, fileName);
+    QFETCH(QString, path);
+    QFETCH(bool, planned);
+    RideItem item(nullptr, nullptr);
+    item.fileName = QStringLiteral("activity.fit");
+    item.path = QStringLiteral("/activities");
+    item.planned = false;
+    item.setDirty(true);
+    TestSaveSingleDialog dialog(&item);
+    dialog.setResult(42);
+
+    item.fileName = fileName;
+    item.path = path;
+    item.planned = planned;
+    dialog.saveClicked();
+
+    QCOMPARE(dialog.result(), 42);
+    QVERIFY(!dialog.mayProceed());
+    QCOMPARE(dialog.saveCalls, 0);
+    QCOMPARE(dialog.errorReports, 1);
+    QVERIFY(item.isDirty());
+
+    item.fileName = QStringLiteral("activity.fit");
+    item.path = QStringLiteral("/activities");
+    item.planned = false;
+    TestSaveSingleDialog abandonDialog(&item);
+    abandonDialog.setResult(42);
+    item.fileName = fileName;
+    item.path = path;
+    item.planned = planned;
+
+    abandonDialog.abandonClicked();
+
+    QCOMPARE(abandonDialog.result(), 42);
+    QVERIFY(!abandonDialog.mayProceed());
+    QCOMPARE(abandonDialog.saveCalls, 0);
+    QCOMPARE(abandonDialog.errorReports, 1);
+    QVERIFY(item.isDirty());
+}
+
+void TestAtomicActivitySave::
+saveSingleDialogCommitsWhenActivityDestroyedDuringSave()
+{
+    RideItem *item = new RideItem(nullptr, nullptr);
+    item->fileName = QStringLiteral("activity.fit");
+    item->path = QStringLiteral("/activities");
+    item->setDirty(true);
+    TestSaveSingleDialog dialog(item);
+    dialog.setResult(42);
+    dialog.saveAction = [&] {
+        delete item;
+        item = nullptr;
+    };
+
+    dialog.saveClicked();
+
+    QCOMPARE(dialog.result(), int(QDialog::Accepted));
+    QVERIFY(dialog.mayProceed());
+    QCOMPARE(dialog.saveCalls, 1);
+    QCOMPARE(dialog.errorReports, 0);
+}
+
+void TestAtomicActivitySave::
+saveSingleDialogRejectsActivityDestroyedDuringFailedSave()
+{
+    RideItem *item = new RideItem(nullptr, nullptr);
+    item->fileName = QStringLiteral("activity.fit");
+    item->path = QStringLiteral("/activities");
+    item->setDirty(true);
+    TestSaveSingleDialog dialog(item);
+    dialog.setResult(42);
+    dialog.saveResult = false;
+    dialog.saveAction = [&] {
+        delete item;
+        item = nullptr;
+    };
+
+    dialog.saveClicked();
+
+    QCOMPARE(dialog.result(), 42);
+    QVERIFY(!dialog.mayProceed());
+    QCOMPARE(dialog.saveCalls, 1);
+    QCOMPARE(dialog.errorReports, 1);
+}
+
+void TestAtomicActivitySave::
+saveSingleDialogSurvivesParentDestroyedDuringSave()
+{
+    RideItem item(nullptr, nullptr);
+    item.fileName = QStringLiteral("activity.fit");
+    item.path = QStringLiteral("/activities");
+    item.setDirty(true);
+    QWidget *parent = new QWidget;
+    TestSaveSingleDialog *dialog =
+        new TestSaveSingleDialog(&item);
+    dialog->setParent(parent);
+    QPointer<TestSaveSingleDialog> guardedDialog(dialog);
+    dialog->saveAction = [parent]() {
+        delete parent;
+    };
+
+    dialog->saveClicked();
+
+    QVERIFY(guardedDialog.isNull());
+}
+
+void TestAtomicActivitySave::
 saveOnExitDialogStopsUntilAllSelectedSave()
 {
     RideItem first(nullptr, nullptr);
     first.fileName = QStringLiteral("first.json");
+    first.path = QStringLiteral("/activities");
     first.setDirty(true);
     RideItem second(nullptr, nullptr);
     second.fileName = QStringLiteral("second.json");
+    second.path = QStringLiteral("/activities");
     second.setDirty(true);
 
     TestSaveOnExitDialog dialog({&first, &second});
     dialog.results.insert(&first, true);
     dialog.results.insert(&second, false);
+    dialog.saveAction = [&first]() {
+        first.fileName = QStringLiteral("first-converted.json");
+    };
     dialog.setResult(42);
 
     dialog.saveClicked();
@@ -2373,13 +3199,88 @@ saveOnExitDialogStopsUntilAllSelectedSave()
 }
 
 void TestAtomicActivitySave::
+saveOnExitDialogDoesNotAcceptRedirtiedCompletedActivity()
+{
+    RideItem first(nullptr, nullptr);
+    first.fileName = QStringLiteral("first.json");
+    first.path = QStringLiteral("/activities");
+    first.setDirty(true);
+    RideItem second(nullptr, nullptr);
+    second.fileName = QStringLiteral("second.json");
+    second.path = QStringLiteral("/activities");
+    second.setDirty(true);
+
+    TestSaveOnExitDialog dialog({&first, &second});
+    dialog.results.insert(&first, true);
+    dialog.results.insert(&second, true);
+    dialog.saveActions.insert(&second, [&first]() {
+        first.setDirty(true);
+    });
+    dialog.setResult(42);
+
+    dialog.saveClicked();
+
+    QCOMPARE(dialog.result(), 42);
+    QCOMPARE(dialog.calls, QList<RideItem *>({&first, &second}));
+    QVERIFY(first.isDirty());
+    QVERIFY(!second.isDirty());
+
+    dialog.calls.clear();
+    dialog.saveClicked();
+
+    QCOMPARE(dialog.result(), int(QDialog::Accepted));
+    QCOMPARE(dialog.calls, QList<RideItem *>({&first}));
+    QVERIFY(!first.isDirty());
+}
+
+void TestAtomicActivitySave::
+saveOnExitDialogDoesNotAcceptNewDirtyActivity()
+{
+    RideItem first(nullptr, nullptr);
+    first.fileName = QStringLiteral("first.json");
+    first.path = QStringLiteral("/activities");
+    first.setDirty(true);
+    RideItem added(nullptr, nullptr);
+    added.fileName = QStringLiteral("added.json");
+    added.path = QStringLiteral("/activities");
+    added.setDirty(false);
+
+    TestSaveOnExitDialog dialog({&first});
+    dialog.trackActivity(&added);
+    dialog.results.insert(&first, true);
+    dialog.results.insert(&added, true);
+    dialog.saveActions.insert(&first, [&added]() {
+        added.setDirty(true);
+    });
+    dialog.setResult(42);
+
+    dialog.saveClicked();
+
+    QCOMPARE(dialog.result(), 42);
+    QCOMPARE(dialog.calls, QList<RideItem *>({&first}));
+    QVERIFY(added.isDirty());
+    QTableWidget *const table = dialog.findChild<QTableWidget *>();
+    QVERIFY(table != nullptr);
+    QCOMPARE(table->rowCount(), 2);
+
+    dialog.calls.clear();
+    dialog.saveClicked();
+
+    QCOMPARE(dialog.result(), int(QDialog::Accepted));
+    QCOMPARE(dialog.calls, QList<RideItem *>({&added}));
+    QVERIFY(!added.isDirty());
+}
+
+void TestAtomicActivitySave::
 saveOnExitDialogDefersSkippedStateUntilSuccess()
 {
     RideItem skipped(nullptr, nullptr);
     skipped.fileName = QStringLiteral("skipped.json");
+    skipped.path = QStringLiteral("/activities");
     skipped.setDirty(true);
     RideItem failing(nullptr, nullptr);
     failing.fileName = QStringLiteral("failing.json");
+    failing.path = QStringLiteral("/activities");
     failing.setDirty(true);
 
     TestSaveOnExitDialog dialog({&skipped, &failing});
@@ -2407,6 +3308,196 @@ saveOnExitDialogDefersSkippedStateUntilSuccess()
     QVERIFY(skipped.skipsave);
     QVERIFY(skipped.isDirty());
     QVERIFY(!failing.isDirty());
+}
+
+void TestAtomicActivitySave::
+saveOnExitAbandonMarksRedirtiedCompletedActivity()
+{
+    RideItem first(nullptr, nullptr);
+    first.fileName = QStringLiteral("first.json");
+    first.path = QStringLiteral("/activities");
+    first.setDirty(true);
+    RideItem second(nullptr, nullptr);
+    second.fileName = QStringLiteral("second.json");
+    second.path = QStringLiteral("/activities");
+    second.setDirty(true);
+
+    TestSaveOnExitDialog dialog({&first, &second});
+    dialog.results.insert(&first, true);
+    dialog.results.insert(&second, false);
+    dialog.setResult(42);
+    dialog.saveClicked();
+    QCOMPARE(dialog.result(), 42);
+    QVERIFY(!first.isDirty());
+    QVERIFY(second.isDirty());
+
+    first.setDirty(true);
+    dialog.abandonClicked();
+
+    QCOMPARE(dialog.result(), int(QDialog::Accepted));
+    QVERIFY(first.skipsave);
+    QVERIFY(second.skipsave);
+}
+
+void TestAtomicActivitySave::
+saveOnExitAbandonMarksNewDirtyActivity()
+{
+    RideItem initial(nullptr, nullptr);
+    initial.fileName = QStringLiteral("initial.json");
+    initial.path = QStringLiteral("/activities");
+    initial.setDirty(true);
+    RideItem added(nullptr, nullptr);
+    added.fileName = QStringLiteral("added.json");
+    added.path = QStringLiteral("/activities");
+    added.setDirty(false);
+
+    TestSaveOnExitDialog dialog({&initial});
+    dialog.trackActivity(&added);
+    dialog.results.insert(&initial, false);
+    dialog.saveActions.insert(&initial, [&added] {
+        added.setDirty(true);
+    });
+    dialog.setResult(42);
+    dialog.saveClicked();
+    QCOMPARE(dialog.result(), 42);
+    QVERIFY(initial.isDirty());
+    QVERIFY(added.isDirty());
+
+    dialog.abandonClicked();
+
+    QCOMPARE(dialog.result(), int(QDialog::Accepted));
+    QVERIFY(initial.skipsave);
+    QVERIFY(added.skipsave);
+}
+
+void TestAtomicActivitySave::
+saveOnExitDialogRejectsIdentityMutation_data()
+{
+    QTest::addColumn<QString>("fileName");
+    QTest::addColumn<QString>("path");
+    QTest::addColumn<bool>("planned");
+
+    QTest::newRow("filename")
+        << QStringLiteral("replacement.json")
+        << QStringLiteral("/activities") << false;
+    QTest::newRow("path")
+        << QStringLiteral("activity.json")
+        << QStringLiteral("/detached") << false;
+    QTest::newRow("namespace")
+        << QStringLiteral("activity.json")
+        << QStringLiteral("/activities") << true;
+}
+
+void TestAtomicActivitySave::
+saveOnExitDialogRejectsIdentityMutation()
+{
+    QFETCH(QString, fileName);
+    QFETCH(QString, path);
+    QFETCH(bool, planned);
+    RideItem item(nullptr, nullptr);
+    item.fileName = QStringLiteral("activity.json");
+    item.path = QStringLiteral("/activities");
+    item.planned = false;
+    item.setDirty(true);
+    TestSaveOnExitDialog dialog({&item});
+    dialog.setResult(42);
+
+    item.fileName = fileName;
+    item.path = path;
+    item.planned = planned;
+    dialog.saveClicked();
+
+    QCOMPARE(dialog.result(), 42);
+    QVERIFY(dialog.calls.isEmpty());
+    QCOMPARE(dialog.errorReports, 1);
+    QVERIFY(item.isDirty());
+    QVERIFY(!item.skipsave);
+
+    item.fileName = QStringLiteral("activity.json");
+    item.path = QStringLiteral("/activities");
+    item.planned = false;
+    TestSaveOnExitDialog abandonDialog({&item});
+    abandonDialog.setResult(42);
+    item.fileName = fileName;
+    item.path = path;
+    item.planned = planned;
+
+    abandonDialog.abandonClicked();
+
+    QCOMPARE(abandonDialog.result(), 42);
+    QVERIFY(abandonDialog.calls.isEmpty());
+    QCOMPARE(abandonDialog.errorReports, 1);
+    QVERIFY(item.isDirty());
+    QVERIFY(!item.skipsave);
+}
+
+void TestAtomicActivitySave::
+saveOnExitDialogRejectsDestroyedActivity()
+{
+    RideItem *removed = new RideItem(nullptr, nullptr);
+    removed->fileName = QStringLiteral("removed.json");
+    removed->path = QStringLiteral("/activities");
+    removed->setDirty(true);
+    RideItem survivor(nullptr, nullptr);
+    survivor.fileName = QStringLiteral("survivor.json");
+    survivor.path = QStringLiteral("/activities");
+    survivor.setDirty(true);
+    TestSaveOnExitDialog dialog({removed, &survivor});
+    dialog.results.insert(&survivor, true);
+    dialog.setResult(42);
+    delete removed;
+
+    dialog.saveClicked();
+
+    QCOMPARE(dialog.result(), 42);
+    QVERIFY(dialog.calls.isEmpty());
+    QCOMPARE(dialog.errorReports, 1);
+    QVERIFY(survivor.isDirty());
+    QVERIFY(!survivor.skipsave);
+}
+
+void TestAtomicActivitySave::
+saveOnExitDialogCommitsWhenActivityDestroyedDuringSave()
+{
+    RideItem *item = new RideItem(nullptr, nullptr);
+    item->fileName = QStringLiteral("activity.json");
+    item->path = QStringLiteral("/activities");
+    item->setDirty(true);
+    RideItem *const expectedItem = item;
+    TestSaveOnExitDialog dialog({item});
+    dialog.results.insert(item, true);
+    dialog.setResult(42);
+    dialog.saveAction = [&] {
+        delete item;
+        item = nullptr;
+    };
+
+    dialog.saveClicked();
+
+    QCOMPARE(dialog.result(), int(QDialog::Accepted));
+    QCOMPARE(dialog.calls, QList<RideItem *>({expectedItem}));
+    QCOMPARE(dialog.errorReports, 0);
+}
+
+void TestAtomicActivitySave::
+saveOnExitDialogSurvivesParentDestroyedDuringSave()
+{
+    RideItem item(nullptr, nullptr);
+    item.fileName = QStringLiteral("activity.json");
+    item.path = QStringLiteral("/activities");
+    item.setDirty(true);
+    QWidget *parent = new QWidget;
+    TestSaveOnExitDialog *dialog =
+        new TestSaveOnExitDialog({&item});
+    dialog->setParent(parent);
+    QPointer<TestSaveOnExitDialog> guardedDialog(dialog);
+    dialog->saveAction = [parent]() {
+        delete parent;
+    };
+
+    dialog->saveClicked();
+
+    QVERIFY(guardedDialog.isNull());
 }
 
 void TestAtomicActivitySave::rideCacheSaveActivityPropagatesFailure()
@@ -2457,6 +3548,35 @@ void TestAtomicActivitySave::rideCacheSaveActivityPropagatesFailure()
     QVERIFY(!RideCache::saveActivity(
         nullptr, nullptr, error, save, notify));
     QVERIFY(!error.isEmpty());
+}
+
+void TestAtomicActivitySave::
+rideCacheSaveActivityRejectsDestructionDuringSave()
+{
+    RideItem *item = new RideItem(nullptr, nullptr);
+    item->fileName = QStringLiteral("activity.json");
+    item->setDirty(true);
+    int notifications = 0;
+    bool receivedExpectedItem = false;
+    QString error;
+
+    const bool saved = RideCache::saveActivity(
+        nullptr, item, error,
+        [&](Context *, RideItem *savedItem, QString *) {
+            receivedExpectedItem =
+                savedItem == item;
+            delete item;
+            item = nullptr;
+            return true;
+        },
+        [&](RideItem *) {
+            ++notifications;
+        });
+
+    QVERIFY(!saved);
+    QVERIFY(!error.isEmpty());
+    QVERIFY(receivedExpectedItem);
+    QCOMPARE(notifications, 0);
 }
 
 void TestAtomicActivitySave::rideCacheSaveActivitiesAggregatesFailures()
@@ -2519,6 +3639,207 @@ void TestAtomicActivitySave::rideCacheSaveActivitiesAggregatesFailures()
         nullptr, {nullptr}, error, save, notify));
     QVERIFY(error.contains(QStringLiteral("unknown activity")));
     QCOMPARE(saveCalls, 5);
+}
+
+void TestAtomicActivitySave::
+rideCacheSaveActivitiesSurviveReentrantNextDeletion_data()
+{
+    QTest::addColumn<bool>("deleteFromSave");
+
+    QTest::newRow("save-callback") << true;
+    QTest::newRow("saved-notification") << false;
+}
+
+void TestAtomicActivitySave::
+rideCacheSaveActivitiesSurviveReentrantNextDeletion()
+{
+    QFETCH(bool, deleteFromSave);
+
+    RideItem first(nullptr, nullptr);
+    first.fileName = QStringLiteral("first.json");
+    first.setDirty(true);
+    RideItem *second = new RideItem(nullptr, nullptr);
+    second->fileName = QStringLiteral("second.json");
+    second->setDirty(true);
+    QPointer<RideItem> secondGuard(second);
+    int saveCalls = 0;
+    QList<RideItem*> notifications;
+    QString error;
+
+    const bool saved = RideCache::saveActivities(
+        nullptr, {&first, second}, error,
+        [&](Context *, RideItem *item, QString *) {
+            ++saveCalls;
+            item->setDirty(false);
+            if (deleteFromSave && item == &first) {
+                delete second;
+                second = nullptr;
+            }
+            return true;
+        },
+        [&](RideItem *item) {
+            notifications.append(item);
+            if (!deleteFromSave && item == &first) {
+                delete second;
+                second = nullptr;
+            }
+        });
+
+    QVERIFY(!saved);
+    QVERIFY(!error.isEmpty());
+    QCOMPARE(saveCalls, 1);
+    QCOMPARE(notifications, QList<RideItem*>({&first}));
+    QVERIFY(secondGuard.isNull());
+}
+
+void TestAtomicActivitySave::
+rideCacheSaveActivitiesStopWhenOwnerDestroyed_data()
+{
+    QTest::addColumn<bool>("destroyFromSave");
+
+    QTest::newRow("save-callback") << true;
+    QTest::newRow("saved-notification") << false;
+}
+
+void TestAtomicActivitySave::
+rideCacheSaveActivitiesStopWhenOwnerDestroyed()
+{
+    QFETCH(bool, destroyFromSave);
+
+    RideItem first(nullptr, nullptr);
+    first.fileName = QStringLiteral("first.json");
+    first.setDirty(true);
+    RideItem second(nullptr, nullptr);
+    second.fileName = QStringLiteral("second.json");
+    second.setDirty(true);
+    QObject *owner = new QObject;
+    QPointer<QObject> ownerGuard(owner);
+    int saveCalls = 0;
+    int notifications = 0;
+    QString error;
+
+    const bool saved = RideCache::saveActivities(
+        nullptr, {&first, &second}, error,
+        [&](Context *, RideItem *item, QString *) {
+            ++saveCalls;
+            item->setDirty(false);
+            if (destroyFromSave) {
+                delete owner;
+                owner = nullptr;
+            }
+            return true;
+        },
+        [&](RideItem *) {
+            ++notifications;
+            if (!destroyFromSave) {
+                delete owner;
+                owner = nullptr;
+            }
+        },
+        owner);
+
+    QVERIFY(!saved);
+    QVERIFY(!error.isEmpty());
+    QVERIFY(ownerGuard.isNull());
+    QCOMPARE(saveCalls, 1);
+    QCOMPARE(notifications, destroyFromSave ? 0 : 1);
+    QVERIFY(!first.isDirty());
+    QVERIFY(second.isDirty());
+}
+
+void TestAtomicActivitySave::
+mainWindowRejectsIdentityChangedByProcessor_data()
+{
+    QTest::addColumn<QString>("mutation");
+
+    QTest::newRow("filename")
+        << QStringLiteral("filename");
+    QTest::newRow("path")
+        << QStringLiteral("path");
+    QTest::newRow("namespace")
+        << QStringLiteral("planned");
+}
+
+void TestAtomicActivitySave::
+mainWindowRejectsIdentityChangedByProcessor()
+{
+    QFETCH(QString, mutation);
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QDateTime startTime(
+        QDate(2026, 8, 1), QTime(10, 11, 12));
+    const QString fileName =
+        activityFileName(startTime, QStringLiteral("json"));
+    const QString sourcePath = dir.filePath(fileName);
+    const QByteArray original("original activity");
+    writeFixture(sourcePath, original);
+
+    RideFile ride(startTime, 1.0);
+    RideItem item(&ride, nullptr);
+    item.path = dir.path();
+    item.fileName = fileName;
+    item.setDirty(true);
+
+    ActivitySaveOperations operations;
+    operations.writerFactory = qSaveFileWriterFactory();
+    operations.stage = [&](RideFile *, QString &) {
+        if (mutation == QStringLiteral("filename")) {
+            item.fileName = QStringLiteral("replacement.json");
+        } else if (mutation == QStringLiteral("path")) {
+            item.path = dir.filePath(
+                QStringLiteral("replacement"));
+        } else {
+            item.planned = true;
+        }
+        return true;
+    };
+
+    QString error;
+    QVERIFY(!MainWindow::saveSilent(
+        nullptr, &item, &error, &operations));
+    QVERIFY(error.contains(
+        QStringLiteral("changed"),
+        Qt::CaseInsensitive));
+    QCOMPARE(readAll(sourcePath), original);
+    QVERIFY(item.isDirty());
+}
+
+void TestAtomicActivitySave::
+mainWindowSurvivesItemDestroyedByProcessor()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QDateTime startTime(
+        QDate(2026, 8, 1), QTime(10, 12, 13));
+    const QString fileName =
+        activityFileName(startTime, QStringLiteral("json"));
+    const QString sourcePath = dir.filePath(fileName);
+    const QByteArray original("original activity");
+    writeFixture(sourcePath, original);
+
+    RideFile ride(startTime, 1.0);
+    RideItem *item = new RideItem(&ride, nullptr);
+    item->path = dir.path();
+    item->fileName = fileName;
+    item->setDirty(true);
+    QPointer<RideItem> guardedItem(item);
+
+    ActivitySaveOperations operations;
+    operations.writerFactory = qSaveFileWriterFactory();
+    operations.stage = [&](RideFile *, QString &) {
+        delete item;
+        item = nullptr;
+        return true;
+    };
+
+    QString error;
+    QVERIFY(!MainWindow::saveSilent(
+        nullptr, item, &error, &operations));
+    QVERIFY(guardedItem.isNull());
+    QVERIFY(error.contains(
+        QStringLiteral("changed"),
+        Qt::CaseInsensitive));
+    QCOMPARE(readAll(sourcePath), original);
 }
 
 QTEST_MAIN(TestAtomicActivitySave)

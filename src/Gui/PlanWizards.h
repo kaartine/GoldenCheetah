@@ -25,11 +25,15 @@
 #include <QWizard>
 #include <QWizardPage>
 #include <QLabel>
+#include <QPointer>
+#include <QSharedPointer>
 #include <QTreeWidget>
 #include <QCheckBox>
 #include <QRadioButton>
 #include <QStyledItemDelegate>
 #include <QStackedWidget>
+
+#include <functional>
 
 #include "PlanBundle.h"
 #include "Season.h"
@@ -116,14 +120,161 @@ class IndicatorDelegate : public QStyledItemDelegate
 };
 
 
+struct GuardedRideItem {
+    QPointer<RideItem> rideItem;
+    QString fileName;
+    QString path;
+    bool planned = false;
+
+    GuardedRideItem() = default;
+    explicit GuardedRideItem(RideItem *rideItem);
+
+    bool matches(RideItem *candidate) const;
+};
+
+
 struct SourceRide {
-    RideItem *rideItem = nullptr;
+    GuardedRideItem source;
     QDate sourceDate;
     QDate targetDate;
     bool selected = false;
     int conflictGroup = -1;
     bool targetBlocked = false;
+
+    SourceRide() = default;
+    SourceRide(RideItem *rideItem, const QDate &sourceDate,
+               const QDate &targetDate, bool selected,
+               int conflictGroup, bool targetBlocked);
 };
+
+
+class RepeatPlanWorkflowGuard
+{
+    public:
+        RepeatPlanWorkflowGuard(
+            QObject *wizard, QObject *context,
+            QObject *athlete, QObject *cache,
+            QObject *tab)
+        : wizard(wizard), context(context), athlete(athlete),
+          cache(cache), tab(tab)
+        {
+        }
+
+        bool allAlive() const
+        {
+            return wizard && context && athlete && cache && tab;
+        }
+
+        bool canAccessPage() const
+        {
+            return allAlive();
+        }
+
+    private:
+        QPointer<QObject> wizard;
+        QPointer<QObject> context;
+        QPointer<QObject> athlete;
+        QPointer<QObject> cache;
+        QPointer<QObject> tab;
+};
+
+
+class RepeatPlanWorkflowState
+{
+    public:
+        void markInputsValid()
+        {
+            markInputsValid(true);
+        }
+
+        bool markInputsValid(bool hasCopyInputs)
+        {
+            inputsValid = hasCopyInputs;
+            removalComplete = false;
+            copyComplete = false;
+            return inputsValid;
+        }
+
+        bool canRemoveTargets() const
+        {
+            return inputsValid;
+        }
+
+        void markRemovalComplete()
+        {
+            removalComplete = inputsValid;
+        }
+
+        void markCopyComplete()
+        {
+            copyComplete = inputsValid && removalComplete;
+        }
+
+        bool canAccept(
+            const RepeatPlanWorkflowGuard &guard) const
+        {
+            return inputsValid && removalComplete
+                && copyComplete && guard.allAlive();
+        }
+
+    private:
+        bool inputsValid = false;
+        bool removalComplete = false;
+        bool copyComplete = false;
+};
+
+
+class RepeatPlanWorkflowExecutionGuard
+{
+    public:
+        RepeatPlanWorkflowExecutionGuard(
+            QObject *owner, bool &inProgress)
+        : owner(owner), inProgress(&inProgress),
+          ownsExecution(owner && !inProgress)
+        {
+            if (ownsExecution)
+                inProgress = true;
+        }
+
+        ~RepeatPlanWorkflowExecutionGuard()
+        {
+            if (ownsExecution && owner)
+                *inProgress = false;
+        }
+
+        bool acquired() const
+        {
+            return ownsExecution;
+        }
+
+        RepeatPlanWorkflowExecutionGuard(
+            const RepeatPlanWorkflowExecutionGuard &) = delete;
+        RepeatPlanWorkflowExecutionGuard &operator=(
+            const RepeatPlanWorkflowExecutionGuard &) = delete;
+        RepeatPlanWorkflowExecutionGuard(
+            RepeatPlanWorkflowExecutionGuard &&) = delete;
+        RepeatPlanWorkflowExecutionGuard &operator=(
+            RepeatPlanWorkflowExecutionGuard &&) = delete;
+
+    private:
+        QPointer<QObject> owner;
+        bool *inProgress;
+        bool ownsExecution;
+};
+
+
+using PlanExportOperation = std::function<bool()>;
+using PlanExportFailureHandler = std::function<void()>;
+
+inline bool runPlanExportCompletion(
+    const PlanExportOperation &exportOperation,
+    const PlanExportFailureHandler &failureHandler)
+{
+    if (exportOperation && exportOperation())
+        return true;
+    if (failureHandler) failureHandler();
+    return false;
+}
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -148,10 +299,11 @@ class RepeatPlanWizard : public QWizard
         QDate getTargetRangeStart() const;
         QDate getTargetRangeEnd() const;
         int getPlannedInTargetRange() const;
-        const QList<RideItem*> &getDeletionList() const;
+        const QList<GuardedRideItem> &getDeletionList() const;
 
         void updateTargetRange();
         void updateTargetRange(QDate sourceStart, QDate sourceEnd, bool keepGap, bool preferOriginal);
+        QPointer<RideCache> resolvePageRideCache();
 
     signals:
         void targetRangeChanged();
@@ -160,15 +312,25 @@ class RepeatPlanWizard : public QWizard
         virtual void done(int result) override;
 
     private:
-        Context *context;
+        bool resolveOwners(
+            Context *&resolvedContext,
+            Athlete *&resolvedAthlete,
+            RideCache *&resolvedCache,
+            AthleteTab *&resolvedTab) const;
+
+        QPointer<Context> context;
+        QPointer<QObject> athleteLifetime;
+        QPointer<QObject> cacheLifetime;
+        QPointer<QObject> tabLifetime;
         QDate sourceRangeStart;
         QDate sourceRangeEnd;
         QDate targetRangeStart;
         QDate targetRangeEnd;
         int frontGap = 0;
-        QList<RideItem*> deletionList;
+        QList<GuardedRideItem> deletionList;
         bool keepGap = false;
         bool preferOriginal = false;
+        bool completionInProgress = false;
 };
 
 
@@ -184,7 +346,6 @@ class RepeatPlanPageSetup : public QWizardPage
         bool isComplete() const override;
 
     private:
-        Context *context;
         QDateEdit *startDate;
         QDateEdit *endDate;
         QCheckBox *keepGapCheck;
@@ -210,7 +371,6 @@ class RepeatPlanPageActivities : public QWizardPage
         void cleanupPage() override;
 
     private:
-        Context *context;
         QTreeWidget *activityTree;
         TargetRangeBar *targetRangeBar;
         int numSelected = 0;
@@ -229,8 +389,6 @@ class RepeatPlanPageSummary : public QWizardPage
         void initializePage() override;
 
     private:
-        Context *context;
-
         QLabel *planLabel;
         QTreeWidget *planTree;
         QLabel *deletionLabel;
@@ -378,6 +536,43 @@ class ExportPlanPageSummary : public QWizardPage
 ////////////////////////////////////////////////////////////////////////////////
 // Import Wizard
 
+template<typename Reader>
+class PlanImportReaderLease
+{
+    public:
+        PlanImportReaderLease(
+            QObject *owner,
+            const QSharedPointer<Reader> &reader)
+        : owner(owner), retainedReader(reader)
+        {
+        }
+
+        bool available() const
+        {
+            return owner && !retainedReader.isNull();
+        }
+
+        bool ownerAlive() const
+        {
+            return owner;
+        }
+
+        Reader *reader() const
+        {
+            return retainedReader.data();
+        }
+
+        const QSharedPointer<Reader> &sharedReader() const
+        {
+            return retainedReader;
+        }
+
+    private:
+        QPointer<QObject> owner;
+        QSharedPointer<Reader> retainedReader;
+};
+
+
 class ImportPlanWizard : public QWizard
 {
     Q_OBJECT
@@ -393,7 +588,7 @@ class ImportPlanWizard : public QWizard
 
         ImportPlanWizard(Context *context, QDate targetDay, QWidget *parent = nullptr);
 
-        PlanBundleReader planReader;
+        QSharedPointer<PlanBundleReader> planReader;
 };
 
 

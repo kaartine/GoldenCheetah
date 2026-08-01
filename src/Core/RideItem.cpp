@@ -60,6 +60,9 @@ RideItem::RideItem(RideFile *ride, Context *context)
 {
     metrics_.fill(0, RideMetricFactory::instance().metricCount());
     count_.fill(0, RideMetricFactory::instance().metricCount());
+    if (ride_)
+        connect(ride_, &QObject::destroyed,
+                this, &RideItem::rideFileDestroyed);
 }
 
 RideItem::RideItem(QString path, QString fileName, QDateTime &dateTime, Context *context, bool planned)
@@ -81,6 +84,9 @@ RideItem::RideItem(RideFile *ride, QDateTime &dateTime, Context *context)
 {
     metrics_.fill(0, RideMetricFactory::instance().metricCount());
     count_.fill(0, RideMetricFactory::instance().metricCount());
+    if (ride_)
+        connect(ride_, &QObject::destroyed,
+                this, &RideItem::rideFileDestroyed);
 }
 
 // clone a ride item
@@ -237,6 +243,8 @@ RideFile *RideItem::ride(bool open)
     connect(ride_, SIGNAL(modified()), this, SLOT(modified()));
     connect(ride_, SIGNAL(saved()), this, SLOT(saved()));
     connect(ride_, SIGNAL(reverted()), this, SLOT(reverted()));
+    connect(ride_, &QObject::destroyed,
+            this, &RideItem::rideFileDestroyed);
 
     return ride_;
 }
@@ -281,6 +289,8 @@ RideItem::setRide(RideFile *overwrite)
         connect(ride_, SIGNAL(modified()), this, SLOT(modified()));
         connect(ride_, SIGNAL(saved()), this, SLOT(saved()));
         connect(ride_, SIGNAL(reverted()), this, SLOT(reverted()));
+        connect(ride_, &QObject::destroyed,
+                this, &RideItem::rideFileDestroyed);
 
         // update status
         setDirty(true);
@@ -295,6 +305,12 @@ RideItem::setRide(RideFile *overwrite)
     //XXX this is only used by MergeActivityWizard and causes issues
     //XXX because the data is accessed in separate threads (Wizard is a dialog)
     //XXX because it is such an edge case (Merge) we will leave it for now
+}
+
+void
+RideItem::rideFileDestroyed(QObject *rideFile)
+{
+    if (ride_ == rideFile) ride_ = nullptr;
 }
 
 bool

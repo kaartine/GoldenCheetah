@@ -230,6 +230,7 @@ class RideItem : public QObject
 
         // get/set
         void setRide(RideFile *);
+        void rideFileDestroyed(QObject *rideFile);
         void setFileName(QString, QString);
         void setStartTime(QDateTime);
 

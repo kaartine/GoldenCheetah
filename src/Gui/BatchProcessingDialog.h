@@ -28,6 +28,7 @@
 
 #include "RideItem.h"
 #include "RideFile.h"
+#include "SaveDialogs.h"
 
 #include <QtGui>
 #include <QTreeWidget>
@@ -37,6 +38,7 @@
 #include <QCheckBox>
 #include <QLabel>
 #include <QListIterator>
+#include <QPointer>
 #include <QDebug>
 
 // Dialog class to allow batch processing of activities
@@ -68,6 +70,7 @@ private:
         unknownF,
         finishedF,
         userF,
+        recoveryF,
         dateFormatF,
         timeFormatF,
         noDataProcessorF };
@@ -78,13 +81,13 @@ private:
         metadataSetB,
         deleteB };
 
-    Context *context;
+    QPointer<Context> context;
     bool aborted;
 
     int processed, fails, numFilesToProcess;
     batchRadioBType outputMode;
 
-    QTreeWidget *files; // choose files to export
+    QPointer<QTreeWidget> files; // choose files to export
 
     QWidget *disableContainer, *dpContainer, *exportContainer;
     QWidget *metaDataContainer;

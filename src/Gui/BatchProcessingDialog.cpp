@@ -28,7 +28,11 @@
 #include "CsvRideFile.h"
 #include "DataProcessor.h"
 #include "RideMetadata.h"
+#include "SaveDialogs.h"
 #include "SpecialFields.h"
+
+#include <QPersistentModelIndex>
+#include <QPointer>
 
 #ifdef GC_WANT_PYTHON
 #include "FixPyScriptsDialog.h"
@@ -37,6 +41,102 @@
 #include <QFormLayout>
 #include <QButtonGroup>
 #include <QMessageBox>
+
+namespace {
+
+struct BatchDeletionSelection {
+    QPersistentModelIndex row;
+    QPointer<RideItem> rideItem;
+    ActivityDeletionWorkflow::Identity rowIdentity;
+    ActivityDeletionWorkflow::Identity itemIdentity;
+    bool blocked = false;
+    bool linked = false;
+};
+
+
+ActivityDeletionWorkflow::Identity
+batchActivityIdentity
+(const RideItem *item)
+{
+    return item
+        ? ActivityDeletionWorkflow::Identity{
+            item->fileName, item->path, item->planned}
+        : ActivityDeletionWorkflow::Identity{};
+}
+
+
+QModelIndex
+batchColumn
+(const QPersistentModelIndex &row, int column)
+{
+    return row.isValid()
+        ? row.sibling(row.row(), column)
+        : QModelIndex();
+}
+
+
+bool
+batchRowMatches
+(const BatchDeletionSelection &selection)
+{
+    return selection.row.isValid()
+        && batchColumn(selection.row, 1).data(
+            Qt::DisplayRole).toString()
+            == selection.rowIdentity.fileName
+        && batchColumn(selection.row, 1).data(
+            Qt::UserRole).toBool()
+            == selection.rowIdentity.planned;
+}
+
+
+RideItem *
+resolveBatchRide
+(const BatchDeletionSelection &selection,
+ RideCache *cache,
+ ActivityDeletionWorkflow::State state)
+{
+    RideItem *const item =
+        selection.rideItem.data();
+    state.itemAvailable = item;
+    state.itemInCache = cache && item
+        && ActivityDeletionWorkflow::
+            cacheContainsUniqueIdentity(
+                cache, item,
+                selection.itemIdentity);
+    return ActivityDeletionWorkflow::isCurrent(
+        state, selection.itemIdentity,
+        batchActivityIdentity(item)) ? item : nullptr;
+}
+
+
+bool
+validateOrAdoptBatchRideIdentity
+(BatchDeletionSelection &selection,
+ RideCache *cache,
+ ActivityDeletionWorkflow::State state,
+ const ActivityDeletionWorkflow::
+     SavedIdentityEvidence &evidence,
+ const QString &cacheDirectory)
+{
+    RideItem *const item = selection.rideItem.data();
+    const ActivityDeletionWorkflow::Identity current =
+        batchActivityIdentity(item);
+    state.itemAvailable = item;
+    state.itemInCache = cache && item
+        && ActivityDeletionWorkflow::
+            cacheContainsUniqueIdentity(
+                cache, item, current);
+    if (ActivityDeletionWorkflow::isCurrent(
+            state, selection.itemIdentity,
+            current)) {
+        return true;
+    }
+    return ActivityDeletionWorkflow::adoptSavedIdentity(
+        state, current, evidence,
+        cacheDirectory, selection.itemIdentity);
+}
+
+}
 
 BatchProcessingDialog::BatchProcessingDialog(Context* context) : QDialog(context->mainWindow), context(context),
 processed(0), fails(0), numFilesToProcess(0), metadataCompleter(nullptr) {
@@ -439,6 +539,7 @@ BatchProcessingDialog::okClicked()
         bpFailureType result = bpFailureType::unknownF;
 
         QString summaryType(tr("Processed "));
+        QPointer<BatchProcessingDialog> guardedDialog(this);
 
         // call the selected type of batch processing
         switch (outputMode) {
@@ -461,6 +562,8 @@ BatchProcessingDialog::okClicked()
             } break;
         }
 
+        if (!guardedDialog) return;
+
         switch (result) {
 
             case bpFailureType::dateFormatF: {
@@ -472,7 +575,17 @@ BatchProcessingDialog::okClicked()
                 break;
             }
             case bpFailureType::userF: {
-                status->setText(tr("Processing aborted by the user..."));
+                status->setText(tr("Processing stopped..."));
+                ok->setText(tr("Finish"));
+                break;
+            }
+            case bpFailureType::recoveryF: {
+                status->setText(
+                    tr("Deletion stopped because manual recovery is required. "
+                       "%1 successful, %2 failed or skipped.")
+                        .arg(processed)
+                        .arg(fails));
+                ok->setText(tr("Finish"));
                 break;
             }
             case bpFailureType::noDataProcessorF: {
@@ -685,44 +798,367 @@ BatchProcessingDialog::exportFiles()
 BatchProcessingDialog::bpFailureType
 BatchProcessingDialog::deleteFiles() {
 
+    QPointer<BatchProcessingDialog> guardedDialog(this);
+    QPointer<Context> guardedContext(context.data());
+    QPointer<Athlete> guardedAthlete(
+        guardedContext
+            ? guardedContext->athlete : nullptr);
+    QPointer<RideCache> guardedCache(
+        guardedAthlete
+            ? guardedAthlete->rideCache : nullptr);
+    QPointer<QTreeWidget> guardedFiles(files.data());
+    QPointer<QAbstractItemModel> guardedModel(
+        guardedFiles ? guardedFiles->model() : nullptr);
+
+    const auto workflowState = [&]() {
+        return ActivityDeletionWorkflow::guardedOwnerState(
+            guardedDialog, guardedFiles,
+            guardedContext, guardedAthlete,
+            guardedCache,
+            [&](BatchProcessingDialog *dialog,
+                QTreeWidget *filesView,
+                Context *contextSnapshot,
+                Athlete *athlete,
+                RideCache *cache) {
+                return guardedModel
+                    && dialog->context.data()
+                        == contextSnapshot
+                    && dialog->files.data()
+                        == filesView
+                    && filesView->model()
+                        == guardedModel.data()
+                    && contextSnapshot->athlete
+                        == athlete
+                    && athlete->context
+                        == contextSnapshot
+                    && athlete->rideCache == cache;
+            });
+    };
+    const auto workflowIsCurrent = [&]() {
+        return ActivityDeletionWorkflow::ownersAreCurrent(
+            workflowState());
+    };
+
+    if (!workflowIsCurrent())
+        return bpFailureType::userF;
+
+    QList<BatchDeletionSelection> selections;
+    selections.reserve(
+        guardedFiles->invisibleRootItem()->childCount());
+    for (int i = 0;
+         i < guardedFiles->invisibleRootItem()->childCount();
+         ++i) {
+        QTreeWidgetItem *const row =
+            guardedFiles->invisibleRootItem()->child(i);
+        QCheckBox *const selection =
+            qobject_cast<QCheckBox *>(
+                guardedFiles->itemWidget(row, 0));
+        if (!selection || !selection->isChecked())
+            continue;
+
+        const QPersistentModelIndex rowIndex(
+            guardedModel->index(i, 0));
+        const QString fileName =
+            batchColumn(rowIndex, 1).data(
+                Qt::DisplayRole).toString();
+        const bool planned =
+            batchColumn(rowIndex, 1).data(
+                Qt::UserRole).toBool();
+        RideItem *const item =
+            guardedCache->getRide(fileName, planned);
+        selections.append(
+            BatchDeletionSelection {
+                rowIndex,
+                QPointer<RideItem>(item),
+                ActivityDeletionWorkflow::Identity{
+                    fileName,
+                    item ? item->path : QString(),
+                    planned},
+                ActivityDeletionWorkflow::Identity{
+                    fileName,
+                    item ? item->path : QString(),
+                    planned},
+                false,
+                false });
+    }
+
+    const auto setStatus =
+        [&](const BatchDeletionSelection &selection,
+            const QString &statusText,
+            const QString &toolTip) {
+            if (!workflowIsCurrent()
+                || !batchRowMatches(selection)) {
+                return false;
+            }
+            guardedModel->setData(
+                batchColumn(selection.row, 4),
+                statusText, Qt::DisplayRole);
+            if (!workflowIsCurrent()
+                || !batchRowMatches(selection)) {
+                return false;
+            }
+            guardedModel->setData(
+                batchColumn(selection.row, 4),
+                toolTip, Qt::ToolTipRole);
+            return workflowIsCurrent()
+                && batchRowMatches(selection);
+        };
+    const auto markFailed =
+        [&](const BatchDeletionSelection &selection,
+            const QString &error) {
+            if (!workflowIsCurrent()) return false;
+            ++guardedDialog->fails;
+            return setStatus(
+                selection,
+                BatchProcessingDialog::tr(
+                    "Failed to process activity"),
+                error);
+        };
+
     QMessageBox msgBox;
-    msgBox.setText(tr("Are you sure you want to delete all selected activities?"));
-    QPushButton *deleteButton = msgBox.addButton(tr("Delete"), QMessageBox::YesRole);
+    msgBox.setText(BatchProcessingDialog::tr(
+        "Are you sure you want to delete all selected activities?"));
+    QPushButton *deleteButton = msgBox.addButton(
+        BatchProcessingDialog::tr("Delete"),
+        QMessageBox::YesRole);
     msgBox.setStandardButtons(QMessageBox::Cancel);
     msgBox.setDefaultButton(QMessageBox::Cancel);
     msgBox.setIcon(QMessageBox::Critical);
     msgBox.exec();
-    bool ok = msgBox.clickedButton() == deleteButton;
+    const bool confirmed =
+        msgBox.clickedButton() == deleteButton;
+
+    if (!workflowIsCurrent() || !confirmed)
+        return bpFailureType::userF;
+
+    for (BatchDeletionSelection &selection :
+         selections) {
+        if (!workflowIsCurrent())
+            return bpFailureType::userF;
+        if (!batchRowMatches(selection)) {
+            ++guardedDialog->fails;
+            selection.blocked = true;
+            continue;
+        }
+        RideItem *const item = resolveBatchRide(
+            selection, guardedCache.data(),
+            workflowState());
+        if (!item) {
+            if (!markFailed(
+                selection,
+                BatchProcessingDialog::tr(
+                    "The activity changed while awaiting confirmation"))) {
+                return bpFailureType::userF;
+            }
+            selection.blocked = true;
+            continue;
+        }
+        const RideCache::OperationPreCheck check =
+            guardedCache->checkRemovalLinks(item);
+        if (!workflowIsCurrent())
+            return bpFailureType::userF;
+        if (!check.canProceed) {
+            if (!markFailed(
+                    selection, check.blockingReason)) {
+                return bpFailureType::userF;
+            }
+            selection.blocked = true;
+            continue;
+        }
+        if (check.affectedItems.size() > 1)
+            selection.linked = true;
+    }
+
+    QList<RideItem*> linkedItems;
+    for (BatchDeletionSelection &selection : selections) {
+        if (!selection.linked || selection.blocked)
+            continue;
+        RideItem *const item = resolveBatchRide(
+            selection, guardedCache.data(),
+            workflowState());
+        if (!item) {
+            if (!markFailed(
+                    selection,
+                    BatchProcessingDialog::tr(
+                        "The activity changed before unlinking"))) {
+                return bpFailureType::userF;
+            }
+            selection.blocked = true;
+            continue;
+        }
+        linkedItems.append(item);
+    }
+
+    if (!linkedItems.isEmpty()) {
+        const RideCache::OperationPreCheck check =
+            guardedCache->checkUnlinkActivities(
+                linkedItems);
+        linkedItems.clear();
+        if (!workflowIsCurrent())
+            return bpFailureType::userF;
+        if (!check.canProceed) {
+            QMessageBox::warning(
+                guardedDialog.data(),
+                BatchProcessingDialog::tr(
+                    "Delete Activities"),
+                check.blockingReason);
+            if (!workflowIsCurrent())
+                return bpFailureType::userF;
+            return bpFailureType::userF;
+        }
+        ProceedDialogResult dialogResult;
+        const bool proceed = proceedDialog(
+            guardedContext.data(), check,
+            &dialogResult);
+        if (!workflowIsCurrent() || !proceed)
+            return bpFailureType::userF;
+
+        for (BatchDeletionSelection &selection : selections) {
+            if (selection.blocked || !selection.linked)
+                continue;
+            ActivitySaveWorkflow::Identity savedIdentity;
+            const bool itemWasSaved =
+                dialogResult.savedIdentityFor(
+                    selection.rideItem.data(),
+                    savedIdentity);
+            const ActivityDeletionWorkflow::
+                SavedIdentityEvidence evidence{
+                    itemWasSaved,
+                    ActivityDeletionWorkflow::Identity{
+                        savedIdentity.fileName,
+                        savedIdentity.path,
+                        savedIdentity.planned}};
+            if (!guardedAthlete
+                || !guardedAthlete->home) {
+                return bpFailureType::userF;
+            }
+            const QString cacheDirectory =
+                (selection.itemIdentity.planned
+                    ? guardedAthlete->home->planned()
+                    : guardedAthlete->home->activities())
+                    .absolutePath();
+            if (validateOrAdoptBatchRideIdentity(
+                    selection, guardedCache.data(),
+                    workflowState(), evidence,
+                    cacheDirectory)) {
+                continue;
+            }
+            if (!markFailed(
+                    selection,
+                    BatchProcessingDialog::tr(
+                        "The activity changed while saving linked activities"))) {
+                return bpFailureType::userF;
+            }
+            selection.blocked = true;
+        }
+    }
 
     // loop through the table and delete all selected
-    for (int i = 0; ok && i < files->invisibleRootItem()->childCount(); i++) {
+    for (int i = 0; i < selections.size(); ++i) {
 
         // give user a chance to abort..
         QApplication::processEvents();
+        if (!workflowIsCurrent())
+            return bpFailureType::userF;
 
         // did they?
-        if (aborted == true) return bpFailureType::userF; // user aborted!
+        if (guardedDialog->aborted == true)
+            return bpFailureType::userF;
 
-        QTreeWidgetItem* current = files->invisibleRootItem()->child(i);
+        BatchDeletionSelection &selection =
+            selections[i];
+        if (selection.blocked)
+            continue;
 
-        // is it selected for delete ?
-        if (static_cast<QCheckBox*>(files->itemWidget(current, 0))->isChecked()) {
-
-            files->setCurrentItem(current);
-
-            if (context->athlete->rideCache
-                    ->removeRide(
-                        current->text(1),
-                        current->data(
-                            1, Qt::UserRole).toBool())) {
-                current->setText(4, tr("Deleted"));
-                processed++;
-            } else {
-                failedToProcessEntry(current);
-            }
-
-            QApplication::processEvents();
+        if (!batchRowMatches(selection)) {
+            ++guardedDialog->fails;
+            continue;
         }
+        RideItem *item = resolveBatchRide(
+            selection, guardedCache.data(),
+            workflowState());
+        if (!item) {
+            if (!markFailed(
+                selection,
+                BatchProcessingDialog::tr(
+                    "The activity changed before deletion"))) {
+                return bpFailureType::userF;
+            }
+            continue;
+        }
+
+        guardedFiles->setCurrentIndex(selection.row);
+        if (!workflowIsCurrent())
+            return bpFailureType::userF;
+        item = resolveBatchRide(
+            selection, guardedCache.data(),
+            workflowState());
+        if (!item) {
+            if (!markFailed(
+                    selection,
+                    BatchProcessingDialog::tr(
+                        "The activity changed before deletion"))) {
+                return bpFailureType::userF;
+            }
+            continue;
+        }
+        const RideCache::RemovalResult result =
+            guardedCache->removeRideResult(item);
+        if (!workflowIsCurrent())
+            return bpFailureType::userF;
+        if (result.cleanlyCompleted()) {
+            if (!setStatus(
+                    selection,
+                    BatchProcessingDialog::tr("Deleted"),
+                    QString())) {
+                return bpFailureType::userF;
+            }
+            guardedDialog->processed++;
+        } else if (result.allLogicallyRemoved()) {
+            if (!setStatus(
+                selection,
+                BatchProcessingDialog::tr(
+                    "Deleted with warning"),
+                result.error)) {
+                return bpFailureType::userF;
+            }
+            guardedDialog->processed++;
+        } else {
+            if (!markFailed(selection, result.error))
+                return bpFailureType::userF;
+            if (result.requiresRecovery()) {
+                for (int remaining = i + 1;
+                     remaining < selections.size();
+                     ++remaining) {
+                    const BatchDeletionSelection
+                        &skipped = selections.at(
+                            remaining);
+                    if (skipped.blocked)
+                        continue;
+                    if (!setStatus(
+                        skipped,
+                        BatchProcessingDialog::tr(
+                            "Not attempted"),
+                        BatchProcessingDialog::tr(
+                            "Not attempted because storage recovery is required"))) {
+                        return bpFailureType::userF;
+                    }
+                    guardedDialog->fails++;
+                }
+                QMessageBox::critical(
+                    guardedDialog.data(),
+                    BatchProcessingDialog::tr(
+                        "Activity Recovery Required"),
+                    result.error);
+                if (!workflowIsCurrent())
+                    return bpFailureType::userF;
+                return bpFailureType::recoveryF;
+            }
+        }
+
+        QApplication::processEvents();
+        if (!workflowIsCurrent())
+            return bpFailureType::userF;
     }
 
     return bpFailureType::finishedF;

@@ -3,24 +3,14 @@ QT += core gui widgets testlib xml sql network svg concurrent serialport \
       positioning webenginequick charts openglwidgets core5compat
 
 TEMPLATE = app
-TARGET = tst_splitRideData
+TARGET = tst_activitySaveWorkflow
 
 include(../../unittests.pri)
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug
 
-SOURCES = testSplitRideData.cpp \
-          SplitRideDataTestStubs.cpp \
-          ../../../src/Gui/SplitRideData.cpp \
-          ../../../src/FileIO/RideFile.cpp \
-          ../../../src/FileIO/RideFileCRC.cpp \
-          ../../../src/FileIO/RideFileCommand.cpp
-
-HEADERS = ../../../src/Gui/SplitActivityWorkflow.h \
-          ../../../src/Gui/SplitRideData.h \
-          ../../../src/FileIO/RideFile.h \
-          ../../../src/FileIO/RideFileCommand.h
+SOURCES = testActivitySaveWorkflow.cpp
 
 INCLUDEPATH += ../../../src \
                ../../../src/ANT \
@@ -34,10 +24,6 @@ INCLUDEPATH += ../../../src \
                ../../../src/Train \
                ../../../qwt/src \
                ../../../contrib/qzip
-
-QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-QMAKE_LFLAGS += -Wl,--gc-sections
-LIBS += -lz
 
 sanitize:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

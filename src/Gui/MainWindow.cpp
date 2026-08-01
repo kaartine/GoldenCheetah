@@ -24,6 +24,7 @@
 #include <QRegExp>
 #include <QNetworkProxyQuery>
 #include <QMenuBar>
+#include <QPointer>
 #include <QStyle>
 #include <QTabBar>
 #include <QStyleFactory>
@@ -1394,8 +1395,14 @@ MainWindow::isStarting
 bool
 MainWindow::filenameWillChange(RideItem *rideItem, QString *newName) const
 {
+    if (newName) newName->clear();
+    if (!rideItem) return false;
+
+    RideFile *const ride = rideItem->ride();
+    if (!ride) return false;
+
     QFileInfo currentFI(rideItem->fileName);
-    QDateTime ridedatetime = rideItem->ride()->startTime();
+    QDateTime ridedatetime = ride->startTime();
     QChar zero = QLatin1Char('0');
     QString targetnosuffix = QString("%1_%2_%3_%4_%5_%6")
                                     .arg(ridedatetime.date().year(), 4, 10, zero)
@@ -1952,44 +1959,194 @@ MainWindow::mergeRide()
 void
 MainWindow::deleteRide()
 {
-    RideItem *_item = currentAthleteTab->context->ride;
+    QPointer<MainWindow> deletionWindow(this);
+    QPointer<AthleteTab> deletionTab(
+        deletionWindow
+            ? deletionWindow->currentAthleteTab
+            : nullptr);
+    QPointer<Context> deletionContext(
+        deletionTab
+            ? deletionTab->context
+            : nullptr);
+    QPointer<Athlete> deletionAthlete(
+        deletionContext
+            ? deletionContext->athlete
+            : nullptr);
+    QPointer<RideCache> deletionCache(
+        deletionAthlete
+            ? deletionAthlete->rideCache
+            : nullptr);
+    QPointer<RideItem> deletionItem(
+        deletionContext
+            ? deletionContext->ride
+            : nullptr);
+    ActivityDeletionWorkflow::Identity
+        deletionIdentity = deletionItem
+            ? ActivityDeletionWorkflow::Identity{
+                deletionItem->fileName,
+                deletionItem->path,
+                deletionItem->planned}
+            : ActivityDeletionWorkflow::Identity{};
 
-    if (_item==NULL) {
-        QMessageBox::critical(this, tr("Delete Activity"), tr("No activity selected!"));
+    const auto deletionOwnerState = [&]() {
+        return ActivityDeletionWorkflow::guardedOwnerState(
+            deletionWindow, deletionTab,
+            deletionContext, deletionAthlete,
+            deletionCache,
+            [](MainWindow *window,
+               AthleteTab *tab,
+               Context *contextSnapshot,
+               Athlete *athlete,
+               RideCache *cache) {
+                return window->currentAthleteTab == tab
+                    && tab->context == contextSnapshot
+                    && contextSnapshot->mainWindow
+                        == window
+                    && contextSnapshot->tab == tab
+                    && contextSnapshot->athlete
+                        == athlete
+                    && athlete->context
+                        == contextSnapshot
+                    && athlete->rideCache == cache;
+            });
+    };
+    const auto currentDeletionState = [&]
+        (ActivityDeletionWorkflow::Identity &current) {
+        ActivityDeletionWorkflow::State state =
+            deletionOwnerState();
+        RideItem *const item = deletionItem.data();
+        state.itemAvailable = item
+            && deletionContext
+            && deletionContext->ride == item;
+        current = item
+            ? ActivityDeletionWorkflow::Identity{
+                item->fileName, item->path,
+                item->planned}
+            : ActivityDeletionWorkflow::Identity{};
+        state.itemInCache = item && deletionCache
+            && ActivityDeletionWorkflow::
+                cacheContainsUniqueIdentity(
+                    deletionCache.data(), item,
+                    current);
+        return state;
+    };
+    const auto deletionStateIsValid = [&]() {
+        ActivityDeletionWorkflow::Identity current;
+        const ActivityDeletionWorkflow::State state =
+            currentDeletionState(current);
+        return ActivityDeletionWorkflow::isCurrent(
+            state, deletionIdentity, current);
+    };
+    const auto adoptSavedDeletionIdentity =
+        [&](const ProceedDialogResult &dialogResult) {
+        ActivityDeletionWorkflow::Identity current;
+        const ActivityDeletionWorkflow::State state =
+            currentDeletionState(current);
+        if (ActivityDeletionWorkflow::isCurrent(
+                state, deletionIdentity, current)) {
+            return true;
+        }
+
+        ActivitySaveWorkflow::Identity savedIdentity;
+        const bool itemWasSaved =
+            dialogResult.savedIdentityFor(
+                deletionItem.data(), savedIdentity);
+        const ActivityDeletionWorkflow::
+            SavedIdentityEvidence evidence{
+                itemWasSaved,
+                ActivityDeletionWorkflow::Identity{
+                    savedIdentity.fileName,
+                    savedIdentity.path,
+                    savedIdentity.planned}};
+        if (!deletionAthlete
+            || !deletionAthlete->home) {
+            return false;
+        }
+        const QString cacheDirectory =
+            (deletionIdentity.planned
+                ? deletionAthlete->home->planned()
+                : deletionAthlete->home->activities())
+                .absolutePath();
+        return ActivityDeletionWorkflow::adoptSavedIdentity(
+            state, current, evidence,
+            cacheDirectory, deletionIdentity);
+    };
+
+    if (!deletionStateIsValid()) {
+        QMessageBox::critical(
+            deletionWindow.data(),
+            MainWindow::tr("Delete Activity"),
+            MainWindow::tr("No activity selected!"));
         return;
     }
 
-    RideItem *item = static_cast<RideItem*>(_item);
     QMessageBox msgBox;
-    msgBox.setText(tr("Are you sure you want to delete the activity:"));
-    msgBox.setInformativeText(item->fileName);
-    QPushButton *deleteButton = msgBox.addButton(tr("Delete"),QMessageBox::YesRole);
+    msgBox.setText(MainWindow::tr(
+        "Are you sure you want to delete the activity:"));
+    msgBox.setInformativeText(
+        deletionIdentity.fileName);
+    QPushButton *deleteButton = msgBox.addButton(
+        MainWindow::tr("Delete"),
+        QMessageBox::YesRole);
     msgBox.setStandardButtons(QMessageBox::Cancel);
     msgBox.setDefaultButton(QMessageBox::Cancel);
     msgBox.setIcon(QMessageBox::Critical);
     msgBox.exec();
-    if (msgBox.clickedButton() == deleteButton) {
-        RideCache::OperationPreCheck check = currentAthleteTab->context->athlete->rideCache->checkUnlinkActivity(item);
-        bool nextStep = true;
-        if (nextStep && check.canProceed) {
-            if (proceedDialog(currentAthleteTab->context, check)) {
-                currentAthleteTab->context->tab->setNoSwitch(true);
-                RideCache::OperationResult result = currentAthleteTab->context->athlete->rideCache->unlinkActivity(item);
-                currentAthleteTab->context->tab->setNoSwitch(false);
-                if (result.success) {
-                    QString error;
-                    currentAthleteTab->context->athlete->rideCache->saveActivities(check.affectedItems, error);
-                } else {
-                    QMessageBox::warning(this, "Failed", result.error);
-                    nextStep = false;
-                }
-            } else {
-                nextStep = false;
-            }
-        }
-        if (nextStep) {
-            currentAthleteTab->context->athlete->removeCurrentRide();
-        }
+    const bool confirmed =
+        msgBox.clickedButton() == deleteButton;
+    if (!confirmed || !deletionStateIsValid()) return;
+
+    const RideCache::OperationPreCheck check =
+        deletionCache->checkRemovalLinks(
+            deletionItem.data());
+    if (!deletionStateIsValid()) return;
+    if (!check.canProceed) {
+        QMessageBox::warning(
+            deletionWindow.data(),
+            MainWindow::tr("Delete Activity"),
+            check.blockingReason);
+        if (!deletionStateIsValid()) return;
+        return;
+    }
+
+    ProceedDialogResult dialogResult;
+    const bool proceed = proceedDialog(
+        deletionContext.data(), check,
+        &dialogResult);
+    if (!proceed
+        || !adoptSavedDeletionIdentity(dialogResult)) {
+        return;
+    }
+
+    const bool previousNoSwitch =
+        deletionTab->noSwitch();
+    deletionTab->setNoSwitch(true);
+    const RideCache::RemovalResult result =
+        deletionCache->removeRideResult(
+            deletionItem.data());
+    if (deletionTab) {
+        deletionTab->setNoSwitch(
+            previousNoSwitch);
+    }
+
+    if (!ActivityDeletionWorkflow::ownersAreCurrent(
+            deletionOwnerState())) {
+        return;
+    }
+    if (!result.cleanlyCompleted()) {
+        const QString summary = result.allLogicallyRemoved()
+            ? MainWindow::tr(
+                "The activity was deleted, but cleanup requires attention.")
+            : result.requiresRecovery()
+                ? MainWindow::tr(
+                    "The activity storage requires manual recovery.")
+                : MainWindow::tr(
+                    "The activity could not be deleted.");
+        QMessageBox::warning(
+            deletionWindow.data(),
+            MainWindow::tr("Delete Activity"),
+            QStringLiteral("%1\n\n%2")
+                .arg(summary, result.error));
     }
 }
 

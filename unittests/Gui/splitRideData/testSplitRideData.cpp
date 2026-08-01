@@ -1,6 +1,7 @@
 #include <QtTest>
 
 #include "RideFile.h"
+#include "SplitActivityWorkflow.h"
 #include "SplitRideData.h"
 
 #include <memory>
@@ -87,7 +88,239 @@ private slots:
     void truncatedIntervalUsesSegmentLocalBounds();
     void invalidRangesAreRejected_data();
     void invalidRangesAreRejected();
+    void sourcePreflightRunsBeforeRefresh();
+    void rejectedSourcePreflightDoesNotRefresh();
+    void keptSourceNeedsNoRemovalPreflight();
+    void changedSourceIsRejectedBeforeRemovalPreflight();
+    void sourceChangedDuringRemovalPreflightDoesNotRefresh();
+    void sourceIdentityAcceptsExactMatch();
+    void sourceIdentityRequiresLiveWorkflowOwners_data();
+    void sourceIdentityRequiresLiveWorkflowOwners();
+    void sourceIdentityRejectsMutation_data();
+    void sourceIdentityRejectsMutation();
+    void sourceContentChangeRejectsStaleSplit();
+    void postPublishRevalidationStopsAfterRecoveryDialog();
 };
+
+void TestSplitRideData::sourcePreflightRunsBeforeRefresh()
+{
+    QStringList events;
+
+    QVERIFY(prepareSplitSourceBeforeSelection(
+        false,
+        [&] {
+            events.append(QStringLiteral("identity"));
+            return true;
+        },
+        [&] {
+            events.append(QStringLiteral("preflight"));
+            return true;
+        },
+        [&] {
+            events.append(QStringLiteral("refresh"));
+        }));
+
+    QCOMPARE(
+        events,
+        QStringList({
+            QStringLiteral("identity"),
+            QStringLiteral("preflight"),
+            QStringLiteral("identity"),
+            QStringLiteral("refresh"),
+            QStringLiteral("identity")}));
+}
+
+void TestSplitRideData::
+rejectedSourcePreflightDoesNotRefresh()
+{
+    int refreshCalls = 0;
+
+    QVERIFY(!prepareSplitSourceBeforeSelection(
+        false,
+        [] { return true; },
+        [] { return false; },
+        [&] { ++refreshCalls; }));
+
+    QCOMPARE(refreshCalls, 0);
+}
+
+void TestSplitRideData::keptSourceNeedsNoRemovalPreflight()
+{
+    int preflightCalls = 0;
+    int refreshCalls = 0;
+
+    QVERIFY(prepareSplitSourceBeforeSelection(
+        true,
+        [] { return true; },
+        [&] {
+            ++preflightCalls;
+            return false;
+        },
+        [&] { ++refreshCalls; }));
+
+    QCOMPARE(preflightCalls, 0);
+    QCOMPARE(refreshCalls, 0);
+}
+
+void TestSplitRideData::
+changedSourceIsRejectedBeforeRemovalPreflight()
+{
+    int preflightCalls = 0;
+    int refreshCalls = 0;
+
+    QVERIFY(!prepareSplitSourceBeforeSelection(
+        false,
+        [] { return false; },
+        [&] {
+            ++preflightCalls;
+            return true;
+        },
+        [&] { ++refreshCalls; }));
+
+    QCOMPARE(preflightCalls, 0);
+    QCOMPARE(refreshCalls, 0);
+}
+
+void TestSplitRideData::
+sourceChangedDuringRemovalPreflightDoesNotRefresh()
+{
+    bool sourceCurrent = true;
+    int refreshCalls = 0;
+
+    QVERIFY(!prepareSplitSourceBeforeSelection(
+        false,
+        [&] { return sourceCurrent; },
+        [&] {
+            sourceCurrent = false;
+            return true;
+        },
+        [&] { ++refreshCalls; }));
+
+    QCOMPARE(refreshCalls, 0);
+}
+
+void TestSplitRideData::sourceIdentityAcceptsExactMatch()
+{
+    const SplitActivitySourceIdentity identity{
+        QStringLiteral("source.json"),
+        QStringLiteral("/activities"),
+        false};
+
+    QVERIFY(splitActivitySourceIsCurrent(
+        true, true, true, true, identity, identity));
+}
+
+void TestSplitRideData::sourceContentChangeRejectsStaleSplit()
+{
+    const SplitActivitySourceIdentity identity {
+        QStringLiteral("source.json"),
+        QStringLiteral("/activities"), false};
+    const SplitActivityContentSnapshot expected {
+        quintptr(0x1234), 7};
+    const SplitActivityContentSnapshot changed {
+        quintptr(0x1234), 8};
+
+    QVERIFY(!splitActivitySourceSnapshotIsCurrent(
+        true, true, true, true,
+        identity, identity, expected, changed));
+}
+
+void TestSplitRideData::
+sourceIdentityRequiresLiveWorkflowOwners_data()
+{
+    QTest::addColumn<bool>("contextAvailable");
+    QTest::addColumn<bool>("cacheAvailable");
+    QTest::addColumn<bool>("sourceAvailable");
+    QTest::addColumn<bool>("sourceInCache");
+
+    QTest::newRow("context-destroyed")
+        << false << true << true << true;
+    QTest::newRow("cache-destroyed")
+        << true << false << true << true;
+    QTest::newRow("source-destroyed")
+        << true << true << false << true;
+    QTest::newRow("source-replaced")
+        << true << true << true << false;
+}
+
+void TestSplitRideData::
+sourceIdentityRequiresLiveWorkflowOwners()
+{
+    QFETCH(bool, contextAvailable);
+    QFETCH(bool, cacheAvailable);
+    QFETCH(bool, sourceAvailable);
+    QFETCH(bool, sourceInCache);
+    const SplitActivitySourceIdentity identity{
+        QStringLiteral("source.json"),
+        QStringLiteral("/activities"),
+        false};
+
+    QVERIFY(!splitActivitySourceIsCurrent(
+        contextAvailable, cacheAvailable,
+        sourceAvailable, sourceInCache,
+        identity, identity));
+}
+
+void TestSplitRideData::sourceIdentityRejectsMutation_data()
+{
+    QTest::addColumn<QString>("fileName");
+    QTest::addColumn<QString>("path");
+    QTest::addColumn<bool>("planned");
+
+    QTest::newRow("filename")
+        << QStringLiteral("replacement.json")
+        << QStringLiteral("/activities") << false;
+    QTest::newRow("path")
+        << QStringLiteral("source.json")
+        << QStringLiteral("/temporary") << false;
+    QTest::newRow("namespace")
+        << QStringLiteral("source.json")
+        << QStringLiteral("/activities") << true;
+}
+
+void TestSplitRideData::sourceIdentityRejectsMutation()
+{
+    QFETCH(QString, fileName);
+    QFETCH(QString, path);
+    QFETCH(bool, planned);
+    const SplitActivitySourceIdentity expected{
+        QStringLiteral("source.json"),
+        QStringLiteral("/activities"),
+        false};
+    const SplitActivitySourceIdentity current{
+        fileName, path, planned};
+
+    QVERIFY(!splitActivitySourceIsCurrent(
+        true, true, true, true,
+        expected, current));
+}
+
+void TestSplitRideData::
+postPublishRevalidationStopsAfterRecoveryDialog()
+{
+    const SplitActivitySourceIdentity expected{
+        QStringLiteral("source.json"),
+        QStringLiteral("/activities"),
+        false};
+    SplitActivitySourceIdentity current = expected;
+    bool cleanupRan = false;
+
+    QVERIFY(splitActivitySourceIsCurrent(
+        true, true, true, true,
+        expected, current));
+
+    const auto recoveryDialog = [&] {
+        current.path = QStringLiteral("/temporary");
+    };
+    recoveryDialog();
+    if (splitActivitySourceIsCurrent(
+            true, true, true, true,
+            expected, current)) {
+        cleanupRan = true;
+    }
+
+    QVERIFY(!cleanupRan);
+}
 
 void TestSplitRideData::adjacentSegmentsOwnBoundaryExactlyOnce()
 {

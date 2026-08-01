@@ -18,6 +18,7 @@
 
 #include "PlanWizards.h"
 
+#include <algorithm>
 #include <QtGui>
 #include <QScrollArea>
 #include <QButtonGroup>
@@ -45,6 +46,142 @@
 
 static constexpr int IndexRole = Qt::UserRole + 100;
 static const QString planExtension(".gcplan");
+
+
+namespace {
+
+class OverrideCursorScope
+{
+    public:
+        OverrideCursorScope()
+        {
+            QApplication::setOverrideCursor(
+                QCursor(Qt::WaitCursor));
+        }
+
+        ~OverrideCursorScope()
+        {
+            QApplication::restoreOverrideCursor();
+        }
+};
+
+
+class NoSwitchScope
+{
+    public:
+        explicit NoSwitchScope(AthleteTab *tab)
+        : tab(tab), previousValue(
+              tab ? tab->noSwitch() : false)
+        {
+            if (this->tab)
+                this->tab->setNoSwitch(true);
+        }
+
+        ~NoSwitchScope()
+        {
+            if (tab)
+                tab->setNoSwitch(previousValue);
+        }
+
+    private:
+        QPointer<AthleteTab> tab;
+        bool previousValue;
+};
+
+}
+
+
+GuardedRideItem::GuardedRideItem
+(RideItem *rideItem)
+: rideItem(rideItem),
+  fileName(rideItem ? rideItem->fileName : QString()),
+  path(rideItem ? rideItem->path : QString()),
+  planned(rideItem && rideItem->planned)
+{
+}
+
+
+bool
+GuardedRideItem::matches
+(RideItem *candidate) const
+{
+    return candidate
+        && rideItem.data() == candidate
+        && candidate->fileName == fileName
+        && candidate->path == path
+        && candidate->planned == planned;
+}
+
+
+SourceRide::SourceRide
+(RideItem *rideItem, const QDate &sourceDate,
+ const QDate &targetDate, bool selected,
+ int conflictGroup, bool targetBlocked)
+: source(rideItem), sourceDate(sourceDate),
+  targetDate(targetDate), selected(selected),
+  conflictGroup(conflictGroup),
+  targetBlocked(targetBlocked)
+{
+}
+
+
+static RideItem *
+resolveGuardedRide
+(const GuardedRideItem &guarded, RideCache *cache)
+{
+    RideItem *const item = guarded.rideItem.data();
+    if (!cache || !guarded.matches(item))
+        return nullptr;
+    return cache->getRide(
+        guarded.fileName, guarded.planned) == item
+        ? item : nullptr;
+}
+
+
+static bool
+resolveGuardedRides
+(const QList<GuardedRideItem> &guardedItems,
+ RideCache *cache, QList<RideItem*> &items)
+{
+    items.clear();
+    items.reserve(guardedItems.size());
+    for (const GuardedRideItem &guarded : guardedItems) {
+        RideItem *const item = resolveGuardedRide(
+            guarded, cache);
+        if (!item) {
+            items.clear();
+            return false;
+        }
+        items.append(item);
+    }
+    return true;
+}
+
+
+static bool
+resolveRepeatPlanSources
+(const QList<SourceRide> &sourceRides,
+ RideCache *cache,
+ QList<std::pair<RideItem*, QDate>> &planList)
+{
+    planList.clear();
+    for (const SourceRide &sourceRide : sourceRides) {
+        if (!sourceRide.selected
+            || sourceRide.targetBlocked) {
+            continue;
+        }
+        RideItem *const item = resolveGuardedRide(
+            sourceRide.source, cache);
+        if (!item) {
+            planList.clear();
+            return false;
+        }
+        planList.append(
+            std::pair<RideItem*, QDate> {
+                item, sourceRide.targetDate });
+    }
+    return true;
+}
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -395,7 +532,13 @@ IndicatorDelegate::sizeHint
 
 RepeatPlanWizard::RepeatPlanWizard
 (Context *context, const QDate &when, QWidget *parent)
-: QWizard(parent), context(context), targetRangeStart(when), targetRangeEnd(when)
+: QWizard(parent), context(context),
+  athleteLifetime(context ? context->athlete : nullptr),
+  cacheLifetime(
+      context && context->athlete
+      ? context->athlete->rideCache : nullptr),
+  tabLifetime(context ? context->tab : nullptr),
+  targetRangeStart(when), targetRangeEnd(when)
 {
     setWindowTitle(tr("Repeat Plan"));
     setMinimumSize(800 * dpiXFactor, 750 * dpiYFactor);
@@ -415,6 +558,53 @@ RepeatPlanWizard::RepeatPlanWizard
 }
 
 
+bool
+RepeatPlanWizard::resolveOwners
+(Context *&resolvedContext,
+ Athlete *&resolvedAthlete,
+ RideCache *&resolvedCache,
+ AthleteTab *&resolvedTab) const
+{
+    resolvedContext = context.data();
+    resolvedAthlete = static_cast<Athlete*>(
+        athleteLifetime.data());
+    resolvedCache = static_cast<RideCache*>(
+        cacheLifetime.data());
+    resolvedTab = static_cast<AthleteTab*>(
+        tabLifetime.data());
+
+    return resolvedContext && resolvedAthlete
+        && resolvedCache && resolvedTab
+        && resolvedContext->athlete == resolvedAthlete
+        && resolvedContext->tab == resolvedTab
+        && resolvedAthlete->context == resolvedContext
+        && resolvedAthlete->rideCache == resolvedCache;
+}
+
+
+QPointer<RideCache>
+RepeatPlanWizard::resolvePageRideCache
+()
+{
+    Context *resolvedContext = nullptr;
+    Athlete *resolvedAthlete = nullptr;
+    RideCache *resolvedCache = nullptr;
+    AthleteTab *resolvedTab = nullptr;
+    if (!resolveOwners(
+            resolvedContext, resolvedAthlete,
+            resolvedCache, resolvedTab)) {
+        return nullptr;
+    }
+
+    const RepeatPlanWorkflowGuard guard(
+        this, resolvedContext, resolvedAthlete,
+        resolvedCache, resolvedTab);
+    return guard.canAccessPage()
+        ? QPointer<RideCache>(resolvedCache)
+        : QPointer<RideCache>();
+}
+
+
 QDate
 RepeatPlanWizard::getTargetRangeStart
 () const
@@ -431,7 +621,7 @@ RepeatPlanWizard::getTargetRangeEnd
 }
 
 
-const QList<RideItem*>&
+const QList<GuardedRideItem>&
 RepeatPlanWizard::getDeletionList
 () const
 {
@@ -451,6 +641,17 @@ void
 RepeatPlanWizard::updateTargetRange
 (QDate sourceStart, QDate sourceEnd, bool keepGap, bool preferOriginal)
 {
+    Context *resolvedContext = nullptr;
+    Athlete *athlete = nullptr;
+    RideCache *cache = nullptr;
+    AthleteTab *tab = nullptr;
+    if (!resolveOwners(
+            resolvedContext, athlete, cache, tab)) {
+        return;
+    }
+    Q_UNUSED(resolvedContext)
+    Q_UNUSED(athlete)
+    Q_UNUSED(tab)
     if (   sourceRangeStart != sourceStart
         || sourceRangeEnd != sourceEnd
         || keepGap != this->keepGap
@@ -462,7 +663,7 @@ RepeatPlanWizard::updateTargetRange
         this->preferOriginal = preferOriginal;
 
         sourceRides.clear();
-        for (RideItem *rideItem : context->athlete->rideCache->rides()) {
+        for (RideItem *rideItem : cache->rides()) {
             if (   rideItem == nullptr
                 || ! rideItem->planned) {
                 continue;
@@ -490,13 +691,25 @@ RepeatPlanWizard::updateTargetRange
         // QDateTime of any planned RideItem must be unique
         QHash<QDateTime, int> targetKeyCount;
         for (const SourceRide &sourceRide : sourceRides) {
-            QDateTime key(sourceRide.targetDate, sourceRide.rideItem->dateTime.time());
+            RideItem *const item = resolveGuardedRide(
+                sourceRide.source, cache);
+            if (!item)
+                continue;
+            QDateTime key(
+                sourceRide.targetDate,
+                item->dateTime.time());
             targetKeyCount[key]++;
         }
         QHash<QDateTime, int> keyToGroup;
         int nextGroup = 0;
         for (SourceRide &sourceRide : sourceRides) {
-            QDateTime key(sourceRide.targetDate, sourceRide.rideItem->dateTime.time());
+            RideItem *const item = resolveGuardedRide(
+                sourceRide.source, cache);
+            if (!item)
+                continue;
+            QDateTime key(
+                sourceRide.targetDate,
+                item->dateTime.time());
             if (targetKeyCount[key] > 1) {
                 if (! keyToGroup.contains(key)) {
                     keyToGroup[key] = nextGroup++;
@@ -520,6 +733,15 @@ RepeatPlanWizard::updateTargetRange
             }
         }
     }
+
+    sourceRides.erase(
+        std::remove_if(
+            sourceRides.begin(), sourceRides.end(),
+            [cache](const SourceRide &sourceRide) {
+                return !resolveGuardedRide(
+                    sourceRide.source, cache);
+            }),
+        sourceRides.end());
 
     // Calculate frontGap and rangeLength
     frontGap = 0;
@@ -557,7 +779,7 @@ RepeatPlanWizard::updateTargetRange
     // Find conflicting planned and linked activities (they wont be autodeleted)
     deletionList.clear();
     QSet<QDateTime> blockedKeys;
-    for (RideItem *rideItem : context->athlete->rideCache->rides()) {
+    for (RideItem *rideItem : cache->rides()) {
         if (   rideItem == nullptr
             || ! rideItem->planned) {
             continue;
@@ -570,11 +792,17 @@ RepeatPlanWizard::updateTargetRange
         if (rideItem->hasLinkedActivity()) {
             blockedKeys.insert(QDateTime(rideDate, rideItem->dateTime.time()));
         } else {
-            deletionList << rideItem;
+            deletionList << GuardedRideItem(rideItem);
         }
     }
     for (SourceRide &sourceRide : sourceRides) {
-        QDateTime key(sourceRide.targetDate, sourceRide.rideItem->dateTime.time());
+        RideItem *const item = resolveGuardedRide(
+            sourceRide.source, cache);
+        if (!item)
+            continue;
+        QDateTime key(
+            sourceRide.targetDate,
+            item->dateTime.time());
         sourceRide.targetBlocked = blockedKeys.contains(key);
     }
 
@@ -586,31 +814,212 @@ void
 RepeatPlanWizard::done
 (int result)
 {
-    if (result == QDialog::Accepted) {
-        QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
-        const QList<RideItem*> &deletionList = getDeletionList();
-        QList<std::pair<RideItem*, QDate>> planList;
-        for (const SourceRide &sourceRide : sourceRides) {
-            if (! sourceRide.selected || sourceRide.targetBlocked) {
-                continue;
-            }
-            planList << std::pair<RideItem*, QDate> { sourceRide.rideItem, sourceRide.targetDate };
-        }
-        context->tab->setNoSwitch(true);
-        for (RideItem *rideItem : deletionList) {
-            context->athlete->rideCache->removeRide(rideItem);
-        }
-        RideCache::OperationPreCheck check = context->athlete->rideCache->checkCopyPlannedActivities(planList);
-        if (check.canProceed) {
-            RideCache::OperationResult result = context->athlete->rideCache->copyPlannedActivities(planList);
-            if (! result.success) {
-                QMessageBox::warning(this, "Failed", result.error);
-            }
-        }
-        context->tab->setNoSwitch(false);
-        QApplication::restoreOverrideCursor();
+    if (result != QDialog::Accepted) {
+        QWizard::done(result);
+        return;
     }
-    QWizard::done(result);
+
+    RepeatPlanWorkflowExecutionGuard executionGuard(
+        this, completionInProgress);
+    if (!executionGuard.acquired())
+        return;
+
+    QPointer<RepeatPlanWizard> wizard(this);
+    Context *guardedContext = nullptr;
+    Athlete *guardedAthlete = nullptr;
+    RideCache *guardedCache = nullptr;
+    AthleteTab *guardedTab = nullptr;
+    if (!resolveOwners(
+            guardedContext, guardedAthlete,
+            guardedCache, guardedTab)) {
+        QMessageBox::warning(
+            this, tr("Repeat Plan"),
+            tr("The athlete was closed while the wizard was open."));
+        return;
+    }
+
+    const RepeatPlanWorkflowGuard lifetimeGuard(
+        wizard.data(), guardedContext, guardedAthlete,
+        guardedCache, guardedTab);
+    RepeatPlanWorkflowState workflowState;
+
+    const auto ownersValid = [&]() {
+        if (!wizard || !lifetimeGuard.allAlive())
+            return false;
+
+        Context *currentContext = nullptr;
+        Athlete *currentAthlete = nullptr;
+        RideCache *currentCache = nullptr;
+        AthleteTab *currentTab = nullptr;
+        return wizard->resolveOwners(
+                currentContext, currentAthlete,
+                currentCache, currentTab)
+            && currentContext == guardedContext
+            && currentAthlete == guardedAthlete
+            && currentCache == guardedCache
+            && currentTab == guardedTab;
+    };
+    const auto showWarning = [&](const QString &message) {
+        if (!ownersValid())
+            return;
+        QMessageBox::warning(
+            wizard.data(), tr("Repeat Plan"), message);
+    };
+    const auto resolveInputs = [&]
+        (QList<RideItem*> &deletionItems,
+         QList<std::pair<RideItem*, QDate>> &planList) {
+        if (!ownersValid())
+            return false;
+        if (!resolveGuardedRides(
+                wizard->deletionList, guardedCache,
+                deletionItems)
+            || !resolveRepeatPlanSources(
+                wizard->sourceRides, guardedCache,
+                planList)) {
+            deletionItems.clear();
+            planList.clear();
+            return false;
+        }
+
+        QSet<RideItem*> sourceItems;
+        for (const auto &entry : planList)
+            sourceItems.insert(entry.first);
+        const bool distinctInputs = std::none_of(
+            deletionItems.begin(), deletionItems.end(),
+            [&sourceItems](RideItem *item) {
+                return sourceItems.contains(item);
+            });
+        if (!distinctInputs) {
+            deletionItems.clear();
+            planList.clear();
+        }
+        return distinctInputs;
+    };
+
+    QList<RideItem*> deletionItems;
+    QList<std::pair<RideItem*, QDate>> planList;
+    if (!resolveInputs(deletionItems, planList)) {
+        showWarning(
+            tr("The plan changed while the wizard was open. Review the activities and try again."));
+        return;
+    }
+    if (!workflowState.markInputsValid(
+            !planList.isEmpty())) {
+        deletionItems.clear();
+        planList.clear();
+        showWarning(
+            tr("No activities are available to copy. No activities were removed."));
+        return;
+    }
+    deletionItems.clear();
+    planList.clear();
+
+    OverrideCursorScope cursorScope;
+    NoSwitchScope noSwitchScope(guardedTab);
+
+    if (!resolveInputs(deletionItems, planList)) {
+        deletionItems.clear();
+        planList.clear();
+        showWarning(
+            tr("The plan changed while preparing the update. No activities were removed."));
+        return;
+    }
+    if (!workflowState.markInputsValid(
+            !planList.isEmpty())) {
+        deletionItems.clear();
+        planList.clear();
+        showWarning(
+            tr("No activities are available to copy. No activities were removed."));
+        return;
+    }
+    planList.clear();
+
+    if (!workflowState.canRemoveTargets())
+        return;
+
+    if (!deletionItems.isEmpty()) {
+        const RideCache::RemovalResult removal =
+            guardedCache->removeRidesResult(deletionItems);
+        deletionItems.clear();
+        if (!ownersValid())
+            return;
+        if (!removal.allLogicallyRemoved()
+            || !removal.cleanlyCompleted()) {
+            const QString detail = removal.error.isEmpty()
+                ? tr("The existing plan could not be removed completely.")
+                : removal.error;
+            showWarning(
+                tr("The existing plan could not be replaced completely.\n\n%1")
+                    .arg(detail));
+            return;
+        }
+    }
+    workflowState.markRemovalComplete();
+
+    if (!resolveRepeatPlanSources(
+            wizard->sourceRides, guardedCache,
+            planList)) {
+        planList.clear();
+        showWarning(
+            tr("A source activity changed before the plan could be copied."));
+        return;
+    }
+
+    const RideCache::OperationPreCheck copyCheck =
+        guardedCache->checkCopyPlannedActivities(planList);
+    planList.clear();
+    if (!ownersValid())
+        return;
+    if (!copyCheck.canProceed) {
+        showWarning(
+            copyCheck.blockingReason.isEmpty()
+            ? tr("The plan cannot be copied.")
+            : copyCheck.blockingReason);
+        return;
+    }
+
+    if (!resolveRepeatPlanSources(
+            wizard->sourceRides, guardedCache,
+            planList)) {
+        planList.clear();
+        showWarning(
+            tr("A source activity changed before the plan could be copied."));
+        return;
+    }
+
+    const int expectedCount = planList.size();
+    const RideCache::OperationResult copyResult =
+        guardedCache->copyPlannedActivities(planList);
+    planList.clear();
+    if (!ownersValid())
+        return;
+    if (!copyResult.success
+        || copyResult.affectedCount != expectedCount
+        || !copyResult.error.isEmpty()) {
+        showWarning(
+            copyResult.error.isEmpty()
+            ? tr("The plan could not be copied completely.")
+            : copyResult.error);
+        return;
+    }
+
+    if (!resolveRepeatPlanSources(
+            wizard->sourceRides, guardedCache,
+            planList)
+        || planList.size() != expectedCount) {
+        planList.clear();
+        showWarning(
+            tr("A source activity changed while the plan was being copied."));
+        return;
+    }
+    planList.clear();
+    workflowState.markCopyComplete();
+
+    if (!ownersValid()
+        || !workflowState.canAccept(lifetimeGuard)) {
+        return;
+    }
+    QWizard::done(QDialog::Accepted);
 }
 
 
@@ -619,7 +1028,7 @@ RepeatPlanWizard::done
 
 RepeatPlanPageSetup::RepeatPlanPageSetup
 (Context *context, const QDate &when, QWidget *parent)
-: QWizardPage(parent), context(context)
+: QWizardPage(parent)
 {
     QLocale locale;
     QString localFormat = locale.dateFormat(QLocale::ShortFormat);
@@ -781,7 +1190,8 @@ RepeatPlanPageSetup::isComplete
 () const
 {
     RepeatPlanWizard *rsw = qobject_cast<RepeatPlanWizard*>(wizard());
-    return rsw->sourceRides.count() > 0;
+    return rsw && rsw->resolvePageRideCache()
+        && rsw->sourceRides.count() > 0;
 }
 
 
@@ -796,6 +1206,13 @@ RepeatPlanPageSetup::refresh
 
     rsw->updateTargetRange(startDate->date(), endDate->date(), keepGapCheck->isChecked(), originalRadio->isChecked());
 
+    if (!rsw->resolvePageRideCache()) {
+        targetRangeBar->setResult(
+            QDate(), QDate(), 0, 0);
+        emit completeChanged();
+        return;
+    }
+
     targetRangeBar->setResult(rsw->getTargetRangeStart(), rsw->getTargetRangeEnd(), rsw->sourceRides.count(), rsw->getDeletionList().count());
 
     emit completeChanged();
@@ -806,8 +1223,8 @@ RepeatPlanPageSetup::refresh
 // RepeatPlanPageActivities
 
 RepeatPlanPageActivities::RepeatPlanPageActivities
-(Context *context, QWidget *parent)
-: QWizardPage(parent), context(context)
+(Context *, QWidget *parent)
+: QWizardPage(parent)
 {
     setTitle(tr("Repeat Plan - Activities"));
     setSubTitle(tr("Review and choose the activities you wish to add to your plan."));
@@ -860,18 +1277,36 @@ RepeatPlanPageActivities::initializePage
     disconnect(dataChangedConnection);
     numSelected = 0;
     activityTree->clear();
+    targetRangeBar->setFlashEnabled(false);
+    targetRangeBar->setResult(QDate(), QDate(), 0, 0);
 
     RepeatPlanWizard *rsw = qobject_cast<RepeatPlanWizard*>(wizard());
     if (rsw == nullptr) {
+        targetRangeBar->setFlashEnabled(true);
+        emit completeChanged();
         return;
     }
-    targetRangeBar->setFlashEnabled(false);
     rsw->updateTargetRange();
+    QPointer<RideCache> cache =
+        rsw->resolvePageRideCache();
+    if (!cache) {
+        targetRangeBar->setFlashEnabled(true);
+        emit completeChanged();
+        return;
+    }
 
     QLocale locale;
     int i = 0;
     while (i < rsw->sourceRides.count()) {
         const SourceRide &sourceRide = rsw->sourceRides[i];
+        RideItem *const sourceItem =
+            resolveGuardedRide(
+                sourceRide.source,
+                cache.data());
+        if (!sourceItem) {
+            ++i;
+            continue;
+        }
 
         if (sourceRide.conflictGroup < 0) {
             QTreeWidgetItem *item = new QTreeWidgetItem();
@@ -879,8 +1314,8 @@ RepeatPlanPageActivities::initializePage
             item->setData(0, IndicatorDelegate::IndicatorTypeRole, IndicatorDelegate::CheckIndicator);
             item->setData(0, IndicatorDelegate::IndicatorStateRole, sourceRide.selected);
             item->setData(0, IndexRole, i);
-            item->setData(1, Qt::DisplayRole, PlanBundle::getRideSport(sourceRide.rideItem));
-            item->setData(2, Qt::DisplayRole, PlanBundle::getRideName(sourceRide.rideItem));
+            item->setData(1, Qt::DisplayRole, PlanBundle::getRideSport(sourceItem));
+            item->setData(2, Qt::DisplayRole, PlanBundle::getRideName(sourceItem));
             activityTree->addTopLevelItem(item);
 
             if (sourceRide.selected) {
@@ -909,13 +1344,19 @@ RepeatPlanPageActivities::initializePage
 
             for (int idx : groupIndices) {
                 const SourceRide &groupRide = rsw->sourceRides[idx];
+                RideItem *const groupItemRide =
+                    resolveGuardedRide(
+                        groupRide.source,
+                        cache.data());
+                if (!groupItemRide)
+                    continue;
                 QTreeWidgetItem *child = new QTreeWidgetItem(groupItem);
                 child->setData(0, Qt::DisplayRole, locale.toString(groupRide.sourceDate, QLocale::ShortFormat));
                 child->setData(0, IndicatorDelegate::IndicatorTypeRole, IndicatorDelegate::RadioIndicator);
                 child->setData(0, IndicatorDelegate::IndicatorStateRole, groupRide.selected);
                 child->setData(0, IndexRole, idx);
-                child->setData(1, Qt::DisplayRole, PlanBundle::getRideSport(groupRide.rideItem));
-                child->setData(2, Qt::DisplayRole, PlanBundle::getRideName(groupRide.rideItem));
+                child->setData(1, Qt::DisplayRole, PlanBundle::getRideSport(groupItemRide));
+                child->setData(2, Qt::DisplayRole, PlanBundle::getRideName(groupItemRide));
             }
             ++numSelected;
         }
@@ -932,7 +1373,20 @@ RepeatPlanPageActivities::initializePage
             return;
         }
         int i = col0Index.data(IndexRole).toInt();
-        if (i < 0) {
+        if (i < 0 || i >= rsw->sourceRides.size()) {
+            return;
+        }
+        QPointer<RideCache> cache =
+            rsw->resolvePageRideCache();
+        if (!cache) {
+            initializePage();
+            return;
+        }
+        if (!resolveGuardedRide(
+                rsw->sourceRides[i].source,
+                cache.data())) {
+            rsw->updateTargetRange();
+            initializePage();
             return;
         }
         bool checked = col0Index.data(IndicatorDelegate::IndicatorStateRole).toBool();
@@ -941,7 +1395,14 @@ RepeatPlanPageActivities::initializePage
             numSelected += checked ? 1 : -1;
             emit completeChanged();
         }
+        const int previousSourceCount =
+            rsw->sourceRides.size();
         rsw->updateTargetRange();
+        if (rsw->sourceRides.size()
+            != previousSourceCount) {
+            initializePage();
+            return;
+        }
         targetRangeBar->setResult(rsw->getTargetRangeStart(), rsw->getTargetRangeEnd(), numSelected, rsw->getDeletionList().count());
     });
     targetRangeBar->setResult(rsw->getTargetRangeStart(), rsw->getTargetRangeEnd(), numSelected, rsw->getDeletionList().count());
@@ -969,8 +1430,8 @@ RepeatPlanPageActivities::cleanupPage
 // RepeatPlanPageSummary
 
 RepeatPlanPageSummary::RepeatPlanPageSummary
-(Context *context, QWidget *parent)
-: QWizardPage(parent), context(context)
+(Context *, QWidget *parent)
+: QWizardPage(parent)
 {
     setTitle(tr("Repeat Plan - Summary"));
     setSubTitle(tr("Preview the plan updates, including planned additions and deletions. No changes will be made until you continue."));
@@ -1035,11 +1496,17 @@ RepeatPlanPageSummary::initializePage
     planTree->setVisible(false);
     deletionLabel->setVisible(false);
     deletionTree->setVisible(false);
+    targetRangeBar->setResult(QDate(), QDate(), 0, 0);
 
     RepeatPlanWizard *rsw = qobject_cast<RepeatPlanWizard*>(wizard());
     if (rsw == nullptr) {
         return;
     }
+    rsw->updateTargetRange();
+    QPointer<RideCache> cache =
+        rsw->resolvePageRideCache();
+    if (!cache)
+        return;
 
     QLocale locale;
     int numSelected = 0;
@@ -1047,6 +1514,12 @@ RepeatPlanPageSummary::initializePage
         if (! sourceRide.selected) {
             continue;
         }
+        RideItem *const sourceItem =
+            resolveGuardedRide(
+                sourceRide.source,
+                cache.data());
+        if (!sourceItem)
+            continue;
         QTreeWidgetItem *planItem = new QTreeWidgetItem(planTree);
         planItem->setData(0, Qt::DisplayRole, locale.toString(sourceRide.sourceDate, QLocale::ShortFormat));
         planItem->setData(1, Qt::DisplayRole, "→");
@@ -1064,14 +1537,22 @@ RepeatPlanPageSummary::initializePage
             planItem->setData(3, Qt::ForegroundRole, palette().color(QPalette::Disabled, QPalette::Text));
             planItem->setData(4, Qt::ForegroundRole, palette().color(QPalette::Disabled, QPalette::Text));
         }
-        planItem->setData(3, Qt::DisplayRole, PlanBundle::getRideSport(sourceRide.rideItem));
-        planItem->setData(4, Qt::DisplayRole, PlanBundle::getRideName(sourceRide.rideItem));
+        planItem->setData(3, Qt::DisplayRole, PlanBundle::getRideSport(sourceItem));
+        planItem->setData(4, Qt::DisplayRole, PlanBundle::getRideName(sourceItem));
     }
     planLabel->setVisible(true);
     planTree->setVisible(true);
-    const QList<RideItem*> &deletionList = rsw->getDeletionList();
+    const QList<GuardedRideItem> &deletionList =
+        rsw->getDeletionList();
     if (deletionList.count() > 0) {
-        for (RideItem *rideItem : deletionList) {
+        for (const GuardedRideItem &guarded :
+             deletionList) {
+            RideItem *const rideItem =
+                resolveGuardedRide(
+                    guarded,
+                    cache.data());
+            if (!rideItem)
+                continue;
             QTreeWidgetItem *deletionItem = new QTreeWidgetItem(deletionTree);
             deletionItem->setData(0, Qt::DisplayRole, locale.toString(rideItem->dateTime.date(), QLocale::ShortFormat));
             deletionItem->setData(1, Qt::DisplayRole, PlanBundle::getRideSport(rideItem));
@@ -1153,6 +1634,8 @@ void
 ExportPlanWizard::updateRange
 (QDate sourceStart, QDate sourceEnd, bool preferOriginal, bool force)
 {
+    RideCache *const cache =
+        context->athlete->rideCache;
     if (   _description.rangeStart != sourceStart
         || _description.rangeEnd != sourceEnd
         || _description.preferOriginal != preferOriginal
@@ -1182,13 +1665,25 @@ ExportPlanWizard::updateRange
         // QDateTime of any planned RideItem must be unique
         QHash<QDateTime, int> targetKeyCount;
         for (const SourceRide &sourceRide : sourceRides) {
-            QDateTime key(sourceRide.sourceDate, sourceRide.rideItem->dateTime.time());
+            RideItem *const item = resolveGuardedRide(
+                sourceRide.source, cache);
+            if (!item)
+                continue;
+            QDateTime key(
+                sourceRide.sourceDate,
+                item->dateTime.time());
             targetKeyCount[key]++;
         }
         QHash<QDateTime, int> keyToGroup;
         int nextGroup = 0;
         for (SourceRide &sourceRide : sourceRides) {
-            QDateTime key(sourceRide.sourceDate, sourceRide.rideItem->dateTime.time());
+            RideItem *const item = resolveGuardedRide(
+                sourceRide.source, cache);
+            if (!item)
+                continue;
+            QDateTime key(
+                sourceRide.sourceDate,
+                item->dateTime.time());
             if (targetKeyCount[key] > 1) {
                 if (! keyToGroup.contains(key)) {
                     keyToGroup[key] = nextGroup++;
@@ -1213,6 +1708,15 @@ ExportPlanWizard::updateRange
         }
     }
 
+    sourceRides.erase(
+        std::remove_if(
+            sourceRides.begin(), sourceRides.end(),
+            [cache](const SourceRide &sourceRide) {
+                return !resolveGuardedRide(
+                    sourceRide.source, cache);
+            }),
+        sourceRides.end());
+
     emit rangeChanged();
 }
 
@@ -1234,18 +1738,49 @@ void
 ExportPlanWizard::done
 (int result)
 {
-    if (result == QDialog::Accepted) {
-        QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
-        for (const SourceRide &sourceRide : sourceRides) {
-            if (! sourceRide.selected || sourceRide.targetBlocked) {
-                continue;
-            }
-            _description.activityFiles << sourceRide.rideItem->fileName;
-        }
-        _description.description = expandedDescription();
-        PlanBundle::exportBundle(context, _description);
-        QApplication::restoreOverrideCursor();
+    if (result != QDialog::Accepted) {
+        QWizard::done(result);
+        return;
     }
+
+    OverrideCursorScope cursorScope;
+    QStringList activityFiles;
+    bool sourcesValid = true;
+    for (const SourceRide &sourceRide : sourceRides) {
+        if (! sourceRide.selected || sourceRide.targetBlocked) {
+            continue;
+        }
+        RideItem *const item = resolveGuardedRide(
+            sourceRide.source,
+            context->athlete->rideCache);
+        if (!item) {
+            sourcesValid = false;
+            break;
+        }
+        activityFiles << item->fileName;
+    }
+    if (!sourcesValid) {
+        QMessageBox::warning(
+            this, tr("Export Plan"),
+            tr("An activity changed while the wizard was open. Review the activities and try again."));
+        return;
+    }
+
+    _description.activityFiles = activityFiles;
+    _description.description = expandedDescription();
+    if (!runPlanExportCompletion(
+            [&] {
+                return PlanBundle::exportBundle(
+                    context, _description);
+            },
+            [&] {
+                QMessageBox::warning(
+                    this, tr("Export Plan"),
+                    tr("The plan could not be exported. Check the selected activities and destination, then try again."));
+            })) {
+        return;
+    }
+
     QWizard::done(result);
 }
 
@@ -1505,6 +2040,14 @@ ExportPlanPageActivities::initializePage
     int i = 0;
     while (i < wiz->sourceRides.count()) {
         const SourceRide &sourceRide = wiz->sourceRides[i];
+        RideItem *const sourceItem =
+            resolveGuardedRide(
+                sourceRide.source,
+                context->athlete->rideCache);
+        if (!sourceItem) {
+            ++i;
+            continue;
+        }
 
         if (sourceRide.conflictGroup < 0) {
             QTreeWidgetItem *item = new QTreeWidgetItem();
@@ -1512,8 +2055,8 @@ ExportPlanPageActivities::initializePage
             item->setData(0, IndicatorDelegate::IndicatorTypeRole, IndicatorDelegate::CheckIndicator);
             item->setData(0, IndicatorDelegate::IndicatorStateRole, sourceRide.selected);
             item->setData(0, IndexRole, i);
-            item->setData(1, Qt::DisplayRole, PlanBundle::getRideSport(sourceRide.rideItem));
-            item->setData(2, Qt::DisplayRole, PlanBundle::getRideName(sourceRide.rideItem));
+            item->setData(1, Qt::DisplayRole, PlanBundle::getRideSport(sourceItem));
+            item->setData(2, Qt::DisplayRole, PlanBundle::getRideName(sourceItem));
             activityTree->addTopLevelItem(item);
 
             if (sourceRide.selected) {
@@ -1537,13 +2080,19 @@ ExportPlanPageActivities::initializePage
 
             for (int idx : groupIndices) {
                 const SourceRide &groupRide = wiz->sourceRides[idx];
+                RideItem *const groupItemRide =
+                    resolveGuardedRide(
+                        groupRide.source,
+                        context->athlete->rideCache);
+                if (!groupItemRide)
+                    continue;
                 QTreeWidgetItem *child = new QTreeWidgetItem(groupItem);
                 child->setData(0, Qt::DisplayRole, locale.toString(groupRide.sourceDate, QLocale::ShortFormat));
                 child->setData(0, IndicatorDelegate::IndicatorTypeRole, IndicatorDelegate::RadioIndicator);
                 child->setData(0, IndicatorDelegate::IndicatorStateRole, groupRide.selected);
                 child->setData(0, IndexRole, idx);
-                child->setData(1, Qt::DisplayRole, PlanBundle::getRideSport(groupRide.rideItem));
-                child->setData(2, Qt::DisplayRole, PlanBundle::getRideName(groupRide.rideItem));
+                child->setData(1, Qt::DisplayRole, PlanBundle::getRideSport(groupItemRide));
+                child->setData(2, Qt::DisplayRole, PlanBundle::getRideName(groupItemRide));
             }
             ++numSelected;
         }
@@ -1560,7 +2109,14 @@ ExportPlanPageActivities::initializePage
             return;
         }
         int i = col0Index.data(IndexRole).toInt();
-        if (i < 0) {
+        if (i < 0 || i >= wiz->sourceRides.size()) {
+            return;
+        }
+        if (!resolveGuardedRide(
+                wiz->sourceRides[i].source,
+                context->athlete->rideCache)) {
+            wiz->updateRange();
+            initializePage();
             return;
         }
         bool checked = col0Index.data(IndicatorDelegate::IndicatorStateRole).toBool();
@@ -1569,7 +2125,14 @@ ExportPlanPageActivities::initializePage
             numSelected += checked ? 1 : -1;
             emit completeChanged();
         }
+        const int previousSourceCount =
+            wiz->sourceRides.size();
         wiz->updateRange();
+        if (wiz->sourceRides.size()
+            != previousSourceCount) {
+            initializePage();
+            return;
+        }
         targetRangeBar->setResult(wiz->description().rangeStart, wiz->description().rangeEnd, numSelected, 0);
     });
     targetRangeBar->setResult(wiz->description().rangeStart, wiz->description().rangeEnd, numSelected, 0);
@@ -1847,13 +2410,20 @@ ExportPlanPageSummary::initializePage
         if (! sourceRide.selected) {
             continue;
         }
-        QString sport = PlanBundle::getRideSport(sourceRide.rideItem);
+        RideItem *const sourceItem =
+            resolveGuardedRide(
+                sourceRide.source,
+                context->athlete->rideCache);
+        if (!sourceItem)
+            continue;
+        QString sport =
+            PlanBundle::getRideSport(sourceItem);
         QTreeWidgetItem *planItem = new QTreeWidgetItem(planTree);
         int day = dayOne.daysTo(sourceRide.sourceDate);
         planItem->setData(0, Qt::DisplayRole, QString::number(day / 7 + 1));
         planItem->setData(1, Qt::DisplayRole, QString::number(day % 7 + 1));
         planItem->setData(2, Qt::DisplayRole, sport);
-        planItem->setData(3, Qt::DisplayRole, PlanBundle::getRideName(sourceRide.rideItem));
+        planItem->setData(3, Qt::DisplayRole, PlanBundle::getRideName(sourceItem));
         ++numSelected;
         sports.insert(sport);
     }
@@ -1976,7 +2546,9 @@ ExportPlanPageSummary::sanitizeFilename
 
 ImportPlanWizard::ImportPlanWizard
 (Context *context, QDate targetDay, QWidget *parent)
-: QWizard(parent), planReader(context, targetDay)
+: QWizard(parent),
+  planReader(QSharedPointer<PlanBundleReader>::create(
+      context, targetDay))
 {
     setWindowTitle(tr("Import Plan"));
     setMinimumSize(800 * dpiXFactor, 750 * dpiYFactor);
@@ -2152,10 +2724,10 @@ ImportPlanPageSetup::ImportPlanPageSetup
     connect(inputPathWidget, &DirectoryPathWidget::pathChanged, this, &ImportPlanPageSetup::bundlePathChanged);
     connect(gapDayCheck, &QCheckBox::toggled, this, [this](bool checked) {
         ImportPlanWizard *wiz = qobject_cast<ImportPlanWizard*>(wizard());
-        if (wiz == nullptr) {
+        if (wiz == nullptr || !wiz->planReader) {
             return;
         }
-        wiz->planReader.setIncludeGapDays(checked);
+        wiz->planReader->setIncludeGapDays(checked);
         updateRanges();
     });
 }
@@ -2177,7 +2749,7 @@ ImportPlanPageSetup::isComplete
     if (wiz == nullptr) {
         return false;
     }
-    return wiz->planReader.isValid();
+    return wiz->planReader && wiz->planReader->isValid();
 }
 
 
@@ -2186,13 +2758,15 @@ ImportPlanPageSetup::bundlePathChanged
 (QString path)
 {
     ImportPlanWizard *wiz = qobject_cast<ImportPlanWizard*>(wizard());
-    if (wiz == nullptr) {
+    if (wiz == nullptr || !wiz->planReader) {
         return;
     }
 
-    gapDayCheck->setChecked(wiz->planReader.isIncludeGapDays());
+    gapDayCheck->setChecked(
+        wiz->planReader->isIncludeGapDays());
 
-    PlanResult result = wiz->planReader.loadBundle(path.trimmed());
+    PlanResult result =
+        wiz->planReader->loadBundle(path.trimmed());
 
     if (path.trimmed().isEmpty()) {
         overviewStack->setCurrentIndex(1);
@@ -2217,7 +2791,7 @@ ImportPlanPageSetup::bundlePathChanged
             errorMessage += "</ul>";
         }
         overviewError->setText(errorMessage);
-    } else if (wiz->planReader.isValid()) {
+    } else if (wiz->planReader->isValid()) {
         overviewStack->setCurrentIndex(0);
 
         QString statusMessage;
@@ -2235,18 +2809,26 @@ ImportPlanPageSetup::bundlePathChanged
         }
         statusLabel->setText(statusMessage);
 
-        authorBox->setText(wiz->planReader.getMetadata().author);
-        nameBox->setText(wiz->planReader.getMetadata().name);
+        authorBox->setText(
+            wiz->planReader->getMetadata().author);
+        nameBox->setText(
+            wiz->planReader->getMetadata().name);
         updateRanges();
-        sportBox->setText(wiz->planReader.getMetadata().sport);
-        countBox->setText(QString::number(wiz->planReader.getNumActivities()));
-        copyrightBox->setText(wiz->planReader.getMetadata().copyright);
-        copyrightBox->setVisible(! wiz->planReader.getMetadata().copyright.isEmpty());
+        sportBox->setText(
+            wiz->planReader->getMetadata().sport);
+        countBox->setText(QString::number(
+            wiz->planReader->getNumActivities()));
+        copyrightBox->setText(
+            wiz->planReader->getMetadata().copyright);
+        copyrightBox->setVisible(
+            !wiz->planReader->getMetadata().copyright.isEmpty());
 
-        bool showDescription = ! wiz->planReader.getMetadata().description.trimmed().isEmpty();
+        bool showDescription = !wiz->planReader
+            ->getMetadata().description.trimmed().isEmpty();
         if (showDescription) {
             QTextDocument doc;
-            doc.setMarkdown(wiz->planReader.getMetadata().description);
+            doc.setMarkdown(
+                wiz->planReader->getMetadata().description);
             descriptionValue->setText(doc.toHtml());
         }
         descriptionValue->setVisible(showDescription);
@@ -2260,11 +2842,12 @@ ImportPlanPageSetup::updateRanges
 ()
 {
     ImportPlanWizard *wiz = qobject_cast<ImportPlanWizard*>(wizard());
-    if (wiz == nullptr || ! wiz->planReader.isValid()) {
+    if (wiz == nullptr || !wiz->planReader
+        || !wiz->planReader->isValid()) {
         return;
     }
 
-    int days = wiz->planReader.getDuration();
+    int days = wiz->planReader->getDuration();
     if (days == 1) {
         durationBox->setText(tr("1 day"));
     } else if (days < 14) {
@@ -2273,7 +2856,11 @@ ImportPlanPageSetup::updateRanges
         durationBox->setText(tr("%1 weeks").arg((days + 6) / 7));
     }
 
-    targetRangeBar->setResult(wiz->planReader.getTargetRangeStart(), wiz->planReader.getTargetRangeEnd(), wiz->planReader.getNumActivities(), wiz->planReader.getActivitiesToRemove().count());
+    targetRangeBar->setResult(
+        wiz->planReader->getTargetRangeStart(),
+        wiz->planReader->getTargetRangeEnd(),
+        wiz->planReader->getNumActivities(),
+        wiz->planReader->getActivitiesToRemove().count());
 }
 
 
@@ -2332,8 +2919,11 @@ void
 ImportPlanPageActivities::initializePage
 ()
 {
+    disconnect(dataChangedConnection);
+
     ImportPlanWizard *wiz = qobject_cast<ImportPlanWizard*>(wizard());
-    if (wiz == nullptr || ! wiz->planReader.isValid()) {
+    if (wiz == nullptr || !wiz->planReader
+        || !wiz->planReader->isValid()) {
         return;
     }
 
@@ -2341,10 +2931,34 @@ ImportPlanPageActivities::initializePage
     QString localFormat = locale.dateFormat(QLocale::ShortFormat);
     QString customFormat = "ddd, " + localFormat;
 
+    bool selectionChanged = false;
+    do {
+        selectionChanged = false;
+        for (int index = 0;
+             index < wiz->planReader->rideFiles.size();
+             ++index) {
+            const RideFileSelection &selection =
+                wiz->planReader->rideFiles[index];
+            const PlanImportScheduleActivity activity {
+                selection.getRideFile()->startTime(),
+                selection.selected};
+            if (planImportHasLinkedConflict(
+                    activity, selection.targetDateTime,
+                    wiz->planReader->getExistingLinked())) {
+                wiz->planReader->setActivitySelected(
+                    index, false);
+                selectionChanged = true;
+                break;
+            }
+        }
+    } while (selectionChanged);
+
     activityTree->clear();
 
-    for (int i = 0; i < wiz->planReader.rideFiles.size(); ++i) {
-        RideFileSelection &rfs = wiz->planReader.rideFiles[i];
+    for (int i = 0;
+         i < wiz->planReader->rideFiles.size(); ++i) {
+        RideFileSelection &rfs =
+            wiz->planReader->rideFiles[i];
 
         QTreeWidgetItem *item = new QTreeWidgetItem(activityTree);
 
@@ -2355,19 +2969,19 @@ ImportPlanPageActivities::initializePage
         item->setData(1, Qt::DisplayRole, PlanBundle::getRideSport(rfs.getRideFile()));
         item->setData(2, Qt::DisplayRole, PlanBundle::getRideName(rfs.getRideFile()));
 
-        if (wiz->planReader.getExistingLinked().contains(targetDate)) {
+        if (wiz->planReader->getExistingLinked()
+                .contains(targetDate)) {
             item->setToolTip(0, tr("Conflicts with existing planned and linked activity"));
             item->setToolTip(1, tr("Conflicts with existing planned and linked activity"));
             item->setToolTip(2, tr("Conflicts with existing planned and linked activity"));
             item->setFlags(item->flags() & ~Qt::ItemIsSelectable & ~Qt::ItemIsEnabled & ~Qt::ItemIsUserCheckable);
-            rfs.selected = false;
         }
         item->setData(0, IndicatorDelegate::IndicatorStateRole, rfs.selected);
     }
 
     dataChangedConnection = connect(activityTree->model(), &QAbstractItemModel::dataChanged, this, [this](const QModelIndex &index) {
         ImportPlanWizard *wiz = qobject_cast<ImportPlanWizard*>(wizard());
-        if (wiz == nullptr) {
+        if (wiz == nullptr || !wiz->planReader) {
             return;
         }
         QModelIndex col0Index = index.siblingAtColumn(0);
@@ -2376,18 +2990,27 @@ ImportPlanPageActivities::initializePage
             return;
         }
         int i = col0Index.data(IndexRole).toInt();
-        if (i < 0 || i >= wiz->planReader.rideFiles.size()) {
+        if (i < 0
+            || i >= wiz->planReader->rideFiles.size()) {
             return;
         }
         bool checked = col0Index.data(IndicatorDelegate::IndicatorStateRole).toBool();
-        wiz->planReader.rideFiles[i].selected = checked;
+        if (!wiz->planReader->setActivitySelected(
+                i, checked)) {
+            return;
+        }
         if (indicatorType == IndicatorDelegate::CheckIndicator) {
             emit completeChanged();
         }
-        targetRangeBar->setResult(wiz->planReader.getTargetRangeStart(), wiz->planReader.getTargetRangeEnd(), wiz->planReader.getNumSelectedActivities(), wiz->planReader.getActivitiesToRemove().count());
+        initializePage();
     });
-    targetRangeBar->setResult(wiz->planReader.getTargetRangeStart(), wiz->planReader.getTargetRangeEnd(), wiz->planReader.getNumSelectedActivities(), wiz->planReader.getActivitiesToRemove().count());
+    targetRangeBar->setResult(
+        wiz->planReader->getTargetRangeStart(),
+        wiz->planReader->getTargetRangeEnd(),
+        wiz->planReader->getNumSelectedActivities(),
+        wiz->planReader->getActivitiesToRemove().count());
     targetRangeBar->setFlashEnabled(true);
+    emit completeChanged();
 }
 
 
@@ -2396,10 +3019,10 @@ ImportPlanPageActivities::isComplete
 () const
 {
     ImportPlanWizard *wiz = qobject_cast<ImportPlanWizard*>(wizard());
-    if (wiz == nullptr) {
+    if (wiz == nullptr || !wiz->planReader) {
         return false;
     }
-    return wiz->planReader.getNumSelectedActivities() > 0;
+    return wiz->planReader->getNumSelectedActivities() > 0;
 }
 
 
@@ -2481,13 +3104,14 @@ ImportPlanPageSummary::initializePage
     deletionTree->setVisible(false);
 
     ImportPlanWizard *wiz = qobject_cast<ImportPlanWizard*>(wizard());
-    if (wiz == nullptr) {
+    if (wiz == nullptr || !wiz->planReader) {
         return;
     }
 
     QLocale locale;
     int numSelected = 0;
-    for (const RideFileSelection &rideFile : wiz->planReader.rideFiles) {
+    for (const RideFileSelection &rideFile :
+         wiz->planReader->rideFiles) {
         QTreeWidgetItem *planItem = new QTreeWidgetItem(planTree);
         planItem->setData(0, Qt::DisplayRole, locale.toString(rideFile.targetDateTime.date(), QLocale::ShortFormat));
         if (! rideFile.selected) {
@@ -2503,7 +3127,8 @@ ImportPlanPageSummary::initializePage
         planItem->setData(2, Qt::DisplayRole, PlanBundle::getRideName(rideFile.getRideFile()));
     }
     int deletionCount = 0;
-    for (RideItem *rideItem : wiz->planReader.getRideItemsToRemove()) {
+    for (RideItem *rideItem :
+         wiz->planReader->getRideItemsToRemove()) {
         QTreeWidgetItem *deletionItem = new QTreeWidgetItem(deletionTree);
         deletionItem->setData(0, Qt::DisplayRole, locale.toString(rideItem->dateTime.date(), QLocale::ShortFormat));
         deletionItem->setData(1, Qt::DisplayRole, PlanBundle::getRideSport(rideItem));
@@ -2512,7 +3137,11 @@ ImportPlanPageSummary::initializePage
     }
     deletionLabel->setVisible(deletionCount > 0);
     deletionTree->setVisible(deletionCount > 0);
-    targetRangeBar->setResult(wiz->planReader.getTargetRangeStart(), wiz->planReader.getTargetRangeEnd(), wiz->planReader.getNumSelectedActivities(), wiz->planReader.getActivitiesToRemove().count());
+    targetRangeBar->setResult(
+        wiz->planReader->getTargetRangeStart(),
+        wiz->planReader->getTargetRangeEnd(),
+        wiz->planReader->getNumSelectedActivities(),
+        wiz->planReader->getActivitiesToRemove().count());
 }
 
 
@@ -2521,15 +3150,23 @@ ImportPlanPageSummary::validatePage
 ()
 {
     ImportPlanWizard *wiz = qobject_cast<ImportPlanWizard*>(wizard());
-    if (wiz == nullptr) {
+    if (wiz == nullptr || !wiz->planReader) {
         return false;
     }
 
-    QApplication::setOverrideCursor(QCursor(Qt::WaitCursor));
-    wiz->planReader.importBundle();
-    QApplication::restoreOverrideCursor();
+    QPointer<ImportPlanWizard> guardedWizard(wiz);
+    PlanImportReaderLease<PlanBundleReader> readerLease(
+        this, wiz->planReader);
+    if (!readerLease.available())
+        return false;
 
-    return true;
+    OverrideCursorScope cursorScope;
+    readerLease.reader()->importBundle();
+
+    return readerLease.ownerAlive()
+        && guardedWizard
+        && guardedWizard->planReader
+            == readerLease.sharedReader();
 }
 
 
@@ -2569,13 +3206,14 @@ ImportPlanPageResult::initializePage
 ()
 {
     ImportPlanWizard *wiz = qobject_cast<ImportPlanWizard*>(wizard());
-    if (wiz == nullptr) {
+    if (wiz == nullptr || !wiz->planReader) {
         return;
     }
 
     QString message;
-    if (wiz->planReader.getLastImportResult().ok()) {
-        if (wiz->planReader.getLastImportResult().warnings.isEmpty()) {
+    if (wiz->planReader->getLastImportResult().ok()) {
+        if (wiz->planReader->getLastImportResult()
+                .warnings.isEmpty()) {
             message = HLO + tr("Import completed successfully.") + HLC + "<br>";
             message += tr("All activities and workouts were imported without issues.");
         } else {
@@ -2587,15 +3225,18 @@ ImportPlanPageResult::initializePage
         message += tr("The bundle could not be fully imported.");
         message += QString("<br>") + HLO + tr("Errors") + HLC;
         message += "<ul>";
-        for (const QString &error : wiz->planReader.getLastImportResult().errors) {
+        for (const QString &error :
+             wiz->planReader->getLastImportResult().errors) {
             message += "<li>" + error + "</li>";
         }
         message += "</ul>";
     }
-    if (! wiz->planReader.getLastImportResult().warnings.isEmpty()) {
+    if (!wiz->planReader->getLastImportResult()
+            .warnings.isEmpty()) {
         message += QString("<br>") + HLO + tr("Warnings") + HLC;
         message += "<ul>";
-        for (const QString &warning : wiz->planReader.getLastImportResult().warnings) {
+        for (const QString &warning :
+             wiz->planReader->getLastImportResult().warnings) {
             message += "<li>" + warning + "</li>";
         }
         message += "</ul>";

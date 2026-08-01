@@ -63,6 +63,9 @@ class RideCache : public QObject
     Q_OBJECT
 
     public:
+        struct OperationResult;
+        struct RemovalResult;
+
 
         RideCache(Context *context);
         ~RideCache();
@@ -119,7 +122,10 @@ class RideCache : public QObject
         void threadCompleted(RideCacheRefreshThread*, quint64 generation);
 
         // the ride list
-	    QVector<RideItem*>&rides() { return rides_; } 
+        const QVector<RideItem*> &rides() const { return rides_; }
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+        QVector<RideItem*> &mutableRidesForRemovalTest() { return rides_; }
+#endif
 
         // add/remove a ride to the list
         void addRide(QString name, bool dosignal, bool select, bool useTempActivities, bool planned);
@@ -132,15 +138,33 @@ class RideCache : public QObject
             bool useTempActivities,
             bool planned);
         bool removeCurrentRide();
+        RemovalResult removeCurrentRideResult();
         bool removeRide(const QString& filenameToDelete);
+        RemovalResult removeRideResult(
+            const QString &filenameToDelete);
         bool removeRide(
             const QString &filenameToDelete,
             bool planned);
+        RemovalResult removeRideResult(
+            const QString &filenameToDelete,
+            bool planned);
         bool removeRide(RideItem *rideToDelete);
+        RemovalResult removeRideResult(
+            RideItem *rideToDelete);
         bool removeArchivedRide(const QString& filenameToDelete);
+        RemovalResult removeArchivedRideResult(
+            const QString &filenameToDelete);
         bool removeArchivedRide(RideItem *rideToDelete);
+        RemovalResult removeArchivedRideResult(
+            RideItem *rideToDelete);
         bool removeRides(const QStringList &filenamesToDelete, bool triggerRefresh = true);
+        RemovalResult removeRidesResult(
+            const QStringList &filenamesToDelete,
+            bool triggerRefresh = true);
         bool removeRides(const QList<RideItem*> &ridesToDelete, bool triggerRefresh = true);
+        RemovalResult removeRidesResult(
+            const QList<RideItem*> &ridesToDelete,
+            bool triggerRefresh = true);
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
         bool renameRideFilesForTest(
             const QString &oldFileName,
@@ -178,6 +202,65 @@ class RideCache : public QObject
             int affectedCount = 0;
         };
 
+        enum class RemovalStatus {
+            Rejected,
+            RolledBack,
+            Committed,
+            CommittedCleanupPending,
+            PartiallyCommitted,
+            RecoveryRequired,
+            NotAttempted
+        };
+
+        struct RemovalItemResult {
+            QString fileName;
+            bool planned = false;
+            RemovalStatus status = RemovalStatus::Rejected;
+            QString error;
+            QStringList recoveryPaths;
+
+            bool logicallyRemoved() const
+            {
+                return status == RemovalStatus::Committed
+                    || status
+                        == RemovalStatus::CommittedCleanupPending;
+            }
+        };
+
+        struct RemovalResult {
+            RemovalStatus status = RemovalStatus::Rejected;
+            QString error;
+            int requestedCount = 0;
+            int affectedCount = 0;
+            QStringList recoveryPaths;
+            QVector<RemovalItemResult> items;
+
+            bool cleanlyCompleted() const
+            {
+                return status == RemovalStatus::Committed;
+            }
+
+            bool allLogicallyRemoved() const
+            {
+                return requestedCount > 0
+                    && affectedCount == requestedCount
+                    && (status == RemovalStatus::Committed
+                        || status
+                            == RemovalStatus::CommittedCleanupPending);
+            }
+
+            bool anyLogicallyRemoved() const
+            {
+                return affectedCount > 0;
+            }
+
+            bool requiresRecovery() const
+            {
+                return status
+                    == RemovalStatus::RecoveryRequired;
+            }
+        };
+
         // Split validations out of the action-methods to allow user interaction if dependent
         // activities need to be saved or reverted.
         // (!) The action-methods don't repeat the input-validation, check is always required upfront
@@ -187,6 +270,8 @@ class RideCache : public QObject
 
         OperationPreCheck checkUnlinkActivity(RideItem *item);
         OperationResult unlinkActivity(RideItem *item);
+
+        OperationPreCheck checkRemovalLinks(RideItem *item);
 
         OperationPreCheck checkUnlinkActivities(const QList<RideItem*> &items);
         OperationResult unlinkActivities(const QList<RideItem*> &items);
@@ -212,11 +297,13 @@ class RideCache : public QObject
         static bool saveActivity(
             Context *context, RideItem *item, QString &error,
             const SaveActivityFunction &save,
-            const ActivitySavedFunction &notifySaved = ActivitySavedFunction());
+            const ActivitySavedFunction &notifySaved = ActivitySavedFunction(),
+            QObject *operationOwner = nullptr);
         static bool saveActivities(
             Context *context, const QList<RideItem *> &items, QString &error,
             const SaveActivityFunction &save,
-            const ActivitySavedFunction &notifySaved = ActivitySavedFunction());
+            const ActivitySavedFunction &notifySaved = ActivitySavedFunction(),
+            QObject *operationOwner = nullptr);
 
         RideItem *getLinkedActivity(RideItem *item);
         RideItem *findSuggestion(RideItem *rideItem);
@@ -336,16 +423,15 @@ class RideCache : public QObject
         RideItem *uniqueRideForIdentity(
             const QString &fileName,
             bool planned) const;
-        bool removeRideEntry(
+        RemovalResult removeRideEntry(
             RideItem *rideToDelete,
             RideFileDisposition disposition,
             bool triggerRefresh = true);
         QString cpxCachePathForActivity(
             const QString &fileName,
             bool isPlanned) const;
-        void removeDerivedFiles(
-            const QString &fileName,
-            bool isPlanned);
+        QStringList derivedFilePathsForRemoval(
+            RideItem *rideToDelete) const;
         bool renameRideFiles(const QString& oldFileName, const QString& newFileName, bool isPlanned, QString &error);
         bool isValidLink(RideItem *item1, RideItem *item2, QString &error);
         RideItem* copyPlannedRideFile(RideItem *sourceItem, const QDate &newDate, const QTime &newTime, QString &error);
@@ -364,6 +450,8 @@ class RideCache : public QObject
         bool refreshChanged_ = false;
         bool refreshNotificationActive_ = false;
         bool saveSnapshotBoundary_ = false;
+        std::shared_ptr<bool> removalInProgress_{
+            std::make_shared<bool>(false)};
         QStringList pendingSaveTargets_;
         std::shared_ptr<RideCacheBackgroundSaver>
             backgroundSaver_;
