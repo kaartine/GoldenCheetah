@@ -49,6 +49,7 @@ equals(GC_UNITTESTS, active) {
 			   Core/signalSafety \
 			   Core/splineCrash \
 			   FileIO/atomicActivitySave \
+			   FileIO/anchoredFilesystem \
 			   FileIO/archiveSecurity \
 			   FileIO/athleteBackupArchive \
 			   FileIO/durableFilesystem \

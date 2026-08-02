@@ -4,12 +4,18 @@ on:
   push:
     paths:
       - .github/workflows/windows-durable-filesystem.yml
+      - src/FileIO/AnchoredFileSystem.cpp
+      - src/FileIO/AnchoredFileSystem.h
       - src/FileIO/AtomicFileWriter.h
+      - unittests/FileIO/anchoredFilesystem/**
       - unittests/FileIO/durableFilesystem/**
   pull_request:
     paths:
       - .github/workflows/windows-durable-filesystem.yml
+      - src/FileIO/AnchoredFileSystem.cpp
+      - src/FileIO/AnchoredFileSystem.h
       - src/FileIO/AtomicFileWriter.h
+      - unittests/FileIO/anchoredFilesystem/**
       - unittests/FileIO/durableFilesystem/**
   workflow_dispatch:
 
@@ -39,6 +45,11 @@ jobs:
           Set-Location build-durable-filesystem
           qmake ../unittests/FileIO/durableFilesystem/durableFilesystem.pro
           nmake /NOLOGO
+          Set-Location ..
+          New-Item -ItemType Directory build-anchored-filesystem | Out-Null
+          Set-Location build-anchored-filesystem
+          qmake ../unittests/FileIO/anchoredFilesystem/anchoredFilesystem.pro
+          nmake /NOLOGO
       - name: Run test
         shell: pwsh
         run: |
@@ -46,4 +57,9 @@ jobs:
             -o 'windows-durable-filesystem.txt,txt'
           $testStatus = $LASTEXITCODE
           Get-Content windows-durable-filesystem.txt
-          exit $testStatus
+          & build-anchored-filesystem/release/tst_anchoredFilesystem.exe `
+            -o 'windows-anchored-filesystem.txt,txt'
+          $anchoredStatus = $LASTEXITCODE
+          Get-Content windows-anchored-filesystem.txt
+          if ($testStatus -ne 0) { exit $testStatus }
+          exit $anchoredStatus
