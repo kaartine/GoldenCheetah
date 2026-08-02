@@ -148,6 +148,40 @@ bool calendarWorkflowAdoptSavedIdentity(
         cacheDirectory, expected);
 }
 
+QString calendarOperationDetails(
+    const RideCache::OperationResult &result)
+{
+    QStringList details;
+    if (!result.error.isEmpty()) details.append(result.error);
+    details.append(result.warnings);
+    return details.join(QStringLiteral("\n"));
+}
+
+void reportCalendarOperation(
+    QWidget *parent,
+    const RideCache::OperationResult &result,
+    const QString &title,
+    const QString &failedSummary,
+    const QString &committedSummary)
+{
+    if (result.success && result.cleanupComplete
+        && result.warnings.isEmpty()) {
+        return;
+    }
+    QString details = calendarOperationDetails(result);
+    if (details.isEmpty()) {
+        details = result.committed
+            ? QObject::tr("The activity cache or transaction cleanup requires attention.")
+            : QObject::tr("No additional error detail is available.");
+    }
+    QMessageBox::warning(
+        parent, title,
+        QStringLiteral("%1\n\n%2")
+            .arg(result.committed
+                     ? committedSummary : failedSummary,
+                 details));
+}
+
 } // namespace
 
 
@@ -1962,12 +1996,12 @@ CalendarWindow::movePlannedActivity
     if (check.canProceed && proceedDialog(context, check)) {
         context->tab->setNoSwitch(true);
         RideCache::OperationResult result = context->athlete->rideCache->moveActivity(rideItem, QDateTime(destDay, destTime));
-        if (result.success) {
-            QString error;
-            context->athlete->rideCache->saveActivities(check.affectedItems, error);
-        } else {
-            QMessageBox::warning(this, tr("Failed"), result.error);
-        }
+        reportCalendarOperation(
+            this, result, tr("Move Activity"),
+            tr("The activity could not be moved."),
+            tr("The activity move was committed, but the activity list or transaction cleanup requires attention. Do not repeat the move."));
+        if (result.committed && !result.cacheUpdated)
+            updateActivities();
         context->tab->setNoSwitch(false);
     }
 }
@@ -1981,12 +2015,12 @@ CalendarWindow::shiftPlannedActivities
     if (check.canProceed && proceedDialog(context, check)) {
         context->tab->setNoSwitch(true);
         RideCache::OperationResult result = context->athlete->rideCache->shiftPlannedActivities(destDay, offset);
-        if (result.success) {
-            QString error;
-            context->athlete->rideCache->saveActivities(check.affectedItems, error);
-        } else {
-            QMessageBox::warning(this, tr("Failed"), result.error);
-        }
+        reportCalendarOperation(
+            this, result, tr("Shift Activities"),
+            tr("The planned activities could not be shifted."),
+            tr("The planned activity shift was committed, but the activity list or transaction cleanup requires attention. Do not repeat the shift."));
+        if (result.committed && !result.cacheUpdated)
+            updateActivities();
         context->tab->setNoSwitch(false);
     }
 }
@@ -2159,13 +2193,13 @@ CalendarWindow::pastePlannedActivity
             if (proceedDialog(context, check)) {
                 context->tab->setNoSwitch(true);
                 RideCache::OperationResult result = context->athlete->rideCache->copyPlannedActivity(sourceItem, day, time);
-                if (result.success) {
-                    QString error;
-                    context->athlete->rideCache->saveActivities(check.affectedItems, error);
-                    // Context::rideDeleted is not always emitted, therefore forcing the update
+                reportCalendarOperation(
+                    this, result,
+                    tr("Paste Activity: %1").arg(primary),
+                    tr("The planned activity could not be pasted."),
+                    tr("The planned activity copy was committed, but the activity list or transaction cleanup requires attention. Do not paste it again."));
+                if (result.committed) {
                     updateActivities();
-                } else {
-                    QMessageBox::warning(this, tr("Paste failed: %1").arg(primary), result.error);
                 }
                 context->tab->setNoSwitch(false);
             }

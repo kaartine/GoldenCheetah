@@ -65,6 +65,8 @@ int removalLinkMutationTriggerCall = 0;
 std::function<void()> calendarStorageAction;
 int calendarCopyCall = 0;
 int calendarCopyFailureCall = 0;
+int activityIdentityStageCall = 0;
+int activityIdentityFailureCall = 0;
 int removalCancelCount = 0;
 int startupInvalidationCount = 0;
 int removalTransitionOccurrence = 0;
@@ -207,6 +209,8 @@ void resetRideCacheRemovalRefreshCounts()
     calendarStorageAction = {};
     calendarCopyCall = 0;
     calendarCopyFailureCall = 0;
+    activityIdentityStageCall = 0;
+    activityIdentityFailureCall = 0;
     removalCancelCount = 0;
     startupInvalidationCount = 0;
     removalTransitionOccurrence = 0;
@@ -524,6 +528,12 @@ void setRideCacheCalendarCopyFailureOnCall(int call)
     calendarCopyFailureCall = call;
 }
 
+void setRideCacheActivityIdentityFailureOnCall(int call)
+{
+    activityIdentityStageCall = 0;
+    activityIdentityFailureCall = call;
+}
+
 void runRideCacheRemovalLinkMutationAction()
 {
     if (!removalLinkMutationAction) return;
@@ -831,6 +841,11 @@ void RideItem::close()
 
 void RideItem::refresh() {}
 
+void RideItem::setDirty(bool dirty)
+{
+    isdirty = dirty;
+}
+
 void RideItem::setFileName(
     QString ridePath, QString rideFileName)
 {
@@ -863,6 +878,19 @@ void RideItem::clearLinkedFileName()
 bool RideItem::hasLinkedActivity() const
 {
     return !getLinkedFileName().isEmpty();
+}
+
+QString RideItem::getText(QString name, QString fallback) const
+{
+    if (name == QStringLiteral("Start Date")) {
+        return QString::number(
+            QDate(1900, 1, 1).daysTo(dateTime.date()));
+    }
+    if (name == QStringLiteral("Start Time")) {
+        return QString::number(
+            QTime(0, 0, 0).secsTo(dateTime.time()));
+    }
+    return metadata_.value(name, fallback);
 }
 
 void RideItem::modified() {}
@@ -1054,6 +1082,59 @@ void RideCache::invalidateStartupSnapshots()
     if (startupLoadFinished_ || startupSnapshotsInvalidated_) return;
     startupSnapshotsInvalidated_ = true;
     ++startupInvalidationCount;
+}
+
+bool RideCache::stageActivityIdentityChange(
+    const QString &sourcePath,
+    const QString &sourceFileName,
+    const QString &targetFileName,
+    const QDateTime &targetDateTime,
+    const QString &originalDate,
+    const QString &linkedFileName,
+    bool planned,
+    const QString &stagingPath,
+    QString &error)
+{
+    Q_UNUSED(originalDate)
+    Q_UNUSED(planned)
+    ++activityIdentityStageCall;
+    if (activityIdentityFailureCall > 0
+        && activityIdentityStageCall
+            == activityIdentityFailureCall) {
+        error = QStringLiteral(
+            "injected identity staging failure");
+        return false;
+    }
+    const QFileInfo sourceInfo(sourcePath);
+    QFile source(sourcePath);
+    if (!targetDateTime.isValid()
+        || sourceInfo.fileName() != sourceFileName
+        || !source.open(QIODevice::ReadOnly)) {
+        error = QStringLiteral(
+            "injected identity staging failure");
+        return false;
+    }
+    QByteArray contents = source.readAll();
+    if (source.error() != QFileDevice::NoError) {
+        error = source.errorString();
+        return false;
+    }
+    contents.append("\nidentity=");
+    contents.append(targetFileName.toUtf8());
+    contents.append("\nlinked=");
+    contents.append(linkedFileName.toUtf8());
+    contents.append('\n');
+
+    QFile staged(stagingPath);
+    if (!staged.open(
+            QIODevice::WriteOnly | QIODevice::Truncate)
+        || staged.write(contents) != contents.size()
+        || !staged.flush()) {
+        error = staged.errorString();
+        return false;
+    }
+    runCalendarStorageAction();
+    return true;
 }
 
 bool RideCache::stagePlannedActivityCopy(

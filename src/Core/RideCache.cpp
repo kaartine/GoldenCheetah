@@ -2123,6 +2123,59 @@ RideCache::updateFromWorkoutAfter
     return ! changedItems.isEmpty();
 }
 
+namespace {
+
+bool applyRelativeWorkoutOverrides(
+    Context *context,
+    RideFile *ride,
+    const QDateTime &when,
+    QString &error)
+{
+    if (!context || !ride) {
+        error = QObject::tr(
+            "The planned activity is unavailable during staging");
+        return false;
+    }
+    const QString workoutFilename = ride->getTag(
+        QStringLiteral("WorkoutFilename"),
+        QString()).trimmed();
+    if (workoutFilename.isEmpty()) return true;
+
+    ErgFile ergFile(
+        workoutFilename, ErgFileFormat::unknown,
+        context, when.date());
+    if (!ergFile.hasRelativeWatts()) return true;
+
+    const QList<std::pair<QString, double>> metrics {
+        {QStringLiteral("average_power"), ergFile.AP()},
+        {QStringLiteral("coggan_np"), ergFile.IsoPower()},
+        {QStringLiteral("coggan_tss"), ergFile.bikeStress()},
+        {QStringLiteral("skiba_bike_score"), ergFile.BS()},
+        {QStringLiteral("skiba_xpower"), ergFile.XP()}
+    };
+    for (const auto &metric : metrics) {
+        auto override = ride->metricOverrides.find(metric.first);
+        if (override == ride->metricOverrides.end()) continue;
+
+        const int targetValue = static_cast<int>(
+            std::round(metric.second));
+        bool currentIsNumber = false;
+        const double currentValue = override.value()
+            .value(QStringLiteral("value"))
+            .toDouble(&currentIsNumber);
+        if (!currentIsNumber
+            || static_cast<int>(std::round(currentValue))
+                != targetValue) {
+            override.value().insert(
+                QStringLiteral("value"),
+                QString::number(targetValue));
+        }
+    }
+    return true;
+}
+
+} // namespace
+
 
 bool
 RideCache::stagePlannedActivityCopy
@@ -2149,15 +2202,9 @@ RideCache::stagePlannedActivityCopy
                     "The planned activity collection disappeared during staging");
                 return false;
             }
-
-            const QString workoutFilename = ride->getTag(
-                QStringLiteral("WorkoutFilename"),
-                QString()).trimmed();
-            if (workoutFilename.isEmpty()) return true;
-
-            ErgFile ergFile(
-                workoutFilename, ErgFileFormat::unknown,
-                guardedContext.data(), when.date());
+            const bool updated = applyRelativeWorkoutOverrides(
+                guardedContext.data(), ride, when,
+                transformError);
             if (!guardedCache || !guardedContext
                 || guardedCache->context
                     != guardedContext.data()) {
@@ -2165,35 +2212,65 @@ RideCache::stagePlannedActivityCopy
                     "The planned activity collection disappeared while its workout was being evaluated");
                 return false;
             }
-            if (!ergFile.hasRelativeWatts()) return true;
+            return updated;
+        },
+        error);
+}
 
-            const QList<std::pair<QString, double>> metrics {
-                {QStringLiteral("average_power"), ergFile.AP()},
-                {QStringLiteral("coggan_np"), ergFile.IsoPower()},
-                {QStringLiteral("coggan_tss"), ergFile.bikeStress()},
-                {QStringLiteral("skiba_bike_score"), ergFile.BS()},
-                {QStringLiteral("skiba_xpower"), ergFile.XP()}
-            };
-            for (const auto &metric : metrics) {
-                auto override =
-                    ride->metricOverrides.find(metric.first);
-                if (override == ride->metricOverrides.end())
-                    continue;
-
-                const int targetValue = static_cast<int>(
-                    std::round(metric.second));
-                bool currentIsNumber = false;
-                const double currentValue =
-                    override.value()
-                        .value(QStringLiteral("value"))
-                        .toDouble(&currentIsNumber);
-                if (!currentIsNumber
-                    || static_cast<int>(std::round(currentValue))
-                        != targetValue) {
-                    override.value().insert(
-                        QStringLiteral("value"),
-                        QString::number(targetValue));
-                }
+bool
+RideCache::stageActivityIdentityChange(
+    const QString &sourcePath,
+    const QString &sourceFileName,
+    const QString &targetFileName,
+    const QDateTime &targetDateTime,
+    const QString &originalDate,
+    const QString &linkedFileName,
+    bool planned,
+    const QString &stagingPath,
+    QString &error)
+{
+    const QPointer<RideCache> guardedCache(this);
+    const QPointer<Context> guardedContext(context);
+    return PlannedActivityFile::stageCopy(
+        guardedContext.data(), sourcePath,
+        sourceFileName, targetDateTime,
+        stagingPath,
+        [guardedCache, guardedContext, targetFileName,
+         originalDate, linkedFileName, planned]
+        (RideFile *ride, const QDateTime &when,
+         QString &transformError) {
+            if (!guardedCache || !guardedContext
+                || guardedCache->context
+                    != guardedContext.data()
+                || !ride) {
+                transformError = QObject::tr(
+                    "The activity collection disappeared during identity staging");
+                return false;
+            }
+            ride->setTag(
+                QStringLiteral("Filename"), targetFileName);
+            ride->setTag(
+                QStringLiteral("Original Date"), originalDate);
+            if (linkedFileName.isEmpty()) {
+                ride->removeTag(
+                    QStringLiteral("Linked Filename"));
+            } else {
+                ride->setTag(
+                    QStringLiteral("Linked Filename"),
+                    linkedFileName);
+            }
+            if (planned
+                && !applyRelativeWorkoutOverrides(
+                    guardedContext.data(), ride, when,
+                    transformError)) {
+                return false;
+            }
+            if (!guardedCache || !guardedContext
+                || guardedCache->context
+                    != guardedContext.data()) {
+                transformError = QObject::tr(
+                    "The activity collection disappeared while identity staging was finalized");
+                return false;
             }
             return true;
         },

@@ -93,6 +93,7 @@ void setRideCacheRemovalLinkMutationActionOnCall(
 void setRideCacheCalendarStorageAction(
     const std::function<void()> &action);
 void setRideCacheCalendarCopyFailureOnCall(int call);
+void setRideCacheActivityIdentityFailureOnCall(int call);
 
 namespace {
 
@@ -101,6 +102,14 @@ const char PlannedCopyCrashRootEnvironment[] =
     "GC_RIDE_CACHE_COPY_CRASH_ROOT";
 const char PlannedCopyCrashModeEnvironment[] =
     "GC_RIDE_CACHE_COPY_CRASH_MODE";
+const char ActivityMoveCrashRootEnvironment[] =
+    "GC_RIDE_CACHE_MOVE_CRASH_ROOT";
+const char ActivityMoveCrashModeEnvironment[] =
+    "GC_RIDE_CACHE_MOVE_CRASH_MODE";
+const char ActivityShiftCrashRootEnvironment[] =
+    "GC_RIDE_CACHE_SHIFT_CRASH_ROOT";
+const char ActivityShiftCrashModeEnvironment[] =
+    "GC_RIDE_CACHE_SHIFT_CRASH_MODE";
 const char PlanReplacementCrashPhaseEnvironment[] =
     "GC_PLAN_REPLACEMENT_CRASH_PHASE";
 const char PlanReplacementCrashOccurrenceEnvironment[] =
@@ -119,6 +128,16 @@ QString secondName()
 QString thirdName()
 {
     return QStringLiteral("2026_07_06_10_00_00.json");
+}
+
+QString nextDayName()
+{
+    return QStringLiteral("2026_07_07_08_00_00.json");
+}
+
+QString twoDaysLaterName()
+{
+    return QStringLiteral("2026_07_08_08_00_00.json");
 }
 
 void writeFixture(const QString &path, const QByteArray &contents)
@@ -468,12 +487,23 @@ private slots:
     void copyPlannedActivitiesPurgesDestroyedRowsBeforePublish();
     void shiftPlannedActivitiesPurgesDestroyedRowsBeforeReorder();
     void moveActivityReservesModelBeforeStorageCommit();
+    void moveActivityCrashRecoveryIsGenerationAtomic();
+    void moveActivityPostCommitNotificationLossIsReportedCommitted();
+    void moveLinkedActivityPersistsReciprocalGeneration();
+    void moveLinkedActivityStageFailureRollsBackGeneration();
+    void moveLinkedActivityCrashRecoveryIsGenerationAtomic_data();
+    void moveLinkedActivityCrashRecoveryIsGenerationAtomic();
     void copyPlannedActivityReservesModelBeforeStorageCommit();
     void copyPlannedActivitiesReserveModelBeforeStorageCommit();
     void copyPlannedActivitiesStageFailureRollsBackGeneration();
     void copyPlannedActivitiesCrashRecoveryIsGenerationAtomic_data();
     void copyPlannedActivitiesCrashRecoveryIsGenerationAtomic();
     void shiftPlannedActivitiesReservesModelBeforeStorageCommit();
+    void shiftPlannedActivitiesCommitOverlappingGeneration();
+    void shiftPlannedActivitiesStageFailureRollsBackGeneration();
+    void shiftLinkedPlannedActivityPersistsReciprocalGeneration();
+    void shiftPlannedActivitiesCrashRecoveryIsGenerationAtomic_data();
+    void shiftPlannedActivitiesCrashRecoveryIsGenerationAtomic();
     void plannedReplacementDropsStaleResumeDuringNewReplacement();
     void plannedReplacementCoalescesSupersededResumes();
     void plannedReplacementProcessorFailureIsReportedAfterPublication();
@@ -6128,6 +6158,9 @@ void TestRideCacheRemoval::moveActivityPurgesDestroyedRowsBeforeReorder()
         fixture.cache->moveActivity(target, targetDateTime);
 
     QVERIFY2(result.success, qPrintable(result.error));
+    QVERIFY(result.committed);
+    QVERIFY(result.cacheUpdated);
+    QVERIFY(result.cleanupComplete);
     QCOMPARE(result.affectedCount, 1);
     QCOMPARE(target->fileName, thirdName());
     QVERIFY(!QFileInfo::exists(fixture.activityPath(firstName())));
@@ -6167,7 +6200,11 @@ void TestRideCacheRemoval::copyPlannedActivityPurgesDestroyedRowsBeforePublish()
         fixture.cache->copyPlannedActivity(
             source, sourceDateTime.date().addDays(1));
 
-    QVERIFY2(result.success, qPrintable(result.error));
+    QVERIFY(!result.success);
+    QVERIFY(result.committed);
+    QVERIFY(!result.cacheUpdated);
+    QVERIFY(result.cleanupComplete);
+    QVERIFY(!result.error.isEmpty());
     QCOMPARE(result.affectedCount, 1);
     QCOMPARE(fixture.cache->count(), 2);
     QVERIFY(!fixture.cache->remembersDeletedAddressForRemovalTest(
@@ -6198,6 +6235,9 @@ void TestRideCacheRemoval::copyPlannedActivityUsesRequestedTime()
     const QString targetName =
         QStringLiteral("2026_07_07_12_34_56.json");
     QVERIFY2(result.success, qPrintable(result.error));
+    QVERIFY(result.committed);
+    QVERIFY(result.cacheUpdated);
+    QVERIFY(result.cleanupComplete);
     QCOMPARE(result.affectedCount, 1);
     QVERIFY(cacheContains(*fixture.cache, targetName));
     QCOMPARE(
@@ -6239,7 +6279,11 @@ void TestRideCacheRemoval::copyPlannedActivitiesPurgesDestroyedRowsBeforePublish
             {first, firstDateTime.date().addDays(1)},
             {second, secondDateTime.date().addDays(2)}});
 
-    QVERIFY2(result.success, qPrintable(result.error));
+    QVERIFY(!result.success);
+    QVERIFY(result.committed);
+    QVERIFY(!result.cacheUpdated);
+    QVERIFY(result.cleanupComplete);
+    QVERIFY(!result.error.isEmpty());
     QCOMPARE(result.affectedCount, 2);
     QCOMPARE(fixture.cache->count(), 4);
     const QStringList filenames =
@@ -6327,6 +6371,553 @@ void TestRideCacheRemoval::moveActivityReservesModelBeforeStorageCommit()
     QCOMPARE(target->fileName, thirdName());
     QVERIFY(!QFileInfo::exists(fixture.activityPath(firstName())));
     QVERIFY(QFileInfo::exists(fixture.activityPath(thirdName())));
+}
+
+void TestRideCacheRemoval::
+moveActivityCrashRecoveryIsGenerationAtomic()
+{
+    const QString root = qEnvironmentVariable(
+        ActivityMoveCrashRootEnvironment);
+    const QString mode = qEnvironmentVariable(
+        ActivityMoveCrashModeEnvironment);
+    if (!root.isEmpty()) {
+        std::unique_ptr<Context> context(new Context(nullptr));
+        std::unique_ptr<Athlete> athlete(
+            new Athlete(context.get(), QDir(root)));
+        std::unique_ptr<RideCache> cache(
+            new RideCache(context.get()));
+        athlete->rideCache = cache.get();
+        if (mode == QStringLiteral("recover")) {
+            if (!cache->startupRecoveryError().isEmpty())
+                std::_Exit(87);
+            return;
+        }
+
+        QDateTime sourceDateTime;
+        QDateTime targetDateTime;
+        if (!RideFile::parseRideFileName(
+                firstName(), &sourceDateTime)
+            || !RideFile::parseRideFileName(
+                thirdName(), &targetDateTime)) {
+            std::_Exit(88);
+        }
+        RideFile *ride = new RideFile(sourceDateTime, 1.0);
+        RideItem *item = new RideItem(ride, context.get());
+        item->fileName = firstName();
+        item->path = athlete->home->activities().absolutePath();
+        item->dateTime = sourceDateTime;
+        cache->mutableRidesForRemovalTest().append(item);
+        context->ride = item;
+        writeFixture(
+            athlete->home->activities().filePath(firstName()),
+            QByteArray("old activity"));
+        const QString oldBase = QFileInfo(firstName()).baseName();
+        for (const QString &extension :
+             {QStringLiteral("cpx"), QStringLiteral("cpi"),
+              QStringLiteral("notes")}) {
+            writeFixture(
+                athlete->home->cache().filePath(
+                    oldBase + QLatin1Char('.') + extension),
+                extension.toLatin1() + QByteArray(" old"));
+        }
+
+        const RideCache::OperationResult childResult =
+            cache->moveActivity(item, targetDateTime);
+        QFAIL(qPrintable(QStringLiteral(
+            "activity move child did not stop at the requested transition: %1")
+                             .arg(childResult.error)));
+    }
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const auto runChild =
+        [&](const QString &childMode,
+            const QString &phase) {
+            QProcess child;
+            QProcessEnvironment environment =
+                QProcessEnvironment::systemEnvironment();
+            environment.remove(QString::fromLatin1(
+                PlanReplacementCrashPhaseEnvironment));
+            environment.remove(QString::fromLatin1(
+                PlanReplacementCrashOccurrenceEnvironment));
+            environment.insert(
+                QString::fromLatin1(
+                    ActivityMoveCrashRootEnvironment),
+                temporary.path());
+            environment.insert(
+                QString::fromLatin1(
+                    ActivityMoveCrashModeEnvironment),
+                childMode);
+            environment.insert(
+                QStringLiteral("QT_QPA_PLATFORM"),
+                QStringLiteral("offscreen"));
+            if (!phase.isEmpty()) {
+                environment.insert(
+                    QString::fromLatin1(
+                        PlanReplacementCrashPhaseEnvironment),
+                    phase);
+                environment.insert(
+                    QString::fromLatin1(
+                        PlanReplacementCrashOccurrenceEnvironment),
+                    QStringLiteral("1"));
+            }
+            child.setProcessEnvironment(environment);
+            child.start(
+                QCoreApplication::applicationFilePath(),
+                {QStringLiteral(
+                    "moveActivityCrashRecoveryIsGenerationAtomic")});
+            if (!child.waitForStarted(5000))
+                return qMakePair(-1, child.errorString());
+            if (!child.waitForFinished(20000)) {
+                child.kill();
+                child.waitForFinished();
+                return qMakePair(
+                    -2, QStringLiteral("child timed out"));
+            }
+            return qMakePair(
+                child.exitCode(),
+                QString::fromUtf8(child.readAll()));
+        };
+
+    const auto crashed = runChild(
+        QStringLiteral("crash"),
+        QStringLiteral("plan-replacement-target-published"));
+    QCOMPARE(crashed.first, PlannedCopyCrashExitCode);
+    const auto recovered = runChild(
+        QStringLiteral("recover"), QString());
+    QCOMPARE(recovered.first, 0);
+
+    const QDir activities(
+        QDir(temporary.path()).filePath(
+            QStringLiteral("activities")));
+    const QDir cache(
+        QDir(temporary.path()).filePath(
+            QStringLiteral("cache")));
+    QCOMPARE(
+        readBytes(activities.filePath(firstName())),
+        QByteArray("old activity"));
+    QVERIFY(!QFileInfo::exists(
+        activities.filePath(thirdName())));
+    const QString oldBase = QFileInfo(firstName()).baseName();
+    const QString newBase = QFileInfo(thirdName()).baseName();
+    for (const QString &extension :
+         {QStringLiteral("cpx"), QStringLiteral("cpi"),
+          QStringLiteral("notes")}) {
+        QCOMPARE(
+            readBytes(cache.filePath(
+                oldBase + QLatin1Char('.') + extension)),
+            extension.toLatin1() + QByteArray(" old"));
+        QVERIFY(!QFileInfo::exists(
+            cache.filePath(
+                newBase + QLatin1Char('.') + extension)));
+    }
+}
+
+void TestRideCacheRemoval::
+moveActivityPostCommitNotificationLossIsReportedCommitted()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    QDateTime sourceDateTime;
+    QDateTime targetDateTime;
+    QVERIFY(RideFile::parseRideFileName(
+        firstName(), &sourceDateTime));
+    QVERIFY(RideFile::parseRideFileName(
+        thirdName(), &targetDateTime));
+    RideItem *item = fixture.addRide(firstName(), true);
+    item->dateTime = sourceDateTime;
+    writeFixture(
+        fixture.activityPath(firstName()),
+        QByteArray("activity old"));
+    connect(
+        fixture.context.get(), &Context::rideChanged,
+        fixture.cache.get(),
+        [context = fixture.context.get(), item](RideItem *changed) {
+            if (changed != item) return;
+            context->ride = nullptr;
+            delete item;
+        });
+
+    const RideCache::OperationResult result =
+        fixture.cache->moveActivity(item, targetDateTime);
+
+    QVERIFY(result.committed);
+    QVERIFY(!result.success);
+    QVERIFY(!result.cacheUpdated);
+    QVERIFY(!result.error.isEmpty());
+    QCOMPARE(result.affectedCount, 1);
+    QVERIFY(!QFileInfo::exists(
+        fixture.activityPath(firstName())));
+    QVERIFY(QFileInfo::exists(
+        fixture.activityPath(thirdName())));
+    QVERIFY(!fixture.cache->remembersDeletedAddressForRemovalTest(item));
+}
+
+void TestRideCacheRemoval::
+moveLinkedActivityPersistsReciprocalGeneration()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    QDateTime sourceDateTime;
+    QDateTime peerDateTime;
+    QDateTime targetDateTime;
+    QVERIFY(RideFile::parseRideFileName(
+        firstName(), &sourceDateTime));
+    QVERIFY(RideFile::parseRideFileName(
+        secondName(), &peerDateTime));
+    QVERIFY(RideFile::parseRideFileName(
+        thirdName(), &targetDateTime));
+    RideItem *completed = fixture.addRide(firstName(), true);
+    RideItem *planned = fixture.addPlannedRide(secondName(), false);
+    completed->dateTime = sourceDateTime;
+    planned->dateTime = peerDateTime;
+    completed->setLinkedFileName(secondName());
+    planned->setLinkedFileName(firstName());
+    writeFixture(
+        fixture.activityPath(firstName()),
+        QByteArray("completed old"));
+    writeFixture(
+        fixture.plannedActivityPath(secondName()),
+        QByteArray("planned old"));
+
+    const RideCache::OperationResult result =
+        fixture.cache->moveActivity(completed, targetDateTime);
+
+    QVERIFY2(result.success, qPrintable(result.error));
+    QVERIFY(result.committed);
+    QVERIFY(result.cacheUpdated);
+    QCOMPARE(result.affectedCount, 2);
+    QCOMPARE(completed->fileName, thirdName());
+    QCOMPARE(completed->getLinkedFileName(), secondName());
+    QCOMPARE(planned->fileName, secondName());
+    QCOMPARE(planned->getLinkedFileName(), thirdName());
+    QVERIFY(!completed->isDirty());
+    QVERIFY(!planned->isDirty());
+    QVERIFY(!QFileInfo::exists(
+        fixture.activityPath(firstName())));
+    QCOMPARE(
+        readBytes(fixture.activityPath(thirdName())),
+        QByteArray("completed old\nidentity=")
+            + thirdName().toUtf8()
+            + QByteArray("\nlinked=")
+            + secondName().toUtf8() + '\n');
+    QCOMPARE(
+        readBytes(fixture.plannedActivityPath(secondName())),
+        QByteArray("planned old\nidentity=")
+            + secondName().toUtf8()
+            + QByteArray("\nlinked=")
+            + thirdName().toUtf8() + '\n');
+}
+
+void TestRideCacheRemoval::
+moveLinkedActivityStageFailureRollsBackGeneration()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    QDateTime sourceDateTime;
+    QDateTime peerDateTime;
+    QDateTime targetDateTime;
+    QVERIFY(RideFile::parseRideFileName(
+        firstName(), &sourceDateTime));
+    QVERIFY(RideFile::parseRideFileName(
+        secondName(), &peerDateTime));
+    QVERIFY(RideFile::parseRideFileName(
+        thirdName(), &targetDateTime));
+    RideItem *completed = fixture.addRide(firstName(), true);
+    RideItem *planned = fixture.addPlannedRide(secondName(), false);
+    completed->dateTime = sourceDateTime;
+    planned->dateTime = peerDateTime;
+    completed->setLinkedFileName(secondName());
+    planned->setLinkedFileName(firstName());
+    const QByteArray completedContents("completed old");
+    const QByteArray plannedContents("planned old");
+    writeFixture(
+        fixture.activityPath(firstName()), completedContents);
+    writeFixture(
+        fixture.plannedActivityPath(secondName()), plannedContents);
+    setRideCacheActivityIdentityFailureOnCall(2);
+
+    const RideCache::OperationResult result =
+        fixture.cache->moveActivity(completed, targetDateTime);
+
+    QVERIFY(!result.success);
+    QVERIFY(!result.committed);
+    QVERIFY(result.error.contains(
+        QStringLiteral("injected identity staging failure")));
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(completed->fileName, firstName());
+    QCOMPARE(completed->getLinkedFileName(), secondName());
+    QCOMPARE(planned->fileName, secondName());
+    QCOMPARE(planned->getLinkedFileName(), firstName());
+    QCOMPARE(
+        readBytes(fixture.activityPath(firstName())),
+        completedContents);
+    QVERIFY(!QFileInfo::exists(
+        fixture.activityPath(thirdName())));
+    QCOMPARE(
+        readBytes(fixture.plannedActivityPath(secondName())),
+        plannedContents);
+}
+
+void TestRideCacheRemoval::
+moveLinkedActivityCrashRecoveryIsGenerationAtomic_data()
+{
+    QTest::addColumn<QString>("phase");
+    QTest::addColumn<int>("occurrence");
+    QTest::addColumn<bool>("committed");
+
+    QTest::newRow("directory-created")
+        << QStringLiteral("plan-replacement-directory-created")
+        << 1 << false;
+    for (int occurrence = 1; occurrence <= 5; ++occurrence) {
+        const QByteArray name = QByteArray("old-copy-")
+            + QByteArray::number(occurrence);
+        QTest::newRow(name.constData())
+            << QStringLiteral("plan-replacement-old-copy-published")
+            << occurrence << false;
+    }
+    QTest::newRow("initial-manifest")
+        << QStringLiteral("plan-replacement-initial-manifest-published")
+        << 1 << false;
+    for (int occurrence = 1; occurrence <= 5; ++occurrence) {
+        const QByteArray name = QByteArray("stage-recorded-")
+            + QByteArray::number(occurrence);
+        QTest::newRow(name.constData())
+            << QStringLiteral("plan-replacement-stage-recorded")
+            << occurrence << false;
+    }
+    for (int occurrence = 1; occurrence <= 5; ++occurrence) {
+        const QByteArray name = QByteArray("target-published-")
+            + QByteArray::number(occurrence);
+        QTest::newRow(name.constData())
+            << QStringLiteral("plan-replacement-target-published")
+            << occurrence << false;
+    }
+    for (int occurrence = 1; occurrence <= 4; ++occurrence) {
+        const QByteArray name = QByteArray("old-removed-")
+            + QByteArray::number(occurrence);
+        QTest::newRow(name.constData())
+            << QStringLiteral("plan-replacement-old-removed")
+            << occurrence << false;
+    }
+    QTest::newRow("commit-marker")
+        << QStringLiteral("plan-replacement-commit-marker")
+        << 1 << true;
+    QTest::newRow("manifest-removed")
+        << QStringLiteral("plan-replacement-manifest-removed")
+        << 1 << true;
+    for (int occurrence = 1; occurrence <= 10; ++occurrence) {
+        const QByteArray name = QByteArray("cleanup-")
+            + QByteArray::number(occurrence);
+        QTest::newRow(name.constData())
+            << QStringLiteral("plan-replacement-cleanup-file")
+            << occurrence << true;
+    }
+    QTest::newRow("commit-marker-removed")
+        << QStringLiteral("plan-replacement-commit-marker-removed")
+        << 1 << true;
+    QTest::newRow("journal-directory-removed")
+        << QStringLiteral("plan-replacement-directory-removed")
+        << 1 << true;
+}
+
+void TestRideCacheRemoval::
+moveLinkedActivityCrashRecoveryIsGenerationAtomic()
+{
+    QFETCH(QString, phase);
+    QFETCH(int, occurrence);
+    QFETCH(bool, committed);
+
+    const QString root = qEnvironmentVariable(
+        ActivityMoveCrashRootEnvironment);
+    const QString mode = qEnvironmentVariable(
+        ActivityMoveCrashModeEnvironment);
+    if (!root.isEmpty()) {
+        std::unique_ptr<Context> context(new Context(nullptr));
+        std::unique_ptr<Athlete> athlete(
+            new Athlete(context.get(), QDir(root)));
+        std::unique_ptr<RideCache> cache(
+            new RideCache(context.get()));
+        athlete->rideCache = cache.get();
+        if (mode == QStringLiteral("recover")) {
+            if (!cache->startupRecoveryError().isEmpty())
+                std::_Exit(87);
+            return;
+        }
+
+        QDateTime sourceDateTime;
+        QDateTime peerDateTime;
+        QDateTime targetDateTime;
+        if (!RideFile::parseRideFileName(
+                firstName(), &sourceDateTime)
+            || !RideFile::parseRideFileName(
+                secondName(), &peerDateTime)
+            || !RideFile::parseRideFileName(
+                thirdName(), &targetDateTime)) {
+            std::_Exit(88);
+        }
+        RideItem *completed = new RideItem(nullptr, context.get());
+        completed->fileName = firstName();
+        completed->path =
+            athlete->home->activities().absolutePath();
+        completed->dateTime = sourceDateTime;
+        RideItem *planned = new RideItem(nullptr, context.get());
+        planned->fileName = secondName();
+        planned->path = athlete->home->planned().absolutePath();
+        planned->dateTime = peerDateTime;
+        planned->planned = true;
+        completed->setLinkedFileName(secondName());
+        planned->setLinkedFileName(firstName());
+        cache->mutableRidesForRemovalTest().append(completed);
+        cache->mutableRidesForRemovalTest().append(planned);
+        context->ride = completed;
+        writeFixture(
+            athlete->home->activities().filePath(firstName()),
+            QByteArray("completed old"));
+        writeFixture(
+            athlete->home->planned().filePath(secondName()),
+            QByteArray("planned old"));
+        const QString oldBase = QFileInfo(firstName()).baseName();
+        for (const QString &extension :
+             {QStringLiteral("cpx"), QStringLiteral("cpi"),
+              QStringLiteral("notes")}) {
+            writeFixture(
+                athlete->home->cache().filePath(
+                    oldBase + QLatin1Char('.') + extension),
+                extension.toLatin1() + QByteArray(" old"));
+        }
+
+        const RideCache::OperationResult childResult =
+            cache->moveActivity(completed, targetDateTime);
+        QFAIL(qPrintable(QStringLiteral(
+            "linked move child did not stop at the requested transition: %1")
+                             .arg(childResult.error)));
+    }
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const auto runChild =
+        [&](const QString &childMode,
+            const QString &phase) {
+            QProcess child;
+            QProcessEnvironment environment =
+                QProcessEnvironment::systemEnvironment();
+            environment.remove(QString::fromLatin1(
+                PlanReplacementCrashPhaseEnvironment));
+            environment.remove(QString::fromLatin1(
+                PlanReplacementCrashOccurrenceEnvironment));
+            environment.insert(
+                QString::fromLatin1(
+                    ActivityMoveCrashRootEnvironment),
+                temporary.path());
+            environment.insert(
+                QString::fromLatin1(
+                    ActivityMoveCrashModeEnvironment),
+                childMode);
+            environment.insert(
+                QStringLiteral("QT_QPA_PLATFORM"),
+                QStringLiteral("offscreen"));
+            if (!phase.isEmpty()) {
+                environment.insert(
+                    QString::fromLatin1(
+                        PlanReplacementCrashPhaseEnvironment),
+                    phase);
+                environment.insert(
+                    QString::fromLatin1(
+                        PlanReplacementCrashOccurrenceEnvironment),
+                    QString::number(occurrence));
+            }
+            child.setProcessEnvironment(environment);
+            child.start(
+                QCoreApplication::applicationFilePath(),
+                {QStringLiteral(
+                    "moveLinkedActivityCrashRecoveryIsGenerationAtomic:%1")
+                     .arg(QString::fromLatin1(
+                         QTest::currentDataTag()))});
+            if (!child.waitForStarted(5000))
+                return qMakePair(-1, child.errorString());
+            if (!child.waitForFinished(20000)) {
+                child.kill();
+                child.waitForFinished();
+                return qMakePair(
+                    -2, QStringLiteral("child timed out"));
+            }
+            return qMakePair(
+                child.exitCode(),
+                QString::fromUtf8(child.readAll()));
+        };
+
+    const auto crashed = runChild(
+        QStringLiteral("crash"), phase);
+    QCOMPARE(crashed.first, PlannedCopyCrashExitCode);
+    const auto recovered = runChild(
+        QStringLiteral("recover"), QString());
+    QCOMPARE(recovered.first, 0);
+
+    const QDir activities(
+        QDir(temporary.path()).filePath(
+            QStringLiteral("activities")));
+    const QDir planned(
+        QDir(temporary.path()).filePath(
+            QStringLiteral("planned")));
+    const QDir cache(
+        QDir(temporary.path()).filePath(
+            QStringLiteral("cache")));
+    const QString oldBase = QFileInfo(firstName()).baseName();
+    const QString newBase = QFileInfo(thirdName()).baseName();
+    const QStringList extensions = {
+        QStringLiteral("cpx"), QStringLiteral("cpi"),
+        QStringLiteral("notes")};
+    if (committed) {
+        QVERIFY(!QFileInfo::exists(
+            activities.filePath(firstName())));
+        QCOMPARE(
+            readBytes(activities.filePath(thirdName())),
+            QByteArray("completed old\nidentity=")
+                + thirdName().toUtf8()
+                + QByteArray("\nlinked=")
+                + secondName().toUtf8() + '\n');
+        QCOMPARE(
+            readBytes(planned.filePath(secondName())),
+            QByteArray("planned old\nidentity=")
+                + secondName().toUtf8()
+                + QByteArray("\nlinked=")
+                + thirdName().toUtf8() + '\n');
+        for (const QString &extension : extensions) {
+            QVERIFY(!QFileInfo::exists(
+                cache.filePath(
+                    oldBase + QLatin1Char('.') + extension)));
+            QCOMPARE(
+                readBytes(cache.filePath(
+                    newBase + QLatin1Char('.') + extension)),
+                extension.toLatin1() + QByteArray(" old"));
+        }
+    } else {
+        QCOMPARE(
+            readBytes(activities.filePath(firstName())),
+            QByteArray("completed old"));
+        QVERIFY(!QFileInfo::exists(
+            activities.filePath(thirdName())));
+        QCOMPARE(
+            readBytes(planned.filePath(secondName())),
+            QByteArray("planned old"));
+        for (const QString &extension : extensions) {
+            QCOMPARE(
+                readBytes(cache.filePath(
+                    oldBase + QLatin1Char('.') + extension)),
+                extension.toLatin1() + QByteArray(" old"));
+            QVERIFY(!QFileInfo::exists(
+                cache.filePath(
+                    newBase + QLatin1Char('.') + extension)));
+        }
+    }
+
+    const auto recoveredAgain = runChild(
+        QStringLiteral("recover"), QString());
+    QCOMPARE(recoveredAgain.first, 0);
 }
 
 void TestRideCacheRemoval::
@@ -6541,10 +7132,13 @@ copyPlannedActivitiesCrashRecoveryIsGenerationAtomic()
             athlete->home->planned().filePath(secondName()),
             QByteArray("second"));
 
-        cache->copyPlannedActivities({
+        const RideCache::OperationResult childResult =
+            cache->copyPlannedActivities({
             {first, firstDateTime.date().addDays(1)},
             {second, secondDateTime.date().addDays(2)}});
-        QFAIL("planned copy child did not stop at the requested transition");
+        QFAIL(qPrintable(QStringLiteral(
+            "planned copy child did not stop at the requested transition: %1")
+                             .arg(childResult.error)));
     }
 
     QTemporaryDir temporary;
@@ -6677,6 +7271,375 @@ shiftPlannedActivitiesReservesModelBeforeStorageCommit()
         fixture.plannedActivityPath(firstName())));
     QVERIFY(QFileInfo::exists(
         fixture.plannedActivityPath(targetName)));
+}
+
+void TestRideCacheRemoval::
+shiftPlannedActivitiesCommitOverlappingGeneration()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    QDateTime firstDateTime;
+    QDateTime secondDateTime;
+    QVERIFY(RideFile::parseRideFileName(
+        firstName(), &firstDateTime));
+    QVERIFY(RideFile::parseRideFileName(
+        nextDayName(), &secondDateTime));
+    RideFile *firstRide = new RideFile(firstDateTime, 1.0);
+    RideFile *secondRide = new RideFile(secondDateTime, 1.0);
+    RideItem *first = fixture.addPlannedRide(
+        firstName(), false, firstRide);
+    RideItem *second = fixture.addPlannedRide(
+        nextDayName(), false, secondRide);
+    first->dateTime = firstDateTime;
+    second->dateTime = secondDateTime;
+    writeFixture(
+        fixture.plannedActivityPath(firstName()),
+        QByteArray("first old"));
+    writeFixture(
+        fixture.plannedActivityPath(nextDayName()),
+        QByteArray("second old"));
+
+    const RideCache::OperationResult result =
+        fixture.cache->shiftPlannedActivities(
+            firstDateTime.date(), 1);
+    delete firstRide;
+    delete secondRide;
+
+    QVERIFY2(result.success, qPrintable(result.error));
+    QVERIFY(result.committed);
+    QVERIFY(result.cacheUpdated);
+    QCOMPARE(result.affectedCount, 2);
+    QVERIFY(!QFileInfo::exists(
+        fixture.plannedActivityPath(firstName())));
+    QCOMPARE(
+        readBytes(fixture.plannedActivityPath(nextDayName())),
+        QByteArray("first old\nidentity=")
+            + nextDayName().toUtf8()
+            + QByteArray("\nlinked=\n"));
+    QCOMPARE(
+        readBytes(fixture.plannedActivityPath(twoDaysLaterName())),
+        QByteArray("second old\nidentity=")
+            + twoDaysLaterName().toUtf8()
+            + QByteArray("\nlinked=\n"));
+    QCOMPARE(first->fileName, nextDayName());
+    QCOMPARE(second->fileName, twoDaysLaterName());
+}
+
+void TestRideCacheRemoval::
+shiftPlannedActivitiesStageFailureRollsBackGeneration()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    QDateTime firstDateTime;
+    QDateTime secondDateTime;
+    QVERIFY(RideFile::parseRideFileName(
+        firstName(), &firstDateTime));
+    QVERIFY(RideFile::parseRideFileName(
+        nextDayName(), &secondDateTime));
+    RideFile *firstRide = new RideFile(firstDateTime, 1.0);
+    RideFile *secondRide = new RideFile(secondDateTime, 1.0);
+    RideItem *first = fixture.addPlannedRide(
+        firstName(), false, firstRide);
+    RideItem *second = fixture.addPlannedRide(
+        nextDayName(), false, secondRide);
+    first->dateTime = firstDateTime;
+    second->dateTime = secondDateTime;
+    const QByteArray firstContents("first old");
+    const QByteArray secondContents("second old");
+    writeFixture(
+        fixture.plannedActivityPath(firstName()),
+        firstContents);
+    writeFixture(
+        fixture.plannedActivityPath(nextDayName()),
+        secondContents);
+    setRideCacheActivityIdentityFailureOnCall(2);
+
+    const RideCache::OperationResult result =
+        fixture.cache->shiftPlannedActivities(
+            firstDateTime.date(), 1);
+    delete firstRide;
+    delete secondRide;
+
+    QVERIFY(!result.success);
+    QVERIFY(!result.committed);
+    QVERIFY(result.error.contains(
+        QStringLiteral("injected identity staging failure")));
+    QCOMPARE(result.affectedCount, 0);
+    QCOMPARE(first->fileName, firstName());
+    QCOMPARE(second->fileName, nextDayName());
+    QCOMPARE(
+        readBytes(fixture.plannedActivityPath(firstName())),
+        firstContents);
+    QCOMPARE(
+        readBytes(fixture.plannedActivityPath(nextDayName())),
+        secondContents);
+    QVERIFY(!QFileInfo::exists(
+        fixture.plannedActivityPath(twoDaysLaterName())));
+}
+
+void TestRideCacheRemoval::
+shiftLinkedPlannedActivityPersistsReciprocalGeneration()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    QDateTime plannedDateTime;
+    QDateTime completedDateTime;
+    QVERIFY(RideFile::parseRideFileName(
+        firstName(), &plannedDateTime));
+    QVERIFY(RideFile::parseRideFileName(
+        secondName(), &completedDateTime));
+    RideFile *plannedRide = new RideFile(plannedDateTime, 1.0);
+    RideItem *planned = fixture.addPlannedRide(
+        firstName(), true, plannedRide);
+    RideItem *completed = fixture.addRide(secondName(), false);
+    planned->dateTime = plannedDateTime;
+    completed->dateTime = completedDateTime;
+    planned->setLinkedFileName(secondName());
+    completed->setLinkedFileName(firstName());
+    writeFixture(
+        fixture.plannedActivityPath(firstName()),
+        QByteArray("planned old"));
+    writeFixture(
+        fixture.activityPath(secondName()),
+        QByteArray("completed old"));
+
+    const RideCache::OperationResult result =
+        fixture.cache->shiftPlannedActivities(
+            plannedDateTime.date(), 1);
+    delete plannedRide;
+
+    QVERIFY2(result.success, qPrintable(result.error));
+    QVERIFY(result.committed);
+    QVERIFY(result.cacheUpdated);
+    QCOMPARE(result.affectedCount, 2);
+    QCOMPARE(planned->fileName, nextDayName());
+    QCOMPARE(planned->getLinkedFileName(), secondName());
+    QCOMPARE(completed->fileName, secondName());
+    QCOMPARE(completed->getLinkedFileName(), nextDayName());
+    QVERIFY(!planned->isDirty());
+    QVERIFY(!completed->isDirty());
+    QVERIFY(!QFileInfo::exists(
+        fixture.plannedActivityPath(firstName())));
+    QCOMPARE(
+        readBytes(fixture.plannedActivityPath(nextDayName())),
+        QByteArray("planned old\nidentity=")
+            + nextDayName().toUtf8()
+            + QByteArray("\nlinked=")
+            + secondName().toUtf8() + '\n');
+    QCOMPARE(
+        readBytes(fixture.activityPath(secondName())),
+        QByteArray("completed old\nidentity=")
+            + secondName().toUtf8()
+            + QByteArray("\nlinked=")
+            + nextDayName().toUtf8() + '\n');
+}
+
+void TestRideCacheRemoval::
+shiftPlannedActivitiesCrashRecoveryIsGenerationAtomic_data()
+{
+    QTest::addColumn<QString>("phase");
+    QTest::addColumn<int>("occurrence");
+    QTest::addColumn<bool>("committed");
+
+    QTest::newRow("directory-created")
+        << QStringLiteral("plan-replacement-directory-created")
+        << 1 << false;
+    QTest::newRow("first-old-copy")
+        << QStringLiteral("plan-replacement-old-copy-published")
+        << 1 << false;
+    QTest::newRow("second-old-copy")
+        << QStringLiteral("plan-replacement-old-copy-published")
+        << 2 << false;
+    QTest::newRow("initial-manifest")
+        << QStringLiteral("plan-replacement-initial-manifest-published")
+        << 1 << false;
+    QTest::newRow("first-stage-recorded")
+        << QStringLiteral("plan-replacement-stage-recorded")
+        << 1 << false;
+    QTest::newRow("second-stage-recorded")
+        << QStringLiteral("plan-replacement-stage-recorded")
+        << 2 << false;
+    QTest::newRow("first-target-published")
+        << QStringLiteral("plan-replacement-target-published")
+        << 1 << false;
+    QTest::newRow("second-target-published")
+        << QStringLiteral("plan-replacement-target-published")
+        << 2 << false;
+    QTest::newRow("old-only-removed")
+        << QStringLiteral("plan-replacement-old-removed")
+        << 1 << false;
+    QTest::newRow("commit-marker")
+        << QStringLiteral("plan-replacement-commit-marker")
+        << 1 << true;
+    QTest::newRow("manifest-removed")
+        << QStringLiteral("plan-replacement-manifest-removed")
+        << 1 << true;
+    for (int occurrence = 1; occurrence <= 4; ++occurrence) {
+        const QByteArray name = QByteArray("cleanup-")
+            + QByteArray::number(occurrence);
+        QTest::newRow(name.constData())
+            << QStringLiteral("plan-replacement-cleanup-file")
+            << occurrence << true;
+    }
+    QTest::newRow("commit-marker-removed")
+        << QStringLiteral("plan-replacement-commit-marker-removed")
+        << 1 << true;
+    QTest::newRow("journal-directory-removed")
+        << QStringLiteral("plan-replacement-directory-removed")
+        << 1 << true;
+}
+
+void TestRideCacheRemoval::
+shiftPlannedActivitiesCrashRecoveryIsGenerationAtomic()
+{
+    QFETCH(QString, phase);
+    QFETCH(int, occurrence);
+    QFETCH(bool, committed);
+
+    const QString root = qEnvironmentVariable(
+        ActivityShiftCrashRootEnvironment);
+    const QString mode = qEnvironmentVariable(
+        ActivityShiftCrashModeEnvironment);
+    if (!root.isEmpty()) {
+        std::unique_ptr<Context> context(new Context(nullptr));
+        std::unique_ptr<Athlete> athlete(
+            new Athlete(context.get(), QDir(root)));
+        std::unique_ptr<RideCache> cache(
+            new RideCache(context.get()));
+        athlete->rideCache = cache.get();
+        if (mode == QStringLiteral("recover")) {
+            if (!cache->startupRecoveryError().isEmpty())
+                std::_Exit(87);
+            return;
+        }
+
+        QDateTime firstDateTime;
+        QDateTime secondDateTime;
+        if (!RideFile::parseRideFileName(
+                firstName(), &firstDateTime)
+            || !RideFile::parseRideFileName(
+                nextDayName(), &secondDateTime)) {
+            std::_Exit(88);
+        }
+        RideItem *first = new RideItem(nullptr, context.get());
+        first->fileName = firstName();
+        first->path = athlete->home->planned().absolutePath();
+        first->dateTime = firstDateTime;
+        first->planned = true;
+        RideItem *second = new RideItem(nullptr, context.get());
+        second->fileName = nextDayName();
+        second->path = athlete->home->planned().absolutePath();
+        second->dateTime = secondDateTime;
+        second->planned = true;
+        cache->mutableRidesForRemovalTest().append(first);
+        cache->mutableRidesForRemovalTest().append(second);
+        writeFixture(
+            athlete->home->planned().filePath(firstName()),
+            QByteArray("first old"));
+        writeFixture(
+            athlete->home->planned().filePath(nextDayName()),
+            QByteArray("second old"));
+
+        const RideCache::OperationResult childResult =
+            cache->shiftPlannedActivities(firstDateTime.date(), 1);
+        QFAIL(qPrintable(QStringLiteral(
+            "planned shift child did not stop at the requested transition: %1")
+                             .arg(childResult.error)));
+    }
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const auto runChild =
+        [&](const QString &childMode,
+            const QString &requestedPhase) {
+            QProcess child;
+            QProcessEnvironment environment =
+                QProcessEnvironment::systemEnvironment();
+            environment.remove(QString::fromLatin1(
+                PlanReplacementCrashPhaseEnvironment));
+            environment.remove(QString::fromLatin1(
+                PlanReplacementCrashOccurrenceEnvironment));
+            environment.insert(
+                QString::fromLatin1(
+                    ActivityShiftCrashRootEnvironment),
+                temporary.path());
+            environment.insert(
+                QString::fromLatin1(
+                    ActivityShiftCrashModeEnvironment),
+                childMode);
+            environment.insert(
+                QStringLiteral("QT_QPA_PLATFORM"),
+                QStringLiteral("offscreen"));
+            if (!requestedPhase.isEmpty()) {
+                environment.insert(
+                    QString::fromLatin1(
+                        PlanReplacementCrashPhaseEnvironment),
+                    requestedPhase);
+                environment.insert(
+                    QString::fromLatin1(
+                        PlanReplacementCrashOccurrenceEnvironment),
+                    QString::number(occurrence));
+            }
+            child.setProcessEnvironment(environment);
+            child.start(
+                QCoreApplication::applicationFilePath(),
+                {QStringLiteral(
+                    "shiftPlannedActivitiesCrashRecoveryIsGenerationAtomic:%1")
+                     .arg(QString::fromLatin1(
+                         QTest::currentDataTag()))});
+            if (!child.waitForStarted(5000))
+                return qMakePair(-1, child.errorString());
+            if (!child.waitForFinished(20000)) {
+                child.kill();
+                child.waitForFinished();
+                return qMakePair(
+                    -2, QStringLiteral("child timed out"));
+            }
+            return qMakePair(
+                child.exitCode(),
+                QString::fromUtf8(child.readAll()));
+        };
+
+    const auto crashed = runChild(
+        QStringLiteral("crash"), phase);
+    QCOMPARE(crashed.first, PlannedCopyCrashExitCode);
+    const auto recovered = runChild(
+        QStringLiteral("recover"), QString());
+    QCOMPARE(recovered.first, 0);
+
+    const QDir planned(
+        QDir(temporary.path()).filePath(
+            QStringLiteral("planned")));
+    if (committed) {
+        QVERIFY(!QFileInfo::exists(
+            planned.filePath(firstName())));
+        QCOMPARE(
+            readBytes(planned.filePath(nextDayName())),
+            QByteArray("first old\nidentity=")
+                + nextDayName().toUtf8()
+                + QByteArray("\nlinked=\n"));
+        QCOMPARE(
+            readBytes(planned.filePath(twoDaysLaterName())),
+            QByteArray("second old\nidentity=")
+                + twoDaysLaterName().toUtf8()
+                + QByteArray("\nlinked=\n"));
+    } else {
+        QCOMPARE(
+            readBytes(planned.filePath(firstName())),
+            QByteArray("first old"));
+        QCOMPARE(
+            readBytes(planned.filePath(nextDayName())),
+            QByteArray("second old"));
+        QVERIFY(!QFileInfo::exists(
+            planned.filePath(twoDaysLaterName())));
+    }
+
+    const auto recoveredAgain = runChild(
+        QStringLiteral("recover"), QString());
+    QCOMPARE(recoveredAgain.first, 0);
 }
 
 void TestRideCacheRemoval::

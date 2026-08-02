@@ -241,8 +241,12 @@ class RideCache : public QObject
 
         struct OperationResult {
             bool success = false;
+            bool committed = false;
+            bool cacheUpdated = false;
+            bool cleanupComplete = false;
             QString error;
             int affectedCount = 0;
+            QStringList warnings;
         };
 
         struct PlannedActivityTarget {
@@ -537,6 +541,22 @@ class RideCache : public QObject
         PlannedReplacementResult replacePlannedActivityCopies(
             const QList<RideItem*> &activitiesToReplace,
             const QList<PlannedActivityCopyRequest> &copies);
+        struct ActivityIdentityMutationRequest {
+            RideItem *item = nullptr;
+            QDateTime targetDateTime;
+        };
+        OperationResult changeActivityIdentitiesAtomically(
+            const QList<ActivityIdentityMutationRequest> &requests);
+        bool stageActivityIdentityChange(
+            const QString &sourcePath,
+            const QString &sourceFileName,
+            const QString &targetFileName,
+            const QDateTime &targetDateTime,
+            const QString &originalDate,
+            const QString &linkedFileName,
+            bool planned,
+            const QString &stagingPath,
+            QString &error);
         bool stagePlannedActivityCopy(
             const QString &sourcePath,
             const QString &sourceFileName,

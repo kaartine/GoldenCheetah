@@ -2928,20 +2928,22 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DATA-022: Model publication can fail after activity files were changed
 
-- Status: OPEN
-- Code: `src/Core/RideCache.cpp`, `src/Core/RideCacheCalendarMutations.cpp`,
-  `src/Core/RideCacheMutationScope.cpp`, `src/Core/RideCacheModel.cpp`,
-  `src/Core/RideCacheModelProtocol.cpp`, `src/Core/RideCacheRemoval.cpp`, and
+- Status: FIXED
+- Code: `src/Charts/CalendarWindow.cpp`, `src/Core/RideCache.cpp`,
+  `src/Core/RideCacheCalendarMutations.cpp`, `src/Core/RideCacheMutationScope.cpp`,
+  `src/Core/RideCacheModel.cpp`, `src/Core/RideCacheModelProtocol.cpp`,
+  `src/Core/RideCacheRemoval.cpp`, and
   `src/Planning/PlanReplacementJournal.cpp`
-- Impact: `moveActivity()` and planned shift still perform multiple durable file
-  transitions without a restart-recoverable generation. A process exit can
-  leave renamed activity, derived, and reciprocal-link files split between old
-  and new identities. A runtime owner loss after durable commit can also be
-  flattened into an ordinary `OperationResult` failure, encouraging an unsafe
-  retry even though storage changed.
-- Evidence: `moveActivity()` and planned shift rename and rewrite each activity
-  before their final cache publication. Planned shift repeats that sequence per
-  item. Their runtime rollback is neither journaled nor restart-idempotent.
+- Impact: The old move and planned-shift paths performed multiple durable file
+  transitions without a restart-recoverable generation. A process exit could
+  split an activity, its derived files, and its reciprocal link between old and
+  new identities. A runtime owner loss after durable commit was also flattened
+  into an ordinary failure, encouraging an unsafe retry after storage changed.
+- Evidence: The previous `moveActivity()` renamed files and then rewrote the
+  activity before publishing its cache identity. Planned shift repeated that
+  sequence for each item. Neither runtime rollback was journaled or
+  restart-idempotent, and the calendar saved affected rows again after a
+  successful operation.
 - Test-first evidence: Four RED regressions opened an incompatible insert frame
   from a storage callback after move, single copy, batch copy, and shift had
   written their target files. Every insert was accepted, the later reset was
@@ -2950,14 +2952,14 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   published when staging the second copy failed. A stale-source regression also
   produced a UBSan invalid member access in the new wrapper before its cache
   membership check; both now fail closed without changing storage.
-- Partial resolution: `RideCacheMutationScope` now acquires a tokenized model
+- Model reservation: `RideCacheMutationScope` acquires a tokenized model
   reservation after quiescing workers and before storage work begins. Public
   insert, remove, and reset attempts cannot consume the reserved publication
   boundary; only the scope can begin its balanced reset. Configuration resets
   are deferred until release, and the reservation is released on every scope
   exit. All four calendar mutations therefore publish or reject before touching
   storage instead of encountering a busy model afterward.
-- Planned-copy resolution: Single and batch planned copies now stage every
+- Planned-copy resolution: Single and batch planned copies stage every
   transformed target through `PlanReplacement::Journal` and publish one fsynced
   generation while the model reservation is held. A staging failure rolls the
   entire batch back. Startup reconciliation selects the complete old or new
@@ -2966,18 +2968,25 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   now uses the same reserved mutation scope, explicit target times remain
   supported, stale sources are rejected before dereference, and the obsolete
   direct `QFile::copy` implementation was removed.
-- Verification: Thirteen focused lifecycle cases pass strict
-  ASan/UBSan/LSan. The complete 258-case RideCache program passes ASan/UBSan and
-  ThreadSanitizer, including ten planned-copy process-exit/restart transitions.
-  All 22 staging and 112 journal cases pass ASan/UBSan/LSan. The production
-  application links and survives an isolated ten-second offscreen event-loop
-  smoke test.
-- Remaining: Journal `moveActivity()` and planned shift as complete generations
-  containing activity files, derived files, and reciprocal link updates, then
-  terminate and restart after every transition. Extend the calendar operation
-  result contract so a durable commit followed by cache-owner loss returns a
-  committed warning and schedules idempotent cache repair rather than reporting
-  an ordinary retryable failure.
+- Move and shift resolution: `moveActivity()` and the complete planned-shift
+  batch now use one `PlanReplacement::Journal` generation. It stages the
+  rewritten activity, every existing CPX/CPI/notes sidecar, and an in-place
+  rewrite of a validated reciprocal linked peer. Overlapping shift source and
+  target paths are supported. Cache identities are changed only after the
+  durable commit marker exists, and the queued mutation refresh repairs a
+  post-commit cache-owner loss from the committed files.
+- Result contract: Calendar operations report `committed`, `cacheUpdated`,
+  `cleanupComplete`, and warnings separately. A committed but degraded result
+  tells the user not to repeat the operation and refreshes the activity view.
+  The calendar no longer performs a second non-atomic save after move, shift,
+  or copy.
+- Verification: Twelve focused identity/result cases pass strict
+  ASan/UBSan/LSan. The complete 317-case RideCache program passes ASan/UBSan and
+  ThreadSanitizer, including process-exit/restart matrices for unlinked move,
+  linked move, batch copy, and overlapping shift at every journal transition
+  with repeated recovery. All 22 staging and 112 journal cases pass strict
+  ASan/UBSan/LSan. The production application links and survives an isolated
+  15-second offscreen event-loop smoke test with a disposable home directory.
 
 ### DUR-013: Activity deletion recovery files are not reconciled on restart
 
