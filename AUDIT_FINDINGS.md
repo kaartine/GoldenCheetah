@@ -2929,9 +2929,9 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 ### DATA-022: Model publication can fail after activity files were changed
 
 - Status: OPEN
-- Code: `src/Core/RideCache.cpp` in `moveActivity()`,
-  `copyPlannedActivity()`, `copyPlannedActivities()`, and
-  `shiftPlannedActivities()`
+- Code: `src/Core/RideCacheCalendarMutations.cpp`,
+  `src/Core/RideCacheMutationScope.cpp`, `src/Core/RideCacheModel.cpp`, and
+  `src/Core/RideCacheModelProtocol.cpp`
 - Impact: These paths perform file rename, write, or copy work before acquiring
   the model change protocol. If `startRemove()` or `beginReset()` then rejects a
   reentrant incompatible model operation, the function returns failure with a
@@ -2941,15 +2941,30 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   planned copy creates each target before `beginReset()`; planned shift commits
   every successful rename and metadata update before its final reset. Their new
   rejection branches return without a storage rollback or cache repair.
-- Test: Hold an incompatible model frame at each publication boundary after the
-  filesystem operation succeeds. Verify the source bytes, target namespace,
-  cache identities, ordering, links, selection, and result all describe one
-  complete old or new state after both same-process failure and restart.
-- Fix direction: Acquire a mutation lease before staging, publish files through
-  the existing atomic/journal primitives, and make model replacement the
-  guarded commit step. If publication cannot proceed, roll back the staged
-  generation; after a durable commit, return a committed-with-warning result and
-  run an idempotent cache repair instead of reporting an ordinary failure.
+- Test-first evidence: Four RED regressions opened an incompatible insert frame
+  from a storage callback after move, single copy, batch copy, and shift had
+  written their target files. Every insert was accepted, the later reset was
+  rejected, and each operation returned with durable state that its cache model
+  had not published.
+- Partial resolution: `RideCacheMutationScope` now acquires a tokenized model
+  reservation after quiescing workers and before storage work begins. Public
+  insert, remove, and reset attempts cannot consume the reserved publication
+  boundary; only the scope can begin its balanced reset. Configuration resets
+  are deferred until release, and the reservation is released on every scope
+  exit. All four calendar mutations therefore publish or reject before touching
+  storage instead of encountering a busy model afterward.
+- Verification: The four publication-boundary regressions and the reservation
+  release/configuration lifecycle pass strict ASan/UBSan/LSan. The complete
+  245-case RideCache program passes ASan/UBSan and ThreadSanitizer. The
+  production application links and survives an isolated ten-second offscreen
+  event-loop smoke test.
+- Remaining: A process exit can still interrupt a multi-file move or shift
+  between durable file transitions. Add a journaled old/new generation for
+  activity files, derived files, and reciprocal link updates, then terminate and
+  restart after every transition. Publication must recover one complete old or
+  new generation; a durable commit followed by cache-owner loss must return a
+  committed warning and run idempotent cache repair rather than report an
+  ordinary failure.
 
 ### DUR-013: Activity deletion recovery files are not reconciled on restart
 
