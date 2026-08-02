@@ -9,6 +9,7 @@
 #include "RideCache.h"
 #include "RideCacheModel.h"
 #include "RideItem.h"
+#include "NavigationModel.h"
 
 #include <QAbstractItemModelTester>
 #include <QCoreApplication>
@@ -30,6 +31,7 @@
 void resetRideCacheRemovalRefreshCounts();
 int rideCacheRemovalRefreshCount();
 int rideCacheRemovalEstimatorRefreshCount();
+int rideCacheRemovalEstimatorStopCount();
 void setRideCacheRemovalCleanupFailurePath(const QString &path);
 void setRideCacheRemovalMoveFailurePath(const QString &path);
 void setRideCacheRemovalMoveFailureTargetPath(
@@ -321,6 +323,7 @@ private slots:
     void incomingLinkedReferenceRejectsRemoval();
     void sameNamespaceIncomingLinkRejectsRemoval();
     void removalLinkPreflightAllowsUnlinkedActivity();
+    void linkValidationRejectsNullAndDestroyedItems();
     void dataProcessorReceivesLoadedRideBeforeArchive();
     void linkedRideClosedDuringMetadataChangeIsNotReused();
     void sourceSymlinkIsRejected();
@@ -372,12 +375,21 @@ private slots:
     void linkedDeletionCrashAfterPeerSaveRecoversOnRestart();
     void processorFailureIsReportedWithoutRemoval();
     void processorReorderingDoesNotRemoveWrongRow();
+    void preexistingDestroyedSiblingDoesNotBreakRemoval();
+    void processorDestroyedSelectionNeighborIsPurged();
     void sidecarOwnerIntroducedBeforeCommitRejectsRemoval();
     void modelRemovalSignalSiblingRemovalDoesNotUseInvalidIndex();
     void modelRemovalSignalKeepsSelectionValid_data();
     void modelRemovalSignalKeepsSelectionValid();
     void modelRemovalSignalDestructionDoesNotExposeDanglingItem_data();
     void modelRemovalSignalDestructionDoesNotExposeDanglingItem();
+    void modelRemovalSignalReaderSkipsDestroyedItem();
+    void modelRemovalPublishesOnlyLiveSnapshot();
+    void ordinaryRemovalStopsEstimatorBeforeRowsAbout();
+    void refreshRequestedDuringRemovalIsDeferred();
+    void rowsRemovedGarbageCollectSkipsDestroyedAddress();
+    void modelRemovalPurgesDestroyedSibling_data();
+    void modelRemovalPurgesDestroyedSibling();
     void modelSignalOwnerDestructionDoesNotContinue_data();
     void modelSignalOwnerDestructionDoesNotContinue();
     void batchModelSignalOwnerDestructionDoesNotContinue_data();
@@ -395,13 +407,24 @@ private slots:
     void batchSurvivesReentrantPendingDeletion();
     void stalePointerOverloadsRejectWithoutDereference_data();
     void stalePointerOverloadsRejectWithoutDereference();
+    void temporaryRideItemDestructionDoesNotCreateCacheTombstone();
+    void tombstonedCacheEntryIsNotDereferencedOrRemoved();
+    void removalPrecheckRejectsDestroyedCacheAddress();
+    void navigationRideEventDoesNotRetainDestroyedItem();
     void currentRemovalUsesSelectedNamespace();
     void ambiguousFilenameRemovalFailsClosed();
     void explicitNamespaceRemovalUsesIdentity();
     void explicitBatchRemovalUsesItemIdentity();
     void plannedRenameMovesOnlyPlannedCpx();
+    void plannedReplacementPurgesPreexistingDestroyedRow();
     void plannedReplacementStageFailurePreservesOldGeneration();
+    void plannedReplacementStageFailureResumesBackgroundWork();
     void plannedReplacementCommitsOneCompleteGeneration();
+    void plannedReplacementQuiescesWorkersAndDefersRefresh();
+    void plannedReplacementBlocksRefreshRestartDuringCallbacks();
+    void plannedReplacementRefreshDoesNotLeakIntoNextRemoval();
+    void plannedReplacementDropsStaleResumeDuringNewReplacement();
+    void plannedReplacementCoalescesSupersededResumes();
     void plannedReplacementProcessorFailureIsReportedAfterPublication();
     void plannedReplacementProcessorRunsAfterPublication();
     void plannedReplacementProcessorUsesIsolatedRide();
@@ -432,10 +455,15 @@ private slots:
     void plannedReplacementModelSignalDeletesUnrelatedItemSafely_data();
     void plannedReplacementModelSignalDeletesUnrelatedItemSafely();
     void plannedReplacementModelResetDeletesIncomingItemSafely();
+    void plannedReplacementDefersNestedConfigReset_data();
+    void plannedReplacementDefersNestedConfigReset();
+    void modelResetRemainsBalancedAcrossReentrantInsert();
+    void modelInsertRejectsReentrantReset();
     void plannedReplacementNotificationDeletionIsContained_data();
     void plannedReplacementNotificationDeletionIsContained();
     void plannedReplacementDeletionNotificationCanDestroyOldItem();
     void plannedReplacementDeletionNotificationCanDeferOldItemDeletion();
+    void plannedReplacementMarksDestroyedAddressDuringCallback();
     void plannedReplacementAdditionNotificationCanDeferIncomingDeletion();
     void plannedReplacementNotificationOwnerLossIsReported();
     void plannedReplacementModelSignalOwnerDestructionDoesNotContinue_data();
@@ -1721,6 +1749,42 @@ removalLinkPreflightAllowsUnlinkedActivity()
         check.affectedItems,
         QList<RideItem*>({item}));
     QVERIFY(check.dirtyItems.isEmpty());
+}
+
+void TestRideCacheRemoval::
+linkValidationRejectsNullAndDestroyedItems()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    const RideCache::OperationPreCheck nullCheck =
+        fixture.cache->checkLinkActivities(nullptr, nullptr);
+    QVERIFY(!nullCheck.canProceed);
+    QCOMPARE(
+        nullCheck.blockingReason,
+        QStringLiteral("Invalid activities for linking"));
+
+    const RideCache::OperationResult nullResult =
+        fixture.cache->linkActivities(nullptr, nullptr);
+    QVERIFY(!nullResult.success);
+    QCOMPARE(
+        nullResult.error,
+        QStringLiteral("Invalid activities for linking"));
+
+    RideItem *destroyed = fixture.addRide(firstName(), false);
+    RideItem *planned = fixture.addPlannedRide(secondName(), false);
+    delete destroyed;
+
+    const RideCache::OperationPreCheck destroyedCheck =
+        fixture.cache->checkLinkActivities(destroyed, planned);
+    QVERIFY(!destroyedCheck.canProceed);
+    QCOMPARE(
+        destroyedCheck.blockingReason,
+        QStringLiteral(
+            "An activity is no longer in the activity list"));
+
+    fixture.cache->mutableRidesForRemovalTest().removeOne(destroyed);
+    fixture.cache->garbageCollect();
 }
 
 void TestRideCacheRemoval::brokenLinkedPairRejectsRemoval()
@@ -3488,6 +3552,67 @@ processorReorderingDoesNotRemoveWrongRow()
 }
 
 void TestRideCacheRemoval::
+preexistingDestroyedSiblingDoesNotBreakRemoval()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target = fixture.addRide(firstName(), true);
+    RideItem *sibling = fixture.addRide(secondName(), false);
+    const QPointer<RideItem> guardedSibling(sibling);
+    writeFixture(
+        fixture.activityPath(firstName()),
+        QByteArray("target activity"));
+    writeFixture(
+        fixture.activityPath(secondName()),
+        QByteArray("sibling activity"));
+
+    delete sibling;
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QVERIFY2(result.cleanlyCompleted(), qPrintable(result.error));
+    QVERIFY(guardedSibling.isNull());
+    QCOMPARE(fixture.cache->count(), 0);
+    QCOMPARE(fixture.cache->model()->rowCount(), 0);
+    QCOMPARE(
+        readBytes(fixture.activityPath(secondName())),
+        QByteArray("sibling activity"));
+}
+
+void TestRideCacheRemoval::
+processorDestroyedSelectionNeighborIsPurged()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideFile *const loadedRide =
+        reinterpret_cast<RideFile *>(quintptr(1));
+    RideItem *target = fixture.addRide(
+        firstName(), true, loadedRide);
+    RideItem *sibling = fixture.addRide(secondName(), false);
+    const QPointer<RideItem> guardedSibling(sibling);
+    writeFixture(
+        fixture.activityPath(firstName()),
+        QByteArray("target activity"));
+    writeFixture(
+        fixture.activityPath(secondName()),
+        QByteArray("sibling activity"));
+    setRideCacheRemovalProcessorAction(
+        [sibling] { delete sibling; });
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QVERIFY2(result.cleanlyCompleted(), qPrintable(result.error));
+    QVERIFY(guardedSibling.isNull());
+    QVERIFY(fixture.context->ride == nullptr);
+    QCOMPARE(fixture.cache->count(), 0);
+    QCOMPARE(fixture.cache->model()->rowCount(), 0);
+    QCOMPARE(
+        readBytes(fixture.activityPath(secondName())),
+        QByteArray("sibling activity"));
+}
+
+void TestRideCacheRemoval::
 sidecarOwnerIntroducedBeforeCommitRejectsRemoval()
 {
     Fixture fixture;
@@ -3705,6 +3830,222 @@ modelRemovalSignalDestructionDoesNotExposeDanglingItem()
     QCOMPARE(fixture.cache->count(), 1);
     QCOMPARE(fixture.cache->rides().constFirst(), survivor);
     QCOMPARE(fixture.context->ride, survivor);
+    QVERIFY(!fixture.cache->remembersDeletedAddressForRemovalTest(
+        targetAddress));
+}
+
+void TestRideCacheRemoval::
+modelRemovalSignalReaderSkipsDestroyedItem()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target = fixture.addRide(firstName(), true);
+    fixture.addRide(secondName(), false);
+    QStringList observedFilenames;
+
+    connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::rowsAboutToBeRemoved,
+        [target] { delete target; });
+    connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::rowsAboutToBeRemoved,
+        [&fixture, &observedFilenames] {
+            observedFilenames = fixture.cache->getAllFilenames();
+        });
+    writeFixture(
+        fixture.activityPath(firstName()),
+        QByteArray("target activity"));
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(result.status, RideCache::RemovalStatus::Committed);
+    QCOMPARE(observedFilenames, QStringList{secondName()});
+}
+
+void TestRideCacheRemoval::modelRemovalPublishesOnlyLiveSnapshot()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target = fixture.addRide(firstName(), true);
+    RideItem *survivor = fixture.addRide(secondName(), false);
+    const int targetRow = fixture.cache->rides().indexOf(target);
+    QVERIFY(targetRow >= 0);
+    QVector<RideItem*> observedRides;
+    int observedCount = -1;
+    int observedModelRows = -1;
+    QVariant observedTargetData;
+
+    connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::rowsAboutToBeRemoved,
+        [target] { delete target; });
+    connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::rowsAboutToBeRemoved,
+        [&] {
+            observedRides = fixture.cache->rides();
+            observedCount = fixture.cache->count();
+            observedModelRows = fixture.cache->model()->rowCount();
+            observedTargetData = fixture.cache->model()->data(
+                fixture.cache->model()->index(targetRow, 1));
+        });
+    writeFixture(
+        fixture.activityPath(firstName()),
+        QByteArray("target activity"));
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(result.status, RideCache::RemovalStatus::Committed);
+    QCOMPARE(observedRides, QVector<RideItem*>{survivor});
+    QCOMPARE(observedCount, 1);
+    QCOMPARE(observedModelRows, 2);
+    QVERIFY(!observedTargetData.isValid());
+}
+
+void TestRideCacheRemoval::
+ordinaryRemovalStopsEstimatorBeforeRowsAbout()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target = fixture.addRide(firstName(), true);
+    bool estimatorWasStopped = false;
+
+    connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::rowsAboutToBeRemoved,
+        [&] {
+            estimatorWasStopped =
+                rideCacheRemovalEstimatorStopCount() == 1;
+        });
+    writeFixture(
+        fixture.activityPath(firstName()),
+        QByteArray("target activity"));
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(result.status, RideCache::RemovalStatus::Committed);
+    QVERIFY(estimatorWasStopped);
+}
+
+void TestRideCacheRemoval::refreshRequestedDuringRemovalIsDeferred()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target = fixture.addRide(firstName(), true);
+    bool refreshWasDeferred = false;
+
+    connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::rowsAboutToBeRemoved,
+        [&] {
+            fixture.cache->refresh();
+            refreshWasDeferred =
+                rideCacheRemovalRefreshCount() == 0;
+        });
+    writeFixture(
+        fixture.activityPath(firstName()),
+        QByteArray("target activity"));
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(result.status, RideCache::RemovalStatus::Committed);
+    QVERIFY(refreshWasDeferred);
+    QCOMPARE(rideCacheRemovalRefreshCount(), 1);
+    QCOMPARE(rideCacheRemovalEstimatorRefreshCount(), 1);
+}
+
+void TestRideCacheRemoval::
+rowsRemovedGarbageCollectSkipsDestroyedAddress()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target = fixture.addRide(firstName(), true);
+    const QPointer<RideItem> guardedTarget(target);
+
+    connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::rowsRemoved,
+        [target] { delete target; });
+    connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::rowsRemoved,
+        [&] { fixture.cache->garbageCollect(); });
+    writeFixture(
+        fixture.activityPath(firstName()),
+        QByteArray("target activity"));
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    QCOMPARE(result.status, RideCache::RemovalStatus::Committed);
+    QVERIFY(guardedTarget.isNull());
+    QCOMPARE(fixture.cache->pendingDeletionCountForRemovalTest(), 0);
+}
+
+void TestRideCacheRemoval::modelRemovalPurgesDestroyedSibling_data()
+{
+    QTest::addColumn<bool>("destroyBeforeRowRemoval");
+
+    QTest::newRow("rows-about-to-be-removed") << true;
+    QTest::newRow("rows-removed") << false;
+}
+
+void TestRideCacheRemoval::modelRemovalPurgesDestroyedSibling()
+{
+    QFETCH(bool, destroyBeforeRowRemoval);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *target = fixture.addRide(firstName(), true);
+    RideItem *sibling = fixture.addRide(secondName(), false);
+    RideItem *survivor = fixture.addRide(thirdName(), false);
+    RideItem *const siblingAddress = sibling;
+    const QPointer<RideItem> guardedSibling(sibling);
+    const auto destroySibling = [sibling] { delete sibling; };
+    if (destroyBeforeRowRemoval) {
+        connect(
+            fixture.cache->model(),
+            &QAbstractItemModel::rowsAboutToBeRemoved,
+            destroySibling);
+    } else {
+        connect(
+            fixture.cache->model(),
+            &QAbstractItemModel::rowsRemoved,
+            destroySibling);
+    }
+    writeFixture(
+        fixture.activityPath(firstName()),
+        QByteArray("target activity"));
+    writeFixture(
+        fixture.activityPath(secondName()),
+        QByteArray("sibling activity"));
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(target);
+
+    const QVector<RideItem*> remainingRides = fixture.cache->rides();
+    const int remainingModelRows = fixture.cache->model()->rowCount();
+    const int remainingCount = fixture.cache->count();
+    const bool rememberedSibling =
+        fixture.cache->remembersDeletedAddressForRemovalTest(
+            siblingAddress);
+    fixture.cache->mutableRidesForRemovalTest().removeOne(
+        siblingAddress);
+
+    QCOMPARE(result.status, RideCache::RemovalStatus::Committed);
+    QVERIFY(guardedSibling.isNull());
+    QCOMPARE(remainingRides, QVector<RideItem*>{survivor});
+    QCOMPARE(remainingModelRows, 1);
+    QCOMPARE(remainingCount, 1);
+    QVERIFY(!rememberedSibling);
+    QCOMPARE(
+        readBytes(fixture.activityPath(secondName())),
+        QByteArray("sibling activity"));
 }
 
 void TestRideCacheRemoval::
@@ -4809,6 +5150,89 @@ stalePointerOverloadsRejectWithoutDereference()
 }
 
 void TestRideCacheRemoval::
+temporaryRideItemDestructionDoesNotCreateCacheTombstone()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *temporary = new RideItem(nullptr, fixture.context.get());
+    RideItem *const address = temporary;
+
+    delete temporary;
+
+    QVERIFY(!fixture.cache->remembersDeletedAddressForRemovalTest(
+        address));
+    QCOMPARE(rideCacheRemovalStartupInvalidationCount(), 0);
+}
+
+void TestRideCacheRemoval::
+tombstonedCacheEntryIsNotDereferencedOrRemoved()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), false);
+    fixture.cache->markDeletedAddressForRemovalTest(item);
+
+    const QModelIndex fileNameIndex =
+        fixture.cache->model()->index(0, 1);
+    QVERIFY(fileNameIndex.isValid());
+    QVERIFY(!fixture.cache->model()->data(
+        fileNameIndex, Qt::DisplayRole).isValid());
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(firstName());
+    QCOMPARE(result.status, RideCache::RemovalStatus::Rejected);
+    QCOMPARE(fixture.cache->count(), 0);
+    QCOMPARE(fixture.cache->model()->rowCount(), 1);
+    QCOMPARE(
+        fixture.cache->mutableRidesForRemovalTest().size(),
+        1);
+}
+
+void TestRideCacheRemoval::
+removalPrecheckRejectsDestroyedCacheAddress()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    RideItem *const item = fixture.addRide(firstName(), false);
+    RideItem *const destroyedAddress = item;
+    delete item;
+    QVERIFY(
+        fixture.cache->remembersDeletedAddressForRemovalTest(
+            destroyedAddress));
+    QCOMPARE(rideCacheRemovalStartupInvalidationCount(), 1);
+
+    const RideCache::OperationPreCheck check =
+        fixture.cache->checkRemovalLinks(destroyedAddress);
+    QVERIFY(!check.canProceed);
+    QCOMPARE(
+        check.blockingReason,
+        QStringLiteral(
+            "The activity is no longer in the activity list"));
+
+    fixture.cache->mutableRidesForRemovalTest().removeOne(
+        destroyedAddress);
+    fixture.cache->garbageCollect();
+}
+
+void TestRideCacheRemoval::
+navigationRideEventDoesNotRetainDestroyedItem()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *item = fixture.addRide(firstName(), false);
+    fixture.cache->mutableRidesForRemovalTest().removeOne(item);
+    NavigationEvent event(NavigationEvent::RIDE, item);
+
+    QCOMPARE(
+        event.after.metaType(),
+        QMetaType::fromType<QPointer<RideItem>>());
+    delete item;
+
+    QVERIFY(event.after.value<QPointer<RideItem>>().isNull());
+}
+
+void TestRideCacheRemoval::
 currentRemovalUsesSelectedNamespace()
 {
     Fixture fixture;
@@ -5197,6 +5621,39 @@ completedRenameMovesOnlyCompletedCpx()
 }
 
 void TestRideCacheRemoval::
+plannedReplacementPurgesPreexistingDestroyedRow()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *first = fixture.addPlannedRide(firstName(), false);
+    RideItem *unrelated = fixture.addRide(secondName(), false);
+    const QPointer<RideItem> guardedUnrelated(unrelated);
+    const QString firstPath = fixture.plannedActivityPath(firstName());
+    const QString unrelatedPath = fixture.activityPath(secondName());
+    const QString targetPath = fixture.plannedActivityPath(thirdName());
+    writeFixture(firstPath, QByteArray("old first"));
+    writeFixture(unrelatedPath, QByteArray("unrelated activity"));
+    delete unrelated;
+    const QList<RideCache::PlannedActivityTarget> targets = {{
+        thirdName(),
+        [](const QString &path, QString &error) {
+            return stageBytes(path, QByteArray("new third"), error);
+        }}};
+
+    const RideCache::PlannedReplacementResult result =
+        fixture.cache->replacePlannedActivityFiles(
+            {first}, {firstPath}, targets);
+
+    QVERIFY2(result.cleanlyCompleted(), qPrintable(result.error));
+    QVERIFY(guardedUnrelated.isNull());
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->model()->rowCount(), 1);
+    QVERIFY(!QFileInfo::exists(firstPath));
+    QCOMPARE(readBytes(targetPath), QByteArray("new third"));
+    QCOMPARE(readBytes(unrelatedPath), QByteArray("unrelated activity"));
+}
+
+void TestRideCacheRemoval::
 plannedReplacementStageFailurePreservesOldGeneration()
 {
     Fixture fixture;
@@ -5235,6 +5692,36 @@ plannedReplacementStageFailurePreservesOldGeneration()
     QVERIFY(cacheContains(*fixture.cache, firstName()));
     QVERIFY(cacheContains(*fixture.cache, secondName()));
     QVERIFY(!cacheContains(*fixture.cache, thirdName()));
+}
+
+void TestRideCacheRemoval::
+plannedReplacementStageFailureResumesBackgroundWork()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *first = fixture.addPlannedRide(firstName(), false);
+    const QString firstPath = fixture.plannedActivityPath(firstName());
+    writeFixture(firstPath, QByteArray("old first"));
+    const QList<RideCache::PlannedActivityTarget> targets = {{
+        thirdName(),
+        [](const QString &, QString &error) {
+            error = QStringLiteral("injected staging failure");
+            return false;
+        }}};
+
+    const RideCache::PlannedReplacementResult result =
+        fixture.cache->replacePlannedActivityFiles(
+            {first}, {firstPath}, targets);
+
+    QVERIFY(!result.committed);
+    QCOMPARE(rideCacheRemovalEstimatorStopCount(), 1);
+    QCOMPARE(rideCacheRemovalRefreshCount(), 0);
+    QCOMPARE(rideCacheRemovalEstimatorRefreshCount(), 0);
+
+    QCoreApplication::processEvents();
+
+    QCOMPARE(rideCacheRemovalRefreshCount(), 1);
+    QCOMPARE(rideCacheRemovalEstimatorRefreshCount(), 1);
 }
 
 void TestRideCacheRemoval::
@@ -5278,6 +5765,188 @@ plannedReplacementCommitsOneCompleteGeneration()
 }
 
 void TestRideCacheRemoval::
+plannedReplacementQuiescesWorkersAndDefersRefresh()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *first = fixture.addPlannedRide(firstName(), false);
+    const QString firstPath = fixture.plannedActivityPath(firstName());
+    writeFixture(firstPath, QByteArray("old first"));
+    bool estimatorWasStoppedBeforeStaging = false;
+    const QList<RideCache::PlannedActivityTarget> targets = {{
+        thirdName(),
+        [&estimatorWasStoppedBeforeStaging]
+        (const QString &path, QString &error) {
+            estimatorWasStoppedBeforeStaging =
+                rideCacheRemovalEstimatorStopCount() == 1;
+            return stageBytes(path, QByteArray("new third"), error);
+        }}};
+
+    const RideCache::PlannedReplacementResult result =
+        fixture.cache->replacePlannedActivityFiles(
+            {first}, {firstPath}, targets);
+
+    QVERIFY2(result.cleanlyCompleted(), qPrintable(result.error));
+    QVERIFY(estimatorWasStoppedBeforeStaging);
+    QCOMPARE(rideCacheRemovalRefreshCount(), 0);
+    QCOMPARE(rideCacheRemovalEstimatorRefreshCount(), 0);
+
+    QCoreApplication::processEvents();
+
+    QCOMPARE(rideCacheRemovalRefreshCount(), 1);
+    QCOMPARE(rideCacheRemovalEstimatorRefreshCount(), 1);
+}
+
+void TestRideCacheRemoval::
+plannedReplacementBlocksRefreshRestartDuringCallbacks()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *first = fixture.addPlannedRide(firstName(), false);
+    const QString firstPath = fixture.plannedActivityPath(firstName());
+    writeFixture(firstPath, QByteArray("old first"));
+    bool refreshWasBlocked = false;
+    const QList<RideCache::PlannedActivityTarget> targets = {{
+        thirdName(),
+        [&fixture, &refreshWasBlocked]
+        (const QString &path, QString &error) {
+            fixture.cache->refresh();
+            refreshWasBlocked =
+                rideCacheRemovalRefreshCount() == 0;
+            return stageBytes(
+                path, QByteArray("new third"), error);
+        }}};
+
+    const RideCache::PlannedReplacementResult result =
+        fixture.cache->replacePlannedActivityFiles(
+            {first}, {firstPath}, targets);
+
+    QVERIFY2(result.cleanlyCompleted(), qPrintable(result.error));
+    QVERIFY(refreshWasBlocked);
+    QCOMPARE(rideCacheRemovalRefreshCount(), 0);
+    QCOMPARE(rideCacheRemovalEstimatorRefreshCount(), 0);
+
+    QCoreApplication::processEvents();
+
+    QCOMPARE(rideCacheRemovalRefreshCount(), 1);
+    QCOMPARE(rideCacheRemovalEstimatorRefreshCount(), 1);
+}
+
+void TestRideCacheRemoval::
+plannedReplacementRefreshDoesNotLeakIntoNextRemoval()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *first = fixture.addPlannedRide(firstName(), false);
+    const QString firstPath = fixture.plannedActivityPath(firstName());
+    writeFixture(firstPath, QByteArray("old first"));
+    const QList<RideCache::PlannedActivityTarget> targets = {{
+        thirdName(),
+        [&fixture](const QString &path, QString &error) {
+            fixture.cache->refresh();
+            return stageBytes(
+                path, QByteArray("new third"), error);
+        }}};
+
+    const RideCache::PlannedReplacementResult replacement =
+        fixture.cache->replacePlannedActivityFiles(
+            {first}, {firstPath}, targets);
+
+    QVERIFY2(
+        replacement.cleanlyCompleted(),
+        qPrintable(replacement.error));
+    QCoreApplication::processEvents();
+    resetRideCacheRemovalRefreshCounts();
+
+    RideItem *second = fixture.addRide(secondName(), false);
+    writeFixture(
+        fixture.activityPath(secondName()),
+        QByteArray("second"));
+    QVERIFY(fixture.cache->removeRides({second}, false));
+
+    QCOMPARE(rideCacheRemovalRefreshCount(), 0);
+    QCOMPARE(rideCacheRemovalEstimatorRefreshCount(), 0);
+}
+
+void TestRideCacheRemoval::
+plannedReplacementDropsStaleResumeDuringNewReplacement()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *first = fixture.addPlannedRide(firstName(), false);
+    const QString firstPath = fixture.plannedActivityPath(firstName());
+    writeFixture(firstPath, QByteArray("old first"));
+    const QList<RideCache::PlannedActivityTarget> failingTargets = {{
+        thirdName(),
+        [](const QString &, QString &error) {
+            error = QStringLiteral("injected staging failure");
+            return false;
+        }}};
+
+    const RideCache::PlannedReplacementResult firstResult =
+        fixture.cache->replacePlannedActivityFiles(
+            {first}, {firstPath}, failingTargets);
+    QVERIFY(!firstResult.committed);
+    QCOMPARE(rideCacheRemovalEstimatorRefreshCount(), 0);
+
+    bool staleResumeWasBlocked = false;
+    const QList<RideCache::PlannedActivityTarget> succeedingTargets = {{
+        thirdName(),
+        [&staleResumeWasBlocked]
+        (const QString &path, QString &error) {
+            QCoreApplication::processEvents();
+            staleResumeWasBlocked =
+                rideCacheRemovalEstimatorRefreshCount() == 0;
+            return stageBytes(path, QByteArray("new third"), error);
+        }}};
+    const RideCache::PlannedReplacementResult secondResult =
+        fixture.cache->replacePlannedActivityFiles(
+            {first}, {firstPath}, succeedingTargets);
+
+    QVERIFY2(secondResult.cleanlyCompleted(), qPrintable(secondResult.error));
+    QVERIFY(staleResumeWasBlocked);
+    QCOMPARE(rideCacheRemovalEstimatorRefreshCount(), 0);
+
+    QCoreApplication::processEvents();
+
+    QCOMPARE(rideCacheRemovalRefreshCount(), 1);
+    QCOMPARE(rideCacheRemovalEstimatorRefreshCount(), 1);
+}
+
+void TestRideCacheRemoval::
+plannedReplacementCoalescesSupersededResumes()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *first = fixture.addPlannedRide(firstName(), false);
+    const QString firstPath = fixture.plannedActivityPath(firstName());
+    writeFixture(firstPath, QByteArray("old first"));
+    const QList<RideCache::PlannedActivityTarget> failingTargets = {{
+        thirdName(),
+        [](const QString &, QString &error) {
+            error = QStringLiteral("injected staging failure");
+            return false;
+        }}};
+
+    const RideCache::PlannedReplacementResult firstResult =
+        fixture.cache->replacePlannedActivityFiles(
+            {first}, {firstPath}, failingTargets);
+    const RideCache::PlannedReplacementResult secondResult =
+        fixture.cache->replacePlannedActivityFiles(
+            {first}, {firstPath}, failingTargets);
+
+    QVERIFY(!firstResult.committed);
+    QVERIFY(!secondResult.committed);
+    QCOMPARE(rideCacheRemovalRefreshCount(), 0);
+    QCOMPARE(rideCacheRemovalEstimatorRefreshCount(), 0);
+
+    QCoreApplication::processEvents();
+
+    QCOMPARE(rideCacheRemovalRefreshCount(), 1);
+    QCOMPARE(rideCacheRemovalEstimatorRefreshCount(), 1);
+}
+
+void TestRideCacheRemoval::
 plannedReplacementProcessorFailureIsReportedAfterPublication()
 {
     Fixture fixture;
@@ -5304,8 +5973,9 @@ plannedReplacementProcessorFailureIsReportedAfterPublication()
     QVERIFY(result.committed);
     QVERIFY(result.cacheUpdated);
     QVERIFY(result.cleanupComplete);
-    QVERIFY(!result.cleanlyCompleted());
-    QVERIFY(!result.error.isEmpty());
+    QVERIFY(result.cleanlyCompleted());
+    QVERIFY(result.error.isEmpty());
+    QVERIFY(!result.warnings.isEmpty());
     QVERIFY(!QFileInfo::exists(firstPath));
     QCOMPARE(readBytes(thirdPath), QByteArray("new third"));
     QVERIFY(!cacheContains(*fixture.cache, firstName()));
@@ -6276,6 +6946,134 @@ plannedReplacementModelResetDeletesIncomingItemSafely()
 }
 
 void TestRideCacheRemoval::
+plannedReplacementDefersNestedConfigReset_data()
+{
+    QTest::addColumn<qint32>("changes");
+    QTest::newRow("zero-mask") << qint32(0);
+    QTest::newRow("field-mask") << qint32(1);
+}
+
+void TestRideCacheRemoval::
+plannedReplacementDefersNestedConfigReset()
+{
+    QFETCH(qint32, changes);
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *first = fixture.addPlannedRide(firstName(), false);
+    const QString firstPath = fixture.plannedActivityPath(firstName());
+    writeFixture(firstPath, QByteArray("old first"));
+    int resetDepth = 0;
+    int maximumResetDepth = 0;
+    int resetCount = 0;
+    bool configChangeSent = false;
+    connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::modelAboutToBeReset,
+        [&fixture, changes, &resetDepth, &maximumResetDepth,
+         &configChangeSent] {
+            ++resetDepth;
+            maximumResetDepth = qMax(maximumResetDepth, resetDepth);
+            if (!configChangeSent) {
+                configChangeSent = true;
+                fixture.context->configChanged(changes);
+            }
+        });
+    connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::modelReset,
+        [&resetDepth, &resetCount] {
+            --resetDepth;
+            ++resetCount;
+        });
+    const QList<RideCache::PlannedActivityTarget> targets = {{
+        thirdName(),
+        [](const QString &path, QString &error) {
+            return stageBytes(path, QByteArray("new third"), error);
+        }}};
+
+    const RideCache::PlannedReplacementResult result =
+        fixture.cache->replacePlannedActivityFiles(
+            {first}, {firstPath}, targets);
+    QCoreApplication::processEvents();
+
+    QVERIFY2(result.cleanlyCompleted(), qPrintable(result.error));
+    QCOMPARE(maximumResetDepth, 1);
+    QCOMPARE(resetDepth, 0);
+    QCOMPARE(resetCount, 2);
+}
+
+void TestRideCacheRemoval::
+modelResetRemainsBalancedAcrossReentrantInsert()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideCacheModel *const model = fixture.cache->model();
+    int resetStarted = 0;
+    int resetFinished = 0;
+    int insertStarted = 0;
+    int insertFinished = 0;
+    bool inserted = false;
+
+    connect(
+        model, &QAbstractItemModel::modelAboutToBeReset,
+        [model, &resetStarted, &inserted] {
+            ++resetStarted;
+            if (inserted) return;
+            inserted = true;
+            model->startInsert(0, 0);
+            model->endInsert();
+        });
+    connect(
+        model, &QAbstractItemModel::modelReset,
+        [&resetFinished] { ++resetFinished; });
+    connect(
+        model, &QAbstractItemModel::rowsAboutToBeInserted,
+        [&insertStarted] { ++insertStarted; });
+    connect(
+        model, &QAbstractItemModel::rowsInserted,
+        [&insertFinished] { ++insertFinished; });
+
+    model->beginReset();
+    model->endReset();
+
+    QCOMPARE(resetStarted, 1);
+    QCOMPARE(resetFinished, 1);
+    QCOMPARE(insertStarted, 0);
+    QCOMPARE(insertFinished, 0);
+}
+
+void TestRideCacheRemoval::
+modelInsertRejectsReentrantReset()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideCacheModel *const model = fixture.cache->model();
+    bool resetWasAllowed = true;
+    int resetStarted = 0;
+    int resetFinished = 0;
+
+    connect(
+        model, &QAbstractItemModel::rowsAboutToBeInserted,
+        [model, &resetWasAllowed] {
+            resetWasAllowed = model->beginReset();
+            if (resetWasAllowed) model->endReset();
+        });
+    connect(
+        model, &QAbstractItemModel::modelAboutToBeReset,
+        [&resetStarted] { ++resetStarted; });
+    connect(
+        model, &QAbstractItemModel::modelReset,
+        [&resetFinished] { ++resetFinished; });
+
+    QVERIFY(model->startInsert(0, 0));
+    model->endInsert();
+
+    QVERIFY(!resetWasAllowed);
+    QCOMPARE(resetStarted, 0);
+    QCOMPARE(resetFinished, 0);
+}
+
+void TestRideCacheRemoval::
 plannedReplacementNotificationDeletionIsContained_data()
 {
     QTest::addColumn<QString>("phase");
@@ -6434,6 +7232,45 @@ plannedReplacementDeletionNotificationCanDeferOldItemDeletion()
     QVERIFY2(result.cleanlyCompleted(), qPrintable(result.error));
     QVERIFY(guardedFirst.isNull());
     QCOMPARE(pendingDeletionCount, 0);
+}
+
+void TestRideCacheRemoval::
+plannedReplacementMarksDestroyedAddressDuringCallback()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *first = fixture.addPlannedRide(firstName(), false);
+    RideItem *const firstAddress = first;
+    const QPointer<RideItem> guardedFirst(first);
+    bool tombstoneVisibleDuringDestruction = false;
+    connect(
+        first, &QObject::destroyed,
+        [&fixture, firstAddress,
+         &tombstoneVisibleDuringDestruction] {
+            tombstoneVisibleDuringDestruction =
+                fixture.cache->remembersDeletedAddressForRemovalTest(
+                    firstAddress);
+        });
+    const QString firstPath = fixture.plannedActivityPath(firstName());
+    writeFixture(firstPath, QByteArray("old first"));
+    connect(
+        fixture.context.get(), &Context::rideDeleted,
+        [](RideItem *item) { delete item; });
+    const QList<RideCache::PlannedActivityTarget> targets = {{
+        thirdName(),
+        [](const QString &path, QString &error) {
+            return stageBytes(path, QByteArray("new third"), error);
+        }}};
+
+    const RideCache::PlannedReplacementResult result =
+        fixture.cache->replacePlannedActivityFiles(
+            {first}, {firstPath}, targets);
+
+    QVERIFY2(result.cleanlyCompleted(), qPrintable(result.error));
+    QVERIFY(guardedFirst.isNull());
+    QVERIFY(tombstoneVisibleDuringDestruction);
+    QVERIFY(!fixture.cache->remembersDeletedAddressForRemovalTest(
+        firstAddress));
 }
 
 void TestRideCacheRemoval::
@@ -6632,6 +7469,7 @@ plannedCopyReplacementCommitsOneCompleteGeneration()
     QVERIFY(!cacheContains(*fixture.cache, firstName()));
     QVERIFY(cacheContains(*fixture.cache, sourceName));
     QVERIFY(cacheContains(*fixture.cache, thirdName()));
+    QCoreApplication::processEvents();
     QCOMPARE(rideCacheRemovalRefreshCount(), 1);
     QCOMPARE(rideCacheRemovalEstimatorRefreshCount(), 1);
 }

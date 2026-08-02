@@ -37,6 +37,7 @@
 #include <QSemaphore>
 #include <QMultiHash>
 #include <QHash>
+#include <QSet>
 
 #include <QFuture>
 #include <QFutureWatcher>
@@ -74,7 +75,15 @@ class RideCache : public QObject
         RideCacheModel *model() { return model_; }
 
         // query the cache
-        int count() const { return rides_.count(); }
+        int count() const {
+            if (deletelist.isEmpty()) return rides_.count();
+
+            int liveCount = 0;
+            for (RideItem *item : rides_) {
+                if (item && !deletelist.contains(item)) ++liveCount;
+            }
+            return liveCount;
+        }
         RideItem *getRide(QString filename);
         RideItem *getRide(const QString &filename, bool planned);
         RideItem *getRide(QDateTime dateTime);
@@ -125,7 +134,16 @@ class RideCache : public QObject
         void threadCompleted(RideCacheRefreshThread*, quint64 generation);
 
         // the ride list
-        const QVector<RideItem*> &rides() const { return rides_; }
+        QVector<RideItem*> rides() const {
+            if (deletelist.isEmpty()) return rides_;
+
+            QVector<RideItem*> live;
+            live.reserve(rides_.size());
+            for (RideItem *item : rides_) {
+                if (item && !deletelist.contains(item)) live.append(item);
+            }
+            return live;
+        }
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
         QVector<RideItem*> &mutableRidesForRemovalTest() { return rides_; }
         qsizetype pendingDeletionCountForRemovalTest() const {
@@ -134,6 +152,14 @@ class RideCache : public QObject
         void discardPendingDeletionAddressForRemovalTest(
             RideItem *address) {
             delete_.removeOne(address);
+        }
+        bool remembersDeletedAddressForRemovalTest(
+            RideItem *address) const {
+            return deletelist.contains(address);
+        }
+        void markDeletedAddressForRemovalTest(
+            RideItem *address) {
+            deletelist.insert(address);
         }
         bool replacementOperationInProgressForTest() const {
             return removalInProgress_ && *removalInProgress_;
@@ -232,6 +258,7 @@ class RideCache : public QObject
             QString error;
             int removedCount = 0;
             int addedCount = 0;
+            QStringList warnings;
 
             bool cleanlyCompleted() const
             {
@@ -417,7 +444,6 @@ class RideCache : public QObject
         friend class ::Banister; // get weekly performances
         friend class ::Leaf; // get weekly performances
         friend class ::RideItem; // adds to deletelist in destructor
-        friend class ::NavigationModel; // checks deletelist during redo/undo
         friend class ::RideCacheRefreshThread;
         friend class ::RideCacheModel;
 
@@ -427,8 +453,12 @@ class RideCache : public QObject
 
         // rides and reverse are the main lists
         // delete_ is a list of items to garbage collect (delete later)
-        // deletelist is a list of items that no longer exist (deleted)
-        QVector<RideItem*> rides_, reverse_, delete_, deletelist;
+        // deletelist contains transient tombstones for destroyed cache entries.
+        QVector<RideItem*> rides_, reverse_, delete_;
+        QSet<RideItem*> deletelist;
+        int modelRowCount() const;
+        RideItem *modelRideAt(int row) const;
+        int modelIndexOf(RideItem *item) const;
         RideCacheModel *model_ = nullptr;
         bool exiting = false;
 	    double progress_; // percent
@@ -439,9 +469,12 @@ class RideCache : public QObject
         bool first; // updated when estimates are marked stale
 
     private:
-        bool activityMutationIsBlocked() const {
-            return QThread::currentThread() != thread()
-                || (removalInProgress_ && *removalInProgress_);
+        bool activityMutationIsBlocked() const;
+        bool ownsLiveRide(const RideItem *item) const {
+            RideItem *const address = const_cast<RideItem*>(item);
+            return address
+                && !deletelist.contains(address)
+                && rides_.contains(address);
         }
 
         enum class RideFileDisposition {
@@ -482,7 +515,10 @@ class RideCache : public QObject
         RemovalResult removeRideEntry(
             RideItem *rideToDelete,
             RideFileDisposition disposition,
-            bool triggerRefresh = true);
+            bool triggerRefresh = true,
+            bool workersQuiesced = false);
+        bool purgeDestroyedModelRows();
+        void discardDetachedTombstones();
         QString cpxCachePathForActivity(
             const QString &fileName,
             bool isPlanned) const;
@@ -522,6 +558,10 @@ class RideCache : public QObject
         bool saveSnapshotBoundary_ = false;
         std::shared_ptr<bool> removalInProgress_{
             std::make_shared<bool>(false)};
+        bool removalRefreshPending_ = false;
+        std::shared_ptr<bool> replacementRefreshBlocked_{
+            std::make_shared<bool>(false)};
+        quint64 replacementResumeGeneration_ = 0;
         QStringList pendingSaveTargets_;
         std::shared_ptr<RideCacheBackgroundSaver>
             backgroundSaver_;

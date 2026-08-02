@@ -163,10 +163,11 @@ NavigationModel::action(bool redo, NavigationEvent event)
 
     case NavigationEvent::RIDE:
     {
-        RideItem *pitem = redo ? event.after.value<RideItem*>() : event.before.value<RideItem*>();
+        const QPointer<RideItem> pitem = redo
+            ? event.after.value<QPointer<RideItem>>()
+            : event.before.value<QPointer<RideItem>>();
 
-        // don't select deleted rides (!!)
-        if (!tab->context->athlete->rideCache->deletelist.contains(pitem)) {
+        if (pitem) {
             item = pitem;
             tab->setNoSwitch(true); // can't be doing that when we are undo/redo ride selection
             tab->context->athlete->selectRideFile(item->fileName);

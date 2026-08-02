@@ -91,14 +91,41 @@ public:
 
     ~RemovalOperationGuard()
     {
-        if (acquired_) *inProgress_ = false;
+        release();
     }
 
     bool acquired() const { return acquired_; }
 
+    void release()
+    {
+        if (!acquired_) return;
+        *inProgress_ = false;
+        acquired_ = false;
+    }
+
 private:
     std::shared_ptr<bool> inProgress_;
     bool acquired_ = false;
+};
+
+class RemovalScopeExit final
+{
+public:
+    explicit RemovalScopeExit(std::function<void()> action)
+        : action_(std::move(action))
+    {
+    }
+
+    ~RemovalScopeExit()
+    {
+        if (action_) action_();
+    }
+
+    RemovalScopeExit(const RemovalScopeExit &) = delete;
+    RemovalScopeExit &operator=(const RemovalScopeExit &) = delete;
+
+private:
+    std::function<void()> action_;
 };
 
 class ScopedRideFiles final
@@ -1428,7 +1455,7 @@ RideCache::derivedFilePathsForRemoval(
             .toCaseFolded();
     bool legacySidecarsAreShared = false;
     for (const RideItem *ride : rides_) {
-        if (!ride || ride == rideToDelete)
+        if (!ownsLiveRide(ride) || ride == rideToDelete)
             continue;
         if (QFileInfo(ride->fileName)
                 .baseName()
@@ -1689,6 +1716,11 @@ RideCache::removeRidesResult(
     bool triggerRefresh)
 {
     RemovalResult result;
+    if (activityMutationIsBlocked()) {
+        result.error = tr(
+            "Another activity operation is already in progress");
+        return result;
+    }
     const QPointer<RideCache> guardedCache(this);
     const QPointer<Context> guardedContext(context);
     const QPointer<Athlete> guardedAthlete(
@@ -1716,7 +1748,8 @@ RideCache::removeRidesResult(
     pending.reserve(ridesToDelete.size());
     QSet<RideItem*> requested;
     for (RideItem *ride : ridesToDelete) {
-        if (!ride || !rides_.contains(ride)) {
+        if (!ride || deletelist.contains(ride)
+            || !rides_.contains(ride)) {
             pending.append(PendingRideRemoval{});
             continue;
         }
@@ -1764,6 +1797,12 @@ RideCache::removeRidesResult(
         finalizeRemovalBatchStatus(result);
         return result;
     }
+    guardedEstimator->stop();
+    if (!operationOwnersAreStable()) {
+        appendNotAttempted(0, ownersUnavailable);
+        finalizeRemovalBatchStatus(result);
+        return result;
+    }
     for (int pendingIndex = 0;
          pendingIndex < pending.size();
          ++pendingIndex) {
@@ -1775,8 +1814,7 @@ RideCache::removeRidesResult(
         const PendingRideRemoval &request =
             pending.at(pendingIndex);
         RideItem *const ride = request.item.data();
-        if (!ride
-            || !guardedCache->rides_.contains(ride)
+        if (!guardedCache->ownsLiveRide(ride)
             || ride->fileName != request.fileName
             || ride->path != request.path
             || ride->planned != request.planned) {
@@ -1797,7 +1835,8 @@ RideCache::removeRidesResult(
             guardedCache->removeRideEntry(
                 ride,
                 RideFileDisposition::Archive,
-                false);
+                false,
+                true);
         result.affectedCount +=
             removed.affectedCount;
         result.recoveryPaths.append(
@@ -1836,9 +1875,14 @@ RideCache::removeRidesResult(
     }
 
     finalizeRemovalBatchStatus(result);
-    if (result.affectedCount > 0
-        && triggerRefresh
+    const bool resumeBackgroundWork =
+        result.affectedCount > 0
+        && (triggerRefresh
+            || (guardedCache
+                && guardedCache->removalRefreshPending_));
+    if (resumeBackgroundWork
         && operationOwnersAreStable()) {
+        guardedCache->removalRefreshPending_ = false;
         guardedCache->refresh();
         if (operationOwnersAreStable())
             guardedEstimator->refresh();
@@ -1860,6 +1904,11 @@ RideCache::replacePlannedActivities(
     if (QThread::currentThread() != thread()) {
         result.error = tr(
             "Planned activities can only be replaced on the cache thread");
+        return result;
+    }
+    if (activityMutationIsBlocked()) {
+        result.error = tr(
+            "Another activity operation is already in progress");
         return result;
     }
     if (sourceItemsAndTargets.isEmpty()) {
@@ -1900,7 +1949,7 @@ RideCache::replacePlannedActivities(
     for (const auto &sourceAndTarget : sourceItemsAndTargets) {
         RideItem *const source = sourceAndTarget.first;
         const QDate targetDate = sourceAndTarget.second;
-        if (!source || !guardedCache->rides_.contains(source)
+        if (!guardedCache->ownsLiveRide(source)
             || !source->planned || source->fileName.isEmpty()
             || !source->dateTime.isValid()
             || !targetDate.isValid()) {
@@ -1932,7 +1981,8 @@ RideCache::replacePlannedActivities(
         int identityMatches = 0;
         for (RideItem *candidate :
              std::as_const(guardedCache->rides_)) {
-            if (!candidate || !candidate->planned
+            if (!guardedCache->ownsLiveRide(candidate)
+                || !candidate->planned
                 || candidate->fileName != source->fileName) {
                 continue;
             }
@@ -1996,7 +2046,7 @@ RideCache::replacePlannedActivities(
                             == guardedAthlete.data()
                         && guardedAthlete->rideCache
                             == guardedCache.data()
-                        && guardedCache->rides_.contains(
+                        && guardedCache->ownsLiveRide(
                             guardedSource.data())
                         && guardedSource->planned
                         && guardedSource->fileName
@@ -2043,12 +2093,26 @@ RideCache::replacePlannedActivityFiles(
             "Planned activities can only be replaced on the cache thread");
         return result;
     }
+    if (activityMutationIsBlocked()) {
+        result.error = tr(
+            "Another activity operation is already in progress");
+        return result;
+    }
     RemovalOperationGuard removalGuard(removalInProgress_);
     if (!removalGuard.acquired()) {
         result.error = tr(
             "Another activity deletion is already in progress");
         return result;
     }
+    RemovalOperationGuard replacementRefreshGuard(
+        replacementRefreshBlocked_);
+    if (!replacementRefreshGuard.acquired()) {
+        result.error = tr(
+            "Another planned activity refresh is already blocked");
+        return result;
+    }
+    const quint64 replacementResumeGeneration =
+        ++replacementResumeGeneration_;
 
     const QPointer<RideCache> guardedCache(this);
     const QPointer<Context> guardedContext(context);
@@ -2078,10 +2142,83 @@ RideCache::replacePlannedActivityFiles(
         return result;
     }
 
+    const auto scheduleBackgroundWork =
+        [guardedCache, guardedEstimator,
+         operationOwnersAreStable,
+         replacementResumeGeneration] {
+            if (!guardedCache) return false;
+            return QMetaObject::invokeMethod(
+                guardedCache.data(),
+                [guardedCache, guardedEstimator,
+                 operationOwnersAreStable,
+                 replacementResumeGeneration] {
+                    if (!operationOwnersAreStable()) {
+                        qWarning().noquote() << QObject::tr(
+                            "Planned activity background refresh was dropped because its owners changed");
+                        return;
+                    }
+                    if (guardedCache->replacementResumeGeneration_
+                            != replacementResumeGeneration
+                        || (guardedCache->replacementRefreshBlocked_
+                            && *guardedCache->replacementRefreshBlocked_)) {
+                        return;
+                    }
+                    guardedCache->refresh();
+                    if (!operationOwnersAreStable()) {
+                        qWarning().noquote() << QObject::tr(
+                            "Planned activity estimate refresh was dropped because its owners changed");
+                        return;
+                    }
+                    if (guardedCache->replacementResumeGeneration_
+                            != replacementResumeGeneration
+                        || (guardedCache->replacementRefreshBlocked_
+                            && *guardedCache->replacementRefreshBlocked_)) {
+                        return;
+                    }
+                    guardedEstimator->refresh();
+                },
+                Qt::QueuedConnection);
+        };
+    bool backgroundWorkQuiesced = false;
+    bool backgroundResumeHandled = false;
+    RemovalScopeExit resumeBackgroundWork([&] {
+        if (!backgroundWorkQuiesced
+            || backgroundResumeHandled) {
+            return;
+        }
+        backgroundResumeHandled = true;
+        if (!scheduleBackgroundWork()) {
+            qWarning().noquote() << QObject::tr(
+                "Planned activity background refresh could not be resumed");
+        }
+    });
+
     guardedCache->cancel();
+    backgroundWorkQuiesced = true;
     if (!operationOwnersAreStable()) {
         result.error = tr(
             "The planned activity collection disappeared while refresh was being cancelled");
+        return result;
+    }
+    guardedEstimator->stop();
+    if (!operationOwnersAreStable()) {
+        result.error = tr(
+            "The planned activity collection disappeared while estimates were being stopped");
+        return result;
+    }
+    if (!guardedCache->purgeDestroyedModelRows()) {
+        if (!operationOwnersAreStable()) {
+            result.error = tr(
+                "The planned activity collection disappeared while destroyed rows were being removed");
+        } else {
+            result.error = tr(
+                "Destroyed activity rows could not be removed before plan replacement");
+        }
+        return result;
+    }
+    if (!operationOwnersAreStable()) {
+        result.error = tr(
+            "The planned activity collection disappeared while destroyed rows were being removed");
         return result;
     }
 
@@ -2113,7 +2250,7 @@ RideCache::replacePlannedActivityFiles(
     QSet<QString> removalPathKeys;
     QStringList removalPaths;
     for (RideItem *item : activitiesToReplace) {
-        if (!item || !guardedCache->rides_.contains(item)) {
+        if (!guardedCache->ownsLiveRide(item)) {
             result.error = tr(
                 "A planned activity replacement target is no longer in the cache");
             return result;
@@ -2159,7 +2296,8 @@ RideCache::replacePlannedActivityFiles(
         }
         int identityMatches = 0;
         for (RideItem *candidate : std::as_const(guardedCache->rides_)) {
-            if (!candidate || !candidate->planned
+            if (!guardedCache->ownsLiveRide(candidate)
+                || !candidate->planned
                 || candidate->fileName != item->fileName) {
                 continue;
             }
@@ -2184,7 +2322,8 @@ RideCache::replacePlannedActivityFiles(
             return result;
         }
         for (RideItem *candidate : std::as_const(guardedCache->rides_)) {
-            if (candidate && candidate != item
+            if (guardedCache->ownsLiveRide(candidate)
+                && candidate != item
                 && candidate->getLinkedFileName() == item->fileName) {
                 result.error = tr(
                     "A planned activity referenced by another activity cannot be replaced: %1")
@@ -2244,7 +2383,8 @@ RideCache::replacePlannedActivityFiles(
             return result;
         }
         for (RideItem *candidate : std::as_const(guardedCache->rides_)) {
-            if (candidate && candidate->fileName == target.fileName
+            if (guardedCache->ownsLiveRide(candidate)
+                && candidate->fileName == target.fileName
                 && !requestedItems.contains(candidate)) {
                 result.error = tr(
                     "A planned activity replacement target already exists in the cache: %1")
@@ -2421,6 +2561,7 @@ RideCache::replacePlannedActivityFiles(
     cacheSnapshot.reserve(guardedCache->rides_.size());
     QSet<RideItem*> cacheSnapshotAddresses;
     for (RideItem *item : std::as_const(guardedCache->rides_)) {
+        if (!guardedCache->ownsLiveRide(item)) continue;
         cacheSnapshot.append({
             item, QPointer<RideItem>(item),
             requestedItems.contains(item)});
@@ -2503,7 +2644,7 @@ RideCache::replacePlannedActivityFiles(
                         repair.unexpectedDeletion = true;
                     guardedCache->rides_.removeOne(entry.address);
                     guardedCache->delete_.removeOne(entry.address);
-                    guardedCache->deletelist.removeOne(entry.address);
+                    guardedCache->deletelist.remove(entry.address);
                     if (guardedContext->ride == entry.address)
                         guardedContext->ride = nullptr;
                     retiredCacheEntries.insert(index);
@@ -2527,7 +2668,10 @@ RideCache::replacePlannedActivityFiles(
                     }
                 }
                 guardedContext->ride = nullptr;
-                guardedModel->beginReset();
+                if (!guardedModel->beginReset()) {
+                    repair.ownersStable = false;
+                    return repair;
+                }
                 flushOriginalDeferredDeletes();
                 if (!operationOwnersAreStable()) {
                     if (guardedCache && guardedModel
@@ -2546,7 +2690,7 @@ RideCache::replacePlannedActivityFiles(
                     return repair;
                 }
                 if (previousSelection
-                    && guardedCache->rides_.contains(
+                    && guardedCache->ownsLiveRide(
                         previousSelection.data())) {
                     guardedContext->ride =
                         previousSelection.data();
@@ -2577,7 +2721,7 @@ RideCache::replacePlannedActivityFiles(
         if (!cacheSnapshotIsStable()) return false;
         for (const PendingReplacement &entry : pending) {
             RideItem *const item = entry.item.data();
-            if (!item || !guardedCache->rides_.contains(item)
+            if (!guardedCache->ownsLiveRide(item)
                 || !item->planned
                 || item->isdirty
                 || item->hasLinkedActivity()
@@ -2594,12 +2738,14 @@ RideCache::replacePlannedActivityFiles(
             int matches = 0;
             for (RideItem *candidate :
                  std::as_const(guardedCache->rides_)) {
-                if (candidate && candidate != item
+                if (guardedCache->ownsLiveRide(candidate)
+                    && candidate != item
                     && candidate->getLinkedFileName()
                         == entry.fileName) {
                     return false;
                 }
-                if (!candidate || !candidate->planned
+                if (!guardedCache->ownsLiveRide(candidate)
+                    || !candidate->planned
                     || candidate->fileName != entry.fileName) {
                     continue;
                 }
@@ -2616,7 +2762,8 @@ RideCache::replacePlannedActivityFiles(
         }
         for (RideItem *candidate :
              std::as_const(guardedCache->rides_)) {
-            if (candidate && targetNames.contains(candidate->fileName)
+            if (guardedCache->ownsLiveRide(candidate)
+                && targetNames.contains(candidate->fileName)
                 && !requestedItems.contains(candidate)) {
                 return false;
             }
@@ -2887,8 +3034,7 @@ RideCache::replacePlannedActivityFiles(
     };
 
     QPointer<RideItem> previousSelection;
-    if (guardedContext->ride
-        && guardedCache->rides_.contains(guardedContext->ride)) {
+    if (guardedCache->ownsLiveRide(guardedContext->ride)) {
         previousSelection = guardedContext->ride;
     }
     QString selectedReplacementName;
@@ -2898,7 +3044,21 @@ RideCache::replacePlannedActivityFiles(
     }
     guardedContext->ride = nullptr;
 
-    guardedModel->beginReset();
+    if (!guardedModel->beginReset()) {
+        for (const QPointer<RideItem> &item :
+             std::as_const(guardedIncoming)) {
+            if (!item) continue;
+            item->context = nullptr;
+            delete item.data();
+        }
+        QString cleanupError;
+        result.cleanupComplete =
+            journal->cleanupAfterCommit(cleanupError);
+        result.error = tr(
+            "The activity model was busy after the plan files were replaced");
+        appendRemovalError(result.error, cleanupError);
+        return result;
+    }
     flushDeferredRideItemDeletes();
     if (!operationOwnersAreStable()) {
         if (guardedCache && guardedModel
@@ -2993,8 +3153,7 @@ RideCache::replacePlannedActivityFiles(
     const auto incomingItemIsValid = [&](int index) {
         RideItem *const item =
             guardedIncoming.at(index).data();
-        return item
-            && guardedCache->rides_.contains(item)
+        return guardedCache->ownsLiveRide(item)
             && item->context == guardedContext.data()
             && item->planned && !item->isdirty
             && item->path == canonicalPlannedRoot
@@ -3033,7 +3192,13 @@ RideCache::replacePlannedActivityFiles(
                 guardedCacheItemAtAddress(
                     guardedContext->ride);
             guardedContext->ride = nullptr;
-            guardedModel->beginReset();
+            if (!guardedModel->beginReset()) {
+                result.cacheUpdated = false;
+                appendRemovalError(
+                    result.error,
+                    tr("The activity model became busy while published activities were repaired"));
+                return false;
+            }
             flushDeferredRideItemDeletes();
             if (!operationOwnersAreStable()) {
                 if (guardedCache && guardedModel
@@ -3069,7 +3234,7 @@ RideCache::replacePlannedActivityFiles(
                     guardedIncoming.at(index).data();
                 guardedCache->rides_.removeOne(address);
                 guardedCache->delete_.removeOne(address);
-                guardedCache->deletelist.removeOne(address);
+                guardedCache->deletelist.remove(address);
                 if (guardedContext->ride == address)
                     guardedContext->ride = nullptr;
                 if (item) {
@@ -3093,7 +3258,7 @@ RideCache::replacePlannedActivityFiles(
                 return false;
             }
             if (resetSelection
-                && guardedCache->rides_.contains(
+                && guardedCache->ownsLiveRide(
                     resetSelection.data())) {
                 guardedContext->ride = resetSelection.data();
             }
@@ -3127,9 +3292,8 @@ RideCache::replacePlannedActivityFiles(
     for (const QPointer<RideFile> &processorRide :
          processorRides.files()) {
         if (!processorRide) {
-            appendRemovalError(
-                result.error,
-                tr("An activity delete processor input disappeared before processing"));
+            result.warnings.append(tr(
+                "An activity delete processor input disappeared before processing"));
             continue;
         }
         QString processorError;
@@ -3137,8 +3301,7 @@ RideCache::replacePlannedActivityFiles(
             processorRide);
         if (!runRemovalDeleteProcessor(
                 guardedProcessorRide.data(), processorError)) {
-            appendRemovalError(
-                result.error,
+            result.warnings.append(
                 processorError.isEmpty()
                     ? tr("An activity delete processor failed")
                     : processorError);
@@ -3150,9 +3313,8 @@ RideCache::replacePlannedActivityFiles(
         }
         flushDeferredRideItemDeletes();
         if (!guardedProcessorRide) {
-            appendRemovalError(
-                result.error,
-                tr("An activity delete processor destroyed its input"));
+            result.warnings.append(tr(
+                "An activity delete processor destroyed its input"));
         }
         if (!postCommitOwnersAreStable(tr(
                 "The planned activity collection disappeared during delete processing"))) {
@@ -3171,7 +3333,7 @@ RideCache::replacePlannedActivityFiles(
     }
 
     RideItem *selection = previousSelection.data();
-    if (!selection || !guardedCache->rides_.contains(selection)) {
+    if (!guardedCache->ownsLiveRide(selection)) {
         selection = nullptr;
         if (!selectedReplacementName.isEmpty()) {
             for (const QPointer<RideItem> &item :
@@ -3192,8 +3354,10 @@ RideCache::replacePlannedActivityFiles(
                 }
             }
         }
-        if (!selection && !guardedCache->rides_.isEmpty())
-            selection = guardedCache->rides_.constFirst();
+        if (!selection) {
+            const QVector<RideItem*> liveRides = guardedCache->rides();
+            if (!liveRides.isEmpty()) selection = liveRides.constFirst();
+        }
     }
     RideItem *const selectionAddress = selection;
     const QPointer<RideItem> guardedSelection(selection);
@@ -3218,7 +3382,7 @@ RideCache::replacePlannedActivityFiles(
         }
         if (!selectionAddress) return true;
         if (guardedSelection
-            && guardedCache->rides_.contains(
+            && guardedCache->ownsLiveRide(
                 guardedSelection.data())) {
             return true;
         }
@@ -3239,7 +3403,7 @@ RideCache::replacePlannedActivityFiles(
         }
         if (!entry.item) {
             guardedCache->delete_.removeOne(entry.address);
-            guardedCache->deletelist.removeOne(entry.address);
+            guardedCache->deletelist.remove(entry.address);
         }
         if (!incomingIsStable(tr(
                 "A newly published planned activity changed during deletion notification"))
@@ -3291,16 +3455,11 @@ RideCache::replacePlannedActivityFiles(
         return result;
     }
 
-    guardedCache->refresh();
-    flushDeferredRideItemDeletes();
-    if (!postCommitOwnersAreStable(tr(
-            "The planned activity collection disappeared during refresh"))) {
-        return result;
+    backgroundResumeHandled = true;
+    if (!scheduleBackgroundWork()) {
+        result.warnings.append(tr(
+            "The plan was replaced, but its background refresh could not be scheduled"));
     }
-    guardedEstimator->refresh();
-    flushDeferredRideItemDeletes();
-    postCommitOwnersAreStable(tr(
-        "The planned activity collection disappeared during estimator refresh"));
     return result;
 }
 
@@ -3312,7 +3471,8 @@ RideCache::uniqueRideForFileName(
 
     RideItem *match = nullptr;
     for (RideItem *ride : rides_) {
-        if (!ride || ride->fileName != fileName)
+        if (!ownsLiveRide(ride)
+            || ride->fileName != fileName)
             continue;
         if (match) return nullptr;
         match = ride;
@@ -3329,7 +3489,7 @@ RideCache::uniqueRideForIdentity(
 
     RideItem *match = nullptr;
     for (RideItem *ride : rides_) {
-        if (!ride
+        if (!ownsLiveRide(ride)
             || ride->fileName != fileName
             || ride->planned != planned) {
             continue;
@@ -3344,7 +3504,7 @@ RideCache::OperationPreCheck
 RideCache::checkRemovalLinks(RideItem *item)
 {
     OperationPreCheck check;
-    if (!item || !rides_.contains(item)) {
+    if (!ownsLiveRide(item)) {
         check.canProceed = false;
         check.blockingReason = tr(
             "The activity is no longer in the activity list");
@@ -3353,7 +3513,7 @@ RideCache::checkRemovalLinks(RideItem *item)
 
     QList<RideItem*> incomingLinkedItems;
     for (RideItem *candidate : std::as_const(rides_)) {
-        if (!candidate
+        if (!ownsLiveRide(candidate)
             || candidate == item
             || candidate->getLinkedFileName()
                 != item->fileName) {
@@ -3379,7 +3539,7 @@ RideCache::checkRemovalLinks(RideItem *item)
     QList<RideItem*> incomingToLinkedItem;
     if (linkedItem) {
         for (RideItem *candidate : std::as_const(rides_)) {
-            if (!candidate
+            if (!ownsLiveRide(candidate)
                 || candidate == linkedItem
                 || candidate->getLinkedFileName()
                     != linkedItem->fileName) {
@@ -3429,10 +3589,20 @@ RideCache::RemovalResult
 RideCache::removeRideEntry(
     RideItem *rideToDelete,
     RideFileDisposition disposition,
-    bool triggerRefresh)
+    bool triggerRefresh,
+    bool workersQuiesced)
 {
     RemovalResult result;
     result.requestedCount = 1;
+    if (activityMutationIsBlocked()) {
+        result.error = tr(
+            "Another activity operation is already in progress");
+        appendRemovalItemResult(
+            result, {}, false,
+            RemovalStatus::Rejected,
+            result.error);
+        return result;
+    }
     RemovalOperationGuard removalGuard(removalInProgress_);
     if (!removalGuard.acquired()) {
         result.error = tr(
@@ -3488,7 +3658,7 @@ RideCache::removeRideEntry(
     RideItem *todelete = rideToDelete;
     int index = rides_.indexOf(todelete);
 
-    if (index < 0) {
+    if (index < 0 || deletelist.contains(todelete)) {
         result.error = tr(
             "The activity deletion target is no longer in the cache");
         appendRemovalItemResult(
@@ -3499,14 +3669,29 @@ RideCache::removeRideEntry(
         return result;
     }
     const QPointer<RideItem> deletionItem(todelete);
-    if (triggerRefresh) {
+    if (!workersQuiesced) {
         guardedCache->cancel();
         if (!operationOwnersAreStable()
             || !deletionItem
-            || !guardedCache->rides_.contains(
+            || !guardedCache->ownsLiveRide(
                 deletionItem.data())) {
             result.error = tr(
                 "The activity deletion target changed while refresh was being cancelled");
+            appendRemovalItemResult(
+                result, {}, false,
+                RemovalStatus::Rejected,
+                result.error);
+            return result;
+        }
+        todelete = deletionItem.data();
+        index = guardedCache->rides_.indexOf(todelete);
+        guardedEstimator->stop();
+        if (!operationOwnersAreStable()
+            || !deletionItem
+            || !guardedCache->ownsLiveRide(
+                deletionItem.data())) {
+            result.error = tr(
+                "The activity deletion target changed while estimates were being stopped");
             appendRemovalItemResult(
                 result, {}, false,
                 RemovalStatus::Rejected,
@@ -3666,9 +3851,9 @@ RideCache::removeRideEntry(
     }
 
     const auto hasDeletionSourceIdentity =
-        [filenameToDelete, plannedToDelete,
+        [guardedCache, filenameToDelete, plannedToDelete,
          activeDirectoryIdentity](RideItem *candidate) {
-            if (!candidate
+            if (!guardedCache->ownsLiveRide(candidate)
                 || candidate->fileName != filenameToDelete
                 || candidate->planned != plannedToDelete) {
                 return false;
@@ -3691,8 +3876,7 @@ RideCache::removeRideEntry(
          hasDeletionSourceIdentity] {
             if (!operationOwnersAreStable()) return false;
             RideItem *const item = deletionItem.data();
-            if (!item
-                || !guardedCache->rides_.contains(item)
+            if (!guardedCache->ownsLiveRide(item)
                 || item->fileName != filenameToDelete
                 || item->planned != plannedToDelete
                 || item->path != pathToDelete) {
@@ -3742,7 +3926,7 @@ RideCache::removeRideEntry(
             if (!operationOwnersAreStable()) return false;
             for (RideItem *candidate :
                  std::as_const(guardedCache->rides_)) {
-                if (!candidate
+                if (!guardedCache->ownsLiveRide(candidate)
                     || candidate == deletionItem.data()) {
                     continue;
                 }
@@ -3786,8 +3970,7 @@ RideCache::removeRideEntry(
          &linkedExpectedPlanned] {
             if (!operationOwnersAreStable()) return false;
             RideItem *const item = linkedItem.data();
-            return item
-                && guardedCache->rides_.contains(item)
+            return guardedCache->ownsLiveRide(item)
                 && item->fileName
                     == linkedExpectedFileName
                 && item->path
@@ -3820,8 +4003,7 @@ RideCache::removeRideEntry(
                 return false;
             }
             RideItem *const item = linkedItem.data();
-            if (!item
-                || !guardedCache->rides_.contains(item)) {
+            if (!guardedCache->ownsLiveRide(item)) {
                 error = QObject::tr(
                     "The linked activity disappeared while its identity was being checked");
                 return false;
@@ -3854,7 +4036,7 @@ RideCache::removeRideEntry(
             int identityMatches = 0;
             for (RideItem *candidate :
                  std::as_const(guardedCache->rides_)) {
-                if (!candidate
+                if (!guardedCache->ownsLiveRide(candidate)
                     || candidate->fileName != item->fileName
                     || candidate->planned != item->planned
                     || directoryIdentity(candidate->path)
@@ -3885,8 +4067,7 @@ RideCache::removeRideEntry(
         [guardedCache, &linkedItem] {
             if (!guardedCache) return QString();
             RideItem *const item = linkedItem.data();
-            if (!item
-                || !guardedCache->rides_.contains(item))
+            if (!guardedCache->ownsLiveRide(item))
                 return QString();
             return RideFileCacheIntegrity::activitySourcePath(
                 item->path, item->fileName);
@@ -3933,8 +4114,7 @@ RideCache::removeRideEntry(
                 return false;
             }
             RideItem *item = linkedItem.data();
-            if (!item
-                || !guardedCache->rides_.contains(item)) {
+            if (!guardedCache->ownsLiveRide(item)) {
                 error = QObject::tr(
                     "The linked activity disappeared before it could be restored");
                 return false;
@@ -3943,8 +4123,7 @@ RideCache::removeRideEntry(
                 linkedFileName);
             item = linkedItem.data();
             if (!operationOwnersAreStable()
-                || !item
-                || !guardedCache->rides_.contains(item)
+                || !guardedCache->ownsLiveRide(item)
                 || !linkedIdentityMatches()
                 || !deletionTargetIsStable()) {
                 error = QObject::tr(
@@ -3974,8 +4153,7 @@ RideCache::removeRideEntry(
             }
             item = linkedItem.data();
             if (!operationOwnersAreStable()
-                || !item
-                || !guardedCache->rides_.contains(item)
+                || !guardedCache->ownsLiveRide(item)
                 || !deletionTargetIsStable()) {
                 error = QObject::tr(
                     "The linked activity disappeared while saving its restored link");
@@ -4039,9 +4217,7 @@ RideCache::removeRideEntry(
         }
         linkedItem =
             linkCheck.affectedItems.value(1);
-        if (!linkedItem
-            || !guardedCache->rides_.contains(
-                linkedItem.data())) {
+        if (!guardedCache->ownsLiveRide(linkedItem.data())) {
             result.error = tr(
                 "The linked activity changed before deletion");
             appendRemovalItemResult(
@@ -4140,9 +4316,7 @@ RideCache::removeRideEntry(
             linkedItem->getLinkedFileName();
         linkedItem->clearLinkedFileName();
         if (!operationOwnersAreStable()
-            || !linkedItem
-            || !guardedCache->rides_.contains(
-                linkedItem.data())
+            || !guardedCache->ownsLiveRide(linkedItem.data())
             || !linkedIdentityMatches()) {
             requireLinkedRecovery(tr(
                 "The linked activity disappeared while its link was being updated"));
@@ -4271,9 +4445,7 @@ RideCache::removeRideEntry(
                 linkedIdentityError);
         if (!linkedIdentityAccepted
             || !operationOwnersAreStable()
-            || !linkedItem
-            || !guardedCache->rides_.contains(
-                linkedItem.data())
+            || !guardedCache->ownsLiveRide(linkedItem.data())
             || !linkedIdentityMatches()
             || !linkedItem->getLinkedFileName()
                     .isEmpty()) {
@@ -4343,15 +4515,14 @@ RideCache::removeRideEntry(
                 return false;
             }
             RideItem *const peer = linkedItem.data();
-            if (!peer
-                || !guardedCache->rides_.contains(peer)
+            if (!guardedCache->ownsLiveRide(peer)
                 || !peer->getLinkedFileName()
                         .isEmpty()) {
                 return false;
             }
             for (RideItem *candidate :
                  std::as_const(guardedCache->rides_)) {
-                if (!candidate
+                if (!guardedCache->ownsLiveRide(candidate)
                     || candidate
                         == deletionItem.data()
                     || candidate == peer) {
@@ -4542,19 +4713,30 @@ RideCache::removeRideEntry(
     QPointer<RideItem> previousSelection;
     RideItem *const previousSelectionCandidate =
         guardedContext->ride;
-    if (previousSelectionCandidate
-        && guardedCache->rides_.contains(
+    if (guardedCache->ownsLiveRide(
             previousSelectionCandidate)) {
         previousSelection = previousSelectionCandidate;
     }
     QPointer<RideItem> nextSelection;
     if (previousSelection == todelete) {
-        if (index + 1 < guardedCache->rides_.size())
-            nextSelection = guardedCache->rides_.at(index + 1);
-        else if (index > 0)
-            nextSelection = guardedCache->rides_.at(index - 1);
+        for (int row = index + 1;
+             row < guardedCache->rides_.size(); ++row) {
+            RideItem *candidate = guardedCache->rides_.at(row);
+            if (guardedCache->ownsLiveRide(candidate)) {
+                nextSelection = candidate;
+                break;
+            }
+        }
+        for (int row = index - 1;
+             !nextSelection && row >= 0; --row) {
+            RideItem *candidate = guardedCache->rides_.at(row);
+            if (guardedCache->ownsLiveRide(candidate)) {
+                nextSelection = candidate;
+                break;
+            }
+        }
     } else if (previousSelection
-               && guardedCache->rides_.contains(
+               && guardedCache->ownsLiveRide(
                    previousSelection.data())) {
         nextSelection = previousSelection;
     }
@@ -4589,7 +4771,17 @@ RideCache::removeRideEntry(
             Qt::DirectConnection);
     }
     guardedContext->ride = signalSelection;
-    guardedModel->startRemove(index);
+    if (!guardedModel->startRemove(index)) {
+        result.status = RemovalStatus::RecoveryRequired;
+        appendRemovalError(
+            result.error,
+            tr("The activity model became busy after its files were archived"));
+        if (!result.items.isEmpty()) {
+            result.items.last().status = result.status;
+            result.items.last().error = result.error;
+        }
+        return result;
+    }
     if (!guardedCache || !guardedModel
         || guardedCache->model_
             != guardedModel.data()) {
@@ -4617,14 +4809,29 @@ RideCache::removeRideEntry(
             != guardedModel.data()) {
         return result;
     }
-    QObject::disconnect(selectionDestroyedConnection);
-    if (!deletionItem)
+    if (!deletionItem) {
         guardedCache->delete_.removeOne(todelete);
+        guardedCache->discardDetachedTombstones();
+    }
+    if (!guardedCache->purgeDestroyedModelRows()) {
+        if (!operationOwnersAreStable()) return result;
+        result.status = RemovalStatus::RecoveryRequired;
+        appendRemovalError(
+            result.error,
+            tr("Destroyed activity rows could not be removed from the activity model"));
+        if (!result.items.isEmpty()) {
+            result.items.last().status = result.status;
+            result.items.last().error = result.error;
+        }
+        return result;
+    }
+    if (!operationOwnersAreStable()) return result;
+    QObject::disconnect(selectionDestroyedConnection);
 
     RideItem *stableSelection =
         nextSelection.data();
     if (stableSelection
-        && !guardedCache->rides_.contains(
+        && !guardedCache->ownsLiveRide(
             stableSelection)) {
         stableSelection = nullptr;
     }
@@ -4651,9 +4858,10 @@ RideCache::removeRideEntry(
     }
     if (!deletionItem)
         guardedCache->delete_.removeOne(todelete);
+    guardedCache->discardDetachedTombstones();
     stableSelection = nextSelection.data();
     if (stableSelection
-        && !guardedCache->rides_.contains(
+        && !guardedCache->ownsLiveRide(
             stableSelection)) {
         stableSelection = nullptr;
     }
@@ -4664,10 +4872,14 @@ RideCache::removeRideEntry(
     if (!operationOwnersAreStable()) return result;
 
     if (triggerRefresh) {
+        guardedCache->removalRefreshPending_ = false;
+        removalGuard.release();
         guardedCache->refresh();
         if (!operationOwnersAreStable()) return result;
         // model estimates (lazy refresh)
         guardedEstimator->refresh();
+    } else {
+        removalGuard.release();
     }
 
     if (!result.cleanlyCompleted()) {

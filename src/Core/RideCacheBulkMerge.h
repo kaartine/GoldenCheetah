@@ -43,7 +43,12 @@ QVector<Item *> mergeItems(
         positions.insert(keyFor(current[index]), index);
     }
 
-    beginReset();
+    if constexpr (std::is_convertible_v<
+                      std::invoke_result_t<BeginResetFunction>, bool>) {
+        if (!beginReset()) return replaced;
+    } else {
+        beginReset();
+    }
     for (Item *item : incoming) {
         Q_ASSERT(item);
         const Key key = keyFor(item);

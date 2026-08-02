@@ -51,6 +51,7 @@ private slots:
     void bulkMerge_data();
     void bulkMerge();
     void duplicateReplacementIsExplicit();
+    void rejectedResetLeavesMergeUntouched();
     void emptyMergeDoesNotResetModel();
 };
 
@@ -290,6 +291,41 @@ void TestRideImportBatch::duplicateReplacementIsExplicit()
 
     deleteItems(replaced);
     deleteItems(current);
+}
+
+void TestRideImportBatch::rejectedResetLeavesMergeUntouched()
+{
+    const QDateTime base(
+        QDate(2020, 1, 1), QTime(0, 0), QTimeZone::UTC);
+    MergeItem *existing = item(QStringLiteral("existing"), base, 1);
+    MergeItem *incoming =
+        item(QStringLiteral("incoming"), base.addSecs(1), 2);
+    QVector<MergeItem *> current{existing};
+    const QVector<MergeItem *> additions{incoming};
+    int beginResetCalls = 0;
+    int endResetCalls = 0;
+
+    const QVector<MergeItem *> replaced =
+        RideCacheBulkMerge::mergeItems(
+            current,
+            additions,
+            [](const MergeItem *entry) { return entry->fileName; },
+            [](const MergeItem *left, const MergeItem *right) {
+                return left->dateTime < right->dateTime;
+            },
+            [&]() {
+                ++beginResetCalls;
+                return false;
+            },
+            [&]() { ++endResetCalls; });
+
+    QVERIFY(replaced.isEmpty());
+    QCOMPARE(current, QVector<MergeItem *>{existing});
+    QCOMPARE(beginResetCalls, 1);
+    QCOMPARE(endResetCalls, 0);
+
+    deleteItems(current);
+    deleteItems(additions);
 }
 
 void TestRideImportBatch::emptyMergeDoesNotResetModel()

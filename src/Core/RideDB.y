@@ -556,7 +556,7 @@ RideCache::captureSaveSnapshot(const QString &targetPath)
             QStringLiteral(RIDEDB_VERSION),
             targetPath,
             metrics,
-            rides_));
+            rides()));
 }
 
 void RideCache::save(bool opendata, QString filename)

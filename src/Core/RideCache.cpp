@@ -324,8 +324,18 @@ RideCache::appendStartupFiles(
     if (!files || files->isEmpty()) return;
 
     const int firstRow = rides_.size();
-    model_->startInsert(
-        firstRow, firstRow + files->size() - 1);
+    if (!model_->startInsert(
+            firstRow, firstRow + files->size() - 1)) {
+        const QPointer<RideCache> guardedThis(this);
+        QMetaObject::invokeMethod(
+            this,
+            [guardedThis, files] {
+                if (guardedThis)
+                    guardedThis->appendStartupFiles(files);
+            },
+            Qt::QueuedConnection);
+        return;
+    }
     for (const RideCacheStartup::IndexedFile &file : *files) {
         QDateTime dateTime = file.dateTime;
         auto *item = new RideItem(
@@ -443,6 +453,19 @@ struct comparerideitem { bool operator()(const RideItem *p1, const RideItem *p2)
 int
 RideCache::find(RideItem *dt)
 {
+    if (!dt || deletelist.contains(dt)) return -1;
+
+    if (!deletelist.isEmpty()) {
+        for (qsizetype index = 0; index < rides_.size(); ++index) {
+            RideItem *item = rides_.at(index);
+            if (item && !deletelist.contains(item)
+                && item->dateTime == dt->dateTime) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
     // use lower_bound to binary search
     QVector<RideItem*>::const_iterator i = std::lower_bound(rides_.begin(), rides_.end(), dt, comparerideitem());
     int index = i - rides_.begin();
@@ -490,15 +513,6 @@ RideCache::~RideCache()
 }
 
 void
-RideCache::garbageCollect()
-{
-    foreach(RideItem *item, delete_) {
-        if (item) item->deleteLater();
-    }
-    delete_.clear();
-}
-
-void
 RideCache::initEstimates()
 {
     // kickoff first calculation
@@ -515,13 +529,13 @@ RideCache::configChanged(qint32 what)
         RideCacheStartup::planInvalidation(what);
 
     if (plan.invalidateWbal) {
-        for (RideItem *item : rides_) {
+        for (RideItem *item : rides()) {
             if (item->isOpen()) item->ride()->wstale = true;
         }
     }
 
     if (plan.rebuildCalendarText) {
-        for (RideItem *item : rides_) {
+        for (RideItem *item : rides()) {
             item->metadata_.insert(
                 QStringLiteral("Calendar Text"),
                 GlobalContext::context()->rideMetadata->calendarText(item));
@@ -529,7 +543,7 @@ RideCache::configChanged(qint32 what)
     }
 
     if (plan.recolor) {
-        for (RideItem *item : rides_) {
+        for (RideItem *item : rides()) {
             item->color = GlobalContext::context()->colorEngine->colorFor(
                 item->getText(
                     GlobalContext::context()->rideMetadata->getColorField(),
@@ -538,6 +552,14 @@ RideCache::configChanged(qint32 what)
     }
 
     if (plan.refreshMetrics) refresh();
+}
+
+bool
+RideCache::activityMutationIsBlocked() const
+{
+    return QThread::currentThread() != thread()
+        || (removalInProgress_ && *removalInProgress_)
+        || (model_ && !model_->cacheMutationAllowed());
 }
 
 void
@@ -589,7 +611,9 @@ RideCache::addRide(QString name, bool dosignal, bool select, bool useTempActivit
     // now add to the list, or replace if already there
     bool added = false;
     for (int index=0; index < rides_.count(); index++) {
-        if (rides_[index]->fileName == last->fileName) {
+        RideItem *const current = rides_.at(index);
+        if (current && !deletelist.contains(current)
+            && current->fileName == last->fileName) {
             invalidateStartupSnapshots();
             rides_[index] = last;
             added = true;
@@ -599,7 +623,10 @@ RideCache::addRide(QString name, bool dosignal, bool select, bool useTempActivit
 
     // add and sort, model needs to know !
     if (!added) {
-        model_->beginReset();
+        if (!model_->beginReset()) {
+            delete last;
+            return;
+        }
         rides_ << last;
         std::sort(rides_.begin(), rides_.end(), rideCacheLessThan);
         model_->endReset();
@@ -699,14 +726,22 @@ RideCache::addRides(
     }
     if (incoming.isEmpty()) return incoming;
 
+    bool mergeStarted = false;
     const QVector<RideItem*> replaced =
         RideCacheBulkMerge::mergeItems(
             rides_,
             incoming,
             [](const RideItem *item) { return item->fileName; },
             rideCacheLessThan,
-            [this]() { model_->beginReset(); },
+            [this, &mergeStarted]() {
+                mergeStarted = model_->beginReset();
+                return mergeStarted;
+            },
             [this]() { model_->endReset(); });
+    if (!mergeStarted) {
+        qDeleteAll(incoming);
+        return {};
+    }
     Q_UNUSED(replaced);
 
     for (RideItem *item : incoming) {
@@ -996,6 +1031,15 @@ RideCache::refresh()
         return;
     }
 
+    if (replacementRefreshBlocked_
+        && *replacementRefreshBlocked_)
+        return;
+
+    if (removalInProgress_ && *removalInProgress_) {
+        removalRefreshPending_ = true;
+        return;
+    }
+
     bool active = false;
     bool deferStart = false;
     {
@@ -1044,7 +1088,7 @@ RideCache::startLatestRefresh()
         }
 
         generation = refreshGeneration_.beginLatest();
-        reverse_ = rides_;
+        reverse_ = rides();
         std::reverse(reverse_.begin(), reverse_.end());
         updates = 0;
         progress_ = 0;
@@ -1151,7 +1195,7 @@ RideCache::getAggregates(
 
     const RideCacheAggregate::BatchResult batch =
         RideCacheAggregate::aggregate(
-            rides_,
+            rides(),
             specifications,
             definitions,
             [](const Specification &specification, RideItem *item) {
@@ -1237,7 +1281,7 @@ RideCache::getBests(QString symbol, int n, Specification specification, bool use
     if (!metric) return results;
 
     // loop through and aggregate
-    foreach (RideItem *ride, rides_) {
+    foreach (RideItem *ride, rides()) {
 
         // skip filtered rides
         if (!specification.pass(ride)) continue;
@@ -1281,6 +1325,7 @@ RideCache::getAllFilenames()
 {
     QStringList returning;
     foreach(RideItem *item, rides()) {
+        if (!item || deletelist.contains(item)) continue;
         returning << item->fileName;
     }
     return returning;
@@ -1374,7 +1419,7 @@ RideCache::getRideTypeCounts(Specification specification, int& nActivities,
     sport = "";
 
     // loop through and aggregate
-    foreach (RideItem *ride, rides_) {
+    foreach (RideItem *ride, rides()) {
 
         // skip filtered rides
         if (!specification.pass(ride)) continue;
@@ -1397,7 +1442,7 @@ RideCache::areMetricsRelevantForRides(
     SportRestriction sport)
 {
     return RideCacheAggregate::metricRelevance(
-        rides_,
+        rides(),
         specifications,
         metrics.size(),
         [](const Specification &specification, RideItem *ride) {
@@ -1428,82 +1473,15 @@ RideCache::isMetricRelevantForRides(
 
 
 RideCache::OperationPreCheck
-RideCache::checkLinkActivities
-(RideItem *item1, RideItem *item2)
-{
-    OperationPreCheck check;
-
-    if (! isValidLink(item1, item2, check.blockingReason)) {
-        check.canProceed = false;
-        return check;
-    }
-    if (item1->hasLinkedActivity()) {
-        check.canProceed = false;
-        check.blockingReason = tr("%1 is already linked to %2").arg(item1->fileName).arg(item1->getLinkedFileName());
-        return check;
-    }
-    if (item2->hasLinkedActivity()) {
-        check.canProceed = false;
-        check.blockingReason = tr("%1 is already linked to %2").arg(item2->fileName).arg(item2->getLinkedFileName());
-        return check;
-    }
-
-    check.affectedItems << item1 << item2;
-    if (item1->isDirty()) {
-        check.dirtyItems << item1;
-    }
-    if (item2->isDirty()) {
-        check.dirtyItems << item2;
-    }
-    if (! check.dirtyItems.isEmpty()) {
-        check.requiresUserDecision = true;
-        QStringList dirtyNames;
-        for (RideItem *item : check.dirtyItems) {
-            dirtyNames << item->fileName;
-        }
-        check.warningMessage = tr(
-            "The following activities have unsaved changes:\n%1\n\n"
-            "Linking will modify both activities. You must save or discard changes first.")
-            .arg(dirtyNames.join("\n"));
-    }
-
-    return check;
-}
-
-
-RideCache::OperationResult
-RideCache::linkActivities
-(RideItem *item1, RideItem *item2)
-{
-    OperationResult result;
-    if (activityMutationIsBlocked()) {
-        result.error = tr(
-            "Another activity operation is already in progress");
-        return result;
-    }
-
-    item1->setLinkedFileName(item2->fileName);
-    item2->setLinkedFileName(item1->fileName);
-
-    result.success = true;
-    result.affectedCount = 2;
-
-    emit itemChanged(item1);
-    emit itemChanged(item2);
-
-    return result;
-}
-
-
-RideCache::OperationPreCheck
 RideCache::checkUnlinkActivity
 (RideItem *item)
 {
     OperationPreCheck check;
 
-    if (! item) {
+    if (!ownsLiveRide(item)) {
         check.canProceed = false;
-        check.blockingReason = tr("No activity given");
+        check.blockingReason = tr(
+            "The activity is no longer in the activity list");
         return check;
     }
     QString linkedFileName = item->getLinkedFileName();
@@ -1552,8 +1530,17 @@ RideCache::unlinkActivity
             "Another activity operation is already in progress");
         return result;
     }
+    if (!ownsLiveRide(item)) {
+        result.error = tr(
+            "The activity is no longer in the activity list");
+        return result;
+    }
 
     RideItem *linkedItem = getLinkedActivity(item);
+    if (!linkedItem) {
+        result.error = tr("Linked activity not found");
+        return result;
+    }
 
     linkedItem->clearLinkedFileName();
     item->clearLinkedFileName();
@@ -1657,9 +1644,10 @@ RideCache::checkMoveActivity
 {
     OperationPreCheck check;
 
-    if (! item) {
+    if (!ownsLiveRide(item)) {
         check.canProceed = false;
-        check.blockingReason = tr("No activity given");
+        check.blockingReason = tr(
+            "The activity is no longer in the activity list");
         return check;
     }
     if (! newDateTime.isValid()) {
@@ -1713,8 +1701,9 @@ RideCache::moveActivity
             "Another activity operation is already in progress");
         return result;
     }
-    if (!item) {
-        result.error = tr("No activity given");
+    if (!ownsLiveRide(item)) {
+        result.error = tr(
+            "The activity is no longer in the activity list");
         return result;
     }
 
@@ -1764,14 +1753,22 @@ RideCache::moveActivity
 
     int index = rides_.indexOf(item);
     if (index >= 0) {
-        model_->startRemove(index);
+        if (!model_->startRemove(index)) {
+            result.error = tr(
+                "The activity list changed while the renamed activity was being published");
+            return result;
+        }
         rides_.remove(index, 1);
         model_->endRemove(index);
     }
 
     item->setFileName((item->planned ? plannedDirectory : directory).canonicalPath(), newFileName);
 
-    model_->beginReset();
+    if (!model_->beginReset()) {
+        result.error = tr(
+            "The activity list changed while the renamed activity was being reordered");
+        return result;
+    }
     rides_ << item;
     std::sort(rides_.begin(), rides_.end(), rideCacheLessThan);
     model_->endReset();
@@ -1811,9 +1808,10 @@ RideCache::checkCopyPlannedActivity
 {
     OperationPreCheck check;
 
-    if (! sourceItem) {
+    if (!ownsLiveRide(sourceItem)) {
         check.canProceed = false;
-        check.blockingReason = tr("No activity given");
+        check.blockingReason = tr(
+            "The activity is no longer in the activity list");
         return check;
     }
     if (! newDate.isValid()) {
@@ -1851,8 +1849,9 @@ RideCache::copyPlannedActivity
             "Another activity operation is already in progress");
         return result;
     }
-    if (!sourceItem) {
-        result.error = tr("No activity given");
+    if (!ownsLiveRide(sourceItem)) {
+        result.error = tr(
+            "The activity is no longer in the activity list");
         return result;
     }
 
@@ -1868,7 +1867,12 @@ RideCache::copyPlannedActivity
         return result;
     }
 
-    model_->beginReset();
+    if (!model_->beginReset()) {
+        delete newItem;
+        result.error = tr(
+            "The activity list changed while the copied activity was being published");
+        return result;
+    }
     rides_ << newItem;
     std::sort(rides_.begin(), rides_.end(), rideCacheLessThan);
     model_->endReset();
@@ -1899,9 +1903,10 @@ RideCache::checkCopyPlannedActivities
         RideItem *sourceItem = pair.first;
         QDate targetDate = pair.second;
 
-        if (! sourceItem) {
+        if (!ownsLiveRide(sourceItem)) {
             check.canProceed = false;
-            check.blockingReason = tr("Invalid source item");
+            check.blockingReason = tr(
+                "A source activity is no longer in the activity list");
             return check;
         }
         if (! sourceItem->planned) {
@@ -1948,8 +1953,9 @@ RideCache::copyPlannedActivities
     }
     for (const std::pair<RideItem*, QDate> &pair :
          sourceItemsAndTargets) {
-        if (!pair.first) {
-            result.error = tr("Invalid source item");
+        if (!ownsLiveRide(pair.first)) {
+            result.error = tr(
+                "A source activity is no longer in the activity list");
             return result;
         }
     }
@@ -1967,7 +1973,12 @@ RideCache::copyPlannedActivities
     }
 
     if (! newItems.isEmpty()) {
-        model_->beginReset();
+        if (!model_->beginReset()) {
+            qDeleteAll(newItems);
+            result.error = tr(
+                "The activity list changed while copied activities were being published");
+            return result;
+        }
         rides_ << newItems;
         std::sort(rides_.begin(), rides_.end(), rideCacheLessThan);
         model_->endReset();
@@ -2005,7 +2016,7 @@ RideCache::checkShiftPlannedActivities
     }
 
     QList<RideItem*> itemsToShift;
-    for (RideItem *item : rides_) {
+    for (RideItem *item : rides()) {
         if (item->planned && item->dateTime.date() >= fromDate) {
             itemsToShift.append(item);
             check.affectedItems << item;
@@ -2073,7 +2084,7 @@ RideCache::shiftPlannedActivities
         return result;
     }
     QList<RideItem*> itemsToShift;
-    for (RideItem *item : rides_) {
+    for (RideItem *item : rides()) {
         if (item->planned && item->dateTime.date() >= fromDate) {
             itemsToShift.append(item);
         }
@@ -2168,7 +2179,11 @@ RideCache::shiftPlannedActivities
     }
 
     if (successCount > 0) {
-        model_->beginReset();
+        if (!model_->beginReset()) {
+            result.error = tr(
+                "The activity list changed while shifted activities were being reordered");
+            return result;
+        }
         std::sort(rides_.begin(), rides_.end(), rideCacheLessThan);
         model_->endReset();
 
@@ -2194,6 +2209,11 @@ bool
 RideCache::saveActivity
 (RideItem *item, QString &error)
 {
+    if (!item || deletelist.contains(item)) {
+        error = QObject::tr(
+            "The activity is no longer in the activity list");
+        return false;
+    }
     const QPointer<RideCache> guardedCache(this);
     return RideCache::saveActivity(
         context, item, error,
@@ -2214,6 +2234,11 @@ RideCache::saveActivity
 (RideItem *item, QString &error,
  const AtomicFileWriterFactory &writerFactory)
 {
+    if (!item || deletelist.contains(item)) {
+        error = QObject::tr(
+            "The activity is no longer in the activity list");
+        return false;
+    }
     ActivitySaveOperations operations;
     operations.writerFactory = writerFactory;
     operations.stage = [](RideFile *ride, QString &stageError) {
@@ -2334,6 +2359,13 @@ bool
 RideCache::saveActivities
 (QList<RideItem*> items, QString &error)
 {
+    for (RideItem *item : std::as_const(items)) {
+        if (!item || deletelist.contains(item)) {
+            error = QObject::tr(
+                "An activity is no longer in the activity list");
+            return false;
+        }
+    }
     const QPointer<RideCache> guardedCache(this);
     const LinkedActivitySaveRequirement requirement =
         linkedActivitySaveRequirement(items, error);
@@ -2508,7 +2540,7 @@ RideItem*
 RideCache::getLinkedActivity
 (RideItem *item)
 {
-    if (! item) {
+    if (!ownsLiveRide(item)) {
         return nullptr;
     }
     QString linkedFileName = item->getLinkedFileName();
@@ -2523,6 +2555,8 @@ RideItem*
 RideCache::findSuggestion
 (RideItem *rideItem)
 {
+    if (!ownsLiveRide(rideItem)) return nullptr;
+
     RideItem *closest = nullptr;
     for (RideItem *o: this->context->athlete->rideCache->rides()) {
         if (   o != nullptr
@@ -2547,7 +2581,7 @@ bool
 RideCache::updateFromWorkout
 (RideItem *item, bool autoSave)
 {
-    if (item == nullptr || ! item->planned) {
+    if (!item || deletelist.contains(item) || !item->planned) {
         return false;
     }
     QString workoutFilename = item->getText("WorkoutFilename", item->ride()->getTag("WorkoutFilename", "")).trimmed();
@@ -2637,27 +2671,6 @@ RideCache::updateFromWorkoutAfter
         estimator->refresh();
     }
     return ! changedItems.isEmpty();
-}
-
-
-bool
-RideCache::isValidLink
-(RideItem *item1, RideItem *item2, QString &error)
-{
-    error = "";
-    if (! item1 || ! item2) {
-        error = tr("Invalid activities for linking");
-        return false;
-    }
-    if (item1 == item2) {
-        error = tr("Can't link to self");
-        return false;
-    }
-    if (item1->planned == item2->planned) {
-        error = tr("Cannot link two activities of the same type. One must be planned, one actual.");
-        return false;
-    }
-    return true;
 }
 
 

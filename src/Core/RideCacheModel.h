@@ -31,6 +31,8 @@
 #include <QModelIndex>
 #include <QVariant>
 
+#include <memory>
+
 class Context;
 
 class RideCacheModel : public QAbstractTableModel
@@ -63,17 +65,40 @@ class RideCacheModel : public QAbstractTableModel
         void itemAdded(RideItem *item);
 
         // model reset on add (if needed)
-        void beginReset();
+        bool beginReset();
         void endReset();
-        void startInsert(int first, int last);
+        bool startInsert(int first, int last);
         void endInsert();
         void rowsChanged(QVector<int> rows);
 
         // start / end remove
-        void startRemove(int);
+        bool startRemove(int);
         void endRemove(int);
 
+        bool cacheMutationAllowed() const;
+
     private:
+        struct ModelChangeState
+        {
+            enum class Protocol {
+                Reset,
+                Insert,
+                Remove
+            };
+
+            struct Frame {
+                Protocol protocol;
+                bool ownsQtProtocol;
+            };
+
+            bool deferredConfigPending = false;
+            bool deferredConfigScheduled = false;
+            qint32 deferredConfigChanges = 0;
+            QVector<Frame> frames;
+        };
+
+        void scheduleDeferredConfigChange();
+
         Context *context;
         RideCache *rideCache;
         RideMetricFactory *factory;
@@ -84,6 +109,8 @@ class RideCacheModel : public QAbstractTableModel
 
         // the fields as defined
         QList<FieldDefinition> metadata;
+        std::shared_ptr<ModelChangeState> modelChangeState_ {
+            std::make_shared<ModelChangeState>()};
 };
 
 #endif

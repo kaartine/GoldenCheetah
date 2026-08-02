@@ -19,7 +19,11 @@ SOURCES = testRideCacheRemoval.cpp \
           ../../../src/Core/LinkedActivitySaveJournal.cpp \
           ../../../src/Planning/PlanReplacementJournal.cpp \
           ../../../src/Core/PlannedActivityFileStager.cpp \
-          ../../../src/Core/RideCacheRemoval.cpp
+          ../../../src/Core/RideCacheActivityLinking.cpp \
+          ../../../src/Core/RideCacheGarbageCollection.cpp \
+          ../../../src/Core/RideCacheLiveView.cpp \
+          ../../../src/Core/RideCacheRemoval.cpp \
+          ../../../src/Core/RideCacheModelProtocol.cpp
 
 HEADERS = ../../../src/Core/Athlete.h \
           ../../../src/Core/Context.h \

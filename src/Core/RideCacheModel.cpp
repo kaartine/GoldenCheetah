@@ -49,7 +49,7 @@ RideCacheModel::RideCacheModel(Context *context, RideCache *cache) : QAbstractTa
 int 
 RideCacheModel::rowCount(const QModelIndex &parent) const
 {
-    return parent.isValid() ? 0 : rideCache->count();
+    return parent.isValid() ? 0 : rideCache->modelRowCount();
 }
 
 
@@ -71,10 +71,14 @@ RideCacheModel::data(const QModelIndex &index, int role) const
 {
     Q_UNUSED(role);
 
-    if (!index.isValid() || index.row() < 0 || index.row() >= rideCache->count() ||
+    if (!index.isValid() || index.row() < 0 || index.row() >= rideCache->modelRowCount() ||
         index.column() < 0 || index.column() >= columns_) return QVariant();
 
-    const RideItem *item = rideCache->rides().at(index.row());
+    const RideItem *item = rideCache->modelRideAt(index.row());
+    if (!item || rideCache->deletelist.contains(
+            const_cast<RideItem*>(item))) {
+        return QVariant();
+    }
 
     switch (index.column()) {
         case 0 : return item->path;
@@ -103,15 +107,15 @@ RideCacheModel::data(const QModelIndex &index, int role) const
                 // but not if high precision, which means
                 // metrics with high precision don't sort this is crap XXX
                 if (m->isTime()) {
-                    return QTime(0,0,0).addSecs(rideCache->rides().at(index.row())->metrics_[m->index()]);
+                    return QTime(0,0,0).addSecs(item->metrics_[m->index()]);
                 } else if (m->units(true) != "km" && m->precision() > 0) {
-                    m->setValue(rideCache->rides().at(index.row())->metrics_[m->index()]);
+                    m->setValue(item->metrics_[m->index()]);
                     return m->toString(GlobalContext::context()->useMetricUnits); // string
                 } else {
 
                     // make low precision numbers sort, including distance which we picked
                     // up as a special case. not sure about pace ....
-                    double value = rideCache->rides().at(index.row())->metrics_[m->index()];
+                    double value = item->metrics_[m->index()];
 
                     // convert to imperial if needed
                     if (GlobalContext::context()->useMetricUnits == false) 
@@ -134,28 +138,13 @@ void
 RideCacheModel::itemChanged(RideItem *item)
 {
     // ok so lets signal that
-    int row = rideCache->rides().indexOf(item);
-    if (row >= 0 && row <= rideCache->count()) {
+    int row = rideCache->modelIndexOf(item);
+    if (row >= 0 && row < rideCache->modelRowCount()) {
         emit dataChanged(createIndex(row,0), createIndex(row,columns_-1));
     }
     //XXX hack to get the navigator to redraw
     context->tab->view(1)->sidebar()->update();
 }
-
-void RideCacheModel::beginReset()
-{
-    rideCache->invalidateStartupSnapshots();
-    beginResetModel();
-}
-
-void RideCacheModel::endReset() { endResetModel(); }
-
-void RideCacheModel::startInsert(int first, int last)
-{
-    beginInsertRows(QModelIndex(), first, last);
-}
-
-void RideCacheModel::endInsert() { endInsertRows(); }
 
 void RideCacheModel::rowsChanged(QVector<int> rows)
 {
@@ -185,19 +174,6 @@ RideCacheModel::itemAdded(RideItem*)
     // nothing to do now as the cache
     // told us to begin/end reset model
     // whilst it updated the ride list
-}
-
-void
-RideCacheModel::startRemove(int index)
-{
-    rideCache->invalidateStartupSnapshots();
-    beginRemoveRows(QModelIndex(), index, index);
-}
-
-void
-RideCacheModel::endRemove(int)
-{
-    endRemoveRows();
 }
 
 bool 
@@ -235,10 +211,26 @@ RideCacheModel::headerData(int section, Qt::Orientation orientation, int role) c
 
 // when updating metadata config
 void 
-RideCacheModel::configChanged(qint32)
+RideCacheModel::configChanged(qint32 changes)
 {
+    const std::shared_ptr<ModelChangeState> state =
+        modelChangeState_;
+    if (!state->frames.isEmpty()) {
+        state->deferredConfigPending = true;
+        state->deferredConfigChanges |= changes;
+        return;
+    }
+
+    state->frames.append({
+        ModelChangeState::Protocol::Reset, true});
+    const QPointer<RideCacheModel> guardedThis(this);
+
     // we are resetting
     beginResetModel();
+    if (!guardedThis) {
+        state->frames.removeLast();
+        return;
+    }
 
     // get field config
     metadata = GlobalContext::context()->rideMetadata->getFields();
@@ -289,9 +281,15 @@ RideCacheModel::configChanged(qint32)
     headingsTechnical_ = headings_;
 
     headerDataChanged (Qt::Horizontal, 0, columns_-1);
+    if (!guardedThis) {
+        state->frames.removeLast();
+        return;
+    }
 
-    // all good
     endResetModel();
+    state->frames.removeLast();
+    if (guardedThis && state->frames.isEmpty())
+        guardedThis->scheduleDeferredConfigChange();
 }
 
 // catch ridecache refreshes

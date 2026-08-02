@@ -251,8 +251,16 @@ RideFile *RideItem::ride(bool open)
 
 RideItem::~RideItem()
 {
-    // add to the deleted list
-    if (context && context->athlete && context->athlete->rideCache) context->athlete->rideCache->deletelist << this;
+    if (context && context->athlete
+        && context->athlete->rideCache) {
+        RideCache *cache = context->athlete->rideCache;
+        if (cache->rides_.contains(this)
+            || cache->reverse_.contains(this)
+            || cache->delete_.contains(this)) {
+            cache->invalidateStartupSnapshots();
+            cache->deletelist.insert(this);
+        }
+    }
 
     //qDebug()<<"deleting:"<<fileName;
     if (isOpen()) close();

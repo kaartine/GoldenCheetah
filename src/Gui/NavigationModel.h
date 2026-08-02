@@ -20,6 +20,7 @@
 #include <QUuid>
 #include <QString>
 #include <QVariant>
+#include <QPointer>
 
 #include "AthleteTab.h"
 #include "TimeUtils.h"
@@ -37,7 +38,7 @@ public:
 
     NavigationEvent(NavigationEventType t, int v) : type(t) { after.setValue(v); }
     NavigationEvent(NavigationEventType t, DateRange v) : type(t) { after.setValue(v); }
-    NavigationEvent(NavigationEventType t, RideItem* v) : type(t) { after.setValue(v); }
+    NavigationEvent(NavigationEventType t, RideItem* v) : type(t) { after.setValue(QPointer<RideItem>(v)); }
     NavigationEvent(NavigationEventType t, QString v) : type(t) { after.setValue(v); }
 
     // before is updated by the navigation model
@@ -60,7 +61,7 @@ public:
     // keep a track of the rides we've looked
     // at recently-- might want to quick link
     // to these in the future ...
-    QVector<RideItem*> recent;
+    QVector<QPointer<RideItem>> recent;
 
 public slots:
 
@@ -82,7 +83,7 @@ private:
     // current state, before an event arrives
     int view; // which view is selected
     DateRange dr;
-    RideItem *item;
+    QPointer<RideItem> item;
 
     // have we seen first values for:
     bool viewinit, drinit, iteminit;

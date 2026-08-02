@@ -26,6 +26,7 @@ namespace {
 
 int rideCacheRefreshCount = 0;
 int estimatorRefreshCount = 0;
+int estimatorStopCount = 0;
 QString removalCleanupFailurePath;
 QString removalMoveFailurePath;
 QString removalMoveFailureTargetPath;
@@ -126,6 +127,7 @@ void resetRideCacheRemovalRefreshCounts()
 {
     rideCacheRefreshCount = 0;
     estimatorRefreshCount = 0;
+    estimatorStopCount = 0;
     removalCleanupFailurePath.clear();
     removalMoveFailurePath.clear();
     removalMoveFailureTargetPath.clear();
@@ -175,6 +177,11 @@ int rideCacheRemovalRefreshCount()
 int rideCacheRemovalEstimatorRefreshCount()
 {
     return estimatorRefreshCount;
+}
+
+int rideCacheRemovalEstimatorStopCount()
+{
+    return estimatorStopCount;
 }
 
 void setRideCacheRemovalCleanupFailurePath(const QString &path)
@@ -706,7 +713,19 @@ RideItem::RideItem(RideFile *ride, Context *rideContext)
 {
 }
 
-RideItem::~RideItem() = default;
+RideItem::~RideItem()
+{
+    if (context && context->athlete
+        && context->athlete->rideCache) {
+        RideCache *cache = context->athlete->rideCache;
+        if (cache->rides_.contains(this)
+            || cache->reverse_.contains(this)
+            || cache->delete_.contains(this)) {
+            cache->invalidateStartupSnapshots();
+            cache->deletelist.insert(this);
+        }
+    }
+}
 
 RideFile *RideItem::ride(bool)
 {
@@ -762,18 +781,21 @@ RideCacheModel::RideCacheModel(
     : context(modelContext),
       rideCache(cache),
       factory(nullptr),
-      columns_(0)
+      columns_(7)
 {
+    connect(modelContext, &Context::configChanged,
+            this, &RideCacheModel::configChanged);
 }
 
-int RideCacheModel::rowCount(const QModelIndex &) const
+int RideCacheModel::rowCount(const QModelIndex &parent) const
 {
-    return rideCache ? rideCache->count() : 0;
+    return parent.isValid() || !rideCache
+        ? 0 : rideCache->modelRowCount();
 }
 
-int RideCacheModel::columnCount(const QModelIndex &) const
+int RideCacheModel::columnCount(const QModelIndex &parent) const
 {
-    return columns_;
+    return parent.isValid() ? 0 : columns_;
 }
 
 Qt::ItemFlags RideCacheModel::flags(const QModelIndex &) const
@@ -793,52 +815,61 @@ bool RideCacheModel::setHeaderData(
     return false;
 }
 
-QVariant RideCacheModel::data(const QModelIndex &, int) const
+QVariant RideCacheModel::data(const QModelIndex &index, int) const
 {
+    if (!index.isValid() || !rideCache
+        || index.row() < 0
+        || index.row() >= rideCache->modelRowCount()
+        || index.column() < 0 || index.column() >= columns_) {
+        return {};
+    }
+    const RideItem *item = rideCache->modelRideAt(index.row());
+    if (!item || rideCache->deletelist.contains(
+            const_cast<RideItem*>(item))) {
+        return {};
+    }
+    if (index.column() == 1) return item->fileName;
     return {};
 }
 
-void RideCacheModel::configChanged(qint32) {}
+void RideCacheModel::configChanged(qint32 changes)
+{
+    const std::shared_ptr<ModelChangeState> state =
+        modelChangeState_;
+    if (!state->frames.isEmpty()) {
+        state->deferredConfigPending = true;
+        state->deferredConfigChanges |= changes;
+        return;
+    }
+    state->frames.append({
+        ModelChangeState::Protocol::Reset, true});
+    const QPointer<RideCacheModel> guardedThis(this);
+    beginResetModel();
+    if (!guardedThis) {
+        state->frames.removeLast();
+        return;
+    }
+    endResetModel();
+    state->frames.removeLast();
+    if (guardedThis && state->frames.isEmpty())
+        guardedThis->scheduleDeferredConfigChange();
+}
 void RideCacheModel::refreshUpdate(QDate) {}
 void RideCacheModel::refreshStart() {}
 void RideCacheModel::refreshEnd() {}
 void RideCacheModel::itemChanged(RideItem *) {}
 void RideCacheModel::itemAdded(RideItem *) {}
-void RideCacheModel::beginReset() { beginResetModel(); }
-void RideCacheModel::endReset() { endResetModel(); }
-
-void RideCacheModel::startInsert(int first, int last)
-{
-    beginInsertRows(QModelIndex(), first, last);
-}
-
-void RideCacheModel::endInsert()
-{
-    endInsertRows();
-}
-
 void RideCacheModel::rowsChanged(QVector<int>) {}
 
-void RideCacheModel::startRemove(int row)
-{
-    beginRemoveRows(QModelIndex(), row, row);
-}
-
-void RideCacheModel::endRemove(int)
-{
-    endRemoveRows();
-}
-
 Estimator::Estimator(Context *estimatorContext)
-    : context(estimatorContext),
-      abort(false)
+    : context(estimatorContext)
 {
 }
 
 Estimator::~Estimator() = default;
 
 void Estimator::run() {}
-void Estimator::stop() {}
+void Estimator::stop() { ++estimatorStopCount; }
 void Estimator::refresh() { ++estimatorRefreshCount; }
 void Estimator::calculate() {}
 
@@ -887,15 +918,41 @@ void RideCache::postLoad() {}
 void RideCache::save(bool, QString) {}
 void RideCache::cleanupThread(RideCacheRefreshThread *) {}
 int RideCache::find(RideItem *) { return -1; }
+QStringList RideCache::getAllFilenames()
+{
+    QStringList filenames;
+    for (RideItem *item : rides_) {
+        if (!item || deletelist.contains(item)) continue;
+        filenames.append(item->fileName);
+    }
+    return filenames;
+}
 void RideCache::configChanged(qint32) {}
 void RideCache::progressing(int) {}
 void RideCache::cancel() { ++removalCancelCount; }
+bool RideCache::activityMutationIsBlocked() const
+{
+    return QThread::currentThread() != thread()
+        || (removalInProgress_ && *removalInProgress_)
+        || (model_ && !model_->cacheMutationAllowed());
+}
 void RideCache::itemChanged() {}
-void RideCache::garbageCollect() {}
 void RideCache::initEstimates() {}
-void RideCache::refresh() { ++rideCacheRefreshCount; }
+void RideCache::refresh()
+{
+    if (replacementRefreshBlocked_
+        && *replacementRefreshBlocked_)
+        return;
+    if (removalInProgress_ && *removalInProgress_) {
+        removalRefreshPending_ = true;
+        return;
+    }
+    ++rideCacheRefreshCount;
+}
 void RideCache::invalidateStartupSnapshots()
 {
+    if (startupLoadFinished_ || startupSnapshotsInvalidated_) return;
+    startupSnapshotsInvalidated_ = true;
     ++startupInvalidationCount;
 }
 
