@@ -529,7 +529,14 @@ class RideCache : public QObject
             RideItem *rideToDelete) const;
         bool renameRideFiles(const QString& oldFileName, const QString& newFileName, bool isPlanned, QString &error);
         bool isValidLink(RideItem *item1, RideItem *item2, QString &error);
-        RideItem* copyPlannedRideFile(RideItem *sourceItem, const QDate &newDate, const QTime &newTime, QString &error);
+        struct PlannedActivityCopyRequest {
+            RideItem *source = nullptr;
+            QDate targetDate;
+            QTime targetTime;
+        };
+        PlannedReplacementResult replacePlannedActivityCopies(
+            const QList<RideItem*> &activitiesToReplace,
+            const QList<PlannedActivityCopyRequest> &copies);
         bool stagePlannedActivityCopy(
             const QString &sourcePath,
             const QString &sourceFileName,

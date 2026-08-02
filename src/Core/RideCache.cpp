@@ -2124,57 +2124,6 @@ RideCache::updateFromWorkoutAfter
 }
 
 
-RideItem*
-RideCache::copyPlannedRideFile
-(RideItem *sourceItem, const QDate &newDate, const QTime &newTime, QString &error)
-{
-    QDateTime newDateTime(newDate, newTime);
-    QFileInfo oldInfo(sourceItem->fileName);
-    QString newFileName = newDateTime.toString("yyyy_MM_dd_HH_mm_ss") + "." + oldInfo.suffix();
-    QString newPath = plannedDirectory.canonicalPath() + "/" + newFileName;
-    QString sourcePath = plannedDirectory.canonicalPath() + "/" + sourceItem->fileName;
-
-    if (! QFile::copy(sourcePath, newPath)) {
-        error = tr("Failed to copy file");
-        return nullptr;
-    }
-
-    QFile file(newPath);
-    QStringList errors;
-    RideFile *newRide = RideFileFactory::instance().openRideFile(context, file, errors);
-    if (! newRide) {
-        QFile::remove(newPath);
-        error = tr("Failed to open copied file");
-        return nullptr;
-    }
-
-    newRide->setStartTime(QDateTime(newDate, sourceItem->dateTime.time()));
-    newRide->setTag("Year", newDateTime.toString("yyyy"));
-    newRide->setTag("Month", newDateTime.toString("MMMM"));
-    newRide->setTag("Weekday", newDateTime.toString("ddd"));
-    newRide->setTag("Original Date", newDateTime.date().toString("yyyy/MM/dd"));
-
-    if (! newRide->getTag("Linked Filename", "").isEmpty()) {
-        newRide->removeTag("Linked Filename");
-    }
-
-    QFile outFile(newPath);
-    if (! RideFileFactory::instance().writeRideFile(context, newRide, outFile, oldInfo.suffix())) {
-        error = tr("Failed to write modified file");
-        delete newRide;
-        QFile::remove(newPath);
-        return nullptr;
-    }
-    delete newRide;
-
-    RideItem *newItem = new RideItem(plannedDirectory.canonicalPath(), newFileName, newDateTime, context, true);
-    updateFromWorkout(newItem, true);
-    newItem->isstale = true;
-
-    return newItem;
-}
-
-
 bool
 RideCache::stagePlannedActivityCopy
 (const QString &sourcePath,

@@ -63,6 +63,8 @@ std::function<void()> removalLinkMutationAction;
 int removalLinkMutationCall = 0;
 int removalLinkMutationTriggerCall = 0;
 std::function<void()> calendarStorageAction;
+int calendarCopyCall = 0;
+int calendarCopyFailureCall = 0;
 int removalCancelCount = 0;
 int startupInvalidationCount = 0;
 int removalTransitionOccurrence = 0;
@@ -76,6 +78,13 @@ void runCalendarStorageAction()
         std::move(calendarStorageAction);
     calendarStorageAction = {};
     action();
+}
+
+bool shouldFailCalendarCopy()
+{
+    ++calendarCopyCall;
+    return calendarCopyFailureCall > 0
+        && calendarCopyCall == calendarCopyFailureCall;
 }
 
 } // namespace
@@ -196,6 +205,8 @@ void resetRideCacheRemovalRefreshCounts()
     removalLinkMutationCall = 0;
     removalLinkMutationTriggerCall = 0;
     calendarStorageAction = {};
+    calendarCopyCall = 0;
+    calendarCopyFailureCall = 0;
     removalCancelCount = 0;
     startupInvalidationCount = 0;
     removalTransitionOccurrence = 0;
@@ -505,6 +516,12 @@ void setRideCacheCalendarStorageAction(
     const std::function<void()> &action)
 {
     calendarStorageAction = action;
+}
+
+void setRideCacheCalendarCopyFailureOnCall(int call)
+{
+    calendarCopyCall = 0;
+    calendarCopyFailureCall = call;
 }
 
 void runRideCacheRemovalLinkMutationAction()
@@ -1046,6 +1063,10 @@ bool RideCache::stagePlannedActivityCopy(
     const QString &stagingPath,
     QString &error)
 {
+    if (shouldFailCalendarCopy()) {
+        error = QStringLiteral("injected copy staging failure");
+        return false;
+    }
     const QFileInfo sourceInfo(sourcePath);
     QFile source(sourcePath);
     if (!targetDateTime.isValid()
@@ -1069,6 +1090,7 @@ bool RideCache::stagePlannedActivityCopy(
         error = staged.errorString();
         return false;
     }
+    runCalendarStorageAction();
     return true;
 }
 
@@ -1140,44 +1162,6 @@ RideItem *RideCache::getLinkedActivity(RideItem *item)
 bool RideCache::updateFromWorkout(RideItem *, bool)
 {
     return false;
-}
-
-RideItem *RideCache::copyPlannedRideFile(
-    RideItem *sourceItem,
-    const QDate &newDate,
-    const QTime &newTime,
-    QString &error)
-{
-    error.clear();
-    if (!sourceItem || !newDate.isValid()
-        || !newTime.isValid()) {
-        error = QStringLiteral(
-            "invalid planned activity copy request");
-        return nullptr;
-    }
-
-    QDateTime newDateTime(newDate, newTime);
-    const QString suffix =
-        QFileInfo(sourceItem->fileName).suffix();
-    const QString newFileName =
-        newDateTime.toString("yyyy_MM_dd_HH_mm_ss")
-        + QStringLiteral(".") + suffix;
-    QFile output(plannedDirectory.filePath(newFileName));
-    if (!output.open(
-            QIODevice::WriteOnly | QIODevice::Truncate)
-        || output.write("planned-copy\n") < 0
-        || !output.flush()) {
-        error = output.errorString();
-        return nullptr;
-    }
-    output.close();
-    runCalendarStorageAction();
-
-    RideItem *item = new RideItem(
-        plannedDirectory.canonicalPath(), newFileName,
-        newDateTime, context, true);
-    item->isstale = true;
-    return item;
 }
 
 bool RideCache::saveActivity(RideItem *item, QString &error)

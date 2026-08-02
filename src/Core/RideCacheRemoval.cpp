@@ -16,6 +16,7 @@
 #include "Estimator.h"
 #include "AtomicFileWriter.h"
 #include "RideCacheModel.h"
+#include "RideCacheMutationScope.h"
 #include "RideFileCacheIntegrity.h"
 #include "LinkedActivityRemovalJournal.h"
 #include "PlanReplacementJournal.h"
@@ -1900,6 +1901,23 @@ RideCache::replacePlannedActivities(
     const QList<std::pair<RideItem*, QDate>>
         &sourceItemsAndTargets)
 {
+    QList<PlannedActivityCopyRequest> copies;
+    copies.reserve(sourceItemsAndTargets.size());
+    for (const auto &sourceAndTarget : sourceItemsAndTargets) {
+        copies.append({
+            sourceAndTarget.first,
+            sourceAndTarget.second,
+            QTime()});
+    }
+    return replacePlannedActivityCopies(
+        activitiesToReplace, copies);
+}
+
+RideCache::PlannedReplacementResult
+RideCache::replacePlannedActivityCopies(
+    const QList<RideItem*> &activitiesToReplace,
+    const QList<PlannedActivityCopyRequest> &copies)
+{
     PlannedReplacementResult result;
     if (QThread::currentThread() != thread()) {
         result.error = tr(
@@ -1911,7 +1929,7 @@ RideCache::replacePlannedActivities(
             "Another activity operation is already in progress");
         return result;
     }
-    if (sourceItemsAndTargets.isEmpty()) {
+    if (copies.isEmpty()) {
         result.error = tr(
             "A planned activity replacement requires source activities");
         return result;
@@ -1944,15 +1962,14 @@ RideCache::replacePlannedActivities(
     QSet<QString> inputPathKeys;
     QSet<QString> targetNames;
     QList<PlannedActivityTarget> targets;
-    targets.reserve(sourceItemsAndTargets.size());
+    targets.reserve(copies.size());
 
-    for (const auto &sourceAndTarget : sourceItemsAndTargets) {
-        RideItem *const source = sourceAndTarget.first;
-        const QDate targetDate = sourceAndTarget.second;
+    for (const PlannedActivityCopyRequest &copy : copies) {
+        RideItem *const source = copy.source;
         if (!guardedCache->ownsLiveRide(source)
             || !source->planned || source->fileName.isEmpty()
             || !source->dateTime.isValid()
-            || !targetDate.isValid()) {
+            || !copy.targetDate.isValid()) {
             result.error = tr(
                 "A planned activity copy source or target is invalid");
             return result;
@@ -2006,7 +2023,8 @@ RideCache::replacePlannedActivities(
         QString targetError;
         if (!PlannedActivityFile::resolveCopyTarget(
                 source->fileName, source->dateTime,
-                targetDate, QTime(), copyTarget,
+                copy.targetDate, copy.targetTime,
+                copyTarget,
                 targetError)) {
             result.error = targetError;
             return result;
@@ -2098,12 +2116,6 @@ RideCache::replacePlannedActivityFiles(
             "Another activity operation is already in progress");
         return result;
     }
-    RemovalOperationGuard removalGuard(removalInProgress_);
-    if (!removalGuard.acquired()) {
-        result.error = tr(
-            "Another activity deletion is already in progress");
-        return result;
-    }
     RemovalOperationGuard replacementRefreshGuard(
         replacementRefreshBlocked_);
     if (!replacementRefreshGuard.acquired()) {
@@ -2111,8 +2123,12 @@ RideCache::replacePlannedActivityFiles(
             "Another planned activity refresh is already blocked");
         return result;
     }
-    const quint64 replacementResumeGeneration =
-        ++mutationResumeGeneration_;
+    QString mutationError;
+    RideCacheMutationScope mutation(this, mutationError);
+    if (!mutation.ready()) {
+        result.error = mutationError;
+        return result;
+    }
 
     const QPointer<RideCache> guardedCache(this);
     const QPointer<Context> guardedContext(context);
@@ -2142,87 +2158,9 @@ RideCache::replacePlannedActivityFiles(
         return result;
     }
 
-    const auto scheduleBackgroundWork =
-        [guardedCache, guardedEstimator,
-         operationOwnersAreStable,
-         replacementResumeGeneration] {
-            if (!guardedCache) return false;
-            return QMetaObject::invokeMethod(
-                guardedCache.data(),
-                [guardedCache, guardedEstimator,
-                 operationOwnersAreStable,
-                 replacementResumeGeneration] {
-                    if (!operationOwnersAreStable()) {
-                        qWarning().noquote() << QObject::tr(
-                            "Planned activity background refresh was dropped because its owners changed");
-                        return;
-                    }
-                    if (guardedCache->mutationResumeGeneration_
-                            != replacementResumeGeneration
-                        || (guardedCache->removalInProgress_
-                            && *guardedCache->removalInProgress_)
-                        || (guardedCache->replacementRefreshBlocked_
-                            && *guardedCache->replacementRefreshBlocked_)) {
-                        return;
-                    }
-                    guardedCache->refresh();
-                    if (!operationOwnersAreStable()) {
-                        qWarning().noquote() << QObject::tr(
-                            "Planned activity estimate refresh was dropped because its owners changed");
-                        return;
-                    }
-                    if (guardedCache->mutationResumeGeneration_
-                            != replacementResumeGeneration
-                        || (guardedCache->removalInProgress_
-                            && *guardedCache->removalInProgress_)
-                        || (guardedCache->replacementRefreshBlocked_
-                            && *guardedCache->replacementRefreshBlocked_)) {
-                        return;
-                    }
-                    guardedEstimator->refresh();
-                },
-                Qt::QueuedConnection);
-        };
-    bool backgroundWorkQuiesced = false;
-    bool backgroundResumeHandled = false;
-    RemovalScopeExit resumeBackgroundWork([&] {
-        if (!backgroundWorkQuiesced
-            || backgroundResumeHandled) {
-            return;
-        }
-        backgroundResumeHandled = true;
-        if (!scheduleBackgroundWork()) {
-            qWarning().noquote() << QObject::tr(
-                "Planned activity background refresh could not be resumed");
-        }
-    });
-
-    guardedCache->cancel();
-    backgroundWorkQuiesced = true;
     if (!operationOwnersAreStable()) {
         result.error = tr(
-            "The planned activity collection disappeared while refresh was being cancelled");
-        return result;
-    }
-    guardedEstimator->stop();
-    if (!operationOwnersAreStable()) {
-        result.error = tr(
-            "The planned activity collection disappeared while estimates were being stopped");
-        return result;
-    }
-    if (!guardedCache->purgeDestroyedModelRows()) {
-        if (!operationOwnersAreStable()) {
-            result.error = tr(
-                "The planned activity collection disappeared while destroyed rows were being removed");
-        } else {
-            result.error = tr(
-                "Destroyed activity rows could not be removed before plan replacement");
-        }
-        return result;
-    }
-    if (!operationOwnersAreStable()) {
-        result.error = tr(
-            "The planned activity collection disappeared while destroyed rows were being removed");
+            "The planned activity collection disappeared while its mutation was being reserved");
         return result;
     }
 
@@ -2672,22 +2610,19 @@ RideCache::replacePlannedActivityFiles(
                     }
                 }
                 guardedContext->ride = nullptr;
-                if (!guardedModel->beginReset()) {
+                QString resetError;
+                if (!mutation.beginReset(resetError)) {
                     repair.ownersStable = false;
                     return repair;
                 }
                 flushOriginalDeferredDeletes();
                 if (!operationOwnersAreStable()) {
-                    if (guardedCache && guardedModel
-                        && guardedCache->model_
-                            == guardedModel.data()) {
-                        guardedModel->endReset();
-                    }
+                    mutation.endReset();
                     repair.ownersStable = false;
                     return repair;
                 }
                 purgeDestroyedEntries();
-                guardedModel->endReset();
+                mutation.endReset();
                 flushOriginalDeferredDeletes();
                 if (!operationOwnersAreStable()) {
                     repair.ownersStable = false;
@@ -3048,7 +2983,8 @@ RideCache::replacePlannedActivityFiles(
     }
     guardedContext->ride = nullptr;
 
-    if (!guardedModel->beginReset()) {
+    QString modelResetError;
+    if (!mutation.beginReset(modelResetError)) {
         for (const QPointer<RideItem> &item :
              std::as_const(guardedIncoming)) {
             if (!item) continue;
@@ -3058,17 +2994,15 @@ RideCache::replacePlannedActivityFiles(
         QString cleanupError;
         result.cleanupComplete =
             journal->cleanupAfterCommit(cleanupError);
-        result.error = tr(
-            "The activity model was busy after the plan files were replaced");
+        result.error = modelResetError.isEmpty()
+            ? tr("The activity model was busy after the plan files were replaced")
+            : modelResetError;
         appendRemovalError(result.error, cleanupError);
         return result;
     }
     flushDeferredRideItemDeletes();
     if (!operationOwnersAreStable()) {
-        if (guardedCache && guardedModel
-            && guardedCache->model_ == guardedModel.data()) {
-            guardedModel->endReset();
-        }
+        mutation.endReset();
         for (const QPointer<RideItem> &item :
              std::as_const(guardedIncoming)) {
             if (!item) continue;
@@ -3089,10 +3023,7 @@ RideCache::replacePlannedActivityFiles(
             resetRepair,
             tr("The planned activity collection disappeared during model replacement"),
             tr("A cached activity was destroyed during model replacement"))) {
-        if (guardedCache && guardedModel
-            && guardedCache->model_ == guardedModel.data()) {
-            guardedModel->endReset();
-        }
+        mutation.endReset();
         for (const QPointer<RideItem> &item :
              std::as_const(guardedIncoming)) {
             if (!item) continue;
@@ -3118,7 +3049,7 @@ RideCache::replacePlannedActivityFiles(
     for (const PendingReplacement &entry : std::as_const(pending)) {
         if (entry.item) guardedCache->delete_.append(entry.item.data());
     }
-    guardedModel->endReset();
+    mutation.endReset();
     flushDeferredRideItemDeletes();
     if (!postCommitOwnersAreStable(tr(
             "The planned activity collection disappeared during model replacement"))) {
@@ -3196,20 +3127,19 @@ RideCache::replacePlannedActivityFiles(
                 guardedCacheItemAtAddress(
                     guardedContext->ride);
             guardedContext->ride = nullptr;
-            if (!guardedModel->beginReset()) {
+            QString repairResetError;
+            if (!mutation.beginReset(repairResetError)) {
                 result.cacheUpdated = false;
                 appendRemovalError(
                     result.error,
-                    tr("The activity model became busy while published activities were repaired"));
+                    repairResetError.isEmpty()
+                        ? tr("The activity model became busy while published activities were repaired")
+                        : repairResetError);
                 return false;
             }
             flushDeferredRideItemDeletes();
             if (!operationOwnersAreStable()) {
-                if (guardedCache && guardedModel
-                    && guardedCache->model_
-                        == guardedModel.data()) {
-                    guardedModel->endReset();
-                }
+                mutation.endReset();
                 result.cacheUpdated = false;
                 appendRemovalError(result.error, detail);
                 return false;
@@ -3218,11 +3148,7 @@ RideCache::replacePlannedActivityFiles(
                     repairDestroyedCacheEntries(true),
                     tr("The planned activity collection disappeared while repairing published activities"),
                     tr("A cached activity was destroyed while published activities were repaired"))) {
-                if (guardedCache && guardedModel
-                    && guardedCache->model_
-                        == guardedModel.data()) {
-                    guardedModel->endReset();
-                }
+                mutation.endReset();
                 appendRemovalError(result.error, detail);
                 return false;
             }
@@ -3247,7 +3173,7 @@ RideCache::replacePlannedActivityFiles(
                 }
                 retiredIncoming.insert(index);
             }
-            guardedModel->endReset();
+            mutation.endReset();
             flushDeferredRideItemDeletes();
             if (!operationOwnersAreStable()) {
                 result.cacheUpdated = false;
@@ -3459,11 +3385,6 @@ RideCache::replacePlannedActivityFiles(
         return result;
     }
 
-    backgroundResumeHandled = true;
-    if (!scheduleBackgroundWork()) {
-        result.warnings.append(tr(
-            "The plan was replaced, but its background refresh could not be scheduled"));
-    }
     return result;
 }
 

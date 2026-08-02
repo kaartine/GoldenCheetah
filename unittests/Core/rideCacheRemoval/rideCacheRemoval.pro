@@ -9,7 +9,8 @@ include(../../unittests.pri)
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug
-DEFINES += GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+DEFINES += GC_RIDE_CACHE_REMOVAL_TEST_HOOKS \
+           GC_PLAN_REPLACEMENT_TEST_HOOKS
 
 SOURCES = testRideCacheRemoval.cpp \
           RideCacheRemovalTestStubs.cpp \

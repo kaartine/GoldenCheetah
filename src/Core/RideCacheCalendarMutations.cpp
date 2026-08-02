@@ -166,7 +166,6 @@ RideCache::copyPlannedActivity
 (RideItem *sourceItem, const QDate &newDate, QTime newTime)
 {
     OperationResult result;
-
     if (activityMutationIsBlocked()) {
         result.error = tr(
             "Another activity operation is already in progress");
@@ -177,71 +176,26 @@ RideCache::copyPlannedActivity
             "The activity is no longer in the activity list");
         return result;
     }
-    QPointer<RideItem> guardedSource(sourceItem);
-    QString mutationError;
-    RideCacheMutationScope mutation(this, mutationError);
-    if (!mutation.ready()) {
-        result.error = mutationError;
-        return result;
+    const QTime targetTime = newTime.isValid()
+        ? newTime : sourceItem->dateTime.time();
+    const PlannedReplacementResult replacement =
+        replacePlannedActivityCopies(
+            {}, {{sourceItem, newDate, targetTime}});
+
+    result.success = replacement.committed
+        && replacement.addedCount == 1;
+    result.affectedCount = replacement.addedCount;
+    result.error = replacement.error;
+    if (!replacement.warnings.isEmpty()) {
+        if (!result.error.isEmpty())
+            result.error.append(QStringLiteral("; "));
+        result.error.append(replacement.warnings.join(
+            QStringLiteral("; ")));
     }
-    if (!guardedSource
-        || !ownsLiveRide(guardedSource.data())) {
+    if (!result.success && result.error.isEmpty()) {
         result.error = tr(
-            "The source activity changed while background work was being stopped");
-        return result;
+            "The planned activity copy did not complete");
     }
-    sourceItem = guardedSource.data();
-
-    QString error;
-    QTime time(sourceItem->dateTime.time());
-    if (newTime.isValid()) {
-        time = newTime;
-    }
-    RideItem *newItem = copyPlannedRideFile(sourceItem, newDate, time, error);
-
-    if (! newItem) {
-        result.error = error;
-        return result;
-    }
-    QPointer<RideItem> guardedNewItem(newItem);
-    bool published = false;
-    const auto discardUnpublished = [&] {
-        if (!guardedNewItem || published) return;
-        if (!mutation.ownersStable()) {
-            guardedNewItem->context = nullptr;
-        }
-        delete guardedNewItem.data();
-    };
-
-    if (!mutation.ownersStable() || !guardedSource
-        || !ownsLiveRide(guardedSource.data())) {
-        discardUnpublished();
-        result.error = tr(
-            "The source activity changed while its copy was being prepared");
-        return result;
-    }
-
-    if (!mutation.resetAndSort(
-            error,
-            [this, &guardedNewItem, &published] {
-                if (!guardedNewItem) return false;
-                rides_ << guardedNewItem.data();
-                published = true;
-                return true;
-            })) {
-        discardUnpublished();
-        result.error = error;
-        return result;
-    }
-    if (!mutation.ownersStable() || !guardedNewItem
-        || !ownsLiveRide(guardedNewItem.data())) {
-        result.error = tr(
-            "The copied activity changed while it was being published");
-        return result;
-    }
-
-    result.success = true;
-    result.affectedCount = 1;
 
     return result;
 }
@@ -251,7 +205,6 @@ RideCache::copyPlannedActivities
 (const QList<std::pair<RideItem*, QDate>> &sourceItemsAndTargets)
 {
     OperationResult result;
-
     if (activityMutationIsBlocked()) {
         result.error = tr(
             "Another activity operation is already in progress");
@@ -261,105 +214,34 @@ RideCache::copyPlannedActivities
         result.error = tr("No files specified");
         return result;
     }
-    QList<std::pair<QPointer<RideItem>, QDate>> guardedSources;
-    guardedSources.reserve(sourceItemsAndTargets.size());
+    QList<PlannedActivityCopyRequest> copies;
+    copies.reserve(sourceItemsAndTargets.size());
     for (const std::pair<RideItem*, QDate> &pair : sourceItemsAndTargets) {
         if (!ownsLiveRide(pair.first)) {
             result.error = tr(
                 "A source activity is no longer in the activity list");
             return result;
         }
-        guardedSources.append({QPointer<RideItem>(pair.first), pair.second});
+        copies.append({
+            pair.first, pair.second, QTime()});
     }
 
-    QString mutationError;
-    RideCacheMutationScope mutation(this, mutationError);
-    if (!mutation.ready()) {
-        result.error = mutationError;
-        return result;
+    const PlannedReplacementResult replacement =
+        replacePlannedActivityCopies({}, copies);
+    result.success = replacement.committed
+        && replacement.addedCount == copies.size();
+    result.affectedCount = replacement.addedCount;
+    result.error = replacement.error;
+    if (!replacement.warnings.isEmpty()) {
+        if (!result.error.isEmpty())
+            result.error.append(QStringLiteral("; "));
+        result.error.append(replacement.warnings.join(
+            QStringLiteral("; ")));
     }
-    for (const auto &pair : std::as_const(guardedSources)) {
-        if (!pair.first || !ownsLiveRide(pair.first.data())) {
-            result.error = tr(
-                "A source activity changed while background work was being stopped");
-            return result;
-        }
+    if (!result.success && result.error.isEmpty()) {
+        result.error = tr(
+            "The planned activity copies did not complete");
     }
-
-    QVector<QPointer<RideItem>> newItems;
-    bool published = false;
-    const auto discardUnpublished = [&] {
-        if (published) return;
-        const bool ownersStable = mutation.ownersStable();
-        for (const QPointer<RideItem> &item :
-             std::as_const(newItems)) {
-            if (!item) continue;
-            if (!ownersStable) item->context = nullptr;
-            delete item.data();
-        }
-        newItems.clear();
-    };
-
-    QStringList failedFiles;
-    for (const auto &pair : std::as_const(guardedSources)) {
-        if (!pair.first || !ownsLiveRide(pair.first.data())) {
-            discardUnpublished();
-            result.error = tr(
-                "A source activity changed while copies were being prepared");
-            return result;
-        }
-        const QString sourceFileName = pair.first->fileName;
-        QString error;
-        RideItem *newItem = copyPlannedRideFile(
-            pair.first.data(), pair.second,
-            pair.first->dateTime.time(), error);
-        if (newItem) {
-            newItems.append(QPointer<RideItem>(newItem));
-        } else {
-            failedFiles << sourceFileName;
-        }
-        if (!mutation.ownersStable()) {
-            discardUnpublished();
-            result.error = tr(
-                "The activity collection changed while copies were being prepared");
-            return result;
-        }
-    }
-
-    if (! newItems.isEmpty()) {
-        QString publishError;
-        if (!mutation.resetAndSort(
-                publishError,
-                [this, &newItems, &published] {
-                    for (const QPointer<RideItem> &item :
-                         std::as_const(newItems)) {
-                        if (!item) return false;
-                    }
-                    for (const QPointer<RideItem> &item :
-                         std::as_const(newItems)) {
-                        rides_ << item.data();
-                    }
-                    published = true;
-                    return true;
-                })) {
-            discardUnpublished();
-            result.error = publishError;
-            return result;
-        }
-    }
-    if (! failedFiles.isEmpty()) {
-        result.error = tr("Failed to copy %1 of %2 activities: %3")
-                         .arg(failedFiles.count())
-                         .arg(sourceItemsAndTargets.count())
-                         .arg(failedFiles.join(", "));
-    }
-
-    int publishedCount = 0;
-    for (const QPointer<RideItem> &item : std::as_const(newItems)) {
-        if (item && ownsLiveRide(item.data())) ++publishedCount;
-    }
-    result.success = publishedCount > 0;
-    result.affectedCount = publishedCount;
 
     return result;
 }
