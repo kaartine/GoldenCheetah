@@ -69,6 +69,7 @@ int activityIdentityStageCall = 0;
 int activityIdentityFailureCall = 0;
 int removalCancelCount = 0;
 int startupInvalidationCount = 0;
+int rideItemDestructionCount = 0;
 int removalTransitionOccurrence = 0;
 bool removalValidationMutationEnabled = false;
 QByteArray removalValidationMutationContents;
@@ -213,6 +214,7 @@ void resetRideCacheRemovalRefreshCounts()
     activityIdentityFailureCall = 0;
     removalCancelCount = 0;
     startupInvalidationCount = 0;
+    rideItemDestructionCount = 0;
     removalTransitionOccurrence = 0;
     removalValidationMutationEnabled = false;
     removalValidationMutationContents.clear();
@@ -433,6 +435,11 @@ int rideCacheRemovalCancelCount()
 int rideCacheRemovalStartupInvalidationCount()
 {
     return startupInvalidationCount;
+}
+
+int rideCacheRemovalRideItemDestructionCount()
+{
+    return rideItemDestructionCount;
 }
 
 void setRideCacheRemovalSaveActionOnCall(
@@ -810,6 +817,7 @@ RideItem::RideItem(
 
 RideItem::~RideItem()
 {
+    ++rideItemDestructionCount;
     if (context && context->athlete
         && context->athlete->rideCache) {
         RideCache *cache = context->athlete->rideCache;
@@ -1064,7 +1072,10 @@ bool RideCache::activityMutationIsBlocked() const
         || (removalInProgress_ && *removalInProgress_)
         || (model_ && !model_->cacheMutationAllowed());
 }
-void RideCache::itemChanged() {}
+void RideCache::itemChanged()
+{
+    emit itemChanged(static_cast<RideItem *>(sender()));
+}
 void RideCache::initEstimates() {}
 void RideCache::refresh()
 {

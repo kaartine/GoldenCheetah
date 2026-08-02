@@ -526,6 +526,8 @@ class RideCache : public QObject
         bool purgeDestroyedModelRows();
         void purgeDestroyedRowsInsideModelReset();
         void discardDetachedTombstones();
+        void retireImportedRideItems(
+            const QVector<RideItem *> &items);
         QString cpxCachePathForActivity(
             const QString &fileName,
             bool isPlanned) const;

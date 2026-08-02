@@ -19,7 +19,9 @@
 #include "RideFile.h"
 #include "RideItem.h"
 
+#include <QHash>
 #include <QPointer>
+#include <QSet>
 
 #include <algorithm>
 
@@ -31,6 +33,25 @@ bool rideImportLessThan(const RideItem *left, const RideItem *right)
 }
 
 } // namespace
+
+void RideCache::retireImportedRideItems(
+    const QVector<RideItem *> &items)
+{
+    QSet<RideItem *> seen;
+    for (RideItem *item : items) {
+        if (!item || seen.contains(item)
+            || deletelist.contains(item)
+            || rides_.contains(item)) {
+            continue;
+        }
+        seen.insert(item);
+        QObject::disconnect(item, nullptr, this, nullptr);
+        reverse_.removeAll(item);
+        if (context && context->ride == item)
+            context->ride = nullptr;
+        if (!delete_.contains(item)) delete_.append(item);
+    }
+}
 
 void RideCache::addRide(
     QString name,
@@ -50,6 +71,9 @@ void RideCache::addRide(
         return;
     }
     QPointer<RideItem> prior(context->ride);
+    RideItem *const priorAddress = context->ride;
+    const QString priorFileName = prior
+        ? prior->fileName : QString();
 
     RideItem *last;
     if (useTempActivities) {
@@ -72,44 +96,66 @@ void RideCache::addRide(
     const RideCacheCallbackGuard callbackGuard(
         this, context, last, estimator);
 
-    bool added = false;
-    for (int index = 0; index < rides_.count(); ++index) {
-        RideItem *const current = rides_.at(index);
-        if (current && !deletelist.contains(current)
-            && current->fileName == last->fileName) {
-            invalidateStartupSnapshots();
-            rides_[index] = last;
-            added = true;
-            break;
-        }
-    }
-
-    if (!added) {
-        bool appended = false;
-        QString publishError;
-        const bool published = mutation.resetAndSort(
-            publishError,
-            [this, &guardedLast, &appended] {
-                if (!guardedLast) return false;
-                rides_ << guardedLast.data();
-                appended = true;
+    bool publishedItem = false;
+    RideItem *displacedAddress = nullptr;
+    QPointer<RideItem> displaced;
+    QString publishError;
+    const bool published = mutation.resetAndSort(
+        publishError,
+        [this, &guardedLast, &publishedItem,
+         &displacedAddress, &displaced] {
+            if (!guardedLast) return false;
+            for (qsizetype index = 0;
+                 index < rides_.size(); ++index) {
+                RideItem *const current = rides_.at(index);
+                if (!current || deletelist.contains(current)
+                    || current->fileName
+                        != guardedLast->fileName) {
+                    continue;
+                }
+                displacedAddress = current;
+                displaced = current;
+                rides_[index] = guardedLast.data();
+                publishedItem = true;
                 return true;
-            });
-        if (!published) {
-            if (guardedLast && !appended) {
-                if (!mutation.ownersStable())
-                    guardedLast->context = nullptr;
-                delete guardedLast.data();
             }
-            if (!publishError.isEmpty())
-                qWarning().noquote() << publishError;
-            return;
+            rides_.append(guardedLast.data());
+            publishedItem = true;
+            return true;
+        });
+    if (!published) {
+        if (guardedLast && !publishedItem) {
+            if (!mutation.ownersStable())
+                guardedLast->context = nullptr;
+            delete guardedLast.data();
         }
-        if (!mutation.ownersStable() || !guardedLast) return;
+        if (!publishError.isEmpty())
+            qWarning().noquote() << publishError;
+        return;
+    }
+    if (!mutation.ownersStable()) return;
+    if (!guardedLast) {
+        if (!ownsLiveRide(context->ride)) context->ride = nullptr;
+        if (displaced)
+            retireImportedRideItems({displaced.data()});
+        return;
     }
 
     last = guardedLast.data();
-    if (!last) return;
+    RideItem *selection = context->ride;
+    if (selection == displacedAddress
+        || (!ownsLiveRide(selection)
+            && priorAddress
+            && priorFileName == last->fileName)) {
+        selection = last;
+    } else if (!ownsLiveRide(selection)) {
+        selection = nullptr;
+    }
+    context->ride = selection;
+    if (displaced) {
+        retireImportedRideItems({displaced.data()});
+    }
+
     last->refresh();
     if (!mutation.ownersStable() || !guardedLast)
         return;
@@ -126,7 +172,7 @@ void RideCache::addRide(
         context->ride = last;
         context->notifyRideSelected(last);
     } else {
-        context->notifyRideSelected(prior.data());
+        context->notifyRideSelected(context->ride);
     }
 
     if (!callbackGuard.allAlive()
@@ -150,6 +196,9 @@ QVector<RideItem*> RideCache::addRides(
         return {};
     }
     QPointer<RideItem> prior(context->ride);
+    RideItem *const priorAddress = context->ride;
+    const QString priorFileName = prior
+        ? prior->fileName : QString();
     QVector<RideItem*> incoming;
     QVector<QPointer<RideItem>> guardedIncoming;
     incoming.reserve(names.size());
@@ -201,6 +250,17 @@ QVector<RideItem*> RideCache::addRides(
     }
     if (incoming.isEmpty()) return incoming;
 
+    QHash<RideItem *, QPointer<RideItem>> itemGuards;
+    itemGuards.reserve(rides_.size() + incoming.size());
+    for (RideItem *item : rides_) {
+        if (item && !deletelist.contains(item))
+            itemGuards.insert(item, QPointer<RideItem>(item));
+    }
+    for (const QPointer<RideItem> &item : guardedIncoming) {
+        if (item) itemGuards.insert(
+            item.data(), QPointer<RideItem>(item));
+    }
+
     bool mergeStarted = false;
     bool mergePrepared = false;
     QString mergeResetError;
@@ -239,14 +299,44 @@ QVector<RideItem*> RideCache::addRides(
         qDeleteAll(incoming);
         return {};
     }
-    Q_UNUSED(replaced);
     if (!mutation.ownersStable()) return {};
+
+    QVector<RideItem *> displacedItems;
+    QSet<RideItem *> displacedAddresses;
+    displacedItems.reserve(replaced.size());
+    for (RideItem *address : replaced) {
+        if (!address || displacedAddresses.contains(address))
+            continue;
+        displacedAddresses.insert(address);
+        const QPointer<RideItem> item = itemGuards.value(address);
+        if (item && !rides_.contains(item.data()))
+            displacedItems.append(item.data());
+    }
+
+    RideItem *selection = context->ride;
+    if (!ownsLiveRide(selection)) {
+        selection = nullptr;
+        if (priorAddress && !priorFileName.isEmpty()) {
+            for (RideItem *item : rides_) {
+                if (item && !deletelist.contains(item)
+                    && item->fileName == priorFileName) {
+                    selection = item;
+                    break;
+                }
+            }
+        }
+    }
+    context->ride = selection;
+    retireImportedRideItems(displacedItems);
 
     for (const QPointer<RideItem> &guardedItem : guardedIncoming) {
         RideItem *item = guardedItem.data();
-        if (!item) continue;
+        if (!item || !ownsLiveRide(item)) continue;
         item->refresh();
-        if (!mutation.ownersStable() || !guardedItem) return {};
+        if (!mutation.ownersStable() || !guardedItem
+            || !ownsLiveRide(guardedItem.data())) {
+            return {};
+        }
         item->close();
         if (dosignal) {
             context->notifyRideAdded(item);
@@ -260,7 +350,7 @@ QVector<RideItem*> RideCache::addRides(
         RideItem *selection = nullptr;
         for (auto item = guardedIncoming.crbegin();
              item != guardedIncoming.crend(); ++item) {
-            if (*item) {
+            if (*item && ownsLiveRide(item->data())) {
                 selection = item->data();
                 break;
             }
@@ -268,14 +358,15 @@ QVector<RideItem*> RideCache::addRides(
         context->ride = selection;
         context->notifyRideSelected(context->ride);
     } else {
-        context->notifyRideSelected(prior.data());
+        context->notifyRideSelected(context->ride);
     }
     if (!mutation.ownersStable()) return {};
 
     QVector<RideItem *> liveIncoming;
     liveIncoming.reserve(guardedIncoming.size());
     for (const QPointer<RideItem> &item : guardedIncoming) {
-        if (item) liveIncoming.append(item.data());
+        if (item && ownsLiveRide(item.data()))
+            liveIncoming.append(item.data());
     }
     return liveIncoming;
 }

@@ -66,6 +66,7 @@ void setRideCacheRemovalSaveFailureCalls(
 int rideCacheRemovalSaveCallCount();
 int rideCacheRemovalCancelCount();
 int rideCacheRemovalStartupInvalidationCount();
+int rideCacheRemovalRideItemDestructionCount();
 void setRideCacheRemovalSaveActionOnCall(
     const QString &fileName,
     int call,
@@ -165,6 +166,14 @@ bool cacheContains(const RideCache &cache, const QString &fileName)
         if (item && item->fileName == fileName) return true;
     }
     return false;
+}
+
+RideItem *cacheItem(RideCache &cache, const QString &fileName)
+{
+    for (RideItem *item : cache.rides()) {
+        if (item && item->fileName == fileName) return item;
+    }
+    return nullptr;
 }
 
 bool stageBytes(
@@ -478,6 +487,9 @@ private slots:
     void addRidePurgesPreexistingDestroyedRow();
     void addRidesPurgesPreexistingDestroyedRow();
     void addRidePurgesRowDestroyedDuringReset();
+    void duplicateSingleImportRetiresReplacedItem();
+    void duplicateSingleImportRetiresOldWhenReplacementIsDestroyed();
+    void duplicateBatchImportRetiresEveryDisplacedItem();
     void consecutiveAddsCoalesceBackgroundResume();
     void mutationScopePublishesOnlyLiveSortedRows();
     void mutationScopeDefersConfigAndReleasesModelReservation();
@@ -6046,6 +6058,214 @@ void TestRideCacheRemoval::addRidePurgesRowDestroyedDuringReset()
     QCOMPARE(
         fixture.cache->getAllFilenames(),
         QStringList({secondName(), thirdName()}));
+}
+
+void TestRideCacheRemoval::duplicateSingleImportRetiresReplacedItem()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    fixture.cache->addRide(
+        firstName(), false, true, false, false);
+    RideItem *const replaced =
+        cacheItem(*fixture.cache, firstName());
+    QVERIFY(replaced);
+    const QPointer<RideItem> guardedReplaced(replaced);
+
+    int aboutToResetCount = 0;
+    int resetCount = 0;
+    bool aliveDuringAboutToReset = false;
+    bool aliveDuringReset = false;
+    connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::modelAboutToBeReset,
+        [&] {
+            ++aboutToResetCount;
+            aliveDuringAboutToReset = guardedReplaced;
+        });
+    connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::modelReset,
+        [&] {
+            ++resetCount;
+            aliveDuringReset = guardedReplaced;
+        });
+    QSignalSpy changedSpy(
+        fixture.cache.get(),
+        QOverload<RideItem *>::of(&RideCache::itemChanged));
+    RideItem *announcedSelection = nullptr;
+    connect(
+        fixture.context.get(), &Context::rideSelected,
+        [&](RideItem *item) { announcedSelection = item; });
+    resetRideCacheRemovalRefreshCounts();
+
+    fixture.cache->addRide(
+        firstName(), false, false, false, false);
+
+    RideItem *const replacement =
+        cacheItem(*fixture.cache, firstName());
+    QVERIFY(replacement);
+    QVERIFY(replacement != replaced);
+    QCOMPARE(aboutToResetCount, 1);
+    QCOMPARE(resetCount, 1);
+    QVERIFY(aliveDuringAboutToReset);
+    QVERIFY(aliveDuringReset);
+    QVERIFY(guardedReplaced);
+    QCOMPARE(fixture.context->ride, replacement);
+    QCOMPARE(announcedSelection, replacement);
+    QCOMPARE(
+        fixture.cache->pendingDeletionCountForRemovalTest(),
+        qsizetype(1));
+
+    guardedReplaced->notifyRideMetadataChanged();
+    QCOMPARE(changedSpy.count(), 0);
+
+    fixture.cache->garbageCollect();
+    QCoreApplication::sendPostedEvents(
+        nullptr, QEvent::DeferredDelete);
+    QVERIFY(guardedReplaced.isNull());
+    QCOMPARE(rideCacheRemovalRideItemDestructionCount(), 1);
+    QCoreApplication::sendPostedEvents(
+        nullptr, QEvent::DeferredDelete);
+    QCOMPARE(rideCacheRemovalRideItemDestructionCount(), 1);
+}
+
+void TestRideCacheRemoval::
+duplicateSingleImportRetiresOldWhenReplacementIsDestroyed()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    fixture.cache->addRide(
+        firstName(), false, true, false, false);
+    RideItem *const replaced =
+        cacheItem(*fixture.cache, firstName());
+    QVERIFY(replaced);
+    const QPointer<RideItem> guardedReplaced(replaced);
+
+    bool replacementDestroyed = false;
+    connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::modelReset,
+        [&] {
+            RideItem *const replacement =
+                cacheItem(*fixture.cache, firstName());
+            if (replacement && replacement != replaced) {
+                replacementDestroyed = true;
+                delete replacement;
+            }
+        });
+    QSignalSpy changedSpy(
+        fixture.cache.get(),
+        QOverload<RideItem *>::of(&RideCache::itemChanged));
+    resetRideCacheRemovalRefreshCounts();
+
+    fixture.cache->addRide(
+        firstName(), false, false, false, false);
+
+    QVERIFY(replacementDestroyed);
+    QVERIFY(guardedReplaced);
+    QCOMPARE(rideCacheRemovalRideItemDestructionCount(), 1);
+    QCOMPARE(fixture.context->ride, nullptr);
+    QCOMPARE(
+        fixture.cache->pendingDeletionCountForRemovalTest(),
+        qsizetype(1));
+    guardedReplaced->notifyRideMetadataChanged();
+    QCOMPARE(changedSpy.count(), 0);
+
+    fixture.cache->garbageCollect();
+    QCoreApplication::sendPostedEvents(
+        nullptr, QEvent::DeferredDelete);
+    QVERIFY(guardedReplaced.isNull());
+    QCOMPARE(rideCacheRemovalRideItemDestructionCount(), 2);
+}
+
+void TestRideCacheRemoval::
+duplicateBatchImportRetiresEveryDisplacedItem()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    fixture.cache->addRide(
+        firstName(), false, true, false, false);
+    fixture.cache->addRide(
+        secondName(), false, false, false, false);
+    RideItem *const replacedFirst =
+        cacheItem(*fixture.cache, firstName());
+    RideItem *const replacedSecond =
+        cacheItem(*fixture.cache, secondName());
+    QVERIFY(replacedFirst);
+    QVERIFY(replacedSecond);
+    const QPointer<RideItem> guardedFirst(replacedFirst);
+    const QPointer<RideItem> guardedSecond(replacedSecond);
+
+    int aboutToResetCount = 0;
+    int resetCount = 0;
+    bool displacedAliveDuringAboutToReset = false;
+    bool displacedAliveDuringReset = false;
+    int destroyedDuringReset = -1;
+    connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::modelAboutToBeReset,
+        [&] {
+            ++aboutToResetCount;
+            displacedAliveDuringAboutToReset =
+                guardedFirst && guardedSecond;
+        });
+    connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::modelReset,
+        [&] {
+            ++resetCount;
+            displacedAliveDuringReset =
+                guardedFirst && guardedSecond;
+            destroyedDuringReset =
+                rideCacheRemovalRideItemDestructionCount();
+        });
+    QSignalSpy changedSpy(
+        fixture.cache.get(),
+        QOverload<RideItem *>::of(&RideCache::itemChanged));
+    RideItem *announcedSelection = nullptr;
+    connect(
+        fixture.context.get(), &Context::rideSelected,
+        [&](RideItem *item) { announcedSelection = item; });
+    resetRideCacheRemovalRefreshCounts();
+
+    const QVector<RideItem *> imported =
+        fixture.cache->addRides(
+            {firstName(), firstName(), secondName(), thirdName()},
+            {}, false, false, false, false);
+
+    RideItem *const firstReplacement =
+        cacheItem(*fixture.cache, firstName());
+    QVERIFY(firstReplacement);
+    QVERIFY(firstReplacement != replacedFirst);
+    QVERIFY(cacheItem(*fixture.cache, secondName()) != replacedSecond);
+    QCOMPARE(imported.size(), 3);
+    QCOMPARE(fixture.cache->count(), 3);
+    QCOMPARE(aboutToResetCount, 1);
+    QCOMPARE(resetCount, 1);
+    QVERIFY(displacedAliveDuringAboutToReset);
+    QVERIFY(displacedAliveDuringReset);
+    QCOMPARE(destroyedDuringReset, 0);
+    QVERIFY(guardedFirst);
+    QVERIFY(guardedSecond);
+    QCOMPARE(fixture.context->ride, firstReplacement);
+    QCOMPARE(announcedSelection, firstReplacement);
+    QCOMPARE(
+        fixture.cache->pendingDeletionCountForRemovalTest(),
+        qsizetype(3));
+
+    guardedFirst->notifyRideMetadataChanged();
+    guardedSecond->notifyRideMetadataChanged();
+    QCOMPARE(changedSpy.count(), 0);
+
+    fixture.cache->garbageCollect();
+    QCoreApplication::sendPostedEvents(
+        nullptr, QEvent::DeferredDelete);
+    QVERIFY(guardedFirst.isNull());
+    QVERIFY(guardedSecond.isNull());
+    QCOMPARE(rideCacheRemovalRideItemDestructionCount(), 3);
+    QCoreApplication::sendPostedEvents(
+        nullptr, QEvent::DeferredDelete);
+    QCOMPARE(rideCacheRemovalRideItemDestructionCount(), 3);
 }
 
 void TestRideCacheRemoval::consecutiveAddsCoalesceBackgroundResume()

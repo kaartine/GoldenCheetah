@@ -3170,24 +3170,33 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### MEM-026: Duplicate activity imports leak the replaced RideItem
 
-- Status: OPEN
-- Code: `src/Core/RideCache.cpp` and `src/Core/RideCacheBulkMerge.h`
+- Status: FIXED
+- Code: `src/Core/RideCacheImport.cpp` and `src/Core/RideCache.h`
 - Impact: `addRide()` overwrites a duplicate vector slot without retiring the
   old object. `addRides()` receives every displaced object from `mergeItems()`
   but discards that list with `Q_UNUSED`. Since `RideItem` has no QObject parent,
   repeated imports leak its metrics, intervals, optional open RideFile, and live
   signal connections back into the cache.
-- Evidence: Both replacement branches remove the old pointer from the only
-  owning vector and neither delete it, enqueue it in `delete_`, nor transfer it
-  to another owner. The bulk helper already returns the exact displaced set,
-  demonstrating that retirement was intended to be explicit.
-- Test: Import one and many duplicate identities with destructor and signal
-  counters. Require every displaced item to stay alive through model callbacks,
-  then be destroyed exactly once; preserve or remap current selection and prove
-  a retired item cannot emit a later cache update.
-- Fix direction: Guard duplicate identities and selection across the reset,
-  disconnect and retire displaced objects only after callbacks finish, and use
-  the existing deferred garbage path with tombstone-aware exactly-once cleanup.
+- Test-first evidence: The initial single-import regression observed no model
+  reset at all, leaving the displaced object outside the model protocol. The
+  batch regression returned all four inputs although only three identities
+  survived. After the first retirement implementation, a reset callback that
+  destroyed the replacement left `Context::ride` pointing at the detached old
+  object. Destructor, reset, selection-signal, and cache-update counters now
+  cover those failures plus a duplicate within one batch.
+- Resolution: Single and batch imports publish replacements inside the reserved
+  model reset and guard every old and incoming item with `QPointer`. The batch
+  path consumes and deduplicates the displaced set returned by `mergeItems()`.
+  Displaced objects remain alive through model callbacks, are disconnected from
+  cache updates, removed from the reverse work list, and queued exactly once on
+  the existing deferred garbage path. Current selection is remapped to the live
+  same-identity replacement, and only final live incoming rows are refreshed,
+  announced, selected, or returned.
+- Verification: All three focused lifetime regressions pass strict
+  ASan/UBSan/LSan. The complete 320-case RideCache program passes ASan/UBSan and
+  ThreadSanitizer, and all 13 bulk-import cases pass both sanitizer
+  configurations. The production application links and survives an isolated
+  15-second offscreen event-loop smoke test with a disposable home directory.
 
 ### DATA-011: CPX freshness trusts source mtime instead of its stored CRC
 
