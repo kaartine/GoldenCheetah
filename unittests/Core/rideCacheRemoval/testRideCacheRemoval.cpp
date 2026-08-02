@@ -537,6 +537,7 @@ private slots:
     void activeRemovalJournalRejectsDirectorySubstitute();
     void activeRemovalJournalRejectsManifestSubstitute();
     void peerManifestPublicationRejectsManifestSubstitute();
+    void commitMarkerReadRejectsMarkerSubstitute();
     void startupReconcilesAbandonedLinkedSaveJournal();
     void startupReportsCorruptLinkedSaveJournal();
     void startupReconcilesAbandonedPlanReplacementJournal();
@@ -3504,6 +3505,66 @@ peerManifestPublicationRejectsManifestSubstitute()
     journal.reset();
     QCOMPARE(readBytes(displacedPath), manifestContents);
     QCOMPARE(readBytes(sourcePath), sourceContents);
+}
+
+void TestRideCacheRemoval::
+commitMarkerReadRejectsMarkerSubstitute()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    RideItem *item = fixture.addRide(firstName(), true);
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QByteArray sourceContents("source");
+    writeFixture(sourcePath, sourceContents);
+
+    const QString namespacePath = QDir(fixture.temporary.path()).filePath(
+        QStringLiteral(".gc-transactions/linked-removal"));
+    QString journalPath;
+    QString markerPath;
+    QString displacedPath;
+    QByteArray markerContents;
+    bool actionReached = false;
+    bool markerReplaced = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("journal-commit-marker-inspected"),
+        [&] {
+            actionReached = true;
+            const QStringList journals = QDir(namespacePath).entryList(
+                QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot,
+                QDir::Name);
+            QCOMPARE(journals.size(), 1);
+            journalPath = QDir(namespacePath).filePath(journals.constFirst());
+            markerPath = QDir(journalPath).filePath(
+                QStringLiteral("COMMITTED"));
+            displacedPath = QDir(journalPath).filePath(
+                QStringLiteral(".COMMITTED.attack.tmp"));
+            markerContents = readBytes(markerPath);
+            if (markerContents.isEmpty()
+                || !QFile::rename(markerPath, displacedPath)) {
+                return;
+            }
+            markerReplaced = true;
+            writeFixture(markerPath, markerContents);
+        });
+
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(item);
+
+    QVERIFY(actionReached);
+    QVERIFY(!journalPath.isEmpty());
+    if (!markerReplaced) {
+        QSKIP("The active journal commit marker could not be replaced");
+    }
+    QCOMPARE(
+        result.status,
+        RideCache::RemovalStatus::CommittedCleanupPending);
+    QVERIFY(!result.error.isEmpty());
+    QVERIFY(result.recoveryPaths.contains(journalPath));
+    QCOMPARE(readBytes(markerPath), markerContents);
+    QCOMPARE(readBytes(displacedPath), markerContents);
+    QVERIFY(!QFileInfo::exists(sourcePath));
+    QCOMPARE(readBytes(fixture.backupPath(firstName())), sourceContents);
 }
 
 void TestRideCacheRemoval::
