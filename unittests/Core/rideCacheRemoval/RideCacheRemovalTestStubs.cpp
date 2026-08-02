@@ -1,6 +1,7 @@
 #include "LTMSettings.h"
 #include "LinkedActivityRemovalJournal.h"
 #include "LinkedActivitySaveJournal.h"
+#include "PlanReplacementJournal.h"
 #include "Athlete.h"
 #include "Context.h"
 #include "DataProcessor.h"
@@ -13,6 +14,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QSet>
 
 #include <cstring>
@@ -59,9 +61,66 @@ std::function<void()> removalLinkMutationAction;
 int removalLinkMutationCall = 0;
 int removalLinkMutationTriggerCall = 0;
 int removalCancelCount = 0;
+int startupInvalidationCount = 0;
 int removalTransitionOccurrence = 0;
+bool removalValidationMutationEnabled = false;
+QByteArray removalValidationMutationContents;
 
 } // namespace
+
+RideFile::RideFile()
+    : RideFile(QDateTime(), 0.0)
+{
+}
+
+RideFile::RideFile(const QDateTime &startTime, double recIntSecs)
+    : command(nullptr), context(nullptr), wstale(true),
+      startTime_(startTime), recIntSecs_(recIntSecs),
+      minPoint(new RideFilePoint()), maxPoint(new RideFilePoint()),
+      avgPoint(new RideFilePoint()), totalPoint(new RideFilePoint()),
+      data(nullptr), wprime_(nullptr), weight_(0),
+      totalCount(0), totalTemp(0), dstale(true),
+      windSpeed_(0), windHeading_(0)
+{
+}
+
+RideFile::~RideFile()
+{
+    emit deleted();
+    qDeleteAll(dataPoints_);
+    qDeleteAll(referencePoints_);
+    delete minPoint;
+    delete maxPoint;
+    delete avgPoint;
+    delete totalPoint;
+    qDeleteAll(calibrations_);
+    qDeleteAll(intervals_);
+    qDeleteAll(xdata_);
+}
+
+bool RideFile::parseRideFileName(
+    const QString &name,
+    QDateTime *dateTime)
+{
+    static const QRegularExpression expression(
+        QStringLiteral(
+            "^(\\d{4})_(\\d{2})_(\\d{2})_(\\d{2})_(\\d{2})_(\\d{2})\\.(.+)$"));
+    const QRegularExpressionMatch match =
+        expression.match(name);
+    if (!match.hasMatch() || !dateTime) return false;
+
+    const QDate date(
+        match.captured(1).toInt(),
+        match.captured(2).toInt(),
+        match.captured(3).toInt());
+    const QTime time(
+        match.captured(4).toInt(),
+        match.captured(5).toInt(),
+        match.captured(6).toInt());
+    if (!date.isValid() || !time.isValid()) return false;
+    *dateTime = QDateTime(date, time);
+    return true;
+}
 
 void resetRideCacheRemovalRefreshCounts()
 {
@@ -102,7 +161,10 @@ void resetRideCacheRemovalRefreshCounts()
     removalLinkMutationCall = 0;
     removalLinkMutationTriggerCall = 0;
     removalCancelCount = 0;
+    startupInvalidationCount = 0;
     removalTransitionOccurrence = 0;
+    removalValidationMutationEnabled = false;
+    removalValidationMutationContents.clear();
 }
 
 int rideCacheRemovalRefreshCount()
@@ -312,6 +374,11 @@ int rideCacheRemovalCancelCount()
     return removalCancelCount;
 }
 
+int rideCacheRemovalStartupInvalidationCount()
+{
+    return startupInvalidationCount;
+}
+
 void setRideCacheRemovalSaveActionOnCall(
     const QString &fileName,
     int call,
@@ -375,6 +442,13 @@ void setRideCacheRemovalProcessorAction(
     const std::function<void()> &action)
 {
     removalProcessorAction = action;
+}
+
+void setRideCacheRemovalValidationMutation(
+    const QByteArray &contents)
+{
+    removalValidationMutationEnabled = true;
+    removalValidationMutationContents = contents;
 }
 
 void setRideCacheRemovalLinkMutationActionOnCall(
@@ -786,9 +860,13 @@ RideCache::RideCache(Context *cacheContext)
     if (LinkedActivityRemoval::Journal::reconcileAll(
             cacheContext->athlete->home->root().absolutePath(),
             startupRecoveryError_)) {
-        LinkedActivitySave::Journal::reconcileAll(
-            cacheContext->athlete->home->root().absolutePath(),
-            startupRecoveryError_);
+        if (LinkedActivitySave::Journal::reconcileAll(
+                cacheContext->athlete->home->root().absolutePath(),
+                startupRecoveryError_)) {
+            PlanReplacement::Journal::reconcileAll(
+                cacheContext->athlete->home->root().absolutePath(),
+                startupRecoveryError_);
+        }
     }
 }
 
@@ -816,6 +894,90 @@ void RideCache::itemChanged() {}
 void RideCache::garbageCollect() {}
 void RideCache::initEstimates() {}
 void RideCache::refresh() { ++rideCacheRefreshCount; }
+void RideCache::invalidateStartupSnapshots()
+{
+    ++startupInvalidationCount;
+}
+
+bool RideCache::stagePlannedActivityCopy(
+    const QString &sourcePath,
+    const QString &sourceFileName,
+    const QDateTime &targetDateTime,
+    const QString &stagingPath,
+    QString &error)
+{
+    const QFileInfo sourceInfo(sourcePath);
+    QFile source(sourcePath);
+    if (!targetDateTime.isValid()
+        || sourceInfo.fileName() != sourceFileName
+        || !source.open(QIODevice::ReadOnly)) {
+        error = source.errorString().isEmpty()
+            ? QStringLiteral("injected copy staging failure")
+            : source.errorString();
+        return false;
+    }
+    const QByteArray contents = source.readAll();
+    if (source.error() != QFileDevice::NoError) {
+        error = source.errorString();
+        return false;
+    }
+
+    QFile staged(stagingPath);
+    if (!staged.open(QIODevice::WriteOnly | QIODevice::Truncate)
+        || staged.write(contents) != contents.size()
+        || !staged.flush()) {
+        error = staged.errorString();
+        return false;
+    }
+    return true;
+}
+
+bool RideCache::validatePlannedActivityStage(
+    const QString &stagingPath,
+    const QString &targetFileName,
+    QString &error) const
+{
+    QDateTime dateTime;
+    QFile staged(stagingPath);
+    if (!RideFile::parseRideFileName(targetFileName, &dateTime)
+        || !staged.open(QIODevice::ReadOnly)
+        || staged.readAll().isEmpty()
+        || staged.error() != QFileDevice::NoError) {
+        error = QStringLiteral(
+            "injected staged activity validation failure");
+        return false;
+    }
+    if (removalValidationMutationEnabled) {
+        removalValidationMutationEnabled = false;
+        QFile replacement(stagingPath);
+        if (!replacement.open(
+                QIODevice::WriteOnly | QIODevice::Truncate)
+            || replacement.write(
+                removalValidationMutationContents)
+                != removalValidationMutationContents.size()
+            || !replacement.flush()) {
+            error = replacement.errorString();
+            return false;
+        }
+    }
+    return true;
+}
+
+RideFile *RideCache::openPlannedActivityForDeleteProcessor(
+    const QString &sourcePath,
+    QString &error) const
+{
+    const QFileInfo sourceInfo(sourcePath);
+    QDateTime dateTime;
+    if (sourceInfo.isSymLink() || !sourceInfo.isFile()
+        || !RideFile::parseRideFileName(
+            sourceInfo.fileName(), &dateTime)) {
+        error = QStringLiteral(
+            "injected planned activity open failure");
+        return nullptr;
+    }
+    return new RideFile(dateTime, 1.0);
+}
 
 RideItem *RideCache::getLinkedActivity(RideItem *item)
 {

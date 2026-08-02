@@ -17,6 +17,8 @@ SOURCES = testRideCacheRemoval.cpp \
           ../../../src/FileIO/RideFileCacheIntegrity.cpp \
           ../../../src/Core/LinkedActivityRemovalJournal.cpp \
           ../../../src/Core/LinkedActivitySaveJournal.cpp \
+          ../../../src/Planning/PlanReplacementJournal.cpp \
+          ../../../src/Core/PlannedActivityFileStager.cpp \
           ../../../src/Core/RideCacheRemoval.cpp
 
 HEADERS = ../../../src/Core/Athlete.h \
@@ -26,6 +28,8 @@ HEADERS = ../../../src/Core/Athlete.h \
           ../../../src/Core/RideItem.h \
           ../../../src/Core/LinkedActivityRemovalJournal.h \
           ../../../src/Core/LinkedActivitySaveJournal.h \
+          ../../../src/Planning/PlanReplacementJournal.h \
+          ../../../src/FileIO/RideFile.h \
           ../../../src/FileIO/RideFileCRC.h \
           ../../../src/FileIO/RideFileCacheIntegrity.h \
           ../../../src/Metrics/Estimator.h

@@ -128,6 +128,19 @@ class RideCache : public QObject
         const QVector<RideItem*> &rides() const { return rides_; }
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
         QVector<RideItem*> &mutableRidesForRemovalTest() { return rides_; }
+        qsizetype pendingDeletionCountForRemovalTest() const {
+            return delete_.size();
+        }
+        void discardPendingDeletionAddressForRemovalTest(
+            RideItem *address) {
+            delete_.removeOne(address);
+        }
+        bool replacementOperationInProgressForTest() const {
+            return removalInProgress_ && *removalInProgress_;
+        }
+        bool activityMutationBlockedForTest() const {
+            return activityMutationIsBlocked();
+        }
 #endif
 
         // add/remove a ride to the list
@@ -203,6 +216,28 @@ class RideCache : public QObject
             bool success = false;
             QString error;
             int affectedCount = 0;
+        };
+
+        struct PlannedActivityTarget {
+            QString fileName;
+            std::function<bool(
+                const QString &stagingPath,
+                QString &error)> stage;
+        };
+
+        struct PlannedReplacementResult {
+            bool committed = false;
+            bool cacheUpdated = false;
+            bool cleanupComplete = false;
+            QString error;
+            int removedCount = 0;
+            int addedCount = 0;
+
+            bool cleanlyCompleted() const
+            {
+                return committed && cacheUpdated
+                    && cleanupComplete && error.isEmpty();
+            }
         };
 
         enum class RemovalStatus {
@@ -287,6 +322,15 @@ class RideCache : public QObject
 
         OperationPreCheck checkCopyPlannedActivities(const QList<std::pair<RideItem*, QDate>> &sourceItemsAndTargets);
         OperationResult copyPlannedActivities(const QList<std::pair<RideItem*, QDate>> &sourceItemsAndTargets);
+        PlannedReplacementResult replacePlannedActivityFiles(
+            const QList<RideItem*> &activitiesToReplace,
+            const QStringList &inputPaths,
+            const QList<PlannedActivityTarget> &targets,
+            bool notifyAdded = false);
+        PlannedReplacementResult replacePlannedActivities(
+            const QList<RideItem*> &activitiesToReplace,
+            const QList<std::pair<RideItem*, QDate>>
+                &sourceItemsAndTargets);
 
         OperationPreCheck checkShiftPlannedActivities(const QDate &fromDate, int dayOffset);
         OperationResult shiftPlannedActivities(const QDate &fromDate, int dayOffset);
@@ -395,6 +439,11 @@ class RideCache : public QObject
         bool first; // updated when estimates are marked stale
 
     private:
+        bool activityMutationIsBlocked() const {
+            return QThread::currentThread() != thread()
+                || (removalInProgress_ && *removalInProgress_);
+        }
+
         enum class RideFileDisposition {
             Archive,
             AlreadyArchived
@@ -442,6 +491,19 @@ class RideCache : public QObject
         bool renameRideFiles(const QString& oldFileName, const QString& newFileName, bool isPlanned, QString &error);
         bool isValidLink(RideItem *item1, RideItem *item2, QString &error);
         RideItem* copyPlannedRideFile(RideItem *sourceItem, const QDate &newDate, const QTime &newTime, QString &error);
+        bool stagePlannedActivityCopy(
+            const QString &sourcePath,
+            const QString &sourceFileName,
+            const QDateTime &targetDateTime,
+            const QString &stagingPath,
+            QString &error);
+        bool validatePlannedActivityStage(
+            const QString &stagingPath,
+            const QString &targetFileName,
+            QString &error) const;
+        RideFile *openPlannedActivityForDeleteProcessor(
+            const QString &sourcePath,
+            QString &error) const;
 
         RideCacheStartup::RefreshGeneration refreshGeneration_;
         QMultiHash<QString, RideItem*> startupItemsByFile_;

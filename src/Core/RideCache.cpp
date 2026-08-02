@@ -26,6 +26,8 @@
 #include "SaveDialogs.h"
 #include "LinkedActivityRemovalJournal.h"
 #include "LinkedActivitySaveJournal.h"
+#include "PlanReplacementJournal.h"
+#include "PlannedActivityFileStager.h"
 
 #include "Context.h"
 #include "Athlete.h"
@@ -58,6 +60,7 @@
 #include <QXmlInputSource>
 #include <QXmlSimpleReader>
 #include <QPointer>
+#include <QTemporaryFile>
 
 #include <exception>
 
@@ -208,6 +211,14 @@ RideCache::RideCache(Context *context) : context(context)
         return;
     }
     if (!LinkedActivitySave::Journal::reconcileAll(
+            context->athlete->home->root().absolutePath(),
+            startupRecoveryError_)) {
+        qCritical().noquote()
+            << "Activity recovery must be completed before loading:"
+            << startupRecoveryError_;
+        return;
+    }
+    if (!PlanReplacement::Journal::reconcileAll(
             context->athlete->home->root().absolutePath(),
             startupRecoveryError_)) {
         qCritical().noquote()
@@ -552,6 +563,11 @@ RideCache::itemChanged()
 void
 RideCache::addRide(QString name, bool dosignal, bool select, bool useTempActivities, bool planned)
 {
+    if (activityMutationIsBlocked()) {
+        qWarning()
+            << "Cannot add an activity while another activity operation is in progress";
+        return;
+    }
     QPointer<RideItem> prior(context->ride);
 
     // ignore malformed names
@@ -628,6 +644,12 @@ RideCache::addRides(
     bool useTempActivities,
     bool planned)
 {
+    if (activityMutationIsBlocked()) {
+        qWarning()
+            << "Cannot add activities while another activity operation is in progress";
+        qDeleteAll(preparedRides);
+        return {};
+    }
     RideItem *prior = context->ride;
     QVector<RideItem*> incoming;
     incoming.reserve(names.size());
@@ -1454,6 +1476,11 @@ RideCache::linkActivities
 (RideItem *item1, RideItem *item2)
 {
     OperationResult result;
+    if (activityMutationIsBlocked()) {
+        result.error = tr(
+            "Another activity operation is already in progress");
+        return result;
+    }
 
     item1->setLinkedFileName(item2->fileName);
     item2->setLinkedFileName(item1->fileName);
@@ -1520,6 +1547,11 @@ RideCache::unlinkActivity
 (RideItem *item)
 {
     OperationResult result;
+    if (activityMutationIsBlocked()) {
+        result.error = tr(
+            "Another activity operation is already in progress");
+        return result;
+    }
 
     RideItem *linkedItem = getLinkedActivity(item);
 
@@ -1589,6 +1621,11 @@ RideCache::unlinkActivities
 (const QList<RideItem*> &items)
 {
     OperationResult batchResult;
+    if (activityMutationIsBlocked()) {
+        batchResult.error = tr(
+            "Another activity operation is already in progress");
+        return batchResult;
+    }
     QSet<RideItem*> processedItems;
 
     for (RideItem *item : items) {
@@ -1671,6 +1708,15 @@ RideCache::moveActivity
 (RideItem *item, const QDateTime &newDateTime)
 {
     OperationResult result;
+    if (activityMutationIsBlocked()) {
+        result.error = tr(
+            "Another activity operation is already in progress");
+        return result;
+    }
+    if (!item) {
+        result.error = tr("No activity given");
+        return result;
+    }
 
     QString oldFileName = item->fileName;
     QDateTime oldDateTime = item->dateTime;
@@ -1800,6 +1846,16 @@ RideCache::copyPlannedActivity
 {
     OperationResult result;
 
+    if (activityMutationIsBlocked()) {
+        result.error = tr(
+            "Another activity operation is already in progress");
+        return result;
+    }
+    if (!sourceItem) {
+        result.error = tr("No activity given");
+        return result;
+    }
+
     QString error;
     QTime time(sourceItem->dateTime.time());
     if (newTime.isValid()) {
@@ -1881,9 +1937,21 @@ RideCache::copyPlannedActivities
 {
     OperationResult result;
 
+    if (activityMutationIsBlocked()) {
+        result.error = tr(
+            "Another activity operation is already in progress");
+        return result;
+    }
     if (sourceItemsAndTargets.isEmpty()) {
         result.error = tr("No files specified");
         return result;
+    }
+    for (const std::pair<RideItem*, QDate> &pair :
+         sourceItemsAndTargets) {
+        if (!pair.first) {
+            result.error = tr("Invalid source item");
+            return result;
+        }
     }
 
     QList<RideItem*> newItems;
@@ -1993,6 +2061,11 @@ RideCache::shiftPlannedActivities
 (const QDate &fromDate, int dayOffset)
 {
     OperationResult result;
+    if (activityMutationIsBlocked()) {
+        result.error = tr(
+            "Another activity operation is already in progress");
+        return result;
+    }
 
     if (dayOffset == 0) {
         result.success = true;
@@ -2636,6 +2709,220 @@ RideCache::copyPlannedRideFile
     newItem->isstale = true;
 
     return newItem;
+}
+
+
+bool
+RideCache::stagePlannedActivityCopy
+(const QString &sourcePath,
+ const QString &sourceFileName,
+ const QDateTime &targetDateTime,
+ const QString &stagingPath,
+ QString &error)
+{
+    const QPointer<RideCache> guardedCache(this);
+    const QPointer<Context> guardedContext(context);
+    return PlannedActivityFile::stageCopy(
+        guardedContext.data(), sourcePath,
+        sourceFileName, targetDateTime,
+        stagingPath,
+        [guardedCache, guardedContext]
+        (RideFile *ride, const QDateTime &when,
+         QString &transformError) {
+            if (!guardedCache || !guardedContext
+                || guardedCache->context
+                    != guardedContext.data()
+                || !ride) {
+                transformError = QObject::tr(
+                    "The planned activity collection disappeared during staging");
+                return false;
+            }
+
+            const QString workoutFilename = ride->getTag(
+                QStringLiteral("WorkoutFilename"),
+                QString()).trimmed();
+            if (workoutFilename.isEmpty()) return true;
+
+            ErgFile ergFile(
+                workoutFilename, ErgFileFormat::unknown,
+                guardedContext.data(), when.date());
+            if (!guardedCache || !guardedContext
+                || guardedCache->context
+                    != guardedContext.data()) {
+                transformError = QObject::tr(
+                    "The planned activity collection disappeared while its workout was being evaluated");
+                return false;
+            }
+            if (!ergFile.hasRelativeWatts()) return true;
+
+            const QList<std::pair<QString, double>> metrics {
+                {QStringLiteral("average_power"), ergFile.AP()},
+                {QStringLiteral("coggan_np"), ergFile.IsoPower()},
+                {QStringLiteral("coggan_tss"), ergFile.bikeStress()},
+                {QStringLiteral("skiba_bike_score"), ergFile.BS()},
+                {QStringLiteral("skiba_xpower"), ergFile.XP()}
+            };
+            for (const auto &metric : metrics) {
+                auto override =
+                    ride->metricOverrides.find(metric.first);
+                if (override == ride->metricOverrides.end())
+                    continue;
+
+                const int targetValue = static_cast<int>(
+                    std::round(metric.second));
+                bool currentIsNumber = false;
+                const double currentValue =
+                    override.value()
+                        .value(QStringLiteral("value"))
+                        .toDouble(&currentIsNumber);
+                if (!currentIsNumber
+                    || static_cast<int>(std::round(currentValue))
+                        != targetValue) {
+                    override.value().insert(
+                        QStringLiteral("value"),
+                        QString::number(targetValue));
+                }
+            }
+            return true;
+        },
+        error);
+}
+
+bool
+RideCache::validatePlannedActivityStage
+(const QString &stagingPath,
+ const QString &targetFileName,
+ QString &error) const
+{
+    error.clear();
+    QDateTime expectedDateTime;
+    if (!RideFile::parseRideFileName(
+            targetFileName, &expectedDateTime)
+        || !context || !context->athlete
+        || !context->athlete->home) {
+        error = tr(
+            "A staged planned activity has an invalid target identity: %1")
+                        .arg(targetFileName);
+        return false;
+    }
+
+    const QFileInfo stagingInfo(stagingPath);
+    QFile staged(stagingPath);
+    if (stagingInfo.isSymLink() || !stagingInfo.isFile()
+        || !staged.open(QIODevice::ReadOnly)) {
+        error = tr(
+            "A staged planned activity cannot be read: %1")
+                        .arg(targetFileName);
+        return false;
+    }
+
+    QString validationTemplate =
+        context->athlete->home->temp().filePath(
+            QStringLiteral("gc-plan-validation-XXXXXX"));
+    const QString suffix =
+        QFileInfo(targetFileName).completeSuffix();
+    if (!suffix.isEmpty())
+        validationTemplate += QLatin1Char('.') + suffix;
+    QTemporaryFile validationFile(validationTemplate);
+    if (!validationFile.open()) {
+        error = tr(
+            "Cannot create a temporary planned activity validation file");
+        return false;
+    }
+
+    while (!staged.atEnd()) {
+        const QByteArray bytes = staged.read(1024 * 1024);
+        if (bytes.isEmpty()) {
+            if (staged.error() != QFileDevice::NoError) {
+                error = staged.errorString();
+                return false;
+            }
+            break;
+        }
+        if (validationFile.write(bytes) != bytes.size()) {
+            error = validationFile.errorString();
+            return false;
+        }
+    }
+    if (!validationFile.flush()) {
+        error = validationFile.errorString();
+        return false;
+    }
+    validationFile.close();
+
+    QFile candidate(validationFile.fileName());
+    QStringList parseErrors;
+    RideFile *ride = RideFileFactory::instance().openRideFile(
+        context, candidate, parseErrors);
+    if (!ride) {
+        error = parseErrors.isEmpty()
+            ? tr("A staged planned activity is not readable: %1")
+                  .arg(targetFileName)
+            : parseErrors.join(QStringLiteral("; "));
+        return false;
+    }
+
+    const QDateTime actualDateTime = ride->startTime();
+    delete ride;
+    if (actualDateTime.date() != expectedDateTime.date()
+        || actualDateTime.time().hour()
+            != expectedDateTime.time().hour()
+        || actualDateTime.time().minute()
+            != expectedDateTime.time().minute()
+        || actualDateTime.time().second()
+            != expectedDateTime.time().second()) {
+        error = tr(
+            "A staged planned activity does not match its target date: %1")
+                        .arg(targetFileName);
+        return false;
+    }
+    return true;
+}
+
+RideFile *
+RideCache::openPlannedActivityForDeleteProcessor
+(const QString &sourcePath,
+ QString &error) const
+{
+    error.clear();
+    const QFileInfo sourceInfo(sourcePath);
+    QDateTime expectedDateTime;
+    if (sourceInfo.isSymLink() || !sourceInfo.isFile()
+        || !RideFile::parseRideFileName(
+            sourceInfo.fileName(), &expectedDateTime)) {
+        error = tr(
+            "A planned activity cannot be opened for delete processing: %1")
+                        .arg(sourceInfo.fileName());
+        return nullptr;
+    }
+
+    QFile source(sourcePath);
+    QStringList parseErrors;
+    RideFile *ride = RideFileFactory::instance().openRideFile(
+        context, source, parseErrors);
+    if (!ride) {
+        error = parseErrors.isEmpty()
+            ? tr("A planned activity is not readable: %1")
+                  .arg(sourceInfo.fileName())
+            : parseErrors.join(QStringLiteral("; "));
+        return nullptr;
+    }
+
+    const QDateTime actualDateTime = ride->startTime();
+    if (actualDateTime.date() != expectedDateTime.date()
+        || actualDateTime.time().hour()
+            != expectedDateTime.time().hour()
+        || actualDateTime.time().minute()
+            != expectedDateTime.time().minute()
+        || actualDateTime.time().second()
+            != expectedDateTime.time().second()) {
+        error = tr(
+            "A planned activity does not match its filename date: %1")
+                        .arg(sourceInfo.fileName());
+        delete ride;
+        return nullptr;
+    }
+    return ride;
 }
 
 

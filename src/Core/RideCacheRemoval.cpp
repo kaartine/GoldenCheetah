@@ -18,7 +18,11 @@
 #include "RideCacheModel.h"
 #include "RideFileCacheIntegrity.h"
 #include "LinkedActivityRemovalJournal.h"
+#include "PlanReplacementJournal.h"
+#include "PlannedActivityFileStager.h"
 
+#include <QCoreApplication>
+#include <QEvent>
 #include <QPointer>
 #include <QTemporaryFile>
 
@@ -95,6 +99,31 @@ public:
 private:
     std::shared_ptr<bool> inProgress_;
     bool acquired_ = false;
+};
+
+class ScopedRideFiles final
+{
+public:
+    ~ScopedRideFiles()
+    {
+        for (const QPointer<RideFile> &ride :
+             std::as_const(files_)) {
+            if (ride) delete ride.data();
+        }
+    }
+
+    void append(RideFile *ride)
+    {
+        files_.append(QPointer<RideFile>(ride));
+    }
+
+    const QVector<QPointer<RideFile>> &files() const
+    {
+        return files_;
+    }
+
+private:
+    QVector<QPointer<RideFile>> files_;
 };
 
 using RemovalPrepareFunction =
@@ -1818,6 +1847,1460 @@ RideCache::removeRidesResult(
         && !result.error.isEmpty()) {
         qWarning().noquote() << result.error;
     }
+    return result;
+}
+
+RideCache::PlannedReplacementResult
+RideCache::replacePlannedActivities(
+    const QList<RideItem*> &activitiesToReplace,
+    const QList<std::pair<RideItem*, QDate>>
+        &sourceItemsAndTargets)
+{
+    PlannedReplacementResult result;
+    if (QThread::currentThread() != thread()) {
+        result.error = tr(
+            "Planned activities can only be replaced on the cache thread");
+        return result;
+    }
+    if (sourceItemsAndTargets.isEmpty()) {
+        result.error = tr(
+            "A planned activity replacement requires source activities");
+        return result;
+    }
+
+    const QPointer<RideCache> guardedCache(this);
+    const QPointer<Context> guardedContext(context);
+    const QPointer<Athlete> guardedAthlete(
+        guardedContext ? guardedContext->athlete : nullptr);
+    if (!guardedCache || !guardedContext || !guardedAthlete
+        || guardedCache->context != guardedContext.data()
+        || guardedContext->athlete != guardedAthlete.data()
+        || guardedAthlete->rideCache != guardedCache.data()) {
+        result.error = tr(
+            "The planned activity collection is no longer available");
+        return result;
+    }
+
+    const QString plannedRoot =
+        guardedAthlete->home->planned().absolutePath();
+    const QString canonicalPlannedRoot =
+        guardedAthlete->home->planned().canonicalPath();
+    if (canonicalPlannedRoot.isEmpty()) {
+        result.error = tr(
+            "The planned activity directory is unavailable");
+        return result;
+    }
+
+    QStringList inputPaths;
+    QSet<QString> inputPathKeys;
+    QSet<QString> targetNames;
+    QList<PlannedActivityTarget> targets;
+    targets.reserve(sourceItemsAndTargets.size());
+
+    for (const auto &sourceAndTarget : sourceItemsAndTargets) {
+        RideItem *const source = sourceAndTarget.first;
+        const QDate targetDate = sourceAndTarget.second;
+        if (!source || !guardedCache->rides_.contains(source)
+            || !source->planned || source->fileName.isEmpty()
+            || !source->dateTime.isValid()
+            || !targetDate.isValid()) {
+            result.error = tr(
+                "A planned activity copy source or target is invalid");
+            return result;
+        }
+
+        const QString sourcePath =
+            RideFileCacheIntegrity::activitySourcePath(
+                plannedRoot, source->fileName);
+        const QString itemSourcePath =
+            RideFileCacheIntegrity::activitySourcePath(
+                source->path, source->fileName);
+        const QString canonicalItemRoot =
+            QDir(source->path).canonicalPath();
+        if (sourcePath.isEmpty() || itemSourcePath.isEmpty()
+            || canonicalItemRoot.isEmpty()
+            || atomicFilePathKey(canonicalItemRoot)
+                != atomicFilePathKey(canonicalPlannedRoot)
+            || atomicFilePathKey(sourcePath)
+                != atomicFilePathKey(itemSourcePath)) {
+            result.error = tr(
+                "A planned activity copy source does not match its cache namespace: %1")
+                               .arg(source->fileName);
+            return result;
+        }
+
+        int identityMatches = 0;
+        for (RideItem *candidate :
+             std::as_const(guardedCache->rides_)) {
+            if (!candidate || !candidate->planned
+                || candidate->fileName != source->fileName) {
+                continue;
+            }
+            const QString candidatePath =
+                RideFileCacheIntegrity::activitySourcePath(
+                    candidate->path, candidate->fileName);
+            if (!candidatePath.isEmpty()
+                && atomicFilePathKey(candidatePath)
+                    == atomicFilePathKey(sourcePath)) {
+                ++identityMatches;
+            }
+        }
+        if (identityMatches != 1) {
+            result.error = tr(
+                "A planned activity copy source identity is not unique: %1")
+                               .arg(source->fileName);
+            return result;
+        }
+
+        PlannedActivityFile::CopyTarget copyTarget;
+        QString targetError;
+        if (!PlannedActivityFile::resolveCopyTarget(
+                source->fileName, source->dateTime,
+                targetDate, QTime(), copyTarget,
+                targetError)) {
+            result.error = targetError;
+            return result;
+        }
+        if (targetNames.contains(copyTarget.fileName)) {
+            result.error = tr(
+                "A planned activity copy target is duplicated: %1")
+                               .arg(copyTarget.fileName);
+            return result;
+        }
+        targetNames.insert(copyTarget.fileName);
+
+        const QString inputKey =
+            atomicFilePathKey(sourcePath);
+        if (!inputPathKeys.contains(inputKey)) {
+            inputPathKeys.insert(inputKey);
+            inputPaths.append(sourcePath);
+        }
+
+        const QPointer<RideItem> guardedSource(source);
+        const QString sourceFileName = source->fileName;
+        const QString sourceItemPath = source->path;
+        const QDateTime sourceDateTime = source->dateTime;
+        const QDateTime targetDateTime = copyTarget.dateTime;
+        targets.append({
+            copyTarget.fileName,
+            [guardedCache, guardedContext, guardedAthlete,
+             guardedSource, sourcePath, sourceFileName,
+             sourceItemPath, sourceDateTime, targetDateTime]
+            (const QString &stagingPath, QString &error) {
+                const auto sourceIsStable = [&] {
+                    return guardedCache && guardedContext
+                        && guardedAthlete && guardedSource
+                        && guardedCache->context
+                            == guardedContext.data()
+                        && guardedContext->athlete
+                            == guardedAthlete.data()
+                        && guardedAthlete->rideCache
+                            == guardedCache.data()
+                        && guardedCache->rides_.contains(
+                            guardedSource.data())
+                        && guardedSource->planned
+                        && guardedSource->fileName
+                            == sourceFileName
+                        && guardedSource->path
+                            == sourceItemPath
+                        && guardedSource->dateTime
+                            == sourceDateTime;
+                };
+                if (!sourceIsStable()) {
+                    error = QObject::tr(
+                        "A planned activity copy source changed before staging");
+                    return false;
+                }
+                if (!guardedCache->stagePlannedActivityCopy(
+                        sourcePath, sourceFileName,
+                        targetDateTime, stagingPath,
+                        error)) {
+                    return false;
+                }
+                if (!sourceIsStable()) {
+                    error = QObject::tr(
+                        "A planned activity copy source changed during staging");
+                    return false;
+                }
+                return true;
+            }});
+    }
+
+    return replacePlannedActivityFiles(
+        activitiesToReplace, inputPaths, targets);
+}
+
+RideCache::PlannedReplacementResult
+RideCache::replacePlannedActivityFiles(
+    const QList<RideItem*> &activitiesToReplace,
+    const QStringList &inputPaths,
+    const QList<PlannedActivityTarget> &targets,
+    bool notifyAdded)
+{
+    PlannedReplacementResult result;
+    if (QThread::currentThread() != thread()) {
+        result.error = tr(
+            "Planned activities can only be replaced on the cache thread");
+        return result;
+    }
+    RemovalOperationGuard removalGuard(removalInProgress_);
+    if (!removalGuard.acquired()) {
+        result.error = tr(
+            "Another activity deletion is already in progress");
+        return result;
+    }
+
+    const QPointer<RideCache> guardedCache(this);
+    const QPointer<Context> guardedContext(context);
+    const QPointer<Athlete> guardedAthlete(
+        guardedContext ? guardedContext->athlete : nullptr);
+    const QPointer<RideCacheModel> guardedModel(model_);
+    const QPointer<Estimator> guardedEstimator(estimator);
+    const auto operationOwnersAreStable = [=] {
+        return guardedCache && guardedContext
+            && guardedAthlete && guardedModel
+            && guardedEstimator
+            && guardedCache->context == guardedContext.data()
+            && guardedContext->athlete == guardedAthlete.data()
+            && guardedAthlete->context == guardedContext.data()
+            && guardedAthlete->rideCache == guardedCache.data()
+            && guardedCache->model_ == guardedModel.data()
+            && guardedCache->estimator == guardedEstimator.data();
+    };
+    if (!operationOwnersAreStable()) {
+        result.error = tr(
+            "The planned activity collection is no longer available");
+        return result;
+    }
+    if (targets.isEmpty()) {
+        result.error = tr(
+            "A planned activity replacement requires target activities");
+        return result;
+    }
+
+    guardedCache->cancel();
+    if (!operationOwnersAreStable()) {
+        result.error = tr(
+            "The planned activity collection disappeared while refresh was being cancelled");
+        return result;
+    }
+
+    const QString athleteRoot =
+        guardedAthlete->home->root().absolutePath();
+    const QString plannedRoot =
+        guardedAthlete->home->planned().absolutePath();
+    const QString canonicalPlannedRoot =
+        guardedAthlete->home->planned().canonicalPath();
+    if (canonicalPlannedRoot.isEmpty()) {
+        result.error = tr(
+            "The planned activity directory is unavailable");
+        return result;
+    }
+
+    struct PendingReplacement
+    {
+        RideItem *address = nullptr;
+        QPointer<RideItem> item;
+        QString fileName;
+        QString path;
+        QString sourcePath;
+        QStringList derivedPaths;
+        QSet<QString> existingDerivedPathKeys;
+    };
+    QList<PendingReplacement> pending;
+    pending.reserve(activitiesToReplace.size());
+    QSet<RideItem*> requestedItems;
+    QSet<QString> removalPathKeys;
+    QStringList removalPaths;
+    for (RideItem *item : activitiesToReplace) {
+        if (!item || !guardedCache->rides_.contains(item)) {
+            result.error = tr(
+                "A planned activity replacement target is no longer in the cache");
+            return result;
+        }
+        if (requestedItems.contains(item)) continue;
+        requestedItems.insert(item);
+        if (!item->planned || item->fileName.isEmpty()) {
+            result.error = tr(
+                "Only named planned activities can be replaced");
+            return result;
+        }
+        if (item->isdirty) {
+            result.error = tr(
+                "A modified planned activity must be saved or reverted before replacement: %1")
+                               .arg(item->fileName);
+            return result;
+        }
+        const QString sourcePath =
+            RideFileCacheIntegrity::activitySourcePath(
+                plannedRoot, item->fileName);
+        const QString itemSourcePath =
+            RideFileCacheIntegrity::activitySourcePath(
+                item->path, item->fileName);
+        const QString canonicalItemRoot =
+            QDir(item->path).canonicalPath();
+        if (sourcePath.isEmpty() || itemSourcePath.isEmpty()
+            || canonicalItemRoot.isEmpty()
+            || atomicFilePathKey(canonicalItemRoot)
+                != atomicFilePathKey(canonicalPlannedRoot)
+            || atomicFilePathKey(sourcePath)
+                != atomicFilePathKey(itemSourcePath)) {
+            result.error = tr(
+                "A planned activity source does not match its cache namespace: %1")
+                               .arg(item->fileName);
+            return result;
+        }
+        const QString sourceKey = atomicFilePathKey(sourcePath);
+        if (removalPathKeys.contains(sourceKey)) {
+            result.error = tr(
+                "A planned activity source identity is duplicated: %1")
+                               .arg(item->fileName);
+            return result;
+        }
+        int identityMatches = 0;
+        for (RideItem *candidate : std::as_const(guardedCache->rides_)) {
+            if (!candidate || !candidate->planned
+                || candidate->fileName != item->fileName) {
+                continue;
+            }
+            const QString candidatePath =
+                RideFileCacheIntegrity::activitySourcePath(
+                    candidate->path, candidate->fileName);
+            if (!candidatePath.isEmpty()
+                && atomicFilePathKey(candidatePath) == sourceKey) {
+                ++identityMatches;
+            }
+        }
+        if (identityMatches != 1) {
+            result.error = tr(
+                "A planned activity source identity is not unique: %1")
+                               .arg(item->fileName);
+            return result;
+        }
+        if (item->hasLinkedActivity()) {
+            result.error = tr(
+                "A linked planned activity must be unlinked before plan replacement: %1")
+                               .arg(item->fileName);
+            return result;
+        }
+        for (RideItem *candidate : std::as_const(guardedCache->rides_)) {
+            if (candidate && candidate != item
+                && candidate->getLinkedFileName() == item->fileName) {
+                result.error = tr(
+                    "A planned activity referenced by another activity cannot be replaced: %1")
+                                   .arg(item->fileName);
+                return result;
+            }
+        }
+        removalPathKeys.insert(sourceKey);
+        removalPaths.append(sourcePath);
+        const QStringList derivedPaths =
+            guardedCache->derivedFilePathsForRemoval(item);
+        QSet<QString> existingDerivedPathKeys;
+        for (const QString &derivedPath : derivedPaths) {
+            const QFileInfo derivedInfo(derivedPath);
+            if (derivedInfo.exists() || derivedInfo.isSymLink()) {
+                existingDerivedPathKeys.insert(
+                    atomicFilePathKey(derivedPath));
+            }
+        }
+        pending.append({
+            item, QPointer<RideItem>(item), item->fileName,
+            item->path, sourcePath, derivedPaths,
+            existingDerivedPathKeys});
+    }
+
+    QStringList targetPaths;
+    targetPaths.reserve(targets.size());
+    QStringList replacementFileNames;
+    replacementFileNames.reserve(targets.size());
+    QList<std::function<bool(const QString &, QString &)>>
+        targetStagers;
+    targetStagers.reserve(targets.size() + pending.size());
+    QStringList targetDescriptions;
+    targetDescriptions.reserve(targets.size() + pending.size());
+    QSet<QString> targetNames;
+    QSet<QString> targetPathKeys;
+    for (const PlannedActivityTarget &target : targets) {
+        QDateTime dateTime;
+        const QString targetPath =
+            RideFileCacheIntegrity::activitySourcePath(
+                plannedRoot, target.fileName);
+        if (targetPath.isEmpty()
+            || !RideFile::parseRideFileName(
+                target.fileName, &dateTime)
+            || !target.stage) {
+            result.error = tr(
+                "A planned activity replacement target is invalid: %1")
+                               .arg(target.fileName);
+            return result;
+        }
+        const QString targetKey = atomicFilePathKey(targetPath);
+        if (targetNames.contains(target.fileName)
+            || targetPathKeys.contains(targetKey)) {
+            result.error = tr(
+                "A planned activity replacement target is duplicated: %1")
+                               .arg(target.fileName);
+            return result;
+        }
+        for (RideItem *candidate : std::as_const(guardedCache->rides_)) {
+            if (candidate && candidate->fileName == target.fileName
+                && !requestedItems.contains(candidate)) {
+                result.error = tr(
+                    "A planned activity replacement target already exists in the cache: %1")
+                                   .arg(target.fileName);
+                return result;
+            }
+        }
+        targetNames.insert(target.fileName);
+        targetPathKeys.insert(targetKey);
+        targetPaths.append(targetPath);
+        replacementFileNames.append(target.fileName);
+        targetStagers.append(target.stage);
+        targetDescriptions.append(target.fileName);
+    }
+    const int replacementTargetCount =
+        replacementFileNames.size();
+
+    const QString backupRoot =
+        guardedAthlete->home->fileBackup().absolutePath();
+    QFileInfo backupRootInfo(backupRoot);
+    const bool backupRootExisted =
+        backupRootInfo.exists() || backupRootInfo.isSymLink();
+    if (backupRootExisted
+        && (backupRootInfo.isSymLink()
+            || !backupRootInfo.isDir())) {
+        result.error = tr(
+            "The activity backup path is not a regular directory");
+        return result;
+    }
+    if (!backupRootExisted && !QDir().mkpath(backupRoot)) {
+        result.error = tr(
+            "Cannot create the activity backup directory");
+        return result;
+    }
+    backupRootInfo.refresh();
+    const QString canonicalAthleteRoot =
+        QDir(athleteRoot).canonicalPath();
+    const QString canonicalBackupRoot =
+        backupRootInfo.canonicalFilePath();
+    const QString relativeBackupRoot =
+        QDir(canonicalAthleteRoot).relativeFilePath(
+            canonicalBackupRoot);
+    if (backupRootInfo.isSymLink()
+        || !backupRootInfo.isDir()
+        || canonicalAthleteRoot.isEmpty()
+        || canonicalBackupRoot.isEmpty()
+        || QDir::isAbsolutePath(relativeBackupRoot)
+        || relativeBackupRoot == QStringLiteral("..")
+        || relativeBackupRoot.startsWith(
+            QStringLiteral("../"))) {
+        result.error = tr(
+            "The activity backup path escapes the athlete directory");
+        return result;
+    }
+    QString backupRootSyncError;
+    if (!syncRemovalDirectory(
+            backupRoot, backupRootSyncError)) {
+        result.error = backupRootSyncError;
+        return result;
+    }
+
+    const QString plannedBackupRoot =
+        QDir(canonicalBackupRoot).filePath(
+            QStringLiteral("planned"));
+    QFileInfo plannedBackupInfo(plannedBackupRoot);
+    const bool plannedBackupExisted =
+        plannedBackupInfo.exists() || plannedBackupInfo.isSymLink();
+    if (plannedBackupExisted
+        && (plannedBackupInfo.isSymLink()
+            || !plannedBackupInfo.isDir())) {
+        result.error = tr(
+            "The planned activity backup path is not a regular directory");
+        return result;
+    }
+    if (!plannedBackupExisted
+        && !QDir().mkpath(plannedBackupRoot)) {
+        result.error = tr(
+            "Cannot create the planned activity backup directory");
+        return result;
+    }
+    plannedBackupInfo.refresh();
+    if (plannedBackupInfo.isSymLink()
+        || !plannedBackupInfo.isDir()) {
+        result.error = tr(
+            "The planned activity backup path is not a regular directory");
+        return result;
+    }
+    QString backupSyncError;
+    if (!syncRemovalDirectory(
+            plannedBackupRoot, backupSyncError)) {
+        result.error = backupSyncError;
+        return result;
+    }
+
+    for (const PendingReplacement &entry : std::as_const(pending)) {
+        const QString backupPath =
+            RideFileCacheIntegrity::activitySourcePath(
+                plannedBackupRoot,
+                entry.fileName + QStringLiteral(".bak"));
+        if (backupPath.isEmpty()) {
+            result.error = tr(
+                "A planned activity backup path is unsafe: %1")
+                               .arg(entry.fileName);
+            return result;
+        }
+        const QString backupKey = atomicFilePathKey(backupPath);
+        if (targetPathKeys.contains(backupKey)) {
+            result.error = tr(
+                "A planned activity backup conflicts with a replacement target: %1")
+                               .arg(entry.fileName);
+            return result;
+        }
+        const QFileInfo backupInfo(backupPath);
+        if (backupInfo.exists() || backupInfo.isSymLink()) {
+            if (removalPathKeys.contains(backupKey)) {
+                result.error = tr(
+                    "A planned activity backup path is duplicated: %1")
+                                   .arg(entry.fileName);
+                return result;
+            }
+            removalPathKeys.insert(backupKey);
+            removalPaths.append(backupPath);
+        }
+        targetPathKeys.insert(backupKey);
+        targetPaths.append(backupPath);
+        const QString sourcePath = entry.sourcePath;
+        targetStagers.append(
+            [sourcePath](const QString &stagingPath,
+                         QString &error) {
+                if (QFile::copy(sourcePath, stagingPath))
+                    return true;
+                error = QObject::tr(
+                    "Cannot stage a planned activity backup: %1")
+                                .arg(sourcePath);
+                return false;
+            });
+        targetDescriptions.append(
+            tr("backup for %1").arg(entry.fileName));
+    }
+
+    for (const PendingReplacement &entry : std::as_const(pending)) {
+        RideItem *const item = entry.item.data();
+        if (!item) {
+            result.error = tr(
+                "A planned activity disappeared before derived files were inspected");
+            return result;
+        }
+        for (const QString &derivedPath : entry.derivedPaths) {
+            const QFileInfo derivedInfo(derivedPath);
+            if (!derivedInfo.exists() && !derivedInfo.isSymLink())
+                continue;
+            const QString derivedKey =
+                atomicFilePathKey(derivedPath);
+            if (removalPathKeys.contains(derivedKey))
+                continue;
+            if (targetPathKeys.contains(derivedKey)) {
+                result.error = tr(
+                    "A derived activity file conflicts with a plan replacement target: %1")
+                                   .arg(derivedPath);
+                return result;
+            }
+            removalPathKeys.insert(derivedKey);
+            removalPaths.append(derivedPath);
+        }
+    }
+
+    struct GuardedCacheEntry
+    {
+        RideItem *address = nullptr;
+        QPointer<RideItem> item;
+        bool replacementTarget = false;
+    };
+    QVector<GuardedCacheEntry> cacheSnapshot;
+    cacheSnapshot.reserve(guardedCache->rides_.size());
+    QSet<RideItem*> cacheSnapshotAddresses;
+    for (RideItem *item : std::as_const(guardedCache->rides_)) {
+        cacheSnapshot.append({
+            item, QPointer<RideItem>(item),
+            requestedItems.contains(item)});
+        cacheSnapshotAddresses.insert(item);
+    }
+    const auto flushOriginalDeferredDeletes = [&] {
+        for (int pass = 0; pass < 2; ++pass) {
+            for (const GuardedCacheEntry &entry : cacheSnapshot) {
+                if (entry.item) {
+                    QCoreApplication::sendPostedEvents(
+                        entry.item.data(),
+                        QEvent::DeferredDelete);
+                }
+            }
+        }
+    };
+    QSet<int> retiredCacheEntries;
+    const auto cacheSnapshotIsStable = [&] {
+        flushOriginalDeferredDeletes();
+        if (!operationOwnersAreStable()
+            || guardedCache->rides_.size()
+                != cacheSnapshot.size()) {
+            return false;
+        }
+        for (RideItem *address :
+             std::as_const(guardedCache->rides_)) {
+            if (!cacheSnapshotAddresses.contains(address))
+                return false;
+        }
+        for (const GuardedCacheEntry &entry : cacheSnapshot) {
+            if (!entry.item) return false;
+        }
+        return true;
+    };
+    struct CacheRepairResult
+    {
+        bool ownersStable = true;
+        bool unexpectedDeletion = false;
+    };
+    const auto repairDestroyedCacheEntries =
+        [&](bool modelResetActive) {
+            CacheRepairResult repair;
+            if (!operationOwnersAreStable()) {
+                repair.ownersStable = false;
+                return repair;
+            }
+            const auto hasDestroyedEntries = [&] {
+                for (int index = 0;
+                     index < cacheSnapshot.size(); ++index) {
+                    if (!retiredCacheEntries.contains(index)
+                        && !cacheSnapshot.at(index).item) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            const auto hasDestroyedModelEntries = [&] {
+                for (int index = 0;
+                     index < cacheSnapshot.size(); ++index) {
+                    const GuardedCacheEntry &entry =
+                        cacheSnapshot.at(index);
+                    if (!retiredCacheEntries.contains(index)
+                        && !entry.item
+                        && guardedCache->rides_.contains(
+                            entry.address)) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            const auto purgeDestroyedEntries = [&] {
+                for (int index = 0;
+                     index < cacheSnapshot.size(); ++index) {
+                    if (retiredCacheEntries.contains(index))
+                        continue;
+                    const GuardedCacheEntry &entry =
+                        cacheSnapshot.at(index);
+                    if (entry.item) continue;
+                    if (!entry.replacementTarget)
+                        repair.unexpectedDeletion = true;
+                    guardedCache->rides_.removeOne(entry.address);
+                    guardedCache->delete_.removeOne(entry.address);
+                    guardedCache->deletelist.removeOne(entry.address);
+                    if (guardedContext->ride == entry.address)
+                        guardedContext->ride = nullptr;
+                    retiredCacheEntries.insert(index);
+                }
+            };
+
+            if (modelResetActive) {
+                purgeDestroyedEntries();
+                repair.ownersStable =
+                    operationOwnersAreStable();
+                return repair;
+            }
+
+            while (hasDestroyedModelEntries()) {
+                QPointer<RideItem> previousSelection;
+                for (const GuardedCacheEntry &entry : cacheSnapshot) {
+                    if (entry.address == guardedContext->ride
+                        && entry.item) {
+                        previousSelection = entry.item;
+                        break;
+                    }
+                }
+                guardedContext->ride = nullptr;
+                guardedModel->beginReset();
+                flushOriginalDeferredDeletes();
+                if (!operationOwnersAreStable()) {
+                    if (guardedCache && guardedModel
+                        && guardedCache->model_
+                            == guardedModel.data()) {
+                        guardedModel->endReset();
+                    }
+                    repair.ownersStable = false;
+                    return repair;
+                }
+                purgeDestroyedEntries();
+                guardedModel->endReset();
+                flushOriginalDeferredDeletes();
+                if (!operationOwnersAreStable()) {
+                    repair.ownersStable = false;
+                    return repair;
+                }
+                if (previousSelection
+                    && guardedCache->rides_.contains(
+                        previousSelection.data())) {
+                    guardedContext->ride =
+                        previousSelection.data();
+                }
+            }
+            if (hasDestroyedEntries())
+                purgeDestroyedEntries();
+            return repair;
+        };
+
+    const auto removalPathKeySet = [](const QStringList &paths) {
+        QSet<QString> keys;
+        for (const QString &path : paths)
+            keys.insert(atomicFilePathKey(path));
+        return keys;
+    };
+    const auto existingPathKeySet = [](const QStringList &paths) {
+        QSet<QString> keys;
+        for (const QString &path : paths) {
+            const QFileInfo info(path);
+            if (info.exists() || info.isSymLink())
+                keys.insert(atomicFilePathKey(path));
+        }
+        return keys;
+    };
+    const auto pendingIsStable = [=](
+        bool requireOriginalDerivedFiles) {
+        if (!cacheSnapshotIsStable()) return false;
+        for (const PendingReplacement &entry : pending) {
+            RideItem *const item = entry.item.data();
+            if (!item || !guardedCache->rides_.contains(item)
+                || !item->planned
+                || item->isdirty
+                || item->hasLinkedActivity()
+                || item->fileName != entry.fileName
+                || item->path != entry.path
+                || removalPathKeySet(
+                       guardedCache->derivedFilePathsForRemoval(item))
+                    != removalPathKeySet(entry.derivedPaths)
+                || (requireOriginalDerivedFiles
+                    && existingPathKeySet(entry.derivedPaths)
+                        != entry.existingDerivedPathKeys)) {
+                return false;
+            }
+            int matches = 0;
+            for (RideItem *candidate :
+                 std::as_const(guardedCache->rides_)) {
+                if (candidate && candidate != item
+                    && candidate->getLinkedFileName()
+                        == entry.fileName) {
+                    return false;
+                }
+                if (!candidate || !candidate->planned
+                    || candidate->fileName != entry.fileName) {
+                    continue;
+                }
+                const QString candidatePath =
+                    RideFileCacheIntegrity::activitySourcePath(
+                        candidate->path, candidate->fileName);
+                if (!candidatePath.isEmpty()
+                    && atomicFilePathKey(candidatePath)
+                        == atomicFilePathKey(entry.sourcePath)) {
+                    ++matches;
+                }
+            }
+            if (matches != 1) return false;
+        }
+        for (RideItem *candidate :
+             std::as_const(guardedCache->rides_)) {
+            if (candidate && targetNames.contains(candidate->fileName)
+                && !requestedItems.contains(candidate)) {
+                return false;
+            }
+        }
+        return true;
+    };
+    if (!pendingIsStable(true)) {
+        result.error = tr(
+            "The planned activity collection changed before replacement");
+        return result;
+    }
+
+    PlanReplacement::Specification specification;
+    specification.athleteRoot = athleteRoot;
+    specification.scopeRoot = athleteRoot;
+    specification.inputPaths = inputPaths;
+    specification.removalPaths = removalPaths;
+    specification.targetPaths = targetPaths;
+    QString journalError;
+    std::shared_ptr<PlanReplacement::Journal> journal =
+        PlanReplacement::Journal::prepare(
+            specification, journalError);
+    if (!journal) {
+        result.error = journalError.isEmpty()
+            ? tr("Cannot prepare the plan replacement")
+            : journalError;
+        return result;
+    }
+
+    const auto rollback = [&](const QString &detail) {
+        appendRemovalError(result.error, detail);
+        const CacheRepairResult cacheRepair =
+            repairDestroyedCacheEntries(false);
+        if (!cacheRepair.ownersStable) {
+            appendRemovalError(
+                result.error,
+                tr("The planned activity collection disappeared while repairing a failed replacement"));
+        } else if (cacheRepair.unexpectedDeletion) {
+            appendRemovalError(
+                result.error,
+                tr("A cached activity was destroyed during the failed replacement"));
+        }
+        bool committed = false;
+        QString commitStateError;
+        if (!journal->commitState(
+                committed, commitStateError)) {
+            appendRemovalError(
+                result.error,
+                commitStateError.isEmpty()
+                    ? tr("The plan replacement commit state is unreadable; recovery is required")
+                    : commitStateError);
+            return;
+        }
+        if (committed) {
+            result.committed = true;
+            return;
+        }
+        QString cleanupError;
+        if (!journal->cleanupAfterRollback(cleanupError)) {
+            appendRemovalError(
+                result.error,
+                cleanupError.isEmpty()
+                    ? tr("The incomplete plan replacement could not be cleaned up")
+                    : cleanupError);
+        }
+    };
+
+    for (int index = 0; index < targetStagers.size(); ++index) {
+        QString stageError;
+        bool staged = false;
+        try {
+            staged = targetStagers.at(index)(
+                journal->stagingPath(index), stageError);
+        } catch (const QString &detail) {
+            stageError = detail;
+        } catch (const std::exception &exception) {
+            stageError = QString::fromLocal8Bit(exception.what());
+        } catch (...) {
+            stageError = tr(
+                "A planned activity staging operation failed");
+        }
+        if (!staged) {
+            rollback(stageError.isEmpty()
+                ? tr("A planned activity could not be staged: %1")
+                      .arg(targetDescriptions.at(index))
+                : stageError);
+            return result;
+        }
+        if (!pendingIsStable(true)) {
+            rollback(tr(
+                "The planned activity collection changed during staging"));
+            return result;
+        }
+        if (!journal->recordStaged(index, stageError)) {
+            rollback(stageError);
+            return result;
+        }
+        if (index < replacementTargetCount
+            && !guardedCache->validatePlannedActivityStage(
+                journal->stagingPath(index),
+                replacementFileNames.at(index),
+                stageError)) {
+            rollback(stageError.isEmpty()
+                ? tr("A staged planned activity is invalid: %1")
+                      .arg(replacementFileNames.at(index))
+                : stageError);
+            return result;
+        }
+        if (!pendingIsStable(true)) {
+            rollback(tr(
+                "The planned activity collection changed during staged activity validation"));
+            return result;
+        }
+    }
+
+    ScopedRideFiles processorRides;
+    for (const PendingReplacement &entry : std::as_const(pending)) {
+        if (!pendingIsStable(true)) {
+            rollback(tr(
+                "The planned activity collection changed before publication"));
+            return result;
+        }
+        QString processorError;
+        RideFile *processorRide =
+            guardedCache->openPlannedActivityForDeleteProcessor(
+                entry.sourcePath, processorError);
+        if (!processorRide) {
+            rollback(processorError.isEmpty()
+                ? tr("A planned activity could not be opened for delete processing")
+                : processorError);
+            return result;
+        }
+        processorRides.append(processorRide);
+        if (!pendingIsStable(true)) {
+            rollback(tr(
+                "The planned activity collection changed while delete processing was prepared"));
+            return result;
+        }
+    }
+
+    QString publishError;
+    if (!journal->publishAndCommit(publishError)) {
+        bool committed = false;
+        QString commitStateError;
+        if (!journal->commitState(
+                committed, commitStateError)) {
+            appendRemovalError(result.error, publishError);
+            appendRemovalError(
+                result.error,
+                commitStateError.isEmpty()
+                    ? tr("The plan replacement commit state is unreadable; recovery is required")
+                    : commitStateError);
+            return result;
+        }
+        if (!committed) {
+            rollback(publishError);
+            return result;
+        }
+        result.committed = true;
+        QString recoveryError;
+        if (!journal->cleanupAfterCommit(recoveryError)) {
+            appendRemovalError(result.error, publishError);
+            appendRemovalError(result.error, recoveryError);
+            return result;
+        }
+    } else {
+        bool committed = false;
+        QString commitStateError;
+        if (!journal->commitState(
+                committed, commitStateError)
+            || !committed) {
+            appendRemovalError(
+                result.error,
+                commitStateError.isEmpty()
+                    ? tr("The plan replacement commit marker is missing; recovery is required")
+                    : commitStateError);
+            return result;
+        }
+        result.committed = true;
+    }
+
+    bool cacheStateDegraded = false;
+    const auto recordCacheRepair =
+        [&](const CacheRepairResult &repair,
+            const QString &ownerDetail,
+            const QString &deletionDetail) {
+            if (!repair.ownersStable) {
+                result.cacheUpdated = false;
+                appendRemovalError(result.error, ownerDetail);
+                return false;
+            }
+            if (repair.unexpectedDeletion) {
+                cacheStateDegraded = true;
+                result.cacheUpdated = false;
+                appendRemovalError(result.error, deletionDetail);
+            }
+            return true;
+        };
+    const auto postCommitOwnersAreStable =
+        [&](const QString &detail) {
+            if (operationOwnersAreStable()) return true;
+            result.cacheUpdated = false;
+            appendRemovalError(result.error, detail);
+            return false;
+        };
+
+    if (!pendingIsStable(false)) {
+        result.error = tr(
+            "The planned activity collection changed after its files were committed");
+        recordCacheRepair(
+            repairDestroyedCacheEntries(false),
+            tr("The planned activity collection disappeared after its files were committed"),
+            tr("A cached activity was destroyed while planned activity files were committed"));
+        QString cleanupError;
+        result.cleanupComplete =
+            journal->cleanupAfterCommit(cleanupError);
+        appendRemovalError(result.error, cleanupError);
+        return result;
+    }
+
+    guardedCache->invalidateStartupSnapshots();
+    if (!operationOwnersAreStable()) {
+        result.error = tr(
+            "The planned activity collection disappeared before model replacement");
+        QString cleanupError;
+        result.cleanupComplete =
+            journal->cleanupAfterCommit(cleanupError);
+        appendRemovalError(result.error, cleanupError);
+        return result;
+    }
+
+    QVector<RideItem*> incoming;
+    incoming.reserve(replacementTargetCount);
+    QVector<QPointer<RideItem>> guardedIncoming;
+    guardedIncoming.reserve(replacementTargetCount);
+    QVector<QDateTime> replacementDateTimes;
+    replacementDateTimes.reserve(replacementTargetCount);
+    for (const QString &fileName : replacementFileNames) {
+        QDateTime dateTime;
+        RideFile::parseRideFileName(fileName, &dateTime);
+        RideItem *item = new RideItem(nullptr, guardedContext.data());
+        item->path = canonicalPlannedRoot;
+        item->fileName = fileName;
+        item->dateTime = dateTime;
+        item->planned = true;
+        item->isdirty = false;
+        item->isstale = true;
+        connect(item, SIGNAL(rideDataChanged()),
+                guardedCache.data(), SLOT(itemChanged()));
+        connect(item, SIGNAL(rideMetadataChanged()),
+                guardedCache.data(), SLOT(itemChanged()));
+        incoming.append(item);
+        guardedIncoming.append(QPointer<RideItem>(item));
+        replacementDateTimes.append(dateTime);
+    }
+    const auto flushDeferredRideItemDeletes = [&] {
+        flushOriginalDeferredDeletes();
+        for (int pass = 0; pass < 2; ++pass) {
+            for (const QPointer<RideItem> &item :
+                 std::as_const(guardedIncoming)) {
+                if (item) {
+                    QCoreApplication::sendPostedEvents(
+                        item.data(),
+                        QEvent::DeferredDelete);
+                }
+            }
+        }
+    };
+
+    QPointer<RideItem> previousSelection;
+    if (guardedContext->ride
+        && guardedCache->rides_.contains(guardedContext->ride)) {
+        previousSelection = guardedContext->ride;
+    }
+    QString selectedReplacementName;
+    if (previousSelection
+        && requestedItems.contains(previousSelection.data())) {
+        selectedReplacementName = previousSelection->fileName;
+    }
+    guardedContext->ride = nullptr;
+
+    guardedModel->beginReset();
+    flushDeferredRideItemDeletes();
+    if (!operationOwnersAreStable()) {
+        if (guardedCache && guardedModel
+            && guardedCache->model_ == guardedModel.data()) {
+            guardedModel->endReset();
+        }
+        for (const QPointer<RideItem> &item :
+             std::as_const(guardedIncoming)) {
+            if (!item) continue;
+            item->context = nullptr;
+            delete item.data();
+        }
+        QString cleanupError;
+        result.cleanupComplete =
+            journal->cleanupAfterCommit(cleanupError);
+        result.error = tr(
+            "The planned activity collection disappeared during model replacement");
+        appendRemovalError(result.error, cleanupError);
+        return result;
+    }
+    const CacheRepairResult resetRepair =
+        repairDestroyedCacheEntries(true);
+    if (!recordCacheRepair(
+            resetRepair,
+            tr("The planned activity collection disappeared during model replacement"),
+            tr("A cached activity was destroyed during model replacement"))) {
+        if (guardedCache && guardedModel
+            && guardedCache->model_ == guardedModel.data()) {
+            guardedModel->endReset();
+        }
+        for (const QPointer<RideItem> &item :
+             std::as_const(guardedIncoming)) {
+            if (!item) continue;
+            item->context = nullptr;
+            delete item.data();
+        }
+        QString cleanupError;
+        result.cleanupComplete =
+            journal->cleanupAfterCommit(cleanupError);
+        appendRemovalError(result.error, cleanupError);
+        return result;
+    }
+    for (const PendingReplacement &entry : std::as_const(pending)) {
+        guardedCache->rides_.removeOne(entry.address);
+    }
+    guardedCache->rides_.append(incoming);
+    std::sort(
+        guardedCache->rides_.begin(),
+        guardedCache->rides_.end(),
+        [](const RideItem *left, const RideItem *right) {
+            return left->dateTime < right->dateTime;
+        });
+    for (const PendingReplacement &entry : std::as_const(pending)) {
+        if (entry.item) guardedCache->delete_.append(entry.item.data());
+    }
+    guardedModel->endReset();
+    flushDeferredRideItemDeletes();
+    if (!postCommitOwnersAreStable(tr(
+            "The planned activity collection disappeared during model replacement"))) {
+        QString cleanupError;
+        result.cleanupComplete =
+            journal->cleanupAfterCommit(cleanupError);
+        appendRemovalError(result.error, cleanupError);
+        return result;
+    }
+    if (!recordCacheRepair(
+            repairDestroyedCacheEntries(false),
+            tr("The planned activity collection disappeared while repairing model replacement"),
+            tr("A cached activity was destroyed during model replacement"))) {
+        QString cleanupError;
+        result.cleanupComplete =
+            journal->cleanupAfterCommit(cleanupError);
+        appendRemovalError(result.error, cleanupError);
+        return result;
+    }
+    result.removedCount = pending.size();
+
+    QSet<int> retiredIncoming;
+    const auto guardedCacheItemAtAddress =
+        [&](RideItem *address) {
+            if (!address) return QPointer<RideItem>();
+            for (const GuardedCacheEntry &entry : cacheSnapshot) {
+                if (entry.address == address && entry.item)
+                    return entry.item;
+            }
+            for (const QPointer<RideItem> &item :
+                 std::as_const(guardedIncoming)) {
+                if (item.data() == address) return item;
+            }
+            return QPointer<RideItem>();
+        };
+    const auto incomingItemIsValid = [&](int index) {
+        RideItem *const item =
+            guardedIncoming.at(index).data();
+        return item
+            && guardedCache->rides_.contains(item)
+            && item->context == guardedContext.data()
+            && item->planned && !item->isdirty
+            && item->path == canonicalPlannedRoot
+            && item->fileName
+                == replacementFileNames.at(index)
+            && item->dateTime
+                == replacementDateTimes.at(index);
+    };
+    const auto incomingIsStable = [&](const QString &detail) {
+        flushDeferredRideItemDeletes();
+        if (!operationOwnersAreStable()) return false;
+        bool stable = true;
+        int resetPasses = 0;
+        while (true) {
+            flushDeferredRideItemDeletes();
+            bool hasInvalidItem = false;
+            int validCount = 0;
+            for (int index = 0;
+                 index < guardedIncoming.size(); ++index) {
+                if (retiredIncoming.contains(index)) continue;
+                if (incomingItemIsValid(index)) {
+                    ++validCount;
+                } else {
+                    hasInvalidItem = true;
+                }
+            }
+            result.addedCount = validCount;
+            if (!hasInvalidItem) break;
+
+            stable = false;
+            if (++resetPasses
+                > guardedIncoming.size() + 1) {
+                break;
+            }
+            const QPointer<RideItem> resetSelection =
+                guardedCacheItemAtAddress(
+                    guardedContext->ride);
+            guardedContext->ride = nullptr;
+            guardedModel->beginReset();
+            flushDeferredRideItemDeletes();
+            if (!operationOwnersAreStable()) {
+                if (guardedCache && guardedModel
+                    && guardedCache->model_
+                        == guardedModel.data()) {
+                    guardedModel->endReset();
+                }
+                result.cacheUpdated = false;
+                appendRemovalError(result.error, detail);
+                return false;
+            }
+            if (!recordCacheRepair(
+                    repairDestroyedCacheEntries(true),
+                    tr("The planned activity collection disappeared while repairing published activities"),
+                    tr("A cached activity was destroyed while published activities were repaired"))) {
+                if (guardedCache && guardedModel
+                    && guardedCache->model_
+                        == guardedModel.data()) {
+                    guardedModel->endReset();
+                }
+                appendRemovalError(result.error, detail);
+                return false;
+            }
+
+            for (int index = 0;
+                 index < guardedIncoming.size(); ++index) {
+                if (retiredIncoming.contains(index)
+                    || incomingItemIsValid(index)) {
+                    continue;
+                }
+                RideItem *const address = incoming.at(index);
+                RideItem *const item =
+                    guardedIncoming.at(index).data();
+                guardedCache->rides_.removeOne(address);
+                guardedCache->delete_.removeOne(address);
+                guardedCache->deletelist.removeOne(address);
+                if (guardedContext->ride == address)
+                    guardedContext->ride = nullptr;
+                if (item) {
+                    if (!guardedCache->delete_.contains(item))
+                        guardedCache->delete_.append(item);
+                }
+                retiredIncoming.insert(index);
+            }
+            guardedModel->endReset();
+            flushDeferredRideItemDeletes();
+            if (!operationOwnersAreStable()) {
+                result.cacheUpdated = false;
+                appendRemovalError(result.error, detail);
+                return false;
+            }
+            if (!recordCacheRepair(
+                    repairDestroyedCacheEntries(false),
+                    tr("The planned activity collection disappeared after published activities were repaired"),
+                    tr("A cached activity was destroyed while published activities were repaired"))) {
+                appendRemovalError(result.error, detail);
+                return false;
+            }
+            if (resetSelection
+                && guardedCache->rides_.contains(
+                    resetSelection.data())) {
+                guardedContext->ride = resetSelection.data();
+            }
+        }
+        if (!stable) {
+            result.cacheUpdated = false;
+            appendRemovalError(result.error, detail);
+        }
+        return stable;
+    };
+
+    if (!incomingIsStable(tr(
+            "A newly published planned activity changed during model replacement"))) {
+        QString cleanupError;
+        result.cleanupComplete =
+            journal->cleanupAfterCommit(cleanupError);
+        appendRemovalError(result.error, cleanupError);
+        return result;
+    }
+    result.cacheUpdated = !cacheStateDegraded;
+
+    QString cleanupError;
+    result.cleanupComplete =
+        journal->cleanupAfterCommit(cleanupError);
+    appendRemovalError(result.error, cleanupError);
+    if (!postCommitOwnersAreStable(tr(
+            "The planned activity collection disappeared after replacement cleanup"))) {
+        return result;
+    }
+
+    for (const QPointer<RideFile> &processorRide :
+         processorRides.files()) {
+        if (!processorRide) {
+            appendRemovalError(
+                result.error,
+                tr("An activity delete processor input disappeared before processing"));
+            continue;
+        }
+        QString processorError;
+        const QPointer<RideFile> guardedProcessorRide(
+            processorRide);
+        if (!runRemovalDeleteProcessor(
+                guardedProcessorRide.data(), processorError)) {
+            appendRemovalError(
+                result.error,
+                processorError.isEmpty()
+                    ? tr("An activity delete processor failed")
+                    : processorError);
+        }
+        if (guardedProcessorRide) {
+            QCoreApplication::sendPostedEvents(
+                guardedProcessorRide.data(),
+                QEvent::DeferredDelete);
+        }
+        flushDeferredRideItemDeletes();
+        if (!guardedProcessorRide) {
+            appendRemovalError(
+                result.error,
+                tr("An activity delete processor destroyed its input"));
+        }
+        if (!postCommitOwnersAreStable(tr(
+                "The planned activity collection disappeared during delete processing"))) {
+            return result;
+        }
+        if (!recordCacheRepair(
+                repairDestroyedCacheEntries(false),
+                tr("The planned activity collection disappeared after delete processing"),
+                tr("A cached activity was destroyed during delete processing"))) {
+            return result;
+        }
+        if (!incomingIsStable(tr(
+                "A newly published planned activity changed during delete processing"))) {
+            return result;
+        }
+    }
+
+    RideItem *selection = previousSelection.data();
+    if (!selection || !guardedCache->rides_.contains(selection)) {
+        selection = nullptr;
+        if (!selectedReplacementName.isEmpty()) {
+            for (const QPointer<RideItem> &item :
+                 std::as_const(guardedIncoming)) {
+                if (item && item->fileName
+                        == selectedReplacementName) {
+                    selection = item.data();
+                    break;
+                }
+            }
+        }
+        if (!selection) {
+            for (const QPointer<RideItem> &item :
+                 std::as_const(guardedIncoming)) {
+                if (item) {
+                    selection = item.data();
+                    break;
+                }
+            }
+        }
+        if (!selection && !guardedCache->rides_.isEmpty())
+            selection = guardedCache->rides_.constFirst();
+    }
+    RideItem *const selectionAddress = selection;
+    const QPointer<RideItem> guardedSelection(selection);
+    guardedContext->ride = guardedSelection.data();
+
+    const auto selectionIsStable = [&](const QString &detail) {
+        if (!postCommitOwnersAreStable(tr(
+                "The planned activity collection disappeared while validating its selection"))) {
+            return false;
+        }
+        const CacheRepairResult selectionRepair =
+            repairDestroyedCacheEntries(false);
+        if (!recordCacheRepair(
+                selectionRepair,
+                tr("The planned activity collection disappeared while repairing its selection"),
+                detail)) {
+            return false;
+        }
+        if (!incomingIsStable(tr(
+                "A newly published planned activity changed while the selection was repaired"))) {
+            return false;
+        }
+        if (!selectionAddress) return true;
+        if (guardedSelection
+            && guardedCache->rides_.contains(
+                guardedSelection.data())) {
+            return true;
+        }
+        guardedContext->ride = nullptr;
+        result.cacheUpdated = false;
+        if (!selectionRepair.unexpectedDeletion)
+            appendRemovalError(result.error, detail);
+        return false;
+    };
+
+    for (const PendingReplacement &entry : std::as_const(pending)) {
+        RideItem *const removed = entry.item.data();
+        if (removed) guardedContext->notifyRideDeleted(removed);
+        flushDeferredRideItemDeletes();
+        if (!postCommitOwnersAreStable(tr(
+                "The planned activity collection disappeared during deletion notification"))) {
+            return result;
+        }
+        if (!entry.item) {
+            guardedCache->delete_.removeOne(entry.address);
+            guardedCache->deletelist.removeOne(entry.address);
+        }
+        if (!incomingIsStable(tr(
+                "A newly published planned activity changed during deletion notification"))
+            || !selectionIsStable(tr(
+                "The selected activity changed during deletion notification"))) {
+            return result;
+        }
+    }
+    if (notifyAdded) {
+        for (const QPointer<RideItem> &item :
+             std::as_const(guardedIncoming)) {
+            const QPointer<RideItem> guardedItem(item);
+            if (guardedItem)
+                guardedContext->notifyRideAdded(guardedItem.data());
+            flushDeferredRideItemDeletes();
+            if (!postCommitOwnersAreStable(tr(
+                    "The planned activity collection disappeared during addition notification"))) {
+                return result;
+            }
+            if (!incomingIsStable(tr(
+                    "A newly published planned activity changed during addition notification"))
+                || !selectionIsStable(tr(
+                    "The selected activity changed during addition notification"))) {
+                return result;
+            }
+        }
+    }
+    if (!postCommitOwnersAreStable(tr(
+            "The planned activity collection disappeared before selection notification"))) {
+        return result;
+    }
+    if (!incomingIsStable(tr(
+            "A newly published planned activity changed before selection notification"))
+        || !selectionIsStable(tr(
+            "The selected activity changed before selection notification"))) {
+        return result;
+    }
+    guardedContext->ride = guardedSelection.data();
+    guardedContext->notifyRideSelected(guardedSelection.data());
+    flushDeferredRideItemDeletes();
+    if (!postCommitOwnersAreStable(tr(
+            "The planned activity collection disappeared during selection notification"))) {
+        return result;
+    }
+    if (!incomingIsStable(tr(
+            "A newly published planned activity changed during selection notification"))
+        || !selectionIsStable(tr(
+            "The selected activity changed during selection notification"))) {
+        return result;
+    }
+
+    guardedCache->refresh();
+    flushDeferredRideItemDeletes();
+    if (!postCommitOwnersAreStable(tr(
+            "The planned activity collection disappeared during refresh"))) {
+        return result;
+    }
+    guardedEstimator->refresh();
+    flushDeferredRideItemDeletes();
+    postCommitOwnersAreStable(tr(
+        "The planned activity collection disappeared during estimator refresh"));
     return result;
 }
 
