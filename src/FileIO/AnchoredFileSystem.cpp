@@ -1447,7 +1447,7 @@ bool pinRegularFile(
     WindowsHandle handle(::CreateFileW(
         reinterpret_cast<LPCWSTR>(entry.displayPath_.utf16()),
         GENERIC_READ | DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-        FILE_SHARE_READ,
+        FILE_SHARE_READ | FILE_SHARE_DELETE,
         nullptr,
         OPEN_EXISTING,
         FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_WRITE_THROUGH,
