@@ -85,6 +85,7 @@ equals(GC_UNITTESTS, active) {
 			   Gui/rideNavigatorSearchFilter \
 			   Gui/trainPerspectiveState \
 			   Metrics/rideMetadataAtomicSave \
+			   Metrics/estimatorThreadControl \
 			   Planning/planReplacementJournal \
 			   Planning/planBundleReaderLifetime \
 			   Python/pythonDataSeriesOwnership \

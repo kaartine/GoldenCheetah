@@ -88,9 +88,6 @@ class RollingBests {
 
 Estimator::Estimator(Context *context) : context(context)
 {
-    // used to flag when we need to stop
-    abort = false;
-
     // lazy start signal
     connect(&singleshot, SIGNAL(timeout()), this, SLOT(calculate()));
 
@@ -101,14 +98,9 @@ Estimator::Estimator(Context *context) : context(context)
 void
 Estimator::stop()
 {
-    if (isRunning()) {
-
-        // we could use requestInterruption but would mean we need QT > 5.2
-        // and there isn't much value in that.
-        abort = true;
-
-        // now wait for the thread to stop
-        while(isRunning() && abort == true)  msleep(50);
+    singleshot.stop();
+    if (!threadControl_.stopAndWait(*this)) {
+        qWarning() << "Estimator could not wait for its worker thread to stop";
     }
 }
 
@@ -125,8 +117,6 @@ Estimator::refresh()
     printd("Lazy start triggered.\n");
 
     stop(); // stop any running threads
-    singleshot.stop(); // stop any pending threads
-
     // 15 secs delay before calculate() is triggered
     singleshot.setSingleShot(true);
     singleshot.setInterval(15000);
@@ -138,7 +128,7 @@ void
 Estimator::calculate()
 {
     // already doing that, so return straight away
-    if (isRunning()) return;
+    if (!threadControl_.prepareForStart(*this)) return;
 
     // get a copy of the rides XXX what about deleting rides?
     rides = context->athlete->rideCache->rides();
@@ -154,6 +144,7 @@ Estimator::run()
   bool first = true;
 
   foreach (QString sport, GlobalContext::context()->rideMetadata->sports()) {
+    if (threadControl_.stopRequested()) return;
 
     sport = RideFile::sportTag(sport); // Normalize sport name
 
@@ -178,6 +169,7 @@ Estimator::run()
 
     // what dates have any power data ?
     foreach(RideItem *item, rides) {
+        if (threadControl_.stopRequested()) return;
 
         // has power and matches sport
         if (item->present.contains("P") && item->sport == sport) {
@@ -224,9 +216,8 @@ Estimator::run()
     while (date <= to) {
 
         // check if we've been asked to stop
-        if (abort == true) {
+        if (threadControl_.stopRequested()) {
             printd("Model estimator aborted.\n");
-            abort = false;
             return;
         }
 
@@ -241,11 +232,13 @@ Estimator::run()
         // include only rides or runs or ..........................................................vvvvv
         QVector<QDate> weekdates;
         QVector<float> week = RideFileCache::meanMaxPowerFor(context, wpk, begin, end, &weekdates, sport);
+        if (threadControl_.stopRequested()) return;
 
         // lets extract the best performance of the week first.
         // only care about performances between 3-20 minutes.
         Performance bestperformance(end,0,0,0);
         for (int t=240; t<week.length() && t<weekdates.length() && t<3600; t++) {
+            if (threadControl_.stopRequested()) return;
 
             double p = double(week[t]);
             if (week[t]<=0) continue;
@@ -269,11 +262,13 @@ Estimator::run()
 
         // we now have the data
         foreach(PDModel *model, models) {
+            if (threadControl_.stopRequested()) return;
 
             PDEstimate add;
 
             // set the data
             model->setData(bests.aggregate());
+            if (threadControl_.stopRequested()) return;
             model->saveParameters(add.parameters); // save the computed parms
 
             add.sport = sport;
@@ -298,6 +293,7 @@ Estimator::run()
 
             // set the wpk data
             model->setData(bestsWPK.aggregate());
+            if (threadControl_.stopRequested()) return;
             model->saveParameters(add.parameters); // save the computed parms
 
             add.wpk = true;
@@ -327,11 +323,18 @@ Estimator::run()
         date = date.addDays(7);
     }
 
+    if (threadControl_.stopRequested()) return;
+
     // filter performances
     perfs = filter(perfs);
+    if (threadControl_.stopRequested()) return;
 
     // now update them
     lock.lock();
+    if (threadControl_.stopRequested()) {
+        lock.unlock();
+        return;
+    }
     if (first) {
         first = false;
         estimates = est;

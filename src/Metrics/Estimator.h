@@ -23,6 +23,7 @@
 #include "Context.h"
 #include "RideCache.h"
 #include "PDModel.h"
+#include "EstimatorThreadControl.h"
 
 #include <QThread>
 #include <QMutex>
@@ -88,7 +89,7 @@ class Estimator : public QThread {
         QVector<RideItem*> rides; // worklist
         QTimer singleshot;
 
-        bool abort;
+        EstimatorThreadControl threadControl_;
 };
 
 #endif
