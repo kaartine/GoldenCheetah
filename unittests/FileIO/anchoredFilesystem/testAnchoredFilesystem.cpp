@@ -27,6 +27,34 @@ using FilesystemAction = std::function<void(
 FilesystemAction filesystemAction;
 bool failDirectorySync = false;
 
+#ifdef Q_OS_WIN
+class WindowsTestHandle
+{
+public:
+    explicit WindowsTestHandle(
+        HANDLE handle = INVALID_HANDLE_VALUE)
+        : handle_(handle)
+    {
+    }
+
+    ~WindowsTestHandle()
+    {
+        if (isValid()) ::CloseHandle(handle_);
+    }
+
+    bool isValid() const
+    {
+        return handle_ != nullptr
+            && handle_ != INVALID_HANDLE_VALUE;
+    }
+
+    HANDLE get() const { return handle_; }
+
+private:
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+};
+#endif
+
 } // namespace
 
 void anchoredFilesystemTransitionReached(
@@ -178,6 +206,7 @@ private slots:
     void removeRejectsFinalEntryReplacement();
     void removeRetainsReplacementAtQuarantine();
     void removeDetectsReplacementAfterFinalQuarantineCheck();
+    void removeUnlinksWindowsNameWithSharedObserver();
     void syncsPinnedDirectory();
 };
 
@@ -928,6 +957,51 @@ removeDetectsReplacementAfterFinalQuarantineCheck()
         QStringList({QStringLiteral(".gc-remove-*")}),
         QDir::Files | QDir::Hidden);
     QVERIFY(entries.isEmpty());
+#endif
+}
+
+void TestAnchoredFilesystem::
+removeUnlinksWindowsNameWithSharedObserver()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Windows shared-delete semantics are platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    const QByteArray original("original contents");
+    const QByteArray replacement("replacement contents");
+    writeFixture(source.displayPath(), original);
+
+    WindowsTestHandle observer(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(source.displayPath().utf16()),
+        GENERIC_READ | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr));
+    QVERIFY(observer.isValid());
+    PinnedFile pinned = pin(source);
+
+    const MutationResult result = remove(pinned);
+
+    QCOMPARE(result.effect, MutationEffect::AppliedDurable);
+    QVERIFY(!pinned.isValid());
+    writeFixture(source.displayPath(), replacement);
+
+    LARGE_INTEGER start {};
+    QVERIFY(::SetFilePointerEx(
+        observer.get(), start, nullptr, FILE_BEGIN));
+    QByteArray observed(original.size(), '\0');
+    DWORD bytesRead = 0;
+    QVERIFY(::ReadFile(
+        observer.get(), observed.data(), DWORD(observed.size()),
+        &bytesRead, nullptr));
+    QCOMPARE(bytesRead, DWORD(original.size()));
+    QCOMPARE(observed, original);
+    QCOMPARE(readFixture(source.displayPath()), replacement);
 #endif
 }
 
