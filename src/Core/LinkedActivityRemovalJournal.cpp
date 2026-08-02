@@ -9,6 +9,8 @@
 
 #include "LinkedActivityRemovalJournal.h"
 
+#include "AnchoredFileSystem.h"
+
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -89,7 +91,9 @@ struct JournalState
     QString commitMarkerPath;
     Detail::Manifest manifest;
     AtomicFileSnapshot manifestSnapshot;
+    AnchoredFileSystem::DirectoryAnchor journalDirectory;
     std::unique_ptr<AtomicFileLockSet> transactionLease;
+    bool cleanupComplete = false;
 };
 
 namespace {
@@ -104,6 +108,44 @@ void appendError(QString &error, const QString &detail)
     if (detail.isEmpty()) return;
     if (!error.isEmpty()) error += QStringLiteral("; ");
     error += detail;
+}
+
+bool journalDirectoryMatches(
+    const JournalState &state, QString &error)
+{
+    if (!state.journalDirectory.isValid()) {
+        error = QStringLiteral(
+            "The active transaction journal directory is not anchored");
+        return false;
+    }
+
+    QString detail;
+    if (state.journalDirectory.pathMatches(detail)) return true;
+    error = detail.isEmpty()
+        ? QStringLiteral(
+              "The active transaction journal directory was replaced")
+        : QStringLiteral(
+              "Cannot revalidate the active transaction journal directory: %1")
+              .arg(detail);
+    return false;
+}
+
+bool sameJournalDirectory(
+    const JournalState &expected,
+    const JournalState &current,
+    QString &error)
+{
+    if (!journalDirectoryMatches(expected, error)
+        || !journalDirectoryMatches(current, error)) {
+        return false;
+    }
+    if (expected.journalDirectory.identity()
+        == current.journalDirectory.identity()) {
+        return true;
+    }
+    error = QStringLiteral(
+        "The active transaction journal directory was replaced");
+    return false;
 }
 
 bool pathEntryExists(const QString &path)
@@ -1163,6 +1205,7 @@ bool inspectJournalDirectory(
     QString &error)
 {
     temporaryFiles.clear();
+    if (!journalDirectoryMatches(state, error)) return false;
     if (!ensurePrivateDirectory(state.journalPath, error)) return false;
 
     const QFileInfoList entries = QDir(state.journalPath).entryInfoList(
@@ -1275,6 +1318,15 @@ bool loadJournalState(
         Detail::PeerOldName);
     loaded->commitMarkerPath = QDir(loaded->journalPath).filePath(
         Detail::CommitMarkerName);
+    if (!AnchoredFileSystem::DirectoryAnchor::open(
+            loaded->journalPath,
+            loaded->journalDirectory,
+            error)) {
+        error = QStringLiteral(
+            "Cannot anchor the transaction journal directory: %1")
+                    .arg(error);
+        return false;
+    }
 
     QByteArray contents;
     if (!readSmallRegularFile(
@@ -1319,10 +1371,15 @@ bool loadAndLockJournal(
     const QString &journalPath,
     std::shared_ptr<JournalState> &state,
     std::unique_ptr<AtomicFileLockSet> &locks,
-    QString &error)
+    QString &error,
+    const JournalState *expected = nullptr)
 {
+    if (expected && !journalDirectoryMatches(*expected, error)) return false;
     std::shared_ptr<JournalState> before;
     if (!loadJournalState(root, journalPath, before, error)) return false;
+    if (expected && !sameJournalDirectory(*expected, *before, error)) {
+        return false;
+    }
     ResolvedPaths paths;
     if (!resolveManifestPaths(*before, paths, error)) return false;
 
@@ -1338,11 +1395,16 @@ bool loadAndLockJournal(
 
     std::shared_ptr<JournalState> after;
     if (!loadJournalState(root, journalPath, after, error)) return false;
-    if (after->manifestSnapshot.size != before->manifestSnapshot.size
+    if (!sameJournalDirectory(*before, *after, error)
+        || (expected
+            && !sameJournalDirectory(*expected, *after, error))
+        || after->manifestSnapshot.size != before->manifestSnapshot.size
         || after->manifestSnapshot.digest
             != before->manifestSnapshot.digest) {
-        error = QStringLiteral(
-            "The linked-removal journal changed while it was being locked");
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The linked-removal journal changed while it was being locked");
+        }
         return false;
     }
     state = after;
@@ -1354,10 +1416,15 @@ bool loadAndLockRuntimeCommit(
     const QString &journalPath,
     std::shared_ptr<JournalState> &state,
     std::unique_ptr<AtomicFileLockSet> &locks,
-    QString &error)
+    QString &error,
+    const JournalState *expected = nullptr)
 {
+    if (expected && !journalDirectoryMatches(*expected, error)) return false;
     std::shared_ptr<JournalState> before;
     if (!loadJournalState(root, journalPath, before, error)) return false;
+    if (expected && !sameJournalDirectory(*expected, *before, error)) {
+        return false;
+    }
     ResolvedPaths paths;
     if (!resolveManifestPaths(*before, paths, error)) return false;
 
@@ -1386,11 +1453,16 @@ bool loadAndLockRuntimeCommit(
 
     std::shared_ptr<JournalState> after;
     if (!loadJournalState(root, journalPath, after, error)) return false;
-    if (after->manifestSnapshot.size != before->manifestSnapshot.size
+    if (!sameJournalDirectory(*before, *after, error)
+        || (expected
+            && !sameJournalDirectory(*expected, *after, error))
+        || after->manifestSnapshot.size != before->manifestSnapshot.size
         || after->manifestSnapshot.digest
             != before->manifestSnapshot.digest) {
-        error = QStringLiteral(
-            "The linked-removal journal changed while it was being locked");
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The linked-removal journal changed while it was being locked");
+        }
         return false;
     }
     state = after;
@@ -2272,7 +2344,8 @@ public:
         }
 
         ResolvedPaths paths;
-        if (!resolveManifestPaths(*state_, paths, error_)
+        if (!journalDirectoryMatches(*state_, error_)
+            || !resolveManifestPaths(*state_, paths, error_)
             || atomicFilePathKey(path_) != atomicFilePathKey(paths.peer)
             || mode_ != AtomicFileMode::ReplaceExisting) {
             if (error_.isEmpty()) {
@@ -2353,7 +2426,10 @@ public:
         }
 
         ResolvedPaths paths;
-        if (!resolveManifestPaths(*state_, paths, error_)) return false;
+        if (!journalDirectoryMatches(*state_, error_)
+            || !resolveManifestPaths(*state_, paths, error_)) {
+            return false;
+        }
         AtomicFileLockSet locks;
         if (!locks.lock(
                 {state_->journalPath, paths.peerStaging}, error_)
@@ -2656,10 +2732,18 @@ std::shared_ptr<Journal> Journal::prepare(
     }
 
     if (!ensurePrivateDirectory(journalPath, error)) return {};
+    if (!AnchoredFileSystem::DirectoryAnchor::open(
+            journalPath, state->journalDirectory, error)) {
+        error = QStringLiteral(
+            "Cannot anchor the new transaction journal directory: %1")
+                    .arg(error);
+        return {};
+    }
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
     rideCacheRemovalTransitionReached(
         "journal-directory-created");
 #endif
+    if (!journalDirectoryMatches(*state, error)) return {};
 
     if (hasPeer
         && !copyExpectedFileCreateNew(
@@ -2678,6 +2762,7 @@ std::shared_ptr<Journal> Journal::prepare(
             "journal-peer-old-published");
     }
 #endif
+    if (!journalDirectoryMatches(*state, error)) return {};
     if (!writeManifestFile(
             state->manifestPath,
             state->manifest,
@@ -2694,6 +2779,7 @@ std::shared_ptr<Journal> Journal::prepare(
     rideCacheRemovalTransitionReached(
         "journal-initial-manifest-published");
 #endif
+    if (!journalDirectoryMatches(*state, error)) return {};
 
     return std::shared_ptr<Journal>(new Journal(state));
 }
@@ -2875,7 +2961,8 @@ bool Journal::validateOriginalStorage(QString &error) const
             state_->journalPath,
             current,
             locks,
-            error)) {
+            error,
+            state_.get())) {
         return false;
     }
     ResolvedPaths paths;
@@ -2898,7 +2985,8 @@ bool Journal::markCommitted(QString &error)
             state_->journalPath,
             current,
             locks,
-            error)) {
+            error,
+            state_.get())) {
         return false;
     }
 
@@ -2928,7 +3016,9 @@ bool Journal::markCommitted(QString &error)
 
 bool Journal::hasCommitMarker() const
 {
+    QString ignored;
     return state_
+        && journalDirectoryMatches(*state_, ignored)
         && pathEntryExists(state_->commitMarkerPath);
 }
 
@@ -2939,6 +3029,8 @@ bool Journal::cleanupAfterRollback(QString &error)
         error = QStringLiteral("The linked-removal journal is unavailable");
         return false;
     }
+    if (state_->cleanupComplete) return true;
+    if (!journalDirectoryMatches(*state_, error)) return false;
     const QFileInfo journalInfo(state_->journalPath);
     if (!journalInfo.exists() && !journalInfo.isSymLink()) return true;
 
@@ -2949,12 +3041,15 @@ bool Journal::cleanupAfterRollback(QString &error)
             state_->journalPath,
             current,
             locks,
-            error)) {
+            error,
+            state_.get())) {
         return false;
     }
     ResolvedPaths paths;
-    return resolveManifestPaths(*current, paths, error)
+    const bool cleaned = resolveManifestPaths(*current, paths, error)
         && rollbackJournal(*current, paths, error);
+    if (cleaned) state_->cleanupComplete = true;
+    return cleaned;
 }
 
 bool Journal::cleanupAfterCommit(QString &error)
@@ -2964,6 +3059,8 @@ bool Journal::cleanupAfterCommit(QString &error)
         error = QStringLiteral("The linked-removal journal is unavailable");
         return false;
     }
+    if (state_->cleanupComplete) return true;
+    if (!journalDirectoryMatches(*state_, error)) return false;
     const QFileInfo journalInfo(state_->journalPath);
     if (!journalInfo.exists() && !journalInfo.isSymLink()) return true;
 
@@ -2974,18 +3071,23 @@ bool Journal::cleanupAfterCommit(QString &error)
             state_->journalPath,
             current,
             locks,
-            error)) {
+            error,
+            state_.get())) {
         return false;
     }
     ResolvedPaths paths;
-    return resolveManifestPaths(*current, paths, error)
+    const bool cleaned = resolveManifestPaths(*current, paths, error)
         && commitJournal(*current, paths, error);
+    if (cleaned) state_->cleanupComplete = true;
+    return cleaned;
 }
 
 QStringList Journal::recoveryPaths() const
 {
     QStringList paths;
     if (!state_) return paths;
+    QString generationError;
+    if (!journalDirectoryMatches(*state_, generationError)) return paths;
 
     const auto addMatchingFile = [&paths](
         const QString &path,
