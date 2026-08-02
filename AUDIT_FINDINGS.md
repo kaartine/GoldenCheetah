@@ -2991,21 +2991,43 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-013: Activity deletion recovery files are not reconciled on restart
 
-- Status: OPEN
-- Code: the ordinary, unlinked path in `src/Core/RideCacheRemoval.cpp` and
-  RideCache startup
-- Impact: `DATA-019` now journals and reconciles linked deletion, but ordinary
-  unlinked deletion still retains only verified canonical and
+- Status: FIXED
+- Code: `src/Core/LinkedActivityRemovalJournal.cpp`,
+  `src/Core/LinkedActivityRemovalJournal.h`,
+  `src/Core/RideCacheRemoval.cpp`, and
+  `unittests/Core/rideCacheRemoval/testRideCacheRemoval.cpp`
+- Impact: `DATA-019` journaled and reconciled linked deletion, but ordinary
+  unlinked deletion previously retained only verified canonical and
   transaction-specific recovery copies. A process exit between its durable
   transitions has no result object, and startup does not classify its
   `.gc-copy-*`, `.gc-previous-*`, or `.gc-remove-*` files. Recoverable data can
-  therefore remain orphaned and require manual inspection.
-- Test: Terminate a deletion subprocess after every file and directory sync,
-  restart the same athlete, and require deterministic completion or rollback
-  while preserving the newest source and every pre-existing backup.
-- Fix direction: Generalize the fsynced manifest and startup reconciler from
-  `DATA-019` to the ordinary deletion path, retaining its role hashes and
-  transition decision while omitting the linked-peer generation.
+  therefore remained orphaned and required manual inspection.
+- Test-first evidence: A subprocess stopped immediately after the ordinary
+  source was durably tombstoned. Reopening the same athlete returned without a
+  startup error but left the source missing instead of restoring its newest
+  contents and the pre-existing backup generation. The final matrix terminates
+  ordinary deletion at journal creation, manifest publication, backup staging,
+  previous-backup preservation, backup publication, source tombstoning, the
+  commit marker, every cleanup occurrence, and every journal cleanup boundary.
+- Resolution: The existing linked-removal journal now has a version-2 manifest
+  with an explicit optional-peer role. Ordinary archived deletion prepares the
+  same fsynced role-hash manifest with no peer, uses its transaction id for all
+  storage sidecars, records the commit decision only after the source is safely
+  archived, and retains committed cleanup work for startup. Restart recovery
+  deterministically rolls an uncommitted generation back or a committed
+  generation forward and removes all verified sidecars. Version-1 linked
+  manifests remain accepted. Pre-manifest validation now precedes journal
+  directory creation, and absent derived files may safely name a missing parent
+  without attempting to create a lock there.
+- Verification: The 15-transition ordinary crash/restart matrix, the existing
+  linked crash/restart matrix, and the version-1 compatibility regression pass.
+  The complete 341-case RideCache program passes normal, ASan/UBSan, and
+  ThreadSanitizer builds. The repository-wide normal matrix reports 101 QtTest
+  result blocks, 4,151 passes, zero failures, 12 expected skips, and zero
+  blacklisted cases. The production application links and survives an isolated
+  20-second offscreen event-loop smoke test with a disposable home directory.
+- Residual: Native Windows directory-entry durability remains `DUR-014`, and
+  non-cooperating pathname replacement remains `SEC-025`.
 
 ### DUR-014: Windows deletion does not durably sync directory entries
 

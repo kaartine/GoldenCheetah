@@ -30,7 +30,7 @@ namespace LinkedActivityRemoval {
 
 namespace Detail {
 
-constexpr int ManifestVersion = 1;
+constexpr int ManifestVersion = 2;
 constexpr qint64 MaximumManifestSize = 4 * 1024 * 1024;
 constexpr qint64 MaximumCommitMarkerSize = 128;
 constexpr qint64 MaximumLockFileSize = 64 * 1024;
@@ -51,6 +51,7 @@ struct Manifest
 {
     int version = ManifestVersion;
     QString id;
+    bool hasPeer = false;
     ExpectedFile source;
     ExpectedFile previousBackup;
     ExpectedFile peerOld;
@@ -188,7 +189,10 @@ bool validateRelativePath(const QString &path, QString &error)
 }
 
 bool validatePathComponents(
-    const QString &root, const QString &relativePath, QString &error)
+    const QString &root,
+    const QString &relativePath,
+    QString &error,
+    bool allowMissingParents = false)
 {
     QString cursor = root;
     const QStringList components = QDir::fromNativeSeparators(relativePath)
@@ -203,6 +207,8 @@ bool validatePathComponents(
         }
         if (index + 1 < components.size()
             && (!info.exists() || !info.isDir())) {
+            if (allowMissingParents && !info.exists())
+                return true;
             error = QStringLiteral(
                 "A journal path has an unavailable parent directory");
             return false;
@@ -216,7 +222,8 @@ bool makeRootRelativePath(
     const QString &candidate,
     QString &relativePath,
     QString &absolutePath,
-    QString &error)
+    QString &error,
+    bool allowMissingParents = false)
 {
     if (candidate.isEmpty() || !QDir::isAbsolutePath(candidate)) {
         error = QStringLiteral("Activity transaction paths must be absolute");
@@ -234,7 +241,10 @@ bool makeRootRelativePath(
         error = QStringLiteral("An activity path escapes the athlete root");
         return false;
     }
-    if (!validatePathComponents(root, relativePath, error)) return false;
+    if (!validatePathComponents(
+            root, relativePath, error, allowMissingParents)) {
+        return false;
+    }
     return true;
 }
 
@@ -242,14 +252,16 @@ bool resolveRootRelativePath(
     const QString &root,
     const QString &relativePath,
     QString &absolutePath,
-    QString &error)
+    QString &error,
+    bool allowMissingParents = false)
 {
     if (!validateRelativePath(relativePath, error)) return false;
     absolutePath = QDir::cleanPath(QDir(root).filePath(relativePath));
     const QString roundTrip = QDir::fromNativeSeparators(
         QDir(root).relativeFilePath(absolutePath));
     if (roundTrip != QDir::fromNativeSeparators(relativePath)
-        || !validatePathComponents(root, relativePath, error)) {
+        || !validatePathComponents(
+            root, relativePath, error, allowMissingParents)) {
         if (error.isEmpty()) {
             error = QStringLiteral("A journal path escapes the athlete root");
         }
@@ -519,6 +531,8 @@ QByteArray serializeManifest(const Manifest &manifest)
     QJsonObject root;
     root.insert(QStringLiteral("version"), manifest.version);
     root.insert(QStringLiteral("id"), manifest.id);
+    if (manifest.version >= 2)
+        root.insert(QStringLiteral("hasPeer"), manifest.hasPeer);
     root.insert(
         QStringLiteral("source"), expectedFileToJson(manifest.source));
     root.insert(
@@ -551,7 +565,10 @@ bool hasExactKeys(const QJsonObject &object, const QSet<QString> &expected)
 }
 
 bool parseExpectedFile(
-    const QJsonValue &value, ExpectedFile &expected, QString &error)
+    const QJsonValue &value,
+    ExpectedFile &expected,
+    QString &error,
+    bool pathRequired = true)
 {
     if (!value.isObject()) {
         error = QStringLiteral("A journal file record is not an object");
@@ -575,8 +592,15 @@ bool parseExpectedFile(
     expected = {};
     expected.relativePath = QDir::fromNativeSeparators(
         object.value(QStringLiteral("path")).toString());
-    if (!validateRelativePath(expected.relativePath, error)) return false;
     expected.exists = object.value(QStringLiteral("exists")).toBool();
+    if (expected.relativePath.isEmpty()) {
+        if (pathRequired || expected.exists) {
+            error = QStringLiteral("A journal file path is missing");
+            return false;
+        }
+    } else if (!validateRelativePath(expected.relativePath, error)) {
+        return false;
+    }
 
     const QString sizeText = object.value(QStringLiteral("size")).toString();
     bool sizeValid = false;
@@ -629,7 +653,7 @@ bool parseManifest(
     }
 
     const QJsonObject root = document.object();
-    const QSet<QString> keys = {
+    const QSet<QString> versionOneKeys = {
         QStringLiteral("version"),
         QStringLiteral("id"),
         QStringLiteral("source"),
@@ -637,18 +661,33 @@ bool parseManifest(
         QStringLiteral("peerOld"),
         QStringLiteral("peerNew"),
         QStringLiteral("derived")};
-    if (!hasExactKeys(root, keys)
-        || !root.value(QStringLiteral("version")).isDouble()
-        || root.value(QStringLiteral("version")).toDouble() != 1.0
+    QSet<QString> versionTwoKeys = versionOneKeys;
+    versionTwoKeys.insert(QStringLiteral("hasPeer"));
+    if (!root.value(QStringLiteral("version")).isDouble()) {
+        error = QStringLiteral("The linked-removal journal schema is invalid");
+        return false;
+    }
+    const double serializedVersion =
+        root.value(QStringLiteral("version")).toDouble();
+    const bool versionOne = serializedVersion == 1.0;
+    const bool versionTwo =
+        serializedVersion == Detail::ManifestVersion;
+    if ((!versionOne && !versionTwo)
+        || !hasExactKeys(
+            root, versionOne ? versionOneKeys : versionTwoKeys)
         || !root.value(QStringLiteral("id")).isString()
-        || !root.value(QStringLiteral("derived")).isArray()) {
+        || !root.value(QStringLiteral("derived")).isArray()
+        || (versionTwo
+            && !root.value(QStringLiteral("hasPeer")).isBool())) {
         error = QStringLiteral("The linked-removal journal schema is invalid");
         return false;
     }
 
     manifest = {};
-    manifest.version = Detail::ManifestVersion;
+    manifest.version = versionOne ? 1 : Detail::ManifestVersion;
     manifest.id = root.value(QStringLiteral("id")).toString();
+    manifest.hasPeer = versionOne
+        || root.value(QStringLiteral("hasPeer")).toBool();
     if (!validTransactionId(manifest.id)
         || manifest.id != expectedId) {
         error = QStringLiteral("The linked-removal journal id is invalid");
@@ -662,15 +701,28 @@ bool parseManifest(
             manifest.previousBackup,
             error)
         || !parseExpectedFile(
-            root.value(QStringLiteral("peerOld")), manifest.peerOld, error)
+            root.value(QStringLiteral("peerOld")),
+            manifest.peerOld,
+            error,
+            manifest.hasPeer)
         || !parseExpectedFile(
-            root.value(QStringLiteral("peerNew")), manifest.peerNew, error)) {
+            root.value(QStringLiteral("peerNew")),
+            manifest.peerNew,
+            error,
+            manifest.hasPeer)) {
         return false;
     }
 
-    if (!manifest.source.exists || !manifest.peerOld.exists
-        || manifest.peerOld.relativePath
-            != manifest.peerNew.relativePath) {
+    if (!manifest.source.exists
+        || (manifest.hasPeer
+            && (!manifest.peerOld.exists
+                || manifest.peerOld.relativePath
+                    != manifest.peerNew.relativePath))
+        || (!manifest.hasPeer
+            && (manifest.peerOld.exists
+                || manifest.peerNew.exists
+                || !manifest.peerOld.relativePath.isEmpty()
+                || !manifest.peerNew.relativePath.isEmpty()))) {
         error = QStringLiteral(
             "The linked-removal journal has invalid required files");
         return false;
@@ -997,8 +1049,11 @@ bool resolveManifestPaths(
             state.athleteRoot,
             state.manifest.previousBackup.relativePath,
             paths.backup,
-            error)
-        || !resolveRootRelativePath(
+            error)) {
+        return false;
+    }
+    if (state.manifest.hasPeer
+        && !resolveRootRelativePath(
             state.athleteRoot,
             state.manifest.peerOld.relativePath,
             paths.peer,
@@ -1009,7 +1064,11 @@ bool resolveManifestPaths(
     for (const ExpectedFile &entry : state.manifest.derived) {
         QString path;
         if (!resolveRootRelativePath(
-                state.athleteRoot, entry.relativePath, path, error)) {
+                state.athleteRoot,
+                entry.relativePath,
+                path,
+                error,
+                !entry.exists)) {
             return false;
         }
         paths.derived.append(path);
@@ -1021,14 +1080,17 @@ bool resolveManifestPaths(
         + QStringLiteral(".gc-remove-") + state.manifest.id;
     paths.previousBackup = paths.backup
         + QStringLiteral(".gc-previous-") + state.manifest.id;
-    paths.peerStaging = paths.peer
-        + QStringLiteral(".gc-linked-new-") + state.manifest.id;
+    if (state.manifest.hasPeer) {
+        paths.peerStaging = paths.peer
+            + QStringLiteral(".gc-linked-new-") + state.manifest.id;
+    }
 
-    const QStringList sidecars = {
+    QStringList sidecars = {
         paths.backupStaging,
         paths.sourceTombstone,
-        paths.previousBackup,
-        paths.peerStaging};
+        paths.previousBackup};
+    if (state.manifest.hasPeer)
+        sidecars.append(paths.peerStaging);
     for (const QString &sidecar : sidecars) {
         QString relative;
         QString absolute;
@@ -1051,7 +1113,7 @@ bool resolveManifestPaths(
         return true;
     };
     if (!addUnique(paths.source) || !addUnique(paths.backup)
-        || !addUnique(paths.peer)) {
+        || (state.manifest.hasPeer && !addUnique(paths.peer))) {
         error = QStringLiteral("Activity transaction paths overlap");
         return false;
     }
@@ -1235,12 +1297,17 @@ QStringList lockPathsFor(
         state.journalPath,
         paths.source,
         paths.backup,
-        paths.peer,
         paths.backupStaging,
         paths.sourceTombstone,
-        paths.previousBackup,
-        paths.peerStaging};
-    lockPaths.append(paths.derived);
+        paths.previousBackup};
+    if (state.manifest.hasPeer) {
+        lockPaths.append(paths.peer);
+        lockPaths.append(paths.peerStaging);
+    }
+    for (const QString &derived : paths.derived) {
+        if (QFileInfo(derived).absoluteDir().exists())
+            lockPaths.append(derived);
+    }
     return lockPaths;
 }
 
@@ -1296,12 +1363,14 @@ bool loadAndLockRuntimeCommit(
     // make markCommitted() fail. This lock set covers the journal-owned files
     // and the peer side of the transaction; startup recovery uses the full set.
     locks.reset(new AtomicFileLockSet);
-    if (!locks->lock(
-            {before->journalPath,
-             paths.peer,
-             paths.peerStaging,
-             paths.backupStaging},
-            error)) {
+    QStringList lockPaths = {
+        before->journalPath,
+        paths.backupStaging};
+    if (before->manifest.hasPeer) {
+        lockPaths.append(paths.peer);
+        lockPaths.append(paths.peerStaging);
+    }
+    if (!locks->lock(lockPaths, error)) {
         return false;
     }
 
@@ -1327,6 +1396,17 @@ bool loadAndLockRuntimeCommit(
 
 bool validatePeerOldCopy(const JournalState &state, QString &error)
 {
+    if (!state.manifest.hasPeer) {
+        ObservedFile observed;
+        if (!inspectRegularFile(state.peerOldPath, observed, error))
+            return false;
+        if (observed.exists) {
+            error = QStringLiteral(
+                "An unlinked removal journal contains unexpected peer data");
+            return false;
+        }
+        return true;
+    }
     return validateExpectedSnapshot(
         state.peerOldPath, state.manifest.peerOld.contents, error);
 }
@@ -1385,7 +1465,13 @@ bool validateOriginalStorageState(
         }
     }
 
-    if (state.manifest.peerNew.exists) {
+    if (!state.manifest.hasPeer) {
+        if (state.manifest.peerNew.exists) {
+            error = QStringLiteral(
+                "An unlinked removal journal contains linked-peer state");
+            return false;
+        }
+    } else if (state.manifest.peerNew.exists) {
         if (!validateExpectedSnapshot(
                 paths.peer,
                 state.manifest.peerNew.contents,
@@ -1417,17 +1503,28 @@ bool validateOriginalStorageState(
 bool markerCanBeCreated(
     const JournalState &state, const ResolvedPaths &paths, QString &error)
 {
-    if (!state.manifest.peerNew.exists) {
-        error = QStringLiteral(
-            "The linked peer has not been staged for deletion");
+    if (state.manifest.hasPeer) {
+        if (!state.manifest.peerNew.exists) {
+            error = QStringLiteral(
+                "The linked peer has not been staged for deletion");
+            return false;
+        }
+        if (!validatePeerOldCopy(state, error)
+            || !validateExpectedSnapshot(
+                paths.peer, state.manifest.peerNew.contents, error)
+            || !validateExpectedSnapshot(
+                paths.peerStaging, state.manifest.peerNew.contents, error)) {
+            return false;
+        }
+    } else if (!validatePeerOldCopy(state, error)
+               || state.manifest.peerNew.exists) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "An unlinked removal journal contains linked-peer state");
+        }
         return false;
     }
-    if (!validatePeerOldCopy(state, error)
-        || !validateExpectedSnapshot(
-            paths.peer, state.manifest.peerNew.contents, error)
-        || !validateExpectedSnapshot(
-            paths.peerStaging, state.manifest.peerNew.contents, error)
-        || !validateExpectedSnapshot(
+    if (!validateExpectedSnapshot(
             paths.backup, state.manifest.source.contents, error)) {
         return false;
     }
@@ -1569,6 +1666,9 @@ bool restoreBackupForRollback(
 bool restorePeerForRollback(
     const JournalState &state, const ResolvedPaths &paths, QString &error)
 {
+    if (!state.manifest.hasPeer)
+        return validatePeerOldCopy(state, error);
+
     ObservedFile peer;
     if (!inspectRegularFile(paths.peer, peer, error)) return false;
     const bool peerIsOld = snapshotMatches(
@@ -1601,7 +1701,8 @@ bool validateRollbackSidecars(
     ObservedFile &previous,
     QString &error)
 {
-    if (!inspectRegularFile(paths.peerStaging, peerStaging, error)
+    if ((state.manifest.hasPeer
+         && !inspectRegularFile(paths.peerStaging, peerStaging, error))
         || !inspectRegularFile(paths.backupStaging, backupStaging, error)
         || !inspectRegularFile(paths.sourceTombstone, tombstone, error)
         || !inspectRegularFile(paths.previousBackup, previous, error)) {
@@ -1636,6 +1737,9 @@ bool validateRollbackSidecars(
 bool ensurePeerForCommit(
     const JournalState &state, const ResolvedPaths &paths, QString &error)
 {
+    if (!state.manifest.hasPeer)
+        return validatePeerOldCopy(state, error);
+
     if (!state.manifest.peerNew.exists) {
         error = QStringLiteral("The committed journal has no linked-peer data");
         return false;
@@ -1876,13 +1980,16 @@ bool removeJournalDirectory(
     rideCacheRemovalTransitionReached(
         "journal-manifest-removed");
 #endif
-    if (!removeExpectedFile(
+    if (state.manifest.hasPeer
+        && !removeExpectedFile(
             state.peerOldPath, state.manifest.peerOld.contents, error)) {
         return false;
     }
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
-    rideCacheRemovalTransitionReached(
-        "journal-peer-old-removed");
+    if (state.manifest.hasPeer) {
+        rideCacheRemovalTransitionReached(
+            "journal-peer-old-removed");
+    }
 #endif
     if (committed
         && !removeExpectedFile(
@@ -1961,12 +2068,13 @@ bool rollbackJournal(
 
     if (!validateDerivedForRollback(state, paths, error)) return false;
 
-    if (peerStaging.exists
+    if (state.manifest.hasPeer
+        && peerStaging.exists
         && !removeObservedFile(paths.peerStaging, peerStaging, error)) {
         return false;
     }
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
-    if (peerStaging.exists) {
+    if (state.manifest.hasPeer && peerStaging.exists) {
         rideCacheRemovalTransitionReached(
             "rollback-peer-staging-removed");
     }
@@ -2054,7 +2162,8 @@ bool commitJournal(
             paths.backupStaging, state.manifest.source.contents, error)) {
         return false;
     }
-    if (pathEntryExists(paths.peerStaging)) {
+    if (state.manifest.hasPeer
+        && pathEntryExists(paths.peerStaging)) {
         if (!removeExpectedFile(
                 paths.peerStaging,
                 state.manifest.peerNew.contents,
@@ -2154,7 +2263,7 @@ public:
             error_ = QStringLiteral("The linked-peer writer is already open");
             return false;
         }
-        if (!state_ || !delegateFactory_) {
+        if (!state_ || !state_->manifest.hasPeer || !delegateFactory_) {
             error_ = QStringLiteral("The linked-peer writer is unavailable");
             return false;
         }
@@ -2350,6 +2459,7 @@ std::shared_ptr<Journal> Journal::prepare(
     QString backupPath;
     QString peerRelative;
     QString peerPath;
+    const bool hasPeer = !specification.peerPath.isEmpty();
     if (!makeRootRelativePath(
             root,
             specification.sourcePath,
@@ -2361,8 +2471,11 @@ std::shared_ptr<Journal> Journal::prepare(
             specification.backupPath,
             backupRelative,
             backupPath,
-            error)
-        || !makeRootRelativePath(
+            error)) {
+        return {};
+    }
+    if (hasPeer
+        && !makeRootRelativePath(
             root,
             specification.peerPath,
             peerRelative,
@@ -2381,7 +2494,12 @@ std::shared_ptr<Journal> Journal::prepare(
         QString relative;
         QString absolute;
         if (!makeRootRelativePath(
-                root, candidate, relative, absolute, error)) {
+                root,
+                candidate,
+                relative,
+                absolute,
+                error,
+                true)) {
             return {};
         }
         derivedRelative.append(relative);
@@ -2402,11 +2520,6 @@ std::shared_ptr<Journal> Journal::prepare(
     if (!transactionNamespaceIsReady(
             root, namespacePath, error)) return {};
     const QString journalPath = QDir(namespacePath).filePath(id);
-    if (!ensurePrivateDirectory(journalPath, error)) return {};
-#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
-    rideCacheRemovalTransitionReached(
-        "journal-directory-created");
-#endif
 
     state->athleteRoot = root;
     state->namespacePath = namespacePath;
@@ -2416,11 +2529,13 @@ std::shared_ptr<Journal> Journal::prepare(
     state->commitMarkerPath = QDir(journalPath).filePath(
         Detail::CommitMarkerName);
     state->manifest.id = id;
+    state->manifest.hasPeer = hasPeer;
 
     ResolvedPaths fixedPaths;
     fixedPaths.source = sourcePath;
     fixedPaths.backup = backupPath;
-    fixedPaths.peer = peerPath;
+    if (hasPeer)
+        fixedPaths.peer = peerPath;
     fixedPaths.derived = derivedPaths;
     fixedPaths.backupStaging = backupPath
         + QStringLiteral(".gc-copy-") + id;
@@ -2428,19 +2543,26 @@ std::shared_ptr<Journal> Journal::prepare(
         + QStringLiteral(".gc-remove-") + id;
     fixedPaths.previousBackup = backupPath
         + QStringLiteral(".gc-previous-") + id;
-    fixedPaths.peerStaging = peerPath
-        + QStringLiteral(".gc-linked-new-") + id;
+    if (hasPeer) {
+        fixedPaths.peerStaging = peerPath
+            + QStringLiteral(".gc-linked-new-") + id;
+    }
 
     QStringList pathsToLock = {
         journalPath,
         fixedPaths.source,
         fixedPaths.backup,
-        fixedPaths.peer,
         fixedPaths.backupStaging,
         fixedPaths.sourceTombstone,
-        fixedPaths.previousBackup,
-        fixedPaths.peerStaging};
-    pathsToLock.append(fixedPaths.derived);
+        fixedPaths.previousBackup};
+    if (hasPeer) {
+        pathsToLock.append(fixedPaths.peer);
+        pathsToLock.append(fixedPaths.peerStaging);
+    }
+    for (const QString &derived : fixedPaths.derived) {
+        if (QFileInfo(derived).absoluteDir().exists())
+            pathsToLock.append(derived);
+    }
     AtomicFileLockSet locks;
     if (!locks.lock(pathsToLock, error)) return {};
 
@@ -2451,18 +2573,30 @@ std::shared_ptr<Journal> Journal::prepare(
         uniquePaths.insert(key);
         return true;
     };
-    for (const QString &path : pathsToLock.mid(1)) {
+    QStringList uniqueCandidates = {
+        fixedPaths.source,
+        fixedPaths.backup,
+        fixedPaths.backupStaging,
+        fixedPaths.sourceTombstone,
+        fixedPaths.previousBackup};
+    if (hasPeer) {
+        uniqueCandidates.append(fixedPaths.peer);
+        uniqueCandidates.append(fixedPaths.peerStaging);
+    }
+    uniqueCandidates.append(fixedPaths.derived);
+    for (const QString &path : uniqueCandidates) {
         if (!addUnique(path)) {
             error = QStringLiteral("Activity transaction paths overlap");
             return {};
         }
     }
 
-    const QStringList sidecars = {
+    QStringList sidecars = {
         fixedPaths.backupStaging,
         fixedPaths.sourceTombstone,
-        fixedPaths.previousBackup,
-        fixedPaths.peerStaging};
+        fixedPaths.previousBackup};
+    if (hasPeer)
+        sidecars.append(fixedPaths.peerStaging);
     for (const QString &sidecar : sidecars) {
         QString relative;
         QString absolute;
@@ -2490,16 +2624,20 @@ std::shared_ptr<Journal> Journal::prepare(
             backupRelative,
             false,
             state->manifest.previousBackup,
-            error)
-        || !inspectExpectedFile(
-            peerPath,
-            peerRelative,
-            true,
-            state->manifest.peerOld,
             error)) {
         return {};
     }
-    state->manifest.peerNew.relativePath = peerRelative;
+    if (hasPeer) {
+        if (!inspectExpectedFile(
+                peerPath,
+                peerRelative,
+                true,
+                state->manifest.peerOld,
+                error)) {
+            return {};
+        }
+        state->manifest.peerNew.relativePath = peerRelative;
+    }
 
     for (int index = 0; index < derivedPaths.size(); ++index) {
         ExpectedFile derived;
@@ -2514,7 +2652,14 @@ std::shared_ptr<Journal> Journal::prepare(
         state->manifest.derived.append(derived);
     }
 
-    if (!copyExpectedFileCreateNew(
+    if (!ensurePrivateDirectory(journalPath, error)) return {};
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    rideCacheRemovalTransitionReached(
+        "journal-directory-created");
+#endif
+
+    if (hasPeer
+        && !copyExpectedFileCreateNew(
             peerPath,
             state->peerOldPath,
             state->manifest.peerOld.contents,
@@ -2525,8 +2670,10 @@ std::shared_ptr<Journal> Journal::prepare(
         return {};
     }
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
-    rideCacheRemovalTransitionReached(
-        "journal-peer-old-published");
+    if (hasPeer) {
+        rideCacheRemovalTransitionReached(
+            "journal-peer-old-published");
+    }
 #endif
     if (!writeManifestFile(
             state->manifestPath,
@@ -2845,12 +2992,13 @@ QStringList Journal::recoveryPaths() const
         return paths;
     }
 
-    const QStringList candidates = {
+    QStringList candidates = {
         state_->journalPath,
-        resolved.peerStaging,
         resolved.backupStaging,
         resolved.sourceTombstone,
         resolved.previousBackup};
+    if (state_->manifest.hasPeer)
+        candidates.insert(1, resolved.peerStaging);
     for (const QString &candidate : candidates) {
         if (pathEntryExists(candidate)) paths.append(candidate);
     }

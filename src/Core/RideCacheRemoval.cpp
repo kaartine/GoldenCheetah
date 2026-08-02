@@ -4506,6 +4506,55 @@ RideCache::removeRideEntry(
         }
     }
 
+    if (archiveSource && !linkedJournal) {
+        QString journalError;
+        linkedJournal =
+            LinkedActivityRemoval::Journal::prepare(
+                {
+                    guardedAthlete->home->root()
+                        .absolutePath(),
+                    sourcePath,
+                    backupPath,
+                    QString(),
+                    derivedPaths
+                },
+                journalError);
+        if (!linkedJournal
+            || !linkedJournal->validateOriginalStorage(
+                journalError)) {
+            result.error = journalError.isEmpty()
+                ? tr(
+                    "The activity deletion journal could not be prepared")
+                : journalError;
+            if (linkedJournal) {
+                QString cleanupError;
+                if (!linkedJournal->cleanupAfterRollback(
+                        cleanupError)) {
+                    result.status =
+                        RemovalStatus::RecoveryRequired;
+                    appendRemovalResultError(
+                        result,
+                        cleanupError.isEmpty()
+                        ? tr(
+                            "The incomplete activity deletion journal requires recovery")
+                        : cleanupError);
+                    for (const QString &path :
+                         linkedJournal->recoveryPaths()) {
+                        appendRecoveryPath(path);
+                    }
+                }
+            }
+            appendRemovalItemResult(
+                result,
+                filenameToDelete,
+                plannedToDelete,
+                result.status,
+                result.error,
+                result.recoveryPaths);
+            return result;
+        }
+    }
+
     const QString originalPeerReference =
         linkedOriginalFileName;
     const QString expectedPeerReference =
@@ -4608,7 +4657,7 @@ RideCache::removeRideEntry(
             archiveSource,
             prepareRemoval,
             linkedJournal);
-    if (storage.committed()
+    if (storage.status == RemovalStatus::Committed
         && linkedJournal) {
         QString cleanupError;
         if (!linkedJournal->cleanupAfterCommit(
@@ -4621,6 +4670,44 @@ RideCache::removeRideEntry(
                  linkedJournal->recoveryPaths()) {
                 addRecoveryPath(
                     storage.recoveryPaths, path);
+            }
+        }
+    } else if (storage.status
+                   == RemovalStatus::CommittedCleanupPending
+               && linkedJournal) {
+        for (const QString &path :
+             linkedJournal->recoveryPaths()) {
+            addRecoveryPath(
+                storage.recoveryPaths, path);
+        }
+    }
+    if (!storage.committed()
+        && linkedJournal
+        && !linkedItemWasSaved) {
+        if (storage.status
+            == RemovalStatus::RecoveryRequired) {
+            for (const QString &path :
+                 linkedJournal->recoveryPaths()) {
+                addRecoveryPath(
+                    storage.recoveryPaths, path);
+            }
+        } else {
+            QString cleanupError;
+            if (!linkedJournal->cleanupAfterRollback(
+                    cleanupError)) {
+                storage.status =
+                    RemovalStatus::RecoveryRequired;
+                appendRemovalError(
+                    storage.error,
+                    cleanupError.isEmpty()
+                    ? tr(
+                        "The activity deletion journal requires recovery")
+                    : cleanupError);
+                for (const QString &path :
+                     linkedJournal->recoveryPaths()) {
+                    addRecoveryPath(
+                        storage.recoveryPaths, path);
+                }
             }
         }
     }

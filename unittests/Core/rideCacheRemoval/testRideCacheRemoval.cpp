@@ -26,6 +26,8 @@
 #include <QFileInfo>
 #include <QDirIterator>
 #include <QHash>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMessageBox>
 #include <QProcess>
 #include <QProcessEnvironment>
@@ -487,8 +489,11 @@ private slots:
     void oversizedUnreadableJournalControlFileFailsBeforeRead_data();
     void oversizedUnreadableJournalControlFileFailsBeforeRead();
     void startupWithoutJournalAllowsSymlinkedAthleteRoot();
+    void legacyLinkedRemovalManifestRecovers();
     void linkedDeletionCrashAfterPeerSaveRecoversOnRestart_data();
     void linkedDeletionCrashAfterPeerSaveRecoversOnRestart();
+    void ordinaryDeletionCrashRecoversOnRestart_data();
+    void ordinaryDeletionCrashRecoversOnRestart();
     void processorFailureIsReportedWithoutRemoval();
     void processorReorderingDoesNotRemoveWrongRow();
     void preexistingDestroyedSiblingDoesNotBreakRemoval();
@@ -1043,8 +1048,16 @@ plannedAndCompletedBackupsUseSeparateNamespaces()
         fixture.plannedActivityPath(firstName()),
         plannedContents);
 
-    QVERIFY(fixture.cache->removeRide(planned));
-    QVERIFY(fixture.cache->removeRide(completed));
+    const RideCache::RemovalResult plannedResult =
+        fixture.cache->removeRideResult(planned);
+    QVERIFY2(
+        plannedResult.allLogicallyRemoved(),
+        qPrintable(plannedResult.error));
+    const RideCache::RemovalResult completedResult =
+        fixture.cache->removeRideResult(completed);
+    QVERIFY2(
+        completedResult.allLogicallyRemoved(),
+        qPrintable(completedResult.error));
 
     QCOMPARE(fixture.cache->count(), 0);
     QCOMPARE(
@@ -1127,6 +1140,9 @@ plannedBackupDirectorySyncFailureIsRetried()
 
     const RideCache::RemovalResult third =
         fixture.cache->removeRideResult(planned);
+    QVERIFY2(
+        third.status == RideCache::RemovalStatus::Committed,
+        qPrintable(third.error));
     QCOMPARE(
         third.status,
         RideCache::RemovalStatus::Committed);
@@ -3275,6 +3291,57 @@ startupWithoutJournalAllowsSymlinkedAthleteRoot()
         qPrintable(error));
 }
 
+void TestRideCacheRemoval::legacyLinkedRemovalManifestRecovers()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QString peerPath = fixture.plannedActivityPath(secondName());
+    const QByteArray sourceContents("legacy source");
+    const QByteArray peerContents("legacy peer");
+    writeFixture(sourcePath, sourceContents);
+    writeFixture(peerPath, peerContents);
+
+    QString error;
+    std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(),
+             sourcePath,
+             fixture.backupPath(firstName()),
+             peerPath,
+             {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString manifestPath = QDir(journalPath).filePath(
+        QStringLiteral("manifest.json"));
+    journal.reset();
+
+    QJsonParseError parseError;
+    QJsonDocument document = QJsonDocument::fromJson(
+        readBytes(manifestPath), &parseError);
+    QCOMPARE(parseError.error, QJsonParseError::NoError);
+    QVERIFY(document.isObject());
+    QJsonObject manifest = document.object();
+    QCOMPARE(manifest.value(QStringLiteral("version")).toInt(), 2);
+    QVERIFY(manifest.value(QStringLiteral("hasPeer")).toBool());
+    manifest.insert(QStringLiteral("version"), 1);
+    manifest.remove(QStringLiteral("hasPeer"));
+    QByteArray legacyManifest =
+        QJsonDocument(manifest).toJson(QJsonDocument::Compact);
+    legacyManifest.append('\n');
+    writeFixture(manifestPath, legacyManifest);
+
+    QVERIFY2(
+        LinkedActivityRemoval::Journal::reconcileAll(
+            fixture.temporary.path(), error),
+        qPrintable(error));
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QCOMPARE(readBytes(sourcePath), sourceContents);
+    QCOMPARE(readBytes(peerPath), peerContents);
+    QVERIFY(!QFileInfo::exists(fixture.backupPath(firstName())));
+}
+
 void TestRideCacheRemoval::
 linkedDeletionCrashAfterPeerSaveRecoversOnRestart_data()
 {
@@ -3614,6 +3681,203 @@ linkedDeletionCrashAfterPeerSaveRecoversOnRestart()
         QVERIFY2(
             !transactionSidecar
                 || name.endsWith(QStringLiteral(".lock")),
+            qPrintable(path));
+    }
+}
+
+void TestRideCacheRemoval::
+ordinaryDeletionCrashRecoversOnRestart_data()
+{
+    QTest::addColumn<QString>("crashPhase");
+    QTest::addColumn<int>("crashOccurrence");
+    QTest::addColumn<bool>("committed");
+
+    QTest::newRow("journal-directory-created")
+        << QStringLiteral("journal-directory-created") << 1 << false;
+    QTest::newRow("journal-initial-manifest-published")
+        << QStringLiteral("journal-initial-manifest-published")
+        << 1 << false;
+    QTest::newRow("backup-staged")
+        << QStringLiteral("backup-staged") << 1 << false;
+    QTest::newRow("previous-backup-preserved")
+        << QStringLiteral("previous-backup-preserved") << 1 << false;
+    QTest::newRow("backup-published")
+        << QStringLiteral("backup-published") << 1 << false;
+    QTest::newRow("source-tombstoned")
+        << QStringLiteral("source-tombstoned") << 1 << false;
+    QTest::newRow("commit-marker")
+        << QStringLiteral("commit-marker") << 1 << true;
+    for (int occurrence = 1; occurrence <= 5; ++occurrence) {
+        QTest::newRow(
+            qPrintable(QStringLiteral("cleanup-%1").arg(occurrence)))
+            << QStringLiteral("cleanup-file") << occurrence << true;
+    }
+    for (const QString &phase :
+         {QStringLiteral("journal-manifest-removed"),
+          QStringLiteral("journal-commit-marker-removed"),
+          QStringLiteral("journal-directory-removed")}) {
+        QTest::newRow(qPrintable(phase)) << phase << 1 << true;
+    }
+}
+
+void TestRideCacheRemoval::
+ordinaryDeletionCrashRecoversOnRestart()
+{
+    QFETCH(QString, crashPhase);
+    QFETCH(int, crashOccurrence);
+    QFETCH(bool, committed);
+
+    static const char RootEnvironment[] =
+        "GC_RIDE_CACHE_ORDINARY_REMOVAL_CRASH_ROOT";
+    static const char ModeEnvironment[] =
+        "GC_RIDE_CACHE_ORDINARY_REMOVAL_CRASH_MODE";
+    const QString root = qEnvironmentVariable(RootEnvironment);
+    const QString mode = qEnvironmentVariable(ModeEnvironment);
+
+    if (!root.isEmpty()) {
+        std::unique_ptr<Context> context(new Context(nullptr));
+        std::unique_ptr<Athlete> athlete(
+            new Athlete(context.get(), QDir(root)));
+        std::unique_ptr<RideCache> cache(new RideCache(context.get()));
+        athlete->rideCache = cache.get();
+
+        if (mode == QStringLiteral("recover")) {
+            if (!cache->startupRecoveryError().isEmpty())
+                std::_Exit(87);
+            return;
+        }
+
+        RideItem *target = new RideItem(nullptr, context.get());
+        target->fileName = firstName();
+        target->path = athlete->home->activities().absolutePath();
+        cache->mutableRidesForRemovalTest().append(target);
+        context->ride = target;
+
+        writeFixture(
+            athlete->home->activities().filePath(firstName()),
+            QByteArray("newest-activity"));
+        writeFixture(
+            athlete->home->fileBackup().filePath(
+                firstName() + QStringLiteral(".bak")),
+            QByteArray("previous-backup"));
+        const QString baseName = QFileInfo(firstName()).baseName();
+        for (const QString &extension :
+             {QStringLiteral("cpx"),
+              QStringLiteral("cpi"),
+              QStringLiteral("notes")}) {
+            writeFixture(
+                athlete->home->cache().filePath(
+                    baseName + QLatin1Char('.') + extension),
+                extension.toLatin1() + "-derived");
+        }
+
+        cache->removeRideResult(target);
+        QFAIL("ordinary deletion child did not stop at the requested transition");
+    }
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const auto runChild = [&](const QString &childMode,
+                              const QString &requestedCrashPhase) {
+        QProcess child;
+        QProcessEnvironment environment =
+            QProcessEnvironment::systemEnvironment();
+        environment.remove(QStringLiteral(
+            "GC_RIDE_CACHE_REMOVAL_CRASH_PHASE"));
+        environment.remove(QStringLiteral(
+            "GC_RIDE_CACHE_REMOVAL_CRASH_OCCURRENCE"));
+        environment.insert(RootEnvironment, temporary.path());
+        environment.insert(ModeEnvironment, childMode);
+        environment.insert(
+            QStringLiteral("QT_QPA_PLATFORM"),
+            QStringLiteral("offscreen"));
+        if (!requestedCrashPhase.isEmpty()) {
+            environment.insert(
+                QStringLiteral("GC_RIDE_CACHE_REMOVAL_CRASH_PHASE"),
+                requestedCrashPhase);
+            environment.insert(
+                QStringLiteral("GC_RIDE_CACHE_REMOVAL_CRASH_OCCURRENCE"),
+                QString::number(crashOccurrence));
+        }
+        child.setProcessEnvironment(environment);
+        child.start(
+            QCoreApplication::applicationFilePath(),
+            {QStringLiteral("ordinaryDeletionCrashRecoversOnRestart:%1")
+                 .arg(QString::fromLatin1(QTest::currentDataTag()))});
+        if (!child.waitForStarted(5000))
+            return qMakePair(-1, child.errorString());
+        if (!child.waitForFinished(10000)) {
+            child.kill();
+            child.waitForFinished();
+            return qMakePair(-2, QStringLiteral("child timed out"));
+        }
+        return qMakePair(
+            child.exitCode(), QString::fromUtf8(child.readAll()));
+    };
+
+    const auto crashed = runChild(QStringLiteral("delete"), crashPhase);
+    QCOMPARE(crashed.first, 86);
+
+    const auto recovered = runChild(QStringLiteral("recover"), QString());
+    QCOMPARE(recovered.first, 0);
+
+    const QDir rootDirectory(temporary.path());
+    const QString sourcePath = rootDirectory.filePath(
+        QStringLiteral("activities/") + firstName());
+    const QString backupPath = rootDirectory.filePath(
+        QStringLiteral("bak/") + firstName() + QStringLiteral(".bak"));
+    const QString baseName = QFileInfo(firstName()).baseName();
+    if (committed) {
+        QVERIFY(!QFileInfo::exists(sourcePath));
+        QCOMPARE(readBytes(backupPath), QByteArray("newest-activity"));
+    } else {
+        QCOMPARE(readBytes(sourcePath), QByteArray("newest-activity"));
+        QCOMPARE(readBytes(backupPath), QByteArray("previous-backup"));
+    }
+    for (const QString &extension :
+         {QStringLiteral("cpx"),
+          QStringLiteral("cpi"),
+          QStringLiteral("notes")}) {
+        const QString derivedPath = rootDirectory.filePath(
+            QStringLiteral("cache/") + baseName + QLatin1Char('.')
+            + extension);
+        if (committed) {
+            QVERIFY(!QFileInfo::exists(derivedPath));
+        } else {
+            QCOMPARE(
+                readBytes(derivedPath),
+                extension.toLatin1() + "-derived");
+        }
+    }
+
+    const bool sourceExists = QFileInfo::exists(sourcePath);
+    const QByteArray sourceContents = readBytes(sourcePath);
+    const QByteArray backupContents = readBytes(backupPath);
+    const auto recoveredAgain = runChild(
+        QStringLiteral("recover"), QString());
+    QCOMPARE(recoveredAgain.first, 0);
+    QCOMPARE(QFileInfo::exists(sourcePath), sourceExists);
+    QCOMPARE(readBytes(sourcePath), sourceContents);
+    QCOMPARE(readBytes(backupPath), backupContents);
+
+    const QDir transactionRoot(rootDirectory.filePath(
+        QStringLiteral(".gc-transactions/linked-removal")));
+    QVERIFY(!transactionRoot.exists()
+        || transactionRoot.entryList(
+            QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot).isEmpty());
+    QDirIterator artifacts(
+        temporary.path(),
+        QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot,
+        QDirIterator::Subdirectories);
+    while (artifacts.hasNext()) {
+        const QString path = artifacts.next();
+        const QString name = QFileInfo(path).fileName();
+        const bool transactionSidecar =
+            name.contains(QStringLiteral(".gc-copy-"))
+            || name.contains(QStringLiteral(".gc-remove-"))
+            || name.contains(QStringLiteral(".gc-previous-"));
+        QVERIFY2(
+            !transactionSidecar || name.endsWith(QStringLiteral(".lock")),
             qPrintable(path));
     }
 }
@@ -4723,7 +4987,9 @@ stagingCleanupFailureRequiresRecoveryAndStopsBatch()
             QDir backupDirectory(backupInfo.absolutePath());
             const QStringList stagingNames = backupDirectory.entryList(
                 {QStringLiteral(".%1.gc-copy-*")
-                     .arg(backupInfo.fileName())},
+                     .arg(backupInfo.fileName()),
+                 backupInfo.fileName()
+                     + QStringLiteral(".gc-copy-*")},
                 QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot);
             QCOMPARE(stagingNames.size(), 1);
             retainedStagingPath =
@@ -4819,7 +5085,11 @@ sharedLegacySidecarsSurviveNamespaceRemoval()
             firstName(), QStringLiteral("cpi")),
         cpi);
 
-    QVERIFY(fixture.cache->removeRide(planned));
+    const RideCache::RemovalResult result =
+        fixture.cache->removeRideResult(planned);
+    QVERIFY2(
+        result.allLogicallyRemoved(),
+        qPrintable(result.error));
 
     QCOMPARE(fixture.cache->count(), 1);
     QCOMPARE(fixture.cache->rides().constFirst(), completed);

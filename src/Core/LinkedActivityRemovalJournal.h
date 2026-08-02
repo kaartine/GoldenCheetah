@@ -24,7 +24,7 @@ struct Specification
     QString athleteRoot;
     QString sourcePath;
     QString backupPath;
-    QString peerPath;
+    QString peerPath; // Empty for an unlinked activity deletion.
     QStringList derivedPaths;
 };
 
