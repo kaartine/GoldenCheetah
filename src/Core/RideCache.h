@@ -256,6 +256,14 @@ class RideCache : public QObject
                 QString &error)> stage;
         };
 
+        struct PlannedReplacementCoordinator {
+            std::function<bool(
+                const QString &journalPath,
+                bool &committed,
+                QString &error)> commit;
+            std::function<bool(QString &error)> complete;
+        };
+
         struct PlannedReplacementResult {
             bool committed = false;
             bool cacheUpdated = false;
@@ -358,7 +366,8 @@ class RideCache : public QObject
             const QList<RideItem*> &activitiesToReplace,
             const QStringList &inputPaths,
             const QList<PlannedActivityTarget> &targets,
-            bool notifyAdded = false);
+            bool notifyAdded = false,
+            const PlannedReplacementCoordinator &coordinator = {});
         PlannedReplacementResult replacePlannedActivities(
             const QList<RideItem*> &activitiesToReplace,
             const QList<std::pair<RideItem*, QDate>>

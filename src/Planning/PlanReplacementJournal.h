@@ -33,6 +33,10 @@ class Journal
 public:
     static std::shared_ptr<Journal> prepare(
         const Specification &specification, QString &error);
+    static std::shared_ptr<Journal> openPrepared(
+        const QString &athleteRoot,
+        const QString &transactionId,
+        QString &error);
     static bool reconcileAll(const QString &athleteRoot, QString &error);
 
     int targetCount() const;

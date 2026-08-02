@@ -18,12 +18,21 @@
 
 #include "PlanBundle.h"
 
+#include <QCryptographicHash>
+#include <QFileInfo>
 #include <QPointer>
+#include <QSet>
+#include <QThread>
+#include <QUuid>
 
+#include <memory>
 #include <utility>
+#include <vector>
 
+#include "AtomicFileWriter.h"
 #include "Athlete.h"
 #include "AthleteTab.h"
+#include "PlanBundleImportJournal.h"
 #include "RideCache.h"
 #include "TrainDB.h"
 #include "ErgFile.h"
@@ -39,6 +48,474 @@ static bool scaleOverride(QMap<QString, QMap<QString, QString>> &overrides, cons
 
 static constexpr int baselinePower = 300;
 static constexpr int md5HashLength = 32;
+static constexpr qint64 maximumPlanWorkoutSize =
+    64LL * 1024 * 1024;
+static constexpr qint64 maximumPlanWorkoutPayload =
+    256LL * 1024 * 1024;
+
+
+namespace {
+
+class ScopedPlanRideFiles final
+{
+public:
+    ~ScopedPlanRideFiles()
+    {
+        for (const QPointer<RideFile> &ride :
+             std::as_const(files_)) {
+            if (ride) delete ride.data();
+        }
+    }
+
+    void append(RideFile *ride)
+    {
+        files_.append(QPointer<RideFile>(ride));
+    }
+
+private:
+    QVector<QPointer<RideFile>> files_;
+};
+
+
+struct WorkoutPreparationState
+{
+    QString workoutRoot;
+    QHash<QString, QString> databaseHashes;
+    QHash<QString, QString> resolvedHashes;
+    QHash<QString, QByteArray> contentsByHash;
+    QHash<QString, QByteArray> contentsByReference;
+    QSet<QString> reservedTargetKeys;
+    QList<TrainDB::PlanImportWorkout> imports;
+    qint64 aggregatePayloadSize = 0;
+    bool initialized = false;
+};
+
+
+bool directRegularFilePath(
+    const QDir &directory,
+    const QString &fileName,
+    QString &path,
+    QString &error)
+{
+    path.clear();
+    if (fileName.isEmpty()
+        || QFileInfo(fileName).fileName() != fileName
+        || fileName.contains(QLatin1Char('/'))
+        || fileName.contains(QLatin1Char('\\'))) {
+        error = QObject::tr("A plan bundle file name is invalid");
+        return false;
+    }
+
+    const QString root = directory.canonicalPath();
+    const QFileInfo info(directory.filePath(fileName));
+    const QString parent = QFileInfo(
+        info.absolutePath()).canonicalFilePath();
+    const QString absolute = QDir::cleanPath(
+        info.absoluteFilePath());
+    if (root.isEmpty() || parent.isEmpty()
+        || info.isSymLink() || !info.exists()
+        || !info.isFile()
+        || atomicFilePathKey(parent)
+            != atomicFilePathKey(root)
+        || atomicFilePathKey(absolute)
+            != atomicFilePathKey(
+                QDir(root).filePath(fileName))) {
+        error = QObject::tr(
+            "A plan bundle file is unavailable or unsafe: %1")
+                    .arg(fileName);
+        return false;
+    }
+    path = absolute;
+    return true;
+}
+
+
+bool readBoundedFile(
+    const QString &path,
+    QByteArray &contents,
+    QString &error)
+{
+    contents.clear();
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        error = QObject::tr("Cannot read workout %1: %2")
+                    .arg(QFileInfo(path).fileName(),
+                         file.errorString());
+        return false;
+    }
+    const qint64 expectedSize = file.size();
+    if (expectedSize < 0
+        || expectedSize > maximumPlanWorkoutSize) {
+        error = QObject::tr(
+            "Workout %1 is too large to import")
+                    .arg(QFileInfo(path).fileName());
+        return false;
+    }
+    contents = file.read(maximumPlanWorkoutSize + 1);
+    if (contents.size() != expectedSize
+        || contents.size() > maximumPlanWorkoutSize
+        || file.error() != QFileDevice::NoError) {
+        contents.clear();
+        error = QObject::tr(
+            "Workout %1 changed or could not be read completely")
+                    .arg(QFileInfo(path).fileName());
+        return false;
+    }
+    return true;
+}
+
+
+bool validateWorkoutFile(
+    const QString &path,
+    const QByteArray &expectedContents,
+    Context *context,
+    QString &error)
+{
+    ErgFile workout(path, ErgFileFormat::unknown, context);
+    if (!workout.isValid()) {
+        error = QObject::tr("Workout %1 is invalid")
+                    .arg(QFileInfo(path).fileName());
+        return false;
+    }
+    QByteArray stableContents;
+    if (!readBoundedFile(path, stableContents, error))
+        return false;
+    if (stableContents != expectedContents) {
+        error = QObject::tr(
+            "Workout %1 changed while it was being validated")
+                    .arg(QFileInfo(path).fileName());
+        return false;
+    }
+    return true;
+}
+
+
+bool resolveWorkoutRoot(
+    Context *context,
+    QString &workoutRoot,
+    QString &error)
+{
+    workoutRoot.clear();
+    if (!context || !context->athlete
+        || !context->athlete->home) {
+        error = QObject::tr(
+            "The athlete is unavailable for workout import");
+        return false;
+    }
+    QString configured = appsettings->value(
+        nullptr, GC_WORKOUTDIR).toString();
+    if (configured.isEmpty()) {
+        QDir root = context->athlete->home->root();
+        if (!root.cdUp()) {
+            error = QObject::tr(
+                "The workout library cannot be resolved");
+            return false;
+        }
+        configured = root.absolutePath();
+    }
+
+    const QFileInfo info(configured);
+    const QString canonical = QDir::cleanPath(
+        info.canonicalFilePath());
+    if (!info.exists() || !info.isDir()
+        || canonical.isEmpty()) {
+        error = QObject::tr(
+            "The workout library is unavailable");
+        return false;
+    }
+    workoutRoot = canonical;
+    return true;
+}
+
+
+QString uniqueWorkoutTargetName(
+    const PlanBundleWorkoutReference &reference,
+    const QString &workoutRoot,
+    QSet<QString> &reservedTargetKeys)
+{
+    const QString suffix =
+        QFileInfo(reference.originalFileName).suffix();
+    const QString extension = suffix.isEmpty()
+        ? QString()
+        : QLatin1Char('.') + suffix;
+    QStringList candidates {
+        reference.originalFileName,
+        reference.hash + extension};
+    for (const QString &candidate : std::as_const(candidates)) {
+        const QString path = QDir(workoutRoot).filePath(candidate);
+        const QString key = atomicFilePathKey(path);
+        const QFileInfo info(path);
+        if (!reservedTargetKeys.contains(key)
+            && !info.exists() && !info.isSymLink()) {
+            reservedTargetKeys.insert(key);
+            return candidate;
+        }
+    }
+    while (true) {
+        const QString candidate = QUuid::createUuid()
+            .toString(QUuid::WithoutBraces).toLower()
+            + extension;
+        const QString path = QDir(workoutRoot).filePath(candidate);
+        const QString key = atomicFilePathKey(path);
+        const QFileInfo info(path);
+        if (!reservedTargetKeys.contains(key)
+            && !info.exists() && !info.isSymLink()) {
+            reservedTargetKeys.insert(key);
+            return candidate;
+        }
+    }
+}
+
+
+bool prepareWorkoutReference(
+    RideFile *rideFile,
+    Context *context,
+    TrainDB *database,
+    const QDir &bundleWorkoutDir,
+    WorkoutPreparationState &state,
+    QString &error)
+{
+    const QString packedName = rideFile->getTag(
+        "WorkoutFilename", "");
+    if (packedName.isEmpty()) return true;
+
+    PlanBundleWorkoutReference reference;
+    if (!parsePlanBundleWorkoutReference(
+            packedName, reference)) {
+        error = QObject::tr(
+            "Linked workout has an invalid bundle reference: %1")
+                    .arg(packedName);
+        return false;
+    }
+    if (!database) {
+        error = QObject::tr(
+            "The workout database is unavailable");
+        return false;
+    }
+    if (!state.initialized) {
+        const TrainDB::SchemaStatus status =
+            database->schemaStatus();
+        if (QThread::currentThread() != database->thread()
+            || (status != TrainDB::SchemaStatus::current
+                && status
+                    != TrainDB::SchemaStatus::migrationReady)
+            || !resolveWorkoutRoot(
+                context, state.workoutRoot, error)) {
+            if (error.isEmpty()) {
+                error = QObject::tr(
+                    "The workout database is unavailable for plan import");
+            }
+            return false;
+        }
+        state.databaseHashes = database->getWorkoutHashes();
+        state.initialized = true;
+    }
+
+    QByteArray contents;
+    const auto cachedReference =
+        state.contentsByReference.constFind(packedName);
+    if (cachedReference != state.contentsByReference.cend()) {
+        contents = cachedReference.value();
+    } else {
+        QString sourcePath;
+        if (!directRegularFilePath(
+                bundleWorkoutDir, packedName,
+                sourcePath, error)
+            || !readBoundedFile(
+                sourcePath, contents, error)
+            || QCryptographicHash::hash(
+                   contents, QCryptographicHash::Md5).toHex()
+                != reference.hash.toLatin1()
+            || !validateWorkoutFile(
+                sourcePath, contents, context, error)) {
+            if (error.isEmpty()) {
+                error = QObject::tr(
+                    "Workout %1 does not match its bundle hash")
+                            .arg(packedName);
+            }
+            return false;
+        }
+        if (state.aggregatePayloadSize
+                > maximumPlanWorkoutPayload - contents.size()) {
+            error = QObject::tr(
+                "The plan bundle contains too much workout data");
+            return false;
+        }
+        state.aggregatePayloadSize += contents.size();
+        state.contentsByReference.insert(packedName, contents);
+    }
+
+    const auto sameHash =
+        state.contentsByHash.constFind(reference.hash);
+    if (sameHash != state.contentsByHash.cend()
+        && sameHash.value() != contents) {
+        error = QObject::tr(
+            "Two linked workouts use the same hash for different contents");
+        return false;
+    }
+    if (sameHash == state.contentsByHash.cend())
+        state.contentsByHash.insert(reference.hash, contents);
+
+    const auto resolved =
+        state.resolvedHashes.constFind(reference.hash);
+    if (resolved != state.resolvedHashes.cend()) {
+        rideFile->setTag("WorkoutFilename", resolved.value());
+        return true;
+    }
+
+    const auto existing =
+        state.databaseHashes.constFind(reference.hash);
+    if (existing != state.databaseHashes.cend()) {
+        const QString existingPath = QDir::cleanPath(
+            QFileInfo(existing.value()).absoluteFilePath());
+        const QFileInfo existingInfo(existingPath);
+        QByteArray existingContents;
+        if (!QDir::isAbsolutePath(existing.value())
+            || existingInfo.isSymLink()
+            || !existingInfo.exists() || !existingInfo.isFile()
+            || !readBoundedFile(
+                existingPath, existingContents, error)
+            || existingContents != contents
+            || !validateWorkoutFile(
+                existingPath, existingContents,
+                context, error)) {
+            if (error.isEmpty()) {
+                error = QObject::tr(
+                    "An existing workout with hash %1 is unavailable or differs from the bundle")
+                            .arg(reference.hash);
+            }
+            return false;
+        }
+        state.resolvedHashes.insert(
+            reference.hash, existingPath);
+        rideFile->setTag("WorkoutFilename", existingPath);
+        return true;
+    }
+
+    const QString targetName = uniqueWorkoutTargetName(
+        reference, state.workoutRoot,
+        state.reservedTargetKeys);
+    const QString targetPath =
+        QDir(state.workoutRoot).filePath(targetName);
+    state.imports.append({targetName, contents, {}});
+    state.resolvedHashes.insert(reference.hash, targetPath);
+    rideFile->setTag("WorkoutFilename", targetPath);
+    return true;
+}
+
+
+PlanBundleImport::DatabaseCompletion planImportDatabaseCompletion(
+    Context *context,
+    TrainDB *database)
+{
+    const QPointer<Context> guardedContext(context);
+    const QPointer<Athlete> guardedAthlete(
+        guardedContext ? guardedContext->athlete : nullptr);
+    const QPointer<TrainDB> guardedDatabase(database);
+    return [guardedContext, guardedAthlete, guardedDatabase](
+        const TrainDB::PlanImportJournal &journal,
+        QString &error) {
+        const auto ownersValid = [&] {
+            return guardedContext && guardedAthlete
+                && guardedDatabase
+                && guardedContext->athlete
+                    == guardedAthlete.data()
+                && guardedAthlete->context
+                    == guardedContext.data()
+                && QThread::currentThread()
+                    == guardedDatabase->thread();
+        };
+        if (!ownersValid()) {
+            error = QObject::tr(
+                "The athlete or workout database was closed during plan recovery");
+            return false;
+        }
+
+        std::vector<std::unique_ptr<ErgFile>> workouts;
+        QStringList paths;
+        workouts.reserve(journal.workouts.size());
+        paths.reserve(journal.workouts.size());
+        for (const TrainDB::PlanImportWorkout &record :
+             journal.workouts) {
+            QString path;
+            QByteArray contents;
+            if (!directRegularFilePath(
+                    QDir(journal.workoutRoot),
+                    record.targetFileName,
+                    path, error)
+                || !readBoundedFile(path, contents, error)
+                || contents.size() != record.contents.size()
+                || QCryptographicHash::hash(
+                       contents, QCryptographicHash::Sha256)
+                    != record.digest) {
+                if (error.isEmpty()) {
+                    error = QObject::tr(
+                        "A published workout changed before database import");
+                }
+                return false;
+            }
+            auto workout = std::make_unique<ErgFile>(
+                path, ErgFileFormat::unknown,
+                guardedContext.data());
+            if (!workout->isValid()) {
+                error = QObject::tr(
+                    "Published workout %1 is invalid")
+                            .arg(record.targetFileName);
+                return false;
+            }
+            QByteArray stableContents;
+            if (!readBoundedFile(
+                    path, stableContents, error)
+                || stableContents != contents
+                || !ownersValid()) {
+                if (error.isEmpty()) {
+                    error = QObject::tr(
+                        "A published workout or its owner changed during database import");
+                }
+                return false;
+            }
+            paths.append(path);
+            workouts.push_back(std::move(workout));
+        }
+
+        if (!guardedDatabase->startLUW()) {
+            error = QObject::tr(
+                "Cannot start the workout database transaction");
+            return false;
+        }
+        const auto rollback = [&] {
+            if (guardedDatabase)
+                guardedDatabase->rollbackLUW();
+            return false;
+        };
+        for (qsizetype index = 0;
+             index < paths.size(); ++index) {
+            if (!ownersValid()
+                || !guardedDatabase->importWorkout(
+                    paths.at(index), *workouts.at(index),
+                    ImportMode::insertOrUpdate)) {
+                error = QObject::tr(
+                    "Workout %1 could not be written to the workout database")
+                            .arg(QFileInfo(paths.at(index)).fileName());
+                return rollback();
+            }
+        }
+        if (!guardedDatabase->removePlanImportJournal(
+                journal.id, error)) {
+            return rollback();
+        }
+        const bool committed =
+            guardedDatabase->endLUW();
+        if (!committed) {
+            error = QObject::tr(
+                "The workout database transaction could not be committed");
+            return rollback();
+        }
+        return true;
+    };
+}
+
+} // namespace
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -216,6 +693,7 @@ PlanResult::reset
 {
     errors.clear();
     warnings.clear();
+    committed = false;
 }
 
 
@@ -223,8 +701,10 @@ PlanResult::reset
 // RideFileSelection
 
 RideFileSelection::RideFileSelection
-(RideFile *rideFile, bool selected, const QDateTime &dt)
-: selected(selected), targetDateTime(dt), rideFile(rideFile)
+(RideFile *rideFile, bool selected, const QDateTime &dt,
+ const QString &sourceFileName)
+: selected(selected), targetDateTime(dt), rideFile(rideFile),
+  sourceFileName(sourceFileName)
 {
 }
 
@@ -234,6 +714,14 @@ RideFileSelection::getRideFile
 () const
 {
     return rideFile;
+}
+
+
+QString
+RideFileSelection::getSourceFileName
+() const
+{
+    return sourceFileName;
 }
 
 
@@ -314,7 +802,16 @@ PlanBundleReader::loadBundle
 
     QFileInfoList plannedList = plannedDir.entryInfoList(QDir::Files);
     for (const QFileInfo &fileInfo : plannedList) {
-        QFile sourceFile(fileInfo.absoluteFilePath());
+        QString sourcePath;
+        QString sourceError;
+        if (!directRegularFilePath(
+                plannedDir, fileInfo.fileName(),
+                sourcePath, sourceError)) {
+            lastValidationResult.addError(sourceError);
+            reset();
+            return lastValidationResult;
+        }
+        QFile sourceFile(sourcePath);
         QStringList errors;
         RideFile *rideFile = RideFileFactory::instance().openRideFile(context, sourceFile, errors);
         if (! rideFile) {
@@ -322,7 +819,9 @@ PlanBundleReader::loadBundle
             reset();
             return lastValidationResult;
         }
-        rideFiles << RideFileSelection { rideFile, true, rideFile->startTime() };
+        rideFiles << RideFileSelection {
+            rideFile, true, rideFile->startTime(),
+            fileInfo.fileName() };
     }
     if (rideFiles.count() == 0) {
         lastValidationResult.addWarning(QObject::tr("No activities in bundle"));
@@ -371,12 +870,18 @@ PlanBundleReader::importBundle
         lastImportResult.addError(QObject::tr("Current bundle is invalid"));
         return lastImportResult;
     }
+    if (getNumSelectedActivities() == 0) {
+        lastImportResult.addError(
+            QObject::tr("Select at least one activity to import"));
+        return lastImportResult;
+    }
 
     QPointer<Context> guardedContext(context);
     QPointer<Athlete> guardedAthlete(
         guardedContext ? guardedContext->athlete : nullptr);
     QPointer<RideCache> guardedCache(
         guardedAthlete ? guardedAthlete->rideCache : nullptr);
+    QPointer<TrainDB> guardedDatabase(trainDB);
     const auto ownersValid = [&]() {
         return guardedContext && guardedAthlete
             && guardedCache
@@ -416,58 +921,185 @@ PlanBundleReader::importBundle
         getRideItemsToRemove();
     if (!requireOwners())
         return lastImportResult;
-    if (!ridesToRemove.isEmpty()) {
-        const RideCache::RemovalResult removal =
-            guardedCache->removeRidesResult(
-                ridesToRemove, false);
-        if (!requireOwners())
-            return lastImportResult;
-        if (!removal.allLogicallyRemoved()) {
-            lastImportResult.addError(
-                removal.error.isEmpty()
-                ? QObject::tr(
-                    "Failed to remove conflicting activities")
-                : removal.error);
-            if (removal.affectedCount > 0)
-                guardedCache->refresh();
-            return lastImportResult;
-        }
-        if (!removal.cleanlyCompleted()) {
-            lastImportResult.addWarning(
-                removal.error);
-        }
-    }
+
+    ScopedPlanRideFiles preparedRides;
+    WorkoutPreparationState workoutState;
+    QList<RideCache::PlannedActivityTarget> targets;
+    targets.reserve(getNumSelectedActivities());
+    QSet<QString> targetNames;
     for (const RideFileSelection &entry : rideFiles) {
-        if (entry.selected) {
-            if (!requireOwners())
-                return lastImportResult;
-            const bool workoutProcessed =
-                processWorkout(entry.getRideFile());
-            if (!requireOwners())
-                return lastImportResult;
-            if (!workoutProcessed) {
-                lastImportResult.addWarning(QObject::tr("Failed to process the attached workout"));
-            }
-            const bool activityCopied = cleanAndCopyActivity(
-                entry.getRideFile(), entry.targetDateTime);
-            if (!requireOwners())
-                return lastImportResult;
-            if (!activityCopied) {
-                lastImportResult.addError(QObject::tr("Failed to import activity"));
-                return lastImportResult;
-            }
-            guardedCache->addRide(
-                entry.getRideFile()->getTag("Filename", ""),
-                true, false, false, true);
-            if (!requireOwners())
-                return lastImportResult;
+        if (!entry.selected) continue;
+        if (!requireOwners()) return lastImportResult;
+
+        QString sourcePath;
+        QString preparationError;
+        if (!directRegularFilePath(
+                plannedDir, entry.getSourceFileName(),
+                sourcePath, preparationError)) {
+            lastImportResult.addError(preparationError);
+            return lastImportResult;
+        }
+        QFile source(sourcePath);
+        QStringList parseErrors;
+        RideFile *prepared = RideFileFactory::instance()
+            .openRideFile(
+                guardedContext.data(), source, parseErrors);
+        if (!prepared) {
+            lastImportResult.addError(
+                parseErrors.isEmpty()
+                ? QObject::tr("Failed to reload activity %1")
+                      .arg(entry.getSourceFileName())
+                : parseErrors.join(QStringLiteral("; ")));
+            return lastImportResult;
+        }
+        preparedRides.append(prepared);
+        if (prepared->startTime()
+                != entry.getRideFile()->startTime()) {
+            lastImportResult.addError(
+                QObject::tr(
+                    "Activity %1 changed after bundle validation")
+                        .arg(entry.getSourceFileName()));
+            return lastImportResult;
+        }
+        if (!prepareWorkoutReference(
+                prepared, guardedContext.data(),
+                guardedDatabase.data(), workoutDir,
+                workoutState, preparationError)) {
+            lastImportResult.addError(preparationError);
+            return lastImportResult;
+        }
+        if (!requireOwners()) return lastImportResult;
+        if (workoutState.initialized
+            && (!guardedDatabase
+                || QThread::currentThread()
+                    != guardedDatabase->thread())) {
+            lastImportResult.addError(
+                QObject::tr(
+                    "The workout database was closed during plan import"));
+            return lastImportResult;
+        }
+
+        QString targetFileName;
+        if (!prepareActivity(
+                prepared, entry.targetDateTime,
+                targetFileName, preparationError)) {
+            lastImportResult.addError(
+                preparationError.isEmpty()
+                ? QObject::tr("Failed to prepare an activity")
+                : preparationError);
+            return lastImportResult;
+        }
+        if (targetNames.contains(targetFileName)) {
+            lastImportResult.addError(
+                QObject::tr(
+                    "Two imported activities have the same target time: %1")
+                        .arg(targetFileName));
+            return lastImportResult;
+        }
+        targetNames.insert(targetFileName);
+
+        const QPointer<RideFile> guardedRide(prepared);
+        targets.append({
+            targetFileName,
+            [guardedContext, guardedAthlete, guardedCache,
+             guardedRide, targetFileName]
+            (const QString &stagingPath, QString &error) {
+                const auto stable = [&] {
+                    return guardedContext && guardedAthlete
+                        && guardedCache && guardedRide
+                        && guardedContext->athlete
+                            == guardedAthlete.data()
+                        && guardedAthlete->rideCache
+                            == guardedCache.data();
+                };
+                if (!stable()) {
+                    error = QObject::tr(
+                        "The athlete or prepared activity was closed before staging");
+                    return false;
+                }
+                QFile staged(stagingPath);
+                if (!RideFileFactory::instance().writeRideFile(
+                        guardedContext.data(),
+                        guardedRide.data(), staged,
+                        QStringLiteral("json"))) {
+                    error = QObject::tr(
+                        "Failed to stage activity %1")
+                            .arg(targetFileName);
+                    return false;
+                }
+                if (!stable()) {
+                    error = QObject::tr(
+                        "The athlete or prepared activity changed during staging");
+                    return false;
+                }
+                return true;
+            }});
+    }
+
+    if (!requireOwners()) return lastImportResult;
+    RideCache::PlannedReplacementCoordinator coordinator;
+    std::shared_ptr<PlanBundleImport::Journal> importJournal;
+    if (!workoutState.imports.isEmpty()) {
+        if (!guardedDatabase) {
+            lastImportResult.addError(
+                QObject::tr("The workout database is unavailable"));
+            return lastImportResult;
+        }
+        QString journalError;
+        importJournal = PlanBundleImport::Journal::create(
+            guardedDatabase.data(),
+            guardedAthlete->home->root().absolutePath(),
+            workoutState.workoutRoot,
+            workoutState.imports, journalError);
+        if (!importJournal) {
+            lastImportResult.addError(
+                journalError.isEmpty()
+                ? QObject::tr(
+                    "Cannot prepare the durable plan import")
+                : journalError);
+            return lastImportResult;
+        }
+        const PlanBundleImport::DatabaseCompletion
+            completeDatabase = planImportDatabaseCompletion(
+                guardedContext.data(), guardedDatabase.data());
+        coordinator.commit = [importJournal](
+            const QString &journalPath,
+            bool &committed,
+            QString &error) {
+            return importJournal->commitDecision(
+                journalPath, committed, error);
+        };
+        coordinator.complete = [importJournal, completeDatabase](
+            QString &error) {
+            return importJournal->completePublishedPlan(
+                completeDatabase, error);
+        };
+    }
+
+    const RideCache::PlannedReplacementResult replacement =
+        guardedCache->replacePlannedActivityFiles(
+            ridesToRemove, {}, targets, true, coordinator);
+    lastImportResult.committed = replacement.committed;
+    for (const QString &warning : replacement.warnings)
+        lastImportResult.addWarning(warning);
+
+    const bool countsMatch =
+        replacement.removedCount == ridesToRemove.size()
+        && replacement.addedCount == targets.size();
+    if (!replacement.cleanlyCompleted() || !countsMatch) {
+        lastImportResult.addError(
+            !replacement.error.isEmpty()
+            ? replacement.error
+            : (!countsMatch
+                ? QObject::tr(
+                    "The committed plan is not fully represented in the activity cache")
+                : QObject::tr("Failed to import the plan")));
+        if (replacement.committed) {
+            lastImportResult.addWarning(
+                QObject::tr(
+                    "The import was committed. Do not import the bundle again; restart GoldenCheetah to complete recovery."));
         }
     }
-    if (!requireOwners())
-        return lastImportResult;
-    guardedCache->refresh();
-    if (!requireOwners())
-        return lastImportResult;
 
     return lastImportResult;
 }
@@ -620,7 +1252,6 @@ PlanBundleReader::reset
     daysToAdd = 0;
     plannedDir = QDir();
     workoutDir = QDir();
-    trainDBHashes.clear();
     toDelete.clear();
     existingLinked.clear();
 }
@@ -687,83 +1318,45 @@ PlanBundleReader::findConflicts
 
 
 bool
-PlanBundleReader::cleanAndCopyActivity
-(RideFile *rideFile, const QDateTime &targetDateTime) const
+PlanBundleReader::prepareActivity
+(RideFile *rideFile, const QDateTime &targetDateTime,
+ QString &targetFileName, QString &error) const
 {
-    QString targetFileName = updateTags(
+    targetFileName.clear();
+    error.clear();
+    if (!rideFile || !targetDateTime.isValid()
+        || !context || !context->athlete) {
+        error = QObject::tr(
+            "The activity or athlete is unavailable for plan import");
+        return false;
+    }
+
+    targetFileName = updateTags(
         rideFile, targetDateTime.date(), metadata.name);
 
     Zones const * const zones = context->athlete->zones(rideFile->getTag("Sport", ""));
     if (zones != nullptr) {
         int zonerange = zones->whichRange(rideFile->startTime().date());
-        int cp = zones->getCP(zonerange);
-        scaleOverride(rideFile->metricOverrides, "average_power", baselinePower, cp);
-        scaleOverride(rideFile->metricOverrides, "coggan_np", baselinePower, cp);
-        scaleOverride(rideFile->metricOverrides, "skiba_xpower", baselinePower, cp);
-    }
-
-    QString targetPath = context->athlete->home->planned().canonicalPath() + "/" + targetFileName;
-    QFile targetFile(targetPath);
-    if (! targetFile.exists()) {
-        if (! RideFileFactory::instance().writeRideFile(context, rideFile, targetFile, "json")) {
-            qWarning() << QString("Failed to write activity %1").arg(targetFileName);
-            return false;
+        if (zonerange >= 0) {
+            int cp = zones->getCP(zonerange);
+            scaleOverride(rideFile->metricOverrides, "average_power", baselinePower, cp);
+            scaleOverride(rideFile->metricOverrides, "coggan_np", baselinePower, cp);
+            scaleOverride(rideFile->metricOverrides, "skiba_xpower", baselinePower, cp);
         }
-    } else {
-        qWarning() << QString("Activity %1 already exists; skipping import").arg(targetFileName);
-        return false;
     }
-    return true;
-}
-
-
-bool
-PlanBundleReader::processWorkout
-(RideFile *rideFile)
-{
-    QString workoutFilename = rideFile->getTag("WorkoutFilename", "");
-    if (workoutFilename.isEmpty()) {
-        return true;
-    }
-    if (workoutFilename.length() >= md5HashLength + 1 && workoutFilename[md5HashLength] == '-') {
-        QString hash = workoutFilename.left(md5HashLength);
-        QString origFilename = workoutFilename.mid(md5HashLength + 1);
-        if (trainDBHashes.count() == 0) {
-            trainDBHashes = trainDB->getWorkoutHashes();
-        }
-        if (trainDBHashes.contains(hash)) {
-            rideFile->setTag("WorkoutFilename", trainDBHashes.value(hash));
-        } else {
-            QString gcWorkoutDir = appsettings->value(nullptr, GC_WORKOUTDIR).toString();
-            if (gcWorkoutDir == "") {
-                QDir root = context->athlete->home->root();
-                root.cdUp();
-                gcWorkoutDir = root.absolutePath();
-            }
-            QFile targetWorkoutFile(gcWorkoutDir + "/" + origFilename);
-            if (targetWorkoutFile.exists()) {
-                QFileInfo targetWorkoutFileInfo(targetWorkoutFile);
-                QString targetWorkoutExtension = "." + targetWorkoutFileInfo.suffix();
-                targetWorkoutFile.setFileName(gcWorkoutDir + "/" + hash + targetWorkoutExtension);
-                if (targetWorkoutFile.exists()) {
-                    targetWorkoutFile.setFileName(gcWorkoutDir + "/" + QUuid::createUuid().toString(QUuid::WithoutBraces) + targetWorkoutExtension);
-                }
-            }
-            QFile workout(workoutDir.filePath(workoutFilename));
-            if (workout.copy(targetWorkoutFile.fileName())) {
-                trainDB->startLUW();
-                ErgFile ergFile(targetWorkoutFile.fileName(), ErgFileFormat::unknown, context);
-                trainDB->importWorkout(targetWorkoutFile.fileName(), ergFile);
-                trainDB->endLUW();
-                rideFile->setTag("WorkoutFilename", targetWorkoutFile.fileName());
-                trainDBHashes.insert(hash, targetWorkoutFile.fileName());
-            } else {
-                return false;
-            }
-        }
-    } else {
-        qWarning("Linked workout has invalid name schema; removing link");
-        rideFile->removeTag("WorkoutFilename");
+    QDateTime parsedTarget;
+    if (!RideFile::parseRideFileName(
+            targetFileName, &parsedTarget)
+        || parsedTarget.date() != targetDateTime.date()
+        || parsedTarget.time().hour()
+            != targetDateTime.time().hour()
+        || parsedTarget.time().minute()
+            != targetDateTime.time().minute()
+        || parsedTarget.time().second()
+            != targetDateTime.time().second()) {
+        error = QObject::tr(
+            "The prepared activity has an invalid target identity");
+        targetFileName.clear();
         return false;
     }
     return true;
@@ -817,26 +1410,38 @@ PlanBundleReader::validate
     }
 
     QFileInfoList workoutDirList = workoutDir.entryInfoList(QDir::AllEntries | QDir::NoDotAndDotDot);
+    qint64 aggregateWorkoutSize = 0;
+    QSet<QString> availableWorkouts;
     for (const QFileInfo &fileInfo : workoutDirList) {
-        if (fileInfo.exists() && fileInfo.isFile()) {
-            ErgFile ergFile(workoutDir.filePath(fileInfo.fileName()), ErgFileFormat::unknown, context);
-            if (! ergFile.isValid()) {
-                lastValidationResult.addError(QObject::tr("Invalid workout file %1 in bundle").arg(fileInfo.fileName()));
-                return;
+        QString workoutPath;
+        QString workoutError;
+        QByteArray contents;
+        PlanBundleWorkoutReference reference;
+        if (!directRegularFilePath(
+                workoutDir, fileInfo.fileName(),
+                workoutPath, workoutError)
+            || !parsePlanBundleWorkoutReference(
+                fileInfo.fileName(), reference)
+            || !readBoundedFile(
+                workoutPath, contents, workoutError)
+            || aggregateWorkoutSize
+                > maximumPlanWorkoutPayload - contents.size()
+            || QCryptographicHash::hash(
+                   contents, QCryptographicHash::Md5).toHex()
+                != reference.hash.toLatin1()
+            || !validateWorkoutFile(
+                workoutPath, contents, context,
+                workoutError)) {
+            if (workoutError.isEmpty()) {
+                workoutError = QObject::tr(
+                    "Bad hash or filename for workout file (%1) in bundle")
+                                   .arg(fileInfo.fileName());
             }
-            // 2. Do all workout-filenames match the format?
-            // 5. Do all workouts match their hash?
-            QString hash = hashFile(workoutDir.filePath(fileInfo.fileName()));
-            if (   hash.length() != md5HashLength
-                || fileInfo.fileName().length() <= hash.length() + 2
-                || ! fileInfo.fileName().startsWith(hash + "-")) {
-                lastValidationResult.addError(QObject::tr("Bad hash or filename for workout file (%1) in bundle").arg(fileInfo.fileName()));
-                return;
-            }
-        } else {
-            lastValidationResult.addError(QObject::tr("Non-file %1 given in workout folder").arg(fileInfo.fileName()));
+            lastValidationResult.addError(workoutError);
             return;
         }
+        aggregateWorkoutSize += contents.size();
+        availableWorkouts.insert(fileInfo.fileName());
     }
 
     // 3. Are all workouts linked from an activity?
@@ -847,13 +1452,21 @@ PlanBundleReader::validate
         if (workoutFilename.isEmpty()) {
             continue;
         }
-        if (! QFile::exists(workoutDir.filePath(workoutFilename))) {
+        PlanBundleWorkoutReference reference;
+        QString workoutPath;
+        QString workoutError;
+        if (!parsePlanBundleWorkoutReference(
+                workoutFilename, reference)
+            || !availableWorkouts.contains(workoutFilename)
+            || !directRegularFilePath(
+                workoutDir, workoutFilename,
+                workoutPath, workoutError)) {
             lastValidationResult.addError(QObject::tr("Missing workout %1 linked from activity %2").arg(workoutFilename).arg(PlanBundle::getRideName(entry.getRideFile())));
             return;
         }
         workouts.insert(workoutFilename);
     }
-    if (workouts.count() != workoutDirList.count()) {
+    if (workouts != availableWorkouts) {
         lastValidationResult.addError(QObject::tr("Bundle contains unused workouts"));
         return;
     }
@@ -876,6 +1489,55 @@ PlanBundleReader::validate
 
 ////////////////////////////////////////////////////////////////////////////////
 // Namespace PlanBundle
+
+
+bool
+PlanBundle::reconcilePendingImport
+(Context *context, QString &error)
+{
+    error.clear();
+    const QPointer<Context> guardedContext(context);
+    const QPointer<Athlete> guardedAthlete(
+        guardedContext ? guardedContext->athlete : nullptr);
+    const QPointer<TrainDB> guardedDatabase(trainDB);
+    if (!guardedContext || !guardedAthlete
+        || !guardedDatabase
+        || guardedContext->athlete
+            != guardedAthlete.data()
+        || guardedAthlete->context
+            != guardedContext.data()
+        || !guardedAthlete->home) {
+        error = QObject::tr(
+            "The athlete or workout database is unavailable for plan recovery");
+        return false;
+    }
+
+    const QString athleteRoot = QDir::cleanPath(
+        guardedAthlete->home->root().canonicalPath());
+    if (athleteRoot.isEmpty()) {
+        error = QObject::tr(
+            "The athlete directory is unavailable for plan recovery");
+        return false;
+    }
+    TrainDB::PlanImportJournal pending;
+    bool found = false;
+    if (!guardedDatabase->loadPlanImportJournal(
+            athleteRoot, pending, found, error)) {
+        return false;
+    }
+    if (!found) return true;
+
+    QString workoutRoot;
+    if (!resolveWorkoutRoot(
+            guardedContext.data(), workoutRoot, error)) {
+        return false;
+    }
+    return PlanBundleImport::Journal::reconcileAll(
+        guardedDatabase.data(), athleteRoot, workoutRoot,
+        planImportDatabaseCompletion(
+            guardedContext.data(), guardedDatabase.data()),
+        error);
+}
 
 
 bool

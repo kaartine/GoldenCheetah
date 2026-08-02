@@ -419,6 +419,7 @@ private slots:
     void successfulReplacementSupportsAthleteRootScope();
     void incompleteStagingPreservesOldGeneration();
     void unrecordedStageIsDiscardedDuringRecovery();
+    void committedCoordinatorCanResumePreparedJournal();
     void rejectsUnsafeSpecifications_data();
     void rejectsUnsafeSpecifications();
     void allowsSymlinkRootWithoutTransactionNamespace();
@@ -620,6 +621,34 @@ void TestPlanReplacementJournal::unrecordedStageIsDiscardedDuringRecovery()
     QCOMPARE(readFile(paths.oldTwo), QByteArray("old generation two"));
     QVERIFY(!QFileInfo::exists(paths.newOne));
     QVERIFY(!QFileInfo::exists(paths.newTwo));
+    QVERIFY(journalNamespaceIsEmpty(temporary.path()));
+}
+
+void TestPlanReplacementJournal::
+committedCoordinatorCanResumePreparedJournal()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QVERIFY(createOldGeneration(temporary.path()));
+    QString error;
+    std::shared_ptr<PlanReplacement::Journal> journal =
+        PlanReplacement::Journal::prepare(
+            replacementSpecification(temporary.path()), error);
+    QVERIFY2(journal, qPrintable(error));
+    QVERIFY2(stageNewGeneration(journal, error), qPrintable(error));
+    const QString transactionId =
+        QFileInfo(journal->directoryPath()).fileName();
+    QVERIFY(!transactionId.isEmpty());
+    journal.reset();
+
+    journal = PlanReplacement::Journal::openPrepared(
+        temporary.path(), transactionId, error);
+    QVERIFY2(journal, qPrintable(error));
+    QVERIFY2(journal->publishAndCommit(error), qPrintable(error));
+    QVERIFY(journal->hasCommitMarker());
+    QVERIFY(verifyCrashGeneration(
+        temporary.path(), QStringLiteral("normal"), true));
+    QVERIFY2(journal->cleanupAfterCommit(error), qPrintable(error));
     QVERIFY(journalNamespaceIsEmpty(temporary.path()));
 }
 

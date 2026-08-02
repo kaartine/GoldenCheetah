@@ -152,6 +152,20 @@ class TrainDB : public QObject, public TagStore
             bool isEmpty() const { return files().isEmpty(); }
         };
 
+        struct PlanImportWorkout {
+            QString targetFileName;
+            QByteArray contents;
+            QByteArray digest;
+        };
+
+        struct PlanImportJournal {
+            QString id;
+            QString athleteRoot;
+            QString workoutRoot;
+            QString planJournalId;
+            QList<PlanImportWorkout> workouts;
+        };
+
         TrainDB(QDir home);
         ~TrainDB();
 
@@ -167,6 +181,18 @@ class TrainDB : public QObject, public TagStore
         bool startLUW();
         bool endLUW();
         void rollbackLUW();
+        bool commitPlanImportJournal(
+            const PlanImportJournal &journal,
+            bool &mayBeCommitted,
+            QString &error) const;
+        bool loadPlanImportJournal(
+            const QString &athleteRoot,
+            PlanImportJournal &journal,
+            bool &found,
+            QString &error) const;
+        bool removePlanImportJournal(
+            const QString &id,
+            QString &error) const;
 
         QAbstractTableModel *getWorkoutModel() const;
         QAbstractTableModel *getVideoModel() const;

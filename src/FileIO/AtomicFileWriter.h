@@ -124,6 +124,46 @@ struct AtomicFileSnapshot
     QByteArray digest;
 };
 
+inline bool atomicFileNameIsPortableComponent(
+    const QString &name)
+{
+    if (name.isEmpty() || name == QStringLiteral(".")
+        || name == QStringLiteral("..")
+        || QDir::isAbsolutePath(name)
+        || QFileInfo(name).fileName() != name
+        || name.endsWith(QLatin1Char(' '))
+        || name.endsWith(QLatin1Char('.'))
+        || name.toUtf8().size() > 240) {
+        return false;
+    }
+    static const QString forbidden =
+        QStringLiteral("<>:\"/\\|?*");
+    for (const QChar character : name) {
+        const ushort value = character.unicode();
+        if (value <= 0x1f || value == 0x7f
+            || forbidden.contains(character)) {
+            return false;
+        }
+    }
+
+    const int dot = name.indexOf(QLatin1Char('.'));
+    const QString stem = (dot < 0 ? name : name.left(dot))
+        .toUpper();
+    static const QSet<QString> reserved = {
+        QStringLiteral("CON"), QStringLiteral("PRN"),
+        QStringLiteral("AUX"), QStringLiteral("NUL"),
+        QStringLiteral("COM1"), QStringLiteral("COM2"),
+        QStringLiteral("COM3"), QStringLiteral("COM4"),
+        QStringLiteral("COM5"), QStringLiteral("COM6"),
+        QStringLiteral("COM7"), QStringLiteral("COM8"),
+        QStringLiteral("COM9"), QStringLiteral("LPT1"),
+        QStringLiteral("LPT2"), QStringLiteral("LPT3"),
+        QStringLiteral("LPT4"), QStringLiteral("LPT5"),
+        QStringLiteral("LPT6"), QStringLiteral("LPT7"),
+        QStringLiteral("LPT8"), QStringLiteral("LPT9")};
+    return !reserved.contains(stem);
+}
+
 inline bool captureAtomicFileSnapshot(
     const QString &path, AtomicFileSnapshot &snapshot, QString &error)
 {

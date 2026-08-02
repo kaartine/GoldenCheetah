@@ -2103,7 +2103,8 @@ RideCache::replacePlannedActivityFiles(
     const QList<RideItem*> &activitiesToReplace,
     const QStringList &inputPaths,
     const QList<PlannedActivityTarget> &targets,
-    bool notifyAdded)
+    bool notifyAdded,
+    const PlannedReplacementCoordinator &coordinator)
 {
     PlannedReplacementResult result;
     if (QThread::currentThread() != thread()) {
@@ -2155,6 +2156,11 @@ RideCache::replacePlannedActivityFiles(
     if (targets.isEmpty()) {
         result.error = tr(
             "A planned activity replacement requires target activities");
+        return result;
+    }
+    if (bool(coordinator.commit) != bool(coordinator.complete)) {
+        result.error = tr(
+            "A planned activity replacement coordinator is incomplete");
         return result;
     }
 
@@ -2843,12 +2849,76 @@ RideCache::replacePlannedActivityFiles(
         }
     }
 
+    bool coordinatorCommitted = false;
+    if (coordinator.commit) {
+        bool proceed = false;
+        QString coordinatorError;
+        try {
+            proceed = coordinator.commit(
+                journal->directoryPath(),
+                coordinatorCommitted,
+                coordinatorError);
+        } catch (const QString &detail) {
+            coordinatorError = detail;
+        } catch (const std::exception &exception) {
+            coordinatorError = QString::fromLocal8Bit(
+                exception.what());
+        } catch (...) {
+            coordinatorError = tr(
+                "The planned activity coordinator failed");
+        }
+        if (!proceed || !coordinatorCommitted) {
+            const QString detail = coordinatorError.isEmpty()
+                ? (coordinatorCommitted
+                    ? tr(
+                        "The coordinated plan import requires recovery")
+                    : tr(
+                        "The planned activity coordinator did not commit"))
+                : coordinatorError;
+            if (coordinatorCommitted) {
+                result.committed = true;
+                result.error = detail;
+            } else {
+                rollback(detail);
+            }
+            return result;
+        }
+    }
+
+    const auto completeCoordinator = [&] {
+        if (!coordinator.complete) return true;
+        bool completed = false;
+        QString coordinatorError;
+        try {
+            completed = coordinator.complete(
+                coordinatorError);
+        } catch (const QString &detail) {
+            coordinatorError = detail;
+        } catch (const std::exception &exception) {
+            coordinatorError = QString::fromLocal8Bit(
+                exception.what());
+        } catch (...) {
+            coordinatorError = tr(
+                "The coordinated plan import could not be completed");
+        }
+        if (completed) return true;
+        appendRemovalError(
+            result.error,
+            coordinatorError.isEmpty()
+                ? tr(
+                    "The coordinated plan import requires recovery")
+                : coordinatorError);
+        return false;
+    };
+
     QString publishError;
     if (!journal->publishAndCommit(publishError)) {
         bool committed = false;
         QString commitStateError;
         if (!journal->commitState(
                 committed, commitStateError)) {
+            if (coordinatorCommitted)
+                result.committed = true;
             appendRemovalError(result.error, publishError);
             appendRemovalError(
                 result.error,
@@ -2858,10 +2928,20 @@ RideCache::replacePlannedActivityFiles(
             return result;
         }
         if (!committed) {
+            if (coordinatorCommitted) {
+                result.committed = true;
+                appendRemovalError(result.error, publishError);
+                appendRemovalError(
+                    result.error,
+                    tr(
+                        "The coordinated plan import requires recovery"));
+                return result;
+            }
             rollback(publishError);
             return result;
         }
         result.committed = true;
+        if (!completeCoordinator()) return result;
         QString recoveryError;
         if (!journal->cleanupAfterCommit(recoveryError)) {
             appendRemovalError(result.error, publishError);
@@ -2874,6 +2954,8 @@ RideCache::replacePlannedActivityFiles(
         if (!journal->commitState(
                 committed, commitStateError)
             || !committed) {
+            if (coordinatorCommitted)
+                result.committed = true;
             appendRemovalError(
                 result.error,
                 commitStateError.isEmpty()
@@ -2882,6 +2964,7 @@ RideCache::replacePlannedActivityFiles(
             return result;
         }
         result.committed = true;
+        if (!completeCoordinator()) return result;
     }
 
     bool cacheStateDegraded = false;

@@ -24,6 +24,7 @@
 #include "SaveDialogs.h"
 #include "LinkedActivityRemovalJournal.h"
 #include "LinkedActivitySaveJournal.h"
+#include "PlanBundle.h"
 #include "PlanReplacementJournal.h"
 #include "PlannedActivityFileStager.h"
 
@@ -210,6 +211,13 @@ RideCache::RideCache(Context *context) : context(context)
             startupRecoveryError_)) {
         qCritical().noquote()
             << "Activity recovery must be completed before loading:"
+            << startupRecoveryError_;
+        return;
+    }
+    if (!PlanBundle::reconcilePendingImport(
+            context, startupRecoveryError_)) {
+        qCritical().noquote()
+            << "Plan import recovery must be completed before loading:"
             << startupRecoveryError_;
         return;
     }

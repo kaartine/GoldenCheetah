@@ -1907,6 +1907,71 @@ std::shared_ptr<Journal> Journal::prepare(
     return std::shared_ptr<Journal>(new Journal(state));
 }
 
+std::shared_ptr<Journal> Journal::openPrepared(
+    const QString &athleteRoot,
+    const QString &transactionId,
+    QString &error)
+{
+    error.clear();
+    if (!validTransactionId(transactionId)
+        || athleteRoot.isEmpty()
+        || !QDir::isAbsolutePath(athleteRoot)) {
+        error = QStringLiteral(
+            "The prepared plan transaction identity is invalid");
+        return {};
+    }
+
+    const QString requestedRoot = QDir::cleanPath(
+        QFileInfo(athleteRoot).absoluteFilePath());
+    const QFileInfo requestedRootInfo(requestedRoot);
+    if (!requestedRootInfo.exists()
+        || !requestedRootInfo.isDir()) {
+        error = QStringLiteral("The athlete root is unavailable");
+        return {};
+    }
+
+    std::unique_ptr<AtomicFileLockSet> transactionLease(
+        new AtomicFileLockSet);
+    if (!transactionLease->lock(
+            {transactionLeaseTarget(requestedRoot)}, error)) {
+        error = QStringLiteral(
+            "An activity transaction is already active: %1")
+                    .arg(error);
+        return {};
+    }
+
+    QString root;
+    if (!normalizeAthleteRoot(athleteRoot, root, error))
+        return {};
+    const QString namespacePath = transactionNamespacePath(root);
+    const QString transactions = QDir(root).filePath(
+        QStringLiteral(".gc-transactions"));
+    if (!validateExistingDirectory(transactions, error)
+        || !makeDirectoryPrivate(transactions, error)
+        || !validateExistingDirectory(namespacePath, error)
+        || !makeDirectoryPrivate(namespacePath, error)) {
+        return {};
+    }
+
+    const QString journalPath =
+        QDir(namespacePath).filePath(transactionId);
+    const QFileInfo journalInfo(journalPath);
+    if (journalInfo.isSymLink() || !journalInfo.isDir()
+        || journalInfo.fileName() != transactionId
+        || atomicFilePathKey(journalInfo.absolutePath())
+            != atomicFilePathKey(namespacePath)) {
+        error = QStringLiteral(
+            "The prepared plan transaction is unavailable");
+        return {};
+    }
+
+    std::shared_ptr<JournalState> state;
+    if (!loadManifestState(root, journalPath, state, error))
+        return {};
+    state->transactionLease = std::move(transactionLease);
+    return std::shared_ptr<Journal>(new Journal(state));
+}
+
 bool Journal::reconcileAll(const QString &athleteRoot, QString &error)
 {
     error.clear();

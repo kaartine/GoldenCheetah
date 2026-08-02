@@ -11,6 +11,17 @@
 #include "TrainDB.h"
 
 namespace {
+bool injectPlanImportCommitFailure = false;
+}
+
+bool trainDbPlanImportCommitReportedFailure()
+{
+    const bool inject = injectPlanImportCommitFailure;
+    injectPlanImportCommitFailure = false;
+    return inject;
+}
+
+namespace {
 
 class ScopedDatabase
 {
@@ -327,7 +338,248 @@ private slots:
     void nullLegacyPathBlocksPlan();
     void videoSyncImportSupportsMigrationRetry();
     void versionOneUpgradePreservesLegacyTables();
+    void planImportJournalSurvivesRollbackAndCommitsAtomically();
+    void planImportCommitUncertaintyRetainsRecoveryDecision();
+    void planImportJournalRejectsCorruptWorkoutPayload();
+    void planImportJournalRejectsMalformedAuxiliaryIndexes();
 };
+
+void TestTrainDbVersionSafety::
+planImportJournalSurvivesRollbackAndCommitsAtomically()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+    TrainDB database{QDir(home.path())};
+    QVERIFY(database.schemaStatus() == TrainDB::SchemaStatus::current);
+
+    TrainDB::PlanImportJournal decision;
+    decision.id = QStringLiteral(
+        "11111111-1111-1111-1111-111111111111");
+    decision.athleteRoot = home.path()
+        + QStringLiteral("/athlete");
+    decision.workoutRoot = home.path()
+        + QStringLiteral("/workouts");
+    decision.planJournalId = QStringLiteral(
+        "22222222-2222-2222-2222-222222222222");
+    decision.workouts = {
+        {QStringLiteral("first.erg"), QByteArray("first workout"), {}},
+        {QStringLiteral("second.zwo"), QByteArray("second workout"), {}}
+    };
+
+    QString error;
+    bool mayBeCommitted = false;
+    QVERIFY2(database.commitPlanImportJournal(
+                 decision, mayBeCommitted, error),
+             qPrintable(error));
+    QVERIFY(mayBeCommitted);
+
+    TrainDB::PlanImportJournal loaded;
+    bool found = false;
+    QVERIFY2(database.loadPlanImportJournal(
+                 decision.athleteRoot, loaded, found, error),
+             qPrintable(error));
+    QVERIFY(found);
+    QCOMPARE(loaded.id, decision.id);
+    QCOMPARE(loaded.athleteRoot, decision.athleteRoot);
+    QCOMPARE(loaded.workoutRoot, decision.workoutRoot);
+    QCOMPARE(loaded.planJournalId, decision.planJournalId);
+    QCOMPARE(loaded.workouts.size(), 2);
+    QCOMPARE(loaded.workouts.at(0).targetFileName,
+             QStringLiteral("first.erg"));
+    QCOMPARE(loaded.workouts.at(0).contents,
+             QByteArray("first workout"));
+    QCOMPARE(
+        loaded.workouts.at(0).digest,
+        QCryptographicHash::hash(
+            QByteArray("first workout"),
+            QCryptographicHash::Sha256));
+
+    TrainDB::PlanImportJournal duplicate = decision;
+    duplicate.id = QStringLiteral(
+        "33333333-3333-3333-3333-333333333333");
+    mayBeCommitted = true;
+    QVERIFY(!database.commitPlanImportJournal(
+        duplicate, mayBeCommitted, error));
+    QVERIFY(!mayBeCommitted);
+    duplicate.athleteRoot = home.path()
+        + QStringLiteral("/other-athlete");
+    mayBeCommitted = true;
+    QVERIFY(!database.commitPlanImportJournal(
+        duplicate, mayBeCommitted, error));
+    QVERIFY(!mayBeCommitted);
+
+    QVERIFY(database.startLUW());
+    QVERIFY2(database.removePlanImportJournal(
+                 decision.id, error), qPrintable(error));
+    database.rollbackLUW();
+    loaded = {};
+    found = false;
+    QVERIFY2(database.loadPlanImportJournal(
+                 decision.athleteRoot, loaded, found, error),
+             qPrintable(error));
+    QVERIFY(found);
+
+    QVERIFY(database.startLUW());
+    QVERIFY2(database.removePlanImportJournal(
+                 decision.id, error), qPrintable(error));
+    QVERIFY(database.endLUW());
+    loaded = {};
+    found = true;
+    QVERIFY2(database.loadPlanImportJournal(
+                 decision.athleteRoot, loaded, found, error),
+             qPrintable(error));
+    QVERIFY(!found);
+
+    QVERIFY(database.checkDBVersion());
+    QVERIFY(database.schemaStatus() == TrainDB::SchemaStatus::current);
+}
+
+void TestTrainDbVersionSafety::
+planImportCommitUncertaintyRetainsRecoveryDecision()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+    TrainDB database{QDir(home.path())};
+    QVERIFY(database.schemaStatus()
+            == TrainDB::SchemaStatus::current);
+
+    TrainDB::PlanImportJournal decision;
+    decision.id = QStringLiteral(
+        "88888888-8888-8888-8888-888888888888");
+    decision.athleteRoot = home.path()
+        + QStringLiteral("/athlete");
+    decision.workoutRoot = home.path()
+        + QStringLiteral("/workouts");
+    decision.planJournalId = QStringLiteral(
+        "99999999-9999-9999-9999-999999999999");
+    decision.workouts = {{
+        QStringLiteral("workout.erg"),
+        QByteArray("workout"), {}}};
+
+    injectPlanImportCommitFailure = true;
+    bool mayBeCommitted = false;
+    QString error;
+    QVERIFY(!database.commitPlanImportJournal(
+        decision, mayBeCommitted, error));
+    QVERIFY(mayBeCommitted);
+    QVERIFY(!error.isEmpty());
+
+    TrainDB::PlanImportJournal loaded;
+    bool found = false;
+    QVERIFY2(database.loadPlanImportJournal(
+                 decision.athleteRoot,
+                 loaded, found, error),
+             qPrintable(error));
+    QVERIFY(found);
+    QCOMPARE(loaded.id, decision.id);
+}
+
+void TestTrainDbVersionSafety::
+planImportJournalRejectsCorruptWorkoutPayload()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+    const QString databasePath =
+        home.path() + QStringLiteral("/trainDB");
+    QString athleteRoot;
+    {
+        TrainDB database{QDir(home.path())};
+        QVERIFY(database.schemaStatus() == TrainDB::SchemaStatus::current);
+        TrainDB::PlanImportJournal decision;
+        decision.id = QStringLiteral(
+            "44444444-4444-4444-4444-444444444444");
+        athleteRoot = home.path() + QStringLiteral("/athlete");
+        decision.athleteRoot = athleteRoot;
+        decision.workoutRoot = home.path()
+            + QStringLiteral("/workouts");
+        decision.planJournalId = QStringLiteral(
+            "55555555-5555-5555-5555-555555555555");
+        decision.workouts = {
+            {QStringLiteral("workout.erg"), QByteArray("original"), {}}
+        };
+        QString error;
+        bool mayBeCommitted = false;
+        QVERIFY2(database.commitPlanImportJournal(
+                     decision, mayBeCommitted, error),
+                 qPrintable(error));
+        QVERIFY(mayBeCommitted);
+    }
+
+    {
+        ScopedDatabase connection(databasePath);
+        QVERIFY(execSql(
+            connection.get(),
+            QStringLiteral(
+                "UPDATE plan_import_workout "
+                "SET contents = X'636F7272757074'")));
+    }
+
+    TrainDB database{QDir(home.path())};
+    TrainDB::PlanImportJournal loaded;
+    bool found = false;
+    QString error;
+    QVERIFY(!database.loadPlanImportJournal(
+        athleteRoot, loaded, found, error));
+    QVERIFY(!error.isEmpty());
+}
+
+void TestTrainDbVersionSafety::
+planImportJournalRejectsMalformedAuxiliaryIndexes()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+    const QString databasePath =
+        home.path() + QStringLiteral("/trainDB");
+    {
+        TrainDB database{QDir(home.path())};
+        QVERIFY(database.schemaStatus()
+                == TrainDB::SchemaStatus::current);
+    }
+    {
+        ScopedDatabase connection(databasePath);
+        QVERIFY(execSql(
+            connection.get(),
+            QStringLiteral(
+                "CREATE TABLE plan_import_journal ("
+                "id TEXT NOT NULL PRIMARY KEY,"
+                "athlete_root TEXT NOT NULL,"
+                "workout_root TEXT NOT NULL,"
+                "plan_journal_id TEXT NOT NULL,"
+                "created_at INTEGER NOT NULL)")));
+        QVERIFY(execSql(
+            connection.get(),
+            QStringLiteral(
+                "CREATE TABLE plan_import_workout ("
+                "journal_id TEXT NOT NULL,"
+                "sequence INTEGER NOT NULL,"
+                "target_name TEXT NOT NULL,"
+                "size INTEGER NOT NULL,"
+                "digest BLOB NOT NULL,"
+                "contents BLOB NOT NULL,"
+                "PRIMARY KEY(journal_id, sequence))")));
+    }
+
+    TrainDB database{QDir(home.path())};
+    TrainDB::PlanImportJournal decision;
+    decision.id = QStringLiteral(
+        "66666666-6666-6666-6666-666666666666");
+    decision.athleteRoot = home.path()
+        + QStringLiteral("/athlete");
+    decision.workoutRoot = home.path()
+        + QStringLiteral("/workouts");
+    decision.planJournalId = QStringLiteral(
+        "77777777-7777-7777-7777-777777777777");
+    decision.workouts = {{
+        QStringLiteral("workout.erg"),
+        QByteArray("workout"), {}}};
+    QString error;
+
+    bool mayBeCommitted = true;
+    QVERIFY(!database.commitPlanImportJournal(
+        decision, mayBeCommitted, error));
+    QVERIFY(!mayBeCommitted);
+    QVERIFY(!error.isEmpty());
+}
 
 void TestTrainDbVersionSafety::malformedVersionTableFailsClosed()
 {

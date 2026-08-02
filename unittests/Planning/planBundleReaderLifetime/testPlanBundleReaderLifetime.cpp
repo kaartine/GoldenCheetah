@@ -9,6 +9,8 @@
 
 #include <QtTest>
 
+#include <QFile>
+
 #include <type_traits>
 
 #define private public
@@ -26,6 +28,11 @@ private slots:
     void gapChangeRecalculatesTargetsAndRange();
     void linkedConflictUsesTargetDateTime();
     void partialActivityExportIsRejected();
+    void validWorkoutReferenceIsParsed();
+    void invalidWorkoutReferenceIsRejected_data();
+    void invalidWorkoutReferenceIsRejected();
+    void importSourceUsesSinglePlanPublication();
+    void startupRecoveryCompletesBundleBeforePlanCleanup();
 };
 
 
@@ -122,6 +129,119 @@ partialActivityExportIsRejected()
     QVERIFY(!planExportCopiedAllActivities(2, 1));
     QVERIFY(!planExportCopiedAllActivities(1, 0));
     QVERIFY(!planExportCopiedAllActivities(0, 0));
+}
+
+
+void TestPlanBundleReaderLifetime::validWorkoutReferenceIsParsed()
+{
+    PlanBundleWorkoutReference reference;
+    const QString hash =
+        QStringLiteral("0123456789abcdef0123456789abcdef");
+
+    QVERIFY(parsePlanBundleWorkoutReference(
+        hash + QStringLiteral("-threshold.erg"),
+        reference));
+    QCOMPARE(reference.hash, hash);
+    QCOMPARE(reference.originalFileName,
+             QStringLiteral("threshold.erg"));
+}
+
+
+void TestPlanBundleReaderLifetime::
+invalidWorkoutReferenceIsRejected_data()
+{
+    QTest::addColumn<QString>("fileName");
+    const QString hash =
+        QStringLiteral("0123456789abcdef0123456789abcdef");
+
+    QTest::newRow("missing-name") << (hash + QStringLiteral("-"));
+    QTest::newRow("short-hash")
+        << QStringLiteral("01234567-workout.erg");
+    QTest::newRow("non-hex-hash")
+        << QStringLiteral(
+            "z123456789abcdef0123456789abcdef-workout.erg");
+    QTest::newRow("forward-traversal")
+        << (hash + QStringLiteral("-../workout.erg"));
+    QTest::newRow("backslash-traversal")
+        << (hash + QStringLiteral("-..\\workout.erg"));
+    QTest::newRow("dot-component")
+        << (hash + QStringLiteral("-."));
+    QTest::newRow("dot-dot-component")
+        << (hash + QStringLiteral("-.."));
+    QTest::newRow("windows-device")
+        << (hash + QStringLiteral("-CON.erg"));
+    QTest::newRow("trailing-dot")
+        << (hash + QStringLiteral("-workout.erg."));
+    QTest::newRow("forbidden-colon")
+        << (hash + QStringLiteral("-workout:one.erg"));
+}
+
+
+void TestPlanBundleReaderLifetime::
+invalidWorkoutReferenceIsRejected()
+{
+    QFETCH(QString, fileName);
+    PlanBundleWorkoutReference reference;
+    reference.hash = QStringLiteral("stale");
+    reference.originalFileName = QStringLiteral("stale");
+
+    QVERIFY(!parsePlanBundleWorkoutReference(
+        fileName, reference));
+    QVERIFY(reference.hash.isEmpty());
+    QVERIFY(reference.originalFileName.isEmpty());
+}
+
+
+void TestPlanBundleReaderLifetime::
+importSourceUsesSinglePlanPublication()
+{
+    const QString sourcePath = QFINDTESTDATA(
+        "../../../src/Planning/PlanBundle.cpp");
+    QVERIFY2(!sourcePath.isEmpty(),
+             "PlanBundle.cpp test data was not found");
+    QFile source(sourcePath);
+    QVERIFY(source.open(QIODevice::ReadOnly));
+    const QByteArray code = source.readAll();
+    const qsizetype importStart = code.indexOf(
+        "PlanBundleReader::importBundle");
+    const qsizetype importEnd = code.indexOf(
+        "PlanBundleReader::getTargetRangeStart",
+        importStart);
+    QVERIFY(importStart >= 0);
+    QVERIFY(importEnd > importStart);
+    const QByteArray importBody = code.mid(
+        importStart, importEnd - importStart);
+
+    QVERIFY(importBody.contains(
+        "replacePlannedActivityFiles"));
+    QVERIFY(!importBody.contains("removeRidesResult"));
+    QVERIFY(!importBody.contains("addRide("));
+    QVERIFY(!importBody.contains("cleanAndCopyActivity"));
+}
+
+
+void TestPlanBundleReaderLifetime::
+startupRecoveryCompletesBundleBeforePlanCleanup()
+{
+    const QString sourcePath = QFINDTESTDATA(
+        "../../../src/Core/RideCache.cpp");
+    QVERIFY2(!sourcePath.isEmpty(),
+             "RideCache.cpp test data was not found");
+    QFile source(sourcePath);
+    QVERIFY(source.open(QIODevice::ReadOnly));
+    const QByteArray code = source.readAll();
+    const qsizetype constructorStart = code.indexOf(
+        "RideCache::RideCache");
+    const qsizetype bundleRecovery = code.indexOf(
+        "PlanBundle::reconcilePendingImport",
+        constructorStart);
+    const qsizetype planRecovery = code.indexOf(
+        "PlanReplacement::Journal::reconcileAll",
+        constructorStart);
+
+    QVERIFY(constructorStart >= 0);
+    QVERIFY(bundleRecovery > constructorStart);
+    QVERIFY(planRecovery > bundleRecovery);
 }
 
 

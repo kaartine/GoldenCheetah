@@ -23,10 +23,13 @@
 #include <QString>
 #include <QStringList>
 #include <QDateTime>
+#include <QFileInfo>
 #include <QList>
 #include <QPointer>
+#include <QRegularExpression>
 #include <QSet>
 
+#include "AtomicFileWriter.h"
 #include "RideFile.h"
 #include "RideItem.h"
 #include "Context.h"
@@ -77,6 +80,7 @@ private:
 struct PlanResult {
     QStringList errors;
     QStringList warnings;
+    bool committed = false;
 
     bool ok() const;
     void addError(const QString &error);
@@ -173,17 +177,57 @@ inline bool planExportCopiedAllActivities(
 }
 
 
+struct PlanBundleWorkoutReference {
+    QString hash;
+    QString originalFileName;
+};
+
+
+inline bool parsePlanBundleWorkoutReference(
+    const QString &fileName,
+    PlanBundleWorkoutReference &reference)
+{
+    reference = {};
+    static constexpr qsizetype hashLength = 32;
+    if (fileName.size() <= hashLength + 1
+        || fileName.at(hashLength) != QLatin1Char('-')) {
+        return false;
+    }
+
+    const QString hash = fileName.left(hashLength);
+    static const QRegularExpression md5Pattern(
+        QStringLiteral("^[0-9a-f]{32}$"));
+    const QString originalFileName =
+        fileName.mid(hashLength + 1);
+    if (!md5Pattern.match(hash).hasMatch()
+        || !atomicFileNameIsPortableComponent(
+            originalFileName)) {
+        return false;
+    }
+
+    reference.hash = hash;
+    reference.originalFileName = originalFileName;
+    return true;
+}
+
+
 class RideFileSelection {
 public:
-    RideFileSelection(RideFile *rideFile, bool sel, const QDateTime &dt);
+    RideFileSelection(
+        RideFile *rideFile,
+        bool sel,
+        const QDateTime &dt,
+        const QString &sourceFileName);
 
     RideFile *getRideFile() const;
+    QString getSourceFileName() const;
 
     bool selected = false;
     QDateTime targetDateTime;
 
 private:
     RideFile *rideFile = nullptr;
+    QString sourceFileName;
 };
 
 
@@ -231,15 +275,15 @@ private:
     QSet<QDateTime> existingLinked;
     QDir plannedDir;
     QDir workoutDir;
-    QHash<QString, QString> trainDBHashes;
 
     void reset();
     void calculateRange();
     void findConflicts();
-    bool cleanAndCopyActivity(
+    bool prepareActivity(
         RideFile *rideFile,
-        const QDateTime &targetDateTime) const;
-    bool processWorkout(RideFile *rideFile);
+        const QDateTime &targetDateTime,
+        QString &targetFileName,
+        QString &error) const;
     void validate();
 };
 
@@ -253,6 +297,7 @@ namespace PlanBundle {
     QDate getRideDate(RideFile const * const rideFile, bool preferOriginal);
 
     bool exportBundle(Context *context, const PlanExportDescription &description);
+    bool reconcilePendingImport(Context *context, QString &error);
 }
 
 #endif

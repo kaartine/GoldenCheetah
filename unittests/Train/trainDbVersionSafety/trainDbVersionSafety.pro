@@ -8,6 +8,8 @@ include(../../unittests.pri)
 CONFIG += console testcase c++17 release
 CONFIG -= debug
 
+DEFINES += GC_TRAIN_DB_TEST_HOOKS
+
 SOURCES = testTrainDbVersionSafety.cpp \
           ../../../src/Train/TrainDB.cpp \
           ../../../src/Train/ErgFileBase.cpp \
@@ -21,6 +23,7 @@ HEADERS = ../../../src/Train/TrainDB.h \
 INCLUDEPATH += ../../../src \
                ../../../src/Charts \
                ../../../src/Core \
+               ../../../src/FileIO \
                ../../../src/Gui \
                ../../../src/Train
 

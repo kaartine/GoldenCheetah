@@ -11,6 +11,8 @@
 #include "RideCacheModel.h"
 #include "RideItem.h"
 #include "RideMetadata.h"
+#include "Settings.h"
+#include "Zones.h"
 
 #include <QDir>
 #include <QFile>
@@ -73,6 +75,7 @@ int rideItemDestructionCount = 0;
 int removalTransitionOccurrence = 0;
 bool removalValidationMutationEnabled = false;
 QByteArray removalValidationMutationContents;
+QString planBundleWorkoutRoot;
 
 void runCalendarStorageAction()
 {
@@ -122,6 +125,16 @@ RideFile::~RideFile()
     qDeleteAll(xdata_);
 }
 
+void RideFile::setStartTime(const QDateTime &value)
+{
+    startTime_ = value;
+}
+
+QString RideFile::sport() const
+{
+    return getTag(QStringLiteral("Sport"), QString());
+}
+
 bool RideFile::parseRideFileName(
     const QString &name,
     QDateTime *dateTime)
@@ -155,10 +168,18 @@ RideFileFactory &RideFileFactory::instance()
 }
 
 bool RideFileFactory::writeRideFile(
-    Context *, const RideFile *, QFile &file, QString) const
+    Context *, const RideFile *ride, QFile &file, QString) const
 {
-    static const QByteArray contents(
+    QByteArray contents(
         "ride-cache-calendar-mutation-test\n");
+    if (ride) {
+        const QString workout = ride->getTag(
+            QStringLiteral("WorkoutFilename"), QString());
+        if (!workout.isEmpty()) {
+            contents += "workout="
+                + workout.toUtf8() + '\n';
+        }
+    }
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
         return false;
     const bool written =
@@ -166,6 +187,95 @@ bool RideFileFactory::writeRideFile(
         && file.flush();
     if (written) runCalendarStorageAction();
     return written;
+}
+
+RideFile *RideFileFactory::openRideFile(
+    Context *, QFile &file, QStringList &errors,
+    QList<RideFile *> *) const
+{
+    const bool openedHere = !file.isOpen();
+    if (openedHere && !file.open(QIODevice::ReadOnly)) {
+        errors.append(file.errorString());
+        return nullptr;
+    }
+    const QByteArray contents = file.readAll();
+    if (openedHere) file.close();
+    QDateTime dateTime;
+    if (contents.isEmpty()
+        || !RideFile::parseRideFileName(
+            QFileInfo(file.fileName()).fileName(),
+            &dateTime)) {
+        errors.append(QStringLiteral(
+            "injected plan activity parse failure"));
+        return nullptr;
+    }
+    RideFile *ride = new RideFile(dateTime, 1.0);
+    const QList<QByteArray> lines = contents.split('\n');
+    for (const QByteArray &line : lines) {
+        if (line.startsWith("workout=")) {
+            ride->setTag(
+                QStringLiteral("WorkoutFilename"),
+                QString::fromUtf8(line.mid(8)));
+        }
+    }
+    return ride;
+}
+
+ErgFile::ErgFile(
+    QString path, ErgFileFormat format,
+    Context *workoutContext, QDate)
+    : valid(true), context(workoutContext)
+{
+    filename(path);
+    mode(format);
+}
+
+ErgFile::~ErgFile() = default;
+
+bool ErgFile::isValid() const
+{
+    return valid;
+}
+
+int Zones::whichRange(const QDate &) const
+{
+    return -1;
+}
+
+int Zones::getCP(int) const
+{
+    return 300;
+}
+
+GSettings::GSettings(QString, QString)
+    : newFormat(true)
+{
+}
+
+GSettings::~GSettings() = default;
+
+namespace {
+GSettings planBundleSettings(
+    QStringLiteral("GoldenCheetah"),
+    QStringLiteral("PlanBundleTest"));
+}
+
+GSettings *appsettings = &planBundleSettings;
+
+QVariant GSettings::value(
+    const QObject *, const QString key,
+    const QVariant defaultValue)
+{
+    if (key == QStringLiteral(GC_WORKOUTDIR)
+        && !planBundleWorkoutRoot.isEmpty()) {
+        return planBundleWorkoutRoot;
+    }
+    return defaultValue;
+}
+
+void setPlanBundleWorkoutRootForTest(const QString &path)
+{
+    planBundleWorkoutRoot = path;
 }
 
 void resetRideCacheRemovalRefreshCounts()

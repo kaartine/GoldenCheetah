@@ -14,11 +14,17 @@ DEFINES += GC_RIDE_CACHE_REMOVAL_TEST_HOOKS \
 
 SOURCES = testRideCacheRemoval.cpp \
           RideCacheRemovalTestStubs.cpp \
+          ../../../src/FileIO/LocationInterpolation.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCacheIntegrity.cpp \
           ../../../src/Core/LinkedActivityRemovalJournal.cpp \
           ../../../src/Core/LinkedActivitySaveJournal.cpp \
+          ../../../src/Planning/PlanBundle.cpp \
+          ../../../src/Planning/PlanBundleImportJournal.cpp \
           ../../../src/Planning/PlanReplacementJournal.cpp \
+          ../../../src/Train/TrainDB.cpp \
+          ../../../src/Train/ErgFileBase.cpp \
+          ../../../src/Train/VideoSyncFileBase.cpp \
           ../../../src/Core/PlannedActivityFileStager.cpp \
           ../../../src/Core/RideCacheActivityLinking.cpp \
           ../../../src/Core/RideCacheCalendarMutations.cpp \
@@ -37,7 +43,11 @@ HEADERS = ../../../src/Core/Athlete.h \
           ../../../src/Core/RideItem.h \
           ../../../src/Core/LinkedActivityRemovalJournal.h \
           ../../../src/Core/LinkedActivitySaveJournal.h \
+          ../../../src/Planning/PlanBundle.h \
+          ../../../src/Planning/PlanBundleImportJournal.h \
           ../../../src/Planning/PlanReplacementJournal.h \
+          ../../../src/Train/TrainDB.h \
+          ../../../src/FileIO/LocationInterpolation.h \
           ../../../src/FileIO/RideFile.h \
           ../../../src/FileIO/RideFileCRC.h \
           ../../../src/FileIO/RideFileCacheIntegrity.h \
@@ -53,7 +63,8 @@ INCLUDEPATH += ../../../src \
                ../../../src/Metrics \
                ../../../src/Planning \
                ../../../src/Train \
-               ../../../qwt/src
+               ../../../qwt/src \
+               ../../../contrib/qzip
 
 QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
 QMAKE_LFLAGS += -Wl,--gc-sections

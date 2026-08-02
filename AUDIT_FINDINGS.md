@@ -2762,56 +2762,57 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DATA-020: Plan replacement and import are not all-or-nothing
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Gui/PlanWizards.cpp`, `src/Planning/PlanBundle.cpp`,
-  `src/Core/RideCache.cpp`, `src/Core/RideCacheRemoval.cpp`, and
-  `src/Planning/PlanReplacementJournal.cpp`
-- Impact: Bundle import still removes conflicts and publishes workout-library
-  and TrainDB state in separate steps. A copy, parse, database, or process
-  failure can therefore leave only a prefix of the imported bundle installed.
+  `src/Planning/PlanBundleImportJournal.cpp`,
+  `src/Planning/PlanReplacementJournal.cpp`, `src/Core/RideCache.cpp`,
+  `src/Core/RideCacheRemoval.cpp`, `src/FileIO/AtomicFileWriter.h`, and
+  `src/Train/TrainDB.cpp`
+- Impact: Bundle import removed conflicts and published workout-library and
+  TrainDB state in separate steps. A copy, parse, database, or process failure
+  could therefore leave only a prefix of the imported bundle installed.
   Repeat Plan previously had the same failure mode, but its replacement path is
   now generation-atomic.
-- Test-first evidence: The initial replacement regressions showed that a failed
-  stage could follow destructive target removal. Follow-up RED cases showed
-  caller-owned targets changing during a staging callback, link and legacy
-  sidecar ownership changing after preflight, unreadable staged activities being
-  accepted, dirty targets being discarded, a backup-parent symlink creating an
-  external directory, stale startup snapshots, a dangling selected RideItem
-  during model reset, synchronous and deferred callback deletion leaving stale
-  raw pointers, owner loss returning clean success, an invalid commit marker
-  being treated as committed, and DELETE processors receiving the live cached
-  RideFile before the replacement was committed.
-- Partial resolution: Repeat Plan now resolves and validates one complete input
-  snapshot and delegates it to a durable replacement journal. The journal
-  stages and syncs every new activity and backup before publication, supports
-  overlapping source and target paths, records content identities, publishes a
-  commit marker, and deterministically completes or rolls back at startup.
-  RideCache revalidates cache, link, sidecar, owner, thread, and dirty-state
-  invariants around every callback; blocks reentrant cache mutations while the
-  model is being replaced; reopens staged activities with the production
-  RideFile reader; runs DELETE processors on isolated disk-backed RideFiles only
-  after durable publication; clears selection during model reset; contains rows
-  deleted synchronously or with `deleteLater()` by callbacks; and invalidates
-  startup snapshots before replacing the model. Replacement also quiesces cache
-  and estimator workers before staging, coalesces one generation-checked resume,
-  purges pre-existing destroyed rows, and distinguishes committed warnings from
-  an uncommitted failure. Corrupt transaction state is retained for recovery
-  instead of being guessed or deleted.
-- Verification: The focused Repeat Plan and RideCache removal programs pass 27
-  and 231 cases under ASan/UBSan; the full
-  231-case removal program also passes ThreadSanitizer without a race report.
-  The focused staged-file and plan-journal programs previously passed 22 and
-  112 cases. Direct behavioral coverage of the production RideFile/ErgFile
-  staging adapters is still missing, and interaction with the real Repeat Plan
-  wizard remains covered by `TEST-005` rather than a headless unit fixture.
-- Remaining: PlanBundle import still needs a durable coordinator covering plan
-  activities, workout-library files, and TrainDB rows, plus behavioral fault
-  injection and restart tests. Until that coordinator exists, this finding
-  remains OPEN.
-- Fix direction: Stage and validate the complete bundle first. Publish workout
-  files and the plan through a durable import manifest, make TrainDB completion
-  idempotent, and reconcile startup to either the complete old generation or
-  the complete new generation without orphan workouts or database rows.
+- Test-first evidence: The original import source still called destructive and
+  per-activity publication APIs instead of one generation replacement. RED
+  parser rows accepted dot components, Windows device names, trailing dots,
+  and colon-bearing workout names. TrainDB accepted malformed auxiliary
+  indexes and a second pending import for another athlete. The durable journal
+  API and restart coordinator were absent. A final injected SQLite case
+  reproduced the uncertain-commit boundary: the decision was durable, but the
+  API reported it as definitely uncommitted and would have allowed the staged
+  plan journal to be rolled back.
+- Resolution: PlanBundle now reopens and validates every selected activity and
+  attached workout before mutation, bounds individual and aggregate payloads,
+  verifies both the bundle MD5 reference and stable exact contents, rejects
+  non-portable target components, and submits one complete activity generation
+  to RideCache. New workout bytes and SHA-256 identities are stored with a
+  globally serialized durable decision in auxiliary TrainDB tables. RideCache
+  commits that decision after all plan files are staged and never rolls the
+  plan journal back once the database commit may be durable. It then publishes
+  one plan generation, idempotently publishes locked workout files, and inserts
+  all workout rows while retiring the decision in the same database
+  transaction. Startup completes this outer transaction before ordinary plan
+  journal reconciliation. Corrupt payloads, schemas, roots, identifiers,
+  conflicting targets, and incomplete database completion fail closed and
+  retain recovery state. The import UI distinguishes an uncommitted failure
+  from a committed operation that requires restart recovery.
+- Verification: Strict ASan/UBSan/LSan runs pass all 30 TrainDB cases, 20
+  PlanBundle reader/source-contract cases, six bundle-import journal cases, and
+  113 plan-replacement journal cases. The complete 325-case RideCache removal
+  and PlanBundle integration program passes ASan/UBSan; its documented Qt model
+  teardown leak rows run with LSan disabled as tracked by `TEST-007`. The six
+  bundle-import journal, 113 plan-journal, and 325 RideCache cases also pass
+  ThreadSanitizer without a race report. A clean full normal matrix reports 101
+  QtTest result blocks, 4,135 passes, zero failures or blacklisted cases, and 12
+  expected platform skips. The complete production application compiles and
+  links, then remains healthy in a 20-second offscreen smoke test with isolated
+  HOME and XDG directories.
+- Residual: Real widget interaction remains tracked by `TEST-005`, production
+  reciprocal JSON persistence by `TEST-006`, and the adversarial Qt model leak
+  rows by `TEST-007`. Windows directory-entry durability remains `DUR-014`, and
+  a non-cooperating process can still replace a checked workout pathname outside
+  the cooperative lock protocol as tracked by `SEC-025`.
 
 ### MEM-024: RideCache callbacks exposed destroyed activity addresses
 

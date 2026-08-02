@@ -3189,33 +3189,42 @@ ImportPlanPageResult::initializePage
         return;
     }
 
+    const PlanResult result =
+        wiz->planReader->getLastImportResult();
     QString message;
-    if (wiz->planReader->getLastImportResult().ok()) {
-        if (wiz->planReader->getLastImportResult()
-                .warnings.isEmpty()) {
+    if (result.ok()) {
+        if (result.warnings.isEmpty()) {
             message = HLO + tr("Import completed successfully.") + HLC + "<br>";
             message += tr("All activities and workouts were imported without issues.");
         } else {
             message = HLO + tr("Import completed with warnings.") + HLC + "<br>";
             message += tr("Some items could not be fully processed.");
         }
+    } else if (result.committed) {
+        message = HLO + tr("Import committed; recovery required.")
+            + HLC + "<br>";
+        message += tr(
+            "Do not import the bundle again. Restart GoldenCheetah to complete recovery.");
+        message += QString("<br>") + HLO + tr("Errors") + HLC;
+        message += "<ul>";
+        for (const QString &error : result.errors) {
+            message += "<li>" + error + "</li>";
+        }
+        message += "</ul>";
     } else {
         message = HLO + tr("Import failed.") + HLC + "<br>";
         message += tr("The bundle could not be fully imported.");
         message += QString("<br>") + HLO + tr("Errors") + HLC;
         message += "<ul>";
-        for (const QString &error :
-             wiz->planReader->getLastImportResult().errors) {
+        for (const QString &error : result.errors) {
             message += "<li>" + error + "</li>";
         }
         message += "</ul>";
     }
-    if (!wiz->planReader->getLastImportResult()
-            .warnings.isEmpty()) {
+    if (!result.warnings.isEmpty()) {
         message += QString("<br>") + HLO + tr("Warnings") + HLC;
         message += "<ul>";
-        for (const QString &warning :
-             wiz->planReader->getLastImportResult().warnings) {
+        for (const QString &warning : result.warnings) {
             message += "<li>" + warning + "</li>";
         }
         message += "</ul>";

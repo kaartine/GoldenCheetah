@@ -18,12 +18,21 @@
  */
 
 #include "TrainDB.h"
+#include "AtomicFileWriter.h"
 #include "Library.h"
 
+#include <QCryptographicHash>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSqlQueryModel>
+
+#include <algorithm>
+
+#ifdef GC_TRAIN_DB_TEST_HOOKS
+extern bool trainDbPlanImportCommitReportedFailure();
+#endif
 
 
 // DB Schema Version - YOU MUST UPDATE THIS IF THE TRAIN DB SCHEMA CHANGES
@@ -120,6 +129,327 @@ TrainDB *trainDB;
 
 
 namespace {
+
+const QString PlanImportJournalTable =
+    QStringLiteral("plan_import_journal");
+const QString PlanImportWorkoutTable =
+    QStringLiteral("plan_import_workout");
+constexpr qsizetype MaximumPlanImportWorkouts = 4096;
+constexpr qint64 MaximumPlanImportWorkoutSize =
+    64LL * 1024 * 1024;
+constexpr qint64 MaximumPlanImportPayloadSize =
+    256LL * 1024 * 1024;
+
+bool validPlanImportId(const QString &id)
+{
+    static const QRegularExpression pattern(QStringLiteral(
+        "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+        "[0-9a-f]{4}-[0-9a-f]{12}$"));
+    return pattern.match(id).hasMatch();
+}
+
+bool validPlanImportTargetName(const QString &name)
+{
+    return atomicFileNameIsPortableComponent(name);
+}
+
+bool validatePlanImportJournal(
+    const TrainDB::PlanImportJournal &journal,
+    QString &error)
+{
+    if (!validPlanImportId(journal.id)
+        || !validPlanImportId(journal.planJournalId)) {
+        error = QStringLiteral(
+            "The plan import journal identifier is invalid");
+        return false;
+    }
+    if (!QDir::isAbsolutePath(journal.athleteRoot)
+        || !QDir::isAbsolutePath(journal.workoutRoot)
+        || QDir::cleanPath(journal.athleteRoot)
+            != journal.athleteRoot
+        || QDir::cleanPath(journal.workoutRoot)
+            != journal.workoutRoot) {
+        error = QStringLiteral(
+            "The plan import journal root is invalid");
+        return false;
+    }
+    if (journal.workouts.size() > MaximumPlanImportWorkouts) {
+        error = QStringLiteral(
+            "The plan import contains too many workouts");
+        return false;
+    }
+
+    QSet<QString> targetNames;
+    qint64 aggregateSize = 0;
+    for (const TrainDB::PlanImportWorkout &workout :
+         journal.workouts) {
+        if (!validPlanImportTargetName(
+                workout.targetFileName)
+            || targetNames.contains(workout.targetFileName)) {
+            error = QStringLiteral(
+                "The plan import workout target is invalid or duplicated");
+            return false;
+        }
+        targetNames.insert(workout.targetFileName);
+        if (workout.contents.size()
+                > MaximumPlanImportWorkoutSize
+            || aggregateSize
+                > MaximumPlanImportPayloadSize
+                    - workout.contents.size()) {
+            error = QStringLiteral(
+                "The plan import workout payload is too large");
+            return false;
+        }
+        aggregateSize += workout.contents.size();
+        const QByteArray digest = QCryptographicHash::hash(
+            workout.contents, QCryptographicHash::Sha256);
+        if (!workout.digest.isEmpty()
+            && workout.digest != digest) {
+            error = QStringLiteral(
+                "The plan import workout digest is invalid");
+            return false;
+        }
+    }
+    return true;
+}
+
+bool planImportTableExists(
+    const QSqlDatabase &database,
+    const QString &name,
+    bool &exists,
+    QString &error)
+{
+    exists = false;
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral(
+        "SELECT type FROM sqlite_master WHERE name = :name"));
+    query.bindValue(QStringLiteral(":name"), name);
+    if (!query.exec()) {
+        error = query.lastError().text();
+        return false;
+    }
+    if (!query.next()) return true;
+    if (query.value(0).toString() != QStringLiteral("table")
+        || query.next()) {
+        error = QStringLiteral(
+            "The plan import journal schema is invalid");
+        return false;
+    }
+    exists = true;
+    return true;
+}
+
+bool planImportTableHasLayout(
+    const QSqlDatabase &database,
+    const QString &name,
+    const QStringList &expectedColumns,
+    const QStringList &expectedPrimaryKey,
+    QString &error)
+{
+    QSqlQuery query(database);
+    if (!query.exec(QStringLiteral(
+            "PRAGMA table_info(\"%1\")").arg(name))) {
+        error = query.lastError().text();
+        return false;
+    }
+    QStringList columns;
+    QHash<int, QString> primaryKeyByPosition;
+    while (query.next()) {
+        const QString column = query.value(1).toString();
+        columns.append(column);
+        if (query.value(3).toInt() == 0) {
+            error = QStringLiteral(
+                "The plan import journal schema permits null values");
+            return false;
+        }
+        const int primaryKeyPosition = query.value(5).toInt();
+        if (primaryKeyPosition > 0)
+            primaryKeyByPosition.insert(
+                primaryKeyPosition, column);
+    }
+    QStringList primaryKey;
+    for (int position = 1;
+         position <= primaryKeyByPosition.size(); ++position) {
+        if (!primaryKeyByPosition.contains(position)) {
+            error = QStringLiteral(
+                "The plan import journal primary key is invalid");
+            return false;
+        }
+        primaryKey.append(
+            primaryKeyByPosition.value(position));
+    }
+    if (columns != expectedColumns
+        || primaryKey != expectedPrimaryKey) {
+        error = QStringLiteral(
+            "The plan import journal schema is invalid");
+        return false;
+    }
+    return true;
+}
+
+bool planImportTableHasUniqueIndexes(
+    const QSqlDatabase &database,
+    const QString &name,
+    const QList<QStringList> &expectedIndexes,
+    QString &error)
+{
+    QSqlQuery indexes(database);
+    if (!indexes.exec(QStringLiteral(
+            "PRAGMA index_list(\"%1\")").arg(name))) {
+        error = indexes.lastError().text();
+        return false;
+    }
+
+    QList<QStringList> actualIndexes;
+    while (indexes.next()) {
+        if (indexes.value(2).toInt() == 0)
+            continue;
+        if (indexes.value(4).toInt() != 0) {
+            error = QStringLiteral(
+                "The plan import journal uses a partial unique index");
+            return false;
+        }
+        QString indexName = indexes.value(1).toString();
+        indexName.replace(
+            QLatin1Char('"'), QStringLiteral("\"\""));
+        QSqlQuery columns(database);
+        if (!columns.exec(QStringLiteral(
+                "PRAGMA index_info(\"%1\")")
+                    .arg(indexName))) {
+            error = columns.lastError().text();
+            return false;
+        }
+        QStringList indexedColumns;
+        int expectedSequence = 0;
+        while (columns.next()) {
+            bool sequenceValid = false;
+            const int sequence = columns.value(0).toInt(
+                &sequenceValid);
+            const QString column = columns.value(2).toString();
+            if (!sequenceValid || sequence != expectedSequence
+                || column.isEmpty()) {
+                error = QStringLiteral(
+                    "The plan import journal index is invalid");
+                return false;
+            }
+            indexedColumns.append(column);
+            ++expectedSequence;
+        }
+        if (indexedColumns.isEmpty()) {
+            error = QStringLiteral(
+                "The plan import journal index is empty");
+            return false;
+        }
+        actualIndexes.append(indexedColumns);
+    }
+
+    const auto normalized = [](QList<QStringList> indexes) {
+        std::sort(
+            indexes.begin(), indexes.end(),
+            [](const QStringList &left,
+               const QStringList &right) {
+                return left.join(QLatin1Char('\x1f'))
+                    < right.join(QLatin1Char('\x1f'));
+            });
+        return indexes;
+    };
+    if (normalized(actualIndexes)
+            != normalized(expectedIndexes)) {
+        error = QStringLiteral(
+            "The plan import journal unique indexes are invalid");
+        return false;
+    }
+    return true;
+}
+
+bool planImportTablesReady(
+    const QSqlDatabase &database,
+    bool create,
+    bool &available,
+    QString &error)
+{
+    available = false;
+    bool journalExists = false;
+    bool workoutExists = false;
+    if (!planImportTableExists(
+            database, PlanImportJournalTable,
+            journalExists, error)
+        || !planImportTableExists(
+            database, PlanImportWorkoutTable,
+            workoutExists, error)) {
+        return false;
+    }
+    if (journalExists != workoutExists) {
+        error = QStringLiteral(
+            "The plan import journal schema is incomplete");
+        return false;
+    }
+    if (!journalExists && !create) return true;
+
+    if (!journalExists) {
+        QSqlQuery query(database);
+        if (!query.exec(QStringLiteral(
+                "CREATE TABLE plan_import_journal ("
+                "id TEXT NOT NULL PRIMARY KEY,"
+                "athlete_root TEXT NOT NULL UNIQUE,"
+                "workout_root TEXT NOT NULL,"
+                "plan_journal_id TEXT NOT NULL,"
+                "created_at INTEGER NOT NULL)"))) {
+            error = query.lastError().text();
+            return false;
+        }
+        if (!query.exec(QStringLiteral(
+                "CREATE TABLE plan_import_workout ("
+                "journal_id TEXT NOT NULL,"
+                "sequence INTEGER NOT NULL,"
+                "target_name TEXT NOT NULL,"
+                "size INTEGER NOT NULL,"
+                "digest BLOB NOT NULL,"
+                "contents BLOB NOT NULL,"
+                "PRIMARY KEY(journal_id, sequence),"
+                "UNIQUE(journal_id, target_name))"))) {
+            error = query.lastError().text();
+            return false;
+        }
+    }
+
+    if (!planImportTableHasLayout(
+            database, PlanImportJournalTable,
+            {QStringLiteral("id"),
+             QStringLiteral("athlete_root"),
+             QStringLiteral("workout_root"),
+             QStringLiteral("plan_journal_id"),
+             QStringLiteral("created_at")},
+            {QStringLiteral("id")}, error)
+        || !planImportTableHasLayout(
+            database, PlanImportWorkoutTable,
+            {QStringLiteral("journal_id"),
+             QStringLiteral("sequence"),
+             QStringLiteral("target_name"),
+             QStringLiteral("size"),
+             QStringLiteral("digest"),
+             QStringLiteral("contents")},
+            {QStringLiteral("journal_id"),
+             QStringLiteral("sequence")}, error)) {
+        return false;
+    }
+    if (!planImportTableHasUniqueIndexes(
+            database, PlanImportJournalTable,
+            {{QStringLiteral("id")},
+             {QStringLiteral("athlete_root")}},
+            error)
+        || !planImportTableHasUniqueIndexes(
+            database, PlanImportWorkoutTable,
+            {{QStringLiteral("journal_id"),
+              QStringLiteral("sequence")},
+             {QStringLiteral("journal_id"),
+              QStringLiteral("target_name")}},
+            error)) {
+        return false;
+    }
+    available = true;
+    return true;
+}
 
 void protectDatabaseFromWrites(const QSqlDatabase &database)
 {
@@ -1269,6 +1599,283 @@ TrainDB::rollbackLUW
 ()
 {
     connection().rollback();
+}
+
+
+bool
+TrainDB::commitPlanImportJournal
+(const PlanImportJournal &journal,
+ bool &mayBeCommitted,
+ QString &error) const
+{
+    mayBeCommitted = false;
+    error.clear();
+    if (currentSchemaStatus != SchemaStatus::current
+        && currentSchemaStatus != SchemaStatus::migrationReady) {
+        error = QStringLiteral(
+            "The workout database is unavailable for plan import");
+        return false;
+    }
+    if (!validatePlanImportJournal(journal, error))
+        return false;
+
+    QSqlDatabase database = connection();
+    if (!database.transaction()) {
+        error = database.lastError().text();
+        return false;
+    }
+    const auto fail = [&](const QString &detail) {
+        error = detail;
+        database.rollback();
+        return false;
+    };
+
+    bool available = false;
+    if (!planImportTablesReady(
+            database, true, available, error)
+        || !available) {
+        return fail(error.isEmpty()
+            ? QStringLiteral(
+                "The plan import journal is unavailable")
+            : error);
+    }
+
+    QSqlQuery pendingQuery(database);
+    if (!pendingQuery.exec(QStringLiteral(
+            "SELECT id FROM plan_import_journal LIMIT 1"))) {
+        return fail(pendingQuery.lastError().text());
+    }
+    if (pendingQuery.next()) {
+        return fail(QStringLiteral(
+            "Another plan import must be recovered before a new import can start"));
+    }
+
+    QSqlQuery journalQuery(database);
+    journalQuery.prepare(QStringLiteral(
+        "INSERT INTO plan_import_journal "
+        "(id, athlete_root, workout_root, plan_journal_id, created_at) "
+        "VALUES (:id, :athlete_root, :workout_root, "
+        ":plan_journal_id, :created_at)"));
+    journalQuery.bindValue(QStringLiteral(":id"), journal.id);
+    journalQuery.bindValue(
+        QStringLiteral(":athlete_root"), journal.athleteRoot);
+    journalQuery.bindValue(
+        QStringLiteral(":workout_root"), journal.workoutRoot);
+    journalQuery.bindValue(
+        QStringLiteral(":plan_journal_id"),
+        journal.planJournalId);
+    journalQuery.bindValue(
+        QStringLiteral(":created_at"),
+        QDateTime::currentSecsSinceEpoch());
+    if (!journalQuery.exec())
+        return fail(journalQuery.lastError().text());
+
+    QSqlQuery workoutQuery(database);
+    workoutQuery.prepare(QStringLiteral(
+        "INSERT INTO plan_import_workout "
+        "(journal_id, sequence, target_name, size, digest, contents) "
+        "VALUES (:journal_id, :sequence, :target_name, "
+        ":size, :digest, :contents)"));
+    for (qsizetype index = 0;
+         index < journal.workouts.size(); ++index) {
+        const PlanImportWorkout &workout =
+            journal.workouts.at(index);
+        const QByteArray digest = QCryptographicHash::hash(
+            workout.contents, QCryptographicHash::Sha256);
+        workoutQuery.bindValue(
+            QStringLiteral(":journal_id"), journal.id);
+        workoutQuery.bindValue(
+            QStringLiteral(":sequence"), index);
+        workoutQuery.bindValue(
+            QStringLiteral(":target_name"),
+            workout.targetFileName);
+        workoutQuery.bindValue(
+            QStringLiteral(":size"), workout.contents.size());
+        workoutQuery.bindValue(
+            QStringLiteral(":digest"), digest);
+        workoutQuery.bindValue(
+            QStringLiteral(":contents"), workout.contents);
+        if (!workoutQuery.exec())
+            return fail(workoutQuery.lastError().text());
+        workoutQuery.finish();
+    }
+
+    mayBeCommitted = true;
+    bool commitSucceeded = database.commit();
+#ifdef GC_TRAIN_DB_TEST_HOOKS
+    if (commitSucceeded
+        && trainDbPlanImportCommitReportedFailure()) {
+        commitSucceeded = false;
+    }
+#endif
+    if (!commitSucceeded) {
+        const QString detail = database.lastError().text();
+        if (database.rollback())
+            mayBeCommitted = false;
+        error = detail.isEmpty()
+            ? QStringLiteral(
+                "The plan import decision commit state is uncertain")
+            : detail;
+        return false;
+    }
+    return true;
+}
+
+
+bool
+TrainDB::loadPlanImportJournal
+(const QString &athleteRoot,
+ PlanImportJournal &journal,
+ bool &found,
+ QString &error) const
+{
+    journal = {};
+    found = false;
+    error.clear();
+    if (currentSchemaStatus != SchemaStatus::current
+        && currentSchemaStatus != SchemaStatus::migrationReady) {
+        error = QStringLiteral(
+            "The workout database is unavailable for plan recovery");
+        return false;
+    }
+
+    QSqlDatabase database = connection();
+    bool available = false;
+    if (!planImportTablesReady(
+            database, false, available, error)) {
+        return false;
+    }
+    if (!available) return true;
+
+    QSqlQuery journalQuery(database);
+    journalQuery.prepare(QStringLiteral(
+        "SELECT id, workout_root, plan_journal_id "
+        "FROM plan_import_journal WHERE athlete_root = :athlete_root"));
+    journalQuery.bindValue(
+        QStringLiteral(":athlete_root"), athleteRoot);
+    if (!journalQuery.exec()) {
+        error = journalQuery.lastError().text();
+        return false;
+    }
+    if (!journalQuery.next()) return true;
+
+    PlanImportJournal loaded;
+    loaded.id = journalQuery.value(0).toString();
+    loaded.athleteRoot = athleteRoot;
+    loaded.workoutRoot = journalQuery.value(1).toString();
+    loaded.planJournalId = journalQuery.value(2).toString();
+    if (journalQuery.next()) {
+        error = QStringLiteral(
+            "Multiple plan import journals exist for one athlete");
+        return false;
+    }
+
+    QSqlQuery workoutQuery(database);
+    workoutQuery.prepare(QStringLiteral(
+        "SELECT sequence, target_name, size, digest, contents "
+        "FROM plan_import_workout WHERE journal_id = :journal_id "
+        "ORDER BY sequence"));
+    workoutQuery.bindValue(
+        QStringLiteral(":journal_id"), loaded.id);
+    if (!workoutQuery.exec()) {
+        error = workoutQuery.lastError().text();
+        return false;
+    }
+    qsizetype expectedSequence = 0;
+    qint64 aggregateSize = 0;
+    while (workoutQuery.next()) {
+        bool sequenceValid = false;
+        bool sizeValid = false;
+        const qlonglong sequence =
+            workoutQuery.value(0).toLongLong(&sequenceValid);
+        const qlonglong storedSize =
+            workoutQuery.value(2).toLongLong(&sizeValid);
+        const QByteArray digest =
+            workoutQuery.value(3).toByteArray();
+        const QByteArray contents =
+            workoutQuery.value(4).toByteArray();
+        if (!sequenceValid || sequence != expectedSequence
+            || !sizeValid || storedSize < 0
+            || storedSize != contents.size()
+            || storedSize > MaximumPlanImportWorkoutSize
+            || digest.size()
+                != QCryptographicHash::hashLength(
+                    QCryptographicHash::Sha256)
+            || QCryptographicHash::hash(
+                   contents, QCryptographicHash::Sha256)
+                != digest
+            || aggregateSize
+                > MaximumPlanImportPayloadSize - storedSize) {
+            error = QStringLiteral(
+                "A plan import workout payload is invalid");
+            return false;
+        }
+        aggregateSize += storedSize;
+        loaded.workouts.append({
+            workoutQuery.value(1).toString(),
+            contents, digest});
+        if (loaded.workouts.size()
+            > MaximumPlanImportWorkouts) {
+            error = QStringLiteral(
+                "The plan import contains too many workouts");
+            return false;
+        }
+        ++expectedSequence;
+    }
+    if (!validatePlanImportJournal(loaded, error))
+        return false;
+
+    journal = std::move(loaded);
+    found = true;
+    return true;
+}
+
+
+bool
+TrainDB::removePlanImportJournal
+(const QString &id, QString &error) const
+{
+    error.clear();
+    if (!validPlanImportId(id)) {
+        error = QStringLiteral(
+            "The plan import journal identifier is invalid");
+        return false;
+    }
+    QSqlDatabase database = connection();
+    bool available = false;
+    if (!planImportTablesReady(
+            database, false, available, error)) {
+        return false;
+    }
+    if (!available) {
+        error = QStringLiteral(
+            "The plan import journal is unavailable");
+        return false;
+    }
+
+    QSqlQuery workouts(database);
+    workouts.prepare(QStringLiteral(
+        "DELETE FROM plan_import_workout WHERE journal_id = :id"));
+    workouts.bindValue(QStringLiteral(":id"), id);
+    if (!workouts.exec()) {
+        error = workouts.lastError().text();
+        return false;
+    }
+
+    QSqlQuery journalQuery(database);
+    journalQuery.prepare(QStringLiteral(
+        "DELETE FROM plan_import_journal WHERE id = :id"));
+    journalQuery.bindValue(QStringLiteral(":id"), id);
+    if (!journalQuery.exec()) {
+        error = journalQuery.lastError().text();
+        return false;
+    }
+    if (journalQuery.numRowsAffected() != 1) {
+        error = QStringLiteral(
+            "The plan import journal no longer exists");
+        return false;
+    }
+    return true;
 }
 
 

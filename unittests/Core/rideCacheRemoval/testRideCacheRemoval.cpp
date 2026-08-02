@@ -11,9 +11,15 @@
 #include "RideCacheMutationScope.h"
 #include "RideItem.h"
 #include "NavigationModel.h"
+#include "TrainDB.h"
+
+#define private public
+#include "PlanBundle.h"
+#undef private
 
 #include <QAbstractItemModelTester>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QEvent>
 #include <QFile>
@@ -95,6 +101,7 @@ void setRideCacheCalendarStorageAction(
     const std::function<void()> &action);
 void setRideCacheCalendarCopyFailureOnCall(int call);
 void setRideCacheActivityIdentityFailureOnCall(int call);
+void setPlanBundleWorkoutRootForTest(const QString &path);
 
 namespace {
 
@@ -245,6 +252,7 @@ struct Fixture
         cache.reset(new RideCache(context.get()));
         athlete->rideCache = cache.get();
         resetRideCacheRemovalRefreshCounts();
+        setPlanBundleWorkoutRootForTest(QString());
         return athlete->home->activities().exists()
             && athlete->home->fileBackup().exists()
             && athlete->home->cache().exists();
@@ -325,6 +333,53 @@ struct Fixture
     std::unique_ptr<Athlete> athlete;
     std::unique_ptr<RideCache> cache;
 };
+
+bool preparePlanBundleReader(
+    PlanBundleReader &reader,
+    const QDateTime &sourceDateTime,
+    const QDateTime &targetDateTime,
+    const QString &workoutReference = QString())
+{
+    reader.tempDir = new QTemporaryDir();
+    if (!reader.tempDir->isValid()) return false;
+    const QDir root(reader.tempDir->path());
+    if (!root.mkpath(QStringLiteral("planned"))
+        || !root.mkpath(QStringLiteral("workouts"))) {
+        return false;
+    }
+    reader.plannedDir = QDir(
+        root.filePath(QStringLiteral("planned")));
+    reader.workoutDir = QDir(
+        root.filePath(QStringLiteral("workouts")));
+    reader.metadata.name = QStringLiteral("Atomic test plan");
+    reader.targetRangeStart = targetDateTime.date();
+    reader.targetRangeEnd = targetDateTime.date();
+    reader.duration = 1;
+
+    const QString sourceName = sourceDateTime.toString(
+        QStringLiteral("yyyy_MM_dd_HH_mm_ss"))
+        + QStringLiteral(".json");
+    QByteArray sourceContents(
+        "plan bundle activity\n");
+    if (!workoutReference.isEmpty()) {
+        sourceContents += "workout="
+            + workoutReference.toUtf8() + '\n';
+    }
+    const QString sourcePath =
+        reader.plannedDir.filePath(sourceName);
+    writeFixture(sourcePath, sourceContents);
+    if (readBytes(sourcePath) != sourceContents)
+        return false;
+    RideFile *preview = new RideFile(sourceDateTime, 1.0);
+    if (!workoutReference.isEmpty()) {
+        preview->setTag(
+            QStringLiteral("WorkoutFilename"),
+            workoutReference);
+    }
+    reader.rideFiles.append({
+        preview, true, targetDateTime, sourceName});
+    return true;
+}
 
 } // namespace
 
@@ -481,6 +536,9 @@ private slots:
     void plannedReplacementStageFailurePreservesOldGeneration();
     void plannedReplacementStageFailureResumesBackgroundWork();
     void plannedReplacementCommitsOneCompleteGeneration();
+    void planBundleImportPublishesOneCompleteGeneration();
+    void planBundleImportCommitsWorkoutFileAndDatabaseRow();
+    void planBundleImportStageFailurePreservesOldGeneration();
     void plannedReplacementQuiescesWorkersAndDefersRefresh();
     void plannedReplacementBlocksRefreshRestartDuringCallbacks();
     void plannedReplacementRefreshDoesNotLeakIntoNextRemoval();
@@ -524,6 +582,8 @@ private slots:
     void plannedReplacementArchivesOldGenerationAndInvalidatesDerivedFiles();
     void plannedReplacementFailurePreservesBackupAndDerivedFiles();
     void plannedReplacementSupportsImportWithoutRemovals();
+    void plannedReplacementCoordinatorWrapsDurableCommit();
+    void plannedReplacementRetainsJournalAfterExternalCommitFailure();
     void plannedReplacementRejectsInvalidTargets_data();
     void plannedReplacementRejectsInvalidTargets();
     void plannedReplacementCacheMutationDuringStageRollsBack();
@@ -5859,6 +5919,143 @@ plannedReplacementCommitsOneCompleteGeneration()
 }
 
 void TestRideCacheRemoval::
+planBundleImportPublishesOneCompleteGeneration()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QDateTime sourceDateTime(
+        QDate(2026, 1, 5), QTime(8, 30));
+    const QDateTime targetDateTime(
+        QDate(2026, 3, 9), QTime(8, 30));
+    PlanBundleReader reader(
+        fixture.context.get(), targetDateTime.date());
+    QVERIFY(preparePlanBundleReader(
+        reader, sourceDateTime, targetDateTime));
+
+    const PlanResult result = reader.importBundle();
+
+    QVERIFY2(result.ok(), qPrintable(result.errors.join(';')));
+    QVERIFY(result.committed);
+    const QString targetName = targetDateTime.toString(
+        QStringLiteral("yyyy_MM_dd_HH_mm_ss"))
+        + QStringLiteral(".json");
+    QVERIFY(QFileInfo::exists(
+        fixture.plannedActivityPath(targetName)));
+    QVERIFY(cacheContains(*fixture.cache, targetName));
+    QCOMPARE(fixture.cache->count(), 1);
+}
+
+void TestRideCacheRemoval::
+planBundleImportCommitsWorkoutFileAndDatabaseRow()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString workoutRoot = QDir(
+        fixture.temporary.path()).filePath(
+            QStringLiteral("workout-library"));
+    const QString databaseRoot = QDir(
+        fixture.temporary.path()).filePath(
+            QStringLiteral("workout-database"));
+    QVERIFY(QDir().mkpath(workoutRoot));
+    QVERIFY(QDir().mkpath(databaseRoot));
+    setPlanBundleWorkoutRootForTest(workoutRoot);
+
+    const QByteArray workoutContents(
+        "[COURSE HEADER]\nVERSION = 2\n[END COURSE HEADER]\n");
+    const QString workoutHash = QString::fromLatin1(
+        QCryptographicHash::hash(
+            workoutContents,
+            QCryptographicHash::Md5).toHex());
+    const QString packedWorkout = workoutHash
+        + QStringLiteral("-threshold.erg");
+    const QDateTime sourceDateTime(
+        QDate(2026, 1, 5), QTime(8, 30));
+    const QDateTime targetDateTime(
+        QDate(2026, 3, 9), QTime(8, 30));
+    PlanBundleReader reader(
+        fixture.context.get(), targetDateTime.date());
+    QVERIFY(preparePlanBundleReader(
+        reader, sourceDateTime, targetDateTime,
+        packedWorkout));
+    writeFixture(
+        reader.workoutDir.filePath(packedWorkout),
+        workoutContents);
+
+    TrainDB database{QDir(databaseRoot)};
+    TrainDB *const previousDatabase = trainDB;
+    trainDB = &database;
+    const PlanResult result = reader.importBundle();
+    trainDB = previousDatabase;
+    setPlanBundleWorkoutRootForTest(QString());
+
+    QVERIFY2(result.ok(), qPrintable(result.errors.join(';')));
+    QVERIFY(result.committed);
+    const QString targetWorkout = QDir(workoutRoot).filePath(
+        QStringLiteral("threshold.erg"));
+    QCOMPARE(readBytes(targetWorkout), workoutContents);
+    QVERIFY(database.hasWorkout(targetWorkout));
+    const QString targetActivityName = targetDateTime.toString(
+        QStringLiteral("yyyy_MM_dd_HH_mm_ss"))
+        + QStringLiteral(".json");
+    const QByteArray activityContents = readBytes(
+        fixture.plannedActivityPath(targetActivityName));
+    QVERIFY(activityContents.contains(
+        targetWorkout.toUtf8()));
+    TrainDB::PlanImportJournal pending;
+    bool found = false;
+    QString journalError;
+    QVERIFY2(database.loadPlanImportJournal(
+                 fixture.athlete->home->root().canonicalPath(),
+                 pending, found, journalError),
+             qPrintable(journalError));
+    QVERIFY(!found);
+}
+
+void TestRideCacheRemoval::
+planBundleImportStageFailurePreservesOldGeneration()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QDateTime sourceDateTime(
+        QDate(2026, 1, 5), QTime(8, 30));
+    const QDateTime targetDateTime(
+        QDate(2026, 3, 9), QTime(8, 30));
+    const QString targetName = targetDateTime.toString(
+        QStringLiteral("yyyy_MM_dd_HH_mm_ss"))
+        + QStringLiteral(".json");
+    RideItem *old = fixture.addPlannedRide(
+        targetName, false);
+    old->dateTime = targetDateTime;
+    const QString oldPath =
+        fixture.plannedActivityPath(targetName);
+    writeFixture(
+        oldPath, QByteArray("old plan generation"));
+    QCOMPARE(
+        readBytes(oldPath),
+        QByteArray("old plan generation"));
+
+    PlanBundleReader reader(
+        fixture.context.get(), targetDateTime.date());
+    QVERIFY(preparePlanBundleReader(
+        reader, sourceDateTime, targetDateTime));
+    setRideCacheCalendarStorageAction([old] {
+        old->isdirty = true;
+    });
+
+    const PlanResult result = reader.importBundle();
+    old->isdirty = false;
+
+    QVERIFY(!result.ok());
+    QVERIFY(!result.committed);
+    QCOMPARE(
+        readBytes(oldPath),
+        QByteArray("old plan generation"));
+    QCOMPARE(fixture.cache->count(), 1);
+    QVERIFY(fixture.cache->rides().contains(old));
+    QVERIFY(cacheContains(*fixture.cache, targetName));
+}
+
+void TestRideCacheRemoval::
 plannedReplacementQuiescesWorkersAndDefersRefresh()
 {
     Fixture fixture;
@@ -8162,6 +8359,113 @@ plannedReplacementSupportsImportWithoutRemovals()
     QCOMPARE(readBytes(targetPath), QByteArray("imported plan"));
     QVERIFY(cacheContains(*fixture.cache, thirdName()));
     QCOMPARE(fixture.context->ride, selected);
+}
+
+void TestRideCacheRemoval::
+plannedReplacementCoordinatorWrapsDurableCommit()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *first = fixture.addPlannedRide(firstName(), false);
+    const QString firstPath = fixture.plannedActivityPath(firstName());
+    const QString thirdPath = fixture.plannedActivityPath(thirdName());
+    writeFixture(firstPath, QByteArray("old first"));
+    const QList<RideCache::PlannedActivityTarget> targets = {{
+        thirdName(),
+        [](const QString &path, QString &error) {
+            return stageBytes(path, QByteArray("new third"), error);
+        }}};
+
+    QString journalPath;
+    bool decisionCalled = false;
+    bool completionCalled = false;
+    bool commitMarkerWasVisible = false;
+    RideCache::PlannedReplacementCoordinator coordinator;
+    coordinator.commit =
+        [&](const QString &path, bool &committed, QString &) {
+            decisionCalled = true;
+            journalPath = path;
+            committed = true;
+            return QFileInfo::exists(
+                QDir(path).filePath(
+                    QStringLiteral("manifest.json")));
+        };
+    coordinator.complete = [&](QString &) {
+        completionCalled = true;
+        commitMarkerWasVisible = QFileInfo::exists(
+            QDir(journalPath).filePath(
+                QStringLiteral("COMMITTED")));
+        return commitMarkerWasVisible;
+    };
+
+    const RideCache::PlannedReplacementResult result =
+        fixture.cache->replacePlannedActivityFiles(
+            {first}, {firstPath}, targets, false,
+            coordinator);
+
+    QVERIFY2(result.cleanlyCompleted(), qPrintable(result.error));
+    QVERIFY(decisionCalled);
+    QVERIFY(completionCalled);
+    QVERIFY(commitMarkerWasVisible);
+    QVERIFY(!journalPath.isEmpty());
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QVERIFY(!QFileInfo::exists(firstPath));
+    QCOMPARE(readBytes(thirdPath), QByteArray("new third"));
+}
+
+void TestRideCacheRemoval::
+plannedReplacementRetainsJournalAfterExternalCommitFailure()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideItem *first = fixture.addPlannedRide(firstName(), false);
+    const QString firstPath = fixture.plannedActivityPath(firstName());
+    const QString thirdPath = fixture.plannedActivityPath(thirdName());
+    writeFixture(firstPath, QByteArray("old first"));
+    const QList<RideCache::PlannedActivityTarget> targets = {{
+        thirdName(),
+        [](const QString &path, QString &error) {
+            return stageBytes(path, QByteArray("new third"), error);
+        }}};
+
+    QString journalPath;
+    RideCache::PlannedReplacementCoordinator coordinator;
+    coordinator.commit =
+        [&](const QString &path, bool &committed, QString &error) {
+            journalPath = path;
+            committed = true;
+            error = QStringLiteral(
+                "injected failure after durable decision");
+            return false;
+        };
+    coordinator.complete = [](QString &) { return true; };
+
+    const RideCache::PlannedReplacementResult result =
+        fixture.cache->replacePlannedActivityFiles(
+            {first}, {firstPath}, targets, false,
+            coordinator);
+
+    QVERIFY(result.committed);
+    QVERIFY(!result.cacheUpdated);
+    QVERIFY(!result.cleanupComplete);
+    QVERIFY(!result.error.isEmpty());
+    QCOMPARE(readBytes(firstPath), QByteArray("old first"));
+    QVERIFY(!QFileInfo::exists(thirdPath));
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    QString recoveryError;
+    std::shared_ptr<PlanReplacement::Journal> journal =
+        PlanReplacement::Journal::openPrepared(
+            fixture.athlete->home->root().absolutePath(),
+            QFileInfo(journalPath).fileName(),
+            recoveryError);
+    QVERIFY2(journal, qPrintable(recoveryError));
+    QVERIFY2(journal->publishAndCommit(recoveryError),
+             qPrintable(recoveryError));
+    QVERIFY2(journal->cleanupAfterCommit(recoveryError),
+             qPrintable(recoveryError));
+    QVERIFY(!QFileInfo::exists(firstPath));
+    QCOMPARE(readBytes(thirdPath), QByteArray("new third"));
 }
 
 void TestRideCacheRemoval::

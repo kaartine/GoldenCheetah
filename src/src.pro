@@ -703,7 +703,7 @@ HEADERS += Metrics/Banister.h Metrics/CPSolver.h Metrics/Estimator.h Metrics/Ext
            Metrics/BlinnSolver.h Metrics/FastKmeans.h
 
 ## Planning and Compliance
-HEADERS += Planning/PlanningWindow.h Planning/PlanBundle.h Planning/PlanReplacementJournal.h
+HEADERS += Planning/PlanningWindow.h Planning/PlanBundle.h Planning/PlanBundleImportJournal.h Planning/PlanReplacementJournal.h
 
 # contrib
 HEADERS += ../contrib/qtsolutions/codeeditor/codeeditor.h ../contrib/qtsolutions/json/mvjson.h \
@@ -829,7 +829,7 @@ SOURCES += Metrics/aBikeScore.cpp Metrics/aCoggan.cpp Metrics/AerobicDecoupling.
            Metrics/RowMetrics.cpp Metrics/FastKmeans.cpp
 
 ## Planning and Compliance
-SOURCES += Planning/PlanningWindow.cpp Planning/PlanBundle.cpp Planning/PlanReplacementJournal.cpp
+SOURCES += Planning/PlanningWindow.cpp Planning/PlanBundle.cpp Planning/PlanBundleImportJournal.cpp Planning/PlanReplacementJournal.cpp
 
 ## Contributed solutions
 SOURCES += ../contrib/qtsolutions/codeeditor/codeeditor.cpp ../contrib/qtsolutions/json/mvjson.cpp \
