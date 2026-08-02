@@ -99,7 +99,7 @@ private:
     friend class EntryRef;
     friend class PinnedFile;
     friend bool pinRegularFile(
-        const EntryRef &, class PinnedFile &, QString &);
+        const EntryRef &, class PinnedFile &, QString &, qint64);
     friend bool entryExists(
         const EntryRef &, bool &, QString &);
     friend bool entryMatches(
@@ -143,7 +143,7 @@ private:
     friend class DirectoryAnchor;
     friend class PinnedFile;
     friend bool pinRegularFile(
-        const EntryRef &, class PinnedFile &, QString &);
+        const EntryRef &, class PinnedFile &, QString &, qint64);
     friend bool entryExists(
         const EntryRef &, bool &, QString &);
     friend bool entryMatches(
@@ -179,7 +179,7 @@ private:
     QString verifiedPath(const EntryRef &entry) const;
 
     friend bool pinRegularFile(
-        const EntryRef &, PinnedFile &, QString &);
+        const EntryRef &, PinnedFile &, QString &, qint64);
     friend bool entryMatches(
         const EntryRef &, const PinnedFile &, bool &, QString &);
     friend bool readAll(
@@ -215,7 +215,8 @@ struct MutationResult
 bool pinRegularFile(
     const EntryRef &entry,
     PinnedFile &file,
-    QString &error);
+    QString &error,
+    qint64 maximumSize = -1);
 
 bool entryExists(
     const EntryRef &entry,

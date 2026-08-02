@@ -92,6 +92,8 @@ struct JournalState
     Detail::Manifest manifest;
     AtomicFileSnapshot manifestSnapshot;
     AnchoredFileSystem::DirectoryAnchor journalDirectory;
+    AnchoredFileSystem::EntryRef manifestEntry;
+    std::shared_ptr<AnchoredFileSystem::PinnedFile> manifestFile;
     std::unique_ptr<AtomicFileLockSet> transactionLease;
     bool cleanupComplete = false;
 };
@@ -127,24 +129,6 @@ bool journalDirectoryMatches(
         : QStringLiteral(
               "Cannot revalidate the active transaction journal directory: %1")
               .arg(detail);
-    return false;
-}
-
-bool sameJournalDirectory(
-    const JournalState &expected,
-    const JournalState &current,
-    QString &error)
-{
-    if (!journalDirectoryMatches(expected, error)
-        || !journalDirectoryMatches(current, error)) {
-        return false;
-    }
-    if (expected.journalDirectory.identity()
-        == current.journalDirectory.identity()) {
-        return true;
-    }
-    error = QStringLiteral(
-        "The active transaction journal directory was replaced");
     return false;
 }
 
@@ -784,57 +768,98 @@ bool parseManifest(
     return true;
 }
 
-bool readSmallRegularFile(
-    const QString &path, qint64 maximumSize, QByteArray &contents,
-    AtomicFileSnapshot &snapshot, QString &error)
+bool manifestFileMatches(
+    const JournalState &state, QString &error)
 {
-    ObservedFile observed;
-    if (!inspectRegularFile(path, observed, error, maximumSize)) return false;
-    if (!observed.exists) {
-        error = QStringLiteral("A required transaction file is missing: %1")
-                    .arg(path);
+    if (!state.manifestEntry.isValid()
+        || !state.manifestFile
+        || !state.manifestFile->isValid()) {
+        error = QStringLiteral(
+            "The transaction journal manifest is not anchored");
+        return false;
+    }
+    if (state.manifestFile->size() != state.manifestSnapshot.size
+        || state.manifestFile->sha256()
+            != state.manifestSnapshot.digest) {
+        error = QStringLiteral(
+            "The anchored transaction journal manifest changed");
         return false;
     }
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
-    if (QFileInfo(path).fileName() == Detail::ManifestName) {
-        rideCacheRemovalTransitionReached(
-            "journal-manifest-inspected");
-    }
+    rideCacheRemovalTransitionReached(
+        "journal-manifest-inspected");
 #endif
+    bool matches = false;
+    if (!AnchoredFileSystem::entryMatches(
+            state.manifestEntry,
+            *state.manifestFile,
+            matches,
+            error)) {
+        return false;
+    }
+    if (!matches) {
+        error = QStringLiteral(
+            "The transaction journal manifest was replaced");
+        return false;
+    }
+    return true;
+}
 
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        error = QStringLiteral("Cannot read a transaction file: %1")
-                    .arg(file.errorString());
+bool pinManifestFile(
+    JournalState &state,
+    const AtomicFileSnapshot *expected,
+    QString &error)
+{
+    const AtomicFileSnapshot expectedSnapshot =
+        expected ? *expected : AtomicFileSnapshot();
+    AnchoredFileSystem::EntryRef entry = state.journalDirectory.entry(
+        Detail::ManifestName, error);
+    if (!entry.isValid()) return false;
+
+    auto file = std::make_shared<AnchoredFileSystem::PinnedFile>();
+    if (!AnchoredFileSystem::pinRegularFile(
+            entry,
+            *file,
+            error,
+            Detail::MaximumManifestSize)) {
+        error = QStringLiteral(
+            "Cannot pin the transaction journal manifest: %1")
+                    .arg(error);
         return false;
     }
-    if (file.size() > maximumSize) {
-        error = QStringLiteral("A transaction file is unexpectedly large: %1")
-                    .arg(path);
-        return false;
-    }
-    contents = file.read(maximumSize + 1);
-    if (contents.size() > maximumSize || !file.atEnd()) {
-        error = QStringLiteral("A transaction file is unexpectedly large: %1")
-                    .arg(path);
-        return false;
-    }
-    if (file.error() != QFileDevice::NoError
-        || contents.size() != observed.contents.size) {
-        error = QStringLiteral("Cannot read a complete transaction file: %1")
-                    .arg(file.errorString());
+    if (file->size() > Detail::MaximumManifestSize) {
+        error = QStringLiteral(
+            "The transaction journal manifest is unexpectedly large");
         return false;
     }
 
-    AtomicFileSnapshot after;
-    if (!captureAtomicFileSnapshot(path, after, error)) return false;
-    if (after.size != observed.contents.size
-        || after.digest != observed.contents.digest) {
+    AtomicFileSnapshot snapshot;
+    snapshot.size = file->size();
+    snapshot.digest = file->sha256();
+    if (expected
+        && (snapshot.size != expectedSnapshot.size
+            || snapshot.digest != expectedSnapshot.digest)) {
         error = QStringLiteral("A transaction file changed while being read");
         return false;
     }
-    snapshot = observed.contents;
+    state.manifestEntry = std::move(entry);
+    state.manifestSnapshot = snapshot;
+    state.manifestFile = std::move(file);
     return true;
+}
+
+bool readManifestFile(
+    JournalState &state, QByteArray &contents, QString &error)
+{
+    if (!pinManifestFile(state, nullptr, error)) return false;
+    if (!AnchoredFileSystem::readAll(
+            *state.manifestFile,
+            Detail::MaximumManifestSize,
+            contents,
+            error)) {
+        return false;
+    }
+    return manifestFileMatches(state, error);
 }
 
 bool writeManifestFile(
@@ -1087,6 +1112,27 @@ bool removeExpectedFile(
     return removeObservedFile(path, observed, error);
 }
 
+bool removeManifestFile(
+    const JournalState &state, QString &error)
+{
+    if (!manifestFileMatches(state, error)) return false;
+    const AnchoredFileSystem::MutationResult removal =
+        AnchoredFileSystem::remove(*state.manifestFile);
+    if (removal.effect
+        == AnchoredFileSystem::MutationEffect::AppliedDurable) {
+        return true;
+    }
+    error = removal.error.isEmpty()
+        ? QStringLiteral(
+              "Cannot remove the anchored transaction journal manifest")
+        : removal.error;
+    if (!removal.verifiedRecoveryPath.isEmpty()) {
+        error += QStringLiteral("; recovery file retained at %1")
+                     .arg(removal.verifiedRecoveryPath);
+    }
+    return false;
+}
+
 bool resolveManifestPaths(
     const JournalState &state, ResolvedPaths &paths, QString &error)
 {
@@ -1335,12 +1381,7 @@ bool loadJournalState(
     }
 
     QByteArray contents;
-    if (!readSmallRegularFile(
-            loaded->manifestPath,
-            Detail::MaximumManifestSize,
-            contents,
-            loaded->manifestSnapshot,
-            error)
+    if (!readManifestFile(*loaded, contents, error)
         || !parseManifest(contents, id, loaded->manifest, error)) {
         return false;
     }
@@ -1378,42 +1419,39 @@ bool loadAndLockJournal(
     std::shared_ptr<JournalState> &state,
     std::unique_ptr<AtomicFileLockSet> &locks,
     QString &error,
-    const JournalState *expected = nullptr)
+    const std::shared_ptr<JournalState> &expected = {})
 {
-    if (expected && !journalDirectoryMatches(*expected, error)) return false;
-    std::shared_ptr<JournalState> before;
-    if (!loadJournalState(root, journalPath, before, error)) return false;
-    if (expected && !sameJournalDirectory(*expected, *before, error)) {
+    std::shared_ptr<JournalState> current = expected;
+    if (current) {
+        if (atomicFilePathKey(current->athleteRoot)
+                != atomicFilePathKey(root)
+            || atomicFilePathKey(current->journalPath)
+                != atomicFilePathKey(journalPath)) {
+            error = QStringLiteral(
+                "The active transaction journal path changed");
+            return false;
+        }
+    } else if (!loadJournalState(
+                   root, journalPath, current, error)) {
         return false;
     }
     ResolvedPaths paths;
-    if (!resolveManifestPaths(*before, paths, error)) return false;
+    if (!journalDirectoryMatches(*current, error)
+        || !manifestFileMatches(*current, error)
+        || !resolveManifestPaths(*current, paths, error)) {
+        return false;
+    }
 
     locks.reset(new AtomicFileLockSet);
-    if (!locks->lock(lockPathsFor(*before, paths), error)) return false;
+    if (!locks->lock(lockPathsFor(*current, paths), error)) return false;
 
-    if (!atomicFileMatchesSnapshot(
-            before->manifestPath, before->manifestSnapshot, error)) {
+    if (!journalDirectoryMatches(*current, error)
+        || !manifestFileMatches(*current, error)) {
         error = QStringLiteral(
             "The linked-removal journal changed while it was being locked");
         return false;
     }
-
-    std::shared_ptr<JournalState> after;
-    if (!loadJournalState(root, journalPath, after, error)) return false;
-    if (!sameJournalDirectory(*before, *after, error)
-        || (expected
-            && !sameJournalDirectory(*expected, *after, error))
-        || after->manifestSnapshot.size != before->manifestSnapshot.size
-        || after->manifestSnapshot.digest
-            != before->manifestSnapshot.digest) {
-        if (error.isEmpty()) {
-            error = QStringLiteral(
-                "The linked-removal journal changed while it was being locked");
-        }
-        return false;
-    }
-    state = after;
+    state = current;
     return true;
 }
 
@@ -1423,16 +1461,28 @@ bool loadAndLockRuntimeCommit(
     std::shared_ptr<JournalState> &state,
     std::unique_ptr<AtomicFileLockSet> &locks,
     QString &error,
-    const JournalState *expected = nullptr)
+    const std::shared_ptr<JournalState> &expected = {})
 {
-    if (expected && !journalDirectoryMatches(*expected, error)) return false;
-    std::shared_ptr<JournalState> before;
-    if (!loadJournalState(root, journalPath, before, error)) return false;
-    if (expected && !sameJournalDirectory(*expected, *before, error)) {
+    std::shared_ptr<JournalState> current = expected;
+    if (current) {
+        if (atomicFilePathKey(current->athleteRoot)
+                != atomicFilePathKey(root)
+            || atomicFilePathKey(current->journalPath)
+                != atomicFilePathKey(journalPath)) {
+            error = QStringLiteral(
+                "The active transaction journal path changed");
+            return false;
+        }
+    } else if (!loadJournalState(
+                   root, journalPath, current, error)) {
         return false;
     }
     ResolvedPaths paths;
-    if (!resolveManifestPaths(*before, paths, error)) return false;
+    if (!journalDirectoryMatches(*current, error)
+        || !manifestFileMatches(*current, error)
+        || !resolveManifestPaths(*current, paths, error)) {
+        return false;
+    }
 
     // The surrounding storage transaction owns source, backup, tombstone,
     // previous-backup, and derived locks. Taking those locks recursively would
@@ -1440,9 +1490,9 @@ bool loadAndLockRuntimeCommit(
     // and the peer side of the transaction; startup recovery uses the full set.
     locks.reset(new AtomicFileLockSet);
     QStringList lockPaths = {
-        before->journalPath,
+        current->journalPath,
         paths.backupStaging};
-    if (before->manifest.hasPeer) {
+    if (current->manifest.hasPeer) {
         lockPaths.append(paths.peer);
         lockPaths.append(paths.peerStaging);
     }
@@ -1450,28 +1500,13 @@ bool loadAndLockRuntimeCommit(
         return false;
     }
 
-    if (!atomicFileMatchesSnapshot(
-            before->manifestPath, before->manifestSnapshot, error)) {
+    if (!journalDirectoryMatches(*current, error)
+        || !manifestFileMatches(*current, error)) {
         error = QStringLiteral(
             "The linked-removal journal changed while it was being locked");
         return false;
     }
-
-    std::shared_ptr<JournalState> after;
-    if (!loadJournalState(root, journalPath, after, error)) return false;
-    if (!sameJournalDirectory(*before, *after, error)
-        || (expected
-            && !sameJournalDirectory(*expected, *after, error))
-        || after->manifestSnapshot.size != before->manifestSnapshot.size
-        || after->manifestSnapshot.digest
-            != before->manifestSnapshot.digest) {
-        if (error.isEmpty()) {
-            error = QStringLiteral(
-                "The linked-removal journal changed while it was being locked");
-        }
-        return false;
-    }
-    state = after;
+    state = current;
     return true;
 }
 
@@ -2053,8 +2088,7 @@ bool removeJournalDirectory(
         }
     }
 
-    if (!removeExpectedFile(
-            state.manifestPath, state.manifestSnapshot, error)) {
+    if (!removeManifestFile(state, error)) {
         return false;
     }
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
@@ -2110,7 +2144,9 @@ bool rollbackJournal(
     const JournalState &state, const ResolvedPaths &paths, QString &error)
 {
     QList<QPair<QString, ObservedFile>> temporaryFiles;
-    if (!inspectJournalDirectory(state, temporaryFiles, error)
+    if (!journalDirectoryMatches(state, error)
+        || !manifestFileMatches(state, error)
+        || !inspectJournalDirectory(state, temporaryFiles, error)
         || !validatePeerOldCopy(state, error)
         || !validateDerivedForRollback(state, paths, error)) {
         return false;
@@ -2203,7 +2239,9 @@ bool commitJournal(
     const JournalState &state, const ResolvedPaths &paths, QString &error)
 {
     QList<QPair<QString, ObservedFile>> temporaryFiles;
-    if (!inspectJournalDirectory(state, temporaryFiles, error)
+    if (!journalDirectoryMatches(state, error)
+        || !manifestFileMatches(state, error)
+        || !inspectJournalDirectory(state, temporaryFiles, error)
         || !validatePeerOldCopy(state, error)) {
         return false;
     }
@@ -2439,10 +2477,7 @@ public:
         AtomicFileLockSet locks;
         if (!locks.lock(
                 {state_->journalPath, paths.peerStaging}, error_)
-            || !atomicFileMatchesSnapshot(
-                state_->manifestPath,
-                state_->manifestSnapshot,
-                error_)
+            || !manifestFileMatches(*state_, error_)
             || !validateExpectedSnapshot(
                 paths.peer,
                 state_->manifest.peerOld.contents,
@@ -2477,9 +2512,12 @@ public:
                 error_)) {
             return false;
         }
+        if (!pinManifestFile(
+                *state_, &updatedManifestSnapshot, error_)) {
+            return false;
+        }
 
         state_->manifest = updated;
-        state_->manifestSnapshot = updatedManifestSnapshot;
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
         rideCacheRemovalTransitionReached(
             "peer-manifest-published");
@@ -2781,6 +2819,13 @@ std::shared_ptr<Journal> Journal::prepare(
             QStringLiteral("recovery journal retained at %1").arg(journalPath));
         return {};
     }
+    if (!pinManifestFile(
+            *state, &state->manifestSnapshot, error)) {
+        appendError(
+            error,
+            QStringLiteral("recovery journal retained at %1").arg(journalPath));
+        return {};
+    }
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
     rideCacheRemovalTransitionReached(
         "journal-initial-manifest-published");
@@ -2968,7 +3013,7 @@ bool Journal::validateOriginalStorage(QString &error) const
             current,
             locks,
             error,
-            state_.get())) {
+            state_)) {
         return false;
     }
     ResolvedPaths paths;
@@ -2992,7 +3037,7 @@ bool Journal::markCommitted(QString &error)
             current,
             locks,
             error,
-            state_.get())) {
+            state_)) {
         return false;
     }
 
@@ -3048,7 +3093,7 @@ bool Journal::cleanupAfterRollback(QString &error)
             current,
             locks,
             error,
-            state_.get())) {
+            state_)) {
         return false;
     }
     ResolvedPaths paths;
@@ -3078,7 +3123,7 @@ bool Journal::cleanupAfterCommit(QString &error)
             current,
             locks,
             error,
-            state_.get())) {
+            state_)) {
         return false;
     }
     ResolvedPaths paths;
@@ -3107,19 +3152,8 @@ QStringList Journal::recoveryPaths() const
         }
     };
     const auto addMatchingJournal = [&] {
-        const QFileInfo journal(state_->journalPath);
-        ObservedFile manifest;
         QString ignored;
-        if (journal.exists()
-            && journal.isDir()
-            && !journal.isSymLink()
-            && inspectRegularFile(
-                state_->manifestPath,
-                manifest,
-                ignored,
-                state_->manifestSnapshot.size)
-            && snapshotMatches(
-                manifest, state_->manifestSnapshot)) {
+        if (manifestFileMatches(*state_, ignored)) {
             paths.append(state_->journalPath);
         }
     };

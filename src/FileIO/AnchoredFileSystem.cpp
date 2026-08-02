@@ -1359,7 +1359,8 @@ bool copyToNewFile(
 bool pinRegularFile(
     const EntryRef &entry,
     PinnedFile &file,
-    QString &error)
+    QString &error,
+    qint64 maximumSize)
 {
     error.clear();
     file = {};
@@ -1370,6 +1371,29 @@ bool pinRegularFile(
 
 #ifdef Q_OS_UNIX
     const QByteArray name = QFile::encodeName(entry.component_);
+    if (maximumSize >= 0) {
+        UnixStamp named;
+        bool exists = false;
+        if (!statEntry(
+                entry.parent_.state_->descriptor.get(),
+                entry.component_, named, exists, error)) {
+            return false;
+        }
+        if (!exists) {
+            error = QStringLiteral("The anchored regular file is missing");
+            return false;
+        }
+        if (named.links != 1) {
+            error = QStringLiteral(
+                "An anchored regular file must have exactly one link");
+            return false;
+        }
+        if (named.size > maximumSize) {
+            error = QStringLiteral(
+                "The anchored regular file is unexpectedly large");
+            return false;
+        }
+    }
     FileDescriptor descriptor(::openat(
         entry.parent_.state_->descriptor.get(),
         name.constData(),
@@ -1385,6 +1409,11 @@ bool pinRegularFile(
     if (before.links != 1) {
         error = QStringLiteral(
             "An anchored regular file must have exactly one link");
+        return false;
+    }
+    if (maximumSize >= 0 && before.size > maximumSize) {
+        error = QStringLiteral(
+            "The anchored regular file is unexpectedly large");
         return false;
     }
 
@@ -1444,6 +1473,37 @@ bool pinRegularFile(
     file.state_ = std::move(state);
     return true;
 #elif defined(Q_OS_WIN)
+    if (maximumSize >= 0) {
+        WindowsHandle metadata(::CreateFileW(
+            reinterpret_cast<LPCWSTR>(entry.displayPath_.utf16()),
+            FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT,
+            nullptr));
+        if (!metadata.isValid()) {
+            error = windowsError(
+                QStringLiteral("Cannot inspect an anchored regular file"),
+                ::GetLastError());
+            return false;
+        }
+        WindowsStamp named;
+        if (!captureWindowsStamp(
+                metadata.get(), named, false, error)) {
+            return false;
+        }
+        if (named.links != 1) {
+            error = QStringLiteral(
+                "An anchored regular file must have exactly one link");
+            return false;
+        }
+        if (named.size > maximumSize) {
+            error = QStringLiteral(
+                "The anchored regular file is unexpectedly large");
+            return false;
+        }
+    }
     WindowsHandle handle(::CreateFileW(
         reinterpret_cast<LPCWSTR>(entry.displayPath_.utf16()),
         GENERIC_READ | DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
@@ -1464,6 +1524,11 @@ bool pinRegularFile(
     if (before.links != 1) {
         error = QStringLiteral(
             "An anchored regular file must have exactly one link");
+        return false;
+    }
+    if (maximumSize >= 0 && before.size > maximumSize) {
+        error = QStringLiteral(
+            "The anchored regular file is unexpectedly large");
         return false;
     }
 
