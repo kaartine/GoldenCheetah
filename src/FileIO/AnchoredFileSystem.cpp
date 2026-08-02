@@ -27,6 +27,9 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#if defined(Q_OS_MACOS)
+#include <stdio.h>
+#endif
 #if defined(Q_OS_LINUX)
 #include <linux/fs.h>
 #include <sys/syscall.h>
@@ -303,6 +306,15 @@ int renameNoReplaceNative(
         return -1;
     }
     unsupported = true;
+#elif defined(Q_OS_MACOS) && defined(RENAME_EXCL)
+    const int result = ::renameatx_np(
+        sourceDirectory,
+        source.constData(),
+        destinationDirectory,
+        destination.constData(),
+        RENAME_EXCL);
+    if (result == 0) return 0;
+    if (errno == ENOTSUP) unsupported = true;
 #else
     Q_UNUSED(sourceDirectory)
     Q_UNUSED(source)
