@@ -193,6 +193,7 @@ private slots:
     void rejectsUnsafeComponents();
     void rejectsUnsafeFileTypes();
     void pinsIdentityAndContentThroughOneHandle();
+    void permitsConcurrentPinsOfOneIdentity();
     void readsPinnedContentsAfterPathReplacement();
     void directoryAnchorSurvivesPathReplacement();
     void directoryAnchorDetectsPathReplacement();
@@ -312,6 +313,23 @@ void TestAnchoredFilesystem::pinsIdentityAndContentThroughOneHandle()
     QVERIFY(entryMatches(source, original, matches, error));
     QVERIFY(!matches);
     QVERIFY(error.isEmpty());
+}
+
+void TestAnchoredFilesystem::permitsConcurrentPinsOfOneIdentity()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    writeFixture(source.displayPath(), QByteArray("fixture"));
+
+    const PinnedFile first = pin(source);
+    PinnedFile second;
+    QString error;
+    QVERIFY2(
+        pinRegularFile(source, second, error),
+        qPrintable(error));
+    QCOMPARE(second.identity(), first.identity());
 }
 
 void TestAnchoredFilesystem::readsPinnedContentsAfterPathReplacement()
