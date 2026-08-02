@@ -39,8 +39,30 @@
 #include <qt_windows.h>
 #endif
 
+#ifdef GC_ANCHORED_FILESYSTEM_TEST_HOOKS
+void anchoredFilesystemTransitionReached(
+    const char *transition,
+    const QString &primary,
+    const QString &secondary);
+#endif
+
 namespace AnchoredFileSystem {
 namespace {
+
+void reportAnchoredFilesystemTransition(
+    const char *transition,
+    const QString &primary,
+    const QString &secondary = QString())
+{
+#ifdef GC_ANCHORED_FILESYSTEM_TEST_HOOKS
+    anchoredFilesystemTransitionReached(
+        transition, primary, secondary);
+#else
+    Q_UNUSED(transition)
+    Q_UNUSED(primary)
+    Q_UNUSED(secondary)
+#endif
+}
 
 QString nativeError(const QString &operation, int errorNumber)
 {
@@ -475,6 +497,7 @@ namespace Detail {
 
 struct DirectoryState
 {
+    std::shared_ptr<DirectoryState> ancestor;
 #ifdef Q_OS_UNIX
     FileDescriptor descriptor;
     UnixStamp stamp;
@@ -821,6 +844,72 @@ NativeIdentity DirectoryAnchor::identity() const
     return state_ ? state_->identity : NativeIdentity();
 }
 
+bool DirectoryAnchor::openChild(
+    const QString &component,
+    DirectoryAnchor &directory,
+    QString &error) const
+{
+    directory = {};
+    error.clear();
+    if (!isValid()) {
+        error = QStringLiteral("The anchored directory is unavailable");
+        return false;
+    }
+    if (!validPortableComponent(component)) {
+        error = QStringLiteral("The anchored directory name is unsafe");
+        return false;
+    }
+    const QString displayPath =
+        QDir(state_->displayPath).filePath(component);
+    std::shared_ptr<Detail::DirectoryState> child;
+
+#ifdef Q_OS_UNIX
+    const QByteArray encoded = QFile::encodeName(component);
+    FileDescriptor descriptor(::openat(
+        state_->descriptor.get(), encoded.constData(),
+        O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+    if (!descriptor.isValid()) {
+        error = nativeError(
+            QStringLiteral("Cannot open an anchored child directory"),
+            errno);
+        return false;
+    }
+    UnixStamp stamp;
+    if (!captureUnixStamp(
+            descriptor.get(), stamp, true, error)) {
+        return false;
+    }
+    child = std::make_shared<Detail::DirectoryState>();
+    child->ancestor = state_;
+    child->descriptor = std::move(descriptor);
+    child->stamp = stamp;
+    child->displayPath = displayPath;
+    child->identity = unixIdentity(stamp, 'd');
+#elif defined(Q_OS_WIN)
+    WindowsHandle handle = openWindowsDirectoryHandle(
+        QDir::toNativeSeparators(displayPath), true, error);
+    if (!handle.isValid()) return false;
+    WindowsStamp stamp;
+    if (!captureWindowsStamp(
+            handle.get(), stamp, true, error)) {
+        return false;
+    }
+    child = std::make_shared<Detail::DirectoryState>();
+    child->ancestor = state_;
+    child->handles.push_back(std::move(handle));
+    child->stamp = stamp;
+    child->displayPath = displayPath;
+    child->identity = windowsIdentity(stamp, 'd');
+#else
+    Q_UNUSED(displayPath)
+    error = QStringLiteral(
+        "Anchored filesystem operations are unsupported on this platform");
+    return false;
+#endif
+    directory = DirectoryAnchor(std::move(child));
+    return true;
+}
+
 EntryRef DirectoryAnchor::entry(
     const QString &component, QString &error) const
 {
@@ -837,6 +926,21 @@ EntryRef DirectoryAnchor::entry(
         *this,
         component,
         QDir(state_->displayPath).filePath(component));
+}
+
+bool DirectoryAnchor::pathMatches(QString &error) const
+{
+    error.clear();
+    if (!isValid()) {
+        error = QStringLiteral("The anchored directory is unavailable");
+        return false;
+    }
+    DirectoryAnchor current;
+    if (!DirectoryAnchor::open(
+            state_->displayPath, current, error)) {
+        return false;
+    }
+    return current.identity() == identity();
 }
 
 bool DirectoryAnchor::sync(QString &error) const
@@ -1296,6 +1400,54 @@ bool pinRegularFile(
 #endif
 }
 
+bool entryExists(
+    const EntryRef &entry,
+    bool &exists,
+    QString &error)
+{
+    error.clear();
+    exists = false;
+    if (!entry.isValid()) {
+        error = QStringLiteral(
+            "The anchored file reference is unavailable");
+        return false;
+    }
+
+#ifdef Q_OS_UNIX
+    UnixStamp stamp;
+    return statEntry(
+        entry.parent_.state_->descriptor.get(),
+        entry.component_, stamp, exists, error);
+#elif defined(Q_OS_WIN)
+    WindowsHandle named(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(entry.displayPath_.utf16()),
+        FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr));
+    if (!named.isValid()) {
+        const DWORD native = ::GetLastError();
+        if (native == ERROR_FILE_NOT_FOUND
+            || native == ERROR_PATH_NOT_FOUND) {
+            return true;
+        }
+        error = windowsError(
+            QStringLiteral("Cannot inspect an anchored file name"), native);
+        return false;
+    }
+    WindowsStamp stamp;
+    if (!captureWindowsStamp(named.get(), stamp, false, error)) return false;
+    exists = true;
+    return true;
+#else
+    error = QStringLiteral(
+        "Anchored filesystem operations are unsupported on this platform");
+    return false;
+#endif
+}
+
 bool entryMatches(
     const EntryRef &entry,
     const PinnedFile &file,
@@ -1421,36 +1573,49 @@ MutationResult moveNoReplace(
         return result;
     }
 
-    UnixStamp moved;
+    reportAnchoredFilesystemTransition(
+        "move-published",
+        original.displayPath_,
+        destination.displayPath_);
+
+    UnixStamp movedHandle;
+    if (!captureUnixStamp(
+            source.state_->descriptor.get(),
+            movedHandle, false, result.error)) {
+        result.effect = MutationEffect::Partial;
+        return result;
+    }
+    UnixStamp movedName;
     bool movedExists = false;
     QString inspectError;
     if (!statEntry(
             destination.parent_.state_->descriptor.get(),
-            destination.component_, moved, movedExists, inspectError)
+            destination.component_, movedName, movedExists, inspectError)
         || !movedExists
-        || unixIdentity(moved, 'f') != source.state_->identity) {
-        bool restoreUnsupported = false;
-        const int restored = renameNoReplaceNative(
-            destination.parent_.state_->descriptor.get(),
-            destinationName,
-            original.parent_.state_->descriptor.get(),
-            sourceName,
-            restoreUnsupported);
-        result.effect = restored == 0
-            ? MutationEffect::Conflict
-            : MutationEffect::Partial;
-        result.error = QStringLiteral(
-            "An unexpected file occupied the anchored move source");
-        if (restored != 0) {
-            result.error += QStringLiteral(
-                "; the unexpected file was retained at the destination");
-        }
+        || !(movedName == movedHandle)
+        || !sameUnixIdentityAndData(
+            movedHandle, source.state_->stamp)) {
+        result.effect = MutationEffect::Partial;
+        result.error = inspectError.isEmpty()
+            ? QStringLiteral(
+                  "The anchored move destination changed after publication")
+            : inspectError;
+        return result;
+    }
+
+    QByteArray verifiedDigest;
+    const PinnedChunkConsumer discard = [](
+        const char *, qsizetype, QString &) { return true; };
+    if (!streamPinnedFile(
+            *source.state_, discard,
+            verifiedDigest, result.error)) {
+        result.effect = MutationEffect::Partial;
         return result;
     }
 
     source.state_->entry = destination;
-    source.state_->stamp = moved;
-    source.state_->identity = unixIdentity(moved, 'f');
+    source.state_->stamp = movedHandle;
+    source.state_->identity = unixIdentity(movedHandle, 'f');
     const bool sourceSynced = original.parent_.sync(inspectError);
     QString destinationSyncError;
     const bool sameDirectory =
@@ -1561,6 +1726,23 @@ MutationResult remove(PinnedFile &file)
 
     bool quarantineMatches = false;
     QString matchError;
+    if (!entryMatches(
+            file.state_->entry, file,
+            quarantineMatches, matchError)
+        || !quarantineMatches) {
+        result.effect = MutationEffect::Partial;
+        result.error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The anchored removal quarantine was replaced")
+            : matchError;
+        return result;
+    }
+
+    reportAnchoredFilesystemTransition(
+        "remove-quarantine-verified",
+        file.state_->entry.displayPath_);
+    quarantineMatches = false;
+    matchError.clear();
     if (!entryMatches(
             file.state_->entry, file,
             quarantineMatches, matchError)

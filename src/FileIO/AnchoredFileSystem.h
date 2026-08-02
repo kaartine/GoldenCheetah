@@ -74,7 +74,12 @@ public:
 
     bool isValid() const { return bool(state_); }
     NativeIdentity identity() const;
+    bool openChild(
+        const QString &component,
+        DirectoryAnchor &directory,
+        QString &error) const;
     EntryRef entry(const QString &component, QString &error) const;
+    bool pathMatches(QString &error) const;
     bool sync(QString &error) const;
 
 private:
@@ -90,6 +95,8 @@ private:
     friend class PinnedFile;
     friend bool pinRegularFile(
         const EntryRef &, class PinnedFile &, QString &);
+    friend bool entryExists(
+        const EntryRef &, bool &, QString &);
     friend bool entryMatches(
         const EntryRef &, const class PinnedFile &, bool &, QString &);
     friend bool copyToNewFile(
@@ -132,6 +139,8 @@ private:
     friend class PinnedFile;
     friend bool pinRegularFile(
         const EntryRef &, class PinnedFile &, QString &);
+    friend bool entryExists(
+        const EntryRef &, bool &, QString &);
     friend bool entryMatches(
         const EntryRef &, const class PinnedFile &, bool &, QString &);
     friend bool copyToNewFile(
@@ -199,6 +208,11 @@ struct MutationResult
 bool pinRegularFile(
     const EntryRef &entry,
     PinnedFile &file,
+    QString &error);
+
+bool entryExists(
+    const EntryRef &entry,
+    bool &exists,
     QString &error);
 
 bool entryMatches(

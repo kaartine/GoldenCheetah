@@ -7,6 +7,7 @@ include(../../unittests.pri)
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug
+DEFINES += GC_ANCHORED_FILESYSTEM_TEST_HOOKS
 
 SOURCES = testAnchoredFilesystem.cpp \
           ../../../src/FileIO/AnchoredFileSystem.cpp
