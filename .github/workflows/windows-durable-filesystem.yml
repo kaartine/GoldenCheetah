@@ -1,4 +1,4 @@
-name: Windows durable filesystem
+name: Durable and anchored filesystem
 
 on:
   push:
@@ -23,7 +23,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  windows:
     runs-on: windows-2025
     timeout-minutes: 20
 
@@ -63,3 +63,27 @@ jobs:
           Get-Content windows-anchored-filesystem.txt
           if ($testStatus -ne 0) { exit $testStatus }
           exit $anchoredStatus
+
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.3
+          arch: clang_64
+          cache: true
+      - name: Build anchored filesystem test
+        run: |
+          printf 'CONFIG += release\n' > src/gcconfig.pri
+          mkdir build-anchored-filesystem
+          cd build-anchored-filesystem
+          qmake ../unittests/FileIO/anchoredFilesystem/anchoredFilesystem.pro
+          make -j3
+      - name: Run anchored filesystem test
+        run: |
+          build-anchored-filesystem/tst_anchoredFilesystem \
+            -o macos-anchored-filesystem.txt,txt
+          cat macos-anchored-filesystem.txt
