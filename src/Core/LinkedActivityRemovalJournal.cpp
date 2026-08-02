@@ -1310,6 +1310,10 @@ bool readCommitMarker(
         return false;
     }
     if (!observed.exists) return true;
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    rideCacheRemovalTransitionReached(
+        "journal-commit-marker-inspected");
+#endif
 
     QFile marker(state.commitMarkerPath);
     if (!marker.open(QIODevice::ReadOnly)) {
