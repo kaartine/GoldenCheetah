@@ -62,11 +62,21 @@ std::function<void()> removalProcessorAction;
 std::function<void()> removalLinkMutationAction;
 int removalLinkMutationCall = 0;
 int removalLinkMutationTriggerCall = 0;
+std::function<void()> calendarStorageAction;
 int removalCancelCount = 0;
 int startupInvalidationCount = 0;
 int removalTransitionOccurrence = 0;
 bool removalValidationMutationEnabled = false;
 QByteArray removalValidationMutationContents;
+
+void runCalendarStorageAction()
+{
+    if (!calendarStorageAction) return;
+    const std::function<void()> action =
+        std::move(calendarStorageAction);
+    calendarStorageAction = {};
+    action();
+}
 
 } // namespace
 
@@ -139,8 +149,11 @@ bool RideFileFactory::writeRideFile(
         "ride-cache-calendar-mutation-test\n");
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
         return false;
-    return file.write(contents) == contents.size()
+    const bool written =
+        file.write(contents) == contents.size()
         && file.flush();
+    if (written) runCalendarStorageAction();
+    return written;
 }
 
 void resetRideCacheRemovalRefreshCounts()
@@ -182,6 +195,7 @@ void resetRideCacheRemovalRefreshCounts()
     removalLinkMutationAction = {};
     removalLinkMutationCall = 0;
     removalLinkMutationTriggerCall = 0;
+    calendarStorageAction = {};
     removalCancelCount = 0;
     startupInvalidationCount = 0;
     removalTransitionOccurrence = 0;
@@ -485,6 +499,12 @@ void setRideCacheRemovalLinkMutationActionOnCall(
     removalLinkMutationAction = action;
     removalLinkMutationCall = 0;
     removalLinkMutationTriggerCall = call;
+}
+
+void setRideCacheCalendarStorageAction(
+    const std::function<void()> &action)
+{
+    calendarStorageAction = action;
 }
 
 void runRideCacheRemovalLinkMutationAction()
@@ -898,7 +918,8 @@ void RideCacheModel::configChanged(qint32 changes)
 {
     const std::shared_ptr<ModelChangeState> state =
         modelChangeState_;
-    if (!state->frames.isEmpty()) {
+    if (!state->frames.isEmpty()
+        || state->activeMutationReservation != 0) {
         state->deferredConfigPending = true;
         state->deferredConfigChanges |= changes;
         return;
@@ -1149,6 +1170,8 @@ RideItem *RideCache::copyPlannedRideFile(
         error = output.errorString();
         return nullptr;
     }
+    output.close();
+    runCalendarStorageAction();
 
     RideItem *item = new RideItem(
         plannedDirectory.canonicalPath(), newFileName,

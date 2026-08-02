@@ -20,9 +20,51 @@
 
 #include <QPointer>
 
-bool RideCacheModel::beginReset()
+quint64 RideCacheModel::reserveCacheMutation()
 {
     const std::shared_ptr<ModelChangeState> state = modelChangeState_;
+    if (state->activeMutationReservation != 0
+        || !state->frames.isEmpty()) {
+        return 0;
+    }
+    if (++state->nextMutationReservation == 0)
+        ++state->nextMutationReservation;
+    state->activeMutationReservation =
+        state->nextMutationReservation;
+    return state->activeMutationReservation;
+}
+
+void RideCacheModel::releaseCacheMutation(quint64 reservation)
+{
+    const std::shared_ptr<ModelChangeState> state = modelChangeState_;
+    if (reservation == 0
+        || state->activeMutationReservation != reservation) {
+        return;
+    }
+    state->activeMutationReservation = 0;
+    if (state->frames.isEmpty()) scheduleDeferredConfigChange();
+}
+
+bool RideCacheModel::beginReset()
+{
+    return beginResetImpl(0);
+}
+
+bool RideCacheModel::beginReservedReset(quint64 reservation)
+{
+    if (reservation == 0) return false;
+    return beginResetImpl(reservation);
+}
+
+bool RideCacheModel::beginResetImpl(quint64 reservation)
+{
+    const std::shared_ptr<ModelChangeState> state = modelChangeState_;
+    if ((state->activeMutationReservation != 0
+         && state->activeMutationReservation != reservation)
+        || (reservation != 0
+            && state->activeMutationReservation != reservation)) {
+        return false;
+    }
     const bool coveredByReset = !state->frames.isEmpty()
         && state->frames.constFirst().protocol
             == ModelChangeState::Protocol::Reset;
@@ -33,8 +75,13 @@ bool RideCacheModel::beginReset()
         !coveredByReset});
     if (coveredByReset) return true;
 
+    const QPointer<RideCacheModel> guardedThis(this);
     rideCache->invalidateStartupSnapshots();
     beginResetModel();
+    if (!guardedThis) {
+        state->frames.removeLast();
+        return false;
+    }
     return true;
 }
 
@@ -63,6 +110,7 @@ void RideCacheModel::endReset()
 bool RideCacheModel::startInsert(int first, int last)
 {
     const std::shared_ptr<ModelChangeState> state = modelChangeState_;
+    if (state->activeMutationReservation != 0) return false;
     const bool coveredByReset = !state->frames.isEmpty()
         && state->frames.constFirst().protocol
             == ModelChangeState::Protocol::Reset;
@@ -102,6 +150,7 @@ void RideCacheModel::endInsert()
 bool RideCacheModel::startRemove(int row)
 {
     const std::shared_ptr<ModelChangeState> state = modelChangeState_;
+    if (state->activeMutationReservation != 0) return false;
     const bool coveredByReset = !state->frames.isEmpty()
         && state->frames.constFirst().protocol
             == ModelChangeState::Protocol::Reset;
@@ -142,9 +191,10 @@ void RideCacheModel::endRemove(int)
 bool RideCacheModel::cacheMutationAllowed() const
 {
     const std::shared_ptr<ModelChangeState> state = modelChangeState_;
-    return state->frames.isEmpty()
+    return state->activeMutationReservation == 0
+        && (state->frames.isEmpty()
         || state->frames.constFirst().protocol
-            == ModelChangeState::Protocol::Reset;
+            == ModelChangeState::Protocol::Reset);
 }
 
 void RideCacheModel::scheduleDeferredConfigChange()
@@ -161,7 +211,10 @@ void RideCacheModel::scheduleDeferredConfigChange()
         this,
         [guardedThis, state] {
             state->deferredConfigScheduled = false;
-            if (!guardedThis || !state->frames.isEmpty()) return;
+            if (!guardedThis || !state->frames.isEmpty()
+                || state->activeMutationReservation != 0) {
+                return;
+            }
 
             const qint32 changes = state->deferredConfigChanges;
             state->deferredConfigPending = false;

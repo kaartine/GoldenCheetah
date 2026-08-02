@@ -32,8 +32,10 @@ struct RideCacheMutationScope::State
     QPointer<Estimator> estimator;
     std::shared_ptr<bool> inProgress;
     quint64 resumeGeneration = 0;
+    quint64 modelReservation = 0;
     bool acquired = false;
     bool workersQuiesced = false;
+    bool resetActive = false;
     bool ready = false;
 };
 
@@ -106,12 +108,32 @@ RideCacheMutationScope::RideCacheMutationScope(
         return;
     }
 
+    state_->modelReservation =
+        state_->model->reserveCacheMutation();
+    if (state_->modelReservation == 0) {
+        error = QObject::tr(
+            "The activity list is busy and cannot reserve this operation");
+        return;
+    }
+    if (!ownersStable()) {
+        error = QObject::tr(
+            "The activity collection disappeared while its model was being reserved");
+        return;
+    }
+
     state_->ready = true;
 }
 
 RideCacheMutationScope::~RideCacheMutationScope()
 {
     if (!state_ || !state_->acquired) return;
+
+    if (state_->resetActive) endReset();
+    if (state_->model && state_->modelReservation != 0) {
+        state_->model->releaseCacheMutation(
+            state_->modelReservation);
+    }
+    state_->modelReservation = 0;
 
     if (ownersStable()
         && !state_->cache->purgeDestroyedModelRows()) {
@@ -167,7 +189,9 @@ RideCacheMutationScope::~RideCacheMutationScope()
 
 bool RideCacheMutationScope::ready() const
 {
-    return state_ && state_->ready && ownersStable();
+    return state_ && state_->ready
+        && state_->modelReservation != 0
+        && ownersStable();
 }
 
 bool RideCacheMutationScope::ownersStable() const
@@ -182,9 +206,7 @@ bool RideCacheMutationScope::ownersStable() const
         && state_->cache->estimator == state_->estimator.data();
 }
 
-bool RideCacheMutationScope::resetAndSort(
-    QString &error,
-    const std::function<bool()> &publish)
+bool RideCacheMutationScope::beginReset(QString &error)
 {
     error.clear();
     if (!ready()) {
@@ -192,23 +214,45 @@ bool RideCacheMutationScope::resetAndSort(
             "The activity collection is no longer available");
         return false;
     }
-
-    const QPointer<RideCacheModel> model = state_->model;
-    if (!model || !model->beginReset()) {
+    if (state_->resetActive) {
         error = QObject::tr(
-            "The activity list is busy and cannot be reordered");
+            "The activity model reset is already active");
         return false;
     }
-    const auto finishReset = [&] {
-        if (model) model->endReset();
-    };
 
+    const QPointer<RideCacheModel> model = state_->model;
+    if (!model || !model->beginReservedReset(
+            state_->modelReservation)) {
+        error = QObject::tr(
+            "The reserved activity model cannot begin its reset");
+        return false;
+    }
+    state_->resetActive = true;
     if (!ownersStable() || state_->cache->model_ != model.data()) {
-        finishReset();
+        endReset();
         error = QObject::tr(
             "The activity collection disappeared while reordering began");
         return false;
     }
+    return true;
+}
+
+void RideCacheMutationScope::endReset()
+{
+    if (!state_ || !state_->resetActive) return;
+    const QPointer<RideCacheModel> model = state_->model;
+    state_->resetActive = false;
+    if (model) model->endReset();
+}
+
+bool RideCacheMutationScope::resetAndSort(
+    QString &error,
+    const std::function<bool()> &publish)
+{
+    error.clear();
+    const QPointer<RideCacheModel> model = state_->model;
+    if (!beginReset(error)) return false;
+    const auto finishReset = [this] { endReset(); };
 
     state_->cache->purgeDestroyedRowsInsideModelReset();
     if (!ownersStable() || state_->cache->model_ != model.data()) {

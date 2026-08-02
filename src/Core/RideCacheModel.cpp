@@ -215,7 +215,8 @@ RideCacheModel::configChanged(qint32 changes)
 {
     const std::shared_ptr<ModelChangeState> state =
         modelChangeState_;
-    if (!state->frames.isEmpty()) {
+    if (!state->frames.isEmpty()
+        || state->activeMutationReservation != 0) {
         state->deferredConfigPending = true;
         state->deferredConfigChanges |= changes;
         return;

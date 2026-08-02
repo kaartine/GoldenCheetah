@@ -203,6 +203,7 @@ QVector<RideItem*> RideCache::addRides(
 
     bool mergeStarted = false;
     bool mergePrepared = false;
+    QString mergeResetError;
     const QPointer<RideCacheModel> guardedModel(model_);
     const QVector<RideItem*> replaced =
         RideCacheBulkMerge::mergeItems(
@@ -210,14 +211,13 @@ QVector<RideItem*> RideCache::addRides(
             incoming,
             [](const RideItem *item) { return item->fileName; },
             rideImportLessThan,
-            [guardedModel, &mutation, &mergeStarted]() {
-                if (!mutation.ownersStable() || !guardedModel)
-                    return false;
-                mergeStarted = guardedModel->beginReset();
+            [&mutation, &mergeStarted, &mergeResetError]() {
+                mergeStarted = mutation.beginReset(
+                    mergeResetError);
                 return mergeStarted;
             },
-            [guardedModel]() {
-                if (guardedModel) guardedModel->endReset();
+            [&mutation]() {
+                mutation.endReset();
             },
             [this, guardedModel, &mutation, &mergePrepared]() {
                 if (!mutation.ownersStable() || !guardedModel
@@ -229,6 +229,8 @@ QVector<RideItem*> RideCache::addRides(
                 return true;
             });
     if (!mergeStarted || !mergePrepared) {
+        if (!mergeResetError.isEmpty())
+            qWarning().noquote() << mergeResetError;
         if (!mutation.ownersStable()) {
             for (const QPointer<RideItem> &item : guardedIncoming) {
                 if (item) item->context = nullptr;

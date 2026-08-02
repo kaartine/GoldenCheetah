@@ -34,6 +34,7 @@
 #include <memory>
 
 class Context;
+class RideCacheMutationScope;
 
 class RideCacheModel : public QAbstractTableModel
 {
@@ -78,6 +79,8 @@ class RideCacheModel : public QAbstractTableModel
         bool cacheMutationAllowed() const;
 
     private:
+        friend class RideCacheMutationScope;
+
         struct ModelChangeState
         {
             enum class Protocol {
@@ -95,8 +98,14 @@ class RideCacheModel : public QAbstractTableModel
             bool deferredConfigScheduled = false;
             qint32 deferredConfigChanges = 0;
             QVector<Frame> frames;
+            quint64 nextMutationReservation = 0;
+            quint64 activeMutationReservation = 0;
         };
 
+        quint64 reserveCacheMutation();
+        void releaseCacheMutation(quint64 reservation);
+        bool beginReservedReset(quint64 reservation);
+        bool beginResetImpl(quint64 reservation);
         void scheduleDeferredConfigChange();
 
         Context *context;

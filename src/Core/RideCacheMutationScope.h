@@ -28,6 +28,8 @@ public:
 
     bool ready() const;
     bool ownersStable() const;
+    bool beginReset(QString &error);
+    void endReset();
     bool resetAndSort(
         QString &error,
         const std::function<bool()> &publish);

@@ -88,6 +88,8 @@ void setRideCacheRemovalValidationMutation(
 void setRideCacheRemovalLinkMutationActionOnCall(
     int call,
     const std::function<void()> &action);
+void setRideCacheCalendarStorageAction(
+    const std::function<void()> &action);
 
 namespace {
 
@@ -429,10 +431,15 @@ private slots:
     void addRidePurgesRowDestroyedDuringReset();
     void consecutiveAddsCoalesceBackgroundResume();
     void mutationScopePublishesOnlyLiveSortedRows();
+    void mutationScopeDefersConfigAndReleasesModelReservation();
     void moveActivityPurgesDestroyedRowsBeforeReorder();
     void copyPlannedActivityPurgesDestroyedRowsBeforePublish();
     void copyPlannedActivitiesPurgesDestroyedRowsBeforePublish();
     void shiftPlannedActivitiesPurgesDestroyedRowsBeforeReorder();
+    void moveActivityReservesModelBeforeStorageCommit();
+    void copyPlannedActivityReservesModelBeforeStorageCommit();
+    void copyPlannedActivitiesReserveModelBeforeStorageCommit();
+    void shiftPlannedActivitiesReservesModelBeforeStorageCommit();
     void plannedReplacementDropsStaleResumeDuringNewReplacement();
     void plannedReplacementCoalescesSupersededResumes();
     void plannedReplacementProcessorFailureIsReportedAfterPublication();
@@ -6031,6 +6038,32 @@ void TestRideCacheRemoval::mutationScopePublishesOnlyLiveSortedRows()
     QCOMPARE(fixture.cache->getAllFilenames(), QStringList{thirdName()});
 }
 
+void TestRideCacheRemoval::
+mutationScopeDefersConfigAndReleasesModelReservation()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    RideCacheModel *const model = fixture.cache->model();
+    int resetCount = 0;
+    connect(
+        model, &QAbstractItemModel::modelReset,
+        [&resetCount] { ++resetCount; });
+
+    {
+        QString error;
+        RideCacheMutationScope mutation(fixture.cache.get(), error);
+        QVERIFY2(mutation.ready(), qPrintable(error));
+        QVERIFY(!model->startInsert(0, 0));
+        fixture.context->configChanged(0x20);
+        QCOMPARE(resetCount, 0);
+    }
+
+    QCoreApplication::processEvents();
+    QCOMPARE(resetCount, 1);
+    QVERIFY(model->startInsert(0, 0));
+    model->endInsert();
+}
+
 void TestRideCacheRemoval::moveActivityPurgesDestroyedRowsBeforeReorder()
 {
     Fixture fixture;
@@ -6192,6 +6225,147 @@ void TestRideCacheRemoval::shiftPlannedActivitiesPurgesDestroyedRowsBeforeReorde
     QCOMPARE(rideCacheRemovalCancelCount(), 1);
     QCOMPARE(rideCacheRemovalEstimatorStopCount(), 1);
     delete ride;
+}
+
+void TestRideCacheRemoval::moveActivityReservesModelBeforeStorageCommit()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    QDateTime originalDateTime;
+    QDateTime targetDateTime;
+    QVERIFY(RideFile::parseRideFileName(firstName(), &originalDateTime));
+    QVERIFY(RideFile::parseRideFileName(thirdName(), &targetDateTime));
+    RideFile *ride = new RideFile(originalDateTime, 1.0);
+    RideItem *target = fixture.addRide(firstName(), true, ride);
+    target->dateTime = originalDateTime;
+    writeFixture(
+        fixture.activityPath(firstName()), QByteArray("activity"));
+    bool insertAllowed = true;
+    setRideCacheCalendarStorageAction([&] {
+        insertAllowed = fixture.cache->model()->startInsert(0, 0);
+    });
+
+    const RideCache::OperationResult result =
+        fixture.cache->moveActivity(target, targetDateTime);
+    if (insertAllowed) fixture.cache->model()->endInsert();
+    delete ride;
+
+    QVERIFY(!insertAllowed);
+    QVERIFY2(result.success, qPrintable(result.error));
+    QCOMPARE(target->fileName, thirdName());
+    QVERIFY(!QFileInfo::exists(fixture.activityPath(firstName())));
+    QVERIFY(QFileInfo::exists(fixture.activityPath(thirdName())));
+}
+
+void TestRideCacheRemoval::
+copyPlannedActivityReservesModelBeforeStorageCommit()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    QDateTime sourceDateTime;
+    QVERIFY(RideFile::parseRideFileName(firstName(), &sourceDateTime));
+    RideItem *source = fixture.addPlannedRide(firstName(), false);
+    source->dateTime = sourceDateTime;
+    writeFixture(
+        fixture.plannedActivityPath(firstName()),
+        QByteArray("planned source"));
+    bool insertAllowed = true;
+    setRideCacheCalendarStorageAction([&] {
+        insertAllowed = fixture.cache->model()->startInsert(0, 0);
+    });
+
+    const RideCache::OperationResult result =
+        fixture.cache->copyPlannedActivity(
+            source, sourceDateTime.date().addDays(1));
+    if (insertAllowed) fixture.cache->model()->endInsert();
+
+    const QString targetName =
+        QStringLiteral("2026_07_07_08_00_00.json");
+    QVERIFY(!insertAllowed);
+    QVERIFY2(result.success, qPrintable(result.error));
+    QVERIFY(cacheContains(*fixture.cache, targetName));
+    QVERIFY(QFileInfo::exists(
+        fixture.plannedActivityPath(targetName)));
+}
+
+void TestRideCacheRemoval::
+copyPlannedActivitiesReserveModelBeforeStorageCommit()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    QDateTime firstDateTime;
+    QDateTime secondDateTime;
+    QVERIFY(RideFile::parseRideFileName(firstName(), &firstDateTime));
+    QVERIFY(RideFile::parseRideFileName(secondName(), &secondDateTime));
+    RideItem *first = fixture.addPlannedRide(firstName(), false);
+    RideItem *second = fixture.addPlannedRide(secondName(), false);
+    first->dateTime = firstDateTime;
+    second->dateTime = secondDateTime;
+    writeFixture(
+        fixture.plannedActivityPath(firstName()), QByteArray("first"));
+    writeFixture(
+        fixture.plannedActivityPath(secondName()), QByteArray("second"));
+    bool insertAllowed = true;
+    setRideCacheCalendarStorageAction([&] {
+        insertAllowed = fixture.cache->model()->startInsert(0, 0);
+    });
+
+    const RideCache::OperationResult result =
+        fixture.cache->copyPlannedActivities({
+            {first, firstDateTime.date().addDays(1)},
+            {second, secondDateTime.date().addDays(2)}});
+    if (insertAllowed) fixture.cache->model()->endInsert();
+
+    const QString firstTarget =
+        QStringLiteral("2026_07_07_08_00_00.json");
+    const QString secondTarget =
+        QStringLiteral("2026_07_08_09_00_00.json");
+    QVERIFY(!insertAllowed);
+    QVERIFY2(result.success, qPrintable(result.error));
+    QVERIFY(cacheContains(*fixture.cache, firstTarget));
+    QVERIFY(cacheContains(*fixture.cache, secondTarget));
+    QVERIFY(QFileInfo::exists(
+        fixture.plannedActivityPath(firstTarget)));
+    QVERIFY(QFileInfo::exists(
+        fixture.plannedActivityPath(secondTarget)));
+}
+
+void TestRideCacheRemoval::
+shiftPlannedActivitiesReservesModelBeforeStorageCommit()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    QDateTime originalDateTime;
+    QVERIFY(RideFile::parseRideFileName(firstName(), &originalDateTime));
+    RideFile *ride = new RideFile(originalDateTime, 1.0);
+    RideItem *target = fixture.addPlannedRide(firstName(), false, ride);
+    target->dateTime = originalDateTime;
+    writeFixture(
+        fixture.plannedActivityPath(firstName()), QByteArray("planned"));
+    bool insertAllowed = true;
+    setRideCacheCalendarStorageAction([&] {
+        insertAllowed = fixture.cache->model()->startInsert(0, 0);
+    });
+
+    const RideCache::OperationResult result =
+        fixture.cache->shiftPlannedActivities(
+            originalDateTime.date(), 1);
+    if (insertAllowed) fixture.cache->model()->endInsert();
+    delete ride;
+
+    const QString targetName =
+        QStringLiteral("2026_07_07_08_00_00.json");
+    QVERIFY(!insertAllowed);
+    QVERIFY2(result.success, qPrintable(result.error));
+    QCOMPARE(target->fileName, targetName);
+    QVERIFY(!QFileInfo::exists(
+        fixture.plannedActivityPath(firstName())));
+    QVERIFY(QFileInfo::exists(
+        fixture.plannedActivityPath(targetName)));
 }
 
 void TestRideCacheRemoval::
