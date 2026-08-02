@@ -66,6 +66,9 @@
 
 #ifdef Q_CC_MSVC
 #include <QtZlib\zlib.h>
+#ifdef uncompress
+#undef uncompress
+#endif
 #else
 #include <zlib.h>
 #endif
@@ -398,7 +401,8 @@ bool GzipReader::uncompress(
     return valid;
 }
 
-static int deflate (Bytef *dest, ulong *destLen, const Bytef *source, ulong sourceLen)
+static int deflateBuffer(
+    Bytef *dest, ulong *destLen, const Bytef *source, ulong sourceLen)
 {
     z_stream stream;
     int err;
@@ -954,7 +958,7 @@ void ZipWriterPrivate::addEntry(
                 return;
             }
             data.resize(static_cast<int>(length));
-            result = deflate(
+            result = deflateBuffer(
                 reinterpret_cast<uchar *>(data.data()),
                 &length,
                 reinterpret_cast<const uchar *>(contents.constData()),
