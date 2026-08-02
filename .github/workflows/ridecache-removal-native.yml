@@ -51,10 +51,18 @@ jobs:
       - uses: TheMrMilchmann/setup-msvc-dev@v4
         with:
           arch: x64
+      - name: Install GSL
+        shell: pwsh
+        run: vcpkg install gsl:x64-windows
       - name: Build activity removal test
         shell: pwsh
         run: |
-          Set-Content src/gcconfig.pri 'CONFIG += release'
+          $gslRoot = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows"
+          @(
+            'CONFIG += release'
+            "GSL_INCLUDES = $gslRoot/include"
+            "GSL_LIBS = -L$gslRoot/lib -lgsl -lgslcblas"
+          ) | Set-Content src/gcconfig.pri
           New-Item -ItemType Directory build-ridecache-removal | Out-Null
           Set-Location build-ridecache-removal
           qmake ../unittests/Core/rideCacheRemoval/rideCacheRemoval.pro

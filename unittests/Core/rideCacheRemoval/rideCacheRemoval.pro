@@ -67,10 +67,15 @@ INCLUDEPATH += ../../../src \
                ../../../src/Planning \
                ../../../src/Train \
                ../../../qwt/src \
-               ../../../contrib/qzip
+               ../../../contrib/qzip \
+               $${GSL_INCLUDES}
 
-QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-QMAKE_LFLAGS += -Wl,--gc-sections
+LIBS += $${GSL_LIBS}
+
+!msvc {
+    QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
+    QMAKE_LFLAGS += -Wl,--gc-sections
+}
 
 sanitize:!tsan:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \
