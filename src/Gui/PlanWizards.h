@@ -190,38 +190,74 @@ class RepeatPlanWorkflowState
         bool markInputsValid(bool hasCopyInputs)
         {
             inputsValid = hasCopyInputs;
-            removalComplete = false;
-            copyComplete = false;
+            replacementComplete = false;
             return inputsValid;
         }
 
-        bool canRemoveTargets() const
+        bool canReplacePlan() const
         {
             return inputsValid;
         }
 
-        void markRemovalComplete()
+        void markReplacementComplete()
         {
-            removalComplete = inputsValid;
-        }
-
-        void markCopyComplete()
-        {
-            copyComplete = inputsValid && removalComplete;
+            replacementComplete = inputsValid;
         }
 
         bool canAccept(
             const RepeatPlanWorkflowGuard &guard) const
         {
-            return inputsValid && removalComplete
-                && copyComplete && guard.allAlive();
+            return inputsValid && replacementComplete
+                && guard.allAlive();
         }
 
     private:
         bool inputsValid = false;
-        bool removalComplete = false;
-        bool copyComplete = false;
+        bool replacementComplete = false;
 };
+
+
+enum class RepeatPlanReplacementDisposition
+{
+    OwnerLost,
+    Failed,
+    Complete
+};
+
+Q_DECLARE_METATYPE(RepeatPlanReplacementDisposition)
+
+
+inline bool repeatPlanReplacementInputsAreUsable(
+    const QList<RideItem*> &deletionItems,
+    const QList<std::pair<RideItem*, QDate>>
+        &sourceItemsAndTargets)
+{
+    if (sourceItemsAndTargets.isEmpty()) return false;
+    for (RideItem *item : deletionItems) {
+        if (!item) return false;
+    }
+    for (const auto &entry : sourceItemsAndTargets) {
+        if (!entry.first || !entry.second.isValid()) return false;
+    }
+    return true;
+}
+
+
+inline RepeatPlanReplacementDisposition
+repeatPlanReplacementDisposition(
+    bool ownersAlive, bool cleanlyCompleted,
+    int removedCount, int expectedRemovedCount,
+    int addedCount, int expectedAddedCount)
+{
+    if (!ownersAlive)
+        return RepeatPlanReplacementDisposition::OwnerLost;
+    if (!cleanlyCompleted
+        || removedCount != expectedRemovedCount
+        || addedCount != expectedAddedCount) {
+        return RepeatPlanReplacementDisposition::Failed;
+    }
+    return RepeatPlanReplacementDisposition::Complete;
+}
 
 
 class RepeatPlanWorkflowExecutionGuard

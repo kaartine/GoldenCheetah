@@ -2763,20 +2763,54 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 ### DATA-020: Plan replacement and import are not all-or-nothing
 
 - Status: OPEN
-- Code: `src/Gui/PlanWizards.cpp`, `src/Planning/PlanBundle.cpp`, and
-  `src/Core/RideCache.cpp`
-- Impact: Repeat Plan removes the existing target range before copying the new
-  activities, and bundle import removes conflicts before processing all new
-  workouts. Copy, parse, or write failure can therefore leave the previous plan
-  gone and only a prefix of the replacement installed. Partial copy is now
-  reported, but there is no automatic rollback.
-- Test: Cover target replacement, overlapping source/target ranges, every
-  deletion and copy failpoint, partial bundle parsing/writes, and restart after
-  each transition. Require the complete old plan or complete new plan, never a
-  mixture.
-- Fix direction: Stage and validate the complete replacement set first, publish
-  it with a durable manifest, then retire conflicts; rollback or startup
-  reconciliation must restore one complete generation.
+- Code: `src/Gui/PlanWizards.cpp`, `src/Planning/PlanBundle.cpp`,
+  `src/Core/RideCache.cpp`, `src/Core/RideCacheRemoval.cpp`, and
+  `src/Planning/PlanReplacementJournal.cpp`
+- Impact: Bundle import still removes conflicts and publishes workout-library
+  and TrainDB state in separate steps. A copy, parse, database, or process
+  failure can therefore leave only a prefix of the imported bundle installed.
+  Repeat Plan previously had the same failure mode, but its replacement path is
+  now generation-atomic.
+- Test-first evidence: The initial replacement regressions showed that a failed
+  stage could follow destructive target removal. Follow-up RED cases showed
+  caller-owned targets changing during a staging callback, link and legacy
+  sidecar ownership changing after preflight, unreadable staged activities being
+  accepted, dirty targets being discarded, a backup-parent symlink creating an
+  external directory, stale startup snapshots, a dangling selected RideItem
+  during model reset, synchronous and deferred callback deletion leaving stale
+  raw pointers, owner loss returning clean success, an invalid commit marker
+  being treated as committed, and DELETE processors receiving the live cached
+  RideFile before the replacement was committed.
+- Partial resolution: Repeat Plan now resolves and validates one complete input
+  snapshot and delegates it to a durable replacement journal. The journal
+  stages and syncs every new activity and backup before publication, supports
+  overlapping source and target paths, records content identities, publishes a
+  commit marker, and deterministically completes or rolls back at startup.
+  RideCache revalidates cache, link, sidecar, owner, thread, and dirty-state
+  invariants around every callback; blocks reentrant cache mutations while the
+  model is being replaced; reopens staged activities with the production
+  RideFile reader; runs DELETE processors on isolated disk-backed RideFiles only
+  after durable publication; clears selection during model reset; contains rows
+  deleted synchronously or with `deleteLater()` by callbacks; and invalidates
+  startup snapshots before replacing the model. Corrupt transaction state is
+  retained for recovery instead of being guessed or deleted.
+- Verification: The focused Repeat Plan, staged-file, plan-journal, and
+  RideCache removal programs pass 22, 22, 112, and 205 cases. Repeat Plan also
+  passes all 22 cases under ASan/UBSan, while the new callback, ownership,
+  thread, recovery, deferred-deletion, and processor rows pass 27 sanitizer
+  cases. The production application links and remains running through an
+  isolated 10-second offscreen smoke run. Direct behavioral coverage of the
+  production RideFile/ErgFile staging adapters is still missing, and
+  interaction with the real Repeat Plan wizard remains covered by `TEST-005`
+  rather than a headless unit fixture.
+- Remaining: PlanBundle import still needs a durable coordinator covering plan
+  activities, workout-library files, and TrainDB rows, plus behavioral fault
+  injection and restart tests. Until that coordinator exists, this finding
+  remains OPEN.
+- Fix direction: Stage and validate the complete bundle first. Publish workout
+  files and the plan through a durable import manifest, make TrainDB completion
+  idempotent, and reconcile startup to either the complete old generation or
+  the complete new generation without orphan workouts or database rows.
 
 ### DUR-013: Activity deletion recovery files are not reconciled on restart
 

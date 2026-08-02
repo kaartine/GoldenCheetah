@@ -880,20 +880,13 @@ RepeatPlanWizard::done
             planList.clear();
             return false;
         }
-
-        QSet<RideItem*> sourceItems;
-        for (const auto &entry : planList)
-            sourceItems.insert(entry.first);
-        const bool distinctInputs = std::none_of(
-            deletionItems.begin(), deletionItems.end(),
-            [&sourceItems](RideItem *item) {
-                return sourceItems.contains(item);
-            });
-        if (!distinctInputs) {
+        if (!repeatPlanReplacementInputsAreUsable(
+                deletionItems, planList)) {
             deletionItems.clear();
             planList.clear();
+            return false;
         }
-        return distinctInputs;
+        return true;
     };
 
     QList<RideItem*> deletionItems;
@@ -932,88 +925,37 @@ RepeatPlanWizard::done
             tr("No activities are available to copy. No activities were removed."));
         return;
     }
+    if (!workflowState.canReplacePlan())
+        return;
+
+    const int expectedRemovedCount = deletionItems.size();
+    const int expectedAddedCount = planList.size();
+    const RideCache::PlannedReplacementResult replacement =
+        guardedCache->replacePlannedActivities(
+            deletionItems, planList);
+    deletionItems.clear();
     planList.clear();
-
-    if (!workflowState.canRemoveTargets())
+    const RepeatPlanReplacementDisposition disposition =
+        repeatPlanReplacementDisposition(
+            ownersValid(), replacement.cleanlyCompleted(),
+            replacement.removedCount, expectedRemovedCount,
+            replacement.addedCount, expectedAddedCount);
+    if (disposition
+        == RepeatPlanReplacementDisposition::OwnerLost) {
         return;
-
-    if (!deletionItems.isEmpty()) {
-        const RideCache::RemovalResult removal =
-            guardedCache->removeRidesResult(deletionItems);
-        deletionItems.clear();
-        if (!ownersValid())
-            return;
-        if (!removal.allLogicallyRemoved()
-            || !removal.cleanlyCompleted()) {
-            const QString detail = removal.error.isEmpty()
-                ? tr("The existing plan could not be removed completely.")
-                : removal.error;
-            showWarning(
-                tr("The existing plan could not be replaced completely.\n\n%1")
-                    .arg(detail));
-            return;
-        }
     }
-    workflowState.markRemovalComplete();
-
-    if (!resolveRepeatPlanSources(
-            wizard->sourceRides, guardedCache,
-            planList)) {
-        planList.clear();
+    if (disposition
+        == RepeatPlanReplacementDisposition::Failed) {
+        const QString fallback = replacement.committed
+            ? tr("The plan files were replaced, but the activity list could not be updated completely.")
+            : tr("The existing plan was not changed.");
         showWarning(
-            tr("A source activity changed before the plan could be copied."));
+            replacement.error.isEmpty()
+            ? fallback
+            : replacement.error);
         return;
     }
-
-    const RideCache::OperationPreCheck copyCheck =
-        guardedCache->checkCopyPlannedActivities(planList);
-    planList.clear();
-    if (!ownersValid())
-        return;
-    if (!copyCheck.canProceed) {
-        showWarning(
-            copyCheck.blockingReason.isEmpty()
-            ? tr("The plan cannot be copied.")
-            : copyCheck.blockingReason);
-        return;
-    }
-
-    if (!resolveRepeatPlanSources(
-            wizard->sourceRides, guardedCache,
-            planList)) {
-        planList.clear();
-        showWarning(
-            tr("A source activity changed before the plan could be copied."));
-        return;
-    }
-
-    const int expectedCount = planList.size();
-    const RideCache::OperationResult copyResult =
-        guardedCache->copyPlannedActivities(planList);
-    planList.clear();
-    if (!ownersValid())
-        return;
-    if (!copyResult.success
-        || copyResult.affectedCount != expectedCount
-        || !copyResult.error.isEmpty()) {
-        showWarning(
-            copyResult.error.isEmpty()
-            ? tr("The plan could not be copied completely.")
-            : copyResult.error);
-        return;
-    }
-
-    if (!resolveRepeatPlanSources(
-            wizard->sourceRides, guardedCache,
-            planList)
-        || planList.size() != expectedCount) {
-        planList.clear();
-        showWarning(
-            tr("A source activity changed while the plan was being copied."));
-        return;
-    }
-    planList.clear();
-    workflowState.markCopyComplete();
+    workflowState.markReplacementComplete();
 
     if (!ownersValid()
         || !workflowState.canAccept(lifetimeGuard)) {

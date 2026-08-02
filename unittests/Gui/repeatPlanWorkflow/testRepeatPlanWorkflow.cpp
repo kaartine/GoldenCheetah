@@ -13,8 +13,11 @@ private slots:
     void incompleteReplacementPreventsAcceptance_data();
     void incompleteReplacementPreventsAcceptance();
     void completeReplacementCanBeAccepted();
-    void emptyCopySetPreventsTargetRemoval();
-    void nonEmptyCopySetAllowsTargetRemoval();
+    void emptyCopySetPreventsReplacement();
+    void nonEmptyCopySetAllowsReplacement();
+    void overlappingSourceAndDeletionAreAllowed();
+    void replacementDisposition_data();
+    void replacementDisposition();
     void destroyedContextPreventsPageAccess();
     void reentrantCompletionIsRejected();
     void importReaderLeaseSurvivesOwnerDestruction();
@@ -70,8 +73,7 @@ TestRepeatPlanWorkflow::ownerDestructionPreventsAcceptance
         owners[3], owners[4]);
     RepeatPlanWorkflowState state;
     state.markInputsValid();
-    state.markRemovalComplete();
-    state.markCopyComplete();
+    state.markReplacementComplete();
 
     delete owners[ownerIndex];
     owners[ownerIndex] = nullptr;
@@ -87,12 +89,10 @@ TestRepeatPlanWorkflow::incompleteReplacementPreventsAcceptance_data
 ()
 {
     QTest::addColumn<bool>("inputsValid");
-    QTest::addColumn<bool>("removalComplete");
-    QTest::addColumn<bool>("copyComplete");
+    QTest::addColumn<bool>("replacementComplete");
 
-    QTest::newRow("source-changed") << false << false << false;
-    QTest::newRow("removal-failed") << true << false << false;
-    QTest::newRow("copy-failed") << true << true << false;
+    QTest::newRow("source-changed") << false << false;
+    QTest::newRow("replacement-failed") << true << false;
 }
 
 
@@ -101,8 +101,7 @@ TestRepeatPlanWorkflow::incompleteReplacementPreventsAcceptance
 ()
 {
     QFETCH(bool, inputsValid);
-    QFETCH(bool, removalComplete);
-    QFETCH(bool, copyComplete);
+    QFETCH(bool, replacementComplete);
 
     QObject wizard;
     QObject context;
@@ -114,10 +113,8 @@ TestRepeatPlanWorkflow::incompleteReplacementPreventsAcceptance
     RepeatPlanWorkflowState state;
     if (inputsValid)
         state.markInputsValid();
-    if (removalComplete)
-        state.markRemovalComplete();
-    if (copyComplete)
-        state.markCopyComplete();
+    if (replacementComplete)
+        state.markReplacementComplete();
 
     QVERIFY(!state.canAccept(guard));
 }
@@ -136,8 +133,7 @@ TestRepeatPlanWorkflow::completeReplacementCanBeAccepted
         &wizard, &context, &athlete, &cache, &tab);
     RepeatPlanWorkflowState state;
     state.markInputsValid();
-    state.markRemovalComplete();
-    state.markCopyComplete();
+    state.markReplacementComplete();
 
     QVERIFY(guard.allAlive());
     QVERIFY(state.canAccept(guard));
@@ -145,30 +141,86 @@ TestRepeatPlanWorkflow::completeReplacementCanBeAccepted
 
 
 void
-TestRepeatPlanWorkflow::emptyCopySetPreventsTargetRemoval
+TestRepeatPlanWorkflow::emptyCopySetPreventsReplacement
 ()
 {
     RepeatPlanWorkflowState state;
-    int removalCalls = 0;
+    int replacementCalls = 0;
 
     if (state.markInputsValid(false)
-        && state.canRemoveTargets()) {
-        ++removalCalls;
+        && state.canReplacePlan()) {
+        ++replacementCalls;
     }
 
-    QCOMPARE(removalCalls, 0);
-    QVERIFY(!state.canRemoveTargets());
+    QCOMPARE(replacementCalls, 0);
+    QVERIFY(!state.canReplacePlan());
 }
 
 
 void
-TestRepeatPlanWorkflow::nonEmptyCopySetAllowsTargetRemoval
+TestRepeatPlanWorkflow::nonEmptyCopySetAllowsReplacement
 ()
 {
     RepeatPlanWorkflowState state;
 
     QVERIFY(state.markInputsValid(true));
-    QVERIFY(state.canRemoveTargets());
+    QVERIFY(state.canReplacePlan());
+}
+
+
+void TestRepeatPlanWorkflow::
+overlappingSourceAndDeletionAreAllowed()
+{
+    RideItem *const sharedItem =
+        reinterpret_cast<RideItem*>(quintptr(0x1));
+    const QList<RideItem*> deletionItems {sharedItem};
+    const QList<std::pair<RideItem*, QDate>> sourceItemsAndTargets {
+        {sharedItem, QDate(2026, 8, 2)}};
+
+    QVERIFY(repeatPlanReplacementInputsAreUsable(
+        deletionItems, sourceItemsAndTargets));
+}
+
+
+void TestRepeatPlanWorkflow::replacementDisposition_data()
+{
+    QTest::addColumn<bool>("ownersAlive");
+    QTest::addColumn<bool>("cleanlyCompleted");
+    QTest::addColumn<int>("removedCount");
+    QTest::addColumn<int>("addedCount");
+    QTest::addColumn<RepeatPlanReplacementDisposition>("expected");
+
+    QTest::newRow("owner-lost")
+        << false << true << 2 << 3
+        << RepeatPlanReplacementDisposition::OwnerLost;
+    QTest::newRow("backend-failed")
+        << true << false << 2 << 3
+        << RepeatPlanReplacementDisposition::Failed;
+    QTest::newRow("removal-count-mismatch")
+        << true << true << 1 << 3
+        << RepeatPlanReplacementDisposition::Failed;
+    QTest::newRow("addition-count-mismatch")
+        << true << true << 2 << 2
+        << RepeatPlanReplacementDisposition::Failed;
+    QTest::newRow("complete")
+        << true << true << 2 << 3
+        << RepeatPlanReplacementDisposition::Complete;
+}
+
+
+void TestRepeatPlanWorkflow::replacementDisposition()
+{
+    QFETCH(bool, ownersAlive);
+    QFETCH(bool, cleanlyCompleted);
+    QFETCH(int, removedCount);
+    QFETCH(int, addedCount);
+    QFETCH(RepeatPlanReplacementDisposition, expected);
+
+    QCOMPARE(
+        repeatPlanReplacementDisposition(
+            ownersAlive, cleanlyCompleted,
+            removedCount, 2, addedCount, 3),
+        expected);
 }
 
 
