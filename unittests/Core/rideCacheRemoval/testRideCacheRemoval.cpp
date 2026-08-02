@@ -535,6 +535,7 @@ private slots:
     void abandonedPlanJournalBlocksLinkedTransaction_data();
     void abandonedPlanJournalBlocksLinkedTransaction();
     void activeRemovalJournalRejectsDirectorySubstitute();
+    void activeRemovalJournalRejectsManifestSubstitute();
     void startupReconcilesAbandonedLinkedSaveJournal();
     void startupReportsCorruptLinkedSaveJournal();
     void startupReconcilesAbandonedPlanReplacementJournal();
@@ -3375,6 +3376,60 @@ activeRemovalJournalRejectsDirectorySubstitute()
     QCOMPARE(
         readBytes(QDir(journalPath).filePath(QStringLiteral("peer.old"))),
         substitutePeerOld);
+    QCOMPARE(readBytes(sourcePath), sourceContents);
+    QCOMPARE(readBytes(peerPath), peerContents);
+}
+
+void TestRideCacheRemoval::
+activeRemovalJournalRejectsManifestSubstitute()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QString peerPath = fixture.plannedActivityPath(secondName());
+    const QByteArray sourceContents("source");
+    const QByteArray peerContents("peer");
+    writeFixture(sourcePath, sourceContents);
+    writeFixture(peerPath, peerContents);
+
+    QString error;
+    std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), peerPath, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+
+    const QString manifestPath = QDir(journal->directoryPath()).filePath(
+        QStringLiteral("manifest.json"));
+    const QString displacedPath = QDir(journal->directoryPath()).filePath(
+        QStringLiteral(".manifest.json.attack.tmp"));
+    const QByteArray manifestContents = readBytes(manifestPath);
+    QVERIFY(!manifestContents.isEmpty());
+    bool actionReached = false;
+    bool manifestReplaced = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("journal-manifest-inspected"),
+        [&] {
+            actionReached = true;
+            if (!QFile::rename(manifestPath, displacedPath)) return;
+            manifestReplaced = true;
+            writeFixture(manifestPath, manifestContents);
+        });
+
+    error.clear();
+    const bool validated = journal->validateOriginalStorage(error);
+
+    QVERIFY(actionReached);
+    if (!manifestReplaced) {
+        QSKIP("The active journal manifest could not be replaced");
+    }
+    QVERIFY2(
+        !validated,
+        "Validation accepted a substituted journal manifest");
+    QCOMPARE(readBytes(manifestPath), manifestContents);
+    QCOMPARE(readBytes(displacedPath), manifestContents);
     QCOMPARE(readBytes(sourcePath), sourceContents);
     QCOMPARE(readBytes(peerPath), peerContents);
 }

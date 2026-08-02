@@ -795,6 +795,12 @@ bool readSmallRegularFile(
                     .arg(path);
         return false;
     }
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    if (QFileInfo(path).fileName() == Detail::ManifestName) {
+        rideCacheRemovalTransitionReached(
+            "journal-manifest-inspected");
+    }
+#endif
 
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
