@@ -54,6 +54,7 @@ class AthleteBest;
 class RideCacheModel;
 class Estimator;
 class Banister;
+class RideCacheMutationScope;
 
 namespace RideCacheSave {
 struct Snapshot;
@@ -446,6 +447,7 @@ class RideCache : public QObject
         friend class ::RideItem; // adds to deletelist in destructor
         friend class ::RideCacheRefreshThread;
         friend class ::RideCacheModel;
+        friend class ::RideCacheMutationScope;
 
         friend class ::RideCacheLoader;
         Context *context;
@@ -518,6 +520,7 @@ class RideCache : public QObject
             bool triggerRefresh = true,
             bool workersQuiesced = false);
         bool purgeDestroyedModelRows();
+        void purgeDestroyedRowsInsideModelReset();
         void discardDetachedTombstones();
         QString cpxCachePathForActivity(
             const QString &fileName,
@@ -561,7 +564,7 @@ class RideCache : public QObject
         bool removalRefreshPending_ = false;
         std::shared_ptr<bool> replacementRefreshBlocked_{
             std::make_shared<bool>(false)};
-        quint64 replacementResumeGeneration_ = 0;
+        quint64 mutationResumeGeneration_ = 0;
         QStringList pendingSaveTargets_;
         std::shared_ptr<RideCacheBackgroundSaver>
             backgroundSaver_;

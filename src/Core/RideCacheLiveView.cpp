@@ -76,12 +76,7 @@ bool RideCache::purgeDestroyedModelRows()
             return false;
         }
 
-        for (qsizetype row = guardedCache->rides_.size();
-             row > 0; --row) {
-            RideItem *item = guardedCache->rides_.at(row - 1);
-            if (!item || guardedCache->deletelist.contains(item))
-                guardedCache->rides_.remove(row - 1, 1);
-        }
+        guardedCache->purgeDestroyedRowsInsideModelReset();
         guardedModel->endReset();
         if (!guardedCache || !guardedModel
             || guardedCache->model_ != guardedModel.data()) {
@@ -89,4 +84,14 @@ bool RideCache::purgeDestroyedModelRows()
         }
         guardedCache->discardDetachedTombstones();
     }
+}
+
+void RideCache::purgeDestroyedRowsInsideModelReset()
+{
+    for (qsizetype row = rides_.size(); row > 0; --row) {
+        RideItem *item = rides_.at(row - 1);
+        if (!item || deletelist.contains(item))
+            rides_.remove(row - 1, 1);
+    }
+    discardDetachedTombstones();
 }

@@ -21,13 +21,16 @@ SOURCES = testRideCacheRemoval.cpp \
           ../../../src/Core/PlannedActivityFileStager.cpp \
           ../../../src/Core/RideCacheActivityLinking.cpp \
           ../../../src/Core/RideCacheGarbageCollection.cpp \
+          ../../../src/Core/RideCacheImport.cpp \
           ../../../src/Core/RideCacheLiveView.cpp \
+          ../../../src/Core/RideCacheMutationScope.cpp \
           ../../../src/Core/RideCacheRemoval.cpp \
           ../../../src/Core/RideCacheModelProtocol.cpp
 
 HEADERS = ../../../src/Core/Athlete.h \
           ../../../src/Core/Context.h \
           ../../../src/Core/RideCache.h \
+          ../../../src/Core/RideCacheMutationScope.h \
           ../../../src/Core/RideCacheModel.h \
           ../../../src/Core/RideItem.h \
           ../../../src/Core/LinkedActivityRemovalJournal.h \

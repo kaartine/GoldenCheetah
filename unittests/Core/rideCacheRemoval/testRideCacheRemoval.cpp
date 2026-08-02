@@ -423,6 +423,10 @@ private slots:
     void plannedReplacementQuiescesWorkersAndDefersRefresh();
     void plannedReplacementBlocksRefreshRestartDuringCallbacks();
     void plannedReplacementRefreshDoesNotLeakIntoNextRemoval();
+    void addRidePurgesPreexistingDestroyedRow();
+    void addRidesPurgesPreexistingDestroyedRow();
+    void addRidePurgesRowDestroyedDuringReset();
+    void consecutiveAddsCoalesceBackgroundResume();
     void plannedReplacementDropsStaleResumeDuringNewReplacement();
     void plannedReplacementCoalescesSupersededResumes();
     void plannedReplacementProcessorFailureIsReportedAfterPublication();
@@ -5866,6 +5870,123 @@ plannedReplacementRefreshDoesNotLeakIntoNextRemoval()
 
     QCOMPARE(rideCacheRemovalRefreshCount(), 0);
     QCOMPARE(rideCacheRemovalEstimatorRefreshCount(), 0);
+}
+
+void TestRideCacheRemoval::addRidePurgesPreexistingDestroyedRow()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    RideItem *destroyed = fixture.addRide(firstName(), false);
+    RideItem *survivor = fixture.addRide(thirdName(), false);
+    QVERIFY(RideFile::parseRideFileName(
+        survivor->fileName, &survivor->dateTime));
+    const RideItem *const destroyedAddress = destroyed;
+    delete destroyed;
+    QVERIFY(fixture.cache->remembersDeletedAddressForRemovalTest(
+        const_cast<RideItem *>(destroyedAddress)));
+
+    fixture.cache->addRide(
+        secondName(), false, false, false, false);
+
+    const bool tombstoneWasPurged =
+        !fixture.cache->remembersDeletedAddressForRemovalTest(
+            const_cast<RideItem *>(destroyedAddress));
+    if (!tombstoneWasPurged) {
+        fixture.cache->mutableRidesForRemovalTest().removeAll(
+            const_cast<RideItem *>(destroyedAddress));
+    }
+    QVERIFY(tombstoneWasPurged);
+    QCOMPARE(fixture.cache->count(), 2);
+    QCOMPARE(
+        fixture.cache->getAllFilenames(),
+        QStringList({secondName(), thirdName()}));
+}
+
+void TestRideCacheRemoval::addRidesPurgesPreexistingDestroyedRow()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    RideItem *destroyed = fixture.addRide(firstName(), false);
+    RideItem *survivor = fixture.addRide(thirdName(), false);
+    QVERIFY(RideFile::parseRideFileName(
+        survivor->fileName, &survivor->dateTime));
+    RideItem *const destroyedAddress = destroyed;
+    delete destroyed;
+
+    const QVector<RideItem *> added = fixture.cache->addRides(
+        QStringList{secondName()}, {}, false, false, false, false);
+
+    const bool tombstoneWasPurged =
+        !fixture.cache->remembersDeletedAddressForRemovalTest(
+            destroyedAddress);
+    if (!tombstoneWasPurged) {
+        fixture.cache->mutableRidesForRemovalTest().removeAll(
+            destroyedAddress);
+    }
+    QVERIFY(tombstoneWasPurged);
+    QCOMPARE(added.size(), 1);
+    QCOMPARE(fixture.cache->count(), 2);
+    QCOMPARE(
+        fixture.cache->getAllFilenames(),
+        QStringList({secondName(), thirdName()}));
+}
+
+void TestRideCacheRemoval::addRidePurgesRowDestroyedDuringReset()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    RideItem *destroyed = fixture.addRide(firstName(), false);
+    RideItem *survivor = fixture.addRide(thirdName(), false);
+    QVERIFY(RideFile::parseRideFileName(
+        survivor->fileName, &survivor->dateTime));
+    RideItem *const destroyedAddress = destroyed;
+    QMetaObject::Connection resetConnection;
+    resetConnection = connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::modelAboutToBeReset,
+        fixture.cache.get(),
+        [destroyed, &resetConnection] {
+            QObject::disconnect(resetConnection);
+            delete destroyed;
+        });
+
+    fixture.cache->addRide(
+        secondName(), false, false, false, false);
+
+    const bool tombstoneWasPurged =
+        !fixture.cache->remembersDeletedAddressForRemovalTest(
+            destroyedAddress);
+    if (!tombstoneWasPurged) {
+        fixture.cache->mutableRidesForRemovalTest().removeAll(
+            destroyedAddress);
+    }
+    QVERIFY(tombstoneWasPurged);
+    QCOMPARE(fixture.cache->count(), 2);
+    QCOMPARE(
+        fixture.cache->getAllFilenames(),
+        QStringList({secondName(), thirdName()}));
+}
+
+void TestRideCacheRemoval::consecutiveAddsCoalesceBackgroundResume()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    fixture.cache->addRide(
+        firstName(), false, false, false, false);
+    fixture.cache->addRide(
+        secondName(), false, false, false, false);
+
+    QCOMPARE(rideCacheRemovalCancelCount(), 2);
+    QCOMPARE(rideCacheRemovalEstimatorStopCount(), 2);
+    QCOMPARE(rideCacheRemovalRefreshCount(), 0);
+    QCOMPARE(rideCacheRemovalEstimatorRefreshCount(), 0);
+
+    QTRY_COMPARE(rideCacheRemovalRefreshCount(), 1);
+    QCOMPARE(rideCacheRemovalEstimatorRefreshCount(), 1);
 }
 
 void TestRideCacheRemoval::

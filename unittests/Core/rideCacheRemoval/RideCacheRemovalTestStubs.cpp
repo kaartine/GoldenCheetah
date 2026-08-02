@@ -713,6 +713,29 @@ RideItem::RideItem(RideFile *ride, Context *rideContext)
 {
 }
 
+RideItem::RideItem(
+    QString ridePath,
+    QString rideFileName,
+    QDateTime &rideDateTime,
+    Context *rideContext,
+    bool ridePlanned)
+    : RideItem(nullptr, rideContext)
+{
+    path = std::move(ridePath);
+    fileName = std::move(rideFileName);
+    dateTime = rideDateTime;
+    planned = ridePlanned;
+}
+
+RideItem::RideItem(
+    RideFile *ride,
+    QDateTime &rideDateTime,
+    Context *rideContext)
+    : RideItem(ride, rideContext)
+{
+    dateTime = rideDateTime;
+}
+
 RideItem::~RideItem()
 {
     if (context && context->athlete
@@ -743,6 +766,8 @@ void RideItem::close()
 {
     ride_ = nullptr;
 }
+
+void RideItem::refresh() {}
 
 QString RideItem::getLinkedFileName() const
 {

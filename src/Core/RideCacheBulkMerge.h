@@ -21,17 +21,38 @@ namespace RideCacheBulkMerge {
 
 template<
     typename Item, typename KeyFunction, typename LessFunction,
-    typename BeginResetFunction, typename EndResetFunction>
+    typename BeginResetFunction, typename EndResetFunction,
+    typename PrepareAfterResetFunction>
 QVector<Item *> mergeItems(
     QVector<Item *> &current,
     const QVector<Item *> &incoming,
     KeyFunction keyFor,
     LessFunction lessThan,
     BeginResetFunction beginReset,
-    EndResetFunction endReset)
+    EndResetFunction endReset,
+    PrepareAfterResetFunction prepareAfterReset)
 {
     QVector<Item *> replaced;
     if (incoming.isEmpty()) return replaced;
+
+    if constexpr (std::is_convertible_v<
+                      std::invoke_result_t<BeginResetFunction>, bool>) {
+        if (!beginReset()) return replaced;
+    } else {
+        beginReset();
+    }
+
+    bool prepared = true;
+    if constexpr (std::is_convertible_v<
+                      std::invoke_result_t<PrepareAfterResetFunction>, bool>) {
+        prepared = prepareAfterReset();
+    } else {
+        prepareAfterReset();
+    }
+    if (!prepared) {
+        endReset();
+        return replaced;
+    }
 
     using Key = std::decay_t<decltype(
         keyFor(std::declval<const Item *>()))>;
@@ -43,12 +64,6 @@ QVector<Item *> mergeItems(
         positions.insert(keyFor(current[index]), index);
     }
 
-    if constexpr (std::is_convertible_v<
-                      std::invoke_result_t<BeginResetFunction>, bool>) {
-        if (!beginReset()) return replaced;
-    } else {
-        beginReset();
-    }
     for (Item *item : incoming) {
         Q_ASSERT(item);
         const Key key = keyFor(item);
@@ -66,6 +81,27 @@ QVector<Item *> mergeItems(
     endReset();
 
     return replaced;
+}
+
+template<
+    typename Item, typename KeyFunction, typename LessFunction,
+    typename BeginResetFunction, typename EndResetFunction>
+QVector<Item *> mergeItems(
+    QVector<Item *> &current,
+    const QVector<Item *> &incoming,
+    KeyFunction keyFor,
+    LessFunction lessThan,
+    BeginResetFunction beginReset,
+    EndResetFunction endReset)
+{
+    return mergeItems(
+        current,
+        incoming,
+        std::move(keyFor),
+        std::move(lessThan),
+        std::move(beginReset),
+        std::move(endReset),
+        [] { return true; });
 }
 
 } // namespace RideCacheBulkMerge

@@ -2112,7 +2112,7 @@ RideCache::replacePlannedActivityFiles(
         return result;
     }
     const quint64 replacementResumeGeneration =
-        ++replacementResumeGeneration_;
+        ++mutationResumeGeneration_;
 
     const QPointer<RideCache> guardedCache(this);
     const QPointer<Context> guardedContext(context);
@@ -2157,8 +2157,10 @@ RideCache::replacePlannedActivityFiles(
                             "Planned activity background refresh was dropped because its owners changed");
                         return;
                     }
-                    if (guardedCache->replacementResumeGeneration_
+                    if (guardedCache->mutationResumeGeneration_
                             != replacementResumeGeneration
+                        || (guardedCache->removalInProgress_
+                            && *guardedCache->removalInProgress_)
                         || (guardedCache->replacementRefreshBlocked_
                             && *guardedCache->replacementRefreshBlocked_)) {
                         return;
@@ -2169,8 +2171,10 @@ RideCache::replacePlannedActivityFiles(
                             "Planned activity estimate refresh was dropped because its owners changed");
                         return;
                     }
-                    if (guardedCache->replacementResumeGeneration_
+                    if (guardedCache->mutationResumeGeneration_
                             != replacementResumeGeneration
+                        || (guardedCache->removalInProgress_
+                            && *guardedCache->removalInProgress_)
                         || (guardedCache->replacementRefreshBlocked_
                             && *guardedCache->replacementRefreshBlocked_)) {
                         return;
