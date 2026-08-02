@@ -17,6 +17,7 @@ SOURCES = testRideCacheRemoval.cpp \
           ../../../src/FileIO/LocationInterpolation.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCacheIntegrity.cpp \
+          ../../../src/Metrics/BlinnSolver.cpp \
           ../../../src/Core/LinkedActivityRemovalJournal.cpp \
           ../../../src/Core/LinkedActivitySaveJournal.cpp \
           ../../../src/Planning/PlanBundle.cpp \
@@ -33,7 +34,8 @@ SOURCES = testRideCacheRemoval.cpp \
           ../../../src/Core/RideCacheLiveView.cpp \
           ../../../src/Core/RideCacheMutationScope.cpp \
           ../../../src/Core/RideCacheRemoval.cpp \
-          ../../../src/Core/RideCacheModelProtocol.cpp
+          ../../../src/Core/RideCacheModelProtocol.cpp \
+          ../../../contrib/qzip/zip.cpp
 
 HEADERS = ../../../src/Core/Athlete.h \
           ../../../src/FileIO/AnchoredFileSystem.h \
@@ -70,7 +72,11 @@ INCLUDEPATH += ../../../src \
 
 LIBS += $${GSL_LIBS}
 
-!msvc {
+unix {
+    LIBS += -lz
+}
+
+unix:!macx {
     QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
     QMAKE_LFLAGS += -Wl,--gc-sections
 }

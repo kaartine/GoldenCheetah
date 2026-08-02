@@ -342,23 +342,26 @@ void TestAnchoredFilesystem::readsPinnedContentsAfterPathReplacement()
     const QByteArray originalContents("original pinned contents");
     const QByteArray substituteContents("substitute contents");
     writeFixture(source.displayPath(), originalContents);
-    const PinnedFile original = pin(source);
+    bool replaced = false;
+    {
+        const PinnedFile original = pin(source);
 
-    const bool replaced = QFile::rename(source.displayPath(), retained);
+        replaced = QFile::rename(source.displayPath(), retained);
 #ifndef Q_OS_WIN
-    QVERIFY(replaced);
+        QVERIFY(replaced);
 #endif
-    if (replaced) writeFixture(source.displayPath(), substituteContents);
+        if (replaced) writeFixture(source.displayPath(), substituteContents);
 
-    QByteArray contents;
-    QString error;
-    QVERIFY(readAll(original, 1024, contents, error));
-    QVERIFY2(error.isEmpty(), qPrintable(error));
-    QCOMPARE(contents, originalContents);
-    if (replaced) {
-        QCOMPARE(readFixture(source.displayPath()), substituteContents);
-        QCOMPARE(readFixture(retained), originalContents);
+        QByteArray contents;
+        QString error;
+        QVERIFY(readAll(original, 1024, contents, error));
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(contents, originalContents);
+        if (replaced) {
+            QCOMPARE(readFixture(source.displayPath()), substituteContents);
+        }
     }
+    if (replaced) QCOMPARE(readFixture(retained), originalContents);
 }
 
 void TestAnchoredFilesystem::directoryAnchorSurvivesPathReplacement()
