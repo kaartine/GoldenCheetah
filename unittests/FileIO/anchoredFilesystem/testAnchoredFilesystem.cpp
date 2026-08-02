@@ -26,6 +26,7 @@ using FilesystemAction = std::function<void(
 
 FilesystemAction filesystemAction;
 bool failDirectorySync = false;
+bool forceLegacyWindowsDelete = false;
 
 #ifdef Q_OS_WIN
 class WindowsTestHandle
@@ -69,6 +70,11 @@ void anchoredFilesystemTransitionReached(
 bool anchoredFilesystemSyncFailureRequested(const QString &)
 {
     return failDirectorySync;
+}
+
+bool anchoredFilesystemUseLegacyWindowsDelete()
+{
+    return forceLegacyWindowsDelete;
 }
 
 namespace {
@@ -208,6 +214,7 @@ private slots:
     void removePartialMoveReportsGeneratedQuarantine();
     void removeDetectsReplacementAfterFinalQuarantineCheck();
     void removeUnlinksWindowsNameWithSharedObserver();
+    void removeLegacyWindowsDeleteReportsPendingName();
     void syncsPinnedDirectory();
 };
 
@@ -1041,6 +1048,57 @@ removeUnlinksWindowsNameWithSharedObserver()
     QCOMPARE(bytesRead, DWORD(original.size()));
     QCOMPARE(observed, original);
     QCOMPARE(readFixture(source.displayPath()), replacement);
+#endif
+}
+
+void TestAnchoredFilesystem::
+removeLegacyWindowsDeleteReportsPendingName()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Windows legacy delete semantics are platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    const QByteArray original("original contents");
+    writeFixture(source.displayPath(), original);
+
+    {
+        WindowsTestHandle observer(::CreateFileW(
+            reinterpret_cast<LPCWSTR>(source.displayPath().utf16()),
+            GENERIC_READ | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT,
+            nullptr));
+        QVERIFY(observer.isValid());
+        PinnedFile pinned = pin(source);
+
+        forceLegacyWindowsDelete = true;
+        const MutationResult result = remove(pinned);
+        forceLegacyWindowsDelete = false;
+
+        QCOMPARE(result.effect, MutationEffect::Partial);
+        QVERIFY(!pinned.isValid());
+        QFile replacement(source.displayPath());
+        QVERIFY(!replacement.open(
+            QIODevice::WriteOnly | QIODevice::NewOnly));
+
+        LARGE_INTEGER start {};
+        QVERIFY(::SetFilePointerEx(
+            observer.get(), start, nullptr, FILE_BEGIN));
+        QByteArray observed(original.size(), '\0');
+        DWORD bytesRead = 0;
+        QVERIFY(::ReadFile(
+            observer.get(), observed.data(), DWORD(observed.size()),
+            &bytesRead, nullptr));
+        QCOMPARE(bytesRead, DWORD(original.size()));
+        QCOMPARE(observed, original);
+    }
+
+    writeFixture(source.displayPath(), QByteArray("replacement"));
 #endif
 }
 
