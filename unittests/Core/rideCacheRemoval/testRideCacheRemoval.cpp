@@ -536,6 +536,7 @@ private slots:
     void abandonedPlanJournalBlocksLinkedTransaction();
     void activeRemovalJournalRejectsDirectorySubstitute();
     void activeRemovalJournalRejectsManifestSubstitute();
+    void peerManifestPublicationRejectsManifestSubstitute();
     void startupReconcilesAbandonedLinkedSaveJournal();
     void startupReportsCorruptLinkedSaveJournal();
     void startupReconcilesAbandonedPlanReplacementJournal();
@@ -3432,6 +3433,77 @@ activeRemovalJournalRejectsManifestSubstitute()
     QCOMPARE(readBytes(displacedPath), manifestContents);
     QCOMPARE(readBytes(sourcePath), sourceContents);
     QCOMPARE(readBytes(peerPath), peerContents);
+}
+
+void TestRideCacheRemoval::
+peerManifestPublicationRejectsManifestSubstitute()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QString peerPath = fixture.plannedActivityPath(secondName());
+    const QByteArray sourceContents("source");
+    const QByteArray peerContents("peer");
+    const QByteArray updatedPeerContents("updated peer");
+    writeFixture(sourcePath, sourceContents);
+    writeFixture(peerPath, peerContents);
+
+    QString error;
+    std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), peerPath, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+
+    const QString manifestPath = QDir(journal->directoryPath()).filePath(
+        QStringLiteral("manifest.json"));
+    const QString displacedPath = QDir(journal->directoryPath()).filePath(
+        QStringLiteral(".manifest.json.attack.tmp"));
+    const QByteArray manifestContents = readBytes(manifestPath);
+    QVERIFY(!manifestContents.isEmpty());
+
+    const AtomicFileWriterFactory factory =
+        journal->peerWriterFactory(qSaveFileWriterFactory());
+    std::unique_ptr<AtomicFileWriter> writer = factory(
+        peerPath, AtomicFileMode::ReplaceExisting);
+    QVERIFY(writer);
+    QVERIFY2(writer->open(), qPrintable(writer->errorString()));
+    QCOMPARE(
+        writer->write(updatedPeerContents),
+        static_cast<qint64>(updatedPeerContents.size()));
+    QVERIFY2(writer->flush(), qPrintable(writer->errorString()));
+
+    bool actionReached = false;
+    bool manifestReplaced = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("peer-staging-published"),
+        [&] {
+            actionReached = true;
+            if (!QFile::rename(manifestPath, displacedPath)) return;
+            manifestReplaced = true;
+            writeFixture(manifestPath, manifestContents);
+        });
+
+    const bool committed = writer->commit();
+
+    QVERIFY(actionReached);
+    if (!manifestReplaced) {
+        QSKIP("The active journal manifest could not be replaced");
+    }
+    QVERIFY2(
+        !committed,
+        "Peer manifest publication replaced a substituted manifest");
+    QVERIFY(!writer->errorString().isEmpty());
+    QCOMPARE(readBytes(manifestPath), manifestContents);
+    QCOMPARE(readBytes(peerPath), peerContents);
+
+    writer->cancelWriting();
+    writer.reset();
+    journal.reset();
+    QCOMPARE(readBytes(displacedPath), manifestContents);
+    QCOMPARE(readBytes(sourcePath), sourceContents);
 }
 
 void TestRideCacheRemoval::
