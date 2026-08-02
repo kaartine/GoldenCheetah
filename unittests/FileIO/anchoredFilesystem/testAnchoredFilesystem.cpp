@@ -546,9 +546,6 @@ void TestAnchoredFilesystem::moveDoesNotRestoreUnverifiedDestination()
 
 void TestAnchoredFilesystem::moveRejectsNewHardLink()
 {
-#ifndef Q_OS_UNIX
-    QSKIP("The Unix hard-link race is platform-specific");
-#else
     QTemporaryDir root;
     QVERIFY(root.isValid());
     const DirectoryAnchor directory = openDirectory(root.path());
@@ -574,7 +571,6 @@ void TestAnchoredFilesystem::moveRejectsNewHardLink()
     QCOMPARE(result.effect, MutationEffect::Partial);
     QVERIFY(QFileInfo::exists(target.displayPath()));
     QVERIFY(QFileInfo::exists(extra));
-#endif
 }
 
 void TestAnchoredFilesystem::moveUsesPinnedParentAfterPathReplacement()
