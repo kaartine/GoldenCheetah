@@ -482,13 +482,40 @@ CalendarWindow::CalendarWindow(Context *context)
         this->context->tab->setNoSwitch(false);
     });
     connect(calendar, &Calendar::repeatPlan, this, [this](const QDate &day) {
-        this->context->tab->setNoSwitch(true);
-        RepeatPlanWizard wizard(this->context, day);
-        if (wizard.exec() == QDialog::Accepted) {
-            // Context::rideDeleted is not always emitted, therefore forcing the update
-            updateActivities();
+        const QPointer<CalendarWindow> guardedWindow(this);
+        const QPointer<Context> guardedContext(this->context);
+        const QPointer<Athlete> guardedAthlete(
+            guardedContext ? guardedContext->athlete : nullptr);
+        const QPointer<RideCache> guardedCache(
+            guardedAthlete ? guardedAthlete->rideCache : nullptr);
+        const QPointer<AthleteTab> guardedTab(
+            guardedContext ? guardedContext->tab : nullptr);
+        const RepeatPlanWorkflowGuard lifetimeGuard(
+            guardedWindow.data(), guardedContext.data(),
+            guardedAthlete.data(), guardedCache.data(),
+            guardedTab.data());
+        if (!lifetimeGuard.allAlive()
+            || !calendarWorkflowOwnersAreCurrent(
+                guardedContext, guardedAthlete, guardedCache)) {
+            return;
         }
-        this->context->tab->setNoSwitch(false);
+        const bool previousNoSwitch = guardedTab->noSwitch();
+        guardedTab->setNoSwitch(true);
+        RepeatPlanWizard wizard(guardedContext.data(), day);
+        const int result = wizard.exec();
+        if (guardedTab)
+            guardedTab->setNoSwitch(previousNoSwitch);
+        if (!lifetimeGuard.allAlive()
+            || !calendarWorkflowOwnersAreCurrent(
+                guardedContext, guardedAthlete, guardedCache)
+            || guardedWindow->context != guardedContext.data()
+            || guardedContext->tab != guardedTab.data()) {
+            return;
+        }
+        if (result == QDialog::Accepted) {
+            // Context::rideDeleted is not always emitted, therefore forcing the update
+            guardedWindow->updateActivities();
+        }
     });
     connect(calendar, &Calendar::importPlan, this, [this](const QDate &day) {
         this->context->tab->setNoSwitch(true);

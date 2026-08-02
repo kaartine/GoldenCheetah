@@ -219,9 +219,11 @@ class RepeatPlanWorkflowState
 
 enum class RepeatPlanReplacementDisposition
 {
-    OwnerLost,
-    Failed,
-    Complete
+    OwnerLost = 0,
+    Failed = 1,
+    Complete = 2,
+    CommittedWithIssues = 3,
+    CommittedOwnerLost = 4
 };
 
 Q_DECLARE_METATYPE(RepeatPlanReplacementDisposition)
@@ -240,6 +242,29 @@ inline bool repeatPlanReplacementInputsAreUsable(
         if (!entry.first || !entry.second.isValid()) return false;
     }
     return true;
+}
+
+
+inline RepeatPlanReplacementDisposition
+repeatPlanReplacementDisposition(
+    bool ownersAlive, bool committed,
+    bool cleanlyCompleted,
+    int removedCount, int expectedRemovedCount,
+    int addedCount, int expectedAddedCount)
+{
+    const bool countsMatch =
+        removedCount == expectedRemovedCount
+        && addedCount == expectedAddedCount;
+    if (committed) {
+        if (!ownersAlive)
+            return RepeatPlanReplacementDisposition::CommittedOwnerLost;
+        return cleanlyCompleted && countsMatch
+            ? RepeatPlanReplacementDisposition::Complete
+            : RepeatPlanReplacementDisposition::CommittedWithIssues;
+    }
+    if (!ownersAlive)
+        return RepeatPlanReplacementDisposition::OwnerLost;
+    return RepeatPlanReplacementDisposition::Failed;
 }
 
 

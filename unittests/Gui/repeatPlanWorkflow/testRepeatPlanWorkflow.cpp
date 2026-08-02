@@ -18,6 +18,7 @@ private slots:
     void overlappingSourceAndDeletionAreAllowed();
     void replacementDisposition_data();
     void replacementDisposition();
+    void legacyReplacementDispositionPreservesOwnerLoss();
     void destroyedContextPreventsPageAccess();
     void reentrantCompletionIsRejected();
     void importReaderLeaseSurvivesOwnerDestruction();
@@ -185,25 +186,38 @@ overlappingSourceAndDeletionAreAllowed()
 void TestRepeatPlanWorkflow::replacementDisposition_data()
 {
     QTest::addColumn<bool>("ownersAlive");
+    QTest::addColumn<bool>("committed");
     QTest::addColumn<bool>("cleanlyCompleted");
     QTest::addColumn<int>("removedCount");
     QTest::addColumn<int>("addedCount");
     QTest::addColumn<RepeatPlanReplacementDisposition>("expected");
 
-    QTest::newRow("owner-lost")
-        << false << true << 2 << 3
+    QTest::newRow("committed-owner-lost")
+        << false << true << true << 2 << 3
+        << RepeatPlanReplacementDisposition::CommittedOwnerLost;
+    QTest::newRow("uncommitted-owner-lost")
+        << false << false << false << 2 << 3
         << RepeatPlanReplacementDisposition::OwnerLost;
     QTest::newRow("backend-failed")
-        << true << false << 2 << 3
+        << true << false << false << 2 << 3
         << RepeatPlanReplacementDisposition::Failed;
+    QTest::newRow("committed-with-backend-issues")
+        << true << true << false << 2 << 3
+        << RepeatPlanReplacementDisposition::CommittedWithIssues;
     QTest::newRow("removal-count-mismatch")
-        << true << true << 1 << 3
+        << true << false << true << 1 << 3
         << RepeatPlanReplacementDisposition::Failed;
+    QTest::newRow("committed-count-mismatch")
+        << true << true << true << 1 << 3
+        << RepeatPlanReplacementDisposition::CommittedWithIssues;
     QTest::newRow("addition-count-mismatch")
-        << true << true << 2 << 2
+        << true << false << true << 2 << 2
+        << RepeatPlanReplacementDisposition::Failed;
+    QTest::newRow("inconsistent-uncommitted-success")
+        << true << false << true << 2 << 3
         << RepeatPlanReplacementDisposition::Failed;
     QTest::newRow("complete")
-        << true << true << 2 << 3
+        << true << true << true << 2 << 3
         << RepeatPlanReplacementDisposition::Complete;
 }
 
@@ -211,6 +225,7 @@ void TestRepeatPlanWorkflow::replacementDisposition_data()
 void TestRepeatPlanWorkflow::replacementDisposition()
 {
     QFETCH(bool, ownersAlive);
+    QFETCH(bool, committed);
     QFETCH(bool, cleanlyCompleted);
     QFETCH(int, removedCount);
     QFETCH(int, addedCount);
@@ -218,9 +233,19 @@ void TestRepeatPlanWorkflow::replacementDisposition()
 
     QCOMPARE(
         repeatPlanReplacementDisposition(
-            ownersAlive, cleanlyCompleted,
+            ownersAlive, committed, cleanlyCompleted,
             removedCount, 2, addedCount, 3),
         expected);
+}
+
+
+void TestRepeatPlanWorkflow::
+legacyReplacementDispositionPreservesOwnerLoss()
+{
+    QCOMPARE(
+        repeatPlanReplacementDisposition(
+            false, true, 2, 2, 3, 3),
+        RepeatPlanReplacementDisposition::OwnerLost);
 }
 
 

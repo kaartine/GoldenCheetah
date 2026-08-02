@@ -814,6 +814,8 @@ void
 RepeatPlanWizard::done
 (int result)
 {
+    if (completionInProgress)
+        return;
     if (result != QDialog::Accepted) {
         QWizard::done(result);
         return;
@@ -928,7 +930,10 @@ RepeatPlanWizard::done
     if (!workflowState.canReplacePlan())
         return;
 
-    const int expectedRemovedCount = deletionItems.size();
+    QSet<RideItem*> uniqueDeletionItems;
+    for (RideItem *item : std::as_const(deletionItems))
+        uniqueDeletionItems.insert(item);
+    const int expectedRemovedCount = uniqueDeletionItems.size();
     const int expectedAddedCount = planList.size();
     const RideCache::PlannedReplacementResult replacement =
         guardedCache->replacePlannedActivities(
@@ -937,7 +942,8 @@ RepeatPlanWizard::done
     planList.clear();
     const RepeatPlanReplacementDisposition disposition =
         repeatPlanReplacementDisposition(
-            ownersValid(), replacement.cleanlyCompleted(),
+            ownersValid(), replacement.committed,
+            replacement.cleanlyCompleted(),
             replacement.removedCount, expectedRemovedCount,
             replacement.addedCount, expectedAddedCount);
     if (disposition
@@ -946,9 +952,8 @@ RepeatPlanWizard::done
     }
     if (disposition
         == RepeatPlanReplacementDisposition::Failed) {
-        const QString fallback = replacement.committed
-            ? tr("The plan files were replaced, but the activity list could not be updated completely.")
-            : tr("The existing plan was not changed.");
+        const QString fallback =
+            tr("The existing plan was not changed.");
         showWarning(
             replacement.error.isEmpty()
             ? fallback
@@ -957,11 +962,43 @@ RepeatPlanWizard::done
     }
     workflowState.markReplacementComplete();
 
-    if (!ownersValid()
-        || !workflowState.canAccept(lifetimeGuard)) {
-        return;
+    QStringList notices;
+    if (disposition
+        == RepeatPlanReplacementDisposition::CommittedOwnerLost) {
+        notices.append(replacement.error.isEmpty()
+            ? tr("The plan files were replaced, but the athlete was closed before the activity view could be updated.")
+            : replacement.error);
+    } else if (disposition
+        == RepeatPlanReplacementDisposition::CommittedWithIssues) {
+        notices.append(replacement.error.isEmpty()
+            ? tr("The plan files were replaced, but the activity list could not be updated completely.")
+            : replacement.error);
     }
-    QWizard::done(QDialog::Accepted);
+    if (replacement.removedCount != expectedRemovedCount) {
+        notices.append(tr(
+            "Expected to replace %1 existing activities, but the cache reported %2.")
+            .arg(expectedRemovedCount)
+            .arg(replacement.removedCount));
+    }
+    if (replacement.addedCount != expectedAddedCount) {
+        notices.append(tr(
+            "Expected to add %1 activities, but the cache reported %2.")
+            .arg(expectedAddedCount)
+            .arg(replacement.addedCount));
+    }
+    notices.append(replacement.warnings);
+    notices.removeAll(QString());
+    notices.removeDuplicates();
+    if (!wizard)
+        return;
+    if (!notices.isEmpty())
+        QMessageBox::warning(
+            wizard.data(), tr("Repeat Plan"),
+            notices.join(QLatin1Char('\n')));
+
+    if (!wizard)
+        return;
+    wizard->QWizard::done(QDialog::Accepted);
 }
 
 
