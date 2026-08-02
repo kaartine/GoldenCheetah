@@ -94,6 +94,8 @@ struct JournalState
     AnchoredFileSystem::DirectoryAnchor journalDirectory;
     AnchoredFileSystem::EntryRef manifestEntry;
     std::shared_ptr<AnchoredFileSystem::PinnedFile> manifestFile;
+    AnchoredFileSystem::EntryRef peerOldEntry;
+    std::shared_ptr<AnchoredFileSystem::PinnedFile> peerOldFile;
     AnchoredFileSystem::EntryRef commitMarkerEntry;
     std::shared_ptr<AnchoredFileSystem::PinnedFile> commitMarkerFile;
     AtomicFileSnapshot commitMarkerSnapshot;
@@ -851,6 +853,91 @@ bool pinManifestFile(
     return true;
 }
 
+bool peerOldFileMatches(
+    const JournalState &state, QString &error)
+{
+    if (!state.manifest.hasPeer) {
+        const AnchoredFileSystem::EntryRef entry =
+            state.journalDirectory.entry(Detail::PeerOldName, error);
+        if (!entry.isValid()) return false;
+        bool exists = false;
+        if (!AnchoredFileSystem::entryExists(entry, exists, error))
+            return false;
+        if (exists) {
+            error = QStringLiteral(
+                "An unlinked removal journal contains unexpected peer data");
+            return false;
+        }
+        return true;
+    }
+
+    if (!state.peerOldEntry.isValid()
+        || !state.peerOldFile
+        || !state.peerOldFile->isValid()) {
+        error = QStringLiteral(
+            "The transaction journal peer copy is not anchored");
+        return false;
+    }
+    const AtomicFileSnapshot &expected =
+        state.manifest.peerOld.contents;
+    if (state.peerOldFile->size() != expected.size
+        || state.peerOldFile->sha256() != expected.digest) {
+        error = QStringLiteral(
+            "The anchored transaction journal peer copy changed");
+        return false;
+    }
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    rideCacheRemovalTransitionReached(
+        "journal-peer-old-inspected");
+#endif
+    bool matches = false;
+    if (!AnchoredFileSystem::entryMatches(
+            state.peerOldEntry,
+            *state.peerOldFile,
+            matches,
+            error)) {
+        return false;
+    }
+    if (!matches) {
+        error = QStringLiteral(
+            "The transaction journal peer copy was replaced");
+        return false;
+    }
+    return true;
+}
+
+bool pinPeerOldFile(JournalState &state, QString &error)
+{
+    state.peerOldEntry = {};
+    state.peerOldFile.reset();
+    if (!state.manifest.hasPeer)
+        return peerOldFileMatches(state, error);
+
+    AnchoredFileSystem::EntryRef entry = state.journalDirectory.entry(
+        Detail::PeerOldName, error);
+    if (!entry.isValid()) return false;
+
+    const AtomicFileSnapshot &expected =
+        state.manifest.peerOld.contents;
+    auto file = std::make_shared<AnchoredFileSystem::PinnedFile>();
+    if (!AnchoredFileSystem::pinRegularFile(
+            entry, *file, error, expected.size)) {
+        error = QStringLiteral(
+            "Cannot pin the transaction journal peer copy: %1")
+                    .arg(error);
+        return false;
+    }
+    if (file->size() != expected.size
+        || file->sha256() != expected.digest) {
+        error = QStringLiteral(
+            "The transaction journal peer copy does not match its manifest");
+        return false;
+    }
+    state.peerOldEntry = std::move(entry);
+    state.peerOldFile = std::move(file);
+    return peerOldFileMatches(state, error);
+}
+
 bool readManifestFile(
     JournalState &state, QByteArray &contents, QString &error)
 {
@@ -1130,6 +1217,29 @@ bool removeManifestFile(
     error = removal.error.isEmpty()
         ? QStringLiteral(
               "Cannot remove the anchored transaction journal manifest")
+        : removal.error;
+    if (!removal.verifiedRecoveryPath.isEmpty()) {
+        error += QStringLiteral("; recovery file retained at %1")
+                     .arg(removal.verifiedRecoveryPath);
+    }
+    return false;
+}
+
+bool removePeerOldFile(
+    const JournalState &state, QString &error)
+{
+    if (!state.manifest.hasPeer)
+        return peerOldFileMatches(state, error);
+    if (!peerOldFileMatches(state, error)) return false;
+    const AnchoredFileSystem::MutationResult removal =
+        AnchoredFileSystem::remove(*state.peerOldFile);
+    if (removal.effect
+        == AnchoredFileSystem::MutationEffect::AppliedDurable) {
+        return true;
+    }
+    error = removal.error.isEmpty()
+        ? QStringLiteral(
+              "Cannot remove the anchored transaction journal peer copy")
         : removal.error;
     if (!removal.verifiedRecoveryPath.isEmpty()) {
         error += QStringLiteral("; recovery file retained at %1")
@@ -1480,6 +1590,7 @@ bool loadJournalState(
         || !parseManifest(contents, id, loaded->manifest, error)) {
         return false;
     }
+    if (!pinPeerOldFile(*loaded, error)) return false;
 
     ResolvedPaths paths;
     if (!resolveManifestPaths(*loaded, paths, error)) return false;
@@ -1533,6 +1644,7 @@ bool loadAndLockJournal(
     ResolvedPaths paths;
     if (!journalDirectoryMatches(*current, error)
         || !manifestFileMatches(*current, error)
+        || !peerOldFileMatches(*current, error)
         || !resolveManifestPaths(*current, paths, error)) {
         return false;
     }
@@ -1541,7 +1653,8 @@ bool loadAndLockJournal(
     if (!locks->lock(lockPathsFor(*current, paths), error)) return false;
 
     if (!journalDirectoryMatches(*current, error)
-        || !manifestFileMatches(*current, error)) {
+        || !manifestFileMatches(*current, error)
+        || !peerOldFileMatches(*current, error)) {
         error = QStringLiteral(
             "The linked-removal journal changed while it was being locked");
         return false;
@@ -1575,6 +1688,7 @@ bool loadAndLockRuntimeCommit(
     ResolvedPaths paths;
     if (!journalDirectoryMatches(*current, error)
         || !manifestFileMatches(*current, error)
+        || !peerOldFileMatches(*current, error)
         || !resolveManifestPaths(*current, paths, error)) {
         return false;
     }
@@ -1596,7 +1710,8 @@ bool loadAndLockRuntimeCommit(
     }
 
     if (!journalDirectoryMatches(*current, error)
-        || !manifestFileMatches(*current, error)) {
+        || !manifestFileMatches(*current, error)
+        || !peerOldFileMatches(*current, error)) {
         error = QStringLiteral(
             "The linked-removal journal changed while it was being locked");
         return false;
@@ -1607,19 +1722,7 @@ bool loadAndLockRuntimeCommit(
 
 bool validatePeerOldCopy(const JournalState &state, QString &error)
 {
-    if (!state.manifest.hasPeer) {
-        ObservedFile observed;
-        if (!inspectRegularFile(state.peerOldPath, observed, error))
-            return false;
-        if (observed.exists) {
-            error = QStringLiteral(
-                "An unlinked removal journal contains unexpected peer data");
-            return false;
-        }
-        return true;
-    }
-    return validateExpectedSnapshot(
-        state.peerOldPath, state.manifest.peerOld.contents, error);
+    return peerOldFileMatches(state, error);
 }
 
 bool validateDerivedForRollback(
@@ -2181,8 +2284,7 @@ bool removeJournalDirectory(
         "journal-manifest-removed");
 #endif
     if (state.manifest.hasPeer
-        && !removeExpectedFile(
-            state.peerOldPath, state.manifest.peerOld.contents, error)) {
+        && !removePeerOldFile(state, error)) {
         return false;
     }
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
@@ -2555,6 +2657,7 @@ public:
 
         ResolvedPaths paths;
         if (!journalDirectoryMatches(*state_, error_)
+            || !peerOldFileMatches(*state_, error_)
             || !resolveManifestPaths(*state_, paths, error_)) {
             return false;
         }
@@ -2562,6 +2665,7 @@ public:
         if (!locks.lock(
                 {state_->journalPath, paths.peerStaging}, error_)
             || !manifestFileMatches(*state_, error_)
+            || !peerOldFileMatches(*state_, error_)
             || !validateExpectedSnapshot(
                 paths.peer,
                 state_->manifest.peerOld.contents,
@@ -2598,6 +2702,8 @@ public:
                     return journalDirectoryMatches(
                                *state_, validationError)
                         && manifestFileMatches(
+                               *state_, validationError)
+                        && peerOldFileMatches(
                                *state_, validationError);
                 })) {
             return false;
@@ -2890,13 +2996,22 @@ std::shared_ptr<Journal> Journal::prepare(
             QStringLiteral("recovery journal retained at %1").arg(journalPath));
         return {};
     }
+    if (!pinPeerOldFile(*state, error)) {
+        appendError(
+            error,
+            QStringLiteral("recovery journal retained at %1").arg(journalPath));
+        return {};
+    }
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
     if (hasPeer) {
         rideCacheRemovalTransitionReached(
             "journal-peer-old-published");
     }
 #endif
-    if (!journalDirectoryMatches(*state, error)) return {};
+    if (!journalDirectoryMatches(*state, error)
+        || !peerOldFileMatches(*state, error)) {
+        return {};
+    }
     if (!writeManifestFile(
             state->manifestPath,
             state->manifest,
@@ -2906,7 +3021,9 @@ std::shared_ptr<Journal> Journal::prepare(
             error,
             [&](QString &validationError) {
                 return journalDirectoryMatches(
-                    *state, validationError);
+                           *state, validationError)
+                    && peerOldFileMatches(
+                           *state, validationError);
             })) {
         appendError(
             error,
@@ -2924,7 +3041,10 @@ std::shared_ptr<Journal> Journal::prepare(
     rideCacheRemovalTransitionReached(
         "journal-initial-manifest-published");
 #endif
-    if (!journalDirectoryMatches(*state, error)) return {};
+    if (!journalDirectoryMatches(*state, error)
+        || !peerOldFileMatches(*state, error)) {
+        return {};
+    }
 
     return std::shared_ptr<Journal>(new Journal(state));
 }

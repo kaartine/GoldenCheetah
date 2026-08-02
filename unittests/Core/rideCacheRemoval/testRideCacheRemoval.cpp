@@ -535,6 +535,8 @@ private slots:
     void abandonedPlanJournalBlocksLinkedTransaction_data();
     void abandonedPlanJournalBlocksLinkedTransaction();
     void activeRemovalJournalRejectsDirectorySubstitute();
+    void activeRemovalJournalRejectsPeerOldSubstitute();
+    void peerOldCleanupRejectsSubstitute();
     void activeRemovalJournalRejectsManifestSubstitute();
     void peerManifestPublicationRejectsManifestSubstitute();
     void commitMarkerReadRejectsMarkerSubstitute();
@@ -3378,6 +3380,121 @@ activeRemovalJournalRejectsDirectorySubstitute()
     QCOMPARE(
         readBytes(QDir(journalPath).filePath(QStringLiteral("peer.old"))),
         substitutePeerOld);
+    QCOMPARE(readBytes(sourcePath), sourceContents);
+    QCOMPARE(readBytes(peerPath), peerContents);
+}
+
+void TestRideCacheRemoval::
+activeRemovalJournalRejectsPeerOldSubstitute()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QString peerPath = fixture.plannedActivityPath(secondName());
+    const QByteArray sourceContents("source");
+    const QByteArray peerContents("peer");
+    writeFixture(sourcePath, sourceContents);
+    writeFixture(peerPath, peerContents);
+
+    const QString namespacePath = QDir(fixture.temporary.path()).filePath(
+        QStringLiteral(".gc-transactions/linked-removal"));
+    QString peerOldPath;
+    QString displacedPath;
+    QByteArray peerOldContents;
+    bool actionReached = false;
+    bool peerOldReplaced = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("journal-peer-old-published"),
+        [&] {
+            actionReached = true;
+            const QStringList journals = QDir(namespacePath).entryList(
+                QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot,
+                QDir::Name);
+            QCOMPARE(journals.size(), 1);
+            const QString journalPath = QDir(namespacePath).filePath(
+                journals.constFirst());
+            peerOldPath = QDir(journalPath).filePath(
+                QStringLiteral("peer.old"));
+            displacedPath = QDir(journalPath).filePath(
+                QStringLiteral(".peer.old.attack.tmp"));
+            peerOldContents = readBytes(peerOldPath);
+            if (!QFile::rename(peerOldPath, displacedPath)) return;
+            peerOldReplaced = true;
+            writeFixture(peerOldPath, peerOldContents);
+        });
+
+    QString error;
+    std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), peerPath, {}},
+            error);
+
+    QVERIFY(actionReached);
+    if (!peerOldReplaced) {
+        QSKIP("The active journal peer copy could not be replaced");
+    }
+    const bool accepted = bool(journal);
+    journal.reset();
+    QVERIFY2(
+        !accepted,
+        "Preparation accepted a substituted journal peer copy");
+    QCOMPARE(readBytes(peerOldPath), peerOldContents);
+    QCOMPARE(readBytes(displacedPath), peerOldContents);
+    QCOMPARE(readBytes(sourcePath), sourceContents);
+    QCOMPARE(readBytes(peerPath), peerContents);
+}
+
+void TestRideCacheRemoval::
+peerOldCleanupRejectsSubstitute()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QString peerPath = fixture.plannedActivityPath(secondName());
+    const QByteArray sourceContents("source");
+    const QByteArray peerContents("peer");
+    writeFixture(sourcePath, sourceContents);
+    writeFixture(peerPath, peerContents);
+
+    QString error;
+    std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), peerPath, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+
+    const QString peerOldPath = QDir(journal->directoryPath()).filePath(
+        QStringLiteral("peer.old"));
+    const QString displacedPath = QDir(journal->directoryPath()).filePath(
+        QStringLiteral(".peer.old.attack.tmp"));
+    const QByteArray peerOldContents = readBytes(peerOldPath);
+    bool actionReached = false;
+    bool peerOldReplaced = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("journal-manifest-removed"),
+        [&] {
+            actionReached = true;
+            if (!QFile::rename(peerOldPath, displacedPath)) return;
+            peerOldReplaced = true;
+            writeFixture(peerOldPath, peerOldContents);
+        });
+
+    error.clear();
+    const bool cleaned = journal->cleanupAfterRollback(error);
+
+    QVERIFY(actionReached);
+    if (!peerOldReplaced) {
+        QSKIP("The journal peer copy could not be replaced during cleanup");
+    }
+    QVERIFY2(
+        !cleaned,
+        "Cleanup removed a substituted journal peer copy");
+    QCOMPARE(readBytes(peerOldPath), peerOldContents);
+    QCOMPARE(readBytes(displacedPath), peerOldContents);
     QCOMPARE(readBytes(sourcePath), sourceContents);
     QCOMPARE(readBytes(peerPath), peerContents);
 }
