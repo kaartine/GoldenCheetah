@@ -85,24 +85,27 @@ void RideCache::addRide(
     }
 
     if (!added) {
-        const QPointer<RideCacheModel> guardedModel(model_);
-        if (!guardedModel || !guardedModel->beginReset()) {
-            if (guardedLast) delete guardedLast.data();
+        bool appended = false;
+        QString publishError;
+        const bool published = mutation.resetAndSort(
+            publishError,
+            [this, &guardedLast, &appended] {
+                if (!guardedLast) return false;
+                rides_ << guardedLast.data();
+                appended = true;
+                return true;
+            });
+        if (!published) {
+            if (guardedLast && !appended) {
+                if (!mutation.ownersStable())
+                    guardedLast->context = nullptr;
+                delete guardedLast.data();
+            }
+            if (!publishError.isEmpty())
+                qWarning().noquote() << publishError;
             return;
         }
-        if (!mutation.ownersStable() || !guardedLast
-            || !guardedModel || model_ != guardedModel.data()) {
-            if (guardedModel) guardedModel->endReset();
-            if (guardedLast) delete guardedLast.data();
-            return;
-        }
-        purgeDestroyedRowsInsideModelReset();
-        rides_ << guardedLast.data();
-        std::sort(
-            rides_.begin(), rides_.end(), rideImportLessThan);
-        guardedModel->endReset();
-        if (!mutation.ownersStable() || !guardedLast)
-            return;
+        if (!mutation.ownersStable() || !guardedLast) return;
     }
 
     last = guardedLast.data();

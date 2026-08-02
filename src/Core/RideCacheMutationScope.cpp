@@ -14,11 +14,14 @@
 #include "Estimator.h"
 #include "RideCache.h"
 #include "RideCacheModel.h"
+#include "RideItem.h"
 
 #include <QMetaObject>
 #include <QObject>
 #include <QPointer>
 #include <QThread>
+
+#include <algorithm>
 
 struct RideCacheMutationScope::State
 {
@@ -177,4 +180,76 @@ bool RideCacheMutationScope::ownersStable() const
         && state_->athlete->rideCache == state_->cache.data()
         && state_->cache->model_ == state_->model.data()
         && state_->cache->estimator == state_->estimator.data();
+}
+
+bool RideCacheMutationScope::resetAndSort(
+    QString &error,
+    const std::function<bool()> &publish)
+{
+    error.clear();
+    if (!ready()) {
+        error = QObject::tr(
+            "The activity collection is no longer available");
+        return false;
+    }
+
+    const QPointer<RideCacheModel> model = state_->model;
+    if (!model || !model->beginReset()) {
+        error = QObject::tr(
+            "The activity list is busy and cannot be reordered");
+        return false;
+    }
+    const auto finishReset = [&] {
+        if (model) model->endReset();
+    };
+
+    if (!ownersStable() || state_->cache->model_ != model.data()) {
+        finishReset();
+        error = QObject::tr(
+            "The activity collection disappeared while reordering began");
+        return false;
+    }
+
+    state_->cache->purgeDestroyedRowsInsideModelReset();
+    if (!ownersStable() || state_->cache->model_ != model.data()) {
+        finishReset();
+        error = QObject::tr(
+            "The activity collection disappeared while destroyed rows were being removed");
+        return false;
+    }
+    if (publish && !publish()) {
+        finishReset();
+        if (error.isEmpty()) {
+            error = QObject::tr(
+                "The activity changes could not be published");
+        }
+        return false;
+    }
+    if (!ownersStable() || state_->cache->model_ != model.data()) {
+        finishReset();
+        error = QObject::tr(
+            "The activity collection disappeared while changes were being published");
+        return false;
+    }
+
+    state_->cache->purgeDestroyedRowsInsideModelReset();
+    if (!ownersStable() || state_->cache->model_ != model.data()) {
+        finishReset();
+        error = QObject::tr(
+            "The activity collection disappeared before changes were reordered");
+        return false;
+    }
+    std::sort(
+        state_->cache->rides_.begin(),
+        state_->cache->rides_.end(),
+        [](const RideItem *left, const RideItem *right) {
+            return left->dateTime < right->dateTime;
+        });
+    finishReset();
+    if (!ownersStable()) {
+        error = QObject::tr(
+            "The activity collection disappeared while reordering finished");
+        return false;
+    }
+    return true;
 }

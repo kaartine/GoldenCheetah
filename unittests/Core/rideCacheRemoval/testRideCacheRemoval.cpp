@@ -8,6 +8,7 @@
 #include "PlanReplacementJournal.h"
 #include "RideCache.h"
 #include "RideCacheModel.h"
+#include "RideCacheMutationScope.h"
 #include "RideItem.h"
 #include "NavigationModel.h"
 
@@ -427,6 +428,11 @@ private slots:
     void addRidesPurgesPreexistingDestroyedRow();
     void addRidePurgesRowDestroyedDuringReset();
     void consecutiveAddsCoalesceBackgroundResume();
+    void mutationScopePublishesOnlyLiveSortedRows();
+    void moveActivityPurgesDestroyedRowsBeforeReorder();
+    void copyPlannedActivityPurgesDestroyedRowsBeforePublish();
+    void copyPlannedActivitiesPurgesDestroyedRowsBeforePublish();
+    void shiftPlannedActivitiesPurgesDestroyedRowsBeforeReorder();
     void plannedReplacementDropsStaleResumeDuringNewReplacement();
     void plannedReplacementCoalescesSupersededResumes();
     void plannedReplacementProcessorFailureIsReportedAfterPublication();
@@ -5987,6 +5993,205 @@ void TestRideCacheRemoval::consecutiveAddsCoalesceBackgroundResume()
 
     QTRY_COMPARE(rideCacheRemovalRefreshCount(), 1);
     QCOMPARE(rideCacheRemovalEstimatorRefreshCount(), 1);
+}
+
+void TestRideCacheRemoval::mutationScopePublishesOnlyLiveSortedRows()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    RideItem *first = fixture.addRide(firstName(), false);
+    RideItem *third = fixture.addRide(thirdName(), false);
+    QVERIFY(RideFile::parseRideFileName(
+        first->fileName, &first->dateTime));
+    QVERIFY(RideFile::parseRideFileName(
+        third->fileName, &third->dateTime));
+
+    QString error;
+    RideCacheMutationScope mutation(fixture.cache.get(), error);
+    QVERIFY2(mutation.ready(), qPrintable(error));
+    QCOMPARE(rideCacheRemovalCancelCount(), 1);
+    QCOMPARE(rideCacheRemovalEstimatorStopCount(), 1);
+
+    QMetaObject::Connection resetConnection;
+    resetConnection = connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::modelAboutToBeReset,
+        fixture.cache.get(),
+        [first, &resetConnection] {
+            QObject::disconnect(resetConnection);
+            delete first;
+        });
+
+    QVERIFY2(
+        mutation.resetAndSort(error, [] { return true; }),
+        qPrintable(error));
+    QVERIFY(!fixture.cache->remembersDeletedAddressForRemovalTest(first));
+    QCOMPARE(fixture.cache->count(), 1);
+    QCOMPARE(fixture.cache->getAllFilenames(), QStringList{thirdName()});
+}
+
+void TestRideCacheRemoval::moveActivityPurgesDestroyedRowsBeforeReorder()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    QDateTime originalDateTime;
+    QDateTime targetDateTime;
+    QVERIFY(RideFile::parseRideFileName(firstName(), &originalDateTime));
+    QVERIFY(RideFile::parseRideFileName(thirdName(), &targetDateTime));
+    RideFile *ride = new RideFile(originalDateTime, 1.0);
+    RideItem *target = fixture.addRide(firstName(), true, ride);
+    target->dateTime = originalDateTime;
+    writeFixture(fixture.activityPath(firstName()), QByteArray("activity"));
+    RideItem *destroyed = fixture.addRide(secondName(), false);
+    RideItem *const destroyedAddress = destroyed;
+    QMetaObject::Connection resetConnection;
+    resetConnection = connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::modelAboutToBeReset,
+        fixture.cache.get(),
+        [destroyed, &resetConnection] {
+            QObject::disconnect(resetConnection);
+            delete destroyed;
+        });
+
+    const RideCache::OperationResult result =
+        fixture.cache->moveActivity(target, targetDateTime);
+
+    QVERIFY2(result.success, qPrintable(result.error));
+    QCOMPARE(result.affectedCount, 1);
+    QCOMPARE(target->fileName, thirdName());
+    QVERIFY(!QFileInfo::exists(fixture.activityPath(firstName())));
+    QVERIFY(QFileInfo::exists(fixture.activityPath(thirdName())));
+    QVERIFY(!fixture.cache->remembersDeletedAddressForRemovalTest(
+        destroyedAddress));
+    QCOMPARE(rideCacheRemovalCancelCount(), 1);
+    QCOMPARE(rideCacheRemovalEstimatorStopCount(), 1);
+    delete ride;
+}
+
+void TestRideCacheRemoval::copyPlannedActivityPurgesDestroyedRowsBeforePublish()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    QDateTime sourceDateTime;
+    QVERIFY(RideFile::parseRideFileName(firstName(), &sourceDateTime));
+    RideItem *source = fixture.addPlannedRide(firstName(), false);
+    source->dateTime = sourceDateTime;
+    RideItem *destroyed = fixture.addRide(secondName(), false);
+    RideItem *const destroyedAddress = destroyed;
+    QMetaObject::Connection resetConnection;
+    resetConnection = connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::modelAboutToBeReset,
+        fixture.cache.get(),
+        [destroyed, &resetConnection] {
+            QObject::disconnect(resetConnection);
+            delete destroyed;
+        });
+
+    const RideCache::OperationResult result =
+        fixture.cache->copyPlannedActivity(
+            source, sourceDateTime.date().addDays(1));
+
+    QVERIFY2(result.success, qPrintable(result.error));
+    QCOMPARE(result.affectedCount, 1);
+    QCOMPARE(fixture.cache->count(), 2);
+    QVERIFY(!fixture.cache->remembersDeletedAddressForRemovalTest(
+        destroyedAddress));
+    QCOMPARE(rideCacheRemovalCancelCount(), 1);
+    QCOMPARE(rideCacheRemovalEstimatorStopCount(), 1);
+}
+
+void TestRideCacheRemoval::copyPlannedActivitiesPurgesDestroyedRowsBeforePublish()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    QDateTime firstDateTime;
+    QDateTime secondDateTime;
+    QVERIFY(RideFile::parseRideFileName(firstName(), &firstDateTime));
+    QVERIFY(RideFile::parseRideFileName(secondName(), &secondDateTime));
+    RideItem *first = fixture.addPlannedRide(firstName(), false);
+    RideItem *second = fixture.addPlannedRide(secondName(), false);
+    first->dateTime = firstDateTime;
+    second->dateTime = secondDateTime;
+    RideItem *destroyed = fixture.addRide(thirdName(), false);
+    RideItem *const destroyedAddress = destroyed;
+    QMetaObject::Connection resetConnection;
+    resetConnection = connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::modelAboutToBeReset,
+        fixture.cache.get(),
+        [destroyed, &resetConnection] {
+            QObject::disconnect(resetConnection);
+            delete destroyed;
+        });
+
+    const RideCache::OperationResult result =
+        fixture.cache->copyPlannedActivities({
+            {first, firstDateTime.date().addDays(1)},
+            {second, secondDateTime.date().addDays(2)}});
+
+    QVERIFY2(result.success, qPrintable(result.error));
+    QCOMPARE(result.affectedCount, 2);
+    QCOMPARE(fixture.cache->count(), 4);
+    const QStringList filenames =
+        fixture.cache->getAllFilenames();
+    QVERIFY(filenames.contains(
+        QStringLiteral("2026_07_07_08_00_00.json")));
+    QVERIFY(filenames.contains(
+        QStringLiteral("2026_07_08_09_00_00.json")));
+    QVERIFY(!fixture.cache->remembersDeletedAddressForRemovalTest(
+        destroyedAddress));
+    QCOMPARE(rideCacheRemovalCancelCount(), 1);
+    QCOMPARE(rideCacheRemovalEstimatorStopCount(), 1);
+}
+
+void TestRideCacheRemoval::shiftPlannedActivitiesPurgesDestroyedRowsBeforeReorder()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    QDateTime originalDateTime;
+    QVERIFY(RideFile::parseRideFileName(firstName(), &originalDateTime));
+    RideFile *ride = new RideFile(originalDateTime, 1.0);
+    RideItem *target = fixture.addPlannedRide(firstName(), false, ride);
+    target->dateTime = originalDateTime;
+    writeFixture(
+        fixture.plannedActivityPath(firstName()), QByteArray("planned"));
+    RideItem *destroyed = fixture.addRide(secondName(), false);
+    RideItem *const destroyedAddress = destroyed;
+    QMetaObject::Connection resetConnection;
+    resetConnection = connect(
+        fixture.cache->model(),
+        &QAbstractItemModel::modelAboutToBeReset,
+        fixture.cache.get(),
+        [destroyed, &resetConnection] {
+            QObject::disconnect(resetConnection);
+            delete destroyed;
+        });
+
+    const RideCache::OperationResult result =
+        fixture.cache->shiftPlannedActivities(
+            originalDateTime.date(), 1);
+
+    QVERIFY2(result.success, qPrintable(result.error));
+    QCOMPARE(result.affectedCount, 1);
+    QCOMPARE(
+        target->fileName,
+        QStringLiteral("2026_07_07_08_00_00.json"));
+    QVERIFY(!QFileInfo::exists(
+        fixture.plannedActivityPath(firstName())));
+    QVERIFY(QFileInfo::exists(
+        fixture.plannedActivityPath(target->fileName)));
+    QVERIFY(!fixture.cache->remembersDeletedAddressForRemovalTest(
+        destroyedAddress));
+    QCOMPARE(rideCacheRemovalCancelCount(), 1);
+    QCOMPARE(rideCacheRemovalEstimatorStopCount(), 1);
+    delete ride;
 }
 
 void TestRideCacheRemoval::

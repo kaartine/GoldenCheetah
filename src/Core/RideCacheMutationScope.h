@@ -10,6 +10,7 @@
 #ifndef GC_RIDECACHEMUTATIONSCOPE_H
 #define GC_RIDECACHEMUTATIONSCOPE_H
 
+#include <functional>
 #include <memory>
 
 class RideCache;
@@ -27,6 +28,9 @@ public:
 
     bool ready() const;
     bool ownersStable() const;
+    bool resetAndSort(
+        QString &error,
+        const std::function<bool()> &publish);
 
 private:
     struct State;

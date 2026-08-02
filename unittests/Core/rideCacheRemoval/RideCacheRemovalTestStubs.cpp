@@ -10,6 +10,7 @@
 #include "RideCache.h"
 #include "RideCacheModel.h"
 #include "RideItem.h"
+#include "RideMetadata.h"
 
 #include <QDir>
 #include <QFile>
@@ -121,6 +122,25 @@ bool RideFile::parseRideFileName(
     if (!date.isValid() || !time.isValid()) return false;
     *dateTime = QDateTime(date, time);
     return true;
+}
+
+RideFileFactory *RideFileFactory::instance_ = nullptr;
+
+RideFileFactory &RideFileFactory::instance()
+{
+    if (!instance_) instance_ = new RideFileFactory();
+    return *instance_;
+}
+
+bool RideFileFactory::writeRideFile(
+    Context *, const RideFile *, QFile &file, QString) const
+{
+    static const QByteArray contents(
+        "ride-cache-calendar-mutation-test\n");
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return false;
+    return file.write(contents) == contents.size()
+        && file.flush();
 }
 
 void resetRideCacheRemovalRefreshCounts()
@@ -498,6 +518,11 @@ void GlobalContext::notifyConfigChanged(qint32) {}
 void GlobalContext::readConfig(qint32) {}
 void GlobalContext::userMetricsConfigChanged() {}
 
+QString RideMetadata::calendarText(RideItem *)
+{
+    return {};
+}
+
 RealtimeData::RealtimeData()
     : mode(ErgFileFormat::unknown)
 {
@@ -768,6 +793,18 @@ void RideItem::close()
 }
 
 void RideItem::refresh() {}
+
+void RideItem::setFileName(
+    QString ridePath, QString rideFileName)
+{
+    path = std::move(ridePath);
+    fileName = std::move(rideFileName);
+}
+
+void RideItem::setStartTime(QDateTime newDateTime)
+{
+    dateTime = newDateTime;
+}
 
 QString RideItem::getLinkedFileName() const
 {
@@ -1077,6 +1114,47 @@ RideItem *RideCache::getLinkedActivity(RideItem *item)
         }
     }
     return nullptr;
+}
+
+bool RideCache::updateFromWorkout(RideItem *, bool)
+{
+    return false;
+}
+
+RideItem *RideCache::copyPlannedRideFile(
+    RideItem *sourceItem,
+    const QDate &newDate,
+    const QTime &newTime,
+    QString &error)
+{
+    error.clear();
+    if (!sourceItem || !newDate.isValid()
+        || !newTime.isValid()) {
+        error = QStringLiteral(
+            "invalid planned activity copy request");
+        return nullptr;
+    }
+
+    QDateTime newDateTime(newDate, newTime);
+    const QString suffix =
+        QFileInfo(sourceItem->fileName).suffix();
+    const QString newFileName =
+        newDateTime.toString("yyyy_MM_dd_HH_mm_ss")
+        + QStringLiteral(".") + suffix;
+    QFile output(plannedDirectory.filePath(newFileName));
+    if (!output.open(
+            QIODevice::WriteOnly | QIODevice::Truncate)
+        || output.write("planned-copy\n") < 0
+        || !output.flush()) {
+        error = output.errorString();
+        return nullptr;
+    }
+
+    RideItem *item = new RideItem(
+        plannedDirectory.canonicalPath(), newFileName,
+        newDateTime, context, true);
+    item->isstale = true;
+    return item;
 }
 
 bool RideCache::saveActivity(RideItem *item, QString &error)

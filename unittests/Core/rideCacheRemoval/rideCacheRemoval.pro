@@ -20,6 +20,7 @@ SOURCES = testRideCacheRemoval.cpp \
           ../../../src/Planning/PlanReplacementJournal.cpp \
           ../../../src/Core/PlannedActivityFileStager.cpp \
           ../../../src/Core/RideCacheActivityLinking.cpp \
+          ../../../src/Core/RideCacheCalendarMutations.cpp \
           ../../../src/Core/RideCacheGarbageCollection.cpp \
           ../../../src/Core/RideCacheImport.cpp \
           ../../../src/Core/RideCacheLiveView.cpp \
