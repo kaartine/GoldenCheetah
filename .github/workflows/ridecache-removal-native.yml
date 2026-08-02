@@ -57,7 +57,11 @@ jobs:
       - name: Build activity removal test
         shell: pwsh
         run: |
-          $gslRoot = "$env:VCPKG_INSTALLATION_ROOT/installed/x64-windows"
+          $vcpkgRoot = Split-Path -Parent (Get-Command vcpkg).Source
+          $gslRoot = "$vcpkgRoot/installed/x64-windows"
+          if (!(Test-Path "$gslRoot/include/gsl/gsl_rng.h")) {
+            throw 'The GSL headers were not installed'
+          }
           @(
             'CONFIG += release'
             "GSL_INCLUDES = $gslRoot/include"
@@ -90,9 +94,13 @@ jobs:
           arch: clang_64
           modules: ${{ env.QT_MODULES }}
           cache: true
+      - name: Install GSL
+        run: brew install gsl
       - name: Build activity removal test
         run: |
-          printf 'CONFIG += release\n' > src/gcconfig.pri
+          gsl_root="$(brew --prefix gsl)"
+          printf 'CONFIG += release\nGSL_INCLUDES = %s/include\nGSL_LIBS = -L%s/lib -lgsl -lgslcblas\n' \
+            "$gsl_root" "$gsl_root" > src/gcconfig.pri
           mkdir build-ridecache-removal
           cd build-ridecache-removal
           qmake ../unittests/Core/rideCacheRemoval/rideCacheRemoval.pro
