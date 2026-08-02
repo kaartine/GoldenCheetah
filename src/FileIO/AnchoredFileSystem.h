@@ -78,6 +78,11 @@ public:
         const QString &component,
         DirectoryAnchor &directory,
         QString &error) const;
+    bool openChildIfExists(
+        const QString &component,
+        DirectoryAnchor &directory,
+        bool &exists,
+        QString &error) const;
     EntryRef entry(const QString &component, QString &error) const;
     bool pathMatches(QString &error) const;
     bool sync(QString &error) const;
