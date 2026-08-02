@@ -94,6 +94,9 @@ struct JournalState
     AnchoredFileSystem::DirectoryAnchor journalDirectory;
     AnchoredFileSystem::EntryRef manifestEntry;
     std::shared_ptr<AnchoredFileSystem::PinnedFile> manifestFile;
+    AnchoredFileSystem::EntryRef commitMarkerEntry;
+    std::shared_ptr<AnchoredFileSystem::PinnedFile> commitMarkerFile;
+    AtomicFileSnapshot commitMarkerSnapshot;
     std::unique_ptr<AtomicFileLockSet> transactionLease;
     bool cleanupComplete = false;
 };
@@ -1135,6 +1138,30 @@ bool removeManifestFile(
     return false;
 }
 
+bool commitMarkerFileMatches(
+    const JournalState &state, QString &error);
+
+bool removeCommitMarkerFile(
+    const JournalState &state, QString &error)
+{
+    if (!commitMarkerFileMatches(state, error)) return false;
+    const AnchoredFileSystem::MutationResult removal =
+        AnchoredFileSystem::remove(*state.commitMarkerFile);
+    if (removal.effect
+        == AnchoredFileSystem::MutationEffect::AppliedDurable) {
+        return true;
+    }
+    error = removal.error.isEmpty()
+        ? QStringLiteral(
+              "Cannot remove the anchored transaction commit marker")
+        : removal.error;
+    if (!removal.verifiedRecoveryPath.isEmpty()) {
+        error += QStringLiteral("; recovery file retained at %1")
+                     .arg(removal.verifiedRecoveryPath);
+    }
+    return false;
+}
+
 bool resolveManifestPaths(
     const JournalState &state, ResolvedPaths &paths, QString &error)
 {
@@ -1295,53 +1322,115 @@ bool inspectJournalDirectory(
     return true;
 }
 
+AtomicFileSnapshot expectedCommitMarkerSnapshot(const JournalState &state)
+{
+    const QByteArray contents = state.manifest.id.toLatin1() + '\n';
+    AtomicFileSnapshot snapshot;
+    snapshot.size = contents.size();
+    snapshot.digest = QCryptographicHash::hash(
+        contents, QCryptographicHash::Sha256);
+    return snapshot;
+}
+
+bool commitMarkerContentsMatch(const JournalState &state)
+{
+    if (!state.commitMarkerFile
+        || !state.commitMarkerFile->isValid()) {
+        return false;
+    }
+    const AtomicFileSnapshot expected =
+        expectedCommitMarkerSnapshot(state);
+    return state.commitMarkerFile->size() == expected.size
+        && state.commitMarkerFile->sha256() == expected.digest
+        && state.commitMarkerSnapshot.size == expected.size
+        && state.commitMarkerSnapshot.digest == expected.digest;
+}
+
+bool commitMarkerFileMatches(
+    const JournalState &state, QString &error)
+{
+    if (!state.commitMarkerEntry.isValid()
+        || !commitMarkerContentsMatch(state)) {
+        error = QStringLiteral(
+            "The transaction commit marker is not anchored");
+        return false;
+    }
+    bool matches = false;
+    if (!AnchoredFileSystem::entryMatches(
+            state.commitMarkerEntry,
+            *state.commitMarkerFile,
+            matches,
+            error)) {
+        return false;
+    }
+    if (!matches) {
+        error = QStringLiteral(
+            "The transaction commit marker was replaced");
+        return false;
+    }
+    return true;
+}
+
 bool readCommitMarker(
-    const JournalState &state,
+    JournalState &state,
     bool &exists,
     QString &error)
 {
     exists = false;
-    ObservedFile observed;
-    if (!inspectRegularFile(
-            state.commitMarkerPath,
-            observed,
-            error,
-            Detail::MaximumCommitMarkerSize)) {
+    if (!journalDirectoryMatches(state, error)) return false;
+
+    AnchoredFileSystem::EntryRef entry = state.journalDirectory.entry(
+        Detail::CommitMarkerName, error);
+    if (!entry.isValid()) return false;
+    bool entryPresent = false;
+    if (!AnchoredFileSystem::entryExists(
+            entry, entryPresent, error)) {
         return false;
     }
-    if (!observed.exists) return true;
+    if (!entryPresent) {
+        state.commitMarkerEntry = {};
+        state.commitMarkerFile.reset();
+        state.commitMarkerSnapshot = {};
+        return true;
+    }
+
+    auto file = std::make_shared<AnchoredFileSystem::PinnedFile>();
+    if (!AnchoredFileSystem::pinRegularFile(
+            entry,
+            *file,
+            error,
+            Detail::MaximumCommitMarkerSize)) {
+        error = QStringLiteral(
+            "Cannot pin the transaction commit marker: %1")
+                    .arg(error);
+        return false;
+    }
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
     rideCacheRemovalTransitionReached(
         "journal-commit-marker-inspected");
 #endif
 
-    QFile marker(state.commitMarkerPath);
-    if (!marker.open(QIODevice::ReadOnly)) {
-        error = QStringLiteral("Cannot read the transaction commit marker");
+    QByteArray contents;
+    if (!AnchoredFileSystem::readAll(
+            *file,
+            Detail::MaximumCommitMarkerSize,
+            contents,
+            error)) {
         return false;
     }
-    if (marker.size() > Detail::MaximumCommitMarkerSize) {
-        error = QStringLiteral("A transaction file is unexpectedly large: %1")
-                    .arg(state.commitMarkerPath);
-        return false;
-    }
-    const QByteArray contents = marker.read(
-        Detail::MaximumCommitMarkerSize + 1);
-    if (contents.size() > Detail::MaximumCommitMarkerSize
-        || !marker.atEnd()) {
-        error = QStringLiteral("A transaction file is unexpectedly large: %1")
-                    .arg(state.commitMarkerPath);
-        return false;
-    }
-    if (marker.error() != QFileDevice::NoError
-        || contents != state.manifest.id.toLatin1() + '\n') {
+    const AtomicFileSnapshot expected =
+        expectedCommitMarkerSnapshot(state);
+    if (contents != state.manifest.id.toLatin1() + '\n'
+        || file->size() != expected.size
+        || file->sha256() != expected.digest) {
         error = QStringLiteral("The transaction commit marker is invalid");
         return false;
     }
-    if (!validateExpectedSnapshot(
-            state.commitMarkerPath, observed.contents, error)) {
-        return false;
-    }
+
+    state.commitMarkerEntry = std::move(entry);
+    state.commitMarkerFile = std::move(file);
+    state.commitMarkerSnapshot = expected;
+    if (!commitMarkerFileMatches(state, error)) return false;
     exists = true;
     return true;
 }
@@ -1550,7 +1639,7 @@ bool validateDerivedForRollback(
 }
 
 bool validateOriginalStorageState(
-    const JournalState &state, const ResolvedPaths &paths, QString &error)
+    JournalState &state, const ResolvedPaths &paths, QString &error)
 {
     QList<QPair<QString, ObservedFile>> temporaryFiles;
     if (!inspectJournalDirectory(state, temporaryFiles, error)
@@ -2071,7 +2160,7 @@ bool removeDerivedForCommit(
 }
 
 bool removeJournalDirectory(
-    const JournalState &state,
+    JournalState &state,
     const QList<QPair<QString, ObservedFile>> &temporaryFiles,
     bool committed,
     QString &error)
@@ -2082,17 +2171,7 @@ bool removeJournalDirectory(
         }
     }
 
-    AtomicFileSnapshot markerSnapshot;
-    if (committed) {
-        const QByteArray markerContents = state.manifest.id.toLatin1() + '\n';
-        markerSnapshot.size = markerContents.size();
-        markerSnapshot.digest = QCryptographicHash::hash(
-            markerContents, QCryptographicHash::Sha256);
-        if (!validateExpectedSnapshot(
-                state.commitMarkerPath, markerSnapshot, error)) {
-            return false;
-        }
-    }
+    if (committed && !commitMarkerFileMatches(state, error)) return false;
 
     if (!removeManifestFile(state, error)) {
         return false;
@@ -2113,8 +2192,7 @@ bool removeJournalDirectory(
     }
 #endif
     if (committed
-        && !removeExpectedFile(
-            state.commitMarkerPath, markerSnapshot, error)) {
+        && !removeCommitMarkerFile(state, error)) {
         return false;
     }
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
@@ -2147,7 +2225,7 @@ bool removeJournalDirectory(
 }
 
 bool rollbackJournal(
-    const JournalState &state, const ResolvedPaths &paths, QString &error)
+    JournalState &state, const ResolvedPaths &paths, QString &error)
 {
     QList<QPair<QString, ObservedFile>> temporaryFiles;
     if (!journalDirectoryMatches(state, error)
@@ -2242,7 +2320,7 @@ bool rollbackJournal(
 }
 
 bool commitJournal(
-    const JournalState &state, const ResolvedPaths &paths, QString &error)
+    JournalState &state, const ResolvedPaths &paths, QString &error)
 {
     QList<QPair<QString, ObservedFile>> temporaryFiles;
     if (!journalDirectoryMatches(state, error)
@@ -2304,7 +2382,7 @@ bool commitJournal(
 }
 
 bool reconcileLockedJournal(
-    const JournalState &state, QString &error)
+    JournalState &state, QString &error)
 {
     ResolvedPaths paths;
     if (!resolveManifestPaths(state, paths, error)) return false;
