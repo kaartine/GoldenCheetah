@@ -92,6 +92,9 @@ private:
         const EntryRef &, class PinnedFile &, QString &);
     friend bool entryMatches(
         const EntryRef &, const class PinnedFile &, bool &, QString &);
+    friend bool copyToNewFile(
+        const class PinnedFile &, const EntryRef &,
+        class PinnedFile &, QString &);
     friend MutationResult moveNoReplace(
         PinnedFile &, const EntryRef &);
     friend MutationResult remove(PinnedFile &);
@@ -131,6 +134,9 @@ private:
         const EntryRef &, class PinnedFile &, QString &);
     friend bool entryMatches(
         const EntryRef &, const class PinnedFile &, bool &, QString &);
+    friend bool copyToNewFile(
+        const class PinnedFile &, const EntryRef &,
+        class PinnedFile &, QString &);
     friend struct Detail::PinnedFileState;
     friend MutationResult moveNoReplace(
         PinnedFile &, const EntryRef &);
@@ -161,6 +167,10 @@ private:
         const EntryRef &, PinnedFile &, QString &);
     friend bool entryMatches(
         const EntryRef &, const PinnedFile &, bool &, QString &);
+    friend bool readAll(
+        const PinnedFile &, qint64, QByteArray &, QString &);
+    friend bool copyToNewFile(
+        const PinnedFile &, const EntryRef &, PinnedFile &, QString &);
     friend struct MutationResult moveNoReplace(
         PinnedFile &, const EntryRef &);
     friend struct MutationResult remove(PinnedFile &);
@@ -195,6 +205,18 @@ bool entryMatches(
     const EntryRef &entry,
     const PinnedFile &file,
     bool &matches,
+    QString &error);
+
+bool readAll(
+    const PinnedFile &file,
+    qint64 maximumSize,
+    QByteArray &contents,
+    QString &error);
+
+bool copyToNewFile(
+    const PinnedFile &source,
+    const EntryRef &destination,
+    PinnedFile &copy,
     QString &error);
 
 MutationResult moveNoReplace(

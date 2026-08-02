@@ -133,7 +133,10 @@ private slots:
     void rejectsUnsafeComponents();
     void rejectsUnsafeFileTypes();
     void pinsIdentityAndContentThroughOneHandle();
+    void readsPinnedContentsAfterPathReplacement();
     void directoryAnchorSurvivesPathReplacement();
+    void copiesPinnedContentsThroughAnchoredParents();
+    void copyDoesNotReplaceDestination();
     void moveUsesPinnedParentAfterPathReplacement();
     void moveRejectsFinalEntryReplacement();
     void moveDoesNotReplaceDestination();
@@ -239,6 +242,35 @@ void TestAnchoredFilesystem::pinsIdentityAndContentThroughOneHandle()
     QVERIFY(error.isEmpty());
 }
 
+void TestAnchoredFilesystem::readsPinnedContentsAfterPathReplacement()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    const QString retained = root.filePath(QStringLiteral("retained"));
+    const QByteArray originalContents("original pinned contents");
+    const QByteArray substituteContents("substitute contents");
+    writeFixture(source.displayPath(), originalContents);
+    const PinnedFile original = pin(source);
+
+    const bool replaced = QFile::rename(source.displayPath(), retained);
+#ifndef Q_OS_WIN
+    QVERIFY(replaced);
+#endif
+    if (replaced) writeFixture(source.displayPath(), substituteContents);
+
+    QByteArray contents;
+    QString error;
+    QVERIFY(readAll(original, 1024, contents, error));
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QCOMPARE(contents, originalContents);
+    if (replaced) {
+        QCOMPARE(readFixture(source.displayPath()), substituteContents);
+        QCOMPARE(readFixture(retained), originalContents);
+    }
+}
+
 void TestAnchoredFilesystem::directoryAnchorSurvivesPathReplacement()
 {
     QTemporaryDir root;
@@ -264,6 +296,91 @@ void TestAnchoredFilesystem::directoryAnchorSurvivesPathReplacement()
     QString error;
     QVERIFY(original.sync(error));
     QVERIFY2(error.isEmpty(), qPrintable(error));
+}
+
+void TestAnchoredFilesystem::copiesPinnedContentsThroughAnchoredParents()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString sourcePath = root.filePath(QStringLiteral("source-dir"));
+    const QString targetPath = root.filePath(QStringLiteral("target-dir"));
+    const QString retainedSource =
+        root.filePath(QStringLiteral("retained-source"));
+    const QString retainedTarget =
+        root.filePath(QStringLiteral("retained-target"));
+    QVERIFY(QDir().mkdir(sourcePath));
+    QVERIFY(QDir().mkdir(targetPath));
+
+    const DirectoryAnchor sourceDirectory = openDirectory(sourcePath);
+    const DirectoryAnchor targetDirectory = openDirectory(targetPath);
+    const EntryRef source = entry(sourceDirectory, QStringLiteral("source"));
+    const EntryRef target = entry(targetDirectory, QStringLiteral("target"));
+    const QByteArray originalContents("anchored copy contents");
+    const QByteArray substituteContents("substitute source contents");
+    writeFixture(source.displayPath(), originalContents);
+    PinnedFile pinned = pin(source);
+
+    const bool sourceReplaced = QDir().rename(sourcePath, retainedSource);
+    const bool targetReplaced = QDir().rename(targetPath, retainedTarget);
+#ifndef Q_OS_WIN
+    QVERIFY(sourceReplaced);
+    QVERIFY(targetReplaced);
+#endif
+    if (sourceReplaced) {
+        QVERIFY(QDir().mkdir(sourcePath));
+        writeFixture(source.displayPath(), substituteContents);
+    }
+    if (targetReplaced) QVERIFY(QDir().mkdir(targetPath));
+
+    PinnedFile copied;
+    QString error;
+    QVERIFY(copyToNewFile(pinned, target, copied, error));
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QCOMPARE(copied.size(), qint64(originalContents.size()));
+    QCOMPARE(copied.sha256(), QCryptographicHash::hash(
+        originalContents, QCryptographicHash::Sha256));
+    QByteArray copiedContents;
+    QVERIFY(readAll(copied, 1024, copiedContents, error));
+    QCOMPARE(copiedContents, originalContents);
+    copied = {};
+    pinned = {};
+
+    const QString actualTarget = targetReplaced
+        ? QDir(retainedTarget).filePath(QStringLiteral("target"))
+        : target.displayPath();
+    QCOMPARE(readFixture(actualTarget), originalContents);
+    if (sourceReplaced) {
+        QCOMPARE(readFixture(source.displayPath()), substituteContents);
+        QCOMPARE(readFixture(
+            QDir(retainedSource).filePath(QStringLiteral("source"))),
+            originalContents);
+    }
+    if (targetReplaced) {
+        QVERIFY(!QFileInfo::exists(target.displayPath()));
+    }
+}
+
+void TestAnchoredFilesystem::copyDoesNotReplaceDestination()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    const EntryRef target = entry(directory, QStringLiteral("target"));
+    const QByteArray sourceContents("source");
+    const QByteArray targetContents("target");
+    writeFixture(source.displayPath(), sourceContents);
+    writeFixture(target.displayPath(), targetContents);
+    PinnedFile pinned = pin(source);
+
+    PinnedFile copied;
+    QString error;
+    QVERIFY(!copyToNewFile(pinned, target, copied, error));
+    QVERIFY(!error.isEmpty());
+    QVERIFY(!copied.isValid());
+    pinned = {};
+    QCOMPARE(readFixture(source.displayPath()), sourceContents);
+    QCOMPARE(readFixture(target.displayPath()), targetContents);
 }
 
 void TestAnchoredFilesystem::moveUsesPinnedParentAfterPathReplacement()

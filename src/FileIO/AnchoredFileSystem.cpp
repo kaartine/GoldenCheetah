@@ -18,6 +18,8 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
+#include <functional>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -150,6 +152,17 @@ struct UnixStamp
             && changedNanoseconds == other.changedNanoseconds;
     }
 };
+
+bool sameUnixIdentityAndData(
+    const UnixStamp &left, const UnixStamp &right)
+{
+    return left.device == right.device
+        && left.inode == right.inode
+        && left.links == right.links
+        && left.size == right.size
+        && left.modifiedSeconds == right.modifiedSeconds
+        && left.modifiedNanoseconds == right.modifiedNanoseconds;
+}
 
 bool captureUnixStamp(
     int descriptor, UnixStamp &stamp, bool directory, QString &error)
@@ -490,6 +503,206 @@ struct PinnedFileState
 
 } // namespace Detail
 
+namespace {
+
+using PinnedChunkConsumer =
+    std::function<bool(const char *, qsizetype, QString &)>;
+
+bool streamPinnedFile(
+    const Detail::PinnedFileState &state,
+    const PinnedChunkConsumer &consume,
+    QByteArray &digest,
+    QString &error)
+{
+    error.clear();
+    digest.clear();
+    if (!consume || state.size < 0) {
+        error = QStringLiteral("The anchored file cannot be read");
+        return false;
+    }
+
+#ifdef Q_OS_UNIX
+    UnixStamp before;
+    if (!captureUnixStamp(
+            state.descriptor.get(), before, false, error)) {
+        return false;
+    }
+    if (!sameUnixIdentityAndData(before, state.stamp)) {
+        error = QStringLiteral(
+            "The anchored file changed before it was read");
+        return false;
+    }
+#elif defined(Q_OS_WIN)
+    WindowsStamp before;
+    if (!captureWindowsStamp(
+            state.handle.get(), before, false, error)) {
+        return false;
+    }
+    if (!sameWindowsIdentityAndData(before, state.stamp)) {
+        error = QStringLiteral(
+            "The anchored file changed before it was read");
+        return false;
+    }
+    LARGE_INTEGER zero {};
+    LARGE_INTEGER savedPosition {};
+    if (!::SetFilePointerEx(
+            state.handle.get(), zero,
+            &savedPosition, FILE_CURRENT)
+        || !::SetFilePointerEx(
+            state.handle.get(), zero,
+            nullptr, FILE_BEGIN)) {
+        error = windowsError(
+            QStringLiteral("Cannot seek an anchored regular file"),
+            ::GetLastError());
+        return false;
+    }
+#else
+    Q_UNUSED(state)
+    Q_UNUSED(consume)
+    error = QStringLiteral(
+        "Anchored filesystem operations are unsupported on this platform");
+    return false;
+#endif
+
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    QByteArray chunk(1024 * 1024, '\0');
+    qint64 offset = 0;
+    bool readSucceeded = true;
+    while (offset < state.size) {
+        const qsizetype requested = qsizetype(std::min<qint64>(
+            chunk.size(), state.size - offset));
+        qsizetype received = 0;
+#ifdef Q_OS_UNIX
+        ssize_t nativeRead;
+        do {
+            nativeRead = ::pread(
+                state.descriptor.get(), chunk.data(),
+                size_t(requested), off_t(offset));
+        } while (nativeRead < 0 && errno == EINTR);
+        if (nativeRead <= 0) {
+            error = nativeRead < 0
+                ? nativeError(
+                      QStringLiteral("Cannot read an anchored regular file"),
+                      errno)
+                : QStringLiteral(
+                      "The anchored regular file ended unexpectedly");
+            readSucceeded = false;
+            break;
+        }
+        received = qsizetype(nativeRead);
+#elif defined(Q_OS_WIN)
+        DWORD nativeRead = 0;
+        if (!::ReadFile(
+                state.handle.get(), chunk.data(),
+                DWORD(requested), &nativeRead, nullptr)
+            || nativeRead == 0) {
+            error = windowsError(
+                QStringLiteral("Cannot read an anchored regular file"),
+                ::GetLastError());
+            readSucceeded = false;
+            break;
+        }
+        received = qsizetype(nativeRead);
+#endif
+        if (!consume(chunk.constData(), received, error)) {
+            if (error.isEmpty()) {
+                error = QStringLiteral(
+                    "Cannot consume anchored file contents");
+            }
+            readSucceeded = false;
+            break;
+        }
+        hash.addData(chunk.constData(), received);
+        offset += received;
+    }
+
+    if (readSucceeded) {
+        char trailing = 0;
+#ifdef Q_OS_UNIX
+        ssize_t trailingRead;
+        do {
+            trailingRead = ::pread(
+                state.descriptor.get(), &trailing, 1,
+                off_t(state.size));
+        } while (trailingRead < 0 && errno == EINTR);
+        if (trailingRead != 0) {
+            error = trailingRead < 0
+                ? nativeError(
+                      QStringLiteral("Cannot finish reading an anchored file"),
+                      errno)
+                : QStringLiteral(
+                      "The anchored regular file grew while being read");
+            readSucceeded = false;
+        }
+#elif defined(Q_OS_WIN)
+        DWORD trailingRead = 0;
+        if (!::ReadFile(
+                state.handle.get(), &trailing, 1,
+                &trailingRead, nullptr)
+            || trailingRead != 0) {
+            error = trailingRead != 0
+                ? QStringLiteral(
+                      "The anchored regular file grew while being read")
+                : windowsError(
+                      QStringLiteral("Cannot finish reading an anchored file"),
+                      ::GetLastError());
+            readSucceeded = false;
+        }
+#endif
+    }
+
+#ifdef Q_OS_WIN
+    if (!::SetFilePointerEx(
+            state.handle.get(), savedPosition,
+            nullptr, FILE_BEGIN)) {
+        if (readSucceeded) {
+            error = windowsError(
+                QStringLiteral(
+                    "Cannot restore an anchored file position"),
+                ::GetLastError());
+        }
+        readSucceeded = false;
+    }
+#endif
+    if (!readSucceeded) return false;
+
+#ifdef Q_OS_UNIX
+    UnixStamp after;
+    if (!captureUnixStamp(
+            state.descriptor.get(), after, false, error)) {
+        return false;
+    }
+    const bool stable = sameUnixIdentityAndData(before, after);
+#elif defined(Q_OS_WIN)
+    WindowsStamp after;
+    if (!captureWindowsStamp(
+            state.handle.get(), after, false, error)) {
+        return false;
+    }
+    const bool stable = sameWindowsIdentityAndData(before, after);
+#endif
+    digest = hash.result();
+    if (!stable || offset != state.size || digest != state.sha256) {
+        error = QStringLiteral(
+            "The anchored regular file changed while being read");
+        digest.clear();
+        return false;
+    }
+    return true;
+}
+
+void appendCleanupError(
+    QString &error, const MutationResult &cleanup)
+{
+    if (cleanup.applied()) return;
+    if (!error.isEmpty()) error += QStringLiteral("; ");
+    error += cleanup.error.isEmpty()
+        ? QStringLiteral("cannot remove an incomplete anchored copy")
+        : cleanup.error;
+}
+
+} // namespace
+
 QDebug operator<<(QDebug debug, const NativeIdentity &identity)
 {
     QDebugStateSaver saver(debug);
@@ -673,6 +886,240 @@ qint64 PinnedFile::size() const
 QByteArray PinnedFile::sha256() const
 {
     return state_ ? state_->sha256 : QByteArray();
+}
+
+bool readAll(
+    const PinnedFile &file,
+    qint64 maximumSize,
+    QByteArray &contents,
+    QString &error)
+{
+    contents.clear();
+    error.clear();
+    if (!file.state_ || maximumSize < 0) {
+        error = QStringLiteral("The anchored file cannot be read");
+        return false;
+    }
+    if (file.state_->size > maximumSize
+        || quint64(file.state_->size)
+            > quint64(std::numeric_limits<qsizetype>::max())) {
+        error = QStringLiteral("The anchored file is unexpectedly large");
+        return false;
+    }
+
+    QByteArray result(file.state_->size, '\0');
+    qsizetype offset = 0;
+    QByteArray digest;
+    const bool read = streamPinnedFile(
+        *file.state_,
+        [&result, &offset](
+            const char *data, qsizetype size, QString &) {
+            std::memcpy(result.data() + offset, data, size_t(size));
+            offset += size;
+            return true;
+        },
+        digest, error);
+    if (!read) return false;
+    contents = std::move(result);
+    return true;
+}
+
+bool copyToNewFile(
+    const PinnedFile &source,
+    const EntryRef &destination,
+    PinnedFile &copy,
+    QString &error)
+{
+    copy = {};
+    error.clear();
+    if (!source.state_ || !destination.isValid()) {
+        error = QStringLiteral(
+            "An anchored copy endpoint is unavailable");
+        return false;
+    }
+
+#ifdef Q_OS_UNIX
+    const QByteArray name = QFile::encodeName(destination.component_);
+    FileDescriptor output(::openat(
+        destination.parent_.state_->descriptor.get(),
+        name.constData(),
+        O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
+        S_IRUSR | S_IWUSR));
+    if (!output.isValid()) {
+        error = errno == EEXIST
+            ? QStringLiteral("The anchored copy destination already exists")
+            : nativeError(
+                  QStringLiteral("Cannot create an anchored copy"), errno);
+        return false;
+    }
+#elif defined(Q_OS_WIN)
+    WindowsHandle output(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(destination.displayPath_.utf16()),
+        GENERIC_READ | GENERIC_WRITE | DELETE
+            | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ,
+        nullptr,
+        CREATE_NEW,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT
+            | FILE_FLAG_WRITE_THROUGH,
+        nullptr));
+    if (!output.isValid()) {
+        const DWORD native = ::GetLastError();
+        error = (native == ERROR_ALREADY_EXISTS
+                 || native == ERROR_FILE_EXISTS)
+            ? QStringLiteral("The anchored copy destination already exists")
+            : windowsError(
+                  QStringLiteral("Cannot create an anchored copy"), native);
+        return false;
+    }
+#else
+    error = QStringLiteral(
+        "Anchored filesystem operations are unsupported on this platform");
+    return false;
+#endif
+
+    QByteArray copiedDigest;
+    const bool copied = streamPinnedFile(
+        *source.state_,
+#ifdef Q_OS_UNIX
+        [&output](const char *data, qsizetype size, QString &writeError) {
+            qsizetype written = 0;
+            while (written < size) {
+                ssize_t result;
+                do {
+                    result = ::write(
+                        output.get(), data + written,
+                        size_t(size - written));
+                } while (result < 0 && errno == EINTR);
+                if (result <= 0) {
+                    writeError = nativeError(
+                        QStringLiteral("Cannot write an anchored copy"),
+                        errno);
+                    return false;
+                }
+                written += qsizetype(result);
+            }
+            return true;
+        },
+#elif defined(Q_OS_WIN)
+        [&output](const char *data, qsizetype size, QString &writeError) {
+            qsizetype written = 0;
+            while (written < size) {
+                DWORD nativeWritten = 0;
+                const DWORD requested = DWORD(std::min<qsizetype>(
+                    size - written,
+                    qsizetype(std::numeric_limits<DWORD>::max())));
+                if (!::WriteFile(
+                        output.get(), data + written,
+                        requested, &nativeWritten, nullptr)
+                    || nativeWritten == 0) {
+                    writeError = windowsError(
+                        QStringLiteral("Cannot write an anchored copy"),
+                        ::GetLastError());
+                    return false;
+                }
+                written += qsizetype(nativeWritten);
+            }
+            return true;
+        },
+#endif
+        copiedDigest, error);
+
+    bool synchronized = false;
+    if (copied) {
+#ifdef Q_OS_UNIX
+        int syncResult;
+        do {
+            syncResult = ::fsync(output.get());
+        } while (syncResult != 0 && errno == EINTR);
+        synchronized = syncResult == 0;
+        if (!synchronized) {
+            error = nativeError(
+                QStringLiteral("Cannot synchronize an anchored copy"),
+                errno);
+        }
+#elif defined(Q_OS_WIN)
+        synchronized = ::FlushFileBuffers(output.get());
+        if (!synchronized) {
+            error = windowsError(
+                QStringLiteral("Cannot synchronize an anchored copy"),
+                ::GetLastError());
+        }
+#endif
+    }
+
+#ifdef Q_OS_UNIX
+    UnixStamp copiedStamp;
+    const bool inspected = captureUnixStamp(
+        output.get(), copiedStamp, false, error);
+    const NativeIdentity copiedIdentity = inspected
+        ? unixIdentity(copiedStamp, 'f') : NativeIdentity();
+#elif defined(Q_OS_WIN)
+    WindowsStamp copiedStamp;
+    const bool inspected = captureWindowsStamp(
+        output.get(), copiedStamp, false, error);
+    const NativeIdentity copiedIdentity = inspected
+        ? windowsIdentity(copiedStamp, 'f') : NativeIdentity();
+#endif
+
+    PinnedFile candidate;
+    if (inspected) {
+        auto state = std::make_unique<Detail::PinnedFileState>();
+        state->entry = destination;
+#ifdef Q_OS_UNIX
+        state->descriptor = std::move(output);
+#elif defined(Q_OS_WIN)
+        state->handle = std::move(output);
+#endif
+        state->stamp = copiedStamp;
+        state->identity = copiedIdentity;
+        state->size = copiedStamp.size;
+        state->sha256 = copiedDigest;
+        candidate.state_ = std::move(state);
+    }
+
+    const bool complete = copied && synchronized && inspected
+        && copiedStamp.links == 1
+        && copiedStamp.size == source.state_->size
+        && copiedDigest == source.state_->sha256;
+    bool verified = false;
+    if (complete) {
+        QByteArray verifiedDigest;
+        QString verifyError;
+        const PinnedChunkConsumer discard = [](
+            const char *, qsizetype, QString &) { return true; };
+        verified = streamPinnedFile(
+            *candidate.state_, discard,
+            verifiedDigest, verifyError);
+        if (!verified) error = verifyError;
+    }
+    bool named = false;
+    if (verified
+        && !entryMatches(
+            destination, candidate, named, error)) {
+        verified = false;
+    }
+    if (verified && !named) {
+        error = QStringLiteral(
+            "The anchored copy destination was replaced");
+        verified = false;
+    }
+    if (verified
+        && !destination.parent_.sync(error)) {
+        verified = false;
+    }
+    if (verified) {
+        copy = std::move(candidate);
+        return true;
+    }
+
+    if (error.isEmpty()) {
+        error = QStringLiteral("Cannot complete an anchored copy");
+    }
+    if (candidate.isValid()) {
+        appendCleanupError(error, remove(candidate));
+    }
+    return false;
 }
 
 bool pinRegularFile(
@@ -1100,31 +1547,17 @@ MutationResult remove(PinnedFile &file)
 
 #ifdef Q_OS_UNIX
     const EntryRef original = file.state_->entry;
-    QString component;
-    EntryRef quarantine;
     QString componentError;
-    for (int attempt = 0; attempt < 16; ++attempt) {
-        component = QStringLiteral(".gc-remove-%1")
-            .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
-        quarantine = original.parent_.entry(component, componentError);
-        if (!quarantine.isValid()) {
-            result.error = componentError;
-            return result;
-        }
-        MutationResult moved = moveNoReplace(file, quarantine);
-        if (moved.effect == MutationEffect::Conflict
-            && QFileInfo::exists(quarantine.displayPath())) {
-            continue;
-        }
-        if (!moved.applied()) return moved;
-        result = moved;
-        break;
-    }
-    if (!result.applied()) {
-        result.error = QStringLiteral(
-            "Cannot allocate an anchored removal quarantine");
+    const QString component = QStringLiteral(".gc-remove-%1")
+        .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    const EntryRef quarantine =
+        original.parent_.entry(component, componentError);
+    if (!quarantine.isValid()) {
+        result.error = componentError;
         return result;
     }
+    result = moveNoReplace(file, quarantine);
+    if (!result.applied()) return result;
 
     bool quarantineMatches = false;
     QString matchError;
