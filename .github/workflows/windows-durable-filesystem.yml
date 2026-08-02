@@ -84,6 +84,8 @@ jobs:
           make -j3
       - name: Run anchored filesystem test
         run: |
+          test_status=0
           build-anchored-filesystem/tst_anchoredFilesystem.app/Contents/MacOS/tst_anchoredFilesystem \
-            -o macos-anchored-filesystem.txt,txt
+            -o macos-anchored-filesystem.txt,txt || test_status=$?
           cat macos-anchored-filesystem.txt
+          exit "$test_status"
