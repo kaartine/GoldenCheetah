@@ -4,24 +4,28 @@ on:
   push:
     paths:
       - .github/workflows/ridecache-removal-native.yml
+      - contrib/qzip/zip.*
       - src/Core/LinkedActivityRemovalJournal.*
       - src/Core/LinkedActivitySaveJournal.*
       - src/Core/PlannedActivityFileStager.*
       - src/Core/RideCache*.*
       - src/FileIO/AnchoredFileSystem.*
       - src/FileIO/AtomicFileWriter.*
+      - src/Metrics/BlinnSolver.*
       - src/Planning/PlanBundle*.*
       - src/Planning/PlanReplacementJournal.*
       - unittests/Core/rideCacheRemoval/**
   pull_request:
     paths:
       - .github/workflows/ridecache-removal-native.yml
+      - contrib/qzip/zip.*
       - src/Core/LinkedActivityRemovalJournal.*
       - src/Core/LinkedActivitySaveJournal.*
       - src/Core/PlannedActivityFileStager.*
       - src/Core/RideCache*.*
       - src/FileIO/AnchoredFileSystem.*
       - src/FileIO/AtomicFileWriter.*
+      - src/Metrics/BlinnSolver.*
       - src/Planning/PlanBundle*.*
       - src/Planning/PlanReplacementJournal.*
       - unittests/Core/rideCacheRemoval/**
