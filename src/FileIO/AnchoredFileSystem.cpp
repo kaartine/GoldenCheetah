@@ -48,6 +48,7 @@ void anchoredFilesystemTransitionReached(
     const QString &primary,
     const QString &secondary);
 bool anchoredFilesystemSyncFailureRequested(const QString &path);
+bool anchoredFilesystemUseLegacyWindowsDelete();
 #endif
 
 namespace AnchoredFileSystem {
@@ -1966,15 +1967,26 @@ MutationResult remove(PinnedFile &file)
     constexpr DWORD dispositionPosixSemantics = 0x00000002;
     WindowsDispositionInfoEx extendedDisposition {
         dispositionDelete | dispositionPosixSemantics};
-    bool removalRequested = ::SetFileInformationByHandle(
-        file.state_->handle.get(),
-        dispositionInfoEx,
-        &extendedDisposition,
-        sizeof(extendedDisposition));
+    bool useLegacyDisposition = false;
+#ifdef GC_ANCHORED_FILESYSTEM_TEST_HOOKS
+    useLegacyDisposition =
+        anchoredFilesystemUseLegacyWindowsDelete();
+#endif
+    bool removalRequested = false;
+    DWORD extendedError = ERROR_NOT_SUPPORTED;
+    if (!useLegacyDisposition) {
+        removalRequested = ::SetFileInformationByHandle(
+            file.state_->handle.get(),
+            dispositionInfoEx,
+            &extendedDisposition,
+            sizeof(extendedDisposition));
+        if (!removalRequested)
+            extendedError = ::GetLastError();
+    }
     if (!removalRequested) {
-        const DWORD extendedError = ::GetLastError();
         const bool unsupported =
-            extendedError == ERROR_INVALID_PARAMETER
+            useLegacyDisposition
+            || extendedError == ERROR_INVALID_PARAMETER
             || extendedError == ERROR_INVALID_FUNCTION
             || extendedError == ERROR_NOT_SUPPORTED
             || extendedError == ERROR_CALL_NOT_IMPLEMENTED;
