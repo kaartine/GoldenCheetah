@@ -176,6 +176,7 @@ public:
 
 private:
     std::unique_ptr<Detail::PinnedFileState> state_;
+    QString verifiedPath(const EntryRef &entry) const;
 
     friend bool pinRegularFile(
         const EntryRef &, PinnedFile &, QString &);
@@ -202,6 +203,7 @@ struct MutationResult
 {
     MutationEffect effect = MutationEffect::NoEffect;
     QString error;
+    QString verifiedRecoveryPath;
 
     bool applied() const
     {

@@ -179,11 +179,17 @@ struct UnixStamp
     }
 };
 
-bool sameUnixObjectAndData(
+bool sameUnixObject(
     const UnixStamp &left, const UnixStamp &right)
 {
     return left.device == right.device
-        && left.inode == right.inode
+        && left.inode == right.inode;
+}
+
+bool sameUnixObjectAndData(
+    const UnixStamp &left, const UnixStamp &right)
+{
+    return sameUnixObject(left, right)
         && left.size == right.size
         && left.modifiedSeconds == right.modifiedSeconds
         && left.modifiedNanoseconds == right.modifiedNanoseconds;
@@ -403,11 +409,17 @@ struct WindowsStamp
     }
 };
 
-bool sameWindowsIdentityAndData(
+bool sameWindowsObject(
     const WindowsStamp &left, const WindowsStamp &right)
 {
     return left.volume == right.volume
-        && left.id == right.id
+        && left.id == right.id;
+}
+
+bool sameWindowsIdentityAndData(
+    const WindowsStamp &left, const WindowsStamp &right)
+{
+    return sameWindowsObject(left, right)
         && left.links == right.links
         && left.size == right.size
         && left.modified == right.modified;
@@ -1059,6 +1071,56 @@ QByteArray PinnedFile::sha256() const
     return state_ ? state_->sha256 : QByteArray();
 }
 
+QString PinnedFile::verifiedPath(const EntryRef &entry) const
+{
+    if (!state_ || !entry.isValid()) return {};
+    QString error;
+    if (!entry.parent_.pathMatches(error)) return {};
+
+#ifdef Q_OS_UNIX
+    UnixStamp pinned;
+    if (!captureUnixStamp(
+            state_->descriptor.get(), pinned, false, error)
+        || !sameUnixObject(pinned, state_->stamp)) {
+        return {};
+    }
+    UnixStamp named;
+    bool exists = false;
+    if (!statEntry(
+            entry.parent_.state_->descriptor.get(),
+            entry.component_, named, exists, error)
+        || !exists
+        || !sameUnixObject(named, pinned)) {
+        return {};
+    }
+#elif defined(Q_OS_WIN)
+    WindowsStamp pinned;
+    if (!captureWindowsStamp(
+            state_->handle.get(), pinned, false, error)
+        || !sameWindowsObject(pinned, state_->stamp)) {
+        return {};
+    }
+    WindowsHandle named(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(entry.displayPath_.utf16()),
+        FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr));
+    WindowsStamp namedStamp;
+    if (!named.isValid()
+        || !captureWindowsStamp(
+            named.get(), namedStamp, false, error)
+        || !sameWindowsObject(namedStamp, pinned)) {
+        return {};
+    }
+#else
+    return {};
+#endif
+    return entry.displayPath_;
+}
+
 bool readAll(
     const PinnedFile &file,
     qint64 maximumSize,
@@ -1650,6 +1712,8 @@ MutationResult moveNoReplace(
             source.state_->descriptor.get(),
             movedHandle, false, result.error)) {
         result.effect = MutationEffect::Partial;
+        result.verifiedRecoveryPath =
+            source.verifiedPath(destination);
         return result;
     }
     UnixStamp movedName;
@@ -1667,6 +1731,8 @@ MutationResult moveNoReplace(
             ? QStringLiteral(
                   "The anchored move destination changed after publication")
             : inspectError;
+        result.verifiedRecoveryPath =
+            source.verifiedPath(destination);
         return result;
     }
 
@@ -1677,6 +1743,8 @@ MutationResult moveNoReplace(
             *source.state_, discard,
             verifiedDigest, result.error)) {
         result.effect = MutationEffect::Partial;
+        result.verifiedRecoveryPath =
+            source.verifiedPath(destination);
         return result;
     }
 
@@ -1748,6 +1816,8 @@ MutationResult moveNoReplace(
             result.error = QStringLiteral(
                 "The anchored file identity changed during its move");
         }
+        result.verifiedRecoveryPath =
+            source.verifiedPath(destination);
         return result;
     }
     source.state_->entry = destination;
@@ -1809,6 +1879,8 @@ MutationResult remove(PinnedFile &file)
             ? QStringLiteral(
                   "The anchored removal quarantine was replaced")
             : matchError;
+        result.verifiedRecoveryPath =
+            file.verifiedPath(file.state_->entry);
         return result;
     }
 
@@ -1826,6 +1898,8 @@ MutationResult remove(PinnedFile &file)
             ? QStringLiteral(
                   "The anchored removal quarantine was replaced")
             : matchError;
+        result.verifiedRecoveryPath =
+            file.verifiedPath(file.state_->entry);
         return result;
     }
 
@@ -1846,6 +1920,8 @@ MutationResult remove(PinnedFile &file)
         result.error = nativeError(
             QStringLiteral("Cannot remove an anchored quarantine file"),
             errno);
+        result.verifiedRecoveryPath =
+            file.verifiedPath(file.state_->entry);
         return result;
     }
     const DirectoryAnchor parent = file.state_->entry.parent_;
@@ -1877,19 +1953,97 @@ MutationResult remove(PinnedFile &file)
     result.error.clear();
     return result;
 #elif defined(Q_OS_WIN)
-    FILE_DISPOSITION_INFO disposition {};
-    disposition.DeleteFile = TRUE;
-    if (!::SetFileInformationByHandle(
+    const EntryRef original = file.state_->entry;
+    const WindowsStamp originalStamp = file.state_->stamp;
+    struct WindowsDispositionInfoEx
+    {
+        DWORD flags = 0;
+    };
+    // Older SDKs omit FileDispositionInfoEx even when the runtime supports it.
+    constexpr FILE_INFO_BY_HANDLE_CLASS dispositionInfoEx =
+        static_cast<FILE_INFO_BY_HANDLE_CLASS>(21);
+    constexpr DWORD dispositionDelete = 0x00000001;
+    constexpr DWORD dispositionPosixSemantics = 0x00000002;
+    WindowsDispositionInfoEx extendedDisposition {
+        dispositionDelete | dispositionPosixSemantics};
+    bool removalRequested = ::SetFileInformationByHandle(
+        file.state_->handle.get(),
+        dispositionInfoEx,
+        &extendedDisposition,
+        sizeof(extendedDisposition));
+    if (!removalRequested) {
+        const DWORD extendedError = ::GetLastError();
+        const bool unsupported =
+            extendedError == ERROR_INVALID_PARAMETER
+            || extendedError == ERROR_INVALID_FUNCTION
+            || extendedError == ERROR_NOT_SUPPORTED
+            || extendedError == ERROR_CALL_NOT_IMPLEMENTED;
+        if (!unsupported) {
+            result.error = windowsError(
+                QStringLiteral("Cannot remove an anchored file"),
+                extendedError);
+            return result;
+        }
+        FILE_DISPOSITION_INFO disposition {};
+        disposition.DeleteFile = TRUE;
+        removalRequested = ::SetFileInformationByHandle(
             file.state_->handle.get(),
             FileDispositionInfo,
             &disposition,
-            sizeof(disposition))) {
-        result.error = windowsError(
-            QStringLiteral("Cannot remove an anchored file"),
-            ::GetLastError());
-        return result;
+            sizeof(disposition));
+        if (!removalRequested) {
+            result.error = windowsError(
+                QStringLiteral("Cannot remove an anchored file"),
+                ::GetLastError());
+            return result;
+        }
     }
     file.state_.reset();
+
+    QString pathError;
+    if (!original.parent_.pathMatches(pathError)) {
+        result.effect = MutationEffect::Partial;
+        result.error = pathError.isEmpty()
+            ? QStringLiteral(
+                  "The anchored removal parent changed before verification")
+            : pathError;
+        return result;
+    }
+    WindowsHandle named(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(original.displayPath_.utf16()),
+        FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr));
+    if (!named.isValid()) {
+        const DWORD native = ::GetLastError();
+        if (native == ERROR_FILE_NOT_FOUND
+            || native == ERROR_PATH_NOT_FOUND) {
+            result.effect = MutationEffect::AppliedDurable;
+            return result;
+        }
+        result.effect = MutationEffect::Partial;
+        result.error = windowsError(
+            QStringLiteral(
+                "Cannot verify completion of an anchored removal"),
+            native);
+        return result;
+    }
+    WindowsStamp namedStamp;
+    if (!captureWindowsStamp(
+            named.get(), namedStamp, false, result.error)) {
+        result.effect = MutationEffect::Partial;
+        return result;
+    }
+    if (sameWindowsObject(namedStamp, originalStamp)) {
+        result.effect = MutationEffect::Partial;
+        result.error = QStringLiteral(
+            "The anchored removal left the original file name visible");
+        result.verifiedRecoveryPath = original.displayPath_;
+        return result;
+    }
     result.effect = MutationEffect::AppliedDurable;
     return result;
 #else
