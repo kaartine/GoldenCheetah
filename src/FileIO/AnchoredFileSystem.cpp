@@ -568,6 +568,45 @@ namespace {
 using PinnedChunkConsumer =
     std::function<bool(const char *, qsizetype, QString &)>;
 
+#ifdef Q_OS_WIN
+WindowsHandle openWindowsMutationHandle(
+    const Detail::PinnedFileState &state,
+    bool &conflict,
+    QString &error)
+{
+    conflict = false;
+    WindowsHandle handle(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(state.entry.displayPath().utf16()),
+        DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_WRITE_THROUGH,
+        nullptr));
+    if (!handle.isValid()) {
+        const DWORD native = ::GetLastError();
+        conflict = native == ERROR_FILE_NOT_FOUND
+            || native == ERROR_PATH_NOT_FOUND;
+        error = windowsError(
+            QStringLiteral("Cannot open an anchored file for mutation"),
+            native);
+        return {};
+    }
+
+    WindowsStamp stamp;
+    if (!captureWindowsStamp(handle.get(), stamp, false, error))
+        return {};
+    if (!sameWindowsIdentityAndData(stamp, state.stamp)
+        || windowsIdentity(stamp, 'f') != state.identity) {
+        conflict = true;
+        error = QStringLiteral(
+            "The anchored mutation target was replaced");
+        return {};
+    }
+    return handle;
+}
+#endif
+
 bool streamPinnedFile(
     const Detail::PinnedFileState &state,
     const PinnedChunkConsumer &consume,
@@ -1191,7 +1230,7 @@ bool copyToNewFile(
         reinterpret_cast<LPCWSTR>(destination.displayPath_.utf16()),
         GENERIC_READ | GENERIC_WRITE | DELETE
             | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-        FILE_SHARE_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         nullptr,
         CREATE_NEW,
         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT
@@ -1506,8 +1545,8 @@ bool pinRegularFile(
     }
     WindowsHandle handle(::CreateFileW(
         reinterpret_cast<LPCWSTR>(entry.displayPath_.utf16()),
-        GENERIC_READ | DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-        FILE_SHARE_READ | FILE_SHARE_DELETE,
+        GENERIC_READ | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         nullptr,
         OPEN_EXISTING,
         FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_WRITE_THROUGH,
@@ -1832,6 +1871,15 @@ MutationResult moveNoReplace(
     result.effect = MutationEffect::AppliedDurable;
     return result;
 #elif defined(Q_OS_WIN)
+    bool mutationConflict = false;
+    WindowsHandle mutation = openWindowsMutationHandle(
+        *source.state_, mutationConflict, result.error);
+    if (!mutation.isValid()) {
+        result.effect = mutationConflict
+            ? MutationEffect::Conflict
+            : MutationEffect::NoEffect;
+        return result;
+    }
     const QString name = QDir::toNativeSeparators(
         destination.displayPath_);
     const DWORD nameBytes = DWORD(name.size() * sizeof(wchar_t));
@@ -1845,7 +1893,7 @@ MutationResult moveNoReplace(
     rename->FileNameLength = nameBytes;
     std::memcpy(rename->FileName, name.utf16(), nameBytes);
     if (!::SetFileInformationByHandle(
-            source.state_->handle.get(),
+            mutation.get(),
             FileRenameInfo,
             rename,
             DWORD(storage.size()))) {
@@ -1872,7 +1920,7 @@ MutationResult moveNoReplace(
         destination.displayPath_);
     WindowsStamp moved;
     if (!captureWindowsStamp(
-            source.state_->handle.get(), moved, false, result.error)
+            mutation.get(), moved, false, result.error)
         || !sameWindowsIdentityAndData(
             moved, source.state_->stamp)
         || windowsIdentity(moved, 'f')
@@ -2021,6 +2069,15 @@ MutationResult remove(PinnedFile &file)
 #elif defined(Q_OS_WIN)
     const EntryRef original = file.state_->entry;
     const WindowsStamp originalStamp = file.state_->stamp;
+    bool mutationConflict = false;
+    WindowsHandle mutation = openWindowsMutationHandle(
+        *file.state_, mutationConflict, result.error);
+    if (!mutation.isValid()) {
+        result.effect = mutationConflict
+            ? MutationEffect::Conflict
+            : MutationEffect::NoEffect;
+        return result;
+    }
     struct WindowsDispositionInfoEx
     {
         DWORD flags = 0;
@@ -2041,7 +2098,7 @@ MutationResult remove(PinnedFile &file)
     DWORD extendedError = ERROR_NOT_SUPPORTED;
     if (!useLegacyDisposition) {
         removalRequested = ::SetFileInformationByHandle(
-            file.state_->handle.get(),
+            mutation.get(),
             dispositionInfoEx,
             &extendedDisposition,
             sizeof(extendedDisposition));
@@ -2064,7 +2121,7 @@ MutationResult remove(PinnedFile &file)
         FILE_DISPOSITION_INFO disposition {};
         disposition.DeleteFile = TRUE;
         removalRequested = ::SetFileInformationByHandle(
-            file.state_->handle.get(),
+            mutation.get(),
             FileDispositionInfo,
             &disposition,
             sizeof(disposition));
@@ -2076,6 +2133,7 @@ MutationResult remove(PinnedFile &file)
         }
     }
     file.state_.reset();
+    mutation.reset();
 
     QString pathError;
     if (!original.parent_.pathMatches(pathError)) {
