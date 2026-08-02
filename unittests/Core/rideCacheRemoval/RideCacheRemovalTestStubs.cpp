@@ -25,6 +25,13 @@
 #include <functional>
 #include <utility>
 
+#ifdef Q_OS_UNIX
+#include <cerrno>
+#include <unistd.h>
+#elif defined(Q_OS_WIN)
+#include <qt_windows.h>
+#endif
+
 namespace {
 
 int rideCacheRefreshCount = 0;
@@ -35,7 +42,9 @@ QString removalMoveFailurePath;
 QString removalMoveFailureTargetPath;
 QString removalPartialMoveFailurePath;
 QString removalPartialMoveFailureTargetPath;
-bool removalPartialMoveRemovesSource = false;
+bool removalPartialMoveTriggered = false;
+QString removalPartialMoveLinkPath;
+QString removalPartialMoveError;
 QString removalMoveMutationPath;
 QByteArray removalMoveMutationContents;
 QString removalMoveActionPath;
@@ -73,6 +82,8 @@ int removalCancelCount = 0;
 int startupInvalidationCount = 0;
 int rideItemDestructionCount = 0;
 int removalTransitionOccurrence = 0;
+QByteArray removalTransitionActionName;
+std::function<void()> removalTransitionAction;
 bool removalValidationMutationEnabled = false;
 QByteArray removalValidationMutationContents;
 QString planBundleWorkoutRoot;
@@ -94,6 +105,61 @@ bool shouldFailCalendarCopy()
 }
 
 } // namespace
+
+void anchoredFilesystemTransitionReached(
+    const char *transition,
+    const QString &primary,
+    const QString &secondary)
+{
+    if (qstrcmp(transition, "move-published") != 0
+        || ((!removalPartialMoveFailurePath.isEmpty()
+             && primary != removalPartialMoveFailurePath)
+            || (!removalPartialMoveFailureTargetPath.isEmpty()
+                && secondary
+                    != removalPartialMoveFailureTargetPath))
+        || (removalPartialMoveFailurePath.isEmpty()
+            && removalPartialMoveFailureTargetPath.isEmpty())) {
+        return;
+    }
+
+    removalPartialMoveFailurePath.clear();
+    removalPartialMoveFailureTargetPath.clear();
+    removalPartialMoveTriggered = true;
+    removalPartialMoveLinkPath =
+        secondary + QStringLiteral(".partial-link");
+#ifdef Q_OS_UNIX
+    if (::link(
+            QFile::encodeName(secondary).constData(),
+            QFile::encodeName(
+                removalPartialMoveLinkPath).constData()) != 0) {
+        removalPartialMoveError = QString::fromLocal8Bit(
+            std::strerror(errno));
+    }
+#elif defined(Q_OS_WIN)
+    if (!::CreateHardLinkW(
+            reinterpret_cast<LPCWSTR>(
+                removalPartialMoveLinkPath.utf16()),
+            reinterpret_cast<LPCWSTR>(secondary.utf16()),
+            nullptr)) {
+        removalPartialMoveError = QStringLiteral(
+            "Cannot create the partial-move hard link: system error %1")
+                .arg(::GetLastError());
+    }
+#else
+    removalPartialMoveError = QStringLiteral(
+        "Hard-link partial-move injection is unsupported");
+#endif
+}
+
+bool anchoredFilesystemSyncFailureRequested(const QString &)
+{
+    return false;
+}
+
+bool anchoredFilesystemUseLegacyWindowsDelete()
+{
+    return false;
+}
 
 RideFile::RideFile()
     : RideFile(QDateTime(), 0.0)
@@ -288,7 +354,9 @@ void resetRideCacheRemovalRefreshCounts()
     removalMoveFailureTargetPath.clear();
     removalPartialMoveFailurePath.clear();
     removalPartialMoveFailureTargetPath.clear();
-    removalPartialMoveRemovesSource = false;
+    removalPartialMoveTriggered = false;
+    removalPartialMoveLinkPath.clear();
+    removalPartialMoveError.clear();
     removalMoveMutationPath.clear();
     removalMoveMutationContents.clear();
     removalMoveActionPath.clear();
@@ -326,6 +394,8 @@ void resetRideCacheRemovalRefreshCounts()
     startupInvalidationCount = 0;
     rideItemDestructionCount = 0;
     removalTransitionOccurrence = 0;
+    removalTransitionActionName.clear();
+    removalTransitionAction = {};
     removalValidationMutationEnabled = false;
     removalValidationMutationContents.clear();
 }
@@ -365,19 +435,6 @@ bool rideCacheRemovalShouldFailMove(
     const QString &sourcePath,
     const QString &targetPath)
 {
-    if ((!removalPartialMoveFailurePath.isEmpty()
-         && sourcePath == removalPartialMoveFailurePath)
-        || (!removalPartialMoveFailureTargetPath.isEmpty()
-            && targetPath
-                == removalPartialMoveFailureTargetPath)) {
-        removalPartialMoveFailurePath.clear();
-        removalPartialMoveFailureTargetPath.clear();
-        QFile::copy(sourcePath, targetPath);
-        if (removalPartialMoveRemovesSource)
-            QFile::remove(sourcePath);
-        removalPartialMoveRemovesSource = false;
-        return true;
-    }
     if (!removalMoveFailurePath.isEmpty()
         && sourcePath == removalMoveFailurePath) {
         return true;
@@ -401,18 +458,39 @@ void setRideCacheRemovalPartialMoveFailurePath(
     const QString &path,
     bool removeSource)
 {
+    Q_UNUSED(removeSource)
     removalPartialMoveFailurePath = path;
     removalPartialMoveFailureTargetPath.clear();
-    removalPartialMoveRemovesSource = removeSource;
+    removalPartialMoveTriggered = false;
+    removalPartialMoveLinkPath.clear();
+    removalPartialMoveError.clear();
 }
 
 void setRideCacheRemovalPartialMoveFailureTargetPath(
     const QString &path,
     bool removeSource)
 {
+    Q_UNUSED(removeSource)
     removalPartialMoveFailurePath.clear();
     removalPartialMoveFailureTargetPath = path;
-    removalPartialMoveRemovesSource = removeSource;
+    removalPartialMoveTriggered = false;
+    removalPartialMoveLinkPath.clear();
+    removalPartialMoveError.clear();
+}
+
+bool rideCacheRemovalPartialMoveWasTriggered()
+{
+    return removalPartialMoveTriggered;
+}
+
+QString rideCacheRemovalPartialMovePublishedLinkPath()
+{
+    return removalPartialMoveLinkPath;
+}
+
+QString rideCacheRemovalPartialMoveFailureError()
+{
+    return removalPartialMoveError;
 }
 
 void setRideCacheRemovalMoveMutation(
@@ -488,6 +566,15 @@ bool rideCacheRemovalShouldFailSync(const QString &path)
 void rideCacheRemovalTransitionReached(
     const char *transition)
 {
+    if (!removalTransitionActionName.isEmpty()
+        && removalTransitionActionName == transition
+        && removalTransitionAction) {
+        removalTransitionActionName.clear();
+        const std::function<void()> action =
+            std::move(removalTransitionAction);
+        removalTransitionAction = {};
+        action();
+    }
     const QByteArray requested =
         qgetenv("GC_RIDE_CACHE_REMOVAL_CRASH_PHASE");
     if (!requested.isEmpty()
@@ -504,6 +591,14 @@ void rideCacheRemovalTransitionReached(
             std::_Exit(86);
         }
     }
+}
+
+void setRideCacheRemovalTransitionAction(
+    const QByteArray &transition,
+    const std::function<void()> &action)
+{
+    removalTransitionActionName = transition;
+    removalTransitionAction = action;
 }
 
 void setRideCacheRemovalSaveFailureFileName(

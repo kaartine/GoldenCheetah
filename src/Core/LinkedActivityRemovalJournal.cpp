@@ -2987,22 +2987,59 @@ QStringList Journal::recoveryPaths() const
     QStringList paths;
     if (!state_) return paths;
 
+    const auto addMatchingFile = [&paths](
+        const QString &path,
+        const AtomicFileSnapshot &expected) {
+        ObservedFile observed;
+        QString ignored;
+        if (inspectRegularFile(
+                path, observed, ignored, expected.size)
+            && snapshotMatches(observed, expected)) {
+            paths.append(path);
+        }
+    };
+    const auto addMatchingJournal = [&] {
+        const QFileInfo journal(state_->journalPath);
+        ObservedFile manifest;
+        QString ignored;
+        if (journal.exists()
+            && journal.isDir()
+            && !journal.isSymLink()
+            && inspectRegularFile(
+                state_->manifestPath,
+                manifest,
+                ignored,
+                state_->manifestSnapshot.size)
+            && snapshotMatches(
+                manifest, state_->manifestSnapshot)) {
+            paths.append(state_->journalPath);
+        }
+    };
+
     ResolvedPaths resolved;
     QString error;
     if (!resolveManifestPaths(*state_, resolved, error)) {
-        if (pathEntryExists(state_->journalPath)) paths.append(state_->journalPath);
+        addMatchingJournal();
         return paths;
     }
 
-    QStringList candidates = {
-        state_->journalPath,
+    addMatchingJournal();
+    addMatchingFile(
         resolved.backupStaging,
+        state_->manifest.source.contents);
+    addMatchingFile(
         resolved.sourceTombstone,
-        resolved.previousBackup};
-    if (state_->manifest.hasPeer)
-        candidates.insert(1, resolved.peerStaging);
-    for (const QString &candidate : candidates) {
-        if (pathEntryExists(candidate)) paths.append(candidate);
+        state_->manifest.source.contents);
+    if (state_->manifest.previousBackup.exists) {
+        addMatchingFile(
+            resolved.previousBackup,
+            state_->manifest.previousBackup.contents);
+    }
+    if (state_->manifest.hasPeer
+        && state_->manifest.peerNew.exists) {
+        addMatchingFile(
+            resolved.peerStaging,
+            state_->manifest.peerNew.contents);
     }
     return paths;
 }

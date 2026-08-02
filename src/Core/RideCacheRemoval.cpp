@@ -10,6 +10,7 @@
 #include "RideCache.h"
 
 #include "LTMSettings.h"
+#include "AnchoredFileSystem.h"
 #include "Athlete.h"
 #include "Context.h"
 #include "DataProcessor.h"
@@ -25,7 +26,6 @@
 #include <QCoreApplication>
 #include <QEvent>
 #include <QPointer>
-#include <QTemporaryFile>
 
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
 bool rideCacheRemovalShouldFailCleanup(
@@ -48,10 +48,29 @@ namespace {
 
 struct RemovalFileSnapshot
 {
+    RemovalFileSnapshot() = default;
+
+    RemovalFileSnapshot(QString filePath, QString fileDescription)
+        : path(std::move(filePath)),
+          description(std::move(fileDescription))
+    {
+    }
+
     QString path;
     QString description;
     bool exists = false;
-    AtomicFileSnapshot contents;
+    AnchoredFileSystem::DirectoryAnchor parent;
+    AnchoredFileSystem::EntryRef entry;
+    AnchoredFileSystem::DirectoryAnchor absentAncestor;
+    QStringList absentComponents;
+    std::shared_ptr<AnchoredFileSystem::PinnedFile> file;
+};
+
+struct AnchoredRemovalPath
+{
+    QString path;
+    AnchoredFileSystem::DirectoryAnchor parent;
+    AnchoredFileSystem::EntryRef entry;
 };
 
 struct StorageRemovalResult
@@ -157,29 +176,345 @@ private:
 using RemovalPrepareFunction =
     std::function<bool(QString &error)>;
 
+bool validatedRemovalPathComponents(
+    const QString &rootPath,
+    const QString &path,
+    QString &cleanedPath,
+    QStringList &components,
+    QString &error)
+{
+    error.clear();
+    cleanedPath.clear();
+    components.clear();
+    if (rootPath.isEmpty()
+        || path.isEmpty()
+        || !QDir::isAbsolutePath(rootPath)
+        || !QDir::isAbsolutePath(path)) {
+        error = QObject::tr(
+            "An activity removal path is unavailable");
+        return false;
+    }
+
+    const QString cleanedRoot = QDir::cleanPath(
+        QFileInfo(rootPath).absoluteFilePath());
+    cleanedPath = QDir::cleanPath(
+        QFileInfo(path).absoluteFilePath());
+    const QString relative = QDir::fromNativeSeparators(
+        QDir(cleanedRoot).relativeFilePath(cleanedPath));
+    if (QDir::isAbsolutePath(relative)) {
+        error = QObject::tr(
+            "An activity removal path escapes the athlete root: %1")
+                    .arg(path);
+        return false;
+    }
+
+    components = relative.split(
+        QLatin1Char('/'), Qt::SkipEmptyParts);
+    if (components.isEmpty()) {
+        error = QObject::tr(
+            "An activity removal path does not name a file: %1")
+                    .arg(path);
+        return false;
+    }
+    for (const QString &component : components) {
+        if (component == QStringLiteral(".")
+            || component == QStringLiteral("..")) {
+            error = QObject::tr(
+                "An activity removal path escapes the athlete root: %1")
+                        .arg(path);
+            return false;
+        }
+    }
+    const QString roundTrip = QDir::cleanPath(
+        QDir(cleanedRoot).filePath(relative));
+    if (atomicFilePathKey(roundTrip)
+        != atomicFilePathKey(cleanedPath)) {
+        error = QObject::tr(
+            "An activity removal path does not resolve under the athlete root: %1")
+                    .arg(path);
+        return false;
+    }
+    return true;
+}
+
+bool resolveAnchoredRemovalPath(
+    const AnchoredFileSystem::DirectoryAnchor &root,
+    const QString &rootPath,
+    const QString &path,
+    AnchoredRemovalPath &resolved,
+    QString &error)
+{
+    resolved = {};
+    if (!root.isValid()) {
+        error = QObject::tr(
+            "An activity removal path is unavailable");
+        return false;
+    }
+
+    QString cleanedPath;
+    QStringList components;
+    if (!validatedRemovalPathComponents(
+            rootPath, path, cleanedPath,
+            components, error)) {
+        return false;
+    }
+
+    AnchoredFileSystem::DirectoryAnchor parent = root;
+    for (int index = 0;
+         index + 1 < components.size();
+         ++index) {
+        AnchoredFileSystem::DirectoryAnchor child;
+        if (!parent.openChild(
+                components.at(index), child, error)) {
+            error = QObject::tr(
+                "Cannot anchor an activity removal directory for %1: %2")
+                        .arg(path, error);
+            return false;
+        }
+        parent = std::move(child);
+    }
+
+    const AnchoredFileSystem::EntryRef entry =
+        parent.entry(components.constLast(), error);
+    if (!entry.isValid()) {
+        error = QObject::tr(
+            "Cannot anchor an activity removal file for %1: %2")
+                    .arg(path, error);
+        return false;
+    }
+    if (atomicFilePathKey(entry.displayPath())
+            != atomicFilePathKey(cleanedPath)) {
+        error = QObject::tr(
+            "An activity removal path does not resolve under the athlete root: %1")
+                    .arg(path);
+        return false;
+    }
+
+    resolved.path = cleanedPath;
+    resolved.parent = std::move(parent);
+    resolved.entry = entry;
+    return true;
+}
+
+bool resolveAnchoredRemovalSnapshot(
+    const AnchoredFileSystem::DirectoryAnchor &root,
+    const QString &rootPath,
+    RemovalFileSnapshot &snapshot,
+    QString &error)
+{
+    AnchoredRemovalPath resolved;
+    if (!resolveAnchoredRemovalPath(
+            root, rootPath, snapshot.path,
+            resolved, error)) {
+        return false;
+    }
+    snapshot.path = resolved.path;
+    snapshot.parent = std::move(resolved.parent);
+    snapshot.entry = resolved.entry;
+    return true;
+}
+
+bool resolveAbsentRemovalSnapshot(
+    const AnchoredFileSystem::DirectoryAnchor &root,
+    const QString &rootPath,
+    RemovalFileSnapshot &snapshot,
+    QString &error)
+{
+    if (!root.isValid()) {
+        error = QObject::tr(
+            "An activity removal path is unavailable");
+        return false;
+    }
+
+    QString cleanedPath;
+    QStringList components;
+    if (!validatedRemovalPathComponents(
+            rootPath, snapshot.path, cleanedPath,
+            components, error)) {
+        return false;
+    }
+
+    AnchoredFileSystem::DirectoryAnchor parent = root;
+    for (int index = 0;
+         index + 1 < components.size();
+         ++index) {
+        QString entryError;
+        AnchoredFileSystem::DirectoryAnchor child;
+        bool exists = false;
+        if (!parent.openChildIfExists(
+                components.at(index), child,
+                exists, entryError)) {
+            error = QObject::tr(
+                "Cannot anchor an optional activity removal directory for %1: %2")
+                        .arg(snapshot.path, entryError);
+            return false;
+        }
+        if (!exists) {
+            snapshot.path = cleanedPath;
+            snapshot.absentAncestor = std::move(parent);
+            snapshot.absentComponents = components.mid(index);
+            return true;
+        }
+        parent = std::move(child);
+    }
+
+    const AnchoredFileSystem::EntryRef entry =
+        parent.entry(components.constLast(), error);
+    if (!entry.isValid()) {
+        error = QObject::tr(
+            "Cannot anchor an optional activity removal file for %1: %2")
+                    .arg(snapshot.path, error);
+        return false;
+    }
+    snapshot.path = cleanedPath;
+    snapshot.parent = std::move(parent);
+    snapshot.entry = entry;
+    return true;
+}
+
+bool absentRemovalSnapshotStillAbsent(
+    const RemovalFileSnapshot &snapshot,
+    QString &error)
+{
+    if (!snapshot.absentAncestor.isValid()
+        || snapshot.absentComponents.isEmpty()) {
+        error = QObject::tr(
+            "An optional activity removal path is unavailable: %1")
+                    .arg(snapshot.path);
+        return false;
+    }
+
+    AnchoredFileSystem::DirectoryAnchor parent =
+        snapshot.absentAncestor;
+    for (int index = 0;
+         index < snapshot.absentComponents.size();
+         ++index) {
+        const QString &component =
+            snapshot.absentComponents.at(index);
+        QString inspectError;
+        if (index + 1
+            == snapshot.absentComponents.size()) {
+            const AnchoredFileSystem::EntryRef entry =
+                parent.entry(component, inspectError);
+            if (!entry.isValid()) {
+                error = QObject::tr(
+                    "Cannot revalidate an optional activity removal path %1: %2")
+                            .arg(snapshot.path, inspectError);
+                return false;
+            }
+            bool exists = false;
+            if (!AnchoredFileSystem::entryExists(
+                    entry, exists, inspectError)) {
+                error = QObject::tr(
+                    "Cannot revalidate an optional activity removal path %1: %2")
+                            .arg(snapshot.path, inspectError);
+                return false;
+            }
+            if (!exists) return true;
+            error = QObject::tr(
+                "The %1 was created concurrently: %2")
+                        .arg(snapshot.description, snapshot.path);
+            return false;
+        }
+
+        AnchoredFileSystem::DirectoryAnchor child;
+        bool exists = false;
+        if (!parent.openChildIfExists(
+                component, child, exists, inspectError)) {
+            error = QObject::tr(
+                "An optional activity removal parent was created with an unsafe type for %1: %2")
+                        .arg(snapshot.path, inspectError);
+            return false;
+        }
+        if (!exists) return true;
+        parent = std::move(child);
+    }
+    return true;
+}
+
+bool validateAndPinRemovalEntry(
+    RemovalFileSnapshot &snapshot,
+    bool required,
+    QString &error)
+{
+    bool exists = false;
+    QString inspectError;
+    if (!AnchoredFileSystem::entryExists(
+            snapshot.entry, exists, inspectError)) {
+        error = QObject::tr(
+            "Cannot inspect the %1: %2")
+                    .arg(snapshot.description, inspectError);
+        return false;
+    }
+    snapshot.exists = exists;
+    snapshot.file.reset();
+    if (!exists) {
+        if (required) {
+            error = QObject::tr(
+                "The %1 is missing: %2")
+                        .arg(snapshot.description, snapshot.path);
+            return false;
+        }
+        return true;
+    }
+
+    auto file = std::make_shared<
+        AnchoredFileSystem::PinnedFile>();
+    QString pinError;
+    if (!AnchoredFileSystem::pinRegularFile(
+            snapshot.entry, *file, pinError)) {
+        error = QObject::tr(
+            "Cannot pin the %1: %2")
+                    .arg(snapshot.description, pinError);
+        return false;
+    }
+    snapshot.file = std::move(file);
+    return true;
+}
+
+bool anchoredRemovalSnapshotMatches(
+    const RemovalFileSnapshot &snapshot,
+    QString &error)
+{
+    if (!snapshot.exists) {
+        bool exists = false;
+        QString inspectError;
+        if (!AnchoredFileSystem::entryExists(
+                snapshot.entry, exists, inspectError)) {
+            error = QObject::tr(
+                "Cannot revalidate the %1: %2")
+                        .arg(snapshot.description, inspectError);
+            return false;
+        }
+        if (!exists) return true;
+        error = QObject::tr(
+            "The %1 was created concurrently: %2")
+                    .arg(snapshot.description, snapshot.path);
+        return false;
+    }
+
+    bool matches = false;
+    QString matchError;
+    if (!snapshot.file
+        || !AnchoredFileSystem::entryMatches(
+            snapshot.entry, *snapshot.file,
+            matches, matchError)) {
+        error = QObject::tr(
+            "Cannot revalidate the %1: %2")
+                    .arg(snapshot.description, matchError);
+        return false;
+    }
+    if (matches) return true;
+    error = QObject::tr(
+        "The %1 changed during activity removal: %2")
+                .arg(snapshot.description, snapshot.path);
+    return false;
+}
+
 bool removalEntryExists(const QString &path)
 {
     const QFileInfo info(path);
     return info.exists() || info.isSymLink();
-}
-
-bool moveRemovalFile(
-    const QString &sourcePath,
-    const QString &targetPath,
-    QString &error)
-{
-#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
-    if (rideCacheRemovalShouldFailMove(
-            sourcePath, targetPath)) {
-        error = QObject::tr(
-            "Injected activity removal move failure");
-        return false;
-    }
-    rideCacheRemovalMutateBeforeMove(
-        sourcePath, targetPath);
-#endif
-    return moveAtomicFile(
-        sourcePath, targetPath, error);
 }
 
 void appendRemovalError(
@@ -189,6 +524,14 @@ void appendRemovalError(
     if (detail.isEmpty()) return;
     if (!error.isEmpty()) error += QStringLiteral("; ");
     error += detail;
+}
+
+QString removalVerificationDetail(const QString &detail)
+{
+    return detail.isEmpty()
+        ? QObject::tr(
+              "the anchored file identity no longer matches its expected name")
+        : detail;
 }
 
 bool syncRemovalDirectory(
@@ -206,268 +549,6 @@ bool syncRemovalDirectory(
     return syncParentDirectory(path, error);
 }
 
-bool validateAndSnapshotRemovalEntry(
-    RemovalFileSnapshot &entry,
-    bool required,
-    QString &error)
-{
-    const QFileInfo info(entry.path);
-    const bool exists =
-        info.exists() || info.isSymLink();
-    entry.exists = exists;
-    if (!exists) {
-        if (required) {
-            error = QObject::tr(
-                "The %1 is missing: %2")
-                        .arg(
-                            entry.description,
-                            entry.path);
-            return false;
-        }
-        return true;
-    }
-    if (info.isSymLink() || !info.isFile()) {
-        error = QObject::tr(
-            "The %1 is not a regular file: %2")
-                    .arg(
-                        entry.description,
-                        entry.path);
-        return false;
-    }
-    QString snapshotError;
-    if (!captureAtomicFileSnapshot(
-            entry.path,
-            entry.contents,
-            snapshotError)) {
-        error = QObject::tr(
-            "Cannot snapshot the %1: %2")
-                    .arg(
-                        entry.description,
-                        snapshotError);
-        return false;
-    }
-    return true;
-}
-
-bool removalSnapshotMatches(
-    const RemovalFileSnapshot &entry,
-    QString &error)
-{
-    if (!entry.exists) {
-        if (!removalEntryExists(entry.path))
-            return true;
-        error = QObject::tr(
-            "The %1 was created concurrently: %2")
-                    .arg(
-                        entry.description,
-                        entry.path);
-        return false;
-    }
-
-    QString snapshotError;
-    if (atomicFileMatchesSnapshot(
-            entry.path,
-            entry.contents,
-            snapshotError)) {
-        return true;
-    }
-    error = QObject::tr(
-        "The %1 changed during activity removal: %2")
-                .arg(
-                    entry.description,
-                    snapshotError);
-    return false;
-}
-
-bool copyRemovalSource(
-    const RemovalFileSnapshot &source,
-    const QString &backupPath,
-    QString &stagingPath,
-    QString &error)
-{
-    QFile input(source.path);
-    if (!input.open(QIODevice::ReadOnly)) {
-        error = QObject::tr(
-            "Cannot read the activity source: %1")
-                    .arg(input.errorString());
-        return false;
-    }
-
-    QTemporaryFile output(
-        QDir(QFileInfo(backupPath).absolutePath())
-            .filePath(
-                QStringLiteral(".%1.gc-copy-XXXXXX")
-                    .arg(QFileInfo(backupPath).fileName())));
-    if (!output.open()) {
-        error = QObject::tr(
-            "Cannot create the activity backup staging file: %1")
-                    .arg(output.errorString());
-        return false;
-    }
-
-    QCryptographicHash hash(QCryptographicHash::Sha256);
-    qint64 copied = 0;
-    while (!input.atEnd()) {
-        const QByteArray chunk =
-            input.read(1024 * 1024);
-        if (chunk.isEmpty()
-            && input.error()
-                != QFileDevice::NoError) {
-            error = QObject::tr(
-                "Cannot read the activity source: %1")
-                        .arg(input.errorString());
-            return false;
-        }
-        if (output.write(chunk) != chunk.size()) {
-            error = QObject::tr(
-                "Cannot write the activity backup staging file: %1")
-                        .arg(output.errorString());
-            return false;
-        }
-        copied += chunk.size();
-        hash.addData(chunk);
-    }
-    if (!output.flush()
-        || !syncFileDevice(output, error)) {
-        if (error.isEmpty()) {
-            error = QObject::tr(
-                "Cannot flush the activity backup staging file: %1")
-                        .arg(output.errorString());
-        }
-        return false;
-    }
-    if (copied != source.contents.size
-        || hash.result()
-            != source.contents.digest) {
-        error = QObject::tr(
-            "The copied activity backup does not match the source");
-        return false;
-    }
-    QString snapshotError;
-    if (!atomicFileMatchesSnapshot(
-            source.path,
-            source.contents,
-            snapshotError)) {
-        error = QObject::tr(
-            "The activity source changed while it was being copied: %1")
-                    .arg(snapshotError);
-        return false;
-    }
-
-    stagingPath = output.fileName();
-    output.setAutoRemove(false);
-    output.close();
-    return true;
-}
-
-bool copyRemovalSourceToPath(
-    const RemovalFileSnapshot &source,
-    const QString &stagingPath,
-    QString &error)
-{
-    if (stagingPath.isEmpty()
-        || removalEntryExists(stagingPath)) {
-        error = QObject::tr(
-            "The activity backup staging path is unavailable");
-        return false;
-    }
-
-    QFile input(source.path);
-    if (!input.open(QIODevice::ReadOnly)) {
-        error = QObject::tr(
-            "Cannot read the activity source: %1")
-                    .arg(input.errorString());
-        return false;
-    }
-
-    NewAtomicFileWriter output(stagingPath);
-    if (!output.open()) {
-        error = QObject::tr(
-            "Cannot create the activity backup staging file: %1")
-                    .arg(output.errorString());
-        return false;
-    }
-
-    QCryptographicHash hash(QCryptographicHash::Sha256);
-    qint64 copied = 0;
-    while (!input.atEnd()) {
-        const QByteArray chunk = input.read(1024 * 1024);
-        if (chunk.isEmpty()
-            && input.error()
-                != QFileDevice::NoError) {
-            error = QObject::tr(
-                "Cannot read the activity source: %1")
-                        .arg(input.errorString());
-            output.cancelWriting();
-            return false;
-        }
-        if (output.write(chunk) != chunk.size()) {
-            error = QObject::tr(
-                "Cannot write the activity backup staging file: %1")
-                        .arg(output.errorString());
-            output.cancelWriting();
-            return false;
-        }
-        copied += chunk.size();
-        hash.addData(chunk);
-    }
-    if (!output.flush()) {
-        error = QObject::tr(
-            "Cannot flush the activity backup staging file: %1")
-                    .arg(output.errorString());
-        output.cancelWriting();
-        return false;
-    }
-    if (copied != source.contents.size
-        || hash.result() != source.contents.digest) {
-        error = QObject::tr(
-            "The copied activity backup does not match the source");
-        output.cancelWriting();
-        return false;
-    }
-    if (!output.commit()) {
-        error = QObject::tr(
-            "Cannot publish the activity backup staging file: %1")
-                    .arg(output.errorString());
-        return false;
-    }
-    if (!syncRemovalDirectory(stagingPath, error))
-        return false;
-
-    QString verifyError;
-    if (!atomicFileMatchesSnapshot(
-            stagingPath, source.contents,
-            verifyError)
-        || !atomicFileMatchesSnapshot(
-            source.path, source.contents,
-            verifyError)) {
-        error = QObject::tr(
-            "The activity source changed while it was being copied: %1")
-                    .arg(verifyError);
-        return false;
-    }
-    return true;
-}
-
-bool removeRemovalFile(
-    const QString &path,
-    const QString &hookPath,
-    QString &error)
-{
-#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
-    if (rideCacheRemovalShouldFailCleanup(
-            hookPath)) {
-        error = QObject::tr(
-            "Injected activity removal cleanup failure");
-        return false;
-    }
-#else
-    Q_UNUSED(hookPath)
-#endif
-    return removeFileDurably(
-        path, error, syncRemovalDirectory);
-}
-
 void addRecoveryPath(
     QStringList &paths,
     const QString &path)
@@ -479,10 +560,19 @@ void addRecoveryPath(
     }
 }
 
+void addVerifiedRecoveryPath(
+    QStringList &paths,
+    const QString &path)
+{
+    if (!path.isEmpty() && !paths.contains(path))
+        paths.append(path);
+}
+
 class ActivityRemovalTransaction final
 {
 public:
     ActivityRemovalTransaction(
+        QString athleteRootPath,
         QString sourcePath,
         QString backupPath,
         QStringList derivedPaths,
@@ -490,16 +580,13 @@ public:
         RemovalPrepareFunction prepare,
         std::shared_ptr<
             LinkedActivityRemoval::Journal> journal = {})
-        : source_({
+        : athleteRootPath_(std::move(athleteRootPath)),
+          source_(
               std::move(sourcePath),
-              QObject::tr("activity source"),
-              false,
-              {}}),
-          backup_({
+              QObject::tr("activity source")),
+          backup_(
               std::move(backupPath),
-              QObject::tr("previous activity backup"),
-              false,
-              {}}),
+              QObject::tr("previous activity backup")),
           archiveSource_(archiveSource),
           prepare_(std::move(prepare)),
           journal_(std::move(journal)),
@@ -511,11 +598,9 @@ public:
     {
         derived_.reserve(derivedPaths.size());
         for (QString &path : derivedPaths) {
-            derived_.append({
+            derived_.append(RemovalFileSnapshot(
                 std::move(path),
-                QObject::tr("derived activity file"),
-                false,
-                {}});
+                QObject::tr("derived activity file")));
         }
         if (archiveSource_) {
             sourceTombstone_ = journal_
@@ -531,6 +616,14 @@ public:
             if (journal_) {
                 backupStaging_ =
                     journal_->backupStagingPath();
+            } else {
+                const QFileInfo backupInfo(backup_.path);
+                backupStaging_ = QDir(
+                    backupInfo.absolutePath()).filePath(
+                        QStringLiteral(".%1.gc-copy-%2")
+                            .arg(
+                                backupInfo.fileName(),
+                                transactionId_));
             }
         }
     }
@@ -538,7 +631,8 @@ public:
     StorageRemovalResult execute()
     {
         StorageRemovalResult result;
-        if (!lockAndSnapshot(result.error))
+        if (!anchorPaths(result.error)
+            || !lockAndSnapshot(result.error))
             return result;
 
         if (!archiveSource_) {
@@ -553,13 +647,8 @@ public:
             return result;
         }
 
-        const bool sourceCopied = journal_
-            ? copyRemovalSourceToPath(
-                  source_, backupStaging_,
-                  result.error)
-            : copyRemovalSource(
-                  source_, backup_.path,
-                  backupStaging_, result.error);
+        const bool sourceCopied =
+            copyRemovalSource(result.error);
         if (!sourceCopied) {
             cleanupUnpublishedStaging(result);
             return result;
@@ -582,32 +671,41 @@ public:
 
         if (backup_.exists) {
             QString moveError;
-            if (!moveRemovalFile(
+            bool moved = false;
+            if (!movePinnedFileDurably(
+                    backup_.file,
+                    previousBackupEntry_,
                     backup_.path,
                     previousBackup_,
+                    moved,
                     moveError)) {
-                previousBackupMoved_ =
-                    removalEntryExists(
-                        previousBackup_);
+                previousBackupMoved_ = moved;
                 result.error = QObject::tr(
                     "Cannot preserve the previous activity backup: %1")
                                    .arg(moveError);
                 return rollbackResult(result.error);
             }
             previousBackupMoved_ = true;
+            bool previousMatches = false;
             QString verifyError;
-            if (!atomicFileMatchesSnapshot(
-                    previousBackup_,
-                    backup_.contents,
-                    verifyError)) {
+            if (!anchoredEntryMatches(
+                    previousBackupEntry_,
+                    backup_.file,
+                    previousMatches,
+                    verifyError)
+                || !previousMatches
+                || !allDirectoriesMatch(verifyError)) {
                 result.error = QObject::tr(
                     "The preserved activity backup is not intact: %1")
-                                   .arg(verifyError);
+                                   .arg(removalVerificationDetail(
+                                       verifyError));
                 return rollbackResult(result.error);
             }
             QString syncError;
-            if (!syncRemovalDirectory(
-                    backup_.path, syncError)) {
+            if (!syncAnchoredDirectory(
+                    previousBackupEntry_.parent,
+                    backup_.path,
+                    syncError)) {
                 result.error = syncError;
                 return rollbackResult(result.error);
             }
@@ -618,32 +716,45 @@ public:
         }
 
         QString moveError;
-        if (!moveRemovalFile(
+        bool backupMoved = false;
+        if (!movePinnedFileDurably(
+                backupStagingFile_,
+                {backup_.path,
+                 backup_.parent,
+                 backup_.entry},
                 backupStaging_,
                 backup_.path,
+                backupMoved,
                 moveError)) {
-            backupPublished_ =
-                removalEntryExists(backup_.path);
+            backupPublished_ = backupMoved;
             result.error = QObject::tr(
                 "Cannot publish the activity backup: %1")
                                .arg(moveError);
             return rollbackResult(result.error);
         }
         backupPublished_ = true;
-        backupStaging_.clear();
+        bool publishedBackupMatches = false;
         QString verifyError;
-        if (!atomicFileMatchesSnapshot(
-                backup_.path,
-                source_.contents,
-                verifyError)) {
+        if (!anchoredEntryMatches(
+                {backup_.path,
+                 backup_.parent,
+                 backup_.entry},
+                backupStagingFile_,
+                publishedBackupMatches,
+                verifyError)
+            || !publishedBackupMatches
+            || !allDirectoriesMatch(verifyError)) {
             result.error = QObject::tr(
                 "The published activity backup is not intact: %1")
-                               .arg(verifyError);
+                               .arg(removalVerificationDetail(
+                                   verifyError));
             return rollbackResult(result.error);
         }
         QString syncError;
-        if (!syncRemovalDirectory(
-                backup_.path, syncError)) {
+        if (!syncAnchoredDirectory(
+                backup_.parent,
+                backup_.path,
+                syncError)) {
             result.error = syncError;
             return rollbackResult(result.error);
         }
@@ -652,30 +763,39 @@ public:
             "backup-published");
 #endif
 
-        if (!moveRemovalFile(
+        bool sourceMoved = false;
+        if (!movePinnedFileDurably(
+                source_.file,
+                sourceTombstoneEntry_,
                 source_.path,
                 sourceTombstone_,
+                sourceMoved,
                 moveError)) {
-            sourceTombstoned_ =
-                removalEntryExists(
-                    sourceTombstone_);
+            sourceTombstoned_ = sourceMoved;
             result.error = QObject::tr(
                 "Cannot stage the activity source for removal: %1")
                                .arg(moveError);
             return rollbackResult(result.error);
         }
         sourceTombstoned_ = true;
-        if (!atomicFileMatchesSnapshot(
-                sourceTombstone_,
-                source_.contents,
-                verifyError)) {
+        bool tombstoneMatches = false;
+        if (!anchoredEntryMatches(
+                sourceTombstoneEntry_,
+                source_.file,
+                tombstoneMatches,
+                verifyError)
+            || !tombstoneMatches
+            || !allDirectoriesMatch(verifyError)) {
             result.error = QObject::tr(
                 "The activity source changed before archival: %1")
-                               .arg(verifyError);
+                               .arg(removalVerificationDetail(
+                                   verifyError));
             return rollbackResult(result.error);
         }
-        if (!syncRemovalDirectory(
-                source_.path, syncError)) {
+        if (!syncAnchoredDirectory(
+                source_.parent,
+                source_.path,
+                syncError)) {
             result.error = syncError;
             return rollbackResult(result.error);
         }
@@ -683,6 +803,24 @@ public:
         rideCacheRemovalTransitionReached(
             "source-tombstoned");
 #endif
+
+        bool finalBackupMatches = false;
+        verifyError.clear();
+        if (!anchoredEntryMatches(
+                {backup_.path,
+                 backup_.parent,
+                 backup_.entry},
+                backupStagingFile_,
+                finalBackupMatches,
+                verifyError)
+            || !finalBackupMatches
+            || !allDirectoriesMatch(verifyError)) {
+            result.error = QObject::tr(
+                "The activity backup changed before commit: %1")
+                               .arg(removalVerificationDetail(
+                                   verifyError));
+            return rollbackResult(result.error);
+        }
 
         if (journal_) {
             QString commitError;
@@ -714,6 +852,316 @@ public:
     }
 
 private:
+    void recordPartialMutation(
+        const AnchoredFileSystem::MutationResult &mutation)
+    {
+        if (mutation.effect
+            != AnchoredFileSystem::MutationEffect::Partial) {
+            return;
+        }
+        partialMutationSeen_ = true;
+        if (mutation.verifiedRecoveryPath.isEmpty()) {
+            unknownPartialLocation_ = true;
+            return;
+        }
+        addVerifiedRecoveryPath(
+            verifiedMutationRecoveryPaths_,
+            mutation.verifiedRecoveryPath);
+    }
+
+    void appendVerifiedMutationRecoveryPaths(
+        QStringList &paths) const
+    {
+        for (const QString &path :
+             verifiedMutationRecoveryPaths_) {
+            addVerifiedRecoveryPath(paths, path);
+        }
+    }
+
+    bool pinnedFileIsAt(
+        const AnchoredRemovalPath &location,
+        const std::shared_ptr<AnchoredFileSystem::PinnedFile> &file,
+        QString &error) const
+    {
+        if (!file || !file->isValid()) {
+            error = QObject::tr(
+                "An anchored activity file is unavailable");
+            return false;
+        }
+        if (!directoryMatches(
+                location.parent, location.path, error)) {
+            return false;
+        }
+        bool matches = false;
+        if (!anchoredEntryMatches(
+                location, file, matches, error)) {
+            return false;
+        }
+        if (matches) return true;
+        error = QObject::tr(
+            "An anchored activity file changed at its expected path: %1")
+                    .arg(location.path);
+        return false;
+    }
+
+    void addPinnedRecoveryPath(
+        QStringList &paths,
+        const AnchoredRemovalPath &location,
+        const std::shared_ptr<AnchoredFileSystem::PinnedFile> &file) const
+    {
+        QString ignored;
+        if (pinnedFileIsAt(location, file, ignored)) {
+            addVerifiedRecoveryPath(paths, location.path);
+        }
+    }
+
+    bool anchorPaths(QString &error)
+    {
+        if (!AnchoredFileSystem::DirectoryAnchor::open(
+                athleteRootPath_, athleteRoot_, error)) {
+            error = QObject::tr(
+                "Cannot anchor the athlete directory for activity removal: %1")
+                        .arg(error);
+            return false;
+        }
+
+        if (archiveSource_
+            && (!resolveAnchoredRemovalSnapshot(
+                    athleteRoot_, athleteRootPath_,
+                    source_, error)
+                || !resolveAnchoredRemovalSnapshot(
+                    athleteRoot_, athleteRootPath_,
+                    backup_, error)
+                || !resolveAnchoredRemovalPath(
+                    athleteRoot_, athleteRootPath_,
+                    sourceTombstone_,
+                    sourceTombstoneEntry_, error)
+                || !resolveAnchoredRemovalPath(
+                    athleteRoot_, athleteRootPath_,
+                    previousBackup_,
+                    previousBackupEntry_, error)
+                || !resolveAnchoredRemovalPath(
+                    athleteRoot_, athleteRootPath_,
+                    backupStaging_,
+                    backupStagingEntry_, error))) {
+            return false;
+        }
+        for (RemovalFileSnapshot &entry : derived_) {
+            QString resolveError;
+            if (resolveAnchoredRemovalSnapshot(
+                    athleteRoot_, athleteRootPath_,
+                    entry, resolveError)) {
+                continue;
+            }
+            if (resolveAbsentRemovalSnapshot(
+                    athleteRoot_, athleteRootPath_,
+                    entry, resolveError)) {
+                continue;
+            }
+            error = resolveError;
+            return false;
+        }
+        return allDirectoriesMatch(error);
+    }
+
+    bool directoryMatches(
+        const AnchoredFileSystem::DirectoryAnchor &directory,
+        const QString &path,
+        QString &error) const
+    {
+        QString matchError;
+        if (directory.pathMatches(matchError)) return true;
+        error = matchError.isEmpty()
+            ? QObject::tr(
+                  "An activity removal directory was replaced: %1")
+                      .arg(path)
+            : QObject::tr(
+                  "Cannot revalidate an activity removal directory for %1: %2")
+                      .arg(path, matchError);
+        return false;
+    }
+
+    bool allDirectoriesMatch(QString &error) const
+    {
+        if (!directoryMatches(
+                athleteRoot_, athleteRootPath_, error)) {
+            return false;
+        }
+        if (archiveSource_) {
+            if (!directoryMatches(
+                    source_.parent, source_.path, error)
+                || !directoryMatches(
+                    backup_.parent, backup_.path, error)
+                || !directoryMatches(
+                    sourceTombstoneEntry_.parent,
+                    sourceTombstone_, error)
+                || !directoryMatches(
+                    previousBackupEntry_.parent,
+                    previousBackup_, error)
+                || !directoryMatches(
+                    backupStagingEntry_.parent,
+                    backupStaging_, error)) {
+                return false;
+            }
+        }
+        for (const RemovalFileSnapshot &entry :
+             std::as_const(derived_)) {
+            const AnchoredFileSystem::DirectoryAnchor &parent =
+                entry.entry.isValid()
+                ? entry.parent : entry.absentAncestor;
+            if (!directoryMatches(parent, entry.path, error)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool anchoredEntryIsAbsent(
+        const AnchoredRemovalPath &path,
+        QString &error) const
+    {
+        bool exists = false;
+        QString inspectError;
+        if (!AnchoredFileSystem::entryExists(
+                path.entry, exists, inspectError)) {
+            error = QObject::tr(
+                "Cannot inspect an activity recovery path %1: %2")
+                        .arg(path.path, inspectError);
+            return false;
+        }
+        if (!exists) return true;
+        error = QObject::tr(
+            "An activity removal recovery path already exists: %1")
+                    .arg(path.path);
+        return false;
+    }
+
+    bool copyRemovalSource(QString &error)
+    {
+        if (!source_.file) {
+            error = QObject::tr(
+                "The anchored activity source is unavailable");
+            return false;
+        }
+        auto copy = std::make_shared<
+            AnchoredFileSystem::PinnedFile>();
+        QString copyError;
+        if (!AnchoredFileSystem::copyToNewFile(
+                *source_.file,
+                backupStagingEntry_.entry,
+                *copy,
+                copyError)) {
+            error = QObject::tr(
+                "Cannot stage the anchored activity backup: %1")
+                        .arg(copyError);
+            return false;
+        }
+        backupStagingFile_ = std::move(copy);
+        return allDirectoriesMatch(error);
+    }
+
+    AnchoredFileSystem::MutationResult movePinnedFile(
+        const std::shared_ptr<AnchoredFileSystem::PinnedFile> &file,
+        const AnchoredRemovalPath &destination,
+        const QString &sourceHookPath,
+        const QString &targetHookPath)
+    {
+        AnchoredFileSystem::MutationResult result;
+        if (!file || !file->isValid()) {
+            result.error = QObject::tr(
+                "The anchored activity move source is unavailable");
+            return result;
+        }
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+        if (rideCacheRemovalShouldFailMove(
+                sourceHookPath, targetHookPath)) {
+            result.error = QObject::tr(
+                "Injected activity removal move failure");
+            return result;
+        }
+        rideCacheRemovalMutateBeforeMove(
+            sourceHookPath, targetHookPath);
+#endif
+        QString directoryError;
+        if (!allDirectoriesMatch(directoryError)) {
+            result.effect =
+                AnchoredFileSystem::MutationEffect::Conflict;
+            result.error = directoryError;
+            return result;
+        }
+        return AnchoredFileSystem::moveNoReplace(
+            *file, destination.entry);
+    }
+
+    bool movePinnedFileDurably(
+        const std::shared_ptr<AnchoredFileSystem::PinnedFile> &file,
+        const AnchoredRemovalPath &destination,
+        const QString &sourceHookPath,
+        const QString &targetHookPath,
+        bool &moved,
+        QString &error)
+    {
+        const AnchoredFileSystem::MutationResult mutation =
+            movePinnedFile(
+                file, destination,
+                sourceHookPath, targetHookPath);
+        moved = mutation.applied();
+        if (mutation.effect
+            == AnchoredFileSystem::MutationEffect::AppliedDurable) {
+            return true;
+        }
+        if (mutation.effect
+            == AnchoredFileSystem::MutationEffect::Partial) {
+            recordPartialMutation(mutation);
+        }
+        error = mutation.error.isEmpty()
+            ? QObject::tr(
+                  "An anchored activity move did not complete")
+            : mutation.error;
+        return false;
+    }
+
+    bool syncAnchoredDirectory(
+        const AnchoredFileSystem::DirectoryAnchor &directory,
+        const QString &hookPath,
+        QString &error) const
+    {
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+        if (rideCacheRemovalShouldFailSync(hookPath)) {
+            error = QObject::tr(
+                "Injected activity directory sync failure: %1")
+                        .arg(hookPath);
+            return false;
+        }
+#endif
+        return directory.sync(error);
+    }
+
+    bool anchoredEntryMatches(
+        const AnchoredRemovalPath &entry,
+        const std::shared_ptr<AnchoredFileSystem::PinnedFile> &file,
+        bool &matches,
+        QString &error) const
+    {
+        if (!file || !file->isValid()) {
+            matches = false;
+            error = QObject::tr(
+                "An anchored activity file is unavailable");
+            return false;
+        }
+        return AnchoredFileSystem::entryMatches(
+            entry.entry, *file, matches, error);
+    }
+
+    bool anchoredEntryExists(
+        const AnchoredRemovalPath &entry,
+        bool &exists,
+        QString &error) const
+    {
+        return AnchoredFileSystem::entryExists(
+            entry.entry, exists, error);
+    }
+
     bool lockAndSnapshot(QString &error)
     {
         QStringList paths;
@@ -725,35 +1173,39 @@ private:
         }
         for (const RemovalFileSnapshot &entry :
              std::as_const(derived_)) {
-            if (QFileInfo(entry.path)
-                    .absoluteDir().exists()) {
-                paths.append(entry.path);
-            }
+            if (!entry.entry.isValid()) continue;
+            paths.append(entry.path);
         }
         if (!locks_.lock(paths, error))
             return false;
 
+        if (!allDirectoriesMatch(error))
+            return false;
+
         if (archiveSource_
-            && (!validateAndSnapshotRemovalEntry(
+            && (!validateAndPinRemovalEntry(
                     source_, true, error)
-                || !validateAndSnapshotRemovalEntry(
+                || !validateAndPinRemovalEntry(
                     backup_, false, error))) {
             return false;
         }
         for (RemovalFileSnapshot &entry : derived_) {
-            if (!validateAndSnapshotRemovalEntry(
+            if (!entry.entry.isValid()) continue;
+            if (!validateAndPinRemovalEntry(
                     entry, false, error)) {
                 return false;
             }
         }
         if (archiveSource_
-            && (removalEntryExists(sourceTombstone_)
-                || removalEntryExists(previousBackup_))) {
-            error = QObject::tr(
-                "An activity removal recovery path already exists");
+            && (!anchoredEntryIsAbsent(
+                    sourceTombstoneEntry_, error)
+                || !anchoredEntryIsAbsent(
+                    previousBackupEntry_, error)
+                || !anchoredEntryIsAbsent(
+                    backupStagingEntry_, error))) {
             return false;
         }
-        return true;
+        return allDirectoriesMatch(error);
     }
 
     bool revalidateBeforeCommit(QString &error)
@@ -773,17 +1225,26 @@ private:
             }
         }
 #endif
+        if (!allDirectoriesMatch(error))
+            return false;
         if (archiveSource_) {
-            if (!removalSnapshotMatches(
+            if (!anchoredRemovalSnapshotMatches(
                     source_, error)
-                || !removalSnapshotMatches(
+                || !anchoredRemovalSnapshotMatches(
                     backup_, error)) {
                 return false;
             }
         }
         for (const RemovalFileSnapshot &entry :
              std::as_const(derived_)) {
-            if (!removalSnapshotMatches(entry, error))
+            if (!entry.entry.isValid()) {
+                if (!absentRemovalSnapshotStillAbsent(
+                        entry, error)) {
+                    return false;
+                }
+                continue;
+            }
+            if (!anchoredRemovalSnapshotMatches(entry, error))
                 return false;
         }
         return true;
@@ -795,41 +1256,58 @@ private:
         return prepare_(error);
     }
 
-    bool cleanupPath(
-        const QString &actualPath,
+    bool cleanupPinnedFile(
+        const std::shared_ptr<AnchoredFileSystem::PinnedFile> &file,
+        const AnchoredRemovalPath &location,
         const QString &hookPath,
-        const AtomicFileSnapshot &expected,
         StorageRemovalResult &result)
     {
-        if (!removalEntryExists(actualPath))
-            return true;
-
+        if (!file || !file->isValid()) return true;
         QString verifyError;
-        if (!atomicFileMatchesSnapshot(
-                actualPath, expected,
-                verifyError)) {
+        if (!pinnedFileIsAt(
+                location, file, verifyError)) {
+            appendRemovalError(
+                result.error, verifyError);
+            return false;
+        }
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+        if (rideCacheRemovalShouldFailCleanup(hookPath)) {
             appendRemovalError(
                 result.error,
                 QObject::tr(
-                    "A cleanup file changed and was retained: %1 (%2)")
-                        .arg(actualPath, verifyError));
-            addRecoveryPath(
-                result.recoveryPaths,
-                actualPath);
+                    "Cannot remove an activity cleanup file: %1 (injected activity removal cleanup failure)")
+                        .arg(location.path));
+            addPinnedRecoveryPath(
+                result.recoveryPaths, location, file);
             return false;
         }
-        QString removalError;
-        if (!removeRemovalFile(
-                actualPath, hookPath,
-                removalError)) {
+#endif
+        const AnchoredFileSystem::MutationResult removal =
+            AnchoredFileSystem::remove(*file);
+        if (removal.effect
+            != AnchoredFileSystem::MutationEffect::AppliedDurable) {
+            if (removal.effect
+                == AnchoredFileSystem::MutationEffect::Partial) {
+                recordPartialMutation(removal);
+                addVerifiedRecoveryPath(
+                    result.recoveryPaths,
+                    removal.verifiedRecoveryPath);
+            }
             appendRemovalError(
                 result.error,
                 QObject::tr(
                     "Cannot remove an activity cleanup file: %1 (%2)")
-                        .arg(actualPath, removalError));
-            addRecoveryPath(
-                result.recoveryPaths,
-                actualPath);
+                        .arg(
+                            location.path,
+                            removal.error.isEmpty()
+                                ? QObject::tr(
+                                      "anchored removal did not complete durably")
+                                : removal.error));
+            if (removal.effect
+                != AnchoredFileSystem::MutationEffect::Partial) {
+                addPinnedRecoveryPath(
+                    result.recoveryPaths, location, file);
+            }
             return false;
         }
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
@@ -845,29 +1323,30 @@ private:
         bool complete = true;
         for (const RemovalFileSnapshot &entry :
              std::as_const(derived_)) {
+            if (!entry.entry.isValid()) continue;
             if (entry.exists
-                && !cleanupPath(
+                && !cleanupPinnedFile(
+                    entry.file,
+                    {entry.path, entry.parent, entry.entry},
                     entry.path,
-                    entry.path,
-                    entry.contents,
                     result)) {
                 complete = false;
             }
         }
         if (archiveSource_
             && backup_.exists
-            && !cleanupPath(
-                previousBackup_,
+            && !cleanupPinnedFile(
+                backup_.file,
+                previousBackupEntry_,
                 backup_.path,
-                backup_.contents,
                 result)) {
             complete = false;
         }
         if (archiveSource_
-            && !cleanupPath(
-                sourceTombstone_,
+            && !cleanupPinnedFile(
+                source_.file,
+                sourceTombstoneEntry_,
                 source_.path,
-                source_.contents,
                 result)) {
             complete = false;
         }
@@ -888,56 +1367,56 @@ private:
     void cleanupUnpublishedStaging(
         StorageRemovalResult &result)
     {
-        if (backupStaging_.isEmpty()
-            || !removalEntryExists(
-                backupStaging_)) {
+        if (!backupStagingFile_
+            || !backupStagingFile_->isValid()) {
             return;
         }
-        QString removalError;
-        if (!removeFileDurably(
-                backupStaging_, removalError,
-                syncRemovalDirectory)) {
+        if (!cleanupPinnedFile(
+                backupStagingFile_,
+                backupStagingEntry_,
+                backupStaging_,
+                result)) {
             result.status = RideCache::RemovalStatus::RecoveryRequired;
-            appendRemovalError(
-                result.error,
-                QObject::tr(
-                    "Cannot remove the unpublished activity backup: %1 (%2)")
-                    .arg(backupStaging_, removalError));
-            addRecoveryPath(
-                result.recoveryPaths,
-                backupStaging_);
             return;
         }
-        backupStaging_.clear();
+        backupStagingFile_.reset();
     }
 
-    bool removeVerifiedRollbackFile(
+    bool removePinnedRollbackFile(
+        const std::shared_ptr<AnchoredFileSystem::PinnedFile> &file,
+        const AnchoredFileSystem::DirectoryAnchor &parent,
         const QString &path,
-        const AtomicFileSnapshot &expected,
         const QString &description,
         QString &error)
     {
-        if (!removalEntryExists(path)) return true;
-
-        QString verifyError;
-        if (!atomicFileMatchesSnapshot(
-                path, expected, verifyError)) {
+        if (!file || !file->isValid()) return true;
+        QString directoryError;
+        if (!directoryMatches(
+                parent, path, directoryError)) {
             appendRemovalError(
-                error,
-                QObject::tr(
-                    "Cannot remove the unverified %1 during rollback: %2")
-                    .arg(description, verifyError));
+                error, directoryError);
             return false;
         }
-        QString removalError;
-        if (!removeFileDurably(
-                path, removalError,
-                syncRemovalDirectory)) {
+
+        const AnchoredFileSystem::MutationResult removal =
+            AnchoredFileSystem::remove(*file);
+        if (removal.effect
+            != AnchoredFileSystem::MutationEffect::AppliedDurable) {
+            if (removal.effect
+                == AnchoredFileSystem::MutationEffect::Partial) {
+                recordPartialMutation(removal);
+            }
             appendRemovalError(
                 error,
                 QObject::tr(
                     "Cannot remove the %1 during rollback: %2 (%3)")
-                    .arg(description, path, removalError));
+                    .arg(
+                        description,
+                        path,
+                        removal.error.isEmpty()
+                            ? QObject::tr(
+                                  "anchored removal did not complete durably")
+                            : removal.error));
             return false;
         }
         return true;
@@ -945,9 +1424,24 @@ private:
 
     bool restorePreviousBackup(QString &error)
     {
+        const AnchoredRemovalPath backupEntry = {
+            backup_.path, backup_.parent, backup_.entry};
         if (!backup_.exists) {
-            if (removalEntryExists(previousBackup_)
-                || removalEntryExists(backup_.path)) {
+            bool previousExists = false;
+            bool backupExists = false;
+            QString inspectError;
+            if (!anchoredEntryExists(
+                    previousBackupEntry_,
+                    previousExists,
+                    inspectError)
+                || !anchoredEntryExists(
+                    backupEntry,
+                    backupExists,
+                    inspectError)) {
+                appendRemovalError(error, inspectError);
+                return false;
+            }
+            if (previousExists || backupExists) {
                 appendRemovalError(
                     error,
                     QObject::tr(
@@ -959,64 +1453,90 @@ private:
         }
 
         if (!previousBackupMoved_) {
+            bool matches = false;
             QString verifyError;
-            if (atomicFileMatchesSnapshot(
-                    backup_.path,
-                    backup_.contents,
-                    verifyError)) {
-                return true;
-            }
+            if (anchoredEntryMatches(
+                    backupEntry,
+                    backup_.file,
+                    matches,
+                    verifyError)
+                && matches) return true;
             appendRemovalError(
                 error,
                 QObject::tr(
                     "The previous activity backup is not intact after rollback: %1")
-                    .arg(verifyError));
+                    .arg(removalVerificationDetail(
+                        verifyError)));
             return false;
         }
 
-        if (!removalEntryExists(backup_.path)
-            && removalEntryExists(previousBackup_)) {
-            QString moveError;
-            if (!moveRemovalFile(
-                    previousBackup_,
-                    backup_.path,
-                    moveError)) {
-                appendRemovalError(
-                    error,
-                    QObject::tr(
-                        "Cannot restore the previous activity backup: %1")
-                        .arg(moveError));
-            }
+        bool backupExists = false;
+        QString inspectError;
+        if (!anchoredEntryExists(
+                backupEntry, backupExists, inspectError)) {
+            appendRemovalError(error, inspectError);
+            return false;
+        }
+        bool previousMatches = false;
+        if (!anchoredEntryMatches(
+                previousBackupEntry_,
+                backup_.file,
+                previousMatches,
+                inspectError)) {
+            appendRemovalError(error, inspectError);
+            return false;
+        }
+        if (backupExists || !previousMatches) {
+            appendRemovalError(
+                error,
+                QObject::tr(
+                    "The previous activity backup cannot be restored because its anchored names changed"));
+            return false;
         }
 
-        QString verifyError;
-        if (!atomicFileMatchesSnapshot(
+        QString moveError;
+        bool moved = false;
+        if (!movePinnedFileDurably(
+                backup_.file,
+                backupEntry,
+                previousBackup_,
                 backup_.path,
-                backup_.contents,
-                verifyError)) {
+                moved,
+                moveError)) {
+            if (moved) previousBackupMoved_ = false;
+            appendRemovalError(
+                error,
+                QObject::tr(
+                    "Cannot restore the previous activity backup: %1")
+                        .arg(moveError));
+            return false;
+        }
+        previousBackupMoved_ = false;
+
+        bool restoredMatches = false;
+        QString verifyError;
+        if (!anchoredEntryMatches(
+                backupEntry,
+                backup_.file,
+                restoredMatches,
+                verifyError)
+            || !restoredMatches) {
             appendRemovalError(
                 error,
                 QObject::tr(
                     "The restored previous activity backup is not intact: %1")
-                    .arg(verifyError));
+                    .arg(removalVerificationDetail(
+                        verifyError)));
             return false;
         }
         QString syncError;
-        if (!syncRemovalDirectory(
-                backup_.path, syncError)) {
+        if (!syncAnchoredDirectory(
+                backup_.parent,
+                backup_.path,
+                syncError)) {
             appendRemovalError(error, syncError);
             return false;
         }
-        if (removalEntryExists(previousBackup_)
-            && !removeVerifiedRollbackFile(
-                previousBackup_,
-                backup_.contents,
-                QObject::tr(
-                    "duplicate previous activity backup"),
-                error)) {
-            return false;
-        }
-        previousBackupMoved_ = false;
         return true;
     }
 
@@ -1024,97 +1544,106 @@ private:
     {
         bool restored = true;
         bool sourceDurable = false;
+        const AnchoredRemovalPath sourceEntry = {
+            source_.path, source_.parent, source_.entry};
 
         if (sourceTombstoned_) {
-            if (removalEntryExists(source_.path)) {
-                QString sourceError;
-                if (atomicFileMatchesSnapshot(
-                        source_.path,
-                        source_.contents,
-                        sourceError)) {
-                    sourceDurable = true;
-                    if (removalEntryExists(
-                            sourceTombstone_)) {
-                        if (removeVerifiedRollbackFile(
-                                sourceTombstone_,
-                                source_.contents,
-                                QObject::tr(
-                                    "duplicate activity source"),
-                                error)) {
-                            sourceTombstoned_ = false;
-                        } else {
-                            restored = false;
-                        }
-                    } else {
-                        sourceTombstoned_ = false;
-                    }
-                } else {
-                    appendRemovalError(
-                        error,
-                        QObject::tr(
-                            "The activity source path is occupied by a changed file: %1")
-                            .arg(sourceError));
-                    restored = false;
-                }
-            } else if (removalEntryExists(
-                           sourceTombstone_)) {
-                QString moveError;
-                if (!moveRemovalFile(
-                        sourceTombstone_,
-                        source_.path,
-                        moveError)) {
-                    appendRemovalError(
-                        error,
-                        QObject::tr(
-                            "Cannot restore the activity source: %1")
-                            .arg(moveError));
-                    restored = false;
-                } else {
-                    sourceTombstoned_ = false;
-                    QString verifyError;
-                    if (!atomicFileMatchesSnapshot(
-                            source_.path,
-                            source_.contents,
-                            verifyError)) {
-                        appendRemovalError(
-                            error,
-                            QObject::tr(
-                                "The restored activity source is not intact: %1")
-                                .arg(verifyError));
-                        restored = false;
-                    } else {
-                        QString syncError;
-                        if (!syncRemovalDirectory(
-                                source_.path,
-                                syncError)) {
-                            appendRemovalError(
-                                error, syncError);
-                            restored = false;
-                        } else {
-                            sourceDurable = true;
-                        }
-                    }
-                }
-            } else {
+            bool sourceExists = false;
+            QString inspectError;
+            if (!anchoredEntryExists(
+                    sourceEntry,
+                    sourceExists,
+                    inspectError)) {
+                appendRemovalError(error, inspectError);
+                restored = false;
+            } else if (sourceExists) {
                 appendRemovalError(
                     error,
                     QObject::tr(
-                        "The activity source and its recovery file are both missing"));
+                        "The activity source name was occupied before rollback"));
                 restored = false;
+            } else {
+                bool tombstoneMatches = false;
+                if (!anchoredEntryMatches(
+                        sourceTombstoneEntry_,
+                        source_.file,
+                        tombstoneMatches,
+                        inspectError)
+                    || !tombstoneMatches) {
+                    appendRemovalError(
+                        error,
+                        inspectError.isEmpty()
+                            ? QObject::tr(
+                                  "The anchored activity source tombstone changed before rollback")
+                            : inspectError);
+                    restored = false;
+                } else {
+                    QString moveError;
+                    bool moved = false;
+                    if (!movePinnedFileDurably(
+                            source_.file,
+                            sourceEntry,
+                            sourceTombstone_,
+                            source_.path,
+                            moved,
+                            moveError)) {
+                        if (moved) sourceTombstoned_ = false;
+                        appendRemovalError(
+                            error,
+                            QObject::tr(
+                                "Cannot restore the activity source: %1")
+                                    .arg(moveError));
+                        restored = false;
+                    } else {
+                        sourceTombstoned_ = false;
+                        bool sourceMatches = false;
+                        QString verifyError;
+                        if (!anchoredEntryMatches(
+                                sourceEntry,
+                                source_.file,
+                                sourceMatches,
+                                verifyError)
+                            || !sourceMatches) {
+                            appendRemovalError(
+                                error,
+                                QObject::tr(
+                                    "The restored activity source is not intact: %1")
+                                        .arg(removalVerificationDetail(
+                                            verifyError)));
+                            restored = false;
+                        } else {
+                            QString syncError;
+                            if (!syncAnchoredDirectory(
+                                    source_.parent,
+                                    source_.path,
+                                    syncError)) {
+                                appendRemovalError(
+                                    error, syncError);
+                                restored = false;
+                            } else {
+                                sourceDurable = true;
+                            }
+                        }
+                    }
+                }
             }
         } else {
+            bool sourceMatches = false;
             QString verifyError;
-            if (atomicFileMatchesSnapshot(
-                    source_.path,
-                    source_.contents,
-                    verifyError)) {
+            if (anchoredEntryMatches(
+                    sourceEntry,
+                    source_.file,
+                    sourceMatches,
+                    verifyError)
+                && sourceMatches) {
                 sourceDurable = true;
             } else {
                 appendRemovalError(
                     error,
                     QObject::tr(
                         "The activity source is not intact after rollback: %1")
-                        .arg(verifyError));
+                        .arg(removalVerificationDetail(
+                            verifyError)));
                 restored = false;
             }
         }
@@ -1123,9 +1652,10 @@ private:
             bool publishedBackupRemoved = true;
             if (backupPublished_) {
                 publishedBackupRemoved =
-                    removeVerifiedRollbackFile(
+                    removePinnedRollbackFile(
+                        backupStagingFile_,
+                        backup_.parent,
                         backup_.path,
-                        source_.contents,
                         QObject::tr(
                             "new activity backup"),
                         error);
@@ -1146,16 +1676,7 @@ private:
                     "The published activity backup was retained because the source was not durably restored"));
         }
 
-        bool verifiedCurrentBackup = false;
-        if (removalEntryExists(backup_.path)) {
-            QString verifyError;
-            verifiedCurrentBackup =
-                atomicFileMatchesSnapshot(
-                    backup_.path,
-                    source_.contents,
-                    verifyError);
-        }
-        if (sourceDurable || verifiedCurrentBackup) {
+        if (sourceDurable) {
             StorageRemovalResult stagingCleanup;
             cleanupUnpublishedStaging(
                 stagingCleanup);
@@ -1165,9 +1686,8 @@ private:
                 || !stagingCleanup.recoveryPaths.isEmpty()) {
                 restored = false;
             }
-        } else if (!backupStaging_.isEmpty()
-                   && removalEntryExists(
-                       backupStaging_)) {
+        } else if (backupStagingFile_
+                   && backupStagingFile_->isValid()) {
             appendRemovalError(
                 error,
                 QObject::tr(
@@ -1177,15 +1697,50 @@ private:
 
         if (!sourceDurable)
             restored = false;
-        if (restored
-            && (removalEntryExists(sourceTombstone_)
-                || removalEntryExists(previousBackup_)
-                || removalEntryExists(backupStaging_))) {
-            appendRemovalError(
-                error,
-                QObject::tr(
-                    "Activity recovery files remain after rollback"));
+        if (partialMutationSeen_) {
+            if (unknownPartialLocation_) {
+                appendRemovalError(
+                    error,
+                    QObject::tr(
+                        "An anchored activity mutation has an uncertain final location"));
+            }
             restored = false;
+        }
+        if (restored) {
+            QString directoryError;
+            if (!allDirectoriesMatch(directoryError)) {
+                appendRemovalError(error, directoryError);
+                restored = false;
+            }
+        }
+        if (restored) {
+            bool tombstoneExists = false;
+            bool previousExists = false;
+            bool stagingExists = false;
+            QString inspectError;
+            if (!anchoredEntryExists(
+                    sourceTombstoneEntry_,
+                    tombstoneExists,
+                    inspectError)
+                || !anchoredEntryExists(
+                    previousBackupEntry_,
+                    previousExists,
+                    inspectError)
+                || !anchoredEntryExists(
+                    backupStagingEntry_,
+                    stagingExists,
+                    inspectError)) {
+                appendRemovalError(error, inspectError);
+                restored = false;
+            } else if (tombstoneExists
+                       || previousExists
+                       || stagingExists) {
+                appendRemovalError(
+                    error,
+                    QObject::tr(
+                        "Activity recovery files remain after rollback"));
+                restored = false;
+            }
         }
         return restored;
     }
@@ -1203,22 +1758,37 @@ private:
         result.status = restored
             ? RideCache::RemovalStatus::RolledBack
             : RideCache::RemovalStatus::RecoveryRequired;
-        addRecoveryPath(
+        addPinnedRecoveryPath(
             result.recoveryPaths,
-            sourceTombstone_);
-        addRecoveryPath(
+            sourceTombstoneEntry_,
+            source_.file);
+        addPinnedRecoveryPath(
             result.recoveryPaths,
-            previousBackup_);
-        addRecoveryPath(
+            previousBackupEntry_,
+            backup_.file);
+        addPinnedRecoveryPath(
             result.recoveryPaths,
-            backupStaging_);
+            backupStagingEntry_,
+            backupStagingFile_);
+        appendVerifiedMutationRecoveryPaths(
+            result.recoveryPaths);
         if (!restored) {
-            addRecoveryPath(
+            const AnchoredRemovalPath sourceEntry = {
+                source_.path, source_.parent, source_.entry};
+            const AnchoredRemovalPath backupEntry = {
+                backup_.path, backup_.parent, backup_.entry};
+            addPinnedRecoveryPath(
                 result.recoveryPaths,
-                source_.path);
-            addRecoveryPath(
+                sourceEntry,
+                source_.file);
+            addPinnedRecoveryPath(
                 result.recoveryPaths,
-                backup_.path);
+                backupEntry,
+                backup_.file);
+            addPinnedRecoveryPath(
+                result.recoveryPaths,
+                backupEntry,
+                backupStagingFile_);
         }
         if (!result.recoveryPaths.isEmpty()) {
             appendRemovalError(
@@ -1231,6 +1801,8 @@ private:
         return result;
     }
 
+    QString athleteRootPath_;
+    AnchoredFileSystem::DirectoryAnchor athleteRoot_;
     RemovalFileSnapshot source_;
     RemovalFileSnapshot backup_;
     QVector<RemovalFileSnapshot> derived_;
@@ -1242,13 +1814,22 @@ private:
     QString backupStaging_;
     QString sourceTombstone_;
     QString previousBackup_;
+    AnchoredRemovalPath backupStagingEntry_;
+    AnchoredRemovalPath sourceTombstoneEntry_;
+    AnchoredRemovalPath previousBackupEntry_;
+    std::shared_ptr<AnchoredFileSystem::PinnedFile>
+        backupStagingFile_;
     bool previousBackupMoved_ = false;
     bool backupPublished_ = false;
     bool sourceTombstoned_ = false;
+    bool partialMutationSeen_ = false;
+    bool unknownPartialLocation_ = false;
+    QStringList verifiedMutationRecoveryPaths_;
     AtomicFileLockSet locks_;
 };
 
 StorageRemovalResult removeRideFilesFromStorage(
+    const QString &athleteRootPath,
     const QString &sourcePath,
     const QString &backupPath,
     const QStringList &derivedPaths,
@@ -1258,6 +1839,7 @@ StorageRemovalResult removeRideFilesFromStorage(
         LinkedActivityRemoval::Journal> journal = {})
 {
     return ActivityRemovalTransaction(
+        athleteRootPath,
         sourcePath,
         backupPath,
         derivedPaths,
@@ -4668,6 +5250,8 @@ RideCache::removeRideEntry(
 
     StorageRemovalResult storage =
         removeRideFilesFromStorage(
+            guardedAthlete->home->root()
+                .absolutePath(),
             sourcePath,
             backupPath,
             derivedPaths,

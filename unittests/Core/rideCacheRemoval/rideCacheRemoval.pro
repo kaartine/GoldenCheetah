@@ -10,10 +10,12 @@ include(../../unittests.pri)
 CONFIG += console testcase c++17 release
 CONFIG -= debug
 DEFINES += GC_RIDE_CACHE_REMOVAL_TEST_HOOKS \
+           GC_ANCHORED_FILESYSTEM_TEST_HOOKS \
            GC_PLAN_REPLACEMENT_TEST_HOOKS
 
 SOURCES = testRideCacheRemoval.cpp \
           RideCacheRemovalTestStubs.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp \
           ../../../src/FileIO/LocationInterpolation.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCacheIntegrity.cpp \
@@ -36,6 +38,7 @@ SOURCES = testRideCacheRemoval.cpp \
           ../../../src/Core/RideCacheModelProtocol.cpp
 
 HEADERS = ../../../src/Core/Athlete.h \
+          ../../../src/FileIO/AnchoredFileSystem.h \
           ../../../src/Core/Context.h \
           ../../../src/Core/RideCache.h \
           ../../../src/Core/RideCacheMutationScope.h \
