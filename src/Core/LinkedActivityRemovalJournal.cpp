@@ -868,7 +868,8 @@ bool writeManifestFile(
     bool replace,
     bool targetLockHeld,
     AtomicFileSnapshot &snapshot,
-    QString &error)
+    QString &error,
+    const AtomicPreCommitValidation &validateBeforeCommit = {})
 {
     const QByteArray contents = serializeManifest(manifest);
     if (contents.size() > Detail::MaximumManifestSize) {
@@ -881,7 +882,8 @@ bool writeManifestFile(
             qSaveFileWriterFactory(),
             error,
             replace,
-            targetLockHeld)) {
+            targetLockHeld,
+            validateBeforeCommit)) {
         return false;
     }
     return captureAtomicFileSnapshot(path, snapshot, error);
@@ -2509,7 +2511,13 @@ public:
                 true,
                 true,
                 updatedManifestSnapshot,
-                error_)) {
+                error_,
+                [&](QString &validationError) {
+                    return journalDirectoryMatches(
+                               *state_, validationError)
+                        && manifestFileMatches(
+                               *state_, validationError);
+                })) {
             return false;
         }
         if (!pinManifestFile(
@@ -2813,7 +2821,11 @@ std::shared_ptr<Journal> Journal::prepare(
             false,
             false,
             state->manifestSnapshot,
-            error)) {
+            error,
+            [&](QString &validationError) {
+                return journalDirectoryMatches(
+                    *state, validationError);
+            })) {
         appendError(
             error,
             QStringLiteral("recovery journal retained at %1").arg(journalPath));

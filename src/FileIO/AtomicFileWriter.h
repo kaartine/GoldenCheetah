@@ -501,6 +501,8 @@ using AtomicPublishFunction = std::function<bool(
     const QString &stagingPath, const QString &targetPath,
     bool &targetPublished, QString &error)>;
 using AtomicFinalizeFunction = std::function<bool(QString &error)>;
+using AtomicPreCommitValidation =
+    std::function<bool(QString &error)>;
 using AtomicMoveFunction = std::function<bool(
     const QString &sourcePath, const QString &targetPath, QString &error)>;
 
@@ -1187,7 +1189,9 @@ inline bool writeFileAtomically(const QString &path,
                                 const AtomicFileWriterFactory &factory,
                                 QString &error,
                                 bool allowTargetReplacement = true,
-                                bool targetLockHeld = false)
+                                bool targetLockHeld = false,
+                                const AtomicPreCommitValidation
+                                    &validateBeforeCommit = {})
 {
     error.clear();
 
@@ -1264,6 +1268,16 @@ inline bool writeFileAtomically(const QString &path,
     if (!writer->flush()) {
         error = atomicFileError(QStringLiteral("Cannot flush the activity file"),
                                 *writer);
+        writer->cancelWriting();
+        return false;
+    }
+
+    if (validateBeforeCommit
+        && !validateBeforeCommit(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The activity changed before atomic publication");
+        }
         writer->cancelWriting();
         return false;
     }
