@@ -2792,17 +2792,18 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   RideFile reader; runs DELETE processors on isolated disk-backed RideFiles only
   after durable publication; clears selection during model reset; contains rows
   deleted synchronously or with `deleteLater()` by callbacks; and invalidates
-  startup snapshots before replacing the model. Corrupt transaction state is
-  retained for recovery instead of being guessed or deleted.
-- Verification: The focused Repeat Plan, staged-file, plan-journal, and
-  RideCache removal programs pass 22, 22, 112, and 205 cases. Repeat Plan also
-  passes all 22 cases under ASan/UBSan, while the new callback, ownership,
-  thread, recovery, deferred-deletion, and processor rows pass 27 sanitizer
-  cases. The production application links and remains running through an
-  isolated 10-second offscreen smoke run. Direct behavioral coverage of the
-  production RideFile/ErgFile staging adapters is still missing, and
-  interaction with the real Repeat Plan wizard remains covered by `TEST-005`
-  rather than a headless unit fixture.
+  startup snapshots before replacing the model. Replacement also quiesces cache
+  and estimator workers before staging, coalesces one generation-checked resume,
+  purges pre-existing destroyed rows, and distinguishes committed warnings from
+  an uncommitted failure. Corrupt transaction state is retained for recovery
+  instead of being guessed or deleted.
+- Verification: The focused Repeat Plan and RideCache removal programs pass 27
+  and 231 cases under ASan/UBSan; the full
+  231-case removal program also passes ThreadSanitizer without a race report.
+  The focused staged-file and plan-journal programs previously passed 22 and
+  112 cases. Direct behavioral coverage of the production RideFile/ErgFile
+  staging adapters is still missing, and interaction with the real Repeat Plan
+  wizard remains covered by `TEST-005` rather than a headless unit fixture.
 - Remaining: PlanBundle import still needs a durable coordinator covering plan
   activities, workout-library files, and TrainDB rows, plus behavioral fault
   injection and restart tests. Until that coordinator exists, this finding
@@ -2811,6 +2812,128 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   files and the plan through a durable import manifest, make TrainDB completion
   idempotent, and reconcile startup to either the complete old generation or
   the complete new generation without orphan workouts or database rows.
+
+### MEM-024: RideCache callbacks exposed destroyed activity addresses
+
+- Status: FIXED
+- Code: `src/Core/RideCache.cpp`, `src/Core/RideCache.h`,
+  `src/Core/RideCacheRemoval.cpp`, `src/Core/RideCacheLiveView.cpp`,
+  `src/Core/RideCacheGarbageCollection.cpp`, `src/Core/RideCacheModel.cpp`,
+  `src/Core/RideCacheModelProtocol.cpp`, `src/Core/RideItem.cpp`, and
+  `src/Gui/NavigationModel.cpp`
+- Impact: `RideCache` and its Qt model shared raw `RideItem*` vectors. A direct
+  callback deletion could leave an address visible to removal preflight,
+  sidecar ownership scans, startup snapshots, background refresh, model data,
+  selection, garbage collection, and navigation history. Those paths could
+  dereference freed memory, publish a dangling item, or delete the same object
+  again. Nested reset/insert/remove notifications could also violate Qt's model
+  protocol while the vectors were being changed.
+- Test-first evidence: An ASan RED regression deleted a cached item but retained
+  its address, then reproduced a heap-use-after-free in
+  `RideItem::getLinkedFileName()` from `RideCache::checkRemovalLinks()`. A second
+  RED row put a destroyed unrelated item ahead of plan replacement; replacement
+  rejected the otherwise valid generation and teardown attempted to delete the
+  freed address. Model-signal rows then covered target and sibling destruction
+  before and after removal notifications, readers invoked inside those signals,
+  garbage collection, startup invalidation, selection neighbors, deferred
+  deletion, owner destruction, and a destroyed navigation-history item. A final
+  RED row showed a refresh requested during plan replacement leaking into the
+  next explicitly no-refresh deletion.
+- Resolution: Cache-owned destruction now records a set tombstone and
+  invalidates startup snapshots, while temporary `RideItem` destruction does
+  neither. Public readers return an implicitly shared live snapshot; the model
+  alone retains physical-row access and returns no data for a tombstone.
+  Removal and replacement stop workers before callbacks, reject stale inputs,
+  skip dead addresses, purge destroyed rows under a balanced reset, and defer a
+  single refresh until the mutation finishes; replacement blocking is resolved
+  before ordinary-removal refresh deferral so that state cannot leak into the
+  next operation. Model changes use explicit
+  reset/insert/remove frames, reject incompatible reentrancy, nest compatible
+  work under an outer reset, and defer configuration resets. Navigation history
+  stores `QPointer<RideItem>`, and garbage collection never schedules an already
+  destroyed address.
+- Verification: The complete 231-case removal/model program passes ASan/UBSan
+  and ThreadSanitizer. The newly isolated liveness rows pass strict LSan. The
+  only remaining leak is the unchanged Qt 6.8.3 interrupted-removal bookkeeping
+  documented by `TEST-007`.
+- Residual: Non-removal mutations that encounter a tombstone remain tracked by
+  `MEM-025`; post-I/O model publication failures remain `DATA-022`.
+
+### THREAD-018: Estimator cancellation raced its worker and did not join
+
+- Status: FIXED
+- Code: `src/Metrics/Estimator.cpp`, `src/Metrics/Estimator.h`, and
+  `src/Metrics/EstimatorThreadControl.h`
+- Impact: The GUI thread wrote a plain `bool abort` while the estimator worker
+  read and cleared it without synchronization. `stop()` polled `isRunning()` and
+  the same flag instead of joining, so destruction or cache mutation could
+  continue while the worker still held raw activity addresses. The accesses
+  were a C++ data race even when the polling appeared to work.
+- Test-first evidence: The extracted lifecycle contract runs a cooperative
+  worker until cancellation, requires the request to remain asserted through
+  worker exit, verifies `stop()` waits for that exit, and then starts a second
+  worker after both cancellation and natural completion.
+- Resolution: `EstimatorThreadControl` publishes cancellation with an atomic
+  release/acquire flag and joins with `QThread::wait()`. The request is cleared
+  only after the worker has stopped or immediately before a verified new start.
+  `Estimator::~Estimator()` calls `stop()`, pending lazy-start timers are
+  cancelled, and long sport, ride, week, model, filtering, and publication loops
+  contain cooperative cancellation checkpoints.
+- Verification: Both lifecycle regressions pass strict ASan/UBSan/LSan and
+  ThreadSanitizer. The full 231-case cache/removal TSan program also verifies
+  that estimator shutdown precedes model mutation without a race report.
+
+### MEM-025: Non-removal cache mutations can sort tombstoned RideItems
+
+- Status: OPEN
+- Code: `src/Core/RideCache.cpp`, `src/Core/RideCacheBulkMerge.h`, and
+  `src/Metrics/Estimator.cpp`
+- Impact: A callback can directly destroy a cache-owned activity and leave its
+  address tombstoned in the physical model vector. Removal and plan replacement
+  purge that state, but `addRide()`, `addRides()`, `moveActivity()`, planned
+  copy, and planned shift still sort or index the raw vector. The comparator or
+  bulk-merge key extractor can therefore dereference the destroyed address. An
+  estimator generation started before such a callback can also retain the same
+  raw address until a later refresh calls `stop()`.
+- Evidence: `addRide()` skips a tombstone in its duplicate scan and then passes
+  the complete raw vector to `std::sort`; `addRides()` calls `keyFor()` for every
+  raw row before it attempts a model reset. The move/copy/shift publication
+  paths likewise sort without first calling `purgeDestroyedModelRows()`, and
+  their callbacks do not share the removal path's worker-quiescence lease.
+- Test: Under ASan, destroy an unrelated cached sibling from each add, select,
+  and publication callback, then invoke a second mutation and require a live,
+  sorted model with the dead row removed. Use barriers around a real estimator
+  generation and run the same lifecycle under ThreadSanitizer, requiring the
+  worker to join before any callback can retire its input.
+- Fix direction: Introduce one owner-thread mutation coordinator that quiesces
+  cache and estimator workers, purges tombstones under a balanced model reset,
+  snapshots guarded inputs, and resumes one coalesced generation. Route every
+  mutator through it instead of relying on per-function raw-vector checks.
+
+### DATA-022: Model publication can fail after activity files were changed
+
+- Status: OPEN
+- Code: `src/Core/RideCache.cpp` in `moveActivity()`,
+  `copyPlannedActivity()`, `copyPlannedActivities()`, and
+  `shiftPlannedActivities()`
+- Impact: These paths perform file rename, write, or copy work before acquiring
+  the model change protocol. If `startRemove()` or `beginReset()` then rejects a
+  reentrant incompatible model operation, the function returns failure with a
+  renamed source, an orphan copied file, or shifted RideItems in an unsorted
+  cache. The UI can report failure even though durable state already changed.
+- Evidence: `moveActivity()` writes the renamed activity before `startRemove()`;
+  planned copy creates each target before `beginReset()`; planned shift commits
+  every successful rename and metadata update before its final reset. Their new
+  rejection branches return without a storage rollback or cache repair.
+- Test: Hold an incompatible model frame at each publication boundary after the
+  filesystem operation succeeds. Verify the source bytes, target namespace,
+  cache identities, ordering, links, selection, and result all describe one
+  complete old or new state after both same-process failure and restart.
+- Fix direction: Acquire a mutation lease before staging, publish files through
+  the existing atomic/journal primitives, and make model replacement the
+  guarded commit step. If publication cannot proceed, roll back the staged
+  generation; after a durable commit, return a committed-with-warning result and
+  run an idempotent cache repair instead of reporting an ordinary failure.
 
 ### DUR-013: Activity deletion recovery files are not reconciled on restart
 
@@ -2933,9 +3056,9 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   cache through the guarded wizard, PlanBundleReader tracks a destroyed Context,
   and cache callback continuations use one owner guard.
 - Verification: The directly testable save/preflight paths pass in the 115-case
-  atomic-save program, linked and batch callbacks pass in the 107-case removal
+  atomic-save program, linked and batch callbacks pass in the 231-case removal
   program, split paths pass their 28- and 33-case programs, and the deletion,
-  save, Repeat Plan, plan-reader, and callback contracts pass 28, 15, 17, 7, and
+  save, Repeat Plan, plan-reader, and callback contracts pass 28, 15, 27, 7, and
   3 cases. These focused suites pass under ASan/UBSan and under TSAN; all except
   the two Qt model rows in `TEST-007` are also strict-LSan-clean. The complete
   production application and 99-target matrix pass. Real MainWindow, Calendar,
@@ -2946,13 +3069,17 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 - Status: OPEN
 - Code: `src/Charts/CalendarWindow.cpp`
-- Impact: Manual Activity, Repeat/Import/Export Plan, Filter Similar, activity
+- Impact: Manual Activity, Import/Export Plan, Filter Similar, activity
   linking, and season event/phase dialogs run nested event loops while retaining
   raw `Context`, `AthleteTab`, `RideItem`, `Season`, `Phase`, or `SeasonEvent`
   state. Closing or replacing the athlete from a queued callback can invalidate
-  those objects. The add/repeat/import paths also restore `noSwitch` to `false`
+  those objects. The add/import paths also restore `noSwitch` to `false`
   unconditionally, which can clear an outer navigation guard or modify a newly
   selected tab.
+- Partial resolution: Repeat Plan now guards CalendarWindow, Context, Athlete,
+  RideCache, and the original AthleteTab across the nested event loop, verifies
+  their topology before updating the calendar, and restores the original tab's
+  exact prior `noSwitch` value. The other listed workflows remain open.
 - Test: With a disposable athlete profile, destroy or replace each owner from a
   modal callback and mutate the selected activity or season container before
   acceptance. Require a clean cancellation, no write through stale pointers, and
@@ -2961,7 +3088,53 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   owner chain with `QPointer`, resolve mutable records again after acceptance,
   and use an owner-aware RAII lease that restores the original `noSwitch` value.
 
+### GUI-011: Repeat Plan treated committed outcomes as retryable failures
+
+- Status: FIXED
+- Code: `src/Gui/PlanWizards.cpp`, `src/Gui/PlanWizards.h`, and
+  `src/Charts/CalendarWindow.cpp`
+- Impact: The replacement journal could commit the complete new plan and then
+  report owner loss, a post-commit processor warning, or a cache notification
+  count mismatch. The wizard classified all of those as failure and remained
+  open, inviting a second attempt after storage had already changed. A reentrant
+  acceptance callback could also enter completion twice, and duplicate deletion
+  pointers inflated the expected removal count.
+- Test-first evidence: Disposition rows distinguish uncommitted owner loss and
+  backend failure from committed owner loss, committed warnings, and committed
+  count mismatches. A separate regression re-enters completion and requires the
+  second call to be rejected; a legacy-overload row preserves its original enum
+  values and owner-loss behavior.
+- Resolution: Replacement disposition now includes the durable `committed`
+  boundary. Uncommitted outcomes keep the wizard open, while committed outcomes
+  are accepted exactly once and any post-commit issues are shown as warnings.
+  Expected removals are deduplicated, one execution guard blocks reentrancy, and
+  Calendar revalidates all owners after the modal loop before refreshing.
+- Verification: The complete 27-case Repeat Plan contract passes strict
+  ASan/UBSan/LSan. The production application build covers the real wizard and
+  Calendar translation units; visible widget interaction remains in `TEST-005`.
+
 ## Medium
+
+### MEM-026: Duplicate activity imports leak the replaced RideItem
+
+- Status: OPEN
+- Code: `src/Core/RideCache.cpp` and `src/Core/RideCacheBulkMerge.h`
+- Impact: `addRide()` overwrites a duplicate vector slot without retiring the
+  old object. `addRides()` receives every displaced object from `mergeItems()`
+  but discards that list with `Q_UNUSED`. Since `RideItem` has no QObject parent,
+  repeated imports leak its metrics, intervals, optional open RideFile, and live
+  signal connections back into the cache.
+- Evidence: Both replacement branches remove the old pointer from the only
+  owning vector and neither delete it, enqueue it in `delete_`, nor transfer it
+  to another owner. The bulk helper already returns the exact displaced set,
+  demonstrating that retirement was intended to be explicit.
+- Test: Import one and many duplicate identities with destructor and signal
+  counters. Require every displaced item to stay alive through model callbacks,
+  then be destroyed exactly once; preserve or remap current selection and prove
+  a retired item cannot emit a later cache update.
+- Fix direction: Guard duplicate identities and selection across the reset,
+  disconnect and retire displaced objects only after callbacks finish, and use
+  the existing deferred garbage path with tombstone-aware exactly-once cleanup.
 
 ### DATA-011: CPX freshness trusts source mtime instead of its stored CRC
 
@@ -4405,7 +4578,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   publishing `rideDeleted`, revalidates it after reentrant callbacks, and then
   publishes `rideSelected`. `notifyRideDeleted` no longer mutates selection.
 - Verification: Signal order, signal-time state, current/non-current removal,
-  all-rides batch removal, and final selection pass in the 107-case removal
+  all-rides batch removal, and final selection pass in the 231-case removal
   program. Full widget navigation remains tracked by `TEST-005`.
 
 ### GUI-003: Power histogram selection guard is inverted
@@ -5477,8 +5650,10 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   and UBSan find no invalid access, all functional assertions pass, and the
   other rows are leak-clean, but these two adversarial rows cannot pass strict
   LSan without hiding a broad Qt allocation signature.
-- Evidence: The complete 107-case instrumented run reaches zero test failures and
-  then LSan reports 256 bytes in four direct allocations. Separate strict-LSan
+- Evidence: The current complete 231-case instrumented run reaches zero test
+  failures with leak detection disabled for this known case. A fresh strict-LSan
+  rerun of the two affected rows still reports 256 bytes in four direct
+  allocations. Separate strict-LSan
   runs isolate 128 bytes in two allocations to each of
   `modelSignalOwnerDestructionDoesNotContinue(cache-rows-about-to-be-removed)`
   and
@@ -5497,15 +5672,17 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 ### GUI-008: Repeat Plan cleared an outer navigation guard
 
 - Status: FIXED
-- Code: `src/Gui/AthleteTab.h` and `src/Gui/PlanWizards.cpp`
+- Code: `src/Gui/AthleteTab.h`, `src/Gui/PlanWizards.cpp`, and
+  `src/Charts/CalendarWindow.cpp`
 - Impact: Calendar disabled automatic view switching around the Repeat Plan
   dialog, but the wizard unconditionally set the shared boolean to false before
   returning. A nested selection callback could switch views inside the caller's
   still-active guarded scope.
-- Resolution: AthleteTab exposes the current guard value and Repeat Plan restores
-  that exact prior value instead of assuming false.
-- Verification: The complete production application compiles; nested real-widget
-  behavior remains part of `TEST-005`.
+- Resolution: AthleteTab exposes the current guard value. Both the wizard scope
+  and the Calendar caller retain a guarded original tab and restore that exact
+  prior value instead of assuming false.
+- Verification: The 27-case Repeat Plan contract passes strict
+  ASan/UBSan/LSan; nested real-widget behavior remains part of `TEST-005`.
 
 ### GUI-009: Batch save failures were labelled as user cancellation
 
@@ -5675,15 +5852,18 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Verification Baseline
 
-The complete containerized release matrix with `DATA-019` passes:
+The complete containerized release matrix through `MEM-024`, `THREAD-018`, and
+`GUI-011` passes:
 
-- 97 QtTest executables
+- 100 QtTest programs
 - 1 AppImage packaging check
 - 1 compile-only generated-SIP prerequisite
-- 3,705 passed
+- 4,016 passed
 - 0 failed or blacklisted
 - 12 expected platform-only skips on Linux
 - Qt 6.8.3 on Ubuntu 24.04
+- complete Qt application build and a 10-second disposable-HOME offscreen
+  event-loop smoke test
 
 The check run also includes the AppImage packaging consistency check and builds
 its compile-only SIP prerequisite. The registered matrix includes the 32-case
@@ -5713,7 +5893,8 @@ check. `PARSE-005`'s 126 focused tests and the related 13 RideFile ownership
 tests retain their sanitizer evidence. Earlier fixed memory/thread findings
 retain the focused sanitizer and TSAN evidence recorded in their entries.
 
-`DATA-018` additionally passes its 107-case removal suite under ASan/UBSan and
+`DATA-018` additionally passes its current 231-case removal suite under
+ASan/UBSan and
 TSAN, its 115-case atomic-save suite under strict ASan/UBSan/LSan and TSAN, and
 the related 28-, 33-, 28-, 15-, 17-, 7-, and 3-case split, lifecycle,
 plan-reader, and callback suites under both configurations. `TEST-007` records
