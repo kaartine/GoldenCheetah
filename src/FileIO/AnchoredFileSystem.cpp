@@ -590,18 +590,18 @@ WindowsHandle openWindowsMutationHandle(
         error = windowsError(
             QStringLiteral("Cannot open an anchored file for mutation"),
             native);
-        return {};
+        return WindowsHandle();
     }
 
     WindowsStamp stamp;
     if (!captureWindowsStamp(handle.get(), stamp, false, error))
-        return {};
+        return WindowsHandle();
     if (!sameWindowsIdentityAndData(stamp, state.stamp)
         || windowsIdentity(stamp, 'f') != state.identity) {
         conflict = true;
         error = QStringLiteral(
             "The anchored mutation target was replaced");
-        return {};
+        return WindowsHandle();
     }
     return handle;
 }
