@@ -62,14 +62,11 @@ jobs:
           if (!(Test-Path "$gslRoot/include/gsl/gsl_rng.h")) {
             throw 'The GSL headers were not installed'
           }
-          @(
-            'CONFIG += release'
-            "GSL_INCLUDES = $gslRoot/include"
-            "GSL_LIBS = -L$gslRoot/lib -lgsl -lgslcblas"
-          ) | Set-Content src/gcconfig.pri
           New-Item -ItemType Directory build-ridecache-removal | Out-Null
           Set-Location build-ridecache-removal
-          qmake ../unittests/Core/rideCacheRemoval/rideCacheRemoval.pro
+          qmake ../unittests/Core/rideCacheRemoval/rideCacheRemoval.pro `
+            "GSL_INCLUDES=$gslRoot/include" `
+            "GSL_LIBS=-L$gslRoot/lib -lgsl -lgslcblas"
           nmake /NOLOGO
       - name: Run activity removal test
         shell: pwsh
@@ -99,11 +96,11 @@ jobs:
       - name: Build activity removal test
         run: |
           gsl_root="$(brew --prefix gsl)"
-          printf 'CONFIG += release\nGSL_INCLUDES = %s/include\nGSL_LIBS = -L%s/lib -lgsl -lgslcblas\n' \
-            "$gsl_root" "$gsl_root" > src/gcconfig.pri
           mkdir build-ridecache-removal
           cd build-ridecache-removal
-          qmake ../unittests/Core/rideCacheRemoval/rideCacheRemoval.pro
+          qmake ../unittests/Core/rideCacheRemoval/rideCacheRemoval.pro \
+            "GSL_INCLUDES=$gsl_root/include" \
+            "GSL_LIBS=-L$gsl_root/lib -lgsl -lgslcblas"
           make -j3
       - name: Run activity removal test
         run: |
