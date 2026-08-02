@@ -153,6 +153,12 @@ QString removalNamespacePath(const QString &root)
         QStringLiteral(".gc-transactions/linked-removal"));
 }
 
+QString planReplacementNamespacePath(const QString &root)
+{
+    return QDir(root).filePath(
+        QStringLiteral(".gc-transactions/plan-replacement"));
+}
+
 QString transactionLeaseTarget(const QString &root)
 {
     // Keep the established target so linked deletion and linked save share
@@ -409,6 +415,11 @@ bool transactionNamespacesAreReady(
     if (!pending
         && !namespaceHasPendingEntries(
             removalNamespacePath(root), pending, error)) {
+        return false;
+    }
+    if (!pending
+        && !namespaceHasPendingEntries(
+            planReplacementNamespacePath(root), pending, error)) {
         return false;
     }
     if (pending) {

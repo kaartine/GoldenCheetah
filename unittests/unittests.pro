@@ -35,6 +35,7 @@ equals(GC_UNITTESTS, active) {
 			   Train/webDownloadImportPolicy \
 			   Train/trainDbVersionSafety \
 			   Core/measuresAtomicSave \
+			   Core/plannedActivityFileStager \
 			   Core/rideCacheAtomicSave \
 			   Core/rideCacheCallbackGuard \
 			   Core/rideCacheSaveSnapshot \
@@ -84,6 +85,7 @@ equals(GC_UNITTESTS, active) {
 			   Gui/rideNavigatorSearchFilter \
 			   Gui/trainPerspectiveState \
 			   Metrics/rideMetadataAtomicSave \
+			   Planning/planReplacementJournal \
 			   Planning/planBundleReaderLifetime \
 			   Python/pythonDataSeriesOwnership \
 			   Python/pythonChartLifecycle \

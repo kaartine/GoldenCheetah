@@ -373,7 +373,9 @@ bool transactionNamespaceIsReady(
     const QStringList namespaces = {
         namespacePath,
         QDir(root).filePath(
-            QStringLiteral(".gc-transactions/linked-save"))};
+            QStringLiteral(".gc-transactions/linked-save")),
+        QDir(root).filePath(
+            QStringLiteral(".gc-transactions/plan-replacement"))};
     for (const QString &candidate : namespaces) {
         const QFileInfo candidateInfo(candidate);
         if (!candidateInfo.exists() && !candidateInfo.isSymLink()) continue;

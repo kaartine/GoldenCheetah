@@ -655,7 +655,7 @@ HEADERS += Cloud/CalendarDownload.h Cloud/CloudService.h \
 HEADERS += Cloud/LocalFileStoreProcess.h
 # core data
 HEADERS += Core/Athlete.h Core/ConfigFlags.h Core/Context.h Core/DataFilter.h Core/DataFilterResources.h Core/DataFilterSafety.h Core/DataFilterZones.h Core/FreeSearch.h Core/GcCalendarModel.h Core/GcUpgrade.h \
-           Core/IdleTimer.h Core/IntervalItem.h Core/LinkedActivityRemovalJournal.h Core/LinkedActivitySaveJournal.h Core/NamedSearch.h Core/RideCache.h Core/RideCacheBackgroundSaver.h Core/RideCacheBulkMerge.h Core/RideCacheCallbackGuard.h Core/RideCachePersistence.h Core/RideCacheSaveCapture.h Core/RideCacheSaveSnapshot.h Core/RideCacheSnapshot.h Core/RideCacheStartup.h Core/RideCacheModel.h Core/RideDB.h \
+           Core/IdleTimer.h Core/IntervalItem.h Core/LinkedActivityRemovalJournal.h Core/LinkedActivitySaveJournal.h Core/NamedSearch.h Core/PlannedActivityFileStager.h Core/RideCache.h Core/RideCacheBackgroundSaver.h Core/RideCacheBulkMerge.h Core/RideCacheCallbackGuard.h Core/RideCachePersistence.h Core/RideCacheSaveCapture.h Core/RideCacheSaveSnapshot.h Core/RideCacheSnapshot.h Core/RideCacheStartup.h Core/RideCacheModel.h Core/RideDB.h \
            Core/RideCacheAggregate.h \
            Core/RideItem.h Core/Route.h Core/RouteParser.h Core/Season.h Core/SeasonDialogs.h Core/Seasons.h Core/Secrets.h Core/Settings.h Core/CredentialSettings.h Core/CredentialStoreQtKeychain.h \
            Core/Specification.h Core/TimeUtils.h Core/Units.h Core/UserData.h Core/Utils.h \
@@ -703,7 +703,7 @@ HEADERS += Metrics/Banister.h Metrics/CPSolver.h Metrics/Estimator.h Metrics/Ext
            Metrics/BlinnSolver.h Metrics/FastKmeans.h
 
 ## Planning and Compliance
-HEADERS += Planning/PlanningWindow.h Planning/PlanBundle.h
+HEADERS += Planning/PlanningWindow.h Planning/PlanBundle.h Planning/PlanReplacementJournal.h
 
 # contrib
 HEADERS += ../contrib/qtsolutions/codeeditor/codeeditor.h ../contrib/qtsolutions/json/mvjson.h \
@@ -775,7 +775,7 @@ SOURCES += Cloud/CalendarDownload.cpp Cloud/CloudService.cpp \
 SOURCES += Cloud/LocalFileStoreProcess.cpp
 ## Core Data Structures
 SOURCES += Core/Athlete.cpp Core/Context.cpp Core/DataFilter.cpp Core/DataFilterSafety.cpp Core/DataFilterZones.cpp Core/FreeSearch.cpp Core/GcUpgrade.cpp Core/IdleTimer.cpp \
-           Core/IntervalItem.cpp Core/LinkedActivityRemovalJournal.cpp Core/LinkedActivitySaveJournal.cpp Core/main.cpp Core/NamedSearch.cpp Core/RideCache.cpp Core/RideCacheBackgroundSaver.cpp Core/RideCachePersistence.cpp Core/RideCacheSaveCapture.cpp Core/RideCacheSaveSnapshot.cpp Core/RideCacheSnapshot.cpp Core/RideCacheRemoval.cpp Core/RideCacheModel.cpp Core/RideItem.cpp \
+           Core/IntervalItem.cpp Core/LinkedActivityRemovalJournal.cpp Core/LinkedActivitySaveJournal.cpp Core/main.cpp Core/NamedSearch.cpp Core/PlannedActivityFileFactoryStager.cpp Core/PlannedActivityFileStager.cpp Core/RideCache.cpp Core/RideCacheBackgroundSaver.cpp Core/RideCachePersistence.cpp Core/RideCacheSaveCapture.cpp Core/RideCacheSaveSnapshot.cpp Core/RideCacheSnapshot.cpp Core/RideCacheRemoval.cpp Core/RideCacheModel.cpp Core/RideItem.cpp \
            Core/Route.cpp Core/RouteParser.cpp Core/Season.cpp Core/SeasonDialogs.cpp Core/Seasons.cpp Core/Settings.cpp Core/CredentialSettings.cpp Core/CredentialStoreQtKeychain.cpp Core/Specification.cpp \
            Core/TimeUtils.cpp Core/Units.cpp Core/UserData.cpp Core/Utils.cpp \
            Core/Measures.cpp Core/Quadtree.cpp Core/SplineLookup.cpp
@@ -829,7 +829,7 @@ SOURCES += Metrics/aBikeScore.cpp Metrics/aCoggan.cpp Metrics/AerobicDecoupling.
            Metrics/RowMetrics.cpp Metrics/FastKmeans.cpp
 
 ## Planning and Compliance
-SOURCES += Planning/PlanningWindow.cpp Planning/PlanBundle.cpp
+SOURCES += Planning/PlanningWindow.cpp Planning/PlanBundle.cpp Planning/PlanReplacementJournal.cpp
 
 ## Contributed solutions
 SOURCES += ../contrib/qtsolutions/codeeditor/codeeditor.cpp ../contrib/qtsolutions/json/mvjson.cpp \
