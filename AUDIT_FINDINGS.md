@@ -2886,7 +2886,8 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 ### MEM-025: Non-removal cache mutations can sort tombstoned RideItems
 
 - Status: OPEN
-- Code: `src/Core/RideCache.cpp`, `src/Core/RideCacheBulkMerge.h`, and
+- Code: `src/Core/RideCache.cpp`, `src/Core/RideCacheImport.cpp`,
+  `src/Core/RideCacheMutationScope.cpp`, `src/Core/RideCacheBulkMerge.h`, and
   `src/Metrics/Estimator.cpp`
 - Impact: A callback can directly destroy a cache-owned activity and leave its
   address tombstoned in the physical model vector. Removal and plan replacement
@@ -2909,6 +2910,23 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   cache and estimator workers, purges tombstones under a balanced model reset,
   snapshots guarded inputs, and resumes one coalesced generation. Route every
   mutator through it instead of relying on per-function raw-vector checks.
+- Progress: `addRide()` and `addRides()` now run inside the shared
+  `RideCacheMutationScope`. The scope blocks reentrant cache operations, joins
+  cache refresh and estimator work, purges dead model rows before and after the
+  mutation, and queues one generation-checked refresh. Bulk merge begins its
+  reset before indexing existing rows and provides a balanced post-reset
+  preparation gate, so a row destroyed by `modelAboutToBeReset` is removed
+  before key extraction or sorting. Import callbacks retain guarded owners and
+  items. The initial ASan RED retained and later deleted the freed row; the
+  final focused rows pass strict ASan/UBSan/LSan and ThreadSanitizer. The full
+  235-case RideCache program passes ASan/UBSan and ThreadSanitizer, and all 13
+  bulk-import cases pass both sanitizer configurations. The production
+  application links and survives an isolated ten-second offscreen event-loop
+  smoke test.
+- Residual: `moveActivity()`, planned copy, and planned shift still need to be
+  routed through the coordinator and to purge callbacks' tombstones inside
+  their publication resets before this finding can be closed. Their separate
+  post-I/O publication failure remains `DATA-022`.
 
 ### DATA-022: Model publication can fail after activity files were changed
 
