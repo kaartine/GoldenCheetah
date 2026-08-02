@@ -114,9 +114,9 @@ bool pathEntryExists(const QString &path)
 
 void removeCreatedFileBestEffort(const QString &path)
 {
-    if (!pathEntryExists(path) || !QFile::remove(path)) return;
     QString ignored;
-    syncParentDirectory(path, ignored);
+    if (pathEntryExists(path))
+        removeFileDurably(path, ignored);
 }
 
 bool validTransactionId(const QString &id)
@@ -318,7 +318,8 @@ bool ensurePrivateDirectory(const QString &path, QString &error)
     const QFileInfo existing(path);
     if (existing.exists() || existing.isSymLink()) {
         return validateExistingDirectory(path, error)
-            && makeDirectoryPrivate(path, error);
+            && makeDirectoryPrivate(path, error)
+            && syncParentDirectory(path, error);
     }
 
     const QFileInfo parent(existing.absolutePath());
@@ -327,19 +328,19 @@ bool ensurePrivateDirectory(const QString &path, QString &error)
             "Cannot create an activity transaction under an unsafe directory");
         return false;
     }
-    if (!QDir().mkdir(path)) {
-        error = QStringLiteral("Cannot create the activity transaction directory");
+    if (!createDirectoryDurably(path, error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "Cannot create the activity transaction directory");
+        }
         return false;
     }
 
     if (!makeDirectoryPrivate(path, error)) {
         QString cleanupError;
-        if (!QDir().rmdir(path)) {
+        if (!removeDirectoryDurably(path, cleanupError)) {
             cleanupError = QStringLiteral(
                 "cannot remove the insufficiently private directory");
-        } else {
-            QString ignored;
-            syncParentDirectory(path, ignored);
         }
         appendError(error, cleanupError);
         return false;
@@ -826,13 +827,13 @@ bool copyExpectedFileCreateNew(
     }
 
     QFile source(sourcePath);
-    QFile target(targetPath);
+    NewAtomicFileWriter target(targetPath);
     if (!source.open(QIODevice::ReadOnly)) {
         error = QStringLiteral("Cannot read an activity transaction file: %1")
                     .arg(source.errorString());
         return false;
     }
-    if (!target.open(QIODevice::WriteOnly | QIODevice::NewOnly)) {
+    if (!target.open()) {
         error = QStringLiteral("Cannot create an activity transaction file: %1")
                     .arg(target.errorString());
         return false;
@@ -845,46 +846,50 @@ bool copyExpectedFileCreateNew(
         if (chunk.isEmpty() && source.error() != QFileDevice::NoError) {
             error = QStringLiteral("Cannot read an activity transaction file: %1")
                         .arg(source.errorString());
-            target.close();
-            removeCreatedFileBestEffort(targetPath);
+            target.cancelWriting();
             return false;
         }
         if (target.write(chunk) != chunk.size()) {
             error = QStringLiteral("Cannot write an activity transaction file: %1")
                         .arg(target.errorString());
-            target.close();
-            removeCreatedFileBestEffort(targetPath);
+            target.cancelWriting();
             return false;
         }
         copied += chunk.size();
         hash.addData(chunk);
     }
 
-    if (!target.flush() || !syncFileDevice(target, error)) {
+    if (!target.flush()) {
         if (error.isEmpty()) {
             error = QStringLiteral("Cannot flush an activity transaction file: %1")
                         .arg(target.errorString());
         }
-        target.close();
-        removeCreatedFileBestEffort(targetPath);
+        target.cancelWriting();
         return false;
     }
-    target.close();
 
     if (copied != expected.size || hash.result() != expected.digest
-        || !validateExpectedSnapshot(sourcePath, expected, error)
-        || !validateExpectedSnapshot(targetPath, expected, error)) {
+        || !validateExpectedSnapshot(sourcePath, expected, error)) {
         if (error.isEmpty()) {
             error = QStringLiteral(
                 "A staged transaction file does not match its source");
         }
-        removeCreatedFileBestEffort(targetPath);
+        target.cancelWriting();
+        return false;
+    }
+    if (!target.commit()) {
+        error = QStringLiteral("Cannot publish an activity transaction file: %1")
+                    .arg(target.errorString());
         return false;
     }
 
     QString syncError;
     if (!syncParentDirectory(targetPath, syncError)) {
         error = syncError;
+        return false;
+    }
+    if (!validateExpectedSnapshot(targetPath, expected, error)) {
+        removeCreatedFileBestEffort(targetPath);
         return false;
     }
     return true;
@@ -1008,13 +1013,11 @@ bool removeObservedFile(
 {
     if (!observed.exists) return true;
     if (!validateExpectedSnapshot(path, observed.contents, error)) return false;
-    if (!QFile::remove(path)) {
-        error = QStringLiteral("Cannot remove a transaction file: %1").arg(path);
-        return false;
-    }
-    QString syncError;
-    if (!syncParentDirectory(path, syncError)) {
-        error = syncError;
+    if (!removeFileDurably(path, error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "Cannot remove a transaction file: %1").arg(path);
+        }
         return false;
     }
     return true;
@@ -2011,13 +2014,11 @@ bool removeJournalDirectory(
             "The transaction journal contains files that cannot be removed");
         return false;
     }
-    if (!QDir(state.namespacePath).rmdir(state.manifest.id)) {
-        error = QStringLiteral("Cannot remove the completed transaction journal");
-        return false;
-    }
-    QString syncError;
-    if (!syncParentDirectory(state.journalPath, syncError)) {
-        error = syncError;
+    if (!removeDirectoryDurably(state.journalPath, error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "Cannot remove the completed transaction journal");
+        }
         return false;
     }
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
@@ -2193,7 +2194,6 @@ bool reconcileLockedJournal(
 }
 
 bool removePreManifestJournal(
-    const QString &namespacePath,
     const QString &journalPath,
     QString &error)
 {
@@ -2235,11 +2235,14 @@ bool removePreManifestJournal(
     for (const auto &entry : removable) {
         if (!removeObservedFile(entry.first, entry.second, error)) return false;
     }
-    if (!QDir(namespacePath).rmdir(id)) {
-        error = QStringLiteral("Cannot remove an incomplete transaction journal");
+    if (!removeDirectoryDurably(journalPath, error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "Cannot remove an incomplete transaction journal");
+        }
         return false;
     }
-    return syncParentDirectory(journalPath, error);
+    return true;
 }
 
 class JournalPeerWriter final : public AtomicFileWriter
@@ -2772,7 +2775,6 @@ bool Journal::reconcileAll(const QString &athleteRoot, QString &error)
         QString transactionError;
         if (!manifestInfo.exists() && !manifestInfo.isSymLink()) {
             if (!removePreManifestJournal(
-                    namespacePath,
                     entry.absoluteFilePath(),
                     transactionError)) {
                 failures.append(transactionError);

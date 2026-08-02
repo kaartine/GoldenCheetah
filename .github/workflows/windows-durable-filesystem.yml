@@ -1,0 +1,49 @@
+name: Windows durable filesystem
+
+on:
+  push:
+    paths:
+      - .github/workflows/windows-durable-filesystem.yml
+      - src/FileIO/AtomicFileWriter.h
+      - unittests/FileIO/durableFilesystem/**
+  pull_request:
+    paths:
+      - .github/workflows/windows-durable-filesystem.yml
+      - src/FileIO/AtomicFileWriter.h
+      - unittests/FileIO/durableFilesystem/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-2025
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.3
+          arch: win64_msvc2022_64
+          cache: true
+      - uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+      - name: Build test
+        shell: pwsh
+        run: |
+          Set-Content src/gcconfig.pri 'CONFIG += release'
+          New-Item -ItemType Directory build-durable-filesystem | Out-Null
+          Set-Location build-durable-filesystem
+          qmake ../unittests/FileIO/durableFilesystem/durableFilesystem.pro
+          nmake /NOLOGO
+      - name: Run test
+        shell: pwsh
+        run: |
+          & build-durable-filesystem/release/tst_durableFilesystem.exe `
+            -o 'windows-durable-filesystem.txt,txt'
+          $testStatus = $LASTEXITCODE
+          Get-Content windows-durable-filesystem.txt
+          exit $testStatus

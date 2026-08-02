@@ -44,6 +44,19 @@
 #include <qt_windows.h>
 #endif
 
+#ifdef GC_DURABLE_FILESYSTEM_TEST_HOOKS
+void durableFilesystemTransitionReached(const char *transition);
+#endif
+
+inline void reportDurableFilesystemTransition(const char *transition)
+{
+#ifdef GC_DURABLE_FILESYSTEM_TEST_HOOKS
+    durableFilesystemTransitionReached(transition);
+#else
+    Q_UNUSED(transition);
+#endif
+}
+
 inline bool syncFileDevice(QFileDevice &file, QString &error)
 {
 #ifdef Q_OS_UNIX
@@ -111,11 +124,261 @@ inline bool syncParentDirectory(const QString &path, QString &error)
                     .arg(QString::fromLocal8Bit(std::strerror(syncError)));
         return false;
     }
+#elif defined(Q_OS_WIN)
+    // Windows has no documented directory-handle equivalent of fsync().
+    // Durable protocols must use the write-through entry mutations below.
+    Q_UNUSED(path);
+    Q_UNUSED(error);
 #else
     Q_UNUSED(path);
     Q_UNUSED(error);
 #endif
     return true;
+}
+
+using AtomicDirectorySyncFunction =
+    std::function<bool(const QString &path, QString &error)>;
+
+#ifdef Q_OS_WIN
+inline bool removeWindowsFilesystemEntryDurably(
+    const QString &path, bool directory, QString &error)
+{
+    const DWORD flags = FILE_FLAG_OPEN_REPARSE_POINT
+        | FILE_FLAG_WRITE_THROUGH
+        | (directory ? FILE_FLAG_BACKUP_SEMANTICS : DWORD(0));
+    const HANDLE handle = ::CreateFileW(
+        reinterpret_cast<LPCWSTR>(path.utf16()),
+        DELETE | FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        flags,
+        nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        error = QStringLiteral(
+                    "Cannot open the filesystem entry for durable removal: system error %1")
+                    .arg(::GetLastError());
+        return false;
+    }
+
+    FILE_ATTRIBUTE_TAG_INFO attributes = {};
+    if (!::GetFileInformationByHandleEx(
+            handle,
+            FileAttributeTagInfo,
+            &attributes,
+            sizeof(attributes))) {
+        const DWORD nativeError = ::GetLastError();
+        ::CloseHandle(handle);
+        error = QStringLiteral(
+                    "Cannot inspect the filesystem entry for durable removal: system error %1")
+                    .arg(nativeError);
+        return false;
+    }
+    const bool isDirectory =
+        attributes.FileAttributes & FILE_ATTRIBUTE_DIRECTORY;
+    if (isDirectory != directory
+        || (attributes.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+        ::CloseHandle(handle);
+        error = QStringLiteral(
+            "Cannot durably remove an unsafe filesystem entry");
+        return false;
+    }
+
+    FILE_DISPOSITION_INFO disposition = {};
+    disposition.DeleteFile = TRUE;
+    if (!::SetFileInformationByHandle(
+            handle,
+            FileDispositionInfo,
+            &disposition,
+            sizeof(disposition))) {
+        const DWORD nativeError = ::GetLastError();
+        ::CloseHandle(handle);
+        error = QStringLiteral(
+                    "Cannot durably remove the filesystem entry: system error %1")
+                    .arg(nativeError);
+        return false;
+    }
+    reportDurableFilesystemTransition(
+        directory
+            ? "directory-removal-requested"
+            : "file-removal-requested");
+    if (!::CloseHandle(handle)) {
+        error = QStringLiteral(
+                    "Cannot close the durably removed filesystem entry: system error %1")
+                    .arg(::GetLastError());
+        return false;
+    }
+    reportDurableFilesystemTransition(
+        directory ? "directory-removed" : "file-removed");
+    return true;
+}
+#endif
+
+inline bool createDirectoryDurably(
+    const QString &path,
+    QString &error,
+    const AtomicDirectorySyncFunction &syncDirectory =
+        syncParentDirectory)
+{
+    error.clear();
+    if (!syncDirectory) {
+        error = QStringLiteral(
+            "Cannot create a directory without a durability barrier");
+        return false;
+    }
+
+    const QFileInfo target(path);
+    const QFileInfo parent(target.absolutePath());
+    if (path.isEmpty() || target.exists() || target.isSymLink()) {
+        error = QStringLiteral(
+            "The durable directory target already exists or is unsafe");
+        return false;
+    }
+    if (!parent.exists() || !parent.isDir() || parent.isSymLink()) {
+        error = QStringLiteral(
+            "The durable directory parent is unavailable or unsafe");
+        return false;
+    }
+
+#ifdef Q_OS_WIN
+    bool created = false;
+    for (int attempt = 0; attempt < 16; ++attempt) {
+        // A UUID-only name is also a valid empty pre-manifest journal. If the
+        // process exits before publication, startup recovery can remove it.
+        const QString temporaryPath = QDir(parent.absoluteFilePath()).filePath(
+            QUuid::createUuid().toString(
+                QUuid::WithoutBraces));
+        if (!::CreateDirectoryW(
+                reinterpret_cast<LPCWSTR>(temporaryPath.utf16()),
+                nullptr)) {
+            const DWORD nativeError = ::GetLastError();
+            if (nativeError == ERROR_ALREADY_EXISTS
+                || nativeError == ERROR_FILE_EXISTS) {
+                continue;
+            }
+            error = QStringLiteral(
+                        "Cannot create the durable directory staging entry: system error %1")
+                        .arg(nativeError);
+            return false;
+        }
+        reportDurableFilesystemTransition(
+            "directory-staging-created");
+        if (::MoveFileExW(
+                reinterpret_cast<LPCWSTR>(temporaryPath.utf16()),
+                reinterpret_cast<LPCWSTR>(path.utf16()),
+                MOVEFILE_WRITE_THROUGH)) {
+            created = true;
+            break;
+        }
+
+        const DWORD nativeError = ::GetLastError();
+        const bool stagingRemoved = ::RemoveDirectoryW(
+            reinterpret_cast<LPCWSTR>(temporaryPath.utf16()));
+        error = QStringLiteral(
+                    "Cannot publish the durable directory entry: system error %1")
+                    .arg(nativeError);
+        if (!stagingRemoved) {
+            error += QStringLiteral(
+                "; cannot remove the directory staging entry");
+        }
+        return false;
+    }
+    if (!created) {
+        error = QStringLiteral(
+            "Cannot allocate a unique durable directory staging entry");
+        return false;
+    }
+#else
+    if (!QDir().mkdir(path)) {
+        error = QStringLiteral("Cannot create the durable directory");
+        return false;
+    }
+#endif
+    reportDurableFilesystemTransition("directory-published");
+    const bool synchronized = syncDirectory(path, error);
+    if (synchronized) {
+        reportDurableFilesystemTransition("parent-synchronized");
+    }
+    return synchronized;
+}
+
+inline bool removeFileDurably(
+    const QString &path,
+    QString &error,
+    const AtomicDirectorySyncFunction &syncDirectory =
+        syncParentDirectory)
+{
+    error.clear();
+    if (!syncDirectory) {
+        error = QStringLiteral(
+            "Cannot remove a file without a durability barrier");
+        return false;
+    }
+    const QFileInfo entry(path);
+    if (!entry.exists() || entry.isSymLink() || !entry.isFile()) {
+        error = QStringLiteral(
+            "The durable file removal target is unavailable or unsafe");
+        return false;
+    }
+
+#ifdef Q_OS_WIN
+    if (!removeWindowsFilesystemEntryDurably(
+            path, false, error)) {
+        return false;
+    }
+#else
+    if (!QFile::remove(path)) {
+        error = QStringLiteral("Cannot remove the durable file");
+        return false;
+    }
+    reportDurableFilesystemTransition("file-removal-requested");
+    reportDurableFilesystemTransition("file-removed");
+#endif
+    const bool synchronized = syncDirectory(path, error);
+    if (synchronized) {
+        reportDurableFilesystemTransition("parent-synchronized");
+    }
+    return synchronized;
+}
+
+inline bool removeDirectoryDurably(
+    const QString &path,
+    QString &error,
+    const AtomicDirectorySyncFunction &syncDirectory =
+        syncParentDirectory)
+{
+    error.clear();
+    if (!syncDirectory) {
+        error = QStringLiteral(
+            "Cannot remove a directory without a durability barrier");
+        return false;
+    }
+    const QFileInfo entry(path);
+    if (!entry.exists() || entry.isSymLink() || !entry.isDir()) {
+        error = QStringLiteral(
+            "The durable directory removal target is unavailable or unsafe");
+        return false;
+    }
+
+#ifdef Q_OS_WIN
+    if (!removeWindowsFilesystemEntryDurably(
+            path, true, error)) {
+        return false;
+    }
+#else
+    if (!QDir().rmdir(path)) {
+        error = QStringLiteral("Cannot remove the durable directory");
+        return false;
+    }
+    reportDurableFilesystemTransition(
+        "directory-removal-requested");
+    reportDurableFilesystemTransition("directory-removed");
+#endif
+    const bool synchronized = syncDirectory(path, error);
+    if (synchronized) {
+        reportDurableFilesystemTransition("parent-synchronized");
+    }
+    return synchronized;
 }
 
 struct AtomicFileSnapshot
@@ -1115,9 +1378,6 @@ inline void appendActivityRollbackError(QString &error, const QString &detail)
     }
     error += detail;
 }
-
-using AtomicDirectorySyncFunction =
-    std::function<bool(const QString &path, QString &error)>;
 
 inline bool finalizeActivityFileReplacement(const QString &sourcePath,
                                             const QString &targetPath,

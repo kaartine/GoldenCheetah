@@ -51,6 +51,7 @@ equals(GC_UNITTESTS, active) {
 			   FileIO/atomicActivitySave \
 			   FileIO/archiveSecurity \
 			   FileIO/athleteBackupArchive \
+			   FileIO/durableFilesystem \
 			   FileIO/cpCsvImport \
 			   FileIO/fitImportIntegrity \
 			   FileIO/fitReaderIntegrity \

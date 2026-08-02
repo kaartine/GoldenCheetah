@@ -3031,22 +3031,50 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-014: Windows deletion does not durably sync directory entries
 
-- Status: OPEN
-- Code: `src/FileIO/AtomicFileWriter.h` and
-  `src/Core/RideCacheRemoval.cpp`
+- Status: FIXED
+- Code: `src/FileIO/AtomicFileWriter.h`,
+  `src/Core/LinkedActivityRemovalJournal.cpp`,
+  `src/Core/RideCacheRemoval.cpp`,
+  `unittests/FileIO/durableFilesystem/`, and
+  `.github/workflows/windows-durable-filesystem.yml`
 - Impact: `syncParentDirectory()` is a successful no-op outside Unix. Windows
   file handles are flushed and `MoveFileExW` uses `MOVEFILE_WRITE_THROUGH`, but
   planned-backup directory creation and all directory-entry cleanup transitions
   lack the durability barrier that the deletion protocol assumes. A power loss
   can therefore violate the documented committed/rolled-back state even when
   runtime calls all returned success.
-- Test: Run the deletion failpoint state machine on native Windows with forced
-  termination after every create, move, remove, and file flush, then restart and
-  verify the newest source and prior backup remain recoverable.
-- Fix direction: Define a Windows-specific durable publication protocol using
-  write-through operations plus a flushed transaction manifest and startup
-  reconciliation; do not claim directory-fsync equivalence where Windows does
-  not provide it.
+- Test-first evidence: The new standalone durability regression initially
+  failed to compile because there was no durable directory-create, file-remove,
+  or directory-remove API. The old deletion implementation instead called
+  `QDir::mkpath()`, `QFile::remove()`, or `QDir::rmdir()` and then accepted the
+  Windows no-op `syncParentDirectory()` result.
+- Resolution: Windows no longer claims a directory-handle `fsync` equivalent.
+  New directory entries are created under a UUID staging name and published by
+  `MoveFileExW(..., MOVEFILE_WRITE_THROUGH)`. Files and empty directories are
+  opened without following the final reparse point, checked by handle, and
+  removed with `SetFileInformationByHandle(FileDispositionInfo)` on a
+  `FILE_FLAG_WRITE_THROUGH` handle. UUID directory staging left by termination
+  inside the journal namespace is a valid empty pre-manifest journal and is
+  removed by startup reconciliation. Unix uses the same helpers with its
+  existing parent-directory `fsync`. Planned-backup creation, journal namespace
+  and instance creation, rollback, committed cleanup, and journal removal now
+  use these helpers. Recovery-copy creation also publishes through the existing
+  atomic writer instead of creating its final pathname directly.
+- Verification: The focused test passes 17 cases on Linux, including strict
+  ASan/UBSan/LSan, and 18 cases under native Windows MSVC in GitHub Actions. The
+  Windows matrix terminates the subprocess after staging-directory creation,
+  write-through publication, delete disposition, handle close, and the logical
+  parent barrier for file and directory operations. The complete 341-case
+  RideCache removal program passes normal, ASan/UBSan, and ThreadSanitizer
+  builds; the 193-case atomic-save program also passes its normal build. The
+  complete Linux repository matrix passes all 102 test programs: 4,168 passed,
+  0 failed, 12 skipped, and 0 blacklisted. The complete application builds and
+  remains alive until the expected 20-second timeout in an isolated, networkless
+  offscreen smoke test with a disposable home directory.
+- Residual: Hosted CI validates process termination rather than cutting power to
+  a physical storage device. Persistence therefore relies on the documented
+  Windows write-through contract and the device honoring flushes. Parent-path
+  replacement by a non-cooperating process remains `SEC-025`.
 
 ### DUR-015: Failed planned-backup directory sync was not retried
 

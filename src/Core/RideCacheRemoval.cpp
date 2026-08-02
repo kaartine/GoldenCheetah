@@ -451,17 +451,21 @@ bool copyRemovalSourceToPath(
 
 bool removeRemovalFile(
     const QString &path,
-    const QString &hookPath)
+    const QString &hookPath,
+    QString &error)
 {
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
     if (rideCacheRemovalShouldFailCleanup(
             hookPath)) {
+        error = QObject::tr(
+            "Injected activity removal cleanup failure");
         return false;
     }
 #else
     Q_UNUSED(hookPath)
 #endif
-    return QFile::remove(path);
+    return removeFileDurably(
+        path, error, syncRemovalDirectory);
 }
 
 void addRecoveryPath(
@@ -814,23 +818,18 @@ private:
                 actualPath);
             return false;
         }
+        QString removalError;
         if (!removeRemovalFile(
-                actualPath, hookPath)) {
+                actualPath, hookPath,
+                removalError)) {
             appendRemovalError(
                 result.error,
                 QObject::tr(
-                    "Cannot remove an activity cleanup file: %1")
-                        .arg(actualPath));
+                    "Cannot remove an activity cleanup file: %1 (%2)")
+                        .arg(actualPath, removalError));
             addRecoveryPath(
                 result.recoveryPaths,
                 actualPath);
-            return false;
-        }
-        QString syncError;
-        if (!syncRemovalDirectory(
-                actualPath, syncError)) {
-            appendRemovalError(
-                result.error, syncError);
             return false;
         }
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
@@ -894,24 +893,20 @@ private:
                 backupStaging_)) {
             return;
         }
-        if (!QFile::remove(backupStaging_)) {
+        QString removalError;
+        if (!removeFileDurably(
+                backupStaging_, removalError,
+                syncRemovalDirectory)) {
             result.status = RideCache::RemovalStatus::RecoveryRequired;
             appendRemovalError(
                 result.error,
                 QObject::tr(
-                    "Cannot remove the unpublished activity backup: %1")
-                    .arg(backupStaging_));
+                    "Cannot remove the unpublished activity backup: %1 (%2)")
+                    .arg(backupStaging_, removalError));
             addRecoveryPath(
                 result.recoveryPaths,
                 backupStaging_);
             return;
-        }
-        QString syncError;
-        if (!syncRemovalDirectory(
-                backupStaging_, syncError)) {
-            result.status = RideCache::RemovalStatus::RecoveryRequired;
-            appendRemovalError(
-                result.error, syncError);
         }
         backupStaging_.clear();
     }
@@ -934,17 +929,15 @@ private:
                     .arg(description, verifyError));
             return false;
         }
-        if (!QFile::remove(path)) {
+        QString removalError;
+        if (!removeFileDurably(
+                path, removalError,
+                syncRemovalDirectory)) {
             appendRemovalError(
                 error,
                 QObject::tr(
-                    "Cannot remove the %1 during rollback: %2")
-                    .arg(description, path));
-            return false;
-        }
-        QString syncError;
-        if (!syncRemovalDirectory(path, syncError)) {
-            appendRemovalError(error, syncError);
+                    "Cannot remove the %1 during rollback: %2 (%3)")
+                    .arg(description, path, removalError));
             return false;
         }
         return true;
@@ -2362,10 +2355,16 @@ RideCache::replacePlannedActivityFiles(
             "The activity backup path is not a regular directory");
         return result;
     }
-    if (!backupRootExisted && !QDir().mkpath(backupRoot)) {
-        result.error = tr(
-            "Cannot create the activity backup directory");
-        return result;
+    if (!backupRootExisted) {
+        QString createError;
+        if (!createDirectoryDurably(
+                backupRoot, createError,
+                syncRemovalDirectory)) {
+            result.error = createError.isEmpty()
+                ? tr("Cannot create the activity backup directory")
+                : createError;
+            return result;
+        }
     }
     backupRootInfo.refresh();
     const QString canonicalAthleteRoot =
@@ -2387,11 +2386,13 @@ RideCache::replacePlannedActivityFiles(
             "The activity backup path escapes the athlete directory");
         return result;
     }
-    QString backupRootSyncError;
-    if (!syncRemovalDirectory(
-            backupRoot, backupRootSyncError)) {
-        result.error = backupRootSyncError;
-        return result;
+    if (backupRootExisted) {
+        QString backupRootSyncError;
+        if (!syncRemovalDirectory(
+                backupRoot, backupRootSyncError)) {
+            result.error = backupRootSyncError;
+            return result;
+        }
     }
 
     const QString plannedBackupRoot =
@@ -2407,11 +2408,17 @@ RideCache::replacePlannedActivityFiles(
             "The planned activity backup path is not a regular directory");
         return result;
     }
-    if (!plannedBackupExisted
-        && !QDir().mkpath(plannedBackupRoot)) {
-        result.error = tr(
-            "Cannot create the planned activity backup directory");
-        return result;
+    if (!plannedBackupExisted) {
+        QString createError;
+        if (!createDirectoryDurably(
+                plannedBackupRoot, createError,
+                syncRemovalDirectory)) {
+            result.error = createError.isEmpty()
+                ? tr(
+                    "Cannot create the planned activity backup directory")
+                : createError;
+            return result;
+        }
     }
     plannedBackupInfo.refresh();
     if (plannedBackupInfo.isSymLink()
@@ -2420,11 +2427,13 @@ RideCache::replacePlannedActivityFiles(
             "The planned activity backup path is not a regular directory");
         return result;
     }
-    QString backupSyncError;
-    if (!syncRemovalDirectory(
-            plannedBackupRoot, backupSyncError)) {
-        result.error = backupSyncError;
-        return result;
+    if (plannedBackupExisted) {
+        QString backupSyncError;
+        if (!syncRemovalDirectory(
+                plannedBackupRoot, backupSyncError)) {
+            result.error = backupSyncError;
+            return result;
+        }
     }
 
     for (const PendingReplacement &entry : std::as_const(pending)) {
@@ -3802,17 +3811,23 @@ RideCache::removeRideEntry(
                     result.error);
                 return result;
             }
-            if (!plannedBackupExisted
-                && !QDir().mkpath(
-                    plannedBackupPath)) {
-                result.error = tr(
-                    "Cannot create the planned activity backup directory");
-                appendRemovalItemResult(
-                    result, filenameToDelete,
-                    todelete->planned,
-                    RemovalStatus::Rejected,
-                    result.error);
-                return result;
+            if (!plannedBackupExisted) {
+                QString createError;
+                if (!createDirectoryDurably(
+                        plannedBackupPath,
+                        createError,
+                        syncRemovalDirectory)) {
+                    result.error = createError.isEmpty()
+                        ? tr(
+                            "Cannot create the planned activity backup directory")
+                        : createError;
+                    appendRemovalItemResult(
+                        result, filenameToDelete,
+                        todelete->planned,
+                        RemovalStatus::Rejected,
+                        result.error);
+                    return result;
+                }
             }
             plannedBackupInfo.refresh();
             if (plannedBackupInfo.isSymLink()
@@ -3826,17 +3841,19 @@ RideCache::removeRideEntry(
                     result.error);
                 return result;
             }
-            QString syncError;
-            if (!syncRemovalDirectory(
-                    plannedBackupPath,
-                    syncError)) {
-                result.error = syncError;
-                appendRemovalItemResult(
-                    result, filenameToDelete,
-                    todelete->planned,
-                    RemovalStatus::Rejected,
-                    result.error);
-                return result;
+            if (plannedBackupExisted) {
+                QString syncError;
+                if (!syncRemovalDirectory(
+                        plannedBackupPath,
+                        syncError)) {
+                    result.error = syncError;
+                    appendRemovalItemResult(
+                        result, filenameToDelete,
+                        todelete->planned,
+                        RemovalStatus::Rejected,
+                        result.error);
+                    return result;
+                }
             }
             backupDirectory =
                 QDir(plannedBackupPath);
