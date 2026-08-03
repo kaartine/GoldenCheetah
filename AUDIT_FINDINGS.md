@@ -3101,6 +3101,8 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Status: IN_PROGRESS
 - Code: `src/Core/RideCacheRemoval.cpp`,
   `src/Core/LinkedActivityRemovalJournal.cpp`,
+  `src/Core/LinkedActivitySaveJournal.cpp`,
+  `src/Planning/PlanReplacementJournal.cpp`,
   `src/FileIO/AnchoredFileSystem.cpp`, and `src/FileIO/AtomicFileWriter.h`
 - Impact: Unsafe names, final symlinks, and planned-backup symlinks are rejected,
   snapshots are hashed, and cooperative writers share path locks. A separate
@@ -3115,7 +3117,14 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   cleanup and exchange a just-verified empty directory before `rmdir`. The
   unsafe baselines accepted byte-identical substitutes, overwrote or deleted
   them, or followed the redirected namespace far enough to remove an empty
-  directory outside the athlete transaction tree.
+  directory outside the athlete transaction tree. Separate RED rows placed
+  one and two exact `.rmlock` suffixes left by `QLockFile` in each removal,
+  linked-save, plan-replacement, and bundle-import namespace and journal parser.
+  They also covered pre-manifest journals, manifest/commit/data lock roles,
+  direct parser boundaries, malformed temporary-name lookalikes, non-files,
+  symlinks, and oversized recognized guards. The valid stale guards permanently
+  blocked reconciliation or the next transaction before the fix, while one
+  malformed removal-journal lookalike was incorrectly accepted and deleted.
 - Partial resolution: RideCache storage transactions now open one anchored
   athlete-root generation, walk children without following links, and pin each
   existing source, backup, derived file, and journal control file once. Reads,
@@ -3138,27 +3147,35 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   repopulated UUID name as partial cleanup. A partial quarantine remains
   visible to both rollback and commit retries instead of being mistaken for a
   completed transaction.
+
+  Journal scanners now share an exact lock-artifact parser. It strips one or
+  more lowercase trailing `.rmlock` suffixes, then requires a nonempty
+  `.<target>.lock` form; each caller still enforces its exact UUID or known
+  manifest, commit-marker, and staged-data roles plus regular-file, non-symlink,
+  and size limits. Linked-removal temporary-file recognition is also restricted
+  to the atomic writer's exact token form, so a lock guard with a `.tmp`
+  lookalike suffix is no longer removed as an atomic temporary file.
 - Verification: Every regression failed for its intended unsafe behavior before
-  its fix. At the current integration head, all 355 RideCache removal cases
-  pass in normal, strict ASan/UBSan/LSan, and ThreadSanitizer Linux builds. The
-  anchored primitive suite passes 44 cases with 8 native-only skips on Linux,
-  44 cases with 8 skips on macOS 15, and 40 cases with 12 skips on Windows 2025;
-  the 18 Windows durable-filesystem cases also pass. The full native macOS
-  RideCache suite passes all 355 cases; Windows passes 342 with 13 expected
-  platform skips. Both native suites report zero failures and zero blacklisted
-  cases after adding the Windows journal-level nonempty-directory injection
-  point.
+  its fix. On Linux, the complete RideCache removal suite passes 369 cases in
+  normal and ThreadSanitizer builds. The complete plan-replacement and bundle
+  suites pass 124 and 8 cases under strict ASan/UBSan/LSan and ThreadSanitizer.
+  The atomic-save suite passes 212 cases under ASan/UBSan and ThreadSanitizer;
+  its 21 focused lock-guard cases are also strict-LSan-clean (the complete
+  program retains the separately documented Qt teardown leak). The anchored
+  primitive suite passes 44 cases with 8 native-only skips on Linux and macOS
+  15, and 40 cases with 12 skips on Windows 2025; all 18 Windows durable-
+  filesystem cases also pass. The full native RideCache suite passes all 369
+  cases on macOS and 356 with 13 expected platform skips on Windows. Every run
+  reports zero failures and zero blacklisted cases.
 - Residual: Journal namespace and instance creation still perform pathname-based
   permission and cleanup work before anchoring. Linked-save source retirement
   validates content and then removes a pathname; replace-existing publication,
   rollback, activity conversion/rename, split archival, plan replacement,
   staged-publication rollback, and a few lower-risk backup cleanups retain
-  similar same-user exchange windows. `QLockFile` sidecars also have a separate
-  stale-helper availability issue. POSIX exposes no portable
-  identity-conditional `rmdir`; the private random quarantine, two identity
-  checks, anchored post-checks, and fail-closed recovery reduce but cannot
-  eliminate the final check-to-syscall race. These residuals keep this item
-  `IN_PROGRESS`.
+  similar same-user exchange windows. POSIX exposes no portable identity-
+  conditional `rmdir`; the private random quarantine, two identity checks,
+  anchored post-checks, and fail-closed recovery reduce but cannot eliminate
+  the final check-to-syscall race. These residuals keep this item `IN_PROGRESS`.
 - Next test and fix: Pin linked-save retirement sources through deletion and
   preserve both the original and a substituted pathname. Then apply the same
   observed-generation contract to replace-existing publication and rollback,
