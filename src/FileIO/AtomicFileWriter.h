@@ -547,17 +547,45 @@ inline bool publishAtomicReplacement(const QString &temporaryPath,
         + size_t(targetBytes);
     std::vector<unsigned char> storage(bufferSize, 0);
     auto *rename = reinterpret_cast<FILE_RENAME_INFO *>(storage.data());
-    rename->ReplaceIfExists = TRUE;
     rename->RootDirectory = nullptr;
     rename->FileNameLength = targetBytes;
     std::memcpy(rename->FileName, target.utf16(), targetBytes);
-    const BOOL published = ::SetFileInformationByHandle(
+
+    // FileRenameInfoEx and its first two flags have a stable Windows ABI,
+    // including in SDKs that do not expose their symbolic names. POSIX
+    // replacement keeps existing shared-delete handles attached to the old
+    // file while publishing the new file at the same name.
+    constexpr auto fileRenameInfoEx =
+        static_cast<FILE_INFO_BY_HANDLE_CLASS>(22);
+    constexpr DWORD replaceIfExists = 0x00000001;
+    constexpr DWORD posixSemantics = 0x00000002;
+    const DWORD extendedFlags = replaceIfExists | posixSemantics;
+    std::memcpy(storage.data(), &extendedFlags, sizeof(extendedFlags));
+    BOOL published = ::SetFileInformationByHandle(
         replacement,
-        FileRenameInfo,
+        fileRenameInfoEx,
         rename,
         DWORD(storage.size()));
-    const DWORD publishError = published
+    DWORD publishError = published
         ? ERROR_SUCCESS : ::GetLastError();
+
+    if (!published
+        && (publishError == ERROR_INVALID_FUNCTION
+            || publishError == ERROR_INVALID_PARAMETER
+            || publishError == ERROR_NOT_SUPPORTED)) {
+        std::fill(storage.begin(), storage.end(), 0);
+        rename->ReplaceIfExists = TRUE;
+        rename->RootDirectory = nullptr;
+        rename->FileNameLength = targetBytes;
+        std::memcpy(rename->FileName, target.utf16(), targetBytes);
+        published = ::SetFileInformationByHandle(
+            replacement,
+            FileRenameInfo,
+            rename,
+            DWORD(storage.size()));
+        publishError = published
+            ? ERROR_SUCCESS : ::GetLastError();
+    }
     ::CloseHandle(replacement);
     if (!published) {
         error = QStringLiteral(
