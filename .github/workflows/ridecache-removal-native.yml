@@ -74,14 +74,17 @@ jobs:
           $vcpkgRoot = Split-Path -Parent (Get-Command vcpkg).Source
           $gslRoot = "$vcpkgRoot/installed/x64-windows"
           $zlibRoot = "$vcpkgRoot/installed/x64-windows"
-          $zlibLibrary = "$zlibRoot/lib/zlib.lib"
+          $zlibLibrary = Get-ChildItem "$zlibRoot/lib" `
+            -Filter 'zlib*.lib' -File |
+            Sort-Object Name |
+            Select-Object -First 1 -ExpandProperty FullName
           if (!(Test-Path "$gslRoot/include/gsl/gsl_rng.h")) {
             throw 'The GSL headers were not installed'
           }
           if (!(Test-Path "$zlibRoot/include/zlib.h")) {
             throw 'The zlib headers were not installed'
           }
-          if (!(Test-Path $zlibLibrary)) {
+          if (!$zlibLibrary) {
             throw 'The zlib import library was not installed'
           }
           Set-Content src/gcconfig.pri 'CONFIG += release'
