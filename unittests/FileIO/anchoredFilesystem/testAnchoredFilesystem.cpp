@@ -201,6 +201,8 @@ private slots:
 #ifdef Q_OS_WIN
     void newAtomicWriterHandsOffWindowsStagingPin();
     void newAtomicWriterRetainsWindowsStagingWhenHandoffIsBlocked();
+    void newAtomicWriterRejectsWindowsHandoffRace_data();
+    void newAtomicWriterRejectsWindowsHandoffRace();
     void outputFilesDenyConcurrentWindowsWrites_data();
     void outputFilesDenyConcurrentWindowsWrites();
     void outputFilesCanBeRepinned_data();
@@ -470,6 +472,98 @@ newAtomicWriterRetainsWindowsStagingWhenHandoffIsBlocked()
     concurrentWriter.reset();
     QVERIFY(QFileInfo::exists(stagingPath));
     QCOMPARE(readFixture(stagingPath), contents);
+}
+
+void TestAnchoredFilesystem::newAtomicWriterRejectsWindowsHandoffRace_data()
+{
+    QTest::addColumn<QString>("race");
+
+    QTest::newRow("path-replacement")
+        << QStringLiteral("replace");
+    QTest::newRow("same-object-rewrite")
+        << QStringLiteral("rewrite");
+}
+
+void TestAnchoredFilesystem::newAtomicWriterRejectsWindowsHandoffRace()
+{
+    QFETCH(QString, race);
+
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString target = root.filePath(QStringLiteral("activity.json"));
+    const QString retained = root.filePath(QStringLiteral("retained.tmp"));
+    const QByteArray contents("complete activity");
+    const QByteArray replacement("modified activity");
+    QCOMPARE(replacement.size(), contents.size());
+    int publisherCalls = 0;
+    const AtomicPublishFunction publisher = [&publisherCalls](
+            const QString &, const QString &,
+            bool &, QString &) {
+        ++publisherCalls;
+        return true;
+    };
+    bool hookReached = false;
+    bool raceApplied = false;
+    QString stagingPath;
+
+    NewAtomicFileWriter writer(target, publisher);
+    QVERIFY2(writer.open(), qPrintable(writer.errorString()));
+    QCOMPARE(writer.write(contents), qint64(contents.size()));
+    QVERIFY2(writer.flush(), qPrintable(writer.errorString()));
+    filesystemAction = [&](const char *transition,
+                           const QString &primary,
+                           const QString &) {
+        if (hookReached
+            || qstrcmp(transition, "output-pin-writer-released") != 0) {
+            return;
+        }
+        hookReached = true;
+        stagingPath = primary;
+        if (race == QStringLiteral("replace")) {
+            const QString nativeSource = QDir::toNativeSeparators(primary);
+            const QString nativeTarget = QDir::toNativeSeparators(retained);
+            raceApplied = ::MoveFileExW(
+                reinterpret_cast<LPCWSTR>(nativeSource.utf16()),
+                reinterpret_cast<LPCWSTR>(nativeTarget.utf16()),
+                MOVEFILE_WRITE_THROUGH);
+            if (raceApplied) writeFixture(primary, replacement);
+            return;
+        }
+
+        WindowsTestHandle concurrentWriter(::CreateFileW(
+            reinterpret_cast<LPCWSTR>(primary.utf16()),
+            GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr));
+        LARGE_INTEGER start {};
+        DWORD written = 0;
+        raceApplied = concurrentWriter.isValid()
+            && ::SetFilePointerEx(
+                concurrentWriter.get(), start, nullptr, FILE_BEGIN)
+            && ::WriteFile(
+                concurrentWriter.get(), replacement.constData(),
+                DWORD(replacement.size()), &written, nullptr)
+            && written == DWORD(replacement.size())
+            && ::FlushFileBuffers(concurrentWriter.get());
+    };
+
+    const bool committed = writer.commit();
+    filesystemAction = {};
+
+    QVERIFY(hookReached);
+    QVERIFY(raceApplied);
+    QVERIFY(!committed);
+    QCOMPARE(publisherCalls, 0);
+    QVERIFY(writer.errorString().contains(
+        QStringLiteral("retained"), Qt::CaseInsensitive));
+    QVERIFY(!QFileInfo::exists(target));
+    QCOMPARE(readFixture(stagingPath), replacement);
+    if (race == QStringLiteral("replace")) {
+        QCOMPARE(readFixture(retained), contents);
+    }
 }
 
 void TestAnchoredFilesystem::
