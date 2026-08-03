@@ -541,6 +541,7 @@ private slots:
     void linkedSaveNondurableJournalRemovalStaysRetryable();
     void linkedSaveNondurableJournalFileRemovalStaysRetryable_data();
     void linkedSaveNondurableJournalFileRemovalStaysRetryable();
+    void linkedSaveTrackedJournalReplacementStopsRetry();
     void linkedSaveNondurableRetirementStaysRetryable();
     void linkedSavePartialRetirementKeepsRecoveryJournal();
     void linkedSavePublishRetryPreservesIncompleteRetirementIntent();
@@ -552,6 +553,7 @@ private slots:
     void linkedSaveIntentRemovalNondurableStaysRetryable();
 #ifdef Q_OS_WIN
     void linkedSavePendingWindowsRetirementRetriesAfterHandleClose();
+    void linkedSaveWindowsJournalRemovalRetriesAfterHandleClose();
 #endif
     void linkedSavePreparedSourceIdentityReplacementIsRejected_data();
     void linkedSavePreparedSourceIdentityReplacementIsRejected();
@@ -3907,9 +3909,33 @@ void TestAtomicActivitySave::
 linkedSaveNondurableJournalFileRemovalStaysRetryable_data()
 {
     QTest::addColumn<bool>("committed");
+    QTest::addColumn<QByteArray>("failureTransition");
+    QTest::addColumn<QString>("removedName");
 
-    QTest::newRow("rollback") << false;
-    QTest::newRow("commit") << true;
+    QTest::newRow("rollback-manifest")
+        << false
+        << QByteArray("linked-save-journal-files-pinned")
+        << QStringLiteral("manifest.json");
+    QTest::newRow("commit-manifest")
+        << true
+        << QByteArray("linked-save-journal-files-pinned")
+        << QStringLiteral("manifest.json");
+    QTest::newRow("rollback-source-copy")
+        << false
+        << QByteArray("linked-save-manifest-removed")
+        << QStringLiteral("source-0000.old");
+    QTest::newRow("commit-source-copy")
+        << true
+        << QByteArray("linked-save-manifest-removed")
+        << QStringLiteral("source-0000.old");
+    QTest::newRow("rollback-staging")
+        << false
+        << QByteArray("linked-save-cleanup-file")
+        << QStringLiteral("new-0000.stage");
+    QTest::newRow("commit-staging")
+        << true
+        << QByteArray("linked-save-cleanup-file")
+        << QStringLiteral("new-0000.stage");
 }
 
 void TestAtomicActivitySave::
@@ -3919,6 +3945,8 @@ linkedSaveNondurableJournalFileRemovalStaysRetryable()
     QSKIP("Directory fsync injection is Unix-specific");
 #else
     QFETCH(bool, committed);
+    QFETCH(QByteArray, failureTransition);
+    QFETCH(QString, removedName);
 
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
@@ -3943,11 +3971,11 @@ linkedSaveNondurableJournalFileRemovalStaysRetryable()
         QVERIFY2(journal->publishAndCommit(error), qPrintable(error));
     }
 
-    bool cleanupStarted = false;
+    bool failureArmed = false;
     setLinkedActivitySaveTransitionAction(
-        QByteArray("linked-save-journal-files-pinned"),
+        failureTransition,
         [&]() {
-            cleanupStarted = true;
+            failureArmed = true;
             anchoredFilesystemSyncFailurePath = journalPath;
         });
     error.clear();
@@ -3956,10 +3984,11 @@ linkedSaveNondurableJournalFileRemovalStaysRetryable()
         : journal->cleanupAfterRollback(error);
     clearLinkedActivitySaveTransitionAction();
 
-    QVERIFY(cleanupStarted);
+    QVERIFY(failureArmed);
     QVERIFY2(!firstCleanup, "A nondurable journal file removal was accepted");
     QVERIFY2(!error.isEmpty(), "Nondurable removal must report an error");
     QVERIFY(!QFileInfo::exists(manifestPath));
+    QVERIFY(!QFileInfo::exists(QDir(journalPath).filePath(removedName)));
     QVERIFY(QFileInfo::exists(journalPath));
 
     anchoredFilesystemSyncFailurePath.clear();
@@ -3970,6 +3999,77 @@ linkedSaveNondurableJournalFileRemovalStaysRetryable()
 
     QVERIFY2(secondCleanup, qPrintable(error));
     QVERIFY(!QFileInfo::exists(journalPath));
+#endif
+}
+
+void TestAtomicActivitySave::
+linkedSaveTrackedJournalReplacementStopsRetry()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Directory fsync injection is Unix-specific");
+#else
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    for (int index = 0; index < journal->entryCount(); ++index) {
+        writeFixture(
+            journal->stagingPath(index),
+            QByteArray("staged generation ") + QByteArray::number(index));
+        QVERIFY2(journal->recordStaged(index, error), qPrintable(error));
+    }
+
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-manifest-removed"),
+        [&]() { anchoredFilesystemSyncFailurePath = journalPath; });
+    error.clear();
+    QVERIFY(!journal->cleanupAfterRollback(error));
+    clearLinkedActivitySaveTransitionAction();
+    QVERIFY2(!error.isEmpty(), "Nondurable removal must report an error");
+
+    const QString sourceCopyPath = QDir(journalPath).filePath(
+        QStringLiteral("source-0000.old"));
+    const QString stagingPath = QDir(journalPath).filePath(
+        QStringLiteral("new-0000.stage"));
+    QVERIFY(!QFileInfo::exists(sourceCopyPath));
+    QVERIFY(QFileInfo::exists(stagingPath));
+
+    anchoredFilesystemSyncFailurePath.clear();
+    writeFixture(sourceCopyPath, QByteArray("first old generation"));
+    AnchoredFileSystem::DirectoryAnchor parent;
+    QVERIFY2(
+        AnchoredFileSystem::DirectoryAnchor::open(
+            journalPath, parent, error),
+        qPrintable(error));
+    const AnchoredFileSystem::EntryRef replacementEntry =
+        parent.entry(QStringLiteral("source-0000.old"), error);
+    QVERIFY2(replacementEntry.isValid(), qPrintable(error));
+    AnchoredFileSystem::PinnedFile replacement;
+    QVERIFY2(
+        AnchoredFileSystem::pinRegularFile(
+            replacementEntry, replacement, error),
+        qPrintable(error));
+
+    error.clear();
+    QVERIFY2(
+        !journal->cleanupAfterRollback(error),
+        "Cleanup accepted a replacement for a tracked removed file");
+    QVERIFY2(!error.isEmpty(), "Rejected cleanup must report an error");
+    QVERIFY(QFileInfo::exists(stagingPath));
+    bool stillMatches = false;
+    QString matchError;
+    QVERIFY2(
+        AnchoredFileSystem::entryMatches(
+            replacementEntry, replacement, stillMatches, matchError),
+        qPrintable(matchError));
+    QVERIFY(stillMatches);
 #endif
 }
 
@@ -4589,6 +4689,46 @@ linkedSavePendingWindowsRetirementRetriesAfterHandleClose()
         QByteArray("second old generation"));
     QVERIFY(!QFileInfo::exists(specification.entries.at(0).targetPath));
     QVERIFY(!QFileInfo::exists(specification.entries.at(1).targetPath));
+}
+
+void TestAtomicActivitySave::
+linkedSaveWindowsJournalRemovalRetriesAfterHandleClose()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    WindowsTestHandle observer(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(journalPath.utf16()),
+        FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr));
+    QVERIFY(observer.isValid());
+
+    error.clear();
+    QVERIFY2(
+        !journal->cleanupAfterRollback(error),
+        "A sharing-blocked journal directory removal was accepted");
+    QVERIFY2(!error.isEmpty(), "Blocked cleanup must report an error");
+    QVERIFY(QFileInfo::exists(journalPath));
+    QVERIFY(QDir(journalPath).entryList(
+        QDir::AllEntries | QDir::NoDotAndDotDot
+            | QDir::Hidden | QDir::System).isEmpty());
+
+    observer.reset();
+    error.clear();
+    QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+    QVERIFY(!QFileInfo::exists(journalPath));
 }
 #endif
 
