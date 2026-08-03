@@ -1538,6 +1538,12 @@ bool ensureNewGeneration(
                     "linked-save-recovery-source-retirement-validated")) {
                 return false;
             }
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+            if (currentSource.exists) {
+                linkedActivitySaveTransitionReached(
+                    "linked-save-recovery-source-retired");
+            }
+#endif
         }
     }
     return verifyNewGeneration(state, resolved, error);

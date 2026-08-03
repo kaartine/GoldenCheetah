@@ -425,9 +425,11 @@ private slots:
     void linkedSavePreparedSourceIdentityReplacementIsRejected();
     void linkedSaveSourceRetirementSubstitutionIsRejected_data();
     void linkedSaveSourceRetirementSubstitutionIsRejected();
+    void linkedSaveSourceRepopulationStopsFurtherRetirement();
     void linkedSaveRecoveryRejectsStagedSourceAtOldName();
     void linkedSaveRecoverySourceRetirementSubstitutionIsRejected_data();
     void linkedSaveRecoverySourceRetirementSubstitutionIsRejected();
+    void linkedSaveRecoveryRepopulationStopsFurtherRetirement();
     void linkedSavePublicationPreservesExternalChanges_data();
     void linkedSavePublicationPreservesExternalChanges();
     void linkedSaveRecoveryRejectsUnsafeJournalEntries_data();
@@ -3673,6 +3675,60 @@ linkedSaveSourceRetirementSubstitutionIsRejected()
 }
 
 void TestAtomicActivitySave::
+linkedSaveSourceRepopulationStopsFurtherRetirement()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QByteArray firstStaged("staged generation 0");
+    const QByteArray secondStaged("staged generation 1");
+    const QByteArray sentinel("repopulated source sentinel");
+    writeFixture(journal->stagingPath(0), firstStaged);
+    QVERIFY2(journal->recordStaged(0, error), qPrintable(error));
+    writeFixture(journal->stagingPath(1), secondStaged);
+    QVERIFY2(journal->recordStaged(1, error), qPrintable(error));
+
+    bool hookReached = false;
+    bool sentinelWritten = false;
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-source-retired"),
+        [&]() {
+            hookReached = true;
+            QFile replacement(specification.entries.at(0).sourcePath);
+            sentinelWritten = replacement.open(
+                    QIODevice::WriteOnly | QIODevice::Truncate)
+                && replacement.write(sentinel) == sentinel.size()
+                && replacement.flush();
+        });
+
+    error.clear();
+    const bool published = journal->publishAndCommit(error);
+    clearLinkedActivitySaveTransitionAction();
+
+    QVERIFY(hookReached);
+    QVERIFY(sentinelWritten);
+    QVERIFY(!published);
+    QVERIFY2(!error.isEmpty(), "Repopulation must report an error");
+    QCOMPARE(
+        readAll(specification.entries.at(0).sourcePath), sentinel);
+    QCOMPARE(
+        readAll(specification.entries.at(1).sourcePath),
+        QByteArray("second old generation"));
+    QCOMPARE(readAll(specification.entries.at(0).targetPath), firstStaged);
+    QCOMPARE(readAll(specification.entries.at(1).targetPath), secondStaged);
+    QVERIFY(!journal->hasCommitMarker());
+    QVERIFY(QFileInfo::exists(journalPath));
+}
+
+void TestAtomicActivitySave::
 linkedSaveRecoveryRejectsStagedSourceAtOldName()
 {
     QTemporaryDir dir;
@@ -3815,6 +3871,71 @@ linkedSaveRecoverySourceRetirementSubstitutionIsRejected()
                 QStringLiteral("backup-0000.old"))),
             previousBackup);
     }
+}
+
+void TestAtomicActivitySave::
+linkedSaveRecoveryRepopulationStopsFurtherRetirement()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QByteArray firstStaged("staged generation 0");
+    const QByteArray secondStaged("staged generation 1");
+    const QByteArray sentinel("repopulated recovery source sentinel");
+    writeFixture(journal->stagingPath(0), firstStaged);
+    QVERIFY2(journal->recordStaged(0, error), qPrintable(error));
+    writeFixture(journal->stagingPath(1), secondStaged);
+    QVERIFY2(journal->recordStaged(1, error), qPrintable(error));
+    QVERIFY2(journal->publishAndCommit(error), qPrintable(error));
+    QVERIFY(journal->hasCommitMarker());
+    writeFixture(
+        specification.entries.at(0).sourcePath,
+        QByteArray("first old generation"));
+    writeFixture(
+        specification.entries.at(1).sourcePath,
+        QByteArray("second old generation"));
+    journal.reset();
+
+    bool hookReached = false;
+    bool sentinelWritten = false;
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-recovery-source-retired"),
+        [&]() {
+            hookReached = true;
+            QFile replacement(specification.entries.at(0).sourcePath);
+            sentinelWritten = replacement.open(
+                    QIODevice::WriteOnly | QIODevice::Truncate)
+                && replacement.write(sentinel) == sentinel.size()
+                && replacement.flush();
+        });
+
+    error.clear();
+    const bool reconciled =
+        LinkedActivitySave::Journal::reconcileAll(dir.path(), error);
+    clearLinkedActivitySaveTransitionAction();
+
+    QVERIFY(hookReached);
+    QVERIFY(sentinelWritten);
+    QVERIFY(!reconciled);
+    QVERIFY2(!error.isEmpty(), "Repopulation must report an error");
+    QCOMPARE(
+        readAll(specification.entries.at(0).sourcePath), sentinel);
+    QCOMPARE(
+        readAll(specification.entries.at(1).sourcePath),
+        QByteArray("second old generation"));
+    QCOMPARE(readAll(specification.entries.at(0).targetPath), firstStaged);
+    QCOMPARE(readAll(specification.entries.at(1).targetPath), secondStaged);
+    QVERIFY(QFileInfo::exists(journalPath));
+    QVERIFY(QFileInfo::exists(
+        QDir(journalPath).filePath(QStringLiteral("COMMITTED"))));
 }
 
 void TestAtomicActivitySave::
