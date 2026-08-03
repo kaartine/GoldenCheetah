@@ -183,18 +183,43 @@ bool pathEntryExists(const QString &path)
     return info.exists() || info.isSymLink();
 }
 
-bool anchorJournalDirectory(JournalState &state, QString &error)
+bool anchorJournalNamespace(JournalState &state, QString &error)
 {
     state.namespaceDirectory = {};
-    state.journalDirectory = {};
+    AnchoredFileSystem::DirectoryAnchor transactionsDirectory;
+    const QFileInfo namespaceInfo(state.namespacePath);
     if (!AnchoredFileSystem::DirectoryAnchor::open(
-            state.namespacePath,
+            namespaceInfo.absolutePath(),
+            transactionsDirectory,
+            error)
+        || !AnchoredFileSystem::hardenPrivateDirectory(
+            transactionsDirectory, error)
+        || !transactionsDirectory.openChild(
+            namespaceInfo.fileName(),
             state.namespaceDirectory,
             error)
+        || !AnchoredFileSystem::hardenPrivateDirectory(
+            state.namespaceDirectory, error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "Cannot anchor the linked-save journal namespace");
+        }
+        return false;
+    }
+    return true;
+}
+
+bool anchorJournalDirectory(JournalState &state, QString &error)
+{
+    state.journalDirectory = {};
+    if ((!state.namespaceDirectory.isValid()
+         && !anchorJournalNamespace(state, error))
         || !state.namespaceDirectory.openChild(
             state.manifest.id,
             state.journalDirectory,
-            error)) {
+            error)
+        || !AnchoredFileSystem::hardenPrivateDirectory(
+            state.journalDirectory, error)) {
         if (error.isEmpty()) {
             error = QStringLiteral(
                 "Cannot anchor the linked-save journal directory");
@@ -1697,6 +1722,7 @@ QStringList productionLockPaths(const QList<ResolvedEntry> &entries)
 bool loadManifestState(
     const QString &root,
     const QString &journalPath,
+    JournalState anchored,
     std::shared_ptr<JournalState> &state,
     QString &error)
 {
@@ -1712,25 +1738,25 @@ bool loadManifestState(
             "The transaction directory is outside its namespace");
         return false;
     }
-    if (!ensurePrivateDirectory(journalPath, error)) return false;
-
-    std::shared_ptr<JournalState> loaded(new JournalState);
+    std::shared_ptr<JournalState> loaded(
+        new JournalState(std::move(anchored)));
     loaded->athleteRoot = root;
     loaded->namespacePath = expectedNamespace;
     loaded->journalPath = journalPath;
+    loaded->manifest.id = id;
     loaded->manifestPath = QDir(journalPath).filePath(Detail::ManifestName);
     loaded->commitMarkerPath = QDir(journalPath).filePath(
         Detail::CommitMarkerName);
 
     QByteArray contents;
-    if (!readSmallRegularFile(
+    if (!journalDirectoryMatches(*loaded, error)
+        || !readSmallRegularFile(
             loaded->manifestPath,
             Detail::MaximumManifestSize,
             contents,
             loaded->manifestSnapshot,
             error)
-        || !parseManifest(contents, id, loaded->manifest, error)
-        || !anchorJournalDirectory(*loaded, error)) {
+        || !parseManifest(contents, id, loaded->manifest, error)) {
         return false;
     }
     QList<ResolvedEntry> resolved;
@@ -3949,27 +3975,27 @@ bool maximumSizeForPreManifestEntry(
 }
 
 bool removePreManifestJournal(
-    const QString &namespacePath,
-    const QString &journalPath,
+    JournalState anchored,
     QString &error)
 {
+    const QString namespacePath = anchored.namespacePath;
+    const QString journalPath = anchored.journalPath;
     const QString id = QFileInfo(journalPath).fileName();
-    if (!validTransactionId(id)
-        || !ensurePrivateDirectory(journalPath, error)) {
+    if (!validTransactionId(id)) {
+        return false;
+    }
+
+    if (!journalDirectoryMatches(anchored, error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "Cannot anchor an incomplete linked-save journal");
+        }
         return false;
     }
 
     AtomicFileLockSet locks;
     if (!locks.lock({journalPath}, error)) return false;
-
-    AnchoredFileSystem::DirectoryAnchor namespaceDirectory;
-    AnchoredFileSystem::DirectoryAnchor journalDirectory;
-    if (!AnchoredFileSystem::DirectoryAnchor::open(
-            namespacePath, namespaceDirectory, error)
-        || !namespaceDirectory.openChild(
-            id, journalDirectory, error)
-        || !namespaceDirectory.pathMatches(error)
-        || !journalDirectory.pathMatches(error)) {
+    if (!journalDirectoryMatches(anchored, error)) {
         if (error.isEmpty()) {
             error = QStringLiteral(
                 "Cannot anchor an incomplete linked-save journal");
@@ -3997,7 +4023,7 @@ bool removePreManifestJournal(
             return false;
         }
         if (!pinAnchoredJournalFile(
-                journalDirectory,
+                anchored.journalDirectory,
                 entry.fileName(),
                 maximumSize,
                 removable,
@@ -4010,14 +4036,15 @@ bool removePreManifestJournal(
 #endif
     for (const AnchoredJournalFile &file : std::as_const(removable)) {
         if (!removeAnchoredJournalFile(
-                journalDirectory, file, error)) {
+                anchored.journalDirectory, file, error)) {
             return false;
         }
     }
     removable.clear();
-    if (!journalDirectory.pathMatches(error)) return false;
+    if (!anchored.journalDirectory.pathMatches(error)) return false;
     const AnchoredFileSystem::MutationResult removal =
-        AnchoredFileSystem::removeEmptyDirectory(journalDirectory);
+        AnchoredFileSystem::removeEmptyDirectory(
+            anchored.journalDirectory);
     if (removal.effect
         == AnchoredFileSystem::MutationEffect::AppliedDurable) {
         return true;
@@ -4025,7 +4052,7 @@ bool removePreManifestJournal(
     if (removal.effect
         == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
         QString syncError;
-        if (namespaceDirectory.sync(syncError)) return true;
+        if (anchored.namespaceDirectory.sync(syncError)) return true;
         error = removal.error;
         appendError(error, syncError);
         return false;
@@ -4120,7 +4147,8 @@ std::shared_ptr<Journal> Journal::prepare(
     }
     if (!ensureTransactionNamespace(root, state->namespacePath, error)
         || !transactionNamespacesAreReady(
-            root, state->namespacePath, error)) {
+            root, state->namespacePath, error)
+        || !anchorJournalNamespace(*state, error)) {
         return {};
     }
 
@@ -4199,37 +4227,53 @@ std::shared_ptr<Journal> Journal::prepare(
     linkedActivitySaveTransitionReached(
         "linked-save-before-journal-directory-create");
 #endif
-    if (!QDir().mkdir(state->journalPath)) {
-        error = QStringLiteral(
-            "Cannot create the linked-save transaction journal");
+    const AnchoredFileSystem::MutationResult creation =
+        AnchoredFileSystem::createPrivateChildDirectory(
+            state->namespaceDirectory,
+            state->manifest.id,
+            state->journalDirectory);
+    if (creation.effect
+        != AnchoredFileSystem::MutationEffect::AppliedDurable) {
+        error = creation.error.isEmpty()
+            ? QStringLiteral(
+                  "Cannot create the linked-save transaction journal")
+            : creation.error;
+        if (!creation.verifiedRecoveryPath.isEmpty()) {
+            appendError(
+                error,
+                QStringLiteral("recovery directory retained at %1")
+                    .arg(creation.verifiedRecoveryPath));
+        } else if (state->journalDirectory.isValid()) {
+            QString retainedError;
+            if (state->journalDirectory.pathMatches(retainedError)) {
+                appendError(
+                    error,
+                    QStringLiteral("recovery journal retained at %1")
+                        .arg(state->journalPath));
+            }
+        }
         return {};
     }
 #ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
     linkedActivitySaveTransitionReached(
         "linked-save-journal-directory-path-created");
 #endif
-    if (!makeDirectoryPrivate(state->journalPath, error)
-        || !syncParentDirectory(state->journalPath, error)) {
+    if (!journalDirectoryMatches(*state, error)) {
         if (error.isEmpty()) {
             error = QStringLiteral(
-                "Cannot create the linked-save transaction journal");
+                "The linked-save transaction journal changed after creation");
         }
-        return {};
-    }
-    if (!anchorJournalDirectory(*state, error)) {
-        appendError(
-            error,
-            QStringLiteral("recovery journal retained at %1")
-                .arg(state->journalPath));
         return {};
     }
 #ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
     linkedActivitySaveTransitionReached("linked-save-directory-created");
 #endif
+    if (!journalDirectoryMatches(*state, error)) return {};
 
     for (int index = 0; index < state->manifest.entries.size(); ++index) {
         const Entry &entry = state->manifest.entries.at(index);
         const ResolvedEntry &paths = resolved.at(index);
+        if (!journalDirectoryMatches(*state, error)) return {};
         if (!copyExpectedFileAtomically(
                 paths.source,
                 paths.sourceCopy,
@@ -4245,18 +4289,20 @@ std::shared_ptr<Journal> Journal::prepare(
 #ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
         linkedActivitySaveTransitionReached("linked-save-source-copy-published");
 #endif
-        if (entry.backup.exists
-            && !copyExpectedFileAtomically(
+        if (entry.backup.exists) {
+            if (!journalDirectoryMatches(*state, error)) return {};
+            if (!copyExpectedFileAtomically(
                 paths.backup,
                 paths.backupCopy,
                 entry.backup.contents,
                 AtomicFileMode::CreateNew,
                 error)) {
-            appendError(
-                error,
-                QStringLiteral("recovery journal retained at %1")
-                    .arg(state->journalPath));
-            return {};
+                appendError(
+                    error,
+                    QStringLiteral("recovery journal retained at %1")
+                        .arg(state->journalPath));
+                return {};
+            }
         }
 #ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
         if (entry.backup.exists) {
@@ -4264,6 +4310,7 @@ std::shared_ptr<Journal> Journal::prepare(
         }
 #endif
     }
+    if (!journalDirectoryMatches(*state, error)) return {};
     if (!writeManifestFile(*state, false, error)) {
         appendError(
             error,
@@ -4322,6 +4369,16 @@ bool Journal::reconcileAll(const QString &athleteRoot, QString &error)
     const QFileInfo namespaceInfo(namespacePath);
     if (!namespaceInfo.exists() && !namespaceInfo.isSymLink()) return true;
     if (!ensurePrivateDirectory(namespacePath, error)) return false;
+    JournalState recoveryNamespace;
+    recoveryNamespace.namespacePath = namespacePath;
+    if (!anchorJournalNamespace(recoveryNamespace, error)
+        || !recoveryNamespace.namespaceDirectory.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "Cannot anchor the linked-save recovery namespace");
+        }
+        return false;
+    }
 
     const QFileInfoList entries = QDir(namespacePath).entryInfoList(
         QDir::AllEntries | QDir::NoDotAndDotDot
@@ -4343,14 +4400,25 @@ bool Journal::reconcileAll(const QString &athleteRoot, QString &error)
             continue;
         }
 
+        QString transactionError;
+        JournalState candidate;
+        candidate.namespacePath = namespacePath;
+        candidate.journalPath = entry.absoluteFilePath();
+        candidate.manifest.id = name;
+        candidate.namespaceDirectory =
+            recoveryNamespace.namespaceDirectory;
+        if (!anchorJournalDirectory(candidate, transactionError)
+            || !journalDirectoryMatches(candidate, transactionError)) {
+            failures.append(transactionError);
+            continue;
+        }
+
         const QString manifestPath = QDir(entry.absoluteFilePath()).filePath(
             Detail::ManifestName);
         const QFileInfo manifestInfo(manifestPath);
-        QString transactionError;
         if (!manifestInfo.exists() && !manifestInfo.isSymLink()) {
             if (!removePreManifestJournal(
-                    namespacePath,
-                    entry.absoluteFilePath(),
+                    std::move(candidate),
                     transactionError)) {
                 failures.append(transactionError);
             }
@@ -4361,6 +4429,7 @@ bool Journal::reconcileAll(const QString &athleteRoot, QString &error)
         if (!loadManifestState(
                 root,
                 entry.absoluteFilePath(),
+                std::move(candidate),
                 state,
                 transactionError)) {
             failures.append(transactionError);
@@ -4375,12 +4444,9 @@ bool Journal::reconcileAll(const QString &athleteRoot, QString &error)
         }
     }
 
-    AnchoredFileSystem::DirectoryAnchor namespaceDirectory;
     QString namespaceError;
-    if (!AnchoredFileSystem::DirectoryAnchor::open(
-            namespacePath, namespaceDirectory, namespaceError)
-        || !namespaceDirectory.pathMatches(namespaceError)
-        || !namespaceDirectory.sync(namespaceError)) {
+    if (!recoveryNamespace.namespaceDirectory.pathMatches(namespaceError)
+        || !recoveryNamespace.namespaceDirectory.sync(namespaceError)) {
         failures.append(
             namespaceError.isEmpty()
                 ? QStringLiteral(

@@ -3096,26 +3096,30 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Verification: Included in the focused removal program and its final normal and
   sanitizer runs recorded under `DATA-018`.
 
-### SEC-025: Activity deletion pathname checks remain TOCTOU-prone
+### SEC-025: Activity transaction pathname checks remain TOCTOU-prone
 
 - Status: IN_PROGRESS
 - Code: `src/Core/RideCacheRemoval.cpp`,
+  `src/Core/LinkedActivitySaveJournal.cpp`,
   `src/Core/LinkedActivityRemovalJournal.cpp`,
   `src/FileIO/AnchoredFileSystem.cpp`, and `src/FileIO/AtomicFileWriter.h`
 - Impact: Unsafe names, final symlinks, and planned-backup symlinks are rejected,
   snapshots are hashed, and cooperative writers share path locks. A separate
-  local process can still replace a parent or directory entry between
-  `QFileInfo`, open, hash, and move operations. Path-based cleanup can then act
-  on a different object or outside the intended athlete namespace.
+  process running as the same OS identity can still replace some parent or
+  directory entries between pathname checks and operations. Remaining
+  path-based mutation and namespace-bootstrap paths can therefore observe a
+  different generation or act outside the intended athlete namespace.
 - Test-first evidence: Deterministic regressions replace snapshotted activity
   parents, final entries, active journal directories, `manifest.json`,
   `peer.old`, commit markers, and enumerated journal temporary files at the
   corresponding validation-to-mutation boundaries. Further regressions replace
   the entire linked-removal namespace with a symlink immediately before journal
-  cleanup and exchange a just-verified empty directory before `rmdir`. The
-  unsafe baselines accepted byte-identical substitutes, overwrote or deleted
-  them, or followed the redirected namespace far enough to remove an empty
-  directory outside the athlete transaction tree.
+  cleanup, exchange a just-verified empty directory before `rmdir`, substitute
+  the linked-save namespace and newly created journal, and terminate after a
+  private staging directory is anchored but before publication. The unsafe
+  baselines accepted byte-identical substitutes, overwrote or deleted them,
+  followed a redirected namespace far enough to remove an outside directory,
+  or left an unrecognized staging name that blocked later recovery.
 - Partial resolution: RideCache storage transactions now open one anchored
   athlete-root generation, walk children without following links, and pin each
   existing source, backup, derived file, and journal control file once. Reads,
@@ -3138,31 +3142,65 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   repopulated UUID name as partial cleanup. A partial quarantine remains
   visible to both rollback and commit retries instead of being mistaken for a
   completed transaction.
-- Verification: Every regression failed for its intended unsafe behavior before
-  its fix. At the current integration head, all 355 RideCache removal cases
-  pass in normal, strict ASan/UBSan/LSan, and ThreadSanitizer Linux builds. The
-  anchored primitive suite passes 44 cases with 8 native-only skips on Linux,
-  44 cases with 8 skips on macOS 15, and 40 cases with 12 skips on Windows 2025;
-  the 18 Windows durable-filesystem cases also pass. The full native macOS
-  RideCache suite passes all 355 cases; Windows passes 342 with 13 expected
-  platform skips. Both native suites report zero failures and zero blacklisted
-  cases after adding the Windows journal-level nonempty-directory injection
-  point.
-- Residual: Journal namespace and instance creation still perform pathname-based
-  permission and cleanup work before anchoring. Linked-save source retirement
-  validates content and then removes a pathname; replace-existing publication,
-  rollback, activity conversion/rename, split archival, plan replacement,
-  staged-publication rollback, and a few lower-risk backup cleanups retain
-  similar same-user exchange windows. `QLockFile` sidecars also have a separate
-  stale-helper availability issue. POSIX exposes no portable
-  identity-conditional `rmdir`; the private random quarantine, two identity
+
+  Linked-save publication, rollback, source retirement, commit-marker handling,
+  and cleanup now retain pinned identities and anchored parents through their
+  mutations. Create-new atomic writers similarly hand their staging identity
+  from the writer to the anchored publisher, and stale `QLockFile` removal
+  helper names are parsed and ignored without weakening rejection of unknown
+  entries.
+
+  A new private-child primitive creates a random recovery-owned staging
+  directory below an anchored private parent, hardens and verifies it through
+  its open identity, publishes it with no replacement, synchronizes the parent,
+  and returns an open anchor for the published generation. Unix requires the
+  effective owner, exact mode `0700`, and no Linux or macOS extended ACL; it
+  uses descriptor-relative creation and identity checks. Windows creates an
+  owner-only protected inheritable DACL at birth, validates persistent ACL
+  support, keeps identity-checked handles across publication, and denies delete
+  sharing during the mutation. Cleanup failures retain their verified recovery
+  location and report a partial effect. Crash-left staging names are plain UUIDs
+  so existing pre-manifest recovery can reconcile them.
+
+  Linked-save preparation now hardens `.gc-transactions` and `linked-save`
+  through directory anchors and creates each UUID journal with that primitive.
+  Recovery hardens the same parent, namespace, and every valid UUID child before
+  namespace enumeration, manifest-existence branching, child enumeration, or
+  manifest reads. Preparation verifies the anchored journal after creation
+  hooks, before every source and prior-backup copy, and before manifest
+  publication. Substitutions injected at those deterministic validation hooks
+  are rejected without writing the next transaction file into the substitute.
+- Verification: Every deterministic regression failed for its intended unsafe
+  behavior before its fix. On the current Linux change, the anchored primitive
+  suite passes 68 cases with 8 Windows-only skips under strict
+  ASan/UBSan/LSan and ThreadSanitizer. The atomic and linked-save suite passes
+  all 308 cases under both sanitizer configurations, including namespace,
+  source/backup-copy, post-check, and private-staging crash recovery. The
+  focused linked-save cleanup suite passes 4 cases under strict sanitizers.
+  The dependent RideCache removal suite passes all 372 cases under ASan/UBSan
+  (LSan disabled for its documented Qt teardown allocation). The immediately
+  preceding native
+  integration head passes its macOS and Windows anchored, RideCache, durable
+  filesystem, and general build workflows; this private-child increment still
+  requires its own hosted native run before integration.
+- Residual: Initial creation of `.gc-transactions` and its fixed child
+  namespaces still starts with pathname-based bootstrap before the first anchor.
+  Linked-removal journal instances do not yet use the private-child primitive.
+  The private-directory API explicitly trusts processes running as the same OS
+  identity and privileged administrators; such a process can still exchange a
+  name after a revalidation and before a later pathname-based copy or write.
+  Replace-existing publication, generic staged-set rollback, activity
+  conversion/rename, split archival, plan replacement, and lower-risk backup
+  cleanup retain related windows. POSIX exposes no portable
+  identity-conditional `rmdir`; private random quarantine, repeated identity
   checks, anchored post-checks, and fail-closed recovery reduce but cannot
-  eliminate the final check-to-syscall race. These residuals keep this item
-  `IN_PROGRESS`.
-- Next test and fix: Pin linked-save retirement sources through deletion and
-  preserve both the original and a substituted pathname. Then apply the same
-  observed-generation contract to replace-existing publication and rollback,
-  followed by parent-anchored namespace creation.
+  eliminate its final check-to-syscall interval. A reported verified recovery
+  path is also point-in-time evidence, not a permanent claim after handles are
+  released. These residuals keep this item `IN_PROGRESS`.
+- Next test and fix: Move linked-removal journal creation onto the private-child
+  primitive and anchor namespace bootstrap from the athlete root. Then apply the
+  observed-generation contract to generic replace-existing publication and
+  staged rollback.
 
 ### GUI-007: Modal activity workflows retained dangling RideItem pointers
 
