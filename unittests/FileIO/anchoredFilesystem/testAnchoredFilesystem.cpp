@@ -214,7 +214,7 @@ private slots:
     void moveRejectsFinalEntryReplacement();
     void moveDoesNotReplaceDestination();
     void moveDoesNotReplaceDestinationAcrossDirectories();
-    void removeUsesPinnedParentAfterPathReplacement();
+    void removeRejectsPinnedParentPathReplacement();
     void removeRejectsFinalEntryReplacement();
     void removesAnchoredEmptyDirectory();
     void emptyDirectoryRemovalRejectsReplacedParent();
@@ -946,7 +946,7 @@ void TestAnchoredFilesystem::moveDoesNotReplaceDestinationAcrossDirectories()
     QCOMPARE(pin(target).identity(), targetIdentity);
 }
 
-void TestAnchoredFilesystem::removeUsesPinnedParentAfterPathReplacement()
+void TestAnchoredFilesystem::removeRejectsPinnedParentPathReplacement()
 {
     QTemporaryDir root;
     QVERIFY(root.isValid());
@@ -978,13 +978,23 @@ void TestAnchoredFilesystem::removeUsesPinnedParentAfterPathReplacement()
         pin(entry(openDirectory(sourcePath), QStringLiteral("activity")))
             .identity();
 
-    verifyApplied(remove(pinned));
+    const NativeIdentity originalIdentity = pinned.identity();
+    const MutationResult result = remove(pinned);
+    QCOMPARE(result.effect, MutationEffect::NoEffect);
+    QVERIFY(!result.applied());
+    QVERIFY(!result.error.isEmpty());
+    QCOMPARE(pinned.identity(), originalIdentity);
     QCOMPARE(readFixture(substitutePath), contents);
     QCOMPARE(pin(entry(openDirectory(sourcePath),
                        QStringLiteral("activity"))).identity(),
              substituteIdentity);
-    QVERIFY(!QFileInfo::exists(
-        QDir(retainedPath).filePath(QStringLiteral("activity"))));
+    const QString retainedActivity =
+        QDir(retainedPath).filePath(QStringLiteral("activity"));
+    QCOMPARE(readFixture(retainedActivity), contents);
+    QCOMPARE(
+        pin(entry(openDirectory(retainedPath), QStringLiteral("activity")))
+            .identity(),
+        originalIdentity);
 }
 
 void TestAnchoredFilesystem::removeRejectsFinalEntryReplacement()

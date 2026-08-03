@@ -492,6 +492,16 @@ bool sameWindowsIdentityAndData(
     return sameWindowsObject(left, right)
         && left.links == right.links
         && left.size == right.size
+        && left.modified == right.modified
+        && left.changed == right.changed;
+}
+
+bool sameWindowsMoveIdentityAndData(
+    const WindowsStamp &left, const WindowsStamp &right)
+{
+    return sameWindowsObject(left, right)
+        && left.links == right.links
+        && left.size == right.size
         && left.modified == right.modified;
 }
 
@@ -1307,7 +1317,7 @@ bool writeNewFile(
     WindowsHandle output(::CreateFileW(
         reinterpret_cast<LPCWSTR>(destination.displayPath_.utf16()),
         GENERIC_READ | GENERIC_WRITE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        FILE_SHARE_READ | FILE_SHARE_DELETE,
         nullptr,
         CREATE_NEW,
         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT
@@ -1511,7 +1521,7 @@ bool copyToNewFile(
     WindowsHandle output(::CreateFileW(
         reinterpret_cast<LPCWSTR>(destination.displayPath_.utf16()),
         GENERIC_READ | GENERIC_WRITE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        FILE_SHARE_READ | FILE_SHARE_DELETE,
         nullptr,
         CREATE_NEW,
         FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT
@@ -1827,7 +1837,7 @@ bool pinRegularFile(
     WindowsHandle handle(::CreateFileW(
         reinterpret_cast<LPCWSTR>(entry.displayPath_.utf16()),
         GENERIC_READ | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        FILE_SHARE_READ | FILE_SHARE_DELETE,
         nullptr,
         OPEN_EXISTING,
         FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_WRITE_THROUGH,
@@ -2202,7 +2212,7 @@ MutationResult moveNoReplace(
     WindowsStamp moved;
     if (!captureWindowsStamp(
             mutation.get(), moved, false, result.error)
-        || !sameWindowsIdentityAndData(
+        || !sameWindowsMoveIdentityAndData(
             moved, source.state_->stamp)
         || windowsIdentity(moved, 'f')
             != source.state_->identity) {
@@ -2218,6 +2228,21 @@ MutationResult moveNoReplace(
     source.state_->entry = destination;
     source.state_->stamp = moved;
     source.state_->identity = windowsIdentity(moved, 'f');
+    QByteArray verifiedDigest;
+    const PinnedChunkConsumer discard = [](
+        const char *, qsizetype, QString &) { return true; };
+    if (!streamPinnedFile(
+            *source.state_, discard, verifiedDigest, result.error)
+        || verifiedDigest != source.state_->sha256) {
+        result.effect = MutationEffect::Partial;
+        if (result.error.isEmpty()) {
+            result.error = QStringLiteral(
+                "The anchored file contents changed during its move");
+        }
+        result.verifiedRecoveryPath =
+            source.verifiedPath(destination);
+        return result;
+    }
     result.effect = MutationEffect::AppliedDurable;
     return result;
 #else
@@ -2263,6 +2288,14 @@ MutationResult remove(PinnedFile &file)
     reportAnchoredFilesystemTransition(
         "remove-before-quarantine",
         original.displayPath_);
+    QString preflightParentError;
+    if (!original.parent_.pathMatches(preflightParentError)) {
+        result.error = preflightParentError.isEmpty()
+            ? QStringLiteral(
+                  "The anchored removal parent changed before quarantine")
+            : preflightParentError;
+        return result;
+    }
     result = moveNoReplace(file, quarantine);
     if (!result.applied()) return result;
 

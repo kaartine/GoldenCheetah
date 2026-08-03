@@ -5431,8 +5431,8 @@ linkedSaveRollbackProductionParentSubstitutionIsRejected()
     if (beforeQuarantine) {
         QCOMPARE(
             readAll(QDir(displacedPath).filePath(
-                QStringLiteral("first-old.json.bak"))),
-            firstSource);
+                QStringLiteral("first-new.json"))),
+            firstStaged);
         QCOMPARE(
             readAll(QDir(displacedPath).filePath(
                 QStringLiteral("first-old.json"))),
@@ -5881,17 +5881,17 @@ linkedSaveCommitMarkerIdentityLossIsRejected()
     QVERIFY2(!error.isEmpty(), "Marker identity loss must report an error");
     QVERIFY(originalPin.isValid());
     if (replaceMarker) {
-        bool originalMatches = false;
         bool replacementMatches = false;
         QString matchError;
         const AnchoredFileSystem::EntryRef retainedEntry =
             markerParent.entry(QStringLiteral("retained-COMMITTED"), matchError);
         QVERIFY2(retainedEntry.isValid(), qPrintable(matchError));
+        AnchoredFileSystem::PinnedFile retainedPin;
         QVERIFY2(
-            AnchoredFileSystem::entryMatches(
-                retainedEntry, originalPin, originalMatches, matchError),
+            AnchoredFileSystem::pinRegularFile(
+                retainedEntry, retainedPin, matchError),
             qPrintable(matchError));
-        QVERIFY(originalMatches);
+        QVERIFY(retainedPin.identity() == originalPin.identity());
         QVERIFY2(
             AnchoredFileSystem::entryMatches(
                 replacementEntry,

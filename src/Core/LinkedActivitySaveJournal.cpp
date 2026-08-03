@@ -123,6 +123,13 @@ struct AnchoredRetirementSource : AnchoredActivityFile
 
 } // namespace Detail
 
+enum class CommitMarkerState
+{
+    Absent,
+    Published,
+    Ambiguous
+};
+
 struct JournalState
 {
     QString athleteRoot;
@@ -145,6 +152,8 @@ struct JournalState
     QSet<QString> removedJournalFiles;
     bool journalFileRemovalSyncPending = false;
     bool terminalCleanupCompleted = false;
+    CommitMarkerState commitMarkerState = CommitMarkerState::Absent;
+    Detail::AnchoredJournalFile commitMarker;
 };
 
 namespace {
@@ -758,15 +767,19 @@ bool publishPinnedActivityFile(
         source, destination, temporaryName, error);
 }
 
-bool publishAnchoredJournalFile(
+bool publishCommitMarker(
     JournalState &state,
-    const QString &name,
     const QByteArray &contents,
-    AtomicFileSnapshot &snapshot,
     QString &error)
 {
+    if (state.commitMarkerState != CommitMarkerState::Absent) {
+        error = QStringLiteral(
+            "The linked-save commit-marker state is already decided");
+        return false;
+    }
     if (!journalDirectoryMatches(state, error)) return false;
 
+    const QString name = Detail::CommitMarkerName;
     AnchoredActivityFile destination;
     destination.parent = state.journalDirectory;
     destination.entry = destination.parent.entry(name, error);
@@ -815,22 +828,44 @@ bool publishAnchoredJournalFile(
     QString parentError;
     bool parentMatches = destination.parent.pathMatches(parentError);
 
-    if (destinationOwned) {
-        snapshot.size = temporary.file.size();
-        snapshot.digest = temporary.file.sha256();
+    const bool mayHavePublished = publication.effect
+            == AnchoredFileSystem::MutationEffect::AppliedDurable
+        || publication.effect
+            == AnchoredFileSystem::MutationEffect::AppliedNotDurable
+        || publication.effect
+            == AnchoredFileSystem::MutationEffect::Partial;
+    if (mayHavePublished) {
+        state.commitMarker.name = name;
+        state.commitMarker.entry = destination.entry;
+        state.commitMarker.file =
+            std::make_shared<AnchoredFileSystem::PinnedFile>(
+                std::move(temporary.file));
+        state.commitMarkerState = CommitMarkerState::Ambiguous;
     }
     if (publication.effect
             == AnchoredFileSystem::MutationEffect::AppliedDurable
         && destinationOwned && parentMatches) {
+        state.commitMarkerState = CommitMarkerState::Published;
         return true;
     }
     if (publication.effect
         == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
         QString syncError;
         const bool synchronized = destination.parent.sync(syncError);
+        bool stillOwned = false;
+        verificationError.clear();
+        if (state.commitMarker.file
+            && state.commitMarker.file->isValid()) {
+            AnchoredFileSystem::entryMatches(
+                destination.entry,
+                *state.commitMarker.file,
+                stillOwned,
+                verificationError);
+        }
         parentError.clear();
         parentMatches = destination.parent.pathMatches(parentError);
-        if (synchronized && destinationOwned && parentMatches) {
+        if (synchronized && stillOwned && parentMatches) {
+            state.commitMarkerState = CommitMarkerState::Published;
             return true;
         }
         error = publication.error.isEmpty()
@@ -1727,6 +1762,48 @@ bool markerSnapshot(
     return true;
 }
 
+bool verifyTrackedCommitMarker(
+    JournalState &state, QString &error)
+{
+    const auto reject = [&]() {
+        state.commitMarkerState = CommitMarkerState::Ambiguous;
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The linked-save commit marker changed after publication");
+        }
+        return false;
+    };
+    if (state.commitMarkerState != CommitMarkerState::Published
+        || state.commitMarker.name != Detail::CommitMarkerName
+        || !state.commitMarker.entry.isValid()
+        || !state.commitMarker.file
+        || !state.commitMarker.file->isValid()) {
+        return reject();
+    }
+    if (!journalDirectoryMatches(state, error)) return reject();
+
+    QByteArray contents;
+    if (!AnchoredFileSystem::readAll(
+            *state.commitMarker.file,
+            Detail::MaximumCommitMarkerSize,
+            contents,
+            error)
+        || contents != state.manifest.id.toLatin1() + '\n') {
+        return reject();
+    }
+    bool matches = false;
+    if (!AnchoredFileSystem::entryMatches(
+            state.commitMarker.entry,
+            *state.commitMarker.file,
+            matches,
+            error)
+        || !matches
+        || !state.journalDirectory.pathMatches(error)) {
+        return reject();
+    }
+    return true;
+}
+
 QByteArray retirementIntentContents(
     const JournalState &state, int index)
 {
@@ -1744,27 +1821,49 @@ AtomicFileSnapshot retirementIntentSnapshot(
 }
 
 bool readCommitMarker(
-    const JournalState &state, bool &committed, QString &error)
+    JournalState &state, bool &committed, QString &error)
 {
     committed = false;
-    const QFileInfo info(state.commitMarkerPath);
-    if (!info.exists() && !info.isSymLink()) return true;
-    if (!info.isFile() || info.isSymLink()) {
-        error = QStringLiteral("Cannot read the transaction commit marker");
+    if (state.commitMarkerState == CommitMarkerState::Ambiguous) {
+        error = QStringLiteral(
+            "The linked-save commit-marker publication is ambiguous");
         return false;
     }
-    if (info.size() > Detail::MaximumCommitMarkerSize) {
-        error = QStringLiteral("A transaction file is unexpectedly large: %1")
-                    .arg(state.commitMarkerPath);
+    if (state.commitMarkerState == CommitMarkerState::Published) {
+        if (state.removedJournalFiles.contains(Detail::CommitMarkerName)
+            && (!state.commitMarker.file
+                || !state.commitMarker.file->isValid())) {
+            committed = true;
+            return true;
+        }
+        if (!verifyTrackedCommitMarker(state, error)) return false;
+        committed = true;
+        return true;
+    }
+
+    if (!journalDirectoryMatches(state, error)) return false;
+    AnchoredJournalFile marker;
+    marker.name = Detail::CommitMarkerName;
+    marker.entry = state.journalDirectory.entry(marker.name, error);
+    bool exists = false;
+    if (!marker.entry.isValid()
+        || !AnchoredFileSystem::entryExists(
+            marker.entry, exists, error)) {
         return false;
     }
+    if (!exists) return true;
+
+    marker.file = std::make_shared<AnchoredFileSystem::PinnedFile>();
     QByteArray contents;
-    AtomicFileSnapshot observed;
-    if (!readSmallRegularFile(
-            state.commitMarkerPath,
+    if (!AnchoredFileSystem::pinRegularFile(
+            marker.entry,
+            *marker.file,
+            error,
+            Detail::MaximumCommitMarkerSize)
+        || !AnchoredFileSystem::readAll(
+            *marker.file,
             Detail::MaximumCommitMarkerSize,
             contents,
-            observed,
             error)) {
         return false;
     }
@@ -1772,6 +1871,19 @@ bool readCommitMarker(
         error = QStringLiteral("The transaction commit marker is invalid");
         return false;
     }
+    bool matches = false;
+    if (!AnchoredFileSystem::entryMatches(
+            marker.entry, *marker.file, matches, error)
+        || !matches
+        || !state.journalDirectory.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The transaction commit marker changed while being pinned");
+        }
+        return false;
+    }
+    state.commitMarker = std::move(marker);
+    state.commitMarkerState = CommitMarkerState::Published;
     committed = true;
     return true;
 }
@@ -3413,13 +3525,20 @@ bool removeJournalDirectory(
     AtomicFileSnapshot marker;
     if (committed) {
         markerSnapshot(state, marker);
-        if (!state.removedJournalFiles.contains(Detail::CommitMarkerName)
-            && !anchoredJournalFileMatches(
-                findAnchoredJournalFile(files, Detail::CommitMarkerName),
-                marker)) {
-            error = QStringLiteral(
-                "The linked-save commit marker changed before cleanup");
-            return false;
+        if (!state.removedJournalFiles.contains(Detail::CommitMarkerName)) {
+            const AnchoredJournalFile *cleanupMarker =
+                findAnchoredJournalFile(files, Detail::CommitMarkerName);
+            if (state.commitMarkerState != CommitMarkerState::Published
+                || !state.commitMarker.file
+                || !state.commitMarker.file->isValid()
+                || !anchoredJournalFileMatches(cleanupMarker, marker)
+                || !cleanupMarker->file
+                || cleanupMarker->file->identity()
+                    != state.commitMarker.file->identity()) {
+                error = QStringLiteral(
+                    "The linked-save commit marker changed before cleanup");
+                return false;
+            }
         }
     }
 
@@ -3470,12 +3589,15 @@ bool removeJournalDirectory(
         }
     }
 
-    if (committed
-        && !removeExpectedFile(
-            Detail::CommitMarkerName,
-            marker,
-            true)) {
-        return false;
+    if (committed) {
+        const bool markerRemoved = removeExpectedFile(
+            Detail::CommitMarkerName, marker, true);
+        if (state.removedJournalFiles.contains(
+                Detail::CommitMarkerName)) {
+            state.commitMarker.file.reset();
+            state.commitMarker.entry = {};
+        }
+        if (!markerRemoved) return false;
     }
 #ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
     if (committed) {
@@ -3538,6 +3660,13 @@ bool removeJournalDirectory(
 
 bool rollbackJournal(JournalState &state, QString &error)
 {
+    if (state.commitMarkerState != CommitMarkerState::Absent) {
+        error = state.commitMarkerState == CommitMarkerState::Ambiguous
+            ? QStringLiteral(
+                  "Cannot roll back an ambiguous linked-save commit decision")
+            : QStringLiteral("Cannot roll back a committed linked save");
+        return false;
+    }
     if (state.journalRemovalEffect
         != AnchoredFileSystem::MutationEffect::NoEffect) {
         if (!removeJournalDirectory(state, false, error)) return false;
@@ -3572,6 +3701,11 @@ bool rollbackJournal(JournalState &state, QString &error)
 
 bool commitJournal(JournalState &state, QString &error)
 {
+    if (state.commitMarkerState == CommitMarkerState::Ambiguous) {
+        error = QStringLiteral(
+            "Cannot clean an ambiguous linked-save commit decision");
+        return false;
+    }
     if (state.journalRemovalEffect
         != AnchoredFileSystem::MutationEffect::NoEffect) {
         if (!removeJournalDirectory(state, true, error)) return false;
@@ -4187,13 +4321,7 @@ bool Journal::publishAndCommit(QString &error)
     }
 
     const QByteArray contents = state_->manifest.id.toLatin1() + '\n';
-    AtomicFileSnapshot marker;
-    if (!publishAnchoredJournalFile(
-            *state_,
-            Detail::CommitMarkerName,
-            contents,
-            marker,
-            error)) {
+    if (!publishCommitMarker(*state_, contents, error)) {
         appendError(
             error,
             QStringLiteral(
@@ -4203,7 +4331,9 @@ bool Journal::publishAndCommit(QString &error)
 #ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
     linkedActivitySaveTransitionReached("linked-save-commit-marker");
 #endif
-    if (!verifyRetirementSourcesAbsent(*state_, resolved, error)) {
+    if (!verifyTrackedCommitMarker(*state_, error)
+        || !verifyRetirementSourcesAbsent(*state_, resolved, error)
+        || !verifyTrackedCommitMarker(*state_, error)) {
         appendError(
             error,
             QStringLiteral(
@@ -4237,7 +4367,9 @@ bool Journal::cleanupAfterCommit(QString &error)
 
 bool Journal::hasCommitMarker() const
 {
-    return state_ && pathEntryExists(state_->commitMarkerPath);
+    return state_
+        && (state_->commitMarkerState != CommitMarkerState::Absent
+            || pathEntryExists(state_->commitMarkerPath));
 }
 
 } // namespace LinkedActivitySave
