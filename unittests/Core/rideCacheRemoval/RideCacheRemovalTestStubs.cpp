@@ -1562,6 +1562,7 @@ bool RideCache::saveActivity(
             error = source.errorString();
             return false;
         }
+        source.close();
     }
     return writeFileAtomically(
         targetPath, contents, writerFactory,
