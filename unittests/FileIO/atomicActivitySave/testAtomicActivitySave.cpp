@@ -511,6 +511,7 @@ private slots:
     void linkedSaveRetirementIntentControlFiles();
     void linkedSaveRetirementIntentMustRemainNamed();
     void linkedSaveIntentRemovalPartialStaysRetryable();
+    void linkedSaveIntentRemovalNondurableStaysRetryable();
 #ifdef Q_OS_WIN
     void linkedSavePendingWindowsRetirementRetriesAfterHandleClose();
 #endif
@@ -3910,6 +3911,15 @@ linkedSaveRetirementIntentControlFiles_data()
     QTest::newRow("temporary-in-place")
         << QStringLiteral("temporary") << true << false
         << QStringLiteral("does not retire its source");
+    QTest::newRow("pending-directory")
+        << QStringLiteral("directory") << false << false
+        << QStringLiteral("unsafe entry");
+    QTest::newRow("pending-symbolic-link")
+        << QStringLiteral("symbolic-link") << false << false
+        << QStringLiteral("unsafe entry");
+    QTest::newRow("pending-oversized")
+        << QStringLiteral("oversized") << false << false
+        << QStringLiteral("unexpectedly large");
     QTest::newRow("lookalike")
         << QStringLiteral("lookalike") << false << false
         << QStringLiteral("unknown file");
@@ -3957,7 +3967,22 @@ linkedSaveRetirementIntentControlFiles()
     } else if (kind == QStringLiteral("lookalike")) {
         name = QStringLiteral("retirement-0000.pending.extra");
     }
-    writeFixture(QDir(journalPath).filePath(name), contents);
+    const QString controlPath = QDir(journalPath).filePath(name);
+    if (kind == QStringLiteral("directory")) {
+        QVERIFY(QDir().mkdir(controlPath));
+    } else if (kind == QStringLiteral("symbolic-link")) {
+        const QString sentinel = dir.filePath(
+            QStringLiteral("retirement-intent-sentinel"));
+        writeFixture(sentinel, contents);
+        if (!QFile::link(sentinel, controlPath)) {
+            QSKIP("Symbolic links are unavailable");
+        }
+    } else {
+        if (kind == QStringLiteral("oversized")) {
+            contents = QByteArray(129, 'x');
+        }
+        writeFixture(controlPath, contents);
+    }
     journal.reset();
 
     error.clear();
@@ -4093,6 +4118,57 @@ linkedSaveIntentRemovalPartialStaysRetryable()
     QVERIFY(!journal->hasCommitMarker());
     QVERIFY(QFileInfo::exists(journalPath));
 
+    error.clear();
+    QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QCOMPARE(
+        readAll(specification.entries.at(0).sourcePath),
+        QByteArray("first old generation"));
+    QCOMPARE(
+        readAll(specification.entries.at(1).sourcePath),
+        QByteArray("second old generation"));
+    QVERIFY(!QFileInfo::exists(specification.entries.at(0).targetPath));
+    QVERIFY(!QFileInfo::exists(specification.entries.at(1).targetPath));
+#endif
+}
+
+void TestAtomicActivitySave::
+linkedSaveIntentRemovalNondurableStaysRetryable()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Directory fsync injection is Unix-specific");
+#else
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    for (int index = 0; index < journal->entryCount(); ++index) {
+        writeFixture(
+            journal->stagingPath(index),
+            QByteArray("staged generation ") + QByteArray::number(index));
+        QVERIFY2(journal->recordStaged(index, error), qPrintable(error));
+    }
+
+    anchoredFilesystemSyncFailurePath = journalPath;
+    error.clear();
+    QVERIFY(!journal->publishAndCommit(error));
+    QVERIFY2(!error.isEmpty(), "Nondurable marker removal must report an error");
+    QVERIFY(!journal->hasCommitMarker());
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    error.clear();
+    QVERIFY(!journal->cleanupAfterRollback(error));
+    QVERIFY2(!error.isEmpty(), "Nondurable marker cleanup must remain retryable");
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    anchoredFilesystemSyncFailurePath.clear();
     error.clear();
     QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
     QVERIFY(!QFileInfo::exists(journalPath));
@@ -5049,6 +5125,10 @@ linkedSavePreManifestRecoveryRejectsUnknownEntries_data()
         << QStringLiteral("attacker-manifest.json-data");
     QTest::newRow("invalid-manifest-temporary")
         << QStringLiteral(".manifest.json.attack.tmp.extra");
+    QTest::newRow("retirement-intent")
+        << QStringLiteral("retirement-0000.pending");
+    QTest::newRow("retirement-intent-temporary")
+        << QStringLiteral(".retirement-0000.pending.ABC123.tmp");
 }
 
 void TestAtomicActivitySave::
@@ -5107,6 +5187,9 @@ linkedSaveOversizedControlFileFailsBeforeRead_data()
         << static_cast<qint64>(4 * 1024 * 1024 + 1) << false;
     QTest::newRow("commit-marker-temporary")
         << QStringLiteral(".COMMITTED.attack.tmp")
+        << static_cast<qint64>(129) << false;
+    QTest::newRow("retirement-intent")
+        << QStringLiteral("retirement-0000.pending")
         << static_cast<qint64>(129) << false;
     QTest::newRow("manifest-lock")
         << QStringLiteral(".manifest.json.lock")
