@@ -77,6 +77,7 @@ jobs:
         run: |
           $env:QT_QPA_PLATFORM = 'offscreen'
           & build-ridecache-removal/release/tst_rideCacheRemoval.exe `
+            linkedRideClosedDuringMetadataChangeIsNotReused `
             -silent -maxwarnings 0 `
             -o 'windows-ridecache-removal.txt,txt'
           $testStatus = $LASTEXITCODE
@@ -111,6 +112,7 @@ jobs:
           test_status=0
           QT_QPA_PLATFORM=offscreen \
             build-ridecache-removal/tst_rideCacheRemoval.app/Contents/MacOS/tst_rideCacheRemoval \
+            linkedRideClosedDuringMetadataChangeIsNotReused \
             -silent -maxwarnings 0 \
             -o macos-ridecache-removal.txt,txt || test_status=$?
           cat macos-ridecache-removal.txt
