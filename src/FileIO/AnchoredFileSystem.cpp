@@ -2615,6 +2615,10 @@ MutationResult removeEmptyDirectory(DirectoryAnchor &directory)
         return result;
     }
 
+    reportAnchoredFilesystemTransition(
+        "remove-directory-finally-verified",
+        QDir::fromNativeSeparators(path));
+
     struct WindowsDispositionInfoEx
     {
         DWORD flags = 0;
