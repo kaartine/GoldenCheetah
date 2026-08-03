@@ -1,6 +1,7 @@
 #include <QtTest>
 
 #include "AnchoredFileSystem.h"
+#include "AtomicFileWriter.h"
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -196,6 +197,7 @@ private slots:
     void permitsConcurrentPinsOfOneIdentity();
     void permitsOrdinaryQtReadsWhilePinned();
     void permitsOrdinaryQtReadsOfPinnedCopy();
+    void permitsAtomicSiblingReplacementWhileDirectoryAnchored();
     void readsPinnedContentsAfterPathReplacement();
     void directoryAnchorSurvivesPathReplacement();
     void directoryAnchorDetectsPathReplacement();
@@ -375,6 +377,34 @@ void TestAnchoredFilesystem::permitsOrdinaryQtReadsOfPinnedCopy()
         ordinaryReader.open(QIODevice::ReadOnly),
         qPrintable(ordinaryReader.errorString()));
     QCOMPARE(ordinaryReader.readAll(), contents);
+}
+
+void TestAnchoredFilesystem::
+permitsAtomicSiblingReplacementWhileDirectoryAnchored()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString journalPath = root.filePath(
+        QStringLiteral(".gc-transactions/linked-removal/journal"));
+    const QString plannedPath = root.filePath(
+        QStringLiteral("planned"));
+    QVERIFY(QDir().mkpath(journalPath));
+    QVERIFY(QDir().mkpath(plannedPath));
+    const DirectoryAnchor journal = openDirectory(journalPath);
+    const QString targetPath = QDir(plannedPath).filePath(
+        QStringLiteral("activity.json"));
+    writeFixture(targetPath, QByteArray("original"));
+
+    const QByteArray replacement("replacement");
+    ReplaceAtomicFileWriter writer(targetPath);
+    QVERIFY2(writer.open(), qPrintable(writer.errorString()));
+    QCOMPARE(writer.write(replacement), qint64(replacement.size()));
+    QVERIFY2(writer.flush(), qPrintable(writer.errorString()));
+    QVERIFY2(writer.commit(), qPrintable(writer.errorString()));
+
+    QCOMPARE(readFixture(targetPath), replacement);
+    QString error;
+    QVERIFY2(journal.pathMatches(error), qPrintable(error));
 }
 
 void TestAnchoredFilesystem::readsPinnedContentsAfterPathReplacement()
