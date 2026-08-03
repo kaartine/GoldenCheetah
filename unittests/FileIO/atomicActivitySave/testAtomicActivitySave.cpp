@@ -5015,12 +5015,18 @@ linkedFilenameSaveCrashRecoversCompleteGeneration_data()
     QTest::newRow("target-two")
         << QStringLiteral("linked-save-target-published")
         << 2 << false << false << false;
+    QTest::newRow("retirement-intent-published")
+        << QStringLiteral("linked-save-retirement-intent-published")
+        << 1 << false << false << true;
     QTest::newRow("source-retired-one")
         << QStringLiteral("linked-save-source-retired")
         << 1 << false << false << true;
     QTest::newRow("source-retired-two")
         << QStringLiteral("linked-save-source-retired")
         << 2 << false << false << true;
+    QTest::newRow("retirement-intent-removed")
+        << QStringLiteral("linked-save-retirement-intent-removed")
+        << 1 << false << false << false;
     QTest::newRow("commit-marker")
         << QStringLiteral("linked-save-commit-marker")
         << 1 << true << false << false;
