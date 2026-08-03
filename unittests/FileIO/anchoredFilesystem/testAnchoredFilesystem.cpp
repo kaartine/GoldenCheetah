@@ -130,6 +130,20 @@ bool createSymbolicLink(const QString &source, const QString &target)
 #endif
 }
 
+bool renameFixture(const QString &source, const QString &target)
+{
+#ifdef Q_OS_WIN
+    const QString nativeSource = QDir::toNativeSeparators(source);
+    const QString nativeTarget = QDir::toNativeSeparators(target);
+    return ::MoveFileExW(
+        reinterpret_cast<LPCWSTR>(nativeSource.utf16()),
+        reinterpret_cast<LPCWSTR>(nativeTarget.utf16()),
+        MOVEFILE_WRITE_THROUGH);
+#else
+    return QFile::rename(source, target);
+#endif
+}
+
 DirectoryAnchor openDirectory(const QString &path)
 {
     DirectoryAnchor directory;
@@ -198,8 +212,9 @@ private slots:
     void permitsConcurrentPinsOfOneIdentity();
     void permitsOrdinaryQtReadsWhilePinned();
     void permitsOrdinaryQtReadsOfPinnedCopy();
+    void newAtomicWriterHandsOffStagingPin();
+    void newAtomicWriterRejectsPreBridgeReplacement();
 #ifdef Q_OS_WIN
-    void newAtomicWriterHandsOffWindowsStagingPin();
     void newAtomicWriterRetainsWindowsStagingWhenHandoffIsBlocked();
     void newAtomicWriterRejectsWindowsHandoffRace_data();
     void newAtomicWriterRejectsWindowsHandoffRace();
@@ -409,8 +424,7 @@ void TestAnchoredFilesystem::permitsOrdinaryQtReadsOfPinnedCopy()
     QCOMPARE(ordinaryReader.readAll(), contents);
 }
 
-#ifdef Q_OS_WIN
-void TestAnchoredFilesystem::newAtomicWriterHandsOffWindowsStagingPin()
+void TestAnchoredFilesystem::newAtomicWriterHandsOffStagingPin()
 {
     QTemporaryDir root;
     QVERIFY(root.isValid());
@@ -424,6 +438,61 @@ void TestAnchoredFilesystem::newAtomicWriterHandsOffWindowsStagingPin()
     QVERIFY2(writer.commit(), qPrintable(writer.errorString()));
     QCOMPARE(readFixture(target), contents);
 }
+
+void TestAnchoredFilesystem::newAtomicWriterRejectsPreBridgeReplacement()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString target = root.filePath(QStringLiteral("activity.json"));
+    const QString retained = root.filePath(QStringLiteral("retained.tmp"));
+    const QByteArray contents("complete activity");
+    int publisherCalls = 0;
+    const AtomicPublishFunction publisher = [&publisherCalls](
+            const QString &staging, const QString &published,
+            bool &targetPublished, QString &error) {
+        ++publisherCalls;
+        return publishAtomicNew(
+            staging, published, targetPublished, error);
+    };
+    bool hookReached = false;
+    bool replacementCreated = false;
+    QString stagingPath;
+
+    NewAtomicFileWriter writer(target, publisher);
+    QVERIFY2(writer.open(), qPrintable(writer.errorString()));
+    QCOMPARE(writer.write(contents), qint64(contents.size()));
+    QVERIFY2(writer.flush(), qPrintable(writer.errorString()));
+    filesystemAction = [&](const char *transition,
+                           const QString &primary,
+                           const QString &) {
+        if (hookReached
+            || qstrcmp(
+                transition, "writer-pin-identity-captured") != 0) {
+            return;
+        }
+        hookReached = true;
+        stagingPath = primary;
+        if (!renameFixture(primary, retained)) return;
+        writeFixture(primary, contents);
+        replacementCreated = true;
+    };
+
+    const bool committed = writer.commit();
+    filesystemAction = {};
+
+    QVERIFY(hookReached);
+    QVERIFY(replacementCreated);
+    QVERIFY(!committed);
+    QCOMPARE(publisherCalls, 0);
+    QVERIFY(!QFileInfo::exists(target));
+    QCOMPARE(readFixture(stagingPath), contents);
+    QCOMPARE(readFixture(retained), contents);
+    QVERIFY(writer.errorString().contains(
+        QStringLiteral("retained"), Qt::CaseInsensitive));
+    QVERIFY(!writer.errorString().contains(stagingPath));
+}
+
+#ifdef Q_OS_WIN
 
 void TestAnchoredFilesystem::
 newAtomicWriterRetainsWindowsStagingWhenHandoffIsBlocked()
