@@ -571,6 +571,7 @@ private slots:
     void linkedSaveRollbackPreservesLateCommitMarker();
     void linkedSaveMovedLiveJournalCannotClaimCleanup();
     void linkedSaveMovedJournalCannotReceiveCommitMarker();
+    void linkedSaveNondurableCommitMarkerStaysRecoverable();
     void linkedSaveRecoveryRejectsStagedSourceAtOldName();
     void linkedSaveRecoveryRejectsRecreatedOriginalSource_data();
     void linkedSaveRecoveryRejectsRecreatedOriginalSource();
@@ -5294,9 +5295,11 @@ void TestAtomicActivitySave::
 linkedSaveRollbackProductionParentSubstitutionIsRejected_data()
 {
     QTest::addColumn<bool>("removeTarget");
+    QTest::addColumn<bool>("duringRemoval");
 
-    QTest::newRow("restore-source") << false;
-    QTest::newRow("remove-target") << true;
+    QTest::newRow("restore-source") << false << false;
+    QTest::newRow("remove-target") << true << false;
+    QTest::newRow("remove-target-during-syscall") << true << true;
 }
 
 void TestAtomicActivitySave::
@@ -5306,6 +5309,7 @@ linkedSaveRollbackProductionParentSubstitutionIsRejected()
     QSKIP("Renaming an open production directory is Unix-specific");
 #else
     QFETCH(bool, removeTarget);
+    QFETCH(bool, duringRemoval);
 
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
@@ -5364,23 +5368,40 @@ linkedSaveRollbackProductionParentSubstitutionIsRejected()
     bool hookReached = false;
     bool parentMoved = false;
     bool substituteCreated = false;
-    setLinkedActivitySaveTransitionAction(
-        QByteArray("linked-save-activity-destination-anchored"),
-        [&]() {
-            hookReached = true;
-            parentMoved = QDir().rename(productionPath, displacedPath);
-            substituteCreated = parentMoved
-                && QDir().mkpath(productionPath);
-            if (!substituteCreated) return;
-            writeFixture(
-                specification.entries.at(0).sourcePath, firstSource);
-            writeFixture(
-                specification.entries.at(1).sourcePath, secondSource);
-        });
+    const auto moveParent = [&]() {
+        hookReached = true;
+        parentMoved = QDir().rename(productionPath, displacedPath);
+        substituteCreated = parentMoved && QDir().mkpath(productionPath);
+        if (!substituteCreated) return;
+        writeFixture(
+            specification.entries.at(0).sourcePath, firstSource);
+        writeFixture(
+            specification.entries.at(1).sourcePath, secondSource);
+    };
+    if (duringRemoval) {
+        anchoredFilesystemAction =
+            [&](const char *transition,
+                const QString &primary,
+                const QString &) {
+                if (hookReached
+                    || QByteArray(transition)
+                        != "remove-quarantine-finally-verified"
+                    || !primary.startsWith(
+                        productionPath + QLatin1Char('/'))) {
+                    return;
+                }
+                moveParent();
+            };
+    } else {
+        setLinkedActivitySaveTransitionAction(
+            QByteArray("linked-save-activity-destination-anchored"),
+            moveParent);
+    }
 
     error.clear();
     const bool cleaned = journal->cleanupAfterRollback(error);
     clearLinkedActivitySaveTransitionAction();
+    anchoredFilesystemAction = {};
 
     QVERIFY(hookReached);
     QVERIFY(parentMoved);
@@ -5393,7 +5414,7 @@ linkedSaveRollbackProductionParentSubstitutionIsRejected()
         readAll(specification.entries.at(1).sourcePath), secondSource);
     QVERIFY(!QFileInfo::exists(
         specification.entries.at(0).targetPath));
-    if (removeTarget) {
+    if (removeTarget && !duringRemoval) {
         QCOMPARE(
             readAll(QDir(displacedPath).filePath(
                 QStringLiteral("first-new.json"))),
@@ -5685,6 +5706,65 @@ linkedSaveMovedJournalCannotReceiveCommitMarker()
         QDir(movedJournalPath).filePath(QStringLiteral("COMMITTED"))));
     QVERIFY(!QFileInfo::exists(
         QDir(journalPath).filePath(QStringLiteral("COMMITTED"))));
+#endif
+}
+
+void TestAtomicActivitySave::
+linkedSaveNondurableCommitMarkerStaysRecoverable()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Directory fsync injection is Unix-specific");
+#else
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString markerPath = QDir(journalPath).filePath(
+        QStringLiteral("COMMITTED"));
+    const QByteArray markerContents =
+        QFileInfo(journalPath).fileName().toLatin1() + '\n';
+    const QByteArray firstStaged("staged generation 0");
+    const QByteArray secondStaged("staged generation 1");
+    writeFixture(journal->stagingPath(0), firstStaged);
+    QVERIFY2(journal->recordStaged(0, error), qPrintable(error));
+    writeFixture(journal->stagingPath(1), secondStaged);
+    QVERIFY2(journal->recordStaged(1, error), qPrintable(error));
+
+    bool markerTemporaryPublished = false;
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-commit-marker-temporary"),
+        [&]() {
+            markerTemporaryPublished = true;
+            anchoredFilesystemSyncFailurePath = journalPath;
+        });
+    error.clear();
+    const bool published = journal->publishAndCommit(error);
+    clearLinkedActivitySaveTransitionAction();
+
+    QVERIFY(markerTemporaryPublished);
+    QVERIFY2(!published, "A nondurable commit marker was accepted");
+    QVERIFY2(!error.isEmpty(), "Nondurable publication must report an error");
+    QCOMPARE(readAll(markerPath), markerContents);
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    anchoredFilesystemSyncFailurePath.clear();
+    journal.reset();
+    error.clear();
+    QVERIFY2(
+        LinkedActivitySave::Journal::reconcileAll(dir.path(), error),
+        qPrintable(error));
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QVERIFY(!QFileInfo::exists(specification.entries.at(0).sourcePath));
+    QVERIFY(!QFileInfo::exists(specification.entries.at(1).sourcePath));
+    QCOMPARE(readAll(specification.entries.at(0).targetPath), firstStaged);
+    QCOMPARE(readAll(specification.entries.at(1).targetPath), secondStaged);
 #endif
 }
 
@@ -6747,6 +6827,9 @@ linkedFilenameSaveCrashRecoversCompleteGeneration_data()
         << 2 << false << false << true;
     QTest::newRow("retirement-intent-removed")
         << QStringLiteral("linked-save-retirement-intent-removed")
+        << 1 << false << false << false;
+    QTest::newRow("commit-marker-temporary")
+        << QStringLiteral("linked-save-commit-marker-temporary")
         << 1 << false << false << false;
     QTest::newRow("commit-marker")
         << QStringLiteral("linked-save-commit-marker")

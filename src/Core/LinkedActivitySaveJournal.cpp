@@ -674,6 +674,12 @@ bool publishPinnedFile(
             source, temporary.entry, temporary.file, error)) {
         return false;
     }
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+    if (temporaryName.startsWith(QStringLiteral(".COMMITTED."))) {
+        linkedActivitySaveTransitionReached(
+            "linked-save-commit-marker-temporary");
+    }
+#endif
     if (!destination.parent.pathMatches(error)) {
         if (error.isEmpty()) {
             error = QStringLiteral(
