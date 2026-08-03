@@ -2636,6 +2636,10 @@ bool Journal::publishAndCommit(QString &error)
         || !publishNewGeneration(*state_, resolved, error)) {
         return false;
     }
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+    linkedActivitySaveTransitionReached(
+        "linked-save-before-final-retirement-check");
+#endif
 
     const QByteArray contents = state_->manifest.id.toLatin1() + '\n';
     AtomicFileSnapshot marker;
