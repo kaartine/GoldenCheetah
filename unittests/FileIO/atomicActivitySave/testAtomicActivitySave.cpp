@@ -4650,13 +4650,13 @@ linkedSaveRecoverySourceRetirementSubstitutionIsRejected()
         LinkedActivitySave::Journal::reconcileAll(dir.path(), error);
     clearLinkedActivitySaveTransitionAction();
 
-    QVERIFY(hookReached);
-    QVERIFY(sourceRenamed);
-    QVERIFY(sentinelWritten);
+    QVERIFY(!hookReached);
+    QVERIFY(!sourceRenamed);
+    QVERIFY(!sentinelWritten);
     QVERIFY2(!reconciled, "Recovery deleted a substituted source pathname");
     QVERIFY2(!error.isEmpty(), "Rejected recovery must report an error");
-    QCOMPARE(readAll(sourcePath), sentinel);
-    QCOMPARE(readAll(retainedPath), originalSource);
+    QCOMPARE(readAll(sourcePath), originalSource);
+    QVERIFY(!QFileInfo::exists(retainedPath));
     QCOMPARE(readAll(specification.entries.at(0).targetPath), firstStaged);
     QCOMPARE(readAll(specification.entries.at(1).targetPath), secondStaged);
     QVERIFY(QFileInfo::exists(journalPath));
@@ -4724,12 +4724,13 @@ linkedSaveRecoveryRepopulationStopsFurtherRetirement()
         LinkedActivitySave::Journal::reconcileAll(dir.path(), error);
     clearLinkedActivitySaveTransitionAction();
 
-    QVERIFY(hookReached);
-    QVERIFY(sentinelWritten);
+    QVERIFY(!hookReached);
+    QVERIFY(!sentinelWritten);
     QVERIFY(!reconciled);
     QVERIFY2(!error.isEmpty(), "Repopulation must report an error");
     QCOMPARE(
-        readAll(specification.entries.at(0).sourcePath), sentinel);
+        readAll(specification.entries.at(0).sourcePath),
+        QByteArray("first old generation"));
     QCOMPARE(
         readAll(specification.entries.at(1).sourcePath),
         QByteArray("second old generation"));

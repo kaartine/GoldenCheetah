@@ -1251,12 +1251,17 @@ bool isKnownTemporaryName(const QString &name)
     return expression.match(name).hasMatch();
 }
 
-bool isRetirementIntentTemporaryName(const QString &name)
+bool retirementIntentTemporaryIndex(const QString &name, int &index)
 {
+    index = -1;
     static const QRegularExpression expression(
         QStringLiteral(
-            "^\\.retirement-[0-9]{4}\\.pending\\.[A-Za-z0-9]+\\.tmp$"));
-    return expression.match(name).hasMatch();
+            "^\\.retirement-([0-9]{4})\\.pending\\.[A-Za-z0-9]+\\.tmp$"));
+    const QRegularExpressionMatch match = expression.match(name);
+    if (!match.hasMatch()) return false;
+    bool converted = false;
+    index = match.captured(1).toInt(&converted);
+    return converted;
 }
 
 qint64 knownTemporaryMaximumSize(const QString &name)
@@ -1356,13 +1361,75 @@ bool inspectJournalDirectory(
             }
             continue;
         }
+        bool activeIntentRecovery = false;
+        for (const std::unique_ptr<AnchoredRetirementSource> &source :
+             state.retirementSources) {
+            if (!source || !source->intent.expected
+                || source->intent.verifiedRecoveryPath.isEmpty()
+                || atomicFilePathKey(
+                       source->intent.verifiedRecoveryPath)
+                    != atomicFilePathKey(info.absoluteFilePath())) {
+                continue;
+            }
+            if (!source->intent.file.isValid()
+                || !pinnedFileMatches(
+                    source->intent.file, source->intent.contents)
+                || !source->intent.parent.pathMatches(error)) {
+                if (error.isEmpty()) {
+                    error = QStringLiteral(
+                        "A source-retirement intent recovery file changed unexpectedly");
+                }
+                return false;
+            }
+            AnchoredFileSystem::EntryRef recoveryEntry =
+                source->intent.parent.entry(name, error);
+            bool matches = false;
+            if (!recoveryEntry.isValid()
+                || !AnchoredFileSystem::entryMatches(
+                    recoveryEntry,
+                    source->intent.file,
+                    matches,
+                    error)
+                || !matches) {
+                if (error.isEmpty()) {
+                    error = QStringLiteral(
+                        "A source-retirement intent recovery file was replaced");
+                }
+                return false;
+            }
+            activeIntentRecovery = true;
+            break;
+        }
+        if (activeIntentRecovery) continue;
+
+        int temporaryIntentIndex = -1;
+        const bool retirementIntentTemporary =
+            retirementIntentTemporaryIndex(
+                name, temporaryIntentIndex);
+        if (retirementIntentTemporary) {
+            if (temporaryIntentIndex < 0
+                || temporaryIntentIndex
+                    >= state.manifest.entries.size()) {
+                error = QStringLiteral(
+                    "A source-retirement intent index is invalid");
+                return false;
+            }
+            if (atomicFilePathKey(
+                    resolved.at(temporaryIntentIndex).source)
+                == atomicFilePathKey(
+                    resolved.at(temporaryIntentIndex).target)) {
+                error = QStringLiteral(
+                    "A source-retirement intent names an entry that does not retire its source");
+                return false;
+            }
+        }
         if (name == Detail::ManifestName
             || name == Detail::CommitMarkerName
             || expectedJournalDataName(state, name)) {
             continue;
         }
         if (!isKnownTemporaryName(name)
-            && !isRetirementIntentTemporaryName(name)
+            && !retirementIntentTemporary
             && !isKnownLockName(name)) {
             error = QStringLiteral(
                 "The linked-save journal contains an unknown file");
@@ -1370,7 +1437,7 @@ bool inspectJournalDirectory(
         }
         const qint64 maximumSize = isKnownLockName(name)
             ? Detail::MaximumLockFileSize
-            : (isRetirementIntentTemporaryName(name)
+            : (retirementIntentTemporary
                    ? Detail::MaximumRetirementIntentSize
                    : knownTemporaryMaximumSize(name));
         ObservedFile observed;
@@ -1521,6 +1588,31 @@ bool pinRetirementIntent(
     return true;
 }
 
+bool retirementIntentMatches(
+    AnchoredRetirementSource::Intent &intent,
+    QString &error)
+{
+    if (!intent.expected || !intent.file.isValid()
+        || !anchorRetirementIntent(intent, error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The source-retirement intent is unavailable");
+        }
+        return false;
+    }
+    bool matches = false;
+    if (!AnchoredFileSystem::entryMatches(
+            intent.entry, intent.file, matches, error)) {
+        return false;
+    }
+    if (!matches) {
+        error = QStringLiteral(
+            "The source-retirement intent was removed or replaced before source mutation");
+        return false;
+    }
+    return true;
+}
+
 bool beginRetirementIntent(
     JournalState &state,
     int index,
@@ -1581,6 +1673,21 @@ bool completeRetirementIntent(
     AnchoredRetirementSource::Intent &intent = source.intent;
     if (!intent.expected) return true;
     if (!anchorRetirementIntent(intent, error)) return false;
+
+    if (intent.mutationEffect
+        == AnchoredFileSystem::MutationEffect::NoEffect) {
+        bool exists = false;
+        if (!AnchoredFileSystem::entryExists(
+                intent.entry, exists, error)) {
+            return false;
+        }
+        if (!exists) {
+            if (!intent.parent.sync(error)) return false;
+            intent.file = {};
+            intent.mutationEffect =
+                AnchoredFileSystem::MutationEffect::AppliedDurable;
+        }
+    }
 
     if (intent.mutationEffect
         == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
@@ -1830,10 +1937,9 @@ bool captureRecoveryRetirementSources(
                 error)) {
             return false;
         }
-        if (source->file.isValid()
-            && !pinnedFileMatches(source->file, entry.source.contents)) {
+        if (source->file.isValid()) {
             error = QStringLiteral(
-                "A linked activity source changed outside its transaction");
+                "A committed linked activity source was recreated after publication");
             return false;
         }
         state.retirementSources[size_t(index)] = std::move(source);
@@ -1909,6 +2015,10 @@ bool retireAnchoredSource(
 #else
     Q_UNUSED(validatedTransition)
 #endif
+    if (source.intent.expected
+        && !retirementIntentMatches(source.intent, error)) {
+        return false;
+    }
 
     const AnchoredFileSystem::MutationResult removed =
         AnchoredFileSystem::remove(source.file);
@@ -2343,17 +2453,6 @@ bool ensureNewGeneration(
                 AtomicFileMode::ReplaceExisting,
                 error)) {
             return false;
-        }
-        if (atomicFilePathKey(paths.source)
-                != atomicFilePathKey(paths.target)) {
-            if (!retireJournalSource(
-                    state,
-                    index,
-                    "linked-save-recovery-source-retirement-validated",
-                    "linked-save-recovery-source-retired",
-                    error)) {
-                return false;
-            }
         }
     }
     return verifyNewGeneration(state, resolved, error);
