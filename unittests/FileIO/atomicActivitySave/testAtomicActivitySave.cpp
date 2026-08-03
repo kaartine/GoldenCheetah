@@ -563,7 +563,10 @@ private slots:
     void linkedSaveRollbackPublicationRacePreservesNewSource();
     void linkedSaveRollbackProductionSubstitutionIsRejected_data();
     void linkedSaveRollbackProductionSubstitutionIsRejected();
+    void linkedSaveRollbackProductionParentSubstitutionIsRejected_data();
+    void linkedSaveRollbackProductionParentSubstitutionIsRejected();
     void linkedSaveMovedLiveJournalCannotClaimCleanup();
+    void linkedSaveMovedJournalCannotReceiveCommitMarker();
     void linkedSaveRecoveryRejectsStagedSourceAtOldName();
     void linkedSaveRecoveryRejectsRecreatedOriginalSource_data();
     void linkedSaveRecoveryRejectsRecreatedOriginalSource();
@@ -5115,6 +5118,123 @@ linkedSaveRollbackProductionSubstitutionIsRejected()
 }
 
 void TestAtomicActivitySave::
+linkedSaveRollbackProductionParentSubstitutionIsRejected_data()
+{
+    QTest::addColumn<bool>("removeTarget");
+
+    QTest::newRow("restore-source") << false;
+    QTest::newRow("remove-target") << true;
+}
+
+void TestAtomicActivitySave::
+linkedSaveRollbackProductionParentSubstitutionIsRejected()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Renaming an open production directory is Unix-specific");
+#else
+    QFETCH(bool, removeTarget);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString productionPath =
+        dir.filePath(QStringLiteral("activities"));
+    const QString displacedPath =
+        dir.filePath(QStringLiteral("displaced-activities"));
+    QVERIFY(QDir().mkpath(productionPath));
+
+    LinkedActivitySave::Specification specification;
+    specification.athleteRoot = dir.path();
+    specification.entries = {
+        {QDir(productionPath).filePath(QStringLiteral("first-old.json")),
+         QDir(productionPath).filePath(QStringLiteral("first-new.json")),
+         QDir(productionPath).filePath(QStringLiteral("first-old.json.bak")),
+         false},
+        {QDir(productionPath).filePath(QStringLiteral("second-old.json")),
+         QDir(productionPath).filePath(QStringLiteral("second-new.json")),
+         QDir(productionPath).filePath(QStringLiteral("second-old.json.bak")),
+         false}};
+    const QByteArray firstSource("first old generation");
+    const QByteArray secondSource("second old generation");
+    const QByteArray firstStaged("staged generation 0");
+    const QByteArray secondStaged("staged generation 1");
+    writeFixture(specification.entries.at(0).sourcePath, firstSource);
+    writeFixture(specification.entries.at(1).sourcePath, secondSource);
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    writeFixture(journal->stagingPath(0), firstStaged);
+    QVERIFY2(journal->recordStaged(0, error), qPrintable(error));
+    writeFixture(journal->stagingPath(1), secondStaged);
+    QVERIFY2(journal->recordStaged(1, error), qPrintable(error));
+
+    bool targetRemoved = false;
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-source-retired"),
+        [&]() {
+            targetRemoved = QFile::remove(
+                specification.entries.at(1).targetPath);
+        });
+    error.clear();
+    const bool published = journal->publishAndCommit(error);
+    clearLinkedActivitySaveTransitionAction();
+    QVERIFY(targetRemoved);
+    QVERIFY2(!published, "Publication ignored a missing linked target");
+
+    if (removeTarget) {
+        writeFixture(specification.entries.at(0).sourcePath, firstSource);
+        writeFixture(specification.entries.at(1).sourcePath, secondSource);
+    }
+
+    bool hookReached = false;
+    bool parentMoved = false;
+    bool substituteCreated = false;
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-activity-destination-anchored"),
+        [&]() {
+            hookReached = true;
+            parentMoved = QDir().rename(productionPath, displacedPath);
+            substituteCreated = parentMoved
+                && QDir().mkpath(productionPath);
+            if (!substituteCreated) return;
+            writeFixture(
+                specification.entries.at(0).sourcePath, firstSource);
+            writeFixture(
+                specification.entries.at(1).sourcePath, secondSource);
+        });
+
+    error.clear();
+    const bool cleaned = journal->cleanupAfterRollback(error);
+    clearLinkedActivitySaveTransitionAction();
+
+    QVERIFY(hookReached);
+    QVERIFY(parentMoved);
+    QVERIFY(substituteCreated);
+    QVERIFY2(!cleaned, "Rollback accepted a substituted production parent");
+    QVERIFY2(!error.isEmpty(), "Rejected rollback must report an error");
+    QCOMPARE(
+        readAll(specification.entries.at(0).sourcePath), firstSource);
+    QCOMPARE(
+        readAll(specification.entries.at(1).sourcePath), secondSource);
+    QVERIFY(!QFileInfo::exists(
+        specification.entries.at(0).targetPath));
+    if (removeTarget) {
+        QCOMPARE(
+            readAll(QDir(displacedPath).filePath(
+                QStringLiteral("first-new.json"))),
+            firstStaged);
+    } else {
+        QVERIFY(!QFileInfo::exists(
+            QDir(displacedPath).filePath(
+                QStringLiteral("first-old.json"))));
+    }
+    QVERIFY(QFileInfo::exists(journalPath));
+#endif
+}
+
+void TestAtomicActivitySave::
 linkedSaveCommittedRecoverySubstitutionIsRejected_data()
 {
     QTest::addColumn<QString>("mutation");
@@ -5282,6 +5402,59 @@ linkedSaveMovedLiveJournalCannotClaimCleanup()
         readAll(QDir(movedJournalPath).filePath(
             QStringLiteral("source-0000.old"))),
         QByteArray("first old generation"));
+#endif
+}
+
+void TestAtomicActivitySave::
+linkedSaveMovedJournalCannotReceiveCommitMarker()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Renaming an open journal is Unix-specific");
+#else
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString movedJournalPath =
+        dir.filePath(QStringLiteral("moved-before-commit-marker"));
+    for (int index = 0; index < journal->entryCount(); ++index) {
+        writeFixture(
+            journal->stagingPath(index),
+            QByteArray("staged generation ") + QByteArray::number(index));
+        QVERIFY2(journal->recordStaged(index, error), qPrintable(error));
+    }
+
+    bool hookReached = false;
+    bool journalMoved = false;
+    bool substituteCreated = false;
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-after-final-retirement-check"),
+        [&]() {
+            hookReached = true;
+            journalMoved = QDir().rename(journalPath, movedJournalPath);
+            substituteCreated = journalMoved && QDir().mkpath(journalPath);
+        });
+
+    error.clear();
+    const bool published = journal->publishAndCommit(error);
+    clearLinkedActivitySaveTransitionAction();
+
+    QVERIFY(hookReached);
+    QVERIFY(journalMoved);
+    QVERIFY(substituteCreated);
+    QVERIFY2(!published, "A substituted journal received the commit marker");
+    QVERIFY2(!error.isEmpty(), "A substituted journal must report an error");
+    QVERIFY(!QFileInfo::exists(
+        QDir(movedJournalPath).filePath(QStringLiteral("COMMITTED"))));
+    QVERIFY(!QFileInfo::exists(
+        QDir(journalPath).filePath(QStringLiteral("COMMITTED"))));
 #endif
 }
 

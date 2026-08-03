@@ -682,6 +682,11 @@ bool replaceObservedActivityFile(
             error)) {
         return false;
     }
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+    if (transition) linkedActivitySaveTransitionReached(transition);
+#else
+    Q_UNUSED(transition)
+#endif
     AnchoredActivityFile destination;
     if (!anchorObservedActivityFile(
             state,
@@ -692,9 +697,8 @@ bool replaceObservedActivityFile(
         return false;
     }
 #ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
-    if (transition) linkedActivitySaveTransitionReached(transition);
-#else
-    Q_UNUSED(transition)
+    linkedActivitySaveTransitionReached(
+        "linked-save-activity-destination-anchored");
 #endif
     if (destination.file.isValid()
         && !completeAnchoredActivityRemoval(
@@ -715,15 +719,19 @@ bool removeObservedActivityFile(
     QString &error)
 {
     if (!observed.exists) return true;
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+    if (transition) linkedActivitySaveTransitionReached(transition);
+#else
+    Q_UNUSED(transition)
+#endif
     AnchoredActivityFile anchored;
     if (!anchorObservedActivityFile(
             state, relativePath, observed, anchored, error)) {
         return false;
     }
 #ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
-    if (transition) linkedActivitySaveTransitionReached(transition);
-#else
-    Q_UNUSED(transition)
+    linkedActivitySaveTransitionReached(
+        "linked-save-activity-destination-anchored");
 #endif
     return completeAnchoredActivityRemoval(
         anchored,
