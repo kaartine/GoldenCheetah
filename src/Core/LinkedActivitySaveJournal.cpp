@@ -1532,7 +1532,10 @@ bool ensureNewGeneration(
             }
             if (currentSource.exists
                 && !removeObservedFile(
-                    paths.source, currentSource, error)) {
+                    paths.source,
+                    currentSource,
+                    error,
+                    "linked-save-recovery-source-retirement-validated")) {
                 return false;
             }
         }
