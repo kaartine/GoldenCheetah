@@ -652,6 +652,13 @@ public:
     }
 
     bool isValid() const { return valid_; }
+    PSID ownerSid()
+    {
+        if (!valid_) return nullptr;
+        auto *user = reinterpret_cast<TOKEN_USER *>(
+            userStorage_.data());
+        return user->User.Sid;
+    }
     PACL acl()
     {
         return valid_
@@ -2898,7 +2905,7 @@ bool hardenPrivateDirectory(
     }
     WindowsHandle mutation(::CreateFileW(
         reinterpret_cast<LPCWSTR>(nativePath.utf16()),
-        FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC
+        FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC | WRITE_OWNER
             | SYNCHRONIZE,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
         nullptr,
@@ -2926,9 +2933,10 @@ bool hardenPrivateDirectory(
     }
     const DWORD securityResult = ::SetSecurityInfo(
         mutation.get(), SE_FILE_OBJECT,
-        DACL_SECURITY_INFORMATION
+        OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION
             | PROTECTED_DACL_SECURITY_INFORMATION,
-        nullptr, nullptr, privateSecurity.acl(), nullptr);
+        privateSecurity.ownerSid(), nullptr,
+        privateSecurity.acl(), nullptr);
     if (securityResult != ERROR_SUCCESS
         || !windowsDirectoryHandleHasPrivateSecurity(
             mutation.get())) {
