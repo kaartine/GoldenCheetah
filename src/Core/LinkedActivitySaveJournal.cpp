@@ -144,6 +144,8 @@ struct JournalState
     AnchoredFileSystem::MutationEffect journalRemovalEffect =
         AnchoredFileSystem::MutationEffect::NoEffect;
     QString journalRemovalRecoveryPath;
+    QSet<QString> removedJournalFiles;
+    bool journalFileRemovalSyncPending = false;
     bool terminalCleanupCompleted = false;
 };
 
@@ -1873,8 +1875,12 @@ bool anchoredJournalFileMatches(
 bool removeAnchoredJournalFile(
     const AnchoredFileSystem::DirectoryAnchor &directory,
     const AnchoredJournalFile &anchored,
-    QString &error)
+    QString &error,
+    AnchoredFileSystem::MutationEffect *effect = nullptr)
 {
+    if (effect) {
+        *effect = AnchoredFileSystem::MutationEffect::NoEffect;
+    }
     if (!directory.pathMatches(error)) {
         if (error.isEmpty()) {
             error = QStringLiteral(
@@ -1904,6 +1910,7 @@ bool removeAnchoredJournalFile(
 
     const AnchoredFileSystem::MutationResult removal =
         AnchoredFileSystem::remove(*anchored.file);
+    if (effect) *effect = removal.effect;
     if (removal.effect
         == AnchoredFileSystem::MutationEffect::AppliedDurable) {
         return true;
@@ -1911,7 +1918,13 @@ bool removeAnchoredJournalFile(
     if (removal.effect
         == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
         QString syncError;
-        if (directory.sync(syncError)) return true;
+        if (directory.sync(syncError)) {
+            if (effect) {
+                *effect =
+                    AnchoredFileSystem::MutationEffect::AppliedDurable;
+            }
+            return true;
+        }
         error = removal.error;
         appendError(error, syncError);
         return false;
@@ -1926,30 +1939,6 @@ bool removeAnchoredJournalFile(
                 .arg(removal.verifiedRecoveryPath));
     }
     return false;
-}
-
-bool removeExpectedAnchoredJournalFile(
-    const AnchoredFileSystem::DirectoryAnchor &directory,
-    const QList<AnchoredJournalFile> &files,
-    const QString &name,
-    const AtomicFileSnapshot &expected,
-    bool required,
-    QString &error)
-{
-    const AnchoredJournalFile *anchored =
-        findAnchoredJournalFile(files, name);
-    if (!anchored) {
-        if (!required) return true;
-        error = QStringLiteral(
-            "A required linked-save journal cleanup file is missing");
-        return false;
-    }
-    if (!anchoredJournalFileMatches(anchored, expected)) {
-        error = QStringLiteral(
-            "A linked-save journal cleanup file changed unexpectedly");
-        return false;
-    }
-    return removeAnchoredJournalFile(directory, *anchored, error);
 }
 
 bool inspectJournalDirectory(
@@ -2449,6 +2438,8 @@ bool retirementRequired(const QList<ResolvedEntry> &resolved)
 void releaseTransactionResources(JournalState &state)
 {
     state.retirementSources.clear();
+    state.removedJournalFiles.clear();
+    state.journalFileRemovalSyncPending = false;
     state.athleteRootDirectory = {};
     state.journalDirectory = {};
     state.namespaceDirectory = {};
@@ -3285,6 +3276,17 @@ bool removeJournalDirectory(
         }
         return false;
     }
+    if (state.journalFileRemovalSyncPending) {
+        if (!state.journalDirectory.isValid()
+            || !state.journalDirectory.sync(error)) {
+            if (error.isEmpty()) {
+                error = QStringLiteral(
+                    "Cannot synchronize removed linked-save journal files");
+            }
+            return false;
+        }
+        state.journalFileRemovalSyncPending = false;
+    }
     if (!journalDirectoryMatches(state, error)) return false;
 
     QList<AnchoredJournalFile> files;
@@ -3293,9 +3295,55 @@ bool removeJournalDirectory(
     linkedActivitySaveTransitionReached("linked-save-journal-files-pinned");
 #endif
 
+    if (!committed
+        && findAnchoredJournalFile(files, Detail::CommitMarkerName)) {
+        error = QStringLiteral(
+            "The linked-save commit decision changed before rollback cleanup");
+        return false;
+    }
+
+    const auto removeTrackedFile = [
+            &state, &error](const AnchoredJournalFile &file) {
+        AnchoredFileSystem::MutationEffect effect =
+            AnchoredFileSystem::MutationEffect::NoEffect;
+        const bool removed = removeAnchoredJournalFile(
+            state.journalDirectory, file, error, &effect);
+        if (removed
+            || effect
+                == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
+            state.removedJournalFiles.insert(file.name);
+        }
+        if (effect
+            == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
+            state.journalFileRemovalSyncPending = true;
+        }
+        return removed;
+    };
+    const auto removeExpectedFile = [
+            &state, &files, &removeTrackedFile, &error](
+            const QString &name,
+            const AtomicFileSnapshot &expected,
+            bool required) {
+        if (state.removedJournalFiles.contains(name)) return true;
+        const AnchoredJournalFile *file =
+            findAnchoredJournalFile(files, name);
+        if (!file) {
+            if (!required) return true;
+            error = QStringLiteral(
+                "A required linked-save journal cleanup file is missing");
+            return false;
+        }
+        if (!anchoredJournalFileMatches(file, expected)) {
+            error = QStringLiteral(
+                "A linked-save journal cleanup file changed unexpectedly");
+            return false;
+        }
+        return removeTrackedFile(*file);
+    };
+
     const auto expectedCleanupName = [&](const QString &name) {
         if (name == Detail::ManifestName
-            || (committed && name == Detail::CommitMarkerName)) {
+            || name == Detail::CommitMarkerName) {
             return true;
         }
         for (int index = 0; index < state.manifest.entries.size(); ++index) {
@@ -3311,8 +3359,7 @@ bool removeJournalDirectory(
     };
     for (const AnchoredJournalFile &file : std::as_const(files)) {
         if (!expectedCleanupName(file.name)
-            && !removeAnchoredJournalFile(
-                state.journalDirectory, file, error)) {
+            && !removeTrackedFile(file)) {
             return false;
         }
     }
@@ -3320,7 +3367,8 @@ bool removeJournalDirectory(
     AtomicFileSnapshot marker;
     if (committed) {
         markerSnapshot(state, marker);
-        if (!anchoredJournalFileMatches(
+        if (!state.removedJournalFiles.contains(Detail::CommitMarkerName)
+            && !anchoredJournalFileMatches(
                 findAnchoredJournalFile(files, Detail::CommitMarkerName),
                 marker)) {
             error = QStringLiteral(
@@ -3329,13 +3377,10 @@ bool removeJournalDirectory(
         }
     }
 
-    if (!removeExpectedAnchoredJournalFile(
-            state.journalDirectory,
-            files,
+    if (!removeExpectedFile(
             Detail::ManifestName,
             state.manifestSnapshot,
-            true,
-            error)) {
+            true)) {
         return false;
     }
 #ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
@@ -3344,26 +3389,20 @@ bool removeJournalDirectory(
 
     for (int index = 0; index < state.manifest.entries.size(); ++index) {
         const Entry &entry = state.manifest.entries.at(index);
-        if (!removeExpectedAnchoredJournalFile(
-                state.journalDirectory,
-                files,
+        if (!removeExpectedFile(
                 sourceCopyName(index),
                 entry.source.contents,
-                true,
-                error)) {
+                true)) {
             return false;
         }
 #ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
         linkedActivitySaveTransitionReached("linked-save-cleanup-file");
 #endif
         if (entry.backup.exists
-            && !removeExpectedAnchoredJournalFile(
-                state.journalDirectory,
-                files,
+            && !removeExpectedFile(
                 backupCopyName(index),
                 entry.backup.contents,
-                true,
-                error)) {
+                true)) {
             return false;
         }
         if (entry.backup.exists) {
@@ -3372,13 +3411,10 @@ bool removeJournalDirectory(
 #endif
         }
         if (entry.staged
-            && !removeExpectedAnchoredJournalFile(
-                state.journalDirectory,
-                files,
+            && !removeExpectedFile(
                 stagingName(index),
                 entry.stagedContents,
-                true,
-                error)) {
+                true)) {
             return false;
         }
         if (entry.staged) {
@@ -3389,13 +3425,10 @@ bool removeJournalDirectory(
     }
 
     if (committed
-        && !removeExpectedAnchoredJournalFile(
-            state.journalDirectory,
-            files,
+        && !removeExpectedFile(
             Detail::CommitMarkerName,
             marker,
-            true,
-            error)) {
+            true)) {
         return false;
     }
 #ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
@@ -3418,6 +3451,10 @@ bool removeJournalDirectory(
         AnchoredFileSystem::removeEmptyDirectory(state.journalDirectory);
     state.journalRemovalEffect = removed.effect;
     state.journalRemovalRecoveryPath = removed.verifiedRecoveryPath;
+    if (removed.applied()) {
+        state.removedJournalFiles.clear();
+        state.journalFileRemovalSyncPending = false;
+    }
     if (state.journalRemovalEffect
         == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
         QString syncError;
@@ -3466,6 +3503,7 @@ bool rollbackJournal(JournalState &state, QString &error)
     if (!inspectJournalDirectory(state, journalFiles, error)) return false;
     bool committed = false;
     if (!readCommitMarker(state, committed, error)) return false;
+    journalFiles.clear();
     if (committed) {
         error = QStringLiteral("Cannot roll back a committed linked save");
         return false;
@@ -3499,6 +3537,7 @@ bool commitJournal(JournalState &state, QString &error)
     if (!inspectJournalDirectory(state, journalFiles, error)) return false;
     bool committed = false;
     if (!readCommitMarker(state, committed, error)) return false;
+    journalFiles.clear();
     if (!committed) {
         error = QStringLiteral("Cannot complete an uncommitted linked save");
         return false;
@@ -3949,6 +3988,19 @@ bool Journal::reconcileAll(const QString &athleteRoot, QString &error)
         }
     }
 
+    AnchoredFileSystem::DirectoryAnchor namespaceDirectory;
+    QString namespaceError;
+    if (!AnchoredFileSystem::DirectoryAnchor::open(
+            namespacePath, namespaceDirectory, namespaceError)
+        || !namespaceDirectory.pathMatches(namespaceError)
+        || !namespaceDirectory.sync(namespaceError)) {
+        failures.append(
+            namespaceError.isEmpty()
+                ? QStringLiteral(
+                      "Cannot synchronize the linked-save journal namespace")
+                : namespaceError);
+    }
+
     if (!failures.isEmpty()) {
         error = failures.join(QStringLiteral("; "));
         return false;
@@ -4028,8 +4080,10 @@ bool Journal::publishAndCommit(QString &error)
     QList<AnchoredJournalFile> journalFiles;
     if (!inspectJournalDirectory(*state_, journalFiles, error)) return false;
     const auto expectedJournalName = [&](const QString &name) {
+        int retirementIndex = -1;
         if (name == Detail::ManifestName
-            || name == Detail::CommitMarkerName) {
+            || name == Detail::CommitMarkerName
+            || retirementIntentIndex(name, retirementIndex)) {
             return true;
         }
         for (int index = 0; index < state_->manifest.entries.size(); ++index) {
