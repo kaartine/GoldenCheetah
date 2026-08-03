@@ -539,8 +539,11 @@ private slots:
     void linkedSaveCleanupReleasesTransactionResources();
     void linkedSaveNondurableJournalRemovalStaysRetryable_data();
     void linkedSaveNondurableJournalRemovalStaysRetryable();
+    void linkedSaveNondurableJournalRemovalRejectsReplacement_data();
+    void linkedSaveNondurableJournalRemovalRejectsReplacement();
     void linkedSaveNondurableJournalFileRemovalStaysRetryable_data();
     void linkedSaveNondurableJournalFileRemovalStaysRetryable();
+    void linkedSaveTrackedJournalReplacementStopsRetry_data();
     void linkedSaveTrackedJournalReplacementStopsRetry();
     void linkedSaveNondurableRetirementStaysRetryable();
     void linkedSavePartialRetirementKeepsRecoveryJournal();
@@ -554,6 +557,8 @@ private slots:
 #ifdef Q_OS_WIN
     void linkedSavePendingWindowsRetirementRetriesAfterHandleClose();
     void linkedSaveWindowsJournalRemovalRetriesAfterHandleClose();
+    void linkedSaveLegacyWindowsJournalFileRemovalRetries_data();
+    void linkedSaveLegacyWindowsJournalFileRemovalRetries();
 #endif
     void linkedSavePreparedSourceIdentityReplacementIsRejected_data();
     void linkedSavePreparedSourceIdentityReplacementIsRejected();
@@ -580,6 +585,8 @@ private slots:
 #ifdef Q_OS_WIN
     void anchoredFilesDenyConcurrentWindowsWrites_data();
     void anchoredFilesDenyConcurrentWindowsWrites();
+    void anchoredOutputFilesCanBeRepinned_data();
+    void anchoredOutputFilesCanBeRepinned();
 #endif
     void linkedSaveRecoveryRejectsStagedSourceAtOldName();
     void linkedSaveRecoveryRejectsRecreatedOriginalSource_data();
@@ -3825,6 +3832,7 @@ linkedSaveCleanupReleasesTransactionResources()
     } else {
         QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
     }
+    QVERIFY(!journal->hasCommitMarker());
 
     QVERIFY2(
         QDir().rename(athleteRoot, movedRoot),
@@ -3902,6 +3910,87 @@ linkedSaveNondurableJournalRemovalStaysRetryable()
             ? journal->cleanupAfterCommit(error)
             : journal->cleanupAfterRollback(error),
         qPrintable(error));
+#endif
+}
+
+void TestAtomicActivitySave::
+linkedSaveNondurableJournalRemovalRejectsReplacement_data()
+{
+    QTest::addColumn<bool>("committed");
+    QTest::addColumn<bool>("replaceNamespace");
+
+    QTest::newRow("rollback-journal") << false << false;
+    QTest::newRow("commit-journal") << true << false;
+    QTest::newRow("rollback-namespace") << false << true;
+    QTest::newRow("commit-namespace") << true << true;
+}
+
+void TestAtomicActivitySave::
+linkedSaveNondurableJournalRemovalRejectsReplacement()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Directory fsync injection is Unix-specific");
+#else
+    QFETCH(bool, committed);
+    QFETCH(bool, replaceNamespace);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString namespacePath = QFileInfo(journalPath).absolutePath();
+    if (committed) {
+        for (int index = 0; index < journal->entryCount(); ++index) {
+            writeFixture(
+                journal->stagingPath(index),
+                QByteArray("staged generation ")
+                    + QByteArray::number(index));
+            QVERIFY2(journal->recordStaged(index, error), qPrintable(error));
+        }
+        QVERIFY2(journal->publishAndCommit(error), qPrintable(error));
+    }
+
+    anchoredFilesystemSyncFailurePath = namespacePath;
+    error.clear();
+    const bool firstCleanup = committed
+        ? journal->cleanupAfterCommit(error)
+        : journal->cleanupAfterRollback(error);
+    QVERIFY2(!firstCleanup, "A nondurable journal removal was accepted");
+    QVERIFY2(!error.isEmpty(), "Nondurable removal must report an error");
+    QVERIFY(!QFileInfo::exists(journalPath));
+    anchoredFilesystemSyncFailurePath.clear();
+
+    const QString movedNamespace = dir.filePath(
+        QStringLiteral("retained-linked-save-namespace"));
+    if (replaceNamespace) {
+        QVERIFY(QDir().rename(namespacePath, movedNamespace));
+    }
+    QVERIFY(QDir().mkpath(journalPath));
+    const QString sentinelPath = QDir(journalPath).filePath(
+        QStringLiteral("replacement-sentinel"));
+    const QByteArray sentinelContents("replacement journal contents");
+    writeFixture(sentinelPath, sentinelContents);
+
+    error.clear();
+    const bool secondCleanup = committed
+        ? journal->cleanupAfterCommit(error)
+        : journal->cleanupAfterRollback(error);
+
+    QVERIFY2(
+        !secondCleanup,
+        "A nondurable removal retry accepted a replacement journal");
+    QVERIFY2(!error.isEmpty(), "Rejected cleanup must report an error");
+    QCOMPARE(readAll(sentinelPath), sentinelContents);
+    if (replaceNamespace) {
+        QVERIFY(QFileInfo::exists(movedNamespace));
+    }
 #endif
 }
 
@@ -4003,11 +4092,22 @@ linkedSaveNondurableJournalFileRemovalStaysRetryable()
 }
 
 void TestAtomicActivitySave::
+linkedSaveTrackedJournalReplacementStopsRetry_data()
+{
+    QTest::addColumn<bool>("afterScan");
+
+    QTest::newRow("before-scan") << false;
+    QTest::newRow("after-scan") << true;
+}
+
+void TestAtomicActivitySave::
 linkedSaveTrackedJournalReplacementStopsRetry()
 {
 #ifndef Q_OS_UNIX
     QSKIP("Directory fsync injection is Unix-specific");
 #else
+    QFETCH(bool, afterScan);
+
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
     writeLinkedSaveJournalSources(dir.path());
@@ -4042,7 +4142,29 @@ linkedSaveTrackedJournalReplacementStopsRetry()
     QVERIFY(QFileInfo::exists(stagingPath));
 
     anchoredFilesystemSyncFailurePath.clear();
-    writeFixture(sourceCopyPath, QByteArray("first old generation"));
+    const QByteArray replacementContents("first old generation");
+    bool replacementWritten = false;
+    const auto writeReplacement = [&]() {
+        writeFixture(sourceCopyPath, replacementContents);
+        replacementWritten = QFileInfo::exists(sourceCopyPath);
+    };
+    if (afterScan) {
+        setLinkedActivitySaveTransitionAction(
+            QByteArray("linked-save-journal-files-pinned"),
+            writeReplacement);
+    } else {
+        writeReplacement();
+    }
+
+    error.clear();
+    QVERIFY2(
+        !journal->cleanupAfterRollback(error),
+        "Cleanup accepted a replacement for a tracked removed file");
+    clearLinkedActivitySaveTransitionAction();
+    QVERIFY(replacementWritten);
+    QVERIFY2(!error.isEmpty(), "Rejected cleanup must report an error");
+    QVERIFY(QFileInfo::exists(stagingPath));
+
     AnchoredFileSystem::DirectoryAnchor parent;
     QVERIFY2(
         AnchoredFileSystem::DirectoryAnchor::open(
@@ -4056,13 +4178,6 @@ linkedSaveTrackedJournalReplacementStopsRetry()
         AnchoredFileSystem::pinRegularFile(
             replacementEntry, replacement, error),
         qPrintable(error));
-
-    error.clear();
-    QVERIFY2(
-        !journal->cleanupAfterRollback(error),
-        "Cleanup accepted a replacement for a tracked removed file");
-    QVERIFY2(!error.isEmpty(), "Rejected cleanup must report an error");
-    QVERIFY(QFileInfo::exists(stagingPath));
     bool stillMatches = false;
     QString matchError;
     QVERIFY2(
@@ -4729,6 +4844,83 @@ linkedSaveWindowsJournalRemovalRetriesAfterHandleClose()
     error.clear();
     QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
     QVERIFY(!QFileInfo::exists(journalPath));
+}
+
+void TestAtomicActivitySave::
+linkedSaveLegacyWindowsJournalFileRemovalRetries_data()
+{
+    QTest::addColumn<bool>("committed");
+    QTest::addColumn<bool>("externalObserver");
+
+    QTest::newRow("rollback-internal") << false << false;
+    QTest::newRow("commit-internal") << true << false;
+    QTest::newRow("rollback-external") << false << true;
+    QTest::newRow("commit-external") << true << true;
+}
+
+void TestAtomicActivitySave::
+linkedSaveLegacyWindowsJournalFileRemovalRetries()
+{
+    QFETCH(bool, committed);
+    QFETCH(bool, externalObserver);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    for (int index = 0; index < journal->entryCount(); ++index) {
+        writeFixture(
+            journal->stagingPath(index),
+            QByteArray("staged generation ") + QByteArray::number(index));
+        QVERIFY2(journal->recordStaged(index, error), qPrintable(error));
+    }
+    if (committed) {
+        QVERIFY2(journal->publishAndCommit(error), qPrintable(error));
+    }
+
+    const QString manifestPath = QDir(journalPath).filePath(
+        QStringLiteral("manifest.json"));
+    WindowsTestHandle observer(externalObserver
+        ? ::CreateFileW(
+            reinterpret_cast<LPCWSTR>(manifestPath.utf16()),
+            GENERIC_READ | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_FLAG_OPEN_REPARSE_POINT,
+            nullptr)
+        : INVALID_HANDLE_VALUE);
+    if (externalObserver) {
+        QVERIFY(observer.isValid());
+    }
+
+    forceLegacyWindowsDelete = true;
+    error.clear();
+    const bool firstCleanup = committed
+        ? journal->cleanupAfterCommit(error)
+        : journal->cleanupAfterRollback(error);
+    forceLegacyWindowsDelete = false;
+
+    QVERIFY2(!firstCleanup, "A pending legacy deletion was accepted");
+    QVERIFY2(!error.isEmpty(), "Pending deletion must report an error");
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    observer.reset();
+    error.clear();
+    QVERIFY2(
+        committed
+            ? journal->cleanupAfterCommit(error)
+            : journal->cleanupAfterRollback(error),
+        qPrintable(error));
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QVERIFY(!journal->hasCommitMarker());
 }
 #endif
 
@@ -6196,6 +6388,61 @@ anchoredFilesDenyConcurrentWindowsWrites()
         !concurrentWriter.isValid(),
         "A live anchored pin allowed a concurrent Windows writer");
     QCOMPARE(nativeError, DWORD(ERROR_SHARING_VIOLATION));
+}
+
+void TestAtomicActivitySave::
+anchoredOutputFilesCanBeRepinned_data()
+{
+    QTest::addColumn<QString>("operation");
+
+    QTest::newRow("copy-new") << QStringLiteral("copy");
+    QTest::newRow("write-new") << QStringLiteral("write");
+}
+
+void TestAtomicActivitySave::
+anchoredOutputFilesCanBeRepinned()
+{
+    QFETCH(QString, operation);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString sourcePath = dir.filePath(QStringLiteral("source.bin"));
+    const QByteArray contents("identity-bound contents");
+    writeFixture(sourcePath, contents);
+
+    QString error;
+    AnchoredFileSystem::DirectoryAnchor parent;
+    QVERIFY2(
+        AnchoredFileSystem::DirectoryAnchor::open(
+            dir.path(), parent, error),
+        qPrintable(error));
+    const AnchoredFileSystem::EntryRef sourceEntry =
+        parent.entry(QStringLiteral("source.bin"), error);
+    const AnchoredFileSystem::EntryRef destinationEntry =
+        parent.entry(QStringLiteral("destination.bin"), error);
+    QVERIFY2(sourceEntry.isValid(), qPrintable(error));
+    QVERIFY2(destinationEntry.isValid(), qPrintable(error));
+
+    AnchoredFileSystem::PinnedFile source;
+    QVERIFY2(
+        AnchoredFileSystem::pinRegularFile(sourceEntry, source, error),
+        qPrintable(error));
+    AnchoredFileSystem::PinnedFile output;
+    const bool created = operation == QStringLiteral("copy")
+        ? AnchoredFileSystem::copyToNewFile(
+              source, destinationEntry, output, error)
+        : AnchoredFileSystem::writeNewFile(
+              contents, destinationEntry, output, error);
+    QVERIFY2(created, qPrintable(error));
+
+    AnchoredFileSystem::PinnedFile repinned;
+    QVERIFY2(
+        AnchoredFileSystem::pinRegularFile(
+            destinationEntry, repinned, error),
+        qPrintable(error));
+    QCOMPARE(repinned.identity(), output.identity());
+    QCOMPARE(repinned.size(), output.size());
+    QCOMPARE(repinned.sha256(), output.sha256());
 }
 #endif
 
