@@ -213,6 +213,8 @@ struct MutationResult
     MutationEffect effect = MutationEffect::NoEffect;
     QString error;
     QString verifiedRecoveryPath;
+    // The platform accepted deletion, even if final verification is pending.
+    bool removalRequested = false;
 
     bool applied() const
     {

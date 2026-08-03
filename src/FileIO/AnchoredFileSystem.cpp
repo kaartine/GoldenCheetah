@@ -486,6 +486,14 @@ bool sameWindowsObject(
         && left.id == right.id;
 }
 
+bool sameWindowsIdentityAndExtent(
+    const WindowsStamp &left, const WindowsStamp &right)
+{
+    return sameWindowsObject(left, right)
+        && left.links == right.links
+        && left.size == right.size;
+}
+
 bool sameWindowsIdentityAndData(
     const WindowsStamp &left, const WindowsStamp &right)
 {
@@ -869,6 +877,95 @@ bool streamPinnedFile(
     }
     return true;
 }
+
+#ifdef Q_OS_WIN
+bool makeWindowsOutputPinImmutable(
+    Detail::PinnedFileState &state,
+    bool &cleanupIsIdentityBound,
+    QString &error)
+{
+    cleanupIsIdentityBound = true;
+    WindowsHandle bridge(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(state.entry.displayPath().utf16()),
+        GENERIC_READ | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr));
+    WindowsStamp bridgeStamp;
+    if (!bridge.isValid()
+        || !captureWindowsStamp(
+            bridge.get(), bridgeStamp, false, error)
+        || !sameWindowsIdentityAndExtent(bridgeStamp, state.stamp)
+        || windowsIdentity(bridgeStamp, 'f') != state.identity) {
+        if (error.isEmpty()) {
+            error = bridge.isValid()
+                ? QStringLiteral(
+                    "The anchored output changed before its pin was finalized")
+                : windowsError(
+                    QStringLiteral(
+                        "Cannot bridge an anchored output pin"),
+                    ::GetLastError());
+        }
+        return false;
+    }
+
+    state.handle.reset();
+    reportAnchoredFilesystemTransition(
+        "output-pin-writer-released",
+        state.entry.displayPath());
+    WindowsHandle immutable(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(state.entry.displayPath().utf16()),
+        GENERIC_READ | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_WRITE_THROUGH,
+        nullptr));
+    if (!immutable.isValid()) {
+        const DWORD native = ::GetLastError();
+        cleanupIsIdentityBound = false;
+        error = windowsError(
+            QStringLiteral(
+                "Cannot finalize an anchored output pin"),
+            native);
+        return false;
+    }
+
+    WindowsStamp immutableStamp;
+    if (!captureWindowsStamp(
+            immutable.get(), immutableStamp, false, error)
+        || !sameWindowsIdentityAndExtent(
+            immutableStamp, state.stamp)
+        || windowsIdentity(immutableStamp, 'f') != state.identity) {
+        cleanupIsIdentityBound = false;
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The anchored output was replaced while its pin was finalized");
+        }
+        return false;
+    }
+
+    state.stamp = immutableStamp;
+    state.identity = windowsIdentity(immutableStamp, 'f');
+    state.handle = std::move(immutable);
+    QByteArray verifiedDigest;
+    const PinnedChunkConsumer discard = [](
+        const char *, qsizetype, QString &) { return true; };
+    if (!streamPinnedFile(
+            state, discard, verifiedDigest, error)
+        || verifiedDigest != state.sha256) {
+        cleanupIsIdentityBound = false;
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The finalized anchored output contents changed");
+        }
+        return false;
+    }
+    return true;
+}
+#endif
 
 void appendCleanupError(
     QString &error, const MutationResult &cleanup)
@@ -1437,6 +1534,7 @@ bool writeNewFile(
         && writtenStamp.links == 1
         && writtenStamp.size == contents.size();
     bool verified = false;
+    bool cleanupIsIdentityBound = true;
     if (complete) {
         QByteArray verifiedDigest;
         QString verifyError;
@@ -1475,6 +1573,28 @@ bool writeNewFile(
             verified = false;
         }
     }
+#ifdef Q_OS_WIN
+    if (verified
+        && !makeWindowsOutputPinImmutable(
+            *candidate.state_, cleanupIsIdentityBound, error)) {
+        verified = false;
+    }
+    if (verified) {
+        bool finalizedNameMatches = false;
+        QString finalError;
+        if (!entryMatches(
+                destination, candidate,
+                finalizedNameMatches, finalError)
+            || !finalizedNameMatches
+            || !destination.parent_.pathMatches(finalError)) {
+            error = finalError.isEmpty()
+                ? QStringLiteral(
+                    "The anchored write destination changed while its pin was finalized")
+                : finalError;
+            verified = false;
+        }
+    }
+#endif
     if (verified) {
         file = std::move(candidate);
         return true;
@@ -1484,7 +1604,12 @@ bool writeNewFile(
         error = QStringLiteral("Cannot complete an anchored file write");
     }
     if (candidate.isValid()) {
-        appendCleanupError(error, remove(candidate));
+        if (cleanupIsIdentityBound) {
+            appendCleanupError(error, remove(candidate));
+        } else {
+            error += QStringLiteral("; unverified output retained at %1")
+                .arg(destination.displayPath());
+        }
     }
     return false;
 }
@@ -1647,6 +1772,7 @@ bool copyToNewFile(
         && copiedStamp.size == source.state_->size
         && copiedDigest == source.state_->sha256;
     bool verified = false;
+    bool cleanupIsIdentityBound = true;
     if (complete) {
         QByteArray verifiedDigest;
         QString verifyError;
@@ -1672,6 +1798,28 @@ bool copyToNewFile(
         && !destination.parent_.sync(error)) {
         verified = false;
     }
+#ifdef Q_OS_WIN
+    if (verified
+        && !makeWindowsOutputPinImmutable(
+            *candidate.state_, cleanupIsIdentityBound, error)) {
+        verified = false;
+    }
+    if (verified) {
+        bool finalizedNameMatches = false;
+        QString finalError;
+        if (!entryMatches(
+                destination, candidate,
+                finalizedNameMatches, finalError)
+            || !finalizedNameMatches
+            || !destination.parent_.pathMatches(finalError)) {
+            error = finalError.isEmpty()
+                ? QStringLiteral(
+                    "The anchored copy destination changed while its pin was finalized")
+                : finalError;
+            verified = false;
+        }
+    }
+#endif
     if (verified) {
         copy = std::move(candidate);
         return true;
@@ -1681,7 +1829,12 @@ bool copyToNewFile(
         error = QStringLiteral("Cannot complete an anchored copy");
     }
     if (candidate.isValid()) {
-        appendCleanupError(error, remove(candidate));
+        if (cleanupIsIdentityBound) {
+            appendCleanupError(error, remove(candidate));
+        } else {
+            error += QStringLiteral("; unverified copy retained at %1")
+                .arg(destination.displayPath());
+        }
     }
     return false;
 }
@@ -2367,6 +2520,7 @@ MutationResult remove(PinnedFile &file)
             file.verifiedPath(file.state_->entry);
         return result;
     }
+    result.removalRequested = true;
     const DirectoryAnchor parent = file.state_->entry.parent_;
     UnixStamp unlinked;
     QString verificationError;
@@ -2461,6 +2615,7 @@ MutationResult remove(PinnedFile &file)
             return result;
         }
     }
+    result.removalRequested = true;
     file.state_.reset();
     mutation.reset();
 
@@ -2708,6 +2863,7 @@ MutationResult removeEmptyDirectory(DirectoryAnchor &directory)
             directory.pathMatches(quarantineError)
                 ? directory.state_->displayPath : QString());
     }
+    result.removalRequested = true;
 
     UnixStamp unlinked;
     QString verificationError;
@@ -2929,6 +3085,7 @@ MutationResult removeEmptyDirectory(DirectoryAnchor &directory)
         return restoreObservation(dispositionError);
     }
 
+    result.removalRequested = true;
     directory.state_.reset();
     mutation.reset();
     reportAnchoredFilesystemTransition(
