@@ -4989,66 +4989,67 @@ linkedFilenameSaveCrashRecoversCompleteGeneration_data()
     QTest::addColumn<int>("crashOccurrence");
     QTest::addColumn<bool>("committed");
     QTest::addColumn<bool>("conversion");
+    QTest::addColumn<bool>("manualRecovery");
 
     QTest::newRow("directory-created")
         << QStringLiteral("linked-save-directory-created")
-        << 1 << false << false;
+        << 1 << false << false << false;
     QTest::newRow("source-copy-one")
         << QStringLiteral("linked-save-source-copy-published")
-        << 1 << false << false;
+        << 1 << false << false << false;
     QTest::newRow("source-copy-two")
         << QStringLiteral("linked-save-source-copy-published")
-        << 2 << false << false;
+        << 2 << false << false << false;
     QTest::newRow("initial-manifest")
         << QStringLiteral("linked-save-initial-manifest-published")
-        << 1 << false << false;
+        << 1 << false << false << false;
     QTest::newRow("stage-one")
         << QStringLiteral("linked-save-stage-recorded")
-        << 1 << false << false;
+        << 1 << false << false << false;
     QTest::newRow("stage-two")
         << QStringLiteral("linked-save-stage-recorded")
-        << 2 << false << false;
+        << 2 << false << false << false;
     QTest::newRow("target-one")
         << QStringLiteral("linked-save-target-published")
-        << 1 << false << false;
+        << 1 << false << false << false;
     QTest::newRow("target-two")
         << QStringLiteral("linked-save-target-published")
-        << 2 << false << false;
+        << 2 << false << false << false;
     QTest::newRow("source-retired-one")
         << QStringLiteral("linked-save-source-retired")
-        << 1 << false << false;
+        << 1 << false << false << true;
     QTest::newRow("source-retired-two")
         << QStringLiteral("linked-save-source-retired")
-        << 2 << false << false;
+        << 2 << false << false << true;
     QTest::newRow("commit-marker")
         << QStringLiteral("linked-save-commit-marker")
-        << 1 << true << false;
+        << 1 << true << false << false;
     QTest::newRow("manifest-removed")
         << QStringLiteral("linked-save-manifest-removed")
-        << 1 << true << false;
+        << 1 << true << false << false;
     for (int occurrence = 1; occurrence <= 4; ++occurrence) {
         QTest::newRow(qPrintable(QStringLiteral("cleanup-%1").arg(occurrence)))
             << QStringLiteral("linked-save-cleanup-file")
-            << occurrence << true << false;
+            << occurrence << true << false << false;
     }
     QTest::newRow("commit-marker-removed")
         << QStringLiteral("linked-save-commit-marker-removed")
-        << 1 << true << false;
+        << 1 << true << false << false;
     QTest::newRow("directory-removed")
         << QStringLiteral("linked-save-directory-removed")
-        << 1 << true << false;
+        << 1 << true << false << false;
     QTest::newRow("conversion-backup-copy")
         << QStringLiteral("linked-save-backup-copy-published")
-        << 1 << false << true;
+        << 1 << false << true << false;
     QTest::newRow("conversion-backup-published")
         << QStringLiteral("linked-save-backup-published")
-        << 1 << false << true;
+        << 1 << false << true << false;
     QTest::newRow("conversion-source-retired")
         << QStringLiteral("linked-save-source-retired")
-        << 1 << false << true;
+        << 1 << false << true << true;
     QTest::newRow("conversion-commit-marker")
         << QStringLiteral("linked-save-commit-marker")
-        << 1 << true << true;
+        << 1 << true << true << false;
 }
 
 void TestAtomicActivitySave::
@@ -5058,6 +5059,7 @@ linkedFilenameSaveCrashRecoversCompleteGeneration()
     QFETCH(int, crashOccurrence);
     QFETCH(bool, committed);
     QFETCH(bool, conversion);
+    QFETCH(bool, manualRecovery);
 
     static const char RootEnvironment[] =
         "GC_LINKED_ACTIVITY_SAVE_CRASH_ROOT";
@@ -5184,13 +5186,53 @@ linkedFilenameSaveCrashRecoversCompleteGeneration()
 
     const auto crashed = runChild(QStringLiteral("crash"), crashPhase);
     QCOMPARE(crashed.first, 86);
-    const auto recovered = runChild(QStringLiteral("recover"), QString());
-    QCOMPARE(recovered.first, 0);
-
     const QString firstOldPath = temporary.filePath(firstOldName);
     const QString secondOldPath = temporary.filePath(secondOldName);
     const QString firstNewPath = temporary.filePath(firstNewName);
     const QString secondNewPath = temporary.filePath(secondNewName);
+    const QStringList productionPaths = {
+        firstOldPath, secondOldPath, firstNewPath, secondNewPath};
+    const auto productionState = [&]() {
+        QList<QPair<bool, QByteArray>> state;
+        for (const QString &path : productionPaths) {
+            const bool exists = QFileInfo::exists(path);
+            state.append(qMakePair(
+                exists, exists ? readAll(path) : QByteArray()));
+        }
+        return state;
+    };
+    const QList<QPair<bool, QByteArray>> beforeRecovery =
+        productionState();
+    const QDir journalRoot(temporary.filePath(
+        QStringLiteral(".gc-transactions/linked-save")));
+
+    const auto recovered = runChild(QStringLiteral("recover"), QString());
+    if (manualRecovery) {
+        QCOMPARE(recovered.first, 87);
+        QVERIFY(productionState() == beforeRecovery);
+        const QStringList journals = journalRoot.entryList(
+            QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot);
+        QCOMPARE(journals.size(), 1);
+        const QDir journal(journalRoot.filePath(journals.constFirst()));
+        const QStringList intents = journal.entryList(
+            {QStringLiteral("retirement-*.pending")}, QDir::Files);
+        QCOMPARE(intents.size(), 1);
+        QVERIFY(!QFileInfo::exists(
+            journal.filePath(QStringLiteral("COMMITTED"))));
+        const QString intentPath =
+            journal.filePath(intents.constFirst());
+        const QByteArray intentContents = readAll(intentPath);
+
+        const auto recoveredAgain = runChild(
+            QStringLiteral("recover"), QString());
+        QCOMPARE(recoveredAgain.first, 87);
+        QVERIFY(productionState() == beforeRecovery);
+        QCOMPARE(readAll(intentPath), intentContents);
+        QVERIFY(QFileInfo::exists(journal.absolutePath()));
+        return;
+    }
+    QCOMPARE(recovered.first, 0);
+
     if (committed) {
         QVERIFY(!QFileInfo::exists(firstOldPath));
         QVERIFY(!QFileInfo::exists(secondOldPath));
@@ -5241,8 +5283,6 @@ linkedFilenameSaveCrashRecoversCompleteGeneration()
     QCOMPARE(readAll(firstPath), firstGeneration);
     QCOMPARE(readAll(secondPath), secondGeneration);
 
-    const QDir journalRoot(temporary.filePath(
-        QStringLiteral(".gc-transactions/linked-save")));
     QVERIFY(!journalRoot.exists()
         || journalRoot.entryList(
             QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot).isEmpty());
