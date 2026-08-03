@@ -285,6 +285,19 @@ void writeLinkedSaveJournalSources(const QString &root)
         QByteArray("second old generation"));
 }
 
+QString qlockRemovalGuardName(
+    const QString &lockName, int suffixCount = 1)
+{
+    return lockName + QStringLiteral(".rmlock").repeated(suffixCount);
+}
+
+QString qlockRemovalGuardName(int suffixCount = 1)
+{
+    return qlockRemovalGuardName(
+        QStringLiteral(".01234567-89ab-cdef-8123-456789abcdef.lock"),
+        suffixCount);
+}
+
 } // namespace
 
 class TestAtomicActivitySave : public QObject
@@ -362,6 +375,10 @@ private slots:
     void pendingLinkedRemovalJournalBlocksLinkedSaveTransaction();
     void concurrentLinkedSaveJournalsAreSerialized();
     void abandonedLinkedSaveJournalBlocksNextTransaction();
+    void linkedSaveQLockFileRemovalGuardDoesNotPoisonReconcile_data();
+    void linkedSaveQLockFileRemovalGuardDoesNotPoisonReconcile();
+    void linkedSaveUnsafeQLockFileRemovalGuardsRemainRejected_data();
+    void linkedSaveUnsafeQLockFileRemovalGuardsRemainRejected();
     void linkedSaveJournalLocksCompleteProductionPathSet_data();
     void linkedSaveJournalLocksCompleteProductionPathSet();
     void linkedSaveJournalRejectsUnsafePathGraphs_data();
@@ -3063,6 +3080,95 @@ abandonedLinkedSaveJournalBlocksNextTransaction()
         LinkedActivitySave::Journal::prepare(specification, error);
     QVERIFY2(next, qPrintable(error));
     QVERIFY2(next->cleanupAfterRollback(error), qPrintable(error));
+}
+
+void TestAtomicActivitySave::
+linkedSaveQLockFileRemovalGuardDoesNotPoisonReconcile_data()
+{
+    QTest::addColumn<bool>("journalEntry");
+    QTest::addColumn<int>("suffixCount");
+    QTest::newRow("namespace-single-rmlock") << false << 1;
+    QTest::newRow("namespace-nested-rmlock") << false << 2;
+    QTest::newRow("journal-single-rmlock") << true << 1;
+    QTest::newRow("journal-nested-rmlock") << true << 2;
+}
+
+void TestAtomicActivitySave::
+linkedSaveQLockFileRemovalGuardDoesNotPoisonReconcile()
+{
+    QFETCH(bool, journalEntry);
+    QFETCH(int, suffixCount);
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+
+    QString journalPath;
+    QString guardPath;
+    QString error;
+    if (journalEntry) {
+        std::shared_ptr<LinkedActivitySave::Journal> journal =
+            LinkedActivitySave::Journal::prepare(
+                linkedSaveJournalSpecification(dir.path()), error);
+        QVERIFY2(journal, qPrintable(error));
+        journalPath = journal->directoryPath();
+        guardPath = QDir(journalPath).filePath(
+            qlockRemovalGuardName(
+                QStringLiteral(".manifest.json.lock"), suffixCount));
+        journal.reset();
+    } else {
+        const QString namespacePath = QDir(dir.path()).filePath(
+            QStringLiteral(".gc-transactions/linked-save"));
+        QVERIFY(QDir().mkpath(namespacePath));
+        guardPath = QDir(namespacePath).filePath(
+            qlockRemovalGuardName(suffixCount));
+    }
+    writeFixture(
+        guardPath, QByteArray("stale QLockFile removal guard"));
+
+    QVERIFY2(
+        LinkedActivitySave::Journal::reconcileAll(dir.path(), error),
+        qPrintable(error));
+    if (journalEntry) QVERIFY(!QFileInfo::exists(journalPath));
+    error.clear();
+    QVERIFY2(
+        LinkedActivitySave::Journal::reconcileAll(dir.path(), error),
+        qPrintable(error));
+
+    const std::shared_ptr<LinkedActivitySave::Journal> next =
+        LinkedActivitySave::Journal::prepare(
+            linkedSaveJournalSpecification(dir.path()), error);
+    QVERIFY2(next, qPrintable(error));
+    QVERIFY2(next->cleanupAfterRollback(error), qPrintable(error));
+}
+
+void TestAtomicActivitySave::
+linkedSaveUnsafeQLockFileRemovalGuardsRemainRejected_data()
+{
+    QTest::addColumn<QString>("entryName");
+    QTest::newRow("invalid-uuid")
+        << QStringLiteral(".not-a-uuid.lock.rmlock");
+    QTest::newRow("suffix-lookalike")
+        << qlockRemovalGuardName() + QStringLiteral(".tmp");
+}
+
+void TestAtomicActivitySave::
+linkedSaveUnsafeQLockFileRemovalGuardsRemainRejected()
+{
+    QFETCH(QString, entryName);
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString namespacePath = QDir(dir.path()).filePath(
+        QStringLiteral(".gc-transactions/linked-save"));
+    QVERIFY(QDir().mkpath(namespacePath));
+    const QString entryPath = QDir(namespacePath).filePath(entryName);
+    writeFixture(entryPath, QByteArray("lookalike"));
+
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        QString error;
+        QVERIFY(!LinkedActivitySave::Journal::reconcileAll(
+            dir.path(), error));
+        QVERIFY2(error.contains(entryName), qPrintable(error));
+    }
 }
 
 void TestAtomicActivitySave::
