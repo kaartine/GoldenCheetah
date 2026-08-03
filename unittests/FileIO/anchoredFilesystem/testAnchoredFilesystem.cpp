@@ -199,6 +199,7 @@ private slots:
     void permitsOrdinaryQtReadsWhilePinned();
     void permitsOrdinaryQtReadsOfPinnedCopy();
 #ifdef Q_OS_WIN
+    void newAtomicWriterHandsOffWindowsStagingPin();
     void outputFilesDenyConcurrentWindowsWrites_data();
     void outputFilesDenyConcurrentWindowsWrites();
     void outputFilesCanBeRepinned_data();
@@ -406,6 +407,21 @@ void TestAnchoredFilesystem::permitsOrdinaryQtReadsOfPinnedCopy()
 }
 
 #ifdef Q_OS_WIN
+void TestAnchoredFilesystem::newAtomicWriterHandsOffWindowsStagingPin()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString target = root.filePath(QStringLiteral("activity.json"));
+    const QByteArray contents("complete activity");
+
+    NewAtomicFileWriter writer(target);
+    QVERIFY2(writer.open(), qPrintable(writer.errorString()));
+    QCOMPARE(writer.write(contents), qint64(contents.size()));
+    QVERIFY2(writer.flush(), qPrintable(writer.errorString()));
+    QVERIFY2(writer.commit(), qPrintable(writer.errorString()));
+    QCOMPARE(readFixture(target), contents);
+}
+
 void TestAnchoredFilesystem::
 outputFilesDenyConcurrentWindowsWrites_data()
 {
