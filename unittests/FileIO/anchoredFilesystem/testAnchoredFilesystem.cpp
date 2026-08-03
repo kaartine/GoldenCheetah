@@ -205,6 +205,8 @@ private slots:
     void outputFilesCanBeRepinned();
     void outputPinFinalizationFailureRetainsFile_data();
     void outputPinFinalizationFailureRetainsFile();
+    void outputDigestMismatchRetainsFile_data();
+    void outputDigestMismatchRetainsFile();
 #endif
     void permitsAtomicSiblingReplacementWhileDirectoryAnchored();
     void permitsAtomicReplacementWhilePinned();
@@ -547,6 +549,80 @@ void TestAnchoredFilesystem::outputPinFinalizationFailureRetainsFile()
         QFileInfo::exists(destination.displayPath()),
         "Failed pin finalization deleted a concurrently writable output");
     QCOMPARE(readFixture(destination.displayPath()), contents);
+}
+
+void TestAnchoredFilesystem::outputDigestMismatchRetainsFile_data()
+{
+    QTest::addColumn<QString>("operation");
+
+    QTest::newRow("copy-new") << QStringLiteral("copy");
+    QTest::newRow("write-new") << QStringLiteral("write");
+}
+
+void TestAnchoredFilesystem::outputDigestMismatchRetainsFile()
+{
+    QFETCH(QString, operation);
+
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    const EntryRef destination = entry(
+        directory, QStringLiteral("destination"));
+    const QByteArray contents("identity-bound contents");
+    const QByteArray replacement(contents.size(), 'x');
+    writeFixture(source.displayPath(), contents);
+
+    const PinnedFile pinnedSource = pin(source);
+    bool hookReached = false;
+    bool writerOpened = false;
+    bool replacementWritten = false;
+    filesystemAction = [&](const char *transition,
+                           const QString &primary,
+                           const QString &) {
+        if (qstrcmp(transition, "output-pin-writer-released") != 0
+            || primary != destination.displayPath()) {
+            return;
+        }
+        hookReached = true;
+        WindowsTestHandle writer(::CreateFileW(
+            reinterpret_cast<LPCWSTR>(primary.utf16()),
+            GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr));
+        writerOpened = writer.isValid();
+        if (!writerOpened) return;
+        LARGE_INTEGER start {};
+        DWORD written = 0;
+        replacementWritten = ::SetFilePointerEx(
+                                 writer.get(), start,
+                                 nullptr, FILE_BEGIN)
+            && ::WriteFile(
+                writer.get(), replacement.constData(),
+                DWORD(replacement.size()), &written, nullptr)
+            && written == DWORD(replacement.size())
+            && ::FlushFileBuffers(writer.get());
+    };
+
+    PinnedFile output;
+    QString error;
+    const bool created = operation == QStringLiteral("copy")
+        ? copyToNewFile(pinnedSource, destination, output, error)
+        : writeNewFile(contents, destination, output, error);
+    filesystemAction = {};
+
+    QVERIFY(hookReached);
+    QVERIFY(writerOpened);
+    QVERIFY(replacementWritten);
+    QVERIFY2(!created, "A digest-mismatched final output pin was accepted");
+    QVERIFY2(!error.isEmpty(), "Rejected output must report an error");
+    QVERIFY2(
+        QFileInfo::exists(destination.displayPath()),
+        "Digest failure deleted a concurrently modified output");
+    QCOMPARE(readFixture(destination.displayPath()), replacement);
 }
 #endif
 
