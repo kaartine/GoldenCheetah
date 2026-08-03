@@ -572,6 +572,7 @@ private slots:
     void abandonedPlanJournalBlocksLinkedTransaction_data();
     void abandonedPlanJournalBlocksLinkedTransaction();
     void activeRemovalJournalRejectsDirectorySubstitute();
+    void journalCleanupRejectsNamespaceRedirect();
     void activeRemovalJournalRejectsPeerOldSubstitute();
     void peerOldCleanupRejectsSubstitute();
     void journalTemporaryCleanupRejectsSubstitute();
@@ -3428,6 +3429,68 @@ activeRemovalJournalRejectsDirectorySubstitute()
         substitutePeerOld);
     QCOMPARE(readBytes(sourcePath), sourceContents);
     QCOMPARE(readBytes(peerPath), peerContents);
+}
+
+void TestRideCacheRemoval::journalCleanupRejectsNamespaceRedirect()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    QTemporaryDir outside;
+    QVERIFY(outside.isValid());
+
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QByteArray sourceContents("source");
+    writeFixture(sourcePath, sourceContents);
+
+    QString error;
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), QString(), {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+
+    const QString journalPath = journal->directoryPath();
+    const QString id = QFileInfo(journalPath).fileName();
+    const QString namespacePath = QFileInfo(journalPath).absolutePath();
+    const QString displacedNamespace =
+        namespacePath + QStringLiteral(".displaced");
+    const QString displacedJournal =
+        QDir(displacedNamespace).filePath(id);
+    const QString outsideJournal = QDir(outside.path()).filePath(id);
+    QVERIFY(QDir().mkdir(outsideJournal));
+
+    bool actionReached = false;
+    bool namespaceRedirected = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("journal-directory-finally-inspected"),
+        [&] {
+            actionReached = true;
+            if (!QDir().rename(
+                    namespacePath, displacedNamespace)) {
+                return;
+            }
+            namespaceRedirected = createTestSymbolicLink(
+                outside.path(), namespacePath, true);
+        });
+
+    error.clear();
+    const bool cleaned = journal->cleanupAfterRollback(error);
+
+    QVERIFY(actionReached);
+    if (!namespaceRedirected) {
+#ifdef Q_OS_WIN
+        QSKIP("Open Windows directory handles prevent this namespace race");
+#else
+        QFAIL("The journal namespace could not be redirected");
+#endif
+    }
+    QVERIFY2(
+        QFileInfo(outsideJournal).isDir(),
+        "Cleanup removed a directory outside the anchored namespace");
+    QVERIFY2(!cleaned, "Cleanup accepted a redirected journal namespace");
+    QVERIFY(QFileInfo(displacedJournal).isDir());
+    QCOMPARE(readBytes(sourcePath), sourceContents);
 }
 
 void TestRideCacheRemoval::

@@ -2396,6 +2396,10 @@ bool removeJournalDirectory(
         return false;
     }
     if (!journalDirectoryMatches(state, error)) return false;
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    rideCacheRemovalTransitionReached(
+        "journal-directory-finally-inspected");
+#endif
 
     // Windows denies deletion while the observation anchor is open without
     // delete sharing. Release every reference only after the final identity
