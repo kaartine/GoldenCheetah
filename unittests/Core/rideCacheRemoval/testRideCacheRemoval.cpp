@@ -2925,6 +2925,9 @@ failedSourceMovePartialStateRequiresRecovery()
 void TestRideCacheRemoval::
 committedCleanupPartialRemovalReportsExactRecoveryPath()
 {
+#ifndef Q_OS_UNIX
+    QSKIP("Exact quarantine recovery paths require Unix removal semantics");
+#endif
     Fixture fixture;
     QVERIFY(fixture.initialize());
     RideItem *item = fixture.addRide(firstName(), true);
