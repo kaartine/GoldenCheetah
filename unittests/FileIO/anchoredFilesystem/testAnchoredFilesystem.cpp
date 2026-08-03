@@ -198,6 +198,7 @@ private slots:
     void permitsOrdinaryQtReadsWhilePinned();
     void permitsOrdinaryQtReadsOfPinnedCopy();
     void permitsAtomicSiblingReplacementWhileDirectoryAnchored();
+    void permitsAtomicReplacementWhilePinned();
     void readsPinnedContentsAfterPathReplacement();
     void directoryAnchorSurvivesPathReplacement();
     void directoryAnchorDetectsPathReplacement();
@@ -405,6 +406,29 @@ permitsAtomicSiblingReplacementWhileDirectoryAnchored()
     QCOMPARE(readFixture(targetPath), replacement);
     QString error;
     QVERIFY2(journal.pathMatches(error), qPrintable(error));
+}
+
+void TestAnchoredFilesystem::permitsAtomicReplacementWhilePinned()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef target = entry(
+        directory, QStringLiteral("activity.json"));
+    const QByteArray original("original");
+    const QByteArray replacement("replacement");
+    writeFixture(target.displayPath(), original);
+    const PinnedFile pinned = pin(target);
+
+    ReplaceAtomicFileWriter writer(target.displayPath());
+    QVERIFY2(writer.open(), qPrintable(writer.errorString()));
+    QCOMPARE(writer.write(replacement), qint64(replacement.size()));
+    QVERIFY2(writer.flush(), qPrintable(writer.errorString()));
+    QVERIFY2(writer.commit(), qPrintable(writer.errorString()));
+
+    QCOMPARE(readFixture(target.displayPath()), replacement);
+    QVERIFY(pinned.isValid());
+    QCOMPARE(pinned.size(), qint64(original.size()));
 }
 
 void TestAnchoredFilesystem::readsPinnedContentsAfterPathReplacement()
