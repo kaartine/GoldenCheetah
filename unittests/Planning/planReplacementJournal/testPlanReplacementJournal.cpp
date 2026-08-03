@@ -36,10 +36,17 @@ enum class JournalNamespaceEntryKind
     Directory
 };
 
+QString qlockRemovalGuardName(
+    const QString &lockName, int suffixCount = 1)
+{
+    return lockName + QStringLiteral(".rmlock").repeated(suffixCount);
+}
+
 QString qlockRemovalGuardName(int suffixCount = 1)
 {
-    return QStringLiteral(".01234567-89ab-cdef-8123-456789abcdef.lock")
-        + QStringLiteral(".rmlock").repeated(suffixCount);
+    return qlockRemovalGuardName(
+        QStringLiteral(".01234567-89ab-cdef-8123-456789abcdef.lock"),
+        suffixCount);
 }
 
 bool createTestSymbolicLink(
@@ -464,6 +471,8 @@ private slots:
     void committedCoordinatorCanResumePreparedJournal();
     void staleQLockFileRemovalGuardDoesNotPoisonReconcile_data();
     void staleQLockFileRemovalGuardDoesNotPoisonReconcile();
+    void staleJournalQLockFileRemovalGuardDoesNotPoisonReconcile_data();
+    void staleJournalQLockFileRemovalGuardDoesNotPoisonReconcile();
     void unsafeQLockFileRemovalGuardEntriesRemainRejected_data();
     void unsafeQLockFileRemovalGuardEntriesRemainRejected();
     void rejectsUnsafeSpecifications_data();
@@ -735,6 +744,44 @@ staleQLockFileRemovalGuardDoesNotPoisonReconcile()
             replacementSpecification(temporary.path()), error);
     QVERIFY2(journal, qPrintable(error));
     QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+}
+
+void TestPlanReplacementJournal::
+staleJournalQLockFileRemovalGuardDoesNotPoisonReconcile_data()
+{
+    QTest::addColumn<int>("suffixCount");
+    QTest::newRow("single-rmlock") << 1;
+    QTest::newRow("nested-rmlock") << 2;
+}
+
+void TestPlanReplacementJournal::
+staleJournalQLockFileRemovalGuardDoesNotPoisonReconcile()
+{
+    QFETCH(int, suffixCount);
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QVERIFY(createOldGeneration(temporary.path()));
+
+    QString error;
+    std::shared_ptr<PlanReplacement::Journal> journal =
+        PlanReplacement::Journal::prepare(
+            replacementSpecification(temporary.path()), error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    QVERIFY(writeFile(
+        QDir(journalPath).filePath(qlockRemovalGuardName(
+            QStringLiteral(".manifest.json.lock"), suffixCount)),
+        QByteArray("stale journal QLockFile removal guard")));
+    journal.reset();
+
+    QVERIFY2(
+        PlanReplacement::Journal::reconcileAll(temporary.path(), error),
+        qPrintable(error));
+    QVERIFY(!QFileInfo::exists(journalPath));
+    error.clear();
+    QVERIFY2(
+        PlanReplacement::Journal::reconcileAll(temporary.path(), error),
+        qPrintable(error));
 }
 
 void TestPlanReplacementJournal::
