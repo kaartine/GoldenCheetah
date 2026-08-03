@@ -1228,8 +1228,7 @@ bool copyToNewFile(
 #elif defined(Q_OS_WIN)
     WindowsHandle output(::CreateFileW(
         reinterpret_cast<LPCWSTR>(destination.displayPath_.utf16()),
-        GENERIC_READ | GENERIC_WRITE | DELETE
-            | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        GENERIC_READ | GENERIC_WRITE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         nullptr,
         CREATE_NEW,

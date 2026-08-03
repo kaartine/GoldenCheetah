@@ -195,6 +195,7 @@ private slots:
     void pinsIdentityAndContentThroughOneHandle();
     void permitsConcurrentPinsOfOneIdentity();
     void permitsOrdinaryQtReadsWhilePinned();
+    void permitsOrdinaryQtReadsOfPinnedCopy();
     void readsPinnedContentsAfterPathReplacement();
     void directoryAnchorSurvivesPathReplacement();
     void directoryAnchorDetectsPathReplacement();
@@ -344,6 +345,32 @@ void TestAnchoredFilesystem::permitsOrdinaryQtReadsWhilePinned()
 
     const PinnedFile pinned = pin(source);
     QFile ordinaryReader(source.displayPath());
+    QVERIFY2(
+        ordinaryReader.open(QIODevice::ReadOnly),
+        qPrintable(ordinaryReader.errorString()));
+    QCOMPARE(ordinaryReader.readAll(), contents);
+}
+
+void TestAnchoredFilesystem::permitsOrdinaryQtReadsOfPinnedCopy()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    const EntryRef destination = entry(
+        directory, QStringLiteral("destination"));
+    const QByteArray contents("fixture");
+    writeFixture(source.displayPath(), contents);
+
+    const PinnedFile pinnedSource = pin(source);
+    PinnedFile pinnedCopy;
+    QString error;
+    QVERIFY2(
+        copyToNewFile(
+            pinnedSource, destination, pinnedCopy, error),
+        qPrintable(error));
+
+    QFile ordinaryReader(destination.displayPath());
     QVERIFY2(
         ordinaryReader.open(QIODevice::ReadOnly),
         qPrintable(ordinaryReader.errorString()));
