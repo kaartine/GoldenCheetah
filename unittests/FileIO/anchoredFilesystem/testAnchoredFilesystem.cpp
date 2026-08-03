@@ -2409,6 +2409,8 @@ removeLegacyWindowsDeleteReportsPendingName()
 
         QCOMPARE(result.effect, MutationEffect::Partial);
         QVERIFY(!pinned.isValid());
+        QVERIFY2(result.verifiedRecoveryPath.isEmpty(),
+                 "A path reopened after pin retirement was reported as verified");
         QFile replacement(source.displayPath());
         QVERIFY(!replacement.open(
             QIODevice::WriteOnly | QIODevice::NewOnly));
