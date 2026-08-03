@@ -25,6 +25,7 @@
 #include <QUuid>
 
 #include <algorithm>
+#include <cstring>
 #include <functional>
 #include <memory>
 #include <utility>
@@ -33,7 +34,6 @@
 #ifdef Q_OS_UNIX
 #include <cerrno>
 #include <cstdio>
-#include <cstring>
 #include <fcntl.h>
 #include <unistd.h>
 #endif
@@ -523,13 +523,46 @@ inline bool publishAtomicReplacement(const QString &temporaryPath,
         return false;
     }
 #elif defined(Q_OS_WIN)
-    if (!::MoveFileExW(
-            reinterpret_cast<LPCWSTR>(temporaryPath.utf16()),
-            reinterpret_cast<LPCWSTR>(targetPath.utf16()),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    const QString temporary = QDir::toNativeSeparators(temporaryPath);
+    const QString target = QDir::toNativeSeparators(targetPath);
+    const HANDLE replacement = ::CreateFileW(
+        reinterpret_cast<LPCWSTR>(temporary.utf16()),
+        DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_WRITE_THROUGH,
+        nullptr);
+    if (replacement == nullptr
+        || replacement == INVALID_HANDLE_VALUE) {
+        error = QStringLiteral(
+                    "Cannot open the replacement activity file: "
+                    "system error %1")
+                    .arg(::GetLastError());
+        return false;
+    }
+
+    const DWORD targetBytes = DWORD(target.size() * sizeof(wchar_t));
+    const size_t bufferSize = sizeof(FILE_RENAME_INFO)
+        + size_t(targetBytes);
+    std::vector<unsigned char> storage(bufferSize, 0);
+    auto *rename = reinterpret_cast<FILE_RENAME_INFO *>(storage.data());
+    rename->ReplaceIfExists = TRUE;
+    rename->RootDirectory = nullptr;
+    rename->FileNameLength = targetBytes;
+    std::memcpy(rename->FileName, target.utf16(), targetBytes);
+    const BOOL published = ::SetFileInformationByHandle(
+        replacement,
+        FileRenameInfo,
+        rename,
+        DWORD(storage.size()));
+    const DWORD publishError = published
+        ? ERROR_SUCCESS : ::GetLastError();
+    ::CloseHandle(replacement);
+    if (!published) {
         error = QStringLiteral(
                     "Cannot publish the activity file: system error %1")
-                    .arg(::GetLastError());
+                    .arg(publishError);
         return false;
     }
 #else
