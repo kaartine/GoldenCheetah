@@ -85,7 +85,14 @@ struct ObservedFile
     AtomicFileSnapshot contents;
 };
 
-struct AnchoredRetirementSource
+struct AnchoredActivityFile
+{
+    AnchoredFileSystem::DirectoryAnchor parent;
+    AnchoredFileSystem::EntryRef entry;
+    AnchoredFileSystem::PinnedFile file;
+};
+
+struct AnchoredRetirementSource : AnchoredActivityFile
 {
     struct Intent
     {
@@ -100,9 +107,6 @@ struct AnchoredRetirementSource
         bool expected = false;
     } intent;
 
-    AnchoredFileSystem::DirectoryAnchor parent;
-    AnchoredFileSystem::EntryRef entry;
-    AnchoredFileSystem::PinnedFile file;
     AnchoredFileSystem::MutationEffect mutationEffect =
         AnchoredFileSystem::MutationEffect::NoEffect;
     QString verifiedRecoveryPath;
@@ -137,6 +141,7 @@ namespace {
 
 using Detail::Entry;
 using Detail::ExpectedFile;
+using Detail::AnchoredActivityFile;
 using Detail::AnchoredRetirementSource;
 using Detail::Manifest;
 using Detail::ObservedFile;
@@ -387,13 +392,13 @@ bool resolveRootRelativePath(
     return true;
 }
 
-bool anchorRetirementSource(
+bool anchorActivityFile(
     const AnchoredFileSystem::DirectoryAnchor &athleteRoot,
     const QString &relativePath,
-    std::unique_ptr<AnchoredRetirementSource> &source,
+    AnchoredActivityFile &anchored,
     QString &error)
 {
-    source.reset();
+    anchored = {};
     if (!validateRelativePath(relativePath, error)) return false;
     const QStringList components = QDir::fromNativeSeparators(relativePath)
                                        .split(QLatin1Char('/'));
@@ -402,39 +407,52 @@ bool anchorRetirementSource(
         return false;
     }
 
-    auto anchored = std::make_unique<AnchoredRetirementSource>();
-    anchored->parent = athleteRoot;
+    anchored.parent = athleteRoot;
     for (int index = 0; index + 1 < components.size(); ++index) {
         AnchoredFileSystem::DirectoryAnchor child;
-        if (!anchored->parent.openChild(
+        if (!anchored.parent.openChild(
                 components.at(index), child, error)) {
             error = QStringLiteral(
-                "Cannot anchor an activity source parent: %1").arg(error);
+                "Cannot anchor an activity file parent: %1").arg(error);
             return false;
         }
-        anchored->parent = std::move(child);
+        anchored.parent = std::move(child);
     }
-    anchored->entry = anchored->parent.entry(
+    anchored.entry = anchored.parent.entry(
         components.constLast(), error);
-    if (!anchored->entry.isValid()) {
+    if (!anchored.entry.isValid()) {
         if (error.isEmpty()) {
-            error = QStringLiteral("Cannot anchor an activity source name");
+            error = QStringLiteral("Cannot anchor an activity file name");
         }
         return false;
     }
 
     bool exists = false;
     if (!AnchoredFileSystem::entryExists(
-            anchored->entry, exists, error)) {
+            anchored.entry, exists, error)) {
         return false;
     }
     if (exists
         && !AnchoredFileSystem::pinRegularFile(
-            anchored->entry, anchored->file, error)) {
-        error = QStringLiteral("Cannot pin an activity source: %1").arg(error);
+            anchored.entry, anchored.file, error)) {
+        error = QStringLiteral("Cannot pin an activity file: %1").arg(error);
         return false;
     }
-    source = std::move(anchored);
+    return true;
+}
+
+bool anchorRetirementSource(
+    const AnchoredFileSystem::DirectoryAnchor &athleteRoot,
+    const QString &relativePath,
+    std::unique_ptr<AnchoredRetirementSource> &source,
+    QString &error)
+{
+    source = std::make_unique<AnchoredRetirementSource>();
+    if (!anchorActivityFile(
+            athleteRoot, relativePath, *source, error)) {
+        source.reset();
+        return false;
+    }
     return true;
 }
 
@@ -445,6 +463,264 @@ bool pinnedFileMatches(
     return file.isValid()
         && file.size() == snapshot.size
         && file.sha256() == snapshot.digest;
+}
+
+bool ensureAthleteRootAnchored(JournalState &state, QString &error)
+{
+    if (!state.athleteRootDirectory.isValid()
+        && !AnchoredFileSystem::DirectoryAnchor::open(
+            state.athleteRoot,
+            state.athleteRootDirectory,
+            error)) {
+        error = QStringLiteral("Cannot anchor the athlete root: %1").arg(error);
+        return false;
+    }
+    if (!state.athleteRootDirectory.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral("The athlete root was replaced");
+        }
+        return false;
+    }
+    return true;
+}
+
+bool anchorObservedActivityFile(
+    JournalState &state,
+    const QString &relativePath,
+    const ObservedFile &observed,
+    AnchoredActivityFile &anchored,
+    QString &error)
+{
+    if (!ensureAthleteRootAnchored(state, error)
+        || !anchorActivityFile(
+            state.athleteRootDirectory,
+            relativePath,
+            anchored,
+            error)) {
+        return false;
+    }
+    if (anchored.file.isValid() != observed.exists) {
+        error = QStringLiteral(
+            "An activity file changed before it could be anchored");
+        return false;
+    }
+    if (observed.exists
+        && !pinnedFileMatches(anchored.file, observed.contents)) {
+        error = QStringLiteral(
+            "An activity file changed while it was being anchored");
+        return false;
+    }
+    return true;
+}
+
+bool completeAnchoredActivityRemoval(
+    AnchoredActivityFile &anchored,
+    const QString &failure,
+    QString &error)
+{
+    const AnchoredFileSystem::MutationResult removal =
+        AnchoredFileSystem::remove(anchored.file);
+    if (removal.effect
+        == AnchoredFileSystem::MutationEffect::AppliedDurable) {
+        return true;
+    }
+    if (removal.effect
+        == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
+        QString syncError;
+        if (anchored.parent.sync(syncError)) return true;
+        error = removal.error.isEmpty() ? failure : removal.error;
+        appendError(error, syncError);
+        return false;
+    }
+    error = removal.error.isEmpty() ? failure : removal.error;
+    if (!removal.verifiedRecoveryPath.isEmpty()) {
+        appendError(
+            error,
+            QStringLiteral("recovery file retained at %1")
+                .arg(removal.verifiedRecoveryPath));
+    }
+    return false;
+}
+
+bool pinExpectedJournalFile(
+    const JournalState &state,
+    const QString &path,
+    const AtomicFileSnapshot &expected,
+    AnchoredFileSystem::PinnedFile &file,
+    QString &error)
+{
+    if (!journalDirectoryMatches(state, error)
+        || atomicFilePathKey(QFileInfo(path).absolutePath())
+            != atomicFilePathKey(state.journalPath)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "A linked-save publication source escapes its journal");
+        }
+        return false;
+    }
+    const AnchoredFileSystem::EntryRef entry =
+        state.journalDirectory.entry(QFileInfo(path).fileName(), error);
+    if (!entry.isValid()
+        || !AnchoredFileSystem::pinRegularFile(
+            entry, file, error, expected.size)
+        || !pinnedFileMatches(file, expected)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "A linked-save publication source changed unexpectedly");
+        }
+        return false;
+    }
+    bool matches = false;
+    if (!AnchoredFileSystem::entryMatches(
+            entry, file, matches, error)
+        || !matches) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "A linked-save publication source was replaced");
+        }
+        return false;
+    }
+    return true;
+}
+
+bool publishPinnedActivityFile(
+    const AnchoredFileSystem::PinnedFile &source,
+    AnchoredActivityFile &destination,
+    QString &error)
+{
+    const QString temporaryName = QStringLiteral(".gc-linked-save-%1.tmp")
+        .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    AnchoredActivityFile temporary;
+    temporary.parent = destination.parent;
+    temporary.entry = temporary.parent.entry(temporaryName, error);
+    if (!temporary.entry.isValid()
+        || !AnchoredFileSystem::copyToNewFile(
+            source, temporary.entry, temporary.file, error)) {
+        return false;
+    }
+
+    const AnchoredFileSystem::MutationResult publication =
+        AnchoredFileSystem::moveNoReplace(
+            temporary.file, destination.entry);
+    bool published = publication.effect
+        == AnchoredFileSystem::MutationEffect::AppliedDurable;
+    if (publication.effect
+        == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
+        QString syncError;
+        published = destination.parent.sync(syncError);
+        if (!published) {
+            error = publication.error;
+            appendError(error, syncError);
+        }
+    }
+    if (published) {
+        bool matches = false;
+        if (!AnchoredFileSystem::entryMatches(
+                destination.entry,
+                temporary.file,
+                matches,
+                error)
+            || !matches) {
+            if (error.isEmpty()) {
+                error = QStringLiteral(
+                    "An anchored activity publication was replaced");
+            }
+            return false;
+        }
+        return true;
+    }
+
+    if (error.isEmpty()) {
+        error = publication.error.isEmpty()
+            ? QStringLiteral("Cannot publish an anchored activity file")
+            : publication.error;
+    }
+    if (!publication.verifiedRecoveryPath.isEmpty()) {
+        appendError(
+            error,
+            QStringLiteral("recovery file retained at %1")
+                .arg(publication.verifiedRecoveryPath));
+    }
+    if (publication.effect
+            != AnchoredFileSystem::MutationEffect::Partial
+        && temporary.file.isValid()) {
+        QString cleanupError;
+        if (!completeAnchoredActivityRemoval(
+                temporary,
+                QStringLiteral(
+                    "Cannot remove an unpublished activity staging file"),
+                cleanupError)) {
+            appendError(error, cleanupError);
+        }
+    }
+    return false;
+}
+
+bool replaceObservedActivityFile(
+    JournalState &state,
+    const QString &journalSourcePath,
+    const AtomicFileSnapshot &expectedSource,
+    const QString &destinationRelativePath,
+    const ObservedFile &observedDestination,
+    const char *transition,
+    QString &error)
+{
+    AnchoredFileSystem::PinnedFile source;
+    if (!pinExpectedJournalFile(
+            state,
+            journalSourcePath,
+            expectedSource,
+            source,
+            error)) {
+        return false;
+    }
+    AnchoredActivityFile destination;
+    if (!anchorObservedActivityFile(
+            state,
+            destinationRelativePath,
+            observedDestination,
+            destination,
+            error)) {
+        return false;
+    }
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+    if (transition) linkedActivitySaveTransitionReached(transition);
+#else
+    Q_UNUSED(transition)
+#endif
+    if (destination.file.isValid()
+        && !completeAnchoredActivityRemoval(
+            destination,
+            QStringLiteral(
+                "Cannot remove the previous activity generation"),
+            error)) {
+        return false;
+    }
+    return publishPinnedActivityFile(source, destination, error);
+}
+
+bool removeObservedActivityFile(
+    JournalState &state,
+    const QString &relativePath,
+    const ObservedFile &observed,
+    const char *transition,
+    QString &error)
+{
+    if (!observed.exists) return true;
+    AnchoredActivityFile anchored;
+    if (!anchorObservedActivityFile(
+            state, relativePath, observed, anchored, error)) {
+        return false;
+    }
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+    if (transition) linkedActivitySaveTransitionReached(transition);
+#else
+    Q_UNUSED(transition)
+#endif
+    return completeAnchoredActivityRemoval(
+        anchored,
+        QStringLiteral("Cannot remove a transaction-owned activity file"),
+        error);
 }
 
 bool validateExistingDirectory(const QString &path, QString &error)
@@ -1865,10 +2141,7 @@ bool preparedRetirementSourcesMatch(
     const QList<ResolvedEntry> &resolved,
     QString &error)
 {
-    if (!retirementRequired(resolved)) return true;
-    if (state.retirementSources.size()
-            != size_t(state.manifest.entries.size())
-        || !state.athleteRootDirectory.isValid()) {
+    if (!state.athleteRootDirectory.isValid()) {
         error = QStringLiteral(
             "The anchored activity sources are unavailable");
         return false;
@@ -1877,6 +2150,13 @@ bool preparedRetirementSourcesMatch(
         if (error.isEmpty()) {
             error = QStringLiteral("The athlete root was replaced");
         }
+        return false;
+    }
+    if (!retirementRequired(resolved)) return true;
+    if (state.retirementSources.size()
+        != size_t(state.manifest.entries.size())) {
+        error = QStringLiteral(
+            "The anchored activity sources are unavailable");
         return false;
     }
 
@@ -1923,13 +2203,15 @@ bool capturePreparedRetirementSources(
 {
     state.retirementSources.clear();
     state.athleteRootDirectory = {};
-    if (!retirementRequired(resolved)) return true;
     if (!AnchoredFileSystem::DirectoryAnchor::open(
             state.athleteRoot,
             state.athleteRootDirectory,
             error)) {
         error = QStringLiteral("Cannot anchor the athlete root: %1").arg(error);
         return false;
+    }
+    if (!retirementRequired(resolved)) {
+        return preparedRetirementSourcesMatch(state, resolved, error);
     }
 
     state.retirementSources.resize(size_t(state.manifest.entries.size()));
@@ -1964,7 +2246,6 @@ bool captureRecoveryRetirementSources(
 {
     state.retirementSources.clear();
     state.athleteRootDirectory = {};
-    if (!retirementRequired(resolved)) return true;
     if (!AnchoredFileSystem::DirectoryAnchor::open(
             state.athleteRoot,
             state.athleteRootDirectory,
@@ -1978,6 +2259,7 @@ bool captureRecoveryRetirementSources(
         }
         return false;
     }
+    if (!retirementRequired(resolved)) return true;
     state.retirementSources.resize(size_t(state.manifest.entries.size()));
     for (int index = 0; index < state.manifest.entries.size(); ++index) {
         const Entry &entry = state.manifest.entries.at(index);
@@ -2384,7 +2666,7 @@ bool verifyNewGeneration(
 }
 
 bool restoreOldGeneration(
-    const JournalState &state,
+    JournalState &state,
     const QList<ResolvedEntry> &resolved,
     QString &error)
 {
@@ -2414,52 +2696,42 @@ bool restoreOldGeneration(
             return false;
         }
 
-        const bool sourceIsTarget =
-            atomicFilePathKey(paths.source)
-                == atomicFilePathKey(paths.target);
         const bool sourceNeedsRestore =
             !snapshotMatches(source, entry.source.contents);
-#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
-        if (sourceNeedsRestore) {
-            linkedActivitySaveTransitionReached(
-                "linked-save-before-source-restore");
-        }
-#endif
         if (sourceNeedsRestore
-            && !copyExpectedFileAtomically(
+            && !replaceObservedActivityFile(
+                state,
                 paths.sourceCopy,
-                paths.source,
                 entry.source.contents,
-                sourceIsTarget
-                    ? AtomicFileMode::ReplaceExisting
-                    : AtomicFileMode::CreateNew,
+                entry.source.relativePath,
+                source,
+                "linked-save-before-source-restore",
                 error)) {
             return false;
         }
         if (entry.backup.exists) {
             const bool backupNeedsRestore =
                 !snapshotMatches(backup, entry.backup.contents);
-#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
-            if (backupNeedsRestore) {
-                linkedActivitySaveTransitionReached(
-                    "linked-save-before-backup-restore");
-            }
-#endif
             if (backupNeedsRestore
-                && !copyExpectedFileAtomically(
+                && !replaceObservedActivityFile(
+                    state,
                     paths.backupCopy,
-                    paths.backup,
                     entry.backup.contents,
-                    AtomicFileMode::ReplaceExisting,
+                    entry.backup.relativePath,
+                    backup,
+                    "linked-save-before-backup-restore",
                     error)) {
                 return false;
             }
         } else if (backup.exists) {
-#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
-            linkedActivitySaveTransitionReached(
-                "linked-save-before-backup-remove");
-#endif
-            if (!removeObservedFile(paths.backup, backup, error)) return false;
+            if (!removeObservedActivityFile(
+                    state,
+                    entry.backup.relativePath,
+                    backup,
+                    "linked-save-before-backup-remove",
+                    error)) {
+                return false;
+            }
         }
 
         if (atomicFilePathKey(paths.source)
@@ -2469,12 +2741,12 @@ bool restoreOldGeneration(
                 return false;
             }
             if (currentTarget.exists) {
-#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
-                linkedActivitySaveTransitionReached(
-                    "linked-save-before-target-remove");
-#endif
-                if (!removeObservedFile(
-                        paths.target, currentTarget, error)) {
+                if (!removeObservedActivityFile(
+                        state,
+                        entry.targetRelativePath,
+                        currentTarget,
+                        "linked-save-before-target-remove",
+                        error)) {
                     return false;
                 }
             }
@@ -2512,18 +2784,14 @@ bool ensureNewGeneration(
         }
         const bool targetNeedsPublication =
             !snapshotMatches(target, entry.stagedContents);
-#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
-        if (targetNeedsPublication) {
-            linkedActivitySaveTransitionReached(
-                "linked-save-before-recovery-target-publish");
-        }
-#endif
         if (targetNeedsPublication
-            && !copyExpectedFileAtomically(
+            && !replaceObservedActivityFile(
+                state,
                 paths.staging,
-                paths.target,
                 entry.stagedContents,
-                AtomicFileMode::ReplaceExisting,
+                entry.targetRelativePath,
+                target,
+                "linked-save-before-recovery-target-publish",
                 error)) {
             return false;
         }
@@ -2542,18 +2810,14 @@ bool ensureNewGeneration(
         if (entry.keepSourceBackup) {
             const bool backupNeedsPublication =
                 !snapshotMatches(backup, entry.source.contents);
-#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
-            if (backupNeedsPublication) {
-                linkedActivitySaveTransitionReached(
-                    "linked-save-before-recovery-backup-publish");
-            }
-#endif
             if (backupNeedsPublication
-                && !copyExpectedFileAtomically(
+                && !replaceObservedActivityFile(
+                    state,
                     paths.sourceCopy,
-                    paths.backup,
                     entry.source.contents,
-                    AtomicFileMode::ReplaceExisting,
+                    entry.backup.relativePath,
+                    backup,
+                    "linked-save-before-recovery-backup-publish",
                     error)) {
                 return false;
             }
@@ -2589,16 +2853,18 @@ bool publishNewGeneration(
     for (int index = 0; index < state.manifest.entries.size(); ++index) {
         const Entry &entry = state.manifest.entries.at(index);
         const ResolvedEntry &paths = resolved.at(index);
-        const bool replacesSource =
-            atomicFilePathKey(paths.source)
-                == atomicFilePathKey(paths.target);
-        if (!copyExpectedFileAtomically(
+        ObservedFile source;
+        ObservedFile target;
+        ObservedFile backup;
+        if (!observeProductionEntry(
+                entry, paths, source, target, backup, error)
+            || !replaceObservedActivityFile(
+                state,
                 paths.staging,
-                paths.target,
                 entry.stagedContents,
-                replacesSource
-                    ? AtomicFileMode::ReplaceExisting
-                    : AtomicFileMode::CreateNew,
+                entry.targetRelativePath,
+                target,
+                nullptr,
                 error)) {
             return false;
         }
@@ -2611,11 +2877,18 @@ bool publishNewGeneration(
         const Entry &entry = state.manifest.entries.at(index);
         const ResolvedEntry &paths = resolved.at(index);
         if (entry.keepSourceBackup) {
-            if (!copyExpectedFileAtomically(
+            ObservedFile source;
+            ObservedFile target;
+            ObservedFile backup;
+            if (!observeProductionEntry(
+                    entry, paths, source, target, backup, error)
+                || !replaceObservedActivityFile(
+                    state,
                     paths.sourceCopy,
-                    paths.backup,
                     entry.source.contents,
-                    AtomicFileMode::ReplaceExisting,
+                    entry.backup.relativePath,
+                    backup,
+                    nullptr,
                     error)) {
                 return false;
             }
