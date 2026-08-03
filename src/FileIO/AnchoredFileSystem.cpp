@@ -2457,8 +2457,16 @@ MutationResult removeEmptyDirectory(DirectoryAnchor &directory)
         unlinked,
         true,
         verificationError);
+#if defined(Q_OS_MACOS)
+    // APFS keeps one link on an open directory after rmdir(), while Linux
+    // reports zero. Require both the BSD terminal count and an observed drop.
+    const bool finalDirectoryLinkRemoved = unlinked.links <= 1
+        && unlinked.links < pinnedAfterRename.links;
+#else
+    const bool finalDirectoryLinkRemoved = unlinked.links == 0;
+#endif
     const bool removedPinnedDirectory = captured
-        && unlinked.links == 0
+        && finalDirectoryLinkRemoved
         && sameUnixObject(unlinked, pinned);
     bool originalExists = false;
     QString originalError;
