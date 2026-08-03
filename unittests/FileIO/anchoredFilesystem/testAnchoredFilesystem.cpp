@@ -9,6 +9,7 @@
 #include <QTemporaryDir>
 
 #include <functional>
+#include <memory>
 
 #ifdef Q_OS_UNIX
 #include <unistd.h>
@@ -197,6 +198,14 @@ private slots:
     void permitsConcurrentPinsOfOneIdentity();
     void permitsOrdinaryQtReadsWhilePinned();
     void permitsOrdinaryQtReadsOfPinnedCopy();
+#ifdef Q_OS_WIN
+    void outputFilesDenyConcurrentWindowsWrites_data();
+    void outputFilesDenyConcurrentWindowsWrites();
+    void outputFilesCanBeRepinned_data();
+    void outputFilesCanBeRepinned();
+    void outputPinFinalizationFailureRetainsFile_data();
+    void outputPinFinalizationFailureRetainsFile();
+#endif
     void permitsAtomicSiblingReplacementWhileDirectoryAnchored();
     void permitsAtomicReplacementWhilePinned();
     void readsPinnedContentsAfterPathReplacement();
@@ -393,6 +402,153 @@ void TestAnchoredFilesystem::permitsOrdinaryQtReadsOfPinnedCopy()
         qPrintable(ordinaryReader.errorString()));
     QCOMPARE(ordinaryReader.readAll(), contents);
 }
+
+#ifdef Q_OS_WIN
+void TestAnchoredFilesystem::
+outputFilesDenyConcurrentWindowsWrites_data()
+{
+    QTest::addColumn<QString>("operation");
+
+    QTest::newRow("copy-new") << QStringLiteral("copy");
+    QTest::newRow("write-new") << QStringLiteral("write");
+}
+
+void TestAnchoredFilesystem::outputFilesDenyConcurrentWindowsWrites()
+{
+    QFETCH(QString, operation);
+
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    const EntryRef destination = entry(
+        directory, QStringLiteral("destination"));
+    const QByteArray contents("identity-bound contents");
+    writeFixture(source.displayPath(), contents);
+
+    const PinnedFile pinnedSource = pin(source);
+    PinnedFile output;
+    QString error;
+    const bool created = operation == QStringLiteral("copy")
+        ? copyToNewFile(pinnedSource, destination, output, error)
+        : writeNewFile(contents, destination, output, error);
+    QVERIFY2(created, qPrintable(error));
+
+    WindowsTestHandle concurrentWriter(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(destination.displayPath().utf16()),
+        GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr));
+    const DWORD nativeError = ::GetLastError();
+    QVERIFY2(
+        !concurrentWriter.isValid(),
+        "A live anchored output pin allowed a concurrent Windows writer");
+    QCOMPARE(nativeError, DWORD(ERROR_SHARING_VIOLATION));
+}
+
+void TestAnchoredFilesystem::outputFilesCanBeRepinned_data()
+{
+    QTest::addColumn<QString>("operation");
+
+    QTest::newRow("copy-new") << QStringLiteral("copy");
+    QTest::newRow("write-new") << QStringLiteral("write");
+}
+
+void TestAnchoredFilesystem::outputFilesCanBeRepinned()
+{
+    QFETCH(QString, operation);
+
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    const EntryRef destination = entry(
+        directory, QStringLiteral("destination"));
+    const QByteArray contents("identity-bound contents");
+    writeFixture(source.displayPath(), contents);
+
+    const PinnedFile pinnedSource = pin(source);
+    PinnedFile output;
+    QString error;
+    const bool created = operation == QStringLiteral("copy")
+        ? copyToNewFile(pinnedSource, destination, output, error)
+        : writeNewFile(contents, destination, output, error);
+    QVERIFY2(created, qPrintable(error));
+
+    PinnedFile repinned;
+    QVERIFY2(
+        pinRegularFile(destination, repinned, error),
+        qPrintable(error));
+    QCOMPARE(repinned.identity(), output.identity());
+    QCOMPARE(repinned.size(), output.size());
+    QCOMPARE(repinned.sha256(), output.sha256());
+}
+
+void TestAnchoredFilesystem::
+outputPinFinalizationFailureRetainsFile_data()
+{
+    QTest::addColumn<QString>("operation");
+
+    QTest::newRow("copy-new") << QStringLiteral("copy");
+    QTest::newRow("write-new") << QStringLiteral("write");
+}
+
+void TestAnchoredFilesystem::outputPinFinalizationFailureRetainsFile()
+{
+    QFETCH(QString, operation);
+
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    const EntryRef destination = entry(
+        directory, QStringLiteral("destination"));
+    const QByteArray contents("identity-bound contents");
+    writeFixture(source.displayPath(), contents);
+
+    const PinnedFile pinnedSource = pin(source);
+    bool hookReached = false;
+    std::unique_ptr<WindowsTestHandle> concurrentWriter;
+    filesystemAction = [&](const char *transition,
+                           const QString &primary,
+                           const QString &) {
+        if (qstrcmp(transition, "output-pin-writer-released") != 0
+            || primary != destination.displayPath()) {
+            return;
+        }
+        hookReached = true;
+        concurrentWriter = std::make_unique<WindowsTestHandle>(
+            ::CreateFileW(
+                reinterpret_cast<LPCWSTR>(primary.utf16()),
+                GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                nullptr,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                nullptr));
+    };
+
+    PinnedFile output;
+    QString error;
+    const bool created = operation == QStringLiteral("copy")
+        ? copyToNewFile(pinnedSource, destination, output, error)
+        : writeNewFile(contents, destination, output, error);
+    filesystemAction = {};
+
+    QVERIFY(hookReached);
+    QVERIFY(concurrentWriter && concurrentWriter->isValid());
+    QVERIFY2(!created, "A sharing-blocked final output pin was accepted");
+    QVERIFY2(!error.isEmpty(), "Rejected output must report an error");
+    concurrentWriter.reset();
+    QVERIFY2(
+        QFileInfo::exists(destination.displayPath()),
+        "Failed pin finalization deleted a concurrently writable output");
+    QCOMPARE(readFixture(destination.displayPath()), contents);
+}
+#endif
 
 void TestAnchoredFilesystem::
 permitsAtomicSiblingReplacementWhileDirectoryAnchored()

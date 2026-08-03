@@ -17,8 +17,10 @@ on:
       - src/Metrics/BlinnSolver.*
       - src/Planning/PlanBundle*.*
       - src/Planning/PlanReplacementJournal.*
+      - unittests/Core/linkedActivitySaveCleanup/**
       - unittests/Core/rideCacheRemoval/**
       - unittests/FileIO/atomicActivitySave/**
+      - unittests/FileIO/anchoredFilesystem/**
   pull_request:
     paths:
       - .github/workflows/ridecache-removal-native.yml
@@ -35,8 +37,10 @@ on:
       - src/Metrics/BlinnSolver.*
       - src/Planning/PlanBundle*.*
       - src/Planning/PlanReplacementJournal.*
+      - unittests/Core/linkedActivitySaveCleanup/**
       - unittests/Core/rideCacheRemoval/**
       - unittests/FileIO/atomicActivitySave/**
+      - unittests/FileIO/anchoredFilesystem/**
   workflow_dispatch:
 
 permissions:
@@ -66,27 +70,14 @@ jobs:
       - name: Install build dependencies
         shell: pwsh
         run: |
-          choco install winflexbison3 --no-progress -y
-          vcpkg install gsl:x64-windows zlib:x64-windows
+          vcpkg install gsl:x64-windows
       - name: Build native activity tests
         shell: pwsh
         run: |
           $vcpkgRoot = Split-Path -Parent (Get-Command vcpkg).Source
           $gslRoot = "$vcpkgRoot/installed/x64-windows"
-          $zlibRoot = "$vcpkgRoot/installed/x64-windows"
-          $zlibLibrary = Get-ChildItem "$zlibRoot/lib" `
-            -Filter '*.lib' -File |
-            Where-Object { $_.BaseName -in @('z', 'zlib', 'zlibstatic') } |
-            Sort-Object Name |
-            Select-Object -First 1 -ExpandProperty FullName
           if (!(Test-Path "$gslRoot/include/gsl/gsl_rng.h")) {
             throw 'The GSL headers were not installed'
-          }
-          if (!(Test-Path "$zlibRoot/include/zlib.h")) {
-            throw 'The zlib headers were not installed'
-          }
-          if (!$zlibLibrary) {
-            throw 'The zlib import library was not installed'
           }
           Set-Content src/gcconfig.pri 'CONFIG += release'
           Copy-Item unittests/unittests.pri.in unittests/unittests.pri
@@ -97,16 +88,14 @@ jobs:
             "GSL_LIBS=-L$gslRoot/lib -lgsl -lgslcblas"
           nmake /NOLOGO
           Set-Location ..
-          New-Item -ItemType Directory build-atomic-activity-save | Out-Null
-          Set-Location build-atomic-activity-save
-          qmake ../unittests/FileIO/atomicActivitySave/atomicActivitySave.pro `
-            "GSL_INCLUDES=$gslRoot/include" `
-            "GSL_LIBS=-L$gslRoot/lib -lgsl -lgslcblas" `
-            "ZLIB_INCLUDES=$zlibRoot/include" `
-            "ZLIB_LIBS=$zlibLibrary" `
-            "QMAKE_LEX=win_flex --wincompat" `
-            "QMAKE_YACC=win_bison --file-prefix=y -t" `
-            "QMAKE_MOVE=copy /Y"
+          New-Item -ItemType Directory build-anchored-filesystem | Out-Null
+          Set-Location build-anchored-filesystem
+          qmake ../unittests/FileIO/anchoredFilesystem/anchoredFilesystem.pro
+          nmake /NOLOGO
+          Set-Location ..
+          New-Item -ItemType Directory build-linked-save-cleanup | Out-Null
+          Set-Location build-linked-save-cleanup
+          qmake ../unittests/Core/linkedActivitySaveCleanup/linkedActivitySaveCleanup.pro
           nmake /NOLOGO
       - name: Run native activity tests
         shell: pwsh
@@ -117,13 +106,19 @@ jobs:
             -o 'windows-ridecache-removal.txt,txt'
           $removalStatus = $LASTEXITCODE
           Get-Content windows-ridecache-removal.txt
-          & build-atomic-activity-save/release/tst_atomicActivitySave.exe `
+          & build-anchored-filesystem/release/tst_anchoredFilesystem.exe `
             -silent -maxwarnings 0 `
-            -o 'windows-atomic-activity-save.txt,txt'
-          $atomicStatus = $LASTEXITCODE
-          Get-Content windows-atomic-activity-save.txt
+            -o 'windows-anchored-filesystem.txt,txt'
+          $anchoredStatus = $LASTEXITCODE
+          Get-Content windows-anchored-filesystem.txt
+          & build-linked-save-cleanup/release/tst_linkedActivitySaveCleanup.exe `
+            -silent -maxwarnings 0 `
+            -o 'windows-linked-save-cleanup.txt,txt'
+          $linkedSaveStatus = $LASTEXITCODE
+          Get-Content windows-linked-save-cleanup.txt
           if ($removalStatus -ne 0) { exit $removalStatus }
-          exit $atomicStatus
+          if ($anchoredStatus -ne 0) { exit $anchoredStatus }
+          exit $linkedSaveStatus
 
   macos:
     runs-on: macos-15
@@ -153,6 +148,16 @@ jobs:
             "GSL_LIBS=-L$gsl_root/lib -lgsl -lgslcblas"
           make -j3
           cd ..
+          mkdir build-anchored-filesystem
+          cd build-anchored-filesystem
+          qmake ../unittests/FileIO/anchoredFilesystem/anchoredFilesystem.pro
+          make -j3
+          cd ..
+          mkdir build-linked-save-cleanup
+          cd build-linked-save-cleanup
+          qmake ../unittests/Core/linkedActivitySaveCleanup/linkedActivitySaveCleanup.pro
+          make -j3
+          cd ..
           mkdir build-atomic-activity-save
           cd build-atomic-activity-save
           qmake ../unittests/FileIO/atomicActivitySave/atomicActivitySave.pro \
@@ -170,6 +175,18 @@ jobs:
             -silent -maxwarnings 0 \
             -o macos-ridecache-removal.txt,txt || removal_status=$?
           cat macos-ridecache-removal.txt
+          anchored_status=0
+          QT_QPA_PLATFORM=offscreen \
+            build-anchored-filesystem/tst_anchoredFilesystem.app/Contents/MacOS/tst_anchoredFilesystem \
+            -silent -maxwarnings 0 \
+            -o macos-anchored-filesystem.txt,txt || anchored_status=$?
+          cat macos-anchored-filesystem.txt
+          linked_save_status=0
+          QT_QPA_PLATFORM=offscreen \
+            build-linked-save-cleanup/tst_linkedActivitySaveCleanup.app/Contents/MacOS/tst_linkedActivitySaveCleanup \
+            -silent -maxwarnings 0 \
+            -o macos-linked-save-cleanup.txt,txt || linked_save_status=$?
+          cat macos-linked-save-cleanup.txt
           atomic_status=0
           QT_QPA_PLATFORM=offscreen \
             build-atomic-activity-save/tst_atomicActivitySave.app/Contents/MacOS/tst_atomicActivitySave \
@@ -177,4 +194,6 @@ jobs:
             -o macos-atomic-activity-save.txt,txt || atomic_status=$?
           cat macos-atomic-activity-save.txt
           if [ "$removal_status" -ne 0 ]; then exit "$removal_status"; fi
+          if [ "$anchored_status" -ne 0 ]; then exit "$anchored_status"; fi
+          if [ "$linked_save_status" -ne 0 ]; then exit "$linked_save_status"; fi
           exit "$atomic_status"
