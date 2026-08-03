@@ -120,11 +120,17 @@ struct JournalState
     QString commitMarkerPath;
     Detail::Manifest manifest;
     AtomicFileSnapshot manifestSnapshot;
+    AnchoredFileSystem::DirectoryAnchor namespaceDirectory;
+    AnchoredFileSystem::DirectoryAnchor journalDirectory;
     AnchoredFileSystem::DirectoryAnchor athleteRootDirectory;
     std::vector<std::unique_ptr<Detail::AnchoredRetirementSource>>
         retirementSources;
     std::unique_ptr<AtomicFileLockSet> transactionLease;
     std::unique_ptr<AtomicFileLockSet> pathLocks;
+    AnchoredFileSystem::MutationEffect journalRemovalEffect =
+        AnchoredFileSystem::MutationEffect::NoEffect;
+    QString journalRemovalRecoveryPath;
+    bool terminalCleanupCompleted = false;
 };
 
 namespace {
@@ -147,6 +153,53 @@ bool pathEntryExists(const QString &path)
 {
     const QFileInfo info(path);
     return info.exists() || info.isSymLink();
+}
+
+bool anchorJournalDirectory(JournalState &state, QString &error)
+{
+    state.namespaceDirectory = {};
+    state.journalDirectory = {};
+    if (!AnchoredFileSystem::DirectoryAnchor::open(
+            state.namespacePath,
+            state.namespaceDirectory,
+            error)
+        || !state.namespaceDirectory.openChild(
+            state.manifest.id,
+            state.journalDirectory,
+            error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "Cannot anchor the linked-save journal directory");
+        }
+        return false;
+    }
+    return true;
+}
+
+bool journalDirectoryMatches(
+    const JournalState &state, QString &error)
+{
+    if (!state.namespaceDirectory.isValid()
+        || !state.journalDirectory.isValid()) {
+        error = QStringLiteral(
+            "The linked-save journal directory is no longer anchored");
+        return false;
+    }
+    if (!state.namespaceDirectory.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The linked-save journal namespace was replaced");
+        }
+        return false;
+    }
+    if (!state.journalDirectory.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The linked-save journal directory was moved or replaced");
+        }
+        return false;
+    }
+    return true;
 }
 
 bool validTransactionId(const QString &id)
@@ -1138,7 +1191,8 @@ bool loadManifestState(
             contents,
             loaded->manifestSnapshot,
             error)
-        || !parseManifest(contents, id, loaded->manifest, error)) {
+        || !parseManifest(contents, id, loaded->manifest, error)
+        || !anchorJournalDirectory(*loaded, error)) {
         return false;
     }
     QList<ResolvedEntry> resolved;
@@ -1800,6 +1854,8 @@ void releaseTransactionResources(JournalState &state)
 {
     state.retirementSources.clear();
     state.athleteRootDirectory = {};
+    state.journalDirectory = {};
+    state.namespaceDirectory = {};
     state.pathLocks.reset();
     state.transactionLease.reset();
 }
@@ -2226,9 +2282,11 @@ bool observeProductionEntry(
     }
     if (!inspectRegularFile(paths.backup, backup, error)) return false;
 
+    const bool sourceIsTarget =
+        atomicFilePathKey(paths.source) == atomicFilePathKey(paths.target);
     const bool sourceKnown = !source.exists
         || snapshotMatches(source, entry.source.contents)
-        || (entry.staged
+        || (sourceIsTarget && entry.staged
             && snapshotMatches(source, entry.stagedContents));
     const bool targetKnown = !target.exists
         || snapshotMatches(target, entry.source.contents)
@@ -2356,6 +2414,9 @@ bool restoreOldGeneration(
             return false;
         }
 
+        const bool sourceIsTarget =
+            atomicFilePathKey(paths.source)
+                == atomicFilePathKey(paths.target);
         const bool sourceNeedsRestore =
             !snapshotMatches(source, entry.source.contents);
 #ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
@@ -2369,7 +2430,9 @@ bool restoreOldGeneration(
                 paths.sourceCopy,
                 paths.source,
                 entry.source.contents,
-                AtomicFileMode::ReplaceExisting,
+                sourceIsTarget
+                    ? AtomicFileMode::ReplaceExisting
+                    : AtomicFileMode::CreateNew,
                 error)) {
             return false;
         }
@@ -2543,10 +2606,43 @@ bool publishNewGeneration(
 }
 
 bool removeJournalDirectory(
-    const JournalState &state,
+    JournalState &state,
     bool committed,
     QString &error)
 {
+    if (state.terminalCleanupCompleted) return true;
+    if (state.journalRemovalEffect
+        == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
+        if (!state.namespaceDirectory.isValid()
+            || !state.namespaceDirectory.sync(error)) {
+            if (error.isEmpty()) {
+                error = QStringLiteral(
+                    "Cannot synchronize the removed linked-save journal");
+            }
+            return false;
+        }
+        state.journalRemovalEffect =
+            AnchoredFileSystem::MutationEffect::AppliedDurable;
+        state.terminalCleanupCompleted = true;
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+        linkedActivitySaveTransitionReached("linked-save-directory-removed");
+#endif
+        return true;
+    }
+    if (state.journalRemovalEffect
+        != AnchoredFileSystem::MutationEffect::NoEffect) {
+        error = QStringLiteral(
+            "Incomplete linked-save journal removal requires manual recovery");
+        if (!state.journalRemovalRecoveryPath.isEmpty()) {
+            appendError(
+                error,
+                QStringLiteral("recovery directory retained at %1")
+                    .arg(state.journalRemovalRecoveryPath));
+        }
+        return false;
+    }
+    if (!journalDirectoryMatches(state, error)) return false;
+
     QList<QPair<QString, ObservedFile>> removable;
     if (!inspectJournalDirectory(state, removable, error)) return false;
 
@@ -2626,12 +2722,40 @@ bool removeJournalDirectory(
             "The linked-save journal contains files that cannot be removed");
         return false;
     }
-    if (!QDir(state.namespacePath).rmdir(state.manifest.id)) {
-        error = QStringLiteral(
-            "Cannot remove the completed linked-save journal");
+    if (!journalDirectoryMatches(state, error)) return false;
+    const AnchoredFileSystem::MutationResult removed =
+        AnchoredFileSystem::removeEmptyDirectory(state.journalDirectory);
+    state.journalRemovalEffect = removed.effect;
+    state.journalRemovalRecoveryPath = removed.verifiedRecoveryPath;
+    if (state.journalRemovalEffect
+        == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
+        QString syncError;
+        if (!state.namespaceDirectory.isValid()
+            || !state.namespaceDirectory.sync(syncError)) {
+            error = removed.error.isEmpty()
+                ? QStringLiteral(
+                    "Cannot synchronize the removed linked-save journal")
+                : removed.error;
+            appendError(error, syncError);
+            return false;
+        }
+        state.journalRemovalEffect =
+            AnchoredFileSystem::MutationEffect::AppliedDurable;
+    }
+    if (state.journalRemovalEffect
+        != AnchoredFileSystem::MutationEffect::AppliedDurable) {
+        error = removed.error.isEmpty()
+            ? QStringLiteral("Cannot remove the completed linked-save journal")
+            : removed.error;
+        if (!state.journalRemovalRecoveryPath.isEmpty()) {
+            appendError(
+                error,
+                QStringLiteral("recovery directory retained at %1")
+                    .arg(state.journalRemovalRecoveryPath));
+        }
         return false;
     }
-    if (!syncParentDirectory(state.journalPath, error)) return false;
+    state.terminalCleanupCompleted = true;
 #ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
     linkedActivitySaveTransitionReached("linked-save-directory-removed");
 #endif
@@ -2640,6 +2764,13 @@ bool removeJournalDirectory(
 
 bool rollbackJournal(JournalState &state, QString &error)
 {
+    if (state.journalRemovalEffect
+        != AnchoredFileSystem::MutationEffect::NoEffect) {
+        if (!removeJournalDirectory(state, false, error)) return false;
+        releaseTransactionResources(state);
+        return true;
+    }
+    if (!journalDirectoryMatches(state, error)) return false;
     QList<QPair<QString, ObservedFile>> removable;
     if (!inspectJournalDirectory(state, removable, error)) return false;
     bool committed = false;
@@ -2662,6 +2793,13 @@ bool rollbackJournal(JournalState &state, QString &error)
 
 bool commitJournal(JournalState &state, QString &error)
 {
+    if (state.journalRemovalEffect
+        != AnchoredFileSystem::MutationEffect::NoEffect) {
+        if (!removeJournalDirectory(state, true, error)) return false;
+        releaseTransactionResources(state);
+        return true;
+    }
+    if (!journalDirectoryMatches(state, error)) return false;
     QList<QPair<QString, ObservedFile>> removable;
     if (!inspectJournalDirectory(state, removable, error)) return false;
     bool committed = false;
@@ -2908,6 +3046,13 @@ std::shared_ptr<Journal> Journal::prepare(
         }
         return {};
     }
+    if (!anchorJournalDirectory(*state, error)) {
+        appendError(
+            error,
+            QStringLiteral("recovery journal retained at %1")
+                .arg(state->journalPath));
+        return {};
+    }
 #ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
     linkedActivitySaveTransitionReached("linked-save-directory-created");
 #endif
@@ -3143,11 +3288,22 @@ bool Journal::publishAndCommit(QString &error)
     }
     bool committed = false;
     if (!readCommitMarker(*state_, committed, error)) return false;
-    if (committed) return true;
-
     QList<ResolvedEntry> resolved;
-    if (!resolveManifestEntries(*state_, resolved, error)
-        || !publishNewGeneration(*state_, resolved, error)) {
+    if (!resolveManifestEntries(*state_, resolved, error)) return false;
+    if (committed) {
+        if (!verifyNewGeneration(*state_, resolved, error)
+            || !verifyRetirementSourcesAbsent(
+                *state_, resolved, error)) {
+            appendError(
+                error,
+                QStringLiteral(
+                    "committed linked activity recovery is required before continuing"));
+            return false;
+        }
+        return true;
+    }
+
+    if (!publishNewGeneration(*state_, resolved, error)) {
         return false;
     }
 #ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
@@ -3199,11 +3355,7 @@ bool Journal::cleanupAfterRollback(QString &error)
         error = QStringLiteral("The linked-save journal is unavailable");
         return false;
     }
-    const QFileInfo info(state_->journalPath);
-    if (!info.exists() && !info.isSymLink()) {
-        releaseTransactionResources(*state_);
-        return true;
-    }
+    if (state_->terminalCleanupCompleted) return true;
     return rollbackJournal(*state_, error);
 }
 
@@ -3214,11 +3366,7 @@ bool Journal::cleanupAfterCommit(QString &error)
         error = QStringLiteral("The linked-save journal is unavailable");
         return false;
     }
-    const QFileInfo info(state_->journalPath);
-    if (!info.exists() && !info.isSymLink()) {
-        releaseTransactionResources(*state_);
-        return true;
-    }
+    if (state_->terminalCleanupCompleted) return true;
     return commitJournal(*state_, error);
 }
 

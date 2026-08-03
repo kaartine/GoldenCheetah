@@ -505,6 +505,8 @@ private slots:
     void linkedSaveRetirementSkipsInPlaceEntry();
     void linkedSaveCleanupReleasesTransactionResources_data();
     void linkedSaveCleanupReleasesTransactionResources();
+    void linkedSaveNondurableJournalRemovalStaysRetryable_data();
+    void linkedSaveNondurableJournalRemovalStaysRetryable();
     void linkedSaveNondurableRetirementStaysRetryable();
     void linkedSavePartialRetirementKeepsRecoveryJournal();
     void linkedSaveIncompleteRetirementBlocksFreshRecovery();
@@ -3719,6 +3721,79 @@ linkedSaveCleanupReleasesTransactionResources()
         QDir().rename(athleteRoot, movedRoot),
         "A completed journal retained an athlete-directory resource");
     QVERIFY(QFileInfo::exists(movedRoot));
+}
+
+void TestAtomicActivitySave::
+linkedSaveNondurableJournalRemovalStaysRetryable_data()
+{
+    QTest::addColumn<bool>("committed");
+
+    QTest::newRow("rollback") << false;
+    QTest::newRow("commit") << true;
+}
+
+void TestAtomicActivitySave::
+linkedSaveNondurableJournalRemovalStaysRetryable()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Directory fsync injection is Unix-specific");
+#else
+    QFETCH(bool, committed);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    if (committed) {
+        for (int index = 0; index < journal->entryCount(); ++index) {
+            writeFixture(
+                journal->stagingPath(index),
+                QByteArray("staged generation ")
+                    + QByteArray::number(index));
+            QVERIFY2(journal->recordStaged(index, error), qPrintable(error));
+        }
+        QVERIFY2(journal->publishAndCommit(error), qPrintable(error));
+    }
+
+    bool removalCompleted = false;
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-directory-removed"),
+        [&]() { removalCompleted = true; });
+    anchoredFilesystemSyncFailurePath = QFileInfo(
+        journalPath).absolutePath();
+
+    error.clear();
+    const bool firstCleanup = committed
+        ? journal->cleanupAfterCommit(error)
+        : journal->cleanupAfterRollback(error);
+
+    QVERIFY2(!firstCleanup, "A nondurable journal removal was accepted");
+    QVERIFY2(!error.isEmpty(), "Nondurable removal must report an error");
+    QVERIFY(!removalCompleted);
+    QVERIFY(!QFileInfo::exists(journalPath));
+
+    anchoredFilesystemSyncFailurePath.clear();
+    error.clear();
+    const bool secondCleanup = committed
+        ? journal->cleanupAfterCommit(error)
+        : journal->cleanupAfterRollback(error);
+
+    QVERIFY2(secondCleanup, qPrintable(error));
+    QVERIFY(removalCompleted);
+    error.clear();
+    QVERIFY2(
+        committed
+            ? journal->cleanupAfterCommit(error)
+            : journal->cleanupAfterRollback(error),
+        qPrintable(error));
+#endif
 }
 
 void TestAtomicActivitySave::
