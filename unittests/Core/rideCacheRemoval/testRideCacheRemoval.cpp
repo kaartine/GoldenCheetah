@@ -35,6 +35,10 @@
 #include <QTemporaryDir>
 #include <QTimer>
 
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#endif
+
 #include <functional>
 #include <cstdlib>
 #include <memory>
@@ -173,6 +177,39 @@ QByteArray readBytes(const QString &path)
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) return {};
     return file.readAll();
+}
+
+bool createTestSymbolicLink(
+    const QString &targetPath,
+    const QString &linkPath,
+    bool directory)
+{
+#ifdef Q_OS_WIN
+    const QString nativeTarget =
+        QDir::toNativeSeparators(targetPath);
+    const QString nativeLink =
+        QDir::toNativeSeparators(linkPath);
+    const DWORD typeFlag = directory
+        ? SYMBOLIC_LINK_FLAG_DIRECTORY : 0;
+#ifdef SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
+    if (::CreateSymbolicLinkW(
+            reinterpret_cast<LPCWSTR>(nativeLink.utf16()),
+            reinterpret_cast<LPCWSTR>(nativeTarget.utf16()),
+            typeFlag
+                | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE)) {
+        return true;
+    }
+    if (::GetLastError() != ERROR_INVALID_PARAMETER)
+        return false;
+#endif
+    return ::CreateSymbolicLinkW(
+        reinterpret_cast<LPCWSTR>(nativeLink.utf16()),
+        reinterpret_cast<LPCWSTR>(nativeTarget.utf16()),
+        typeFlag);
+#else
+    Q_UNUSED(directory)
+    return QFile::link(targetPath, linkPath);
+#endif
 }
 
 bool nativeIdentityForPath(
@@ -1510,8 +1547,8 @@ void TestRideCacheRemoval::plannedBackupSymlinkIsRejected()
         QDir(fixture.temporary.path()).filePath(
             QStringLiteral("outside-backups"));
     QVERIFY(QDir().mkpath(outsideDirectory));
-    if (!QFile::link(
-            outsideDirectory, backupDirectory)) {
+    if (!createTestSymbolicLink(
+            outsideDirectory, backupDirectory, true)) {
         QSKIP("Directory symbolic links are unavailable");
     }
     writeFixture(sourcePath, contents);
@@ -1668,7 +1705,10 @@ unsafeLinkedPeerIdentityRejectsBeforeSave()
         sentinelPath = QDir(fixture.temporary.path()).filePath(
             QStringLiteral("outside/symlink-sentinel.json"));
         writeFixture(sentinelPath, sentinelContents);
-        QVERIFY(QFile::link(sentinelPath, linkedSourcePath));
+        if (!createTestSymbolicLink(
+                sentinelPath, linkedSourcePath, false)) {
+            QSKIP("File symbolic links are unavailable");
+        }
         QVERIFY(QFileInfo(linkedSourcePath).isSymLink());
     } else if (identityCase
                == QStringLiteral("non-regular-source")) {
@@ -2393,9 +2433,10 @@ void TestRideCacheRemoval::sourceSymlinkIsRejected()
             .filePath(QStringLiteral("outside-source"));
     const QByteArray contents("outside contents");
     writeFixture(outsidePath, contents);
-    if (!QFile::link(
+    if (!createTestSymbolicLink(
             outsidePath,
-            fixture.activityPath(firstName()))) {
+            fixture.activityPath(firstName()),
+            false)) {
         QSKIP("Symbolic links are unavailable");
     }
 
@@ -4277,7 +4318,8 @@ startupWithoutJournalAllowsSymlinkedAthleteRoot()
         QDir(temporary.path()).filePath(
             QStringLiteral("linked-athlete"));
     QVERIFY(QDir().mkpath(actualRoot));
-    if (!QFile::link(actualRoot, linkedRoot)) {
+    if (!createTestSymbolicLink(
+            actualRoot, linkedRoot, true)) {
         QSKIP("Directory symbolic links are unavailable");
     }
 
@@ -10259,9 +10301,6 @@ plannedReplacementCorruptCommitMarkerRequiresRecovery()
 void TestRideCacheRemoval::
 plannedReplacementBackupParentSymlinkIsRejected()
 {
-#ifdef Q_OS_WIN
-    QSKIP("Directory symbolic links are not generally available on Windows");
-#else
     Fixture fixture;
     QVERIFY(fixture.initialize());
     RideItem *first = fixture.addPlannedRide(firstName(), false);
@@ -10273,7 +10312,10 @@ plannedReplacementBackupParentSymlinkIsRejected()
     const QString external = QDir(fixture.temporary.path()).filePath(
         QStringLiteral("external-backups"));
     QVERIFY(QDir().mkpath(external));
-    QVERIFY(QFile::link(external, backupRoot));
+    if (!createTestSymbolicLink(
+            external, backupRoot, true)) {
+        QSKIP("Directory symbolic links are unavailable");
+    }
     const QList<RideCache::PlannedActivityTarget> targets = {{
         thirdName(),
         [](const QString &path, QString &error) {
@@ -10288,7 +10330,6 @@ plannedReplacementBackupParentSymlinkIsRejected()
     QVERIFY(!QFileInfo::exists(
         QDir(external).filePath(QStringLiteral("planned"))));
     QCOMPARE(readBytes(firstPath), QByteArray("old first"));
-#endif
 }
 
 void TestRideCacheRemoval::
