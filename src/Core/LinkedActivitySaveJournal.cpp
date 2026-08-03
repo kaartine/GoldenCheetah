@@ -393,10 +393,9 @@ bool namespaceHasPendingEntries(
         QDir::Name);
     for (const QFileInfo &entry : entries) {
         const QString name = entry.fileName();
+        QString lockedId;
         if (entry.isFile() && !entry.isSymLink()
-            && name.startsWith(QLatin1Char('.'))
-            && name.endsWith(QStringLiteral(".lock"))) {
-            const QString lockedId = name.mid(1, name.size() - 6);
+            && atomicFileLockTargetName(name, lockedId)) {
             if (validTransactionId(lockedId)) continue;
         }
         pending = true;
@@ -1140,11 +1139,8 @@ qint64 knownTemporaryMaximumSize(const QString &name)
 
 bool isKnownLockName(const QString &name)
 {
-    if (!name.startsWith(QLatin1Char('.'))
-        || !name.endsWith(QStringLiteral(".lock"))) {
-        return false;
-    }
-    const QString base = name.mid(1, name.size() - 6);
+    QString base;
+    if (!atomicFileLockTargetName(name, base)) return false;
     return base == Detail::ManifestName
         || base == Detail::CommitMarkerName
         || isKnownDataName(base);
@@ -2061,10 +2057,9 @@ bool Journal::reconcileAll(const QString &athleteRoot, QString &error)
     QStringList failures;
     for (const QFileInfo &entry : entries) {
         const QString name = entry.fileName();
+        QString lockedId;
         if (entry.isFile() && !entry.isSymLink()
-            && name.startsWith(QLatin1Char('.'))
-            && name.endsWith(QStringLiteral(".lock"))) {
-            const QString lockedId = name.mid(1, name.size() - 6);
+            && atomicFileLockTargetName(name, lockedId)) {
             if (validTransactionId(lockedId)) continue;
         }
         if (entry.isSymLink() || !entry.isDir()

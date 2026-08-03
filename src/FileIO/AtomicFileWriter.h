@@ -932,6 +932,24 @@ inline QString atomicFileLockPath(const QString &path)
         QStringLiteral(".%1.lock").arg(target.fileName()));
 }
 
+inline bool atomicFileLockTargetName(
+    const QString &entryName, QString &targetName)
+{
+    QString lockName = entryName;
+    const QString removalGuardSuffix = QStringLiteral(".rmlock");
+    while (lockName.endsWith(removalGuardSuffix)) {
+        lockName.chop(removalGuardSuffix.size());
+    }
+    if (lockName.size() <= 6
+        || !lockName.startsWith(QLatin1Char('.'))
+        || !lockName.endsWith(QStringLiteral(".lock"))) {
+        targetName.clear();
+        return false;
+    }
+    targetName = lockName.mid(1, lockName.size() - 6);
+    return true;
+}
+
 inline QString atomicFilePathKey(const QString &path)
 {
     QString key = QFileInfo(path).absoluteFilePath();
