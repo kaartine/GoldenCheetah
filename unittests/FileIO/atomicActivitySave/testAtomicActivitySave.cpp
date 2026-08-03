@@ -3819,6 +3819,7 @@ linkedSaveCleanupReleasesTransactionResources()
     const std::shared_ptr<LinkedActivitySave::Journal> journal =
         LinkedActivitySave::Journal::prepare(specification, error);
     QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
     if (committed) {
         for (int index = 0; index < journal->entryCount(); ++index) {
             writeFixture(
@@ -3833,6 +3834,14 @@ linkedSaveCleanupReleasesTransactionResources()
         QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
     }
     QVERIFY(!journal->hasCommitMarker());
+
+    QVERIFY(QDir().mkpath(journalPath));
+    writeFixture(
+        QDir(journalPath).filePath(QStringLiteral("COMMITTED")),
+        QByteArray("replacement marker\n"));
+    QVERIFY2(
+        !journal->hasCommitMarker(),
+        "A completed journal accepted a replacement commit marker");
 
     QVERIFY2(
         QDir().rename(athleteRoot, movedRoot),
@@ -4916,6 +4925,15 @@ linkedSaveLegacyWindowsJournalFileRemovalRetries()
     }
     QVERIFY2(!firstCleanup, "A pending legacy deletion was accepted");
     QVERIFY2(!error.isEmpty(), "Pending deletion must report an error");
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    error.clear();
+    QVERIFY2(
+        !(committed
+              ? journal->cleanupAfterCommit(error)
+              : journal->cleanupAfterRollback(error)),
+        "A still-pending legacy deletion was accepted on retry");
+    QVERIFY2(!error.isEmpty(), "Pending retry must report an error");
     QVERIFY(QFileInfo::exists(journalPath));
 
     observer.reset();
