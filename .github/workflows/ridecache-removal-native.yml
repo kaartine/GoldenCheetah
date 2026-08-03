@@ -75,7 +75,8 @@ jobs:
           $gslRoot = "$vcpkgRoot/installed/x64-windows"
           $zlibRoot = "$vcpkgRoot/installed/x64-windows"
           $zlibLibrary = Get-ChildItem "$zlibRoot/lib" `
-            -Filter 'zlib*.lib' -File |
+            -Filter '*.lib' -File |
+            Where-Object { $_.BaseName -in @('z', 'zlib', 'zlibstatic') } |
             Sort-Object Name |
             Select-Object -First 1 -ExpandProperty FullName
           if (!(Test-Path "$gslRoot/include/gsl/gsl_rng.h")) {
