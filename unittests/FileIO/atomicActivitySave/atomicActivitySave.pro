@@ -57,9 +57,21 @@ isEmpty(ZLIB_LIBS) {
     LIBS += $${ZLIB_LIBS}
 }
 
-unix:!macx {
+unix {
     QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
+}
+
+unix:!macx {
     QMAKE_LFLAGS += -Wl,--gc-sections
+}
+
+macx {
+    QMAKE_LFLAGS += -Wl,-dead_strip
+}
+
+msvc {
+    QMAKE_CXXFLAGS += /Gy /Gw
+    QMAKE_LFLAGS += /OPT:REF
 }
 
 sanitize:!msvc {
