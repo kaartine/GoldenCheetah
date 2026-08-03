@@ -110,6 +110,7 @@ private:
     friend MutationResult moveNoReplace(
         PinnedFile &, const EntryRef &);
     friend MutationResult remove(PinnedFile &);
+    friend MutationResult removeEmptyDirectory(DirectoryAnchor &);
     friend struct Detail::PinnedFileState;
 };
 
@@ -246,6 +247,8 @@ MutationResult moveNoReplace(
     const EntryRef &destination);
 
 MutationResult remove(PinnedFile &file);
+
+MutationResult removeEmptyDirectory(DirectoryAnchor &directory);
 
 } // namespace AnchoredFileSystem
 

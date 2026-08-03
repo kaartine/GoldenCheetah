@@ -84,6 +84,9 @@ int rideItemDestructionCount = 0;
 int removalTransitionOccurrence = 0;
 QByteArray removalTransitionActionName;
 std::function<void()> removalTransitionAction;
+QByteArray anchoredTransitionActionName;
+std::function<void(const QString &, const QString &)>
+    anchoredTransitionAction;
 bool removalValidationMutationEnabled = false;
 QByteArray removalValidationMutationContents;
 QString planBundleWorkoutRoot;
@@ -111,6 +114,17 @@ void anchoredFilesystemTransitionReached(
     const QString &primary,
     const QString &secondary)
 {
+    if (!anchoredTransitionActionName.isEmpty()
+        && anchoredTransitionActionName == transition
+        && anchoredTransitionAction) {
+        anchoredTransitionActionName.clear();
+        const std::function<void(
+            const QString &, const QString &)> action =
+                std::move(anchoredTransitionAction);
+        anchoredTransitionAction = {};
+        action(primary, secondary);
+    }
+
     if (qstrcmp(transition, "move-published") != 0
         || ((!removalPartialMoveFailurePath.isEmpty()
              && primary != removalPartialMoveFailurePath)
@@ -599,6 +613,15 @@ void setRideCacheRemovalTransitionAction(
 {
     removalTransitionActionName = transition;
     removalTransitionAction = action;
+}
+
+void setAnchoredFilesystemTransitionAction(
+    const QByteArray &transition,
+    const std::function<void(
+        const QString &, const QString &)> &action)
+{
+    anchoredTransitionActionName = transition;
+    anchoredTransitionAction = action;
 }
 
 void setRideCacheRemovalSaveFailureFileName(

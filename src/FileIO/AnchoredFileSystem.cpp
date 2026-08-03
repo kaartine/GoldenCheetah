@@ -294,6 +294,75 @@ bool statEntry(
     return true;
 }
 
+bool statDirectoryEntry(
+    int directory,
+    const QString &component,
+    UnixStamp &stamp,
+    bool &exists,
+    QString &error)
+{
+    exists = false;
+    const QByteArray name = QFile::encodeName(component);
+    struct stat status {};
+    if (::fstatat(
+            directory,
+            name.constData(),
+            &status,
+            AT_SYMLINK_NOFOLLOW) != 0) {
+        if (errno == ENOENT) return true;
+        error = nativeError(
+            QStringLiteral("Cannot inspect an anchored directory name"),
+            errno);
+        return false;
+    }
+    exists = true;
+    if (!S_ISDIR(status.st_mode) || status.st_size < 0) {
+        error = QStringLiteral(
+            "The anchored directory name has an unsafe type");
+        return false;
+    }
+    stamp.device = quint64(status.st_dev);
+    stamp.inode = quint64(status.st_ino);
+    stamp.links = quint64(status.st_nlink);
+    stamp.size = qint64(status.st_size);
+#if defined(Q_OS_MACOS)
+    stamp.modifiedSeconds = qint64(status.st_mtimespec.tv_sec);
+    stamp.modifiedNanoseconds = qint64(status.st_mtimespec.tv_nsec);
+    stamp.changedSeconds = qint64(status.st_ctimespec.tv_sec);
+    stamp.changedNanoseconds = qint64(status.st_ctimespec.tv_nsec);
+#else
+    stamp.modifiedSeconds = qint64(status.st_mtim.tv_sec);
+    stamp.modifiedNanoseconds = qint64(status.st_mtim.tv_nsec);
+    stamp.changedSeconds = qint64(status.st_ctim.tv_sec);
+    stamp.changedNanoseconds = qint64(status.st_ctim.tv_nsec);
+#endif
+    return true;
+}
+
+bool entryNameExists(
+    int directory,
+    const QString &component,
+    bool &exists,
+    QString &error)
+{
+    exists = false;
+    const QByteArray name = QFile::encodeName(component);
+    struct stat status {};
+    if (::fstatat(
+            directory,
+            name.constData(),
+            &status,
+            AT_SYMLINK_NOFOLLOW) == 0) {
+        exists = true;
+        return true;
+    }
+    if (errno == ENOENT) return true;
+    error = nativeError(
+        QStringLiteral("Cannot inspect an anchored filesystem name"),
+        errno);
+    return false;
+}
+
 int renameNoReplaceNative(
     int sourceDirectory,
     const QByteArray &source,
@@ -542,6 +611,7 @@ struct DirectoryState
     std::vector<WindowsHandle> handles;
     WindowsStamp stamp;
 #endif
+    QString component;
     QString displayPath;
     NativeIdentity identity;
 };
@@ -1017,6 +1087,7 @@ bool DirectoryAnchor::openChildIfExists(
         "Anchored filesystem operations are unsupported on this platform");
     return false;
 #endif
+    child->component = component;
     directory = DirectoryAnchor(std::move(child));
     exists = true;
     return true;
@@ -2179,6 +2250,452 @@ MutationResult remove(PinnedFile &file)
         return result;
     }
     result.effect = MutationEffect::AppliedDurable;
+    return result;
+#else
+    result.error = QStringLiteral(
+        "Anchored filesystem operations are unsupported on this platform");
+    return result;
+#endif
+}
+
+MutationResult removeEmptyDirectory(DirectoryAnchor &directory)
+{
+    MutationResult result;
+    if (!directory.state_
+        || !directory.state_->ancestor
+        || directory.state_->component.isEmpty()) {
+        result.error = QStringLiteral(
+            "The anchored directory removal target is unavailable");
+        return result;
+    }
+
+    DirectoryAnchor parent(directory.state_->ancestor);
+    QString matchError;
+    if (!parent.pathMatches(matchError)) {
+        result.effect = MutationEffect::Conflict;
+        result.error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The anchored directory removal parent was replaced")
+            : matchError;
+        return result;
+    }
+    if (!directory.pathMatches(matchError)) {
+        result.effect = MutationEffect::Conflict;
+        result.error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The anchored directory removal target was replaced")
+            : matchError;
+        return result;
+    }
+
+#ifdef Q_OS_UNIX
+    UnixStamp pinned;
+    if (!captureUnixStamp(
+            directory.state_->descriptor.get(),
+            pinned,
+            true,
+            result.error)) {
+        return result;
+    }
+    if (!sameUnixObject(pinned, directory.state_->stamp)) {
+        result.effect = MutationEffect::Conflict;
+        result.error = QStringLiteral(
+            "The anchored directory identity changed before removal");
+        return result;
+    }
+
+    UnixStamp named;
+    bool exists = false;
+    if (!statDirectoryEntry(
+            parent.state_->descriptor.get(),
+            directory.state_->component,
+            named,
+            exists,
+            result.error)) {
+        return result;
+    }
+    if (!exists || !sameUnixObject(named, pinned)) {
+        result.effect = MutationEffect::Conflict;
+        result.error = QStringLiteral(
+            "The anchored directory removal target was replaced");
+        return result;
+    }
+
+    reportAnchoredFilesystemTransition(
+        "remove-directory-before-quarantine",
+        directory.state_->displayPath);
+
+    const QString originalComponent = directory.state_->component;
+    const QString quarantineComponent =
+        QUuid::createUuid().toString(QUuid::WithoutBraces).toLower();
+    const QByteArray originalName =
+        QFile::encodeName(originalComponent);
+    const QByteArray quarantineName =
+        QFile::encodeName(quarantineComponent);
+    bool unsupported = false;
+    const int renameResult = renameNoReplaceNative(
+        parent.state_->descriptor.get(),
+        originalName,
+        parent.state_->descriptor.get(),
+        quarantineName,
+        unsupported);
+    const int renameError = errno;
+    if (renameResult != 0) {
+        if (renameError == EEXIST || renameError == ENOENT) {
+            result.effect = MutationEffect::Conflict;
+            result.error = QStringLiteral(
+                "The anchored directory changed before quarantine");
+        } else if (unsupported) {
+            result.error = QStringLiteral(
+                "The filesystem cannot quarantine an anchored directory without replacement");
+        } else {
+            result.error = nativeError(
+                QStringLiteral(
+                    "Cannot quarantine an anchored directory"),
+                renameError);
+        }
+        return result;
+    }
+
+    const auto partialAfterQuarantine = [&parent](
+        QString failure,
+        const QString &recoveryPath = QString()) {
+        MutationResult partial;
+        partial.effect = MutationEffect::Partial;
+        partial.error = std::move(failure);
+        partial.verifiedRecoveryPath = recoveryPath;
+        QString syncError;
+        if (!parent.sync(syncError)) {
+            if (!partial.error.isEmpty())
+                partial.error += QStringLiteral("; ");
+            partial.error += syncError;
+        }
+        return partial;
+    };
+
+    UnixStamp quarantined;
+    bool quarantineExists = false;
+    QString quarantineError;
+    if (!statDirectoryEntry(
+            parent.state_->descriptor.get(),
+            quarantineComponent,
+            quarantined,
+            quarantineExists,
+            quarantineError)
+        || !quarantineExists
+        || !sameUnixObject(quarantined, pinned)) {
+        return partialAfterQuarantine(
+            quarantineError.isEmpty()
+                ? QStringLiteral(
+                      "The anchored directory quarantine contains an unexpected entry")
+                : quarantineError);
+    }
+
+    UnixStamp pinnedAfterRename;
+    if (!captureUnixStamp(
+            directory.state_->descriptor.get(),
+            pinnedAfterRename,
+            true,
+            quarantineError)
+        || !sameUnixObject(pinnedAfterRename, pinned)) {
+        return partialAfterQuarantine(
+            quarantineError.isEmpty()
+                ? QStringLiteral(
+                      "The anchored directory identity changed during quarantine")
+                : quarantineError);
+    }
+
+    directory.state_->component = quarantineComponent;
+    directory.state_->displayPath = QDir(
+        parent.state_->displayPath).filePath(quarantineComponent);
+    directory.state_->stamp = pinnedAfterRename;
+    reportAnchoredFilesystemTransition(
+        "remove-directory-finally-verified",
+        directory.state_->displayPath);
+
+    quarantineExists = false;
+    quarantineError.clear();
+    if (!statDirectoryEntry(
+            parent.state_->descriptor.get(),
+            quarantineComponent,
+            quarantined,
+            quarantineExists,
+            quarantineError)
+        || !quarantineExists
+        || !sameUnixObject(quarantined, pinnedAfterRename)) {
+        return partialAfterQuarantine(
+            quarantineError.isEmpty()
+                ? QStringLiteral(
+                      "The anchored directory quarantine was replaced")
+                : quarantineError,
+            directory.pathMatches(quarantineError)
+                ? directory.state_->displayPath : QString());
+    }
+
+    int unlinkResult;
+    do {
+        unlinkResult = ::unlinkat(
+            parent.state_->descriptor.get(),
+            quarantineName.constData(),
+            AT_REMOVEDIR);
+    } while (unlinkResult != 0 && errno == EINTR);
+    if (unlinkResult != 0) {
+        const int unlinkError = errno;
+        return partialAfterQuarantine(
+            nativeError(
+                QStringLiteral(
+                    "Cannot remove an anchored quarantined directory"),
+                unlinkError),
+            directory.pathMatches(quarantineError)
+                ? directory.state_->displayPath : QString());
+    }
+
+    UnixStamp unlinked;
+    QString verificationError;
+    const bool captured = captureUnixStamp(
+        directory.state_->descriptor.get(),
+        unlinked,
+        true,
+        verificationError);
+    const bool removedPinnedDirectory = captured
+        && unlinked.links == 0
+        && sameUnixObject(unlinked, pinned);
+    bool originalExists = false;
+    QString originalError;
+    const bool originalInspected = entryNameExists(
+        parent.state_->descriptor.get(),
+        originalComponent,
+        originalExists,
+        originalError);
+    QString parentMatchError;
+    const bool parentStillMatches = parent.pathMatches(parentMatchError);
+    QString syncError;
+    const bool parentSynced = parent.sync(syncError);
+    if (!removedPinnedDirectory) {
+        result.effect = MutationEffect::Partial;
+        result.error = verificationError.isEmpty()
+            ? QStringLiteral(
+                  "The anchored directory removal did not unlink the pinned directory")
+            : verificationError;
+        if (!parentSynced) {
+            result.error += QStringLiteral("; ") + syncError;
+        }
+        return result;
+    }
+    directory.state_.reset();
+    if (!originalInspected || originalExists || !parentStillMatches) {
+        result.effect = MutationEffect::Partial;
+        if (!originalInspected) {
+            result.error = originalError;
+        } else if (originalExists) {
+            result.error = QStringLiteral(
+                "The anchored directory's original name was repopulated during removal");
+        } else {
+            result.error = parentMatchError.isEmpty()
+                ? QStringLiteral(
+                      "The anchored directory removal parent changed before verification")
+                : parentMatchError;
+        }
+        if (!parentSynced) {
+            if (!result.error.isEmpty())
+                result.error += QStringLiteral("; ");
+            result.error += syncError;
+        }
+        return result;
+    }
+    if (!parentSynced) {
+        result.effect = MutationEffect::AppliedNotDurable;
+        result.error = syncError;
+        return result;
+    }
+    result.effect = MutationEffect::AppliedDurable;
+    return result;
+#elif defined(Q_OS_WIN)
+    if (directory.state_.use_count() != 1
+        || directory.state_->handles.size() != 1) {
+        result.error = QStringLiteral(
+            "The anchored directory still has active references");
+        return result;
+    }
+
+    const QString path = QDir::toNativeSeparators(
+        directory.state_->displayPath);
+    const WindowsStamp expected = directory.state_->stamp;
+    const auto restoreObservation = [
+        &directory, &path, &expected](QString failure) {
+        MutationResult restoredResult;
+        QString observationError;
+        WindowsHandle observation = openWindowsDirectoryHandle(
+            path, true, observationError);
+        if (!observation.isValid()) {
+            directory.state_.reset();
+            restoredResult.effect = MutationEffect::Conflict;
+            restoredResult.error = std::move(failure);
+            if (!observationError.isEmpty()) {
+                restoredResult.error += QStringLiteral("; ")
+                    + observationError;
+            }
+            return restoredResult;
+        }
+
+        WindowsStamp restored;
+        if (!captureWindowsStamp(
+                observation.get(), restored, true, observationError)
+            || !sameWindowsObject(restored, expected)) {
+            directory.state_.reset();
+            restoredResult.effect = MutationEffect::Conflict;
+            restoredResult.error = std::move(failure);
+            restoredResult.error += QStringLiteral("; ");
+            restoredResult.error += observationError.isEmpty()
+                ? QStringLiteral(
+                      "The anchored directory changed while restoring its observation handle")
+                : observationError;
+            return restoredResult;
+        }
+
+        directory.state_->handles.push_back(std::move(observation));
+        directory.state_->stamp = restored;
+        directory.state_->identity = windowsIdentity(restored, 'd');
+        restoredResult.error = std::move(failure);
+        return restoredResult;
+    };
+
+    directory.state_->handles.clear();
+    WindowsHandle mutation(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(path.utf16()),
+        DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS
+            | FILE_FLAG_OPEN_REPARSE_POINT
+            | FILE_FLAG_WRITE_THROUGH,
+        nullptr));
+    if (!mutation.isValid()) {
+        const DWORD native = ::GetLastError();
+        return restoreObservation(windowsError(
+            QStringLiteral(
+                "Cannot open an anchored directory for removal"),
+            native));
+    }
+
+    WindowsStamp opened;
+    if (!captureWindowsStamp(
+            mutation.get(), opened, true, result.error)
+        || !sameWindowsObject(opened, expected)) {
+        directory.state_.reset();
+        result.effect = MutationEffect::Conflict;
+        if (result.error.isEmpty()) {
+            result.error = QStringLiteral(
+                "The anchored directory removal target was replaced");
+        }
+        return result;
+    }
+
+    struct WindowsDispositionInfoEx
+    {
+        DWORD flags = 0;
+    };
+    constexpr FILE_INFO_BY_HANDLE_CLASS dispositionInfoEx =
+        static_cast<FILE_INFO_BY_HANDLE_CLASS>(21);
+    constexpr DWORD dispositionDelete = 0x00000001;
+    constexpr DWORD dispositionPosixSemantics = 0x00000002;
+    WindowsDispositionInfoEx extendedDisposition {
+        dispositionDelete | dispositionPosixSemantics};
+    bool useLegacyDisposition = false;
+#ifdef GC_ANCHORED_FILESYSTEM_TEST_HOOKS
+    useLegacyDisposition =
+        anchoredFilesystemUseLegacyWindowsDelete();
+#endif
+    bool removalRequested = false;
+    DWORD removalError = ERROR_NOT_SUPPORTED;
+    if (!useLegacyDisposition) {
+        removalRequested = ::SetFileInformationByHandle(
+            mutation.get(),
+            dispositionInfoEx,
+            &extendedDisposition,
+            sizeof(extendedDisposition));
+        removalError = removalRequested
+            ? ERROR_SUCCESS : ::GetLastError();
+    }
+    const bool extendedUnsupported =
+        useLegacyDisposition
+        || removalError == ERROR_INVALID_PARAMETER
+        || removalError == ERROR_INVALID_FUNCTION
+        || removalError == ERROR_NOT_SUPPORTED
+        || removalError == ERROR_CALL_NOT_IMPLEMENTED;
+    if (!removalRequested && extendedUnsupported) {
+        FILE_DISPOSITION_INFO disposition {};
+        disposition.DeleteFile = TRUE;
+        removalRequested = ::SetFileInformationByHandle(
+            mutation.get(),
+            FileDispositionInfo,
+            &disposition,
+            sizeof(disposition));
+        removalError = removalRequested
+            ? ERROR_SUCCESS : ::GetLastError();
+    }
+    if (!removalRequested) {
+        const QString dispositionError = windowsError(
+            QStringLiteral("Cannot remove an anchored empty directory"),
+            removalError);
+        mutation.reset();
+        return restoreObservation(dispositionError);
+    }
+
+    directory.state_.reset();
+    mutation.reset();
+    reportAnchoredFilesystemTransition(
+        "remove-directory-disposition-completed",
+        QDir::fromNativeSeparators(path));
+    if (!parent.pathMatches(matchError)) {
+        result.effect = MutationEffect::Partial;
+        result.error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The anchored directory removal parent changed before verification")
+            : matchError;
+        return result;
+    }
+
+    WindowsHandle named(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(path.utf16()),
+        FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr));
+    if (!named.isValid()) {
+        const DWORD native = ::GetLastError();
+        if (native == ERROR_FILE_NOT_FOUND
+            || native == ERROR_PATH_NOT_FOUND) {
+            result.effect = MutationEffect::AppliedDurable;
+            return result;
+        }
+        result.effect = MutationEffect::Partial;
+        result.error = windowsError(
+            QStringLiteral(
+                "Cannot verify completion of an anchored directory removal"),
+            native);
+        return result;
+    }
+    WindowsStamp namedStamp;
+    if (!captureWindowsStamp(
+            named.get(), namedStamp, true, result.error)) {
+        result.effect = MutationEffect::Partial;
+        return result;
+    }
+    if (sameWindowsObject(namedStamp, expected)) {
+        result.effect = MutationEffect::Partial;
+        result.error = QStringLiteral(
+            "The anchored directory removal left the original name visible");
+        result.verifiedRecoveryPath =
+            QDir::fromNativeSeparators(path);
+        return result;
+    }
+    result.effect = MutationEffect::Partial;
+    result.error = QStringLiteral(
+        "The anchored directory's original name was repopulated during removal");
     return result;
 #else
     result.error = QStringLiteral(

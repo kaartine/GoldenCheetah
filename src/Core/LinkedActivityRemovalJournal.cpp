@@ -416,6 +416,30 @@ bool ensureTransactionNamespace(
     return ensurePrivateDirectory(namespacePath, error);
 }
 
+bool openAnchoredJournalDirectory(
+    const QString &namespacePath,
+    const QString &id,
+    AnchoredFileSystem::DirectoryAnchor &journalDirectory,
+    QString &error)
+{
+    AnchoredFileSystem::DirectoryAnchor namespaceDirectory;
+    if (!AnchoredFileSystem::DirectoryAnchor::open(
+            namespacePath, namespaceDirectory, error)) {
+        error = QStringLiteral(
+            "Cannot anchor the transaction journal namespace: %1")
+                    .arg(error);
+        return false;
+    }
+    if (!namespaceDirectory.openChild(
+            id, journalDirectory, error)) {
+        error = QStringLiteral(
+            "Cannot anchor the transaction journal directory: %1")
+                    .arg(error);
+        return false;
+    }
+    return true;
+}
+
 bool transactionNamespaceIsReady(
     const QString &root,
     const QString &namespacePath,
@@ -1657,13 +1681,11 @@ bool loadJournalState(
         Detail::PeerOldName);
     loaded->commitMarkerPath = QDir(loaded->journalPath).filePath(
         Detail::CommitMarkerName);
-    if (!AnchoredFileSystem::DirectoryAnchor::open(
-            loaded->journalPath,
+    if (!openAnchoredJournalDirectory(
+            expectedNamespace,
+            id,
             loaded->journalDirectory,
             error)) {
-        error = QStringLiteral(
-            "Cannot anchor the transaction journal directory: %1")
-                    .arg(error);
         return false;
     }
 
@@ -2401,9 +2423,8 @@ bool removeJournalDirectory(
         "journal-directory-finally-inspected");
 #endif
 
-    // Windows denies deletion while the observation anchor is open without
-    // delete sharing. Release every reference only after the final identity
-    // and emptiness checks; a failed removal is recovered on the next load.
+    // Drop child-entry aliases before the identity-bound directory removal;
+    // Windows must exchange its observation handle for a delete handle.
     temporaryFiles.clear();
     state.manifestEntry = AnchoredFileSystem::EntryRef();
     state.manifestFile.reset();
@@ -2411,12 +2432,15 @@ bool removeJournalDirectory(
     state.peerOldFile.reset();
     state.commitMarkerEntry = AnchoredFileSystem::EntryRef();
     state.commitMarkerFile.reset();
-    state.journalDirectory = AnchoredFileSystem::DirectoryAnchor();
-    if (!removeDirectoryDurably(state.journalPath, error)) {
-        if (error.isEmpty()) {
-            error = QStringLiteral(
-                "Cannot remove the completed transaction journal");
-        }
+    const AnchoredFileSystem::MutationResult removal =
+        AnchoredFileSystem::removeEmptyDirectory(
+            state.journalDirectory);
+    if (removal.effect
+        != AnchoredFileSystem::MutationEffect::AppliedDurable) {
+        error = removal.error.isEmpty()
+            ? QStringLiteral(
+                  "Cannot remove the completed transaction journal")
+            : removal.error;
         return false;
     }
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
@@ -2609,11 +2633,11 @@ bool removePreManifestJournal(
     if (!locks.lock({journalPath}, error)) return false;
 
     AnchoredFileSystem::DirectoryAnchor journalDirectory;
-    if (!AnchoredFileSystem::DirectoryAnchor::open(
-            journalPath, journalDirectory, error)) {
-        error = QStringLiteral(
-            "Cannot anchor an incomplete transaction journal: %1")
-                    .arg(error);
+    if (!openAnchoredJournalDirectory(
+            QFileInfo(journalPath).absolutePath(),
+            id,
+            journalDirectory,
+            error)) {
         return false;
     }
 
@@ -2659,12 +2683,14 @@ bool removePreManifestJournal(
     }
     if (!journalDirectory.pathMatches(error)) return false;
     removable.clear();
-    journalDirectory = AnchoredFileSystem::DirectoryAnchor();
-    if (!removeDirectoryDurably(journalPath, error)) {
-        if (error.isEmpty()) {
-            error = QStringLiteral(
-                "Cannot remove an incomplete transaction journal");
-        }
+    const AnchoredFileSystem::MutationResult removal =
+        AnchoredFileSystem::removeEmptyDirectory(journalDirectory);
+    if (removal.effect
+        != AnchoredFileSystem::MutationEffect::AppliedDurable) {
+        error = removal.error.isEmpty()
+            ? QStringLiteral(
+                  "Cannot remove an incomplete transaction journal")
+            : removal.error;
         return false;
     }
     return true;
@@ -3095,11 +3121,11 @@ std::shared_ptr<Journal> Journal::prepare(
     }
 
     if (!ensurePrivateDirectory(journalPath, error)) return {};
-    if (!AnchoredFileSystem::DirectoryAnchor::open(
-            journalPath, state->journalDirectory, error)) {
-        error = QStringLiteral(
-            "Cannot anchor the new transaction journal directory: %1")
-                    .arg(error);
+    if (!openAnchoredJournalDirectory(
+            namespacePath,
+            id,
+            state->journalDirectory,
+            error)) {
         return {};
     }
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
@@ -3419,8 +3445,6 @@ bool Journal::cleanupAfterRollback(QString &error)
     }
     if (state_->cleanupComplete) return true;
     if (!journalDirectoryMatches(*state_, error)) return false;
-    const QFileInfo journalInfo(state_->journalPath);
-    if (!journalInfo.exists() && !journalInfo.isSymLink()) return true;
 
     std::shared_ptr<JournalState> current;
     std::unique_ptr<AtomicFileLockSet> locks;
@@ -3449,8 +3473,6 @@ bool Journal::cleanupAfterCommit(QString &error)
     }
     if (state_->cleanupComplete) return true;
     if (!journalDirectoryMatches(*state_, error)) return false;
-    const QFileInfo journalInfo(state_->journalPath);
-    if (!journalInfo.exists() && !journalInfo.isSymLink()) return true;
 
     std::shared_ptr<JournalState> current;
     std::unique_ptr<AtomicFileLockSet> locks;
