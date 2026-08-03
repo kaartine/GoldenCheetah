@@ -613,6 +613,8 @@ private slots:
     void linkedSavePreManifestRecoveryRejectsUnknownEntries();
     void linkedSaveOversizedControlFileFailsBeforeRead_data();
     void linkedSaveOversizedControlFileFailsBeforeRead();
+    void linkedSaveJournalCreationRejectsNamespaceReplacement();
+    void linkedSaveJournalCreationRejectsDirectoryReplacement();
     void linkedSaveTransactionDirectoriesArePrivate();
     void linkedSaveRecoveryRestrictsExistingDirectories();
     void linkedSaveRecoveryWithoutJournalAllowsSymlinkedRoot();
@@ -7365,6 +7367,126 @@ linkedSaveOversizedControlFileFailsBeforeRead()
         controlPath,
         QFileDevice::ReadOwner | QFileDevice::WriteOwner);
 #endif
+}
+
+void TestAtomicActivitySave::
+linkedSaveJournalCreationRejectsNamespaceReplacement()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const QString namespacePath = dir.filePath(
+        QStringLiteral(".gc-transactions/linked-save"));
+    const QString retainedNamespace = dir.filePath(
+        QStringLiteral("retained-linked-save-namespace"));
+    const QString sentinelPath = QDir(namespacePath).filePath(
+        QStringLiteral("replacement-sentinel"));
+    const QByteArray sentinel("replacement namespace contents");
+    bool hookReached = false;
+    bool namespaceReplaced = false;
+    bool sentinelWritten = false;
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-before-journal-directory-create"),
+        [&]() {
+            hookReached = true;
+            namespaceReplaced =
+                QDir().rename(namespacePath, retainedNamespace);
+            if (!namespaceReplaced) return;
+            if (!QDir().mkpath(namespacePath)) return;
+            QFile sentinelFile(sentinelPath);
+            sentinelWritten = sentinelFile.open(
+                    QIODevice::WriteOnly | QIODevice::Truncate)
+                && sentinelFile.write(sentinel) == sentinel.size()
+                && sentinelFile.flush();
+        });
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(
+            linkedSaveJournalSpecification(dir.path()), error);
+    clearLinkedActivitySaveTransitionAction();
+
+    QVERIFY(hookReached);
+    if (!namespaceReplaced) {
+#ifdef Q_OS_WIN
+        QVERIFY2(journal, qPrintable(error));
+        QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+        return;
+#else
+        QFAIL("The namespace replacement injection did not run");
+#endif
+    }
+    QVERIFY(sentinelWritten);
+    QVERIFY2(
+        !journal,
+        "Linked-save preparation accepted a replacement namespace");
+    QVERIFY2(!error.isEmpty(), "Rejected creation must report an error");
+    QCOMPARE(readAll(sentinelPath), sentinel);
+    QVERIFY(QFileInfo(retainedNamespace).isDir());
+}
+
+void TestAtomicActivitySave::
+linkedSaveJournalCreationRejectsDirectoryReplacement()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const QString namespacePath = dir.filePath(
+        QStringLiteral(".gc-transactions/linked-save"));
+    QString journalPath;
+    QString retainedJournal;
+    QString sentinelPath;
+    const QByteArray sentinel("replacement journal contents");
+    bool hookReached = false;
+    bool directoryReplaced = false;
+    bool sentinelWritten = false;
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-journal-directory-path-created"),
+        [&]() {
+            hookReached = true;
+            const QStringList directories = QDir(namespacePath).entryList(
+                QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot,
+                QDir::Name);
+            if (directories.size() != 1) return;
+            journalPath = QDir(namespacePath).filePath(
+                directories.constFirst());
+            retainedJournal = QDir(namespacePath).filePath(
+                QStringLiteral("retained-journal"));
+            directoryReplaced =
+                QDir().rename(journalPath, retainedJournal);
+            if (!directoryReplaced || !QDir().mkdir(journalPath)) return;
+            sentinelPath = QDir(journalPath).filePath(
+                QStringLiteral("replacement-sentinel"));
+            QFile sentinelFile(sentinelPath);
+            sentinelWritten = sentinelFile.open(
+                    QIODevice::WriteOnly | QIODevice::Truncate)
+                && sentinelFile.write(sentinel) == sentinel.size()
+                && sentinelFile.flush();
+        });
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(
+            linkedSaveJournalSpecification(dir.path()), error);
+    clearLinkedActivitySaveTransitionAction();
+
+    QVERIFY(hookReached);
+    if (!directoryReplaced) {
+#ifdef Q_OS_WIN
+        QVERIFY2(journal, qPrintable(error));
+        QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+        return;
+#else
+        QFAIL("The journal replacement injection did not run");
+#endif
+    }
+    QVERIFY(sentinelWritten);
+    QVERIFY2(
+        !journal,
+        "Linked-save preparation accepted a replacement journal directory");
+    QVERIFY2(!error.isEmpty(), "Rejected creation must report an error");
+    QCOMPARE(readAll(sentinelPath), sentinel);
+    QVERIFY(QFileInfo(retainedJournal).isDir());
 }
 
 void TestAtomicActivitySave::

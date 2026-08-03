@@ -4195,8 +4195,20 @@ std::shared_ptr<Journal> Journal::prepare(
         return {};
     }
 
-    if (!QDir().mkdir(state->journalPath)
-        || !makeDirectoryPrivate(state->journalPath, error)
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+    linkedActivitySaveTransitionReached(
+        "linked-save-before-journal-directory-create");
+#endif
+    if (!QDir().mkdir(state->journalPath)) {
+        error = QStringLiteral(
+            "Cannot create the linked-save transaction journal");
+        return {};
+    }
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+    linkedActivitySaveTransitionReached(
+        "linked-save-journal-directory-path-created");
+#endif
+    if (!makeDirectoryPrivate(state->journalPath, error)
         || !syncParentDirectory(state->journalPath, error)) {
         if (error.isEmpty()) {
             error = QStringLiteral(
