@@ -9,6 +9,7 @@
 
 #include "LinkedActivitySaveJournal.h"
 
+#include "AnchoredFileSystem.h"
 #include "AtomicFileWriter.h"
 
 #include <QDir>
@@ -24,6 +25,7 @@
 #include <algorithm>
 #include <memory>
 #include <utility>
+#include <vector>
 
 #ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
 void linkedActivitySaveTransitionReached(const char *transition);
@@ -82,6 +84,17 @@ struct ObservedFile
     AtomicFileSnapshot contents;
 };
 
+struct AnchoredRetirementSource
+{
+    AnchoredFileSystem::DirectoryAnchor parent;
+    AnchoredFileSystem::EntryRef entry;
+    AnchoredFileSystem::PinnedFile file;
+    AnchoredFileSystem::MutationEffect mutationEffect =
+        AnchoredFileSystem::MutationEffect::NoEffect;
+    QString verifiedRecoveryPath;
+    bool completionVerified = false;
+};
+
 } // namespace Detail
 
 struct JournalState
@@ -93,6 +106,9 @@ struct JournalState
     QString commitMarkerPath;
     Detail::Manifest manifest;
     AtomicFileSnapshot manifestSnapshot;
+    AnchoredFileSystem::DirectoryAnchor athleteRootDirectory;
+    std::vector<std::unique_ptr<Detail::AnchoredRetirementSource>>
+        retirementSources;
     std::unique_ptr<AtomicFileLockSet> transactionLease;
     std::unique_ptr<AtomicFileLockSet> pathLocks;
 };
@@ -101,6 +117,7 @@ namespace {
 
 using Detail::Entry;
 using Detail::ExpectedFile;
+using Detail::AnchoredRetirementSource;
 using Detail::Manifest;
 using Detail::ObservedFile;
 using Detail::ResolvedEntry;
@@ -295,6 +312,66 @@ bool resolveRootRelativePath(
         return false;
     }
     return true;
+}
+
+bool anchorRetirementSource(
+    const AnchoredFileSystem::DirectoryAnchor &athleteRoot,
+    const QString &relativePath,
+    std::unique_ptr<AnchoredRetirementSource> &source,
+    QString &error)
+{
+    source.reset();
+    if (!validateRelativePath(relativePath, error)) return false;
+    const QStringList components = QDir::fromNativeSeparators(relativePath)
+                                       .split(QLatin1Char('/'));
+    if (components.isEmpty()) {
+        error = QStringLiteral("An activity source path is unavailable");
+        return false;
+    }
+
+    auto anchored = std::make_unique<AnchoredRetirementSource>();
+    anchored->parent = athleteRoot;
+    for (int index = 0; index + 1 < components.size(); ++index) {
+        AnchoredFileSystem::DirectoryAnchor child;
+        if (!anchored->parent.openChild(
+                components.at(index), child, error)) {
+            error = QStringLiteral(
+                "Cannot anchor an activity source parent: %1").arg(error);
+            return false;
+        }
+        anchored->parent = std::move(child);
+    }
+    anchored->entry = anchored->parent.entry(
+        components.constLast(), error);
+    if (!anchored->entry.isValid()) {
+        if (error.isEmpty()) {
+            error = QStringLiteral("Cannot anchor an activity source name");
+        }
+        return false;
+    }
+
+    bool exists = false;
+    if (!AnchoredFileSystem::entryExists(
+            anchored->entry, exists, error)) {
+        return false;
+    }
+    if (exists
+        && !AnchoredFileSystem::pinRegularFile(
+            anchored->entry, anchored->file, error)) {
+        error = QStringLiteral("Cannot pin an activity source: %1").arg(error);
+        return false;
+    }
+    source = std::move(anchored);
+    return true;
+}
+
+bool pinnedFileMatches(
+    const AnchoredFileSystem::PinnedFile &file,
+    const AtomicFileSnapshot &snapshot)
+{
+    return file.isValid()
+        && file.size() == snapshot.size
+        && file.sha256() == snapshot.digest;
 }
 
 bool validateExistingDirectory(const QString &path, QString &error)
@@ -1239,10 +1316,7 @@ bool inspectJournalDirectory(
 }
 
 bool removeObservedFile(
-    const QString &path,
-    const ObservedFile &observed,
-    QString &error,
-    const char *validatedTransition = nullptr)
+    const QString &path, const ObservedFile &observed, QString &error)
 {
     if (!observed.exists) return true;
     ObservedFile current;
@@ -1252,13 +1326,6 @@ bool removeObservedFile(
             "A transaction file changed before it could be removed");
         return false;
     }
-#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
-    if (validatedTransition) {
-        linkedActivitySaveTransitionReached(validatedTransition);
-    }
-#else
-    Q_UNUSED(validatedTransition)
-#endif
     if (!QFile::remove(path)) {
         error = QStringLiteral("Cannot remove a transaction file: %1").arg(path);
         return false;
@@ -1269,8 +1336,7 @@ bool removeObservedFile(
 bool removeExpectedFile(
     const QString &path,
     const AtomicFileSnapshot &expected,
-    QString &error,
-    const char *validatedTransition = nullptr)
+    QString &error)
 {
     ObservedFile observed;
     if (!inspectRegularFile(path, observed, error)) return false;
@@ -1279,8 +1345,342 @@ bool removeExpectedFile(
             "A transaction file changed before it could be removed");
         return false;
     }
-    return removeObservedFile(
-        path, observed, error, validatedTransition);
+    return removeObservedFile(path, observed, error);
+}
+
+bool retirementRequired(const QList<ResolvedEntry> &resolved)
+{
+    for (const ResolvedEntry &paths : resolved) {
+        if (atomicFilePathKey(paths.source)
+            != atomicFilePathKey(paths.target)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void releaseTransactionResources(JournalState &state)
+{
+    state.retirementSources.clear();
+    state.athleteRootDirectory = {};
+    state.pathLocks.reset();
+    state.transactionLease.reset();
+}
+
+bool preparedRetirementSourcesMatch(
+    const JournalState &state,
+    const QList<ResolvedEntry> &resolved,
+    QString &error)
+{
+    if (!retirementRequired(resolved)) return true;
+    if (state.retirementSources.size()
+            != size_t(state.manifest.entries.size())
+        || !state.athleteRootDirectory.isValid()) {
+        error = QStringLiteral(
+            "The anchored activity sources are unavailable");
+        return false;
+    }
+    if (!state.athleteRootDirectory.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral("The athlete root was replaced");
+        }
+        return false;
+    }
+
+    for (int index = 0; index < state.manifest.entries.size(); ++index) {
+        if (atomicFilePathKey(resolved.at(index).source)
+            == atomicFilePathKey(resolved.at(index).target)) {
+            continue;
+        }
+        const std::unique_ptr<AnchoredRetirementSource> &source =
+            state.retirementSources.at(size_t(index));
+        if (!source || !source->file.isValid()
+            || !pinnedFileMatches(
+                source->file,
+                state.manifest.entries.at(index).source.contents)) {
+            error = QStringLiteral(
+                "An anchored activity source does not match its journal");
+            return false;
+        }
+        if (!source->parent.pathMatches(error)) {
+            if (error.isEmpty()) {
+                error = QStringLiteral(
+                    "An activity source parent was replaced");
+            }
+            return false;
+        }
+        bool matches = false;
+        if (!AnchoredFileSystem::entryMatches(
+                source->entry, source->file, matches, error)) {
+            return false;
+        }
+        if (!matches) {
+            error = QStringLiteral(
+                "An activity source was replaced after preparation");
+            return false;
+        }
+    }
+    return true;
+}
+
+bool capturePreparedRetirementSources(
+    JournalState &state,
+    const QList<ResolvedEntry> &resolved,
+    QString &error)
+{
+    state.retirementSources.clear();
+    state.athleteRootDirectory = {};
+    if (!retirementRequired(resolved)) return true;
+    if (!AnchoredFileSystem::DirectoryAnchor::open(
+            state.athleteRoot,
+            state.athleteRootDirectory,
+            error)) {
+        error = QStringLiteral("Cannot anchor the athlete root: %1").arg(error);
+        return false;
+    }
+
+    state.retirementSources.resize(size_t(state.manifest.entries.size()));
+    for (int index = 0; index < state.manifest.entries.size(); ++index) {
+        const Entry &entry = state.manifest.entries.at(index);
+        if (atomicFilePathKey(resolved.at(index).source)
+            == atomicFilePathKey(resolved.at(index).target)) {
+            continue;
+        }
+        std::unique_ptr<AnchoredRetirementSource> source;
+        if (!anchorRetirementSource(
+                state.athleteRootDirectory,
+                entry.source.relativePath,
+                source,
+                error)) {
+            return false;
+        }
+        if (!pinnedFileMatches(source->file, entry.source.contents)) {
+            error = QStringLiteral(
+                "An activity source changed while it was being pinned");
+            return false;
+        }
+        state.retirementSources[size_t(index)] = std::move(source);
+    }
+    return preparedRetirementSourcesMatch(state, resolved, error);
+}
+
+bool captureRecoveryRetirementSources(
+    JournalState &state,
+    const QList<ResolvedEntry> &resolved,
+    QString &error)
+{
+    state.retirementSources.clear();
+    state.athleteRootDirectory = {};
+    if (!retirementRequired(resolved)) return true;
+    if (!AnchoredFileSystem::DirectoryAnchor::open(
+            state.athleteRoot,
+            state.athleteRootDirectory,
+            error)) {
+        error = QStringLiteral("Cannot anchor the athlete root: %1").arg(error);
+        return false;
+    }
+    if (!state.athleteRootDirectory.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral("The athlete root was replaced");
+        }
+        return false;
+    }
+    state.retirementSources.resize(size_t(state.manifest.entries.size()));
+    for (int index = 0; index < state.manifest.entries.size(); ++index) {
+        const Entry &entry = state.manifest.entries.at(index);
+        if (atomicFilePathKey(resolved.at(index).source)
+            == atomicFilePathKey(resolved.at(index).target)) {
+            continue;
+        }
+        std::unique_ptr<AnchoredRetirementSource> source;
+        if (!anchorRetirementSource(
+                state.athleteRootDirectory,
+                entry.source.relativePath,
+                source,
+                error)) {
+            return false;
+        }
+        if (source->file.isValid()
+            && !pinnedFileMatches(source->file, entry.source.contents)) {
+            error = QStringLiteral(
+                "A linked activity source changed outside its transaction");
+            return false;
+        }
+        state.retirementSources[size_t(index)] = std::move(source);
+    }
+    return true;
+}
+
+bool verifyRetiredSourceAbsent(
+    AnchoredRetirementSource &source, QString &error)
+{
+    if (!source.parent.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "An activity source parent changed during retirement");
+        }
+        return false;
+    }
+    bool exists = false;
+    if (!AnchoredFileSystem::entryExists(
+            source.entry, exists, error)) {
+        return false;
+    }
+    if (exists) {
+        error = QStringLiteral(
+            "An activity source name was repopulated during retirement");
+        return false;
+    }
+    source.completionVerified = true;
+    return true;
+}
+
+bool retireAnchoredSource(
+    AnchoredRetirementSource &source,
+    const char *validatedTransition,
+    const char *retiredTransition,
+    QString &error)
+{
+    if (!source.parent.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral("An activity source parent was replaced");
+        }
+        return false;
+    }
+    if (!source.file.isValid()) {
+        bool exists = false;
+        if (!AnchoredFileSystem::entryExists(
+                source.entry, exists, error)) {
+            return false;
+        }
+        if (!exists) {
+            source.completionVerified = true;
+            return true;
+        }
+        error = QStringLiteral(
+            "An activity source appeared during transaction recovery");
+        return false;
+    }
+
+    bool matches = false;
+    if (!AnchoredFileSystem::entryMatches(
+            source.entry, source.file, matches, error)) {
+        return false;
+    }
+    if (!matches) {
+        error = QStringLiteral(
+            "An activity source was replaced before retirement");
+        return false;
+    }
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+    if (validatedTransition) {
+        linkedActivitySaveTransitionReached(validatedTransition);
+    }
+#else
+    Q_UNUSED(validatedTransition)
+#endif
+
+    const AnchoredFileSystem::MutationResult removed =
+        AnchoredFileSystem::remove(source.file);
+    source.mutationEffect = removed.effect;
+    source.verifiedRecoveryPath = removed.verifiedRecoveryPath;
+    source.completionVerified = false;
+    if (removed.effect
+        == AnchoredFileSystem::MutationEffect::AppliedDurable) {
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+        if (retiredTransition) {
+            linkedActivitySaveTransitionReached(retiredTransition);
+        }
+#else
+        Q_UNUSED(retiredTransition)
+#endif
+        return verifyRetiredSourceAbsent(source, error);
+    }
+    error = removed.error.isEmpty()
+        ? QStringLiteral("Cannot retire an anchored activity source")
+        : removed.error;
+    if (!removed.verifiedRecoveryPath.isEmpty()) {
+        appendError(
+            error,
+            QStringLiteral("recovery file retained at %1")
+                .arg(removed.verifiedRecoveryPath));
+    }
+    return false;
+}
+
+bool resolveIncompleteRetirements(
+    JournalState &state, QString &error)
+{
+    for (const std::unique_ptr<AnchoredRetirementSource> &sourcePtr :
+         state.retirementSources) {
+        if (!sourcePtr) continue;
+        AnchoredRetirementSource &source = *sourcePtr;
+        if (source.mutationEffect
+            == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
+            if (!source.parent.sync(error)) {
+                if (error.isEmpty()) {
+                    error = QStringLiteral(
+                        "Cannot synchronize an incomplete source retirement");
+                }
+                return false;
+            }
+            source.mutationEffect =
+                AnchoredFileSystem::MutationEffect::AppliedDurable;
+        } else if (source.mutationEffect
+                   == AnchoredFileSystem::MutationEffect::Partial) {
+            if (!source.file.isValid()) {
+                QString verificationError;
+                if (verifyRetiredSourceAbsent(
+                        source, verificationError)) {
+                    source.mutationEffect =
+                        AnchoredFileSystem::MutationEffect::AppliedDurable;
+                    source.verifiedRecoveryPath.clear();
+                } else {
+                    error = QStringLiteral(
+                        "An incomplete source retirement requires manual recovery");
+                    appendError(error, verificationError);
+                    if (!source.verifiedRecoveryPath.isEmpty()) {
+                        appendError(
+                            error,
+                            QStringLiteral("recovery file retained at %1")
+                                .arg(source.verifiedRecoveryPath));
+                    }
+                    return false;
+                }
+            } else {
+                const AnchoredFileSystem::MutationResult cleanup =
+                    AnchoredFileSystem::remove(source.file);
+                source.mutationEffect = cleanup.effect;
+                source.verifiedRecoveryPath = cleanup.verifiedRecoveryPath;
+                if (cleanup.effect
+                    == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
+                    if (!source.parent.sync(error)) return false;
+                    source.mutationEffect =
+                        AnchoredFileSystem::MutationEffect::AppliedDurable;
+                } else if (cleanup.effect
+                           != AnchoredFileSystem::MutationEffect::AppliedDurable) {
+                    error = cleanup.error.isEmpty()
+                        ? QStringLiteral(
+                            "Cannot resolve an incomplete source retirement")
+                        : cleanup.error;
+                    if (!cleanup.verifiedRecoveryPath.isEmpty()) {
+                        appendError(
+                            error,
+                            QStringLiteral("recovery file retained at %1")
+                                .arg(cleanup.verifiedRecoveryPath));
+                    }
+                    return false;
+                }
+            }
+        }
+        if (source.mutationEffect
+                == AnchoredFileSystem::MutationEffect::AppliedDurable
+            && !source.completionVerified
+            && !verifyRetiredSourceAbsent(source, error)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool observeProductionEntry(
@@ -1470,10 +1870,13 @@ bool restoreOldGeneration(
 }
 
 bool ensureNewGeneration(
-    const JournalState &state,
+    JournalState &state,
     const QList<ResolvedEntry> &resolved,
     QString &error)
 {
+    if (!captureRecoveryRetirementSources(state, resolved, error)) {
+        return false;
+    }
     for (int index = 0; index < state.manifest.entries.size(); ++index) {
         const Entry &entry = state.manifest.entries.at(index);
         const ResolvedEntry &paths = resolved.at(index);
@@ -1526,35 +1929,34 @@ bool ensureNewGeneration(
         }
         if (atomicFilePathKey(paths.source)
                 != atomicFilePathKey(paths.target)) {
-            ObservedFile currentSource;
-            if (!inspectRegularFile(paths.source, currentSource, error)) {
+            AnchoredRetirementSource *source =
+                state.retirementSources.at(size_t(index)).get();
+            if (!source) {
+                error = QStringLiteral(
+                    "The anchored activity source is unavailable");
                 return false;
             }
-            if (currentSource.exists
-                && !removeObservedFile(
-                    paths.source,
-                    currentSource,
-                    error,
-                    "linked-save-recovery-source-retirement-validated")) {
+            if (!retireAnchoredSource(
+                    *source,
+                    "linked-save-recovery-source-retirement-validated",
+                    "linked-save-recovery-source-retired",
+                    error)) {
                 return false;
             }
-#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
-            if (currentSource.exists) {
-                linkedActivitySaveTransitionReached(
-                    "linked-save-recovery-source-retired");
-            }
-#endif
         }
     }
     return verifyNewGeneration(state, resolved, error);
 }
 
 bool publishNewGeneration(
-    const JournalState &state,
+    JournalState &state,
     const QList<ResolvedEntry> &resolved,
     QString &error)
 {
-    if (!verifyOldGeneration(state, resolved, error)) return false;
+    if (!preparedRetirementSourcesMatch(state, resolved, error)
+        || !verifyOldGeneration(state, resolved, error)) {
+        return false;
+    }
     for (int index = 0; index < state.manifest.entries.size(); ++index) {
         const Entry &entry = state.manifest.entries.at(index);
         if (!entry.staged
@@ -1609,16 +2011,20 @@ bool publishNewGeneration(
         }
         if (atomicFilePathKey(paths.source)
                 != atomicFilePathKey(paths.target)) {
-            if (!removeExpectedFile(
-                    paths.source,
-                    entry.source.contents,
-                    error,
-                    "linked-save-source-retirement-validated")) {
+            AnchoredRetirementSource *source =
+                state.retirementSources.at(size_t(index)).get();
+            if (!source
+                || !retireAnchoredSource(
+                    *source,
+                    "linked-save-source-retirement-validated",
+                    "linked-save-source-retired",
+                    error)) {
+                if (!source && error.isEmpty()) {
+                    error = QStringLiteral(
+                        "The anchored activity source is unavailable");
+                }
                 return false;
             }
-#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
-            linkedActivitySaveTransitionReached("linked-save-source-retired");
-#endif
         }
     }
     return verifyNewGeneration(state, resolved, error);
@@ -1730,12 +2136,15 @@ bool rollbackJournal(JournalState &state, QString &error)
         error = QStringLiteral("Cannot roll back a committed linked save");
         return false;
     }
+    if (!resolveIncompleteRetirements(state, error)) return false;
     QList<ResolvedEntry> resolved;
     if (!resolveManifestEntries(state, resolved, error)
         || !restoreOldGeneration(state, resolved, error)) {
         return false;
     }
-    return removeJournalDirectory(state, false, error);
+    if (!removeJournalDirectory(state, false, error)) return false;
+    releaseTransactionResources(state);
+    return true;
 }
 
 bool commitJournal(JournalState &state, QString &error)
@@ -1748,12 +2157,15 @@ bool commitJournal(JournalState &state, QString &error)
         error = QStringLiteral("Cannot complete an uncommitted linked save");
         return false;
     }
+    if (!resolveIncompleteRetirements(state, error)) return false;
     QList<ResolvedEntry> resolved;
     if (!resolveManifestEntries(state, resolved, error)
         || !ensureNewGeneration(state, resolved, error)) {
         return false;
     }
-    return removeJournalDirectory(state, true, error);
+    if (!removeJournalDirectory(state, true, error)) return false;
+    releaseTransactionResources(state);
+    return true;
 }
 
 bool maximumSizeForPreManifestEntry(
@@ -1912,7 +2324,9 @@ std::shared_ptr<Journal> Journal::prepare(
     state->commitMarkerPath = QDir(state->journalPath).filePath(
         Detail::CommitMarkerName);
 
-    for (const EntrySpecification &requested : specification.entries) {
+    for (int index = 0; index < specification.entries.size(); ++index) {
+        const EntrySpecification &requested =
+            specification.entries.at(index);
         Entry entry;
         QString sourceAbsolute;
         QString targetAbsolute;
@@ -1939,8 +2353,10 @@ std::shared_ptr<Journal> Journal::prepare(
         }
         entry.source.exists = true;
         if (!captureAtomicFileSnapshot(
-                sourceAbsolute, entry.source.contents, error)
-            || !captureOptionalFile(
+                sourceAbsolute, entry.source.contents, error)) {
+            return {};
+        }
+        if (!captureOptionalFile(
                 backupAbsolute, entry.backup, error)) {
             return {};
         }
@@ -1963,7 +2379,11 @@ std::shared_ptr<Journal> Journal::prepare(
                     .arg(error);
         return {};
     }
-    if (!revalidateOriginalGeneration(*state, resolved, error)) return {};
+    if (!revalidateOriginalGeneration(*state, resolved, error)
+        || !capturePreparedRetirementSources(*state, resolved, error)
+        || !revalidateOriginalGeneration(*state, resolved, error)) {
+        return {};
+    }
 
     if (!QDir().mkdir(state->journalPath)
         || !makeDirectoryPrivate(state->journalPath, error)
@@ -2245,7 +2665,10 @@ bool Journal::cleanupAfterRollback(QString &error)
         return false;
     }
     const QFileInfo info(state_->journalPath);
-    if (!info.exists() && !info.isSymLink()) return true;
+    if (!info.exists() && !info.isSymLink()) {
+        releaseTransactionResources(*state_);
+        return true;
+    }
     return rollbackJournal(*state_, error);
 }
 
@@ -2257,7 +2680,10 @@ bool Journal::cleanupAfterCommit(QString &error)
         return false;
     }
     const QFileInfo info(state_->journalPath);
-    if (!info.exists() && !info.isSymLink()) return true;
+    if (!info.exists() && !info.isSymLink()) {
+        releaseTransactionResources(*state_);
+        return true;
+    }
     return commitJournal(*state_, error);
 }
 

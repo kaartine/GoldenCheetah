@@ -18,6 +18,12 @@
 #include <functional>
 #include <utility>
 
+#ifdef Q_OS_UNIX
+#include <unistd.h>
+#elif defined(Q_OS_WIN)
+#include <qt_windows.h>
+#endif
+
 void resetAtomicActivitySaveProcessorStub();
 void setAtomicActivitySaveProcessorFailure(bool enabled);
 int atomicActivitySaveProcessorCalls();
@@ -32,6 +38,39 @@ namespace {
 
 QByteArray linkedActivitySaveActionTransition;
 std::function<void()> linkedActivitySaveAction;
+QString anchoredFilesystemSyncFailurePath;
+std::function<void(const char *, const QString &, const QString &)>
+    anchoredFilesystemAction;
+bool forceLegacyWindowsDelete = false;
+
+#ifdef Q_OS_WIN
+class WindowsTestHandle
+{
+public:
+    explicit WindowsTestHandle(
+        HANDLE handle = INVALID_HANDLE_VALUE)
+        : handle_(handle)
+    {
+    }
+
+    ~WindowsTestHandle() { reset(); }
+
+    bool isValid() const
+    {
+        return handle_ != nullptr
+            && handle_ != INVALID_HANDLE_VALUE;
+    }
+
+    void reset()
+    {
+        if (isValid()) ::CloseHandle(handle_);
+        handle_ = INVALID_HANDLE_VALUE;
+    }
+
+private:
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+};
+#endif
 
 } // namespace
 
@@ -47,6 +86,27 @@ void clearLinkedActivitySaveTransitionAction()
 {
     linkedActivitySaveActionTransition.clear();
     linkedActivitySaveAction = {};
+}
+
+void anchoredFilesystemTransitionReached(
+    const char *transition,
+    const QString &primary,
+    const QString &secondary)
+{
+    if (anchoredFilesystemAction) {
+        anchoredFilesystemAction(transition, primary, secondary);
+    }
+}
+
+bool anchoredFilesystemSyncFailureRequested(const QString &path)
+{
+    return !anchoredFilesystemSyncFailurePath.isEmpty()
+        && path == anchoredFilesystemSyncFailurePath;
+}
+
+bool anchoredFilesystemUseLegacyWindowsDelete()
+{
+    return forceLegacyWindowsDelete;
 }
 
 void linkedActivitySaveTransitionReached(const char *transition)
@@ -294,6 +354,24 @@ void writeFixture(const QString &path, const QByteArray &bytes)
     QVERIFY(file.flush());
 }
 
+bool createHardLink(const QString &source, const QString &target)
+{
+#ifdef Q_OS_UNIX
+    return ::link(
+        QFile::encodeName(source).constData(),
+        QFile::encodeName(target).constData()) == 0;
+#elif defined(Q_OS_WIN)
+    return ::CreateHardLinkW(
+        reinterpret_cast<LPCWSTR>(target.utf16()),
+        reinterpret_cast<LPCWSTR>(source.utf16()),
+        nullptr);
+#else
+    Q_UNUSED(source)
+    Q_UNUSED(target)
+    return false;
+#endif
+}
+
 LinkedActivitySave::Specification linkedSaveJournalSpecification(
     const QString &root)
 {
@@ -421,6 +499,16 @@ private slots:
     void linkedSaveJournalLocksCompleteProductionPathSet();
     void linkedSaveJournalRejectsUnsafePathGraphs_data();
     void linkedSaveJournalRejectsUnsafePathGraphs();
+    void linkedSaveRejectsHardLinkedRetirementSource();
+    void linkedSaveRetirementSkipsInPlaceEntry_data();
+    void linkedSaveRetirementSkipsInPlaceEntry();
+    void linkedSaveCleanupReleasesTransactionResources_data();
+    void linkedSaveCleanupReleasesTransactionResources();
+    void linkedSaveNondurableRetirementStaysRetryable();
+    void linkedSavePartialRetirementKeepsRecoveryJournal();
+#ifdef Q_OS_WIN
+    void linkedSavePendingWindowsRetirementRetriesAfterHandleClose();
+#endif
     void linkedSavePreparedSourceIdentityReplacementIsRejected_data();
     void linkedSavePreparedSourceIdentityReplacementIsRejected();
     void linkedSaveSourceRetirementSubstitutionIsRejected_data();
@@ -493,6 +581,9 @@ private slots:
 void TestAtomicActivitySave::cleanup()
 {
     clearLinkedActivitySaveTransitionAction();
+    anchoredFilesystemSyncFailurePath.clear();
+    anchoredFilesystemAction = {};
+    forceLegacyWindowsDelete = false;
     resetAtomicActivitySaveProcessorStub();
 }
 
@@ -3478,6 +3569,304 @@ linkedSaveJournalRejectsUnsafePathGraphs()
         || journalRoot.entryList(
             QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot).isEmpty());
 }
+
+void TestAtomicActivitySave::
+linkedSaveRejectsHardLinkedRetirementSource()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+    const QString aliasPath =
+        specification.entries.at(0).sourcePath
+        + QStringLiteral(".hardlink");
+    if (!createHardLink(
+            specification.entries.at(0).sourcePath, aliasPath)) {
+        QSKIP("Hard links are unavailable");
+    }
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY(!journal);
+    QVERIFY2(
+        error.contains(QStringLiteral("one link"), Qt::CaseInsensitive),
+        qPrintable(error));
+    QCOMPARE(
+        readAll(specification.entries.at(0).sourcePath),
+        QByteArray("first old generation"));
+    QCOMPARE(readAll(aliasPath), QByteArray("first old generation"));
+    QCOMPARE(
+        readAll(specification.entries.at(1).sourcePath),
+        QByteArray("second old generation"));
+}
+
+void TestAtomicActivitySave::
+linkedSaveRetirementSkipsInPlaceEntry_data()
+{
+    QTest::addColumn<bool>("allInPlace");
+
+    QTest::newRow("mixed") << false;
+    QTest::newRow("all-in-place") << true;
+}
+
+void TestAtomicActivitySave::
+linkedSaveRetirementSkipsInPlaceEntry()
+{
+    QFETCH(bool, allInPlace);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+    specification.entries[0].targetPath =
+        specification.entries.at(0).sourcePath;
+    if (allInPlace) {
+        specification.entries[1].targetPath =
+            specification.entries.at(1).sourcePath;
+    }
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QByteArray firstStaged("staged in-place generation");
+    const QByteArray secondStaged("staged renamed generation");
+    writeFixture(journal->stagingPath(0), firstStaged);
+    QVERIFY2(journal->recordStaged(0, error), qPrintable(error));
+    writeFixture(journal->stagingPath(1), secondStaged);
+    QVERIFY2(journal->recordStaged(1, error), qPrintable(error));
+
+    QVERIFY2(journal->publishAndCommit(error), qPrintable(error));
+    QCOMPARE(
+        readAll(specification.entries.at(0).sourcePath), firstStaged);
+    if (allInPlace) {
+        QCOMPARE(
+            readAll(specification.entries.at(1).sourcePath), secondStaged);
+    } else {
+        QVERIFY(!QFileInfo::exists(
+            specification.entries.at(1).sourcePath));
+    }
+    QCOMPARE(
+        readAll(specification.entries.at(1).targetPath), secondStaged);
+    QVERIFY2(journal->cleanupAfterCommit(error), qPrintable(error));
+    QVERIFY(!QFileInfo::exists(journalPath));
+}
+
+void TestAtomicActivitySave::
+linkedSaveCleanupReleasesTransactionResources_data()
+{
+    QTest::addColumn<bool>("committed");
+
+    QTest::newRow("rollback") << false;
+    QTest::newRow("commit") << true;
+}
+
+void TestAtomicActivitySave::
+linkedSaveCleanupReleasesTransactionResources()
+{
+    QFETCH(bool, committed);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString athleteRoot =
+        dir.filePath(QStringLiteral("athlete"));
+    const QString movedRoot =
+        dir.filePath(QStringLiteral("moved-athlete"));
+    QVERIFY(QDir().mkpath(athleteRoot));
+    writeLinkedSaveJournalSources(athleteRoot);
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(athleteRoot);
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    if (committed) {
+        for (int index = 0; index < journal->entryCount(); ++index) {
+            writeFixture(
+                journal->stagingPath(index),
+                QByteArray("staged generation ")
+                    + QByteArray::number(index));
+            QVERIFY2(journal->recordStaged(index, error), qPrintable(error));
+        }
+        QVERIFY2(journal->publishAndCommit(error), qPrintable(error));
+        QVERIFY2(journal->cleanupAfterCommit(error), qPrintable(error));
+    } else {
+        QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+    }
+
+    QVERIFY2(
+        QDir().rename(athleteRoot, movedRoot),
+        "A completed journal retained an athlete-directory resource");
+    QVERIFY(QFileInfo::exists(movedRoot));
+}
+
+void TestAtomicActivitySave::
+linkedSaveNondurableRetirementStaysRetryable()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Directory fsync injection is Unix-specific");
+#else
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    for (int index = 0; index < journal->entryCount(); ++index) {
+        writeFixture(
+            journal->stagingPath(index),
+            QByteArray("staged generation ") + QByteArray::number(index));
+        QVERIFY2(journal->recordStaged(index, error), qPrintable(error));
+    }
+
+    anchoredFilesystemSyncFailurePath = dir.path();
+    QVERIFY(!journal->publishAndCommit(error));
+    QVERIFY2(!error.isEmpty(), "A nondurable retirement must report an error");
+    QVERIFY(!journal->hasCommitMarker());
+    QVERIFY(QFileInfo::exists(journalPath));
+    QVERIFY(!QFileInfo::exists(specification.entries.at(0).sourcePath));
+    QCOMPARE(
+        readAll(specification.entries.at(1).sourcePath),
+        QByteArray("second old generation"));
+
+    error.clear();
+    QVERIFY(!journal->cleanupAfterRollback(error));
+    QVERIFY2(!error.isEmpty(), "Nondurable recovery must remain retryable");
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    anchoredFilesystemSyncFailurePath.clear();
+    error.clear();
+    QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QCOMPARE(
+        readAll(specification.entries.at(0).sourcePath),
+        QByteArray("first old generation"));
+    QCOMPARE(
+        readAll(specification.entries.at(1).sourcePath),
+        QByteArray("second old generation"));
+    QVERIFY(!QFileInfo::exists(specification.entries.at(0).targetPath));
+    QVERIFY(!QFileInfo::exists(specification.entries.at(1).targetPath));
+#endif
+}
+
+void TestAtomicActivitySave::
+linkedSavePartialRetirementKeepsRecoveryJournal()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Quarantine transition injection is Unix-specific");
+#else
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    for (int index = 0; index < journal->entryCount(); ++index) {
+        writeFixture(
+            journal->stagingPath(index),
+            QByteArray("staged generation ") + QByteArray::number(index));
+        QVERIFY2(journal->recordStaged(index, error), qPrintable(error));
+    }
+
+    QString retainedQuarantine;
+    bool injected = false;
+    anchoredFilesystemAction =
+        [&](const char *transition,
+            const QString &primary,
+            const QString &) {
+            if (injected
+                || QByteArray(transition) != "remove-quarantine-verified") {
+                return;
+            }
+            injected = true;
+            retainedQuarantine = primary + QStringLiteral(".retained");
+            QFile::rename(primary, retainedQuarantine);
+        };
+
+    QVERIFY(!journal->publishAndCommit(error));
+    anchoredFilesystemAction = {};
+    QVERIFY(injected);
+    QVERIFY2(!error.isEmpty(), "A partial retirement must report an error");
+    QVERIFY(!journal->hasCommitMarker());
+    QVERIFY(QFileInfo::exists(journalPath));
+    QVERIFY(QFileInfo::exists(retainedQuarantine));
+
+    error.clear();
+    QVERIFY(!journal->cleanupAfterRollback(error));
+    QVERIFY2(!error.isEmpty(), "Partial recovery must remain explicit");
+    QVERIFY(QFileInfo::exists(journalPath));
+    QVERIFY(QFileInfo::exists(retainedQuarantine));
+#endif
+}
+
+#ifdef Q_OS_WIN
+void TestAtomicActivitySave::
+linkedSavePendingWindowsRetirementRetriesAfterHandleClose()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    for (int index = 0; index < journal->entryCount(); ++index) {
+        writeFixture(
+            journal->stagingPath(index),
+            QByteArray("staged generation ") + QByteArray::number(index));
+        QVERIFY2(journal->recordStaged(index, error), qPrintable(error));
+    }
+
+    const QString sourcePath = specification.entries.at(0).sourcePath;
+    WindowsTestHandle observer(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(sourcePath.utf16()),
+        GENERIC_READ | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr));
+    QVERIFY(observer.isValid());
+    forceLegacyWindowsDelete = true;
+    QVERIFY(!journal->publishAndCommit(error));
+    forceLegacyWindowsDelete = false;
+    QVERIFY2(!error.isEmpty(), "Pending retirement must report an error");
+    QVERIFY(!journal->hasCommitMarker());
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    observer.reset();
+    error.clear();
+    QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QCOMPARE(
+        readAll(specification.entries.at(0).sourcePath),
+        QByteArray("first old generation"));
+    QCOMPARE(
+        readAll(specification.entries.at(1).sourcePath),
+        QByteArray("second old generation"));
+    QVERIFY(!QFileInfo::exists(specification.entries.at(0).targetPath));
+    QVERIFY(!QFileInfo::exists(specification.entries.at(1).targetPath));
+}
+#endif
 
 void TestAtomicActivitySave::
 linkedSavePreparedSourceIdentityReplacementIsRejected_data()

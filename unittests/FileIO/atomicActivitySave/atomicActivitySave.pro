@@ -9,12 +9,14 @@ include(../../unittests.pri)
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug
-DEFINES += GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+DEFINES += GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS \
+           GC_ANCHORED_FILESYSTEM_TEST_HOOKS
 
 SOURCES = testAtomicActivitySave.cpp \
           ApplicationSaveTestStubs.cpp \
           ../../../src/Core/LinkedActivitySaveJournal.cpp \
           ../../../src/Core/RideCache.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp \
           ../../../src/FileIO/RideFile.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCommand.cpp \
@@ -23,6 +25,7 @@ SOURCES = testAtomicActivitySave.cpp \
 
 HEADERS = ../../../src/Core/RideItem.h \
           ../../../src/Core/LinkedActivitySaveJournal.h \
+          ../../../src/FileIO/AnchoredFileSystem.h \
           ../../../src/FileIO/RideFile.h \
           ../../../src/FileIO/RideFileCommand.h \
           ../../../src/FileIO/JsonRideFile.h \
