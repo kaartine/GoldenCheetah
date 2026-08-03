@@ -1335,9 +1335,6 @@ void TestAnchoredFilesystem::copyReportsNonDurableCleanup()
 
 void TestAnchoredFilesystem::moveDoesNotRestoreUnverifiedDestination()
 {
-#ifndef Q_OS_UNIX
-    QSKIP("The Unix rename race is platform-specific");
-#else
     QTemporaryDir root;
     QVERIFY(root.isValid());
     const DirectoryAnchor directory = openDirectory(root.path());
@@ -1354,7 +1351,7 @@ void TestAnchoredFilesystem::moveDoesNotRestoreUnverifiedDestination()
                            const QString &destination) {
         if (qstrcmp(transition, "move-published") != 0) return;
         actionReached = true;
-        QVERIFY(QFile::rename(destination, retained));
+        QVERIFY(renameFixture(destination, retained));
         writeFixture(destination, substitute);
     };
 
@@ -1369,7 +1366,6 @@ void TestAnchoredFilesystem::moveDoesNotRestoreUnverifiedDestination()
     QVERIFY(!QFileInfo::exists(source.displayPath()));
     QCOMPARE(readFixture(target.displayPath()), substitute);
     QCOMPARE(readFixture(retained), original);
-#endif
 }
 
 void TestAnchoredFilesystem::moveRejectsNewHardLink()
