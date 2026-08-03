@@ -1005,17 +1005,12 @@ void TestAtomicActivitySave::newWriterRollsBackPartialPublishFailure()
     QVERIFY(dir.isValid());
     const QString path = dir.filePath(QStringLiteral("activity.json"));
     const AtomicPublishFunction partialPublish =
-        [](const QString &, const QString &target,
+        [](const QString &staging, const QString &target,
            bool &temporaryMoved, QString &error) {
-            QFile published(target);
-            if (!published.open(QIODevice::WriteOnly)
-                || published.write("partial") != 7
-                || !published.flush()) {
-                error = published.errorString();
+            if (!publishAtomicNew(
+                    staging, target, temporaryMoved, error)) {
                 return false;
             }
-            published.close();
-            temporaryMoved = true;
             error = QStringLiteral("injected post-publication failure");
             return false;
         };
@@ -1041,16 +1036,20 @@ newWriterPreservesReplacementAfterPartialPublishFailure()
     const QString path = dir.filePath(QStringLiteral("activity.json"));
     const QString retainedPath =
         dir.filePath(QStringLiteral("transaction-owned.json"));
-    const QByteArray replacement("concurrent activity");
+    const QByteArray staged("complete activity");
+    const QByteArray replacement = staged;
     AnchoredFileSystem::DirectoryAnchor parent;
     AnchoredFileSystem::EntryRef entry;
     AnchoredFileSystem::PinnedFile pin;
     QString injectionError;
     bool replacementPinned = false;
     const AtomicPublishFunction partialPublish =
-        [&](const QString &, const QString &target,
+        [&](const QString &stagingPath, const QString &target,
             bool &temporaryMoved, QString &error) {
-            writeFixture(target, QByteArray("partial"));
+            if (!publishAtomicNew(
+                    stagingPath, target, temporaryMoved, error)) {
+                return false;
+            }
             replacementPinned = replaceAndPinFixture(
                 target,
                 retainedPath,
@@ -1066,7 +1065,6 @@ newWriterPreservesReplacementAfterPartialPublishFailure()
 
     NewAtomicFileWriter writer(path, partialPublish);
     QVERIFY(writer.open());
-    const QByteArray staged("complete activity");
     QCOMPARE(writer.write(staged), static_cast<qint64>(staged.size()));
     QVERIFY(writer.flush());
     QVERIFY(!writer.commit());
@@ -1081,6 +1079,10 @@ newWriterPreservesReplacementAfterPartialPublishFailure()
             entry, pin, stillMatches, matchError),
         qPrintable(matchError));
     QVERIFY2(stillMatches, "Rollback removed a replacement activity");
+    QCOMPARE(readAll(retainedPath), staged);
+    QVERIFY(QDir(dir.path()).entryList(
+        {QStringLiteral("*.tmp")},
+        QDir::Files | QDir::Hidden).isEmpty());
 }
 
 void TestAtomicActivitySave::newWriterRejectsSuccessfulNoPublish()

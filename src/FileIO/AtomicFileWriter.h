@@ -10,6 +10,8 @@
 #ifndef _GC_AtomicFileWriter_h
 #define _GC_AtomicFileWriter_h
 
+#include "AnchoredFileSystem.h"
+
 #include <QByteArray>
 #include <QCryptographicHash>
 #include <QDir>
@@ -818,54 +820,138 @@ public:
                 "Atomic publication is not open");
             return false;
         }
+
+        AnchoredFileSystem::DirectoryAnchor parent;
+        AnchoredFileSystem::EntryRef stagingEntry;
+        AnchoredFileSystem::EntryRef targetEntry;
+        AnchoredFileSystem::PinnedFile stagingPin;
+        QString anchorError;
+        const QString parentPath = QFileInfo(targetPath_).absolutePath();
+        if (!AnchoredFileSystem::DirectoryAnchor::open(
+                parentPath, parent, anchorError)
+            || !parent.pathMatches(anchorError)) {
+            error_ = QStringLiteral(
+                "Cannot anchor the atomic publication directory: %1")
+                         .arg(anchorError);
+            return false;
+        }
+        stagingEntry = parent.entry(
+            QFileInfo(temporaryPath_).fileName(), anchorError);
+        targetEntry = parent.entry(
+            QFileInfo(targetPath_).fileName(), anchorError);
+        if (!stagingEntry.isValid() || !targetEntry.isValid()
+            || !AnchoredFileSystem::pinRegularFile(
+                stagingEntry, stagingPin, anchorError)) {
+            error_ = QStringLiteral(
+                "Cannot pin the atomic publication staging file: %1")
+                         .arg(anchorError);
+            return false;
+        }
+
         file_->setAutoRemove(false);
         file_.reset();
         bool targetPublished = false;
         const bool published = publish_ && publish_(
             temporaryPath_, targetPath_,
             targetPublished, error_);
-        if (!published || !targetPublished) {
-            if (!publish_ && error_.isEmpty()) {
-                error_ = QStringLiteral(
-                    "Cannot publish the new activity file");
-            } else if (published && error_.isEmpty()) {
-                error_ = QStringLiteral(
-                    "The activity publisher did not create the target");
+        const auto appendError = [&](const QString &detail) {
+            if (detail.isEmpty()) return;
+            if (!error_.isEmpty()) error_ += QStringLiteral("; ");
+            error_ += detail;
+        };
+        const auto removePinned = [&parent, &appendError](
+                AnchoredFileSystem::PinnedFile &file,
+                const QString &failure) {
+            const AnchoredFileSystem::MutationResult removal =
+                AnchoredFileSystem::remove(file);
+            if (removal.effect
+                == AnchoredFileSystem::MutationEffect::AppliedDurable) {
+                return true;
             }
-            const auto appendError = [&](const QString &detail) {
-                if (!error_.isEmpty()) error_ += QStringLiteral("; ");
-                error_ += detail;
-            };
-            bool directoryChanged = false;
-            if (targetPublished) {
-                const QFileInfo target(targetPath_);
-                if (target.exists() || target.isSymLink()) {
-                    if (QFile::remove(targetPath_)) {
-                        directoryChanged = true;
-                    } else {
-                        appendError(QStringLiteral(
-                            "cannot remove the partially published activity"));
-                    }
-                }
-            }
-            const QFileInfo staging(temporaryPath_);
-            if (staging.exists() || staging.isSymLink()) {
-                if (QFile::remove(temporaryPath_)) {
-                    directoryChanged = true;
-                } else {
-                    appendError(QStringLiteral(
-                        "cannot remove the activity staging file"));
-                }
-            }
-            if (directoryChanged) {
+            if (removal.effect
+                == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
                 QString syncError;
-                if (!syncParentDirectory(targetPath_, syncError)) {
-                    appendError(syncError);
-                }
+                if (parent.sync(syncError)) return true;
+                appendError(syncError);
+            }
+            appendError(removal.error.isEmpty() ? failure : removal.error);
+            if (!removal.verifiedRecoveryPath.isEmpty()) {
+                appendError(QStringLiteral("recovery file retained at %1")
+                                .arg(removal.verifiedRecoveryPath));
             }
             return false;
+        };
+
+        AnchoredFileSystem::PinnedFile targetPin;
+        bool targetOwned = false;
+        if (targetPublished) {
+            QString targetError;
+            bool targetExists = false;
+            if (!AnchoredFileSystem::entryExists(
+                    targetEntry, targetExists, targetError)) {
+                appendError(targetError);
+            } else if (!targetExists) {
+                appendError(QStringLiteral(
+                    "the partially published activity is unavailable"));
+            } else if (!AnchoredFileSystem::pinRegularFile(
+                           targetEntry, targetPin, targetError)) {
+                appendError(QStringLiteral(
+                    "cannot verify the partially published activity: %1")
+                                .arg(targetError));
+            } else {
+                targetOwned =
+                    targetPin.identity() == stagingPin.identity()
+                    && targetPin.size() == stagingPin.size()
+                    && targetPin.sha256() == stagingPin.sha256();
+                if (!targetOwned) {
+                    appendError(QStringLiteral(
+                        "the partially published activity was replaced and retained"));
+                }
+            }
         }
-        return true;
+
+        if (published && targetPublished && targetOwned) return true;
+        if (!publish_ && error_.isEmpty()) {
+            error_ = QStringLiteral("Cannot publish the new activity file");
+        } else if (published && !targetPublished && error_.isEmpty()) {
+            error_ = QStringLiteral(
+                "The activity publisher did not create the target");
+        } else if (published && targetPublished && error_.isEmpty()) {
+            error_ = QStringLiteral(
+                "The published activity identity could not be verified");
+        }
+
+        if (targetOwned) {
+            removePinned(
+                targetPin,
+                QStringLiteral(
+                    "cannot remove the partially published activity"));
+        }
+
+        QString stagingError;
+        bool stagingExists = false;
+        if (!AnchoredFileSystem::entryExists(
+                stagingEntry, stagingExists, stagingError)) {
+            appendError(stagingError);
+        } else if (stagingExists) {
+            bool stagingMatches = false;
+            if (!AnchoredFileSystem::entryMatches(
+                    stagingEntry,
+                    stagingPin,
+                    stagingMatches,
+                    stagingError)) {
+                appendError(stagingError);
+            } else if (!stagingMatches) {
+                appendError(QStringLiteral(
+                    "the activity staging file was replaced and retained"));
+            } else {
+                removePinned(
+                    stagingPin,
+                    QStringLiteral(
+                        "cannot remove the activity staging file"));
+            }
+        }
+        return false;
     }
 
     void cancelWriting() override
