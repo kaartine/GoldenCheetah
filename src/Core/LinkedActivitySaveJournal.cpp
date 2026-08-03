@@ -2437,7 +2437,15 @@ bool restoreOldGeneration(
             return false;
         }
         if (entry.backup.exists) {
-            if (!snapshotMatches(backup, entry.backup.contents)
+            const bool backupNeedsRestore =
+                !snapshotMatches(backup, entry.backup.contents);
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+            if (backupNeedsRestore) {
+                linkedActivitySaveTransitionReached(
+                    "linked-save-before-backup-restore");
+            }
+#endif
+            if (backupNeedsRestore
                 && !copyExpectedFileAtomically(
                     paths.backupCopy,
                     paths.backup,
@@ -2446,9 +2454,12 @@ bool restoreOldGeneration(
                     error)) {
                 return false;
             }
-        } else if (backup.exists
-                   && !removeObservedFile(paths.backup, backup, error)) {
-            return false;
+        } else if (backup.exists) {
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+            linkedActivitySaveTransitionReached(
+                "linked-save-before-backup-remove");
+#endif
+            if (!removeObservedFile(paths.backup, backup, error)) return false;
         }
 
         if (atomicFilePathKey(paths.source)
@@ -2457,10 +2468,15 @@ bool restoreOldGeneration(
             if (!inspectRegularFile(paths.target, currentTarget, error)) {
                 return false;
             }
-            if (currentTarget.exists
-                && !removeObservedFile(
-                    paths.target, currentTarget, error)) {
-                return false;
+            if (currentTarget.exists) {
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+                linkedActivitySaveTransitionReached(
+                    "linked-save-before-target-remove");
+#endif
+                if (!removeObservedFile(
+                        paths.target, currentTarget, error)) {
+                    return false;
+                }
             }
         }
     }
@@ -2494,7 +2510,15 @@ bool ensureNewGeneration(
                 entry, paths, source, target, backup, error)) {
             return false;
         }
-        if (!snapshotMatches(target, entry.stagedContents)
+        const bool targetNeedsPublication =
+            !snapshotMatches(target, entry.stagedContents);
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+        if (targetNeedsPublication) {
+            linkedActivitySaveTransitionReached(
+                "linked-save-before-recovery-target-publish");
+        }
+#endif
+        if (targetNeedsPublication
             && !copyExpectedFileAtomically(
                 paths.staging,
                 paths.target,
@@ -2515,15 +2539,24 @@ bool ensureNewGeneration(
                 entry, paths, source, target, backup, error)) {
             return false;
         }
-        if (entry.keepSourceBackup
-            && !snapshotMatches(backup, entry.source.contents)
-            && !copyExpectedFileAtomically(
-                paths.sourceCopy,
-                paths.backup,
-                entry.source.contents,
-                AtomicFileMode::ReplaceExisting,
-                error)) {
-            return false;
+        if (entry.keepSourceBackup) {
+            const bool backupNeedsPublication =
+                !snapshotMatches(backup, entry.source.contents);
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+            if (backupNeedsPublication) {
+                linkedActivitySaveTransitionReached(
+                    "linked-save-before-recovery-backup-publish");
+            }
+#endif
+            if (backupNeedsPublication
+                && !copyExpectedFileAtomically(
+                    paths.sourceCopy,
+                    paths.backup,
+                    entry.source.contents,
+                    AtomicFileMode::ReplaceExisting,
+                    error)) {
+                return false;
+            }
         }
     }
     return verifyNewGeneration(state, resolved, error);
@@ -2874,6 +2907,9 @@ bool removePreManifestJournal(
         }
         removable.append(qMakePair(entry.absoluteFilePath(), observed));
     }
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+    linkedActivitySaveTransitionReached("linked-save-pre-manifest-scanned");
+#endif
     for (const auto &file : std::as_const(removable)) {
         if (!removeObservedFile(file.first, file.second, error)) return false;
     }
