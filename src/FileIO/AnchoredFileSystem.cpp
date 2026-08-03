@@ -1268,6 +1268,217 @@ bool readAll(
     return true;
 }
 
+bool writeNewFile(
+    const QByteArray &contents,
+    const EntryRef &destination,
+    PinnedFile &file,
+    QString &error)
+{
+    file = {};
+    error.clear();
+    if (!destination.isValid()) {
+        error = QStringLiteral(
+            "An anchored write destination is unavailable");
+        return false;
+    }
+    if (!destination.parent_.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The anchored write parent was replaced");
+        }
+        return false;
+    }
+
+#ifdef Q_OS_UNIX
+    const QByteArray name = QFile::encodeName(destination.component_);
+    FileDescriptor output(::openat(
+        destination.parent_.state_->descriptor.get(),
+        name.constData(),
+        O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
+        S_IRUSR | S_IWUSR));
+    if (!output.isValid()) {
+        error = errno == EEXIST
+            ? QStringLiteral("The anchored write destination already exists")
+            : nativeError(
+                  QStringLiteral("Cannot create an anchored file"), errno);
+        return false;
+    }
+#elif defined(Q_OS_WIN)
+    WindowsHandle output(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(destination.displayPath_.utf16()),
+        GENERIC_READ | GENERIC_WRITE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        CREATE_NEW,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT
+            | FILE_FLAG_WRITE_THROUGH,
+        nullptr));
+    if (!output.isValid()) {
+        const DWORD native = ::GetLastError();
+        error = (native == ERROR_ALREADY_EXISTS
+                 || native == ERROR_FILE_EXISTS)
+            ? QStringLiteral("The anchored write destination already exists")
+            : windowsError(
+                  QStringLiteral("Cannot create an anchored file"), native);
+        return false;
+    }
+#else
+    error = QStringLiteral(
+        "Anchored filesystem operations are unsupported on this platform");
+    return false;
+#endif
+
+    qsizetype written = 0;
+    bool writeComplete = true;
+    while (written < contents.size()) {
+#ifdef Q_OS_UNIX
+        ssize_t result;
+        do {
+            result = ::write(
+                output.get(),
+                contents.constData() + written,
+                size_t(contents.size() - written));
+        } while (result < 0 && errno == EINTR);
+        if (result <= 0) {
+            error = nativeError(
+                QStringLiteral("Cannot write an anchored file"), errno);
+            writeComplete = false;
+            break;
+        }
+        written += qsizetype(result);
+#elif defined(Q_OS_WIN)
+        DWORD nativeWritten = 0;
+        const DWORD requested = DWORD(std::min<qsizetype>(
+            contents.size() - written,
+            qsizetype(std::numeric_limits<DWORD>::max())));
+        if (!::WriteFile(
+                output.get(),
+                contents.constData() + written,
+                requested,
+                &nativeWritten,
+                nullptr)
+            || nativeWritten == 0) {
+            error = windowsError(
+                QStringLiteral("Cannot write an anchored file"),
+                ::GetLastError());
+            writeComplete = false;
+            break;
+        }
+        written += qsizetype(nativeWritten);
+#endif
+    }
+
+    bool synchronized = false;
+    if (writeComplete) {
+#ifdef Q_OS_UNIX
+        int syncResult;
+        do {
+            syncResult = ::fsync(output.get());
+        } while (syncResult != 0 && errno == EINTR);
+        synchronized = syncResult == 0;
+        if (!synchronized) {
+            error = nativeError(
+                QStringLiteral("Cannot synchronize an anchored file"),
+                errno);
+        }
+#elif defined(Q_OS_WIN)
+        synchronized = ::FlushFileBuffers(output.get());
+        if (!synchronized) {
+            error = windowsError(
+                QStringLiteral("Cannot synchronize an anchored file"),
+                ::GetLastError());
+        }
+#endif
+    }
+
+#ifdef Q_OS_UNIX
+    UnixStamp writtenStamp;
+    const bool inspected = captureUnixStamp(
+        output.get(), writtenStamp, false, error);
+    const NativeIdentity writtenIdentity = inspected
+        ? unixIdentity(writtenStamp, 'f') : NativeIdentity();
+#elif defined(Q_OS_WIN)
+    WindowsStamp writtenStamp;
+    const bool inspected = captureWindowsStamp(
+        output.get(), writtenStamp, false, error);
+    const NativeIdentity writtenIdentity = inspected
+        ? windowsIdentity(writtenStamp, 'f') : NativeIdentity();
+#endif
+    const QByteArray expectedDigest = QCryptographicHash::hash(
+        contents, QCryptographicHash::Sha256);
+
+    PinnedFile candidate;
+    if (inspected) {
+        auto state = std::make_unique<Detail::PinnedFileState>();
+        state->entry = destination;
+#ifdef Q_OS_UNIX
+        state->descriptor = std::move(output);
+#elif defined(Q_OS_WIN)
+        state->handle = std::move(output);
+#endif
+        state->stamp = writtenStamp;
+        state->identity = writtenIdentity;
+        state->size = writtenStamp.size;
+        state->sha256 = expectedDigest;
+        candidate.state_ = std::move(state);
+    }
+
+    const bool complete = writeComplete && synchronized && inspected
+        && writtenStamp.links == 1
+        && writtenStamp.size == contents.size();
+    bool verified = false;
+    if (complete) {
+        QByteArray verifiedDigest;
+        QString verifyError;
+        const PinnedChunkConsumer discard = [](
+            const char *, qsizetype, QString &) { return true; };
+        verified = streamPinnedFile(
+            *candidate.state_, discard, verifiedDigest, verifyError)
+            && verifiedDigest == expectedDigest;
+        if (!verified) {
+            error = verifyError.isEmpty()
+                ? QStringLiteral(
+                      "The anchored file contents changed while being written")
+                : verifyError;
+        }
+    }
+    bool named = false;
+    if (verified
+        && !entryMatches(destination, candidate, named, error)) {
+        verified = false;
+    }
+    if (verified && !named) {
+        error = QStringLiteral(
+            "The anchored write destination was replaced");
+        verified = false;
+    }
+    if (verified) {
+        const bool synchronized = destination.parent_.sync(error);
+        QString parentError;
+        const bool parentMatches =
+            destination.parent_.pathMatches(parentError);
+        if (!synchronized || !parentMatches) {
+            if (!parentError.isEmpty()) {
+                if (!error.isEmpty()) error += QStringLiteral("; ");
+                error += parentError;
+            }
+            verified = false;
+        }
+    }
+    if (verified) {
+        file = std::move(candidate);
+        return true;
+    }
+
+    if (error.isEmpty()) {
+        error = QStringLiteral("Cannot complete an anchored file write");
+    }
+    if (candidate.isValid()) {
+        appendCleanupError(error, remove(candidate));
+    }
+    return false;
+}
+
 bool copyToNewFile(
     const PinnedFile &source,
     const EntryRef &destination,
@@ -2090,6 +2301,18 @@ MutationResult remove(PinnedFile &file)
     reportAnchoredFilesystemTransition(
         "remove-quarantine-finally-verified",
         file.state_->entry.displayPath_);
+
+    QString parentError;
+    if (!file.state_->entry.parent_.pathMatches(parentError)) {
+        result.effect = MutationEffect::Partial;
+        result.error = parentError.isEmpty()
+            ? QStringLiteral(
+                  "The anchored removal parent changed before unlinking")
+            : parentError;
+        result.verifiedRecoveryPath =
+            file.verifiedPath(file.state_->entry);
+        return result;
+    }
 
     const QByteArray quarantineName =
         QFile::encodeName(file.state_->entry.component_);

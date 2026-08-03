@@ -20,7 +20,6 @@
 #include <QLockFile>
 #include <QRegularExpression>
 #include <QSet>
-#include <QTemporaryFile>
 #include <QUuid>
 
 #include <algorithm>
@@ -80,19 +79,18 @@ struct ResolvedEntry
     QString staging;
 };
 
-struct ObservedFile
-{
-    bool exists = false;
-    AtomicFileSnapshot contents;
-    AnchoredFileSystem::NativeIdentity parentIdentity;
-    AnchoredFileSystem::NativeIdentity identity;
-};
-
 struct AnchoredActivityFile
 {
     AnchoredFileSystem::DirectoryAnchor parent;
     AnchoredFileSystem::EntryRef entry;
     AnchoredFileSystem::PinnedFile file;
+};
+
+struct ObservedFile
+{
+    bool exists = false;
+    AtomicFileSnapshot contents;
+    std::shared_ptr<AnchoredActivityFile> anchored;
 };
 
 struct AnchoredJournalFile
@@ -523,58 +521,61 @@ bool observeActivityFile(
     QString &error)
 {
     observed = {};
-    AnchoredActivityFile anchored;
+    observed.anchored = std::make_shared<AnchoredActivityFile>();
     if (!ensureAthleteRootAnchored(state, error)
         || !anchorActivityFile(
             state.athleteRootDirectory,
             relativePath,
-            anchored,
+            *observed.anchored,
             error)) {
+        observed.anchored.reset();
         return false;
     }
-    observed.parentIdentity = anchored.parent.identity();
-    if (!anchored.file.isValid()) return true;
+    if (!observed.anchored->file.isValid()) return true;
 
     observed.exists = true;
-    observed.identity = anchored.file.identity();
-    observed.contents.size = anchored.file.size();
-    observed.contents.digest = anchored.file.sha256();
+    observed.contents.size = observed.anchored->file.size();
+    observed.contents.digest = observed.anchored->file.sha256();
     return true;
 }
 
 bool anchorObservedActivityFile(
     JournalState &state,
-    const QString &relativePath,
+    const QString &,
     const ObservedFile &observed,
-    AnchoredActivityFile &anchored,
+    std::shared_ptr<AnchoredActivityFile> &anchored,
     QString &error)
 {
+    anchored = observed.anchored;
     if (!ensureAthleteRootAnchored(state, error)
-        || !anchorActivityFile(
-            state.athleteRootDirectory,
-            relativePath,
-            anchored,
-            error)) {
+        || !anchored
+        || !anchored->parent.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "An observed activity file is no longer anchored");
+        }
         return false;
     }
-    if (!observed.parentIdentity.isValid()
-        || anchored.parent.identity() != observed.parentIdentity) {
-        error = QStringLiteral(
-            "An activity file parent changed before it could be anchored");
-        return false;
-    }
-    if (anchored.file.isValid() != observed.exists) {
+    if (anchored->file.isValid() != observed.exists) {
         error = QStringLiteral(
             "An activity file changed before it could be anchored");
         return false;
     }
-    if (observed.exists
-        && (!observed.identity.isValid()
-            || anchored.file.identity() != observed.identity
-            || !pinnedFileMatches(anchored.file, observed.contents))) {
-        error = QStringLiteral(
-            "An activity file changed while it was being anchored");
-        return false;
+    if (observed.exists) {
+        bool matches = false;
+        if (!pinnedFileMatches(anchored->file, observed.contents)
+            || !AnchoredFileSystem::entryMatches(
+                anchored->entry,
+                anchored->file,
+                matches,
+                error)
+            || !matches) {
+            if (error.isEmpty()) {
+                error = QStringLiteral(
+                    "An activity file changed while it was anchored");
+            }
+            return false;
+        }
     }
     return true;
 }
@@ -592,14 +593,20 @@ bool completeAnchoredActivityRemoval(
         AnchoredFileSystem::remove(anchored.file);
     if (removal.effect
         == AnchoredFileSystem::MutationEffect::AppliedDurable) {
-        return true;
+        if (anchored.parent.pathMatches(error)) return true;
+        if (error.isEmpty()) error = failure;
+        return false;
     }
     if (removal.effect
         == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
         QString syncError;
-        if (anchored.parent.sync(syncError)) return true;
+        const bool synchronized = anchored.parent.sync(syncError);
+        QString parentError;
+        const bool parentMatches = anchored.parent.pathMatches(parentError);
+        if (synchronized && parentMatches) return true;
         error = removal.error.isEmpty() ? failure : removal.error;
         appendError(error, syncError);
+        appendError(error, parentError);
         return false;
     }
     error = removal.error.isEmpty() ? failure : removal.error;
@@ -674,12 +681,6 @@ bool publishPinnedFile(
             source, temporary.entry, temporary.file, error)) {
         return false;
     }
-#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
-    if (temporaryName.startsWith(QStringLiteral(".COMMITTED."))) {
-        linkedActivitySaveTransitionReached(
-            "linked-save-commit-marker-temporary");
-    }
-#endif
     if (!destination.parent.pathMatches(error)) {
         if (error.isEmpty()) {
             error = QStringLiteral(
@@ -757,50 +758,6 @@ bool publishPinnedActivityFile(
         source, destination, temporaryName, error);
 }
 
-bool pinTemporaryContents(
-    const QByteArray &contents,
-    QTemporaryFile &temporary,
-    AnchoredFileSystem::PinnedFile &source,
-    QString &error)
-{
-    if (!temporary.open()
-        || temporary.write(contents) != contents.size()
-        || !temporary.flush()
-        || !syncFileDevice(temporary, error)) {
-        if (error.isEmpty()) error = temporary.errorString();
-        return false;
-    }
-    const QString path = temporary.fileName();
-    temporary.close();
-
-    AnchoredFileSystem::DirectoryAnchor parent;
-    if (!AnchoredFileSystem::DirectoryAnchor::open(
-            QFileInfo(path).absolutePath(), parent, error)
-        || !parent.pathMatches(error)) {
-        return false;
-    }
-    const AnchoredFileSystem::EntryRef entry = parent.entry(
-        QFileInfo(path).fileName(), error);
-    bool matches = false;
-    if (!entry.isValid()
-        || !AnchoredFileSystem::pinRegularFile(
-            entry, source, error, contents.size())
-        || !AnchoredFileSystem::entryMatches(
-            entry, source, matches, error)
-        || !matches
-        || source.size() != contents.size()
-        || source.sha256()
-            != QCryptographicHash::hash(
-                contents, QCryptographicHash::Sha256)) {
-        if (error.isEmpty()) {
-            error = QStringLiteral(
-                "Cannot pin the anchored publication contents");
-        }
-        return false;
-    }
-    return true;
-}
-
 bool publishAnchoredJournalFile(
     JournalState &state,
     const QString &name,
@@ -809,13 +766,6 @@ bool publishAnchoredJournalFile(
     QString &error)
 {
     if (!journalDirectoryMatches(state, error)) return false;
-
-    QTemporaryFile temporarySource;
-    AnchoredFileSystem::PinnedFile source;
-    if (!pinTemporaryContents(
-            contents, temporarySource, source, error)) {
-        return false;
-    }
 
     AnchoredActivityFile destination;
     destination.parent = state.journalDirectory;
@@ -832,16 +782,94 @@ bool publishAnchoredJournalFile(
         return false;
     }
 
+    QString token = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    token.remove(QLatin1Char('-'));
     const QString temporaryName = QStringLiteral(".%1.%2.tmp")
-        .arg(name, QUuid::createUuid().toString(QUuid::WithoutBraces));
-    if (!publishPinnedFile(
-            source, destination, temporaryName, error)
-        || !journalDirectoryMatches(state, error)) {
+        .arg(name, token);
+    AnchoredActivityFile temporary;
+    temporary.parent = destination.parent;
+    temporary.entry = temporary.parent.entry(temporaryName, error);
+    if (!temporary.entry.isValid()
+        || !AnchoredFileSystem::writeNewFile(
+            contents, temporary.entry, temporary.file, error)) {
         return false;
     }
-    snapshot.size = source.size();
-    snapshot.digest = source.sha256();
-    return true;
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+    linkedActivitySaveTransitionReached(
+        "linked-save-commit-marker-temporary");
+#endif
+    if (!journalDirectoryMatches(state, error)) return false;
+
+    const AnchoredFileSystem::MutationResult publication =
+        AnchoredFileSystem::moveNoReplace(
+            temporary.file, destination.entry);
+    bool destinationOwned = false;
+    QString verificationError;
+    if (temporary.file.isValid()) {
+        AnchoredFileSystem::entryMatches(
+            destination.entry,
+            temporary.file,
+            destinationOwned,
+            verificationError);
+    }
+    QString parentError;
+    bool parentMatches = destination.parent.pathMatches(parentError);
+
+    if (destinationOwned) {
+        snapshot.size = temporary.file.size();
+        snapshot.digest = temporary.file.sha256();
+    }
+    if (publication.effect
+            == AnchoredFileSystem::MutationEffect::AppliedDurable
+        && destinationOwned && parentMatches) {
+        return true;
+    }
+    if (publication.effect
+        == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
+        QString syncError;
+        const bool synchronized = destination.parent.sync(syncError);
+        parentError.clear();
+        parentMatches = destination.parent.pathMatches(parentError);
+        if (synchronized && destinationOwned && parentMatches) {
+            return true;
+        }
+        error = publication.error.isEmpty()
+            ? QStringLiteral(
+                  "Cannot durably publish the linked-save commit marker")
+            : publication.error;
+        appendError(error, syncError);
+        appendError(error, verificationError);
+        appendError(error, parentError);
+        return false;
+    }
+
+    error = publication.error.isEmpty()
+        ? QStringLiteral("Cannot publish the linked-save commit marker")
+        : publication.error;
+    appendError(error, verificationError);
+    appendError(error, parentError);
+    if (!publication.verifiedRecoveryPath.isEmpty()) {
+        appendError(
+            error,
+            QStringLiteral("recovery file retained at %1")
+                .arg(publication.verifiedRecoveryPath));
+    }
+    if ((publication.effect
+             == AnchoredFileSystem::MutationEffect::NoEffect
+         || publication.effect
+             == AnchoredFileSystem::MutationEffect::Conflict)
+        && !destinationOwned
+        && temporary.file.isValid()) {
+        QString cleanupError;
+        if (!completeAnchoredActivityRemoval(
+                temporary,
+                QStringLiteral(
+                    "Cannot remove an unpublished commit-marker staging file"),
+                cleanupError)) {
+            appendError(error, cleanupError);
+        }
+    }
+    return false;
 }
 
 bool replaceObservedActivityFile(
@@ -867,7 +895,7 @@ bool replaceObservedActivityFile(
 #else
     Q_UNUSED(transition)
 #endif
-    AnchoredActivityFile destination;
+    std::shared_ptr<AnchoredActivityFile> destination;
     if (!anchorObservedActivityFile(
             state,
             destinationRelativePath,
@@ -880,15 +908,15 @@ bool replaceObservedActivityFile(
     linkedActivitySaveTransitionReached(
         "linked-save-activity-destination-anchored");
 #endif
-    if (destination.file.isValid()
+    if (destination->file.isValid()
         && !completeAnchoredActivityRemoval(
-            destination,
+            *destination,
             QStringLiteral(
                 "Cannot remove the previous activity generation"),
             error)) {
         return false;
     }
-    return publishPinnedActivityFile(source, destination, error);
+    return publishPinnedActivityFile(source, *destination, error);
 }
 
 bool removeObservedActivityFile(
@@ -904,7 +932,7 @@ bool removeObservedActivityFile(
 #else
     Q_UNUSED(transition)
 #endif
-    AnchoredActivityFile anchored;
+    std::shared_ptr<AnchoredActivityFile> anchored;
     if (!anchorObservedActivityFile(
             state, relativePath, observed, anchored, error)) {
         return false;
@@ -914,7 +942,7 @@ bool removeObservedActivityFile(
         "linked-save-activity-destination-anchored");
 #endif
     return completeAnchoredActivityRemoval(
-        anchored,
+        *anchored,
         QStringLiteral("Cannot remove a transaction-owned activity file"),
         error);
 }
@@ -1919,12 +1947,23 @@ bool removeAnchoredJournalFile(
     if (effect) *effect = removal.effect;
     if (removal.effect
         == AnchoredFileSystem::MutationEffect::AppliedDurable) {
-        return true;
+        if (directory.pathMatches(error)) return true;
+        if (effect) {
+            *effect = AnchoredFileSystem::MutationEffect::Partial;
+        }
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The linked-save journal directory changed during cleanup");
+        }
+        return false;
     }
     if (removal.effect
         == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
         QString syncError;
-        if (directory.sync(syncError)) {
+        const bool synchronized = directory.sync(syncError);
+        QString parentError;
+        const bool parentMatches = directory.pathMatches(parentError);
+        if (synchronized && parentMatches) {
             if (effect) {
                 *effect =
                     AnchoredFileSystem::MutationEffect::AppliedDurable;
@@ -1933,6 +1972,7 @@ bool removeAnchoredJournalFile(
         }
         error = removal.error;
         appendError(error, syncError);
+        appendError(error, parentError);
         return false;
     }
     error = removal.error.isEmpty()

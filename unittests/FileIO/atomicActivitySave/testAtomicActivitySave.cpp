@@ -5414,7 +5414,12 @@ linkedSaveRollbackProductionParentSubstitutionIsRejected()
         readAll(specification.entries.at(1).sourcePath), secondSource);
     QVERIFY(!QFileInfo::exists(
         specification.entries.at(0).targetPath));
-    if (removeTarget && !duringRemoval) {
+    if (duringRemoval) {
+        QCOMPARE(
+            readAll(QDir(displacedPath).filePath(
+                QStringLiteral("first-old.json"))),
+            firstSource);
+    } else if (removeTarget) {
         QCOMPARE(
             readAll(QDir(displacedPath).filePath(
                 QStringLiteral("first-new.json"))),
