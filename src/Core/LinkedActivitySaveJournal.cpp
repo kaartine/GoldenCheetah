@@ -3149,6 +3149,13 @@ bool Journal::publishAndCommit(QString &error)
     if (!verifyRetirementSourcesAbsent(*state_, resolved, error)) {
         return false;
     }
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+    linkedActivitySaveTransitionReached(
+        "linked-save-after-final-retirement-check");
+#endif
+    if (!verifyRetirementSourcesAbsent(*state_, resolved, error)) {
+        return false;
+    }
 
     const QByteArray contents = state_->manifest.id.toLatin1() + '\n';
     AtomicFileSnapshot marker;
@@ -3167,6 +3174,13 @@ bool Journal::publishAndCommit(QString &error)
 #ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
     linkedActivitySaveTransitionReached("linked-save-commit-marker");
 #endif
+    if (!verifyRetirementSourcesAbsent(*state_, resolved, error)) {
+        appendError(
+            error,
+            QStringLiteral(
+                "committed linked activity recovery is required before continuing"));
+        return false;
+    }
     return true;
 }
 
