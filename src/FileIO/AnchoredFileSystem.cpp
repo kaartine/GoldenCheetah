@@ -771,10 +771,12 @@ bool windowsMovedEntryMatches(
     const EntryRef &entry,
     const Detail::PinnedFileState &state,
     bool &matches,
+    WindowsStamp &matchedStamp,
     QString &error)
 {
     error.clear();
     matches = false;
+    matchedStamp = {};
     WindowsStamp pinnedNow;
     if (!captureWindowsStamp(
             state.handle.get(), pinnedNow, false, error)) {
@@ -810,6 +812,7 @@ bool windowsMovedEntryMatches(
     }
     matches = sameWindowsMoveIdentityAndData(namedStamp, pinnedNow)
         && windowsIdentity(namedStamp, 'f') == state.identity;
+    if (matches) matchedStamp = pinnedNow;
     return true;
 }
 #endif
@@ -2705,6 +2708,7 @@ MutationResult moveNoReplace(
         return result;
     }
     bool destinationMatches = false;
+    WindowsStamp finalDestinationStamp;
     QString destinationError;
     reportAnchoredFilesystemTransition(
         "move-before-final-name-check",
@@ -2712,7 +2716,8 @@ MutationResult moveNoReplace(
         destination.displayPath_);
     if (!windowsMovedEntryMatches(
             destination, *source.state_,
-            destinationMatches, destinationError)
+            destinationMatches, finalDestinationStamp,
+            destinationError)
         || !destinationMatches) {
         result.effect = MutationEffect::Partial;
         result.error = destinationError.isEmpty()
@@ -2723,6 +2728,9 @@ MutationResult moveNoReplace(
             source.verifiedPath(destination);
         return result;
     }
+    source.state_->stamp = finalDestinationStamp;
+    source.state_->identity =
+        windowsIdentity(finalDestinationStamp, 'f');
     result.effect = MutationEffect::AppliedDurable;
     return result;
 #else
