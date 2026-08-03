@@ -520,6 +520,8 @@ private slots:
     void linkedSaveSourceRetirementSubstitutionIsRejected();
     void linkedSaveSourceRepopulationStopsFurtherRetirement();
     void linkedSaveFinalSourceRepopulationIsRejected();
+    void linkedSaveCommitBoundarySourceRepopulationIsRejected_data();
+    void linkedSaveCommitBoundarySourceRepopulationIsRejected();
     void linkedSaveRecoveryRejectsStagedSourceAtOldName();
     void linkedSaveRecoveryRejectsRecreatedOriginalSource_data();
     void linkedSaveRecoveryRejectsRecreatedOriginalSource();
@@ -4457,6 +4459,106 @@ linkedSaveFinalSourceRepopulationIsRejected()
     QVERIFY(QFileInfo::exists(journalPath));
     QCOMPARE(readAll(specification.entries.at(0).targetPath), firstStaged);
     QCOMPARE(readAll(specification.entries.at(1).targetPath), secondStaged);
+}
+
+void TestAtomicActivitySave::
+linkedSaveCommitBoundarySourceRepopulationIsRejected_data()
+{
+    QTest::addColumn<QByteArray>("transition");
+    QTest::addColumn<bool>("commitMarkerExpected");
+    QTest::addColumn<bool>("conversion");
+
+    QTest::newRow("before-marker-rename")
+        << QByteArray("linked-save-after-final-retirement-check")
+        << false << false;
+    QTest::newRow("before-marker-conversion")
+        << QByteArray("linked-save-after-final-retirement-check")
+        << false << true;
+    QTest::newRow("after-marker-rename")
+        << QByteArray("linked-save-commit-marker") << true << false;
+    QTest::newRow("after-marker-conversion")
+        << QByteArray("linked-save-commit-marker") << true << true;
+}
+
+void TestAtomicActivitySave::
+linkedSaveCommitBoundarySourceRepopulationIsRejected()
+{
+    QFETCH(QByteArray, transition);
+    QFETCH(bool, commitMarkerExpected);
+    QFETCH(bool, conversion);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+    const QByteArray originalSource("first old generation");
+    const QByteArray secondSource("second old generation");
+    const QByteArray previousBackup("previous imported backup");
+    if (conversion) {
+        specification.entries[0].sourcePath =
+            dir.filePath(QStringLiteral("import.fit"));
+        specification.entries[0].backupPath =
+            dir.filePath(QStringLiteral("import.fit.bak"));
+        specification.entries[0].keepSourceBackup = true;
+        writeFixture(
+            specification.entries.at(0).sourcePath, originalSource);
+        writeFixture(
+            specification.entries.at(0).backupPath, previousBackup);
+        writeFixture(
+            specification.entries.at(1).sourcePath, secondSource);
+    } else {
+        writeLinkedSaveJournalSources(dir.path());
+    }
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QByteArray firstStaged("staged generation 0");
+    const QByteArray secondStaged("staged generation 1");
+    writeFixture(journal->stagingPath(0), firstStaged);
+    QVERIFY2(journal->recordStaged(0, error), qPrintable(error));
+    writeFixture(journal->stagingPath(1), secondStaged);
+    QVERIFY2(journal->recordStaged(1, error), qPrintable(error));
+
+    bool hookReached = false;
+    bool sourceWritten = false;
+    setLinkedActivitySaveTransitionAction(
+        transition,
+        [&]() {
+            hookReached = true;
+            QFile source(specification.entries.at(0).sourcePath);
+            sourceWritten = source.open(
+                    QIODevice::WriteOnly | QIODevice::Truncate)
+                && source.write(originalSource) == originalSource.size()
+                && source.flush();
+        });
+
+    error.clear();
+    const bool published = journal->publishAndCommit(error);
+    clearLinkedActivitySaveTransitionAction();
+
+    QVERIFY(hookReached);
+    QVERIFY(sourceWritten);
+    QVERIFY2(!published, "Source repopulation crossed the commit boundary");
+    QVERIFY2(!error.isEmpty(), "Rejected repopulation must report an error");
+    QCOMPARE(
+        readAll(specification.entries.at(0).sourcePath), originalSource);
+    QCOMPARE(readAll(specification.entries.at(0).targetPath), firstStaged);
+    QCOMPARE(readAll(specification.entries.at(1).targetPath), secondStaged);
+    QCOMPARE(journal->hasCommitMarker(), commitMarkerExpected);
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    if (commitMarkerExpected) {
+        error.clear();
+        QVERIFY(!journal->cleanupAfterCommit(error));
+        QVERIFY2(!error.isEmpty(), "Committed cleanup must reject the source");
+        QCOMPARE(
+            readAll(specification.entries.at(0).sourcePath),
+            originalSource);
+        QVERIFY(QFileInfo::exists(journalPath));
+    }
 }
 
 void TestAtomicActivitySave::
