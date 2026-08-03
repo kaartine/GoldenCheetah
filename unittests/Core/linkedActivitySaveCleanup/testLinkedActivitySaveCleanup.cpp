@@ -34,6 +34,8 @@ public:
         return handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE;
     }
 
+    HANDLE get() const { return handle_; }
+
     void reset()
     {
         if (isValid()) ::CloseHandle(handle_);
@@ -253,6 +255,22 @@ legacyWindowsJournalFileRemovalRetries()
 
     QVERIFY2(!firstCleanup, "A pending legacy deletion was accepted");
     QVERIFY2(!error.isEmpty(), "Pending deletion must report an error");
+    FILE_STANDARD_INFO pendingInfo {};
+    QVERIFY(::GetFileInformationByHandleEx(
+        observer.get(), FileStandardInfo,
+        &pendingInfo, sizeof(pendingInfo)));
+    QVERIFY(pendingInfo.DeletePending);
+    WindowsTestHandle blockedReopen(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(manifestPath.utf16()),
+        FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr));
+    const DWORD reopenError = ::GetLastError();
+    QVERIFY(!blockedReopen.isValid());
+    QCOMPARE(reopenError, DWORD(ERROR_ACCESS_DENIED));
     QVERIFY(QFileInfo::exists(journalPath));
 
     error.clear();
@@ -262,6 +280,11 @@ legacyWindowsJournalFileRemovalRetries()
               : journal->cleanupAfterRollback(error)),
         "A still-pending legacy deletion was accepted on retry");
     QVERIFY2(!error.isEmpty(), "Pending retry must report an error");
+    pendingInfo = {};
+    QVERIFY(::GetFileInformationByHandleEx(
+        observer.get(), FileStandardInfo,
+        &pendingInfo, sizeof(pendingInfo)));
+    QVERIFY(pendingInfo.DeletePending);
     QVERIFY(QFileInfo::exists(journalPath));
 
     observer.reset();
@@ -323,6 +346,22 @@ legacyWindowsJournalDirectoryRemovalRetries()
 
     QVERIFY2(!firstCleanup, "A pending legacy directory deletion was accepted");
     QVERIFY2(!error.isEmpty(), "Pending deletion must report an error");
+    FILE_STANDARD_INFO pendingInfo {};
+    QVERIFY(::GetFileInformationByHandleEx(
+        observer.get(), FileStandardInfo,
+        &pendingInfo, sizeof(pendingInfo)));
+    QVERIFY(pendingInfo.DeletePending);
+    WindowsTestHandle blockedReopen(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(journalPath.utf16()),
+        FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr));
+    const DWORD reopenError = ::GetLastError();
+    QVERIFY(!blockedReopen.isValid());
+    QCOMPARE(reopenError, DWORD(ERROR_ACCESS_DENIED));
     QVERIFY2(
         !QDir().mkdir(journalPath),
         "The observed journal name was not left delete-pending");
@@ -334,6 +373,11 @@ legacyWindowsJournalDirectoryRemovalRetries()
               : journal->cleanupAfterRollback(error)),
         "A still-pending legacy directory deletion was accepted on retry");
     QVERIFY2(!error.isEmpty(), "Pending retry must report an error");
+    pendingInfo = {};
+    QVERIFY(::GetFileInformationByHandleEx(
+        observer.get(), FileStandardInfo,
+        &pendingInfo, sizeof(pendingInfo)));
+    QVERIFY(pendingInfo.DeletePending);
 
     observer.reset();
     error.clear();

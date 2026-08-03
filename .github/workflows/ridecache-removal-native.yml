@@ -74,6 +74,8 @@ jobs:
       - name: Build native activity tests
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $vcpkgRoot = Split-Path -Parent (Get-Command vcpkg).Source
           $gslRoot = "$vcpkgRoot/installed/x64-windows"
           if (!(Test-Path "$gslRoot/include/gsl/gsl_rng.h")) {
