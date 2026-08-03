@@ -507,6 +507,8 @@ private slots:
     void linkedSaveNondurableRetirementStaysRetryable();
     void linkedSavePartialRetirementKeepsRecoveryJournal();
     void linkedSaveIncompleteRetirementBlocksFreshRecovery();
+    void linkedSaveRetirementIntentControlFiles_data();
+    void linkedSaveRetirementIntentControlFiles();
 #ifdef Q_OS_WIN
     void linkedSavePendingWindowsRetirementRetriesAfterHandleClose();
 #endif
@@ -3872,6 +3874,90 @@ linkedSaveIncompleteRetirementBlocksFreshRecovery()
     QVERIFY(QFileInfo::exists(journalPath));
     QVERIFY(QFileInfo::exists(retainedQuarantine));
 #endif
+}
+
+void TestAtomicActivitySave::
+linkedSaveRetirementIntentControlFiles_data()
+{
+    QTest::addColumn<QString>("kind");
+    QTest::addColumn<bool>("inPlace");
+    QTest::addColumn<bool>("recoverable");
+    QTest::addColumn<QString>("errorFragment");
+
+    QTest::newRow("valid-pending")
+        << QStringLiteral("valid") << false << false
+        << QStringLiteral("manual recovery");
+    QTest::newRow("invalid-contents")
+        << QStringLiteral("invalid-contents") << false << false
+        << QStringLiteral("invalid source-retirement intent");
+    QTest::newRow("out-of-range")
+        << QStringLiteral("out-of-range") << false << false
+        << QStringLiteral("index is invalid");
+    QTest::newRow("in-place")
+        << QStringLiteral("valid") << true << false
+        << QStringLiteral("does not retire its source");
+    QTest::newRow("atomic-temporary")
+        << QStringLiteral("temporary") << false << true << QString();
+    QTest::newRow("lookalike")
+        << QStringLiteral("lookalike") << false << false
+        << QStringLiteral("unknown file");
+}
+
+void TestAtomicActivitySave::
+linkedSaveRetirementIntentControlFiles()
+{
+    QFETCH(QString, kind);
+    QFETCH(bool, inPlace);
+    QFETCH(bool, recoverable);
+    QFETCH(QString, errorFragment);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+    if (inPlace) {
+        specification.entries[0].targetPath =
+            specification.entries.at(0).sourcePath;
+    }
+
+    QString error;
+    std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString id = QFileInfo(journalPath).fileName();
+    QString name = QStringLiteral("retirement-0000.pending");
+    QByteArray contents = id.toLatin1() + ":0\n";
+    if (kind == QStringLiteral("invalid-contents")) {
+        contents = QByteArray("forged retirement intent\n");
+    } else if (kind == QStringLiteral("out-of-range")) {
+        name = QStringLiteral("retirement-9999.pending");
+        contents = id.toLatin1() + ":9999\n";
+    } else if (kind == QStringLiteral("temporary")) {
+        name = QStringLiteral(
+            ".retirement-0000.pending.ABC123.tmp");
+        contents = QByteArray("incomplete temporary data");
+    } else if (kind == QStringLiteral("lookalike")) {
+        name = QStringLiteral("retirement-0000.pending.extra");
+    }
+    writeFixture(QDir(journalPath).filePath(name), contents);
+    journal.reset();
+
+    error.clear();
+    const bool reconciled =
+        LinkedActivitySave::Journal::reconcileAll(dir.path(), error);
+
+    QCOMPARE(reconciled, recoverable);
+    if (recoverable) {
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QVERIFY(!QFileInfo::exists(journalPath));
+    } else {
+        QVERIFY2(
+            error.contains(errorFragment, Qt::CaseInsensitive),
+            qPrintable(error));
+        QVERIFY(QFileInfo::exists(journalPath));
+    }
 }
 
 #ifdef Q_OS_WIN
