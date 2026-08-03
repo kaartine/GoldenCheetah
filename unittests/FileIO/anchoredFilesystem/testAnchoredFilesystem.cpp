@@ -213,8 +213,11 @@ private slots:
     void permitsOrdinaryQtReadsWhilePinned();
     void permitsOrdinaryQtReadsOfPinnedCopy();
     void newAtomicWriterHandsOffStagingPin();
-    void newAtomicWriterRejectsPreBridgeReplacement();
+    void newAtomicWriterRejectsNameReplacement_data();
+    void newAtomicWriterRejectsNameReplacement();
+    void newAtomicWriterRejectsPrePublishReplacement();
 #ifdef Q_OS_WIN
+    void newAtomicWriterBlocksWindowsPreBridgeReplacement();
     void newAtomicWriterRetainsWindowsStagingWhenHandoffIsBlocked();
     void newAtomicWriterRejectsWindowsHandoffRace_data();
     void newAtomicWriterRejectsWindowsHandoffRace();
@@ -439,8 +442,22 @@ void TestAnchoredFilesystem::newAtomicWriterHandsOffStagingPin()
     QCOMPARE(readFixture(target), contents);
 }
 
-void TestAnchoredFilesystem::newAtomicWriterRejectsPreBridgeReplacement()
+void TestAnchoredFilesystem::newAtomicWriterRejectsNameReplacement_data()
 {
+    QTest::addColumn<QString>("transition");
+
+#ifndef Q_OS_WIN
+    QTest::newRow("before-bridge")
+        << QStringLiteral("writer-pin-identity-captured");
+#endif
+    QTest::newRow("after-writer-release")
+        << QStringLiteral("output-pin-writer-released");
+}
+
+void TestAnchoredFilesystem::newAtomicWriterRejectsNameReplacement()
+{
+    QFETCH(QString, transition);
+
     QTemporaryDir root;
     QVERIFY(root.isValid());
     const QString target = root.filePath(QStringLiteral("activity.json"));
@@ -462,12 +479,11 @@ void TestAnchoredFilesystem::newAtomicWriterRejectsPreBridgeReplacement()
     QVERIFY2(writer.open(), qPrintable(writer.errorString()));
     QCOMPARE(writer.write(contents), qint64(contents.size()));
     QVERIFY2(writer.flush(), qPrintable(writer.errorString()));
-    filesystemAction = [&](const char *transition,
+    filesystemAction = [&](const char *event,
                            const QString &primary,
                            const QString &) {
         if (hookReached
-            || qstrcmp(
-                transition, "writer-pin-identity-captured") != 0) {
+            || QString::fromLatin1(event) != transition) {
             return;
         }
         hookReached = true;
@@ -489,10 +505,102 @@ void TestAnchoredFilesystem::newAtomicWriterRejectsPreBridgeReplacement()
     QCOMPARE(readFixture(retained), contents);
     QVERIFY(writer.errorString().contains(
         QStringLiteral("retained"), Qt::CaseInsensitive));
+    const QString expectedReason = transition
+            == QStringLiteral("writer-pin-identity-captured")
+        ? QStringLiteral("before it was pinned")
+        : QStringLiteral("while its writer was released");
+    QVERIFY(writer.errorString().contains(expectedReason));
     QVERIFY(!writer.errorString().contains(stagingPath));
 }
 
+void TestAnchoredFilesystem::newAtomicWriterRejectsPrePublishReplacement()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString target = root.filePath(QStringLiteral("activity.json"));
+    const QString retained = root.filePath(QStringLiteral("retained.tmp"));
+    const QByteArray contents("complete activity");
+    bool hookReached = false;
+    bool replacementCreated = false;
+    QString stagingPath;
+
+    NewAtomicFileWriter writer(target);
+    QVERIFY2(writer.open(), qPrintable(writer.errorString()));
+    QCOMPARE(writer.write(contents), qint64(contents.size()));
+    QVERIFY2(writer.flush(), qPrintable(writer.errorString()));
+    filesystemAction = [&](const char *transition,
+                           const QString &primary,
+                           const QString &) {
+        if (hookReached
+            || qstrcmp(transition, "atomic-publish-starting") != 0) {
+            return;
+        }
+        hookReached = true;
+        stagingPath = primary;
+        if (!renameFixture(primary, retained)) return;
+        writeFixture(primary, contents);
+        replacementCreated = true;
+    };
+
+    const bool committed = writer.commit();
+    filesystemAction = {};
+
+    QVERIFY(hookReached);
+    QVERIFY(replacementCreated);
+    QVERIFY(!committed);
+    QVERIFY(!QFileInfo::exists(target));
+    QCOMPARE(readFixture(stagingPath), contents);
+    QCOMPARE(readFixture(retained), contents);
+    QVERIFY(writer.errorString().contains(
+        QStringLiteral("replaced"), Qt::CaseInsensitive));
+}
+
 #ifdef Q_OS_WIN
+
+void TestAnchoredFilesystem::
+newAtomicWriterBlocksWindowsPreBridgeReplacement()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString target = root.filePath(QStringLiteral("activity.json"));
+    const QString retained = root.filePath(QStringLiteral("retained.tmp"));
+    const QByteArray contents("complete activity");
+    bool hookReached = false;
+    bool renamed = false;
+    DWORD renameError = ERROR_SUCCESS;
+
+    NewAtomicFileWriter writer(target);
+    QVERIFY2(writer.open(), qPrintable(writer.errorString()));
+    QCOMPARE(writer.write(contents), qint64(contents.size()));
+    QVERIFY2(writer.flush(), qPrintable(writer.errorString()));
+    filesystemAction = [&](const char *transition,
+                           const QString &primary,
+                           const QString &) {
+        if (hookReached
+            || qstrcmp(
+                transition, "writer-pin-identity-captured") != 0) {
+            return;
+        }
+        hookReached = true;
+        const QString nativeSource = QDir::toNativeSeparators(primary);
+        const QString nativeTarget = QDir::toNativeSeparators(retained);
+        renamed = ::MoveFileExW(
+            reinterpret_cast<LPCWSTR>(nativeSource.utf16()),
+            reinterpret_cast<LPCWSTR>(nativeTarget.utf16()),
+            MOVEFILE_WRITE_THROUGH);
+        renameError = renamed ? ERROR_SUCCESS : ::GetLastError();
+    };
+
+    const bool committed = writer.commit();
+    filesystemAction = {};
+
+    QVERIFY(hookReached);
+    QVERIFY(!renamed);
+    QCOMPARE(renameError, DWORD(ERROR_SHARING_VIOLATION));
+    QVERIFY2(committed, qPrintable(writer.errorString()));
+    QCOMPARE(readFixture(target), contents);
+    QVERIFY(!QFileInfo::exists(retained));
+}
 
 void TestAnchoredFilesystem::
 newAtomicWriterRetainsWindowsStagingWhenHandoffIsBlocked()
@@ -536,7 +644,10 @@ newAtomicWriterRetainsWindowsStagingWhenHandoffIsBlocked()
     QVERIFY(concurrentWriter && concurrentWriter->isValid());
     QVERIFY(!committed);
     QVERIFY(writer.errorString().contains(
+        QStringLiteral("system error 32"), Qt::CaseInsensitive));
+    QVERIFY(writer.errorString().contains(
         QStringLiteral("retained"), Qt::CaseInsensitive));
+    QVERIFY(!writer.errorString().contains(stagingPath));
     QVERIFY(!QFileInfo::exists(target));
     concurrentWriter.reset();
     QVERIFY(QFileInfo::exists(stagingPath));
@@ -546,16 +657,23 @@ newAtomicWriterRetainsWindowsStagingWhenHandoffIsBlocked()
 void TestAnchoredFilesystem::newAtomicWriterRejectsWindowsHandoffRace_data()
 {
     QTest::addColumn<QString>("race");
+    QTest::addColumn<QString>("transition");
 
     QTest::newRow("path-replacement")
-        << QStringLiteral("replace");
+        << QStringLiteral("replace")
+        << QStringLiteral("output-pin-writer-released");
     QTest::newRow("same-object-rewrite")
-        << QStringLiteral("rewrite");
+        << QStringLiteral("rewrite")
+        << QStringLiteral("output-pin-writer-released");
+    QTest::newRow("same-object-rewrite-before-bridge")
+        << QStringLiteral("rewrite")
+        << QStringLiteral("writer-pin-identity-captured");
 }
 
 void TestAnchoredFilesystem::newAtomicWriterRejectsWindowsHandoffRace()
 {
     QFETCH(QString, race);
+    QFETCH(QString, transition);
 
     QTemporaryDir root;
     QVERIFY(root.isValid());
@@ -579,11 +697,11 @@ void TestAnchoredFilesystem::newAtomicWriterRejectsWindowsHandoffRace()
     QVERIFY2(writer.open(), qPrintable(writer.errorString()));
     QCOMPARE(writer.write(contents), qint64(contents.size()));
     QVERIFY2(writer.flush(), qPrintable(writer.errorString()));
-    filesystemAction = [&](const char *transition,
+    filesystemAction = [&](const char *event,
                            const QString &primary,
                            const QString &) {
         if (hookReached
-            || qstrcmp(transition, "output-pin-writer-released") != 0) {
+            || QString::fromLatin1(event) != transition) {
             return;
         }
         hookReached = true;
@@ -626,8 +744,14 @@ void TestAnchoredFilesystem::newAtomicWriterRejectsWindowsHandoffRace()
     QVERIFY(raceApplied);
     QVERIFY(!committed);
     QCOMPARE(publisherCalls, 0);
+    const QString expectedReason = transition
+            == QStringLiteral("writer-pin-identity-captured")
+        ? QStringLiteral("before it was pinned")
+        : QStringLiteral("while its writer was released");
+    QVERIFY(writer.errorString().contains(expectedReason));
     QVERIFY(writer.errorString().contains(
         QStringLiteral("retained"), Qt::CaseInsensitive));
+    QVERIFY(!writer.errorString().contains(stagingPath));
     QVERIFY(!QFileInfo::exists(target));
     QCOMPARE(readFixture(stagingPath), replacement);
     if (race == QStringLiteral("replace")) {
