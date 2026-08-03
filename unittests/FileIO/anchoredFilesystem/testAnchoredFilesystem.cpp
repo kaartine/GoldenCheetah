@@ -23,7 +23,9 @@
 #include <sys/xattr.h>
 #endif
 #if defined(Q_OS_MACOS)
+#include <membership.h>
 #include <sys/acl.h>
+#include <uuid/uuid.h>
 #endif
 #endif
 
@@ -103,25 +105,51 @@ bool linuxAclXattrPresent(
 #endif
 
 #ifdef Q_OS_MACOS
-bool installEmptyExtendedAcl(const QString &path)
+bool installCurrentUserExtendedAcl(const QString &path)
 {
     const int descriptor = ::open(
         QFile::encodeName(path).constData(),
         O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (descriptor < 0) return false;
+
+    uuid_t userUuid;
+    if (::mbr_uid_to_uuid(::geteuid(), userUuid) != 0) {
+        ::close(descriptor);
+        return false;
+    }
+
     acl_t acl = ::acl_init(1);
     if (!acl) {
         ::close(descriptor);
         return false;
     }
-    const bool installed = ::acl_set_fd_np(
-        descriptor, acl, ACL_TYPE_EXTENDED) == 0;
+
+    acl_entry_t entry = nullptr;
+    acl_permset_t permissions = nullptr;
+    acl_flagset_t flags = nullptr;
+    const bool installed =
+        ::acl_create_entry(&acl, &entry) == 0
+        && ::acl_set_tag_type(entry, ACL_EXTENDED_ALLOW) == 0
+        && ::acl_set_qualifier(entry, userUuid) == 0
+        && ::acl_get_permset(entry, &permissions) == 0
+        && ::acl_clear_perms(permissions) == 0
+        && ::acl_add_perm(permissions, ACL_LIST_DIRECTORY) == 0
+        && ::acl_set_permset(entry, permissions) == 0
+        && ::acl_get_flagset_np(entry, &flags) == 0
+        && ::acl_clear_flags_np(flags) == 0
+        && ::acl_set_flagset_np(entry, flags) == 0
+        && ::acl_set_fd_np(
+            descriptor, acl, ACL_TYPE_EXTENDED) == 0;
     ::acl_free(acl);
+
     errno = 0;
     acl = installed
         ? ::acl_get_fd_np(descriptor, ACL_TYPE_EXTENDED)
         : nullptr;
-    const bool present = acl != nullptr;
+    acl_entry_t retainedEntry = nullptr;
+    const bool present = acl
+        && ::acl_get_entry(
+            acl, ACL_FIRST_ENTRY, &retainedEntry) == 0;
     if (acl) ::acl_free(acl);
     ::close(descriptor);
     return installed && present;
@@ -2328,7 +2356,7 @@ void TestAnchoredFilesystem::hardensPrivateDirectory()
             | QFileDevice::ExeOther));
 #endif
 #ifdef Q_OS_MACOS
-    QVERIFY(installEmptyExtendedAcl(path));
+    QVERIFY(installCurrentUserExtendedAcl(path));
 #endif
     DirectoryAnchor directory = openDirectory(path);
     QString error;
