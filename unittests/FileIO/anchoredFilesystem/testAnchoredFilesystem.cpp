@@ -200,6 +200,7 @@ private slots:
     void permitsOrdinaryQtReadsOfPinnedCopy();
 #ifdef Q_OS_WIN
     void newAtomicWriterHandsOffWindowsStagingPin();
+    void newAtomicWriterRetainsWindowsStagingWhenHandoffIsBlocked();
     void outputFilesDenyConcurrentWindowsWrites_data();
     void outputFilesDenyConcurrentWindowsWrites();
     void outputFilesCanBeRepinned_data();
@@ -420,6 +421,55 @@ void TestAnchoredFilesystem::newAtomicWriterHandsOffWindowsStagingPin()
     QVERIFY2(writer.flush(), qPrintable(writer.errorString()));
     QVERIFY2(writer.commit(), qPrintable(writer.errorString()));
     QCOMPARE(readFixture(target), contents);
+}
+
+void TestAnchoredFilesystem::
+newAtomicWriterRetainsWindowsStagingWhenHandoffIsBlocked()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString target = root.filePath(QStringLiteral("activity.json"));
+    const QByteArray contents("recoverable activity");
+    bool hookReached = false;
+    QString stagingPath;
+    std::unique_ptr<WindowsTestHandle> concurrentWriter;
+
+    NewAtomicFileWriter writer(target);
+    QVERIFY2(writer.open(), qPrintable(writer.errorString()));
+    QCOMPARE(writer.write(contents), qint64(contents.size()));
+    QVERIFY2(writer.flush(), qPrintable(writer.errorString()));
+    filesystemAction = [&](const char *transition,
+                           const QString &primary,
+                           const QString &) {
+        if (hookReached
+            || qstrcmp(transition, "output-pin-writer-released") != 0) {
+            return;
+        }
+        hookReached = true;
+        stagingPath = primary;
+        concurrentWriter = std::make_unique<WindowsTestHandle>(
+            ::CreateFileW(
+                reinterpret_cast<LPCWSTR>(primary.utf16()),
+                GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                nullptr,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                nullptr));
+    };
+
+    const bool committed = writer.commit();
+    filesystemAction = {};
+
+    QVERIFY(hookReached);
+    QVERIFY(concurrentWriter && concurrentWriter->isValid());
+    QVERIFY(!committed);
+    QVERIFY(writer.errorString().contains(
+        QStringLiteral("retained"), Qt::CaseInsensitive));
+    QVERIFY(!QFileInfo::exists(target));
+    concurrentWriter.reset();
+    QVERIFY(QFileInfo::exists(stagingPath));
+    QCOMPARE(readFixture(stagingPath), contents);
 }
 
 void TestAnchoredFilesystem::
