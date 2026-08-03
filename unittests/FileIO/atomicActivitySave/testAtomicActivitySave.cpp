@@ -4908,6 +4908,12 @@ linkedSaveLegacyWindowsJournalFileRemovalRetries()
         : journal->cleanupAfterRollback(error);
     forceLegacyWindowsDelete = false;
 
+    if (!externalObserver) {
+        QVERIFY2(firstCleanup, qPrintable(error));
+        QVERIFY(!QFileInfo::exists(journalPath));
+        QVERIFY(!journal->hasCommitMarker());
+        return;
+    }
     QVERIFY2(!firstCleanup, "A pending legacy deletion was accepted");
     QVERIFY2(!error.isEmpty(), "Pending deletion must report an error");
     QVERIFY(QFileInfo::exists(journalPath));
