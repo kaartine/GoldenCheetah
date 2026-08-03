@@ -596,6 +596,8 @@ private slots:
     void staleQLockFileRemovalGuardDoesNotPoisonReconcile();
     void staleJournalQLockFileRemovalGuardDoesNotPoisonReconcile_data();
     void staleJournalQLockFileRemovalGuardDoesNotPoisonReconcile();
+    void unsafeJournalQLockFileRemovalGuardEntriesRemainRejected_data();
+    void unsafeJournalQLockFileRemovalGuardEntriesRemainRejected();
     void unsafeQLockFileRemovalGuardEntriesRemainRejected_data();
     void unsafeQLockFileRemovalGuardEntriesRemainRejected();
     void pendingLinkedSaveJournalBlocksDeletionTransaction();
@@ -3428,14 +3430,17 @@ void TestRideCacheRemoval::
 staleJournalQLockFileRemovalGuardDoesNotPoisonReconcile_data()
 {
     QTest::addColumn<int>("suffixCount");
-    QTest::newRow("single-rmlock") << 1;
-    QTest::newRow("nested-rmlock") << 2;
+    QTest::addColumn<bool>("removeManifest");
+    QTest::newRow("single-rmlock") << 1 << false;
+    QTest::newRow("nested-rmlock") << 2 << false;
+    QTest::newRow("pre-manifest-rmlock") << 1 << true;
 }
 
 void TestRideCacheRemoval::
 staleJournalQLockFileRemovalGuardDoesNotPoisonReconcile()
 {
     QFETCH(int, suffixCount);
+    QFETCH(bool, removeManifest);
     Fixture fixture;
     QVERIFY(fixture.initialize());
     const QString root = fixture.temporary.path();
@@ -3454,6 +3459,10 @@ staleJournalQLockFileRemovalGuardDoesNotPoisonReconcile()
             QStringLiteral(".manifest.json.lock"), suffixCount)),
         QByteArray("stale journal QLockFile removal guard"));
     journal.reset();
+    if (removeManifest) {
+        QVERIFY(QFile::remove(
+            QDir(journalPath).filePath(QStringLiteral("manifest.json"))));
+    }
 
     QVERIFY2(
         LinkedActivityRemoval::Journal::reconcileAll(root, error),
@@ -3463,6 +3472,45 @@ staleJournalQLockFileRemovalGuardDoesNotPoisonReconcile()
     QVERIFY2(
         LinkedActivityRemoval::Journal::reconcileAll(root, error),
         qPrintable(error));
+}
+
+void TestRideCacheRemoval::
+unsafeJournalQLockFileRemovalGuardEntriesRemainRejected_data()
+{
+    QTest::addColumn<QString>("entryName");
+    QTest::newRow("unknown-lock-target")
+        << QStringLiteral(".peer.old.lock.rmlock");
+    QTest::newRow("suffix-lookalike")
+        << QStringLiteral(".manifest.json.lock.rmlock.tmp");
+}
+
+void TestRideCacheRemoval::
+unsafeJournalQLockFileRemovalGuardEntriesRemainRejected()
+{
+    QFETCH(QString, entryName);
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString root = fixture.temporary.path();
+    const QString sourcePath = fixture.activityPath(firstName());
+    writeFixture(sourcePath, QByteArray("source"));
+
+    QString error;
+    std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {root, sourcePath, fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString entryPath = QDir(journalPath).filePath(entryName);
+    writeFixture(entryPath, QByteArray("lookalike"));
+    journal.reset();
+
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        error.clear();
+        QVERIFY(!LinkedActivityRemoval::Journal::reconcileAll(root, error));
+        QVERIFY2(!error.isEmpty(), qPrintable(entryName));
+        QCOMPARE(readBytes(entryPath), QByteArray("lookalike"));
+    }
 }
 
 void TestRideCacheRemoval::
