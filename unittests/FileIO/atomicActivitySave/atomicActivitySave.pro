@@ -46,7 +46,10 @@ INCLUDEPATH += ../../../src \
                ../../../src/Train \
                ../../../qwt/src \
                ../../../contrib/qzip \
+               $${GSL_INCLUDES} \
                $${ZLIB_INCLUDES}
+
+LIBS += $${GSL_LIBS}
 
 isEmpty(ZLIB_LIBS) {
     LIBS += -lz

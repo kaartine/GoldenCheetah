@@ -92,6 +92,8 @@ jobs:
           New-Item -ItemType Directory build-atomic-activity-save | Out-Null
           Set-Location build-atomic-activity-save
           qmake ../unittests/FileIO/atomicActivitySave/atomicActivitySave.pro `
+            "GSL_INCLUDES=$gslRoot/include" `
+            "GSL_LIBS=-L$gslRoot/lib -lgsl -lgslcblas" `
             "ZLIB_INCLUDES=$zlibRoot/include" `
             "ZLIB_LIBS=-L$zlibRoot/lib -lzlib" `
             "QMAKE_LEX=win_flex --wincompat" `
@@ -146,6 +148,8 @@ jobs:
           mkdir build-atomic-activity-save
           cd build-atomic-activity-save
           qmake ../unittests/FileIO/atomicActivitySave/atomicActivitySave.pro \
+            "GSL_INCLUDES=$gsl_root/include" \
+            "GSL_LIBS=-L$gsl_root/lib -lgsl -lgslcblas" \
             "QMAKE_LEX=$flex_root/bin/flex" \
             "QMAKE_YACC=$bison_root/bin/bison --file-prefix=y -t" \
             "QMAKE_MOVE=cp"
