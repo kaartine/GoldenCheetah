@@ -15,6 +15,8 @@
 #include <QTemporaryDir>
 
 #include <cstdlib>
+#include <functional>
+#include <utility>
 
 void resetAtomicActivitySaveProcessorStub();
 void setAtomicActivitySaveProcessorFailure(bool enabled);
@@ -26,8 +28,35 @@ void setAtomicActivitySaveSetRideAction(
 void setAtomicActivitySaveCloseAction(
     RideItem *rideItem, std::function<void()> action);
 
+namespace {
+
+QByteArray linkedActivitySaveActionTransition;
+std::function<void()> linkedActivitySaveAction;
+
+} // namespace
+
+void setLinkedActivitySaveTransitionAction(
+    const QByteArray &transition,
+    const std::function<void()> &action)
+{
+    linkedActivitySaveActionTransition = transition;
+    linkedActivitySaveAction = action;
+}
+
+void clearLinkedActivitySaveTransitionAction()
+{
+    linkedActivitySaveActionTransition.clear();
+    linkedActivitySaveAction = {};
+}
+
 void linkedActivitySaveTransitionReached(const char *transition)
 {
+    if (linkedActivitySaveAction
+        && linkedActivitySaveActionTransition == transition) {
+        std::function<void()> action = std::move(linkedActivitySaveAction);
+        linkedActivitySaveActionTransition.clear();
+        action();
+    }
     const QByteArray requested = qgetenv(
         "GC_LINKED_ACTIVITY_SAVE_CRASH_PHASE");
     if (requested.isEmpty() || requested != transition) return;
@@ -392,6 +421,8 @@ private slots:
     void linkedSaveJournalLocksCompleteProductionPathSet();
     void linkedSaveJournalRejectsUnsafePathGraphs_data();
     void linkedSaveJournalRejectsUnsafePathGraphs();
+    void linkedSaveSourceRetirementSubstitutionIsRejected_data();
+    void linkedSaveSourceRetirementSubstitutionIsRejected();
     void linkedSavePublicationPreservesExternalChanges_data();
     void linkedSavePublicationPreservesExternalChanges();
     void linkedSaveRecoveryRejectsUnsafeJournalEntries_data();
@@ -454,6 +485,7 @@ private slots:
 
 void TestAtomicActivitySave::cleanup()
 {
+    clearLinkedActivitySaveTransitionAction();
     resetAtomicActivitySaveProcessorStub();
 }
 
@@ -3438,6 +3470,115 @@ linkedSaveJournalRejectsUnsafePathGraphs()
     QVERIFY(!journalRoot.exists()
         || journalRoot.entryList(
             QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot).isEmpty());
+}
+
+void TestAtomicActivitySave::
+linkedSaveSourceRetirementSubstitutionIsRejected_data()
+{
+    QTest::addColumn<bool>("conversion");
+
+    QTest::newRow("rename") << false;
+    QTest::newRow("conversion") << true;
+}
+
+void TestAtomicActivitySave::
+linkedSaveSourceRetirementSubstitutionIsRejected()
+{
+    QFETCH(bool, conversion);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+    const QByteArray originalSource("first old generation");
+    const QByteArray secondSource("second old generation");
+    const QByteArray previousBackup("previous imported backup");
+    const QByteArray sentinel("concurrent source sentinel");
+    if (conversion) {
+        specification.entries[0].sourcePath =
+            dir.filePath(QStringLiteral("import.fit"));
+        specification.entries[0].backupPath =
+            dir.filePath(QStringLiteral("import.fit.bak"));
+        specification.entries[0].keepSourceBackup = true;
+        writeFixture(
+            specification.entries.at(0).sourcePath, originalSource);
+        writeFixture(
+            specification.entries.at(0).backupPath, previousBackup);
+        writeFixture(
+            specification.entries.at(1).sourcePath, secondSource);
+    } else {
+        writeLinkedSaveJournalSources(dir.path());
+    }
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QByteArray firstStaged("staged generation 0");
+    const QByteArray secondStaged("staged generation 1");
+    writeFixture(journal->stagingPath(0), firstStaged);
+    QVERIFY2(journal->recordStaged(0, error), qPrintable(error));
+    writeFixture(journal->stagingPath(1), secondStaged);
+    QVERIFY2(journal->recordStaged(1, error), qPrintable(error));
+
+    const QString sourcePath = specification.entries.at(0).sourcePath;
+    const QString retainedPath = sourcePath + QStringLiteral(".retained");
+    bool hookReached = false;
+    bool sourceRenamed = false;
+    bool sentinelWritten = false;
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-source-retirement-validated"),
+        [&]() {
+            hookReached = true;
+            sourceRenamed = QFile::rename(sourcePath, retainedPath);
+            if (!sourceRenamed) return;
+            QFile replacement(sourcePath);
+            sentinelWritten = replacement.open(
+                    QIODevice::WriteOnly | QIODevice::Truncate)
+                && replacement.write(sentinel) == sentinel.size()
+                && replacement.flush();
+        });
+
+    error.clear();
+    const bool published = journal->publishAndCommit(error);
+    clearLinkedActivitySaveTransitionAction();
+
+    QVERIFY(hookReached);
+    QVERIFY(sourceRenamed);
+    QVERIFY(sentinelWritten);
+    QVERIFY2(!published, "A substituted source pathname was committed");
+    QVERIFY2(!error.isEmpty(), "A rejected substitution must report an error");
+    QCOMPARE(readAll(sourcePath), sentinel);
+    QCOMPARE(readAll(retainedPath), originalSource);
+    QVERIFY(!journal->hasCommitMarker());
+    QVERIFY(!QFileInfo::exists(
+        QDir(journalPath).filePath(QStringLiteral("COMMITTED"))));
+    QVERIFY(QFileInfo::exists(journalPath));
+    QVERIFY(QFileInfo::exists(
+        QDir(journalPath).filePath(QStringLiteral("manifest.json"))));
+    QVERIFY(QFileInfo::exists(
+        QDir(journalPath).filePath(QStringLiteral("source-0000.old"))));
+    QVERIFY(QFileInfo::exists(
+        QDir(journalPath).filePath(QStringLiteral("new-0000.stage"))));
+    QCOMPARE(
+        readAll(specification.entries.at(0).targetPath), firstStaged);
+    QCOMPARE(
+        readAll(specification.entries.at(1).targetPath), secondStaged);
+    QCOMPARE(
+        readAll(specification.entries.at(1).sourcePath), secondSource);
+    if (conversion) {
+        QCOMPARE(
+            readAll(specification.entries.at(0).backupPath),
+            originalSource);
+        QCOMPARE(
+            readAll(QDir(journalPath).filePath(
+                QStringLiteral("backup-0000.old"))),
+            previousBackup);
+    } else {
+        QVERIFY(!QFileInfo::exists(
+            specification.entries.at(0).backupPath));
+    }
 }
 
 void TestAtomicActivitySave::

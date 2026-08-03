@@ -1239,7 +1239,10 @@ bool inspectJournalDirectory(
 }
 
 bool removeObservedFile(
-    const QString &path, const ObservedFile &observed, QString &error)
+    const QString &path,
+    const ObservedFile &observed,
+    QString &error,
+    const char *validatedTransition = nullptr)
 {
     if (!observed.exists) return true;
     ObservedFile current;
@@ -1249,6 +1252,13 @@ bool removeObservedFile(
             "A transaction file changed before it could be removed");
         return false;
     }
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+    if (validatedTransition) {
+        linkedActivitySaveTransitionReached(validatedTransition);
+    }
+#else
+    Q_UNUSED(validatedTransition)
+#endif
     if (!QFile::remove(path)) {
         error = QStringLiteral("Cannot remove a transaction file: %1").arg(path);
         return false;
@@ -1259,7 +1269,8 @@ bool removeObservedFile(
 bool removeExpectedFile(
     const QString &path,
     const AtomicFileSnapshot &expected,
-    QString &error)
+    QString &error,
+    const char *validatedTransition = nullptr)
 {
     ObservedFile observed;
     if (!inspectRegularFile(path, observed, error)) return false;
@@ -1268,7 +1279,8 @@ bool removeExpectedFile(
             "A transaction file changed before it could be removed");
         return false;
     }
-    return removeObservedFile(path, observed, error);
+    return removeObservedFile(
+        path, observed, error, validatedTransition);
 }
 
 bool observeProductionEntry(
@@ -1589,7 +1601,10 @@ bool publishNewGeneration(
         if (atomicFilePathKey(paths.source)
                 != atomicFilePathKey(paths.target)) {
             if (!removeExpectedFile(
-                    paths.source, entry.source.contents, error)) {
+                    paths.source,
+                    entry.source.contents,
+                    error,
+                    "linked-save-source-retirement-validated")) {
                 return false;
             }
 #ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
