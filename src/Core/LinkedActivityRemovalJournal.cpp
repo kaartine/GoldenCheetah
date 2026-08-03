@@ -18,6 +18,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
+#include <QRegularExpression>
 #include <QSet>
 #include <QUuid>
 
@@ -461,10 +462,9 @@ bool transactionNamespaceIsReady(
             QDir::Name);
         for (const QFileInfo &entry : entries) {
             const QString name = entry.fileName();
+            QString lockedId;
             if (entry.isFile() && !entry.isSymLink()
-                && name.startsWith(QLatin1Char('.'))
-                && name.endsWith(QStringLiteral(".lock"))) {
-                const QString lockedId = name.mid(1, name.size() - 6);
+                && atomicFileLockTargetName(name, lockedId)) {
                 if (validTransactionId(lockedId)) continue;
             }
 
@@ -1436,16 +1436,20 @@ bool resolveManifestPaths(
 
 qint64 knownTemporaryMaximumSize(const QString &name)
 {
-    const auto atomicTemporary = [&](const QString &base) {
-        return name.startsWith(QLatin1Char('.') + base + QLatin1Char('.'))
-            && name.endsWith(QStringLiteral(".tmp"));
-    };
-    if (atomicTemporary(Detail::ManifestName))
-        return Detail::MaximumManifestSize;
-    if (atomicTemporary(Detail::CommitMarkerName))
-        return Detail::MaximumCommitMarkerSize;
-    if (name == QStringLiteral(".manifest.json.lock")
-        || name == QStringLiteral(".COMMITTED.lock")) {
+    static const QRegularExpression atomicTemporary(
+        QStringLiteral(
+            "^\\.(manifest\\.json|COMMITTED)\\.[A-Za-z0-9]+\\.tmp$"));
+    const QRegularExpressionMatch temporaryMatch =
+        atomicTemporary.match(name);
+    if (temporaryMatch.hasMatch()) {
+        return temporaryMatch.captured(1) == Detail::ManifestName
+            ? Detail::MaximumManifestSize
+            : Detail::MaximumCommitMarkerSize;
+    }
+    QString lockTarget;
+    if (atomicFileLockTargetName(name, lockTarget)
+        && (lockTarget == Detail::ManifestName
+            || lockTarget == Detail::CommitMarkerName)) {
         return Detail::MaximumLockFileSize;
     }
     return -1;
@@ -3255,10 +3259,9 @@ bool Journal::reconcileAll(const QString &athleteRoot, QString &error)
     QStringList failures;
     for (const QFileInfo &entry : entries) {
         const QString name = entry.fileName();
+        QString lockedId;
         if (entry.isFile() && !entry.isSymLink()
-            && name.startsWith(QLatin1Char('.'))
-            && name.endsWith(QStringLiteral(".lock"))) {
-            const QString lockedId = name.mid(1, name.size() - 6);
+            && atomicFileLockTargetName(name, lockedId)) {
             if (validTransactionId(lockedId)) continue;
         }
         if (entry.isSymLink() || !entry.isDir()
