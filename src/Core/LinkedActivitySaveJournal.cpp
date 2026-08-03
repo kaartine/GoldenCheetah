@@ -2356,7 +2356,15 @@ bool restoreOldGeneration(
             return false;
         }
 
-        if (!snapshotMatches(source, entry.source.contents)
+        const bool sourceNeedsRestore =
+            !snapshotMatches(source, entry.source.contents);
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+        if (sourceNeedsRestore) {
+            linkedActivitySaveTransitionReached(
+                "linked-save-before-source-restore");
+        }
+#endif
+        if (sourceNeedsRestore
             && !copyExpectedFileAtomically(
                 paths.sourceCopy,
                 paths.source,

@@ -1,5 +1,6 @@
 #include <QtTest>
 
+#include "AnchoredFileSystem.h"
 #include "AtomicFileWriter.h"
 #include "JsonRideFile.h"
 #include "LinkedActivitySaveJournal.h"
@@ -525,6 +526,7 @@ private slots:
     void linkedSaveCommitBoundarySourceRepopulationIsRejected();
     void linkedSaveRollbackPreservesRecreatedRetiredSource_data();
     void linkedSaveRollbackPreservesRecreatedRetiredSource();
+    void linkedSaveRollbackPublicationRacePreservesNewSource();
     void linkedSaveMovedLiveJournalCannotClaimCleanup();
     void linkedSaveRecoveryRejectsStagedSourceAtOldName();
     void linkedSaveRecoveryRejectsRecreatedOriginalSource_data();
@@ -4631,6 +4633,16 @@ linkedSaveCommitBoundarySourceRepopulationIsRejected()
 
     if (commitMarkerExpected) {
         error.clear();
+        QVERIFY2(
+            !journal->publishAndCommit(error),
+            "A committed retry ignored a repopulated source");
+        QVERIFY2(!error.isEmpty(), "Rejected retry must report an error");
+        QCOMPARE(
+            readAll(specification.entries.at(0).sourcePath),
+            originalSource);
+        QVERIFY(QFileInfo::exists(journalPath));
+
+        error.clear();
         QVERIFY(!journal->cleanupAfterCommit(error));
         QVERIFY2(!error.isEmpty(), "Committed cleanup must reject the source");
         QCOMPARE(
@@ -4717,6 +4729,93 @@ linkedSaveRollbackPreservesRecreatedRetiredSource()
     QVERIFY(QFileInfo::exists(journalPath));
     QVERIFY(QFileInfo::exists(
         QDir(journalPath).filePath(QStringLiteral("manifest.json"))));
+}
+
+void TestAtomicActivitySave::
+linkedSaveRollbackPublicationRacePreservesNewSource()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QByteArray firstStaged("staged generation 0");
+    const QByteArray secondStaged("staged generation 1");
+    writeFixture(journal->stagingPath(0), firstStaged);
+    QVERIFY2(journal->recordStaged(0, error), qPrintable(error));
+    writeFixture(journal->stagingPath(1), secondStaged);
+    QVERIFY2(journal->recordStaged(1, error), qPrintable(error));
+
+    bool targetRemoved = false;
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-source-retired"),
+        [&]() {
+            targetRemoved = QFile::remove(
+                specification.entries.at(0).targetPath);
+        });
+
+    error.clear();
+    const bool published = journal->publishAndCommit(error);
+    clearLinkedActivitySaveTransitionAction();
+
+    QVERIFY(targetRemoved);
+    QVERIFY2(!published, "Publication ignored a missing staged target");
+    QVERIFY2(!error.isEmpty(), "Failed publication must report an error");
+    QVERIFY(!QFileInfo::exists(specification.entries.at(0).sourcePath));
+    QVERIFY(!QFileInfo::exists(specification.entries.at(1).sourcePath));
+
+    const QString sourcePath = specification.entries.at(0).sourcePath;
+    const QByteArray concurrentSource("concurrent source generation");
+    AnchoredFileSystem::DirectoryAnchor sourceParent;
+    AnchoredFileSystem::EntryRef sourceEntry;
+    AnchoredFileSystem::PinnedFile sourcePin;
+    QString injectionError;
+    bool sourceWritten = false;
+    bool sourcePinned = false;
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-before-source-restore"),
+        [&]() {
+            QFile source(sourcePath);
+            sourceWritten = source.open(QIODevice::WriteOnly)
+                && source.write(concurrentSource) == concurrentSource.size()
+                && source.flush();
+            if (!sourceWritten
+                || !AnchoredFileSystem::DirectoryAnchor::open(
+                    QFileInfo(sourcePath).absolutePath(),
+                    sourceParent,
+                    injectionError)) {
+                return;
+            }
+            sourceEntry = sourceParent.entry(
+                QFileInfo(sourcePath).fileName(), injectionError);
+            sourcePinned = sourceEntry.isValid()
+                && AnchoredFileSystem::pinRegularFile(
+                    sourceEntry, sourcePin, injectionError);
+        });
+
+    error.clear();
+    const bool cleaned = journal->cleanupAfterRollback(error);
+    clearLinkedActivitySaveTransitionAction();
+
+    QVERIFY(sourceWritten);
+    QVERIFY2(sourcePinned, qPrintable(injectionError));
+    QVERIFY2(!cleaned, "Rollback replaced a post-observation source");
+    QVERIFY2(!error.isEmpty(), "Rejected rollback must report an error");
+    QCOMPARE(readAll(sourcePath), concurrentSource);
+    bool sourceStillMatches = false;
+    QString matchError;
+    QVERIFY2(
+        AnchoredFileSystem::entryMatches(
+            sourceEntry, sourcePin, sourceStillMatches, matchError),
+        qPrintable(matchError));
+    QVERIFY2(sourceStillMatches, "Rollback changed the new source identity");
+    QVERIFY(QFileInfo::exists(journalPath));
 }
 
 void TestAtomicActivitySave::
