@@ -539,8 +539,11 @@ private slots:
     void linkedSaveCleanupReleasesTransactionResources();
     void linkedSaveNondurableJournalRemovalStaysRetryable_data();
     void linkedSaveNondurableJournalRemovalStaysRetryable();
+    void linkedSaveNondurableJournalFileRemovalStaysRetryable_data();
+    void linkedSaveNondurableJournalFileRemovalStaysRetryable();
     void linkedSaveNondurableRetirementStaysRetryable();
     void linkedSavePartialRetirementKeepsRecoveryJournal();
+    void linkedSavePublishRetryPreservesIncompleteRetirementIntent();
     void linkedSaveIncompleteRetirementBlocksFreshRecovery();
     void linkedSaveRetirementIntentControlFiles_data();
     void linkedSaveRetirementIntentControlFiles();
@@ -565,6 +568,7 @@ private slots:
     void linkedSaveRollbackProductionSubstitutionIsRejected();
     void linkedSaveRollbackProductionParentSubstitutionIsRejected_data();
     void linkedSaveRollbackProductionParentSubstitutionIsRejected();
+    void linkedSaveRollbackPreservesLateCommitMarker();
     void linkedSaveMovedLiveJournalCannotClaimCleanup();
     void linkedSaveMovedJournalCannotReceiveCommitMarker();
     void linkedSaveRecoveryRejectsStagedSourceAtOldName();
@@ -575,6 +579,7 @@ private slots:
     void linkedSaveJournalCleanupSubstitutionPreservesReplacement_data();
     void linkedSaveJournalCleanupSubstitutionPreservesReplacement();
     void linkedSavePreManifestCleanupSubstitutionPreservesReplacement();
+    void linkedSavePreManifestRemovalDurabilityStaysRetryable();
     void linkedSaveRecoverySourceRetirementSubstitutionIsRejected_data();
     void linkedSaveRecoverySourceRetirementSubstitutionIsRejected();
     void linkedSaveRecoveryRepopulationStopsFurtherRetirement();
@@ -3891,6 +3896,76 @@ linkedSaveNondurableJournalRemovalStaysRetryable()
 }
 
 void TestAtomicActivitySave::
+linkedSaveNondurableJournalFileRemovalStaysRetryable_data()
+{
+    QTest::addColumn<bool>("committed");
+
+    QTest::newRow("rollback") << false;
+    QTest::newRow("commit") << true;
+}
+
+void TestAtomicActivitySave::
+linkedSaveNondurableJournalFileRemovalStaysRetryable()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Directory fsync injection is Unix-specific");
+#else
+    QFETCH(bool, committed);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString manifestPath = QDir(journalPath).filePath(
+        QStringLiteral("manifest.json"));
+    for (int index = 0; index < journal->entryCount(); ++index) {
+        writeFixture(
+            journal->stagingPath(index),
+            QByteArray("staged generation ") + QByteArray::number(index));
+        QVERIFY2(journal->recordStaged(index, error), qPrintable(error));
+    }
+    if (committed) {
+        QVERIFY2(journal->publishAndCommit(error), qPrintable(error));
+    }
+
+    bool cleanupStarted = false;
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-journal-files-pinned"),
+        [&]() {
+            cleanupStarted = true;
+            anchoredFilesystemSyncFailurePath = journalPath;
+        });
+    error.clear();
+    const bool firstCleanup = committed
+        ? journal->cleanupAfterCommit(error)
+        : journal->cleanupAfterRollback(error);
+    clearLinkedActivitySaveTransitionAction();
+
+    QVERIFY(cleanupStarted);
+    QVERIFY2(!firstCleanup, "A nondurable journal file removal was accepted");
+    QVERIFY2(!error.isEmpty(), "Nondurable removal must report an error");
+    QVERIFY(!QFileInfo::exists(manifestPath));
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    anchoredFilesystemSyncFailurePath.clear();
+    error.clear();
+    const bool secondCleanup = committed
+        ? journal->cleanupAfterCommit(error)
+        : journal->cleanupAfterRollback(error);
+
+    QVERIFY2(secondCleanup, qPrintable(error));
+    QVERIFY(!QFileInfo::exists(journalPath));
+#endif
+}
+
+void TestAtomicActivitySave::
 linkedSaveNondurableRetirementStaysRetryable()
 {
 #ifndef Q_OS_UNIX
@@ -4003,6 +4078,96 @@ linkedSavePartialRetirementKeepsRecoveryJournal()
     QVERIFY(!journal->cleanupAfterRollback(error));
     QVERIFY2(!error.isEmpty(), "Partial recovery must remain explicit");
     QVERIFY(QFileInfo::exists(journalPath));
+    QVERIFY(QFileInfo::exists(retainedQuarantine));
+#endif
+}
+
+void TestAtomicActivitySave::
+linkedSavePublishRetryPreservesIncompleteRetirementIntent()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Quarantine transition injection is Unix-specific");
+#else
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString intentPath = QDir(journalPath).filePath(
+        QStringLiteral("retirement-0000.pending"));
+    for (int index = 0; index < journal->entryCount(); ++index) {
+        writeFixture(
+            journal->stagingPath(index),
+            QByteArray("staged generation ") + QByteArray::number(index));
+        QVERIFY2(journal->recordStaged(index, error), qPrintable(error));
+    }
+
+    QString retainedQuarantine;
+    bool injected = false;
+    anchoredFilesystemAction =
+        [&](const char *transition,
+            const QString &primary,
+            const QString &) {
+            if (injected
+                || QByteArray(transition) != "remove-quarantine-verified") {
+                return;
+            }
+            injected = true;
+            retainedQuarantine = primary + QStringLiteral(".retained");
+            QFile::rename(primary, retainedQuarantine);
+        };
+
+    QVERIFY(!journal->publishAndCommit(error));
+    anchoredFilesystemAction = {};
+    QVERIFY(injected);
+    QVERIFY(QFileInfo::exists(intentPath));
+    QVERIFY(QFileInfo::exists(retainedQuarantine));
+
+    AnchoredFileSystem::DirectoryAnchor intentParent;
+    AnchoredFileSystem::EntryRef intentEntry;
+    AnchoredFileSystem::PinnedFile intentPin;
+    QString pinError;
+    QVERIFY2(
+        AnchoredFileSystem::DirectoryAnchor::open(
+            journalPath, intentParent, pinError),
+        qPrintable(pinError));
+    intentEntry = intentParent.entry(
+        QStringLiteral("retirement-0000.pending"), pinError);
+    QVERIFY2(
+        intentEntry.isValid()
+            && AnchoredFileSystem::pinRegularFile(
+                intentEntry, intentPin, pinError),
+        qPrintable(pinError));
+
+    error.clear();
+    QVERIFY2(
+        !journal->publishAndCommit(error),
+        "A retry accepted an incomplete source retirement");
+    QVERIFY2(!error.isEmpty(), "Rejected retry must report an error");
+    QVERIFY(QFileInfo::exists(intentPath));
+    bool intentStillMatches = false;
+    QString matchError;
+    QVERIFY2(
+        AnchoredFileSystem::entryMatches(
+            intentEntry, intentPin, intentStillMatches, matchError),
+        qPrintable(matchError));
+    QVERIFY2(
+        intentStillMatches,
+        "A publish retry removed the incomplete retirement intent");
+
+    journal.reset();
+    error.clear();
+    QVERIFY2(
+        !LinkedActivitySave::Journal::reconcileAll(dir.path(), error),
+        "Fresh recovery forgot the incomplete source retirement");
+    QVERIFY2(!error.isEmpty(), "Blocked recovery must report an error");
+    QVERIFY(QFileInfo::exists(intentPath));
     QVERIFY(QFileInfo::exists(retainedQuarantine));
 #endif
 }
@@ -5343,6 +5508,63 @@ linkedSaveCommittedRecoverySubstitutionIsRejected()
 }
 
 void TestAtomicActivitySave::
+linkedSaveRollbackPreservesLateCommitMarker()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString markerPath = QDir(journalPath).filePath(
+        QStringLiteral("COMMITTED"));
+    const QByteArray markerContents =
+        QFileInfo(journalPath).fileName().toLatin1() + '\n';
+
+    AnchoredFileSystem::DirectoryAnchor markerParent;
+    AnchoredFileSystem::EntryRef markerEntry;
+    AnchoredFileSystem::PinnedFile markerPin;
+    QString injectionError;
+    bool markerPinned = false;
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-rollback-decision-observed"),
+        [&]() {
+            writeFixture(markerPath, markerContents);
+            if (!AnchoredFileSystem::DirectoryAnchor::open(
+                    journalPath, markerParent, injectionError)) {
+                return;
+            }
+            markerEntry = markerParent.entry(
+                QStringLiteral("COMMITTED"), injectionError);
+            markerPinned = markerEntry.isValid()
+                && AnchoredFileSystem::pinRegularFile(
+                    markerEntry, markerPin, injectionError);
+        });
+
+    error.clear();
+    const bool cleaned = journal->cleanupAfterRollback(error);
+    clearLinkedActivitySaveTransitionAction();
+
+    QVERIFY2(markerPinned, qPrintable(injectionError));
+    QVERIFY2(!cleaned, "Rollback erased a late commit decision");
+    QVERIFY2(!error.isEmpty(), "A late commit decision must report an error");
+    QCOMPARE(readAll(markerPath), markerContents);
+    bool markerStillMatches = false;
+    QString matchError;
+    QVERIFY2(
+        AnchoredFileSystem::entryMatches(
+            markerEntry, markerPin, markerStillMatches, matchError),
+        qPrintable(matchError));
+    QVERIFY2(markerStillMatches, "Rollback changed the late commit marker");
+    QVERIFY(QFileInfo::exists(journalPath));
+}
+
+void TestAtomicActivitySave::
 linkedSaveMovedLiveJournalCannotClaimCleanup()
 {
 #ifndef Q_OS_UNIX
@@ -5686,6 +5908,51 @@ linkedSavePreManifestCleanupSubstitutionPreservesReplacement()
         qPrintable(matchError));
     QVERIFY2(stillMatches, "Recovery changed a substitute journal file");
     QVERIFY(QFileInfo::exists(movedJournalPath));
+#endif
+}
+
+void TestAtomicActivitySave::
+linkedSavePreManifestRemovalDurabilityStaysRetryable()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Directory fsync injection is Unix-specific");
+#else
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString namespacePath = dir.filePath(
+        QStringLiteral(".gc-transactions/linked-save"));
+    QVERIFY(QDir().mkpath(namespacePath));
+    const QString journalId =
+        QUuid::createUuid().toString(QUuid::WithoutBraces).toLower();
+    const QString journalPath = QDir(namespacePath).filePath(journalId);
+    QVERIFY(QDir().mkpath(journalPath));
+    QVERIFY(QFile::setPermissions(
+        journalPath,
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner
+            | QFileDevice::ExeOwner));
+    writeFixture(
+        QDir(journalPath).filePath(QStringLiteral("source-0000.old")),
+        QByteArray("pre-manifest transaction data"));
+
+    anchoredFilesystemSyncFailurePath = namespacePath;
+    QString error;
+    QVERIFY2(
+        !LinkedActivitySave::Journal::reconcileAll(dir.path(), error),
+        "A nondurable pre-manifest removal was accepted");
+    QVERIFY2(!error.isEmpty(), "Nondurable removal must report an error");
+    QVERIFY(!QFileInfo::exists(journalPath));
+
+    error.clear();
+    QVERIFY2(
+        !LinkedActivitySave::Journal::reconcileAll(dir.path(), error),
+        "Recovery forgot the pending namespace synchronization");
+    QVERIFY2(!error.isEmpty(), "Pending synchronization must report an error");
+
+    anchoredFilesystemSyncFailurePath.clear();
+    error.clear();
+    QVERIFY2(
+        LinkedActivitySave::Journal::reconcileAll(dir.path(), error),
+        qPrintable(error));
 #endif
 }
 

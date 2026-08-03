@@ -3470,6 +3470,10 @@ bool rollbackJournal(JournalState &state, QString &error)
         error = QStringLiteral("Cannot roll back a committed linked save");
         return false;
     }
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+    linkedActivitySaveTransitionReached(
+        "linked-save-rollback-decision-observed");
+#endif
     if (!resolveIncompleteRetirements(state, error)) return false;
     QList<ResolvedEntry> resolved;
     if (!resolveManifestEntries(state, resolved, error)
