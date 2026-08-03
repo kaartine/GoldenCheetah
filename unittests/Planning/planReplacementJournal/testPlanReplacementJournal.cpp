@@ -749,15 +749,27 @@ staleQLockFileRemovalGuardDoesNotPoisonReconcile()
 void TestPlanReplacementJournal::
 staleJournalQLockFileRemovalGuardDoesNotPoisonReconcile_data()
 {
+    QTest::addColumn<QString>("lockName");
     QTest::addColumn<int>("suffixCount");
-    QTest::newRow("single-rmlock") << 1;
-    QTest::newRow("nested-rmlock") << 2;
+    QTest::addColumn<bool>("removeManifest");
+    QTest::newRow("manifest-single-rmlock")
+        << QStringLiteral(".manifest.json.lock") << 1 << false;
+    QTest::newRow("manifest-nested-rmlock")
+        << QStringLiteral(".manifest.json.lock") << 2 << false;
+    QTest::newRow("commit-marker-rmlock")
+        << QStringLiteral(".COMMITTED.lock") << 1 << false;
+    QTest::newRow("stage-rmlock")
+        << QStringLiteral(".new-0000.stage.lock") << 1 << false;
+    QTest::newRow("pre-manifest-stage-rmlock")
+        << QStringLiteral(".new-0000.stage.lock") << 1 << true;
 }
 
 void TestPlanReplacementJournal::
 staleJournalQLockFileRemovalGuardDoesNotPoisonReconcile()
 {
+    QFETCH(QString, lockName);
     QFETCH(int, suffixCount);
+    QFETCH(bool, removeManifest);
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
     QVERIFY(createOldGeneration(temporary.path()));
@@ -770,9 +782,13 @@ staleJournalQLockFileRemovalGuardDoesNotPoisonReconcile()
     const QString journalPath = journal->directoryPath();
     QVERIFY(writeFile(
         QDir(journalPath).filePath(qlockRemovalGuardName(
-            QStringLiteral(".manifest.json.lock"), suffixCount)),
+            lockName, suffixCount)),
         QByteArray("stale journal QLockFile removal guard")));
     journal.reset();
+    if (removeManifest) {
+        QVERIFY(QFile::remove(
+            QDir(journalPath).filePath(QStringLiteral("manifest.json"))));
+    }
 
     QVERIFY2(
         PlanReplacement::Journal::reconcileAll(temporary.path(), error),

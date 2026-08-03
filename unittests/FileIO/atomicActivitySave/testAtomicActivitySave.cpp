@@ -3086,18 +3086,32 @@ void TestAtomicActivitySave::
 linkedSaveQLockFileRemovalGuardDoesNotPoisonReconcile_data()
 {
     QTest::addColumn<bool>("journalEntry");
+    QTest::addColumn<QString>("lockName");
     QTest::addColumn<int>("suffixCount");
-    QTest::newRow("namespace-single-rmlock") << false << 1;
-    QTest::newRow("namespace-nested-rmlock") << false << 2;
-    QTest::newRow("journal-single-rmlock") << true << 1;
-    QTest::newRow("journal-nested-rmlock") << true << 2;
+    QTest::addColumn<bool>("removeManifest");
+    const QString namespaceLock =
+        QStringLiteral(".01234567-89ab-cdef-8123-456789abcdef.lock");
+    QTest::newRow("namespace-single-rmlock")
+        << false << namespaceLock << 1 << false;
+    QTest::newRow("namespace-nested-rmlock")
+        << false << namespaceLock << 2 << false;
+    QTest::newRow("journal-manifest-single-rmlock")
+        << true << QStringLiteral(".manifest.json.lock") << 1 << false;
+    QTest::newRow("journal-manifest-nested-rmlock")
+        << true << QStringLiteral(".manifest.json.lock") << 2 << false;
+    QTest::newRow("journal-stage-rmlock")
+        << true << QStringLiteral(".new-0000.stage.lock") << 1 << false;
+    QTest::newRow("pre-manifest-stage-rmlock")
+        << true << QStringLiteral(".new-0000.stage.lock") << 1 << true;
 }
 
 void TestAtomicActivitySave::
 linkedSaveQLockFileRemovalGuardDoesNotPoisonReconcile()
 {
     QFETCH(bool, journalEntry);
+    QFETCH(QString, lockName);
     QFETCH(int, suffixCount);
+    QFETCH(bool, removeManifest);
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
     writeLinkedSaveJournalSources(dir.path());
@@ -3112,15 +3126,19 @@ linkedSaveQLockFileRemovalGuardDoesNotPoisonReconcile()
         QVERIFY2(journal, qPrintable(error));
         journalPath = journal->directoryPath();
         guardPath = QDir(journalPath).filePath(
-            qlockRemovalGuardName(
-                QStringLiteral(".manifest.json.lock"), suffixCount));
+            qlockRemovalGuardName(lockName, suffixCount));
         journal.reset();
+        if (removeManifest) {
+            QVERIFY(QFile::remove(
+                QDir(journalPath).filePath(
+                    QStringLiteral("manifest.json"))));
+        }
     } else {
         const QString namespacePath = QDir(dir.path()).filePath(
             QStringLiteral(".gc-transactions/linked-save"));
         QVERIFY(QDir().mkpath(namespacePath));
         guardPath = QDir(namespacePath).filePath(
-            qlockRemovalGuardName(suffixCount));
+            qlockRemovalGuardName(lockName, suffixCount));
     }
     writeFixture(
         guardPath, QByteArray("stale QLockFile removal guard"));
