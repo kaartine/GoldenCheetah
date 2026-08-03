@@ -13,6 +13,10 @@
 #include <QProcessEnvironment>
 #include <QTemporaryDir>
 
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#endif
+
 #include <cstdlib>
 #include <memory>
 
@@ -24,6 +28,44 @@ const char CrashActionEnvironment[] = "GC_PLAN_REPLACEMENT_CRASH_ACTION";
 const char CrashPhaseEnvironment[] = "GC_PLAN_REPLACEMENT_CRASH_PHASE";
 const char CrashOccurrenceEnvironment[] =
     "GC_PLAN_REPLACEMENT_CRASH_OCCURRENCE";
+
+enum class JournalNamespaceEntryKind
+{
+    RegularFile,
+    SymbolicLink,
+    Directory
+};
+
+QString qlockRemovalGuardName(int suffixCount = 1)
+{
+    return QStringLiteral(".01234567-89ab-cdef-8123-456789abcdef.lock")
+        + QStringLiteral(".rmlock").repeated(suffixCount);
+}
+
+bool createTestSymbolicLink(
+    const QString &targetPath,
+    const QString &linkPath)
+{
+#ifdef Q_OS_WIN
+    const QString nativeTarget = QDir::toNativeSeparators(targetPath);
+    const QString nativeLink = QDir::toNativeSeparators(linkPath);
+#ifdef SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
+    if (::CreateSymbolicLinkW(
+            reinterpret_cast<LPCWSTR>(nativeLink.utf16()),
+            reinterpret_cast<LPCWSTR>(nativeTarget.utf16()),
+            SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE)) {
+        return true;
+    }
+    if (::GetLastError() != ERROR_INVALID_PARAMETER) return false;
+#endif
+    return ::CreateSymbolicLinkW(
+        reinterpret_cast<LPCWSTR>(nativeLink.utf16()),
+        reinterpret_cast<LPCWSTR>(nativeTarget.utf16()),
+        0);
+#else
+    return QFile::link(targetPath, linkPath);
+#endif
+}
 
 bool writeFile(const QString &path, const QByteArray &contents)
 {
@@ -420,6 +462,10 @@ private slots:
     void incompleteStagingPreservesOldGeneration();
     void unrecordedStageIsDiscardedDuringRecovery();
     void committedCoordinatorCanResumePreparedJournal();
+    void staleQLockFileRemovalGuardDoesNotPoisonReconcile_data();
+    void staleQLockFileRemovalGuardDoesNotPoisonReconcile();
+    void unsafeQLockFileRemovalGuardEntriesRemainRejected_data();
+    void unsafeQLockFileRemovalGuardEntriesRemainRejected();
     void rejectsUnsafeSpecifications_data();
     void rejectsUnsafeSpecifications();
     void allowsSymlinkRootWithoutTransactionNamespace();
@@ -650,6 +696,98 @@ committedCoordinatorCanResumePreparedJournal()
         temporary.path(), QStringLiteral("normal"), true));
     QVERIFY2(journal->cleanupAfterCommit(error), qPrintable(error));
     QVERIFY(journalNamespaceIsEmpty(temporary.path()));
+}
+
+void TestPlanReplacementJournal::
+staleQLockFileRemovalGuardDoesNotPoisonReconcile_data()
+{
+    QTest::addColumn<int>("suffixCount");
+    QTest::newRow("single-rmlock") << 1;
+    QTest::newRow("nested-rmlock") << 2;
+}
+
+void TestPlanReplacementJournal::
+staleQLockFileRemovalGuardDoesNotPoisonReconcile()
+{
+    QFETCH(int, suffixCount);
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QVERIFY(createOldGeneration(temporary.path()));
+    const QString namespacePath = QDir(temporary.path()).filePath(
+        QStringLiteral(".gc-transactions/plan-replacement"));
+    QVERIFY(QDir().mkpath(namespacePath));
+    QVERIFY(writeFile(
+        QDir(namespacePath).filePath(
+            qlockRemovalGuardName(suffixCount)),
+        QByteArray("stale QLockFile removal guard")));
+
+    QString error;
+    QVERIFY2(
+        PlanReplacement::Journal::reconcileAll(temporary.path(), error),
+        qPrintable(error));
+    error.clear();
+    QVERIFY2(
+        PlanReplacement::Journal::reconcileAll(temporary.path(), error),
+        qPrintable(error));
+
+    const std::shared_ptr<PlanReplacement::Journal> journal =
+        PlanReplacement::Journal::prepare(
+            replacementSpecification(temporary.path()), error);
+    QVERIFY2(journal, qPrintable(error));
+    QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+}
+
+void TestPlanReplacementJournal::
+unsafeQLockFileRemovalGuardEntriesRemainRejected_data()
+{
+    QTest::addColumn<QString>("entryName");
+    QTest::addColumn<int>("entryKind");
+    QTest::newRow("invalid-uuid")
+        << QStringLiteral(".not-a-uuid.lock.rmlock")
+        << int(JournalNamespaceEntryKind::RegularFile);
+    QTest::newRow("suffix-lookalike")
+        << qlockRemovalGuardName() + QStringLiteral(".tmp")
+        << int(JournalNamespaceEntryKind::RegularFile);
+    QTest::newRow("symbolic-link")
+        << qlockRemovalGuardName()
+        << int(JournalNamespaceEntryKind::SymbolicLink);
+    QTest::newRow("directory")
+        << qlockRemovalGuardName()
+        << int(JournalNamespaceEntryKind::Directory);
+}
+
+void TestPlanReplacementJournal::
+unsafeQLockFileRemovalGuardEntriesRemainRejected()
+{
+    QFETCH(QString, entryName);
+    QFETCH(int, entryKind);
+    const JournalNamespaceEntryKind kind =
+        JournalNamespaceEntryKind(entryKind);
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString namespacePath = QDir(temporary.path()).filePath(
+        QStringLiteral(".gc-transactions/plan-replacement"));
+    QVERIFY(QDir().mkpath(namespacePath));
+    const QString entryPath = QDir(namespacePath).filePath(entryName);
+
+    if (kind == JournalNamespaceEntryKind::Directory) {
+        QVERIFY(QDir().mkpath(entryPath));
+    } else if (kind == JournalNamespaceEntryKind::SymbolicLink) {
+        const QString targetPath = QDir(temporary.path()).filePath(
+            QStringLiteral("qlock-removal-guard-target"));
+        QVERIFY(writeFile(targetPath, QByteArray("target")));
+        if (!createTestSymbolicLink(targetPath, entryPath))
+            QSKIP("File symbolic links are unavailable");
+    } else {
+        QVERIFY(writeFile(entryPath, QByteArray("lookalike")));
+    }
+
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        QString error;
+        QVERIFY(!PlanReplacement::Journal::reconcileAll(
+            temporary.path(), error));
+        QVERIFY2(error.contains(entryName), qPrintable(error));
+    }
 }
 
 void TestPlanReplacementJournal::rejectsUnsafeSpecifications_data()

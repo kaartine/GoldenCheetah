@@ -5,6 +5,7 @@
 #include "TrainDB.h"
 
 #include <QFile>
+#include <QFileInfo>
 #include <QTemporaryDir>
 
 namespace {
@@ -22,6 +23,12 @@ QByteArray readFile(const QString &path)
     QFile file(path);
     return file.open(QIODevice::ReadOnly)
         ? file.readAll() : QByteArray();
+}
+
+QString qlockRemovalGuardName(int suffixCount)
+{
+    return QStringLiteral(".01234567-89ab-cdef-8123-456789abcdef.lock")
+        + QStringLiteral(".rmlock").repeated(suffixCount);
 }
 
 struct Fixture
@@ -147,6 +154,8 @@ class TestPlanBundleImportJournal : public QObject
 
 private slots:
     void committedDecisionCompletesAfterRestart();
+    void coordinatedStartupRecoverySurvivesQLockFileRemovalGuard_data();
+    void coordinatedStartupRecoverySurvivesQLockFileRemovalGuard();
     void databaseFailureRetainsDecisionForRetry();
     void conflictingWorkoutTargetFailsClosed();
     void completionMustRemoveDecisionAtomically();
@@ -183,6 +192,56 @@ committedDecisionCompletesAfterRestart()
                  &database, fixture.athleteRoot,
                  fixture.workoutRoot,
                  removeDecision(database), error),
+             qPrintable(error));
+}
+
+void TestPlanBundleImportJournal::
+coordinatedStartupRecoverySurvivesQLockFileRemovalGuard_data()
+{
+    QTest::addColumn<int>("suffixCount");
+    QTest::newRow("single-rmlock") << 1;
+    QTest::newRow("nested-rmlock") << 2;
+}
+
+void TestPlanBundleImportJournal::
+coordinatedStartupRecoverySurvivesQLockFileRemovalGuard()
+{
+    QFETCH(int, suffixCount);
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    TrainDB database{QDir(fixture.databaseRoot)};
+    QString error;
+    std::shared_ptr<PlanReplacement::Journal> plan;
+    std::shared_ptr<PlanBundleImport::Journal> coordinator =
+        commitDecision(fixture, database, plan, error);
+    QVERIFY2(coordinator, qPrintable(error));
+    QVERIFY(plan);
+    const QString namespacePath = QFileInfo(
+        plan->directoryPath()).absolutePath();
+    QVERIFY(writeFile(
+        QDir(namespacePath).filePath(
+            qlockRemovalGuardName(suffixCount)),
+        QByteArray("stale QLockFile removal guard")));
+    plan.reset();
+    coordinator.reset();
+
+    QVERIFY2(PlanBundleImport::Journal::reconcileAll(
+                 &database, fixture.athleteRoot,
+                 fixture.workoutRoot,
+                 removeDecision(database), error),
+             qPrintable(error));
+    QVERIFY(!decisionExists(database, fixture.athleteRoot));
+    QCOMPARE(readFile(fixture.newPlan), QByteArray("new plan"));
+    QCOMPARE(readFile(fixture.workoutTarget),
+             QByteArray("workout payload"));
+
+    error.clear();
+    QVERIFY2(PlanReplacement::Journal::reconcileAll(
+                 fixture.athleteRoot, error),
+             qPrintable(error));
+    error.clear();
+    QVERIFY2(PlanReplacement::Journal::reconcileAll(
+                 fixture.athleteRoot, error),
              qPrintable(error));
 }
 
