@@ -2457,15 +2457,23 @@ MutationResult removeEmptyDirectory(DirectoryAnchor &directory)
         unlinked,
         true,
         verificationError);
+    bool quarantineStillExists = false;
+    QString postRemovalError;
+    const bool quarantineInspected = entryNameExists(
+        parent.state_->descriptor.get(),
+        quarantineComponent,
+        quarantineStillExists,
+        postRemovalError);
 #if defined(Q_OS_MACOS)
-    // APFS keeps one link on an open directory after rmdir(), while Linux
-    // reports zero. Require both the BSD terminal count and an observed drop.
-    const bool finalDirectoryLinkRemoved = unlinked.links <= 1
-        && unlinked.links < pinnedAfterRename.links;
+    // macOS reports one directory link both before and after rmdir(). The
+    // successful syscall and anchored name check provide the removal proof.
+    const bool finalDirectoryLinkRemoved = true;
 #else
     const bool finalDirectoryLinkRemoved = unlinked.links == 0;
 #endif
     const bool removedPinnedDirectory = captured
+        && quarantineInspected
+        && !quarantineStillExists
         && finalDirectoryLinkRemoved
         && sameUnixObject(unlinked, pinned);
     bool originalExists = false;
@@ -2481,10 +2489,17 @@ MutationResult removeEmptyDirectory(DirectoryAnchor &directory)
     const bool parentSynced = parent.sync(syncError);
     if (!removedPinnedDirectory) {
         result.effect = MutationEffect::Partial;
-        result.error = verificationError.isEmpty()
-            ? QStringLiteral(
-                  "The anchored directory removal did not unlink the pinned directory")
-            : verificationError;
+        if (!verificationError.isEmpty()) {
+            result.error = verificationError;
+        } else if (!postRemovalError.isEmpty()) {
+            result.error = postRemovalError;
+        } else if (quarantineStillExists) {
+            result.error = QStringLiteral(
+                "The anchored directory quarantine name was repopulated during removal");
+        } else {
+            result.error = QStringLiteral(
+                "The anchored directory removal did not unlink the pinned directory");
+        }
         if (!parentSynced) {
             result.error += QStringLiteral("; ") + syncError;
         }
