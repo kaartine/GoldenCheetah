@@ -2260,6 +2260,9 @@ MutationResult remove(PinnedFile &file)
         result.error = componentError;
         return result;
     }
+    reportAnchoredFilesystemTransition(
+        "remove-before-quarantine",
+        original.displayPath_);
     result = moveNoReplace(file, quarantine);
     if (!result.applied()) return result;
 

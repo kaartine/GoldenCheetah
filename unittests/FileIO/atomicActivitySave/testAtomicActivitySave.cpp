@@ -572,6 +572,13 @@ private slots:
     void linkedSaveMovedLiveJournalCannotClaimCleanup();
     void linkedSaveMovedJournalCannotReceiveCommitMarker();
     void linkedSaveNondurableCommitMarkerStaysRecoverable();
+    void linkedSaveCommitMarkerIdentityLossIsRejected_data();
+    void linkedSaveCommitMarkerIdentityLossIsRejected();
+    void linkedSavePartialCommitMarkerPublicationBlocksRollback();
+#ifdef Q_OS_WIN
+    void anchoredFilesDenyConcurrentWindowsWrites_data();
+    void anchoredFilesDenyConcurrentWindowsWrites();
+#endif
     void linkedSaveRecoveryRejectsStagedSourceAtOldName();
     void linkedSaveRecoveryRejectsRecreatedOriginalSource_data();
     void linkedSaveRecoveryRejectsRecreatedOriginalSource();
@@ -5296,10 +5303,14 @@ linkedSaveRollbackProductionParentSubstitutionIsRejected_data()
 {
     QTest::addColumn<bool>("removeTarget");
     QTest::addColumn<bool>("duringRemoval");
+    QTest::addColumn<bool>("beforeQuarantine");
 
-    QTest::newRow("restore-source") << false << false;
-    QTest::newRow("remove-target") << true << false;
-    QTest::newRow("remove-target-during-syscall") << true << true;
+    QTest::newRow("restore-source") << false << false << false;
+    QTest::newRow("remove-target") << true << false << false;
+    QTest::newRow("remove-target-during-syscall")
+        << true << true << false;
+    QTest::newRow("remove-target-before-quarantine")
+        << true << true << true;
 }
 
 void TestAtomicActivitySave::
@@ -5310,6 +5321,7 @@ linkedSaveRollbackProductionParentSubstitutionIsRejected()
 #else
     QFETCH(bool, removeTarget);
     QFETCH(bool, duringRemoval);
+    QFETCH(bool, beforeQuarantine);
 
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
@@ -5385,7 +5397,9 @@ linkedSaveRollbackProductionParentSubstitutionIsRejected()
                 const QString &) {
                 if (hookReached
                     || QByteArray(transition)
-                        != "remove-quarantine-finally-verified"
+                        != (beforeQuarantine
+                            ? "remove-before-quarantine"
+                            : "remove-quarantine-finally-verified")
                     || !primary.startsWith(
                         productionPath + QLatin1Char('/'))) {
                     return;
@@ -5414,7 +5428,16 @@ linkedSaveRollbackProductionParentSubstitutionIsRejected()
         readAll(specification.entries.at(1).sourcePath), secondSource);
     QVERIFY(!QFileInfo::exists(
         specification.entries.at(0).targetPath));
-    if (duringRemoval) {
+    if (beforeQuarantine) {
+        QCOMPARE(
+            readAll(QDir(displacedPath).filePath(
+                QStringLiteral("first-old.json.bak"))),
+            firstSource);
+        QCOMPARE(
+            readAll(QDir(displacedPath).filePath(
+                QStringLiteral("first-old.json"))),
+            firstSource);
+    } else if (duringRemoval) {
         QCOMPARE(
             readAll(QDir(displacedPath).filePath(
                 QStringLiteral("first-old.json"))),
@@ -5772,6 +5795,269 @@ linkedSaveNondurableCommitMarkerStaysRecoverable()
     QCOMPARE(readAll(specification.entries.at(1).targetPath), secondStaged);
 #endif
 }
+
+void TestAtomicActivitySave::
+linkedSaveCommitMarkerIdentityLossIsRejected_data()
+{
+    QTest::addColumn<bool>("replaceMarker");
+
+    QTest::newRow("removed") << false;
+    QTest::newRow("replaced") << true;
+}
+
+void TestAtomicActivitySave::
+linkedSaveCommitMarkerIdentityLossIsRejected()
+{
+    QFETCH(bool, replaceMarker);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString markerPath = QDir(journalPath).filePath(
+        QStringLiteral("COMMITTED"));
+    const QString retainedPath = QDir(journalPath).filePath(
+        QStringLiteral("retained-COMMITTED"));
+    const QByteArray markerContents =
+        QFileInfo(journalPath).fileName().toLatin1() + '\n';
+    const QByteArray firstStaged("staged generation 0");
+    const QByteArray secondStaged("staged generation 1");
+    writeFixture(journal->stagingPath(0), firstStaged);
+    QVERIFY2(journal->recordStaged(0, error), qPrintable(error));
+    writeFixture(journal->stagingPath(1), secondStaged);
+    QVERIFY2(journal->recordStaged(1, error), qPrintable(error));
+
+    AnchoredFileSystem::DirectoryAnchor markerParent;
+    AnchoredFileSystem::EntryRef originalEntry;
+    AnchoredFileSystem::EntryRef replacementEntry;
+    AnchoredFileSystem::PinnedFile originalPin;
+    AnchoredFileSystem::PinnedFile replacementPin;
+    QString injectionError;
+    bool markerPinned = false;
+    bool markerMutated = false;
+    bool replacementPinned = false;
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-commit-marker"),
+        [&]() {
+            if (!AnchoredFileSystem::DirectoryAnchor::open(
+                    journalPath, markerParent, injectionError)) {
+                return;
+            }
+            originalEntry = markerParent.entry(
+                QStringLiteral("COMMITTED"), injectionError);
+            markerPinned = originalEntry.isValid()
+                && AnchoredFileSystem::pinRegularFile(
+                    originalEntry, originalPin, injectionError);
+            if (!markerPinned) return;
+            markerMutated = replaceMarker
+                ? QFile::rename(markerPath, retainedPath)
+                : QFile::remove(markerPath);
+            if (!markerMutated || !replaceMarker) return;
+            writeFixture(markerPath, markerContents);
+            replacementEntry = markerParent.entry(
+                QStringLiteral("COMMITTED"), injectionError);
+            replacementPinned = replacementEntry.isValid()
+                && AnchoredFileSystem::pinRegularFile(
+                    replacementEntry, replacementPin, injectionError);
+        });
+
+    error.clear();
+    const bool published = journal->publishAndCommit(error);
+    clearLinkedActivitySaveTransitionAction();
+
+    QVERIFY2(markerPinned, qPrintable(injectionError));
+    QVERIFY(markerMutated);
+    if (replaceMarker) {
+        QVERIFY2(replacementPinned, qPrintable(injectionError));
+    }
+    QVERIFY2(!published, "Publication accepted a lost commit-marker identity");
+    QVERIFY2(!error.isEmpty(), "Marker identity loss must report an error");
+    QVERIFY(originalPin.isValid());
+    if (replaceMarker) {
+        bool originalMatches = false;
+        bool replacementMatches = false;
+        QString matchError;
+        const AnchoredFileSystem::EntryRef retainedEntry =
+            markerParent.entry(QStringLiteral("retained-COMMITTED"), matchError);
+        QVERIFY2(retainedEntry.isValid(), qPrintable(matchError));
+        QVERIFY2(
+            AnchoredFileSystem::entryMatches(
+                retainedEntry, originalPin, originalMatches, matchError),
+            qPrintable(matchError));
+        QVERIFY(originalMatches);
+        QVERIFY2(
+            AnchoredFileSystem::entryMatches(
+                replacementEntry,
+                replacementPin,
+                replacementMatches,
+                matchError),
+            qPrintable(matchError));
+        QVERIFY(replacementMatches);
+    } else {
+        QVERIFY(!QFileInfo::exists(markerPath));
+    }
+
+    error.clear();
+    QVERIFY2(
+        !journal->cleanupAfterRollback(error),
+        "Rollback ignored an ambiguous commit-marker publication");
+    QVERIFY2(!error.isEmpty(), "Rejected rollback must report an error");
+    QCOMPARE(readAll(specification.entries.at(0).targetPath), firstStaged);
+    QCOMPARE(readAll(specification.entries.at(1).targetPath), secondStaged);
+}
+
+void TestAtomicActivitySave::
+linkedSavePartialCommitMarkerPublicationBlocksRollback()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Unlinking a pinned commit marker is Unix-specific");
+#else
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString markerPath = QDir(journalPath).filePath(
+        QStringLiteral("COMMITTED"));
+    const QByteArray firstStaged("staged generation 0");
+    const QByteArray secondStaged("staged generation 1");
+    writeFixture(journal->stagingPath(0), firstStaged);
+    QVERIFY2(journal->recordStaged(0, error), qPrintable(error));
+    writeFixture(journal->stagingPath(1), secondStaged);
+    QVERIFY2(journal->recordStaged(1, error), qPrintable(error));
+
+    AnchoredFileSystem::DirectoryAnchor markerParent;
+    AnchoredFileSystem::EntryRef markerEntry;
+    AnchoredFileSystem::PinnedFile markerPin;
+    QString injectionError;
+    bool hookReached = false;
+    bool markerPinned = false;
+    bool markerRemoved = false;
+    anchoredFilesystemAction =
+        [&](const char *transition,
+            const QString &,
+            const QString &secondary) {
+            if (hookReached
+                || QByteArray(transition) != "move-published"
+                || secondary != markerPath) {
+                return;
+            }
+            hookReached = true;
+            if (!AnchoredFileSystem::DirectoryAnchor::open(
+                    journalPath, markerParent, injectionError)) {
+                return;
+            }
+            markerEntry = markerParent.entry(
+                QStringLiteral("COMMITTED"), injectionError);
+            markerPinned = markerEntry.isValid()
+                && AnchoredFileSystem::pinRegularFile(
+                    markerEntry, markerPin, injectionError);
+            markerRemoved = markerPinned && QFile::remove(markerPath);
+        };
+
+    error.clear();
+    const bool published = journal->publishAndCommit(error);
+    anchoredFilesystemAction = {};
+
+    QVERIFY(hookReached);
+    QVERIFY2(markerPinned, qPrintable(injectionError));
+    QVERIFY(markerRemoved);
+    QVERIFY2(!published, "A partial commit-marker publication was accepted");
+    QVERIFY2(!error.isEmpty(), "Partial publication must report an error");
+    QVERIFY(!QFileInfo::exists(markerPath));
+    QVERIFY(markerPin.isValid());
+
+    error.clear();
+    QVERIFY2(
+        !journal->cleanupAfterRollback(error),
+        "Rollback ignored a partial commit-marker publication");
+    QVERIFY2(!error.isEmpty(), "Rejected rollback must report an error");
+    QCOMPARE(readAll(specification.entries.at(0).targetPath), firstStaged);
+    QCOMPARE(readAll(specification.entries.at(1).targetPath), secondStaged);
+#endif
+}
+
+#ifdef Q_OS_WIN
+void TestAtomicActivitySave::
+anchoredFilesDenyConcurrentWindowsWrites_data()
+{
+    QTest::addColumn<QString>("operation");
+
+    QTest::newRow("pin-existing") << QStringLiteral("pin");
+    QTest::newRow("copy-new") << QStringLiteral("copy");
+    QTest::newRow("write-new") << QStringLiteral("write");
+}
+
+void TestAtomicActivitySave::
+anchoredFilesDenyConcurrentWindowsWrites()
+{
+    QFETCH(QString, operation);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString sourcePath = dir.filePath(QStringLiteral("source.bin"));
+    const QString destinationPath = operation == QStringLiteral("pin")
+        ? sourcePath : dir.filePath(QStringLiteral("destination.bin"));
+    const QByteArray contents("identity-bound contents");
+    writeFixture(sourcePath, contents);
+
+    QString error;
+    AnchoredFileSystem::DirectoryAnchor parent;
+    QVERIFY2(
+        AnchoredFileSystem::DirectoryAnchor::open(
+            dir.path(), parent, error),
+        qPrintable(error));
+    const AnchoredFileSystem::EntryRef sourceEntry =
+        parent.entry(QStringLiteral("source.bin"), error);
+    QVERIFY2(sourceEntry.isValid(), qPrintable(error));
+    AnchoredFileSystem::PinnedFile source;
+    QVERIFY2(
+        AnchoredFileSystem::pinRegularFile(sourceEntry, source, error),
+        qPrintable(error));
+
+    AnchoredFileSystem::PinnedFile destination;
+    if (operation == QStringLiteral("pin")) {
+        destination = std::move(source);
+    } else {
+        const AnchoredFileSystem::EntryRef destinationEntry =
+            parent.entry(QStringLiteral("destination.bin"), error);
+        QVERIFY2(destinationEntry.isValid(), qPrintable(error));
+        const bool created = operation == QStringLiteral("copy")
+            ? AnchoredFileSystem::copyToNewFile(
+                  source, destinationEntry, destination, error)
+            : AnchoredFileSystem::writeNewFile(
+                  contents, destinationEntry, destination, error);
+        QVERIFY2(created, qPrintable(error));
+    }
+
+    WindowsTestHandle concurrentWriter(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(destinationPath.utf16()),
+        GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr));
+    const DWORD nativeError = ::GetLastError();
+    QVERIFY2(
+        !concurrentWriter.isValid(),
+        "A live anchored pin allowed a concurrent Windows writer");
+    QCOMPARE(nativeError, DWORD(ERROR_SHARING_VIOLATION));
+}
+#endif
 
 void TestAtomicActivitySave::
 linkedSaveJournalCleanupSubstitutionPreservesReplacement_data()
