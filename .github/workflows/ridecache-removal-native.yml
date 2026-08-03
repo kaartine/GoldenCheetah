@@ -1,4 +1,4 @@
-name: Native activity removal
+name: Native activity transactions
 
 on:
   push:
@@ -11,10 +11,14 @@ on:
       - src/Core/RideCache*.*
       - src/FileIO/AnchoredFileSystem.*
       - src/FileIO/AtomicFileWriter.*
+      - src/FileIO/JsonRideFile.*
+      - src/FileIO/RideFile*.*
+      - src/Gui/SaveDialogs.*
       - src/Metrics/BlinnSolver.*
       - src/Planning/PlanBundle*.*
       - src/Planning/PlanReplacementJournal.*
       - unittests/Core/rideCacheRemoval/**
+      - unittests/FileIO/atomicActivitySave/**
   pull_request:
     paths:
       - .github/workflows/ridecache-removal-native.yml
@@ -25,10 +29,14 @@ on:
       - src/Core/RideCache*.*
       - src/FileIO/AnchoredFileSystem.*
       - src/FileIO/AtomicFileWriter.*
+      - src/FileIO/JsonRideFile.*
+      - src/FileIO/RideFile*.*
+      - src/Gui/SaveDialogs.*
       - src/Metrics/BlinnSolver.*
       - src/Planning/PlanBundle*.*
       - src/Planning/PlanReplacementJournal.*
       - unittests/Core/rideCacheRemoval/**
+      - unittests/FileIO/atomicActivitySave/**
   workflow_dispatch:
 
 permissions:
@@ -42,7 +50,7 @@ env:
 jobs:
   windows:
     runs-on: windows-2025
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v6
@@ -55,37 +63,61 @@ jobs:
       - uses: TheMrMilchmann/setup-msvc-dev@v4
         with:
           arch: x64
-      - name: Install GSL
+      - name: Install build dependencies
         shell: pwsh
-        run: vcpkg install gsl:x64-windows
-      - name: Build activity removal test
+        run: |
+          choco install winflexbison3 --no-progress -y
+          vcpkg install gsl:x64-windows zlib:x64-windows
+      - name: Build native activity tests
         shell: pwsh
         run: |
           $vcpkgRoot = Split-Path -Parent (Get-Command vcpkg).Source
           $gslRoot = "$vcpkgRoot/installed/x64-windows"
+          $zlibRoot = "$vcpkgRoot/installed/x64-windows"
           if (!(Test-Path "$gslRoot/include/gsl/gsl_rng.h")) {
             throw 'The GSL headers were not installed'
           }
+          if (!(Test-Path "$zlibRoot/include/zlib.h")) {
+            throw 'The zlib headers were not installed'
+          }
+          Set-Content src/gcconfig.pri 'CONFIG += release'
+          Copy-Item unittests/unittests.pri.in unittests/unittests.pri
           New-Item -ItemType Directory build-ridecache-removal | Out-Null
           Set-Location build-ridecache-removal
           qmake ../unittests/Core/rideCacheRemoval/rideCacheRemoval.pro `
             "GSL_INCLUDES=$gslRoot/include" `
             "GSL_LIBS=-L$gslRoot/lib -lgsl -lgslcblas"
           nmake /NOLOGO
-      - name: Run activity removal test
+          Set-Location ..
+          New-Item -ItemType Directory build-atomic-activity-save | Out-Null
+          Set-Location build-atomic-activity-save
+          qmake ../unittests/FileIO/atomicActivitySave/atomicActivitySave.pro `
+            "ZLIB_INCLUDES=$zlibRoot/include" `
+            "ZLIB_LIBS=-L$zlibRoot/lib -lzlib" `
+            "QMAKE_LEX=win_flex --wincompat" `
+            "QMAKE_YACC=win_bison --file-prefix=y -t" `
+            "QMAKE_MOVE=copy /Y"
+          nmake /NOLOGO
+      - name: Run native activity tests
         shell: pwsh
         run: |
           $env:QT_QPA_PLATFORM = 'offscreen'
           & build-ridecache-removal/release/tst_rideCacheRemoval.exe `
             -silent -maxwarnings 0 `
             -o 'windows-ridecache-removal.txt,txt'
-          $testStatus = $LASTEXITCODE
+          $removalStatus = $LASTEXITCODE
           Get-Content windows-ridecache-removal.txt
-          exit $testStatus
+          & build-atomic-activity-save/release/tst_atomicActivitySave.exe `
+            -silent -maxwarnings 0 `
+            -o 'windows-atomic-activity-save.txt,txt'
+          $atomicStatus = $LASTEXITCODE
+          Get-Content windows-atomic-activity-save.txt
+          if ($removalStatus -ne 0) { exit $removalStatus }
+          exit $atomicStatus
 
   macos:
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v6
@@ -95,23 +127,42 @@ jobs:
           arch: clang_64
           modules: ${{ env.QT_MODULES }}
           cache: true
-      - name: Install GSL
-        run: brew install gsl
-      - name: Build activity removal test
+      - name: Install build dependencies
+        run: brew install gsl bison flex
+      - name: Build native activity tests
         run: |
           gsl_root="$(brew --prefix gsl)"
+          bison_root="$(brew --prefix bison)"
+          flex_root="$(brew --prefix flex)"
+          printf 'CONFIG += release\n' > src/gcconfig.pri
+          cp unittests/unittests.pri.in unittests/unittests.pri
           mkdir build-ridecache-removal
           cd build-ridecache-removal
           qmake ../unittests/Core/rideCacheRemoval/rideCacheRemoval.pro \
             "GSL_INCLUDES=$gsl_root/include" \
             "GSL_LIBS=-L$gsl_root/lib -lgsl -lgslcblas"
           make -j3
-      - name: Run activity removal test
+          cd ..
+          mkdir build-atomic-activity-save
+          cd build-atomic-activity-save
+          qmake ../unittests/FileIO/atomicActivitySave/atomicActivitySave.pro \
+            "QMAKE_LEX=$flex_root/bin/flex" \
+            "QMAKE_YACC=$bison_root/bin/bison --file-prefix=y -t" \
+            "QMAKE_MOVE=cp"
+          make -j3
+      - name: Run native activity tests
         run: |
-          test_status=0
+          removal_status=0
           QT_QPA_PLATFORM=offscreen \
             build-ridecache-removal/tst_rideCacheRemoval.app/Contents/MacOS/tst_rideCacheRemoval \
             -silent -maxwarnings 0 \
-            -o macos-ridecache-removal.txt,txt || test_status=$?
+            -o macos-ridecache-removal.txt,txt || removal_status=$?
           cat macos-ridecache-removal.txt
-          exit "$test_status"
+          atomic_status=0
+          QT_QPA_PLATFORM=offscreen \
+            build-atomic-activity-save/tst_atomicActivitySave.app/Contents/MacOS/tst_atomicActivitySave \
+            -silent -maxwarnings 0 \
+            -o macos-atomic-activity-save.txt,txt || atomic_status=$?
+          cat macos-atomic-activity-save.txt
+          if [ "$removal_status" -ne 0 ]; then exit "$removal_status"; fi
+          exit "$atomic_status"

@@ -45,11 +45,19 @@ INCLUDEPATH += ../../../src \
                ../../../src/Planning \
                ../../../src/Train \
                ../../../qwt/src \
-               ../../../contrib/qzip
+               ../../../contrib/qzip \
+               $${ZLIB_INCLUDES}
 
-QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-QMAKE_LFLAGS += -Wl,--gc-sections
-LIBS += -lz
+isEmpty(ZLIB_LIBS) {
+    LIBS += -lz
+} else {
+    LIBS += $${ZLIB_LIBS}
+}
+
+unix:!macx {
+    QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
+    QMAKE_LFLAGS += -Wl,--gc-sections
+}
 
 sanitize:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \
