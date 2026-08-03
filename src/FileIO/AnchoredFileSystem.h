@@ -15,6 +15,7 @@
 #include <QString>
 #include <QtGlobal>
 
+#include <functional>
 #include <memory>
 #include <utility>
 
@@ -28,6 +29,7 @@ struct PinnedFileState;
 class EntryRef;
 class PinnedFile;
 struct MutationResult;
+struct WriterPinHandoffState;
 
 class NativeIdentity
 {
@@ -187,10 +189,16 @@ private:
 
     friend bool pinRegularFile(
         const EntryRef &, PinnedFile &, QString &, qint64);
+    friend bool pinRegularFileAfterWriterRelease(
+        const EntryRef &, qintptr, qint64, const QByteArray &,
+        const std::function<void()> &, PinnedFile &,
+        WriterPinHandoffState &, QString &);
     friend bool entryMatches(
         const EntryRef &, const PinnedFile &, bool &, QString &);
     friend bool readAll(
         const PinnedFile &, qint64, QByteArray &, QString &);
+    friend QString verifiedRecoveryPath(
+        const PinnedFile &, const EntryRef &);
     friend bool copyToNewFile(
         const PinnedFile &, const EntryRef &, PinnedFile &, QString &);
     friend bool writeNewFile(
@@ -229,6 +237,22 @@ bool pinRegularFile(
     QString &error,
     qint64 maximumSize = -1);
 
+struct WriterPinHandoffState
+{
+    bool writerReleased = false;
+};
+
+// Keeps the writer identity anchored while its write handle is closed.
+bool pinRegularFileAfterWriterRelease(
+    const EntryRef &entry,
+    qintptr writerDescriptor,
+    qint64 expectedSize,
+    const QByteArray &expectedSha256,
+    const std::function<void()> &releaseWriter,
+    PinnedFile &file,
+    WriterPinHandoffState &handoff,
+    QString &error);
+
 bool entryExists(
     const EntryRef &entry,
     bool &exists,
@@ -245,6 +269,10 @@ bool readAll(
     qint64 maximumSize,
     QByteArray &contents,
     QString &error);
+
+QString verifiedRecoveryPath(
+    const PinnedFile &file,
+    const EntryRef &entry);
 
 bool copyToNewFile(
     const PinnedFile &source,

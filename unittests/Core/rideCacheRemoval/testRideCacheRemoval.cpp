@@ -571,7 +571,7 @@ private slots:
     void failedPreviousBackupMovePartialStateRequiresRecovery();
     void failedBackupPublishPartialMoveRequiresRecovery();
     void failedSourceMovePartialStateRequiresRecovery();
-    void committedCleanupPartialRemovalReportsExactRecoveryPath();
+    void committedCleanupPartialRemovalRejectsUnverifiedRecoveryPath();
     void committedCleanupParentReplacementDoesNotReportSubstitute();
     void batchStopsAfterRecoveryRequired();
     void derivedCleanupFailurePreservesCacheAndFiles_data();
@@ -592,6 +592,9 @@ private slots:
     void concurrentLinkedRemovalJournalsAreSerialized();
     void activeLinkedSaveAndRemovalShareAthleteLease();
     void abandonedLinkedRemovalJournalBlocksNextTransaction();
+    void recoveryPathsRejectReplacedJournalDirectory();
+    void recoveryPathsRejectCandidateReplacedAfterCollection();
+    void recoveryPathsRejectCandidateReplacedAfterFinalJournalCheck();
     void staleQLockFileRemovalGuardDoesNotPoisonReconcile_data();
     void staleQLockFileRemovalGuardDoesNotPoisonReconcile();
     void staleJournalQLockFileRemovalGuardDoesNotPoisonReconcile_data();
@@ -2838,8 +2841,9 @@ failedPreviousBackupMovePartialStateRequiresRecovery()
     QCOMPARE(readBytes(previousPath), previousBackup);
     QCOMPARE(readBytes(linkedPath), previousBackup);
     QVERIFY(result.recoveryPaths.contains(sourcePath));
-    QVERIFY(result.recoveryPaths.contains(previousPath));
-    QVERIFY(!result.error.contains(
+    QVERIFY(!result.recoveryPaths.contains(previousPath));
+    QVERIFY(!result.recoveryPaths.contains(linkedPath));
+    QVERIFY(result.error.contains(
         QStringLiteral("uncertain final location")));
     QVERIFY(recoveryFilesFor(
         backupPath,
@@ -2891,10 +2895,11 @@ failedBackupPublishPartialMoveRequiresRecovery()
         readBytes(previousRecovery.constFirst()),
         previousBackup);
     QVERIFY(result.recoveryPaths.contains(sourcePath));
-    QVERIFY(result.recoveryPaths.contains(backupPath));
+    QVERIFY(!result.recoveryPaths.contains(backupPath));
+    QVERIFY(!result.recoveryPaths.contains(linkedPath));
     QVERIFY(result.recoveryPaths.contains(
         previousRecovery.constFirst()));
-    QVERIFY(!result.error.contains(
+    QVERIFY(result.error.contains(
         QStringLiteral("uncertain final location")));
     QVERIFY(recoveryFilesFor(
         backupPath,
@@ -2949,16 +2954,17 @@ failedSourceMovePartialStateRequiresRecovery()
     QCOMPARE(
         readBytes(previousRecovery.constFirst()),
         previousBackup);
-    QVERIFY(result.recoveryPaths.contains(tombstonePath));
+    QVERIFY(!result.recoveryPaths.contains(tombstonePath));
+    QVERIFY(!result.recoveryPaths.contains(linkedPath));
     QVERIFY(result.recoveryPaths.contains(backupPath));
     QVERIFY(result.recoveryPaths.contains(
         previousRecovery.constFirst()));
-    QVERIFY(!result.error.contains(
+    QVERIFY(result.error.contains(
         QStringLiteral("uncertain final location")));
 }
 
 void TestRideCacheRemoval::
-committedCleanupPartialRemovalReportsExactRecoveryPath()
+committedCleanupPartialRemovalRejectsUnverifiedRecoveryPath()
 {
 #ifndef Q_OS_UNIX
     QSKIP("Exact quarantine recovery paths require Unix removal semantics");
@@ -2998,8 +3004,13 @@ committedCleanupPartialRemovalReportsExactRecoveryPath()
         linkedPath.size() - QStringLiteral(".partial-link").size());
     QCOMPARE(readBytes(quarantinePath), notes);
     QCOMPARE(readBytes(linkedPath), notes);
-    QVERIFY(result.recoveryPaths.contains(quarantinePath));
+    QVERIFY(!result.recoveryPaths.contains(quarantinePath));
+    QVERIFY(!result.recoveryPaths.contains(linkedPath));
     QVERIFY(!result.recoveryPaths.contains(notesPath));
+    QCOMPARE(result.recoveryPaths.size(), 1);
+    QVERIFY(QFileInfo(result.recoveryPaths.constFirst()).isDir());
+    QVERIFY(result.error.contains(
+        QStringLiteral("destination changed after publication")));
     QCOMPARE(readBytes(fixture.backupPath(firstName())), activity);
     QVERIFY(!QFileInfo::exists(sourcePath));
 }
@@ -3382,6 +3393,126 @@ abandonedLinkedRemovalJournalBlocksNextTransaction()
         LinkedActivityRemoval::Journal::prepare(specification, error);
     QVERIFY2(next, qPrintable(error));
     QVERIFY2(next->cleanupAfterRollback(error), qPrintable(error));
+}
+
+void TestRideCacheRemoval::
+recoveryPathsRejectReplacedJournalDirectory()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Live journal directory replacement is blocked on Windows");
+#else
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    writeFixture(sourcePath, QByteArray("source"));
+
+    QString error;
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString displacedPath =
+        journalPath + QStringLiteral(".displaced");
+    bool hookReached = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("journal-recovery-manifest-verified"),
+        [&] {
+            hookReached = true;
+            QVERIFY(QDir().rename(journalPath, displacedPath));
+            QVERIFY(QDir().mkpath(journalPath));
+            writeFixture(
+                QDir(journalPath).filePath(
+                    QStringLiteral("manifest.json")),
+                QByteArray("substitute manifest"));
+        });
+
+    const QStringList recovery = journal->recoveryPaths();
+
+    QVERIFY(hookReached);
+    QVERIFY2(!recovery.contains(journalPath),
+             "A replacement journal directory was reported for recovery");
+#endif
+}
+
+void TestRideCacheRemoval::
+recoveryPathsRejectCandidateReplacedAfterCollection()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QByteArray sourceContents("source");
+    const QString sourcePath = fixture.activityPath(firstName());
+    writeFixture(sourcePath, sourceContents);
+
+    QString error;
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString firstCandidate = journal->backupStagingPath();
+    const QString secondCandidate = journal->sourceTombstonePath();
+    const QString displaced =
+        firstCandidate + QStringLiteral(".displaced");
+    writeFixture(firstCandidate, sourceContents);
+    writeFixture(secondCandidate, sourceContents);
+    bool hookReached = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("journal-recovery-candidates-collected"),
+        [&] {
+            hookReached = true;
+            QVERIFY(QFile::rename(firstCandidate, displaced));
+            writeFixture(firstCandidate, QByteArray("other!"));
+        });
+
+    const QStringList recovery = journal->recoveryPaths();
+
+    QVERIFY(hookReached);
+    QVERIFY2(!recovery.contains(firstCandidate),
+             "A replaced recovery candidate remained in the result");
+    QVERIFY(recovery.contains(secondCandidate));
+    QCOMPARE(readBytes(displaced), sourceContents);
+    QCOMPARE(readBytes(firstCandidate), QByteArray("other!"));
+}
+
+void TestRideCacheRemoval::
+recoveryPathsRejectCandidateReplacedAfterFinalJournalCheck()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QByteArray sourceContents("source");
+    const QString sourcePath = fixture.activityPath(firstName());
+    writeFixture(sourcePath, sourceContents);
+
+    QString error;
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString candidate = journal->backupStagingPath();
+    const QString displaced = candidate + QStringLiteral(".displaced");
+    writeFixture(candidate, sourceContents);
+    bool hookReached = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("journal-recovery-final-journal-verified"),
+        [&] {
+            hookReached = true;
+            QVERIFY(QFile::rename(candidate, displaced));
+            writeFixture(candidate, QByteArray("other!"));
+        });
+
+    const QStringList recovery = journal->recoveryPaths();
+
+    QVERIFY(hookReached);
+    QVERIFY2(!recovery.contains(candidate),
+             "A candidate replaced after the journal check was returned");
+    QCOMPARE(readBytes(displaced), sourceContents);
+    QCOMPARE(readBytes(candidate), QByteArray("other!"));
 }
 
 void TestRideCacheRemoval::

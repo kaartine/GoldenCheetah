@@ -13,6 +13,7 @@
 #include "AnchoredFileSystem.h"
 
 #include <QByteArray>
+#include <QByteArrayView>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -29,6 +30,7 @@
 #include <algorithm>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -502,6 +504,11 @@ using AtomicFileWriterFactory = std::function<std::unique_ptr<AtomicFileWriter>(
 using AtomicPublishFunction = std::function<bool(
     const QString &stagingPath, const QString &targetPath,
     bool &targetPublished, QString &error)>;
+using PinnedAtomicPublishFunction = std::function<bool(
+    AnchoredFileSystem::PinnedFile &staging,
+    const AnchoredFileSystem::EntryRef &target,
+    bool &targetPublished,
+    QString &error)>;
 using AtomicFinalizeFunction = std::function<bool(QString &error)>;
 using AtomicPreCommitValidation =
     std::function<bool(QString &error)>;
@@ -739,6 +746,39 @@ inline bool publishAtomicNew(const QString &temporaryPath,
     return true;
 }
 
+inline bool publishPinnedAtomicNew(
+    AnchoredFileSystem::PinnedFile &staging,
+    const AnchoredFileSystem::EntryRef &target,
+    bool &targetPublished,
+    QString &error)
+{
+    targetPublished = false;
+    error.clear();
+    const AnchoredFileSystem::MutationResult result =
+        AnchoredFileSystem::moveNoReplace(staging, target);
+    if (result.effect
+        == AnchoredFileSystem::MutationEffect::AppliedDurable) {
+        targetPublished = true;
+        return true;
+    }
+
+    targetPublished = result.applied()
+        || (!result.verifiedRecoveryPath.isEmpty()
+            && QDir::cleanPath(result.verifiedRecoveryPath)
+                == QDir::cleanPath(target.displayPath()));
+    if (result.effect == AnchoredFileSystem::MutationEffect::Conflict
+        && result.error.startsWith(QStringLiteral(
+            "The anchored move destination already exists"))) {
+        error = QStringLiteral(
+            "The target activity was created concurrently");
+    } else {
+        error = result.error.isEmpty()
+            ? QStringLiteral("Cannot publish the pinned activity file")
+            : result.error;
+    }
+    return false;
+}
+
 inline bool moveAtomicFile(
     const QString &sourcePath,
     const QString &targetPath,
@@ -772,7 +812,7 @@ class NewAtomicFileWriter final : public AtomicFileWriter
 public:
     explicit NewAtomicFileWriter(
         const QString &targetPath,
-        AtomicPublishFunction publish = publishAtomicNew)
+        PinnedAtomicPublishFunction publish = publishPinnedAtomicNew)
         : targetPath_(targetPath),
           file_(std::make_unique<QTemporaryFile>(
               QDir(QFileInfo(targetPath).absolutePath()).filePath(
@@ -796,12 +836,25 @@ public:
             return false;
         }
         temporaryPath_ = file_->fileName();
+        stagedHash_.reset();
+        stagedSize_ = 0;
         return true;
     }
 
     qint64 write(const QByteArray &data) override
     {
-        return file_ ? file_->write(data) : -1;
+        if (!file_) return -1;
+        const qint64 written = file_->write(data);
+        if (written <= 0) return written;
+        if (stagedSize_ > std::numeric_limits<qint64>::max() - written) {
+            error_ = QStringLiteral(
+                "The atomic publication is unexpectedly large");
+            return -1;
+        }
+        stagedHash_.addData(
+            QByteArrayView(data.constData(), qsizetype(written)));
+        stagedSize_ += written;
+        return written;
     }
 
     bool flush() override
@@ -839,20 +892,55 @@ public:
             QFileInfo(temporaryPath_).fileName(), anchorError);
         targetEntry = parent.entry(
             QFileInfo(targetPath_).fileName(), anchorError);
-        if (!stagingEntry.isValid() || !targetEntry.isValid()
-            || !AnchoredFileSystem::pinRegularFile(
-                stagingEntry, stagingPin, anchorError)) {
+        if (!stagingEntry.isValid() || !targetEntry.isValid()) {
             error_ = QStringLiteral(
                 "Cannot pin the atomic publication staging file: %1")
                          .arg(anchorError);
             return false;
         }
 
-        file_->setAutoRemove(false);
-        file_.reset();
+        AnchoredFileSystem::WriterPinHandoffState handoff;
+        const bool stagingPinned =
+            AnchoredFileSystem::pinRegularFileAfterWriterRelease(
+                stagingEntry,
+                file_->handle(),
+                stagedSize_,
+                stagedHash_.result(),
+                [this]() {
+                    file_->setAutoRemove(false);
+                    file_.reset();
+                },
+                stagingPin,
+                handoff,
+                anchorError);
+        if (!stagingPinned) {
+            error_ = QStringLiteral(
+                "Cannot pin the atomic publication staging file: %1")
+                         .arg(anchorError);
+            if (handoff.writerReleased) {
+                error_ += QStringLiteral(
+                    "; writer released; no identity-verified "
+                    "recovery path is available");
+            }
+            return false;
+        }
+        QString finalParentError;
+        if (!parent.pathMatches(finalParentError)) {
+            error_ = finalParentError.isEmpty()
+                ? QStringLiteral(
+                      "The atomic publication directory was replaced")
+                : QStringLiteral(
+                      "Cannot verify the atomic publication directory: %1")
+                      .arg(finalParentError);
+            error_ += QStringLiteral(
+                "; writer released; no identity-verified "
+                "recovery path is available");
+            return false;
+        }
+
         bool targetPublished = false;
         const bool published = publish_ && publish_(
-            temporaryPath_, targetPath_,
+            stagingPin, targetEntry,
             targetPublished, error_);
         const auto appendError = [&](const QString &detail) {
             if (detail.isEmpty()) return;
@@ -910,7 +998,16 @@ public:
             }
         }
 
-        if (published && targetPublished && targetOwned) return true;
+        if (published && targetPublished && targetOwned) {
+            QString publishedParentError;
+            if (parent.pathMatches(publishedParentError)) return true;
+            appendError(publishedParentError.isEmpty()
+                ? QStringLiteral(
+                      "the atomic publication directory was replaced")
+                : QStringLiteral(
+                      "cannot verify the atomic publication directory: %1")
+                      .arg(publishedParentError));
+        }
         if (!publish_ && error_.isEmpty()) {
             error_ = QStringLiteral("Cannot publish the new activity file");
         } else if (published && !targetPublished && error_.isEmpty()) {
@@ -976,8 +1073,10 @@ private:
     QString targetPath_;
     std::unique_ptr<QTemporaryFile> file_;
     QString temporaryPath_;
-    AtomicPublishFunction publish_;
+    PinnedAtomicPublishFunction publish_;
     QString error_;
+    QCryptographicHash stagedHash_{QCryptographicHash::Sha256};
+    qint64 stagedSize_ = 0;
 };
 
 inline AtomicFileWriterFactory qSaveFileWriterFactory()

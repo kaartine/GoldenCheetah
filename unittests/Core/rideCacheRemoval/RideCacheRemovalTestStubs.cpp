@@ -170,6 +170,11 @@ bool anchoredFilesystemSyncFailureRequested(const QString &)
     return false;
 }
 
+bool anchoredFilesystemFileUnlinkFailureRequested(const QString &)
+{
+    return false;
+}
+
 bool anchoredFilesystemUseLegacyWindowsDelete()
 {
     return false;

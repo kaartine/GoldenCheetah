@@ -105,6 +105,11 @@ bool anchoredFilesystemSyncFailureRequested(const QString &path)
         && path == anchoredFilesystemSyncFailurePath;
 }
 
+bool anchoredFilesystemFileUnlinkFailureRequested(const QString &)
+{
+    return false;
+}
+
 bool anchoredFilesystemUseLegacyWindowsDelete()
 {
     return forceLegacyWindowsDelete;
@@ -1029,10 +1034,11 @@ void TestAtomicActivitySave::newWriterRollsBackPartialPublishFailure()
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
     const QString path = dir.filePath(QStringLiteral("activity.json"));
-    const AtomicPublishFunction partialPublish =
-        [](const QString &staging, const QString &target,
+    const PinnedAtomicPublishFunction partialPublish =
+        [](AnchoredFileSystem::PinnedFile &staging,
+           const AnchoredFileSystem::EntryRef &target,
            bool &temporaryMoved, QString &error) {
-            if (!publishAtomicNew(
+            if (!publishPinnedAtomicNew(
                     staging, target, temporaryMoved, error)) {
                 return false;
             }
@@ -1068,15 +1074,16 @@ newWriterPreservesReplacementAfterPartialPublishFailure()
     AnchoredFileSystem::PinnedFile pin;
     QString injectionError;
     bool replacementPinned = false;
-    const AtomicPublishFunction partialPublish =
-        [&](const QString &stagingPath, const QString &target,
+    const PinnedAtomicPublishFunction partialPublish =
+        [&](AnchoredFileSystem::PinnedFile &staging,
+            const AnchoredFileSystem::EntryRef &target,
             bool &temporaryMoved, QString &error) {
-            if (!publishAtomicNew(
-                    stagingPath, target, temporaryMoved, error)) {
+            if (!publishPinnedAtomicNew(
+                    staging, target, temporaryMoved, error)) {
                 return false;
             }
             replacementPinned = replaceAndPinFixture(
-                target,
+                target.displayPath(),
                 retainedPath,
                 replacement,
                 parent,
@@ -1116,8 +1123,9 @@ void TestAtomicActivitySave::newWriterRejectsSuccessfulNoPublish()
     QVERIFY(dir.isValid());
     const QString path =
         dir.filePath(QStringLiteral("activity.json"));
-    const AtomicPublishFunction noPublish =
-        [](const QString &, const QString &,
+    const PinnedAtomicPublishFunction noPublish =
+        [](AnchoredFileSystem::PinnedFile &,
+           const AnchoredFileSystem::EntryRef &,
            bool &, QString &) {
             return true;
         };

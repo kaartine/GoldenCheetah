@@ -12,6 +12,8 @@
 #include <memory>
 
 #ifdef Q_OS_UNIX
+#include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -28,6 +30,7 @@ using FilesystemAction = std::function<void(
 
 FilesystemAction filesystemAction;
 bool failDirectorySync = false;
+bool failFileUnlink = false;
 bool forceLegacyWindowsDelete = false;
 
 #ifdef Q_OS_WIN
@@ -74,6 +77,11 @@ bool anchoredFilesystemSyncFailureRequested(const QString &)
     return failDirectorySync;
 }
 
+bool anchoredFilesystemFileUnlinkFailureRequested(const QString &)
+{
+    return failFileUnlink;
+}
+
 bool anchoredFilesystemUseLegacyWindowsDelete()
 {
     return forceLegacyWindowsDelete;
@@ -112,6 +120,43 @@ bool createHardLink(const QString &source, const QString &target)
     return false;
 #endif
 }
+
+#ifdef Q_OS_UNIX
+struct NativeFileTimes
+{
+    timespec accessed {};
+    timespec modified {};
+};
+
+bool captureNativeFileTimes(
+    const QString &path,
+    NativeFileTimes &times)
+{
+    struct stat status {};
+    if (::stat(QFile::encodeName(path).constData(), &status) != 0)
+        return false;
+#ifdef Q_OS_MACOS
+    times.accessed = status.st_atimespec;
+    times.modified = status.st_mtimespec;
+#else
+    times.accessed = status.st_atim;
+    times.modified = status.st_mtim;
+#endif
+    return true;
+}
+
+bool restoreNativeFileTimes(
+    const QString &path,
+    const NativeFileTimes &times)
+{
+    const timespec values[] = {times.accessed, times.modified};
+    return ::utimensat(
+        AT_FDCWD,
+        QFile::encodeName(path).constData(),
+        values,
+        0) == 0;
+}
+#endif
 
 bool createSymbolicLink(const QString &source, const QString &target)
 {
@@ -216,6 +261,11 @@ private slots:
     void newAtomicWriterRejectsNameReplacement_data();
     void newAtomicWriterRejectsNameReplacement();
     void newAtomicWriterRejectsPrePublishReplacement();
+#ifdef Q_OS_UNIX
+    void newAtomicWriterRejectsPostPublishParentReplacement();
+    void newAtomicWriterRejectsUnixHandoffRewrite();
+    void newAtomicWriterDoesNotClaimDeletedStaging();
+#endif
 #ifdef Q_OS_WIN
     void newAtomicWriterBlocksWindowsPreBridgeReplacement();
     void newAtomicWriterRetainsWindowsStagingWhenHandoffIsBlocked();
@@ -229,10 +279,14 @@ private slots:
     void outputPinFinalizationFailureRetainsFile();
     void outputDigestMismatchRetainsFile_data();
     void outputDigestMismatchRetainsFile();
+    void moveAcceptsWindowsRenameOnlyChange();
 #endif
     void permitsAtomicSiblingReplacementWhileDirectoryAnchored();
     void permitsAtomicReplacementWhilePinned();
     void readsPinnedContentsAfterPathReplacement();
+    void verifiedPathRejectsFinalNameReplacement();
+    void verifiedPathRejectsPostDigestRewrite();
+    void verifiedPathRejectsFinalParentReplacement();
     void directoryAnchorSurvivesPathReplacement();
     void directoryAnchorDetectsPathReplacement();
     void childAnchorsRemainInOneRootGeneration();
@@ -242,6 +296,8 @@ private slots:
     void copyDoesNotReplaceDestination();
     void copyReportsNonDurableCleanup();
     void moveDoesNotRestoreUnverifiedDestination();
+    void moveDoesNotReportModifiedRecoveryPath();
+    void moveRejectsReplacementAfterDirectorySync();
     void moveRejectsNewHardLink();
     void moveUsesPinnedParentAfterPathReplacement();
     void moveRejectsFinalEntryReplacement();
@@ -464,11 +520,12 @@ void TestAnchoredFilesystem::newAtomicWriterRejectsNameReplacement()
     const QString retained = root.filePath(QStringLiteral("retained.tmp"));
     const QByteArray contents("complete activity");
     int publisherCalls = 0;
-    const AtomicPublishFunction publisher = [&publisherCalls](
-            const QString &staging, const QString &published,
+    const PinnedAtomicPublishFunction publisher = [&publisherCalls](
+            AnchoredFileSystem::PinnedFile &staging,
+            const AnchoredFileSystem::EntryRef &published,
             bool &targetPublished, QString &error) {
         ++publisherCalls;
-        return publishAtomicNew(
+        return publishPinnedAtomicNew(
             staging, published, targetPublished, error);
     };
     bool hookReached = false;
@@ -504,7 +561,7 @@ void TestAnchoredFilesystem::newAtomicWriterRejectsNameReplacement()
     QCOMPARE(readFixture(stagingPath), contents);
     QCOMPARE(readFixture(retained), contents);
     QVERIFY(writer.errorString().contains(
-        QStringLiteral("retained"), Qt::CaseInsensitive));
+        QStringLiteral("writer released"), Qt::CaseInsensitive));
     const QString expectedReason = transition
             == QStringLiteral("writer-pin-identity-captured")
         ? QStringLiteral("before it was pinned")
@@ -532,7 +589,7 @@ void TestAnchoredFilesystem::newAtomicWriterRejectsPrePublishReplacement()
                            const QString &primary,
                            const QString &) {
         if (hookReached
-            || qstrcmp(transition, "atomic-publish-starting") != 0) {
+            || qstrcmp(transition, "move-before-publish") != 0) {
             return;
         }
         hookReached = true;
@@ -554,6 +611,157 @@ void TestAnchoredFilesystem::newAtomicWriterRejectsPrePublishReplacement()
     QVERIFY(writer.errorString().contains(
         QStringLiteral("replaced"), Qt::CaseInsensitive));
 }
+
+#ifdef Q_OS_UNIX
+
+void TestAnchoredFilesystem::
+newAtomicWriterRejectsPostPublishParentReplacement()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString liveDirectory =
+        root.filePath(QStringLiteral("live"));
+    const QString retainedDirectory =
+        root.filePath(QStringLiteral("retained"));
+    QVERIFY(QDir().mkdir(liveDirectory));
+    const QString target = QDir(liveDirectory).filePath(
+        QStringLiteral("activity.json"));
+    const QByteArray contents("complete activity");
+    const QByteArray replacement("concurrent activity");
+    bool hookReached = false;
+
+    NewAtomicFileWriter writer(target);
+    QVERIFY2(writer.open(), qPrintable(writer.errorString()));
+    QCOMPARE(writer.write(contents), qint64(contents.size()));
+    QVERIFY2(writer.flush(), qPrintable(writer.errorString()));
+    filesystemAction = [&](const char *transition,
+                           const QString &,
+                           const QString &) {
+        if (hookReached
+            || qstrcmp(transition, "move-before-publish") != 0) {
+            return;
+        }
+        hookReached = true;
+        QVERIFY(QDir().rename(liveDirectory, retainedDirectory));
+        QVERIFY(QDir().mkdir(liveDirectory));
+        writeFixture(target, replacement);
+    };
+
+    const bool committed = writer.commit();
+    filesystemAction = {};
+
+    QVERIFY(hookReached);
+    QVERIFY2(!committed,
+             "Publication succeeded through a replaced parent path");
+    QVERIFY(writer.errorString().contains(
+        QStringLiteral("directory"), Qt::CaseInsensitive));
+    QVERIFY(writer.errorString().contains(
+        QStringLiteral("replaced"), Qt::CaseInsensitive));
+    QCOMPARE(readFixture(target), replacement);
+    const QString retainedActivity = QDir(retainedDirectory).filePath(
+        QStringLiteral("activity.json"));
+    QCOMPARE(readFixture(retainedActivity), contents);
+    QVERIFY(!writer.errorString().contains(retainedActivity));
+}
+
+void TestAnchoredFilesystem::newAtomicWriterRejectsUnixHandoffRewrite()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString target = root.filePath(QStringLiteral("activity.json"));
+    const QByteArray contents("complete activity");
+    const QByteArray replacement("modified activity");
+    QCOMPARE(replacement.size(), contents.size());
+    int publisherCalls = 0;
+    const PinnedAtomicPublishFunction publisher = [&publisherCalls](
+            AnchoredFileSystem::PinnedFile &,
+            const AnchoredFileSystem::EntryRef &,
+            bool &, QString &) {
+        ++publisherCalls;
+        return true;
+    };
+    bool hookReached = false;
+    bool replacementWritten = false;
+    QString stagingPath;
+
+    NewAtomicFileWriter writer(target, publisher);
+    QVERIFY2(writer.open(), qPrintable(writer.errorString()));
+    QCOMPARE(writer.write(contents), qint64(contents.size()));
+    QVERIFY2(writer.flush(), qPrintable(writer.errorString()));
+    filesystemAction = [&](const char *transition,
+                           const QString &primary,
+                           const QString &) {
+        if (hookReached
+            || qstrcmp(transition, "output-pin-writer-released") != 0) {
+            return;
+        }
+        hookReached = true;
+        stagingPath = primary;
+        QFile replacementFile(primary);
+        if (!replacementFile.open(QIODevice::ReadWrite)
+            || !replacementFile.seek(0)) {
+            return;
+        }
+        replacementWritten =
+            replacementFile.write(replacement)
+                == qint64(replacement.size())
+            && replacementFile.flush();
+    };
+
+    const bool committed = writer.commit();
+    filesystemAction = {};
+
+    QVERIFY(hookReached);
+    QVERIFY(replacementWritten);
+    QVERIFY(!committed);
+    QCOMPARE(publisherCalls, 0);
+    QVERIFY(!QFileInfo::exists(target));
+    QCOMPARE(readFixture(stagingPath), replacement);
+    QVERIFY(writer.errorString().contains(
+        QStringLiteral("changed"), Qt::CaseInsensitive));
+    QVERIFY(!writer.errorString().contains(stagingPath));
+}
+
+void TestAnchoredFilesystem::newAtomicWriterDoesNotClaimDeletedStaging()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString target = root.filePath(QStringLiteral("activity.json"));
+    const QByteArray contents("complete activity");
+    bool hookReached = false;
+    QString stagingPath;
+
+    NewAtomicFileWriter writer(target);
+    QVERIFY2(writer.open(), qPrintable(writer.errorString()));
+    QCOMPARE(writer.write(contents), qint64(contents.size()));
+    QVERIFY2(writer.flush(), qPrintable(writer.errorString()));
+    filesystemAction = [&](const char *transition,
+                           const QString &primary,
+                           const QString &) {
+        if (hookReached
+            || qstrcmp(transition, "output-pin-writer-released") != 0) {
+            return;
+        }
+        hookReached = true;
+        stagingPath = primary;
+        QVERIFY(QFile::remove(primary));
+    };
+
+    const bool committed = writer.commit();
+    filesystemAction = {};
+
+    QVERIFY(hookReached);
+    QVERIFY(!committed);
+    QVERIFY(!QFileInfo::exists(target));
+    QVERIFY(!QFileInfo::exists(stagingPath));
+    QVERIFY(writer.errorString().contains(
+        QStringLiteral("writer released"), Qt::CaseInsensitive));
+    QVERIFY(!writer.errorString().contains(
+        QStringLiteral("data retained"), Qt::CaseInsensitive));
+    QVERIFY(!writer.errorString().contains(stagingPath));
+}
+
+#endif
 
 #ifdef Q_OS_WIN
 
@@ -646,7 +854,7 @@ newAtomicWriterRetainsWindowsStagingWhenHandoffIsBlocked()
     QVERIFY(writer.errorString().contains(
         QStringLiteral("system error 32"), Qt::CaseInsensitive));
     QVERIFY(writer.errorString().contains(
-        QStringLiteral("retained"), Qt::CaseInsensitive));
+        QStringLiteral("writer released"), Qt::CaseInsensitive));
     QVERIFY(!writer.errorString().contains(stagingPath));
     QVERIFY(!QFileInfo::exists(target));
     concurrentWriter.reset();
@@ -683,8 +891,9 @@ void TestAnchoredFilesystem::newAtomicWriterRejectsWindowsHandoffRace()
     const QByteArray replacement("modified activity");
     QCOMPARE(replacement.size(), contents.size());
     int publisherCalls = 0;
-    const AtomicPublishFunction publisher = [&publisherCalls](
-            const QString &, const QString &,
+    const PinnedAtomicPublishFunction publisher = [&publisherCalls](
+            AnchoredFileSystem::PinnedFile &,
+            const AnchoredFileSystem::EntryRef &,
             bool &, QString &) {
         ++publisherCalls;
         return true;
@@ -750,7 +959,7 @@ void TestAnchoredFilesystem::newAtomicWriterRejectsWindowsHandoffRace()
         : QStringLiteral("while its writer was released");
     QVERIFY(writer.errorString().contains(expectedReason));
     QVERIFY(writer.errorString().contains(
-        QStringLiteral("retained"), Qt::CaseInsensitive));
+        QStringLiteral("writer released"), Qt::CaseInsensitive));
     QVERIFY(!writer.errorString().contains(stagingPath));
     QVERIFY(!QFileInfo::exists(target));
     QCOMPARE(readFixture(stagingPath), replacement);
@@ -1040,27 +1249,218 @@ void TestAnchoredFilesystem::readsPinnedContentsAfterPathReplacement()
     const QByteArray originalContents("original pinned contents");
     const QByteArray substituteContents("substitute contents");
     writeFixture(source.displayPath(), originalContents);
-    bool replaced = false;
     {
         const PinnedFile original = pin(source);
 
-        replaced = QFile::rename(source.displayPath(), retained);
-#ifndef Q_OS_WIN
-        QVERIFY(replaced);
-#endif
-        if (replaced) writeFixture(source.displayPath(), substituteContents);
+        QVERIFY(renameFixture(source.displayPath(), retained));
+        writeFixture(source.displayPath(), substituteContents);
 
         QByteArray contents;
         QString error;
         QVERIFY(readAll(original, 1024, contents, error));
         QVERIFY2(error.isEmpty(), qPrintable(error));
         QCOMPARE(contents, originalContents);
-        if (replaced) {
-            QCOMPARE(readFixture(source.displayPath()), substituteContents);
-        }
+        QCOMPARE(readFixture(source.displayPath()), substituteContents);
     }
-    if (replaced) QCOMPARE(readFixture(retained), originalContents);
+    QCOMPARE(readFixture(retained), originalContents);
 }
+
+void TestAnchoredFilesystem::verifiedPathRejectsFinalNameReplacement()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("The permission-blocked recovery race is Unix-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    const QString retained = root.filePath(QStringLiteral("retained"));
+    const QByteArray original("original contents");
+    const QByteArray substitute("substitute contents");
+    writeFixture(source.displayPath(), original);
+    PinnedFile pinned = pin(source);
+    QString quarantine;
+    bool unlinkBlocked = false;
+    bool hookReached = false;
+    filesystemAction = [&](const char *transition,
+                           const QString &primary,
+                           const QString &) {
+        if (qstrcmp(
+                transition, "remove-quarantine-finally-verified") == 0) {
+            quarantine = primary;
+            failFileUnlink = true;
+            unlinkBlocked = true;
+            return;
+        }
+        if (hookReached
+            || qstrcmp(
+                transition, "recovery-path-digest-verified") != 0) {
+            return;
+        }
+        hookReached = true;
+        failFileUnlink = false;
+        QVERIFY(renameFixture(primary, retained));
+        writeFixture(primary, substitute);
+    };
+
+    const MutationResult result = remove(pinned);
+    filesystemAction = {};
+    failFileUnlink = false;
+
+    QVERIFY(unlinkBlocked);
+    QVERIFY(!quarantine.isEmpty());
+    QVERIFY(hookReached);
+    QCOMPARE(result.effect, MutationEffect::Partial);
+    QVERIFY2(result.verifiedRecoveryPath.isEmpty(),
+             "A replaced name was reported as a verified recovery path");
+    QCOMPARE(readFixture(quarantine), substitute);
+    QCOMPARE(readFixture(retained), original);
+#endif
+}
+
+void TestAnchoredFilesystem::verifiedPathRejectsPostDigestRewrite()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Native timestamp restoration is Unix-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    const QString alias = root.filePath(QStringLiteral("alias"));
+    const QByteArray original("verified recovery bytes");
+    const QByteArray substitute(original.size(), 'x');
+    writeFixture(source.displayPath(), original);
+    PinnedFile pinned = pin(source);
+    NativeFileTimes originalTimes;
+    QVERIFY(captureNativeFileTimes(
+        source.displayPath(), originalTimes));
+    bool hookReached = false;
+    filesystemAction = [&](const char *transition,
+                           const QString &primary,
+                           const QString &) {
+        if (hookReached
+            || qstrcmp(
+                transition, "recovery-path-digest-verified") != 0) {
+            return;
+        }
+        hookReached = true;
+        QVERIFY(createHardLink(primary, alias));
+        QFile file(primary);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QCOMPARE(file.write(substitute), qint64(substitute.size()));
+        QVERIFY(file.flush());
+        file.close();
+        QVERIFY(QFile::remove(alias));
+        QVERIFY(restoreNativeFileTimes(primary, originalTimes));
+    };
+
+    const QString verified = verifiedRecoveryPath(pinned, source);
+    filesystemAction = {};
+
+    QVERIFY(hookReached);
+    QVERIFY2(verified.isEmpty(),
+             "Post-digest replacement was reported as verified");
+    QCOMPARE(readFixture(source.displayPath()), substitute);
+#endif
+}
+
+void TestAnchoredFilesystem::verifiedPathRejectsFinalParentReplacement()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("The anchored parent replacement race is Unix-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString parentPath = root.filePath(QStringLiteral("current"));
+    const QString retainedParent =
+        root.filePath(QStringLiteral("retained"));
+    QVERIFY(QDir().mkdir(parentPath));
+    const DirectoryAnchor directory = openDirectory(parentPath);
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    const QByteArray original("original recovery bytes");
+    const QByteArray substitute("substitute recovery bytes");
+    writeFixture(source.displayPath(), original);
+    PinnedFile pinned = pin(source);
+    bool digestVerified = false;
+    bool parentReplaced = false;
+    filesystemAction = [&](const char *transition,
+                           const QString &,
+                           const QString &) {
+        if (qstrcmp(
+                transition, "recovery-path-digest-verified") == 0) {
+            digestVerified = true;
+            return;
+        }
+        if (!digestVerified
+            || parentReplaced
+            || qstrcmp(
+                transition, "recovery-path-parent-verified") != 0) {
+            return;
+        }
+        QVERIFY(QDir().rename(parentPath, retainedParent));
+        QVERIFY(QDir().mkdir(parentPath));
+        writeFixture(
+            QDir(parentPath).filePath(QStringLiteral("source")),
+            substitute);
+        parentReplaced = true;
+    };
+
+    const QString verified = verifiedRecoveryPath(pinned, source);
+    filesystemAction = {};
+
+    QVERIFY(digestVerified);
+    QVERIFY(parentReplaced);
+    QVERIFY2(verified.isEmpty(),
+             "A path through a replaced parent was reported as verified");
+    QCOMPARE(
+        readFixture(QDir(parentPath).filePath(QStringLiteral("source"))),
+        substitute);
+    QCOMPARE(
+        readFixture(QDir(retainedParent).filePath(QStringLiteral("source"))),
+        original);
+#endif
+}
+
+#ifdef Q_OS_WIN
+
+void TestAnchoredFilesystem::moveAcceptsWindowsRenameOnlyChange()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    const EntryRef target = entry(directory, QStringLiteral("target"));
+    const QString transient = root.filePath(QStringLiteral("transient"));
+    const QByteArray contents("rename-stable contents");
+    writeFixture(source.displayPath(), contents);
+    PinnedFile pinned = pin(source);
+    const NativeIdentity identity = pinned.identity();
+    bool hookReached = false;
+    filesystemAction = [&](const char *transition,
+                           const QString &,
+                           const QString &destination) {
+        if (hookReached
+            || qstrcmp(
+                transition, "move-before-final-name-check") != 0) {
+            return;
+        }
+        hookReached = true;
+        QVERIFY(renameFixture(destination, transient));
+        QVERIFY(renameFixture(transient, destination));
+    };
+
+    const MutationResult result = moveNoReplace(pinned, target);
+    filesystemAction = {};
+
+    QVERIFY(hookReached);
+    verifyApplied(result);
+    verifyPinnedAt(pinned, target, identity);
+    QCOMPARE(readFixture(target.displayPath()), contents);
+    QVERIFY(!QFileInfo::exists(transient));
+}
+
+#endif
 
 void TestAnchoredFilesystem::directoryAnchorSurvivesPathReplacement()
 {
@@ -1368,6 +1768,87 @@ void TestAnchoredFilesystem::moveDoesNotRestoreUnverifiedDestination()
     QCOMPARE(readFixture(retained), original);
 }
 
+void TestAnchoredFilesystem::moveDoesNotReportModifiedRecoveryPath()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("The Unix in-place rewrite race is platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    const EntryRef target = entry(directory, QStringLiteral("target"));
+    const QByteArray original("original bytes");
+    const QByteArray replacement("modified bytes");
+    QCOMPARE(replacement.size(), original.size());
+    writeFixture(source.displayPath(), original);
+    PinnedFile pinned = pin(source);
+    bool hookReached = false;
+    filesystemAction = [&](const char *transition,
+                           const QString &,
+                           const QString &destination) {
+        if (qstrcmp(transition, "move-published") != 0) return;
+        hookReached = true;
+        QFile file(destination);
+        QVERIFY(file.open(QIODevice::ReadWrite));
+        QVERIFY(file.seek(0));
+        QCOMPARE(file.write(replacement), qint64(replacement.size()));
+        QVERIFY(file.flush());
+    };
+
+    const MutationResult result = moveNoReplace(pinned, target);
+    filesystemAction = {};
+
+    QVERIFY(hookReached);
+    QCOMPARE(result.effect, MutationEffect::Partial);
+    QVERIFY(!result.applied());
+    QVERIFY2(result.verifiedRecoveryPath.isEmpty(),
+             "A modified file was advertised as a verified recovery path");
+    QCOMPARE(readFixture(target.displayPath()), replacement);
+#endif
+}
+
+void TestAnchoredFilesystem::moveRejectsReplacementAfterDirectorySync()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Directory synchronization is Unix-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    const EntryRef target = entry(directory, QStringLiteral("target"));
+    const QString retained = root.filePath(QStringLiteral("retained"));
+    const QByteArray original("original");
+    const QByteArray substitute("substitute");
+    writeFixture(source.displayPath(), original);
+    PinnedFile pinned = pin(source);
+    bool hookReached = false;
+    filesystemAction = [&](const char *transition,
+                           const QString &,
+                           const QString &destination) {
+        if (qstrcmp(
+                transition, "move-before-final-name-check") != 0) {
+            return;
+        }
+        hookReached = true;
+        QVERIFY(renameFixture(destination, retained));
+        writeFixture(destination, substitute);
+    };
+
+    const MutationResult result = moveNoReplace(pinned, target);
+    filesystemAction = {};
+
+    QVERIFY(hookReached);
+    QCOMPARE(result.effect, MutationEffect::Partial);
+    QVERIFY(!result.applied());
+    QVERIFY(result.verifiedRecoveryPath.isEmpty());
+    pinned = {};
+    QCOMPARE(readFixture(target.displayPath()), substitute);
+    QCOMPARE(readFixture(retained), original);
+#endif
+}
+
 void TestAnchoredFilesystem::moveRejectsNewHardLink()
 {
     QTemporaryDir root;
@@ -1393,7 +1874,8 @@ void TestAnchoredFilesystem::moveRejectsNewHardLink()
     QVERIFY(actionReached);
     QVERIFY(!result.applied());
     QCOMPARE(result.effect, MutationEffect::Partial);
-    QCOMPARE(result.verifiedRecoveryPath, target.displayPath());
+    QVERIFY2(result.verifiedRecoveryPath.isEmpty(),
+             "A multiply linked file was advertised as recoverable");
     QVERIFY(QFileInfo::exists(target.displayPath()));
     QVERIFY(QFileInfo::exists(extra));
 }
@@ -2279,7 +2761,8 @@ void TestAnchoredFilesystem::removePartialMoveReportsGeneratedQuarantine()
 
     QVERIFY(!quarantine.isEmpty());
     QCOMPARE(result.effect, MutationEffect::Partial);
-    QCOMPARE(result.verifiedRecoveryPath, quarantine);
+    QVERIFY2(result.verifiedRecoveryPath.isEmpty(),
+             "A multiply linked quarantine was advertised as recoverable");
     QCOMPARE(readFixture(quarantine), original);
     QCOMPARE(readFixture(extraLink), original);
     QVERIFY(!QFileInfo::exists(source.displayPath()));

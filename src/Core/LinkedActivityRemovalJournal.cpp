@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <utility>
+#include <vector>
 
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
 void rideCacheRemovalTransitionReached(const char *transition);
@@ -3497,53 +3498,110 @@ bool Journal::cleanupAfterCommit(QString &error)
 
 QStringList Journal::recoveryPaths() const
 {
-    QStringList paths;
-    if (!state_) return paths;
+    if (!state_) return {};
     QString generationError;
-    if (!journalDirectoryMatches(*state_, generationError)) return paths;
+    if (!journalDirectoryMatches(*state_, generationError)) return {};
 
-    const auto addMatchingFile = [&paths](
+    struct RecoveryCandidate
+    {
+        AnchoredFileSystem::EntryRef entry;
+        AnchoredFileSystem::PinnedFile file;
+    };
+    std::vector<RecoveryCandidate> candidates;
+
+    const auto pinMatchingFile = [&candidates](
         const QString &path,
         const AtomicFileSnapshot &expected) {
-        ObservedFile observed;
         QString ignored;
-        if (inspectRegularFile(
-                path, observed, ignored, expected.size)
-            && snapshotMatches(observed, expected)) {
-            paths.append(path);
+        const QFileInfo info(path);
+        AnchoredFileSystem::DirectoryAnchor parent;
+        if (!AnchoredFileSystem::DirectoryAnchor::open(
+                info.absolutePath(), parent, ignored)) {
+            return;
         }
+        const AnchoredFileSystem::EntryRef entry =
+            parent.entry(info.fileName(), ignored);
+        if (!entry.isValid()) return;
+
+        AnchoredFileSystem::PinnedFile file;
+        if (!AnchoredFileSystem::pinRegularFile(
+                entry, file, ignored, expected.size)
+            || file.size() != expected.size
+            || file.sha256() != expected.digest) {
+            return;
+        }
+        candidates.push_back(
+            {entry, std::move(file)});
     };
-    const auto addMatchingJournal = [&] {
+
+    const auto journalRecoveryPathMatches = [&] {
         QString ignored;
-        if (manifestFileMatches(*state_, ignored)) {
-            paths.append(state_->journalPath);
-        }
+        return journalDirectoryMatches(*state_, ignored)
+            && manifestFileMatches(*state_, ignored)
+            && journalDirectoryMatches(*state_, ignored);
     };
+    const bool includeJournal = journalRecoveryPathMatches();
+    if (includeJournal) {
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+        rideCacheRemovalTransitionReached(
+            "journal-recovery-manifest-verified");
+#endif
+    }
 
     ResolvedPaths resolved;
     QString error;
     if (!resolveManifestPaths(*state_, resolved, error)) {
-        addMatchingJournal();
-        return paths;
+        if (includeJournal && journalRecoveryPathMatches()) {
+            return {state_->journalPath};
+        }
+        return {};
     }
 
-    addMatchingJournal();
-    addMatchingFile(
+    pinMatchingFile(
         resolved.backupStaging,
         state_->manifest.source.contents);
-    addMatchingFile(
+    pinMatchingFile(
         resolved.sourceTombstone,
         state_->manifest.source.contents);
     if (state_->manifest.previousBackup.exists) {
-        addMatchingFile(
+        pinMatchingFile(
             resolved.previousBackup,
             state_->manifest.previousBackup.contents);
     }
     if (state_->manifest.hasPeer
         && state_->manifest.peerNew.exists) {
-        addMatchingFile(
+        pinMatchingFile(
             resolved.peerStaging,
             state_->manifest.peerNew.contents);
+    }
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    rideCacheRemovalTransitionReached(
+        "journal-recovery-candidates-collected");
+#endif
+
+    if (!journalRecoveryPathMatches()) return {};
+    std::vector<bool> candidateMatched(candidates.size(), false);
+    for (std::size_t index = 0; index < candidates.size(); ++index) {
+        const RecoveryCandidate &candidate = candidates.at(index);
+        candidateMatched.at(index) =
+            !AnchoredFileSystem::verifiedRecoveryPath(
+                candidate.file, candidate.entry).isEmpty();
+    }
+    if (!journalRecoveryPathMatches()) return {};
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    rideCacheRemovalTransitionReached(
+        "journal-recovery-final-journal-verified");
+#endif
+
+    QStringList paths;
+    if (includeJournal) paths.append(state_->journalPath);
+    for (std::size_t index = 0; index < candidates.size(); ++index) {
+        if (!candidateMatched.at(index)) continue;
+        const RecoveryCandidate &candidate = candidates.at(index);
+        const QString verified =
+            AnchoredFileSystem::verifiedRecoveryPath(
+                candidate.file, candidate.entry);
+        if (!verified.isEmpty()) paths.append(verified);
     }
     return paths;
 }
