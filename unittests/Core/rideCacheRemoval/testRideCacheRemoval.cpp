@@ -3478,16 +3478,40 @@ void TestRideCacheRemoval::
 unsafeJournalQLockFileRemovalGuardEntriesRemainRejected_data()
 {
     QTest::addColumn<QString>("entryName");
+    QTest::addColumn<int>("entryKind");
+    QTest::addColumn<qint64>("size");
+    QTest::addColumn<QString>("errorFragment");
     QTest::newRow("unknown-lock-target")
-        << QStringLiteral(".peer.old.lock.rmlock");
+        << QStringLiteral(".peer.old.lock.rmlock")
+        << int(JournalNamespaceEntryKind::RegularFile)
+        << qint64(9) << QString();
     QTest::newRow("suffix-lookalike")
-        << QStringLiteral(".manifest.json.lock.rmlock.tmp");
+        << QStringLiteral(".manifest.json.lock.rmlock.tmp")
+        << int(JournalNamespaceEntryKind::RegularFile)
+        << qint64(9) << QString();
+    QTest::newRow("recognized-symbolic-link")
+        << QStringLiteral(".manifest.json.lock.rmlock")
+        << int(JournalNamespaceEntryKind::SymbolicLink)
+        << qint64(0) << QStringLiteral("unsafe");
+    QTest::newRow("recognized-directory")
+        << QStringLiteral(".manifest.json.lock.rmlock")
+        << int(JournalNamespaceEntryKind::Directory)
+        << qint64(0) << QStringLiteral("unsafe");
+    QTest::newRow("recognized-oversized-file")
+        << QStringLiteral(".manifest.json.lock.rmlock")
+        << int(JournalNamespaceEntryKind::RegularFile)
+        << qint64(64 * 1024 + 1) << QStringLiteral("large");
 }
 
 void TestRideCacheRemoval::
 unsafeJournalQLockFileRemovalGuardEntriesRemainRejected()
 {
     QFETCH(QString, entryName);
+    QFETCH(int, entryKind);
+    QFETCH(qint64, size);
+    QFETCH(QString, errorFragment);
+    const JournalNamespaceEntryKind kind =
+        JournalNamespaceEntryKind(entryKind);
     Fixture fixture;
     QVERIFY(fixture.initialize());
     const QString root = fixture.temporary.path();
@@ -3502,14 +3526,31 @@ unsafeJournalQLockFileRemovalGuardEntriesRemainRejected()
     QVERIFY2(journal, qPrintable(error));
     const QString journalPath = journal->directoryPath();
     const QString entryPath = QDir(journalPath).filePath(entryName);
-    writeFixture(entryPath, QByteArray("lookalike"));
+    const QByteArray contents(int(size), 'x');
+    if (kind == JournalNamespaceEntryKind::Directory) {
+        QVERIFY(QDir().mkpath(entryPath));
+    } else if (kind == JournalNamespaceEntryKind::SymbolicLink) {
+        const QString targetPath = QDir(root).filePath(
+            QStringLiteral("journal-qlock-removal-guard-target"));
+        writeFixture(targetPath, QByteArray("target"));
+        if (!createTestSymbolicLink(targetPath, entryPath, false))
+            QSKIP("File symbolic links are unavailable");
+    } else {
+        writeFixture(entryPath, contents);
+    }
     journal.reset();
 
     for (int attempt = 0; attempt < 2; ++attempt) {
         error.clear();
         QVERIFY(!LinkedActivityRemoval::Journal::reconcileAll(root, error));
         QVERIFY2(!error.isEmpty(), qPrintable(entryName));
-        QCOMPARE(readBytes(entryPath), QByteArray("lookalike"));
+        if (!errorFragment.isEmpty()) {
+            QVERIFY2(
+                error.contains(errorFragment, Qt::CaseInsensitive),
+                qPrintable(error));
+        }
+        if (kind == JournalNamespaceEntryKind::RegularFile)
+            QCOMPARE(readBytes(entryPath), contents);
     }
 }
 
