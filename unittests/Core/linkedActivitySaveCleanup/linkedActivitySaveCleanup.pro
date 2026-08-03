@@ -18,3 +18,5 @@ HEADERS = ../../../src/Core/LinkedActivitySaveJournal.h \
 
 INCLUDEPATH += ../../../src/Core \
                ../../../src/FileIO
+
+win32:LIBS += -ladvapi32

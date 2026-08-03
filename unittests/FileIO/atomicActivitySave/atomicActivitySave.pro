@@ -50,6 +50,7 @@ INCLUDEPATH += ../../../src \
                $${ZLIB_INCLUDES}
 
 LIBS += $${GSL_LIBS}
+win32:LIBS += -ladvapi32
 
 isEmpty(ZLIB_LIBS) {
     LIBS += -lz

@@ -16,6 +16,8 @@ HEADERS = ../../../src/FileIO/AnchoredFileSystem.h
 
 INCLUDEPATH += ../../../src/FileIO
 
+win32:LIBS += -ladvapi32
+
 sanitize:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \
                       -fno-omit-frame-pointer \

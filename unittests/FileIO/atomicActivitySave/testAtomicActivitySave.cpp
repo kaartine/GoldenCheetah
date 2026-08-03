@@ -23,6 +23,8 @@
 #include <unistd.h>
 #elif defined(Q_OS_WIN)
 #include <qt_windows.h>
+#include <aclapi.h>
+#include <sddl.h>
 #endif
 
 void resetAtomicActivitySaveProcessorStub();
@@ -68,9 +70,130 @@ public:
         handle_ = INVALID_HANDLE_VALUE;
     }
 
+    HANDLE get() const { return handle_; }
+
 private:
     HANDLE handle_ = INVALID_HANDLE_VALUE;
 };
+
+bool makeWindowsDirectoryPermissive(const QString &path)
+{
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    if (!::ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            L"D:P(A;OICI;GA;;;WD)",
+            SDDL_REVISION_1,
+            &descriptor,
+            nullptr)) {
+        return false;
+    }
+    BOOL daclPresent = FALSE;
+    BOOL daclDefaulted = FALSE;
+    PACL dacl = nullptr;
+    const bool valid = ::GetSecurityDescriptorDacl(
+            descriptor, &daclPresent, &dacl, &daclDefaulted)
+        && daclPresent && dacl;
+    const QString native = QDir::toNativeSeparators(path);
+    const DWORD result = valid
+        ? ::SetNamedSecurityInfoW(
+              reinterpret_cast<LPWSTR>(
+                  const_cast<ushort *>(native.utf16())),
+              SE_FILE_OBJECT,
+              DACL_SECURITY_INFORMATION
+                  | PROTECTED_DACL_SECURITY_INFORMATION,
+              nullptr,
+              nullptr,
+              dacl,
+              nullptr)
+        : ERROR_INVALID_SECURITY_DESCR;
+    ::LocalFree(descriptor);
+    return result == ERROR_SUCCESS;
+}
+
+bool windowsDirectoryHasOwnerOnlyAcl(const QString &path)
+{
+    HANDLE rawToken = nullptr;
+    if (!::OpenProcessToken(
+            ::GetCurrentProcess(), TOKEN_QUERY, &rawToken)) {
+        return false;
+    }
+    WindowsTestHandle token(rawToken);
+    DWORD required = 0;
+    ::GetTokenInformation(
+        token.get(), TokenUser, nullptr, 0, &required);
+    if (::GetLastError() != ERROR_INSUFFICIENT_BUFFER
+        || required == 0) {
+        return false;
+    }
+    QByteArray userStorage(int(required), '\0');
+    if (!::GetTokenInformation(
+            token.get(), TokenUser, userStorage.data(),
+            required, &required)) {
+        return false;
+    }
+    auto *user = reinterpret_cast<TOKEN_USER *>(
+        userStorage.data());
+    if (!::IsValidSid(user->User.Sid)) return false;
+
+    const QString native = QDir::toNativeSeparators(path);
+    WindowsTestHandle directory(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(native.utf16()),
+        FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS
+            | FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr));
+    if (!directory.isValid()) return false;
+
+    PSID owner = nullptr;
+    PACL dacl = nullptr;
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    const DWORD securityResult = ::GetSecurityInfo(
+        directory.get(),
+        SE_FILE_OBJECT,
+        OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+        &owner,
+        nullptr,
+        &dacl,
+        nullptr,
+        &descriptor);
+    if (securityResult != ERROR_SUCCESS) return false;
+
+    SECURITY_DESCRIPTOR_CONTROL control = 0;
+    DWORD revision = 0;
+    bool privateSecurity = owner
+        && ::EqualSid(owner, user->User.Sid)
+        && dacl
+        && dacl->AceCount == 1
+        && ::GetSecurityDescriptorControl(
+            descriptor, &control, &revision)
+        && (control & SE_DACL_PROTECTED);
+    if (privateSecurity) {
+        void *rawAce = nullptr;
+        if (!::GetAce(dacl, 0, &rawAce)) {
+            privateSecurity = false;
+        } else {
+            auto *header = static_cast<ACE_HEADER *>(rawAce);
+            auto *ace = static_cast<ACCESS_ALLOWED_ACE *>(rawAce);
+            constexpr BYTE inheritanceFlags =
+                OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
+                | INHERITED_ACE | INHERIT_ONLY_ACE
+                | NO_PROPAGATE_INHERIT_ACE;
+            privateSecurity = header->AceType
+                    == ACCESS_ALLOWED_ACE_TYPE
+                && (header->AceFlags & inheritanceFlags)
+                    == (OBJECT_INHERIT_ACE
+                        | CONTAINER_INHERIT_ACE)
+                && ::IsValidSid(&ace->SidStart)
+                && ::EqualSid(&ace->SidStart, user->User.Sid)
+                && (ace->Mask & FILE_ALL_ACCESS)
+                    == FILE_ALL_ACCESS;
+        }
+    }
+    if (descriptor) ::LocalFree(descriptor);
+    return privateSecurity;
+}
 #endif
 
 } // namespace
@@ -89,6 +212,8 @@ void clearLinkedActivitySaveTransitionAction()
     linkedActivitySaveAction = {};
 }
 
+void linkedActivitySaveTransitionReached(const char *transition);
+
 void anchoredFilesystemTransitionReached(
     const char *transition,
     const QString &primary,
@@ -96,6 +221,11 @@ void anchoredFilesystemTransitionReached(
 {
     if (anchoredFilesystemAction) {
         anchoredFilesystemAction(transition, primary, secondary);
+    }
+    if (QByteArray(transition)
+        == QByteArray("private-directory-staging-anchored")) {
+        linkedActivitySaveTransitionReached(
+            "linked-save-private-directory-staging-anchored");
     }
 }
 
@@ -615,8 +745,14 @@ private slots:
     void linkedSaveOversizedControlFileFailsBeforeRead();
     void linkedSaveJournalCreationRejectsNamespaceReplacement();
     void linkedSaveJournalCreationRejectsDirectoryReplacement();
+    void linkedSaveJournalCreationRejectsPostCheckReplacement();
+    void linkedSaveJournalCreationRejectsCopyBoundaryReplacement_data();
+    void linkedSaveJournalCreationRejectsCopyBoundaryReplacement();
     void linkedSaveTransactionDirectoriesArePrivate();
+    void linkedSaveRecoveryRestrictsExistingDirectories_data();
     void linkedSaveRecoveryRestrictsExistingDirectories();
+    void linkedSaveRecoveryCompletesHardenedJournals_data();
+    void linkedSaveRecoveryCompletesHardenedJournals();
     void linkedSaveRecoveryWithoutJournalAllowsSymlinkedRoot();
     void linkedFilenameSaveCrashRecoversCompleteGeneration_data();
     void linkedFilenameSaveCrashRecoversCompleteGeneration();
@@ -6726,13 +6862,25 @@ linkedSavePreManifestRemovalDurabilityStaysRetryable()
         QDir(journalPath).filePath(QStringLiteral("source-0000.old")),
         QByteArray("pre-manifest transaction data"));
 
-    anchoredFilesystemSyncFailurePath = namespacePath;
+    bool removalReached = false;
+    anchoredFilesystemAction = [
+        &namespacePath, &removalReached](
+        const char *transition,
+        const QString &,
+        const QString &) {
+        if (QByteArray(transition)
+            == QByteArray("remove-directory-finally-verified")) {
+            removalReached = true;
+            anchoredFilesystemSyncFailurePath = namespacePath;
+        }
+    };
     QString error;
     QVERIFY2(
         !LinkedActivitySave::Journal::reconcileAll(dir.path(), error),
         "A nondurable pre-manifest removal was accepted");
+    QVERIFY(removalReached);
     QVERIFY2(!error.isEmpty(), "Nondurable removal must report an error");
-    QVERIFY(!QFileInfo::exists(journalPath));
+    QVERIFY2(!QFileInfo::exists(journalPath), qPrintable(error));
 
     error.clear();
     QVERIFY2(
@@ -7411,7 +7559,7 @@ linkedSaveJournalCreationRejectsNamespaceReplacement()
 #ifdef Q_OS_WIN
         QVERIFY2(journal, qPrintable(error));
         QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
-        return;
+        QSKIP("The anchored Windows namespace blocks replacement");
 #else
         QFAIL("The namespace replacement injection did not run");
 #endif
@@ -7422,6 +7570,16 @@ linkedSaveJournalCreationRejectsNamespaceReplacement()
         "Linked-save preparation accepted a replacement namespace");
     QVERIFY2(!error.isEmpty(), "Rejected creation must report an error");
     QCOMPARE(readAll(sentinelPath), sentinel);
+    QCOMPARE(
+        QDir(namespacePath).entryList(
+            QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden),
+        QStringList {QStringLiteral("replacement-sentinel")});
+    QCOMPARE(
+        readAll(dir.filePath(QStringLiteral("first-old.json"))),
+        QByteArray("first old generation"));
+    QCOMPARE(
+        readAll(dir.filePath(QStringLiteral("second-old.json"))),
+        QByteArray("second old generation"));
     QVERIFY(QFileInfo(retainedNamespace).isDir());
 }
 
@@ -7475,7 +7633,7 @@ linkedSaveJournalCreationRejectsDirectoryReplacement()
 #ifdef Q_OS_WIN
         QVERIFY2(journal, qPrintable(error));
         QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
-        return;
+        QSKIP("The anchored Windows journal blocks replacement");
 #else
         QFAIL("The journal replacement injection did not run");
 #endif
@@ -7486,6 +7644,184 @@ linkedSaveJournalCreationRejectsDirectoryReplacement()
         "Linked-save preparation accepted a replacement journal directory");
     QVERIFY2(!error.isEmpty(), "Rejected creation must report an error");
     QCOMPARE(readAll(sentinelPath), sentinel);
+    QCOMPARE(
+        QDir(journalPath).entryList(
+            QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden),
+        QStringList {QStringLiteral("replacement-sentinel")});
+    QCOMPARE(
+        readAll(dir.filePath(QStringLiteral("first-old.json"))),
+        QByteArray("first old generation"));
+    QCOMPARE(
+        readAll(dir.filePath(QStringLiteral("second-old.json"))),
+        QByteArray("second old generation"));
+    QVERIFY(QFileInfo(retainedJournal).isDir());
+}
+
+void TestAtomicActivitySave::
+linkedSaveJournalCreationRejectsPostCheckReplacement()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const QString namespacePath = dir.filePath(
+        QStringLiteral(".gc-transactions/linked-save"));
+    QString journalPath;
+    QString retainedJournal;
+    QString sentinelPath;
+    const QByteArray sentinel("post-check replacement");
+    bool hookReached = false;
+    bool directoryReplaced = false;
+    bool sentinelWritten = false;
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-directory-created"),
+        [&]() {
+            hookReached = true;
+            const QStringList directories = QDir(namespacePath).entryList(
+                QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot,
+                QDir::Name);
+            if (directories.size() != 1) return;
+            journalPath = QDir(namespacePath).filePath(
+                directories.constFirst());
+            retainedJournal = QDir(namespacePath).filePath(
+                QStringLiteral("retained-post-check-journal"));
+            directoryReplaced =
+                QDir().rename(journalPath, retainedJournal);
+            if (!directoryReplaced || !QDir().mkdir(journalPath)) return;
+            sentinelPath = QDir(journalPath).filePath(
+                QStringLiteral("replacement-sentinel"));
+            QFile sentinelFile(sentinelPath);
+            sentinelWritten = sentinelFile.open(
+                    QIODevice::WriteOnly | QIODevice::Truncate)
+                && sentinelFile.write(sentinel) == sentinel.size()
+                && sentinelFile.flush();
+        });
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(
+            linkedSaveJournalSpecification(dir.path()), error);
+    clearLinkedActivitySaveTransitionAction();
+
+    QVERIFY(hookReached);
+    if (!directoryReplaced) {
+#ifdef Q_OS_WIN
+        QVERIFY2(journal, qPrintable(error));
+        QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+        QSKIP("The anchored Windows journal blocks replacement");
+#else
+        QFAIL("The post-check replacement injection did not run");
+#endif
+    }
+    QVERIFY(sentinelWritten);
+    QVERIFY2(
+        !journal,
+        "Linked-save preparation wrote through a replaced journal path");
+    QVERIFY2(!error.isEmpty(), "Rejected creation must report an error");
+    QCOMPARE(readAll(sentinelPath), sentinel);
+    QCOMPARE(
+        QDir(journalPath).entryList(
+            QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden),
+        QStringList {QStringLiteral("replacement-sentinel")});
+    QCOMPARE(
+        readAll(dir.filePath(QStringLiteral("first-old.json"))),
+        QByteArray("first old generation"));
+    QCOMPARE(
+        readAll(dir.filePath(QStringLiteral("second-old.json"))),
+        QByteArray("second old generation"));
+    QVERIFY(QFileInfo(retainedJournal).isDir());
+}
+
+void TestAtomicActivitySave::
+linkedSaveJournalCreationRejectsCopyBoundaryReplacement_data()
+{
+    QTest::addColumn<QByteArray>("transition");
+    QTest::addColumn<QString>("backupName");
+
+    QTest::newRow("after-source-copy")
+        << QByteArray("linked-save-source-copy-published")
+        << QStringLiteral("first-old.json.bak");
+    QTest::newRow("after-final-backup-copy")
+        << QByteArray("linked-save-backup-copy-published")
+        << QStringLiteral("second-old.json.bak");
+}
+
+void TestAtomicActivitySave::
+linkedSaveJournalCreationRejectsCopyBoundaryReplacement()
+{
+    QFETCH(QByteArray, transition);
+    QFETCH(QString, backupName);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const QByteArray backupContents("prior backup generation");
+    writeFixture(dir.filePath(backupName), backupContents);
+    const QString namespacePath = dir.filePath(
+        QStringLiteral(".gc-transactions/linked-save"));
+    QString journalPath;
+    QString retainedJournal;
+    QString sentinelPath;
+    const QByteArray sentinel("copy-boundary replacement");
+    bool hookReached = false;
+    bool directoryReplaced = false;
+    bool sentinelWritten = false;
+    setLinkedActivitySaveTransitionAction(
+        transition,
+        [&]() {
+            hookReached = true;
+            const QStringList directories = QDir(namespacePath).entryList(
+                QDir::Dirs | QDir::Hidden | QDir::NoDotAndDotDot,
+                QDir::Name);
+            if (directories.size() != 1) return;
+            journalPath = QDir(namespacePath).filePath(
+                directories.constFirst());
+            retainedJournal = QDir(namespacePath).filePath(
+                QStringLiteral("retained-copy-boundary-journal"));
+            directoryReplaced = QDir().rename(
+                journalPath, retainedJournal);
+            if (!directoryReplaced || !QDir().mkdir(journalPath)) return;
+            sentinelPath = QDir(journalPath).filePath(
+                QStringLiteral("replacement-sentinel"));
+            QFile sentinelFile(sentinelPath);
+            sentinelWritten = sentinelFile.open(
+                    QIODevice::WriteOnly | QIODevice::Truncate)
+                && sentinelFile.write(sentinel) == sentinel.size()
+                && sentinelFile.flush();
+        });
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(
+            linkedSaveJournalSpecification(dir.path()), error);
+    clearLinkedActivitySaveTransitionAction();
+
+    QVERIFY(hookReached);
+    if (!directoryReplaced) {
+#ifdef Q_OS_WIN
+        QVERIFY2(journal, qPrintable(error));
+        QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+        QSKIP("The anchored Windows journal blocks replacement");
+#else
+        QFAIL("The copy-boundary replacement injection did not run");
+#endif
+    }
+    QVERIFY(sentinelWritten);
+    QVERIFY2(
+        !journal,
+        "Linked-save preparation wrote through a replaced journal path");
+    QVERIFY2(!error.isEmpty(), "Rejected creation must report an error");
+    QCOMPARE(readAll(sentinelPath), sentinel);
+    QCOMPARE(
+        QDir(journalPath).entryList(
+            QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden),
+        QStringList {QStringLiteral("replacement-sentinel")});
+    QCOMPARE(
+        readAll(dir.filePath(QStringLiteral("first-old.json"))),
+        QByteArray("first old generation"));
+    QCOMPARE(
+        readAll(dir.filePath(QStringLiteral("second-old.json"))),
+        QByteArray("second old generation"));
+    QCOMPARE(readAll(dir.filePath(backupName)), backupContents);
     QVERIFY(QFileInfo(retainedJournal).isDir());
 }
 
@@ -7538,11 +7874,18 @@ linkedSaveTransactionDirectoriesArePrivate()
 }
 
 void TestAtomicActivitySave::
+linkedSaveRecoveryRestrictsExistingDirectories_data()
+{
+    QTest::addColumn<bool>("manifestPresent");
+    QTest::newRow("manifest") << true;
+    QTest::newRow("pre-manifest") << false;
+}
+
+void TestAtomicActivitySave::
 linkedSaveRecoveryRestrictsExistingDirectories()
 {
-#ifndef Q_OS_UNIX
-    QSKIP("Unix directory permissions are required");
-#else
+    QFETCH(bool, manifestPresent);
+
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
     writeLinkedSaveJournalSources(dir.path());
@@ -7558,6 +7901,7 @@ linkedSaveRecoveryRestrictsExistingDirectories()
         QStringLiteral(".gc-transactions"));
     const QString namespacePath = QDir(transactionsPath).filePath(
         QStringLiteral("linked-save"));
+#ifdef Q_OS_UNIX
     const QFileDevice::Permissions broadPermissions =
         QFileDevice::ReadOwner | QFileDevice::WriteOwner
         | QFileDevice::ExeOwner | QFileDevice::ReadGroup
@@ -7568,14 +7912,32 @@ linkedSaveRecoveryRestrictsExistingDirectories()
          {transactionsPath, namespacePath, journalPath}) {
         QVERIFY(QFile::setPermissions(path, broadPermissions));
     }
-    writeFixture(
-        QDir(journalPath).filePath(QStringLiteral("manifest.json")),
-        QByteArray("{}\n"));
+#elif defined(Q_OS_WIN)
+    for (const QString &path :
+         {transactionsPath, namespacePath, journalPath}) {
+        QVERIFY(makeWindowsDirectoryPermissive(path));
+        QVERIFY(!windowsDirectoryHasOwnerOnlyAcl(path));
+    }
+#else
+    QSKIP("Native directory access controls are unavailable");
+#endif
+    const QString manifestPath = QDir(journalPath).filePath(
+        QStringLiteral("manifest.json"));
+    if (manifestPresent) {
+        writeFixture(manifestPath, QByteArray("{}\n"));
+    } else {
+        QVERIFY(QFile::remove(manifestPath));
+        writeFixture(
+            QDir(journalPath).filePath(
+                QStringLiteral("unknown-entry")),
+            QByteArray("unexpected"));
+    }
 
     error.clear();
     QVERIFY(!LinkedActivitySave::Journal::reconcileAll(dir.path(), error));
     QVERIFY2(!error.isEmpty(), "A corrupt manifest must stop recovery");
 
+#ifdef Q_OS_UNIX
     const QFileDevice::Permissions nonOwnerPermissions =
         QFileDevice::ReadGroup | QFileDevice::WriteGroup
         | QFileDevice::ExeGroup | QFileDevice::ReadOther
@@ -7591,6 +7953,108 @@ linkedSaveRecoveryRestrictsExistingDirectories()
         QVERIFY(permissions.testFlag(QFileDevice::WriteOwner));
         QVERIFY(permissions.testFlag(QFileDevice::ExeOwner));
     }
+#elif defined(Q_OS_WIN)
+    for (const QString &path :
+         {transactionsPath, namespacePath, journalPath}) {
+        QVERIFY(windowsDirectoryHasOwnerOnlyAcl(path));
+    }
+#endif
+}
+
+void TestAtomicActivitySave::
+linkedSaveRecoveryCompletesHardenedJournals_data()
+{
+    QTest::addColumn<QString>("recoveryCase");
+    QTest::newRow("pre-manifest") << QStringLiteral("pre-manifest");
+    QTest::newRow("rollback") << QStringLiteral("rollback");
+    QTest::newRow("commit") << QStringLiteral("commit");
+}
+
+void TestAtomicActivitySave::
+linkedSaveRecoveryCompletesHardenedJournals()
+{
+    QFETCH(QString, recoveryCase);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString transactionsPath = dir.filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString namespacePath = QDir(transactionsPath).filePath(
+        QStringLiteral("linked-save"));
+    QString journalPath;
+    QString error;
+    if (recoveryCase == QStringLiteral("pre-manifest")) {
+        const QString journalId = QUuid::createUuid()
+            .toString(QUuid::WithoutBraces).toLower();
+        journalPath = QDir(namespacePath).filePath(journalId);
+        QVERIFY(QDir().mkpath(journalPath));
+        writeFixture(
+            QDir(journalPath).filePath(
+                QStringLiteral("source-0000.old")),
+            QByteArray("recoverable pre-manifest data"));
+    } else {
+        writeLinkedSaveJournalSources(dir.path());
+        std::shared_ptr<LinkedActivitySave::Journal> journal =
+            LinkedActivitySave::Journal::prepare(
+                linkedSaveJournalSpecification(dir.path()), error);
+        QVERIFY2(journal, qPrintable(error));
+        journalPath = journal->directoryPath();
+        if (recoveryCase == QStringLiteral("commit")) {
+            for (int index = 0; index < journal->entryCount(); ++index) {
+                writeFixture(
+                    journal->stagingPath(index),
+                    QByteArray("staged generation ")
+                        + QByteArray::number(index));
+                QVERIFY2(
+                    journal->recordStaged(index, error),
+                    qPrintable(error));
+            }
+            QVERIFY2(journal->publishAndCommit(error), qPrintable(error));
+        }
+        journal.reset();
+    }
+    QVERIFY(QFileInfo(journalPath).isDir());
+
+#ifdef Q_OS_UNIX
+    const QFileDevice::Permissions broadPermissions =
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner
+        | QFileDevice::ExeOwner | QFileDevice::ReadGroup
+        | QFileDevice::WriteGroup | QFileDevice::ExeGroup
+        | QFileDevice::ReadOther | QFileDevice::WriteOther
+        | QFileDevice::ExeOther;
+    for (const QString &path :
+         {transactionsPath, namespacePath, journalPath}) {
+        QVERIFY(QFile::setPermissions(path, broadPermissions));
+    }
+#elif defined(Q_OS_WIN)
+    for (const QString &path :
+         {transactionsPath, namespacePath, journalPath}) {
+        QVERIFY(makeWindowsDirectoryPermissive(path));
+        QVERIFY(!windowsDirectoryHasOwnerOnlyAcl(path));
+    }
+#else
+    QSKIP("Native directory access controls are unavailable");
+#endif
+
+    error.clear();
+    QVERIFY2(
+        LinkedActivitySave::Journal::reconcileAll(dir.path(), error),
+        qPrintable(error));
+    QVERIFY(!QFileInfo::exists(journalPath));
+
+#ifdef Q_OS_UNIX
+    const QFileDevice::Permissions nonOwnerPermissions =
+        QFileDevice::ReadGroup | QFileDevice::WriteGroup
+        | QFileDevice::ExeGroup | QFileDevice::ReadOther
+        | QFileDevice::WriteOther | QFileDevice::ExeOther;
+    for (const QString &path : {transactionsPath, namespacePath}) {
+        QCOMPARE(
+            QFileInfo(path).permissions() & nonOwnerPermissions,
+            QFileDevice::Permissions());
+    }
+#elif defined(Q_OS_WIN)
+    QVERIFY(windowsDirectoryHasOwnerOnlyAcl(transactionsPath));
+    QVERIFY(windowsDirectoryHasOwnerOnlyAcl(namespacePath));
 #endif
 }
 
@@ -7626,6 +8090,10 @@ linkedFilenameSaveCrashRecoversCompleteGeneration_data()
 
     QTest::newRow("directory-created")
         << QStringLiteral("linked-save-directory-created")
+        << 1 << false << false << false;
+    QTest::newRow("private-directory-staging")
+        << QStringLiteral(
+               "linked-save-private-directory-staging-anchored")
         << 1 << false << false << false;
     QTest::newRow("source-copy-one")
         << QStringLiteral("linked-save-source-copy-published")

@@ -71,6 +71,7 @@ INCLUDEPATH += ../../../src \
                $${GSL_INCLUDES}
 
 LIBS += $${GSL_LIBS}
+win32:LIBS += -ladvapi32
 
 unix {
     LIBS += -lz
