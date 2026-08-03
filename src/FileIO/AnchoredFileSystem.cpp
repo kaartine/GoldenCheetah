@@ -28,11 +28,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #if defined(Q_OS_MACOS)
+#include <sys/acl.h>
 #include <stdio.h>
 #endif
 #if defined(Q_OS_LINUX)
 #include <linux/fs.h>
 #include <sys/syscall.h>
+#include <sys/xattr.h>
 #endif
 #endif
 
@@ -41,6 +43,7 @@
 #include <cstddef>
 #include <io.h>
 #include <qt_windows.h>
+#include <aclapi.h>
 #endif
 
 #ifdef GC_ANCHORED_FILESYSTEM_TEST_HOOKS
@@ -410,6 +413,132 @@ int renameNoReplaceNative(
     return -1;
 }
 
+#if defined(Q_OS_MACOS)
+bool macDirectoryHasExtendedAcl(
+    int descriptor, bool &hasAcl, QString &error)
+{
+    hasAcl = false;
+    errno = 0;
+    acl_t acl = ::acl_get_fd_np(descriptor, ACL_TYPE_EXTENDED);
+    if (!acl) {
+        if (errno == ENOENT) return true;
+        error = nativeError(
+            QStringLiteral(
+                "Cannot inspect anchored directory access controls"),
+            errno);
+        return false;
+    }
+    ::acl_free(acl);
+    hasAcl = true;
+    return true;
+}
+
+bool removeMacDirectoryExtendedAcl(
+    int descriptor, QString &error)
+{
+    bool hasAcl = false;
+    if (!macDirectoryHasExtendedAcl(
+            descriptor, hasAcl, error)) {
+        return false;
+    }
+    if (hasAcl) {
+        filesec_t security = ::filesec_init();
+        if (!security) {
+            error = nativeError(
+                QStringLiteral(
+                    "Cannot allocate directory access controls"),
+                errno);
+            return false;
+        }
+        if (::filesec_set_property(
+                security,
+                FILESEC_ACL,
+                _FILESEC_REMOVE_ACL) != 0) {
+            const int setError = errno;
+            ::filesec_free(security);
+            error = nativeError(
+                QStringLiteral(
+                    "Cannot prepare inherited access-control removal"),
+                setError);
+            return false;
+        }
+        const int setResult = ::fchmodx_np(descriptor, security);
+        const int setError = errno;
+        ::filesec_free(security);
+        if (setResult != 0) {
+            error = nativeError(
+                QStringLiteral(
+                    "Cannot remove inherited directory access controls"),
+                setError);
+            return false;
+        }
+    }
+    if (!macDirectoryHasExtendedAcl(
+            descriptor, hasAcl, error)) {
+        return false;
+    }
+    if (hasAcl) {
+        error = QStringLiteral(
+            "The anchored child directory retained extended access controls");
+        return false;
+    }
+    return true;
+}
+#endif
+
+#if defined(Q_OS_LINUX)
+bool linuxDirectoryAclsAreAbsent(int descriptor, QString &error)
+{
+    static const char *const attributes[] = {
+        "system.posix_acl_access",
+        "system.posix_acl_default"};
+    for (const char *attribute : attributes) {
+        errno = 0;
+        const ssize_t size = ::fgetxattr(
+            descriptor, attribute, nullptr, 0);
+        if (size >= 0) {
+            error = QStringLiteral(
+                "The anchored directory retained a POSIX access control list");
+            return false;
+        }
+        if (errno != ENODATA && errno != ENOTSUP
+#ifdef EOPNOTSUPP
+            && errno != EOPNOTSUPP
+#endif
+        ) {
+            error = nativeError(
+                QStringLiteral(
+                    "Cannot inspect anchored directory access controls"),
+                errno);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool removeLinuxDirectoryAcls(int descriptor, QString &error)
+{
+    static const char *const attributes[] = {
+        "system.posix_acl_access",
+        "system.posix_acl_default"};
+    for (const char *attribute : attributes) {
+        if (::fremovexattr(descriptor, attribute) != 0
+            && errno != ENODATA && errno != ENOTSUP
+#ifdef EOPNOTSUPP
+            && errno != EOPNOTSUPP
+#endif
+        ) {
+            error = nativeError(
+                QStringLiteral(
+                    "Cannot remove inherited directory access controls"),
+                errno);
+            return false;
+        }
+    }
+    return linuxDirectoryAclsAreAbsent(descriptor, error);
+}
+#endif
+
 #endif
 
 #ifdef Q_OS_WIN
@@ -460,6 +589,146 @@ public:
 private:
     HANDLE handle_ = INVALID_HANDLE_VALUE;
 };
+
+bool currentWindowsUserSid(QByteArray &storage, PSID &sid)
+{
+    HANDLE rawToken = nullptr;
+    if (!::OpenProcessToken(
+            ::GetCurrentProcess(), TOKEN_QUERY, &rawToken)) {
+        return false;
+    }
+    WindowsHandle token(rawToken);
+    DWORD required = 0;
+    ::GetTokenInformation(
+        token.get(), TokenUser, nullptr, 0, &required);
+    if (::GetLastError() != ERROR_INSUFFICIENT_BUFFER
+        || required == 0) {
+        return false;
+    }
+    storage.resize(int(required));
+    if (!::GetTokenInformation(
+            token.get(), TokenUser, storage.data(),
+            required, &required)) {
+        return false;
+    }
+    auto *user = reinterpret_cast<TOKEN_USER *>(storage.data());
+    if (!::IsValidSid(user->User.Sid)) return false;
+    sid = user->User.Sid;
+    return true;
+}
+
+class WindowsPrivateDirectorySecurity final
+{
+public:
+    WindowsPrivateDirectorySecurity()
+    {
+        PSID userSid = nullptr;
+        if (!currentWindowsUserSid(userStorage_, userSid)) return;
+        const DWORD aclSize = DWORD(
+            sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE)
+            - sizeof(DWORD) + ::GetLengthSid(userSid));
+        aclStorage_.resize(int(aclSize));
+        auto *acl = reinterpret_cast<PACL>(aclStorage_.data());
+        if (!::InitializeAcl(acl, aclSize, ACL_REVISION)
+            || !::AddAccessAllowedAceEx(
+                acl, ACL_REVISION,
+                CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE,
+                FILE_ALL_ACCESS, userSid)
+            || !::InitializeSecurityDescriptor(
+                &descriptor_, SECURITY_DESCRIPTOR_REVISION)
+            || !::SetSecurityDescriptorOwner(
+                &descriptor_, userSid, FALSE)
+            || !::SetSecurityDescriptorDacl(
+                &descriptor_, TRUE, acl, FALSE)
+            || !::SetSecurityDescriptorControl(
+                &descriptor_, SE_DACL_PROTECTED,
+                SE_DACL_PROTECTED)) {
+            return;
+        }
+        attributes_.nLength = sizeof(attributes_);
+        attributes_.lpSecurityDescriptor = &descriptor_;
+        attributes_.bInheritHandle = FALSE;
+        valid_ = true;
+    }
+
+    bool isValid() const { return valid_; }
+    PACL acl()
+    {
+        return valid_
+            ? reinterpret_cast<PACL>(aclStorage_.data())
+            : nullptr;
+    }
+    SECURITY_ATTRIBUTES *attributes()
+    {
+        return valid_ ? &attributes_ : nullptr;
+    }
+
+private:
+    QByteArray userStorage_;
+    QByteArray aclStorage_;
+    SECURITY_DESCRIPTOR descriptor_ {};
+    SECURITY_ATTRIBUTES attributes_ {};
+    bool valid_ = false;
+};
+
+bool windowsDirectoryHandleHasPrivateSecurity(HANDLE handle)
+{
+    DWORD fileSystemFlags = 0;
+    if (!handle
+        || handle == INVALID_HANDLE_VALUE
+        || !::GetVolumeInformationByHandleW(
+            handle, nullptr, 0, nullptr, nullptr,
+            &fileSystemFlags, nullptr, 0)
+        || !(fileSystemFlags & FILE_PERSISTENT_ACLS)) {
+        return false;
+    }
+
+    QByteArray userStorage;
+    PSID userSid = nullptr;
+    if (!currentWindowsUserSid(userStorage, userSid)) return false;
+    PSID owner = nullptr;
+    PACL acl = nullptr;
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    const DWORD securityResult = ::GetSecurityInfo(
+        handle, SE_FILE_OBJECT,
+        OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+        &owner, nullptr, &acl, nullptr, &descriptor);
+    if (securityResult != ERROR_SUCCESS) return false;
+
+    SECURITY_DESCRIPTOR_CONTROL control = 0;
+    DWORD revision = 0;
+    bool privateSecurity = owner
+        && ::EqualSid(owner, userSid)
+        && acl
+        && acl->AceCount == 1
+        && ::GetSecurityDescriptorControl(
+            descriptor, &control, &revision)
+        && (control & SE_DACL_PROTECTED);
+    if (privateSecurity) {
+        void *rawAce = nullptr;
+        if (!::GetAce(acl, 0, &rawAce)) {
+            privateSecurity = false;
+        } else {
+            auto *header = static_cast<ACE_HEADER *>(rawAce);
+            auto *ace = static_cast<ACCESS_ALLOWED_ACE *>(rawAce);
+            constexpr BYTE inheritanceFlags =
+                OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
+                | INHERITED_ACE | INHERIT_ONLY_ACE
+                | NO_PROPAGATE_INHERIT_ACE;
+            privateSecurity = header->AceType
+                    == ACCESS_ALLOWED_ACE_TYPE
+                && (header->AceFlags & inheritanceFlags)
+                    == (OBJECT_INHERIT_ACE
+                        | CONTAINER_INHERIT_ACE)
+                && ::IsValidSid(&ace->SidStart)
+                && ::EqualSid(&ace->SidStart, userSid)
+                && (ace->Mask & FILE_ALL_ACCESS)
+                    == FILE_ALL_ACCESS;
+        }
+    }
+    if (descriptor) ::LocalFree(descriptor);
+    return privateSecurity;
+}
 
 struct WindowsStamp
 {
@@ -686,6 +955,34 @@ WindowsHandle openWindowsDirectoryHandle(
     return handle;
 }
 
+WindowsHandle openWindowsDirectoryBridge(
+    const QString &path,
+    QString &error,
+    DWORD *nativeError = nullptr)
+{
+    WindowsHandle handle(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(path.utf16()),
+        FILE_LIST_DIRECTORY | FILE_TRAVERSE
+            | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS
+            | FILE_FLAG_OPEN_REPARSE_POINT
+            | FILE_FLAG_WRITE_THROUGH,
+        nullptr));
+    if (!handle.isValid()) {
+        const DWORD failure = ::GetLastError();
+        if (nativeError) *nativeError = failure;
+        error = windowsError(
+            QStringLiteral("Cannot bridge an anchored directory handle"),
+            failure);
+    } else if (nativeError) {
+        *nativeError = ERROR_SUCCESS;
+    }
+    return handle;
+}
+
 #endif
 
 } // namespace
@@ -720,6 +1017,14 @@ struct PinnedFileState
     NativeIdentity identity;
     qint64 size = -1;
     QByteArray sha256;
+};
+
+struct PrivateDirectoryOperations
+{
+    static MutationResult create(
+        const DirectoryAnchor &parent,
+        const QString &component,
+        DirectoryAnchor &directory);
 };
 
 } // namespace Detail
@@ -2471,6 +2776,945 @@ bool entryMatches(
 #endif
 }
 
+bool hardenPrivateDirectory(
+    DirectoryAnchor &directory,
+    QString &error)
+{
+    error.clear();
+    if (!directory.state_) {
+        error = QStringLiteral(
+            "The anchored private directory is unavailable");
+        return false;
+    }
+    if (!directory.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The private directory path was replaced");
+        }
+        return false;
+    }
+
+#ifdef Q_OS_UNIX
+    UnixStamp before;
+    if (!captureUnixStamp(
+            directory.state_->descriptor.get(), before,
+            true, error)
+        || !sameUnixObject(before, directory.state_->stamp)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The private directory identity changed before hardening");
+        }
+        return false;
+    }
+    if (::fchmod(directory.state_->descriptor.get(), S_IRWXU) != 0) {
+        error = nativeError(
+            QStringLiteral(
+                "Cannot harden anchored directory permissions"),
+            errno);
+        return false;
+    }
+#if defined(Q_OS_LINUX)
+    if (!removeLinuxDirectoryAcls(
+            directory.state_->descriptor.get(), error)
+        || ::fchmod(
+            directory.state_->descriptor.get(), S_IRWXU) != 0) {
+        if (error.isEmpty()) {
+            error = nativeError(
+                QStringLiteral(
+                    "Cannot finalize private directory permissions"),
+                errno);
+        }
+        return false;
+    }
+#endif
+#if defined(Q_OS_MACOS)
+    if (!removeMacDirectoryExtendedAcl(
+            directory.state_->descriptor.get(), error)
+        || ::fchmod(
+            directory.state_->descriptor.get(), S_IRWXU) != 0) {
+        if (error.isEmpty()) {
+            error = nativeError(
+                QStringLiteral(
+                    "Cannot finalize private directory permissions"),
+                errno);
+        }
+        return false;
+    }
+#endif
+    struct stat status {};
+    if (::fstat(
+            directory.state_->descriptor.get(), &status) != 0) {
+        error = nativeError(
+            QStringLiteral(
+                "Cannot verify hardened directory permissions"),
+            errno);
+        return false;
+    }
+    if (!S_ISDIR(status.st_mode)
+        || status.st_uid != ::geteuid()
+        || (status.st_mode & 0777) != S_IRWXU) {
+        error = QStringLiteral(
+            "The anchored directory is not private");
+        return false;
+    }
+    UnixStamp hardened;
+    if (!captureUnixStamp(
+            directory.state_->descriptor.get(), hardened,
+            true, error)
+        || !sameUnixObject(hardened, before)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The private directory identity changed while hardening");
+        }
+        return false;
+    }
+    directory.state_->stamp = hardened;
+    directory.state_->identity = unixIdentity(hardened, 'd');
+
+#elif defined(Q_OS_WIN)
+    const QString nativePath = QDir::toNativeSeparators(
+        directory.state_->displayPath);
+    QString bridgeError;
+    WindowsHandle bridge = openWindowsDirectoryBridge(
+        nativePath, bridgeError);
+    WindowsStamp bridgeStamp;
+    if (!bridge.isValid()
+        || !captureWindowsStamp(
+            bridge.get(), bridgeStamp, true, bridgeError)
+        || !sameWindowsObject(
+            bridgeStamp, directory.state_->stamp)) {
+        error = bridgeError.isEmpty()
+            ? QStringLiteral(
+                  "The private directory identity changed before hardening")
+            : bridgeError;
+        return false;
+    }
+
+    WindowsPrivateDirectorySecurity privateSecurity;
+    if (!privateSecurity.isValid()) {
+        error = QStringLiteral(
+            "Cannot prepare private Windows directory security");
+        return false;
+    }
+    WindowsHandle mutation(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(nativePath.utf16()),
+        FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC
+            | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS
+            | FILE_FLAG_OPEN_REPARSE_POINT
+            | FILE_FLAG_WRITE_THROUGH,
+        nullptr));
+    if (!mutation.isValid()) {
+        error = windowsError(
+            QStringLiteral(
+                "Cannot open an anchored directory for hardening"),
+            ::GetLastError());
+        return false;
+    }
+    WindowsStamp mutationStamp;
+    if (!captureWindowsStamp(
+            mutation.get(), mutationStamp, true, error)
+        || !sameWindowsObject(mutationStamp, bridgeStamp)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The private directory identity changed while opening it for hardening");
+        }
+        return false;
+    }
+    const DWORD securityResult = ::SetSecurityInfo(
+        mutation.get(), SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION
+            | PROTECTED_DACL_SECURITY_INFORMATION,
+        nullptr, nullptr, privateSecurity.acl(), nullptr);
+    if (securityResult != ERROR_SUCCESS
+        || !windowsDirectoryHandleHasPrivateSecurity(
+            mutation.get())) {
+        error = securityResult == ERROR_SUCCESS
+            ? QStringLiteral(
+                  "The anchored Windows directory is not private")
+            : windowsError(
+                  QStringLiteral(
+                      "Cannot harden a Windows directory access list"),
+                  securityResult);
+        return false;
+    }
+    WindowsStamp hardened;
+    if (!captureWindowsStamp(
+            directory.state_->handles.back().get(),
+            hardened, true, error)
+        || !sameWindowsObject(hardened, mutationStamp)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The private directory identity changed while hardening");
+        }
+        return false;
+    }
+    directory.state_->stamp = hardened;
+    directory.state_->identity = windowsIdentity(hardened, 'd');
+
+#else
+    error = QStringLiteral(
+        "Anchored filesystem operations are unsupported on this platform");
+    return false;
+#endif
+
+    if (!directory.sync(error)) return false;
+    if (!directory.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The private directory path changed after hardening");
+        }
+        return false;
+    }
+    return true;
+}
+
+MutationResult Detail::PrivateDirectoryOperations::create(
+    const DirectoryAnchor &parent,
+    const QString &component,
+    DirectoryAnchor &directory)
+{
+    MutationResult result;
+    directory = {};
+    if (!parent.state_) {
+        result.error = QStringLiteral(
+            "The anchored parent directory is unavailable");
+        return result;
+    }
+    if (!validPortableComponent(component)) {
+        result.error = QStringLiteral(
+            "The anchored child directory name is unsafe");
+        return result;
+    }
+
+    QString matchError;
+    if (!parent.pathMatches(matchError)) {
+        result.effect = MutationEffect::Conflict;
+        result.error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The anchored child directory parent was replaced")
+            : matchError;
+        return result;
+    }
+
+    const QString finalPath =
+        QDir(parent.state_->displayPath).filePath(component);
+    QString stagingComponent;
+    QString stagingPath;
+    DirectoryAnchor staging;
+
+    const auto appendCleanupFailure = [&result](
+        const MutationResult &cleanup) {
+        if (cleanup.effect == MutationEffect::AppliedDurable) return;
+        result.effect = MutationEffect::Partial;
+        if (result.verifiedRecoveryPath.isEmpty()) {
+            result.verifiedRecoveryPath =
+                cleanup.verifiedRecoveryPath;
+        }
+        result.removalRequested = result.removalRequested
+            || cleanup.removalRequested;
+        if (!result.error.isEmpty()) result.error += QStringLiteral("; ");
+        result.error += cleanup.error.isEmpty()
+            ? QStringLiteral(
+                  "cannot remove an unpublished private directory")
+            : cleanup.error;
+    };
+    const auto cleanupStaging = [&appendCleanupFailure](
+        DirectoryAnchor &candidate) {
+        if (!candidate.isValid()) return;
+        appendCleanupFailure(removeEmptyDirectory(candidate));
+    };
+#ifdef Q_OS_UNIX
+    struct stat parentStatus {};
+    if (::fstat(
+            parent.state_->descriptor.get(), &parentStatus) != 0) {
+        result.error = nativeError(
+            QStringLiteral(
+                "Cannot verify private directory parent permissions"),
+            errno);
+        return result;
+    }
+    if (!S_ISDIR(parentStatus.st_mode)
+        || parentStatus.st_uid != ::geteuid()
+        || (parentStatus.st_mode & 0777) != S_IRWXU) {
+        result.error = QStringLiteral(
+            "The anchored parent directory is not private");
+        return result;
+    }
+#if defined(Q_OS_LINUX)
+    if (!linuxDirectoryAclsAreAbsent(
+            parent.state_->descriptor.get(), result.error)) {
+        return result;
+    }
+#endif
+#if defined(Q_OS_MACOS)
+    bool parentHasExtendedAcl = false;
+    if (!macDirectoryHasExtendedAcl(
+            parent.state_->descriptor.get(),
+            parentHasExtendedAcl, result.error)) {
+        return result;
+    }
+    if (parentHasExtendedAcl) {
+        result.error = QStringLiteral(
+            "The anchored parent has inheritable extended access controls");
+        return result;
+    }
+#endif
+    bool destinationExists = false;
+    if (!entryNameExists(
+            parent.state_->descriptor.get(), component,
+            destinationExists, result.error)) {
+        return result;
+    }
+    if (destinationExists) {
+        result.effect = MutationEffect::Conflict;
+        result.error = QStringLiteral(
+            "The private child directory already exists");
+        return result;
+    }
+
+    FileDescriptor descriptor;
+    for (int attempt = 0; attempt < 32; ++attempt) {
+        stagingComponent = QUuid::createUuid()
+            .toString(QUuid::WithoutBraces)
+            .toLower();
+        if (stagingComponent == component) continue;
+        const QByteArray encoded = QFile::encodeName(stagingComponent);
+        if (::mkdirat(
+                parent.state_->descriptor.get(),
+                encoded.constData(), S_IRWXU) == 0) {
+            stagingPath = QDir(parent.state_->displayPath)
+                .filePath(stagingComponent);
+            descriptor = FileDescriptor(::openat(
+                parent.state_->descriptor.get(), encoded.constData(),
+                O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+            break;
+        }
+        if (errno != EEXIST) {
+            result.error = nativeError(
+                QStringLiteral(
+                    "Cannot create a private anchored child directory"),
+                errno);
+            return result;
+        }
+        stagingComponent.clear();
+    }
+    if (stagingComponent.isEmpty()) {
+        result.error = QStringLiteral(
+            "Cannot reserve a private anchored child directory name");
+        return result;
+    }
+    if (!descriptor.isValid()) {
+        result.effect = MutationEffect::Partial;
+        result.error = nativeError(
+            QStringLiteral(
+                "Cannot anchor a newly created private directory"),
+            errno);
+        return result;
+    }
+
+    UnixStamp stamp;
+    if (!captureUnixStamp(descriptor.get(), stamp, true, result.error)) {
+        result.effect = MutationEffect::Partial;
+        return result;
+    }
+    auto state = std::make_shared<Detail::DirectoryState>();
+    state->ancestor = parent.state_;
+    state->descriptor = std::move(descriptor);
+    state->stamp = stamp;
+    state->component = stagingComponent;
+    state->displayPath = stagingPath;
+    state->identity = unixIdentity(stamp, 'd');
+    staging = DirectoryAnchor(std::move(state));
+
+    if (::fchmod(staging.state_->descriptor.get(), S_IRWXU) != 0) {
+        result.error = nativeError(
+            QStringLiteral(
+                "Cannot make an anchored child directory private"),
+            errno);
+        cleanupStaging(staging);
+        return result;
+    }
+#if defined(Q_OS_LINUX)
+    if (!removeLinuxDirectoryAcls(
+            staging.state_->descriptor.get(), result.error)
+        || ::fchmod(
+            staging.state_->descriptor.get(), S_IRWXU) != 0) {
+        if (result.error.isEmpty()) {
+            result.error = nativeError(
+                QStringLiteral(
+                    "Cannot finalize private directory permissions"),
+                errno);
+        }
+        cleanupStaging(staging);
+        return result;
+    }
+#endif
+#if defined(Q_OS_MACOS)
+    if (!removeMacDirectoryExtendedAcl(
+            staging.state_->descriptor.get(), result.error)
+        || ::fchmod(
+            staging.state_->descriptor.get(), S_IRWXU) != 0) {
+        if (result.error.isEmpty()) {
+            result.error = nativeError(
+                QStringLiteral(
+                    "Cannot finalize private directory permissions"),
+                errno);
+        }
+        cleanupStaging(staging);
+        return result;
+    }
+#endif
+    struct stat privateStatus {};
+    if (::fstat(
+            staging.state_->descriptor.get(), &privateStatus) != 0) {
+        result.error = nativeError(
+            QStringLiteral(
+                "Cannot verify private directory permissions"),
+            errno);
+        cleanupStaging(staging);
+        return result;
+    }
+    if (!S_ISDIR(privateStatus.st_mode)
+        || privateStatus.st_uid != ::geteuid()
+        || (privateStatus.st_mode & 0777) != S_IRWXU) {
+        result.error = QStringLiteral(
+            "The anchored child directory is not private");
+        cleanupStaging(staging);
+        return result;
+    }
+    if (!captureUnixStamp(
+            staging.state_->descriptor.get(),
+            staging.state_->stamp, true, result.error)) {
+        cleanupStaging(staging);
+        return result;
+    }
+    staging.state_->identity =
+        unixIdentity(staging.state_->stamp, 'd');
+    if (!staging.sync(result.error)) {
+        cleanupStaging(staging);
+        return result;
+    }
+
+    reportAnchoredFilesystemTransition(
+        "private-directory-staging-anchored",
+        stagingPath,
+        finalPath);
+    reportAnchoredFilesystemTransition(
+        "private-directory-before-publish",
+        stagingPath,
+        finalPath);
+    if (!parent.pathMatches(matchError)) {
+        result.effect = MutationEffect::Conflict;
+        result.error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The private directory parent changed before publication")
+            : matchError;
+        cleanupStaging(staging);
+        return result;
+    }
+
+    UnixStamp namedStaging;
+    bool stagingExists = false;
+    if (!statDirectoryEntry(
+            parent.state_->descriptor.get(), stagingComponent,
+            namedStaging, stagingExists, result.error)
+        || !stagingExists
+        || !sameUnixObject(namedStaging, staging.state_->stamp)) {
+        result.effect = MutationEffect::Conflict;
+        if (result.error.isEmpty()) {
+            result.error = QStringLiteral(
+                "The private directory staging name was replaced");
+        }
+        cleanupStaging(staging);
+        return result;
+    }
+
+    const QByteArray stagingName = QFile::encodeName(stagingComponent);
+    const QByteArray finalName = QFile::encodeName(component);
+    bool unsupported = false;
+    if (renameNoReplaceNative(
+            parent.state_->descriptor.get(), stagingName,
+            parent.state_->descriptor.get(), finalName,
+            unsupported) != 0) {
+        const int renameError = errno;
+        result.effect = renameError == EEXIST
+            ? MutationEffect::Conflict : MutationEffect::NoEffect;
+        if (renameError == EEXIST) {
+            result.error = QStringLiteral(
+                "The private child directory already exists");
+        } else if (unsupported) {
+            result.error = QStringLiteral(
+                "The filesystem cannot publish a private directory without replacement");
+        } else {
+            result.error = nativeError(
+                QStringLiteral(
+                    "Cannot publish an anchored private directory"),
+                renameError);
+        }
+        cleanupStaging(staging);
+        return result;
+    }
+
+    UnixStamp moved;
+    UnixStamp namedFinal;
+    bool finalExists = false;
+    bool oldNameExists = false;
+    QString verificationError;
+    const bool movedCaptured = captureUnixStamp(
+        staging.state_->descriptor.get(), moved,
+        true, verificationError);
+    const bool movedIdentityMatches = movedCaptured
+        && sameUnixObject(moved, staging.state_->stamp);
+    if (!movedIdentityMatches
+        || !statDirectoryEntry(
+            parent.state_->descriptor.get(), component,
+            namedFinal, finalExists, verificationError)
+        || !finalExists
+        || !sameUnixObject(namedFinal, moved)
+        || !entryNameExists(
+            parent.state_->descriptor.get(), stagingComponent,
+            oldNameExists, verificationError)
+        || oldNameExists) {
+        staging.state_->component = component;
+        staging.state_->displayPath = finalPath;
+        if (movedIdentityMatches) {
+            staging.state_->stamp = moved;
+            staging.state_->identity = unixIdentity(moved, 'd');
+        }
+        directory = std::move(staging);
+        result.effect = MutationEffect::Partial;
+        result.error = verificationError.isEmpty()
+            ? QStringLiteral(
+                  "The private directory changed during publication")
+            : verificationError;
+        return result;
+    }
+    staging.state_->component = component;
+    staging.state_->displayPath = finalPath;
+    staging.state_->stamp = moved;
+    staging.state_->identity = unixIdentity(moved, 'd');
+    directory = std::move(staging);
+
+#elif defined(Q_OS_WIN)
+    const QString nativeParent = QDir::toNativeSeparators(
+        parent.state_->displayPath);
+    QString parentSecurityError;
+    WindowsHandle parentSecurity = openWindowsDirectoryBridge(
+        nativeParent, parentSecurityError);
+    WindowsStamp parentSecurityStamp;
+    if (!parentSecurity.isValid()
+        || !captureWindowsStamp(
+            parentSecurity.get(), parentSecurityStamp,
+            true, parentSecurityError)
+        || !sameWindowsObject(
+            parentSecurityStamp, parent.state_->stamp)
+        || !windowsDirectoryHandleHasPrivateSecurity(
+            parentSecurity.get())) {
+        result.error = parentSecurityError.isEmpty()
+            ? QStringLiteral(
+                  "The anchored parent directory is not private")
+            : parentSecurityError;
+        return result;
+    }
+    const QString nativeFinal = QDir::toNativeSeparators(finalPath);
+    const DWORD finalAttributes = ::GetFileAttributesW(
+        reinterpret_cast<LPCWSTR>(nativeFinal.utf16()));
+    if (finalAttributes != INVALID_FILE_ATTRIBUTES) {
+        result.effect = MutationEffect::Conflict;
+        result.error = QStringLiteral(
+            "The private child directory already exists");
+        return result;
+    }
+    const DWORD attributesError = ::GetLastError();
+    if (attributesError != ERROR_FILE_NOT_FOUND
+        && attributesError != ERROR_PATH_NOT_FOUND) {
+        result.error = windowsError(
+            QStringLiteral(
+                "Cannot inspect a private child directory name"),
+            attributesError);
+        return result;
+    }
+
+    WindowsPrivateDirectorySecurity privateSecurity;
+    if (!privateSecurity.isValid()) {
+        result.error = QStringLiteral(
+            "Cannot prepare private Windows directory security");
+        return result;
+    }
+    for (int attempt = 0; attempt < 32; ++attempt) {
+        stagingComponent = QUuid::createUuid()
+            .toString(QUuid::WithoutBraces)
+            .toLower();
+        if (stagingComponent == component) continue;
+        stagingPath = QDir(parent.state_->displayPath)
+            .filePath(stagingComponent);
+        const QString nativeStaging =
+            QDir::toNativeSeparators(stagingPath);
+        if (::CreateDirectoryW(
+                reinterpret_cast<LPCWSTR>(nativeStaging.utf16()),
+                privateSecurity.attributes())) {
+            break;
+        }
+        const DWORD createError = ::GetLastError();
+        if (createError != ERROR_ALREADY_EXISTS
+            && createError != ERROR_FILE_EXISTS) {
+            result.error = windowsError(
+                QStringLiteral(
+                    "Cannot create a private anchored child directory"),
+                createError);
+            return result;
+        }
+        stagingComponent.clear();
+        stagingPath.clear();
+    }
+    if (stagingComponent.isEmpty()) {
+        result.error = QStringLiteral(
+            "Cannot reserve a private anchored child directory name");
+        return result;
+    }
+
+    QString openError;
+    const QString nativeStaging =
+        QDir::toNativeSeparators(stagingPath);
+    WindowsHandle observation(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(nativeStaging.utf16()),
+        FILE_LIST_DIRECTORY | FILE_TRAVERSE
+            | FILE_READ_ATTRIBUTES | FILE_ADD_FILE
+            | FILE_ADD_SUBDIRECTORY | READ_CONTROL | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS
+            | FILE_FLAG_OPEN_REPARSE_POINT
+            | FILE_FLAG_WRITE_THROUGH,
+        nullptr));
+    if (!observation.isValid()) {
+        result.effect = MutationEffect::Partial;
+        result.error = windowsError(
+            QStringLiteral(
+                "Cannot anchor a newly created private directory"),
+            ::GetLastError());
+        return result;
+    }
+    WindowsStamp stamp;
+    if (!captureWindowsStamp(
+            observation.get(), stamp, true, result.error)) {
+        result.effect = MutationEffect::Partial;
+        return result;
+    }
+    auto state = std::make_shared<Detail::DirectoryState>();
+    state->ancestor = parent.state_;
+    state->handles.push_back(std::move(observation));
+    state->stamp = stamp;
+    state->component = stagingComponent;
+    state->displayPath = stagingPath;
+    state->identity = windowsIdentity(stamp, 'd');
+    staging = DirectoryAnchor(std::move(state));
+    if (!windowsDirectoryHandleHasPrivateSecurity(
+            staging.state_->handles.back().get())) {
+        result.error = QStringLiteral(
+            "The anchored child directory is not private");
+        cleanupStaging(staging);
+        return result;
+    }
+
+    reportAnchoredFilesystemTransition(
+        "private-directory-staging-anchored",
+        stagingPath,
+        finalPath);
+    reportAnchoredFilesystemTransition(
+        "private-directory-before-publish",
+        stagingPath,
+        finalPath);
+    if (!parent.pathMatches(matchError)) {
+        result.effect = MutationEffect::Conflict;
+        result.error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The private directory parent changed before publication")
+            : matchError;
+        cleanupStaging(staging);
+        return result;
+    }
+
+    QString bridgeError;
+    WindowsHandle bridge = openWindowsDirectoryBridge(
+        nativeStaging, bridgeError);
+    WindowsStamp bridgeStamp;
+    if (!bridge.isValid()
+        || !captureWindowsStamp(
+            bridge.get(), bridgeStamp, true, bridgeError)
+        || !sameWindowsObject(
+            bridgeStamp, staging.state_->stamp)) {
+        result.effect = MutationEffect::Conflict;
+        result.error = bridgeError.isEmpty()
+            ? QStringLiteral(
+                  "The private directory staging name was replaced")
+            : bridgeError;
+        cleanupStaging(staging);
+        return result;
+    }
+
+    staging.state_->handles.clear();
+    WindowsHandle mutation(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(nativeStaging.utf16()),
+        DELETE | FILE_LIST_DIRECTORY | FILE_TRAVERSE
+            | FILE_READ_ATTRIBUTES | FILE_ADD_FILE
+            | FILE_ADD_SUBDIRECTORY | READ_CONTROL
+            | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS
+            | FILE_FLAG_OPEN_REPARSE_POINT
+            | FILE_FLAG_WRITE_THROUGH,
+        nullptr));
+    const DWORD mutationOpenError = mutation.isValid()
+        ? ERROR_SUCCESS : ::GetLastError();
+    WindowsStamp mutationStamp;
+    const bool mutationOpened = mutation.isValid();
+    const bool mutationStampCaptured = mutationOpened
+        && captureWindowsStamp(
+            mutation.get(), mutationStamp, true, result.error);
+    const bool mutationIdentityMatched = mutationStampCaptured
+        && sameWindowsObject(mutationStamp, bridgeStamp);
+    const bool mutationSecurityMatched = mutationIdentityMatched
+        && windowsDirectoryHandleHasPrivateSecurity(mutation.get());
+    if (!mutationSecurityMatched) {
+        mutation.reset();
+        WindowsHandle restored = openWindowsDirectoryHandle(
+            nativeStaging, true, openError);
+        if (restored.isValid()) {
+            WindowsStamp restoredStamp;
+            if (captureWindowsStamp(
+                    restored.get(), restoredStamp,
+                    true, openError)
+                && sameWindowsObject(restoredStamp, bridgeStamp)) {
+                staging.state_->handles.push_back(std::move(restored));
+                staging.state_->stamp = restoredStamp;
+                staging.state_->identity =
+                    windowsIdentity(restoredStamp, 'd');
+            }
+        }
+        if (staging.state_->handles.empty()) {
+            staging.state_->handles.push_back(std::move(bridge));
+            staging.state_->stamp = bridgeStamp;
+            staging.state_->identity =
+                windowsIdentity(bridgeStamp, 'd');
+        }
+        result.effect = mutationOpened && mutationStampCaptured
+            ? MutationEffect::Conflict : MutationEffect::NoEffect;
+        if (result.error.isEmpty()) {
+            result.error = !mutationOpened
+                ? windowsError(
+                      QStringLiteral(
+                          "Cannot open a private directory for publication"),
+                      mutationOpenError)
+                : !mutationIdentityMatched
+                ? QStringLiteral(
+                      "The private directory changed before publication")
+                : QStringLiteral(
+                      "The private directory security changed before publication");
+        }
+        if (staging.state_->handles.size() == 1)
+            cleanupStaging(staging);
+        return result;
+    }
+    bridge.reset();
+    staging.state_->handles.push_back(std::move(mutation));
+
+    const DWORD nameBytes = DWORD(
+        nativeFinal.size() * sizeof(wchar_t));
+    const size_t bufferSize = sizeof(FILE_RENAME_INFO)
+        + size_t(nameBytes);
+    std::vector<unsigned char> storage(bufferSize, 0);
+    auto *rename = reinterpret_cast<FILE_RENAME_INFO *>(storage.data());
+    rename->ReplaceIfExists = FALSE;
+    rename->RootDirectory = nullptr;
+    rename->FileNameLength = nameBytes;
+    std::memcpy(rename->FileName, nativeFinal.utf16(), nameBytes);
+    if (!::SetFileInformationByHandle(
+            staging.state_->handles.back().get(),
+            FileRenameInfo,
+            rename,
+            DWORD(storage.size()))) {
+        const DWORD renameError = ::GetLastError();
+        bridgeError.clear();
+        WindowsHandle restoreBridge = openWindowsDirectoryBridge(
+            nativeStaging, bridgeError);
+        WindowsStamp restoreStamp;
+        const bool canRestore = restoreBridge.isValid()
+            && captureWindowsStamp(
+                restoreBridge.get(), restoreStamp,
+                true, bridgeError)
+            && sameWindowsObject(restoreStamp, mutationStamp);
+        if (canRestore) {
+            staging.state_->handles.clear();
+            WindowsHandle restored = openWindowsDirectoryHandle(
+                nativeStaging, true, openError);
+            WindowsStamp restoredStamp;
+            if (restored.isValid()
+                && captureWindowsStamp(
+                    restored.get(), restoredStamp,
+                    true, openError)
+                && sameWindowsObject(restoredStamp, restoreStamp)) {
+                staging.state_->handles.push_back(std::move(restored));
+                staging.state_->stamp = restoredStamp;
+                staging.state_->identity =
+                    windowsIdentity(restoredStamp, 'd');
+            } else {
+                staging.state_->handles.push_back(
+                    std::move(restoreBridge));
+            }
+        }
+        const DWORD targetAttributes = ::GetFileAttributesW(
+            reinterpret_cast<LPCWSTR>(nativeFinal.utf16()));
+        const MutationEffect renameEffect =
+            (renameError == ERROR_ALREADY_EXISTS
+             || renameError == ERROR_FILE_EXISTS
+             || (renameError == ERROR_ACCESS_DENIED
+                 && targetAttributes != INVALID_FILE_ATTRIBUTES))
+                ? MutationEffect::Conflict : MutationEffect::NoEffect;
+        result.effect = canRestore
+            ? renameEffect : MutationEffect::Partial;
+        result.error = windowsError(
+            renameEffect == MutationEffect::Conflict
+                ? QStringLiteral(
+                      "The private child directory already exists")
+                : QStringLiteral(
+                      "Cannot publish an anchored private directory"),
+            renameError);
+        if (!canRestore && !bridgeError.isEmpty()) {
+            result.error += QStringLiteral("; ") + bridgeError;
+        }
+        if (canRestore && staging.state_->handles.size() == 1)
+            cleanupStaging(staging);
+        return result;
+    }
+
+    WindowsStamp moved;
+    const bool movedCaptured = captureWindowsStamp(
+        staging.state_->handles.back().get(),
+        moved, true, result.error);
+    const bool movedIdentityMatches = movedCaptured
+        && sameWindowsObject(moved, mutationStamp);
+    if (!movedIdentityMatches) {
+        staging.state_->component = component;
+        staging.state_->displayPath = finalPath;
+        directory = std::move(staging);
+        result.effect = MutationEffect::Partial;
+        if (result.error.isEmpty()) {
+            result.error = QStringLiteral(
+                "The private directory identity changed during publication");
+        }
+        return result;
+    }
+    staging.state_->component = component;
+    staging.state_->displayPath = finalPath;
+    staging.state_->stamp = moved;
+    staging.state_->identity = windowsIdentity(moved, 'd');
+
+    bridgeError.clear();
+    WindowsHandle finalBridge = openWindowsDirectoryBridge(
+        nativeFinal, bridgeError);
+    WindowsStamp finalBridgeStamp;
+    if (!finalBridge.isValid()
+        || !captureWindowsStamp(
+            finalBridge.get(), finalBridgeStamp,
+            true, bridgeError)
+        || !sameWindowsObject(finalBridgeStamp, moved)
+        || !windowsDirectoryHandleHasPrivateSecurity(
+            finalBridge.get())) {
+        directory = std::move(staging);
+        result.effect = MutationEffect::Partial;
+        result.error = bridgeError.isEmpty()
+            ? QStringLiteral(
+                  "The private directory destination was replaced")
+            : bridgeError;
+        return result;
+    }
+    staging.state_->handles.clear();
+    WindowsHandle immutable = openWindowsDirectoryHandle(
+        nativeFinal, true, openError);
+    WindowsStamp immutableStamp;
+    if (!immutable.isValid()
+        || !captureWindowsStamp(
+            immutable.get(), immutableStamp, true, openError)
+        || !sameWindowsObject(immutableStamp, finalBridgeStamp)) {
+        staging.state_->handles.push_back(std::move(finalBridge));
+        staging.state_->stamp = finalBridgeStamp;
+        staging.state_->identity =
+            windowsIdentity(finalBridgeStamp, 'd');
+        directory = std::move(staging);
+        result.effect = MutationEffect::Partial;
+        result.error = openError.isEmpty()
+            ? QStringLiteral(
+                  "The private directory changed while finalizing its anchor")
+            : openError;
+        return result;
+    }
+    staging.state_->handles.push_back(std::move(immutable));
+    staging.state_->stamp = immutableStamp;
+    staging.state_->identity = windowsIdentity(immutableStamp, 'd');
+    directory = std::move(staging);
+
+#else
+    Q_UNUSED(finalPath)
+    Q_UNUSED(stagingComponent)
+    Q_UNUSED(stagingPath)
+    Q_UNUSED(staging)
+    result.error = QStringLiteral(
+        "Anchored filesystem operations are unsupported on this platform");
+    return result;
+#endif
+
+    reportAnchoredFilesystemTransition(
+        "private-directory-published",
+        finalPath);
+    QString finalError;
+    if (!parent.pathMatches(finalError)
+        || !directory.pathMatches(finalError)) {
+        result.effect = MutationEffect::Partial;
+        result.error = finalError.isEmpty()
+            ? QStringLiteral(
+                  "The private directory changed after publication")
+            : finalError;
+        return result;
+    }
+    if (!parent.sync(finalError)) {
+        result.effect = MutationEffect::AppliedNotDurable;
+        result.error = finalError;
+        return result;
+    }
+    reportAnchoredFilesystemTransition(
+        "private-directory-before-final-name-check",
+        finalPath);
+    finalError.clear();
+    if (!parent.pathMatches(finalError)
+        || !directory.pathMatches(finalError)) {
+        result.effect = MutationEffect::Partial;
+        result.error = finalError.isEmpty()
+            ? QStringLiteral(
+                  "The private directory changed after synchronization")
+            : finalError;
+        return result;
+    }
+    result.effect = MutationEffect::AppliedDurable;
+    return result;
+}
+
+MutationResult createPrivateChildDirectory(
+    const DirectoryAnchor &parent,
+    const QString &component,
+    DirectoryAnchor &directory)
+{
+    return Detail::PrivateDirectoryOperations::create(
+        parent, component, directory);
+}
+
 MutationResult moveNoReplace(
     PinnedFile &source,
     const EntryRef &destination)
@@ -3340,6 +4584,8 @@ MutationResult removeEmptyDirectory(DirectoryAnchor &directory)
         directory.state_->stamp = restored;
         directory.state_->identity = windowsIdentity(restored, 'd');
         restoredResult.error = std::move(failure);
+        restoredResult.verifiedRecoveryPath =
+            QDir::fromNativeSeparators(path);
         return restoredResult;
     };
 

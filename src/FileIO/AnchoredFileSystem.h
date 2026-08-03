@@ -24,6 +24,7 @@ namespace AnchoredFileSystem {
 namespace Detail {
 struct DirectoryState;
 struct PinnedFileState;
+struct PrivateDirectoryOperations;
 }
 
 class EntryRef;
@@ -114,6 +115,9 @@ private:
         class PinnedFile &, QString &);
     friend MutationResult moveNoReplace(
         PinnedFile &, const EntryRef &);
+    friend bool hardenPrivateDirectory(
+        DirectoryAnchor &, QString &);
+    friend struct Detail::PrivateDirectoryOperations;
     friend MutationResult remove(PinnedFile &);
     friend MutationResult removeEmptyDirectory(DirectoryAnchor &);
     friend struct Detail::PinnedFileState;
@@ -289,6 +293,17 @@ bool writeNewFile(
 MutationResult moveNoReplace(
     PinnedFile &source,
     const EntryRef &destination);
+
+// Private-directory operations exclude processes sharing the same OS identity
+// and privileged administrators from their attacker model.
+MutationResult createPrivateChildDirectory(
+    const DirectoryAnchor &parent,
+    const QString &component,
+    DirectoryAnchor &directory);
+
+bool hardenPrivateDirectory(
+    DirectoryAnchor &directory,
+    QString &error);
 
 MutationResult remove(PinnedFile &file);
 
