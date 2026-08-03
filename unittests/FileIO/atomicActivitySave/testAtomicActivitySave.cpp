@@ -509,6 +509,8 @@ private slots:
     void linkedSaveIncompleteRetirementBlocksFreshRecovery();
     void linkedSaveRetirementIntentControlFiles_data();
     void linkedSaveRetirementIntentControlFiles();
+    void linkedSaveRetirementIntentMustRemainNamed();
+    void linkedSaveIntentRemovalPartialStaysRetryable();
 #ifdef Q_OS_WIN
     void linkedSavePendingWindowsRetirementRetriesAfterHandleClose();
 #endif
@@ -519,6 +521,8 @@ private slots:
     void linkedSaveSourceRepopulationStopsFurtherRetirement();
     void linkedSaveFinalSourceRepopulationIsRejected();
     void linkedSaveRecoveryRejectsStagedSourceAtOldName();
+    void linkedSaveRecoveryRejectsRecreatedOriginalSource_data();
+    void linkedSaveRecoveryRejectsRecreatedOriginalSource();
     void linkedSaveRecoverySourceRetirementSubstitutionIsRejected_data();
     void linkedSaveRecoverySourceRetirementSubstitutionIsRejected();
     void linkedSaveRecoveryRepopulationStopsFurtherRetirement();
@@ -3898,6 +3902,12 @@ linkedSaveRetirementIntentControlFiles_data()
         << QStringLiteral("does not retire its source");
     QTest::newRow("atomic-temporary")
         << QStringLiteral("temporary") << false << true << QString();
+    QTest::newRow("temporary-out-of-range")
+        << QStringLiteral("temporary-out-of-range") << false << false
+        << QStringLiteral("index is invalid");
+    QTest::newRow("temporary-in-place")
+        << QStringLiteral("temporary") << true << false
+        << QStringLiteral("does not retire its source");
     QTest::newRow("lookalike")
         << QStringLiteral("lookalike") << false << false
         << QStringLiteral("unknown file");
@@ -3938,6 +3948,10 @@ linkedSaveRetirementIntentControlFiles()
         name = QStringLiteral(
             ".retirement-0000.pending.ABC123.tmp");
         contents = QByteArray("incomplete temporary data");
+    } else if (kind == QStringLiteral("temporary-out-of-range")) {
+        name = QStringLiteral(
+            ".retirement-9999.pending.ABC123.tmp");
+        contents = QByteArray("incomplete temporary data");
     } else if (kind == QStringLiteral("lookalike")) {
         name = QStringLiteral("retirement-0000.pending.extra");
     }
@@ -3958,6 +3972,137 @@ linkedSaveRetirementIntentControlFiles()
             qPrintable(error));
         QVERIFY(QFileInfo::exists(journalPath));
     }
+}
+
+void TestAtomicActivitySave::
+linkedSaveRetirementIntentMustRemainNamed()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString intentPath = QDir(journalPath).filePath(
+        QStringLiteral("retirement-0000.pending"));
+    for (int index = 0; index < journal->entryCount(); ++index) {
+        writeFixture(
+            journal->stagingPath(index),
+            QByteArray("staged generation ") + QByteArray::number(index));
+        QVERIFY2(journal->recordStaged(index, error), qPrintable(error));
+    }
+
+    bool hookReached = false;
+    bool intentRemoved = false;
+    bool removalSynced = false;
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-source-retirement-validated"),
+        [&]() {
+            hookReached = true;
+            intentRemoved = QFile::remove(intentPath);
+            QString syncError;
+            removalSynced = intentRemoved
+                && syncParentDirectory(intentPath, syncError);
+        });
+
+    error.clear();
+    const bool published = journal->publishAndCommit(error);
+    clearLinkedActivitySaveTransitionAction();
+
+    QVERIFY(hookReached);
+    QVERIFY(intentRemoved);
+    QVERIFY(removalSynced);
+    QVERIFY2(!published, "Source retirement ignored a missing intent");
+    QVERIFY2(!error.isEmpty(), "A missing intent must report an error");
+    QCOMPARE(
+        readAll(specification.entries.at(0).sourcePath),
+        QByteArray("first old generation"));
+    QCOMPARE(
+        readAll(specification.entries.at(1).sourcePath),
+        QByteArray("second old generation"));
+    QVERIFY(!journal->hasCommitMarker());
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    error.clear();
+    QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+    QVERIFY(!QFileInfo::exists(journalPath));
+}
+
+void TestAtomicActivitySave::
+linkedSaveIntentRemovalPartialStaysRetryable()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Unix directory-permission injection is required");
+#else
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+    const LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    for (int index = 0; index < journal->entryCount(); ++index) {
+        writeFixture(
+            journal->stagingPath(index),
+            QByteArray("staged generation ") + QByteArray::number(index));
+        QVERIFY2(journal->recordStaged(index, error), qPrintable(error));
+    }
+
+    const QFileDevice::Permissions originalPermissions =
+        QFile::permissions(journalPath);
+    bool injected = false;
+    bool permissionsRestricted = false;
+    anchoredFilesystemAction =
+        [&](const char *transition,
+            const QString &primary,
+            const QString &) {
+            if (injected
+                || QByteArray(transition)
+                    != "remove-quarantine-finally-verified"
+                || !primary.startsWith(journalPath + QLatin1Char('/'))) {
+                return;
+            }
+            injected = true;
+            permissionsRestricted = QFile::setPermissions(
+                journalPath,
+                QFileDevice::ReadOwner | QFileDevice::ExeOwner);
+        };
+
+    error.clear();
+    const bool published = journal->publishAndCommit(error);
+    anchoredFilesystemAction = {};
+    const bool permissionsRestored = QFile::setPermissions(
+        journalPath, originalPermissions);
+
+    QVERIFY(injected);
+    QVERIFY(permissionsRestricted);
+    QVERIFY(permissionsRestored);
+    QVERIFY2(!published, "Injected marker removal unexpectedly committed");
+    QVERIFY2(!error.isEmpty(), "Partial marker removal must report an error");
+    QVERIFY(!journal->hasCommitMarker());
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    error.clear();
+    QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QCOMPARE(
+        readAll(specification.entries.at(0).sourcePath),
+        QByteArray("first old generation"));
+    QCOMPARE(
+        readAll(specification.entries.at(1).sourcePath),
+        QByteArray("second old generation"));
+    QVERIFY(!QFileInfo::exists(specification.entries.at(0).targetPath));
+    QVERIFY(!QFileInfo::exists(specification.entries.at(1).targetPath));
+#endif
 }
 
 #ifdef Q_OS_WIN
@@ -4353,6 +4498,77 @@ linkedSaveRecoveryRejectsStagedSourceAtOldName()
     QVERIFY(QFileInfo::exists(journalPath));
     QVERIFY(QFileInfo::exists(
         QDir(journalPath).filePath(QStringLiteral("manifest.json"))));
+    QVERIFY(QFileInfo::exists(
+        QDir(journalPath).filePath(QStringLiteral("COMMITTED"))));
+}
+
+void TestAtomicActivitySave::
+linkedSaveRecoveryRejectsRecreatedOriginalSource_data()
+{
+    QTest::addColumn<bool>("conversion");
+
+    QTest::newRow("rename") << false;
+    QTest::newRow("conversion") << true;
+}
+
+void TestAtomicActivitySave::
+linkedSaveRecoveryRejectsRecreatedOriginalSource()
+{
+    QFETCH(bool, conversion);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    LinkedActivitySave::Specification specification =
+        linkedSaveJournalSpecification(dir.path());
+    const QByteArray originalSource("first old generation");
+    const QByteArray secondSource("second old generation");
+    const QByteArray previousBackup("previous imported backup");
+    if (conversion) {
+        specification.entries[0].sourcePath =
+            dir.filePath(QStringLiteral("import.fit"));
+        specification.entries[0].backupPath =
+            dir.filePath(QStringLiteral("import.fit.bak"));
+        specification.entries[0].keepSourceBackup = true;
+        writeFixture(
+            specification.entries.at(0).sourcePath, originalSource);
+        writeFixture(
+            specification.entries.at(0).backupPath, previousBackup);
+        writeFixture(
+            specification.entries.at(1).sourcePath, secondSource);
+    } else {
+        writeLinkedSaveJournalSources(dir.path());
+    }
+
+    QString error;
+    std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(specification, error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QByteArray firstStaged("staged generation 0");
+    const QByteArray secondStaged("staged generation 1");
+    writeFixture(journal->stagingPath(0), firstStaged);
+    QVERIFY2(journal->recordStaged(0, error), qPrintable(error));
+    writeFixture(journal->stagingPath(1), secondStaged);
+    QVERIFY2(journal->recordStaged(1, error), qPrintable(error));
+    QVERIFY2(journal->publishAndCommit(error), qPrintable(error));
+    QVERIFY(journal->hasCommitMarker());
+
+    const QString sourcePath = specification.entries.at(0).sourcePath;
+    writeFixture(sourcePath, originalSource);
+    journal.reset();
+
+    error.clear();
+    const bool reconciled =
+        LinkedActivitySave::Journal::reconcileAll(dir.path(), error);
+
+    QVERIFY2(
+        !reconciled,
+        "Committed recovery retired a recreated original source");
+    QVERIFY2(!error.isEmpty(), "Rejected recovery must report an error");
+    QCOMPARE(readAll(sourcePath), originalSource);
+    QCOMPARE(readAll(specification.entries.at(0).targetPath), firstStaged);
+    QCOMPARE(readAll(specification.entries.at(1).targetPath), secondStaged);
+    QVERIFY(QFileInfo::exists(journalPath));
     QVERIFY(QFileInfo::exists(
         QDir(journalPath).filePath(QStringLiteral("COMMITTED"))));
 }
