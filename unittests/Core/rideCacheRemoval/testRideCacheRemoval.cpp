@@ -140,6 +140,19 @@ const char PlanReplacementCrashPhaseEnvironment[] =
 const char PlanReplacementCrashOccurrenceEnvironment[] =
     "GC_PLAN_REPLACEMENT_CRASH_OCCURRENCE";
 
+enum class JournalNamespaceEntryKind
+{
+    RegularFile,
+    SymbolicLink,
+    Directory
+};
+
+QString qlockRemovalGuardName(int suffixCount = 1)
+{
+    return QStringLiteral(".01234567-89ab-cdef-8123-456789abcdef.lock")
+        + QStringLiteral(".rmlock").repeated(suffixCount);
+}
+
 QString firstName()
 {
     return QStringLiteral("2026_07_06_08_00_00.json");
@@ -572,6 +585,10 @@ private slots:
     void concurrentLinkedRemovalJournalsAreSerialized();
     void activeLinkedSaveAndRemovalShareAthleteLease();
     void abandonedLinkedRemovalJournalBlocksNextTransaction();
+    void staleQLockFileRemovalGuardDoesNotPoisonReconcile_data();
+    void staleQLockFileRemovalGuardDoesNotPoisonReconcile();
+    void unsafeQLockFileRemovalGuardEntriesRemainRejected_data();
+    void unsafeQLockFileRemovalGuardEntriesRemainRejected();
     void pendingLinkedSaveJournalBlocksDeletionTransaction();
     void abandonedPlanJournalBlocksLinkedTransaction_data();
     void abandonedPlanJournalBlocksLinkedTransaction();
@@ -3354,6 +3371,101 @@ abandonedLinkedRemovalJournalBlocksNextTransaction()
         LinkedActivityRemoval::Journal::prepare(specification, error);
     QVERIFY2(next, qPrintable(error));
     QVERIFY2(next->cleanupAfterRollback(error), qPrintable(error));
+}
+
+void TestRideCacheRemoval::
+staleQLockFileRemovalGuardDoesNotPoisonReconcile_data()
+{
+    QTest::addColumn<int>("suffixCount");
+    QTest::newRow("single-rmlock") << 1;
+    QTest::newRow("nested-rmlock") << 2;
+}
+
+void TestRideCacheRemoval::
+staleQLockFileRemovalGuardDoesNotPoisonReconcile()
+{
+    QFETCH(int, suffixCount);
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString root = fixture.temporary.path();
+    const QString namespacePath = QDir(root).filePath(
+        QStringLiteral(".gc-transactions/linked-removal"));
+    QVERIFY(QDir().mkpath(namespacePath));
+    writeFixture(
+        QDir(namespacePath).filePath(
+            qlockRemovalGuardName(suffixCount)),
+        QByteArray("stale QLockFile removal guard"));
+
+    QString error;
+    QVERIFY2(
+        LinkedActivityRemoval::Journal::reconcileAll(root, error),
+        qPrintable(error));
+    error.clear();
+    QVERIFY2(
+        LinkedActivityRemoval::Journal::reconcileAll(root, error),
+        qPrintable(error));
+
+    const QString sourcePath = fixture.activityPath(firstName());
+    writeFixture(sourcePath, QByteArray("source"));
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {root, sourcePath, fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+}
+
+void TestRideCacheRemoval::
+unsafeQLockFileRemovalGuardEntriesRemainRejected_data()
+{
+    QTest::addColumn<QString>("entryName");
+    QTest::addColumn<int>("entryKind");
+    QTest::newRow("invalid-uuid")
+        << QStringLiteral(".not-a-uuid.lock.rmlock")
+        << int(JournalNamespaceEntryKind::RegularFile);
+    QTest::newRow("suffix-lookalike")
+        << qlockRemovalGuardName() + QStringLiteral(".tmp")
+        << int(JournalNamespaceEntryKind::RegularFile);
+    QTest::newRow("symbolic-link")
+        << qlockRemovalGuardName()
+        << int(JournalNamespaceEntryKind::SymbolicLink);
+    QTest::newRow("directory")
+        << qlockRemovalGuardName()
+        << int(JournalNamespaceEntryKind::Directory);
+}
+
+void TestRideCacheRemoval::
+unsafeQLockFileRemovalGuardEntriesRemainRejected()
+{
+    QFETCH(QString, entryName);
+    QFETCH(int, entryKind);
+    const JournalNamespaceEntryKind kind =
+        JournalNamespaceEntryKind(entryKind);
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString root = fixture.temporary.path();
+    const QString namespacePath = QDir(root).filePath(
+        QStringLiteral(".gc-transactions/linked-removal"));
+    QVERIFY(QDir().mkpath(namespacePath));
+    const QString entryPath = QDir(namespacePath).filePath(entryName);
+
+    if (kind == JournalNamespaceEntryKind::Directory) {
+        QVERIFY(QDir().mkpath(entryPath));
+    } else if (kind == JournalNamespaceEntryKind::SymbolicLink) {
+        const QString targetPath = QDir(root).filePath(
+            QStringLiteral("qlock-removal-guard-target"));
+        writeFixture(targetPath, QByteArray("target"));
+        if (!createTestSymbolicLink(targetPath, entryPath, false))
+            QSKIP("File symbolic links are unavailable");
+    } else {
+        writeFixture(entryPath, QByteArray("lookalike"));
+    }
+
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        QString error;
+        QVERIFY(!LinkedActivityRemoval::Journal::reconcileAll(root, error));
+        QVERIFY2(error.contains(entryName), qPrintable(error));
+    }
 }
 
 void TestRideCacheRemoval::
