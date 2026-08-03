@@ -2304,6 +2304,7 @@ bool removeJournalDirectory(
     }
 #endif
 
+    if (!journalDirectoryMatches(state, error)) return false;
     const QFileInfoList remaining = QDir(state.journalPath).entryInfoList(
         QDir::AllEntries | QDir::NoDotAndDotDot
             | QDir::Hidden | QDir::System);
@@ -2312,6 +2313,18 @@ bool removeJournalDirectory(
             "The transaction journal contains files that cannot be removed");
         return false;
     }
+    if (!journalDirectoryMatches(state, error)) return false;
+
+    // Windows denies deletion while the observation anchor is open without
+    // delete sharing. Release every reference only after the final identity
+    // and emptiness checks; a failed removal is recovered on the next load.
+    state.manifestEntry = AnchoredFileSystem::EntryRef();
+    state.manifestFile.reset();
+    state.peerOldEntry = AnchoredFileSystem::EntryRef();
+    state.peerOldFile.reset();
+    state.commitMarkerEntry = AnchoredFileSystem::EntryRef();
+    state.commitMarkerFile.reset();
+    state.journalDirectory = AnchoredFileSystem::DirectoryAnchor();
     if (!removeDirectoryDurably(state.journalPath, error)) {
         if (error.isEmpty()) {
             error = QStringLiteral(
