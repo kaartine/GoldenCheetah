@@ -537,6 +537,8 @@ private slots:
     void activeRemovalJournalRejectsDirectorySubstitute();
     void activeRemovalJournalRejectsPeerOldSubstitute();
     void peerOldCleanupRejectsSubstitute();
+    void journalTemporaryCleanupRejectsSubstitute();
+    void preManifestTemporaryCleanupRejectsSubstitute();
     void activeRemovalJournalRejectsManifestSubstitute();
     void peerManifestPublicationRejectsManifestSubstitute();
     void commitMarkerReadRejectsMarkerSubstitute();
@@ -3497,6 +3499,113 @@ peerOldCleanupRejectsSubstitute()
     QCOMPARE(readBytes(displacedPath), peerOldContents);
     QCOMPARE(readBytes(sourcePath), sourceContents);
     QCOMPARE(readBytes(peerPath), peerContents);
+}
+
+void TestRideCacheRemoval::
+journalTemporaryCleanupRejectsSubstitute()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QByteArray sourceContents("source");
+    const QByteArray temporaryContents("temporary control data");
+    writeFixture(sourcePath, sourceContents);
+
+    QString error;
+    std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+
+    const QString temporaryPath = QDir(journal->directoryPath()).filePath(
+        QStringLiteral(".manifest.json.attack.tmp"));
+    const QString displacedPath = QDir(journal->directoryPath()).filePath(
+        QStringLiteral(".manifest.json.displaced.tmp"));
+    writeFixture(temporaryPath, temporaryContents);
+
+    bool actionReached = false;
+    bool temporaryReplaced = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("journal-temporary-files-inspected"),
+        [&] {
+            actionReached = true;
+            if (!QFile::rename(temporaryPath, displacedPath)) return;
+            temporaryReplaced = true;
+            writeFixture(temporaryPath, temporaryContents);
+        });
+
+    error.clear();
+    const bool cleaned = journal->cleanupAfterRollback(error);
+
+    QVERIFY(actionReached);
+    if (!temporaryReplaced) {
+        QSKIP("The journal temporary file could not be replaced during cleanup");
+    }
+    QVERIFY2(
+        !cleaned,
+        "Cleanup removed a substituted journal temporary file");
+    QCOMPARE(readBytes(temporaryPath), temporaryContents);
+    QCOMPARE(readBytes(displacedPath), temporaryContents);
+    QCOMPARE(readBytes(sourcePath), sourceContents);
+}
+
+void TestRideCacheRemoval::
+preManifestTemporaryCleanupRejectsSubstitute()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QByteArray sourceContents("source");
+    const QByteArray temporaryContents("temporary control data");
+    writeFixture(sourcePath, sourceContents);
+
+    QString error;
+    std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    journal.reset();
+
+    QVERIFY(QFile::remove(
+        QDir(journalPath).filePath(QStringLiteral("manifest.json"))));
+    const QString temporaryPath = QDir(journalPath).filePath(
+        QStringLiteral(".manifest.json.attack.tmp"));
+    const QString displacedPath = QDir(journalPath).filePath(
+        QStringLiteral(".manifest.json.displaced.tmp"));
+    writeFixture(temporaryPath, temporaryContents);
+
+    bool actionReached = false;
+    bool temporaryReplaced = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("journal-pre-manifest-files-inspected"),
+        [&] {
+            actionReached = true;
+            if (!QFile::rename(temporaryPath, displacedPath)) return;
+            temporaryReplaced = true;
+            writeFixture(temporaryPath, temporaryContents);
+        });
+
+    error.clear();
+    const bool reconciled = LinkedActivityRemoval::Journal::reconcileAll(
+        fixture.temporary.path(), error);
+
+    QVERIFY(actionReached);
+    if (!temporaryReplaced) {
+        QSKIP("The pre-manifest temporary file could not be replaced");
+    }
+    QVERIFY2(
+        !reconciled,
+        "Recovery removed a substituted pre-manifest temporary file");
+    QCOMPARE(readBytes(temporaryPath), temporaryContents);
+    QCOMPARE(readBytes(displacedPath), temporaryContents);
+    QCOMPARE(readBytes(sourcePath), sourceContents);
 }
 
 void TestRideCacheRemoval::

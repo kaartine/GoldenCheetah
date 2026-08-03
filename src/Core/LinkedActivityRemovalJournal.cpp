@@ -1429,6 +1429,12 @@ bool inspectJournalDirectory(
         }
         temporaryFiles.append({entry.absoluteFilePath(), observed});
     }
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    if (!temporaryFiles.isEmpty()) {
+        rideCacheRemovalTransitionReached(
+            "journal-temporary-files-inspected");
+    }
+#endif
     return true;
 }
 
@@ -2533,6 +2539,13 @@ bool removePreManifestJournal(
         }
         removable.append({entry.absoluteFilePath(), observed});
     }
+
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    if (!removable.isEmpty()) {
+        rideCacheRemovalTransitionReached(
+            "journal-pre-manifest-files-inspected");
+    }
+#endif
 
     for (const auto &entry : removable) {
         if (!removeObservedFile(entry.first, entry.second, error)) return false;
