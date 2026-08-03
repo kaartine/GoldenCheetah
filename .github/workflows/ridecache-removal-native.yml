@@ -74,11 +74,15 @@ jobs:
           $vcpkgRoot = Split-Path -Parent (Get-Command vcpkg).Source
           $gslRoot = "$vcpkgRoot/installed/x64-windows"
           $zlibRoot = "$vcpkgRoot/installed/x64-windows"
+          $zlibLibrary = "$zlibRoot/lib/zlib.lib"
           if (!(Test-Path "$gslRoot/include/gsl/gsl_rng.h")) {
             throw 'The GSL headers were not installed'
           }
           if (!(Test-Path "$zlibRoot/include/zlib.h")) {
             throw 'The zlib headers were not installed'
+          }
+          if (!(Test-Path $zlibLibrary)) {
+            throw 'The zlib import library was not installed'
           }
           Set-Content src/gcconfig.pri 'CONFIG += release'
           Copy-Item unittests/unittests.pri.in unittests/unittests.pri
@@ -95,7 +99,7 @@ jobs:
             "GSL_INCLUDES=$gslRoot/include" `
             "GSL_LIBS=-L$gslRoot/lib -lgsl -lgslcblas" `
             "ZLIB_INCLUDES=$zlibRoot/include" `
-            "ZLIB_LIBS=-L$zlibRoot/lib -lzlib" `
+            "ZLIB_LIBS=$zlibLibrary" `
             "QMAKE_LEX=win_flex --wincompat" `
             "QMAKE_YACC=win_bison --file-prefix=y -t" `
             "QMAKE_MOVE=copy /Y"
