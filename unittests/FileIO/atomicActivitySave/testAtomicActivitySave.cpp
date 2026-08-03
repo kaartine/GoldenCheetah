@@ -5290,16 +5290,20 @@ linkedSaveJournalCleanupSubstitutionPreservesReplacement_data()
 {
     QTest::addColumn<QByteArray>("transition");
     QTest::addColumn<QString>("substituteName");
-    QTest::addColumn<QByteArray>("substituteBytes");
+    QTest::addColumn<bool>("committed");
 
+    QTest::newRow("before-first-remove")
+        << QByteArray("linked-save-journal-files-pinned")
+        << QStringLiteral("manifest.json") << false;
     QTest::newRow("after-manifest")
         << QByteArray("linked-save-manifest-removed")
-        << QStringLiteral("source-0000.old")
-        << QByteArray("first old generation");
+        << QStringLiteral("source-0000.old") << false;
     QTest::newRow("between-journal-files")
         << QByteArray("linked-save-cleanup-file")
-        << QStringLiteral("new-0000.stage")
-        << QByteArray("staged generation 0");
+        << QStringLiteral("new-0000.stage") << false;
+    QTest::newRow("after-manifest-committed")
+        << QByteArray("linked-save-manifest-removed")
+        << QStringLiteral("COMMITTED") << true;
 }
 
 void TestAtomicActivitySave::
@@ -5310,7 +5314,7 @@ linkedSaveJournalCleanupSubstitutionPreservesReplacement()
 #else
     QFETCH(QByteArray, transition);
     QFETCH(QString, substituteName);
-    QFETCH(QByteArray, substituteBytes);
+    QFETCH(bool, committed);
 
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
@@ -5331,6 +5335,22 @@ linkedSaveJournalCleanupSubstitutionPreservesReplacement()
     QVERIFY2(journal->recordStaged(0, error), qPrintable(error));
     writeFixture(journal->stagingPath(1), secondStaged);
     QVERIFY2(journal->recordStaged(1, error), qPrintable(error));
+    if (committed) {
+        QVERIFY2(journal->publishAndCommit(error), qPrintable(error));
+        QVERIFY(journal->hasCommitMarker());
+    }
+
+    QByteArray substituteBytes;
+    if (substituteName == QStringLiteral("manifest.json")
+        || substituteName == QStringLiteral("COMMITTED")) {
+        substituteBytes = readAll(
+            QDir(journalPath).filePath(substituteName));
+    } else if (substituteName == QStringLiteral("source-0000.old")) {
+        substituteBytes = QByteArray("first old generation");
+    } else {
+        substituteBytes = firstStaged;
+    }
+    QVERIFY(!substituteBytes.isEmpty());
 
     AnchoredFileSystem::DirectoryAnchor substituteParent;
     AnchoredFileSystem::EntryRef substituteEntry;
@@ -5366,7 +5386,9 @@ linkedSaveJournalCleanupSubstitutionPreservesReplacement()
         });
 
     error.clear();
-    const bool cleaned = journal->cleanupAfterRollback(error);
+    const bool cleaned = committed
+        ? journal->cleanupAfterCommit(error)
+        : journal->cleanupAfterRollback(error);
     clearLinkedActivitySaveTransitionAction();
 
     QVERIFY(journalMoved);
@@ -5382,6 +5404,20 @@ linkedSaveJournalCleanupSubstitutionPreservesReplacement()
         qPrintable(matchError));
     QVERIFY2(stillMatches, "Cleanup changed a substitute journal file");
     QVERIFY(QFileInfo::exists(movedJournalPath));
+
+    error.clear();
+    const bool retried = committed
+        ? journal->cleanupAfterCommit(error)
+        : journal->cleanupAfterRollback(error);
+    QVERIFY2(!retried, "A cleanup retry accepted a substituted journal");
+    QVERIFY2(!error.isEmpty(), "Rejected retry must report an error");
+    stillMatches = false;
+    matchError.clear();
+    QVERIFY2(
+        AnchoredFileSystem::entryMatches(
+            substituteEntry, substitutePin, stillMatches, matchError),
+        qPrintable(matchError));
+    QVERIFY2(stillMatches, "A cleanup retry changed the substitute file");
 #endif
 }
 

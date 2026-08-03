@@ -2951,6 +2951,9 @@ bool removeJournalDirectory(
 
     QList<QPair<QString, ObservedFile>> removable;
     if (!inspectJournalDirectory(state, removable, error)) return false;
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+    linkedActivitySaveTransitionReached("linked-save-journal-files-pinned");
+#endif
 
     for (const auto &file : std::as_const(removable)) {
         if (!removeObservedFile(file.first, file.second, error)) {
