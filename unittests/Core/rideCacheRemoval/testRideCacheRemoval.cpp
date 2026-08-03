@@ -105,6 +105,10 @@ void setRideCacheRemovalProcessorAction(
 void setRideCacheRemovalTransitionAction(
     const QByteArray &transition,
     const std::function<void()> &action);
+void setAnchoredFilesystemTransitionAction(
+    const QByteArray &transition,
+    const std::function<void(
+        const QString &, const QString &)> &action);
 void setRideCacheRemovalValidationMutation(
     const QByteArray &contents);
 void setRideCacheRemovalLinkMutationActionOnCall(
@@ -573,6 +577,8 @@ private slots:
     void abandonedPlanJournalBlocksLinkedTransaction();
     void activeRemovalJournalRejectsDirectorySubstitute();
     void journalCleanupRejectsNamespaceRedirect();
+    void journalCleanupDoesNotHideNonEmptyQuarantine_data();
+    void journalCleanupDoesNotHideNonEmptyQuarantine();
     void activeRemovalJournalRejectsPeerOldSubstitute();
     void peerOldCleanupRejectsSubstitute();
     void journalTemporaryCleanupRejectsSubstitute();
@@ -3491,6 +3497,78 @@ void TestRideCacheRemoval::journalCleanupRejectsNamespaceRedirect()
     QVERIFY2(!cleaned, "Cleanup accepted a redirected journal namespace");
     QVERIFY(QFileInfo(displacedJournal).isDir());
     QCOMPARE(readBytes(sourcePath), sourceContents);
+}
+
+void TestRideCacheRemoval::
+journalCleanupDoesNotHideNonEmptyQuarantine_data()
+{
+    QTest::addColumn<bool>("committed");
+    QTest::newRow("rollback") << false;
+    QTest::newRow("commit") << true;
+}
+
+void TestRideCacheRemoval::
+journalCleanupDoesNotHideNonEmptyQuarantine()
+{
+    QFETCH(bool, committed);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QString backupPath = fixture.backupPath(firstName());
+    const QByteArray sourceContents("source");
+    writeFixture(sourcePath, sourceContents);
+
+    QString error;
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             backupPath, QString(), {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+
+    if (committed) {
+        QVERIFY(QFile::copy(
+            sourcePath, journal->backupStagingPath()));
+        QVERIFY(QFile::rename(
+            journal->backupStagingPath(), backupPath));
+        QVERIFY(QFile::rename(
+            sourcePath, journal->sourceTombstonePath()));
+        QVERIFY2(journal->markCommitted(error), qPrintable(error));
+    }
+
+    QString quarantinePath;
+    setAnchoredFilesystemTransitionAction(
+        QByteArrayLiteral("remove-directory-finally-verified"),
+        [&](const QString &target, const QString &) {
+            quarantinePath = target;
+            writeFixture(
+                QDir(target).filePath(QStringLiteral("unexpected")),
+                QByteArray("unexpected"));
+        });
+
+    error.clear();
+    const bool cleaned = committed
+        ? journal->cleanupAfterCommit(error)
+        : journal->cleanupAfterRollback(error);
+
+    QVERIFY(!cleaned);
+    QVERIFY(!error.isEmpty());
+    QVERIFY(!quarantinePath.isEmpty());
+    QVERIFY(QFileInfo(QDir(quarantinePath).filePath(
+        QStringLiteral("unexpected"))).isFile());
+
+    error.clear();
+    const bool retryCleaned = committed
+        ? journal->cleanupAfterCommit(error)
+        : journal->cleanupAfterRollback(error);
+
+    QVERIFY2(
+        !retryCleaned,
+        "A retry hid a nonempty quarantined journal directory");
+    QVERIFY(!error.isEmpty());
+    QVERIFY(QFileInfo(QDir(quarantinePath).filePath(
+        QStringLiteral("unexpected"))).isFile());
 }
 
 void TestRideCacheRemoval::

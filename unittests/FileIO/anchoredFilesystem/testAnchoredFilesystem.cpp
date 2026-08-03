@@ -216,6 +216,20 @@ private slots:
     void moveDoesNotReplaceDestinationAcrossDirectories();
     void removeUsesPinnedParentAfterPathReplacement();
     void removeRejectsFinalEntryReplacement();
+    void removesAnchoredEmptyDirectory();
+    void emptyDirectoryRemovalRejectsReplacedParent();
+    void emptyDirectoryRemovalRetainsPreQuarantineReplacement();
+    void emptyDirectoryRemovalRetainsFinalNameReplacement();
+    void emptyDirectoryRemovalRetainsNonEmptyQuarantine();
+    void emptyDirectoryRemovalRejectsRepopulatedOriginalName();
+    void emptyDirectoryRemovalReportsParentSyncFailure();
+    void emptyDirectoryRemovalReportsPartialSyncFailure();
+    void emptyDirectoryRemovalCanRetryAfterNonEmptyFailure();
+    void emptyDirectoryRemovalRetriesAfterDeleteSharingConflict();
+    void emptyDirectoryRemovalRejectsWindowsRepopulation();
+    void emptyDirectoryRemovalRejectsWindowsAliases();
+    void emptyDirectoryRemovalUnlinksWindowsNameWithSharedObserver();
+    void emptyDirectoryRemovalLegacyWindowsDeleteReportsPendingName();
     void removeRetainsReplacementAtQuarantine();
     void removePartialMoveReportsGeneratedQuarantine();
     void removeDetectsReplacementAfterFinalQuarantineCheck();
@@ -1003,6 +1017,608 @@ void TestAnchoredFilesystem::removeRejectsFinalEntryReplacement()
     QVERIFY(!result.applied());
     QCOMPARE(pin(source).identity(), substituteIdentity);
     QCOMPARE(pin(retained).identity(), originalIdentity);
+}
+
+void TestAnchoredFilesystem::removesAnchoredEmptyDirectory()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(QDir(root.path()).mkdir(QStringLiteral("journal")));
+    const DirectoryAnchor parent = openDirectory(root.path());
+    DirectoryAnchor journal;
+    QString error;
+    QVERIFY2(
+        parent.openChild(
+            QStringLiteral("journal"), journal, error),
+        qPrintable(error));
+
+    const MutationResult result = removeEmptyDirectory(journal);
+
+    QCOMPARE(result.effect, MutationEffect::AppliedDurable);
+    QVERIFY2(result.error.isEmpty(), qPrintable(result.error));
+    QVERIFY(!journal.isValid());
+    QVERIFY(!QFileInfo::exists(
+        root.filePath(QStringLiteral("journal"))));
+    QCOMPARE(
+        QDir(root.path()).entryList(
+            QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden),
+        QStringList());
+}
+
+void TestAnchoredFilesystem::
+emptyDirectoryRemovalRejectsReplacedParent()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString namespacePath =
+        root.filePath(QStringLiteral("namespace"));
+    const QString displacedPath =
+        root.filePath(QStringLiteral("namespace.displaced"));
+    QVERIFY(QDir().mkpath(
+        QDir(namespacePath).filePath(QStringLiteral("journal"))));
+
+    const DirectoryAnchor rootAnchor = openDirectory(root.path());
+    DirectoryAnchor namespaceAnchor;
+    DirectoryAnchor journal;
+    QString error;
+    QVERIFY2(
+        rootAnchor.openChild(
+            QStringLiteral("namespace"), namespaceAnchor, error),
+        qPrintable(error));
+    QVERIFY2(
+        namespaceAnchor.openChild(
+            QStringLiteral("journal"), journal, error),
+        qPrintable(error));
+
+    const bool replaced = QDir().rename(
+        namespacePath, displacedPath);
+#ifdef Q_OS_WIN
+    if (!replaced) {
+        QSKIP("Open Windows directory handles prevent this parent race");
+    }
+#else
+    QVERIFY(replaced);
+#endif
+    QVERIFY(QDir().mkpath(
+        QDir(namespacePath).filePath(QStringLiteral("journal"))));
+
+    const MutationResult result = removeEmptyDirectory(journal);
+
+    QCOMPARE(result.effect, MutationEffect::Conflict);
+    QVERIFY(!result.error.isEmpty());
+    QVERIFY(QFileInfo::exists(
+        QDir(namespacePath).filePath(QStringLiteral("journal"))));
+    QVERIFY(QFileInfo::exists(
+        QDir(displacedPath).filePath(QStringLiteral("journal"))));
+}
+
+void TestAnchoredFilesystem::
+emptyDirectoryRemovalRetainsPreQuarantineReplacement()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("The Unix directory quarantine is platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString journalPath =
+        root.filePath(QStringLiteral("journal"));
+    const QString retainedPath =
+        root.filePath(QStringLiteral("journal.retained"));
+    QVERIFY(QDir().mkdir(journalPath));
+    const DirectoryAnchor parent = openDirectory(root.path());
+    DirectoryAnchor journal;
+    QString error;
+    QVERIFY2(
+        parent.openChild(
+            QStringLiteral("journal"), journal, error),
+        qPrintable(error));
+
+    bool actionReached = false;
+    NativeIdentity substituteIdentity;
+    filesystemAction = [&](const char *transition,
+                           const QString &target,
+                           const QString &) {
+        if (qstrcmp(
+                transition,
+                "remove-directory-before-quarantine") != 0) {
+            return;
+        }
+        actionReached = true;
+        QVERIFY(QDir().rename(target, retainedPath));
+        QVERIFY(QDir().mkdir(target));
+        DirectoryAnchor substitute;
+        QString actionError;
+        QVERIFY2(
+            parent.openChild(
+                QStringLiteral("journal"), substitute, actionError),
+            qPrintable(actionError));
+        substituteIdentity = substitute.identity();
+    };
+
+    const MutationResult result = removeEmptyDirectory(journal);
+    filesystemAction = {};
+
+    QVERIFY(actionReached);
+    QCOMPARE(result.effect, MutationEffect::Partial);
+    QVERIFY(!result.error.isEmpty());
+    QVERIFY(journal.isValid());
+    QVERIFY(QFileInfo(retainedPath).isDir());
+    QVERIFY(substituteIdentity.isValid());
+    const QFileInfoList directories = QDir(root.path()).entryInfoList(
+        QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden);
+    QCOMPARE(directories.size(), 2);
+    for (const QFileInfo &entryInfo : directories) {
+        if (entryInfo.absoluteFilePath() == retainedPath) continue;
+        DirectoryAnchor retainedSubstitute;
+        QVERIFY2(
+            parent.openChild(
+                entryInfo.fileName(), retainedSubstitute, error),
+            qPrintable(error));
+        QCOMPARE(retainedSubstitute.identity(), substituteIdentity);
+    }
+#endif
+}
+
+void TestAnchoredFilesystem::
+emptyDirectoryRemovalRetainsFinalNameReplacement()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("The Unix directory unlink race is platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString journalPath =
+        root.filePath(QStringLiteral("journal"));
+    const QString retainedPath =
+        root.filePath(QStringLiteral("journal.retained"));
+    QVERIFY(QDir().mkdir(journalPath));
+    const DirectoryAnchor parent = openDirectory(root.path());
+    DirectoryAnchor journal;
+    QString error;
+    QVERIFY2(
+        parent.openChild(
+            QStringLiteral("journal"), journal, error),
+        qPrintable(error));
+
+    bool actionReached = false;
+    QString replacementPath;
+    filesystemAction = [&](const char *transition,
+                           const QString &target,
+                           const QString &) {
+        if (qstrcmp(
+                transition,
+                "remove-directory-finally-verified") != 0) {
+            return;
+        }
+        actionReached = true;
+        replacementPath = target;
+        QVERIFY(QDir().rename(target, retainedPath));
+        QVERIFY(QDir().mkdir(target));
+    };
+
+    const MutationResult result = removeEmptyDirectory(journal);
+    filesystemAction = {};
+
+    QVERIFY(actionReached);
+    QCOMPARE(result.effect, MutationEffect::Partial);
+    QVERIFY(!result.error.isEmpty());
+    QVERIFY(journal.isValid());
+    QVERIFY(QFileInfo(retainedPath).isDir());
+    QVERIFY2(
+        QFileInfo(replacementPath).isDir(),
+        "Directory removal deleted a substituted final component");
+#endif
+}
+
+void TestAnchoredFilesystem::
+emptyDirectoryRemovalRetainsNonEmptyQuarantine()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("The Unix directory quarantine is platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString journalPath =
+        root.filePath(QStringLiteral("journal"));
+    QVERIFY(QDir().mkdir(journalPath));
+    const DirectoryAnchor parent = openDirectory(root.path());
+    DirectoryAnchor journal;
+    QString error;
+    QVERIFY2(
+        parent.openChild(
+            QStringLiteral("journal"), journal, error),
+        qPrintable(error));
+
+    QString quarantinePath;
+    filesystemAction = [&](const char *transition,
+                           const QString &target,
+                           const QString &) {
+        if (qstrcmp(
+                transition,
+                "remove-directory-finally-verified") != 0) {
+            return;
+        }
+        quarantinePath = target;
+        writeFixture(
+            QDir(target).filePath(QStringLiteral("entry")),
+            QByteArray("entry"));
+    };
+
+    const MutationResult result = removeEmptyDirectory(journal);
+    filesystemAction = {};
+
+    QVERIFY(!quarantinePath.isEmpty());
+    QCOMPARE(result.effect, MutationEffect::Partial);
+    QVERIFY(!result.error.isEmpty());
+    QVERIFY(journal.isValid());
+    QCOMPARE(result.verifiedRecoveryPath, quarantinePath);
+    QVERIFY(QFileInfo(QDir(quarantinePath).filePath(
+        QStringLiteral("entry"))).isFile());
+#endif
+}
+
+void TestAnchoredFilesystem::
+emptyDirectoryRemovalRejectsRepopulatedOriginalName()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("The Unix directory quarantine is platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString journalPath =
+        root.filePath(QStringLiteral("journal"));
+    QVERIFY(QDir().mkdir(journalPath));
+    const DirectoryAnchor parent = openDirectory(root.path());
+    DirectoryAnchor journal;
+    QString error;
+    QVERIFY2(
+        parent.openChild(
+            QStringLiteral("journal"), journal, error),
+        qPrintable(error));
+
+    bool actionReached = false;
+    filesystemAction = [&](const char *transition,
+                           const QString &,
+                           const QString &) {
+        if (qstrcmp(
+                transition,
+                "remove-directory-finally-verified") != 0) {
+            return;
+        }
+        actionReached = true;
+        QVERIFY(QDir().mkdir(journalPath));
+    };
+
+    const MutationResult result = removeEmptyDirectory(journal);
+    filesystemAction = {};
+
+    QVERIFY(actionReached);
+    QCOMPARE(result.effect, MutationEffect::Partial);
+    QVERIFY(!result.error.isEmpty());
+    QVERIFY(!journal.isValid());
+    QVERIFY(QFileInfo(journalPath).isDir());
+#endif
+}
+
+void TestAnchoredFilesystem::
+emptyDirectoryRemovalReportsPartialSyncFailure()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Unix directory durability is platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString journalPath =
+        root.filePath(QStringLiteral("journal"));
+    QVERIFY(QDir().mkdir(journalPath));
+    const DirectoryAnchor parent = openDirectory(root.path());
+    DirectoryAnchor journal;
+    QString error;
+    QVERIFY2(
+        parent.openChild(
+            QStringLiteral("journal"), journal, error),
+        qPrintable(error));
+
+    filesystemAction = [&](const char *transition,
+                           const QString &target,
+                           const QString &) {
+        if (qstrcmp(
+                transition,
+                "remove-directory-finally-verified") != 0) {
+            return;
+        }
+        writeFixture(
+            QDir(target).filePath(QStringLiteral("entry")),
+            QByteArray("entry"));
+    };
+    failDirectorySync = true;
+
+    const MutationResult result = removeEmptyDirectory(journal);
+    failDirectorySync = false;
+    filesystemAction = {};
+
+    QCOMPARE(result.effect, MutationEffect::Partial);
+    QVERIFY(result.error.contains(QStringLiteral("synchronization")));
+    QVERIFY(journal.isValid());
+#endif
+}
+
+void TestAnchoredFilesystem::
+emptyDirectoryRemovalReportsParentSyncFailure()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Unix directory durability is platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString journalPath =
+        root.filePath(QStringLiteral("journal"));
+    QVERIFY(QDir().mkdir(journalPath));
+    const DirectoryAnchor parent = openDirectory(root.path());
+    DirectoryAnchor journal;
+    QString error;
+    QVERIFY2(
+        parent.openChild(
+            QStringLiteral("journal"), journal, error),
+        qPrintable(error));
+
+    failDirectorySync = true;
+    const MutationResult result = removeEmptyDirectory(journal);
+    failDirectorySync = false;
+
+    QCOMPARE(result.effect, MutationEffect::AppliedNotDurable);
+    QVERIFY(!result.error.isEmpty());
+    QVERIFY(!journal.isValid());
+    QVERIFY(!QFileInfo::exists(journalPath));
+#endif
+}
+
+void TestAnchoredFilesystem::
+emptyDirectoryRemovalCanRetryAfterNonEmptyFailure()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Windows directory handle sharing is platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString journalPath =
+        root.filePath(QStringLiteral("journal"));
+    const QString childPath =
+        QDir(journalPath).filePath(QStringLiteral("entry"));
+    QVERIFY(QDir().mkdir(journalPath));
+    writeFixture(childPath, QByteArray("entry"));
+    const DirectoryAnchor parent = openDirectory(root.path());
+    DirectoryAnchor journal;
+    QString error;
+    QVERIFY2(
+        parent.openChild(
+            QStringLiteral("journal"), journal, error),
+        qPrintable(error));
+
+    const MutationResult first = removeEmptyDirectory(journal);
+
+    QCOMPARE(first.effect, MutationEffect::NoEffect);
+    QVERIFY(!first.error.isEmpty());
+    QVERIFY(journal.isValid());
+    QVERIFY(QFile::remove(childPath));
+
+    const MutationResult retry = removeEmptyDirectory(journal);
+
+    QCOMPARE(retry.effect, MutationEffect::AppliedDurable);
+    QVERIFY2(retry.error.isEmpty(), qPrintable(retry.error));
+    QVERIFY(!journal.isValid());
+    QVERIFY(!QFileInfo::exists(journalPath));
+#endif
+}
+
+void TestAnchoredFilesystem::
+emptyDirectoryRemovalRetriesAfterDeleteSharingConflict()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Windows directory handle sharing is platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString journalPath =
+        root.filePath(QStringLiteral("journal"));
+    QVERIFY(QDir().mkdir(journalPath));
+    const DirectoryAnchor parent = openDirectory(root.path());
+    DirectoryAnchor journal;
+    QString error;
+    QVERIFY2(
+        parent.openChild(
+            QStringLiteral("journal"), journal, error),
+        qPrintable(error));
+
+    {
+        WindowsTestHandle observer(::CreateFileW(
+            reinterpret_cast<LPCWSTR>(journalPath.utf16()),
+            FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            nullptr));
+        QVERIFY(observer.isValid());
+
+        const MutationResult first = removeEmptyDirectory(journal);
+
+        QCOMPARE(first.effect, MutationEffect::NoEffect);
+        QVERIFY(!first.error.isEmpty());
+        QVERIFY(journal.isValid());
+        error.clear();
+        QVERIFY2(journal.pathMatches(error), qPrintable(error));
+    }
+
+    const MutationResult retry = removeEmptyDirectory(journal);
+
+    QCOMPARE(retry.effect, MutationEffect::AppliedDurable);
+    QVERIFY2(retry.error.isEmpty(), qPrintable(retry.error));
+    QVERIFY(!journal.isValid());
+#endif
+}
+
+void TestAnchoredFilesystem::
+emptyDirectoryRemovalRejectsWindowsRepopulation()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Windows directory removal is platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString journalPath =
+        root.filePath(QStringLiteral("journal"));
+    QVERIFY(QDir().mkdir(journalPath));
+    const DirectoryAnchor parent = openDirectory(root.path());
+    DirectoryAnchor journal;
+    QString error;
+    QVERIFY2(
+        parent.openChild(
+            QStringLiteral("journal"), journal, error),
+        qPrintable(error));
+
+    bool actionReached = false;
+    filesystemAction = [&](const char *transition,
+                           const QString &target,
+                           const QString &) {
+        if (qstrcmp(
+                transition,
+                "remove-directory-disposition-completed") != 0) {
+            return;
+        }
+        actionReached = true;
+        QVERIFY(QDir().mkdir(target));
+    };
+
+    const MutationResult result = removeEmptyDirectory(journal);
+    filesystemAction = {};
+
+    QVERIFY(actionReached);
+    QCOMPARE(result.effect, MutationEffect::Partial);
+    QVERIFY(!result.error.isEmpty());
+    QVERIFY(!journal.isValid());
+    QVERIFY(QFileInfo(journalPath).isDir());
+#endif
+}
+
+void TestAnchoredFilesystem::
+emptyDirectoryRemovalRejectsWindowsAliases()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Windows directory handle sharing is platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString journalPath =
+        root.filePath(QStringLiteral("journal"));
+    QVERIFY(QDir().mkdir(journalPath));
+    const DirectoryAnchor parent = openDirectory(root.path());
+    DirectoryAnchor journal;
+    QString error;
+    QVERIFY2(
+        parent.openChild(
+            QStringLiteral("journal"), journal, error),
+        qPrintable(error));
+    DirectoryAnchor alias = journal;
+
+    const MutationResult aliased = removeEmptyDirectory(journal);
+
+    QCOMPARE(aliased.effect, MutationEffect::NoEffect);
+    QVERIFY(!aliased.error.isEmpty());
+    QVERIFY(journal.isValid());
+    QVERIFY(alias.isValid());
+    error.clear();
+    QVERIFY2(journal.pathMatches(error), qPrintable(error));
+    error.clear();
+    QVERIFY2(alias.pathMatches(error), qPrintable(error));
+
+    alias = {};
+    const MutationResult retry = removeEmptyDirectory(journal);
+
+    QCOMPARE(retry.effect, MutationEffect::AppliedDurable);
+    QVERIFY(!journal.isValid());
+#endif
+}
+
+void TestAnchoredFilesystem::
+emptyDirectoryRemovalUnlinksWindowsNameWithSharedObserver()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Windows shared-delete semantics are platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString journalPath =
+        root.filePath(QStringLiteral("journal"));
+    QVERIFY(QDir().mkdir(journalPath));
+    const DirectoryAnchor parent = openDirectory(root.path());
+    DirectoryAnchor journal;
+    QString error;
+    QVERIFY2(
+        parent.openChild(
+            QStringLiteral("journal"), journal, error),
+        qPrintable(error));
+    WindowsTestHandle observer(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(journalPath.utf16()),
+        FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr));
+    QVERIFY(observer.isValid());
+
+    const MutationResult result = removeEmptyDirectory(journal);
+
+    QCOMPARE(result.effect, MutationEffect::AppliedDurable);
+    QVERIFY2(result.error.isEmpty(), qPrintable(result.error));
+    QVERIFY(!journal.isValid());
+    QVERIFY(QDir().mkdir(journalPath));
+#endif
+}
+
+void TestAnchoredFilesystem::
+emptyDirectoryRemovalLegacyWindowsDeleteReportsPendingName()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Windows legacy delete semantics are platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString journalPath =
+        root.filePath(QStringLiteral("journal"));
+    QVERIFY(QDir().mkdir(journalPath));
+    const DirectoryAnchor parent = openDirectory(root.path());
+    DirectoryAnchor journal;
+    QString error;
+    QVERIFY2(
+        parent.openChild(
+            QStringLiteral("journal"), journal, error),
+        qPrintable(error));
+
+    {
+        WindowsTestHandle observer(::CreateFileW(
+            reinterpret_cast<LPCWSTR>(journalPath.utf16()),
+            FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            nullptr));
+        QVERIFY(observer.isValid());
+
+        forceLegacyWindowsDelete = true;
+        const MutationResult result = removeEmptyDirectory(journal);
+        forceLegacyWindowsDelete = false;
+
+        QCOMPARE(result.effect, MutationEffect::Partial);
+        QVERIFY(!result.error.isEmpty());
+        QVERIFY(!journal.isValid());
+        QVERIFY(!QDir().mkdir(journalPath));
+    }
+
+    QVERIFY(QDir().mkdir(journalPath));
+#endif
 }
 
 void TestAnchoredFilesystem::removeRetainsReplacementAtQuarantine()
