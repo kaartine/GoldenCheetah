@@ -79,6 +79,12 @@ struct ObservedFile
     AtomicFileSnapshot contents;
 };
 
+struct AnchoredJournalFile
+{
+    AnchoredFileSystem::EntryRef entry;
+    std::shared_ptr<AnchoredFileSystem::PinnedFile> file;
+};
+
 } // namespace Detail
 
 struct JournalState
@@ -108,6 +114,7 @@ namespace {
 using Detail::ExpectedFile;
 using Detail::Manifest;
 using Detail::ObservedFile;
+using Detail::AnchoredJournalFile;
 using Detail::ResolvedPaths;
 
 void appendError(QString &error, const QString &detail)
@@ -1188,6 +1195,41 @@ bool removeObservedFile(
     return true;
 }
 
+bool removeAnchoredJournalFile(
+    const AnchoredJournalFile &anchored, QString &error)
+{
+    if (!anchored.entry.isValid()
+        || !anchored.file
+        || !anchored.file->isValid()) {
+        error = QStringLiteral(
+            "The transaction journal cleanup file is not anchored");
+        return false;
+    }
+
+    bool matches = false;
+    if (!AnchoredFileSystem::entryMatches(
+            anchored.entry, *anchored.file, matches, error)) {
+        return false;
+    }
+    if (!matches) {
+        error = QStringLiteral(
+            "A transaction journal cleanup file was replaced and retained");
+        return false;
+    }
+
+    const AnchoredFileSystem::MutationResult removal =
+        AnchoredFileSystem::remove(*anchored.file);
+    if (removal.effect
+        == AnchoredFileSystem::MutationEffect::AppliedDurable) {
+        return true;
+    }
+    error = removal.error.isEmpty()
+        ? QStringLiteral(
+              "Cannot remove an anchored transaction journal cleanup file")
+        : removal.error;
+    return false;
+}
+
 bool removeExpectedFile(
     const QString &path,
     const AtomicFileSnapshot &expected,
@@ -1390,9 +1432,42 @@ bool isKnownTemporaryName(const QString &name)
     return knownTemporaryMaximumSize(name) >= 0;
 }
 
+bool pinJournalFile(
+    const AnchoredFileSystem::DirectoryAnchor &directory,
+    const QString &name,
+    qint64 maximumSize,
+    AnchoredJournalFile &anchored,
+    QString &error)
+{
+    anchored.entry = AnchoredFileSystem::EntryRef();
+    anchored.file.reset();
+    AnchoredFileSystem::EntryRef entry = directory.entry(name, error);
+    if (!entry.isValid()) return false;
+
+    auto file = std::make_shared<AnchoredFileSystem::PinnedFile>();
+    if (!AnchoredFileSystem::pinRegularFile(
+            entry, *file, error, maximumSize)) {
+        return false;
+    }
+    bool matches = false;
+    if (!AnchoredFileSystem::entryMatches(
+            entry, *file, matches, error)) {
+        return false;
+    }
+    if (!matches) {
+        error = QStringLiteral(
+            "A transaction journal file was replaced while being inspected");
+        return false;
+    }
+
+    anchored.entry = std::move(entry);
+    anchored.file = std::move(file);
+    return true;
+}
+
 bool inspectJournalDirectory(
     const JournalState &state,
-    QList<QPair<QString, ObservedFile>> &temporaryFiles,
+    QList<AnchoredJournalFile> &temporaryFiles,
     QString &error)
 {
     temporaryFiles.clear();
@@ -1419,16 +1494,23 @@ bool inspectJournalDirectory(
                 "The transaction journal contains an unknown file");
             return false;
         }
-        ObservedFile observed;
-        if (!inspectRegularFile(
-                entry.absoluteFilePath(),
-                observed,
-                error,
-                knownTemporaryMaximumSize(name))) {
+        AnchoredJournalFile anchored;
+        if (!pinJournalFile(
+                state.journalDirectory,
+                name,
+                knownTemporaryMaximumSize(name),
+                anchored,
+                error)) {
             return false;
         }
-        temporaryFiles.append({entry.absoluteFilePath(), observed});
+        temporaryFiles.append(std::move(anchored));
     }
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    if (!temporaryFiles.isEmpty()) {
+        rideCacheRemovalTransitionReached(
+            "journal-temporary-files-inspected");
+    }
+#endif
     return true;
 }
 
@@ -1744,7 +1826,7 @@ bool validateDerivedForRollback(
 bool validateOriginalStorageState(
     JournalState &state, const ResolvedPaths &paths, QString &error)
 {
-    QList<QPair<QString, ObservedFile>> temporaryFiles;
+    QList<AnchoredJournalFile> temporaryFiles;
     if (!inspectJournalDirectory(state, temporaryFiles, error)
         || !validatePeerOldCopy(state, error)) {
         return false;
@@ -2264,12 +2346,12 @@ bool removeDerivedForCommit(
 
 bool removeJournalDirectory(
     JournalState &state,
-    const QList<QPair<QString, ObservedFile>> &temporaryFiles,
+    QList<AnchoredJournalFile> &temporaryFiles,
     bool committed,
     QString &error)
 {
     for (const auto &temporary : temporaryFiles) {
-        if (!removeObservedFile(temporary.first, temporary.second, error)) {
+        if (!removeAnchoredJournalFile(temporary, error)) {
             return false;
         }
     }
@@ -2318,6 +2400,7 @@ bool removeJournalDirectory(
     // Windows denies deletion while the observation anchor is open without
     // delete sharing. Release every reference only after the final identity
     // and emptiness checks; a failed removal is recovered on the next load.
+    temporaryFiles.clear();
     state.manifestEntry = AnchoredFileSystem::EntryRef();
     state.manifestFile.reset();
     state.peerOldEntry = AnchoredFileSystem::EntryRef();
@@ -2342,7 +2425,7 @@ bool removeJournalDirectory(
 bool rollbackJournal(
     JournalState &state, const ResolvedPaths &paths, QString &error)
 {
-    QList<QPair<QString, ObservedFile>> temporaryFiles;
+    QList<AnchoredJournalFile> temporaryFiles;
     if (!journalDirectoryMatches(state, error)
         || !manifestFileMatches(state, error)
         || !inspectJournalDirectory(state, temporaryFiles, error)
@@ -2437,7 +2520,7 @@ bool rollbackJournal(
 bool commitJournal(
     JournalState &state, const ResolvedPaths &paths, QString &error)
 {
-    QList<QPair<QString, ObservedFile>> temporaryFiles;
+    QList<AnchoredJournalFile> temporaryFiles;
     if (!journalDirectoryMatches(state, error)
         || !manifestFileMatches(state, error)
         || !inspectJournalDirectory(state, temporaryFiles, error)
@@ -2521,11 +2604,20 @@ bool removePreManifestJournal(
     AtomicFileLockSet locks;
     if (!locks.lock({journalPath}, error)) return false;
 
+    AnchoredFileSystem::DirectoryAnchor journalDirectory;
+    if (!AnchoredFileSystem::DirectoryAnchor::open(
+            journalPath, journalDirectory, error)) {
+        error = QStringLiteral(
+            "Cannot anchor an incomplete transaction journal: %1")
+                    .arg(error);
+        return false;
+    }
+
     const QFileInfoList entries = QDir(journalPath).entryInfoList(
         QDir::AllEntries | QDir::NoDotAndDotDot
             | QDir::Hidden | QDir::System,
         QDir::Name);
-    QList<QPair<QString, ObservedFile>> removable;
+    QList<AnchoredJournalFile> removable;
     for (const QFileInfo &entry : entries) {
         if (entry.isSymLink() || !entry.isFile()
             || (entry.fileName() != Detail::PeerOldName
@@ -2539,17 +2631,31 @@ bool removePreManifestJournal(
             entry.fileName() == Detail::CommitMarkerName
             ? Detail::MaximumCommitMarkerSize
             : knownTemporaryMaximumSize(entry.fileName());
-        ObservedFile observed;
-        if (!inspectRegularFile(
-                entry.absoluteFilePath(), observed, error, maximumSize)) {
+        AnchoredJournalFile anchored;
+        if (!pinJournalFile(
+                journalDirectory,
+                entry.fileName(),
+                maximumSize,
+                anchored,
+                error)) {
             return false;
         }
-        removable.append({entry.absoluteFilePath(), observed});
+        removable.append(std::move(anchored));
     }
 
-    for (const auto &entry : removable) {
-        if (!removeObservedFile(entry.first, entry.second, error)) return false;
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    if (!removable.isEmpty()) {
+        rideCacheRemovalTransitionReached(
+            "journal-pre-manifest-files-inspected");
     }
+#endif
+
+    for (const auto &entry : removable) {
+        if (!removeAnchoredJournalFile(entry, error)) return false;
+    }
+    if (!journalDirectory.pathMatches(error)) return false;
+    removable.clear();
+    journalDirectory = AnchoredFileSystem::DirectoryAnchor();
     if (!removeDirectoryDurably(journalPath, error)) {
         if (error.isEmpty()) {
             error = QStringLiteral(
