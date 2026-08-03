@@ -20,6 +20,7 @@
 #include <QLockFile>
 #include <QRegularExpression>
 #include <QSet>
+#include <QTemporaryFile>
 #include <QUuid>
 
 #include <algorithm>
@@ -83,6 +84,8 @@ struct ObservedFile
 {
     bool exists = false;
     AtomicFileSnapshot contents;
+    AnchoredFileSystem::NativeIdentity parentIdentity;
+    AnchoredFileSystem::NativeIdentity identity;
 };
 
 struct AnchoredActivityFile
@@ -434,17 +437,36 @@ bool anchorActivityFile(
         }
         return false;
     }
+    if (!anchored.parent.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral("An activity file parent was replaced");
+        }
+        return false;
+    }
 
     bool exists = false;
     if (!AnchoredFileSystem::entryExists(
             anchored.entry, exists, error)) {
         return false;
     }
-    if (exists
-        && !AnchoredFileSystem::pinRegularFile(
-            anchored.entry, anchored.file, error)) {
-        error = QStringLiteral("Cannot pin an activity file: %1").arg(error);
-        return false;
+    if (exists) {
+        if (!AnchoredFileSystem::pinRegularFile(
+                anchored.entry, anchored.file, error)) {
+            error = QStringLiteral("Cannot pin an activity file: %1")
+                        .arg(error);
+            return false;
+        }
+        bool matches = false;
+        if (!anchored.parent.pathMatches(error)
+            || !AnchoredFileSystem::entryMatches(
+                anchored.entry, anchored.file, matches, error)
+            || !matches) {
+            if (error.isEmpty()) {
+                error = QStringLiteral(
+                    "An activity file was replaced while being pinned");
+            }
+            return false;
+        }
     }
     return true;
 }
@@ -492,6 +514,32 @@ bool ensureAthleteRootAnchored(JournalState &state, QString &error)
     return true;
 }
 
+bool observeActivityFile(
+    JournalState &state,
+    const QString &relativePath,
+    ObservedFile &observed,
+    QString &error)
+{
+    observed = {};
+    AnchoredActivityFile anchored;
+    if (!ensureAthleteRootAnchored(state, error)
+        || !anchorActivityFile(
+            state.athleteRootDirectory,
+            relativePath,
+            anchored,
+            error)) {
+        return false;
+    }
+    observed.parentIdentity = anchored.parent.identity();
+    if (!anchored.file.isValid()) return true;
+
+    observed.exists = true;
+    observed.identity = anchored.file.identity();
+    observed.contents.size = anchored.file.size();
+    observed.contents.digest = anchored.file.sha256();
+    return true;
+}
+
 bool anchorObservedActivityFile(
     JournalState &state,
     const QString &relativePath,
@@ -507,13 +555,21 @@ bool anchorObservedActivityFile(
             error)) {
         return false;
     }
+    if (!observed.parentIdentity.isValid()
+        || anchored.parent.identity() != observed.parentIdentity) {
+        error = QStringLiteral(
+            "An activity file parent changed before it could be anchored");
+        return false;
+    }
     if (anchored.file.isValid() != observed.exists) {
         error = QStringLiteral(
             "An activity file changed before it could be anchored");
         return false;
     }
     if (observed.exists
-        && !pinnedFileMatches(anchored.file, observed.contents)) {
+        && (!observed.identity.isValid()
+            || anchored.file.identity() != observed.identity
+            || !pinnedFileMatches(anchored.file, observed.contents))) {
         error = QStringLiteral(
             "An activity file changed while it was being anchored");
         return false;
@@ -526,6 +582,10 @@ bool completeAnchoredActivityRemoval(
     const QString &failure,
     QString &error)
 {
+    if (!anchored.parent.pathMatches(error)) {
+        if (error.isEmpty()) error = failure;
+        return false;
+    }
     const AnchoredFileSystem::MutationResult removal =
         AnchoredFileSystem::remove(anchored.file);
     if (removal.effect
@@ -591,19 +651,32 @@ bool pinExpectedJournalFile(
     return true;
 }
 
-bool publishPinnedActivityFile(
+bool publishPinnedFile(
     const AnchoredFileSystem::PinnedFile &source,
     AnchoredActivityFile &destination,
+    const QString &temporaryName,
     QString &error)
 {
-    const QString temporaryName = QStringLiteral(".gc-linked-save-%1.tmp")
-        .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    if (!destination.parent.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "An activity publication parent was replaced");
+        }
+        return false;
+    }
     AnchoredActivityFile temporary;
     temporary.parent = destination.parent;
     temporary.entry = temporary.parent.entry(temporaryName, error);
     if (!temporary.entry.isValid()
         || !AnchoredFileSystem::copyToNewFile(
             source, temporary.entry, temporary.file, error)) {
+        return false;
+    }
+    if (!destination.parent.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "An activity publication parent was replaced");
+        }
         return false;
     }
 
@@ -623,7 +696,8 @@ bool publishPinnedActivityFile(
     }
     if (published) {
         bool matches = false;
-        if (!AnchoredFileSystem::entryMatches(
+        if (!destination.parent.pathMatches(error)
+            || !AnchoredFileSystem::entryMatches(
                 destination.entry,
                 temporary.file,
                 matches,
@@ -662,6 +736,104 @@ bool publishPinnedActivityFile(
         }
     }
     return false;
+}
+
+bool publishPinnedActivityFile(
+    const AnchoredFileSystem::PinnedFile &source,
+    AnchoredActivityFile &destination,
+    QString &error)
+{
+    const QString temporaryName = QStringLiteral(".gc-linked-save-%1.tmp")
+        .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    return publishPinnedFile(
+        source, destination, temporaryName, error);
+}
+
+bool pinTemporaryContents(
+    const QByteArray &contents,
+    QTemporaryFile &temporary,
+    AnchoredFileSystem::PinnedFile &source,
+    QString &error)
+{
+    if (!temporary.open()
+        || temporary.write(contents) != contents.size()
+        || !temporary.flush()
+        || !syncFileDevice(temporary, error)) {
+        if (error.isEmpty()) error = temporary.errorString();
+        return false;
+    }
+    const QString path = temporary.fileName();
+    temporary.close();
+
+    AnchoredFileSystem::DirectoryAnchor parent;
+    if (!AnchoredFileSystem::DirectoryAnchor::open(
+            QFileInfo(path).absolutePath(), parent, error)
+        || !parent.pathMatches(error)) {
+        return false;
+    }
+    const AnchoredFileSystem::EntryRef entry = parent.entry(
+        QFileInfo(path).fileName(), error);
+    bool matches = false;
+    if (!entry.isValid()
+        || !AnchoredFileSystem::pinRegularFile(
+            entry, source, error, contents.size())
+        || !AnchoredFileSystem::entryMatches(
+            entry, source, matches, error)
+        || !matches
+        || source.size() != contents.size()
+        || source.sha256()
+            != QCryptographicHash::hash(
+                contents, QCryptographicHash::Sha256)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "Cannot pin the anchored publication contents");
+        }
+        return false;
+    }
+    return true;
+}
+
+bool publishAnchoredJournalFile(
+    JournalState &state,
+    const QString &name,
+    const QByteArray &contents,
+    AtomicFileSnapshot &snapshot,
+    QString &error)
+{
+    if (!journalDirectoryMatches(state, error)) return false;
+
+    QTemporaryFile temporarySource;
+    AnchoredFileSystem::PinnedFile source;
+    if (!pinTemporaryContents(
+            contents, temporarySource, source, error)) {
+        return false;
+    }
+
+    AnchoredActivityFile destination;
+    destination.parent = state.journalDirectory;
+    destination.entry = destination.parent.entry(name, error);
+    bool exists = false;
+    if (!destination.entry.isValid()
+        || !AnchoredFileSystem::entryExists(
+            destination.entry, exists, error)) {
+        return false;
+    }
+    if (exists) {
+        error = QStringLiteral(
+            "An anchored journal publication target already exists");
+        return false;
+    }
+
+    const QString temporaryName = QStringLiteral(".%1.%2.tmp")
+        .arg(name, QUuid::createUuid().toString(QUuid::WithoutBraces));
+    if (!publishPinnedFile(
+            source, destination, temporaryName, error)
+        || !journalDirectoryMatches(state, error)) {
+        return false;
+    }
+    snapshot.size = source.size();
+    snapshot.digest = source.sha256();
+    return true;
 }
 
 bool replaceObservedActivityFile(
@@ -2697,6 +2869,7 @@ bool verifyRetirementSourcesAbsent(
 }
 
 bool observeProductionEntry(
+    JournalState &state,
     const Entry &entry,
     const ResolvedEntry &paths,
     ObservedFile &source,
@@ -2704,13 +2877,20 @@ bool observeProductionEntry(
     ObservedFile &backup,
     QString &error)
 {
-    if (!inspectRegularFile(paths.source, source, error)) return false;
-    if (atomicFilePathKey(paths.source) == atomicFilePathKey(paths.target)) {
-        target = source;
-    } else if (!inspectRegularFile(paths.target, target, error)) {
+    if (!observeActivityFile(
+            state, entry.source.relativePath, source, error)) {
         return false;
     }
-    if (!inspectRegularFile(paths.backup, backup, error)) return false;
+    if (atomicFilePathKey(paths.source) == atomicFilePathKey(paths.target)) {
+        target = source;
+    } else if (!observeActivityFile(
+                   state, entry.targetRelativePath, target, error)) {
+        return false;
+    }
+    if (!observeActivityFile(
+            state, entry.backup.relativePath, backup, error)) {
+        return false;
+    }
 
     const bool sourceIsTarget =
         atomicFilePathKey(paths.source) == atomicFilePathKey(paths.target);
@@ -2823,6 +3003,7 @@ bool restoreOldGeneration(
         ObservedFile target;
         ObservedFile backup;
         if (!observeProductionEntry(
+                state,
                 state.manifest.entries.at(index),
                 resolved.at(index),
                 source,
@@ -2840,6 +3021,7 @@ bool restoreOldGeneration(
         ObservedFile target;
         ObservedFile backup;
         if (!observeProductionEntry(
+                state,
                 entry, paths, source, target, backup, error)) {
             return false;
         }
@@ -2885,7 +3067,11 @@ bool restoreOldGeneration(
         if (atomicFilePathKey(paths.source)
                 != atomicFilePathKey(paths.target)) {
             ObservedFile currentTarget;
-            if (!inspectRegularFile(paths.target, currentTarget, error)) {
+            if (!observeActivityFile(
+                    state,
+                    entry.targetRelativePath,
+                    currentTarget,
+                    error)) {
                 return false;
             }
             if (currentTarget.exists) {
@@ -2927,6 +3113,7 @@ bool ensureNewGeneration(
         ObservedFile target;
         ObservedFile backup;
         if (!observeProductionEntry(
+                state,
                 entry, paths, source, target, backup, error)) {
             return false;
         }
@@ -2952,6 +3139,7 @@ bool ensureNewGeneration(
         ObservedFile target;
         ObservedFile backup;
         if (!observeProductionEntry(
+                state,
                 entry, paths, source, target, backup, error)) {
             return false;
         }
@@ -3005,6 +3193,7 @@ bool publishNewGeneration(
         ObservedFile target;
         ObservedFile backup;
         if (!observeProductionEntry(
+                state,
                 entry, paths, source, target, backup, error)
             || !replaceObservedActivityFile(
                 state,
@@ -3029,6 +3218,7 @@ bool publishNewGeneration(
             ObservedFile target;
             ObservedFile backup;
             if (!observeProductionEntry(
+                    state,
                     entry, paths, source, target, backup, error)
                 || !replaceObservedActivityFile(
                     state,
@@ -3894,10 +4084,10 @@ bool Journal::publishAndCommit(QString &error)
 
     const QByteArray contents = state_->manifest.id.toLatin1() + '\n';
     AtomicFileSnapshot marker;
-    if (!writeBytesAtomically(
-            state_->commitMarkerPath,
+    if (!publishAnchoredJournalFile(
+            *state_,
+            Detail::CommitMarkerName,
             contents,
-            AtomicFileMode::CreateNew,
             marker,
             error)) {
         appendError(

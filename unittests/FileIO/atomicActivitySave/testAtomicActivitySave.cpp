@@ -3914,8 +3914,16 @@ linkedSaveNondurableRetirementStaysRetryable()
         QVERIFY2(journal->recordStaged(index, error), qPrintable(error));
     }
 
-    anchoredFilesystemSyncFailurePath = dir.path();
+    bool retirementValidated = false;
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-source-retirement-validated"),
+        [&]() {
+            retirementValidated = true;
+            anchoredFilesystemSyncFailurePath = dir.path();
+        });
     QVERIFY(!journal->publishAndCommit(error));
+    clearLinkedActivitySaveTransitionAction();
+    QVERIFY(retirementValidated);
     QVERIFY2(!error.isEmpty(), "A nondurable retirement must report an error");
     QVERIFY(!journal->hasCommitMarker());
     QVERIFY(QFileInfo::exists(journalPath));
