@@ -53,6 +53,13 @@ enum class FailurePoint {
     MissingCommit
 };
 
+enum class LockArtifactEntryKind
+{
+    RegularFile,
+    SymbolicLink,
+    Directory
+};
+
 class FaultInjectingWriter final : public AtomicFileWriter
 {
 public:
@@ -334,6 +341,8 @@ private slots:
     void stagedFileSetFinalizesWhileTargetsAreLocked();
     void stagedFileSetReturnsSuccessfulFinalizerWarning();
     void stagedFileSetRollsBackWhenFinalizerFails();
+    void atomicFileLockTargetName_data();
+    void atomicFileLockTargetName();
     void lockSetKeepsCaseDistinctPaths();
     void atomicWriterPreservesConcurrentNewTarget();
     void jsonWriterFailurePreservesOriginal_data();
@@ -1317,6 +1326,47 @@ void TestAtomicActivitySave::stagedFileSetRollsBackWhenFinalizerFails()
         QVERIFY(!QFile::exists(file.first));
         QVERIFY(!QFile::exists(file.second));
     }
+}
+
+void TestAtomicActivitySave::atomicFileLockTargetName_data()
+{
+    QTest::addColumn<QString>("entryName");
+    QTest::addColumn<bool>("expectedValid");
+    QTest::addColumn<QString>("expectedTarget");
+    QTest::newRow("lock-without-target")
+        << QStringLiteral(".lock") << false << QString();
+    QTest::newRow("guard-without-target")
+        << QStringLiteral(".lock.rmlock") << false << QString();
+    QTest::newRow("ordinary-lock")
+        << QStringLiteral(".target.lock") << true
+        << QStringLiteral("target");
+    QTest::newRow("single-removal-guard")
+        << QStringLiteral(".target.lock.rmlock") << true
+        << QStringLiteral("target");
+    QTest::newRow("nested-removal-guard")
+        << QStringLiteral(".target.lock.rmlock.rmlock") << true
+        << QStringLiteral("target");
+    QTest::newRow("uppercase-suffix")
+        << QStringLiteral(".target.lock.RMLOCK") << false << QString();
+    QTest::newRow("embedded-suffix")
+        << QStringLiteral(".target.rmlock.lock") << true
+        << QStringLiteral("target.rmlock");
+    QTest::newRow("trailing-lookalike")
+        << QStringLiteral(".target.lock.rmlock.tmp") << false << QString();
+    QTest::newRow("missing-dot-prefix")
+        << QStringLiteral("target.lock.rmlock") << false << QString();
+}
+
+void TestAtomicActivitySave::atomicFileLockTargetName()
+{
+    QFETCH(QString, entryName);
+    QFETCH(bool, expectedValid);
+    QFETCH(QString, expectedTarget);
+    QString targetName = QStringLiteral("stale output");
+    QCOMPARE(
+        ::atomicFileLockTargetName(entryName, targetName),
+        expectedValid);
+    QCOMPARE(targetName, expectedTarget);
 }
 
 void TestAtomicActivitySave::lockSetKeepsCaseDistinctPaths()
@@ -3163,23 +3213,48 @@ void TestAtomicActivitySave::
 linkedSaveUnsafeQLockFileRemovalGuardsRemainRejected_data()
 {
     QTest::addColumn<QString>("entryName");
+    QTest::addColumn<int>("entryKind");
     QTest::newRow("invalid-uuid")
-        << QStringLiteral(".not-a-uuid.lock.rmlock");
+        << QStringLiteral(".not-a-uuid.lock.rmlock")
+        << int(LockArtifactEntryKind::RegularFile);
     QTest::newRow("suffix-lookalike")
-        << qlockRemovalGuardName() + QStringLiteral(".tmp");
+        << qlockRemovalGuardName() + QStringLiteral(".tmp")
+        << int(LockArtifactEntryKind::RegularFile);
+    QTest::newRow("symbolic-link")
+        << qlockRemovalGuardName()
+        << int(LockArtifactEntryKind::SymbolicLink);
+    QTest::newRow("directory")
+        << qlockRemovalGuardName()
+        << int(LockArtifactEntryKind::Directory);
 }
 
 void TestAtomicActivitySave::
 linkedSaveUnsafeQLockFileRemovalGuardsRemainRejected()
 {
     QFETCH(QString, entryName);
+    QFETCH(int, entryKind);
+    const LockArtifactEntryKind kind =
+        LockArtifactEntryKind(entryKind);
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
     const QString namespacePath = QDir(dir.path()).filePath(
         QStringLiteral(".gc-transactions/linked-save"));
     QVERIFY(QDir().mkpath(namespacePath));
     const QString entryPath = QDir(namespacePath).filePath(entryName);
-    writeFixture(entryPath, QByteArray("lookalike"));
+    if (kind == LockArtifactEntryKind::Directory) {
+        QVERIFY(QDir().mkpath(entryPath));
+    } else if (kind == LockArtifactEntryKind::SymbolicLink) {
+#ifdef Q_OS_WIN
+        QSKIP("QFile::link creates shortcuts rather than symlinks on Windows");
+#else
+        const QString targetPath = QDir(dir.path()).filePath(
+            QStringLiteral("qlock-removal-guard-target"));
+        writeFixture(targetPath, QByteArray("target"));
+        QVERIFY(QFile::link(targetPath, entryPath));
+#endif
+    } else {
+        writeFixture(entryPath, QByteArray("lookalike"));
+    }
 
     for (int attempt = 0; attempt < 2; ++attempt) {
         QString error;
