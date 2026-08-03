@@ -196,6 +196,22 @@ void writeFixture(const QString &path, const QByteArray &contents)
     QVERIFY(file.flush());
 }
 
+void replaceFixtureWhilePinned(
+    const QString &path,
+    const QByteArray &contents)
+{
+#ifdef Q_OS_WIN
+    const QString retainedPath =
+        path + QStringLiteral(".gc-test-retained-original");
+    QVERIFY(!QFileInfo::exists(retainedPath));
+    QFile original(path);
+    QVERIFY2(
+        original.rename(retainedPath),
+        qPrintable(original.errorString()));
+#endif
+    writeFixture(path, contents);
+}
+
 QByteArray readBytes(const QString &path)
 {
     QFile file(path);
@@ -1045,9 +1061,14 @@ sourceMutationBeforeArchiveRollsBackFiles()
         fixture.cachePath(
             firstName(), QStringLiteral("notes")),
         notes);
-    setRideCacheRemovalMoveMutation(
-        fixture.activityPath(firstName()),
-        concurrentActivity);
+    const QString activityPath =
+        fixture.activityPath(firstName());
+    setRideCacheRemovalMoveAction(
+        activityPath,
+        [activityPath, concurrentActivity] {
+            replaceFixtureWhilePinned(
+                activityPath, concurrentActivity);
+        });
 
     const RideCache::RemovalResult result =
         fixture.cache->removeRideResult(item);
@@ -2607,8 +2628,12 @@ derivedMutationBeforeStagingRollsBackFiles()
         fixture.backupPath(firstName()),
         previousBackup);
     writeFixture(notesPath, notes);
-    setRideCacheRemovalMoveMutation(
-        notesPath, concurrentNotes);
+    setRideCacheRemovalMoveAction(
+        notesPath,
+        [notesPath, concurrentNotes] {
+            replaceFixtureWhilePinned(
+                notesPath, concurrentNotes);
+        });
 
     const RideCache::RemovalResult result =
         fixture.cache->removeRideResult(item);
@@ -6584,7 +6609,8 @@ stagingCleanupFailureRequiresRecoveryAndStopsBatch()
                 QDir(retainedStagingPath).filePath(
                     QStringLiteral("sentinel")),
                 retainedContents);
-            writeFixture(firstPath, changedContents);
+            replaceFixtureWhilePinned(
+                firstPath, changedContents);
         });
 
     const RideCache::RemovalResult result =
