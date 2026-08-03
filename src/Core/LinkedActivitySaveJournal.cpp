@@ -1961,9 +1961,15 @@ bool retireJournalSource(
         return false;
     }
 
-    if (source->file.isValid()
-        && !beginRetirementIntent(state, index, *source, error)) {
-        return false;
+    const bool intentPublished = source->file.isValid();
+    if (intentPublished) {
+        if (!beginRetirementIntent(state, index, *source, error)) {
+            return false;
+        }
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+        linkedActivitySaveTransitionReached(
+            "linked-save-retirement-intent-published");
+#endif
     }
     if (!retireAnchoredSource(
             *source,
@@ -1972,7 +1978,14 @@ bool retireJournalSource(
             error)) {
         return false;
     }
-    return completeRetirementIntent(*source, error);
+    if (!completeRetirementIntent(*source, error)) return false;
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+    if (intentPublished) {
+        linkedActivitySaveTransitionReached(
+            "linked-save-retirement-intent-removed");
+    }
+#endif
+    return true;
 }
 
 bool resolveIncompleteRetirements(
