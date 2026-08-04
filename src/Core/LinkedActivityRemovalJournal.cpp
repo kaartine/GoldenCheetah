@@ -3737,15 +3737,17 @@ bool Journal::reconcileAll(const QString &athleteRoot, QString &error)
                 "The linked-removal journal changed after namespace enumeration"));
             continue;
         }
-        AnchoredFileSystem::EntryRef manifestEntry =
-            journalDirectory.entry(
-                Detail::ManifestName, transactionError);
         bool manifestExists = false;
-        if (!manifestEntry.isValid()
-            || !AnchoredFileSystem::entryExists(
-                manifestEntry, manifestExists, transactionError)) {
-            failures.append(transactionError);
-            continue;
+        {
+            const AnchoredFileSystem::EntryRef manifestEntry =
+                journalDirectory.entry(
+                    Detail::ManifestName, transactionError);
+            if (!manifestEntry.isValid()
+                || !AnchoredFileSystem::entryExists(
+                    manifestEntry, manifestExists, transactionError)) {
+                failures.append(transactionError);
+                continue;
+            }
         }
 
         const QString journalPath = QDir(namespacePath).filePath(name);
