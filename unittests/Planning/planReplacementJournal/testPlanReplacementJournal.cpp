@@ -36,6 +36,104 @@ enum class JournalNamespaceEntryKind
     Directory
 };
 
+#ifdef Q_OS_WIN
+class WindowsTestHandle
+{
+public:
+    explicit WindowsTestHandle(HANDLE handle = INVALID_HANDLE_VALUE)
+        : handle_(handle)
+    {
+    }
+
+    ~WindowsTestHandle()
+    {
+        if (isValid()) ::CloseHandle(handle_);
+    }
+
+    WindowsTestHandle(const WindowsTestHandle &) = delete;
+    WindowsTestHandle &operator=(const WindowsTestHandle &) = delete;
+
+    bool isValid() const
+    {
+        return handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE;
+    }
+
+    HANDLE get() const { return handle_; }
+
+private:
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+};
+
+bool createCurrentUserOwnedDirectory(const QString &path)
+{
+    HANDLE rawToken = nullptr;
+    if (!::OpenProcessToken(
+            ::GetCurrentProcess(), TOKEN_QUERY, &rawToken)) {
+        return false;
+    }
+    WindowsTestHandle token(rawToken);
+    DWORD required = 0;
+    ::GetTokenInformation(
+        token.get(), TokenUser, nullptr, 0, &required);
+    if (::GetLastError() != ERROR_INSUFFICIENT_BUFFER
+        || required == 0) {
+        return false;
+    }
+    QByteArray userStorage(int(required), '\0');
+    if (!::GetTokenInformation(
+            token.get(), TokenUser, userStorage.data(),
+            required, &required)) {
+        return false;
+    }
+    auto *user = reinterpret_cast<TOKEN_USER *>(
+        userStorage.data());
+    if (!::IsValidSid(user->User.Sid)) return false;
+
+    const DWORD aclSize = DWORD(
+        sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE)
+        - sizeof(DWORD) + ::GetLengthSid(user->User.Sid));
+    QByteArray aclStorage(int(aclSize), '\0');
+    auto *acl = reinterpret_cast<PACL>(aclStorage.data());
+    SECURITY_DESCRIPTOR descriptor {};
+    if (!::InitializeAcl(acl, aclSize, ACL_REVISION)
+        || !::AddAccessAllowedAceEx(
+            acl, ACL_REVISION,
+            CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE,
+            FILE_ALL_ACCESS, user->User.Sid)
+        || !::InitializeSecurityDescriptor(
+            &descriptor, SECURITY_DESCRIPTOR_REVISION)
+        || !::SetSecurityDescriptorOwner(
+            &descriptor, user->User.Sid, FALSE)
+        || !::SetSecurityDescriptorDacl(
+            &descriptor, TRUE, acl, FALSE)
+        || !::SetSecurityDescriptorControl(
+            &descriptor, SE_DACL_PROTECTED,
+            SE_DACL_PROTECTED)) {
+        return false;
+    }
+    SECURITY_ATTRIBUTES attributes {};
+    attributes.nLength = sizeof(attributes);
+    attributes.lpSecurityDescriptor = &descriptor;
+    const QString native = QDir::toNativeSeparators(path);
+    return ::CreateDirectoryW(
+        reinterpret_cast<LPCWSTR>(native.utf16()),
+        &attributes);
+}
+#endif
+
+bool createOwnedFixtureHierarchy(const QStringList &paths)
+{
+    if (paths.isEmpty()) return false;
+#ifdef Q_OS_WIN
+    for (const QString &path : paths) {
+        if (!createCurrentUserOwnedDirectory(path)) return false;
+    }
+    return true;
+#else
+    return QDir().mkpath(paths.constLast());
+#endif
+}
+
 QString qlockRemovalGuardName(
     const QString &lockName, int suffixCount = 1)
 {
@@ -722,9 +820,12 @@ staleQLockFileRemovalGuardDoesNotPoisonReconcile()
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
     QVERIFY(createOldGeneration(temporary.path()));
-    const QString namespacePath = QDir(temporary.path()).filePath(
-        QStringLiteral(".gc-transactions/plan-replacement"));
-    QVERIFY(QDir().mkpath(namespacePath));
+    const QString transactionsPath = QDir(temporary.path()).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString namespacePath = QDir(transactionsPath).filePath(
+        QStringLiteral("plan-replacement"));
+    QVERIFY(createOwnedFixtureHierarchy(
+        {transactionsPath, namespacePath}));
     QVERIFY(writeFile(
         QDir(namespacePath).filePath(
             qlockRemovalGuardName(suffixCount)),
@@ -828,9 +929,12 @@ unsafeQLockFileRemovalGuardEntriesRemainRejected()
         JournalNamespaceEntryKind(entryKind);
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
-    const QString namespacePath = QDir(temporary.path()).filePath(
-        QStringLiteral(".gc-transactions/plan-replacement"));
-    QVERIFY(QDir().mkpath(namespacePath));
+    const QString transactionsPath = QDir(temporary.path()).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString namespacePath = QDir(transactionsPath).filePath(
+        QStringLiteral("plan-replacement"));
+    QVERIFY(createOwnedFixtureHierarchy(
+        {transactionsPath, namespacePath}));
     const QString entryPath = QDir(namespacePath).filePath(entryName);
 
     if (kind == JournalNamespaceEntryKind::Directory) {
@@ -1010,9 +1114,13 @@ void TestPlanReplacementJournal::pendingSiblingTransactionIsRejected()
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
     QVERIFY(createOldGeneration(temporary.path()));
-    const QString sibling = QDir(temporary.path()).filePath(
-        QStringLiteral(".gc-transactions/%1").arg(name));
-    QVERIFY(QDir().mkpath(QDir(sibling).filePath(QStringLiteral("pending"))));
+    const QString transactionsPath = QDir(temporary.path()).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString sibling = QDir(transactionsPath).filePath(name);
+    const QString pending = QDir(sibling).filePath(
+        QStringLiteral("pending"));
+    QVERIFY(createOwnedFixtureHierarchy(
+        {transactionsPath, sibling, pending}));
 
     QString error;
     const std::shared_ptr<PlanReplacement::Journal> journal =

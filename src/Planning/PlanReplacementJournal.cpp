@@ -9,6 +9,7 @@
 
 #include "PlanReplacementJournal.h"
 
+#include "AnchoredFileSystem.h"
 #include "AtomicFileWriter.h"
 
 #include <QDir>
@@ -429,14 +430,99 @@ bool ensurePrivateDirectory(const QString &path, QString &error)
     return true;
 }
 
-bool ensureTransactionNamespace(
-    const QString &root, QString &namespacePath, QString &error)
+bool openOrCreatePrivateFixedDirectory(
+    const AnchoredFileSystem::DirectoryAnchor &parent,
+    const QString &component,
+    AnchoredFileSystem::DirectoryAnchor &directory,
+    QString &error)
 {
-    const QString transactions = QDir(root).filePath(
-        QStringLiteral(".gc-transactions"));
-    if (!ensurePrivateDirectory(transactions, error)) return false;
+    if (!AnchoredFileSystem::validateCurrentUserControlledDirectory(
+            parent, error)) {
+        return false;
+    }
+    bool exists = false;
+    if (!parent.openChildIfExists(
+            component, directory, exists, error)) {
+        return false;
+    }
+    if (exists) {
+        if (!AnchoredFileSystem::validateCurrentUserOwnedDirectory(
+                directory, error)
+            || !AnchoredFileSystem::hardenPrivateDirectory(
+                directory, error)) {
+            return false;
+        }
+    } else {
+        const AnchoredFileSystem::MutationResult creation =
+            AnchoredFileSystem::createPrivateFixedChildDirectory(
+                parent, component, directory);
+        if (creation.effect
+            != AnchoredFileSystem::MutationEffect::AppliedDurable) {
+            error = creation.error.isEmpty()
+                ? QStringLiteral(
+                      "Cannot create a private plan transaction directory")
+                : creation.error;
+            if (!creation.verifiedRecoveryPath.isEmpty()) {
+                appendError(
+                    error,
+                    QStringLiteral("recovery directory retained at %1")
+                        .arg(creation.verifiedRecoveryPath));
+            }
+            return false;
+        }
+    }
+
+    QString matchError;
+    if (!parent.pathMatches(matchError)
+        || !directory.pathMatches(matchError)) {
+        error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The private plan transaction directory hierarchy changed")
+            : matchError;
+        return false;
+    }
+    return true;
+}
+
+bool ensureTransactionNamespace(
+    const QString &root,
+    QString &namespacePath,
+    AnchoredFileSystem::DirectoryAnchor &transactionsDirectory,
+    AnchoredFileSystem::DirectoryAnchor &namespaceDirectory,
+    QString &error)
+{
+    transactionsDirectory = {};
+    namespaceDirectory = {};
+    AnchoredFileSystem::DirectoryAnchor rootDirectory;
+    if (!AnchoredFileSystem::DirectoryAnchor::open(
+            root, rootDirectory, error)) {
+        error = QStringLiteral(
+            "Cannot anchor the plan transaction root: %1").arg(error);
+        return false;
+    }
+    if (!openOrCreatePrivateFixedDirectory(
+            rootDirectory,
+            QStringLiteral(".gc-transactions"),
+            transactionsDirectory,
+            error)) {
+        error = QStringLiteral(
+            "Cannot prepare the plan transaction directory: %1")
+                    .arg(error);
+        return false;
+    }
+
     namespacePath = transactionNamespacePath(root);
-    return ensurePrivateDirectory(namespacePath, error);
+    if (!openOrCreatePrivateFixedDirectory(
+            transactionsDirectory,
+            QStringLiteral("plan-replacement"),
+            namespaceDirectory,
+            error)) {
+        error = QStringLiteral(
+            "Cannot prepare the plan-replacement namespace: %1")
+                    .arg(error);
+        return false;
+    }
+    return true;
 }
 
 bool namespaceHasPendingEntries(
@@ -1697,9 +1783,22 @@ std::shared_ptr<Journal> Journal::prepare(
             "Another activity transaction is already active: %1").arg(error);
         return {};
     }
-    if (!ensureTransactionNamespace(root, state->namespacePath, error)
+    AnchoredFileSystem::DirectoryAnchor transactionsDirectory;
+    AnchoredFileSystem::DirectoryAnchor namespaceDirectory;
+    if (!ensureTransactionNamespace(
+            root,
+            state->namespacePath,
+            transactionsDirectory,
+            namespaceDirectory,
+            error)
         || !transactionNamespacesAreReady(
-            root, state->namespacePath, error)) {
+            root, state->namespacePath, error)
+        || !ensureTransactionNamespace(
+            root,
+            state->namespacePath,
+            transactionsDirectory,
+            namespaceDirectory,
+            error)) {
         return {};
     }
 
@@ -1855,13 +1954,36 @@ std::shared_ptr<Journal> Journal::prepare(
         Detail::ManifestName);
     state->commitMarkerPath = QDir(state->journalPath).filePath(
         Detail::CommitMarkerName);
-    if (pathEntryExists(state->journalPath)
-        || !QDir().mkdir(state->journalPath)
-        || !makeDirectoryPrivate(state->journalPath, error)
-        || !syncParentDirectory(state->journalPath, error)) {
-        if (error.isEmpty()) {
-            error = QStringLiteral(
-                "Cannot create the plan replacement journal");
+    if (pathEntryExists(state->journalPath)) {
+        error = QStringLiteral(
+            "Cannot create the plan replacement journal because it already exists");
+        return {};
+    }
+    AnchoredFileSystem::DirectoryAnchor journalDirectory;
+    const AnchoredFileSystem::MutationResult creation =
+        AnchoredFileSystem::createPrivateChildDirectory(
+            namespaceDirectory,
+            state->manifest.id,
+            journalDirectory);
+    if (creation.effect
+        != AnchoredFileSystem::MutationEffect::AppliedDurable) {
+        error = creation.error.isEmpty()
+            ? QStringLiteral(
+                  "Cannot create the plan replacement journal")
+            : creation.error;
+        if (!creation.verifiedRecoveryPath.isEmpty()) {
+            appendError(
+                error,
+                QStringLiteral("recovery directory retained at %1")
+                    .arg(creation.verifiedRecoveryPath));
+        } else if (journalDirectory.isValid()) {
+            QString retainedError;
+            if (journalDirectory.pathMatches(retainedError)) {
+                appendError(
+                    error,
+                    QStringLiteral("recovery journal retained at %1")
+                        .arg(state->journalPath));
+            }
         }
         return {};
     }

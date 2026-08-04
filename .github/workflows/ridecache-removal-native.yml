@@ -21,6 +21,7 @@ on:
       - unittests/Core/rideCacheRemoval/**
       - unittests/FileIO/atomicActivitySave/**
       - unittests/FileIO/anchoredFilesystem/**
+      - unittests/Planning/**
   pull_request:
     paths:
       - .github/workflows/ridecache-removal-native.yml
@@ -41,6 +42,7 @@ on:
       - unittests/Core/rideCacheRemoval/**
       - unittests/FileIO/atomicActivitySave/**
       - unittests/FileIO/anchoredFilesystem/**
+      - unittests/Planning/**
   workflow_dispatch:
 
 permissions:
@@ -99,6 +101,16 @@ jobs:
           Set-Location build-linked-save-cleanup
           qmake ../unittests/Core/linkedActivitySaveCleanup/linkedActivitySaveCleanup.pro
           nmake /NOLOGO
+          Set-Location ..
+          New-Item -ItemType Directory build-plan-replacement | Out-Null
+          Set-Location build-plan-replacement
+          qmake ../unittests/Planning/planReplacementJournal/planReplacementJournal.pro
+          nmake /NOLOGO
+          Set-Location ..
+          New-Item -ItemType Directory build-plan-bundle-import | Out-Null
+          Set-Location build-plan-bundle-import
+          qmake ../unittests/Planning/planBundleImportJournal/planBundleImportJournal.pro
+          nmake /NOLOGO
       - name: Run native activity tests
         shell: pwsh
         run: |
@@ -118,9 +130,21 @@ jobs:
             -o 'windows-linked-save-cleanup.txt,txt'
           $linkedSaveStatus = $LASTEXITCODE
           Get-Content windows-linked-save-cleanup.txt
+          & build-plan-replacement/release/tst_planReplacementJournal.exe `
+            -silent -maxwarnings 0 `
+            -o 'windows-plan-replacement.txt,txt'
+          $planReplacementStatus = $LASTEXITCODE
+          Get-Content windows-plan-replacement.txt
+          & build-plan-bundle-import/release/tst_planBundleImportJournal.exe `
+            -silent -maxwarnings 0 `
+            -o 'windows-plan-bundle-import.txt,txt'
+          $planBundleStatus = $LASTEXITCODE
+          Get-Content windows-plan-bundle-import.txt
           if ($removalStatus -ne 0) { exit $removalStatus }
           if ($anchoredStatus -ne 0) { exit $anchoredStatus }
-          exit $linkedSaveStatus
+          if ($linkedSaveStatus -ne 0) { exit $linkedSaveStatus }
+          if ($planReplacementStatus -ne 0) { exit $planReplacementStatus }
+          exit $planBundleStatus
 
   macos:
     runs-on: macos-15
@@ -160,6 +184,16 @@ jobs:
           qmake ../unittests/Core/linkedActivitySaveCleanup/linkedActivitySaveCleanup.pro
           make -j3
           cd ..
+          mkdir build-plan-replacement
+          cd build-plan-replacement
+          qmake ../unittests/Planning/planReplacementJournal/planReplacementJournal.pro
+          make -j3
+          cd ..
+          mkdir build-plan-bundle-import
+          cd build-plan-bundle-import
+          qmake ../unittests/Planning/planBundleImportJournal/planBundleImportJournal.pro
+          make -j3
+          cd ..
           mkdir build-atomic-activity-save
           cd build-atomic-activity-save
           qmake ../unittests/FileIO/atomicActivitySave/atomicActivitySave.pro \
@@ -189,6 +223,18 @@ jobs:
             -silent -maxwarnings 0 \
             -o macos-linked-save-cleanup.txt,txt || linked_save_status=$?
           cat macos-linked-save-cleanup.txt
+          plan_replacement_status=0
+          QT_QPA_PLATFORM=offscreen \
+            build-plan-replacement/tst_planReplacementJournal.app/Contents/MacOS/tst_planReplacementJournal \
+            -silent -maxwarnings 0 \
+            -o macos-plan-replacement.txt,txt || plan_replacement_status=$?
+          cat macos-plan-replacement.txt
+          plan_bundle_status=0
+          QT_QPA_PLATFORM=offscreen \
+            build-plan-bundle-import/tst_planBundleImportJournal.app/Contents/MacOS/tst_planBundleImportJournal \
+            -silent -maxwarnings 0 \
+            -o macos-plan-bundle-import.txt,txt || plan_bundle_status=$?
+          cat macos-plan-bundle-import.txt
           atomic_status=0
           QT_QPA_PLATFORM=offscreen \
             build-atomic-activity-save/tst_atomicActivitySave.app/Contents/MacOS/tst_atomicActivitySave \
@@ -198,4 +244,6 @@ jobs:
           if [ "$removal_status" -ne 0 ]; then exit "$removal_status"; fi
           if [ "$anchored_status" -ne 0 ]; then exit "$anchored_status"; fi
           if [ "$linked_save_status" -ne 0 ]; then exit "$linked_save_status"; fi
+          if [ "$plan_replacement_status" -ne 0 ]; then exit "$plan_replacement_status"; fi
+          if [ "$plan_bundle_status" -ne 0 ]; then exit "$plan_bundle_status"; fi
           exit "$atomic_status"
