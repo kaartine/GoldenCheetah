@@ -45,7 +45,72 @@ public:
 private:
     HANDLE handle_ = INVALID_HANDLE_VALUE;
 };
+
+bool createCurrentUserOwnedDirectory(const QString &path)
+{
+    HANDLE rawToken = nullptr;
+    if (!::OpenProcessToken(
+            ::GetCurrentProcess(), TOKEN_QUERY, &rawToken)) {
+        return false;
+    }
+    WindowsTestHandle token(rawToken);
+    DWORD required = 0;
+    ::GetTokenInformation(
+        token.get(), TokenUser, nullptr, 0, &required);
+    if (::GetLastError() != ERROR_INSUFFICIENT_BUFFER
+        || required == 0) {
+        return false;
+    }
+    QByteArray userStorage(int(required), '\0');
+    if (!::GetTokenInformation(
+            token.get(), TokenUser, userStorage.data(),
+            required, &required)) {
+        return false;
+    }
+    auto *user = reinterpret_cast<TOKEN_USER *>(
+        userStorage.data());
+    if (!::IsValidSid(user->User.Sid)) return false;
+
+    const DWORD aclSize = DWORD(
+        sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE)
+        - sizeof(DWORD) + ::GetLengthSid(user->User.Sid));
+    QByteArray aclStorage(int(aclSize), '\0');
+    auto *acl = reinterpret_cast<PACL>(aclStorage.data());
+    SECURITY_DESCRIPTOR descriptor {};
+    if (!::InitializeAcl(acl, aclSize, ACL_REVISION)
+        || !::AddAccessAllowedAceEx(
+            acl, ACL_REVISION,
+            CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE,
+            FILE_ALL_ACCESS, user->User.Sid)
+        || !::InitializeSecurityDescriptor(
+            &descriptor, SECURITY_DESCRIPTOR_REVISION)
+        || !::SetSecurityDescriptorOwner(
+            &descriptor, user->User.Sid, FALSE)
+        || !::SetSecurityDescriptorDacl(
+            &descriptor, TRUE, acl, FALSE)
+        || !::SetSecurityDescriptorControl(
+            &descriptor, SE_DACL_PROTECTED,
+            SE_DACL_PROTECTED)) {
+        return false;
+    }
+    SECURITY_ATTRIBUTES attributes {};
+    attributes.nLength = sizeof(attributes);
+    attributes.lpSecurityDescriptor = &descriptor;
+    const QString native = QDir::toNativeSeparators(path);
+    return ::CreateDirectoryW(
+        reinterpret_cast<LPCWSTR>(native.utf16()),
+        &attributes);
+}
 #endif
+
+bool createOwnedFixtureDirectory(const QString &path)
+{
+#ifdef Q_OS_WIN
+    return createCurrentUserOwnedDirectory(path);
+#else
+    return QDir().mkdir(path);
+#endif
+}
 
 void writeFixture(const QString &path, const QByteArray &contents)
 {
@@ -162,7 +227,7 @@ void TestLinkedActivitySaveCleanup::releasesTransactionResources()
     QVERIFY(dir.isValid());
     const QString athleteRoot = dir.filePath(QStringLiteral("athlete"));
     const QString movedRoot = dir.filePath(QStringLiteral("moved-athlete"));
-    QVERIFY(QDir().mkpath(athleteRoot));
+    QVERIFY(createOwnedFixtureDirectory(athleteRoot));
     writeSources(athleteRoot);
 
     QString error;

@@ -147,6 +147,100 @@ enum class JournalNamespaceEntryKind
     Directory
 };
 
+#ifdef Q_OS_WIN
+class WindowsTestHandle
+{
+public:
+    explicit WindowsTestHandle(HANDLE handle = INVALID_HANDLE_VALUE)
+        : handle_(handle)
+    {
+    }
+
+    ~WindowsTestHandle()
+    {
+        if (isValid()) ::CloseHandle(handle_);
+    }
+
+    WindowsTestHandle(const WindowsTestHandle &) = delete;
+    WindowsTestHandle &operator=(const WindowsTestHandle &) = delete;
+
+    bool isValid() const
+    {
+        return handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE;
+    }
+
+    HANDLE get() const { return handle_; }
+
+private:
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+};
+
+bool createCurrentUserOwnedDirectory(const QString &path)
+{
+    HANDLE rawToken = nullptr;
+    if (!::OpenProcessToken(
+            ::GetCurrentProcess(), TOKEN_QUERY, &rawToken)) {
+        return false;
+    }
+    WindowsTestHandle token(rawToken);
+    DWORD required = 0;
+    ::GetTokenInformation(
+        token.get(), TokenUser, nullptr, 0, &required);
+    if (::GetLastError() != ERROR_INSUFFICIENT_BUFFER
+        || required == 0) {
+        return false;
+    }
+    QByteArray userStorage(int(required), '\0');
+    if (!::GetTokenInformation(
+            token.get(), TokenUser, userStorage.data(),
+            required, &required)) {
+        return false;
+    }
+    auto *user = reinterpret_cast<TOKEN_USER *>(
+        userStorage.data());
+    if (!::IsValidSid(user->User.Sid)) return false;
+
+    const DWORD aclSize = DWORD(
+        sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE)
+        - sizeof(DWORD) + ::GetLengthSid(user->User.Sid));
+    QByteArray aclStorage(int(aclSize), '\0');
+    auto *acl = reinterpret_cast<PACL>(aclStorage.data());
+    SECURITY_DESCRIPTOR descriptor {};
+    if (!::InitializeAcl(acl, aclSize, ACL_REVISION)
+        || !::AddAccessAllowedAceEx(
+            acl, ACL_REVISION,
+            CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE,
+            FILE_ALL_ACCESS, user->User.Sid)
+        || !::InitializeSecurityDescriptor(
+            &descriptor, SECURITY_DESCRIPTOR_REVISION)
+        || !::SetSecurityDescriptorOwner(
+            &descriptor, user->User.Sid, FALSE)
+        || !::SetSecurityDescriptorDacl(
+            &descriptor, TRUE, acl, FALSE)
+        || !::SetSecurityDescriptorControl(
+            &descriptor, SE_DACL_PROTECTED,
+            SE_DACL_PROTECTED)) {
+        return false;
+    }
+    SECURITY_ATTRIBUTES attributes {};
+    attributes.nLength = sizeof(attributes);
+    attributes.lpSecurityDescriptor = &descriptor;
+    const QString native = QDir::toNativeSeparators(path);
+    return ::CreateDirectoryW(
+        reinterpret_cast<LPCWSTR>(native.utf16()),
+        &attributes);
+}
+#endif
+
+bool createOwnedFixtureDirectory(const QString &path)
+{
+#ifdef Q_OS_WIN
+    return createCurrentUserOwnedDirectory(path);
+#else
+    return QDir().mkdir(path);
+#endif
+}
+
 QString qlockRemovalGuardName(
     const QString &lockName, int suffixCount = 1)
 {
@@ -4507,9 +4601,12 @@ staleQLockFileRemovalGuardDoesNotPoisonReconcile()
     Fixture fixture;
     QVERIFY(fixture.initialize());
     const QString root = fixture.temporary.path();
-    const QString namespacePath = QDir(root).filePath(
-        QStringLiteral(".gc-transactions/linked-removal"));
-    QVERIFY(QDir().mkpath(namespacePath));
+    const QString transactionsPath = QDir(root).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString namespacePath = QDir(transactionsPath).filePath(
+        QStringLiteral("linked-removal"));
+    QVERIFY(createOwnedFixtureDirectory(transactionsPath));
+    QVERIFY(createOwnedFixtureDirectory(namespacePath));
     writeFixture(
         QDir(namespacePath).filePath(
             qlockRemovalGuardName(suffixCount)),
@@ -4691,9 +4788,12 @@ unsafeQLockFileRemovalGuardEntriesRemainRejected()
     Fixture fixture;
     QVERIFY(fixture.initialize());
     const QString root = fixture.temporary.path();
-    const QString namespacePath = QDir(root).filePath(
-        QStringLiteral(".gc-transactions/linked-removal"));
-    QVERIFY(QDir().mkpath(namespacePath));
+    const QString transactionsPath = QDir(root).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString namespacePath = QDir(transactionsPath).filePath(
+        QStringLiteral("linked-removal"));
+    QVERIFY(createOwnedFixtureDirectory(transactionsPath));
+    QVERIFY(createOwnedFixtureDirectory(namespacePath));
     const QString entryPath = QDir(namespacePath).filePath(entryName);
 
     if (kind == JournalNamespaceEntryKind::Directory) {
@@ -5377,10 +5477,15 @@ pendingLinkedSaveJournalBlocksDeletionTransaction()
     writeFixture(sourcePath, QByteArray("source"));
     writeFixture(peerPath, QByteArray("peer"));
 
-    const QString pending = QDir(fixture.temporary.path()).filePath(
-        QStringLiteral(".gc-transactions/linked-save/")
-        + QUuid::createUuid().toString(QUuid::WithoutBraces).toLower());
-    QVERIFY(QDir().mkpath(pending));
+    const QString transactionsPath = QDir(fixture.temporary.path()).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString namespacePath = QDir(transactionsPath).filePath(
+        QStringLiteral("linked-save"));
+    const QString pending = QDir(namespacePath).filePath(
+        QUuid::createUuid().toString(QUuid::WithoutBraces).toLower());
+    QVERIFY(createOwnedFixtureDirectory(transactionsPath));
+    QVERIFY(createOwnedFixtureDirectory(namespacePath));
+    QVERIFY(createOwnedFixtureDirectory(pending));
 
     const LinkedActivityRemoval::Specification specification = {
         fixture.temporary.path(),
