@@ -4,14 +4,19 @@
 #include "AtomicFileWriter.h"
 
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QTemporaryDir>
 #include <QtEndian>
 
+#include <atomic>
 #include <cerrno>
+#include <cstddef>
+#include <cstring>
 #include <functional>
 #include <memory>
+#include <thread>
 
 #ifdef Q_OS_UNIX
 #include <fcntl.h>
@@ -45,6 +50,7 @@ FilesystemAction filesystemAction;
 bool failDirectorySync = false;
 bool failFileUnlink = false;
 bool forceLegacyWindowsDelete = false;
+bool forceZeroWindowsFileId = false;
 
 #ifdef Q_OS_LINUX
 struct LinuxAclXattr
@@ -198,6 +204,95 @@ private:
     HANDLE handle_ = INVALID_HANDLE_VALUE;
 };
 
+bool createWindowsDirectoryJunction(
+    const QString &target,
+    const QString &link,
+    DWORD &nativeError)
+{
+    struct JunctionReparseData {
+        DWORD tag;
+        WORD dataLength;
+        WORD reserved;
+        WORD substituteNameOffset;
+        WORD substituteNameLength;
+        WORD printNameOffset;
+        WORD printNameLength;
+        WCHAR pathBuffer[1];
+    };
+
+    const QString printName = QDir::toNativeSeparators(
+        QFileInfo(target).absoluteFilePath());
+    const QString substituteName = printName.startsWith(QStringLiteral("\\\\"))
+        ? QStringLiteral("\\??\\UNC\\") + printName.mid(2)
+        : QStringLiteral("\\??\\") + printName;
+    const qsizetype substituteBytes =
+        substituteName.size() * qsizetype(sizeof(WCHAR));
+    const qsizetype printBytes =
+        printName.size() * qsizetype(sizeof(WCHAR));
+    const qsizetype pathBytes = substituteBytes + sizeof(WCHAR)
+        + printBytes + sizeof(WCHAR);
+    const qsizetype totalBytes =
+        qsizetype(offsetof(JunctionReparseData, pathBuffer))
+        + pathBytes;
+    if (totalBytes > MAXIMUM_REPARSE_DATA_BUFFER_SIZE) {
+        nativeError = ERROR_BUFFER_OVERFLOW;
+        return false;
+    }
+
+    const QString nativeLink = QDir::toNativeSeparators(link);
+    if (!::CreateDirectoryW(
+            reinterpret_cast<LPCWSTR>(nativeLink.utf16()), nullptr)) {
+        nativeError = ::GetLastError();
+        return false;
+    }
+
+    QByteArray storage(totalBytes, '\0');
+    auto *data = reinterpret_cast<JunctionReparseData *>(storage.data());
+    data->tag = IO_REPARSE_TAG_MOUNT_POINT;
+    data->dataLength = WORD(totalBytes - 8);
+    data->substituteNameLength = WORD(substituteBytes);
+    data->printNameOffset = WORD(substituteBytes + sizeof(WCHAR));
+    data->printNameLength = WORD(printBytes);
+    char *pathBuffer = reinterpret_cast<char *>(data->pathBuffer);
+    std::memcpy(
+        pathBuffer, substituteName.utf16(), size_t(substituteBytes));
+    std::memcpy(
+        pathBuffer + data->printNameOffset,
+        printName.utf16(), size_t(printBytes));
+
+    WindowsTestHandle handle(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(nativeLink.utf16()),
+        GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+        nullptr));
+    if (!handle.isValid()) {
+        nativeError = ::GetLastError();
+        ::RemoveDirectoryW(
+            reinterpret_cast<LPCWSTR>(nativeLink.utf16()));
+        return false;
+    }
+
+    DWORD returned = 0;
+    const bool created = ::DeviceIoControl(
+        handle.get(),
+        FSCTL_SET_REPARSE_POINT,
+        data,
+        DWORD(totalBytes),
+        nullptr,
+        0,
+        &returned,
+        nullptr);
+    nativeError = created ? ERROR_SUCCESS : ::GetLastError();
+    if (!created) {
+        ::RemoveDirectoryW(
+            reinterpret_cast<LPCWSTR>(nativeLink.utf16()));
+    }
+    return created;
+}
+
 bool currentWindowsTestUserSid(QByteArray &storage, PSID &sid)
 {
     HANDLE rawToken = nullptr;
@@ -331,7 +426,85 @@ bool windowsDirectoryHasOwnerOnlyAcl(const QString &path)
     if (descriptor) ::LocalFree(descriptor);
     return privateSecurity;
 }
+
+bool setWindowsDirectoryEveryoneAccess(
+    const QString &path, ACCESS_MASK everyoneAccess)
+{
+    QByteArray userStorage;
+    PSID userSid = nullptr;
+    if (!currentWindowsTestUserSid(userStorage, userSid)) return false;
+
+    DWORD worldSidSize = SECURITY_MAX_SID_SIZE;
+    QByteArray worldStorage(int(worldSidSize), '\0');
+    PSID worldSid = worldStorage.data();
+    if (!::CreateWellKnownSid(
+            WinWorldSid, nullptr, worldSid, &worldSidSize)) {
+        return false;
+    }
+
+    const DWORD aclSize = DWORD(
+        sizeof(ACL)
+        + 2 * (sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD))
+        + ::GetLengthSid(userSid)
+        + ::GetLengthSid(worldSid));
+    QByteArray aclStorage(int(aclSize), '\0');
+    auto *acl = reinterpret_cast<PACL>(aclStorage.data());
+    constexpr DWORD inheritance =
+        CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE;
+    if (!::InitializeAcl(acl, aclSize, ACL_REVISION)
+        || !::AddAccessAllowedAceEx(
+            acl, ACL_REVISION, inheritance,
+            FILE_ALL_ACCESS, userSid)
+        || !::AddAccessAllowedAceEx(
+            acl, ACL_REVISION, inheritance,
+            everyoneAccess, worldSid)) {
+        return false;
+    }
+
+    const QString native = QDir::toNativeSeparators(path);
+    WindowsTestHandle directory(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(native.utf16()),
+        READ_CONTROL | WRITE_DAC | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS
+            | FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr));
+    if (!directory.isValid()) return false;
+    return ::SetSecurityInfo(
+               directory.get(), SE_FILE_OBJECT,
+               DACL_SECURITY_INFORMATION
+                   | PROTECTED_DACL_SECURITY_INFORMATION,
+               nullptr, nullptr, acl, nullptr)
+        == ERROR_SUCCESS;
+}
+
+bool makeWindowsDirectoryPermissive(const QString &path)
+{
+    return setWindowsDirectoryEveryoneAccess(
+        path, FILE_GENERIC_READ | FILE_TRAVERSE);
+}
+
+bool makeWindowsDirectoryEveryoneWritable(const QString &path)
+{
+    return setWindowsDirectoryEveryoneAccess(
+        path, FILE_ALL_ACCESS);
+}
 #endif
+
+bool makeOwnedDirectoryPermissive(const QString &path)
+{
+#ifdef Q_OS_UNIX
+    return ::chmod(
+               QFile::encodeName(path).constData(), 0755) == 0;
+#elif defined(Q_OS_WIN)
+    return makeWindowsDirectoryPermissive(path);
+#else
+    Q_UNUSED(path)
+    return false;
+#endif
+}
 
 } // namespace
 
@@ -357,6 +530,11 @@ bool anchoredFilesystemFileUnlinkFailureRequested(const QString &)
 bool anchoredFilesystemUseLegacyWindowsDelete()
 {
     return forceLegacyWindowsDelete;
+}
+
+bool anchoredFilesystemForceZeroWindowsFileId()
+{
+    return forceZeroWindowsFileId;
 }
 
 namespace {
@@ -574,7 +752,17 @@ private slots:
     void directoryAnchorDetectsPathReplacement();
     void childAnchorsRemainInOneRootGeneration();
     void optionalChildOpenDistinguishesMissingAndUnsafeEntries();
+    void rejectsUnavailableWindowsFileIdentity();
     void inspectsEntriesThroughPinnedDirectory();
+    void enumeratesEntriesFromPinnedDirectoryGeneration();
+    void enumeratesWindowsDirectoryAcrossNativeBuffers();
+    void directoryEnumerationRejectsUnsafeTypes();
+    void directoryEnumerationRejectsWindowsJunction();
+    void directoryEnumerationRejectsMutationBetweenPasses();
+    void directoryEnumerationRejectsSameSizeRewriteBetweenPasses();
+    void directoryEnumerationEnforcesEntryBudget();
+    void permitsConcurrentDirectoryEnumerations();
+    void enumeratedIdentityDetectsFollowupReplacement();
     void copiesPinnedContentsThroughAnchoredParents();
     void copyDoesNotReplaceDestination();
     void copyReportsNonDurableCleanup();
@@ -592,7 +780,16 @@ private slots:
     void hardensCurrentUserOwnedDirectoryWithoutWriteOwner();
     void hardensPrivateDirectoryAcls_data();
     void hardensPrivateDirectoryAcls();
+    void validatesCurrentUserControlledParent();
+    void rejectsWritableCurrentUserOwnedParent();
+    void acceptsPrivateGroupWritableParent();
     void createsPrivateChildDirectory();
+    void createsPrivateFixedChildInPermissiveParent();
+    void strictPrivateChildRejectsPermissiveParent();
+    void privateFixedChildRejectsParentAcl();
+    void privateFixedChildRejectsCollision();
+    void privateFixedChildReportsSyncFailure_data();
+    void privateFixedChildReportsSyncFailure();
     void privateChildCreationRejectsCollision();
     void privateChildCreationRejectsPublishCollision();
     void privateChildCreationRejectsReplacedParent();
@@ -1883,6 +2080,26 @@ optionalChildOpenDistinguishesMissingAndUnsafeEntries()
     QVERIFY(!error.isEmpty());
 }
 
+void TestAnchoredFilesystem::rejectsUnavailableWindowsFileIdentity()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Zero Windows file identities are platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    DirectoryAnchor directory;
+    QString error;
+    forceZeroWindowsFileId = true;
+    const bool opened = DirectoryAnchor::open(
+        root.path(), directory, error);
+    forceZeroWindowsFileId = false;
+
+    QVERIFY(!opened);
+    QVERIFY(!directory.isValid());
+    QVERIFY(!error.isEmpty());
+#endif
+}
+
 void TestAnchoredFilesystem::inspectsEntriesThroughPinnedDirectory()
 {
     QTemporaryDir root;
@@ -1912,6 +2129,314 @@ void TestAnchoredFilesystem::inspectsEntriesThroughPinnedDirectory()
         QVERIFY(entryExists(present, exists, error));
         QVERIFY(exists);
     }
+}
+
+void TestAnchoredFilesystem::
+enumeratesEntriesFromPinnedDirectoryGeneration()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString live = root.filePath(QStringLiteral("live"));
+    const QString retained = root.filePath(QStringLiteral("retained"));
+    QVERIFY(QDir().mkdir(live));
+    writeFixture(
+        QDir(live).filePath(QStringLiteral("z-file")),
+        QByteArray("original"));
+    QVERIFY(QDir(live).mkdir(QStringLiteral("a-directory")));
+    const DirectoryAnchor directory = openDirectory(live);
+
+    const bool replaced = renameFixture(live, retained);
+#ifdef Q_OS_WIN
+    QVERIFY(!replaced);
+#else
+    QVERIFY(replaced);
+#endif
+    if (replaced) {
+        QVERIFY(QDir().mkdir(live));
+        writeFixture(
+            QDir(live).filePath(QStringLiteral("substitute")),
+            QByteArray("substitute"));
+    }
+
+    QList<DirectoryEntry> entries;
+    QString error;
+    QVERIFY2(
+        directory.enumerateEntries(entries, 16, error),
+        qPrintable(error));
+    QCOMPARE(entries.size(), 2);
+    QCOMPARE(entries.at(0).name, QStringLiteral("a-directory"));
+    QCOMPARE(entries.at(0).kind, DirectoryEntryKind::Directory);
+    QVERIFY(entries.at(0).identity.isValid());
+    QCOMPARE(entries.at(1).name, QStringLiteral("z-file"));
+    QCOMPARE(entries.at(1).kind, DirectoryEntryKind::RegularFile);
+    QVERIFY(entries.at(1).identity.isValid());
+}
+
+void TestAnchoredFilesystem::enumeratesWindowsDirectoryAcrossNativeBuffers()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Windows directory query continuation is platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    constexpr int entryCount = 220;
+    QStringList expected;
+    for (int index = 0; index < entryCount; ++index) {
+        const QString name = QStringLiteral("%1-%2")
+            .arg(index, 4, 10, QLatin1Char('0'))
+            .arg(QString(180, QLatin1Char('x')));
+        expected.append(name);
+        writeFixture(root.filePath(name), QByteArray());
+    }
+    expected.sort(Qt::CaseSensitive);
+    const DirectoryAnchor directory = openDirectory(root.path());
+
+    QList<DirectoryEntry> entries;
+    QString error;
+    QVERIFY2(
+        directory.enumerateEntries(entries, entryCount, error),
+        qPrintable(error));
+    QCOMPARE(entries.size(), entryCount);
+    for (int index = 0; index < entryCount; ++index) {
+        QCOMPARE(entries.at(index).name, expected.at(index));
+        QCOMPARE(
+            entries.at(index).kind,
+            DirectoryEntryKind::RegularFile);
+    }
+#endif
+}
+
+void TestAnchoredFilesystem::directoryEnumerationRejectsUnsafeTypes()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString target = root.filePath(QStringLiteral("target"));
+    const QString symbolic = root.filePath(QStringLiteral("symbolic"));
+    writeFixture(target, QByteArray("target"));
+    if (!createSymbolicLink(target, symbolic)) {
+        QSKIP("Symbolic links are unavailable in this test environment");
+    }
+    const DirectoryAnchor directory = openDirectory(root.path());
+
+    QList<DirectoryEntry> entries;
+    QString error;
+    QVERIFY(!directory.enumerateEntries(entries, 16, error));
+    QVERIFY(entries.isEmpty());
+    QVERIFY(!error.isEmpty());
+}
+
+void TestAnchoredFilesystem::directoryEnumerationRejectsWindowsJunction()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Windows directory junctions are platform-specific");
+#else
+    QTemporaryDir root;
+    QTemporaryDir target;
+    QVERIFY(root.isValid());
+    QVERIFY(target.isValid());
+    const QString junction = root.filePath(QStringLiteral("junction"));
+    DWORD nativeError = ERROR_SUCCESS;
+    QVERIFY2(
+        createWindowsDirectoryJunction(
+            target.path(), junction, nativeError),
+        qPrintable(QStringLiteral(
+            "Cannot create the Windows junction: system error %1")
+                       .arg(nativeError)));
+    const DirectoryAnchor directory = openDirectory(root.path());
+
+    QList<DirectoryEntry> entries;
+    QString error;
+    QVERIFY(!directory.enumerateEntries(entries, 16, error));
+    QVERIFY(entries.isEmpty());
+    QVERIFY(!error.isEmpty());
+#endif
+}
+
+void TestAnchoredFilesystem::
+directoryEnumerationRejectsMutationBetweenPasses()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString source = root.filePath(QStringLiteral("source"));
+    const QString retained = root.filePath(QStringLiteral("retained"));
+    writeFixture(source, QByteArray("original"));
+    const DirectoryAnchor directory = openDirectory(root.path());
+    bool actionReached = false;
+    filesystemAction = [&](const char *transition,
+                           const QString &primary,
+                           const QString &) {
+        if (qstrcmp(
+                transition,
+                "directory-enumeration-first-pass") != 0
+            || primary != root.path()) {
+            return;
+        }
+        actionReached = true;
+        QVERIFY(renameFixture(source, retained));
+        writeFixture(source, QByteArray("replacement"));
+    };
+
+    QList<DirectoryEntry> entries;
+    QString error;
+    const bool enumerated = directory.enumerateEntries(
+        entries, 16, error);
+    filesystemAction = {};
+
+    QVERIFY(actionReached);
+    QVERIFY(!enumerated);
+    QVERIFY(entries.isEmpty());
+    QVERIFY(!error.isEmpty());
+}
+
+void TestAnchoredFilesystem::
+directoryEnumerationRejectsSameSizeRewriteBetweenPasses()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString source = root.filePath(QStringLiteral("source"));
+    const QByteArray original("original");
+    const QByteArray replacement("modified");
+    QCOMPARE(original.size(), replacement.size());
+    writeFixture(source, original);
+    QFile timestampFile(source);
+    QVERIFY(timestampFile.open(QIODevice::ReadWrite));
+    QVERIFY(timestampFile.setFileTime(
+        QDateTime::fromSecsSinceEpoch(946684800, Qt::UTC),
+        QFileDevice::FileModificationTime));
+    timestampFile.close();
+    const DirectoryAnchor directory = openDirectory(root.path());
+    bool actionReached = false;
+    filesystemAction = [&](const char *transition,
+                           const QString &primary,
+                           const QString &) {
+        if (qstrcmp(
+                transition,
+                "directory-enumeration-first-pass") != 0
+            || primary != root.path()) {
+            return;
+        }
+        actionReached = true;
+        QFile file(source);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QCOMPARE(file.write(replacement), qint64(replacement.size()));
+        QVERIFY(file.flush());
+        QVERIFY(file.setFileTime(
+            QDateTime::fromSecsSinceEpoch(978307200, Qt::UTC),
+            QFileDevice::FileModificationTime));
+    };
+
+    QList<DirectoryEntry> entries;
+    QString error;
+    const bool enumerated = directory.enumerateEntries(
+        entries, 16, error);
+    filesystemAction = {};
+
+    QVERIFY(actionReached);
+    QVERIFY(!enumerated);
+    QVERIFY(entries.isEmpty());
+    QVERIFY(!error.isEmpty());
+    QCOMPARE(readFixture(source), replacement);
+}
+
+void TestAnchoredFilesystem::directoryEnumerationEnforcesEntryBudget()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    writeFixture(
+        root.filePath(QStringLiteral("first")), QByteArray("first"));
+    writeFixture(
+        root.filePath(QStringLiteral("second")), QByteArray("second"));
+    const DirectoryAnchor directory = openDirectory(root.path());
+
+    QList<DirectoryEntry> entries;
+    QString error;
+    QVERIFY(!directory.enumerateEntries(entries, 1, error));
+    QVERIFY(entries.isEmpty());
+    QVERIFY(!error.isEmpty());
+
+    error.clear();
+    QVERIFY2(
+        directory.enumerateEntries(entries, 2, error),
+        qPrintable(error));
+    QCOMPARE(entries.size(), 2);
+}
+
+void TestAnchoredFilesystem::permitsConcurrentDirectoryEnumerations()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    for (int index = 0; index < 8; ++index) {
+        writeFixture(
+            root.filePath(QStringLiteral("entry-%1").arg(index)),
+            QByteArray::number(index));
+    }
+    const DirectoryAnchor directory = openDirectory(root.path());
+    std::atomic<bool> start {false};
+    std::atomic<bool> succeeded {true};
+    const auto enumerate = [&] {
+        while (!start.load(std::memory_order_acquire))
+            std::this_thread::yield();
+        for (int attempt = 0; attempt < 64; ++attempt) {
+            QList<DirectoryEntry> entries;
+            QString error;
+            if (!directory.enumerateEntries(entries, 16, error)
+                || entries.size() != 8) {
+                succeeded.store(false, std::memory_order_release);
+                return;
+            }
+        }
+    };
+    std::thread first(enumerate);
+    std::thread second(enumerate);
+    start.store(true, std::memory_order_release);
+    first.join();
+    second.join();
+
+    QVERIFY(succeeded.load(std::memory_order_acquire));
+}
+
+void TestAnchoredFilesystem::
+enumeratedIdentityDetectsFollowupReplacement()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString filePath = root.filePath(QStringLiteral("file"));
+    const QString retainedFile =
+        root.filePath(QStringLiteral("retained-file"));
+    const QString directoryPath =
+        root.filePath(QStringLiteral("directory"));
+    const QString retainedDirectory =
+        root.filePath(QStringLiteral("retained-directory"));
+    writeFixture(filePath, QByteArray("original"));
+    QVERIFY(QDir().mkdir(directoryPath));
+    const DirectoryAnchor rootDirectory = openDirectory(root.path());
+
+    QList<DirectoryEntry> entries;
+    QString error;
+    QVERIFY2(
+        rootDirectory.enumerateEntries(entries, 16, error),
+        qPrintable(error));
+    QCOMPARE(entries.size(), 2);
+    const DirectoryEntry listedDirectory = entries.at(0);
+    const DirectoryEntry listedFile = entries.at(1);
+    QCOMPARE(listedDirectory.name, QStringLiteral("directory"));
+    QCOMPARE(listedDirectory.kind, DirectoryEntryKind::Directory);
+    QCOMPARE(listedFile.name, QStringLiteral("file"));
+    QCOMPARE(listedFile.kind, DirectoryEntryKind::RegularFile);
+
+    QVERIFY(renameFixture(filePath, retainedFile));
+    writeFixture(filePath, QByteArray("replacement"));
+    QVERIFY(renameFixture(directoryPath, retainedDirectory));
+    QVERIFY(QDir().mkdir(directoryPath));
+
+    PinnedFile replacementFile = pin(entry(
+        rootDirectory, QStringLiteral("file")));
+    QVERIFY(replacementFile.identity() != listedFile.identity);
+    DirectoryAnchor replacementDirectory;
+    QVERIFY(rootDirectory.openChild(
+        QStringLiteral("directory"), replacementDirectory, error));
+    QVERIFY(replacementDirectory.identity()
+            != listedDirectory.identity);
 }
 
 void TestAnchoredFilesystem::copiesPinnedContentsThroughAnchoredParents()
@@ -2484,6 +3009,107 @@ void TestAnchoredFilesystem::hardensPrivateDirectoryAcls()
 #endif
 }
 
+void TestAnchoredFilesystem::validatesCurrentUserControlledParent()
+{
+#if !defined(Q_OS_UNIX) && !defined(Q_OS_WIN)
+    QSKIP("Anchored directory ownership is platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+#ifdef Q_OS_UNIX
+    QVERIFY(::chmod(
+        QFile::encodeName(root.path()).constData(), 0755) == 0);
+#elif defined(Q_OS_WIN)
+    QVERIFY(makeWindowsDirectoryPermissive(root.path()));
+#endif
+    const DirectoryAnchor parent = openDirectory(root.path());
+    QString error;
+
+    QVERIFY2(
+        validateCurrentUserOwnedDirectory(parent, error),
+        qPrintable(error));
+    QVERIFY2(
+        validateCurrentUserControlledDirectory(parent, error),
+        qPrintable(error));
+#ifdef Q_OS_WIN
+    QVERIFY(!windowsDirectoryHasOwnerOnlyAcl(root.path()));
+#endif
+#endif
+}
+
+void TestAnchoredFilesystem::rejectsWritableCurrentUserOwnedParent()
+{
+#if !defined(Q_OS_UNIX) && !defined(Q_OS_WIN)
+    QSKIP("Anchored directory ownership is platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+#ifdef Q_OS_UNIX
+    QVERIFY(::chmod(
+        QFile::encodeName(root.path()).constData(), 0777) == 0);
+#elif defined(Q_OS_WIN)
+    QVERIFY(makeWindowsDirectoryEveryoneWritable(root.path()));
+#endif
+    const DirectoryAnchor parent = openDirectory(root.path());
+    QString error;
+    QVERIFY2(
+        validateCurrentUserOwnedDirectory(parent, error),
+        qPrintable(error));
+    QVERIFY(!validateCurrentUserControlledDirectory(parent, error));
+    QVERIFY(!error.isEmpty());
+
+    DirectoryAnchor child;
+    const MutationResult result = createPrivateFixedChildDirectory(
+        parent, QStringLiteral("journal"), child);
+    QCOMPARE(result.effect, MutationEffect::NoEffect);
+    QVERIFY(!result.error.isEmpty());
+    QVERIFY(!child.isValid());
+    QVERIFY(!QFileInfo::exists(
+        root.filePath(QStringLiteral("journal"))));
+#endif
+}
+
+void TestAnchoredFilesystem::acceptsPrivateGroupWritableParent()
+{
+#ifndef Q_OS_LINUX
+    QSKIP("Private user-group validation is Linux-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(::chmod(
+        QFile::encodeName(root.path()).constData(), 0775) == 0);
+    const QFileInfo rootInfo(root.path());
+    if (rootInfo.owner().isEmpty()
+        || rootInfo.owner() != rootInfo.group()) {
+        QSKIP("The test account does not use a user-private group");
+    }
+    const DirectoryAnchor parent = openDirectory(root.path());
+    QString error;
+    QVERIFY2(
+        validateCurrentUserControlledDirectory(parent, error),
+        qPrintable(error));
+
+    DirectoryAnchor child;
+    const MutationResult result = createPrivateFixedChildDirectory(
+        parent, QStringLiteral("journal"), child);
+    QCOMPARE(result.effect, MutationEffect::AppliedDurable);
+    QVERIFY2(result.error.isEmpty(), qPrintable(result.error));
+    QVERIFY(child.isValid());
+    struct stat parentStatus {};
+    struct stat childStatus {};
+    QCOMPARE(
+        ::stat(QFile::encodeName(root.path()).constData(), &parentStatus),
+        0);
+    QCOMPARE(parentStatus.st_mode & 0777, mode_t(0775));
+    QCOMPARE(
+        ::stat(QFile::encodeName(
+                   root.filePath(QStringLiteral("journal"))).constData(),
+               &childStatus),
+        0);
+    QCOMPARE(childStatus.st_mode & 0777, mode_t(0700));
+#endif
+}
+
 void TestAnchoredFilesystem::createsPrivateChildDirectory()
 {
     QTemporaryDir root;
@@ -2520,6 +3146,256 @@ void TestAnchoredFilesystem::createsPrivateChildDirectory()
 #elif defined(Q_OS_WIN)
     QVERIFY(windowsDirectoryHasOwnerOnlyAcl(
         root.filePath(QStringLiteral("journal"))));
+#endif
+}
+
+void TestAnchoredFilesystem::
+createsPrivateFixedChildInPermissiveParent()
+{
+#if !defined(Q_OS_UNIX) && !defined(Q_OS_WIN)
+    QSKIP("Private fixed child directories are platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(makeOwnedDirectoryPermissive(root.path()));
+#ifdef Q_OS_WIN
+    QVERIFY(!windowsDirectoryHasOwnerOnlyAcl(root.path()));
+#endif
+    const DirectoryAnchor parent = openDirectory(root.path());
+    QString error;
+    QVERIFY2(
+        validateCurrentUserControlledDirectory(parent, error),
+        qPrintable(error));
+    DirectoryAnchor child;
+
+    const MutationResult result = createPrivateFixedChildDirectory(
+        parent, QStringLiteral("journal"), child);
+
+    QCOMPARE(result.effect, MutationEffect::AppliedDurable);
+    QVERIFY2(result.error.isEmpty(), qPrintable(result.error));
+    QVERIFY(child.isValid());
+    QVERIFY2(child.pathMatches(error), qPrintable(error));
+    DirectoryAnchor reopened;
+    QVERIFY2(
+        parent.openChild(QStringLiteral("journal"), reopened, error),
+        qPrintable(error));
+    QCOMPARE(reopened.identity(), child.identity());
+    QCOMPARE(
+        QDir(root.path()).entryList(
+            QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden),
+        QStringList {QStringLiteral("journal")});
+
+#ifdef Q_OS_UNIX
+    struct stat parentStatus {};
+    struct stat childStatus {};
+    QCOMPARE(
+        ::stat(QFile::encodeName(root.path()).constData(),
+               &parentStatus),
+        0);
+    QCOMPARE(parentStatus.st_uid, ::geteuid());
+    QCOMPARE(parentStatus.st_mode & 0777, mode_t(0755));
+    QCOMPARE(
+        ::stat(QFile::encodeName(
+                   root.filePath(QStringLiteral("journal"))).constData(),
+               &childStatus),
+        0);
+    QCOMPARE(childStatus.st_uid, ::geteuid());
+    QCOMPARE(childStatus.st_mode & 0777, mode_t(0700));
+#if defined(Q_OS_LINUX)
+    QVERIFY(!linuxAclXattrPresent(
+        root.filePath(QStringLiteral("journal")),
+        QByteArray("system.posix_acl_access")));
+    QVERIFY(!linuxAclXattrPresent(
+        root.filePath(QStringLiteral("journal")),
+        QByteArray("system.posix_acl_default")));
+#elif defined(Q_OS_MACOS)
+    QVERIFY(extendedAclIsAbsent(
+        root.filePath(QStringLiteral("journal"))));
+#endif
+#elif defined(Q_OS_WIN)
+    QVERIFY(!windowsDirectoryHasOwnerOnlyAcl(root.path()));
+    QVERIFY(windowsDirectoryHasOwnerOnlyAcl(
+        root.filePath(QStringLiteral("journal"))));
+#endif
+#endif
+}
+
+void TestAnchoredFilesystem::
+strictPrivateChildRejectsPermissiveParent()
+{
+#if !defined(Q_OS_UNIX) && !defined(Q_OS_WIN)
+    QSKIP("Private child directories are platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(makeOwnedDirectoryPermissive(root.path()));
+    const DirectoryAnchor parent = openDirectory(root.path());
+    DirectoryAnchor child;
+
+    const MutationResult result = createPrivateChildDirectory(
+        parent, QStringLiteral("journal"), child);
+
+    QCOMPARE(result.effect, MutationEffect::NoEffect);
+    QVERIFY(!result.error.isEmpty());
+    QVERIFY(!child.isValid());
+    QVERIFY(!QFileInfo::exists(
+        root.filePath(QStringLiteral("journal"))));
+#ifdef Q_OS_UNIX
+    struct stat parentStatus {};
+    QCOMPARE(
+        ::stat(QFile::encodeName(root.path()).constData(),
+               &parentStatus),
+        0);
+    QCOMPARE(parentStatus.st_mode & 0777, mode_t(0755));
+#elif defined(Q_OS_WIN)
+    QVERIFY(!windowsDirectoryHasOwnerOnlyAcl(root.path()));
+#endif
+#endif
+}
+
+void TestAnchoredFilesystem::privateFixedChildRejectsParentAcl()
+{
+#if defined(Q_OS_LINUX)
+    const QList<QByteArray> attributes = {
+        QByteArray("system.posix_acl_access"),
+        QByteArray("system.posix_acl_default")};
+    for (const QByteArray &attribute : attributes) {
+        QTemporaryDir root;
+        QVERIFY(root.isValid());
+        QVERIFY(makeOwnedDirectoryPermissive(root.path()));
+        int aclError = 0;
+        if (!installLinuxAclXattr(root.path(), attribute, aclError)
+            && (aclError == ENOTSUP || aclError == EOPNOTSUPP)) {
+            QSKIP("The test filesystem does not support POSIX ACLs");
+        }
+        QCOMPARE(aclError, 0);
+        QVERIFY(linuxAclXattrPresent(root.path(), attribute));
+        const DirectoryAnchor parent = openDirectory(root.path());
+        DirectoryAnchor child;
+
+        const MutationResult result = createPrivateFixedChildDirectory(
+            parent, QStringLiteral("journal"), child);
+
+        QCOMPARE(result.effect, MutationEffect::NoEffect);
+        QVERIFY(!result.error.isEmpty());
+        QVERIFY(!child.isValid());
+        QVERIFY(!QFileInfo::exists(
+            root.filePath(QStringLiteral("journal"))));
+        QVERIFY(linuxAclXattrPresent(root.path(), attribute));
+    }
+#elif defined(Q_OS_MACOS)
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(makeOwnedDirectoryPermissive(root.path()));
+    QVERIFY(installCurrentUserExtendedAcl(root.path()));
+    const DirectoryAnchor parent = openDirectory(root.path());
+    DirectoryAnchor child;
+
+    const MutationResult result = createPrivateFixedChildDirectory(
+        parent, QStringLiteral("journal"), child);
+
+    QCOMPARE(result.effect, MutationEffect::NoEffect);
+    QVERIFY(!result.error.isEmpty());
+    QVERIFY(!child.isValid());
+    QVERIFY(!QFileInfo::exists(
+        root.filePath(QStringLiteral("journal"))));
+    QVERIFY(!extendedAclIsAbsent(root.path()));
+#else
+    QSKIP("Parent ACL inheritance is Unix platform-specific");
+#endif
+}
+
+void TestAnchoredFilesystem::privateFixedChildRejectsCollision()
+{
+#if !defined(Q_OS_UNIX) && !defined(Q_OS_WIN)
+    QSKIP("Private fixed child directories are platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(makeOwnedDirectoryPermissive(root.path()));
+    const QString existing = root.filePath(QStringLiteral("journal"));
+    QVERIFY(QDir().mkdir(existing));
+    const QString sentinel = QDir(existing).filePath(
+        QStringLiteral("sentinel"));
+    writeFixture(sentinel, QByteArray("existing contents"));
+    const DirectoryAnchor parent = openDirectory(root.path());
+    DirectoryAnchor child;
+
+    const MutationResult result = createPrivateFixedChildDirectory(
+        parent, QStringLiteral("journal"), child);
+
+    QCOMPARE(result.effect, MutationEffect::Conflict);
+    QVERIFY(!result.error.isEmpty());
+    QVERIFY(!child.isValid());
+    QCOMPARE(readFixture(sentinel), QByteArray("existing contents"));
+    QCOMPARE(
+        QDir(root.path()).entryList(
+            QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden),
+        QStringList {QStringLiteral("journal")});
+#endif
+}
+
+void TestAnchoredFilesystem::
+privateFixedChildReportsSyncFailure_data()
+{
+    QTest::addColumn<QByteArray>("phase");
+    QTest::addColumn<int>("expectedEffect");
+    QTest::newRow("child")
+        << QByteArray("private-fixed-directory-before-child-sync")
+        << int(MutationEffect::AppliedNotDurable);
+    QTest::newRow("parent")
+        << QByteArray("private-fixed-directory-child-synced")
+        << int(MutationEffect::AppliedNotDurable);
+}
+
+void TestAnchoredFilesystem::
+privateFixedChildReportsSyncFailure()
+{
+#if !defined(Q_OS_UNIX) && !defined(Q_OS_WIN)
+    QSKIP("Private fixed child directories are platform-specific");
+#else
+    QFETCH(QByteArray, phase);
+    QFETCH(int, expectedEffect);
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(makeOwnedDirectoryPermissive(root.path()));
+    const DirectoryAnchor parent = openDirectory(root.path());
+    bool hookReached = false;
+    filesystemAction = [&](const char *transition,
+                           const QString &, const QString &) {
+        if (QByteArray(transition) != phase) return;
+        hookReached = true;
+        failDirectorySync = true;
+    };
+    DirectoryAnchor child;
+
+    const MutationResult result = createPrivateFixedChildDirectory(
+        parent, QStringLiteral("journal"), child);
+    filesystemAction = {};
+    failDirectorySync = false;
+
+    QVERIFY(hookReached);
+    QCOMPARE(result.effect,
+             static_cast<MutationEffect>(expectedEffect));
+    QVERIFY(result.applied());
+    QVERIFY(!result.error.isEmpty());
+    QVERIFY(child.isValid());
+    QString error;
+    QVERIFY2(child.pathMatches(error), qPrintable(error));
+#ifdef Q_OS_UNIX
+    struct stat childStatus {};
+    QCOMPARE(
+        ::stat(QFile::encodeName(
+                   root.filePath(QStringLiteral("journal"))).constData(),
+               &childStatus),
+        0);
+    QCOMPARE(childStatus.st_uid, ::geteuid());
+    QCOMPARE(childStatus.st_mode & 0777, mode_t(0700));
+#elif defined(Q_OS_WIN)
+    QVERIFY(windowsDirectoryHasOwnerOnlyAcl(
+        root.filePath(QStringLiteral("journal"))));
+#endif
+    verifyApplied(removeEmptyDirectory(child));
 #endif
 }
 

@@ -20,11 +20,15 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <mutex>
 #include <utility>
 #include <vector>
 
 #ifdef Q_OS_UNIX
+#include <dirent.h>
 #include <fcntl.h>
+#include <grp.h>
+#include <pwd.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #if defined(Q_OS_MACOS)
@@ -54,6 +58,9 @@ void anchoredFilesystemTransitionReached(
 bool anchoredFilesystemSyncFailureRequested(const QString &path);
 bool anchoredFilesystemFileUnlinkFailureRequested(const QString &path);
 bool anchoredFilesystemUseLegacyWindowsDelete();
+#ifdef GC_ANCHORED_FILESYSTEM_ZERO_ID_TEST_HOOK
+bool anchoredFilesystemForceZeroWindowsFileId();
+#endif
 #endif
 
 namespace AnchoredFileSystem {
@@ -156,6 +163,7 @@ public:
 
     bool isValid() const { return descriptor_ >= 0; }
     int get() const { return descriptor_; }
+    int release() { return std::exchange(descriptor_, -1); }
 
 private:
     int descriptor_ = -1;
@@ -368,6 +376,183 @@ bool entryNameExists(
     return false;
 }
 
+#if defined(Q_OS_LINUX)
+
+constexpr qsizetype MaximumAccountLookupBuffer = 1024 * 1024;
+
+qsizetype accountLookupBufferSize(int configurationName)
+{
+    const long configured = ::sysconf(configurationName);
+    if (configured >= 1024
+        && configured <= MaximumAccountLookupBuffer) {
+        return qsizetype(configured);
+    }
+    return 16 * 1024;
+}
+
+bool growAccountLookupBuffer(QByteArray &storage, QString &error)
+{
+    if (storage.size() >= MaximumAccountLookupBuffer) {
+        error = QStringLiteral(
+            "An account database record exceeds the supported size");
+        return false;
+    }
+    storage.resize(std::min<qsizetype>(
+        MaximumAccountLookupBuffer, storage.size() * 2));
+    return true;
+}
+
+bool lookupUserById(
+    uid_t id,
+    struct passwd &account,
+    QByteArray &storage,
+    QString &error)
+{
+    storage.resize(accountLookupBufferSize(_SC_GETPW_R_SIZE_MAX));
+    for (;;) {
+        struct passwd *result = nullptr;
+        const int lookup = ::getpwuid_r(
+            id, &account, storage.data(), size_t(storage.size()),
+            &result);
+        if (lookup == ERANGE) {
+            if (!growAccountLookupBuffer(storage, error)) return false;
+            continue;
+        }
+        if (lookup != 0) {
+            error = nativeError(
+                QStringLiteral("Cannot inspect the current user account"),
+                lookup);
+            return false;
+        }
+        if (!result) {
+            error = QStringLiteral(
+                "The current user account cannot be resolved");
+            return false;
+        }
+        return true;
+    }
+}
+
+bool lookupGroupById(
+    gid_t id,
+    struct group &groupEntry,
+    QByteArray &storage,
+    QString &error)
+{
+    storage.resize(accountLookupBufferSize(_SC_GETGR_R_SIZE_MAX));
+    for (;;) {
+        struct group *result = nullptr;
+        const int lookup = ::getgrgid_r(
+            id, &groupEntry, storage.data(), size_t(storage.size()),
+            &result);
+        if (lookup == ERANGE) {
+            if (!growAccountLookupBuffer(storage, error)) return false;
+            continue;
+        }
+        if (lookup != 0) {
+            error = nativeError(
+                QStringLiteral("Cannot inspect the anchored parent group"),
+                lookup);
+            return false;
+        }
+        if (!result) {
+            error = QStringLiteral(
+                "The anchored parent group cannot be resolved");
+            return false;
+        }
+        return true;
+    }
+}
+
+bool lookupUserByName(
+    const QByteArray &name,
+    struct passwd &account,
+    QByteArray &storage,
+    QString &error)
+{
+    storage.resize(accountLookupBufferSize(_SC_GETPW_R_SIZE_MAX));
+    for (;;) {
+        struct passwd *result = nullptr;
+        const int lookup = ::getpwnam_r(
+            name.constData(), &account,
+            storage.data(), size_t(storage.size()), &result);
+        if (lookup == ERANGE) {
+            if (!growAccountLookupBuffer(storage, error)) return false;
+            continue;
+        }
+        if (lookup != 0) {
+            error = nativeError(
+                QStringLiteral(
+                    "Cannot inspect an anchored parent group member"),
+                lookup);
+            return false;
+        }
+        if (!result) {
+            error = QStringLiteral(
+                "An anchored parent group member cannot be resolved");
+            return false;
+        }
+        return true;
+    }
+}
+
+bool unixWriterUidIsExcluded(uid_t uid)
+{
+    return uid == 0 || uid == ::geteuid();
+}
+
+bool unixGroupWritersAreRestricted(gid_t groupId, QString &error)
+{
+    struct passwd currentAccount {};
+    QByteArray accountStorage;
+    if (!lookupUserById(
+            ::geteuid(), currentAccount, accountStorage, error)) {
+        return false;
+    }
+
+    struct group groupEntry {};
+    QByteArray groupStorage;
+    if (!lookupGroupById(
+            groupId, groupEntry, groupStorage, error)) {
+        return false;
+    }
+
+    const QByteArray accountName(
+        currentAccount.pw_name ? currentAccount.pw_name : "");
+    const QByteArray groupName(
+        groupEntry.gr_name ? groupEntry.gr_name : "");
+    if (groupId != currentAccount.pw_gid
+        || accountName.isEmpty()
+        || groupName != accountName) {
+        error = QStringLiteral(
+            "The anchored parent group is not the current user's private group");
+        return false;
+    }
+
+    std::vector<QByteArray> explicitMembers;
+    for (char **member = groupEntry.gr_mem;
+         member && *member; ++member) {
+        explicitMembers.emplace_back(*member);
+    }
+    for (const QByteArray &member : explicitMembers) {
+        struct passwd account {};
+        QByteArray memberStorage;
+        if (!lookupUserByName(
+                member, account, memberStorage, error)) {
+            return false;
+        }
+        if (!unixWriterUidIsExcluded(account.pw_uid)) {
+            error = QStringLiteral(
+                "The anchored parent group is writable by account %1")
+                    .arg(QString::fromLocal8Bit(member));
+            return false;
+        }
+    }
+    return true;
+}
+
+#endif
+
 int renameNoReplaceNative(
     int sourceDirectory,
     const QByteArray &source,
@@ -487,6 +672,56 @@ bool removeMacDirectoryExtendedAcl(
 #endif
 
 #if defined(Q_OS_LINUX)
+bool linuxDirectoryAccessAclIsAbsent(
+    int descriptor, QString &error)
+{
+    errno = 0;
+    const ssize_t size = ::fgetxattr(
+        descriptor, "system.posix_acl_access", nullptr, 0);
+    if (size >= 0) {
+        error = QStringLiteral(
+            "The anchored parent has an extended POSIX access control list");
+        return false;
+    }
+    if (errno == ENODATA || errno == ENOTSUP
+#ifdef EOPNOTSUPP
+        || errno == EOPNOTSUPP
+#endif
+    ) {
+        return true;
+    }
+    error = nativeError(
+        QStringLiteral(
+            "Cannot inspect anchored directory access controls"),
+        errno);
+    return false;
+}
+
+bool linuxDirectoryDefaultAclIsAbsent(
+    int descriptor, QString &error)
+{
+    errno = 0;
+    const ssize_t size = ::fgetxattr(
+        descriptor, "system.posix_acl_default", nullptr, 0);
+    if (size >= 0) {
+        error = QStringLiteral(
+            "The anchored parent has an inheritable POSIX access control list");
+        return false;
+    }
+    if (errno == ENODATA || errno == ENOTSUP
+#ifdef EOPNOTSUPP
+        || errno == EOPNOTSUPP
+#endif
+    ) {
+        return true;
+    }
+    error = nativeError(
+        QStringLiteral(
+            "Cannot inspect anchored directory access controls"),
+        errno);
+    return false;
+}
+
 bool linuxDirectoryAclsAreAbsent(int descriptor, QString &error)
 {
     static const char *const attributes[] = {
@@ -678,17 +913,20 @@ private:
     bool valid_ = false;
 };
 
-bool windowsDirectoryHandleHasPrivateSecurity(HANDLE handle)
+bool windowsHandleSupportsPersistentAcls(HANDLE handle)
 {
     DWORD fileSystemFlags = 0;
-    if (!handle
-        || handle == INVALID_HANDLE_VALUE
-        || !::GetVolumeInformationByHandleW(
+    return handle
+        && handle != INVALID_HANDLE_VALUE
+        && ::GetVolumeInformationByHandleW(
             handle, nullptr, 0, nullptr, nullptr,
             &fileSystemFlags, nullptr, 0)
-        || !(fileSystemFlags & FILE_PERSISTENT_ACLS)) {
-        return false;
-    }
+        && (fileSystemFlags & FILE_PERSISTENT_ACLS);
+}
+
+bool windowsDirectoryHandleHasPrivateSecurity(HANDLE handle)
+{
+    if (!windowsHandleSupportsPersistentAcls(handle)) return false;
 
     QByteArray userStorage;
     PSID userSid = nullptr;
@@ -797,6 +1035,186 @@ QString windowsError(const QString &operation, DWORD nativeError)
         .arg(operation).arg(nativeError);
 }
 
+bool createWindowsWellKnownSid(
+    WELL_KNOWN_SID_TYPE type,
+    QByteArray &storage,
+    PSID &sid)
+{
+    DWORD size = SECURITY_MAX_SID_SIZE;
+    storage.resize(int(size));
+    sid = storage.data();
+    return ::CreateWellKnownSid(
+        type, nullptr, sid, &size) && ::IsValidSid(sid);
+}
+
+bool windowsAceTypeAllowsAccess(BYTE type)
+{
+    return type == ACCESS_ALLOWED_ACE_TYPE
+        || type == ACCESS_ALLOWED_OBJECT_ACE_TYPE
+        || type == ACCESS_ALLOWED_CALLBACK_ACE_TYPE
+        || type == ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE
+        || type == ACCESS_ALLOWED_COMPOUND_ACE_TYPE;
+}
+
+bool windowsAllowedAceMaskAndSid(
+    const ACE_HEADER *header,
+    ACCESS_MASK &mask,
+    PSID &sid)
+{
+    mask = 0;
+    sid = nullptr;
+    if (!header
+        || header->AceSize
+            < sizeof(ACE_HEADER) + sizeof(ACCESS_MASK)) {
+        return false;
+    }
+    const auto *bytes = reinterpret_cast<const unsigned char *>(
+        header);
+    std::memcpy(
+        &mask, bytes + sizeof(ACE_HEADER), sizeof(mask));
+
+    size_t sidOffset = 0;
+    if (header->AceType == ACCESS_ALLOWED_ACE_TYPE
+        || header->AceType == ACCESS_ALLOWED_CALLBACK_ACE_TYPE) {
+        sidOffset = offsetof(ACCESS_ALLOWED_ACE, SidStart);
+    } else if (header->AceType == ACCESS_ALLOWED_OBJECT_ACE_TYPE
+               || header->AceType
+                   == ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE) {
+        if (header->AceSize
+            < offsetof(ACCESS_ALLOWED_OBJECT_ACE, ObjectType)) {
+            return false;
+        }
+        const auto *object = reinterpret_cast<
+            const ACCESS_ALLOWED_OBJECT_ACE *>(header);
+        sidOffset = offsetof(
+            ACCESS_ALLOWED_OBJECT_ACE, ObjectType);
+        if (object->Flags & ACE_OBJECT_TYPE_PRESENT)
+            sidOffset += sizeof(GUID);
+        if (object->Flags & ACE_INHERITED_OBJECT_TYPE_PRESENT)
+            sidOffset += sizeof(GUID);
+    } else {
+        return false;
+    }
+
+    constexpr size_t minimumSidSize = 8;
+    if (sidOffset > header->AceSize
+        || header->AceSize - sidOffset < minimumSidSize) {
+        return false;
+    }
+    auto *candidate = const_cast<unsigned char *>(bytes + sidOffset);
+    const auto *layout = reinterpret_cast<const SID *>(candidate);
+    const DWORD required = ::GetSidLengthRequired(
+        layout->SubAuthorityCount);
+    if (required > header->AceSize - sidOffset
+        || !::IsValidSid(candidate)) {
+        return false;
+    }
+    sid = candidate;
+    return true;
+}
+
+bool windowsDirectoryHandleIsCurrentUserControlled(
+    HANDLE handle, QString &error)
+{
+    if (!windowsHandleSupportsPersistentAcls(handle)) {
+        error = QStringLiteral(
+            "The anchored parent filesystem does not support persistent access controls");
+        return false;
+    }
+
+    QByteArray userStorage;
+    QByteArray systemStorage;
+    QByteArray administratorsStorage;
+    PSID userSid = nullptr;
+    PSID systemSid = nullptr;
+    PSID administratorsSid = nullptr;
+    if (!currentWindowsUserSid(userStorage, userSid)
+        || !createWindowsWellKnownSid(
+            WinLocalSystemSid, systemStorage, systemSid)
+        || !createWindowsWellKnownSid(
+            WinBuiltinAdministratorsSid,
+            administratorsStorage, administratorsSid)) {
+        error = windowsError(
+            QStringLiteral(
+                "Cannot resolve trusted Windows directory identities"),
+            ::GetLastError());
+        return false;
+    }
+
+    PSID owner = nullptr;
+    PACL acl = nullptr;
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    const DWORD securityResult = ::GetSecurityInfo(
+        handle, SE_FILE_OBJECT,
+        OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+        &owner, nullptr, &acl, nullptr, &descriptor);
+    if (securityResult != ERROR_SUCCESS) {
+        if (descriptor) ::LocalFree(descriptor);
+        error = windowsError(
+            QStringLiteral(
+                "Cannot inspect anchored parent access controls"),
+            securityResult);
+        return false;
+    }
+
+    bool controlled = owner
+        && ::IsValidSid(owner)
+        && ::EqualSid(owner, userSid);
+    if (!controlled) {
+        error = QStringLiteral(
+            "The anchored parent directory is not owned by the current user");
+    } else if (!acl) {
+        controlled = false;
+        error = QStringLiteral(
+            "The anchored parent directory has an unrestricted access list");
+    } else if (!::IsValidAcl(acl)) {
+        controlled = false;
+        error = QStringLiteral(
+            "The anchored parent directory has an invalid access list");
+    }
+
+    constexpr ACCESS_MASK dangerousAccess =
+        FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY
+        | FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER
+        | GENERIC_WRITE | GENERIC_ALL;
+    for (DWORD index = 0;
+         controlled && index < acl->AceCount; ++index) {
+        void *rawAce = nullptr;
+        if (!::GetAce(acl, index, &rawAce) || !rawAce) {
+            controlled = false;
+            error = QStringLiteral(
+                "Cannot inspect an anchored parent access entry");
+            break;
+        }
+        const auto *header = static_cast<const ACE_HEADER *>(rawAce);
+        if (!windowsAceTypeAllowsAccess(header->AceType)
+            || (header->AceFlags & INHERIT_ONLY_ACE)) {
+            continue;
+        }
+
+        ACCESS_MASK mask = 0;
+        PSID sid = nullptr;
+        if (!windowsAllowedAceMaskAndSid(
+                header, mask, sid)) {
+            controlled = false;
+            error = QStringLiteral(
+                "The anchored parent has an unsupported access entry");
+            break;
+        }
+        if (!(mask & dangerousAccess)) continue;
+        if (!::EqualSid(sid, userSid)
+            && !::EqualSid(sid, systemSid)
+            && !::EqualSid(sid, administratorsSid)) {
+            controlled = false;
+            error = QStringLiteral(
+                "The anchored parent grants directory mutation to another identity");
+        }
+    }
+
+    if (descriptor) ::LocalFree(descriptor);
+    return controlled;
+}
+
 bool windowsDirectoryHandleOwnerMatches(
     HANDLE handle, PSID expectedOwner, bool &matches, QString &error)
 {
@@ -862,6 +1280,18 @@ bool captureWindowsStamp(
         std::begin(identity.FileId.Identifier),
         std::end(identity.FileId.Identifier),
         stamp.id.begin());
+#ifdef GC_ANCHORED_FILESYSTEM_ZERO_ID_TEST_HOOK
+    if (anchoredFilesystemForceZeroWindowsFileId()) {
+        stamp.id.fill(0);
+    }
+#endif
+    if (std::all_of(
+            stamp.id.begin(), stamp.id.end(),
+            [](unsigned char value) { return value == 0; })) {
+        error = QStringLiteral(
+            "The anchored filesystem does not provide a stable file identity");
+        return false;
+    }
     stamp.links = legacy.nNumberOfLinks;
     stamp.size = standard.EndOfFile.QuadPart;
     stamp.modified = basic.LastWriteTime.QuadPart;
@@ -1030,6 +1460,7 @@ struct DirectoryState
 #elif defined(Q_OS_WIN)
     std::vector<WindowsHandle> handles;
     WindowsStamp stamp;
+    mutable std::mutex enumerationMutex;
 #endif
     QString component;
     QString displayPath;
@@ -1057,11 +1488,369 @@ struct PrivateDirectoryOperations
         const DirectoryAnchor &parent,
         const QString &component,
         DirectoryAnchor &directory);
+    static MutationResult createFixed(
+        const DirectoryAnchor &parent,
+        const QString &component,
+        DirectoryAnchor &directory);
 };
 
 } // namespace Detail
 
 namespace {
+
+struct DirectoryEntryObservation
+{
+    QString name;
+    DirectoryEntryKind kind = DirectoryEntryKind::RegularFile;
+    NativeIdentity identity;
+#ifdef Q_OS_UNIX
+    UnixStamp stamp;
+#elif defined(Q_OS_WIN)
+    WindowsStamp stamp;
+#endif
+};
+
+void sortDirectoryEntryObservations(
+    QList<DirectoryEntryObservation> &entries)
+{
+    std::sort(
+        entries.begin(), entries.end(),
+        [](const DirectoryEntryObservation &left,
+           const DirectoryEntryObservation &right) {
+            return QString::compare(
+                left.name, right.name, Qt::CaseSensitive) < 0;
+        });
+}
+
+bool directoryEntryObservationsMatch(
+    const QList<DirectoryEntryObservation> &left,
+    const QList<DirectoryEntryObservation> &right)
+{
+    if (left.size() != right.size()) return false;
+    for (int index = 0; index < left.size(); ++index) {
+        const DirectoryEntryObservation &leftEntry = left.at(index);
+        const DirectoryEntryObservation &rightEntry = right.at(index);
+        if (leftEntry.name != rightEntry.name
+            || leftEntry.kind != rightEntry.kind
+            || leftEntry.identity != rightEntry.identity
+            || !(leftEntry.stamp == rightEntry.stamp)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool validateDirectoryEntryObservations(
+    QList<DirectoryEntryObservation> &entries,
+    QString &error)
+{
+    sortDirectoryEntryObservations(entries);
+    for (int index = 1; index < entries.size(); ++index) {
+        if (entries.at(index - 1).name == entries.at(index).name) {
+            error = QStringLiteral(
+                "The anchored directory contains duplicate names");
+            return false;
+        }
+    }
+    return true;
+}
+
+#ifdef Q_OS_UNIX
+
+bool captureUnixDirectoryEntryObservation(
+    int directory,
+    const QByteArray &encodedName,
+    const QString &name,
+    DirectoryEntryObservation &observation,
+    QString &error)
+{
+    struct stat status {};
+    int statusResult = -1;
+    do {
+        statusResult = ::fstatat(
+            directory, encodedName.constData(), &status,
+            AT_SYMLINK_NOFOLLOW);
+    } while (statusResult != 0 && errno == EINTR);
+    if (statusResult != 0) {
+        error = nativeError(
+            QStringLiteral(
+                "Cannot inspect an anchored directory entry"),
+            errno);
+        return false;
+    }
+
+    char identityType = 0;
+    if (S_ISREG(status.st_mode)) {
+        observation.kind = DirectoryEntryKind::RegularFile;
+        identityType = 'f';
+    } else if (S_ISDIR(status.st_mode)) {
+        observation.kind = DirectoryEntryKind::Directory;
+        identityType = 'd';
+    } else {
+        error = QStringLiteral(
+            "The anchored directory contains an unsafe entry type: %1")
+                .arg(name);
+        return false;
+    }
+    if (status.st_size < 0) {
+        error = QStringLiteral(
+            "The anchored directory entry has an invalid size");
+        return false;
+    }
+
+    UnixStamp stamp;
+    stamp.device = quint64(status.st_dev);
+    stamp.inode = quint64(status.st_ino);
+    stamp.links = quint64(status.st_nlink);
+    stamp.size = qint64(status.st_size);
+#if defined(Q_OS_MACOS)
+    stamp.modifiedSeconds = qint64(status.st_mtimespec.tv_sec);
+    stamp.modifiedNanoseconds = qint64(status.st_mtimespec.tv_nsec);
+    stamp.changedSeconds = qint64(status.st_ctimespec.tv_sec);
+    stamp.changedNanoseconds = qint64(status.st_ctimespec.tv_nsec);
+#else
+    stamp.modifiedSeconds = qint64(status.st_mtim.tv_sec);
+    stamp.modifiedNanoseconds = qint64(status.st_mtim.tv_nsec);
+    stamp.changedSeconds = qint64(status.st_ctim.tv_sec);
+    stamp.changedNanoseconds = qint64(status.st_ctim.tv_nsec);
+#endif
+    observation.name = name;
+    observation.stamp = stamp;
+    observation.identity = unixIdentity(stamp, identityType);
+    return true;
+}
+
+bool enumerateUnixDirectoryPass(
+    const Detail::DirectoryState &state,
+    QList<DirectoryEntryObservation> &entries,
+    qsizetype maximumEntries,
+    QString &error)
+{
+    entries.clear();
+    int duplicateDescriptor = -1;
+    do {
+        duplicateDescriptor = ::openat(
+            state.descriptor.get(), ".",
+            O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    } while (duplicateDescriptor < 0 && errno == EINTR);
+    if (duplicateDescriptor < 0) {
+        error = nativeError(
+            QStringLiteral(
+                "Cannot open an anchored directory enumeration stream"),
+            errno);
+        return false;
+    }
+
+    DIR *rawStream = ::fdopendir(duplicateDescriptor);
+    if (!rawStream) {
+        const int failure = errno;
+        ::close(duplicateDescriptor);
+        error = nativeError(
+            QStringLiteral(
+                "Cannot initialize an anchored directory enumeration stream"),
+            failure);
+        return false;
+    }
+    std::unique_ptr<DIR, int (*)(DIR *)> stream(
+        rawStream, &::closedir);
+
+    for (;;) {
+        errno = 0;
+        const struct dirent *entry = ::readdir(stream.get());
+        if (!entry) {
+            if (errno == EINTR) continue;
+            if (errno != 0) {
+                error = nativeError(
+                    QStringLiteral(
+                        "Cannot enumerate an anchored directory"),
+                    errno);
+                entries.clear();
+                return false;
+            }
+            break;
+        }
+
+        const QByteArray encodedName(entry->d_name);
+        if (encodedName == QByteArrayLiteral(".")
+            || encodedName == QByteArrayLiteral("..")) {
+            continue;
+        }
+        const QString name = QFile::decodeName(encodedName);
+        if (QFile::encodeName(name) != encodedName
+            || !validPortableComponent(name)) {
+            error = QStringLiteral(
+                "The anchored directory contains an unsafe name");
+            entries.clear();
+            return false;
+        }
+
+        DirectoryEntryObservation observation;
+        if (!captureUnixDirectoryEntryObservation(
+                ::dirfd(stream.get()), encodedName, name,
+                observation, error)) {
+            entries.clear();
+            return false;
+        }
+        if (entries.size() >= maximumEntries) {
+            error = QStringLiteral(
+                "The anchored directory exceeds its entry budget");
+            entries.clear();
+            return false;
+        }
+        entries.append(std::move(observation));
+    }
+    if (!validateDirectoryEntryObservations(entries, error)) {
+        entries.clear();
+        return false;
+    }
+    return true;
+}
+
+#elif defined(Q_OS_WIN)
+
+bool enumerateWindowsDirectoryPass(
+    const Detail::DirectoryState &state,
+    QList<DirectoryEntryObservation> &entries,
+    qsizetype maximumEntries,
+    QString &error)
+{
+    entries.clear();
+    constexpr DWORD bufferSize = 64 * 1024;
+    QByteArray buffer(int(bufferSize), Qt::Uninitialized);
+    bool restart = true;
+    for (;;) {
+        const FILE_INFO_BY_HANDLE_CLASS informationClass = restart
+            ? FileIdExtdDirectoryRestartInfo
+            : FileIdExtdDirectoryInfo;
+        if (!::GetFileInformationByHandleEx(
+                state.handles.back().get(), informationClass,
+                buffer.data(), bufferSize)) {
+            const DWORD failure = ::GetLastError();
+            if (failure == ERROR_NO_MORE_FILES) break;
+            error = windowsError(
+                QStringLiteral(
+                    "Cannot enumerate an anchored Windows directory"),
+                failure);
+            entries.clear();
+            return false;
+        }
+        restart = false;
+
+        size_t offset = 0;
+        for (;;) {
+            constexpr size_t fixedSize =
+                offsetof(FILE_ID_EXTD_DIR_INFO, FileName);
+            if (offset > size_t(buffer.size())
+                || size_t(buffer.size()) - offset < fixedSize) {
+                error = QStringLiteral(
+                    "Windows returned an invalid anchored directory entry");
+                entries.clear();
+                return false;
+            }
+            const auto *nativeEntry = reinterpret_cast<
+                const FILE_ID_EXTD_DIR_INFO *>(
+                    buffer.constData() + offset);
+            const size_t nameBytes = nativeEntry->FileNameLength;
+            if ((nameBytes % sizeof(wchar_t)) != 0
+                || nameBytes > size_t(buffer.size())
+                    - offset - fixedSize) {
+                error = QStringLiteral(
+                    "Windows returned an invalid anchored directory name");
+                entries.clear();
+                return false;
+            }
+            const QString name = QString::fromWCharArray(
+                nativeEntry->FileName,
+                int(nameBytes / sizeof(wchar_t)));
+            if (name != QStringLiteral(".")
+                && name != QStringLiteral("..")) {
+                if (!validPortableComponent(name)
+                    || (nativeEntry->FileAttributes
+                        & (FILE_ATTRIBUTE_REPARSE_POINT
+                           | FILE_ATTRIBUTE_DEVICE))) {
+                    error = QStringLiteral(
+                        "The anchored directory contains an unsafe entry: %1")
+                            .arg(name);
+                    entries.clear();
+                    return false;
+                }
+
+                const bool isDirectory =
+                    nativeEntry->FileAttributes
+                    & FILE_ATTRIBUTE_DIRECTORY;
+                const QString path = QDir(state.displayPath).filePath(name);
+                WindowsHandle handle(::CreateFileW(
+                    reinterpret_cast<LPCWSTR>(
+                        QDir::toNativeSeparators(path).utf16()),
+                    FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    nullptr,
+                    OPEN_EXISTING,
+                    FILE_FLAG_OPEN_REPARSE_POINT
+                        | (isDirectory
+                            ? FILE_FLAG_BACKUP_SEMANTICS : 0),
+                    nullptr));
+                if (!handle.isValid()) {
+                    error = windowsError(
+                        QStringLiteral(
+                            "Cannot open an anchored Windows directory entry"),
+                        ::GetLastError());
+                    entries.clear();
+                    return false;
+                }
+
+                WindowsStamp stamp;
+                if (!captureWindowsStamp(
+                        handle.get(), stamp, isDirectory, error)
+                    || !std::equal(
+                        std::begin(nativeEntry->FileId.Identifier),
+                        std::end(nativeEntry->FileId.Identifier),
+                        stamp.id.begin())) {
+                    if (error.isEmpty()) {
+                        error = QStringLiteral(
+                            "An anchored Windows directory entry changed while being enumerated");
+                    }
+                    entries.clear();
+                    return false;
+                }
+
+                DirectoryEntryObservation observation;
+                observation.name = name;
+                observation.kind = isDirectory
+                    ? DirectoryEntryKind::Directory
+                    : DirectoryEntryKind::RegularFile;
+                observation.stamp = stamp;
+                observation.identity = windowsIdentity(
+                    stamp, isDirectory ? 'd' : 'f');
+                if (entries.size() >= maximumEntries) {
+                    error = QStringLiteral(
+                        "The anchored directory exceeds its entry budget");
+                    entries.clear();
+                    return false;
+                }
+                entries.append(std::move(observation));
+            }
+
+            const ULONG next = nativeEntry->NextEntryOffset;
+            if (next == 0) break;
+            if (next < fixedSize
+                || size_t(next) > size_t(buffer.size()) - offset) {
+                error = QStringLiteral(
+                    "Windows returned an invalid anchored directory sequence");
+                entries.clear();
+                return false;
+            }
+            offset += next;
+        }
+    }
+    if (!validateDirectoryEntryObservations(entries, error)) {
+        entries.clear();
+        return false;
+    }
+    return true;
+}
+
+#endif
 
 using PinnedChunkConsumer =
     std::function<bool(const char *, qsizetype, QString &)>;
@@ -1656,6 +2445,89 @@ bool DirectoryAnchor::openChildIfExists(
     child->component = component;
     directory = DirectoryAnchor(std::move(child));
     exists = true;
+    return true;
+}
+
+bool DirectoryAnchor::enumerateEntries(
+    QList<DirectoryEntry> &entries,
+    qsizetype maximumEntries,
+    QString &error) const
+{
+    entries.clear();
+    error.clear();
+    if (!isValid()) {
+        error = QStringLiteral("The anchored directory is unavailable");
+        return false;
+    }
+    if (maximumEntries < 0) {
+        error = QStringLiteral(
+            "The anchored directory entry budget is invalid");
+        return false;
+    }
+
+    QList<DirectoryEntryObservation> first;
+    QList<DirectoryEntryObservation> second;
+#ifdef Q_OS_UNIX
+    UnixStamp before;
+    UnixStamp after;
+    if (!captureUnixStamp(
+            state_->descriptor.get(), before, true, error)
+        || !enumerateUnixDirectoryPass(
+            *state_, first, maximumEntries, error)) {
+        return false;
+    }
+    reportAnchoredFilesystemTransition(
+        "directory-enumeration-first-pass", state_->displayPath);
+    if (!enumerateUnixDirectoryPass(
+            *state_, second, maximumEntries, error)
+        || !captureUnixStamp(
+            state_->descriptor.get(), after, true, error)) {
+        return false;
+    }
+    if (!(before == after)
+        || !directoryEntryObservationsMatch(first, second)) {
+        error = QStringLiteral(
+            "The anchored directory changed while being enumerated");
+        return false;
+    }
+#elif defined(Q_OS_WIN)
+    const std::lock_guard<std::mutex> lock(
+        state_->enumerationMutex);
+    WindowsStamp before;
+    WindowsStamp after;
+    if (!captureWindowsStamp(
+            state_->handles.back().get(), before, true, error)
+        || !enumerateWindowsDirectoryPass(
+            *state_, first, maximumEntries, error)) {
+        return false;
+    }
+    reportAnchoredFilesystemTransition(
+        "directory-enumeration-first-pass", state_->displayPath);
+    if (!enumerateWindowsDirectoryPass(
+            *state_, second, maximumEntries, error)
+        || !captureWindowsStamp(
+            state_->handles.back().get(), after, true, error)) {
+        return false;
+    }
+    if (!(before == after)
+        || !directoryEntryObservationsMatch(first, second)) {
+        error = QStringLiteral(
+            "The anchored directory changed while being enumerated");
+        return false;
+    }
+#else
+    error = QStringLiteral(
+        "Anchored filesystem operations are unsupported on this platform");
+    return false;
+#endif
+
+    entries.reserve(first.size());
+    for (const DirectoryEntryObservation &observation : first) {
+        entries.append({
+            observation.name,
+            observation.kind,
+            observation.identity});
+    }
     return true;
 }
 
@@ -2808,23 +3680,196 @@ bool entryMatches(
 #endif
 }
 
-bool hardenPrivateDirectory(
-    DirectoryAnchor &directory,
+bool validateCurrentUserOwnedDirectory(
+    const DirectoryAnchor &directory,
     QString &error)
 {
     error.clear();
     if (!directory.state_) {
         error = QStringLiteral(
-            "The anchored private directory is unavailable");
+            "The anchored directory is unavailable");
         return false;
     }
     if (!directory.pathMatches(error)) {
         if (error.isEmpty()) {
             error = QStringLiteral(
-                "The private directory path was replaced");
+                "The anchored directory path was replaced");
         }
         return false;
     }
+
+#ifdef Q_OS_UNIX
+    struct stat status {};
+    if (::fstat(
+            directory.state_->descriptor.get(), &status) != 0) {
+        error = nativeError(
+            QStringLiteral(
+                "Cannot inspect anchored directory ownership"),
+            errno);
+        return false;
+    }
+    if (!S_ISDIR(status.st_mode)
+        || quint64(status.st_dev) != directory.state_->stamp.device
+        || quint64(status.st_ino) != directory.state_->stamp.inode) {
+        error = QStringLiteral(
+            "The anchored directory identity changed while checking ownership");
+        return false;
+    }
+    if (status.st_uid != ::geteuid()) {
+        error = QStringLiteral(
+            "The anchored directory is not owned by the current user");
+        return false;
+    }
+    return true;
+
+#elif defined(Q_OS_WIN)
+    const QString nativePath = QDir::toNativeSeparators(
+        directory.state_->displayPath);
+    WindowsHandle bridge = openWindowsDirectoryBridge(
+        nativePath, error);
+    WindowsStamp bridgeStamp;
+    if (!bridge.isValid()
+        || !captureWindowsStamp(
+            bridge.get(), bridgeStamp, true, error)
+        || !sameWindowsObject(
+            bridgeStamp, directory.state_->stamp)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The anchored directory identity changed while checking ownership");
+        }
+        return false;
+    }
+    QByteArray userStorage;
+    PSID userSid = nullptr;
+    bool ownerMatches = false;
+    if (!currentWindowsUserSid(userStorage, userSid)
+        || !windowsDirectoryHandleOwnerMatches(
+            bridge.get(), userSid, ownerMatches, error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "Cannot resolve the current Windows directory owner");
+        }
+        return false;
+    }
+    if (!ownerMatches) {
+        error = QStringLiteral(
+            "The anchored directory is not owned by the current user");
+        return false;
+    }
+    return true;
+
+#else
+    error = QStringLiteral(
+        "Anchored filesystem operations are unsupported on this platform");
+    return false;
+#endif
+}
+
+bool validateCurrentUserControlledDirectory(
+    const DirectoryAnchor &directory,
+    QString &error)
+{
+    if (!validateCurrentUserOwnedDirectory(directory, error))
+        return false;
+
+#ifdef Q_OS_UNIX
+    struct stat status {};
+    if (::fstat(
+            directory.state_->descriptor.get(), &status) != 0) {
+        error = nativeError(
+            QStringLiteral(
+                "Cannot inspect anchored parent permissions"),
+            errno);
+        return false;
+    }
+    if (status.st_mode & S_IWOTH) {
+        error = QStringLiteral(
+            "The anchored parent directory is writable by other users");
+        return false;
+    }
+    if (status.st_mode & S_IWGRP) {
+#if defined(Q_OS_LINUX)
+        if (!unixGroupWritersAreRestricted(status.st_gid, error)) {
+            return false;
+        }
+#else
+        error = QStringLiteral(
+            "The anchored parent directory is group-writable");
+        return false;
+#endif
+    }
+#if defined(Q_OS_LINUX)
+    if (!linuxDirectoryAccessAclIsAbsent(
+            directory.state_->descriptor.get(), error)) {
+        return false;
+    }
+#endif
+#if defined(Q_OS_MACOS)
+    bool hasExtendedAcl = false;
+    if (!macDirectoryHasExtendedAcl(
+            directory.state_->descriptor.get(),
+            hasExtendedAcl, error)) {
+        return false;
+    }
+    if (hasExtendedAcl) {
+        error = QStringLiteral(
+            "The anchored parent has extended access controls");
+        return false;
+    }
+#endif
+    if (!directory.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The anchored parent path changed while checking access controls");
+        }
+        return false;
+    }
+    return true;
+
+#elif defined(Q_OS_WIN)
+    const QString nativePath = QDir::toNativeSeparators(
+        directory.state_->displayPath);
+    WindowsHandle bridge = openWindowsDirectoryBridge(
+        nativePath, error);
+    WindowsStamp bridgeStamp;
+    if (!bridge.isValid()
+        || !captureWindowsStamp(
+            bridge.get(), bridgeStamp, true, error)
+        || !sameWindowsObject(
+            bridgeStamp, directory.state_->stamp)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The anchored parent identity changed while checking access controls");
+        }
+        return false;
+    }
+    if (!windowsDirectoryHandleIsCurrentUserControlled(
+            bridge.get(), error)) {
+        return false;
+    }
+    if (!directory.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The anchored parent path changed while checking access controls");
+        }
+        return false;
+    }
+    return true;
+
+#else
+    error = QStringLiteral(
+        "Anchored filesystem operations are unsupported on this platform");
+    return false;
+#endif
+}
+
+bool hardenPrivateDirectory(
+    DirectoryAnchor &directory,
+    QString &error)
+{
+    error.clear();
+    if (!validateCurrentUserOwnedDirectory(directory, error))
+        return false;
 
 #ifdef Q_OS_UNIX
     UnixStamp before;
@@ -2931,12 +3976,16 @@ bool hardenPrivateDirectory(
     bool ownerMatches = false;
     if (!windowsDirectoryHandleOwnerMatches(
             bridge.get(), privateSecurity.ownerSid(),
-            ownerMatches, error)) {
+            ownerMatches, error)
+        || !ownerMatches) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The anchored directory is not owned by the current user");
+        }
         return false;
     }
     DWORD mutationAccess = FILE_READ_ATTRIBUTES | READ_CONTROL
         | WRITE_DAC | SYNCHRONIZE;
-    if (!ownerMatches) mutationAccess |= WRITE_OWNER;
     WindowsHandle mutation(::CreateFileW(
         reinterpret_cast<LPCWSTR>(nativePath.utf16()),
         mutationAccess,
@@ -2967,14 +4016,9 @@ bool hardenPrivateDirectory(
     SECURITY_INFORMATION securityInformation =
         DACL_SECURITY_INFORMATION
         | PROTECTED_DACL_SECURITY_INFORMATION;
-    PSID owner = nullptr;
-    if (!ownerMatches) {
-        securityInformation |= OWNER_SECURITY_INFORMATION;
-        owner = privateSecurity.ownerSid();
-    }
     const DWORD securityResult = ::SetSecurityInfo(
         mutation.get(), SE_FILE_OBJECT,
-        securityInformation, owner, nullptr,
+        securityInformation, nullptr, nullptr,
         privateSecurity.acl(), nullptr);
     if (securityResult != ERROR_SUCCESS
         || !windowsDirectoryHandleHasPrivateSecurity(
@@ -3753,12 +4797,412 @@ MutationResult Detail::PrivateDirectoryOperations::create(
     return result;
 }
 
+MutationResult Detail::PrivateDirectoryOperations::createFixed(
+    const DirectoryAnchor &parent,
+    const QString &component,
+    DirectoryAnchor &directory)
+{
+    MutationResult result;
+    directory = {};
+    if (!parent.state_) {
+        result.error = QStringLiteral(
+            "The anchored parent directory is unavailable");
+        return result;
+    }
+    if (!validPortableComponent(component)) {
+        result.error = QStringLiteral(
+            "The anchored child directory name is unsafe");
+        return result;
+    }
+
+    QString matchError;
+    if (!parent.pathMatches(matchError)) {
+        result.effect = MutationEffect::Conflict;
+        result.error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The anchored child directory parent was replaced")
+            : matchError;
+        return result;
+    }
+
+    const QString finalPath =
+        QDir(parent.state_->displayPath).filePath(component);
+
+#ifdef Q_OS_UNIX
+    if (!validateCurrentUserControlledDirectory(
+            parent, result.error)) {
+        return result;
+    }
+#if defined(Q_OS_LINUX)
+    if (!linuxDirectoryDefaultAclIsAbsent(
+            parent.state_->descriptor.get(), result.error)) {
+        return result;
+    }
+#endif
+
+    const QByteArray encoded = QFile::encodeName(component);
+    if (::mkdirat(
+            parent.state_->descriptor.get(),
+            encoded.constData(), S_IRWXU) != 0) {
+        const int createError = errno;
+        if (createError == EEXIST) {
+            result.effect = MutationEffect::Conflict;
+            result.error = QStringLiteral(
+                "The private child directory already exists");
+        } else {
+            result.error = nativeError(
+                QStringLiteral(
+                    "Cannot create a fixed private anchored child directory"),
+                createError);
+        }
+        return result;
+    }
+
+    FileDescriptor descriptor(::openat(
+        parent.state_->descriptor.get(), encoded.constData(),
+        O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+    if (!descriptor.isValid()) {
+        result.effect = MutationEffect::Partial;
+        result.error = nativeError(
+            QStringLiteral(
+                "Cannot anchor a newly created fixed private directory"),
+            errno);
+        return result;
+    }
+
+    UnixStamp created;
+    if (!captureUnixStamp(
+            descriptor.get(), created, true, result.error)) {
+        result.effect = MutationEffect::Partial;
+        return result;
+    }
+    auto state = std::make_shared<Detail::DirectoryState>();
+    state->ancestor = parent.state_;
+    state->descriptor = std::move(descriptor);
+    state->stamp = created;
+    state->component = component;
+    state->displayPath = finalPath;
+    state->identity = unixIdentity(created, 'd');
+    directory = DirectoryAnchor(std::move(state));
+
+    if (::fchmod(
+            directory.state_->descriptor.get(), S_IRWXU) != 0) {
+        result.effect = MutationEffect::Partial;
+        result.error = nativeError(
+            QStringLiteral(
+                "Cannot make a fixed anchored child directory private"),
+            errno);
+        return result;
+    }
+#if defined(Q_OS_LINUX)
+    if (!removeLinuxDirectoryAcls(
+            directory.state_->descriptor.get(), result.error)
+        || ::fchmod(
+            directory.state_->descriptor.get(), S_IRWXU) != 0) {
+        result.effect = MutationEffect::Partial;
+        if (result.error.isEmpty()) {
+            result.error = nativeError(
+                QStringLiteral(
+                    "Cannot finalize fixed private directory permissions"),
+                errno);
+        }
+        return result;
+    }
+#endif
+#if defined(Q_OS_MACOS)
+    if (!removeMacDirectoryExtendedAcl(
+            directory.state_->descriptor.get(), result.error)
+        || ::fchmod(
+            directory.state_->descriptor.get(), S_IRWXU) != 0) {
+        result.effect = MutationEffect::Partial;
+        if (result.error.isEmpty()) {
+            result.error = nativeError(
+                QStringLiteral(
+                    "Cannot finalize fixed private directory permissions"),
+                errno);
+        }
+        return result;
+    }
+#endif
+
+    struct stat privateStatus {};
+    if (::fstat(
+            directory.state_->descriptor.get(), &privateStatus) != 0) {
+        result.effect = MutationEffect::Partial;
+        result.error = nativeError(
+            QStringLiteral(
+                "Cannot verify fixed private directory permissions"),
+            errno);
+        return result;
+    }
+    if (!S_ISDIR(privateStatus.st_mode)
+        || privateStatus.st_uid != ::geteuid()
+        || (privateStatus.st_mode & 0777) != S_IRWXU) {
+        result.effect = MutationEffect::Partial;
+        result.error = QStringLiteral(
+            "The fixed anchored child directory is not private");
+        return result;
+    }
+    UnixStamp hardened;
+    if (!captureUnixStamp(
+            directory.state_->descriptor.get(),
+            hardened, true, result.error)
+        || !sameUnixObject(hardened, created)) {
+        result.effect = MutationEffect::Partial;
+        if (result.error.isEmpty()) {
+            result.error = QStringLiteral(
+                "The fixed private directory identity changed while hardening");
+        }
+        return result;
+    }
+    directory.state_->stamp = hardened;
+    directory.state_->identity = unixIdentity(hardened, 'd');
+
+    UnixStamp named;
+    bool namedExists = false;
+    if (!statDirectoryEntry(
+            parent.state_->descriptor.get(), component,
+            named, namedExists, result.error)
+        || !namedExists
+        || !sameUnixObject(named, hardened)) {
+        result.effect = MutationEffect::Partial;
+        if (result.error.isEmpty()) {
+            result.error = QStringLiteral(
+                "The fixed private directory name was replaced after creation");
+        }
+        return result;
+    }
+
+#elif defined(Q_OS_WIN)
+    if (!validateCurrentUserControlledDirectory(
+            parent, result.error)) {
+        return result;
+    }
+
+    WindowsPrivateDirectorySecurity privateSecurity;
+    if (!privateSecurity.isValid()) {
+        result.error = QStringLiteral(
+            "Cannot prepare private Windows directory security");
+        return result;
+    }
+    const QString nativeFinal = QDir::toNativeSeparators(finalPath);
+    if (!::CreateDirectoryW(
+            reinterpret_cast<LPCWSTR>(nativeFinal.utf16()),
+            privateSecurity.attributes())) {
+        const DWORD createError = ::GetLastError();
+        if (createError == ERROR_ALREADY_EXISTS
+            || createError == ERROR_FILE_EXISTS) {
+            result.effect = MutationEffect::Conflict;
+            result.error = QStringLiteral(
+                "The private child directory already exists");
+        } else {
+            result.error = windowsError(
+                QStringLiteral(
+                    "Cannot create a fixed private anchored child directory"),
+                createError);
+        }
+        return result;
+    }
+
+    WindowsHandle observation(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(nativeFinal.utf16()),
+        FILE_LIST_DIRECTORY | FILE_TRAVERSE
+            | FILE_READ_ATTRIBUTES | FILE_ADD_FILE
+            | FILE_ADD_SUBDIRECTORY | READ_CONTROL | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS
+            | FILE_FLAG_OPEN_REPARSE_POINT
+            | FILE_FLAG_WRITE_THROUGH,
+        nullptr));
+    if (!observation.isValid()) {
+        result.effect = MutationEffect::Partial;
+        result.error = windowsError(
+            QStringLiteral(
+                "Cannot anchor a newly created fixed private directory"),
+            ::GetLastError());
+        return result;
+    }
+
+    WindowsStamp created;
+    if (!captureWindowsStamp(
+            observation.get(), created, true, result.error)) {
+        result.effect = MutationEffect::Partial;
+        return result;
+    }
+    auto state = std::make_shared<Detail::DirectoryState>();
+    state->ancestor = parent.state_;
+    state->handles.push_back(std::move(observation));
+    state->stamp = created;
+    state->component = component;
+    state->displayPath = finalPath;
+    state->identity = windowsIdentity(created, 'd');
+    directory = DirectoryAnchor(std::move(state));
+
+    if (!windowsDirectoryHandleHasPrivateSecurity(
+            directory.state_->handles.back().get())) {
+        result.effect = MutationEffect::Partial;
+        result.error = QStringLiteral(
+            "The fixed anchored Windows child directory is not private");
+        return result;
+    }
+    WindowsStamp verified;
+    if (!captureWindowsStamp(
+            directory.state_->handles.back().get(),
+            verified, true, result.error)
+        || !sameWindowsObject(verified, created)) {
+        result.effect = MutationEffect::Partial;
+        if (result.error.isEmpty()) {
+            result.error = QStringLiteral(
+                "The fixed private directory identity changed after creation");
+        }
+        return result;
+    }
+    directory.state_->stamp = verified;
+    directory.state_->identity = windowsIdentity(verified, 'd');
+
+#else
+    Q_UNUSED(finalPath)
+    result.error = QStringLiteral(
+        "Anchored filesystem operations are unsupported on this platform");
+    return result;
+#endif
+
+    reportAnchoredFilesystemTransition(
+        "private-fixed-directory-anchored", finalPath);
+    QString finalError;
+    if (!parent.pathMatches(finalError)
+        || !directory.pathMatches(finalError)) {
+        result.effect = MutationEffect::Partial;
+        result.error = finalError.isEmpty()
+            ? QStringLiteral(
+                  "The fixed private directory changed after creation")
+            : finalError;
+        return result;
+    }
+
+    reportAnchoredFilesystemTransition(
+        "private-fixed-directory-before-child-sync", finalPath);
+    if (!directory.sync(finalError)) {
+        result.effect = MutationEffect::AppliedNotDurable;
+        result.error = finalError;
+        return result;
+    }
+    reportAnchoredFilesystemTransition(
+        "private-fixed-directory-child-synced", finalPath);
+    if (!parent.sync(finalError)) {
+        result.effect = MutationEffect::AppliedNotDurable;
+        result.error = finalError;
+        return result;
+    }
+
+    reportAnchoredFilesystemTransition(
+        "private-fixed-directory-before-final-name-check", finalPath);
+    finalError.clear();
+    if (!parent.pathMatches(finalError)
+        || !directory.pathMatches(finalError)) {
+        result.effect = MutationEffect::Partial;
+        result.error = finalError.isEmpty()
+            ? QStringLiteral(
+                  "The fixed private directory changed after synchronization")
+            : finalError;
+        return result;
+    }
+
+#ifdef Q_OS_UNIX
+    struct stat finalStatus {};
+    UnixStamp finalNamed;
+    bool finalNamedExists = false;
+    const int finalStatusResult = ::fstat(
+        directory.state_->descriptor.get(), &finalStatus);
+    const int finalStatusError = errno;
+    if (finalStatusResult != 0
+        || !S_ISDIR(finalStatus.st_mode)
+        || finalStatus.st_uid != ::geteuid()
+        || (finalStatus.st_mode & 0777) != S_IRWXU) {
+        result.effect = MutationEffect::Partial;
+        result.error = finalStatusResult != 0
+            ? nativeError(
+                  QStringLiteral(
+                      "Cannot verify final fixed private directory permissions"),
+                  finalStatusError)
+            : QStringLiteral(
+                  "The final fixed anchored child directory is not private");
+        return result;
+    }
+#if defined(Q_OS_LINUX)
+    if (!linuxDirectoryAclsAreAbsent(
+            directory.state_->descriptor.get(), result.error)) {
+        result.effect = MutationEffect::Partial;
+        return result;
+    }
+#endif
+#if defined(Q_OS_MACOS)
+    bool childHasExtendedAcl = false;
+    if (!macDirectoryHasExtendedAcl(
+            directory.state_->descriptor.get(),
+            childHasExtendedAcl, result.error)
+        || childHasExtendedAcl) {
+        result.effect = MutationEffect::Partial;
+        if (result.error.isEmpty()) {
+            result.error = QStringLiteral(
+                "The fixed private child retained extended access controls");
+        }
+        return result;
+    }
+#endif
+    if (!statDirectoryEntry(
+            parent.state_->descriptor.get(), component,
+            finalNamed, finalNamedExists, result.error)
+        || !finalNamedExists
+        || !sameUnixObject(
+            finalNamed, directory.state_->stamp)) {
+        result.effect = MutationEffect::Partial;
+        if (result.error.isEmpty()) {
+            result.error = QStringLiteral(
+                "The fixed private directory name changed after synchronization");
+        }
+        return result;
+    }
+#elif defined(Q_OS_WIN)
+    WindowsStamp finalStamp;
+    if (!captureWindowsStamp(
+            directory.state_->handles.back().get(),
+            finalStamp, true, result.error)
+        || !sameWindowsObject(finalStamp, directory.state_->stamp)
+        || !windowsDirectoryHandleHasPrivateSecurity(
+            directory.state_->handles.back().get())) {
+        result.effect = MutationEffect::Partial;
+        if (result.error.isEmpty()) {
+            result.error = QStringLiteral(
+                "The fixed anchored Windows child directory changed after synchronization");
+        }
+        return result;
+    }
+    directory.state_->stamp = finalStamp;
+    directory.state_->identity = windowsIdentity(finalStamp, 'd');
+#endif
+
+    result.effect = MutationEffect::AppliedDurable;
+    return result;
+}
+
 MutationResult createPrivateChildDirectory(
     const DirectoryAnchor &parent,
     const QString &component,
     DirectoryAnchor &directory)
 {
     return Detail::PrivateDirectoryOperations::create(
+        parent, component, directory);
+}
+
+MutationResult createPrivateFixedChildDirectory(
+    const DirectoryAnchor &parent,
+    const QString &component,
+    DirectoryAnchor &directory)
+{
+    return Detail::PrivateDirectoryOperations::createFixed(
         parent, component, directory);
 }
 

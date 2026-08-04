@@ -12,6 +12,7 @@
 
 #include <QByteArray>
 #include <QDebug>
+#include <QList>
 #include <QString>
 #include <QtGlobal>
 
@@ -65,6 +66,18 @@ private:
 
 QDebug operator<<(QDebug debug, const NativeIdentity &identity);
 
+enum class DirectoryEntryKind {
+    RegularFile,
+    Directory
+};
+
+struct DirectoryEntry
+{
+    QString name;
+    DirectoryEntryKind kind = DirectoryEntryKind::RegularFile;
+    NativeIdentity identity;
+};
+
 class DirectoryAnchor
 {
 public:
@@ -85,6 +98,14 @@ public:
         const QString &component,
         DirectoryAnchor &directory,
         bool &exists,
+        QString &error) const;
+    // Enumerates the held directory generation, not its display pathname.
+    // Unsafe types, observable two-pass changes, and budget exhaustion fail
+    // closed. Exact identity/metadata reuse can remain unobservable, so a
+    // caller opening an entry must compare the returned identity afterward.
+    bool enumerateEntries(
+        QList<DirectoryEntry> &entries,
+        qsizetype maximumEntries,
         QString &error) const;
     EntryRef entry(const QString &component, QString &error) const;
     bool pathMatches(QString &error) const;
@@ -115,6 +136,10 @@ private:
         class PinnedFile &, QString &);
     friend MutationResult moveNoReplace(
         PinnedFile &, const EntryRef &);
+    friend bool validateCurrentUserOwnedDirectory(
+        const DirectoryAnchor &, QString &);
+    friend bool validateCurrentUserControlledDirectory(
+        const DirectoryAnchor &, QString &);
     friend bool hardenPrivateDirectory(
         DirectoryAnchor &, QString &);
     friend struct Detail::PrivateDirectoryOperations;
@@ -296,7 +321,26 @@ MutationResult moveNoReplace(
 
 // Private-directory operations exclude processes sharing the same OS identity
 // and privileged administrators from their attacker model.
+// These validators inspect the anchored object and revalidate its pathname.
+bool validateCurrentUserOwnedDirectory(
+    const DirectoryAnchor &directory,
+    QString &error);
+
+// Allows nonprivate read/traverse access but rejects untrusted principals that
+// can mutate this directory, its child names, owner, or access controls.
+bool validateCurrentUserControlledDirectory(
+    const DirectoryAnchor &directory,
+    QString &error);
+
 MutationResult createPrivateChildDirectory(
+    const DirectoryAnchor &parent,
+    const QString &component,
+    DirectoryAnchor &directory);
+
+// Creates the requested name directly under an owner-controlled parent. The
+// child is private from creation. After creation, failures retain the fixed
+// name and, once established, its DirectoryAnchor for recovery or retry.
+MutationResult createPrivateFixedChildDirectory(
     const DirectoryAnchor &parent,
     const QString &component,
     DirectoryAnchor &directory);
