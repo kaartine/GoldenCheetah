@@ -198,7 +198,7 @@ private:
     HANDLE handle_ = INVALID_HANDLE_VALUE;
 };
 
-bool windowsDirectoryHasOwnerOnlyAcl(const QString &path)
+bool currentWindowsTestUserSid(QByteArray &storage, PSID &sid)
 {
     HANDLE rawToken = nullptr;
     if (!::OpenProcessToken(
@@ -213,15 +213,62 @@ bool windowsDirectoryHasOwnerOnlyAcl(const QString &path)
         || required == 0) {
         return false;
     }
-    QByteArray userStorage(int(required), '\0');
+    storage.resize(int(required));
     if (!::GetTokenInformation(
-            token.get(), TokenUser, userStorage.data(),
+            token.get(), TokenUser, storage.data(),
             required, &required)) {
         return false;
     }
     auto *user = reinterpret_cast<TOKEN_USER *>(
-        userStorage.data());
+        storage.data());
     if (!::IsValidSid(user->User.Sid)) return false;
+    sid = user->User.Sid;
+    return true;
+}
+
+bool createCurrentUserOwnedDirectoryWithoutWriteOwner(
+    const QString &path)
+{
+    QByteArray userStorage;
+    PSID userSid = nullptr;
+    if (!currentWindowsTestUserSid(userStorage, userSid)) return false;
+
+    const DWORD aclSize = DWORD(
+        sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE)
+        - sizeof(DWORD) + ::GetLengthSid(userSid));
+    QByteArray aclStorage(int(aclSize), '\0');
+    auto *acl = reinterpret_cast<PACL>(aclStorage.data());
+    SECURITY_DESCRIPTOR descriptor {};
+    if (!::InitializeAcl(acl, aclSize, ACL_REVISION)
+        || !::AddAccessAllowedAceEx(
+            acl, ACL_REVISION,
+            CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE,
+            FILE_ALL_ACCESS & ~WRITE_OWNER, userSid)
+        || !::InitializeSecurityDescriptor(
+            &descriptor, SECURITY_DESCRIPTOR_REVISION)
+        || !::SetSecurityDescriptorOwner(
+            &descriptor, userSid, FALSE)
+        || !::SetSecurityDescriptorDacl(
+            &descriptor, TRUE, acl, FALSE)
+        || !::SetSecurityDescriptorControl(
+            &descriptor, SE_DACL_PROTECTED,
+            SE_DACL_PROTECTED)) {
+        return false;
+    }
+    SECURITY_ATTRIBUTES attributes {};
+    attributes.nLength = sizeof(attributes);
+    attributes.lpSecurityDescriptor = &descriptor;
+    const QString native = QDir::toNativeSeparators(path);
+    return ::CreateDirectoryW(
+        reinterpret_cast<LPCWSTR>(native.utf16()),
+        &attributes);
+}
+
+bool windowsDirectoryHasOwnerOnlyAcl(const QString &path)
+{
+    QByteArray userStorage;
+    PSID userSid = nullptr;
+    if (!currentWindowsTestUserSid(userStorage, userSid)) return false;
 
     const QString native = QDir::toNativeSeparators(path);
     WindowsTestHandle directory(::CreateFileW(
@@ -253,7 +300,7 @@ bool windowsDirectoryHasOwnerOnlyAcl(const QString &path)
     SECURITY_DESCRIPTOR_CONTROL control = 0;
     DWORD revision = 0;
     bool privateSecurity = owner
-        && ::EqualSid(owner, user->User.Sid)
+        && ::EqualSid(owner, userSid)
         && acl
         && acl->AceCount == 1
         && ::GetSecurityDescriptorControl(
@@ -276,7 +323,7 @@ bool windowsDirectoryHasOwnerOnlyAcl(const QString &path)
                     == (OBJECT_INHERIT_ACE
                         | CONTAINER_INHERIT_ACE)
                 && ::IsValidSid(&ace->SidStart)
-                && ::EqualSid(&ace->SidStart, user->User.Sid)
+                && ::EqualSid(&ace->SidStart, userSid)
                 && (ace->Mask & FILE_ALL_ACCESS)
                     == FILE_ALL_ACCESS;
         }
@@ -542,6 +589,7 @@ private slots:
     void removeRejectsPinnedParentPathReplacement();
     void removeRejectsFinalEntryReplacement();
     void hardensPrivateDirectory();
+    void hardensCurrentUserOwnedDirectoryWithoutWriteOwner();
     void hardensPrivateDirectoryAcls_data();
     void hardensPrivateDirectoryAcls();
     void createsPrivateChildDirectory();
@@ -2373,6 +2421,24 @@ void TestAnchoredFilesystem::hardensPrivateDirectory()
     QVERIFY(extendedAclIsAbsent(path));
 #endif
 #elif defined(Q_OS_WIN)
+    QVERIFY(windowsDirectoryHasOwnerOnlyAcl(path));
+#endif
+}
+
+void TestAnchoredFilesystem::
+    hardensCurrentUserOwnedDirectoryWithoutWriteOwner()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Windows ownership semantics are platform-specific");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString path = root.filePath(QStringLiteral("private"));
+    QVERIFY(createCurrentUserOwnedDirectoryWithoutWriteOwner(path));
+    DirectoryAnchor directory = openDirectory(path);
+    QString error;
+
+    QVERIFY2(hardenPrivateDirectory(directory, error), qPrintable(error));
     QVERIFY(windowsDirectoryHasOwnerOnlyAcl(path));
 #endif
 }

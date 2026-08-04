@@ -797,6 +797,31 @@ QString windowsError(const QString &operation, DWORD nativeError)
         .arg(operation).arg(nativeError);
 }
 
+bool windowsDirectoryHandleOwnerMatches(
+    HANDLE handle, PSID expectedOwner, bool &matches, QString &error)
+{
+    matches = false;
+    PSID owner = nullptr;
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    const DWORD securityResult = ::GetSecurityInfo(
+        handle, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION,
+        &owner, nullptr, nullptr, nullptr, &descriptor);
+    if (securityResult != ERROR_SUCCESS) {
+        if (descriptor) ::LocalFree(descriptor);
+        error = windowsError(
+            QStringLiteral(
+                "Cannot inspect an anchored Windows directory owner"),
+            securityResult);
+        return false;
+    }
+    matches = owner && expectedOwner
+        && ::IsValidSid(owner)
+        && ::IsValidSid(expectedOwner)
+        && ::EqualSid(owner, expectedOwner);
+    if (descriptor) ::LocalFree(descriptor);
+    return true;
+}
+
 bool captureWindowsStamp(
     HANDLE handle, WindowsStamp &stamp, bool directory, QString &error)
 {
@@ -2903,10 +2928,18 @@ bool hardenPrivateDirectory(
             "Cannot prepare private Windows directory security");
         return false;
     }
+    bool ownerMatches = false;
+    if (!windowsDirectoryHandleOwnerMatches(
+            bridge.get(), privateSecurity.ownerSid(),
+            ownerMatches, error)) {
+        return false;
+    }
+    DWORD mutationAccess = FILE_READ_ATTRIBUTES | READ_CONTROL
+        | WRITE_DAC | SYNCHRONIZE;
+    if (!ownerMatches) mutationAccess |= WRITE_OWNER;
     WindowsHandle mutation(::CreateFileW(
         reinterpret_cast<LPCWSTR>(nativePath.utf16()),
-        FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC | WRITE_OWNER
-            | SYNCHRONIZE,
+        mutationAccess,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
         nullptr,
         OPEN_EXISTING,
@@ -2931,11 +2964,17 @@ bool hardenPrivateDirectory(
         }
         return false;
     }
+    SECURITY_INFORMATION securityInformation =
+        DACL_SECURITY_INFORMATION
+        | PROTECTED_DACL_SECURITY_INFORMATION;
+    PSID owner = nullptr;
+    if (!ownerMatches) {
+        securityInformation |= OWNER_SECURITY_INFORMATION;
+        owner = privateSecurity.ownerSid();
+    }
     const DWORD securityResult = ::SetSecurityInfo(
         mutation.get(), SE_FILE_OBJECT,
-        OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION
-            | PROTECTED_DACL_SECURITY_INFORMATION,
-        privateSecurity.ownerSid(), nullptr,
+        securityInformation, owner, nullptr,
         privateSecurity.acl(), nullptr);
     if (securityResult != ERROR_SUCCESS
         || !windowsDirectoryHandleHasPrivateSecurity(
