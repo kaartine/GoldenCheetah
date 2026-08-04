@@ -3102,6 +3102,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Code: `src/Core/RideCacheRemoval.cpp`,
   `src/Core/LinkedActivitySaveJournal.cpp`,
   `src/Core/LinkedActivityRemovalJournal.cpp`,
+  `src/Planning/PlanReplacementJournal.cpp`,
   `src/FileIO/AnchoredFileSystem.cpp`, and `src/FileIO/AtomicFileWriter.h`
 - Impact: Unsafe names, final symlinks, and planned-backup symlinks are rejected,
   snapshots are hashed, and cooperative writers share path locks. A separate
@@ -3170,36 +3171,50 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   hooks, before every source and prior-backup copy, and before manifest
   publication. Substitutions injected at those deterministic validation hooks
   are rejected without writing the next transaction file into the substitute.
+
+  Linked-removal preparation and recovery now anchor the athlete root, create or
+  open `.gc-transactions` and `linked-removal` as fixed private children, and
+  create each UUID journal with the private-child primitive. Recovery performs
+  bounded, repeated namespace enumeration before mutation and hands manifest,
+  peer, temporary-file, and commit-marker identities through validation and
+  cleanup. Its transient manifest-existence reference is released before
+  Windows exchanges the journal observation handle for a delete handle.
+  Reapplying an already exact Windows private ACL is observational, preserving
+  the pinned child generation instead of changing its `ChangeTime`.
+
+  Plan-replacement preparation uses the same anchored fixed-child bootstrap and
+  private UUID-journal creation. This gives directories an explicit current-user
+  owner even under an elevated Windows token. Its standalone tests now link the
+  anchored implementation, and native CI builds and runs the plan-replacement
+  and plan-bundle suites on both Windows and macOS.
 - Verification: Every deterministic regression failed for its intended unsafe
-  behavior before its fix. On the current Linux change, the anchored primitive
-  suite passes 68 cases with 9 Windows-only skips under strict
-  ASan/UBSan/LSan and ThreadSanitizer. The atomic and linked-save suite passes
-  all 308 cases under both sanitizer configurations, including namespace,
-  source/backup-copy, post-check, and private-staging crash recovery. The
-  focused linked-save cleanup suite passes 4 cases under strict sanitizers.
-  The dependent RideCache removal suite passes all 372 cases under ASan/UBSan
-  (LSan disabled for its documented Qt teardown allocation). Hosted run
-  `30864608578` passes the macOS and Windows durable/anchored suites. Final-head
-  run `30866014958` passes the macOS and Windows native activity transaction
-  suites, and run `30866014962` passes the complete application build.
-- Residual: Initial creation of `.gc-transactions` and its fixed child
-  namespaces still starts with pathname-based bootstrap before the first anchor.
-  Linked-removal journal instances do not yet use the private-child primitive.
-  The private-directory API explicitly trusts processes running as the same OS
-  identity and privileged administrators; such a process can still exchange a
-  name after a revalidation and before a later pathname-based copy or write.
-  Replace-existing publication, generic staged-set rollback, activity
-  conversion/rename, split archival, plan replacement, and lower-risk backup
-  cleanup retain related windows. POSIX exposes no portable
-  identity-conditional `rmdir`; private random quarantine, repeated identity
-  checks, anchored post-checks, and fail-closed recovery reduce but cannot
-  eliminate its final check-to-syscall interval. A reported verified recovery
-  path is also point-in-time evidence, not a permanent claim after handles are
-  released. These residuals keep this item `IN_PROGRESS`.
-- Next test and fix: Move linked-removal journal creation onto the private-child
-  primitive and anchor namespace bootstrap from the athlete root. Then apply the
-  observed-generation contract to generic replace-existing publication and
-  staged rollback.
+  behavior before its fix. On Linux, RideCache passes 390 cases with one skip,
+  PlanReplacement 124, PlanBundleImport 8, and linked-save cleanup 4 under both
+  ASan/UBSan and ThreadSanitizer; the anchored suite passes 83 cases with 13
+  platform skips under both configurations. The release application also builds,
+  links, and answers `--version` in the constrained remote Docker environment.
+  Final-head hosted run `30956053366` passes both native jobs. Windows reports
+  376/0/15 for RideCache, 85/0/22 for AnchoredFilesystem, 10/0/0 for linked-save
+  cleanup, 121/0/3 for PlanReplacement, and 8/0/0 for PlanBundleImport. macOS
+  reports 390/0/1, 81/0/15, 4/0/0, 124/0/0, and 8/0/0 respectively, plus the
+  307/0/1 atomic-activity suite.
+- Residual: Linked-save namespace readiness and recovery, and plan-replacement
+  readiness, recovery enumeration, control-file I/O, and cleanup, still use
+  pathname-based `QDir`/`QFileInfo` operations rather than one retained namespace
+  generation. The private-directory API explicitly trusts processes running as
+  the same OS identity and privileged administrators; such a process can still
+  exchange a name after revalidation and before a later pathname-based copy or
+  write. Replace-existing publication, generic staged-set rollback, activity
+  conversion/rename, split archival, and lower-risk backup cleanup retain related
+  windows. POSIX exposes no portable identity-conditional `rmdir`; private random
+  quarantine, repeated identity checks, anchored post-checks, and fail-closed
+  recovery reduce but cannot eliminate its final check-to-syscall interval. A
+  reported verified recovery path is also point-in-time evidence, not a permanent
+  claim after handles are released. These residuals keep this item `IN_PROGRESS`.
+- Next test and fix: Anchor linked-save and plan-replacement namespace readiness
+  and recovery, then retain plan journal entries through identity-bound control
+  I/O and cleanup. After that, apply the observed-generation contract to generic
+  replace-existing publication and staged rollback.
 
 ### GUI-007: Modal activity workflows retained dangling RideItem pointers
 
