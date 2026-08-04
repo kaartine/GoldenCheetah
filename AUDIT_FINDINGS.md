@@ -5652,9 +5652,13 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Low
 
+As of 2026-08-04, open Low-severity findings are deferred and excluded from
+the active remediation goal. They remain documented for later prioritization;
+`DEFERRED` does not mean fixed or accepted as harmless.
+
 ### PERF-010: A valid zero activity CRC remains an unknown sentinel
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Core/RideItem.cpp:538`
 - Impact: ISO-3309 CRC value zero is valid, but `RideItem` treats every stored
   zero as unknown. An unchanged activity with such a checksum is conservatively
@@ -5666,7 +5670,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### PERF-009: OpenData capture can monopolize the GUI thread
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Cloud/OpenData.cpp`, `src/Core/RideDB.y`, and
   `src/Cloud/OpenDataSummaryStatistics.cpp`
 - Impact: The thread-safety fix for `THREAD-015` deliberately captures the
@@ -5691,7 +5695,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### PERF-012: Linked-removal peer staging duplicates the serialized activity
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Core/LinkedActivityRemovalJournal.cpp`,
   `src/FileIO/JsonRideFile.y`, and `src/FileIO/AtomicFileWriter.h`
 - Impact: JSON save already materializes the complete survivor payload, and the
@@ -5716,7 +5720,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### TEST-001: Strava disconnect UI lifetime coverage is source-only
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Gui/AthletePages.cpp` and
   `unittests/Cloud/stravaOAuthPolicy/testStravaOAuthPolicy.cpp`
 - Impact: The implementation guards the page and progress dialog lifetimes,
@@ -5734,7 +5738,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### TEST-002: Source-contract tests skip in out-of-source builds
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `unittests/Core/signalSafety/testPatternDetection.cpp`,
   `unittests/Core/signalSafety/testTreeSafety.cpp`, and their source-checking
   scripts
@@ -5753,7 +5757,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### TEST-003: Compressed OpenData reader suffixes lack end-to-end coverage
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Cloud/OpenData.cpp`,
   `src/Cloud/OpenDataCaptureUtils.cpp`, and
   `src/FileIO/CompressedActivityFile.cpp`
@@ -5773,7 +5777,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### TEST-004: Concurrent credential enrollment coverage is timing-sensitive
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Core/CredentialSettings.cpp:1608-1661`,
   `src/Core/CredentialSettings.cpp:4715-4805`, and
   `unittests/Core/credentialSettings/testCredentialSettings.cpp:16963-17341`
@@ -5796,7 +5800,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### TEST-005: Activity deletion caller workflows lack widget-level coverage
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Gui/MainWindow.cpp`, `src/Charts/CalendarWindow.cpp`,
   `src/Gui/BatchProcessingDialog.cpp`, `src/Gui/PlanWizards.cpp`,
   `src/Gui/SplitActivityWizard.cpp`, and `src/Planning/PlanBundle.cpp`
@@ -5819,7 +5823,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### TEST-006: Linked-deletion tests stub production metadata persistence
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `unittests/Core/rideCacheRemoval/RideCacheRemovalTestStubs.cpp`,
   `unittests/Core/rideCacheRemoval/testRideCacheRemoval.cpp`,
   `src/Core/RideItem.cpp`, and `src/Gui/SaveDialogs.cpp`
@@ -5838,7 +5842,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### TEST-007: Synchronous model-owner destruction leaves Qt removal bookkeeping
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `unittests/Core/rideCacheRemoval/testRideCacheRemoval.cpp`,
   `unittests/Core/rideCacheRemoval/RideCacheRemovalTestStubs.cpp`, and
   `src/Core/RideCacheRemoval.cpp`
@@ -5897,7 +5901,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### BUILD-008: Qt 6.8.3 reports impossible QVariant inline-storage overflows
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Charts/GoldenCheetah.cpp:969`,
   `src/Charts/GoldenCheetah.cpp:1166`,
   `src/Gui/Perspective.cpp:1642`, and the Qt 6.8.3 build image
@@ -5919,7 +5923,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### BUILD-009: Release builds have no project-warning gate
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: release qmake configuration and CI
 - Impact: The clean MEM-019 release build succeeds with 160 warnings from
   project, generated, vendored, and toolchain code. Genuine findings
@@ -5992,7 +5996,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DEV-007: ANT FE-C spindown result aliases the zero offset
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/ANT/ANT.h`, `src/ANT/ANTlocalController.cpp`,
   `src/Train/TrainSidebar.cpp`
 - Impact: Successful ANT+ FE-C spindown calibration displays the zero-offset
@@ -6007,7 +6011,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### THREAD-005: Cloud SSL callbacks read a GUI parent in worker threads
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Cloud/Strava.cpp`, `src/Cloud/Nolio.cpp`, and other provider
   `onSslErrors` implementations; `src/Cloud/CloudService.cpp`
 - Impact: The base SSL helper now creates warnings on the GUI thread, but each
@@ -6020,7 +6024,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### THREAD-006: Nested start listeners can reorder cloud lifecycle signals
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Cloud/CloudService.cpp` (`CloudServiceAutoDownload::startDownload`)
 - Impact: The worker starts before `autoDownloadStart` finishes notifying all
   direct listeners. If an early listener runs a nested event loop, a fast worker
@@ -6034,7 +6038,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### CLOUD-008: Strava API host migration is still duplicated in call sites
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Cloud/Strava.cpp` and
   `src/Train/StravaRoutesDownload.cpp`
 - Impact: Strava announced that its API base URL is changing from
