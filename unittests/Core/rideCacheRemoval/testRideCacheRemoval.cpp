@@ -608,6 +608,8 @@ private slots:
     void concurrentLinkedRemovalJournalsAreSerialized();
     void activeLinkedSaveAndRemovalShareAthleteLease();
     void abandonedLinkedRemovalJournalBlocksNextTransaction();
+    void linkedRemovalBootstrapRejectsTransactionParentSubstitute();
+    void linkedRemovalCreationRejectsJournalSubstituteBeforeAnchor();
     void recoveryPathsRejectReplacedJournalDirectory();
     void recoveryPathsRejectCandidateReplacedAfterCollection();
     void recoveryPathsRejectCandidateReplacedAfterFinalJournalCheck();
@@ -3418,6 +3420,116 @@ abandonedLinkedRemovalJournalBlocksNextTransaction()
         LinkedActivityRemoval::Journal::prepare(specification, error);
     QVERIFY2(next, qPrintable(error));
     QVERIFY2(next->cleanupAfterRollback(error), qPrintable(error));
+}
+
+void TestRideCacheRemoval::
+linkedRemovalBootstrapRejectsTransactionParentSubstitute()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    writeFixture(sourcePath, QByteArray("source"));
+
+    const QString transactionsPath = QDir(fixture.temporary.path()).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString displacedPath =
+        transactionsPath + QStringLiteral(".displaced");
+    const QString sentinelPath = QDir(transactionsPath).filePath(
+        QStringLiteral("sentinel"));
+    const QByteArray sentinelContents("substitute");
+    bool actionReached = false;
+    bool parentReplaced = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral(
+            "linked-removal-transactions-directory-ready"),
+        [&] {
+            actionReached = true;
+            if (!QDir().rename(transactionsPath, displacedPath)) return;
+            if (!QDir().mkpath(transactionsPath)) return;
+            writeFixture(sentinelPath, sentinelContents);
+            parentReplaced = true;
+        });
+
+    QString error;
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+
+    QVERIFY(actionReached);
+    if (!parentReplaced) {
+#ifdef Q_OS_WIN
+        QSKIP("Open Windows directory handles prevent this bootstrap race");
+#else
+        QFAIL("The transaction parent could not be replaced");
+#endif
+    }
+    QVERIFY2(
+        !journal,
+        "Linked-removal preparation accepted a substituted transaction parent");
+    QCOMPARE(readBytes(sentinelPath), sentinelContents);
+    QVERIFY(!QFileInfo::exists(
+        QDir(transactionsPath).filePath(
+            QStringLiteral("linked-removal"))));
+}
+
+void TestRideCacheRemoval::
+linkedRemovalCreationRejectsJournalSubstituteBeforeAnchor()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    writeFixture(sourcePath, QByteArray("source"));
+
+    const QString namespacePath = QDir(fixture.temporary.path()).filePath(
+        QStringLiteral(".gc-transactions/linked-removal"));
+    QString journalPath;
+    QString displacedPath;
+    QString sentinelPath;
+    const QByteArray sentinelContents("substitute");
+    bool actionReached = false;
+    bool journalReplaced = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("linked-removal-journal-path-created"),
+        [&] {
+            actionReached = true;
+            const QStringList journals = QDir(namespacePath).entryList(
+                QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden,
+                QDir::Name);
+            if (journals.size() != 1) return;
+            journalPath = QDir(namespacePath).filePath(journals.constFirst());
+            displacedPath = journalPath + QStringLiteral(".displaced");
+            if (!QDir().rename(journalPath, displacedPath)) return;
+            if (!QDir().mkpath(journalPath)) return;
+            sentinelPath = QDir(journalPath).filePath(
+                QStringLiteral("sentinel"));
+            writeFixture(sentinelPath, sentinelContents);
+            journalReplaced = true;
+        });
+
+    QString error;
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+
+    QVERIFY(actionReached);
+    if (!journalReplaced) {
+#ifdef Q_OS_WIN
+        QSKIP("Open Windows directory handles prevent this journal race");
+#else
+        QFAIL("The new journal directory could not be replaced");
+#endif
+    }
+    QVERIFY2(
+        !journal,
+        "Linked-removal preparation accepted a substituted journal directory");
+    QCOMPARE(readBytes(sentinelPath), sentinelContents);
+    QVERIFY(!QFileInfo::exists(
+        QDir(journalPath).filePath(QStringLiteral("manifest.json"))));
+    QVERIFY(QFileInfo(displacedPath).isDir());
 }
 
 void TestRideCacheRemoval::

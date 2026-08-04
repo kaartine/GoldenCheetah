@@ -412,6 +412,10 @@ bool ensureTransactionNamespace(
     const QString transactions = QDir(root).filePath(
         QStringLiteral(".gc-transactions"));
     if (!ensurePrivateDirectory(transactions, error)) return false;
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    rideCacheRemovalTransitionReached(
+        "linked-removal-transactions-directory-ready");
+#endif
 
     namespacePath = QDir(transactions).filePath(
         QStringLiteral("linked-removal"));
@@ -3126,6 +3130,10 @@ std::shared_ptr<Journal> Journal::prepare(
     }
 
     if (!ensurePrivateDirectory(journalPath, error)) return {};
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    rideCacheRemovalTransitionReached(
+        "linked-removal-journal-path-created");
+#endif
     if (!openAnchoredJournalDirectory(
             namespacePath,
             id,
