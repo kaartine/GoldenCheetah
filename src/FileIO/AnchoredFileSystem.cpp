@@ -924,13 +924,39 @@ bool windowsHandleSupportsPersistentAcls(HANDLE handle)
         && (fileSystemFlags & FILE_PERSISTENT_ACLS);
 }
 
-bool windowsDirectoryHandleHasPrivateSecurity(HANDLE handle)
+QString windowsError(const QString &operation, DWORD nativeError);
+
+bool inspectWindowsDirectoryPrivateSecurity(
+    HANDLE handle,
+    bool &privateSecurity,
+    QString &error)
 {
-    if (!windowsHandleSupportsPersistentAcls(handle)) return false;
+    error.clear();
+    privateSecurity = false;
+    DWORD fileSystemFlags = 0;
+    if (!handle || handle == INVALID_HANDLE_VALUE) {
+        error = QStringLiteral(
+            "The anchored Windows directory handle is unavailable");
+        return false;
+    }
+    if (!::GetVolumeInformationByHandleW(
+            handle, nullptr, 0, nullptr, nullptr,
+            &fileSystemFlags, nullptr, 0)) {
+        error = windowsError(
+            QStringLiteral(
+                "Cannot inspect anchored Windows access-control support"),
+            ::GetLastError());
+        return false;
+    }
+    if (!(fileSystemFlags & FILE_PERSISTENT_ACLS)) return true;
 
     QByteArray userStorage;
     PSID userSid = nullptr;
-    if (!currentWindowsUserSid(userStorage, userSid)) return false;
+    if (!currentWindowsUserSid(userStorage, userSid)) {
+        error = QStringLiteral(
+            "Cannot resolve the current Windows directory owner");
+        return false;
+    }
     PSID owner = nullptr;
     PACL acl = nullptr;
     PSECURITY_DESCRIPTOR descriptor = nullptr;
@@ -938,41 +964,77 @@ bool windowsDirectoryHandleHasPrivateSecurity(HANDLE handle)
         handle, SE_FILE_OBJECT,
         OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
         &owner, nullptr, &acl, nullptr, &descriptor);
-    if (securityResult != ERROR_SUCCESS) return false;
+    if (securityResult != ERROR_SUCCESS) {
+        if (descriptor) ::LocalFree(descriptor);
+        error = windowsError(
+            QStringLiteral(
+                "Cannot inspect anchored Windows directory security"),
+            securityResult);
+        return false;
+    }
+
+    if (!descriptor || !owner || !::IsValidSid(owner)
+        || (acl && !::IsValidAcl(acl))) {
+        if (descriptor) ::LocalFree(descriptor);
+        error = QStringLiteral(
+            "Windows returned an invalid directory security descriptor");
+        return false;
+    }
+    if (!::EqualSid(owner, userSid)
+        || !acl || acl->AceCount != 1) {
+        if (descriptor) ::LocalFree(descriptor);
+        return true;
+    }
 
     SECURITY_DESCRIPTOR_CONTROL control = 0;
     DWORD revision = 0;
-    bool privateSecurity = owner
-        && ::EqualSid(owner, userSid)
-        && acl
-        && acl->AceCount == 1
-        && ::GetSecurityDescriptorControl(
-            descriptor, &control, &revision)
-        && (control & SE_DACL_PROTECTED);
-    if (privateSecurity) {
-        void *rawAce = nullptr;
-        if (!::GetAce(acl, 0, &rawAce)) {
-            privateSecurity = false;
-        } else {
-            auto *header = static_cast<ACE_HEADER *>(rawAce);
-            auto *ace = static_cast<ACCESS_ALLOWED_ACE *>(rawAce);
-            constexpr BYTE inheritanceFlags =
-                OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
-                | INHERITED_ACE | INHERIT_ONLY_ACE
-                | NO_PROPAGATE_INHERIT_ACE;
-            privateSecurity = header->AceType
-                    == ACCESS_ALLOWED_ACE_TYPE
-                && (header->AceFlags & inheritanceFlags)
-                    == (OBJECT_INHERIT_ACE
-                        | CONTAINER_INHERIT_ACE)
-                && ::IsValidSid(&ace->SidStart)
-                && ::EqualSid(&ace->SidStart, userSid)
-                && (ace->Mask & FILE_ALL_ACCESS)
-                    == FILE_ALL_ACCESS;
-        }
+    if (!::GetSecurityDescriptorControl(
+            descriptor, &control, &revision)) {
+        const DWORD nativeError = ::GetLastError();
+        ::LocalFree(descriptor);
+        error = windowsError(
+            QStringLiteral(
+                "Cannot inspect Windows security descriptor controls"),
+            nativeError);
+        return false;
     }
-    if (descriptor) ::LocalFree(descriptor);
-    return privateSecurity;
+    if (!(control & SE_DACL_PROTECTED)) {
+        ::LocalFree(descriptor);
+        return true;
+    }
+
+    void *rawAce = nullptr;
+    if (!::GetAce(acl, 0, &rawAce)) {
+        const DWORD nativeError = ::GetLastError();
+        ::LocalFree(descriptor);
+        error = windowsError(
+            QStringLiteral("Cannot inspect a Windows directory access rule"),
+            nativeError);
+        return false;
+    }
+    auto *header = static_cast<ACE_HEADER *>(rawAce);
+    auto *ace = static_cast<ACCESS_ALLOWED_ACE *>(rawAce);
+    constexpr BYTE inheritanceFlags =
+        OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
+        | INHERITED_ACE | INHERIT_ONLY_ACE
+        | NO_PROPAGATE_INHERIT_ACE;
+    privateSecurity = header->AceType == ACCESS_ALLOWED_ACE_TYPE
+        && (header->AceFlags & inheritanceFlags)
+            == (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)
+        && ::IsValidSid(&ace->SidStart)
+        && ::EqualSid(&ace->SidStart, userSid)
+        && (ace->Mask & FILE_ALL_ACCESS) == FILE_ALL_ACCESS;
+    ::LocalFree(descriptor);
+    return true;
+}
+
+bool windowsDirectoryHandleHasPrivateSecurity(HANDLE handle)
+{
+    bool privateSecurity = false;
+    QString ignored;
+    return inspectWindowsDirectoryPrivateSecurity(
+               handle, privateSecurity, ignored)
+        && privateSecurity;
 }
 
 struct WindowsStamp
@@ -3967,79 +4029,119 @@ bool hardenPrivateDirectory(
         return false;
     }
 
-    WindowsPrivateDirectorySecurity privateSecurity;
-    if (!privateSecurity.isValid()) {
-        error = QStringLiteral(
-            "Cannot prepare private Windows directory security");
+    // Reapplying an inheritable DACL can update existing children's ChangeTime.
+    // Keep repeated hardening observational when security is already exact.
+    bool wasPrivate = false;
+    if (!inspectWindowsDirectoryPrivateSecurity(
+            bridge.get(), wasPrivate, error)) {
         return false;
     }
-    bool ownerMatches = false;
-    if (!windowsDirectoryHandleOwnerMatches(
-            bridge.get(), privateSecurity.ownerSid(),
-            ownerMatches, error)
-        || !ownerMatches) {
-        if (error.isEmpty()) {
-            error = QStringLiteral(
-                "The anchored directory is not owned by the current user");
-        }
-        return false;
-    }
-    DWORD mutationAccess = FILE_READ_ATTRIBUTES | READ_CONTROL
-        | WRITE_DAC | SYNCHRONIZE;
-    WindowsHandle mutation(::CreateFileW(
-        reinterpret_cast<LPCWSTR>(nativePath.utf16()),
-        mutationAccess,
-        FILE_SHARE_READ | FILE_SHARE_WRITE,
-        nullptr,
-        OPEN_EXISTING,
-        FILE_FLAG_BACKUP_SEMANTICS
-            | FILE_FLAG_OPEN_REPARSE_POINT
-            | FILE_FLAG_WRITE_THROUGH,
-        nullptr));
-    if (!mutation.isValid()) {
-        error = windowsError(
-            QStringLiteral(
-                "Cannot open an anchored directory for hardening"),
-            ::GetLastError());
-        return false;
-    }
-    WindowsStamp mutationStamp;
+    WindowsStamp inspectedSecurityStamp;
     if (!captureWindowsStamp(
-            mutation.get(), mutationStamp, true, error)
-        || !sameWindowsObject(mutationStamp, bridgeStamp)) {
+            bridge.get(), inspectedSecurityStamp, true, error)
+        || !sameWindowsObject(inspectedSecurityStamp, bridgeStamp)
+        || (wasPrivate
+            && !sameWindowsIdentityAndData(
+                inspectedSecurityStamp, bridgeStamp))) {
         if (error.isEmpty()) {
             error = QStringLiteral(
-                "The private directory identity changed while opening it for hardening");
+                "The private directory changed while its security was inspected");
         }
         return false;
     }
-    SECURITY_INFORMATION securityInformation =
-        DACL_SECURITY_INFORMATION
-        | PROTECTED_DACL_SECURITY_INFORMATION;
-    const DWORD securityResult = ::SetSecurityInfo(
-        mutation.get(), SE_FILE_OBJECT,
-        securityInformation, nullptr, nullptr,
-        privateSecurity.acl(), nullptr);
-    if (securityResult != ERROR_SUCCESS
-        || !windowsDirectoryHandleHasPrivateSecurity(
-            mutation.get())) {
-        error = securityResult == ERROR_SUCCESS
-            ? QStringLiteral(
-                  "The anchored Windows directory is not private")
-            : windowsError(
-                  QStringLiteral(
-                      "Cannot harden a Windows directory access list"),
-                  securityResult);
-        return false;
+
+    if (!wasPrivate) {
+        WindowsPrivateDirectorySecurity privateSecurity;
+        if (!privateSecurity.isValid()) {
+            error = QStringLiteral(
+                "Cannot prepare private Windows directory security");
+            return false;
+        }
+        bool ownerMatches = false;
+        if (!windowsDirectoryHandleOwnerMatches(
+                bridge.get(), privateSecurity.ownerSid(),
+                ownerMatches, error)
+            || !ownerMatches) {
+            if (error.isEmpty()) {
+                error = QStringLiteral(
+                    "The anchored directory is not owned by the current user");
+            }
+            return false;
+        }
+        const DWORD mutationAccess = FILE_READ_ATTRIBUTES | READ_CONTROL
+            | WRITE_DAC | SYNCHRONIZE;
+        WindowsHandle mutation(::CreateFileW(
+            reinterpret_cast<LPCWSTR>(nativePath.utf16()),
+            mutationAccess,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS
+                | FILE_FLAG_OPEN_REPARSE_POINT
+                | FILE_FLAG_WRITE_THROUGH,
+            nullptr));
+        if (!mutation.isValid()) {
+            error = windowsError(
+                QStringLiteral(
+                    "Cannot open an anchored directory for hardening"),
+                ::GetLastError());
+            return false;
+        }
+        WindowsStamp mutationStamp;
+        if (!captureWindowsStamp(
+                mutation.get(), mutationStamp, true, error)
+            || !sameWindowsObject(mutationStamp, bridgeStamp)) {
+            if (error.isEmpty()) {
+                error = QStringLiteral(
+                    "The private directory identity changed while opening it for hardening");
+            }
+            return false;
+        }
+        const SECURITY_INFORMATION securityInformation =
+            DACL_SECURITY_INFORMATION
+            | PROTECTED_DACL_SECURITY_INFORMATION;
+        const DWORD securityResult = ::SetSecurityInfo(
+            mutation.get(), SE_FILE_OBJECT,
+            securityInformation, nullptr, nullptr,
+            privateSecurity.acl(), nullptr);
+        if (securityResult != ERROR_SUCCESS) {
+            error = windowsError(
+                QStringLiteral(
+                    "Cannot harden a Windows directory access list"),
+                securityResult);
+            return false;
+        }
+        bool mutationPrivate = false;
+        if (!inspectWindowsDirectoryPrivateSecurity(
+                mutation.get(), mutationPrivate, error)) {
+            return false;
+        }
+        if (!mutationPrivate) {
+            error = QStringLiteral(
+                "The anchored Windows directory is not private");
+            return false;
+        }
     }
+
+    WindowsStamp beforeFinalSecurity;
+    bool finalPrivate = false;
     WindowsStamp hardened;
     if (!captureWindowsStamp(
-            directory.state_->handles.back().get(),
-            hardened, true, error)
-        || !sameWindowsObject(hardened, mutationStamp)) {
+            bridge.get(), beforeFinalSecurity, true, error)
+        || !sameWindowsObject(beforeFinalSecurity, bridgeStamp)
+        || (wasPrivate
+            && !sameWindowsIdentityAndData(
+                beforeFinalSecurity, inspectedSecurityStamp))
+        || !inspectWindowsDirectoryPrivateSecurity(
+            bridge.get(), finalPrivate, error)
+        || !finalPrivate
+        || !captureWindowsStamp(
+            bridge.get(), hardened, true, error)
+        || !sameWindowsIdentityAndData(
+            hardened, beforeFinalSecurity)) {
         if (error.isEmpty()) {
             error = QStringLiteral(
-                "The private directory identity changed while hardening");
+                "The private directory changed while hardening");
         }
         return false;
     }

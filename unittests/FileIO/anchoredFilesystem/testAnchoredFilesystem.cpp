@@ -741,6 +741,7 @@ private slots:
     void outputDigestMismatchRetainsFile_data();
     void outputDigestMismatchRetainsFile();
     void moveAcceptsWindowsRenameOnlyChange();
+    void repeatedPrivateHardeningPreservesPinnedChild();
 #endif
     void permitsAtomicSiblingReplacementWhileDirectoryAnchored();
     void permitsAtomicReplacementWhilePinned();
@@ -2973,6 +2974,27 @@ void TestAnchoredFilesystem::
     QVERIFY(windowsDirectoryHasOwnerOnlyAcl(path));
 #endif
 }
+
+#ifdef Q_OS_WIN
+void TestAnchoredFilesystem::repeatedPrivateHardeningPreservesPinnedChild()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    DirectoryAnchor directory = openPrivateDirectory(root.path());
+    const EntryRef child = entry(directory, QStringLiteral("manifest.json"));
+    writeFixture(child.displayPath(), QByteArray("immutable manifest"));
+    PinnedFile pinned = pin(child);
+    QString error;
+    bool matches = false;
+
+    QVERIFY2(entryMatches(child, pinned, matches, error), qPrintable(error));
+    QVERIFY(matches);
+    QVERIFY2(hardenPrivateDirectory(directory, error), qPrintable(error));
+    matches = false;
+    QVERIFY2(entryMatches(child, pinned, matches, error), qPrintable(error));
+    QVERIFY(matches);
+}
+#endif
 
 void TestAnchoredFilesystem::hardensPrivateDirectoryAcls_data()
 {
