@@ -5030,6 +5030,12 @@ linkedDeletionCrashAfterPeerSaveRecoversOnRestart()
         "GC_RIDE_CACHE_REMOVAL_CRASH_ROOT";
     static const char ModeEnvironment[] =
         "GC_RIDE_CACHE_REMOVAL_CRASH_MODE";
+#ifdef Q_OS_WIN
+    constexpr int ChildFinishTimeoutMs = 30000;
+#else
+    constexpr int ChildFinishTimeoutMs = 10000;
+#endif
+    constexpr int ChildTerminationTimeoutMs = 5000;
     const QString root = qEnvironmentVariable(
         RootEnvironment);
     const QString mode = qEnvironmentVariable(
@@ -5132,6 +5138,7 @@ linkedDeletionCrashAfterPeerSaveRecoversOnRestart()
                     QString::number(crashOccurrence));
             }
             child.setProcessEnvironment(environment);
+            child.setProcessChannelMode(QProcess::MergedChannels);
             child.start(
                 QCoreApplication::applicationFilePath(),
                 {QStringLiteral(
@@ -5142,11 +5149,26 @@ linkedDeletionCrashAfterPeerSaveRecoversOnRestart()
                 return qMakePair(
                     -1, child.errorString());
             }
-            if (!child.waitForFinished(10000)) {
+            if (!child.waitForFinished(ChildFinishTimeoutMs)) {
                 child.kill();
-                child.waitForFinished();
-                return qMakePair(
-                    -2, QStringLiteral("child timed out"));
+                const bool terminated = child.waitForFinished(
+                    ChildTerminationTimeoutMs);
+                QString diagnostic = QStringLiteral(
+                    "child timed out after %1 ms; mode=%2; phase=%3; "
+                    "row=%4; terminated=%5; process-error=%6")
+                    .arg(ChildFinishTimeoutMs)
+                    .arg(childMode)
+                    .arg(requestedCrashPhase)
+                    .arg(QString::fromLatin1(QTest::currentDataTag()))
+                    .arg(terminated ? QStringLiteral("yes")
+                                    : QStringLiteral("no"))
+                    .arg(child.errorString());
+                const QByteArray output = child.readAll();
+                if (!output.isEmpty()) {
+                    diagnostic.append(QStringLiteral("; output=%1")
+                        .arg(QString::fromUtf8(output)));
+                }
+                return qMakePair(-2, diagnostic);
             }
             return qMakePair(
                 child.exitCode(),
@@ -5155,18 +5177,28 @@ linkedDeletionCrashAfterPeerSaveRecoversOnRestart()
 
     const auto crashed = runChild(
         QStringLiteral("crash"), crashPhase);
-    QCOMPARE(crashed.first, 86);
+    QVERIFY2(
+        crashed.first == 86,
+        qPrintable(QStringLiteral("Expected exit 86, got %1: %2")
+            .arg(crashed.first).arg(crashed.second)));
 
     if (!recoveryCrashPhase.isEmpty()) {
         const auto recoveryCrashed = runChild(
             QStringLiteral("recover"),
             recoveryCrashPhase);
-        QCOMPARE(recoveryCrashed.first, 86);
+        QVERIFY2(
+            recoveryCrashed.first == 86,
+            qPrintable(QStringLiteral("Expected exit 86, got %1: %2")
+                .arg(recoveryCrashed.first)
+                .arg(recoveryCrashed.second)));
     }
 
     const auto recovered = runChild(
         QStringLiteral("recover"), QString());
-    QCOMPARE(recovered.first, 0);
+    QVERIFY2(
+        recovered.first == 0,
+        qPrintable(QStringLiteral("Expected exit 0, got %1: %2")
+            .arg(recovered.first).arg(recovered.second)));
 
     const QByteArray targetAfterRecovery =
         readBytes(
@@ -5181,7 +5213,11 @@ linkedDeletionCrashAfterPeerSaveRecoversOnRestart()
 
     const auto recoveredAgain = runChild(
         QStringLiteral("recover"), QString());
-    QCOMPARE(recoveredAgain.first, 0);
+    QVERIFY2(
+        recoveredAgain.first == 0,
+        qPrintable(QStringLiteral("Expected exit 0, got %1: %2")
+            .arg(recoveredAgain.first)
+            .arg(recoveredAgain.second)));
 
     const QString targetPath =
         QDir(temporary.path()).filePath(
