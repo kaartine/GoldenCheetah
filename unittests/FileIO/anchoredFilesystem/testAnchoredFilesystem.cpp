@@ -321,8 +321,8 @@ bool currentWindowsTestUserSid(QByteArray &storage, PSID &sid)
     return true;
 }
 
-bool createCurrentUserOwnedDirectoryWithoutWriteOwner(
-    const QString &path)
+bool createCurrentUserOwnedDirectory(
+    const QString &path, ACCESS_MASK userAccess)
 {
     QByteArray userStorage;
     PSID userSid = nullptr;
@@ -338,7 +338,7 @@ bool createCurrentUserOwnedDirectoryWithoutWriteOwner(
         || !::AddAccessAllowedAceEx(
             acl, ACL_REVISION,
             CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE,
-            FILE_ALL_ACCESS & ~WRITE_OWNER, userSid)
+            userAccess, userSid)
         || !::InitializeSecurityDescriptor(
             &descriptor, SECURITY_DESCRIPTOR_REVISION)
         || !::SetSecurityDescriptorOwner(
@@ -2918,7 +2918,12 @@ void TestAnchoredFilesystem::hardensPrivateDirectory()
     QTemporaryDir root;
     QVERIFY(root.isValid());
     const QString path = root.filePath(QStringLiteral("private"));
+#ifdef Q_OS_WIN
+    QVERIFY(createCurrentUserOwnedDirectory(path, FILE_ALL_ACCESS));
+    QVERIFY(makeWindowsDirectoryPermissive(path));
+#else
     QVERIFY(QDir().mkdir(path));
+#endif
 #ifdef Q_OS_UNIX
     QVERIFY(QFile::setPermissions(
         path,
@@ -2959,7 +2964,8 @@ void TestAnchoredFilesystem::
     QTemporaryDir root;
     QVERIFY(root.isValid());
     const QString path = root.filePath(QStringLiteral("private"));
-    QVERIFY(createCurrentUserOwnedDirectoryWithoutWriteOwner(path));
+    QVERIFY(createCurrentUserOwnedDirectory(
+        path, FILE_ALL_ACCESS & ~WRITE_OWNER));
     DirectoryAnchor directory = openDirectory(path);
     QString error;
 
@@ -3471,7 +3477,12 @@ privateChildCreationRejectsReplacedParent()
         root.filePath(QStringLiteral("namespace"));
     const QString retainedPath =
         root.filePath(QStringLiteral("namespace.retained"));
+#ifdef Q_OS_WIN
+    QVERIFY(createCurrentUserOwnedDirectory(
+        namespacePath, FILE_ALL_ACCESS));
+#else
     QVERIFY(QDir().mkdir(namespacePath));
+#endif
     QVERIFY(QFile::setPermissions(
         namespacePath,
         QFileDevice::ReadOwner | QFileDevice::WriteOwner
