@@ -3172,17 +3172,16 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   are rejected without writing the next transaction file into the substitute.
 - Verification: Every deterministic regression failed for its intended unsafe
   behavior before its fix. On the current Linux change, the anchored primitive
-  suite passes 68 cases with 8 Windows-only skips under strict
+  suite passes 68 cases with 9 Windows-only skips under strict
   ASan/UBSan/LSan and ThreadSanitizer. The atomic and linked-save suite passes
   all 308 cases under both sanitizer configurations, including namespace,
   source/backup-copy, post-check, and private-staging crash recovery. The
   focused linked-save cleanup suite passes 4 cases under strict sanitizers.
   The dependent RideCache removal suite passes all 372 cases under ASan/UBSan
-  (LSan disabled for its documented Qt teardown allocation). The immediately
-  preceding native
-  integration head passes its macOS and Windows anchored, RideCache, durable
-  filesystem, and general build workflows; this private-child increment still
-  requires its own hosted native run before integration.
+  (LSan disabled for its documented Qt teardown allocation). Hosted run
+  `30864608578` passes the macOS and Windows durable/anchored suites. Final-head
+  run `30866014958` passes the macOS and Windows native activity transaction
+  suites, and run `30866014962` passes the complete application build.
 - Residual: Initial creation of `.gc-transactions` and its fixed child
   namespaces still starts with pathname-based bootstrap before the first anchor.
   Linked-removal journal instances do not yet use the private-child primitive.
