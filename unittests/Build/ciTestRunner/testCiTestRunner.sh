@@ -27,6 +27,8 @@ require_literal './.github/scripts/run-tests.sh' \
   "$repository/.github/workflows/ci.yml"
 require_literal 'Build/ciTestRunner' \
   "$repository/unittests/unittests.pro"
+require_literal 'linux:SUBDIRS += Build/appImagePackaging' \
+  "$repository/unittests/unittests.pro"
 
 make_fixture() {
   local name="$1"

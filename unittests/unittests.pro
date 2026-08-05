@@ -5,8 +5,7 @@ exists(unittests.pri) {
 }
 
 equals(GC_UNITTESTS, active) {
-	SUBDIRS += Build/appImagePackaging \
-			   Build/ciTestRunner \
+	SUBDIRS += Build/ciTestRunner \
 			   Core/athleteMigrationSafety \
 			   Core/credentialSettings \
 			   Core/dataFilterResources \
@@ -110,6 +109,7 @@ equals(GC_UNITTESTS, active) {
 			   Train/trainRuntime \
 			   Train/ftmsTargetReadiness \
 			   Train/bluetoothTelemetryRouter
+	linux:SUBDIRS += Build/appImagePackaging
 	!win32:SUBDIRS += Train/usbXpressSafety
 	CONFIG += ordered
 } else {
