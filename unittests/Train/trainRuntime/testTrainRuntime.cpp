@@ -16,6 +16,15 @@
 #include <QTest>
 #include <QTextStream>
 
+#include <atomic>
+#include <memory>
+
+#ifdef Q_OS_UNIX
+#include <fcntl.h>
+#include <stdlib.h>
+#include <unistd.h>
+#endif
+
 namespace {
 
 QByteArray readAll(const QString &path)
@@ -62,6 +71,49 @@ protected:
         exec();
     }
 };
+
+#ifdef Q_OS_UNIX
+class PseudoTerminal
+{
+public:
+    PseudoTerminal()
+        : masterFd_(::posix_openpt(O_RDWR | O_NOCTTY))
+    {
+        if (masterFd_ < 0 || ::grantpt(masterFd_) != 0
+                || ::unlockpt(masterFd_) != 0) {
+            closeMaster();
+            return;
+        }
+
+        const char *name = ::ptsname(masterFd_);
+        if (name == nullptr) {
+            closeMaster();
+            return;
+        }
+        slavePath_ = QString::fromLocal8Bit(name);
+    }
+
+    ~PseudoTerminal()
+    {
+        closeMaster();
+    }
+
+    bool isValid() const { return masterFd_ >= 0 && !slavePath_.isEmpty(); }
+    QString slavePath() const { return slavePath_; }
+
+private:
+    void closeMaster()
+    {
+        if (masterFd_ >= 0) {
+            ::close(masterFd_);
+            masterFd_ = -1;
+        }
+    }
+
+    int masterFd_;
+    QString slavePath_;
+};
+#endif
 
 }
 
@@ -201,6 +253,68 @@ private slots:
         QVERIFY(!daum.pausedForTest());
         QCOMPARE(daum.stop(), 0);
         QVERIFY(daum.wait(1000));
+    }
+
+    void daumFailedOpenStopJoinAndDestructionReleasesResources()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+
+        Daum daum(nullptr, directory.filePath(QStringLiteral("missing-device")),
+                  QString());
+        daum.start();
+        QVERIFY(daum.wait(10000));
+
+        QCOMPARE(daum.stop(), 0);
+        QVERIFY(daum.wait(1000));
+        QVERIFY(daum.workerResourcesReleasedForTest());
+    }
+
+    void daumPartialStartStopJoinsAndReleasesResources()
+    {
+#ifndef Q_OS_UNIX
+        QSKIP("A pseudo-terminal is required for the partial-start regression");
+#else
+        PseudoTerminal terminal;
+        QVERIFY(terminal.isValid());
+
+        Daum daum(nullptr, terminal.slavePath(), QStringLiteral("0"));
+        std::atomic_bool portOpened(false);
+        QObject observer;
+        connect(&daum, &Daum::workerPortOpenedForTest, &observer,
+                [&portOpened]() { portOpened.store(true); }, Qt::DirectConnection);
+        daum.start();
+        QTRY_VERIFY_WITH_TIMEOUT(portOpened.load(), 5000);
+
+        QCOMPARE(daum.stop(), 0);
+        QVERIFY(daum.wait(15000));
+        QVERIFY(daum.workerResourcesReleasedForTest());
+#endif
+    }
+
+    void daumDestructorJoinsPartialStartWorker()
+    {
+#ifndef Q_OS_UNIX
+        QSKIP("A pseudo-terminal is required for the partial-start regression");
+#else
+        PseudoTerminal terminal;
+        QVERIFY(terminal.isValid());
+
+        std::atomic_bool finished(false);
+        std::atomic_bool portOpened(false);
+        QObject observer;
+        auto daum = std::make_unique<Daum>(
+                nullptr, terminal.slavePath(), QStringLiteral("0"));
+        connect(daum.get(), &Daum::workerPortOpenedForTest, &observer,
+                [&portOpened]() { portOpened.store(true); }, Qt::DirectConnection);
+        connect(daum.get(), &QThread::finished, &observer,
+                [&finished]() { finished.store(true); }, Qt::DirectConnection);
+        daum->start();
+        QTRY_VERIFY_WITH_TIMEOUT(portOpened.load(), 5000);
+
+        daum.reset();
+        QVERIFY(finished.load());
+#endif
     }
 };
 
