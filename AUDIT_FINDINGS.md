@@ -4974,12 +4974,31 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### METRIC-001: Missing/cyclic metric dependencies can loop forever
 
-- Status: OPEN
-- Code: `src/Metrics/RideMetric.cpp:226`,
-  `src/Metrics/RideMetric.cpp:242`, `src/Metrics/RideMetric.cpp:281`
-- Impact: Refresh workers repeatedly requeue an unresolvable parent metric.
-- Test: Missing, self-cycle, multi-node cycle, diamond, and valid graphs.
-- Fix direction: Validate and topologically order the dependency graph.
+- Status: FIXED
+- Code: `src/Metrics/RideMetric.cpp`,
+  `unittests/Metrics/rideMetricDependencyGraph/`, and
+  `unittests/unittests.pro`
+- Impact: Refresh workers repeatedly requeued an unresolvable parent metric;
+  a null metric clone crashed the process, and duplicate requests could publish
+  a null result after transferring ownership twice.
+- Test-first evidence: Production-path fixtures for a missing dependency, a
+  self-cycle, and a multi-node cycle did not terminate within three seconds and
+  had to be killed. The null-clone row terminated with `SIGSEGV`, while the
+  duplicate-request row returned a null metric. Diamond and ordinary acyclic
+  graphs provided ordering and shared-dependency controls.
+- Resolution: Metric computation discovers the reachable dependency graph,
+  propagates missing-dependency invalidity to dependents, and uses Kahn's
+  algorithm for a deterministic topological order. Cycles and their dependents
+  are omitted instead of requeued. Clones are held by `QSharedPointer` before
+  computation, duplicate roots are de-duplicated, and only non-null requested
+  metrics are returned.
+- Verification: The focused suite passes 9/9 on the integrated branch and the
+  same 9/9 under strict ASan/UBSan/LSan and genuine ThreadSanitizer. The
+  sanitizer rows also verify that dependency-only clones and returned roots
+  have deterministic ownership.
+- Residual: Invalid metrics are omitted from the result using the established
+  missing-metric contract; no user-facing diagnostic identifies a malformed
+  third-party or user metric graph yet.
 
 ### METRIC-002: User metrics retain the first athlete Context
 
