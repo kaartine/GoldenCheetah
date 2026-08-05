@@ -5,7 +5,12 @@ DEFINES += GC_ANT_BURST_TEST
 SOURCES = testAntBurstBounds.cpp \
           ../../../src/ANT/ANT.cpp \
           ../../../src/ANT/ANTChannel.cpp \
-          ../../../src/ANT/ANTMessage.cpp
+          ../../../src/ANT/ANTMessage.cpp \
+          ../../../src/Train/RealtimeData.cpp \
+          ../../../src/Train/CalibrationData.cpp
+
+HEADERS = ../../../src/ANT/ANT.h \
+          ../../../src/ANT/ANTChannel.h
 
 INCLUDEPATH += $$PWD/../../../src/ANT \
                $$PWD/../../../src/Train \
@@ -16,11 +21,6 @@ INCLUDEPATH += $$PWD/../../../src/ANT \
                $$PWD/../../../src/Gui \
                $$PWD/../../../src/Core \
                $$PWD/../../../src/Planning
-
-GC_OBJS = RealtimeData \
-          CalibrationData \
-          moc_ANT \
-          moc_ANTChannel
 
 include(../../unittests.pri)
 

@@ -1,6 +1,11 @@
-QT += testlib core
+QT += testlib core gui
 
-SOURCES = testCalendarData.cpp
-GC_OBJS = CalendarData
+SOURCES = testCalendarData.cpp \
+          ../../../src/Gui/CalendarData.cpp
+
+HEADERS = ../../../src/Gui/CalendarData.h
+
+INCLUDEPATH += ../../../src \
+               ../../../src/Gui
 
 include(../../unittests.pri)

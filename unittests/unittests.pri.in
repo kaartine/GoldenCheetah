@@ -6,18 +6,10 @@ GC_UNITTESTS = active
 include(../src/gcconfig.pri)
 
 GC_SRC_DIR = ../../../src
-GC_OBJECTS_DIR = $$GC_SRC_DIR/$(OBJECTS_DIR)
 INCLUDEPATH += $$GC_SRC_DIR
-win32 {
-	PLATFORM_EXT = obj
-} else {
-	PLATFORM_EXT = o
-}
 
 CONFIG += testcase
 CONFIG += no_testcase_installs
-CONFIG += c++11
+CONFIG += c++17
 
-for(obj, GC_OBJS) {
-	LIBS += $${GC_OBJECTS_DIR}/$${obj}.$${PLATFORM_EXT}
-}
+!isEmpty(GC_OBJS):error("GC_OBJS is unsupported; compile or link an explicit production target")
