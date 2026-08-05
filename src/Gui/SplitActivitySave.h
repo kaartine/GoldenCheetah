@@ -12,6 +12,7 @@
 
 #include "AtomicFileWriter.h"
 
+#include <QByteArray>
 #include <QDir>
 #include <QList>
 #include <QString>
@@ -22,11 +23,30 @@
 struct SplitActivityOutput
 {
     QString fileName;
-    std::function<bool(const QString &stagingPath, QString &error)> stage;
+    std::function<bool(QByteArray &contents, QString &error)> stage;
 };
 
 using SplitActivityArchiveFunction = std::function<bool(
     const QString &sourcePath, const QString &backupPath, QString &error)>;
+
+namespace SplitActivityTransaction {
+
+bool reconcileAll(const QString &athleteRoot, QString &error);
+
+} // namespace SplitActivityTransaction
+
+#ifdef GC_SPLIT_ACTIVITY_SAVE_TEST_HOOKS
+void splitActivitySaveDurableTransitionReached(const char *transition);
+bool splitActivitySaveMoveAllowed(
+    const QString &sourcePath, const QString &destinationPath);
+qint64 splitActivitySaveRecoveryByteLimitForTest();
+qint64 splitActivitySaveRecoveryOperationLimitForTest();
+qint64 splitActivitySaveRecoveryDeadlineForTest();
+qint64 splitActivitySaveRecoveryElapsedMillisecondsForTest();
+void splitActivitySaveRecoveryBudgetStarted();
+void splitActivitySaveRecoveryBytesConsumed(qint64 bytes);
+void splitActivitySavePathValidationStep();
+#endif
 
 bool archiveSplitActivitySource(
     const QString &sourcePath,
@@ -44,7 +64,7 @@ bool saveSplitActivityFiles(
     bool keepOriginal,
     QStringList &publishedFileNames,
     QString &error,
-    const AtomicPublishFunction &publish = publishAtomicNew,
+    const AtomicPublishFunction &publish = AtomicPublishFunction(),
     const SplitActivityArchiveFunction &archive =
         SplitActivityArchiveFunction());
 

@@ -22,7 +22,8 @@ SOURCES = testAtomicActivitySave.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCommand.cpp \
           JsonRideFileTestStubs.cpp \
-          ../../../src/Gui/SaveDialogs.cpp
+          ../../../src/Gui/SaveDialogs.cpp \
+          ../../../src/Gui/SplitActivitySave.cpp
 
 HEADERS = ../../../src/Core/RideItem.h \
           ../../../src/Core/LinkedActivitySaveJournal.h \
@@ -30,7 +31,8 @@ HEADERS = ../../../src/Core/RideItem.h \
           ../../../src/FileIO/RideFile.h \
           ../../../src/FileIO/RideFileCommand.h \
           ../../../src/FileIO/JsonRideFile.h \
-          ../../../src/Gui/SaveDialogs.h
+          ../../../src/Gui/SaveDialogs.h \
+          ../../../src/Gui/SplitActivitySave.h
 
 YACCSOURCES = ../../../src/FileIO/JsonRideFile.y
 LEXSOURCES = ../../../src/FileIO/JsonRideFile.l

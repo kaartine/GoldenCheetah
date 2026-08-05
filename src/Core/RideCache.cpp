@@ -24,6 +24,7 @@
 #include "SaveDialogs.h"
 #include "LinkedActivityRemovalJournal.h"
 #include "LinkedActivitySaveJournal.h"
+#include "SplitActivitySave.h"
 #include "PlanBundle.h"
 #include "PlanReplacementJournal.h"
 #include "PlannedActivityFileStager.h"
@@ -198,6 +199,14 @@ RideCache::RideCache(Context *context) : context(context)
         context, SIGNAL(configChanged(qint32)),
         this, SLOT(configChanged(qint32)));
 
+    if (!SplitActivityTransaction::reconcileAll(
+            context->athlete->home->root().absolutePath(),
+            startupRecoveryError_)) {
+        qCritical().noquote()
+            << "Split activity recovery must be completed before loading:"
+            << startupRecoveryError_;
+        return;
+    }
     if (!LinkedActivityRemoval::Journal::reconcileAll(
             context->athlete->home->root().absolutePath(),
             startupRecoveryError_)) {
