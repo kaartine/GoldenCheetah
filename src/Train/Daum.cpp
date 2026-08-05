@@ -38,6 +38,10 @@ Daum::Daum(QObject *parent, QString device, QString profile) : QThread(parent),
     profile_(profile) {
 }
 
+Daum::~Daum() {
+    stop();
+}
+
 int Daum::start() {
     QThread::start();
     return isRunning() ? 0 : 1;
@@ -53,32 +57,34 @@ int Daum::pause() {
     return 0;
 }
 int Daum::stop() {
-    exit(-1);
+    requestInterruption();
+    QThread::exit(-1);
+    if (QThread::currentThread() != this && !wait()) {
+        return 1;
+    }
     return 0;
 }
 
 bool Daum::discover(QString dev) {
-    if (!openPort(dev)) {
+    QSerialPort serial;
+    if (!openPort(serial, dev)) {
         return false;
     }
 
-    QSerialPort &s(*serial_dev_);
     QByteArray data;
     data.append(0x11);
 
-    s.write(data);
-    if (!s.waitForBytesWritten(1000)) {
+    serial.write(data);
+    if (!serial.waitForBytesWritten(1000)) {
         return false;
     }
-    if (!s.waitForReadyRead(1000)) {
+    if (!serial.waitForReadyRead(1000)) {
         return false;
     }
-    data = s.read(2);
-    if ((int)data[0] != 0x11) {
+    data = serial.read(2);
+    if (data.size() != 2 || (int)data[0] != 0x11) {
         return false;
     }
-    data = s.readAll();
-    closePort();
 
     return true;
 }
@@ -110,80 +116,80 @@ double Daum::getHeartRate() const {
     return deviceHeartRate_;
 }
 
-bool Daum::openPort(QString dev) {
-    QMutexLocker locker(&pvars);
-    if (serial_dev_ == nullptr) {
-        serial_dev_ = new QSerialPort();
-    }
-    if (serial_dev_->isOpen()) {
-        serial_dev_->close();
+bool Daum::openPort(QSerialPort &serial, const QString &dev) {
+    if (serial.isOpen()) {
+        serial.close();
     }
 
-    serial_dev_->setPortName(dev);
+    serial.setPortName(dev);
     if (profile_ == "OLD_DAUM") {
-        serial_dev_->setBaudRate(QSerialPort::Baud4800);  // Old cockpits use 4800 Baud
+        serial.setBaudRate(QSerialPort::Baud4800);  // Old cockpits use 4800 Baud
     } else {
-        serial_dev_->setBaudRate(QSerialPort::Baud9600);
+        serial.setBaudRate(QSerialPort::Baud9600);
     }
-    serial_dev_->setStopBits(QSerialPort::OneStop);
-    serial_dev_->setDataBits(QSerialPort::Data8);
-    serial_dev_->setFlowControl(QSerialPort::NoFlowControl);
-    serial_dev_->setParity(QSerialPort::NoParity);
+    serial.setStopBits(QSerialPort::OneStop);
+    serial.setDataBits(QSerialPort::Data8);
+    serial.setFlowControl(QSerialPort::NoFlowControl);
+    serial.setParity(QSerialPort::NoParity);
 
-    if (!serial_dev_->open(QSerialPort::ReadWrite)) {
-       return false;
-    }
-
-    return true;
-}
-
-bool Daum::closePort() {
-    QMutexLocker locker(&pvars);
-    delete serial_dev_;
-    serial_dev_ = nullptr;
-    return true;
+    return serial.open(QSerialPort::ReadWrite);
 }
 
 void Daum::run() {
-    //closePort();
-    if (!openPort(serialDeviceName_)) {
-        exit(-1);
-    }
-
+    QSerialPort serial;
+    QTimer timer;
     {
         QMutexLocker locker(&pvars);
-        if (timer_ == nullptr) {
-            timer_ = new QTimer();
-
-            connect(this, SIGNAL(finished()), timer_, SLOT(stop()), Qt::DirectConnection);
-            connect(timer_, SIGNAL(timeout()), this, SLOT(requestRealtimeData()), Qt::DirectConnection);
-        }
-
-        // discard prev. read data
-        serial_dev_->readAll();
+        serial_dev_ = &serial;
+        timer_ = &timer;
     }
 
-    initializeConnection();
+    runWorker(serial, timer);
+
+    timer.stop();
+    {
+        QMutexLocker locker(&pvars);
+        timer_ = nullptr;
+        serial_dev_ = nullptr;
+    }
+}
+
+void Daum::runWorker(QSerialPort &serial, QTimer &timer) {
+    if (isInterruptionRequested()) {
+        return;
+    }
+    {
+        QMutexLocker locker(&pvars);
+        if (!openPort(serial, serialDeviceName_)) {
+            return;
+        }
+    }
+#ifdef GC_TRAIN_RUNTIME_TEST_HOOKS
+    emit workerPortOpenedForTest();
+#endif
+
+    connect(&timer, &QTimer::timeout, &timer,
+            [this]() { requestRealtimeData(); });
+    serial.readAll();
+
+    if (isInterruptionRequested() || !initializeConnection()) {
+        return;
+    }
 
     // setup polling
-    {
-        QMutexLocker locker(&pvars);
-        timer_->setInterval(kQueryIntervalMS);
-        timer_->start();
-    }
+    timer.setInterval(kQueryIntervalMS);
+    timer.start();
 
+    if (isInterruptionRequested()) {
+        return;
+    }
     StartProgram(0);
 
     // enter event loop and wait for a call to quit() or exit()
     exec();
-
-    {
-        QMutexLocker locker(&pvars);
-        timer_->stop();
-    }
 }
 
-void Daum::initializeConnection() {
+bool Daum::initializeConnection() {
 
     serialWriteDelay_ = 0;
 
@@ -194,7 +200,10 @@ void Daum::initializeConnection() {
     }
     if (addr < 0) {
         qWarning() << "unable to detect device address";
-        exit(-1);
+        return false;
+    }
+    if (isInterruptionRequested()) {
+        return false;
     }
 
     QThread::msleep(100);
@@ -203,11 +212,17 @@ void Daum::initializeConnection() {
     if (!ResetDevice()) {
         qWarning() << "reset device failed";
     }
+    if (isInterruptionRequested()) {
+        return false;
+    }
 
     QThread::msleep(100);
 
     // unused so far
     qDebug() << "CheckCockpit() returned " << CheckCockpit();
+    if (isInterruptionRequested()) {
+        return false;
+    }
 
     QThread::msleep(100);
 
@@ -226,7 +241,7 @@ void Daum::initializeConnection() {
         qDebug() << "  Playing sound:" << playSound_;
     } else {
         qWarning() << "unable to identify daum cockpit type" << Qt::hex << dat;
-        exit(-1);
+        return false;
     }
     
     if (profile_ != "OLD_DAUM") { // Function not available
@@ -247,6 +262,7 @@ void Daum::initializeConnection() {
     }
 
     PlaySound();
+    return !isInterruptionRequested();
 }
 
 bool Daum::configureForCockpitType(int cockpitType) {
@@ -502,7 +518,9 @@ QByteArray Daum::WriteDataAndGetAnswer(QByteArray const& dat, int response_bytes
     s.write(dat);
     if(!s.waitForBytesWritten(1000)) {
         qWarning() << "failed to write data to daum cockpit";
+        requestInterruption();
         exit(-1);
+        return ret;
     }
 
     if (response_bytes > 0) {
