@@ -3098,8 +3098,9 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-025: Activity transaction pathname checks remain TOCTOU-prone
 
-- Status: IN_PROGRESS
+- Status: FIXED
 - Code: `src/Core/RideCacheRemoval.cpp`,
+  `src/Core/CredentialSettings.cpp`,
   `src/Core/LinkedActivitySaveJournal.cpp`,
   `src/Core/LinkedActivityRemovalJournal.cpp`,
   `src/Planning/PlanReplacementJournal.cpp`,
@@ -3136,7 +3137,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   foreign replacement. A follow-up contract regression showed that the first
   identity-bound draft retained an otherwise removable stage when no publisher
   was supplied.
-- Partial resolution: RideCache storage transactions now open one anchored
+- Resolution: RideCache storage transactions now open one anchored
   athlete-root generation, walk children without following links, and pin each
   existing source, backup, derived file, and journal control file once. Reads,
   no-replace publication, rollback, and cleanup operate through those pinned
@@ -3251,6 +3252,17 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   target exchanged during finalization, or an output whose publisher cannot
   prove identity continuity, is retained and reported instead of being deleted
   by pathname.
+
+  Generic replace-existing publication now uses the same observed-generation
+  contract. First-time credential files use create-new publication and existing
+  files use replace-existing publication through the configured writer factory;
+  the generic writer interface exposes its staging path so platform hardening is
+  preserved. A successful replacement is not reported when retirement of the
+  displaced old target fails. On POSIX, an ambiguous post-exchange state fails
+  closed and retains a verified recovery path instead of attempting a second,
+  identity-unverified exchange. A custom writer whose commit cannot prove
+  identity continuity reports failure and retains the uncertain output rather
+  than restoring or deleting a pathname that may now name another file.
 - Verification: Every deterministic regression failed for its intended unsafe
   behavior before its fix. On Linux, RideCache passes 390 cases with one skip,
   PlanReplacement 124, PlanBundleImport 8, and linked-save cleanup 4 under both
@@ -3284,21 +3296,23 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   ASan/UBSan/LSan, and under ThreadSanitizer. Split activity save passes 33/0/0
   under both sanitizer configurations, including its staging-failure cleanup
   path.
-- Residual: The private-directory API explicitly trusts
-  processes running as the same OS identity and privileged administrators; such
-  a process can still exchange a name after revalidation and before a later
-  pathname-based copy or write. Plan manifest rewrites still inherit the generic
-  replace-existing publication window despite retaining and revalidating the
-  expected generation. Activity conversion/rename, split archival, and
-  lower-risk backup cleanup retain related windows. POSIX exposes no portable
-  identity-conditional
-  `rmdir`; private random quarantine, repeated identity checks, anchored
-  post-checks, and fail-closed recovery reduce but cannot eliminate its final
-  check-to-syscall interval. A reported verified recovery path is also
-  point-in-time evidence, not a permanent claim after handles are released.
-  These residuals keep this item `IN_PROGRESS`.
-- Next test and fix: Apply the observed-generation contract to generic
-  replace-existing publication.
+  The final credential suite reports 426/0/7 normally, under strict
+  ASan/UBSan/LSan, and under ThreadSanitizer. AnchoredFilesystem reports 88/0/13
+  in all three configurations, with its five closure regressions passing in
+  focused runs. Atomic activity save reports 317/0/0 in all three
+  configurations, including 18 focused generic-publication regressions. Hosted
+  runs `30982140513`, `30982140602`, and `30982140674` all pass on SEC-025
+  implementation head `ef4dcac`, covering durable and anchored filesystems,
+  native Windows and macOS activity transactions, and the complete build.
+- Residual: The private-directory API explicitly trusts processes running as
+  the same OS identity and privileged administrators. POSIX exposes no portable
+  identity-conditional `rmdir`; private random quarantine, repeated identity
+  checks, anchored post-checks, and fail-closed recovery bound but cannot remove
+  its final check-to-syscall interval. A reported verified recovery path is
+  point-in-time evidence while its identity is held, not a permanent claim after
+  handles are released. These are explicit trust and platform limits; ambiguous
+  states are surfaced for recovery and are no longer resolved by destructive
+  pathname rollback.
 
 ### GUI-007: Modal activity workflows retained dangling RideItem pointers
 
