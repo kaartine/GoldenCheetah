@@ -269,23 +269,51 @@ template<typename Owner, typename Value>
 class ModalPointerOverrideLease
 {
 public:
+    using Getter = std::function<Value(const Owner &)>;
+    using Setter = std::function<void(Owner &, const Value &)>;
+
     ModalPointerOverrideLease(
         Owner *owner,
         Value Owner::*member,
         const Value &temporaryValue,
         ModalWorkflowValidator ownerValidator = {},
         ModalWorkflowValidator originalValueValidator = {})
+        : ModalPointerOverrideLease(
+              owner,
+              [member](const Owner &current) {
+                  return current.*member;
+              },
+              [member](Owner &current, const Value &value) {
+                  current.*member = value;
+              },
+              temporaryValue,
+              std::move(ownerValidator),
+              std::move(originalValueValidator))
+    {
+    }
+
+    ModalPointerOverrideLease(
+        Owner *owner,
+        Getter getter,
+        Setter setter,
+        const Value &temporaryValue,
+        ModalWorkflowValidator ownerValidator = {},
+        ModalWorkflowValidator originalValueValidator = {})
         : owner(owner),
-          member(member),
-          originalValue(owner ? owner->*member : Value()),
+          getter(std::move(getter)),
+          setter(std::move(setter)),
+          originalValue(
+              owner && this->getter
+                  ? this->getter(*owner)
+                  : Value()),
           installedValue(temporaryValue),
           ownerValidator(std::move(ownerValidator)),
           originalValueValidator(
               std::move(originalValueValidator)),
-          active(owner != nullptr)
+          active(owner != nullptr && this->getter && this->setter)
     {
-        if (this->owner)
-            this->owner.data()->*member = temporaryValue;
+        if (active)
+            this->setter(*this->owner, temporaryValue);
     }
 
     ~ModalPointerOverrideLease()
@@ -296,11 +324,11 @@ public:
     bool publish(const Value &value)
     {
         if (!active || !owner
-            || owner.data()->*member != installedValue) {
+            || getter(*owner) != installedValue) {
             active = false;
             return false;
         }
-        owner.data()->*member = value;
+        setter(*owner, value);
         installedValue = value;
         return true;
     }
@@ -308,7 +336,7 @@ public:
     void restore()
     {
         if (!active || !owner
-            || owner.data()->*member != installedValue) {
+            || getter(*owner) != installedValue) {
             active = false;
             return;
         }
@@ -317,9 +345,11 @@ public:
         const bool originalIsCurrent =
             !originalValueValidator
             || originalValueValidator();
-        owner.data()->*member =
+        setter(
+            *owner,
             ownerIsCurrent && originalIsCurrent
-            ? originalValue : Value();
+                ? originalValue
+                : Value());
         active = false;
     }
 
@@ -330,7 +360,8 @@ public:
 
 private:
     QPointer<Owner> owner;
-    Value Owner::*member;
+    Getter getter;
+    Setter setter;
     Value originalValue;
     Value installedValue;
     ModalWorkflowValidator ownerValidator;

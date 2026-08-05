@@ -183,7 +183,7 @@ WebPageWindow::WebPageWindow(Context *context) : GcChartWindow(context), context
     view->settings()->setAttribute(QWebEngineSettings::LocalContentCanAccessRemoteUrls, true);
     view->settings()->setAttribute(QWebEngineSettings::LocalStorageEnabled, true);
 
-    view->setPage(new QWebEnginePage(context->webEngineProfile));
+    view->setPage(new QWebEnginePage(context->webEngineProfile()));
     view->setContentsMargins(0,0,0,0);
     view->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     view->setAcceptDrops(false);

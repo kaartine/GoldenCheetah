@@ -17,6 +17,11 @@
  */
 
 #include "Context.h"
+#include "AthleteSession.h"
+#include "TrainingSession.h"
+#include "SessionServices.h"
+
+#ifndef GC_CONTEXT_SESSION_INTEGRATION_TEST
 #include "Settings.h"
 #include "Athlete.h"
 #include "RideMetadata.h"
@@ -27,19 +32,18 @@
 #include "UserMetricParser.h"
 #include "SpecialFields.h"
 #include "DataFilter.h"
-#include "HtmlTrainingBridge.h"
-#include "RideFileCacheWriteError.h"
 
 #include <QXmlInputSource>
 #include <QXmlSimpleReader>
-#include <QMutex>
-#include <QWebEngineProfile>
+#endif
 
-#include <utility>
+#include <QApplication>
 
+#include <memory>
 
 static QList<Context*> _contexts;
 
+#ifndef GC_CONTEXT_SESSION_INTEGRATION_TEST
 GlobalContext::GlobalContext()
 {
     rideMetadata = NULL;
@@ -135,6 +139,7 @@ GlobalContext::userMetricsConfigChanged()
     // refresh SpecialFields to include updated user metrics
     SpecialFields::getInstance().reloadFields();
 }
+#endif
 
 
 bool Context::isValid(Context *p) { return p != NULL &&_contexts.contains(p); }
@@ -142,27 +147,24 @@ bool Context::isValid(Context *p) { return p != NULL &&_contexts.contains(p); }
 Context::Context(MainWindow *mainWindow): mainWindow(mainWindow)
 {
     ride = NULL;
-    workout = NULL;
-    videosync = NULL;
     isfiltered = ishomefiltered = false;
     isCompareIntervals = isCompareDateRanges = false;
-    isRunning = isPaused = false;
-    m_HtmlTrainingBridge = nullptr;
-    cacheWriteErrorCoordinator_ =
-        new RideFileCacheWriteErrorCoordinator;
+    athleteSession_ = std::make_unique<AthleteSession>(
+        createContextAthleteApplicationService(),
+        createContextAthletePersistenceService(
+            this,
+            [this](const QString &message) {
+                emit cacheWriteFailed(message);
+            }));
+    trainingSession_ = std::make_unique<TrainingSession>(
+        createContextTrainingApplicationService(this));
 
-    connect(this, SIGNAL(loadProgress(QString, double)), mainWindow, SLOT(loadProgress(QString, double)));
-    connect(this, SIGNAL(cacheWriteFailed(QString)),
-            mainWindow, SLOT(cacheWriteFailed(QString)));
+    connectContextMainWindow(this, mainWindow);
 
 #ifdef GC_HAS_CLOUD_DB
     cdbChartListDialog = NULL;
     cdbUserMetricListDialog = NULL;
 #endif
-
-    // WebEngineProfile - cookies and storage
-    webEngineProfile = new QWebEngineProfile("Default", this);
-    webEngineProfile->setPersistentCookiesPolicy(QWebEngineProfile::ForcePersistentCookies);
 
     _contexts.append(this);
 }
@@ -170,16 +172,36 @@ Context::Context(MainWindow *mainWindow): mainWindow(mainWindow)
 HtmlTrainingBridge *
 Context::getHtmlTrainingBridge()
 {
-    if (!m_HtmlTrainingBridge) {
-        m_HtmlTrainingBridge = new HtmlTrainingBridge(this, this);
-        qDebug() << "Context: HtmlTrainingBridge created";
-    }
-    return m_HtmlTrainingBridge;
+    return trainingSession().htmlTrainingBridge();
+}
+
+AthleteSession &Context::athleteSession()
+{
+    return *athleteSession_;
+}
+
+const AthleteSession &Context::athleteSession() const
+{
+    return *athleteSession_;
+}
+
+TrainingSession &Context::trainingSession()
+{
+    return *trainingSession_;
+}
+
+const TrainingSession &Context::trainingSession() const
+{
+    return *trainingSession_;
+}
+
+QWebEngineProfile *Context::webEngineProfile() const
+{
+    return athleteSession().webEngineProfile();
 }
 
 Context::~Context()
 {
-    delete cacheWriteErrorCoordinator_;
     int i=_contexts.indexOf(this);
     if (i >= 0) _contexts.removeAt(i);
 }
@@ -189,23 +211,69 @@ Context::reportCacheWriteFailure(
     const QString &cachePath,
     const QString &detail)
 {
-    const auto result = cacheWriteErrorCoordinator_->report(
+    athleteSession().persistenceService().reportCacheWriteFailure(
         cachePath,
-        detail,
-        [this](
-            RideFileCacheWriteErrorCoordinator::Delivery delivery) {
-            return RideFileCacheWriteErrorCoordinator::queueForOwner(
-                this,
-                std::move(delivery));
-        },
-        [this](const QString &message) {
-            emit cacheWriteFailed(message);
-        });
-    if (result
-        == RideFileCacheWriteErrorCoordinator::ReportResult::DispatchFailed) {
-        qWarning().noquote()
-            << "Cannot queue CPX cache write failure notification";
-    }
+        detail);
+}
+
+bool Context::isRunning() const
+{
+    return trainingSession().isRunning();
+}
+
+bool Context::isPaused() const
+{
+    return trainingSession().isPaused();
+}
+
+void Context::setTrainingStatus(bool running, bool paused)
+{
+    trainingSession().setStatus(running, paused);
+}
+
+const QString &Context::currentMediaFilename() const
+{
+    return trainingSession().mediaFilename();
+}
+
+void Context::notifyErgFileSelected(ErgFile *workout)
+{
+    trainingSession().setWorkout(workout);
+    emit ergFileSelected(workout);
+    emit ergFileSelected(asErgFileBase(workout));
+}
+
+void Context::notifyVideoSyncFileSelected(VideoSyncFile *videoSync)
+{
+    trainingSession().setVideoSync(videoSync);
+    emit videoSyncFileSelected(videoSync);
+}
+
+ErgFile *Context::currentErgFile() const
+{
+    return trainingSession().currentWorkout();
+}
+
+VideoSyncFile *Context::currentVideoSyncFile() const
+{
+    return trainingSession().currentVideoSync();
+}
+
+void Context::notifyMediaSelected(QString filename)
+{
+    trainingSession().setMediaFilename(filename);
+    emit mediaSelected(filename);
+}
+
+void Context::notifySetNow(long now)
+{
+    trainingSession().setNow(now);
+    emit setNow(now);
+}
+
+long Context::getNow() const
+{
+    return trainingSession().now();
 }
 
 void 

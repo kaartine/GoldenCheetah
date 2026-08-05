@@ -28,6 +28,7 @@
 #include <thread>
 
 class Context;
+class AthletePersistenceService;
 class RideFile;
 class RideBest;
 class MetricDetail;
@@ -116,7 +117,14 @@ class RideFileCache
         // the calling class.
         // to save time you can pass the ride file if you already have it open
         // and if you don't want the data and just want to check pass check=true
-        RideFileCache(Context *context, QString filename, double weight, RideFile *ride =0, bool check = false, bool refresh = true);
+        RideFileCache(
+            Context *context,
+            QString filename,
+            double weight,
+            RideFile *ride = 0,
+            bool check = false,
+            bool refresh = true,
+            AthletePersistenceService *persistenceService = nullptr);
 
         // Construct a ridefile cache that represents the data
         // across a date range. This is used to provide aggregated data.
@@ -155,7 +163,10 @@ class RideFileCache
 
 #ifdef GC_RIDE_FILE_CACHE_TEST_HOOKS
         struct SkipInitialComputeForTest {};
-        RideFileCache(RideFile*, SkipInitialComputeForTest);
+        RideFileCache(
+            RideFile*,
+            SkipInitialComputeForTest,
+            AthletePersistenceService *persistenceService = nullptr);
         struct NoPersistentTargetForTest {
             double weight = 75.0;
         };
@@ -206,6 +217,12 @@ class RideFileCache
             std::function<void()> hook);
         static void setAggregateBindingReadHookForTest(
             std::function<void()> hook);
+        static void setContextPersistenceFallbackHookForTest(
+            std::function<void(
+                Context *,
+                const QString &,
+                const QString &)> hook);
+        void setContextForTest(Context *context);
         static void resetSourceFingerprintReadCountForTest();
         static int sourceFingerprintReadCountForTest();
         static bool aggregateBindingsAreCurrentForTest(
@@ -351,6 +368,7 @@ class RideFileCache
     private:
 
         Context *context;
+        AthletePersistenceService *persistenceService_;
         QString rideFileName; // filename of ride
         QString cacheFileName; // filename of cache file
         RideFile *ride;

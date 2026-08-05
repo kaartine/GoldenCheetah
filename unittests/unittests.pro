@@ -8,6 +8,7 @@ equals(GC_UNITTESTS, active) {
 	SUBDIRS += Build/ciTestRunner \
 			   Build/linkerSectionFlags \
 			   Core/athleteMigrationSafety \
+			   Core/sessionBoundaries \
 			   Core/credentialSettings \
 			   Core/dataFilterResources \
 			   Core/dataFilterSafety \

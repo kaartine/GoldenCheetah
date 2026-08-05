@@ -31,6 +31,8 @@ isEmpty(GC_CLOUD_SERVICE_SOURCE) {
 
 SOURCES = testAthleteMigrationSafety.cpp \
           AthleteMigrationTestStubs.cpp \
+          ../../../src/Core/AthleteSession.cpp \
+          ../../../src/Core/TrainingSession.cpp \
           CloudAutoDownloadTestSupport.cpp \
           ../../../src/Cloud/CloudCredentialTransport.cpp \
           ../../../src/Cloud/LocalFileStore.cpp \
@@ -71,7 +73,10 @@ HEADERS = CloudAutoDownloadTestSupport.h \
           ../../../src/Cloud/TrainingsTageBuch.h \
           ../../../src/Cloud/WithingsDownload.h \
           ../../../src/Core/Athlete.h \
+          ../../../src/Core/AthleteSession.h \
           ../../../src/Core/Context.h \
+          ../../../src/Core/SessionServices.h \
+          ../../../src/Core/TrainingSession.h \
           ../../../src/Core/GcUpgrade.h \
           ../../../src/Core/NamedSearch.h \
           ../../../src/Core/RideCache.h \

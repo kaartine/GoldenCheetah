@@ -31,6 +31,7 @@
 #include <cmath>
 
 #include "Context.h"
+#include "TrainingSession.h"
 #include "MainWindow.h"
 #include "TrainDB.h"
 #include "Colors.h"
@@ -558,7 +559,7 @@ ManualActivityPageWorkout::ManualActivityPageWorkout
 #endif
 
     ErgFile *const originalWorkout =
-        context ? context->workout : nullptr;
+        context ? context->currentErgFile() : nullptr;
     const std::weak_ptr<const char> originalWorkoutLifetime =
         originalWorkout
         ? originalWorkout->lifetimeToken()
@@ -567,7 +568,14 @@ ManualActivityPageWorkout::ManualActivityPageWorkout
     const QPointer<Athlete> guardedAthlete(this->athlete);
     workoutLease.reset(
         new ModalPointerOverrideLease<Context, ErgFile*>(
-            context, &Context::workout, nullptr,
+            context,
+            [](const Context &owner) {
+                return owner.trainingSession().currentWorkout();
+            },
+            [](Context &owner, ErgFile *const &workout) {
+                owner.trainingSession().setWorkout(workout);
+            },
+            nullptr,
             [guardedContext, guardedAthlete] {
                 return guardedContext && guardedAthlete
                     && guardedContext->athlete

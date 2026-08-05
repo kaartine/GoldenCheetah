@@ -12,6 +12,7 @@
 #include "Cloud/CloudService.h"
 #include "Cloud/MeasuresDownload.h"
 #include "Core/Athlete.h"
+#include "Core/AthleteSession.h"
 #include "Core/Context.h"
 #include "Core/Measures.h"
 #include "Core/NamedSearch.h"
@@ -20,6 +21,7 @@
 #include "Core/Route.h"
 #include "Core/Seasons.h"
 #include "Core/Settings.h"
+#include "Core/TrainingSession.h"
 #include "FileIO/CsvRideFile.h"
 #include "FileIO/DataProcessor.h"
 #include "FileIO/JsonRideFile.h"
@@ -485,17 +487,10 @@ Context::Context(MainWindow *window)
     tab = nullptr;
     athlete = nullptr;
     ride = nullptr;
-    workout = nullptr;
-    videosync = nullptr;
-    now = 0;
     isfiltered = false;
     ishomefiltered = false;
-    isRunning = false;
-    isPaused = false;
     isCompareIntervals = false;
     isCompareDateRanges = false;
-    webEngineProfile = nullptr;
-    m_HtmlTrainingBridge = nullptr;
     {
         QMutexLocker locker(&validContextsMutex);
         validContexts.insert(this);
@@ -506,6 +501,42 @@ Context::~Context()
 {
     QMutexLocker locker(&validContextsMutex);
     validContexts.remove(this);
+}
+
+void Context::notifyErgFileSelected(ErgFile *workout)
+{
+    emit ergFileSelected(workout);
+    emit ergFileSelected(static_cast<ErgFileBase *>(workout));
+}
+
+void Context::notifyVideoSyncFileSelected(VideoSyncFile *videoSync)
+{
+    emit videoSyncFileSelected(videoSync);
+}
+
+ErgFile *Context::currentErgFile() const
+{
+    return nullptr;
+}
+
+VideoSyncFile *Context::currentVideoSyncFile() const
+{
+    return nullptr;
+}
+
+void Context::notifyMediaSelected(QString filename)
+{
+    emit mediaSelected(filename);
+}
+
+void Context::notifySetNow(long now)
+{
+    emit setNow(now);
+}
+
+long Context::getNow() const
+{
+    return 0;
 }
 
 bool Context::isValid(Context *context)

@@ -17,6 +17,8 @@
  */
 
 #include "RideFileCache.h"
+#include "AthleteSession.h"
+#include "SessionServices.h"
 #include "Context.h"
 #include "Athlete.h"
 #include "RideCache.h"
@@ -183,6 +185,9 @@ static thread_local std::function<void()>
     sourceBoundReadHookForTest;
 static thread_local std::function<void()>
     aggregateBindingReadHookForTest;
+static thread_local std::function<void(
+    Context *, const QString &, const QString &)>
+    contextPersistenceFallbackHookForTest;
 static thread_local int
     sourceFingerprintReadsForTest = 0;
 #endif
@@ -308,8 +313,16 @@ static QByteArray analysisFingerprintForSource(
 
 
 // cache from ride
-RideFileCache::RideFileCache(Context *context, QString fileName, double weight, RideFile *passedride, bool check, bool refresh) :
+RideFileCache::RideFileCache(
+    Context *context,
+    QString fileName,
+    double weight,
+    RideFile *passedride,
+    bool check,
+    bool refresh,
+    AthletePersistenceService *persistenceService) :
                crc(0), incomplete(false), context(context),
+               persistenceService_(persistenceService),
                rideFileName(fileName), ride(passedride),
                CP(0), WPRIME(0), LTHR(0), CV(0.0), WEIGHT(0.0),
                filter(false), onhome(false)
@@ -1080,6 +1093,7 @@ QVector<float> RideFileCache::meanMaxFor(
 
 RideFileCache::RideFileCache(RideFile *ride) :
                crc(0), incomplete(true), context(ride->context),
+               persistenceService_(nullptr),
                rideFileName(""), ride(ride),
                CP(0), WPRIME(0), LTHR(0), CV(0.0), WEIGHT(0.0),
                filter(false), onhome(false)
@@ -1183,6 +1197,23 @@ RideFileCache::setAggregateBindingReadHookForTest(
 }
 
 void
+RideFileCache::setContextPersistenceFallbackHookForTest(
+    std::function<void(
+        Context *,
+        const QString &,
+        const QString &)> hook)
+{
+    contextPersistenceFallbackHookForTest =
+        std::move(hook);
+}
+
+void
+RideFileCache::setContextForTest(Context *context)
+{
+    this->context = context;
+}
+
+void
 RideFileCache::
 resetSourceFingerprintReadCountForTest()
 {
@@ -1234,9 +1265,11 @@ RideFileCache::aggregateBindingsAreCurrentForTest(
 
 RideFileCache::RideFileCache(
     RideFile *ride,
-    SkipInitialComputeForTest)
+    SkipInitialComputeForTest,
+    AthletePersistenceService *persistenceService)
     : incomplete(true)
     , context(ride ? ride->context : nullptr)
+    , persistenceService_(persistenceService)
     , rideFileName()
     , cacheFileName()
     , ride(ride)
@@ -1832,9 +1865,20 @@ RideFileCache::refreshCache(
         if (operations && operations->reportError) {
             operations->reportError(
                 cacheFileName, writeError);
-        } else if (context) {
-            context->reportCacheWriteFailure(
+        } else if (persistenceService_) {
+            persistenceService_->reportCacheWriteFailure(
                 cacheFileName, writeError);
+        } else if (context) {
+#ifdef GC_RIDE_FILE_CACHE_TEST_HOOKS
+            if (contextPersistenceFallbackHookForTest) {
+                contextPersistenceFallbackHookForTest(
+                    context, cacheFileName, writeError);
+            } else
+#endif
+            {
+                context->reportCacheWriteFailure(
+                    cacheFileName, writeError);
+            }
         }
         return false;
     }
@@ -2702,7 +2746,8 @@ static void distAggregate(QVector<double> &into, QVector<double> &other)
 
 RideFileCache::RideFileCache(Context *context, QDate start, QDate end, bool filter, QStringList files, bool onhome, RideItem *rideItem)
                : start(start), end(end), crc(0), incomplete(false),
-                 context(context), rideFileName(""), ride(0),
+                 context(context), persistenceService_(nullptr),
+                 rideFileName(""), ride(0),
                  CP(0), WPRIME(0), LTHR(0), CV(0.0), WEIGHT(0.0),
                  filter(filter), onhome(onhome)
 {
@@ -2939,7 +2984,11 @@ QVector<float> &RideFileCache::heatMeanMaxArray()
                 context,
                 RideFileCacheIntegrity::activitySourcePath(
                     item->path, item->fileName),
-                item->getWeight());
+                item->getWeight(),
+                nullptr,
+                false,
+                true,
+                &context->athleteSession().persistenceService());
 
             for(int i=0; i<rideCache.wattsMeanMaxDouble.count() && i<wattsMeanMaxDouble.count(); i++) {
 
