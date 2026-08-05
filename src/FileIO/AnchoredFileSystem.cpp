@@ -5747,6 +5747,27 @@ MutationResult replaceExisting(
                 replaceError);
             return result;
         }
+        const bool targetUnchanged = publishedPinned
+            && exactFile(
+                published,
+                targetIdentity,
+                targetSize,
+                targetDigest)
+            && backupInspected && !backupExists;
+        if (targetUnchanged) {
+            QString refreshError;
+            refreshExpectedTarget(refreshError);
+            result.effect = MutationEffect::Conflict;
+            result.error = windowsError(
+                QStringLiteral(
+                    "The anchored replacement staging file changed "
+                    "before publication"),
+                replaceError);
+            if (!refreshError.isEmpty()) {
+                result.error += QStringLiteral("; ") + refreshError;
+            }
+            return result;
+        }
     }
     if (replaced || (publishedPinned && displacedPinned)) {
         reportAnchoredFilesystemTransition(
