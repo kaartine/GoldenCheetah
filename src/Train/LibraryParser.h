@@ -28,7 +28,7 @@ class LibraryParser : public QXmlDefaultHandler
 
 public:
     // save
-    static bool serialize(QDir);
+    static bool serialize(QDir, QString *error = nullptr);
 
     // restore
     bool startDocument();

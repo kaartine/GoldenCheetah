@@ -37,6 +37,7 @@ equals(GC_UNITTESTS, active) {
 			   Train/webDownloadImportPolicy \
 			   Train/trainDbVersionSafety \
 			   Train/libraryTransactionSafety \
+			   Train/libraryParserSerialize \
 			   Core/measuresAtomicSave \
 			   Core/plannedActivityFileStager \
 			   Core/rideCacheAtomicSave \

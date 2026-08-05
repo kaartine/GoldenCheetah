@@ -35,6 +35,9 @@ private slots:
     void rejectsDifferentExistingTarget();
     void rejectsDifferentSourceForPreparedTarget();
     void rollbackRemovesOnlyCreatedTargets();
+    void replacementRollbackRestoresExistingTarget();
+    void replacementFinalizeKeepsNewTarget();
+    void replacementPreparationFailurePreservesTarget();
     void missingSourceReportsIoError();
 #ifdef Q_OS_UNIX
     void rejectsSymlinkTarget();
@@ -146,6 +149,68 @@ void TestLibraryImportFileStager::rollbackRemovesOnlyCreatedTargets()
     QVERIFY(QFile::exists(reusedTarget));
     QCOMPARE(readFile(reusedTarget), QByteArray("existing"));
     QVERIFY(!QFile::exists(copiedTarget));
+}
+
+void TestLibraryImportFileStager::replacementRollbackRestoresExistingTarget()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString source = directory.filePath(QStringLiteral("source.erg"));
+    const QString target = directory.filePath(QStringLiteral("library.erg"));
+    QVERIFY(writeFile(source, QByteArray("new-workout")));
+    QVERIFY(writeFile(target, QByteArray("existing-workout")));
+
+    LibraryImportFileStager stager;
+    const LibraryImportStageResult result = stager.stage(
+        source, target, LibraryImportStageMode::replaceExisting);
+
+    QCOMPARE(result.status, LibraryImportStageStatus::replaced);
+    QCOMPARE(readFile(target), QByteArray("new-workout"));
+    QVERIFY(stager.rollback().isEmpty());
+    QCOMPARE(readFile(target), QByteArray("existing-workout"));
+}
+
+void TestLibraryImportFileStager::replacementFinalizeKeepsNewTarget()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString source = directory.filePath(QStringLiteral("source.rlv"));
+    const QString target = directory.filePath(QStringLiteral("library.rlv"));
+    QVERIFY(writeFile(source, QByteArray("new-video-sync")));
+    QVERIFY(writeFile(target, QByteArray("existing-video-sync")));
+
+    LibraryImportFileStager stager;
+    const LibraryImportStageResult result = stager.stage(
+        source, target, LibraryImportStageMode::replaceExisting);
+
+    QCOMPARE(result.status, LibraryImportStageStatus::replaced);
+    QVERIFY(stager.finalize().isEmpty());
+    QCOMPARE(readFile(target), QByteArray("new-video-sync"));
+    QVERIFY(stager.rollback().isEmpty());
+    QCOMPARE(readFile(target), QByteArray("new-video-sync"));
+}
+
+void TestLibraryImportFileStager::replacementPreparationFailurePreservesTarget()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString source = directory.filePath(QStringLiteral("source.erg"));
+    const QString target = directory.filePath(QStringLiteral("library.erg"));
+    QVERIFY(writeFile(source, QByteArray("new-workout")));
+    QVERIFY(writeFile(target, QByteArray("existing-workout")));
+    const QFileDevice::Permissions originalPermissions =
+        QFileInfo(directory.path()).permissions();
+    QVERIFY(QFile::setPermissions(
+        directory.path(), QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+
+    LibraryImportFileStager stager;
+    const LibraryImportStageResult result = stager.stage(
+        source, target, LibraryImportStageMode::replaceExisting);
+    QVERIFY(QFile::setPermissions(directory.path(), originalPermissions));
+
+    QCOMPARE(result.status, LibraryImportStageStatus::ioError);
+    QVERIFY(!result.succeeded());
+    QCOMPARE(readFile(target), QByteArray("existing-workout"));
 }
 
 void TestLibraryImportFileStager::missingSourceReportsIoError()
