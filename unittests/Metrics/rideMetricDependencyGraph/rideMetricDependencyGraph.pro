@@ -31,6 +31,11 @@ unix:!macx {
     QMAKE_LFLAGS += -Wl,--gc-sections
 }
 
+macx {
+    QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
+    QMAKE_LFLAGS += -Wl,-dead_strip
+}
+
 sanitize:!tsan:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \
                       -fno-omit-frame-pointer \
