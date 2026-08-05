@@ -3229,6 +3229,13 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   pinning, stable-snapshot, and anchored-removal contract. Successful cleanup is
   recorded explicitly instead of inferred from a later pathname absence, so
   repeated cleanup remains idempotent without accepting a replaced journal.
+
+  Staged-set publication now pins each staging generation before invoking its
+  publisher and accepts an output as transaction-owned only when a newly pinned
+  target has the same native identity, size, and digest. Rollback removes that
+  held identity through the anchored removal primitive. A target exchanged
+  during finalization, or an output whose publisher cannot prove identity
+  continuity, is retained and reported instead of being deleted by pathname.
 - Verification: Every deterministic regression failed for its intended unsafe
   behavior before its fix. On Linux, RideCache passes 390 cases with one skip,
   PlanReplacement 124, PlanBundleImport 8, and linked-save cleanup 4 under both
@@ -3262,7 +3269,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   a process can still exchange a name after revalidation and before a later
   pathname-based copy or write. Plan manifest rewrites still inherit the generic
   replace-existing publication window despite retaining and revalidating the
-  expected generation. Generic staged-set rollback, activity conversion/rename,
+  expected generation. Early staged-input cleanup, activity conversion/rename,
   split archival, and lower-risk backup cleanup retain related windows. POSIX
   exposes no portable identity-conditional
   `rmdir`; private random quarantine, repeated identity checks, anchored
@@ -3271,7 +3278,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   point-in-time evidence, not a permanent claim after handles are released.
   These residuals keep this item `IN_PROGRESS`.
 - Next test and fix: Apply the observed-generation contract to generic
-  replace-existing publication and staged rollback.
+  replace-existing publication and early staged-input cleanup.
 
 ### GUI-007: Modal activity workflows retained dangling RideItem pointers
 
@@ -4710,17 +4717,30 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-008: Staged-set rollback trusts a mutable target pathname
 
-- Status: OPEN
-- Code: `src/FileIO/AtomicFileWriter.h:697`
+- Status: FIXED
+- Code: `src/FileIO/AtomicFileWriter.h` and
+  `unittests/FileIO/atomicActivitySave/testAtomicActivitySave.cpp`
 - Impact: GoldenCheetah holds cooperative path locks, but another process can
   replace a newly published target before finalization fails. Rollback removes
   the current pathname and could therefore delete the other process's file.
-- Test: Replace a published target through an injected non-cooperating writer
-  during finalization and verify rollback removes only the exact file identity
-  created by this transaction.
-- Fix direction: Record and revalidate platform file identities or publish an
-  immutable generation and atomically switch one manifest instead of deleting
-  rollback targets by pathname.
+- Test-first evidence: A deterministic finalizer moves the transaction's
+  published activity aside, creates a different file at the target pathname,
+  and then fails. The unsafe baseline deleted that replacement; the regression
+  observed an empty target instead of the concurrent contents. A pre-existing
+  partial-publication test also demonstrated that a callback-created copy has
+  no provable identity continuity with its staging source.
+- Resolution: Staging files are pinned before their publisher runs. Every
+  claimed output is pinned through an anchored target parent and accepted as
+  transaction-owned only when its native identity, size, and SHA-256 digest
+  match the staging pin. Rollback removes owned outputs through the pinned
+  identity. Replaced targets and ambiguous callback-created outputs are retained
+  with an explicit error.
+- Verification: The focused regression passes, and the complete atomic-activity
+  program passes 311/0/0 normally, under strict ASan/UBSan/LSan with leak
+  detection, and under ThreadSanitizer without suppressions. SplitActivitySave
+  passes 33/0/0 under both sanitizer configurations. The complete production
+  application links and reports its version from an isolated minimal-platform
+  profile.
 
 ### PORT-001: Unix atomic-new publication requires hard-link support
 

@@ -616,6 +616,7 @@ private slots:
     void stagedFileSetFinalizesWhileTargetsAreLocked();
     void stagedFileSetReturnsSuccessfulFinalizerWarning();
     void stagedFileSetRollsBackWhenFinalizerFails();
+    void stagedFileSetRetainsReplacedTargetOnRollback();
     void atomicFileLockTargetName_data();
     void atomicFileLockTargetName();
     void lockSetKeepsCaseDistinctPaths();
@@ -1444,10 +1445,13 @@ stagedFileSetRollsBackPartiallyPublishedFailure()
     QVERIFY(!publishStagedFileSet(files, error, publish));
     QCOMPARE(publishCalls, 2);
     QVERIFY(error.contains(QStringLiteral("post-publication")));
+    QVERIFY(error.contains(QStringLiteral("ambiguous")));
     for (const StagedFilePublication &file : files) {
         QVERIFY(!QFile::exists(file.first));
-        QVERIFY(!QFile::exists(file.second));
     }
+    QVERIFY(!QFile::exists(files.at(0).second));
+    QCOMPARE(readAll(files.at(1).second), QByteArray("activity-1"));
+    QVERIFY(!QFile::exists(files.at(2).second));
 }
 
 void TestAtomicActivitySave::stagedFileSetCleansStagingOnCollision()
@@ -1738,6 +1742,51 @@ void TestAtomicActivitySave::stagedFileSetRollsBackWhenFinalizerFails()
         QVERIFY(!QFile::exists(file.first));
         QVERIFY(!QFile::exists(file.second));
     }
+}
+
+void TestAtomicActivitySave::stagedFileSetRetainsReplacedTargetOnRollback()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString stage = dir.filePath(QStringLiteral("activity.stage"));
+    const QString target = dir.filePath(QStringLiteral("activity.json"));
+    const QString retained = dir.filePath(QStringLiteral("published-retained"));
+    const QByteArray published("published activity");
+    const QByteArray replacement("concurrent replacement");
+    writeFixture(stage, published);
+
+    bool targetReplaced = false;
+    const AtomicFinalizeFunction finalize = [&](QString &finalizeError) {
+        if (!QFile::rename(target, retained)) {
+            finalizeError = QStringLiteral(
+                "cannot retain the published target for substitution");
+            return false;
+        }
+        QFile substitute(target);
+        if (!substitute.open(QIODevice::WriteOnly | QIODevice::NewOnly)
+            || substitute.write(replacement) != replacement.size()
+            || !substitute.flush()) {
+            finalizeError = QStringLiteral(
+                "cannot inject the concurrent target substitution");
+            return false;
+        }
+        targetReplaced = true;
+        finalizeError = QStringLiteral("injected finalization failure");
+        return false;
+    };
+
+    QString error;
+    QVERIFY(!publishStagedFileSet(
+        { StagedFilePublication(stage, target) },
+        error,
+        publishAtomicNew,
+        finalize));
+
+    QVERIFY(targetReplaced);
+    QVERIFY(error.contains(QStringLiteral("finalization failure")));
+    QVERIFY(!QFile::exists(stage));
+    QCOMPARE(readAll(retained), published);
+    QCOMPARE(readAll(target), replacement);
 }
 
 void TestAtomicActivitySave::atomicFileLockTargetName_data()

@@ -11,11 +11,16 @@ SOURCES = testSplitActivitySave.cpp
 exists(../../../src/Gui/SplitActivitySave.cpp) {
     SOURCES += ../../../src/Gui/SplitActivitySave.cpp
 }
+exists(../../../src/FileIO/AnchoredFileSystem.cpp) {
+    SOURCES += ../../../src/FileIO/AnchoredFileSystem.cpp
+}
 
 include(../../unittests.pri)
 
 INCLUDEPATH += ../../../src/FileIO \
                ../../../src/Gui
+
+win32:LIBS += -ladvapi32
 
 sanitize:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \
