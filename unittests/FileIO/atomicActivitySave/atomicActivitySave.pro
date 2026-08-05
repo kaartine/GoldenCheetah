@@ -10,7 +10,8 @@ include(../../unittests.pri)
 CONFIG += console testcase c++17 release
 CONFIG -= debug
 DEFINES += GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS \
-           GC_ANCHORED_FILESYSTEM_TEST_HOOKS
+           GC_ANCHORED_FILESYSTEM_TEST_HOOKS \
+           GC_ATOMIC_FILE_WRITER_TEST_HOOKS
 
 SOURCES = testAtomicActivitySave.cpp \
           ApplicationSaveTestStubs.cpp \
@@ -75,10 +76,20 @@ msvc {
     QMAKE_LFLAGS += /OPT:REF
 }
 
-sanitize:!msvc {
+sanitize:!tsan:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \
                       -fno-omit-frame-pointer \
                       -fno-sanitize=vptr \
                       -fno-sanitize-recover=all
     QMAKE_LFLAGS += -fsanitize=address,undefined
+}
+
+linux:tsan:!msvc {
+    QMAKE_CXXFLAGS += -fsanitize=thread \
+                      -fno-omit-frame-pointer \
+                      -O1 \
+                      -g
+    QMAKE_LFLAGS += -fsanitize=thread
+    QMAKE_CXXFLAGS += -fno-pie
+    QMAKE_LFLAGS += -no-pie
 }
