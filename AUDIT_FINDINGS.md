@@ -4892,6 +4892,22 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Test: State-machine test for start, pause, restart, and stop.
 - Fix direction: Set `paused_ = false` in restart.
 
+### MEM-027: Daum worker teardown leaks its serial port and timer
+
+- Status: OPEN
+- Code: `src/Train/Daum.cpp:113`, `src/Train/Daum.cpp:147`,
+  `src/Train/Daum.h:39`
+- Impact: Destroying a started Daum controller does not release its unparented
+  `QSerialPort` and `QTimer`, retaining their Qt backing allocations for the
+  process lifetime.
+- Evidence: A strict ASan/LSan no-device lifecycle run reported 1,364 bytes in
+  11 allocations rooted at `Daum::openPort()` and `Daum::run()`.
+- Test: Start the real worker without a device, stop and join it, then destroy
+  the controller under strict leak detection.
+- Fix direction: Give the worker a deterministic joined shutdown and release
+  both objects in their owning thread, including failed-open and partial-start
+  paths.
+
 ### METRIC-001: Missing/cyclic metric dependencies can loop forever
 
 - Status: OPEN
