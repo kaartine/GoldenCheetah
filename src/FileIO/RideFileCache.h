@@ -165,6 +165,12 @@ class RideFileCache
             const QString &sourceActivityPath,
             RideFile::SeriesType series,
             int duration);
+        static int rankCacheRowsForTest(
+            const QVector<QPair<QString, QString>> &cacheRows,
+            RideFile::SeriesType series,
+            int duration,
+            double value,
+            int &of);
         static int tizForActivityForTest(
             const QString &cacheRoot,
             const QString &completedRoot,
@@ -224,10 +230,12 @@ class RideFileCache
                 const QString &)> &reportError);
 #endif
 
-        // get a single best or time in zone value from the cache file
-        // intended to be very fast (using lseek to jump direct to the value requested
+        // Rank is the one-based descending insertion position before ties.
+        // "of" counts accepted cache rows, so rank can be "of + 1".
         static int rank(Context *context, RideFile::SeriesType series, int duration, 
                         double value, Specification spec, int &of);
+        // get a single best or time in zone value from the cache file
+        // intended to be very fast (using lseek to jump direct to the value requested
         static double best(Context *context, QString fileName, RideFile::SeriesType series, int duration);
         static double best(Context *context, RideItem *item, RideFile::SeriesType series, int duration);
         static double best(Context *context, const RideItem *item, RideFile::SeriesType series, int duration);

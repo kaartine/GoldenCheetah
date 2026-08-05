@@ -417,6 +417,8 @@ private slots:
     void standalonePowerActivityComputesWithoutContext();
     void standaloneWPrimeWithoutZonesStaysEmpty();
     void plannedAndCompletedActivitiesUseSeparateCaches();
+    void rankUsesDescendingInsertionSemantics_data();
+    void rankUsesDescendingInsertionSemantics();
     void batchReadDiscardsRowAfterMidReadFailure();
     void crcReadFailureSkipsPersistence();
     void restoredMtimeSourceChangeRejectsCache();
@@ -664,6 +666,73 @@ TestRideFileCacheRefresh::plannedAndCompletedActivitiesUseSeparateCaches()
             RideFile::watts,
             1),
         0);
+}
+
+void
+TestRideFileCacheRefresh::rankUsesDescendingInsertionSemantics_data()
+{
+    QTest::addColumn<double>("candidate");
+    QTest::addColumn<int>("expectedRank");
+
+    QTest::newRow("above-top") << 350.0 << 1;
+    QTest::newRow("tie-at-top") << 300.0 << 1;
+    QTest::newRow("between-top-and-middle") << 250.0 << 2;
+    QTest::newRow("tie-in-middle") << 200.0 << 2;
+    QTest::newRow("between-middle-and-bottom") << 150.0 << 4;
+    QTest::newRow("below-bottom") << 50.0 << 5;
+}
+
+void
+TestRideFileCacheRefresh::rankUsesDescendingInsertionSemantics()
+{
+    QFETCH(double, candidate);
+    QFETCH(int, expectedRank);
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QVector<QPair<QString, QString>> cacheRows;
+    const auto addRow = [&](const QString &name,
+                            float best,
+                            bool valid) {
+        const QString sourcePath =
+            directory.filePath(name + QStringLiteral(".fit"));
+        const QString cachePath =
+            directory.filePath(
+                QStringLiteral("cache/")
+                + name
+                + QStringLiteral(".cpx"));
+        const QByteArray sourceBytes =
+            name.toUtf8() + QByteArrayLiteral("-source");
+        writeFileBytes(sourcePath, sourceBytes);
+        writeCacheFixture(
+            cachePath,
+            best,
+            0.0f,
+            valid
+                ? sourceBytes
+                : QByteArrayLiteral("stale-source"));
+        cacheRows.append({sourcePath, cachePath});
+    };
+
+    addRow(QStringLiteral("top"), 300.0f, true);
+    addRow(QStringLiteral("middle-a"), 200.0f, true);
+    addRow(QStringLiteral("middle-b"), 200.0f, true);
+    addRow(QStringLiteral("bottom"), 100.0f, true);
+    addRow(QStringLiteral("rejected"), 1000.0f, false);
+
+    int of = -1;
+    const int rank =
+        RideFileCache::rankCacheRowsForTest(
+            cacheRows,
+            RideFile::watts,
+            1,
+            candidate,
+            of);
+
+    // "of" counts accepted rows. Rank is their one-based descending
+    // insertion position, so a new last place can be "of + 1".
+    QCOMPARE(of, 4);
+    QCOMPARE(rank, expectedRank);
 }
 
 void

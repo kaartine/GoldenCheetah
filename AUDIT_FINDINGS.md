@@ -3549,16 +3549,23 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### METRIC-004: Ride best ranking is sorted in the wrong direction
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/FileIO/RideFileCache.cpp:2846-2884`
 - Impact: `rank()` sorts values ascending and returns the first value less than
   or equal to the candidate. For values 100, 200, and 300, a candidate of 250
   is therefore reported as rank 1 instead of rank 2; most non-minimum results
   collapse to the top rank.
-- Test: Cover top, middle, bottom, ties, and rejected-cache rows with a fixed
-  best-value set and define the `of` and insertion-rank semantics explicitly.
-- Fix direction: Rank a descending sequence with a tie policy shared by the UI
-  consumers, using a standard bound operation instead of the current loop.
+- Test-first evidence: A fixed best-value set covers top, middle, bottom, ties,
+  a rejected cache row, and the defined `of + 1` last-place result. The old
+  ascending loop returned ranks `1, 1, 1, 1, 1, 4` where the expected ranks
+  are `1, 1, 2, 2, 4, 5`.
+- Resolution: Accepted values are sorted descending and ranked with
+  `std::lower_bound`, placing a tied candidate before equal existing values.
+  `of` remains the number of accepted cache rows, while insertion below every
+  row is reported as `of + 1`.
+- Verification: The focused data-driven QtTest regression passes in the remote
+  Qt 6.8.3 Docker build and covers top, middle, bottom, ties, rejected-cache
+  rows, and the documented `of` semantics.
 
 ### PERF-011: Verified CPX refresh duplicates full caches and payloads
 

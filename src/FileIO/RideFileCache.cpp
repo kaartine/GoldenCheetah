@@ -36,6 +36,8 @@
 #include <QSet>
 #include <QtAlgorithms> // for qStableSort
 
+#include <algorithm>
+#include <functional>
 #include <limits>
 #include <utility>
 
@@ -2843,6 +2845,23 @@ static bool bestForCache(
     const double *expectedWeight,
     double &result);
 
+static int descendingInsertionRank(
+    QList<double> values,
+    double value,
+    int &of)
+{
+    const std::greater<double> descending;
+    std::sort(
+        values.begin(), values.end(), descending);
+    const auto insertion = std::lower_bound(
+        values.cbegin(), values.cend(), value, descending);
+
+    of = values.count();
+    return static_cast<int>(
+               insertion - values.cbegin())
+        + 1;
+}
+
 // get a list of all values for the spec, series and duration and see where the value ranks
 int RideFileCache::rank(Context *context, RideFile::SeriesType series, int duration, 
          double value, Specification spec, int &of)
@@ -2869,18 +2888,8 @@ int RideFileCache::rank(Context *context, RideFile::SeriesType series, int durat
         }
     }
 
-    // sort the list
-    std::sort(values.begin(), values.end());
-
-    // get the ranking and count
-    of = values.count();
-
-    // where do we fit?
-    for (int i=0; i<values.count(); i++)
-        if (values.at(i) <= value)
-            return (i+1);
-
-    return values.count();
+    return descendingInsertionRank(
+        std::move(values), value, of);
 }
 
 static bool bestForCache(
@@ -3285,6 +3294,32 @@ RideFileCache::bestForActivityForTest(
         nullptr,
         result);
     return result;
+}
+
+int
+RideFileCache::rankCacheRowsForTest(
+    const QVector<QPair<QString, QString>> &cacheRows,
+    RideFile::SeriesType series,
+    int duration,
+    double value,
+    int &of)
+{
+    QList<double> values;
+    values.reserve(cacheRows.size());
+    for (const auto &row : cacheRows) {
+        double bestValue = 0;
+        if (bestForCache(
+                row.first,
+                row.second,
+                series,
+                duration,
+                nullptr,
+                bestValue)) {
+            values.append(bestValue);
+        }
+    }
+    return descendingInsertionRank(
+        std::move(values), value, of);
 }
 
 int
