@@ -3555,19 +3555,38 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DATA-016: Activity rename ignores derived-file rename failures
 
-- Status: OPEN
-- Code: `src/Core/RideCacheRemoval.cpp:358-421`
+- Status: FIXED
+- Code: `src/Core/RideCacheCalendarMutations.cpp`,
+  `src/Planning/PlanReplacementJournal.cpp`, and
+  `src/Planning/PlanReplacementJournal.h`
 - Impact: The activity source is renamed first, but failures to rename notes,
   CPI, or CPX files are ignored and the operation still reports success. A
   destination collision or filesystem error can therefore detach metadata,
   leave stale cache artifacts, or expose an unrelated same-basename sidecar
   under the renamed activity.
-- Test: Pre-create each destination sidecar and inject rename failures after
-  the source move. The operation must either publish one consistent artifact
-  set or report the partial outcome without losing the original metadata.
-- Fix direction: Stage and commit the source and metadata as one rollback-aware
-  transaction. Derived CPX data may be invalidated instead of moved, but notes
-  must not be silently detached and every failure must be surfaced.
+- Test-first evidence: Ten new ride-cache rows failed on the baseline. Renames
+  committed when unowned CPI, CPX, or notes targets already existed or appeared
+  during publication; shared CPI and notes files were not copied to the new
+  identity; and the shared-sidecar crash hooks were never reached because those
+  files were outside the journal. The required-absence journal regressions were
+  compile-RED because the journal had no way to bind a target that must stay
+  absent throughout publication and recovery.
+- Resolution: Activity files and every existing CPI, CPX, and notes artifact
+  are staged and published through one plan-replacement journal. Legacy CPI and
+  notes files shared by another activity are copied to the new identity while
+  the shared source is retained. Missing derived artifacts add anchored,
+  locked must-remain-absent entries to manifest version 2; version 1 journals
+  remain recoverable. A destination collision, concurrent appearance, parent
+  substitution, staging failure, or crash now either preserves the old
+  generation or leaves an explicit recovery journal instead of reporting an
+  inconsistent rename as successful.
+- Verification: On the final integrated source, the complete plan-replacement
+  suite reports 149/149 passing and the complete ride-cache removal and rename
+  suite reports 406/406 passing with one expected environment-specific skip.
+  Focused strict ASan/UBSan/LSan runs report 13/13 and 37/37 passing with leak
+  detection enabled. Fresh binaries confirmed to link `libtsan` report the same
+  13/13 and 37/37 under ThreadSanitizer. The sanitizer source files are
+  byte-identical to the integrated files.
 
 ### METRIC-004: Ride best ranking is sorted in the wrong direction
 
