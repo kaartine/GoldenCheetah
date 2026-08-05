@@ -6775,10 +6775,13 @@ plaintextCleanupIdentitySeparatesNewlineTuples()
         QFile::encodeName(stateRoot));
     const QString firstPath =
         temporary.filePath(QStringLiteral("source"));
-    const QString secondPath =
+    const QString secondDirectory =
         temporary.filePath(QStringLiteral("source\nsuffix"));
+    QVERIFY(QDir().mkpath(secondDirectory));
+    const QString secondPath = QDir(secondDirectory).filePath(
+        QStringLiteral("settings"));
     const QString firstKey =
-        QStringLiteral("suffix\ncredential");
+        QStringLiteral("suffix/settings\ncredential");
     const QString secondKey = QStringLiteral("credential");
     const QString scope =
         QUuid::createUuid().toString(QUuid::WithoutBraces);

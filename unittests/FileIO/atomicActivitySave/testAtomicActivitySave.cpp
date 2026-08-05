@@ -45,6 +45,7 @@ QString anchoredFilesystemSyncFailurePath;
 std::function<void(const char *, const QString &, const QString &)>
     anchoredFilesystemAction;
 bool forceLegacyWindowsDelete = false;
+bool failAnchoredFilesystemFileUnlink = false;
 
 #ifdef Q_OS_WIN
 class WindowsTestHandle
@@ -237,7 +238,7 @@ bool anchoredFilesystemSyncFailureRequested(const QString &path)
 
 bool anchoredFilesystemFileUnlinkFailureRequested(const QString &)
 {
-    return false;
+    return failAnchoredFilesystemFileUnlink;
 }
 
 bool anchoredFilesystemUseLegacyWindowsDelete()
@@ -336,6 +337,7 @@ public:
         const bool success =
             target.write(committed) == committed.size()
             && target.flush();
+        target.close();
         if (success && afterCommit_) {
             afterCommit_();
         }
@@ -657,10 +659,13 @@ private slots:
     void cleanup();
     void failurePreservesOriginalAndDirty_data();
     void failurePreservesOriginalAndDirty();
+    void unverifiedWriterPreservesPostCommitSubstitute_data();
+    void unverifiedWriterPreservesPostCommitSubstitute();
     void successReplacesOriginalAndMarksClean();
     void finalizeFailureKeepsDirty();
     void qSaveFileWriterCommitsReplacement();
     void replaceWriterRejectsTargetSubstitutionAtCommit();
+    void replaceWriterReportsDisplacedTargetCleanupFailure();
     void conversionMovesOriginalToBackup();
     void jsonRenameRemovesSupersededSource();
     void finalizationFailurePreservesTargetAndKeepsDirty();
@@ -883,6 +888,7 @@ void TestAtomicActivitySave::cleanup()
     anchoredFilesystemSyncFailurePath.clear();
     anchoredFilesystemAction = {};
     forceLegacyWindowsDelete = false;
+    failAnchoredFilesystemFileUnlink = false;
     resetAtomicActivitySaveProcessorStub();
 }
 
@@ -890,24 +896,35 @@ void TestAtomicActivitySave::failurePreservesOriginalAndDirty_data()
 {
     QTest::addColumn<int>("failurePoint");
     QTest::addColumn<QString>("expectedError");
+    QTest::addColumn<bool>("expectedTarget");
+    QTest::addColumn<QByteArray>("expectedContents");
 
     QTest::newRow("open")
-        << static_cast<int>(FailurePoint::Open) << QStringLiteral("open");
+        << static_cast<int>(FailurePoint::Open) << QStringLiteral("open")
+        << true << QByteArray("original activity bytes");
     QTest::newRow("short-write")
-        << static_cast<int>(FailurePoint::ShortWrite) << QStringLiteral("write");
+        << static_cast<int>(FailurePoint::ShortWrite) << QStringLiteral("write")
+        << true << QByteArray("original activity bytes");
     QTest::newRow("flush")
-        << static_cast<int>(FailurePoint::Flush) << QStringLiteral("flush");
+        << static_cast<int>(FailurePoint::Flush) << QStringLiteral("flush")
+        << true << QByteArray("original activity bytes");
     QTest::newRow("commit")
-        << static_cast<int>(FailurePoint::Commit) << QStringLiteral("commit");
+        << static_cast<int>(FailurePoint::Commit) << QStringLiteral("commit")
+        << true << QByteArray("original activity bytes");
     QTest::newRow("corrupt-commit")
-        << static_cast<int>(FailurePoint::CorruptCommit) << QStringLiteral("match");
+        << static_cast<int>(FailurePoint::CorruptCommit) << QStringLiteral("match")
+        << true << QByteArray(
+               "replacement activity bytescorrupt");
     QTest::newRow("missing-commit")
-        << static_cast<int>(FailurePoint::MissingCommit) << QStringLiteral("verify");
+        << static_cast<int>(FailurePoint::MissingCommit) << QStringLiteral("verify")
+        << false << QByteArray();
 }
 
 void TestAtomicActivitySave::failurePreservesOriginalAndDirty()
 {
     QFETCH(int, failurePoint);
+    QFETCH(bool, expectedTarget);
+    QFETCH(QByteArray, expectedContents);
     const FailurePoint failure = static_cast<FailurePoint>(failurePoint);
 
     QTemporaryDir dir;
@@ -937,9 +954,60 @@ void TestAtomicActivitySave::failurePreservesOriginalAndDirty()
 
     QVERIFY(!saved);
     QVERIFY(!error.isEmpty());
-    QCOMPARE(readAll(path), original);
+    QCOMPARE(QFileInfo::exists(path), expectedTarget);
+    if (expectedTarget) QCOMPARE(readAll(path), expectedContents);
     QVERIFY(rideFileDirty);
     QVERIFY(rideItemDirty);
+}
+
+void TestAtomicActivitySave::
+unverifiedWriterPreservesPostCommitSubstitute_data()
+{
+    QTest::addColumn<bool>("hadOriginal");
+
+    QTest::newRow("replace-existing") << true;
+    QTest::newRow("create-new") << false;
+}
+
+void TestAtomicActivitySave::
+unverifiedWriterPreservesPostCommitSubstitute()
+{
+    QFETCH(bool, hadOriginal);
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("activity.json"));
+    const QString retained =
+        dir.filePath(QStringLiteral("committed-retained.json"));
+    const QByteArray original("original activity bytes");
+    const QByteArray replacement("replacement activity bytes");
+    const QByteArray foreign("foreign activity bytes");
+    if (hadOriginal) writeFixture(path, original);
+
+    bool substituted = false;
+    const AtomicFileWriterFactory factory = [
+            &substituted,
+            &retained,
+            &foreign](const QString &target, AtomicFileMode) {
+        return std::unique_ptr<AtomicFileWriter>(
+            new FaultInjectingWriter(
+                target,
+                FailurePoint::CorruptCommit,
+                [&substituted, &retained, &foreign, target]() {
+                    QVERIFY(renameForSubstitution(target, retained));
+                    writeFixture(target, foreign);
+                    substituted = true;
+                }));
+    };
+
+    QString error;
+    QVERIFY(!writeFileAtomically(
+        path, replacement, factory, error));
+
+    QVERIFY(substituted);
+    QVERIFY(!error.isEmpty());
+    QCOMPARE(readAll(path), foreign);
+    QCOMPARE(readAll(retained), replacement + QByteArray("corrupt"));
 }
 
 void TestAtomicActivitySave::successReplacesOriginalAndMarksClean()
@@ -1087,6 +1155,38 @@ void TestAtomicActivitySave::replaceWriterRejectsTargetSubstitutionAtCommit()
     QVERIFY(QDir(dir.path()).entryList(
         {QStringLiteral("*.tmp")},
         QDir::Files | QDir::Hidden).isEmpty());
+}
+
+void TestAtomicActivitySave::
+replaceWriterReportsDisplacedTargetCleanupFailure()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Injected anchored unlink failures are Unix-specific");
+#else
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("activity.json"));
+    const QByteArray original("original activity bytes");
+    const QByteArray replacement("replacement activity bytes");
+    writeFixture(path, original);
+
+    failAnchoredFilesystemFileUnlink = true;
+    QString error;
+    const bool saved = writeFileAtomically(
+        path, replacement, qSaveFileWriterFactory(), error);
+    failAnchoredFilesystemFileUnlink = false;
+
+    QVERIFY(!saved);
+    QVERIFY(!error.isEmpty());
+    QCOMPARE(readAll(path), replacement);
+    const QStringList recoveryNames = QDir(dir.path()).entryList(
+        {QStringLiteral(".gc-remove-*")},
+        QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot);
+    QCOMPARE(recoveryNames.size(), 1);
+    QCOMPARE(
+        readAll(dir.filePath(recoveryNames.constFirst())),
+        original);
+#endif
 }
 
 void TestAtomicActivitySave::conversionMovesOriginalToBackup()
@@ -2113,6 +2213,8 @@ void TestAtomicActivitySave::jsonWriterFailurePreservesOriginal()
 {
     QFETCH(int, failurePoint);
     QFETCH(QString, expectedError);
+    QFETCH(bool, expectedTarget);
+    QFETCH(QByteArray, expectedContents);
     const FailurePoint failure = static_cast<FailurePoint>(failurePoint);
 
     QTemporaryDir dir;
@@ -2135,7 +2237,14 @@ void TestAtomicActivitySave::jsonWriterFailurePreservesOriginal()
     QVERIFY(!error.isEmpty());
     QVERIFY2(error.contains(expectedError, Qt::CaseInsensitive),
              qPrintable(error));
-    QCOMPARE(readAll(path), original);
+    QCOMPARE(QFileInfo::exists(path), expectedTarget);
+    if (failure == FailurePoint::CorruptCommit) {
+        const QByteArray retained = readAll(path);
+        QVERIFY(retained.endsWith(QByteArray("corrupt")));
+        QVERIFY(retained != original);
+    } else if (expectedTarget) {
+        QCOMPARE(readAll(path), expectedContents);
+    }
 }
 
 void TestAtomicActivitySave::jsonWriterKeepsUtf8BomAndRoundTrips()
@@ -2822,7 +2931,10 @@ void TestAtomicActivitySave::failedSaveRestoresHistoryUntilCommit()
             nullptr, &ride, targetPath, operations, error));
         QVERIFY(!error.isEmpty());
         QCOMPARE(readAll(sourcePath), original);
-        QVERIFY(!QFile::exists(targetPath));
+        const bool targetRetained =
+            failure == FailurePoint::CorruptCommit;
+        QCOMPARE(QFileInfo::exists(targetPath), targetRetained);
+        if (targetRetained) QVERIFY(QFile::remove(targetPath));
         QCOMPARE(ride.getTag(QStringLiteral("Change History"), QString()),
                  initialHistory);
     }

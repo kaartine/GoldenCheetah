@@ -23,11 +23,13 @@ unix:!android:!macx {
 SOURCES = testCredentialSettings.cpp \
           ../../../src/Core/CredentialSettings.cpp \
           ../../../src/Core/CredentialStoreQtKeychain.cpp \
-          ../../../src/Core/Settings.cpp
+          ../../../src/Core/Settings.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp
 
 HEADERS = ../../../src/Core/CredentialSettings.h \
           ../../../src/Core/CredentialStoreQtKeychain.h \
-          ../../../src/Core/Settings.h
+          ../../../src/Core/Settings.h \
+          ../../../src/FileIO/AnchoredFileSystem.h
 
 include(../../../contrib/qtkeychain/qtkeychain.pri)
 

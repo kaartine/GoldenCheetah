@@ -34,6 +34,7 @@
 #include <chrono>
 #include <cstring>
 #include <cstdlib>
+#include <memory>
 #include <utility>
 
 #ifdef Q_OS_UNIX
@@ -2156,15 +2157,25 @@ bool replaceCredentialFile(
     const QString &path,
     const QByteArray &contents)
 {
-    ReplaceAtomicFileWriter file(path);
-    if (!file.open())
-        return false;
-    if (file.write(contents) != contents.size()
-        || !file.flush()) {
-        file.cancelWriting();
+    const QFileInfo target(path);
+    if (path.isEmpty()
+        || credentialPathIsRedirected(target)
+        || (target.exists() && !target.isFile())) {
         return false;
     }
-    return file.commit();
+    const AtomicFileMode mode = target.exists()
+        ? AtomicFileMode::ReplaceExisting
+        : AtomicFileMode::CreateNew;
+    std::unique_ptr<AtomicFileWriter> file =
+        qSaveFileWriterFactory()(path, mode);
+    if (!file || !file->open())
+        return false;
+    if (file->write(contents) != contents.size()
+        || !file->flush()) {
+        file->cancelWriting();
+        return false;
+    }
+    return file->commit();
 }
 
 bool readCredentialFile(
@@ -3452,28 +3463,47 @@ bool replaceExactSettingsMap(
         return false;
     }
 
-    ReplaceAtomicFileWriter replacement(settings->fileName());
-    if (!replacement.open()
-#ifdef Q_OS_WIN
-        || !hardenWindowsCredentialFile(
-            replacement.temporaryPath())
-#endif
-        || replacement.write(serialized)
-            != serialized.size()
-        || !replacement.flush()) {
-        replacement.cancelWriting();
+    const QFileInfo target(settings->fileName());
+    if (credentialPathIsRedirected(target)
+        || (target.exists() && !target.isFile())) {
         if (error) {
             *error = QStringLiteral(
-                "Cannot stage credential settings replacement");
+                "Credential settings target is unsafe");
         }
         return false;
     }
-    if (!replacement.commit()) {
-        replacement.cancelWriting();
+    const AtomicFileMode mode = target.exists()
+        ? AtomicFileMode::ReplaceExisting
+        : AtomicFileMode::CreateNew;
+    std::unique_ptr<AtomicFileWriter> replacement =
+        qSaveFileWriterFactory()(settings->fileName(), mode);
+    if (!replacement || !replacement->open()
+#ifdef Q_OS_WIN
+        || !hardenWindowsCredentialFile(
+            replacement->temporaryPath())
+#endif
+        || replacement->write(serialized)
+            != serialized.size()
+        || !replacement->flush()) {
+        const QString detail = replacement
+            ? replacement->errorString() : QString();
+        if (replacement) replacement->cancelWriting();
+        if (error) {
+            *error = detail.isEmpty()
+                ? QStringLiteral(
+                      "Cannot stage credential settings replacement")
+                : QStringLiteral(
+                      "Cannot stage credential settings replacement: %1")
+                      .arg(detail);
+        }
+        return false;
+    }
+    if (!replacement->commit()) {
+        replacement->cancelWriting();
         if (error) {
             *error = QStringLiteral(
                 "Cannot publish credential settings replacement: %1")
-                .arg(replacement.errorString());
+                .arg(replacement->errorString());
         }
         return false;
     }

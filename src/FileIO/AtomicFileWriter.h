@@ -492,7 +492,9 @@ public:
     virtual bool commit() = 0;
     virtual void cancelWriting() = 0;
     virtual QString errorString() const = 0;
+    // Unverified commits are observed but never rolled back by pathname.
     virtual bool verifiesCommittedResult() const { return false; }
+    virtual QString temporaryPath() const { return {}; }
 };
 
 enum class AtomicFileMode {
@@ -667,12 +669,11 @@ public:
                 staging, expectedTarget_);
         if (publication.effect
             == AnchoredFileSystem::MutationEffect::AppliedDurable) {
-            removePinned(
+            return removePinned(
                 expectedTarget_,
                 parent_,
                 QStringLiteral(
                     "cannot remove the previous atomic target"));
-            return true;
         }
 
         error_ = publication.error.isEmpty()
@@ -707,7 +708,7 @@ public:
         return file_ ? file_->errorString() : QString();
     }
 
-    QString temporaryPath() const
+    QString temporaryPath() const override
     {
         return file_ ? file_->fileName() : temporaryPath_;
     }
@@ -1098,6 +1099,11 @@ public:
     }
 
     bool verifiesCommittedResult() const override { return true; }
+
+    QString temporaryPath() const override
+    {
+        return file_ ? file_->fileName() : temporaryPath_;
+    }
 
 private:
     bool targetExists() const
@@ -1567,80 +1573,6 @@ inline bool publishStagedFileSet(
     return true;
 }
 
-inline bool restoreAtomicFile(const QString &path, bool hadOriginal,
-                              const QByteArray &original, QString &error)
-{
-    if (!hadOriginal) {
-        const QFileInfo current(path);
-        if (!current.exists() && !current.isSymLink()) {
-            return true;
-        }
-        if (!QFile::remove(path)) {
-            appendAtomicFileError(
-                error,
-                QStringLiteral("cannot remove the unverified activity file"));
-            return false;
-        }
-        QString syncError;
-        if (!syncParentDirectory(path, syncError)) {
-            appendAtomicFileError(error, syncError);
-            return false;
-        }
-        return true;
-    }
-
-    const QFileInfo current(path);
-    if (current.isSymLink()) {
-        appendAtomicFileError(
-            error,
-            QStringLiteral(
-                "cannot restore the previous activity through a symbolic link"));
-        return false;
-    }
-    std::unique_ptr<AtomicFileWriter> restore = current.exists()
-        ? std::unique_ptr<AtomicFileWriter>(
-            new ReplaceAtomicFileWriter(path))
-        : std::unique_ptr<AtomicFileWriter>(
-            new NewAtomicFileWriter(path));
-    if (!restore->open()) {
-        appendAtomicFileError(
-            error,
-            QStringLiteral("cannot restore the previous activity: %1")
-                .arg(restore->errorString()));
-        return false;
-    }
-    if (restore->write(original)
-        != static_cast<qint64>(original.size())) {
-        appendAtomicFileError(
-            error,
-            QStringLiteral("cannot rewrite the previous activity: %1")
-                .arg(restore->errorString()));
-        restore->cancelWriting();
-        return false;
-    }
-    if (!restore->flush()) {
-        appendAtomicFileError(
-            error,
-            QStringLiteral("cannot flush the restored activity: %1")
-                .arg(restore->errorString()));
-        restore->cancelWriting();
-        return false;
-    }
-    QString syncError;
-    if (!restore->commit()) {
-        appendAtomicFileError(
-            error,
-            QStringLiteral("cannot commit the restored activity: %1")
-                .arg(restore->errorString()));
-        return false;
-    }
-    if (!syncParentDirectory(path, syncError)) {
-        appendAtomicFileError(error, syncError);
-        return false;
-    }
-    return true;
-}
-
 inline bool writeFileAtomically(const QString &path,
                                 const QByteArray &data,
                                 const AtomicFileWriterFactory &factory,
@@ -1679,7 +1611,6 @@ inline bool writeFileAtomically(const QString &path,
         return false;
     }
 
-    QByteArray original;
     if (hadOriginal) {
         QFile originalFile(path);
         if (!originalFile.open(QIODevice::ReadOnly)) {
@@ -1688,12 +1619,15 @@ inline bool writeFileAtomically(const QString &path,
                         .arg(originalFile.errorString());
             return false;
         }
-        original = originalFile.readAll();
-        if (originalFile.error() != QFileDevice::NoError) {
-            error = QStringLiteral(
-                        "Cannot read the complete existing activity: %1")
-                        .arg(originalFile.errorString());
-            return false;
+        while (!originalFile.atEnd()) {
+            const QByteArray chunk = originalFile.read(1024 * 1024);
+            if (chunk.isEmpty()
+                && originalFile.error() != QFileDevice::NoError) {
+                error = QStringLiteral(
+                            "Cannot read the complete existing activity: %1")
+                            .arg(originalFile.errorString());
+                return false;
+            }
         }
     }
 
@@ -1753,7 +1687,10 @@ inline bool writeFileAtomically(const QString &path,
     if (!syncParentDirectory(path, syncError)) {
         error = syncError;
         writer.reset();
-        restoreAtomicFile(path, hadOriginal, original, error);
+        appendAtomicFileError(
+            error,
+            QStringLiteral(
+                "the unverified committed activity pathname was retained"));
         return false;
     }
 
@@ -1777,7 +1714,10 @@ inline bool writeFileAtomically(const QString &path,
     if (!error.isEmpty()) {
         committedFile.close();
         writer.reset();
-        restoreAtomicFile(path, hadOriginal, original, error);
+        appendAtomicFileError(
+            error,
+            QStringLiteral(
+                "the unverified committed activity pathname was retained"));
         return false;
     }
     return true;

@@ -5569,68 +5569,23 @@ MutationResult replaceExisting(
         return result;
     }
 
-    PinnedFile firstAfterExchange;
-    PinnedFile secondAfterExchange;
-    QString pinError;
-    const bool firstPinned = pinRegularFile(
-        staging, firstAfterExchange, pinError);
-    const bool secondPinned = pinRegularFile(
-        target, secondAfterExchange, pinError);
-    reportAnchoredFilesystemTransition(
-        "replace-before-rollback",
-        target.displayPath_,
-        staging.displayPath_);
-    bool rollbackUnsupported = false;
-    const int rollbackResult = exchangeNamesNative(
-        staging.parent_.state_->descriptor.get(),
-        stagingName,
-        target.parent_.state_->descriptor.get(),
-        targetName,
-        rollbackUnsupported);
-    const int rollbackError = rollbackResult == 0 ? 0 : errno;
-    if (rollbackResult != 0) {
-        result.effect = MutationEffect::Partial;
-        result.error = rollbackUnsupported
-            ? QStringLiteral(
-                "The filesystem could not roll back an anchored replacement")
-            : nativeError(
-                QStringLiteral(
-                    "Cannot roll back an anchored replacement"),
-                rollbackError);
-        result.verifiedRecoveryPath =
-            replacement.verifiedPath(target);
-        return result;
-    }
-
-    refreshHeld(replacement, pinError);
-    refreshHeld(expectedTarget, pinError);
-    bool firstRestored = false;
-    bool secondRestored = false;
-    QString rollbackInspectionError;
-    const bool rollbackVerified = firstPinned && secondPinned
-        && nameMatches(
-            target, firstAfterExchange,
-            firstRestored, rollbackInspectionError)
-        && nameMatches(
-            staging, secondAfterExchange,
-            secondRestored, rollbackInspectionError)
-        && firstRestored && secondRestored;
+    result.effect = MutationEffect::Partial;
+    result.error = inspectionError.isEmpty()
+        ? QStringLiteral(
+              "An anchored replacement endpoint changed after publication; "
+              "no unverified rollback was attempted")
+        : inspectionError;
     QString syncError;
-    const bool rollbackSynced = staging.parent_.sync(syncError);
-    if (!rollbackVerified || !rollbackSynced) {
-        result.effect = MutationEffect::Partial;
-        result.error = !rollbackInspectionError.isEmpty()
-            ? rollbackInspectionError
-            : (!pinError.isEmpty() ? pinError : syncError);
-        if (result.error.isEmpty()) {
-            result.error = QStringLiteral(
-                "The anchored replacement rollback could not be verified");
-        }
-        return result;
+    if (!staging.parent_.sync(syncError)
+        && !syncError.isEmpty()) {
+        result.error += QStringLiteral("; ") + syncError;
     }
-    result.effect = MutationEffect::Conflict;
-    result.error = QStringLiteral(
-        "An anchored replacement endpoint changed before publication");
+    result.verifiedRecoveryPath =
+        replacement.verifiedPath(target);
+    if (result.verifiedRecoveryPath.isEmpty()) {
+        result.verifiedRecoveryPath =
+            expectedTarget.verifiedPath(staging);
+    }
     return result;
 #elif defined(Q_OS_WIN)
     const NativeIdentity replacementIdentity = replacement.identity();

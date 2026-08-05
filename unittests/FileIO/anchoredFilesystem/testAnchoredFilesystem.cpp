@@ -769,8 +769,9 @@ private slots:
     void copyDoesNotReplaceDestination();
     void copyReportsNonDurableCleanup();
     void replaceExchangesPinnedGenerations();
-    void replaceRejectsTargetSubstitutionAtMutation();
-    void replaceRejectsStagingSubstitutionAtMutation();
+    void replaceReportsTargetSubstitutionAtMutation();
+    void replaceReportsStagingSubstitutionAtMutation();
+    void replaceDoesNotAttemptUnverifiedRollback();
     void moveDoesNotRestoreUnverifiedDestination();
     void moveDoesNotReportModifiedRecoveryPath();
     void moveRejectsReplacementAfterDirectorySync();
@@ -2640,7 +2641,7 @@ void TestAnchoredFilesystem::replaceExchangesPinnedGenerations()
 #endif
 }
 
-void TestAnchoredFilesystem::replaceRejectsTargetSubstitutionAtMutation()
+void TestAnchoredFilesystem::replaceReportsTargetSubstitutionAtMutation()
 {
     QTemporaryDir root;
     QVERIFY(root.isValid());
@@ -2672,20 +2673,33 @@ void TestAnchoredFilesystem::replaceRejectsTargetSubstitutionAtMutation()
 
     QVERIFY(hookReached);
     QVERIFY(!result.applied());
+#ifdef Q_OS_WIN
     QCOMPARE(result.effect, MutationEffect::Conflict);
     const NativeIdentity substituteIdentity = substitute.identity();
     substitute = {};
     QCOMPARE(pin(target).identity(), substituteIdentity);
     verifyPinnedAt(staged, staging, staged.identity());
+#else
+    QCOMPARE(result.effect, MutationEffect::Partial);
+    const NativeIdentity substituteIdentity = substitute.identity();
+    substitute = {};
+    QCOMPARE(pin(staging).identity(), substituteIdentity);
+    QCOMPARE(pin(target).identity(), staged.identity());
+#endif
     verifyPinnedAt(expectedTarget,
                    entry(directory, QStringLiteral("retained")),
                    expectedTarget.identity());
+#ifdef Q_OS_WIN
     QCOMPARE(readFixture(target.displayPath()), targetContents);
     QCOMPARE(readFixture(staging.displayPath()), stagedContents);
+#else
+    QCOMPARE(readFixture(target.displayPath()), stagedContents);
+    QCOMPARE(readFixture(staging.displayPath()), targetContents);
+#endif
     QCOMPARE(readFixture(retained), targetContents);
 }
 
-void TestAnchoredFilesystem::replaceRejectsStagingSubstitutionAtMutation()
+void TestAnchoredFilesystem::replaceReportsStagingSubstitutionAtMutation()
 {
     QTemporaryDir root;
     QVERIFY(root.isValid());
@@ -2720,17 +2734,71 @@ void TestAnchoredFilesystem::replaceRejectsStagingSubstitutionAtMutation()
 
     QVERIFY(hookReached);
     QVERIFY(!result.applied());
+#ifdef Q_OS_WIN
     QCOMPARE(result.effect, MutationEffect::Conflict);
     const NativeIdentity substituteIdentity = substitute.identity();
     substitute = {};
     QCOMPARE(pin(staging).identity(), substituteIdentity);
     verifyPinnedAt(expectedTarget, target, expectedTarget.identity());
+#else
+    QCOMPARE(result.effect, MutationEffect::Partial);
+    const NativeIdentity substituteIdentity = substitute.identity();
+    substitute = {};
+    QCOMPARE(pin(target).identity(), substituteIdentity);
+    verifyPinnedAt(expectedTarget, staging, expectedTarget.identity());
+#endif
     verifyPinnedAt(retainedStaging,
                    entry(directory, QStringLiteral("retained")),
                    retainedStaging.identity());
+#ifdef Q_OS_WIN
     QCOMPARE(readFixture(target.displayPath()), targetContents);
     QCOMPARE(readFixture(staging.displayPath()), stagedContents);
+#else
+    QCOMPARE(readFixture(target.displayPath()), stagedContents);
+    QCOMPARE(readFixture(staging.displayPath()), targetContents);
+#endif
     QCOMPARE(readFixture(retained), stagedContents);
+}
+
+void TestAnchoredFilesystem::replaceDoesNotAttemptUnverifiedRollback()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("POSIX atomic name exchange behavior is required");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef staging = entry(directory, QStringLiteral("staging"));
+    const EntryRef target = entry(directory, QStringLiteral("target"));
+    const QString retained = root.filePath(QStringLiteral("retained"));
+    const QByteArray stagedContents("new activity bytes");
+    const QByteArray targetContents("old activity bytes");
+    const QByteArray substituteContents("foreign activity bytes");
+    writeFixture(staging.displayPath(), stagedContents);
+    writeFixture(target.displayPath(), targetContents);
+    PinnedFile staged = pin(staging);
+    PinnedFile expectedTarget = pin(target);
+    bool hookReached = false;
+    filesystemAction = [&](const char *transition,
+                           const QString &,
+                           const QString &targetPath) {
+        if (qstrcmp(transition, "replace-published") != 0) return;
+        hookReached = true;
+        QVERIFY(renameFixture(targetPath, retained));
+        writeFixture(targetPath, substituteContents);
+    };
+
+    const MutationResult result = replaceExisting(
+        staged, expectedTarget);
+    filesystemAction = {};
+
+    QVERIFY(hookReached);
+    QCOMPARE(result.effect, MutationEffect::Partial);
+    QVERIFY(!result.error.isEmpty());
+    QCOMPARE(readFixture(target.displayPath()), substituteContents);
+    QCOMPARE(readFixture(staging.displayPath()), targetContents);
+    QCOMPARE(readFixture(retained), stagedContents);
+#endif
 }
 
 void TestAnchoredFilesystem::moveDoesNotRestoreUnverifiedDestination()
