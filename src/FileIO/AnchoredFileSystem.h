@@ -32,6 +32,8 @@ class EntryRef;
 class PinnedFile;
 struct MutationResult;
 struct WriterPinHandoffState;
+using PinnedFileChunkConsumer =
+    std::function<bool(const char *, qsizetype, QString &)>;
 
 class NativeIdentity
 {
@@ -226,6 +228,8 @@ private:
         const EntryRef &, const PinnedFile &, bool &, QString &);
     friend bool readAll(
         const PinnedFile &, qint64, QByteArray &, QString &);
+    friend bool streamContents(
+        const PinnedFile &, const PinnedFileChunkConsumer &, QString &);
     friend QString verifiedRecoveryPath(
         const PinnedFile &, const EntryRef &);
     friend bool copyToNewFile(
@@ -297,6 +301,12 @@ bool readAll(
     const PinnedFile &file,
     qint64 maximumSize,
     QByteArray &contents,
+    QString &error);
+
+// The chunk pointer is valid only for the duration of the consumer call.
+bool streamContents(
+    const PinnedFile &file,
+    const PinnedFileChunkConsumer &consume,
     QString &error);
 
 QString verifiedRecoveryPath(

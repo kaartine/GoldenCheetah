@@ -3121,6 +3121,16 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   baselines accepted byte-identical substitutes, overwrote or deleted them,
   followed a redirected namespace far enough to remove an outside directory,
   or left an unrecognized staging name that blocked later recovery.
+  Plan-specific follow-up regressions replace a byte-identical manifest,
+  commit marker after publication and while being read, staged activity,
+  preserved old activity, and pre-manifest recovery file at their respective
+  observation-to-use boundaries. Another exchanges the newly created UUID
+  journal before its first old-copy publication. The unsafe baselines accepted
+  the replacement generations, published from them, deleted them, or wrote a
+  new journal file into the substituted directory. Two additional lifetime
+  regressions exchange a just-created old copy before manifest publication and
+  a just-recorded staged file before the record operation returns; both unsafe
+  baselines accepted the substituted generation.
 - Partial resolution: RideCache storage transactions now open one anchored
   athlete-root generation, walk children without following links, and pin each
   existing source, backup, derived file, and journal control file once. Reads,
@@ -3200,6 +3210,25 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   final namespace snapshot. Its standalone tests now link the anchored
   implementation, and native CI builds and runs the plan-replacement and
   plan-bundle suites on both Windows and macOS.
+
+  Plan UUID journals now retain their namespace and child anchors through
+  manifest, commit-marker, data-file, recovery, and cleanup operations. Initial
+  manifests, preserved old copies, and commit markers are created directly
+  below the anchored directory with no replacement. Existing manifests and
+  marker reads are pinned to one native identity; manifest rewrites retain the
+  expected old generation across pre-commit validation and re-pin the published
+  generation. Staged and preserved activity files are obtained from a bounded,
+  repeated anchored directory snapshot, pinned by the enumerated identity, and
+  streamed from that handle into the atomic activity writer. The reusable
+  anchored stream API verifies the file before, during, and after chunked reads
+  without buffering a complete activity in memory.
+
+  Cleanup removes only the pinned identities, rejects repopulated names, and
+  removes the verified empty UUID child through the anchored quarantine
+  primitive. Pre-manifest crash recovery follows the same bounded enumeration,
+  pinning, stable-snapshot, and anchored-removal contract. Successful cleanup is
+  recorded explicitly instead of inferred from a later pathname absence, so
+  repeated cleanup remains idempotent without accepting a replaced journal.
 - Verification: Every deterministic regression failed for its intended unsafe
   behavior before its fix. On Linux, RideCache passes 390 cases with one skip,
   PlanReplacement 124, PlanBundleImport 8, and linked-save cleanup 4 under both
@@ -3218,24 +3247,31 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   plan-namespace regressions likewise first reproduced hidden sibling recovery
   and destructive enumerated-child substitution. PlanReplacement now passes
   126/0/0 normally, under strict ASan/UBSan/LSan, and under ThreadSanitizer;
-  PlanBundleImport passes 8/0/0 in all three configurations.
-- Residual: Plan-replacement UUID-journal control-file and data I/O plus cleanup
-  still use pathname-based `QDir`/`QFileInfo` operations after the identity-bound
-  observation handle is released. The private-directory API explicitly trusts
+  PlanBundleImport passes 8/0/0 in all three configurations. The nine new plan
+  identity regressions first reproduced
+  acceptance, publication, destructive cleanup, or out-of-generation writes.
+  PlanReplacement now passes 136/0/0 normally, under strict ASan/UBSan/LSan,
+  and under ThreadSanitizer. AnchoredFilesystem passes 84/0/13 in all three
+  configurations, including direct multi-chunk and consumer-failure coverage
+  for the pinned stream API. PlanBundleImport passes 8/0/0 normally and under
+  both sanitizer configurations. The complete production application links,
+  and an isolated minimal-platform `--version` smoke test reports
+  `GoldenCheetah V3.8-DEV2605 (5012)`.
+- Residual: The private-directory API explicitly trusts
   processes running as the same OS identity and privileged administrators; such
   a process can still exchange a name after revalidation and before a later
-  pathname-based copy or write. Replace-existing publication, generic staged-set
-  rollback, activity conversion/rename, split archival, and lower-risk backup
-  cleanup retain related windows. POSIX exposes no portable identity-conditional
+  pathname-based copy or write. Plan manifest rewrites still inherit the generic
+  replace-existing publication window despite retaining and revalidating the
+  expected generation. Generic staged-set rollback, activity conversion/rename,
+  split archival, and lower-risk backup cleanup retain related windows. POSIX
+  exposes no portable identity-conditional
   `rmdir`; private random quarantine, repeated identity checks, anchored
   post-checks, and fail-closed recovery reduce but cannot eliminate its final
   check-to-syscall interval. A reported verified recovery path is also
   point-in-time evidence, not a permanent claim after handles are released.
   These residuals keep this item `IN_PROGRESS`.
-- Next test and fix: Retain plan UUID-journal children through identity-bound
-  manifest, commit-marker, data-file, and cleanup operations. After that, apply
-  the observed-generation contract to generic replace-existing publication and
-  staged rollback.
+- Next test and fix: Apply the observed-generation contract to generic
+  replace-existing publication and staged rollback.
 
 ### GUI-007: Modal activity workflows retained dangling RideItem pointers
 

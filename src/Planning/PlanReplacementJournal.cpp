@@ -38,6 +38,8 @@ namespace Detail {
 constexpr int ManifestVersion = 1;
 constexpr int MaximumEntries = 4096;
 constexpr qsizetype MaximumNamespaceEntries = 4096;
+constexpr qsizetype MaximumJournalEntries =
+    qsizetype(MaximumEntries) * 4 + 256;
 constexpr qint64 MaximumManifestSize = 16 * 1024 * 1024;
 constexpr qint64 MaximumCommitMarkerSize = 128;
 constexpr qint64 MaximumLockFileSize = 64 * 1024;
@@ -77,6 +79,13 @@ struct ObservedFile
     AtomicFileSnapshot contents;
 };
 
+struct AnchoredJournalFile
+{
+    QString name;
+    AnchoredFileSystem::EntryRef entry;
+    std::shared_ptr<AnchoredFileSystem::PinnedFile> file;
+};
+
 } // namespace Detail
 
 struct JournalState
@@ -89,14 +98,21 @@ struct JournalState
     QString commitMarkerPath;
     Detail::Manifest manifest;
     AtomicFileSnapshot manifestSnapshot;
+    AnchoredFileSystem::DirectoryAnchor namespaceDirectory;
+    AnchoredFileSystem::DirectoryAnchor journalDirectory;
+    Detail::AnchoredJournalFile manifestFile;
+    Detail::AnchoredJournalFile commitMarkerFile;
+    QList<Detail::AnchoredJournalFile> trackedDataFiles;
     QList<QPair<QString, AtomicFileSnapshot>> inputSnapshots;
     std::unique_ptr<AtomicFileLockSet> transactionLease;
     std::unique_ptr<AtomicFileLockSet> pathLocks;
+    bool cleanupComplete = false;
 };
 
 namespace {
 
 using Detail::Entry;
+using Detail::AnchoredJournalFile;
 using Detail::Manifest;
 using Detail::ObservedFile;
 using Detail::ResolvedEntry;
@@ -381,63 +397,6 @@ bool validateExistingDirectory(const QString &path, QString &error)
     return true;
 }
 
-bool makeDirectoryPrivate(const QString &path, QString &error)
-{
-    const QFileDevice::Permissions privatePermissions =
-        QFileDevice::ReadOwner | QFileDevice::WriteOwner
-        | QFileDevice::ExeOwner;
-    if (!QFile::setPermissions(path, privatePermissions)) {
-        error = QStringLiteral(
-            "Cannot make the plan transaction directory private");
-        return false;
-    }
-
-#ifdef Q_OS_UNIX
-    QFileInfo info(path);
-    info.refresh();
-    const QFileDevice::Permissions nonOwnerPermissions =
-        QFileDevice::ReadGroup | QFileDevice::WriteGroup
-        | QFileDevice::ExeGroup | QFileDevice::ReadOther
-        | QFileDevice::WriteOther | QFileDevice::ExeOther;
-    const QFileDevice::Permissions permissions = info.permissions();
-    if ((permissions & nonOwnerPermissions) != QFileDevice::Permissions()
-        || !permissions.testFlag(QFileDevice::ReadOwner)
-        || !permissions.testFlag(QFileDevice::WriteOwner)
-        || !permissions.testFlag(QFileDevice::ExeOwner)) {
-        error = QStringLiteral(
-            "The plan transaction directory is not private");
-        return false;
-    }
-#endif
-    return true;
-}
-
-bool ensurePrivateDirectory(const QString &path, QString &error)
-{
-    const QFileInfo existing(path);
-    if (existing.exists() || existing.isSymLink()) {
-        return validateExistingDirectory(path, error)
-            && makeDirectoryPrivate(path, error);
-    }
-
-    const QFileInfo parent(existing.absolutePath());
-    if (!parent.exists() || !parent.isDir() || parent.isSymLink()) {
-        error = QStringLiteral(
-            "Cannot create a plan transaction under an unsafe directory");
-        return false;
-    }
-    if (!QDir().mkdir(path)) {
-        error = QStringLiteral("Cannot create the plan transaction directory");
-        return false;
-    }
-    if (!makeDirectoryPrivate(path, error)) {
-        QDir().rmdir(path);
-        return false;
-    }
-    if (!syncParentDirectory(path, error)) return false;
-    return true;
-}
-
 bool openOrCreatePrivateFixedDirectory(
     const AnchoredFileSystem::DirectoryAnchor &parent,
     const QString &component,
@@ -665,6 +624,207 @@ bool transactionNamespacesAreReady(
     return true;
 }
 
+bool journalDirectoryMatches(
+    const JournalState &state, QString &error)
+{
+    if (!state.namespaceDirectory.isValid()
+        || !state.journalDirectory.isValid()) {
+        error = QStringLiteral(
+            "The plan-replacement journal is no longer anchored");
+        return false;
+    }
+    if (!state.namespaceDirectory.pathMatches(error)
+        || !state.journalDirectory.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The plan-replacement journal directory was replaced");
+        }
+        return false;
+    }
+    return true;
+}
+
+bool pinAnchoredJournalFile(
+    const AnchoredFileSystem::DirectoryAnchor &directory,
+    const QString &name,
+    qint64 maximumSize,
+    AnchoredJournalFile &anchored,
+    QString &error,
+    const AnchoredFileSystem::NativeIdentity *expectedIdentity = nullptr)
+{
+    anchored = {};
+    anchored.name = name;
+    anchored.entry = directory.entry(name, error);
+    anchored.file =
+        std::make_shared<AnchoredFileSystem::PinnedFile>();
+    if (!anchored.entry.isValid()
+        || !AnchoredFileSystem::pinRegularFile(
+            anchored.entry,
+            *anchored.file,
+            error,
+            maximumSize)) {
+        return false;
+    }
+    bool matches = false;
+    if (!AnchoredFileSystem::entryMatches(
+            anchored.entry,
+            *anchored.file,
+            matches,
+            error)
+        || !matches
+        || anchored.file->identity().linkCount() != 1
+        || (expectedIdentity
+            && (anchored.file->identity() != *expectedIdentity
+                || anchored.file->identity().linkCount()
+                    != expectedIdentity->linkCount()))
+        || !directory.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "A plan-replacement journal file was replaced while being pinned");
+        }
+        return false;
+    }
+    return true;
+}
+
+const AnchoredJournalFile *findAnchoredJournalFile(
+    const QList<AnchoredJournalFile> &files,
+    const QString &name)
+{
+    for (const AnchoredJournalFile &file : files) {
+        if (file.name == name) return &file;
+    }
+    return nullptr;
+}
+
+bool anchoredJournalFileMatches(
+    const AnchoredJournalFile *file,
+    const AtomicFileSnapshot &expected)
+{
+    return file && file->file && file->file->isValid()
+        && file->file->size() == expected.size
+        && file->file->sha256() == expected.digest;
+}
+
+bool anchoredJournalFileIsCurrent(
+    const AnchoredFileSystem::DirectoryAnchor &directory,
+    const AnchoredJournalFile &anchored,
+    QString &error);
+
+bool removeAnchoredJournalFile(
+    const AnchoredFileSystem::DirectoryAnchor &directory,
+    const AnchoredJournalFile &anchored,
+    QString &error)
+{
+    if (!anchoredJournalFileIsCurrent(
+            directory, anchored, error)) {
+        return false;
+    }
+    const AnchoredFileSystem::MutationResult removal =
+        AnchoredFileSystem::remove(*anchored.file);
+    if (removal.effect
+        == AnchoredFileSystem::MutationEffect::AppliedDurable) {
+        if (directory.pathMatches(error)) return true;
+    } else if (removal.effect
+        == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
+        QString syncError;
+        QString matchError;
+        if (directory.sync(syncError)
+            && directory.pathMatches(matchError)) {
+            return true;
+        }
+        error = removal.error;
+        appendError(error, syncError);
+        appendError(error, matchError);
+        return false;
+    }
+    if (error.isEmpty()) {
+        error = removal.error.isEmpty()
+            ? QStringLiteral(
+                  "Cannot remove an anchored plan transaction file")
+            : removal.error;
+    }
+    if (!removal.verifiedRecoveryPath.isEmpty()) {
+        appendError(
+            error,
+            QStringLiteral("recovery file retained at %1")
+                .arg(removal.verifiedRecoveryPath));
+    }
+    return false;
+}
+
+bool anchoredJournalFileIsCurrent(
+    const AnchoredFileSystem::DirectoryAnchor &directory,
+    const AnchoredJournalFile &anchored,
+    QString &error)
+{
+    if (!anchored.entry.isValid() || !anchored.file
+        || !anchored.file->isValid()) {
+        error = QStringLiteral(
+            "A plan-replacement journal file is no longer anchored");
+        return false;
+    }
+    bool matches = false;
+    if (!AnchoredFileSystem::entryMatches(
+            anchored.entry,
+            *anchored.file,
+            matches,
+            error)
+        || !matches
+        || !directory.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "A plan-replacement journal file was replaced");
+        }
+        return false;
+    }
+    return true;
+}
+
+bool trackedJournalFilesAreCurrent(
+    const JournalState &state, QString &error)
+{
+    for (const AnchoredJournalFile &file : state.trackedDataFiles) {
+        if (!anchoredJournalFileIsCurrent(
+                state.journalDirectory, file, error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool readAnchoredControlFile(
+    const AnchoredFileSystem::DirectoryAnchor &directory,
+    const QString &name,
+    qint64 maximumSize,
+    QByteArray &contents,
+    AtomicFileSnapshot &snapshot,
+    AnchoredJournalFile &anchored,
+    QString &error,
+    const char *transition = nullptr)
+{
+    contents.clear();
+    snapshot = {};
+    if (!pinAnchoredJournalFile(
+            directory, name, maximumSize, anchored, error)
+        || !AnchoredFileSystem::readAll(
+            *anchored.file,
+            maximumSize,
+            contents,
+            error)) {
+        return false;
+    }
+    snapshot.size = anchored.file->size();
+    snapshot.digest = anchored.file->sha256();
+#ifdef GC_PLAN_REPLACEMENT_TEST_HOOKS
+    if (transition) planReplacementTransitionReached(transition);
+#else
+    Q_UNUSED(transition)
+#endif
+    return anchoredJournalFileIsCurrent(
+        directory, anchored, error);
+}
+
 bool inspectRegularFile(
     const QString &path,
     ObservedFile &observed,
@@ -717,75 +877,43 @@ bool validateExpectedSnapshot(
     return true;
 }
 
-bool readSmallRegularFile(
-    const QString &path,
-    qint64 maximumSize,
-    QByteArray &contents,
-    AtomicFileSnapshot &snapshot,
-    QString &error)
-{
-    contents.clear();
-    const QFileInfo info(path);
-    if (!info.exists() || !info.isFile() || info.isSymLink()) {
-        error = QStringLiteral(
-            "A plan transaction control file is unavailable or unsafe");
-        return false;
-    }
-    if (info.size() < 0 || info.size() > maximumSize) {
-        error = QStringLiteral(
-            "A plan transaction control file is unexpectedly large");
-        return false;
-    }
-
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        error = QStringLiteral("Cannot read a plan transaction control file: %1")
-                    .arg(file.errorString());
-        return false;
-    }
-    contents = file.read(maximumSize + 1);
-    if (contents.size() > maximumSize
-        || file.error() != QFileDevice::NoError) {
-        error = QStringLiteral("Cannot read a bounded plan transaction file");
-        return false;
-    }
-    snapshot.size = contents.size();
-    snapshot.digest = QCryptographicHash::hash(
-        contents, QCryptographicHash::Sha256);
-    return true;
-}
-
 bool writeBytesAtomically(
     const QString &path,
     const QByteArray &contents,
     AtomicFileMode mode,
     AtomicFileSnapshot &snapshot,
-    QString &error)
+    QString &error,
+    const AtomicPreCommitValidation &validateBeforeCommit = {})
 {
     if (!writeFileAtomically(
             path, contents, qSaveFileWriterFactory(), error,
-            mode == AtomicFileMode::ReplaceExisting)) {
+            mode == AtomicFileMode::ReplaceExisting,
+            false,
+            validateBeforeCommit)) {
         return false;
     }
     if (!syncParentDirectory(path, error)) return false;
     return captureAtomicFileSnapshot(path, snapshot, error);
 }
 
-bool copyExpectedFileAtomically(
-    const QString &sourcePath,
+bool copyExpectedPinnedFileAtomically(
+    const AnchoredFileSystem::DirectoryAnchor &sourceDirectory,
+    const AnchoredJournalFile &source,
     const QString &targetPath,
     const AtomicFileSnapshot &expected,
     AtomicFileMode mode,
     QString &error)
 {
-    if (!atomicFileMatchesSnapshot(sourcePath, expected, error)) return false;
-
-    QFile source(sourcePath);
-    if (!source.open(QIODevice::ReadOnly)) {
-        error = QStringLiteral("Cannot read a plan transaction source: %1")
-                    .arg(source.errorString());
+    if (!anchoredJournalFileMatches(&source, expected)
+        || !anchoredJournalFileIsCurrent(
+            sourceDirectory, source, error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "A plan transaction source changed unexpectedly");
+        }
         return false;
     }
+
     std::unique_ptr<AtomicFileWriter> writer =
         qSaveFileWriterFactory()(targetPath, mode);
     if (!writer || !writer->open()) {
@@ -797,32 +925,30 @@ bool copyExpectedFileAtomically(
         return false;
     }
 
-    qint64 copied = 0;
-    while (!source.atEnd()) {
-        const QByteArray chunk = source.read(1024 * 1024);
-        if (chunk.isEmpty() && source.error() != QFileDevice::NoError) {
-            error = QStringLiteral("Cannot read a plan transaction source: %1")
-                        .arg(source.errorString());
-            writer->cancelWriting();
-            return false;
-        }
-        if (writer->write(chunk) != chunk.size()) {
-            error = atomicFileError(
+    const bool copied = AnchoredFileSystem::streamContents(
+        *source.file,
+        [&writer](const char *data, qsizetype size, QString &streamError) {
+            const QByteArray chunk = QByteArray::fromRawData(
+                data, int(size));
+            if (writer->write(chunk) == size) return true;
+            streamError = atomicFileError(
                 QStringLiteral("Cannot copy a complete plan transaction file"),
                 *writer);
-            writer->cancelWriting();
             return false;
+        },
+        error);
+    if (!copied || !writer->flush()) {
+        if (error.isEmpty()) {
+            error = writer->errorString().isEmpty()
+                ? QStringLiteral(
+                      "Cannot flush a complete plan transaction file")
+                : writer->errorString();
         }
-        copied += chunk.size();
-    }
-    if (copied != expected.size || !writer->flush()) {
-        error = writer->errorString().isEmpty()
-            ? QStringLiteral("Cannot flush a complete plan transaction file")
-            : writer->errorString();
         writer->cancelWriting();
         return false;
     }
-    if (!atomicFileMatchesSnapshot(sourcePath, expected, error)) {
+    if (!anchoredJournalFileIsCurrent(
+            sourceDirectory, source, error)) {
         writer->cancelWriting();
         return false;
     }
@@ -832,8 +958,83 @@ bool copyExpectedFileAtomically(
             *writer);
         return false;
     }
-    if (!syncParentDirectory(targetPath, error)) return false;
-    return atomicFileMatchesSnapshot(targetPath, expected, error);
+    if (!syncParentDirectory(targetPath, error)
+        || !atomicFileMatchesSnapshot(targetPath, expected, error)
+        || !anchoredJournalFileIsCurrent(
+            sourceDirectory, source, error)) {
+        return false;
+    }
+    return true;
+}
+
+bool copyExpectedPathToAnchoredJournal(
+    const QString &sourcePath,
+    const AtomicFileSnapshot &expected,
+    const AnchoredFileSystem::DirectoryAnchor &journalDirectory,
+    const QString &journalName,
+    AnchoredJournalFile &anchored,
+    QString &error)
+{
+    anchored = {};
+    const QFileInfo sourceInfo(sourcePath);
+    AnchoredFileSystem::DirectoryAnchor sourceDirectory;
+    if (!AnchoredFileSystem::DirectoryAnchor::open(
+            sourceInfo.absolutePath(), sourceDirectory, error)
+        || !sourceDirectory.pathMatches(error)) {
+        return false;
+    }
+    const AnchoredFileSystem::EntryRef sourceEntry =
+        sourceDirectory.entry(sourceInfo.fileName(), error);
+    AnchoredFileSystem::PinnedFile source;
+    if (!sourceEntry.isValid()
+        || !AnchoredFileSystem::pinRegularFile(
+            sourceEntry, source, error, expected.size)
+        || source.size() != expected.size
+        || source.sha256() != expected.digest) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "A plan transaction source changed unexpectedly");
+        }
+        return false;
+    }
+    bool sourceMatches = false;
+    if (!AnchoredFileSystem::entryMatches(
+            sourceEntry, source, sourceMatches, error)
+        || !sourceMatches
+        || !sourceDirectory.pathMatches(error)
+        || !journalDirectory.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "A plan transaction source or journal was replaced");
+        }
+        return false;
+    }
+
+    const AnchoredFileSystem::EntryRef destination =
+        journalDirectory.entry(journalName, error);
+    AnchoredFileSystem::PinnedFile copy;
+    if (!destination.isValid()
+        || !AnchoredFileSystem::copyToNewFile(
+            source, destination, copy, error)
+        || copy.size() != expected.size
+        || copy.sha256() != expected.digest) {
+        return false;
+    }
+    anchored.name = journalName;
+    anchored.entry = destination;
+    anchored.file =
+        std::make_shared<AnchoredFileSystem::PinnedFile>(
+            std::move(copy));
+    if (anchored.file->identity().linkCount() != 1
+        || !anchoredJournalFileIsCurrent(
+            journalDirectory, anchored, error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "An anchored plan journal copy was replaced");
+        }
+        return false;
+    }
+    return true;
 }
 
 bool hasExactKeys(
@@ -1083,14 +1284,102 @@ bool writeManifestFile(
         error = QStringLiteral("The plan transaction manifest is too large");
         return false;
     }
-    return writeBytesAtomically(
+    if (!journalDirectoryMatches(state, error)
+        || !trackedJournalFilesAreCurrent(state, error)) {
+        return false;
+    }
+
+    const AnchoredJournalFile previous = state.manifestFile;
+    const AnchoredFileSystem::EntryRef manifestEntry =
+        state.journalDirectory.entry(Detail::ManifestName, error);
+    if (!manifestEntry.isValid()) return false;
+    if (!replace) {
+        bool exists = false;
+        if (!AnchoredFileSystem::entryExists(
+                manifestEntry, exists, error)) {
+            return false;
+        }
+        if (exists) {
+            error = QStringLiteral(
+                "The plan transaction manifest appeared concurrently");
+            return false;
+        }
+        AnchoredFileSystem::PinnedFile published;
+        if (!AnchoredFileSystem::writeNewFile(
+                contents, manifestEntry, published, error)) {
+            return false;
+        }
+        AnchoredJournalFile manifest;
+        manifest.name = Detail::ManifestName;
+        manifest.entry = manifestEntry;
+        manifest.file =
+            std::make_shared<AnchoredFileSystem::PinnedFile>(
+                std::move(published));
+        const AtomicFileSnapshot expected = {
+            static_cast<qint64>(contents.size()),
+            QCryptographicHash::hash(
+                contents, QCryptographicHash::Sha256)};
+        if (!anchoredJournalFileMatches(&manifest, expected)
+            || !anchoredJournalFileIsCurrent(
+                state.journalDirectory, manifest, error)
+            || !trackedJournalFilesAreCurrent(state, error)) {
+            if (error.isEmpty()) {
+                error = QStringLiteral(
+                    "The published plan transaction manifest changed unexpectedly");
+            }
+            return false;
+        }
+        state.manifestSnapshot = expected;
+        state.manifestFile = std::move(manifest);
+        return true;
+    }
+
+    const AtomicPreCommitValidation validateBeforeCommit =
+        [&state, previous](QString &validationError) {
+            if (!journalDirectoryMatches(state, validationError)) {
+                return false;
+            }
+            return previous.name == Detail::ManifestName
+                && anchoredJournalFileIsCurrent(
+                    state.journalDirectory,
+                    previous,
+                    validationError)
+                && trackedJournalFilesAreCurrent(
+                    state, validationError);
+        };
+
+    AtomicFileSnapshot written;
+    if (!writeBytesAtomically(
         state.manifestPath,
         contents,
-        replace
-            ? AtomicFileMode::ReplaceExisting
-            : AtomicFileMode::CreateNew,
-        state.manifestSnapshot,
-        error);
+        AtomicFileMode::ReplaceExisting,
+        written,
+        error,
+        validateBeforeCommit)) {
+        return false;
+    }
+    AnchoredJournalFile manifest;
+    if (!journalDirectoryMatches(state, error)
+        || !pinAnchoredJournalFile(
+            state.journalDirectory,
+            Detail::ManifestName,
+            Detail::MaximumManifestSize,
+            manifest,
+            error)
+        || manifest.file->size() != contents.size()
+        || manifest.file->sha256()
+            != QCryptographicHash::hash(
+                contents, QCryptographicHash::Sha256)
+        || !trackedJournalFilesAreCurrent(state, error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The published plan transaction manifest changed unexpectedly");
+        }
+        return false;
+    }
+    state.manifestSnapshot = written;
+    state.manifestFile = std::move(manifest);
+    return true;
 }
 
 bool resolveManifestEntries(
@@ -1161,13 +1450,27 @@ QStringList productionLockPaths(const QList<ResolvedEntry> &entries)
 bool loadManifestState(
     const QString &root,
     const QString &journalPath,
+    AnchoredFileSystem::DirectoryAnchor namespaceDirectory,
+    AnchoredFileSystem::DirectoryAnchor journalDirectory,
     std::shared_ptr<JournalState> &state,
     QString &error)
 {
-    if (!ensurePrivateDirectory(journalPath, error)) return false;
     const QString id = QFileInfo(journalPath).fileName();
     if (!validTransactionId(id)) {
         error = QStringLiteral("A plan transaction has an invalid identifier");
+        return false;
+    }
+    const QString expectedNamespace = transactionNamespacePath(root);
+    if (atomicFilePathKey(QFileInfo(journalPath).absolutePath())
+            != atomicFilePathKey(expectedNamespace)
+        || !namespaceDirectory.isValid()
+        || !journalDirectory.isValid()
+        || !namespaceDirectory.pathMatches(error)
+        || !journalDirectory.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The prepared plan transaction is outside its anchored namespace");
+        }
         return false;
     }
 
@@ -1175,12 +1478,16 @@ bool loadManifestState(
         Detail::ManifestName);
     QByteArray contents;
     AtomicFileSnapshot manifestSnapshot;
-    if (!readSmallRegularFile(
-            manifestPath,
+    AnchoredJournalFile manifestFile;
+    if (!readAnchoredControlFile(
+            journalDirectory,
+            Detail::ManifestName,
             Detail::MaximumManifestSize,
             contents,
             manifestSnapshot,
-            error)) {
+            manifestFile,
+            error,
+            "plan-replacement-manifest-read")) {
         return false;
     }
     Manifest manifest;
@@ -1195,6 +1502,9 @@ bool loadManifestState(
         Detail::CommitMarkerName);
     loaded->manifest = manifest;
     loaded->manifestSnapshot = manifestSnapshot;
+    loaded->namespaceDirectory = std::move(namespaceDirectory);
+    loaded->journalDirectory = std::move(journalDirectory);
+    loaded->manifestFile = std::move(manifestFile);
 
     QList<ResolvedEntry> resolved;
     if (!resolveManifestEntries(*loaded, resolved, error)) return false;
@@ -1204,10 +1514,10 @@ bool loadManifestState(
                     .arg(error);
         return false;
     }
-    if (!validateExpectedSnapshot(
-            loaded->manifestPath,
-            true,
-            loaded->manifestSnapshot,
+    if (!journalDirectoryMatches(*loaded, error)
+        || !anchoredJournalFileIsCurrent(
+            loaded->journalDirectory,
+            loaded->manifestFile,
             error)) {
         return false;
     }
@@ -1215,24 +1525,102 @@ bool loadManifestState(
     return true;
 }
 
+bool writeCommitMarkerFile(
+    JournalState &state,
+    AtomicFileSnapshot &snapshot,
+    QString &error)
+{
+    if (!journalDirectoryMatches(state, error)) return false;
+    const QByteArray contents = state.manifest.id.toLatin1() + '\n';
+    AnchoredJournalFile marker;
+    marker.name = Detail::CommitMarkerName;
+    marker.entry = state.journalDirectory.entry(marker.name, error);
+    bool exists = false;
+    if (!marker.entry.isValid()
+        || !AnchoredFileSystem::entryExists(
+            marker.entry, exists, error)) {
+        return false;
+    }
+    if (exists) {
+        error = QStringLiteral(
+            "The plan transaction commit marker already exists");
+        return false;
+    }
+
+    AnchoredFileSystem::PinnedFile published;
+    if (!AnchoredFileSystem::writeNewFile(
+            contents, marker.entry, published, error)) {
+        return false;
+    }
+    marker.file = std::make_shared<AnchoredFileSystem::PinnedFile>(
+        std::move(published));
+    snapshot.size = marker.file->size();
+    snapshot.digest = marker.file->sha256();
+    const AtomicFileSnapshot expected = {
+        static_cast<qint64>(contents.size()),
+        QCryptographicHash::hash(contents, QCryptographicHash::Sha256)};
+    if (!anchoredJournalFileMatches(&marker, expected)
+        || !anchoredJournalFileIsCurrent(
+            state.journalDirectory, marker, error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The published plan commit marker changed unexpectedly");
+        }
+        return false;
+    }
+    state.commitMarkerFile = std::move(marker);
+    return true;
+}
+
 bool readCommitMarker(
-    const JournalState &state,
+    JournalState &state,
     bool &committed,
     AtomicFileSnapshot *snapshot,
     QString &error)
 {
     committed = false;
-    const QFileInfo markerInfo(state.commitMarkerPath);
-    if (!markerInfo.exists() && !markerInfo.isSymLink()) return true;
+    state.commitMarkerFile = {};
+    if (!journalDirectoryMatches(state, error)) return false;
+
+    const AnchoredFileSystem::EntryRef markerEntry =
+        state.journalDirectory.entry(Detail::CommitMarkerName, error);
+    bool exists = false;
+    if (!markerEntry.isValid()
+        || !AnchoredFileSystem::entryExists(
+            markerEntry, exists, error)) {
+        return false;
+    }
+    if (!exists) {
+#ifdef GC_PLAN_REPLACEMENT_TEST_HOOKS
+        planReplacementTransitionReached(
+            "plan-replacement-commit-marker-absence-observed");
+#endif
+        if (!AnchoredFileSystem::entryExists(
+                markerEntry, exists, error)
+            || !state.journalDirectory.pathMatches(error)) {
+            return false;
+        }
+        if (exists) {
+            error = QStringLiteral(
+                "The plan transaction commit marker appeared concurrently");
+            return false;
+        }
+        state.commitMarkerFile = {};
+        return true;
+    }
 
     QByteArray contents;
     AtomicFileSnapshot observed;
-    if (!readSmallRegularFile(
-            state.commitMarkerPath,
+    AnchoredJournalFile marker;
+    if (!readAnchoredControlFile(
+            state.journalDirectory,
+            Detail::CommitMarkerName,
             Detail::MaximumCommitMarkerSize,
             contents,
             observed,
-            error)) {
+            marker,
+            error,
+            "plan-replacement-commit-marker-read")) {
         return false;
     }
     if (contents != state.manifest.id.toLatin1() + '\n') {
@@ -1241,6 +1629,7 @@ bool readCommitMarker(
     }
     committed = true;
     if (snapshot) *snapshot = observed;
+    state.commitMarkerFile = std::move(marker);
     return true;
 }
 
@@ -1294,79 +1683,125 @@ bool expectedJournalDataName(
 
 bool inspectJournalDirectory(
     const JournalState &state,
-    QList<QPair<QString, ObservedFile>> &removable,
+    QList<AnchoredJournalFile> &files,
     QString &error)
 {
-    removable.clear();
-    if (!validateExpectedSnapshot(
-            state.manifestPath,
-            true,
-            state.manifestSnapshot,
-            error)) {
+    files.clear();
+    if (!journalDirectoryMatches(state, error)) return false;
+
+    QList<AnchoredFileSystem::DirectoryEntry> entries;
+    if (!state.journalDirectory.enumerateEntries(
+            entries, Detail::MaximumJournalEntries, error)) {
         return false;
     }
-    const QFileInfoList entries = QDir(state.journalPath).entryInfoList(
-        QDir::AllEntries | QDir::NoDotAndDotDot
-            | QDir::Hidden | QDir::System,
-        QDir::Name);
-    for (const QFileInfo &info : entries) {
-        const QString name = info.fileName();
-        if (info.isSymLink() || !info.isFile()) {
+    for (const AnchoredFileSystem::DirectoryEntry &entry : entries) {
+        const QString &name = entry.name;
+        if (entry.kind
+                != AnchoredFileSystem::DirectoryEntryKind::RegularFile
+            || entry.identity.linkCount() != 1) {
             error = QStringLiteral(
                 "The plan transaction journal contains an unsafe entry");
             return false;
         }
+
+        qint64 maximumSize = -1;
         if (name == Detail::ManifestName
-            || name == Detail::CommitMarkerName
-            || expectedJournalDataName(state, name)) {
-            continue;
+            || name == Detail::CommitMarkerName) {
+            maximumSize = name == Detail::ManifestName
+                ? Detail::MaximumManifestSize
+                : Detail::MaximumCommitMarkerSize;
+        } else if (!expectedJournalDataName(state, name)) {
+            if (!isKnownTemporaryName(name) && !isKnownLockName(name)) {
+                error = QStringLiteral(
+                    "The plan transaction journal contains an unknown file");
+                return false;
+            }
+            maximumSize = isKnownLockName(name)
+                ? Detail::MaximumLockFileSize
+                : knownTemporaryMaximumSize(name);
         }
-        if (!isKnownTemporaryName(name) && !isKnownLockName(name)) {
-            error = QStringLiteral(
-                "The plan transaction journal contains an unknown file");
+
+        AnchoredJournalFile anchored;
+        if (!pinAnchoredJournalFile(
+                state.journalDirectory,
+                name,
+                maximumSize,
+                anchored,
+                error,
+                &entry.identity)) {
             return false;
         }
-        const qint64 maximumSize = isKnownLockName(name)
-            ? Detail::MaximumLockFileSize
-            : knownTemporaryMaximumSize(name);
-        ObservedFile observed;
-        if (!inspectRegularFile(
-                info.absoluteFilePath(), observed, error, maximumSize)) {
-            return false;
-        }
-        removable.append(qMakePair(info.absoluteFilePath(), observed));
+        files.append(std::move(anchored));
     }
 
-    QList<ResolvedEntry> resolved;
-    if (!resolveManifestEntries(state, resolved, error)) return false;
+#ifdef GC_PLAN_REPLACEMENT_TEST_HOOKS
+    planReplacementTransitionReached(
+        "plan-replacement-journal-inspected");
+#endif
+    QList<AnchoredFileSystem::DirectoryEntry> verifiedEntries;
+    if (!state.journalDirectory.enumerateEntries(
+            verifiedEntries, Detail::MaximumJournalEntries, error)
+        || !directorySnapshotsMatch(entries, verifiedEntries)
+        || !journalDirectoryMatches(state, error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The plan transaction journal changed while being inspected");
+        }
+        return false;
+    }
+
+    const AnchoredJournalFile *manifest =
+        findAnchoredJournalFile(files, Detail::ManifestName);
+    if (!anchoredJournalFileMatches(manifest, state.manifestSnapshot)
+        || !state.manifestFile.file
+        || !state.manifestFile.file->isValid()
+        || !manifest->file
+        || manifest->file->identity()
+            != state.manifestFile.file->identity()) {
+        error = QStringLiteral(
+            "The plan transaction manifest changed unexpectedly");
+        return false;
+    }
+    for (const AnchoredJournalFile &tracked : state.trackedDataFiles) {
+        const AnchoredJournalFile *observed =
+            findAnchoredJournalFile(files, tracked.name);
+        if (!observed || !observed->file || !tracked.file
+            || observed->file->identity()
+                != tracked.file->identity()) {
+            error = QStringLiteral(
+                "A tracked plan transaction file was replaced");
+            return false;
+        }
+    }
+
     for (int index = 0; index < state.manifest.entries.size(); ++index) {
         const Entry &entry = state.manifest.entries.at(index);
-        const ResolvedEntry &paths = resolved.at(index);
-        ObservedFile oldCopy;
-        if (!inspectRegularFile(paths.oldCopy, oldCopy, error)) return false;
+        const AnchoredJournalFile *oldCopy =
+            findAnchoredJournalFile(files, oldCopyName(index));
         if (entry.oldExists) {
-            if (!snapshotMatches(oldCopy, entry.oldContents)) {
+            if (!anchoredJournalFileMatches(
+                    oldCopy, entry.oldContents)) {
                 error = QStringLiteral(
                     "A preserved plan activity does not match its journal");
                 return false;
             }
-        } else if (oldCopy.exists) {
+        } else if (oldCopy) {
             error = QStringLiteral(
                 "An unexpected preserved plan activity exists");
             return false;
         }
 
         if (!entry.hasNew) continue;
-        ObservedFile staged;
-        if (!inspectRegularFile(paths.staging, staged, error)) return false;
+        const AnchoredJournalFile *staged =
+            findAnchoredJournalFile(
+                files, stagingName(entry.stageIndex));
         if (entry.staged) {
-            if (!snapshotMatches(staged, entry.newContents)) {
+            if (!anchoredJournalFileMatches(
+                    staged, entry.newContents)) {
                 error = QStringLiteral(
                     "A staged plan activity does not match its journal");
                 return false;
             }
-        } else if (staged.exists) {
-            removable.append(qMakePair(paths.staging, staged));
         }
     }
     return true;
@@ -1468,6 +1903,7 @@ bool verifyNewGeneration(
 bool restoreOldGeneration(
     JournalState &state,
     const QList<ResolvedEntry> &resolved,
+    const QList<AnchoredJournalFile> &journalFiles,
     QString &error)
 {
     for (int index = 0; index < state.manifest.entries.size(); ++index) {
@@ -1485,8 +1921,13 @@ bool restoreOldGeneration(
                     "A plan activity changed outside the recovery transaction");
                 return false;
             }
-            if (!copyExpectedFileAtomically(
-                    paths.oldCopy,
+            const AnchoredJournalFile *oldCopy =
+                findAnchoredJournalFile(
+                    journalFiles, oldCopyName(index));
+            if (!oldCopy
+                || !copyExpectedPinnedFileAtomically(
+                    state.journalDirectory,
+                    *oldCopy,
                     paths.path,
                     entry.oldContents,
                     current.exists
@@ -1519,8 +1960,10 @@ int entryIndexForStage(const Manifest &manifest, int stageIndex)
 }
 
 bool installNewEntry(
+    const JournalState &state,
     const Entry &entry,
     const ResolvedEntry &paths,
+    const AnchoredJournalFile &staged,
     QString &error)
 {
     ObservedFile current;
@@ -1533,8 +1976,9 @@ bool installNewEntry(
             "A plan target changed outside the replacement transaction");
         return false;
     }
-    return copyExpectedFileAtomically(
-        paths.staging,
+    return copyExpectedPinnedFileAtomically(
+        state.journalDirectory,
+        staged,
         paths.path,
         entry.newContents,
         current.exists
@@ -1562,6 +2006,7 @@ bool removeOldOnlyEntry(
 bool ensureNewGeneration(
     JournalState &state,
     const QList<ResolvedEntry> &resolved,
+    const QList<AnchoredJournalFile> &journalFiles,
     QString &error)
 {
     if (!allTargetsAreStaged(state, error)) return false;
@@ -1571,10 +2016,16 @@ bool ensureNewGeneration(
     }
     for (int stageIndex = 0; stageIndex < targetCount; ++stageIndex) {
         const int index = entryIndexForStage(state.manifest, stageIndex);
-        if (index < 0
+        const AnchoredJournalFile *staged = index < 0
+            ? nullptr
+            : findAnchoredJournalFile(
+                  journalFiles, stagingName(stageIndex));
+        if (index < 0 || !staged
             || !installNewEntry(
+                state,
                 state.manifest.entries.at(index),
                 resolved.at(index),
+                *staged,
                 error)) {
             if (index < 0 && error.isEmpty()) {
                 error = QStringLiteral(
@@ -1596,6 +2047,7 @@ bool ensureNewGeneration(
 bool publishNewGeneration(
     JournalState &state,
     const QList<ResolvedEntry> &resolved,
+    const QList<AnchoredJournalFile> &journalFiles,
     QString &error)
 {
     if (!allTargetsAreStaged(state, error)
@@ -1610,10 +2062,16 @@ bool publishNewGeneration(
     }
     for (int stageIndex = 0; stageIndex < targetCount; ++stageIndex) {
         const int index = entryIndexForStage(state.manifest, stageIndex);
-        if (index < 0
+        const AnchoredJournalFile *staged = index < 0
+            ? nullptr
+            : findAnchoredJournalFile(
+                  journalFiles, stagingName(stageIndex));
+        if (index < 0 || !staged
             || !installNewEntry(
+                state,
                 state.manifest.entries.at(index),
                 resolved.at(index),
+                *staged,
                 error)) {
             if (index < 0 && error.isEmpty()) {
                 error = QStringLiteral(
@@ -1642,8 +2100,12 @@ bool publishNewGeneration(
 bool removeJournalDirectory(
     JournalState &state, bool committed, QString &error)
 {
-    QList<QPair<QString, ObservedFile>> removable;
-    if (!inspectJournalDirectory(state, removable, error)) return false;
+    QList<AnchoredJournalFile> files;
+    if (!inspectJournalDirectory(state, files, error)) return false;
+#ifdef GC_PLAN_REPLACEMENT_TEST_HOOKS
+    planReplacementTransitionReached(
+        "plan-replacement-cleanup-files-inspected");
+#endif
 
     bool markerExists = false;
     AtomicFileSnapshot markerSnapshot;
@@ -1664,60 +2126,149 @@ bool removeJournalDirectory(
             : verifyOldGeneration(state, resolved, error))) {
         return false;
     }
-    for (const auto &file : std::as_const(removable)) {
-        if (!removeObservedFile(file.first, file.second, error)) return false;
+    state.trackedDataFiles.clear();
+
+    const auto expectedCleanupName = [&state](const QString &name) {
+        if (name == Detail::ManifestName
+            || name == Detail::CommitMarkerName) {
+            return true;
+        }
+        for (int index = 0;
+             index < state.manifest.entries.size();
+             ++index) {
+            const Entry &entry = state.manifest.entries.at(index);
+            if ((entry.oldExists && name == oldCopyName(index))
+                || (entry.hasNew && entry.staged
+                    && name == stagingName(entry.stageIndex))) {
+                return true;
+            }
+        }
+        return false;
+    };
+    for (const AnchoredJournalFile &file : std::as_const(files)) {
+        if (!expectedCleanupName(file.name)
+            && !removeAnchoredJournalFile(
+                state.journalDirectory, file, error)) {
+            return false;
+        }
     }
 
-    ObservedFile manifestFile;
-    manifestFile.exists = true;
-    manifestFile.contents = state.manifestSnapshot;
-    if (!removeObservedFile(state.manifestPath, manifestFile, error)) {
+    const auto removeExpectedFile = [
+            &state, &files, &error](
+            const QString &name,
+            const AtomicFileSnapshot &expected,
+            bool required) {
+        const AnchoredJournalFile *file =
+            findAnchoredJournalFile(files, name);
+        if (!file) {
+            if (!required) return true;
+            error = QStringLiteral(
+                "A required plan transaction cleanup file is missing");
+            return false;
+        }
+        if (!anchoredJournalFileMatches(file, expected)) {
+            error = QStringLiteral(
+                "A plan transaction cleanup file changed unexpectedly");
+            return false;
+        }
+        return removeAnchoredJournalFile(
+            state.journalDirectory, *file, error);
+    };
+
+    if (!removeExpectedFile(
+            Detail::ManifestName,
+            state.manifestSnapshot,
+            true)) {
         return false;
     }
+    state.manifestFile = {};
 #ifdef GC_PLAN_REPLACEMENT_TEST_HOOKS
     planReplacementTransitionReached("plan-replacement-manifest-removed");
 #endif
 
     for (int index = 0; index < state.manifest.entries.size(); ++index) {
         const Entry &entry = state.manifest.entries.at(index);
-        const ResolvedEntry &paths = resolved.at(index);
         if (entry.oldExists) {
-            ObservedFile oldCopy;
-            oldCopy.exists = true;
-            oldCopy.contents = entry.oldContents;
-            if (!removeObservedFile(paths.oldCopy, oldCopy, error)) return false;
+            if (!removeExpectedFile(
+                    oldCopyName(index),
+                    entry.oldContents,
+                    true)) {
+                return false;
+            }
 #ifdef GC_PLAN_REPLACEMENT_TEST_HOOKS
             planReplacementTransitionReached("plan-replacement-cleanup-file");
 #endif
         }
         if (entry.hasNew && entry.staged) {
-            ObservedFile staged;
-            staged.exists = true;
-            staged.contents = entry.newContents;
-            if (!removeObservedFile(paths.staging, staged, error)) return false;
+            if (!removeExpectedFile(
+                    stagingName(entry.stageIndex),
+                    entry.newContents,
+                    true)) {
+                return false;
+            }
 #ifdef GC_PLAN_REPLACEMENT_TEST_HOOKS
             planReplacementTransitionReached("plan-replacement-cleanup-file");
 #endif
         }
     }
     if (markerExists) {
-        ObservedFile marker;
-        marker.exists = true;
-        marker.contents = markerSnapshot;
-        if (!removeObservedFile(state.commitMarkerPath, marker, error)) {
+        const AnchoredJournalFile *marker =
+            findAnchoredJournalFile(
+                files, Detail::CommitMarkerName);
+        if (!marker || !marker->file
+            || !state.commitMarkerFile.file
+            || marker->file->identity()
+                != state.commitMarkerFile.file->identity()) {
+            error = QStringLiteral(
+                "The plan transaction commit marker changed before cleanup");
             return false;
         }
+        if (!removeExpectedFile(
+                Detail::CommitMarkerName,
+                markerSnapshot,
+                true)) {
+            return false;
+        }
+        state.commitMarkerFile = {};
 #ifdef GC_PLAN_REPLACEMENT_TEST_HOOKS
         planReplacementTransitionReached(
             "plan-replacement-commit-marker-removed");
 #endif
     }
-    const QString id = state.manifest.id;
-    if (!QDir(state.namespacePath).rmdir(id)) {
-        error = QStringLiteral("Cannot remove the plan transaction directory");
+    files.clear();
+    if (!journalDirectoryMatches(state, error)) return false;
+    const AnchoredFileSystem::MutationResult removal =
+        AnchoredFileSystem::removeEmptyDirectory(
+            state.journalDirectory);
+    if (removal.effect
+        != AnchoredFileSystem::MutationEffect::AppliedDurable) {
+        if (removal.effect
+            == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
+            QString syncError;
+            if (state.namespaceDirectory.sync(syncError)) {
+                state.cleanupComplete = true;
+#ifdef GC_PLAN_REPLACEMENT_TEST_HOOKS
+                planReplacementTransitionReached(
+                    "plan-replacement-directory-removed");
+#endif
+                return true;
+            }
+            error = removal.error;
+            appendError(error, syncError);
+            return false;
+        }
+        error = removal.error.isEmpty()
+            ? QStringLiteral("Cannot remove the plan transaction directory")
+            : removal.error;
+        if (!removal.verifiedRecoveryPath.isEmpty()) {
+            appendError(
+                error,
+                QStringLiteral("recovery directory retained at %1")
+                    .arg(removal.verifiedRecoveryPath));
+        }
         return false;
     }
-    if (!syncParentDirectory(state.journalPath, error)) return false;
+    state.cleanupComplete = true;
 #ifdef GC_PLAN_REPLACEMENT_TEST_HOOKS
     planReplacementTransitionReached("plan-replacement-directory-removed");
 #endif
@@ -1726,8 +2277,8 @@ bool removeJournalDirectory(
 
 bool rollbackJournal(JournalState &state, QString &error)
 {
-    QList<QPair<QString, ObservedFile>> removable;
-    if (!inspectJournalDirectory(state, removable, error)) return false;
+    QList<AnchoredJournalFile> journalFiles;
+    if (!inspectJournalDirectory(state, journalFiles, error)) return false;
     bool committed = false;
     if (!readCommitMarker(state, committed, nullptr, error)) return false;
     if (committed) {
@@ -1736,7 +2287,8 @@ bool rollbackJournal(JournalState &state, QString &error)
     }
     QList<ResolvedEntry> resolved;
     if (!resolveManifestEntries(state, resolved, error)
-        || !restoreOldGeneration(state, resolved, error)) {
+        || !restoreOldGeneration(
+            state, resolved, journalFiles, error)) {
         return false;
     }
     return removeJournalDirectory(state, false, error);
@@ -1744,8 +2296,8 @@ bool rollbackJournal(JournalState &state, QString &error)
 
 bool commitJournal(JournalState &state, QString &error)
 {
-    QList<QPair<QString, ObservedFile>> removable;
-    if (!inspectJournalDirectory(state, removable, error)) return false;
+    QList<AnchoredJournalFile> journalFiles;
+    if (!inspectJournalDirectory(state, journalFiles, error)) return false;
     bool committed = false;
     if (!readCommitMarker(state, committed, nullptr, error)) return false;
     if (!committed) {
@@ -1754,7 +2306,8 @@ bool commitJournal(JournalState &state, QString &error)
     }
     QList<ResolvedEntry> resolved;
     if (!resolveManifestEntries(state, resolved, error)
-        || !ensureNewGeneration(state, resolved, error)) {
+        || !ensureNewGeneration(
+            state, resolved, journalFiles, error)) {
         return false;
     }
     return removeJournalDirectory(state, true, error);
@@ -1780,48 +2333,106 @@ bool maximumSizeForPreManifestEntry(
 }
 
 bool removePreManifestJournal(
-    const QString &namespacePath,
     const QString &journalPath,
+    AnchoredFileSystem::DirectoryAnchor namespaceDirectory,
+    AnchoredFileSystem::DirectoryAnchor journalDirectory,
     QString &error)
 {
     const QString id = QFileInfo(journalPath).fileName();
     if (!validTransactionId(id)
-        || !ensurePrivateDirectory(journalPath, error)) {
+        || !namespaceDirectory.isValid()
+        || !journalDirectory.isValid()
+        || !namespaceDirectory.pathMatches(error)
+        || !journalDirectory.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "Cannot anchor an incomplete plan transaction");
+        }
         return false;
     }
     AtomicFileLockSet lock;
     if (!lock.lock({journalPath}, error)) return false;
+    if (!namespaceDirectory.pathMatches(error)
+        || !journalDirectory.pathMatches(error)) {
+        return false;
+    }
 
-    const QFileInfoList entries = QDir(journalPath).entryInfoList(
-        QDir::AllEntries | QDir::NoDotAndDotDot
-            | QDir::Hidden | QDir::System,
-        QDir::Name);
-    QList<QPair<QString, ObservedFile>> removable;
-    for (const QFileInfo &entry : entries) {
+    QList<AnchoredFileSystem::DirectoryEntry> entries;
+    if (!journalDirectory.enumerateEntries(
+            entries, Detail::MaximumJournalEntries, error)) {
+        return false;
+    }
+    QList<AnchoredJournalFile> removable;
+    for (const AnchoredFileSystem::DirectoryEntry &entry : entries) {
         qint64 maximumSize = -1;
-        if (entry.isSymLink() || !entry.isFile()
+        if (entry.kind
+                != AnchoredFileSystem::DirectoryEntryKind::RegularFile
+            || entry.identity.linkCount() != 1
             || !maximumSizeForPreManifestEntry(
-                entry.fileName(), maximumSize)) {
+                entry.name, maximumSize)) {
             error = QStringLiteral(
                 "An incomplete plan transaction contains an unknown entry");
             return false;
         }
-        ObservedFile observed;
-        if (!inspectRegularFile(
-                entry.absoluteFilePath(), observed, error, maximumSize)) {
+        AnchoredJournalFile file;
+        if (!pinAnchoredJournalFile(
+                journalDirectory,
+                entry.name,
+                maximumSize,
+                file,
+                error,
+                &entry.identity)) {
             return false;
         }
-        removable.append(qMakePair(entry.absoluteFilePath(), observed));
+        removable.append(std::move(file));
     }
-    for (const auto &file : std::as_const(removable)) {
-        if (!removeObservedFile(file.first, file.second, error)) return false;
-    }
-    if (!QDir(namespacePath).rmdir(id)) {
-        error = QStringLiteral(
-            "Cannot remove an incomplete plan transaction");
+#ifdef GC_PLAN_REPLACEMENT_TEST_HOOKS
+    planReplacementTransitionReached(
+        "plan-replacement-pre-manifest-files-pinned");
+#endif
+    QList<AnchoredFileSystem::DirectoryEntry> verifiedEntries;
+    if (!journalDirectory.enumerateEntries(
+            verifiedEntries, Detail::MaximumJournalEntries, error)
+        || !directorySnapshotsMatch(entries, verifiedEntries)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The incomplete plan transaction changed while being inspected");
+        }
         return false;
     }
-    return syncParentDirectory(journalPath, error);
+    for (const AnchoredJournalFile &file : std::as_const(removable)) {
+        if (!removeAnchoredJournalFile(
+                journalDirectory, file, error)) {
+            return false;
+        }
+    }
+    removable.clear();
+    if (!journalDirectory.pathMatches(error)) return false;
+    const AnchoredFileSystem::MutationResult removal =
+        AnchoredFileSystem::removeEmptyDirectory(journalDirectory);
+    if (removal.effect
+        == AnchoredFileSystem::MutationEffect::AppliedDurable) {
+        return true;
+    }
+    if (removal.effect
+        == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
+        QString syncError;
+        if (namespaceDirectory.sync(syncError)) return true;
+        error = removal.error;
+        appendError(error, syncError);
+        return false;
+    }
+    error = removal.error.isEmpty()
+        ? QStringLiteral(
+              "Cannot remove an incomplete plan transaction")
+        : removal.error;
+    if (!removal.verifiedRecoveryPath.isEmpty()) {
+        appendError(
+            error,
+            QStringLiteral("recovery directory retained at %1")
+                .arg(removal.verifiedRecoveryPath));
+    }
+    return false;
 }
 
 } // namespace
@@ -1889,6 +2500,7 @@ std::shared_ptr<Journal> Journal::prepare(
             transactionsDirectory, namespaceDirectory, error)) {
         return {};
     }
+    state->namespaceDirectory = namespaceDirectory;
 
     struct RequestedPath
     {
@@ -2047,12 +2659,11 @@ std::shared_ptr<Journal> Journal::prepare(
             "Cannot create the plan replacement journal because it already exists");
         return {};
     }
-    AnchoredFileSystem::DirectoryAnchor journalDirectory;
     const AnchoredFileSystem::MutationResult creation =
         AnchoredFileSystem::createPrivateChildDirectory(
-            namespaceDirectory,
+            state->namespaceDirectory,
             state->manifest.id,
-            journalDirectory);
+            state->journalDirectory);
     if (creation.effect
         != AnchoredFileSystem::MutationEffect::AppliedDurable) {
         error = creation.error.isEmpty()
@@ -2064,9 +2675,9 @@ std::shared_ptr<Journal> Journal::prepare(
                 error,
                 QStringLiteral("recovery directory retained at %1")
                     .arg(creation.verifiedRecoveryPath));
-        } else if (journalDirectory.isValid()) {
+        } else if (state->journalDirectory.isValid()) {
             QString retainedError;
-            if (journalDirectory.pathMatches(retainedError)) {
+            if (state->journalDirectory.pathMatches(retainedError)) {
                 appendError(
                     error,
                     QStringLiteral("recovery journal retained at %1")
@@ -2078,17 +2689,25 @@ std::shared_ptr<Journal> Journal::prepare(
 #ifdef GC_PLAN_REPLACEMENT_TEST_HOOKS
     planReplacementTransitionReached("plan-replacement-directory-created");
 #endif
+    if (!journalDirectoryMatches(*state, error)) return {};
 
     QList<ResolvedEntry> resolved;
     if (!resolveManifestEntries(*state, resolved, error)) return {};
     for (int index = 0; index < state->manifest.entries.size(); ++index) {
         const Entry &entry = state->manifest.entries.at(index);
         if (!entry.oldExists) continue;
-        if (!copyExpectedFileAtomically(
+        if (!journalDirectoryMatches(*state, error)) return {};
+#ifdef GC_PLAN_REPLACEMENT_TEST_HOOKS
+        planReplacementTransitionReached(
+            "plan-replacement-before-old-copy");
+#endif
+        AnchoredJournalFile oldCopy;
+        if (!copyExpectedPathToAnchoredJournal(
                 resolved.at(index).path,
-                resolved.at(index).oldCopy,
                 entry.oldContents,
-                AtomicFileMode::CreateNew,
+                state->journalDirectory,
+                oldCopyName(index),
+                oldCopy,
                 error)) {
             appendError(
                 error,
@@ -2096,9 +2715,12 @@ std::shared_ptr<Journal> Journal::prepare(
                     .arg(state->journalPath));
             return {};
         }
+        state->trackedDataFiles.append(std::move(oldCopy));
+        if (!journalDirectoryMatches(*state, error)) return {};
 #ifdef GC_PLAN_REPLACEMENT_TEST_HOOKS
         planReplacementTransitionReached("plan-replacement-old-copy-published");
 #endif
+        if (!trackedJournalFilesAreCurrent(*state, error)) return {};
     }
     if (!writeManifestFile(*state, false, error)) {
         appendError(
@@ -2149,31 +2771,76 @@ std::shared_ptr<Journal> Journal::openPrepared(
     QString root;
     if (!normalizeAthleteRoot(athleteRoot, root, error))
         return {};
+    AnchoredFileSystem::DirectoryAnchor rootDirectory;
+    if (!AnchoredFileSystem::DirectoryAnchor::open(
+            root, rootDirectory, error)) {
+        error = QStringLiteral(
+            "Cannot anchor the prepared plan transaction root: %1")
+                    .arg(error);
+        return {};
+    }
+
+    AnchoredFileSystem::DirectoryAnchor transactionsDirectory;
+    bool transactionsExist = false;
+    if (!openExistingPrivateDirectory(
+            rootDirectory,
+            QStringLiteral(".gc-transactions"),
+            transactionsDirectory,
+            transactionsExist,
+            error)
+        || !transactionsExist) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The prepared plan transaction is unavailable");
+        }
+        return {};
+    }
+
     const QString namespacePath = transactionNamespacePath(root);
-    const QString transactions = QDir(root).filePath(
-        QStringLiteral(".gc-transactions"));
-    if (!validateExistingDirectory(transactions, error)
-        || !makeDirectoryPrivate(transactions, error)
-        || !validateExistingDirectory(namespacePath, error)
-        || !makeDirectoryPrivate(namespacePath, error)) {
+    AnchoredFileSystem::DirectoryAnchor namespaceDirectory;
+    bool namespaceExists = false;
+    if (!openExistingPrivateDirectory(
+            transactionsDirectory,
+            QStringLiteral("plan-replacement"),
+            namespaceDirectory,
+            namespaceExists,
+            error)
+        || !namespaceExists) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The prepared plan transaction is unavailable");
+        }
         return {};
     }
 
     const QString journalPath =
         QDir(namespacePath).filePath(transactionId);
-    const QFileInfo journalInfo(journalPath);
-    if (journalInfo.isSymLink() || !journalInfo.isDir()
-        || journalInfo.fileName() != transactionId
-        || atomicFilePathKey(journalInfo.absolutePath())
-            != atomicFilePathKey(namespacePath)) {
-        error = QStringLiteral(
-            "The prepared plan transaction is unavailable");
+    AnchoredFileSystem::DirectoryAnchor journalDirectory;
+    bool journalExists = false;
+    if (!openExistingPrivateDirectory(
+            namespaceDirectory,
+            transactionId,
+            journalDirectory,
+            journalExists,
+            error)
+        || !journalExists) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The prepared plan transaction is unavailable");
+        }
         return {};
     }
 
     std::shared_ptr<JournalState> state;
-    if (!loadManifestState(root, journalPath, state, error))
+    if (!loadManifestState(
+            root,
+            journalPath,
+            std::move(namespaceDirectory),
+            std::move(journalDirectory),
+            state,
+            error)) {
         return {};
+    }
     state->transactionLease = std::move(transactionLease);
     return std::shared_ptr<Journal>(new Journal(state));
 }
@@ -2368,14 +3035,11 @@ bool Journal::reconcileAll(const QString &athleteRoot, QString &error)
             }
         }
 
-        // Control-file I/O and cleanup remain pathname based for the next
-        // SEC-025 package. Release the Windows observation handle only after
-        // binding this operation to the enumerated child generation.
-        journalDirectory = {};
         if (!manifestExists) {
             if (!removePreManifestJournal(
-                    namespacePath,
                     journalPath,
+                    namespaceDirectory,
+                    std::move(journalDirectory),
                     transactionError)) {
                 failures.append(transactionError);
             }
@@ -2386,6 +3050,8 @@ bool Journal::reconcileAll(const QString &athleteRoot, QString &error)
         if (!loadManifestState(
                 root,
                 journalPath,
+                namespaceDirectory,
+                std::move(journalDirectory),
                 state,
                 transactionError)) {
             failures.append(transactionError);
@@ -2489,11 +3155,12 @@ bool Journal::recordStaged(int targetIndex, QString &error)
         error = QStringLiteral("The plan staging entry is unavailable");
         return false;
     }
-    if (!validateExpectedSnapshot(
-            state_->manifestPath,
-            true,
-            state_->manifestSnapshot,
-            error)) {
+    if (!journalDirectoryMatches(*state_, error)
+        || !anchoredJournalFileIsCurrent(
+            state_->journalDirectory,
+            state_->manifestFile,
+            error)
+        || !trackedJournalFilesAreCurrent(*state_, error)) {
         return false;
     }
     const int entryIndex = entryIndexForStage(
@@ -2513,29 +3180,49 @@ bool Journal::recordStaged(int targetIndex, QString &error)
     stagedFile.close();
     if (!syncParentDirectory(path, error)) return false;
 
-    ObservedFile staged;
-    if (!inspectRegularFile(path, staged, error)
-        || !staged.exists) {
+    AnchoredJournalFile staged;
+    if (!pinAnchoredJournalFile(
+            state_->journalDirectory,
+            stagingName(targetIndex),
+            -1,
+            staged,
+            error)) {
         if (error.isEmpty()) {
             error = QStringLiteral("A staged plan activity is unavailable");
         }
         return false;
     }
+    const AtomicFileSnapshot stagedSnapshot = {
+        staged.file->size(), staged.file->sha256()};
     Entry &entry = state_->manifest.entries[entryIndex];
     if (entry.staged) {
-        if (!snapshotMatches(staged, entry.newContents)) {
+        const AnchoredJournalFile *tracked =
+            findAnchoredJournalFile(
+                state_->trackedDataFiles,
+                stagingName(targetIndex));
+        if (!anchoredJournalFileMatches(
+                &staged, entry.newContents)
+            || (tracked
+                && (!tracked->file
+                    || tracked->file->identity()
+                        != staged.file->identity()))) {
             error = QStringLiteral("A staged plan activity changed unexpectedly");
             return false;
         }
         return true;
     }
     entry.staged = true;
-    entry.newContents = staged.contents;
-    if (!writeManifestFile(*state_, true, error)) return false;
+    entry.newContents = stagedSnapshot;
+    if (!writeManifestFile(*state_, true, error)
+        || !anchoredJournalFileIsCurrent(
+            state_->journalDirectory, staged, error)) {
+        return false;
+    }
+    state_->trackedDataFiles.append(staged);
 #ifdef GC_PLAN_REPLACEMENT_TEST_HOOKS
     planReplacementTransitionReached("plan-replacement-stage-recorded");
 #endif
-    return true;
+    return trackedJournalFilesAreCurrent(*state_, error);
 }
 
 bool Journal::publishAndCommit(QString &error)
@@ -2545,10 +3232,37 @@ bool Journal::publishAndCommit(QString &error)
         error = QStringLiteral("The plan replacement journal is unavailable");
         return false;
     }
-    QList<QPair<QString, ObservedFile>> removable;
-    if (!inspectJournalDirectory(*state_, removable, error)) return false;
-    for (const auto &file : std::as_const(removable)) {
-        if (!removeObservedFile(file.first, file.second, error)) return false;
+    QList<AnchoredJournalFile> journalFiles;
+    if (!inspectJournalDirectory(
+            *state_, journalFiles, error)) {
+        return false;
+    }
+    const auto requiredForPublication = [this](const QString &name) {
+        if (name == Detail::ManifestName
+            || name == Detail::CommitMarkerName) {
+            return true;
+        }
+        for (int index = 0;
+             index < state_->manifest.entries.size();
+             ++index) {
+            const Entry &entry = state_->manifest.entries.at(index);
+            if ((entry.oldExists && name == oldCopyName(index))
+                || (entry.hasNew && entry.staged
+                    && name == stagingName(entry.stageIndex))) {
+                return true;
+            }
+        }
+        return false;
+    };
+    for (qsizetype index = journalFiles.size(); index > 0; --index) {
+        const qsizetype fileIndex = index - 1;
+        const AnchoredJournalFile &file = journalFiles.at(fileIndex);
+        if (requiredForPublication(file.name)) continue;
+        if (!removeAnchoredJournalFile(
+                state_->journalDirectory, file, error)) {
+            return false;
+        }
+        journalFiles.removeAt(fileIndex);
     }
     bool committed = false;
     if (!readCommitMarker(*state_, committed, nullptr, error)) return false;
@@ -2556,16 +3270,13 @@ bool Journal::publishAndCommit(QString &error)
 
     QList<ResolvedEntry> resolved;
     if (!resolveManifestEntries(*state_, resolved, error)
-        || !publishNewGeneration(*state_, resolved, error)) {
+        || !publishNewGeneration(
+            *state_, resolved, journalFiles, error)) {
         return false;
     }
     AtomicFileSnapshot markerSnapshot;
-    if (!writeBytesAtomically(
-            state_->commitMarkerPath,
-            state_->manifest.id.toLatin1() + '\n',
-            AtomicFileMode::CreateNew,
-            markerSnapshot,
-            error)) {
+    if (!writeCommitMarkerFile(
+            *state_, markerSnapshot, error)) {
         appendError(
             error,
             QStringLiteral(
@@ -2575,6 +3286,16 @@ bool Journal::publishAndCommit(QString &error)
 #ifdef GC_PLAN_REPLACEMENT_TEST_HOOKS
     planReplacementTransitionReached("plan-replacement-commit-marker");
 #endif
+    if (!anchoredJournalFileIsCurrent(
+            state_->journalDirectory,
+            state_->commitMarkerFile,
+            error)) {
+        appendError(
+            error,
+            QStringLiteral(
+                "plan replacement recovery is required before continuing"));
+        return false;
+    }
     return true;
 }
 
@@ -2585,8 +3306,7 @@ bool Journal::cleanupAfterRollback(QString &error)
         error = QStringLiteral("The plan replacement journal is unavailable");
         return false;
     }
-    const QFileInfo info(state_->journalPath);
-    if (!info.exists() && !info.isSymLink()) return true;
+    if (state_->cleanupComplete) return true;
     return rollbackJournal(*state_, error);
 }
 
@@ -2597,8 +3317,7 @@ bool Journal::cleanupAfterCommit(QString &error)
         error = QStringLiteral("The plan replacement journal is unavailable");
         return false;
     }
-    const QFileInfo info(state_->journalPath);
-    if (!info.exists() && !info.isSymLink()) return true;
+    if (state_->cleanupComplete) return true;
     return commitJournal(*state_, error);
 }
 

@@ -9,6 +9,7 @@
 
 #include "AnchoredFileSystem.h"
 
+#include <QByteArrayView>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
@@ -65,6 +66,8 @@ bool anchoredFilesystemForceZeroWindowsFileId();
 
 namespace AnchoredFileSystem {
 namespace {
+
+using PinnedChunkConsumer = PinnedFileChunkConsumer;
 
 void reportAnchoredFilesystemTransition(
     const char *transition,
@@ -1914,9 +1917,6 @@ bool enumerateWindowsDirectoryPass(
 
 #endif
 
-using PinnedChunkConsumer =
-    std::function<bool(const char *, qsizetype, QString &)>;
-
 #ifdef Q_OS_WIN
 WindowsHandle openWindowsMutationHandle(
     const Detail::PinnedFileState &state,
@@ -2007,7 +2007,7 @@ bool windowsMovedEntryMatches(
 
 bool streamPinnedFile(
     const Detail::PinnedFileState &state,
-    const PinnedChunkConsumer &consume,
+    const PinnedFileChunkConsumer &consume,
     QByteArray &digest,
     QString &error)
 {
@@ -2109,7 +2109,7 @@ bool streamPinnedFile(
             readSucceeded = false;
             break;
         }
-        hash.addData(chunk.constData(), received);
+        hash.addData(QByteArrayView(chunk.constData(), received));
         offset += received;
     }
 
@@ -2799,6 +2799,21 @@ bool readAll(
     return true;
 }
 
+bool streamContents(
+    const PinnedFile &file,
+    const PinnedFileChunkConsumer &consume,
+    QString &error)
+{
+    error.clear();
+    if (!file.state_) {
+        error = QStringLiteral("The anchored file cannot be read");
+        return false;
+    }
+    QByteArray digest;
+    return streamPinnedFile(
+        *file.state_, consume, digest, error);
+}
+
 bool writeNewFile(
     const QByteArray &contents,
     const EntryRef &destination,
@@ -3343,7 +3358,8 @@ bool pinRegularFile(
                       errno);
             return false;
         }
-        hash.addData(chunk.constData(), qsizetype(bytesRead));
+        hash.addData(QByteArrayView(
+            chunk.constData(), qsizetype(bytesRead)));
         offset += qint64(bytesRead);
     }
     char trailing = 0;

@@ -746,6 +746,7 @@ private slots:
     void permitsAtomicSiblingReplacementWhileDirectoryAnchored();
     void permitsAtomicReplacementWhilePinned();
     void readsPinnedContentsAfterPathReplacement();
+    void streamsPinnedContentsInChunks();
     void verifiedPathRejectsFinalNameReplacement();
     void verifiedPathRejectsPostDigestRewrite();
     void verifiedPathRejectsFinalParentReplacement();
@@ -1757,6 +1758,48 @@ void TestAnchoredFilesystem::readsPinnedContentsAfterPathReplacement()
         QCOMPARE(readFixture(source.displayPath()), substituteContents);
     }
     QCOMPARE(readFixture(retained), originalContents);
+}
+
+void TestAnchoredFilesystem::streamsPinnedContentsInChunks()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    const QString retained = root.filePath(QStringLiteral("retained"));
+    QByteArray originalContents(2 * 1024 * 1024 + 17, 'a');
+    originalContents[1024 * 1024] = 'b';
+    originalContents[originalContents.size() - 1] = 'c';
+    writeFixture(source.displayPath(), originalContents);
+    const PinnedFile original = pin(source);
+    QVERIFY(renameFixture(source.displayPath(), retained));
+    writeFixture(source.displayPath(), QByteArray("substitute"));
+
+    QByteArray streamed;
+    int chunks = 0;
+    QString error;
+    QVERIFY(streamContents(
+        original,
+        [&streamed, &chunks](
+            const char *data, qsizetype size, QString &) {
+            streamed.append(data, size);
+            ++chunks;
+            return true;
+        },
+        error));
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QVERIFY(chunks > 1);
+    QCOMPARE(streamed, originalContents);
+    QCOMPARE(readFixture(source.displayPath()), QByteArray("substitute"));
+
+    QVERIFY(!streamContents(
+        original,
+        [](const char *, qsizetype, QString &consumerError) {
+            consumerError = QStringLiteral("consumer rejected chunk");
+            return false;
+        },
+        error));
+    QCOMPARE(error, QStringLiteral("consumer rejected chunk"));
 }
 
 void TestAnchoredFilesystem::verifiedPathRejectsFinalNameReplacement()

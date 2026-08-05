@@ -601,10 +601,20 @@ private slots:
     void rejectsUnsafeSpecifications();
     void allowsSymlinkRootWithoutTransactionNamespace();
     void concurrentReplacementIsRejected();
+    void completedCleanupIsIdempotent();
     void readinessRejectsHiddenPendingNamespace();
+    void oldCopyPublicationRejectsJournalReplacement();
+    void oldCopyIdentitySubstitutionDuringPreparationIsRejected();
     void recoveryRejectsEnumeratedJournalReplacement();
+    void preManifestFileIdentitySubstitutionIsRejected();
     void pendingSiblingTransactionIsRejected_data();
     void pendingSiblingTransactionIsRejected();
+    void manifestIdentitySubstitutionIsRejected();
+    void publishedCommitMarkerIdentitySubstitutionIsRejected();
+    void commitMarkerIdentitySubstitutionIsRejected();
+    void oldCopyIdentitySubstitutionIsRejected();
+    void stagedCopyIdentitySubstitutionIsRejected();
+    void stagedIdentitySubstitutionAfterRecordIsRejected();
     void manifestTamperingIsFailClosed_data();
     void manifestTamperingIsFailClosed();
     void journalDirectoryTamperingIsFailClosed_data();
@@ -1132,6 +1142,36 @@ void TestPlanReplacementJournal::concurrentReplacementIsRejected()
     QVERIFY2(afterCleanup->cleanupAfterRollback(error), qPrintable(error));
 }
 
+void TestPlanReplacementJournal::completedCleanupIsIdempotent()
+{
+    {
+        QTemporaryDir temporary;
+        QVERIFY(temporary.isValid());
+        QVERIFY(createOldGeneration(temporary.path()));
+        QString error;
+        const std::shared_ptr<PlanReplacement::Journal> journal =
+            PlanReplacement::Journal::prepare(
+                replacementSpecification(temporary.path()), error);
+        QVERIFY2(journal, qPrintable(error));
+        QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+        QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+    }
+
+    {
+        QTemporaryDir temporary;
+        QVERIFY(temporary.isValid());
+        QVERIFY(createOldGeneration(temporary.path()));
+        QString error;
+        const std::shared_ptr<PlanReplacement::Journal> journal =
+            PlanReplacement::Journal::prepare(
+                replacementSpecification(temporary.path()), error);
+        QVERIFY2(stageNewGeneration(journal, error), qPrintable(error));
+        QVERIFY2(journal->publishAndCommit(error), qPrintable(error));
+        QVERIFY2(journal->cleanupAfterCommit(error), qPrintable(error));
+        QVERIFY2(journal->cleanupAfterCommit(error), qPrintable(error));
+    }
+}
+
 void TestPlanReplacementJournal::readinessRejectsHiddenPendingNamespace()
 {
     QTemporaryDir temporary;
@@ -1185,6 +1225,119 @@ void TestPlanReplacementJournal::readinessRejectsHiddenPendingNamespace()
     QVERIFY2(!error.isEmpty(), "Rejected readiness must report an error");
     QVERIFY(QFileInfo(QDir(retainedNamespace).filePath(pendingId)).isDir());
     QVERIFY(QDir(siblingNamespace).isEmpty());
+}
+
+void TestPlanReplacementJournal::
+oldCopyPublicationRejectsJournalReplacement()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QVERIFY(createOldGeneration(temporary.path()));
+
+    const QString namespacePath = QDir(temporary.path()).filePath(
+        QStringLiteral(".gc-transactions/plan-replacement"));
+    const QString retainedJournal = QDir(temporary.path()).filePath(
+        QStringLiteral("retained-created-plan-journal"));
+    QString journalPath;
+    bool hookReached = false;
+    bool journalReplaced = false;
+    setPlanReplacementTransitionAction(
+        QByteArray("plan-replacement-before-old-copy"),
+        [&]() {
+            hookReached = true;
+            const QStringList journals = QDir(namespacePath).entryList(
+                QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+            QVERIFY(journals.size() == 1);
+            journalPath = QDir(namespacePath).filePath(journals.constFirst());
+            journalReplaced = QDir().rename(
+                journalPath, retainedJournal);
+            if (journalReplaced) {
+                QVERIFY(createOwnedFixtureHierarchy({journalPath}));
+            }
+        });
+
+    QString error;
+    const std::shared_ptr<PlanReplacement::Journal> journal =
+        PlanReplacement::Journal::prepare(
+            replacementSpecification(temporary.path()), error);
+    clearPlanReplacementTransitionAction();
+
+    QVERIFY(hookReached);
+    if (!journalReplaced) {
+#ifdef Q_OS_WIN
+        QSKIP("Windows blocked the created-journal replacement");
+#else
+        QFAIL("The created-journal replacement injection did not run");
+#endif
+    }
+    QVERIFY2(
+        !journal,
+        "Preparation accepted a replaced journal directory");
+    QVERIFY2(!error.isEmpty(), "Rejected preparation must report an error");
+    QVERIFY(QFileInfo(retainedJournal).isDir());
+    QVERIFY2(
+        QDir(journalPath).isEmpty(),
+        "Preparation wrote an old-copy file into the replacement journal");
+}
+
+void TestPlanReplacementJournal::
+oldCopyIdentitySubstitutionDuringPreparationIsRejected()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QVERIFY(createOldGeneration(temporary.path()));
+
+    const QString namespacePath = QDir(temporary.path()).filePath(
+        QStringLiteral(".gc-transactions/plan-replacement"));
+    QString copyPath;
+    QString retainedCopy;
+    QByteArray contents;
+    bool hookReached = false;
+    bool copyReplaced = false;
+    setPlanReplacementTransitionAction(
+        QByteArray("plan-replacement-old-copy-published"),
+        [&]() {
+            hookReached = true;
+            const QStringList journals = QDir(namespacePath).entryList(
+                QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+            QVERIFY(journals.size() == 1);
+            const QString journalPath =
+                QDir(namespacePath).filePath(journals.constFirst());
+            const QFileInfoList copies = QDir(journalPath).entryInfoList(
+                {QStringLiteral("old-*.copy")}, QDir::Files, QDir::Name);
+            QVERIFY(copies.size() == 1);
+            copyPath = copies.constFirst().absoluteFilePath();
+            retainedCopy = QDir(journalPath).filePath(
+                QStringLiteral("retained-")
+                + copies.constFirst().fileName());
+            contents = readFile(copyPath);
+            copyReplaced = !contents.isEmpty()
+                && QFile::rename(copyPath, retainedCopy);
+            if (copyReplaced) {
+                QVERIFY(writeFile(copyPath, contents));
+            }
+        });
+
+    QString error;
+    const std::shared_ptr<PlanReplacement::Journal> journal =
+        PlanReplacement::Journal::prepare(
+            replacementSpecification(temporary.path()), error);
+    clearPlanReplacementTransitionAction();
+
+    QVERIFY(hookReached);
+    if (!copyReplaced) {
+#ifdef Q_OS_WIN
+        QSKIP("Windows blocked the prepared old-copy substitution");
+#else
+        QFAIL("The prepared old-copy substitution did not run");
+#endif
+    }
+    QVERIFY2(
+        !journal,
+        "Preparation accepted a replaced old-copy generation");
+    QVERIFY2(!error.isEmpty(), "Rejected preparation must report an error");
+    QCOMPARE(readFile(retainedCopy), contents);
+    QCOMPARE(readFile(copyPath), contents);
 }
 
 void TestPlanReplacementJournal::
@@ -1248,6 +1401,62 @@ recoveryRejectsEnumeratedJournalReplacement()
     QCOMPARE(readFile(pendingFile), replacementContents);
 }
 
+void TestPlanReplacementJournal::
+preManifestFileIdentitySubstitutionIsRejected()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+
+    const QString transactionsPath = QDir(temporary.path()).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString namespacePath = QDir(transactionsPath).filePath(
+        QStringLiteral("plan-replacement"));
+    const QString pendingId = QStringLiteral(
+        "01234567-89ab-cdef-8123-456789abcdef");
+    const QString pendingJournal = QDir(namespacePath).filePath(pendingId);
+    const QString pendingFile = QDir(pendingJournal).filePath(
+        QStringLiteral("old-0000.copy"));
+    const QString retainedFile = QDir(pendingJournal).filePath(
+        QStringLiteral("retained-old-0000.copy"));
+    const QByteArray contents("incomplete plan recovery data");
+    QVERIFY(createOwnedFixtureHierarchy(
+        {transactionsPath, namespacePath, pendingJournal}));
+    QVERIFY(writeFile(pendingFile, contents));
+
+    bool hookReached = false;
+    bool fileReplaced = false;
+    setPlanReplacementTransitionAction(
+        QByteArray("plan-replacement-pre-manifest-files-pinned"),
+        [&]() {
+            hookReached = true;
+            fileReplaced = QFile::rename(pendingFile, retainedFile);
+            if (fileReplaced) {
+                QVERIFY(writeFile(pendingFile, contents));
+            }
+        });
+
+    QString error;
+    const bool reconciled =
+        PlanReplacement::Journal::reconcileAll(
+            temporary.path(), error);
+    clearPlanReplacementTransitionAction();
+
+    QVERIFY(hookReached);
+    if (!fileReplaced) {
+#ifdef Q_OS_WIN
+        QSKIP("Windows blocked the pre-manifest file substitution");
+#else
+        QFAIL("The pre-manifest file substitution did not run");
+#endif
+    }
+    QVERIFY2(
+        !reconciled,
+        "Recovery accepted a replaced pre-manifest journal file");
+    QVERIFY2(!error.isEmpty(), "Rejected recovery must report an error");
+    QCOMPARE(readFile(retainedFile), contents);
+    QCOMPARE(readFile(pendingFile), contents);
+}
+
 void TestPlanReplacementJournal::pendingSiblingTransactionIsRejected_data()
 {
     QTest::addColumn<QString>("name");
@@ -1275,6 +1484,321 @@ void TestPlanReplacementJournal::pendingSiblingTransactionIsRejected()
             replacementSpecification(temporary.path()), error);
     QVERIFY(!journal);
     QVERIFY(!error.isEmpty());
+}
+
+void TestPlanReplacementJournal::manifestIdentitySubstitutionIsRejected()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QVERIFY(createOldGeneration(temporary.path()));
+
+    QString error;
+    std::shared_ptr<PlanReplacement::Journal> journal =
+        PlanReplacement::Journal::prepare(
+            replacementSpecification(temporary.path()), error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString transactionId = QFileInfo(journalPath).fileName();
+    const QString manifestPath = QDir(journalPath).filePath(
+        QStringLiteral("manifest.json"));
+    const QString retainedManifest = QDir(journalPath).filePath(
+        QStringLiteral("retained-manifest.json"));
+    const QByteArray contents = readFile(manifestPath);
+    QVERIFY(!contents.isEmpty());
+    journal.reset();
+
+    bool hookReached = false;
+    bool manifestReplaced = false;
+    setPlanReplacementTransitionAction(
+        QByteArray("plan-replacement-manifest-read"),
+        [&]() {
+            hookReached = true;
+            manifestReplaced =
+                QFile::rename(manifestPath, retainedManifest);
+            if (manifestReplaced) {
+                QVERIFY(writeFile(manifestPath, contents));
+            }
+        });
+
+    const std::shared_ptr<PlanReplacement::Journal> reopened =
+        PlanReplacement::Journal::openPrepared(
+            temporary.path(), transactionId, error);
+    clearPlanReplacementTransitionAction();
+
+    QVERIFY(hookReached);
+    if (!manifestReplaced) {
+#ifdef Q_OS_WIN
+        QSKIP("Windows blocked the manifest identity substitution");
+#else
+        QFAIL("The manifest identity substitution did not run");
+#endif
+    }
+    QVERIFY2(
+        !reopened,
+        "Plan loading accepted a byte-identical replacement manifest");
+    QVERIFY2(!error.isEmpty(), "Rejected loading must report an error");
+    QCOMPARE(readFile(retainedManifest), contents);
+    QCOMPARE(readFile(manifestPath), contents);
+}
+
+void TestPlanReplacementJournal::commitMarkerIdentitySubstitutionIsRejected()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QVERIFY(createOldGeneration(temporary.path()));
+
+    QString error;
+    const std::shared_ptr<PlanReplacement::Journal> journal =
+        PlanReplacement::Journal::prepare(
+            replacementSpecification(temporary.path()), error);
+    QVERIFY2(stageNewGeneration(journal, error), qPrintable(error));
+    QVERIFY2(journal->publishAndCommit(error), qPrintable(error));
+    const QString markerPath = QDir(journal->directoryPath()).filePath(
+        QStringLiteral("COMMITTED"));
+    const QString retainedMarker = QDir(journal->directoryPath()).filePath(
+        QStringLiteral("retained-COMMITTED"));
+    const QByteArray contents = readFile(markerPath);
+    QVERIFY(!contents.isEmpty());
+
+    bool hookReached = false;
+    bool markerReplaced = false;
+    setPlanReplacementTransitionAction(
+        QByteArray("plan-replacement-commit-marker-read"),
+        [&]() {
+            hookReached = true;
+            markerReplaced = QFile::rename(markerPath, retainedMarker);
+            if (markerReplaced) {
+                QVERIFY(writeFile(markerPath, contents));
+            }
+        });
+
+    bool committed = false;
+    const bool observed = journal->commitState(committed, error);
+    clearPlanReplacementTransitionAction();
+
+    QVERIFY(hookReached);
+    if (!markerReplaced) {
+#ifdef Q_OS_WIN
+        QSKIP("Windows blocked the commit-marker identity substitution");
+#else
+        QFAIL("The commit-marker identity substitution did not run");
+#endif
+    }
+    QVERIFY2(
+        !observed,
+        "Plan commit state accepted a byte-identical replacement marker");
+    QVERIFY(!committed);
+    QVERIFY2(!error.isEmpty(), "Rejected commit state must report an error");
+    QCOMPARE(readFile(retainedMarker), contents);
+    QCOMPARE(readFile(markerPath), contents);
+}
+
+void TestPlanReplacementJournal::
+publishedCommitMarkerIdentitySubstitutionIsRejected()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QVERIFY(createOldGeneration(temporary.path()));
+
+    QString error;
+    const std::shared_ptr<PlanReplacement::Journal> journal =
+        PlanReplacement::Journal::prepare(
+            replacementSpecification(temporary.path()), error);
+    QVERIFY2(stageNewGeneration(journal, error), qPrintable(error));
+    const QString markerPath = QDir(journal->directoryPath()).filePath(
+        QStringLiteral("COMMITTED"));
+    const QString retainedMarker = QDir(journal->directoryPath()).filePath(
+        QStringLiteral("retained-published-COMMITTED"));
+    QByteArray contents;
+    bool hookReached = false;
+    bool markerReplaced = false;
+    setPlanReplacementTransitionAction(
+        QByteArray("plan-replacement-commit-marker"),
+        [&]() {
+            hookReached = true;
+            contents = readFile(markerPath);
+            markerReplaced = !contents.isEmpty()
+                && QFile::rename(markerPath, retainedMarker);
+            if (markerReplaced) {
+                QVERIFY(writeFile(markerPath, contents));
+            }
+        });
+
+    const bool published = journal->publishAndCommit(error);
+    clearPlanReplacementTransitionAction();
+
+    QVERIFY(hookReached);
+    if (!markerReplaced) {
+#ifdef Q_OS_WIN
+        QSKIP("Windows blocked the published-marker identity substitution");
+#else
+        QFAIL("The published-marker identity substitution did not run");
+#endif
+    }
+    QVERIFY2(
+        !published,
+        "Publication accepted a replaced commit-marker generation");
+    QVERIFY2(!error.isEmpty(), "Rejected publication must report an error");
+    QCOMPARE(readFile(retainedMarker), contents);
+    QCOMPARE(readFile(markerPath), contents);
+}
+
+void TestPlanReplacementJournal::oldCopyIdentitySubstitutionIsRejected()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QVERIFY(createOldGeneration(temporary.path()));
+
+    QString error;
+    const std::shared_ptr<PlanReplacement::Journal> journal =
+        PlanReplacement::Journal::prepare(
+            replacementSpecification(temporary.path()), error);
+    QVERIFY2(journal, qPrintable(error));
+    const QFileInfoList copies = QDir(journal->directoryPath()).entryInfoList(
+        {QStringLiteral("old-*.copy")}, QDir::Files, QDir::Name);
+    QVERIFY(!copies.isEmpty());
+    const QString copyPath = copies.constFirst().absoluteFilePath();
+    const QString retainedCopy = QDir(journal->directoryPath()).filePath(
+        QStringLiteral("retained-") + QFileInfo(copyPath).fileName());
+    const QByteArray contents = readFile(copyPath);
+    QVERIFY(!contents.isEmpty());
+
+    bool hookReached = false;
+    bool copyReplaced = false;
+    setPlanReplacementTransitionAction(
+        QByteArray("plan-replacement-cleanup-files-inspected"),
+        [&]() {
+            hookReached = true;
+            copyReplaced = QFile::rename(copyPath, retainedCopy);
+            if (copyReplaced) {
+                QVERIFY(writeFile(copyPath, contents));
+            }
+        });
+
+    const bool cleaned = journal->cleanupAfterRollback(error);
+    clearPlanReplacementTransitionAction();
+
+    QVERIFY(hookReached);
+    if (!copyReplaced) {
+#ifdef Q_OS_WIN
+        QSKIP("Windows blocked the old-copy identity substitution");
+#else
+        QFAIL("The old-copy identity substitution did not run");
+#endif
+    }
+    QVERIFY2(
+        !cleaned,
+        "Rollback cleanup unexpectedly completed after journal substitution");
+    QVERIFY2(!error.isEmpty(), "Rejected rollback must report an error");
+    QCOMPARE(readFile(retainedCopy), contents);
+    QCOMPARE(readFile(copyPath), contents);
+    const PlanPaths paths = planPaths(temporary.path());
+    QCOMPARE(readFile(paths.oldOne), QByteArray("old generation one"));
+    QCOMPARE(readFile(paths.oldTwo), QByteArray("old generation two"));
+}
+
+void TestPlanReplacementJournal::stagedCopyIdentitySubstitutionIsRejected()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QVERIFY(createOldGeneration(temporary.path()));
+
+    QString error;
+    const std::shared_ptr<PlanReplacement::Journal> journal =
+        PlanReplacement::Journal::prepare(
+            replacementSpecification(temporary.path()), error);
+    QVERIFY2(stageNewGeneration(journal, error), qPrintable(error));
+    const QString stagedPath = QDir(journal->directoryPath()).filePath(
+        QStringLiteral("new-0000.stage"));
+    const QString retainedStaged = QDir(journal->directoryPath()).filePath(
+        QStringLiteral("retained-new-0000.stage"));
+    const QByteArray contents = readFile(stagedPath);
+    QVERIFY(!contents.isEmpty());
+
+    bool hookReached = false;
+    bool stagedReplaced = false;
+    setPlanReplacementTransitionAction(
+        QByteArray("plan-replacement-journal-inspected"),
+        [&]() {
+            hookReached = true;
+            stagedReplaced = QFile::rename(stagedPath, retainedStaged);
+            if (stagedReplaced) {
+                QVERIFY(writeFile(stagedPath, contents));
+            }
+        });
+
+    const bool published = journal->publishAndCommit(error);
+    clearPlanReplacementTransitionAction();
+
+    QVERIFY(hookReached);
+    if (!stagedReplaced) {
+#ifdef Q_OS_WIN
+        QSKIP("Windows blocked the staged-copy identity substitution");
+#else
+        QFAIL("The staged-copy identity substitution did not run");
+#endif
+    }
+    QVERIFY2(
+        !published,
+        "Publication accepted a byte-identical replacement staged copy");
+    QVERIFY2(!error.isEmpty(), "Rejected publication must report an error");
+    QCOMPARE(readFile(retainedStaged), contents);
+    QCOMPARE(readFile(stagedPath), contents);
+    const PlanPaths paths = planPaths(temporary.path());
+    QCOMPARE(readFile(paths.oldOne), QByteArray("old generation one"));
+    QCOMPARE(readFile(paths.oldTwo), QByteArray("old generation two"));
+    QVERIFY(!QFileInfo::exists(paths.newOne));
+    QVERIFY(!QFileInfo::exists(paths.newTwo));
+}
+
+void TestPlanReplacementJournal::
+stagedIdentitySubstitutionAfterRecordIsRejected()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QVERIFY(createOldGeneration(temporary.path()));
+
+    QString error;
+    const std::shared_ptr<PlanReplacement::Journal> journal =
+        PlanReplacement::Journal::prepare(
+            replacementSpecification(temporary.path()), error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString stagedPath = journal->stagingPath(0);
+    const QString retainedStaged = QDir(journal->directoryPath()).filePath(
+        QStringLiteral("retained-recorded-stage"));
+    const QByteArray contents("recorded staged generation");
+    QVERIFY(writeFile(stagedPath, contents));
+
+    bool hookReached = false;
+    bool stagedReplaced = false;
+    setPlanReplacementTransitionAction(
+        QByteArray("plan-replacement-stage-recorded"),
+        [&]() {
+            hookReached = true;
+            stagedReplaced = QFile::rename(
+                stagedPath, retainedStaged);
+            if (stagedReplaced) {
+                QVERIFY(writeFile(stagedPath, contents));
+            }
+        });
+
+    const bool recorded = journal->recordStaged(0, error);
+    clearPlanReplacementTransitionAction();
+
+    QVERIFY(hookReached);
+    if (!stagedReplaced) {
+#ifdef Q_OS_WIN
+        QSKIP("Windows blocked the recorded-stage identity substitution");
+#else
+        QFAIL("The recorded-stage identity substitution did not run");
+#endif
+    }
+    QVERIFY2(
+        !recorded,
+        "Stage recording accepted a replaced staged generation");
+    QVERIFY2(!error.isEmpty(), "Rejected recording must report an error");
+    QCOMPARE(readFile(retainedStaged), contents);
+    QCOMPARE(readFile(stagedPath), contents);
 }
 
 void TestPlanReplacementJournal::manifestTamperingIsFailClosed_data()
