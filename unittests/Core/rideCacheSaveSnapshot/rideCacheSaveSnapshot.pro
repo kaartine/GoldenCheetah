@@ -47,6 +47,7 @@ linux|win32-g++ {
 macx {
     QMAKE_LFLAGS += -Wl,-dead_strip
 }
+win32:LIBS += -ladvapi32
 
 sanitize:!tsan:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

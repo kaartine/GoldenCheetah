@@ -9,8 +9,7 @@ CONFIG += console testcase c++17 release
 CONFIG -= debug
 DEFINES += GC_DURABLE_FILESYSTEM_TEST_HOOKS
 
-SOURCES = testDurableFilesystem.cpp \
-          ../../../src/FileIO/AnchoredFileSystem.cpp
+SOURCES = testDurableFilesystem.cpp
 
 HEADERS = ../../../src/FileIO/AtomicFileWriter.h
 
