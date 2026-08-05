@@ -4964,19 +4964,34 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### MEM-027: Daum worker teardown leaks its serial port and timer
 
-- Status: OPEN
-- Code: `src/Train/Daum.cpp:113`, `src/Train/Daum.cpp:147`,
-  `src/Train/Daum.h:39`
+- Status: FIXED
+- Code: `src/Train/Daum.cpp`, `src/Train/Daum.h`, and
+  `unittests/Train/trainRuntime/testTrainRuntime.cpp`
 - Impact: Destroying a started Daum controller does not release its unparented
   `QSerialPort` and `QTimer`, retaining their Qt backing allocations for the
   process lifetime.
 - Evidence: A strict ASan/LSan no-device lifecycle run reported 1,364 bytes in
   11 allocations rooted at `Daum::openPort()` and `Daum::run()`.
-- Test: Start the real worker without a device, stop and join it, then destroy
-  the controller under strict leak detection.
-- Fix direction: Give the worker a deterministic joined shutdown and release
-  both objects in their owning thread, including failed-open and partial-start
-  paths.
+- Test-first evidence: Production-worker tests for failed open, pseudo-terminal
+  partial start, explicit stop/join, and destruction during initialization
+  reproduced three failures: partial shutdown took 9.34 seconds, destruction
+  aborted with `QThread: Destroyed while thread is still running`, and the
+  current strict LSan run retained 1,484 bytes in 11 allocations rooted at the
+  serial port and timer.
+- Resolution: The serial port and polling timer are now stack-owned by
+  `Daum::run()`, so every return path destroys them in their worker thread.
+  Failed open and failed initialization return immediately, the timer callback
+  is context-bound to the worker-owned timer, and `stop()` requests
+  interruption, exits the event loop, and joins the worker. The destructor uses
+  the same joined shutdown.
+- Verification: The complete `trainRuntime` suite passes 14/14 normally and
+  the same 14/14 under strict ASan/UBSan/LSan and genuine ThreadSanitizer. Five
+  adjacent Train suites pass 66/66, and the production `Daum` translation unit
+  compiles. The normal partial-start and destructor paths now complete in the
+  suite's approximately two-second total runtime.
+- Residual: `Daum` retains the standard `QThread` ownership requirement that
+  its controller object be destroyed outside its own worker thread; normal
+  controller teardown already satisfies that contract.
 
 ### METRIC-001: Missing/cyclic metric dependencies can loop forever
 
