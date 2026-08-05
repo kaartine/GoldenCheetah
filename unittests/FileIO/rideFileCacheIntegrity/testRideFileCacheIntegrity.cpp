@@ -17,6 +17,7 @@
 #include <QTemporaryDir>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <limits>
 #include <utility>
@@ -28,6 +29,12 @@
 namespace {
 
 constexpr int FixedZoneFloatCount = 10 + 4 + 10 + 4 + 10 + 4 + 4;
+
+QByteArray analysisFingerprint(const QByteArray &label)
+{
+    return QCryptographicHash::hash(
+        label, QCryptographicHash::Sha256);
+}
 
 QByteArray cacheBytes(const RideFileCacheHeader &header,
                       int payloadFloatCount = FixedZoneFloatCount)
@@ -120,6 +127,11 @@ RideFileCacheHeader validHeader()
 {
     RideFileCacheHeader header {};
     header.version = RideFileCacheVersion;
+    if (!RideFileCacheIntegrity::setAnalysisFingerprint(
+            header,
+            analysisFingerprint(QByteArrayLiteral("analysis-v1")))) {
+        qFatal("Could not initialize analysis fingerprint fixture");
+    }
     return header;
 }
 
@@ -377,6 +389,7 @@ class TestRideFileCacheIntegrity : public QObject
 
 private slots:
     void acceptsValidMinimalFormat();
+    void preservesAuthenticatedAnalysisFingerprint();
     void acceptsNonUniformBlockLayout();
     void rejectsLegacyV25Cache();
     void inspectionAcceptsValidLayout();
@@ -435,6 +448,38 @@ void TestRideFileCacheIntegrity::acceptsValidMinimalFormat()
          ++index) {
         QCOMPARE(data.zones[index].size(), expectedZoneSizes[index]);
     }
+}
+
+void
+TestRideFileCacheIntegrity::preservesAuthenticatedAnalysisFingerprint()
+{
+    const QByteArray expected =
+        analysisFingerprint(QByteArrayLiteral("zones-and-settings-v2"));
+    RideFileCacheHeader header = validHeader();
+    QVERIFY(RideFileCacheIntegrity::setAnalysisFingerprint(
+        header, expected));
+    const QByteArray bytes = cacheBytes(header);
+
+    RideFileCacheIntegrity::CacheData data;
+    QString error;
+    QVERIFY2(readBytes(bytes, data, &error), qPrintable(error));
+    QCOMPARE(data.analysisFingerprint, expected);
+
+    QBuffer input;
+    input.setData(bytes);
+    QVERIFY(input.open(QIODevice::ReadOnly));
+    RideFileCacheIntegrity::PartialReader reader(input, &error);
+    QVERIFY2(reader.isValid(), qPrintable(error));
+    QCOMPARE(reader.analysisFingerprint(), expected);
+    QVERIFY2(reader.finish(&error), qPrintable(error));
+
+    QByteArray tampered = bytes;
+    tampered[offsetof(
+        RideFileCacheHeader,
+        analysisSha256)] ^= 0x01;
+    RideFileCacheIntegrity::CacheData rejected;
+    QVERIFY(!readBytes(tampered, rejected, &error));
+    verifyEmpty(rejected);
 }
 
 void TestRideFileCacheIntegrity::acceptsNonUniformBlockLayout()

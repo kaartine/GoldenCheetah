@@ -20,7 +20,7 @@
 #include <array>
 #include <functional>
 
-static const unsigned int RideFileCacheVersion = 26;
+static const unsigned int RideFileCacheVersion = 27;
 
 struct RideFileCacheHeader {
     unsigned int version;
@@ -60,6 +60,7 @@ struct RideFileCacheHeader {
     double CV;
     double WEIGHT;
     double WPRIME;
+    unsigned char analysisSha256[RideFileCRC::Sha256Size];
 };
 
 namespace RideFileCacheIntegrity {
@@ -71,6 +72,7 @@ inline constexpr qint64 CachePreambleBytes =
     + static_cast<qint64>(RideFileCRC::Sha256Size);
 inline constexpr qint64 CacheFooterBytes =
     static_cast<qint64>(RideFileCRC::Sha256Size);
+inline constexpr qint64 CacheWriteChunkBytes = 64 * 1024;
 
 enum Block {
     WattsMeanMax,
@@ -119,6 +121,7 @@ struct CacheData {
     bool complete = false;
     RideFileCacheHeader header {};
     RideFileCRC::ContentFingerprint sourceFingerprint;
+    QByteArray analysisFingerprint;
     std::array<QVector<float>, BlockCount> blocks;
     std::array<QVector<float>, ZoneBlockCount> zones;
 
@@ -129,6 +132,12 @@ struct CacheData {
 bool validateCacheLayout(
     const RideFileCacheHeader &header,
     QString *error = nullptr);
+
+bool setAnalysisFingerprint(
+    RideFileCacheHeader &header,
+    const QByteArray &fingerprint);
+QByteArray analysisFingerprint(
+    const RideFileCacheHeader &header);
 
 // Construction validates the bounded preamble. Read requests are queued; their
 // output objects must keep a stable address and outlive finish(), which
@@ -148,6 +157,7 @@ public:
     const RideFileCacheHeader &header() const;
     const RideFileCRC::ContentFingerprint &
     sourceFingerprint() const;
+    const QByteArray &analysisFingerprint() const;
     bool readBlock(
         Block block,
         QVector<float> &output,
@@ -189,6 +199,7 @@ private:
     QByteArray preamble_;
     RideFileCacheHeader header_ {};
     RideFileCRC::ContentFingerprint sourceFingerprint_;
+    QByteArray analysisFingerprint_;
     std::array<quint32, BlockCount> counts_ {};
     QVector<PendingRead> pendingReads_;
     qint64 expectedSize_ = 0;

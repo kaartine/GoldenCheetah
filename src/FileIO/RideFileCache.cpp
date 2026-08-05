@@ -23,12 +23,13 @@
 #include "Zones.h"
 #include "HrZones.h"
 #include "PaceZones.h"
+#include "RideItem.h"
+#include "Settings.h"
 #include "WPrime.h" // for wbal zones
 #include "LTMSettings.h" // getAllBestsFor needs this
 
 #include <cmath> // for pow()
 #include <QByteArrayView>
-#include <QBuffer>
 #include <QCryptographicHash>
 #include <QDebug>
 #include <QDir>
@@ -53,6 +54,129 @@ static const double cadDelta   = 1.0;
 static const double gearDelta  = 0.01; //RideFileCache creates POW(10) * decimals section
 static const double smo2Delta  = 1;
 static const double wbalDelta  = 1;
+
+namespace {
+
+class DigestWriteDevice final : public QIODevice
+{
+public:
+    DigestWriteDevice()
+        : hash_(QCryptographicHash::Sha256)
+    {
+        open(QIODevice::WriteOnly | QIODevice::Unbuffered);
+    }
+
+    qint64 byteCount() const { return byteCount_; }
+    QByteArray digest() const { return hash_.result(); }
+
+protected:
+    qint64 readData(char *, qint64) override { return -1; }
+
+    qint64 writeData(const char *data, qint64 size) override
+    {
+        if (size < 0 || (size > 0 && !data))
+            return -1;
+        hash_.addData(QByteArrayView(data, size));
+        byteCount_ += size;
+        return size;
+    }
+
+private:
+    mutable QCryptographicHash hash_;
+    qint64 byteCount_ = 0;
+};
+
+class ForwardDigestWriteDevice final : public QIODevice
+{
+public:
+    explicit ForwardDigestWriteDevice(QIODevice &destination)
+        : destination_(destination)
+        , hash_(QCryptographicHash::Sha256)
+    {
+        open(QIODevice::WriteOnly | QIODevice::Unbuffered);
+    }
+
+    qint64 byteCount() const { return byteCount_; }
+    QByteArray digest() const { return hash_.result(); }
+
+protected:
+    qint64 readData(char *, qint64) override { return -1; }
+
+    qint64 writeData(const char *data, qint64 size) override
+    {
+        if (size < 0 || (size > 0 && !data))
+            return -1;
+        qint64 offset = 0;
+        while (offset < size) {
+            const qint64 written = destination_.write(
+                data + offset, size - offset);
+            if (written <= 0 || written > size - offset)
+                return -1;
+            hash_.addData(QByteArrayView(
+                data + offset, written));
+            byteCount_ += written;
+            offset += written;
+        }
+        return size;
+    }
+
+private:
+    QIODevice &destination_;
+    mutable QCryptographicHash hash_;
+    qint64 byteCount_ = 0;
+};
+
+struct SerializedCacheDigest
+{
+    qint64 byteCount = 0;
+    QByteArray sha256;
+
+    bool operator==(const SerializedCacheDigest &other) const
+    {
+        return byteCount == other.byteCount
+            && sha256 == other.sha256;
+    }
+};
+
+struct CacheAnalysisRequirement
+{
+    QByteArray expected;
+    bool independent = false;
+
+    static CacheAnalysisRequirement exact(
+        const QByteArray &fingerprint)
+    {
+        return {fingerprint, false};
+    }
+
+    static CacheAnalysisRequirement independentResult()
+    {
+        return {{}, true};
+    }
+
+    bool accepts(const QByteArray &actual) const
+    {
+        return independent
+            ? expected.isEmpty()
+            : expected.size() == RideFileCRC::Sha256Size
+                && actual == expected;
+    }
+};
+
+struct CacheReadBinding
+{
+    double weight = 0.0;
+    bool checksWeight = false;
+    CacheAnalysisRequirement analysis =
+        CacheAnalysisRequirement::independentResult();
+
+    const double *expectedWeight() const
+    {
+        return checksWeight ? &weight : nullptr;
+    }
+};
+
+} // namespace
 
 #ifdef GC_RIDE_FILE_CACHE_TEST_HOOKS
 static thread_local std::function<void()>
@@ -112,32 +236,12 @@ static bool withCurrentSource(
     return true;
 }
 
-static bool sourceBindingsAreCurrent(
-    const QVector<
-        QPair<
-            QString,
-            RideFileCRC::ContentFingerprint>>
-        &bindings)
-{
-    for (const auto &binding : bindings) {
-        RideFileCRC::ContentFingerprint
-            current;
-        if (!RideFileCRC::
-                computeFileFingerprint(
-                    binding.first,
-                    current)
-            || current != binding.second) {
-            return false;
-        }
-    }
-    return true;
-}
-
 template<typename Operation>
 static bool readSourceBoundPartialCache(
     const QString &sourcePath,
     const QString &cachePath,
     const double *expectedWeight,
+    const CacheAnalysisRequirement &analysis,
     RideFileCRC::ContentFingerprint *verifiedFingerprint,
     Operation &&operation)
 {
@@ -159,6 +263,8 @@ static bool readSourceBoundPartialCache(
                 || (expectedWeight
                     && reader.header().WEIGHT
                         != *expectedWeight)
+                || !analysis.accepts(
+                    reader.analysisFingerprint())
                 || !operation(reader)
                 || !reader.finish()) {
                 return false;
@@ -172,18 +278,31 @@ static bool readSourceBoundPartialCache(
 static bool cacheIsCurrentForSource(
     const QString &sourcePath,
     const QString &cachePath,
-    double weight)
+    double weight,
+    const QByteArray &analysisFingerprint)
 {
     return readSourceBoundPartialCache(
         sourcePath,
         cachePath,
         &weight,
+        CacheAnalysisRequirement::exact(
+            analysisFingerprint),
         nullptr,
         [](RideFileCacheIntegrity::
                PartialReader &) {
             return true;
         });
 }
+
+static QByteArray analysisFingerprintForItem(
+    Context *context,
+    RideItem *item,
+    double weight);
+static QByteArray analysisFingerprintForSource(
+    Context *context,
+    const QString &sourcePath,
+    const RideFile *ride,
+    double weight);
 
 
 // cache from ride
@@ -245,12 +364,19 @@ RideFileCache::RideFileCache(Context *context, QString fileName, double weight, 
         computeWithoutPersistentCache(refresh, weight);
         return;
     }
+    const QByteArray expectedAnalysisFingerprint =
+        analysisFingerprintForSource(
+            context, rideFileName, passedride, weight);
     if ((check
          && cacheIsCurrentForSource(
              rideFileName,
              cacheFileName,
-             weight))
-        || (!check && readCache(weight))) {
+             weight,
+             expectedAnalysisFingerprint))
+        || (!check
+            && readCache(
+                weight,
+                expectedAnalysisFingerprint))) {
         return;
     }
 
@@ -302,10 +428,13 @@ RideFileCache::checkStale(Context *context, RideItem*item)
             context->athlete->home->planned().absolutePath(),
             rideFileName);
 
+    const double weight = item->getWeight();
     return !cacheIsCurrentForSource(
         rideFileName,
         cacheFileName,
-        item->getWeight());
+        weight,
+        analysisFingerprintForItem(
+            context, item, weight));
 }
 
 static bool meanMaxBlockForSeries(
@@ -366,6 +495,13 @@ static bool meanMaxBlockForSeries(
     }
 }
 
+static bool meanMaxResultIsAnalysisIndependent(
+    RideFile::SeriesType series)
+{
+    return series != RideFile::wattsKg
+        && series != RideFile::aPowerKg;
+}
+
 static bool zoneBlockForSeries(
     RideFile::SeriesType series,
     RideFileCacheIntegrity::ZoneBlock &block)
@@ -413,6 +549,278 @@ static QString cachePathForRideItem(
         context->athlete->home->activities().absolutePath(),
         context->athlete->home->planned().absolutePath(),
         sourcePath);
+}
+
+static RideItem *rideItemForSource(
+    Context *context,
+    const QString &sourcePath)
+{
+    if (!context || !context->athlete
+        || !context->athlete->rideCache
+        || sourcePath.isEmpty()) {
+        return nullptr;
+    }
+    const QString canonical =
+        QFileInfo(sourcePath).canonicalFilePath();
+    const QString normalized = canonical.isEmpty()
+        ? QDir::cleanPath(QFileInfo(sourcePath).absoluteFilePath())
+        : canonical;
+    for (RideItem *item :
+         context->athlete->rideCache->rides()) {
+        const QString itemPath =
+            sourcePathForRideItem(context, item);
+        const QString itemCanonical =
+            QFileInfo(itemPath).canonicalFilePath();
+        const QString itemNormalized = itemCanonical.isEmpty()
+            ? QDir::cleanPath(QFileInfo(itemPath).absoluteFilePath())
+            : itemCanonical;
+        if (itemNormalized == normalized)
+            return item;
+    }
+    return nullptr;
+}
+
+static QByteArray analysisFingerprintForInputs(
+    Context *context,
+    const QDate &date,
+    const QString &sport,
+    bool isSwim,
+    double weight)
+{
+    if (!std::isfinite(weight) || weight <= 0.0)
+        return {};
+
+    QByteArray canonical;
+    QDataStream stream(&canonical, QIODevice::WriteOnly);
+    stream.setVersion(QDataStream::Qt_4_6);
+    stream.setByteOrder(QDataStream::BigEndian);
+    stream << quint32(1)
+           << qint64(date.toJulianDay())
+           << sport
+           << isSwim
+           << weight;
+
+    const Athlete *athlete =
+        context ? context->athlete : nullptr;
+    const Zones *power =
+        athlete ? athlete->zones(sport) : nullptr;
+    const int powerRange =
+        power ? power->whichRange(date) : -1;
+    stream << bool(power) << qint32(powerRange);
+    if (power && powerRange >= 0) {
+        stream << qint32(power->getCP(powerRange))
+               << qint32(power->getAeT(powerRange))
+               << qint32(power->getFTP(powerRange))
+               << qint32(power->getWprime(powerRange))
+               << qint32(power->getPmax(powerRange))
+               << power->getZoneLows(powerRange)
+               << power->getZoneHighs(powerRange);
+    }
+
+    const HrZones *heartRate =
+        athlete ? athlete->hrZones(sport) : nullptr;
+    const int heartRateRange =
+        heartRate ? heartRate->whichRange(date) : -1;
+    stream << bool(heartRate) << qint32(heartRateRange);
+    if (heartRate && heartRateRange >= 0) {
+        stream << qint32(heartRate->getLT(heartRateRange))
+               << qint32(heartRate->getAeT(heartRateRange))
+               << qint32(heartRate->getRestHr(heartRateRange))
+               << qint32(heartRate->getMaxHr(heartRateRange))
+               << heartRate->getZoneLows(heartRateRange)
+               << heartRate->getZoneHighs(heartRateRange);
+    }
+
+    const PaceZones *pace =
+        athlete ? athlete->paceZones(isSwim) : nullptr;
+    const int paceRange =
+        pace ? pace->whichRange(date) : -1;
+    stream << bool(pace) << qint32(paceRange);
+    if (pace && paceRange >= 0) {
+        stream << pace->getCV(paceRange)
+               << pace->getAeT(paceRange)
+               << pace->getZoneLows(paceRange)
+               << pace->getZoneHighs(paceRange);
+    }
+
+    const QString cyclist =
+        athlete ? athlete->cyclist : QString();
+    const QString wbalFormula = appsettings
+        ? appsettings->value(
+              nullptr, GC_WBALFORM,
+              QStringLiteral("int")).toString()
+        : QStringLiteral("int");
+    const int wbalTau = appsettings && athlete
+        ? appsettings->cvalue(
+              cyclist, GC_WBALTAU, 300).toInt()
+        : 300;
+    const int wheelSize = appsettings && athlete
+        ? appsettings->cvalue(
+              cyclist, GC_WHEELSIZE, 2100).toInt()
+        : 2100;
+    stream << wbalFormula
+           << qint32(wbalTau)
+           << qint32(wheelSize);
+    if (stream.status() != QDataStream::Ok)
+        return {};
+    return QCryptographicHash::hash(
+        canonical, QCryptographicHash::Sha256);
+}
+
+static QByteArray analysisFingerprintForRide(
+    Context *context,
+    const RideFile *ride,
+    double weight)
+{
+    if (!ride)
+        return {};
+    return analysisFingerprintForInputs(
+        context,
+        ride->startTime().date(),
+        ride->sport(),
+        ride->isSwim(),
+        weight);
+}
+
+static QByteArray analysisFingerprintForItem(
+    Context *context,
+    RideItem *item,
+    double weight)
+{
+    if (!item)
+        return {};
+    return analysisFingerprintForInputs(
+        context,
+        item->dateTime.date(),
+        item->sport,
+        item->isSwim,
+        weight);
+}
+
+static QByteArray analysisFingerprintForSource(
+    Context *context,
+    const QString &sourcePath,
+    const RideFile *ride,
+    double weight)
+{
+    if (ride) {
+        return analysisFingerprintForRide(
+            context, ride, weight);
+    }
+    return analysisFingerprintForItem(
+        context,
+        rideItemForSource(context, sourcePath),
+        weight);
+}
+
+template<typename Bindings, typename AnalysisResolver>
+static bool sourceAndAnalysisBindingsAreCurrent(
+    const Bindings &bindings,
+    AnalysisResolver &&resolveCurrentAnalysis)
+{
+    for (qsizetype index = 0;
+         index < bindings.size();
+         ++index) {
+        const auto &binding = bindings.at(index);
+        RideFileCRC::ContentFingerprint currentSource;
+        if (!RideFileCRC::computeFileFingerprint(
+                binding.sourcePath, currentSource)
+            || currentSource != binding.sourceFingerprint) {
+            return false;
+        }
+        QByteArray currentAnalysis;
+        if (!resolveCurrentAnalysis(
+                index, binding, currentAnalysis)) {
+            return false;
+        }
+        if (currentAnalysis.size()
+                != RideFileCRC::Sha256Size
+            || currentAnalysis
+                != binding.analysisFingerprint) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool cacheReadBindingForMeanMax(
+    Context *context,
+    const QString &sourcePath,
+    RideItem *item,
+    RideFile::SeriesType series,
+    CacheReadBinding &binding)
+{
+    binding = CacheReadBinding {};
+    if (meanMaxResultIsAnalysisIndependent(series))
+        return true;
+    if (!item)
+        item = rideItemForSource(context, sourcePath);
+    if (!item)
+        return false;
+    binding.weight = item->getWeight();
+    binding.checksWeight = true;
+    const QByteArray fingerprint =
+        analysisFingerprintForItem(
+            context, item, binding.weight);
+    if (fingerprint.size()
+        != RideFileCRC::Sha256Size) {
+        return false;
+    }
+    binding.analysis =
+        CacheAnalysisRequirement::exact(
+            fingerprint);
+    return true;
+}
+
+static bool cacheReadBindingForZones(
+    Context *context,
+    const QString &sourcePath,
+    RideItem *item,
+    CacheReadBinding &binding)
+{
+    binding = CacheReadBinding {};
+    if (!item)
+        item = rideItemForSource(context, sourcePath);
+    if (!item)
+        return false;
+    binding.weight = item->getWeight();
+    binding.checksWeight = true;
+    const QByteArray fingerprint =
+        analysisFingerprintForItem(
+            context, item, binding.weight);
+    if (fingerprint.size()
+        != RideFileCRC::Sha256Size) {
+        return false;
+    }
+    binding.analysis =
+        CacheAnalysisRequirement::exact(
+            fingerprint);
+    return true;
+}
+
+static bool cacheReadBindingForRequests(
+    Context *context,
+    const QString &sourcePath,
+    RideItem *item,
+    const QVector<QPair<RideFile::SeriesType, int>> &requests,
+    CacheReadBinding &binding)
+{
+    const auto dependent = std::find_if(
+        requests.cbegin(), requests.cend(),
+        [](const QPair<RideFile::SeriesType, int> &request) {
+            return !meanMaxResultIsAnalysisIndependent(
+                request.first);
+        });
+    if (dependent == requests.cend()) {
+        binding = CacheReadBinding {};
+        return true;
+    }
+    return cacheReadBindingForMeanMax(
+        context,
+        sourcePath,
+        item,
+        dependent->first,
+        binding);
 }
 
 QVector<float> RideFileCache::meanMaxPowerFor(Context *context, QVector<float> &wpk, QDate from, QDate to, QVector<QDate>*dates, QString sport)
@@ -499,10 +907,22 @@ QVector<float> RideFileCache::meanMaxPowerFor(Context *context, QVector<float>&w
     }
     QVector<float> loaded;
     QVector<float> loadedWpk;
+    RideItem *item = rideItemForSource(
+        context, fileName);
+    if (!item) {
+        wpk.clear();
+        return returning;
+    }
+    const double expectedWeight = item->getWeight();
+    const QByteArray expectedAnalysis =
+        analysisFingerprintForItem(
+            context, item, expectedWeight);
     if (readSourceBoundPartialCache(
             fileName,
             cacheFilename,
-            nullptr,
+            &expectedWeight,
+            CacheAnalysisRequirement::exact(
+                expectedAnalysis),
             nullptr,
             [&](RideFileCacheIntegrity::
                     PartialReader &reader) {
@@ -539,12 +959,15 @@ static bool meanMaxForSource(
     RideFileCacheIntegrity::Block block;
     if (!meanMaxBlockForSeries(series, block))
         return false;
+    if (!meanMaxResultIsAnalysisIndependent(series))
+        return false;
 
     QVector<float> loaded;
     if (!readSourceBoundPartialCache(
             sourceFilename,
             cacheFilename,
             nullptr,
+            CacheAnalysisRequirement::independentResult(),
             nullptr,
             [&](RideFileCacheIntegrity::
                     PartialReader &reader) {
@@ -691,6 +1114,13 @@ RideFileCache::RideFileCache(RideFile *ride) :
 }
 
 #ifdef GC_RIDE_FILE_CACHE_TEST_HOOKS
+static QByteArray defaultAnalysisFingerprintForTest()
+{
+    return QCryptographicHash::hash(
+        QByteArrayLiteral("analysis-v1"),
+        QCryptographicHash::Sha256);
+}
+
 bool
 RideFileCache::cacheIsCurrentForSourceForTest(
     const QString &sourcePath,
@@ -698,7 +1128,24 @@ RideFileCache::cacheIsCurrentForSourceForTest(
     double weight)
 {
     return cacheIsCurrentForSource(
-        sourcePath, cachePath, weight);
+        sourcePath,
+        cachePath,
+        weight,
+        defaultAnalysisFingerprintForTest());
+}
+
+bool
+RideFileCache::cacheIsCurrentForSourceWithAnalysisForTest(
+    const QString &sourcePath,
+    const QString &cachePath,
+    double weight,
+    const QByteArray &analysisFingerprint)
+{
+    return cacheIsCurrentForSource(
+        sourcePath,
+        cachePath,
+        weight,
+        analysisFingerprint);
 }
 
 void
@@ -724,14 +1171,39 @@ sourceFingerprintReadCountForTest()
 }
 
 bool
-RideFileCache::sourceBindingsAreCurrentForTest(
+RideFileCache::aggregateBindingsAreCurrentForTest(
     const QVector<
         QPair<
             QString,
             RideFileCRC::ContentFingerprint>>
-        &bindings)
+        &sourceBindings,
+    const QVector<QPair<QByteArray, QByteArray>>
+        &analysisBindings)
 {
-    return sourceBindingsAreCurrent(bindings);
+    if (sourceBindings.size()
+        != analysisBindings.size()) {
+        return false;
+    }
+    QVector<AggregateSourceBinding> bindings;
+    bindings.reserve(sourceBindings.size());
+    for (qsizetype index = 0;
+         index < sourceBindings.size();
+         ++index) {
+        bindings.append({
+            sourceBindings.at(index).first,
+            sourceBindings.at(index).second,
+            analysisBindings.at(index).first
+        });
+    }
+    return sourceAndAnalysisBindingsAreCurrent(
+        bindings,
+        [&analysisBindings](
+            qsizetype index,
+            const AggregateSourceBinding &,
+            QByteArray &current) {
+            current = analysisBindings.at(index).second;
+            return true;
+        });
 }
 
 RideFileCache::RideFileCache(
@@ -1101,12 +1573,34 @@ bool
 RideFileCache::refreshCache(
     const PersistenceOperations *operations)
 {
+    if (!ride)
+        return false;
+    const double analysisWeight = ride->getWeight();
+    if (analysisWeight != WEIGHT)
+        return false;
+    const QByteArray persistedAnalysisFingerprint =
+        analysisFingerprintForRide(
+            context, ride, analysisWeight);
+    if (persistedAnalysisFingerprint.size()
+        != RideFileCRC::Sha256Size) {
+        return false;
+    }
+
     // Recompute before persistence so a cache write failure does not discard
     // otherwise valid in-memory results.
-    if (ride)
-        ride->recalculateDerivedSeries();
+    ride->recalculateDerivedSeries(true);
+    if (ride->context && ride->context->athlete
+        && ride->isDataPresent(RideFile::watts)) {
+        ride->wprimeData()->setRide(ride);
+    }
     if (!compute())
         return false;
+    if (ride->getWeight() != analysisWeight
+        || analysisFingerprintForRide(
+               context, ride, analysisWeight)
+            != persistedAnalysisFingerprint) {
+        return false;
+    }
 
     RideFile::SourceFingerprint sourceFingerprint;
     if (!ride
@@ -1130,27 +1624,32 @@ RideFileCache::refreshCache(
     if (!persistedSourceFingerprint.isValid())
         return false;
 
-    const auto serializeSnapshot =
+    const auto digestSnapshot =
         [](RideFileCache &cache,
            const RideFileCRC::ContentFingerprint
                &source,
-           QByteArray &payload) {
-            payload.clear();
-            QBuffer output(&payload);
-            if (!output.open(QIODevice::WriteOnly))
-                return false;
+           const QByteArray &analysis,
+           SerializedCacheDigest &digest) {
+            DigestWriteDevice output;
             QDataStream stream(&output);
-            return cache.serialize(
-                       &stream, source)
-                && stream.status()
-                    == QDataStream::Ok;
+            if (!cache.serialize(
+                    &stream, source, analysis)
+                || stream.status()
+                    != QDataStream::Ok) {
+                return false;
+            }
+            digest.byteCount = output.byteCount();
+            digest.sha256 = output.digest();
+            return digest.sha256.size()
+                == RideFileCRC::Sha256Size;
         };
 
-    QByteArray payload;
-    if (!serializeSnapshot(
+    SerializedCacheDigest expectedDigest;
+    if (!digestSnapshot(
             *this,
             persistedSourceFingerprint,
-            payload)) {
+            persistedAnalysisFingerprint,
+            expectedDigest)) {
         return false;
     }
 
@@ -1167,36 +1666,73 @@ RideFileCache::refreshCache(
         return false;
     }
 
-    RideFileCache verifiedCache(verifiedRide.get());
-    verifiedCache.crc = sourceFingerprint.crc;
-    QByteArray verifiedPayload;
-    if (!serializeSnapshot(
-            verifiedCache,
-            persistedSourceFingerprint,
-            verifiedPayload)
-        || payload != verifiedPayload) {
-        return false;
+    {
+        if (verifiedRide->getWeight()
+                != analysisWeight
+            || analysisFingerprintForRide(
+                   context,
+                   verifiedRide.get(),
+                   analysisWeight)
+                != persistedAnalysisFingerprint) {
+            return false;
+        }
+        RideFileCache verifiedCache(
+            verifiedRide.get());
+        verifiedCache.crc = sourceFingerprint.crc;
+        SerializedCacheDigest verifiedDigest;
+        if (analysisFingerprintForRide(
+                context,
+                verifiedRide.get(),
+                analysisWeight)
+                != persistedAnalysisFingerprint
+            || !digestSnapshot(
+                verifiedCache,
+                persistedSourceFingerprint,
+                persistedAnalysisFingerprint,
+                verifiedDigest)
+            || !(expectedDigest
+                 == verifiedDigest)) {
+            return false;
+        }
     }
+    verifiedRide.reset();
     sourceFingerprint_ =
         persistedSourceFingerprint;
+    analysisFingerprint_ =
+        persistedAnalysisFingerprint;
 
     QDir().mkpath(QFileInfo(cacheFileName).absolutePath());
     QString writeError;
     const RideFileCacheIntegrity::CacheWriteOperation serializeCache =
-        [&payload](QIODevice &output, QString *error) {
-            qint64 written = 0;
-            while (written < payload.size()) {
-                const qint64 count = output.write(
-                    payload.constData() + written,
-                    payload.size() - written);
-                if (count <= 0) {
-                    if (error) {
-                        *error = QStringLiteral(
-                            "Cannot serialize CPX cache");
-                    }
-                    return false;
+        [this,
+         persistedSourceFingerprint,
+         persistedAnalysisFingerprint,
+         expectedDigest](
+             QIODevice &output,
+             QString *error) {
+            ForwardDigestWriteDevice forwarded(output);
+            QDataStream stream(&forwarded);
+            if (!serialize(
+                    &stream,
+                    persistedSourceFingerprint,
+                    persistedAnalysisFingerprint)
+                || stream.status() != QDataStream::Ok) {
+                if (error) {
+                    *error = QStringLiteral(
+                        "Cannot serialize CPX cache");
                 }
-                written += count;
+                return false;
+            }
+            const SerializedCacheDigest writtenDigest {
+                forwarded.byteCount(),
+                forwarded.digest()
+            };
+            if (!(writtenDigest == expectedDigest)) {
+                if (error) {
+                    *error = QStringLiteral(
+                        "CPX cache changed after verification");
+                }
+                return false;
             }
             return true;
         };
@@ -1205,10 +1741,19 @@ RideFileCache::refreshCache(
         validateBeforeCommit =
             [this,
              sourceFingerprint,
+             persistedAnalysisFingerprint,
+             analysisWeight,
              &sourceValidationRejected](QString *error) {
                 RideFile::SourceFingerprint current;
                 const bool valid =
                     ride
+                    && ride->getWeight()
+                        == analysisWeight
+                    && analysisFingerprintForRide(
+                           context,
+                           ride,
+                           analysisWeight)
+                        == persistedAnalysisFingerprint
                     && ride->sourceProvenanceMatches(
                         sourceFingerprint)
                     && RideFile::captureSourceFingerprint(
@@ -2155,8 +2700,22 @@ RideFileCache::RideFileCache(Context *context, QDate start, QDate end, bool filt
                         ->cpxCache.at(index);
                 if (p->start == start && p->end == end) {
                     if (p->aggregateSourceBindingsComplete_
-                        && sourceBindingsAreCurrent(
-                            p->aggregateSourceBindings_)) {
+                        && sourceAndAnalysisBindingsAreCurrent(
+                            p->aggregateSourceBindings_,
+                            [context](
+                                qsizetype,
+                                const auto &binding,
+                                QByteArray &current) {
+                                RideItem *item = rideItemForSource(
+                                    context,
+                                    binding.sourcePath);
+                                if (!item)
+                                    return false;
+                                const double weight = item->getWeight();
+                                current = analysisFingerprintForItem(
+                                    context, item, weight);
+                                return true;
+                            })) {
                         *this = *p;
                         return;
                     }
@@ -2249,12 +2808,17 @@ RideFileCache::RideFileCache(Context *context, QDate start, QDate end, bool filt
                 incomplete = true;
             } else if (!rideCache
                             .sourceFingerprint_
-                            .isValid()) {
+                            .isValid()
+                       || rideCache
+                              .analysisFingerprint_
+                              .size()
+                          != RideFileCRC::Sha256Size) {
                 incomplete = true;
             } else {
                 aggregateSourceBindings_.append({
                     sourcePath,
-                    rideCache.sourceFingerprint_
+                    rideCache.sourceFingerprint_,
+                    rideCache.analysisFingerprint_
                 });
 
                 // lets aggregate
@@ -2370,11 +2934,14 @@ bool
 RideFileCache::serialize(
     QDataStream *out,
     const RideFileCRC::ContentFingerprint
-        &sourceFingerprint)
+        &sourceFingerprint,
+    const QByteArray &analysisFingerprint)
 {
     if (!out
         || !out->device()
         || !sourceFingerprint.isValid()
+        || analysisFingerprint.size()
+            != RideFileCRC::Sha256Size
         || crc
             != sourceFingerprint.legacyCrc16) {
         return false;
@@ -2390,6 +2957,10 @@ RideFileCache::serialize(
     head.LTHR = LTHR;
     head.CV = CV;
     head.WEIGHT = WEIGHT;
+    if (!RideFileCacheIntegrity::setAnalysisFingerprint(
+            head, analysisFingerprint)) {
+        return false;
+    }
 
     const auto assignCount =
         [](qsizetype count,
@@ -2508,23 +3079,31 @@ RideFileCache::serialize(
             if (!writeSucceeded)
                 return;
             if (bytes < 0
-                || bytes
-                    > std::numeric_limits<int>::max()
                 || (bytes > 0 && !data)) {
                 writeSucceeded = false;
                 return;
             }
             const auto *raw =
                 static_cast<const char *>(data);
-            if (out->writeRawData(
-                    raw,
-                    static_cast<int>(bytes))
-                != bytes) {
-                writeSucceeded = false;
-                return;
+            qsizetype offset = 0;
+            while (offset < bytes) {
+                const qsizetype chunk = std::min(
+                    bytes - offset,
+                    static_cast<qsizetype>(
+                        RideFileCacheIntegrity::
+                            CacheWriteChunkBytes));
+                if (out->writeRawData(
+                        raw + offset,
+                        static_cast<int>(chunk))
+                    != chunk) {
+                    writeSucceeded = false;
+                    return;
+                }
+                cacheHash.addData(
+                    QByteArrayView(
+                        raw + offset, chunk));
+                offset += chunk;
             }
-            cacheHash.addData(
-                QByteArrayView(raw, bytes));
         };
 
     writeRaw(&head, sizeof(head));
@@ -2598,6 +3177,7 @@ RideFileCache::clearPublishedArrays()
 {
     sourceFingerprint_ =
         RideFileCRC::ContentFingerprint {};
+    analysisFingerprint_.clear();
     aggregateSourceBindings_.clear();
     aggregateSourceBindingsComplete_ = false;
 
@@ -2673,12 +3253,20 @@ RideFileCache::clearPublishedArrays()
 }
 
 bool
-RideFileCache::readCache(double expectedWeight)
+RideFileCache::readCache(
+    double expectedWeight,
+    const QByteArray &expectedAnalysisFingerprint)
 {
     clearPublishedArrays();
     incomplete = true;
     sourceFingerprint_ =
         RideFileCRC::ContentFingerprint {};
+    analysisFingerprint_.clear();
+
+    if (expectedAnalysisFingerprint.size()
+        != RideFileCRC::Sha256Size) {
+        return false;
+    }
 
     RideFileCacheIntegrity::CacheData data;
     RideFileCRC::ContentFingerprint
@@ -2697,7 +3285,9 @@ RideFileCache::readCache(double expectedWeight)
                                cacheFile,
                                data)
                     || data.header.WEIGHT
-                        != expectedWeight) {
+                        != expectedWeight
+                    || data.analysisFingerprint
+                        != expectedAnalysisFingerprint) {
                     return false;
                 }
                 cacheFingerprint =
@@ -2715,6 +3305,8 @@ RideFileCache::readCache(double expectedWeight)
     WPRIME = data.header.WPRIME;
     sourceFingerprint_ =
         std::move(verifiedFingerprint);
+    analysisFingerprint_ =
+        std::move(data.analysisFingerprint);
 
     wattsMeanMax = std::move(
         data.blocks[RideFileCacheIntegrity::WattsMeanMax]);
@@ -2843,6 +3435,7 @@ static bool bestForCache(
     RideFile::SeriesType series,
     int duration,
     const double *expectedWeight,
+    const CacheAnalysisRequirement &analysis,
     double &result);
 
 static int descendingInsertionRank(
@@ -2873,16 +3466,24 @@ int RideFileCache::rank(Context *context, RideFile::SeriesType series, int durat
         if (!spec.pass(item)) continue;
 
         double bestValue = 0;
-        const double expectedWeight =
-            item->getWeight();
-        if (bestForCache(
-                sourcePathForRideItem(
-                    context, item),
+        const QString sourcePath =
+            sourcePathForRideItem(
+                context, item);
+        CacheReadBinding binding;
+        if (cacheReadBindingForMeanMax(
+                context,
+                sourcePath,
+                item,
+                series,
+                binding)
+            && bestForCache(
+                sourcePath,
                 cachePathForRideItem(
                     context, item),
                 series,
                 duration,
-                &expectedWeight,
+                binding.expectedWeight(),
+                binding.analysis,
                 bestValue)) {
             values << bestValue;
         }
@@ -2898,6 +3499,7 @@ static bool bestForCache(
     RideFile::SeriesType series,
     int duration,
     const double *expectedWeight,
+    const CacheAnalysisRequirement &analysis,
     double &result)
 {
     result = 0;
@@ -2912,6 +3514,7 @@ static bool bestForCache(
             sourceFileName,
             cacheFileName,
             expectedWeight,
+            analysis,
             nullptr,
             [&](RideFileCacheIntegrity::
                     PartialReader &reader) {
@@ -2934,6 +3537,7 @@ static bool bestForActivity(
     RideFile::SeriesType series,
     int duration,
     const double *expectedWeight,
+    const CacheAnalysisRequirement &analysis,
     double &result)
 {
     return bestForCache(
@@ -2946,6 +3550,7 @@ static bool bestForActivity(
         series,
         duration,
         expectedWeight,
+        analysis,
         result);
 }
 
@@ -3012,6 +3617,7 @@ static bool readBestRowForSource(
     const QString &sourceFileName,
     const QString &cacheFileName,
     const double *expectedWeight,
+    const CacheAnalysisRequirement &analysis,
     const QVector<
         QPair<RideFile::SeriesType, int>>
         &requests,
@@ -3024,6 +3630,7 @@ static bool readBestRowForSource(
             sourceFileName,
             cacheFileName,
             expectedWeight,
+            analysis,
             nullptr,
             [&](RideFileCacheIntegrity::
                     PartialReader &reader) {
@@ -3087,6 +3694,15 @@ RideFileCache::best(
                 .absolutePath(),
             filename);
     double result = 0;
+    CacheReadBinding binding;
+    if (!cacheReadBindingForMeanMax(
+            context,
+            sourcePath,
+            nullptr,
+            series,
+            binding)) {
+        return result;
+    }
     bestForActivity(
         context->athlete->home
             ->cache()
@@ -3100,7 +3716,8 @@ RideFileCache::best(
         sourcePath,
         series,
         duration,
-        nullptr,
+        binding.expectedWeight(),
+        binding.analysis,
         result);
     return result;
 }
@@ -3114,15 +3731,23 @@ RideFileCache::best(
 {
     const QString sourcePath =
         sourcePathForRideItem(context, item);
-    const double expectedWeight =
-        item ? item->getWeight() : 0.0;
     double result = 0;
+    CacheReadBinding binding;
+    if (!cacheReadBindingForMeanMax(
+            context,
+            sourcePath,
+            item,
+            series,
+            binding)) {
+        return result;
+    }
     bestForCache(
         sourcePath,
         cachePathForRideItem(context, item),
         series,
         duration,
-        item ? &expectedWeight : nullptr,
+        binding.expectedWeight(),
+        binding.analysis,
         result);
     return result;
 }
@@ -3134,13 +3759,29 @@ RideFileCache::best(
     RideFile::SeriesType series,
     int duration)
 {
+    RideItem *mutableItem =
+        const_cast<RideItem *>(item);
+    const QString sourcePath =
+        sourcePathForRideItem(
+            context, mutableItem);
     double result = 0;
+    CacheReadBinding binding;
+    if (!cacheReadBindingForMeanMax(
+            context,
+            sourcePath,
+            mutableItem,
+            series,
+            binding)) {
+        return result;
+    }
     bestForCache(
-        sourcePathForRideItem(context, item),
-        cachePathForRideItem(context, item),
+        sourcePath,
+        cachePathForRideItem(
+            context, mutableItem),
         series,
         duration,
-        nullptr,
+        binding.expectedWeight(),
+        binding.analysis,
         result);
     return result;
 }
@@ -3151,6 +3792,7 @@ static bool tizForCache(
     RideFile::SeriesType series,
     int zone,
     const double *expectedWeight,
+    const CacheAnalysisRequirement &analysis,
     int &result)
 {
     result = 0;
@@ -3166,6 +3808,7 @@ static bool tizForCache(
             sourceFileName,
             cacheFileName,
             expectedWeight,
+            analysis,
             nullptr,
             [&](RideFileCacheIntegrity::
                     PartialReader &reader) {
@@ -3186,6 +3829,7 @@ static bool tizForActivity(
     RideFile::SeriesType series,
     int zone,
     const double *expectedWeight,
+    const CacheAnalysisRequirement &analysis,
     int &result)
 {
     return tizForCache(
@@ -3198,6 +3842,7 @@ static bool tizForActivity(
         series,
         zone,
         expectedWeight,
+        analysis,
         result);
 }
 
@@ -3215,6 +3860,14 @@ RideFileCache::tiz(
                 .absolutePath(),
             filename);
     int result = 0;
+    CacheReadBinding binding;
+    if (!cacheReadBindingForZones(
+            context,
+            sourcePath,
+            nullptr,
+            binding)) {
+        return result;
+    }
     tizForActivity(
         context->athlete->home
             ->cache()
@@ -3228,7 +3881,8 @@ RideFileCache::tiz(
         sourcePath,
         series,
         zone,
-        nullptr,
+        binding.expectedWeight(),
+        binding.analysis,
         result);
     return result;
 }
@@ -3242,15 +3896,22 @@ RideFileCache::tiz(
 {
     const QString sourcePath =
         sourcePathForRideItem(context, item);
-    const double expectedWeight =
-        item ? item->getWeight() : 0.0;
     int result = 0;
+    CacheReadBinding binding;
+    if (!cacheReadBindingForZones(
+            context,
+            sourcePath,
+            item,
+            binding)) {
+        return result;
+    }
     tizForCache(
         sourcePath,
         cachePathForRideItem(context, item),
         series,
         zone,
-        item ? &expectedWeight : nullptr,
+        binding.expectedWeight(),
+        binding.analysis,
         result);
     return result;
 }
@@ -3262,13 +3923,28 @@ RideFileCache::tiz(
     RideFile::SeriesType series,
     int zone)
 {
+    RideItem *mutableItem =
+        const_cast<RideItem *>(item);
+    const QString sourcePath =
+        sourcePathForRideItem(
+            context, mutableItem);
     int result = 0;
+    CacheReadBinding binding;
+    if (!cacheReadBindingForZones(
+            context,
+            sourcePath,
+            mutableItem,
+            binding)) {
+        return result;
+    }
     tizForCache(
-        sourcePathForRideItem(context, item),
-        cachePathForRideItem(context, item),
+        sourcePath,
+        cachePathForRideItem(
+            context, mutableItem),
         series,
         zone,
-        nullptr,
+        binding.expectedWeight(),
+        binding.analysis,
         result);
     return result;
 }
@@ -3292,6 +3968,32 @@ RideFileCache::bestForActivityForTest(
         series,
         duration,
         nullptr,
+        CacheAnalysisRequirement::independentResult(),
+        result);
+    return result;
+}
+
+double
+RideFileCache::bestForActivityWithAnalysisForTest(
+    const QString &cacheRoot,
+    const QString &completedRoot,
+    const QString &plannedRoot,
+    const QString &sourceActivityPath,
+    RideFile::SeriesType series,
+    int duration,
+    const QByteArray &analysisFingerprint)
+{
+    double result = 0;
+    bestForActivity(
+        cacheRoot,
+        completedRoot,
+        plannedRoot,
+        sourceActivityPath,
+        series,
+        duration,
+        nullptr,
+        CacheAnalysisRequirement::exact(
+            analysisFingerprint),
         result);
     return result;
 }
@@ -3314,6 +4016,7 @@ RideFileCache::rankCacheRowsForTest(
                 series,
                 duration,
                 nullptr,
+                CacheAnalysisRequirement::independentResult(),
                 bestValue)) {
             values.append(bestValue);
         }
@@ -3340,6 +4043,33 @@ RideFileCache::tizForActivityForTest(
         series,
         zone,
         nullptr,
+        CacheAnalysisRequirement::exact(
+            defaultAnalysisFingerprintForTest()),
+        result);
+    return result;
+}
+
+int
+RideFileCache::tizForActivityWithAnalysisForTest(
+    const QString &cacheRoot,
+    const QString &completedRoot,
+    const QString &plannedRoot,
+    const QString &sourceActivityPath,
+    RideFile::SeriesType series,
+    int zone,
+    const QByteArray &analysisFingerprint)
+{
+    int result = 0;
+    tizForActivity(
+        cacheRoot,
+        completedRoot,
+        plannedRoot,
+        sourceActivityPath,
+        series,
+        zone,
+        nullptr,
+        CacheAnalysisRequirement::exact(
+            analysisFingerprint),
         result);
     return result;
 }
@@ -3369,6 +4099,27 @@ RideFileCache::readBestRowForSourceForTest(
         sourcePath,
         cachePath,
         nullptr,
+        CacheAnalysisRequirement::independentResult(),
+        requests,
+        values);
+}
+
+bool
+RideFileCache::readBestRowForSourceWithAnalysisForTest(
+    const QString &sourcePath,
+    const QString &cachePath,
+    const QByteArray &analysisFingerprint,
+    const QVector<
+        QPair<RideFile::SeriesType, int>>
+        &requests,
+    QVector<double> &values)
+{
+    return readBestRowForSource(
+        sourcePath,
+        cachePath,
+        nullptr,
+        CacheAnalysisRequirement::exact(
+            analysisFingerprint),
         requests,
         values);
 }
@@ -3432,13 +4183,21 @@ RideFileCache::getAllBestsFor(Context *context, QList<MetricDetail> metrics, Spe
         if (cacheFileName.isEmpty()) continue;
         const QString sourceFileName =
             sourcePathForRideItem(context, ride);
-        const double expectedWeight =
-            ride->getWeight();
+        CacheReadBinding binding;
+        if (!cacheReadBindingForRequests(
+                context,
+                sourceFileName,
+                ride,
+                requests,
+                binding)) {
+            continue;
+        }
         QVector<double> values;
         if (!readBestRowForSource(
                 sourceFileName,
                 cacheFileName,
-                &expectedWeight,
+                binding.expectedWeight(),
+                binding.analysis,
                 requests,
                 values)) {
             continue;
@@ -3484,18 +4243,26 @@ RideFileCache::getAllBestsFor(Context *context, RideFile::SeriesType series, int
         if (cacheFileName.isEmpty()) continue;
         const QString sourceFileName =
             sourcePathForRideItem(context, ride);
-        const double expectedWeight =
-            ride->getWeight();
         QVector<double> values;
         QVector<
             QPair<RideFile::SeriesType, int>>
             requests;
         if (series != RideFile::none)
             requests.append({series, duration});
+        CacheReadBinding binding;
+        if (!cacheReadBindingForRequests(
+                context,
+                sourceFileName,
+                ride,
+                requests,
+                binding)) {
+            continue;
+        }
         if (!readBestRowForSource(
                 sourceFileName,
                 cacheFileName,
-                &expectedWeight,
+                binding.expectedWeight(),
+                binding.analysis,
                 requests,
                 values)) {
             continue;

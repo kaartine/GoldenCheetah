@@ -3498,24 +3498,36 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DATA-014: CPX reuse does not consistently bind weight and analysis inputs
 
-- Status: OPEN
-- Code: `src/FileIO/RideFileCache.cpp:113-181`,
-  `src/FileIO/RideFileCache.cpp:416-523`,
-  `src/FileIO/RideFileCache.cpp:2147-2165`, and
-  `src/FileIO/RideFileCache.cpp:3068-3268`
+- Status: FIXED
+- Code: `src/FileIO/RideFileCache.cpp`, `src/FileIO/RideFileCache.h`,
+  `src/FileIO/RideFileCacheIntegrity.cpp`, and
+  `src/FileIO/RideFileCacheIntegrity.h`
 - Impact: Item-aware mutable best/TIZ calls verify the current athlete weight,
   but filename and const-item overloads, the single-file mean-max helper, and
   in-memory aggregate reuse can accept source-authentic CPX values after weight
   changes. Zone/profile/configuration inputs that affect derived arrays are not
   represented in the persisted source identity. W/kg and zone-dependent
   results can therefore remain stale while the activity bytes are unchanged.
-- Test: Change weight and zone/configuration generations after creating a valid
-  CPX and require every public fast path and aggregate reuse path either to
-  reject it or to prove that the requested series is independent of the
-  changed input.
-- Fix direction: Define one explicit analysis-input fingerprint or generation,
-  persist it in CPX, and require it through a single item-aware read contract.
-  Keep legacy overloads only as wrappers that can resolve all required inputs.
+- Test-first evidence: Regressions create a source-authentic CPX with one
+  analysis fingerprint, then substitute weight-, zone-, and setting-equivalent
+  fingerprint generations. Cache-current checks, individual best/TIZ reads,
+  and batched best reads accept the original generation and reject every
+  changed generation. Aggregate tests run the production source-and-analysis
+  binding validator and reject both changed source bytes and a changed member
+  analysis generation. The CPX integrity test also proves that the persisted
+  analysis fingerprint is covered by the authenticated cache digest.
+- Resolution: CPX v27 authenticates a SHA-256 fingerprint of analysis-affecting
+  inputs alongside the source fingerprint. Its canonical input includes
+  activity date, sport and swim mode, weight, power/heart-rate/pace zone ranges
+  and thresholds, W'bal formula and tau, and wheel size. Full, partial, batched,
+  and aggregate reads require the current fingerprint whenever their result is
+  analysis-dependent. Explicitly independent mean-max series may use the
+  source-bound cache without resolving athlete analysis state; contextless
+  weight-dependent APIs fail closed instead of returning stale values.
+- Verification: The focused Qt 6.8.3 suites report 44 refresh and 45 integrity
+  tests passing normally, under strict ASan/UBSan/LSan, and in fresh binaries
+  linked with ThreadSanitizer. Existing v26 files are rejected and rebuilt once.
+  Set-wide aggregate mutation races remain tracked separately by `DATA-015`.
 
 ### DATA-015: Aggregate source validation has a set-wide TOCTOU window
 
@@ -3569,18 +3581,29 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### PERF-011: Verified CPX refresh duplicates full caches and payloads
 
-- Status: OPEN
-- Code: `src/FileIO/RideFileCache.cpp:1096-1196`
+- Status: FIXED
+- Code: `src/FileIO/RideFileCache.cpp`, `src/FileIO/RideFileCache.h`, and
+  `src/FileIO/RideFileCacheIntegrity.h`
 - Impact: Verified refresh retains the original `RideFileCache`, a second
   independently parsed cache, and two complete serialized `QByteArray`
   payloads at once. Long activities with large mean-max and distribution
   arrays can create a substantial avoidable memory peak.
-- Test: Exercise a large synthetic cache through verified refresh and assert
-  that comparison and persistence remain bounded to one serialized payload
-  plus a fixed-size streaming buffer.
-- Fix direction: Serialize one side through a streaming comparator or digest
-  sink, then stream the accepted payload to `QSaveFile` without retaining two
-  full byte arrays.
+- Test-first evidence: A large synthetic refresh records every destination
+  write. The pre-fix serializer issued a 96,836-byte payload write, exceeding
+  the 65,536-byte bound. A second regression mutates computed cache data after
+  verification and requires publication to fail rather than install a payload
+  different from the verified generation.
+- Resolution: Verification serializes each cache into a fixed-size SHA-256
+  digest sink instead of retaining complete payload byte arrays. The accepted
+  cache is then serialized directly through a hashing forwarding device to the
+  atomic writer in chunks of at most 64 KiB, and its byte count and digest must
+  still match the independently recomputed cache before commit.
+- Verification: The bounded-write and post-verification-mutation regressions
+  pass as part of the 44-test refresh suite normally, under strict
+  ASan/UBSan/LSan, and in a fresh ThreadSanitizer-linked build. The independent
+  verification cache's numeric tables still coexist temporarily with the
+  original computed tables, but the two full serialized payload copies have
+  been eliminated.
 
 ### DUR-012: CPX refresh can publish torn files and stale in-memory arrays
 

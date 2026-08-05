@@ -72,9 +72,11 @@ typedef double data_t;
 // 24       15-Jun-15    Fix percentify error on W'bal Distribution
 // 25       19-Dec-16    Added aPower
 // 26       30-Jul-26    Bind source SHA-256 and protect complete cache contents
+// 27       05-Aug-26    Bind analysis inputs to authenticated cache contents
 
 // The cache file (.cpx) has a binary format:
 // 1 x Header data - describing the version and contents of the cache
+// Header includes a SHA-256 fingerprint of analysis-affecting inputs
 // 1 x Source byte size and SHA-256 fingerprint
 // n x Blocks - meanmax or distribution arrays
 // 1 x Watts TIZ - 10 floats
@@ -195,17 +197,48 @@ class RideFileCache
             const QString &sourcePath,
             const QString &cachePath,
             double weight);
+        static bool cacheIsCurrentForSourceWithAnalysisForTest(
+            const QString &sourcePath,
+            const QString &cachePath,
+            double weight,
+            const QByteArray &analysisFingerprint);
         static void setSourceBoundReadHookForTest(
             std::function<void()> hook);
         static void resetSourceFingerprintReadCountForTest();
         static int sourceFingerprintReadCountForTest();
-        static bool sourceBindingsAreCurrentForTest(
+        static bool aggregateBindingsAreCurrentForTest(
             const QVector<
                 QPair<
                     QString,
                     RideFileCRC::
                         ContentFingerprint>>
-                &bindings);
+                &sourceBindings,
+            const QVector<QPair<QByteArray, QByteArray>>
+                &analysisBindings);
+        static double bestForActivityWithAnalysisForTest(
+            const QString &cacheRoot,
+            const QString &completedRoot,
+            const QString &plannedRoot,
+            const QString &sourceActivityPath,
+            RideFile::SeriesType series,
+            int duration,
+            const QByteArray &analysisFingerprint);
+        static int tizForActivityWithAnalysisForTest(
+            const QString &cacheRoot,
+            const QString &completedRoot,
+            const QString &plannedRoot,
+            const QString &sourceActivityPath,
+            RideFile::SeriesType series,
+            int zone,
+            const QByteArray &analysisFingerprint);
+        static bool readBestRowForSourceWithAnalysisForTest(
+            const QString &sourcePath,
+            const QString &cachePath,
+            const QByteArray &analysisFingerprint,
+            const QVector<
+                QPair<RideFile::SeriesType, int>>
+                &requests,
+            QVector<double> &values);
         bool refreshCacheForTest(
             const QString &sourcePath,
             const QString &cachePath,
@@ -295,11 +328,14 @@ class RideFileCache
 
         bool refreshCache(
             const PersistenceOperations *operations = nullptr);
-        bool readCache(double expectedWeight);
+        bool readCache(
+            double expectedWeight,
+            const QByteArray &expectedAnalysisFingerprint);
         bool serialize(
             QDataStream *out,
             const RideFileCRC::ContentFingerprint
-                &sourceFingerprint);
+                &sourceFingerprint,
+            const QByteArray &analysisFingerprint);
 
         bool compute();             // compute all arrays
         bool computeWithoutPersistentCache(bool refresh, double weight);
@@ -318,10 +354,14 @@ class RideFileCache
         RideFile *ride;
         RideFileCRC::ContentFingerprint
             sourceFingerprint_;
-        QVector<
-            QPair<
-                QString,
-                RideFileCRC::ContentFingerprint>>
+        QByteArray analysisFingerprint_;
+        struct AggregateSourceBinding {
+            QString sourcePath;
+            RideFileCRC::ContentFingerprint
+                sourceFingerprint;
+            QByteArray analysisFingerprint;
+        };
+        QVector<AggregateSourceBinding>
             aggregateSourceBindings_;
         bool aggregateSourceBindingsComplete_ =
             false;

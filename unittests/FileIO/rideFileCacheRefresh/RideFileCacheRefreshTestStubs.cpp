@@ -122,9 +122,29 @@ int Zones::getAeT(int) const
     return 0;
 }
 
+int Zones::getFTP(int) const
+{
+    return 0;
+}
+
 int Zones::getWprime(int) const
 {
     return 0;
+}
+
+int Zones::getPmax(int) const
+{
+    return 0;
+}
+
+QList<int> Zones::getZoneLows(int) const
+{
+    return {};
+}
+
+QList<int> Zones::getZoneHighs(int) const
+{
+    return {};
 }
 
 int HrZones::whichRange(const QDate &) const
@@ -147,6 +167,26 @@ int HrZones::getAeT(int) const
     return 0;
 }
 
+int HrZones::getRestHr(int) const
+{
+    return 0;
+}
+
+int HrZones::getMaxHr(int) const
+{
+    return 0;
+}
+
+QList<int> HrZones::getZoneLows(int) const
+{
+    return {};
+}
+
+QList<int> HrZones::getZoneHighs(int) const
+{
+    return {};
+}
+
 int PaceZones::whichRange(const QDate &) const
 {
     return -1;
@@ -165,6 +205,16 @@ double PaceZones::getCV(int) const
 double PaceZones::getAeT(int) const
 {
     return 0.0;
+}
+
+QList<double> PaceZones::getZoneLows(int) const
+{
+    return {};
+}
+
+QList<double> PaceZones::getZoneHighs(int) const
+{
+    return {};
 }
 
 WPrime::WPrime()
