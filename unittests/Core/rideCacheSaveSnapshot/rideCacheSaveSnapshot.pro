@@ -14,7 +14,8 @@ SOURCES = testRideCacheSaveSnapshot.cpp \
           ../../../src/Core/RideCacheBackgroundSaver.cpp \
           ../../../src/Core/RideCacheSaveCapture.cpp \
           ../../../src/Core/RideCacheSaveSnapshot.cpp \
-          ../../../src/Core/RideCachePersistence.cpp
+          ../../../src/Core/RideCachePersistence.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp
 
 HEADERS = ../../../src/Core/RideCacheBackgroundSaver.h \
           ../../../src/Core/RideCacheSaveCapture.h \

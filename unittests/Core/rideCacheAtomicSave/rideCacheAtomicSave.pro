@@ -9,7 +9,8 @@ CONFIG += console testcase c++17 release
 CONFIG -= debug
 
 SOURCES = testRideCacheAtomicSave.cpp \
-          ../../../src/Core/RideCachePersistence.cpp
+          ../../../src/Core/RideCachePersistence.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp
 
 HEADERS = ../../../src/Core/RideCachePersistence.h \
           ../../../src/FileIO/AtomicFileWriter.h

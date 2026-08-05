@@ -3,6 +3,7 @@ CONFIG += c++17
 
 SOURCES = testAthleteBackupArchive.cpp \
           ../../../src/FileIO/AthleteBackupArchive.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp \
           ../../../contrib/qzip/zip.cpp
 
 HEADERS = ../../../src/FileIO/AthleteBackupArchive.h \

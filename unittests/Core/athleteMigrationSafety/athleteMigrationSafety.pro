@@ -47,6 +47,7 @@ SOURCES = testAthleteMigrationSafety.cpp \
           ../../../src/Cloud/WithingsDownload.cpp \
           ../../../contrib/qzip/zip.cpp \
           ../../../src/FileIO/CompressedActivityFile.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp \
           $$GC_UPGRADE_SOURCE \
           $$GC_ATHLETE_SOURCE \
           $$GC_CLOUD_SERVICE_SOURCE
