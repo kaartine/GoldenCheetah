@@ -5078,24 +5078,49 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### METRIC-002: User metrics retain the first athlete Context
 
-- Status: OPEN
-- Code: `src/Core/RideCache.cpp:77`, `src/Metrics/UserMetric.cpp:27`,
-  `src/Core/Context.cpp:134`
+- Status: FIXED
+- Code: `src/Core/RideCache.cpp`, `src/Core/RideItem.cpp`,
+  `src/Metrics/UserMetric.cpp`, `src/Metrics/RideMetric.cpp`, and
+  `src/Metrics/RideMetric.h`
 - Impact: Closing the first athlete can leave global metrics with a dangling
   context while other athletes remain open.
-- Test: Open two athletes, close the first, and evaluate/reload metrics under ASan.
-- Fix direction: Compile formulas context-free and pass athlete services at
-  evaluation time.
+- Test-first evidence: The new two-athlete regression first observed that the
+  compiled `DataFilter` retained the first athlete address after that athlete
+  was destroyed. The old registry also had no immutable replacement API with
+  which the concurrent lifetime tests could pin one generation.
+- Resolution: User formulas are compiled without an athlete `Context` and the
+  active ride supplies its context only while the formula is evaluated.
+  Clones share the immutable compiled program, so destroying or replacing the
+  defining metric cannot invalidate an in-flight evaluation.
+- Verification: `userMetricRegistrySafety` passes 8/8 normally and 8/8 under
+  strict ASan/UBSan/LSan. The context-retention row destroys the first athlete,
+  evaluates with a second athlete, reloads the definition, and verifies the
+  second athlete's value throughout. The complete release build links and its
+  112 QtTest suites pass 4,632 cases.
 
 ### METRIC-003: Global metric reload races other athlete workers
 
-- Status: OPEN
-- Code: `src/Gui/ConfigDialog.cpp:241`,
-  `src/Core/Context.cpp:130`, `src/Core/RideCache.cpp:743`
+- Status: FIXED
+- Code: `src/Core/Context.cpp`, `src/Core/RideCache.cpp`,
+  `src/Core/RideItem.cpp`, `src/Metrics/RideMetric.cpp`, and
+  `src/Metrics/RideMetric.h`
 - Impact: One athlete cancels only its own cache before global metric objects are
   removed while other workers may still use them.
-- Test: Multi-athlete metric reload during refresh under TSAN.
-- Fix direction: Publish an immutable registry snapshot under one lock.
+- Test-first evidence: The regression contract could not be satisfied by the
+  mutable global vector: readers received borrowed metric pointers while reload
+  removed those objects in place. It also lacked one atomic operation for
+  publishing metrics, indexes, dependencies, and the schema generation.
+- Resolution: The factory now builds a complete immutable registry generation
+  and atomically publishes one `shared_ptr` snapshot. Cache refresh and metric
+  evaluation pin that generation for their whole operation; reload never
+  mutates or frees objects still visible to another athlete worker.
+- Verification: The concurrent two-athlete reload suite passes 8/8 normally,
+  8/8 under strict ASan/UBSan/LSan, and 8/8 under genuine ThreadSanitizer while
+  replacing the registry hundreds of times. Dependency-graph tests pass 9/9
+  normally and under strict sanitizers, and `rideCacheSaveSnapshot` passes
+  29/29. An exact `1e73b52` Qt 6.8.3 production build reports configured
+  Strava OAuth, all 4,632 registered cases pass across 112 suites, and a
+  read-only isolated offscreen startup remains live for the full smoke window.
 
 ### GUI-001: RideNavigator stores a dangling stack address in QModelIndex
 
