@@ -33,6 +33,7 @@
 #include "IntervalItem.h"
 #include "Context.h"
 #include "MapPageSecurityPolicy.h"
+#include "MapRoutePointIndex.h"
 
 #include <QDialog>
 
@@ -68,6 +69,8 @@ class MapWebBridge : public QObject
         RideMapWindow *mw;
 
         RideFilePoint const * point = nullptr;
+        mutable MapRoutePointIndex routePointIndex;
+        mutable RideFile const *indexedRide = nullptr;
         bool m_startDrag = false;
         bool m_drag = false;
         int selection = 1;
