@@ -12,6 +12,7 @@ CONFIG -= debug
 
 SOURCES = testJsonImportIntegrity.cpp \
           JsonImportIntegrityTestStubs.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp \
           ../../../src/FileIO/RideFile.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCommand.cpp
@@ -40,6 +41,7 @@ INCLUDEPATH += ../../../src \
 QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
 QMAKE_LFLAGS += -Wl,--gc-sections
 LIBS += -lz
+win32:LIBS += -ladvapi32
 
 sanitize:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \
