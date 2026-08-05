@@ -743,6 +743,8 @@ private slots:
     void linkedSavePreManifestRecoveryRejectsUnknownEntries();
     void linkedSaveOversizedControlFileFailsBeforeRead_data();
     void linkedSaveOversizedControlFileFailsBeforeRead();
+    void linkedSaveRecoveryRejectsEnumeratedJournalReplacement();
+    void linkedSaveReadinessRejectsHiddenPendingNamespace();
     void linkedSaveJournalCreationRejectsNamespaceReplacement();
     void linkedSaveJournalCreationRejectsDirectoryReplacement();
     void linkedSaveJournalCreationRejectsPostCheckReplacement();
@@ -7515,6 +7517,125 @@ linkedSaveOversizedControlFileFailsBeforeRead()
         controlPath,
         QFileDevice::ReadOwner | QFileDevice::WriteOwner);
 #endif
+}
+
+void TestAtomicActivitySave::
+linkedSaveRecoveryRejectsEnumeratedJournalReplacement()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString namespacePath = dir.filePath(
+        QStringLiteral(".gc-transactions/linked-save"));
+    const QString pendingId = QStringLiteral(
+        "01234567-89ab-cdef-8123-456789abcdef");
+    const QString pendingJournal = QDir(namespacePath).filePath(pendingId);
+    const QString pendingFile = QDir(pendingJournal).filePath(
+        QStringLiteral("source-0000.old"));
+    const QByteArray pendingContents("original pending linked-save recovery");
+    QVERIFY(QDir().mkpath(pendingJournal));
+    writeFixture(pendingFile, pendingContents);
+
+    const QString retainedJournal = QDir(namespacePath).filePath(
+        QStringLiteral("retained-linked-save-journal"));
+    const QByteArray replacementContents(
+        "replacement journal must remain untouched");
+    bool hookReached = false;
+    bool journalReplaced = false;
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-recovery-namespace-enumerated"),
+        [&]() {
+            hookReached = true;
+            journalReplaced =
+                QDir().rename(pendingJournal, retainedJournal);
+            if (!journalReplaced) return;
+            QVERIFY(QDir().mkdir(pendingJournal));
+            writeFixture(pendingFile, replacementContents);
+        });
+
+    QString error;
+    const bool reconciled =
+        LinkedActivitySave::Journal::reconcileAll(dir.path(), error);
+    clearLinkedActivitySaveTransitionAction();
+
+    QVERIFY(hookReached);
+    if (!journalReplaced) {
+#ifdef Q_OS_WIN
+        QSKIP("Windows blocked the enumerated journal replacement");
+#else
+        QFAIL("The enumerated journal replacement injection did not run");
+#endif
+    }
+    QVERIFY2(
+        !reconciled,
+        "Linked-save recovery accepted an enumerated journal replacement");
+    QVERIFY2(!error.isEmpty(), "Rejected recovery must report an error");
+    QCOMPARE(
+        readAll(QDir(retainedJournal).filePath(
+            QStringLiteral("source-0000.old"))),
+        pendingContents);
+    QCOMPARE(readAll(pendingFile), replacementContents);
+}
+
+void TestAtomicActivitySave::
+linkedSaveReadinessRejectsHiddenPendingNamespace()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    writeLinkedSaveJournalSources(dir.path());
+
+    const QString transactionsPath = dir.filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString removalNamespace = QDir(transactionsPath).filePath(
+        QStringLiteral("linked-removal"));
+    const QString pendingId = QStringLiteral(
+        "01234567-89ab-cdef-8123-456789abcdef");
+    const QString pendingJournal = QDir(removalNamespace).filePath(pendingId);
+    const QString retainedNamespace = dir.filePath(
+        QStringLiteral("retained-linked-removal-namespace"));
+    QVERIFY(QDir().mkpath(pendingJournal));
+
+    bool hookReached = false;
+    bool namespaceReplaced = false;
+    setLinkedActivitySaveTransitionAction(
+        QByteArray("linked-save-readiness-namespaces-anchored"),
+        [&]() {
+            hookReached = true;
+            namespaceReplaced =
+                QDir().rename(removalNamespace, retainedNamespace);
+            if (namespaceReplaced) {
+                QVERIFY(QDir().mkdir(removalNamespace));
+            }
+        });
+
+    QString error;
+    const std::shared_ptr<LinkedActivitySave::Journal> journal =
+        LinkedActivitySave::Journal::prepare(
+            linkedSaveJournalSpecification(dir.path()), error);
+    clearLinkedActivitySaveTransitionAction();
+
+    QVERIFY(hookReached);
+    if (!namespaceReplaced) {
+#ifdef Q_OS_WIN
+        QVERIFY2(!journal, "The original pending namespace must remain visible");
+        QVERIFY2(!error.isEmpty(), "Rejected readiness must report an error");
+        QSKIP("The anchored Windows namespace blocks replacement");
+#else
+        QFAIL("The namespace replacement injection did not run");
+#endif
+    }
+    QVERIFY2(
+        !journal,
+        "Linked-save readiness accepted a hidden pending transaction namespace");
+    QVERIFY2(!error.isEmpty(), "Rejected readiness must report an error");
+    QVERIFY(QFileInfo(QDir(retainedNamespace).filePath(pendingId)).isDir());
+    QVERIFY(QDir(removalNamespace).isEmpty());
+    QCOMPARE(
+        readAll(dir.filePath(QStringLiteral("first-old.json"))),
+        QByteArray("first old generation"));
+    QCOMPARE(
+        readAll(dir.filePath(QStringLiteral("second-old.json"))),
+        QByteArray("second old generation"));
 }
 
 void TestAtomicActivitySave::

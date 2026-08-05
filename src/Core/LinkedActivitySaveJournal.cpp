@@ -37,6 +37,7 @@ namespace Detail {
 
 constexpr int ManifestVersion = 1;
 constexpr int MaximumEntries = 64;
+constexpr qsizetype MaximumNamespaceEntries = 4096;
 constexpr qint64 MaximumManifestSize = 4 * 1024 * 1024;
 constexpr qint64 MaximumCommitMarkerSize = 128;
 constexpr qint64 MaximumRetirementIntentSize = 128;
@@ -183,6 +184,25 @@ bool pathEntryExists(const QString &path)
     return info.exists() || info.isSymLink();
 }
 
+bool directorySnapshotsMatch(
+    const QList<AnchoredFileSystem::DirectoryEntry> &left,
+    const QList<AnchoredFileSystem::DirectoryEntry> &right)
+{
+    if (left.size() != right.size()) return false;
+    for (qsizetype index = 0; index < left.size(); ++index) {
+        const AnchoredFileSystem::DirectoryEntry &leftEntry = left.at(index);
+        const AnchoredFileSystem::DirectoryEntry &rightEntry = right.at(index);
+        if (leftEntry.name != rightEntry.name
+            || leftEntry.kind != rightEntry.kind
+            || leftEntry.identity != rightEntry.identity
+            || leftEntry.identity.linkCount()
+                != rightEntry.identity.linkCount()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool anchorJournalNamespace(JournalState &state, QString &error)
 {
     state.namespaceDirectory = {};
@@ -209,16 +229,36 @@ bool anchorJournalNamespace(JournalState &state, QString &error)
     return true;
 }
 
-bool anchorJournalDirectory(JournalState &state, QString &error)
+bool anchorJournalDirectory(
+    JournalState &state,
+    QString &error,
+    const AnchoredFileSystem::NativeIdentity *expectedIdentity = nullptr)
 {
     state.journalDirectory = {};
-    if ((!state.namespaceDirectory.isValid()
-         && !anchorJournalNamespace(state, error))
-        || !state.namespaceDirectory.openChild(
+    if (!state.namespaceDirectory.isValid()
+        && !anchorJournalNamespace(state, error)) {
+        return false;
+    }
+    if (!state.namespaceDirectory.openChild(
             state.manifest.id,
             state.journalDirectory,
-            error)
-        || !AnchoredFileSystem::hardenPrivateDirectory(
+            error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "Cannot anchor the linked-save journal directory");
+        }
+        return false;
+    }
+    if (expectedIdentity
+        && (state.journalDirectory.identity() != *expectedIdentity
+            || state.journalDirectory.identity().linkCount()
+                != expectedIdentity->linkCount())) {
+        error = QStringLiteral(
+            "The linked-save journal changed after namespace enumeration");
+        state.journalDirectory = {};
+        return false;
+    }
+    if (!AnchoredFileSystem::hardenPrivateDirectory(
             state.journalDirectory, error)) {
         if (error.isEmpty()) {
             error = QStringLiteral(
@@ -288,18 +328,6 @@ QString transactionNamespacePath(const QString &root)
 {
     return QDir(root).filePath(
         QStringLiteral(".gc-transactions/linked-save"));
-}
-
-QString removalNamespacePath(const QString &root)
-{
-    return QDir(root).filePath(
-        QStringLiteral(".gc-transactions/linked-removal"));
-}
-
-QString planReplacementNamespacePath(const QString &root)
-{
-    return QDir(root).filePath(
-        QStringLiteral(".gc-transactions/plan-replacement"));
 }
 
 QString transactionLeaseTarget(const QString &root)
@@ -1010,78 +1038,6 @@ bool removeObservedActivityFile(
         error);
 }
 
-bool validateExistingDirectory(const QString &path, QString &error)
-{
-    const QFileInfo info(path);
-    if (!info.exists() || !info.isDir() || info.isSymLink()) {
-        error = QStringLiteral(
-            "The activity transaction directory is unavailable or unsafe");
-        return false;
-    }
-    return true;
-}
-
-bool makeDirectoryPrivate(const QString &path, QString &error)
-{
-    const QFileDevice::Permissions privatePermissions =
-        QFileDevice::ReadOwner | QFileDevice::WriteOwner
-        | QFileDevice::ExeOwner;
-    if (!QFile::setPermissions(path, privatePermissions)) {
-        error = QStringLiteral(
-            "Cannot make the activity transaction directory private");
-        return false;
-    }
-
-#ifdef Q_OS_UNIX
-    QFileInfo info(path);
-    info.refresh();
-    const QFileDevice::Permissions nonOwnerPermissions =
-        QFileDevice::ReadGroup | QFileDevice::WriteGroup
-        | QFileDevice::ExeGroup | QFileDevice::ReadOther
-        | QFileDevice::WriteOther | QFileDevice::ExeOther;
-    const QFileDevice::Permissions permissions = info.permissions();
-    if ((permissions & nonOwnerPermissions) != QFileDevice::Permissions()
-        || !permissions.testFlag(QFileDevice::ReadOwner)
-        || !permissions.testFlag(QFileDevice::WriteOwner)
-        || !permissions.testFlag(QFileDevice::ExeOwner)) {
-        error = QStringLiteral(
-            "The activity transaction directory is not private");
-        return false;
-    }
-#endif
-    return true;
-}
-
-bool ensurePrivateDirectory(const QString &path, QString &error)
-{
-    const QFileInfo existing(path);
-    if (existing.exists() || existing.isSymLink()) {
-        return validateExistingDirectory(path, error)
-            && makeDirectoryPrivate(path, error);
-    }
-
-    const QFileInfo parent(existing.absolutePath());
-    if (!parent.exists() || !parent.isDir() || parent.isSymLink()) {
-        error = QStringLiteral(
-            "Cannot create an activity transaction under an unsafe directory");
-        return false;
-    }
-    if (!QDir().mkdir(path)) {
-        error = QStringLiteral("Cannot create the activity transaction directory");
-        return false;
-    }
-    if (!makeDirectoryPrivate(path, error)) {
-        QDir().rmdir(path);
-        return false;
-    }
-    QString syncError;
-    if (!syncParentDirectory(path, syncError)) {
-        error = syncError;
-        return false;
-    }
-    return true;
-}
-
 bool openOrCreatePrivateFixedDirectory(
     const AnchoredFileSystem::DirectoryAnchor &parent,
     const QString &component,
@@ -1122,6 +1078,39 @@ bool openOrCreatePrivateFixedDirectory(
             }
             return false;
         }
+    }
+
+    QString matchError;
+    if (!parent.pathMatches(matchError)
+        || !directory.pathMatches(matchError)) {
+        error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The private transaction directory hierarchy changed")
+            : matchError;
+        return false;
+    }
+    return true;
+}
+
+bool openExistingPrivateDirectory(
+    const AnchoredFileSystem::DirectoryAnchor &parent,
+    const QString &component,
+    AnchoredFileSystem::DirectoryAnchor &directory,
+    bool &exists,
+    QString &error)
+{
+    if (!AnchoredFileSystem::validateCurrentUserControlledDirectory(
+            parent, error)
+        || !parent.openChildIfExists(
+            component, directory, exists, error)) {
+        return false;
+    }
+    if (!exists) return true;
+    if (!AnchoredFileSystem::validateCurrentUserOwnedDirectory(
+            directory, error)
+        || !AnchoredFileSystem::hardenPrivateDirectory(
+            directory, error)) {
+        return false;
     }
 
     QString matchError;
@@ -1185,52 +1174,91 @@ bool ensureTransactionNamespace(
     return true;
 }
 
-bool namespaceHasPendingEntries(
-    const QString &path, bool &pending, QString &error)
-{
-    pending = false;
-    const QFileInfo namespaceInfo(path);
-    if (!namespaceInfo.exists() && !namespaceInfo.isSymLink()) return true;
-    if (!ensurePrivateDirectory(path, error)) return false;
-
-    const QFileInfoList entries = QDir(path).entryInfoList(
-        QDir::AllEntries | QDir::NoDotAndDotDot
-            | QDir::Hidden | QDir::System,
-        QDir::Name);
-    for (const QFileInfo &entry : entries) {
-        const QString name = entry.fileName();
-        QString lockedId;
-        if (entry.isFile() && !entry.isSymLink()
-            && atomicFileLockTargetName(name, lockedId)) {
-            if (validTransactionId(lockedId)) continue;
-        }
-        pending = true;
-        return true;
-    }
-    return true;
-}
-
 bool transactionNamespacesAreReady(
-    const QString &root, const QString &saveNamespace, QString &error)
+    const AnchoredFileSystem::DirectoryAnchor &transactionsDirectory,
+    const AnchoredFileSystem::DirectoryAnchor &saveNamespace,
+    QString &error)
 {
-    bool pending = false;
-    if (!namespaceHasPendingEntries(saveNamespace, pending, error)) {
+    QList<AnchoredFileSystem::DirectoryAnchor> namespaces {saveNamespace};
+    const QStringList otherComponents = {
+        QStringLiteral("linked-removal"),
+        QStringLiteral("plan-replacement")};
+    for (const QString &component : otherComponents) {
+        AnchoredFileSystem::DirectoryAnchor directory;
+        bool exists = false;
+        if (!openExistingPrivateDirectory(
+                transactionsDirectory,
+                component,
+                directory,
+                exists,
+                error)) {
+            return false;
+        }
+        if (exists) namespaces.append(directory);
+    }
+
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+    linkedActivitySaveTransitionReached(
+        "linked-save-readiness-namespaces-anchored");
+#endif
+
+    for (const AnchoredFileSystem::DirectoryAnchor &candidate : namespaces) {
+        QString matchError;
+        if (!transactionsDirectory.pathMatches(matchError)
+            || !candidate.pathMatches(matchError)) {
+            error = matchError.isEmpty()
+                ? QStringLiteral(
+                      "An activity transaction namespace was replaced")
+                : matchError;
+            return false;
+        }
+
+        QList<AnchoredFileSystem::DirectoryEntry> entries;
+        if (!candidate.enumerateEntries(
+                entries, Detail::MaximumNamespaceEntries, error)) {
+            error = QStringLiteral(
+                "Cannot inspect an activity transaction namespace: %1")
+                        .arg(error);
+            return false;
+        }
+        for (const AnchoredFileSystem::DirectoryEntry &entry : entries) {
+            QString lockedId;
+            if (entry.kind
+                    == AnchoredFileSystem::DirectoryEntryKind::RegularFile
+                && entry.identity.linkCount() == 1
+                && atomicFileLockTargetName(entry.name, lockedId)
+                && validTransactionId(lockedId)) {
+                continue;
+            }
+            error = QStringLiteral(
+                "Pending linked activity recovery must be completed before starting another transaction");
+            return false;
+        }
+        if (!transactionsDirectory.pathMatches(matchError)
+            || !candidate.pathMatches(matchError)) {
+            error = matchError.isEmpty()
+                ? QStringLiteral(
+                      "An activity transaction namespace changed while being inspected")
+                : matchError;
+            return false;
+        }
+    }
+    QString matchError;
+    if (!transactionsDirectory.pathMatches(matchError)) {
+        error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The activity transaction directory changed during readiness inspection")
+            : matchError;
         return false;
     }
-    if (!pending
-        && !namespaceHasPendingEntries(
-            removalNamespacePath(root), pending, error)) {
-        return false;
-    }
-    if (!pending
-        && !namespaceHasPendingEntries(
-            planReplacementNamespacePath(root), pending, error)) {
-        return false;
-    }
-    if (pending) {
-        error = QStringLiteral(
-            "Pending linked activity recovery must be completed before starting another transaction");
-        return false;
+    for (const AnchoredFileSystem::DirectoryAnchor &candidate : namespaces) {
+        if (!candidate.pathMatches(matchError)) {
+            error = matchError.isEmpty()
+                ? QStringLiteral(
+                      "An activity transaction namespace changed during readiness inspection")
+                : matchError;
+            return false;
+        }
     }
     return true;
 }
@@ -4244,9 +4272,11 @@ std::shared_ptr<Journal> Journal::prepare(
             state->namespacePath,
             transactionsDirectory,
             state->namespaceDirectory,
-            error)
-        || !transactionNamespacesAreReady(
-            root, state->namespacePath, error)
+            error)) {
+        return {};
+    }
+    if (!transactionNamespacesAreReady(
+            transactionsDirectory, state->namespaceDirectory, error)
         || !AnchoredFileSystem::hardenPrivateDirectory(
             transactionsDirectory, error)
         || !AnchoredFileSystem::hardenPrivateDirectory(
@@ -4459,66 +4489,158 @@ bool Journal::reconcileAll(const QString &athleteRoot, QString &error)
 
     QString root;
     if (!normalizeAthleteRoot(athleteRoot, root, error)) return false;
-    const QString transactions = QDir(root).filePath(
-        QStringLiteral(".gc-transactions"));
-    const QFileInfo transactionsInfo(transactions);
-    if (!transactionsInfo.exists() && !transactionsInfo.isSymLink()) {
-        return true;
-    }
-    if (!ensurePrivateDirectory(transactions, error)) return false;
 
-    const QString namespacePath = transactionNamespacePath(root);
-    const QFileInfo namespaceInfo(namespacePath);
-    if (!namespaceInfo.exists() && !namespaceInfo.isSymLink()) return true;
-    if (!ensurePrivateDirectory(namespacePath, error)) return false;
-    JournalState recoveryNamespace;
-    recoveryNamespace.namespacePath = namespacePath;
-    if (!anchorJournalNamespace(recoveryNamespace, error)
-        || !recoveryNamespace.namespaceDirectory.pathMatches(error)) {
-        if (error.isEmpty()) {
-            error = QStringLiteral(
-                "Cannot anchor the linked-save recovery namespace");
-        }
+    AnchoredFileSystem::DirectoryAnchor rootDirectory;
+    if (!AnchoredFileSystem::DirectoryAnchor::open(
+            root, rootDirectory, error)) {
+        error = QStringLiteral(
+            "Cannot anchor the athlete transaction root: %1").arg(error);
         return false;
     }
 
-    const QFileInfoList entries = QDir(namespacePath).entryInfoList(
-        QDir::AllEntries | QDir::NoDotAndDotDot
-            | QDir::Hidden | QDir::System,
-        QDir::Name);
-    QStringList failures;
-    for (const QFileInfo &entry : entries) {
-        const QString name = entry.fileName();
-        QString lockedId;
-        if (entry.isFile() && !entry.isSymLink()
-            && atomicFileLockTargetName(name, lockedId)) {
-            if (validTransactionId(lockedId)) continue;
-        }
-        if (entry.isSymLink() || !entry.isDir()
-            || !validTransactionId(name)) {
-            failures.append(QStringLiteral(
-                "Unknown entry in the linked-save journal namespace: %1")
-                                .arg(name));
-            continue;
-        }
+    AnchoredFileSystem::DirectoryAnchor transactionsDirectory;
+    bool transactionsExist = false;
+    if (!openExistingPrivateDirectory(
+            rootDirectory,
+            QStringLiteral(".gc-transactions"),
+            transactionsDirectory,
+            transactionsExist,
+            error)) {
+        return false;
+    }
+    if (!transactionsExist) {
+        return true;
+    }
 
+    const QString namespacePath = transactionNamespacePath(root);
+    AnchoredFileSystem::DirectoryAnchor namespaceDirectory;
+    bool namespaceExists = false;
+    if (!openExistingPrivateDirectory(
+            transactionsDirectory,
+            QStringLiteral("linked-save"),
+            namespaceDirectory,
+            namespaceExists,
+            error)) {
+        return false;
+    }
+    if (!namespaceExists) return true;
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+    linkedActivitySaveTransitionReached(
+        "linked-save-recovery-namespace-anchored");
+#endif
+
+    QString matchError;
+    if (!rootDirectory.pathMatches(matchError)
+        || !transactionsDirectory.pathMatches(matchError)
+        || !namespaceDirectory.pathMatches(matchError)) {
+        error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The linked-save recovery namespace was replaced")
+            : matchError;
+        return false;
+    }
+
+    QList<AnchoredFileSystem::DirectoryEntry> entries;
+    if (!namespaceDirectory.enumerateEntries(
+            entries, Detail::MaximumNamespaceEntries, error)) {
+        error = QStringLiteral(
+            "Cannot inspect the linked-save recovery namespace: %1")
+                    .arg(error);
+        return false;
+    }
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+    linkedActivitySaveTransitionReached(
+        "linked-save-recovery-namespace-enumerated");
+#endif
+    QList<AnchoredFileSystem::DirectoryEntry> verifiedEntries;
+    if (!namespaceDirectory.enumerateEntries(
+            verifiedEntries, Detail::MaximumNamespaceEntries, error)) {
+        error = QStringLiteral(
+            "Cannot verify the linked-save recovery namespace: %1")
+                    .arg(error);
+        return false;
+    }
+    if (!directorySnapshotsMatch(entries, verifiedEntries)) {
+        error = QStringLiteral(
+            "The linked-save recovery namespace changed after enumeration");
+        return false;
+    }
+    entries = std::move(verifiedEntries);
+    if (!namespaceDirectory.pathMatches(matchError)) {
+        error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The linked-save recovery namespace changed while being enumerated")
+            : matchError;
+        return false;
+    }
+
+    const auto isValidLockGuard = [](
+        const AnchoredFileSystem::DirectoryEntry &entry) {
+        QString lockedId;
+        return entry.kind
+                == AnchoredFileSystem::DirectoryEntryKind::RegularFile
+            && entry.identity.linkCount() == 1
+            && atomicFileLockTargetName(entry.name, lockedId)
+            && validTransactionId(lockedId);
+    };
+    for (const AnchoredFileSystem::DirectoryEntry &entry : entries) {
+        if (isValidLockGuard(entry)) continue;
+        if (entry.kind
+                != AnchoredFileSystem::DirectoryEntryKind::Directory
+            || !validTransactionId(entry.name)) {
+            error = QStringLiteral(
+                "Unknown entry in the linked-save journal namespace: %1")
+                            .arg(entry.name);
+            return false;
+        }
+    }
+
+    QStringList failures;
+    for (const AnchoredFileSystem::DirectoryEntry &entry : entries) {
+        if (!namespaceDirectory.pathMatches(matchError)) {
+            failures.append(
+                matchError.isEmpty()
+                    ? QStringLiteral(
+                          "The linked-save recovery namespace was replaced")
+                    : matchError);
+            break;
+        }
+        if (isValidLockGuard(entry)) continue;
+        const QString &name = entry.name;
+        const QString journalPath = QDir(namespacePath).filePath(name);
         QString transactionError;
         JournalState candidate;
         candidate.namespacePath = namespacePath;
-        candidate.journalPath = entry.absoluteFilePath();
+        candidate.journalPath = journalPath;
         candidate.manifest.id = name;
-        candidate.namespaceDirectory =
-            recoveryNamespace.namespaceDirectory;
-        if (!anchorJournalDirectory(candidate, transactionError)
+        candidate.namespaceDirectory = namespaceDirectory;
+        if (!anchorJournalDirectory(
+                candidate, transactionError, &entry.identity)
+            || candidate.journalDirectory.identity() != entry.identity
+            || candidate.journalDirectory.identity().linkCount()
+                != entry.identity.linkCount()
             || !journalDirectoryMatches(candidate, transactionError)) {
+            if (transactionError.isEmpty()) {
+                transactionError = QStringLiteral(
+                    "The linked-save journal changed after namespace enumeration");
+            }
             failures.append(transactionError);
             continue;
         }
 
-        const QString manifestPath = QDir(entry.absoluteFilePath()).filePath(
-            Detail::ManifestName);
-        const QFileInfo manifestInfo(manifestPath);
-        if (!manifestInfo.exists() && !manifestInfo.isSymLink()) {
+        bool manifestExists = false;
+        {
+            const AnchoredFileSystem::EntryRef manifestEntry =
+                candidate.journalDirectory.entry(
+                    Detail::ManifestName, transactionError);
+            if (!manifestEntry.isValid()
+                || !AnchoredFileSystem::entryExists(
+                    manifestEntry, manifestExists, transactionError)) {
+                failures.append(transactionError);
+                continue;
+            }
+        }
+        if (!manifestExists) {
             if (!removePreManifestJournal(
                     std::move(candidate),
                     transactionError)) {
@@ -4530,7 +4652,7 @@ bool Journal::reconcileAll(const QString &athleteRoot, QString &error)
         std::shared_ptr<JournalState> state;
         if (!loadManifestState(
                 root,
-                entry.absoluteFilePath(),
+                journalPath,
                 std::move(candidate),
                 state,
                 transactionError)) {
@@ -4546,14 +4668,59 @@ bool Journal::reconcileAll(const QString &athleteRoot, QString &error)
         }
     }
 
-    QString namespaceError;
-    if (!recoveryNamespace.namespaceDirectory.pathMatches(namespaceError)
-        || !recoveryNamespace.namespaceDirectory.sync(namespaceError)) {
+    if (!namespaceDirectory.pathMatches(matchError)) {
         failures.append(
-            namespaceError.isEmpty()
+            matchError.isEmpty()
+                ? QStringLiteral(
+                      "The linked-save recovery namespace changed during recovery")
+                : matchError);
+    }
+
+    if (failures.isEmpty()) {
+        QList<AnchoredFileSystem::DirectoryEntry> remaining;
+        QString enumerationError;
+        if (!namespaceDirectory.enumerateEntries(
+                remaining,
+                Detail::MaximumNamespaceEntries,
+                enumerationError)) {
+            failures.append(enumerationError);
+        } else {
+#ifdef GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS
+            linkedActivitySaveTransitionReached(
+                "linked-save-recovery-final-namespace-enumerated");
+#endif
+            QList<AnchoredFileSystem::DirectoryEntry> verifiedRemaining;
+            if (!namespaceDirectory.enumerateEntries(
+                    verifiedRemaining,
+                    Detail::MaximumNamespaceEntries,
+                    enumerationError)) {
+                failures.append(enumerationError);
+            } else if (!directorySnapshotsMatch(
+                           remaining, verifiedRemaining)) {
+                failures.append(QStringLiteral(
+                    "The linked-save recovery namespace changed during final inspection"));
+            } else {
+                for (const AnchoredFileSystem::DirectoryEntry &entry :
+                     verifiedRemaining) {
+                    if (isValidLockGuard(entry)) continue;
+                    failures.append(QStringLiteral(
+                        "The linked-save recovery namespace still contains a transaction"));
+                    break;
+                }
+            }
+        }
+    }
+
+    QString hierarchyError;
+    if (!rootDirectory.pathMatches(hierarchyError)
+        || !transactionsDirectory.pathMatches(hierarchyError)
+        || !namespaceDirectory.pathMatches(hierarchyError)
+        || !namespaceDirectory.sync(hierarchyError)) {
+        failures.append(
+            hierarchyError.isEmpty()
                 ? QStringLiteral(
                       "Cannot synchronize the linked-save journal namespace")
-                : namespaceError);
+                : hierarchyError);
     }
 
     if (!failures.isEmpty()) {

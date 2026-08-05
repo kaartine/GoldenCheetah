@@ -3171,6 +3171,14 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   hooks, before every source and prior-backup copy, and before manifest
   publication. Substitutions injected at those deterministic validation hooks
   are rejected without writing the next transaction file into the substitute.
+  Readiness now retains the linked-save, linked-removal, and plan-replacement
+  namespace generations together, performs bounded anchored enumeration, and
+  rechecks every held name before journal creation. Linked-save recovery uses
+  two matching anchored namespace snapshots before mutation, opens each UUID
+  child only when its native identity matches the enumerated generation, and
+  performs another stable namespace snapshot after recovery. A journal replaced
+  immediately after enumeration is rejected without deleting either the
+  original or substitute generation.
 
   Linked-removal preparation and recovery now anchor the athlete root, create or
   open `.gc-transactions` and `linked-removal` as fixed private children, and
@@ -3197,23 +3205,27 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   376/0/15 for RideCache, 85/0/22 for AnchoredFilesystem, 10/0/0 for linked-save
   cleanup, 121/0/3 for PlanReplacement, and 8/0/0 for PlanBundleImport. macOS
   reports 390/0/1, 81/0/15, 4/0/0, 124/0/0, and 8/0/0 respectively, plus the
-  307/0/1 atomic-activity suite.
-- Residual: Linked-save namespace readiness and recovery, and plan-replacement
-  readiness, recovery enumeration, control-file I/O, and cleanup, still use
-  pathname-based `QDir`/`QFileInfo` operations rather than one retained namespace
-  generation. The private-directory API explicitly trusts processes running as
-  the same OS identity and privileged administrators; such a process can still
-  exchange a name after revalidation and before a later pathname-based copy or
-  write. Replace-existing publication, generic staged-set rollback, activity
-  conversion/rename, split archival, and lower-risk backup cleanup retain related
-  windows. POSIX exposes no portable identity-conditional `rmdir`; private random
-  quarantine, repeated identity checks, anchored post-checks, and fail-closed
-  recovery reduce but cannot eliminate its final check-to-syscall interval. A
-  reported verified recovery path is also point-in-time evidence, not a permanent
-  claim after handles are released. These residuals keep this item `IN_PROGRESS`.
-- Next test and fix: Anchor linked-save and plan-replacement namespace readiness
-  and recovery, then retain plan journal entries through identity-bound control
-  I/O and cleanup. After that, apply the observed-generation contract to generic
+  307/0/1 atomic-activity suite. The linked-save readiness and recovery
+  regressions first reproduced the hidden pending namespace and destructive
+  enumerated-child substitution. The resulting atomic-activity suite passes
+  310/0/0 normally; 14 focused readiness, recovery, lock-guard, and hardened-
+  journal cases pass under strict ASan/UBSan/LSan and ThreadSanitizer.
+- Residual: Plan-replacement readiness, recovery enumeration, control-file I/O,
+  and cleanup still use pathname-based `QDir`/`QFileInfo` operations rather than
+  one retained namespace generation. The private-directory API explicitly trusts
+  processes running as the same OS identity and privileged administrators; such
+  a process can still exchange a name after revalidation and before a later
+  pathname-based copy or write. Replace-existing publication, generic staged-set
+  rollback, activity conversion/rename, split archival, and lower-risk backup
+  cleanup retain related windows. POSIX exposes no portable identity-conditional
+  `rmdir`; private random quarantine, repeated identity checks, anchored
+  post-checks, and fail-closed recovery reduce but cannot eliminate its final
+  check-to-syscall interval. A reported verified recovery path is also
+  point-in-time evidence, not a permanent claim after handles are released.
+  These residuals keep this item `IN_PROGRESS`.
+- Next test and fix: Anchor plan-replacement namespace readiness and recovery,
+  then retain plan journal entries through identity-bound control I/O and
+  cleanup. After that, apply the observed-generation contract to generic
   replace-existing publication and staged rollback.
 
 ### GUI-007: Modal activity workflows retained dangling RideItem pointers
