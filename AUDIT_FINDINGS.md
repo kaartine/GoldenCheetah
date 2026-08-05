@@ -3435,7 +3435,481 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   ASan/UBSan/LSan. The production application build covers the real wizard and
   Calendar translation units; visible widget interaction remains in `TEST-005`.
 
+### THREAD-022: Credential shutdown can destroy live settings state
+
+- Status: OPEN
+- Code: `src/Core/Settings.cpp`, `src/Core/Settings.h`,
+  `src/Core/CredentialStoreQtKeychain.cpp`,
+  `src/Cloud/StravaSettingsCommit.cpp`, and `src/Core/main.cpp`
+- Impact: Credential operations release the `GSettings` mutex while retaining
+  pointers to settings and backend state. Reconfiguration or application
+  shutdown can delete those objects after the worker's 100 ms join expires,
+  allowing a stalled keychain callback to resume through freed settings,
+  storage, or mutex memory.
+- Test-first evidence / required regression: Block a backend operation after it
+  releases the settings mutex, concurrently clear or destroy settings, then
+  release the backend. Repeat with shutdown delayed beyond 100 ms and require
+  clean completion under ASan and ThreadSanitizer with no access after free.
+- Fix direction: Give every in-flight credential operation an ownership lease
+  over all referenced settings and backend objects. Reconfiguration and
+  shutdown must wait for or safely transfer those leases; they must not destroy
+  state while a detached operation can still resume.
+- Verification: Confirmed by an independent read-only final review. No closing
+  regression, integrated fix, or sanitizer verification exists yet.
+
 ## Medium
+
+### MEM-028: OAuth nested messages can outlive their dialog
+
+- Status: OPEN
+- Code: `src/Cloud/OAuthDialog.cpp` and `src/Cloud/OAuthDialog.h`
+- Impact: OAuth failure paths open nested message-box event loops and then
+  continue through the raw dialog pointer. Closing or deleting the OAuth dialog
+  reentrantly can therefore cause a use-after-free when the message returns.
+- Test-first evidence / required regression: Destroy the dialog from each
+  nested-message path and require the callback to return without touching the
+  deleted object under ASan.
+- Fix direction: Guard dialog lifetime with `QPointer` across every nested event
+  loop and return immediately when the guard clears. Keep completion callbacks
+  context-bound.
+- Verification: Confirmed by final review. A guard and source-contract tests
+  exist only in unintegrated agent work; this branch has no closing fix.
+
+### DUR-016: Cross-process Strava recovery can use stale revocation state
+
+- Status: OPEN
+- Code: `src/Cloud/StravaCredentialDurability.cpp`,
+  `src/Cloud/StravaCredentialPublisher.cpp`,
+  `src/Cloud/StravaTokenRefresh.cpp`, and
+  `src/Cloud/StravaAccountRemoval.cpp`
+- Impact: Durable recovery records are coordinated with process-local state.
+  Another GoldenCheetah process can rotate, revoke, or replace a grant before
+  recovery resumes, allowing stale recovery state to overwrite or misclassify
+  the newer authorization.
+- Test-first evidence / required regression: Run overlapping refresh,
+  revocation, publication, and restart recovery in separate processes against
+  one disposable athlete and require stale journals to preserve the newer
+  durable generation.
+- Fix direction: Serialize grant mutations with a per-athlete interprocess
+  lease and bind every journal transition to a durable credential generation
+  checked before and after remote and local side effects.
+- Verification: Confirmed by final review and distinct from the live-flight
+  coordination in `THREAD-010`; no integrated subprocess regression or fix
+  exists yet.
+
+### THREAD-019: QtKeychain caller deadlines do not bound backend completion
+
+- Status: OPEN
+- Code: `src/Core/CredentialStoreQtKeychain.cpp`,
+  `src/Core/CredentialStoreQtKeychain.h`, and
+  `src/Cloud/StravaSettingsCommit.cpp`
+- Impact: A caller can time out while the QtKeychain job remains live and may
+  later mutate the vault. The apparent deadline therefore does not bound the
+  operation or establish whether a credential write committed.
+- Test-first evidence / required regression: Stall a keychain job beyond its
+  caller deadline, allow it to finish later, and require one durable,
+  recoverable outcome without a silent post-timeout mutation.
+- Fix direction: Make backend completion part of the owned operation lifetime
+  and persist an explicit pending or unknown result until definitive completion
+  can be observed and reconciled.
+- Verification: Confirmed by final review. Existing timeout tests do not bound
+  backend completion, and no integrated closing regression exists.
+
+### THREAD-020: Credential suspension skips valid settings operations
+
+- Status: OPEN
+- Code: `src/Core/Settings.cpp`, `src/Core/Settings.h`, and
+  `src/Core/CredentialSettings.cpp`
+- Impact: A per-instance credential suspension counter makes unrelated settings
+  calls fail or return early. In particular, opening or creating an athlete
+  during a blocked credential request can silently skip same-instance settings
+  initialization with no retry.
+- Test-first evidence / required regression: Block a credential read, invoke
+  `initializeQSettingsAthlete()` on the same `GSettings` instance, release the
+  read, and require initialization exactly once. Also require unrelated
+  settings access to wait or proceed rather than report a false failure.
+- Fix direction: Scope suspension to credential backend routing only. Serialize
+  structural reconfiguration explicitly and queue or wait for initialization
+  instead of dropping it.
+- Verification: Confirmed by final review. Existing concurrency coverage uses
+  another settings instance and does not close the same-instance case.
+
+### THREAD-021: Bounded credential-worker shutdown can leave work alive
+
+- Status: OPEN
+- Code: `src/Cloud/StravaSettingsCommit.cpp`,
+  `src/Cloud/StravaSettingsCommit.h`, and `src/Core/main.cpp`
+- Impact: Shutdown waits 100 ms and can return while a keychain or settings
+  operation still runs. The process then has neither a reliable completion
+  result nor a bounded guarantee that all credential work has stopped.
+- Test-first evidence / required regression: Hold a worker operation beyond
+  100 ms, initiate shutdown, then release it and require deterministic joining
+  or durable handoff with no live worker at process teardown.
+- Fix direction: Use cooperative cancellation plus an owned join protocol, or
+  persist and transfer incomplete work to startup recovery. Do not abandon a
+  thread that still owns application callbacks.
+- Verification: Confirmed by final review. The stronger destruction hazard is
+  tracked as High `THREAD-022`; no integrated fix exists for either boundary.
+
+### DUR-017: Replaced split-journal payloads had ambiguous cleanup ownership
+
+- Status: FIXED
+- Code: `src/FileIO/AnchoredFileSystem.cpp`,
+  `src/FileIO/AnchoredFileSystem.h`, and `src/Gui/SplitActivitySave.cpp`
+- Impact: Cleanup could encounter a journal payload whose pathname had been
+  replaced after validation. Without identity, generation, size, and digest
+  continuity, deleting it could destroy foreign data while accepting it could
+  erase the evidence needed for recovery.
+- Test-first evidence / required regression: Replace the source, backup, or
+  output cleanup payload, and separately alter output size. Recovery must retain
+  the replacement and journal and report a payload-specific error.
+- Resolution: Cleanup derives expected payload evidence from the pinned
+  manifest, repins each observed journal file, and removes a payload only when
+  identity, durable generation, size, and SHA-256 all match. Ambiguous files
+  are preserved with explicit diagnostics.
+- Verification: Commit `220a96f`; the split suite passes 104/104 normally,
+  under ASan/UBSan, and under ThreadSanitizer. The atomic suite passes 331/331,
+  the full application links, and the isolated offscreen smoke reaches timeout.
+
+### DUR-018: Split recovery lacked durable-generation evidence
+
+- Status: FIXED
+- Code: `src/FileIO/AnchoredFileSystem.cpp`,
+  `src/FileIO/AnchoredFileSystem.h`, and `src/Gui/SplitActivitySave.cpp`
+- Impact: Native identity, size, and digest alone do not prove that a pathname
+  still names the same durable file generation after replacement and reuse.
+  Forward recovery could otherwise publish or remove an unproven artifact.
+- Test-first evidence / required regression: Use a filesystem fixture that
+  cannot provide generation evidence and replace or reuse an output identity;
+  recovery must fail closed, preserve production data, and retain its journal.
+- Resolution: Pinned files expose platform-backed durable-generation evidence.
+  Split manifests and cleanup records require and validate that evidence at
+  every publication, recovery, and retirement boundary.
+- Verification: Commit `220a96f`; the split suite passes 104/104 normally,
+  under ASan/UBSan, and under ThreadSanitizer. The atomic suite passes 331/331,
+  the full application links, and the isolated offscreen smoke reaches timeout.
+
+### DUR-019: Split recovery limits did not charge actual reads
+
+- Status: FIXED
+- Code: `src/FileIO/AnchoredFileSystem.cpp`,
+  `src/FileIO/AnchoredFileSystem.h`, and `src/Gui/SplitActivitySave.cpp`
+- Impact: Recovery limits based only on declared metadata can be bypassed by
+  actual payload reads, while a deadline checked only between files permits one
+  large read or digest operation to monopolize startup.
+- Test-first evidence / required regression: Recover oversized and aggregate
+  payload sets under a shared byte budget, expire the deadline in the middle of
+  a payload read, and require bounded failure followed by successful resumable
+  recovery.
+- Resolution: One recovery budget is shared across journals and phases. Every
+  bounded read and digest callback charges actual bytes in chunks of at most
+  one MiB and checks the common operation limit and deadline.
+- Verification: Commit `220a96f`; the split suite passes 104/104 normally,
+  under ASan/UBSan, and under ThreadSanitizer. The atomic suite passes 331/331,
+  the full application links, and the isolated offscreen smoke reaches timeout.
+
+### PERF-013: Split-manifest validation can become quadratic
+
+- Status: OPEN
+- Code: `src/Gui/SplitActivitySave.cpp`
+- Impact: Repeated linear searches and path comparisons across a maximum-size
+  hostile manifest can make startup recovery quadratic and hold application
+  initialization for an excessive time.
+- Test-first evidence / required regression: Validate maximum-sized manifests
+  with unique and adversarially colliding path sets, measure comparison or
+  lookup counts, and require linear or near-linear growth.
+- Fix direction: Normalize each path once and use keyed sets or maps for
+  uniqueness, ancestry, and ownership checks while retaining all anchored
+  filesystem validation.
+- Verification: The risk was identified during final review. No integrated
+  complexity-bound regression or closing fix has been verified.
+
+### DUR-020: Multi-target overwrite can publish before all predecessors validate
+
+- Status: OPEN
+- Code: `src/FileIO/AtomicFileWriter.h` and
+  `src/Train/StravaRoutesDownloadPipeline.cpp`
+- Impact: A batched overwrite can publish an early target before discovering
+  that a later predecessor was replaced or became unsafe. Failure then exposes
+  a partially updated route set even though the transaction was rejected.
+- Test-first evidence / required regression: Replace a later predecessor after
+  staging but before commit and require every original target to remain intact
+  with no newly published prefix.
+- Fix direction: Lock and repin every target, validate all predecessor
+  identities and ownership evidence, and only then begin the publication phase.
+- Verification: Confirmed by final review. A preflight implementation and
+  regressions exist only in unintegrated agent work.
+
+### DUR-021: Staged route publication is not bound to its original pin
+
+- Status: OPEN
+- Code: `src/Train/StravaRoutesDownloadPipeline.cpp`,
+  `src/Train/StravaRoutesDownloadPipeline.h`, and
+  `src/FileIO/AtomicFileWriter.h`
+- Impact: Route preparation and later publication trust a staging pathname
+  across phases. Replacement at that pathname can cause the importer to parse
+  or publish bytes other than the authenticated download.
+- Test-first evidence / required regression: Replace a staged route after
+  download validation and before preparation or publication; require rejection
+  while preserving both production data and the foreign replacement.
+- Fix direction: Carry the original anchored file pin, native identity, size,
+  and SHA-256 through preparation and publication and validate all evidence at
+  each phase boundary.
+- Verification: Confirmed by final review. Pin-bound staging exists only in
+  unintegrated agent work and has not closed this branch's finding.
+
+### GUI-012: Abort is ignored during route import preparation
+
+- Status: OPEN
+- Code: `src/Train/StravaRoutesDownload.cpp` and
+  `src/Train/StravaRoutesDownloadPipeline.cpp`
+- Impact: After downloads complete, route parsing, hashing, and preparation can
+  run for long enough that Close or Abort appears ineffective. The suffix can
+  continue consuming CPU and may be imported despite the user's request.
+- Test-first evidence / required regression: Stall preparation between routes,
+  trigger Abort and Close, and require prompt cancellation while committing at
+  most the fully prepared prefix according to the documented policy.
+- Fix direction: Check cancellation between bounded preparation units, stop
+  preparing the suffix, and keep the final database transaction short and on
+  its owning thread.
+- Verification: Confirmed by final review. Cancellation changes and focused
+  tests remain in unintegrated agent work.
+
+### TEST-008: Route-import composition test substitutes a fake parser
+
+- Status: OPEN
+- Code: `unittests/Train/stravaRoutesDownloadPipeline/`,
+  `src/Train/ErgFile.cpp`, `src/Train/GpxParser.cpp`, and
+  `src/Train/TrainDB.cpp`
+- Impact: The byte-backed route test replaces production parsing with a fake,
+  so it can pass while real GPX-to-`ErgFile` composition, metadata transfer, or
+  TrainDB import wiring is broken.
+- Test-first evidence / required regression: Feed actual GPX bytes through the
+  production parser and `ErgFile` implementation into a disposable TrainDB,
+  then verify the persisted route and cancellation behavior.
+- Fix direction: Link the production parser and its real dependencies in the
+  focused suite; reserve fakes for network transport and deterministic timing.
+- Verification: Confirmed by final review. A production-composition rewrite is
+  in unintegrated agent work and has not yet been accepted here.
+
+### DUR-022: Unavailable vault reads look empty during local Strava removal
+
+- Status: OPEN
+- Code: `src/Cloud/StravaCredentialPublisher.cpp`,
+  `src/Cloud/StravaCredentialDurability.cpp`, and
+  `src/Cloud/StravaAccountRemoval.cpp`
+- Impact: Backend read failure is converted to empty tokens and then marked
+  readable. Local-only disconnect can report success and persist `revoked`
+  while real credentials remain in an unavailable vault.
+- Test-first evidence / required regression: Make token reads and removals
+  return `Unavailable` in local-only mode. The operation must not report
+  disconnected or persist `revoked`; after backend recovery, retry must remove
+  the original credentials.
+- Fix direction: Preserve `Present`, `NotFound`, and `Unavailable` through the
+  storage adapter and durability state machine. Fail closed and retain a
+  retryable journal whenever credential existence is unknown.
+- Verification: Confirmed by independent final review. Status-bearing reads are
+  incomplete in unintegrated work and no closing removal regression exists.
+
+### DUR-023: Revocation becomes uncertain before any remote dispatch
+
+- Status: OPEN
+- Code: `src/Cloud/StravaAccountRemoval.cpp`,
+  `src/Cloud/StravaCredentialDurability.cpp`, and
+  `src/Cloud/StravaRevocationClient.cpp`
+- Impact: Removal enters `CommitUnknown` before distinguishing local-only work
+  or proving that a remote request was dispatched. A crash during local cleanup
+  or request-construction failure can therefore leave authorization permanently
+  uncertain even though no remote side effect was possible.
+- Test-first evidence / required regression: Crash local-only removal before
+  its first deletion and require restart to resume. Force remote request
+  creation to fail before dispatch and require rollback or retry, while
+  preserving fail-closed uncertainty after a request may have left the process.
+- Fix direction: Record separate pre-dispatch, dispatched-unknown, and local
+  cleanup phases. Enter remote uncertainty only at the first point where the
+  provider may have observed the request.
+- Verification: Confirmed by independent final review. No integrated phase
+  split or closing recovery regressions exist.
+
+### BUILD-014: Vendored Python metadata can claim false file ownership
+
+- Status: OPEN
+- Code: `src/Resources/linux/generate-runtime-provenance.py`,
+  `src/Resources/linux/normalize-embedded-python.py`, and
+  `src/Resources/linux/MakeAppImageQt6.sh`
+- Impact: A vendored `.dist-info` directory can be treated as proof that nearby
+  Python files belong to that distribution even when authenticated package
+  metadata does not claim them. The AppImage SBOM and provenance can therefore
+  attribute injected or unowned code to a legitimate dependency.
+- Test-first evidence / required regression: Package a fixture with legitimate
+  distribution metadata plus an unclaimed module and require provenance
+  generation to reject or explicitly mark the module unowned.
+- Fix direction: Derive ownership from authenticated wheel or installed-package
+  records with normalized exact paths and hashes; fail closed on overlaps,
+  missing claims, or conflicting metadata.
+- Verification: Confirmed by build review. Candidate implementation and tests
+  are confined to unintegrated agent work.
+
+### BUILD-015: Bundled Python runtime lacks authenticated provenance
+
+- Status: OPEN
+- Code: `src/Resources/linux/AppImagePackagingSupport.sh`,
+  `src/Resources/linux/generate-runtime-provenance.py`, and
+  `src/Resources/linux/generate-appimage-sbom.py`
+- Impact: Hashing the final embedded interpreter records what was packaged but
+  does not authenticate where the Python runtime and standard library came
+  from. A substituted runtime can receive internally consistent provenance.
+- Test-first evidence / required regression: Substitute runtime bytes while
+  retaining plausible local metadata and require packaging to fail unless each
+  source artifact is covered by the locked manifest and verified digest.
+- Fix direction: Bind every runtime file to a hash-locked source archive or
+  package record and carry that authenticated source identity into the embedded
+  provenance and SBOM.
+- Verification: Confirmed by build review. Provenance tooling exists only in
+  unintegrated work and has not yet passed the integrated release gate.
+
+### BUILD-016: Runtime provenance uses incompatible path ordering
+
+- Status: OPEN
+- Code: `src/Resources/linux/generate-runtime-provenance.py` and
+  `src/Resources/linux/generate-appimage-sbom.py`
+- Impact: Sorting or comparing mixed filesystem `Path` and POSIX-path values can
+  raise a type error or produce platform-dependent ordering. Packaging can fail
+  or emit nondeterministically ordered provenance from equivalent inputs.
+- Test-first evidence / required regression: Feed mixed native and normalized
+  POSIX path objects, including non-ASCII and case-sensitive names, and require
+  stable byte-identical ordering without cross-type comparison.
+- Fix direction: Normalize to one canonical relative POSIX string at the trust
+  boundary and sort only by that explicit key.
+- Verification: Confirmed by build review. The normalization change is not
+  integrated or release-verified.
+
+### BUILD-017: Release archives are extracted without a safe boundary
+
+- Status: OPEN
+- Code: `appveyor/safe-extract.py`, `appveyor/linux/install.sh`,
+  `appveyor/macos/install.sh`, `appveyor/windows/install.ps1`, and
+  `appveyor/linux/after_build.sh`
+- Impact: Dependency archives can contain traversal paths, absolute paths,
+  links, device names, or collisions that escape or corrupt the build tree.
+  AppVeyor Linux also has a direct `tar` path that bypasses any shared safety
+  checks.
+- Test-first evidence / required regression: Exercise malicious ZIP and TAR
+  members, links, path aliases, collisions, and the AppVeyor direct-tar call;
+  require rejection before any destination mutation.
+- Fix direction: Route every platform and phase through one fail-closed staged
+  extractor that validates the complete member set before publishing files.
+- Verification: Confirmed by build review. The shared extractor and its tests
+  remain unintegrated, including the direct-tar bypass correction.
+
+### BUILD-018: Qt installation trusts unlocked layout and updater behavior
+
+- Status: OPEN
+- Code: `.devcontainer/install-verified-qt.py`,
+  `.devcontainer/aqt-requirements.lock`,
+  `.devcontainer/qt-6.8.3-linux-gcc64.lock`, and
+  `.devcontainer/Dockerfile`
+- Impact: A pinned top-level Qt version is insufficient when the downloader,
+  module layout, metadata, or updater can change independently. The same source
+  can install different toolchains or execute different installer code.
+- Test-first evidence / required regression: Alter updater bytes, archive
+  membership, module layout, or an archive digest and require installation to
+  fail before extraction; verify the complete expected layout after install.
+- Fix direction: Hash-lock the installer and every Qt archive, validate exact
+  archive membership and destination layout, and disable implicit updates or
+  network fallback.
+- Verification: Confirmed by build review. Locks and installer validation are
+  present only in unintegrated agent work.
+
+### BUILD-019: CI dependencies are mutable and their gate expects tags
+
+- Status: OPEN
+- Code: `.github/workflows/ci.yml`,
+  `.github/workflows/ridecache-removal-native.yml`,
+  `.github/workflows/windows-durable-filesystem.yml`, and
+  `unittests/Build/ciTestRunner/testCiTestRunner.py`
+- Impact: Tag-based GitHub Actions can change without a source commit, while a
+  stale self-test that requires `upload-artifact@v7` rejects the safer
+  full-commit SHA form. CI is either mutable or fails after being pinned.
+- Test-first evidence / required regression: Require every external action to
+  use a full approved commit SHA and make the self-test reject tags while
+  accepting the exact pinned revision.
+- Fix direction: Pin actions by reviewed commit SHA, record the human-readable
+  release in comments or lock metadata, and make tests parse semantic action
+  identity separately from the immutable revision.
+- Verification: Confirmed by build and failed-workflow review. Corrected pins
+  and expectations are not yet integrated or rerun in platform CI.
+
+### BUILD-020: Runtime provenance override is fail-open and forgeable
+
+- Status: OPEN
+- Code: `src/Resources/linux/AppImagePackagingSupport.sh` and
+  `src/Resources/linux/generate-runtime-provenance.py`
+- Impact: A package-index environment override can supply arbitrary ownership
+  claims and let production packaging generate apparently valid provenance for
+  unauthenticated files.
+- Test-first evidence / required regression: Set the override in normal
+  packaging and require failure. In explicit test mode, alter the fixture path
+  or bytes after authorization and require its bound digest check to fail.
+- Fix direction: Remove the production override. Permit fixtures only behind an
+  explicit test mode and bind the canonical fixture path and SHA-256 before use.
+- Verification: Confirmed by build review. Candidate restrictions and tests are
+  still in unintegrated agent work.
+
+### BUILD-021: Native releases lack OAuth credential gates
+
+- Status: OPEN
+- Code: `appveyor/macos/after_build.sh`,
+  `appveyor/windows/after_build.ps1`, `appveyor/check-unconfigured-oauth.py`,
+  and `src/Core/Secrets.h`
+- Impact: AppImage packaging validates configured OAuth credentials, but macOS
+  and Windows artifacts can ship placeholder, absent, malformed, or unintended
+  credentials while still being presented as production builds.
+- Test-first evidence / required regression: Build configured and unconfigured
+  native fixtures and require each release job to reject placeholders, missing
+  support, malformed status output, and credentials not intended for release.
+- Fix direction: Apply one executable-backed OAuth configuration contract to
+  Linux, macOS, and Windows immediately before signing or publication.
+- Verification: Confirmed by release review. Native gates and platform tests are
+  unintegrated and have not run in their final CI environments.
+
+### BUILD-022: CI test inventory is incomplete and manually maintained
+
+- Status: OPEN
+- Code: `.github/scripts/run-tests.py`, `unittests/unittests.pro`,
+  `unittests/ci-required-tests.txt`, and
+  `unittests/Build/ciTestRunner/testCiTestRunner.py`
+- Impact: A hand-maintained allowlist can omit a repository test target without
+  failing CI. The current inventory misses `linkedActivitySaveCleanup`, leaving
+  durable linked-save behavior outside the release gate.
+- Test-first evidence / required regression: Add a discoverable test target
+  without editing the inventory and require the runner's self-test to fail;
+  explicitly require `linkedActivitySaveCleanup` to execute.
+- Fix direction: Discover test projects from repository metadata, compare them
+  with explicit justified exclusions, and fail on zero, missing, duplicate, or
+  unexecuted targets.
+- Verification: Confirmed by CI review. Discovery and coverage changes are only
+  in unintegrated agent work.
+
+### BUILD-023: Transformed libraries lose authenticated source provenance
+
+- Status: OPEN
+- Code: `src/Resources/linux/generate-runtime-provenance.py`,
+  `src/Resources/linux/AppImagePackagingSupport.sh`, and
+  `src/Resources/linux/MakeAppImageQt6.sh`
+- Impact: `patchelf` legitimately changes a copied Debian library, so the final
+  bytes cannot equal the package's authenticated digest. Requiring exact source
+  bytes rejects valid packaging, while dropping the check leaves transformed
+  runtime code unauthenticated.
+- Test-first evidence / required regression: Transform a verified fixture
+  library, require failure when either source or output changes unexpectedly,
+  and accept only a record binding the final path and digest to the verified
+  package source and declared transformation.
+- Fix direction: Verify the source file against authenticated Debian metadata
+  before transformation, then record the transformation plus final output path
+  and SHA-256 in provenance and the SBOM.
+- Verification: Confirmed by final build review. The source-to-output binding
+  remains unintegrated and has not passed a complete package build.
 
 ### MEM-026: Duplicate activity imports leak the replaced RideItem
 
@@ -4794,19 +5268,30 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-007: Split transactions have no restart recovery journal
 
-- Status: OPEN
-- Code: `src/FileIO/AtomicFileWriter.h`,
-  `src/Gui/SplitActivitySave.cpp`
+- Status: FIXED
+- Code: `src/FileIO/AnchoredFileSystem.cpp`,
+  `src/FileIO/AnchoredFileSystem.h`, `src/Gui/SplitActivitySave.cpp`,
+  `src/Gui/SplitActivitySave.h`, `src/Gui/SplitActivityWizard.cpp`, and
+  `src/Core/RideCache.cpp`
 - Impact: Runtime failures are rolled back, but a process or power loss between
   publishing outputs, preserving an old backup, and archiving the source can
   leave a recoverable mixture of split files and `.rollback-*` state with no
   automatic reconciliation on restart.
-- Test: Run each durable transition in a subprocess, terminate it at injected
+- Test-first evidence: Run each durable transition in a subprocess, terminate it at injected
   failpoints, restart, and require deterministic completion or rollback without
-  losing the source or a prior backup.
-- Fix direction: Use a private transaction directory and fsynced manifest with
-  explicit states, then reconcile incomplete transactions before loading the
-  activity cache.
+  losing the source or a prior backup. Additional regressions replace journal
+  payloads, remove durable-generation evidence, exhaust actual-read budgets,
+  expire deadlines during payload reads, and interrupt recovery itself.
+- Resolution: Split saves now use a private anchored transaction namespace,
+  fsynced intent, manifest, phase markers, and cleanup records with explicit
+  durable states. Startup reconciliation validates pinned identities,
+  generations, sizes, and digests before deterministically rolling back or
+  completing each interrupted transaction. Recovery is bounded by shared
+  operation, byte, and deadline budgets.
+- Verification: The split suite passes 104/104 normally, under ASan/UBSan, and
+  under ThreadSanitizer. The atomic activity suite passes 331/331, the full
+  application links, and an isolated offscreen smoke run remained alive until
+  its expected timeout.
 
 ### DUR-008: Staged-set rollback trusts a mutable target pathname
 
