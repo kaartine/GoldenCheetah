@@ -14,9 +14,19 @@ SOURCES = testAntLifecycle.cpp \
           ../../../src/ANT/ANTChannel.cpp \
           ../../../src/ANT/ANTMessage.cpp \
           ../../../src/ANT/ANTlocalController.cpp \
-          ../../../src/ANT/ANTLogger.cpp
+          ../../../src/ANT/ANTLogger.cpp \
+          ../../../src/Train/RealtimeData.cpp \
+          ../../../src/Metrics/BlinnSolver.cpp \
+          ../../../src/Train/CalibrationData.cpp \
+          ../../../src/Train/PolynomialRegression.cpp \
+          ../../../src/Train/RealtimeController.cpp
 
-HEADERS = LibUsb.h
+HEADERS = LibUsb.h \
+          ../../../src/ANT/ANT.h \
+          ../../../src/ANT/ANTChannel.h \
+          ../../../src/ANT/ANTlocalController.h \
+          ../../../src/ANT/ANTLogger.h \
+          ../../../src/Train/RealtimeController.h
 
 INCLUDEPATH += $$PWD \
                $$PWD/../../../src/ANT \
@@ -29,17 +39,6 @@ INCLUDEPATH += $$PWD \
                $$PWD/../../../src/Core \
                $$PWD/../../../src/Planning \
                $$PWD/../../../qwt/src
-
-GC_OBJS = RealtimeData \
-          BlinnSolver \
-          CalibrationData \
-          PolynomialRegression \
-          RealtimeController \
-          moc_ANT \
-          moc_ANTChannel \
-          moc_ANTlocalController \
-          moc_ANTLogger \
-          moc_RealtimeController
 
 include(../../unittests.pri)
 

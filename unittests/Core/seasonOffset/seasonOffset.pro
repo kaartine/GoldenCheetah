@@ -1,6 +1,11 @@
 QT += testlib widgets
 
-SOURCES = testSeasonOffset.cpp
-GC_OBJS = Season
+SOURCES = testSeasonOffset.cpp \
+          ../../../src/Core/Season.cpp
+
+HEADERS = ../../../src/Core/Season.h
+
+INCLUDEPATH += ../../../src \
+               ../../../src/Core
 
 include(../../unittests.pri)
