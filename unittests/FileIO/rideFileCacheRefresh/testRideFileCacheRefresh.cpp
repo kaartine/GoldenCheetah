@@ -486,6 +486,7 @@ private slots:
     void apiReadersRejectChangedSource();
     void batchReadersRejectChangedSource();
     void aggregateBindingsRejectChangedSource();
+    void aggregateBindingsRejectMixedSourceGeneration();
     void changedAnalysisInputsRejectDependentFastPaths();
     void aggregateBindingsRejectChangedAnalysisInputs();
     void factoryCapturesSourceProvenance();
@@ -1548,6 +1549,45 @@ aggregateBindingsRejectChangedSource()
         !RideFileCache::
             aggregateBindingsAreCurrentForTest(
                 bindings, analysisBindings));
+}
+
+void
+TestRideFileCacheRefresh::
+aggregateBindingsRejectMixedSourceGeneration()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QVector<
+        QPair<
+            QString,
+            RideFileCRC::ContentFingerprint>>
+        sourceBindings;
+    const QByteArray analysis = analysisFingerprint(
+        QByteArrayLiteral("analysis-v1"));
+    QVector<QPair<QByteArray, QByteArray>>
+        analysisBindings;
+    for (int index = 0; index < 2; ++index) {
+        const QString sourcePath = directory.filePath(
+            QStringLiteral("source-%1.fit").arg(index));
+        writeFileBytes(
+            sourcePath,
+            QByteArrayLiteral("original-")
+                + QByteArray::number(index));
+        RideFileCRC::ContentFingerprint fingerprint;
+        QVERIFY(RideFileCRC::computeFileFingerprint(
+            sourcePath, fingerprint));
+        sourceBindings.append({sourcePath, fingerprint});
+        analysisBindings.append({analysis, analysis});
+    }
+
+    RideFileCache::setAggregateBindingReadHookForTest(
+        [sourcePath = sourceBindings.constFirst().first]() {
+            writeFileBytes(
+                sourcePath,
+                QByteArrayLiteral("changed-0"));
+        });
+    QVERIFY(!RideFileCache::aggregateBindingsAreCurrentForTest(
+        sourceBindings, analysisBindings));
 }
 
 void

@@ -204,6 +204,8 @@ class RideFileCache
             const QByteArray &analysisFingerprint);
         static void setSourceBoundReadHookForTest(
             std::function<void()> hook);
+        static void setAggregateBindingReadHookForTest(
+            std::function<void()> hook);
         static void resetSourceFingerprintReadCountForTest();
         static int sourceFingerprintReadCountForTest();
         static bool aggregateBindingsAreCurrentForTest(

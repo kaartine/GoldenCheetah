@@ -3531,17 +3531,27 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DATA-015: Aggregate source validation has a set-wide TOCTOU window
 
-- Status: OPEN
-- Code: `src/FileIO/RideFileCache.cpp:113-130` and
-  `src/FileIO/RideFileCache.cpp:2147-2165`
+- Status: FIXED
+- Code: `src/FileIO/RideFileCache.cpp`, `src/FileIO/RideFileCache.h`, and
+  `unittests/FileIO/rideFileCacheRefresh/testRideFileCacheRefresh.cpp`
 - Impact: Cached aggregate reuse hashes source bindings sequentially. Source A
   can change after its comparison while source B is being hashed, allowing an
   aggregate derived from A's old contents to be returned after A has changed.
-- Test: Pause validation after source A, replace A while source B is read, and
-  require aggregate reuse to reject the mixed-generation source set.
-- Fix direction: Bind aggregate reuse to a library/activity generation that
-  changes with source mutations, or implement a bounded set-snapshot protocol
-  that verifies every member belongs to one stable generation before publish.
+- Test-first evidence: A deterministic validation hook replaces source A after
+  its source and analysis bindings have passed, before source B is checked. The
+  former single-pass validator accepted the mixed source set, producing two
+  passing harness cases and one failed race regression.
+- Resolution: Aggregate reuse now performs two complete ordered validation
+  passes. Every pass recomputes each source's strong content fingerprint and
+  resolves its current analysis fingerprint against the generation stored in
+  the aggregate. A mutation after an earlier member in the first pass is
+  therefore observed and rejected by the second pass before the aggregate is
+  returned.
+- Verification: The refresh suite reports 45/45 passing normally, under strict
+  ASan/UBSan/LSan, and in a fresh ThreadSanitizer-linked build. The guarantee is
+  a bounded two-snapshot point-in-time check; a non-cooperating process can
+  still mutate a source after the final observation, as with any unpinned
+  multi-file read set.
 
 ### DATA-016: Activity rename ignores derived-file rename failures
 
