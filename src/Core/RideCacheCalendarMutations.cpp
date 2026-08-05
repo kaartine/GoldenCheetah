@@ -67,6 +67,7 @@ RideCache::changeActivityIdentitiesAtomically(
     {
         QString sourcePath;
         QString targetPath;
+        bool removeSource = true;
     };
     struct PendingIdentity
     {
@@ -84,6 +85,7 @@ RideCache::changeActivityIdentitiesAtomically(
         QString targetLinkedFileName;
         bool planned = false;
         QList<DerivedMutation> derived;
+        QStringList absentDerivedTargets;
     };
 
     QSet<RideItem*> requestedAddresses;
@@ -223,17 +225,36 @@ RideCache::changeActivityIdentitiesAtomically(
         const QString newCpxPath =
             guardedCache->cpxCachePathForActivity(
                 entry.targetFileName, entry.planned);
+        struct DerivedCandidate
+        {
+            QString sourcePath;
+            bool removeSource = true;
+        };
+        QList<DerivedCandidate> derivedCandidates;
+        QSet<QString> derivedCandidateKeys;
         for (const QString &derivedPath :
              guardedCache->derivedFilePathsForRemoval(item)) {
+            const QString key = atomicFilePathKey(derivedPath);
+            if (derivedCandidateKeys.contains(key)) continue;
+            derivedCandidateKeys.insert(key);
+            derivedCandidates.append({derivedPath, true});
+        }
+        const QString oldBaseName =
+            QFileInfo(entry.sourceFileName).baseName();
+        for (const QString &extension :
+             {QStringLiteral("cpi"), QStringLiteral("notes")}) {
+            const QString legacyPath = QDir(canonicalCacheRoot).filePath(
+                oldBaseName + QLatin1Char('.') + extension);
+            const QString key = atomicFilePathKey(legacyPath);
+            if (derivedCandidateKeys.contains(key)) continue;
+            derivedCandidateKeys.insert(key);
+            derivedCandidates.append({legacyPath, false});
+        }
+
+        for (const DerivedCandidate &candidate :
+             std::as_const(derivedCandidates)) {
+            const QString &derivedPath = candidate.sourcePath;
             const QFileInfo derivedInfo(derivedPath);
-            if (!derivedInfo.exists() && !derivedInfo.isSymLink())
-                continue;
-            if (derivedInfo.isSymLink() || !derivedInfo.isFile()) {
-                result.error = tr(
-                    "A derived activity file is not regular: %1")
-                                   .arg(derivedPath);
-                return result;
-            }
             QString derivedTargetPath;
             if (!oldCpxPath.isEmpty()
                 && atomicFilePathKey(derivedPath)
@@ -249,8 +270,19 @@ RideCache::changeActivityIdentitiesAtomically(
                     "A derived activity target path is unavailable");
                 return result;
             }
+            if (!derivedInfo.exists() && !derivedInfo.isSymLink()) {
+                entry.absentDerivedTargets.append(derivedTargetPath);
+                continue;
+            }
+            if (derivedInfo.isSymLink() || !derivedInfo.isFile()) {
+                result.error = tr(
+                    "A derived activity file is not regular: %1")
+                                   .arg(derivedPath);
+                return result;
+            }
             entry.derived.append({
-                derivedPath, derivedTargetPath});
+                derivedPath, derivedTargetPath,
+                candidate.removeSource});
         }
         pending.append(entry);
 
@@ -398,6 +430,7 @@ RideCache::changeActivityIdentitiesAtomically(
     QSet<QString> inputKeys;
     QSet<QString> removalKeys;
     QSet<QString> targetKeys;
+    QSet<QString> absentTargetKeys;
     const auto appendInput = [&](const QString &path) {
         const QString key = atomicFilePathKey(path);
         if (inputKeys.contains(key)) return;
@@ -416,6 +449,13 @@ RideCache::changeActivityIdentitiesAtomically(
         if (targetKeys.contains(key)) return false;
         targetKeys.insert(key);
         specification.targetPaths.append(path);
+        return true;
+    };
+    const auto appendAbsentTarget = [&](const QString &path) {
+        const QString key = atomicFilePathKey(path);
+        if (absentTargetKeys.contains(key)) return false;
+        absentTargetKeys.insert(key);
+        specification.mustRemainAbsentPaths.append(path);
         return true;
     };
 
@@ -465,7 +505,8 @@ RideCache::changeActivityIdentitiesAtomically(
             }});
 
         for (const DerivedMutation &derived : entry.derived) {
-            if (!appendRemoval(derived.sourcePath)
+            if ((derived.removeSource
+                 && !appendRemoval(derived.sourcePath))
                 || !appendTarget(derived.targetPath)) {
                 result.error = tr(
                     "A derived activity transaction path is duplicated");
@@ -495,6 +536,13 @@ RideCache::changeActivityIdentitiesAtomically(
                     }
                     return true;
                 }});
+        }
+        for (const QString &path : entry.absentDerivedTargets) {
+            if (!appendAbsentTarget(path)) {
+                result.error = tr(
+                    "A derived activity absence path is duplicated");
+                return result;
+            }
         }
     }
 

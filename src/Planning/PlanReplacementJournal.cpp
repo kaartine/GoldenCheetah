@@ -35,7 +35,8 @@ namespace PlanReplacement {
 
 namespace Detail {
 
-constexpr int ManifestVersion = 1;
+constexpr int LegacyManifestVersion = 1;
+constexpr int ManifestVersion = 2;
 constexpr int MaximumEntries = 4096;
 constexpr qsizetype MaximumNamespaceEntries = 4096;
 constexpr qsizetype MaximumJournalEntries =
@@ -71,6 +72,8 @@ struct ResolvedEntry
     QString path;
     QString oldCopy;
     QString staging;
+    AnchoredFileSystem::DirectoryAnchor parent;
+    AnchoredFileSystem::EntryRef entry;
 };
 
 struct ObservedFile
@@ -103,6 +106,7 @@ struct JournalState
     Detail::AnchoredJournalFile manifestFile;
     Detail::AnchoredJournalFile commitMarkerFile;
     QList<Detail::AnchoredJournalFile> trackedDataFiles;
+    QList<Detail::ResolvedEntry> productionEntries;
     QList<QPair<QString, AtomicFileSnapshot>> inputSnapshots;
     std::unique_ptr<AtomicFileLockSet> transactionLease;
     std::unique_ptr<AtomicFileLockSet> pathLocks;
@@ -253,11 +257,15 @@ bool validateScopeRelativePath(
 }
 
 bool validatePathComponents(
-    const QString &root, const QString &relativePath, QString &error)
+    const QString &root,
+    const QString &relativePath,
+    QString &error,
+    bool allowMissingParents = false)
 {
     QString cursor = root;
     const QStringList components = QDir::fromNativeSeparators(relativePath)
                                        .split(QLatin1Char('/'));
+    bool parentIsMissing = false;
     for (int index = 0; index < components.size(); ++index) {
         cursor = QDir(cursor).filePath(components.at(index));
         const QFileInfo info(cursor);
@@ -266,14 +274,56 @@ bool validatePathComponents(
                 "A plan transaction path uses a symbolic-link component");
             return false;
         }
-        if (index + 1 < components.size()
-            && (!info.exists() || !info.isDir())) {
-            error = QStringLiteral(
-                "A plan transaction path has an unavailable parent directory");
-            return false;
+        if (index + 1 < components.size() && !parentIsMissing) {
+            if (!info.exists()) {
+                if (allowMissingParents) {
+                    parentIsMissing = true;
+                    continue;
+                }
+                error = QStringLiteral(
+                    "A plan transaction path has an unavailable parent directory");
+                return false;
+            }
+            if (!info.isDir()) {
+                error = QStringLiteral(
+                    "A plan transaction path has an unavailable parent directory");
+                return false;
+            }
         }
     }
     return true;
+}
+
+bool lockTargetForRequiredAbsence(
+    const QString &path,
+    QString &lockTarget,
+    QString &error)
+{
+    lockTarget = path;
+    while (true) {
+        const QString parentPath = QFileInfo(lockTarget).absolutePath();
+        const QFileInfo parentInfo(parentPath);
+        if (parentInfo.isSymLink()) {
+            error = QStringLiteral(
+                "A required-absence lock parent uses a symbolic link");
+            return false;
+        }
+        if (parentInfo.exists()) {
+            if (!parentInfo.isDir()) {
+                error = QStringLiteral(
+                    "A required-absence lock parent is not a directory");
+                return false;
+            }
+            return true;
+        }
+        if (atomicFilePathKey(parentPath)
+            == atomicFilePathKey(lockTarget)) {
+            error = QStringLiteral(
+                "A required-absence path has no lockable ancestor");
+            return false;
+        }
+        lockTarget = parentPath;
+    }
 }
 
 bool makeRootRelativePath(
@@ -281,7 +331,8 @@ bool makeRootRelativePath(
     const QString &candidate,
     QString &relativePath,
     QString &absolutePath,
-    QString &error)
+    QString &error,
+    bool allowMissingParents = false)
 {
     if (candidate.isEmpty() || !QDir::isAbsolutePath(candidate)) {
         error = QStringLiteral("Plan transaction paths must be absolute");
@@ -299,7 +350,8 @@ bool makeRootRelativePath(
         error = QStringLiteral("A plan path escapes the athlete root");
         return false;
     }
-    return validatePathComponents(root, relativePath, error);
+    return validatePathComponents(
+        root, relativePath, error, allowMissingParents);
 }
 
 bool makeScopeRelativePath(
@@ -328,14 +380,16 @@ bool resolveRootRelativePath(
     const QString &root,
     const QString &relativePath,
     QString &absolutePath,
-    QString &error)
+    QString &error,
+    bool allowMissingParents = false)
 {
     if (!validateRelativePath(relativePath, error)) return false;
     absolutePath = QDir::cleanPath(QDir(root).filePath(relativePath));
     const QString roundTrip = QDir::fromNativeSeparators(
         QDir(root).relativeFilePath(absolutePath));
     if (roundTrip != QDir::fromNativeSeparators(relativePath)
-        || !validatePathComponents(root, relativePath, error)) {
+        || !validatePathComponents(
+            root, relativePath, error, allowMissingParents)) {
         if (error.isEmpty()) {
             error = QStringLiteral("A plan path escapes the athlete root");
         }
@@ -877,6 +931,60 @@ bool validateExpectedSnapshot(
     return true;
 }
 
+bool validateExpectedProductionSnapshot(
+    const ResolvedEntry &resolved,
+    bool expectedExists,
+    const AtomicFileSnapshot &expected,
+    QString &error)
+{
+    if (!resolved.parent.isValid() || !resolved.entry.isValid()) {
+        error = QStringLiteral(
+            "An anchored plan transaction path is unavailable");
+        return false;
+    }
+    if (!resolved.parent.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "A plan transaction parent directory was replaced");
+        }
+        return false;
+    }
+
+    if (expectedExists) {
+        if (atomicFilePathKey(resolved.entry.displayPath())
+            != atomicFilePathKey(resolved.path)) {
+            error = QStringLiteral(
+                "An existing plan transaction file resolved only to an absent ancestor");
+            return false;
+        }
+        if (!validateExpectedSnapshot(
+                resolved.path, true, expected, error)) {
+            return false;
+        }
+    } else {
+        bool exists = false;
+        if (!AnchoredFileSystem::entryExists(
+                resolved.entry, exists, error)) {
+            return false;
+        }
+        if (exists) {
+            error = QStringLiteral(
+                "A plan transaction path that must remain absent appeared: %1")
+                        .arg(resolved.path);
+            return false;
+        }
+    }
+
+    if (!resolved.parent.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "A plan transaction parent directory changed during validation");
+        }
+        return false;
+    }
+    return true;
+}
+
 bool writeBytesAtomically(
     const QString &path,
     const QByteArray &contents,
@@ -1126,7 +1234,10 @@ bool parseSizeAndDigest(
 }
 
 bool parseEntry(
-    const QJsonValue &value, Entry &entry, QString &error)
+    const QJsonValue &value,
+    bool allowAbsentRequirement,
+    Entry &entry,
+    QString &error)
 {
     if (!value.isObject()) {
         error = QStringLiteral("A plan manifest entry is not an object");
@@ -1164,7 +1275,8 @@ bool parseEntry(
         || std::floor(stageNumber) != stageNumber
         || stageNumber < -1
         || stageNumber >= Detail::MaximumEntries
-        || (!entry.oldExists && !entry.hasNew)
+        || (!allowAbsentRequirement
+            && !entry.oldExists && !entry.hasNew)
         || (!entry.hasNew && (stageNumber != -1 || entry.staged))) {
         error = QStringLiteral("A plan manifest staging index is invalid");
         return false;
@@ -1216,12 +1328,20 @@ bool parseManifest(
         return false;
     }
 
+    const double serializedVersion =
+        object.value(QStringLiteral("version")).toDouble();
+    const bool legacyVersion =
+        serializedVersion == Detail::LegacyManifestVersion;
+    const bool currentVersion =
+        serializedVersion == Detail::ManifestVersion;
     manifest = {};
-    manifest.version = object.value(QStringLiteral("version")).toInt(-1);
+    manifest.version = legacyVersion
+        ? Detail::LegacyManifestVersion
+        : Detail::ManifestVersion;
     manifest.id = object.value(QStringLiteral("id")).toString();
     manifest.scopeRelativePath = object.value(QStringLiteral("scope")).toString();
     const QJsonArray entries = object.value(QStringLiteral("entries")).toArray();
-    if (manifest.version != Detail::ManifestVersion
+    if ((!legacyVersion && !currentVersion)
         || manifest.id != expectedId
         || !validTransactionId(manifest.id)
         || entries.isEmpty()
@@ -1238,7 +1358,11 @@ bool parseManifest(
     QSet<int> stageIndices;
     for (const QJsonValue &value : entries) {
         Entry entry;
-        if (!parseEntry(value, entry, error)
+        if (!parseEntry(
+                value,
+                manifest.version >= Detail::ManifestVersion,
+                entry,
+                error)
             || !pathIsWithinScope(
                 entry.relativePath, manifest.scopeRelativePath)) {
             if (error.isEmpty()) {
@@ -1405,10 +1529,24 @@ bool resolveManifestEntries(
         error = QStringLiteral("The plan transaction scope is unsafe");
         return false;
     }
+    AnchoredFileSystem::DirectoryAnchor scopeDirectory;
+    if (!AnchoredFileSystem::DirectoryAnchor::open(
+            scopePath, scopeDirectory, error)
+        || !scopeDirectory.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The plan transaction scope could not be anchored");
+        }
+        return false;
+    }
 
     QSet<QString> pathKeys;
+    QHash<QString, AnchoredFileSystem::DirectoryAnchor> directoryAnchors;
+    directoryAnchors.insert(
+        atomicFilePathKey(scopePath), scopeDirectory);
     for (int index = 0; index < state.manifest.entries.size(); ++index) {
         const Entry &entry = state.manifest.entries.at(index);
+        const bool pureAbsence = !entry.oldExists && !entry.hasNew;
         ResolvedEntry paths;
         if (!pathIsWithinScope(
                 entry.relativePath,
@@ -1417,7 +1555,8 @@ bool resolveManifestEntries(
                 state.athleteRoot,
                 entry.relativePath,
                 paths.path,
-                error)) {
+                error,
+                pureAbsence)) {
             if (error.isEmpty()) {
                 error = QStringLiteral("A plan path escapes its declared scope");
             }
@@ -1429,6 +1568,65 @@ bool resolveManifestEntries(
             return false;
         }
         pathKeys.insert(pathKey);
+
+        const QString relativeToScope = QDir::fromNativeSeparators(
+            QDir(scopePath).relativeFilePath(paths.path));
+        const QStringList components = relativeToScope.split(
+            QLatin1Char('/'), Qt::KeepEmptyParts);
+        if (components.isEmpty()
+            || components.contains(QString())
+            || components.contains(QStringLiteral("."))
+            || components.contains(QStringLiteral(".."))) {
+            error = QStringLiteral(
+                "A plan path cannot be anchored within its declared scope");
+            return false;
+        }
+
+        AnchoredFileSystem::DirectoryAnchor parent = scopeDirectory;
+        QString parentPath = scopePath;
+        bool resolvedAtMissingBoundary = false;
+        for (int componentIndex = 0;
+             componentIndex + 1 < components.size();
+             ++componentIndex) {
+            const QString &component = components.at(componentIndex);
+            const QString childPath = QDir(parentPath).filePath(component);
+            const QString childKey = atomicFilePathKey(childPath);
+            const auto cached = directoryAnchors.constFind(childKey);
+            AnchoredFileSystem::DirectoryAnchor child;
+            bool exists = true;
+            if (cached != directoryAnchors.constEnd()) {
+                child = cached.value();
+            } else if (!parent.openChildIfExists(
+                           component, child, exists, error)) {
+                return false;
+            }
+            if (!exists) {
+                if (!pureAbsence) {
+                    error = QStringLiteral(
+                        "A plan transaction path has an unavailable parent directory");
+                    return false;
+                }
+                paths.parent = parent;
+                paths.entry = parent.entry(component, error);
+                resolvedAtMissingBoundary = true;
+                break;
+            }
+            if (cached == directoryAnchors.constEnd())
+                directoryAnchors.insert(childKey, child);
+            parent = child;
+            parentPath = childPath;
+        }
+        if (!resolvedAtMissingBoundary) {
+            paths.parent = parent;
+            paths.entry = parent.entry(components.constLast(), error);
+        }
+        if (!paths.entry.isValid()) return false;
+        if (!pureAbsence
+            && atomicFilePathKey(paths.entry.displayPath()) != pathKey) {
+            error = QStringLiteral(
+                "A plan transaction path did not resolve to its target name");
+            return false;
+        }
         paths.oldCopy = QDir(state.journalPath).filePath(oldCopyName(index));
         if (entry.hasNew) {
             paths.staging = QDir(state.journalPath).filePath(
@@ -1443,8 +1641,66 @@ QStringList productionLockPaths(const QList<ResolvedEntry> &entries)
 {
     QStringList paths;
     paths.reserve(entries.size());
-    for (const ResolvedEntry &entry : entries) paths.append(entry.path);
+    for (const ResolvedEntry &entry : entries) {
+        paths.append(entry.entry.displayPath());
+    }
     return paths;
+}
+
+bool productionEntryParentIsCurrent(
+    const ResolvedEntry &entry, QString &error)
+{
+    if (!entry.parent.isValid() || !entry.entry.isValid()
+        || !entry.parent.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "A plan transaction parent directory was replaced");
+        }
+        return false;
+    }
+    return true;
+}
+
+bool productionEntryParentsAreCurrent(
+    const QList<ResolvedEntry> &entries, QString &error)
+{
+    QHash<QString, AnchoredFileSystem::NativeIdentity> parentIdentities;
+    for (const ResolvedEntry &entry : entries) {
+        if (!entry.parent.isValid() || !entry.entry.isValid()) {
+            error = QStringLiteral(
+                "An anchored plan transaction path is unavailable");
+            return false;
+        }
+        const QString parentKey = atomicFilePathKey(
+            QFileInfo(entry.entry.displayPath()).absolutePath());
+        const AnchoredFileSystem::NativeIdentity identity =
+            entry.parent.identity();
+        const auto validated = parentIdentities.constFind(parentKey);
+        if (validated != parentIdentities.constEnd()) {
+            if (validated.value() != identity) {
+                error = QStringLiteral(
+                    "Plan entries disagree about an anchored parent directory");
+                return false;
+            }
+            continue;
+        }
+        if (!productionEntryParentIsCurrent(entry, error)) return false;
+        parentIdentities.insert(parentKey, identity);
+    }
+    return true;
+}
+
+bool productionEntriesAreAvailable(
+    const JournalState &state, QString &error)
+{
+    if (state.productionEntries.size()
+        != state.manifest.entries.size()) {
+        error = QStringLiteral(
+            "The anchored plan transaction paths are unavailable");
+        return false;
+    }
+    return productionEntryParentsAreCurrent(
+        state.productionEntries, error);
 }
 
 bool loadManifestState(
@@ -1514,13 +1770,15 @@ bool loadManifestState(
                     .arg(error);
         return false;
     }
-    if (!journalDirectoryMatches(*loaded, error)
+    if (!productionEntryParentsAreCurrent(resolved, error)
+        || !journalDirectoryMatches(*loaded, error)
         || !anchoredJournalFileIsCurrent(
             loaded->journalDirectory,
             loaded->manifestFile,
             error)) {
         return false;
     }
+    loaded->productionEntries = std::move(resolved);
     state = loaded;
     return true;
 }
@@ -1867,8 +2125,8 @@ bool verifyOldGeneration(
 {
     for (int index = 0; index < state.manifest.entries.size(); ++index) {
         const Entry &entry = state.manifest.entries.at(index);
-        if (!validateExpectedSnapshot(
-                resolved.at(index).path,
+        if (!validateExpectedProductionSnapshot(
+                resolved.at(index),
                 entry.oldExists,
                 entry.oldContents,
                 error)) {
@@ -1887,13 +2145,29 @@ bool verifyNewGeneration(
     if (!allTargetsAreStaged(state, error)) return false;
     for (int index = 0; index < state.manifest.entries.size(); ++index) {
         const Entry &entry = state.manifest.entries.at(index);
-        if (!validateExpectedSnapshot(
-                resolved.at(index).path,
+        if (!validateExpectedProductionSnapshot(
+                resolved.at(index),
                 entry.hasNew,
                 entry.newContents,
                 error)) {
             error = QStringLiteral("The committed plan is incomplete: %1")
                         .arg(error);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool verifyRequiredAbsentEntries(
+    JournalState &state,
+    const QList<ResolvedEntry> &resolved,
+    QString &error)
+{
+    for (int index = 0; index < state.manifest.entries.size(); ++index) {
+        const Entry &entry = state.manifest.entries.at(index);
+        if (entry.oldExists || entry.hasNew) continue;
+        if (!validateExpectedProductionSnapshot(
+                resolved.at(index), false, {}, error)) {
             return false;
         }
     }
@@ -1909,11 +2183,27 @@ bool restoreOldGeneration(
     for (int index = 0; index < state.manifest.entries.size(); ++index) {
         const Entry &entry = state.manifest.entries.at(index);
         const ResolvedEntry &paths = resolved.at(index);
+        if (!entry.oldExists && !entry.hasNew) {
+            if (!validateExpectedProductionSnapshot(
+                    paths, false, {}, error)) {
+                error = QStringLiteral(
+                    "An unexpected plan activity blocks recovery: %1")
+                            .arg(error);
+                return false;
+            }
+            continue;
+        }
+        if (!productionEntryParentIsCurrent(paths, error)) return false;
         ObservedFile current;
         if (!inspectRegularFile(paths.path, current, error)) return false;
 
         if (entry.oldExists) {
-            if (snapshotMatches(current, entry.oldContents)) continue;
+            if (snapshotMatches(current, entry.oldContents)) {
+                if (!productionEntryParentIsCurrent(paths, error)) {
+                    return false;
+                }
+                continue;
+            }
             if (current.exists
                 && (!entry.hasNew || !entry.staged
                     || !snapshotMatches(current, entry.newContents))) {
@@ -1937,7 +2227,12 @@ bool restoreOldGeneration(
                 return false;
             }
         } else {
-            if (!current.exists) continue;
+            if (!current.exists) {
+                if (!productionEntryParentIsCurrent(paths, error)) {
+                    return false;
+                }
+                continue;
+            }
             if (!entry.hasNew || !entry.staged
                 || !snapshotMatches(current, entry.newContents)) {
                 error = QStringLiteral(
@@ -1946,6 +2241,7 @@ bool restoreOldGeneration(
             }
             if (!removeObservedFile(paths.path, current, error)) return false;
         }
+        if (!productionEntryParentIsCurrent(paths, error)) return false;
     }
     return verifyOldGeneration(state, resolved, error);
 }
@@ -1966,9 +2262,12 @@ bool installNewEntry(
     const AnchoredJournalFile &staged,
     QString &error)
 {
+    if (!productionEntryParentIsCurrent(paths, error)) return false;
     ObservedFile current;
     if (!inspectRegularFile(paths.path, current, error)) return false;
-    if (snapshotMatches(current, entry.newContents)) return true;
+    if (snapshotMatches(current, entry.newContents)) {
+        return productionEntryParentIsCurrent(paths, error);
+    }
     if (current.exists
         && (!entry.oldExists
             || !snapshotMatches(current, entry.oldContents))) {
@@ -1976,15 +2275,18 @@ bool installNewEntry(
             "A plan target changed outside the replacement transaction");
         return false;
     }
-    return copyExpectedPinnedFileAtomically(
-        state.journalDirectory,
-        staged,
-        paths.path,
-        entry.newContents,
-        current.exists
-            ? AtomicFileMode::ReplaceExisting
-            : AtomicFileMode::CreateNew,
-        error);
+    if (!copyExpectedPinnedFileAtomically(
+            state.journalDirectory,
+            staged,
+            paths.path,
+            entry.newContents,
+            current.exists
+                ? AtomicFileMode::ReplaceExisting
+                : AtomicFileMode::CreateNew,
+            error)) {
+        return false;
+    }
+    return productionEntryParentIsCurrent(paths, error);
 }
 
 bool removeOldOnlyEntry(
@@ -1992,15 +2294,23 @@ bool removeOldOnlyEntry(
     const ResolvedEntry &paths,
     QString &error)
 {
+    if (!entry.oldExists) {
+        return validateExpectedProductionSnapshot(
+            paths, false, {}, error);
+    }
+    if (!productionEntryParentIsCurrent(paths, error)) return false;
     ObservedFile current;
     if (!inspectRegularFile(paths.path, current, error)) return false;
-    if (!current.exists) return true;
-    if (!entry.oldExists || !snapshotMatches(current, entry.oldContents)) {
+    if (!current.exists) {
+        return productionEntryParentIsCurrent(paths, error);
+    }
+    if (!snapshotMatches(current, entry.oldContents)) {
         error = QStringLiteral(
             "A plan removal target changed outside the transaction");
         return false;
     }
-    return removeObservedFile(paths.path, current, error);
+    if (!removeObservedFile(paths.path, current, error)) return false;
+    return productionEntryParentIsCurrent(paths, error);
 }
 
 bool ensureNewGeneration(
@@ -2119,8 +2429,8 @@ bool removeJournalDirectory(
         return false;
     }
 
-    QList<ResolvedEntry> resolved;
-    if (!resolveManifestEntries(state, resolved, error)
+    const QList<ResolvedEntry> &resolved = state.productionEntries;
+    if (!productionEntriesAreAvailable(state, error)
         || !(committed
             ? verifyNewGeneration(state, resolved, error)
             : verifyOldGeneration(state, resolved, error))) {
@@ -2285,8 +2595,8 @@ bool rollbackJournal(JournalState &state, QString &error)
         error = QStringLiteral("Cannot roll back a committed plan replacement");
         return false;
     }
-    QList<ResolvedEntry> resolved;
-    if (!resolveManifestEntries(state, resolved, error)
+    const QList<ResolvedEntry> &resolved = state.productionEntries;
+    if (!productionEntriesAreAvailable(state, error)
         || !restoreOldGeneration(
             state, resolved, journalFiles, error)) {
         return false;
@@ -2305,8 +2615,8 @@ bool commitJournal(JournalState &state, QString &error)
         error = QStringLiteral("Cannot complete an uncommitted plan replacement");
         return false;
     }
-    QList<ResolvedEntry> resolved;
-    if (!resolveManifestEntries(state, resolved, error)
+    const QList<ResolvedEntry> &resolved = state.productionEntries;
+    if (!productionEntriesAreAvailable(state, error)
         || !ensureNewGeneration(
             state, resolved, journalFiles, error)) {
         return false;
@@ -2510,6 +2820,7 @@ std::shared_ptr<Journal> Journal::prepare(
         QString absolute;
         bool removed = false;
         bool target = false;
+        bool mustRemainAbsent = false;
         int stageIndex = -1;
     };
     QList<RequestedPath> requested;
@@ -2517,11 +2828,13 @@ std::shared_ptr<Journal> Journal::prepare(
     const auto addRequested = [&](const QString &candidate,
                                   bool removed,
                                   bool target,
+                                  bool mustRemainAbsent,
                                   int stageIndex) {
         QString relative;
         QString absolute;
         if (!makeRootRelativePath(
-                root, candidate, relative, absolute, error)
+                root, candidate, relative, absolute, error,
+                mustRemainAbsent)
             || !pathIsWithinScope(relative, scopeRelative)) {
             if (error.isEmpty()) {
                 error = QStringLiteral(
@@ -2534,32 +2847,48 @@ std::shared_ptr<Journal> Journal::prepare(
         if (found != requestedByKey.constEnd()) {
             RequestedPath &existing = requested[*found];
             if ((removed && existing.removed)
-                || (target && existing.target)) {
+                || (target && existing.target)
+                || (mustRemainAbsent
+                    && existing.mustRemainAbsent)) {
                 error = QStringLiteral(
                     "The plan replacement contains a duplicate path role");
                 return false;
             }
+            if ((target && existing.mustRemainAbsent)
+                || (mustRemainAbsent && existing.target)) {
+                error = QStringLiteral(
+                    "A plan replacement target cannot also remain absent");
+                return false;
+            }
             existing.removed = existing.removed || removed;
             existing.target = existing.target || target;
+            existing.mustRemainAbsent =
+                existing.mustRemainAbsent || mustRemainAbsent;
             if (target) existing.stageIndex = stageIndex;
             return true;
         }
         requestedByKey.insert(key, requested.size());
-        requested.append({relative, absolute, removed, target, stageIndex});
+        requested.append({
+            relative, absolute, removed, target,
+            mustRemainAbsent, stageIndex});
         return true;
     };
 
     for (const QString &path : specification.removalPaths) {
-        if (!addRequested(path, true, false, -1)) return {};
+        if (!addRequested(path, true, false, false, -1)) return {};
     }
     for (int index = 0; index < specification.targetPaths.size(); ++index) {
         if (!addRequested(
                 specification.targetPaths.at(index),
                 false,
                 true,
+                false,
                 index)) {
             return {};
         }
+    }
+    for (const QString &path : specification.mustRemainAbsentPaths) {
+        if (!addRequested(path, false, false, true, -1)) return {};
     }
     if (requested.size() > Detail::MaximumEntries) {
         error = QStringLiteral("The plan replacement contains too many files");
@@ -2588,7 +2917,14 @@ std::shared_ptr<Journal> Journal::prepare(
 
     QStringList lockPaths = inputPaths;
     for (const RequestedPath &path : std::as_const(requested)) {
-        lockPaths.append(path.absolute);
+        QString lockTarget = path.absolute;
+        if (path.mustRemainAbsent
+            && !path.removed && !path.target
+            && !lockTargetForRequiredAbsence(
+                path.absolute, lockTarget, error)) {
+            return {};
+        }
+        lockPaths.append(lockTarget);
     }
     state->pathLocks = std::make_unique<AtomicFileLockSet>();
     if (!state->pathLocks->lock(lockPaths, error)) {
@@ -2656,6 +2992,16 @@ std::shared_ptr<Journal> Journal::prepare(
         Detail::ManifestName);
     state->commitMarkerPath = QDir(state->journalPath).filePath(
         Detail::CommitMarkerName);
+    QList<ResolvedEntry> anchoredEntries;
+    if (!resolveManifestEntries(
+            *state, anchoredEntries, error)) {
+        return {};
+    }
+    state->productionEntries = std::move(anchoredEntries);
+    if (!verifyOldGeneration(
+            *state, state->productionEntries, error)) {
+        return {};
+    }
     if (pathEntryExists(state->journalPath)) {
         error = QStringLiteral(
             "Cannot create the plan replacement journal because it already exists");
@@ -2693,8 +3039,8 @@ std::shared_ptr<Journal> Journal::prepare(
 #endif
     if (!journalDirectoryMatches(*state, error)) return {};
 
-    QList<ResolvedEntry> resolved;
-    if (!resolveManifestEntries(*state, resolved, error)) return {};
+    const QList<ResolvedEntry> &resolved = state->productionEntries;
+    if (!productionEntriesAreAvailable(*state, error)) return {};
     for (int index = 0; index < state->manifest.entries.size(); ++index) {
         const Entry &entry = state->manifest.entries.at(index);
         if (!entry.oldExists) continue;
@@ -3211,7 +3557,9 @@ bool Journal::recordStaged(int targetIndex, QString &error)
             error = QStringLiteral("A staged plan activity changed unexpectedly");
             return false;
         }
-        return true;
+        return productionEntriesAreAvailable(*state_, error)
+            && verifyRequiredAbsentEntries(
+                *state_, state_->productionEntries, error);
     }
     entry.staged = true;
     entry.newContents = stagedSnapshot;
@@ -3224,7 +3572,10 @@ bool Journal::recordStaged(int targetIndex, QString &error)
 #ifdef GC_PLAN_REPLACEMENT_TEST_HOOKS
     planReplacementTransitionReached("plan-replacement-stage-recorded");
 #endif
-    return trackedJournalFilesAreCurrent(*state_, error);
+    return trackedJournalFilesAreCurrent(*state_, error)
+        && productionEntriesAreAvailable(*state_, error)
+        && verifyRequiredAbsentEntries(
+            *state_, state_->productionEntries, error);
 }
 
 bool Journal::publishAndCommit(QString &error)
@@ -3268,10 +3619,14 @@ bool Journal::publishAndCommit(QString &error)
     }
     bool committed = false;
     if (!readCommitMarker(*state_, committed, nullptr, error)) return false;
-    if (committed) return true;
+    if (committed) {
+        return productionEntriesAreAvailable(*state_, error)
+            && verifyNewGeneration(
+                *state_, state_->productionEntries, error);
+    }
 
-    QList<ResolvedEntry> resolved;
-    if (!resolveManifestEntries(*state_, resolved, error)
+    const QList<ResolvedEntry> &resolved = state_->productionEntries;
+    if (!productionEntriesAreAvailable(*state_, error)
         || !publishNewGeneration(
             *state_, resolved, journalFiles, error)) {
         return false;
@@ -3291,7 +3646,8 @@ bool Journal::publishAndCommit(QString &error)
     if (!anchoredJournalFileIsCurrent(
             state_->journalDirectory,
             state_->commitMarkerFile,
-            error)) {
+            error)
+        || !verifyNewGeneration(*state_, resolved, error)) {
         appendError(
             error,
             QStringLiteral(

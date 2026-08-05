@@ -24,6 +24,7 @@ struct Specification
     QStringList inputPaths;
     QStringList removalPaths;
     QStringList targetPaths;
+    QStringList mustRemainAbsentPaths;
 };
 
 struct JournalState;
