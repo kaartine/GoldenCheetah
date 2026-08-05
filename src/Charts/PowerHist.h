@@ -211,6 +211,9 @@ class PowerHist : public QwtPlot
         void setParameterAxisTitle();
         bool isSelected(const RideFilePoint *p, double);
         bool isSelected(const double t, double sample);
+        static bool isSelected(const RideItem *rideItem,
+                               const RideFilePoint *point,
+                               double sample);
         void percentify(QVector<double> &, double factor); // and a function to convert
 
         bool shadeZones() const; // check if zone shading is both wanted and possible
