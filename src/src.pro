@@ -642,7 +642,7 @@ HEADERS += Charts/Aerolab.h Charts/AerolabWindow.h Charts/AllPlot.h Charts/AllPl
            Charts/MetadataWindow.h Charts/MUPlot.h Charts/MUPool.h Charts/MUWidget.h Charts/PfPvPlot.h Charts/PfPvWindow.h \
            Charts/PowerHist.h Charts/ReferenceLineDialog.h Charts/RideEditor.h Charts/MapPageSecurityPolicy.h Charts/RideMapWindow.h \
            Charts/ScatterPlot.h Charts/ScatterWindow.h Charts/SmallPlot.h Charts/TreeMapPlot.h \
-           Charts/TreeMapWindow.h Charts/ZoneScaleDraw.h Charts/CalendarWindow.h Charts/AgendaWindow.h Charts/PlanAdherenceWindow.h
+           Charts/TreeMapWindow.h Charts/ZoneScaleDraw.h Charts/CalendarWindow.h Charts/CalendarSeasonWorkflow.h Charts/AgendaWindow.h Charts/PlanAdherenceWindow.h
 
 # cloud services
 HEADERS += Cloud/CalendarDownload.h Cloud/CloudService.h \
@@ -691,7 +691,7 @@ HEADERS += Gui/AboutDialog.h Gui/AddIntervalDialog.h Gui/AnalysisSidebar.h Gui/C
            Gui/SolverDisplay.h Gui/MetricSelect.h \
            Gui/AddTileWizard.h Gui/NavigationModel.h Gui/AthleteView.h Gui/AthleteConfigDialog.h Gui/AthletePages.h Gui/Perspective.h \
            Gui/PerspectiveDialog.h Gui/SplashScreen.h Gui/StyledItemDelegates.h Gui/MetadataDialog.h Gui/ActionButtonBox.h \
-           Gui/MetricOverrideDialog.h Gui/PlanWizards.h \
+           Gui/MetricOverrideDialog.h Gui/ModalWorkflowGuard.h Gui/PlanWizards.h \
            Gui/Calendar.h Gui/Agenda.h Gui/CalendarData.h Gui/CalendarItemDelegates.h \
            Gui/PlanAdherence.h \
            Gui/IconManager.h Gui/FilterSimilarDialog.h

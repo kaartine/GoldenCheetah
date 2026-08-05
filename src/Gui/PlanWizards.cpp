@@ -24,6 +24,7 @@
 #include <QButtonGroup>
 
 #include "Context.h"
+#include "MainWindow.h"
 #include "Athlete.h"
 #include "AthleteTab.h"
 #include "Seasons.h"
@@ -65,28 +66,6 @@ class OverrideCursorScope
         }
 };
 
-
-class NoSwitchScope
-{
-    public:
-        explicit NoSwitchScope(AthleteTab *tab)
-        : tab(tab), previousValue(
-              tab ? tab->noSwitch() : false)
-        {
-            if (this->tab)
-                this->tab->setNoSwitch(true);
-        }
-
-        ~NoSwitchScope()
-        {
-            if (tab)
-                tab->setNoSwitch(previousValue);
-        }
-
-    private:
-        QPointer<AthleteTab> tab;
-        bool previousValue;
-};
 
 }
 
@@ -910,7 +889,8 @@ RepeatPlanWizard::done
     planList.clear();
 
     OverrideCursorScope cursorScope;
-    NoSwitchScope noSwitchScope(guardedTab);
+    ModalNoSwitchLease<AthleteTab>
+        noSwitchScope(guardedTab);
 
     if (!resolveInputs(deletionItems, planList)) {
         deletionItems.clear();
@@ -1549,8 +1529,30 @@ RepeatPlanPageSummary::initializePage
 
 ExportPlanWizard::ExportPlanWizard
 (Context *context, Season const * const preselectSeason, QWidget *parent)
-: QWizard(parent), context(context)
+: QWizard(parent), context(context),
+  mainWindow(context ? context->mainWindow : nullptr),
+  athlete(context ? context->athlete : nullptr),
+  cache(context && context->athlete
+        ? context->athlete->rideCache : nullptr),
+  tab(context ? context->tab : nullptr)
 {
+    ownerGuard.reset(new ModalWorkflowGuard(
+        {this->context.data(), mainWindow.data(), athlete.data(),
+         cache.data(), tab.data()},
+        [this] {
+            return this->context && this->mainWindow
+                && this->athlete && this->cache && this->tab
+                && modalWorkflowHasActiveTab(
+                    this->mainWindow.data(),
+                    this->context.data(), this->tab.data())
+                && this->context->athlete
+                    == this->athlete.data()
+                && this->athlete->rideCache
+                    == this->cache.data()
+                && this->context->tab
+                    == this->tab.data();
+        }));
+    ownerGuard->rejectOnOwnerLoss(this);
     setWindowTitle(tr("Export Plan"));
     setMinimumSize(800 * dpiXFactor, 750 * dpiYFactor);
     setModal(true);
@@ -1593,6 +1595,28 @@ $COPYRIGHT)");
 }
 
 
+void
+ExportPlanWizard::setWorkflowValidator
+(ModalWorkflowValidator validator)
+{
+    workflowValidator = std::move(validator);
+}
+
+
+bool
+ExportPlanWizard::workflowIsCurrent
+() const
+{
+    return context && mainWindow && athlete && cache && tab
+        && modalWorkflowHasActiveTab(
+            mainWindow.data(), context.data(), tab.data())
+        && context->athlete == athlete.data()
+        && athlete->rideCache == cache.data()
+        && context->tab == tab.data()
+        && (!workflowValidator || workflowValidator());
+}
+
+
 PlanExportDescription&
 ExportPlanWizard::description
 ()
@@ -1613,8 +1637,12 @@ void
 ExportPlanWizard::updateRange
 (QDate sourceStart, QDate sourceEnd, bool preferOriginal, bool force)
 {
-    RideCache *const cache =
-        context->athlete->rideCache;
+    if (!workflowIsCurrent()) {
+        sourceRides.clear();
+        emit rangeChanged();
+        return;
+    }
+    RideCache *const currentCache = cache.data();
     if (   _description.rangeStart != sourceStart
         || _description.rangeEnd != sourceEnd
         || _description.preferOriginal != preferOriginal
@@ -1625,7 +1653,7 @@ ExportPlanWizard::updateRange
         _description.preferOriginal = preferOriginal;
 
         sourceRides.clear();
-        for (RideItem *rideItem : context->athlete->rideCache->rides()) {
+        for (RideItem *rideItem : currentCache->rides()) {
             if (   rideItem == nullptr
                 || ! rideItem->planned) {
                 continue;
@@ -1645,7 +1673,7 @@ ExportPlanWizard::updateRange
         QHash<QDateTime, int> targetKeyCount;
         for (const SourceRide &sourceRide : sourceRides) {
             RideItem *const item = resolveGuardedRide(
-                sourceRide.source, cache);
+                sourceRide.source, currentCache);
             if (!item)
                 continue;
             QDateTime key(
@@ -1657,7 +1685,7 @@ ExportPlanWizard::updateRange
         int nextGroup = 0;
         for (SourceRide &sourceRide : sourceRides) {
             RideItem *const item = resolveGuardedRide(
-                sourceRide.source, cache);
+                sourceRide.source, currentCache);
             if (!item)
                 continue;
             QDateTime key(
@@ -1690,9 +1718,9 @@ ExportPlanWizard::updateRange
     sourceRides.erase(
         std::remove_if(
             sourceRides.begin(), sourceRides.end(),
-            [cache](const SourceRide &sourceRide) {
+            [currentCache](const SourceRide &sourceRide) {
                 return !resolveGuardedRide(
-                    sourceRide.source, cache);
+                    sourceRide.source, currentCache);
             }),
         sourceRides.end());
 
@@ -1722,6 +1750,11 @@ ExportPlanWizard::done
         return;
     }
 
+    if (!workflowIsCurrent()) {
+        QWizard::done(QDialog::Rejected);
+        return;
+    }
+
     OverrideCursorScope cursorScope;
     QStringList activityFiles;
     bool sourcesValid = true;
@@ -1731,7 +1764,7 @@ ExportPlanWizard::done
         }
         RideItem *const item = resolveGuardedRide(
             sourceRide.source,
-            context->athlete->rideCache);
+            cache.data());
         if (!item) {
             sourcesValid = false;
             break;
@@ -1750,7 +1783,7 @@ ExportPlanWizard::done
     if (!runPlanExportCompletion(
             [&] {
                 return PlanBundle::exportBundle(
-                    context, _description);
+                    context.data(), _description);
             },
             [&] {
                 QMessageBox::warning(
@@ -1927,7 +1960,8 @@ ExportPlanPageSetup::isComplete
 () const
 {
     ExportPlanWizard *wiz = qobject_cast<ExportPlanWizard*>(wizard());
-    return wiz->sourceRides.count() > 0;
+    return wiz && wiz->workflowIsCurrent()
+        && wiz->sourceRides.count() > 0;
 }
 
 
@@ -1936,7 +1970,7 @@ ExportPlanPageSetup::refresh
 ()
 {
     ExportPlanWizard *wiz = qobject_cast<ExportPlanWizard*>(wizard());
-    if (wiz == nullptr) {
+    if (wiz == nullptr || !wiz->workflowIsCurrent()) {
         return;
     }
 
@@ -2009,7 +2043,7 @@ ExportPlanPageActivities::initializePage
     activityTree->clear();
 
     ExportPlanWizard *wiz = qobject_cast<ExportPlanWizard*>(wizard());
-    if (wiz == nullptr) {
+    if (wiz == nullptr || !wiz->workflowIsCurrent()) {
         return;
     }
     targetRangeBar->setFlashEnabled(false);
@@ -2079,7 +2113,7 @@ ExportPlanPageActivities::initializePage
 
     dataChangedConnection = connect(activityTree->model(), &QAbstractItemModel::dataChanged, this, [this](const QModelIndex &index) {
         ExportPlanWizard *wiz = qobject_cast<ExportPlanWizard*>(wizard());
-        if (wiz == nullptr) {
+        if (wiz == nullptr || !wiz->workflowIsCurrent()) {
             return;
         }
         QModelIndex col0Index = index.siblingAtColumn(0);
@@ -2123,7 +2157,10 @@ bool
 ExportPlanPageActivities::isComplete
 () const
 {
-    return numSelected > 0;
+    const ExportPlanWizard *wiz =
+        qobject_cast<ExportPlanWizard*>(wizard());
+    return wiz && wiz->workflowIsCurrent()
+        && numSelected > 0;
 }
 
 
@@ -2185,7 +2222,7 @@ ExportPlanPageMetadata::initializePage
 ()
 {
     ExportPlanWizard *wiz = qobject_cast<ExportPlanWizard*>(wizard());
-    if (wiz == nullptr) {
+    if (wiz == nullptr || !wiz->workflowIsCurrent()) {
         return;
     }
 
@@ -2209,6 +2246,10 @@ bool
 ExportPlanPageMetadata::validatePage
 ()
 {
+    ExportPlanWizard *wiz =
+        qobject_cast<ExportPlanWizard*>(wizard());
+    if (!wiz || !wiz->workflowIsCurrent())
+        return false;
     cleanupPage();
     return true;
 }
@@ -2218,7 +2259,10 @@ bool
 ExportPlanPageMetadata::isComplete
 () const
 {
-    return    ! authorEdit->text().trimmed().isEmpty()
+    const ExportPlanWizard *wiz =
+        qobject_cast<ExportPlanWizard*>(wizard());
+    return wiz && wiz->workflowIsCurrent()
+        && ! authorEdit->text().trimmed().isEmpty()
            && ! nameEdit->text().trimmed().isEmpty();
 }
 
@@ -2228,7 +2272,7 @@ ExportPlanPageMetadata::cleanupPage
 ()
 {
     ExportPlanWizard *wiz = qobject_cast<ExportPlanWizard*>(wizard());
-    if (wiz == nullptr) {
+    if (wiz == nullptr || !wiz->workflowIsCurrent()) {
         return;
     }
     wiz->description().author = authorEdit->text().trimmed();
@@ -2350,7 +2394,7 @@ ExportPlanPageSummary::ExportPlanPageSummary
 
     connect(outputPathWidget, &DirectoryPathWidget::pathChanged, this, [this](QString path) {
         ExportPlanWizard *wiz = qobject_cast<ExportPlanWizard*>(wizard());
-        if (wiz == nullptr) {
+        if (wiz == nullptr || !wiz->workflowIsCurrent()) {
             return;
         }
         if (path != wiz->description().planFile) {
@@ -2376,7 +2420,7 @@ ExportPlanPageSummary::initializePage
     planTree->clear();
 
     ExportPlanWizard *wiz = qobject_cast<ExportPlanWizard*>(wizard());
-    if (wiz == nullptr) {
+    if (wiz == nullptr || !wiz->workflowIsCurrent()) {
         return;
     }
 
@@ -2471,7 +2515,7 @@ ExportPlanPageSummary::isComplete
 () const
 {
     ExportPlanWizard *wiz = qobject_cast<ExportPlanWizard*>(wizard());
-    if (wiz == nullptr) {
+    if (wiz == nullptr || !wiz->workflowIsCurrent()) {
         return false;
     }
     if (! wiz->description().planFile.trimmed().isEmpty()) {
@@ -2527,8 +2571,31 @@ ImportPlanWizard::ImportPlanWizard
 (Context *context, QDate targetDay, QWidget *parent)
 : QWizard(parent),
   planReader(QSharedPointer<PlanBundleReader>::create(
-      context, targetDay))
+      context, targetDay)),
+  context(context),
+  mainWindow(context ? context->mainWindow : nullptr),
+  athlete(context ? context->athlete : nullptr),
+  cache(context && context->athlete
+        ? context->athlete->rideCache : nullptr),
+  tab(context ? context->tab : nullptr)
 {
+    ownerGuard.reset(new ModalWorkflowGuard(
+        {this->context.data(), mainWindow.data(), athlete.data(),
+         cache.data(), tab.data()},
+        [this] {
+            return this->context && this->mainWindow
+                && this->athlete && this->cache && this->tab
+                && modalWorkflowHasActiveTab(
+                    this->mainWindow.data(),
+                    this->context.data(), this->tab.data())
+                && this->context->athlete
+                    == this->athlete.data()
+                && this->athlete->rideCache
+                    == this->cache.data()
+                && this->context->tab
+                    == this->tab.data();
+        }));
+    ownerGuard->rejectOnOwnerLoss(this);
     setWindowTitle(tr("Import Plan"));
     setMinimumSize(800 * dpiXFactor, 750 * dpiYFactor);
     setModal(true);
@@ -2547,6 +2614,28 @@ ImportPlanWizard::ImportPlanWizard
     setPage(PageSummary, new ImportPlanPageSummary());
     setPage(PageResult, new ImportPlanPageResult());
     setStartId(PageSetup);
+}
+
+
+void
+ImportPlanWizard::setWorkflowValidator
+(ModalWorkflowValidator validator)
+{
+    workflowValidator = std::move(validator);
+}
+
+
+bool
+ImportPlanWizard::workflowIsCurrent
+() const
+{
+    return context && mainWindow && athlete && cache && tab
+        && modalWorkflowHasActiveTab(
+            mainWindow.data(), context.data(), tab.data())
+        && context->athlete == athlete.data()
+        && athlete->rideCache == cache.data()
+        && context->tab == tab.data()
+        && (!workflowValidator || workflowValidator());
 }
 
 
@@ -2703,7 +2792,8 @@ ImportPlanPageSetup::ImportPlanPageSetup
     connect(inputPathWidget, &DirectoryPathWidget::pathChanged, this, &ImportPlanPageSetup::bundlePathChanged);
     connect(gapDayCheck, &QCheckBox::toggled, this, [this](bool checked) {
         ImportPlanWizard *wiz = qobject_cast<ImportPlanWizard*>(wizard());
-        if (wiz == nullptr || !wiz->planReader) {
+        if (wiz == nullptr || !wiz->workflowIsCurrent()
+            || !wiz->planReader) {
             return;
         }
         wiz->planReader->setIncludeGapDays(checked);
@@ -2725,7 +2815,7 @@ ImportPlanPageSetup::isComplete
 () const
 {
     ImportPlanWizard *wiz = qobject_cast<ImportPlanWizard*>(wizard());
-    if (wiz == nullptr) {
+    if (wiz == nullptr || !wiz->workflowIsCurrent()) {
         return false;
     }
     return wiz->planReader && wiz->planReader->isValid();
@@ -2737,7 +2827,8 @@ ImportPlanPageSetup::bundlePathChanged
 (QString path)
 {
     ImportPlanWizard *wiz = qobject_cast<ImportPlanWizard*>(wizard());
-    if (wiz == nullptr || !wiz->planReader) {
+    if (wiz == nullptr || !wiz->workflowIsCurrent()
+        || !wiz->planReader) {
         return;
     }
 
@@ -2821,7 +2912,8 @@ ImportPlanPageSetup::updateRanges
 ()
 {
     ImportPlanWizard *wiz = qobject_cast<ImportPlanWizard*>(wizard());
-    if (wiz == nullptr || !wiz->planReader
+    if (wiz == nullptr || !wiz->workflowIsCurrent()
+        || !wiz->planReader
         || !wiz->planReader->isValid()) {
         return;
     }
@@ -2901,7 +2993,8 @@ ImportPlanPageActivities::initializePage
     disconnect(dataChangedConnection);
 
     ImportPlanWizard *wiz = qobject_cast<ImportPlanWizard*>(wizard());
-    if (wiz == nullptr || !wiz->planReader
+    if (wiz == nullptr || !wiz->workflowIsCurrent()
+        || !wiz->planReader
         || !wiz->planReader->isValid()) {
         return;
     }
@@ -2960,7 +3053,8 @@ ImportPlanPageActivities::initializePage
 
     dataChangedConnection = connect(activityTree->model(), &QAbstractItemModel::dataChanged, this, [this](const QModelIndex &index) {
         ImportPlanWizard *wiz = qobject_cast<ImportPlanWizard*>(wizard());
-        if (wiz == nullptr || !wiz->planReader) {
+        if (wiz == nullptr || !wiz->workflowIsCurrent()
+            || !wiz->planReader) {
             return;
         }
         QModelIndex col0Index = index.siblingAtColumn(0);
@@ -2998,7 +3092,8 @@ ImportPlanPageActivities::isComplete
 () const
 {
     ImportPlanWizard *wiz = qobject_cast<ImportPlanWizard*>(wizard());
-    if (wiz == nullptr || !wiz->planReader) {
+    if (wiz == nullptr || !wiz->workflowIsCurrent()
+        || !wiz->planReader) {
         return false;
     }
     return wiz->planReader->getNumSelectedActivities() > 0;
@@ -3083,7 +3178,8 @@ ImportPlanPageSummary::initializePage
     deletionTree->setVisible(false);
 
     ImportPlanWizard *wiz = qobject_cast<ImportPlanWizard*>(wizard());
-    if (wiz == nullptr || !wiz->planReader) {
+    if (wiz == nullptr || !wiz->workflowIsCurrent()
+        || !wiz->planReader) {
         return;
     }
 
@@ -3129,7 +3225,8 @@ ImportPlanPageSummary::validatePage
 ()
 {
     ImportPlanWizard *wiz = qobject_cast<ImportPlanWizard*>(wizard());
-    if (wiz == nullptr || !wiz->planReader) {
+    if (wiz == nullptr || !wiz->workflowIsCurrent()
+        || !wiz->planReader) {
         return false;
     }
 
@@ -3140,12 +3237,16 @@ ImportPlanPageSummary::validatePage
         return false;
 
     OverrideCursorScope cursorScope;
-    readerLease.reader()->importBundle();
+    const PlanResult result =
+        readerLease.reader()->importBundle();
 
     return readerLease.ownerAlive()
         && guardedWizard
         && guardedWizard->planReader
-            == readerLease.sharedReader();
+            == readerLease.sharedReader()
+        && modalWorkflowCanAdvanceAfterCommit(
+            result.committed,
+            guardedWizard->workflowIsCurrent());
 }
 
 

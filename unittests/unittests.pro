@@ -72,6 +72,7 @@ equals(GC_UNITTESTS, active) {
 			   Gui/activityDeletionWorkflow \
 			   Gui/activitySaveWorkflow \
 			   Gui/cacheWriteWarning \
+			   Gui/calendarModalWorkflow \
 			   Gui/calendarData \
 			   Gui/mergeActivityDistanceCursor \
 			   Gui/mergeActivityRidePreparation \

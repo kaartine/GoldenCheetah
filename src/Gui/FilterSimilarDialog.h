@@ -22,7 +22,6 @@
 #include <QtGui>
 #include <QTreeWidget>
 
-#include "Context.h"
 #include "RideItem.h"
 
 
@@ -31,22 +30,22 @@ class FilterSimilarDialog : public QDialog
     Q_OBJECT
 
     public:
-        FilterSimilarDialog(Context *context, RideItem const * const rideItem, QWidget *parent = nullptr);
+        FilterSimilarDialog(RideItem const *rideItem, QWidget *parent = nullptr);
+
+        QString selectedFilter() const;
 
     protected:
         bool eventFilter(QObject *obj, QEvent *event) override;
 
     private:
-        Context *context;
-        RideItem const * const rideItem;
         QCheckBox *hideZeroed;
         QLineEdit *filterTreeEdit;
         QTreeWidget *tree;
         QTextEdit *preview;
 
         QString buildFilter() const;
-        void addFields();
-        void addMetrics();
+        void addFields(const RideItem *rideItem);
+        void addMetrics(const RideItem *rideItem);
 
     private slots:
         void updateFilterTree();

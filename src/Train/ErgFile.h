@@ -33,6 +33,7 @@
 #include <QTextStream>
 #include <QTextEdit>
 #include <QRegExp>
+#include <memory>
 #include "Zones.h"      // For zones ... see below vvvv
 #include "LocationInterpolation.h"
 #include "Settings.h"
@@ -123,6 +124,11 @@ class ErgFile : public ErgFileBase
 
         ~ErgFile();             // delete the contents
 
+        std::weak_ptr<const char> lifetimeToken() const
+        {
+            return lifetimeToken_;
+        }
+
         void finalize();        // finish up ergfile creation
 
         void setFrom(ErgFile *f); // clone an existing workout
@@ -151,6 +157,8 @@ private:
         bool coalescedSections = false;
 
         QDate when;
+        std::shared_ptr<const char> lifetimeToken_ =
+            std::make_shared<const char>(0);
 
 public:
         void coalesceSections();

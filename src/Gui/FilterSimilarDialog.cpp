@@ -23,14 +23,13 @@
 
 #include "RideMetadata.h"
 #include "Utils.h"
-#include "MainWindow.h"
 #include "Colors.h"
 #include "StyledItemDelegates.h"
 
 
 FilterSimilarDialog::FilterSimilarDialog
-(Context *context, RideItem const * const rideItem, QWidget *parent)
-: QDialog(parent), context(context), rideItem(rideItem)
+(RideItem const *rideItem, QWidget *parent)
+: QDialog(parent)
 {
     setWindowTitle(tr("Filter for similar activities"));
     setMinimumSize(800 * dpiXFactor, 800 * dpiYFactor);
@@ -59,8 +58,8 @@ FilterSimilarDialog::FilterSimilarDialog
     tree->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     tree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
 
-    addFields();
-    addMetrics();
+    addFields(rideItem);
+    addMetrics(rideItem);
 
     preview = new QTextEdit();
     preview->setReadOnly(true);
@@ -94,13 +93,8 @@ FilterSimilarDialog::FilterSimilarDialog
     });
     connect(hideZeroed, &QCheckBox::toggled, this, &FilterSimilarDialog::updateFilterTree);
     connect(filterTreeEdit, &QLineEdit::textChanged, this, &FilterSimilarDialog::updateFilterTree);
-    connect(buttons, &QDialogButtonBox::accepted, this, [this, context]() {
-        QString filter = buildFilter();
-        if (! filter.isEmpty()) {
-            context->mainWindow->fillinFilter(filter);
-        }
-        accept();
-    });
+    connect(buttons, &QDialogButtonBox::accepted,
+            this, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, [this]() {
         reject();
     });
@@ -121,6 +115,14 @@ FilterSimilarDialog::FilterSimilarDialog
     mainLayout->addWidget(buttons);
 
     updateFilterTree();
+}
+
+
+QString
+FilterSimilarDialog::selectedFilter
+() const
+{
+    return buildFilter();
 }
 
 
@@ -226,7 +228,7 @@ FilterSimilarDialog::buildFilter
 
 void
 FilterSimilarDialog::addFields
-()
+(const RideItem *rideItem)
 {
     QFont bold = tree->font();
     bold.setWeight(QFont::Bold);
@@ -276,7 +278,7 @@ FilterSimilarDialog::addFields
 
 void
 FilterSimilarDialog::addMetrics
-()
+(const RideItem *rideItem)
 {
     QFont bold = tree->font();
     bold.setWeight(QFont::Bold);

@@ -3272,8 +3272,12 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### GUI-010: Other Calendar modal workflows retain mutable owner state
 
-- Status: OPEN
-- Code: `src/Charts/CalendarWindow.cpp`
+- Status: FIXED
+- Code: `src/Charts/CalendarWindow.cpp`,
+  `src/Charts/CalendarSeasonWorkflow.h`, `src/Core/Season.h`,
+  `src/Gui/AnalysisSidebar.cpp`, `src/Gui/FilterSimilarDialog.cpp`,
+  `src/Gui/ManualActivityWizard.cpp`, `src/Gui/ModalWorkflowGuard.h`,
+  `src/Gui/PlanWizards.cpp`, and `src/Train/ErgFile.h`
 - Impact: Manual Activity, Import/Export Plan, Filter Similar, activity
   linking, and season event/phase dialogs run nested event loops while retaining
   raw `Context`, `AthleteTab`, `RideItem`, `Season`, `Phase`, or `SeasonEvent`
@@ -3281,17 +3285,31 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   those objects. The add/import paths also restore `noSwitch` to `false`
   unconditionally, which can clear an outer navigation guard or modify a newly
   selected tab.
-- Partial resolution: Repeat Plan now guards CalendarWindow, Context, Athlete,
-  RideCache, and the original AthleteTab across the nested event loop, verifies
-  their topology before updating the calendar, and restores the original tab's
-  exact prior `noSwitch` value. The other listed workflows remain open.
-- Test: With a disposable athlete profile, destroy or replace each owner from a
-  modal callback and mutate the selected activity or season container before
-  acceptance. Require a clean cancellation, no write through stale pointers, and
-  exact restoration of the original tab's prior navigation state.
-- Fix direction: Snapshot value identities before each dialog, guard the complete
-  owner chain with `QPointer`, resolve mutable records again after acceptance,
-  and use an owner-aware RAII lease that restores the original `noSwitch` value.
+- Test-first evidence: The first focused build failed because the complete-owner,
+  active-tab, exact-affected-set, guarded-continuation, mutation-rejection,
+  committed-boundary, workout-lifetime, and current-season contracts did not
+  exist. A later regression reproduced the remaining pre-`exec()` gap: losing
+  an owner before installing the rejection hook returned `Accepted` instead of
+  `Rejected` after the nested loop began.
+- Resolution: A shared modal guard now tracks every QObject owner and validates
+  the active MainWindow/AthleteTab topology before commit. Dialogs reject on
+  owner destruction or source mutation, including owner loss immediately before
+  `exec()`. Navigation and temporary workout overrides use owner-aware leases
+  that restore only state they still own and never restore an expired workout.
+  Calendar operations snapshot and recheck the exact affected object set,
+  re-resolve stable activity identities after save-driven renames, preserve
+  committed outcomes as non-retryable, and guard continuations after nested
+  warnings. Season editing uses detached values, stable event UUIDs, unique
+  record resolution, unchanged-season snapshots, and the still-current season
+  identity. Link persistence saves every surviving affected item and reports an
+  incomplete save instead of silently skipping it.
+- Verification: All 37 modal-workflow cases pass normally and under strict
+  ASan/UBSan/LSan. The 9-case season parser and 27-case Repeat Plan contracts
+  pass both configurations. The complete production application links, and an
+  isolated 15-second offscreen event-loop smoke test with a disposable home
+  directory does not exit or crash. The expanded Windows, macOS, and Linux
+  workflow is clean under `actionlint` 1.7.12; hosted results are recorded after
+  push rather than assumed locally.
 
 ### GUI-011: Repeat Plan treated committed outcomes as retryable failures
 

@@ -36,6 +36,7 @@
 
 struct LinkEntry {
     QString reference;
+    QString path;
     bool planned;
     QString sport;
     QString iconFile;
@@ -56,7 +57,7 @@ class LinkDialog : public QDialog
     public:
         explicit LinkDialog(const LinkEntry &entry, QList<LinkEntry> &candidates, QWidget *parent = nullptr);
 
-        QString getSelectedReference() const;
+        bool getSelectedEntry(LinkEntry &selected) const;
 
     private:
         QStackedWidget *candidateStack;

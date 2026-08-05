@@ -9,16 +9,27 @@ on:
       - src/Core/LinkedActivitySaveJournal.*
       - src/Core/PlannedActivityFileStager.*
       - src/Core/RideCache*.*
+      - src/Core/Season.*
+      - src/Core/Seasons.*
+      - src/Charts/CalendarSeasonWorkflow.h
+      - src/Charts/CalendarWindow.*
       - src/FileIO/AnchoredFileSystem.*
       - src/FileIO/AtomicFileWriter.*
       - src/FileIO/JsonRideFile.*
       - src/FileIO/RideFile*.*
       - src/Gui/SaveDialogs.*
+      - src/Gui/ModalWorkflowGuard.h
+      - src/Gui/AnalysisSidebar.*
+      - src/Gui/FilterSimilarDialog.*
+      - src/Gui/ManualActivityWizard.*
+      - src/Gui/PlanWizards.*
       - src/Metrics/BlinnSolver.*
       - src/Planning/PlanBundle*.*
       - src/Planning/PlanReplacementJournal.*
       - unittests/Core/linkedActivitySaveCleanup/**
       - unittests/Core/rideCacheRemoval/**
+      - unittests/Core/seasonParser/**
+      - unittests/Gui/calendarModalWorkflow/**
       - unittests/FileIO/atomicActivitySave/**
       - unittests/FileIO/anchoredFilesystem/**
       - unittests/Planning/**
@@ -30,16 +41,27 @@ on:
       - src/Core/LinkedActivitySaveJournal.*
       - src/Core/PlannedActivityFileStager.*
       - src/Core/RideCache*.*
+      - src/Core/Season.*
+      - src/Core/Seasons.*
+      - src/Charts/CalendarSeasonWorkflow.h
+      - src/Charts/CalendarWindow.*
       - src/FileIO/AnchoredFileSystem.*
       - src/FileIO/AtomicFileWriter.*
       - src/FileIO/JsonRideFile.*
       - src/FileIO/RideFile*.*
       - src/Gui/SaveDialogs.*
+      - src/Gui/ModalWorkflowGuard.h
+      - src/Gui/AnalysisSidebar.*
+      - src/Gui/FilterSimilarDialog.*
+      - src/Gui/ManualActivityWizard.*
+      - src/Gui/PlanWizards.*
       - src/Metrics/BlinnSolver.*
       - src/Planning/PlanBundle*.*
       - src/Planning/PlanReplacementJournal.*
       - unittests/Core/linkedActivitySaveCleanup/**
       - unittests/Core/rideCacheRemoval/**
+      - unittests/Core/seasonParser/**
+      - unittests/Gui/calendarModalWorkflow/**
       - unittests/FileIO/atomicActivitySave/**
       - unittests/FileIO/anchoredFilesystem/**
       - unittests/Planning/**
@@ -111,9 +133,20 @@ jobs:
           Set-Location build-plan-bundle-import
           qmake ../unittests/Planning/planBundleImportJournal/planBundleImportJournal.pro
           nmake /NOLOGO
+          Set-Location ..
+          New-Item -ItemType Directory build-calendar-modal | Out-Null
+          Set-Location build-calendar-modal
+          qmake ../unittests/Gui/calendarModalWorkflow/calendarModalWorkflow.pro
+          nmake /NOLOGO
+          Set-Location ..
+          New-Item -ItemType Directory build-season-parser | Out-Null
+          Set-Location build-season-parser
+          qmake ../unittests/Core/seasonParser/seasonParser.pro
+          nmake /NOLOGO
       - name: Run native activity tests
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $env:QT_QPA_PLATFORM = 'offscreen'
           & build-ridecache-removal/release/tst_rideCacheRemoval.exe `
             -silent -maxwarnings 0 `
@@ -140,11 +173,23 @@ jobs:
             -o 'windows-plan-bundle-import.txt,txt'
           $planBundleStatus = $LASTEXITCODE
           Get-Content windows-plan-bundle-import.txt
+          & build-calendar-modal/release/tst_calendarModalWorkflow.exe `
+            -silent -maxwarnings 0 `
+            -o 'windows-calendar-modal.txt,txt'
+          $calendarModalStatus = $LASTEXITCODE
+          Get-Content windows-calendar-modal.txt
+          & build-season-parser/release/tst_seasonParser.exe `
+            -silent -maxwarnings 0 `
+            -o 'windows-season-parser.txt,txt'
+          $seasonParserStatus = $LASTEXITCODE
+          Get-Content windows-season-parser.txt
           if ($removalStatus -ne 0) { exit $removalStatus }
           if ($anchoredStatus -ne 0) { exit $anchoredStatus }
           if ($linkedSaveStatus -ne 0) { exit $linkedSaveStatus }
           if ($planReplacementStatus -ne 0) { exit $planReplacementStatus }
-          exit $planBundleStatus
+          if ($planBundleStatus -ne 0) { exit $planBundleStatus }
+          if ($calendarModalStatus -ne 0) { exit $calendarModalStatus }
+          exit $seasonParserStatus
 
   macos:
     runs-on: macos-15
@@ -194,6 +239,16 @@ jobs:
           qmake ../unittests/Planning/planBundleImportJournal/planBundleImportJournal.pro
           make -j3
           cd ..
+          mkdir build-calendar-modal
+          cd build-calendar-modal
+          qmake ../unittests/Gui/calendarModalWorkflow/calendarModalWorkflow.pro
+          make -j3
+          cd ..
+          mkdir build-season-parser
+          cd build-season-parser
+          qmake ../unittests/Core/seasonParser/seasonParser.pro
+          make -j3
+          cd ..
           mkdir build-atomic-activity-save
           cd build-atomic-activity-save
           qmake ../unittests/FileIO/atomicActivitySave/atomicActivitySave.pro \
@@ -235,6 +290,18 @@ jobs:
             -silent -maxwarnings 0 \
             -o macos-plan-bundle-import.txt,txt || plan_bundle_status=$?
           cat macos-plan-bundle-import.txt
+          calendar_modal_status=0
+          QT_QPA_PLATFORM=offscreen \
+            build-calendar-modal/tst_calendarModalWorkflow.app/Contents/MacOS/tst_calendarModalWorkflow \
+            -silent -maxwarnings 0 \
+            -o macos-calendar-modal.txt,txt || calendar_modal_status=$?
+          cat macos-calendar-modal.txt
+          season_parser_status=0
+          QT_QPA_PLATFORM=offscreen \
+            build-season-parser/tst_seasonParser.app/Contents/MacOS/tst_seasonParser \
+            -silent -maxwarnings 0 \
+            -o macos-season-parser.txt,txt || season_parser_status=$?
+          cat macos-season-parser.txt
           atomic_status=0
           QT_QPA_PLATFORM=offscreen \
             build-atomic-activity-save/tst_atomicActivitySave.app/Contents/MacOS/tst_atomicActivitySave \
@@ -246,4 +313,42 @@ jobs:
           if [ "$linked_save_status" -ne 0 ]; then exit "$linked_save_status"; fi
           if [ "$plan_replacement_status" -ne 0 ]; then exit "$plan_replacement_status"; fi
           if [ "$plan_bundle_status" -ne 0 ]; then exit "$plan_bundle_status"; fi
+          if [ "$calendar_modal_status" -ne 0 ]; then exit "$calendar_modal_status"; fi
+          if [ "$season_parser_status" -ne 0 ]; then exit "$season_parser_status"; fi
           exit "$atomic_status"
+
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v6
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.3
+          arch: linux_gcc_64
+          modules: qt5compat
+          cache: true
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libacl1-dev
+      - name: Build GUI-010 regression tests
+        run: |
+          set -euo pipefail
+          printf 'CONFIG += release\n' > src/gcconfig.pri
+          cp unittests/unittests.pri.in unittests/unittests.pri
+          mkdir build-calendar-modal build-season-parser
+          cd build-calendar-modal
+          qmake ../unittests/Gui/calendarModalWorkflow/calendarModalWorkflow.pro
+          make -j2
+          cd ../build-season-parser
+          qmake ../unittests/Core/seasonParser/seasonParser.pro
+          make -j2
+      - name: Run GUI-010 regression tests
+        run: |
+          set -euo pipefail
+          QT_QPA_PLATFORM=offscreen \
+            build-calendar-modal/tst_calendarModalWorkflow \
+            -silent -maxwarnings 0
+          QT_QPA_PLATFORM=offscreen \
+            build-season-parser/tst_seasonParser \
+            -silent -maxwarnings 0

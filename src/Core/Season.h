@@ -35,7 +35,7 @@ class SeasonEvent
     public:
         static QStringList priorityList();
 
-        SeasonEvent(QString name, QDate date, int priority=0, QString description="", QString id="") : name(name), date(date), priority(priority), description(description), id(id) {}
+        SeasonEvent(QString name, QDate date, int priority=0, QString description="", QString id="") : name(name), date(date), priority(priority), description(description), id(id.isEmpty() ? QUuid::createUuid().toString() : id) {}
 
         QString name;
         QDate date;
@@ -202,6 +202,7 @@ class Season
         static bool LessThanForStarts(const Season &a, const Season &b);
 
         QVector<int> &load() { return _load; }
+        const QVector<int> &load() const { return _load; }
 
         QList<Phase> phases;
         QList<SeasonEvent> events;
