@@ -4857,20 +4857,43 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DB-001: VideoSync import uses video-table helpers
 
-- Status: OPEN
-- Code: `src/Train/TrainDB.cpp:1065`
+- Status: FIXED
+- Code: `src/Train/TrainDB.cpp` and
+  `unittests/Train/trainDbVersionSafety/testTrainDbVersionSafety.cpp`
 - Impact: Replace can delete a same-path video and update can skip an existing
   videosync row.
-- Test: Cover insert/update/replace with identical paths in both tables.
-- Fix direction: Use videosync helpers or one SQLite upsert.
+- Test-first evidence: The original VideoSync replace path called the video
+  table helpers. Replacing a VideoSync that shared its path with a video
+  deleted the video row, and an update could test the wrong table before
+  deciding whether to run its SQL update.
+- Resolution: VideoSync replace and update decisions use only
+  `deleteVideoSync()` and `hasVideoSync()`. The regression matrix covers
+  insert, insert-or-update, replace, and an identical path present in both the
+  `video` and `videosync` tables.
+- Verification: The complete registered Train database suite passes 35/35
+  normally and the same 35/35 under ASan/UBSan/LSan and ThreadSanitizer. The
+  same-path test proves the VideoSync row changes while the video row and its
+  metadata remain intact.
+- Residual: Video and VideoSync rows intentionally remain independent even when
+  their path strings are identical.
 
 ### DB-002: Workout update does not update average power
 
-- Status: OPEN
-- Code: `src/Train/TrainDB.cpp:1027`
+- Status: FIXED
+- Code: `src/Train/TrainDB.cpp` and
+  `unittests/Train/trainDbVersionSafety/testTrainDbVersionSafety.cpp`
 - Impact: Edited workouts retain stale `erg_avg_power` metadata.
-- Test: Insert, change power, update, and query the stored average.
-- Fix direction: Assign the bound `:erg_avg_power` value.
+- Test-first evidence: Inserting a workout at 175 watts and updating it to 242
+  watts still returned 175 from SQLite because the update assigned the column
+  to itself.
+- Resolution: The update statement assigns `erg_avg_power` from the existing
+  bound `:erg_avg_power` parameter, consistently with the other computed
+  workout fields.
+- Verification: The production database regression inserts, modifies, updates,
+  and queries the row and now observes 242 watts. The complete suite passes
+  35/35 normally, under ASan/UBSan/LSan, and under ThreadSanitizer.
+- Residual: Average power remains whatever the parsed `ErgFileBase` supplies;
+  this fix does not change workout parsing or rounding policy.
 
 ### DB-003: Training-library transaction failures are ignored
 
