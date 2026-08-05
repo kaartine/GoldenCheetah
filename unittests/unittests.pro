@@ -7,6 +7,7 @@ exists(unittests.pri) {
 equals(GC_UNITTESTS, active) {
 	SUBDIRS += Build/ciTestRunner \
 			   Build/publicReleaseCredentials \
+			   Build/linkerSectionFlags \
 			   Core/athleteMigrationSafety \
 			   Core/sessionBoundaries \
 			   Core/credentialSettings \

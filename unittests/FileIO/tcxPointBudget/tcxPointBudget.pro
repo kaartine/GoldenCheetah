@@ -37,8 +37,7 @@ INCLUDEPATH += ../../../src \
                ../../../qwt/src \
                ../../../contrib/qzip
 
-QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-QMAKE_LFLAGS += -Wl,--gc-sections
+include(../../section-gc.prf)
 LIBS += -lz
 
 sanitize:!msvc {

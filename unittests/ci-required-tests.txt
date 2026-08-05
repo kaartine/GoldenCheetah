@@ -1,6 +1,7 @@
 # platform kind project
 all aux Build/ciTestRunner
 all aux Build/publicReleaseCredentials
+all aux Build/linkerSectionFlags
 all qt Core/athleteMigrationSafety
 all qt Core/sessionBoundaries
 all qt Core/credentialSettings

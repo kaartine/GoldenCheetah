@@ -1,0 +1,19 @@
+!isEmpty(GC_SECTION_LINKER_OVERRIDE) {
+    GC_SECTION_LINKER = $$GC_SECTION_LINKER_OVERRIDE
+} else:macx {
+    GC_SECTION_LINKER = apple
+} else:msvc {
+    GC_SECTION_LINKER = msvc
+} else {
+    GC_SECTION_LINKER = gnu
+}
+
+!equals(GC_SECTION_LINKER, msvc) {
+    QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
+}
+
+equals(GC_SECTION_LINKER, apple) {
+    QMAKE_LFLAGS += -Wl,-dead_strip
+} else:equals(GC_SECTION_LINKER, gnu) {
+    QMAKE_LFLAGS += -Wl,--gc-sections
+}

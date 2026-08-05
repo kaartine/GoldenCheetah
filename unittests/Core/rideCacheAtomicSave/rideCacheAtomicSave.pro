@@ -19,8 +19,7 @@ INCLUDEPATH += ../../../src \
                ../../../src/Core \
                ../../../src/FileIO
 
-QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-QMAKE_LFLAGS += -Wl,--gc-sections
+include(../../section-gc.prf)
 win32:LIBS += -ladvapi32
 
 sanitize:!msvc {

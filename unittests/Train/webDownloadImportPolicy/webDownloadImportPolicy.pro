@@ -16,8 +16,7 @@ HEADERS = ../../../src/Train/WebDownloadImportPolicy.h
 INCLUDEPATH += ../../../src \
                ../../../src/Train
 
-QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-QMAKE_LFLAGS += -Wl,--gc-sections
+include(../../section-gc.prf)
 
 sanitize:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \
