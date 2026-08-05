@@ -21,6 +21,7 @@ INCLUDEPATH += ../../../src \
 
 QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
 QMAKE_LFLAGS += -Wl,--gc-sections
+win32:LIBS += -ladvapi32
 
 sanitize:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

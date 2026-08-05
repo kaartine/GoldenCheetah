@@ -11,6 +11,7 @@ include(../../unittests.pri)
 
 INCLUDEPATH += ../../../contrib/qtsolutions
 LIBS += -lz
+win32:LIBS += -ladvapi32
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug
