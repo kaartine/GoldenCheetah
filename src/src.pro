@@ -17,6 +17,19 @@ include(gcconfig.pri)
 include(../contrib/qtkeychain/qtkeychain.pri)
 INCLUDEPATH += ../contrib/qtkeychain
 
+unix {
+    GC_BUILD_SOURCE_REVISION_VALUE = $$(GC_SOURCE_REVISION)
+    isEmpty(GC_BUILD_SOURCE_REVISION_VALUE) {
+        GC_BUILD_SOURCE_REVISION_VALUE = $$system(git -C $$shell_quote($$PWD/..) rev-parse --verify HEAD 2>/dev/null)
+    }
+    !isEmpty(GC_BUILD_SOURCE_REVISION_VALUE) {
+        !contains(GC_BUILD_SOURCE_REVISION_VALUE, ^[0-9a-f]{40}$) {
+            error("GC_SOURCE_REVISION must be a full lowercase Git commit hash")
+        }
+        DEFINES += GC_BUILD_SOURCE_REVISION=\\\"$${GC_BUILD_SOURCE_REVISION_VALUE}\\\"
+    }
+}
+
 # You can also define your own local source to add to build
 HEADERS += $${LOCALHEADERS}
 SOURCES += $${LOCALSOURCES}

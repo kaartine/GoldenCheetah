@@ -14,6 +14,11 @@ echo "Checking GoldenCheetah.app can execute"
 ./GoldenCheetah --version
 STRAVA_OAUTH_STATUS=$(require_strava_oauth_build ./GoldenCheetah)
 echo "$STRAVA_OAUTH_STATUS"
+BUILD_MANIFEST=$(mktemp)
+trap 'rm -f -- "$BUILD_MANIFEST"' EXIT
+create_appimage_build_manifest \
+    "$(cd .. && pwd -P)" ./GoldenCheetah \
+    "$STRAVA_OAUTH_STATUS" "$BUILD_MANIFEST"
 
 ### Create a clean AppDir and start populating
 rm -rf appdir
@@ -21,6 +26,7 @@ mkdir -p appdir
 
 # Executable
 cp GoldenCheetah appdir
+install_appimage_build_manifest "$BUILD_MANIFEST" appdir
 
 # Desktop file
 cat >appdir/GoldenCheetah.desktop <<EOF
@@ -93,6 +99,9 @@ echo "$KEYCHAIN_RUNTIME_STATUS"
 OFFSCREEN_RUNTIME_STATUS=$(
     require_qt_offscreen_appimage "./$FINAL_NAME")
 echo "$OFFSCREEN_RUNTIME_STATUS"
+finalize_appimage_manifest \
+    "./$FINAL_NAME" "$BUILD_MANIFEST" "./$FINAL_NAME.manifest"
+verify_appimage_manifest "./$FINAL_NAME" "./$FINAL_NAME.manifest"
 
 ### Generate version file with SHA
 run_packaging_appimage "./$FINAL_NAME" --version \

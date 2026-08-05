@@ -69,6 +69,16 @@ declare -F install_embedded_python >/dev/null ||
     fail "install_embedded_python helper is missing"
 declare -F write_source_revision >/dev/null ||
     fail "write_source_revision helper is missing"
+declare -F create_appimage_build_manifest >/dev/null ||
+    fail "create_appimage_build_manifest helper is missing"
+declare -F install_appimage_build_manifest >/dev/null ||
+    fail "install_appimage_build_manifest helper is missing"
+declare -F finalize_appimage_manifest >/dev/null ||
+    fail "finalize_appimage_manifest helper is missing"
+declare -F verify_appimage_manifest >/dev/null ||
+    fail "verify_appimage_manifest helper is missing"
+declare -F promote_appimage_release >/dev/null ||
+    fail "promote_appimage_release helper is missing"
 declare -F strava_oauth_build_status >/dev/null ||
     fail "strava_oauth_build_status helper is missing"
 declare -F require_strava_oauth_build >/dev/null ||
@@ -162,6 +172,257 @@ fi
 if (cd "$TEMP_DIR" && unset GC_SOURCE_REVISION &&
     write_source_revision missing 2>/dev/null); then
     fail "exported source without a revision was accepted"
+fi
+
+PROVENANCE_REPO="$TEMP_DIR/provenance-repo"
+mkdir -p "$PROVENANCE_REPO"
+git -C "$PROVENANCE_REPO" init -q
+git -C "$PROVENANCE_REPO" config user.name "Packaging Test"
+git -C "$PROVENANCE_REPO" config user.email "packaging@example.invalid"
+printf 'revision a\n' >"$PROVENANCE_REPO/source.txt"
+git -C "$PROVENANCE_REPO" add source.txt
+git -C "$PROVENANCE_REPO" commit -q -m a
+REVISION_A=$(git -C "$PROVENANCE_REPO" rev-parse HEAD)
+printf 'revision b\n' >"$PROVENANCE_REPO/source.txt"
+git -C "$PROVENANCE_REPO" commit -q -am b
+REVISION_B=$(git -C "$PROVENANCE_REPO" rev-parse HEAD)
+
+make_provenance_probe()
+{
+    local output=$1
+    local revision=$2
+    cat >"$output" <<EOF
+#!/bin/sh
+test "\${1:-}" = "--goldencheetah-build-provenance" || exit 64
+cat <<REPORT
+goldencheetah_build_provenance=1
+application=GoldenCheetah
+source_revision=$revision
+compiler_family=gcc
+compiler_version=14.2.0
+qt_version=6.8.3
+cxx_standard=201703
+REPORT
+EOF
+    chmod +x "$output"
+}
+
+make_provenance_probe "$TEMP_DIR/provenance-a" "$REVISION_A"
+make_provenance_probe "$TEMP_DIR/provenance-b" "$REVISION_B"
+make_provenance_probe "$TEMP_DIR/provenance-unknown" \
+    0000000000000000000000000000000000000000
+printf '#!/bin/sh\nprintf "malformed\\n"\n' \
+    >"$TEMP_DIR/provenance-malformed"
+chmod +x "$TEMP_DIR/provenance-malformed"
+
+if GC_TEST_BUILD_PROVENANCE_ENTRYPOINT=true \
+    create_appimage_build_manifest \
+        "$PROVENANCE_REPO" "$TEMP_DIR/provenance-a" \
+        "Strava OAuth: configured" "$TEMP_DIR/mismatch.manifest" \
+        >/dev/null 2>&1; then
+    fail "binary from revision A was accepted for revision B"
+fi
+if GC_SOURCE_REVISION=$REVISION_A \
+   GC_TEST_BUILD_PROVENANCE_ENTRYPOINT=true \
+    create_appimage_build_manifest \
+        "$PROVENANCE_REPO" "$TEMP_DIR/provenance-b" \
+        "Strava OAuth: configured" "$TEMP_DIR/wrong-head.manifest" \
+        >/dev/null 2>&1; then
+    fail "a non-HEAD source revision was accepted"
+fi
+if GC_TEST_BUILD_PROVENANCE_ENTRYPOINT=true \
+    create_appimage_build_manifest \
+        "$PROVENANCE_REPO" "$TEMP_DIR/provenance-unknown" \
+        "Strava OAuth: configured" "$TEMP_DIR/unknown.manifest" \
+        >/dev/null 2>&1; then
+    fail "a binary claiming an unknown revision was accepted"
+fi
+if GC_TEST_BUILD_PROVENANCE_ENTRYPOINT=true \
+    create_appimage_build_manifest \
+        "$PROVENANCE_REPO" "$TEMP_DIR/provenance-malformed" \
+        "Strava OAuth: configured" "$TEMP_DIR/malformed.manifest" \
+        >/dev/null 2>&1; then
+    fail "a malformed binary provenance report was accepted"
+fi
+
+printf 'dirty\n' >>"$PROVENANCE_REPO/source.txt"
+if GC_TEST_BUILD_PROVENANCE_ENTRYPOINT=true \
+    create_appimage_build_manifest \
+        "$PROVENANCE_REPO" "$TEMP_DIR/provenance-b" \
+        "Strava OAuth: configured" "$TEMP_DIR/dirty.manifest" \
+        >/dev/null 2>&1; then
+    fail "a dirty tracked source tree was accepted"
+fi
+git -C "$PROVENANCE_REPO" checkout -q -- source.txt
+printf 'untracked\n' >"$PROVENANCE_REPO/untracked.txt"
+if GC_TEST_BUILD_PROVENANCE_ENTRYPOINT=true \
+    create_appimage_build_manifest \
+        "$PROVENANCE_REPO" "$TEMP_DIR/provenance-b" \
+        "Strava OAuth: configured" "$TEMP_DIR/untracked.manifest" \
+        >/dev/null 2>&1; then
+    fail "a dirty untracked source tree was accepted"
+fi
+rm "$PROVENANCE_REPO/untracked.txt"
+
+BASE_MANIFEST="$TEMP_DIR/build.manifest"
+GC_TEST_BUILD_PROVENANCE_ENTRYPOINT=true \
+    create_appimage_build_manifest \
+        "$PROVENANCE_REPO" "$TEMP_DIR/provenance-b" \
+        "Strava OAuth: configured" "$BASE_MANIFEST"
+grep -Fxq 'goldencheetah_appimage_manifest=1' "$BASE_MANIFEST" ||
+    fail "manifest version is missing"
+grep -Fxq "source_revision=$REVISION_B" "$BASE_MANIFEST" ||
+    fail "manifest source revision is wrong"
+grep -Fxq "raw_elf_sha256=$(sha256sum "$TEMP_DIR/provenance-b" | cut -d ' ' -f 1)" \
+    "$BASE_MANIFEST" || fail "manifest raw ELF hash is wrong"
+grep -Fxq 'toolchain=gcc-14.2.0_qt-6.8.3_cxx-201703' \
+    "$BASE_MANIFEST" || fail "manifest toolchain identity is wrong"
+grep -Fxq 'strava_oauth_configured=true' "$BASE_MANIFEST" ||
+    fail "manifest OAuth status is not boolean true"
+
+UNCONFIGURED_MANIFEST="$TEMP_DIR/unconfigured-build.manifest"
+GC_TEST_BUILD_PROVENANCE_ENTRYPOINT=true \
+    create_appimage_build_manifest \
+        "$PROVENANCE_REPO" "$TEMP_DIR/provenance-b" \
+        "Strava OAuth: unavailable (credentials not configured)" \
+        "$UNCONFIGURED_MANIFEST"
+grep -Fxq 'strava_oauth_configured=false' "$UNCONFIGURED_MANIFEST" ||
+    fail "manifest OAuth status is not boolean false"
+if GC_TEST_BUILD_PROVENANCE_ENTRYPOINT=true \
+    create_appimage_build_manifest \
+        "$PROVENANCE_REPO" "$TEMP_DIR/provenance-b" \
+        "Strava OAuth: unknown" "$TEMP_DIR/unknown-oauth.manifest" \
+        >/dev/null 2>&1; then
+    fail "an unknown OAuth status was accepted"
+fi
+
+MANIFEST_APPDIR="$TEMP_DIR/manifest-appdir"
+install_appimage_build_manifest "$BASE_MANIFEST" "$MANIFEST_APPDIR"
+cmp "$BASE_MANIFEST" \
+    "$MANIFEST_APPDIR/usr/share/goldencheetah/build-manifest" ||
+    fail "embedded build manifest changed during installation"
+
+FAKE_APPIMAGE="$TEMP_DIR/manifest.AppImage"
+cat >"$FAKE_APPIMAGE" <<EOF
+#!/bin/sh
+test "\${1:-}" = "--appimage-extract" || exit 64
+mkdir -p squashfs-root/usr/share/goldencheetah
+cp "$BASE_MANIFEST" squashfs-root/usr/share/goldencheetah/build-manifest
+EOF
+chmod +x "$FAKE_APPIMAGE"
+SIDECAR_MANIFEST="$TEMP_DIR/manifest.AppImage.manifest"
+finalize_appimage_manifest \
+    "$FAKE_APPIMAGE" "$BASE_MANIFEST" "$SIDECAR_MANIFEST"
+[ "$(stat -c '%a' "$SIDECAR_MANIFEST")" = 600 ] ||
+    fail "AppImage sidecar manifest is not mode 0600"
+grep -Fxq "appimage_sha256=$(sha256sum "$FAKE_APPIMAGE" | cut -d ' ' -f 1)" \
+    "$SIDECAR_MANIFEST" || fail "AppImage hash is missing from sidecar"
+GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+    verify_appimage_manifest "$FAKE_APPIMAGE" "$SIDECAR_MANIFEST"
+
+RELEASE_LINK="$TEMP_DIR/GoldenCheetah-release"
+GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+    promote_appimage_release \
+        "$FAKE_APPIMAGE" "$SIDECAR_MANIFEST" "$RELEASE_LINK" >/dev/null
+[ -L "$RELEASE_LINK" ] || fail "the release pointer is not a symlink"
+cmp -s "$FAKE_APPIMAGE" "$RELEASE_LINK/latest.AppImage" ||
+    fail "the first promoted image is not latest"
+cmp -s "$FAKE_APPIMAGE" "$RELEASE_LINK/previous.AppImage" ||
+    fail "the initial previous image is not valid"
+GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+    verify_appimage_manifest \
+        "$RELEASE_LINK/latest.AppImage" \
+        "$RELEASE_LINK/latest.AppImage.manifest"
+GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+    verify_appimage_manifest \
+        "$RELEASE_LINK/previous.AppImage" \
+        "$RELEASE_LINK/previous.AppImage.manifest"
+FIRST_RELEASE_TARGET=$(readlink "$RELEASE_LINK")
+
+SECOND_APPIMAGE="$TEMP_DIR/manifest-second.AppImage"
+cp "$FAKE_APPIMAGE" "$SECOND_APPIMAGE"
+printf '# second immutable image\n' >>"$SECOND_APPIMAGE"
+chmod +x "$SECOND_APPIMAGE"
+SECOND_MANIFEST="$SECOND_APPIMAGE.manifest"
+finalize_appimage_manifest \
+    "$SECOND_APPIMAGE" "$BASE_MANIFEST" "$SECOND_MANIFEST"
+GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+    promote_appimage_release \
+        "$SECOND_APPIMAGE" "$SECOND_MANIFEST" "$RELEASE_LINK" >/dev/null
+[ "$(readlink "$RELEASE_LINK")" != "$FIRST_RELEASE_TARGET" ] ||
+    fail "release promotion did not rotate the generation pointer"
+cmp -s "$SECOND_APPIMAGE" "$RELEASE_LINK/latest.AppImage" ||
+    fail "the second promoted image is not latest"
+cmp -s "$FAKE_APPIMAGE" "$RELEASE_LINK/previous.AppImage" ||
+    fail "the former latest image did not become previous"
+GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+    verify_appimage_manifest \
+        "$RELEASE_LINK/latest.AppImage" \
+        "$RELEASE_LINK/latest.AppImage.manifest"
+GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+    verify_appimage_manifest \
+        "$RELEASE_LINK/previous.AppImage" \
+        "$RELEASE_LINK/previous.AppImage.manifest"
+
+PUBLISHED_TARGET=$(readlink "$RELEASE_LINK")
+THIRD_APPIMAGE="$TEMP_DIR/manifest-third.AppImage"
+cp "$FAKE_APPIMAGE" "$THIRD_APPIMAGE"
+printf '# third immutable image\n' >>"$THIRD_APPIMAGE"
+chmod +x "$THIRD_APPIMAGE"
+THIRD_MANIFEST="$THIRD_APPIMAGE.manifest"
+finalize_appimage_manifest \
+    "$THIRD_APPIMAGE" "$BASE_MANIFEST" "$THIRD_MANIFEST"
+FAILING_SYNC_DIR="$TEMP_DIR/failing-sync"
+mkdir "$FAILING_SYNC_DIR"
+REAL_SYNC=$(command -v sync)
+cat >"$FAILING_SYNC_DIR/sync" <<EOF
+#!/bin/sh
+count=0
+test ! -f "$TEMP_DIR/sync-count" || count=\$(cat "$TEMP_DIR/sync-count")
+count=\$((count + 1))
+printf '%s\\n' "\$count" >"$TEMP_DIR/sync-count"
+test "\$count" -ne 2 || exit 74
+exec "$REAL_SYNC" "\$@"
+EOF
+chmod +x "$FAILING_SYNC_DIR/sync"
+if PATH="$FAILING_SYNC_DIR:$PATH" \
+   GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+    promote_appimage_release \
+        "$THIRD_APPIMAGE" "$THIRD_MANIFEST" "$RELEASE_LINK" \
+        >/dev/null 2>&1; then
+    fail "promotion reported success after a post-publication sync failure"
+fi
+[ "$(readlink "$RELEASE_LINK")" = "$PUBLISHED_TARGET" ] ||
+    fail "late promotion failure did not restore the previous release"
+cmp -s "$SECOND_APPIMAGE" "$RELEASE_LINK/latest.AppImage" ||
+    fail "late promotion failure changed latest"
+cmp -s "$FAKE_APPIMAGE" "$RELEASE_LINK/previous.AppImage" ||
+    fail "late promotion failure changed previous"
+
+printf '# invalid after finalization\n' >>"$SECOND_APPIMAGE"
+if GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+    promote_appimage_release \
+        "$SECOND_APPIMAGE" "$SECOND_MANIFEST" "$RELEASE_LINK" \
+        >/dev/null 2>&1; then
+    fail "a tampered image was promoted"
+fi
+[ "$(readlink "$RELEASE_LINK")" = "$PUBLISHED_TARGET" ] ||
+    fail "failed promotion changed the active release"
+
+cp "$SIDECAR_MANIFEST" "$TEMP_DIR/tampered-sidecar"
+sed -i 's/^source_revision=./source_revision=f/' \
+    "$TEMP_DIR/tampered-sidecar"
+if GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+    verify_appimage_manifest \
+        "$FAKE_APPIMAGE" "$TEMP_DIR/tampered-sidecar" \
+        >/dev/null 2>&1; then
+    fail "a tampered sidecar manifest was accepted"
+fi
+printf '# tampered\n' >>"$FAKE_APPIMAGE"
+if GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+    verify_appimage_manifest "$FAKE_APPIMAGE" "$SIDECAR_MANIFEST" \
+        >/dev/null 2>&1; then
+    fail "a modified AppImage was accepted"
 fi
 
 cat >"$TEMP_DIR/status-probe.c" <<'EOF'
@@ -935,7 +1196,16 @@ for packager in "$LOCAL_PACKAGER" "$CI_PACKAGER" "$DEV_PACKAGER"; do
         'install_qt_offscreen_plugin'
     assert_contains "$packager" \
         'require_qt_offscreen_appimage'
+    assert_contains "$packager" \
+        'create_appimage_build_manifest'
+    assert_contains "$packager" \
+        'install_appimage_build_manifest'
+    assert_contains "$packager" \
+        'finalize_appimage_manifest'
+    assert_contains "$packager" \
+        'verify_appimage_manifest'
 done
+assert_contains "$DEV_PACKAGER" 'promote_appimage_release'
 
 if grep -Fq 'python3.7' "$LOCAL_PACKAGER"; then
     fail "local AppImage packaging still embeds unsupported Python 3.7"
@@ -949,6 +1219,8 @@ assert_contains "$DEV_CONFIG" \
     '# DEFINES += GC_STRAVA_CLIENT_SECRET=\\\"your_client_secret\\\"'
 assert_contains "$MAIN_SOURCE" \
     '--goldencheetah-linux-keychain-status'
+assert_contains "$MAIN_SOURCE" \
+    '--goldencheetah-build-provenance'
 assert_contains "$MAIN_SOURCE" \
     'configureBundledLinuxRuntime'
 assert_contains "$LIBSECRET_SOURCE" \

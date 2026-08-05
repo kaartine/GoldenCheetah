@@ -71,6 +71,48 @@
 #pragma warning(disable:4996)
 #endif
 
+#ifndef GC_BUILD_SOURCE_REVISION
+#define GC_BUILD_SOURCE_REVISION "0000000000000000000000000000000000000000"
+#endif
+
+#define GC_STRINGIFY_DETAIL(value) #value
+#define GC_STRINGIFY(value) GC_STRINGIFY_DETAIL(value)
+
+namespace {
+
+QByteArray buildProvenanceReport()
+{
+#if defined(__clang__)
+    const QByteArray compilerFamily = QByteArrayLiteral("clang");
+    const QByteArray compilerVersion = QByteArrayLiteral(
+        GC_STRINGIFY(__clang_major__) "." GC_STRINGIFY(__clang_minor__) "."
+        GC_STRINGIFY(__clang_patchlevel__));
+#elif defined(__GNUC__)
+    const QByteArray compilerFamily = QByteArrayLiteral("gcc");
+    const QByteArray compilerVersion = QByteArrayLiteral(
+        GC_STRINGIFY(__GNUC__) "." GC_STRINGIFY(__GNUC_MINOR__) "."
+        GC_STRINGIFY(__GNUC_PATCHLEVEL__));
+#else
+    const QByteArray compilerFamily = QByteArrayLiteral("unknown");
+    const QByteArray compilerVersion = QByteArrayLiteral("0.0.0");
+#endif
+
+    QByteArray report = QByteArrayLiteral(
+        "goldencheetah_build_provenance=1\n"
+        "application=GoldenCheetah\n"
+        "source_revision=" GC_BUILD_SOURCE_REVISION "\n"
+        "compiler_family=");
+    report += compilerFamily;
+    report += QByteArrayLiteral("\ncompiler_version=");
+    report += compilerVersion;
+    report += QByteArrayLiteral("\nqt_version=" QT_VERSION_STR "\ncxx_standard=");
+    report += QByteArray::number(static_cast<qulonglong>(__cplusplus));
+    report += '\n';
+    return report;
+}
+
+} // namespace
+
 //
 // bootstrap state
 //
@@ -250,7 +292,10 @@ main(int argc, char *argv[])
         const bool keychainStatus =
             argument == QByteArrayLiteral(
                 "--goldencheetah-linux-keychain-status");
-        if (!buildStatus && !keychainStatus) continue;
+        const bool buildProvenance =
+            argument == QByteArrayLiteral(
+                "--goldencheetah-build-provenance");
+        if (!buildStatus && !keychainStatus && !buildProvenance) continue;
         if (argc != 2) return EXIT_FAILURE;
 
         QByteArray report;
@@ -258,7 +303,7 @@ main(int argc, char *argv[])
             report = StravaOAuthPolicy::buildStatusReport(
                 QStringLiteral(GC_STRAVA_CLIENT_ID),
                 QStringLiteral(GC_STRAVA_CLIENT_SECRET));
-        } else {
+        } else if (keychainStatus) {
             QCoreApplication statusApplication(argc, argv);
             CredentialStoreQtKeychainDetail::
                 configureBundledLinuxRuntime(
@@ -267,8 +312,10 @@ main(int argc, char *argv[])
                 linuxRuntimeStatusReport(
                     CredentialStoreQtKeychainDetail::
                         linuxLibSecretCompileSupport(),
-                    CredentialStoreQtKeychainDetail::
-                        linuxLibSecretRuntimeAvailable());
+                        CredentialStoreQtKeychainDetail::
+                            linuxLibSecretRuntimeAvailable());
+        } else {
+            report = buildProvenanceReport();
         }
         const size_t written = fwrite(
             report.constData(),

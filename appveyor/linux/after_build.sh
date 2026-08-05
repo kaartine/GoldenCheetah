@@ -11,6 +11,11 @@ fi
 . Resources/linux/AppImagePackagingSupport.sh
 STRAVA_OAUTH_STATUS=$(require_strava_oauth_build ./GoldenCheetah)
 echo "$STRAVA_OAUTH_STATUS"
+BUILD_MANIFEST=$(mktemp)
+trap 'rm -f -- "$BUILD_MANIFEST"' EXIT
+create_appimage_build_manifest \
+    "$(cd .. && pwd -P)" ./GoldenCheetah \
+    "$STRAVA_OAUTH_STATUS" "$BUILD_MANIFEST"
 
 if [ "${PYTHON_VERSION:-}" != "$PYTHON_APPIMAGE_SERIES" ]; then
     echo "Build Python ${PYTHON_VERSION:-unset} does not match packaged Python $PYTHON_APPIMAGE_SERIES"
@@ -23,6 +28,7 @@ mkdir -p appdir
 
 # Executable
 cp GoldenCheetah appdir
+install_appimage_build_manifest "$BUILD_MANIFEST" appdir
 
 # Desktop file
 cat >appdir/GoldenCheetah.desktop <<EOF
@@ -98,5 +104,11 @@ echo "$KEYCHAIN_RUNTIME_STATUS"
 OFFSCREEN_RUNTIME_STATUS=$(require_qt_offscreen_appimage \
     ../GoldenCheetah_v3.8_x64.AppImage)
 echo "$OFFSCREEN_RUNTIME_STATUS"
+finalize_appimage_manifest \
+    ../GoldenCheetah_v3.8_x64.AppImage "$BUILD_MANIFEST" \
+    ../GoldenCheetah_v3.8_x64.AppImage.manifest
+verify_appimage_manifest \
+    ../GoldenCheetah_v3.8_x64.AppImage \
+    ../GoldenCheetah_v3.8_x64.AppImage.manifest
 
 exit

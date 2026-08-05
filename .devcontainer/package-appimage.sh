@@ -51,11 +51,15 @@ fi
 
 strava_oauth_status="$(require_strava_oauth_build "${binary}")"
 echo "${strava_oauth_status}"
+base_manifest="${package_dir}/build-manifest.base"
+create_appimage_build_manifest \
+    "${repo_root}" "${binary}" "${strava_oauth_status}" "${base_manifest}"
 
 rm -rf "${app_dir}"
 mkdir -p "${app_dir}" "${tools_dir}"
 install -m 0755 "${binary}" "${app_dir}/GoldenCheetah"
 install -m 0644 "${repo_root}/src/Resources/images/gc.png" "${app_dir}/gc.png"
+install_appimage_build_manifest "${base_manifest}" "${app_dir}"
 
 cat >"${app_dir}/GoldenCheetah.desktop" <<'EOF'
 [Desktop Entry]
@@ -112,6 +116,15 @@ echo "${keychain_runtime_status}"
 offscreen_runtime_status="$(
     require_qt_offscreen_appimage "${output}")"
 echo "${offscreen_runtime_status}"
+manifest="${output}.manifest"
+finalize_appimage_manifest "${output}" "${base_manifest}" "${manifest}"
+verify_appimage_manifest "${output}" "${manifest}"
+if [[ -n "${PROMOTION_LINK:-}" ]]; then
+    promoted_image="$(promote_appimage_release \
+        "${output}" "${manifest}" "${PROMOTION_LINK}")"
+    echo "Promoted AppImage: ${promoted_image}"
+fi
 
 echo "AppDir: ${app_dir}"
 echo "AppImage: ${output}"
+echo "Manifest: ${manifest}"
