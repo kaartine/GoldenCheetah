@@ -15,6 +15,7 @@ PORTABLE_SECTION_PROJECTS = (
     "Core/athleteMigrationSafety/athleteMigrationSafety.pro",
     "Core/credentialSettings/credentialSettings.pro",
     "Core/measuresAtomicSave/measuresAtomicSave.pro",
+    "Core/plannedActivityFileStager/plannedActivityFileStager.pro",
     "Core/rideCacheAtomicSave/rideCacheAtomicSave.pro",
     "FileIO/fitReaderIntegrity/fitReaderIntegrity.pro",
     "FileIO/jsonImportIntegrity/jsonImportIntegrity.pro",
