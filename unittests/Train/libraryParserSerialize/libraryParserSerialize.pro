@@ -1,23 +1,23 @@
-QT += core testlib
+QT += core widgets testlib
 
 TEMPLATE = app
-TARGET = tst_libraryImportFileStager
+TARGET = tst_libraryParserSerialize
 
 include(../../unittests.pri)
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug
 
-SOURCES = testLibraryImportFileStager.cpp \
-          ../../../src/Train/LibraryImportFileStager.cpp
+DEFINES += GC_LIBRARY_PARSER_SERIALIZE_TEST_HOOKS
 
-HEADERS = ../../../src/Train/LibraryImportFileStager.h
+SOURCES = testLibraryParserSerialize.cpp \
+          ../../../src/Train/LibraryParser.cpp
 
-INCLUDEPATH += ../../../src \
+HEADERS = LibraryParserSerializeTestStubs.h
+
+INCLUDEPATH += . \
+               ../../../src \
                ../../../src/Train
-
-QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-QMAKE_LFLAGS += -Wl,--gc-sections
 
 sanitize:!tsan:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

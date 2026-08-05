@@ -16,11 +16,17 @@
  * Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
+#ifdef GC_LIBRARY_PARSER_SERIALIZE_TEST_HOOKS
+#include "LibraryParserSerializeTestStubs.h"
+#else
 #include "Library.h"
 #include "LibraryParser.h"
+#endif
 #include <QDebug>
 #include <QMessageBox>
+#include <QSaveFile>
 
+#ifndef GC_LIBRARY_PARSER_SERIALIZE_TEST_HOOKS
 bool LibraryParser::startDocument()
 {
     buffer.clear();
@@ -63,25 +69,32 @@ bool LibraryParser::characters(const QString& str)
     buffer += str;
     return true;
 }
+#endif
 
 bool
-LibraryParser::serialize(QDir home)
+LibraryParser::serialize(QDir home, QString *error)
 {
+    if (error != nullptr) error->clear();
+
     // we write to root of all cyclists
     home.cdUp();
 
-    // open file - truncate contents
-    QString filename = home.canonicalPath() + "/library.xml";
-    QFile file(filename);
+    const QString filename = home.filePath(QStringLiteral("library.xml"));
+    QSaveFile file(filename);
+    file.setDirectWriteFallback(false);
     if (!file.open(QFile::WriteOnly)) {
-        QMessageBox msgBox;
-        msgBox.setIcon(QMessageBox::Critical);
-        msgBox.setText(QObject::tr("Problem Saving Workout Library"));
-        msgBox.setInformativeText(QObject::tr("File: %1 cannot be opened for 'Writing'. Please check file properties.").arg(filename));
-        msgBox.exec();
+        const QString message = QObject::tr(
+            "File: %1 cannot be opened for writing. %2")
+                                    .arg(filename, file.errorString());
+        if (error != nullptr) {
+            *error = message;
+        } else {
+            QMessageBox::critical(nullptr,
+                                  QObject::tr("Problem Saving Workout Library"),
+                                  message);
+        }
         return false;
-    };
-    file.resize(0);
+    }
     QTextStream out(&file);
 
     // write out to file
@@ -102,8 +115,32 @@ LibraryParser::serialize(QDir home)
     }
 
 
-    // close file
-    file.close();
+    out.flush();
+    if (out.status() != QTextStream::Ok || file.error() != QFileDevice::NoError) {
+        const QString message = QObject::tr("File: %1 could not be written. %2")
+                                    .arg(filename, file.errorString());
+        file.cancelWriting();
+        if (error != nullptr) {
+            *error = message;
+        } else {
+            QMessageBox::critical(nullptr,
+                                  QObject::tr("Problem Saving Workout Library"),
+                                  message);
+        }
+        return false;
+    }
+    if (!file.commit()) {
+        const QString message = QObject::tr("File: %1 could not be committed. %2")
+                                    .arg(filename, file.errorString());
+        if (error != nullptr) {
+            *error = message;
+        } else {
+            QMessageBox::critical(nullptr,
+                                  QObject::tr("Problem Saving Workout Library"),
+                                  message);
+        }
+        return false;
+    }
 
-    return true; // success
+    return true;
 }

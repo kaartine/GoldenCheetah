@@ -10,6 +10,7 @@
 
 #include "LibraryTransactionTestStubs.h"
 #include "TrainDB.h"
+#include "WorkoutImportBatch.h"
 
 namespace {
 
@@ -51,9 +52,11 @@ public:
 
         databaseHome = temporary.filePath(QStringLiteral("database"));
         workoutDirectory = temporary.filePath(QStringLiteral("workouts"));
+        sourceDirectory = temporary.filePath(QStringLiteral("sources"));
         athleteDirectory = temporary.filePath(QStringLiteral("athlete"));
         valid = QDir().mkpath(databaseHome)
             && QDir().mkpath(workoutDirectory)
+            && QDir().mkpath(sourceDirectory)
             && QDir().mkpath(athleteDirectory);
         if (!valid) return;
 
@@ -68,6 +71,7 @@ public:
 
         mediaLibrary.name = QStringLiteral("Media Library");
         libraries.append(&mediaLibrary);
+        LibraryParser::reset();
     }
 
     ~TestEnvironment()
@@ -76,6 +80,7 @@ public:
         trainDB = nullptr;
         database.reset();
         appsettings = nullptr;
+        LibraryParser::reset();
     }
 
     QString filePath(const QString &name) const
@@ -88,10 +93,21 @@ public:
         return QDir(databaseHome).filePath(QStringLiteral("trainDB"));
     }
 
+    QString sourcePath(const QString &name) const
+    {
+        return QDir(sourceDirectory).filePath(name);
+    }
+
+    QString libraryXmlPath() const
+    {
+        return temporary.filePath(QStringLiteral("library.xml"));
+    }
+
     bool valid = false;
     QTemporaryDir temporary;
     QString databaseHome;
     QString workoutDirectory;
+    QString sourceDirectory;
     QString athleteDirectory;
     TestAppSettings settings;
     std::unique_ptr<TestAthleteHome> home;
@@ -107,6 +123,13 @@ bool writeFile(const QString &path, const QByteArray &contents)
     return file.open(QIODevice::WriteOnly | QIODevice::Truncate)
         && file.write(contents) == contents.size()
         && file.flush();
+}
+
+QByteArray readFile(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) return {};
+    return file.readAll();
 }
 
 bool execSql(QSqlDatabase &database, const QString &sql)
@@ -199,6 +222,16 @@ private slots:
     void refreshWorkoutsSchemaFailureDoesNotReportSuccess();
     void refreshWorkoutsCommitFailureRollsBackWithoutSignal();
     void refreshWorkoutsSuccessSignalsAfterCommit();
+    void dialogBatchStartFailureDoesNotCommitOrAccept();
+    void dialogBatchDuplicateFailureRollsBackEarlierWrite();
+    void dialogBatchSchemaFailureRollsBackFilesAndDatabase();
+    void dialogBatchImportFailureRollsBackEarlierWrite();
+    void dialogBatchCommitFailureRestoresMetadataAndFiles();
+    void dialogBatchTargetCollisionIsNotReportedAsSuccess();
+    void dialogBatchOverwriteCopyFailurePreservesTarget();
+    void dialogBatchLaterFailureRestoresOverwrittenTarget();
+    void dialogBatchSerializeFailureRestoresAllStores();
+    void dialogBatchSuccessPublishesOnlyAfterCommit();
 };
 
 void TestLibraryTransactionSafety::importFilesDuplicateFailureRollsBackBatch()
@@ -428,6 +461,357 @@ void TestLibraryTransactionSafety::refreshWorkoutsSuccessSignalsAfterCommit()
     QVERIFY(Library::refreshWorkouts(&environment.context));
     QCOMPARE(changed.count(), 1);
     QVERIFY(committedValueObserved);
+}
+
+void TestLibraryTransactionSafety::dialogBatchStartFailureDoesNotCommitOrAccept()
+{
+    TestEnvironment environment;
+    QVERIFY(environment.valid);
+    const QString video = environment.sourcePath(QStringLiteral("nested.mp4"));
+    QVERIFY(writeFile(video, QByteArrayLiteral("video")));
+    QVERIFY(writeFile(environment.libraryXmlPath(), QByteArrayLiteral("original")));
+
+    TrainDB::ScopedLUW outer(*environment.database);
+    QVERIFY(outer.isActive());
+    QSignalSpy changed(environment.database.get(), &TrainDB::dataChanged);
+    int accepted = 0;
+    const WorkoutImportBatchResult result = runWorkoutImportDialogBatch(
+        &environment.context, {video}, {}, {}, false, [&] { ++accepted; });
+    outer.rollback();
+
+    QVERIFY(!result.succeeded);
+    QCOMPARE(accepted, 0);
+    QCOMPARE(changed.count(), 0);
+    QVERIFY(!environment.database->hasVideo(video));
+    QVERIFY(environment.mediaLibrary.refs.isEmpty());
+    QCOMPARE(readFile(environment.libraryXmlPath()), QByteArrayLiteral("original"));
+}
+
+void TestLibraryTransactionSafety::dialogBatchDuplicateFailureRollsBackEarlierWrite()
+{
+    TestEnvironment environment;
+    QVERIFY(environment.valid);
+    const QString first = environment.sourcePath(QStringLiteral("first.mp4"));
+    const QString duplicate =
+        environment.sourcePath(QStringLiteral("duplicate.mp4"));
+    QVERIFY(writeFile(first, QByteArrayLiteral("first")));
+    QVERIFY(writeFile(duplicate, QByteArrayLiteral("duplicate")));
+    QVERIFY(environment.database->importVideo(duplicate));
+    QSignalSpy changed(environment.database.get(), &TrainDB::dataChanged);
+    int accepted = 0;
+
+    const WorkoutImportBatchResult result = runWorkoutImportDialogBatch(
+        &environment.context,
+        {first, duplicate},
+        {},
+        {},
+        false,
+        [&] { ++accepted; });
+
+    QVERIFY(!result.succeeded);
+    QVERIFY(result.failedFiles.contains(first));
+    QVERIFY(result.failedFiles.contains(duplicate));
+    QVERIFY(!environment.database->hasVideo(first));
+    QVERIFY(environment.database->hasVideo(duplicate));
+    QVERIFY(environment.mediaLibrary.refs.isEmpty());
+    QCOMPARE(changed.count(), 0);
+    QCOMPARE(accepted, 0);
+}
+
+void TestLibraryTransactionSafety::dialogBatchSchemaFailureRollsBackFilesAndDatabase()
+{
+    TestEnvironment environment;
+    QVERIFY(environment.valid);
+    const QString video = environment.sourcePath(QStringLiteral("before.mp4"));
+    const QString source =
+        environment.sourcePath(QStringLiteral("schema-failure.erg"));
+    const QString target = environment.filePath(QStringLiteral("schema-failure.erg"));
+    QVERIFY(writeFile(video, QByteArrayLiteral("video")));
+    QVERIFY(writeFile(source, QByteArrayLiteral("225")));
+    QVERIFY(writeFile(environment.libraryXmlPath(), QByteArrayLiteral("original")));
+    QSqlDatabase connection = QSqlDatabase::database(QStringLiteral("train"), false);
+    QVERIFY(execSql(connection, QStringLiteral("DROP TABLE workout")));
+    QSignalSpy changed(environment.database.get(), &TrainDB::dataChanged);
+    int accepted = 0;
+
+    const WorkoutImportBatchResult result = runWorkoutImportDialogBatch(
+        &environment.context,
+        {video},
+        {source},
+        {},
+        false,
+        [&] { ++accepted; });
+
+    QVERIFY(!result.succeeded);
+    QVERIFY(!environment.database->hasVideo(video));
+    QVERIFY(!QFileInfo::exists(target));
+    QVERIFY(environment.mediaLibrary.refs.isEmpty());
+    QCOMPARE(LibraryParser::serializeCalls, 0);
+    QCOMPARE(readFile(environment.libraryXmlPath()), QByteArrayLiteral("original"));
+    QCOMPARE(changed.count(), 0);
+    QCOMPARE(accepted, 0);
+}
+
+void TestLibraryTransactionSafety::dialogBatchImportFailureRollsBackEarlierWrite()
+{
+    TestEnvironment environment;
+    QVERIFY(environment.valid);
+    const QString video = environment.sourcePath(QStringLiteral("first.mp4"));
+    const QString source =
+        environment.sourcePath(QStringLiteral("rejected.erg"));
+    const QString target = environment.filePath(QStringLiteral("rejected.erg"));
+    QVERIFY(writeFile(video, QByteArrayLiteral("video")));
+    QVERIFY(writeFile(source, QByteArrayLiteral("235")));
+    QSqlDatabase connection = QSqlDatabase::database(QStringLiteral("train"), false);
+    QVERIFY(execSql(connection,
+                    QStringLiteral("CREATE TRIGGER reject_dialog_workout "
+                                   "BEFORE INSERT ON workout BEGIN "
+                                   "SELECT RAISE(FAIL, 'workout rejected'); END")));
+    QSignalSpy changed(environment.database.get(), &TrainDB::dataChanged);
+    int accepted = 0;
+
+    const WorkoutImportBatchResult result = runWorkoutImportDialogBatch(
+        &environment.context,
+        {video},
+        {source},
+        {},
+        false,
+        [&] { ++accepted; });
+
+    QVERIFY(!result.succeeded);
+    QVERIFY(!environment.database->hasVideo(video));
+    QVERIFY(!QFileInfo::exists(target));
+    QVERIFY(environment.mediaLibrary.refs.isEmpty());
+    QCOMPARE(changed.count(), 0);
+    QCOMPARE(accepted, 0);
+}
+
+void TestLibraryTransactionSafety::dialogBatchCommitFailureRestoresMetadataAndFiles()
+{
+    TestEnvironment environment;
+    QVERIFY(environment.valid);
+    const QString video = environment.sourcePath(QStringLiteral("commit.mp4"));
+    const QString source =
+        environment.sourcePath(QStringLiteral("commit-failure.erg"));
+    const QString target =
+        environment.filePath(QStringLiteral("commit-failure.erg"));
+    QVERIFY(writeFile(video, QByteArrayLiteral("video")));
+    QVERIFY(writeFile(source, QByteArrayLiteral("245")));
+    QVERIFY(writeFile(environment.libraryXmlPath(), QByteArrayLiteral("original")));
+    QSqlDatabase connection = QSqlDatabase::database(QStringLiteral("train"), false);
+    QVERIFY(installDeferredCommitFailure(
+        connection, QStringLiteral("INSERT"), target));
+    QSignalSpy changed(environment.database.get(), &TrainDB::dataChanged);
+    int accepted = 0;
+
+    const WorkoutImportBatchResult result = runWorkoutImportDialogBatch(
+        &environment.context,
+        {video},
+        {source},
+        {},
+        false,
+        [&] { ++accepted; });
+
+    QVERIFY(!result.succeeded);
+    QVERIFY(!environment.database->hasVideo(video));
+    QVERIFY(!environment.database->hasWorkout(target));
+    QVERIFY(!QFileInfo::exists(target));
+    QVERIFY(environment.mediaLibrary.refs.isEmpty());
+    QCOMPARE(readFile(environment.libraryXmlPath()), QByteArrayLiteral("original"));
+    QCOMPARE(changed.count(), 0);
+    QCOMPARE(accepted, 0);
+}
+
+void TestLibraryTransactionSafety::dialogBatchTargetCollisionIsNotReportedAsSuccess()
+{
+    TestEnvironment environment;
+    QVERIFY(environment.valid);
+    const QString source = environment.sourcePath(QStringLiteral("collision.erg"));
+    const QString target = environment.filePath(QStringLiteral("collision.erg"));
+    QVERIFY(writeFile(source, QByteArrayLiteral("255")));
+    QVERIFY(writeFile(target, QByteArrayLiteral("old target")));
+    QSignalSpy changed(environment.database.get(), &TrainDB::dataChanged);
+    int accepted = 0;
+
+    const WorkoutImportBatchResult result = runWorkoutImportDialogBatch(
+        &environment.context,
+        {},
+        {source},
+        {},
+        false,
+        [&] { ++accepted; });
+
+    QVERIFY(!result.succeeded);
+    QCOMPARE(readFile(target), QByteArrayLiteral("old target"));
+    QVERIFY(!environment.database->hasWorkout(target));
+    QCOMPARE(changed.count(), 0);
+    QCOMPARE(accepted, 0);
+}
+
+void TestLibraryTransactionSafety::dialogBatchOverwriteCopyFailurePreservesTarget()
+{
+    TestEnvironment environment;
+    QVERIFY(environment.valid);
+    const QString source = environment.sourcePath(QStringLiteral("overwrite.erg"));
+    const QString target = environment.filePath(QStringLiteral("overwrite.erg"));
+    QVERIFY(writeFile(source, QByteArrayLiteral("265")));
+    QVERIFY(writeFile(target, QByteArrayLiteral("old target")));
+    const QFileDevice::Permissions originalPermissions =
+        QFileInfo(environment.workoutDirectory).permissions();
+    QVERIFY(QFile::setPermissions(
+        environment.workoutDirectory,
+        QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    QSignalSpy changed(environment.database.get(), &TrainDB::dataChanged);
+    int accepted = 0;
+
+    const WorkoutImportBatchResult result = runWorkoutImportDialogBatch(
+        &environment.context,
+        {},
+        {source},
+        {},
+        true,
+        [&] { ++accepted; });
+    QVERIFY(QFile::setPermissions(environment.workoutDirectory,
+                                  originalPermissions));
+
+    QVERIFY(!result.succeeded);
+    QCOMPARE(readFile(target), QByteArrayLiteral("old target"));
+    QVERIFY(!environment.database->hasWorkout(target));
+    QCOMPARE(changed.count(), 0);
+    QCOMPARE(accepted, 0);
+}
+
+void TestLibraryTransactionSafety::dialogBatchLaterFailureRestoresOverwrittenTarget()
+{
+    TestEnvironment environment;
+    QVERIFY(environment.valid);
+    const QString firstSource =
+        environment.sourcePath(QStringLiteral("replace-first.erg"));
+    const QString firstTarget =
+        environment.filePath(QStringLiteral("replace-first.erg"));
+    const QString secondSource =
+        environment.sourcePath(QStringLiteral("replace-second.erg"));
+    const QString secondTarget =
+        environment.filePath(QStringLiteral("replace-second.erg"));
+    QVERIFY(writeFile(firstSource, QByteArrayLiteral("300")));
+    QVERIFY(writeFile(firstTarget, QByteArrayLiteral("100")));
+    QVERIFY(writeFile(secondSource, QByteArrayLiteral("325")));
+    QVERIFY(environment.database->importWorkout(
+        firstTarget, workout(100.0, QStringLiteral("Original"))));
+    QSqlDatabase connection = QSqlDatabase::database(QStringLiteral("train"), false);
+    QVERIFY(execSql(
+        connection,
+        QStringLiteral("CREATE TRIGGER reject_later_workout "
+                       "BEFORE INSERT ON workout "
+                       "WHEN NEW.filepath = %1 BEGIN "
+                       "SELECT RAISE(FAIL, 'later workout rejected'); END")
+            .arg(sqlString(secondTarget))));
+    QSignalSpy changed(environment.database.get(), &TrainDB::dataChanged);
+    int accepted = 0;
+
+    const WorkoutImportBatchResult result = runWorkoutImportDialogBatch(
+        &environment.context,
+        {},
+        {firstSource, secondSource},
+        {},
+        true,
+        [&] { ++accepted; });
+
+    QVERIFY(!result.succeeded);
+    QCOMPARE(readFile(firstTarget), QByteArrayLiteral("100"));
+    QVERIFY(!QFileInfo::exists(secondTarget));
+    QCOMPARE(storedAveragePower(connection, firstTarget), 100.0);
+    QCOMPARE(changed.count(), 0);
+    QCOMPARE(accepted, 0);
+}
+
+void TestLibraryTransactionSafety::dialogBatchSerializeFailureRestoresAllStores()
+{
+    TestEnvironment environment;
+    QVERIFY(environment.valid);
+    const QString video = environment.sourcePath(QStringLiteral("serialize.mp4"));
+    QVERIFY(writeFile(video, QByteArrayLiteral("video")));
+    QVERIFY(writeFile(environment.libraryXmlPath(), QByteArrayLiteral("original")));
+    LibraryParser::serializeResult = false;
+    LibraryParser::writeBeforeReturning = true;
+    QSignalSpy changed(environment.database.get(), &TrainDB::dataChanged);
+    int accepted = 0;
+
+    const WorkoutImportBatchResult result = runWorkoutImportDialogBatch(
+        &environment.context,
+        {video},
+        {},
+        {},
+        false,
+        [&] { ++accepted; });
+
+    QVERIFY(!result.succeeded);
+    QVERIFY(!environment.database->hasVideo(video));
+    QVERIFY(environment.mediaLibrary.refs.isEmpty());
+    QVERIFY(environment.context.selectedVideo.isEmpty());
+    QCOMPARE(readFile(environment.libraryXmlPath()), QByteArrayLiteral("original"));
+    QCOMPARE(changed.count(), 0);
+    QCOMPARE(accepted, 0);
+}
+
+void TestLibraryTransactionSafety::dialogBatchSuccessPublishesOnlyAfterCommit()
+{
+    TestEnvironment environment;
+    QVERIFY(environment.valid);
+    const QString video = environment.sourcePath(QStringLiteral("success.mp4"));
+    const QString workoutSource =
+        environment.sourcePath(QStringLiteral("success.erg"));
+    const QString workoutTarget = environment.filePath(QStringLiteral("success.erg"));
+    const QString videoSyncSource =
+        environment.sourcePath(QStringLiteral("success.rlv"));
+    const QString videoSyncTarget = environment.filePath(QStringLiteral("success.rlv"));
+    QVERIFY(writeFile(video, QByteArrayLiteral("video")));
+    QVERIFY(writeFile(workoutSource, QByteArrayLiteral("275")));
+    QVERIFY(writeFile(videoSyncSource, QByteArrayLiteral("videosync")));
+    QVERIFY(writeFile(environment.libraryXmlPath(), QByteArrayLiteral("original")));
+    ScopedDatabase reader(environment.databasePath());
+    QVERIFY(reader.get().isOpen());
+
+    int accepted = 0;
+    bool committedRowsObserved = false;
+    bool publicationDeferredUntilAfterCommit = false;
+    bool acceptObservedPublishedState = false;
+    connect(environment.database.get(), &TrainDB::dataChanged, this, [&] {
+        committedRowsObserved =
+            rowExists(reader.get(), QStringLiteral("video"), video)
+            && rowExists(reader.get(), QStringLiteral("workout"), workoutTarget)
+            && rowExists(reader.get(), QStringLiteral("videosync"), videoSyncTarget);
+        publicationDeferredUntilAfterCommit =
+            environment.mediaLibrary.refs.isEmpty()
+            && environment.context.selectedVideo.isEmpty()
+            && environment.context.selectedWorkout.isEmpty()
+            && environment.context.selectedVideoSync.isEmpty()
+            && accepted == 0;
+    });
+    QSignalSpy changed(environment.database.get(), &TrainDB::dataChanged);
+
+    const WorkoutImportBatchResult result = runWorkoutImportDialogBatch(
+        &environment.context,
+        {video},
+        {workoutSource},
+        {videoSyncSource},
+        false,
+        [&] {
+            ++accepted;
+            acceptObservedPublishedState =
+                environment.mediaLibrary.refs.contains(video)
+                && environment.context.selectedVideo == video
+                && environment.context.selectedWorkout == workoutTarget
+                && environment.context.selectedVideoSync == videoSyncTarget;
+        });
+
+    QVERIFY(result.succeeded);
+    QCOMPARE(changed.count(), 1);
+    QVERIFY(committedRowsObserved);
+    QVERIFY(publicationDeferredUntilAfterCommit);
+    QCOMPARE(accepted, 1);
+    QVERIFY(acceptObservedPublishedState);
+    QVERIFY(readFile(environment.libraryXmlPath()).contains(video.toUtf8()));
 }
 
 QTEST_GUILESS_MAIN(TestLibraryTransactionSafety)

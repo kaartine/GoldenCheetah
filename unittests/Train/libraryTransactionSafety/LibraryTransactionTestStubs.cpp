@@ -4,6 +4,41 @@
 
 QList<Library *> libraries;
 TestAppSettings *appsettings = nullptr;
+bool LibraryParser::serializeResult = true;
+bool LibraryParser::writeBeforeReturning = true;
+int LibraryParser::serializeCalls = 0;
+
+bool LibraryParser::serialize(QDir home, QString *error)
+{
+    ++serializeCalls;
+    if (writeBeforeReturning) {
+        home.cdUp();
+        QFile file(home.filePath(QStringLiteral("library.xml")));
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            if (error != nullptr) *error = file.errorString();
+            return false;
+        }
+        for (Library *library : libraries) {
+            if (library == nullptr) continue;
+            for (const QString &ref : library->refs) {
+                file.write(ref.toUtf8());
+                file.write("\n");
+            }
+        }
+        file.close();
+    }
+    if (!serializeResult && error != nullptr) {
+        *error = QStringLiteral("injected library serialization failure");
+    }
+    return serializeResult;
+}
+
+void LibraryParser::reset()
+{
+    serializeResult = true;
+    writeBeforeReturning = true;
+    serializeCalls = 0;
+}
 
 Library *Library::findLibrary(QString name)
 {

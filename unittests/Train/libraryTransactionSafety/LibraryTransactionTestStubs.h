@@ -113,7 +113,12 @@ extern TestAppSettings *appsettings;
 class LibraryParser
 {
 public:
-    static bool serialize(const QDir &) { return true; }
+    static bool serialize(QDir home, QString *error = nullptr);
+    static void reset();
+
+    static bool serializeResult;
+    static bool writeBeforeReturning;
+    static int serializeCalls;
 };
 
 class MediaHelper

@@ -14,12 +14,14 @@ SOURCES = testLibraryTransactionSafety.cpp \
           LibraryTransactionTestStubs.cpp \
           ../../../src/Train/Library.cpp \
           ../../../src/Train/LibraryImportFileStager.cpp \
+          ../../../src/Train/WorkoutImportBatch.cpp \
           ../../../src/Train/TrainDB.cpp \
           ../../../src/Train/ErgFileBase.cpp \
           ../../../src/Train/VideoSyncFileBase.cpp
 
 HEADERS = LibraryTransactionTestStubs.h \
           ../../../src/Train/LibraryImportFileStager.h \
+          ../../../src/Train/WorkoutImportBatch.h \
           ../../../src/Train/TrainDB.h \
           ../../../src/Train/ErgFileBase.h \
           ../../../src/Train/VideoSyncFileBase.h \

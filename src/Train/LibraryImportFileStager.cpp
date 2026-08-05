@@ -9,8 +9,11 @@
 
 #include "LibraryImportFileStager.h"
 
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
+#include <QTemporaryFile>
 
 namespace {
 
@@ -64,11 +67,95 @@ LibraryImportStageResult failure(LibraryImportStageStatus status,
     return result;
 }
 
+bool copyContents(QFile &source, QIODevice &target, QString &error)
+{
+    constexpr qint64 chunkSize = 1024 * 1024;
+    while (!source.atEnd()) {
+        const QByteArray chunk = source.read(chunkSize);
+        if (source.error() != QFileDevice::NoError) {
+            error = source.errorString();
+            return false;
+        }
+        if (target.write(chunk) != chunk.size()) {
+            error = target.errorString();
+            return false;
+        }
+    }
+    return true;
+}
+
+bool copyAtomically(const QString &sourcePath,
+                    const QString &targetPath,
+                    QFileDevice::Permissions permissions,
+                    QString &error)
+{
+    QFile source(sourcePath);
+    if (!source.open(QIODevice::ReadOnly)) {
+        error = source.errorString();
+        return false;
+    }
+
+    QSaveFile target(targetPath);
+    target.setDirectWriteFallback(false);
+    if (!target.open(QIODevice::WriteOnly)) {
+        error = target.errorString();
+        return false;
+    }
+    if (!copyContents(source, target, error)) {
+        target.cancelWriting();
+        return false;
+    }
+    if (!target.setPermissions(permissions)) {
+        error = target.errorString();
+        target.cancelWriting();
+        return false;
+    }
+    if (!target.commit()) {
+        error = target.errorString();
+        return false;
+    }
+    return true;
+}
+
+bool createBackup(const QString &targetPath,
+                  QString &backupPath,
+                  QString &error)
+{
+    QFile source(targetPath);
+    if (!source.open(QIODevice::ReadOnly)) {
+        error = source.errorString();
+        return false;
+    }
+
+    const QString pattern = QDir(QFileInfo(targetPath).absolutePath())
+                                .filePath(QStringLiteral(
+                                    ".gc-library-import-backup-XXXXXX"));
+    QTemporaryFile backup(pattern);
+    if (!backup.open()) {
+        error = backup.errorString();
+        return false;
+    }
+    if (!copyContents(source, backup, error) || !backup.flush()) {
+        if (error.isEmpty()) error = backup.errorString();
+        return false;
+    }
+    if (!backup.setPermissions(QFileInfo(targetPath).permissions())) {
+        error = backup.errorString();
+        return false;
+    }
+
+    backupPath = backup.fileName();
+    backup.setAutoRemove(false);
+    backup.close();
+    return true;
+}
+
 } // namespace
 
 LibraryImportStageResult LibraryImportFileStager::stage(
     const QString &sourcePath,
-    const QString &targetPath)
+    const QString &targetPath,
+    LibraryImportStageMode mode)
 {
     const QFileInfo sourceInfo(sourcePath);
     const QString source = sourceInfo.absoluteFilePath();
@@ -113,11 +200,36 @@ LibraryImportStageResult LibraryImportFileStager::stage(
         if (!compareFileContents(source, target, equal, compareError)) {
             return failure(LibraryImportStageStatus::ioError, compareError);
         }
-        if (!equal) {
+        if (!equal && mode == LibraryImportStageMode::preserveExisting) {
             return failure(
                 LibraryImportStageStatus::targetConflict,
                 QStringLiteral(
                     "The import target already exists with different contents"));
+        }
+
+        if (!equal) {
+            QString backupPath;
+            if (!createBackup(target, backupPath, compareError)) {
+                return failure(LibraryImportStageStatus::ioError,
+                               compareError);
+            }
+            if (!copyAtomically(source,
+                                target,
+                                sourceInfo.permissions(),
+                                compareError)) {
+                if (!QFile::remove(backupPath)) {
+                    compareError += QStringLiteral(
+                        " The preserved target remains at %1.")
+                                        .arg(backupPath);
+                }
+                return failure(LibraryImportStageStatus::ioError,
+                               compareError);
+            }
+
+            sourcesByTarget.insert(target, source);
+            replacedTargets.append(
+                {target, backupPath, targetInfo.permissions()});
+            return {LibraryImportStageStatus::replaced, {}};
         }
 
         sourcesByTarget.insert(target, source);
@@ -139,12 +251,44 @@ LibraryImportStageResult LibraryImportFileStager::stage(
 QStringList LibraryImportFileStager::rollback()
 {
     QStringList failures;
+
+    for (int index = replacedTargets.count() - 1; index >= 0; --index) {
+        const ReplacedTarget &replacement = replacedTargets.at(index);
+        QString error;
+        if (!copyAtomically(replacement.backup,
+                            replacement.target,
+                            replacement.permissions,
+                            error)) {
+            failures.append(replacement.target);
+            failures.append(replacement.backup);
+            continue;
+        }
+        if (!QFile::remove(replacement.backup)) {
+            failures.append(replacement.backup);
+        }
+    }
     for (int index = createdTargets.count() - 1; index >= 0; --index) {
         const QString &target = createdTargets.at(index);
         if (QFileInfo::exists(target) && !QFile::remove(target)) {
             failures.append(target);
         }
     }
+    replacedTargets.clear();
+    createdTargets.clear();
+    sourcesByTarget.clear();
+    return failures;
+}
+
+QStringList LibraryImportFileStager::finalize()
+{
+    QStringList failures;
+    for (const ReplacedTarget &replacement : replacedTargets) {
+        if (QFileInfo::exists(replacement.backup)
+            && !QFile::remove(replacement.backup)) {
+            failures.append(replacement.backup);
+        }
+    }
+    replacedTargets.clear();
     createdTargets.clear();
     sourcesByTarget.clear();
     return failures;

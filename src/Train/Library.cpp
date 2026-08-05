@@ -18,6 +18,7 @@
 
 #include "LibraryImportFileStager.h"
 #include "TrainDB.h"
+#include "WorkoutImportBatch.h"
 
 #include <QFileInfo>
 #include <QScopedPointer>
@@ -1039,100 +1040,15 @@ WorkoutImportDialog::WorkoutImportDialog(Context *context, QStringList files) :
 void
 WorkoutImportDialog::import()
 {
-    Library *l = Library::findLibrary("Media Library");
-
-    if (!l) accept(); // not possible
-
-    trainDB->startLUW();
-
-    // videos are easy, just add a reference, if its already
-    // there then do nothing
-    foreach(QString video, videos) {
-
-        // if we don't already have it, add it
-        if (l && !l->refs.contains(video)) {
-            l->refs.append(video);
-            trainDB->importVideo(video);
-        }
+    const WorkoutImportBatchResult result = runWorkoutImportDialogBatch(
+        context,
+        videos,
+        workouts,
+        videosyncs,
+        overwrite->isChecked(),
+        [this] { accept(); });
+    if (!result.succeeded) {
+        QMessageBox::warning(this, result.errorTitle, result.errorMessage);
     }
-
-    // now write to disk..
-    LibraryParser::serialize(context->athlete->home->root());
-
-    // set target directory
-    QString workoutDir = appsettings->value(NULL, GC_WORKOUTDIR).toString();
-    if (workoutDir == "") {
-        QDir root = context->athlete->home->root();
-        root.cdUp();
-        workoutDir = root.absolutePath();
-    }
-
-
-    // now import those workouts
-    foreach(QString workout, workouts) {
-
-        // if doesn't exist then skip
-        if (!QFile(workout).exists()) continue;
-
-        // cannot read or not valid
-        ErgFile file(workout, ErgFileFormat::unknown, context);
-        if (!file.isValid()) continue;
-
-        // get target name
-        QString target = workoutDir + "/" + QFileInfo(workout).fileName();
-
-        // only copy if source != target otherwise just keep what we have
-        if (target != workout) {
-            // don't overwrite existing
-            if (QFile(target).exists() && !overwrite->isChecked()) continue;
-
-            // wipe and copy
-            if (QFile(target).exists()) QFile::remove(target); // zap it
-            QFile(workout).copy(target);
-        }
-
-        // add to library now
-        trainDB->importWorkout(target, file);
-    }
-
-    // set target directory
-    QString videosyncDir = appsettings->value(NULL, GC_WORKOUTDIR).toString();
-    if (videosyncDir == "") {
-        QDir root = context->athlete->home->root();
-        root.cdUp();
-        videosyncDir = root.absolutePath();
-    }
-
-    // now import those videosync
-    foreach(QString videosync, videosyncs) {
-
-        // if doesn't exist then skip
-        if (!QFile(videosync).exists()) continue;
-
-        // cannot read or not valid
-        int mode=0;
-        VideoSyncFile file(videosync, mode, context);
-        if (!file.isValid()) continue;
-
-        // get target name
-        QString target = videosyncDir + "/" + QFileInfo(videosync).fileName();
-
-        // only copy if source != target otherwise just keep what we have
-        if (target != videosync) {
-            // don't overwrite existing
-            if (QFile(target).exists() && !overwrite->isChecked()) continue;
-
-            // wipe and copy
-            if (QFile(target).exists()) QFile::remove(target); // zap it
-            QFile(videosync).copy(target);
-        }
-
-        // add to library now
-        trainDB->importVideoSync(target, file);
-    }
-
-    trainDB->endLUW();
-
-    accept();
 }
 #endif
