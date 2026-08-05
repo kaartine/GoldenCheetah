@@ -184,6 +184,8 @@ artifacts:
 # Linux
 - path: GoldenCheetah_v3.8_x64.AppImage
   name: GClinuxAppImage
+- path: GoldenCheetah_v3.8_x64.AppImage.manifest
+  name: GClinuxAppImageManifest
 - path: GCversionLinux.txt
   name: GCversionLinux
 
@@ -195,7 +197,7 @@ deploy:
     tag: snapshot
     release: 'Snapshot Builds'
     description: ''
-    artifact: GCwindowsInstaller, GCversionWindows, GCmacOSpackage, GCversionMacOS, GClinuxAppImage, GCversionLinux
+    artifact: GCwindowsInstaller, GCversionWindows, GCmacOSpackage, GCversionMacOS, GClinuxAppImage, GClinuxAppImageManifest, GCversionLinux
     draft: false
     prerelease: true
     force_update: true

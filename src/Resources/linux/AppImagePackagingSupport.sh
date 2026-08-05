@@ -1004,6 +1004,474 @@ require_linux_keychain_appimage()
     echo "$status"
 }
 
+build_provenance_report()
+(
+    local executable=$1
+    local status_home= status_file= command_status
+    local -a lines=()
+
+    cleanup_build_provenance_home()
+    {
+        if [ -n "$status_home" ] && [ -d "$status_home" ]; then
+            rm -rf -- "$status_home"
+        fi
+    }
+    trap cleanup_build_provenance_home EXIT
+
+    if [ ! -f "$executable" ] || [ ! -x "$executable" ]; then
+        echo "Cannot inspect build provenance in $executable" >&2
+        return 1
+    fi
+    local elf_magic script_magic
+    elf_magic=$(dd if="$executable" bs=1 count=4 \
+        2>/dev/null | od -An -tx1 | tr -d ' \n')
+    if [ "$elf_magic" != "7f454c46" ]; then
+        script_magic=$(dd if="$executable" bs=1 count=2 \
+            2>/dev/null | od -An -tx1 | tr -d ' \n')
+        if [ "${GC_TEST_BUILD_PROVENANCE_ENTRYPOINT:-false}" != true ] ||
+           [ "$script_magic" != "2321" ]; then
+            echo "Build provenance requires an ELF executable." >&2
+            return 1
+        fi
+    fi
+
+    status_home=$(mktemp -d) || return
+    mkdir -p "$status_home/.config" || return
+    status_file="$status_home/build-provenance"
+    if ! (
+        umask 077
+        : >"$status_file"
+    ); then
+        return 1
+    fi
+    if (
+        ulimit -c 0
+        ulimit -f 8
+        HOME="$status_home" \
+            XDG_CONFIG_HOME="$status_home/.config" \
+            LC_ALL=C env -u LD_LIBRARY_PATH -u LD_PRELOAD \
+            timeout --signal=TERM --kill-after=2s 10s \
+                "$executable" --goldencheetah-build-provenance
+    ) >"$status_file" 2>/dev/null; then
+        command_status=0
+    else
+        command_status=$?
+    fi
+    if [ "$command_status" -ne 0 ] ||
+       [ ! -s "$status_file" ] ||
+       [ "$(wc -c <"$status_file")" -gt 4096 ] ||
+       [ "$(tail -c 1 "$status_file" | od -An -tu1 | tr -d ' \n')" != 10 ]; then
+        echo "GoldenCheetah build-provenance command failed." >&2
+        return 1
+    fi
+
+    if ! LC_ALL=C tr -d '\000' <"$status_file" | cmp -s - "$status_file"; then
+        echo "GoldenCheetah returned an invalid build-provenance report." >&2
+        return 1
+    fi
+    mapfile -t lines <"$status_file"
+    if [ "${#lines[@]}" -ne 7 ] ||
+       [ "${lines[0]}" != "goldencheetah_build_provenance=1" ] ||
+       [ "${lines[1]}" != "application=GoldenCheetah" ] ||
+       [[ ! "${lines[2]}" =~ ^source_revision=[0-9a-f]{40}$ ]] ||
+       [[ ! "${lines[3]}" =~ ^compiler_family=(gcc|clang)$ ]] ||
+       [[ ! "${lines[4]}" =~ ^compiler_version=[0-9]+(\.[0-9]+){1,3}$ ]] ||
+       [[ ! "${lines[5]}" =~ ^qt_version=[0-9]+(\.[0-9]+){1,3}$ ]] ||
+       [[ ! "${lines[6]}" =~ ^cxx_standard=[0-9]+$ ]]; then
+        echo "GoldenCheetah returned an invalid build-provenance report." >&2
+        return 1
+    fi
+    printf '%s\n' "${lines[@]}"
+)
+
+verified_source_revision()
+(
+    local source_root=$1
+    local git_root revision head status
+
+    git_root=$(git -C "$source_root" rev-parse --show-toplevel 2>/dev/null) || {
+        echo "AppImage packaging requires a Git source tree." >&2
+        return 1
+    }
+    if [ "$(cd "$source_root" && pwd -P)" != "$(cd "$git_root" && pwd -P)" ]; then
+        echo "The AppImage source root is not the Git worktree root." >&2
+        return 1
+    fi
+    revision=${GC_SOURCE_REVISION:-$(git -C "$git_root" rev-parse HEAD)}
+    if [[ ! "$revision" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "GC_SOURCE_REVISION must be a full lowercase Git commit hash" >&2
+        return 1
+    fi
+    git -C "$git_root" cat-file -e "$revision^{commit}" 2>/dev/null || {
+        echo "GC_SOURCE_REVISION does not identify a source commit." >&2
+        return 1
+    }
+    head=$(git -C "$git_root" rev-parse HEAD) || return
+    if [ "$revision" != "$head" ]; then
+        echo "GC_SOURCE_REVISION does not match the source HEAD." >&2
+        return 1
+    fi
+    status=$(git -C "$git_root" status --porcelain=v1 \
+        --untracked-files=normal --ignore-submodules=none) || return
+    if [ -n "$status" ]; then
+        echo "Refusing to package a dirty source worktree." >&2
+        return 1
+    fi
+    printf '%s\n' "$revision"
+)
+
+validate_appimage_base_manifest()
+{
+    local manifest=$1
+    local -a lines=()
+
+    [ -f "$manifest" ] && [ ! -L "$manifest" ] || return 1
+    [ "$(wc -c <"$manifest")" -le 4096 ] || return 1
+    [ "$(tail -c 1 "$manifest" | od -An -tu1 | tr -d ' \n')" = 10 ] ||
+        return 1
+    mapfile -t lines <"$manifest"
+    [ "${#lines[@]}" -eq 5 ] || return 1
+    [ "${lines[0]}" = "goldencheetah_appimage_manifest=1" ] || return 1
+    [[ "${lines[1]}" =~ ^source_revision=[0-9a-f]{40}$ ]] || return 1
+    [[ "${lines[2]}" =~ ^raw_elf_sha256=[0-9a-f]{64}$ ]] || return 1
+    [[ "${lines[3]}" =~ ^toolchain=(gcc|clang)-[0-9]+(\.[0-9]+){1,3}_qt-[0-9]+(\.[0-9]+){1,3}_cxx-[0-9]+$ ]] ||
+        return 1
+    [[ "${lines[4]}" =~ ^strava_oauth_configured=(true|false)$ ]] ||
+        return 1
+}
+
+create_appimage_build_manifest()
+{
+    local source_root=$1
+    local binary=$2
+    local oauth_status=$3
+    local output=$4
+    local revision report binary_revision compiler_family compiler_version
+    local qt_version cxx_standard raw_hash oauth_configured temporary
+
+    revision=$(verified_source_revision "$source_root") || return
+    report=$(build_provenance_report "$binary") || return
+    binary_revision=$(printf '%s\n' "$report" | sed -n 's/^source_revision=//p')
+    if [ "$binary_revision" != "$revision" ]; then
+        echo "The GoldenCheetah binary was not built from the source HEAD." >&2
+        return 1
+    fi
+    compiler_family=$(printf '%s\n' "$report" | sed -n 's/^compiler_family=//p')
+    compiler_version=$(printf '%s\n' "$report" | sed -n 's/^compiler_version=//p')
+    qt_version=$(printf '%s\n' "$report" | sed -n 's/^qt_version=//p')
+    cxx_standard=$(printf '%s\n' "$report" | sed -n 's/^cxx_standard=//p')
+    raw_hash=$(sha256sum "$binary" | cut -d ' ' -f 1) || return
+    case "$oauth_status" in
+    "Strava OAuth: configured") oauth_configured=true ;;
+    "Strava OAuth: unavailable (credentials not configured)")
+        oauth_configured=false ;;
+    *)
+        echo "Cannot encode an unknown Strava OAuth status." >&2
+        return 1
+        ;;
+    esac
+
+    mkdir -p "$(dirname "$output")" || return
+    temporary=$(mktemp "${output}.tmp.XXXXXX") || return
+    if ! (
+        umask 077
+        printf '%s\n' \
+            "goldencheetah_appimage_manifest=1" \
+            "source_revision=$revision" \
+            "raw_elf_sha256=$raw_hash" \
+            "toolchain=${compiler_family}-${compiler_version}_qt-${qt_version}_cxx-${cxx_standard}" \
+            "strava_oauth_configured=$oauth_configured" >"$temporary"
+        chmod 0600 "$temporary"
+    ) || ! validate_appimage_base_manifest "$temporary"; then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    mv -f -- "$temporary" "$output"
+}
+
+install_appimage_build_manifest()
+{
+    local manifest=$1
+    local appdir=$2
+    local target="$appdir/usr/share/goldencheetah/build-manifest"
+
+    validate_appimage_base_manifest "$manifest" || {
+        echo "Cannot install an invalid AppImage build manifest." >&2
+        return 1
+    }
+    install -D -m 0644 "$manifest" "$target"
+    cmp -s -- "$manifest" "$target"
+}
+
+finalize_appimage_manifest()
+{
+    local image=$1
+    local base_manifest=$2
+    local sidecar=$3
+    local image_hash temporary
+
+    [ -f "$image" ] && [ -x "$image" ] || {
+        echo "Cannot finalize a missing AppImage." >&2
+        return 1
+    }
+    validate_appimage_base_manifest "$base_manifest" || {
+        echo "Cannot finalize an invalid AppImage build manifest." >&2
+        return 1
+    }
+    image_hash=$(sha256sum "$image" | cut -d ' ' -f 1) || return
+    mkdir -p "$(dirname "$sidecar")" || return
+    temporary=$(mktemp "${sidecar}.tmp.XXXXXX") || return
+    if ! (
+        umask 077
+        cat "$base_manifest" >"$temporary"
+        printf 'appimage_sha256=%s\n' "$image_hash" >>"$temporary"
+        chmod 0600 "$temporary"
+    ); then
+        rm -f -- "$temporary"
+        return 1
+    fi
+    mv -f -- "$temporary" "$sidecar"
+}
+
+verify_appimage_manifest()
+(
+    local image=$1
+    local sidecar=$2
+    local image_path extract_dir embedded expected_base expected_hash actual_hash
+    local -a lines=()
+
+    cleanup_manifest_extract()
+    {
+        if [ -n "${extract_dir:-}" ] && [ -d "$extract_dir" ]; then
+            rm -rf -- "$extract_dir"
+        fi
+    }
+    trap cleanup_manifest_extract EXIT
+
+    [ -f "$image" ] && [ -x "$image" ] || return 1
+    [ -f "$sidecar" ] && [ ! -L "$sidecar" ] || return 1
+    [ "$(stat -c '%a' "$sidecar")" = 600 ] || return 1
+    [ "$(wc -c <"$sidecar")" -le 4352 ] || return 1
+    [ "$(tail -c 1 "$sidecar" | od -An -tu1 | tr -d ' \n')" = 10 ] ||
+        return 1
+    mapfile -t lines <"$sidecar"
+    [ "${#lines[@]}" -eq 6 ] || return 1
+    expected_hash=${lines[5]#appimage_sha256=}
+    [[ "${lines[5]}" =~ ^appimage_sha256=[0-9a-f]{64}$ ]] || return 1
+    actual_hash=$(sha256sum "$image" | cut -d ' ' -f 1) || return
+    [ "$actual_hash" = "$expected_hash" ] || return 1
+
+    extract_dir=$(mktemp -d) || return
+    expected_base="$extract_dir/expected-base"
+    (umask 077; printf '%s\n' "${lines[@]:0:5}" >"$expected_base") ||
+        return
+    validate_appimage_base_manifest "$expected_base" || return
+
+    image_path=$(readlink -f -- "$image") || return
+    if [ "${GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT:-false}" != true ]; then
+        local elf_magic appimage_magic
+        elf_magic=$(dd if="$image_path" bs=1 count=4 \
+            2>/dev/null | od -An -tx1 | tr -d ' \n')
+        appimage_magic=$(dd if="$image_path" bs=1 skip=8 count=3 \
+            2>/dev/null | od -An -tx1 | tr -d ' \n')
+        [ "$elf_magic" = 7f454c46 ] && [ "$appimage_magic" = 414902 ] ||
+            return 1
+    fi
+    if ! (
+        cd "$extract_dir"
+        ulimit -c 0
+        LC_ALL=C env -u LD_LIBRARY_PATH -u LD_PRELOAD \
+            -u APPDIR -u APPIMAGE -u OWD \
+            "$image_path" --appimage-extract >/dev/null
+    ); then
+        return 1
+    fi
+    embedded="$extract_dir/squashfs-root/usr/share/goldencheetah/build-manifest"
+    if [ ! -f "$embedded" ] || [ -L "$embedded" ] ||
+       ! validate_appimage_base_manifest "$embedded" ||
+       ! cmp -s -- "$expected_base" "$embedded"; then
+        return 1
+    fi
+)
+
+promote_appimage_release()
+(
+    if [ "$#" -ne 3 ]; then
+        echo "Usage: promote_appimage_release IMAGE MANIFEST RELEASE_LINK" >&2
+        return 2
+    fi
+
+    local image=$1
+    local manifest=$2
+    local release_link=$3
+    local release_parent release_name store artifacts sets
+    local image_hash revision artifact_id artifact_dir artifact_temp=
+    local current_dir= current_hash= previous_image previous_manifest
+    local set_id set_dir set_temp= pointer_temp=
+    local old_pointer=
+
+    cleanup_appimage_promotion()
+    {
+        [ -z "$artifact_temp" ] || rm -rf -- "$artifact_temp"
+        [ -z "$set_temp" ] || rm -rf -- "$set_temp"
+        [ -z "$pointer_temp" ] || rm -f -- "$pointer_temp"
+    }
+    trap cleanup_appimage_promotion EXIT
+
+    verify_appimage_manifest "$image" "$manifest" || {
+        echo "Refusing to promote an unverified AppImage." >&2
+        return 1
+    }
+    image=$(readlink -f -- "$image") || return
+    manifest=$(readlink -f -- "$manifest") || return
+    image_hash=$(sed -n 's/^appimage_sha256=//p' "$manifest")
+    revision=$(sed -n 's/^source_revision=//p' "$manifest")
+    [[ "$image_hash" =~ ^[0-9a-f]{64}$ ]] || return 1
+    [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || return 1
+
+    release_parent=$(dirname -- "$release_link")
+    release_name=$(basename -- "$release_link")
+    [ "$release_name" != . ] && [ "$release_name" != .. ] &&
+        [ -n "$release_name" ] || return 1
+    mkdir -p -- "$release_parent" || return
+    release_parent=$(cd "$release_parent" && pwd -P) || return
+    release_link="$release_parent/$release_name"
+    if [ -e "$release_link" ] && [ ! -L "$release_link" ]; then
+        echo "The release pointer exists and is not a symlink." >&2
+        return 1
+    fi
+
+    store="$release_parent/.${release_name}.store"
+    if [ -e "$store" ]; then
+        [ -d "$store" ] && [ ! -L "$store" ] || return 1
+    else
+        (umask 077; mkdir -- "$store") || return
+    fi
+    [ "$(stat -c '%u' "$store")" = "$(id -u)" ] || return 1
+    if [ $((8#$(stat -c '%a' "$store") & 8#022)) -ne 0 ]; then
+        echo "The AppImage release store is writable by another user." >&2
+        return 1
+    fi
+    artifacts="$store/artifacts"
+    sets="$store/sets"
+    mkdir -m 0700 -p -- "$artifacts" "$sets" || return
+    exec 9>"$store/promotion.lock" || return
+    flock -x 9 || return
+
+    artifact_id="${revision}-${image_hash}"
+    artifact_dir="$artifacts/$artifact_id"
+    if [ ! -e "$artifact_dir" ]; then
+        artifact_temp=$(mktemp -d "$artifacts/.tmp.XXXXXX") || return
+        install -m 0755 "$image" "$artifact_temp/GoldenCheetah.AppImage" ||
+            return
+        install -m 0600 "$manifest" \
+            "$artifact_temp/GoldenCheetah.AppImage.manifest" || return
+        verify_appimage_manifest \
+            "$artifact_temp/GoldenCheetah.AppImage" \
+            "$artifact_temp/GoldenCheetah.AppImage.manifest" || return
+        mv -- "$artifact_temp" "$artifact_dir" || return
+        artifact_temp=
+    fi
+    [ -d "$artifact_dir" ] && [ ! -L "$artifact_dir" ] || return 1
+    verify_appimage_manifest \
+        "$artifact_dir/GoldenCheetah.AppImage" \
+        "$artifact_dir/GoldenCheetah.AppImage.manifest" || return
+    cmp -s -- "$image" "$artifact_dir/GoldenCheetah.AppImage" || return 1
+    cmp -s -- "$manifest" \
+        "$artifact_dir/GoldenCheetah.AppImage.manifest" || return 1
+
+    previous_image="$artifact_dir/GoldenCheetah.AppImage"
+    previous_manifest="$artifact_dir/GoldenCheetah.AppImage.manifest"
+    current_hash=$image_hash
+    if [ -L "$release_link" ]; then
+        old_pointer=$(readlink -- "$release_link") || return
+        current_dir=$(readlink -f -- "$release_link") || return
+        [ "$(dirname -- "$current_dir")" = "$sets" ] &&
+            [ -d "$current_dir" ] && [ ! -L "$current_dir" ] || return 1
+        verify_appimage_manifest \
+            "$current_dir/latest.AppImage" \
+            "$current_dir/latest.AppImage.manifest" || return
+        current_hash=$(sed -n 's/^appimage_sha256=//p' \
+            "$current_dir/latest.AppImage.manifest")
+        [[ "$current_hash" =~ ^[0-9a-f]{64}$ ]] || return 1
+        if [ "$current_hash" = "$image_hash" ]; then
+            cmp -s -- "$image" "$current_dir/latest.AppImage" || return 1
+            cmp -s -- "$manifest" \
+                "$current_dir/latest.AppImage.manifest" || return 1
+            printf '%s\n' "$release_link/latest.AppImage"
+            return 0
+        fi
+        previous_image=$(readlink -f -- "$current_dir/latest.AppImage") ||
+            return
+        previous_manifest="$current_dir/latest.AppImage.manifest"
+        case "$previous_image" in
+        "$artifacts"/*/GoldenCheetah.AppImage) ;;
+        *) return 1 ;;
+        esac
+    fi
+
+    set_id="${image_hash}-${current_hash}"
+    set_dir="$sets/$set_id"
+    if [ ! -e "$set_dir" ]; then
+        set_temp=$(mktemp -d "$sets/.tmp.XXXXXX") || return
+        ln -s "$(realpath --relative-to="$set_temp" \
+            "$artifact_dir/GoldenCheetah.AppImage")" \
+            "$set_temp/latest.AppImage" || return
+        install -m 0600 "$artifact_dir/GoldenCheetah.AppImage.manifest" \
+            "$set_temp/latest.AppImage.manifest" || return
+        ln -s "$(realpath --relative-to="$set_temp" "$previous_image")" \
+            "$set_temp/previous.AppImage" || return
+        install -m 0600 "$previous_manifest" \
+            "$set_temp/previous.AppImage.manifest" || return
+        verify_appimage_manifest \
+            "$set_temp/latest.AppImage" \
+            "$set_temp/latest.AppImage.manifest" || return
+        verify_appimage_manifest \
+            "$set_temp/previous.AppImage" \
+            "$set_temp/previous.AppImage.manifest" || return
+        mv -- "$set_temp" "$set_dir" || return
+        set_temp=
+    fi
+    [ -d "$set_dir" ] && [ ! -L "$set_dir" ] || return 1
+    verify_appimage_manifest \
+        "$set_dir/latest.AppImage" "$set_dir/latest.AppImage.manifest" ||
+        return
+    verify_appimage_manifest \
+        "$set_dir/previous.AppImage" "$set_dir/previous.AppImage.manifest" ||
+        return
+    [ "$(sed -n 's/^appimage_sha256=//p' \
+        "$set_dir/latest.AppImage.manifest")" = "$image_hash" ] || return 1
+    [ "$(sed -n 's/^appimage_sha256=//p' \
+        "$set_dir/previous.AppImage.manifest")" = "$current_hash" ] ||
+        return 1
+
+    sync -f "$store" || return
+    pointer_temp="$release_parent/.${release_name}.tmp.${BASHPID}.${RANDOM}"
+    ln -s ".${release_name}.store/sets/$set_id" "$pointer_temp" || return
+    mv -Tf -- "$pointer_temp" "$release_link" || return
+    pointer_temp=
+    if ! sync -f "$release_parent" ||
+       ! verify_appimage_manifest \
+            "$release_link/latest.AppImage" \
+            "$release_link/latest.AppImage.manifest" ||
+       ! verify_appimage_manifest \
+            "$release_link/previous.AppImage" \
+            "$release_link/previous.AppImage.manifest"; then
+        echo "AppImage promotion failed after pointer publication; rolling back." >&2
+        if [ -n "$old_pointer" ]; then
+            pointer_temp="$release_parent/.${release_name}.rollback.${BASHPID}.${RANDOM}"
+            ln -s "$old_pointer" "$pointer_temp" &&
+                mv -Tf -- "$pointer_temp" "$release_link" || return 1
+            pointer_temp=
+        else
+            rm -f -- "$release_link" || return
+        fi
+        sync -f "$release_parent" || return
+        return 1
+    fi
+    printf '%s\n' "$release_link/latest.AppImage"
+)
+
 write_source_revision()
 {
     local output=$1
