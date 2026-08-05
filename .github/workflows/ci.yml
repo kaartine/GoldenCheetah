@@ -36,7 +36,7 @@ jobs:
         run: ./.github/scripts/build.sh
       - name: Test
         run: |
-          ./.github/scripts/run-tests.sh
+          python3 ./.github/scripts/run-tests.py
           ./src/GoldenCheetah.app/Contents/MacOS/GoldenCheetah --version 2>GCversionMacOS_arm64.txt
           git log -1 >> GCversionMacOS_arm64.txt
           shasum -a 256 GoldenCheetah_v*_arm64.dmg | cut -f 1 -d ' ' >> GCversionMacOS_arm64.txt
