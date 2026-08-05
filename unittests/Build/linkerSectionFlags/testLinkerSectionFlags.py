@@ -35,6 +35,17 @@ PORTABLE_SECTION_PROJECTS = (
     "Train/libraryImportFileStager/libraryImportFileStager.pro",
     "Train/webDownloadImportPolicy/webDownloadImportPolicy.pro",
 )
+CUSTOM_SECTION_PROJECTS = {
+    "Core/rideCacheSaveSnapshot/rideCacheSaveSnapshot.pro",
+    "FileIO/atomicActivitySave/atomicActivitySave.pro",
+    "Python/pythonDataSeriesOwnership/testPythonDataSeriesOwnership.pro",
+}
+SECTION_FLAG_MARKERS = (
+    "-ffunction-sections",
+    "-fdata-sections",
+    "--gc-sections",
+    "-dead_strip",
+)
 
 
 def qmake_executable() -> str:
@@ -99,6 +110,27 @@ def main() -> None:
         raise AssertionError(
             "unit projects do not use portable section GC flags: "
             + ", ".join(missing_includes)
+        )
+
+    manual_section_projects = {
+        project.relative_to(UNITTESTS).as_posix()
+        for project in UNITTESTS.rglob("*.pro")
+        if any(
+            marker in project.read_text(encoding="utf-8")
+            for marker in SECTION_FLAG_MARKERS
+        )
+    }
+    unexpected_manual_projects = manual_section_projects - CUSTOM_SECTION_PROJECTS
+    missing_custom_projects = CUSTOM_SECTION_PROJECTS - manual_section_projects
+    if unexpected_manual_projects:
+        raise AssertionError(
+            "unit projects define section GC flags outside section-gc.prf: "
+            + ", ".join(sorted(unexpected_manual_projects))
+        )
+    if missing_custom_projects:
+        raise AssertionError(
+            "stale custom section GC project allowlist: "
+            + ", ".join(sorted(missing_custom_projects))
         )
 
     apple = generated_flags("apple")
