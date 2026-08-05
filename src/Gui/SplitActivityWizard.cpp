@@ -30,6 +30,9 @@
 #include <QCoreApplication>
 #include <QPointer>
 
+#include <memory>
+#include <utility>
+
 
 // Minimum gap in recording to find a natural break to split
 static const double defaultMinimumGap = 1; // 1 minute
@@ -1259,7 +1262,7 @@ SplitConfirm::validatePage()
              guardedAthlete, guardedCache,
              guardedHome, source, expectedSource,
              expectedContent, ride](
-                const QString &stagingPath, QString &stageError) {
+                QByteArray &contents, QString &stageError) {
                 if (!guardedWizard
                     || !splitWorkflowSourceSnapshotIsCurrent(
                         guardedContext, guardedAthlete,
@@ -1271,10 +1274,23 @@ SplitConfirm::validatePage()
                     return false;
                 }
                 JsonFileReader reader;
-                QFile stagingFile(stagingPath);
-                const bool written = reader.writeRideFile(
-                    guardedContext.data(), ride, stagingFile,
-                    stageError, false);
+                QByteArray json = reader.toByteArray(
+                    guardedContext.data(), ride,
+                    true, true, true, true);
+                QStringList validationErrors;
+                std::unique_ptr<RideFile> validation(
+                    reader.fromByteArray(json, validationErrors));
+                const bool written = bool(validation);
+                if (!written) {
+                    stageError = QObject::tr(
+                        "Cannot serialize a valid activity: %1")
+                        .arg(validationErrors.join(
+                            QStringLiteral("; ")));
+                } else {
+                    // Preserve the UTF-8 BOM emitted by normal JSON saves.
+                    json.prepend("\xEF\xBB\xBF", 3);
+                    contents = std::move(json);
+                }
                 if (!guardedWizard
                     || !splitWorkflowSourceSnapshotIsCurrent(
                         guardedContext, guardedAthlete,

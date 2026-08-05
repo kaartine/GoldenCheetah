@@ -6,6 +6,10 @@ TARGET = tst_splitActivitySave
 CONFIG += console testcase c++17 release
 CONFIG -= debug debug_and_release
 
+DEFINES += GC_SPLIT_ACTIVITY_SAVE_TEST_HOOKS \
+           GC_ANCHORED_FILESYSTEM_TEST_HOOKS \
+           GC_ANCHORED_FILESYSTEM_DUR007_TEST_HOOKS
+
 SOURCES = testSplitActivitySave.cpp
 
 exists(../../../src/Gui/SplitActivitySave.cpp) {
@@ -27,4 +31,10 @@ sanitize:!msvc {
                       -fno-omit-frame-pointer \
                       -fno-sanitize-recover=all
     QMAKE_LFLAGS += -fsanitize=address,undefined
+}
+
+tsan:!msvc {
+    QMAKE_CXXFLAGS += -fsanitize=thread \
+                      -fno-omit-frame-pointer
+    QMAKE_LFLAGS += -fsanitize=thread
 }
