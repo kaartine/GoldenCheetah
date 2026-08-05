@@ -3308,8 +3308,9 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   pass both configurations. The complete production application links, and an
   isolated 15-second offscreen event-loop smoke test with a disposable home
   directory does not exit or crash. The expanded Windows, macOS, and Linux
-  workflow is clean under `actionlint` 1.7.12; hosted results are recorded after
-  push rather than assumed locally.
+  workflow is clean under `actionlint` 1.7.12. Hosted run `30962466123` passes
+  all three jobs, and standard build run `30962466139` builds, tests, and
+  uploads the macOS package successfully.
 
 ### GUI-011: Repeat Plan treated committed outcomes as retryable failures
 
