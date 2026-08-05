@@ -36,8 +36,7 @@ INCLUDEPATH += ../../../src \
                ../../../qwt/src \
                ../../../contrib/qzip
 
-QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-QMAKE_LFLAGS += -Wl,--gc-sections
+include(../../section-gc.prf)
 
 QWT_LIB_DIR = $$OUT_PWD/../../../qwt/lib
 LIBS += -L$$QWT_LIB_DIR -lqwt -lz

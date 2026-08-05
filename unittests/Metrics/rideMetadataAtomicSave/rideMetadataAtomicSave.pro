@@ -29,8 +29,7 @@ INCLUDEPATH += ../../../src \
                ../../../src/Train \
                ../../../qwt/src
 
-QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-QMAKE_LFLAGS += -Wl,--gc-sections
+include(../../section-gc.prf)
 LIBS += -lz
 win32:LIBS += -ladvapi32
 
