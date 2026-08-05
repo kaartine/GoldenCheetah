@@ -359,6 +359,62 @@ private:
     std::function<void()> afterCommit_;
 };
 
+class BeforeCommitWriter final : public AtomicFileWriter
+{
+public:
+    BeforeCommitWriter(
+        std::unique_ptr<AtomicFileWriter> delegate,
+        std::function<void()> beforeCommit)
+        : delegate_(std::move(delegate)),
+          beforeCommit_(std::move(beforeCommit))
+    {
+    }
+
+    bool open() override
+    {
+        return delegate_ && delegate_->open();
+    }
+
+    qint64 write(const QByteArray &data) override
+    {
+        return delegate_ ? delegate_->write(data) : -1;
+    }
+
+    bool flush() override
+    {
+        return delegate_ && delegate_->flush();
+    }
+
+    bool commit() override
+    {
+        const std::function<void()> action =
+            std::move(beforeCommit_);
+        if (action) action();
+        return delegate_ && delegate_->commit();
+    }
+
+    void cancelWriting() override
+    {
+        if (delegate_) delegate_->cancelWriting();
+    }
+
+    QString errorString() const override
+    {
+        return delegate_
+            ? delegate_->errorString()
+            : QStringLiteral("Missing delegated atomic writer");
+    }
+
+    bool verifiesCommittedResult() const override
+    {
+        return delegate_ && delegate_->verifiesCommittedResult();
+    }
+
+private:
+    std::unique_ptr<AtomicFileWriter> delegate_;
+    std::function<void()> beforeCommit_;
+};
+
 class ObservableRideFile final : public RideFile
 {
 public:
@@ -530,7 +586,7 @@ bool replaceAndPinFixture(
     QString &error)
 {
     error.clear();
-    if (!QFile::rename(path, retainedPath)) {
+    if (!renameForSubstitution(path, retainedPath)) {
         error = QStringLiteral("Cannot retain the transaction-owned fixture");
         return false;
     }
@@ -604,6 +660,7 @@ private slots:
     void successReplacesOriginalAndMarksClean();
     void finalizeFailureKeepsDirty();
     void qSaveFileWriterCommitsReplacement();
+    void replaceWriterRejectsTargetSubstitutionAtCommit();
     void conversionMovesOriginalToBackup();
     void jsonRenameRemovesSupersededSource();
     void finalizationFailurePreservesTargetAndKeepsDirty();
@@ -957,6 +1014,79 @@ void TestAtomicActivitySave::qSaveFileWriterCommitsReplacement()
                                 qSaveFileWriterFactory(), error));
     QVERIFY(error.isEmpty());
     QCOMPARE(readAll(path), replacement);
+}
+
+void TestAtomicActivitySave::replaceWriterRejectsTargetSubstitutionAtCommit()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("activity.json"));
+    const QString retained =
+        dir.filePath(QStringLiteral("original-retained.json"));
+    const QByteArray original("original activity bytes");
+    const QByteArray replacement("new activity bytes");
+    writeFixture(path, original);
+
+    AnchoredFileSystem::DirectoryAnchor replacementParent;
+    AnchoredFileSystem::EntryRef replacementEntry;
+    AnchoredFileSystem::PinnedFile replacementPin;
+    QString injectionError;
+    bool replacementPinned = false;
+    const AtomicFileWriterFactory realFactory =
+        qSaveFileWriterFactory();
+    const AtomicFileWriterFactory factory = [
+            &replacementPinned,
+            &replacementParent,
+            &replacementEntry,
+            &replacementPin,
+            &injectionError,
+            &retained,
+            &original,
+            realFactory](const QString &target, AtomicFileMode mode) mutable {
+        std::unique_ptr<AtomicFileWriter> writer =
+            realFactory(target, mode);
+        return std::unique_ptr<AtomicFileWriter>(
+            new BeforeCommitWriter(
+                std::move(writer),
+                [&replacementPinned,
+                 &replacementParent,
+                 &replacementEntry,
+                 &replacementPin,
+                 &injectionError,
+                 &retained,
+                 &original,
+                 target]() {
+                    replacementPinned = replaceAndPinFixture(
+                        target,
+                        retained,
+                        original,
+                        replacementParent,
+                        replacementEntry,
+                        replacementPin,
+                        injectionError);
+                }));
+    };
+
+    QString error;
+    QVERIFY(!writeFileAtomically(
+        path, replacement, factory, error));
+
+    QVERIFY2(replacementPinned, qPrintable(injectionError));
+    QVERIFY(!error.isEmpty());
+    QCOMPARE(readAll(path), original);
+    QCOMPARE(readAll(retained), original);
+    const AnchoredFileSystem::NativeIdentity replacementIdentity =
+        replacementPin.identity();
+    replacementPin = {};
+    AnchoredFileSystem::PinnedFile currentReplacement;
+    QString matchError;
+    QVERIFY2(AnchoredFileSystem::pinRegularFile(
+                 replacementEntry, currentReplacement, matchError),
+             qPrintable(matchError));
+    QCOMPARE(currentReplacement.identity(), replacementIdentity);
+    QVERIFY(QDir(dir.path()).entryList(
+        {QStringLiteral("*.tmp")},
+        QDir::Files | QDir::Hidden).isEmpty());
 }
 
 void TestAtomicActivitySave::conversionMovesOriginalToBackup()

@@ -3218,6 +3218,11 @@ public:
         return delegate_ ? delegate_->errorString() : QString();
     }
 
+    bool verifiesCommittedResult() const override
+    {
+        return delegate_ && delegate_->verifiesCommittedResult();
+    }
+
 private:
     std::shared_ptr<JournalState> state_;
     AtomicFileWriterFactory delegateFactory_;

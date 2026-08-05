@@ -138,6 +138,8 @@ private:
         class PinnedFile &, QString &);
     friend MutationResult moveNoReplace(
         PinnedFile &, const EntryRef &);
+    friend MutationResult replaceExisting(
+        PinnedFile &, PinnedFile &);
     friend bool validateCurrentUserOwnedDirectory(
         const DirectoryAnchor &, QString &);
     friend bool validateCurrentUserControlledDirectory(
@@ -194,6 +196,8 @@ private:
     friend struct Detail::PinnedFileState;
     friend MutationResult moveNoReplace(
         PinnedFile &, const EntryRef &);
+    friend MutationResult replaceExisting(
+        PinnedFile &, PinnedFile &);
     friend MutationResult remove(PinnedFile &);
 };
 
@@ -238,6 +242,8 @@ private:
         const QByteArray &, const EntryRef &, PinnedFile &, QString &);
     friend struct MutationResult moveNoReplace(
         PinnedFile &, const EntryRef &);
+    friend struct MutationResult replaceExisting(
+        PinnedFile &, PinnedFile &);
     friend struct MutationResult remove(PinnedFile &);
 };
 
@@ -328,6 +334,13 @@ bool writeNewFile(
 MutationResult moveNoReplace(
     PinnedFile &source,
     const EntryRef &destination);
+
+// Replaces one observed regular-file generation without discarding a
+// concurrently substituted name. On success, replacement follows the target
+// name and expectedTarget follows the former staging name or a private backup.
+MutationResult replaceExisting(
+    PinnedFile &replacement,
+    PinnedFile &expectedTarget);
 
 // Private-directory operations exclude processes sharing the same OS identity
 // and privileged administrators from their attacker model.

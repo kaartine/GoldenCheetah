@@ -601,6 +601,51 @@ int renameNoReplaceNative(
     return -1;
 }
 
+int exchangeNamesNative(
+    int firstDirectory,
+    const QByteArray &first,
+    int secondDirectory,
+    const QByteArray &second,
+    bool &unsupported)
+{
+    unsupported = false;
+#if defined(Q_OS_LINUX) && defined(SYS_renameat2) \
+    && defined(RENAME_EXCHANGE)
+    const int result = int(::syscall(
+        SYS_renameat2,
+        firstDirectory,
+        first.constData(),
+        secondDirectory,
+        second.constData(),
+        RENAME_EXCHANGE));
+    if (result == 0) return 0;
+    if (errno != ENOSYS && errno != EINVAL
+#ifdef EOPNOTSUPP
+        && errno != EOPNOTSUPP
+#endif
+    ) {
+        return -1;
+    }
+    unsupported = true;
+#elif defined(Q_OS_MACOS) && defined(RENAME_SWAP)
+    const int result = ::renameatx_np(
+        firstDirectory,
+        first.constData(),
+        secondDirectory,
+        second.constData(),
+        RENAME_SWAP);
+    if (result == 0) return 0;
+    if (errno == ENOTSUP || errno == EINVAL) unsupported = true;
+#else
+    Q_UNUSED(firstDirectory)
+    Q_UNUSED(first)
+    Q_UNUSED(secondDirectory)
+    Q_UNUSED(second)
+    unsupported = true;
+#endif
+    return -1;
+}
+
 #if defined(Q_OS_MACOS)
 bool macDirectoryHasExtendedAcl(
     int descriptor, bool &hasAcl, QString &error)
@@ -5322,6 +5367,523 @@ MutationResult createPrivateFixedChildDirectory(
 {
     return Detail::PrivateDirectoryOperations::createFixed(
         parent, component, directory);
+}
+
+MutationResult replaceExisting(
+    PinnedFile &replacement,
+    PinnedFile &expectedTarget)
+{
+    MutationResult result;
+    if (!replacement.state_ || !expectedTarget.state_) {
+        result.error = QStringLiteral(
+            "An anchored replacement endpoint is unavailable");
+        return result;
+    }
+    if (replacement.identity() == expectedTarget.identity()) {
+        result.error = QStringLiteral(
+            "An anchored replacement requires distinct files");
+        return result;
+    }
+
+    const EntryRef staging = replacement.state_->entry;
+    const EntryRef target = expectedTarget.state_->entry;
+    if (!staging.isValid() || !target.isValid()
+        || staging.parent_.identity() != target.parent_.identity()
+        || staging.component_ == target.component_) {
+        result.error = QStringLiteral(
+            "An anchored replacement requires distinct sibling names");
+        return result;
+    }
+
+    bool stagingMatches = false;
+    bool targetMatches = false;
+    if (!entryMatches(
+            staging, replacement, stagingMatches, result.error)
+        || !stagingMatches) {
+        result.effect = MutationEffect::Conflict;
+        if (result.error.isEmpty()) {
+            result.error = QStringLiteral(
+                "The anchored replacement staging file was replaced");
+        }
+        return result;
+    }
+    if (!entryMatches(
+            target, expectedTarget, targetMatches, result.error)
+        || !targetMatches) {
+        result.effect = MutationEffect::Conflict;
+        if (result.error.isEmpty()) {
+            result.error = QStringLiteral(
+                "The anchored replacement target was replaced");
+        }
+        return result;
+    }
+    if (!staging.parent_.pathMatches(result.error)) {
+        if (result.error.isEmpty()) {
+            result.error = QStringLiteral(
+                "The anchored replacement parent was replaced");
+        }
+        return result;
+    }
+
+#ifdef Q_OS_UNIX
+    const auto refreshHeld = [](PinnedFile &file, QString &error) {
+        UnixStamp current;
+        if (!captureUnixStamp(
+                file.state_->descriptor.get(), current, false, error)
+            || !sameUnixIdentityAndData(
+                current, file.state_->stamp)
+            || current.links != 1) {
+            if (error.isEmpty()) {
+                error = QStringLiteral(
+                    "An anchored replacement file changed unexpectedly");
+            }
+            return false;
+        }
+        file.state_->stamp = current;
+        file.state_->identity = unixIdentity(current, 'f');
+        return true;
+    };
+    const auto nameMatches = [](
+        const EntryRef &entry,
+        const PinnedFile &file,
+        bool &matches,
+        QString &error) {
+        matches = false;
+        UnixStamp held;
+        if (!captureUnixStamp(
+                file.state_->descriptor.get(), held, false, error)) {
+            return false;
+        }
+        UnixStamp named;
+        bool exists = false;
+        if (!statEntry(
+                entry.parent_.state_->descriptor.get(),
+                entry.component_, named, exists, error)) {
+            return false;
+        }
+        matches = exists && named == held;
+        return true;
+    };
+
+    reportAnchoredFilesystemTransition(
+        "replace-before-publish",
+        staging.displayPath_,
+        target.displayPath_);
+    const QByteArray stagingName = QFile::encodeName(staging.component_);
+    const QByteArray targetName = QFile::encodeName(target.component_);
+    bool unsupported = false;
+    const int exchangeResult = exchangeNamesNative(
+        staging.parent_.state_->descriptor.get(),
+        stagingName,
+        target.parent_.state_->descriptor.get(),
+        targetName,
+        unsupported);
+    const int exchangeError = exchangeResult == 0 ? 0 : errno;
+    if (exchangeResult == 0) {
+        reportAnchoredFilesystemTransition(
+            "replace-published",
+            staging.displayPath_,
+            target.displayPath_);
+    }
+
+    QString inspectionError;
+    const bool replacementHeld = refreshHeld(
+        replacement, inspectionError);
+    const bool targetHeld = refreshHeld(
+        expectedTarget, inspectionError);
+    bool targetIsReplacement = false;
+    bool stagingIsExpectedTarget = false;
+    const bool targetInspected = replacementHeld
+        && nameMatches(
+            target, replacement,
+            targetIsReplacement, inspectionError);
+    const bool stagingInspected = targetHeld
+        && nameMatches(
+            staging, expectedTarget,
+            stagingIsExpectedTarget, inspectionError);
+
+    if (targetInspected && stagingInspected
+        && targetIsReplacement && stagingIsExpectedTarget) {
+        replacement.state_->entry = target;
+        expectedTarget.state_->entry = staging;
+        QString syncError;
+        if (!staging.parent_.sync(syncError)) {
+            result.effect = MutationEffect::AppliedNotDurable;
+            result.error = syncError;
+            return result;
+        }
+        QString parentError;
+        bool finalTargetMatches = false;
+        bool finalStagingMatches = false;
+        if (!staging.parent_.pathMatches(parentError)
+            || !entryMatches(
+                target, replacement,
+                finalTargetMatches, parentError)
+            || !entryMatches(
+                staging, expectedTarget,
+                finalStagingMatches, parentError)
+            || !finalTargetMatches || !finalStagingMatches) {
+            result.effect = MutationEffect::Partial;
+            result.error = parentError.isEmpty()
+                ? QStringLiteral(
+                    "The anchored replacement changed after publication")
+                : parentError;
+            result.verifiedRecoveryPath =
+                replacement.verifiedPath(target);
+            return result;
+        }
+        result.effect = MutationEffect::AppliedDurable;
+        return result;
+    }
+
+    bool stagingIsReplacement = false;
+    bool targetIsExpectedTarget = false;
+    QString unchangedError;
+    const bool stagingChecked = replacementHeld
+        && nameMatches(
+            staging, replacement,
+            stagingIsReplacement, unchangedError);
+    const bool targetChecked = targetHeld
+        && nameMatches(
+            target, expectedTarget,
+            targetIsExpectedTarget, unchangedError);
+    if (exchangeResult != 0
+        && stagingChecked && targetChecked
+        && stagingIsReplacement && targetIsExpectedTarget) {
+        result.error = unsupported
+            ? QStringLiteral(
+                "The filesystem cannot exchange anchored file names")
+            : nativeError(
+                QStringLiteral(
+                    "Cannot exchange anchored replacement files"),
+                exchangeError);
+        return result;
+    }
+
+    if (exchangeResult != 0) {
+        result.effect = MutationEffect::Conflict;
+        result.error = inspectionError.isEmpty()
+            ? QStringLiteral(
+                "An anchored replacement endpoint changed before publication")
+            : inspectionError;
+        return result;
+    }
+
+    PinnedFile firstAfterExchange;
+    PinnedFile secondAfterExchange;
+    QString pinError;
+    const bool firstPinned = pinRegularFile(
+        staging, firstAfterExchange, pinError);
+    const bool secondPinned = pinRegularFile(
+        target, secondAfterExchange, pinError);
+    reportAnchoredFilesystemTransition(
+        "replace-before-rollback",
+        target.displayPath_,
+        staging.displayPath_);
+    bool rollbackUnsupported = false;
+    const int rollbackResult = exchangeNamesNative(
+        staging.parent_.state_->descriptor.get(),
+        stagingName,
+        target.parent_.state_->descriptor.get(),
+        targetName,
+        rollbackUnsupported);
+    const int rollbackError = rollbackResult == 0 ? 0 : errno;
+    if (rollbackResult != 0) {
+        result.effect = MutationEffect::Partial;
+        result.error = rollbackUnsupported
+            ? QStringLiteral(
+                "The filesystem could not roll back an anchored replacement")
+            : nativeError(
+                QStringLiteral(
+                    "Cannot roll back an anchored replacement"),
+                rollbackError);
+        result.verifiedRecoveryPath =
+            replacement.verifiedPath(target);
+        return result;
+    }
+
+    refreshHeld(replacement, pinError);
+    refreshHeld(expectedTarget, pinError);
+    bool firstRestored = false;
+    bool secondRestored = false;
+    QString rollbackInspectionError;
+    const bool rollbackVerified = firstPinned && secondPinned
+        && nameMatches(
+            target, firstAfterExchange,
+            firstRestored, rollbackInspectionError)
+        && nameMatches(
+            staging, secondAfterExchange,
+            secondRestored, rollbackInspectionError)
+        && firstRestored && secondRestored;
+    QString syncError;
+    const bool rollbackSynced = staging.parent_.sync(syncError);
+    if (!rollbackVerified || !rollbackSynced) {
+        result.effect = MutationEffect::Partial;
+        result.error = !rollbackInspectionError.isEmpty()
+            ? rollbackInspectionError
+            : (!pinError.isEmpty() ? pinError : syncError);
+        if (result.error.isEmpty()) {
+            result.error = QStringLiteral(
+                "The anchored replacement rollback could not be verified");
+        }
+        return result;
+    }
+    result.effect = MutationEffect::Conflict;
+    result.error = QStringLiteral(
+        "An anchored replacement endpoint changed before publication");
+    return result;
+#elif defined(Q_OS_WIN)
+    const NativeIdentity replacementIdentity = replacement.identity();
+    const qint64 replacementSize = replacement.size();
+    const QByteArray replacementDigest = replacement.sha256();
+    const NativeIdentity targetIdentity = expectedTarget.identity();
+    const qint64 targetSize = expectedTarget.size();
+    const QByteArray targetDigest = expectedTarget.sha256();
+    const auto exactFile = [](
+        const PinnedFile &file,
+        const NativeIdentity &identity,
+        qint64 size,
+        const QByteArray &digest) {
+        return file.isValid()
+            && file.identity() == identity
+            && file.size() == size
+            && file.sha256() == digest;
+    };
+    const auto refreshExpectedTarget = [&expectedTarget](QString &error) {
+        WindowsStamp current;
+        if (!captureWindowsStamp(
+                expectedTarget.state_->handle.get(),
+                current, false, error)
+            || !sameWindowsMoveIdentityAndData(
+                current, expectedTarget.state_->stamp)) {
+            if (error.isEmpty()) {
+                error = QStringLiteral(
+                    "The expected replacement target changed unexpectedly");
+            }
+            return false;
+        }
+        expectedTarget.state_->stamp = current;
+        expectedTarget.state_->identity = windowsIdentity(current, 'f');
+        return true;
+    };
+
+    EntryRef backup;
+    for (int attempt = 0; attempt < 16; ++attempt) {
+        const QString component = QStringLiteral(".gc-replace-%1.tmp")
+            .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+        QString entryError;
+        EntryRef candidate = staging.parent_.entry(component, entryError);
+        bool exists = true;
+        if (candidate.isValid()
+            && entryExists(candidate, exists, entryError)
+            && !exists) {
+            backup = candidate;
+            break;
+        }
+    }
+    if (!backup.isValid()) {
+        result.error = QStringLiteral(
+            "Cannot reserve an anchored replacement backup name");
+        return result;
+    }
+
+    replacement.state_->handle.reset();
+    replacement = {};
+    reportAnchoredFilesystemTransition(
+        "replace-before-publish",
+        staging.displayPath_,
+        target.displayPath_);
+    const QString nativeTarget = QDir::toNativeSeparators(
+        target.displayPath_);
+    const QString nativeStaging = QDir::toNativeSeparators(
+        staging.displayPath_);
+    const QString nativeBackup = QDir::toNativeSeparators(
+        backup.displayPath_);
+    const BOOL replaced = ::ReplaceFileW(
+        reinterpret_cast<LPCWSTR>(nativeTarget.utf16()),
+        reinterpret_cast<LPCWSTR>(nativeStaging.utf16()),
+        reinterpret_cast<LPCWSTR>(nativeBackup.utf16()),
+        0,
+        nullptr,
+        nullptr);
+    const DWORD replaceError = replaced
+        ? ERROR_SUCCESS : ::GetLastError();
+    PinnedFile published;
+    PinnedFile displaced;
+    PinnedFile remainingStaging;
+    QString pinError;
+    const bool publishedPinned = pinRegularFile(
+        target, published, pinError);
+    const bool displacedPinned = pinRegularFile(
+        backup, displaced, pinError);
+    QString stagingError;
+    const bool remainingStagingPinned = pinRegularFile(
+        staging, remainingStaging, stagingError);
+    if (!replaced) {
+        bool backupExists = false;
+        QString existenceError;
+        const bool backupInspected = entryExists(
+            backup, backupExists, existenceError);
+        const bool unchanged = publishedPinned
+            && remainingStagingPinned
+            && exactFile(
+                published,
+                targetIdentity,
+                targetSize,
+                targetDigest)
+            && exactFile(
+                remainingStaging,
+                replacementIdentity,
+                replacementSize,
+                replacementDigest)
+            && backupInspected && !backupExists;
+        if (unchanged) {
+            replacement = std::move(remainingStaging);
+            QString refreshError;
+            refreshExpectedTarget(refreshError);
+            result.error = windowsError(
+                QStringLiteral(
+                    "Cannot publish an anchored replacement"),
+                replaceError);
+            return result;
+        }
+    }
+    if (replaced || (publishedPinned && displacedPinned)) {
+        reportAnchoredFilesystemTransition(
+            "replace-published",
+            staging.displayPath_,
+            target.displayPath_);
+    }
+
+    const bool expectedPublication = publishedPinned && displacedPinned
+        && exactFile(
+            published,
+            replacementIdentity,
+            replacementSize,
+            replacementDigest)
+        && exactFile(
+            displaced,
+            targetIdentity,
+            targetSize,
+            targetDigest);
+    if (expectedPublication) {
+        replacement = std::move(published);
+        expectedTarget = std::move(displaced);
+        QString syncError;
+        if (!staging.parent_.sync(syncError)) {
+            result.effect = MutationEffect::AppliedNotDurable;
+            result.error = syncError;
+            return result;
+        }
+        bool finalTargetMatches = false;
+        bool finalBackupMatches = false;
+        QString finalError;
+        if (!staging.parent_.pathMatches(finalError)
+            || !entryMatches(
+                target, replacement,
+                finalTargetMatches, finalError)
+            || !entryMatches(
+                backup, expectedTarget,
+                finalBackupMatches, finalError)
+            || !finalTargetMatches || !finalBackupMatches) {
+            result.effect = MutationEffect::Partial;
+            result.error = finalError.isEmpty()
+                ? QStringLiteral(
+                    "The anchored replacement changed after publication")
+                : finalError;
+            result.verifiedRecoveryPath =
+                replacement.verifiedPath(target);
+            return result;
+        }
+        result.effect = replaced
+            ? MutationEffect::AppliedDurable
+            : MutationEffect::AppliedNotDurable;
+        if (!replaced) {
+            result.error = windowsError(
+                QStringLiteral(
+                    "Windows reported an incomplete anchored replacement"),
+                replaceError);
+        }
+        return result;
+    }
+
+    if (!publishedPinned || !displacedPinned) {
+        result.effect = MutationEffect::Partial;
+        result.error = pinError.isEmpty()
+            ? QStringLiteral(
+                "Cannot identify files after an anchored replacement")
+            : pinError;
+        return result;
+    }
+
+    reportAnchoredFilesystemTransition(
+        "replace-before-rollback",
+        target.displayPath_,
+        staging.displayPath_);
+    const MutationResult restoreStaging = moveNoReplace(
+        published, staging);
+    if (!restoreStaging.applied()) {
+        result.effect = MutationEffect::Partial;
+        result.error = restoreStaging.error.isEmpty()
+            ? QStringLiteral(
+                "Cannot retain the rejected replacement staging file")
+            : restoreStaging.error;
+        result.verifiedRecoveryPath =
+            published.verifiedPath(target);
+        return result;
+    }
+    const MutationResult restoreTarget = moveNoReplace(
+        displaced, target);
+    if (!restoreTarget.applied()) {
+        result.effect = MutationEffect::Partial;
+        result.error = restoreTarget.error.isEmpty()
+            ? QStringLiteral(
+                "Cannot restore the displaced replacement target")
+            : restoreTarget.error;
+        result.verifiedRecoveryPath =
+            displaced.verifiedPath(backup);
+        return result;
+    }
+
+    QString refreshError;
+    refreshExpectedTarget(refreshError);
+    const bool originalReplacementRestored = exactFile(
+            published,
+            replacementIdentity,
+            replacementSize,
+            replacementDigest);
+    if (originalReplacementRestored) {
+        replacement = std::move(published);
+    }
+    QString syncError;
+    const bool rollbackSynced = staging.parent_.sync(syncError);
+    bool restoredStagingMatches = false;
+    bool restoredTargetMatches = false;
+    QString rollbackError;
+    const PinnedFile &restoredStaging = originalReplacementRestored
+        ? replacement : published;
+    const bool rollbackVerified = entryMatches(
+            staging, restoredStaging,
+            restoredStagingMatches, rollbackError)
+        && entryMatches(
+            target, displaced,
+            restoredTargetMatches, rollbackError)
+        && restoredStagingMatches && restoredTargetMatches;
+    if (!rollbackSynced || !rollbackVerified) {
+        result.effect = MutationEffect::Partial;
+        result.error = !rollbackError.isEmpty()
+            ? rollbackError : syncError;
+        return result;
+    }
+    result.effect = MutationEffect::Conflict;
+    result.error = QStringLiteral(
+        "An anchored replacement endpoint changed before publication");
+    return result;
+#else
+    result.error = QStringLiteral(
+        "Anchored filesystem operations are unsupported on this platform");
+    return result;
+#endif
 }
 
 MutationResult moveNoReplace(

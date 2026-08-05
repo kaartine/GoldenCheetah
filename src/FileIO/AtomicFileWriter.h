@@ -492,6 +492,7 @@ public:
     virtual bool commit() = 0;
     virtual void cancelWriting() = 0;
     virtual QString errorString() const = 0;
+    virtual bool verifiesCommittedResult() const { return false; }
 };
 
 enum class AtomicFileMode {
@@ -515,103 +516,6 @@ using AtomicPreCommitValidation =
 using AtomicMoveFunction = std::function<bool(
     const QString &sourcePath, const QString &targetPath, QString &error)>;
 
-inline bool publishAtomicReplacement(const QString &temporaryPath,
-                                     const QString &targetPath,
-                                     QString &error)
-{
-#ifdef Q_OS_UNIX
-    const QByteArray temporary = QFile::encodeName(temporaryPath);
-    const QByteArray target = QFile::encodeName(targetPath);
-    int result;
-    do {
-        result = ::rename(temporary.constData(), target.constData());
-    } while (result != 0 && errno == EINTR);
-    if (result != 0) {
-        error = QStringLiteral("Cannot publish the activity file: %1")
-                    .arg(QString::fromLocal8Bit(std::strerror(errno)));
-        return false;
-    }
-#elif defined(Q_OS_WIN)
-    const QString temporary = QDir::toNativeSeparators(temporaryPath);
-    const QString target = QDir::toNativeSeparators(targetPath);
-    const HANDLE replacement = ::CreateFileW(
-        reinterpret_cast<LPCWSTR>(temporary.utf16()),
-        DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        nullptr,
-        OPEN_EXISTING,
-        FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_WRITE_THROUGH,
-        nullptr);
-    if (replacement == nullptr
-        || replacement == INVALID_HANDLE_VALUE) {
-        error = QStringLiteral(
-                    "Cannot open the replacement activity file: "
-                    "system error %1")
-                    .arg(::GetLastError());
-        return false;
-    }
-
-    const DWORD targetBytes = DWORD(target.size() * sizeof(wchar_t));
-    const size_t bufferSize = sizeof(FILE_RENAME_INFO)
-        + size_t(targetBytes);
-    std::vector<unsigned char> storage(bufferSize, 0);
-    auto *rename = reinterpret_cast<FILE_RENAME_INFO *>(storage.data());
-    rename->RootDirectory = nullptr;
-    rename->FileNameLength = targetBytes;
-    std::memcpy(rename->FileName, target.utf16(), targetBytes);
-
-    // FileRenameInfoEx and its first two flags have a stable Windows ABI,
-    // including in SDKs that do not expose their symbolic names. POSIX
-    // replacement keeps existing shared-delete handles attached to the old
-    // file while publishing the new file at the same name.
-    constexpr auto fileRenameInfoEx =
-        static_cast<FILE_INFO_BY_HANDLE_CLASS>(22);
-    constexpr DWORD replaceIfExists = 0x00000001;
-    constexpr DWORD posixSemantics = 0x00000002;
-    const DWORD extendedFlags = replaceIfExists | posixSemantics;
-    std::memcpy(storage.data(), &extendedFlags, sizeof(extendedFlags));
-    BOOL published = ::SetFileInformationByHandle(
-        replacement,
-        fileRenameInfoEx,
-        rename,
-        DWORD(storage.size()));
-    DWORD publishError = published
-        ? ERROR_SUCCESS : ::GetLastError();
-
-    if (!published
-        && (publishError == ERROR_INVALID_FUNCTION
-            || publishError == ERROR_INVALID_PARAMETER
-            || publishError == ERROR_NOT_SUPPORTED)) {
-        std::fill(storage.begin(), storage.end(), 0);
-        rename->ReplaceIfExists = TRUE;
-        rename->RootDirectory = nullptr;
-        rename->FileNameLength = targetBytes;
-        std::memcpy(rename->FileName, target.utf16(), targetBytes);
-        published = ::SetFileInformationByHandle(
-            replacement,
-            FileRenameInfo,
-            rename,
-            DWORD(storage.size()));
-        publishError = published
-            ? ERROR_SUCCESS : ::GetLastError();
-    }
-    ::CloseHandle(replacement);
-    if (!published) {
-        error = QStringLiteral(
-                    "Cannot publish the activity file: system error %1")
-                    .arg(publishError);
-        return false;
-    }
-#else
-    Q_UNUSED(temporaryPath);
-    Q_UNUSED(targetPath);
-    error = QStringLiteral(
-        "Atomic activity replacement is unsupported on this platform");
-    return false;
-#endif
-    return true;
-}
-
 class ReplaceAtomicFileWriter final : public AtomicFileWriter
 {
 public:
@@ -626,6 +530,26 @@ public:
 
     bool open() override
     {
+        error_.clear();
+        const QString parentPath = QFileInfo(targetPath_).absolutePath();
+        if (!AnchoredFileSystem::DirectoryAnchor::open(
+                parentPath, parent_, error_)
+            || !parent_.pathMatches(error_)) {
+            error_ = QStringLiteral(
+                "Cannot anchor the atomic replacement directory: %1")
+                         .arg(error_);
+            return false;
+        }
+        targetEntry_ = parent_.entry(
+            QFileInfo(targetPath_).fileName(), error_);
+        if (!targetEntry_.isValid()
+            || !AnchoredFileSystem::pinRegularFile(
+                targetEntry_, expectedTarget_, error_)) {
+            error_ = QStringLiteral(
+                "Cannot pin the existing atomic replacement target: %1")
+                         .arg(error_);
+            return false;
+        }
         if (!file_ || !file_->open()) {
             error_ = file_
                 ? file_->errorString()
@@ -634,12 +558,25 @@ public:
             return false;
         }
         temporaryPath_ = file_->fileName();
+        stagedHash_.reset();
+        stagedSize_ = 0;
         return true;
     }
 
     qint64 write(const QByteArray &data) override
     {
-        return file_ ? file_->write(data) : -1;
+        if (!file_) return -1;
+        const qint64 written = file_->write(data);
+        if (written <= 0) return written;
+        if (stagedSize_ > std::numeric_limits<qint64>::max() - written) {
+            error_ = QStringLiteral(
+                "The atomic replacement is unexpectedly large");
+            return -1;
+        }
+        stagedHash_.addData(
+            QByteArrayView(data.constData(), qsizetype(written)));
+        stagedSize_ += written;
+        return written;
     }
 
     bool flush() override
@@ -653,19 +590,109 @@ public:
 
     bool commit() override
     {
-        if (!file_ || temporaryPath_.isEmpty()) {
+        if (!file_ || temporaryPath_.isEmpty()
+            || !parent_.isValid() || !targetEntry_.isValid()
+            || !expectedTarget_.isValid()) {
             error_ = QStringLiteral(
                 "Atomic replacement is not open");
             return false;
         }
-        file_->setAutoRemove(false);
-        file_.reset();
-        if (!publishAtomicReplacement(
-                temporaryPath_, targetPath_, error_)) {
-            QFile::remove(temporaryPath_);
+
+        AnchoredFileSystem::EntryRef stagingEntry = parent_.entry(
+            QFileInfo(temporaryPath_).fileName(), error_);
+        if (!stagingEntry.isValid()) {
+            error_ = QStringLiteral(
+                "Cannot reference the atomic replacement staging file: %1")
+                         .arg(error_);
             return false;
         }
-        return true;
+
+        AnchoredFileSystem::PinnedFile staging;
+        AnchoredFileSystem::WriterPinHandoffState handoff;
+        QString anchorError;
+        if (!AnchoredFileSystem::pinRegularFileAfterWriterRelease(
+                stagingEntry,
+                file_->handle(),
+                stagedSize_,
+                stagedHash_.result(),
+                [this]() {
+                    file_->setAutoRemove(false);
+                    file_.reset();
+                },
+                staging,
+                handoff,
+                anchorError)) {
+            error_ = QStringLiteral(
+                "Cannot pin the atomic replacement staging file: %1")
+                         .arg(anchorError);
+            if (handoff.writerReleased) {
+                error_ += QStringLiteral(
+                    "; writer released; staging retained for recovery");
+            }
+            return false;
+        }
+
+        const auto appendError = [this](const QString &detail) {
+            if (detail.isEmpty()) return;
+            if (!error_.isEmpty()) error_ += QStringLiteral("; ");
+            error_ += detail;
+        };
+        const auto removePinned = [&appendError](
+                AnchoredFileSystem::PinnedFile &file,
+                const AnchoredFileSystem::DirectoryAnchor &parent,
+                const QString &failure) {
+            const AnchoredFileSystem::MutationResult removal =
+                AnchoredFileSystem::remove(file);
+            if (removal.effect
+                == AnchoredFileSystem::MutationEffect::AppliedDurable) {
+                return true;
+            }
+            if (removal.effect
+                == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
+                QString syncError;
+                if (parent.sync(syncError)) return true;
+                appendError(syncError);
+            }
+            appendError(removal.error.isEmpty() ? failure : removal.error);
+            if (!removal.verifiedRecoveryPath.isEmpty()) {
+                appendError(QStringLiteral("recovery file retained at %1")
+                    .arg(removal.verifiedRecoveryPath));
+            }
+            return false;
+        };
+
+        error_.clear();
+        const AnchoredFileSystem::MutationResult publication =
+            AnchoredFileSystem::replaceExisting(
+                staging, expectedTarget_);
+        if (publication.effect
+            == AnchoredFileSystem::MutationEffect::AppliedDurable) {
+            removePinned(
+                expectedTarget_,
+                parent_,
+                QStringLiteral(
+                    "cannot remove the previous atomic target"));
+            return true;
+        }
+
+        error_ = publication.error.isEmpty()
+            ? QStringLiteral("Cannot publish the atomic replacement")
+            : publication.error;
+        if (!publication.verifiedRecoveryPath.isEmpty()) {
+            appendError(QStringLiteral("recovery file retained at %1")
+                .arg(publication.verifiedRecoveryPath));
+        }
+        if (publication.effect
+                == AnchoredFileSystem::MutationEffect::NoEffect
+            || publication.effect
+                == AnchoredFileSystem::MutationEffect::Conflict) {
+            removePinned(
+                staging,
+                parent_,
+                QStringLiteral(
+                    "cannot remove the rejected replacement staging file"));
+        }
+        return false;
     }
 
     void cancelWriting() override
@@ -685,11 +712,18 @@ public:
         return file_ ? file_->fileName() : temporaryPath_;
     }
 
+    bool verifiesCommittedResult() const override { return true; }
+
 private:
     QString targetPath_;
     std::unique_ptr<QTemporaryFile> file_;
     QString temporaryPath_;
     QString error_;
+    AnchoredFileSystem::DirectoryAnchor parent_;
+    AnchoredFileSystem::EntryRef targetEntry_;
+    AnchoredFileSystem::PinnedFile expectedTarget_;
+    QCryptographicHash stagedHash_{QCryptographicHash::Sha256};
+    qint64 stagedSize_ = 0;
 };
 
 inline bool publishAtomicNew(const QString &temporaryPath,
@@ -1062,6 +1096,8 @@ public:
             return error_;
         return file_ ? file_->errorString() : QString();
     }
+
+    bool verifiesCommittedResult() const override { return true; }
 
 private:
     bool targetExists() const
@@ -1553,37 +1589,49 @@ inline bool restoreAtomicFile(const QString &path, bool hadOriginal,
         return true;
     }
 
-    ReplaceAtomicFileWriter restore(path);
-    if (!restore.open()) {
+    const QFileInfo current(path);
+    if (current.isSymLink()) {
+        appendAtomicFileError(
+            error,
+            QStringLiteral(
+                "cannot restore the previous activity through a symbolic link"));
+        return false;
+    }
+    std::unique_ptr<AtomicFileWriter> restore = current.exists()
+        ? std::unique_ptr<AtomicFileWriter>(
+            new ReplaceAtomicFileWriter(path))
+        : std::unique_ptr<AtomicFileWriter>(
+            new NewAtomicFileWriter(path));
+    if (!restore->open()) {
         appendAtomicFileError(
             error,
             QStringLiteral("cannot restore the previous activity: %1")
-                .arg(restore.errorString()));
+                .arg(restore->errorString()));
         return false;
     }
-    if (restore.write(original)
+    if (restore->write(original)
         != static_cast<qint64>(original.size())) {
         appendAtomicFileError(
             error,
             QStringLiteral("cannot rewrite the previous activity: %1")
-                .arg(restore.errorString()));
-        restore.cancelWriting();
+                .arg(restore->errorString()));
+        restore->cancelWriting();
         return false;
     }
-    if (!restore.flush()) {
+    if (!restore->flush()) {
         appendAtomicFileError(
             error,
             QStringLiteral("cannot flush the restored activity: %1")
-                .arg(restore.errorString()));
-        restore.cancelWriting();
+                .arg(restore->errorString()));
+        restore->cancelWriting();
         return false;
     }
     QString syncError;
-    if (!restore.commit()) {
+    if (!restore->commit()) {
         appendAtomicFileError(
             error,
             QStringLiteral("cannot commit the restored activity: %1")
-                .arg(restore.errorString()));
+                .arg(restore->errorString()));
         return false;
     }
     if (!syncParentDirectory(path, syncError)) {
@@ -1695,6 +1743,10 @@ inline bool writeFileAtomically(const QString &path,
         error = atomicFileError(QStringLiteral("Cannot commit the activity file"),
                                 *writer);
         return false;
+    }
+
+    if (writer->verifiesCommittedResult()) {
+        return true;
     }
 
     QString syncError;
