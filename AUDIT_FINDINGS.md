@@ -5950,9 +5950,12 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### BUILD-011: AppImage metadata is not bound to the binary source revision
 
-- Status: OPEN
-- Code: `src/Resources/linux/AppImagePackagingSupport.sh:91`,
-  `src/Resources/linux/MakeAppImageQt6.sh:110`, and release orchestration
+- Status: FIXED
+- Code: `src/Core/main.cpp`, `src/src.pro`,
+  `src/Resources/linux/AppImagePackagingSupport.sh`,
+  `src/Resources/linux/MakeAppImageQt6.sh`,
+  `.devcontainer/package-appimage.sh`, `appveyor/linux/after_build.sh`, and
+  `appveyor.yml`
 - Impact: `GC_SOURCE_REVISION` is checked only for hash syntax. Packaging does
   not prove that the commit exists, the worktree was clean, or the supplied
   binary was built from that tree. A plausible but incorrect revision can be
@@ -5961,14 +5964,27 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   the transferred AppImage, but the repository packager does not bind the
   revision to a raw-binary hash or place a verifiable manifest in the image.
   AppVeyor does not generate the same sidecar.
-- Test: Package a binary from revision A while claiming revision B and require
-  rejection. Verify a manifest containing source revision, raw ELF hash,
-  AppImage hash, toolchain identity, and boolean OAuth status across atomic
-  `latest`/`previous` rotation.
-- Fix direction: Build and package from a clean, identified source export;
-  generate one canonical manifest before deployment, embed the non-recursive
-  fields in the image, and verify source, binary, image, and sidecar hashes at
-  promotion time.
+- Test-first evidence: The first packaging test failed because the manifest
+  creation API did not exist. A second RED case failed because release
+  promotion had no implementation. The completed suite rejects revision A
+  binaries claimed as revision B, unknown/non-HEAD revisions, tracked and
+  untracked source changes, malformed binary reports, unknown OAuth state,
+  tampered images and sidecars, and failed post-publication durability syncs.
+- Resolution: Commit `1f57d86` gives the ELF a strict build-provenance command
+  and injects the full source revision during qmake configuration. All Linux
+  packagers now require an existing clean HEAD, match it to the ELF report,
+  hash the raw ELF, record toolchain and boolean OAuth state, embed the
+  non-recursive manifest, append the final AppImage hash to a mode-0600
+  sidecar, and verify the extracted copy. AppVeyor publishes the same sidecar.
+  Promotion copies verified immutable artifacts and swaps one generation
+  symlink so `latest` and `previous` change together; a late verification or
+  sync failure restores the former pointer.
+- Verification: The packaging helper suite passes, malformed qmake revisions
+  are rejected, and the production `main.cpp` compiles with the expected
+  revision embedded. A clean release build of `1f57d86` reported GCC 13.3.0,
+  Qt 6.8.3, C++17, the exact commit, and configured OAuth. Its 366 MiB AppImage
+  passed embedded/sidecar hash verification, libsecret and offscreen gates,
+  local atomic promotion, and a ten-second isolated-container GUI smoke test.
 
 ### BUILD-012: Primary AppImage packaging omits the libsecret runtime
 
