@@ -30,6 +30,7 @@ equals(GC_UNITTESTS, active) {
 			   Charts/indendPlotMarkerMatrix \
 			   Charts/mapPageSecurity \
 			   Charts/powerHistSelection \
+			   Charts/mapRoutePointIndex \
 			   Charts/voronoiSafety \
 			   Train/libraryImportFileStager \
 			   Train/stravaRoutesClient \

@@ -5123,21 +5123,44 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### MAP-001: Map nearest-point longitude scaling uses degrees as radians
 
-- Status: OPEN
-- Code: `src/Charts/RideMapWindow.cpp:1772`
+- Status: FIXED
+- Code: `src/Charts/MapRoutePointIndex.cpp`,
+  `src/Charts/MapRoutePointIndex.h`, and `src/Charts/RideMapWindow.cpp`
 - Impact: `cos(latitude)` receives degrees, selecting the wrong route point at
   many latitudes.
-- Test: Known routes at equatorial and high latitudes with expected nearest point.
-- Fix direction: Convert latitude to radians or use a geodesic helper.
+- Test-first evidence: Equatorial and positive/negative 60-degree fixtures
+  offer one latitude-offset and one longitude-offset route point. The former
+  degree-based cosine selected the latitude-offset point for both high-latitude
+  rows, producing two failures while the equatorial control passed.
+- Resolution: Route lookup converts the query latitude to radians before
+  scaling longitude. Equal-distance results retain original route order through
+  their source indices.
+- Verification: The focused 10-case Qt 6.8.3 suite passes normally, under strict
+  ASan/UBSan/LSan, and in a ThreadSanitizer-linked build. The production
+  `RideMapWindow` and index translation units also compile in the release
+  application build.
 
 ### MAP-002: Map mouse movement repeatedly scans the full activity
 
-- Status: OPEN
-- Code: `src/Charts/RideMapWindow.cpp:1758`
+- Status: FIXED
+- Code: `src/Charts/MapRoutePointIndex.cpp`,
+  `src/Charts/MapRoutePointIndex.h`, `src/Charts/RideMapWindow.cpp`, and
+  `src/Charts/RideMapWindow.h`
 - Impact: Every mousemove performs an O(N) point search, causing stalls for
   long/high-frequency activities.
-- Test: Benchmark hover on 10k/100k/1m point routes.
-- Fix direction: Spatial index or map-rendered point/index identifiers.
+- Test-first evidence: Deterministic 10,000-, 100,000-, and 1,000,000-point
+  fixtures count inspected entries per query. The former implementation
+  inspected every point in each row and failed all three bounded-work checks.
+- Resolution: Each displayed ride is indexed once by latitude. Lookup uses
+  binary search to enter the narrow latitude window, examines only nearby
+  points, applies the corrected longitude scaling, and returns the original
+  RideFile point index. Ride changes clear the index through the existing map
+  bridge reset path.
+- Verification: The final release build indexed one million synthetic points in
+  28 ms and inspected 13 points for the query; the 10k and 100k rows inspected
+  one each. All 10 cases pass normally and under both sanitizer configurations,
+  and the production map translation units compile. Timings are diagnostic;
+  pass/fail is based on returned identity and bounded examined-point counts.
 
 ### ARCH-001: Context is a cross-layer mutable service locator
 
