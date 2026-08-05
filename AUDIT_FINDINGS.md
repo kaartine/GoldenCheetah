@@ -3610,19 +3610,22 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### PERF-013: Split-manifest validation can become quadratic
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Gui/SplitActivitySave.cpp`
 - Impact: Repeated linear searches and path comparisons across a maximum-size
   hostile manifest can make startup recovery quadratic and hold application
   initialization for an excessive time.
-- Test-first evidence / required regression: Validate maximum-sized manifests
+- Test-first evidence: Validate maximum-sized manifests
   with unique and adversarially colliding path sets, measure comparison or
   lookup counts, and require linear or near-linear growth.
-- Fix direction: Normalize each path once and use keyed sets or maps for
-  uniqueness, ancestry, and ownership checks while retaining all anchored
+- Resolution: Commit `220a96f` normalizes each path once, sorts the normalized
+  keys, and checks only adjacent paths for equality or ancestry. Identity and
+  cleanup-name uniqueness use keyed sets and maps while retaining anchored
   filesystem validation.
-- Verification: The risk was identified during final review. No integrated
-  complexity-bound regression or closing fix has been verified.
+- Verification: The maximum-size regression validates 1000 outputs with a
+  bounded path-validation step count, and hostile-manifest coverage rejects a
+  source/output collision. Both are included in the split suite that passes
+  104/104 normally, under ASan/UBSan, and under ThreadSanitizer.
 
 ### DUR-020: Multi-target overwrite can publish before all predecessors validate
 
