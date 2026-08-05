@@ -128,6 +128,22 @@ class TrainDB : public QObject, public TagStore
     Q_OBJECT
 
     public:
+        class ScopedLUW {
+            public:
+                explicit ScopedLUW(TrainDB &database);
+                ~ScopedLUW();
+
+                bool isActive() const;
+                bool commit();
+                void rollback();
+
+            private:
+                Q_DISABLE_COPY_MOVE(ScopedLUW)
+
+                TrainDB &database;
+                bool active;
+        };
+
         enum class SchemaStatus {
             uninitialized,
             current,

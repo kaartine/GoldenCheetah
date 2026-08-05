@@ -337,6 +337,11 @@ private slots:
     void uncPathsAreMigrated();
     void nullLegacyPathBlocksPlan();
     void videoSyncImportSupportsMigrationRetry();
+    void videoSyncReplacePreservesSamePathVideo();
+    void workoutUpdatePersistsAveragePower();
+    void scopedTransactionRollsBackDuplicateFailure();
+    void scopedTransactionRollsBackSchemaFailure();
+    void scopedTransactionRollsBackCommitFailure();
     void versionOneUpgradePreservesLegacyTables();
     void planImportJournalSurvivesRollbackAndCommitsAtomically();
     void planImportCommitUncertaintyRetainsRecoveryDecision();
@@ -1262,6 +1267,185 @@ void TestTrainDbVersionSafety::videoSyncImportSupportsMigrationRetry()
     QVERIFY(!query.next());
 }
 
+void TestTrainDbVersionSafety::videoSyncReplacePreservesSamePathVideo()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+
+    TrainDB database{QDir(home.path())};
+    QVERIFY(database.schemaStatus() == TrainDB::SchemaStatus::current);
+
+    const QString path = QStringLiteral("/shared-library-path.rlv");
+    QVERIFY(database.importVideo(path));
+
+    VideoSyncFileBase initial;
+    initial.name(QStringLiteral("Initial sync"));
+    initial.source(QStringLiteral("initial"));
+    QVERIFY(database.importVideoSync(path, initial));
+
+    VideoSyncFileBase replacement;
+    replacement.name(QStringLiteral("Replacement sync"));
+    replacement.source(QStringLiteral("replacement"));
+    QVERIFY(database.importVideoSync(path, replacement, ImportMode::replace));
+
+    QVERIFY(database.hasVideo(path));
+    QVERIFY(database.hasVideoSync(path));
+
+    ScopedDatabase connection(home.path() + QStringLiteral("/trainDB"));
+    QSqlQuery video(connection.get());
+    video.prepare(QStringLiteral(
+        "SELECT displayname FROM video WHERE filepath = :filepath"));
+    video.bindValue(QStringLiteral(":filepath"), path);
+    QVERIFY(video.exec());
+    QVERIFY(video.next());
+    QCOMPARE(video.value(0).toString(),
+             QStringLiteral("shared-library-path"));
+    QVERIFY(!video.next());
+
+    QSqlQuery videoSync(connection.get());
+    videoSync.prepare(QStringLiteral(
+        "SELECT source, displayname FROM videosync WHERE filepath = :filepath"));
+    videoSync.bindValue(QStringLiteral(":filepath"), path);
+    QVERIFY(videoSync.exec());
+    QVERIFY(videoSync.next());
+    QCOMPARE(videoSync.value(0).toString(), QStringLiteral("replacement"));
+    QCOMPARE(videoSync.value(1).toString(),
+             QStringLiteral("Replacement sync"));
+    QVERIFY(!videoSync.next());
+}
+
+void TestTrainDbVersionSafety::workoutUpdatePersistsAveragePower()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+
+    TrainDB database{QDir(home.path())};
+    QVERIFY(database.schemaStatus() == TrainDB::SchemaStatus::current);
+
+    const QString path = QStringLiteral("/updated-average.erg");
+    ErgFileBase workout;
+    workout.format(ErgFileFormat::erg);
+    workout.name(QStringLiteral("Average power regression"));
+    workout.AP(175.0);
+    QVERIFY(database.importWorkout(path, workout));
+
+    workout.AP(242.0);
+    QVERIFY(database.importWorkout(path, workout, ImportMode::update));
+
+    ScopedDatabase connection(home.path() + QStringLiteral("/trainDB"));
+    QSqlQuery query(connection.get());
+    query.prepare(QStringLiteral(
+        "SELECT erg_avg_power FROM workout WHERE filepath = :filepath"));
+    query.bindValue(QStringLiteral(":filepath"), path);
+    QVERIFY(query.exec());
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toDouble(), 242.0);
+    QVERIFY(!query.next());
+}
+
+void TestTrainDbVersionSafety::scopedTransactionRollsBackDuplicateFailure()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+
+    TrainDB database{QDir(home.path())};
+    QVERIFY(database.schemaStatus() == TrainDB::SchemaStatus::current);
+    QSignalSpy changed(&database, &TrainDB::dataChanged);
+
+    const QString path = QStringLiteral("/duplicate.mp4");
+    {
+        TrainDB::ScopedLUW transaction(database);
+        QVERIFY(transaction.isActive());
+        QVERIFY(database.importVideo(path));
+        QVERIFY(!database.importVideo(path));
+    }
+
+    QVERIFY(!database.hasVideo(path));
+    QCOMPARE(changed.count(), 0);
+}
+
+void TestTrainDbVersionSafety::scopedTransactionRollsBackSchemaFailure()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+
+    TrainDB database{QDir(home.path())};
+    QVERIFY(database.schemaStatus() == TrainDB::SchemaStatus::current);
+    QSignalSpy changed(&database, &TrainDB::dataChanged);
+
+    const QString videoPath = QStringLiteral("/before-schema-failure.mp4");
+    {
+        TrainDB::ScopedLUW transaction(database);
+        QVERIFY(transaction.isActive());
+        QVERIFY(database.importVideo(videoPath));
+
+        QSqlDatabase trainConnection = QSqlDatabase::database(
+            QStringLiteral("train"), false);
+        QVERIFY(trainConnection.isOpen());
+        QVERIFY(execSql(trainConnection,
+                        QStringLiteral("DROP TABLE videosync")));
+
+        VideoSyncFileBase videoSync;
+        videoSync.name(QStringLiteral("Must fail"));
+        QVERIFY(!database.importVideoSync(
+            QStringLiteral("/missing-schema.rlv"), videoSync));
+    }
+
+    QVERIFY(!database.hasVideo(videoPath));
+    VideoSyncFileBase restored;
+    restored.name(QStringLiteral("Restored table"));
+    QVERIFY(database.importVideoSync(QStringLiteral("/restored.rlv"), restored));
+    QCOMPARE(changed.count(), 0);
+}
+
+void TestTrainDbVersionSafety::scopedTransactionRollsBackCommitFailure()
+{
+    QTemporaryDir home;
+    QVERIFY(home.isValid());
+
+    TrainDB database{QDir(home.path())};
+    QVERIFY(database.schemaStatus() == TrainDB::SchemaStatus::current);
+    QSignalSpy changed(&database, &TrainDB::dataChanged);
+
+    QSqlDatabase trainConnection = QSqlDatabase::database(
+        QStringLiteral("train"), false);
+    QVERIFY(trainConnection.isOpen());
+    QVERIFY(execSql(trainConnection, QStringLiteral("PRAGMA foreign_keys = ON")));
+    QVERIFY(execSql(trainConnection,
+                    QStringLiteral("CREATE TABLE deferred_parent (id INTEGER PRIMARY KEY)")));
+    QVERIFY(execSql(trainConnection,
+                    QStringLiteral("CREATE TABLE deferred_child ("
+                                   "parent_id INTEGER, "
+                                   "FOREIGN KEY(parent_id) REFERENCES deferred_parent(id) "
+                                   "DEFERRABLE INITIALLY DEFERRED)")));
+    QVERIFY(execSql(trainConnection,
+                    QStringLiteral("CREATE TRIGGER fail_video_commit "
+                                   "AFTER INSERT ON video BEGIN "
+                                   "INSERT INTO deferred_child(parent_id) VALUES (42); "
+                                   "END")));
+
+    const QString failedPath = QStringLiteral("/commit-failure.mp4");
+    {
+        TrainDB::ScopedLUW transaction(database);
+        QVERIFY(transaction.isActive());
+        QVERIFY(database.importVideo(failedPath));
+        QVERIFY(!transaction.commit());
+    }
+    QVERIFY(!database.hasVideo(failedPath));
+    QCOMPARE(changed.count(), 0);
+
+    QVERIFY(execSql(trainConnection,
+                    QStringLiteral("DROP TRIGGER fail_video_commit")));
+    const QString committedPath = QStringLiteral("/committed.mp4");
+    {
+        TrainDB::ScopedLUW transaction(database);
+        QVERIFY(transaction.isActive());
+        QVERIFY(database.importVideo(committedPath));
+        QVERIFY(transaction.commit());
+    }
+    QVERIFY(database.hasVideo(committedPath));
+    QCOMPARE(changed.count(), 1);
+}
 void TestTrainDbVersionSafety::versionOneUpgradePreservesLegacyTables()
 {
     QTemporaryDir home;
