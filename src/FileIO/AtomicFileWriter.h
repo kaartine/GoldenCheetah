@@ -40,6 +40,13 @@
 #include <cstdio>
 #include <fcntl.h>
 #include <unistd.h>
+#if defined(Q_OS_MACOS)
+#include <stdio.h>
+#endif
+#if defined(Q_OS_LINUX)
+#include <linux/fs.h>
+#include <sys/syscall.h>
+#endif
 #endif
 
 #ifdef Q_OS_WIN
@@ -50,6 +57,10 @@
 
 #ifdef GC_DURABLE_FILESYSTEM_TEST_HOOKS
 void durableFilesystemTransitionReached(const char *transition);
+#endif
+
+#ifdef GC_ATOMIC_FILE_WRITER_TEST_HOOKS
+int atomicFileWriterNativeNoReplaceForcedError();
 #endif
 
 inline void reportDurableFilesystemTransition(const char *transition)
@@ -727,6 +738,66 @@ private:
     qint64 stagedSize_ = 0;
 };
 
+#ifdef Q_OS_UNIX
+inline int atomicFileWriterNativeNoReplace(
+    const QByteArray &temporary,
+    const QByteArray &target,
+    bool &unsupported)
+{
+    unsupported = false;
+#if defined(Q_OS_LINUX) && defined(SYS_renameat2) \
+    && defined(RENAME_NOREPLACE)
+    int result = -1;
+#ifdef GC_ATOMIC_FILE_WRITER_TEST_HOOKS
+    const int forcedError =
+        atomicFileWriterNativeNoReplaceForcedError();
+    if (forcedError != 0) {
+        errno = forcedError;
+    } else
+#endif
+    {
+        do {
+            result = int(::syscall(
+                SYS_renameat2,
+                AT_FDCWD,
+                temporary.constData(),
+                AT_FDCWD,
+                target.constData(),
+                RENAME_NOREPLACE));
+        } while (result != 0 && errno == EINTR);
+    }
+    if (result == 0) return 0;
+    if (errno == ENOSYS || errno == EINVAL
+#ifdef EOPNOTSUPP
+        || errno == EOPNOTSUPP
+#endif
+    ) {
+        unsupported = true;
+    }
+    return -1;
+#elif defined(Q_OS_MACOS) && defined(RENAME_EXCL)
+    int result;
+    do {
+        result = ::renameatx_np(
+            AT_FDCWD,
+            temporary.constData(),
+            AT_FDCWD,
+            target.constData(),
+            RENAME_EXCL);
+    } while (result != 0 && errno == EINTR);
+    if (result == 0) return 0;
+    unsupported = errno == ENOTSUP || errno == EINVAL;
+    return -1;
+#else
+    Q_UNUSED(temporary)
+    Q_UNUSED(target)
+    unsupported = true;
+    errno = ENOSYS;
+    return -1;
+#endif
+}
+#endif
+
 inline bool publishAtomicNew(const QString &temporaryPath,
                              const QString &targetPath,
                              bool &temporaryMoved,
@@ -736,6 +807,22 @@ inline bool publishAtomicNew(const QString &temporaryPath,
 #ifdef Q_OS_UNIX
     const QByteArray temporary = QFile::encodeName(temporaryPath);
     const QByteArray target = QFile::encodeName(targetPath);
+    bool nativeUnsupported = false;
+    if (atomicFileWriterNativeNoReplace(
+            temporary, target, nativeUnsupported) == 0) {
+        temporaryMoved = true;
+        return true;
+    }
+    const int nativeError = errno;
+    if (!nativeUnsupported) {
+        error = nativeError == EEXIST
+            ? QStringLiteral("The target activity was created concurrently")
+            : QStringLiteral("Cannot publish the new activity file: %1")
+                  .arg(QString::fromLocal8Bit(
+                      std::strerror(nativeError)));
+        return false;
+    }
+
     int result;
     do {
         result = ::link(temporary.constData(), target.constData());

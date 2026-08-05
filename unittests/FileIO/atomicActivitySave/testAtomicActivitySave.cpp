@@ -21,10 +21,53 @@
 
 #ifdef Q_OS_UNIX
 #include <unistd.h>
+#if defined(Q_OS_LINUX)
+#include <fcntl.h>
+#include <sys/syscall.h>
+#endif
 #elif defined(Q_OS_WIN)
 #include <qt_windows.h>
 #include <aclapi.h>
 #include <sddl.h>
+#endif
+
+#if defined(Q_OS_LINUX) && defined(SYS_linkat) \
+    && defined(SYS_unlinkat)
+namespace {
+bool rejectAtomicHardLinks = false;
+int atomicHardLinkCalls = 0;
+int forcedAtomicNativeNoReplaceError = 0;
+QByteArray rejectedAtomicUnlinkPath;
+int rejectedAtomicUnlinkCount = 0;
+}
+
+int atomicFileWriterNativeNoReplaceForcedError()
+{
+    return forcedAtomicNativeNoReplaceError;
+}
+
+extern "C" int link(
+    const char *source, const char *target) noexcept
+{
+    ++atomicHardLinkCalls;
+    if (rejectAtomicHardLinks) {
+        errno = EOPNOTSUPP;
+        return -1;
+    }
+    return int(::syscall(
+        SYS_linkat, AT_FDCWD, source, AT_FDCWD, target, 0));
+}
+
+extern "C" int unlink(const char *path) noexcept
+{
+    if (rejectedAtomicUnlinkCount > 0
+        && rejectedAtomicUnlinkPath == QByteArray(path)) {
+        --rejectedAtomicUnlinkCount;
+        errno = EIO;
+        return -1;
+    }
+    return int(::syscall(SYS_unlinkat, AT_FDCWD, path, 0));
+}
 #endif
 
 void resetAtomicActivitySaveProcessorStub();
@@ -674,6 +717,19 @@ private slots:
     void finalizationSyncFailureRestoresSource();
     void atomicWriterRejectsSymlinkTarget();
     void atomicWriterRejectsCollisionAtCommit();
+    void nativeNoReplacePublishesCreateNewSaveWithoutHardLinks();
+    void nativeNoReplacePublishesSplitSetWithoutHardLinks();
+    void nativeNoReplacePublishesArchiveWithoutHardLinks();
+    void nativeNoReplacePublishesDeletionTransactionWithoutHardLinks();
+    void nativeNoReplaceRejectsCollisionWithoutHardLinks();
+    void nativeNoReplaceRejectsSymlinkTargetWithoutHardLinks();
+    void nativeNoReplaceRejectsHardLinkTargetWithoutHardLinks();
+    void nativeNoReplaceReportsFailureWithoutHardLinkFallback();
+    void nativeUnavailableFallsBackToHardLinks_data();
+    void nativeUnavailableFallsBackToHardLinks();
+    void nativeFailureDoesNotUseHardLinkFallback();
+    void hardLinkFallbackReportsPartialPublication();
+    void moveAtomicFileReconcilesPartialHardLinkPublication();
     void atomicWriterRejectsLockedTarget();
     void newWriterRollsBackPartialPublishFailure();
     void newWriterPreservesReplacementAfterPartialPublishFailure();
@@ -889,6 +945,14 @@ void TestAtomicActivitySave::cleanup()
     anchoredFilesystemAction = {};
     forceLegacyWindowsDelete = false;
     failAnchoredFilesystemFileUnlink = false;
+#if defined(Q_OS_LINUX) && defined(SYS_linkat) \
+    && defined(SYS_unlinkat)
+    rejectAtomicHardLinks = false;
+    atomicHardLinkCalls = 0;
+    forcedAtomicNativeNoReplaceError = 0;
+    rejectedAtomicUnlinkPath.clear();
+    rejectedAtomicUnlinkCount = 0;
+#endif
     resetAtomicActivitySaveProcessorStub();
 }
 
@@ -1385,6 +1449,452 @@ void TestAtomicActivitySave::atomicWriterRejectsCollisionAtCommit()
     QVERIFY(writer.errorString().contains(
         QStringLiteral("concurrently"), Qt::CaseInsensitive));
     QCOMPARE(readAll(path), concurrent);
+}
+
+void TestAtomicActivitySave::
+nativeNoReplacePublishesCreateNewSaveWithoutHardLinks()
+{
+#if defined(Q_OS_LINUX) && defined(SYS_linkat) \
+    && defined(SYS_unlinkat)
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("activity.json"));
+    const QByteArray contents("complete activity");
+
+    NewAtomicFileWriter writer(path);
+    QVERIFY(writer.open());
+    QCOMPARE(writer.write(contents), qint64(contents.size()));
+    QVERIFY(writer.flush());
+
+    atomicHardLinkCalls = 0;
+    rejectAtomicHardLinks = true;
+    const bool committed = writer.commit();
+    rejectAtomicHardLinks = false;
+
+    QVERIFY2(committed, qPrintable(writer.errorString()));
+    QCOMPARE(atomicHardLinkCalls, 0);
+    QCOMPARE(readAll(path), contents);
+#else
+    QSKIP("Linux hard-link rejection contract");
+#endif
+}
+
+void TestAtomicActivitySave::
+nativeNoReplacePublishesSplitSetWithoutHardLinks()
+{
+#if defined(Q_OS_LINUX) && defined(SYS_linkat) \
+    && defined(SYS_unlinkat)
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString firstStage =
+        dir.filePath(QStringLiteral(".first.stage"));
+    const QString secondStage =
+        dir.filePath(QStringLiteral(".second.stage"));
+    const QString firstTarget =
+        dir.filePath(QStringLiteral("first.json"));
+    const QString secondTarget =
+        dir.filePath(QStringLiteral("second.json"));
+    writeFixture(firstStage, QByteArray("first split activity"));
+    writeFixture(secondStage, QByteArray("second split activity"));
+
+    QString error;
+    atomicHardLinkCalls = 0;
+    rejectAtomicHardLinks = true;
+    const bool published = publishStagedFileSet(
+        {
+            StagedFilePublication(firstStage, firstTarget),
+            StagedFilePublication(secondStage, secondTarget)
+        },
+        error);
+    rejectAtomicHardLinks = false;
+
+    QVERIFY2(published, qPrintable(error));
+    QCOMPARE(atomicHardLinkCalls, 0);
+    QVERIFY(!QFile::exists(firstStage));
+    QVERIFY(!QFile::exists(secondStage));
+    QCOMPARE(readAll(firstTarget), QByteArray("first split activity"));
+    QCOMPARE(readAll(secondTarget), QByteArray("second split activity"));
+#else
+    QSKIP("Linux hard-link rejection contract");
+#endif
+}
+
+void TestAtomicActivitySave::
+nativeNoReplacePublishesArchiveWithoutHardLinks()
+{
+#if defined(Q_OS_LINUX) && defined(SYS_linkat) \
+    && defined(SYS_unlinkat)
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString stage =
+        dir.filePath(QStringLiteral(".athlete-backup.stage"));
+    const QString target =
+        dir.filePath(QStringLiteral("athlete-backup.zip"));
+    const QByteArray contents("verified backup archive");
+    writeFixture(stage, contents);
+
+    bool targetPublished = false;
+    QString error;
+    atomicHardLinkCalls = 0;
+    rejectAtomicHardLinks = true;
+    const bool published = publishAtomicNew(
+        stage, target, targetPublished, error);
+    rejectAtomicHardLinks = false;
+
+    QVERIFY2(published, qPrintable(error));
+    QVERIFY(targetPublished);
+    QCOMPARE(atomicHardLinkCalls, 0);
+    QVERIFY(!QFile::exists(stage));
+    QCOMPARE(readAll(target), contents);
+#else
+    QSKIP("Linux hard-link rejection contract");
+#endif
+}
+
+void TestAtomicActivitySave::
+nativeNoReplacePublishesDeletionTransactionWithoutHardLinks()
+{
+#if defined(Q_OS_LINUX) && defined(SYS_linkat) \
+    && defined(SYS_unlinkat)
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString sourcePath =
+        dir.filePath(QStringLiteral(".deletion.stage"));
+    const QString targetPath =
+        dir.filePath(QStringLiteral("deletion.intent"));
+    const QByteArray contents("deletion transaction intent");
+    writeFixture(sourcePath, contents);
+
+    AnchoredFileSystem::DirectoryAnchor parent;
+    QString error;
+    QVERIFY2(
+        AnchoredFileSystem::DirectoryAnchor::open(
+            dir.path(), parent, error),
+        qPrintable(error));
+    AnchoredFileSystem::EntryRef source = parent.entry(
+        QFileInfo(sourcePath).fileName(), error);
+    AnchoredFileSystem::EntryRef target = parent.entry(
+        QFileInfo(targetPath).fileName(), error);
+    QVERIFY2(source.isValid() && target.isValid(), qPrintable(error));
+    AnchoredFileSystem::PinnedFile pinned;
+    QVERIFY2(
+        AnchoredFileSystem::pinRegularFile(source, pinned, error),
+        qPrintable(error));
+
+    bool targetPublished = false;
+    atomicHardLinkCalls = 0;
+    rejectAtomicHardLinks = true;
+    const bool published = publishPinnedAtomicNew(
+        pinned, target, targetPublished, error);
+    rejectAtomicHardLinks = false;
+
+    QVERIFY2(published, qPrintable(error));
+    QVERIFY(targetPublished);
+    QCOMPARE(atomicHardLinkCalls, 0);
+    QVERIFY(!QFile::exists(sourcePath));
+    QCOMPARE(readAll(targetPath), contents);
+#else
+    QSKIP("Linux hard-link rejection contract");
+#endif
+}
+
+void TestAtomicActivitySave::
+nativeNoReplaceRejectsCollisionWithoutHardLinks()
+{
+#if defined(Q_OS_LINUX) && defined(SYS_linkat) \
+    && defined(SYS_unlinkat)
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString stage = dir.filePath(QStringLiteral("activity.stage"));
+    const QString target = dir.filePath(QStringLiteral("activity.json"));
+    const QByteArray staged("staged generation");
+    const QByteArray concurrent("concurrent generation");
+    writeFixture(stage, staged);
+    writeFixture(target, concurrent);
+
+    bool targetPublished = true;
+    QString error;
+    atomicHardLinkCalls = 0;
+    rejectAtomicHardLinks = true;
+    const bool published = publishAtomicNew(
+        stage, target, targetPublished, error);
+    rejectAtomicHardLinks = false;
+
+    QVERIFY(!published);
+    QVERIFY(!targetPublished);
+    QCOMPARE(atomicHardLinkCalls, 0);
+    QVERIFY(error.contains(
+        QStringLiteral("concurrently"), Qt::CaseInsensitive));
+    QCOMPARE(readAll(stage), staged);
+    QCOMPARE(readAll(target), concurrent);
+#else
+    QSKIP("Linux hard-link rejection contract");
+#endif
+}
+
+void TestAtomicActivitySave::
+nativeNoReplaceRejectsSymlinkTargetWithoutHardLinks()
+{
+#if defined(Q_OS_LINUX) && defined(SYS_linkat) \
+    && defined(SYS_unlinkat)
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString stage = dir.filePath(QStringLiteral("activity.stage"));
+    const QString referent = dir.filePath(QStringLiteral("referent.json"));
+    const QString target = dir.filePath(QStringLiteral("activity.json"));
+    const QByteArray staged("staged generation");
+    const QByteArray original("referent generation");
+    writeFixture(stage, staged);
+    writeFixture(referent, original);
+    QVERIFY(QFile::link(referent, target));
+    QVERIFY(QFileInfo(target).isSymLink());
+
+    bool targetPublished = true;
+    QString error;
+    atomicHardLinkCalls = 0;
+    rejectAtomicHardLinks = true;
+    const bool published = publishAtomicNew(
+        stage, target, targetPublished, error);
+    rejectAtomicHardLinks = false;
+
+    QVERIFY(!published);
+    QVERIFY(!targetPublished);
+    QCOMPARE(atomicHardLinkCalls, 0);
+    QVERIFY(error.contains(
+        QStringLiteral("concurrently"), Qt::CaseInsensitive));
+    QVERIFY(QFileInfo(target).isSymLink());
+    QCOMPARE(readAll(stage), staged);
+    QCOMPARE(readAll(referent), original);
+#else
+    QSKIP("Linux hard-link rejection contract");
+#endif
+}
+
+void TestAtomicActivitySave::
+nativeNoReplaceRejectsHardLinkTargetWithoutHardLinks()
+{
+#if defined(Q_OS_LINUX) && defined(SYS_linkat) \
+    && defined(SYS_unlinkat)
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString stage = dir.filePath(QStringLiteral("activity.stage"));
+    const QString referent = dir.filePath(QStringLiteral("referent.json"));
+    const QString target = dir.filePath(QStringLiteral("activity.json"));
+    const QByteArray staged("staged generation");
+    const QByteArray original("hard-linked generation");
+    writeFixture(stage, staged);
+    writeFixture(referent, original);
+    const QByteArray referentName = QFile::encodeName(referent);
+    const QByteArray targetName = QFile::encodeName(target);
+    QCOMPARE(int(::syscall(
+        SYS_linkat,
+        AT_FDCWD,
+        referentName.constData(),
+        AT_FDCWD,
+        targetName.constData(),
+        0)), 0);
+    QVERIFY(!QFileInfo(target).isSymLink());
+
+    bool targetPublished = true;
+    QString error;
+    atomicHardLinkCalls = 0;
+    rejectAtomicHardLinks = true;
+    const bool published = publishAtomicNew(
+        stage, target, targetPublished, error);
+    rejectAtomicHardLinks = false;
+
+    QVERIFY(!published);
+    QVERIFY(!targetPublished);
+    QCOMPARE(atomicHardLinkCalls, 0);
+    QVERIFY(error.contains(
+        QStringLiteral("concurrently"), Qt::CaseInsensitive));
+    QCOMPARE(readAll(stage), staged);
+    QCOMPARE(readAll(target), original);
+    QCOMPARE(readAll(referent), original);
+#else
+    QSKIP("Linux hard-link rejection contract");
+#endif
+}
+
+void TestAtomicActivitySave::
+nativeNoReplaceReportsFailureWithoutHardLinkFallback()
+{
+#if defined(Q_OS_LINUX) && defined(SYS_linkat) \
+    && defined(SYS_unlinkat)
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString stage = dir.filePath(QStringLiteral("missing.stage"));
+    const QString target = dir.filePath(QStringLiteral("activity.json"));
+
+    bool targetPublished = true;
+    QString error;
+    atomicHardLinkCalls = 0;
+    rejectAtomicHardLinks = true;
+    const bool published = publishAtomicNew(
+        stage, target, targetPublished, error);
+    rejectAtomicHardLinks = false;
+
+    QVERIFY(!published);
+    QVERIFY(!targetPublished);
+    QCOMPARE(atomicHardLinkCalls, 0);
+    QVERIFY(error.contains(
+        QStringLiteral("Cannot publish"), Qt::CaseInsensitive));
+    QVERIFY(!QFile::exists(target));
+#else
+    QSKIP("Linux hard-link rejection contract");
+#endif
+}
+
+void TestAtomicActivitySave::
+nativeUnavailableFallsBackToHardLinks_data()
+{
+    QTest::addColumn<int>("nativeError");
+#if defined(Q_OS_LINUX) && defined(SYS_linkat) \
+    && defined(SYS_unlinkat)
+    QTest::newRow("enosys") << int(ENOSYS);
+    QTest::newRow("einval") << int(EINVAL);
+#ifdef EOPNOTSUPP
+    QTest::newRow("eopnotsupp") << int(EOPNOTSUPP);
+#endif
+#else
+    QTest::newRow("unsupported-platform") << 0;
+#endif
+}
+
+void TestAtomicActivitySave::
+nativeUnavailableFallsBackToHardLinks()
+{
+#if defined(Q_OS_LINUX) && defined(SYS_linkat) \
+    && defined(SYS_unlinkat)
+    QFETCH(int, nativeError);
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString stage = dir.filePath(QStringLiteral("activity.stage"));
+    const QString target = dir.filePath(QStringLiteral("activity.json"));
+    const QByteArray contents("fallback activity");
+    writeFixture(stage, contents);
+
+    bool targetPublished = false;
+    QString error;
+    atomicHardLinkCalls = 0;
+    forcedAtomicNativeNoReplaceError = nativeError;
+    const bool published = publishAtomicNew(
+        stage, target, targetPublished, error);
+    forcedAtomicNativeNoReplaceError = 0;
+
+    QVERIFY2(published, qPrintable(error));
+    QVERIFY(targetPublished);
+    QCOMPARE(atomicHardLinkCalls, 1);
+    QVERIFY(!QFile::exists(stage));
+    QCOMPARE(readAll(target), contents);
+#else
+    QSKIP("Linux native no-replace fallback contract");
+#endif
+}
+
+void TestAtomicActivitySave::
+nativeFailureDoesNotUseHardLinkFallback()
+{
+#if defined(Q_OS_LINUX) && defined(SYS_linkat) \
+    && defined(SYS_unlinkat)
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString stage = dir.filePath(QStringLiteral("activity.stage"));
+    const QString target = dir.filePath(QStringLiteral("activity.json"));
+    const QByteArray contents("unpublished activity");
+    writeFixture(stage, contents);
+
+    bool targetPublished = true;
+    QString error;
+    atomicHardLinkCalls = 0;
+    rejectAtomicHardLinks = true;
+    forcedAtomicNativeNoReplaceError = EACCES;
+    const bool published = publishAtomicNew(
+        stage, target, targetPublished, error);
+    forcedAtomicNativeNoReplaceError = 0;
+    rejectAtomicHardLinks = false;
+
+    QVERIFY(!published);
+    QVERIFY(!targetPublished);
+    QCOMPARE(atomicHardLinkCalls, 0);
+    QVERIFY(error.contains(
+        QStringLiteral("Cannot publish"), Qt::CaseInsensitive));
+    QCOMPARE(readAll(stage), contents);
+    QVERIFY(!QFile::exists(target));
+#else
+    QSKIP("Linux native no-replace fallback contract");
+#endif
+}
+
+void TestAtomicActivitySave::
+hardLinkFallbackReportsPartialPublication()
+{
+#if defined(Q_OS_LINUX) && defined(SYS_linkat) \
+    && defined(SYS_unlinkat)
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString stage = dir.filePath(QStringLiteral("activity.stage"));
+    const QString target = dir.filePath(QStringLiteral("activity.json"));
+    const QByteArray contents("partially published activity");
+    writeFixture(stage, contents);
+
+    bool targetPublished = false;
+    QString error;
+    atomicHardLinkCalls = 0;
+    forcedAtomicNativeNoReplaceError = ENOSYS;
+    rejectedAtomicUnlinkPath = QFile::encodeName(stage);
+    rejectedAtomicUnlinkCount = 1;
+    const bool published = publishAtomicNew(
+        stage, target, targetPublished, error);
+    forcedAtomicNativeNoReplaceError = 0;
+    rejectedAtomicUnlinkPath.clear();
+
+    QVERIFY(!published);
+    QVERIFY(targetPublished);
+    QCOMPARE(atomicHardLinkCalls, 1);
+    QCOMPARE(rejectedAtomicUnlinkCount, 0);
+    QVERIFY(error.contains(
+        QStringLiteral("staging"), Qt::CaseInsensitive));
+    QCOMPARE(readAll(stage), contents);
+    QCOMPARE(readAll(target), contents);
+#else
+    QSKIP("Unix hard-link partial-effect contract");
+#endif
+}
+
+void TestAtomicActivitySave::
+moveAtomicFileReconcilesPartialHardLinkPublication()
+{
+#if defined(Q_OS_LINUX) && defined(SYS_linkat) \
+    && defined(SYS_unlinkat)
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString stage = dir.filePath(QStringLiteral("activity.stage"));
+    const QString target = dir.filePath(QStringLiteral("activity.json"));
+    const QByteArray contents("reconciled activity");
+    writeFixture(stage, contents);
+
+    QString error;
+    atomicHardLinkCalls = 0;
+    forcedAtomicNativeNoReplaceError = EINVAL;
+    rejectedAtomicUnlinkPath = QFile::encodeName(stage);
+    rejectedAtomicUnlinkCount = 1;
+    const bool moved = moveAtomicFile(stage, target, error);
+    forcedAtomicNativeNoReplaceError = 0;
+    rejectedAtomicUnlinkPath.clear();
+
+    QVERIFY(!moved);
+    QCOMPARE(atomicHardLinkCalls, 1);
+    QCOMPARE(rejectedAtomicUnlinkCount, 0);
+    QVERIFY(error.contains(
+        QStringLiteral("staging"), Qt::CaseInsensitive));
+    QVERIFY(!error.contains(
+        QStringLiteral("cannot roll back"), Qt::CaseInsensitive));
+    QCOMPARE(readAll(stage), contents);
+    QVERIFY(!QFile::exists(target));
+#else
+    QSKIP("Unix hard-link partial-effect contract");
+#endif
 }
 
 void TestAtomicActivitySave::atomicWriterRejectsLockedTarget()
