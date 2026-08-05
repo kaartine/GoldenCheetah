@@ -12,7 +12,8 @@ CONFIG -= debug
 
 SOURCES = testRideMetadataAtomicSave.cpp \
           ../../../src/Metrics/RideMetadata.cpp \
-          ../../../src/Core/Utils.cpp
+          ../../../src/Core/Utils.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp
 
 HEADERS = ../../../src/FileIO/AtomicFileWriter.h
 

@@ -11,7 +11,8 @@ CONFIG += console testcase c++17 release
 CONFIG -= debug
 
 SOURCES = testMeasuresAtomicSave.cpp \
-          ../../../src/Core/Measures.cpp
+          ../../../src/Core/Measures.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp
 
 HEADERS = ../../../src/Core/Measures.h \
           ../../../src/FileIO/AtomicFileWriter.h
