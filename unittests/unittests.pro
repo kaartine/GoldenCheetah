@@ -4,8 +4,9 @@ exists(unittests.pri) {
 	include(unittests.pri)
 }
 
-equals(GC_UNITTESTS, active) {
+	equals(GC_UNITTESTS, active) {
 	SUBDIRS += Build/ciTestRunner \
+			   Build/headerIncludePaths \
 			   Build/publicReleaseCredentials \
 			   Build/linkerSectionFlags \
 			   Core/athleteMigrationSafety \
