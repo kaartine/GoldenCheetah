@@ -34,6 +34,10 @@ struct MutationResult;
 struct WriterPinHandoffState;
 using PinnedFileChunkConsumer =
     std::function<bool(const char *, qsizetype, QString &)>;
+// Called before each anchored content read. Returning false prevents that
+// chunk read and aborts verification; a mutation may already have been applied.
+using PinnedFileReadControl =
+    std::function<bool(qint64, QString &)>;
 
 class NativeIdentity
 {
@@ -46,6 +50,8 @@ public:
 
     bool isValid() const { return !key_.isEmpty(); }
     quint64 linkCount() const { return linkCount_; }
+    // Opaque, host-local key for durable identity journals.
+    QByteArray serializedKey() const { return key_; }
 
     bool operator==(const NativeIdentity &other) const
     {
@@ -92,6 +98,8 @@ public:
 
     bool isValid() const { return bool(state_); }
     NativeIdentity identity() const;
+    // Informational pathname; callers must revalidate the held anchor.
+    QString displayPath() const;
     bool openChild(
         const QString &component,
         DirectoryAnchor &directory,
@@ -125,19 +133,20 @@ private:
     friend class EntryRef;
     friend class PinnedFile;
     friend bool pinRegularFile(
-        const EntryRef &, class PinnedFile &, QString &, qint64);
+        const EntryRef &, class PinnedFile &, QString &, qint64,
+        const PinnedFileReadControl &);
     friend bool entryExists(
         const EntryRef &, bool &, QString &);
     friend bool entryMatches(
         const EntryRef &, const class PinnedFile &, bool &, QString &);
     friend bool copyToNewFile(
         const class PinnedFile &, const EntryRef &,
-        class PinnedFile &, QString &);
+        class PinnedFile &, QString &, bool);
     friend bool writeNewFile(
         const QByteArray &, const EntryRef &,
         class PinnedFile &, QString &);
     friend MutationResult moveNoReplace(
-        PinnedFile &, const EntryRef &);
+        PinnedFile &, const EntryRef &, const PinnedFileReadControl &);
     friend MutationResult replaceExisting(
         PinnedFile &, PinnedFile &);
     friend bool validateCurrentUserOwnedDirectory(
@@ -147,7 +156,8 @@ private:
     friend bool hardenPrivateDirectory(
         DirectoryAnchor &, QString &);
     friend struct Detail::PrivateDirectoryOperations;
-    friend MutationResult remove(PinnedFile &);
+    friend MutationResult remove(
+        PinnedFile &, const PinnedFileReadControl &);
     friend MutationResult removeEmptyDirectory(DirectoryAnchor &);
     friend struct Detail::PinnedFileState;
 };
@@ -182,23 +192,25 @@ private:
     friend class DirectoryAnchor;
     friend class PinnedFile;
     friend bool pinRegularFile(
-        const EntryRef &, class PinnedFile &, QString &, qint64);
+        const EntryRef &, class PinnedFile &, QString &, qint64,
+        const PinnedFileReadControl &);
     friend bool entryExists(
         const EntryRef &, bool &, QString &);
     friend bool entryMatches(
         const EntryRef &, const class PinnedFile &, bool &, QString &);
     friend bool copyToNewFile(
         const class PinnedFile &, const EntryRef &,
-        class PinnedFile &, QString &);
+        class PinnedFile &, QString &, bool);
     friend bool writeNewFile(
         const QByteArray &, const EntryRef &,
         class PinnedFile &, QString &);
     friend struct Detail::PinnedFileState;
     friend MutationResult moveNoReplace(
-        PinnedFile &, const EntryRef &);
+        PinnedFile &, const EntryRef &, const PinnedFileReadControl &);
     friend MutationResult replaceExisting(
         PinnedFile &, PinnedFile &);
-    friend MutationResult remove(PinnedFile &);
+    friend MutationResult remove(
+        PinnedFile &, const PinnedFileReadControl &);
 };
 
 class PinnedFile
@@ -215,15 +227,21 @@ public:
 
     bool isValid() const { return bool(state_); }
     NativeIdentity identity() const;
+    // Opaque evidence that distinguishes native identity reuse and survives
+    // renames. Empty means the host cannot provide durable generation proof.
+    QByteArray durableGeneration() const;
     qint64 size() const;
     QByteArray sha256() const;
 
 private:
     std::unique_ptr<Detail::PinnedFileState> state_;
-    QString verifiedPath(const EntryRef &entry) const;
+    QString verifiedPath(
+        const EntryRef &entry,
+        const PinnedFileReadControl &readControl = {}) const;
 
     friend bool pinRegularFile(
-        const EntryRef &, PinnedFile &, QString &, qint64);
+        const EntryRef &, PinnedFile &, QString &, qint64,
+        const PinnedFileReadControl &);
     friend bool pinRegularFileAfterWriterRelease(
         const EntryRef &, qintptr, qint64, const QByteArray &,
         const std::function<void()> &, PinnedFile &,
@@ -231,20 +249,23 @@ private:
     friend bool entryMatches(
         const EntryRef &, const PinnedFile &, bool &, QString &);
     friend bool readAll(
-        const PinnedFile &, qint64, QByteArray &, QString &);
+        const PinnedFile &, qint64, QByteArray &, QString &,
+        const PinnedFileReadControl &);
     friend bool streamContents(
         const PinnedFile &, const PinnedFileChunkConsumer &, QString &);
     friend QString verifiedRecoveryPath(
-        const PinnedFile &, const EntryRef &);
+        const PinnedFile &, const EntryRef &,
+        const PinnedFileReadControl &);
     friend bool copyToNewFile(
-        const PinnedFile &, const EntryRef &, PinnedFile &, QString &);
+        const PinnedFile &, const EntryRef &, PinnedFile &, QString &, bool);
     friend bool writeNewFile(
         const QByteArray &, const EntryRef &, PinnedFile &, QString &);
     friend struct MutationResult moveNoReplace(
-        PinnedFile &, const EntryRef &);
+        PinnedFile &, const EntryRef &, const PinnedFileReadControl &);
     friend struct MutationResult replaceExisting(
         PinnedFile &, PinnedFile &);
-    friend struct MutationResult remove(PinnedFile &);
+    friend struct MutationResult remove(
+        PinnedFile &, const PinnedFileReadControl &);
 };
 
 enum class MutationEffect {
@@ -274,7 +295,8 @@ bool pinRegularFile(
     const EntryRef &entry,
     PinnedFile &file,
     QString &error,
-    qint64 maximumSize = -1);
+    qint64 maximumSize = -1,
+    const PinnedFileReadControl &readControl = {});
 
 struct WriterPinHandoffState
 {
@@ -303,11 +325,17 @@ bool entryMatches(
     bool &matches,
     QString &error);
 
+// Exact recovery name used by remove(); empty means invalid input.
+QString removalQuarantineName(
+    const NativeIdentity &identity,
+    const QString &originalComponent);
+
 bool readAll(
     const PinnedFile &file,
     qint64 maximumSize,
     QByteArray &contents,
-    QString &error);
+    QString &error,
+    const PinnedFileReadControl &readControl = {});
 
 // The chunk pointer is valid only for the duration of the consumer call.
 bool streamContents(
@@ -317,13 +345,17 @@ bool streamContents(
 
 QString verifiedRecoveryPath(
     const PinnedFile &file,
-    const EntryRef &entry);
+    const EntryRef &entry,
+    const PinnedFileReadControl &readControl = {});
 
+// A retained failed destination keeps its fixed name so a higher-level
+// durable journal can recover it without an anonymous quarantine scan.
 bool copyToNewFile(
     const PinnedFile &source,
     const EntryRef &destination,
     PinnedFile &copy,
-    QString &error);
+    QString &error,
+    bool retainDestinationOnFailure = false);
 
 bool writeNewFile(
     const QByteArray &contents,
@@ -333,7 +365,8 @@ bool writeNewFile(
 
 MutationResult moveNoReplace(
     PinnedFile &source,
-    const EntryRef &destination);
+    const EntryRef &destination,
+    const PinnedFileReadControl &readControl = {});
 
 // Replaces one observed regular-file generation without discarding a
 // concurrently substituted name. On success, replacement follows the target
@@ -372,7 +405,9 @@ bool hardenPrivateDirectory(
     DirectoryAnchor &directory,
     QString &error);
 
-MutationResult remove(PinnedFile &file);
+MutationResult remove(
+    PinnedFile &file,
+    const PinnedFileReadControl &readControl = {});
 
 MutationResult removeEmptyDirectory(DirectoryAnchor &directory);
 

@@ -38,6 +38,7 @@
 #endif
 #if defined(Q_OS_LINUX)
 #include <linux/fs.h>
+#include <linux/stat.h>
 #include <sys/syscall.h>
 #include <sys/xattr.h>
 #endif
@@ -62,6 +63,11 @@ bool anchoredFilesystemUseLegacyWindowsDelete();
 #ifdef GC_ANCHORED_FILESYSTEM_ZERO_ID_TEST_HOOK
 bool anchoredFilesystemForceZeroWindowsFileId();
 #endif
+#endif
+
+#ifdef GC_ANCHORED_FILESYSTEM_DUR007_TEST_HOOKS
+void anchoredFilesystemOpenStateChanged(int delta);
+bool anchoredFilesystemDurableGenerationUnavailableRequested();
 #endif
 
 namespace AnchoredFileSystem {
@@ -182,6 +188,10 @@ struct UnixStamp
     qint64 modifiedNanoseconds = 0;
     qint64 changedSeconds = 0;
     qint64 changedNanoseconds = 0;
+#if defined(Q_OS_MACOS) || defined(Q_OS_FREEBSD)
+    qint64 birthSeconds = 0;
+    qint64 birthNanoseconds = 0;
+#endif
 
     bool operator==(const UnixStamp &other) const
     {
@@ -240,11 +250,22 @@ bool captureUnixStamp(
     stamp.inode = quint64(status.st_ino);
     stamp.links = quint64(status.st_nlink);
     stamp.size = qint64(status.st_size);
+#if defined(Q_OS_MACOS) || defined(Q_OS_FREEBSD)
 #if defined(Q_OS_MACOS)
     stamp.modifiedSeconds = qint64(status.st_mtimespec.tv_sec);
     stamp.modifiedNanoseconds = qint64(status.st_mtimespec.tv_nsec);
     stamp.changedSeconds = qint64(status.st_ctimespec.tv_sec);
     stamp.changedNanoseconds = qint64(status.st_ctimespec.tv_nsec);
+    stamp.birthSeconds = qint64(status.st_birthtimespec.tv_sec);
+    stamp.birthNanoseconds = qint64(status.st_birthtimespec.tv_nsec);
+#elif defined(Q_OS_FREEBSD)
+    stamp.modifiedSeconds = qint64(status.st_mtim.tv_sec);
+    stamp.modifiedNanoseconds = qint64(status.st_mtim.tv_nsec);
+    stamp.changedSeconds = qint64(status.st_ctim.tv_sec);
+    stamp.changedNanoseconds = qint64(status.st_ctim.tv_nsec);
+    stamp.birthSeconds = qint64(status.st_birthtim.tv_sec);
+    stamp.birthNanoseconds = qint64(status.st_birthtim.tv_nsec);
+#endif
 #else
     stamp.modifiedSeconds = qint64(status.st_mtim.tv_sec);
     stamp.modifiedNanoseconds = qint64(status.st_mtim.tv_nsec);
@@ -252,6 +273,46 @@ bool captureUnixStamp(
     stamp.changedNanoseconds = qint64(status.st_ctim.tv_nsec);
 #endif
     return true;
+}
+
+QByteArray unixDurableGeneration(int descriptor, const UnixStamp &stamp)
+{
+#ifdef GC_ANCHORED_FILESYSTEM_DUR007_TEST_HOOKS
+    if (anchoredFilesystemDurableGenerationUnavailableRequested()) {
+        return {};
+    }
+#endif
+#if defined(Q_OS_MACOS) || defined(Q_OS_FREEBSD)
+    if (stamp.birthSeconds <= 0
+        && stamp.birthNanoseconds <= 0) {
+        return {};
+    }
+    return QByteArrayLiteral("birth:")
+        + QByteArray::number(stamp.birthSeconds) + ':'
+        + QByteArray::number(stamp.birthNanoseconds);
+#elif defined(Q_OS_LINUX) && defined(SYS_statx) \
+    && defined(STATX_BTIME) && defined(AT_EMPTY_PATH) \
+    && defined(AT_STATX_SYNC_AS_STAT)
+    struct statx status {};
+    const int result = int(::syscall(
+        SYS_statx,
+        descriptor,
+        "",
+        AT_EMPTY_PATH | AT_STATX_SYNC_AS_STAT,
+        STATX_BTIME,
+        &status));
+    if (result == 0 && (status.stx_mask & STATX_BTIME)
+        && (status.stx_btime.tv_sec > 0
+            || status.stx_btime.tv_nsec > 0)) {
+        return QByteArrayLiteral("birth:")
+            + QByteArray::number(status.stx_btime.tv_sec) + ':'
+            + QByteArray::number(status.stx_btime.tv_nsec);
+    }
+#else
+    Q_UNUSED(descriptor)
+    Q_UNUSED(stamp)
+#endif
+    return {};
 }
 
 NativeIdentity unixIdentity(const UnixStamp &stamp, char type)
@@ -1093,6 +1154,7 @@ struct WindowsStamp
     qint64 size = -1;
     qint64 modified = 0;
     qint64 changed = 0;
+    qint64 created = 0;
 
     bool operator==(const WindowsStamp &other) const
     {
@@ -1101,7 +1163,8 @@ struct WindowsStamp
             && links == other.links
             && size == other.size
             && modified == other.modified
-            && changed == other.changed;
+            && changed == other.changed
+            && created == other.created;
     }
 };
 
@@ -1406,7 +1469,21 @@ bool captureWindowsStamp(
     stamp.size = standard.EndOfFile.QuadPart;
     stamp.modified = basic.LastWriteTime.QuadPart;
     stamp.changed = basic.ChangeTime.QuadPart;
+    stamp.created = basic.CreationTime.QuadPart;
     return true;
+}
+
+QByteArray windowsDurableGeneration(const WindowsStamp &stamp)
+{
+#ifdef GC_ANCHORED_FILESYSTEM_DUR007_TEST_HOOKS
+    if (anchoredFilesystemDurableGenerationUnavailableRequested()) {
+        return {};
+    }
+#endif
+    return stamp.created > 0
+        ? QByteArrayLiteral("birth:")
+            + QByteArray::number(stamp.created)
+        : QByteArray();
 }
 
 NativeIdentity windowsIdentity(const WindowsStamp &stamp, char type)
@@ -1428,7 +1505,8 @@ bool hashWindowsRegularFile(
     qint64 maximumSize,
     WindowsStamp &stamp,
     QByteArray &digest,
-    QString &error)
+    QString &error,
+    const PinnedFileReadControl &readControl = {})
 {
     WindowsStamp before;
     if (!captureWindowsStamp(handle, before, false, error)) return false;
@@ -1456,6 +1534,14 @@ bool hashWindowsRegularFile(
     while (copied < before.size) {
         const DWORD requested = DWORD(std::min<qint64>(
             chunk.size(), before.size - copied));
+        if (readControl
+            && !readControl(qint64(requested), error)) {
+            if (error.isEmpty()) {
+                error = QStringLiteral(
+                    "The anchored file read was cancelled");
+            }
+            return false;
+        }
         DWORD bytesRead = 0;
         if (!::ReadFile(
                 handle, chunk.data(), requested,
@@ -1471,14 +1557,19 @@ bool hashWindowsRegularFile(
     }
     char trailing = 0;
     DWORD trailingRead = 0;
-    if (!::ReadFile(
+    if ((readControl && !readControl(1, error))
+        || !::ReadFile(
             handle, &trailing, 1, &trailingRead, nullptr)
         || trailingRead != 0) {
-        error = trailingRead != 0
-            ? QStringLiteral("The anchored regular file grew while reading")
-            : windowsError(
-                  QStringLiteral("Cannot finish reading an anchored file"),
-                  ::GetLastError());
+        if (error.isEmpty()) {
+            error = trailingRead != 0
+                ? QStringLiteral(
+                      "The anchored regular file grew while reading")
+                : windowsError(
+                      QStringLiteral(
+                          "Cannot finish reading an anchored file"),
+                      ::GetLastError());
+        }
         return false;
     }
 
@@ -1563,6 +1654,18 @@ namespace Detail {
 
 struct DirectoryState
 {
+    DirectoryState()
+    {
+#ifdef GC_ANCHORED_FILESYSTEM_DUR007_TEST_HOOKS
+        anchoredFilesystemOpenStateChanged(1);
+#endif
+    }
+    ~DirectoryState()
+    {
+#ifdef GC_ANCHORED_FILESYSTEM_DUR007_TEST_HOOKS
+        anchoredFilesystemOpenStateChanged(-1);
+#endif
+    }
     std::shared_ptr<DirectoryState> ancestor;
 #ifdef Q_OS_UNIX
     FileDescriptor descriptor;
@@ -1579,6 +1682,18 @@ struct DirectoryState
 
 struct PinnedFileState
 {
+    PinnedFileState()
+    {
+#ifdef GC_ANCHORED_FILESYSTEM_DUR007_TEST_HOOKS
+        anchoredFilesystemOpenStateChanged(1);
+#endif
+    }
+    ~PinnedFileState()
+    {
+#ifdef GC_ANCHORED_FILESYSTEM_DUR007_TEST_HOOKS
+        anchoredFilesystemOpenStateChanged(-1);
+#endif
+    }
     EntryRef entry;
 #ifdef Q_OS_UNIX
     FileDescriptor descriptor;
@@ -1588,6 +1703,7 @@ struct PinnedFileState
     WindowsStamp stamp;
 #endif
     NativeIdentity identity;
+    QByteArray durableGeneration;
     qint64 size = -1;
     QByteArray sha256;
 };
@@ -2054,7 +2170,8 @@ bool streamPinnedFile(
     const Detail::PinnedFileState &state,
     const PinnedFileChunkConsumer &consume,
     QByteArray &digest,
-    QString &error)
+    QString &error,
+    const PinnedFileReadControl &readControl = {})
 {
     error.clear();
     digest.clear();
@@ -2113,6 +2230,15 @@ bool streamPinnedFile(
     while (offset < state.size) {
         const qsizetype requested = qsizetype(std::min<qint64>(
             chunk.size(), state.size - offset));
+        if (readControl
+            && !readControl(qint64(requested), error)) {
+            if (error.isEmpty()) {
+                error = QStringLiteral(
+                    "The anchored file read was cancelled");
+            }
+            readSucceeded = false;
+            break;
+        }
         qsizetype received = 0;
 #ifdef Q_OS_UNIX
         ssize_t nativeRead;
@@ -2160,37 +2286,48 @@ bool streamPinnedFile(
 
     if (readSucceeded) {
         char trailing = 0;
+        if (readControl && !readControl(1, error)) {
+            if (error.isEmpty()) {
+                error = QStringLiteral(
+                    "The anchored file read was cancelled");
+            }
+            readSucceeded = false;
+        }
+        if (readSucceeded) {
 #ifdef Q_OS_UNIX
-        ssize_t trailingRead;
-        do {
-            trailingRead = ::pread(
-                state.descriptor.get(), &trailing, 1,
-                off_t(state.size));
-        } while (trailingRead < 0 && errno == EINTR);
-        if (trailingRead != 0) {
-            error = trailingRead < 0
-                ? nativeError(
-                      QStringLiteral("Cannot finish reading an anchored file"),
-                      errno)
-                : QStringLiteral(
-                      "The anchored regular file grew while being read");
-            readSucceeded = false;
-        }
+            ssize_t trailingRead;
+            do {
+                trailingRead = ::pread(
+                    state.descriptor.get(), &trailing, 1,
+                    off_t(state.size));
+            } while (trailingRead < 0 && errno == EINTR);
+            if (trailingRead != 0) {
+                error = trailingRead < 0
+                    ? nativeError(
+                          QStringLiteral(
+                              "Cannot finish reading an anchored file"),
+                          errno)
+                    : QStringLiteral(
+                          "The anchored regular file grew while being read");
+                readSucceeded = false;
+            }
 #elif defined(Q_OS_WIN)
-        DWORD trailingRead = 0;
-        if (!::ReadFile(
-                state.handle.get(), &trailing, 1,
-                &trailingRead, nullptr)
-            || trailingRead != 0) {
-            error = trailingRead != 0
-                ? QStringLiteral(
-                      "The anchored regular file grew while being read")
-                : windowsError(
-                      QStringLiteral("Cannot finish reading an anchored file"),
-                      ::GetLastError());
-            readSucceeded = false;
-        }
+            DWORD trailingRead = 0;
+            if (!::ReadFile(
+                    state.handle.get(), &trailing, 1,
+                    &trailingRead, nullptr)
+                || trailingRead != 0) {
+                error = trailingRead != 0
+                    ? QStringLiteral(
+                          "The anchored regular file grew while being read")
+                    : windowsError(
+                          QStringLiteral(
+                              "Cannot finish reading an anchored file"),
+                          ::GetLastError());
+                readSucceeded = false;
+            }
 #endif
+        }
     }
 
 #ifdef Q_OS_WIN
@@ -2460,6 +2597,11 @@ NativeIdentity DirectoryAnchor::identity() const
     return state_ ? state_->identity : NativeIdentity();
 }
 
+QString DirectoryAnchor::displayPath() const
+{
+    return state_ ? state_->displayPath : QString();
+}
+
 bool DirectoryAnchor::openChild(
     const QString &component,
     DirectoryAnchor &directory,
@@ -2717,6 +2859,11 @@ NativeIdentity PinnedFile::identity() const
     return state_ ? state_->identity : NativeIdentity();
 }
 
+QByteArray PinnedFile::durableGeneration() const
+{
+    return state_ ? state_->durableGeneration : QByteArray();
+}
+
 qint64 PinnedFile::size() const
 {
     return state_ ? state_->size : -1;
@@ -2727,7 +2874,9 @@ QByteArray PinnedFile::sha256() const
     return state_ ? state_->sha256 : QByteArray();
 }
 
-QString PinnedFile::verifiedPath(const EntryRef &entry) const
+QString PinnedFile::verifiedPath(
+    const EntryRef &entry,
+    const PinnedFileReadControl &readControl) const
 {
     if (!state_ || !entry.isValid()) return {};
     QString error;
@@ -2786,7 +2935,7 @@ QString PinnedFile::verifiedPath(const EntryRef &entry) const
     const PinnedChunkConsumer discard = [](
         const char *, qsizetype, QString &) { return true; };
     if (!streamPinnedFile(
-            *state_, discard, verifiedDigest, error)) {
+            *state_, discard, verifiedDigest, error, readControl)) {
         return {};
     }
     reportAnchoredFilesystemTransition(
@@ -2794,7 +2943,7 @@ QString PinnedFile::verifiedPath(const EntryRef &entry) const
     if (!entryStillNamesPinnedFile()) return {};
     QByteArray finalDigest;
     if (!streamPinnedFile(
-            *state_, discard, finalDigest, error)) {
+            *state_, discard, finalDigest, error, readControl)) {
         return {};
     }
     if (!entryStillNamesPinnedFile()) return {};
@@ -2803,16 +2952,18 @@ QString PinnedFile::verifiedPath(const EntryRef &entry) const
 
 QString verifiedRecoveryPath(
     const PinnedFile &file,
-    const EntryRef &entry)
+    const EntryRef &entry,
+    const PinnedFileReadControl &readControl)
 {
-    return file.verifiedPath(entry);
+    return file.verifiedPath(entry, readControl);
 }
 
 bool readAll(
     const PinnedFile &file,
     qint64 maximumSize,
     QByteArray &contents,
-    QString &error)
+    QString &error,
+    const PinnedFileReadControl &readControl)
 {
     contents.clear();
     error.clear();
@@ -2838,7 +2989,7 @@ bool readAll(
             offset += size;
             return true;
         },
-        digest, error);
+        digest, error, readControl);
     if (!read) return false;
     contents = std::move(result);
     return true;
@@ -3009,6 +3160,12 @@ bool writeNewFile(
 #endif
         state->stamp = writtenStamp;
         state->identity = writtenIdentity;
+#ifdef Q_OS_UNIX
+        state->durableGeneration = unixDurableGeneration(
+            state->descriptor.get(), writtenStamp);
+#elif defined(Q_OS_WIN)
+        state->durableGeneration = windowsDurableGeneration(writtenStamp);
+#endif
         state->size = writtenStamp.size;
         state->sha256 = expectedDigest;
         candidate.state_ = std::move(state);
@@ -3102,7 +3259,8 @@ bool copyToNewFile(
     const PinnedFile &source,
     const EntryRef &destination,
     PinnedFile &copy,
-    QString &error)
+    QString &error,
+    bool retainDestinationOnFailure)
 {
     copy = {};
     error.clear();
@@ -3246,6 +3404,12 @@ bool copyToNewFile(
 #endif
         state->stamp = copiedStamp;
         state->identity = copiedIdentity;
+#ifdef Q_OS_UNIX
+        state->durableGeneration = unixDurableGeneration(
+            state->descriptor.get(), copiedStamp);
+#elif defined(Q_OS_WIN)
+        state->durableGeneration = windowsDurableGeneration(copiedStamp);
+#endif
         state->size = copiedStamp.size;
         state->sha256 = copiedDigest;
         candidate.state_ = std::move(state);
@@ -3313,12 +3477,19 @@ bool copyToNewFile(
         error = QStringLiteral("Cannot complete an anchored copy");
     }
     if (candidate.isValid()) {
-        if (cleanupIsIdentityBound) {
+        if (retainDestinationOnFailure) {
+            copy = std::move(candidate);
+            error += QStringLiteral("; incomplete copy retained at %1")
+                .arg(destination.displayPath());
+        } else if (cleanupIsIdentityBound) {
             appendCleanupError(error, remove(candidate));
         } else {
             error += QStringLiteral("; unverified copy retained at %1")
                 .arg(destination.displayPath());
         }
+    } else if (retainDestinationOnFailure) {
+        error += QStringLiteral("; incomplete copy may remain at %1")
+            .arg(destination.displayPath());
     }
     return false;
 }
@@ -3327,7 +3498,8 @@ bool pinRegularFile(
     const EntryRef &entry,
     PinnedFile &file,
     QString &error,
-    qint64 maximumSize)
+    qint64 maximumSize,
+    const PinnedFileReadControl &readControl)
 {
     error.clear();
     file = {};
@@ -3390,6 +3562,14 @@ bool pinRegularFile(
     while (offset < before.size) {
         const size_t requested = size_t(std::min<qint64>(
             chunk.size(), before.size - offset));
+        if (readControl
+            && !readControl(qint64(requested), error)) {
+            if (error.isEmpty()) {
+                error = QStringLiteral(
+                    "The anchored file read was cancelled");
+            }
+            return false;
+        }
         ssize_t bytesRead;
         do {
             bytesRead = ::pread(
@@ -3408,6 +3588,13 @@ bool pinRegularFile(
         offset += qint64(bytesRead);
     }
     char trailing = 0;
+    if (readControl && !readControl(1, error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The anchored file read was cancelled");
+        }
+        return false;
+    }
     ssize_t trailingRead;
     do {
         trailingRead = ::pread(
@@ -3436,6 +3623,8 @@ bool pinRegularFile(
     state->descriptor = std::move(descriptor);
     state->stamp = before;
     state->identity = unixIdentity(before, 'f');
+    state->durableGeneration = unixDurableGeneration(
+        state->descriptor.get(), before);
     state->size = before.size;
     state->sha256 = hash.result();
     file.state_ = std::move(state);
@@ -3489,7 +3678,8 @@ bool pinRegularFile(
     WindowsStamp stamp;
     QByteArray digest;
     if (!hashWindowsRegularFile(
-            handle.get(), maximumSize, stamp, digest, error)) {
+            handle.get(), maximumSize, stamp, digest, error,
+            readControl)) {
         return false;
     }
 
@@ -3498,6 +3688,7 @@ bool pinRegularFile(
     state->handle = std::move(handle);
     state->stamp = stamp;
     state->identity = windowsIdentity(stamp, 'f');
+    state->durableGeneration = windowsDurableGeneration(stamp);
     state->size = stamp.size;
     state->sha256 = std::move(digest);
     file.state_ = std::move(state);
@@ -5864,7 +6055,8 @@ MutationResult replaceExisting(
 
 MutationResult moveNoReplace(
     PinnedFile &source,
-    const EntryRef &destination)
+    const EntryRef &destination,
+    const PinnedFileReadControl &readControl)
 {
     MutationResult result;
     if (!source.state_ || !destination.isValid()) {
@@ -5930,7 +6122,7 @@ MutationResult moveNoReplace(
             movedHandle, false, result.error)) {
         result.effect = MutationEffect::Partial;
         result.verifiedRecoveryPath =
-            source.verifiedPath(destination);
+            source.verifiedPath(destination, readControl);
         return result;
     }
     UnixStamp movedName;
@@ -5949,7 +6141,7 @@ MutationResult moveNoReplace(
                   "The anchored move destination changed after publication")
             : inspectError;
         result.verifiedRecoveryPath =
-            source.verifiedPath(destination);
+            source.verifiedPath(destination, readControl);
         return result;
     }
 
@@ -5958,10 +6150,10 @@ MutationResult moveNoReplace(
         const char *, qsizetype, QString &) { return true; };
     if (!streamPinnedFile(
             *source.state_, discard,
-            verifiedDigest, result.error)) {
+            verifiedDigest, result.error, readControl)) {
         result.effect = MutationEffect::Partial;
         result.verifiedRecoveryPath =
-            source.verifiedPath(destination);
+            source.verifiedPath(destination, readControl);
         return result;
     }
 
@@ -5980,7 +6172,7 @@ MutationResult moveNoReplace(
                   "The anchored move destination changed after verification")
             : finalDestinationError;
         result.verifiedRecoveryPath =
-            source.verifiedPath(destination);
+            source.verifiedPath(destination, readControl);
         return result;
     }
     const bool sourceSynced = original.parent_.sync(inspectError);
@@ -6011,7 +6203,7 @@ MutationResult moveNoReplace(
                   "The anchored move destination changed after synchronization")
             : finalDestinationError;
         result.verifiedRecoveryPath =
-            source.verifiedPath(destination);
+            source.verifiedPath(destination, readControl);
         return result;
     }
     result.effect = MutationEffect::AppliedDurable;
@@ -6077,7 +6269,7 @@ MutationResult moveNoReplace(
                 "The anchored file identity changed during its move");
         }
         result.verifiedRecoveryPath =
-            source.verifiedPath(destination);
+            source.verifiedPath(destination, readControl);
         return result;
     }
     source.state_->entry = destination;
@@ -6087,7 +6279,8 @@ MutationResult moveNoReplace(
     const PinnedChunkConsumer discard = [](
         const char *, qsizetype, QString &) { return true; };
     if (!streamPinnedFile(
-            *source.state_, discard, verifiedDigest, result.error)
+            *source.state_, discard, verifiedDigest, result.error,
+            readControl)
         || verifiedDigest != source.state_->sha256) {
         result.effect = MutationEffect::Partial;
         if (result.error.isEmpty()) {
@@ -6095,7 +6288,7 @@ MutationResult moveNoReplace(
                 "The anchored file contents changed during its move");
         }
         result.verifiedRecoveryPath =
-            source.verifiedPath(destination);
+            source.verifiedPath(destination, readControl);
         return result;
     }
     bool destinationMatches = false;
@@ -6116,7 +6309,7 @@ MutationResult moveNoReplace(
                   "The anchored move destination changed after verification")
             : destinationError;
         result.verifiedRecoveryPath =
-            source.verifiedPath(destination);
+            source.verifiedPath(destination, readControl);
         return result;
     }
     source.state_->stamp = finalDestinationStamp;
@@ -6131,7 +6324,25 @@ MutationResult moveNoReplace(
 #endif
 }
 
-MutationResult remove(PinnedFile &file)
+QString removalQuarantineName(
+    const NativeIdentity &identity,
+    const QString &originalComponent)
+{
+    if (!identity.isValid()
+        || !validPortableComponent(originalComponent)) {
+        return {};
+    }
+    QByteArray ownership = identity.serializedKey();
+    ownership += '\0';
+    ownership += QFile::encodeName(originalComponent);
+    return QStringLiteral(".gc-remove-%1").arg(
+        QString::fromLatin1(QCryptographicHash::hash(
+            ownership, QCryptographicHash::Sha256).toHex()));
+}
+
+MutationResult remove(
+    PinnedFile &file,
+    const PinnedFileReadControl &readControl)
 {
     MutationResult result;
     if (!file.state_) {
@@ -6156,8 +6367,12 @@ MutationResult remove(PinnedFile &file)
 #ifdef Q_OS_UNIX
     const EntryRef original = file.state_->entry;
     QString componentError;
-    const QString component = QStringLiteral(".gc-remove-%1")
-        .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    const bool alreadyQuarantined =
+        original.component_.startsWith(QStringLiteral(".gc-remove-"));
+    const QString component = alreadyQuarantined
+        ? original.component_
+        : removalQuarantineName(
+            file.state_->identity, original.component_);
     const EntryRef quarantine =
         original.parent_.entry(component, componentError);
     if (!quarantine.isValid()) {
@@ -6175,8 +6390,12 @@ MutationResult remove(PinnedFile &file)
             : preflightParentError;
         return result;
     }
-    result = moveNoReplace(file, quarantine);
-    if (!result.applied()) return result;
+    if (!alreadyQuarantined) {
+        result = moveNoReplace(file, quarantine, readControl);
+        if (!result.applied()) return result;
+    } else {
+        result.effect = MutationEffect::AppliedDurable;
+    }
 
     bool quarantineMatches = false;
     QString matchError;
@@ -6190,7 +6409,7 @@ MutationResult remove(PinnedFile &file)
                   "The anchored removal quarantine was replaced")
             : matchError;
         result.verifiedRecoveryPath =
-            file.verifiedPath(file.state_->entry);
+            file.verifiedPath(file.state_->entry, readControl);
         return result;
     }
 
@@ -6209,7 +6428,7 @@ MutationResult remove(PinnedFile &file)
                   "The anchored removal quarantine was replaced")
             : matchError;
         result.verifiedRecoveryPath =
-            file.verifiedPath(file.state_->entry);
+            file.verifiedPath(file.state_->entry, readControl);
         return result;
     }
 
@@ -6225,7 +6444,7 @@ MutationResult remove(PinnedFile &file)
                   "The anchored removal parent changed before unlinking")
             : parentError;
         result.verifiedRecoveryPath =
-            file.verifiedPath(file.state_->entry);
+            file.verifiedPath(file.state_->entry, readControl);
         return result;
     }
 
@@ -6254,7 +6473,7 @@ MutationResult remove(PinnedFile &file)
             QStringLiteral("Cannot remove an anchored quarantine file"),
             errno);
         result.verifiedRecoveryPath =
-            file.verifiedPath(file.state_->entry);
+            file.verifiedPath(file.state_->entry, readControl);
         return result;
     }
     result.removalRequested = true;
