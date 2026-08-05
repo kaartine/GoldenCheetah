@@ -856,6 +856,7 @@ private slots:
     void copyPlannedActivitiesPurgesDestroyedRowsBeforePublish();
     void shiftPlannedActivitiesPurgesDestroyedRowsBeforeReorder();
     void moveActivityReservesModelBeforeStorageCommit();
+    void moveActivityCrashRecoveryIsGenerationAtomic_data();
     void moveActivityCrashRecoveryIsGenerationAtomic();
     void moveActivityPostCommitNotificationLossIsReportedCommitted();
     void moveLinkedActivityPersistsReciprocalGeneration();
@@ -925,6 +926,13 @@ private slots:
     void plannedCopyReplacementRejectsStaleSourceWithoutDereference();
     void plannedCopyReplacementCanReplaceSameTargetPath();
     void completedRenameMovesOnlyCompletedCpx();
+    void moveActivityCopiesSharedLegacySidecars();
+    void moveActivityRejectsDerivedDestinationCollision_data();
+    void moveActivityRejectsDerivedDestinationCollision();
+    void moveActivityRejectsDerivedDestinationRace();
+    void moveActivityRejectsSharedLegacySidecarDestinationCollision_data();
+    void moveActivityRejectsSharedLegacySidecarDestinationCollision();
+    void moveActivityRejectsSharedLegacySidecarDestinationRace();
 };
 
 void TestRideCacheRemoval::
@@ -8799,6 +8807,291 @@ completedRenameMovesOnlyCompletedCpx()
 }
 
 void TestRideCacheRemoval::
+moveActivityCopiesSharedLegacySidecars()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    QDateTime sourceDateTime;
+    QDateTime targetDateTime;
+    QVERIFY(RideFile::parseRideFileName(
+        firstName(), &sourceDateTime));
+    QVERIFY(RideFile::parseRideFileName(
+        thirdName(), &targetDateTime));
+    RideItem *completed = fixture.addRide(firstName(), true);
+    RideItem *planned = fixture.addPlannedRide(firstName(), false);
+    completed->dateTime = sourceDateTime;
+    planned->dateTime = sourceDateTime;
+
+    const QByteArray completedContents("completed activity");
+    const QByteArray plannedContents("planned activity");
+    writeFixture(
+        fixture.activityPath(firstName()), completedContents);
+    writeFixture(
+        fixture.plannedActivityPath(firstName()), plannedContents);
+    for (const QString &extension :
+         {QStringLiteral("cpi"), QStringLiteral("notes")}) {
+        const QByteArray contents =
+            extension.toLatin1() + QByteArray(" shared");
+        const QString oldPath =
+            fixture.cachePath(firstName(), extension);
+        const QString newPath =
+            fixture.cachePath(thirdName(), extension);
+        writeFixture(oldPath, contents);
+        QVERIFY(!QFileInfo::exists(newPath));
+    }
+
+    const RideCache::OperationResult result =
+        fixture.cache->moveActivity(completed, targetDateTime);
+
+    QVERIFY2(result.success, qPrintable(result.error));
+    QVERIFY(result.committed);
+    QCOMPARE(completed->fileName, thirdName());
+    QCOMPARE(planned->fileName, firstName());
+    QVERIFY(!QFileInfo::exists(fixture.activityPath(firstName())));
+    QVERIFY(QFileInfo::exists(fixture.activityPath(thirdName())));
+    QCOMPARE(
+        readBytes(fixture.plannedActivityPath(firstName())),
+        plannedContents);
+    for (const QString &extension :
+         {QStringLiteral("cpi"), QStringLiteral("notes")}) {
+        const QByteArray contents =
+            extension.toLatin1() + QByteArray(" shared");
+        QCOMPARE(
+            readBytes(fixture.cachePath(firstName(), extension)),
+            contents);
+        QCOMPARE(
+            readBytes(fixture.cachePath(thirdName(), extension)),
+            contents);
+    }
+}
+
+void TestRideCacheRemoval::
+moveActivityRejectsDerivedDestinationCollision_data()
+{
+    QTest::addColumn<QString>("extension");
+    QTest::addColumn<bool>("sourceArtifactExists");
+
+    for (const QString &extension :
+         {QStringLiteral("notes"),
+          QStringLiteral("cpi"),
+          QStringLiteral("cpx")}) {
+        QTest::newRow(
+            qPrintable(extension + QStringLiteral("-owned")))
+                << extension << true;
+        QTest::newRow(
+            qPrintable(extension + QStringLiteral("-unowned")))
+                << extension << false;
+    }
+}
+
+void TestRideCacheRemoval::
+moveActivityRejectsDerivedDestinationCollision()
+{
+    QFETCH(QString, extension);
+    QFETCH(bool, sourceArtifactExists);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    QDateTime sourceDateTime;
+    QDateTime targetDateTime;
+    QVERIFY(RideFile::parseRideFileName(
+        firstName(), &sourceDateTime));
+    QVERIFY(RideFile::parseRideFileName(
+        thirdName(), &targetDateTime));
+    RideItem *item = fixture.addRide(firstName(), true);
+    item->dateTime = sourceDateTime;
+
+    const QByteArray activityContents("completed activity");
+    const QByteArray sourceContents("source derived artifact");
+    const QByteArray collisionContents("unrelated destination artifact");
+    const QString oldActivity = fixture.activityPath(firstName());
+    const QString newActivity = fixture.activityPath(thirdName());
+    const QString oldDerived =
+        fixture.cachePath(firstName(), extension);
+    const QString newDerived =
+        fixture.cachePath(thirdName(), extension);
+    writeFixture(oldActivity, activityContents);
+    if (sourceArtifactExists)
+        writeFixture(oldDerived, sourceContents);
+    writeFixture(newDerived, collisionContents);
+
+    const RideCache::OperationResult result =
+        fixture.cache->moveActivity(item, targetDateTime);
+
+    QVERIFY(!result.success);
+    QVERIFY(!result.committed);
+    QVERIFY(!result.error.isEmpty());
+    QCOMPARE(item->fileName, firstName());
+    QCOMPARE(item->dateTime, sourceDateTime);
+    QCOMPARE(readBytes(oldActivity), activityContents);
+    QVERIFY(!QFileInfo::exists(newActivity));
+    if (sourceArtifactExists) {
+        QCOMPARE(readBytes(oldDerived), sourceContents);
+    } else {
+        QVERIFY(!QFileInfo::exists(oldDerived));
+    }
+    QCOMPARE(readBytes(newDerived), collisionContents);
+}
+
+void TestRideCacheRemoval::moveActivityRejectsDerivedDestinationRace()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    QDateTime sourceDateTime;
+    QDateTime targetDateTime;
+    QVERIFY(RideFile::parseRideFileName(
+        firstName(), &sourceDateTime));
+    QVERIFY(RideFile::parseRideFileName(
+        thirdName(), &targetDateTime));
+    RideItem *item = fixture.addRide(firstName(), true);
+    item->dateTime = sourceDateTime;
+
+    const QByteArray activityContents("completed activity");
+    const QByteArray collisionContents("concurrent destination notes");
+    const QString oldActivity = fixture.activityPath(firstName());
+    const QString newActivity = fixture.activityPath(thirdName());
+    const QString oldNotes = fixture.cachePath(
+        firstName(), QStringLiteral("notes"));
+    const QString newNotes = fixture.cachePath(
+        thirdName(), QStringLiteral("notes"));
+    writeFixture(oldActivity, activityContents);
+    QVERIFY(!QFileInfo::exists(oldNotes));
+    QVERIFY(!QFileInfo::exists(newNotes));
+    setRideCacheCalendarStorageAction([newNotes, collisionContents] {
+        writeFixture(newNotes, collisionContents);
+    });
+
+    const RideCache::OperationResult result =
+        fixture.cache->moveActivity(item, targetDateTime);
+
+    QVERIFY(!result.success);
+    QVERIFY(!result.committed);
+    QVERIFY(!result.cleanupComplete);
+    QVERIFY(!result.error.isEmpty());
+    QCOMPARE(item->fileName, firstName());
+    QCOMPARE(item->dateTime, sourceDateTime);
+    QCOMPARE(readBytes(oldActivity), activityContents);
+    QVERIFY(!QFileInfo::exists(newActivity));
+    QVERIFY(!QFileInfo::exists(oldNotes));
+    QCOMPARE(readBytes(newNotes), collisionContents);
+}
+
+void TestRideCacheRemoval::
+moveActivityRejectsSharedLegacySidecarDestinationCollision_data()
+{
+    QTest::addColumn<QString>("extension");
+
+    QTest::newRow("cpi") << QStringLiteral("cpi");
+    QTest::newRow("notes") << QStringLiteral("notes");
+}
+
+void TestRideCacheRemoval::
+moveActivityRejectsSharedLegacySidecarDestinationCollision()
+{
+    QFETCH(QString, extension);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    QDateTime sourceDateTime;
+    QDateTime targetDateTime;
+    QVERIFY(RideFile::parseRideFileName(
+        firstName(), &sourceDateTime));
+    QVERIFY(RideFile::parseRideFileName(
+        thirdName(), &targetDateTime));
+    RideItem *completed = fixture.addRide(firstName(), true);
+    RideItem *planned = fixture.addPlannedRide(firstName(), false);
+    completed->dateTime = sourceDateTime;
+    planned->dateTime = sourceDateTime;
+
+    const QByteArray completedContents("completed activity");
+    const QByteArray plannedContents("planned activity");
+    const QByteArray sharedContents("shared legacy sidecar");
+    const QByteArray collisionContents("unrelated destination sidecar");
+    const QString oldSidecar =
+        fixture.cachePath(firstName(), extension);
+    const QString newSidecar =
+        fixture.cachePath(thirdName(), extension);
+    writeFixture(
+        fixture.activityPath(firstName()), completedContents);
+    writeFixture(
+        fixture.plannedActivityPath(firstName()), plannedContents);
+    writeFixture(oldSidecar, sharedContents);
+    writeFixture(newSidecar, collisionContents);
+
+    const RideCache::OperationResult result =
+        fixture.cache->moveActivity(completed, targetDateTime);
+
+    QVERIFY(!result.success);
+    QVERIFY(!result.committed);
+    QVERIFY(!result.error.isEmpty());
+    QCOMPARE(completed->fileName, firstName());
+    QCOMPARE(planned->fileName, firstName());
+    QCOMPARE(
+        readBytes(fixture.activityPath(firstName())),
+        completedContents);
+    QCOMPARE(
+        readBytes(fixture.plannedActivityPath(firstName())),
+        plannedContents);
+    QVERIFY(!QFileInfo::exists(fixture.activityPath(thirdName())));
+    QCOMPARE(readBytes(oldSidecar), sharedContents);
+    QCOMPARE(readBytes(newSidecar), collisionContents);
+}
+
+void TestRideCacheRemoval::
+moveActivityRejectsSharedLegacySidecarDestinationRace()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    QDateTime sourceDateTime;
+    QDateTime targetDateTime;
+    QVERIFY(RideFile::parseRideFileName(
+        firstName(), &sourceDateTime));
+    QVERIFY(RideFile::parseRideFileName(
+        thirdName(), &targetDateTime));
+    RideItem *completed = fixture.addRide(firstName(), true);
+    RideItem *planned = fixture.addPlannedRide(firstName(), false);
+    completed->dateTime = sourceDateTime;
+    planned->dateTime = sourceDateTime;
+
+    const QByteArray completedContents("completed activity");
+    const QByteArray plannedContents("planned activity");
+    const QByteArray sharedContents("shared notes");
+    const QByteArray collisionContents("concurrent destination notes");
+    const QString oldNotes =
+        fixture.cachePath(firstName(), QStringLiteral("notes"));
+    const QString newNotes =
+        fixture.cachePath(thirdName(), QStringLiteral("notes"));
+    writeFixture(
+        fixture.activityPath(firstName()), completedContents);
+    writeFixture(
+        fixture.plannedActivityPath(firstName()), plannedContents);
+    writeFixture(oldNotes, sharedContents);
+    QVERIFY(!QFileInfo::exists(newNotes));
+    setRideCacheCalendarStorageAction([newNotes, collisionContents] {
+        writeFixture(newNotes, collisionContents);
+    });
+
+    const RideCache::OperationResult result =
+        fixture.cache->moveActivity(completed, targetDateTime);
+
+    QVERIFY(!result.success);
+    QVERIFY(!result.committed);
+    QVERIFY(!result.cleanupComplete);
+    QVERIFY(!result.error.isEmpty());
+    QCOMPARE(completed->fileName, firstName());
+    QCOMPARE(planned->fileName, firstName());
+    QCOMPARE(
+        readBytes(fixture.activityPath(firstName())),
+        completedContents);
+    QCOMPARE(
+        readBytes(fixture.plannedActivityPath(firstName())),
+        plannedContents);
+    QVERIFY(!QFileInfo::exists(fixture.activityPath(thirdName())));
+    QCOMPARE(readBytes(oldNotes), sharedContents);
+    QCOMPARE(readBytes(newNotes), collisionContents);
+}
+
+void TestRideCacheRemoval::
 plannedReplacementPurgesPreexistingDestroyedRow()
 {
     Fixture fixture;
@@ -9815,8 +10108,29 @@ void TestRideCacheRemoval::moveActivityReservesModelBeforeStorageCommit()
 }
 
 void TestRideCacheRemoval::
+moveActivityCrashRecoveryIsGenerationAtomic_data()
+{
+    QTest::addColumn<QString>("phase");
+    QTest::addColumn<int>("occurrence");
+    QTest::addColumn<bool>("sharedLegacySidecars");
+
+    const QString phase = QStringLiteral(
+        "plan-replacement-target-published");
+    QTest::newRow("activity-published") << phase << 1 << false;
+    QTest::newRow("cpx-published") << phase << 2 << false;
+    QTest::newRow("cpi-published") << phase << 3 << false;
+    QTest::newRow("notes-published") << phase << 4 << false;
+    QTest::newRow("shared-cpi-published") << phase << 3 << true;
+    QTest::newRow("shared-notes-published") << phase << 4 << true;
+}
+
+void TestRideCacheRemoval::
 moveActivityCrashRecoveryIsGenerationAtomic()
 {
+    QFETCH(QString, phase);
+    QFETCH(int, occurrence);
+    QFETCH(bool, sharedLegacySidecars);
+
     const QString root = qEnvironmentVariable(
         ActivityMoveCrashRootEnvironment);
     const QString mode = qEnvironmentVariable(
@@ -9852,6 +10166,17 @@ moveActivityCrashRecoveryIsGenerationAtomic()
         writeFixture(
             athlete->home->activities().filePath(firstName()),
             QByteArray("old activity"));
+        if (sharedLegacySidecars) {
+            RideItem *planned = new RideItem(nullptr, context.get());
+            planned->fileName = firstName();
+            planned->path = athlete->home->planned().absolutePath();
+            planned->dateTime = sourceDateTime;
+            planned->planned = true;
+            cache->mutableRidesForRemovalTest().append(planned);
+            writeFixture(
+                athlete->home->planned().filePath(firstName()),
+                QByteArray("planned peer"));
+        }
         const QString oldBase = QFileInfo(firstName()).baseName();
         for (const QString &extension :
              {QStringLiteral("cpx"), QStringLiteral("cpi"),
@@ -9900,13 +10225,15 @@ moveActivityCrashRecoveryIsGenerationAtomic()
                 environment.insert(
                     QString::fromLatin1(
                         PlanReplacementCrashOccurrenceEnvironment),
-                    QStringLiteral("1"));
+                    QString::number(occurrence));
             }
             child.setProcessEnvironment(environment);
             child.start(
                 QCoreApplication::applicationFilePath(),
                 {QStringLiteral(
-                    "moveActivityCrashRecoveryIsGenerationAtomic")});
+                    "moveActivityCrashRecoveryIsGenerationAtomic:%1")
+                     .arg(QString::fromLatin1(
+                         QTest::currentDataTag()))});
             if (!child.waitForStarted(5000))
                 return qMakePair(-1, child.errorString());
             if (!child.waitForFinished(20000)) {
@@ -9921,8 +10248,7 @@ moveActivityCrashRecoveryIsGenerationAtomic()
         };
 
     const auto crashed = runChild(
-        QStringLiteral("crash"),
-        QStringLiteral("plan-replacement-target-published"));
+        QStringLiteral("crash"), phase);
     QCOMPARE(crashed.first, PlannedCopyCrashExitCode);
     const auto recovered = runChild(
         QStringLiteral("recover"), QString());
@@ -9939,6 +10265,14 @@ moveActivityCrashRecoveryIsGenerationAtomic()
         QByteArray("old activity"));
     QVERIFY(!QFileInfo::exists(
         activities.filePath(thirdName())));
+    const QDir planned(
+        QDir(temporary.path()).filePath(
+            QStringLiteral("planned")));
+    if (sharedLegacySidecars) {
+        QCOMPARE(
+            readBytes(planned.filePath(firstName())),
+            QByteArray("planned peer"));
+    }
     const QString oldBase = QFileInfo(firstName()).baseName();
     const QString newBase = QFileInfo(thirdName()).baseName();
     for (const QString &extension :
