@@ -27,10 +27,7 @@ INCLUDEPATH += ../../../src \
                ../../../src/Train \
                ../../../qwt/src
 
-unix:!macx {
-    QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-    QMAKE_LFLAGS += -Wl,--gc-sections
-}
+include(../../section-gc.prf)
 
 sanitize:!tsan:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \
