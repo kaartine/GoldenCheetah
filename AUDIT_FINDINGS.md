@@ -4837,23 +4837,34 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### PORT-001: Unix atomic-new publication requires hard-link support
 
-- Status: OPEN
-- Code: `src/FileIO/AtomicFileWriter.h` and
-  `src/Core/RideCacheRemoval.cpp`
+- Status: FIXED
+- Code: `src/FileIO/AtomicFileWriter.h`,
+  `unittests/FileIO/atomicActivitySave/testAtomicActivitySave.cpp`, and
+  `unittests/FileIO/atomicActivitySave/atomicActivitySave.pro`
 - Impact: Unix no-replace publication is implemented as `link(2)` followed by
   `unlink(2)`. Athlete libraries on filesystems that reject hard links cannot
   publish new save, split, backup-archive, or deletion transaction files even
   though each staging file is deliberately created in its target directory.
-  Activity and backup directories being on different filesystems is not itself a
-  deletion failure: deletion copies and verifies the source into the backup
+  Activity and backup directories being on different filesystems is not itself
+  a deletion failure: deletion copies and verifies the source into the backup
   namespace and performs each atomic move within one directory.
-- Test: Exercise save, split, backup-archive, and deletion publication on a Unix
-  filesystem that rejects hard links. Require a safe supported no-replace
-  primitive or an explicit preflight error before metadata changes.
-- Fix direction: Prefer a native no-replace rename primitive such as Linux
-  `renameat2(RENAME_NOREPLACE)` where available, retain the current partial-effect
-  reconciliation contract, and define a verified target-directory staging
-  fallback for Unix platforms without either primitive.
+- Test-first evidence: With hard links rejected, six production-path Linux
+  contracts failed before the change across split-set, archive, collision, and
+  target-identity cases. The expanded fixture also covers create-new save and
+  deletion publication, symlink and hard-link collisions, missing staging,
+  unsupported native calls, non-fallback native failures, and partial
+  link/unlink reconciliation.
+- Resolution: Linux publication first uses
+  `renameat2(RENAME_NOREPLACE)`, while macOS uses
+  `renameatx_np(RENAME_EXCL)`. Linux `ENOSYS`, `EINVAL`, and `EOPNOTSUPP`, plus
+  unsupported Unix platforms, retain the no-replace hard-link fallback. Other
+  native errors fail closed without a second publication attempt, and the
+  existing partial-effect flag continues to drive identity-preserving rollback.
+- Verification: The complete atomic-activity suite passes 331/331. The focused
+  native, collision, fallback, and rollback matrix passes 16/16 under strict
+  ASan/UBSan/LSan and 16/16 under genuine ThreadSanitizer with `libtsan.so.2`
+  verified. Linux exercised the native syscalls at runtime; macOS remains
+  compile-guarded and awaits native CI/runtime coverage.
 
 ### DB-001: VideoSync import uses video-table helpers
 
