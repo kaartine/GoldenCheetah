@@ -1,26 +1,32 @@
 QT += core gui widgets sql testlib
 
 TEMPLATE = app
-TARGET = tst_trainDbVersionSafety
+TARGET = tst_libraryTransactionSafety
 
 include(../../unittests.pri)
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug
 
-DEFINES += GC_TRAIN_DB_TEST_HOOKS
+DEFINES += GC_LIBRARY_TRANSACTION_TEST_HOOKS
 
-SOURCES = testTrainDbVersionSafety.cpp \
+SOURCES = testLibraryTransactionSafety.cpp \
+          LibraryTransactionTestStubs.cpp \
+          ../../../src/Train/Library.cpp \
+          ../../../src/Train/LibraryImportFileStager.cpp \
           ../../../src/Train/TrainDB.cpp \
           ../../../src/Train/ErgFileBase.cpp \
           ../../../src/Train/VideoSyncFileBase.cpp
 
-HEADERS = ../../../src/Train/TrainDB.h \
+HEADERS = LibraryTransactionTestStubs.h \
+          ../../../src/Train/LibraryImportFileStager.h \
+          ../../../src/Train/TrainDB.h \
           ../../../src/Train/ErgFileBase.h \
           ../../../src/Train/VideoSyncFileBase.h \
           ../../../src/Train/TagStore.h
 
-INCLUDEPATH += ../../../src \
+INCLUDEPATH += . \
+               ../../../src \
                ../../../src/Charts \
                ../../../src/Core \
                ../../../src/FileIO \

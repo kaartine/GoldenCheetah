@@ -493,6 +493,52 @@ TrainDB::~TrainDB
 }
 
 
+TrainDB::ScopedLUW::ScopedLUW
+(TrainDB &database)
+    : database(database)
+    , active(database.startLUW())
+{
+}
+
+
+TrainDB::ScopedLUW::~ScopedLUW
+()
+{
+    rollback();
+}
+
+
+bool
+TrainDB::ScopedLUW::isActive
+() const
+{
+    return active;
+}
+
+
+bool
+TrainDB::ScopedLUW::commit
+()
+{
+    if (!active || !database.endLUW()) {
+        return false;
+    }
+    active = false;
+    return true;
+}
+
+
+void
+TrainDB::ScopedLUW::rollback
+()
+{
+    if (active) {
+        database.rollbackLUW();
+        active = false;
+    }
+}
+
+
 QSqlDatabase
 TrainDB::connection
 () const
@@ -2095,7 +2141,7 @@ TrainDB::importWorkout
                       "   SET type = :type, source = :source, source_id = :source_id, displayname = :displayname, description = :description, "
                       "       erg_subtype = :erg_subtype, erg_duration = :erg_duration, erg_bikestress = :erg_bikestress, erg_if = :erg_if, "
                       "       erg_iso_power = :erg_iso_power, erg_vi = :erg_vi, erg_xp = :erg_xp, erg_ri = :erg_ri, erg_bs = :erg_bs, erg_svi = :erg_svi, "
-                      "       erg_min_power = :erg_min_power, erg_max_power = :erg_max_power, erg_avg_power = erg_avg_power, "
+                      "       erg_min_power = :erg_min_power, erg_max_power = :erg_max_power, erg_avg_power = :erg_avg_power, "
                       "       erg_dominant_zone = :erg_dominant_zone, erg_num_zones = :erg_num_zones, "
                       "       erg_duration_z1 = :erg_duration_z1, erg_duration_z2 = :erg_duration_z2, "
                       "       erg_duration_z3 = :erg_duration_z3, erg_duration_z4 = :erg_duration_z4, "

@@ -36,6 +36,7 @@ equals(GC_UNITTESTS, active) {
 			   Train/stravaRoutesClient \
 			   Train/webDownloadImportPolicy \
 			   Train/trainDbVersionSafety \
+			   Train/libraryTransactionSafety \
 			   Core/measuresAtomicSave \
 			   Core/plannedActivityFileStager \
 			   Core/rideCacheAtomicSave \
