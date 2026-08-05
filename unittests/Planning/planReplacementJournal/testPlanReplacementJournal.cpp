@@ -18,6 +18,7 @@
 #endif
 
 #include <cstdlib>
+#include <functional>
 #include <memory>
 
 namespace {
@@ -28,6 +29,22 @@ const char CrashActionEnvironment[] = "GC_PLAN_REPLACEMENT_CRASH_ACTION";
 const char CrashPhaseEnvironment[] = "GC_PLAN_REPLACEMENT_CRASH_PHASE";
 const char CrashOccurrenceEnvironment[] =
     "GC_PLAN_REPLACEMENT_CRASH_OCCURRENCE";
+QByteArray planReplacementActionTransition;
+std::function<void()> planReplacementAction;
+
+void setPlanReplacementTransitionAction(
+    const QByteArray &transition,
+    const std::function<void()> &action)
+{
+    planReplacementActionTransition = transition;
+    planReplacementAction = action;
+}
+
+void clearPlanReplacementTransitionAction()
+{
+    planReplacementActionTransition.clear();
+    planReplacementAction = {};
+}
 
 enum class JournalNamespaceEntryKind
 {
@@ -543,6 +560,12 @@ enum class DataTamper
 
 void planReplacementTransitionReached(const char *transition)
 {
+    if (planReplacementAction
+        && planReplacementActionTransition == transition) {
+        std::function<void()> action = std::move(planReplacementAction);
+        planReplacementActionTransition.clear();
+        action();
+    }
     const QByteArray requested = qgetenv(CrashPhaseEnvironment);
     if (requested.isEmpty() || requested != transition) return;
     static QHash<QByteArray, int> occurrences;
@@ -560,6 +583,7 @@ class TestPlanReplacementJournal : public QObject
     Q_OBJECT
 
 private slots:
+    void cleanup();
     void crashRecoveryIsGenerationAtomic_data();
     void crashRecoveryIsGenerationAtomic();
     void successfulReplacementSupportsOverlappingPaths();
@@ -577,6 +601,8 @@ private slots:
     void rejectsUnsafeSpecifications();
     void allowsSymlinkRootWithoutTransactionNamespace();
     void concurrentReplacementIsRejected();
+    void readinessRejectsHiddenPendingNamespace();
+    void recoveryRejectsEnumeratedJournalReplacement();
     void pendingSiblingTransactionIsRejected_data();
     void pendingSiblingTransactionIsRejected();
     void manifestTamperingIsFailClosed_data();
@@ -588,6 +614,11 @@ private slots:
     void invalidCommitMarkerIsNotReportedCommitted();
     void journalDirectoriesArePrivate();
 };
+
+void TestPlanReplacementJournal::cleanup()
+{
+    clearPlanReplacementTransitionAction();
+}
 
 void TestPlanReplacementJournal::crashRecoveryIsGenerationAtomic_data()
 {
@@ -1099,6 +1130,122 @@ void TestPlanReplacementJournal::concurrentReplacementIsRejected()
         PlanReplacement::Journal::prepare(specification, error);
     QVERIFY2(afterCleanup, qPrintable(error));
     QVERIFY2(afterCleanup->cleanupAfterRollback(error), qPrintable(error));
+}
+
+void TestPlanReplacementJournal::readinessRejectsHiddenPendingNamespace()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QVERIFY(createOldGeneration(temporary.path()));
+
+    const QString transactionsPath = QDir(temporary.path()).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString siblingNamespace = QDir(transactionsPath).filePath(
+        QStringLiteral("linked-save"));
+    const QString pendingId = QStringLiteral(
+        "01234567-89ab-cdef-8123-456789abcdef");
+    const QString pendingJournal = QDir(siblingNamespace).filePath(pendingId);
+    QVERIFY(createOwnedFixtureHierarchy(
+        {transactionsPath, siblingNamespace, pendingJournal}));
+
+    const QString retainedNamespace = QDir(temporary.path()).filePath(
+        QStringLiteral("retained-linked-save-namespace"));
+    bool hookReached = false;
+    bool namespaceReplaced = false;
+    setPlanReplacementTransitionAction(
+        QByteArray("plan-replacement-readiness-namespaces-anchored"),
+        [&]() {
+            hookReached = true;
+            namespaceReplaced =
+                QDir().rename(siblingNamespace, retainedNamespace);
+            if (namespaceReplaced) {
+                QVERIFY(createOwnedFixtureHierarchy({siblingNamespace}));
+            }
+        });
+
+    QString error;
+    const std::shared_ptr<PlanReplacement::Journal> journal =
+        PlanReplacement::Journal::prepare(
+            replacementSpecification(temporary.path()), error);
+    clearPlanReplacementTransitionAction();
+
+    QVERIFY(hookReached);
+    if (!namespaceReplaced) {
+#ifdef Q_OS_WIN
+        QVERIFY2(!journal, "The original pending namespace must remain visible");
+        QVERIFY2(!error.isEmpty(), "Rejected readiness must report an error");
+        QSKIP("The anchored Windows namespace blocks replacement");
+#else
+        QFAIL("The sibling namespace replacement injection did not run");
+#endif
+    }
+    QVERIFY2(
+        !journal,
+        "Plan readiness accepted a hidden pending transaction namespace");
+    QVERIFY2(!error.isEmpty(), "Rejected readiness must report an error");
+    QVERIFY(QFileInfo(QDir(retainedNamespace).filePath(pendingId)).isDir());
+    QVERIFY(QDir(siblingNamespace).isEmpty());
+}
+
+void TestPlanReplacementJournal::
+recoveryRejectsEnumeratedJournalReplacement()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+
+    const QString transactionsPath = QDir(temporary.path()).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString namespacePath = QDir(transactionsPath).filePath(
+        QStringLiteral("plan-replacement"));
+    const QString pendingId = QStringLiteral(
+        "01234567-89ab-cdef-8123-456789abcdef");
+    const QString pendingJournal = QDir(namespacePath).filePath(pendingId);
+    const QString pendingFile = QDir(pendingJournal).filePath(
+        QStringLiteral("old-0000.copy"));
+    const QByteArray pendingContents("original pending plan recovery");
+    QVERIFY(createOwnedFixtureHierarchy(
+        {transactionsPath, namespacePath, pendingJournal}));
+    QVERIFY(writeFile(pendingFile, pendingContents));
+
+    const QString retainedJournal = QDir(namespacePath).filePath(
+        QStringLiteral("retained-plan-replacement-journal"));
+    const QByteArray replacementContents(
+        "replacement plan journal must remain untouched");
+    bool hookReached = false;
+    bool journalReplaced = false;
+    setPlanReplacementTransitionAction(
+        QByteArray("plan-replacement-recovery-namespace-enumerated"),
+        [&]() {
+            hookReached = true;
+            journalReplaced =
+                QDir().rename(pendingJournal, retainedJournal);
+            if (!journalReplaced) return;
+            QVERIFY(createOwnedFixtureHierarchy({pendingJournal}));
+            QVERIFY(writeFile(pendingFile, replacementContents));
+        });
+
+    QString error;
+    const bool reconciled =
+        PlanReplacement::Journal::reconcileAll(temporary.path(), error);
+    clearPlanReplacementTransitionAction();
+
+    QVERIFY(hookReached);
+    if (!journalReplaced) {
+#ifdef Q_OS_WIN
+        QSKIP("Windows blocked the enumerated journal replacement");
+#else
+        QFAIL("The enumerated journal replacement injection did not run");
+#endif
+    }
+    QVERIFY2(
+        !reconciled,
+        "Plan recovery accepted an enumerated journal replacement");
+    QVERIFY2(!error.isEmpty(), "Rejected recovery must report an error");
+    QCOMPARE(
+        readFile(QDir(retainedJournal).filePath(
+            QStringLiteral("old-0000.copy"))),
+        pendingContents);
+    QCOMPARE(readFile(pendingFile), replacementContents);
 }
 
 void TestPlanReplacementJournal::pendingSiblingTransactionIsRejected_data()

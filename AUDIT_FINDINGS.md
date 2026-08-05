@@ -3192,9 +3192,14 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
   Plan-replacement preparation uses the same anchored fixed-child bootstrap and
   private UUID-journal creation. This gives directories an explicit current-user
-  owner even under an elevated Windows token. Its standalone tests now link the
-  anchored implementation, and native CI builds and runs the plan-replacement
-  and plan-bundle suites on both Windows and macOS.
+  owner even under an elevated Windows token. Readiness now retains all three
+  activity-transaction namespace generations and enumerates them through their
+  anchors. Recovery retains the athlete root, transaction parent, and plan
+  namespace, requires two matching bounded snapshots before mutation, binds each
+  opened UUID child to the enumerated native identity, and verifies a stable
+  final namespace snapshot. Its standalone tests now link the anchored
+  implementation, and native CI builds and runs the plan-replacement and
+  plan-bundle suites on both Windows and macOS.
 - Verification: Every deterministic regression failed for its intended unsafe
   behavior before its fix. On Linux, RideCache passes 390 cases with one skip,
   PlanReplacement 124, PlanBundleImport 8, and linked-save cleanup 4 under both
@@ -3209,10 +3214,14 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   regressions first reproduced the hidden pending namespace and destructive
   enumerated-child substitution. The resulting atomic-activity suite passes
   310/0/0 normally; 14 focused readiness, recovery, lock-guard, and hardened-
-  journal cases pass under strict ASan/UBSan/LSan and ThreadSanitizer.
-- Residual: Plan-replacement readiness, recovery enumeration, control-file I/O,
-  and cleanup still use pathname-based `QDir`/`QFileInfo` operations rather than
-  one retained namespace generation. The private-directory API explicitly trusts
+  journal cases pass under strict ASan/UBSan/LSan and ThreadSanitizer. The two
+  plan-namespace regressions likewise first reproduced hidden sibling recovery
+  and destructive enumerated-child substitution. PlanReplacement now passes
+  126/0/0 normally, under strict ASan/UBSan/LSan, and under ThreadSanitizer;
+  PlanBundleImport passes 8/0/0 in all three configurations.
+- Residual: Plan-replacement UUID-journal control-file and data I/O plus cleanup
+  still use pathname-based `QDir`/`QFileInfo` operations after the identity-bound
+  observation handle is released. The private-directory API explicitly trusts
   processes running as the same OS identity and privileged administrators; such
   a process can still exchange a name after revalidation and before a later
   pathname-based copy or write. Replace-existing publication, generic staged-set
@@ -3223,10 +3232,10 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   check-to-syscall interval. A reported verified recovery path is also
   point-in-time evidence, not a permanent claim after handles are released.
   These residuals keep this item `IN_PROGRESS`.
-- Next test and fix: Anchor plan-replacement namespace readiness and recovery,
-  then retain plan journal entries through identity-bound control I/O and
-  cleanup. After that, apply the observed-generation contract to generic
-  replace-existing publication and staged rollback.
+- Next test and fix: Retain plan UUID-journal children through identity-bound
+  manifest, commit-marker, data-file, and cleanup operations. After that, apply
+  the observed-generation contract to generic replace-existing publication and
+  staged rollback.
 
 ### GUI-007: Modal activity workflows retained dangling RideItem pointers
 
