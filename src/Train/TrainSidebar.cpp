@@ -2600,7 +2600,8 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
         if (context->currentErgFile()) {
             const double workoutSlope = ergFileQueryAdapter.gradientAt(
                     displayWorkoutDistance * 1000., curLap);
-            if (initializeSlope) slope = workoutSlope;
+            slope = TrainSidebarRuntime::slopeTarget(
+                    slope, workoutSlope, initializeSlope);
 
             if (displayWorkoutLap != curLap) {
                 context->notifyNewLap();

@@ -175,6 +175,21 @@ private slots:
         QVERIFY(observerSawReadyState);
     }
 
+    void failedInitialTargetDoesNotEmitStart()
+    {
+        StartObserver observer;
+        QSignalSpy startSpy(&observer, &StartObserver::started);
+        bool initialized = false;
+
+        QVERIFY(!TrainSidebarRuntime::completeStart(
+                [&]() { initialized = true; },
+                []() { return false; },
+                [&]() { emit observer.started(); }));
+
+        QVERIFY(initialized);
+        QCOMPARE(startSpy.count(), 0);
+    }
+
     void firstTargetIsAppliedSynchronously()
     {
         FakeController controller;
@@ -188,6 +203,16 @@ private slots:
                 []() {}));
 
         QCOMPARE(controller.targets, QList<int>() << 235);
+    }
+
+    void initialSlopeUsesWorkoutGradient()
+    {
+        QCOMPARE(
+                TrainSidebarRuntime::slopeTarget(1.5, 7.25, true),
+                7.25);
+        QCOMPARE(
+                TrainSidebarRuntime::slopeTarget(1.5, 7.25, false),
+                1.5);
     }
 
     void daumRestartReleasesPausedState()

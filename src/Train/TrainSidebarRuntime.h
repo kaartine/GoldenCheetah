@@ -61,6 +61,13 @@ inline bool discardRecordingArtifacts(const QString &recordingPath)
     return removed;
 }
 
+inline double slopeTarget(double currentSlope,
+                          double workoutSlope,
+                          bool initialize)
+{
+    return initialize ? workoutSlope : currentSlope;
+}
+
 template<typename Initialize, typename ApplyInitialTarget, typename NotifyStart>
 bool completeStart(Initialize initialize,
                    ApplyInitialTarget applyInitialTarget,
