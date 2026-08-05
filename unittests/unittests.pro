@@ -30,6 +30,7 @@ equals(GC_UNITTESTS, active) {
 			   Charts/indendPlotMarkerMatrix \
 			   Charts/mapPageSecurity \
 			   Charts/mapRoutePointIndex \
+			   Charts/powerHistSelection \
 			   Charts/voronoiSafety \
 			   Train/libraryImportFileStager \
 			   Train/stravaRoutesClient \
@@ -80,6 +81,7 @@ equals(GC_UNITTESTS, active) {
 			   Gui/mergeActivityTimeOffset \
 			   Gui/mergeActivityXData \
 			   Gui/rideImportBatch \
+			   Gui/rideNavigatorProxyMapping \
 			   Gui/repeatPlanWorkflow \
 			   Gui/mergeActivityAlignment \
 			   Gui/iconBundleSecurity \
