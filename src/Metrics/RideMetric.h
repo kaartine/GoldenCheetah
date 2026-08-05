@@ -29,6 +29,9 @@
 #include <QMutex>
 #include <QList>
 
+#include <atomic>
+#include <memory>
+
 #include "RideFile.h"
 #include "UserMetricSettings.h"
 
@@ -41,11 +44,13 @@ class RideItem;
 class DataFilter;
 class DataFilterRuntime;
 class Leaf;
+class RideMetricRegistrySnapshot;
+class RideMetricRegistryState;
 
 // keep track of schema changes
 extern int DBSchemaVersion;
 extern QList<UserMetricSettings> _userMetrics;
-extern quint16 UserMetricSchemaVersion;
+extern std::atomic<quint16> UserMetricSchemaVersion;
 
 typedef QSharedPointer<RideMetric> RideMetricPtr;
 
@@ -223,6 +228,11 @@ public:
     static QHash<QString,RideMetricPtr>
     computeMetrics(RideItem *item, Specification spec, const QStringList &metrics);
 
+    static QHash<QString,RideMetricPtr>
+    computeMetrics(RideItem *item, Specification spec,
+                   const QStringList &metrics,
+                   const RideMetricRegistrySnapshot &registry);
+
     // get the value for metric m from precomputed values stored at p
     static double getForSymbol(QString m, const QHash<QString,RideMetric*> *p);
 
@@ -265,6 +275,7 @@ class UserMetric: public RideMetric {
 
 public:
 
+    explicit UserMetric(UserMetricSettings settings);
     UserMetric(Context *context, UserMetricSettings settings);
     UserMetric(const UserMetric *from);
     ~UserMetric();
@@ -338,7 +349,7 @@ public:
         UserMetricSettings settings;
 
         // and we compile into this for runtime
-        DataFilter *program;
+        QSharedPointer<DataFilter> program;
         Leaf *root;
 
         // functions, to save lots of lookups
@@ -352,115 +363,72 @@ public:
 
 };
 
+class RideMetricRegistrySnapshot
+{
+public:
+    RideMetricRegistrySnapshot() = default;
+
+    int metricCount() const;
+    const QStringList &allMetrics() const;
+    QString metricName(int index) const;
+    RideMetric::MetricType metricType(int index) const;
+    const RideMetric *rideMetric(const QString &symbol) const;
+    bool haveMetric(const QString &symbol) const;
+    RideMetric *newMetric(const QString &symbol) const;
+    const QVector<QString> &dependencies(const QString &symbol) const;
+    quint16 userMetricSchemaVersion() const;
+
+private:
+    explicit RideMetricRegistrySnapshot(
+        std::shared_ptr<const RideMetricRegistryState> state);
+
+    std::shared_ptr<const RideMetricRegistryState> state_;
+
+    friend class RideMetricFactory;
+};
+
 class RideMetricFactory {
 
 public:
     static QList<QString> compatibilitymetrics;
 
 private:
-    static RideMetricFactory *_instance;
-    static QVector<QString> noDeps;
+    RideMetricFactory();
+    RideMetricFactory(const RideMetricFactory &other) = delete;
+    RideMetricFactory &operator=(const RideMetricFactory &other) = delete;
 
-    QStringList metricNames;
-    QVector<RideMetric::MetricType> metricTypes;
-    QHash<QString,RideMetric*> metrics;
-    QHash<QString,QVector<QString>*> dependencyMap;
-    bool dependenciesChecked;
-
-    RideMetricFactory() : dependenciesChecked(false) {}
-    RideMetricFactory(const RideMetricFactory &other);
-    RideMetricFactory &operator=(const RideMetricFactory &other);
-
-    void checkDependencies() const {
-        if (dependenciesChecked) return;
-        foreach(const QString &dependee, dependencyMap.keys()) {
-            foreach(const QString &dependency, *dependencyMap[dependee])
-                if (!metrics.contains(dependency))
-                    qDebug()<<"metric dep error:"<<dependency;
-        }
-        const_cast<RideMetricFactory*>(this)->dependenciesChecked = true;
-    }
+    mutable QMutex writerMutex_;
+    mutable std::shared_ptr<const RideMetricRegistryState> state_;
+    static thread_local std::shared_ptr<const RideMetricRegistryState>
+        constructionState_;
 
     public:
 
-    QMutex mutex;
-
     static RideMetricFactory &instance() {
-        if (!_instance)
-            _instance = new RideMetricFactory();
-        return *_instance;
+        // Metric registrars have static lifetime and can run during global
+        // teardown. Preserve the historical process-lifetime factory while
+        // retaining thread-safe function-local initialization.
+        static RideMetricFactory *const factory = new RideMetricFactory;
+        return *factory;
     }
 
-    int metricCount() const { return metricNames.size(); }
-    QHash<QString,RideMetric*> metricHash() const { return metrics; }
-
-    void initialize() {
-        foreach(const QString &metricName, metrics.keys())
-            metrics[metricName]->initialize();
-    }
-
-    const QStringList &allMetrics() const { return metricNames; }
-    const QString &metricName(int i) const { return metricNames[i]; }
-    const RideMetric::MetricType &metricType(int i) const { return metricTypes[i]; }
-    const RideMetric *rideMetric(QString name) const { return metrics.value(name, NULL); }
-
-    bool haveMetric(const QString &symbol) const {
-        return metrics.contains(symbol);
-    }
-
-    RideMetric *newMetric(const QString &symbol) const {
-        checkDependencies();
-        return metrics.value(symbol)->clone();
-    }
-
-    // clear out user metrics, we're readding them
-    void removeUserMetrics() {
-        int firstUser=-1;
-        for(int i=0; i<metricNames.count(); i++) {
-            RideMetric *m = metrics.value(metricNames[i], NULL);
-            if (m && m->isUser()) {
-                firstUser=i;
-                break;
-            }
-        }
-
-        // now delete
-        if (firstUser >0) {
-            while (firstUser < metricNames.count()) {
-                QString current = metricNames.at(firstUser);
-
-                metrics.remove(current);
-                dependencyMap.remove(current);
-                metricNames.takeAt(firstUser);
-                metricTypes.remove(firstUser);
-            }
-        }
-    }
-
+    RideMetricRegistrySnapshot snapshot() const;
+    int metricCount() const;
+    QHash<QString,RideMetric*> metricHash() const;
+    void initialize();
+    QStringList allMetrics() const;
+    QString metricName(int index) const;
+    RideMetric::MetricType metricType(int index) const;
+    const RideMetric *rideMetric(QString name) const;
+    bool haveMetric(const QString &symbol) const;
+    RideMetric *newMetric(const QString &symbol) const;
+    void removeUserMetrics();
+    bool replaceUserMetrics(const QList<UserMetricSettings> &settings,
+                            quint16 schemaVersion);
     bool addMetric(const RideMetric &metric,
-                   const QVector<QString> *deps = NULL) {
-        if(metrics.contains(metric.symbol())) return false;
-        RideMetric *newMetric = metric.clone();
-        newMetric->setIndex(metrics.count());
-        metrics.insert(metric.symbol(), newMetric);
-        metricNames.append(metric.symbol());
-        metricTypes.append(metric.type());
-        if (deps) {
-            QVector<QString> *copy = new QVector<QString>;
-            for (int i = 0; i < deps->size(); ++i)
-                copy->append((*deps)[i]);
-            dependencyMap.insert(metric.symbol(), copy);
-            dependenciesChecked = false;
-        }
-        return true;
-    }
-
-    const QVector<QString> &dependencies(const QString &symbol) const {
-        if(!metrics.contains(symbol)) return noDeps;
-        QVector<QString> *result = dependencyMap.value(symbol);
-        return result ? *result : noDeps;
-    }
+                   const QVector<QString> *deps = NULL);
+    QVector<QString> dependencies(const QString &symbol) const;
+    quint16 userMetricSchemaVersion() const;
 };
 
 #endif // _GC_RideMetric_h
-

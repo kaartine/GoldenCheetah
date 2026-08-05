@@ -27,6 +27,8 @@
 
 #include <QSet>
 
+#include <mutex>
+
 // DB Schema Version - YOU MUST UPDATE THIS IF THE SCHEMA VERSION CHANGES!!!
 // Schema version will change if a) the default metadata.xml is updated
 //                            or b) new metrics are added / old changed
@@ -173,14 +175,318 @@
 
 int DBSchemaVersion = 160;
 
-RideMetricFactory *RideMetricFactory::_instance;
-QVector<QString> RideMetricFactory::noDeps;
 QList<QString> RideMetricFactory::compatibilitymetrics;
 
 // user defined metrics are loaded by the ridecache on startup
 // and then reloaded by ridecache if they change
 QList<UserMetricSettings> _userMetrics;
-quint16 UserMetricSchemaVersion = 0;
+std::atomic<quint16> UserMetricSchemaVersion{0};
+
+class RideMetricRegistryState
+{
+public:
+    RideMetricRegistryState() = default;
+
+    RideMetricRegistryState(const RideMetricRegistryState &other)
+        : metricNames(other.metricNames), metricTypes(other.metricTypes),
+          metrics(other.metrics), dependencyMap(other.dependencyMap),
+          userMetricSchemaVersion(other.userMetricSchemaVersion)
+    {
+    }
+
+    QStringList metricNames;
+    QVector<RideMetric::MetricType> metricTypes;
+    QHash<QString, RideMetricPtr> metrics;
+    QHash<QString, QVector<QString>> dependencyMap;
+    quint16 userMetricSchemaVersion = 0;
+    mutable std::once_flag dependenciesChecked;
+};
+
+thread_local std::shared_ptr<const RideMetricRegistryState>
+    RideMetricFactory::constructionState_;
+
+namespace {
+
+const QStringList &emptyMetricNames()
+{
+    static const QStringList empty;
+    return empty;
+}
+
+const QVector<QString> &emptyDependencies()
+{
+    static const QVector<QString> empty;
+    return empty;
+}
+
+} // namespace
+
+RideMetricRegistrySnapshot::RideMetricRegistrySnapshot(
+    std::shared_ptr<const RideMetricRegistryState> state)
+    : state_(std::move(state))
+{
+}
+
+int RideMetricRegistrySnapshot::metricCount() const
+{
+    return state_ ? state_->metricNames.size() : 0;
+}
+
+const QStringList &RideMetricRegistrySnapshot::allMetrics() const
+{
+    return state_ ? state_->metricNames : emptyMetricNames();
+}
+
+QString RideMetricRegistrySnapshot::metricName(int index) const
+{
+    return state_ && index >= 0 && index < state_->metricNames.size()
+        ? state_->metricNames.at(index) : QString();
+}
+
+RideMetric::MetricType
+RideMetricRegistrySnapshot::metricType(int index) const
+{
+    return state_ && index >= 0 && index < state_->metricTypes.size()
+        ? state_->metricTypes.at(index) : RideMetric::Total;
+}
+
+const RideMetric *
+RideMetricRegistrySnapshot::rideMetric(const QString &symbol) const
+{
+    return state_ ? state_->metrics.value(symbol).data() : nullptr;
+}
+
+bool RideMetricRegistrySnapshot::haveMetric(const QString &symbol) const
+{
+    return state_ && state_->metrics.contains(symbol);
+}
+
+RideMetric *RideMetricRegistrySnapshot::newMetric(const QString &symbol) const
+{
+    if (!state_) return nullptr;
+
+    std::call_once(state_->dependenciesChecked, [state = state_]() {
+        for (auto it = state->dependencyMap.cbegin();
+             it != state->dependencyMap.cend(); ++it) {
+            for (const QString &dependency : it.value()) {
+                if (!state->metrics.contains(dependency))
+                    qDebug() << "metric dep error:" << dependency;
+            }
+        }
+    });
+
+    const RideMetricPtr definition = state_->metrics.value(symbol);
+    return definition ? definition->clone() : nullptr;
+}
+
+const QVector<QString> &
+RideMetricRegistrySnapshot::dependencies(const QString &symbol) const
+{
+    if (!state_ || !state_->metrics.contains(symbol))
+        return emptyDependencies();
+    const auto it = state_->dependencyMap.constFind(symbol);
+    return it == state_->dependencyMap.cend()
+        ? emptyDependencies() : it.value();
+}
+
+quint16 RideMetricRegistrySnapshot::userMetricSchemaVersion() const
+{
+    return state_ ? state_->userMetricSchemaVersion : 0;
+}
+
+RideMetricFactory::RideMetricFactory()
+    : state_(std::make_shared<const RideMetricRegistryState>())
+{
+}
+
+RideMetricRegistrySnapshot RideMetricFactory::snapshot() const
+{
+    if (constructionState_)
+        return RideMetricRegistrySnapshot(constructionState_);
+    return RideMetricRegistrySnapshot(
+        std::atomic_load_explicit(&state_, std::memory_order_acquire));
+}
+
+int RideMetricFactory::metricCount() const
+{
+    return snapshot().metricCount();
+}
+
+QHash<QString, RideMetric *> RideMetricFactory::metricHash() const
+{
+    const RideMetricRegistrySnapshot current = snapshot();
+    QHash<QString, RideMetric *> result;
+    if (!current.state_) return result;
+    for (auto it = current.state_->metrics.cbegin();
+         it != current.state_->metrics.cend(); ++it) {
+        result.insert(it.key(), it.value().data());
+    }
+    return result;
+}
+
+void RideMetricFactory::initialize()
+{
+    QMutexLocker locker(&writerMutex_);
+    const auto current =
+        std::atomic_load_explicit(&state_, std::memory_order_acquire);
+    auto next = std::make_shared<RideMetricRegistryState>(*current);
+    QHash<QString, RideMetricPtr> initialized;
+
+    for (const QString &name : current->metricNames) {
+        const RideMetricPtr definition = current->metrics.value(name);
+        RideMetricPtr copy(definition ? definition->clone() : nullptr);
+        if (!copy) {
+            qWarning() << "cannot initialize metric clone:" << name;
+            return;
+        }
+        copy->setIndex(definition->index());
+        copy->initialize();
+        initialized.insert(name, copy);
+    }
+    next->metrics = initialized;
+    std::atomic_store_explicit(
+        &state_, std::shared_ptr<const RideMetricRegistryState>(next),
+        std::memory_order_release);
+}
+
+QStringList RideMetricFactory::allMetrics() const
+{
+    return snapshot().allMetrics();
+}
+
+QString RideMetricFactory::metricName(int index) const
+{
+    return snapshot().metricName(index);
+}
+
+RideMetric::MetricType RideMetricFactory::metricType(int index) const
+{
+    return snapshot().metricType(index);
+}
+
+const RideMetric *RideMetricFactory::rideMetric(QString name) const
+{
+    return snapshot().rideMetric(name);
+}
+
+bool RideMetricFactory::haveMetric(const QString &symbol) const
+{
+    return snapshot().haveMetric(symbol);
+}
+
+RideMetric *RideMetricFactory::newMetric(const QString &symbol) const
+{
+    return snapshot().newMetric(symbol);
+}
+
+void RideMetricFactory::removeUserMetrics()
+{
+    QMutexLocker locker(&writerMutex_);
+    const auto current =
+        std::atomic_load_explicit(&state_, std::memory_order_acquire);
+    auto next = std::make_shared<RideMetricRegistryState>();
+    next->userMetricSchemaVersion = current->userMetricSchemaVersion;
+
+    for (const QString &name : current->metricNames) {
+        const RideMetricPtr metric = current->metrics.value(name);
+        if (metric && metric->isUser()) break;
+        next->metricNames.append(name);
+        next->metricTypes.append(current->metricTypes.at(
+            next->metricTypes.size()));
+        next->metrics.insert(name, metric);
+        const auto dependencies = current->dependencyMap.constFind(name);
+        if (dependencies != current->dependencyMap.cend())
+            next->dependencyMap.insert(name, dependencies.value());
+    }
+
+    if (next->metricNames.size() == current->metricNames.size()) return;
+    std::atomic_store_explicit(
+        &state_, std::shared_ptr<const RideMetricRegistryState>(next),
+        std::memory_order_release);
+}
+
+bool RideMetricFactory::replaceUserMetrics(
+    const QList<UserMetricSettings> &settings, quint16 schemaVersion)
+{
+    QMutexLocker locker(&writerMutex_);
+    const auto current =
+        std::atomic_load_explicit(&state_, std::memory_order_acquire);
+    auto next = std::make_shared<RideMetricRegistryState>();
+
+    for (const QString &name : current->metricNames) {
+        const RideMetricPtr metric = current->metrics.value(name);
+        if (metric && metric->isUser()) break;
+        next->metricNames.append(name);
+        next->metricTypes.append(current->metricTypes.at(
+            next->metricTypes.size()));
+        next->metrics.insert(name, metric);
+        const auto dependencies = current->dependencyMap.constFind(name);
+        if (dependencies != current->dependencyMap.cend())
+            next->dependencyMap.insert(name, dependencies.value());
+    }
+    next->userMetricSchemaVersion = schemaVersion;
+
+    const auto previousConstructionState = constructionState_;
+    constructionState_ = next;
+    struct ConstructionStateRestore {
+        std::shared_ptr<const RideMetricRegistryState> previous;
+        ~ConstructionStateRestore()
+        {
+            RideMetricFactory::constructionState_ = std::move(previous);
+        }
+    } restore{previousConstructionState};
+
+    for (const UserMetricSettings &setting : settings) {
+        if (next->metrics.contains(setting.symbol)) continue;
+        RideMetricPtr metric(new UserMetric(setting));
+        metric->setIndex(next->metrics.size());
+        next->metrics.insert(setting.symbol, metric);
+        next->metricNames.append(setting.symbol);
+        next->metricTypes.append(metric->type());
+    }
+
+    std::atomic_store_explicit(
+        &state_, std::shared_ptr<const RideMetricRegistryState>(next),
+        std::memory_order_release);
+    UserMetricSchemaVersion.store(schemaVersion, std::memory_order_release);
+    return true;
+}
+
+bool RideMetricFactory::addMetric(
+    const RideMetric &metric, const QVector<QString> *dependencies)
+{
+    RideMetricPtr registered(metric.clone());
+    if (!registered) return false;
+
+    QMutexLocker locker(&writerMutex_);
+    const auto current =
+        std::atomic_load_explicit(&state_, std::memory_order_acquire);
+    if (current->metrics.contains(metric.symbol())) return false;
+
+    auto next = std::make_shared<RideMetricRegistryState>(*current);
+    registered->setIndex(next->metrics.size());
+    next->metrics.insert(metric.symbol(), registered);
+    next->metricNames.append(metric.symbol());
+    next->metricTypes.append(metric.type());
+    if (dependencies)
+        next->dependencyMap.insert(metric.symbol(), *dependencies);
+
+    std::atomic_store_explicit(
+        &state_, std::shared_ptr<const RideMetricRegistryState>(next),
+        std::memory_order_release);
+    return true;
+}
+
+QVector<QString>
+RideMetricFactory::dependencies(const QString &symbol) const
+{
+    return snapshot().dependencies(symbol);
+}
+
+quint16 RideMetricFactory::userMetricSchemaVersion() const
+{
+    return snapshot().userMetricSchemaVersion();
+}
 
 quint16
 RideMetric::userMetricFingerprint(QList<UserMetricSettings> these)
@@ -196,7 +502,15 @@ RideMetric::userMetricFingerprint(QList<UserMetricSettings> these)
 QHash<QString,RideMetricPtr>
 RideMetric::computeMetrics(RideItem *item, Specification spec, const QStringList &metrics)
 {
-    const RideMetricFactory &factory = RideMetricFactory::instance();
+    return computeMetrics(
+        item, spec, metrics, RideMetricFactory::instance().snapshot());
+}
+
+QHash<QString,RideMetricPtr>
+RideMetric::computeMetrics(
+    RideItem *item, Specification spec, const QStringList &metrics,
+    const RideMetricRegistrySnapshot &factory)
+{
 
     // Keep the historical builtin-before-user root ordering, but de-duplicate
     // requests before constructing the reachable dependency graph.

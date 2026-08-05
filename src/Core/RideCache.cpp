@@ -159,7 +159,7 @@ RideCache::RideCache(Context *context) : context(context)
 
     // initial load of user defined metrics - do once we have an initial context
     // but before we refresh or check metrics for the first time
-    if (UserMetricSchemaVersion == 0) {
+    if (RideMetricFactory::instance().userMetricSchemaVersion() == 0) {
 
         QString metrics = QString("%1/../usermetrics.xml").arg(context->athlete->home->root().absolutePath());
         if (QFile(metrics).exists()) {
@@ -178,12 +178,10 @@ RideCache::RideCache(Context *context) : context(context)
             UserMetric::addCompatibility(_userMetrics);
 
             // reset schema version
-            UserMetricSchemaVersion = RideMetric::userMetricFingerprint(_userMetrics);
-
-            // now add initial metrics
-            foreach(UserMetricSettings m, _userMetrics) {
-                RideMetricFactory::instance().addMetric(UserMetric(context, m));
-            }
+            const quint16 schemaVersion =
+                RideMetric::userMetricFingerprint(_userMetrics);
+            RideMetricFactory::instance().replaceUserMetrics(
+                _userMetrics, schemaVersion);
         }
 
         // reset special fields to take into account user metrics

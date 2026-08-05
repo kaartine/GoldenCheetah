@@ -2,8 +2,6 @@
 #include "RideItem.h"
 #include "RideMetric.h"
 
-RideMetricFactory *RideMetricFactory::_instance = nullptr;
-QVector<QString> RideMetricFactory::noDeps;
 QList<QString> RideMetricFactory::compatibilitymetrics;
 
 RideItem::RideItem()

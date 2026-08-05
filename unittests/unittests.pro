@@ -91,6 +91,7 @@ equals(GC_UNITTESTS, active) {
 			   Gui/trainPerspectiveState \
 			   Metrics/rideMetadataAtomicSave \
 			   Metrics/rideMetricDependencyGraph \
+			   Metrics/userMetricRegistrySafety \
 			   Metrics/estimatorThreadControl \
 			   Planning/planBundleImportJournal \
 			   Planning/planReplacementJournal \
