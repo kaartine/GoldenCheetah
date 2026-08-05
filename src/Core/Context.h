@@ -27,6 +27,8 @@
 #include "RideFile.h"
 #include "Season.h"
 
+#include <memory>
+
 #ifdef GC_HAS_CLOUD_DB
 #include "CloudDBChart.h"
 #include "CloudDBUserMetric.h"
@@ -60,6 +62,8 @@ class ModelFilter;
 class QWebEngineProfile;
 class HtmlTrainingBridge;
 class RideFileCacheWriteErrorCoordinator;
+class AthleteSession;
+class TrainingSession;
 
 class GlobalContext : public QObject
 {
@@ -121,9 +125,18 @@ class Context : public QObject
         bool scopehighlighted;
 
         HtmlTrainingBridge *getHtmlTrainingBridge();
+        AthleteSession &athleteSession();
+        const AthleteSession &athleteSession() const;
+        TrainingSession &trainingSession();
+        const TrainingSession &trainingSession() const;
+        QWebEngineProfile *webEngineProfile() const;
         void reportCacheWriteFailure(
             const QString &cachePath,
             const QString &detail);
+        bool isRunning() const;
+        bool isPaused() const;
+        void setTrainingStatus(bool running, bool paused);
+        const QString &currentMediaFilename() const;
 
         // ride item
         RideItem *rideItem() const { return ride; }
@@ -139,20 +152,11 @@ class Context : public QObject
         RideItem *ride;  // the currently selected ride
         DateRange dr_;
         Season const *season = nullptr;
-        ErgFile *workout; // the currently selected workout file
-        VideoSyncFile *videosync; // the currently selected videosync file
-        QString videoFilename;
-        long now; // point in time during train session
-
         // search filter
         bool isfiltered;
         bool ishomefiltered;
         QStringList filters; // searchBox filters
         QStringList homeFilters; // homewindow sidebar filters
-
-        // train mode state
-        bool isRunning;
-        bool isPaused;
 
         // comparing things
         bool isCompareIntervals;
@@ -166,9 +170,6 @@ class Context : public QObject
         CloudDBChartListDialog *cdbChartListDialog;
         CloudDBUserMetricListDialog *cdbUserMetricListDialog;
 #endif
-
-        // WebEngineProfile for this user
-        QWebEngineProfile* webEngineProfile;
 
     public slots:
 
@@ -210,17 +211,17 @@ class Context : public QObject
 
         // realtime signals
         void notifyTelemetryUpdate(const RealtimeData &rtData) { telemetryUpdate(rtData); }
-        void notifyErgFileSelected(ErgFile *x) { workout=x; ergFileSelected(x); ergFileSelected((ErgFileBase*)(x));}
-        void notifyVideoSyncFileSelected(VideoSyncFile *x) { videosync=x; videoSyncFileSelected(x); }
-        ErgFile *currentErgFile() { return workout; }
-        VideoSyncFile *currentVideoSyncFile() { return videosync; }
-        void notifyMediaSelected( QString x) { videoFilename = x; mediaSelected(x); }
+        void notifyErgFileSelected(ErgFile *x);
+        void notifyVideoSyncFileSelected(VideoSyncFile *x);
+        ErgFile *currentErgFile() const;
+        VideoSyncFile *currentVideoSyncFile() const;
+        void notifyMediaSelected(QString x);
         void notifySelectVideo(QString x) { selectMedia(x); }
         void notifySelectWorkout(QString x) { selectWorkout(x); }
         void notifySelectWorkout(int idx ) { selectWorkout(idx); }
         void notifySelectVideoSync(QString x) { selectVideoSync(x); }
-        void notifySetNow(long x) { now = x; setNow(x); }
-        long getNow() { return now; }
+        void notifySetNow(long x);
+        long getNow() const;
         void notifyNewLap() { emit newLap(); }
         void notifyStart() { GlobalContext::context()->notifyStart(); emit start(); }
         void notifyUnPause() { emit unpause(); }
@@ -285,8 +286,8 @@ class Context : public QObject
         void userMetricsConfigChanged();
 
     private:
-        HtmlTrainingBridge *m_HtmlTrainingBridge;
-        RideFileCacheWriteErrorCoordinator *cacheWriteErrorCoordinator_;
+        std::unique_ptr<AthleteSession> athleteSession_;
+        std::unique_ptr<TrainingSession> trainingSession_;
 
     signals:
 

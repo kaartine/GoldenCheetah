@@ -5240,17 +5240,44 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   and the production map translation units compile. Timings are diagnostic;
   pass/fail is based on returned identity and bounded examined-point counts.
 
-### ARCH-001: Context is a cross-layer mutable service locator
+### ARCH-001: Context directly owned session and persistence lifetimes
 
-- Status: OPEN
-- Code: `src/Core/Context.h:22`, `src/Core/Context.h:147`,
-  `src/Core/Context.cpp:154`
-- Impact: Core, GUI, Train, FileIO, Cloud, and WebEngine lifetimes are coupled,
-  making thread ownership and isolated tests difficult.
-- Test: Architectural dependency check plus headless construction tests for
-  extracted services.
-- Fix direction: Incrementally introduce `AthleteSession`, `TrainingSession`,
-  and narrow settings/persistence/application service interfaces.
+- Status: FIXED
+- Code: `src/Core/AthleteSession.*`, `src/Core/TrainingSession.*`,
+  `src/Core/SessionServices.h`, `src/Core/Context.*`,
+  `src/Core/ContextSessionServices.cpp`,
+  `src/FileIO/RideFileCache.*`, `src/Core/RideItem.cpp`, and
+  `unittests/Core/sessionBoundaries`
+- Impact: Training state, WebEngine/bridge resources, and CPX persistence-error
+  delivery shared one unstructured `Context` lifetime, making ownership,
+  thread-bound notification, and isolated testing difficult.
+- Test-first evidence: The dependency check initially failed because `Context`
+  had no owned session boundaries. After the first extraction, the production
+  build also failed on the remaining `&Context::workout` state alias; the
+  extended check reproduced that failure deterministically.
+- Resolution: `AthleteSession` owns the athlete-scoped WebEngine and persistence
+  services, while `TrainingSession` owns mutable workout, media, timeline, and
+  run state. `Context` keeps source-compatible delegation methods as a migration
+  layer. CPX writes use an injected `AthletePersistenceService`; legacy callers
+  that omit it fall back centrally through the owning `Context`, so reporting
+  cannot disappear silently. The manual-workout lease uses session accessors
+  instead of a `Context` data member.
+- Verification: The boundary suite links production `Context.cpp` and covers
+  construction/destruction, per-athlete session isolation, compatibility
+  wrapper propagation, persistence delegation, lazy bridge creation, and
+  profile lifetime through injected service factories. The cache regression
+  exercises the exact omitted-service failure path. Remote focused suites
+  passed 614 tests with one existing platform skip and no failures. The new
+  boundary and cache suites also passed strict ASan/UBSan and TSan runs (54
+  tests in each sanitizer configuration). The architecture check passed, and
+  the complete Qt 6.8.3/Qwt 6.8.0 application built, linked, and executed its
+  `--version` startup path in the constrained remote container.
+- Deferred Low: `Context` still exposes broad mutable
+  navigation, filter, selection, and comparison state and therefore remains a
+  wider service locator. Eliminating that coupling is outside the active
+  High/Medium goal. This FIXED status applies only to the scoped session and
+  persistence ownership/thread-lifetime extraction. Workout and video-sync
+  pointers retain their existing externally owned lifetime contract.
 
 ### ARCH-002: Unit tests link private application object files
 

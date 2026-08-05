@@ -25,7 +25,8 @@ HEADERS = ../../../src/FileIO/RideFile.h \
           ../../../src/FileIO/RideFileCommand.h \
           ../../../src/FileIO/RideFileCache.h \
           ../../../src/FileIO/RideFileCacheIntegrity.h \
-          ../../../src/FileIO/RideFileCacheWriteError.h
+          ../../../src/FileIO/RideFileCacheWriteError.h \
+          ../../../src/Core/SessionServices.h
 
 INCLUDEPATH += ../../../src \
                ../../../src/ANT \

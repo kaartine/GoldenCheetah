@@ -10,6 +10,7 @@
 #include "RideFile.h"
 #include "RideFileCache.h"
 #include "RideFileCacheWriteError.h"
+#include "SessionServices.h"
 #include "WPrime.h"
 
 #include <QByteArrayView>
@@ -457,6 +458,24 @@ void writeCacheFixture(
     file.close();
 }
 
+class RecordingPersistenceService final
+    : public AthletePersistenceService
+{
+public:
+    void reportCacheWriteFailure(
+        const QString &cachePath,
+        const QString &detail) override
+    {
+        ++reportCount;
+        reportedPath = cachePath;
+        reportedDetail = detail;
+    }
+
+    int reportCount = 0;
+    QString reportedPath;
+    QString reportedDetail;
+};
+
 } // namespace
 
 class TestRideFileCacheRefresh : public QObject
@@ -464,6 +483,7 @@ class TestRideFileCacheRefresh : public QObject
     Q_OBJECT
 
 private slots:
+    void cleanup();
     void refreshRestoresFixedZoneStorage();
     void repeatedRefreshClearsZoneValues();
     void temporaryActivityComputesWithoutPersistentCache();
@@ -496,6 +516,8 @@ private slots:
     void unprovenancedRideSkipsPersistence();
     void savedRideRebindsAndPersistsAtomically();
     void matchingSourceProvenanceAllowsPersistenceAttempt();
+    void injectedPersistenceServiceReceivesWriteFailure();
+    void omittedPersistenceServiceFallsBackToContext();
     void sourceChangeInvalidatesPersistence();
     void rideMutationInvalidatesPersistence();
     void directPointMutationSkipsPersistence();
@@ -504,6 +526,11 @@ private slots:
     void verifiedRefreshRejectsMutationBeforePublication();
     void concurrentPersistenceFailuresKeepComputedResults();
 };
+
+void TestRideFileCacheRefresh::cleanup()
+{
+    RideFileCache::setContextPersistenceFallbackHookForTest({});
+}
 
 void TestRideFileCacheRefresh::refreshRestoresFixedZoneStorage()
 {
@@ -2020,6 +2047,113 @@ matchingSourceProvenanceAllowsPersistenceAttempt()
 
     QCOMPARE(writeCalls, 1);
     QCOMPARE(reportCalls, 1);
+    QVERIFY(!cache.incomplete);
+}
+
+void
+TestRideFileCacheRefresh::
+injectedPersistenceServiceReceivesWriteFailure()
+{
+    registerProvenanceTestReader();
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath =
+        directory.filePath(QStringLiteral("source.provenance"));
+    const QString cachePath =
+        directory.filePath(QStringLiteral("cache/source.cpx"));
+    writeFileBytes(sourcePath, QByteArrayLiteral("source-a"));
+
+    QFile source(sourcePath);
+    QStringList errors;
+    std::unique_ptr<RideFile> ride(
+        RideFileFactory::instance().openRideFile(
+            nullptr, source, errors));
+    QVERIFY2(ride, qPrintable(errors.join(QLatin1Char('\n'))));
+    RecordingPersistenceService persistence;
+    RideFileCache cache(
+        ride.get(),
+        RideFileCache::SkipInitialComputeForTest {},
+        &persistence);
+
+    QVERIFY(!cache.refreshCacheForTest(
+        sourcePath,
+        cachePath,
+        [](const QString &,
+           const RideFileCacheIntegrity::CacheWriteOperation &,
+           QString *error) {
+            if (error)
+                *error = QStringLiteral("injected write failure");
+            return false;
+        },
+        {}));
+
+    QCOMPARE(persistence.reportCount, 1);
+    QCOMPARE(persistence.reportedPath, cachePath);
+    QCOMPARE(
+        persistence.reportedDetail,
+        QStringLiteral("injected write failure"));
+    QVERIFY(!cache.incomplete);
+}
+
+void
+TestRideFileCacheRefresh::
+omittedPersistenceServiceFallsBackToContext()
+{
+    registerProvenanceTestReader();
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath =
+        directory.filePath(QStringLiteral("source.provenance"));
+    const QString cachePath =
+        directory.filePath(QStringLiteral("cache/source.cpx"));
+    writeFileBytes(sourcePath, QByteArrayLiteral("source-a"));
+
+    QFile source(sourcePath);
+    QStringList errors;
+    std::unique_ptr<RideFile> ride(
+        RideFileFactory::instance().openRideFile(
+            nullptr, source, errors));
+    QVERIFY2(ride, qPrintable(errors.join(QLatin1Char('\n'))));
+
+    Context *const expectedContext =
+        reinterpret_cast<Context *>(quintptr(0x1234));
+    Context *reportedContext = nullptr;
+    QString reportedPath;
+    QString reportedDetail;
+    int reportCount = 0;
+    RideFileCache::setContextPersistenceFallbackHookForTest(
+        [&](Context *context,
+            const QString &path,
+            const QString &detail) {
+            ++reportCount;
+            reportedContext = context;
+            reportedPath = path;
+            reportedDetail = detail;
+        });
+
+    RideFileCache cache(
+        ride.get(),
+        RideFileCache::SkipInitialComputeForTest {});
+    QVERIFY(!cache.refreshCacheForTest(
+        sourcePath,
+        cachePath,
+        [&cache, expectedContext](
+            const QString &,
+            const RideFileCacheIntegrity::CacheWriteOperation &,
+            QString *error) {
+            cache.setContextForTest(expectedContext);
+            if (error)
+                *error = QStringLiteral("injected write failure");
+            return false;
+        },
+        {}));
+
+    QCOMPARE(reportCount, 1);
+    QCOMPARE(reportedContext, expectedContext);
+    QCOMPARE(reportedPath, cachePath);
+    QCOMPARE(
+        reportedDetail,
+        QStringLiteral("injected write failure"));
     QVERIFY(!cache.incomplete);
 }
 

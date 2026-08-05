@@ -1253,7 +1253,7 @@ TrainSidebar::mediaTreeWidgetSelectionChanged()
     QModelIndex current = mediaTree->currentIndex();
     QModelIndex target = vsortModel->mapToSource(current);
     QString filename = videoModel->data(videoModel->index(target.row(), TdbVideoModelIdx::filepath), Qt::DisplayRole).toString();
-    if (filename == context->videoFilename) {
+    if (filename == context->currentMediaFilename()) {
         mediafile = "";
         context->notifyMediaSelected(""); // CTRL+Click to clear selection
     } else {
@@ -3747,8 +3747,9 @@ TrainSidebar::viewChanged(int index)
 void TrainSidebar::setStatusFlags(int flags)
 {
     status |= flags;
-    context->isRunning = (status&RT_RUNNING);
-    context->isPaused  = (status&RT_PAUSED);
+    context->setTrainingStatus(
+        status & RT_RUNNING,
+        status & RT_PAUSED);
 
     emit statusChanged(status);
 }
@@ -3756,8 +3757,9 @@ void TrainSidebar::setStatusFlags(int flags)
 void TrainSidebar::clearStatusFlags(int flags)
 {
     status &=~flags;
-    context->isRunning = (status&RT_RUNNING);
-    context->isPaused  = (status&RT_PAUSED);
+    context->setTrainingStatus(
+        status & RT_RUNNING,
+        status & RT_PAUSED);
 
     emit statusChanged(status);
 }

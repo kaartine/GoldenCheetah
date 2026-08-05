@@ -3,6 +3,7 @@
 #include "LinkedActivitySaveJournal.h"
 #include "PlanReplacementJournal.h"
 #include "Athlete.h"
+#include "AthleteSession.h"
 #include "Context.h"
 #include "DataProcessor.h"
 #include "Estimator.h"
@@ -12,6 +13,7 @@
 #include "RideItem.h"
 #include "RideMetadata.h"
 #include "Settings.h"
+#include "TrainingSession.h"
 #include "Zones.h"
 
 #include <QDir>
@@ -845,20 +847,49 @@ Context::Context(MainWindow *window)
     tab = nullptr;
     athlete = nullptr;
     ride = nullptr;
-    workout = nullptr;
-    videosync = nullptr;
-    now = 0;
     isfiltered = false;
     ishomefiltered = false;
-    isRunning = false;
-    isPaused = false;
     isCompareIntervals = false;
     isCompareDateRanges = false;
-    webEngineProfile = nullptr;
-    m_HtmlTrainingBridge = nullptr;
 }
 
 Context::~Context() = default;
+
+void Context::notifyErgFileSelected(ErgFile *workout)
+{
+    emit ergFileSelected(workout);
+    emit ergFileSelected(static_cast<ErgFileBase *>(workout));
+}
+
+void Context::notifyVideoSyncFileSelected(VideoSyncFile *videoSync)
+{
+    emit videoSyncFileSelected(videoSync);
+}
+
+ErgFile *Context::currentErgFile() const
+{
+    return nullptr;
+}
+
+VideoSyncFile *Context::currentVideoSyncFile() const
+{
+    return nullptr;
+}
+
+void Context::notifyMediaSelected(QString filename)
+{
+    emit mediaSelected(filename);
+}
+
+void Context::notifySetNow(long now)
+{
+    emit setNow(now);
+}
+
+long Context::getNow() const
+{
+    return 0;
+}
 
 DateRange::DateRange(QDate from, QDate to, QString name, QColor color)
     : from(from),

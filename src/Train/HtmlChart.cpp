@@ -139,7 +139,7 @@ HtmlChart::HtmlChart(Context *context) : GcChartWindow(context), context(context
     // Viewer
     canvas = new QWebEngineView(this);
     canvas->settings()->setAttribute(QWebEngineSettings::LocalStorageEnabled, true);
-    canvas->setPage(new QWebEnginePage(context->webEngineProfile, canvas));
+    canvas->setPage(new QWebEnginePage(context->webEngineProfile(), canvas));
 
     try {
         m_webChannel = new QWebChannel(this);

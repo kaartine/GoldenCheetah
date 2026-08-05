@@ -131,15 +131,16 @@ ImagicController::getRealtimeData(RealtimeData &rtData)
         // START
         // If not running, start. If paused, restart. Otherwise start new lap
         if ((Buttons&IM_ENTER) == 0 && noPressCount > 4) {
-            if (!parent->context->isRunning || parent->context->isPaused) parent->Start();
+            if (!parent->context->isRunning()
+                || parent->context->isPaused()) parent->Start();
             else  parent->newLap();
         }
 
         // CANCEL
         // Press once to pause, press again (while paused) to stop
         if ((Buttons&IM_CANCEL) == 0 && noPressCount > 4) {
-            if (parent->context->isRunning) {
-                if (parent->context->isPaused) parent->Stop(0);
+            if (parent->context->isRunning()) {
+                if (parent->context->isPaused()) parent->Stop(0);
                 else  parent->Start();
             }
         }
@@ -223,4 +224,3 @@ ImagicController::setWeight(double weight)
 {
     myImagic->setWeight(weight);
 }
-

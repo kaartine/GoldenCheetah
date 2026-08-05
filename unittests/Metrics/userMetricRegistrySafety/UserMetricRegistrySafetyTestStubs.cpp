@@ -210,6 +210,13 @@ void Context::notifyCompareIntervals(bool) {}
 void Context::notifyCompareIntervalsChanged() {}
 void Context::notifyCompareDateRanges(bool) {}
 void Context::notifyCompareDateRangesChanged() {}
+void Context::notifyErgFileSelected(ErgFile *) {}
+void Context::notifyVideoSyncFileSelected(VideoSyncFile *) {}
+ErgFile *Context::currentErgFile() const { return nullptr; }
+VideoSyncFile *Context::currentVideoSyncFile() const { return nullptr; }
+void Context::notifyMediaSelected(QString) {}
+void Context::notifySetNow(long) {}
+long Context::getNow() const { return 0; }
 
 RealtimeData::RealtimeData() {}
 

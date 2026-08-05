@@ -71,6 +71,7 @@ private slots:
     void noSwitchLeaseLeavesReplacementTabUntouched();
     void noSwitchLeaseToleratesDestroyedOriginalTab();
     void pointerOverrideRestoresOnlyOwnedState();
+    void pointerOverrideSupportsAccessorBoundary();
     void pointerOverrideDoesNotRestoreDetachedOwnerState();
     void pointerOverrideDoesNotRestoreExpiredOriginal();
     void committedCompletionCannotBecomeRetryable();
@@ -396,6 +397,34 @@ pointerOverrideRestoresOnlyOwnedState()
     }
 
     QCOMPARE(owner.value, static_cast<void*>(&externalValue));
+}
+
+
+void TestCalendarModalWorkflow::
+pointerOverrideSupportsAccessorBoundary()
+{
+    int originalValue = 1;
+    int temporaryValue = 2;
+    int publishedValue = 3;
+    FakePointerOwner owner;
+    owner.value = &originalValue;
+
+    {
+        ModalPointerOverrideLease<FakePointerOwner, void*> lease(
+            &owner,
+            [](const FakePointerOwner &current) {
+                return current.value;
+            },
+            [](FakePointerOwner &current, void *value) {
+                current.value = value;
+            },
+            &temporaryValue);
+        QCOMPARE(owner.value, static_cast<void*>(&temporaryValue));
+        QVERIFY(lease.publish(&publishedValue));
+        QCOMPARE(owner.value, static_cast<void*>(&publishedValue));
+    }
+
+    QCOMPARE(owner.value, static_cast<void*>(&originalValue));
 }
 
 

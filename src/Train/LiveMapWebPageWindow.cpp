@@ -110,7 +110,7 @@ LiveMapWebPageWindow::LiveMapWebPageWindow(Context *context) : GcChartWindow(con
 
     // set webview for map
     view = new QWebEngineView(this);
-    webPage = new QWebEnginePage(context->webEngineProfile);
+    webPage = new QWebEnginePage(context->webEngineProfile());
     view->setPage(webPage);
 
     view->setContentsMargins(0,10,0,0);

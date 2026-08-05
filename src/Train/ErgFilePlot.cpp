@@ -99,7 +99,7 @@ QPointF NowData::sample(size_t i) const
 
 ErgFilePlot::ErgFilePlot(Context *context) : context(context)
 {
-    workoutActive = context->isRunning;
+    workoutActive = context->isRunning();
 
     //insertLegend(new QwtLegend(), QwtPlot::BottomLegend);
     setCanvasBackground(GColor(CTRAINPLOTBACKGROUND));
@@ -768,7 +768,7 @@ void
 ErgFilePlot::performancePlot(RealtimeData rtdata)
 {
     // don't update this plot if we are not running or are paused
-    if ((!context->isRunning) || (context->isPaused)) return;
+    if (!context->isRunning() || context->isPaused()) return;
 
     // we got some data, convert if bydist using imperial units
     double x = bydist ? context->getNow() * (GlobalContext::context()->useMetricUnits ? 1.0 : MILES_PER_KM)

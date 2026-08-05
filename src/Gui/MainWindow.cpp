@@ -175,8 +175,8 @@ MainWindow::MainWindow(const QDir &home)
     }
 
     QString temp = const_cast<AthleteDirectoryStructure*>(context->athlete->directoryStructure())->temp().absolutePath();
-    context->webEngineProfile->setCachePath(temp);
-    context->webEngineProfile->setPersistentStoragePath(temp);
+    context->webEngineProfile()->setCachePath(temp);
+    context->webEngineProfile()->setPersistentStoragePath(temp);
 
     currentAthleteTab = new AthleteTab(context);
 
@@ -2232,8 +2232,8 @@ MainWindow::loadCompleted(QString name, Context *context)
 
     // setup the WebEngine paths
     QString temp = const_cast<AthleteDirectoryStructure*>(context->athlete->directoryStructure())->temp().absolutePath();
-    context->webEngineProfile->setCachePath(temp);
-    context->webEngineProfile->setPersistentStoragePath(temp);
+    context->webEngineProfile()->setCachePath(temp);
+    context->webEngineProfile()->setPersistentStoragePath(temp);
 
     // first tab
     athletetabs.insert(currentAthleteTab->context->athlete->home->root().dirName(), currentAthleteTab);

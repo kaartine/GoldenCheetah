@@ -17,6 +17,7 @@
  */
 
 #include "RideItem.h"
+#include "AthleteSession.h"
 #include "RideCache.h"
 #include "RideMetric.h"
 #include "RideFile.h"
@@ -280,7 +281,10 @@ RideItem::fileCache()
             RideFileCacheIntegrity::activitySourcePath(
                 path, fileName),
             getWeight(),
-            ride());
+            ride(),
+            false,
+            true,
+            &context->athleteSession().persistenceService());
         if (isDirty()) fileCache_->refresh(ride_); // refresh from what we have now !
     }
     return fileCache_;
@@ -710,7 +714,9 @@ RideItem::refresh()
                 path, fileName),
             getWeight(),
             ride_,
-            true);
+            true,
+            true,
+            &context->athleteSession().persistenceService());
 
         // refresh metrics etc
         const RideMetricRegistrySnapshot metricRegistry =
