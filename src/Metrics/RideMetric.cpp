@@ -25,6 +25,8 @@
 #include "Zones.h"
 #include "HrZones.h"
 
+#include <QSet>
+
 // DB Schema Version - YOU MUST UPDATE THIS IF THE SCHEMA VERSION CHANGES!!!
 // Schema version will change if a) the default metadata.xml is updated
 //                            or b) new metrics are added / old changed
@@ -196,23 +198,115 @@ RideMetric::computeMetrics(RideItem *item, Specification spec, const QStringList
 {
     const RideMetricFactory &factory = RideMetricFactory::instance();
 
-    // generate worklist from metrics we know
-    // bear in mind this can change as users add
-    // and remove user metrics
-    // builtin User metrics are computed after builtins
-    // since they don't have explicit dependencies set, yet.
-    QStringList builtin;
-    QStringList user;
-    foreach(QString metric, metrics)
-        if (factory.haveMetric(metric)) {
-            if (factory.rideMetric(metric)->isUser())
-                user << metric;
-            else
-                builtin << metric;
-        }
+    // Keep the historical builtin-before-user root ordering, but de-duplicate
+    // requests before constructing the reachable dependency graph.
+    QStringList builtinRoots;
+    QStringList userRoots;
+    QSet<QString> requestedSymbols;
+    foreach (const QString &metric, metrics) {
+        if (!factory.haveMetric(metric) || requestedSymbols.contains(metric))
+            continue;
 
-    // this is what we've completed as we go
-    QHash<QString,RideMetric*> done;
+        requestedSymbols.insert(metric);
+        if (factory.rideMetric(metric)->isUser())
+            userRoots.append(metric);
+        else
+            builtinRoots.append(metric);
+    }
+    const bool hasUserMetrics = !userRoots.isEmpty();
+    const QStringList roots = builtinRoots + userRoots;
+
+    // Discover only the graph reachable from requested metrics. Preserve root
+    // and declared dependency order so every valid graph has a stable order.
+    QStringList discovered = roots;
+    QSet<QString> discoveredSet(requestedSymbols);
+    QHash<QString, QVector<QString>> graph;
+    QHash<QString, QStringList> dependents;
+    QSet<QString> invalid;
+
+    for (int i = 0; i < discovered.size(); ++i) {
+        const QString symbol = discovered.at(i);
+        QVector<QString> knownDependencies;
+        QSet<QString> seenDependencies;
+
+        foreach (const QString &dependency, factory.dependencies(symbol)) {
+            if (seenDependencies.contains(dependency)) continue;
+            seenDependencies.insert(dependency);
+
+            if (!factory.haveMetric(dependency)) {
+                invalid.insert(symbol);
+                continue;
+            }
+
+            knownDependencies.append(dependency);
+            dependents[dependency].append(symbol);
+            if (!discoveredSet.contains(dependency)) {
+                discoveredSet.insert(dependency);
+                discovered.append(dependency);
+            }
+        }
+        graph.insert(symbol, knownDependencies);
+    }
+
+    // A metric with a missing dependency, and every metric depending on it,
+    // is unresolvable even when the remainder of its graph is acyclic.
+    QStringList invalidQueue;
+    foreach (const QString &symbol, discovered)
+        if (invalid.contains(symbol)) invalidQueue.append(symbol);
+
+    for (int i = 0; i < invalidQueue.size(); ++i) {
+        foreach (const QString &dependent, dependents.value(invalidQueue.at(i))) {
+            if (invalid.contains(dependent)) continue;
+            invalid.insert(dependent);
+            invalidQueue.append(dependent);
+        }
+    }
+
+    // Kahn's algorithm resolves the valid acyclic portion. Cycle members and
+    // their dependents retain a positive indegree and are never scheduled.
+    QHash<QString, int> indegree;
+    QStringList ready;
+    foreach (const QString &symbol, discovered) {
+        if (invalid.contains(symbol)) continue;
+        indegree.insert(symbol, graph.value(symbol).size());
+        if (indegree.value(symbol) == 0) ready.append(symbol);
+    }
+
+    QStringList topologicalOrder;
+    QSet<QString> resolved;
+    for (int i = 0; i < ready.size(); ++i) {
+        const QString symbol = ready.at(i);
+        if (resolved.contains(symbol)) continue;
+
+        resolved.insert(symbol);
+        topologicalOrder.append(symbol);
+        foreach (const QString &dependent, dependents.value(symbol)) {
+            if (invalid.contains(dependent) || resolved.contains(dependent))
+                continue;
+
+            const int remaining = indegree.value(dependent) - 1;
+            indegree.insert(dependent, remaining);
+            if (remaining == 0) ready.append(dependent);
+        }
+    }
+
+    // Do not compute an otherwise valid dependency when all requested roots
+    // that need it are unresolvable.
+    QSet<QString> needed;
+    QStringList neededQueue;
+    foreach (const QString &root, roots) {
+        if (!resolved.contains(root) || needed.contains(root)) continue;
+        needed.insert(root);
+        neededQueue.append(root);
+    }
+    for (int i = 0; i < neededQueue.size(); ++i) {
+        foreach (const QString &dependency, graph.value(neededQueue.at(i))) {
+            if (!resolved.contains(dependency) || needed.contains(dependency))
+                continue;
+            needed.insert(dependency);
+            neededQueue.append(dependency);
+        }
+    }
 
     // resize the metric array in the interval if needed
     if (spec.interval() && spec.interval()->metrics().size() < factory.metricCount()) 
@@ -222,81 +316,51 @@ RideMetric::computeMetrics(RideItem *item, Specification spec, const QStringList
     if (!spec.interval() && item->metrics().size() < factory.metricCount())
         item->metrics().resize(factory.metricCount());
 
-    // working through the todo list...
-    while (!builtin.isEmpty() || !user.isEmpty()) {
+    QHash<QString, RideMetricPtr> owned;
+    QHash<QString, RideMetric *> done;
+    foreach (const QString &symbol, topologicalOrder) {
+        if (!needed.contains(symbol)) continue;
 
-        // next one to do, builtins first then user defined
-        QString symbol = builtin.isEmpty() ? user.takeFirst() :
-                                             builtin.takeFirst();
-
-        // doesn't exist !
-        if (!factory.haveMetric(symbol)) continue;
-
-        // does this one have any dependencies?
-        const QVector<QString> &deps = factory.dependencies(symbol);
-
-        bool ready = true;
-
-        // if the dependencies aren't done yet add to the end of the list
-        foreach (QString dep, deps) {
-            if (!done.contains(dep)) {
-                ready = false;
-                if (!builtin.contains(dep))
-                    builtin.append(dep);
+        bool dependenciesReady = true;
+        foreach (const QString &dependency, graph.value(symbol)) {
+            if (!done.contains(dependency)) {
+                dependenciesReady = false;
+                break;
             }
         }
+        if (!dependenciesReady) continue;
 
-        // if all our depencies are computed we can do this one
-        if (ready) {
+        // Hold ownership before compute so null clones and exceptional metric
+        // implementations cannot leak already-computed instances.
+        RideMetricPtr metric(factory.newMetric(symbol));
+        if (metric.isNull()) continue;
 
-            // we clone so we can remain thread safe
-            // do not be tempted to change this (!)
-            RideMetric *m = factory.newMetric(symbol);
-            m->setValue(0.0);
-            m->setCount(0);
-            m->compute(item, spec, done);
+        RideMetric *m = metric.data();
+        m->setValue(0.0);
+        m->setCount(0);
+        m->compute(item, spec, done);
 
-            // override the computed value if set by user, but not for intervals
-            if (!spec.interval() && item->ride() && item->ride()->metricOverrides.contains(symbol))
-                m->override(item->ride()->metricOverrides.value(symbol));
+        // override the computed value if set by user, but not for intervals
+        if (!spec.interval() && item->ride() && item->ride()->metricOverrides.contains(symbol))
+            m->override(item->ride()->metricOverrides.value(symbol));
 
-            // all computed add to the return list
-            done.insert(symbol, m);
+        owned.insert(symbol, metric);
+        done.insert(symbol, m);
 
-            // put into value array too. user metrics will interrogate
-            // this for symbol values, rather than the metric pointer
-            // this is crucial, even though RideItem and IntervalItem both
-            // update their values directly. But only need to bother if the
-            // user has defined any local metrics.
-            if (user.count()) {
-                if (spec.interval()) spec.interval()->metrics()[m->index()] = m->value();
-                else item->metrics()[m->index()] = m->value();
-            }
-
-        } else {
-
-            // we need to wait for our dependencies so add
-            // to the back of the list 
-            if (!builtin.contains(symbol))
-                builtin.append(symbol);
+        // User metrics interrogate the value array rather than dependency
+        // pointers, so publish every resolved dependency before they run.
+        if (hasUserMetrics) {
+            if (spec.interval()) spec.interval()->metrics()[m->index()] = m->value();
+            else item->metrics()[m->index()] = m->value();
         }
     }
 
-    // lets prepate the results using a shared pointer
-    // which is deleted when reference count 0 and goes out of scope
     QHash<QString,RideMetricPtr> result;
-    foreach (QString symbol, metrics) {
-        if (factory.haveMetric(symbol)) {
-            result.insert(symbol, QSharedPointer<RideMetric>(done.value(symbol)));
-            done.remove(symbol);
-        }
+    foreach (const QString &symbol, metrics) {
+        const RideMetricPtr metric = owned.value(symbol);
+        if (!metric.isNull()) result.insert(symbol, metric);
     }
 
-    // delete the cloned metrics, no memory leak here :)
-    foreach (QString symbol, done.keys())
-        delete done.value(symbol);
-
-    // and we're done
     return result;
 }
 
