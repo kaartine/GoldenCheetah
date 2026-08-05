@@ -5281,14 +5281,33 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### ARCH-002: Unit tests link private application object files
 
-- Status: OPEN
-- Code: `unittests/unittests.pri.in:8`, `unittests/unittests.pri.in:19`,
-  `src/src.pro:41`
+- Status: FIXED
+- Code: `unittests/unittests.pri.in` and the explicit-source projects under
+  `unittests/Core`, `unittests/Gui`, and `unittests/Train`
 - Impact: Tests depend on build paths/configuration, compile as C++11 while the
   application uses C++17, and omit most parser/training registrations.
-- Test: Build tests from a clean tree on every platform without prebuilt app
-  object discovery.
-- Fix direction: Extract Core/FileIO/Train library targets and link tests normally.
+- Test-first evidence: A clean out-of-source `calendarData` build compiled its
+  test object and then failed at link time because
+  `../../../src/CalendarData.o` did not exist. The shared test configuration
+  discovered private `.o`/`.obj` files using the application build's
+  `OBJECTS_DIR`, and selected C++11 despite the application's C++17 baseline.
+- Resolution: The private object discovery, platform extension selection, and
+  `GC_OBJS` linker loop were removed. All eight remaining consumers now name
+  their production sources and required moc headers explicitly, while the
+  shared configuration selects C++17 and rejects any future `GC_OBJS` use at
+  qmake time. The aggregate test project now registers the broader parser,
+  database, GUI, and training suites independently of application objects.
+- Verification: Eight clean, independent qmake builds selected
+  `-std=gnu++1z`, compiled without a prebuilt application tree, and passed
+  108/108 tests: CalendarData 3, TrainPerspectiveState 6, SeasonOffset 8,
+  Utils 3, Season 32, Units 8, ANT lifecycle 9, and ANT burst bounds 39. A
+  source-tree dependency scan finds no remaining `GC_OBJS`, object-directory,
+  or platform object-extension consumer.
+- Residual: These focused tests compile their small production source sets
+  directly. Extracting reusable Core/FileIO/Train libraries would reduce
+  duplicate compilation and remains a broader architectural optimization, but
+  tests no longer depend on private application artifacts or language-mode
+  drift.
 
 ### CI-001: Pull-request CI does not execute unit tests
 
