@@ -111,6 +111,10 @@ before_build:
  # Linux / macOS
 - sh: bash appveyor/$OS_NAME/before_build.sh
 
+# Enable unit tests
+- cmd: copy /Y unittests\unittests.pri.in unittests\unittests.pri
+- sh: cp unittests/unittests.pri.in unittests/unittests.pri
+
 # For tagged builds, define GC version string
 - ps: if ($env:APPVEYOR_REPO_TAG -eq "true") { Add-Content src/gcconfig.pri "DEFINES += GC_VERSION=VERSION_STRING" }
 
@@ -130,11 +134,13 @@ build_script:
 - cmd: qmake.exe build.pro -r -spec win32-msvc
 - cmd: if not exist qwt\lib\qwt.lib jom -j1 sub-qwt
 - cmd: jom -j2 sub-src
+- cmd: jom -j2 sub-unittests
 
 # Linux / macOS
 - sh: qmake build.pro -r QMAKE_CXXFLAGS_WARN_ON+="-Wno-unused-private-field -Wno-c++11-narrowing -Wno-deprecated-declarations -Wno-deprecated-register -Wno-nullability-completeness -Wno-sign-compare -Wno-inconsistent-missing-override" QMAKE_CFLAGS_WARN_ON+="-Wno-deprecated-declarations -Wno-sign-compare"
 - sh: if test ! -f qwt/lib/libqwt.a; then make -j2 sub-qwt; fi
 - sh: make -j2 sub-src
+- sh: make -j2 sub-unittests
 
 after_build:
 
@@ -151,12 +157,14 @@ after_build:
 test_script:
 
 # Windows
+- cmd: python .github\scripts\run-tests.py --build-tool jom
 - cmd: src\release\GoldenCheetah --version 2>GCversionWindows.txt
 - cmd: git log -1 >> GCversionWindows.txt
 - ps: if ($isWindows) { CertUtil -hashfile GoldenCheetah_v3.8_x64.exe sha256 | Select-Object -First 2 | Add-Content GCversionWindows.txt }
 - cmd: type GCversionWindows.txt
 
 # Linux / macOS
+- sh: python3 .github/scripts/run-tests.py --build-tool make
 - sh: >-
     if $CI_LINUX; then
       ./GoldenCheetah_v3.8_x64.AppImage --version 2>GCversionLinux.txt
