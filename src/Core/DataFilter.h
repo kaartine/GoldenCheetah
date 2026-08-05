@@ -255,8 +255,6 @@ class DataFilter : public QObject
         static QStringList completerList(Context *, bool); // return list of names for auto-completers
         static QStringList builtins(Context *); // return list of functions supported
 
-        int refcount; // used by user metrics
-
     public slots:
         QStringList parseFilter(Context *context, QString query, QStringList *list=0);
         QStringList check(QString query);

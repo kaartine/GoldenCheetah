@@ -127,15 +127,10 @@ GlobalContext::userMetricsConfigChanged()
 
 
     // change the schema version, this may trigger metrics recomputation
-    UserMetricSchemaVersion = RideMetric::userMetricFingerprint(_userMetrics);
-
-    // update metric factory deleting originals
-    RideMetricFactory::instance().removeUserMetrics();
-
-    // now add user metrics
-    foreach(UserMetricSettings m, _userMetrics) {
-        RideMetricFactory::instance().addMetric(UserMetric(_contexts.at(0), m));
-    }
+    const quint16 schemaVersion =
+        RideMetric::userMetricFingerprint(_userMetrics);
+    RideMetricFactory::instance().replaceUserMetrics(
+        _userMetrics, schemaVersion);
 
     // refresh SpecialFields to include updated user metrics
     SpecialFields::getInstance().reloadFields();
