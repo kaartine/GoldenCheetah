@@ -181,6 +181,8 @@ struct CacheReadBinding
 #ifdef GC_RIDE_FILE_CACHE_TEST_HOOKS
 static thread_local std::function<void()>
     sourceBoundReadHookForTest;
+static thread_local std::function<void()>
+    aggregateBindingReadHookForTest;
 static thread_local int
     sourceFingerprintReadsForTest = 0;
 #endif
@@ -718,26 +720,42 @@ static bool sourceAndAnalysisBindingsAreCurrent(
     const Bindings &bindings,
     AnalysisResolver &&resolveCurrentAnalysis)
 {
-    for (qsizetype index = 0;
-         index < bindings.size();
-         ++index) {
-        const auto &binding = bindings.at(index);
-        RideFileCRC::ContentFingerprint currentSource;
-        if (!RideFileCRC::computeFileFingerprint(
-                binding.sourcePath, currentSource)
-            || currentSource != binding.sourceFingerprint) {
-            return false;
-        }
-        QByteArray currentAnalysis;
-        if (!resolveCurrentAnalysis(
-                index, binding, currentAnalysis)) {
-            return false;
-        }
-        if (currentAnalysis.size()
-                != RideFileCRC::Sha256Size
-            || currentAnalysis
-                != binding.analysisFingerprint) {
-            return false;
+#ifdef GC_RIDE_FILE_CACHE_TEST_HOOKS
+    std::function<void()> sourceMutationHook =
+        std::move(aggregateBindingReadHookForTest);
+    aggregateBindingReadHookForTest = {};
+#endif
+    constexpr int ValidationPasses = 2;
+    for (int pass = 0;
+         pass < ValidationPasses;
+         ++pass) {
+        for (qsizetype index = 0;
+             index < bindings.size();
+             ++index) {
+            const auto &binding = bindings.at(index);
+            RideFileCRC::ContentFingerprint currentSource;
+            if (!RideFileCRC::computeFileFingerprint(
+                    binding.sourcePath, currentSource)
+                || currentSource != binding.sourceFingerprint) {
+                return false;
+            }
+            QByteArray currentAnalysis;
+            if (!resolveCurrentAnalysis(
+                    index, binding, currentAnalysis)) {
+                return false;
+            }
+            if (currentAnalysis.size()
+                    != RideFileCRC::Sha256Size
+                || currentAnalysis
+                    != binding.analysisFingerprint) {
+                return false;
+            }
+#ifdef GC_RIDE_FILE_CACHE_TEST_HOOKS
+            if (pass == 0 && index == 0
+                && sourceMutationHook) {
+                sourceMutationHook();
+            }
+#endif
         }
     }
     return true;
@@ -1153,6 +1171,14 @@ RideFileCache::setSourceBoundReadHookForTest(
     std::function<void()> hook)
 {
     sourceBoundReadHookForTest =
+        std::move(hook);
+}
+
+void
+RideFileCache::setAggregateBindingReadHookForTest(
+    std::function<void()> hook)
+{
+    aggregateBindingReadHookForTest =
         std::move(hook);
 }
 
