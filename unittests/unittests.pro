@@ -106,6 +106,7 @@ equals(GC_UNITTESTS, active) {
 			   Train/trainingStopPolicy \
 			   Train/trainingRecordingIo \
 			   Train/trainingTelemetryTimeline \
+			   Train/trainRuntime \
 			   Train/ftmsTargetReadiness \
 			   Train/bluetoothTelemetryRouter
 	!win32:SUBDIRS += Train/usbXpressSafety

@@ -44,7 +44,7 @@ int Daum::start() {
 }
 int Daum::restart() {
     QMutexLocker locker(&pvars);
-    paused_ = true;
+    paused_ = false;
     return 0;
 }
 int Daum::pause() {

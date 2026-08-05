@@ -60,6 +60,10 @@ public:
     double getCadence() const;
     double getHeartRate() const;
 
+#ifdef GC_TRAIN_RUNTIME_TEST_HOOKS
+    bool pausedForTest() const { return isPaused(); }
+#endif
+
 private:
     void run();
 
@@ -128,4 +132,3 @@ private slots:
 };
 
 #endif // _GC_Daum_h
-
