@@ -66,6 +66,8 @@ main() {
   .github/scripts/install.sh
   .github/scripts/before_build.sh
 
+  cp unittests/unittests.pri.in unittests/unittests.pri
+
   qmake build.pro -r \
     QMAKE_CXXFLAGS_WARN_ON+="-Wno-unused-private-field -Wno-c++11-narrowing -Wno-deprecated-declarations -Wno-deprecated-register -Wno-nullability-completeness -Wno-sign-compare -Wno-inconsistent-missing-override" \
     QMAKE_CFLAGS_WARN_ON+="-Wno-deprecated-declarations -Wno-sign-compare"
@@ -73,6 +75,7 @@ main() {
     make -j2 sub-qwt
   fi
   make -j2 sub-src
+  make -j2 sub-unittests
 
   .github/scripts/after_build.sh
 }
