@@ -1932,16 +1932,22 @@ invalidCommitMarkerIsNotReportedCommitted()
     QVERIFY(temporary.isValid());
     QVERIFY(createOldGeneration(temporary.path()));
     QString error;
-    const std::shared_ptr<PlanReplacement::Journal> journal =
+    std::shared_ptr<PlanReplacement::Journal> journal =
         PlanReplacement::Journal::prepare(
             replacementSpecification(temporary.path()), error);
     QVERIFY2(stageNewGeneration(journal, error), qPrintable(error));
     QVERIFY2(journal->publishAndCommit(error), qPrintable(error));
+    const QString transactionId = QFileInfo(journal->directoryPath()).fileName();
     const QString marker = QDir(journal->directoryPath()).filePath(
         QStringLiteral("COMMITTED"));
+    journal.reset();
     QVERIFY(writeFile(marker, QByteArray("corrupt marker")));
 
-    QVERIFY(!journal->hasCommitMarker());
+    const std::shared_ptr<PlanReplacement::Journal> reopened =
+        PlanReplacement::Journal::openPrepared(
+            temporary.path(), transactionId, error);
+    QVERIFY2(reopened, qPrintable(error));
+    QVERIFY(!reopened->hasCommitMarker());
 }
 
 void TestPlanReplacementJournal::journalDirectoryTamperingIsFailClosed_data()

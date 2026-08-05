@@ -2291,6 +2291,7 @@ bool rollbackJournal(JournalState &state, QString &error)
             state, resolved, journalFiles, error)) {
         return false;
     }
+    journalFiles.clear();
     return removeJournalDirectory(state, false, error);
 }
 
@@ -2310,6 +2311,7 @@ bool commitJournal(JournalState &state, QString &error)
             state, resolved, journalFiles, error)) {
         return false;
     }
+    journalFiles.clear();
     return removeJournalDirectory(state, true, error);
 }
 
