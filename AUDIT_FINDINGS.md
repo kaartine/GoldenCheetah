@@ -4926,47 +4926,84 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### TRN-004: Core-temperature header is written to the RR file
 
-- Status: OPEN
-- Code: `src/Train/TrainSidebar.cpp:3486`
+- Status: FIXED
+- Code: `src/Train/TrainSidebar.cpp`, `src/Train/TrainSidebarRuntime.h`, and
+  `unittests/Train/trainRuntime/testTrainRuntime.cpp`
 - Impact: TCR lacks its header and RR can be corrupted by a TCR header.
-- Test: Round-trip core and RR data both together and independently.
-- Fix direction: Construct the header stream on `tcoreFile`.
+- Test-first evidence: Round-trip fixtures exercise RR and TCR together and
+  with either file absent. The former TCR path selected the RR device, leaving
+  the TCR header empty and contaminating RR output.
+- Resolution: Auxiliary header selection names the RR and core-temperature
+  destinations explicitly; TCR output now constructs its stream on
+  `tcoreFile`.
+- Verification: The focused Train runtime suite passes 11/11 normally, under
+  strict ASan/UBSan/LSan, and in a ThreadSanitizer-linked build. The five
+  adjacent Train suites pass 66/66.
 
 ### TRN-005: Discard leaves auxiliary recording files behind
 
-- Status: OPEN
-- Code: `src/Train/TrainSidebar.cpp:1663`,
-  `src/Train/TrainSidebar.cpp:1701`
+- Status: FIXED
+- Code: `src/Train/TrainSidebar.cpp`, `src/Train/TrainSidebarRuntime.h`, and
+  `unittests/Train/trainRuntime/testTrainRuntime.cpp`
 - Impact: `.rr`, `.pos.csv`, `.vo2`, and `.tcr` files remain orphaned.
-- Test: Create every sidecar, discard, and require all artifacts removed.
-- Fix direction: Track and dispose the complete recording artifact set.
+- Test-first evidence: A temporary recording creates the primary CSV and every
+  supported auxiliary artifact. The former discard path removed only the CSV,
+  leaving all four sidecars present.
+- Resolution: Discard derives and removes the complete `.csv`, `.rr`,
+  `.pos.csv`, `.vo2`, and `.tcr` artifact set from the recording path.
+- Verification: Covered by the 11/11 normal and sanitizer-clean Train runtime
+  suite and the 9/9 adjacent recording-I/O suite. Individual removal failures
+  are retained in the helper result but are not yet surfaced in the UI.
 
 ### TRN-006: Initial start signal is emitted twice
 
-- Status: OPEN
-- Code: `src/Train/TrainSidebar.cpp:1408`,
-  `src/Train/TrainSidebar.cpp:1414`, `src/Train/VideoWindow.cpp:346`
+- Status: FIXED
+- Code: `src/Train/TrainSidebar.cpp`, `src/Train/TrainSidebarRuntime.h`, and
+  `unittests/Train/trainRuntime/testTrainRuntime.cpp`
 - Impact: Consumers reset twice and the first callback observes non-running state.
-- Test: `QSignalSpy` must observe exactly one start after complete initialization.
-- Fix direction: Set state/timers first and emit once.
+- Test-first evidence: A `QSignalSpy` contract requires exactly one signal and
+  verifies that initialization and the first target are complete when the
+  observer runs. A failure row also requires an initial-target failure to emit
+  no start signal. The former production path contained two notifications, the
+  first before running state was established.
+- Resolution: Start establishes running/recording state and timers, applies the
+  initial target, and emits one notification only after those steps succeed.
+- Verification: Both start rows pass in the 11/11 normal, strict
+  ASan/UBSan/LSan, and ThreadSanitizer runs.
 
 ### TRN-007: First workout target is delayed by the load timer
 
-- Status: OPEN
-- Code: `src/Train/TrainSidebar.cpp:1389`,
-  `src/Train/TrainSidebar.cpp:1438`, `src/Train/TrainSidebar.cpp:2432`
+- Status: FIXED
+- Code: `src/Train/TrainSidebar.cpp`, `src/Train/TrainSidebar.h`,
+  `src/Train/TrainSidebarRuntime.h`, and
+  `unittests/Train/trainRuntime/testTrainRuntime.cpp`
 - Impact: The trainer can retain its previous target for roughly one second.
-- Test: A fake controller must receive the zero-time target before event-loop
-  advancement.
-- Fix direction: Calculate and apply the initial target synchronously.
+- Test-first evidence: A fake-controller contract requires the zero-time load
+  before start completion, and explicit SLOPE rows distinguish initial workout
+  gradient selection from later timer updates. The former start path waited for
+  the first load-timer event.
+- Resolution: Start calls the shared workout-target path synchronously before
+  notification. ERG mode applies the zero-time load, while SLOPE mode initializes
+  the current slope from the workout gradient; later timer ticks preserve the
+  existing slope update behavior.
+- Verification: The focused initial-load, initial-slope, and failure rows pass
+  in all three 11/11 test configurations; the 20/20 FTMS target-readiness suite
+  also remains green.
 
 ### DEV-005: Daum restart leaves the trainer paused
 
-- Status: OPEN
-- Code: `src/Train/Daum.cpp:45`, `src/Train/Daum.cpp:50`
+- Status: FIXED
+- Code: `src/Train/Daum.cpp`, `src/Train/Daum.h`, and
+  `unittests/Train/trainRuntime/testTrainRuntime.cpp`
 - Impact: Both pause and restart set `paused_ = true`, preventing later load writes.
-- Test: State-machine test for start, pause, restart, and stop.
-- Fix direction: Set `paused_ = false` in restart.
+- Test-first evidence: The real Daum thread state-machine fixture starts,
+  pauses, restarts, stops, and joins the worker. The former restart left the
+  test-visible paused state true.
+- Resolution: `restart()` clears `paused_` while holding the existing state
+  mutex.
+- Verification: The lifecycle row passes normally, under strict
+  ASan/UBSan/LSan, and under ThreadSanitizer. A separate real no-device leak
+  discovered by the sanitizer investigation remains `MEM-027`.
 
 ### MEM-027: Daum worker teardown leaks its serial port and timer
 
