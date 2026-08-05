@@ -5668,19 +5668,41 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-010: Credential-scope mirror failure is not propagated
 
-- Status: OPEN
-- Code: `src/Core/Settings.cpp`
+- Status: FIXED
+- Code: `src/Core/Settings.cpp`, `src/Core/Settings.h`,
+  `src/Core/CredentialSettings.cpp`, `src/Core/CredentialSettings.h`, and
+  `unittests/Core/credentialSettings/testCredentialSettings.cpp`
 - Impact: `mirrorCredentialScope()` logs a failed system-settings sync but its
   callers still cache and return the scope identifier. A later legacy or
   pre-initialization path can then select a different scope after restart,
   while credential migration may already have written to the first scope.
-- Test: Inject system scope-mirror write and sync failures for global and
-  athlete mappings. Require an empty/failure result, no cached scope, no vault
-  write, no plaintext removal, and deterministic recovery after restart.
-- Fix direction: Return and propagate checked mirror durability. Do not expose
-  or cache a newly selected scope, migrate credentials, or scrub a source until
-  both its canonical target mapping and required compatibility mirror are
-  durable.
+- Test-first evidence: The fresh-enrollment fault matrix originally rejected
+  the first root, global-scope, athlete-profile, or athlete-scope authority
+  publication and exposed local identities that could not be recovered. Its
+  eight global and athlete rows now require the failed attempt to leave the
+  vault empty and plaintext intact, then require deterministic recovery both
+  in the same process and after reconstructing `GSettings`. Separate exact
+  settings transaction tests inject file and directory synchronization
+  failures into the shared durability primitive and require fail-closed
+  results.
+- Resolution: `mirrorCredentialScope()` and its invocation-local scope cache
+  were removed. Global and athlete scope selection now uses a checked,
+  two-phase external authority enrollment: a canonical location-bound intent
+  and claim must be durably published before local metadata is exposed, and
+  the authority record is completed only after the exact local binding is
+  durable. Every enrollment, binding, and completion failure returns an empty
+  scope, so callers cannot write the vault, migrate a credential, or scrub its
+  plaintext source prematurely. Pending authority state supports deterministic
+  same-process and restart recovery.
+- Verification: `interruptedFreshEnrollmentRecovers` passes all eight
+  write-failure and recovery rows, including global and athlete mappings. The
+  complete credential suite passes 426 cases normally, under strict
+  ASan/UBSan/LSan, and under ThreadSanitizer, with no failures and seven
+  platform-contract skips per run.
+- Residual: A durability failure can leave an authenticated pending authority
+  intent on disk, but it cannot authorize credential access until the complete
+  local tuple is verified. Recovery deliberately retries that pending intent
+  instead of generating a second scope.
 
 ### DUR-011: Failed vault deletion is not retried in the same process
 
