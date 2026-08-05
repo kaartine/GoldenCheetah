@@ -4908,12 +4908,33 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DB-003: Training-library transaction failures are ignored
 
-- Status: OPEN
-- Code: `src/Train/TrainDB.cpp:795`,
-  `src/Train/TrainDB.cpp:803`, `src/Train/Library.cpp:144`
+- Status: FIXED
+- Code: `src/Train/Library.cpp`, `src/Train/WorkoutImportBatch.cpp`,
+  `src/Train/LibraryImportFileStager.cpp`, `src/Train/LibraryParser.cpp`,
+  `src/Train/TrainDB.cpp`, and the focused Train library test suites
 - Impact: Partial imports can be reported to the UI as successful.
-- Test: Force duplicate, schema, and commit failures and require rollback.
-- Fix direction: RAII transaction with propagated result and post-commit signals.
+- Test-first evidence: Against the former dialog import behavior, all nine new
+  failure and publication-order contracts failed: duplicate, schema, triggered
+  import, deferred commit, target collision, overwrite-copy, later overwrite
+  rollback, serialization, and post-commit publication. Failure paths reported
+  success, and the success path exposed in-memory references before commit.
+- Resolution: `WorkoutImportDialog::import()` delegates to one result-bearing
+  production batch. `TrainDB::ScopedLUW` owns rollback, every database and
+  serialization result is checked, and copied or atomically replaced files are
+  restored on failure. `library.xml` uses `QSaveFile` and a pre-change snapshot.
+  References, selections, `dataChanged`, and dialog acceptance become visible
+  only after a successful commit; a failure leaves the dialog open with its
+  concrete error. The former delete-then-copy overwrite is gone.
+- Verification: On the integrated branch, transaction safety passes 20/20,
+  file staging passes 12/12, and atomic library serialization passes 4/4. The
+  same 20/20, 12/12, and 4/4 matrices pass under strict ASan/UBSan/LSan and
+  genuine ThreadSanitizer. Production `Library`, stager, batch, and parser
+  translation units also compile without test hooks.
+- Residual: Runtime failures roll back all three stores, but the SQLite row,
+  imported file, and `library.xml` do not share a persistent crash-recovery
+  journal. A process death between their publication steps can leave an orphan
+  file, retained backup, or metadata generation ahead of the database. Backup
+  cleanup failure is fail-safe for the imported data and is logged.
 
 ### TRN-004: Core-temperature header is written to the RR file
 
