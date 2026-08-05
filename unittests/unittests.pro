@@ -6,6 +6,7 @@ exists(unittests.pri) {
 
 equals(GC_UNITTESTS, active) {
 	SUBDIRS += Build/ciTestRunner \
+			   Build/headerIncludePaths \
 			   Build/linkerSectionFlags \
 			   Core/athleteMigrationSafety \
 			   Core/sessionBoundaries \
