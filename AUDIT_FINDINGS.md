@@ -5048,15 +5048,30 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### GUI-001: RideNavigator stores a dangling stack address in QModelIndex
 
-- Status: OPEN
-- Code: `src/Gui/RideNavigatorProxy.h:243`
+- Status: FIXED
+- Code: `src/Gui/RideNavigatorProxy.h`,
+  `unittests/Gui/rideNavigatorProxyMapping/testRideNavigatorProxyMapping.cpp`,
+  and `unittests/unittests.pro`
 - Impact: `mapFromSource` stores `&p`, the address of a local pointer, as
   `internalPointer`; later mapping dereferences invalid stack memory. The heap
   allocated QModelIndex is also leaked and source row zero is excluded.
-- Test: Round-trip every source/proxy row under ASan, including row zero and
-  model resets.
-- Fix direction: Use stable model-owned identity/internal IDs without heap or
-  stack pointer storage.
+- Test-first evidence: The production-path proxy test passed only its setup and
+  teardown while row zero, complete source/proxy round trips, and reset
+  rebuilding all failed. The sanitizer run additionally reported 200 leaked
+  bytes in six allocations from the heap-allocated parent indexes.
+- Resolution: Child indexes now refer to the corresponding model-owned group
+  index, never a stack address or an allocated temporary. `mapFromSource()`
+  validates model ownership and bounds, maps source row zero, and uses the
+  complete ungrouped source-row domain. Reset and destruction clear every
+  owned group row vector and stable group index.
+- Verification: The registered production-path suite passes 6/6 normally and
+  6/6 under both ASan/UBSan/LSan and ThreadSanitizer. It round-trips every row
+  and column in grouped and ungrouped modes and verifies that persistent
+  indexes are invalidated and rebuilt on source reset. The production
+  `RideNavigator` object also compiles with the change.
+- Residual: Group index addresses remain stable for one model generation and
+  are deliberately replaced only inside a Qt model reset, which invalidates
+  previously issued indexes before their storage is released.
 
 ### GUI-002: Ride deletion can retain a deleted current selection
 
@@ -5077,8 +5092,11 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### GUI-003: Power histogram selection guard is inverted
 
-- Status: OPEN
-- Code: `src/Charts/PowerHist.cpp:2401`
+- Status: FIXED
+- Code: `src/Charts/PowerHist.cpp`, `src/Charts/PowerHist.h`,
+  `src/Charts/PowerHistSelection.cpp`,
+  `unittests/Charts/powerHistSelection/testPowerHistSelection.cpp`, and
+  `unittests/unittests.pro`
 - Impact: The `RideFilePoint*` overload enters its interval loop only when
   `rideItem` is null and then dereferences it. A null item can therefore
   crash, while every normal non-null ride skips the loop and reports all point
@@ -5087,10 +5105,21 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Evidence: GCC 13 diagnoses that the loop calls a member function through a
   null `this` pointer. The adjacent time-based overload has the intended
   positive guard.
-- Test: Exercise the point overload with no ride, a ride with no selected
-  intervals, overlapping selected intervals, and exact sample boundaries.
-- Fix direction: Return false for a null ride/point and iterate selected
-  intervals only when `rideItem` is valid, matching the time-based overload.
+- Test-first evidence: Calling the production selection path with a null
+  `RideItem` terminated with `SIGSEGV`; GCC also diagnosed the null-`this`
+  member call. Non-null selected intervals were never visited because the
+  inverted branch was skipped.
+- Resolution: The point overload delegates to one directly tested helper that
+  rejects a null ride or point before iterating selected intervals. A sample is
+  selected only when its half-open time span overlaps a selected interval,
+  preserving the existing histogram boundary semantics.
+- Verification: The registered helper suite passes 6/6 normally and 6/6 under
+  both ASan/UBSan/LSan and ThreadSanitizer. It covers null inputs, an empty
+  selection, exact start and stop boundaries, multiple intervals, and ignored
+  unselected intervals. Both `PowerHist` production translation units compile.
+- Residual: Selection continues to use the existing strict overlap test, so a
+  sample ending exactly at an interval start or beginning exactly at its stop
+  is intentionally not selected.
 
 ### MAP-001: Map nearest-point longitude scaling uses degrees as radians
 
