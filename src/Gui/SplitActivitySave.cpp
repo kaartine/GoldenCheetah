@@ -104,6 +104,26 @@ bool validSplitFileName(const QString &fileName)
             == timestamp;
 }
 
+void discardStagedFileSet(
+    const QList<StagedFilePublication> &files, QString &error)
+{
+    const AtomicPublishFunction stopBeforePublication = [](
+            const QString &,
+            const QString &,
+            bool &targetPublished,
+            QString &) {
+        targetPublished = false;
+        return false;
+    };
+
+    QString cleanupError;
+    (void)publishStagedFileSet(
+        files, cleanupError, stopBeforePublication);
+    if (!cleanupError.isEmpty()) {
+        appendAtomicFileError(error, cleanupError);
+    }
+}
+
 struct PreparedSplitOutput
 {
     SplitActivityOutput output;
@@ -408,7 +428,7 @@ bool saveSplitActivityFiles(
                 ? QStringLiteral(
                     "Cannot stage a split activity file")
                 : stageError;
-            cleanupStagedFiles(publications, error);
+            discardStagedFileSet(publications, error);
             return false;
         }
     }

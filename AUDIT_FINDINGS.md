@@ -3130,7 +3130,12 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   new journal file into the substituted directory. Two additional lifetime
   regressions exchange a just-created old copy before manifest publication and
   a just-recorded staged file before the record operation returns; both unsafe
-  baselines accepted the substituted generation.
+  baselines accepted the substituted generation. A staged-set rollback
+  regression then moves a pinned second input aside, installs a foreign file at
+  its old name, and injects a publisher failure. The unsafe cleanup deleted the
+  foreign replacement. A follow-up contract regression showed that the first
+  identity-bound draft retained an otherwise removable stage when no publisher
+  was supplied.
 - Partial resolution: RideCache storage transactions now open one anchored
   athlete-root generation, walk children without following links, and pin each
   existing source, backup, derived file, and journal control file once. Reads,
@@ -3230,12 +3235,22 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   recorded explicitly instead of inferred from a later pathname absence, so
   repeated cleanup remains idempotent without accepting a replaced journal.
 
-  Staged-set publication now pins each staging generation before invoking its
-  publisher and accepts an output as transaction-owned only when a newly pinned
-  target has the same native identity, size, and digest. Rollback removes that
-  held identity through the anchored removal primitive. A target exchanged
-  during finalization, or an output whose publisher cannot prove identity
-  continuity, is retained and reported instead of being deleted by pathname.
+  Staged-set publication now anchors and pins every valid staging generation
+  before target locking or publisher callbacks. Publication revalidates each
+  held source and both parent generations immediately before use. Cleanup
+  removes only a staging name that still resolves to its pinned identity and
+  synchronizes the held parent; substitutions, symlinks, and unpinnable entries
+  are retained and reported. The missing-publisher path preserves its prior
+  cleanup contract through the same identity-bound machinery, and split-output
+  staging failures use a stop-before-publication discard path instead of raw
+  pathname deletion.
+
+  A published output is accepted as transaction-owned only when a newly pinned
+  target has the same native identity, size, and digest as its staged source.
+  Rollback removes that held identity through the anchored removal primitive. A
+  target exchanged during finalization, or an output whose publisher cannot
+  prove identity continuity, is retained and reported instead of being deleted
+  by pathname.
 - Verification: Every deterministic regression failed for its intended unsafe
   behavior before its fix. On Linux, RideCache passes 390 cases with one skip,
   PlanReplacement 124, PlanBundleImport 8, and linked-save cleanup 4 under both
@@ -3263,22 +3278,27 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   for the pinned stream API. PlanBundleImport passes 8/0/0 normally and under
   both sanitizer configurations. The complete production application links,
   and an isolated minimal-platform `--version` smoke test reports
-  `GoldenCheetah V3.8-DEV2605 (5012)`.
+  `GoldenCheetah V3.8-DEV2605 (5012)`. The staged-input regressions first
+  reproduced destructive replacement cleanup and the missing-publisher cleanup
+  regression. Atomic activity save now passes 313/0/0 normally, under strict
+  ASan/UBSan/LSan, and under ThreadSanitizer. Split activity save passes 33/0/0
+  under both sanitizer configurations, including its staging-failure cleanup
+  path.
 - Residual: The private-directory API explicitly trusts
   processes running as the same OS identity and privileged administrators; such
   a process can still exchange a name after revalidation and before a later
   pathname-based copy or write. Plan manifest rewrites still inherit the generic
   replace-existing publication window despite retaining and revalidating the
-  expected generation. Early staged-input cleanup, activity conversion/rename,
-  split archival, and lower-risk backup cleanup retain related windows. POSIX
-  exposes no portable identity-conditional
+  expected generation. Activity conversion/rename, split archival, and
+  lower-risk backup cleanup retain related windows. POSIX exposes no portable
+  identity-conditional
   `rmdir`; private random quarantine, repeated identity checks, anchored
   post-checks, and fail-closed recovery reduce but cannot eliminate its final
   check-to-syscall interval. A reported verified recovery path is also
   point-in-time evidence, not a permanent claim after handles are released.
   These residuals keep this item `IN_PROGRESS`.
 - Next test and fix: Apply the observed-generation contract to generic
-  replace-existing publication and early staged-input cleanup.
+  replace-existing publication.
 
 ### GUI-007: Modal activity workflows retained dangling RideItem pointers
 
@@ -5763,7 +5783,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Low
 
-As of 2026-08-04, open Low-severity findings are deferred and excluded from
+As of 2026-08-05, open Low-severity findings are deferred and excluded from
 the active remediation goal. They remain documented for later prioritization;
 `DEFERRED` does not mean fixed or accepted as harmless.
 

@@ -508,6 +508,18 @@ bool createHardLink(const QString &source, const QString &target)
 #endif
 }
 
+bool renameForSubstitution(const QString &source, const QString &target)
+{
+#ifdef Q_OS_WIN
+    return ::MoveFileExW(
+        reinterpret_cast<LPCWSTR>(source.utf16()),
+        reinterpret_cast<LPCWSTR>(target.utf16()),
+        MOVEFILE_WRITE_THROUGH);
+#else
+    return QFile::rename(source, target);
+#endif
+}
+
 bool replaceAndPinFixture(
     const QString &path,
     const QString &retainedPath,
@@ -605,6 +617,7 @@ private slots:
     void newWriterPreservesReplacementAfterPartialPublishFailure();
     void newWriterRejectsSuccessfulNoPublish();
     void stagedFileSetPublishesAll();
+    void stagedFileSetCleansStagingWithoutPublisher();
     void publicationFailureSkipsCacheUpdate();
     void publicationSuccessUpdatesCacheAfterPublish();
     void stagedFileSetRollsBackOnMiddleFailure();
@@ -617,6 +630,7 @@ private slots:
     void stagedFileSetReturnsSuccessfulFinalizerWarning();
     void stagedFileSetRollsBackWhenFinalizerFails();
     void stagedFileSetRetainsReplacedTargetOnRollback();
+    void stagedFileSetRetainsReplacedStagingOnFailure();
     void atomicFileLockTargetName_data();
     void atomicFileLockTargetName();
     void lockSetKeepsCaseDistinctPaths();
@@ -1313,6 +1327,25 @@ void TestAtomicActivitySave::stagedFileSetPublishesAll()
     QCOMPARE(readAll(secondTarget), QByteArray("second activity"));
 }
 
+void TestAtomicActivitySave::stagedFileSetCleansStagingWithoutPublisher()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString stage = dir.filePath(QStringLiteral("activity.stage"));
+    const QString target = dir.filePath(QStringLiteral("activity.json"));
+    writeFixture(stage, QByteArray("staged activity"));
+
+    QString error;
+    QVERIFY(!publishStagedFileSet(
+        { StagedFilePublication(stage, target) },
+        error,
+        AtomicPublishFunction()));
+
+    QVERIFY(!error.isEmpty());
+    QVERIFY(!QFile::exists(stage));
+    QVERIFY(!QFile::exists(target));
+}
+
 void TestAtomicActivitySave::publicationFailureSkipsCacheUpdate()
 {
     bool cacheUpdated = false;
@@ -1599,7 +1632,7 @@ stagedFileSetRejectsInvalidAndDuplicateStages()
     QVERIFY(!publishStagedFileSet(
         { StagedFilePublication(linkedStage, firstTarget) }, error));
     QVERIFY(!error.isEmpty());
-    QVERIFY(!QFile::exists(linkedStage));
+    QVERIFY(QFileInfo(linkedStage).isSymLink());
     QCOMPARE(readAll(backing), backingContents);
     QVERIFY(!QFile::exists(firstTarget));
 }
@@ -1757,7 +1790,7 @@ void TestAtomicActivitySave::stagedFileSetRetainsReplacedTargetOnRollback()
 
     bool targetReplaced = false;
     const AtomicFinalizeFunction finalize = [&](QString &finalizeError) {
-        if (!QFile::rename(target, retained)) {
+        if (!renameForSubstitution(target, retained)) {
             finalizeError = QStringLiteral(
                 "cannot retain the published target for substitution");
             return false;
@@ -1787,6 +1820,68 @@ void TestAtomicActivitySave::stagedFileSetRetainsReplacedTargetOnRollback()
     QVERIFY(!QFile::exists(stage));
     QCOMPARE(readAll(retained), published);
     QCOMPARE(readAll(target), replacement);
+}
+
+void TestAtomicActivitySave::stagedFileSetRetainsReplacedStagingOnFailure()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString firstStage = dir.filePath(QStringLiteral("first.stage"));
+    const QString secondStage = dir.filePath(QStringLiteral("second.stage"));
+    const QString firstTarget = dir.filePath(QStringLiteral("first.json"));
+    const QString secondTarget = dir.filePath(QStringLiteral("second.json"));
+    const QString retained = dir.filePath(QStringLiteral("second-retained"));
+    const QByteArray firstContents("first staged activity");
+    const QByteArray secondContents("second staged activity");
+    const QByteArray replacement("concurrent staging replacement");
+    writeFixture(firstStage, firstContents);
+    writeFixture(secondStage, secondContents);
+
+    bool stagingReplaced = false;
+    const AtomicPublishFunction publish = [
+            &stagingReplaced,
+            &secondStage,
+            &retained,
+            &replacement](
+            const QString &,
+            const QString &,
+            bool &targetPublished,
+            QString &publishError) {
+        if (!renameForSubstitution(secondStage, retained)) {
+            publishError = QStringLiteral(
+                "cannot retain the staging file for substitution");
+            return false;
+        }
+        QFile substitute(secondStage);
+        if (!substitute.open(QIODevice::WriteOnly | QIODevice::NewOnly)
+            || substitute.write(replacement) != replacement.size()
+            || !substitute.flush()) {
+            publishError = QStringLiteral(
+                "cannot inject the concurrent staging substitution");
+            return false;
+        }
+        stagingReplaced = true;
+        targetPublished = false;
+        publishError = QStringLiteral("injected publication failure");
+        return false;
+    };
+
+    QString error;
+    QVERIFY(!publishStagedFileSet(
+        {
+            StagedFilePublication(firstStage, firstTarget),
+            StagedFilePublication(secondStage, secondTarget)
+        },
+        error,
+        publish));
+
+    QVERIFY(stagingReplaced);
+    QVERIFY(error.contains(QStringLiteral("publication failure")));
+    QVERIFY(!QFile::exists(firstStage));
+    QCOMPARE(readAll(retained), secondContents);
+    QCOMPARE(readAll(secondStage), replacement);
+    QVERIFY(!QFile::exists(firstTarget));
+    QVERIFY(!QFile::exists(secondTarget));
 }
 
 void TestAtomicActivitySave::atomicFileLockTargetName_data()

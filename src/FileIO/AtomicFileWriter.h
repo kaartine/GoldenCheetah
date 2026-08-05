@@ -1186,29 +1186,6 @@ private:
     std::vector<std::unique_ptr<QLockFile>> locks_;
 };
 
-inline void cleanupStagedFiles(
-    const QList<StagedFilePublication> &files, QString &error)
-{
-    QSet<QString> syncedDirectories;
-    for (const StagedFilePublication &file : files) {
-        const QFileInfo staging(file.first);
-        const QString directory = staging.absolutePath();
-        if ((staging.exists() || staging.isSymLink())
-            && !QFile::remove(file.first)) {
-            appendAtomicFileError(
-                error,
-                QStringLiteral("cannot remove an activity staging file"));
-        }
-
-        if (syncedDirectories.contains(directory)) continue;
-        syncedDirectories.insert(directory);
-        QString syncError;
-        if (!syncParentDirectory(file.first, syncError)) {
-            appendAtomicFileError(error, syncError);
-        }
-    }
-}
-
 inline bool publishStagedFileSet(
     const QList<StagedFilePublication> &files,
     QString &error,
@@ -1216,9 +1193,8 @@ inline bool publishStagedFileSet(
     const AtomicFinalizeFunction &finalize = AtomicFinalizeFunction())
 {
     error.clear();
-    if (files.isEmpty() || !publish) {
+    if (files.isEmpty()) {
         error = QStringLiteral("No staged activity files to publish");
-        cleanupStagedFiles(files, error);
         return false;
     }
 
@@ -1255,20 +1231,160 @@ inline bool publishStagedFileSet(
             return false;
         }
     }
-    if (duplicateTarget) {
-        error = QStringLiteral("Duplicate activity publication target");
-        cleanupStagedFiles(files, error);
+
+    struct StagedInput
+    {
+        StagedFilePublication paths;
+        AnchoredFileSystem::DirectoryAnchor stagingParent;
+        AnchoredFileSystem::DirectoryAnchor targetParent;
+        AnchoredFileSystem::EntryRef stagingEntry;
+        AnchoredFileSystem::EntryRef targetEntry;
+        AnchoredFileSystem::PinnedFile staged;
+    };
+    struct PublishedTarget
+    {
+        AnchoredFileSystem::DirectoryAnchor parent;
+        AnchoredFileSystem::PinnedFile file;
+    };
+    std::vector<StagedInput> stagedInputs;
+    std::vector<PublishedTarget> published;
+    stagedInputs.reserve(static_cast<std::size_t>(files.size()));
+    published.reserve(static_cast<std::size_t>(files.size()));
+
+    const auto removePinned = [
+            &error](
+            AnchoredFileSystem::PinnedFile &file,
+            const AnchoredFileSystem::DirectoryAnchor &parent,
+            const QString &failure,
+            const QString &conflict) {
+        const AnchoredFileSystem::MutationResult removal =
+            AnchoredFileSystem::remove(file);
+        if (removal.effect
+            == AnchoredFileSystem::MutationEffect::AppliedDurable) {
+            return;
+        }
+        if (removal.effect
+            == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
+            QString syncError;
+            if (parent.sync(syncError)) return;
+            if (!removal.error.isEmpty()) {
+                appendAtomicFileError(error, removal.error);
+            }
+            appendAtomicFileError(error, syncError);
+            return;
+        }
+        appendAtomicFileError(
+            error,
+            removal.effect == AnchoredFileSystem::MutationEffect::Conflict
+                ? conflict
+                : (removal.error.isEmpty() ? failure : removal.error));
+        if (!removal.verifiedRecoveryPath.isEmpty()) {
+            appendAtomicFileError(
+                error,
+                QStringLiteral("recovery file retained at %1")
+                    .arg(removal.verifiedRecoveryPath));
+        }
+    };
+    const auto cleanupStaging = [&]() {
+        for (StagedInput &input : stagedInputs) {
+            bool exists = false;
+            QString cleanupError;
+            if (!AnchoredFileSystem::entryExists(
+                    input.stagingEntry, exists, cleanupError)) {
+                appendAtomicFileError(error, cleanupError);
+                continue;
+            }
+            if (!exists) continue;
+
+            bool matches = false;
+            if (!AnchoredFileSystem::entryMatches(
+                    input.stagingEntry,
+                    input.staged,
+                    matches,
+                    cleanupError)) {
+                appendAtomicFileError(error, cleanupError);
+                continue;
+            }
+            if (!matches) {
+                appendAtomicFileError(
+                    error,
+                    QStringLiteral(
+                        "the activity staging file was replaced and retained"));
+                continue;
+            }
+            removePinned(
+                input.staged,
+                input.stagingParent,
+                QStringLiteral("cannot remove an activity staging file"),
+                QStringLiteral(
+                    "the activity staging file was replaced and retained"));
+        }
+    };
+    const auto cleanup = [&]() {
+        for (PublishedTarget &target : published) {
+            removePinned(
+                target.file,
+                target.parent,
+                QStringLiteral(
+                    "cannot remove a partially published activity"),
+                QStringLiteral(
+                    "the partially published activity was replaced and retained"));
+        }
+        cleanupStaging();
+    };
+
+    for (const StagedFilePublication &file : files) {
+        StagedInput input;
+        input.paths = file;
+        QString anchorError;
+        if (!AnchoredFileSystem::DirectoryAnchor::open(
+                QFileInfo(file.first).absolutePath(),
+                input.stagingParent,
+                anchorError)
+            || !AnchoredFileSystem::DirectoryAnchor::open(
+                QFileInfo(file.second).absolutePath(),
+                input.targetParent,
+                anchorError)
+            || !input.stagingParent.pathMatches(anchorError)
+            || !input.targetParent.pathMatches(anchorError)) {
+            appendAtomicFileError(
+                error,
+                anchorError.isEmpty()
+                    ? QStringLiteral(
+                          "cannot anchor a staged activity publication")
+                    : anchorError);
+            cleanupStaging();
+            return false;
+        }
+        input.stagingEntry = input.stagingParent.entry(
+            QFileInfo(file.first).fileName(), anchorError);
+        input.targetEntry = input.targetParent.entry(
+            QFileInfo(file.second).fileName(), anchorError);
+        if (!input.stagingEntry.isValid()
+            || !input.targetEntry.isValid()
+            || !AnchoredFileSystem::pinRegularFile(
+                input.stagingEntry, input.staged, anchorError)) {
+            appendAtomicFileError(
+                error,
+                anchorError.isEmpty()
+                    ? QStringLiteral("A staged activity file is unavailable")
+                    : anchorError);
+            cleanupStaging();
+            return false;
+        }
+        stagedInputs.push_back(std::move(input));
+    }
+
+    if (!publish) {
+        error = QStringLiteral("No staged activity files to publish");
+        cleanupStaging();
         return false;
     }
 
-    for (const StagedFilePublication &file : files) {
-        const QFileInfo staging(file.first);
-        if (staging.isSymLink() || !staging.exists()
-            || !staging.isFile()) {
-            error = QStringLiteral("A staged activity file is unavailable");
-            cleanupStagedFiles(files, error);
-            return false;
-        }
+    if (duplicateTarget) {
+        error = QStringLiteral("Duplicate activity publication target");
+        cleanupStaging();
+        return false;
     }
 
     std::sort(targets.begin(), targets.end());
@@ -1281,154 +1397,80 @@ inline bool publishStagedFileSet(
         if (!lock->tryLock(0)) {
             error = QStringLiteral(
                 "An activity publication target is already being saved");
-            cleanupStagedFiles(files, error);
+            cleanupStaging();
             return false;
         }
         locks.push_back(std::move(lock));
     }
 
-    for (const StagedFilePublication &file : files) {
-        const QFileInfo target(file.second);
-        if (target.exists() || target.isSymLink()) {
+    for (const StagedInput &input : stagedInputs) {
+        bool targetExists = false;
+        QString targetError;
+        if (!AnchoredFileSystem::entryExists(
+                input.targetEntry, targetExists, targetError)) {
+            appendAtomicFileError(error, targetError);
+            cleanupStaging();
+            return false;
+        }
+        if (targetExists) {
             error = QStringLiteral(
                 "An activity publication target already exists");
-            cleanupStagedFiles(files, error);
+            cleanupStaging();
             return false;
         }
     }
 
-    struct PublishedTarget
-    {
-        AnchoredFileSystem::DirectoryAnchor parent;
-        AnchoredFileSystem::PinnedFile file;
-    };
-    std::vector<PublishedTarget> published;
-    const auto cleanup = [&]() {
-        QStringList changedPaths;
-        for (PublishedTarget &target : published) {
-            const AnchoredFileSystem::MutationResult removal =
-                AnchoredFileSystem::remove(target.file);
-            if (removal.effect
-                == AnchoredFileSystem::MutationEffect::AppliedDurable) {
-                continue;
+    const auto capturePublishedTarget = [
+            &published](StagedInput &input, QString &targetError) {
+        AnchoredFileSystem::PinnedFile target;
+        if (!AnchoredFileSystem::pinRegularFile(
+                input.targetEntry, target, targetError)
+            || target.identity() != input.staged.identity()
+            || target.size() != input.staged.size()
+            || target.sha256() != input.staged.sha256()) {
+            if (targetError.isEmpty()) {
+                targetError = QStringLiteral(
+                    "the published activity identity is ambiguous and was "
+                    "retained");
             }
-            if (removal.effect
-                == AnchoredFileSystem::MutationEffect::AppliedNotDurable) {
-                QString syncError;
-                if (target.parent.sync(syncError)) continue;
-                appendAtomicFileError(error, syncError);
-            }
-            if (removal.effect
-                == AnchoredFileSystem::MutationEffect::Conflict) {
-                appendAtomicFileError(
-                    error,
-                    QStringLiteral(
-                        "the partially published activity was replaced and retained"));
-            } else {
-                appendAtomicFileError(
-                    error,
-                    removal.error.isEmpty()
-                        ? QStringLiteral(
-                              "cannot remove a partially published activity")
-                        : removal.error);
-                if (!removal.verifiedRecoveryPath.isEmpty()) {
-                    appendAtomicFileError(
-                        error,
-                        QStringLiteral("recovery file retained at %1")
-                            .arg(removal.verifiedRecoveryPath));
-                }
-            }
-        }
-        for (const StagedFilePublication &file : files) {
-            const QFileInfo staging(file.first);
-            if ((staging.exists() || staging.isSymLink())
-                && !QFile::remove(file.first)) {
-                appendAtomicFileError(
-                    error,
-                    QStringLiteral("cannot remove an activity staging file"));
-            } else {
-                changedPaths.append(file.first);
-            }
-        }
-
-        QSet<QString> syncedDirectories;
-        for (const QString &path : changedPaths) {
-            const QString directory = QFileInfo(path).absolutePath();
-            if (syncedDirectories.contains(directory)) continue;
-            syncedDirectories.insert(directory);
-            QString syncError;
-            if (!syncParentDirectory(path, syncError)) {
-                appendAtomicFileError(error, syncError);
-            }
-        }
-    };
-
-    for (const StagedFilePublication &file : files) {
-        AnchoredFileSystem::DirectoryAnchor stagingParent;
-        AnchoredFileSystem::DirectoryAnchor targetParent;
-        AnchoredFileSystem::EntryRef stagingEntry;
-        AnchoredFileSystem::EntryRef targetEntry;
-        AnchoredFileSystem::PinnedFile staged;
-        QString anchorError;
-        const QString stagingParentPath =
-            QFileInfo(file.first).absolutePath();
-        const QString targetParentPath =
-            QFileInfo(file.second).absolutePath();
-        if (!AnchoredFileSystem::DirectoryAnchor::open(
-                stagingParentPath, stagingParent, anchorError)
-            || !AnchoredFileSystem::DirectoryAnchor::open(
-                targetParentPath, targetParent, anchorError)
-            || !stagingParent.pathMatches(anchorError)
-            || !targetParent.pathMatches(anchorError)) {
-            appendAtomicFileError(
-                error,
-                anchorError.isEmpty()
-                    ? QStringLiteral(
-                          "cannot anchor a staged activity publication")
-                    : anchorError);
-            cleanup();
             return false;
         }
-        stagingEntry = stagingParent.entry(
-            QFileInfo(file.first).fileName(), anchorError);
-        targetEntry = targetParent.entry(
-            QFileInfo(file.second).fileName(), anchorError);
-        if (!stagingEntry.isValid() || !targetEntry.isValid()
-            || !AnchoredFileSystem::pinRegularFile(
-                stagingEntry, staged, anchorError)) {
-            appendAtomicFileError(
-                error,
-                anchorError.isEmpty()
-                    ? QStringLiteral(
-                          "cannot pin a staged activity publication")
-                    : anchorError);
+        published.push_back(PublishedTarget{
+            input.targetParent,
+            std::move(target)});
+        return true;
+    };
+
+    for (StagedInput &input : stagedInputs) {
+        bool stagingMatches = false;
+        QString publicationError;
+        if (!AnchoredFileSystem::entryMatches(
+                input.stagingEntry,
+                input.staged,
+                stagingMatches,
+                publicationError)
+            || !stagingMatches
+            || !input.stagingParent.pathMatches(publicationError)
+            || !input.targetParent.pathMatches(publicationError)) {
+            if (publicationError.isEmpty()) {
+                publicationError = QStringLiteral(
+                    "a staged activity changed before publication");
+            }
+            appendAtomicFileError(error, publicationError);
             cleanup();
             return false;
         }
 
         bool targetPublished = false;
         QString publishError;
-        if (!publish(file.first, file.second,
+        if (!publish(input.paths.first, input.paths.second,
                      targetPublished, publishError)) {
             if (targetPublished) {
-                AnchoredFileSystem::PinnedFile target;
                 QString targetError;
-                if (AnchoredFileSystem::pinRegularFile(
-                        targetEntry, target, targetError)
-                    && target.identity() == staged.identity()
-                    && target.size() == staged.size()
-                    && target.sha256() == staged.sha256()) {
-                    published.push_back(PublishedTarget{
-                        targetParent,
-                        std::move(target)});
-                } else {
+                if (!capturePublishedTarget(input, targetError)) {
                     appendAtomicFileError(
                         publishError,
-                        targetError.isEmpty()
-                            ? QStringLiteral(
-                                  "the partially published activity identity "
-                                  "is ambiguous and was retained")
-                            : targetError);
+                        targetError);
                 }
             }
             appendAtomicFileError(error, publishError);
@@ -1444,42 +1486,29 @@ inline bool publishStagedFileSet(
             return false;
         }
 
-        AnchoredFileSystem::PinnedFile target;
         QString targetError;
-        if (!AnchoredFileSystem::pinRegularFile(
-                targetEntry, target, targetError)
-            || target.identity() != staged.identity()
-            || target.size() != staged.size()
-            || target.sha256() != staged.sha256()
-            || !targetParent.pathMatches(targetError)) {
+        if (!capturePublishedTarget(input, targetError)
+            || !input.targetParent.pathMatches(targetError)) {
             appendAtomicFileError(
                 error,
-                targetError.isEmpty()
-                    ? QStringLiteral(
-                          "the published activity identity is ambiguous and "
-                          "was retained")
-                    : targetError);
+                targetError);
             cleanup();
             return false;
         }
-        published.push_back(PublishedTarget{
-            targetParent,
-            std::move(target)});
     }
 
-    QSet<QString> syncedDirectories;
-    for (const StagedFilePublication &file : files) {
-        const QStringList paths = { file.first, file.second };
-        for (const QString &path : paths) {
-            const QString directory = QFileInfo(path).absolutePath();
-            if (syncedDirectories.contains(directory)) continue;
-            syncedDirectories.insert(directory);
-            QString syncError;
-            if (!syncParentDirectory(path, syncError)) {
-                error = syncError;
-                cleanup();
-                return false;
-            }
+    for (const StagedInput &input : stagedInputs) {
+        QString syncError;
+        if (!input.stagingParent.pathMatches(syncError)
+            || !input.targetParent.pathMatches(syncError)
+            || !input.stagingParent.sync(syncError)
+            || !input.targetParent.sync(syncError)) {
+            error = syncError.isEmpty()
+                ? QStringLiteral(
+                      "cannot sync an anchored activity publication")
+                : syncError;
+            cleanup();
+            return false;
         }
     }
 
@@ -1501,7 +1530,6 @@ inline bool publishStagedFileSet(
 
     return true;
 }
-
 
 inline bool restoreAtomicFile(const QString &path, bool hadOriginal,
                               const QByteArray &original, QString &error)
