@@ -13,6 +13,8 @@ SOURCE_ROOT_DEPENDENCIES = {
         "Python/PythonEmbed.h",
     },
 }
+PORTABLE_QT_SHIM = REPOSITORY / "unittests/Train/usbXpressSafety/QtPlatformShim.h"
+PORTABLE_QT_PROJECT = REPOSITORY / "unittests/Train/usbXpressSafety/usbXpressSafety.pro"
 INCLUDE_PATTERN = re.compile(r'^\s*#\s*include\s*[<"]([^>"]+)[>"]', re.MULTILINE)
 
 
@@ -37,6 +39,22 @@ def main() -> None:
                 f"{relative_header} refers to missing source headers: "
                 + ", ".join(sorted(missing_files))
             )
+
+    shim_includes = set(
+        INCLUDE_PATTERN.findall(PORTABLE_QT_SHIM.read_text(encoding="utf-8"))
+    )
+    if "qglobal.h" not in shim_includes or "QtCore/qglobal.h" in shim_includes:
+        raise AssertionError(
+            "QtPlatformShim.h must include qglobal.h through qmake's direct "
+            "QtCore include path so both framework and directory Qt layouts work"
+        )
+
+    project = PORTABLE_QT_PROJECT.read_text(encoding="utf-8")
+    if "QT_INSTALL_HEADERS" in project:
+        raise AssertionError(
+            "usbXpressSafety must use qmake's Qt module include paths instead of "
+            "assuming a directory-style QT_INSTALL_HEADERS layout"
+        )
 
 
 if __name__ == "__main__":
