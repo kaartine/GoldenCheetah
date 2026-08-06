@@ -1133,6 +1133,7 @@ QString credentialStateDirectory()
 
     const QString rootPath =
         QFileInfo(root).absoluteFilePath();
+    QString stableAncestor;
 #ifdef Q_OS_WIN
     QString stableRoot;
     bool createdRoot = false;
@@ -1142,7 +1143,25 @@ QString credentialStateDirectory()
             &retainedRoot, !explicitRoot)) {
         return {};
     }
+    stableAncestor = stableRoot;
 #else
+    QString existingAncestorPath = rootPath;
+    while (!QFileInfo::exists(existingAncestorPath)) {
+        const QString parent =
+            QFileInfo(existingAncestorPath).absolutePath();
+        if (parent == existingAncestorPath)
+            return {};
+        existingAncestorPath = parent;
+    }
+    const QFileInfo existingAncestor(
+        existingAncestorPath);
+    if (!existingAncestor.isDir())
+        return {};
+    stableAncestor =
+        existingAncestor.canonicalFilePath();
+    if (stableAncestor.isEmpty())
+        return {};
+
     const bool createdRoot =
         !QFileInfo::exists(rootPath);
     if (!QDir().mkpath(rootPath))
@@ -1159,12 +1178,17 @@ QString credentialStateDirectory()
 #endif
     }
     const QFileInfo rootDirectory(rootPath);
-    if (!credentialRootIsSecure(rootDirectory))
+    if (!rootDirectory.isDir()
+        || rootDirectory.isSymLink()) {
         return {};
+    }
     const QString stableRoot =
         rootDirectory.canonicalFilePath();
-    if (stableRoot.isEmpty())
+    if (stableRoot.isEmpty()
+        || !credentialRootIsSecure(
+            QFileInfo(stableRoot))) {
         return {};
+    }
 #endif
 
     QString applicationPath;
@@ -1218,14 +1242,6 @@ QString credentialStateDirectory()
         return {};
 #endif
 
-    QString stableAncestor = stablePath;
-    while (true) {
-        const QString parent =
-            QFileInfo(stableAncestor).absolutePath();
-        if (parent == stableAncestor)
-            break;
-        stableAncestor = parent;
-    }
     if (!credentialDirectoryTreeIsDurable(
             stablePath, stableAncestor,
             createdRoot || createdApplication

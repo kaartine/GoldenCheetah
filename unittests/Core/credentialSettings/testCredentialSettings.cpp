@@ -1648,6 +1648,7 @@ private slots:
     void credentialPostMutationDurabilityFailure();
     void credentialCrashRecoveryAcrossProcesses();
     void plaintextCleanupCrashRecoveryAcrossProcesses();
+    void canonicalCredentialStateAncestorIsAccepted();
     void credentialStateAncestorSyncFailureFailsClosed();
     void partialCredentialStateAncestryFailsClosed();
     void unsafeCredentialStateAncestorFailsClosed();
@@ -10579,6 +10580,55 @@ plaintextCleanupCrashRecoveryAcrossProcesses()
                  QVariant(newerSecret));
         QVERIFY(!recovery.contains(plaintextKey));
     }
+}
+
+void TestCredentialSettings::
+canonicalCredentialStateAncestorIsAccepted()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Unix canonical path aliases are required");
+#else
+    QTemporaryDir stateTemporary;
+    QTemporaryDir settingsTemporary;
+    QVERIFY(stateTemporary.isValid());
+    QVERIFY(settingsTemporary.isValid());
+
+    const QString realParent = stateTemporary.filePath(
+        QStringLiteral("real-parent"));
+    const QString aliasParent = stateTemporary.filePath(
+        QStringLiteral("alias-parent"));
+    QVERIFY(QDir().mkpath(realParent));
+    QVERIFY(QFile::link(realParent, aliasParent));
+    QVERIFY(QFileInfo(aliasParent).isSymLink());
+
+    const QString stateRoot = QDir(aliasParent).filePath(
+        QStringLiteral("state-root"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings settings(
+        settingsTemporary.filePath(
+            QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(
+            QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    const QString secret = QStringLiteral("canonical-secret");
+
+    auto state = std::make_shared<FakeStoreState>();
+    CredentialSettings credentials(fakeStore(state));
+    QVERIFY(credentials.setValueChecked(
+        &settings, scope, GC_STRAVA_TOKEN,
+        plaintextKey, secret));
+    QCOMPARE(state->values.value(vaultKey), secret);
+    QVERIFY(QFileInfo(QDir(realParent).filePath(
+        QStringLiteral(
+            "state-root/GoldenCheetah/credential-locks")))
+                .isDir());
+#endif
 }
 
 void TestCredentialSettings::
