@@ -1972,19 +1972,25 @@ void credentialCrashPoint(const QByteArray &point)
 }
 
 #ifdef Q_OS_UNIX
-bool syncCredentialDescriptor(int descriptor)
+bool syncCredentialDescriptor(
+    int descriptor,
+    bool requestFullSync)
 {
 #ifdef Q_OS_DARWIN
-    int fullSyncResult;
-    do {
-        fullSyncResult =
-            ::fcntl(descriptor, F_FULLFSYNC);
-    } while (fullSyncResult == -1
-             && errno == EINTR);
-    if (fullSyncResult == 0)
-        return true;
-    if (errno != EINVAL && errno != ENOTSUP)
-        return false;
+    if (requestFullSync) {
+        int fullSyncResult;
+        do {
+            fullSyncResult =
+                ::fcntl(descriptor, F_FULLFSYNC);
+        } while (fullSyncResult == -1
+                 && errno == EINTR);
+        if (fullSyncResult == 0)
+            return true;
+        if (errno != EINVAL && errno != ENOTSUP)
+            return false;
+    }
+#else
+    Q_UNUSED(requestFullSync)
 #endif
 
     int result;
@@ -2025,7 +2031,7 @@ bool syncCredentialDirectoryPath(
     if (descriptor == -1)
         return false;
     const bool synchronized =
-        syncCredentialDescriptor(descriptor);
+        syncCredentialDescriptor(descriptor, false);
     return ::close(descriptor) == 0 && synchronized;
 }
 #endif
@@ -2096,7 +2102,7 @@ bool syncCredentialFile(
     if (descriptor == -1)
         return false;
     const bool synchronized =
-        syncCredentialDescriptor(descriptor);
+        syncCredentialDescriptor(descriptor, true);
     return ::close(descriptor) == 0 && synchronized;
 #elif defined(Q_OS_WIN)
     ScopedWindowsHandle file =
