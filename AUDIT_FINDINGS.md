@@ -3734,6 +3734,33 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Verification: Confirmed by independent final review. No integrated phase
   split or closing recovery regressions exist.
 
+### DUR-024: macOS root aliases made anchored persistence unusable
+
+- Status: FIXED
+- Code: `src/FileIO/AnchoredFileSystem.cpp` and
+  `unittests/FileIO/anchoredFilesystem/testAnchoredFilesystem.cpp`
+- Impact: The anchored-directory walker rejected every symbolic path component
+  with `O_NOFOLLOW`. macOS exposes the system-owned `/var` directory as a link
+  to `/private/var`, so ordinary temporary paths below `/var/folders` failed
+  before their actual directory could be opened. This broke atomic persistence
+  for otherwise safe paths and cascaded into 192 credential-settings failures
+  on the native macOS runner.
+- Test-first evidence: A focused regression first reproduced the native `/var`
+  failure on macOS and, in a root-owned Linux fixture, failed with `Not a
+  directory`. A separate regression requires a user-controlled directory alias
+  to remain rejected.
+- Resolution: The Unix walker may resolve only its first root-level component,
+  and only when that component is a root-owned symbolic link. It reads the
+  target relative to the already opened root descriptor, verifies device,
+  inode, type, and owner again after the read, then restarts traversal from the
+  cleaned absolute target. Every later component remains protected by strict
+  descriptor-relative `O_NOFOLLOW` traversal, so user-controlled aliases and
+  alias chains are still rejected.
+- Verification: The focused Linux suite passes 89 cases with 14 platform
+  skips, and the complete credential suite passes 427 cases with seven
+  platform skips. GitHub Actions run 31105481269 builds and passes the anchored
+  filesystem test on macOS 15 and both filesystem suites on Windows 2025.
+
 ### BUILD-014: Vendored Python metadata can claim false file ownership
 
 - Status: OPEN
