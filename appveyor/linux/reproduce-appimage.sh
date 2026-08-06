@@ -13,18 +13,37 @@ BUILD_PASS=${GC_APPIMAGE_BUILD_PASS_SCRIPT:-$SCRIPT_DIR/build-appimage-pass.sh}
 PACKAGE_PASS=${GC_APPIMAGE_PACKAGE_PASS_SCRIPT:-$SCRIPT_DIR/package-appimage-pass.sh}
 SUPPORT="$SCRIPT_DIR/../../src/Resources/linux/AppImagePackagingSupport.sh"
 WORK_ROOT=
-PASS_SOURCES=()
+ACTIVE_SOURCE=
 
 cleanup_reproduction_worktrees()
 {
-    local source
-    for source in "${PASS_SOURCES[@]}"; do
-        run_reproducible_git -C "$SOURCE_ROOT" worktree remove --force "$source" \
+    if [ -n "$ACTIVE_SOURCE" ]; then
+        run_reproducible_git -C "$SOURCE_ROOT" worktree remove --force \
+            "$ACTIVE_SOURCE" \
             >/dev/null 2>&1 || true
-    done
+    fi
     if [ -n "$WORK_ROOT" ]; then
         rm -rf -- "$WORK_ROOT"
     fi
+}
+
+create_reproduction_source()
+{
+    [ -z "$ACTIVE_SOURCE" ] || {
+        echo "Previous reproduction source worktree is still active." >&2
+        exit 1
+    }
+    ACTIVE_SOURCE="$WORK_ROOT/source"
+    run_reproducible_git -C "$SOURCE_ROOT" worktree add --quiet --detach \
+        "$ACTIVE_SOURCE" "$REVISION"
+}
+
+remove_reproduction_source()
+{
+    [ -n "$ACTIVE_SOURCE" ] || return 0
+    run_reproducible_git -C "$SOURCE_ROOT" worktree remove --force \
+        "$ACTIVE_SOURCE"
+    ACTIVE_SOURCE=
 }
 trap cleanup_reproduction_worktrees EXIT
 trap 'exit 129' HUP
@@ -65,14 +84,12 @@ fi
 
 WORK_ROOT=$(mktemp -d)
 for label in one two; do
-    pass_source="$WORK_ROOT/source-$label"
     pass_build="$WORK_ROOT/build-$label"
     pass_output="$WORK_ROOT/package-$label"
-    run_reproducible_git -C "$SOURCE_ROOT" worktree add --quiet --detach \
-        "$pass_source" "$REVISION"
-    PASS_SOURCES+=("$pass_source")
     mkdir -p -- "$pass_build" "$pass_output"
-    "$BUILD_PASS" "$pass_source" "$pass_build" "$SOURCE_ROOT"
+    create_reproduction_source
+    "$BUILD_PASS" "$ACTIVE_SOURCE" "$pass_build" "$SOURCE_ROOT"
+    remove_reproduction_source
 done
 
 ELF_ONE="$WORK_ROOT/build-one/src/GoldenCheetah"
@@ -92,12 +109,13 @@ if [ "$ELF_ONE_SHA256" != "$ELF_TWO_SHA256" ] ||
 fi
 
 for label in one two; do
-    pass_source="$WORK_ROOT/source-$label"
     pass_build="$WORK_ROOT/build-$label"
     pass_output="$WORK_ROOT/package-$label"
-    GC_APPIMAGE_REPOSITORY_ROOT="$pass_source" \
+    create_reproduction_source
+    GC_APPIMAGE_REPOSITORY_ROOT="$ACTIVE_SOURCE" \
         GC_APPIMAGE_BINARY="$pass_build/src/GoldenCheetah" \
         "$PACKAGE_PASS" "$pass_output"
+    remove_reproduction_source
 done
 
 compare_appimage_reproduction \

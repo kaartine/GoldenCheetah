@@ -512,6 +512,8 @@ class PipelineIsolationTests(unittest.TestCase):
             package_probe = root / "package-pass"
             build_probe.write_text(
                 "#!/bin/sh\nset -eu\n"
+                "test ! -e \"$1/.reproduction-pass\"\n"
+                "printf build >\"$1/.reproduction-pass\"\n"
                 "printf '%s|%s\\n' \"$1\" \"$2\" >>\"$GC_BUILD_LOG\"\n"
                 "mkdir -p \"$2/src\"\n"
                 "printf 'same independently built elf\\n' >\"$2/src/GoldenCheetah\"\n"
@@ -520,6 +522,9 @@ class PipelineIsolationTests(unittest.TestCase):
             )
             package_probe.write_text(
                 "#!/bin/sh\nset -eu\n"
+                "test ! -e \"$GC_APPIMAGE_REPOSITORY_ROOT/.reproduction-pass\"\n"
+                "printf package >"
+                "\"$GC_APPIMAGE_REPOSITORY_ROOT/.reproduction-pass\"\n"
                 "printf '%s|%s\\n' \"$GC_APPIMAGE_REPOSITORY_ROOT\" "
                 "\"$GC_APPIMAGE_BINARY\" >>\"$GC_PACKAGE_LOG\"\n"
                 "test -x \"$GC_APPIMAGE_BINARY\"\n"
@@ -550,7 +555,11 @@ class PipelineIsolationTests(unittest.TestCase):
             packages = package_log.read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(builds), 2)
             self.assertEqual(len(packages), 2)
-            self.assertEqual(len({line.split("|", 1)[0] for line in builds}), 2)
+            self.assertEqual(
+                len({line.split("|", 1)[0] for line in builds}),
+                1,
+                "independent checkouts must reuse one canonical source path",
+            )
             self.assertEqual(len({line.split("|", 1)[1] for line in builds}), 2)
             for build, package in zip(builds, packages):
                 source_tree, build_tree = build.split("|", 1)
