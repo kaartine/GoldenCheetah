@@ -36,6 +36,7 @@ create_reproduction_source()
     ACTIVE_SOURCE="$WORK_ROOT/source"
     run_reproducible_git -C "$SOURCE_ROOT" worktree add --quiet --detach \
         "$ACTIVE_SOURCE" "$REVISION"
+    install_reproducible_build_inputs "$SOURCE_ROOT" "$ACTIVE_SOURCE"
 }
 
 remove_reproduction_source()
