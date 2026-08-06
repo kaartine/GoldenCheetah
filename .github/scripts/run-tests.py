@@ -8,8 +8,21 @@ import subprocess
 import sys
 
 
-CHECK_TARGET = re.compile(r"^check\s*:", re.MULTILINE)
 QTTEST_TOTAL = re.compile(r"Totals:\s+([0-9]+)\s+passed")
+PROJECT_RE = re.compile(r"^[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)+$")
+TESTCASE_CONFIG = re.compile(
+    r"^\s*CONFIG\s*\+=\s*[^#\n]*\btestcase\b", re.MULTILINE
+)
+COMMON_TEST_CONFIG = re.compile(
+    r"^\s*include\s*\(\s*\.\./\.\./unittests\.pri\s*\)", re.MULTILINE
+)
+AUX_TEMPLATE = re.compile(
+    r"^\s*TEMPLATE\s*=\s*aux(?:\s|$)", re.MULTILINE
+)
+AUX_CHECK_TARGET = re.compile(
+    r"^\s*QMAKE_EXTRA_TARGETS\s*\+=\s*[^#\n]*\bcheck\b", re.MULTILINE
+)
+PLATFORM_SELECTORS = {"all", "linux", "macos", "windows", "nonwindows"}
 
 
 def fail(message: str, status: int = 1) -> None:
@@ -17,22 +30,97 @@ def fail(message: str, status: int = 1) -> None:
     raise SystemExit(status)
 
 
-def count_registered_tests(root: Path) -> int:
-    unit_tests = root / "unittests"
-    if not unit_tests.is_dir():
-        fail("unit-test directory is unavailable")
-
-    registered = 0
-    for makefile in unit_tests.rglob("Makefile"):
-        if makefile.parent == unit_tests:
+def read_inventory(unit_tests: Path) -> dict[str, tuple[str, str]]:
+    inventory_path = unit_tests / "ci-required-tests.txt"
+    if inventory_path.is_symlink() or not inventory_path.is_file():
+        fail("unit-test inventory is unavailable")
+    inventory = {}
+    for line_number, raw in enumerate(
+        inventory_path.read_text(encoding="ascii").splitlines(), start=1
+    ):
+        line = raw.strip()
+        if not line or line.startswith("#"):
             continue
-        contents = makefile.read_text(encoding="utf-8", errors="replace")
-        if CHECK_TARGET.search(contents):
-            registered += 1
-    return registered
+        fields = line.split()
+        if (
+            len(fields) != 3
+            or fields[0] not in PLATFORM_SELECTORS
+            or fields[1] not in {"qt", "aux"}
+            or not PROJECT_RE.fullmatch(fields[2])
+        ):
+            fail(f"invalid unit-test inventory line {line_number}")
+        if fields[2] in inventory:
+            fail(f"duplicate unit-test inventory project: {fields[2]}")
+        inventory[fields[2]] = (fields[0], fields[1])
+    if not inventory:
+        fail("unit-test inventory is empty")
+    return inventory
 
 
-def run_tests(command: list[str], root: Path) -> tuple[int, int]:
+def discover_projects(unit_tests: Path) -> dict[str, str]:
+    project_files = {}
+    for project_file in sorted(unit_tests.rglob("*.pro")):
+        directory = project_file.parent
+        project = directory.relative_to(unit_tests).as_posix()
+        if not PROJECT_RE.fullmatch(project):
+            continue
+        current = directory
+        while current != unit_tests:
+            if current.is_symlink() or not current.is_dir():
+                fail(f"unit-test project directory is unsafe: {current}")
+            current = current.parent
+        if project_file.is_symlink() or not project_file.is_file():
+            fail(f"unit-test project file is unsafe: {project_file}")
+        project_files.setdefault(project, []).append(project_file)
+
+    discovered = {}
+    for project in sorted(project_files):
+        contents = [
+            project_file.read_text(encoding="utf-8")
+            for project_file in project_files[project]
+        ]
+        qt_test = any(
+            TESTCASE_CONFIG.search(text) or COMMON_TEST_CONFIG.search(text)
+            for text in contents
+        )
+        auxiliary = any(
+            AUX_TEMPLATE.search(text) and AUX_CHECK_TARGET.search(text)
+            for text in contents
+        )
+        if qt_test and auxiliary:
+            fail(f"unit-test project has ambiguous kind: {project}")
+        if qt_test or auxiliary:
+            discovered[project] = "qt" if qt_test else "aux"
+    if not discovered:
+        fail("no testcase or auxiliary projects were discovered")
+    return discovered
+
+
+def selector_matches(selector: str, platform: str) -> bool:
+    return (
+        selector == "all"
+        or selector == platform
+        or (selector == "nonwindows" and platform != "windows")
+    )
+
+
+def read_enabled(unit_tests: Path) -> set[str]:
+    enabled_path = unit_tests / "ci-enabled-tests.txt"
+    if enabled_path.is_symlink() or not enabled_path.is_file():
+        fail("qmake unit-test project manifest is unavailable")
+    projects = []
+    for raw in enabled_path.read_text(encoding="ascii").splitlines():
+        project = raw.strip()
+        if project and not PROJECT_RE.fullmatch(project):
+            fail(f"qmake generated an invalid unit-test project: {project!r}")
+        if project:
+            projects.append(project)
+    if len(projects) != len(set(projects)):
+        fail("qmake unit-test project manifest contains duplicates")
+    return set(projects)
+
+
+def run_tests(command: list[str], working_directory: Path) -> tuple[int, int]:
     environment = os.environ.copy()
     environment.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -41,7 +129,7 @@ def run_tests(command: list[str], root: Path) -> tuple[int, int]:
     try:
         process = subprocess.Popen(
             command,
-            cwd=root,
+            cwd=working_directory,
             env=environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -72,19 +160,69 @@ def parse_arguments() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(description="Run generated GoldenCheetah tests")
     parser.add_argument("--root", type=Path, default=repository)
+    parser.add_argument(
+        "--build-root",
+        type=Path,
+        help="qmake output root; defaults to the source root",
+    )
     parser.add_argument("--build-tool", default=default_tool)
     parser.add_argument("--build-tool-arg", action="append", default=[])
+    parser.add_argument(
+        "--platform",
+        choices=("linux", "macos", "windows"),
+        default="windows" if os.name == "nt" else ("macos" if sys.platform == "darwin" else "linux"),
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     arguments = parse_arguments()
-    root = arguments.root.resolve()
+    source_root = arguments.root.resolve()
+    build_root = (
+        arguments.build_root.resolve()
+        if arguments.build_root is not None
+        else source_root
+    )
 
-    registered = count_registered_tests(root)
-    if registered == 0:
-        fail("no unit-test targets were generated")
-    print(f"Discovered {registered} generated unit-test targets.", file=sys.stderr)
+    source_unit_tests = source_root / "unittests"
+    build_unit_tests = build_root / "unittests"
+    if not source_unit_tests.is_dir():
+        fail("unit-test directory is unavailable")
+    if not build_unit_tests.is_dir():
+        fail("generated unit-test directory is unavailable")
+    inventory = read_inventory(source_unit_tests)
+    discovered = discover_projects(source_unit_tests)
+    absent = sorted(set(discovered) - set(inventory))
+    stale = sorted(set(inventory) - set(discovered))
+    if absent:
+        fail(
+            "discovered test projects are absent from inventory: "
+            + ", ".join(absent)
+        )
+    if stale:
+        fail("unit-test inventory has no discovered project: " + ", ".join(stale))
+    mismatched = sorted(
+        project
+        for project, kind in discovered.items()
+        if inventory[project][1] != kind
+    )
+    if mismatched:
+        fail("unit-test inventory kind mismatch: " + ", ".join(mismatched))
+    eligible = {
+        project: kind
+        for project, (selector, kind) in inventory.items()
+        if selector_matches(selector, arguments.platform)
+    }
+    if not eligible:
+        fail("unit-test inventory has no eligible projects")
+    enabled = read_enabled(build_unit_tests)
+    missing = sorted(set(eligible) - enabled)
+    unexpected = sorted(enabled - set(eligible))
+    if missing:
+        fail("eligible test projects were not generated: " + ", ".join(missing))
+    if unexpected:
+        fail("generated test projects are not in inventory: " + ", ".join(unexpected))
+    print(f"Reconciled {len(eligible)} eligible unit-test projects.", file=sys.stderr)
 
     command = [
         arguments.build_tool,
@@ -92,11 +230,20 @@ def main() -> None:
         "-j1",
         "check",
     ]
-    suites, cases = run_tests(command, root)
-    if suites == 0:
-        fail("test command completed without a QtTest result")
-    if cases == 0:
-        fail("test command reported zero executed test cases")
+    suites = 0
+    cases = 0
+    for project, kind in eligible.items():
+        project_directory = build_unit_tests / project
+        makefile = project_directory / "Makefile"
+        if makefile.is_symlink() or not makefile.is_file():
+            fail(f"eligible test project has no generated Makefile: {project}")
+        project_suites, project_cases = run_tests(command, project_directory)
+        if kind == "qt" and project_suites == 0:
+            fail(f"test project completed without a QtTest result: {project}")
+        if kind == "qt" and project_cases == 0:
+            fail(f"test project reported zero executed test cases: {project}")
+        suites += project_suites
+        cases += project_cases
     print(
         f"Executed {cases} QtTest cases across {suites} suites.",
         file=sys.stderr,

@@ -38,6 +38,7 @@
 #include <QtGui>
 #include <QFile>
 #include <QMessageBox>
+#include <QTimer>
 #include "ChooseCyclistDialog.h"
 #ifdef GC_WANT_HTTP
 #include "httplistener.h"
@@ -76,6 +77,10 @@
 #define GC_BUILD_SOURCE_REVISION "0000000000000000000000000000000000000000"
 #endif
 
+#ifndef GC_BUILD_INPUTS_SHA256
+#define GC_BUILD_INPUTS_SHA256 "0000000000000000000000000000000000000000000000000000000000000000"
+#endif
+
 #define GC_STRINGIFY_DETAIL(value) #value
 #define GC_STRINGIFY(value) GC_STRINGIFY_DETAIL(value)
 
@@ -102,6 +107,7 @@ QByteArray buildProvenanceReport()
         "goldencheetah_build_provenance=1\n"
         "application=GoldenCheetah\n"
         "source_revision=" GC_BUILD_SOURCE_REVISION "\n"
+        "build_inputs_sha256=" GC_BUILD_INPUTS_SHA256 "\n"
         "compiler_family=");
     report += compilerFamily;
     report += QByteArrayLiteral("\ncompiler_version=");
@@ -366,6 +372,7 @@ main(int argc, char *argv[])
     bool server = false;
     nogui = false;
     bool help = false;
+    bool guiSmoke = false;
 
     // honour command line switches
     QString arg;
@@ -428,6 +435,10 @@ main(int argc, char *argv[])
             fprintf(stderr, "HTTP support not compiled in, exiting.\n");
             exit(1);
 #endif
+
+        } else if (arg == "--goldencheetah-gui-smoke") {
+
+            guiSmoke = true;
 
 #ifdef GC_WANT_PYTHON
         } else if (arg == "--no-python") {
@@ -520,9 +531,26 @@ main(int argc, char *argv[])
 
     // create the application -- only ever ONE regardless of restarts
     application = new QApplication(argc, argv);
+    if (guiSmoke) {
+        const QString smokeHome = QDir::home().canonicalPath();
+        const QFileInfo smokeRoot(args.value(1));
+        const QString canonicalSmokeRoot =
+            smokeRoot.canonicalFilePath();
+        if (sargs.size() != 4 || args.size() != 3
+            || args.value(2) != QStringLiteral("SmokeAthlete")
+            || !smokeRoot.isDir() || smokeHome.isEmpty()
+            || canonicalSmokeRoot.isEmpty()
+            || !canonicalSmokeRoot.startsWith(
+                smokeHome + QLatin1Char('/'))) {
+            delete application;
+            return EXIT_FAILURE;
+        }
+    }
     CredentialStoreQtKeychainDetail::configureBundledLinuxRuntime(
         application->applicationDirPath());
-    if (!LocalFileStoreProcess::initializeReaper()) {
+    const bool localStoreReaperReady =
+        LocalFileStoreProcess::initializeReaper();
+    if (!localStoreReaperReady) {
         qWarning()
             << "Local Store process isolation is unavailable";
     }
@@ -582,13 +610,33 @@ main(int argc, char *argv[])
     appsettings->setValue(GC_FONT_DEFAULT_SIZE, font.pointSizeF());
     appsettings->setValue(GC_FONT_CHARTLABELS_SIZE, font.pointSizeF() * 0.8);
 
-
     // what filestores are registered (whilst we refactor)
     //qDebug()<<"Cloud services registered:"<<CloudServiceFactory::instance().serviceNames();
 
     //
     // OPEN FIRST MAINWINDOW
     //
+    const auto scheduleGuiSmokeCompletion = [guiSmoke, localStoreReaperReady](
+            MainWindow *mainWindow) {
+        if (!guiSmoke) return;
+        QTimer::singleShot(
+            0, mainWindow,
+            [mainWindow, localStoreReaperReady]() {
+                static const char marker[] =
+                    "goldencheetah_gui_smoke=main-window-ready\n";
+                const bool ready = mainWindow->isVisible()
+                    && gc_opened == 1
+                    && localStoreReaperReady;
+                const size_t size = sizeof(marker) - 1;
+                const bool written = ready
+                    && fwrite(marker, 1, size, stdout) == size;
+                const bool flushed = written && fflush(stdout) == 0;
+                QCoreApplication::exit(
+                    ready && written && flushed
+                        ? EXIT_SUCCESS : EXIT_FAILURE);
+            });
+    };
+
     do {
 
         // lets not restart endlessly
@@ -889,12 +937,19 @@ main(int argc, char *argv[])
                 QString homeDir = home.canonicalPath();
                 if (home.cd(cyclist)) {
                     appsettings->initializeQSettingsAthlete(homeDir, cyclist);
+                    if (guiSmoke) {
+                        appsettings->setCValue(
+                            cyclist, GC_UPGRADE_FOLDER_SUCCESS, true);
+                        appsettings->setCValue(
+                            cyclist, GC_VERSION_USED, VERSION_LATEST);
+                    }
                     GcUpgrade v3;
                     if (v3.executeAfterConfirmation(home, [&]() {
                             MainWindow *mainWindow = new MainWindow(home);
                             mainWindow->show();
                             mainWindow->ridesAutoImport();
                             gc_opened++;
+                            scheduleGuiSmokeCompletion(mainWindow);
                         })) {
                         home.cdUp();
                         anyOpened = true;
@@ -928,6 +983,12 @@ main(int argc, char *argv[])
             }
 
             appsettings->initializeQSettingsAthlete(homeDir, d.choice());
+            if (guiSmoke) {
+                appsettings->setCValue(
+                    d.choice(), GC_UPGRADE_FOLDER_SUCCESS, true);
+                appsettings->setCValue(
+                    d.choice(), GC_VERSION_USED, VERSION_LATEST);
+            }
             // .. and open a mainwindow
             GcUpgrade v3;
             if (!v3.executeAfterConfirmation(home, [&]() {
@@ -935,6 +996,7 @@ main(int argc, char *argv[])
                     mainWindow->show();
                     mainWindow->ridesAutoImport();
                     gc_opened++;
+                    scheduleGuiSmokeCompletion(mainWindow);
                 })) {
                 delete trainDB;
                 terminate(0);

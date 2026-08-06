@@ -1,0 +1,62 @@
+{
+  "name": "Protect master and trusted CI",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [],
+  "conditions": {
+    "ref_name": {
+      "include": [
+        "refs/heads/master"
+      ],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "allowed_merge_methods": [
+          "merge",
+          "squash",
+          "rebase"
+        ],
+        "dismiss_stale_reviews_on_push": true,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_approving_review_count": 0,
+        "required_review_thread_resolution": true
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          {
+            "context": "Workflow policy / immutable actions",
+            "integration_id": 15368
+          },
+          {
+            "context": "Candidate CI / build",
+            "integration_id": 15368
+          },
+          {
+            "context": "Candidate CI / native activity transactions",
+            "integration_id": 15368
+          },
+          {
+            "context": "Candidate CI / durable and anchored filesystem",
+            "integration_id": 15368
+          }
+        ],
+        "strict_required_status_checks_policy": true
+      }
+    }
+  ]
+}

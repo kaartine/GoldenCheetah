@@ -4820,6 +4820,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 - Status: FIXED
 - Code: `src/Core/RideCache.cpp`,
+  `src/FileIO/AtomicFileWriter.h`,
   `src/FileIO/AnchoredFileSystem.cpp`,
   `src/FileIO/AnchoredFileSystem.h`,
   `src/Gui/SplitActivitySave.cpp`,
@@ -6715,6 +6716,157 @@ the active remediation goal. They remain documented for later prioritization;
 - Fix direction: Centralize API URL construction now, retain the documented
   current host until Strava opens the replacement, then validate and switch in
   one place before the provider's removal deadline is announced.
+
+### BUILD-014: AppImage verification executes the untrusted candidate runtime
+
+- Status: FIXED
+- Code: `src/Resources/linux/AppImagePackagingSupport.sh`
+- Impact: Manifest, SBOM, OAuth, and keychain inspection invoke a candidate
+  AppImage with `--appimage-extract`. A malformed or substituted runtime can
+  execute arbitrary code before the release payload has been authenticated.
+- Regression test: Build a Type 2 fixture whose ELF runtime leaves an execution
+  marker, inspect it through every pre-trust verifier, and require successful
+  SquashFS extraction without creating the marker.
+- Resolution: Candidate inspection now copies the regular AppImage into a
+  private snapshot, authenticates the source and snapshot hashes around that
+  copy, parses the Type 2 offset without executing the runtime, and extracts
+  the snapshot with `unsquashfs`. A changed snapshot removes the extracted tree
+  and fails closed.
+- Verification: Both executable-runtime and same-size in-place mutation
+  fixtures pass with real `mksquashfs` and `unsquashfs`; the complete AppImage
+  packaging fixture also passes.
+
+### BUILD-015: AppVeyor dependency setup dirties its source worktree
+
+- Status: FIXED
+- Code: `appveyor/linux/install.sh`, `appveyor/linux/before_build.sh`, and
+  `appveyor.yml`
+- Impact: Linux setup creates `D2XX`, `srmio`, and `python-source` below the
+  repository root. The release clean-tree gate consequently rejects the build
+  inputs that its own installer created.
+- Regression test: Run dependency path setup against a temporary repository and
+  require every generated or downloaded path to remain outside the worktree.
+- Resolution: Linux setup uses one bounded external input root and passes each
+  authenticated dependency path explicitly to configuration and packaging.
+  Release source trees remain clean.
+- Verification: Release-hardening tests require every generated dependency
+  path to resolve outside the repository and reject source-tree inputs.
+
+### BUILD-016: AppVeyor restores release dependencies into non-empty targets
+
+- Status: FIXED
+- Code: `appveyor.yml` and `appveyor/linux/install.sh`
+- Impact: Whole extracted dependency directories are cached, while the
+  fail-closed extractor requires an empty target. A cache hit can therefore
+  make the next release setup fail or mix stale and current payloads.
+- Regression test: Assert that AppVeyor does not cache mutable extracted
+  dependency trees and that setup recreates a bounded external input root.
+- Resolution: AppVeyor no longer caches mutable extracted source trees. Each
+  release pass recreates its bounded input root and extracts only verified,
+  pinned archives into empty destinations.
+- Verification: Pipeline-isolation tests reject extracted-tree cache entries
+  and non-empty or in-worktree release input roots.
+
+### BUILD-017: Source provenance omits ignored and local build inputs
+
+- Status: FIXED
+- Code: `src/src.pro`, `src/Core/main.cpp`, and
+  `src/Resources/linux/AppImagePackagingSupport.sh`
+- Impact: A clean Git revision does not identify ignored `gcconfig.pri`,
+  `GeneratedSecrets.h`, or arbitrary `LOCALHEADERS` and `LOCALSOURCES`.
+  BUILD-011 metadata can therefore claim a committed source identity for a
+  binary compiled from different inputs.
+- Regression test: Change an ignored effective configuration after producing a
+  binary provenance fixture and require packaging to reject it; reject local
+  source/header injection in release input identity generation.
+- Resolution: The compiled provenance and release manifest bind a deterministic
+  identity for effective `gcconfig.pri`, optional `GeneratedSecrets.h`, and Qwt
+  configuration. Release identity generation rejects local source and header
+  extensions.
+- Verification: Build-input fixtures mutate ignored configuration and require
+  rejection, while compiled report and manifest identities must match exactly.
+
+### BUILD-018: SBOM verification does not authenticate payload coverage
+
+- Status: FIXED
+- Code: `src/Resources/linux/generate-appimage-sbom.py` and
+  `src/Resources/linux/AppImagePackagingSupport.sh`
+- Impact: The verifier checks CycloneDX shape and sidecar equality but does not
+  require one accurate component for every payload file and symlink. Missing,
+  stale, or modified runtime files can pass the current gate.
+- Regression test: Verify a complete fixture, then remove a component, alter a
+  payload file, and redirect a symlink; every mutation must be rejected.
+- Resolution: The SBOM preserves the primary payload role for every file and
+  symlink and records Python provenance in a separate property. Verification
+  enforces exact path coverage, hashes, sizes, modes, link targets, and payload
+  containment.
+- Verification: Complete payload fixtures pass; missing entries, altered files,
+  redirected links, and Python-role substitutions are rejected.
+
+### BUILD-019: AppImage tooling inherits release-affecting host variables
+
+- Status: FIXED
+- Code: `src/Resources/linux/AppImagePackagingSupport.sh`
+- Impact: `appimagetool` and package smoke commands inherit variables such as
+  `VERSION`, signing/update settings, Qt plugin paths, and Python paths. Host
+  state can alter output or load code outside the verified package.
+- Regression test: Poison every relevant variable in a fake packaging tool and
+  require only the explicitly controlled locale, timezone, architecture, and
+  source epoch to reach it.
+- Resolution: Build, packaging, and smoke tools now run through separate
+  `env -i` allowlists. The reproducible build path supplies only authenticated
+  revision/epoch, fixed locale/timezone, private HOME/TMPDIR, Qt root, and
+  deterministic archive settings; host compiler and flag variables are absent.
+- Verification: Poisoned-environment tests confirm release-affecting host
+  variables do not reach build or packaging tools.
+
+### BUILD-020: Two-pass packaging reuses one compiled executable
+
+- Status: OPEN
+- Code: `appveyor/linux/after_build.sh`,
+  `appveyor/linux/package-appimage-pass.sh`,
+  `.devcontainer/package-appimage.sh`, and
+  `src/Resources/linux/MakeAppImageQt6.sh`
+- Impact: Byte-identical packages from the same ELF prove packaging
+  determinism, not source-build reproducibility. Local and devcontainer paths
+  additionally perform only one packaging pass.
+- Regression test: Drive the orchestration with fake compilers that stamp
+  distinct build roots, require two independent clean builds, and verify that
+  each pass packages its own executable before comparison.
+- Fix direction: Share one two-build/two-package orchestrator, isolate both
+  build roots, and compare complete release outputs.
+
+### BUILD-021: GUI smoke exits before GoldenCheetah runtime initialization
+
+- Status: OPEN
+- Code: `src/Core/main.cpp` and
+  `src/Resources/linux/AppImagePackagingSupport.sh`
+- Impact: The current marker proves only that `QApplication` entered its event
+  loop. It exits before bundled keychain configuration, local-store process
+  setup, and application defaults, so packaged startup regressions can pass.
+- Regression test: Require the smoke marker path to occur after non-profile
+  runtime initialization and to perform matching local-store shutdown.
+- Fix direction: Keep the disposable profile, initialize the bounded runtime
+  prerequisites, then emit an `application-runtime-ready` marker from the event
+  loop and shut down cleanly.
+
+### BUILD-022: APT snapshot integration bypasses the real Docker bootstrap
+
+- Status: FIXED
+- Code: `.devcontainer/Dockerfile` and
+  `unittests/Build/appImagePackaging/testAptSnapshot.py`
+- Impact: The optional integration test installs live CA and Python packages
+  before switching to the snapshot, so it cannot validate the actual
+  no-trust-yet bootstrap ordering used by the development image.
+- Regression test: Build the Dockerfile's named bootstrap stage directly with
+  no cache and require snapshot metadata verification and pinned CA/OpenSSL
+  installation to complete there.
+- Resolution: The real Docker bootstrap stage is built directly. Its initial
+  trust store comes from a SHA-256-pinned CA package whose digest was verified
+  against the signed Ubuntu snapshot index; APT then installs the exact pinned
+  CA/OpenSSL packages and verifies snapshot metadata before other dependencies.
+- Verification: All 13 APT tests pass, including a no-cache networked build of
+  the actual `apt-snapshot-bootstrap` stage.
 
 ## Verification Baseline
 

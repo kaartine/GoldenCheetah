@@ -6,9 +6,37 @@ REPO_ROOT=$(cd -- "$SCRIPT_DIR/../../.." && pwd)
 SUPPORT="$REPO_ROOT/src/Resources/linux/AppImagePackagingSupport.sh"
 LOCAL_PACKAGER="$REPO_ROOT/src/Resources/linux/MakeAppImageQt6.sh"
 CI_PACKAGER="$REPO_ROOT/appveyor/linux/after_build.sh"
+CI_PACKAGE_PASS="$REPO_ROOT/appveyor/linux/package-appimage-pass.sh"
+CI_BUILD_PASS="$REPO_ROOT/appveyor/linux/build-appimage-pass.sh"
+CI_REPRODUCE="$REPO_ROOT/appveyor/linux/reproduce-appimage.sh"
 DEV_PACKAGER="$REPO_ROOT/.devcontainer/package-appimage.sh"
+DEV_DOCKERFILE="$REPO_ROOT/.devcontainer/Dockerfile"
 APPVEYOR_INSTALL="$REPO_ROOT/appveyor/linux/install.sh"
+APPVEYOR_MACOS_INSTALL="$REPO_ROOT/appveyor/macos/install.sh"
+APPVEYOR_MACOS_PACKAGER="$REPO_ROOT/appveyor/macos/after_build.sh"
+APPVEYOR_WINDOWS_INSTALL="$REPO_ROOT/appveyor/windows/install.ps1"
+APPVEYOR_WINDOWS_PACKAGER="$REPO_ROOT/appveyor/windows/after_build.ps1"
+APPVEYOR_CONFIG="$REPO_ROOT/appveyor.yml"
+GITHUB_CI_CONFIG="$REPO_ROOT/.github/workflows/ci.yml"
+UBUNTU_SNAPSHOT="$REPO_ROOT/appveyor/linux/ubuntu-snapshot.sources.list"
+DEV_UBUNTU_SNAPSHOT="$REPO_ROOT/.devcontainer/ubuntu-snapshot.sources.list"
+SECRETS_SCRIPT="$REPO_ROOT/util/add_secrets.ps1"
+SECRETS_HEADER="$REPO_ROOT/src/Core/Secrets.h"
+SECRETS_TEST="$SCRIPT_DIR/testGeneratedSecrets.ps1"
+WINDOWS_PACKAGING_TEST="$SCRIPT_DIR/testWindowsPackaging.ps1"
+WINDOWS_OPENSSL_TEST="$SCRIPT_DIR/testWindowsOpenSsl.py"
+CI_RELEASE_GATES_TEST="$SCRIPT_DIR/testCiReleaseGates.sh"
+QT_ARCHIVE_TEST="$SCRIPT_DIR/testVerifiedQtArchives.py"
+SAFE_EXTRACTION_TEST="$SCRIPT_DIR/testSafeExtraction.py"
+MACOS_PACKAGING_TEST="$SCRIPT_DIR/testMacOSPackaging.py"
+SBOM_PROVENANCE_TEST="$SCRIPT_DIR/testSbomProvenance.py"
+DIAGNOSTIC_OAUTH_TEST="$SCRIPT_DIR/testDiagnosticOAuth.sh"
+UNCONFIGURED_OAUTH_TEST="$SCRIPT_DIR/testUnconfiguredOAuthGate.py"
 REQUIREMENTS="$REPO_ROOT/src/Python/requirements.txt"
+APPIMAGE_REQUIREMENTS="$REPO_ROOT/src/Python/requirements-appimage.lock"
+SBOM_GENERATOR="$REPO_ROOT/src/Resources/linux/generate-appimage-sbom.py"
+RUNTIME_PROVENANCE_GENERATOR="$REPO_ROOT/src/Resources/linux/generate-runtime-provenance.py"
+PYTHON_NORMALIZER="$REPO_ROOT/src/Resources/linux/normalize-embedded-python.py"
 DEV_CONFIG="$REPO_ROOT/.devcontainer/gcconfig.pri"
 MAIN_SOURCE="$REPO_ROOT/src/Core/main.cpp"
 LIBSECRET_SOURCE="$REPO_ROOT/contrib/qtkeychain/qtkeychain/libsecret.cpp"
@@ -28,6 +56,10 @@ assert_contains()
 }
 
 [ -r "$SUPPORT" ] || fail "missing shared AppImage packaging support"
+[ -r "$PYTHON_NORMALIZER" ] ||
+    fail "missing embedded Python normalizer"
+[ -r "$REPO_ROOT/appveyor/safe-extract.py" ] ||
+    fail "missing safe cross-platform archive extractor"
 
 # shellcheck source=/dev/null
 . "$SUPPORT"
@@ -49,6 +81,32 @@ assert_contains()
 [ "$PYTHON_APPIMAGE_URL" = \
   "https://github.com/kaartine/GoldenCheetah/releases/download/appimage-build-deps-v1/$PYTHON_APPIMAGE_FILE" ] ||
     fail "embedded Python URL is not the project-controlled immutable asset"
+[ "$LINUXDEPLOYQT_FILE" = \
+  "linuxdeployqt-build107-20251021-x86_64.AppImage" ] ||
+    fail "linuxdeployqt filename is not versioned"
+[ "$LINUXDEPLOYQT_SHA256" = \
+  "974a87457ed26241b793bed7841978fcdf84158d13220e53833a06515f173b0b" ] ||
+    fail "linuxdeployqt SHA-256 is not the reviewed release digest"
+[ "$LINUXDEPLOYQT_URL" = \
+  "https://github.com/kaartine/GoldenCheetah/releases/download/appimage-build-deps-v1/$LINUXDEPLOYQT_FILE" ] ||
+    fail "linuxdeployqt URL is not an immutable project asset"
+[ "$APPIMAGETOOL_FILE" = \
+  "appimagetool-8c8c91f-build295-x86_64.AppImage" ] ||
+    fail "appimagetool filename is not versioned"
+[ "$APPIMAGETOOL_SHA256" = \
+  "a6d71e2b6cd66f8e8d16c37ad164658985e0cf5fcaa950c90a482890cb9d13e0" ] ||
+    fail "appimagetool SHA-256 is not the reviewed release digest"
+[ "$APPIMAGETOOL_URL" = \
+  "https://github.com/kaartine/GoldenCheetah/releases/download/appimage-build-deps-v1/$APPIMAGETOOL_FILE" ] ||
+    fail "appimagetool URL is not an immutable project asset"
+[ "$APPIMAGE_RUNTIME_FILE" = "runtime-2fca8b44-x86_64" ] ||
+    fail "AppImage runtime filename is not content-addressed"
+[ "$APPIMAGE_RUNTIME_SHA256" = \
+  "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d" ] ||
+    fail "AppImage runtime SHA-256 is not the reviewed digest"
+[ "$APPIMAGE_RUNTIME_URL" = \
+  "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64" ] ||
+    fail "unexpected AppImage runtime source"
 [ "${QTKEYCHAIN_LICENSE_SHA256:-}" = \
   "ca46b73d5159548ab52834db51f195aa3d1f277f020e9dca92f4beb21b468a50" ] ||
     fail "QtKeychain license digest is not the reviewed content"
@@ -57,10 +115,28 @@ assert_contains()
     fail "LGPL-2.1 digest is not the reviewed content"
 
 declare -F download_file >/dev/null || fail "download_file helper is missing"
+declare -F download_verified_file >/dev/null ||
+    fail "verified download helper is missing"
+declare -F download_appimage_runtime >/dev/null ||
+    fail "verified AppImage runtime helper is missing"
+declare -F create_appimage_sbom >/dev/null ||
+    fail "AppImage SBOM helper is missing"
+declare -F set_appimage_source_date_epoch >/dev/null ||
+    fail "SOURCE_DATE_EPOCH helper is missing"
+declare -F normalize_appdir_mtimes >/dev/null ||
+    fail "AppDir mtime normalization helper is missing"
+declare -F validate_appimage_sbom >/dev/null ||
+    fail "AppImage SBOM validator is missing"
+declare -F verify_appimage_sbom >/dev/null ||
+    fail "packaged AppImage SBOM verifier is missing"
+declare -F require_qt_offscreen_appimage_on_glibc >/dev/null ||
+    fail "glibc compatibility smoke helper is missing"
 declare -F run_packaging_appimage >/dev/null ||
     fail "run_packaging_appimage helper is missing"
 declare -F run_packaged_appimage_smoke >/dev/null ||
     fail "run_packaged_appimage_smoke helper is missing"
+declare -F compare_appimage_reproduction >/dev/null ||
+    fail "compare_appimage_reproduction helper is missing"
 declare -F install_qt_offscreen_plugin >/dev/null ||
     fail "install_qt_offscreen_plugin helper is missing"
 declare -F require_qt_offscreen_appimage >/dev/null ||
@@ -87,6 +163,10 @@ declare -F strava_oauth_appimage_status >/dev/null ||
     fail "strava_oauth_appimage_status helper is missing"
 declare -F require_strava_oauth_appimage >/dev/null ||
     fail "require_strava_oauth_appimage helper is missing"
+declare -F require_unconfigured_strava_oauth_build >/dev/null ||
+    fail "credential-free build-status gate is missing"
+declare -F require_unconfigured_strava_oauth_appimage >/dev/null ||
+    fail "credential-free AppImage-status gate is missing"
 declare -F install_linux_keychain_runtime >/dev/null ||
     fail "install_linux_keychain_runtime helper is missing"
 declare -F linux_keychain_runtime_status >/dev/null ||
@@ -106,6 +186,101 @@ declare -F run_linuxdeployqt_with_keychain_probe >/dev/null ||
 
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
+
+NORMALIZER_FIXTURE="$TEMP_DIR/python-normalizer"
+NORMALIZER_ROOT="$NORMALIZER_FIXTURE/opt/python3.11"
+NORMALIZER_SITE="$NORMALIZER_ROOT/lib/python3.11/site-packages"
+NORMALIZER_FORBIDDEN="$NORMALIZER_FIXTURE/random-build"
+NORMALIZER_MANIFEST="$TEMP_DIR/python-normalizer-runtime.json"
+mkdir -p "$NORMALIZER_ROOT/bin" \
+    "$NORMALIZER_SITE/fixture.dist-info" \
+    "$NORMALIZER_SITE/numpy/random" \
+    "$NORMALIZER_FIXTURE/usr/lib"
+printf 'nested runtime\n' >"$NORMALIZER_SITE/numpy/random/mtrand.so"
+printf 'sibling runtime\n' >"$NORMALIZER_FIXTURE/usr/lib/libfixture.so.1"
+cat >"$NORMALIZER_ROOT/bin/python3.11" <<'EOF'
+#!/bin/sh
+exec python3 "$@"
+EOF
+chmod +x "$NORMALIZER_ROOT/bin/python3.11"
+cat >"$NORMALIZER_ROOT/bin/fixture-tool" <<EOF
+#!$NORMALIZER_FORBIDDEN/python3.11
+print("normalized-ok")
+EOF
+chmod +x "$NORMALIZER_ROOT/bin/fixture-tool"
+cat >"$NORMALIZER_SITE/fixture.dist-info/RECORD" <<'EOF'
+../../../bin/fixture-tool,sha256=obsolete,1
+fixture.dist-info/RECORD,,
+EOF
+python3 "$PYTHON_NORMALIZER" \
+    --python-root "$NORMALIZER_ROOT" \
+    --forbidden-prefix "$NORMALIZER_FORBIDDEN" \
+    --payload-root "$NORMALIZER_FIXTURE" \
+    --runtime-manifest "$NORMALIZER_MANIFEST" \
+    --runtime-sha256 "$PYTHON_APPIMAGE_SHA256"
+[ "$("$NORMALIZER_ROOT/bin/fixture-tool")" = "normalized-ok" ] ||
+    fail "normalized embedded Python console script is not relocatable"
+if grep -R -F -q -- "$NORMALIZER_FORBIDDEN" "$NORMALIZER_ROOT"; then
+    fail "embedded Python normalizer retained a build path"
+fi
+grep -Eq '^\.\./\.\./\.\./bin/fixture-tool,sha256=[A-Za-z0-9_-]{43},[0-9]+$' \
+    "$NORMALIZER_SITE/fixture.dist-info/RECORD" ||
+    fail "embedded Python normalizer did not update RECORD"
+python3 - "$NORMALIZER_MANIFEST" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    document = json.load(stream)
+assert document["format"] == "goldencheetah-python-source-runtime-2"
+assert document["distributions"] == []
+paths = [entry["path"] for entry in document["files"]]
+assert paths == sorted(set(paths))
+assert paths == [
+    "opt/python3.11/bin/fixture-tool",
+    "opt/python3.11/bin/python3.11",
+    "opt/python3.11/lib/python3.11/site-packages/fixture.dist-info/RECORD",
+    "opt/python3.11/lib/python3.11/site-packages/numpy/random/mtrand.so",
+    "usr/lib/libfixture.so.1",
+]
+transformations = {entry["path"]: entry["transformation"]
+                   for entry in document["files"]}
+assert transformations["opt/python3.11/bin/fixture-tool"] == \
+    "python-console-script-wrapper-v1"
+assert transformations[
+    "opt/python3.11/lib/python3.11/site-packages/fixture.dist-info/RECORD"
+] == "python-wheel-record-refresh-v1"
+PY
+
+printf 'reviewed payload\n' >"$TEMP_DIR/reviewed-download"
+REVIEWED_DOWNLOAD_SHA256=$(sha256sum "$TEMP_DIR/reviewed-download" |
+    cut -d ' ' -f 1)
+download_verified_file \
+    "file://$TEMP_DIR/reviewed-download" \
+    "$TEMP_DIR/download-cache" "$REVIEWED_DOWNLOAD_SHA256"
+cmp "$TEMP_DIR/reviewed-download" "$TEMP_DIR/download-cache" ||
+    fail "verified download changed the reviewed payload"
+printf 'corrupt cache\n' >"$TEMP_DIR/download-cache"
+download_verified_file \
+    "file://$TEMP_DIR/reviewed-download" \
+    "$TEMP_DIR/download-cache" "$REVIEWED_DOWNLOAD_SHA256"
+cmp "$TEMP_DIR/reviewed-download" "$TEMP_DIR/download-cache" ||
+    fail "verified download did not replace a corrupt cache entry"
+printf 'old destination\n' >"$TEMP_DIR/rejected-download"
+if download_verified_file \
+    "file://$TEMP_DIR/reviewed-download" \
+    "$TEMP_DIR/rejected-download" \
+    0000000000000000000000000000000000000000000000000000000000000000 \
+    >/dev/null 2>&1; then
+    fail "verified download accepted an unexpected digest"
+fi
+[ ! -e "$TEMP_DIR/rejected-download" ] ||
+    fail "failed verified download left a destination behind"
+if find "$TEMP_DIR" -maxdepth 1 -name 'rejected-download.tmp.*' |
+   grep -q .; then
+    fail "failed verified download left a temporary file behind"
+fi
+
 printf '#!/bin/sh\nprintf "%%s" "$APPIMAGE_EXTRACT_AND_RUN"\n' \
     >"$TEMP_DIR/check-extract-mode"
 chmod +x "$TEMP_DIR/check-extract-mode"
@@ -146,13 +321,63 @@ cat >"$TEMP_DIR/offscreen-smoke" <<'EOF'
 test "$APPIMAGE_EXTRACT_AND_RUN" = "1" || exit 65
 test "$QT_QPA_PLATFORM" = "offscreen" || exit 66
 test "$QT_OPENGL" = "software" || exit 67
-sleep 5
+test "$1" = "--goldencheetah-gui-smoke" || exit 68
+test "$3" = "SmokeAthlete" || exit 69
+test -d "$2/SmokeAthlete" || exit 70
+test -f "$2/SmokeAthlete/config/athlete-general.ini" || exit 71
+printf '%s\n' 'goldencheetah_gui_smoke=main-window-ready'
 EOF
 chmod +x "$TEMP_DIR/offscreen-smoke"
 [ "$(require_qt_offscreen_appimage \
       "$TEMP_DIR/offscreen-smoke" 0.1s)" = \
   "Qt offscreen runtime: available" ] ||
     fail "offscreen AppImage smoke did not accept a running image"
+cat >"$TEMP_DIR/offscreen-hang" <<'EOF'
+#!/bin/sh
+sleep 5
+EOF
+chmod +x "$TEMP_DIR/offscreen-hang"
+if require_qt_offscreen_appimage \
+    "$TEMP_DIR/offscreen-hang" 0.1s \
+    >/dev/null 2>&1; then
+    fail "offscreen AppImage smoke accepted a hang without a ready marker"
+fi
+cat >"$TEMP_DIR/offscreen-marker-hang" <<'EOF'
+#!/bin/sh
+printf '%s\n' 'goldencheetah_gui_smoke=main-window-ready'
+sleep 5
+EOF
+chmod +x "$TEMP_DIR/offscreen-marker-hang"
+if require_qt_offscreen_appimage \
+    "$TEMP_DIR/offscreen-marker-hang" 0.1s \
+    >/dev/null 2>&1; then
+    fail "offscreen AppImage smoke accepted a hang after the ready marker"
+fi
+printf '#!/bin/sh\nexit 0\n' >"$TEMP_DIR/offscreen-no-marker"
+chmod +x "$TEMP_DIR/offscreen-no-marker"
+if require_qt_offscreen_appimage \
+    "$TEMP_DIR/offscreen-no-marker" 0.1s \
+    >/dev/null 2>&1; then
+    fail "offscreen AppImage smoke accepted success without a ready marker"
+fi
+mkdir "$TEMP_DIR/glibc-2.35"
+cat >"$TEMP_DIR/glibc-2.35/getconf" <<'EOF'
+#!/bin/sh
+test "$1" = "GNU_LIBC_VERSION" || exit 64
+printf 'glibc 2.35\n'
+EOF
+chmod +x "$TEMP_DIR/glibc-2.35/getconf"
+[ "$(PATH="$TEMP_DIR/glibc-2.35:$PATH" \
+      require_qt_offscreen_appimage_on_glibc \
+          2.35 "$TEMP_DIR/offscreen-smoke" 0.1s)" = \
+  "Qt offscreen runtime: available on glibc 2.35" ] ||
+    fail "oldest supported glibc smoke did not execute the AppImage"
+if PATH="$TEMP_DIR/glibc-2.35:$PATH" \
+   require_qt_offscreen_appimage_on_glibc \
+       2.34 "$TEMP_DIR/offscreen-smoke" 0.1s \
+       >/dev/null 2>&1; then
+    fail "AppImage compatibility smoke ran on an unexpected glibc"
+fi
 printf '#!/bin/sh\nexit 127\n' >"$TEMP_DIR/offscreen-failure"
 chmod +x "$TEMP_DIR/offscreen-failure"
 if require_qt_offscreen_appimage \
@@ -175,12 +400,16 @@ if (cd "$TEMP_DIR" && unset GC_SOURCE_REVISION &&
 fi
 
 PROVENANCE_REPO="$TEMP_DIR/provenance-repo"
-mkdir -p "$PROVENANCE_REPO"
+mkdir -p "$PROVENANCE_REPO/src/Core" "$PROVENANCE_REPO/qwt"
 git -C "$PROVENANCE_REPO" init -q
 git -C "$PROVENANCE_REPO" config user.name "Packaging Test"
 git -C "$PROVENANCE_REPO" config user.email "packaging@example.invalid"
+printf '/src/gcconfig.pri\n/src/Core/GeneratedSecrets.h\n/qwt/qwtconfig.pri\n' \
+    >"$PROVENANCE_REPO/.gitignore"
+printf 'CONFIG += release\n' >"$PROVENANCE_REPO/src/gcconfig.pri"
+printf 'QWT_CONFIG += QwtPlot\n' >"$PROVENANCE_REPO/qwt/qwtconfig.pri"
 printf 'revision a\n' >"$PROVENANCE_REPO/source.txt"
-git -C "$PROVENANCE_REPO" add source.txt
+git -C "$PROVENANCE_REPO" add .gitignore source.txt
 git -C "$PROVENANCE_REPO" commit -q -m a
 REVISION_A=$(git -C "$PROVENANCE_REPO" rev-parse HEAD)
 printf 'revision b\n' >"$PROVENANCE_REPO/source.txt"
@@ -191,6 +420,9 @@ make_provenance_probe()
 {
     local output=$1
     local revision=$2
+    local build_inputs
+    build_inputs=$(python3 "$REPO_ROOT/src/Resources/linux/compute-build-input-identity.py" \
+        "$PROVENANCE_REPO")
     cat >"$output" <<EOF
 #!/bin/sh
 test "\${1:-}" = "--goldencheetah-build-provenance" || exit 64
@@ -198,6 +430,7 @@ cat <<REPORT
 goldencheetah_build_provenance=1
 application=GoldenCheetah
 source_revision=$revision
+build_inputs_sha256=$build_inputs
 compiler_family=gcc
 compiler_version=14.2.0
 qt_version=6.8.3
@@ -269,7 +502,7 @@ GC_TEST_BUILD_PROVENANCE_ENTRYPOINT=true \
     create_appimage_build_manifest \
         "$PROVENANCE_REPO" "$TEMP_DIR/provenance-b" \
         "Strava OAuth: configured" "$BASE_MANIFEST"
-grep -Fxq 'goldencheetah_appimage_manifest=1' "$BASE_MANIFEST" ||
+grep -Fxq 'goldencheetah_appimage_manifest=2' "$BASE_MANIFEST" ||
     fail "manifest version is missing"
 grep -Fxq "source_revision=$REVISION_B" "$BASE_MANIFEST" ||
     fail "manifest source revision is wrong"
@@ -279,6 +512,120 @@ grep -Fxq 'toolchain=gcc-14.2.0_qt-6.8.3_cxx-201703' \
     "$BASE_MANIFEST" || fail "manifest toolchain identity is wrong"
 grep -Fxq 'strava_oauth_configured=true' "$BASE_MANIFEST" ||
     fail "manifest OAuth status is not boolean true"
+
+set_appimage_source_date_epoch "$BASE_MANIFEST" "$PROVENANCE_REPO"
+EXPECTED_SOURCE_DATE_EPOCH=$(git -C "$PROVENANCE_REPO" show -s --format=%ct \
+    "$REVISION_B")
+[ "$SOURCE_DATE_EPOCH" = "$EXPECTED_SOURCE_DATE_EPOCH" ] ||
+    fail "SOURCE_DATE_EPOCH was not derived from the manifest revision"
+
+REPRO_A="$TEMP_DIR/repro-a"
+REPRO_B="$TEMP_DIR/repro-b"
+for appdir in "$REPRO_A" "$REPRO_B"; do
+    mkdir -p "$appdir/usr/bin" "$appdir/usr/share/reproducibility"
+    cat >"$appdir/AppRun" <<'EOF'
+#!/bin/sh
+exec "$(dirname "$0")/usr/bin/reproducibility-fixture" "$@"
+EOF
+    cat >"$appdir/reproducibility-fixture.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Reproducibility Fixture
+Exec=reproducibility-fixture
+Icon=reproducibility-fixture
+Categories=Utility;
+EOF
+    cat >"$appdir/reproducibility-fixture.svg" <<'EOF'
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <rect width="16" height="16" fill="#247a52"/>
+</svg>
+EOF
+    cat >"$appdir/usr/bin/reproducibility-fixture" <<'EOF'
+#!/bin/sh
+printf '%s\n' reproducible
+EOF
+    printf 'same payload\n' >"$appdir/usr/share/reproducibility/payload"
+    ln -s payload "$appdir/usr/share/reproducibility/current"
+    chmod +x "$appdir/AppRun" "$appdir/usr/bin/reproducibility-fixture"
+done
+touch -d '2020-01-01 00:00:00 UTC' \
+    "$REPRO_A/usr/share/reproducibility/payload"
+touch -d '2030-01-01 00:00:00 UTC' \
+    "$REPRO_B/usr/share/reproducibility/payload"
+normalize_appdir_mtimes "$REPRO_A"
+normalize_appdir_mtimes "$REPRO_B"
+
+REPRO_TOOL="$TEMP_DIR/$APPIMAGETOOL_FILE"
+if [ -n "${GC_PINNED_APPIMAGETOOL:-}" ]; then
+    verify_sha256 "$GC_PINNED_APPIMAGETOOL" "$APPIMAGETOOL_SHA256" ||
+        fail "GC_PINNED_APPIMAGETOOL is not the reviewed appimagetool"
+    install -m 0755 "$GC_PINNED_APPIMAGETOOL" "$REPRO_TOOL"
+else
+    download_verified_file \
+        "$APPIMAGETOOL_URL" "$REPRO_TOOL" "$APPIMAGETOOL_SHA256"
+    chmod +x "$REPRO_TOOL"
+fi
+REPRO_RUNTIME="$TEMP_DIR/$APPIMAGE_RUNTIME_FILE"
+if [ -n "${GC_PINNED_APPIMAGE_RUNTIME:-}" ]; then
+    verify_sha256 "$GC_PINNED_APPIMAGE_RUNTIME" "$APPIMAGE_RUNTIME_SHA256" ||
+        fail "GC_PINNED_APPIMAGE_RUNTIME is not the reviewed runtime"
+    install -m 0644 "$GC_PINNED_APPIMAGE_RUNTIME" "$REPRO_RUNTIME"
+else
+    download_verified_file \
+        "$APPIMAGE_RUNTIME_URL" "$REPRO_RUNTIME" "$APPIMAGE_RUNTIME_SHA256"
+fi
+ARCH=x86_64 run_packaging_appimage \
+    "$REPRO_TOOL" --runtime-file "$REPRO_RUNTIME" \
+    "$REPRO_A" "$TEMP_DIR/repro-a.AppImage"
+ARCH=x86_64 run_packaging_appimage \
+    "$REPRO_TOOL" --runtime-file "$REPRO_RUNTIME" \
+    "$REPRO_B" "$TEMP_DIR/repro-b.AppImage"
+cmp "$TEMP_DIR/repro-a.AppImage" "$TEMP_DIR/repro-b.AppImage" ||
+    fail "pinned appimagetool did not produce identical package bytes"
+
+REPRO_PASS_A="$TEMP_DIR/production-pass-a"
+REPRO_PASS_B="$TEMP_DIR/production-pass-b"
+for pass_dir in "$REPRO_PASS_A" "$REPRO_PASS_B"; do
+    mkdir -p "$pass_dir"
+    printf 'production manifest\n' >"$pass_dir/build.manifest"
+    printf '{"bomFormat":"CycloneDX"}\n' \
+        >"$pass_dir/GoldenCheetah.AppImage.sbom.cdx.json"
+    printf 'production image\n' >"$pass_dir/GoldenCheetah.AppImage"
+    chmod +x "$pass_dir/GoldenCheetah.AppImage"
+    image_hash=$(sha256sum "$pass_dir/GoldenCheetah.AppImage" | cut -d ' ' -f 1)
+    cp "$pass_dir/build.manifest" \
+        "$pass_dir/GoldenCheetah.AppImage.manifest"
+    printf 'appimage_sha256=%s\n' "$image_hash" \
+        >>"$pass_dir/GoldenCheetah.AppImage.manifest"
+done
+compare_appimage_reproduction "$REPRO_PASS_A" "$REPRO_PASS_B" ||
+    fail "matching production packaging outputs were rejected"
+printf 'different SBOM\n' \
+    >"$REPRO_PASS_B/GoldenCheetah.AppImage.sbom.cdx.json"
+if compare_appimage_reproduction "$REPRO_PASS_A" "$REPRO_PASS_B" \
+    >/dev/null 2>&1; then
+    fail "production reproduction accepted different SBOM bytes"
+fi
+
+PRODUCTION_PACKAGE_PASS="$REPO_ROOT/appveyor/linux/package-appimage-pass.sh"
+PRODUCTION_BUILD_PASS="$REPO_ROOT/appveyor/linux/build-appimage-pass.sh"
+grep -Fq 'set_appimage_source_date_epoch' "$PRODUCTION_PACKAGE_PASS" ||
+    fail "production package pass does not set SOURCE_DATE_EPOCH"
+grep -Fq 'normalize_appdir_mtimes' "$PRODUCTION_PACKAGE_PASS" ||
+    fail "production package pass does not normalize AppDir mtimes"
+grep -Fq 'download_appimage_runtime' "$PRODUCTION_PACKAGE_PASS" ||
+    fail "production package pass does not acquire the pinned runtime"
+grep -Fq -- '--runtime-file' "$PRODUCTION_PACKAGE_PASS" ||
+    fail "production package pass does not pass the pinned runtime"
+grep -Fq 'SOURCE_DATE_EPOCH=' "$PRODUCTION_BUILD_PASS" ||
+    fail "production build pass does not set SOURCE_DATE_EPOCH"
+for packager in \
+    "$REPO_ROOT/src/Resources/linux/MakeAppImageQt6.sh" \
+    "$REPO_ROOT/.devcontainer/package-appimage.sh" \
+    "$REPO_ROOT/appveyor/linux/after_build.sh"; do
+    grep -Fq 'reproduce-appimage.sh' "$packager" ||
+        fail "$packager bypasses independent release builds"
+done
 
 UNCONFIGURED_MANIFEST="$TEMP_DIR/unconfigured-build.manifest"
 GC_TEST_BUILD_PROVENANCE_ENTRYPOINT=true \
@@ -302,14 +649,104 @@ cmp "$BASE_MANIFEST" \
     "$MANIFEST_APPDIR/usr/share/goldencheetah/build-manifest" ||
     fail "embedded build manifest changed during installation"
 
+FAKE_APPDIR="$TEMP_DIR/manifest.AppDir"
 FAKE_APPIMAGE="$TEMP_DIR/manifest.AppImage"
-cat >"$FAKE_APPIMAGE" <<EOF
+FAKE_SBOM="$TEMP_DIR/manifest.AppImage.sbom.cdx.json"
+mkdir -p "$FAKE_APPDIR/usr/share/goldencheetah"
+install -m 0644 "$BASE_MANIFEST" \
+    "$FAKE_APPDIR/usr/share/goldencheetah/build-manifest"
+cat >"$FAKE_APPDIR/AppRun" <<'EOF'
 #!/bin/sh
-test "\${1:-}" = "--appimage-extract" || exit 64
-mkdir -p squashfs-root/usr/share/goldencheetah
-cp "$BASE_MANIFEST" squashfs-root/usr/share/goldencheetah/build-manifest
+exit 0
 EOF
-chmod +x "$FAKE_APPIMAGE"
+chmod 0755 "$FAKE_APPDIR/AppRun"
+cat >"$FAKE_APPDIR/manifest-fixture.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=Manifest Fixture
+Exec=AppRun
+Icon=manifest-fixture
+Categories=Utility;
+EOF
+cat >"$FAKE_APPDIR/manifest-fixture.svg" <<'EOF'
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+  <rect width="16" height="16" fill="#247a52"/>
+</svg>
+EOF
+ln -s manifest-fixture.svg "$FAKE_APPDIR/.DirIcon"
+python3 - "$FAKE_APPDIR" "$REVISION_B" \
+    "$FAKE_APPDIR/usr/share/goldencheetah/goldencheetah.cdx.json" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+
+appdir = Path(sys.argv[1])
+revision = sys.argv[2]
+output = Path(sys.argv[3])
+components = []
+for path in sorted(appdir.rglob("*")):
+    if path == output or path.is_dir():
+        continue
+    relative = path.relative_to(appdir).as_posix()
+    metadata = path.lstat()
+    if path.is_symlink():
+        component = {
+            "bom-ref": "goldencheetah:symlink:" + relative,
+            "type": "file",
+            "name": relative,
+            "properties": [
+                {"name": "goldencheetah:role", "value": "payload-symlink"},
+                {"name": "goldencheetah:symlink-target", "value": os.readlink(path)},
+            ],
+        }
+    else:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        component = {
+            "bom-ref": f"goldencheetah:file:{relative}:{digest}",
+            "type": "file",
+            "name": relative,
+            "hashes": [{"alg": "SHA-256", "content": digest}],
+            "properties": [
+                {"name": "goldencheetah:role", "value": "payload-file"},
+                {"name": "goldencheetah:size", "value": str(metadata.st_size)},
+                {"name": "goldencheetah:mode", "value": f"{stat.S_IMODE(metadata.st_mode):04o}"},
+            ],
+        }
+    components.append(component)
+components.sort(key=lambda item: item["bom-ref"])
+application_ref = f"pkg:generic/goldencheetah@{revision}"
+document = {
+    "$schema": "http://cyclonedx.org/schema/bom-1.5.schema.json",
+    "bomFormat": "CycloneDX",
+    "specVersion": "1.5",
+    "version": 1,
+    "metadata": {
+        "component": {
+            "bom-ref": application_ref,
+            "type": "application",
+            "name": "GoldenCheetah",
+            "version": revision,
+            "licenses": [{"license": {"id": "GPL-2.0-or-later"}}],
+        }
+    },
+    "components": components,
+    "dependencies": [
+        {"ref": application_ref, "dependsOn": [item["bom-ref"] for item in components]}
+    ],
+}
+output.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+PY
+install -m 0644 \
+    "$FAKE_APPDIR/usr/share/goldencheetah/goldencheetah.cdx.json" \
+    "$FAKE_SBOM"
+validate_appimage_sbom "$FAKE_SBOM"
+normalize_appdir_mtimes "$FAKE_APPDIR"
+run_packaging_appimage "$REPRO_TOOL" \
+    --runtime-file "$REPRO_RUNTIME" "$FAKE_APPDIR" "$FAKE_APPIMAGE"
+[ -x "$FAKE_APPIMAGE" ] || fail "manifest fixture AppImage was not generated"
 SIDECAR_MANIFEST="$TEMP_DIR/manifest.AppImage.manifest"
 finalize_appimage_manifest \
     "$FAKE_APPIMAGE" "$BASE_MANIFEST" "$SIDECAR_MANIFEST"
@@ -320,10 +757,83 @@ grep -Fxq "appimage_sha256=$(sha256sum "$FAKE_APPIMAGE" | cut -d ' ' -f 1)" \
 GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
     verify_appimage_manifest "$FAKE_APPIMAGE" "$SIDECAR_MANIFEST"
 
+for unsafe_entry in artifacts sets; do
+    UNSAFE_PARENT="$TEMP_DIR/unsafe-$unsafe_entry"
+    UNSAFE_LINK="$UNSAFE_PARENT/release"
+    UNSAFE_STORE="$UNSAFE_PARENT/.release.store"
+    mkdir -p "$UNSAFE_STORE" "$UNSAFE_PARENT/outside"
+    chmod 0700 "$UNSAFE_STORE"
+    ln -s "$UNSAFE_PARENT/outside" "$UNSAFE_STORE/$unsafe_entry"
+    if GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+       GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
+        promote_appimage_release \
+            "$FAKE_APPIMAGE" "$SIDECAR_MANIFEST" "$FAKE_SBOM" \
+            "$UNSAFE_LINK" >/dev/null 2>&1; then
+        fail "promotion accepted a linked $unsafe_entry directory"
+    fi
+    [ -z "$(find "$UNSAFE_PARENT/outside" -mindepth 1 -print -quit)" ] ||
+        fail "promotion wrote through linked $unsafe_entry directory"
+done
+
+for unsafe_entry in artifacts sets; do
+    UNSAFE_PARENT="$TEMP_DIR/non-directory-$unsafe_entry"
+    UNSAFE_LINK="$UNSAFE_PARENT/release"
+    UNSAFE_STORE="$UNSAFE_PARENT/.release.store"
+    mkdir -p "$UNSAFE_STORE"
+    chmod 0700 "$UNSAFE_STORE"
+    printf 'not a directory\n' >"$UNSAFE_STORE/$unsafe_entry"
+    if GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+       GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
+        promote_appimage_release \
+            "$FAKE_APPIMAGE" "$SIDECAR_MANIFEST" "$FAKE_SBOM" \
+            "$UNSAFE_LINK" >/dev/null 2>&1; then
+        fail "promotion accepted a non-directory $unsafe_entry path"
+    fi
+done
+
+UNSAFE_LOCK_PARENT="$TEMP_DIR/unsafe-lock"
+UNSAFE_LOCK_LINK="$UNSAFE_LOCK_PARENT/release"
+UNSAFE_LOCK_STORE="$UNSAFE_LOCK_PARENT/.release.store"
+mkdir -p "$UNSAFE_LOCK_STORE/artifacts" "$UNSAFE_LOCK_STORE/sets"
+chmod 0700 "$UNSAFE_LOCK_STORE" "$UNSAFE_LOCK_STORE/artifacts" \
+    "$UNSAFE_LOCK_STORE/sets"
+printf 'do not truncate\n' >"$UNSAFE_LOCK_PARENT/outside-lock-target"
+cp "$UNSAFE_LOCK_PARENT/outside-lock-target" \
+    "$UNSAFE_LOCK_PARENT/outside-lock-expected"
+ln -s "$UNSAFE_LOCK_PARENT/outside-lock-target" \
+    "$UNSAFE_LOCK_STORE/promotion.lock"
+if GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+   GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
+    promote_appimage_release \
+        "$FAKE_APPIMAGE" "$SIDECAR_MANIFEST" "$FAKE_SBOM" \
+        "$UNSAFE_LOCK_LINK" >/dev/null 2>&1; then
+    fail "promotion accepted a linked lock file"
+fi
+cmp "$UNSAFE_LOCK_PARENT/outside-lock-expected" \
+    "$UNSAFE_LOCK_PARENT/outside-lock-target" ||
+    fail "promotion truncated a linked lock target"
+
+UNSAFE_LOCK_PARENT="$TEMP_DIR/non-file-lock"
+UNSAFE_LOCK_LINK="$UNSAFE_LOCK_PARENT/release"
+UNSAFE_LOCK_STORE="$UNSAFE_LOCK_PARENT/.release.store"
+mkdir -p "$UNSAFE_LOCK_STORE/artifacts" "$UNSAFE_LOCK_STORE/sets" \
+    "$UNSAFE_LOCK_STORE/promotion.lock"
+chmod 0700 "$UNSAFE_LOCK_STORE" "$UNSAFE_LOCK_STORE/artifacts" \
+    "$UNSAFE_LOCK_STORE/sets" "$UNSAFE_LOCK_STORE/promotion.lock"
+if GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+   GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
+    promote_appimage_release \
+        "$FAKE_APPIMAGE" "$SIDECAR_MANIFEST" "$FAKE_SBOM" \
+        "$UNSAFE_LOCK_LINK" >/dev/null 2>&1; then
+    fail "promotion accepted a non-file lock path"
+fi
+
 RELEASE_LINK="$TEMP_DIR/GoldenCheetah-release"
 GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
     promote_appimage_release \
-        "$FAKE_APPIMAGE" "$SIDECAR_MANIFEST" "$RELEASE_LINK" >/dev/null
+        "$FAKE_APPIMAGE" "$SIDECAR_MANIFEST" "$FAKE_SBOM" \
+        "$RELEASE_LINK" >/dev/null
 [ -L "$RELEASE_LINK" ] || fail "the release pointer is not a symlink"
 cmp -s "$FAKE_APPIMAGE" "$RELEASE_LINK/latest.AppImage" ||
     fail "the first promoted image is not latest"
@@ -337,6 +847,14 @@ GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
     verify_appimage_manifest \
         "$RELEASE_LINK/previous.AppImage" \
         "$RELEASE_LINK/previous.AppImage.manifest"
+GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
+    verify_appimage_sbom \
+        "$RELEASE_LINK/latest.AppImage" \
+        "$RELEASE_LINK/latest.AppImage.sbom.cdx.json"
+GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
+    verify_appimage_sbom \
+        "$RELEASE_LINK/previous.AppImage" \
+        "$RELEASE_LINK/previous.AppImage.sbom.cdx.json"
 FIRST_RELEASE_TARGET=$(readlink "$RELEASE_LINK")
 
 SECOND_APPIMAGE="$TEMP_DIR/manifest-second.AppImage"
@@ -347,8 +865,10 @@ SECOND_MANIFEST="$SECOND_APPIMAGE.manifest"
 finalize_appimage_manifest \
     "$SECOND_APPIMAGE" "$BASE_MANIFEST" "$SECOND_MANIFEST"
 GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
     promote_appimage_release \
-        "$SECOND_APPIMAGE" "$SECOND_MANIFEST" "$RELEASE_LINK" >/dev/null
+        "$SECOND_APPIMAGE" "$SECOND_MANIFEST" "$FAKE_SBOM" \
+        "$RELEASE_LINK" >/dev/null
 [ "$(readlink "$RELEASE_LINK")" != "$FIRST_RELEASE_TARGET" ] ||
     fail "release promotion did not rotate the generation pointer"
 cmp -s "$SECOND_APPIMAGE" "$RELEASE_LINK/latest.AppImage" ||
@@ -363,6 +883,38 @@ GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
     verify_appimage_manifest \
         "$RELEASE_LINK/previous.AppImage" \
         "$RELEASE_LINK/previous.AppImage.manifest"
+cmp -s "$FAKE_SBOM" \
+    "$RELEASE_LINK/latest.AppImage.sbom.cdx.json" ||
+    fail "the latest release SBOM was not promoted"
+cmp -s "$FAKE_SBOM" \
+    "$RELEASE_LINK/previous.AppImage.sbom.cdx.json" ||
+    fail "the previous release SBOM was not retained"
+
+LEGACY_RELEASE_LINK="$TEMP_DIR/GoldenCheetah-legacy-release"
+GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
+    promote_appimage_release \
+        "$FAKE_APPIMAGE" "$SIDECAR_MANIFEST" "$FAKE_SBOM" \
+        "$LEGACY_RELEASE_LINK" >/dev/null
+rm "$LEGACY_RELEASE_LINK/latest.AppImage.sbom.cdx.json" \
+    "$LEGACY_RELEASE_LINK/previous.AppImage.sbom.cdx.json"
+GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
+    promote_appimage_release \
+        "$SECOND_APPIMAGE" "$SECOND_MANIFEST" "$FAKE_SBOM" \
+        "$LEGACY_RELEASE_LINK" >/dev/null
+cmp -s "$SECOND_APPIMAGE" "$LEGACY_RELEASE_LINK/latest.AppImage" ||
+    fail "legacy release migration did not publish the new image"
+cmp -s "$SECOND_APPIMAGE" "$LEGACY_RELEASE_LINK/previous.AppImage" ||
+    fail "legacy release migration retained an unverifiable rollback image"
+GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
+    verify_appimage_sbom \
+        "$LEGACY_RELEASE_LINK/latest.AppImage" \
+        "$LEGACY_RELEASE_LINK/latest.AppImage.sbom.cdx.json"
+GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
+    verify_appimage_sbom \
+        "$LEGACY_RELEASE_LINK/previous.AppImage" \
+        "$LEGACY_RELEASE_LINK/previous.AppImage.sbom.cdx.json"
 
 PUBLISHED_TARGET=$(readlink "$RELEASE_LINK")
 THIRD_APPIMAGE="$TEMP_DIR/manifest-third.AppImage"
@@ -387,8 +939,10 @@ EOF
 chmod +x "$FAILING_SYNC_DIR/sync"
 if PATH="$FAILING_SYNC_DIR:$PATH" \
    GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+   GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
     promote_appimage_release \
-        "$THIRD_APPIMAGE" "$THIRD_MANIFEST" "$RELEASE_LINK" \
+        "$THIRD_APPIMAGE" "$THIRD_MANIFEST" "$FAKE_SBOM" \
+        "$RELEASE_LINK" \
         >/dev/null 2>&1; then
     fail "promotion reported success after a post-publication sync failure"
 fi
@@ -401,8 +955,10 @@ cmp -s "$FAKE_APPIMAGE" "$RELEASE_LINK/previous.AppImage" ||
 
 printf '# invalid after finalization\n' >>"$SECOND_APPIMAGE"
 if GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+   GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
     promote_appimage_release \
-        "$SECOND_APPIMAGE" "$SECOND_MANIFEST" "$RELEASE_LINK" \
+        "$SECOND_APPIMAGE" "$SECOND_MANIFEST" "$FAKE_SBOM" \
+        "$RELEASE_LINK" \
         >/dev/null 2>&1; then
     fail "a tampered image was promoted"
 fi
@@ -410,7 +966,8 @@ fi
     fail "failed promotion changed the active release"
 
 cp "$SIDECAR_MANIFEST" "$TEMP_DIR/tampered-sidecar"
-sed -i 's/^source_revision=./source_revision=f/' \
+sed -i \
+    's/^source_revision=.*/source_revision=0000000000000000000000000000000000000000/' \
     "$TEMP_DIR/tampered-sidecar"
 if GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
     verify_appimage_manifest \
@@ -725,6 +1282,7 @@ LGPL21_LICENSE_FIXTURE="/usr/share/common-licenses/LGPL-2.1"
     fail "reviewed LGPL-2.1 license fixture is missing"
 
 KEYCHAIN_APPDIR="$TEMP_DIR/keychain.AppDir"
+KEYCHAIN_TRANSFORM_MANIFEST="$TEMP_DIR/keychain-transformations.json"
 mkdir -p "$KEYCHAIN_APPDIR/lib"
 cp "$TEMP_DIR/libsecret/lib/libglib-2.0.so.0" \
     "$TEMP_DIR/libsecret/lib/libgio-2.0.so.0" \
@@ -732,11 +1290,36 @@ cp "$TEMP_DIR/libsecret/lib/libglib-2.0.so.0" \
     "$TEMP_DIR/libsecret/lib/libgcrypt.so.20" \
     "$KEYCHAIN_APPDIR/lib/"
 PATH="$TEMP_DIR/libsecret/bin:$PATH" \
+    LIBGCRYPT_RUNTIME_FILE="$TEMP_DIR/libsecret/lib/libgcrypt.so.20" \
     LIBSECRET_COPYRIGHT_FILE="$TEMP_DIR/libsecret/copyright" \
     LIBSECRET_LICENSE_FILE="$LGPL21_LICENSE_FIXTURE" \
     install_linux_keychain_runtime \
         "$KEYCHAIN_APPDIR" \
-        "$QTKEYCHAIN_LICENSE_FIXTURE"
+        "$QTKEYCHAIN_LICENSE_FIXTURE" \
+        "$KEYCHAIN_TRANSFORM_MANIFEST"
+[ -f "$KEYCHAIN_TRANSFORM_MANIFEST" ] ||
+    fail "Linux keychain transformation manifest was not created"
+python3 - "$KEYCHAIN_APPDIR" "$KEYCHAIN_TRANSFORM_MANIFEST" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+appdir = Path(sys.argv[1])
+manifest = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+assert manifest["format"] == "goldencheetah-transformed-runtime-1"
+assert [entry["path"] for entry in manifest["libraries"]] == [
+    "lib/libgcrypt.so.20",
+    "lib/libsecret-1.so.0",
+]
+for entry in manifest["libraries"]:
+    assert entry["transformation"] == "patchelf-set-rpath:$ORIGIN"
+    output = appdir / entry["path"]
+    source = Path(entry["source_path"])
+    assert source.is_file() and not source.is_symlink()
+    assert hashlib.sha256(output.read_bytes()).hexdigest() == entry["output_sha256"]
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == entry["source_sha256"]
+PY
 [ "$(linux_keychain_runtime_status "$KEYCHAIN_APPDIR")" = \
   "Linux keychain runtime: bundled" ] ||
     fail "installed Linux keychain runtime was not reported"
@@ -779,11 +1362,13 @@ LINKED_LIB_OUTSIDE="$TEMP_DIR/linked-lib-outside"
 mkdir -p "$LINKED_LIB_APPDIR" "$LINKED_LIB_OUTSIDE"
 ln -s "$LINKED_LIB_OUTSIDE" "$LINKED_LIB_APPDIR/lib"
 if PATH="$TEMP_DIR/libsecret/bin:$PATH" \
+    LIBGCRYPT_RUNTIME_FILE="$TEMP_DIR/libsecret/lib/libgcrypt.so.20" \
     LIBSECRET_COPYRIGHT_FILE="$TEMP_DIR/libsecret/copyright" \
     LIBSECRET_LICENSE_FILE="$LGPL21_LICENSE_FIXTURE" \
     install_linux_keychain_runtime \
         "$LINKED_LIB_APPDIR" \
         "$QTKEYCHAIN_LICENSE_FIXTURE" \
+        "$TEMP_DIR/linked-lib-transformations.json" \
         >/dev/null 2>&1; then
     fail "installer accepted a linked AppDir library directory"
 fi
@@ -804,11 +1389,13 @@ cp "$TEMP_DIR/libsecret/lib/libglib-2.0.so.0" \
 ln -s "$LINKED_LICENSE_OUTSIDE" \
     "$LINKED_LICENSE_APPDIR/usr/share/doc/GoldenCheetah/licenses"
 if PATH="$TEMP_DIR/libsecret/bin:$PATH" \
+    LIBGCRYPT_RUNTIME_FILE="$TEMP_DIR/libsecret/lib/libgcrypt.so.20" \
     LIBSECRET_COPYRIGHT_FILE="$TEMP_DIR/libsecret/copyright" \
     LIBSECRET_LICENSE_FILE="$LGPL21_LICENSE_FIXTURE" \
     install_linux_keychain_runtime \
         "$LINKED_LICENSE_APPDIR" \
         "$QTKEYCHAIN_LICENSE_FIXTURE" \
+        "$TEMP_DIR/linked-license-transformations.json" \
         >/dev/null 2>&1; then
     fail "installer accepted a linked AppDir license directory"
 fi
@@ -1004,6 +1591,12 @@ if require_strava_oauth_build "$TEMP_DIR/unconfigured" \
     >/dev/null 2>&1; then
     fail "release gate accepted unavailable Strava credentials"
 fi
+require_unconfigured_strava_oauth_build "$TEMP_DIR/unconfigured" >/dev/null ||
+    fail "credential-free diagnostic build rejected unavailable OAuth"
+if require_unconfigured_strava_oauth_build "$TEMP_DIR/configured" \
+    >/dev/null 2>&1; then
+    fail "credential-free diagnostic build accepted embedded OAuth credentials"
+fi
 if require_strava_oauth_build "$TEMP_DIR/missing" \
     >/dev/null 2>&1; then
     fail "release gate accepted a missing executable"
@@ -1012,46 +1605,43 @@ fi
 GC_TEST_APPIMAGE_SIDECAR="$TEMP_DIR/configured"
 GC_TEST_APPIMAGE_ENTRY="$TEMP_DIR/configured-entry"
 GC_TEST_APPIMAGE_ENTRY_NAME="configured-entry"
-run_packaging_appimage()
+trusted_appimage_extract()
 {
-    [ -z "${LD_LIBRARY_PATH:-}" ] ||
-        fail "AppImage extraction inherited LD_LIBRARY_PATH"
-    [ -z "${LD_PRELOAD:-}" ] ||
-        fail "AppImage extraction inherited LD_PRELOAD"
-    [ -z "${APPDIR:-}" ] ||
-        fail "AppImage extraction inherited APPDIR"
-    [ -z "${APPIMAGE:-}" ] ||
-        fail "AppImage extraction inherited APPIMAGE"
-    [ -z "${OWD:-}" ] ||
-        fail "AppImage extraction inherited OWD"
-    [ "$2" = "--appimage-extract" ] ||
-        fail "AppImage status did not request extraction"
-    mkdir -p squashfs-root
+    local image=$1
+    local destination=$2
+    local app_root="$destination/squashfs-root"
+
+    [ "$image" = "$TEMP_DIR/type2.AppImage" ] ||
+        fail "AppImage status extracted an unexpected fixture"
+    [ -d "$destination" ] &&
+        [ -z "$(find "$destination" -mindepth 1 -print -quit)" ] ||
+        fail "AppImage status did not provide an empty extraction directory"
+    mkdir -p "$app_root"
     cp "$GC_TEST_APPIMAGE_SIDECAR" \
-        squashfs-root/GoldenCheetah
+        "$app_root/GoldenCheetah"
     cp "$GC_TEST_APPIMAGE_ENTRY" \
-        "squashfs-root/$GC_TEST_APPIMAGE_ENTRY_NAME"
+        "$app_root/$GC_TEST_APPIMAGE_ENTRY_NAME"
     ln -s "$GC_TEST_APPIMAGE_ENTRY_NAME" \
-        squashfs-root/AppRun
+        "$app_root/AppRun"
     if [ -n "${GC_TEST_APPIMAGE_LIBSECRET:-}" ]; then
         mkdir -p \
-            squashfs-root/lib \
-            squashfs-root/usr/share/doc/GoldenCheetah/licenses
+            "$app_root/lib" \
+            "$app_root/usr/share/doc/GoldenCheetah/licenses"
         cp "$GC_TEST_APPIMAGE_LIBSECRET" \
-            squashfs-root/lib/libsecret-1.so.0
+            "$app_root/lib/libsecret-1.so.0"
         cp \
             "$GC_TEST_APPIMAGE_DEPENDENCY_DIR/libglib-2.0.so.0" \
             "$GC_TEST_APPIMAGE_DEPENDENCY_DIR/libgio-2.0.so.0" \
             "$GC_TEST_APPIMAGE_DEPENDENCY_DIR/libgobject-2.0.so.0" \
             "$GC_TEST_APPIMAGE_DEPENDENCY_DIR/libgcrypt.so.20" \
             "$GC_TEST_APPIMAGE_DEPENDENCY_DIR/libgpg-error.so.0" \
-            squashfs-root/lib/
+            "$app_root/lib/"
         cp "$GC_TEST_APPIMAGE_LIBSECRET_COPYRIGHT" \
-            squashfs-root/usr/share/doc/GoldenCheetah/licenses/libsecret-copyright
+            "$app_root/usr/share/doc/GoldenCheetah/licenses/libsecret-copyright"
         cp "$GC_TEST_APPIMAGE_QTKEYCHAIN_LICENSE" \
-            squashfs-root/usr/share/doc/GoldenCheetah/licenses/QtKeychain-COPYING
+            "$app_root/usr/share/doc/GoldenCheetah/licenses/QtKeychain-COPYING"
         cp "$GC_TEST_APPIMAGE_LIBSECRET_LICENSE" \
-            squashfs-root/usr/share/doc/GoldenCheetah/licenses/LGPL-2.1
+            "$app_root/usr/share/doc/GoldenCheetah/licenses/LGPL-2.1"
     fi
 }
 
@@ -1085,7 +1675,15 @@ if require_strava_oauth_appimage "$TEMP_DIR/type2.AppImage" \
     >/dev/null 2>&1; then
     fail "release gate accepted an unavailable packaged GoldenCheetah"
 fi
-
+require_unconfigured_strava_oauth_appimage "$TEMP_DIR/type2.AppImage" \
+    >/dev/null ||
+    fail "credential-free diagnostic AppImage rejected unavailable OAuth"
+GC_TEST_APPIMAGE_ENTRY="$TEMP_DIR/configured-entry"
+GC_TEST_APPIMAGE_ENTRY_NAME="configured-entry"
+if require_unconfigured_strava_oauth_appimage "$TEMP_DIR/type2.AppImage" \
+    >/dev/null 2>&1; then
+    fail "credential-free diagnostic AppImage accepted embedded OAuth credentials"
+fi
 GC_TEST_APPIMAGE_ENTRY="$TEMP_DIR/malformed-entry"
 GC_TEST_APPIMAGE_ENTRY_NAME="malformed-entry"
 if strava_oauth_appimage_status "$TEMP_DIR/type2.AppImage" \
@@ -1172,18 +1770,455 @@ assert_contains "$SUPPORT" \
 grep -Eq '^sip[[:space:]]*==[[:space:]]*6\.15\.1$' "$REQUIREMENTS" ||
     fail "test must be reviewed when the pinned SIP version changes"
 
-for packager in "$LOCAL_PACKAGER" "$CI_PACKAGER"; do
+[ -r "$APPIMAGE_REQUIREMENTS" ] ||
+    fail "missing hash-locked AppImage Python requirements"
+if grep -Ev '^[[:space:]]*(#|$|--hash=sha256:)' \
+       "$APPIMAGE_REQUIREMENTS" |
+   grep -Ev '^[[:space:]]*[A-Za-z0-9_.-]+==[^[:space:]\\]+[[:space:]]*\\?$' \
+       >/dev/null; then
+    fail "AppImage Python requirements contain an unpinned entry"
+fi
+grep -Fq -- '--hash=sha256:' "$APPIMAGE_REQUIREMENTS" ||
+    fail "AppImage Python requirements contain no artifact hashes"
+if grep -Ev '^[[:space:]]*(#|$)' "$REQUIREMENTS" |
+   grep -Ev '^[[:space:]]*[A-Za-z0-9_.-]+[[:space:]]*==[[:space:]]*[^[:space:]]+[[:space:]]*$' \
+       >/dev/null; then
+    fail "cross-platform Python requirements contain an unpinned entry"
+fi
+
+assert_contains "$SUPPORT" \
+    'download_verified_file "$LINUXDEPLOYQT_URL" "$LINUXDEPLOYQT_FILE" "$LINUXDEPLOYQT_SHA256"'
+assert_contains "$SUPPORT" \
+    'download_verified_file "$APPIMAGETOOL_URL" "$APPIMAGETOOL_FILE" "$APPIMAGETOOL_SHA256"'
+assert_contains "$SUPPORT" 'PIP_CONFIG_FILE=/dev/null'
+assert_contains "$SUPPORT" 'PYTHONDONTWRITEBYTECODE=1'
+assert_contains "$SUPPORT" \
+    'pip install -q --isolated --disable-pip-version-check --no-input'
+assert_contains "$SUPPORT" '--no-cache-dir --no-compile'
+assert_contains "$SUPPORT" '--only-binary=:all:'
+assert_contains "$SUPPORT" \
+    '--report "$report_path" -r "$requirements_path"'
+if grep -Fq 'pip install --upgrade pip' "$SUPPORT"; then
+    fail "AppImage packaging upgrades pip from an unpinned index target"
+fi
+
+PYTHON_PATH_CHECK="$TEMP_DIR/python-path-check"
+mkdir -p "$PYTHON_PATH_CHECK/appdir"
+printf 'fixture==1.0 --hash=sha256:%064d\n' 0 >"$PYTHON_PATH_CHECK/lock"
+: >"$PYTHON_PATH_CHECK/report"
+ln -s lock "$PYTHON_PATH_CHECK/linked-lock"
+ln -s appdir "$PYTHON_PATH_CHECK/linked-appdir"
+ln -s report "$PYTHON_PATH_CHECK/linked-report"
+if install_embedded_python \
+    "$PYTHON_PATH_CHECK/linked-lock" "$PYTHON_PATH_CHECK/appdir" \
+    "$PYTHON_PATH_CHECK/report" >/dev/null 2>&1; then
+    fail "embedded Python accepted a linked requirements lock"
+fi
+if install_embedded_python \
+    "$PYTHON_PATH_CHECK/lock" "$PYTHON_PATH_CHECK/linked-appdir" \
+    "$PYTHON_PATH_CHECK/report" >/dev/null 2>&1; then
+    fail "embedded Python accepted a linked AppDir"
+fi
+if install_embedded_python \
+    "$PYTHON_PATH_CHECK/lock" "$PYTHON_PATH_CHECK/appdir" \
+    "$PYTHON_PATH_CHECK/linked-report" >/dev/null 2>&1; then
+    fail "embedded Python accepted a linked pip report"
+fi
+mkdir "$PYTHON_PATH_CHECK/outside-usr" \
+    "$PYTHON_PATH_CHECK/outside-nested" \
+    "$PYTHON_PATH_CHECK/appdir-with-nested-link" \
+    "$PYTHON_PATH_CHECK/appdir-with-nested-link/usr"
+ln -s "$PYTHON_PATH_CHECK/outside-usr" \
+    "$PYTHON_PATH_CHECK/appdir/usr"
+ln -s "$PYTHON_PATH_CHECK/outside-nested" \
+    "$PYTHON_PATH_CHECK/appdir-with-nested-link/usr/lib"
+if install_embedded_python \
+    "$PYTHON_PATH_CHECK/lock" "$PYTHON_PATH_CHECK/appdir" \
+    "$PYTHON_PATH_CHECK/report" >/dev/null 2>&1; then
+    fail "embedded Python accepted a linked usr payload root"
+fi
+if install_embedded_python \
+    "$PYTHON_PATH_CHECK/lock" \
+    "$PYTHON_PATH_CHECK/appdir-with-nested-link" \
+    "$PYTHON_PATH_CHECK/report" >/dev/null 2>&1; then
+    fail "embedded Python accepted a nested payload symlink"
+fi
+[ -z "$(find "$PYTHON_PATH_CHECK/outside-usr" \
+              "$PYTHON_PATH_CHECK/outside-nested" \
+              -mindepth 1 -print -quit)" ] ||
+    fail "embedded Python wrote through a linked payload root"
+
+[ -r "$SBOM_GENERATOR" ] || fail "missing AppImage SBOM generator"
+[ -r "$RUNTIME_PROVENANCE_GENERATOR" ] ||
+    fail "missing AppImage runtime provenance generator"
+SBOM_APPDIR="$TEMP_DIR/sbom-appdir"
+SBOM_PYTHON_SITE="$SBOM_APPDIR/opt/python3.11/lib/python3.11/site-packages"
+mkdir -p "$SBOM_APPDIR/usr/lib" "$SBOM_APPDIR/usr/share/goldencheetah" \
+    "$SBOM_PYTHON_SITE/fixture_package-1.2.3.dist-info"
+printf 'application binary\n' >"$SBOM_APPDIR/GoldenCheetah"
+printf 'runtime library\n' >"$SBOM_APPDIR/usr/lib/libfixture.so"
+printf 'Qt runtime library\n' >"$SBOM_APPDIR/usr/lib/libQt6Core.so.6.8.3"
+printf 'libsecret runtime library\n' \
+    >"$SBOM_APPDIR/usr/lib/libsecret-1.so.0.0.0"
+ln -s libfixture.so "$SBOM_APPDIR/usr/lib/libfixture-current.so"
+ln -s usr/lib "$SBOM_APPDIR/lib"
+cp "$BASE_MANIFEST" \
+    "$SBOM_APPDIR/usr/share/goldencheetah/build-manifest"
+SBOM_LOCK="$TEMP_DIR/sbom-requirements.lock"
+cat >"$SBOM_LOCK" <<'EOF'
+fixture_package==1.2.3 \
+    --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    --hash=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+EOF
+SBOM_PIP_REPORT="$TEMP_DIR/sbom-pip-report.json"
+cat >"$SBOM_PIP_REPORT" <<'EOF'
+{
+  "version": "1",
+  "pip_version": "26.1.2",
+  "install": [
+    {
+      "download_info": {
+        "url": "https://files.pythonhosted.org/packages/fixture_package-1.2.3-py3-none-any.whl",
+        "archive_info": {
+          "hashes": {
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      },
+      "metadata": {"name": "Fixture_Package", "version": "1.2.3"}
+    }
+  ]
+}
+EOF
+cat >"$SBOM_PYTHON_SITE/fixture_package-1.2.3.dist-info/METADATA" <<'EOF'
+Metadata-Version: 2.1
+Name: Fixture_Package
+Version: 1.2.3
+License-Expression: MIT
+EOF
+SBOM_PYTHON_METADATA_SHA256=$(sha256sum \
+    "$SBOM_PYTHON_SITE/fixture_package-1.2.3.dist-info/METADATA" |
+    cut -d' ' -f1)
+cat >"${SBOM_PIP_REPORT}.runtime-libraries.json" <<EOF
+{
+  "format": "goldencheetah-python-source-runtime-2",
+  "source_sha256": "$PYTHON_APPIMAGE_SHA256",
+  "distributions": [],
+  "files": [],
+  "symlinks": []
+}
+EOF
+SBOM_LOCK_SHA256=$(sha256sum "$SBOM_LOCK" | cut -d' ' -f1)
+cat >"${SBOM_PIP_REPORT}.wheel-records.json" <<EOF
+{
+  "format": "goldencheetah-python-wheel-records-1",
+  "requirements_lock_sha256": "$SBOM_LOCK_SHA256",
+  "packages": [
+    {
+      "artifact": "fixture_package-1.2.3-py3-none-any.whl",
+      "license": "MIT",
+      "metadata_path": "opt/python3.11/lib/python3.11/site-packages/fixture_package-1.2.3.dist-info/METADATA",
+      "metadata_sha256": "$SBOM_PYTHON_METADATA_SHA256",
+      "name": "fixture-package",
+      "record_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "runtime_libraries": [],
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "version": "1.2.3"
+    }
+  ]
+}
+EOF
+SBOM_ONE="$TEMP_DIR/one.cdx.json"
+SBOM_TWO="$TEMP_DIR/two.cdx.json"
+SBOM_ENABLED="$TEMP_DIR/enabled.cdx.json"
+SBOM_BUILD_CONFIG="$TEMP_DIR/sbom-gcconfig.pri"
+SBOM_ENABLED_CONFIG="$TEMP_DIR/sbom-enabled-gcconfig.pri"
+SBOM_PACKAGE_INDEX="$TEMP_DIR/sbom-package-index.json"
+SBOM_TRANSFORMATIONS="$TEMP_DIR/sbom-transformations.json"
+cat >"$SBOM_BUILD_CONFIG" <<'EOF'
+GSL_INCLUDES = /usr/include
+GSL_LIBS = -lgsl -lgslcblas -lm
+EOF
+cat >"$SBOM_ENABLED_CONFIG" <<'EOF'
+GSL_INCLUDES = /usr/include
+GSL_LIBS = -lgsl -lgslcblas -lm
+SRMIO_INSTALL = /usr/local
+D2XX_INCLUDE = ../D2XX/release
+EOF
+SBOM_FIXTURE_SHA256=$(sha256sum "$SBOM_APPDIR/usr/lib/libfixture.so" | cut -d' ' -f1)
+SBOM_LIBSECRET_SHA256=$(sha256sum "$SBOM_APPDIR/usr/lib/libsecret-1.so.0.0.0" | cut -d' ' -f1)
+SBOM_QT_SHA256=$(sha256sum "$SBOM_APPDIR/usr/lib/libQt6Core.so.6.8.3" | cut -d' ' -f1)
+cat >"$SBOM_PACKAGE_INDEX" <<EOF
+{
+  "format": "goldencheetah-runtime-fixture-index-1",
+  "libraries": [
+    {
+      "license": "LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only",
+      "name": "Qt6Core",
+      "path": "usr/lib/libQt6Core.so.6.8.3",
+      "provenance": "fixture-qt-spdx",
+      "purl": "pkg:generic/qt6core@6.8.3",
+      "sha256": "$SBOM_QT_SHA256",
+      "version": "6.8.3"
+    },
+    {
+      "license": "MIT",
+      "name": "fixture-runtime",
+      "path": "usr/lib/libfixture.so",
+      "provenance": "dpkg:fixture-runtime=9.1.0",
+      "purl": "pkg:deb/ubuntu/fixture-runtime@9.1.0",
+      "sha256": "$SBOM_FIXTURE_SHA256",
+      "version": "9.1.0"
+    },
+    {
+      "license": "LGPL-2.1-or-later",
+      "name": "libsecret-1-0",
+      "path": "usr/lib/libsecret-1.so.0.0.0",
+      "provenance": "dpkg:libsecret-1-0=0.21.4-1",
+      "purl": "pkg:deb/ubuntu/libsecret-1-0@0.21.4-1",
+      "sha256": "$SBOM_LIBSECRET_SHA256",
+      "version": "0.21.4-1"
+    }
+  ]
+}
+EOF
+cat >"$SBOM_TRANSFORMATIONS" <<'EOF'
+{
+  "format": "goldencheetah-transformed-runtime-1",
+  "libraries": []
+}
+EOF
+SBOM_TOOL_DIR="$TEMP_DIR/sbom-tools"
+SBOM_QT_ROOT="$TEMP_DIR/sbom-qt"
+mkdir "$SBOM_TOOL_DIR"
+mkdir -p "$SBOM_QT_ROOT/sbom"
+cat >"$SBOM_QT_ROOT/sbom/fixture-6.8.3.spdx.json" <<'EOF'
+{
+  "spdxVersion": "SPDX-2.3",
+  "packages": [],
+  "files": [],
+  "relationships": []
+}
+EOF
+cat >"$SBOM_TOOL_DIR/pkg-config" <<'EOF'
+#!/bin/sh
+test "$1" = --modversion && test "$2" = libsecret-1 || exit 64
+printf '%s\n' 0.21.4
+EOF
+cat >"$SBOM_TOOL_DIR/qmake" <<'EOF'
+#!/bin/sh
+test "$1" = -query && test "$2" = QT_INSTALL_PREFIX || exit 64
+printf '%s\n' "${GC_TEST_SBOM_QT_ROOT:?}"
+EOF
+chmod +x "$SBOM_TOOL_DIR/pkg-config" "$SBOM_TOOL_DIR/qmake"
+SBOM_TEST_RUNTIME_GENERATOR="$TEMP_DIR/test-runtime-provenance.py"
+cat >"$SBOM_TEST_RUNTIME_GENERATOR" <<EOF
+#!/usr/bin/env python3
+import hashlib
+import importlib.util
+import os
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location(
+    "runtime_provenance", r"$RUNTIME_PROVENANCE_GENERATOR"
+)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+arguments = module.parse_arguments()
+fixture_path = Path(os.environ["GC_INTERNAL_TEST_FIXTURE_INDEX"]).resolve()
+expected = os.environ["GC_INTERNAL_TEST_FIXTURE_SHA256"]
+if hashlib.sha256(fixture_path.read_bytes()).hexdigest() != expected:
+    raise ValueError("internal fixture authorization mismatch")
+fixture = module._load_test_fixture_package_index(
+    fixture_path, arguments.appdir.resolve(), expected
+)
+module.atomic_write(
+    arguments.output,
+    module.build_document(arguments, fixture_index=fixture),
+)
+EOF
+SBOM_ORIGINAL_PATH=$PATH
+export GC_INTERNAL_TEST_FIXTURE_INDEX="$SBOM_PACKAGE_INDEX"
+GC_INTERNAL_TEST_FIXTURE_SHA256=$(sha256sum \
+    "$SBOM_PACKAGE_INDEX" | cut -d' ' -f1)
+export GC_INTERNAL_TEST_FIXTURE_SHA256
+export GC_TEST_SBOM_QT_ROOT="$SBOM_QT_ROOT"
+PATH="$SBOM_TOOL_DIR:$PATH"
+export PATH
+if GC_RUNTIME_PROVENANCE_FIXTURE_INDEX="$SBOM_PACKAGE_INDEX" \
+GC_RUNTIME_PROVENANCE_TEST_MODE=false \
+GC_TEST_SBOM_QT_ROOT="$SBOM_QT_ROOT" \
+PATH="$SBOM_TOOL_DIR:$PATH" create_appimage_sbom \
+    "$SBOM_APPDIR" "$BASE_MANIFEST" "$SBOM_BUILD_CONFIG" "$SBOM_LOCK" \
+    "$SBOM_PIP_REPORT" "$SBOM_ONE" "$SBOM_GENERATOR" \
+    "$RUNTIME_PROVENANCE_GENERATOR" "$SBOM_TRANSFORMATIONS" \
+    >/dev/null 2>&1; then
+    fail "production SBOM generation accepted a fixture package index"
+fi
+GC_TEST_SBOM_QT_ROOT="$SBOM_QT_ROOT" \
+PATH="$SBOM_TOOL_DIR:$PATH" create_appimage_sbom \
+    "$SBOM_APPDIR" "$BASE_MANIFEST" "$SBOM_BUILD_CONFIG" "$SBOM_LOCK" \
+    "$SBOM_PIP_REPORT" "$SBOM_ONE" "$SBOM_GENERATOR" \
+    "$SBOM_TEST_RUNTIME_GENERATOR" "$SBOM_TRANSFORMATIONS"
+GC_TEST_SBOM_QT_ROOT="$SBOM_QT_ROOT" \
+PATH="$SBOM_TOOL_DIR:$PATH" create_appimage_sbom \
+    "$SBOM_APPDIR" "$BASE_MANIFEST" "$SBOM_BUILD_CONFIG" "$SBOM_LOCK" \
+    "$SBOM_PIP_REPORT" "$SBOM_TWO" "$SBOM_GENERATOR" \
+    "$SBOM_TEST_RUNTIME_GENERATOR" "$SBOM_TRANSFORMATIONS"
+GC_TEST_SBOM_QT_ROOT="$SBOM_QT_ROOT" \
+PATH="$SBOM_TOOL_DIR:$PATH" create_appimage_sbom \
+    "$SBOM_APPDIR" "$BASE_MANIFEST" "$SBOM_ENABLED_CONFIG" "$SBOM_LOCK" \
+    "$SBOM_PIP_REPORT" "$SBOM_ENABLED" "$SBOM_GENERATOR" \
+    "$SBOM_TEST_RUNTIME_GENERATOR" "$SBOM_TRANSFORMATIONS"
+cmp "$SBOM_ONE" "$SBOM_TWO" ||
+    fail "identical AppDirs produced different SBOM data"
+validate_appimage_sbom "$SBOM_ONE" ||
+    fail "generated CycloneDX SBOM did not pass strict validation"
+if [ -n "${GC_TEST_SBOM_OUTPUT:-}" ] &&
+   [ "${GC_TEST_PYTHON_LOCK_INSTALL:-false}" != true ]; then
+    install -m 0644 "$SBOM_ONE" "$GC_TEST_SBOM_OUTPUT"
+fi
+python3 - "$SBOM_ONE" "$REVISION_B" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    document = json.load(stream)
+assert document["bomFormat"] == "CycloneDX"
+assert document["specVersion"] == "1.5"
+assert document["metadata"]["component"]["version"] == sys.argv[2]
+assert document["metadata"]["component"]["licenses"] == [
+    {"license": {"id": "GPL-2.0-or-later"}}
+]
+components = document["components"]
+names = {component["name"] for component in components}
+assert "fixture-package" in names
+assert "usr/lib/libfixture.so" in names
+assert "lib" in names
+assert "linuxdeployqt" in names
+assert "appimagetool" in names
+assert "srmio" not in names
+assert "d2xx-linux" not in names
+assert "Qt6Core" in names
+assert "libsecret-1-0" in names
+qt = next(component for component in components
+          if component["name"] == "Qt6Core")
+assert qt["version"] == "6.8.3"
+assert qt["purl"] == "pkg:generic/qt6core@6.8.3"
+libsecret = next(component for component in components
+                 if component["name"] == "libsecret-1-0")
+assert libsecret["version"] == "0.21.4-1"
+assert libsecret["purl"] == "pkg:deb/ubuntu/libsecret-1-0@0.21.4-1"
+runtime = {
+    next(prop["value"] for prop in component["properties"]
+         if prop["name"] == "goldencheetah:runtime-path"): component
+    for component in components
+    if any(prop == {
+        "name": "goldencheetah:role",
+        "value": "identified-runtime-dependency",
+    } for prop in component.get("properties", []))
+}
+assert set(runtime) == {
+    "usr/lib/libQt6Core.so.6.8.3",
+    "usr/lib/libfixture.so",
+    "usr/lib/libsecret-1.so.0.0.0",
+}
+for component in runtime.values():
+    assert component["version"]
+    assert component["licenses"]
+    assert any(prop["name"] == "goldencheetah:provenance"
+               and prop["value"] for prop in component["properties"])
+fixture = next(component for component in components
+               if component["name"] == "fixture-package")
+assert fixture["hashes"] == [{
+    "alg": "SHA-256",
+    "content": "a" * 64,
+}]
+PY
+python3 - "$SBOM_ENABLED" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    document = json.load(stream)
+components = {component["name"]: component for component in document["components"]}
+assert components["srmio"]["licenses"] == [{"license": {"id": "MIT"}}]
+assert components["d2xx-linux"]["licenses"] == [
+    {"license": {"name": "FTDI D2XX Driver License"}}
+]
+PY
+python3 - "$SBOM_ONE" "$TEMP_DIR/broken-reference.cdx.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    document = json.load(stream)
+document["dependencies"][0]["dependsOn"].append("missing:component")
+with open(sys.argv[2], "w", encoding="utf-8") as stream:
+    json.dump(document, stream, indent=2, sort_keys=True)
+    stream.write("\n")
+PY
+if validate_appimage_sbom "$TEMP_DIR/broken-reference.cdx.json"; then
+    fail "SBOM validation accepted an unresolved dependency reference"
+fi
+if grep -Fq -- "$TEMP_DIR" "$SBOM_ONE"; then
+    fail "AppImage SBOM contains a build-machine path"
+fi
+
+cp "$SBOM_PIP_REPORT" "$TEMP_DIR/unreviewed-pip-report.json"
+sed -i 's/"a\{64\}"/"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"/' \
+    "$TEMP_DIR/unreviewed-pip-report.json"
+if create_appimage_sbom \
+    "$SBOM_APPDIR" "$BASE_MANIFEST" "$SBOM_BUILD_CONFIG" "$SBOM_LOCK" \
+    "$TEMP_DIR/unreviewed-pip-report.json" \
+    "$TEMP_DIR/unreviewed.cdx.json" "$SBOM_GENERATOR" \
+        "$SBOM_TEST_RUNTIME_GENERATOR" "$SBOM_TRANSFORMATIONS" \
+    >/dev/null 2>&1; then
+    fail "SBOM accepted a Python artifact outside the reviewed lock"
+fi
+
+printf 'outside payload\n' >"$TEMP_DIR/outside-payload"
+ln -s "$TEMP_DIR/outside-payload" "$SBOM_APPDIR/absolute-link"
+if create_appimage_sbom \
+    "$SBOM_APPDIR" "$BASE_MANIFEST" "$SBOM_BUILD_CONFIG" "$SBOM_LOCK" \
+    "$SBOM_PIP_REPORT" "$TEMP_DIR/absolute.cdx.json" "$SBOM_GENERATOR" \
+        "$SBOM_TEST_RUNTIME_GENERATOR" "$SBOM_TRANSFORMATIONS" \
+    >/dev/null 2>&1; then
+    fail "SBOM accepted an absolute AppDir symlink"
+fi
+unlink "$SBOM_APPDIR/absolute-link"
+ln -s ../outside-payload "$SBOM_APPDIR/escaping-link"
+if create_appimage_sbom \
+    "$SBOM_APPDIR" "$BASE_MANIFEST" "$SBOM_BUILD_CONFIG" "$SBOM_LOCK" \
+    "$SBOM_PIP_REPORT" "$TEMP_DIR/escaping.cdx.json" "$SBOM_GENERATOR" \
+        "$SBOM_TEST_RUNTIME_GENERATOR" "$SBOM_TRANSFORMATIONS" \
+    >/dev/null 2>&1; then
+    fail "SBOM accepted an AppDir symlink escaping the payload"
+fi
+unlink "$SBOM_APPDIR/escaping-link"
+ln -s missing-target "$SBOM_APPDIR/dangling-link"
+if create_appimage_sbom \
+    "$SBOM_APPDIR" "$BASE_MANIFEST" "$SBOM_BUILD_CONFIG" "$SBOM_LOCK" \
+    "$SBOM_PIP_REPORT" "$TEMP_DIR/dangling.cdx.json" "$SBOM_GENERATOR" \
+        "$SBOM_TEST_RUNTIME_GENERATOR" "$SBOM_TRANSFORMATIONS" \
+    >/dev/null 2>&1; then
+    fail "SBOM accepted a dangling AppDir symlink"
+fi
+unlink "$SBOM_APPDIR/dangling-link"
+PATH=$SBOM_ORIGINAL_PATH
+export PATH
+unset GC_INTERNAL_TEST_FIXTURE_INDEX GC_INTERNAL_TEST_FIXTURE_SHA256 \
+    GC_TEST_SBOM_QT_ROOT
+
+for packager in "$LOCAL_PACKAGER" "$DEV_PACKAGER"; do
     bash -n "$packager"
-    assert_contains "$packager" \
-        '. Resources/linux/AppImagePackagingSupport.sh'
-    assert_contains "$packager" 'install_embedded_python'
-    assert_contains "$packager" 'run_packaging_appimage'
-    assert_contains "$packager" \
-        'require_strava_oauth_build ./GoldenCheetah'
+    assert_contains "$packager" 'reproduce-appimage.sh'
+    assert_contains "$packager" 'GC_APPIMAGE_OAUTH_POLICY=configured'
+    assert_contains "$packager" 'verify_appimage_manifest'
+    assert_contains "$packager" 'verify_appimage_sbom'
 done
 
-for packager in "$LOCAL_PACKAGER" "$CI_PACKAGER" "$DEV_PACKAGER"; do
-    bash -n "$packager"
+for packager in "$CI_PACKAGE_PASS"; do
     assert_contains "$packager" \
         'require_strava_oauth_appimage'
     assert_contains "$packager" \
@@ -1204,7 +2239,15 @@ for packager in "$LOCAL_PACKAGER" "$CI_PACKAGER" "$DEV_PACKAGER"; do
         'finalize_appimage_manifest'
     assert_contains "$packager" \
         'verify_appimage_manifest'
+    assert_contains "$packager" \
+        'create_appimage_sbom'
+    assert_contains "$packager" \
+        'verify_appimage_sbom'
 done
+assert_contains "$CI_PACKAGE_PASS" \
+    'require_unconfigured_strava_oauth_build "$BINARY"'
+assert_contains "$CI_PACKAGE_PASS" \
+    'require_unconfigured_strava_oauth_appimage'
 assert_contains "$DEV_PACKAGER" 'promote_appimage_release'
 
 if grep -Fq 'python3.7' "$LOCAL_PACKAGER"; then
@@ -1212,15 +2255,24 @@ if grep -Fq 'python3.7' "$LOCAL_PACKAGER"; then
 fi
 assert_contains "$LOCAL_PACKAGER" 'write_source_revision'
 assert_contains "$LOCAL_PACKAGER" \
-    'run_packaging_appimage "./$FINAL_NAME" --version'
+    'run_packaging_appimage "$output" --version'
 assert_contains "$DEV_CONFIG" \
     '# DEFINES += GC_STRAVA_CLIENT_ID=\\\"your_client_id\\\"'
 assert_contains "$DEV_CONFIG" \
-    '# DEFINES += GC_STRAVA_CLIENT_SECRET=\\\"your_client_secret\\\"'
+    'src/Core/GeneratedSecrets.h'
+if grep -Eq 'DEFINES.*(SECRET|API_KEY|BASIC_AUTH)' \
+    "$DEV_CONFIG" "$REPO_ROOT/src/gcconfig.pri.in"; then
+    fail "tracked qmake configuration still recommends compiler-line secrets"
+fi
 assert_contains "$MAIN_SOURCE" \
     '--goldencheetah-linux-keychain-status'
 assert_contains "$MAIN_SOURCE" \
     '--goldencheetah-build-provenance'
+assert_contains "$MAIN_SOURCE" \
+    '--goldencheetah-gui-smoke'
+assert_contains "$MAIN_SOURCE" \
+    'goldencheetah_gui_smoke=main-window-ready'
+assert_contains "$MAIN_SOURCE" 'scheduleGuiSmokeCompletion'
 assert_contains "$MAIN_SOURCE" \
     'configureBundledLinuxRuntime'
 assert_contains "$LIBSECRET_SOURCE" \
@@ -1228,6 +2280,277 @@ assert_contains "$LIBSECRET_SOURCE" \
 assert_contains "$APPVEYOR_INSTALL" 'libsecret-1-dev'
 assert_contains "$APPVEYOR_INSTALL" 'libgpg-error-dev'
 assert_contains "$APPVEYOR_INSTALL" 'pkg-config'
+bash -n "$APPVEYOR_INSTALL"
+bash -n "$APPVEYOR_MACOS_INSTALL"
+assert_contains "$APPVEYOR_INSTALL" \
+    'SRMIO_REVISION=b444b8747317c41607d468ae71a0ecd36a94332e'
+assert_contains "$APPVEYOR_MACOS_INSTALL" \
+    'SRMIO_REVISION=b444b8747317c41607d468ae71a0ecd36a94332e'
+assert_contains "$APPVEYOR_INSTALL" \
+    'SRMIO_SHA256=16359481488476df47de3cd1499787d3947036c06bd9d9b632f6e8a63e654186'
+assert_contains "$APPVEYOR_MACOS_INSTALL" \
+    'SRMIO_SHA256=16359481488476df47de3cd1499787d3947036c06bd9d9b632f6e8a63e654186'
+assert_contains "$APPVEYOR_INSTALL" 'SRMIO_WORK=$(mktemp -d)'
+assert_contains "$APPVEYOR_MACOS_INSTALL" 'SRMIO_WORK=$(mktemp -d)'
+assert_contains "$APPVEYOR_INSTALL" '--strip-components 1'
+assert_contains "$APPVEYOR_MACOS_INSTALL" '--strip-components 1'
+assert_contains "$APPVEYOR_INSTALL" \
+    'D2XX_SHA256=537fc9db6e1eea110dd7661982dc49a28de22a4514b588e8a33a21110a5b6b4c'
+assert_contains "$APPVEYOR_MACOS_INSTALL" \
+    'D2XX_SHA256=f59d18c11ecf5dedf0fcbdef24f18823c122ff24189a8e204479f9c408af7704'
+assert_contains "$APPVEYOR_MACOS_INSTALL" 'brew reinstall --formula "$formula"'
+assert_contains "$APPVEYOR_MACOS_PACKAGER" \
+    'codesign --verify --deep --strict GoldenCheetah.app'
+assert_contains "$APPVEYOR_MACOS_PACKAGER" 'validate-payload.py'
+assert_contains "$APPVEYOR_MACOS_PACKAGER" '--forbidden-prefix "$HOME"'
+assert_contains "$APPVEYOR_CONFIG" '  - Ubuntu2204'
+assert_contains "$CI_PACKAGE_PASS" \
+    'require_qt_offscreen_appimage_on_glibc 2.35'
+test -x "$CI_PACKAGE_PASS" ||
+    fail "production AppImage pass script is missing or not executable"
+bash -n "$CI_PACKAGE_PASS"
+for production_step in \
+    'create_appimage_build_manifest' \
+    'run_linuxdeployqt_with_keychain_probe' \
+    'install_embedded_python' \
+    'install_linux_keychain_runtime' \
+    'create_appimage_sbom' \
+    'normalize_appdir_mtimes' \
+    'run_packaging_appimage' \
+    'finalize_appimage_manifest' \
+    'verify_appimage_manifest' \
+    'verify_appimage_sbom'; do
+    assert_contains "$CI_PACKAGE_PASS" "$production_step"
+done
+test -x "$CI_BUILD_PASS" ||
+    fail "independent AppImage build pass is missing or not executable"
+test -x "$CI_REPRODUCE" ||
+    fail "AppImage reproduction driver is missing or not executable"
+bash -n "$CI_BUILD_PASS" "$CI_REPRODUCE"
+assert_contains "$CI_PACKAGER" 'reproduce-appimage.sh'
+assert_contains "$CI_REPRODUCE" 'for label in one two'
+assert_contains "$CI_REPRODUCE" 'ELF_ONE_SHA256=$(sha256sum'
+assert_contains "$CI_REPRODUCE" '! cmp -s -- "$ELF_ONE" "$ELF_TWO"'
+assert_contains "$CI_REPRODUCE" 'compare_appimage_reproduction'
+assert_contains "$CI_BUILD_PASS" 'make -j"$BUILD_JOBS" sub-src'
+assert_contains "$CI_PACKAGE_PASS" 'if [ ! -x "$IMAGE" ]'
+if grep -Fq '[ ! -x ./GoldenCheetah*.AppImage ]' "$CI_PACKAGE_PASS"; then
+    fail "Linux release packaging still validates AppImage output with a glob"
+fi
+assert_contains "$APPVEYOR_CONFIG" 'GClinuxAppImageSbom'
+assert_contains "$SECRETS_SCRIPT" \
+    '[Parameter(Position=0)] [string]$f = "src/Core/GeneratedSecrets.h"'
+if grep -Fq 'DEFINES +=' "$SECRETS_SCRIPT"; then
+    fail "CI secrets are still placed in compiler definitions"
+fi
+assert_contains "$SECRETS_SCRIPT" 'ConvertTo-CEncodedUtf8'
+assert_contains "$SECRETS_HEADER" '__has_include("GeneratedSecrets.h")'
+git -C "$REPO_ROOT" check-ignore -q src/Core/GeneratedSecrets.h ||
+    fail "generated CI secret header is not ignored by Git"
+git -C "$REPO_ROOT" check-ignore -q \
+    src/Core/GeneratedSecrets.h.tmp-fixture ||
+    fail "generated CI secret temporary files are not ignored by Git"
+[ -r "$SECRETS_TEST" ] || fail "missing generated-secret behavior test"
+[ -r "$WINDOWS_PACKAGING_TEST" ] ||
+    fail "missing Windows packaging behavior test"
+[ -x "$CI_RELEASE_GATES_TEST" ] || fail "missing executable CI release-gate test"
+"$CI_RELEASE_GATES_TEST"
+python3 "$QT_ARCHIVE_TEST"
+python3 "$SAFE_EXTRACTION_TEST"
+python3 "$MACOS_PACKAGING_TEST"
+python3 "$SBOM_PROVENANCE_TEST"
+python3 "$UNCONFIGURED_OAUTH_TEST"
+python3 "$WINDOWS_OPENSSL_TEST"
+bash "$DIAGNOSTIC_OAUTH_TEST"
+if command -v pwsh >/dev/null 2>&1; then
+    pwsh -NoLogo -NoProfile -File "$SECRETS_TEST" \
+        -RepositoryRoot "$REPO_ROOT"
+    pwsh -NoLogo -NoProfile -File "$WINDOWS_PACKAGING_TEST" \
+        -RepositoryRoot "$REPO_ROOT"
+fi
+assert_contains "$APPVEYOR_CONFIG" 'RELEASE_INPUTS_VERIFIED: "false"'
+assert_contains "$APPVEYOR_CONFIG" \
+    "Set-AppveyorBuildVariable -Name 'PUBLISH_BINARIES' -Value false"
+assert_contains "$APPVEYOR_CONFIG" '      RELEASE_INPUTS_VERIFIED: true'
+if grep -Fq "Set-AppveyorBuildVariable -Name 'PUBLISH_BINARIES' -Value true" \
+    "$APPVEYOR_CONFIG"; then
+    fail "AppVeyor mutable jobs can enable release publication"
+fi
+if grep -Eq 'util/add_secrets\.ps1|GC_.*(SECRET|API_KEY|BASIC_AUTH).*:' \
+    "$APPVEYOR_CONFIG"; then
+    fail "AppVeyor public artifacts still receive reusable provider credentials"
+fi
+assert_contains "$GITHUB_CI_CONFIG" '  contents: read'
+assert_contains "$GITHUB_CI_CONFIG" '  RELEASE_INPUTS_VERIFIED: "false"'
+assert_contains "$GITHUB_CI_CONFIG" \
+    "if: env.RELEASE_INPUTS_VERIFIED == 'true' && contains("
+assert_contains "$GITHUB_CI_CONFIG" \
+    'uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'
+if grep -Eq '\$\{\{[[:space:]]*secrets\.|util/add_secrets\.ps1' \
+    "$GITHUB_CI_CONFIG"; then
+    fail "GitHub public artifacts still receive reusable provider credentials"
+fi
+if grep -Eq '^[[:space:]]*-[[:space:]]+C:\\(LIBS|JOM|R|Python|tools\\vcpkg)' \
+    "$APPVEYOR_CONFIG"; then
+    fail "AppVeyor still restores unauthenticated Windows dependency trees"
+fi
+[ -r "$UBUNTU_SNAPSHOT" ] || fail "missing Ubuntu release snapshot sources"
+assert_contains "$UBUNTU_SNAPSHOT" \
+    '[snapshot=20260801T000000Z]'
+[ -r "$DEV_UBUNTU_SNAPSHOT" ] ||
+    fail "missing development Ubuntu snapshot sources"
+assert_contains "$DEV_UBUNTU_SNAPSHOT" \
+    '[snapshot=20260801T000000Z]'
+assert_contains "$DEV_DOCKERFILE" \
+    'FROM ubuntu:24.04@sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b'
+assert_contains "$DEV_DOCKERFILE" 'ARG UBUNTU_SNAPSHOT=20260801T000000Z'
+if grep -Fq 'Acquire::https::Verify-Peer "false"' "$DEV_DOCKERFILE"; then
+    fail "development container disables TLS peer verification"
+fi
+assert_contains "$DEV_DOCKERFILE" 'verify-apt-snapshot.py'
+assert_contains "$DEV_DOCKERFILE" '--series noble'
+assert_contains "$DEV_DOCKERFILE" 'apt-get update --error-on=any'
+assert_contains "$DEV_DOCKERFILE" 'autoconf'
+assert_contains "$DEV_DOCKERFILE" 'automake'
+assert_contains "$DEV_DOCKERFILE" 'libtool'
+assert_contains "$APPVEYOR_INSTALL" 'UBUNTU_SNAPSHOT=20260801T000000Z'
+assert_contains "$APPVEYOR_INSTALL" \
+    'sudo find /etc/apt/sources.list.d'
+assert_contains "$APPVEYOR_INSTALL" \
+    'sudo rm -rf /var/lib/apt/lists/*'
+assert_contains "$APPVEYOR_INSTALL" \
+    'sudo "$APT_GET" update --error-on=any -qq'
+assert_contains "$APPVEYOR_INSTALL" 'QT_BUILD_VERSION=6.8.3'
+assert_contains "$APPVEYOR_INSTALL" \
+    'PYTHON_SOURCE_SHA256=f4de1b10bd6c70cbb9fa1cd71fc5038b832747a74ee59d599c69ce4846defb50'
+if grep -Eq 'add-apt-repository|apt-key' "$APPVEYOR_INSTALL"; then
+    fail "Linux release setup still adds a moving package repository"
+fi
+assert_contains "$APPVEYOR_MACOS_INSTALL" \
+    'R_PACKAGE_SHA256=c239e97c3659169447c50474827d9af79176fff67a34249fcd413d8da6ef2414'
+assert_contains "$APPVEYOR_MACOS_INSTALL" \
+    'test "$("$(brew --prefix "python@${PYTHON_VERSION}")/bin/python${PYTHON_VERSION}" --version)" = "Python 3.11.15"'
+assert_contains "$APPVEYOR_MACOS_PACKAGER" '--require-hashes'
+assert_contains "$APPVEYOR_MACOS_PACKAGER" \
+    'requirements-appimage.lock'
+assert_contains "$APPVEYOR_WINDOWS_PACKAGER" \
+    "\$pythonSha256 = '009d6bf7e3b2ddca3d784fa09f90fe54336d5b60f0e0f305c37f400bf83cfd3b'"
+assert_contains "$APPVEYOR_WINDOWS_PACKAGER" \
+    "\$getPipSha256 = 'fb24e693bab954209a063d90953621412ccad4a500905a726286e038f508ddf6'"
+assert_contains "$APPVEYOR_WINDOWS_PACKAGER" '--require-hashes'
+assert_contains "$APPVEYOR_WINDOWS_PACKAGER" '--no-compile'
+assert_contains "$APPVEYOR_WINDOWS_PACKAGER" 'Assert-NoFileContainsText'
+assert_contains "$APPVEYOR_WINDOWS_PACKAGER" \
+    "Remove-Item -LiteralPath \$pythonRoot -Recurse -Force"
+assert_contains "$APPVEYOR_MACOS_PACKAGER" 'PYTHON_PACKAGE_STAGE=$(mktemp -d)'
+assert_contains "$APPVEYOR_MACOS_PACKAGER" '--no-compile'
+assert_contains "$APPVEYOR_MACOS_PACKAGER" \
+    'rm -rf "$SITE_PACKAGES"'
+if grep -Fq 'Test-DependencyCache' "$APPVEYOR_WINDOWS_INSTALL" ||
+   grep -Fq '.gc-dependency-complete' "$APPVEYOR_WINDOWS_INSTALL" \
+       "$APPVEYOR_WINDOWS_PACKAGER"; then
+    fail "Windows release acquisition still trusts a marker-based payload"
+fi
+assert_contains "$APPVEYOR_WINDOWS_INSTALL" \
+    'Remove-Item -LiteralPath $Root -Recurse -Force'
+if grep -Eq 'pip(3|\.exe| -m pip)?.*install.*--upgrade|pip install --upgrade' \
+    "$APPVEYOR_MACOS_INSTALL" "$APPVEYOR_MACOS_PACKAGER" \
+    "$APPVEYOR_WINDOWS_PACKAGER"; then
+    fail "release packaging still upgrades Python tooling from a moving target"
+fi
+if grep -Fq 'releases/download/continuous' "$SUPPORT"; then
+    fail "AppImage packaging still uses a moving tool release"
+fi
+if grep -Eq 'git (clone|fetch).*(github.com/rclasen/srmio|SRMIO_REVISION)' \
+    "$APPVEYOR_INSTALL" "$APPVEYOR_MACOS_INSTALL"; then
+    fail "release setup still executes an unverified SRMIO checkout"
+fi
+
+if [ "${GC_TEST_PYTHON_LOCK_INSTALL:-false}" = true ]; then
+    for iteration in 1 2; do
+        PYTHON_LOCK_INSTALL="$TEMP_DIR/python-lock-install-$iteration"
+        mkdir -p "$PYTHON_LOCK_INSTALL/appdir"
+        (
+            cd "$PYTHON_LOCK_INSTALL"
+            PYTHON_LOCK_REPORT="$PYTHON_LOCK_INSTALL/pip-report.json"
+            (umask 077 && : >"$PYTHON_LOCK_REPORT")
+            install_embedded_python \
+                "$APPIMAGE_REQUIREMENTS" "$PYTHON_LOCK_INSTALL/appdir" \
+                "$PYTHON_LOCK_REPORT"
+            if find "$PYTHON_LOCK_INSTALL/appdir" -type f -name '*.pyc' \
+                -print -quit | grep -q .; then
+                fail "embedded Python payload contains path-dependent bytecode"
+            fi
+            if grep -R -F -l -- "$PYTHON_LOCK_INSTALL" \
+                "$PYTHON_LOCK_INSTALL/appdir" >/dev/null 2>&1; then
+                fail "embedded Python payload retains its build path"
+            fi
+            [ -x "$PYTHON_LOCK_INSTALL/appdir/opt/python3.11/bin/f2py" ] ||
+                fail "relocatable embedded Python console script is missing"
+            PYTHONDONTWRITEBYTECODE=1 \
+                "$PYTHON_LOCK_INSTALL/appdir/opt/python3.11/bin/f2py" -v \
+                    >/dev/null
+            PYTHONDONTWRITEBYTECODE=1 \
+                "$PYTHON_LOCK_INSTALL/appdir/opt/python3.11/bin/python3.11" -c \
+                'import importlib_metadata, jinja2, lmfit, numpy, pandas, plotly, scipy'
+            if find "$PYTHON_LOCK_INSTALL/appdir" -type f -name '*.pyc' \
+                -print -quit | grep -q .; then
+                fail "embedded Python smoke generated bytecode in the payload"
+            fi
+            create_appimage_sbom \
+                "$PYTHON_LOCK_INSTALL/appdir" "$BASE_MANIFEST" \
+                "$SBOM_BUILD_CONFIG" "$APPIMAGE_REQUIREMENTS" \
+                "$PYTHON_LOCK_REPORT" \
+                "$PYTHON_LOCK_INSTALL/runtime.cdx.json" "$SBOM_GENERATOR" \
+                "$RUNTIME_PROVENANCE_GENERATOR" "$SBOM_TRANSFORMATIONS"
+            validate_appimage_sbom "$PYTHON_LOCK_INSTALL/runtime.cdx.json"
+        )
+    done
+    if ! cmp "$TEMP_DIR/python-lock-install-1/runtime.cdx.json" \
+        "$TEMP_DIR/python-lock-install-2/runtime.cdx.json"; then
+        if [ -n "${GC_TEST_SBOM_OUTPUT:-}" ]; then
+            install -m 0644 \
+                "$TEMP_DIR/python-lock-install-1/runtime.cdx.json" \
+                "${GC_TEST_SBOM_OUTPUT}.first"
+            install -m 0644 \
+                "$TEMP_DIR/python-lock-install-2/runtime.cdx.json" \
+                "${GC_TEST_SBOM_OUTPUT}.second"
+        fi
+        diff -u \
+            "$TEMP_DIR/python-lock-install-1/runtime.cdx.json" \
+            "$TEMP_DIR/python-lock-install-2/runtime.cdx.json" |
+            sed -n '1,120p' >&2 || true
+        fail "repeated locked Python payload builds produced different SBOM data"
+    fi
+    if [ -n "${GC_TEST_SBOM_OUTPUT:-}" ]; then
+        install -m 0644 \
+            "$TEMP_DIR/python-lock-install-1/runtime.cdx.json" \
+            "$GC_TEST_SBOM_OUTPUT"
+    fi
+fi
+
+if [ "${GC_TEST_SRMIO_SOURCE_BUILD:-false}" = true ]; then
+    SRMIO_CHECK="$TEMP_DIR/srmio-source-build"
+    mkdir -p "$SRMIO_CHECK/source" "$SRMIO_CHECK/build"
+    printf 'hostile stale cache\n' >"$SRMIO_CHECK/$SRMIO_SOURCE_FILE"
+    download_verified_file \
+        "$SRMIO_SOURCE_URL" "$SRMIO_CHECK/$SRMIO_SOURCE_FILE" \
+        "$SRMIO_SOURCE_SHA256"
+    tar xzf "$SRMIO_CHECK/$SRMIO_SOURCE_FILE" \
+        --strip-components=1 -C "$SRMIO_CHECK/source"
+    (
+        cd "$SRMIO_CHECK/source"
+        sh genautomake.sh
+    )
+    (
+        cd "$SRMIO_CHECK/build"
+        "$SRMIO_CHECK/source/configure" \
+            --disable-shared --enable-static
+        make --silent -j2
+    )
+    [ -f "$SRMIO_CHECK/build/.libs/libsrmio.a" ] ||
+        fail "reviewed SRMIO source did not produce the static library"
+fi
 
 bash -n "$SUPPORT"
 echo "PASS: AppImage Python runtime and packaging helpers are consistent"

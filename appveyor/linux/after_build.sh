@@ -1,114 +1,36 @@
 #!/bin/bash
-set -ev
+set -euo pipefail
 
-### This script should be run from GoldenCheetah src directory after build
-cd src
-if [ ! -x ./GoldenCheetah ]; then
-    echo "Build GoldenCheetah and execute from distribution src"
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+REPOSITORY_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd -P)
+PACKAGE_PASS="$SCRIPT_DIR/package-appimage-pass.sh"
+REPRODUCE_APPIMAGE="$SCRIPT_DIR/reproduce-appimage.sh"
+REPRODUCTION_OUTPUT=$(mktemp -d)
+IMAGE="$REPOSITORY_ROOT/GoldenCheetah_v3.8_x64.AppImage"
+MANIFEST="$IMAGE.manifest"
+SBOM="$IMAGE.sbom.cdx.json"
+
+cleanup_reproduction()
+{
+    rm -rf -- "$REPRODUCTION_OUTPUT"
+}
+trap cleanup_reproduction EXIT
+
+if [ ! -x "$REPRODUCE_APPIMAGE" ] || [ -L "$REPRODUCE_APPIMAGE" ]; then
+    echo "Production AppImage reproduction driver is unavailable or unsafe." >&2
     exit 1
 fi
 
-. Resources/linux/AppImagePackagingSupport.sh
-STRAVA_OAUTH_STATUS=$(require_strava_oauth_build ./GoldenCheetah)
-echo "$STRAVA_OAUTH_STATUS"
-BUILD_MANIFEST=$(mktemp)
-trap 'rm -f -- "$BUILD_MANIFEST"' EXIT
-create_appimage_build_manifest \
-    "$(cd .. && pwd -P)" ./GoldenCheetah \
-    "$STRAVA_OAUTH_STATUS" "$BUILD_MANIFEST"
+# shellcheck source=/dev/null
+. "$REPOSITORY_ROOT/src/Resources/linux/AppImagePackagingSupport.sh"
 
-if [ "${PYTHON_VERSION:-}" != "$PYTHON_APPIMAGE_SERIES" ]; then
-    echo "Build Python ${PYTHON_VERSION:-unset} does not match packaged Python $PYTHON_APPIMAGE_SERIES"
-    exit 1
-fi
+rm -f -- "$IMAGE" "$MANIFEST" "$SBOM"
+"$REPRODUCE_APPIMAGE" "$REPOSITORY_ROOT" "$REPRODUCTION_OUTPUT"
 
-### Create a clean AppDir and start populating
-rm -rf appdir
-mkdir -p appdir
+install -m 0755 "$REPRODUCTION_OUTPUT/GoldenCheetah.AppImage" "$IMAGE"
+install -m 0600 "$REPRODUCTION_OUTPUT/GoldenCheetah.AppImage.manifest" "$MANIFEST"
+install -m 0644 \
+    "$REPRODUCTION_OUTPUT/GoldenCheetah.AppImage.sbom.cdx.json" "$SBOM"
 
-# Executable
-cp GoldenCheetah appdir
-install_appimage_build_manifest "$BUILD_MANIFEST" appdir
-
-# Desktop file
-cat >appdir/GoldenCheetah.desktop <<EOF
-[Desktop Entry]
-Version=1.0
-Type=Application
-Name=GoldenCheetah
-Comment=Cycling Power Analysis Software.
-Exec=GoldenCheetah
-Icon=gc
-Categories=Science;Sports;
-EOF
-
-# Icon
-cp Resources/images/gc.png appdir/
-
-### Download current version of linuxdeployqt
-download_file "$LINUXDEPLOYQT_URL" "$LINUXDEPLOYQT_FILE"
-chmod a+x "$LINUXDEPLOYQT_FILE"
-
-### Deploy to appdir
-run_linuxdeployqt_with_keychain_probe \
-    ./GoldenCheetah appdir \
-    "./$LINUXDEPLOYQT_FILE" appdir/GoldenCheetah \
-    -verbose=2 -bundle-non-qt-libs \
-    -exclude-libs=libqsqlmysql,libqsqlpsql,libqsqlmimer,libqsqlodbc,libnss3,libnssutil3,libxcb-dri3.so.0 \
-    -unsupported-allow-new-glibc
-
-# linuxdeployqt only detects the desktop xcb backend.
-install_qt_offscreen_plugin qmake appdir
-
-# Add Python and core modules
-install_embedded_python "Python/requirements.txt" "appdir"
-
-# Add the dynamically loaded Linux credential-vault runtime and licenses
-install_linux_keychain_runtime \
-    "appdir" "../contrib/qtkeychain/COPYING"
-
-# Fix RPATH on QtWebEngineProcess and copy missing resources
-patchelf --set-rpath '$ORIGIN/../lib' appdir/libexec/QtWebEngineProcess
-
-# Get Qt resources directory from qmake
-QT_INSTALL_PREFIX=$(qmake -query QT_INSTALL_PREFIX 2>/dev/null || echo "")
-if [ -n "$QT_INSTALL_PREFIX" ] && [ -d "${QT_INSTALL_PREFIX}/resources" ]; then
-    cp -r "${QT_INSTALL_PREFIX}/resources" appdir/
-else
-    echo "Warning: Could not find Qt resources directory"
-fi
-
-# Generate AppImage
-download_file "$APPIMAGETOOL_URL" "$APPIMAGETOOL_FILE"
-chmod a+x "$APPIMAGETOOL_FILE"
-run_packaging_appimage "./$APPIMAGETOOL_FILE" appdir
-
-### Cleanup
-rm -f "$LINUXDEPLOYQT_FILE"
-rm -f "$APPIMAGETOOL_FILE"
-rm -rf appdir
-
-if [ ! -x ./GoldenCheetah*.AppImage ]; then
-    echo "AppImage not generated, check the errors"
-    exit 1
-fi
-
-echo "Renaming AppImage file to version number ready for deploy"
-mv GoldenCheetah*.AppImage ../GoldenCheetah_v3.8_x64.AppImage
-STRAVA_OAUTH_STATUS=$(require_strava_oauth_appimage \
-    ../GoldenCheetah_v3.8_x64.AppImage)
-echo "$STRAVA_OAUTH_STATUS"
-KEYCHAIN_RUNTIME_STATUS=$(require_linux_keychain_appimage \
-    ../GoldenCheetah_v3.8_x64.AppImage)
-echo "$KEYCHAIN_RUNTIME_STATUS"
-OFFSCREEN_RUNTIME_STATUS=$(require_qt_offscreen_appimage \
-    ../GoldenCheetah_v3.8_x64.AppImage)
-echo "$OFFSCREEN_RUNTIME_STATUS"
-finalize_appimage_manifest \
-    ../GoldenCheetah_v3.8_x64.AppImage "$BUILD_MANIFEST" \
-    ../GoldenCheetah_v3.8_x64.AppImage.manifest
-verify_appimage_manifest \
-    ../GoldenCheetah_v3.8_x64.AppImage \
-    ../GoldenCheetah_v3.8_x64.AppImage.manifest
-
-exit
+verify_appimage_manifest "$IMAGE" "$MANIFEST"
+verify_appimage_sbom "$IMAGE" "$SBOM"

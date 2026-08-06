@@ -19,24 +19,28 @@
 
 // Web based services that offer an API typically require you to sign
 // up to a terms of service and will provide an access token or 'secret'
-// to use when making calls. 
+// to use when making calls.
 //
 // Because these are registered to the GoldenCheetah project they are
 // not made public. If you want to build with these services enabled
-// you will need to request a token from the provider and add a line
-// to your gcconfig.pri file off the form:
-//      DEFINES += GC_STRAVA_CLIENT_SECRET="__XXXX_SECRET__"
+// you will need to request a token from the provider and create a private
+// Core/GeneratedSecrets.h with the required definitions.
 //
-// This file is modified by the AppVeyor build scripts to replace the
-// __XXXX_SECRET__ token with the secret gem held within the AppVeyor
-// build environment.
+// util/add_secrets.ps1 generates that ignored header with encoded string
+// literals so secret values are not placed in compiler command lines or
+// diagnostics.
 //
 // ********* DO NOT MODIFY THIS FILE EXCEPT TO ADD NEW ************
-// ********* API TOKENS SINCE THE DEFINES ARE UPDATED  ************
-// ********* AUTOMATICALLY BY THE TRAVIS BUILD SYSTEM  ************
+// ********* API TOKEN PLACEHOLDERS AND DEFAULTS.      ************
 
 #ifndef _GC_SECRETS_H
 #define _GC_SECRETS_H 1
+
+#if defined(__has_include)
+#  if __has_include("GeneratedSecrets.h")
+#    include "GeneratedSecrets.h"
+#  endif
+#endif
 
 #ifndef GC_CLOUD_OPENDATA_SECRET
 #define OPENDATA_DISABLE

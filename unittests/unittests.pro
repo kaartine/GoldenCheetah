@@ -41,9 +41,10 @@ equals(GC_UNITTESTS, active) {
 			   Train/trainDbVersionSafety \
 			   Train/libraryTransactionSafety \
 			   Train/libraryParserSerialize \
-			   Core/measuresAtomicSave \
-			   Core/plannedActivityFileStager \
-			   Core/rideCacheAtomicSave \
+				   Core/measuresAtomicSave \
+				   Core/plannedActivityFileStager \
+				   Core/linkedActivitySaveCleanup \
+				   Core/rideCacheAtomicSave \
 			   Core/rideCacheCallbackGuard \
 			   Core/rideCacheSaveSnapshot \
 			   Core/rideCachePerformance \
@@ -121,6 +122,8 @@ equals(GC_UNITTESTS, active) {
 	linux:SUBDIRS += Build/appImagePackaging
 	!win32:SUBDIRS += Train/usbXpressSafety
 	CONFIG += ordered
+	CI_ENABLED_TESTS = $$SUBDIRS
+	write_file($$OUT_PWD/ci-enabled-tests.txt, CI_ENABLED_TESTS)
 } else {
 	message("Unittests are disabled; to enable copy unittests/unittests.pri.in to unittests/unittests.pri")
 }

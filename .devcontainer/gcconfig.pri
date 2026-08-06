@@ -19,7 +19,6 @@ QMAKE_CXXFLAGS += -O0 -g
 # Video playback is unrelated to the BLE proof of concept.
 DEFINES += GC_VIDEO_NONE
 
-# A source build needs its own Strava application credentials. Keep secrets out
-# of this tracked file and add the two defines to src/gcconfig.pri locally.
+# A source build needs its own Strava application credentials. Put the client
+# secret in the ignored src/Core/GeneratedSecrets.h, never in qmake DEFINES.
 # DEFINES += GC_STRAVA_CLIENT_ID=\\\"your_client_id\\\"
-# DEFINES += GC_STRAVA_CLIENT_SECRET=\\\"your_client_secret\\\"

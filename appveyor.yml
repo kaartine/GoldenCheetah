@@ -5,6 +5,10 @@ branches:
   only:
     - master
 
+skip_branch_with_pr: true
+
+# AppVeyor does not expose immutable VM image digests. These jobs remain useful
+# for credential-free CI artifacts, but the release gate below stays closed.
 image:
   - Visual Studio 2022
   - Ubuntu2204
@@ -12,36 +16,13 @@ image:
 
 environment:
   PYTHON_VERSION: "3.11"
-  GC_CLOUD_OPENDATA_SECRET:
-    secure: 6fPhBiHKvJeOMqXdHGqpkPS+NpUDMczEXjedx8GcjbHr82ISX+gwSuXfOUDLq/S9
-  GC_NOKIA_CLIENT_SECRET:
-    secure: pvPWraDplrKeRNamt5MKga8fzDmI2+zgFx+y3lsQE6gmBadZU2xkTIc/xCaP7UPv2erNCmKivfMOh2NIcRmqvIHynDoifNVy2P61KyG5v3E=
-  GC_DROPBOX_CLIENT_SECRET:
-    secure: 7pCVnVEKKmSU4SZN6IFqUw==
-  GC_STRAVA_CLIENT_SECRET:
-    secure: n3cMS1yy709xhSnTeWABMsoAIkJzy5euh3Pw4ehv0BzszJKoWkypF0cyW8RXSm3M
-  GC_CYCLINGANALYTICS_CLIENT_SECRET:
-    secure: UY+m3YypNNLUzKyGdrLw8xdCvxuQWRZi9EHS3j1ubLC4qyRL7iEVW6ubumfdh6gT
-  GC_CLOUD_DB_BASIC_AUTH:
-    secure: OEBetrOnXjsY7wN8hYqmMj6482oDORmAmCq8PI7mfnfiWE6Z4jB676JvgdNlP98q
-  GC_CLOUD_DB_APP_NAME:
-    secure: bpkyuw/BsJw0OrpuBqQwZ46CHbhkbmcjcMttVtfJoZU=
-  GC_POLARFLOW_CLIENT_SECRET:
-    secure: h2JdlC1i4QOmwpkz+Xxbrw==
-  GC_SPORTTRACKS_CLIENT_SECRET:
-    secure: n6a8nJgqMyg+VsVeoIIR8TFzxyDFVi2w/ggetQk5agY=
-  GC_RWGPS_API_KEY:
-    secure: uUtCyF5ByZ1VYJOztUngIA==
-  GC_NOLIO_CLIENT_ID:
-    secure: /OFVjEBwU7o3SItIQVf/YlJ8XErxneXIT2N0JyPMSXR1tCbdZVWixMHpqKNWoNk4
-  GC_NOLIO_SECRET:
-    secure: mmMksvVnfBiXufBDn2gAhQY53n0J9BokSCtDY51uU918QJ/LL4XOojtJp5tMFn8T7ugyDhNASpqZXiK55vxSD53vm+tjufpfzppKEeh93Babvc/VrndLB1X/RZCRUQTR6rka05fYl4e0eBzP1H091A==
-  GC_XERT_CLIENT_SECRET:
-    secure: /1rVLT8LyJCZ4xNJ5W+NtAcZ1rtKaUjW9SYm/T3gHoc=
-  GC_AZUM_CLIENT_SECRET:
-    secure: 2ZpXsA3TQv1zftYVyZSF6f83ftCzza+K22ZX1doj7Yc/5dmGl1bnsSeVChJgJ8lQ2fRPYpdmun9cjqwcrtG/zXTTsYuTvYWegHz/4Y0u6Mg=
-  GC_TRAINERDAY_API_KEY:
-    secure: nDgxUdgLkp0+gaxKRCaAVD5WYAl9pLmOnZ9JLSx3ulqT346nieakd02V3Q7dZYEU
+  QT_WINDOWS_VERSION: "6.8.3"
+  QT_LINUX_VERSION: "6.8.3"
+  QT_MACOS_VERSION: "6.5.3"
+  # AppVeyor VM images and their preinstalled compilers/Qt SDKs have no
+  # immutable digest. Jobs may build test artifacts, but cannot deploy them as
+  # releases until the platform is migrated to a verified toolchain image.
+  RELEASE_INPUTS_VERIFIED: "false"
 
 init:
 
@@ -50,12 +31,13 @@ init:
 - cmd: set QTDIR=C:\Qt\6.8\msvc2022_64
 - cmd: set PATH=%QTDIR%\bin;%PATH%
 - cmd: qmake --version
+- ps: if ($isWindows -and ((qmake -query QT_VERSION) -ne $env:QT_WINDOWS_VERSION)) { throw "Unexpected Windows Qt version" }
 # Setup MSVC - VS 2022
 - cmd: call c:\"Program Files"\"Microsoft Visual Studio"\2022\Community\VC\Auxiliary\Build\vcvarsall.bat amd64
 # Setup NSIS
 - cmd: set PATH=%PATH%;C:\"Program Files (x86)"\NSIS
 # Setup Python
-- cmd: set PATH=C:\Python311-x64\Scripts\;C:\Python311-x64\;%PATH%
+- cmd: set PATH=C:\Python313-x64\Scripts\;C:\Python313-x64\;%PATH%
 - cmd: python --version
 # Setup JOM
 - cmd: set PATH=%PATH%;C:\JOM\;
@@ -72,28 +54,21 @@ init:
       export QTDIR=$HOME/Qt/6.8
       export LD_LIBRARY_PATH=$QTDIR:$LD_LIBRARY_PATH
       export PATH=$QTDIR/bin:$PATH
-      qmake --version
+      test "$(qmake -query QT_VERSION)" = "$QT_LINUX_VERSION"
     else
       export OS_NAME=macos
       # Setup QT 6.5
       export QTDIR=$HOME/Qt/6.5/macos
       export PATH=$QTDIR/bin:$PATH
-      qmake --version
+      test "$(qmake -query QT_VERSION)" = "$QT_MACOS_VERSION"
       # Setup Xcode 14.2
       sudo xcode-select -s /Applications/Xcode-14.2.0.app
+      test "$(xcodebuild -version | sed -n '1p')" = "Xcode 14.2"
     fi
 
 cache:
-- C:\LIBS -> appveyor.yml
-- C:\JOM
-- C:\R -> appveyor.yml
-- C:\Python -> src\Python\requirements.txt, appveyor.yml
-- c:\tools\vcpkg\installed\
-- qwt -> qwt/qwtconfig.pri.in, appveyor.yml
-- srmio -> appveyor.yml
-- D2XX
-- src\Python\SIP\release\sip_lib.lib -> src\Python\SIP\goldencheetah.sip
-- src\Python\SIP\libsip_lib.a -> src\Python\SIP\goldencheetah.sip
+# Release dependency trees are reconstructed from pinned inputs outside the
+# source worktree. Mutable extracted trees are never restored from a cache.
 
 install:
 
@@ -125,8 +100,7 @@ before_build:
 - cmd: lupdate src\src.pro
 - sh: lupdate src/src.pro
 
-# Patch Secrets.h (Windows / Linux / macOS)
-- ps: util/add_secrets.ps1
+# Public CI artifacts are intentionally built without reusable provider secrets.
 
 build_script:
 
@@ -144,9 +118,13 @@ build_script:
 
 after_build:
 
-# Windows/macOS/Linux: set PUBLISH_BINARIES according to commit message
+# Run Windows packaging regressions before the production packager so a
+# packaging precondition failure cannot make its own regression unreachable.
+- ps: if ($isWindows) { ./appveyor/windows/run-build-regressions.ps1 }
+
+# Mutable AppVeyor jobs never publish. A future verified release pipeline must
+# replace this hard gate rather than toggling a project environment variable.
 - ps: Set-AppveyorBuildVariable -Name 'PUBLISH_BINARIES' -Value false
-- ps: if ($env:APPVEYOR_REPO_COMMIT_MESSAGE_EXTENDED -Match "\[publish binaries\]") { Set-AppveyorBuildVariable -Name 'PUBLISH_BINARIES' -Value true }
 
 # Windows
 - ps: if ($isWindows) { ./appveyor/windows/after_build.ps1 }
@@ -155,6 +133,10 @@ after_build:
 - sh: bash appveyor/$OS_NAME/after_build.sh
 
 test_script:
+
+# Run platform-native packaging behavior tests explicitly. The qmake test
+# project only registers the shell AppImage suite on Linux.
+- sh: if ! $CI_LINUX; then bash appveyor/macos/run-build-regressions.sh; fi
 
 # Windows
 - cmd: python .github\scripts\run-tests.py --build-tool jom
@@ -187,6 +169,8 @@ artifacts:
 # macOS
 - path: GoldenCheetah_v3.8_x64.dmg
   name: GCmacOSpackage
+- path: GoldenCheetah_v3.8_x64.macos-provenance.json
+  name: GCmacOSprovenance
 - path: GCversionMacOS.txt
   name: GCversionMacOS
 # Linux
@@ -194,6 +178,8 @@ artifacts:
   name: GClinuxAppImage
 - path: GoldenCheetah_v3.8_x64.AppImage.manifest
   name: GClinuxAppImageManifest
+- path: GoldenCheetah_v3.8_x64.AppImage.sbom.cdx.json
+  name: GClinuxAppImageSbom
 - path: GCversionLinux.txt
   name: GCversionLinux
 
@@ -205,10 +191,11 @@ deploy:
     tag: snapshot
     release: 'Snapshot Builds'
     description: ''
-    artifact: GCwindowsInstaller, GCversionWindows, GCmacOSpackage, GCversionMacOS, GClinuxAppImage, GClinuxAppImageManifest, GCversionLinux
+    artifact: GCwindowsInstaller, GCversionWindows, GCmacOSpackage, GCmacOSprovenance, GCversionMacOS, GClinuxAppImage, GClinuxAppImageManifest, GClinuxAppImageSbom, GCversionLinux
     draft: false
     prerelease: true
     force_update: true
     on:
       PUBLISH_BINARIES: true
+      RELEASE_INPUTS_VERIFIED: true
       APPVEYOR_REPO_NAME: "GoldenCheetah/GoldenCheetah"
