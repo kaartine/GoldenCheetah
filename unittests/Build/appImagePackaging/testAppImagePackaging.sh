@@ -2332,7 +2332,7 @@ assert_contains "$CI_REPRODUCE" 'for label in one two'
 assert_contains "$CI_REPRODUCE" 'ELF_ONE_SHA256=$(sha256sum'
 assert_contains "$CI_REPRODUCE" '! cmp -s -- "$ELF_ONE" "$ELF_TWO"'
 assert_contains "$CI_REPRODUCE" 'compare_appimage_reproduction'
-assert_contains "$CI_BUILD_PASS" 'make -j"$BUILD_JOBS" sub-src'
+assert_contains "$CI_BUILD_PASS" '"$MAKE_COMMAND" -j"$BUILD_JOBS" sub-src'
 assert_contains "$CI_PACKAGE_PASS" 'if [ ! -x "$IMAGE" ]'
 if grep -Fq '[ ! -x ./GoldenCheetah*.AppImage ]' "$CI_PACKAGE_PASS"; then
     fail "Linux release packaging still validates AppImage output with a glob"
