@@ -407,6 +407,7 @@ private:
 #define GC_NOKIA_REFRESH_TOKEN          "<athlete-private>nokia_refresh_token"
 
 //Strava
+#define GC_STRAVA_CLIENT_CREDENTIALS    "<athlete-private>strava/client_credentials"
 #define GC_STRAVA_TOKEN                 "<athlete-private>strava_token"
 #define GC_STRAVA_REFRESH_TOKEN         "<athlete-private>strava_refresh_token"
 #define GC_STRAVA_PENDING_TRANSACTION   "<athlete-private>strava_pending_transaction"

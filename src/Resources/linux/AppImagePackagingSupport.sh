@@ -516,7 +516,7 @@ require_qt_offscreen_appimage_on_glibc()
     printf '%s on glibc %s\n' "$status" "$host_glibc"
 }
 
-strava_oauth_build_status()
+strava_oauth_build_fallback_status()
 (
     local executable=$1
     local allow_script_entrypoint=${2:-false}
@@ -598,36 +598,51 @@ strava_oauth_build_status()
         echo "GoldenCheetah build-status command failed." >&2
         return 1
     fi
-    local configured_report unavailable_report
-    configured_report=$(
+    local fallback_report runtime_only_report
+    fallback_report=$(
         printf '%s\n' \
             "goldencheetah_build_status=1" \
             "application=GoldenCheetah" \
             "strava_support=enabled" \
-            "strava_oauth=configured"
+            "strava_oauth=runtime_credentials" \
+            "strava_compile_fallback=configured"
         printf x
     )
-    configured_report=${configured_report%x}
-    unavailable_report=$(
+    fallback_report=${fallback_report%x}
+    runtime_only_report=$(
         printf '%s\n' \
             "goldencheetah_build_status=1" \
             "application=GoldenCheetah" \
             "strava_support=enabled" \
-            "strava_oauth=unavailable"
+            "strava_oauth=runtime_credentials" \
+            "strava_compile_fallback=unavailable"
         printf x
     )
-    unavailable_report=${unavailable_report%x}
-    if [ "$report" = "$configured_report" ]; then
-        echo "Strava OAuth: configured"
+    runtime_only_report=${runtime_only_report%x}
+    if [ "$report" = "$fallback_report" ]; then
+        echo "configured"
         return
     fi
-    if [ "$report" = "$unavailable_report" ]; then
-        echo "Strava OAuth: unavailable (credentials not configured)"
+    if [ "$report" = "$runtime_only_report" ]; then
+        echo "unavailable"
         return
     fi
     echo "GoldenCheetah returned an invalid build-status report." >&2
     return 1
 )
+
+strava_oauth_build_status()
+{
+    local fallback_status
+
+    fallback_status=$(strava_oauth_build_fallback_status "$@") || return
+    if [ "$fallback_status" != "configured" ] &&
+       [ "$fallback_status" != "unavailable" ]; then
+        echo "GoldenCheetah returned an invalid Strava fallback status." >&2
+        return 1
+    fi
+    echo "Strava OAuth: runtime credentials supported"
+}
 
 require_strava_oauth_build()
 {
@@ -635,10 +650,10 @@ require_strava_oauth_build()
     local status
 
     status=$(strava_oauth_build_status "$executable") || return
-    if [ "$status" != "Strava OAuth: configured" ]; then
+    if [ "$status" != "Strava OAuth: runtime credentials supported" ]; then
         echo "$status" >&2
-        echo "Refusing to package a release without configured" \
-            "Strava OAuth credentials." >&2
+        echo "Refusing to package a release without runtime" \
+            "Strava OAuth credential support." >&2
         return 1
     fi
     echo "$status"
@@ -649,26 +664,31 @@ require_unconfigured_strava_oauth_build()
     local executable=$1
     local status
 
-    status=$(strava_oauth_build_status "$executable") || return
-    if [ "$status" != \
-      "Strava OAuth: unavailable (credentials not configured)" ]; then
+    status=$(strava_oauth_build_fallback_status "$executable") || return
+    if [ "$status" != "unavailable" ]; then
         echo "$status" >&2
         echo "Refusing to publish a credential-free diagnostic artifact" \
-            "that embeds Strava OAuth credentials." >&2
+            "with a compile-time Strava OAuth fallback." >&2
         return 1
     fi
-    echo "$status"
+    echo "Strava OAuth compile-time fallback: unavailable"
 }
 
 strava_oauth_appimage_status()
 (
     local image=$1
+    local status_kind=${2:-support}
     local extract_dir=
     local original_working_dir
     local APPDIR= APPIMAGE= OWD=
     local LD_LIBRARY_PATH= LD_PRELOAD=
 
     original_working_dir=$(pwd -P) || return
+    if [ "$status_kind" != "support" ] &&
+       [ "$status_kind" != "fallback" ]; then
+        echo "Unknown Strava OAuth AppImage status kind." >&2
+        return 2
+    fi
 
     cleanup_extract_dir()
     {
@@ -712,10 +732,17 @@ strava_oauth_appimage_status()
         return 1
         ;;
     esac
-    APPDIR="$app_root" \
-        APPIMAGE="$image_path" \
-        OWD="$original_working_dir" \
-        strava_oauth_build_status "$app_root/AppRun" true
+    if [ "$status_kind" = "support" ]; then
+        APPDIR="$app_root" \
+            APPIMAGE="$image_path" \
+            OWD="$original_working_dir" \
+            strava_oauth_build_status "$app_root/AppRun" true
+    else
+        APPDIR="$app_root" \
+            APPIMAGE="$image_path" \
+            OWD="$original_working_dir" \
+            strava_oauth_build_fallback_status "$app_root/AppRun" true
+    fi
 )
 
 require_strava_oauth_appimage()
@@ -724,10 +751,10 @@ require_strava_oauth_appimage()
     local status
 
     status=$(strava_oauth_appimage_status "$image") || return
-    if [ "$status" != "Strava OAuth: configured" ]; then
+    if [ "$status" != "Strava OAuth: runtime credentials supported" ]; then
         echo "$status" >&2
-        echo "Refusing to publish an AppImage without configured" \
-            "Strava OAuth credentials." >&2
+        echo "Refusing to publish an AppImage without runtime" \
+            "Strava OAuth credential support." >&2
         return 1
     fi
     echo "$status"
@@ -738,15 +765,14 @@ require_unconfigured_strava_oauth_appimage()
     local image=$1
     local status
 
-    status=$(strava_oauth_appimage_status "$image") || return
-    if [ "$status" != \
-      "Strava OAuth: unavailable (credentials not configured)" ]; then
+    status=$(strava_oauth_appimage_status "$image" fallback) || return
+    if [ "$status" != "unavailable" ]; then
         echo "$status" >&2
         echo "Refusing to publish a credential-free diagnostic AppImage" \
-            "that embeds Strava OAuth credentials." >&2
+            "with a compile-time Strava OAuth fallback." >&2
         return 1
     fi
-    echo "$status"
+    echo "Strava OAuth compile-time fallback: unavailable"
 }
 
 file_matches_sha256()

@@ -1,6 +1,8 @@
 # platform kind project
 all aux Build/ciTestRunner
+all aux Build/publicReleaseCredentials
 all qt Core/athleteMigrationSafety
+all qt Core/sessionBoundaries
 all qt Core/credentialSettings
 all qt Core/dataFilterResources
 all qt Core/dataFilterSafety
@@ -11,10 +13,12 @@ all qt Cloud/oauthCallbackPolicy
 all qt Cloud/oauthTokenReplyController
 all qt Cloud/stravaAccountRemoval
 all qt Cloud/stravaAuthenticatedSession
+all qt Cloud/stravaClientCredentials
 all qt Cloud/stravaOAuthPolicy
 all qt Cloud/stravaApiReplyPolicy
 all qt Cloud/stravaTokenRefresh
 all qt Cloud/stravaTokenPublication
+all qt Cloud/stravaCredentialDurability
 all qt Cloud/openDataEndpointPolicy
 all qt Cloud/openDataCaptureUtils
 all qt Cloud/openDataCaptureStateMachine
@@ -28,6 +32,7 @@ all qt Charts/powerHistSelection
 all qt Charts/voronoiSafety
 all qt Train/libraryImportFileStager
 all qt Train/stravaRoutesClient
+all qt Train/stravaRoutesDownloadPipeline
 all qt Train/webDownloadImportPolicy
 all qt Train/trainDbVersionSafety
 all qt Train/libraryTransactionSafety

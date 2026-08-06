@@ -3999,6 +3999,7 @@ const QSet<QString> &credentialKeys()
         QStringLiteral(GC_WITHINGS_SECRET),
         QStringLiteral(GC_NOKIA_TOKEN),
         QStringLiteral(GC_NOKIA_REFRESH_TOKEN),
+        QStringLiteral(GC_STRAVA_CLIENT_CREDENTIALS),
         QStringLiteral(GC_STRAVA_TOKEN),
         QStringLiteral(GC_STRAVA_REFRESH_TOKEN),
         QStringLiteral(GC_STRAVA_PENDING_TRANSACTION),

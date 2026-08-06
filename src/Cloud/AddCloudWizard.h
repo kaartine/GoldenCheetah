@@ -159,12 +159,24 @@ class AddAuth : public QWizardPage
         QLineEdit *user;
         QLabel *passLabel;
         QLineEdit *pass;
+        QLabel *stravaClientIdLabel;
+        QLineEdit *stravaClientId;
+        QLabel *stravaClientSecretLabel;
+        QLineEdit *stravaClientSecret;
+        QLabel *stravaRemoveCredentialsLabel;
+        QPushButton *stravaRemoveCredentials;
         QLabel *authLabel;
         QPushButton *auth;
         QLabel *tokenLabel;
         QLabel *token;
         QLabel *messageLabel;
         QLabel *message;
+        bool stravaCredentialRecordPresent = false;
+        bool stravaCredentialVaultReadable = true;
+
+        bool persistStravaClientCredentials();
+        void removeStravaClientCredentials();
+        QString stravaAccountKey() const;
 
 };
 

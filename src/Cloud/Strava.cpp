@@ -25,6 +25,7 @@
 #include "NetworkReplyWait.h"
 #include "StravaAccountRemoval.h"
 #include "StravaApiReplyPolicy.h"
+#include "StravaClientCredentials.h"
 #include "StravaCredentialPublisher.h"
 #include "StravaNetworkReply.h"
 #include "StravaOAuthPolicy.h"
@@ -123,8 +124,7 @@ QStringList stravaSensitiveValues(const Strava *service)
             accountKey);
     return {
         authorization.accessToken,
-        authorization.refreshToken,
-        QStringLiteral(GC_STRAVA_CLIENT_SECRET)
+        authorization.refreshToken
     };
 }
 
@@ -284,14 +284,22 @@ Strava::accountDisconnectOperation(
         ? snapshot.refreshToken : QString();
     request.expectedAuthorizationEpoch =
         snapshot.epoch;
-    request.clientId =
-        QStringLiteral(GC_STRAVA_CLIENT_ID);
-    request.clientSecret =
-        QStringLiteral(GC_STRAVA_CLIENT_SECRET);
     request.mode =
         mode == AccountDisconnectMode::LocalOnly
             ? StravaAccountRemoval::Mode::LocalOnly
             : StravaAccountRemoval::Mode::RevokeRemote;
+    if (request.mode ==
+            StravaAccountRemoval::Mode::RevokeRemote) {
+        const StravaClientCredentials::Resolution credentials =
+            StravaClientCredentials::resolveForAccount(
+                request.accountKey);
+        if (credentials.isAvailable()) {
+            request.clientId =
+                credentials.credentials.clientId;
+            request.clientSecret =
+                credentials.credentials.clientSecret;
+        }
+    }
 
     return [request](
         const AccountDisconnectCancellation &cancelled,
@@ -391,6 +399,12 @@ Strava::refreshAccessGrant(
             tr("The Strava account identity is unavailable.");
         return grant;
     }
+    const StravaClientCredentials::Resolution clientCredentials =
+        StravaClientCredentials::resolveForAccount(accountKey);
+    if (!clientCredentials.isAvailable()) {
+        grant.error = clientCredentials.error;
+        return grant;
+    }
     if (!reconcileSharedAuthorizationStatus()) {
         grant.error = tr("The Strava authorization is disconnected.");
         return grant;
@@ -438,13 +452,14 @@ Strava::refreshAccessGrant(
     std::optional<StravaCredentialPublisher::StoredAuthorization>
         externalAuthorization;
     const auto refreshOperation =
-        [this, accountKey, interrupted, &externalAuthorization](
+        [this, accountKey, interrupted, clientCredentials,
+         &externalAuthorization](
                 const QString &effectiveRefreshToken) {
                 StravaTokenRefreshResult result;
                 const StravaOAuthPolicy::TokenRequest tokenRequest =
                     StravaOAuthPolicy::refreshTokenRequest(
-                        QStringLiteral(GC_STRAVA_CLIENT_ID),
-                        QStringLiteral(GC_STRAVA_CLIENT_SECRET),
+                        clientCredentials.credentials.clientId,
+                        clientCredentials.credentials.clientSecret,
                         effectiveRefreshToken);
                 if (!tokenRequest.isValid()) {
                     result.error = tokenRequest.error;
@@ -586,10 +601,6 @@ Strava::refreshAccessGrant(
                 const QByteArray payload = tokenReply->readAll();
                 if (tokenReply->error()
                     != QNetworkReply::NoError) {
-                    printd(
-                        "Got error %s\n",
-                        tokenReply->errorString()
-                            .toStdString().c_str());
                     result.error =
                         StravaOAuthPolicy::tokenFailureMessage(
                             statusCode,
@@ -597,8 +608,8 @@ Strava::refreshAccessGrant(
                             tokenReply->errorString(),
                             payload,
                             {
-                                QStringLiteral(
-                                    GC_STRAVA_CLIENT_SECRET),
+                                clientCredentials.credentials
+                                    .clientSecret,
                                 effectiveRefreshToken
                             });
                     tokenReply->deleteLater();

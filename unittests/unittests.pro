@@ -6,6 +6,7 @@ exists(unittests.pri) {
 
 equals(GC_UNITTESTS, active) {
 	SUBDIRS += Build/ciTestRunner \
+			   Build/publicReleaseCredentials \
 			   Core/athleteMigrationSafety \
 			   Core/sessionBoundaries \
 			   Core/credentialSettings \
@@ -18,6 +19,7 @@ equals(GC_UNITTESTS, active) {
 			   Cloud/oauthTokenReplyController \
 			   Cloud/stravaAccountRemoval \
 			   Cloud/stravaAuthenticatedSession \
+			   Cloud/stravaClientCredentials \
 			   Cloud/stravaOAuthPolicy \
 			   Cloud/stravaApiReplyPolicy \
 			   Cloud/stravaTokenRefresh \

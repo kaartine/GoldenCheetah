@@ -18,6 +18,8 @@ SOURCES = testStravaOAuthPolicy.cpp \
           ../../../src/Cloud/CloudCredentialTransport.cpp \
           ../../../src/Cloud/NetworkReplyWait.cpp \
           ../../../src/Cloud/StravaCredentialDurability.cpp \
+          ../../../src/Cloud/StravaClientCredentials.cpp \
+          ../../../src/Cloud/StravaClientCredentialsSettings.cpp \
           ../../../src/Cloud/StravaCredentialPublisher.cpp \
           ../../../src/Cloud/StravaOAuthPolicy.cpp \
           ../../../src/Cloud/StravaSettingsCommit.cpp \
@@ -33,6 +35,7 @@ HEADERS = ../stravaAccountRemoval/StravaPublisherTestSettings.h \
           ../../../src/Cloud/OAuthTokenReplyController.h \
           ../../../src/Cloud/NetworkReplyWait.h \
           ../../../src/Cloud/StravaCredentialDurability.h \
+          ../../../src/Cloud/StravaClientCredentials.h \
           ../../../src/Cloud/StravaCredentialPublisher.h \
           ../../../src/Cloud/StravaOAuthPolicy.h \
           ../../../src/Cloud/StravaSettingsCommit.h \

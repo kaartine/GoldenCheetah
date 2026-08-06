@@ -259,7 +259,7 @@
     "appveyor/windows/run-build-regressions.ps1": "7375ad60bf3aba53a9ec14bcad43f06516c026efbd4b3ad32c63c4daa28c6995",
     "appveyor/windows/vcpkg.json": "965e28da83be81089b59ae69ec31058de76c6fe15f366e983b338406238a0153",
     "src/Python/requirements-appimage.lock": "7b8c9bb16c8dddbd26352e97650b5313641c7ea71740ba62e70e7c6be7c4883b",
-    "src/Resources/linux/AppImagePackagingSupport.sh": "a89dccc5ca07280f5ca191ec1a5eb3fa29d886f4ee41d590172ff5cff6997e5c",
+    "src/Resources/linux/AppImagePackagingSupport.sh": "7f32f218c8fe183f7850596ac3a6e78cf8d9227f5792bfdda60f8b6fbf22d3cf",
     "src/Resources/linux/MakeAppImageQt6.sh": "100c84b9e2ec734328f07b54f5eb48ad61169a9a505e310c738bce3c4cbbefd5",
     "src/Resources/linux/compute-build-input-identity.py": "d848cf912f4eeda06b3a933e040b0c18c3f80d6f3ba8855929032bd950e97cac",
     "src/Resources/linux/generate-appimage-sbom.py": "6edc5f3ff6758fe180270fd3e2672a2ac6661e50d1a9281d855f7e4406ebbc00",
@@ -269,10 +269,10 @@
     "src/Resources/linux/verify-appimage-payload.py": "18809da68d8571df92af71bfd6110b7921eb7e555142da68d7de433598dba34e",
     "src/Resources/win32/GC3.8-Master-W64-QT6.nsi": "faa9df078f3cce406b1eaf7188c24bc2c8a288958207af55d052f932cefcccde",
     "unittests/Build/appImagePackaging/appImagePackaging.pro": "cfe1447304665c49477eb2c96660eb31f88e254d7a2f8f9fc444cec884bb8a52",
-    "unittests/Build/appImagePackaging/testAppImagePackaging.sh": "6815d01a03d5fef1e78443784a0e4ff43a8929fcbfad236130176f51ee9c1857",
+    "unittests/Build/appImagePackaging/testAppImagePackaging.sh": "6b4c85c00c74399b794a07eb4496e3f3902e22e2aed9c7d600269902329d4f95",
     "unittests/Build/appImagePackaging/testAptSnapshot.py": "224bbc8516616d127452cc13c7d1d4c51b60632123527248abb91dee5ce41a44",
     "unittests/Build/appImagePackaging/testCiReleaseGates.sh": "f27ad24e7a34a857a44e7cb6047bf3e34c99217add327b17a41e8a52cdc24172",
-    "unittests/Build/appImagePackaging/testDiagnosticOAuth.sh": "8fe4cbf752ccaa5617c6c8c9f55b2dac694789ffd4f96f5bb63297e8d82cfcbd",
+    "unittests/Build/appImagePackaging/testDiagnosticOAuth.sh": "2f14458503e751bc33f284b43d1de13450fa9cfd350ad2866d88dd248e19bc3c",
     "unittests/Build/appImagePackaging/testGeneratedSecrets.ps1": "da1b89ff997b473ec30414b6b96fa7ffde6934b88a1ccd04783c9e02b353b418",
     "unittests/Build/appImagePackaging/testImmutableActions.py": "9db6e6099d077f41da21cc360906fb87a1338148f5d97a77145c0576062af73a",
     "unittests/Build/appImagePackaging/testMacOSPackaging.py": "dd319d547616a1465f81811bf1ea96505099b852b68d3eb8865563fe31175024",
@@ -285,8 +285,8 @@
     "unittests/Build/appImagePackaging/testWindowsPackaging.ps1": "79d829a7297d516a60610084ca4acc33a7b84d03f73cd9d1f7672599354cd6fc",
     "unittests/Build/ciTestRunner/ciTestRunner.pro": "2f0afcc5fea392caf3c728960171159afbe1464404a30e9da65256968a284234",
     "unittests/Build/ciTestRunner/testCiTestRunner.py": "9bac7a05cb8578df1abbf828e57908bf085073dad1533da76fbfe138471c4deb",
-    "unittests/ci-required-tests.txt": "b321f1f346ba5ce98759370ddaf3366b891707bd2b7a6907eb1867f9c2ab32c2",
+    "unittests/ci-required-tests.txt": "52dad7aaa8cb360a3a46d95baa06a0945d8e5a11f3ff2d08cbbd778dd68e6688",
     "unittests/unittests.pri.in": "205f84784e7e12a28dcb2dd278a1106fd57df4e31af8a3f809cbc24d921e4e92",
-    "unittests/unittests.pro": "69f2dd16674a04f2bbea6d6ea7af3b09d6be2afcdd232234f2e09d608cdec47f"
+    "unittests/unittests.pro": "bf9751abdcd4f754e1f14cd27f01d019c32658e6b4b09428309f76c629efc242"
   }
 }

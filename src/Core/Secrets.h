@@ -59,7 +59,8 @@
 #define GC_DROPBOX_CLIENT_SECRET "__GC_DROPBOX_CLIENT_SECRET__"
 #endif
 
-//Strava / see also Athlete parameter, default value.
+// Optional Strava fallback for private personal builds. Public builds use
+// per-athlete credentials from the platform credential vault at runtime.
 #ifndef GC_STRAVA_CLIENT_ID
 #define GC_STRAVA_CLIENT_ID    "83" // client id
 #endif

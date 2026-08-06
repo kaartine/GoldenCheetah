@@ -25,6 +25,7 @@
 #include "Colors.h"
 #include "CloudService.h"
 #include "OAuthDialog.h"
+#include "StravaClientCredentials.h"
 
 #include <QMessageBox>
 #include <QPixmap>
@@ -274,6 +275,17 @@ AddAuth::AddAuth(AddCloudWizard *parent) : QWizardPage(parent), wizard(parent)
     pass = new QLineEdit(this);
     pass->setEchoMode(QLineEdit::Password);
     pass->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    stravaClientId = new QLineEdit(this);
+    stravaClientId->setSizePolicy(
+        QSizePolicy::Fixed, QSizePolicy::Fixed);
+    stravaClientSecret = new QLineEdit(this);
+    stravaClientSecret->setEchoMode(QLineEdit::Password);
+    stravaClientSecret->setSizePolicy(
+        QSizePolicy::Fixed, QSizePolicy::Fixed);
+    stravaRemoveCredentials = new QPushButton(
+        tr("Remove"), this);
+    stravaRemoveCredentials->setSizePolicy(
+        QSizePolicy::Fixed, QSizePolicy::Fixed);
     token = new QLabel(this);
     token->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     message = new QLabel(this);
@@ -289,6 +301,10 @@ AddAuth::AddAuth(AddCloudWizard *parent) : QWizardPage(parent), wizard(parent)
     keyLabel = new QLabel(tr("Key (optional)"));
     userLabel = new QLabel(tr("Username"));
     passLabel = new QLabel(tr("Password"));
+    stravaClientIdLabel = new QLabel(tr("Client ID"));
+    stravaClientSecretLabel = new QLabel(tr("Client secret"));
+    stravaRemoveCredentialsLabel = new QLabel(
+        tr("Stored client credentials"));
     authLabel = new QLabel(tr("Authorise"));
     tokenLabel = new QLabel(tr("Token"));
     messageLabel = new QLabel(tr("Message"));
@@ -298,11 +314,22 @@ AddAuth::AddAuth(AddCloudWizard *parent) : QWizardPage(parent), wizard(parent)
     layout->addRow(keyLabel, key);
     layout->addRow(userLabel, user);
     layout->addRow(passLabel, pass);
+    layout->addRow(stravaClientIdLabel, stravaClientId);
+    layout->addRow(
+        stravaClientSecretLabel, stravaClientSecret);
+    layout->addRow(
+        stravaRemoveCredentialsLabel,
+        stravaRemoveCredentials);
     layout->addRow(authLabel, auth);
     layout->addRow(messageLabel, message);
     layout->addRow(tokenLabel, token);
 
     connect(auth, SIGNAL(clicked(bool)), this, SLOT(doAuth()));
+    connect(
+        stravaRemoveCredentials,
+        &QPushButton::clicked,
+        this,
+        &AddAuth::removeStravaClientCredentials);
 
     setLayout(layout);
     setFinalPage(false);
@@ -315,6 +342,8 @@ AddAuth::doAuth()
 
     // no config for token !?
     if (cname == "") return;
+
+    if (!persistStravaClientCredentials()) return;
 
     // update the service values with what the user has edited
     // so they are up-to-date before we perform an OAUTH process
@@ -357,6 +386,9 @@ AddAuth::initializePage()
     key->hide();
     user->hide();
     pass->hide();
+    stravaClientId->hide();
+    stravaClientSecret->hide();
+    stravaRemoveCredentials->hide();
     auth->hide();
     message->hide();
     token->hide();
@@ -365,9 +397,66 @@ AddAuth::initializePage()
     keyLabel->hide();
     userLabel->hide();
     passLabel->hide();
+    stravaClientIdLabel->hide();
+    stravaClientSecretLabel->hide();
+    stravaRemoveCredentialsLabel->hide();
     authLabel->hide();
     messageLabel->hide();
     tokenLabel->hide();
+
+    stravaCredentialRecordPresent = false;
+    stravaCredentialVaultReadable = true;
+    stravaClientId->setEnabled(true);
+    stravaClientSecret->setEnabled(true);
+    stravaRemoveCredentials->setEnabled(false);
+    auth->setEnabled(true);
+    if (wizard->cloudService
+        && wizard->cloudService->id() == QStringLiteral("Strava")) {
+        stravaClientId->show();
+        stravaClientSecret->show();
+        stravaClientIdLabel->show();
+        stravaClientSecretLabel->show();
+        stravaRemoveCredentials->show();
+        stravaRemoveCredentialsLabel->show();
+        const StravaClientCredentials::Resolution runtime =
+            StravaClientCredentials::runtimeForAccount(
+                stravaAccountKey());
+        stravaCredentialRecordPresent =
+            runtime.status
+                == StravaClientCredentials::Status::Available
+            || runtime.status
+                == StravaClientCredentials::Status::
+                    InvalidRuntimeCredentials;
+        stravaCredentialVaultReadable =
+            runtime.status
+                != StravaClientCredentials::Status::VaultUnavailable;
+        stravaRemoveCredentials->setEnabled(
+            stravaCredentialRecordPresent
+            && stravaCredentialVaultReadable);
+        if (runtime.isAvailable()) {
+            stravaClientId->setText(
+                runtime.credentials.clientId);
+            stravaClientSecret->setText(
+                runtime.credentials.clientSecret);
+        } else {
+            stravaClientId->clear();
+            stravaClientSecret->clear();
+        }
+        if (!stravaCredentialVaultReadable) {
+            stravaClientId->setEnabled(false);
+            stravaClientSecret->setEnabled(false);
+            auth->setEnabled(false);
+            messageLabel->show();
+            message->show();
+            message->setText(runtime.error);
+        } else if (runtime.status
+                   == StravaClientCredentials::Status::
+                       InvalidRuntimeCredentials) {
+            messageLabel->show();
+            message->show();
+            message->setText(runtime.error);
+        }
+    }
 
     // clone to do next few steps!
     setSubTitle(QString(tr("%1 Credentials and authorisation")).arg(wizard->cloudService->uiName()));
@@ -429,8 +518,91 @@ AddAuth::validatePage()
     // just extract edited values
     updateServiceSettings();
 
-    // always move on -- for now.
+    return persistStravaClientCredentials();
+}
+
+QString AddAuth::stravaAccountKey() const
+{
+    if (!wizard || !wizard->cloudService) return {};
+    QString accountKey = wizard->cloudService
+        ->property("_gcAthleteName").toString();
+    if (accountKey.isEmpty()
+        && wizard->context
+        && wizard->context->athlete) {
+        accountKey = wizard->context->athlete->cyclist;
+    }
+    return accountKey;
+}
+
+bool AddAuth::persistStravaClientCredentials()
+{
+    if (!wizard || !wizard->cloudService
+        || wizard->cloudService->id()
+            != QStringLiteral("Strava")) {
+        return true;
+    }
+    if (!stravaCredentialVaultReadable) {
+        QMessageBox::warning(
+            this,
+            tr("Authorization Error"),
+            tr("Strava client credentials cannot be accessed in secure storage."));
+        return false;
+    }
+
+    const QString clientId = stravaClientId->text().trimmed();
+    const QString clientSecret = stravaClientSecret->text();
+    const StravaClientCredentials::MutationResult result =
+        StravaClientCredentials::applyUserEditForAccount(
+            stravaAccountKey(), clientId, clientSecret,
+            StravaClientCredentials::UserAction::SaveIfProvided);
+    if (!result.succeeded) {
+        QMessageBox::warning(
+            this,
+            tr("Authorization Error"),
+            result.error);
+        return false;
+    }
+    if (!clientId.isEmpty() || !clientSecret.isEmpty()) {
+        stravaCredentialRecordPresent = true;
+        stravaRemoveCredentials->setEnabled(true);
+    }
     return true;
+}
+
+void AddAuth::removeStravaClientCredentials()
+{
+    if (!stravaCredentialRecordPresent
+        || !stravaCredentialVaultReadable) {
+        return;
+    }
+    if (QMessageBox::question(
+            this,
+            tr("Remove client credentials"),
+            tr("Remove the stored Strava client ID and client secret?"),
+            QMessageBox::Yes | QMessageBox::No,
+            QMessageBox::No) != QMessageBox::Yes) {
+        return;
+    }
+
+    const StravaClientCredentials::MutationResult result =
+        StravaClientCredentials::applyUserEditForAccount(
+            stravaAccountKey(), QString(), QString(),
+            StravaClientCredentials::UserAction::Remove);
+    if (!result.succeeded) {
+        QMessageBox::warning(
+            this,
+            tr("Authorization Error"),
+            result.error);
+        return;
+    }
+
+    stravaCredentialRecordPresent = false;
+    stravaClientId->clear();
+    stravaClientSecret->clear();
+    stravaRemoveCredentials->setEnabled(false);
+    message->clear();
+    message->hide();
+    messageLabel->hide();
 }
 
 void

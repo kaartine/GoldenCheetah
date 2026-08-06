@@ -23,24 +23,22 @@ int main(int argc, char **argv)
         "goldencheetah_build_status=1\n"
         "application=GoldenCheetah\n"
         "strava_support=enabled\n"
-        "strava_oauth=" GC_OAUTH_STATUS "\n",
+        "strava_oauth=runtime_credentials\n"
+        "strava_compile_fallback=" GC_FALLBACK_STATUS "\n",
         stdout
     );
     return 0;
 }
 EOF
 "${CC:-cc}" -std=c99 -Wall -Wextra -Werror \
-    -DGC_OAUTH_STATUS='"configured"' "$TEMPORARY/status.c" \
+    -DGC_FALLBACK_STATUS='"configured"' "$TEMPORARY/status.c" \
     -o "$TEMPORARY/configured"
 "${CC:-cc}" -std=c99 -Wall -Wextra -Werror \
-    -DGC_OAUTH_STATUS='"unavailable"' "$TEMPORARY/status.c" \
+    -DGC_FALLBACK_STATUS='"unavailable"' "$TEMPORARY/status.c" \
     -o "$TEMPORARY/unconfigured"
 
 require_strava_oauth_build "$TEMPORARY/configured" >/dev/null
-if require_strava_oauth_build "$TEMPORARY/unconfigured" >/dev/null 2>&1; then
-    echo "private build gate accepted unavailable OAuth" >&2
-    exit 1
-fi
+require_strava_oauth_build "$TEMPORARY/unconfigured" >/dev/null
 require_unconfigured_strava_oauth_build "$TEMPORARY/unconfigured" >/dev/null
 if require_unconfigured_strava_oauth_build "$TEMPORARY/configured" \
     >/dev/null 2>&1; then
@@ -68,11 +66,7 @@ trusted_appimage_extract()
 
 require_unconfigured_strava_oauth_appimage \
     "$TEMPORARY/fixture.AppImage" >/dev/null
-if require_strava_oauth_appimage "$TEMPORARY/fixture.AppImage" \
-    >/dev/null 2>&1; then
-    echo "private AppImage gate accepted unavailable OAuth" >&2
-    exit 1
-fi
+require_strava_oauth_appimage "$TEMPORARY/fixture.AppImage" >/dev/null
 GC_TEST_OAUTH_ENTRY="$TEMPORARY/configured"
 require_strava_oauth_appimage "$TEMPORARY/fixture.AppImage" >/dev/null
 if require_unconfigured_strava_oauth_appimage \

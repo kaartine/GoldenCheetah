@@ -111,6 +111,8 @@ private:
     CloudService *service;
     QString baseURL; // can be passed, but typically is blank (used by Todays Plan)
     QString clientsecret; // can be passed, but typicall is blank (used by Todays Plan)
+    QString stravaClientId;
+    QString stravaClientSecret;
     QString codeVerifier; // PKCE code_verifier, used by Tredict and other PKCE services
     QStringList tokenRequestSensitiveValues;
     std::uint64_t stravaAuthorizationEpoch = 0;
