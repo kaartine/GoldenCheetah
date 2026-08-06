@@ -71,9 +71,17 @@ Replace-InFile $gcconfig "#DEFINES \+= GC_VIDEO_QT6" "DEFINES += GC_VIDEO_QT6"
 Replace-InFile $gcconfig "#DEFINES \+= GC_WANT_R" "DEFINES += GC_WANT_R"
 
 # 14. Python Support
+$pythonVersion = (& python -c "import sys; print(sys.version.split()[0])").Trim()
+$pythonPrefix = (& python -c "import sys; print(sys.prefix)").Trim()
+$pythonAbi = (& python -c "import sys; print(f'{sys.version_info.major}{sys.version_info.minor}')").Trim()
+if ($LASTEXITCODE -ne 0 -or
+    $pythonVersion -cne '3.13.14' -or
+    $pythonAbi -cne '313') {
+    throw "Unexpected Windows build Python: version=$pythonVersion ABI=$pythonAbi"
+}
 Replace-InFile $gcconfig "#DEFINES \+= GC_WANT_PYTHON" "DEFINES += GC_WANT_PYTHON"
-Replace-InFile $gcconfig "#PYTHONINCLUDES =" "PYTHONINCLUDES = -ICore -I`"$(python -c "import sys; print(sys.prefix)")\include`""
-Replace-InFile $gcconfig "#PYTHONLIBS =" "PYTHONLIBS = -L`"$(python -c "import sys; print(sys.prefix)")\libs`" -lpython311"
+Replace-InFile $gcconfig "#PYTHONINCLUDES =" "PYTHONINCLUDES = -ICore -I`"$pythonPrefix\include`""
+Replace-InFile $gcconfig "#PYTHONLIBS =" "PYTHONLIBS = -L`"$pythonPrefix\libs`" -lpython$pythonAbi"
 
 # 15. GSL Support
 Replace-InFile $gcconfig "#  GSL_INCLUDES = c:\\vcpkg\\installed\\x64-windows\\include" "GSL_INCLUDES = c:\tools\vcpkg\installed\x64-windows\include"

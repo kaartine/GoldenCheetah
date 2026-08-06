@@ -1,5 +1,13 @@
 #!/bin/bash
-set -ev
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+REPOSITORY_ROOT=${1:-$(cd -- "$SCRIPT_DIR/../.." && pwd -P)}
+REPOSITORY_ROOT=$(cd -- "$REPOSITORY_ROOT" && pwd -P)
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/build-input-paths.sh"
+validate_appveyor_build_input_root
+cd "$REPOSITORY_ROOT"
 
 cp qwt/qwtconfig.pri.in qwt/qwtconfig.pri
 cp src/gcconfig.pri.in src/gcconfig.pri
@@ -26,7 +34,7 @@ sed -i "s|#\(DEFINES += GC_WANT_R.*\)|\1|" src/gcconfig.pri
 # Enable CloudDB
 sed -i "s|^#CloudDB|CloudDB|" src/gcconfig.pri
 # D2XX
-sed -i "s|#\(D2XX_INCLUDE =.*\)|\1 ../D2XX/release|" src/gcconfig.pri
+sed -i "s|#\(D2XX_INCLUDE =.*\)|\1 $GC_D2XX_ROOT/release|" src/gcconfig.pri
 # SAMPLERATE
 sed -i "s|#\(SAMPLERATE_INSTALL =\).*|\1 /usr|" src/gcconfig.pri
 # SRMIO

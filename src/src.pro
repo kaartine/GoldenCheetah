@@ -17,6 +17,16 @@ include(gcconfig.pri)
 include(../contrib/qtkeychain/qtkeychain.pri)
 INCLUDEPATH += ../contrib/qtkeychain
 
+unix:!macx:CONFIG(release, debug|release) {
+    !isEmpty(LOCALHEADERS):error("LOCALHEADERS is not allowed in an authenticated release build")
+    !isEmpty(LOCALSOURCES):error("LOCALSOURCES is not allowed in an authenticated release build")
+    GC_BUILD_INPUTS_SHA256_VALUE = $$system(python3 $$shell_quote($$PWD/Resources/linux/compute-build-input-identity.py) $$shell_quote($$PWD/..))
+    !contains(GC_BUILD_INPUTS_SHA256_VALUE, ^[0-9a-f]{64}$) {
+        error("Cannot authenticate ignored release build inputs")
+    }
+    DEFINES += GC_BUILD_INPUTS_SHA256=\\\"$${GC_BUILD_INPUTS_SHA256_VALUE}\\\"
+}
+
 unix {
     GC_BUILD_SOURCE_REVISION_VALUE = $$(GC_SOURCE_REVISION)
     isEmpty(GC_BUILD_SOURCE_REVISION_VALUE) {

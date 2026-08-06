@@ -33,42 +33,14 @@ on:
       - unittests/FileIO/atomicActivitySave/**
       - unittests/FileIO/anchoredFilesystem/**
       - unittests/Planning/**
-  pull_request:
-    paths:
-      - .github/workflows/ridecache-removal-native.yml
-      - contrib/qzip/zip.*
-      - src/Core/LinkedActivityRemovalJournal.*
-      - src/Core/LinkedActivitySaveJournal.*
-      - src/Core/PlannedActivityFileStager.*
-      - src/Core/RideCache*.*
-      - src/Core/Season.*
-      - src/Core/Seasons.*
-      - src/Charts/CalendarSeasonWorkflow.h
-      - src/Charts/CalendarWindow.*
-      - src/FileIO/AnchoredFileSystem.*
-      - src/FileIO/AtomicFileWriter.*
-      - src/FileIO/JsonRideFile.*
-      - src/FileIO/RideFile*.*
-      - src/Gui/SaveDialogs.*
-      - src/Gui/ModalWorkflowGuard.h
-      - src/Gui/AnalysisSidebar.*
-      - src/Gui/FilterSimilarDialog.*
-      - src/Gui/ManualActivityWizard.*
-      - src/Gui/PlanWizards.*
-      - src/Metrics/BlinnSolver.*
-      - src/Planning/PlanBundle*.*
-      - src/Planning/PlanReplacementJournal.*
-      - unittests/Core/linkedActivitySaveCleanup/**
-      - unittests/Core/rideCacheRemoval/**
-      - unittests/Core/seasonParser/**
-      - unittests/Gui/calendarModalWorkflow/**
-      - unittests/FileIO/atomicActivitySave/**
-      - unittests/FileIO/anchoredFilesystem/**
-      - unittests/Planning/**
+  workflow_run:
+    workflows: ["Workflow policy"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
   contents: read
+  pull-requests: read
 
 env:
   QT_MODULES: >-
@@ -76,19 +48,185 @@ env:
     qtserialport qt5compat
 
 jobs:
+  validated-candidate:
+    runs-on: ubuntu-24.04
+    outputs:
+      authorized: ${{ steps.resolve.outputs.authorized }}
+      repository: ${{ steps.resolve.outputs.repository }}
+      revision: ${{ steps.resolve.outputs.revision }}
+      selected: ${{ steps.resolve.outputs.selected }}
+    steps:
+      - name: Resolve trusted candidate identity
+        id: resolve
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          CURRENT_REPOSITORY: ${{ github.repository }}
+          CURRENT_REVISION: ${{ github.sha }}
+          POLICY_EVENT: ${{ github.event.workflow_run.event }}
+          POLICY_PATH: ${{ github.event.workflow_run.path }}
+          POLICY_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          POLICY_IDENTITY: ${{ github.event.workflow_run.display_title }}
+          POLICY_REPOSITORY: ${{ github.event.workflow_run.repository.full_name }}
+          POLICY_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          POLICY_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PATH_FILTERS: |-
+            .github/workflows/ridecache-removal-native.yml
+            contrib/qzip/zip.*
+            src/Core/LinkedActivityRemovalJournal.*
+            src/Core/LinkedActivitySaveJournal.*
+            src/Core/PlannedActivityFileStager.*
+            src/Core/RideCache*.*
+            src/Core/Season.*
+            src/Core/Seasons.*
+            src/Charts/CalendarSeasonWorkflow.h
+            src/Charts/CalendarWindow.*
+            src/FileIO/AnchoredFileSystem.*
+            src/FileIO/AtomicFileWriter.*
+            src/FileIO/JsonRideFile.*
+            src/FileIO/RideFile*.*
+            src/Gui/SaveDialogs.*
+            src/Gui/ModalWorkflowGuard.h
+            src/Gui/AnalysisSidebar.*
+            src/Gui/FilterSimilarDialog.*
+            src/Gui/ManualActivityWizard.*
+            src/Gui/PlanWizards.*
+            src/Metrics/BlinnSolver.*
+            src/Planning/PlanBundle*.*
+            src/Planning/PlanReplacementJournal.*
+            unittests/Core/linkedActivitySaveCleanup/**
+            unittests/Core/rideCacheRemoval/**
+            unittests/Core/seasonParser/**
+            unittests/Gui/calendarModalWorkflow/**
+            unittests/FileIO/atomicActivitySave/**
+            unittests/FileIO/anchoredFilesystem/**
+            unittests/Planning/**
+        run: |
+          set -euo pipefail
+          repository=$CURRENT_REPOSITORY
+          revision=$CURRENT_REVISION
+          selected=true
+          if [ "$EVENT_NAME" = workflow_run ]; then
+            [ "$POLICY_EVENT" = pull_request_target ]
+            [ "$POLICY_PATH" = .github/workflows/workflow-policy.yml ]
+            [ "$POLICY_CONCLUSION" = success ]
+            [ "$POLICY_REPOSITORY" = "$CURRENT_REPOSITORY" ]
+            [ "$POLICY_HEAD_BRANCH" = master ]
+            [[ "$POLICY_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+            case "$POLICY_IDENTITY" in
+              workflow-policy:*:*:[0-9a-f][0-9a-f]*) ;;
+              *) exit 1 ;;
+            esac
+            payload=${POLICY_IDENTITY#workflow-policy:}
+            pull_number=${payload%%:*}
+            payload=${payload#*:}
+            repository=${payload%:*}
+            revision=${payload##*:}
+            [[ "$pull_number" =~ ^[1-9][0-9]*$ ]]
+            [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+            [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+            master_revision=$(gh api "/repos/${CURRENT_REPOSITORY}/git/ref/heads/master" --jq .object.sha)
+            [ "$POLICY_HEAD_SHA" = "$master_revision" ]
+            pull_json=$(mktemp)
+            files_json=$(mktemp)
+            trap 'rm -f -- "$pull_json" "$files_json"' EXIT
+            gh api "/repos/${CURRENT_REPOSITORY}/pulls/${pull_number}" >"$pull_json"
+            python3 - "$pull_json" "$CURRENT_REPOSITORY" "$repository" "$revision" "$POLICY_HEAD_SHA" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as source:
+              pull = json.load(source)
+          expected = {
+              "base_repository": sys.argv[2],
+              "head_repository": sys.argv[3],
+              "head_revision": sys.argv[4],
+              "base_revision": sys.argv[5],
+          }
+          observed = {
+              "base_repository": pull.get("base", {}).get("repo", {}).get("full_name"),
+              "head_repository": pull.get("head", {}).get("repo", {}).get("full_name"),
+              "head_revision": pull.get("head", {}).get("sha"),
+              "base_revision": pull.get("base", {}).get("sha"),
+          }
+          if pull.get("state") != "open" or pull.get("base", {}).get("ref") != "master":
+              raise SystemExit("pull request is not open against master")
+          if observed != expected:
+              raise SystemExit("pull request identity changed after policy validation")
+          PY
+            gh api --paginate --slurp \
+              "/repos/${CURRENT_REPOSITORY}/pulls/${pull_number}/files?per_page=100" \
+              >"$files_json"
+            if ! python3 - "$files_json" <<'PY'
+          import fnmatch
+          import json
+          import os
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as source:
+              pages = json.load(source)
+          paths = [item["filename"] for page in pages for item in page]
+          patterns = [line for line in os.environ["PATH_FILTERS"].splitlines() if line]
+          if not paths or len(paths) >= 3000:
+              raise SystemExit(0)
+          raise SystemExit(0 if any(
+              fnmatch.fnmatchcase(path, pattern)
+              for path in paths
+              for pattern in patterns
+          ) else 1)
+          PY
+            then
+              selected=false
+            fi
+            rm -f -- "$pull_json" "$files_json"
+            trap - EXIT
+          fi
+          [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          printf 'authorized=true\nrepository=%s\nrevision=%s\nselected=%s\n' \
+            "$repository" "$revision" "$selected" >>"$GITHUB_OUTPUT"
+
+  report-pending:
+    needs: validated-candidate
+    if: ${{ github.event_name == 'workflow_run' && needs.validated-candidate.outputs.authorized == 'true' && needs.validated-candidate.outputs.selected == 'true' }}
+    permissions:
+      statuses: write
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Mark candidate native activity tests pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ needs.validated-candidate.outputs.revision }}
+          STATUS_CONTEXT: Candidate CI / native activity transactions
+        run: |
+          set -euo pipefail
+          gh api --method POST \
+            "/repos/${GITHUB_REPOSITORY}/statuses/${CANDIDATE_SHA}" \
+            --raw-field state=pending \
+            --raw-field context="$STATUS_CONTEXT" \
+            --raw-field description='Candidate native activity tests are running' \
+            --raw-field target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
   windows:
+    needs: [validated-candidate, report-pending]
+    if: ${{ always() && needs.validated-candidate.outputs.authorized == 'true' && needs.validated-candidate.outputs.selected == 'true' && (github.event_name != 'workflow_run' || needs.report-pending.result == 'success') }}
     runs-on: windows-2025
     timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v6
-      - uses: jurplel/install-qt-action@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ needs.validated-candidate.outputs.repository }}
+          ref: ${{ needs.validated-candidate.outputs.revision }}
+          persist-credentials: false
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: 6.8.3
           arch: win64_msvc2022_64
           modules: ${{ env.QT_MODULES }}
-          cache: true
-      - uses: TheMrMilchmann/setup-msvc-dev@v4
+          cache: ${{ github.event_name != 'workflow_run' }}
+      - uses: TheMrMilchmann/setup-msvc-dev@368ef7d1ee4d1171b31d4a7f67f4d954f903f5a9 # v4.1.0
         with:
           arch: x64
       - name: Install build dependencies
@@ -192,17 +330,23 @@ jobs:
           exit $seasonParserStatus
 
   macos:
+    needs: [validated-candidate, report-pending]
+    if: ${{ always() && needs.validated-candidate.outputs.authorized == 'true' && needs.validated-candidate.outputs.selected == 'true' && (github.event_name != 'workflow_run' || needs.report-pending.result == 'success') }}
     runs-on: macos-15
     timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v6
-      - uses: jurplel/install-qt-action@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ needs.validated-candidate.outputs.repository }}
+          ref: ${{ needs.validated-candidate.outputs.revision }}
+          persist-credentials: false
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: 6.8.3
           arch: clang_64
           modules: ${{ env.QT_MODULES }}
-          cache: true
+          cache: ${{ github.event_name != 'workflow_run' }}
       - name: Install build dependencies
         run: brew install gsl bison flex
       - name: Build native activity tests
@@ -318,17 +462,23 @@ jobs:
           exit "$atomic_status"
 
   linux:
+    needs: [validated-candidate, report-pending]
+    if: ${{ always() && needs.validated-candidate.outputs.authorized == 'true' && needs.validated-candidate.outputs.selected == 'true' && (github.event_name != 'workflow_run' || needs.report-pending.result == 'success') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v6
-      - uses: jurplel/install-qt-action@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ needs.validated-candidate.outputs.repository }}
+          ref: ${{ needs.validated-candidate.outputs.revision }}
+          persist-credentials: false
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: 6.8.3
           arch: linux_gcc_64
           modules: qt5compat
-          cache: true
+          cache: ${{ github.event_name != 'workflow_run' }}
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y libacl1-dev
       - name: Build GUI-010 regression tests
@@ -336,8 +486,11 @@ jobs:
           set -euo pipefail
           printf 'CONFIG += release\n' > src/gcconfig.pri
           cp unittests/unittests.pri.in unittests/unittests.pri
-          mkdir build-calendar-modal build-season-parser
-          cd build-calendar-modal
+          mkdir build-linked-save-cleanup build-calendar-modal build-season-parser
+          cd build-linked-save-cleanup
+          qmake ../unittests/Core/linkedActivitySaveCleanup/linkedActivitySaveCleanup.pro
+          make -j2
+          cd ../build-calendar-modal
           qmake ../unittests/Gui/calendarModalWorkflow/calendarModalWorkflow.pro
           make -j2
           cd ../build-season-parser
@@ -346,9 +499,49 @@ jobs:
       - name: Run GUI-010 regression tests
         run: |
           set -euo pipefail
+          build-linked-save-cleanup/tst_linkedActivitySaveCleanup \
+            -silent -maxwarnings 0
           QT_QPA_PLATFORM=offscreen \
             build-calendar-modal/tst_calendarModalWorkflow \
             -silent -maxwarnings 0
           QT_QPA_PLATFORM=offscreen \
             build-season-parser/tst_seasonParser \
             -silent -maxwarnings 0
+
+  report-final:
+    needs: [validated-candidate, report-pending, windows, macos, linux]
+    if: ${{ always() && github.event_name == 'workflow_run' && needs.validated-candidate.outputs.authorized == 'true' }}
+    permissions:
+      statuses: write
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Publish candidate native activity test result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ needs.validated-candidate.outputs.revision }}
+          STATUS_CONTEXT: Candidate CI / native activity transactions
+          SELECTED: ${{ needs.validated-candidate.outputs.selected }}
+          PENDING_RESULT: ${{ needs.report-pending.result }}
+          WINDOWS_RESULT: ${{ needs.windows.result }}
+          MACOS_RESULT: ${{ needs.macos.result }}
+          LINUX_RESULT: ${{ needs.linux.result }}
+        run: |
+          set -euo pipefail
+          state=failure
+          description='Candidate native activity tests failed'
+          if [ "$SELECTED" != true ]; then
+            state=success
+            description='Candidate tests are not applicable'
+          elif [ "$PENDING_RESULT" = success ] && \
+             [ "$WINDOWS_RESULT" = success ] && \
+             [ "$MACOS_RESULT" = success ] && \
+             [ "$LINUX_RESULT" = success ]; then
+            state=success
+            description='Candidate native activity tests passed'
+          fi
+          gh api --method POST \
+            "/repos/${GITHUB_REPOSITORY}/statuses/${CANDIDATE_SHA}" \
+            --raw-field state="$state" \
+            --raw-field context="$STATUS_CONTEXT" \
+            --raw-field description="$description" \
+            --raw-field target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"

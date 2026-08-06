@@ -17,20 +17,59 @@ def require_literal(text: str, path: Path) -> None:
         raise AssertionError(f"missing CI test wiring {text!r} in {path}")
 
 
-def make_fixture(root: Path, registered: bool) -> Path:
-    (root / "unittests").mkdir(parents=True)
-    if registered:
-        test_directory = root / "unittests" / "Fake" / "Test"
+def make_fixture(
+    root: Path,
+    required=("all qt Fake/Test",),
+    enabled=("Fake/Test",),
+    discovered=(),
+    build_root: Path | None = None,
+) -> Path:
+    source_unit_tests = root / "unittests"
+    generated_unit_tests = (build_root or root) / "unittests"
+    source_unit_tests.mkdir(parents=True)
+    generated_unit_tests.mkdir(parents=True, exist_ok=True)
+    (source_unit_tests / "ci-required-tests.txt").write_text(
+        "\n".join(required) + "\n", encoding="ascii"
+    )
+    (generated_unit_tests / "ci-enabled-tests.txt").write_text(
+        "\n".join(enabled) + "\n", encoding="ascii"
+    )
+    project_kinds = {}
+    for entry in required:
+        _, kind, project = entry.split()
+        project_kinds[project] = kind
+    for kind, project in discovered:
+        project_kinds[project] = kind
+    for project, kind in project_kinds.items():
+        test_directory = source_unit_tests / project
         test_directory.mkdir(parents=True)
+        if kind == "qt":
+            project_file = "TEMPLATE = app\nCONFIG += testcase\n"
+        else:
+            project_file = (
+                "TEMPLATE = aux\n"
+                "check.commands = python3 test.py\n"
+                "QMAKE_EXTRA_TARGETS += check\n"
+            )
+        test_directory.joinpath(project.split("/")[-1] + ".pro").write_text(
+            project_file, encoding="ascii"
+        )
+    for project in enabled:
+        test_directory = generated_unit_tests / project
+        test_directory.mkdir(parents=True, exist_ok=True)
         (test_directory / "Makefile").write_text("check:\n", encoding="utf-8")
     return root
 
 
-def run_runner(root: Path, fake_build_tool: Path, mode: str) -> subprocess.CompletedProcess[str]:
+def run_runner(
+    root: Path,
+    fake_build_tool: Path,
+    mode: str,
+    build_root: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment["GC_FAKE_TEST_RESULT"] = mode
-    return subprocess.run(
-        [
+    command = [
             sys.executable,
             str(RUNNER),
             "--root",
@@ -39,7 +78,13 @@ def run_runner(root: Path, fake_build_tool: Path, mode: str) -> subprocess.Compl
             sys.executable,
             "--build-tool-arg",
             str(fake_build_tool),
-        ],
+            "--platform",
+            "linux",
+        ]
+    if build_root is not None:
+        command.extend(("--build-root", str(build_root)))
+    return subprocess.run(
+        command,
         check=False,
         capture_output=True,
         text=True,
@@ -84,6 +129,20 @@ def main() -> None:
         "linux:SUBDIRS += Build/appImagePackaging",
         REPOSITORY / "unittests" / "unittests.pro",
     )
+    require_literal(
+        "Core/linkedActivitySaveCleanup",
+        REPOSITORY / "unittests" / "unittests.pro",
+    )
+    require_literal(
+        "all qt Core/linkedActivitySaveCleanup",
+        REPOSITORY / "unittests" / "ci-required-tests.txt",
+    )
+    linux_workflow = REPOSITORY / ".github" / "workflows" / "ridecache-removal-native.yml"
+    require_literal("mkdir build-linked-save-cleanup", linux_workflow)
+    require_literal(
+        "build-linked-save-cleanup/tst_linkedActivitySaveCleanup",
+        linux_workflow,
+    )
 
     with tempfile.TemporaryDirectory(prefix="gc-ci-test-runner-") as temporary:
         temporary_path = Path(temporary)
@@ -95,6 +154,8 @@ import sys
 mode = os.environ["GC_FAKE_TEST_RESULT"]
 if mode == "failure":
     sys.exit(7)
+if os.path.basename(os.getcwd()) == "Aux":
+    sys.exit(0)
 if mode == "zero":
     print("Totals: 0 passed, 0 failed, 0 skipped, 0 blacklisted, 0ms")
 elif mode == "success":
@@ -103,13 +164,17 @@ elif mode == "success":
             encoding="utf-8",
         )
 
-        missing = make_fixture(temporary_path / "missing", registered=False)
+        missing = make_fixture(
+            temporary_path / "missing",
+            required=("all qt Fake/Test", "all qt Fake/Missing"),
+            enabled=("Fake/Test",),
+        )
         no_targets = run_runner(missing, fake_build_tool, "success")
-        expect_failure(no_targets, "no targets")
-        if "no unit-test targets were generated" not in no_targets.stderr:
-            raise AssertionError(f"missing no-target diagnostic: {no_targets.stderr}")
+        expect_failure(no_targets, "eligible project missing from qmake output")
+        if "eligible test projects were not generated" not in no_targets.stderr:
+            raise AssertionError(f"missing inventory diagnostic: {no_targets.stderr}")
 
-        registered = make_fixture(temporary_path / "registered", registered=True)
+        registered = make_fixture(temporary_path / "registered")
         expect_failure(run_runner(registered, fake_build_tool, "none"), "no results")
         zero_cases = run_runner(registered, fake_build_tool, "zero")
         expect_failure(zero_cases, "zero cases")
@@ -129,6 +194,100 @@ elif mode == "success":
             )
         if "Executed 2 QtTest cases across 1 suites." not in success.stderr:
             raise AssertionError(f"missing execution summary: {success.stderr}")
+
+        shadow_source = temporary_path / "shadow-source"
+        shadow_build = temporary_path / "shadow-build"
+        make_fixture(shadow_source, build_root=shadow_build)
+        shadow_success = run_runner(
+            shadow_source,
+            fake_build_tool,
+            "success",
+            build_root=shadow_build,
+        )
+        if shadow_success.returncode != 0:
+            raise AssertionError(
+                "shadow-build test output was not used: " + shadow_success.stderr
+            )
+        if (shadow_source / "unittests" / "ci-enabled-tests.txt").exists():
+            raise AssertionError("shadow-build fixture polluted the source tree")
+
+        with_aux = make_fixture(
+            temporary_path / "with-aux",
+            required=("all qt Fake/Test", "all aux Fake/Aux"),
+            enabled=("Fake/Test", "Fake/Aux"),
+        )
+        aux_success = run_runner(with_aux, fake_build_tool, "success")
+        if aux_success.returncode != 0:
+            raise AssertionError(
+                f"auxiliary test project was not reconciled: {aux_success.stderr}"
+            )
+
+        nested = make_fixture(
+            temporary_path / "nested",
+            required=("all qt Fake/Nested/Test",),
+            enabled=("Fake/Nested/Test",),
+        )
+        nested_success = run_runner(nested, fake_build_tool, "success")
+        if nested_success.returncode != 0:
+            raise AssertionError(
+                f"nested test project was not reconciled: {nested_success.stderr}"
+            )
+
+        excluded = make_fixture(
+            temporary_path / "excluded",
+            required=("all qt Fake/Test", "windows qt Fake/WindowsOnly"),
+            enabled=("Fake/Test",),
+        )
+        excluded_success = run_runner(excluded, fake_build_tool, "success")
+        if excluded_success.returncode != 0:
+            raise AssertionError(
+                "explicit platform exclusion was not honored: "
+                + excluded_success.stderr
+            )
+
+        omitted = make_fixture(
+            temporary_path / "omitted",
+            required=("all qt Fake/Test",),
+            enabled=("Fake/Test",),
+            discovered=(("qt", "Fake/Omitted"),),
+        )
+        result = run_runner(omitted, fake_build_tool, "success")
+        expect_failure(result, "discovered project absent from inventory")
+        if "discovered test projects are absent from inventory" not in result.stderr:
+            raise AssertionError(f"missing discovery diagnostic: {result.stderr}")
+
+        nested_omitted = make_fixture(
+            temporary_path / "nested-omitted",
+            required=("all qt Fake/Test",),
+            enabled=("Fake/Test",),
+            discovered=(("qt", "Fake/Nested/Omitted"),),
+        )
+        result = run_runner(nested_omitted, fake_build_tool, "success")
+        expect_failure(result, "nested discovered project absent from inventory")
+        if "discovered test projects are absent from inventory" not in result.stderr:
+            raise AssertionError(f"missing nested discovery diagnostic: {result.stderr}")
+
+        wrong_kind = make_fixture(
+            temporary_path / "wrong-kind",
+            required=("all aux Fake/Test",),
+            enabled=("Fake/Test",),
+            discovered=(("qt", "Fake/Test"),),
+        )
+        result = run_runner(wrong_kind, fake_build_tool, "success")
+        expect_failure(result, "inventory kind mismatch")
+        if "unit-test inventory kind mismatch" not in result.stderr:
+            raise AssertionError(f"missing kind diagnostic: {result.stderr}")
+
+        unexpected = make_fixture(
+            temporary_path / "unexpected",
+            required=("all qt Fake/Test",),
+            enabled=("Fake/Test", "Fake/Unreviewed"),
+            discovered=(("qt", "Fake/Unreviewed"),),
+        )
+        result = run_runner(unexpected, fake_build_tool, "success")
+        expect_failure(result, "generated project absent from inventory")
+        if "discovered test projects are absent from inventory" not in result.stderr:
+            raise AssertionError(f"missing extra-project diagnostic: {result.stderr}")
 
 
 if __name__ == "__main__":
