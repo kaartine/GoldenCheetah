@@ -1523,6 +1523,7 @@ private slots:
     void cleanup();
     void credentialClassification_data();
     void credentialClassification();
+    void stravaClientCredentialsNeverReachPlaintextSettings();
     void keychainStatusMapping_data();
     void keychainStatusMapping();
     void linuxKeychainRuntimeStatusReport_data();
@@ -1918,6 +1919,7 @@ void TestCredentialSettings::credentialClassification_data()
     CREDENTIAL_ROW(GC_STRAVA_TOKEN);
     CREDENTIAL_ROW(GC_STRAVA_REFRESH_TOKEN);
     CREDENTIAL_ROW(GC_STRAVA_PENDING_TRANSACTION);
+    CREDENTIAL_ROW(GC_STRAVA_CLIENT_CREDENTIALS);
     CREDENTIAL_ROW(GC_CYCLINGANALYTICS_TOKEN);
     CREDENTIAL_ROW(GC_SIXCYCLE_PASS);
     CREDENTIAL_ROW(GC_AZUM_ACCESS_TOKEN);
@@ -1952,6 +1954,51 @@ void TestCredentialSettings::credentialClassification()
     QFETCH(QString, key);
     QFETCH(bool, credential);
     QCOMPARE(CredentialSettings::isCredentialKey(key), credential);
+}
+
+void TestCredentialSettings::
+stravaClientCredentialsNeverReachPlaintextSettings()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(temporary.filePath(
+            QStringLiteral("credential-state"))));
+    const QString settingsPath =
+        temporary.filePath(QStringLiteral("athlete-private.ini"));
+    QSettings settings(settingsPath, QSettings::IniFormat);
+    const QString scope = QUuid::createUuid().toString(
+        QUuid::WithoutBraces);
+    const QString plaintextKey =
+        plainKey(GC_STRAVA_CLIENT_CREDENTIALS);
+    const QString sentinelSecret = QStringLiteral(
+        "sec013-runtime-secret-must-not-reach-qsettings");
+    const QString payload = QStringLiteral(
+        R"({"client_id":"123456","client_secret":"%1","version":1})")
+            .arg(sentinelSecret);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_CLIENT_CREDENTIALS);
+
+    auto state = std::make_shared<FakeStoreState>();
+    CredentialSettings credentials(fakeStore(state));
+    QVERIFY(credentials.setValueChecked(
+        &settings, scope, GC_STRAVA_CLIENT_CREDENTIALS,
+        plaintextKey, payload));
+    settings.sync();
+    QCOMPARE(settings.status(), QSettings::NoError);
+    QVERIFY(!settings.contains(plaintextKey));
+    QVERIFY(!fileContents(settingsPath).contains(
+        sentinelSecret.toUtf8()));
+    QCOMPARE(state->values.value(vaultKey), payload);
+
+    QVERIFY(credentials.removeChecked(
+        &settings, scope, GC_STRAVA_CLIENT_CREDENTIALS,
+        plaintextKey));
+    QVERIFY(!state->values.contains(vaultKey));
+    settings.sync();
+    QVERIFY(!fileContents(settingsPath).contains(
+        sentinelSecret.toUtf8()));
 }
 
 void TestCredentialSettings::keychainStatusMapping_data()

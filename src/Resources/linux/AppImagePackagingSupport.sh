@@ -238,31 +238,30 @@ strava_oauth_build_status()
         echo "GoldenCheetah build-status command failed." >&2
         return 1
     fi
-    local configured_report unavailable_report
-    configured_report=$(
+    local fallback_report runtime_only_report
+    fallback_report=$(
         printf '%s\n' \
             "goldencheetah_build_status=1" \
             "application=GoldenCheetah" \
             "strava_support=enabled" \
-            "strava_oauth=configured"
+            "strava_oauth=runtime_credentials" \
+            "strava_compile_fallback=configured"
         printf x
     )
-    configured_report=${configured_report%x}
-    unavailable_report=$(
+    fallback_report=${fallback_report%x}
+    runtime_only_report=$(
         printf '%s\n' \
             "goldencheetah_build_status=1" \
             "application=GoldenCheetah" \
             "strava_support=enabled" \
-            "strava_oauth=unavailable"
+            "strava_oauth=runtime_credentials" \
+            "strava_compile_fallback=unavailable"
         printf x
     )
-    unavailable_report=${unavailable_report%x}
-    if [ "$report" = "$configured_report" ]; then
-        echo "Strava OAuth: configured"
-        return
-    fi
-    if [ "$report" = "$unavailable_report" ]; then
-        echo "Strava OAuth: unavailable (credentials not configured)"
+    runtime_only_report=${runtime_only_report%x}
+    if [ "$report" = "$fallback_report" ] ||
+       [ "$report" = "$runtime_only_report" ]; then
+        echo "Strava OAuth: runtime credentials supported"
         return
     fi
     echo "GoldenCheetah returned an invalid build-status report." >&2
@@ -275,10 +274,10 @@ require_strava_oauth_build()
     local status
 
     status=$(strava_oauth_build_status "$executable") || return
-    if [ "$status" != "Strava OAuth: configured" ]; then
+    if [ "$status" != "Strava OAuth: runtime credentials supported" ]; then
         echo "$status" >&2
-        echo "Refusing to package a release without configured" \
-            "Strava OAuth credentials." >&2
+        echo "Refusing to package a release without runtime" \
+            "Strava OAuth credential support." >&2
         return 1
     fi
     echo "$status"
@@ -361,10 +360,10 @@ require_strava_oauth_appimage()
     local status
 
     status=$(strava_oauth_appimage_status "$image") || return
-    if [ "$status" != "Strava OAuth: configured" ]; then
+    if [ "$status" != "Strava OAuth: runtime credentials supported" ]; then
         echo "$status" >&2
-        echo "Refusing to publish an AppImage without configured" \
-            "Strava OAuth credentials." >&2
+        echo "Refusing to publish an AppImage without runtime" \
+            "Strava OAuth credential support." >&2
         return 1
     fi
     echo "$status"

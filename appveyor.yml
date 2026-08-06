@@ -18,8 +18,6 @@ environment:
     secure: pvPWraDplrKeRNamt5MKga8fzDmI2+zgFx+y3lsQE6gmBadZU2xkTIc/xCaP7UPv2erNCmKivfMOh2NIcRmqvIHynDoifNVy2P61KyG5v3E=
   GC_DROPBOX_CLIENT_SECRET:
     secure: 7pCVnVEKKmSU4SZN6IFqUw==
-  GC_STRAVA_CLIENT_SECRET:
-    secure: n3cMS1yy709xhSnTeWABMsoAIkJzy5euh3Pw4ehv0BzszJKoWkypF0cyW8RXSm3M
   GC_CYCLINGANALYTICS_CLIENT_SECRET:
     secure: UY+m3YypNNLUzKyGdrLw8xdCvxuQWRZi9EHS3j1ubLC4qyRL7iEVW6ubumfdh6gT
   GC_CLOUD_DB_BASIC_AUTH:

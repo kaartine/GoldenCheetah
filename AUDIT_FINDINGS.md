@@ -6275,27 +6275,31 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-013: A desktop AppImage cannot keep its Strava client secret private
 
-- Status: OPEN
-- Code: `src/Core/Secrets.h`, `src/gcconfig.pri`, generated Makefiles, and
-  configured GoldenCheetah executables
-- Impact: A configured native client embeds its reusable application secret in
-  the executable. Anyone receiving that binary can recover the value and
-  impersonate the application, potentially consuming rate limits or causing
-  provider sanctions that affect every user of that client identity.
-- Evidence: The configured value can be matched between the private qmake
-  configuration and the extracted AppImage ELF without source access. Strava's
-  OAuth documentation calls the client secret private, but its current desktop
-  flow still requires it for code exchange and does not document PKCE.
-  Verbose qmake builds can additionally place it in command lines, logs, and
-  generated Makefiles; remote build directories have been restricted to mode
-  0700 as an operational mitigation.
-- Test: Scan release payloads and build artifacts for sentinel credentials,
-  verify restrictive permissions on unavoidable intermediates, and exercise a
-  public-client or brokered flow without a reusable secret in the binary.
-- Fix direction: Prefer a provider-supported PKCE/public-client flow. Until one
-  exists, choose explicitly between per-user registered applications and a
-  narrowly scoped server-side exchange service; neither obfuscating the binary
-  nor keeping only the source define private solves distribution exposure.
+- Status: FIXED
+- Code: `src/Cloud/StravaClientCredentials.*`,
+  `src/Cloud/AddCloudWizard.*`, `src/Cloud/OAuthDialog.*`,
+  `src/Cloud/Strava.cpp`, `src/Cloud/StravaOAuthPolicy.*`,
+  `src/Core/CredentialSettings.cpp`, `.github/workflows/ci.yml`,
+  `appveyor.yml`, and `util/add_secrets.ps1`
+- Impact: Public release builds no longer receive or require a shared Strava
+  client secret. Each athlete supplies a Strava client ID and secret at
+  runtime; the pair is stored atomically through the platform credential vault
+  and never through ordinary QSettings. A compile-time fallback remains only
+  for an explicitly requested private personal build.
+- Evidence: Runtime credentials take precedence. An unavailable vault or an
+  invalid runtime record fails closed without falling back, and blank UI fields
+  do not delete a record. Removal requires the dedicated, confirmed Remove
+  command. Authorization-code exchange, refresh, and revocation all add the
+  runtime secret to their redaction paths; STRAVA_DEBUG logs only the already
+  redacted token-failure message. Public GitHub Actions and AppVeyor workflows
+  contain no `GC_STRAVA_CLIENT_SECRET` injection, while the release gate accepts
+  a runtime-only binary with no compile-time fallback.
+- Test: `tst_stravaClientCredentials` passes 14 cases normally and under
+  ASan/UBSan/LSan from a shadow build; `testStravaOAuthPolicy` passes 68 cases;
+  the focused CredentialSettings selection passes 41 cases; Strava account
+  removal passes 21 cases; and both public-release credential and AppImage
+  packaging shell suites pass. The modified production translation units also
+  compile with a credential-free build configuration.
 
 ## Low
 

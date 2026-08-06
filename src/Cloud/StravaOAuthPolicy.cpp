@@ -13,11 +13,16 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
+#include <QDebug>
 #include <QList>
 #include <QPair>
 #include <QSet>
 
 #include <algorithm>
+
+#ifndef STRAVA_DEBUG
+#define STRAVA_DEBUG false
+#endif
 
 namespace {
 
@@ -47,7 +52,7 @@ bool isDecimalClientId(const QString &value)
     return true;
 }
 
-bool isBuildPlaceholder(const QString &value)
+bool isCredentialPlaceholder(const QString &value)
 {
     if (value.trimmed().compare(
             QStringLiteral("your_client_secret"),
@@ -118,7 +123,7 @@ StravaOAuthPolicy::TokenRequest makeTokenRequest(
     if (!StravaOAuthPolicy::hasUsableCredentials(
             clientId, clientSecret)) {
         request.error = QStringLiteral(
-            "Strava OAuth credentials are not configured in this build.");
+            "Strava OAuth client credentials are not configured.");
         return request;
     }
     if (!isUsableOpaqueValue(grantValue)) {
@@ -384,18 +389,19 @@ bool hasUsableCredentials(const QString &clientId,
 {
     return isDecimalClientId(clientId)
         && isUsableOpaqueValue(clientSecret)
-        && !isBuildPlaceholder(clientSecret);
+        && !isCredentialPlaceholder(clientSecret);
 }
 
-QByteArray buildStatusReport(const QString &clientId,
-                             const QString &clientSecret)
+QByteArray buildStatusReport(
+    bool compileTimeFallbackConfigured)
 {
     QByteArray report = QByteArrayLiteral(
         "goldencheetah_build_status=1\n"
         "application=GoldenCheetah\n"
         "strava_support=enabled\n"
-        "strava_oauth=");
-    report += hasUsableCredentials(clientId, clientSecret)
+        "strava_oauth=runtime_credentials\n"
+        "strava_compile_fallback=");
+    report += compileTimeFallbackConfigured
         ? QByteArrayLiteral("configured\n")
         : QByteArrayLiteral("unavailable\n");
     return report;
@@ -432,7 +438,7 @@ RevocationRequest revocationRequest(
     RevocationRequest request;
     if (!hasUsableCredentials(clientId, clientSecret)) {
         request.error = QStringLiteral(
-            "Strava OAuth credentials are not configured in this build.");
+            "Strava OAuth client credentials are not configured.");
         return request;
     }
     if (!isUsableOpaqueValue(token)) {
@@ -514,7 +520,11 @@ QString tokenFailureMessage(
             message.append(QLatin1Char('.'));
         }
     }
-    return message.left(MaximumFailureMessageLength);
+    message = message.left(MaximumFailureMessageLength);
+    if (STRAVA_DEBUG) {
+        qDebug().noquote() << message;
+    }
+    return message;
 }
 
 QString revocationFailureMessage(

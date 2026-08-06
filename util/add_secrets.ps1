@@ -1,12 +1,18 @@
 # Patch Secrets.h (Windows / Linux / macOS) used from CI scripts
 param(
-  [Parameter(Position=0)] [string]$f = "src/Core/Secrets.h"
+  [Parameter(Position=0)] [string]$f = "src/Core/Secrets.h",
+  [switch]$IncludePrivateStravaCredentials
 )
 (Get-Content $f) -replace 'OPENDATA_DISABLE', 'OPENDATA_ENABLE' | Set-Content $f
 (Get-Content $f) -replace '__GC_CLOUD_OPENDATA_SECRET__', $env:GC_CLOUD_OPENDATA_SECRET | Set-Content $f
 (Get-Content $f) -replace '__GC_NOKIA_CLIENT_SECRET__', $env:GC_NOKIA_CLIENT_SECRET | Set-Content $f
 (Get-Content $f) -replace '__GC_DROPBOX_CLIENT_SECRET__', $env:GC_DROPBOX_CLIENT_SECRET | Set-Content $f
-(Get-Content $f) -replace '__GC_STRAVA_CLIENT_SECRET__', $env:GC_STRAVA_CLIENT_SECRET | Set-Content $f
+if ($IncludePrivateStravaCredentials) {
+  if ([string]::IsNullOrWhiteSpace($env:GC_STRAVA_CLIENT_SECRET)) {
+    throw "GC_STRAVA_CLIENT_SECRET is required for a private Strava build"
+  }
+  (Get-Content $f) -replace '__GC_STRAVA_CLIENT_SECRET__', $env:GC_STRAVA_CLIENT_SECRET | Set-Content $f
+}
 (Get-Content $f) -replace '__GC_CYCLINGANALYTICS_CLIENT_SECRET__', $env:GC_CYCLINGANALYTICS_CLIENT_SECRET | Set-Content $f
 (Get-Content $f) -replace '__GC_CLOUD_DB_BASIC_AUTH__', $env:GC_CLOUD_DB_BASIC_AUTH | Set-Content $f
 (Get-Content $f) -replace '__GC_CLOUD_DB_APP_NAME__', $env:GC_CLOUD_DB_APP_NAME | Set-Content $f

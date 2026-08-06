@@ -33,6 +33,7 @@
 #include "CredentialStoreQtKeychain.h"
 #include "Secrets.h"
 #include "StravaOAuthPolicy.h"
+#include "StravaClientCredentials.h"
 
 #include <QApplication>
 #include <QtGui>
@@ -265,8 +266,8 @@ main(int argc, char *argv[])
         QByteArray report;
         if (buildStatus) {
             report = StravaOAuthPolicy::buildStatusReport(
-                QStringLiteral(GC_STRAVA_CLIENT_ID),
-                QStringLiteral(GC_STRAVA_CLIENT_SECRET));
+                StravaClientCredentials::
+                    compileTimeFallbackIsConfigured());
         } else {
             QCoreApplication statusApplication(argc, argv);
             CredentialStoreQtKeychainDetail::

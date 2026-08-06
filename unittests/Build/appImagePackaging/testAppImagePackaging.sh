@@ -226,19 +226,28 @@ int main(int argc, char **argv)
         return 0;
     }
     if (strstr(mode, "missing-newline") != NULL) {
-        fputs("strava_oauth=configured", stdout);
+        fputs(
+            "strava_oauth=runtime_credentials\n"
+            "strava_compile_fallback=configured",
+            stdout);
         return 0;
     }
     if (strstr(mode, "extra-newline") != NULL) {
-        fputs("strava_oauth=configured\n\n", stdout);
+        fputs(
+            "strava_oauth=runtime_credentials\n"
+            "strava_compile_fallback=configured\n\n",
+            stdout);
         return 0;
     }
     if (strstr(mode, "malformed") != NULL) {
         fputs("strava_oauth=maybe\n", stdout);
-    } else if (strstr(mode, "unconfigured") != NULL) {
-        fputs("strava_oauth=unavailable\n", stdout);
     } else {
-        fputs("strava_oauth=configured\n", stdout);
+        fputs("strava_oauth=runtime_credentials\n", stdout);
+        fputs(
+            strstr(mode, "unconfigured") != NULL
+                ? "strava_compile_fallback=unavailable\n"
+                : "strava_compile_fallback=configured\n",
+            stdout);
     }
     return strstr(mode, "bad-exit") == NULL ? 0 : 1;
 }
@@ -286,7 +295,7 @@ printf 'invalid host override\n' \
     >"$TEMP_DIR/host-loader-override/libc.so.6"
 [ "$(LD_LIBRARY_PATH="$TEMP_DIR/host-loader-override" \
       strava_oauth_build_status "$TEMP_DIR/configured")" = \
-  "Strava OAuth: configured" ] ||
+  "Strava OAuth: runtime credentials supported" ] ||
     fail "Strava status inherited an external library override"
 [ "$(LD_LIBRARY_PATH="$TEMP_DIR/host-loader-override" \
       linux_keychain_entrypoint_status "$TEMP_DIR/configured-entry")" = \
@@ -690,11 +699,11 @@ printf '\177ELF\002\001\001\000AI\002compressed-appimage-payload' \
 chmod +x "$TEMP_DIR/type1.AppImage" "$TEMP_DIR/type2.AppImage"
 
 [ "$(strava_oauth_build_status "$TEMP_DIR/unconfigured")" = \
-  "Strava OAuth: unavailable (credentials not configured)" ] ||
-    fail "runtime-unavailable Strava credentials were not reported unavailable"
+  "Strava OAuth: runtime credentials supported" ] ||
+    fail "runtime-only Strava support was not reported"
 [ "$(strava_oauth_build_status "$TEMP_DIR/configured")" = \
-  "Strava OAuth: configured" ] ||
-    fail "configured Strava credentials were not reported"
+  "Strava OAuth: runtime credentials supported" ] ||
+    fail "runtime Strava support with a fallback was not reported"
 if strava_oauth_build_status "$TEMP_DIR/missing" >/dev/null 2>&1; then
     fail "missing executable was accepted for Strava status inspection"
 fi
@@ -738,11 +747,9 @@ if strava_oauth_build_status "$TEMP_DIR/type2.AppImage" \
     fail "a Type 2 AppImage was inspected as a raw executable"
 fi
 require_strava_oauth_build "$TEMP_DIR/configured" >/dev/null ||
-    fail "configured Strava credentials were rejected by the release gate"
-if require_strava_oauth_build "$TEMP_DIR/unconfigured" \
-    >/dev/null 2>&1; then
-    fail "release gate accepted unavailable Strava credentials"
-fi
+    fail "runtime Strava support was rejected by the release gate"
+require_strava_oauth_build "$TEMP_DIR/unconfigured" >/dev/null ||
+    fail "runtime-only Strava support was rejected by the release gate"
 if require_strava_oauth_build "$TEMP_DIR/missing" \
     >/dev/null 2>&1; then
     fail "release gate accepted a missing executable"
@@ -795,8 +802,8 @@ run_packaging_appimage()
 }
 
 [ "$(strava_oauth_appimage_status "$TEMP_DIR/type2.AppImage")" = \
-  "Strava OAuth: configured" ] ||
-    fail "configured packaged GoldenCheetah was not reported"
+  "Strava OAuth: runtime credentials supported" ] ||
+    fail "runtime Strava support in the package was not reported"
 require_strava_oauth_appimage "$TEMP_DIR/type2.AppImage" \
     >/dev/null ||
     fail "configured packaged GoldenCheetah was rejected"
@@ -812,18 +819,17 @@ WRAPPED_STRAVA_STATUS=$(
         strava_oauth_appimage_status "$TEMP_DIR/type2.AppImage"
 )
 [ "$WRAPPED_STRAVA_STATUS" = \
-  "Strava OAuth: configured" ] ||
+  "Strava OAuth: runtime credentials supported" ] ||
     fail "a valid shell AppRun wrapper was rejected for Strava status"
 
 GC_TEST_APPIMAGE_ENTRY="$TEMP_DIR/unconfigured-entry"
 GC_TEST_APPIMAGE_ENTRY_NAME="unconfigured-entry"
 [ "$(strava_oauth_appimage_status "$TEMP_DIR/type2.AppImage")" = \
-  "Strava OAuth: unavailable (credentials not configured)" ] ||
-    fail "unavailable packaged GoldenCheetah was not reported"
-if require_strava_oauth_appimage "$TEMP_DIR/type2.AppImage" \
-    >/dev/null 2>&1; then
-    fail "release gate accepted an unavailable packaged GoldenCheetah"
-fi
+  "Strava OAuth: runtime credentials supported" ] ||
+    fail "runtime-only packaged GoldenCheetah was not reported"
+require_strava_oauth_appimage "$TEMP_DIR/type2.AppImage" \
+    >/dev/null ||
+    fail "release gate rejected runtime-only Strava support"
 
 GC_TEST_APPIMAGE_ENTRY="$TEMP_DIR/malformed-entry"
 GC_TEST_APPIMAGE_ENTRY_NAME="malformed-entry"

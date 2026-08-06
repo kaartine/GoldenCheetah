@@ -31,6 +31,7 @@
 #include "OAuthPKCE.h"
 #include "OAuthTokenReplyController.h"
 #include "OAuthDialogMessageGuard.h"
+#include "StravaClientCredentials.h"
 #include "StravaCredentialPublisher.h"
 #include "StravaOAuthPolicy.h"
 #include "StravaSettingsCommit.h"
@@ -111,18 +112,27 @@ OAuthDialog::OAuthDialog(Context *context, OAuthSite site, CloudService *service
         if (service->id() == "Tredict") site = this->site = TREDICT;
     }
 
-    if (site == STRAVA
-        && !StravaOAuthPolicy::hasUsableCredentials(
-            QStringLiteral(GC_STRAVA_CLIENT_ID),
-            QStringLiteral(GC_STRAVA_CLIENT_SECRET))) {
-        const QString text = tr(
-            "This build does not include configured Strava OAuth credentials. "
-            "Install an official GoldenCheetah release or configure a registered "
-            "Strava client ID and client secret before building.");
-        authorizationReady = false;
-        OAuthDialogMessageGuard::showDetached(
-            tr("Authorization Error"), text);
-        return;
+    if (site == STRAVA) {
+        QString accountKey = service
+            ? service->property("_gcAthleteName").toString()
+            : QString();
+        if (accountKey.isEmpty()
+            && context
+            && context->athlete) {
+            accountKey = context->athlete->cyclist;
+        }
+        const StravaClientCredentials::Resolution credentials =
+            StravaClientCredentials::resolveForAccount(accountKey);
+        if (!credentials.isAvailable()) {
+            authorizationReady = false;
+            OAuthDialogMessageGuard::showDetached(
+                tr("Authorization Error"),
+                credentials.error);
+            return;
+        }
+        stravaClientId = credentials.credentials.clientId;
+        stravaClientSecret =
+            credentials.credentials.clientSecret;
     }
 
     // check if SSL is available - if not - message and end
@@ -189,7 +199,7 @@ OAuthDialog::OAuthDialog(Context *context, OAuthSite site, CloudService *service
     if (site == STRAVA) {
 
         urlstr = QString("https://www.strava.com/oauth/authorize?");
-        urlstr.append("client_id=").append(GC_STRAVA_CLIENT_ID).append("&");
+        urlstr.append("client_id=").append(stravaClientId).append("&");
         urlstr.append("scope=read_all,activity:read_all,activity:write&");
         urlstr.append("redirect_uri=https://www.goldencheetah.org/&");
         urlstr.append("response_type=code&");
@@ -499,8 +509,8 @@ OAuthDialog::urlChanged(const QUrl &url)
             if (site == STRAVA) {
                 const StravaOAuthPolicy::TokenRequest stravaRequest =
                     StravaOAuthPolicy::authorizationCodeRequest(
-                        QStringLiteral(GC_STRAVA_CLIENT_ID),
-                        QStringLiteral(GC_STRAVA_CLIENT_SECRET),
+                        stravaClientId,
+                        stravaClientSecret,
                         code);
                 if (!stravaRequest.isValid()) {
                     OAuthDialogMessageGuard::showAndReject(
@@ -512,7 +522,7 @@ OAuthDialog::urlChanged(const QUrl &url)
                 tokenUrl = stravaRequest.endpoint;
                 data = stravaRequest.body;
                 tokenRequestSensitiveValues = {
-                    QStringLiteral(GC_STRAVA_CLIENT_SECRET),
+                    stravaClientSecret,
                     code
                 };
             } else {

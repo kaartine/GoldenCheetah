@@ -387,50 +387,33 @@ void TestStravaOAuthPolicy::acceptsConfiguredCredentials()
 
 void TestStravaOAuthPolicy::reportsMachineReadableBuildStatus_data()
 {
-    QTest::addColumn<QString>("clientId");
-    QTest::addColumn<QString>("clientSecret");
-    QTest::addColumn<QByteArray>("oauthStatus");
+    QTest::addColumn<bool>("compileTimeFallbackConfigured");
+    QTest::addColumn<QByteArray>("fallbackStatus");
 
     QTest::newRow("configured")
-        << ClientId << ClientSecret
+        << true
         << QByteArray("configured");
-    QTest::newRow("missing-id")
-        << QString() << ClientSecret
-        << QByteArray("unavailable");
-    QTest::newRow("invalid-id")
-        << QStringLiteral("client-83") << ClientSecret
-        << QByteArray("unavailable");
-    QTest::newRow("missing-secret")
-        << ClientId << QString()
-        << QByteArray("unavailable");
-    QTest::newRow("specific-placeholder")
-        << ClientId
-        << QStringLiteral("__GC_STRAVA_CLIENT_SECRET__")
-        << QByteArray("unavailable");
-    QTest::newRow("generic-placeholder")
-        << ClientId << QStringLiteral("__MISSING_SECRET__")
-        << QByteArray("unavailable");
-    QTest::newRow("documented-config-placeholder")
-        << ClientId << QStringLiteral("your_client_secret")
+    QTest::newRow("runtime-only")
+        << false
         << QByteArray("unavailable");
 }
 
 void TestStravaOAuthPolicy::reportsMachineReadableBuildStatus()
 {
-    QFETCH(QString, clientId);
-    QFETCH(QString, clientSecret);
-    QFETCH(QByteArray, oauthStatus);
+    QFETCH(bool, compileTimeFallbackConfigured);
+    QFETCH(QByteArray, fallbackStatus);
 
     const QByteArray expected =
         QByteArrayLiteral(
             "goldencheetah_build_status=1\n"
             "application=GoldenCheetah\n"
             "strava_support=enabled\n"
-            "strava_oauth=")
-        + oauthStatus + '\n';
+            "strava_oauth=runtime_credentials\n"
+            "strava_compile_fallback=")
+        + fallbackStatus + '\n';
     QCOMPARE(
         StravaOAuthPolicy::buildStatusReport(
-            clientId, clientSecret),
+            compileTimeFallbackConfigured),
         expected);
 }
 
@@ -443,8 +426,10 @@ void TestStravaOAuthPolicy::mainExposesCredentialFreeBuildStatus()
         "\"--goldencheetah-build-status\""));
     QVERIFY(source.contains(
         "StravaOAuthPolicy::buildStatusReport("));
-    QVERIFY(source.contains("GC_STRAVA_CLIENT_ID"));
-    QVERIFY(source.contains("GC_STRAVA_CLIENT_SECRET"));
+    QVERIFY(source.contains(
+        "compileTimeFallbackIsConfigured()"));
+    QVERIFY(!source.contains("GC_STRAVA_CLIENT_ID"));
+    QVERIFY(!source.contains("GC_STRAVA_CLIENT_SECRET"));
     const qsizetype shutdown = source.indexOf(
         "StravaSettingsCommit::shutdownCredentialThread()");
     const qsizetype settingsDeletion = source.indexOf(
