@@ -22,11 +22,6 @@ SUPPORT="$SOURCE_TREE/src/Resources/linux/AppImagePackagingSupport.sh"
     echo "Independent AppImage build directory must be empty." >&2
     exit 1
 }
-[ -f "$INPUT_SOURCE/src/gcconfig.pri" ] &&
-    [ ! -L "$INPUT_SOURCE/src/gcconfig.pri" ] || {
-    echo "Effective gcconfig.pri is required for reproducible builds." >&2
-    exit 1
-}
 [ -f "$SUPPORT" ] && [ ! -L "$SUPPORT" ] || {
     echo "AppImage packaging support is unavailable." >&2
     exit 1
@@ -48,25 +43,7 @@ BUILD_HOME="$BUILD_TREE/.build-home"
 BUILD_TMP="$BUILD_TREE/.build-tmp"
 mkdir -m 0700 -- "$BUILD_HOME" "$BUILD_TMP"
 
-install -m 0644 "$INPUT_SOURCE/src/gcconfig.pri" \
-    "$SOURCE_TREE/src/gcconfig.pri"
-if [ -f "$INPUT_SOURCE/src/Core/GeneratedSecrets.h" ] &&
-   [ ! -L "$INPUT_SOURCE/src/Core/GeneratedSecrets.h" ]; then
-    install -m 0600 "$INPUT_SOURCE/src/Core/GeneratedSecrets.h" \
-        "$SOURCE_TREE/src/Core/GeneratedSecrets.h"
-elif [ -e "$INPUT_SOURCE/src/Core/GeneratedSecrets.h" ] ||
-     [ -L "$INPUT_SOURCE/src/Core/GeneratedSecrets.h" ]; then
-    echo "GeneratedSecrets.h is not a regular file." >&2
-    exit 1
-fi
-if [ -f "$INPUT_SOURCE/qwt/qwtconfig.pri" ] &&
-   [ ! -L "$INPUT_SOURCE/qwt/qwtconfig.pri" ]; then
-    install -m 0644 "$INPUT_SOURCE/qwt/qwtconfig.pri" \
-        "$SOURCE_TREE/qwt/qwtconfig.pri"
-else
-    install -m 0644 "$SOURCE_TREE/qwt/qwtconfig.pri.in" \
-        "$SOURCE_TREE/qwt/qwtconfig.pri"
-fi
+install_reproducible_build_inputs "$INPUT_SOURCE" "$SOURCE_TREE"
 
 REVISION=$(run_reproducible_git -C "$SOURCE_TREE" rev-parse --verify HEAD)
 SOURCE_DATE_EPOCH=$(run_reproducible_git -C "$SOURCE_TREE" show -s --format=%ct "$REVISION")

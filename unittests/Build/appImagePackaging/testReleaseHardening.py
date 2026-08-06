@@ -333,6 +333,44 @@ class BuildInputTests(unittest.TestCase):
         self.assertIn("build_inputs_sha256=", main)
         self.assertIn("build_inputs_sha256=", support)
 
+    def test_input_installer_rejects_source_and_destination_symlinks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_source = root / "input"
+            source_tree = root / "source"
+            for tree in (input_source, source_tree):
+                (tree / "src/Core").mkdir(parents=True)
+                (tree / "qwt").mkdir()
+            config = input_source / "src/gcconfig.pri"
+            config.write_text("CONFIG += release\n", encoding="ascii")
+            (source_tree / "qwt/qwtconfig.pri.in").write_text(
+                "QWT_CONFIG += QwtPlot\n", encoding="ascii"
+            )
+            outside = root / "outside"
+            outside.write_text("unchanged\n", encoding="ascii")
+
+            def install_inputs():
+                return run(
+                    [
+                        "bash", "-c",
+                        'set -euo pipefail; . "$1"; '
+                        'install_reproducible_build_inputs "$2" "$3"',
+                        "bash", str(SUPPORT), str(input_source), str(source_tree),
+                    ]
+                )
+
+            os.symlink(outside, source_tree / "src/gcconfig.pri")
+            destination_link = install_inputs()
+            self.assertNotEqual(destination_link.returncode, 0)
+            self.assertEqual(outside.read_text(encoding="ascii"), "unchanged\n")
+
+            (source_tree / "src/gcconfig.pri").unlink()
+            config.unlink()
+            os.symlink(outside, config)
+            source_link = install_inputs()
+            self.assertNotEqual(source_link.returncode, 0)
+            self.assertEqual(outside.read_text(encoding="ascii"), "unchanged\n")
+
 
 class PipelineIsolationTests(unittest.TestCase):
     def test_appveyor_inputs_are_external_and_extracted_trees_are_not_cached(self):
@@ -537,9 +575,37 @@ class PipelineIsolationTests(unittest.TestCase):
                 ["git", "-C", source, "config", "user.email", "test@example.invalid"],
                 check=True,
             )
+            (source / "src/Core").mkdir(parents=True)
+            (source / "qwt").mkdir()
+            (source / ".gitignore").write_text(
+                "/src/gcconfig.pri\n"
+                "/src/Core/GeneratedSecrets.h\n"
+                "/qwt/qwtconfig.pri\n",
+                encoding="ascii",
+            )
             (source / "tracked").write_text("source\n", encoding="ascii")
-            subprocess.run(["git", "-C", source, "add", "tracked"], check=True)
+            (source / "src/Core/fixture").write_text("core\n", encoding="ascii")
+            (source / "qwt/qwtconfig.pri.in").write_text(
+                "QWT_CONFIG += QwtPlot\n", encoding="ascii"
+            )
+            subprocess.run(
+                [
+                    "git", "-C", source, "add", "tracked", ".gitignore",
+                    "src/Core/fixture", "qwt/qwtconfig.pri.in",
+                ],
+                check=True,
+            )
             subprocess.run(["git", "-C", source, "commit", "-qm", "fixture"], check=True)
+            config = source / "src/gcconfig.pri"
+            secrets = source / "src/Core/GeneratedSecrets.h"
+            qwt_config = source / "qwt/qwtconfig.pri"
+            config.write_text("CONFIG += release\n", encoding="ascii")
+            secrets.write_text(
+                '#define GC_TEST_SECRET "fixture"\n', encoding="ascii"
+            )
+            qwt_config.write_text(
+                "QWT_CONFIG += QwtPlot QwtSvg\n", encoding="ascii"
+            )
 
             build_log = root / "build.log"
             package_log = root / "package.log"
@@ -549,6 +615,11 @@ class PipelineIsolationTests(unittest.TestCase):
                 "#!/bin/sh\nset -eu\n"
                 "test ! -e \"$1/.reproduction-pass\"\n"
                 "printf build >\"$1/.reproduction-pass\"\n"
+                "mkdir -p \"$1/src/Core\" \"$1/qwt\"\n"
+                "cp \"$3/src/gcconfig.pri\" \"$1/src/gcconfig.pri\"\n"
+                "cp \"$3/src/Core/GeneratedSecrets.h\" "
+                "\"$1/src/Core/GeneratedSecrets.h\"\n"
+                "cp \"$3/qwt/qwtconfig.pri\" \"$1/qwt/qwtconfig.pri\"\n"
                 "printf '%s|%s\\n' \"$1\" \"$2\" >>\"$GC_BUILD_LOG\"\n"
                 "mkdir -p \"$2/src\"\n"
                 "printf 'same independently built elf\\n' >\"$2/src/GoldenCheetah\"\n"
@@ -560,6 +631,12 @@ class PipelineIsolationTests(unittest.TestCase):
                 "test ! -e \"$GC_APPIMAGE_REPOSITORY_ROOT/.reproduction-pass\"\n"
                 "printf package >"
                 "\"$GC_APPIMAGE_REPOSITORY_ROOT/.reproduction-pass\"\n"
+                "cmp \"$GC_EFFECTIVE_CONFIG\" "
+                "\"$GC_APPIMAGE_REPOSITORY_ROOT/src/gcconfig.pri\"\n"
+                "cmp \"$GC_EFFECTIVE_SECRETS\" "
+                "\"$GC_APPIMAGE_REPOSITORY_ROOT/src/Core/GeneratedSecrets.h\"\n"
+                "cmp \"$GC_EFFECTIVE_QWT_CONFIG\" "
+                "\"$GC_APPIMAGE_REPOSITORY_ROOT/qwt/qwtconfig.pri\"\n"
                 "printf '%s|%s\\n' \"$GC_APPIMAGE_REPOSITORY_ROOT\" "
                 "\"$GC_APPIMAGE_BINARY\" >>\"$GC_PACKAGE_LOG\"\n"
                 "test -x \"$GC_APPIMAGE_BINARY\"\n"
@@ -583,6 +660,9 @@ class PipelineIsolationTests(unittest.TestCase):
                     "GC_APPIMAGE_PACKAGE_PASS_SCRIPT": str(package_probe),
                     "GC_BUILD_LOG": str(build_log),
                     "GC_PACKAGE_LOG": str(package_log),
+                    "GC_EFFECTIVE_CONFIG": str(config),
+                    "GC_EFFECTIVE_SECRETS": str(secrets),
+                    "GC_EFFECTIVE_QWT_CONFIG": str(qwt_config),
                 },
             )
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -628,9 +708,27 @@ class PipelineIsolationTests(unittest.TestCase):
                 ["git", "-C", source, "config", "user.email", "test@example.invalid"],
                 check=True,
             )
+            (source / "src/Core").mkdir(parents=True)
+            (source / "qwt").mkdir()
+            (source / ".gitignore").write_text(
+                "/src/gcconfig.pri\n/qwt/qwtconfig.pri\n", encoding="ascii"
+            )
             (source / "tracked").write_text("source\n", encoding="ascii")
-            subprocess.run(["git", "-C", source, "add", "tracked"], check=True)
+            (source / "src/Core/fixture").write_text("core\n", encoding="ascii")
+            (source / "qwt/qwtconfig.pri.in").write_text(
+                "QWT_CONFIG += QwtPlot\n", encoding="ascii"
+            )
+            subprocess.run(
+                [
+                    "git", "-C", source, "add", "tracked", ".gitignore",
+                    "src/Core/fixture", "qwt/qwtconfig.pri.in",
+                ],
+                check=True,
+            )
             subprocess.run(["git", "-C", source, "commit", "-qm", "fixture"], check=True)
+            (source / "src/gcconfig.pri").write_text(
+                "CONFIG += release\n", encoding="ascii"
+            )
 
             build_probe = root / "build-pass"
             package_probe = root / "package-pass"

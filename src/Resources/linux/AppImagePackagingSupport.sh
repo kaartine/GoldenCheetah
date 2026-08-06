@@ -113,6 +113,70 @@ run_reproducible_git()
         "$git_path" "$@"
 )
 
+install_reproducible_build_inputs()
+{
+    if [ "$#" -ne 2 ]; then
+        echo "Usage: install_reproducible_build_inputs INPUT_SOURCE SOURCE_TREE" >&2
+        return 2
+    fi
+    local input_source=$1
+    local source_tree=$2
+    local input_config="$input_source/src/gcconfig.pri"
+    local input_secrets="$input_source/src/Core/GeneratedSecrets.h"
+    local input_qwt_config="$input_source/qwt/qwtconfig.pri"
+    local default_qwt_config="$source_tree/qwt/qwtconfig.pri.in"
+    local output_config="$source_tree/src/gcconfig.pri"
+    local output_secrets="$source_tree/src/Core/GeneratedSecrets.h"
+    local output_qwt_config="$source_tree/qwt/qwtconfig.pri"
+    local output
+
+    [ -d "$input_source" ] && [ ! -L "$input_source" ] &&
+        [ -d "$source_tree" ] && [ ! -L "$source_tree" ] &&
+        [ -d "$source_tree/src" ] && [ ! -L "$source_tree/src" ] &&
+        [ -d "$source_tree/src/Core" ] && [ ! -L "$source_tree/src/Core" ] &&
+        [ -d "$source_tree/qwt" ] && [ ! -L "$source_tree/qwt" ] || {
+        echo "Reproducible build input directories are unsafe." >&2
+        return 1
+    }
+    for output in "$output_config" "$output_secrets" "$output_qwt_config"; do
+        if [ -L "$output" ] ||
+           { [ -e "$output" ] && [ ! -f "$output" ]; }; then
+            echo "Reproducible build input destination is unsafe: $output" >&2
+            return 1
+        fi
+    done
+    [ -f "$input_config" ] && [ ! -L "$input_config" ] || {
+        echo "Effective gcconfig.pri is required for reproducible builds." >&2
+        return 1
+    }
+    install -m 0644 -- "$input_config" "$output_config" ||
+        return
+
+    if [ -f "$input_secrets" ] && [ ! -L "$input_secrets" ]; then
+        install -m 0600 -- "$input_secrets" "$output_secrets" || return
+    elif [ -e "$input_secrets" ] || [ -L "$input_secrets" ]; then
+        echo "GeneratedSecrets.h is not a regular input file." >&2
+        return 1
+    elif [ -e "$output_secrets" ] || [ -L "$output_secrets" ]; then
+        echo "Unexpected GeneratedSecrets.h exists in the source tree." >&2
+        return 1
+    fi
+
+    if [ -f "$input_qwt_config" ] && [ ! -L "$input_qwt_config" ]; then
+        install -m 0644 -- "$input_qwt_config" \
+            "$output_qwt_config"
+    elif [ -e "$input_qwt_config" ] || [ -L "$input_qwt_config" ]; then
+        echo "qwtconfig.pri is not a regular input file." >&2
+        return 1
+    elif [ -f "$default_qwt_config" ] && [ ! -L "$default_qwt_config" ]; then
+        install -m 0644 -- "$default_qwt_config" \
+            "$output_qwt_config"
+    else
+        echo "Default qwtconfig.pri input is unavailable." >&2
+        return 1
+    fi
+}
+
 run_reproducible_build_tool()
 (
     if [ "$#" -lt 4 ]; then
