@@ -22,6 +22,7 @@ RUNTIME_TRANSFORM_MANIFEST="$RUNTIME_TRANSFORM_DIR/manifest.json"
 IMAGE="$PASS_DIR/GoldenCheetah.AppImage"
 MANIFEST="$PASS_DIR/GoldenCheetah.AppImage.manifest"
 SBOM="$PASS_DIR/GoldenCheetah.AppImage.sbom.cdx.json"
+PACKAGE_PYTHON_VERSION=3.11
 
 if [ ! -d "$PASS_DIR" ] || [ -L "$PASS_DIR" ] ||
    [ -n "$(find "$PASS_DIR" -mindepth 1 -print -quit)" ]; then
@@ -32,8 +33,10 @@ if [ ! -x "$BINARY" ]; then
     echo "GoldenCheetah build output is missing: $BINARY" >&2
     exit 1
 fi
-if [ "${PYTHON_VERSION:-}" != "3.11" ]; then
-    echo "Build Python ${PYTHON_VERSION:-unset} does not match packaged Python 3.11" >&2
+PYTHON_VERSION=${PYTHON_VERSION:-$PACKAGE_PYTHON_VERSION}
+if [ "$PYTHON_VERSION" != "$PACKAGE_PYTHON_VERSION" ]; then
+    echo "Build Python $PYTHON_VERSION does not match packaged Python" \
+        "$PACKAGE_PYTHON_VERSION" >&2
     exit 1
 fi
 

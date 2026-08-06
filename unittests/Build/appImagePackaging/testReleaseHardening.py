@@ -24,6 +24,7 @@ BUILD_INPUT_IDENTITY = (
 )
 APPVEYOR_INPUTS = REPOSITORY_ROOT / "appveyor/linux/build-input-paths.sh"
 REPRODUCE_APPIMAGE = REPOSITORY_ROOT / "appveyor/linux/reproduce-appimage.sh"
+PACKAGE_APPIMAGE = REPOSITORY_ROOT / "appveyor/linux/package-appimage-pass.sh"
 
 
 def run(arguments, **kwargs):
@@ -415,6 +416,40 @@ class PipelineIsolationTests(unittest.TestCase):
                 env=environment,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_package_python_version_is_pinned_and_conflicts_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            binary = root / "GoldenCheetah"
+            binary.write_text("#!/bin/sh\nexit 1\n", encoding="ascii")
+            binary.chmod(0o700)
+
+            def package(version):
+                output = root / ("output-" + (version or "unset"))
+                output.mkdir()
+                environment = {
+                    **os.environ,
+                    "GC_APPIMAGE_BINARY": str(binary),
+                    "GC_APPIMAGE_OAUTH_POLICY": "unconfigured",
+                    "GC_APPIMAGE_REPOSITORY_ROOT": str(REPOSITORY_ROOT),
+                }
+                if version is None:
+                    environment.pop("PYTHON_VERSION", None)
+                else:
+                    environment["PYTHON_VERSION"] = version
+                return run([str(PACKAGE_APPIMAGE), str(output)], env=environment)
+
+            defaulted = package(None)
+            self.assertNotEqual(defaulted.returncode, 0)
+            self.assertNotIn("Python unset does not match", defaulted.stderr)
+            self.assertIn(
+                "Strava OAuth build status requires an ELF executable",
+                defaulted.stderr,
+            )
+
+            conflict = package("3.12")
+            self.assertNotEqual(conflict.returncode, 0)
+            self.assertIn("Python 3.12 does not match", conflict.stderr)
 
     def test_compiler_environment_is_allowlisted(self):
         build_pass = REPOSITORY_ROOT / "appveyor/linux/build-appimage-pass.sh"
