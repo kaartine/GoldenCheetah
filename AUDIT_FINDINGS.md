@@ -4780,19 +4780,38 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-007: Split transactions have no restart recovery journal
 
-- Status: OPEN
-- Code: `src/FileIO/AtomicFileWriter.h`,
-  `src/Gui/SplitActivitySave.cpp`
+- Status: FIXED
+- Code: `src/Core/RideCache.cpp`,
+  `src/FileIO/AnchoredFileSystem.cpp`,
+  `src/FileIO/AnchoredFileSystem.h`,
+  `src/Gui/SplitActivitySave.cpp`,
+  `src/Gui/SplitActivitySave.h`, and
+  `src/Gui/SplitActivityWizard.cpp`
 - Impact: Runtime failures are rolled back, but a process or power loss between
   publishing outputs, preserving an old backup, and archiving the source can
   leave a recoverable mixture of split files and `.rollback-*` state with no
   automatic reconciliation on restart.
-- Test: Run each durable transition in a subprocess, terminate it at injected
-  failpoints, restart, and require deterministic completion or rollback without
-  losing the source or a prior backup.
-- Fix direction: Use a private transaction directory and fsynced manifest with
-  explicit states, then reconcile incomplete transactions before loading the
-  activity cache.
+- Test-first evidence: Subprocess regressions crash at every durable save and
+  recovery transition, restart with a fresh process, and require one complete
+  generation without losing a source, prior backup, or foreign replacement.
+  The baseline had no persistent split intent or startup reconciliation path,
+  so interrupted publication could not satisfy that contract. Additional
+  regressions cover hostile and replaced journals, bounded handles and reads,
+  recovery deadlines, same-filesystem publication, and durable-generation
+  failures.
+- Resolution: Split publication now uses a private, permission-restricted
+  transaction directory with identity-bound and durably synchronized control
+  records. Source snapshots, prior backups, staged outputs, commit markers, and
+  cleanup transitions are validated through anchored handles. Recovery is
+  forward-only after the commit boundary, preserves unowned replacements, and
+  runs before `RideCache` loads activities. Work, payload, path, deadline, and
+  open-handle budgets bound hostile or abandoned journals.
+- Verification: `splitActivitySave` passes 104/0/0 normally and 104/0/0 under
+  strict ASan/UBSan/LSan. `atomicActivitySave` passes 331/0/0 in both modes;
+  `rideFileCacheRefresh`, `planReplacementJournal`, and `rideCacheRemoval` pass
+  45/0/0, 149/0/0, and 406/0/1 respectively in both modes. The full Qt 6.8.3
+  application links, and an isolated minimal-platform invocation reports
+  `GoldenCheetah V3.8-DEV2605 (5012)`.
 
 ### DUR-008: Staged-set rollback trusts a mutable target pathname
 
