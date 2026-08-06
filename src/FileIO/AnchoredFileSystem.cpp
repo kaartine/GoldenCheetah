@@ -178,6 +178,87 @@ private:
     int descriptor_ = -1;
 };
 
+bool expandTrustedRootDirectoryAlias(
+    int rootDescriptor,
+    QString &path,
+    QStringList &components,
+    QString &error)
+{
+    if (components.isEmpty()) return true;
+
+    const QByteArray encoded = QFile::encodeName(
+        components.constFirst());
+    struct stat before {};
+    if (::fstatat(
+            rootDescriptor, encoded.constData(), &before,
+            AT_SYMLINK_NOFOLLOW) != 0
+        || !S_ISLNK(before.st_mode)) {
+        return true;
+    }
+    if (before.st_uid != 0) {
+        error = QStringLiteral(
+            "The anchored root directory alias is not trusted");
+        return false;
+    }
+
+    QByteArray target(4096, '\0');
+    ssize_t length;
+    do {
+        length = ::readlinkat(
+            rootDescriptor, encoded.constData(),
+            target.data(), size_t(target.size()));
+    } while (length == -1 && errno == EINTR);
+    if (length < 0) {
+        error = nativeError(
+            QStringLiteral(
+                "Cannot resolve the anchored root directory alias"),
+            errno);
+        return false;
+    }
+    if (length >= target.size()) {
+        error = QStringLiteral(
+            "The anchored root directory alias target is too long");
+        return false;
+    }
+    target.truncate(int(length));
+
+    struct stat after {};
+    if (::fstatat(
+            rootDescriptor, encoded.constData(), &after,
+            AT_SYMLINK_NOFOLLOW) != 0
+        || before.st_dev != after.st_dev
+        || before.st_ino != after.st_ino
+        || !S_ISLNK(after.st_mode)
+        || after.st_uid != 0) {
+        error = QStringLiteral(
+            "The anchored root directory alias changed while resolving it");
+        return false;
+    }
+
+    const QString decoded = QFile::decodeName(target);
+    if (decoded.isEmpty()) {
+        error = QStringLiteral(
+            "The anchored root directory alias target is empty");
+        return false;
+    }
+    QString expanded = QDir::isAbsolutePath(decoded)
+        ? decoded
+        : QDir::root().filePath(decoded);
+    for (int index = 1; index < components.size(); ++index) {
+        expanded = QDir(expanded).filePath(
+            components.at(index));
+    }
+    path = QDir::cleanPath(expanded);
+    if (!QDir::isAbsolutePath(path)) {
+        error = QStringLiteral(
+            "The anchored root directory alias target is not absolute");
+        return false;
+    }
+    components = path.split(
+        QLatin1Char('/'), Qt::SkipEmptyParts);
+    return true;
+}
+
 struct UnixStamp
 {
     quint64 device = 0;
@@ -2499,7 +2580,7 @@ bool DirectoryAnchor::open(
             "An anchored directory path must be absolute");
         return false;
     }
-    const QString cleaned = QDir::cleanPath(
+    QString cleaned = QDir::cleanPath(
         QFileInfo(absolutePath).absoluteFilePath());
 
 #ifdef Q_OS_UNIX
@@ -2510,8 +2591,12 @@ bool DirectoryAnchor::open(
             QStringLiteral("Cannot open the filesystem root"), errno);
         return false;
     }
-    const QStringList components = cleaned.split(
+    QStringList components = cleaned.split(
         QLatin1Char('/'), Qt::SkipEmptyParts);
+    if (!expandTrustedRootDirectoryAlias(
+            current.get(), cleaned, components, error)) {
+        return false;
+    }
     for (const QString &component : components) {
         const QByteArray encoded = QFile::encodeName(component);
         FileDescriptor next(::openat(

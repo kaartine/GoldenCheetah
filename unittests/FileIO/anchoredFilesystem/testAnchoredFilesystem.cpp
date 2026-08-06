@@ -714,6 +714,8 @@ private slots:
     void rejectsUnsafeComponents_data();
     void rejectsUnsafeComponents();
     void rejectsUnsafeFileTypes();
+    void opensTrustedRootDirectoryAlias();
+    void rejectsUserControlledDirectoryAlias();
     void pinsIdentityAndContentThroughOneHandle();
     void permitsConcurrentPinsOfOneIdentity();
     void permitsOrdinaryQtReadsWhilePinned();
@@ -881,6 +883,75 @@ void TestAnchoredFilesystem::rejectsUnsafeFileTypes()
             entry(directory, QStringLiteral("symbolic")), pinned, error));
         QVERIFY(!error.isEmpty());
     }
+}
+
+void TestAnchoredFilesystem::opensTrustedRootDirectoryAlias()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("POSIX root aliases are required");
+#elif defined(Q_OS_MACOS)
+    const QFileInfo systemAlias(QStringLiteral("/var"));
+    QVERIFY(systemAlias.isSymLink());
+    QTemporaryDir target(
+        QStringLiteral("/var/tmp/gc-anchored-root-alias-XXXXXX"));
+    QVERIFY(target.isValid());
+
+    DirectoryAnchor directory;
+    QString error;
+    QVERIFY2(
+        DirectoryAnchor::open(target.path(), directory, error),
+        qPrintable(error));
+    QCOMPARE(
+        directory.displayPath(),
+        QFileInfo(target.path()).canonicalFilePath());
+#else
+    if (::geteuid() != 0)
+        QSKIP("Creating a trusted root alias requires root");
+
+    QTemporaryDir target;
+    QVERIFY(target.isValid());
+    const QString alias = QStringLiteral(
+        "/gc-anchored-root-alias-%1")
+        .arg(QCoreApplication::applicationPid());
+    QVERIFY(!QFileInfo::exists(alias));
+    QVERIFY(createSymbolicLink(target.path(), alias));
+
+    DirectoryAnchor directory;
+    QString error;
+    const bool opened = DirectoryAnchor::open(
+        alias, directory, error);
+    const bool removed = QFile::remove(alias);
+    QVERIFY(removed);
+    QVERIFY2(opened, qPrintable(error));
+    QCOMPARE(
+        directory.displayPath(),
+        QFileInfo(target.path()).canonicalFilePath());
+#endif
+}
+
+void TestAnchoredFilesystem::rejectsUserControlledDirectoryAlias()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("POSIX symbolic links are required");
+#else
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString canonicalRoot =
+        QFileInfo(root.path()).canonicalFilePath();
+    QVERIFY(!canonicalRoot.isEmpty());
+    const QString target = QDir(canonicalRoot).filePath(
+        QStringLiteral("target"));
+    const QString alias = QDir(canonicalRoot).filePath(
+        QStringLiteral("alias"));
+    QVERIFY(QDir().mkdir(target));
+    QVERIFY(createSymbolicLink(target, alias));
+
+    DirectoryAnchor directory;
+    QString error;
+    QVERIFY(!DirectoryAnchor::open(alias, directory, error));
+    QVERIFY(!directory.isValid());
+    QVERIFY(!error.isEmpty());
+#endif
 }
 
 void TestAnchoredFilesystem::pinsIdentityAndContentThroughOneHandle()
