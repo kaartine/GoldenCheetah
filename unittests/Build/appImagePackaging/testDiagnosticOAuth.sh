@@ -51,12 +51,19 @@ fi
 printf '\177ELF\000\000\000\000AI\002fixture\n' >"$TEMPORARY/fixture.AppImage"
 chmod +x "$TEMPORARY/fixture.AppImage"
 GC_TEST_OAUTH_ENTRY="$TEMPORARY/unconfigured"
-run_packaging_appimage()
+trusted_appimage_extract()
 {
-    [ "$2" = --appimage-extract ] || return 64
-    mkdir -p squashfs-root
-    cp "$GC_TEST_OAUTH_ENTRY" squashfs-root/GoldenCheetah
-    ln -s GoldenCheetah squashfs-root/AppRun
+    local image=$1
+    local destination=$2
+    local app_root="$destination/squashfs-root"
+
+    [ "$image" = "$TEMPORARY/fixture.AppImage" ] || return 64
+    [ -d "$destination" ] &&
+        [ -z "$(find -P "$destination" -mindepth 1 -print -quit)" ] ||
+        return 64
+    mkdir -p "$app_root"
+    cp "$GC_TEST_OAUTH_ENTRY" "$app_root/GoldenCheetah"
+    ln -s GoldenCheetah "$app_root/AppRun"
 }
 
 require_unconfigured_strava_oauth_appimage \

@@ -272,7 +272,7 @@
     "unittests/Build/appImagePackaging/testAppImagePackaging.sh": "c60fb30d50161253db247dabc66fdbf628a76e9c2a8c9e5b86127b311ce1a7a5",
     "unittests/Build/appImagePackaging/testAptSnapshot.py": "224bbc8516616d127452cc13c7d1d4c51b60632123527248abb91dee5ce41a44",
     "unittests/Build/appImagePackaging/testCiReleaseGates.sh": "f27ad24e7a34a857a44e7cb6047bf3e34c99217add327b17a41e8a52cdc24172",
-    "unittests/Build/appImagePackaging/testDiagnosticOAuth.sh": "77b316d0518c6482d96c6a09583615d9d6cb9068a473d657dd2a09f81b53c9d9",
+    "unittests/Build/appImagePackaging/testDiagnosticOAuth.sh": "8fe4cbf752ccaa5617c6c8c9f55b2dac694789ffd4f96f5bb63297e8d82cfcbd",
     "unittests/Build/appImagePackaging/testGeneratedSecrets.ps1": "da1b89ff997b473ec30414b6b96fa7ffde6934b88a1ccd04783c9e02b353b418",
     "unittests/Build/appImagePackaging/testImmutableActions.py": "9db6e6099d077f41da21cc360906fb87a1338148f5d97a77145c0576062af73a",
     "unittests/Build/appImagePackaging/testMacOSPackaging.py": "dd319d547616a1465f81811bf1ea96505099b852b68d3eb8865563fe31175024",
