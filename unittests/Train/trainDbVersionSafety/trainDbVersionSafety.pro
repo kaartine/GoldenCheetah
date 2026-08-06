@@ -11,11 +11,13 @@ CONFIG -= debug
 DEFINES += GC_TRAIN_DB_TEST_HOOKS
 
 SOURCES = testTrainDbVersionSafety.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp \
           ../../../src/Train/TrainDB.cpp \
           ../../../src/Train/ErgFileBase.cpp \
           ../../../src/Train/VideoSyncFileBase.cpp
 
 HEADERS = ../../../src/Train/TrainDB.h \
+          ../../../src/FileIO/AnchoredFileSystem.h \
           ../../../src/Train/ErgFileBase.h \
           ../../../src/Train/VideoSyncFileBase.h \
           ../../../src/Train/TagStore.h

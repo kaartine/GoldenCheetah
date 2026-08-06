@@ -29,12 +29,32 @@
 #include <QXmlDefaultHandler>
 #include "Settings.h"
 
+#include <functional>
+
 #define GPX_SAMPLE_INTERVAL (1.0)
+
+struct GpxParserOptions
+{
+    bool garminSmartRecording = true;
+    int garminHighWaterMark = 25;
+};
 
 class GpxParser : public QXmlDefaultHandler
 {
 public:
-    GpxParser(RideFile* rideFile);
+    using CancellationCheck = std::function<bool()>;
+    static constexpr int MaximumGarminHighWaterMark = 3600;
+    static constexpr qsizetype MaximumPointCount = 250000;
+
+    static GpxParserOptions captureOptions();
+
+    explicit GpxParser(
+        RideFile *rideFile,
+        CancellationCheck cancelled = {});
+    GpxParser(
+        RideFile *rideFile,
+        const GpxParserOptions &options,
+        CancellationCheck cancelled = {});
 
     bool startElement( const QString&, const QString&, const QString&,
 		       const QXmlAttributes& );
@@ -42,7 +62,16 @@ public:
 
     bool characters( const QString& );
 
+    bool wasCancelled() const { return cancelled_; }
+    bool resourceLimitExceeded() const
+    {
+        return resourceLimitExceeded_;
+    }
+
 private:
+
+    bool continueParsing();
+    bool canAppendPoint();
 
     RideFile*   rideFile;
 
@@ -70,8 +99,12 @@ private:
     bool firstTime;
     // throw away the metadata, it doesn't look useful
     bool metadata;
+    CancellationCheck cancellationCheck;
+    bool cancelled_ = false;
+    bool configurationValid_ = true;
+    bool resourceLimitExceeded_ = false;
+    qsizetype pointLimit_ = MaximumPointCount;
 
 };
 
 #endif // _GpxParser_h
-

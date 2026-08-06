@@ -17,6 +17,7 @@
  */
 
 #include "ErgFile.h"
+#include "GpxParser.h"
 #include "Athlete.h"
 
 // Zwift XML handing
@@ -74,7 +75,9 @@ ErgFile::ErgFile(QString filename, ErgFileFormat mode, Context *context, QDate w
     this->mode(mode);
     strictGradient(true);
     fHasGPS(false);
-    if (context->athlete->zones("Bike")) {
+    CP(300);
+    if (context && context->athlete
+        && context->athlete->zones("Bike")) {
         int zonerange = context->athlete->zones("Bike")->whichRange(this->when);
         if (zonerange >= 0) CP(context->athlete->zones("Bike")->getCP(zonerange));
     }
@@ -92,11 +95,11 @@ ErgFile::ErgFile(Context *context, QDate when)
     mode(ErgFileFormat::unknown);
     strictGradient(true);
     fHasGPS(false);
-    if (context->athlete->zones("Bike")) {
+    CP(300);
+    if (context && context->athlete
+        && context->athlete->zones("Bike")) {
         int zonerange = context->athlete->zones("Bike")->whichRange(this->when);
         if (zonerange >= 0) CP(context->athlete->zones("Bike")->getCP(zonerange));
-    } else {
-        CP(300);
     }
     filename("");
 }
@@ -774,6 +777,76 @@ void ErgFile::parseComputrainer(QString p)
 // .json    GoldenCheetah JSON
 void ErgFile::parseFromRideFileFactory()
 {
+    QFile sourceFile(filename());
+    if (!sourceFile.exists()) {
+        valid = false;
+        return;
+    }
+    QStringList errors;
+    std::unique_ptr<RideFile> ride(
+        RideFileFactory::instance().openRideFile(
+            context, sourceFile, errors));
+    setFromRideFile(std::move(ride));
+}
+
+bool ErgFile::parseGpxFile(
+    const std::function<bool()> &cancelled,
+    QString &error)
+{
+    return parseGpxFile(
+        GpxParser::captureOptions(), cancelled, error);
+}
+
+bool ErgFile::parseGpxFile(
+    const GpxParserOptions &options,
+    const std::function<bool()> &cancelled,
+    QString &error)
+{
+    error.clear();
+    QFile sourceFile(filename());
+    if (!sourceFile.exists()) {
+        error = QObject::tr("The GPX workout content is unavailable.");
+        valid = false;
+        return false;
+    }
+    QStringList errors;
+    std::unique_ptr<RideFile> ride(new RideFile);
+    ride->setRecIntSecs(GPX_SAMPLE_INTERVAL);
+    ride->setFileFormat("GPS Exchange Format (gpx)");
+    GpxParser handler(ride.get(), options, cancelled);
+    QXmlInputSource source(&sourceFile);
+    QXmlSimpleReader reader;
+    reader.setContentHandler(&handler);
+    if (!reader.parse(source)) {
+        errors << (handler.wasCancelled()
+            ? QObject::tr("GPX parsing was cancelled.")
+            : handler.resourceLimitExceeded()
+                ? QObject::tr("GPX workout resource limit exceeded.")
+            : QObject::tr("Could not parse GPX workout content."));
+        ride.reset();
+    }
+    if (!ride || !setFromRideFile(std::move(ride), cancelled)) {
+        error = errors.isEmpty()
+            ? QObject::tr("The GPX workout content is not valid.")
+            : errors.join(QLatin1Char(' '));
+        return false;
+    }
+    return true;
+}
+
+bool ErgFile::setFromRideFile(
+    std::unique_ptr<RideFile> ride,
+    const std::function<bool()> &cancelled)
+{
+    const auto cancellationRequested = [&cancelled] {
+        if (!cancelled) return false;
+        try {
+            return cancelled();
+        } catch (...) {
+            return true;
+        }
+    };
+
     // Initialise
     version("");
     units("");
@@ -795,20 +868,9 @@ void ErgFile::parseFromRideFileFactory()
 
     // static double km = 0;
 
-    QFile gpxFile(filename());
-
-    // check file exists
-    if (!gpxFile.exists()) {
+    if (!ride || cancellationRequested()) {
         valid = false;
-        return;
-    }
-
-    // instantiate ride
-    QStringList errors_;
-    RideFile* ride = RideFileFactory::instance().openRideFile(context, gpxFile, errors_);
-    if (ride == NULL) {
-        valid = false;
-        return;
+        return false;
     }
 
     // Enumerate the data types that are available from this gpx.
@@ -823,16 +885,24 @@ void ErgFile::parseFromRideFileFactory()
     else if (fHasKm && fHasAlt) {}  // derive slope from distance and alt
     else {
         valid = false;
-        return;
+        return false;
     }
 
     int pointCount = ride->dataPoints().count();
+    if (pointCount == 0) {
+        valid = false;
+        return false;
+    }
 
     RideFilePoint* prevPoint = NULL;
     RideFilePoint* point = NULL;
     RideFilePoint* nextPoint = (ride->dataPoints()[0]);
     double alt = 0;
     for (int i = 0; i < pointCount; i++) {
+        if (cancellationRequested()) {
+            valid = false;
+            return false;
+        }
         ErgFilePoint add;
 
         prevPoint = point;
@@ -889,6 +959,10 @@ void ErgFile::parseFromRideFileFactory()
     // Add intervals as lap markers and text cues
     int i = 0;
     foreach(const RideFileInterval* lap, ride->intervals()) {
+        if (cancellationRequested()) {
+            valid = false;
+            return false;
+        }
         double x = ride->timeToDistance(lap->start) * 1000.0;
         double y = ride->timeToDistance(lap->stop) * 1000.0;
         int duration = lap->stop - lap->start + 1;
@@ -902,8 +976,6 @@ void ErgFile::parseFromRideFileFactory()
         }
     }
 
-    gpxFile.close();
-
     valid = true;
 
     // set ErgFile duration
@@ -911,6 +983,7 @@ void ErgFile::parseFromRideFileFactory()
 
     // calculate climbing etc
     calculateMetrics();
+    return true;
 }
 
 // Parse TTS into ergfile
@@ -2245,4 +2318,3 @@ int ErgFileQueryAdapter::addNewLap(double loc) const
 {
     return getErgFile() ? getErgFile()->addNewLap(loc) : -1;
 }
-

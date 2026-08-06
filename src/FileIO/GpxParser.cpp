@@ -30,13 +30,60 @@
 // use stc strtod to bypass Qt toDouble() issues
 #include <stdlib.h>
 
-GpxParser::GpxParser (RideFile* rideFile)
-    : rideFile(rideFile)
+#include <QCoreApplication>
+#include <QThread>
+
+#include <utility>
+
+#ifdef GC_ERG_FILE_GPX_TEST_HOOKS
+extern void ergFileGpxParserInterpolationTestHook();
+extern qsizetype ergFileGpxParserPointLimitTestOverride();
+#endif
+
+GpxParserOptions GpxParser::captureOptions()
 {
-    isGarminSmartRecording = appsettings->value(NULL, GC_GARMIN_SMARTRECORD,Qt::Checked);
-    GarminHWM = appsettings->value(NULL, GC_GARMIN_HWMARK);
-    if (GarminHWM.isNull() || GarminHWM.toInt() == 0)
-        GarminHWM.setValue(25); // default to 25 seconds.
+    GpxParserOptions options;
+    QCoreApplication *application = QCoreApplication::instance();
+    if (!appsettings || !application
+        || QThread::currentThread() != application->thread()) {
+        return options;
+    }
+    options.garminSmartRecording = appsettings->value(
+        nullptr, GC_GARMIN_SMARTRECORD, Qt::Checked).toInt() != 0;
+    const QVariant highWaterMark = appsettings->value(
+        nullptr, GC_GARMIN_HWMARK, 25);
+    if (highWaterMark.toInt() > 0) {
+        options.garminHighWaterMark = qMin(
+            highWaterMark.toInt(), MaximumGarminHighWaterMark);
+    }
+    return options;
+}
+
+GpxParser::GpxParser(
+    RideFile *rideFile,
+    CancellationCheck cancelled)
+    : GpxParser(
+          rideFile, captureOptions(), std::move(cancelled))
+{
+}
+
+GpxParser::GpxParser(
+    RideFile *rideFile,
+    const GpxParserOptions &options,
+    CancellationCheck cancelled)
+    : rideFile(rideFile)
+    , cancellationCheck(std::move(cancelled))
+{
+    isGarminSmartRecording = options.garminSmartRecording;
+    GarminHWM = options.garminHighWaterMark;
+    configurationValid_ = options.garminHighWaterMark > 0
+        && options.garminHighWaterMark <= MaximumGarminHighWaterMark;
+#ifdef GC_ERG_FILE_GPX_TEST_HOOKS
+    const qsizetype overrideLimit =
+        ergFileGpxParserPointLimitTestOverride();
+    if (overrideLimit > 0)
+        pointLimit_ = qMin(pointLimit_, overrideLimit);
+#endif
 
     cad = 0;
     distance = 0;
@@ -53,10 +100,41 @@ GpxParser::GpxParser (RideFile* rideFile)
 
 }
 
+bool GpxParser::continueParsing()
+{
+#ifdef GC_ERG_FILE_GPX_TEST_HOOKS
+    extern void ergFileGpxParserProgressTestHook();
+    ergFileGpxParserProgressTestHook();
+#endif
+    if (!cancellationCheck) return true;
+    try {
+        cancelled_ = cancellationCheck();
+    } catch (...) {
+        cancelled_ = true;
+    }
+    return !cancelled_;
+}
+
+bool GpxParser::canAppendPoint()
+{
+    if (!configurationValid_
+        || !rideFile
+        || rideFile->dataPoints().size() >= pointLimit_) {
+        resourceLimitExceeded_ = true;
+        return false;
+    }
+    return true;
+}
+
 bool GpxParser::startElement( const QString&, const QString&,
     const QString& qName,
     const QXmlAttributes& qAttributes)
 {
+    if (!configurationValid_) {
+        resourceLimitExceeded_ = true;
+        return false;
+    }
+    if (!continueParsing()) return false;
     buffer.clear();
 
     if(metadata)
@@ -104,6 +182,7 @@ inline double toRadians(double degrees)
 bool
         GpxParser::endElement( const QString&, const QString&, const QString& qName)
 {
+    if (!continueParsing()) return false;
     if (qName == "time")
     {
 
@@ -167,6 +246,7 @@ bool
             lastLat = lat;
             lastSpeed = speed;
 	    // first point
+            if (!canAppendPoint()) return false;
             rideFile->appendPoint(secs, cad, hr, 0, 0, 0, watts, alt, lon, lat, 0, 0.0, temp, 0.0, 
                                   0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                                   0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0);
@@ -269,6 +349,7 @@ bool
                 (secs == 0)) {
 
                 // no smart recording, or delta exceeds HW treshold, or no time elements; just insert the data
+                if (!canAppendPoint()) return false;
                 rideFile->appendPoint(secs, cad, hr, distance, speed, 0,watts, alt, lon, lat, 0, 0.0, temp, 0.0, 
                                       0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                                       0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0);
@@ -280,9 +361,13 @@ bool
 		double deltaLon = lon - prevPoint->lon;
 		double deltaLat = lat - prevPoint->lat;
 
-		// smart recording is on and delta is less than GarminHWM seconds.
-		for(int i = 1; i <= deltaSecs; i++) {
-		    double weight = i/ deltaSecs;
+			// smart recording is on and delta is less than GarminHWM seconds.
+			for(int i = 1; i <= deltaSecs; i++) {
+#ifdef GC_ERG_FILE_GPX_TEST_HOOKS
+                ergFileGpxParserInterpolationTestHook();
+#endif
+                if (!continueParsing() || !canAppendPoint()) return false;
+			    double weight = i/ deltaSecs;
 		    double kph = prevPoint->kph + (deltaSpeed *weight);
 		    // need to make sure speed goes to zero
 		    kph = kph > 0.35 ? kph : 0;
@@ -326,6 +411,7 @@ bool
 
 bool GpxParser::characters( const QString& str )
 {
+    if (!continueParsing()) return false;
     buffer += str;
     return true;
 }

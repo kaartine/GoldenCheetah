@@ -34,6 +34,7 @@ equals(GC_UNITTESTS, active) {
 			   Charts/voronoiSafety \
 			   Train/libraryImportFileStager \
 			   Train/stravaRoutesClient \
+			   Train/stravaRoutesDownloadPipeline \
 			   Train/webDownloadImportPolicy \
 			   Train/trainDbVersionSafety \
 			   Train/libraryTransactionSafety \

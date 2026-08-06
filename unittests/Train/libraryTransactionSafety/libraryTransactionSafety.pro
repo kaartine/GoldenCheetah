@@ -12,6 +12,7 @@ DEFINES += GC_LIBRARY_TRANSACTION_TEST_HOOKS
 
 SOURCES = testLibraryTransactionSafety.cpp \
           LibraryTransactionTestStubs.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp \
           ../../../src/Train/Library.cpp \
           ../../../src/Train/LibraryImportFileStager.cpp \
           ../../../src/Train/TrainDB.cpp \
@@ -19,6 +20,7 @@ SOURCES = testLibraryTransactionSafety.cpp \
           ../../../src/Train/VideoSyncFileBase.cpp
 
 HEADERS = LibraryTransactionTestStubs.h \
+          ../../../src/FileIO/AnchoredFileSystem.h \
           ../../../src/Train/LibraryImportFileStager.h \
           ../../../src/Train/TrainDB.h \
           ../../../src/Train/ErgFileBase.h \

@@ -7,6 +7,7 @@
 #include "DataProcessor.h"
 #include "Estimator.h"
 #include "ErgFile.h"
+#include "GpxParser.h"
 #include "RideCache.h"
 #include "RideCacheModel.h"
 #include "RideItem.h"
@@ -307,15 +308,68 @@ RideFile *RideFileFactory::openRideFile(
 }
 
 ErgFile::ErgFile(
-    QString path, ErgFileFormat format,
+    QString path, ErgFileFormat requestedFormat,
     Context *workoutContext, QDate)
+    : valid(false), context(workoutContext)
+{
+    QFile source(path);
+    if (!source.open(QIODevice::ReadOnly)) return;
+    const QByteArray contents = source.readAll();
+    if (contents.isEmpty()) return;
+    filename(path);
+    originalFilename(path);
+    description(QString::fromUtf8(contents));
+    const ErgFileFormat effectiveFormat =
+        requestedFormat == ErgFileFormat::unknown
+            ? ErgFileFormat::erg
+            : requestedFormat;
+    mode(requestedFormat);
+    format(effectiveFormat);
+    valid = true;
+}
+
+ErgFile::ErgFile(Context *workoutContext, QDate)
     : valid(true), context(workoutContext)
 {
-    filename(path);
-    mode(format);
 }
 
 ErgFile::~ErgFile() = default;
+
+GpxParserOptions GpxParser::captureOptions()
+{
+    return {};
+}
+
+bool ErgFile::isWorkout(QString path)
+{
+    const QString suffix = QFileInfo(path).suffix().toLower();
+    return suffix == QStringLiteral("erg")
+        || suffix == QStringLiteral("mrc")
+        || suffix == QStringLiteral("crs")
+        || suffix == QStringLiteral("gpx")
+        || suffix == QStringLiteral("zwo");
+}
+
+bool ErgFile::parseGpxFile(
+    const std::function<bool()> &cancelled,
+    QString &error)
+{
+    if (cancelled && cancelled()) {
+        error = QStringLiteral("GPX parsing was cancelled.");
+        valid = false;
+        return false;
+    }
+    valid = true;
+    return true;
+}
+
+bool ErgFile::parseGpxFile(
+    const GpxParserOptions &,
+    const std::function<bool()> &cancelled,
+    QString &error)
+{
+    return parseGpxFile(cancelled, error);
+}
 
 bool ErgFile::isValid() const
 {
