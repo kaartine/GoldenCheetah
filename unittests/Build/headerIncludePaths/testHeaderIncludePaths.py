@@ -43,17 +43,26 @@ def main() -> None:
     shim_includes = set(
         INCLUDE_PATTERN.findall(PORTABLE_QT_SHIM.read_text(encoding="utf-8"))
     )
-    if "qglobal.h" not in shim_includes or "QtCore/qglobal.h" in shim_includes:
+    if "QtCore/qglobal.h" not in shim_includes or "qglobal.h" in shim_includes:
         raise AssertionError(
-            "QtPlatformShim.h must include qglobal.h through qmake's direct "
-            "QtCore include path so both framework and directory Qt layouts work"
+            "QtPlatformShim.h must use the module-qualified QtCore/qglobal.h "
+            "include supported by framework and directory Qt layouts"
         )
 
     project = PORTABLE_QT_PROJECT.read_text(encoding="utf-8")
-    if "QT_INSTALL_HEADERS" in project:
+    expected_force_include = """unix {
+    macx {
+        QMAKE_CXXFLAGS += -F$$[QT_INSTALL_LIBS]
+    } else {
+        QMAKE_CXXFLAGS += -I$$[QT_INSTALL_HEADERS]
+    }
+
+    QMAKE_CXXFLAGS += -include $$PWD/QtPlatformShim.h
+}"""
+    if expected_force_include not in project:
         raise AssertionError(
-            "usbXpressSafety must use qmake's Qt module include paths instead of "
-            "assuming a directory-style QT_INSTALL_HEADERS layout"
+            "usbXpressSafety must give the compiler-forced Qt shim a direct "
+            "QtCore header path for framework and directory Qt layouts"
         )
 
 
