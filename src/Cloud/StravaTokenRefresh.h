@@ -18,6 +18,8 @@
 #include <memory>
 #include <optional>
 
+class QObject;
+
 struct StravaTokenRefreshResult
 {
     bool success = false;
@@ -44,6 +46,7 @@ struct StravaAuthorizationRemovalResult
     bool cleanupPending = false;
     QString error;
     bool remoteAuthorizationMayRemain = false;
+    bool authorizationUnchanged = false;
 
     bool isSuccess() const
     {
@@ -214,6 +217,34 @@ public:
         const QString &accessToken,
         const QString &refreshToken,
         bool remoteGrantMayHaveRotated = false);
+    static bool reconcileAuthorizationFromStorage(
+        const QString &accountKey,
+        StravaAuthorizationStatus status,
+        const QString &accessToken,
+        const QString &refreshToken,
+        bool remoteGrantMayHaveRotated,
+        bool authoritative);
+    static bool adoptAuthoritativeAuthorizationFromStorage(
+        const QString &accountKey,
+        const StravaAuthorizationSnapshot &expected,
+        StravaAuthorizationStatus status,
+        const QString &accessToken,
+        const QString &refreshToken,
+        bool remoteGrantMayHaveRotated);
+    static bool reconcileAuthoritativeAuthorizationFromStorage(
+        const QString &accountKey,
+        StravaAuthorizationStatus status,
+        const QString &accessToken,
+        const QString &refreshToken,
+        bool remoteGrantMayHaveRotated,
+        bool *authorizationActive = nullptr);
+    static std::function<void()> threadBoundAbortOperation(
+        QObject *target,
+        const std::function<void(QObject *)> &operation);
+#ifdef GC_STRAVA_TOKEN_REFRESH_TEST_HOOKS
+    static void setThreadBoundDispatchHookForTest(
+        std::function<void()> hook);
+#endif
     static void initializeAuthorizationStatus(
         const QString &accountKey,
         StravaAuthorizationStatus status);

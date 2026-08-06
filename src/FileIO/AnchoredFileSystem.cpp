@@ -14,6 +14,8 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QElapsedTimer>
+#include <QThread>
 #include <QUuid>
 
 #include <algorithm>
@@ -31,6 +33,7 @@
 #include <grp.h>
 #include <pwd.h>
 #include <sys/stat.h>
+#include <sys/file.h>
 #include <unistd.h>
 #if defined(Q_OS_MACOS)
 #include <sys/acl.h>
@@ -3253,6 +3256,82 @@ bool writeNewFile(
         }
     }
     return false;
+}
+
+bool tryLockExclusive(
+    PinnedFile &file,
+    int timeoutMilliseconds,
+    QString &error)
+{
+    error.clear();
+    if (!file.state_ || timeoutMilliseconds <= 0) {
+        error = QStringLiteral(
+            "The anchored lock inputs are invalid");
+        return false;
+    }
+    if (!file.state_->entry.parent_.pathMatches(error))
+        return false;
+
+    QElapsedTimer elapsed;
+    elapsed.start();
+    for (;;) {
+#ifdef Q_OS_UNIX
+        int result;
+        do {
+            result = ::flock(
+                file.state_->descriptor.get(), LOCK_EX | LOCK_NB);
+        } while (result != 0 && errno == EINTR);
+        if (result == 0) break;
+        if (errno != EWOULDBLOCK && errno != EAGAIN) {
+            error = nativeError(
+                QStringLiteral("Cannot lock an anchored file"), errno);
+            return false;
+        }
+#elif defined(Q_OS_WIN)
+        OVERLAPPED overlap{};
+        if (::LockFileEx(
+                file.state_->handle.get(),
+                LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                0,
+                MAXDWORD,
+                MAXDWORD,
+                &overlap)) {
+            break;
+        }
+        const DWORD native = ::GetLastError();
+        if (native != ERROR_LOCK_VIOLATION
+            && native != ERROR_IO_PENDING) {
+            error = windowsError(
+                QStringLiteral("Cannot lock an anchored file"), native);
+            return false;
+        }
+#else
+        error = QStringLiteral(
+            "Anchored filesystem operations are unsupported on this platform");
+        return false;
+#endif
+        const qint64 remaining =
+            qint64(timeoutMilliseconds) - elapsed.elapsed();
+        if (remaining <= 0) {
+            error = QStringLiteral("The anchored file is already locked");
+            return false;
+        }
+        QThread::msleep(static_cast<unsigned long>(
+            std::min<qint64>(10, remaining)));
+    }
+
+    bool named = false;
+    if (!entryMatches(file.state_->entry, file, named, error)
+        || !named
+        || !file.state_->entry.parent_.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The anchored lock file or its parent was replaced");
+        }
+        file = {};
+        return false;
+    }
+    return true;
 }
 
 bool copyToNewFile(

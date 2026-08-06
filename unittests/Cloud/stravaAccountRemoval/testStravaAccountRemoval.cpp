@@ -1,40 +1,23 @@
 #include "Cloud/StravaAccountRemoval.h"
 #include "Cloud/StravaCredentialPublisher.h"
 #include "Cloud/StravaTokenRefresh.h"
+#include "Core/Settings.h"
+#include "StravaPublisherTestSettings.h"
 
+#include <QDir>
 #include <QTest>
+#include <QTemporaryDir>
 #include <QUuid>
 
 #include <atomic>
+#include <chrono>
 #include <functional>
+#include <future>
+#include <memory>
 #include <stdexcept>
+#include <utility>
 
 namespace {
-
-struct PublisherProbe
-{
-    bool markResult = true;
-    StravaTokenPublication::RemovalResult removalResult{
-        StravaTokenPublication::RemovalStatus::Cleared,
-        QString()
-    };
-    int markCalls = 0;
-    int removalCalls = 0;
-    std::function<void()> markHook;
-    QString accountKey;
-    StravaCredentialPublisher::RemovalRequest removalRequest;
-};
-
-PublisherProbe &publisherProbe()
-{
-    static PublisherProbe probe;
-    return probe;
-}
-
-void resetPublisherProbe()
-{
-    publisherProbe() = {};
-}
 
 QString uniqueAccount(const QString &label)
 {
@@ -46,6 +29,10 @@ QString uniqueAccount(const QString &label)
 StravaAccountRemoval::Request localRequest(
     const QString &account)
 {
+    StravaPublisherTestSettings::seedAuthorization(
+        account,
+        QStringLiteral("synthetic-access-token"),
+        QStringLiteral("synthetic-refresh-token"));
     StravaAccountRemoval::Request request;
     request.accountKey = account;
     request.accessToken =
@@ -57,34 +44,6 @@ StravaAccountRemoval::Request localRequest(
 }
 
 } // namespace
-
-namespace StravaCredentialPublisher {
-
-bool markRevocationPending(
-    const QString &accountKey,
-    int,
-    const CancellationCheck &)
-{
-    PublisherProbe &probe = publisherProbe();
-    ++probe.markCalls;
-    probe.accountKey = accountKey;
-    if (probe.markHook)
-        probe.markHook();
-    return probe.markResult;
-}
-
-StravaTokenPublication::RemovalResult remove(
-    const RemovalRequest &request,
-    int,
-    const CancellationCheck &)
-{
-    PublisherProbe &probe = publisherProbe();
-    ++probe.removalCalls;
-    probe.removalRequest = request;
-    return probe.removalResult;
-}
-
-} // namespace StravaCredentialPublisher
 
 class TestStravaAccountRemoval : public QObject
 {
@@ -98,6 +57,7 @@ private slots:
     void accessTokenRevocationClearsRemoteWarning();
     void refreshTokenRevocationClearsRemoteWarning();
     void remoteSuccessSurvivesLocalCleanupFailure();
+    void remoteSuccessWithVaultConflictReportsUncertainty();
     void accessTokenSuccessSurvivesLocalCleanupFailure();
     void remoteTokenDoesNotReplaceLocalCasToken();
     void staleDisconnectCannotRemoveNewGrant();
@@ -106,11 +66,132 @@ private slots:
     void cancellationBeforeStartDoesNotMutateStorage();
     void cancellationAfterPendingCannotAbortRemoteRevocation();
     void invalidModeFailsClosed();
+    void unavailableVaultReadCannotReportLocalDisconnect();
+    void requestCreationFailureRestoresRetryableAuthorization();
+    void metadataSnapshotWaitsForDurabilityLease();
+    void snapshotDeadlineCoversNativeKeychainTimeout();
 };
+
+void TestStravaAccountRemoval::
+snapshotDeadlineCoversNativeKeychainTimeout()
+{
+    QVERIFY(
+        StravaCredentialPublisher::CredentialSnapshotTimeoutMs
+        >= 30000);
+}
+
+void TestStravaAccountRemoval::
+metadataSnapshotWaitsForDurabilityLease()
+{
+    const QString account =
+        uniqueAccount(QStringLiteral("metadata-lease"));
+    localRequest(account);
+    QString error;
+    const auto mutation = StravaCredentialPublisher::beginMutation(
+        account,
+        StravaCredentialDurability::MutationKind::Refresh,
+        2000,
+        error);
+    QVERIFY2(mutation, qPrintable(error));
+
+    auto snapshot = std::async(std::launch::async, [account] {
+        return StravaCredentialPublisher::
+            readStoredAuthorizationMetadata(account, 2000);
+    });
+    QCOMPARE(
+        snapshot.wait_for(std::chrono::milliseconds(100)),
+        std::future_status::timeout);
+
+    QVERIFY(mutation->finishNoChange(error));
+    const auto metadata = snapshot.get();
+    QVERIFY(metadata.readable);
+    QCOMPARE(metadata.state, QStringLiteral("active"));
+    QVERIFY(!metadata.revision.isEmpty());
+}
+
+void TestStravaAccountRemoval::
+unavailableVaultReadCannotReportLocalDisconnect()
+{
+    const QString account =
+        uniqueAccount(QStringLiteral("local-vault-unavailable"));
+    StravaPublisherTestSettings::setCredentialReadsAvailable(false);
+
+    const StravaAccountRemoval::Result unavailable =
+        StravaAccountRemoval::execute(localRequest(account));
+
+    QVERIFY(!unavailable.isSuccess());
+    QVERIFY(!unavailable.disconnected);
+    QCOMPARE(StravaPublisherTestSettings::pendingStateWrites(), 0);
+    QCOMPARE(StravaPublisherTestSettings::tokenRemovalWrites(), 0);
+    QCOMPARE(
+        StravaTokenRefreshCoordinator::authorizationStatus(account),
+        StravaAuthorizationStatus::Active);
+
+    StravaPublisherTestSettings::setCredentialReadsAvailable(true);
+    const StravaAccountRemoval::Result retried =
+        StravaAccountRemoval::execute(localRequest(account));
+    QVERIFY(retried.isSuccess());
+    QVERIFY(retried.disconnected);
+    QCOMPARE(StravaPublisherTestSettings::tokenRemovalWrites(), 2);
+    QCOMPARE(
+        StravaTokenRefreshCoordinator::authorizationStatus(account),
+        StravaAuthorizationStatus::Revoked);
+}
+
+void TestStravaAccountRemoval::
+requestCreationFailureRestoresRetryableAuthorization()
+{
+    const QString account =
+        uniqueAccount(QStringLiteral("request-not-created"));
+    StravaAccountRemoval::Request request = localRequest(account);
+    request.mode = StravaAccountRemoval::Mode::RevokeRemote;
+    request.clientId = QStringLiteral("83");
+    request.clientSecret = QStringLiteral("synthetic-client-secret");
+
+    const StravaAccountRemoval::Result notCreated =
+        StravaAccountRemoval::execute(
+            request,
+            {},
+            [](const QString &,
+               StravaAccountRemoval::RevocationToken,
+               const StravaAccountRemoval::CancellationCheck &) {
+                return StravaAccountRemoval::RemoteRevocationResult{
+                    false,
+                    QStringLiteral("Synthetic request creation failure."),
+                    false
+                };
+            });
+    QVERIFY(!notCreated.isSuccess());
+    QVERIFY(!notCreated.disconnected);
+    QCOMPARE(StravaPublisherTestSettings::tokenRemovalWrites(), 0);
+    QCOMPARE(
+        StravaTokenRefreshCoordinator::authorizationStatus(account),
+        StravaAuthorizationStatus::Active);
+
+    request.expectedAuthorizationEpoch =
+        StravaTokenRefreshCoordinator::authorizationEpoch(account);
+    const StravaAccountRemoval::Result retried =
+        StravaAccountRemoval::execute(
+            request,
+            {},
+            [](const QString &,
+               StravaAccountRemoval::RevocationToken,
+               const StravaAccountRemoval::CancellationCheck &) {
+                return StravaAccountRemoval::RemoteRevocationResult{
+                    true, QString(), true
+                };
+            });
+    QVERIFY(retried.isSuccess());
+    QVERIFY(retried.disconnected);
+    QCOMPARE(StravaPublisherTestSettings::tokenRemovalWrites(), 2);
+    QCOMPARE(
+        StravaTokenRefreshCoordinator::authorizationStatus(account),
+        StravaAuthorizationStatus::Revoked);
+}
 
 void TestStravaAccountRemoval::init()
 {
-    resetPublisherProbe();
+    StravaPublisherTestSettings::reset();
 }
 
 void TestStravaAccountRemoval::
@@ -126,19 +207,16 @@ localOnlyRemovalClearsCredentialsAndClosesState()
     QVERIFY(result.disconnected);
     QVERIFY(!result.cleanupPending);
     QVERIFY(result.remoteAuthorizationMayRemain);
-    QCOMPARE(publisherProbe().markCalls, 1);
-    QCOMPARE(publisherProbe().removalCalls, 1);
-    QCOMPARE(publisherProbe().accountKey, account);
+    QCOMPARE(StravaPublisherTestSettings::pendingStateWrites(), 1);
+    QCOMPARE(StravaPublisherTestSettings::tokenRemovalWrites(), 2);
+    QVERIFY(StravaPublisherTestSettings::value(
+        account, GC_STRAVA_TOKEN).toString().isEmpty());
+    QVERIFY(StravaPublisherTestSettings::value(
+        account, GC_STRAVA_REFRESH_TOKEN).toString().isEmpty());
     QCOMPARE(
-        publisherProbe().removalRequest.accountKey,
-        account);
-    QCOMPARE(
-        publisherProbe().removalRequest.expectedRefreshToken,
-        QStringLiteral("synthetic-refresh-token"));
-    QCOMPARE(
-        publisherProbe().removalRequest.mode,
-        StravaTokenPublication::PublicationMode::
-            Authoritative);
+        StravaPublisherTestSettings::value(
+            account, GC_STRAVA_AUTHORIZATION_STATE).toString(),
+        QStringLiteral("revoked"));
     QCOMPARE(
         StravaTokenRefreshCoordinator::authorizationStatus(
             account),
@@ -150,10 +228,7 @@ cleanupPendingRemainsACompletedDisconnect()
 {
     const QString account =
         uniqueAccount(QStringLiteral("cleanup-pending"));
-    publisherProbe().removalResult = {
-        StravaTokenPublication::RemovalStatus::CleanupPending,
-        QStringLiteral("Synthetic cleanup warning.")
-    };
+    StravaPublisherTestSettings::setRevokedStateWriteFailure(true);
 
     const StravaAccountRemoval::Result result =
         StravaAccountRemoval::execute(
@@ -189,8 +264,8 @@ invalidRemoteCredentialsDoNotMutateState()
     QVERIFY(!result.isSuccess());
     QVERIFY(!result.error.isEmpty());
     QVERIFY(result.remoteAuthorizationMayRemain);
-    QCOMPARE(publisherProbe().markCalls, 0);
-    QCOMPARE(publisherProbe().removalCalls, 0);
+    QCOMPARE(StravaPublisherTestSettings::pendingStateWrites(), 0);
+    QCOMPARE(StravaPublisherTestSettings::tokenRemovalWrites(), 0);
     QCOMPARE(
         StravaTokenRefreshCoordinator::authorizationStatus(
             account),
@@ -207,6 +282,8 @@ accessTokenRevocationClearsRemoteWarning()
     request.mode =
         StravaAccountRemoval::Mode::RevokeRemote;
     request.refreshToken.clear();
+    StravaPublisherTestSettings::setValue(
+        account, GC_STRAVA_REFRESH_TOKEN, QVariant());
     request.clientId = QStringLiteral("83");
     request.clientSecret =
         QStringLiteral("synthetic-client-secret");
@@ -290,10 +367,7 @@ remoteSuccessSurvivesLocalCleanupFailure()
     request.clientId = QStringLiteral("83");
     request.clientSecret =
         QStringLiteral("synthetic-client-secret");
-    publisherProbe().removalResult = {
-        StravaTokenPublication::RemovalStatus::StorageFailure,
-        QStringLiteral("Synthetic local cleanup failure.")
-    };
+    StravaPublisherTestSettings::setTokenRemovalFailure(true);
 
     const StravaAccountRemoval::Result result =
         StravaAccountRemoval::execute(
@@ -311,12 +385,43 @@ remoteSuccessSurvivesLocalCleanupFailure()
     QVERIFY(!result.isSuccess());
     QVERIFY(!result.error.isEmpty());
     QVERIFY(!result.remoteAuthorizationMayRemain);
-    QCOMPARE(publisherProbe().markCalls, 1);
-    QCOMPARE(publisherProbe().removalCalls, 1);
+    QCOMPARE(StravaPublisherTestSettings::pendingStateWrites(), 1);
+    QVERIFY(StravaPublisherTestSettings::tokenRemovalWrites() > 0);
     QCOMPARE(
         StravaTokenRefreshCoordinator::authorizationStatus(
             account),
         StravaAuthorizationStatus::RevocationPending);
+}
+
+void TestStravaAccountRemoval::
+remoteSuccessWithVaultConflictReportsUncertainty()
+{
+    const QString account =
+        uniqueAccount(QStringLiteral("vault-conflict"));
+    StravaAccountRemoval::Request request = localRequest(account);
+    request.mode = StravaAccountRemoval::Mode::RevokeRemote;
+    request.clientId = QStringLiteral("83");
+    request.clientSecret =
+        QStringLiteral("synthetic-client-secret");
+    const StravaAccountRemoval::Result result =
+        StravaAccountRemoval::execute(
+            request,
+            {},
+            [account](const QString &,
+               StravaAccountRemoval::RevocationToken,
+               const StravaAccountRemoval::CancellationCheck &) {
+                StravaPublisherTestSettings::setValue(
+                    account,
+                    GC_STRAVA_REFRESH_TOKEN,
+                    QStringLiteral("synthetic-newer-refresh-token"));
+                return StravaAccountRemoval::RemoteRevocationResult{
+                    true, QString()
+                };
+            });
+
+    QVERIFY(!result.isSuccess());
+    QVERIFY(result.remoteAuthorizationMayRemain);
+    QCOMPARE(StravaPublisherTestSettings::tokenRemovalWrites(), 0);
 }
 
 void TestStravaAccountRemoval::
@@ -330,13 +435,12 @@ accessTokenSuccessSurvivesLocalCleanupFailure()
     request.mode =
         StravaAccountRemoval::Mode::RevokeRemote;
     request.refreshToken.clear();
+    StravaPublisherTestSettings::setValue(
+        account, GC_STRAVA_REFRESH_TOKEN, QVariant());
     request.clientId = QStringLiteral("83");
     request.clientSecret =
         QStringLiteral("synthetic-client-secret");
-    publisherProbe().removalResult = {
-        StravaTokenPublication::RemovalStatus::StorageFailure,
-        QStringLiteral("Synthetic local cleanup failure.")
-    };
+    StravaPublisherTestSettings::setTokenRemovalFailure(true);
     StravaAccountRemoval::RevocationToken revokedToken =
         StravaAccountRemoval::RevocationToken::RefreshToken;
 
@@ -358,8 +462,8 @@ accessTokenSuccessSurvivesLocalCleanupFailure()
     QVERIFY(!result.isSuccess());
     QVERIFY(!result.error.isEmpty());
     QVERIFY(!result.remoteAuthorizationMayRemain);
-    QCOMPARE(publisherProbe().markCalls, 1);
-    QCOMPARE(publisherProbe().removalCalls, 1);
+    QCOMPARE(StravaPublisherTestSettings::pendingStateWrites(), 1);
+    QVERIFY(StravaPublisherTestSettings::tokenRemovalWrites() > 0);
     QCOMPARE(
         revokedToken,
         StravaAccountRemoval::RevocationToken::AccessToken);
@@ -377,6 +481,10 @@ remoteTokenDoesNotReplaceLocalCasToken()
     request.clientId = QStringLiteral("83");
     request.clientSecret =
         QStringLiteral("synthetic-client-secret");
+    const QString fencedRefresh =
+        QStringLiteral("synthetic-vault-refresh-token");
+    StravaPublisherTestSettings::setValue(
+        account, GC_STRAVA_REFRESH_TOKEN, fencedRefresh);
 
     const StravaTokenRefreshResult durable{
         true,
@@ -427,10 +535,9 @@ remoteTokenDoesNotReplaceLocalCasToken()
             });
 
     QVERIFY(result.isSuccess());
-    QCOMPARE(remoteToken, unpublished.refreshToken);
-    QCOMPARE(
-        publisherProbe().removalRequest.expectedRefreshToken,
-        request.refreshToken);
+    QCOMPARE(remoteToken, fencedRefresh);
+    QVERIFY(StravaPublisherTestSettings::value(
+        account, GC_STRAVA_REFRESH_TOKEN).toString().isEmpty());
 }
 
 void TestStravaAccountRemoval::
@@ -458,8 +565,8 @@ staleDisconnectCannotRemoveNewGrant()
         StravaAccountRemoval::execute(request);
 
     QVERIFY(!result.isSuccess());
-    QCOMPARE(publisherProbe().markCalls, 0);
-    QCOMPARE(publisherProbe().removalCalls, 0);
+    QCOMPARE(StravaPublisherTestSettings::pendingStateWrites(), 0);
+    QCOMPARE(StravaPublisherTestSettings::tokenRemovalWrites(), 0);
     QCOMPARE(
         StravaTokenRefreshCoordinator::authorizationStatus(
             account),
@@ -478,7 +585,7 @@ failedPendingPersistenceDoesNotRevoke()
 {
     const QString account =
         uniqueAccount(QStringLiteral("pending-failure"));
-    publisherProbe().markResult = false;
+    StravaPublisherTestSettings::setPendingStateWriteFailure(true);
 
     const StravaAccountRemoval::Result result =
         StravaAccountRemoval::execute(
@@ -487,8 +594,8 @@ failedPendingPersistenceDoesNotRevoke()
     QVERIFY(!result.isSuccess());
     QVERIFY(!result.error.isEmpty());
     QVERIFY(result.remoteAuthorizationMayRemain);
-    QCOMPARE(publisherProbe().markCalls, 1);
-    QCOMPARE(publisherProbe().removalCalls, 0);
+    QCOMPARE(StravaPublisherTestSettings::pendingStateWrites(), 1);
+    QCOMPARE(StravaPublisherTestSettings::tokenRemovalWrites(), 0);
     QCOMPARE(
         StravaTokenRefreshCoordinator::authorizationStatus(
             account),
@@ -523,8 +630,8 @@ throwingRemoteRevocationReportsUncertainty()
     QVERIFY(!result.isSuccess());
     QVERIFY(!result.error.isEmpty());
     QVERIFY(result.remoteAuthorizationMayRemain);
-    QCOMPARE(publisherProbe().markCalls, 1);
-    QCOMPARE(publisherProbe().removalCalls, 0);
+    QCOMPARE(StravaPublisherTestSettings::pendingStateWrites(), 1);
+    QCOMPARE(StravaPublisherTestSettings::tokenRemovalWrites(), 0);
     QCOMPARE(
         StravaTokenRefreshCoordinator::authorizationStatus(
             account),
@@ -549,8 +656,8 @@ cancellationBeforeStartDoesNotMutateStorage()
     QVERIFY(!result.isSuccess());
     QVERIFY(!result.error.isEmpty());
     QVERIFY(cancellationCalls.load() > 0);
-    QCOMPARE(publisherProbe().markCalls, 0);
-    QCOMPARE(publisherProbe().removalCalls, 0);
+    QCOMPARE(StravaPublisherTestSettings::pendingStateWrites(), 0);
+    QCOMPARE(StravaPublisherTestSettings::tokenRemovalWrites(), 0);
 }
 
 void TestStravaAccountRemoval::
@@ -571,9 +678,8 @@ cancellationAfterPendingCannotAbortRemoteRevocation()
     std::atomic<bool> remoteSawCancellation{true};
     std::atomic<int> irreversibleCalls{0};
     std::atomic<bool> irreversibleSawPending{false};
-    publisherProbe().markHook = [&] {
-        cancelled = true;
-    };
+    StravaPublisherTestSettings::setPendingStateHook(
+        [&] { cancelled = true; });
 
     const StravaAccountRemoval::Result result =
         StravaAccountRemoval::execute(
@@ -595,8 +701,8 @@ cancellationAfterPendingCannotAbortRemoteRevocation()
             [&] {
                 ++irreversibleCalls;
                 irreversibleSawPending =
-                    publisherProbe().markCalls == 1
-                    && publisherProbe().removalCalls == 0;
+                    StravaPublisherTestSettings::pendingStateWrites() == 1
+                    && StravaPublisherTestSettings::tokenRemovalWrites() == 0;
             });
 
     QVERIFY2(
@@ -607,7 +713,7 @@ cancellationAfterPendingCannotAbortRemoteRevocation()
     QVERIFY(!remoteSawCancellation.load());
     QCOMPARE(irreversibleCalls.load(), 1);
     QVERIFY(irreversibleSawPending.load());
-    QCOMPARE(publisherProbe().removalCalls, 1);
+    QCOMPARE(StravaPublisherTestSettings::tokenRemovalWrites(), 2);
 }
 
 void TestStravaAccountRemoval::invalidModeFailsClosed()
@@ -625,8 +731,8 @@ void TestStravaAccountRemoval::invalidModeFailsClosed()
     const StravaAccountRemoval::Result result =
         StravaAccountRemoval::execute(request);
     QVERIFY(!result.isSuccess());
-    QCOMPARE(publisherProbe().markCalls, 0);
-    QCOMPARE(publisherProbe().removalCalls, 0);
+    QCOMPARE(StravaPublisherTestSettings::pendingStateWrites(), 0);
+    QCOMPARE(StravaPublisherTestSettings::tokenRemovalWrites(), 0);
 }
 
 QTEST_MAIN(TestStravaAccountRemoval)

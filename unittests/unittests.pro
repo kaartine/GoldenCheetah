@@ -22,6 +22,7 @@ equals(GC_UNITTESTS, active) {
 			   Cloud/stravaApiReplyPolicy \
 			   Cloud/stravaTokenRefresh \
 			   Cloud/stravaTokenPublication \
+			   Cloud/stravaCredentialDurability \
 			   Cloud/openDataEndpointPolicy \
 			   Cloud/openDataCaptureUtils \
 			   Cloud/openDataCaptureStateMachine \

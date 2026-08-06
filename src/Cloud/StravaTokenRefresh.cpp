@@ -10,7 +10,11 @@
 #include "StravaTokenRefresh.h"
 
 #include <QHash>
+#include <QMetaObject>
+#include <QObject>
+#include <QPointer>
 #include <QStringList>
+#include <QThread>
 
 #include <chrono>
 #include <condition_variable>
@@ -77,6 +81,9 @@ struct AccountState
     StravaAuthorizationStatus authorizationStatus =
         StravaAuthorizationStatus::Active;
     bool authorizationStatusInitialized = false;
+    bool storageInitializationProvisional = false;
+    std::uint64_t provisionalGeneration = 0;
+    std::uint64_t provisionalAuthorizationEpoch = 0;
     bool authorizationInstallInFlight = false;
     bool removalInFlight = false;
     bool remoteGrantMayHaveRotated = false;
@@ -96,6 +103,43 @@ RefreshRegistry &registry()
     static RefreshRegistry value;
     return value;
 }
+
+class ThreadBoundAbortRelay final : public QObject
+{
+public:
+    ThreadBoundAbortRelay(
+        QObject *target,
+        std::function<void(QObject *)> operation)
+        : target_(target), operation_(std::move(operation))
+    {
+    }
+
+    void dispatch()
+    {
+        QObject *target = target_.data();
+        if (target && operation_) operation_(target);
+    }
+
+private:
+    QPointer<QObject> target_;
+    std::function<void(QObject *)> operation_;
+};
+
+#ifdef GC_STRAVA_TOKEN_REFRESH_TEST_HOOKS
+std::mutex threadBoundDispatchHookMutex;
+std::function<void()> threadBoundDispatchHook;
+
+void runThreadBoundDispatchHook()
+{
+    std::function<void()> hook;
+    {
+        const std::lock_guard<std::mutex> lock(
+            threadBoundDispatchHookMutex);
+        hook = threadBoundDispatchHook;
+    }
+    if (hook) hook();
+}
+#endif
 
 StravaTokenRefreshResult failure(const QString &error)
 {
@@ -189,6 +233,38 @@ void rememberToken(AccountState &state, const QString &token)
 void clearCache(AccountState &state)
 {
     state.cache = {};
+}
+
+void clearProvisionalStorageInitialization(AccountState &state)
+{
+    state.storageInitializationProvisional = false;
+    state.provisionalGeneration = 0;
+    state.provisionalAuthorizationEpoch = 0;
+}
+
+void applyStoredAuthorization(
+    AccountState &state,
+    StravaAuthorizationStatus status,
+    const QString &accessToken,
+    const QString &refreshToken,
+    bool remoteGrantMayHaveRotated)
+{
+    state.authorizationStatus = status;
+    state.authorizationStatusInitialized = true;
+    state.remoteGrantMayHaveRotated =
+        remoteGrantMayHaveRotated;
+    state.remoteGrantLatestTokenKnown = false;
+    state.durableAccessToken = accessToken;
+    state.durableRefreshToken = refreshToken;
+    state.latestObservedAccessToken = accessToken;
+    state.latestObservedRefreshToken = refreshToken;
+    state.canonicalToken.clear();
+    state.knownTokens.clear();
+    clearCache(state);
+    if (!refreshToken.isEmpty()) {
+        state.canonicalToken = refreshToken;
+        rememberToken(state, refreshToken);
+    }
 }
 
 void reconcileActiveAuthorization(AccountState &state)
@@ -446,6 +522,7 @@ StravaTokenRefreshResult coordinatedRefresh(
                     StravaAuthorizationStatus::
                         RevocationPending;
                 state->authorizationStatusInitialized = true;
+                clearProvisionalStorageInitialization(*state);
                 clearCache(*state);
             }
         }
@@ -485,6 +562,7 @@ StravaTokenRefreshResult coordinatedRefresh(
             state->remoteGrantMayHaveRotated = false;
             state->remoteGrantLatestTokenKnown = false;
             state->authorizationStatusInitialized = true;
+            clearProvisionalStorageInitialization(*state);
             state->cache.present = cacheLifetime.count() > 0;
             state->cache.authoritative = false;
             state->cache.generation = state->generation;
@@ -714,6 +792,7 @@ bool installAuthorizationDurablyImpl(
         }
         ++state->authorizationEpoch;
         ++state->generation;
+        clearProvisionalStorageInitialization(*state);
         state->authorizationInstallInFlight = true;
         active = state->activeFlight;
         const bool refreshMayStillRotate =
@@ -748,6 +827,7 @@ bool installAuthorizationDurablyImpl(
             state->authorizationStatus =
                 StravaAuthorizationStatus::Active;
             state->authorizationStatusInitialized = true;
+            clearProvisionalStorageInitialization(*state);
             state->canonicalToken = result.refreshToken;
             state->durableAccessToken =
                 result.accessToken;
@@ -769,6 +849,7 @@ bool installAuthorizationDurablyImpl(
             state->authorizationStatus =
                 StravaAuthorizationStatus::RevocationPending;
             state->authorizationStatusInitialized = true;
+            clearProvisionalStorageInitialization(*state);
         }
     }
     return installed;
@@ -917,12 +998,18 @@ removeAuthorizationTransaction(
     std::shared_ptr<AccountState> state;
     QString effectiveRefreshToken;
     QString durableRefreshToken;
+    StravaAuthorizationStatus previousAuthorizationStatus =
+        StravaAuthorizationStatus::Active;
+    bool previousAuthorizationStatusInitialized = false;
     const auto deadline = std::chrono::steady_clock::now()
         + waitTimeout;
 
     {
         const std::lock_guard<std::mutex> lock(value.mutex);
         state = accountState(value, accountKey);
+        previousAuthorizationStatus = state->authorizationStatus;
+        previousAuthorizationStatusInitialized =
+            state->authorizationStatusInitialized;
         if (expectedAuthorizationEpoch
             && state->authorizationEpoch
                 != *expectedAuthorizationEpoch) {
@@ -940,6 +1027,7 @@ removeAuthorizationTransaction(
                 "Strava authorization removal is already in progress."));
         }
         ++state->authorizationEpoch;
+        clearProvisionalStorageInitialization(*state);
         state->removalInFlight = true;
     }
 
@@ -1024,6 +1112,7 @@ removeAuthorizationTransaction(
         state->authorizationStatus =
             StravaAuthorizationStatus::RevocationPending;
         state->authorizationStatusInitialized = true;
+        clearProvisionalStorageInitialization(*state);
     }
 
     {
@@ -1084,6 +1173,7 @@ removeAuthorizationTransaction(
             state->authorizationStatus =
                 StravaAuthorizationStatus::Revoked;
             state->authorizationStatusInitialized = true;
+            clearProvisionalStorageInitialization(*state);
             state->canonicalToken.clear();
             state->knownTokens.clear();
             state->durableAccessToken.clear();
@@ -1094,10 +1184,16 @@ removeAuthorizationTransaction(
             state->remoteGrantLatestTokenKnown = false;
             clearCache(*state);
             state->activeFlight.reset();
+        } else if (result.authorizationUnchanged) {
+            state->authorizationStatus = previousAuthorizationStatus;
+            state->authorizationStatusInitialized =
+                previousAuthorizationStatusInitialized;
+            clearProvisionalStorageInitialization(*state);
         } else {
             state->authorizationStatus =
                 StravaAuthorizationStatus::RevocationPending;
             state->authorizationStatusInitialized = true;
+            clearProvisionalStorageInitialization(*state);
         }
         state->requestCondition.notify_all();
     }
@@ -1121,21 +1217,222 @@ initializeAuthorization(
     if (state->authorizationStatusInitialized)
         return;
 
-    state->authorizationStatus = status;
-    state->authorizationStatusInitialized = true;
-    state->remoteGrantMayHaveRotated =
-        remoteGrantMayHaveRotated;
-    state->remoteGrantLatestTokenKnown = false;
-    state->durableAccessToken = accessToken;
-    state->durableRefreshToken = refreshToken;
-    state->latestObservedAccessToken = accessToken;
-    state->latestObservedRefreshToken = refreshToken;
-    if (!refreshToken.isEmpty()) {
-        state->canonicalToken = refreshToken;
-        state->knownTokens.clear();
-        rememberToken(*state, refreshToken);
-    }
+    applyStoredAuthorization(
+        *state, status, accessToken, refreshToken,
+        remoteGrantMayHaveRotated);
+    clearProvisionalStorageInitialization(*state);
 }
+
+bool StravaTokenRefreshCoordinator::
+reconcileAuthorizationFromStorage(
+    const QString &accountKey,
+    StravaAuthorizationStatus status,
+    const QString &accessToken,
+    const QString &refreshToken,
+    bool remoteGrantMayHaveRotated,
+    bool authoritative)
+{
+    if (accountKey.trimmed().isEmpty()) return false;
+
+    RefreshRegistry &value = registry();
+    const std::lock_guard<std::mutex> lock(value.mutex);
+    const std::shared_ptr<AccountState> state =
+        accountState(value, accountKey);
+    if (!state->authorizationStatusInitialized) {
+        applyStoredAuthorization(
+            *state, status, accessToken, refreshToken,
+            remoteGrantMayHaveRotated);
+        state->storageInitializationProvisional = !authoritative;
+        state->provisionalGeneration = state->generation;
+        state->provisionalAuthorizationEpoch =
+            state->authorizationEpoch;
+        return true;
+    }
+    if (!state->storageInitializationProvisional)
+        return false;
+    if (!authoritative)
+        return true;
+    if (state->generation != state->provisionalGeneration
+        || state->authorizationEpoch
+            != state->provisionalAuthorizationEpoch
+        || state->authorizationInstallInFlight
+        || state->removalInFlight
+        || state->activeFlight
+        || !state->activeRequests.isEmpty()) {
+        return false;
+    }
+
+    ++state->generation;
+    ++state->authorizationEpoch;
+    applyStoredAuthorization(
+        *state, status, accessToken, refreshToken,
+        remoteGrantMayHaveRotated);
+    clearProvisionalStorageInitialization(*state);
+    return true;
+}
+
+bool StravaTokenRefreshCoordinator::
+adoptAuthoritativeAuthorizationFromStorage(
+    const QString &accountKey,
+    const StravaAuthorizationSnapshot &expected,
+    StravaAuthorizationStatus status,
+    const QString &accessToken,
+    const QString &refreshToken,
+    bool remoteGrantMayHaveRotated)
+{
+    const bool active =
+        status == StravaAuthorizationStatus::Active;
+    if (accountKey.trimmed().isEmpty()
+        || (active
+            && (accessToken.isEmpty()
+                || refreshToken.isEmpty()))) {
+        return false;
+    }
+
+    RefreshRegistry &value = registry();
+    std::shared_ptr<RefreshFlight> supersededFlight;
+    std::vector<std::function<void()>> abortOperations;
+    {
+        const std::lock_guard<std::mutex> lock(value.mutex);
+        const std::shared_ptr<AccountState> state =
+            accountState(value, accountKey);
+        const QString authoritativeAccess =
+            active ? accessToken : QString();
+        const QString authoritativeRefresh =
+            active ? refreshToken : QString();
+        const bool expectedStillCurrent =
+            state->authorizationStatusInitialized
+            && !state->storageInitializationProvisional
+            && state->authorizationStatus == expected.status
+            && state->durableAccessToken == expected.accessToken
+            && state->durableRefreshToken == expected.refreshToken
+            && state->authorizationEpoch == expected.epoch
+            && state->remoteGrantMayHaveRotated
+                == expected.remoteGrantMayHaveRotated;
+        if (!expectedStillCurrent) return false;
+        if (state->authorizationStatus == status
+            && state->durableAccessToken == authoritativeAccess
+            && state->durableRefreshToken == authoritativeRefresh
+            && state->remoteGrantMayHaveRotated
+                == remoteGrantMayHaveRotated) {
+            return true;
+        }
+        if (state->authorizationInstallInFlight
+            || state->removalInFlight
+            || state->activeFlight
+            || (active && !state->activeRequests.isEmpty())) {
+            return false;
+        }
+
+        ++state->generation;
+        ++state->authorizationEpoch;
+        if (!active) {
+            supersededFlight = state->activeFlight;
+            if (supersededFlight)
+                supersededFlight->superseded = true;
+            for (auto request = state->activeRequests.begin();
+                 request != state->activeRequests.end();
+                 ++request) {
+                if (request->dispatchAuthorized
+                    && request->abortOperation
+                    && !request->abortIssued) {
+                    request->abortIssued = true;
+                    abortOperations.push_back(
+                        request->abortOperation);
+                }
+            }
+        }
+        applyStoredAuthorization(
+            *state, status,
+            authoritativeAccess, authoritativeRefresh,
+            remoteGrantMayHaveRotated);
+        clearProvisionalStorageInitialization(*state);
+    }
+    if (supersededFlight)
+        supersededFlight->condition.notify_all();
+    for (const auto &abortOperation : abortOperations) {
+        try {
+            abortOperation();
+        } catch (...) {
+        }
+    }
+    return true;
+}
+
+bool StravaTokenRefreshCoordinator::
+reconcileAuthoritativeAuthorizationFromStorage(
+    const QString &accountKey,
+    StravaAuthorizationStatus status,
+    const QString &accessToken,
+    const QString &refreshToken,
+    bool remoteGrantMayHaveRotated,
+    bool *authorizationActive)
+{
+    if (authorizationActive) *authorizationActive = false;
+    StravaAuthorizationStatus effectiveStatus = status;
+    QString effectiveAccessToken = accessToken;
+    QString effectiveRefreshToken = refreshToken;
+    bool effectiveUncertainty = remoteGrantMayHaveRotated;
+    if (status == StravaAuthorizationStatus::Active
+        && (accessToken.isEmpty() || refreshToken.isEmpty())) {
+        effectiveStatus = StravaAuthorizationStatus::RevocationPending;
+        effectiveAccessToken.clear();
+        effectiveRefreshToken.clear();
+        effectiveUncertainty = true;
+    }
+
+    const StravaAuthorizationSnapshot expected =
+        authorizationSnapshot(accountKey);
+    const bool reconciled =
+        adoptAuthoritativeAuthorizationFromStorage(
+            accountKey,
+            expected,
+            effectiveStatus,
+            effectiveAccessToken,
+            effectiveRefreshToken,
+            effectiveUncertainty);
+    if (reconciled && authorizationActive) {
+        *authorizationActive =
+            effectiveStatus == StravaAuthorizationStatus::Active;
+    }
+    return reconciled;
+}
+
+std::function<void()>
+StravaTokenRefreshCoordinator::threadBoundAbortOperation(
+    QObject *target,
+    const std::function<void(QObject *)> &operation)
+{
+    if (!target || !operation
+        || QThread::currentThread() != target->thread()) {
+        return {};
+    }
+
+    auto relay = std::shared_ptr<ThreadBoundAbortRelay>(
+        new ThreadBoundAbortRelay(target, operation),
+        [](ThreadBoundAbortRelay *value) {
+            if (value) value->deleteLater();
+        });
+    return [relay] {
+#ifdef GC_STRAVA_TOKEN_REFRESH_TEST_HOOKS
+        runThreadBoundDispatchHook();
+#endif
+        QMetaObject::invokeMethod(
+            relay.get(),
+            [relay] { relay->dispatch(); },
+            Qt::QueuedConnection);
+    };
+}
+
+#ifdef GC_STRAVA_TOKEN_REFRESH_TEST_HOOKS
+void StravaTokenRefreshCoordinator::
+setThreadBoundDispatchHookForTest(std::function<void()> hook)
+{
+    const std::lock_guard<std::mutex> lock(
+        threadBoundDispatchHookMutex);
+    threadBoundDispatchHook = std::move(hook);
+}
+#endif
 
 void StravaTokenRefreshCoordinator::
 initializeAuthorizationStatus(
@@ -1272,6 +1569,7 @@ void StravaTokenRefreshCoordinator::invalidate(
         const std::shared_ptr<AccountState> state =
             accountState(value, accountKey);
         ++state->generation;
+        clearProvisionalStorageInitialization(*state);
         state->canonicalToken.clear();
         state->knownTokens.clear();
         state->durableAccessToken.clear();

@@ -43,6 +43,12 @@ namespace OAuthCallbackPolicy {
 class Session;
 }
 
+namespace StravaCredentialDurability {
+class Mutation;
+}
+
+struct StravaCredentialAttempt;
+
 class OAuthTokenReplyController;
 
 class OAuthDialog : public QDialog
@@ -70,6 +76,13 @@ public:
     OAuthDialog(Context *context, OAuthSite site, CloudService *service, QString baseURL="", QString clientsecret="");
     ~OAuthDialog();
 
+#ifdef GC_OAUTH_DIALOG_TEST_HOOKS
+    struct TestConstruction {};
+    OAuthDialog(OAuthSite site, TestConstruction);
+    bool trackTokenReplyForTest(QNetworkReply *reply);
+    void finishTokenReplyForTest(QNetworkReply *reply);
+#endif
+
     bool sslLibMissing() { return noSSLlib; }
     bool canAuthorize() const
     {
@@ -84,6 +97,12 @@ private slots:
 
 
 private:
+    void initializeTokenReplyController();
+    void prepareStravaTokenRequest(
+        const QUrl &tokenUrl, const QByteArray &data);
+    void startTokenRequest(
+        const QUrl &tokenUrl, const QByteArray &data,
+        const QString &authorizationHeader = QString());
     Context *context;
     bool noSSLlib = false;
     bool authorizationReady = true;
@@ -95,6 +114,10 @@ private:
     QString codeVerifier; // PKCE code_verifier, used by Tredict and other PKCE services
     QStringList tokenRequestSensitiveValues;
     std::uint64_t stravaAuthorizationEpoch = 0;
+    std::shared_ptr<StravaCredentialDurability::Mutation>
+        stravaCredentialMutation;
+    std::shared_ptr<StravaCredentialAttempt>
+        stravaCredentialAttempt;
     std::unique_ptr<OAuthCallbackPolicy::Session> callbackSession;
     QUrl redirectUri;
 

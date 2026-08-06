@@ -35,6 +35,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <memory>
+#include <mutex>
 #include <utility>
 
 #ifdef Q_OS_UNIX
@@ -66,11 +67,16 @@ bool windowsCredentialPathHasNoReparseComponents(
     const QString &path);
 #endif
 
-QMutex &credentialOperationMutex()
+std::recursive_mutex &credentialOperationMutex()
 {
-    static QMutex mutex;
+    static std::recursive_mutex mutex;
     return mutex;
 }
+
+thread_local unsigned int credentialOperationMutexDepth = 0;
+thread_local unsigned int credentialOperationWildcardDepth = 0;
+thread_local QHash<QString, unsigned int> credentialOperationContextDepth;
+thread_local QStringList credentialOperationContextStack;
 
 bool credentialRootIsSecure(
     const QFileInfo &directory)
@@ -1612,9 +1618,16 @@ public:
         const QString &operationId,
         int processWaitMilliseconds = 0)
     {
-        if (!credentialOperationMutex().tryLock())
+        if (CredentialSettingsDetail::
+                credentialOperationContextActive(operationId)) {
             return;
+        }
+        credentialOperationMutex().lock();
+        ++credentialOperationMutexDepth;
         localLocked_ = true;
+        context_ = std::make_unique<
+            CredentialSettingsDetail::
+                CredentialOperationContextScope>(operationId);
 
         const QString directory =
 #ifdef Q_OS_WIN
@@ -1664,8 +1677,12 @@ public:
     {
         if (processLock_ && processLock_->isLocked())
             processLock_->unlock();
-        if (localLocked_)
+        context_.reset();
+        if (localLocked_) {
+            Q_ASSERT(credentialOperationMutexDepth > 0);
+            --credentialOperationMutexDepth;
             credentialOperationMutex().unlock();
+        }
     }
 
     explicit operator bool() const
@@ -1695,10 +1712,8 @@ public:
             return false;
         const QString lockPath =
             backendMutationLockPath();
-        if (CredentialSettingsDetail::
-                backendMutationMarkerStatus(lockPath)
-            != CredentialSettingsDetail::
-                BackendMutationMarkerStatus::Absent) {
+        if (!CredentialSettingsDetail::
+                recoverBackendMutationMarker(lockPath)) {
             return false;
         }
         QLockFile lock(lockPath);
@@ -1751,6 +1766,8 @@ private:
     bool localLocked_ = false;
     bool admitted_ = false;
     QString stateBasePath_;
+    std::unique_ptr<CredentialSettingsDetail::
+        CredentialOperationContextScope> context_;
     std::unique_ptr<QLockFile> processLock_;
 #ifdef Q_OS_WIN
     ScopedWindowsHandle rootDirectoryHandle_;
@@ -3984,6 +4001,7 @@ const QSet<QString> &credentialKeys()
         QStringLiteral(GC_NOKIA_REFRESH_TOKEN),
         QStringLiteral(GC_STRAVA_TOKEN),
         QStringLiteral(GC_STRAVA_REFRESH_TOKEN),
+        QStringLiteral(GC_STRAVA_PENDING_TRANSACTION),
         QStringLiteral(GC_CYCLINGANALYTICS_TOKEN),
         QStringLiteral(GC_SIXCYCLE_PASS),
         QStringLiteral(GC_AZUM_ACCESS_TOKEN),
@@ -4041,6 +4059,79 @@ QString backendMutationMarkerPath(
 }
 
 } // namespace
+
+bool CredentialSettingsDetail::credentialOperationContextActive()
+{
+    return credentialOperationWildcardDepth > 0
+        || !credentialOperationContextDepth.isEmpty();
+}
+
+bool CredentialSettingsDetail::credentialOperationContextActive(
+    const QString &operationId)
+{
+    return credentialOperationWildcardDepth > 0
+        || (!operationId.isEmpty()
+            && credentialOperationContextDepth.value(operationId) > 0);
+}
+
+QString CredentialSettingsDetail::currentCredentialOperationId()
+{
+    for (auto found = credentialOperationContextStack.crbegin();
+         found != credentialOperationContextStack.crend(); ++found) {
+        if (!found->isEmpty()) return *found;
+    }
+    return {};
+}
+
+unsigned int CredentialSettingsDetail::
+suspendCredentialOperationMutexForBackend()
+{
+    const unsigned int depth = credentialOperationMutexDepth;
+    credentialOperationMutexDepth = 0;
+    for (unsigned int index = 0; index < depth; ++index)
+        credentialOperationMutex().unlock();
+    return depth;
+}
+
+void CredentialSettingsDetail::
+resumeCredentialOperationMutexAfterBackend(unsigned int depth)
+{
+    Q_ASSERT(credentialOperationMutexDepth == 0);
+    for (unsigned int index = 0; index < depth; ++index)
+        credentialOperationMutex().lock();
+    credentialOperationMutexDepth = depth;
+}
+
+CredentialSettingsDetail::CredentialOperationContextScope::
+CredentialOperationContextScope(const QString &operationId)
+    : operationId_(operationId)
+{
+    credentialOperationContextStack.append(operationId_);
+    if (operationId_.isEmpty()) {
+        ++credentialOperationWildcardDepth;
+    } else {
+        ++credentialOperationContextDepth[operationId_];
+    }
+}
+
+CredentialSettingsDetail::CredentialOperationContextScope::
+~CredentialOperationContextScope()
+{
+    Q_ASSERT(!credentialOperationContextStack.isEmpty());
+    Q_ASSERT(credentialOperationContextStack.constLast()
+             == operationId_);
+    credentialOperationContextStack.removeLast();
+    if (operationId_.isEmpty()) {
+        Q_ASSERT(credentialOperationWildcardDepth > 0);
+        --credentialOperationWildcardDepth;
+        return;
+    }
+    auto found = credentialOperationContextDepth.find(operationId_);
+    Q_ASSERT(found != credentialOperationContextDepth.end()
+             && found.value() > 0);
+    if (--found.value() == 0)
+        credentialOperationContextDepth.erase(found);
+}
 
 CredentialSettingsDetail::BackendMutationMarkerStatus
 CredentialSettingsDetail::backendMutationMarkerStatus(
@@ -4118,6 +4209,24 @@ bool CredentialSettingsDetail::removeBackendMutationMarker(
     return backendMutationMarkerStatus(
                mutationLockPath)
         == BackendMutationMarkerStatus::Absent;
+}
+
+bool CredentialSettingsDetail::recoverBackendMutationMarker(
+    const QString &mutationLockPath)
+{
+    if (mutationLockPath.isEmpty()) return false;
+
+    QLockFile lock(mutationLockPath);
+    lock.setStaleLockTime(0);
+    if (!lock.tryLock(0)) return false;
+
+    const BackendMutationMarkerStatus status =
+        backendMutationMarkerStatus(mutationLockPath);
+    if (status == BackendMutationMarkerStatus::Absent)
+        return true;
+    if (status != BackendMutationMarkerStatus::Pending)
+        return false;
+    return removeBackendMutationMarker(mutationLockPath);
 }
 
 #ifdef GC_CREDENTIAL_TEST_HOOKS

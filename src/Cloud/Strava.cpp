@@ -40,6 +40,7 @@
 #include <QThread>
 
 #include <memory>
+#include <optional>
 
 #ifndef STRAVA_DEBUG
 #define STRAVA_DEBUG false
@@ -67,6 +68,22 @@ namespace {
 
 constexpr auto OversizedReplyProperty =
         "_gcStravaReplyExceededLimit";
+
+std::optional<StravaCredentialPublisher::StoredAuthorization>
+readActiveStoredAuthorization(
+    const QString &accountKey,
+    int timeoutMs)
+{
+    const StravaCredentialPublisher::StoredAuthorization stored =
+        StravaCredentialPublisher::readStoredAuthorization(
+            accountKey, timeoutMs);
+    if (!stored.readable
+        || stored.state != QStringLiteral("active")
+        || !stored.credentials.isValid()) {
+        return std::nullopt;
+    }
+    return stored;
+}
 
 bool appendAvailableReplyData(
     QNetworkReply *reply,
@@ -98,10 +115,15 @@ bool appendAvailableReplyData(
 
 QStringList stravaSensitiveValues(const Strava *service)
 {
+    const QString accountKey = service
+        ? service->property("_gcAthleteName").toString()
+        : QString();
+    const StravaAuthorizationSnapshot authorization =
+        StravaTokenRefreshCoordinator::authorizationSnapshot(
+            accountKey);
     return {
-        service->getSetting(GC_STRAVA_TOKEN, QString()).toString(),
-        service->getSetting(
-            GC_STRAVA_REFRESH_TOKEN, QString()).toString(),
+        authorization.accessToken,
+        authorization.refreshToken,
         QStringLiteral(GC_STRAVA_CLIENT_SECRET)
     };
 }
@@ -109,20 +131,14 @@ QStringList stravaSensitiveValues(const Strava *service)
 std::function<void()> abortOperationFor(
     QNetworkReply *networkReply)
 {
-    const QPointer<QNetworkReply> guardedReply(
-        networkReply);
-    return [guardedReply] {
-        if (!guardedReply) return;
-        QMetaObject::invokeMethod(
-            guardedReply,
-            [guardedReply] {
-                if (guardedReply
-                    && guardedReply->isRunning()) {
-                    guardedReply->abort();
-                }
-            },
-            Qt::QueuedConnection);
-    };
+    return StravaTokenRefreshCoordinator::
+        threadBoundAbortOperation(
+            networkReply,
+            [](QObject *target) {
+                QNetworkReply *reply =
+                    qobject_cast<QNetworkReply *>(target);
+                if (reply && reply->isRunning()) reply->abort();
+            });
 }
 
 } // namespace
@@ -174,39 +190,92 @@ QString Strava::sharedAccountKey() const
 
 void Strava::initializeSharedAuthorizationStatus() const
 {
+    if (sharedAuthorizationInitialized.load(
+            std::memory_order_acquire)) return;
     const QString accountKey = sharedAccountKey();
     if (accountKey.trimmed().isEmpty()) return;
 
-    const QString stored = getSetting(
-        GC_STRAVA_AUTHORIZATION_STATE,
-        QStringLiteral("active")).toString();
-    StravaTokenRefreshCoordinator::
-        initializeAuthorization(
+    const StravaCredentialPublisher::StoredAuthorization authorization =
+        StravaCredentialPublisher::readStoredAuthorization(
+            accountKey,
+            StravaCredentialPublisher::CredentialSnapshotTimeoutMs);
+    QString stored = authorization.readable
+        ? authorization.state
+        : QStringLiteral("authorization_pending");
+    const bool storageAuthoritative =
+        authorization.readable
+        && !authorization.state.isEmpty();
+    if (!authorization.readable || stored.isEmpty())
+        stored = QStringLiteral("authorization_pending");
+    const bool reconciled = StravaTokenRefreshCoordinator::
+        reconcileAuthorizationFromStorage(
             accountKey,
             StravaTokenRefreshCoordinator::
                 authorizationStatusFromStorage(stored),
-            getSetting(
-                GC_STRAVA_TOKEN, QString()).toString(),
-            getSetting(
-                GC_STRAVA_REFRESH_TOKEN, QString()).toString(),
-            getSetting(
-                GC_STRAVA_REMOTE_GRANT_UNCERTAIN,
-                false).toBool());
+            authorization.credentials.accessToken,
+            authorization.credentials.refreshToken,
+            authorization.remoteGrantUncertain,
+            storageAuthoritative);
+    if (reconciled) {
+        const std::lock_guard<std::mutex> lock(
+            sharedAuthorizationMutex);
+        sharedAuthorizationRevision = authorization.revision;
+        sharedAuthorizationState = stored;
+    }
+    sharedAuthorizationInitialized.store(
+        storageAuthoritative && reconciled,
+        std::memory_order_release);
+}
+
+bool Strava::reconcileSharedAuthorizationStatus() const
+{
+    initializeSharedAuthorizationStatus();
+    const QString accountKey = sharedAccountKey();
+    if (accountKey.trimmed().isEmpty()) return false;
+
+    const StravaCredentialPublisher::StoredAuthorization stored =
+        StravaCredentialPublisher::readStoredAuthorization(
+            accountKey,
+            StravaCredentialPublisher::CredentialSnapshotTimeoutMs);
+    if (!stored.readable) return false;
+
+    const StravaAuthorizationStatus status =
+        StravaTokenRefreshCoordinator::authorizationStatusFromStorage(
+            stored.state);
+    bool active = false;
+    if (!StravaTokenRefreshCoordinator::
+            reconcileAuthoritativeAuthorizationFromStorage(
+                accountKey,
+                status,
+                stored.credentials.accessToken,
+                stored.credentials.refreshToken,
+                stored.remoteGrantUncertain,
+                &active)) {
+        return false;
+    }
+
+    const std::lock_guard<std::mutex> lock(sharedAuthorizationMutex);
+    sharedAuthorizationRevision = stored.revision;
+    sharedAuthorizationState = stored.state;
+    return active;
 }
 
 CloudService::AccountDisconnectOperation
 Strava::accountDisconnectOperation(
     AccountDisconnectMode mode) const
 {
-    initializeSharedAuthorizationStatus();
+    const bool authorizationActive =
+        reconcileSharedAuthorizationStatus();
 
     StravaAccountRemoval::Request request;
     request.accountKey = sharedAccountKey();
     const StravaAuthorizationSnapshot snapshot =
         StravaTokenRefreshCoordinator::
             authorizationSnapshot(request.accountKey);
-    request.accessToken = snapshot.accessToken;
-    request.refreshToken = snapshot.refreshToken;
+    request.accessToken = authorizationActive
+        ? snapshot.accessToken : QString();
+    request.refreshToken = authorizationActive
+        ? snapshot.refreshToken : QString();
     request.expectedAuthorizationEpoch =
         snapshot.epoch;
     request.clientId =
@@ -309,13 +378,6 @@ Strava::refreshAccessGrant(
             tr("The Strava network service is unavailable.");
         return grant;
     }
-    const QString configuredRefreshToken =
-        getSetting(GC_STRAVA_REFRESH_TOKEN, "").toString();
-    if (configuredRefreshToken.isEmpty()) {
-        grant.error = tr("No authorisation token configured.");
-        return grant;
-    }
-
     const QString accountKey =
         property("_gcAthleteName").toString();
     if (accountKey.trimmed().isEmpty()) {
@@ -323,7 +385,36 @@ Strava::refreshAccessGrant(
             tr("The Strava account identity is unavailable.");
         return grant;
     }
-    initializeSharedAuthorizationStatus();
+    if (!reconcileSharedAuthorizationStatus()) {
+        grant.error = tr("The Strava authorization is disconnected.");
+        return grant;
+    }
+    StravaAuthorizationSnapshot refreshSnapshot =
+        StravaTokenRefreshCoordinator::authorizationSnapshot(
+            accountKey);
+    const auto durableBeforeRefresh =
+        readActiveStoredAuthorization(
+            accountKey,
+            StravaCredentialPublisher::CredentialSnapshotTimeoutMs);
+    if (durableBeforeRefresh) {
+        StravaTokenRefreshCoordinator::
+            adoptAuthoritativeAuthorizationFromStorage(
+                accountKey,
+                refreshSnapshot,
+                StravaAuthorizationStatus::Active,
+                durableBeforeRefresh->credentials.accessToken,
+                durableBeforeRefresh->credentials.refreshToken,
+                durableBeforeRefresh->remoteGrantUncertain);
+        refreshSnapshot =
+            StravaTokenRefreshCoordinator::authorizationSnapshot(
+                accountKey);
+    }
+    const QString configuredRefreshToken =
+        refreshSnapshot.refreshToken;
+    if (configuredRefreshToken.isEmpty()) {
+        grant.error = tr("No authorisation token configured.");
+        return grant;
+    }
 
     printd("Get access token for this session.\n");
     const auto interrupted = [&cancelled] {
@@ -338,8 +429,10 @@ Strava::refreshAccessGrant(
             return true;
         }
     };
+    std::optional<StravaCredentialPublisher::StoredAuthorization>
+        externalAuthorization;
     const auto refreshOperation =
-        [this, accountKey, interrupted](
+        [this, accountKey, interrupted, &externalAuthorization](
                 const QString &effectiveRefreshToken) {
                 StravaTokenRefreshResult result;
                 const StravaOAuthPolicy::TokenRequest tokenRequest =
@@ -356,19 +449,75 @@ Strava::refreshAccessGrant(
                         "The Strava token request could not be started.");
                     return result;
                 }
-                if (!StravaCredentialPublisher::
-                        markAuthorizationPending(
+                QString mutationError;
+                const std::shared_ptr<
+                    StravaCredentialDurability::Mutation> mutation =
+                        StravaCredentialPublisher::beginMutation(
                             accountKey,
+                            StravaCredentialDurability::MutationKind::Refresh,
                             30000,
-                            interrupted)) {
+                            mutationError);
+                if (!mutation) {
+                    result.error = mutationError.isEmpty()
+                        ? tr("The Strava credential transaction could not be started.")
+                        : mutationError;
+                    return result;
+                }
+                const StravaCredentialPublisher::StateCommitResult
+                    pendingState = StravaCredentialPublisher::
+                        markAuthorizationPendingTracked(
+                            accountKey, mutation,
+                            30000, interrupted);
+                if (!pendingState.isSuccess()) {
+                    if (pendingState.canDiscardMutation())
+                        StravaCredentialPublisher::finishNoChange(
+                            mutation);
                     result.error = tr(
                         "The pending Strava token refresh "
                         "could not be stored securely.");
                     return result;
                 }
+                const StravaCredentialPublisher::StoredAuthorization
+                    fenced = StravaCredentialPublisher::
+                        readStoredAuthorization(mutation);
+                if (!fenced.readable
+                    || fenced.credentials.refreshToken
+                        != effectiveRefreshToken) {
+                    bool retired = mutation->isFinished();
+                    if (!retired) {
+                        retired = StravaCredentialPublisher::
+                            finishNoChange(mutation);
+                    }
+                    if (retired) {
+                        const auto current =
+                            readActiveStoredAuthorization(
+                                accountKey,
+                                StravaCredentialPublisher::
+                                    CredentialSnapshotTimeoutMs);
+                        if (current
+                            && current->credentials.refreshToken
+                                != effectiveRefreshToken) {
+                            externalAuthorization = current;
+                        }
+                    }
+                    result.error = tr(
+                        "The Strava grant changed before refresh started.");
+                    return result;
+                }
                 if (interrupted()) {
+                    StravaCredentialPublisher::finishNoChange(
+                        mutation);
                     result.error =
                         tr("Strava token refresh was cancelled.");
+                    return result;
+                }
+
+                if (!mutation->isCurrent(mutationError)) {
+                    result.error = mutationError;
+                    return result;
+                }
+                if (!mutation->markCommitUnknown(mutationError)) {
+                    result.error = mutationError;
                     return result;
                 }
 
@@ -383,6 +532,8 @@ Strava::refreshAccessGrant(
                 QNetworkReply *tokenReply =
                     nam->post(request, tokenRequest.body);
                 if (!tokenReply) {
+                    QString abortError;
+                    mutation->abortBeforeRemoteDispatch(abortError);
                     result.error = tr(
                         "The Strava token request could not be started.");
                     return result;
@@ -414,6 +565,11 @@ Strava::refreshAccessGrant(
                     == NetworkReplyWaitResult::TimedOut) {
                     result.error =
                         tr("Strava token refresh timed out.");
+                    tokenReply->deleteLater();
+                    return result;
+                }
+                if (!mutation->isCurrent(mutationError)) {
+                    result.error = mutationError;
                     tokenReply->deleteLater();
                     return result;
                 }
@@ -474,6 +630,12 @@ Strava::refreshAccessGrant(
                         CompareAndSwap;
                 publication.activatesAuthorization = true;
                 publication.clearsRemoteGrantUncertainty = true;
+                publication.mutation = mutation;
+                if (!mutation->isCurrent(mutationError)) {
+                    result.success = false;
+                    result.error = mutationError;
+                    return result;
+                }
                 const StravaTokenPublication::PublicationResult
                     published =
                         StravaCredentialPublisher::publish(
@@ -507,20 +669,25 @@ Strava::refreshAccessGrant(
                     refreshOperation,
                     interrupted);
     if (!refreshResult.isValid()) {
+        if (externalAuthorization
+            && StravaTokenRefreshCoordinator::
+                adoptAuthoritativeAuthorizationFromStorage(
+                    accountKey,
+                    refreshSnapshot,
+                    StravaAuthorizationStatus::Active,
+                    externalAuthorization->credentials.accessToken,
+                    externalAuthorization->credentials.refreshToken,
+                    externalAuthorization->remoteGrantUncertain)) {
+            grant.accessToken =
+                externalAuthorization->credentials.accessToken;
+            return grant;
+        }
         grant.error = refreshResult.error.isEmpty()
             ? tr("Strava token refresh failed.")
             : refreshResult.error;
         return grant;
     }
 
-    setSetting(GC_STRAVA_TOKEN, refreshResult.accessToken);
-    setSetting(
-        GC_STRAVA_REFRESH_TOKEN, refreshResult.refreshToken);
-    if (!refreshResult.refreshedAt.isEmpty()) {
-        setSetting(
-            GC_STRAVA_LAST_REFRESH,
-            refreshResult.refreshedAt);
-    }
     grant.accessToken = refreshResult.accessToken;
     return grant;
 }
@@ -534,7 +701,13 @@ Strava::performAuthenticatedGet(
 {
     Q_UNUSED(accessToken)
     StravaNetworkReply::Result result;
-    initializeSharedAuthorizationStatus();
+    if (!reconcileSharedAuthorizationStatus()) {
+        result.failure = StravaNetworkReply::Failure::Invalid;
+        result.networkError = QNetworkReply::AuthenticationRequiredError;
+        result.networkErrorString =
+            tr("The Strava authorization is disconnected.");
+        return result;
+    }
     StravaAuthorizedRequest requestPermit =
         StravaTokenRefreshCoordinator::beginAuthorizedRequest(
             sharedAccountKey());
@@ -614,7 +787,6 @@ Strava::readdir(QString path, QStringList &errors, QDateTime from, QDateTime to)
 
     QList<CloudServiceEntry*> returning;
 
-    initializeSharedAuthorizationStatus();
     if (!nam) {
         errors << tr("The Strava network service is unavailable.");
         return returning;
@@ -626,6 +798,11 @@ Strava::readdir(QString path, QStringList &errors, QDateTime from, QDateTime to)
     int resultCount = INT_MAX;
 
     while (offset < resultCount) {
+        if (!reconcileSharedAuthorizationStatus()) {
+            errors << tr(
+                "The Strava authorization is disconnected.");
+            break;
+        }
         StravaAuthorizedRequest requestPermit =
             StravaTokenRefreshCoordinator::beginAuthorizedRequest(
                 sharedAccountKey());
@@ -740,7 +917,8 @@ Strava::readFile(QByteArray *data, QString remotename, QString remoteid)
         return false;
     }
 
-    initializeSharedAuthorizationStatus();
+    if (!reconcileSharedAuthorizationStatus())
+        return false;
     StravaAuthorizedRequest requestPermit =
         StravaTokenRefreshCoordinator::beginAuthorizedRequest(
             sharedAccountKey());
@@ -799,7 +977,9 @@ Strava::writeFile(QByteArray &data, QString remotename, RideFile *ride)
 
     printd("Strava::writeFile(%s) manual(%s)\n", remotename.toStdString().c_str(), manual ? "true" : "false");
 
-    initializeSharedAuthorizationStatus();
+    if (!reconcileSharedAuthorizationStatus()) {
+        return false;
+    }
     StravaAuthorizedRequest requestPermit =
         StravaTokenRefreshCoordinator::beginAuthorizedRequest(
             sharedAccountKey());
@@ -1134,7 +1314,10 @@ Strava::addSamples(
 {
     printd("Strava::addSamples(%s)\n", remoteid.toStdString().c_str());
 
-    initializeSharedAuthorizationStatus();
+    if (!reconcileSharedAuthorizationStatus()) {
+        error = tr("The Strava authorization is disconnected.");
+        return false;
+    }
     StravaAuthorizedRequest requestPermit =
         StravaTokenRefreshCoordinator::beginAuthorizedRequest(
             sharedAccountKey());

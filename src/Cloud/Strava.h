@@ -22,8 +22,10 @@
 #include "CloudService.h"
 #include "StravaAuthenticatedSession.h"
 
+#include <atomic>
 #include <functional>
 #include <memory>
+#include <mutex>
 
 class QNetworkReply;
 class QNetworkAccessManager;
@@ -102,10 +104,15 @@ class Strava : public CloudService {
             requestPermits;
         std::unique_ptr<StravaAuthenticatedSession>
             authenticatedSession;
+        mutable std::atomic<bool> sharedAuthorizationInitialized{false};
+        mutable std::mutex sharedAuthorizationMutex;
+        mutable QString sharedAuthorizationRevision;
+        mutable QString sharedAuthorizationState;
 
         bool prepareResponse(QByteArray *data, QString &error);
         QString sharedAccountKey() const;
         void initializeSharedAuthorizationStatus() const;
+        bool reconcileSharedAuthorizationStatus() const;
         void ensureAuthenticatedSession();
         StravaAuthenticatedSession::Grant refreshAccessGrant(
             const QString &rejectedAccessToken,

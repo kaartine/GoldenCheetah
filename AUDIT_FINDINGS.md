@@ -3764,20 +3764,31 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 - Status: FIXED
 - Code: `src/Core/CredentialSettings.cpp`,
-  `src/Core/CredentialSettings.h`, `src/Core/Settings.cpp`, and
-  `unittests/Core/credentialSettings/testCredentialSettings.cpp`
+  `src/Core/CredentialSettings.h`, `src/Core/Settings.cpp`,
+  `src/Cloud/Strava.cpp`, `src/Cloud/StravaTokenRefresh.cpp`,
+  `unittests/Core/credentialSettings/testCredentialSettings.cpp`, and
+  `unittests/Cloud/stravaTokenRefresh/testStravaTokenRefresh.cpp`, plus
+  `unittests/Cloud/stravaOAuthPolicy/testStravaOAuthPolicy.cpp`
 - Impact: Cache entries are invalidated by GoldenCheetah's revision sidecar, but
   direct keychain changes by another application do not advance that revision.
   Normal reads can therefore return a stale positive or negative value until a
   local mutation, cache clear, or restart. SEC-018 now bypasses cached misses
   when authorizing cross-file fallback, but ordinary credential reads retain
-  the broader stale-cache behavior.
+  the broader stale-cache behavior. A long-lived Strava service also treated
+  unchanged authorization metadata as proof that a newly read credential pair
+  was unchanged, extending an externally replaced or deleted token past cache
+  expiry.
 - Test-first evidence: With a deterministic monotonic test clock but no expiry
   behavior, external replacement, deletion, insertion after a cached miss, and
   a backend error after expiry produced four failures and only the three
   setup/memory-only cases passed. A second RED matrix showed that an
   authoritative read still returned a fresh cached positive after external
-  replacement or deletion: three cases passed and two failed.
+  replacement or deletion: three cases passed and two failed. The follow-up
+  `authoritativeStorageReconciliationObservesSameMetadataCredentialChange`
+  regression keeps storage metadata unchanged while replacing and deleting
+  the pair, then exercises the coordinator path used by `Strava`; the existing
+  storage-reconciliation source contract also forbids restoring the metadata
+  fast path.
 - Resolution: Persisted positive and all negative cache entries now carry a
   monotonic insertion timestamp and expire after 30 seconds. Lookup checks and
   erases an expired entry under the cache mutex; clock rollback also expires
@@ -3786,7 +3797,10 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   `ReadPolicy::RequireLiveVault` explicitly bypasses vault-backed positive and
   negative cache entries for legacy-fallback authorization. Pending
   memory-only writes remain visible without expiry but cannot report live-vault
-  evidence or authorize fallback.
+  evidence or authorize fallback. Strava now reconciles every authoritative
+  read against the complete in-memory pair and uncertainty state; an active
+  record with missing credentials becomes fail-closed pending state instead of
+  retaining the previous request token.
 - Verification: The final credential program passes 423 cases normally with
   zero failures and seven Linux platform skips. The final SEC-023 cache,
   policy, revision, process-mutation, and serialization matrix passes 29 cases
@@ -5803,22 +5817,30 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Verification: Both RED rows pass in the 50-case normal, sanitizer, and
   ThreadSanitizer coordinator runs.
 
-### MEM-021: Strava phase callback could target a destroyed progress dialog
+### MEM-021: Cross-thread Strava callbacks could target destroyed QObjects
 
 - Status: FIXED
-- Code: `src/Gui/AthletePages.cpp`
+- Code: `src/Gui/AthletePages.cpp`, `src/Cloud/Strava.cpp`,
+  `src/Cloud/StravaTokenRefresh.cpp`, and
+  `unittests/Cloud/stravaTokenRefresh/testStravaTokenRefresh.cpp`
 - Impact: A worker checked a cross-thread `QPointer` and then separately passed
   its raw widget pointer to `QMetaObject::invokeMethod`. Destruction between
   those operations could make the invocation target dangling during settings
-  page or application teardown.
+  page or application teardown. The same check/use pattern remained in active
+  request abort callbacks: the removal worker checked a reply `QPointer` and
+  then used the reply as a queued invocation target while its owner thread
+  could destroy it.
 - Test-first evidence: Commit `92c7c1a` forbade the raw `QPointer` invocation
   target and required an independently owned GUI context before the fix.
+  `threadBoundAbortSurvivesTargetDestructionAtDispatch` deterministically
+  destroys the guarded target at the abort dispatch boundary.
 - Resolution: The worker retains a shared, GUI-affine `QObject` context for the
   queued phase update. The progress-dialog `QPointer` is dereferenced only
   inside the GUI-thread callback. A shared irreversible flag also prevents a
   late visible Cancel action from changing operation state, and the queued
   phase update restores a dialog hidden by a boundary-racing Cancel before
-  removing its Cancel control.
+  removing its Cancel control. Network aborts now queue through an independently
+  owned, owner-thread relay and dereference the reply only inside that thread.
 - Verification: The UI source contract and complete application build pass.
   Runtime widget lifecycle coverage remains tracked by `TEST-001`.
 
@@ -5841,21 +5863,51 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-009: Partial Strava credential publication has no automatic recovery
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Cloud/StravaTokenPublication.cpp`,
-  `src/Cloud/StravaCredentialPublisher.cpp`, and `src/Cloud/Strava.cpp`
+  `src/Cloud/StravaCredentialPublisher.cpp`,
+  `src/Cloud/StravaCredentialDurability.cpp`, and `src/Cloud/Strava.cpp`
 - Impact: Refresh-token rotation must persist the new refresh token before the
   corresponding access token. If the later access-token or timestamp write
   fails, the coordinator correctly leaves authorization pending, but
   production does not schedule recovery. The in-process coordinator still
   knows the observed pair and the publication primitive can retry, but a
   restart loses that evidence and requires reauthorization or disconnection.
-- Test: Inject a one-time access-token or timestamp persistence failure,
-  restart against the same settings and vault, and require deterministic
-  recovery without admitting API requests until the complete pair is active.
-- Fix direction: Persist a minimal secure recovery journal for the observed
-  pair and retry publication during startup. Never mark the grant active until
-  every credential and metadata write has committed and synchronized.
+- Test-first evidence: One-time access-token and timestamp failures leave a
+  complete pending package, then reconstruct the coordinator against the same
+  settings and secure store. Further regressions terminate a child process at
+  each durable transition, distinguish operations that never reached the
+  provider from unknown remote outcomes, reject transiently unreadable state,
+  and resume both local and confirmed-remote revocation cleanup. A final
+  restart regression preserves the vault grant after an indeterminate remote
+  revocation, requires the stale transaction fence to retire, and then starts
+  a new explicit local-cleanup generation. Follow-up regressions
+  `revocationConflictRecoveryPreservesNewerGrantUntilExplicitCleanup` and
+  `publicationConflictRecoveryRetiresFenceForExplicitRetry` cover newer-vault
+  conflicts after restart and require a new explicit generation to proceed.
+- Resolution: Every grant mutation has an account-bound transaction id and
+  generation. An anchored, atomically replaced journal records the previous
+  authorization state, mutation kind, remote-transition boundary, and an
+  authenticated pending token package before publication can advance. Startup
+  recovery reopens that exact generation, keeps authorization pending, and
+  either completes all credential, timestamp, state, revision, and sync writes
+  or leaves the journal intact for another retry. Incomplete or unreadable
+  evidence fails closed instead of admitting API requests. An indeterminate
+  revocation with retained credentials remains durably `revocation_pending`
+  with remote-grant uncertainty, but its obsolete journal generation retires
+  after that state is durable. Authenticated use remains blocked while an
+  explicit retry or local-only cleanup can acquire a new fenced generation.
+  Confirmed-revocation cleanup stores its expected token and removal mode only
+  in the secure pending credential package and replays the same CAS after
+  restart. A conflicting newer pair is preserved while the obsolete journal
+  retires fail-closed. Publication conflicts follow the same supersession rule
+  instead of permanently retaining a non-idle journal.
+- Verification: `stravaCredentialDurability` passes 26 cases normally and
+  under strict ASan/UBSan/LSan. Together with CredentialSettings (439 with
+  seven platform skips), athlete migration (116), OAuth policy (73), account
+  removal (21), and token refresh (55), the package passes 730 cases with zero
+  failures in both configurations. The complete application also builds and
+  links.
 
 ### DUR-010: Credential-scope mirror failure is not propagated
 
@@ -5926,37 +5978,78 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### THREAD-010: Strava grant coordination is process-local
 
-- Status: OPEN
-- Code: `src/Cloud/StravaTokenRefresh.cpp` and
-  `src/Cloud/StravaCredentialPublisher.cpp`
+- Status: FIXED
+- Code: `src/Cloud/StravaTokenRefresh.cpp`,
+  `src/Cloud/StravaCredentialPublisher.cpp`, and
+  `src/Cloud/StravaCredentialDurability.cpp`
 - Impact: Static mutexes, registries, epochs, and request permits coordinate
   service clones only inside one GoldenCheetah process. Two processes using the
   same athlete profile can concurrently rotate, revoke, install, or publish a
   grant and defeat the otherwise serialized state machine.
-- Test: Run independent subprocesses against one disposable athlete settings
-  tree and fake provider. Force overlapping refresh, OAuth, and removal
-  operations and require one durable ordering with no stale token publication.
-- Fix direction: Add a per-athlete interprocess lease around remote grant
-  mutation and credential publication, backed by a durable generation checked
-  before and after each network transition.
+- Test-first evidence: Independent child processes overlap refresh, OAuth, and
+  removal against one disposable account and secure-store fixture. Each child
+  reports the generation and credentials it observed; the regression requires
+  a single durable order and rejects stale publication. Namespace-swap tests
+  also replace the lock and journal parents at mutation boundaries.
+- Resolution: Refresh, OAuth installation, and removal acquire one private,
+  account-derived interprocess lease before reading grant state or crossing a
+  provider boundary. The lease owns an anchored journal generation and every
+  transition revalidates its transaction id and generation before publication.
+  In-process coordination remains the fast path, while the durable generation
+  fences independent processes and restart recovery. Replaced lock or journal
+  namespaces fail closed.
+- Verification: The subprocess serialization and generation-fencing rows pass
+  in the 26-case durability suite normally and under strict ASan/UBSan/LSan.
+  The adjacent 55 refresh, 21 removal, and 73 OAuth policy cases pass in both
+  configurations.
 
 ### THREAD-011: Started Strava settings commits can block callers indefinitely
 
-- Status: OPEN
-- Code: `src/Cloud/StravaCredentialPublisher.cpp`
-  (`runOnSettingsThread`)
+- Status: FIXED
+- Code: `src/Cloud/StravaCredentialPublisher.cpp`,
+  `src/Cloud/StravaSettingsCommit.cpp`, and
+  `src/Cloud/StravaCredentialDurability.cpp`,
+  `src/Core/Settings.cpp`, `src/Core/CredentialStoreQtKeychain.cpp`, and
+  `unittests/Core/credentialSettings/testCredentialSettings.cpp`
 - Impact: Cancellation and deadline handling can abandon an operation that has
   not started on the settings thread. Once the GUI thread begins a credential
   write, the caller waits for its definitive result even after the deadline.
   This avoids reporting timeout while a mutation can later commit silently,
   but an indefinitely blocked credential backend can hang a worker or
   application teardown.
-- Test: Block a settings backend after the GUI-side operation starts, then
-  cancel and expire the deadline. Require bounded owner teardown and a durable,
-  explicit unknown or pending result that startup recovery can resolve.
-- Fix direction: Use a bounded or cancellable storage backend, or move the
-  durable operation to an owned worker with a recoverable transaction identity.
-  Do not return timeout while an untracked mutation can still commit.
+- Test-first evidence: A storage callback blocks only after it has started.
+  Cancellation and the deadline must return a tracked pending result promptly,
+  owner teardown must remain bounded, and a reconstructed coordinator must
+  resolve the same transaction. Additional rows race late pending-state writes
+  against a newer mutation generation and require GUI-originated credential
+  work to execute outside the application thread. A deterministic native-job
+  hook also queues keychain completion on the application thread while that
+  thread starts settings reconfiguration; the wait must process completion
+  before the shortened backend deadline instead of freezing the event loop.
+  `applicationThreadKeychainReentrancyDefersSettingsReconfiguration` starts the
+  native job directly on the application thread, reenters athlete settings
+  initialization from its nested loop, and requires that initialization to
+  return without touching `QSettings` until the owning suspension unwinds.
+- Resolution: Credential storage runs on a dedicated owned worker rather than
+  the GUI/settings owner thread. Before dispatch, the durable coordinator
+  records the transaction identity and pending phase. An unstarted callback can
+  be abandoned; a started callback that exceeds its deadline returns only an
+  explicit pending result backed by that journal. Late completion is accepted
+  only while its worker and mutation generations remain current, so it cannot
+  cross a newer grant mutation. Shutdown interrupts and joins cooperative work;
+  a wedged native callback is detached from future generations without blocking
+  the caller or allowing untracked publication. Application-thread settings
+  reconfiguration now releases the settings mutex and runs a restricted,
+  timer-bounded event loop while credential backends remain suspended. It
+  reacquires the mutex and rechecks the suspension count before any `QSettings`
+  object can be accessed, replaced, or destroyed by that reconfiguration. A
+  suspension owned by the current application-thread stack is detected
+  separately and causes reentrant initialization to defer immediately, avoiding
+  a nested-loop cycle in which only the blocked outer frame can clear it.
+- Verification: The started-commit deadline, generation fence, worker-affinity,
+  clean shutdown/restart, and recovery rows pass normally and under strict
+  ASan/UBSan/LSan. The full six-suite package passes 730 cases with zero
+  failures and seven platform-contract skips in both configurations.
 
 ### BUILD-010: AppImage credential gate treats absence of one marker as proof
 

@@ -20,6 +20,7 @@
 #include "Athlete.h"
 #include "MainWindow.h"
 #include "Settings.h"
+#include "StravaSettingsCommit.h"
 #include "CloudService.h"
 #include "LocalFileStoreProcess.h"
 #include "TrainDB.h"
@@ -111,8 +112,16 @@ void terminate(int code)
 #ifdef GC_WANT_PYTHON
     delete fixPySettings;
 #endif
-    delete appsettings;
+    const bool credentialWorkerStopped =
+        StravaSettingsCommit::shutdownCredentialThread();
+    if (credentialWorkerStopped) {
+        delete appsettings;
+        appsettings = nullptr;
+    }
+    // A stalled native keychain call may still reference settings. Process
+    // teardown reclaims them after the bounded UI shutdown path returns.
     application->exit();
+    if (!credentialWorkerStopped) _Exit(code);
 
     // because QT starts a bunch of threads (e.g. reading XcbEvents)
     // calling exit() during startup is a no-no. So we go nuclear and
@@ -887,11 +896,30 @@ main(int argc, char *argv[])
 
         ret=application->exec();
 
+        const bool credentialWorkerStopped =
+            StravaSettingsCommit::shutdownCredentialThread();
+        if (!credentialWorkerStopped) {
+            qCritical()
+                << "Credential backend did not stop before application shutdown";
+            _Exit(ret);
+        }
+
         // close trainDB
         delete trainDB;
 
         // reset QSettings (global & Athlete)
-        appsettings->clearGlobalAndAthletes();
+        if (!appsettings->clearGlobalAndAthletes(100)) {
+            qCritical()
+                << "Credential backend retained settings during shutdown";
+            _Exit(ret);
+        }
+
+        if (restarting
+            && !StravaSettingsCommit::restartCredentialThread()) {
+            qCritical()
+                << "Credential worker could not restart after settings reset";
+            _Exit(ret);
+        }
 
     } while (restarting);
 

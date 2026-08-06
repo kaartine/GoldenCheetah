@@ -43,11 +43,15 @@
 #include "Train/VideoWindow.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFileInfo>
 #include <QHash>
 #include <QMessageBox>
 #include <QMutex>
 #include <QSet>
 #include <QThread>
+#include <QTemporaryDir>
 #include <QTimer>
 
 #include <chrono>
@@ -60,12 +64,14 @@
 namespace {
 
 QHash<QString, QVariant> testValues;
+QTemporaryDir stravaTransactionRoot;
 QMutex testValuesMutex;
 int settingsCrossThreadWrites = 0;
 bool settingsSyncFails = false;
 int settingsSyncCalls = 0;
 int settingsSyncFailureCall = 0;
 bool unrelatedSettingsSyncFails = false;
+bool stravaCredentialReadsAvailable = true;
 std::mutex stravaCredentialWriteMutex;
 std::condition_variable stravaCredentialWriteCondition;
 bool blockStravaCredentialWrite = false;
@@ -124,6 +130,9 @@ bool DataProcessorFactory::autoprocess = true;
 
 void resetAthleteMigrationTestSettings()
 {
+    const QString transactionRoot = stravaTransactionRoot.path();
+    QDir(transactionRoot).removeRecursively();
+    QDir().mkpath(transactionRoot);
     {
         QMutexLocker locker(&testValuesMutex);
         testValues.clear();
@@ -132,6 +141,7 @@ void resetAthleteMigrationTestSettings()
         settingsSyncCalls = 0;
         settingsSyncFailureCall = 0;
         unrelatedSettingsSyncFails = false;
+        stravaCredentialReadsAvailable = true;
     }
     throwOnAthleteIdWrite = false;
     {
@@ -234,6 +244,13 @@ void setAthleteMigrationUnrelatedSettingsSyncFails(
 {
     QMutexLocker locker(&testValuesMutex);
     unrelatedSettingsSyncFails = enabled;
+}
+
+void setAthleteMigrationStravaCredentialReadsAvailable(
+    bool available)
+{
+    QMutexLocker locker(&testValuesMutex);
+    stravaCredentialReadsAvailable = available;
 }
 
 void setAthleteMigrationBlockStravaCredentialWrite(bool enabled)
@@ -358,6 +375,19 @@ QVariant GSettings::cvalue(QString athleteName, QString key, QVariant def)
     return testValues.value(settingKey(athleteName, key), def);
 }
 
+GSettings::CredentialReadResult GSettings::credentialCValueChecked(
+    const QString &athleteName,
+    const QString &key)
+{
+    QMutexLocker locker(&testValuesMutex);
+    if (!stravaCredentialReadsAvailable)
+        return {CredentialReadStatus::Unavailable, {}};
+    const QString storedKey = settingKey(athleteName, key);
+    if (!testValues.contains(storedKey))
+        return {CredentialReadStatus::NotFound, {}};
+    return {CredentialReadStatus::Present, testValues.value(storedKey)};
+}
+
 void GSettings::setCValue(QString athleteName, QString key, QVariant value)
 {
     QMutexLocker locker(&testValuesMutex);
@@ -423,6 +453,23 @@ bool GSettings::syncCValueChecked(
     return !settingsSyncFails
         && (settingsSyncFailureCall <= 0
             || settingsSyncCalls != settingsSyncFailureCall);
+}
+
+QString GSettings::athleteConfigDirectory(
+    const QString &athleteName) const
+{
+    if (!stravaTransactionRoot.isValid()
+        || athleteName.trimmed().isEmpty()) {
+        return {};
+    }
+    const QString directory = stravaTransactionRoot.filePath(
+        QString::fromLatin1(
+            QCryptographicHash::hash(
+                athleteName.toUtf8(), QCryptographicHash::Sha256)
+                .toHex()));
+    return QDir().mkpath(directory)
+        ? QFileInfo(directory).canonicalFilePath()
+        : QString();
 }
 
 AppearanceSettings GSettings::defaultAppearanceSettings()
