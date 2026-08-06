@@ -4873,29 +4873,56 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DB-001: VideoSync import uses video-table helpers
 
-- Status: OPEN
-- Code: `src/Train/TrainDB.cpp:1065`
+- Status: FIXED
+- Code: `src/Train/TrainDB.cpp`, `src/Train/TrainDB.h`, and
+  `unittests/Train/trainDbVersionSafety/testTrainDbVersionSafety.cpp`
 - Impact: Replace can delete a same-path video and update can skip an existing
   videosync row.
-- Test: Cover insert/update/replace with identical paths in both tables.
-- Fix direction: Use videosync helpers or one SQLite upsert.
+- Test-first evidence: The migration-retry and same-path replacement
+  regressions first exposed that VideoSync import selected and replaced rows
+  through the video-table helpers, allowing one table's row to affect the
+  other.
+- Resolution: VideoSync import now queries, updates, and replaces only
+  `videosync` rows. Same-path video rows remain untouched, and retries update
+  the existing VideoSync record instead of inserting a duplicate.
+- Verification: `trainDbVersionSafety` passes 35/0/0 normally and 35/0/0 under
+  strict ASan/UBSan/LSan.
 
 ### DB-002: Workout update does not update average power
 
-- Status: OPEN
-- Code: `src/Train/TrainDB.cpp:1027`
+- Status: FIXED
+- Code: `src/Train/TrainDB.cpp` and
+  `unittests/Train/trainDbVersionSafety/testTrainDbVersionSafety.cpp`
 - Impact: Edited workouts retain stale `erg_avg_power` metadata.
-- Test: Insert, change power, update, and query the stored average.
-- Fix direction: Assign the bound `:erg_avg_power` value.
+- Test-first evidence: The regression inserts a workout, changes its average
+  power, updates it, and reads the database directly. The baseline retained the
+  original value because the update statement did not assign the bound field.
+- Resolution: The workout update now writes `erg_avg_power` from its bound
+  value together with the rest of the mutable workout metadata.
+- Verification: The focused regression is part of the 35/0/0 normal and
+  35/0/0 strict ASan/UBSan/LSan `trainDbVersionSafety` runs.
 
 ### DB-003: Training-library transaction failures are ignored
 
-- Status: OPEN
-- Code: `src/Train/TrainDB.cpp:795`,
-  `src/Train/TrainDB.cpp:803`, `src/Train/Library.cpp:144`
+- Status: FIXED
+- Code: `src/Train/TrainDB.cpp`, `src/Train/TrainDB.h`,
+  `src/Train/Library.cpp`, `src/Train/LibraryImportFileStager.cpp`,
+  `src/Train/LibraryParser.cpp`, and `src/Train/WorkoutImportBatch.cpp`
 - Impact: Partial imports can be reported to the UI as successful.
-- Test: Force duplicate, schema, and commit failures and require rollback.
-- Fix direction: RAII transaction with propagated result and post-commit signals.
+- Test-first evidence: Regressions inject transaction-start, duplicate, schema,
+  import, serialization, copy, collision, and commit failures. The baseline
+  could retain earlier database rows or files, emit success signals, accept the
+  dialog, or overwrite metadata despite a later failure.
+- Resolution: `TrainDB::ScopedLUW` owns rollback unless an explicit commit
+  succeeds. Library refresh/import and dialog batches stage file replacements,
+  database writes, and `QSaveFile` metadata together; every failure propagates,
+  restores owned files and metadata, and suppresses success publication.
+  Signals and dialog acceptance occur only after the durable commit boundary.
+- Verification: `libraryTransactionSafety`, `libraryImportFileStager`, and
+  `libraryParserSerialize` pass 20/0/0, 12/0/0, and 4/0/0 respectively both
+  normally and under strict ASan/UBSan/LSan. The integrated 11-program matrix
+  passes 151/0/0 in both modes, the full Qt 6.8.3 application links, and an
+  isolated minimal-platform run reports `GoldenCheetah V3.8-DEV2605 (5012)`.
 
 ### TRN-004: Core-temperature header is written to the RR file
 
