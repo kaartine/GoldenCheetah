@@ -30,14 +30,27 @@
 #include "OAuthCallbackPolicy.h"
 #include "OAuthPKCE.h"
 #include "OAuthTokenReplyController.h"
+#include "OAuthDialogMessageGuard.h"
 #include "StravaCredentialPublisher.h"
 #include "StravaOAuthPolicy.h"
+#include "StravaSettingsCommit.h"
 #include "StravaTokenRefresh.h"
 
 #include <QJsonParseError>
 
-OAuthDialog::OAuthDialog(Context *context, OAuthSite site, CloudService *service, QString baseURL, QString clientsecret) :
-    context(context), site(site), service(service), baseURL(baseURL), clientsecret(clientsecret)
+#include <mutex>
+
+struct StravaCredentialAttempt
+{
+    std::mutex mutex;
+    std::shared_ptr<StravaCredentialDurability::Mutation> mutation;
+    QString error;
+    std::uint64_t authorizationEpoch = 0;
+    bool prepared = false;
+    bool cancelled = false;
+};
+
+void OAuthDialog::initializeTokenReplyController()
 {
     tokenReplyController =
         std::make_unique<OAuthTokenReplyController>(this);
@@ -46,7 +59,37 @@ OAuthDialog::OAuthDialog(Context *context, OAuthSite site, CloudService *service
         this, [this] {
             tokenRequestSensitiveValues.clear();
             tokenReplyController->cancel();
+            if (stravaCredentialAttempt) {
+                const std::lock_guard<std::mutex> lock(
+                    stravaCredentialAttempt->mutex);
+                stravaCredentialAttempt->cancelled = true;
+            }
         });
+}
+
+#ifdef GC_OAUTH_DIALOG_TEST_HOOKS
+OAuthDialog::OAuthDialog(OAuthSite site, TestConstruction)
+    : context(nullptr), site(site), service(nullptr)
+{
+    initializeTokenReplyController();
+    setAttribute(Qt::WA_DeleteOnClose);
+}
+
+bool OAuthDialog::trackTokenReplyForTest(QNetworkReply *reply)
+{
+    return reply && tokenReplyController->start(reply, 30000);
+}
+
+void OAuthDialog::finishTokenReplyForTest(QNetworkReply *reply)
+{
+    networkRequestFinished(reply);
+}
+#endif
+
+OAuthDialog::OAuthDialog(Context *context, OAuthSite site, CloudService *service, QString baseURL, QString clientsecret) :
+    context(context), site(site), service(service), baseURL(baseURL), clientsecret(clientsecret)
+{
+    initializeTokenReplyController();
 
     setAttribute(Qt::WA_DeleteOnClose);
     setWindowTitle(tr("OAuth"));
@@ -68,34 +111,6 @@ OAuthDialog::OAuthDialog(Context *context, OAuthSite site, CloudService *service
         if (service->id() == "Tredict") site = this->site = TREDICT;
     }
 
-    if (site == STRAVA && service) {
-        const QString accountKey = service->property(
-            "_gcAthleteName").toString();
-        if (!accountKey.trimmed().isEmpty()) {
-            const QString storedState = service->getSetting(
-                GC_STRAVA_AUTHORIZATION_STATE,
-                QStringLiteral("active")).toString();
-            StravaTokenRefreshCoordinator::
-                initializeAuthorization(
-                    accountKey,
-                    StravaTokenRefreshCoordinator::
-                        authorizationStatusFromStorage(
-                            storedState),
-                    service->getSetting(
-                        GC_STRAVA_TOKEN,
-                        QString()).toString(),
-                    service->getSetting(
-                        GC_STRAVA_REFRESH_TOKEN,
-                        QString()).toString(),
-                    service->getSetting(
-                        GC_STRAVA_REMOTE_GRANT_UNCERTAIN,
-                        false).toBool());
-            stravaAuthorizationEpoch =
-                StravaTokenRefreshCoordinator::authorizationEpoch(
-                    accountKey);
-        }
-    }
-
     if (site == STRAVA
         && !StravaOAuthPolicy::hasUsableCredentials(
             QStringLiteral(GC_STRAVA_CLIENT_ID),
@@ -104,21 +119,19 @@ OAuthDialog::OAuthDialog(Context *context, OAuthSite site, CloudService *service
             "This build does not include configured Strava OAuth credentials. "
             "Install an official GoldenCheetah release or configure a registered "
             "Strava client ID and client secret before building.");
-        QMessageBox credentialsMissing(
-            QMessageBox::Critical,
-            tr("Authorization Error"), text);
-        credentialsMissing.exec();
         authorizationReady = false;
+        OAuthDialogMessageGuard::showDetached(
+            tr("Authorization Error"), text);
         return;
     }
 
     // check if SSL is available - if not - message and end
     if (!QSslSocket::supportsSsl()) {
         QString text = QString(tr("SSL Security Libraries required for 'Authorise' are missing in this installation."));
-        QMessageBox sslMissing(QMessageBox::Critical, tr("Authorization Error"), text);
-        sslMissing.exec();
         noSSLlib = true;
         authorizationReady = false;
+        OAuthDialogMessageGuard::showDetached(
+            tr("Authorization Error"), text);
         return;
     }
 
@@ -275,13 +288,11 @@ OAuthDialog::OAuthDialog(Context *context, OAuthSite site, CloudService *service
         if (url.isEmpty()
             || !callbackSession->isValid()) {
             noSSLlib = true;
-            QMessageBox authorizationFailure(
-                QMessageBox::Critical,
+            OAuthDialogMessageGuard::showDetached(
                 tr("Authorization Error"),
                 authorizationError.isEmpty()
                     ? tr("The OAuth callback configuration is unsafe.")
                     : authorizationError);
-            authorizationFailure.exec();
             return;
         }
 
@@ -296,6 +307,23 @@ OAuthDialog::OAuthDialog(Context *context, OAuthSite site, CloudService *service
 
 OAuthDialog::~OAuthDialog()
 {
+  std::shared_ptr<StravaCredentialDurability::Mutation>
+      abandonedMutation;
+  if (stravaCredentialAttempt) {
+      const std::lock_guard<std::mutex> lock(
+          stravaCredentialAttempt->mutex);
+      stravaCredentialAttempt->cancelled = true;
+      abandonedMutation = stravaCredentialAttempt->mutation;
+  }
+  if (abandonedMutation) {
+      StravaSettingsCommit::runOnCredentialThreadAsync(
+          [abandonedMutation] {
+              QString abortError;
+              abandonedMutation->abortBeforeRemoteDispatch(
+                  abortError);
+          },
+          {});
+  }
   tokenReplyController->cancel();
   if (view) delete view->page();
   delete view;  // view was constructed without a parent to delete it
@@ -344,12 +372,10 @@ OAuthDialog::urlChanged(const QUrl &url)
         if (outcome.type
             == OAuthCallbackPolicy::OutcomeType::
                 AuthorizationError) {
-            QMessageBox authorizationError(
-                QMessageBox::Critical,
+            OAuthDialogMessageGuard::showAndReject(
+                this,
                 tr("Authorization Error"),
                 outcome.error);
-            authorizationError.exec();
-            reject();
             return;
         }
 
@@ -477,12 +503,10 @@ OAuthDialog::urlChanged(const QUrl &url)
                         QStringLiteral(GC_STRAVA_CLIENT_SECRET),
                         code);
                 if (!stravaRequest.isValid()) {
-                    QMessageBox requestError(
-                        QMessageBox::Critical,
+                    OAuthDialogMessageGuard::showAndReject(
+                        this,
                         tr("Authorization Error"),
                         stravaRequest.error);
-                    requestError.exec();
-                    reject();
                     return;
                 }
                 tokenUrl = stravaRequest.endpoint;
@@ -500,72 +524,235 @@ OAuthDialog::urlChanged(const QUrl &url)
             // trade in the temporary code only over a verified HTTPS endpoint
             if (!OAuthCallbackPolicy::isSecureEndpoint(
                     tokenUrl)) {
-                QMessageBox endpointError(
-                    QMessageBox::Critical,
+                OAuthDialogMessageGuard::showAndReject(
+                    this,
                     tr("Authorization Error"),
                     tr("The OAuth token endpoint must use verified HTTPS."));
-                endpointError.exec();
-                reject();
                 return;
             }
 
-            manager = new QNetworkAccessManager(this);
-            connect(manager, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
-            connect(
-                manager, &QNetworkAccessManager::finished,
-                this, &OAuthDialog::networkRequestFinished,
-                Qt::QueuedConnection);
+            if (site == STRAVA) {
+                prepareStravaTokenRequest(tokenUrl, data);
+                return;
+            }
+            startTokenRequest(tokenUrl, data, authheader);
 
-            QNetworkReply *reply;
-            if (site == RIDEWITHGPS) {
-                const CloudCredentialTransport::Request transport =
-                    CloudCredentialTransport::
-                        makeRideWithGpsAuthTokenRequest(
-                            tokenUrl,
-                            QStringLiteral(GC_RWGPS_API_KEY),
-                            service->getSetting(
-                                GC_RWGPSUSER, "").toString(),
-                            service->getSetting(
-                                GC_RWGPSPASS, "").toString());
-                reply = manager->post(
-                    transport.request, transport.body);
+}
+
+void OAuthDialog::prepareStravaTokenRequest(
+    const QUrl &tokenUrl, const QByteArray &data)
+{
+    const QString accountKey = service
+        ? service->property("_gcAthleteName").toString()
+        : QString();
+    const auto attempt = std::make_shared<StravaCredentialAttempt>();
+    stravaCredentialAttempt = attempt;
+    const bool queued = StravaSettingsCommit::runOnCredentialThreadAsync(
+        [attempt, accountKey] {
+            QString error;
+            const auto cancelled = [attempt] {
+                const std::lock_guard<std::mutex> lock(attempt->mutex);
+                return attempt->cancelled;
+            };
+            const StravaCredentialDurability::RecoveryResult recovery =
+                StravaCredentialPublisher::recover(accountKey, 30000);
+            std::shared_ptr<StravaCredentialDurability::Mutation> mutation;
+            if (recovery.isSuccess()) {
+                mutation = StravaCredentialPublisher::beginMutation(
+                    accountKey,
+                    StravaCredentialDurability::MutationKind::Authorization,
+                    30000,
+                    error);
             } else {
-                QNetworkRequest request =
-                    QNetworkRequest(tokenUrl);
-                request.setHeader(QNetworkRequest::ContentTypeHeader,"application/x-www-form-urlencoded");
-                if (site == STRAVA) {
-                    request.setAttribute(
-                        QNetworkRequest::RedirectPolicyAttribute,
-                        QNetworkRequest::SameOriginRedirectPolicy);
-                }
-
-                // client id and secret are encoded and sent in the header for NOLIO, POLAR and XERT
-                if (site == NOLIO || site == POLAR || site == XERT)  request.setRawHeader("Authorization", "Basic " +  authheader.toLatin1().toBase64());
-                reply = manager->post(request, data);
-
+                error = recovery.error.isEmpty()
+                    ? QStringLiteral(
+                        "A prior Strava credential transaction could not be recovered.")
+                    : recovery.error;
             }
-            if (!reply
-                || !tokenReplyController->start(reply, 30000)) {
-                if (reply) {
-                    reply->abort();
-                    reply->deleteLater();
-                }
-                tokenRequestSensitiveValues.clear();
-                QMessageBox requestError(
-                    QMessageBox::Critical,
-                    tr("OAuth Token Error"),
-                    tr("The OAuth token request could not be started."));
-                requestError.exec();
-                reject();
+            if (cancelled()) {
+                StravaCredentialPublisher::finishNoChange(
+                    mutation, 30000);
                 return;
             }
-            // services without web login need blocking requests
-            if (site == XERT || site == RIDEWITHGPS) {
-                QEventLoop loop;
-                connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
-                loop.exec();
+            const StravaCredentialPublisher::StoredAuthorization stored =
+                mutation
+                ? StravaCredentialPublisher::readStoredAuthorization(
+                    mutation, 30000)
+                : StravaCredentialPublisher::StoredAuthorization();
+            if (stored.readable) {
+                QString storedState = stored.state;
+                if (storedState.isEmpty()) {
+                    storedState =
+                        QStringLiteral("authorization_pending");
+                }
+                StravaTokenRefreshCoordinator::
+                    reconcileAuthorizationFromStorage(
+                        accountKey,
+                        StravaTokenRefreshCoordinator::
+                            authorizationStatusFromStorage(
+                                storedState),
+                        stored.credentials.accessToken,
+                        stored.credentials.refreshToken,
+                        stored.remoteGrantUncertain,
+                        true);
+                attempt->authorizationEpoch =
+                    StravaTokenRefreshCoordinator::authorizationEpoch(
+                        accountKey);
+            } else if (mutation && error.isEmpty()) {
+                error = QStringLiteral(
+                    "The existing Strava authorization could not be read securely.");
             }
+            const StravaCredentialPublisher::StateCommitResult pending =
+                mutation && stored.readable
+                ? StravaCredentialPublisher::
+                    markAuthorizationPendingTracked(
+                        accountKey, mutation, 30000, {})
+                : StravaCredentialPublisher::StateCommitResult();
+            bool prepared = mutation && pending.isSuccess();
+            if (cancelled()) {
+                StravaCredentialPublisher::finishNoChange(
+                    mutation, 30000);
+                return;
+            }
+            if (prepared)
+                prepared = mutation->isCurrent(error);
+            if (prepared)
+                prepared = mutation->markCommitUnknown(error);
+            if (prepared && cancelled()) {
+                QString abortError;
+                mutation->abortBeforeRemoteDispatch(abortError);
+                return;
+            }
+            if (!prepared && mutation
+                && pending.canDiscardMutation()) {
+                StravaCredentialPublisher::finishNoChange(
+                    mutation, 30000);
+            }
+            if (!prepared && error.isEmpty()) {
+                error = QStringLiteral(
+                    "The Strava credential transaction could not be prepared.");
+            }
+            bool cancelledBeforeCompletion = false;
+            {
+                const std::lock_guard<std::mutex> lock(attempt->mutex);
+                cancelledBeforeCompletion = attempt->cancelled;
+                if (!cancelledBeforeCompletion) {
+                    attempt->mutation = mutation;
+                    attempt->error = error;
+                    attempt->prepared = prepared;
+                }
+            }
+            if (cancelledBeforeCompletion && mutation) {
+                QString abortError;
+                if (prepared) {
+                    mutation->abortBeforeRemoteDispatch(abortError);
+                } else {
+                    StravaCredentialPublisher::finishNoChange(
+                        mutation, 30000);
+                }
+            }
+        },
+        this,
+        [this, attempt, tokenUrl, data] {
+            std::shared_ptr<StravaCredentialDurability::Mutation> mutation;
+            QString error;
+            bool prepared = false;
+            {
+                const std::lock_guard<std::mutex> lock(attempt->mutex);
+                if (attempt->cancelled) return;
+                mutation = attempt->mutation;
+                error = attempt->error;
+                prepared = attempt->prepared;
+                stravaAuthorizationEpoch =
+                    attempt->authorizationEpoch;
+            }
+            if (stravaCredentialAttempt != attempt) return;
+            stravaCredentialAttempt.reset();
+            if (!prepared || !mutation) {
+                tokenRequestSensitiveValues.clear();
+                OAuthDialogMessageGuard::showAndReject(
+                    this,
+                    tr("Authorization Error"),
+                    error.isEmpty()
+                        ? tr("The Strava credential transaction could not be started.")
+                        : error);
+                return;
+            }
+            stravaCredentialMutation = std::move(mutation);
+            startTokenRequest(tokenUrl, data);
+        });
+    if (queued) return;
 
+    stravaCredentialAttempt.reset();
+    tokenRequestSensitiveValues.clear();
+    OAuthDialogMessageGuard::showAndReject(
+        this,
+        tr("Authorization Error"),
+        tr("The Strava credential worker is unavailable."));
+}
+
+void OAuthDialog::startTokenRequest(
+    const QUrl &tokenUrl, const QByteArray &data,
+    const QString &authorizationHeader)
+{
+    manager = new QNetworkAccessManager(this);
+    connect(manager, SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> & )), this, SLOT(onSslErrors(QNetworkReply*, const QList<QSslError> & )));
+    connect(
+        manager, &QNetworkAccessManager::finished,
+        this, &OAuthDialog::networkRequestFinished,
+        Qt::QueuedConnection);
+
+    QNetworkReply *reply = nullptr;
+    if (site == RIDEWITHGPS) {
+        const CloudCredentialTransport::Request transport =
+            CloudCredentialTransport::makeRideWithGpsAuthTokenRequest(
+                tokenUrl,
+                QStringLiteral(GC_RWGPS_API_KEY),
+                service->getSetting(GC_RWGPSUSER, "").toString(),
+                service->getSetting(GC_RWGPSPASS, "").toString());
+        reply = manager->post(transport.request, transport.body);
+    } else {
+        QNetworkRequest request(tokenUrl);
+        request.setHeader(
+            QNetworkRequest::ContentTypeHeader,
+            "application/x-www-form-urlencoded");
+        if (site == STRAVA) {
+            request.setAttribute(
+                QNetworkRequest::RedirectPolicyAttribute,
+                QNetworkRequest::SameOriginRedirectPolicy);
+        }
+        if (site == NOLIO || site == POLAR || site == XERT) {
+            request.setRawHeader(
+                "Authorization",
+                "Basic "
+                    + authorizationHeader.toLatin1().toBase64());
+        }
+        reply = manager->post(request, data);
+    }
+
+    if (!reply || !tokenReplyController->start(reply, 30000)) {
+        if (!reply && stravaCredentialMutation) {
+            QString abortError;
+            stravaCredentialMutation->abortBeforeRemoteDispatch(
+                abortError);
+        }
+        if (reply) {
+            reply->abort();
+            reply->deleteLater();
+        }
+        stravaCredentialMutation.reset();
+        tokenRequestSensitiveValues.clear();
+        OAuthDialogMessageGuard::showAndReject(
+            this,
+            tr("OAuth Token Error"),
+            tr("The OAuth token request could not be started."));
+        return;
+    }
+    if (site == XERT || site == RIDEWITHGPS) {
+        QEventLoop loop;
+        connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
+        loop.exec();
+    }
 }
 
 //
@@ -594,13 +781,22 @@ OAuthDialog::networkRequestFinished(QNetworkReply *reply)
     if (completion
         == OAuthTokenReplyController::Completion::TimedOut) {
         tokenRequestSensitiveValues.clear();
-        QMessageBox oauthError(
-            QMessageBox::Critical,
+        OAuthDialogMessageGuard::showAndReject(
+            this,
             tr("OAuth Token Error"),
             tr("The OAuth token request timed out."));
-        oauthError.exec();
-        reject();
         return;
+    }
+    if (site == STRAVA && stravaCredentialMutation) {
+        QString mutationError;
+        if (!stravaCredentialMutation->isCurrent(mutationError)) {
+            tokenRequestSensitiveValues.clear();
+            OAuthDialogMessageGuard::showAndReject(
+                this,
+                tr("OAuth Token Error"),
+                mutationError);
+            return;
+        }
     }
 
     // Polar binding reuses this manager after credentials are stored.
@@ -629,13 +825,11 @@ OAuthDialog::networkRequestFinished(QNetworkReply *reply)
             : tr("Error retrieving access token, %1 (%2)")
                   .arg(networkErrorString)
                   .arg(networkError);
-        QMessageBox oauthError(
-            QMessageBox::Critical,
+        OAuthDialogMessageGuard::showAndReject(
+            this,
             tr("OAuth Token Error"),
+            error,
             error);
-        oauthError.setDetailedText(error);
-        oauthError.exec();
-        reject();
         return;
     }
 
@@ -649,12 +843,10 @@ OAuthDialog::networkRequestFinished(QNetworkReply *reply)
                 ? tr("OAuth token response is not a JSON object.")
                 : tr("Cannot parse OAuth token response: %1")
                       .arg(parseError.errorString());
-        QMessageBox oauthError(
-            QMessageBox::Critical,
+        OAuthDialogMessageGuard::showAndReject(
+            this,
             tr("OAuth Token Error"),
             error);
-        oauthError.exec();
-        reject();
         return;
     }
 
@@ -666,12 +858,10 @@ OAuthDialog::networkRequestFinished(QNetworkReply *reply)
         const StravaOAuthPolicy::TokenResponse response =
             StravaOAuthPolicy::parseAuthorizationResponse(payload);
         if (!response.isValid()) {
-            QMessageBox oauthError(
-                QMessageBox::Critical,
+            OAuthDialogMessageGuard::showAndReject(
+                this,
                 tr("OAuth Token Error"),
                 response.error);
-            oauthError.exec();
-            reject();
             return;
         }
         refresh_token = response.refreshToken;
@@ -705,12 +895,10 @@ OAuthDialog::networkRequestFinished(QNetworkReply *reply)
             error = tr(
                 "OAuth token response does not contain an access token.");
         }
-        QMessageBox oauthError(
-            QMessageBox::Critical,
+        OAuthDialogMessageGuard::showAndReject(
+            this,
             tr("OAuth Token Error"),
             error);
-        oauthError.exec();
-        reject();
         return;
     }
 
@@ -719,18 +907,20 @@ OAuthDialog::networkRequestFinished(QNetworkReply *reply)
         if (site == DROPBOX) {
 
             service->setSetting(GC_DROPBOX_TOKEN, access_token);
-            QString info = QString(tr("Dropbox authorization was successful."));
-            QMessageBox information(QMessageBox::Information, tr("Information"), info);
-            information.exec();
+            OAuthDialogMessageGuard::showAndAccept(
+                this, tr("Information"),
+                tr("Dropbox authorization was successful."));
+            return;
 
         } else if (site == SPORTTRACKS) {
 
             service->setSetting(GC_SPORTTRACKS_TOKEN, access_token);
             service->setSetting(GC_SPORTTRACKS_REFRESH_TOKEN, refresh_token);
             service->setSetting(GC_SPORTTRACKS_LAST_REFRESH, QDateTime::currentDateTime());
-            QString info = QString(tr("SportTracks authorization was successful."));
-            QMessageBox information(QMessageBox::Information, tr("Information"), info);
-            information.exec();
+            OAuthDialogMessageGuard::showAndAccept(
+                this, tr("Information"),
+                tr("SportTracks authorization was successful."));
+            return;
 
         } else if (site == POLAR) {
 
@@ -765,9 +955,10 @@ OAuthDialog::networkRequestFinished(QNetworkReply *reply)
             QByteArray r = bind->readAll();
             //qDebug()<<bind->errorString()<< "bind response="<<r;
 
-            QString info = QString(tr("Polar Flow authorization was successful."));
-            QMessageBox information(QMessageBox::Information, tr("Information"), info);
-            information.exec();
+            OAuthDialogMessageGuard::showAndAccept(
+                this, tr("Information"),
+                tr("Polar Flow authorization was successful."));
+            return;
 
         } else if (site == STRAVA) {
 
@@ -776,12 +967,10 @@ OAuthDialog::networkRequestFinished(QNetworkReply *reply)
                       "_gcAthleteName").toString()
                 : QString();
             if (accountKey.trimmed().isEmpty()) {
-                QMessageBox oauthError(
-                    QMessageBox::Critical,
+                OAuthDialogMessageGuard::showAndReject(
+                    this,
                     tr("OAuth Token Error"),
                     tr("The Strava account identity is unavailable."));
-                oauthError.exec();
-                reject();
                 return;
             }
 
@@ -790,9 +979,6 @@ OAuthDialog::networkRequestFinished(QNetworkReply *reply)
                     .toString(Qt::ISODateWithMs);
             StravaCredentialPublisher::Request publication;
             publication.accountKey = accountKey;
-            publication.expectedRefreshToken =
-                service->getSetting(
-                    GC_STRAVA_REFRESH_TOKEN, QString()).toString();
             publication.replacement = {
                 access_token,
                 refresh_token
@@ -801,74 +987,91 @@ OAuthDialog::networkRequestFinished(QNetworkReply *reply)
             publication.mode =
                 StravaTokenPublication::PublicationMode::Authoritative;
             publication.activatesAuthorization = true;
+            publication.mutation = stravaCredentialMutation;
+
+            QString mutationError;
+            if (!stravaCredentialMutation
+                || !stravaCredentialMutation->isCurrent(
+                    mutationError)) {
+                OAuthDialogMessageGuard::showAndReject(
+                    this,
+                    tr("OAuth Token Error"),
+                    mutationError.isEmpty()
+                        ? tr("The Strava credential transaction is unavailable.")
+                        : mutationError);
+                return;
+            }
 
             StravaTokenRefreshResult authorization;
             authorization.success = true;
             authorization.accessToken = access_token;
             authorization.refreshToken = refresh_token;
             authorization.sourceRefreshToken = refresh_token;
-            StravaTokenPublication::PublicationResult published;
-            if (!StravaTokenRefreshCoordinator::
-                    installAuthorizationDurably(
-                        accountKey,
-                        authorization,
-                        stravaAuthorizationEpoch,
-                        [&publication, &published, accountKey] {
-                            publication
-                                .clearsRemoteGrantUncertainty =
-                                !StravaTokenRefreshCoordinator::
-                                    authorizationSnapshot(
-                                        accountKey)
-                                        .remoteGrantMayHaveRotated;
-                            published =
-                                StravaCredentialPublisher::
-                                    publish(publication);
-                            return published.isSuccess();
-                        })) {
-                QMessageBox oauthError(
-                    QMessageBox::Critical,
+            const auto published = std::make_shared<
+                StravaTokenPublication::PublicationResult>();
+            const auto installed = std::make_shared<bool>(false);
+            const std::uint64_t expectedEpoch =
+                stravaAuthorizationEpoch;
+            const bool queued =
+                StravaSettingsCommit::runOnCredentialThreadAsync(
+                    [publication, authorization, accountKey,
+                     expectedEpoch, published, installed]() mutable {
+                        *installed = StravaTokenRefreshCoordinator::
+                            installAuthorizationDurably(
+                                accountKey,
+                                authorization,
+                                expectedEpoch,
+                                [&publication, published, accountKey] {
+                                    publication
+                                        .clearsRemoteGrantUncertainty =
+                                        !StravaTokenRefreshCoordinator::
+                                            authorizationSnapshot(
+                                                accountKey)
+                                                .remoteGrantMayHaveRotated;
+                                    *published =
+                                        StravaCredentialPublisher::
+                                            publish(publication);
+                                    return published->isSuccess();
+                                });
+                    },
+                    this,
+                    [this, published, installed] {
+                        if (!*installed) {
+                            OAuthDialogMessageGuard::showAndReject(
+                                this,
+                                tr("OAuth Token Error"),
+                                published->error.isEmpty()
+                                    ? tr("The new Strava authorization could not be activated.")
+                                    : published->error);
+                            return;
+                        }
+                        stravaCredentialMutation.reset();
+                        OAuthDialogMessageGuard::showAndAccept(
+                            this,
+                            tr("Information"),
+                            tr("Strava authorization was successful."));
+                    });
+            if (!queued) {
+                OAuthDialogMessageGuard::showAndReject(
+                    this,
                     tr("OAuth Token Error"),
-                    published.error.isEmpty()
-                        ? tr("The new Strava authorization "
-                             "could not be activated.")
-                        : published.error);
-                oauthError.exec();
-                reject();
+                    tr("The Strava credential worker is unavailable."));
                 return;
             }
-
-            service->setSetting(GC_STRAVA_TOKEN, access_token);
-            service->setSetting(GC_STRAVA_REFRESH_TOKEN, refresh_token);
-            service->setSetting(GC_STRAVA_LAST_REFRESH, refreshedAt);
-            service->setSetting(
-                GC_STRAVA_AUTHORIZATION_STATE,
-                QStringLiteral("active"));
-            service->setSetting(
-                GC_STRAVA_REMOTE_GRANT_UNCERTAIN,
-                StravaTokenRefreshCoordinator::
-                    authorizationSnapshot(accountKey)
-                        .remoteGrantMayHaveRotated);
-            QString info = QString(tr("Strava authorization was successful."));
-            QMessageBox information(QMessageBox::Information, tr("Information"), info);
-            information.exec();
+            return;
 
         } else if (site == CYCLING_ANALYTICS) {
 
             service->setSetting(GC_CYCLINGANALYTICS_TOKEN, access_token);
-            QString info = QString(tr("Cycling Analytics authorization was successful."));
-            QMessageBox information(QMessageBox::Information, tr("Information"), info);
-            information.exec();
+            OAuthDialogMessageGuard::showAndAccept(
+                this, tr("Information"),
+                tr("Cycling Analytics authorization was successful."));
+            return;
 
         } else if (site == XERT) {
 
             service->setSetting(GC_XERT_TOKEN, access_token);
             service->setSetting(GC_XERT_REFRESH_TOKEN, refresh_token);
-
-            // Try without Message Box
-
-            //QString info = QString(tr("Xert authorization was successful."));
-            //QMessageBox information(QMessageBox::Information, tr("Information"), info);
-            //information.exec();
 
             service->message = "Xert authorization was successful.";
 
@@ -887,31 +1090,35 @@ OAuthDialog::networkRequestFinished(QNetworkReply *reply)
 
 
 
-            QString info = QString(tr("Withings authorization was successful."));
-            QMessageBox information(QMessageBox::Information, tr("Information"), info);
-            information.exec();
+            OAuthDialogMessageGuard::showAndAccept(
+                this, tr("Information"),
+                tr("Withings authorization was successful."));
+            return;
 
         } else if (site == NOLIO) {
             appsettings->setValue(GC_NOLIO_ACCESS_TOKEN, access_token);
             appsettings->setValue(GC_NOLIO_REFRESH_TOKEN, refresh_token);
             appsettings->setValue(GC_NOLIO_LAST_REFRESH, QDateTime::currentDateTime());
-            QString info = QString(tr("Nolio authorization was successful."));
-            QMessageBox information(QMessageBox::Information, tr("Information"), info);
-            information.exec();
+            OAuthDialogMessageGuard::showAndAccept(
+                this, tr("Information"),
+                tr("Nolio authorization was successful."));
+            return;
         } else if (site == AZUM) {
             service->setSetting(GC_AZUM_ACCESS_TOKEN, access_token);
             service->setSetting(GC_AZUM_REFRESH_TOKEN, refresh_token);
-            QString info = QString(tr("Azum authorization was successful."));
-            QMessageBox information(QMessageBox::Information, tr("Information"), info);
-            information.exec();
+            OAuthDialogMessageGuard::showAndAccept(
+                this, tr("Information"),
+                tr("Azum authorization was successful."));
+            return;
 
         } else if (site == TREDICT) {
             service->setSetting(GC_TREDICT_TOKEN, access_token);
             service->setSetting(GC_TREDICT_REFRESH_TOKEN, refresh_token);
             service->setSetting(GC_TREDICT_LAST_REFRESH, QDateTime::currentDateTime());
-            QString info = QString(tr("Tredict authorization was successful."));
-            QMessageBox information(QMessageBox::Information, tr("Information"), info);
-            information.exec();
+            OAuthDialogMessageGuard::showAndAccept(
+                this, tr("Information"),
+                tr("Tredict authorization was successful."));
+            return;
 
         }
 

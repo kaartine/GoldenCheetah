@@ -21,12 +21,14 @@ unix:!android:!macx {
 }
 
 SOURCES = testCredentialSettings.cpp \
+          ../../../src/Cloud/StravaSettingsCommit.cpp \
           ../../../src/Core/CredentialSettings.cpp \
           ../../../src/Core/CredentialStoreQtKeychain.cpp \
           ../../../src/Core/Settings.cpp \
           ../../../src/FileIO/AnchoredFileSystem.cpp
 
 HEADERS = ../../../src/Core/CredentialSettings.h \
+          ../../../src/Cloud/StravaSettingsCommit.h \
           ../../../src/Core/CredentialStoreQtKeychain.h \
           ../../../src/Core/Settings.h \
           ../../../src/FileIO/AnchoredFileSystem.h

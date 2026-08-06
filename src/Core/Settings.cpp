@@ -22,8 +22,12 @@
 #include "CredentialSettings.h"
 #include "MainWindow.h"
 #include "Colors.h"
+#include <QCoreApplication>
+#include <QEventLoop>
 #include <QSettings>
 #include <QDebug>
+#include <QThread>
+#include <QTimer>
 #include <QtAlgorithms>
 
 #include <QFontDatabase>
@@ -32,11 +36,263 @@
 #include <QUuid>
 
 #include <memory>
+#include <chrono>
+#include <unordered_map>
 #include <utility>
 
 #ifdef Q_OS_WIN
 #include <qt_windows.h>
 #endif
+
+namespace {
+
+thread_local std::unordered_map<const SettingsAccessMutex *, unsigned int>
+    settingsAccessDepth;
+thread_local std::unordered_map<const SettingsAccessMutex *, unsigned int>
+    credentialBackendSuspensionOwners;
+
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+std::atomic<int> credentialBackendWaitTimeoutForTest{-1};
+#endif
+
+int credentialBackendWaitTimeout()
+{
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+    return credentialBackendWaitTimeoutForTest.load(
+        std::memory_order_acquire);
+#else
+    return -1;
+#endif
+}
+
+class CredentialBackendSettingsUnlock final
+{
+public:
+    explicit CredentialBackendSettingsUnlock(SettingsAccessMutex &mutex)
+        : mutex_(mutex),
+          credentialDepth_(CredentialSettingsDetail::
+              suspendCredentialOperationMutexForBackend()),
+          settingsDepth_(mutex_.suspendForCredentialBackend())
+    {
+    }
+
+    ~CredentialBackendSettingsUnlock()
+    {
+        mutex_.resumeAfterCredentialBackend(settingsDepth_);
+        CredentialSettingsDetail::
+            resumeCredentialOperationMutexAfterBackend(
+                credentialDepth_);
+    }
+
+private:
+    SettingsAccessMutex &mutex_;
+    unsigned int credentialDepth_;
+    unsigned int settingsDepth_;
+};
+
+class SettingsUnlockingCredentialStore final : public CredentialStore
+{
+public:
+    SettingsUnlockingCredentialStore(
+        std::unique_ptr<CredentialStore> store,
+        SettingsAccessMutex &mutex)
+        : store_(std::move(store)), mutex_(mutex)
+    {
+    }
+
+    ReadResult read(const QString &key) override
+    {
+        CredentialBackendSettingsUnlock unlock(mutex_);
+        return store_->read(key);
+    }
+
+    CreateResult createIfAbsent(
+        const QString &key,
+        const QString &value) override
+    {
+        CredentialBackendSettingsUnlock unlock(mutex_);
+        return store_->createIfAbsent(key, value);
+    }
+
+    Status write(const QString &key,
+                 const QString &value,
+                 QString *error) override
+    {
+        CredentialBackendSettingsUnlock unlock(mutex_);
+        return store_->write(key, value, error);
+    }
+
+    Status writeCoordinated(
+        const QString &key,
+        const QString &value,
+        QString *error,
+        const QString &mutationLockPath) override
+    {
+        CredentialBackendSettingsUnlock unlock(mutex_);
+        return store_->writeCoordinated(
+            key, value, error, mutationLockPath);
+    }
+
+    Status remove(const QString &key,
+                  QString *error) override
+    {
+        CredentialBackendSettingsUnlock unlock(mutex_);
+        return store_->remove(key, error);
+    }
+
+    Status removeCoordinated(
+        const QString &key,
+        QString *error,
+        const QString &mutationLockPath) override
+    {
+        CredentialBackendSettingsUnlock unlock(mutex_);
+        return store_->removeCoordinated(
+            key, error, mutationLockPath);
+    }
+
+private:
+    std::unique_ptr<CredentialStore> store_;
+    SettingsAccessMutex &mutex_;
+};
+
+std::unique_ptr<CredentialStore> settingsCredentialStore(
+    SettingsAccessMutex &mutex)
+{
+    return std::make_unique<SettingsUnlockingCredentialStore>(
+        createPlatformCredentialStore(), mutex);
+}
+
+} // namespace
+
+void SettingsAccessMutex::lock()
+{
+    mutex.lock();
+    ++settingsAccessDepth[this];
+}
+
+void SettingsAccessMutex::unlock()
+{
+    auto found = settingsAccessDepth.find(this);
+    Q_ASSERT(found != settingsAccessDepth.end() && found->second > 0);
+    if (--found->second == 0)
+        settingsAccessDepth.erase(found);
+    mutex.unlock();
+}
+
+unsigned int SettingsAccessMutex::suspendForCredentialBackend()
+{
+    const auto found = settingsAccessDepth.find(this);
+    if (found == settingsAccessDepth.end()) return 0;
+
+    const unsigned int depth = found->second;
+    credentialBackendSuspensions.fetch_add(
+        1, std::memory_order_release);
+    ++credentialBackendSuspensionOwners[this];
+    settingsAccessDepth.erase(found);
+    for (unsigned int index = 0; index < depth; ++index)
+        mutex.unlock();
+    return depth;
+}
+
+void SettingsAccessMutex::resumeAfterCredentialBackend(
+    unsigned int depth)
+{
+    for (unsigned int index = 0; index < depth; ++index)
+        mutex.lock();
+    if (depth > 0) {
+        settingsAccessDepth[this] = depth;
+        const auto owner =
+            credentialBackendSuspensionOwners.find(this);
+        Q_ASSERT(owner != credentialBackendSuspensionOwners.end()
+                 && owner->second > 0);
+        if (--owner->second == 0)
+            credentialBackendSuspensionOwners.erase(owner);
+        const unsigned int previous =
+            credentialBackendSuspensions.fetch_sub(
+                1, std::memory_order_acq_rel);
+        Q_ASSERT(previous > 0);
+        if (previous == 1)
+            credentialBackendCondition.notify_all();
+    }
+}
+
+bool SettingsAccessMutex::credentialBackendSuspended() const
+{
+    return credentialBackendSuspensions.load(
+               std::memory_order_acquire) > 0;
+}
+
+bool SettingsAccessMutex::waitForCredentialBackends(
+    int timeoutMilliseconds)
+{
+    if (!credentialBackendSuspended()) return true;
+
+    const auto owner = credentialBackendSuspensionOwners.find(this);
+    if (owner != credentialBackendSuspensionOwners.end()
+        && owner->second > 0) {
+        return false;
+    }
+
+    const auto found = settingsAccessDepth.find(this);
+    Q_ASSERT(found != settingsAccessDepth.end()
+             && found->second == 1);
+    settingsAccessDepth.erase(found);
+    std::unique_lock<std::recursive_mutex> lock(
+        mutex, std::adopt_lock);
+    const auto complete = [this] {
+        return !credentialBackendSuspended();
+    };
+    bool completed = true;
+    QCoreApplication *application =
+        QCoreApplication::instance();
+    const bool applicationThread = application
+        && QThread::currentThread() == application->thread();
+    if (applicationThread) {
+        // Native keychain dispatch and completion are application-thread
+        // events, so reconfiguration must keep that event path alive.
+        constexpr int EventWaitSliceMilliseconds = 10;
+        const auto deadline = std::chrono::steady_clock::now()
+            + std::chrono::milliseconds(
+                timeoutMilliseconds < 0
+                    ? 0 : timeoutMilliseconds);
+        while (!complete()) {
+            int waitMilliseconds = EventWaitSliceMilliseconds;
+            if (timeoutMilliseconds >= 0) {
+                const auto remaining =
+                    std::chrono::duration_cast<
+                        std::chrono::milliseconds>(
+                            deadline
+                            - std::chrono::steady_clock::now())
+                        .count();
+                if (remaining <= 0) break;
+                if (remaining < waitMilliseconds)
+                    waitMilliseconds = int(remaining);
+            }
+
+            lock.unlock();
+            QEventLoop eventLoop;
+            QTimer wakeup;
+            wakeup.setSingleShot(true);
+            QObject::connect(
+                &wakeup, &QTimer::timeout,
+                &eventLoop, &QEventLoop::quit);
+            wakeup.start(waitMilliseconds);
+            eventLoop.exec(QEventLoop::ExcludeUserInputEvents);
+            lock.lock();
+        }
+        completed = complete();
+    } else if (timeoutMilliseconds < 0) {
+        credentialBackendCondition.wait(lock, complete);
+    } else {
+        completed = credentialBackendCondition.wait_for(
+            lock,
+            std::chrono::milliseconds(timeoutMilliseconds),
+            complete);
+    }
+    lock.release();
+    settingsAccessDepth[this] = 1;
+    return completed;
+}
 
 #ifdef Q_OS_MAC
 int OperatingSystem = OSX;
@@ -858,7 +1114,7 @@ GSettings::GSettings(
       newSettingsFormat(targetFormat)
 {
     credentialSettings = new CredentialSettings(
-        createPlatformCredentialStore());
+        settingsCredentialStore(accessMutex));
     oldsystemsettings = new QSettings(
         legacyFormat, QSettings::UserScope, org, app);
     systemsettings = new QSettings(
@@ -894,11 +1150,13 @@ GSettings::GSettings(QString file, QSettings::Format format)
       newSettingsFormat(format)
 {
     credentialSettings = new CredentialSettings(
-        createPlatformCredentialStore());
+        settingsCredentialStore(accessMutex));
     systemsettings = new QSettings(file,format);
 }
 
 GSettings::~GSettings() {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
+    accessMutex.waitForCredentialBackends();
     syncQSettings();
     if (global) {
         qDeleteAll(*global);
@@ -1182,9 +1440,19 @@ void GSettings::setCredentialLegacyValueSnapshotHook(
     credentialLegacyValueSnapshotHook = std::move(hook);
 }
 
+void GSettings::setCredentialBackendWaitTimeoutForTest(
+    int timeoutMilliseconds)
+{
+    credentialBackendWaitTimeoutForTest.store(
+        timeoutMilliseconds, std::memory_order_release);
+}
+
 QString GSettings::credentialLegacyScopeForTest(
     const QString &athleteName)
 {
+    if (accessMutex.credentialBackendSuspended())
+        return {};
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
     return authorizedLegacyCredentialScope(athleteName);
 }
 #endif
@@ -1329,6 +1597,25 @@ QString GSettings::athletePrivateSettingsPath(
 {
     return exactAthletePrivateSettingsPath(
         activeAthletesRoot, athleteName);
+}
+
+QString GSettings::athleteConfigDirectory(
+    const QString &athleteName) const
+{
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
+    if (!newFormat || athlete.constFind(athleteName) == athlete.cend())
+        return {};
+    const QString privatePath =
+        athletePrivateSettingsPath(athleteName);
+    if (privatePath.isEmpty()) return {};
+    const QFileInfo privateFile(privatePath);
+    const QString configPath = QDir::cleanPath(
+        privateFile.absolutePath());
+    const QFileInfo config(configPath);
+    return config.exists() && config.isDir()
+            && !config.isSymLink()
+        ? config.canonicalFilePath()
+        : QString();
 }
 
 QString GSettings::credentialScopeForAthlete(
@@ -1576,8 +1863,15 @@ QVariant GSettings::credentialValueWithLegacyFallback(
     const QString &legacyStoredKey,
     const QString &legacyScopeKey,
     bool authorizedLegacy,
-    const QVariant &defaultValue)
+    const QVariant &defaultValue,
+    bool requireLiveVault,
+    bool *authoritativeMissResult,
+    bool *confirmedVaultValueResult)
 {
+    if (authoritativeMissResult)
+        *authoritativeMissResult = false;
+    if (confirmedVaultValueResult)
+        *confirmedVaultValueResult = false;
     if (!credentialSettings || !target
         || scopeId.isEmpty()) {
         return defaultValue;
@@ -1610,17 +1904,20 @@ QVariant GSettings::credentialValueWithLegacyFallback(
     const QVariant current = credentialSettings->value(
         target, scopeId, credentialKey, plaintextKey,
         QVariant(),
-        legacyCandidate
+        legacyCandidate || requireLiveVault
             ? CredentialSettings::ReadPolicy::RequireLiveVault
             : CredentialSettings::ReadPolicy::AllowFreshCache,
-        legacyCandidate ? &authoritativeMiss : nullptr,
+        &authoritativeMiss,
         &confirmedVaultValue);
     const ExactSettingPresence after =
         exactSettingPresence(target, plaintextKey);
 
     if (current.isValid()) {
-        if (!confirmedVaultValue)
+        if (!confirmedVaultValue) {
+            if (requireLiveVault)
+                return defaultValue;
             return current;
+        }
         if (!persistLegacyCredentialFallbackBlock(
                 target, scopeId, credentialKey)) {
             qWarning()
@@ -1628,10 +1925,14 @@ QVariant GSettings::credentialValueWithLegacyFallback(
                 << "fallback protection";
             return defaultValue;
         }
+        if (confirmedVaultValueResult)
+            *confirmedVaultValueResult = true;
         return current;
     }
 
     if (!legacyCandidate) {
+        if (authoritativeMissResult)
+            *authoritativeMissResult = authoritativeMiss;
         return defaultValue;
     }
 
@@ -1659,6 +1960,8 @@ QVariant GSettings::credentialValueWithLegacyFallback(
         != LegacyCredentialFallbackDisposition::Allowed) {
         return defaultValue;
     }
+    if (confirmedVaultValueResult)
+        *confirmedVaultValueResult = true;
     return legacy.value;
 }
 
@@ -1715,9 +2018,12 @@ void GSettings::migrateAthleteCredentials(
 
 QVariant
 GSettings::value(const QObject * /*me*/, const QString key, const QVariant def) {
+    const bool credential =
+        CredentialSettings::isCredentialKey(key);
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
 
     if (credentialSettings
-        && CredentialSettings::isCredentialKey(key)) {
+        && credential) {
         QString plaintextKey = key;
         int store;
         int file;
@@ -1787,8 +2093,11 @@ GSettings::setValue(QString key, QVariant value)
 bool
 GSettings::setValueChecked(QString key, QVariant value)
 {
+    const bool credential =
+        CredentialSettings::isCredentialKey(key);
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
     if (credentialSettings
-        && CredentialSettings::isCredentialKey(key)) {
+        && credential) {
         QString plaintextKey = key;
         int store;
         int file;
@@ -1857,8 +2166,11 @@ GSettings::setValueChecked(QString key, QVariant value)
 void
 GSettings::remove(const QString &key)
 {
+    const bool credential =
+        CredentialSettings::isCredentialKey(key);
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
     if (credentialSettings
-        && CredentialSettings::isCredentialKey(key)) {
+        && credential) {
         QString plaintextKey = key;
         int store;
         int file;
@@ -1919,11 +2231,14 @@ GSettings::remove(const QString &key)
 // access to athlete specific config
 QVariant
 GSettings::cvalue(QString athleteName, QString key, QVariant def) {
+    const bool credential =
+        CredentialSettings::isCredentialKey(key);
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
 
     if (athleteName.isNull() || athleteName.isEmpty()) return def;
 
     if (credentialSettings
-        && CredentialSettings::isCredentialKey(key)) {
+        && credential) {
         QString plaintextKey = key;
         int store;
         int file;
@@ -2031,6 +2346,118 @@ GSettings::cvalue(QString athleteName, QString key, QVariant def) {
 
 }
 
+GSettings::CredentialReadResult
+GSettings::credentialCValueChecked(
+    const QString &athleteName,
+    const QString &key)
+{
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
+    if (athleteName.isEmpty() || !credentialSettings
+        || !CredentialSettings::isCredentialKey(key)) {
+        return {};
+    }
+
+    const auto classified = [](
+        const QVariant &value,
+        bool authoritativeMiss,
+        bool confirmedVaultValue) {
+        if (confirmedVaultValue) {
+            return CredentialReadResult{
+                CredentialReadStatus::Present, value};
+        }
+        if (authoritativeMiss) {
+            return CredentialReadResult{
+                CredentialReadStatus::NotFound, QVariant()};
+        }
+        return CredentialReadResult{};
+    };
+
+    QString plaintextKey = key;
+    int store;
+    int file;
+    plaintextKey = DetermineKey(plaintextKey, store, file);
+    if (newFormat) {
+        QSettings *target = nullptr;
+        QString scopeId;
+        QString legacyStoredKey;
+        QString legacyScopeKey;
+        bool authorizedLegacy = false;
+        if (store == SETTINGS_GLOBAL) {
+            target = globalSettingsAt(global, file);
+            scopeId = credentialScopeForGlobal(
+                &authorizedLegacy);
+            legacyStoredKey = plaintextKey;
+            legacyScopeKey = legacyCredentialScopeStorageKey(
+                QString());
+        } else if (store == SETTINGS_ATHLETE) {
+            const auto found = athlete.constFind(athleteName);
+            if (found != athlete.cend()) {
+                target = found.value()->getQSettings(file);
+                scopeId = credentialScopeForAthlete(
+                    athleteName, &authorizedLegacy);
+            } else {
+                const QString privatePath =
+                    athletePrivateSettingsPath(athleteName);
+                if (privatePath.isEmpty() || credentialRootBlocked)
+                    return {};
+                QSettings privateSettings(
+                    privatePath, newSettingsFormat);
+                scopeId = credentialScopeForAthleteSettings(
+                    athleteName, &privateSettings,
+                    privatePath, &authorizedLegacy);
+                bool authoritativeMiss = false;
+                bool confirmedVaultValue = false;
+                const QVariant value =
+                    credentialValueWithLegacyFallback(
+                        &privateSettings, scopeId, key,
+                        plaintextKey,
+                        athleteName + QLatin1Char('/')
+                            + plaintextKey,
+                        legacyCredentialScopeStorageKey(
+                            athleteName),
+                        authorizedLegacy, QVariant(), true,
+                        &authoritativeMiss,
+                        &confirmedVaultValue);
+                return classified(
+                    value, authoritativeMiss,
+                    confirmedVaultValue);
+            }
+            legacyStoredKey = athleteName + QLatin1Char('/')
+                + plaintextKey;
+            legacyScopeKey = legacyCredentialScopeStorageKey(
+                athleteName);
+        } else {
+            return {};
+        }
+        if (!target || scopeId.isEmpty()) return {};
+        bool authoritativeMiss = false;
+        bool confirmedVaultValue = false;
+        const QVariant value = credentialValueWithLegacyFallback(
+            target, scopeId, key, plaintextKey,
+            legacyStoredKey, legacyScopeKey,
+            authorizedLegacy, QVariant(), true,
+            &authoritativeMiss, &confirmedVaultValue);
+        return classified(
+            value, authoritativeMiss, confirmedVaultValue);
+    }
+
+    const bool globalCredential = store == SETTINGS_GLOBAL;
+    const QString storedKey = globalCredential
+        ? plaintextKey
+        : athleteName + QLatin1Char('/') + plaintextKey;
+    bool authoritativeMiss = false;
+    bool confirmedVaultValue = false;
+    const QVariant value = credentialSettings->value(
+        systemsettings,
+        credentialScopeForLegacy(
+            globalCredential ? QString() : athleteName),
+        key, storedKey, QVariant(),
+        CredentialSettings::ReadPolicy::RequireLiveVault,
+        &authoritativeMiss, &confirmedVaultValue);
+    return classified(
+        value, authoritativeMiss, confirmedVaultValue);
+}
+
 void
 GSettings::setCValue(QString athleteName, QString key, QVariant value)
 {
@@ -2041,9 +2468,12 @@ bool
 GSettings::setCValueChecked(
     QString athleteName, QString key, QVariant value)
 {
+    const bool credential =
+        CredentialSettings::isCredentialKey(key);
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
 
     if (credentialSettings
-        && CredentialSettings::isCredentialKey(key)) {
+        && credential) {
         QString plaintextKey = key;
         int store;
         int file;
@@ -2126,6 +2556,7 @@ GSettings::setCValueChecked(
 // other functions unsed from QSettings which GSettings needs to implement
 QStringList
 GSettings::allKeys() const {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
 
     if (newFormat) {
         QStringList allKeys, tempKeys;
@@ -2182,6 +2613,7 @@ GSettings::allKeys() const {
 
 bool
 GSettings::contains(const QString & key) const {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
 
     QString keyVar = QString(key);
     if (newFormat) {
@@ -2258,6 +2690,11 @@ bool GSettings::containsCValueTarget(
 
 void
 GSettings::migrateQSettingsSystem() {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
+    if (!accessMutex.waitForCredentialBackends(
+            credentialBackendWaitTimeout())) {
+        return;
+    }
 
     if (!newFormat) return;
 
@@ -2284,6 +2721,11 @@ GSettings::migrateQSettingsSystem() {
 
 void
 GSettings::initializeQSettingsGlobal(QString athletesRootDir) {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
+    if (!accessMutex.waitForCredentialBackends(
+            credentialBackendWaitTimeout())) {
+        return;
+    }
 
     if (!newFormat) return;
 
@@ -2396,6 +2838,11 @@ GSettings::initializeQSettingsGlobal(QString athletesRootDir) {
 
 void
 GSettings::initializeQSettingsAthlete(QString athletesRootDir, QString athleteName) {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
+    if (!accessMutex.waitForCredentialBackends(
+            credentialBackendWaitTimeout())) {
+        return;
+    }
 
     // assumption is that the directory "<athletesRootDir>/athleteName" exists //
 
@@ -2474,6 +2921,11 @@ GSettings::initializeQSettingsAthlete(QString athletesRootDir, QString athleteNa
 
 void
 GSettings::initializeQSettingsNewAthlete(QString athletesRootDir, QString athleteName) {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
+    if (!accessMutex.waitForCredentialBackends(
+            credentialBackendWaitTimeout())) {
+        return;
+    }
 
     if (!newFormat) return;
     const QString canonicalRoot =
@@ -2522,12 +2974,14 @@ GSettings::initializeQSettingsNewAthlete(QString athletesRootDir, QString athlet
 
 void
 GSettings::syncQSettingsAllAthletes() {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
 
     syncQSettingsAllAthletesChecked();
 }
 
 bool
 GSettings::syncQSettingsAllAthletesChecked() {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
 
     if (!newFormat) {
         if (!systemsettings) return false;
@@ -2561,6 +3015,7 @@ GSettings::syncCValueChecked(
     const QString &athleteName,
     const QString &key)
 {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
     if (!newFormat) {
         if (!systemsettings) return false;
         systemsettings->sync();
@@ -2595,6 +3050,7 @@ GSettings::syncCValueChecked(
 
 void
 GSettings::syncQSettingsGlobal() {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
 
     if (!newFormat) return;
 
@@ -2612,6 +3068,7 @@ GSettings::syncQSettingsGlobal() {
 
 void
 GSettings::syncQSettings() {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
 
     systemsettings->sync();
     CredentialSettings::hardenSettingsFile(systemsettings);
@@ -2620,10 +3077,16 @@ GSettings::syncQSettings() {
 
 }
 
-void
-GSettings::clearGlobalAndAthletes() {
+bool
+GSettings::clearGlobalAndAthletes(
+    int credentialBackendTimeoutMilliseconds) {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
+    if (!accessMutex.waitForCredentialBackends(
+            credentialBackendTimeoutMilliseconds)) {
+        return false;
+    }
 
-    if (!newFormat) return;
+    if (!newFormat) return true;
     syncQSettings();
     qDeleteAll(*global);
     qDeleteAll(athlete);
@@ -2633,6 +3096,7 @@ GSettings::clearGlobalAndAthletes() {
     credentialRootIdentityId.clear();
     credentialRootBlocked = false;
     if (credentialSettings) credentialSettings->clearCache();
+    return true;
 }
 
 
@@ -2652,6 +3116,7 @@ GSettings::clearGlobalAndAthletes() {
 
 void
 GSettings::migrateValue(QString key) {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
 
     QString oldKey = key;
     oldKey.remove(QRegularExpression("^<.*>"));
@@ -2666,6 +3131,7 @@ GSettings::migrateValue(QString key) {
 
 void
 GSettings::migrateCValue(QString athlete, QString key) {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
 
     QString oldKey = key;
     oldKey.remove(QRegularExpression("^<.*>"));
@@ -2681,6 +3147,7 @@ GSettings::migrateCValue(QString athlete, QString key) {
 
 void
 GSettings::migrateAndRenameCValue(QString athlete, QString wrongKey, QString key) {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
 
     wrongKey.remove(QRegularExpression("^<.*>"));
     const QString storedKey = athlete + QLatin1Char('/') + wrongKey;
@@ -2695,6 +3162,7 @@ GSettings::migrateAndRenameCValue(QString athlete, QString wrongKey, QString key
 
 void
 GSettings::migrateValueToCValue(QString athlete, QString key) {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
 
     QString oldKey = key;
     oldKey.remove(QRegularExpression("^<.*>"));
@@ -2709,6 +3177,7 @@ GSettings::migrateValueToCValue(QString athlete, QString key) {
 
 void
 GSettings::migrateCValueToValue(QString athlete, QString key) {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
 
     if (containsValueTarget(key))
         return;
@@ -2726,6 +3195,7 @@ GSettings::migrateCValueToValue(QString athlete, QString key) {
 
 void
 GSettings::upgradeSystem() {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
 
     // by explicitely naming all the properties, and not choosing the "allKeys()" function,
     // only the properties still in use are migrated - and not any orphans for previous releases
@@ -2763,6 +3233,7 @@ GSettings::upgradeSystem() {
 
 void
 GSettings::upgradeGlobal() {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
 
     // by explicitely naming all the properties, and not choosing the "allKeys()" function,
     // only the properties still in use are migrated - and not any orphans for previous releases
@@ -2844,6 +3315,7 @@ GSettings::upgradeGlobal() {
 
 void
 GSettings::upgradeAthlete(QString athlete) {
+    const std::lock_guard<SettingsAccessMutex> lock(accessMutex);
 
     // by explicitely naming all the properties, and not choosing the "allKeys()" function,
     // only the properties still in use are migrated - and not any orphans for previous releases

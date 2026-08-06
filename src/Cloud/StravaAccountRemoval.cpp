@@ -52,9 +52,12 @@ Result failure(
 StravaNetworkReply::Result performRevocationRequest(
     const StravaOAuthPolicy::RevocationRequest &request,
     qsizetype maximumBytes,
-    const CancellationCheck &cancelled)
+    const CancellationCheck &cancelled,
+    bool *mayHaveBeenDispatched)
 {
     StravaNetworkReply::Result result;
+    if (mayHaveBeenDispatched)
+        *mayHaveBeenDispatched = false;
     if (!request.isValid()
         || maximumBytes <= 0
         || cancellationRequested(cancelled)) {
@@ -97,6 +100,8 @@ StravaNetworkReply::Result performRevocationRequest(
             "The Strava revocation request could not be started.");
         return result;
     }
+    if (mayHaveBeenDispatched)
+        *mayHaveBeenDispatched = true;
     return StravaNetworkReply::collect(
         reply,
         maximumBytes,
@@ -111,8 +116,18 @@ RemoteRevocationResult revokeRemoteAuthorization(
     RevocationToken tokenType,
     const CancellationCheck &cancelled)
 {
+    bool mayHaveBeenDispatched = false;
     StravaRevocationClient client(
-        performRevocationRequest);
+        [&mayHaveBeenDispatched](
+            const StravaOAuthPolicy::RevocationRequest &request,
+            qsizetype maximumBytes,
+            const CancellationCheck &operationCancelled) {
+            return performRevocationRequest(
+                request,
+                maximumBytes,
+                operationCancelled,
+                &mayHaveBeenDispatched);
+        });
     const StravaRevocationClient::Result revoked =
         client.revoke(
             clientId,
@@ -126,7 +141,8 @@ RemoteRevocationResult revokeRemoteAuthorization(
             cancelled);
     return {
         revoked.isSuccess(),
-        revoked.error
+        revoked.error,
+        mayHaveBeenDispatched
     };
 }
 
@@ -142,8 +158,7 @@ bool Request::isValid() const
     }
     if (mode == Mode::LocalOnly)
         return true;
-    return (!refreshToken.isEmpty() || !accessToken.isEmpty())
-        && StravaOAuthPolicy::hasUsableCredentials(
+    return StravaOAuthPolicy::hasUsableCredentials(
             clientId, clientSecret);
 }
 
@@ -187,7 +202,37 @@ Result execute(
         return failure(QStringLiteral(
             "Strava account removal was cancelled."));
 
+    QString mutationError;
+    const std::shared_ptr<StravaCredentialDurability::Mutation> mutation =
+        StravaCredentialPublisher::beginMutation(
+            request.accountKey,
+            StravaCredentialDurability::MutationKind::Revocation,
+            NetworkTimeoutMs,
+            mutationError);
+    if (!mutation) {
+        return failure(
+            mutationError.isEmpty()
+                ? QStringLiteral(
+                      "The Strava credential transaction could not be started.")
+                : mutationError);
+    }
+
+    const StravaCredentialPublisher::StoredAuthorization
+        fencedAuthorization = StravaCredentialPublisher::
+            readStoredAuthorization(mutation);
+    if (!fencedAuthorization.readable) {
+        StravaCredentialPublisher::finishNoChange(mutation);
+        return failure(
+            mutationError.isEmpty()
+                ? QStringLiteral(
+                      "The current Strava authorization could not be read securely.")
+                : mutationError,
+            true);
+    }
+
     bool irreversibleStarted = false;
+    bool mutationOperationStarted = false;
+    bool pendingStateCommitOwnedByWorker = false;
     const CancellationCheck operationCancelled =
         [&cancelled, &irreversibleStarted] {
             return !irreversibleStarted
@@ -197,14 +242,22 @@ Result execute(
         [&request,
          &operationCancelled,
          &irreversible,
-         &irreversibleStarted] {
-            const bool stored =
+         &irreversibleStarted,
+         &pendingStateCommitOwnedByWorker,
+         mutation] {
+            const StravaCredentialPublisher::StateCommitResult stored =
                 StravaCredentialPublisher::
-                markRevocationPending(
+                markRevocationPendingTracked(
                     request.accountKey,
+                    mutation,
                     NetworkTimeoutMs,
                     operationCancelled);
-            if (!stored)
+            pendingStateCommitOwnedByWorker =
+                stored.status
+                    == StravaCredentialPublisher::StateCommitStatus::Pending
+                || stored.status
+                    == StravaCredentialPublisher::StateCommitStatus::StorageFailure;
+            if (!stored.isSuccess())
                 return false;
 
             irreversibleStarted = true;
@@ -222,43 +275,106 @@ Result execute(
         [&request,
          &operationCancelled,
          &revokeRemote,
-         &remoteAuthorizationRevoked](
-            const QString &effectiveRefreshToken,
-            const QString &durableRefreshToken) {
+         &remoteAuthorizationRevoked,
+         &mutationOperationStarted,
+         fencedAuthorization,
+         mutation](
+            const QString &,
+            const QString &) {
+            QString mutationError;
+            if (!mutation->isCurrent(mutationError)) {
+                return StravaAuthorizationRemovalResult{
+                    false, false, mutationError, true
+                };
+            }
+            QString token;
+            RevocationToken tokenType = RevocationToken::RefreshToken;
             if (request.mode == Mode::RevokeRemote) {
                 const bool useRefreshToken =
-                    !effectiveRefreshToken.isEmpty();
-                const QString token = useRefreshToken
-                    ? effectiveRefreshToken
-                    : request.accessToken;
-                const RevocationToken tokenType =
+                    !fencedAuthorization.credentials
+                        .refreshToken.isEmpty();
+                token = useRefreshToken
+                    ? fencedAuthorization.credentials.refreshToken
+                    : fencedAuthorization.credentials.accessToken;
+                if (token.isEmpty()) {
+                    return StravaAuthorizationRemovalResult{
+                        false,
+                        false,
+                        QStringLiteral(
+                            "The current Strava revocation token is unavailable."),
+                        true
+                    };
+                }
+                tokenType =
                     useRefreshToken
                         ? RevocationToken::RefreshToken
                         : RevocationToken::AccessToken;
+            }
+            StravaCredentialPublisher::RemovalRequest removal;
+            removal.accountKey = request.accountKey;
+            removal.expectedRefreshToken =
+                fencedAuthorization.credentials.refreshToken;
+            removal.mode =
+                request.mode == Mode::LocalOnly
+                    || fencedAuthorization.credentials
+                        .refreshToken.isEmpty()
+                ? StravaTokenPublication::PublicationMode::Authoritative
+                : StravaTokenPublication::PublicationMode::CompareAndSwap;
+            removal.mutation = mutation;
+            if (request.mode == Mode::RevokeRemote) {
+                if (!mutation->markCommitUnknown(mutationError)) {
+                    return StravaAuthorizationRemovalResult{
+                        false, false, mutationError, true
+                    };
+                }
+                mutationOperationStarted = true;
                 const RemoteRevocationResult revoked =
                     revokeRemote(
                         token,
                         tokenType,
                         operationCancelled);
+                if (!mutation->isCurrent(mutationError)) {
+                    return StravaAuthorizationRemovalResult{
+                        false, false, mutationError, true
+                    };
+                }
                 if (!revoked.isSuccess()) {
+                    if (!revoked.mayHaveBeenDispatched) {
+                        QString abortError;
+                        if (mutation->abortBeforeRemoteDispatch(
+                                abortError)) {
+                            mutationOperationStarted = false;
+                            return StravaAuthorizationRemovalResult{
+                                false,
+                                false,
+                                revoked.error,
+                                true,
+                                true
+                            };
+                        } else if (!abortError.isEmpty()) {
+                            return StravaAuthorizationRemovalResult{
+                                false, false, abortError, true
+                            };
+                        }
+                    }
                     return StravaAuthorizationRemovalResult{
                         false, false, revoked.error, true
+                    };
+                }
+                if (!mutation->markLocalCommitStarted(
+                        removal.expectedRefreshToken,
+                        removal.mode,
+                        mutationError)) {
+                    return StravaAuthorizationRemovalResult{
+                        false, false, mutationError, true
                     };
                 }
                 remoteAuthorizationRevoked = true;
             }
 
-            StravaCredentialPublisher::RemovalRequest removal;
-            removal.accountKey = request.accountKey;
-            removal.expectedRefreshToken =
-                durableRefreshToken;
-            removal.mode =
-                request.mode == Mode::LocalOnly
-                    || durableRefreshToken.isEmpty()
-                ? StravaTokenPublication::PublicationMode::
-                    Authoritative
-                : StravaTokenPublication::PublicationMode::
-                    CompareAndSwap;
+            mutationOperationStarted = true;
+            removal.remoteRevocationMayHaveBeenDispatched =
+                remoteAuthorizationRevoked;
             const StravaTokenPublication::RemovalResult removed =
                 StravaCredentialPublisher::remove(
                     removal,
@@ -271,6 +387,8 @@ Result execute(
                     removed.error,
                     request.mode == Mode::LocalOnly
                         || !remoteAuthorizationRevoked
+                        || removed.status
+                            == StravaTokenPublication::RemovalStatus::Conflict
                 };
             }
             return StravaAuthorizationRemovalResult{
@@ -295,6 +413,11 @@ Result execute(
                 std::chrono::seconds(75),
                 request.expectedAuthorizationEpoch);
     if (!removed.isSuccess()) {
+        if (!mutationOperationStarted
+            && !pendingStateCommitOwnedByWorker
+            && !mutation->isFinished()) {
+            StravaCredentialPublisher::finishNoChange(mutation);
+        }
         return failure(
             removed.error,
             removed.remoteAuthorizationMayRemain);

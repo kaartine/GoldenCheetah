@@ -26,6 +26,26 @@
 #ifdef GC_CREDENTIAL_TEST_HOOKS
 #include <functional>
 #endif
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+
+
+class SettingsAccessMutex
+{
+public:
+    void lock();
+    void unlock();
+    unsigned int suspendForCredentialBackend();
+    void resumeAfterCredentialBackend(unsigned int depth);
+    bool credentialBackendSuspended() const;
+    bool waitForCredentialBackends(int timeoutMilliseconds = -1);
+
+private:
+    std::atomic<unsigned int> credentialBackendSuspensions{0};
+    std::condition_variable_any credentialBackendCondition;
+    std::recursive_mutex mutex;
+};
 
 
 /*
@@ -389,9 +409,11 @@
 //Strava
 #define GC_STRAVA_TOKEN                 "<athlete-private>strava_token"
 #define GC_STRAVA_REFRESH_TOKEN         "<athlete-private>strava_refresh_token"
+#define GC_STRAVA_PENDING_TRANSACTION   "<athlete-private>strava_pending_transaction"
 #define GC_STRAVA_LAST_REFRESH          "<athlete-private>strava_last_refresh"
 #define GC_STRAVA_AUTHORIZATION_STATE   "<athlete-private>strava_authorization_state"
 #define GC_STRAVA_REMOTE_GRANT_UNCERTAIN "<athlete-private>strava_remote_grant_uncertain"
+#define GC_STRAVA_AUTHORIZATION_REVISION "<athlete-private>strava_authorization_revision"
 #define GC_STRAVA_ACTIVITY_NAME         "<athlete-private>strava_metaname"
 
 //Cycling Analytics
@@ -502,6 +524,23 @@ class GSettings
 {
 
 public:
+    enum class CredentialReadStatus {
+        Present,
+        NotFound,
+        Unavailable
+    };
+
+    struct CredentialReadResult {
+        CredentialReadStatus status =
+            CredentialReadStatus::Unavailable;
+        QVariant value;
+
+        bool readable() const
+        {
+            return status != CredentialReadStatus::Unavailable;
+        }
+    };
+
     // 2 Variants are supported - still the "old" one where ALL properties are in ONE .INI file and the
     // new one were the properties are distributed as explained above (this is to keep compatibility)
     GSettings(QString org, QString app);
@@ -520,6 +559,9 @@ public:
 
     // access to athleteName specific config
     QVariant cvalue(QString athleteName, QString key, QVariant def = 0);
+    CredentialReadResult credentialCValueChecked(
+        const QString &athleteName,
+        const QString &key);
 
     void setCValue(QString athleteName, QString key, QVariant value);
     bool setCValueChecked(QString athleteName, QString key, QVariant value);
@@ -542,9 +584,12 @@ public:
     bool syncCValueChecked(
         const QString &athleteName,
         const QString &key);
+    QString athleteConfigDirectory(
+        const QString &athleteName) const;
 
     // Cleanup if AthleteDir is changed
-    void clearGlobalAndAthletes();
+    bool clearGlobalAndAthletes(
+        int credentialBackendTimeoutMilliseconds = -1);
 
     // reset appearance settings like theme, font, color and geometry
     static AppearanceSettings defaultAppearanceSettings();
@@ -554,11 +599,14 @@ public:
         std::function<void()> hook);
     static void setCredentialLegacyValueSnapshotHook(
         std::function<void()> hook);
+    static void setCredentialBackendWaitTimeoutForTest(
+        int timeoutMilliseconds);
     QString credentialLegacyScopeForTest(
         const QString &athleteName);
 #endif
 
 private:
+    mutable SettingsAccessMutex accessMutex;
     bool newFormat;
     QSettings::Format newSettingsFormat = QSettings::IniFormat;
     QSettings *systemsettings = nullptr;
@@ -610,7 +658,10 @@ private:
         const QString &legacyStoredKey,
         const QString &legacyScopeKey,
         bool authorizedLegacy,
-        const QVariant &defaultValue);
+        const QVariant &defaultValue,
+        bool requireLiveVault = false,
+        bool *authoritativeMissResult = nullptr,
+        bool *confirmedVaultValueResult = nullptr);
     bool containsValueTarget(QString key) const;
     bool containsCValueTarget(const QString &athleteName,
                               QString key) const;

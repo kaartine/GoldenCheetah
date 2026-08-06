@@ -347,9 +347,19 @@ public:
 protected:
     void run() override
     {
-        const bool pending =
-            StravaCredentialPublisher::markRevocationPending(
-                request.accountKey, timeoutMs);
+        QString mutationError;
+        request.mutation =
+            StravaCredentialPublisher::beginMutation(
+                request.accountKey,
+                StravaCredentialDurability::MutationKind::Revocation,
+                timeoutMs,
+                mutationError);
+        const bool pending = request.mutation
+            && StravaCredentialPublisher::
+                markRevocationPendingTracked(
+                    request.accountKey,
+                    request.mutation,
+                    timeoutMs).isSuccess();
         StravaTokenPublication::RemovalResult removed;
         if (pending) {
             removed = StravaCredentialPublisher::remove(
@@ -1444,8 +1454,8 @@ private slots:
     void stalledGuiCoalescesCloudSettingsTransactions();
     void guiCloudSettingsSaveWritesAllScopes();
     void guiCloudSettingsSaveClearsCustomUrl();
-    void stravaCredentialsPublishOnGuiThread();
-    void stravaCredentialsRemoveOnGuiThread();
+    void stravaCredentialsPublishOnCredentialWorker();
+    void stravaCredentialsRemoveOnCredentialWorker();
     void stravaAuthorizationActivationRejectsSyncFailure();
     void stravaActivationSyncFailureRemainsPending();
     void stravaActivationIgnoresUnrelatedSyncFailure();
@@ -1453,8 +1463,8 @@ private slots:
     void stravaRefreshPendingPersistsFailClosedState();
     void stravaRevocationPendingRejectsSyncFailure();
     void stravaCredentialRemovalReportsSyncFailure();
-    void startedStravaPublicationWaitsForCommit();
-    void timedOutStravaPublicationCannotWriteLater();
+    void stravaUnavailableCredentialRemovalRemainsRecoverable();
+    void startedStravaPublicationReturnsTrackedPending();
     void workerCloudSettingsClearUrlUsesDefault();
     void defaultCloudUrlDoesNotInvalidatePayload();
     void emptyCloudUrlUsesDefault();
@@ -4406,7 +4416,7 @@ void TestAthleteMigrationSafety::guiCloudSettingsSaveClearsCustomUrl()
     QCOMPARE(storedUrl, QString());
 }
 
-void TestAthleteMigrationSafety::stravaCredentialsPublishOnGuiThread()
+void TestAthleteMigrationSafety::stravaCredentialsPublishOnCredentialWorker()
 {
     const QString athlete =
         QStringLiteral("StravaPublicationAthlete");
@@ -4466,11 +4476,11 @@ void TestAthleteMigrationSafety::stravaCredentialsPublishOnGuiThread()
         athlete,
         GC_STRAVA_REMOTE_GRANT_UNCERTAIN,
         true).toBool());
-    QCOMPARE(athleteMigrationSettingsCrossThreadWrites(), 0);
+    QVERIFY(athleteMigrationSettingsCrossThreadWrites() > 0);
 }
 
 void TestAthleteMigrationSafety::
-stravaCredentialsRemoveOnGuiThread()
+stravaCredentialsRemoveOnCredentialWorker()
 {
     const QString athlete =
         QStringLiteral("StravaRemovalAthlete");
@@ -4549,7 +4559,7 @@ stravaCredentialsRemoveOnGuiThread()
         athlete,
         GC_STRAVA_REMOTE_GRANT_UNCERTAIN,
         true).toBool());
-    QCOMPARE(athleteMigrationSettingsCrossThreadWrites(), 0);
+    QVERIFY(athleteMigrationSettingsCrossThreadWrites() > 0);
 }
 
 void TestAthleteMigrationSafety::
@@ -4621,7 +4631,7 @@ stravaActivationSyncFailureRemainsPending()
 
     QCOMPARE(
         result.status,
-        StravaTokenPublication::PublicationStatus::StorageFailure);
+        StravaTokenPublication::PublicationStatus::Pending);
     QCOMPARE(
         appsettings->cvalue(
             athlete,
@@ -4720,8 +4730,16 @@ stravaRefreshPendingPersistsFailClosedState()
         GC_STRAVA_AUTHORIZATION_STATE,
         QStringLiteral("active"));
 
+    QString mutationError;
+    const auto mutation = StravaCredentialPublisher::beginMutation(
+        athlete,
+        StravaCredentialDurability::MutationKind::Refresh,
+        30000,
+        mutationError);
+    QVERIFY2(mutation, qPrintable(mutationError));
     QVERIFY(StravaCredentialPublisher::
-        markAuthorizationPending(athlete));
+        markAuthorizationPendingTracked(
+            athlete, mutation).isSuccess());
     const QString storedState =
         appsettings->cvalue(
             athlete,
@@ -4741,8 +4759,16 @@ stravaRevocationPendingRejectsSyncFailure()
 {
     setAthleteMigrationSettingsSyncFails(true);
 
-    QVERIFY(!StravaCredentialPublisher::markRevocationPending(
-        QStringLiteral("StravaPendingSyncFailure")));
+    const QString athlete =
+        QStringLiteral("StravaPendingSyncFailure");
+    QString mutationError;
+    const auto mutation = StravaCredentialPublisher::beginMutation(
+        athlete,
+        StravaCredentialDurability::MutationKind::Revocation,
+        30000,
+        mutationError);
+    QVERIFY(!mutation);
+    QVERIFY(!mutationError.isEmpty());
 }
 
 void TestAthleteMigrationSafety::
@@ -4757,7 +4783,9 @@ stravaCredentialRemovalReportsSyncFailure()
         QStringLiteral("access-current"));
     appsettings->setCValue(
         athlete, GC_STRAVA_REFRESH_TOKEN, refreshToken);
-    setAthleteMigrationSettingsSyncFails(true);
+    // The durable removal intent is synchronized before credential deletion;
+    // fail the subsequent cleanup sync exercised by this regression.
+    setAthleteMigrationSettingsSyncFailureCall(3);
 
     StravaCredentialPublisher::RemovalRequest request;
     request.accountKey = athlete;
@@ -4781,7 +4809,76 @@ stravaCredentialRemovalReportsSyncFailure()
 }
 
 void TestAthleteMigrationSafety::
-startedStravaPublicationWaitsForCommit()
+stravaUnavailableCredentialRemovalRemainsRecoverable()
+{
+    const QString athlete =
+        QStringLiteral("StravaUnavailableRemoval");
+    const QString accessToken = QStringLiteral("access-retained");
+    const QString refreshToken = QStringLiteral("refresh-retained");
+    appsettings->setCValue(athlete, GC_STRAVA_TOKEN, accessToken);
+    appsettings->setCValue(
+        athlete, GC_STRAVA_REFRESH_TOKEN, refreshToken);
+    appsettings->setCValue(
+        athlete,
+        GC_STRAVA_AUTHORIZATION_STATE,
+        QStringLiteral("active"));
+
+    QString mutationError;
+    auto mutation = StravaCredentialPublisher::beginMutation(
+        athlete,
+        StravaCredentialDurability::MutationKind::Revocation,
+        2000,
+        mutationError);
+    QVERIFY2(mutation, qPrintable(mutationError));
+    QVERIFY(StravaCredentialPublisher::markRevocationPendingTracked(
+        athlete, mutation, 2000).isSuccess());
+
+    setAthleteMigrationStravaCredentialReadsAvailable(false);
+    StravaCredentialPublisher::RemovalRequest request;
+    request.accountKey = athlete;
+    request.expectedRefreshToken = refreshToken;
+    request.mode =
+        StravaTokenPublication::PublicationMode::Authoritative;
+    request.mutation = mutation;
+    const StravaTokenPublication::RemovalResult unavailable =
+        StravaCredentialPublisher::remove(request, 2000);
+
+    QCOMPARE(
+        unavailable.status,
+        StravaTokenPublication::RemovalStatus::StorageFailure);
+    QCOMPARE(
+        appsettings->cvalue(
+            athlete, GC_STRAVA_TOKEN, QString()).toString(),
+        accessToken);
+    QCOMPARE(
+        appsettings->cvalue(
+            athlete, GC_STRAVA_REFRESH_TOKEN, QString()).toString(),
+        refreshToken);
+
+    setAthleteMigrationStravaCredentialReadsAvailable(true);
+    request.mutation.reset();
+    mutation.reset();
+    const StravaCredentialDurability::RecoveryResult recovered =
+        StravaCredentialPublisher::recover(athlete, 2000);
+    QCOMPARE(
+        recovered.status,
+        StravaCredentialDurability::RecoveryStatus::Recovered);
+    QVERIFY(appsettings->cvalue(
+        athlete, GC_STRAVA_TOKEN, QString()).toString().isEmpty());
+    QVERIFY(appsettings->cvalue(
+        athlete,
+        GC_STRAVA_REFRESH_TOKEN,
+        QString()).toString().isEmpty());
+    QCOMPARE(
+        appsettings->cvalue(
+            athlete,
+            GC_STRAVA_AUTHORIZATION_STATE,
+            QString()).toString(),
+        QStringLiteral("revoked"));
+}
+
+void TestAthleteMigrationSafety::
+startedStravaPublicationReturnsTrackedPending()
 {
     const QString athlete =
         QStringLiteral("StravaStartedPublication");
@@ -4819,13 +4916,17 @@ startedStravaPublicationWaitsForCommit()
     releaser.join();
     const StravaTokenPublication::PublicationResult result =
         worker.result();
+    const StravaCredentialDurability::RecoveryResult recovery =
+        StravaCredentialPublisher::recover(athlete, 2000);
 
     QVERIFY(writeStarted.load());
     QVERIFY(completed);
     QVERIFY(joined);
     QCOMPARE(
         result.status,
-        StravaTokenPublication::PublicationStatus::Saved);
+        StravaTokenPublication::PublicationStatus::Pending);
+    QVERIFY(!result.isSuccess());
+    QVERIFY(recovery.isSuccess());
     QCOMPARE(
         appsettings->cvalue(
             athlete, GC_STRAVA_TOKEN, QString()).toString(),
@@ -4836,51 +4937,6 @@ startedStravaPublicationWaitsForCommit()
             GC_STRAVA_REFRESH_TOKEN,
             QString()).toString(),
         QStringLiteral("refresh-new"));
-}
-
-void TestAthleteMigrationSafety::
-timedOutStravaPublicationCannotWriteLater()
-{
-    const QString athlete =
-        QStringLiteral("StravaPublicationTimeoutAthlete");
-    const QString oldAccess = QStringLiteral("access-old");
-    const QString oldRefresh = QStringLiteral("refresh-old");
-    appsettings->setCValue(athlete, GC_STRAVA_TOKEN, oldAccess);
-    appsettings->setCValue(
-        athlete, GC_STRAVA_REFRESH_TOKEN, oldRefresh);
-
-    StravaCredentialPublisher::Request request;
-    request.accountKey = athlete;
-    request.expectedRefreshToken = oldRefresh;
-    request.replacement = {
-        QStringLiteral("access-late"),
-        QStringLiteral("refresh-late")
-    };
-    request.refreshedAt = QStringLiteral("timestamp-late");
-    request.mode =
-        StravaTokenPublication::PublicationMode::CompareAndSwap;
-
-    StravaPublicationThread worker(request, 50);
-    worker.start();
-    const bool joinedWithoutGuiDispatch = worker.wait(2000);
-    const StravaTokenPublication::PublicationResult result =
-        worker.result();
-    QCoreApplication::processEvents();
-
-    QVERIFY(joinedWithoutGuiDispatch);
-    QCOMPARE(
-        result.status,
-        StravaTokenPublication::PublicationStatus::StorageFailure);
-    QVERIFY(!result.isSuccess());
-    QCOMPARE(
-        appsettings->cvalue(
-            athlete, GC_STRAVA_TOKEN, QString()).toString(),
-        oldAccess);
-    QCOMPARE(
-        appsettings->cvalue(
-            athlete, GC_STRAVA_REFRESH_TOKEN, QString()).toString(),
-        oldRefresh);
-    QCOMPARE(athleteMigrationSettingsCrossThreadWrites(), 0);
 }
 
 void TestAthleteMigrationSafety::workerCloudSettingsClearUrlUsesDefault()

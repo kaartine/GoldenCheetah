@@ -14,6 +14,28 @@ class QSettings;
 
 namespace CredentialSettingsDetail {
 
+bool credentialOperationContextActive();
+bool credentialOperationContextActive(const QString &operationId);
+QString currentCredentialOperationId();
+unsigned int suspendCredentialOperationMutexForBackend();
+void resumeCredentialOperationMutexAfterBackend(unsigned int depth);
+
+class CredentialOperationContextScope
+{
+public:
+    explicit CredentialOperationContextScope(
+        const QString &operationId = QString());
+    ~CredentialOperationContextScope();
+
+    CredentialOperationContextScope(
+        const CredentialOperationContextScope &) = delete;
+    CredentialOperationContextScope &operator=(
+        const CredentialOperationContextScope &) = delete;
+
+private:
+    QString operationId_;
+};
+
 enum class BackendMutationMarkerStatus {
     Absent,
     Pending,
@@ -25,6 +47,8 @@ BackendMutationMarkerStatus backendMutationMarkerStatus(
 bool createBackendMutationMarker(
     const QString &mutationLockPath);
 bool removeBackendMutationMarker(
+    const QString &mutationLockPath);
+bool recoverBackendMutationMarker(
     const QString &mutationLockPath);
 
 #ifdef GC_CREDENTIAL_TEST_HOOKS

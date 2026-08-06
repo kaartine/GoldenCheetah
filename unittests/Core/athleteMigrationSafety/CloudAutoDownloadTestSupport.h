@@ -77,6 +77,7 @@ void setAthleteMigrationSettingsSyncFails(bool enabled);
 void setAthleteMigrationSettingsSyncFailureCall(int call);
 void setAthleteMigrationUnrelatedSettingsSyncFails(
     bool enabled);
+void setAthleteMigrationStravaCredentialReadsAvailable(bool available);
 void setAthleteMigrationBlockStravaCredentialWrite(bool enabled);
 bool waitForAthleteMigrationStravaCredentialWrite(int timeoutMs);
 void releaseAthleteMigrationStravaCredentialWrite();

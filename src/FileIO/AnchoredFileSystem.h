@@ -136,6 +136,8 @@ private:
     friend bool writeNewFile(
         const QByteArray &, const EntryRef &,
         class PinnedFile &, QString &);
+    friend bool tryLockExclusive(
+        class PinnedFile &, int, QString &);
     friend MutationResult moveNoReplace(
         PinnedFile &, const EntryRef &);
     friend MutationResult replaceExisting(
@@ -193,6 +195,8 @@ private:
     friend bool writeNewFile(
         const QByteArray &, const EntryRef &,
         class PinnedFile &, QString &);
+    friend bool tryLockExclusive(
+        class PinnedFile &, int, QString &);
     friend struct Detail::PinnedFileState;
     friend MutationResult moveNoReplace(
         PinnedFile &, const EntryRef &);
@@ -240,6 +244,8 @@ private:
         const PinnedFile &, const EntryRef &, PinnedFile &, QString &);
     friend bool writeNewFile(
         const QByteArray &, const EntryRef &, PinnedFile &, QString &);
+    friend bool tryLockExclusive(
+        PinnedFile &, int, QString &);
     friend struct MutationResult moveNoReplace(
         PinnedFile &, const EntryRef &);
     friend struct MutationResult replaceExisting(
@@ -329,6 +335,13 @@ bool writeNewFile(
     const QByteArray &contents,
     const EntryRef &destination,
     PinnedFile &file,
+    QString &error);
+
+// Locks the pinned file generation. Closing or destroying the pin releases
+// the lock, including when the owning process terminates unexpectedly.
+bool tryLockExclusive(
+    PinnedFile &file,
+    int timeoutMilliseconds,
     QString &error);
 
 MutationResult moveNoReplace(
