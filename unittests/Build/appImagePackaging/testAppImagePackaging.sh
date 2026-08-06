@@ -2429,7 +2429,7 @@ assert_contains "$APPVEYOR_MACOS_PACKAGER" '--require-hashes'
 assert_contains "$APPVEYOR_MACOS_PACKAGER" \
     'requirements-appimage.lock'
 assert_contains "$APPVEYOR_WINDOWS_PACKAGER" \
-    "\$pythonSha256 = '009d6bf7e3b2ddca3d784fa09f90fe54336d5b60f0e0f305c37f400bf83cfd3b'"
+    "\$pythonSha256 = '90b4e5b9898b72d744650524bff92377c367f44bd5fbd09e3148656c080ad907'"
 assert_contains "$APPVEYOR_WINDOWS_PACKAGER" \
     "\$getPipSha256 = 'fb24e693bab954209a063d90953621412ccad4a500905a726286e038f508ddf6'"
 assert_contains "$APPVEYOR_WINDOWS_PACKAGER" '--require-hashes'
