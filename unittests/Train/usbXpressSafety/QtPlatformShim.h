@@ -11,7 +11,7 @@
 #define GC_TEST_USBXPRESS_RESTORE_WIN32
 #endif
 
-#include <qglobal.h>
+#include <QtCore/qglobal.h>
 
 #ifdef GC_TEST_USBXPRESS_RESTORE_WIN32
 #define WIN32
