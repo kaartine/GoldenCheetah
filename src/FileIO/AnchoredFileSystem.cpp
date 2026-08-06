@@ -37,11 +37,14 @@
 #include <unistd.h>
 #if defined(Q_OS_MACOS)
 #include <sys/acl.h>
+#include <sys/event.h>
+#include <sys/param.h>
 #include <stdio.h>
 #endif
 #if defined(Q_OS_LINUX)
 #include <linux/fs.h>
 #include <linux/stat.h>
+#include <sys/inotify.h>
 #include <sys/syscall.h>
 #include <sys/xattr.h>
 #endif
@@ -195,6 +198,7 @@ struct UnixStamp
     qint64 birthSeconds = 0;
     qint64 birthNanoseconds = 0;
 #endif
+    QByteArray immutableGeneration;
 
     bool operator==(const UnixStamp &other) const
     {
@@ -205,7 +209,8 @@ struct UnixStamp
             && modifiedSeconds == other.modifiedSeconds
             && modifiedNanoseconds == other.modifiedNanoseconds
             && changedSeconds == other.changedSeconds
-            && changedNanoseconds == other.changedNanoseconds;
+            && changedNanoseconds == other.changedNanoseconds
+            && immutableGeneration == other.immutableGeneration;
     }
 };
 
@@ -213,7 +218,68 @@ bool sameUnixObject(
     const UnixStamp &left, const UnixStamp &right)
 {
     return left.device == right.device
-        && left.inode == right.inode;
+        && left.inode == right.inode
+        && left.immutableGeneration == right.immutableGeneration;
+}
+
+QByteArray unixImmutableGeneration(
+    int directory,
+    const char *path,
+    int flags,
+    const struct stat &status)
+{
+    QByteArray generation;
+#if defined(Q_OS_MACOS)
+    Q_UNUSED(directory)
+    Q_UNUSED(path)
+    Q_UNUSED(flags)
+    if (status.st_birthtimespec.tv_sec != 0
+        || status.st_birthtimespec.tv_nsec != 0
+        || status.st_gen != 0) {
+        generation = QByteArrayLiteral("b:")
+            + QByteArray::number(
+                qint64(status.st_birthtimespec.tv_sec))
+            + ':'
+            + QByteArray::number(
+                qint64(status.st_birthtimespec.tv_nsec))
+            + QByteArrayLiteral(":g:")
+            + QByteArray::number(quint64(status.st_gen));
+    }
+#elif defined(Q_OS_FREEBSD)
+    Q_UNUSED(directory)
+    Q_UNUSED(path)
+    Q_UNUSED(flags)
+    if (status.st_birthtim.tv_sec != 0
+        || status.st_birthtim.tv_nsec != 0) {
+        generation = QByteArrayLiteral("b:")
+            + QByteArray::number(qint64(status.st_birthtim.tv_sec))
+            + ':'
+            + QByteArray::number(qint64(status.st_birthtim.tv_nsec));
+    }
+#elif defined(Q_OS_LINUX)
+    Q_UNUSED(status)
+#if defined(SYS_statx) && defined(STATX_BTIME)
+    struct statx extended {};
+    if (::syscall(
+            SYS_statx, directory, path, flags,
+            STATX_BTIME, &extended) == 0
+        && (extended.stx_mask & STATX_BTIME)
+        && (extended.stx_btime.tv_sec != 0
+            || extended.stx_btime.tv_nsec != 0)) {
+        generation = QByteArrayLiteral("b:")
+            + QByteArray::number(qint64(extended.stx_btime.tv_sec))
+            + ':'
+            + QByteArray::number(
+                qint64(extended.stx_btime.tv_nsec));
+    }
+#endif
+#else
+    Q_UNUSED(directory)
+    Q_UNUSED(path)
+    Q_UNUSED(flags)
+    Q_UNUSED(status)
+#endif
+    return generation;
 }
 
 bool sameUnixObjectAndData(
@@ -275,6 +341,9 @@ bool captureUnixStamp(
     stamp.changedSeconds = qint64(status.st_ctim.tv_sec);
     stamp.changedNanoseconds = qint64(status.st_ctim.tv_nsec);
 #endif
+    constexpr int EmptyPath = 0x1000;
+    stamp.immutableGeneration = unixImmutableGeneration(
+        descriptor, "", EmptyPath, status);
     return true;
 }
 
@@ -296,6 +365,7 @@ QByteArray unixDurableGeneration(int descriptor, const UnixStamp &stamp)
 #elif defined(Q_OS_LINUX) && defined(SYS_statx) \
     && defined(STATX_BTIME) && defined(AT_EMPTY_PATH) \
     && defined(AT_STATX_SYNC_AS_STAT)
+    Q_UNUSED(stamp)
     struct statx status {};
     const int result = int(::syscall(
         SYS_statx,
@@ -327,7 +397,8 @@ NativeIdentity unixIdentity(const UnixStamp &stamp, char type)
     key += QByteArray::number(stamp.device, 16);
     key += ':';
     key += QByteArray::number(stamp.inode, 16);
-    return NativeIdentity(std::move(key), stamp.links);
+    return NativeIdentity(
+        std::move(key), stamp.links, stamp.immutableGeneration);
 }
 
 bool statEntry(
@@ -371,6 +442,8 @@ bool statEntry(
     stamp.changedSeconds = qint64(status.st_ctim.tv_sec);
     stamp.changedNanoseconds = qint64(status.st_ctim.tv_nsec);
 #endif
+    stamp.immutableGeneration = unixImmutableGeneration(
+        directory, name.constData(), AT_SYMLINK_NOFOLLOW, status);
     return true;
 }
 
@@ -416,6 +489,8 @@ bool statDirectoryEntry(
     stamp.changedSeconds = qint64(status.st_ctim.tv_sec);
     stamp.changedNanoseconds = qint64(status.st_ctim.tv_nsec);
 #endif
+    stamp.immutableGeneration = unixImmutableGeneration(
+        directory, name.constData(), AT_SYMLINK_NOFOLLOW, status);
     return true;
 }
 
@@ -1175,7 +1250,8 @@ bool sameWindowsObject(
     const WindowsStamp &left, const WindowsStamp &right)
 {
     return left.volume == right.volume
-        && left.id == right.id;
+        && left.id == right.id
+        && left.created == right.created;
 }
 
 bool sameWindowsIdentityAndExtent(
@@ -1500,7 +1576,15 @@ NativeIdentity windowsIdentity(const WindowsStamp &stamp, char type)
     key.append(
         reinterpret_cast<const char *>(stamp.id.data()),
         int(stamp.id.size()));
-    return NativeIdentity(std::move(key), stamp.links);
+    QByteArray immutableGeneration;
+    if (stamp.created > 0) {
+        immutableGeneration.reserve(int(sizeof(stamp.created)));
+        immutableGeneration.append(
+            reinterpret_cast<const char *>(&stamp.created),
+            int(sizeof(stamp.created)));
+    }
+    return NativeIdentity(
+        std::move(key), stamp.links, std::move(immutableGeneration));
 }
 
 bool hashWindowsRegularFile(
@@ -1683,6 +1767,22 @@ struct DirectoryState
     NativeIdentity identity;
 };
 
+struct FileGenerationGuardState
+{
+#if defined(Q_OS_LINUX)
+    FileDescriptor notifications;
+    int watch = -1;
+#elif defined(Q_OS_MACOS)
+    FileDescriptor notifications;
+    FileDescriptor watchedFile;
+    std::vector<FileDescriptor> watchedDirectories;
+#elif defined(Q_OS_WIN)
+    WindowsHandle watchedFile;
+    NativeIdentity identity;
+#endif
+    bool compromised = false;
+};
+
 struct PinnedFileState
 {
     PinnedFileState()
@@ -1843,6 +1943,9 @@ bool captureUnixDirectoryEntryObservation(
     stamp.changedSeconds = qint64(status.st_ctim.tv_sec);
     stamp.changedNanoseconds = qint64(status.st_ctim.tv_nsec);
 #endif
+    stamp.immutableGeneration = unixImmutableGeneration(
+        directory, encodedName.constData(),
+        AT_SYMLINK_NOFOLLOW, status);
     observation.name = name;
     observation.stamp = stamp;
     observation.identity = unixIdentity(stamp, identityType);
@@ -2490,6 +2593,17 @@ QDebug operator<<(QDebug debug, const NativeIdentity &identity)
     return debug;
 }
 
+QByteArray NativeIdentity::persistentFingerprint() const
+{
+    if (!isValid() || immutableGeneration_.isEmpty()) return {};
+    QByteArray evidence = QByteArray::number(key_.size());
+    evidence += ':';
+    evidence += key_;
+    evidence += immutableGeneration_;
+    return QCryptographicHash::hash(
+        evidence, QCryptographicHash::Sha256);
+}
+
 bool DirectoryAnchor::open(
     const QString &absolutePath,
     DirectoryAnchor &directory,
@@ -2801,6 +2915,42 @@ EntryRef DirectoryAnchor::entry(
         QDir(state_->displayPath).filePath(component));
 }
 
+bool EntryRef::stableAccessPath(QString &path, QString &error) const
+{
+    path.clear();
+    error.clear();
+    if (!isValid()) {
+        error = QStringLiteral("The anchored file is unavailable");
+        return false;
+    }
+#if defined(Q_OS_LINUX)
+    path = QStringLiteral("/proc/self/fd/%1/%2")
+        .arg(parent_.state_->descriptor.get())
+        .arg(component_);
+    return true;
+#elif defined(Q_OS_MACOS)
+    char directoryPath[MAXPATHLEN] = {};
+    if (::fcntl(
+            parent_.state_->descriptor.get(), F_GETPATH,
+            directoryPath) != 0) {
+        error = nativeError(
+            QStringLiteral("Cannot resolve an anchored directory"),
+            errno);
+        return false;
+    }
+    path = QDir(QFile::decodeName(directoryPath)).filePath(component_);
+    return true;
+#elif defined(Q_OS_WIN)
+    if (!parent_.pathMatches(error)) return false;
+    path = displayPath_;
+    return true;
+#else
+    if (!parent_.pathMatches(error)) return false;
+    path = displayPath_;
+    return true;
+#endif
+}
+
 bool DirectoryAnchor::pathMatches(QString &error) const
 {
     error.clear();
@@ -2856,6 +3006,85 @@ PinnedFile::PinnedFile() = default;
 PinnedFile::~PinnedFile() = default;
 PinnedFile::PinnedFile(PinnedFile &&other) noexcept = default;
 PinnedFile &PinnedFile::operator=(PinnedFile &&other) noexcept = default;
+
+FileGenerationGuard::FileGenerationGuard() = default;
+FileGenerationGuard::~FileGenerationGuard() = default;
+FileGenerationGuard::FileGenerationGuard(
+    FileGenerationGuard &&other) noexcept = default;
+FileGenerationGuard &FileGenerationGuard::operator=(
+    FileGenerationGuard &&other) noexcept = default;
+
+bool FileGenerationGuard::unchanged(QString &error)
+{
+    error.clear();
+    if (!state_) {
+        error = QStringLiteral("The file-generation guard is unavailable");
+        return false;
+    }
+    if (state_->compromised) {
+        error = QStringLiteral("The guarded file generation changed");
+        return false;
+    }
+
+#if defined(Q_OS_LINUX)
+    alignas(struct inotify_event) char events[4096];
+    for (;;) {
+        const ssize_t received = ::read(
+            state_->notifications.get(), events, sizeof(events));
+        if (received > 0) {
+            for (ssize_t offset = 0; offset < received;) {
+                const auto *event = reinterpret_cast<const inotify_event *>(
+                    events + offset);
+                if (event->wd == state_->watch
+                    || (event->mask & IN_Q_OVERFLOW)) {
+                    state_->compromised = true;
+                }
+                offset += sizeof(inotify_event) + event->len;
+            }
+            continue;
+        }
+        if (received < 0 && errno == EINTR) continue;
+        if (received < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            break;
+        if (received == 0) break;
+        error = nativeError(
+            QStringLiteral("Cannot inspect the file-generation guard"),
+            errno);
+        return false;
+    }
+#elif defined(Q_OS_MACOS)
+    struct kevent event {};
+    const struct timespec timeout {0, 0};
+    const int received = ::kevent(
+        state_->notifications.get(), nullptr, 0,
+        &event, 1, &timeout);
+    if (received < 0) {
+        error = nativeError(
+            QStringLiteral("Cannot inspect the file-generation guard"),
+            errno);
+        return false;
+    }
+    if (received > 0) state_->compromised = true;
+#elif defined(Q_OS_WIN)
+    WindowsStamp current;
+    if (!captureWindowsStamp(
+            state_->watchedFile.get(), current, false, error)) {
+        return false;
+    }
+    if (windowsIdentity(current, 'f') != state_->identity)
+        state_->compromised = true;
+#else
+    error = QStringLiteral(
+        "File-generation guards are unsupported on this platform");
+    return false;
+#endif
+
+    if (state_->compromised) {
+        error = QStringLiteral("The guarded file generation changed");
+        return false;
+    }
+    return true;
+}
 
 NativeIdentity PinnedFile::identity() const
 {
@@ -3779,6 +4008,231 @@ bool pinRegularFile(
 #endif
 }
 
+bool pinRegularFileIdentity(
+    const EntryRef &entry,
+    PinnedFile &file,
+    QString &error)
+{
+    error.clear();
+    file = {};
+    if (!entry.isValid()) {
+        error = QStringLiteral("The anchored file reference is unavailable");
+        return false;
+    }
+
+#ifdef Q_OS_UNIX
+    const QByteArray name = QFile::encodeName(entry.component_);
+    FileDescriptor descriptor(::openat(
+        entry.parent_.state_->descriptor.get(),
+        name.constData(),
+        O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW));
+    if (!descriptor.isValid()) {
+        error = nativeError(
+            QStringLiteral("Cannot open an anchored regular file"), errno);
+        return false;
+    }
+    UnixStamp stamp;
+    if (!captureUnixStamp(descriptor.get(), stamp, false, error))
+        return false;
+    if (stamp.links != 1) {
+        error = QStringLiteral(
+            "An anchored regular file must have exactly one link");
+        return false;
+    }
+    auto state = std::make_unique<Detail::PinnedFileState>();
+    state->entry = entry;
+    state->descriptor = std::move(descriptor);
+    state->stamp = stamp;
+    state->identity = unixIdentity(stamp, 'f');
+    state->size = stamp.size;
+    file.state_ = std::move(state);
+    return true;
+#elif defined(Q_OS_WIN)
+    WindowsHandle handle(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(entry.displayPath_.utf16()),
+        FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr));
+    if (!handle.isValid()) {
+        error = windowsError(
+            QStringLiteral("Cannot open an anchored regular file"),
+            ::GetLastError());
+        return false;
+    }
+    WindowsStamp stamp;
+    if (!captureWindowsStamp(handle.get(), stamp, false, error))
+        return false;
+    if (stamp.links != 1) {
+        error = QStringLiteral(
+            "An anchored regular file must have exactly one link");
+        return false;
+    }
+    auto state = std::make_unique<Detail::PinnedFileState>();
+    state->entry = entry;
+    state->handle = std::move(handle);
+    state->stamp = stamp;
+    state->identity = windowsIdentity(stamp, 'f');
+    state->size = stamp.size;
+    file.state_ = std::move(state);
+    return true;
+#else
+    error = QStringLiteral(
+        "Anchored filesystem operations are unsupported on this platform");
+    return false;
+#endif
+}
+
+bool guardFileGeneration(
+    const EntryRef &entry,
+    const PinnedFile &file,
+    FileGenerationGuard &guard,
+    QString &error)
+{
+    guard = {};
+    error.clear();
+    if (!entry.isValid() || !file.state_) {
+        error = QStringLiteral("A guarded file generation is unavailable");
+        return false;
+    }
+
+    bool matches = false;
+    if (!entryIdentityMatches(entry, file, matches, error) || !matches) {
+        if (error.isEmpty()) {
+            error = QStringLiteral("The guarded file generation changed");
+        }
+        return false;
+    }
+
+    auto state = std::make_unique<Detail::FileGenerationGuardState>();
+#if defined(Q_OS_LINUX)
+    state->notifications = FileDescriptor(::inotify_init1(
+        IN_CLOEXEC | IN_NONBLOCK));
+    if (!state->notifications.isValid()) {
+        error = nativeError(
+            QStringLiteral("Cannot create a file-generation guard"), errno);
+        return false;
+    }
+    reportAnchoredFilesystemTransition(
+        "file-generation-guard-before-watch", entry.displayPath_);
+    const QByteArray path = QByteArrayLiteral("/proc/self/fd/")
+        + QByteArray::number(file.state_->descriptor.get());
+    state->watch = ::inotify_add_watch(
+        state->notifications.get(), path.constData(),
+        IN_ATTRIB | IN_DELETE_SELF | IN_MOVE_SELF | IN_UNMOUNT);
+    if (state->watch < 0) {
+        error = nativeError(
+            QStringLiteral("Cannot watch a file generation"), errno);
+        return false;
+    }
+    reportAnchoredFilesystemTransition(
+        "file-generation-guard-watch-installed", entry.displayPath_);
+#elif defined(Q_OS_MACOS)
+    state->watchedFile = FileDescriptor(::dup(file.state_->descriptor.get()));
+    state->notifications = FileDescriptor(::kqueue());
+    if (!state->watchedFile.isValid()
+        || !state->notifications.isValid()) {
+        error = nativeError(
+            QStringLiteral("Cannot create a file-generation guard"), errno);
+        return false;
+    }
+
+    FileDescriptor current(::open(
+        "/", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+    if (!current.isValid()) {
+        error = nativeError(
+            QStringLiteral("Cannot anchor a file-generation guard"), errno);
+        return false;
+    }
+    state->watchedDirectories.push_back(std::move(current));
+    const QStringList components =
+        entry.parent_.state_->displayPath.split(
+            QLatin1Char('/'), Qt::SkipEmptyParts);
+    for (const QString &component : components) {
+        const QByteArray encoded = QFile::encodeName(component);
+        FileDescriptor next(::openat(
+            state->watchedDirectories.back().get(),
+            encoded.constData(),
+            O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+        if (!next.isValid()) {
+            error = nativeError(
+                QStringLiteral("Cannot anchor a file-generation path"),
+                errno);
+            return false;
+        }
+        state->watchedDirectories.push_back(std::move(next));
+    }
+    UnixStamp guardedParent;
+    if (!captureUnixStamp(
+            state->watchedDirectories.back().get(),
+            guardedParent, true, error)
+        || unixIdentity(guardedParent, 'd')
+            != entry.parent_.state_->identity) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The guarded file path generation changed");
+        }
+        return false;
+    }
+
+    std::vector<struct kevent> changes(
+        state->watchedDirectories.size() + 1);
+    EV_SET(
+        &changes[0], state->watchedFile.get(), EVFILT_VNODE,
+        EV_ADD | EV_CLEAR,
+        NOTE_DELETE | NOTE_LINK | NOTE_RENAME | NOTE_REVOKE,
+        0, nullptr);
+    for (size_t index = 0;
+         index < state->watchedDirectories.size(); ++index) {
+        EV_SET(
+            &changes[index + 1],
+            state->watchedDirectories.at(index).get(), EVFILT_VNODE,
+            EV_ADD | EV_CLEAR,
+            NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE,
+            0, nullptr);
+    }
+    if (::kevent(
+            state->notifications.get(), changes.data(),
+            int(changes.size()),
+            nullptr, 0, nullptr) != 0) {
+        error = nativeError(
+            QStringLiteral("Cannot watch a file generation"), errno);
+        return false;
+    }
+#elif defined(Q_OS_WIN)
+    HANDLE duplicate = INVALID_HANDLE_VALUE;
+    if (!::DuplicateHandle(
+            ::GetCurrentProcess(), file.state_->handle.get(),
+            ::GetCurrentProcess(), &duplicate,
+            0, FALSE, DUPLICATE_SAME_ACCESS)) {
+        error = windowsError(
+            QStringLiteral("Cannot create a file-generation guard"),
+            ::GetLastError());
+        return false;
+    }
+    state->watchedFile = WindowsHandle(duplicate);
+    state->identity = file.state_->identity;
+#else
+    error = QStringLiteral(
+        "File-generation guards are unsupported on this platform");
+    return false;
+#endif
+
+    guard.state_ = std::move(state);
+    if (!guard.unchanged(error)
+        || !entryIdentityMatches(entry, file, matches, error)
+        || !matches) {
+        guard = {};
+        if (error.isEmpty()) {
+            error = QStringLiteral("The guarded file generation changed");
+        }
+        return false;
+    }
+    return true;
+}
+
 bool pinRegularFileAfterWriterRelease(
     const EntryRef &entry,
     qintptr writerDescriptor,
@@ -4065,6 +4519,73 @@ bool entryMatches(
     if (!captureWindowsStamp(named.get(), namedStamp, false, error))
         return false;
     matches = sameWindowsIdentityAndData(namedStamp, pinnedNow);
+    return true;
+#else
+    error = QStringLiteral(
+        "Anchored filesystem operations are unsupported on this platform");
+    return false;
+#endif
+}
+
+bool entryIdentityMatches(
+    const EntryRef &entry,
+    const PinnedFile &file,
+    bool &matches,
+    QString &error)
+{
+    error.clear();
+    matches = false;
+    if (!entry.isValid() || !file.state_) {
+        error = QStringLiteral("An anchored file identity is unavailable");
+        return false;
+    }
+
+#ifdef Q_OS_UNIX
+    UnixStamp pinnedNow;
+    if (!captureUnixStamp(
+            file.state_->descriptor.get(), pinnedNow, false, error)) {
+        return false;
+    }
+    UnixStamp named;
+    bool exists = false;
+    if (!statEntry(
+            entry.parent_.state_->descriptor.get(),
+            entry.component_, named, exists, error)) {
+        return false;
+    }
+    matches = exists
+        && sameUnixObject(pinnedNow, named)
+        && file.state_->identity == unixIdentity(pinnedNow, 'f');
+    return true;
+#elif defined(Q_OS_WIN)
+    WindowsStamp pinnedNow;
+    if (!captureWindowsStamp(
+            file.state_->handle.get(), pinnedNow, false, error)) {
+        return false;
+    }
+    WindowsHandle named(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(entry.displayPath_.utf16()),
+        FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr));
+    if (!named.isValid()) {
+        const DWORD native = ::GetLastError();
+        if (native == ERROR_FILE_NOT_FOUND
+            || native == ERROR_PATH_NOT_FOUND) {
+            return true;
+        }
+        error = windowsError(
+            QStringLiteral("Cannot inspect an anchored file name"), native);
+        return false;
+    }
+    WindowsStamp namedStamp;
+    if (!captureWindowsStamp(named.get(), namedStamp, false, error))
+        return false;
+    matches = sameWindowsObject(pinnedNow, namedStamp)
+        && file.state_->identity == windowsIdentity(pinnedNow, 'f');
     return true;
 #else
     error = QStringLiteral(
@@ -5643,6 +6164,14 @@ MutationResult replaceExisting(
     PinnedFile &replacement,
     PinnedFile &expectedTarget)
 {
+    return replaceExisting(replacement, expectedTarget, {});
+}
+
+MutationResult replaceExisting(
+    PinnedFile &replacement,
+    PinnedFile &expectedTarget,
+    const EntryRef &displacedTarget)
+{
     MutationResult result;
     if (!replacement.state_ || !expectedTarget.state_) {
         result.error = QStringLiteral(
@@ -5696,6 +6225,14 @@ MutationResult replaceExisting(
     }
 
 #ifdef Q_OS_UNIX
+    if (displacedTarget.isValid()
+        && (displacedTarget.parent_.identity()
+                != staging.parent_.identity()
+            || displacedTarget.component_ != staging.component_)) {
+        result.error = QStringLiteral(
+            "The anchored Unix replacement recovery name must be its staging name");
+        return result;
+    }
     const auto refreshHeld = [](PinnedFile &file, QString &error) {
         UnixStamp current;
         if (!captureUnixStamp(
@@ -5892,18 +6429,33 @@ MutationResult replaceExisting(
         return true;
     };
 
-    EntryRef backup;
-    for (int attempt = 0; attempt < 16; ++attempt) {
-        const QString component = QStringLiteral(".gc-replace-%1.tmp")
-            .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
-        QString entryError;
-        EntryRef candidate = staging.parent_.entry(component, entryError);
+    EntryRef backup = displacedTarget;
+    if (backup.isValid()) {
         bool exists = true;
-        if (candidate.isValid()
-            && entryExists(candidate, exists, entryError)
-            && !exists) {
-            backup = candidate;
-            break;
+        if (backup.parent_.identity() != staging.parent_.identity()
+            || backup.component_ == staging.component_
+            || backup.component_ == target.component_
+            || !entryExists(backup, exists, result.error)
+            || exists) {
+            if (result.error.isEmpty()) {
+                result.error = QStringLiteral(
+                    "The anchored replacement recovery name is unavailable");
+            }
+            return result;
+        }
+    } else {
+        for (int attempt = 0; attempt < 16; ++attempt) {
+            const QString component = QStringLiteral(".gc-replace-%1.tmp")
+                .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+            QString entryError;
+            EntryRef candidate = staging.parent_.entry(component, entryError);
+            bool exists = true;
+            if (candidate.isValid()
+                && entryExists(candidate, exists, entryError)
+                && !exists) {
+                backup = candidate;
+                break;
+            }
         }
     }
     if (!backup.isValid()) {

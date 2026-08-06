@@ -7,6 +7,10 @@ include(../../unittests.pri)
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug
+DEFINES += GC_PLAN_BUNDLE_IMPORT_TEST_HOOKS \
+           GC_ANCHORED_FILESYSTEM_TEST_HOOKS \
+           GC_TRAIN_DB_TEST_HOOKS \
+           GC_TRAIN_DB_PERSISTENCE_TEST_HOOKS
 
 SOURCES = testPlanBundleImportJournal.cpp \
           ../../../src/Planning/PlanBundleImportJournal.cpp \

@@ -26,6 +26,7 @@ SOURCES = testRideCacheRemoval.cpp \
           ../../../src/Planning/PlanBundleImportJournal.cpp \
           ../../../src/Planning/PlanReplacementJournal.cpp \
           ../../../src/Train/TrainDB.cpp \
+          ../../../src/Train/ErgFileBytes.cpp \
           ../../../src/Train/ErgFileBase.cpp \
           ../../../src/Train/VideoSyncFileBase.cpp \
           ../../../src/Core/PlannedActivityFileStager.cpp \

@@ -24,6 +24,7 @@ namespace AnchoredFileSystem {
 
 namespace Detail {
 struct DirectoryState;
+struct FileGenerationGuardState;
 struct PinnedFileState;
 struct PrivateDirectoryOperations;
 }
@@ -43,8 +44,13 @@ class NativeIdentity
 {
 public:
     NativeIdentity() = default;
-    NativeIdentity(QByteArray key, quint64 linkCount)
-        : key_(std::move(key)), linkCount_(linkCount)
+    NativeIdentity(
+        QByteArray key,
+        quint64 linkCount,
+        QByteArray immutableGeneration)
+        : key_(std::move(key)),
+          immutableGeneration_(std::move(immutableGeneration)),
+          linkCount_(linkCount)
     {
     }
 
@@ -52,10 +58,12 @@ public:
     quint64 linkCount() const { return linkCount_; }
     // Opaque, host-local key for durable identity journals.
     QByteArray serializedKey() const { return key_; }
+    QByteArray persistentFingerprint() const;
 
     bool operator==(const NativeIdentity &other) const
     {
-        return key_ == other.key_;
+        return key_ == other.key_
+            && immutableGeneration_ == other.immutableGeneration_;
     }
 
     bool operator!=(const NativeIdentity &other) const
@@ -65,6 +73,7 @@ public:
 
 private:
     QByteArray key_;
+    QByteArray immutableGeneration_;
     quint64 linkCount_ = 0;
 
     friend struct Detail::DirectoryState;
@@ -135,10 +144,17 @@ private:
     friend bool pinRegularFile(
         const EntryRef &, class PinnedFile &, QString &, qint64,
         const PinnedFileReadControl &);
+    friend bool pinRegularFileIdentity(
+        const EntryRef &, class PinnedFile &, QString &);
     friend bool entryExists(
         const EntryRef &, bool &, QString &);
     friend bool entryMatches(
         const EntryRef &, const class PinnedFile &, bool &, QString &);
+    friend bool entryIdentityMatches(
+        const EntryRef &, const class PinnedFile &, bool &, QString &);
+    friend bool guardFileGeneration(
+        const EntryRef &, const class PinnedFile &,
+        class FileGenerationGuard &, QString &);
     friend bool copyToNewFile(
         const class PinnedFile &, const EntryRef &,
         class PinnedFile &, QString &, bool);
@@ -151,6 +167,8 @@ private:
         PinnedFile &, const EntryRef &, const PinnedFileReadControl &);
     friend MutationResult replaceExisting(
         PinnedFile &, PinnedFile &);
+    friend MutationResult replaceExisting(
+        PinnedFile &, PinnedFile &, const EntryRef &);
     friend bool validateCurrentUserOwnedDirectory(
         const DirectoryAnchor &, QString &);
     friend bool validateCurrentUserControlledDirectory(
@@ -175,6 +193,7 @@ public:
     }
 
     QString displayPath() const { return displayPath_; }
+    bool stableAccessPath(QString &path, QString &error) const;
 
 private:
     EntryRef(
@@ -196,10 +215,17 @@ private:
     friend bool pinRegularFile(
         const EntryRef &, class PinnedFile &, QString &, qint64,
         const PinnedFileReadControl &);
+    friend bool pinRegularFileIdentity(
+        const EntryRef &, class PinnedFile &, QString &);
     friend bool entryExists(
         const EntryRef &, bool &, QString &);
     friend bool entryMatches(
         const EntryRef &, const class PinnedFile &, bool &, QString &);
+    friend bool entryIdentityMatches(
+        const EntryRef &, const class PinnedFile &, bool &, QString &);
+    friend bool guardFileGeneration(
+        const EntryRef &, const class PinnedFile &,
+        class FileGenerationGuard &, QString &);
     friend bool copyToNewFile(
         const class PinnedFile &, const EntryRef &,
         class PinnedFile &, QString &, bool);
@@ -215,6 +241,8 @@ private:
         PinnedFile &, PinnedFile &);
     friend MutationResult remove(
         PinnedFile &, const PinnedFileReadControl &);
+    friend MutationResult replaceExisting(
+        PinnedFile &, PinnedFile &, const EntryRef &);
 };
 
 class PinnedFile
@@ -246,12 +274,19 @@ private:
     friend bool pinRegularFile(
         const EntryRef &, PinnedFile &, QString &, qint64,
         const PinnedFileReadControl &);
+    friend bool pinRegularFileIdentity(
+        const EntryRef &, PinnedFile &, QString &);
     friend bool pinRegularFileAfterWriterRelease(
         const EntryRef &, qintptr, qint64, const QByteArray &,
         const std::function<void()> &, PinnedFile &,
         WriterPinHandoffState &, QString &);
     friend bool entryMatches(
         const EntryRef &, const PinnedFile &, bool &, QString &);
+    friend bool entryIdentityMatches(
+        const EntryRef &, const PinnedFile &, bool &, QString &);
+    friend bool guardFileGeneration(
+        const EntryRef &, const PinnedFile &,
+        class FileGenerationGuard &, QString &);
     friend bool readAll(
         const PinnedFile &, qint64, QByteArray &, QString &,
         const PinnedFileReadControl &);
@@ -272,6 +307,31 @@ private:
         PinnedFile &, PinnedFile &);
     friend struct MutationResult remove(
         PinnedFile &, const PinnedFileReadControl &);
+    friend struct MutationResult replaceExisting(
+        PinnedFile &, PinnedFile &, const EntryRef &);
+};
+
+class FileGenerationGuard
+{
+public:
+    FileGenerationGuard();
+    ~FileGenerationGuard();
+
+    FileGenerationGuard(FileGenerationGuard &&other) noexcept;
+    FileGenerationGuard &operator=(FileGenerationGuard &&other) noexcept;
+
+    FileGenerationGuard(const FileGenerationGuard &) = delete;
+    FileGenerationGuard &operator=(const FileGenerationGuard &) = delete;
+
+    bool isValid() const { return bool(state_); }
+    bool unchanged(QString &error);
+
+private:
+    std::unique_ptr<Detail::FileGenerationGuardState> state_;
+
+    friend bool guardFileGeneration(
+        const EntryRef &, const PinnedFile &,
+        FileGenerationGuard &, QString &);
 };
 
 enum class MutationEffect {
@@ -304,6 +364,22 @@ bool pinRegularFile(
     qint64 maximumSize = -1,
     const PinnedFileReadControl &readControl = {});
 
+// Holds a regular-file generation without reading its contents. This is for
+// mutable files whose object identity must remain stable, such as SQLite
+// databases; it must not be used as content validation.
+bool pinRegularFileIdentity(
+    const EntryRef &entry,
+    PinnedFile &file,
+    QString &error);
+
+// Detects transient replacement as well as a replacement still visible by
+// pathname. Keep the guard alive across opening a path-based third-party API.
+bool guardFileGeneration(
+    const EntryRef &entry,
+    const PinnedFile &file,
+    FileGenerationGuard &guard,
+    QString &error);
+
 struct WriterPinHandoffState
 {
     bool writerReleased = false;
@@ -335,6 +411,14 @@ bool entryMatches(
 QString removalQuarantineName(
     const NativeIdentity &identity,
     const QString &originalComponent);
+
+// Compares only the native file object, allowing the pinned file's data and
+// metadata to change while it remains the same generation.
+bool entryIdentityMatches(
+    const EntryRef &entry,
+    const PinnedFile &file,
+    bool &matches,
+    QString &error);
 
 bool readAll(
     const PinnedFile &file,
@@ -387,6 +471,10 @@ MutationResult moveNoReplace(
 MutationResult replaceExisting(
     PinnedFile &replacement,
     PinnedFile &expectedTarget);
+MutationResult replaceExisting(
+    PinnedFile &replacement,
+    PinnedFile &expectedTarget,
+    const EntryRef &displacedTarget);
 
 // Private-directory operations exclude processes sharing the same OS identity
 // and privileged administrators from their attacker model.

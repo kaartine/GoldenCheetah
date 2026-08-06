@@ -2781,7 +2781,11 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   API and restart coordinator were absent. A final injected SQLite case
   reproduced the uncertain-commit boundary: the decision was durable, but the
   API reported it as definitely uncommitted and would have allowed the staged
-  plan journal to be rolled back.
+  plan journal to be rolled back. Final source-level regressions also force a
+  target substitution after publication validation but before SQLite work and
+  require the legacy unbound recovery callback to fail closed. Restart cleanup
+  also substitutes a different predecessor generation with identical bytes and
+  requires that generation to be preserved.
 - Resolution: PlanBundle now reopens and validates every selected activity and
   attached workout before mutation, bounds individual and aggregate payloads,
   verifies both the bundle MD5 reference and stable exact contents, rejects
@@ -2792,7 +2796,13 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   plan journal back once the database commit may be durable. It then publishes
   one plan generation, idempotently publishes locked workout files, and inserts
   all workout rows while retiring the decision in the same database
-  transaction. Startup completes this outer transaction before ordinary plan
+  transaction. Recovery now accepts only a bound completion callback, verifies
+  that its published-target validator runs while the same `TrainDB` LUW is
+  active, and invokes that validator immediately before journal retirement.
+  Overwrite decisions persist the predecessor's native generation fingerprint
+  with its size and digest, and restart cleanup requires all three before an
+  anchored deletion.
+  Startup completes this outer transaction before ordinary plan
   journal reconciliation. Corrupt payloads, schemas, roots, identifiers,
   conflicting targets, and incomplete database completion fail closed and
   retain recovery state. The import UI distinguishes an uncommitted failure
@@ -5690,32 +5700,83 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### THREAD-008: Strava refresh followers can still freeze the GUI
 
-- Status: OPEN
-- Code: `src/Cloud/StravaTokenRefresh.cpp` and
-  `src/Train/StravaRoutesDownload.cpp`
+- Status: FIXED
+- Code: `src/Cloud/StravaTokenRefresh.cpp`,
+  `src/FileIO/GpxParser.cpp`, `src/Train/StravaRoutesClient.cpp`,
+  `src/Train/StravaRoutesDownload.cpp`, and
+  `src/Train/StravaRoutesDownloadPipeline.cpp`
 - Impact: A Routes request on the GUI thread can join an in-flight refresh by
   waiting on a condition variable. Although the leader's real network request
   is bounded to 30 seconds, GUI events are not processed while the follower
   waits, so Close and Abort cannot update the cancellation flag during that
   interval.
-- Test: Hold a worker refresh open, join it from the GUI through the Routes
-  path, post Close, and require prompt cancellation without waiting for the
-  leader's deadline.
-- Fix direction: Expose asynchronous shared-flight completion or move the
-  complete Routes request off the GUI thread. Do not solve this by pumping
-  arbitrary nested GUI events inside the coordinator.
+- Test-first evidence: A refresh leader is held open while the real Routes
+  follower starts from the dialog. A posted Abort must reach the follower and
+  complete promptly without waiting for the leader's deadline. Additional
+  regressions require completion on the GUI thread, worker-affine destruction
+  of the complete network-service object tree, prompt cooperative teardown,
+  safe non-joining teardown for a non-cooperative operation, and responsive
+  cancellation during pinned reads, GPX parsing, publication, and database
+  finalization. Additional RED rows enter the smart-recording interpolation
+  loop, exceed a test-bounded generated-point budget, pass an excessive
+  high-water mark, and cancel during the initial GPX XML validation scan.
+- Resolution: Route listing, downloading, validation, journal publication, and
+  database finalization run in owned worker threads. The dialog receives only
+  queued completion callbacks, and Abort/Close set a lock-free cancellation
+  flag and request thread interruption without pumping nested GUI events or
+  joining a network wait. Worker-owned Qt objects are parented to a worker
+  context and destroyed on that thread; shared operation leases keep staged
+  data alive across queued and reentrant finalization notifications. GPX smart
+  recording now caps its high-water mark and total generated representation,
+  polls cancellation inside interpolation, and makes the preliminary XML scan
+  cooperative.
+- Verification: The 48-case Strava Routes pipeline suite passes normally and
+  under strict ASan/UBSan/LSan. Its production-composition cases exercise the
+  actual dialog slots, asynchronous Strava service tree, reentrant deletion,
+  queued cancellation, and worker finalization. The 30-case Routes client suite
+  passes, the complete application links, and an isolated minimal-platform
+  `--version` smoke test reports `GoldenCheetah V3.8-DEV2605 (5012)`.
 
 ### PERF-008: Strava route imports no longer share one database transaction
 
-- Status: OPEN
-- Code: `src/Train/StravaRoutesDownload.cpp`
+- Status: FIXED
+- Code: `src/Train/StravaRoutesDownload.cpp`,
+  `src/Train/StravaRoutesDownloadPipeline.cpp`,
+  `src/Planning/PlanBundleImportJournal.cpp`,
+  `src/FileIO/AnchoredFileSystem.cpp`, and `src/Train/TrainDB.cpp`
 - Impact: Removing network waits from the original long transaction fixed lock
   duration, but each successfully downloaded route now starts and commits its
   own LUW. Importing many routes loses the previous batching benefit.
-- Test: Import a representative multi-route set and compare transaction count
-  and elapsed import time while proving no network wait occurs inside an LUW.
-- Fix direction: Separate bounded download and validation from a short batched
-  import phase, with bounded memory and correct partial-cancellation behavior.
+- Test-first evidence: Multi-route imports initially observed one LUW per route.
+  Regressions require one short LUW for every completed bounded batch, no
+  download or GPX parsing inside that LUW, one commit for a cancellation-safe
+  completed prefix, and complete rollback of both database and published files
+  on begin, import, commit, or generation-validation failure. Final regressions
+  force a post-handoff partial replacement, replace `trainDB` at the exact
+  publication boundary, invoke target validation outside an LUW, and restart
+  with both an intact and a same-content, different-generation substituted
+  displaced-predecessor artifact.
+- Resolution: Downloads are staged before database access in batches of at most
+  eight routes and 32 MiB. Pinned staged inputs are parsed and recorded in a
+  durable import journal off the GUI thread. A short finalization phase then
+  imports every prepared route through one `TrainDB::ScopedLUW`, validates the
+  published generation, removes the journal row, and commits once. Cancellation
+  preserves a completed prefix, and later batches begin only after cleanup.
+  The decision is additionally witnessed by a constant-size anchored marker
+  bound to the athlete, workout-root, and `trainDB` generations, so replacing
+  the logical database cannot make a committed decision disappear. Publication
+  validates that generation around each mutation, preserves `Partial` outcomes
+  for forward recovery, and derives deterministic predecessor names from the
+  persisted journal identity. Cleanup pins and verifies the predecessor before
+  deletion against the native generation fingerprint persisted in the SQLite
+  decision, and is retried on restart before bound database completion.
+- Verification: The 48-case pipeline suite passes normally and under strict
+  ASan/UBSan/LSan, including real multi-route TrainDB commit and rollback,
+  batches larger than eight routes, byte limits, partial failures, cancellation,
+  and all transaction rollback paths. PlanBundleImport passes 37 cases,
+  TrainDbVersionSafety 35, LibraryTransactionSafety 10, and RideCacheRemoval
+  406 with one platform skip, and AnchoredFileSystem 89 with 13 platform skips;
+  every listed suite passes normally and under strict ASan/UBSan/LSan.
 
 ### CLOUD-007: Removing Strava locally does not revoke provider authorization
 

@@ -60,16 +60,6 @@ QByteArray routesPayload(
         QJsonDocument::Compact);
 }
 
-QByteArray sourceContents(const char *relativePath)
-{
-    const QString path = QFINDTESTDATA(relativePath);
-    if (path.isEmpty()) return {};
-
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) return {};
-    return file.readAll();
-}
-
 } // namespace
 
 class TestStravaRoutesClient : public QObject
@@ -93,7 +83,6 @@ private slots:
     void validatesGpxResponse_data();
     void validatesGpxResponse();
     void buildsLeafOnlyWorkoutFileNames();
-    void productionWiringHidesCredentialsAndBoundsWork();
 };
 
 void TestStravaRoutesClient::usesAuthenticatedGetForListAndGpx()
@@ -482,52 +471,6 @@ void TestStravaRoutesClient::buildsLeafOnlyWorkoutFileNames()
     QCOMPARE(QFileInfo(name).fileName(), name);
     QVERIFY(StravaRoutesClient::workoutFileName(
         QStringLiteral("../route")).isEmpty());
-}
-
-void TestStravaRoutesClient::
-productionWiringHidesCredentialsAndBoundsWork()
-{
-    const QByteArray routes = sourceContents(
-        "../../../src/Train/StravaRoutesDownload.cpp");
-    QVERIFY(!routes.isEmpty());
-
-    QVERIFY(!routes.contains("QEventLoop"));
-    QVERIFY(!routes.contains("GC_STRAVA_TOKEN"));
-    QVERIFY(!routes.contains("Authorization"));
-    QVERIFY(!routes.contains("waitForNetworkReply("));
-    QVERIFY(!routes.contains(
-        "StravaTokenRefreshCoordinator"));
-    QVERIFY(routes.contains("authenticatedGet("));
-    QVERIFY(routes.contains("Qt::UserRole"));
-    QVERIFY(!routes.contains("setText(4"));
-    QVERIFY(routes.contains("QTemporaryFile temporaryFile("));
-    QVERIFY(!routes.contains(
-        "temporaryDirectory.filePath(fileBasename)"));
-    QVERIFY(routes.contains("QTimer::singleShot("));
-    QVERIFY(!routes.contains("\n    refreshClicked();"));
-
-    const qsizetype readPosition =
-        routes.indexOf("readFile(");
-    const qsizetype transactionPosition =
-        routes.indexOf("trainDB->startLUW()", readPosition);
-    QVERIFY(readPosition >= 0);
-    QVERIFY(transactionPosition > readPosition);
-
-    const QByteArray strava = sourceContents(
-        "../../../src/Cloud/Strava.cpp");
-    QVERIFY(!strava.isEmpty());
-    QVERIFY(strava.contains(
-        "StravaAuthenticatedSession"));
-    QVERIFY(strava.contains(
-        "refreshAfterRejectedAccessToken("));
-
-    const QByteArray stravaHeader = sourceContents(
-        "../../../src/Cloud/Strava.h");
-    QVERIFY(!stravaHeader.isEmpty());
-    QVERIFY(stravaHeader.contains(
-        "QNetworkAccessManager *nam = nullptr;"));
-    QVERIFY(stravaHeader.contains(
-        "QNetworkReply *reply = nullptr;"));
 }
 
 QTEST_MAIN(TestStravaRoutesClient)

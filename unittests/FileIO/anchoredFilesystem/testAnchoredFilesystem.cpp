@@ -711,11 +711,15 @@ class TestAnchoredFilesystem : public QObject
     Q_OBJECT
 
 private slots:
+    void persistentFingerprintIncludesImmutableGenerationEvidence();
     void rejectsUnsafeComponents_data();
     void rejectsUnsafeComponents();
     void rejectsUnsafeFileTypes();
     void pinsIdentityAndContentThroughOneHandle();
     void permitsConcurrentPinsOfOneIdentity();
+#ifdef Q_OS_LINUX
+    void fileGenerationGuardAnchorsWatchToPinnedFile();
+#endif
     void permitsOrdinaryQtReadsWhilePinned();
     void permitsOrdinaryQtReadsOfPinnedCopy();
     void newAtomicWriterHandsOffStagingPin();
@@ -825,6 +829,22 @@ private slots:
     void removeLegacyWindowsDeleteReportsPendingName();
     void syncsPinnedDirectory();
 };
+
+void TestAnchoredFilesystem::
+persistentFingerprintIncludesImmutableGenerationEvidence()
+{
+    const QByteArray reusedNativeKey("f:1:2");
+    const NativeIdentity original(
+        reusedNativeKey, 1, QByteArray("birth-generation-1"));
+    const NativeIdentity reused(
+        reusedNativeKey, 1, QByteArray("birth-generation-2"));
+
+    QVERIFY(original != reused);
+    QVERIFY(!original.persistentFingerprint().isEmpty());
+    QVERIFY(!reused.persistentFingerprint().isEmpty());
+    QVERIFY(original.persistentFingerprint()
+        != reused.persistentFingerprint());
+}
 
 void TestAnchoredFilesystem::rejectsUnsafeComponents_data()
 {
@@ -938,6 +958,67 @@ void TestAnchoredFilesystem::permitsConcurrentPinsOfOneIdentity()
         qPrintable(error));
     QCOMPARE(second.identity(), first.identity());
 }
+
+#ifdef Q_OS_LINUX
+void TestAnchoredFilesystem::fileGenerationGuardAnchorsWatchToPinnedFile()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const QString live = root.filePath(QStringLiteral("live"));
+    const QString malicious = root.filePath(QStringLiteral("malicious"));
+    const QString retainedLive =
+        root.filePath(QStringLiteral("retained-live"));
+    const QString retainedMalicious =
+        root.filePath(QStringLiteral("retained-malicious"));
+    QVERIFY(QDir().mkdir(live));
+    QVERIFY(QDir().mkdir(malicious));
+
+    const DirectoryAnchor directory = openDirectory(live);
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    writeFixture(source.displayPath(), QByteArray("trusted"));
+    writeFixture(
+        QDir(malicious).filePath(QStringLiteral("source")),
+        QByteArray("substitute"));
+    const PinnedFile pinned = pin(source);
+
+    bool beforeWatchReached = false;
+    bool watchInstalledReached = false;
+    filesystemAction = [&](const char *event,
+                           const QString &,
+                           const QString &) {
+        if (std::strcmp(
+                event,
+                "file-generation-guard-before-watch") == 0) {
+            QVERIFY(renameFixture(live, retainedLive));
+            QVERIFY(renameFixture(malicious, live));
+            beforeWatchReached = true;
+        } else if (std::strcmp(
+                       event,
+                       "file-generation-guard-watch-installed") == 0) {
+            QVERIFY(renameFixture(live, retainedMalicious));
+            QVERIFY(renameFixture(retainedLive, live));
+            watchInstalledReached = true;
+        }
+    };
+
+    FileGenerationGuard guard;
+    QString error;
+    QVERIFY2(
+        guardFileGeneration(source, pinned, guard, error),
+        qPrintable(error));
+    filesystemAction = {};
+    QVERIFY(beforeWatchReached);
+    QVERIFY(watchInstalledReached);
+
+    const QString retainedSource =
+        QDir(live).filePath(QStringLiteral("retained-source"));
+    QVERIFY(renameFixture(source.displayPath(), retainedSource));
+    writeFixture(source.displayPath(), QByteArray("replacement"));
+
+    QVERIFY(!guard.unchanged(error));
+    QVERIFY(!error.isEmpty());
+}
+#endif
 
 void TestAnchoredFilesystem::permitsOrdinaryQtReadsWhilePinned()
 {

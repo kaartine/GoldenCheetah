@@ -18,20 +18,40 @@
  */
 
 #include "TrainDB.h"
+#include "FileIO/AnchoredFileSystem.h"
 #include "AtomicFileWriter.h"
 #include "Library.h"
 
+#include <QByteArrayView>
 #include <QCryptographicHash>
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QRegularExpression>
 #include <QSet>
 #include <QSqlQueryModel>
+#include <QThread>
+#include <QUuid>
 
 #include <algorithm>
+#include <exception>
+#include <utility>
+
+struct TrainDatabaseFileGeneration
+{
+    QString path;
+    AnchoredFileSystem::DirectoryAnchor parent;
+    AnchoredFileSystem::EntryRef entry;
+    AnchoredFileSystem::PinnedFile file;
+    AnchoredFileSystem::FileGenerationGuard guard;
+};
 
 #ifdef GC_TRAIN_DB_TEST_HOOKS
 extern bool trainDbPlanImportCommitReportedFailure();
+#endif
+#ifdef GC_TRAIN_DB_PERSISTENCE_TEST_HOOKS
+extern void trainDbPlanImportPersistenceTestHook();
+extern void trainDbPlanImportPreOpenTestHook();
+extern void trainDbPlanImportOpenBoundaryTestHook(bool opened);
 #endif
 
 
@@ -134,6 +154,8 @@ const QString PlanImportJournalTable =
     QStringLiteral("plan_import_journal");
 const QString PlanImportWorkoutTable =
     QStringLiteral("plan_import_workout");
+const QString PlanImportReplacementTable =
+    QStringLiteral("plan_import_replacement");
 constexpr qsizetype MaximumPlanImportWorkouts = 4096;
 constexpr qint64 MaximumPlanImportWorkoutSize =
     64LL * 1024 * 1024;
@@ -148,17 +170,30 @@ bool validPlanImportId(const QString &id)
     return pattern.match(id).hasMatch();
 }
 
+bool validPlanJournalId(const QString &id)
+{
+    if (validPlanImportId(id)) return true;
+    static const QRegularExpression standalonePattern(QStringLiteral(
+        "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+        "[0-9a-f]{4}-[0-9a-f]{12}\\.[0-9a-f]{64}\\.[0-9a-f]{64}$"));
+    return standalonePattern.match(id).hasMatch();
+}
+
 bool validPlanImportTargetName(const QString &name)
 {
-    return atomicFileNameIsPortableComponent(name);
+    return atomicFileNameIsPortableComponent(name)
+        && !name.startsWith(
+            QStringLiteral(".gc-plan-import-"),
+            Qt::CaseInsensitive);
 }
 
 bool validatePlanImportJournal(
     const TrainDB::PlanImportJournal &journal,
+    bool payloadsPrevalidated,
     QString &error)
 {
     if (!validPlanImportId(journal.id)
-        || !validPlanImportId(journal.planJournalId)) {
+        || !validPlanJournalId(journal.planJournalId)) {
         error = QStringLiteral(
             "The plan import journal identifier is invalid");
         return false;
@@ -201,12 +236,39 @@ bool validatePlanImportJournal(
             return false;
         }
         aggregateSize += workout.contents.size();
-        const QByteArray digest = QCryptographicHash::hash(
-            workout.contents, QCryptographicHash::Sha256);
-        if (!workout.digest.isEmpty()
-            && workout.digest != digest) {
+        if (payloadsPrevalidated
+            && workout.digest.size()
+                != QCryptographicHash::hashLength(
+                    QCryptographicHash::Sha256)) {
+            error = QStringLiteral(
+                "The prepared plan import workout digest is invalid");
+            return false;
+        }
+        if (!payloadsPrevalidated
+            && !workout.digest.isEmpty()
+            && workout.digest != QCryptographicHash::hash(
+                workout.contents, QCryptographicHash::Sha256)) {
             error = QStringLiteral(
                 "The plan import workout digest is invalid");
+            return false;
+        }
+        if (workout.replaceExisting) {
+            if (workout.previousSize < 0
+                || workout.previousDigest.size()
+                    != QCryptographicHash::hashLength(
+                        QCryptographicHash::Sha256)
+                || workout.previousIdentity.size()
+                    != QCryptographicHash::hashLength(
+                        QCryptographicHash::Sha256)) {
+                error = QStringLiteral(
+                    "The plan import predecessor is invalid");
+                return false;
+            }
+        } else if (workout.previousSize != -1
+                   || !workout.previousDigest.isEmpty()
+                   || !workout.previousIdentity.isEmpty()) {
+            error = QStringLiteral(
+                "A create-only plan import has predecessor metadata");
             return false;
         }
     }
@@ -451,6 +513,281 @@ bool planImportTablesReady(
     return true;
 }
 
+bool planImportReplacementTableReady(
+    const QSqlDatabase &database,
+    bool create,
+    bool &available,
+    QString &error)
+{
+    available = false;
+    bool exists = false;
+    if (!planImportTableExists(
+            database, PlanImportReplacementTable, exists, error)) {
+        return false;
+    }
+    if (!exists && !create) return true;
+    if (!exists) {
+        QSqlQuery query(database);
+        if (!query.exec(QStringLiteral(
+                "CREATE TABLE plan_import_replacement ("
+                "journal_id TEXT NOT NULL,"
+                "sequence INTEGER NOT NULL,"
+                "previous_size INTEGER NOT NULL,"
+                "previous_digest BLOB NOT NULL,"
+                "previous_identity BLOB NOT NULL,"
+                "PRIMARY KEY(journal_id, sequence))"))) {
+            error = query.lastError().text();
+            return false;
+        }
+    }
+    if (!planImportTableHasLayout(
+            database, PlanImportReplacementTable,
+            {QStringLiteral("journal_id"),
+             QStringLiteral("sequence"),
+             QStringLiteral("previous_size"),
+             QStringLiteral("previous_digest"),
+             QStringLiteral("previous_identity")},
+            {QStringLiteral("journal_id"),
+             QStringLiteral("sequence")}, error)
+        || !planImportTableHasUniqueIndexes(
+            database, PlanImportReplacementTable,
+            {{QStringLiteral("journal_id"),
+              QStringLiteral("sequence")}}, error)) {
+        return false;
+    }
+    available = true;
+    return true;
+}
+
+bool planImportCancellationRequested(
+    const std::function<bool()> &cancelled)
+{
+    if (!cancelled) return false;
+    try {
+        return cancelled();
+    } catch (...) {
+        return true;
+    }
+}
+
+bool validatePreparedPlanImportPayloads(
+    const TrainDB::PlanImportJournal &journal,
+    const std::function<bool()> &cancelled,
+    QString &error)
+{
+    constexpr qsizetype ChunkSize = 256 * 1024;
+    for (const TrainDB::PlanImportWorkout &workout : journal.workouts) {
+        QCryptographicHash digest(QCryptographicHash::Sha256);
+        for (qsizetype offset = 0;
+             offset < workout.contents.size(); offset += ChunkSize) {
+            if (planImportCancellationRequested(cancelled)) {
+                error = QStringLiteral(
+                    "The plan import decision was cancelled");
+                return false;
+            }
+            const qsizetype size = qMin(
+                ChunkSize, workout.contents.size() - offset);
+            digest.addData(QByteArrayView(
+                workout.contents.constData() + offset, size));
+        }
+        if (workout.digest.size()
+                != QCryptographicHash::hashLength(
+                    QCryptographicHash::Sha256)
+            || digest.result() != workout.digest) {
+            error = QStringLiteral(
+                "A prepared plan import workout payload is invalid");
+            return false;
+        }
+    }
+    return true;
+}
+
+bool commitPlanImportJournalConnection(
+    QSqlDatabase database,
+    const TrainDB::PlanImportJournal &journal,
+    bool payloadsPrevalidated,
+    const std::function<bool()> &cancelled,
+    const std::function<bool(QString &)> &validateBeforeCommit,
+    bool &mayBeCommitted,
+    QString &error)
+{
+    mayBeCommitted = false;
+    if (payloadsPrevalidated
+        && !validatePreparedPlanImportPayloads(
+            journal, cancelled, error)) {
+        return false;
+    }
+    if (planImportCancellationRequested(cancelled)) {
+        error = QStringLiteral(
+            "The plan import decision was cancelled");
+        return false;
+    }
+    if (!database.transaction()) {
+        error = database.lastError().text();
+        return false;
+    }
+    const auto fail = [&](const QString &detail) {
+        error = detail;
+        database.rollback();
+        return false;
+    };
+    const auto cancelledFailure = [&] {
+        return fail(QStringLiteral(
+            "The plan import decision was cancelled"));
+    };
+
+    bool available = false;
+    bool replacementsAvailable = false;
+    if (!planImportTablesReady(
+            database, true, available, error)
+        || !available
+        || !planImportReplacementTableReady(
+            database, true, replacementsAvailable, error)
+        || !replacementsAvailable) {
+        return fail(error.isEmpty()
+            ? QStringLiteral(
+                "The plan import journal is unavailable")
+            : error);
+    }
+
+    QSqlQuery pendingQuery(database);
+    if (!pendingQuery.exec(QStringLiteral(
+            "SELECT id FROM plan_import_journal LIMIT 1"))) {
+        return fail(pendingQuery.lastError().text());
+    }
+    if (pendingQuery.next()) {
+        return fail(QStringLiteral(
+            "Another plan import must be recovered before a new import can start"));
+    }
+    if (planImportCancellationRequested(cancelled))
+        return cancelledFailure();
+
+    QSqlQuery journalQuery(database);
+    journalQuery.prepare(QStringLiteral(
+        "INSERT INTO plan_import_journal "
+        "(id, athlete_root, workout_root, plan_journal_id, created_at) "
+        "VALUES (:id, :athlete_root, :workout_root, "
+        ":plan_journal_id, :created_at)"));
+    journalQuery.bindValue(QStringLiteral(":id"), journal.id);
+    journalQuery.bindValue(
+        QStringLiteral(":athlete_root"), journal.athleteRoot);
+    journalQuery.bindValue(
+        QStringLiteral(":workout_root"), journal.workoutRoot);
+    journalQuery.bindValue(
+        QStringLiteral(":plan_journal_id"), journal.planJournalId);
+    journalQuery.bindValue(
+        QStringLiteral(":created_at"),
+        QDateTime::currentSecsSinceEpoch());
+    if (!journalQuery.exec())
+        return fail(journalQuery.lastError().text());
+
+    QSqlQuery workoutQuery(database);
+    workoutQuery.prepare(QStringLiteral(
+        "INSERT INTO plan_import_workout "
+        "(journal_id, sequence, target_name, size, digest, contents) "
+        "VALUES (:journal_id, :sequence, :target_name, "
+        ":size, :digest, :contents)"));
+    for (qsizetype index = 0;
+         index < journal.workouts.size(); ++index) {
+        if (planImportCancellationRequested(cancelled))
+            return cancelledFailure();
+        const TrainDB::PlanImportWorkout &workout =
+            journal.workouts.at(index);
+        const QByteArray digest = payloadsPrevalidated
+            ? workout.digest
+            : QCryptographicHash::hash(
+                workout.contents, QCryptographicHash::Sha256);
+        workoutQuery.bindValue(
+            QStringLiteral(":journal_id"), journal.id);
+        workoutQuery.bindValue(
+            QStringLiteral(":sequence"), index);
+        workoutQuery.bindValue(
+            QStringLiteral(":target_name"),
+            workout.targetFileName);
+        workoutQuery.bindValue(
+            QStringLiteral(":size"), workout.contents.size());
+        workoutQuery.bindValue(
+            QStringLiteral(":digest"), digest);
+        workoutQuery.bindValue(
+            QStringLiteral(":contents"), workout.contents);
+#ifdef GC_TRAIN_DB_PERSISTENCE_TEST_HOOKS
+        trainDbPlanImportPersistenceTestHook();
+#endif
+        if (!workoutQuery.exec())
+            return fail(workoutQuery.lastError().text());
+        workoutQuery.finish();
+    }
+
+    QSqlQuery replacementQuery(database);
+    replacementQuery.prepare(QStringLiteral(
+        "INSERT INTO plan_import_replacement "
+        "(journal_id, sequence, previous_size, previous_digest, "
+        "previous_identity) "
+        "VALUES (:journal_id, :sequence, :previous_size, "
+        ":previous_digest, :previous_identity)"));
+    for (qsizetype index = 0;
+         index < journal.workouts.size(); ++index) {
+        if (planImportCancellationRequested(cancelled))
+            return cancelledFailure();
+        const TrainDB::PlanImportWorkout &workout =
+            journal.workouts.at(index);
+        if (!workout.replaceExisting) continue;
+        replacementQuery.bindValue(
+            QStringLiteral(":journal_id"), journal.id);
+        replacementQuery.bindValue(
+            QStringLiteral(":sequence"), index);
+        replacementQuery.bindValue(
+            QStringLiteral(":previous_size"), workout.previousSize);
+        replacementQuery.bindValue(
+            QStringLiteral(":previous_digest"), workout.previousDigest);
+        replacementQuery.bindValue(
+            QStringLiteral(":previous_identity"), workout.previousIdentity);
+        if (!replacementQuery.exec())
+            return fail(replacementQuery.lastError().text());
+        replacementQuery.finish();
+    }
+    if (planImportCancellationRequested(cancelled))
+        return cancelledFailure();
+    if (validateBeforeCommit) {
+        bool valid = false;
+        try {
+            valid = validateBeforeCommit(error);
+        } catch (const QString &detail) {
+            error = detail;
+        } catch (const std::exception &exception) {
+            error = QString::fromLocal8Bit(exception.what());
+        } catch (...) {
+            error = QStringLiteral(
+                "The plan import pre-commit validation failed");
+        }
+        if (!valid) {
+            return fail(error.isEmpty()
+                ? QStringLiteral(
+                    "The plan import pre-commit validation failed")
+                : error);
+        }
+    }
+
+    mayBeCommitted = true;
+    bool commitSucceeded = database.commit();
+#ifdef GC_TRAIN_DB_TEST_HOOKS
+    if (commitSucceeded
+        && trainDbPlanImportCommitReportedFailure()) {
+        commitSucceeded = false;
+    }
+#endif
+    if (!commitSucceeded) {
+        const QString detail = database.lastError().text();
+        if (database.rollback()) mayBeCommitted = false;
+        error = detail.isEmpty()
+            ? QStringLiteral(
+                "The plan import decision commit state is uncertain")
+            : detail;
+        return false;
+    }
+    return true;
+}
+
 void protectDatabaseFromWrites(const QSqlDatabase &database)
 {
     QSqlQuery query(database);
@@ -476,9 +813,34 @@ workoutModelZoneIndex
 
 
 TrainDB::TrainDB
-(QDir home): home(home), sessionid("train")
+(QDir home)
+    : TrainDB(std::move(home), QStringLiteral("train"), true)
+{
+}
+
+
+TrainDB::TrainDB
+(QDir home, QString sessionId, bool interactiveErrors)
+    : home(std::move(home)),
+      db(nullptr),
+      sessionid(std::move(sessionId)),
+      interactiveErrors(interactiveErrors)
 {
     initDatabase();
+}
+
+
+TrainDB::TrainDB
+(QDir home,
+ QString sessionId,
+ bool interactiveErrors,
+ std::shared_ptr<TrainDatabaseFileGeneration> databaseGeneration)
+    : home(std::move(home)),
+      db(nullptr),
+      sessionid(std::move(sessionId)),
+      interactiveErrors(interactiveErrors)
+{
+    initDatabase(databaseGeneration);
 }
 
 
@@ -543,7 +905,15 @@ QSqlDatabase
 TrainDB::connection
 () const
 {
-    return db->database(sessionid);
+    return QSqlDatabase::database(sessionid, false);
+}
+
+
+QString
+TrainDB::databaseFilePath
+() const
+{
+    return home.canonicalPath() + QStringLiteral("/trainDB");
 }
 
 
@@ -557,26 +927,77 @@ TrainDB::closeConnection
 
 void
 TrainDB::initDatabase
-()
+(const std::shared_ptr<TrainDatabaseFileGeneration> &databaseGeneration)
 {
-    if (connection().isOpen()) return;
+    if (db && connection().isOpen()) return;
 
     // get a connection
     db = new QSqlDatabase(QSqlDatabase::addDatabase("QSQLITE", sessionid));
-    db->setDatabaseName(home.canonicalPath() + "/trainDB");
+    const QString logicalPath = databaseFilePath();
+    QString accessPath = logicalPath;
+    QString generationError;
+    if (databaseGeneration) {
+        if (!databaseFileGenerationMatches(
+                logicalPath, databaseGeneration, generationError)) {
+            currentSchemaStatus = SchemaStatus::readError;
+            qWarning() << "TrainDB: database generation is unavailable"
+                       << generationError;
+            return;
+        }
+#ifdef GC_TRAIN_DB_PERSISTENCE_TEST_HOOKS
+        trainDbPlanImportPreOpenTestHook();
+#endif
+        if (!databaseFileGenerationMatches(
+                logicalPath, databaseGeneration, generationError)
+            || !databaseGeneration->entry.stableAccessPath(
+                accessPath, generationError)
+            || !databaseFileGenerationMatches(
+                logicalPath, databaseGeneration, generationError)) {
+            currentSchemaStatus = SchemaStatus::readError;
+            qWarning() << "TrainDB: database changed before open"
+                       << generationError;
+            return;
+        }
+    }
+    db->setDatabaseName(accessPath);
+#ifdef GC_TRAIN_DB_PERSISTENCE_TEST_HOOKS
+    if (databaseGeneration)
+        trainDbPlanImportOpenBoundaryTestHook(false);
+#endif
+    const bool opened = db->open();
+#ifdef GC_TRAIN_DB_PERSISTENCE_TEST_HOOKS
+    if (databaseGeneration)
+        trainDbPlanImportOpenBoundaryTestHook(true);
+#endif
 
-    if (connection().isOpen()) {
+    if (opened) {
+        if (databaseGeneration
+            && !databaseFileGenerationMatches(
+                logicalPath, databaseGeneration, generationError)) {
+            db->close();
+            currentSchemaStatus = SchemaStatus::readError;
+            qWarning() << "TrainDB: database changed while opening"
+                       << generationError;
+            return;
+        }
         createDatabase();
     } else {
         currentSchemaStatus = SchemaStatus::readError;
-        QMessageBox::critical(0,
-                              qApp->translate("TrainDB","Cannot open database"),
-                              qApp->translate("TrainDB","Unable to establish a database connection.\n"
-                                              "This feature requires SQLite support. Please read "
-                                              "the Qt SQL driver documentation for information how "
-                                              "to build it.\n\n"
-                                              "Click Cancel to exit."),
-                              QMessageBox::Cancel);
+        if (interactiveErrors
+            && qApp
+            && QThread::currentThread() == qApp->thread()) {
+            QMessageBox::critical(0,
+                                  qApp->translate("TrainDB","Cannot open database"),
+                                  qApp->translate("TrainDB","Unable to establish a database connection.\n"
+                                                  "This feature requires SQLite support. Please read "
+                                                  "the Qt SQL driver documentation for information how "
+                                                  "to build it.\n\n"
+                                                  "Click Cancel to exit."),
+                                  QMessageBox::Cancel);
+        } else {
+            qWarning() << "TrainDB: cannot open worker database"
+                       << db->lastError();
+        }
     }
 }
 
@@ -1624,7 +2045,9 @@ bool
 TrainDB::startLUW
 ()
 {
-    return connection().transaction();
+    if (luwActive || !connection().transaction()) return false;
+    luwActive = true;
+    return true;
 }
 
 
@@ -1632,8 +2055,10 @@ bool
 TrainDB::endLUW
 ()
 {
+    if (!luwActive) return false;
     const bool committed = connection().commit();
     if (committed) {
+        luwActive = false;
         emit dataChanged();
     }
     return committed;
@@ -1645,12 +2070,44 @@ TrainDB::rollbackLUW
 ()
 {
     connection().rollback();
+    luwActive = false;
+}
+
+
+bool
+TrainDB::hasActiveLUW
+() const
+{
+    return luwActive;
 }
 
 
 bool
 TrainDB::commitPlanImportJournal
 (const PlanImportJournal &journal,
+ bool &mayBeCommitted,
+ QString &error) const
+{
+    return commitPlanImportJournalImpl(
+        journal, false, mayBeCommitted, error);
+}
+
+
+bool
+TrainDB::commitPreparedPlanImportJournal
+(const PlanImportJournal &journal,
+ bool &mayBeCommitted,
+ QString &error) const
+{
+    return commitPlanImportJournalImpl(
+        journal, true, mayBeCommitted, error);
+}
+
+
+bool
+TrainDB::commitPlanImportJournalImpl
+(const PlanImportJournal &journal,
+ bool payloadsPrevalidated,
  bool &mayBeCommitted,
  QString &error) const
 {
@@ -1662,108 +2119,255 @@ TrainDB::commitPlanImportJournal
             "The workout database is unavailable for plan import");
         return false;
     }
-    if (!validatePlanImportJournal(journal, error))
+    if (!validatePlanImportJournal(
+            journal, payloadsPrevalidated, error))
         return false;
+
+    return commitPlanImportJournalConnection(
+        connection(), journal, payloadsPrevalidated,
+        {}, {}, mayBeCommitted, error);
+}
+
+
+bool
+TrainDB::commitPreparedPlanImportJournalAtPath
+(const QString &databasePath,
+ const PlanImportJournal &journal,
+ const std::function<bool()> &cancelled,
+ bool &mayBeCommitted,
+ QString &error,
+ const std::function<bool(QString &)> &validateBeforeCommit)
+{
+    const auto generation = captureDatabaseFileGeneration(
+        databasePath, error);
+    if (!generation) {
+        mayBeCommitted = false;
+        return false;
+    }
+    return commitPreparedPlanImportJournalAtPath(
+        databasePath, journal, cancelled, generation,
+        mayBeCommitted, error, validateBeforeCommit);
+}
+
+
+bool
+TrainDB::commitPreparedPlanImportJournalAtPath
+(const QString &databasePath,
+ const PlanImportJournal &journal,
+ const std::function<bool()> &cancelled,
+ const std::shared_ptr<TrainDatabaseFileGeneration> &databaseGeneration,
+ bool &mayBeCommitted,
+ QString &error,
+ const std::function<bool(QString &)> &validateBeforeCommit)
+{
+    mayBeCommitted = false;
+    error.clear();
+    const QFileInfo databaseInfo(databasePath);
+    if (!databaseInfo.isAbsolute()
+        || databaseInfo.fileName() != QStringLiteral("trainDB")
+        || !validatePlanImportJournal(journal, true, error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The workout database path is invalid");
+        }
+        return false;
+    }
+
+    if (!databaseGeneration
+        || !databaseFileGenerationMatches(
+            databaseInfo.absoluteFilePath(), databaseGeneration, error)) {
+        return false;
+    }
+
+#ifdef GC_TRAIN_DB_PERSISTENCE_TEST_HOOKS
+    trainDbPlanImportPreOpenTestHook();
+#endif
+    QString databaseAccessPath;
+    if (!databaseFileGenerationMatches(
+            databaseInfo.absoluteFilePath(), databaseGeneration, error)
+        || !databaseGeneration->entry.stableAccessPath(
+            databaseAccessPath, error)
+        || !databaseFileGenerationMatches(
+            databaseInfo.absoluteFilePath(), databaseGeneration, error)) {
+        return false;
+    }
+
+    const QString connectionName = QStringLiteral("plan-import-worker-%1")
+        .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    bool result = false;
+    {
+        QSqlDatabase database = QSqlDatabase::addDatabase(
+            QStringLiteral("QSQLITE"), connectionName);
+        database.setDatabaseName(databaseAccessPath);
+        database.setConnectOptions(QStringLiteral("QSQLITE_BUSY_TIMEOUT=5000"));
+#ifdef GC_TRAIN_DB_PERSISTENCE_TEST_HOOKS
+        trainDbPlanImportOpenBoundaryTestHook(false);
+#endif
+        const bool opened = database.open();
+#ifdef GC_TRAIN_DB_PERSISTENCE_TEST_HOOKS
+        trainDbPlanImportOpenBoundaryTestHook(true);
+#endif
+        if (!opened) {
+            error = database.lastError().text();
+        } else if (!databaseFileGenerationMatches(
+                       databaseInfo.absoluteFilePath(),
+                       databaseGeneration, error)) {
+            database.close();
+        } else {
+            const auto validateGenerationAndCaller =
+                [&databaseInfo,
+                 &databaseGeneration,
+                 &validateBeforeCommit](QString &validationError) {
+                    if (databaseGeneration
+                        && !TrainDB::databaseFileGenerationMatches(
+                            databaseInfo.absoluteFilePath(),
+                            databaseGeneration, validationError)) {
+                        return false;
+                    }
+                    return !validateBeforeCommit
+                        || validateBeforeCommit(validationError);
+                };
+            result = commitPlanImportJournalConnection(
+                database, journal, true, cancelled,
+                validateGenerationAndCaller, mayBeCommitted, error);
+            database.close();
+            if (result
+                && !databaseFileGenerationMatches(
+                    databaseInfo.absoluteFilePath(),
+                    databaseGeneration, error)) {
+                result = false;
+            }
+        }
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+    return result;
+}
+
+
+std::shared_ptr<TrainDatabaseFileGeneration>
+TrainDB::captureDatabaseFileGeneration
+(const QString &databasePath, QString &error)
+{
+    error.clear();
+    const QFileInfo info(databasePath);
+    if (!info.isAbsolute()
+        || info.fileName() != QStringLiteral("trainDB")) {
+        error = QStringLiteral("The workout database path is invalid");
+        return {};
+    }
+    auto generation = std::make_shared<TrainDatabaseFileGeneration>();
+    generation->path = info.absoluteFilePath();
+    if (!AnchoredFileSystem::DirectoryAnchor::open(
+            info.absolutePath(), generation->parent, error)
+        || !generation->parent.pathMatches(error)) {
+        return {};
+    }
+    generation->entry = generation->parent.entry(
+        info.fileName(), error);
+    if (!generation->entry.isValid()
+        || !AnchoredFileSystem::pinRegularFileIdentity(
+            generation->entry, generation->file, error)
+        || !AnchoredFileSystem::guardFileGeneration(
+            generation->entry, generation->file,
+            generation->guard, error)) {
+        return {};
+    }
+    bool matches = false;
+    if (!AnchoredFileSystem::entryIdentityMatches(
+            generation->entry, generation->file, matches, error)
+        || !matches || !generation->parent.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The workout database generation changed");
+        }
+        return {};
+    }
+    return generation;
+}
+
+
+bool
+TrainDB::databaseFileGenerationMatches
+(const QString &databasePath,
+ const std::shared_ptr<TrainDatabaseFileGeneration> &generation,
+ QString &error)
+{
+    error.clear();
+    if (!generation
+        || QFileInfo(databasePath).absoluteFilePath()
+            != generation->path
+        || !generation->parent.isValid()
+        || !generation->entry.isValid()
+        || !generation->file.isValid()
+        || !generation->parent.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The workout database generation is unavailable");
+        }
+        return false;
+    }
+    if (!generation->guard.unchanged(error)) {
+        error = QStringLiteral(
+            "The workout database generation changed: %1")
+                .arg(error);
+        return false;
+    }
+    bool matches = false;
+    if (!AnchoredFileSystem::entryIdentityMatches(
+            generation->entry, generation->file, matches, error)
+        || !matches || !generation->parent.pathMatches(error)) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The workout database generation changed");
+        }
+        return false;
+    }
+    return true;
+}
+
+
+QByteArray TrainDB::databaseFileGenerationFingerprint(
+    const std::shared_ptr<TrainDatabaseFileGeneration> &generation)
+{
+    return generation && generation->file.isValid()
+        ? generation->file.identity().persistentFingerprint()
+        : QByteArray();
+}
+
+
+bool
+TrainDB::planImportJournalExists
+(const QString &athleteRoot,
+ bool &found,
+ QString &error) const
+{
+    found = false;
+    error.clear();
+    if (currentSchemaStatus != SchemaStatus::current
+        && currentSchemaStatus != SchemaStatus::migrationReady) {
+        error = QStringLiteral(
+            "The workout database is unavailable for plan recovery");
+        return false;
+    }
 
     QSqlDatabase database = connection();
-    if (!database.transaction()) {
-        error = database.lastError().text();
-        return false;
-    }
-    const auto fail = [&](const QString &detail) {
-        error = detail;
-        database.rollback();
-        return false;
-    };
-
     bool available = false;
     if (!planImportTablesReady(
-            database, true, available, error)
-        || !available) {
-        return fail(error.isEmpty()
-            ? QStringLiteral(
-                "The plan import journal is unavailable")
-            : error);
-    }
-
-    QSqlQuery pendingQuery(database);
-    if (!pendingQuery.exec(QStringLiteral(
-            "SELECT id FROM plan_import_journal LIMIT 1"))) {
-        return fail(pendingQuery.lastError().text());
-    }
-    if (pendingQuery.next()) {
-        return fail(QStringLiteral(
-            "Another plan import must be recovered before a new import can start"));
-    }
-
-    QSqlQuery journalQuery(database);
-    journalQuery.prepare(QStringLiteral(
-        "INSERT INTO plan_import_journal "
-        "(id, athlete_root, workout_root, plan_journal_id, created_at) "
-        "VALUES (:id, :athlete_root, :workout_root, "
-        ":plan_journal_id, :created_at)"));
-    journalQuery.bindValue(QStringLiteral(":id"), journal.id);
-    journalQuery.bindValue(
-        QStringLiteral(":athlete_root"), journal.athleteRoot);
-    journalQuery.bindValue(
-        QStringLiteral(":workout_root"), journal.workoutRoot);
-    journalQuery.bindValue(
-        QStringLiteral(":plan_journal_id"),
-        journal.planJournalId);
-    journalQuery.bindValue(
-        QStringLiteral(":created_at"),
-        QDateTime::currentSecsSinceEpoch());
-    if (!journalQuery.exec())
-        return fail(journalQuery.lastError().text());
-
-    QSqlQuery workoutQuery(database);
-    workoutQuery.prepare(QStringLiteral(
-        "INSERT INTO plan_import_workout "
-        "(journal_id, sequence, target_name, size, digest, contents) "
-        "VALUES (:journal_id, :sequence, :target_name, "
-        ":size, :digest, :contents)"));
-    for (qsizetype index = 0;
-         index < journal.workouts.size(); ++index) {
-        const PlanImportWorkout &workout =
-            journal.workouts.at(index);
-        const QByteArray digest = QCryptographicHash::hash(
-            workout.contents, QCryptographicHash::Sha256);
-        workoutQuery.bindValue(
-            QStringLiteral(":journal_id"), journal.id);
-        workoutQuery.bindValue(
-            QStringLiteral(":sequence"), index);
-        workoutQuery.bindValue(
-            QStringLiteral(":target_name"),
-            workout.targetFileName);
-        workoutQuery.bindValue(
-            QStringLiteral(":size"), workout.contents.size());
-        workoutQuery.bindValue(
-            QStringLiteral(":digest"), digest);
-        workoutQuery.bindValue(
-            QStringLiteral(":contents"), workout.contents);
-        if (!workoutQuery.exec())
-            return fail(workoutQuery.lastError().text());
-        workoutQuery.finish();
-    }
-
-    mayBeCommitted = true;
-    bool commitSucceeded = database.commit();
-#ifdef GC_TRAIN_DB_TEST_HOOKS
-    if (commitSucceeded
-        && trainDbPlanImportCommitReportedFailure()) {
-        commitSucceeded = false;
-    }
-#endif
-    if (!commitSucceeded) {
-        const QString detail = database.lastError().text();
-        if (database.rollback())
-            mayBeCommitted = false;
-        error = detail.isEmpty()
-            ? QStringLiteral(
-                "The plan import decision commit state is uncertain")
-            : detail;
+            database, false, available, error)) {
         return false;
     }
+    if (!available) return true;
+
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral(
+        "SELECT id FROM plan_import_journal "
+        "WHERE athlete_root = :athlete_root LIMIT 1"));
+    query.bindValue(QStringLiteral(":athlete_root"), athleteRoot);
+    if (!query.exec()) {
+        error = query.lastError().text();
+        return false;
+    }
+    found = query.next();
     return true;
 }
 
@@ -1792,6 +2396,11 @@ TrainDB::loadPlanImportJournal
         return false;
     }
     if (!available) return true;
+    bool replacementsAvailable = false;
+    if (!planImportReplacementTableReady(
+            database, false, replacementsAvailable, error)) {
+        return false;
+    }
 
     QSqlQuery journalQuery(database);
     journalQuery.prepare(QStringLiteral(
@@ -1857,9 +2466,11 @@ TrainDB::loadPlanImportJournal
             return false;
         }
         aggregateSize += storedSize;
-        loaded.workouts.append({
-            workoutQuery.value(1).toString(),
-            contents, digest});
+        PlanImportWorkout workout;
+        workout.targetFileName = workoutQuery.value(1).toString();
+        workout.contents = contents;
+        workout.digest = digest;
+        loaded.workouts.append(std::move(workout));
         if (loaded.workouts.size()
             > MaximumPlanImportWorkouts) {
             error = QStringLiteral(
@@ -1868,7 +2479,53 @@ TrainDB::loadPlanImportJournal
         }
         ++expectedSequence;
     }
-    if (!validatePlanImportJournal(loaded, error))
+    if (replacementsAvailable) {
+        QSqlQuery replacements(database);
+        replacements.prepare(QStringLiteral(
+            "SELECT sequence, previous_size, previous_digest, "
+            "previous_identity "
+            "FROM plan_import_replacement "
+            "WHERE journal_id = :journal_id ORDER BY sequence"));
+        replacements.bindValue(
+            QStringLiteral(":journal_id"), loaded.id);
+        if (!replacements.exec()) {
+            error = replacements.lastError().text();
+            return false;
+        }
+        QSet<qsizetype> seen;
+        while (replacements.next()) {
+            bool sequenceValid = false;
+            bool sizeValid = false;
+            const qlonglong sequence = replacements.value(0).toLongLong(
+                &sequenceValid);
+            const qlonglong previousSize = replacements.value(1).toLongLong(
+                &sizeValid);
+            const QByteArray previousDigest = replacements.value(2).toByteArray();
+            const QByteArray previousIdentity =
+                replacements.value(3).toByteArray();
+            if (!sequenceValid || sequence < 0
+                || sequence >= loaded.workouts.size()
+                || seen.contains(qsizetype(sequence))
+                || !sizeValid || previousSize < 0
+                || previousDigest.size()
+                    != QCryptographicHash::hashLength(
+                        QCryptographicHash::Sha256)
+                || previousIdentity.size()
+                    != QCryptographicHash::hashLength(
+                        QCryptographicHash::Sha256)) {
+                error = QStringLiteral(
+                    "A plan import predecessor is invalid");
+                return false;
+            }
+            seen.insert(qsizetype(sequence));
+            PlanImportWorkout &workout = loaded.workouts[qsizetype(sequence)];
+            workout.replaceExisting = true;
+            workout.previousSize = previousSize;
+            workout.previousDigest = previousDigest;
+            workout.previousIdentity = previousIdentity;
+        }
+    }
+    if (!validatePlanImportJournal(loaded, true, error))
         return false;
 
     journal = std::move(loaded);
@@ -1897,6 +2554,22 @@ TrainDB::removePlanImportJournal
         error = QStringLiteral(
             "The plan import journal is unavailable");
         return false;
+    }
+
+    bool replacementsAvailable = false;
+    if (!planImportReplacementTableReady(
+            database, false, replacementsAvailable, error)) {
+        return false;
+    }
+    if (replacementsAvailable) {
+        QSqlQuery replacements(database);
+        replacements.prepare(QStringLiteral(
+            "DELETE FROM plan_import_replacement WHERE journal_id = :id"));
+        replacements.bindValue(QStringLiteral(":id"), id);
+        if (!replacements.exec()) {
+            error = replacements.lastError().text();
+            return false;
+        }
     }
 
     QSqlQuery workouts(database);

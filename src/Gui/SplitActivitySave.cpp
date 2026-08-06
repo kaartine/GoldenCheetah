@@ -901,7 +901,7 @@ bool identityFromJson(
             "A split journal identity is invalid");
         return false;
     }
-    identity = AnchoredFileSystem::NativeIdentity(key, 1);
+    identity = AnchoredFileSystem::NativeIdentity(key, 1, {});
     return true;
 }
 
@@ -1737,14 +1737,31 @@ bool pinResolvedFile(
     return true;
 }
 
+bool recordedIdentityMatches(
+    const AnchoredFileSystem::NativeIdentity &observed,
+    const AnchoredFileSystem::NativeIdentity &recorded)
+{
+    return observed.isValid()
+        && recorded.isValid()
+        && observed.serializedKey() == recorded.serializedKey();
+}
+
 bool identityMatchesOneOf(
     const AnchoredFileSystem::NativeIdentity &observed,
     const AnchoredFileSystem::NativeIdentity &first,
     const AnchoredFileSystem::NativeIdentity &second =
-        AnchoredFileSystem::NativeIdentity())
+        AnchoredFileSystem::NativeIdentity(),
+    bool recorded = false)
 {
-    return observed == first
-        || (second.isValid() && observed == second);
+    const auto matches = [recorded](
+            const AnchoredFileSystem::NativeIdentity &left,
+            const AnchoredFileSystem::NativeIdentity &right) {
+        return recorded
+            ? recordedIdentityMatches(left, right)
+            : left == right;
+    };
+    return matches(observed, first)
+        || (second.isValid() && matches(observed, second));
 }
 
 bool pinExpectedResolvedFile(
@@ -1764,7 +1781,8 @@ bool pinExpectedResolvedFile(
     }
     if (!exists) return true;
     if (!identityMatchesOneOf(
-            file->identity(), firstIdentity, secondIdentity)
+            file->identity(), firstIdentity, secondIdentity,
+            !requiredGeneration.isEmpty())
         || (!requiredGeneration.isEmpty()
             && (file->durableGeneration().isEmpty()
                 || file->durableGeneration() != requiredGeneration))
@@ -2124,7 +2142,10 @@ bool pinExpectedRemovalQuarantine(
             budget ? budget->maximumFor(contents.size)
                    : std::min(contents.size, MaximumSplitPayloadSize),
             readControl)
-        || candidate->identity() != identity
+        || (requiredGeneration.isEmpty()
+            ? candidate->identity() != identity
+            : !recordedIdentityMatches(
+                  candidate->identity(), identity))
         || (!requiredGeneration.isEmpty()
             && candidate->durableGeneration()
                 != requiredGeneration)
@@ -2350,7 +2371,8 @@ bool cleanupSplitJournal(
         if (!pinned
             || !exists
             || (isPayload
-                && (current->identity() != expected->identity
+                && (!recordedIdentityMatches(
+                        current->identity(), expected->identity)
                     || current->durableGeneration() != expected->generation
                     || current->size() != expected->contents.size
                     || current->sha256() != expected->contents.digest))) {
@@ -2749,8 +2771,9 @@ bool rollbackSplitTransaction(
             return false;
         }
         if (backupExists) {
-            if (backup->identity()
-                    == manifest.source.archiveStageIdentity
+            if (recordedIdentityMatches(
+                    backup->identity(),
+                    manifest.source.archiveStageIdentity)
                 && backup->durableGeneration()
                     == manifest.source.archiveStageGeneration
                 && backup->size() == manifest.source.contents.size
@@ -2758,8 +2781,9 @@ bool rollbackSplitTransaction(
                     == manifest.source.contents.digest) {
                 backupGeneration = SplitBackupGeneration::Source;
             } else if (manifest.backup.exists
-                && backup->identity()
-                    == manifest.backup.originalIdentity
+                && recordedIdentityMatches(
+                    backup->identity(),
+                    manifest.backup.originalIdentity)
                 && backup->durableGeneration()
                     == manifest.backup.originalGeneration
                 && backup->size() == manifest.backup.contents.size
@@ -3164,8 +3188,8 @@ bool retireCommittedIdentityIfCurrent(
             return false;
         }
         if (pinned) {
-            if (file->identity() == identity
-                && !generation.isEmpty()
+            if (!generation.isEmpty()
+                && recordedIdentityMatches(file->identity(), identity)
                 && file->durableGeneration() == generation
                 && file->size() == contents.size
                 && file->sha256() == contents.digest) {
@@ -3467,8 +3491,9 @@ bool completeForwardSplitTransaction(
         SplitBackupGeneration generation =
             SplitBackupGeneration::Absent;
         if (backupExists) {
-            if (backup->identity()
-                    == manifest.source.archiveStageIdentity
+            if (recordedIdentityMatches(
+                    backup->identity(),
+                    manifest.source.archiveStageIdentity)
                 && backup->durableGeneration()
                     == manifest.source.archiveStageGeneration
                 && backup->size() == manifest.source.contents.size
@@ -3476,8 +3501,9 @@ bool completeForwardSplitTransaction(
                     == manifest.source.contents.digest) {
                 generation = SplitBackupGeneration::Source;
             } else if (manifest.backup.exists
-                && backup->identity()
-                    == manifest.backup.originalIdentity
+                && recordedIdentityMatches(
+                    backup->identity(),
+                    manifest.backup.originalIdentity)
                 && backup->durableGeneration()
                     == manifest.backup.originalGeneration
                 && backup->size() == manifest.backup.contents.size
@@ -3486,13 +3512,15 @@ bool completeForwardSplitTransaction(
                 generation = SplitBackupGeneration::Prior;
             } else {
                 const bool reusedGeneration =
-                    (backup->identity()
-                            == manifest.source.archiveStageIdentity
+                    (recordedIdentityMatches(
+                            backup->identity(),
+                            manifest.source.archiveStageIdentity)
                         && backup->durableGeneration()
                             != manifest.source.archiveStageGeneration)
                     || (manifest.backup.exists
-                        && backup->identity()
-                            == manifest.backup.originalIdentity
+                        && recordedIdentityMatches(
+                            backup->identity(),
+                            manifest.backup.originalIdentity)
                         && backup->durableGeneration()
                             != manifest.backup.originalGeneration);
                 error = reusedGeneration

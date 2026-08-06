@@ -105,24 +105,38 @@ bool hasGpxContentType(const QString &contentType)
         || mediaType == QStringLiteral("application/octet-stream");
 }
 
-bool isValidGpx(const QByteArray &payload)
+enum class GpxValidationResult {
+    valid,
+    invalid,
+    cancelled
+};
+
+GpxValidationResult validateGpx(
+    const QByteArray &payload,
+    const StravaRoutesClient::CancellationCheck &cancelled)
 {
     QXmlStreamReader reader(payload);
     bool sawRoot = false;
     while (!reader.atEnd()) {
+        if (cancellationRequested(cancelled))
+            return GpxValidationResult::cancelled;
         reader.readNext();
         if (reader.tokenType()
             == QXmlStreamReader::DTD) {
-            return false;
+            return GpxValidationResult::invalid;
         }
         if (!sawRoot && reader.isStartElement()) {
             sawRoot =
                 reader.name() == QStringLiteral("gpx");
             if (!sawRoot)
-                return false;
+                return GpxValidationResult::invalid;
         }
     }
-    return sawRoot && !reader.hasError();
+    if (cancellationRequested(cancelled))
+        return GpxValidationResult::cancelled;
+    return sawRoot && !reader.hasError()
+        ? GpxValidationResult::valid
+        : GpxValidationResult::invalid;
 }
 
 StravaRoutesClient::PayloadResult payloadFailure(
@@ -359,9 +373,15 @@ StravaRoutesClient::downloadGpx(
             MaximumGpxPayload, cancelled);
     if (!response.isValid())
         return payloadFailure(response.error);
-    if (response.payload.isEmpty()
+    const GpxValidationResult validation = response.payload.isEmpty()
         || !hasGpxContentType(response.contentType)
-        || !isValidGpx(response.payload)) {
+        ? GpxValidationResult::invalid
+        : validateGpx(response.payload, cancelled);
+    if (validation == GpxValidationResult::cancelled) {
+        return payloadFailure(QStringLiteral(
+            "Strava GPX validation was cancelled."));
+    }
+    if (validation != GpxValidationResult::valid) {
         return payloadFailure(QStringLiteral(
             "Strava returned an invalid GPX response."));
     }

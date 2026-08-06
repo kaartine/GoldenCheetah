@@ -532,12 +532,17 @@ using AtomicMoveFunction = std::function<bool(
 class ReplaceAtomicFileWriter final : public AtomicFileWriter
 {
 public:
-    explicit ReplaceAtomicFileWriter(const QString &targetPath)
+    explicit ReplaceAtomicFileWriter(
+        const QString &targetPath,
+        qint64 expectedSize = -1,
+        QByteArray expectedDigest = {})
         : targetPath_(targetPath),
           file_(std::make_unique<QTemporaryFile>(
               QDir(QFileInfo(targetPath).absolutePath()).filePath(
-                  QStringLiteral(".%1.XXXXXX.tmp")
-                      .arg(QFileInfo(targetPath).fileName()))))
+                      QStringLiteral(".%1.XXXXXX.tmp")
+                      .arg(QFileInfo(targetPath).fileName())))),
+          expectedSize_(expectedSize),
+          expectedDigest_(std::move(expectedDigest))
     {
     }
 
@@ -561,6 +566,13 @@ public:
             error_ = QStringLiteral(
                 "Cannot pin the existing atomic replacement target: %1")
                          .arg(error_);
+            return false;
+        }
+        if (expectedSize_ >= 0
+            && (expectedTarget_.size() != expectedSize_
+                || expectedTarget_.sha256() != expectedDigest_)) {
+            error_ = QStringLiteral(
+                "The existing atomic replacement target changed");
             return false;
         }
         if (!file_ || !file_->open()) {
@@ -736,6 +748,8 @@ private:
     AnchoredFileSystem::PinnedFile expectedTarget_;
     QCryptographicHash stagedHash_{QCryptographicHash::Sha256};
     qint64 stagedSize_ = 0;
+    qint64 expectedSize_ = -1;
+    QByteArray expectedDigest_;
 };
 
 #ifdef Q_OS_UNIX

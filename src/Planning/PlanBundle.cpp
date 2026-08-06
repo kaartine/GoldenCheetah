@@ -171,10 +171,14 @@ bool validateWorkoutFile(
     Context *context,
     QString &error)
 {
-    ErgFile workout(path, ErgFileFormat::unknown, context);
-    if (!workout.isValid()) {
-        error = QObject::tr("Workout %1 is invalid")
-                    .arg(QFileInfo(path).fileName());
+    std::unique_ptr<ErgFile> workout(ErgFile::fromContentBytes(
+        expectedContents, path,
+        ErgFileFormat::unknown, context, error));
+    if (!workout) {
+        if (error.isEmpty()) {
+            error = QObject::tr("Workout %1 is invalid")
+                        .arg(QFileInfo(path).fileName());
+        }
         return false;
     }
     QByteArray stableContents;
@@ -397,14 +401,17 @@ bool prepareWorkoutReference(
         state.reservedTargetKeys);
     const QString targetPath =
         QDir(state.workoutRoot).filePath(targetName);
-    state.imports.append({targetName, contents, {}});
+    TrainDB::PlanImportWorkout import;
+    import.targetFileName = targetName;
+    import.contents = contents;
+    state.imports.append(std::move(import));
     state.resolvedHashes.insert(reference.hash, targetPath);
     rideFile->setTag("WorkoutFilename", targetPath);
     return true;
 }
 
 
-PlanBundleImport::DatabaseCompletion planImportDatabaseCompletion(
+PlanBundleImport::BoundDatabaseCompletion planImportDatabaseCompletion(
     Context *context,
     TrainDB *database)
 {
@@ -414,6 +421,7 @@ PlanBundleImport::DatabaseCompletion planImportDatabaseCompletion(
     const QPointer<TrainDB> guardedDatabase(database);
     return [guardedContext, guardedAthlete, guardedDatabase](
         const TrainDB::PlanImportJournal &journal,
+        const PlanBundleImport::PublishedValidation &validatePublished,
         QString &error) {
         const auto ownersValid = [&] {
             return guardedContext && guardedAthlete
@@ -454,13 +462,19 @@ PlanBundleImport::DatabaseCompletion planImportDatabaseCompletion(
                 }
                 return false;
             }
-            auto workout = std::make_unique<ErgFile>(
-                path, ErgFileFormat::unknown,
-                guardedContext.data());
-            if (!workout->isValid()) {
-                error = QObject::tr(
-                    "Published workout %1 is invalid")
-                            .arg(record.targetFileName);
+            std::unique_ptr<ErgFile> workout(
+                ErgFile::fromContentBytes(
+                    record.contents,
+                    path,
+                    ErgFileFormat::unknown,
+                    guardedContext.data(),
+                    error));
+            if (!workout) {
+                if (error.isEmpty()) {
+                    error = QObject::tr(
+                        "Published workout %1 is invalid")
+                                .arg(record.targetFileName);
+                }
                 return false;
             }
             QByteArray stableContents;
@@ -478,16 +492,12 @@ PlanBundleImport::DatabaseCompletion planImportDatabaseCompletion(
             workouts.push_back(std::move(workout));
         }
 
-        if (!guardedDatabase->startLUW()) {
+        TrainDB::ScopedLUW transaction(*guardedDatabase.data());
+        if (!transaction.isActive()) {
             error = QObject::tr(
                 "Cannot start the workout database transaction");
             return false;
         }
-        const auto rollback = [&] {
-            if (guardedDatabase)
-                guardedDatabase->rollbackLUW();
-            return false;
-        };
         for (qsizetype index = 0;
              index < paths.size(); ++index) {
             if (!ownersValid()
@@ -497,19 +507,17 @@ PlanBundleImport::DatabaseCompletion planImportDatabaseCompletion(
                 error = QObject::tr(
                     "Workout %1 could not be written to the workout database")
                             .arg(QFileInfo(paths.at(index)).fileName());
-                return rollback();
+                return false;
             }
         }
-        if (!guardedDatabase->removePlanImportJournal(
-                journal.id, error)) {
-            return rollback();
-        }
-        const bool committed =
-            guardedDatabase->endLUW();
-        if (!committed) {
+        if (!validatePublished(error)
+            || !guardedDatabase->removePlanImportJournal(
+                journal.id, error)
+            || !transaction.commit()) {
+            if (!error.isEmpty()) return false;
             error = QObject::tr(
                 "The workout database transaction could not be committed");
-            return rollback();
+            return false;
         }
         return true;
     };
@@ -1059,7 +1067,7 @@ PlanBundleReader::importBundle
                 : journalError);
             return lastImportResult;
         }
-        const PlanBundleImport::DatabaseCompletion
+        const PlanBundleImport::BoundDatabaseCompletion
             completeDatabase = planImportDatabaseCompletion(
                 guardedContext.data(), guardedDatabase.data());
         coordinator.commit = [importJournal](
@@ -1519,14 +1527,6 @@ PlanBundle::reconcilePendingImport
             "The athlete directory is unavailable for plan recovery");
         return false;
     }
-    TrainDB::PlanImportJournal pending;
-    bool found = false;
-    if (!guardedDatabase->loadPlanImportJournal(
-            athleteRoot, pending, found, error)) {
-        return false;
-    }
-    if (!found) return true;
-
     QString workoutRoot;
     if (!resolveWorkoutRoot(
             guardedContext.data(), workoutRoot, error)) {

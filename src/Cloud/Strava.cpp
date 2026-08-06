@@ -169,7 +169,7 @@ Strava::Strava(Context *context) : CloudService(context), context(context), root
 }
 
 Strava::~Strava() {
-    if (context) delete nam;
+    delete nam;
 }
 
 QImage Strava::logo() const
@@ -180,7 +180,13 @@ QImage Strava::logo() const
 void
 Strava::onSslErrors(QNetworkReply *reply, const QList<QSslError>&errors)
 {
-    sslErrors(context->mainWindow, reply, errors);
+    QCoreApplication *application = QCoreApplication::instance();
+    QWidget *parent = nullptr;
+    if (context && application
+        && QThread::currentThread() == application->thread()) {
+        parent = context->mainWindow;
+    }
+    sslErrors(parent, reply, errors);
 }
 
 QString Strava::sharedAccountKey() const
