@@ -269,7 +269,7 @@
     "src/Resources/linux/verify-appimage-payload.py": "18809da68d8571df92af71bfd6110b7921eb7e555142da68d7de433598dba34e",
     "src/Resources/win32/GC3.8-Master-W64-QT6.nsi": "faa9df078f3cce406b1eaf7188c24bc2c8a288958207af55d052f932cefcccde",
     "unittests/Build/appImagePackaging/appImagePackaging.pro": "cfe1447304665c49477eb2c96660eb31f88e254d7a2f8f9fc444cec884bb8a52",
-    "unittests/Build/appImagePackaging/testAppImagePackaging.sh": "c60fb30d50161253db247dabc66fdbf628a76e9c2a8c9e5b86127b311ce1a7a5",
+    "unittests/Build/appImagePackaging/testAppImagePackaging.sh": "f139a6ffb25e6075acadd5d3980606b81a0c8726675e090801e8a372129ce236",
     "unittests/Build/appImagePackaging/testAptSnapshot.py": "224bbc8516616d127452cc13c7d1d4c51b60632123527248abb91dee5ce41a44",
     "unittests/Build/appImagePackaging/testCiReleaseGates.sh": "f27ad24e7a34a857a44e7cb6047bf3e34c99217add327b17a41e8a52cdc24172",
     "unittests/Build/appImagePackaging/testDiagnosticOAuth.sh": "8fe4cbf752ccaa5617c6c8c9f55b2dac694789ffd4f96f5bb63297e8d82cfcbd",

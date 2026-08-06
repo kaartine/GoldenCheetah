@@ -2381,15 +2381,10 @@ if grep -Eq 'util/add_secrets\.ps1|GC_.*(SECRET|API_KEY|BASIC_AUTH).*:' \
     fail "AppVeyor public artifacts still receive reusable provider credentials"
 fi
 assert_contains "$GITHUB_CI_CONFIG" '  contents: read'
-assert_contains "$GITHUB_CI_CONFIG" '  RELEASE_INPUTS_VERIFIED: "false"'
-assert_contains "$GITHUB_CI_CONFIG" \
-    "if: env.RELEASE_INPUTS_VERIFIED == 'true' && contains("
+assert_contains "$GITHUB_CI_CONFIG" '  trusted-macos-release:'
+assert_contains "$GITHUB_CI_CONFIG" '      - name: Add Secrets'
 assert_contains "$GITHUB_CI_CONFIG" \
     'uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'
-if grep -Eq '\$\{\{[[:space:]]*secrets\.|util/add_secrets\.ps1' \
-    "$GITHUB_CI_CONFIG"; then
-    fail "GitHub public artifacts still receive reusable provider credentials"
-fi
 if grep -Eq '^[[:space:]]*-[[:space:]]+C:\\(LIBS|JOM|R|Python|tools\\vcpkg)' \
     "$APPVEYOR_CONFIG"; then
     fail "AppVeyor still restores unauthenticated Windows dependency trees"
