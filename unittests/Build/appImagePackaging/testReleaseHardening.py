@@ -319,10 +319,41 @@ class BuildInputTests(unittest.TestCase):
             self.assertEqual(fourth.returncode, 0, fourth.stderr)
             self.assertNotEqual(third.stdout, fourth.stdout)
 
-            config.write_text("LOCALHEADERS += /tmp/injected.h\n", encoding="ascii")
+            config.write_text(
+                "CONFIG += release\nLOCALHEADERS += /tmp/injected.h\n",
+                encoding="ascii",
+            )
             rejected = self.identity(source_root)
             self.assertNotEqual(rejected.returncode, 0)
             self.assertIn("LOCALHEADERS", rejected.stderr)
+
+    def test_identity_rejects_non_release_configuration(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source_root = Path(temporary)
+            (source_root / "src/Core").mkdir(parents=True)
+            (source_root / "qwt").mkdir()
+            (source_root / "qwt/qwtconfig.pri").write_text(
+                "QWT_CONFIG += QwtPlot\n", encoding="ascii"
+            )
+            config = source_root / "src/gcconfig.pri"
+
+            for contents in (
+                "CONFIG += debug\n",
+                "CONFIG += release debug\n",
+                "DEFINES += GC_VIDEO_NONE\n",
+            ):
+                with self.subTest(contents=contents):
+                    config.write_text(contents, encoding="ascii")
+                    rejected = self.identity(source_root)
+                    self.assertNotEqual(rejected.returncode, 0)
+                    self.assertIn("release configuration", rejected.stderr)
+
+            config.write_text(
+                "CONFIG += debug\nCONFIG -= debug\nCONFIG += release static\n",
+                encoding="ascii",
+            )
+            accepted = self.identity(source_root)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
 
     def test_compiled_report_and_manifest_bind_build_inputs(self):
         project = (REPOSITORY_ROOT / "src/src.pro").read_text(encoding="utf-8")
