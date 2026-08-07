@@ -268,6 +268,8 @@ def remove_locked_source_distributions(python_root, requirements_lock):
                 raise ValueError(
                     "embedded Python source RECORD path escapes its root"
                 )
+            if not os.path.lexists(lexical):
+                continue
             try:
                 parent = lexical.parent.resolve(strict=True)
             except FileNotFoundError as error:
