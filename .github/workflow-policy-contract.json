@@ -287,6 +287,6 @@
     "unittests/Build/ciTestRunner/testCiTestRunner.py": "9bac7a05cb8578df1abbf828e57908bf085073dad1533da76fbfe138471c4deb",
     "unittests/ci-required-tests.txt": "0e6ceb72d3865e1e97fa152a5485d623738d9b2df140035f99d703586f617be9",
     "unittests/unittests.pri.in": "205f84784e7e12a28dcb2dd278a1106fd57df4e31af8a3f809cbc24d921e4e92",
-    "unittests/unittests.pro": "812d181f2600fd5dad2a7e1ebafb92d25a11ed9e383dcc8e841dbbc121cd315f"
+    "unittests/unittests.pro": "2030524db3f8cf2bb421be2d9241ecdd0566e2b693ef42833ffe8f1f2972207a"
   }
 }
