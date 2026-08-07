@@ -894,7 +894,7 @@ class SbomProvenanceTests(unittest.TestCase):
                     self.runtime_generator.load_python_runtime_manifest(
                         manifest, payload, self.python_runtime_sha256
                     )
-            target.write_bytes(original)
+                target.write_bytes(original)
 
         link.unlink()
         link.symlink_to("source-tool")
@@ -915,6 +915,18 @@ class SbomProvenanceTests(unittest.TestCase):
             self.runtime_generator.load_python_runtime_manifest(
                 manifest, payload, self.python_runtime_sha256
             )
+
+    def test_python_source_capture_uses_manifest_path_order(self):
+        payload = self.root / "python-path-order"
+        nested = payload / "usr/foo/bar"
+        sibling = payload / "usr/foo-bar"
+        nested.parent.mkdir(parents=True)
+        nested.write_bytes(b"nested")
+        sibling.write_bytes(b"sibling")
+
+        entries = self.python_normalizer.capture_runtime_source(payload)
+        paths = [entry["path"] for entry in entries]
+        self.assertEqual(paths, ["usr/foo-bar", "usr/foo/bar"])
 
     def test_base_python_runtime_manifest_is_created_before_pip_install(self):
         support = PACKAGING_SUPPORT.read_text(encoding="utf-8")

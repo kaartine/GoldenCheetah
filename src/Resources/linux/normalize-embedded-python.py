@@ -476,8 +476,9 @@ def capture_runtime_source(payload_root):
     if not entries:
         raise ValueError("embedded Python payload is empty")
     paths = [entry["path"] for entry in entries]
-    if paths != sorted(set(paths)):
-        raise ValueError("embedded Python source paths are not unique and sorted")
+    if len(paths) != len(set(paths)):
+        raise ValueError("embedded Python source paths are not unique")
+    entries.sort(key=lambda entry: entry["path"])
     return entries
 
 
