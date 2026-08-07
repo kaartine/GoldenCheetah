@@ -950,6 +950,7 @@ class SbomProvenanceTests(unittest.TestCase):
         record = dist_info / "RECORD"
         record.write_text(
             "packaging/__init__.py,,\n"
+            "packaging/__pycache__/missing.pyc,,\n"
             "packaging-1.0.dist-info/METADATA,,\n"
             "packaging-1.0.dist-info/RECORD,,\n"
             "../../../bin/packaging-tool,,\n",
