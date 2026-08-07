@@ -85,6 +85,7 @@ RUN printf '%s  %s\n' \
         libasound2t64 \
         libatspi2.0-0 \
         libbluetooth-dev \
+        libcap2 \
         libcups2t64 \
         libdbus-1-3 \
         libdbus-1-dev \
@@ -94,6 +95,7 @@ RUN printf '%s  %s\n' \
         libgl1-mesa-dev \
         libglib2.0-0 \
         libglu1-mesa-dev \
+        libgnutls30t64 \
         libgsl-dev \
         libgtk-3-0 \
         libtool \

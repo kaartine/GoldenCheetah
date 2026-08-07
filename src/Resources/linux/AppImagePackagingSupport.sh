@@ -1144,8 +1144,9 @@ install_linux_keychain_runtime()
     fi
 
     if [ -L "$transformation_manifest" ] ||
-       [ -e "$transformation_manifest" ]; then
-        echo "Linux keychain transformation manifest destination exists." >&2
+       [ ! -f "$transformation_manifest" ] ||
+       [ ! -r "$transformation_manifest" ]; then
+        echo "Linux keychain transformation manifest is unavailable." >&2
         return 1
     fi
     transformation_sources="${transformation_manifest}.sources"
@@ -1176,9 +1177,16 @@ install_linux_keychain_runtime()
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import re
 import tempfile
 import sys
+
+
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+LINUXDEPLOYQT_TRANSFORMATION_RE = re.compile(
+    r"^linuxdeployqt-no-strip:[0-9a-f]{64}:rpath=\$ORIGIN$"
+)
 
 
 def sha256_file(path):
@@ -1189,29 +1197,125 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
+def checked_output(relative):
+    if (
+        not isinstance(relative, str)
+        or not relative.isascii()
+        or "\\" in relative
+        or "\x00" in relative
+    ):
+        raise ValueError("invalid Linux keychain transformation path")
+    parsed = PurePosixPath(relative)
+    if (
+        parsed.is_absolute()
+        or not parsed.parts
+        or any(part in ("", ".", "..") for part in parsed.parts)
+    ):
+        raise ValueError("invalid Linux keychain transformation path")
+    output = appdir.joinpath(*parsed.parts)
+    if output.is_symlink() or not output.is_file():
+        raise ValueError("Linux keychain transformation output is unavailable")
+    resolved = output.resolve(strict=True)
+    if resolved != output.absolute():
+        raise ValueError("Linux keychain transformation output is unsafe")
+    try:
+        resolved.relative_to(appdir)
+    except ValueError as error:
+        raise ValueError(
+            "Linux keychain transformation output escapes AppDir"
+        ) from error
+    return resolved
+
+
+def checked_source(value):
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise ValueError("invalid Linux keychain transformation source")
+    source = Path(value)
+    if not source.is_absolute() or source.is_symlink():
+        raise ValueError("Linux keychain transformation source is unsafe")
+    resolved = source.resolve(strict=True)
+    if resolved != source or not resolved.is_file():
+        raise ValueError("Linux keychain transformation source is unsafe")
+    return resolved
+
+
 appdir_argument = Path(sys.argv[1])
 appdir = appdir_argument.resolve(strict=True)
 if appdir_argument.is_symlink() or not appdir.is_dir():
     raise ValueError("Linux keychain AppDir is unsafe")
-manifest = Path(sys.argv[2]).absolute()
-if manifest.exists() or manifest.is_symlink():
-    raise ValueError("Linux keychain transformation manifest destination exists")
-parent = manifest.parent.resolve(strict=True)
-manifest = parent / manifest.name
+manifest_argument = Path(sys.argv[2]).absolute()
+if manifest_argument.is_symlink() or not manifest_argument.is_file():
+    raise ValueError("Linux keychain transformation manifest is unsafe")
+if manifest_argument.stat().st_size > 16 * 1024 * 1024:
+    raise ValueError("Linux keychain transformation manifest is too large")
+manifest = manifest_argument.resolve(strict=True)
+if manifest != manifest_argument:
+    raise ValueError("Linux keychain transformation manifest is not canonical")
+parent = manifest.parent
 sources = Path(sys.argv[3]).resolve(strict=True)
-if not sources.is_dir():
+if Path(sys.argv[3]).is_symlink() or not sources.is_dir():
     raise ValueError("Linux keychain transformation sources are unavailable")
 
+with manifest.open(encoding="utf-8") as stream:
+    document = json.load(stream)
+if (
+    not isinstance(document, dict)
+    or set(document) != {"format", "libraries"}
+    or document["format"] != "goldencheetah-transformed-runtime-1"
+    or not isinstance(document["libraries"], list)
+    or len(document["libraries"]) > 100000
+):
+    raise ValueError("invalid Linux keychain transformation manifest")
+
+expected_keys = {
+    "output_sha256",
+    "path",
+    "source_path",
+    "source_sha256",
+    "transformation",
+}
+replacement_paths = {"lib/libgcrypt.so.20", "lib/libsecret-1.so.0"}
 entries = []
+input_paths = []
+for entry in document["libraries"]:
+    if not isinstance(entry, dict) or set(entry) != expected_keys:
+        raise ValueError("invalid Linux keychain transformation entry")
+    relative = entry["path"]
+    output = checked_output(relative)
+    source = checked_source(entry["source_path"])
+    source_digest = entry["source_sha256"]
+    output_digest = entry["output_sha256"]
+    transformation = entry["transformation"]
+    if (
+        not isinstance(source_digest, str)
+        or not SHA256_RE.fullmatch(source_digest)
+        or not isinstance(output_digest, str)
+        or not SHA256_RE.fullmatch(output_digest)
+        or not isinstance(transformation, str)
+        or (
+            transformation != "patchelf-set-rpath:$ORIGIN"
+            and not LINUXDEPLOYQT_TRANSFORMATION_RE.fullmatch(transformation)
+        )
+    ):
+        raise ValueError("invalid Linux keychain transformation entry")
+    if sha256_file(source) != source_digest:
+        raise ValueError("Linux keychain transformation source digest mismatch")
+    input_paths.append(relative)
+    if relative in replacement_paths:
+        continue
+    if sha256_file(output) != output_digest:
+        raise ValueError("Linux keychain transformation output digest mismatch")
+    entries.append(dict(entry))
+if input_paths != sorted(set(input_paths)):
+    raise ValueError("Linux keychain transformations are not unique and sorted")
+
 for relative in ("lib/libgcrypt.so.20", "lib/libsecret-1.so.0"):
-    output = appdir.joinpath(*relative.split("/"))
+    output = checked_output(relative)
     source = sources / Path(relative).name
-    if output.is_symlink() or source.is_symlink():
+    if source.is_symlink():
         raise ValueError("Linux keychain transformation payload is a symlink")
-    if not output.is_file() or not source.is_file():
+    if not source.is_file():
         raise ValueError("Linux keychain transformation payload is unavailable")
-    if output.resolve(strict=True) != output.absolute():
-        raise ValueError("Linux keychain transformation output is unsafe")
     entries.append(
         {
             "output_sha256": sha256_file(output),
@@ -1221,6 +1325,9 @@ for relative in ("lib/libgcrypt.so.20", "lib/libsecret-1.so.0"):
             "transformation": "patchelf-set-rpath:$ORIGIN",
         }
     )
+entries.sort(key=lambda entry: entry["path"])
+if len(entries) != len({entry["path"] for entry in entries}):
+    raise ValueError("Linux keychain transformations conflict")
 
 document = {
     "format": "goldencheetah-transformed-runtime-1",
@@ -1866,6 +1973,7 @@ create_appimage_sbom()
         --python-install-report "$python_install_report" \
         --d2xx-version "$D2XX_LINUX_VERSION" \
         --d2xx-provenance "https://ftdichip.com/drivers/d2xx-drivers/#sha256=${D2XX_LINUX_SHA256}" \
+        --linuxdeployqt-sha256 "$LINUXDEPLOYQT_SHA256" \
         --transformed-runtime-manifest "$transformed_runtime_manifest"
 
     python3 "$generator" \

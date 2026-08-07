@@ -21,6 +21,10 @@ SBOM_GENERATOR = REPOSITORY_ROOT / "src/Resources/linux/generate-appimage-sbom.p
 RUNTIME_GENERATOR = REPOSITORY_ROOT / "src/Resources/linux/generate-runtime-provenance.py"
 PACKAGING_SUPPORT = REPOSITORY_ROOT / "src/Resources/linux/AppImagePackagingSupport.sh"
 PYTHON_NORMALIZER = REPOSITORY_ROOT / "src/Resources/linux/normalize-embedded-python.py"
+LINUXDEPLOYQT_CAPTURE = (
+    REPOSITORY_ROOT
+    / "src/Resources/linux/capture-linuxdeployqt-transforms.py"
+)
 
 
 def load_python_module(name, path):
@@ -363,6 +367,7 @@ class SbomProvenanceTests(unittest.TestCase):
             qt_root=self.qt_root,
             qt_version="6.8.3",
             requirements_lock=self.lock,
+            linuxdeployqt_sha256="d" * 64,
             transformed_runtime_manifest=self.transformed_runtime_manifest,
         )
 
@@ -777,6 +782,7 @@ class SbomProvenanceTests(unittest.TestCase):
             "--python-install-report", str(self.report),
             "--d2xx-version", "1.4.27",
             "--d2xx-provenance", "reviewed-d2xx-archive",
+            "--linuxdeployqt-sha256", "d" * 64,
             "--transformed-runtime-manifest", str(self.transformed_runtime_manifest),
             "--test-mode",
             "--fixture-package-index", str(self.package_index),
@@ -1093,6 +1099,98 @@ class SbomProvenanceTests(unittest.TestCase):
                 output,
                 self.appdir,
                 entries["lib/libtransformed.so.1"],
+            )
+
+    def test_linuxdeployqt_capture_binds_source_tool_and_elf_identity(self):
+        capture = load_python_module(
+            "capture_linuxdeployqt_transforms", LINUXDEPLOYQT_CAPTURE
+        )
+        source = self.root / "system/libaudio.so.1.2.3"
+        source.parent.mkdir()
+        source.write_bytes(b"authenticated source library")
+        output = self.appdir / "lib/libaudio.so.1"
+        output.write_bytes(b"linuxdeployqt transformed library")
+        tool_digest = "d" * 64
+        snapshot = {
+            "format": "goldencheetah-linuxdeployqt-source-snapshot-1",
+            "libraries": [
+                {
+                    "path": str(source.resolve()),
+                    "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                    "soname": "libaudio.so.1",
+                }
+            ],
+        }
+        authenticated = []
+
+        def elf_identity(path):
+            return {
+                "build_id": "0123456789abcdef",
+                "rpath": "$ORIGIN" if path == output else "",
+                "soname": "libaudio.so.1",
+            }
+
+        entries = capture.build_transformed_entries(
+            self.appdir,
+            snapshot,
+            tool_digest,
+            elf_identity=elf_identity,
+            authenticate_source=lambda path: authenticated.append(path),
+        )
+        self.assertEqual(authenticated, [source.resolve()])
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["path"], "lib/libaudio.so.1")
+        self.assertEqual(
+            entries[0]["transformation"],
+            f"linuxdeployqt-no-strip:{tool_digest}:rpath=$ORIGIN",
+        )
+
+        manifest = self.root / "linuxdeployqt-transforms.json"
+        manifest.write_text(
+            json.dumps(
+                {
+                    "format": "goldencheetah-transformed-runtime-1",
+                    "libraries": entries,
+                }
+            ),
+            encoding="utf-8",
+        )
+        loaded = self.runtime_generator.load_transformed_runtime_manifest(
+            manifest, self.appdir, tool_digest
+        )
+        self.assertIn("lib/libaudio.so.1", loaded)
+        with self.assertRaisesRegex(ValueError, "transformation"):
+            self.runtime_generator.load_transformed_runtime_manifest(
+                manifest, self.appdir, "e" * 64
+            )
+
+        def wrong_output_identity(path):
+            identity = elf_identity(path)
+            if path == output:
+                identity["rpath"] = "/untrusted"
+            return identity
+
+        unauthenticated = []
+        self.assertEqual(
+            capture.build_transformed_entries(
+                self.appdir,
+                snapshot,
+                tool_digest,
+                elf_identity=wrong_output_identity,
+                authenticate_source=lambda path: unauthenticated.append(path),
+            ),
+            [],
+        )
+        self.assertEqual(unauthenticated, [])
+
+        source.write_bytes(b"changed after snapshot")
+        with self.assertRaisesRegex(ValueError, "source changed"):
+            capture.build_transformed_entries(
+                self.appdir,
+                snapshot,
+                tool_digest,
+                elf_identity=elf_identity,
+                authenticate_source=lambda path: None,
             )
 
     def test_runtime_library_paths_follow_serialized_posix_order(self):

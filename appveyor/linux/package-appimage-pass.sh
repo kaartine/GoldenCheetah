@@ -19,6 +19,8 @@ BUILD_MANIFEST="$PASS_DIR/build.manifest"
 PYTHON_INSTALL_REPORT="$PASS_DIR/python-install-report.json"
 RUNTIME_TRANSFORM_DIR="$PASS_DIR/runtime-transform"
 RUNTIME_TRANSFORM_MANIFEST="$RUNTIME_TRANSFORM_DIR/manifest.json"
+LINUXDEPLOYQT_SOURCE_SNAPSHOT="$RUNTIME_TRANSFORM_DIR/linuxdeployqt-sources.json"
+LINUXDEPLOYQT_CAPTURE="$SOURCE_DIR/Resources/linux/capture-linuxdeployqt-transforms.py"
 IMAGE="$PASS_DIR/GoldenCheetah.AppImage"
 MANIFEST="$PASS_DIR/GoldenCheetah.AppImage.manifest"
 SBOM="$PASS_DIR/GoldenCheetah.AppImage.sbom.cdx.json"
@@ -83,12 +85,21 @@ download_appimagetool
 download_appimage_runtime
 chmod a+x "$LINUXDEPLOYQT_FILE" "$APPIMAGETOOL_FILE"
 
+python3 "$LINUXDEPLOYQT_CAPTURE" snapshot \
+    --output "$LINUXDEPLOYQT_SOURCE_SNAPSHOT"
 run_linuxdeployqt_with_keychain_probe \
     "$BINARY" "$APPDIR" \
     "./$LINUXDEPLOYQT_FILE" "$APPDIR/GoldenCheetah" \
-    -verbose=2 -bundle-non-qt-libs \
+    -verbose=2 -bundle-non-qt-libs -no-strip \
     -exclude-libs=libqsqlmysql,libqsqlpsql,libqsqlmimer,libqsqlodbc,libnss3,libnssutil3,libxcb-dri3.so.0 \
     -unsupported-allow-new-glibc
+python3 "$LINUXDEPLOYQT_CAPTURE" finalize \
+    --appdir "$APPDIR" \
+    --snapshot "$LINUXDEPLOYQT_SOURCE_SNAPSHOT" \
+    --output "$RUNTIME_TRANSFORM_MANIFEST" \
+    --linuxdeployqt-sha256 "$LINUXDEPLOYQT_SHA256" \
+    --provenance-tool \
+        "$SOURCE_DIR/Resources/linux/generate-runtime-provenance.py"
 
 install_qt_offscreen_plugin "$QMAKE_COMMAND" "$APPDIR"
 install_embedded_python \

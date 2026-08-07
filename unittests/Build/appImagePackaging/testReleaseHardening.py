@@ -520,6 +520,23 @@ class PipelineIsolationTests(unittest.TestCase):
             self.assertNotEqual(conflict.returncode, 0)
             self.assertIn("Python 3.12 does not match", conflict.stderr)
 
+    def test_linuxdeployqt_transform_capture_surrounds_deployment(self):
+        package = PACKAGE_APPIMAGE.read_text(encoding="utf-8")
+        self.assertIn(
+            "Resources/linux/capture-linuxdeployqt-transforms.py",
+            package,
+        )
+        snapshot = package.index('"$LINUXDEPLOYQT_CAPTURE" snapshot')
+        deployment = package.index("run_linuxdeployqt_with_keychain_probe")
+        finalize = package.index('"$LINUXDEPLOYQT_CAPTURE" finalize')
+        keychain = package.index("install_linux_keychain_runtime")
+        sbom = package.index("create_appimage_sbom")
+        self.assertLess(snapshot, deployment)
+        self.assertLess(deployment, finalize)
+        self.assertLess(finalize, keychain)
+        self.assertLess(keychain, sbom)
+        self.assertIn("-no-strip", package[deployment:finalize])
+
     def test_compiler_environment_is_allowlisted(self):
         build_pass = REPOSITORY_ROOT / "appveyor/linux/build-appimage-pass.sh"
         with tempfile.TemporaryDirectory() as temporary:
@@ -826,6 +843,20 @@ class PlatformGateTests(unittest.TestCase):
             "def test_real_apt_update_indices_match_signed_metadata", 1
         )[1]
         self.assertNotIn("apt-get install --no-install-recommends -y -qq ca-certificates python3", integration)
+
+    def test_release_hosts_refresh_transformed_runtime_packages(self):
+        dockerfile = (REPOSITORY_ROOT / ".devcontainer/Dockerfile").read_text(
+            encoding="utf-8"
+        )
+        linux_install = (
+            REPOSITORY_ROOT / "appveyor/linux/install.sh"
+        ).read_text(encoding="utf-8")
+        self.assertRegex(dockerfile, r"(?m)^\s+libcap2 \\$")
+        self.assertRegex(dockerfile, r"(?m)^\s+libgnutls30t64 \\$")
+        self.assertIn(
+            '"$APT_GET" install -qq libcap2 libgnutls30',
+            linux_install,
+        )
 
 
 if __name__ == "__main__":

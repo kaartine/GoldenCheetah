@@ -39,6 +39,7 @@ QT_BUILD_VERSION=6.8.3
 test "$(qmake -query QT_VERSION)" = "$QT_BUILD_VERSION"
 sudo "$APT_GET" install -qq flex libpulse-dev
 sudo "$APT_GET" install -qq pkg-config libsecret-1-dev libgpg-error-dev
+sudo "$APT_GET" install -qq libcap2 libgnutls30
 sudo "$APT_GET" install -qq libglu1-mesa-dev libxcb-cursor-dev
 sudo "$APT_GET" install -qq libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
 sudo "$APT_GET" install -qq libsamplerate0-dev

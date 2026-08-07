@@ -36,6 +36,7 @@ REQUIREMENTS="$REPO_ROOT/src/Python/requirements.txt"
 APPIMAGE_REQUIREMENTS="$REPO_ROOT/src/Python/requirements-appimage.lock"
 SBOM_GENERATOR="$REPO_ROOT/src/Resources/linux/generate-appimage-sbom.py"
 RUNTIME_PROVENANCE_GENERATOR="$REPO_ROOT/src/Resources/linux/generate-runtime-provenance.py"
+LINUXDEPLOYQT_CAPTURE="$REPO_ROOT/src/Resources/linux/capture-linuxdeployqt-transforms.py"
 PYTHON_NORMALIZER="$REPO_ROOT/src/Resources/linux/normalize-embedded-python.py"
 DEV_CONFIG="$REPO_ROOT/.devcontainer/gcconfig.pri"
 MAIN_SOURCE="$REPO_ROOT/src/Core/main.cpp"
@@ -58,6 +59,8 @@ assert_contains()
 [ -r "$SUPPORT" ] || fail "missing shared AppImage packaging support"
 [ -r "$PYTHON_NORMALIZER" ] ||
     fail "missing embedded Python normalizer"
+[ -x "$LINUXDEPLOYQT_CAPTURE" ] ||
+    fail "missing linuxdeployqt transformation capture"
 [ -r "$REPO_ROOT/appveyor/safe-extract.py" ] ||
     fail "missing safe cross-platform archive extractor"
 
@@ -1289,6 +1292,38 @@ cp "$TEMP_DIR/libsecret/lib/libglib-2.0.so.0" \
     "$TEMP_DIR/libsecret/lib/libgobject-2.0.so.0" \
     "$TEMP_DIR/libsecret/lib/libgcrypt.so.20" \
     "$KEYCHAIN_APPDIR/lib/"
+printf 'prior authenticated source\n' >"$TEMP_DIR/prior-source.so.1"
+printf 'prior transformed output\n' >"$KEYCHAIN_APPDIR/lib/libprior.so.1"
+python3 - \
+    "$TEMP_DIR/prior-source.so.1" \
+    "$KEYCHAIN_APPDIR/lib/libprior.so.1" \
+    "$KEYCHAIN_TRANSFORM_MANIFEST" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]).resolve()
+output = Path(sys.argv[2]).resolve()
+manifest = Path(sys.argv[3])
+document = {
+    "format": "goldencheetah-transformed-runtime-1",
+    "libraries": [
+        {
+            "output_sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
+            "path": "lib/libprior.so.1",
+            "source_path": str(source),
+            "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+            "transformation": (
+                "linuxdeployqt-no-strip:"
+                + "d" * 64
+                + ":rpath=$ORIGIN"
+            ),
+        }
+    ],
+}
+manifest.write_text(json.dumps(document), encoding="utf-8")
+PY
 PATH="$TEMP_DIR/libsecret/bin:$PATH" \
     LIBGCRYPT_RUNTIME_FILE="$TEMP_DIR/libsecret/lib/libgcrypt.so.20" \
     LIBSECRET_COPYRIGHT_FILE="$TEMP_DIR/libsecret/copyright" \
@@ -1310,10 +1345,14 @@ manifest = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
 assert manifest["format"] == "goldencheetah-transformed-runtime-1"
 assert [entry["path"] for entry in manifest["libraries"]] == [
     "lib/libgcrypt.so.20",
+    "lib/libprior.so.1",
     "lib/libsecret-1.so.0",
 ]
 for entry in manifest["libraries"]:
-    assert entry["transformation"] == "patchelf-set-rpath:$ORIGIN"
+    if entry["path"] == "lib/libprior.so.1":
+        assert entry["transformation"].startswith("linuxdeployqt-no-strip:")
+    else:
+        assert entry["transformation"] == "patchelf-set-rpath:$ORIGIN"
     output = appdir / entry["path"]
     source = Path(entry["source_path"])
     assert source.is_file() and not source.is_symlink()

@@ -451,6 +451,7 @@ class ImmutableActionTests(unittest.TestCase):
             "appveyor/windows/install.ps1",
             "appveyor/windows/vcpkg.json",
             "src/Python/requirements-appimage.lock",
+            "src/Resources/linux/capture-linuxdeployqt-transforms.py",
             "src/Resources/linux/compute-build-input-identity.py",
             "src/Resources/linux/read-appimage-offset.py",
             "src/Resources/linux/verify-appimage-payload.py",
@@ -553,6 +554,9 @@ class ImmutableActionTests(unittest.TestCase):
         self.assertIn("/.github/scripts/run-tests.py", contents)
         self.assertIn("/appveyor/linux/build-appimage-pass.sh", contents)
         self.assertIn("/appveyor/linux/reproduce-appimage.sh", contents)
+        self.assertIn(
+            "/src/Resources/linux/capture-linuxdeployqt-transforms.py", contents
+        )
         self.assertIn(
             "/src/Resources/linux/compute-build-input-identity.py", contents
         )

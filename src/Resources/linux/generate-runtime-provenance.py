@@ -149,7 +149,20 @@ def _load_test_fixture_package_index(path, appdir, expected_sha256):
     return entries
 
 
-def load_transformed_runtime_manifest(path, appdir):
+def load_transformed_runtime_manifest(
+    path, appdir, expected_linuxdeployqt_sha256=None
+):
+    allowed_transformations = {"patchelf-set-rpath:$ORIGIN"}
+    if expected_linuxdeployqt_sha256 is not None:
+        if (
+            not isinstance(expected_linuxdeployqt_sha256, str)
+            or not SHA256_RE.fullmatch(expected_linuxdeployqt_sha256)
+        ):
+            raise ValueError("invalid expected linuxdeployqt SHA-256")
+        allowed_transformations.add(
+            "linuxdeployqt-no-strip:"
+            f"{expected_linuxdeployqt_sha256}:rpath=$ORIGIN"
+        )
     source = Path(path)
     if source.is_symlink() or not source.is_file():
         raise ValueError("transformed runtime manifest must be a regular file")
@@ -182,6 +195,7 @@ def load_transformed_runtime_manifest(path, appdir):
         source_path_value = entry["source_path"]
         source_digest = entry["source_sha256"]
         output_digest = entry["output_sha256"]
+        transformation = entry["transformation"]
         if (
             not isinstance(source_path_value, str)
             or not source_path_value
@@ -190,9 +204,13 @@ def load_transformed_runtime_manifest(path, appdir):
             or not SHA256_RE.fullmatch(source_digest)
             or not isinstance(output_digest, str)
             or not SHA256_RE.fullmatch(output_digest)
-            or entry["transformation"] != "patchelf-set-rpath:$ORIGIN"
         ):
             raise ValueError("invalid transformed runtime manifest entry")
+        if (
+            not isinstance(transformation, str)
+            or transformation not in allowed_transformations
+        ):
+            raise ValueError("invalid transformed runtime transformation")
         output = checked_appdir_relative_path(
             relative, appdir, "transformed runtime"
         )
@@ -1245,7 +1263,9 @@ def build_document(arguments, fixture_index=None):
         raise ValueError("AppDir must be a real directory")
     fixture_index = dict(fixture_index or {})
     transformed_runtime = load_transformed_runtime_manifest(
-        arguments.transformed_runtime_manifest, appdir
+        arguments.transformed_runtime_manifest,
+        appdir,
+        arguments.linuxdeployqt_sha256,
     )
     python_source = load_python_runtime_manifest(
         arguments.python_runtime_manifest,
@@ -1445,6 +1465,7 @@ def parse_arguments():
     parser.add_argument("--python-install-report", required=True, type=Path)
     parser.add_argument("--d2xx-version", required=True)
     parser.add_argument("--d2xx-provenance", required=True)
+    parser.add_argument("--linuxdeployqt-sha256", required=True)
     parser.add_argument("--transformed-runtime-manifest", required=True, type=Path)
     return parser.parse_args()
 
