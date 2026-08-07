@@ -2514,7 +2514,8 @@ install_embedded_python()
         --runtime-sha256 "$PYTHON_APPIMAGE_SHA256" \
         --wheelhouse "$wheelhouse" \
         --requirements-lock "$requirements_path" \
-        --wheel-manifest "$wheel_manifest_path"
+        --wheel-manifest "$wheel_manifest_path" \
+        --remove-locked-source-distributions
 
     PIP_CONFIG_FILE=/dev/null PIP_DISABLE_PIP_VERSION_CHECK=1 \
         PYTHONDONTWRITEBYTECODE=1 \

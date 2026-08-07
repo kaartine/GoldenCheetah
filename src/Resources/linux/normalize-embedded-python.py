@@ -208,6 +208,116 @@ def parse_requirements_lock(path):
     return by_name
 
 
+def remove_locked_source_distributions(python_root, requirements_lock):
+    if python_root.is_symlink():
+        raise ValueError("embedded Python root is a symlink")
+    root = python_root.resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError("embedded Python root is not a directory")
+    if requirements_lock.is_symlink() or not requirements_lock.is_file():
+        raise ValueError("Python requirements lock is unsafe")
+    locked = parse_requirements_lock(requirements_lock.resolve(strict=True))
+    candidates = sorted(root.glob("lib/python*/site-packages"))
+    if len(candidates) != 1 or candidates[0].is_symlink():
+        raise ValueError("embedded Python site-packages directory is ambiguous")
+    site_packages = candidates[0].resolve(strict=True)
+    require_under(site_packages, root)
+    if not site_packages.is_dir():
+        raise ValueError("embedded Python site-packages directory is unsafe")
+
+    claimed = {}
+    replaced = {}
+    for dist_info in sorted(site_packages.glob("*.dist-info")):
+        if dist_info.is_symlink() or not dist_info.is_dir():
+            raise ValueError("embedded Python distribution metadata is unsafe")
+        metadata_path = dist_info / "METADATA"
+        record_path = dist_info / "RECORD"
+        for path in (metadata_path, record_path):
+            if (
+                path.is_symlink()
+                or not path.is_file()
+                or path.stat().st_size > 16 * 1024 * 1024
+            ):
+                raise ValueError("embedded Python distribution metadata is unsafe")
+        metadata = BytesParser(policy=default).parsebytes(metadata_path.read_bytes())
+        name = normalized_python_name((metadata.get("Name") or "").strip())
+        if name not in locked:
+            continue
+        if not name or name in replaced:
+            raise ValueError("locked Python source distribution is ambiguous")
+        replaced[name] = dist_info
+
+        rows = csv.reader(io.StringIO(record_path.read_text(encoding="utf-8")))
+        record_claims = set()
+        for row in rows:
+            if len(row) != 3 or not row[0] or "\\" in row[0] or "\x00" in row[0]:
+                raise ValueError("embedded Python source RECORD is malformed")
+            relative = PurePosixPath(row[0])
+            if relative.is_absolute():
+                raise ValueError("embedded Python source RECORD path escapes its root")
+            lexical = Path(
+                os.path.abspath(site_packages.joinpath(*relative.parts))
+            )
+            try:
+                lexical.relative_to(root)
+            except ValueError as error:
+                raise ValueError(
+                    "embedded Python source RECORD path escapes its root"
+                ) from error
+            if lexical == root:
+                raise ValueError(
+                    "embedded Python source RECORD path escapes its root"
+                )
+            try:
+                parent = lexical.parent.resolve(strict=True)
+            except FileNotFoundError as error:
+                raise ValueError(
+                    "embedded Python source RECORD path is unavailable"
+                ) from error
+            require_under(parent, root)
+            candidate = parent / lexical.name
+            if candidate in record_claims:
+                raise ValueError("embedded Python source RECORD has duplicate paths")
+            record_claims.add(candidate)
+            previous = claimed.setdefault(candidate, name)
+            if previous != name:
+                raise ValueError(
+                    "embedded Python source distributions have overlapping paths"
+                )
+
+    for path in sorted(claimed, key=lambda item: (len(item.parts), str(item)), reverse=True):
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError as error:
+            raise ValueError(
+                "embedded Python source RECORD path is unavailable"
+            ) from error
+        if not (stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode)):
+            raise ValueError("embedded Python source RECORD names a non-file")
+
+    removable_directories = set()
+    for path in claimed:
+        path.unlink()
+        parent = path.parent
+        while parent != root and parent != site_packages:
+            removable_directories.add(parent)
+            parent = parent.parent
+    for directory in sorted(
+        removable_directories,
+        key=lambda item: (len(item.parts), str(item)),
+        reverse=True,
+    ):
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
+    for name, dist_info in replaced.items():
+        if dist_info.exists() or dist_info.is_symlink():
+            raise ValueError(
+                f"locked Python source distribution has unclaimed files: {name}"
+            )
+
+
 def package_license(metadata):
     license_name = (metadata.get("License-Expression") or "").strip()
     if not license_name:
@@ -596,6 +706,9 @@ def main():
     parser.add_argument("--wheelhouse", type=Path)
     parser.add_argument("--requirements-lock", type=Path)
     parser.add_argument("--wheel-manifest", type=Path)
+    parser.add_argument(
+        "--remove-locked-source-distributions", action="store_true"
+    )
     arguments = parser.parse_args()
 
     runtime_arguments = (
@@ -623,6 +736,12 @@ def main():
     root = arguments.python_root.resolve(strict=True)
     if not root.is_dir():
         raise ValueError("embedded Python root is not a directory")
+    if arguments.remove_locked_source_distributions:
+        if arguments.requirements_lock is None:
+            raise ValueError(
+                "removing locked source distributions requires the lock"
+            )
+        remove_locked_source_distributions(root, arguments.requirements_lock)
     source_entries = (
         capture_runtime_source(arguments.payload_root)
         if arguments.runtime_manifest is not None
