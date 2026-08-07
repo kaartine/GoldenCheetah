@@ -130,6 +130,7 @@ jobs:
             /src/Python/requirements-appimage.lock
             /src/Resources/linux/AppImagePackagingSupport.sh
             /src/Resources/linux/MakeAppImageQt6.sh
+            /src/Resources/linux/capture-linuxdeployqt-transforms.py
             /src/Resources/linux/compute-build-input-identity.py
             /src/Resources/linux/generate-appimage-sbom.py
             /src/Resources/linux/generate-runtime-provenance.py
