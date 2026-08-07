@@ -928,12 +928,77 @@ class SbomProvenanceTests(unittest.TestCase):
         paths = [entry["path"] for entry in entries]
         self.assertEqual(paths, ["usr/foo-bar", "usr/foo/bar"])
 
+    def test_locked_wheel_replacement_removes_source_distribution_first(self):
+        payload = self.root / "python-wheel-overlap"
+        python_root = payload / "opt/python3.11"
+        site_packages = python_root / "lib/python3.11/site-packages"
+        replaced = site_packages / "packaging"
+        dist_info = site_packages / "packaging-1.0.dist-info"
+        unrelated = site_packages / "pip"
+        script = python_root / "bin/packaging-tool"
+        dist_info.mkdir(parents=True)
+        replaced.mkdir()
+        unrelated.mkdir()
+        script.parent.mkdir()
+        module = replaced / "__init__.py"
+        module.write_bytes(b"source runtime package")
+        metadata = dist_info / "METADATA"
+        metadata.write_text(
+            "Metadata-Version: 2.1\nName: packaging\nVersion: 1.0\n",
+            encoding="ascii",
+        )
+        record = dist_info / "RECORD"
+        record.write_text(
+            "packaging/__init__.py,,\n"
+            "packaging-1.0.dist-info/METADATA,,\n"
+            "packaging-1.0.dist-info/RECORD,,\n"
+            "../../../bin/packaging-tool,,\n",
+            encoding="ascii",
+        )
+        script.write_bytes(b"#!/tmp/python\n")
+        (unrelated / "__init__.py").write_bytes(b"pip remains")
+        lock = self.root / "overlap-requirements.lock"
+        lock.write_text(
+            "packaging==1.0 \\\n"
+            f"    --hash=sha256:{'1' * 64}\n",
+            encoding="ascii",
+        )
+
+        self.python_normalizer.remove_locked_source_distributions(
+            python_root, lock
+        )
+        self.assertFalse(replaced.exists())
+        self.assertFalse(dist_info.exists())
+        self.assertFalse(script.exists())
+        self.assertTrue((unrelated / "__init__.py").is_file())
+
+        escaped = self.root / "must-remain"
+        escaped.write_bytes(b"outside")
+        dist_info.mkdir()
+        metadata.write_text(
+            "Metadata-Version: 2.1\nName: packaging\nVersion: 1.0\n",
+            encoding="ascii",
+        )
+        record.write_text(
+            f"{'../' * 12}{escaped.name},,\n",
+            encoding="ascii",
+        )
+        with self.assertRaisesRegex(ValueError, "escapes"):
+            self.python_normalizer.remove_locked_source_distributions(
+                python_root, lock
+            )
+        self.assertEqual(escaped.read_bytes(), b"outside")
+
     def test_base_python_runtime_manifest_is_created_before_pip_install(self):
         support = PACKAGING_SUPPORT.read_text(encoding="utf-8")
         function = support.split("install_embedded_python()", 1)[1]
         function = function.split("\n)", 1)[0]
         self.assertLess(
             function.index("--runtime-manifest"),
+            function.index("pip install"),
+        )
+        self.assertLess(
+            function.index("--remove-locked-source-distributions"),
             function.index("pip install"),
         )
 
