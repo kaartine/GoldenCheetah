@@ -1888,6 +1888,8 @@ create_appimage_build_manifest()
     raw_hash=$(sha256sum "$binary" | cut -d ' ' -f 1) || return
     case "$oauth_status" in
     "Strava OAuth: configured") oauth_configured=true ;;
+    "Strava OAuth: runtime credentials supported")
+        oauth_configured=false ;;
     "Strava OAuth: unavailable (credentials not configured)")
         oauth_configured=false ;;
     *)

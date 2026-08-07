@@ -638,6 +638,14 @@ GC_TEST_BUILD_PROVENANCE_ENTRYPOINT=true \
         "$UNCONFIGURED_MANIFEST"
 grep -Fxq 'strava_oauth_configured=false' "$UNCONFIGURED_MANIFEST" ||
     fail "manifest OAuth status is not boolean false"
+RUNTIME_OAUTH_MANIFEST="$TEMP_DIR/runtime-oauth-build.manifest"
+GC_TEST_BUILD_PROVENANCE_ENTRYPOINT=true \
+    create_appimage_build_manifest \
+        "$PROVENANCE_REPO" "$TEMP_DIR/provenance-b" \
+        "Strava OAuth: runtime credentials supported" \
+        "$RUNTIME_OAUTH_MANIFEST"
+grep -Fxq 'strava_oauth_configured=false' "$RUNTIME_OAUTH_MANIFEST" ||
+    fail "runtime-only OAuth manifest encoded a compile-time fallback"
 if GC_TEST_BUILD_PROVENANCE_ENTRYPOINT=true \
     create_appimage_build_manifest \
         "$PROVENANCE_REPO" "$TEMP_DIR/provenance-b" \
