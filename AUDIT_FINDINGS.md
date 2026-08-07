@@ -7203,7 +7203,7 @@ the active remediation goal. They remain documented for later prioritization;
   current host until Strava opens the replacement, then validate and switch in
   one place before the provider's removal deadline is announced.
 
-### BUILD-014: AppImage verification executes the untrusted candidate runtime
+### BUILD-024: AppImage verification executes the untrusted candidate runtime
 
 - Status: FIXED
 - Code: `src/Resources/linux/AppImagePackagingSupport.sh`
@@ -7222,7 +7222,7 @@ the active remediation goal. They remain documented for later prioritization;
   fixtures pass with real `mksquashfs` and `unsquashfs`; the complete AppImage
   packaging fixture also passes.
 
-### BUILD-015: AppVeyor dependency setup dirties its source worktree
+### BUILD-025: AppVeyor dependency setup dirties its source worktree
 
 - Status: FIXED
 - Code: `appveyor/linux/install.sh`, `appveyor/linux/before_build.sh`, and
@@ -7238,7 +7238,7 @@ the active remediation goal. They remain documented for later prioritization;
 - Verification: Release-hardening tests require every generated dependency
   path to resolve outside the repository and reject source-tree inputs.
 
-### BUILD-016: AppVeyor restores release dependencies into non-empty targets
+### BUILD-026: AppVeyor restores release dependencies into non-empty targets
 
 - Status: FIXED
 - Code: `appveyor.yml` and `appveyor/linux/install.sh`
@@ -7253,7 +7253,7 @@ the active remediation goal. They remain documented for later prioritization;
 - Verification: Pipeline-isolation tests reject extracted-tree cache entries
   and non-empty or in-worktree release input roots.
 
-### BUILD-017: Source provenance omits ignored and local build inputs
+### BUILD-027: Source provenance omits ignored and local build inputs
 
 - Status: FIXED
 - Code: `src/src.pro`, `src/Core/main.cpp`, and
@@ -7272,7 +7272,7 @@ the active remediation goal. They remain documented for later prioritization;
 - Verification: Build-input fixtures mutate ignored configuration and require
   rejection, while compiled report and manifest identities must match exactly.
 
-### BUILD-018: SBOM verification does not authenticate payload coverage
+### BUILD-028: SBOM verification does not authenticate payload coverage
 
 - Status: FIXED
 - Code: `src/Resources/linux/generate-appimage-sbom.py` and
@@ -7289,7 +7289,7 @@ the active remediation goal. They remain documented for later prioritization;
 - Verification: Complete payload fixtures pass; missing entries, altered files,
   redirected links, and Python-role substitutions are rejected.
 
-### BUILD-019: AppImage tooling inherits release-affecting host variables
+### BUILD-029: AppImage tooling inherits release-affecting host variables
 
 - Status: FIXED
 - Code: `src/Resources/linux/AppImagePackagingSupport.sh`
@@ -7306,7 +7306,7 @@ the active remediation goal. They remain documented for later prioritization;
 - Verification: Poisoned-environment tests confirm release-affecting host
   variables do not reach build or packaging tools.
 
-### BUILD-020: Two-pass packaging reuses one compiled executable
+### BUILD-030: Two-pass packaging reuses one compiled executable
 
 - Status: OPEN
 - Code: `appveyor/linux/after_build.sh`,
@@ -7322,7 +7322,7 @@ the active remediation goal. They remain documented for later prioritization;
 - Fix direction: Share one two-build/two-package orchestrator, isolate both
   build roots, and compare complete release outputs.
 
-### BUILD-021: GUI smoke exits before GoldenCheetah runtime initialization
+### BUILD-031: GUI smoke exits before GoldenCheetah runtime initialization
 
 - Status: OPEN
 - Code: `src/Core/main.cpp` and
@@ -7336,7 +7336,7 @@ the active remediation goal. They remain documented for later prioritization;
   prerequisites, then emit an `application-runtime-ready` marker from the event
   loop and shut down cleanly.
 
-### BUILD-022: APT snapshot integration bypasses the real Docker bootstrap
+### BUILD-032: APT snapshot integration bypasses the real Docker bootstrap
 
 - Status: FIXED
 - Code: `.devcontainer/Dockerfile` and
