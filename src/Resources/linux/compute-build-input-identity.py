@@ -13,6 +13,10 @@ MAX_INPUT_SIZE = 1024 * 1024
 LOCAL_INPUT_RE = re.compile(
     r"^\s*(LOCALHEADERS|LOCALSOURCES)\s*(?:\+=|-=|\*=|~=|=)", re.MULTILINE
 )
+CONFIG_ASSIGNMENT_RE = re.compile(
+    r"^\s*CONFIG\s*(\+=|-=|\*=|=)\s*([^\n]*)$", re.MULTILINE
+)
+BUILD_MODES = {"debug", "release"}
 
 
 def read_regular(path, required):
@@ -40,6 +44,23 @@ def uncommented_configuration(data):
     return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
 
 
+def effective_build_mode(configuration):
+    modes = []
+    for operator, value in CONFIG_ASSIGNMENT_RE.findall(configuration):
+        assigned_modes = [token for token in value.split() if token in BUILD_MODES]
+        if operator == "=":
+            modes = assigned_modes
+        elif operator == "+=":
+            modes.extend(assigned_modes)
+        elif operator == "-=":
+            modes = [mode for mode in modes if mode not in assigned_modes]
+        else:
+            for mode in assigned_modes:
+                if mode not in modes:
+                    modes.append(mode)
+    return modes[-1] if modes else None
+
+
 def update_field(digest, name, data):
     encoded_name = name.encode("ascii")
     digest.update(len(encoded_name).to_bytes(4, "big"))
@@ -56,7 +77,10 @@ def identity(source_root):
     if not stat.S_ISDIR(metadata.st_mode) or source_root.is_symlink():
         raise ValueError("source root is not a real directory")
     config = read_regular(source_root / "src/gcconfig.pri", required=True)
-    local_match = LOCAL_INPUT_RE.search(uncommented_configuration(config))
+    configuration = uncommented_configuration(config)
+    if effective_build_mode(configuration) != "release":
+        raise ValueError("gcconfig.pri must select the release configuration")
+    local_match = LOCAL_INPUT_RE.search(configuration)
     if local_match:
         raise ValueError(
             f"{local_match.group(1)} is not allowed in an authenticated release build"
