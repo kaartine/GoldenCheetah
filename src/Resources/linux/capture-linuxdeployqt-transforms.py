@@ -251,20 +251,21 @@ def build_transformed_entries(
     root, outputs = appdir_libraries(appdir)
     transformed = []
     for output in outputs:
-        candidates = by_soname.get(output.name, [])
+        output_identity = elf_identity(output)
+        output_soname = output_identity.get("soname")
+        candidates = by_soname.get(output_soname, [])
         if not candidates:
             continue
         output_digest = stable_sha256(output)
         if any(entry["sha256"] == output_digest for entry in candidates):
             continue
-        output_identity = elf_identity(output)
         matching = []
         for entry in candidates:
             source_identity = elf_identity(entry["path"])
             if (
                 source_identity.get("build_id") == output_identity.get("build_id")
-                and source_identity.get("soname") == output.name
-                and output_identity.get("soname") == output.name
+                and source_identity.get("soname") == entry["soname"]
+                and output_soname == entry["soname"]
                 and output_identity.get("rpath") == "$ORIGIN"
             ):
                 matching.append(entry)
