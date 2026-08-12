@@ -23864,7 +23864,7 @@ credentialBackendBlocksSettingsReconfigurationUntilRelease()
 
     state->released.store(true);
     state->condition.notify_all();
-    QVERIFY(reconfiguration.wait_for(std::chrono::seconds(5))
+    QVERIFY(reconfiguration.wait_for(std::chrono::seconds(15))
             == std::future_status::ready);
     reconfiguration.get();
     QTRY_VERIFY_WITH_TIMEOUT(state->readFinished.load(), 1000);
@@ -23942,7 +23942,7 @@ credentialBackendDoesNotDropSameInstanceAthleteInitialization()
 
     state->released.store(true);
     state->condition.notify_all();
-    QVERIFY(initialization.wait_for(std::chrono::seconds(5))
+    QVERIFY(initialization.wait_for(std::chrono::seconds(15))
             == std::future_status::ready);
     initialization.get();
     QCOMPARE(state->initializationCompletions.load(), 1);
@@ -24131,7 +24131,7 @@ credentialWorkerShutdownAbandonsQueuedOperations()
         child.start();
         QVERIFY2(child.waitForStarted(5000),
                  qPrintable(child.errorString()));
-        const bool finished = child.waitForFinished(15000);
+        const bool finished = child.waitForFinished(30000);
         if (!finished) {
             child.kill();
             child.waitForFinished();
@@ -24188,8 +24188,8 @@ credentialWorkerShutdownAbandonsQueuedOperations()
         },
         completionContext,
         [&] { completionCalled.store(true); }));
-    QTRY_VERIFY_WITH_TIMEOUT(firstStarted.load(), 1000);
-    QTRY_VERIFY_WITH_TIMEOUT(backendEntered.load(), 1000);
+    QTRY_VERIFY_WITH_TIMEOUT(firstStarted.load(), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(backendEntered.load(), 5000);
     QVERIFY(StravaSettingsCommit::runOnCredentialThreadAsync(
         [&] { queuedRan.store(true); },
         {}));

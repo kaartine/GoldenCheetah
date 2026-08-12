@@ -3445,6 +3445,38 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   ASan/UBSan/LSan. The production application build covers the real wizard and
   Calendar translation units; visible widget interaction remains in `TEST-005`.
 
+### THREAD-022: Credential shutdown can destroy live settings state
+
+- Status: FIXED
+- Code: `src/Core/Settings.cpp`, `src/Core/Settings.h`,
+  `src/Core/CredentialStoreQtKeychain.cpp`,
+  `src/Cloud/StravaSettingsCommit.cpp`, and `src/Core/main.cpp`, plus
+  `unittests/Core/credentialSettings/testCredentialSettings.cpp`
+- Impact: Credential operations release the `GSettings` mutex while retaining
+  pointers to settings and backend state. Reconfiguration or application
+  shutdown could delete those objects after the worker's 100 ms join expired,
+  allowing a stalled keychain callback to resume through freed settings,
+  storage, or mutex memory.
+- Test-first evidence: `credentialBackendBlocksSettingsReconfigurationUntilRelease`
+  blocks a backend after the settings mutex is released, proves that bounded
+  reconfiguration fails without destroying state, and then proves that an
+  unbounded reconfiguration completes only after backend release.
+  `credentialWorkerShutdownAbandonsQueuedOperations` holds the active operation
+  beyond the 100 ms worker join, concurrently destroys its `GSettings`, and
+  requires destruction to remain blocked until release while queued work and
+  stale completion callbacks remain suppressed.
+- Resolution: Every settings-backed credential call increments a suspension
+  lease before releasing the settings mutex and clears it only after the call
+  stack no longer retains settings or backend objects. Reconfiguration and the
+  `GSettings` destructor wait for all foreign leases. Credential-worker
+  generations suppress callbacks after shutdown, and every production shutdown
+  path uses `_Exit` before settings teardown if the bounded worker join does not
+  complete.
+- Verification: Implementation commit `906b5e3`. The complete 15-case
+  `THREAD-019..022` matrix passes ThreadSanitizer with no race reports. The full
+  credentialSettings program passes 443 cases under strict
+  ASan/UBSan/LSan, with zero failures and seven platform skips.
+
 ## Medium
 
 ### MEM-028: OAuth nested messages can outlive their dialog
@@ -3487,57 +3519,76 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### THREAD-019: QtKeychain caller deadlines do not bound backend completion
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Core/CredentialStoreQtKeychain.cpp`,
   `src/Core/CredentialStoreQtKeychain.h`, and
   `src/Cloud/StravaSettingsCommit.cpp`
 - Impact: A caller can time out while the QtKeychain job remains live and may
   later mutate the vault. The apparent deadline therefore does not bound the
   operation or establish whether a credential write committed.
-- Test-first evidence / required regression: Stall a keychain job beyond its
-  caller deadline, allow it to finish later, and require one durable,
-  recoverable outcome without a silent post-timeout mutation.
-- Fix direction: Make backend completion part of the owned operation lifetime
-  and persist an explicit pending or unknown result until definitive completion
-  can be observed and reconciled.
-- Verification: Confirmed by final review. Existing timeout tests do not bound
-  backend completion, and no integrated closing regression exists.
+- Test-first evidence: The timeout regressions stall read, write, and removal
+  jobs beyond both native and caller deadlines, attempt competing mutations,
+  and then finish or destroy the original job. They require a tracked pending
+  or indeterminate result, retained process and filesystem serialization, and
+  deterministic retry only after terminal reconciliation.
+- Resolution: A timed-out native mutation retains its unique job gate and
+  durable backend marker until the job finishes or is destroyed. Callers see
+  `Pending` or `Indeterminate`, never success or an empty credential, and the
+  Strava durability transaction remains authoritative for late completion.
+  Generation checks prevent an old completion from releasing or publishing
+  through a newer owner.
+- Verification: Implementation commit `906b5e3`. The complete 15-case
+  `THREAD-019..022` matrix passes ThreadSanitizer with no race reports. The full
+  credentialSettings program passes 443 cases under strict
+  ASan/UBSan/LSan, with zero failures and seven platform skips.
 
 ### THREAD-020: Credential suspension skips valid settings operations
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Core/Settings.cpp`, `src/Core/Settings.h`, and
   `src/Core/CredentialSettings.cpp`
 - Impact: A per-instance credential suspension counter makes unrelated settings
   calls fail or return early. In particular, opening or creating an athlete
   during a blocked credential request can silently skip same-instance settings
   initialization with no retry.
-- Test-first evidence / required regression: Block a credential read, invoke
+- Test-first evidence: Block a credential read, invoke
   `initializeQSettingsAthlete()` on the same `GSettings` instance, release the
   read, and require initialization exactly once. Also require unrelated
   settings access to wait or proceed rather than report a false failure.
-- Fix direction: Scope suspension to credential backend routing only. Serialize
-  structural reconfiguration explicitly and queue or wait for initialization
-  instead of dropping it.
-- Verification: Confirmed by final review. Existing concurrency coverage uses
-  another settings instance and does not close the same-instance case.
+- Resolution: Production structural operations wait for credential-backend
+  suspensions instead of skipping initialization. The wait temporarily releases
+  the recursive settings mutex and, on the application thread, processes the
+  restricted event path needed for native keychain completion. A suspension
+  owned by the current reentrant stack fails closed rather than deadlocking;
+  the caller retries that deferred structural operation after the owning lease
+  unwinds. A call from another thread waits and completes exactly once.
+- Verification: Implementation commit `906b5e3` includes the same-instance
+  initialization and reentrant application-thread regressions. The complete
+  15-case `THREAD-019..022` matrix passes ThreadSanitizer, and the full
+  credentialSettings program passes 443 cases under strict ASan/UBSan/LSan.
 
 ### THREAD-021: Bounded credential-worker shutdown can leave work alive
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Cloud/StravaSettingsCommit.cpp`,
   `src/Cloud/StravaSettingsCommit.h`, and `src/Core/main.cpp`
 - Impact: Shutdown waits 100 ms and can return while a keychain or settings
   operation still runs. The process then has neither a reliable completion
   result nor a bounded guarantee that all credential work has stopped.
-- Test-first evidence / required regression: Hold a worker operation beyond
+- Test-first evidence: Hold a worker operation beyond
   100 ms, initiate shutdown, then release it and require deterministic joining
   or durable handoff with no live worker at process teardown.
-- Fix direction: Use cooperative cancellation plus an owned join protocol, or
-  persist and transfer incomplete work to startup recovery. Do not abandon a
-  thread that still owns application callbacks.
-- Verification: Confirmed by final review. The stronger destruction hazard is
-  tracked as High `THREAD-022`; no integrated fix exists for either boundary.
+- Resolution: Shutdown atomically stops submissions, abandons queued operations,
+  interrupts the active worker, and invalidates its callback generation. A
+  cooperative operation joins and its stopped generation is reclaimed. If a
+  native backend remains wedged past 100 ms, production does not tear down any
+  referenced application state: both startup termination and normal shutdown
+  take an explicit `_Exit` fail-stop path. Durable credential journals retain
+  any mutation whose outcome is not definitive.
+- Verification: Implementation commit `906b5e3`. The shutdown child regression
+  proves bounded return, callback suppression, blocked settings destruction,
+  eventual join after release, and no queued execution. It passes in the
+  15-case ThreadSanitizer matrix and the full 443-case ASan/UBSan/LSan run.
 
 ### DUR-017: Replaced split-journal payloads had ambiguous cleanup ownership
 
