@@ -1233,6 +1233,49 @@ class SbomProvenanceTests(unittest.TestCase):
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]["path"], "lib/libbz2.so.1")
 
+    def test_linuxdeployqt_snapshot_includes_package_private_libraries(self):
+        capture = load_python_module(
+            "capture_linuxdeployqt_private_library", LINUXDEPLOYQT_CAPTURE
+        )
+        public = self.root / "system/libpublic.so.1"
+        private = self.root / "system/pulseaudio/libprivate.so.1"
+        private.parent.mkdir(parents=True)
+        public.write_bytes(b"public library")
+        private.write_bytes(b"private package library")
+
+        def run(command, **_kwargs):
+            if command[0].endswith("ldconfig"):
+                return SimpleNamespace(
+                    stdout=(
+                        f"libpublic.so.1 (libc6,x86-64) => {public}\n"
+                    )
+                )
+            if command[:2] == ["/usr/bin/dpkg-query", "-S"]:
+                return SimpleNamespace(
+                    stdout=f"private-package:amd64: {private}\n"
+                )
+            self.fail(f"unexpected source-discovery command: {command}")
+
+        with mock.patch.object(
+            capture.shutil,
+            "which",
+            side_effect=lambda name: {
+                "ldconfig": "/usr/sbin/ldconfig",
+                "dpkg-query": "/usr/bin/dpkg-query",
+            }.get(name),
+        ), mock.patch.object(capture.subprocess, "run", side_effect=run):
+            entries = capture.ldconfig_source_entries()
+
+        by_soname = {entry["soname"]: entry for entry in entries}
+        self.assertEqual(
+            by_soname["libprivate.so.1"]["path"],
+            str(private.resolve()),
+        )
+        self.assertEqual(
+            by_soname["libprivate.so.1"]["sha256"],
+            hashlib.sha256(private.read_bytes()).hexdigest(),
+        )
+
     def test_runtime_library_paths_follow_serialized_posix_order(self):
         nested = self.appdir / "opt/python/site-packages/numpy/random"
         sibling = self.appdir / "opt/python/site-packages/numpy.libs"
