@@ -36,6 +36,7 @@
 // DATA STRUCTURES
 #include "MainWindow.h"
 #include "CacheWriteWarning.h"
+#include "OpenGLVersionProbe.h"
 #include "Context.h"
 #include "Athlete.h"
 #include "AthleteView.h"
@@ -417,15 +418,7 @@ MainWindow::MainWindow(const QDir &home)
 #ifdef Q_OS_LINUX
     // check opengl is available with version 2 or higher
     // only do this on Linux since Windows and MacOS have opengl "issues"
-    QOffscreenSurface surf;
-    surf.create();
-
-    QOpenGLContext ctx;
-    ctx.create();
-    ctx.makeCurrent(&surf);
-
-    // OpenGL version number
-    gl_version = QString::fromUtf8((char *)(ctx.functions()->glGetString(GL_VERSION)));
+    gl_version = OpenGLVersionProbe::detect();
     gl_major = Utils::number(gl_version);
 #endif
 

@@ -3477,6 +3477,30 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   credentialSettings program passes 443 cases under strict
   ASan/UBSan/LSan, with zero failures and seven platform skips.
 
+### GUI-013: Linux startup dereferences an unavailable OpenGL dispatch table
+
+- Status: FIXED
+- Code: `src/Gui/MainWindow.cpp`, `src/Gui/OpenGLVersionProbe.cpp`,
+  `src/Gui/OpenGLVersionProbe.h`, and
+  `unittests/Gui/openGLVersionProbe/`
+- Impact: Linux startup ignored failures from OpenGL context creation and
+  `makeCurrent()`, then dispatched `glGetString()` through that invalid
+  context. Systems without a usable OpenGL context, including the packaged Qt
+  offscreen smoke environment, could crash before the main window became
+  ready.
+- Test-first evidence: The packaged offscreen smoke reproduced a segmentation
+  fault in `MainWindow` after Qt reported a non-current OpenGL context. The
+  focused invalid-context regression was added before the checked probe existed
+  and failed to build because no safe failure-path API was available.
+- Resolution: OpenGL version discovery now validates context creation, surface
+  creation, `makeCurrent()`, and the function table before dispatch. Every
+  successful current-context path calls `doneCurrent()`, while any unavailable
+  OpenGL capability returns an empty version and allows startup to continue.
+- Verification: All five focused cases pass normally and under strict
+  ASan/UBSan, covering null surfaces, an invalid context, and automatic cleanup
+  with no usable OpenGL context. Complete packaged offscreen verification is
+  required before release promotion.
+
 ## Medium
 
 ### DATA-023: A missing workout setting becomes a literal `0` path

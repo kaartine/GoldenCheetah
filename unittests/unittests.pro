@@ -84,6 +84,7 @@ exists(unittests.pri) {
 			   Gui/activityDeletionWorkflow \
 			   Gui/activitySaveWorkflow \
 			   Gui/cacheWriteWarning \
+			   Gui/openGLVersionProbe \
 			   Gui/calendarModalWorkflow \
 			   Gui/calendarData \
 			   Gui/mergeActivityDistanceCursor \
