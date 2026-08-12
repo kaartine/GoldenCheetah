@@ -3481,23 +3481,27 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### MEM-028: OAuth nested messages can outlive their dialog
 
-- Status: OPEN
-- Code: `src/Cloud/OAuthDialog.cpp` and `src/Cloud/OAuthDialog.h`
+- Status: FIXED
+- Code: `src/Cloud/OAuthDialog.cpp`, `src/Cloud/OAuthDialog.h`, and
+  `src/Cloud/OAuthDialogMessageGuard.cpp`
 - Impact: OAuth failure paths open nested message-box event loops and then
   continue through the raw dialog pointer. Closing or deleting the OAuth dialog
   reentrantly can therefore cause a use-after-free when the message returns.
-- Test-first evidence / required regression: Destroy the dialog from each
-  nested-message path and require the callback to return without touching the
-  deleted object under ASan.
-- Fix direction: Guard dialog lifetime with `QPointer` across every nested event
-  loop and return immediately when the guard clears. Keep completion callbacks
-  context-bound.
-- Verification: Confirmed by final review. A guard and source-contract tests
-  exist only in unintegrated agent work; this branch has no closing fix.
+- Test-first evidence: The failure-message regression destroys the dialog from
+  network-failure, malformed-JSON, and invalid-Strava-response paths. Success
+  and constructor-message rows separately delete the live dialog or message
+  while callbacks remain queued.
+- Resolution: Commit `906b5e3` routes OAuth messages through a nonblocking
+  guard. It tracks dialogs and messages with `QPointer`, binds completion to a
+  live Qt context, and rejects or accepts only while the target still exists.
+- Verification: The implementation's OAuth package passed under strict
+  ASan/UBSan/LSan. At integration revision `daae182`, the current production
+  helper and OAuth sources pass all 68 focused cases, including every dialog
+  destruction row.
 
 ### DUR-016: Cross-process Strava recovery can use stale revocation state
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Cloud/StravaCredentialDurability.cpp`,
   `src/Cloud/StravaCredentialPublisher.cpp`,
   `src/Cloud/StravaTokenRefresh.cpp`, and
@@ -3506,16 +3510,19 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   Another GoldenCheetah process can rotate, revoke, or replace a grant before
   recovery resumes, allowing stale recovery state to overwrite or misclassify
   the newer authorization.
-- Test-first evidence / required regression: Run overlapping refresh,
-  revocation, publication, and restart recovery in separate processes against
-  one disposable athlete and require stale journals to preserve the newer
-  durable generation.
-- Fix direction: Serialize grant mutations with a per-athlete interprocess
-  lease and bind every journal transition to a durable credential generation
-  checked before and after remote and local side effects.
-- Verification: Confirmed by final review and distinct from the live-flight
-  coordination in `THREAD-010`; no integrated subprocess regression or fix
-  exists yet.
+- Test-first evidence: `independentProcessesSerializeAndFenceGenerations`
+  starts refresh, removal, and OAuth child processes against one disposable
+  account. It requires generations 1, 2, and 3 to serialize, each child to see
+  its predecessor, and the final OAuth grant to win. Process-death, coherent
+  revision-read, and lock/journal parent-swap rows cover recovery boundaries.
+- Resolution: Commit `906b5e3` adds an account-derived anchored interprocess
+  lease, refreshes storage metadata after acquiring it, and binds every journal
+  transition to a transaction ID and generation. Credential and authorization
+  revisions are checked around coherent snapshots and before publication, so a
+  stale process cannot publish through a newer generation.
+- Verification: The implementation's 26-case durability suite passed normally
+  and under strict ASan/UBSan/LSan. The expanded suite, built exactly from
+  integration revision `daae182`, passes all 28 cases.
 
 ### THREAD-019: QtKeychain caller deadlines do not bound backend completion
 
@@ -3756,26 +3763,28 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-022: Unavailable vault reads look empty during local Strava removal
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Cloud/StravaCredentialPublisher.cpp`,
   `src/Cloud/StravaCredentialDurability.cpp`, and
   `src/Cloud/StravaAccountRemoval.cpp`
 - Impact: Backend read failure is converted to empty tokens and then marked
   readable. Local-only disconnect can report success and persist `revoked`
   while real credentials remain in an unavailable vault.
-- Test-first evidence / required regression: Make token reads and removals
-  return `Unavailable` in local-only mode. The operation must not report
-  disconnected or persist `revoked`; after backend recovery, retry must remove
-  the original credentials.
-- Fix direction: Preserve `Present`, `NotFound`, and `Unavailable` through the
-  storage adapter and durability state machine. Fail closed and retain a
-  retryable journal whenever credential existence is unknown.
-- Verification: Confirmed by independent final review. Status-bearing reads are
-  incomplete in unintegrated work and no closing removal regression exists.
+- Test-first evidence: `unavailableVaultReadCannotReportLocalDisconnect` makes
+  local-only token reads unavailable and requires no success, disconnect,
+  deletion, or `revoked` state. After backend recovery, the same regression
+  requires retry to remove both original tokens and complete revocation.
+- Resolution: Commit `906b5e3` preserves checked credential-read status through
+  the publisher and removal coordinator. A local removal proceeds only when
+  both token reads are authoritative; `Unavailable` fails closed without
+  converting unknown credentials into an empty pair or publishing success.
+- Verification: All 21 account-removal cases passed under strict
+  ASan/UBSan/LSan with the implementation and pass again against integration
+  revision `daae182`.
 
 ### DUR-023: Revocation becomes uncertain before any remote dispatch
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Cloud/StravaAccountRemoval.cpp`,
   `src/Cloud/StravaCredentialDurability.cpp`, and
   `src/Cloud/StravaRevocationClient.cpp`
@@ -3783,15 +3792,18 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   or proving that a remote request was dispatched. A crash during local cleanup
   or request-construction failure can therefore leave authorization permanently
   uncertain even though no remote side effect was possible.
-- Test-first evidence / required regression: Crash local-only removal before
-  its first deletion and require restart to resume. Force remote request
-  creation to fail before dispatch and require rollback or retry, while
-  preserving fail-closed uncertainty after a request may have left the process.
-- Fix direction: Record separate pre-dispatch, dispatched-unknown, and local
-  cleanup phases. Enter remote uncertainty only at the first point where the
-  provider may have observed the request.
-- Verification: Confirmed by independent final review. No integrated phase
-  split or closing recovery regressions exist.
+- Test-first evidence: Local and confirmed-remote crash rows restart before the
+  first credential deletion. `requestCreationFailureRestoresRetryableAuthorization`
+  requires a pre-dispatch failure to restore the previous authorization, while
+  the dispatched-request rows retain fail-closed uncertainty.
+- Resolution: Commit `906b5e3` separates local cleanup from the remote boundary
+  and carries an explicit `mayHaveBeenDispatched` result from request creation.
+  A failure before dispatch retires the uncertain transition and restores the
+  prior retryable state; once dispatch may have occurred, recovery remains
+  blocked until the durable remote outcome and local-commit phase reconcile.
+- Verification: The implementation's durability and account-removal programs
+  passed under strict ASan/UBSan/LSan. At integration revision `daae182`, their
+  expanded focused suites pass 28/28 and 21/21 cases respectively.
 
 ### DUR-024: macOS root aliases made anchored persistence unusable
 
