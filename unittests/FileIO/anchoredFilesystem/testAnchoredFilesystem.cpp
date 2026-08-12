@@ -765,6 +765,7 @@ private slots:
     void outputDigestMismatchRetainsFile_data();
     void outputDigestMismatchRetainsFile();
     void copiedOutputCanBeMovedAfterPinFinalization();
+    void copiedOutputCanMoveIntoTunneledWindowsName();
     void moveAcceptsWindowsRenameOnlyChange();
     void repeatedPrivateHardeningPreservesPinnedChild();
 #endif
@@ -2162,6 +2163,46 @@ void TestAnchoredFilesystem::copiedOutputCanBeMovedAfterPinFinalization()
     QCOMPARE(movedIdentity.serializedKey(), copiedKey);
     verifyPinnedAt(copied, target, movedIdentity);
     QCOMPARE(readFixture(target.displayPath()), contents);
+    QVERIFY(!QFileInfo::exists(staging.displayPath()));
+}
+
+void TestAnchoredFilesystem::copiedOutputCanMoveIntoTunneledWindowsName()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    const EntryRef staging = entry(directory, QStringLiteral("staging"));
+    const EntryRef target = entry(directory, QStringLiteral("target"));
+    const EntryRef previous = entry(directory, QStringLiteral("previous"));
+    const QByteArray contents("new copied output contents");
+    const QByteArray oldContents("old target contents");
+    writeFixture(source.displayPath(), contents);
+    writeFixture(target.displayPath(), oldContents);
+    QVERIFY(setWindowsCreationTime(
+        target.displayPath(), quint64(132223104000000000ULL)));
+    const PinnedFile sourceFile = pin(source);
+    PinnedFile oldTarget = pin(target);
+    const NativeIdentity oldTargetIdentity = oldTarget.identity();
+    PinnedFile copied;
+    QString copyError;
+    QVERIFY2(
+        copyToNewFile(sourceFile, staging, copied, copyError),
+        qPrintable(copyError));
+    const QByteArray copiedKey = copied.identity().serializedKey();
+    QVERIFY(!copiedKey.isEmpty());
+    QVERIFY(copied.durableGeneration() != oldTarget.durableGeneration());
+    verifyApplied(moveNoReplace(oldTarget, previous));
+
+    const MutationResult result = moveNoReplace(copied, target);
+
+    verifyApplied(result);
+    const NativeIdentity movedIdentity = copied.identity();
+    QCOMPARE(movedIdentity.serializedKey(), copiedKey);
+    verifyPinnedAt(copied, target, movedIdentity);
+    verifyPinnedAt(oldTarget, previous, oldTargetIdentity);
+    QCOMPARE(readFixture(target.displayPath()), contents);
+    QCOMPARE(readFixture(previous.displayPath()), oldContents);
     QVERIFY(!QFileInfo::exists(staging.displayPath()));
 }
 
