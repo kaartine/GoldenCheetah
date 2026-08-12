@@ -1193,6 +1193,46 @@ class SbomProvenanceTests(unittest.TestCase):
                 authenticate_source=lambda path: None,
             )
 
+    def test_linuxdeployqt_capture_accepts_soname_alias_output(self):
+        capture = load_python_module(
+            "capture_linuxdeployqt_soname_alias", LINUXDEPLOYQT_CAPTURE
+        )
+        source = self.root / "system/libbz2.so.1.0.4"
+        source.parent.mkdir()
+        source.write_bytes(b"authenticated libbz2 package payload")
+        output = self.appdir / "lib/libbz2.so.1"
+        output.write_bytes(b"linuxdeployqt transformed libbz2 payload")
+        snapshot = {
+            "format": "goldencheetah-linuxdeployqt-source-snapshot-1",
+            "libraries": [
+                {
+                    "path": str(source.resolve()),
+                    "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                    "soname": "libbz2.so.1.0",
+                }
+            ],
+        }
+
+        def elf_identity(path):
+            return {
+                "build_id": "0123456789abcdef",
+                "rpath": "$ORIGIN" if path == output else "",
+                "soname": "libbz2.so.1.0",
+            }
+
+        authenticated = []
+        entries = capture.build_transformed_entries(
+            self.appdir,
+            snapshot,
+            "d" * 64,
+            elf_identity=elf_identity,
+            authenticate_source=lambda path: authenticated.append(path),
+        )
+
+        self.assertEqual(authenticated, [source.resolve()])
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["path"], "lib/libbz2.so.1")
+
     def test_runtime_library_paths_follow_serialized_posix_order(self):
         nested = self.appdir / "opt/python/site-packages/numpy/random"
         sibling = self.appdir / "opt/python/site-packages/numpy.libs"
