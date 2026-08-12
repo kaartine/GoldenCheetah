@@ -3524,6 +3524,30 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   RideCache removal, mutation, and recovery program passes 407 tests with zero
   failures and one expected platform skip.
 
+### BUILD-037: Offscreen startup runs a desktop WebEngine workaround
+
+- Status: FIXED
+- Code: `src/Gui/MainWindow.cpp`, `src/Gui/GuiStartupPolicy.cpp`,
+  `src/Gui/GuiStartupPolicy.h`, and `unittests/Gui/guiStartupPolicy/`
+- Impact: Main-window construction always created and immediately destroyed a
+  temporary `QWebEngineView` to avoid flicker on real desktop windows. The
+  workaround has no purpose on Qt's offscreen platform, where it starts an
+  additional WebEngine rendering lifetime that the package smoke must tear
+  down despite having no visible surface.
+- Test-first evidence: Retained offscreen startup first reproduced entry into
+  Qt Quick and WebEngine teardown after the ready marker. The platform-policy
+  regression was then added before its production API and failed to build
+  because no guarded policy existed.
+- Resolution: The desktop primer is preserved for normal platform plugins but
+  is skipped case-insensitively for `offscreen`. The package smoke can therefore
+  validate the main window without creating a rendering workaround that cannot
+  affect an invisible surface.
+- Verification: The focused policy covers lowercase and mixed-case offscreen
+  names plus xcb, Wayland, Windows, and Cocoa desktop controls, with all eight
+  rows passing in normal and ASan/UBSan builds. A production constructor trace
+  confirms that the primer is absent offscreen; a separate map-view shutdown
+  defect still blocks the complete package smoke.
+
 ### MEM-028: OAuth nested messages can outlive their dialog
 
 - Status: FIXED

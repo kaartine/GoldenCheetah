@@ -36,6 +36,7 @@
 // DATA STRUCTURES
 #include "MainWindow.h"
 #include "CacheWriteWarning.h"
+#include "GuiStartupPolicy.h"
 #include "OpenGLVersionProbe.h"
 #include "Context.h"
 #include "Athlete.h"
@@ -488,11 +489,14 @@ MainWindow::MainWindow(const QDir &home)
      * Temporarily add a dummy QWebEngineView with some random content before the MainWindow is shown
      * https://forum.qt.io/topic/141398/qwebengineview-closes-reopens-window-when-added-dynamically
      *--------------------------------------------------------------------*/
-    QWebEngineView *dummywev = new QWebEngineView();
-    dummywev->page()->setHtml("<html></html>");
-    mainLayout->addWidget(dummywev);
-    mainLayout->removeWidget(dummywev);
-    delete dummywev;
+    if (GuiStartupPolicy::shouldPrimeWebEngine(
+            QGuiApplication::platformName())) {
+        QWebEngineView *dummywev = new QWebEngineView();
+        dummywev->page()->setHtml("<html></html>");
+        mainLayout->addWidget(dummywev);
+        mainLayout->removeWidget(dummywev);
+        delete dummywev;
+    }
 
     /*----------------------------------------------------------------------
      * Application Menus

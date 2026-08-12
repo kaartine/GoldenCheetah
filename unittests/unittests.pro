@@ -84,6 +84,7 @@ exists(unittests.pri) {
 			   Gui/activityDeletionWorkflow \
 			   Gui/activitySaveWorkflow \
 			   Gui/cacheWriteWarning \
+			   Gui/guiStartupPolicy \
 			   Gui/openGLVersionProbe \
 			   Gui/calendarModalWorkflow \
 			   Gui/calendarData \
