@@ -1368,6 +1368,16 @@ bool sameWindowsMoveIdentityAndData(
         && left.modified == right.modified;
 }
 
+bool sameWindowsRenameResultAndData(
+    const WindowsStamp &left, const WindowsStamp &right)
+{
+    // Name tunneling can replace creation time after a successful rename.
+    return sameWindowsFileId(left, right)
+        && left.links == right.links
+        && left.size == right.size
+        && left.modified == right.modified;
+}
+
 QString windowsError(const QString &operation, DWORD nativeError)
 {
     return QStringLiteral("%1: system error %2")
@@ -7006,10 +7016,8 @@ MutationResult moveNoReplace(
     WindowsStamp moved;
     if (!captureWindowsStamp(
             mutation.get(), moved, false, result.error)
-        || !sameWindowsMoveIdentityAndData(
-            moved, source.state_->stamp)
-        || windowsIdentity(moved, 'f')
-            != source.state_->identity) {
+        || !sameWindowsRenameResultAndData(
+            moved, source.state_->stamp)) {
         result.effect = MutationEffect::Partial;
         if (result.error.isEmpty()) {
             result.error = QStringLiteral(
@@ -7022,6 +7030,7 @@ MutationResult moveNoReplace(
     source.state_->entry = destination;
     source.state_->stamp = moved;
     source.state_->identity = windowsIdentity(moved, 'f');
+    source.state_->durableGeneration = windowsDurableGeneration(moved);
     QByteArray verifiedDigest;
     const PinnedChunkConsumer discard = [](
         const char *, qsizetype, QString &) { return true; };
@@ -7062,6 +7071,8 @@ MutationResult moveNoReplace(
     source.state_->stamp = finalDestinationStamp;
     source.state_->identity =
         windowsIdentity(finalDestinationStamp, 'f');
+    source.state_->durableGeneration =
+        windowsDurableGeneration(finalDestinationStamp);
     result.effect = MutationEffect::AppliedDurable;
     return result;
 #else
