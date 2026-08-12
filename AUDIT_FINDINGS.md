@@ -3668,71 +3668,91 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-020: Multi-target overwrite can publish before all predecessors validate
 
-- Status: OPEN
-- Code: `src/FileIO/AtomicFileWriter.h` and
-  `src/Train/StravaRoutesDownloadPipeline.cpp`
+- Status: FIXED
+- Code: `src/Planning/PlanBundleImportJournal.cpp` and
+  `src/Train/StravaRoutesDownload.cpp`
 - Impact: A batched overwrite can publish an early target before discovering
   that a later predecessor was replaced or became unsafe. Failure then exposes
   a partially updated route set even though the transaction was rejected.
-- Test-first evidence / required regression: Replace a later predecessor after
-  staging but before commit and require every original target to remain intact
-  with no newly published prefix.
-- Fix direction: Lock and repin every target, validate all predecessor
-  identities and ownership evidence, and only then begin the publication phase.
-- Verification: Confirmed by final review. A preflight implementation and
-  regressions exist only in unintegrated agent work.
+- Test-first evidence: `standaloneMultiTargetPreflightIsMutationFree()` replaces
+  the second predecessor after the durable decision and before publication. Its
+  create and overwrite rows require the first target to remain absent or retain
+  its original bytes while the foreign second generation is preserved.
+- Resolution: Commit `47b70c3` locks every target and captures each current
+  file through the anchored directory before publication. It validates the
+  complete batch against the persisted predecessor size, SHA-256, and native
+  generation fingerprint before preparing or moving the first output.
+- Verification: The PlanBundleImport regression is part of the tested route
+  integration. The 48-case production route suite and complete build passed in
+  workflow `31088424022`; the relevant production and test files are unchanged
+  between `47b70c3` and this audit reconciliation.
 
 ### DUR-021: Staged route publication is not bound to its original pin
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Train/StravaRoutesDownloadPipeline.cpp`,
   `src/Train/StravaRoutesDownloadPipeline.h`, and
-  `src/FileIO/AtomicFileWriter.h`
+  `src/Train/StravaRoutesDownload.cpp`
 - Impact: Route preparation and later publication trust a staging pathname
   across phases. Replacement at that pathname can cause the importer to parse
   or publish bytes other than the authenticated download.
-- Test-first evidence / required regression: Replace a staged route after
-  download validation and before preparation or publication; require rejection
-  while preserving both production data and the foreign replacement.
-- Fix direction: Carry the original anchored file pin, native identity, size,
-  and SHA-256 through preparation and publication and validate all evidence at
-  each phase boundary.
-- Verification: Confirmed by final review. Pin-bound staging exists only in
-  unintegrated agent work and has not closed this branch's finding.
+- Test-first evidence: `pinnedRouteBytesSurviveStagingParentSwap()` proves a
+  validated read continues from the original handle during a directory swap,
+  while `stagedRouteRejectsSameSizedPrevalidationReplacement()` substitutes a
+  same-sized foreign generation and requires rejection before the parser runs.
+- Resolution: Commit `47b70c3` carries an anchored `StagedRoutePin`, byte count,
+  and SHA-256 with each staged route. Preparation verifies the pathname still
+  names that pin before and after streaming, hashes the pinned bytes again, and
+  passes only the authenticated in-memory bytes to the parser and durable
+  publication journal. Later phases no longer reopen the staging pathname.
+- Verification: The pin-swap regressions and real production composition are in
+  the 48-case route suite that passed in workflow `31088424022`; the relevant
+  implementation and tests are unchanged at this reconciliation revision.
 
 ### GUI-012: Abort is ignored during route import preparation
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Train/StravaRoutesDownload.cpp` and
-  `src/Train/StravaRoutesDownloadPipeline.cpp`
+  `src/Train/StravaRoutesDownloadPipeline.cpp`, plus
+  `src/FileIO/GpxParser.cpp`
 - Impact: After downloads complete, route parsing, hashing, and preparation can
   run for long enough that Close or Abort appears ineffective. The suffix can
   continue consuming CPU and may be imported despite the user's request.
-- Test-first evidence / required regression: Stall preparation between routes,
-  trigger Abort and Close, and require prompt cancellation while committing at
-  most the fully prepared prefix according to the documented policy.
-- Fix direction: Check cancellation between bounded preparation units, stop
-  preparing the suffix, and keep the final database transaction short and on
-  its owning thread.
-- Verification: Confirmed by final review. Cancellation changes and focused
-  tests remain in unintegrated agent work.
+- Test-first evidence: `delayedPinnedReadCancellationKeepsGuiResponsive()` and
+  `delayedGpxParserCancellationKeepsGuiResponsive()` stall both expensive
+  preparation phases and require prompt worker exit while GUI heartbeats
+  continue. Prefix, queued-stage, and actual dialog-slot regressions cover
+  between-route cancellation, Abort, Close, and window close.
+- Resolution: Commit `47b70c3` moves preparation to an owned worker, polls its
+  lock-free cancellation check between routes and inside bounded file, XML,
+  interpolation, and parser work, and generation-fences every queued handoff.
+  Abort discards uncommitted preparation; a decision that became durable is
+  retained for recovery instead of being misreported or rolled back.
+- Verification: The 48-case route suite passed normally and under strict
+  ASan/UBSan/LSan during the original fix. Its unchanged production composition
+  also passed the complete build in workflow `31088424022`.
 
 ### TEST-008: Route-import composition test substitutes a fake parser
 
-- Status: OPEN
+- Status: FIXED
 - Code: `unittests/Train/stravaRoutesDownloadPipeline/`,
   `src/Train/ErgFile.cpp`, `src/Train/GpxParser.cpp`, and
   `src/Train/TrainDB.cpp`
 - Impact: The byte-backed route test replaces production parsing with a fake,
   so it can pass while real GPX-to-`ErgFile` composition, metadata transfer, or
   TrainDB import wiring is broken.
-- Test-first evidence / required regression: Feed actual GPX bytes through the
-  production parser and `ErgFile` implementation into a disposable TrainDB,
-  then verify the persisted route and cancellation behavior.
-- Fix direction: Link the production parser and its real dependencies in the
-  focused suite; reserve fakes for network transport and deterministic timing.
-- Verification: Confirmed by final review. A production-composition rewrite is
-  in unintegrated agent work and has not yet been accepted here.
+- Test-first evidence: `byteBackedErgFileSurvivesParserTemporaryCleanup()` feeds
+  real GPX bytes through `ErgFile::fromGpxContentBytes()`, verifies route points,
+  altitude and location after parser cleanup, imports the result into a
+  disposable `TrainDB`, and checks the persisted workout row and type.
+- Resolution: Commit `47b70c3` links the production `GpxParser`, `ErgFile`,
+  byte-backed adapter, `TrainDB`, and journal into the focused suite. Its small
+  composition stub supplies only isolated settings and power-zone dependencies;
+  it does not replace route parsing, workout construction, or persistence.
+- Verification: Real multi-route commit, rollback, cancellation, restart
+  recovery, and dialog composition are included in the 48-case suite. The
+  complete build passed in workflow `31088424022`, and these sources are
+  unchanged at this audit reconciliation.
 
 ### DUR-022: Unavailable vault reads look empty during local Strava removal
 
