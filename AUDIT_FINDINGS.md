@@ -3820,6 +3820,30 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   platform skips. GitHub Actions run 31105481269 builds and passes the anchored
   filesystem test on macOS 15 and both filesystem suites on Windows 2025.
 
+### DUR-025: Windows name tunneling misclassified successful publications
+
+- Status: FIXED
+- Code: `src/FileIO/AnchoredFileSystem.cpp` and
+  `unittests/FileIO/anchoredFilesystem/testAnchoredFilesystem.cpp`
+- Impact: NTFS can preserve the creation time associated with a recently
+  vacated filename. `ReplaceFileW` and rename therefore changed the pinned
+  file's creation-time component even though its volume, native file ID, byte
+  extent, modification time, and contents still identified the published
+  source. The anchored helpers reported a partial failure after the mutation
+  had already succeeded, leaving callers in unnecessary recovery state.
+- Test-first evidence: The Windows regressions assign distinct creation times
+  to replacement generations and move copied output into a just-vacated name.
+  The original implementation failed the tunneled move in workflow
+  `31574659831`; ordinary copied-output moves provide the non-tunneled control.
+- Resolution: Commits `ee425df` and `7962023` verify post-publication identity
+  with the stable Windows volume and file ID plus extent, modification time,
+  and SHA-256. They accept only the documented creation-time inheritance and
+  refresh the pinned identity and durable-generation evidence after the native
+  operation; unrelated substitutions still fail closed.
+- Verification: Focused workflow `31574854649` passed the Windows and macOS
+  regressions. Full native workflow `31579686400` subsequently passed Linux,
+  macOS, and Windows after portable fixture and responsiveness stabilization.
+
 ### BUILD-014: Vendored Python metadata can claim false file ownership
 
 - Status: OPEN
