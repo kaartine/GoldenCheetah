@@ -1760,6 +1760,44 @@ set_appimage_source_date_epoch()
     export SOURCE_DATE_EPOCH
 }
 
+install_appimage_dir_icon()
+{
+    if [ "$#" -ne 2 ]; then
+        echo "Usage: install_appimage_dir_icon APPDIR ROOT_ICON" >&2
+        return 2
+    fi
+    local appdir=$1
+    local icon=$2
+    local link="$appdir/.DirIcon"
+
+    [ -d "$appdir" ] && [ ! -L "$appdir" ] || {
+        echo "Cannot install metadata in an unsafe AppDir." >&2
+        return 1
+    }
+    case "$icon" in
+    ""|.|..|*/*|*$'\n'*|*$'\r'*)
+        echo "AppImage root icon name is unsafe." >&2
+        return 1
+        ;;
+    esac
+    [ -f "$appdir/$icon" ] && [ ! -L "$appdir/$icon" ] || {
+        echo "AppImage root icon is missing or unsafe." >&2
+        return 1
+    }
+    if [ -L "$link" ]; then
+        [ "$(readlink -- "$link")" = "$icon" ] || {
+            echo "AppImage directory icon has an unexpected target." >&2
+            return 1
+        }
+    elif [ -e "$link" ]; then
+        echo "AppImage directory icon path is unsafe." >&2
+        return 1
+    else
+        (cd -- "$appdir" && ln -s -- "$icon" .DirIcon) || return
+    fi
+    [ -L "$link" ] && [ "$(readlink -- "$link")" = "$icon" ]
+}
+
 normalize_appdir_mtimes()
 {
     local appdir=$1

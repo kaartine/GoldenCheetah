@@ -118,6 +118,7 @@ if [ ! -d "$QT_INSTALL_PREFIX/resources" ]; then
 fi
 cp -a "$QT_INSTALL_PREFIX/resources" "$APPDIR/"
 
+install_appimage_dir_icon "$APPDIR" gc.png
 SBOM_IN_APPDIR="$APPDIR/usr/share/goldencheetah/goldencheetah.cdx.json"
 create_appimage_sbom \
     "$APPDIR" "$BUILD_MANIFEST" "$SOURCE_DIR/gcconfig.pri" \

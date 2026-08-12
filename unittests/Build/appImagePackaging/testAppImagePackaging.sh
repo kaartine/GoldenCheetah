@@ -124,6 +124,8 @@ declare -F download_appimage_runtime >/dev/null ||
     fail "verified AppImage runtime helper is missing"
 declare -F create_appimage_sbom >/dev/null ||
     fail "AppImage SBOM helper is missing"
+declare -F install_appimage_dir_icon >/dev/null ||
+    fail "AppImage directory icon helper is missing"
 declare -F set_appimage_source_date_epoch >/dev/null ||
     fail "SOURCE_DATE_EPOCH helper is missing"
 declare -F normalize_appdir_mtimes >/dev/null ||
@@ -616,6 +618,15 @@ grep -Fq 'set_appimage_source_date_epoch' "$PRODUCTION_PACKAGE_PASS" ||
     fail "production package pass does not set SOURCE_DATE_EPOCH"
 grep -Fq 'normalize_appdir_mtimes' "$PRODUCTION_PACKAGE_PASS" ||
     fail "production package pass does not normalize AppDir mtimes"
+DIR_ICON_SETUP_LINE=$(grep -nF \
+    'install_appimage_dir_icon "$APPDIR" gc.png' \
+    "$PRODUCTION_PACKAGE_PASS" | cut -d: -f1 || true)
+SBOM_SETUP_LINE=$(grep -n '^create_appimage_sbom' \
+    "$PRODUCTION_PACKAGE_PASS" | cut -d: -f1 || true)
+if [ -z "$DIR_ICON_SETUP_LINE" ] || [ -z "$SBOM_SETUP_LINE" ] ||
+   [ "$DIR_ICON_SETUP_LINE" -ge "$SBOM_SETUP_LINE" ]; then
+    fail "production package pass does not anchor .DirIcon before the SBOM"
+fi
 grep -Fq 'download_appimage_runtime' "$PRODUCTION_PACKAGE_PASS" ||
     fail "production package pass does not acquire the pinned runtime"
 grep -Fq -- '--runtime-file' "$PRODUCTION_PACKAGE_PASS" ||
@@ -676,7 +687,19 @@ cat >"$FAKE_APPDIR/manifest-fixture.svg" <<'EOF'
   <rect width="16" height="16" fill="#247a52"/>
 </svg>
 EOF
-ln -s manifest-fixture.svg "$FAKE_APPDIR/.DirIcon"
+install_appimage_dir_icon "$FAKE_APPDIR" manifest-fixture.svg
+[ "$(readlink -- "$FAKE_APPDIR/.DirIcon")" = manifest-fixture.svg ] ||
+    fail "AppImage directory icon target is incorrect"
+install_appimage_dir_icon "$FAKE_APPDIR" manifest-fixture.svg ||
+    fail "AppImage directory icon setup is not idempotent"
+BAD_DIR_ICON_APPDIR="$TEMP_DIR/bad-dir-icon.AppDir"
+mkdir -p "$BAD_DIR_ICON_APPDIR"
+printf 'icon\n' >"$BAD_DIR_ICON_APPDIR/expected.png"
+ln -s unexpected.png "$BAD_DIR_ICON_APPDIR/.DirIcon"
+if install_appimage_dir_icon \
+       "$BAD_DIR_ICON_APPDIR" expected.png >/dev/null 2>&1; then
+    fail "an unexpected AppImage directory icon target was accepted"
+fi
 python3 - "$FAKE_APPDIR" "$REVISION_B" \
     "$FAKE_APPDIR/usr/share/goldencheetah/goldencheetah.cdx.json" <<'PY'
 import hashlib
