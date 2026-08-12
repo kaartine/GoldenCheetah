@@ -95,15 +95,15 @@ DEFINES += QXT_STATIC
 win32 {
     #QWT is configured to build 2 libs (release/debug) on win32 (see qwtbuild.pri)
     CONFIG(release, debug|release){
-    LIBS += -L$${PWD}/../qwt/lib -lqwt
+    LIBS += -L$${OUT_PWD}/../qwt/lib -lqwt
     }
     CONFIG(debug, debug|release) {
-    LIBS += -L$${PWD}/../qwt/lib -lqwtd
+    LIBS += -L$${OUT_PWD}/../qwt/lib -lqwtd
     }
 
 } else {
     #QWT is configured to build 1 lib for all other OS (see qwtbuild.pri)
-    LIBS += -L$${PWD}/../qwt/lib -lqwt
+    LIBS += -L$${OUT_PWD}/../qwt/lib -lqwt
 }
 
 # compress and math libs must be defined in gcconfig.pri

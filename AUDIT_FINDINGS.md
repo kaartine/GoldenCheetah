@@ -4060,6 +4060,25 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   requires each retained include to resolve after qmake's rename. A clean
   qmake-generated `make -j10` build of all five parser objects passes.
 
+### BUILD-034: Shadow builds link Qwt from the source tree
+
+- Status: FIXED
+- Code: `src/src.pro` and
+  `unittests/Build/appImagePackaging/testShadowBuildPaths.py`
+- Impact: The top-level build writes Qwt to `<build>/qwt/lib`, but every
+  application link branch searches `<source>/qwt/lib`. A clean shadow release
+  compiles the complete application and then fails at the final link with
+  `cannot find -lqwt`; a stale source-tree library could instead be linked.
+- Test-first evidence: The regression compared Qwt's declared `DESTDIR` with
+  all application release/debug link roots and observed three `PWD` values
+  where `OUT_PWD` was required. The independent release build reproduced the
+  final-link failure after compiling all objects.
+- Resolution: Release and debug links now resolve Qwt relative to `OUT_PWD`,
+  matching Qwt's shadow-build destination while retaining in-source behavior.
+- Verification: The path regression requires every platform branch to match
+  Qwt's output root. A generated shadow-build Makefile now links through
+  `-L<build>/src/../qwt/lib`, which contains the freshly built Qwt archive.
+
 ### MEM-026: Duplicate activity imports leak the replaced RideItem
 
 - Status: FIXED
