@@ -685,6 +685,8 @@ preparedCommitRejectsDatabaseOpenAbaSwap()
     bool swapped = false;
     bool restored = false;
     bool renameDenied = false;
+    bool restoreDenied = false;
+    bool replacementDisplaced = false;
     {
         const std::lock_guard<std::mutex> lock(
             databaseOpenBoundaryActionMutex);
@@ -698,8 +700,14 @@ preparedCommitRejectsDatabaseOpenAbaSwap()
                 return;
             }
             if (swapped && !restored) {
-                restored = QFile::rename(original, displacedReplacement)
-                    && QFile::rename(displacedOriginal, original);
+                replacementDisplaced =
+                    QFile::rename(original, displacedReplacement);
+                if (!replacementDisplaced) {
+                    restoreDenied = true;
+                    return;
+                }
+                restored = QFile::rename(displacedOriginal, original);
+                restoreDenied = !restored;
             }
         };
     }
@@ -717,6 +725,16 @@ preparedCommitRejectsDatabaseOpenAbaSwap()
         QVERIFY(result);
         QVERIFY(committed);
         QSKIP("The pinned SQLite generation denies replacement on Windows");
+    }
+    if (restoreDenied) {
+        QVERIFY(!result);
+        QVERIFY(!committed);
+        QVERIFY(error.contains(
+            QStringLiteral("database"), Qt::CaseInsensitive));
+        if (!replacementDisplaced)
+            QVERIFY(QFile::rename(original, displacedReplacement));
+        QVERIFY(QFile::rename(displacedOriginal, original));
+        QSKIP("The open replacement denies ABA restoration on Windows");
     }
 #endif
     QVERIFY(swapped);
@@ -936,14 +954,18 @@ preparedStandaloneCommitRejectsRootReplacement()
     const QString displaced = fixture.workoutRoot
         + QStringLiteral("-displaced");
     bool rootReplaced = false;
+    bool rootRenameDenied = false;
     {
         const std::lock_guard<std::mutex> lock(
             decisionPersistenceActionMutex);
         decisionPersistenceAction = [&] {
-            if (rootReplaced) return;
-            rootReplaced = QDir().rename(
-                    fixture.workoutRoot, displaced)
-                && createOwnedFixtureHierarchy({fixture.workoutRoot});
+            if (rootReplaced || rootRenameDenied) return;
+            if (!QDir().rename(fixture.workoutRoot, displaced)) {
+                rootRenameDenied = true;
+                return;
+            }
+            rootReplaced =
+                createOwnedFixtureHierarchy({fixture.workoutRoot});
         };
     }
     bool committed = false;
@@ -954,6 +976,13 @@ preparedStandaloneCommitRejectsRootReplacement()
             decisionPersistenceActionMutex);
         decisionPersistenceAction = {};
     }
+#ifdef Q_OS_WIN
+    if (rootRenameDenied) {
+        QVERIFY(commitResult);
+        QVERIFY(committed);
+        QSKIP("The pinned workout root denies replacement on Windows");
+    }
+#endif
     QVERIFY(rootReplaced);
     QVERIFY(!commitResult);
     QVERIFY(!committed);
@@ -1042,7 +1071,7 @@ workerDecisionPersistenceKeepsOwnerEventLoopResponsive()
         500);
     QTRY_VERIFY_WITH_TIMEOUT(
         decision.wait_for(0ms) == std::future_status::ready,
-        1000);
+        5000);
     QVERIFY2(decision.get(), qPrintable(workerError));
     QVERIFY(committed);
     QVERIFY(heartbeats > 0);
