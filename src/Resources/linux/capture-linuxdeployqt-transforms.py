@@ -94,6 +94,22 @@ def ldconfig_source_entries():
         env={"LC_ALL": "C", "PATH": os.environ.get("PATH", "")},
     )
     entries = {}
+    digests = {}
+
+    def add_entry(soname, source):
+        key = (soname, str(source))
+        digest = digests.get(source)
+        if digest is None:
+            digest = stable_sha256(source)
+            digests[source] = digest
+        entries[key] = {
+            "path": str(source),
+            "sha256": digest,
+            "soname": soname,
+        }
+        if len(entries) > MAX_SNAPSHOT_ENTRIES:
+            raise ValueError("runtime source snapshot is unexpectedly large")
+
     for line in result.stdout.splitlines():
         match = LDCONFIG_LINE_RE.fullmatch(line)
         if match is None:
@@ -113,16 +129,45 @@ def ldconfig_source_entries():
             raise ValueError("ldconfig source is unavailable") from error
         if not source.is_absolute() or source.is_symlink() or not source.is_file():
             raise ValueError("ldconfig source is not a regular file")
-        key = (soname, str(source))
-        entries[key] = {
-            "path": str(source),
-            "sha256": stable_sha256(source),
-            "soname": soname,
-        }
-        if len(entries) > MAX_SNAPSHOT_ENTRIES:
-            raise ValueError("ldconfig source snapshot is unexpectedly large")
+        add_entry(soname, source)
+
+    dpkg_query = shutil.which("dpkg-query")
+    if dpkg_query is None:
+        raise ValueError("dpkg-query is unavailable")
+    package_files = subprocess.run(
+        [dpkg_query, "-S", "*.so", "*.so.*"],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        env={"LC_ALL": "C", "PATH": os.environ.get("PATH", "")},
+    )
+    for line in package_files.stdout.splitlines():
+        _owner, separator, raw_path = line.partition(": ")
+        if not separator:
+            raise ValueError("dpkg-query returned an invalid library path")
+        source_argument = Path(raw_path)
+        soname = source_argument.name
+        if not (soname.endswith(".so") or ".so." in soname):
+            continue
+        if (
+            not source_argument.is_absolute()
+            or not soname.isascii()
+            or "/" in soname
+            or "\\" in soname
+            or "\x00" in soname
+        ):
+            raise ValueError("dpkg-query returned an unsafe library path")
+        try:
+            source = source_argument.resolve(strict=True)
+        except FileNotFoundError:
+            continue
+        if source.is_symlink() or not source.is_file():
+            continue
+        add_entry(soname, source)
+
     if not entries:
-        raise ValueError("ldconfig source snapshot is empty")
+        raise ValueError("runtime source snapshot is empty")
     return [entries[key] for key in sorted(entries)]
 
 
