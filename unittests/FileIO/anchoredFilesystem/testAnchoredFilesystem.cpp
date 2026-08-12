@@ -2190,8 +2190,9 @@ void TestAnchoredFilesystem::copiedOutputCanMoveIntoTunneledWindowsName()
         copyToNewFile(sourceFile, staging, copied, copyError),
         qPrintable(copyError));
     const QByteArray copiedKey = copied.identity().serializedKey();
+    const QByteArray tunneledGeneration = oldTarget.durableGeneration();
     QVERIFY(!copiedKey.isEmpty());
-    QVERIFY(copied.durableGeneration() != oldTarget.durableGeneration());
+    QVERIFY(copied.durableGeneration() != tunneledGeneration);
     verifyApplied(moveNoReplace(oldTarget, previous));
 
     const MutationResult result = moveNoReplace(copied, target);
@@ -2199,6 +2200,7 @@ void TestAnchoredFilesystem::copiedOutputCanMoveIntoTunneledWindowsName()
     verifyApplied(result);
     const NativeIdentity movedIdentity = copied.identity();
     QCOMPARE(movedIdentity.serializedKey(), copiedKey);
+    QCOMPARE(copied.durableGeneration(), tunneledGeneration);
     verifyPinnedAt(copied, target, movedIdentity);
     verifyPinnedAt(oldTarget, previous, oldTargetIdentity);
     QCOMPARE(readFixture(target.displayPath()), contents);
