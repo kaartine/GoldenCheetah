@@ -819,16 +819,28 @@ class PlatformGateTests(unittest.TestCase):
         completion = main.index(
             "scheduleGuiSmokeCompletion(mainWindow)", athlete
         )
+        disable_auto_quit = main.index("setQuitOnLastWindowClosed(false)")
+        coordinated_close = main.index("GuiSmokeShutdown::complete")
+        close_window = main.index("mainWindow->close()", coordinated_close)
         event_loop = main.rindex("application->exec()")
         shutdown = main.index("LocalFileStoreProcess::shutdownReaper", completion)
         self.assertLess(initialization, completion)
         self.assertLess(athlete, completion)
+        self.assertLess(disable_auto_quit, athlete)
+        self.assertLess(coordinated_close, close_window)
+        self.assertLess(close_window, event_loop)
         self.assertLess(completion, shutdown)
         self.assertLess(completion, event_loop)
 
         support = SUPPORT.read_text(encoding="utf-8")
         self.assertIn("smoke_athlete/config/athlete-general.ini", support)
         self.assertIn('"$smoke_library" SmokeAthlete', support)
+
+        package = PACKAGE_APPIMAGE.read_text(encoding="utf-8")
+        self.assertIn(
+            'require_qt_offscreen_appimage_on_glibc 2.35 "$IMAGE" 30s',
+            package,
+        )
 
     def test_apt_integration_builds_the_real_bootstrap_stage(self):
         dockerfile = (REPOSITORY_ROOT / ".devcontainer/Dockerfile").read_text(

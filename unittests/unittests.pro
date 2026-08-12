@@ -85,6 +85,7 @@ exists(unittests.pri) {
 			   Gui/activitySaveWorkflow \
 			   Gui/cacheWriteWarning \
 			   Gui/guiStartupPolicy \
+			   Gui/guiSmokeShutdown \
 			   Gui/openGLVersionProbe \
 			   Gui/calendarModalWorkflow \
 			   Gui/calendarData \

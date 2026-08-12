@@ -2390,6 +2390,8 @@ assert_contains "$APPVEYOR_MACOS_PACKAGER" '--forbidden-prefix "$HOME"'
 assert_contains "$APPVEYOR_CONFIG" '  - Ubuntu2204'
 assert_contains "$CI_PACKAGE_PASS" \
     'require_qt_offscreen_appimage_on_glibc 2.35'
+assert_contains "$CI_PACKAGE_PASS" \
+    'require_qt_offscreen_appimage_on_glibc 2.35 "$IMAGE" 30s'
 test -x "$CI_PACKAGE_PASS" ||
     fail "production AppImage pass script is missing or not executable"
 bash -n "$CI_PACKAGE_PASS"

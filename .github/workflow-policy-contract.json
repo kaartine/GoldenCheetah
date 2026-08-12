@@ -242,7 +242,7 @@
     "appveyor/linux/build-appimage-pass.sh": "7c414b9894ddfa4393e3d9f78b8cd9332c5837a6a39515c3466178d4700c1a8f",
     "appveyor/linux/build-input-paths.sh": "7c3cf8a0c1e9b32c882aeb1072d8a1a39837700d3e8fbe0d60c36efb2c3d9b5c",
     "appveyor/linux/install.sh": "948077dfd4b25390e5ed2053558d9b0be0eae083594176455fc3f796569852e4",
-    "appveyor/linux/package-appimage-pass.sh": "00a2944da4565425117355c023f2fbe8f02a494a939ecfd441cb770a6b863f9e",
+    "appveyor/linux/package-appimage-pass.sh": "270a0e4a4b950c640102d7d258c9a1a2b96c29029d2981e10ad01e64734813a8",
     "appveyor/linux/reproduce-appimage.sh": "1e8af63bf5be3073e8e32a89e67a38c2d87a45dae0db8f7966ebd0a5d7d59645",
     "appveyor/linux/ubuntu-snapshot.sources.list": "090781d92edbdda63f40316d22859542961c91f927f469e0cf5421503ccddae1",
     "appveyor/linux/verify-apt-snapshot-bootstrap.sh": "bc46556b890f703a1a63c7ef3a988504f87aef07f6a88264b33f73c16bb262bd",
@@ -270,14 +270,14 @@
     "src/Resources/linux/verify-appimage-payload.py": "18809da68d8571df92af71bfd6110b7921eb7e555142da68d7de433598dba34e",
     "src/Resources/win32/GC3.8-Master-W64-QT6.nsi": "faa9df078f3cce406b1eaf7188c24bc2c8a288958207af55d052f932cefcccde",
     "unittests/Build/appImagePackaging/appImagePackaging.pro": "cfe1447304665c49477eb2c96660eb31f88e254d7a2f8f9fc444cec884bb8a52",
-    "unittests/Build/appImagePackaging/testAppImagePackaging.sh": "fa1c6666110b54f2b3dc651d7c5826cb333f443ab2ff784a1e117058a075cdd1",
+    "unittests/Build/appImagePackaging/testAppImagePackaging.sh": "786f0163062481c65b3eff8d3bffc6791315f2df5e405e7a859c202bd26c1b06",
     "unittests/Build/appImagePackaging/testAptSnapshot.py": "224bbc8516616d127452cc13c7d1d4c51b60632123527248abb91dee5ce41a44",
     "unittests/Build/appImagePackaging/testCiReleaseGates.sh": "f27ad24e7a34a857a44e7cb6047bf3e34c99217add327b17a41e8a52cdc24172",
     "unittests/Build/appImagePackaging/testDiagnosticOAuth.sh": "2f14458503e751bc33f284b43d1de13450fa9cfd350ad2866d88dd248e19bc3c",
     "unittests/Build/appImagePackaging/testGeneratedSecrets.ps1": "da1b89ff997b473ec30414b6b96fa7ffde6934b88a1ccd04783c9e02b353b418",
     "unittests/Build/appImagePackaging/testImmutableActions.py": "a050788b005a93465b54e4436c89011fd50f37d937b69292d109a1d5173305b8",
     "unittests/Build/appImagePackaging/testMacOSPackaging.py": "dd319d547616a1465f81811bf1ea96505099b852b68d3eb8865563fe31175024",
-    "unittests/Build/appImagePackaging/testReleaseHardening.py": "7437214a48377119f897bf56b34dc8ac3380d92175f880e3b98a3c79b982c7df",
+    "unittests/Build/appImagePackaging/testReleaseHardening.py": "f1c56d4d0422f1a6e56b9692ec3b637427c670ce79faa3fde98815f5dc47fe2c",
     "unittests/Build/appImagePackaging/testSafeExtraction.py": "d9f86b09ca2b2b10562679dfcb06def7fcd69b033fb8c828d20810d7402c29b0",
     "unittests/Build/appImagePackaging/testSbomProvenance.py": "46e5ee6af497432902b5e22c2e058470f071b127a4b05a8768d5176ef36ff0c5",
     "unittests/Build/appImagePackaging/testUnconfiguredOAuthGate.py": "9d58a7f21edf908207069629e569eaa9f7dee74880101f894417f52370e0590b",
@@ -288,6 +288,6 @@
     "unittests/Build/ciTestRunner/testCiTestRunner.py": "9bac7a05cb8578df1abbf828e57908bf085073dad1533da76fbfe138471c4deb",
     "unittests/ci-required-tests.txt": "0e6ceb72d3865e1e97fa152a5485d623738d9b2df140035f99d703586f617be9",
     "unittests/unittests.pri.in": "205f84784e7e12a28dcb2dd278a1106fd57df4e31af8a3f809cbc24d921e4e92",
-    "unittests/unittests.pro": "2030524db3f8cf2bb421be2d9241ecdd0566e2b693ef42833ffe8f1f2972207a"
+    "unittests/unittests.pro": "b0fb0fa8e8a4461df561877a5468172c1ee99bca2a705024fa373b87c5d37ccb"
   }
 }

@@ -722,7 +722,7 @@ HEADERS += FileIO/AnchoredFileSystem.h FileIO/ArchiveFile.h FileIO/AtomicFileWri
 HEADERS += Gui/AboutDialog.h Gui/AddIntervalDialog.h Gui/AnalysisSidebar.h Gui/CacheWriteWarning.h Gui/ChooseCyclistDialog.h Gui/ColorButton.h \
            Gui/Colors.h Gui/CompareDateRange.h Gui/CompareInterval.h Gui/ComparePane.h Gui/ConfigDialog.h Gui/MiniCalendar.h \
            Gui/DragBar.h Gui/EstimateCPDialog.h Gui/GcCrashDialog.h Gui/GcSideBarItem.h Gui/GcToolBar.h Gui/GcWindowLayout.h \
-           Gui/GcWindowRegistry.h Gui/GenerateHeatMapDialog.h Gui/GuiStartupPolicy.h Gui/HelpWhatsThis.h Gui/HelpWindow.h \
+           Gui/GcWindowRegistry.h Gui/GenerateHeatMapDialog.h Gui/GuiSmokeShutdown.h Gui/GuiStartupPolicy.h Gui/HelpWhatsThis.h Gui/HelpWindow.h \
            Gui/IntervalTreeView.h Gui/LTMSidebar.h Gui/MainWindow.h Gui/OpenGLVersionProbe.h Gui/NewAthleteWizard.h Gui/Pages.h Gui/RideNavigator.h Gui/RideNavigatorProxy.h \
            Gui/RideNavigatorSearchFilter.h \
            Gui/SaveDialogs.h Gui/SearchBox.h Gui/SearchFilterBox.h Gui/SolveCPDialog.h Gui/AthleteTab.h Gui/AbstractView.h Gui/ToolsRhoEstimator.h \
@@ -844,7 +844,7 @@ SOURCES += FileIO/AnchoredFileSystem.cpp FileIO/ArchiveFile.cpp FileIO/AthleteBa
 SOURCES += Gui/AboutDialog.cpp Gui/AddIntervalDialog.cpp Gui/AnalysisSidebar.cpp Gui/CacheWriteWarning.cpp Gui/ChooseCyclistDialog.cpp Gui/ColorButton.cpp \
            Gui/Colors.cpp Gui/CompareDateRange.cpp Gui/CompareInterval.cpp Gui/ComparePane.cpp Gui/ConfigDialog.cpp Gui/MiniCalendar.cpp \
            Gui/DragBar.cpp Gui/EstimateCPDialog.cpp Gui/GcCrashDialog.cpp Gui/GcSideBarItem.cpp Gui/GcToolBar.cpp Gui/GcWindowLayout.cpp \
-           Gui/GcWindowRegistry.cpp Gui/GenerateHeatMapDialog.cpp Gui/GuiStartupPolicy.cpp Gui/HelpWhatsThis.cpp Gui/HelpWindow.cpp \
+           Gui/GcWindowRegistry.cpp Gui/GenerateHeatMapDialog.cpp Gui/GuiSmokeShutdown.cpp Gui/GuiStartupPolicy.cpp Gui/HelpWhatsThis.cpp Gui/HelpWindow.cpp \
            Gui/IntervalTreeView.cpp Gui/LTMSidebar.cpp Gui/MainWindow.cpp Gui/OpenGLVersionProbe.cpp Gui/NewAthleteWizard.cpp Gui/Pages.cpp Gui/RideNavigator.cpp Gui/SaveDialogs.cpp \
            Gui/SearchBox.cpp Gui/SearchFilterBox.cpp Gui/SolveCPDialog.cpp Gui/AthleteTab.cpp Gui/AbstractView.cpp Gui/ToolsRhoEstimator.cpp Gui/Views.cpp Gui/PerspectiveStateSource.cpp Gui/TrainPerspectiveState.cpp \
            Gui/BatchProcessingDialog.cpp Gui/DownloadRideDialog.cpp Gui/ManualActivityWizard.cpp Gui/EditUserMetricDialog.cpp Gui/NewSideBar.cpp \

@@ -149,7 +149,9 @@ fi
 echo "$STRAVA_OAUTH_STATUS"
 KEYCHAIN_RUNTIME_STATUS=$(require_linux_keychain_appimage "$IMAGE")
 echo "$KEYCHAIN_RUNTIME_STATUS"
-OFFSCREEN_RUNTIME_STATUS=$(require_qt_offscreen_appimage_on_glibc 2.35 "$IMAGE")
+OFFSCREEN_RUNTIME_STATUS=$(
+    require_qt_offscreen_appimage_on_glibc 2.35 "$IMAGE" 30s
+)
 echo "$OFFSCREEN_RUNTIME_STATUS"
 verify_appimage_manifest "$IMAGE" "$MANIFEST"
 verify_appimage_sbom "$IMAGE" "$SBOM"

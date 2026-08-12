@@ -3545,8 +3545,39 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Verification: The focused policy covers lowercase and mixed-case offscreen
   names plus xcb, Wayland, Windows, and Cocoa desktop controls, with all eight
   rows passing in normal and ASan/UBSan builds. A production constructor trace
-  confirms that the primer is absent offscreen; a separate map-view shutdown
-  defect still blocks the complete package smoke.
+  confirms that the primer is absent offscreen. The retained production smoke
+  reaches the ready marker and exits successfully after BUILD-038's coordinated
+  shutdown.
+
+### BUILD-038: GUI smoke exits before its main window is destroyed
+
+- Status: FIXED
+- Code: `src/Core/main.cpp`, `src/Gui/GuiSmokeShutdown.cpp`,
+  `src/Gui/GuiSmokeShutdown.h`, `appveyor/linux/package-appimage-pass.sh`, and
+  `unittests/Gui/guiSmokeShutdown/`; the corresponding protected-file digests
+  are updated in `.github/workflow-policy-contract.json`.
+- Impact: The package smoke exited the Qt event loop immediately after its
+  ready marker while the main window, map pages, and athlete WebEngine profile
+  were still alive. QApplication fallback teardown released the profile before
+  all deferred Qt Quick delegates and crashed, so a working runtime could not
+  pass release verification.
+- Test-first evidence: The retained production binary reproducibly reached the
+  ready marker and then crashed in `QQuickWindow` and
+  `QWebEngineView` teardown. A lifecycle regression was added first and failed
+  to build because no coordinated shutdown API existed.
+- Resolution: The smoke disables automatic last-window quit, closes the main
+  window through its normal athlete cleanup, and requests process exit only
+  after the window's `destroyed` signal. Production packaging allows 30 seconds
+  for this bounded cleanup instead of racing its existing ten-second thread
+  pool wait.
+- Verification: The focused lifecycle suite passes six tests in normal and
+  ASan/UBSan builds, including deferred and synchronous destruction, rejected
+  close, duplicate-exit prevention, and invalid inputs. The structural release
+  gate passes, and the retained production offscreen runtime reaches the ready
+  marker and exits with status zero in 11 seconds without a WebEngine profile
+  warning or crash. The full packaging and release-hardening regression programs
+  pass in a valid isolated worktree. Complete reproducible package verification
+  remains required before release promotion.
 
 ### MEM-028: OAuth nested messages can outlive their dialog
 

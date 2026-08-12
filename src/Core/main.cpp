@@ -19,6 +19,7 @@
 #include "Context.h"
 #include "Athlete.h"
 #include "MainWindow.h"
+#include "GuiSmokeShutdown.h"
 #include "Settings.h"
 #include "StravaSettingsCommit.h"
 #include "CloudService.h"
@@ -533,6 +534,7 @@ main(int argc, char *argv[])
     // create the application -- only ever ONE regardless of restarts
     application = new QApplication(argc, argv);
     if (guiSmoke) {
+        application->setQuitOnLastWindowClosed(false);
         const QString smokeHome = QDir::home().canonicalPath();
         const QFileInfo smokeRoot(args.value(1));
         const QString canonicalSmokeRoot =
@@ -632,9 +634,15 @@ main(int argc, char *argv[])
                 const bool written = ready
                     && fwrite(marker, 1, size, stdout) == size;
                 const bool flushed = written && fflush(stdout) == 0;
-                QCoreApplication::exit(
+                const int completedCode =
                     ready && written && flushed
-                        ? EXIT_SUCCESS : EXIT_FAILURE);
+                        ? EXIT_SUCCESS : EXIT_FAILURE;
+                GuiSmokeShutdown::complete(
+                    mainWindow,
+                    [mainWindow]() { return mainWindow->close(); },
+                    [](int code) { QCoreApplication::exit(code); },
+                    completedCode,
+                    EXIT_FAILURE);
             });
     };
 
