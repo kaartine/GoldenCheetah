@@ -1954,15 +1954,16 @@ cancellablePublicationKeepsGuiResponsive()
             [&] { return cancelled.load(std::memory_order_acquire); },
             publicationError);
     });
-    QTRY_VERIFY_WITH_TIMEOUT(
-        publicationChunkVisits.load(std::memory_order_acquire) > 0,
-        500);
 
     int heartbeats = 0;
     QTimer heartbeat;
     heartbeat.setInterval(1);
     connect(&heartbeat, &QTimer::timeout, [&] { ++heartbeats; });
     heartbeat.start();
+    QTRY_VERIFY_WITH_TIMEOUT(
+        publicationChunkVisits.load(std::memory_order_acquire) > 0,
+        500);
+    QTRY_VERIFY_WITH_TIMEOUT(heartbeats > 0, 100);
     QElapsedTimer elapsed;
     elapsed.start();
     cancelled.store(true, std::memory_order_release);
@@ -1970,7 +1971,6 @@ cancellablePublicationKeepsGuiResponsive()
         publication.wait_for(0ms) == std::future_status::ready,
         300);
     QVERIFY(elapsed.elapsed() < 250);
-    QVERIFY(heartbeats > 0);
     QVERIFY(!publication.get());
     QVERIFY(publicationError.contains(
         QStringLiteral("cancel"), Qt::CaseInsensitive));
