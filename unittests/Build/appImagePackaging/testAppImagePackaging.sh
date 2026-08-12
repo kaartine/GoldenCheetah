@@ -649,6 +649,14 @@ GC_TEST_BUILD_PROVENANCE_ENTRYPOINT=true \
         "$UNCONFIGURED_MANIFEST"
 grep -Fxq 'strava_oauth_configured=false' "$UNCONFIGURED_MANIFEST" ||
     fail "manifest OAuth status is not boolean false"
+DIAGNOSTIC_OAUTH_MANIFEST="$TEMP_DIR/diagnostic-oauth-build.manifest"
+GC_TEST_BUILD_PROVENANCE_ENTRYPOINT=true \
+    create_appimage_build_manifest \
+        "$PROVENANCE_REPO" "$TEMP_DIR/provenance-b" \
+        "Strava OAuth compile-time fallback: unavailable" \
+        "$DIAGNOSTIC_OAUTH_MANIFEST"
+grep -Fxq 'strava_oauth_configured=false' "$DIAGNOSTIC_OAUTH_MANIFEST" ||
+    fail "diagnostic OAuth status encoded a compile-time fallback"
 RUNTIME_OAUTH_MANIFEST="$TEMP_DIR/runtime-oauth-build.manifest"
 GC_TEST_BUILD_PROVENANCE_ENTRYPOINT=true \
     create_appimage_build_manifest \

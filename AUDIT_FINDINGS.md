@@ -4079,6 +4079,27 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   Qwt's output root. A generated shadow-build Makefile now links through
   `-L<build>/src/../qwt/lib`, which contains the freshly built Qwt archive.
 
+### BUILD-035: Credential-free AppImage releases reject their own OAuth status
+
+- Status: FIXED
+- Code: `src/Resources/linux/AppImagePackagingSupport.sh` and
+  `unittests/Build/appImagePackaging/testAppImagePackaging.sh`
+- Impact: The default credential-free Linux package pass verifies that the
+  compile-time Strava fallback is absent and returns
+  `Strava OAuth compile-time fallback: unavailable`. The build-manifest encoder
+  did not recognize that exact successful status, so every such release stopped
+  after both independent ELF builds without producing an AppImage.
+- Test-first evidence: The manifest regression passed the exact status emitted
+  by `require_unconfigured_strava_oauth_build()` to
+  `create_appimage_build_manifest()` and reproduced
+  `Cannot encode an unknown Strava OAuth status.`
+- Resolution: The manifest encoder now maps the verified absent compile-time
+  fallback to `strava_oauth_configured=false`. Its fail-closed default still
+  rejects every unknown status.
+- Verification: The regression passes and the complete AppImage packaging suite
+  passes in the release-capable container, including credential, provenance,
+  SBOM, keychain, offscreen, and reproducibility checks.
+
 ### MEM-026: Duplicate activity imports leak the replaced RideItem
 
 - Status: FIXED

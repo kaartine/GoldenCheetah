@@ -1930,6 +1930,8 @@ create_appimage_build_manifest()
         oauth_configured=false ;;
     "Strava OAuth: unavailable (credentials not configured)")
         oauth_configured=false ;;
+    "Strava OAuth compile-time fallback: unavailable")
+        oauth_configured=false ;;
     *)
         echo "Cannot encode an unknown Strava OAuth status." >&2
         return 1
