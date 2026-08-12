@@ -204,6 +204,24 @@ private:
     HANDLE handle_ = INVALID_HANDLE_VALUE;
 };
 
+bool setWindowsCreationTime(const QString &path, quint64 ticks)
+{
+    const QString nativePath = QDir::toNativeSeparators(path);
+    WindowsTestHandle handle(::CreateFileW(
+        reinterpret_cast<LPCWSTR>(nativePath.utf16()),
+        FILE_WRITE_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr));
+    if (!handle.isValid()) return false;
+    const FILETIME creation {
+        DWORD(ticks & 0xffffffffULL),
+        DWORD(ticks >> 32)};
+    return ::SetFileTime(handle.get(), &creation, nullptr, nullptr);
+}
+
 bool createWindowsDirectoryJunction(
     const QString &target,
     const QString &link,
@@ -2765,17 +2783,36 @@ void TestAnchoredFilesystem::replaceExchangesPinnedGenerations()
     const QByteArray targetContents("old activity bytes");
     writeFixture(staging.displayPath(), stagedContents);
     writeFixture(target.displayPath(), targetContents);
+#ifdef Q_OS_WIN
+    QVERIFY(setWindowsCreationTime(
+        staging.displayPath(), quint64(132223104000000000ULL)));
+    QVERIFY(setWindowsCreationTime(
+        target.displayPath(), quint64(133801632000000000ULL)));
+#endif
     PinnedFile staged = pin(staging);
     PinnedFile expectedTarget = pin(target);
     const NativeIdentity stagedIdentity = staged.identity();
     const NativeIdentity targetIdentity = expectedTarget.identity();
+#ifdef Q_OS_WIN
+    const QByteArray stagedGeneration = staged.durableGeneration();
+    const QByteArray targetGeneration = expectedTarget.durableGeneration();
+    QVERIFY(!stagedGeneration.isEmpty());
+    QVERIFY(!targetGeneration.isEmpty());
+    QVERIFY(stagedGeneration != targetGeneration);
+#endif
 
     const MutationResult result = replaceExisting(
         staged, expectedTarget);
 
     verifyApplied(result);
-    verifyPinnedAt(staged, target, stagedIdentity);
 #ifdef Q_OS_WIN
+    const NativeIdentity publishedIdentity = staged.identity();
+    QVERIFY(publishedIdentity != stagedIdentity);
+    QCOMPARE(
+        publishedIdentity.serializedKey(),
+        stagedIdentity.serializedKey());
+    QCOMPARE(staged.durableGeneration(), targetGeneration);
+    verifyPinnedAt(staged, target, publishedIdentity);
     QByteArray retainedTarget;
     QString retainedError;
     QVERIFY(readAll(
@@ -2785,6 +2822,7 @@ void TestAnchoredFilesystem::replaceExchangesPinnedGenerations()
     QCOMPARE(expectedTarget.identity(), targetIdentity);
     QVERIFY(!QFileInfo::exists(staging.displayPath()));
 #else
+    verifyPinnedAt(staged, target, stagedIdentity);
     verifyPinnedAt(expectedTarget, staging, targetIdentity);
 #endif
     QCOMPARE(readFixture(target.displayPath()), stagedContents);
