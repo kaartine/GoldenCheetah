@@ -3498,8 +3498,10 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   OpenGL capability returns an empty version and allows startup to continue.
 - Verification: All five focused cases pass normally and under strict
   ASan/UBSan, covering null surfaces, an invalid context, and automatic cleanup
-  with no usable OpenGL context. Complete packaged offscreen verification is
-  required before release promotion.
+  with no usable OpenGL context. Two clean build trees independently produced
+  the same AppImage at revision `b46e064`; both completed the packaged offscreen
+  startup gate on glibc 2.35, and the reproduced artifact has SHA-256
+  `9142bc5f60a272051d039e33c23ee573ffb811f5804de2754bfa1d75650b19a6`.
 
 ## Medium
 
@@ -3547,7 +3549,8 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   rows passing in normal and ASan/UBSan builds. A production constructor trace
   confirms that the primer is absent offscreen. The retained production smoke
   reaches the ready marker and exits successfully after BUILD-038's coordinated
-  shutdown.
+  shutdown. Both independent release packages also passed the completed
+  AppImage offscreen gate.
 
 ### BUILD-038: GUI smoke exits before its main window is destroyed
 
@@ -3576,8 +3579,10 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   gate passes, and the retained production offscreen runtime reaches the ready
   marker and exits with status zero in 11 seconds without a WebEngine profile
   warning or crash. The full packaging and release-hardening regression programs
-  pass in a valid isolated worktree. Complete reproducible package verification
-  remains required before release promotion.
+  pass in a valid isolated worktree. Two clean build and package passes at
+  revision `b46e064` each passed the 30-second completed-AppImage smoke and
+  produced byte-identical output with SHA-256
+  `9142bc5f60a272051d039e33c23ee573ffb811f5804de2754bfa1d75650b19a6`.
 
 ### MEM-028: OAuth nested messages can outlive their dialog
 
@@ -3958,7 +3963,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### BUILD-014: Vendored Python metadata can claim false file ownership
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Resources/linux/generate-runtime-provenance.py`,
   `src/Resources/linux/normalize-embedded-python.py`, and
   `src/Resources/linux/MakeAppImageQt6.sh`
@@ -3966,52 +3971,59 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   Python files belong to that distribution even when authenticated package
   metadata does not claim them. The AppImage SBOM and provenance can therefore
   attribute injected or unowned code to a legitimate dependency.
-- Test-first evidence / required regression: Package a fixture with legitimate
-  distribution metadata plus an unclaimed module and require provenance
-  generation to reject or explicitly mark the module unowned.
-- Fix direction: Derive ownership from authenticated wheel or installed-package
-  records with normalized exact paths and hashes; fail closed on overlaps,
-  missing claims, or conflicting metadata.
-- Verification: Confirmed by build review. Candidate implementation and tests
-  are confined to unintegrated agent work.
+- Test-first evidence: Fixtures with legitimate metadata plus an unclaimed
+  module, forged top-level `.dist-info`, invalid RECORD hashes and sizes,
+  overlapping wheels, and out-of-scope paths exposed that directory proximity
+  was not an ownership proof.
+- Resolution: Wheel archives are digest-locked before use and their complete
+  member sets are authenticated against normalized RECORD paths, hashes, and
+  sizes. The resulting wheel manifest is the only ownership authority;
+  unclaimed, overlapping, missing, or conflicting files fail closed.
+- Verification: All 22 SBOM/provenance regressions pass, including false-owner,
+  exact-consumption, replacement, and source-manifest cases. Both independent
+  release package passes generated and verified complete runtime provenance and
+  SBOM output.
 
 ### BUILD-015: Bundled Python runtime lacks authenticated provenance
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Resources/linux/AppImagePackagingSupport.sh`,
   `src/Resources/linux/generate-runtime-provenance.py`, and
   `src/Resources/linux/generate-appimage-sbom.py`
 - Impact: Hashing the final embedded interpreter records what was packaged but
   does not authenticate where the Python runtime and standard library came
   from. A substituted runtime can receive internally consistent provenance.
-- Test-first evidence / required regression: Substitute runtime bytes while
-  retaining plausible local metadata and require packaging to fail unless each
-  source artifact is covered by the locked manifest and verified digest.
-- Fix direction: Bind every runtime file to a hash-locked source archive or
-  package record and carry that authenticated source identity into the embedded
-  provenance and SBOM.
-- Verification: Confirmed by build review. Provenance tooling exists only in
-  unintegrated work and has not yet passed the integrated release gate.
+- Test-first evidence: Runtime substitution, omitted-file, extra-file, changed
+  digest, incomplete manifest, and post-install replacement fixtures all fail
+  unless the complete source runtime is authenticated and consumed exactly.
+- Resolution: Packaging verifies the pinned Python AppImage digest before
+  extraction, captures every base-runtime file before package installation,
+  binds its canonical path and digest to that locked source artifact, and
+  carries the identity into runtime provenance and the CycloneDX SBOM.
+- Verification: The 22-case provenance suite passes. The integrated two-pass
+  release independently downloaded, verified, normalized, and attributed the
+  Python runtime in both packages before producing byte-identical AppImages.
 
 ### BUILD-016: Runtime provenance uses incompatible path ordering
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Resources/linux/generate-runtime-provenance.py` and
   `src/Resources/linux/generate-appimage-sbom.py`
 - Impact: Sorting or comparing mixed filesystem `Path` and POSIX-path values can
   raise a type error or produce platform-dependent ordering. Packaging can fail
   or emit nondeterministically ordered provenance from equivalent inputs.
-- Test-first evidence / required regression: Feed mixed native and normalized
-  POSIX path objects, including non-ASCII and case-sensitive names, and require
-  stable byte-identical ordering without cross-type comparison.
-- Fix direction: Normalize to one canonical relative POSIX string at the trust
-  boundary and sort only by that explicit key.
-- Verification: Confirmed by build review. The normalization change is not
-  integrated or release-verified.
+- Test-first evidence: Mixed filesystem and serialized paths exposed the
+  cross-type comparison. Regressions now cover manifest-defined ordering,
+  non-ASCII names, case-sensitive names, and serialized runtime paths.
+- Resolution: Paths are normalized once to canonical relative POSIX strings and
+  every provenance and SBOM ordering operation uses those strings as its key.
+- Verification: The path-order regressions pass as part of all 22 provenance
+  cases. Two independent release trees emitted byte-identical AppImages and
+  matching manifests and SBOMs.
 
 ### BUILD-017: Release archives are extracted without a safe boundary
 
-- Status: OPEN
+- Status: FIXED
 - Code: `appveyor/safe-extract.py`, `appveyor/linux/install.sh`,
   `appveyor/macos/install.sh`, `appveyor/windows/install.ps1`, and
   `appveyor/linux/after_build.sh`
@@ -4019,17 +4031,21 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   links, device names, or collisions that escape or corrupt the build tree.
   AppVeyor Linux also has a direct `tar` path that bypasses any shared safety
   checks.
-- Test-first evidence / required regression: Exercise malicious ZIP and TAR
-  members, links, path aliases, collisions, and the AppVeyor direct-tar call;
-  require rejection before any destination mutation.
-- Fix direction: Route every platform and phase through one fail-closed staged
-  extractor that validates the complete member set before publishing files.
-- Verification: Confirmed by build review. The shared extractor and its tests
-  remain unintegrated, including the direct-tar bypass correction.
+- Test-first evidence: Malicious ZIP and TAR fixtures cover traversal,
+  absolute and dotted paths, links, devices, Windows aliases, case and
+  file/directory collisions, encryption, size limits, and the former direct-tar
+  bypass, requiring rejection before publication.
+- Resolution: Linux, macOS, and Windows dependency installers route archives
+  through the shared staged extractor. It validates the complete member set,
+  bounds expansion, extracts without following archive links, and publishes
+  only a completely validated tree.
+- Verification: All eight safe-extraction regressions pass. The platform
+  packaging contracts pass, and the Linux release consumed only verified,
+  safely extracted inputs in both independent passes.
 
 ### BUILD-018: Qt installation trusts unlocked layout and updater behavior
 
-- Status: OPEN
+- Status: FIXED
 - Code: `.devcontainer/install-verified-qt.py`,
   `.devcontainer/aqt-requirements.lock`,
   `.devcontainer/qt-6.8.3-linux-gcc64.lock`, and
@@ -4037,18 +4053,19 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Impact: A pinned top-level Qt version is insufficient when the downloader,
   module layout, metadata, or updater can change independently. The same source
   can install different toolchains or execute different installer code.
-- Test-first evidence / required regression: Alter updater bytes, archive
-  membership, module layout, or an archive digest and require installation to
-  fail before extraction; verify the complete expected layout after install.
-- Fix direction: Hash-lock the installer and every Qt archive, validate exact
-  archive membership and destination layout, and disable implicit updates or
-  network fallback.
-- Verification: Confirmed by build review. Locks and installer validation are
-  present only in unintegrated agent work.
+- Test-first evidence: Regressions alter installer inputs, archive digests,
+  special members, module layout, updater targets, output state, and the ICU
+  destination; all must fail before an unverified tree is published.
+- Resolution: The installer environment and hash-locked Python dependencies are
+  fixed, every reviewed Qt archive and destination is declared in a lock, all
+  digests are verified before extraction, and exact path-bounded layout checks
+  reject updater or network fallback behavior.
+- Verification: All ten verified-Qt archive regressions pass. The release used
+  the locked Qt 6.8.3 SDK and reported it in both matching build manifests.
 
 ### BUILD-019: CI dependencies are mutable and their gate expects tags
 
-- Status: OPEN
+- Status: FIXED
 - Code: `.github/workflows/ci.yml`,
   `.github/workflows/ridecache-removal-native.yml`,
   `.github/workflows/windows-durable-filesystem.yml`, and
@@ -4056,69 +4073,80 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Impact: Tag-based GitHub Actions can change without a source commit, while a
   stale self-test that requires `upload-artifact@v7` rejects the safer
   full-commit SHA form. CI is either mutable or fails after being pinned.
-- Test-first evidence / required regression: Require every external action to
-  use a full approved commit SHA and make the self-test reject tags while
-  accepting the exact pinned revision.
-- Fix direction: Pin actions by reviewed commit SHA, record the human-readable
-  release in comments or lock metadata, and make tests parse semantic action
-  identity separately from the immutable revision.
-- Verification: Confirmed by build and failed-workflow review. Corrected pins
-  and expectations are not yet integrated or rerun in platform CI.
+- Test-first evidence: Workflow fixtures accept reviewed full commit SHAs and
+  container digests while rejecting tags, incorrect repositories, unknown
+  commits, mutable images, duplicate YAML keys, merge keys, and uncontracted
+  workflow changes.
+- Resolution: External actions and containers are pinned to reviewed immutable
+  identities in a checked-in lock. A trusted, hash-locked policy parser validates
+  workflow semantics and protected inputs before candidate jobs can execute.
+- Verification: All 32 immutable-action and workflow-policy regressions pass,
+  including the checked-in workflows and their complete protected-file
+  contract. Subsequent native GitHub workflow runs passed on Linux, macOS, and
+  Windows with those immutable references.
 
 ### BUILD-020: Runtime provenance override is fail-open and forgeable
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Resources/linux/AppImagePackagingSupport.sh` and
   `src/Resources/linux/generate-runtime-provenance.py`
 - Impact: A package-index environment override can supply arbitrary ownership
   claims and let production packaging generate apparently valid provenance for
   unauthenticated files.
-- Test-first evidence / required regression: Set the override in normal
-  packaging and require failure. In explicit test mode, alter the fixture path
-  or bytes after authorization and require its bound digest check to fail.
-- Fix direction: Remove the production override. Permit fixtures only behind an
-  explicit test mode and bind the canonical fixture path and SHA-256 before use.
-- Verification: Confirmed by build review. Candidate restrictions and tests are
-  still in unintegrated agent work.
+- Test-first evidence: Production-mode override attempts, non-canonical fixture
+  paths, unauthorized fixture digests, and fixture mutation after authorization
+  are all rejected.
+- Resolution: Production provenance has no caller-controlled package index.
+  Tests may supply fixtures only through an explicit test mode whose canonical
+  path and preauthorized SHA-256 are checked before every use.
+- Verification: The production-CLI and fixture-authorization regressions pass
+  in the 22-case provenance suite. Both production package passes ran without a
+  fixture override and generated authenticated provenance.
 
 ### BUILD-021: Native releases lack OAuth credential gates
 
-- Status: OPEN
+- Status: FIXED
 - Code: `appveyor/macos/after_build.sh`,
   `appveyor/windows/after_build.ps1`, `appveyor/check-unconfigured-oauth.py`,
   and `src/Core/Secrets.h`
 - Impact: AppImage packaging validates configured OAuth credentials, but macOS
   and Windows artifacts can ship placeholder, absent, malformed, or unintended
   credentials while still being presented as production builds.
-- Test-first evidence / required regression: Build configured and unconfigured
-  native fixtures and require each release job to reject placeholders, missing
-  support, malformed status output, and credentials not intended for release.
-- Fix direction: Apply one executable-backed OAuth configuration contract to
-  Linux, macOS, and Windows immediately before signing or publication.
-- Verification: Confirmed by release review. Native gates and platform tests are
-  unintegrated and have not run in their final CI environments.
+- Test-first evidence: ELF, Mach-O, and PE fixtures cover exact configured and
+  intentionally runtime-configured status plus placeholders, missing support,
+  malformed output, failed execution, loader injection, and unrelated binary
+  formats.
+- Resolution: Every platform probes the built executable through the same exact
+  versioned status contract immediately before packaging. Native releases reject
+  malformed or compile-time-configured credentials; public builds intentionally
+  obtain user-owned Strava credentials from the runtime vault instead.
+- Verification: All three cross-platform OAuth-gate regressions, seven macOS
+  payload regressions, and four Windows runtime regressions pass. The final
+  AppImage manifest reports the expected credential-free compile-time fallback
+  without exposing credential material.
 
 ### BUILD-022: CI test inventory is incomplete and manually maintained
 
-- Status: OPEN
+- Status: FIXED
 - Code: `.github/scripts/run-tests.py`, `unittests/unittests.pro`,
   `unittests/ci-required-tests.txt`, and
   `unittests/Build/ciTestRunner/testCiTestRunner.py`
 - Impact: A hand-maintained allowlist can omit a repository test target without
   failing CI. The current inventory misses `linkedActivitySaveCleanup`, leaving
   durable linked-save behavior outside the release gate.
-- Test-first evidence / required regression: Add a discoverable test target
-  without editing the inventory and require the runner's self-test to fail;
-  explicitly require `linkedActivitySaveCleanup` to execute.
-- Fix direction: Discover test projects from repository metadata, compare them
-  with explicit justified exclusions, and fail on zero, missing, duplicate, or
-  unexecuted targets.
-- Verification: Confirmed by CI review. Discovery and coverage changes are only
-  in unintegrated agent work.
+- Test-first evidence: Runner fixtures omit a discoverable top-level and nested
+  test, change its project kind, add an unreviewed generated target, generate no
+  cases, or omit `linkedActivitySaveCleanup`; each case must fail.
+- Resolution: The runner discovers qmake test projects, reconciles them against
+  an explicit platform-aware inventory and generated targets, and rejects
+  missing, duplicate, mismatched, unexecuted, or zero-case suites.
+- Verification: The CI-runner self-test passes all failure and success fixtures,
+  including shadow builds and auxiliary tests. `linkedActivitySaveCleanup` is
+  registered in both the inventory and the native transaction workflow.
 
 ### BUILD-023: Transformed libraries lose authenticated source provenance
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Resources/linux/generate-runtime-provenance.py`,
   `src/Resources/linux/AppImagePackagingSupport.sh`, and
   `src/Resources/linux/MakeAppImageQt6.sh`
@@ -4126,15 +4154,17 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   bytes cannot equal the package's authenticated digest. Requiring exact source
   bytes rejects valid packaging, while dropping the check leaves transformed
   runtime code unauthenticated.
-- Test-first evidence / required regression: Transform a verified fixture
-  library, require failure when either source or output changes unexpectedly,
-  and accept only a record binding the final path and digest to the verified
-  package source and declared transformation.
-- Fix direction: Verify the source file against authenticated Debian metadata
-  before transformation, then record the transformation plus final output path
-  and SHA-256 in provenance and the SBOM.
-- Verification: Confirmed by final build review. The source-to-output binding
-  remains unintegrated and has not passed a complete package build.
+- Test-first evidence: Regressions mutate verified source and transformed
+  output, change the relative path or deployment tool, exercise SONAME aliases,
+  and require package-private libraries to be present in the pre-transform
+  snapshot.
+- Resolution: Packaging snapshots authenticated source libraries before
+  `linuxdeployqt`, binds each source package and digest to the reviewed tool
+  identity and declared transformation, then records the final path and digest
+  in provenance and the SBOM. Unconsumed and ambiguous records fail closed.
+- Verification: The source/output, tool, SONAME, snapshot, and exact-consumption
+  cases pass in the 22-case provenance suite. Both complete package passes
+  verified their transformed runtime manifests and produced the same AppImage.
 
 ### BUILD-033: Clean builds cannot compile qmake-renamed Bison parsers
 
@@ -6107,14 +6137,24 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### CI-001: Pull-request CI does not execute unit tests
 
-- Status: OPEN
-- Code: `.github/workflows/ci.yml:28`, `.github/workflows/ci.yml:37`,
-  `.github/scripts/build.sh:69`
+- Status: FIXED
+- Code: `.github/workflows/ci.yml`, `.github/scripts/build.sh`,
+  `.github/scripts/run-tests.py`, `unittests/ci-required-tests.txt`, and
+  `unittests/Build/ciTestRunner/testCiTestRunner.py`
 - Impact: The CI "Test" step only invokes `--version`; parser, database, and
   platform regressions can merge despite the existing test suite.
-- Test: CI self-check must fail if zero test cases are discovered.
-- Fix direction: Linux/macOS/Windows matrix, build and run all tests, then add
-  ASan/UBSan, TSAN where viable, and parser fuzzers.
+- Test-first evidence: The runner self-test requires failures for zero test
+  cases, absent results, build-tool failures, missing and extra generated
+  targets, omitted discoverable projects, project-kind mismatches, and an
+  incomplete platform inventory.
+- Resolution: Trusted pull-request CI builds the application and registered unit
+  projects on Linux, macOS, and Windows, then runs every platform-eligible test
+  through the inventory-reconciling runner. Candidate identity and workflow
+  policy are validated before untrusted source is built.
+- Verification: The runner self-test passes its complete success and failure
+  matrix, and the immutable-workflow suite confirms all three platform jobs call
+  the runner with the complete inventory. Focused native workflows subsequently
+  passed their Linux, macOS, and Windows test matrices.
 
 ### CI-002: Season parser test depends on its working directory
 
@@ -6131,14 +6171,29 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### BUILD-001: Release dependencies and tooling are not reproducibly pinned
 
-- Status: OPEN
-- Code: `appveyor/linux/after_build.sh:36`,
-  `appveyor/linux/install.sh:28`, `src/Python/requirements.txt:5`
+- Status: FIXED
+- Code: `appveyor/linux/reproduce-appimage.sh`,
+  `appveyor/linux/build-appimage-pass.sh`,
+  `appveyor/linux/package-appimage-pass.sh`, `.devcontainer/Dockerfile`,
+  `.devcontainer/install-verified-qt.py`, the checked-in dependency locks, and
+  `src/Resources/linux/generate-appimage-sbom.py`
 - Impact: Moving tool/dependency targets can change or break artifacts for the
   same source commit.
-- Test: Repeat the build from a locked manifest and compare dependency/SBOM data.
-- Fix direction: Pin commits/digests, hash-lock Python dependencies, generate an
-  SBOM, and smoke-test AppImage on the oldest supported glibc.
+- Test-first evidence: Release-hardening regressions reject mutable or locally
+  substituted inputs, inherited build and packaging variables, mismatched
+  independent ELFs, incomplete SBOM coverage, unlocked snapshots, and release
+  entrypoints that bypass the reproduction driver.
+- Resolution: Release inputs, actions, tool archives, APT snapshots, Qt
+  archives, Python wheels, and runtime artifacts are pinned by reviewed hashes.
+  The driver builds and packages two isolated trees, compares their ELF and
+  AppImage bytes, embeds complete provenance, and emits a content-verified
+  CycloneDX SBOM.
+- Verification: The focused release-hardening, snapshot, extraction, Qt-lock,
+  immutable-action, and provenance suites pass. Two clean Jammy builds at
+  revision `b46e064` independently compiled and packaged the application,
+  passed the completed-AppImage offscreen gate on glibc 2.35, and produced the
+  same 251,214,328-byte image with SHA-256
+  `9142bc5f60a272051d039e33c23ee573ffb811f5804de2754bfa1d75650b19a6`.
 
 ### BUILD-003: AppImage Python runtime is incompatible and its release asset moves
 
@@ -7597,7 +7652,7 @@ the active remediation goal. They remain documented for later prioritization;
 
 ### BUILD-030: Two-pass packaging reuses one compiled executable
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `appveyor/linux/after_build.sh`,
   `appveyor/linux/package-appimage-pass.sh`,
   `.devcontainer/package-appimage.sh`, and
@@ -7613,7 +7668,7 @@ the active remediation goal. They remain documented for later prioritization;
 
 ### BUILD-031: GUI smoke exits before GoldenCheetah runtime initialization
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Core/main.cpp` and
   `src/Resources/linux/AppImagePackagingSupport.sh`
 - Impact: The current marker proves only that `QApplication` entered its event
