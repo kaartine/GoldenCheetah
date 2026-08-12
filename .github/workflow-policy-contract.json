@@ -230,7 +230,7 @@
     ".github/scripts/before_build.sh": "013982f40ac27e626b8df52f1e8fc043f96cc47ce0afcd5e5ae7982c9923a4c2",
     ".github/scripts/build.sh": "3127abd7af54e37c56a53ee3b91403183c631ad72e9f420ed5ea5d76d70a2b81",
     ".github/scripts/check-immutable-actions.py": "8240ede87866254cb2b5b5123ce1b64a79a8baf99ab912ad0b65ccef66df1dd2",
-    ".github/scripts/immutable-actions-requirements.lock": "3e1b87efba20bdea6c25a22ea38df58b5523459ec6e5813003584def26d389f4",
+    ".github/scripts/immutable-actions-requirements.lock": "f4eb4eb9e1a67e2ac46d760f7f364f81319b6af5467b5404ec82a29a0d84bf6e",
     ".github/scripts/install-pinned-homebrew.sh": "16a919842b9bcffff01146e3d46a674b1672a5504ecdf57050b564f6aa60b874",
     ".github/scripts/install.sh": "3701459000ce3731f450d101316e3143471cf2623bd8aab95da6d442d34ce236",
     ".github/scripts/run-tests.py": "72fa04ab40d6158413c61e7fbe3d7a322e9fe8d96cf9b557d213c723ec610f10",

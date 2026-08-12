@@ -4100,6 +4100,24 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   passes in the release-capable container, including credential, provenance,
   SBOM, keychain, offscreen, and reproducibility checks.
 
+### BUILD-036: Jammy CI cannot install its pinned policy parser
+
+- Status: FIXED
+- Code: `.github/scripts/immutable-actions-requirements.lock`
+- Impact: The Linux CI job runs on Ubuntu 22.04 and invokes its release-policy
+  tests with the host's CPython 3.10. The hash lock covered only CPython
+  3.11-3.13 wheels, so a clean Jammy job rejected PyYAML's selected wheel and
+  stopped before immutable-action and packaging policy tests could run.
+- Test-first evidence: The complete AppImage packaging suite in a clean Jammy
+  container selected PyYAML's CPython 3.10 manylinux x86_64 wheel, then pip's
+  `--require-hashes` gate rejected its absent SHA-256.
+- Resolution: The lock now includes the exact CPython 3.10 x86_64 wheel digest
+  published in PyPI's PyYAML 6.0.2 release metadata and documents the actual
+  CPython 3.10-3.13 CI range.
+- Verification: The same clean Jammy suite now installs the locked wheel and
+  passes all immutable-action, credential, provenance, SBOM, keychain,
+  offscreen, and reproducibility checks.
+
 ### MEM-026: Duplicate activity imports leak the replaced RideItem
 
 - Status: FIXED

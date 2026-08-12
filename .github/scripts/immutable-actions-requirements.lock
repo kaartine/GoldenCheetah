@@ -1,4 +1,4 @@
-# PyYAML 6.0.2 wheels for supported CPython 3.11-3.13 CI hosts.
+# PyYAML 6.0.2 wheels for supported CPython 3.10-3.13 CI hosts.
 # Generated from the release metadata at https://pypi.org/project/PyYAML/6.0.2/.
 PyYAML==6.0.2 \
     --hash=sha256:cc1c1159b3d456576af7a3e4d1ba7e6924cb39de8f67111c735f6fc832082774 \
@@ -27,4 +27,5 @@ PyYAML==6.0.2 \
     --hash=sha256:41e4e3953a79407c794916fa277a82531dd93aad34e29c2a514c2c0c5fe971cc \
     --hash=sha256:68ccc6023a3400877818152ad9a1033e3db8625d899c72eacb5a668902e4d652 \
     --hash=sha256:bc2fa7c6b47d6bc618dd7fb02ef6fdedb1090ec036abab80d4681424b84c1183 \
-    --hash=sha256:8388ee1976c416731879ac16da0aff3f63b286ffdd57cdeb95f3f2e085687563
+    --hash=sha256:8388ee1976c416731879ac16da0aff3f63b286ffdd57cdeb95f3f2e085687563 \
+    --hash=sha256:ec031d5d2feb36d1d1a24380e4db6d43695f3748343d99434e6f5f9156aaa2ed
