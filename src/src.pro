@@ -640,6 +640,14 @@ SOURCES += Charts/UserChartWindow.cpp Charts/UserChartOverviewItem.cpp Charts/Us
 ### LEX AND YACC SOURCES
 ###=====================
 
+# Modern Bison keeps the original .tab.h include after qmake renames that
+# generated header. These source-side forwarding headers keep both names valid.
+HEADERS += Core/DataFilter.tab.h \
+           FileIO/JsonRideFile.tab.h \
+           Core/RideDB.tab.h \
+           Train/WorkoutFilter.tab.h \
+           Train/TrainerDayAPIQuery.tab.h
+
 YACCSOURCES += Core/DataFilter.y \
                FileIO/JsonRideFile.y \
                Core/RideDB.y \

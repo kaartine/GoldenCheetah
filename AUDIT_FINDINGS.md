@@ -4036,6 +4036,30 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Verification: Confirmed by final build review. The source-to-output binding
   remains unintegrated and has not passed a complete package build.
 
+### BUILD-033: Clean builds cannot compile qmake-renamed Bison parsers
+
+- Status: FIXED
+- Code: `src/src.pro`, parser-specific `src/{Core,FileIO,Train}/*.tab.h`
+  compatibility headers, and
+  `unittests/Build/appImagePackaging/testYaccCompatibility.py`
+- Impact: Modern Bison makes each generated parser include its original
+  `<name>.tab.h`, while qmake immediately renames that header to
+  `<name>_yacc.h`. A clean Linux build therefore fails all five parser
+  compilations with missing-header errors; parallel builds expose several
+  failures at once and cannot produce a release.
+- Test-first evidence: The regression generated every declared `YACCSOURCES`
+  parser and reproduced five unresolved `.tab.h` includes after applying
+  qmake's rename. The independent release build failed the same way in
+  `DataFilter`, `JsonRideFile`, `RideDB`, and `WorkoutFilter` before reaching
+  the fifth parser.
+- Resolution: Each parser source directory now supplies a tracked forwarding
+  header from Bison's retained name to qmake's generated name. Keeping the
+  wrappers outside the output root also preserves in-source and shadow builds;
+  older Bison output remains compatible.
+- Verification: The parser regression regenerates every production grammar and
+  requires each retained include to resolve after qmake's rename. A clean
+  qmake-generated `make -j10` build of all five parser objects passes.
+
 ### MEM-026: Duplicate activity imports leak the replaced RideItem
 
 - Status: FIXED
