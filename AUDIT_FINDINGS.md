@@ -3479,6 +3479,27 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ## Medium
 
+### DATA-023: A missing workout setting becomes a literal `0` path
+
+- Status: FIXED
+- Code: `src/Planning/PlanBundle.cpp` and
+  `unittests/Core/rideCacheRemoval/testRideCacheRemoval.cpp`
+- Impact: `GSettings::value()` defaults its fallback `QVariant` to integer zero.
+  Plan import recovery omitted an explicit fallback, converted that zero to the
+  string `"0"`, and skipped its intended athlete-library default. A fresh
+  profile therefore reported that the workout library was unavailable before
+  the main window had initialized the setting.
+- Test-first evidence: `planBundleRecoveryUsesDefaultWorkoutRoot()` leaves the
+  setting absent, supplies an existing athlete-library parent, and first failed
+  with `The workout library is unavailable`.
+- Resolution: The recovery path now requests an explicit empty `QString` from
+  settings. The existing empty-value branch then resolves and canonicalizes the
+  athlete-library parent as intended.
+- Verification: The focused recovery regression passes against the production
+  `PlanBundle::reconcilePendingImport()` implementation. The complete
+  RideCache removal, mutation, and recovery program passes 407 tests with zero
+  failures and one expected platform skip.
+
 ### MEM-028: OAuth nested messages can outlive their dialog
 
 - Status: FIXED

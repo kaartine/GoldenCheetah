@@ -207,7 +207,7 @@ bool resolveWorkoutRoot(
         return false;
     }
     QString configured = appsettings->value(
-        nullptr, GC_WORKOUTDIR).toString();
+        nullptr, GC_WORKOUTDIR, QString()).toString();
     if (configured.isEmpty()) {
         QDir root = context->athlete->home->root();
         if (!root.cdUp()) {

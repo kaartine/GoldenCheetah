@@ -837,6 +837,7 @@ private slots:
     void plannedReplacementCommitsOneCompleteGeneration();
     void planBundleImportPublishesOneCompleteGeneration();
     void planBundleImportCommitsWorkoutFileAndDatabaseRow();
+    void planBundleRecoveryUsesDefaultWorkoutRoot();
     void planBundleImportStageFailurePreservesOldGeneration();
     void plannedReplacementQuiescesWorkersAndDefersRefresh();
     void plannedReplacementBlocksRefreshRestartDuringCallbacks();
@@ -9326,6 +9327,35 @@ planBundleImportCommitsWorkoutFileAndDatabaseRow()
                  pending, found, journalError),
              qPrintable(journalError));
     QVERIFY(!found);
+}
+
+void TestRideCacheRemoval::
+planBundleRecoveryUsesDefaultWorkoutRoot()
+{
+    QTemporaryDir libraryRoot;
+    QVERIFY(libraryRoot.isValid());
+    const QString athleteRoot = QDir(
+        libraryRoot.path()).filePath(
+            QStringLiteral("RecoveryAthlete"));
+    const QString databaseRoot = QDir(
+        libraryRoot.path()).filePath(
+            QStringLiteral("workout-database"));
+    QVERIFY(QDir().mkpath(athleteRoot));
+    QVERIFY(QDir().mkpath(databaseRoot));
+
+    Context context(nullptr);
+    Athlete athlete(&context, QDir(athleteRoot));
+    TrainDB database{QDir(databaseRoot)};
+    setPlanBundleWorkoutRootForTest(QString());
+
+    TrainDB *const previousDatabase = trainDB;
+    trainDB = &database;
+    QString error;
+    const bool recovered = PlanBundle::reconcilePendingImport(
+        &context, error);
+    trainDB = previousDatabase;
+
+    QVERIFY2(recovered, qPrintable(error));
 }
 
 void TestRideCacheRemoval::
