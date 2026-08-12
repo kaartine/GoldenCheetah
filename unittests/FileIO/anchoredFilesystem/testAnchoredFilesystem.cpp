@@ -764,6 +764,7 @@ private slots:
     void outputPinFinalizationFailureRetainsFile();
     void outputDigestMismatchRetainsFile_data();
     void outputDigestMismatchRetainsFile();
+    void copiedOutputCanBeMovedAfterPinFinalization();
     void moveAcceptsWindowsRenameOnlyChange();
     void repeatedPrivateHardeningPreservesPinnedChild();
 #endif
@@ -2134,6 +2135,35 @@ void TestAnchoredFilesystem::verifiedPathRejectsFinalParentReplacement()
 }
 
 #ifdef Q_OS_WIN
+
+void TestAnchoredFilesystem::copiedOutputCanBeMovedAfterPinFinalization()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    const DirectoryAnchor directory = openDirectory(root.path());
+    const EntryRef source = entry(directory, QStringLiteral("source"));
+    const EntryRef staging = entry(directory, QStringLiteral("staging"));
+    const EntryRef target = entry(directory, QStringLiteral("target"));
+    const QByteArray contents("copied output contents");
+    writeFixture(source.displayPath(), contents);
+    const PinnedFile sourceFile = pin(source);
+    PinnedFile copied;
+    QString copyError;
+    QVERIFY2(
+        copyToNewFile(sourceFile, staging, copied, copyError),
+        qPrintable(copyError));
+    const QByteArray copiedKey = copied.identity().serializedKey();
+    QVERIFY(!copiedKey.isEmpty());
+
+    const MutationResult result = moveNoReplace(copied, target);
+
+    verifyApplied(result);
+    const NativeIdentity movedIdentity = copied.identity();
+    QCOMPARE(movedIdentity.serializedKey(), copiedKey);
+    verifyPinnedAt(copied, target, movedIdentity);
+    QCOMPARE(readFixture(target.displayPath()), contents);
+    QVERIFY(!QFileInfo::exists(staging.displayPath()));
+}
 
 void TestAnchoredFilesystem::moveAcceptsWindowsRenameOnlyChange()
 {
