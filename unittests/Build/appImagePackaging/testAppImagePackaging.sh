@@ -158,6 +158,8 @@ declare -F finalize_appimage_manifest >/dev/null ||
     fail "finalize_appimage_manifest helper is missing"
 declare -F verify_appimage_manifest >/dev/null ||
     fail "verify_appimage_manifest helper is missing"
+declare -F verify_legacy_appimage_manifest >/dev/null ||
+    fail "legacy AppImage manifest verifier is missing"
 declare -F promote_appimage_release >/dev/null ||
     fail "promote_appimage_release helper is missing"
 declare -F strava_oauth_build_status >/dev/null ||
@@ -957,6 +959,118 @@ GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
     verify_appimage_sbom \
         "$LEGACY_RELEASE_LINK/previous.AppImage" \
         "$LEGACY_RELEASE_LINK/previous.AppImage.sbom.cdx.json"
+
+LEGACY_V1_BASE_MANIFEST="$TEMP_DIR/legacy-v1-build.manifest"
+{
+    printf '%s\n' 'goldencheetah_appimage_manifest=1'
+    sed -n \
+        -e '/^source_revision=/p' \
+        -e '/^raw_elf_sha256=/p' \
+        -e '/^toolchain=/p' \
+        -e '/^strava_oauth_configured=/p' \
+        "$BASE_MANIFEST"
+} >"$LEGACY_V1_BASE_MANIFEST"
+LEGACY_V1_APPDIR="$TEMP_DIR/legacy-v1.AppDir"
+LEGACY_V1_APPIMAGE="$TEMP_DIR/legacy-v1.AppImage"
+cp -a "$FAKE_APPDIR" "$LEGACY_V1_APPDIR"
+install -m 0644 "$LEGACY_V1_BASE_MANIFEST" \
+    "$LEGACY_V1_APPDIR/usr/share/goldencheetah/build-manifest"
+normalize_appdir_mtimes "$LEGACY_V1_APPDIR"
+run_packaging_appimage "$REPRO_TOOL" \
+    --runtime-file "$REPRO_RUNTIME" \
+    "$LEGACY_V1_APPDIR" "$LEGACY_V1_APPIMAGE"
+LEGACY_V1_MANIFEST="$LEGACY_V1_APPIMAGE.manifest"
+(
+    umask 077
+    cat "$LEGACY_V1_BASE_MANIFEST" >"$LEGACY_V1_MANIFEST"
+    printf 'appimage_sha256=%s\n' \
+        "$(sha256sum "$LEGACY_V1_APPIMAGE" | cut -d ' ' -f 1)" \
+        >>"$LEGACY_V1_MANIFEST"
+)
+if GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+    verify_appimage_manifest \
+        "$LEGACY_V1_APPIMAGE" "$LEGACY_V1_MANIFEST" \
+        >/dev/null 2>&1; then
+    fail "the production manifest verifier accepted legacy manifest version 1"
+fi
+
+seed_legacy_v1_release()
+{
+    local image=$1
+    local manifest=$2
+    local release_parent=$3
+    local release_name=GoldenCheetah-release
+    local release_store="$release_parent/.${release_name}.store"
+    local image_hash revision artifact_id set_id
+
+    image_hash=$(sed -n 's/^appimage_sha256=//p' "$manifest")
+    revision=$(sed -n 's/^source_revision=//p' "$manifest")
+    artifact_id="${revision}-${image_hash}"
+    set_id="${image_hash}-${image_hash}"
+    mkdir -p \
+        "$release_store/artifacts/$artifact_id" \
+        "$release_store/sets/$set_id"
+    chmod 0700 \
+        "$release_store" \
+        "$release_store/artifacts" \
+        "$release_store/artifacts/$artifact_id" \
+        "$release_store/sets" \
+        "$release_store/sets/$set_id"
+    install -m 0755 "$image" \
+        "$release_store/artifacts/$artifact_id/GoldenCheetah.AppImage"
+    install -m 0600 "$manifest" \
+        "$release_store/artifacts/$artifact_id/GoldenCheetah.AppImage.manifest"
+    ln -s "../../artifacts/$artifact_id/GoldenCheetah.AppImage" \
+        "$release_store/sets/$set_id/latest.AppImage"
+    ln -s "../../artifacts/$artifact_id/GoldenCheetah.AppImage" \
+        "$release_store/sets/$set_id/previous.AppImage"
+    install -m 0600 "$manifest" \
+        "$release_store/sets/$set_id/latest.AppImage.manifest"
+    install -m 0600 "$manifest" \
+        "$release_store/sets/$set_id/previous.AppImage.manifest"
+    install -m 0600 /dev/null "$release_store/promotion.lock"
+    ln -s ".${release_name}.store/sets/$set_id" \
+        "$release_parent/$release_name"
+}
+
+LEGACY_V1_PARENT="$TEMP_DIR/legacy-v1-release-parent"
+mkdir "$LEGACY_V1_PARENT"
+seed_legacy_v1_release \
+    "$LEGACY_V1_APPIMAGE" "$LEGACY_V1_MANIFEST" "$LEGACY_V1_PARENT"
+LEGACY_V1_RELEASE_LINK="$LEGACY_V1_PARENT/GoldenCheetah-release"
+if ! GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+     GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
+        promote_appimage_release \
+            "$SECOND_APPIMAGE" "$SECOND_MANIFEST" "$FAKE_SBOM" \
+            "$LEGACY_V1_RELEASE_LINK" >/dev/null; then
+    fail "manifest-version-1 release migration failed"
+fi
+cmp -s "$SECOND_APPIMAGE" "$LEGACY_V1_RELEASE_LINK/latest.AppImage" ||
+    fail "manifest-version-1 migration did not publish the new image"
+cmp -s "$SECOND_APPIMAGE" "$LEGACY_V1_RELEASE_LINK/previous.AppImage" ||
+    fail "manifest-version-1 migration retained an unverifiable rollback image"
+
+TAMPERED_V1_MANIFEST="$TEMP_DIR/legacy-v1-tampered.manifest"
+cp "$LEGACY_V1_MANIFEST" "$TAMPERED_V1_MANIFEST"
+sed -i \
+    's/^source_revision=.*/source_revision=0000000000000000000000000000000000000000/' \
+    "$TAMPERED_V1_MANIFEST"
+LEGACY_V1_TAMPERED_PARENT="$TEMP_DIR/legacy-v1-tampered-parent"
+mkdir "$LEGACY_V1_TAMPERED_PARENT"
+seed_legacy_v1_release \
+    "$LEGACY_V1_APPIMAGE" "$TAMPERED_V1_MANIFEST" \
+    "$LEGACY_V1_TAMPERED_PARENT"
+LEGACY_V1_TAMPERED_LINK="$LEGACY_V1_TAMPERED_PARENT/GoldenCheetah-release"
+if GC_TEST_APPIMAGE_MANIFEST_ENTRYPOINT=true \
+   GC_TEST_APPIMAGE_SBOM_ENTRYPOINT=true \
+    promote_appimage_release \
+        "$SECOND_APPIMAGE" "$SECOND_MANIFEST" "$FAKE_SBOM" \
+        "$LEGACY_V1_TAMPERED_LINK" >/dev/null 2>&1; then
+    fail "promotion accepted a legacy sidecar that mismatches its AppImage"
+fi
+cmp -s "$LEGACY_V1_APPIMAGE" \
+    "$LEGACY_V1_TAMPERED_LINK/latest.AppImage" ||
+    fail "failed legacy migration changed the active release"
 
 PUBLISHED_TARGET=$(readlink "$RELEASE_LINK")
 THIRD_APPIMAGE="$TEMP_DIR/manifest-third.AppImage"

@@ -1761,6 +1761,26 @@ validate_appimage_base_manifest()
         return 1
 }
 
+validate_legacy_appimage_base_manifest()
+{
+    local manifest=$1
+    local -a lines=()
+
+    [ -f "$manifest" ] && [ ! -L "$manifest" ] || return 1
+    [ "$(wc -c <"$manifest")" -le 4096 ] || return 1
+    [ "$(tail -c 1 "$manifest" | od -An -tu1 | tr -d ' \n')" = 10 ] ||
+        return 1
+    mapfile -t lines <"$manifest"
+    [ "${#lines[@]}" -eq 5 ] || return 1
+    [ "${lines[0]}" = "goldencheetah_appimage_manifest=1" ] || return 1
+    [[ "${lines[1]}" =~ ^source_revision=[0-9a-f]{40}$ ]] || return 1
+    [[ "${lines[2]}" =~ ^raw_elf_sha256=[0-9a-f]{64}$ ]] || return 1
+    [[ "${lines[3]}" =~ ^toolchain=(gcc|clang)-[0-9]+(\.[0-9]+){1,3}_qt-[0-9]+(\.[0-9]+){1,3}_cxx-[0-9]+$ ]] ||
+        return 1
+    [[ "${lines[4]}" =~ ^strava_oauth_configured=(true|false)$ ]] ||
+        return 1
+}
+
 set_appimage_source_date_epoch()
 {
     local manifest=$1
@@ -2304,6 +2324,53 @@ verify_appimage_manifest()
     fi
 )
 
+verify_legacy_appimage_manifest()
+(
+    local image=$1
+    local sidecar=$2
+    local image_path extract_dir payload_dir embedded expected_base
+    local expected_hash actual_hash
+    local -a lines=()
+
+    cleanup_legacy_manifest_extract()
+    {
+        if [ -n "${extract_dir:-}" ] && [ -d "$extract_dir" ]; then
+            rm -rf -- "$extract_dir"
+        fi
+    }
+    trap cleanup_legacy_manifest_extract EXIT
+
+    [ -f "$image" ] && [ -x "$image" ] || return 1
+    [ -f "$sidecar" ] && [ ! -L "$sidecar" ] || return 1
+    [ "$(stat -c '%a' "$sidecar")" = 600 ] || return 1
+    [ "$(wc -c <"$sidecar")" -le 4352 ] || return 1
+    [ "$(tail -c 1 "$sidecar" | od -An -tu1 | tr -d ' \n')" = 10 ] ||
+        return 1
+    mapfile -t lines <"$sidecar"
+    [ "${#lines[@]}" -eq 6 ] || return 1
+    expected_hash=${lines[5]#appimage_sha256=}
+    [[ "${lines[5]}" =~ ^appimage_sha256=[0-9a-f]{64}$ ]] || return 1
+    actual_hash=$(sha256sum "$image" | cut -d ' ' -f 1) || return
+    [ "$actual_hash" = "$expected_hash" ] || return 1
+
+    extract_dir=$(mktemp -d) || return
+    expected_base="$extract_dir/expected-base"
+    payload_dir="$extract_dir/payload"
+    mkdir "$payload_dir" || return
+    (umask 077; printf '%s\n' "${lines[@]:0:5}" >"$expected_base") ||
+        return
+    validate_legacy_appimage_base_manifest "$expected_base" || return
+
+    image_path=$(readlink -f -- "$image") || return
+    trusted_appimage_extract "$image_path" "$payload_dir" || return
+    embedded="$payload_dir/squashfs-root/usr/share/goldencheetah/build-manifest"
+    if [ ! -f "$embedded" ] || [ -L "$embedded" ] ||
+       ! validate_legacy_appimage_base_manifest "$embedded" ||
+       ! cmp -s -- "$expected_base" "$embedded"; then
+        return 1
+    fi
+)
+
 promote_appimage_release()
 (
     if [ "$#" -ne 4 ]; then
@@ -2455,14 +2522,11 @@ promote_appimage_release()
         current_dir=$(readlink -f -- "$release_link") || return
         [ "$(dirname -- "$current_dir")" = "$sets" ] &&
             [ -d "$current_dir" ] && [ ! -L "$current_dir" ] || return 1
-        verify_appimage_manifest \
-            "$current_dir/latest.AppImage" \
-            "$current_dir/latest.AppImage.manifest" || return
-        current_hash=$(sed -n 's/^appimage_sha256=//p' \
-            "$current_dir/latest.AppImage.manifest")
-        [[ "$current_hash" =~ ^[0-9a-f]{64}$ ]] || return 1
         if [ -f "$current_dir/latest.AppImage.sbom.cdx.json" ] &&
            [ ! -L "$current_dir/latest.AppImage.sbom.cdx.json" ]; then
+            verify_appimage_manifest \
+                "$current_dir/latest.AppImage" \
+                "$current_dir/latest.AppImage.manifest" || return
             verify_appimage_sbom \
                 "$current_dir/latest.AppImage" \
                 "$current_dir/latest.AppImage.sbom.cdx.json" || return
@@ -2470,8 +2534,19 @@ promote_appimage_release()
              [ -L "$current_dir/latest.AppImage.sbom.cdx.json" ]; then
             return 1
         else
+            if ! verify_appimage_manifest \
+                    "$current_dir/latest.AppImage" \
+                    "$current_dir/latest.AppImage.manifest" &&
+               ! verify_legacy_appimage_manifest \
+                    "$current_dir/latest.AppImage" \
+                    "$current_dir/latest.AppImage.manifest"; then
+                return 1
+            fi
             current_has_sbom=false
         fi
+        current_hash=$(sed -n 's/^appimage_sha256=//p' \
+            "$current_dir/latest.AppImage.manifest")
+        [[ "$current_hash" =~ ^[0-9a-f]{64}$ ]] || return 1
         if [ "$current_has_sbom" = true ] &&
            [ "$current_hash" = "$image_hash" ]; then
             cmp -s -- "$image" "$current_dir/latest.AppImage" || return 1

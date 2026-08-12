@@ -3584,6 +3584,36 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   produced byte-identical output with SHA-256
   `9142bc5f60a272051d039e33c23ee573ffb811f5804de2754bfa1d75650b19a6`.
 
+### BUILD-039: Legacy release migration rejects manifest version 1
+
+- Status: FIXED
+- Code: `src/Resources/linux/AppImagePackagingSupport.sh` and
+  `unittests/Build/appImagePackaging/testAppImagePackaging.sh`; the protected
+  file digests are updated in `.github/workflow-policy-contract.json`.
+- Impact: The release promoter advertises migration from an installed AppImage
+  without an SBOM, but it first required the current manifest version 2. A real
+  predecessor with the structurally valid version-1 manifest therefore failed
+  closed before the generation pointer could move, preventing installation of
+  the new verified release.
+- Test-first evidence: A real Type-2 fixture with matching version-1 embedded
+  and sidecar manifests, exact image digest, mode-0600 sidecar, and no SBOM was
+  seeded through the legacy release-store layout. Promotion first failed before
+  replacing it. A second fixture changes only the sidecar source revision and
+  requires the embedded-manifest mismatch to remain rejected without changing
+  the active pointer.
+- Resolution: A dedicated legacy verifier accepts only the exact five-field
+  version-1 base format and six-field sidecar, checks file shape and mode,
+  hashes the AppImage, extracts it without executing it, and
+  requires its embedded manifest to match byte for byte. It is available only
+  when validating an already installed release with no SBOM. New candidates
+  still require manifest version 2 and a verified SBOM, and the unverifiable
+  predecessor is not retained as the rollback generation.
+- Verification: The full AppImage packaging program passes in the locked Jammy
+  container, including the valid and tampered migration rows, 32 workflow-policy
+  cases, 19 release-hardening cases, and the complete provenance, extraction,
+  Qt archive, native-platform, and OAuth package gates. Local shell syntax and
+  all 32 immutable-workflow tests also pass.
+
 ### MEM-028: OAuth nested messages can outlive their dialog
 
 - Status: FIXED
