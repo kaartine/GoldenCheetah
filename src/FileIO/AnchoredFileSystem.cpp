@@ -1327,11 +1327,17 @@ struct WindowsStamp
     }
 };
 
-bool sameWindowsObject(
+bool sameWindowsFileId(
     const WindowsStamp &left, const WindowsStamp &right)
 {
     return left.volume == right.volume
-        && left.id == right.id
+        && left.id == right.id;
+}
+
+bool sameWindowsObject(
+    const WindowsStamp &left, const WindowsStamp &right)
+{
+    return sameWindowsFileId(left, right)
         && left.created == right.created;
 }
 
@@ -6480,9 +6486,11 @@ MutationResult replaceExisting(
     }
     return result;
 #elif defined(Q_OS_WIN)
+    const WindowsStamp replacementStamp = replacement.state_->stamp;
     const NativeIdentity replacementIdentity = replacement.identity();
     const qint64 replacementSize = replacement.size();
     const QByteArray replacementDigest = replacement.sha256();
+    const WindowsStamp targetStamp = expectedTarget.state_->stamp;
     const NativeIdentity targetIdentity = expectedTarget.identity();
     const qint64 targetSize = expectedTarget.size();
     const QByteArray targetDigest = expectedTarget.sha256();
@@ -6493,6 +6501,21 @@ MutationResult replaceExisting(
         const QByteArray &digest) {
         return file.isValid()
             && file.identity() == identity
+            && file.size() == size
+            && file.sha256() == digest;
+    };
+    const auto replacementPublicationMatches = [](
+        const PinnedFile &file,
+        const WindowsStamp &originalReplacement,
+        const WindowsStamp &originalTarget,
+        qint64 size,
+        const QByteArray &digest) {
+        // ReplaceFileW retains the replacement file ID but preserves the
+        // replaced target's creation time.
+        return file.isValid()
+            && sameWindowsFileId(
+                file.state_->stamp, originalReplacement)
+            && file.state_->stamp.created == originalTarget.created
             && file.size() == size
             && file.sha256() == digest;
     };
@@ -6639,9 +6662,10 @@ MutationResult replaceExisting(
     }
 
     const bool expectedPublication = publishedPinned && displacedPinned
-        && exactFile(
+        && replacementPublicationMatches(
             published,
-            replacementIdentity,
+            replacementStamp,
+            targetStamp,
             replacementSize,
             replacementDigest)
         && exactFile(
@@ -6730,9 +6754,16 @@ MutationResult replaceExisting(
 
     QString refreshError;
     refreshExpectedTarget(refreshError);
-    const bool originalReplacementRestored = exactFile(
+    const bool originalReplacementRestored =
+        exactFile(
             published,
             replacementIdentity,
+            replacementSize,
+            replacementDigest)
+        || replacementPublicationMatches(
+            published,
+            replacementStamp,
+            targetStamp,
             replacementSize,
             replacementDigest);
     if (originalReplacementRestored) {
