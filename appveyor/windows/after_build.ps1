@@ -107,7 +107,12 @@ function Get-StagedFileRecord {
       $RelativePath -match '(^|[\\/])\.\.([\\/]|$)') {
     throw "Invalid staged runtime path: $RelativePath"
   }
-  $rootPath = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+  $separators = [char[]]@(
+    [IO.Path]::DirectorySeparatorChar,
+    [IO.Path]::AltDirectorySeparatorChar
+  )
+  $rootPath = [IO.Path]::GetFullPath($Root).TrimEnd($separators) +
+    [IO.Path]::DirectorySeparatorChar
   $path = [IO.Path]::GetFullPath((Join-Path $Root $RelativePath))
   if (-not $path.StartsWith($rootPath, [StringComparison]::OrdinalIgnoreCase) -or
       -not (Test-Path -LiteralPath $path -PathType Leaf)) {

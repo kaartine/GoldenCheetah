@@ -2684,6 +2684,8 @@ assert_contains "$APPVEYOR_WINDOWS_BEFORE_BUILD" \
     'ZLIB_INCLUDE = c:\tools\vcpkg\installed\x64-windows\include'
 assert_contains "$APPVEYOR_WINDOWS_BEFORE_BUILD" \
     'ZLIB_LIBS = -Lc:\tools\vcpkg\installed\x64-windows\lib -lzlib'
+assert_contains "$APPVEYOR_WINDOWS_PACKAGER" \
+    '[IO.Path]::DirectorySeparatorChar'
 assert_contains "$SOURCE_PROJECT" '!isEmpty(ZLIB_INCLUDE)'
 assert_contains "$SOURCE_PROJECT" '!isEmpty(ZLIB_LIBS)'
 assert_contains "$SOURCE_PROJECT" '$$[QT_INSTALL_PREFIX]/src/3rdparty/zlib'
