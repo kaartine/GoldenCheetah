@@ -1,6 +1,7 @@
 QT += core gui widgets testlib xml sql network svg concurrent serialport \
       multimedia multimediawidgets webenginecore webenginewidgets webchannel \
       positioning webenginequick
+QT += charts
 greaterThan(QT_MAJOR_VERSION, 5): QT += core5compat
 CONFIG += c++17
 DEFINES += GC_OAUTH_DIALOG_TEST_HOOKS

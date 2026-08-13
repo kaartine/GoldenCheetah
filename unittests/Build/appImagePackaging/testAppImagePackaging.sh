@@ -47,6 +47,7 @@ SOURCE_PROJECT="$REPO_ROOT/src/src.pro"
 SOURCE_CONFIG_TEMPLATE="$REPO_ROOT/src/gcconfig.pri.in"
 ATHLETE_MIGRATION_STUB="$REPO_ROOT/unittests/Core/athleteMigrationSafety/AthleteMigrationTestStubs.cpp"
 ATHLETE_MIGRATION_PROJECT="$REPO_ROOT/unittests/Core/athleteMigrationSafety/athleteMigrationSafety.pro"
+STRAVA_OAUTH_POLICY_PROJECT="$REPO_ROOT/unittests/Cloud/stravaOAuthPolicy/stravaOAuthPolicy.pro"
 
 fail()
 {
@@ -2687,6 +2688,7 @@ assert_contains "$ATHLETE_MIGRATION_PROJECT" '$${GSL_INCLUDES}'
 assert_contains "$ATHLETE_MIGRATION_PROJECT" '$${GSL_LIBS}'
 assert_contains "$ATHLETE_MIGRATION_PROJECT" '$${ZLIB_INCLUDE}'
 assert_contains "$ATHLETE_MIGRATION_PROJECT" '$${ZLIB_LIBS}'
+assert_contains "$STRAVA_OAUTH_POLICY_PROJECT" 'QT += charts'
 if grep -Fq '$${QT_INSTALL_PREFIX}/src/3rdparty/zlib' "$SOURCE_PROJECT"; then
     fail "Windows zlib fallback still expands an unset qmake variable"
 fi
