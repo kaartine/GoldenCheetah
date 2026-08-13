@@ -16,12 +16,23 @@ HEADERS = ../../../src/Train/LibraryImportFileStager.h
 INCLUDEPATH += ../../../src \
                ../../../src/Train
 
-QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-QMAKE_LFLAGS += -Wl,--gc-sections
+include(../../section-gc.prf)
 
-sanitize:!msvc {
+sanitize:!tsan:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \
                       -fno-omit-frame-pointer \
                       -fno-sanitize-recover=all
     QMAKE_LFLAGS += -fsanitize=address,undefined
+}
+
+tsan:!msvc {
+    QMAKE_CXXFLAGS += -fsanitize=thread \
+                      -fno-omit-frame-pointer \
+                      -O1 \
+                      -g
+    QMAKE_LFLAGS += -fsanitize=thread
+    linux {
+        QMAKE_CXXFLAGS += -fno-pie
+        QMAKE_LFLAGS += -no-pie
+    }
 }

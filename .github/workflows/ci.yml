@@ -3,32 +3,249 @@ name: build
 
 on:
   push:
-  pull_request:
+    branches: [master]
+  workflow_run:
+    workflows: ["Workflow policy"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.display_title || github.ref }}
+  cancel-in-progress: true
 
 env:
   PYTHON_VERSION: "3.11"
-  GC_CLOUD_OPENDATA_SECRET: ${{ secrets.GC_CLOUD_OPENDATA_SECRET }}
-  GC_NOKIA_CLIENT_SECRET: ${{ secrets.GC_NOKIA_CLIENT_SECRET }}
-  GC_DROPBOX_CLIENT_SECRET: ${{ secrets.GC_DROPBOX_CLIENT_SECRET }}
-  GC_STRAVA_CLIENT_SECRET: ${{ secrets.GC_STRAVA_CLIENT_SECRET }}
-  GC_CYCLINGANALYTICS_CLIENT_SECRET: ${{ secrets.GC_CYCLINGANALYTICS_CLIENT_SECRET }}
-  GC_CLOUD_DB_BASIC_AUTH: ${{ secrets.GC_CLOUD_DB_BASIC_AUTH }}
-  GC_CLOUD_DB_APP_NAME: ${{ secrets.GC_CLOUD_DB_APP_NAME }}
-  GC_POLARFLOW_CLIENT_SECRET: ${{ secrets.GC_POLARFLOW_CLIENT_SECRET }}
-  GC_SPORTTRACKS_CLIENT_SECRET: ${{ secrets.GC_SPORTTRACKS_CLIENT_SECRET }}
-  GC_RWGPS_API_KEY: ${{ secrets.GC_RWGPS_API_KEY }}
-  GC_NOLIO_CLIENT_ID: ${{ secrets.GC_NOLIO_CLIENT_ID }}
-  GC_NOLIO_SECRET: ${{ secrets.GC_NOLIO_SECRET }}
-  GC_XERT_CLIENT_SECRET: ${{ secrets.GC_XERT_CLIENT_SECRET }}
-  GC_AZUM_CLIENT_SECRET: ${{ secrets.GC_AZUM_CLIENT_SECRET }}
-  GC_TRAINERDAY_API_KEY: ${{ secrets.GC_TRAINERDAY_API_KEY }}
+  QT_MODULES: >-
+    qtmultimedia qtwebengine qtwebchannel qtpositioning qtcharts
+    qtserialport qt5compat
 
 jobs:
-  build:
-    runs-on: macos-latest
+  validated-candidate:
+    runs-on: ubuntu-24.04
+    outputs:
+      authorized: ${{ steps.resolve.outputs.authorized }}
+      repository: ${{ steps.resolve.outputs.repository }}
+      revision: ${{ steps.resolve.outputs.revision }}
+      selected: ${{ steps.resolve.outputs.selected }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
+      - name: Resolve trusted candidate identity
+        id: resolve
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          CURRENT_REPOSITORY: ${{ github.repository }}
+          CURRENT_REVISION: ${{ github.sha }}
+          POLICY_EVENT: ${{ github.event.workflow_run.event }}
+          POLICY_PATH: ${{ github.event.workflow_run.path }}
+          POLICY_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          POLICY_IDENTITY: ${{ github.event.workflow_run.display_title }}
+          POLICY_REPOSITORY: ${{ github.event.workflow_run.repository.full_name }}
+          POLICY_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          POLICY_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PATH_FILTERS: |-
+            **
+        run: |
+          set -euo pipefail
+          repository=$CURRENT_REPOSITORY
+          revision=$CURRENT_REVISION
+          selected=true
+          if [ "$EVENT_NAME" = workflow_run ]; then
+            [ "$POLICY_EVENT" = pull_request_target ]
+            [ "$POLICY_PATH" = .github/workflows/workflow-policy.yml ]
+            [ "$POLICY_CONCLUSION" = success ]
+            [ "$POLICY_REPOSITORY" = "$CURRENT_REPOSITORY" ]
+            [ "$POLICY_HEAD_BRANCH" = master ]
+            [[ "$POLICY_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+            case "$POLICY_IDENTITY" in
+              workflow-policy:*:*:[0-9a-f][0-9a-f]*) ;;
+              *) exit 1 ;;
+            esac
+            payload=${POLICY_IDENTITY#workflow-policy:}
+            pull_number=${payload%%:*}
+            payload=${payload#*:}
+            repository=${payload%:*}
+            revision=${payload##*:}
+            [[ "$pull_number" =~ ^[1-9][0-9]*$ ]]
+            [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+            [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+            master_revision=$(gh api "/repos/${CURRENT_REPOSITORY}/git/ref/heads/master" --jq .object.sha)
+            [ "$POLICY_HEAD_SHA" = "$master_revision" ]
+            pull_json=$(mktemp)
+            files_json=$(mktemp)
+            trap 'rm -f -- "$pull_json" "$files_json"' EXIT
+            gh api "/repos/${CURRENT_REPOSITORY}/pulls/${pull_number}" >"$pull_json"
+            python3 - "$pull_json" "$CURRENT_REPOSITORY" "$repository" "$revision" "$POLICY_HEAD_SHA" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as source:
+              pull = json.load(source)
+          expected = {
+              "base_repository": sys.argv[2],
+              "head_repository": sys.argv[3],
+              "head_revision": sys.argv[4],
+              "base_revision": sys.argv[5],
+          }
+          observed = {
+              "base_repository": pull.get("base", {}).get("repo", {}).get("full_name"),
+              "head_repository": pull.get("head", {}).get("repo", {}).get("full_name"),
+              "head_revision": pull.get("head", {}).get("sha"),
+              "base_revision": pull.get("base", {}).get("sha"),
+          }
+          if pull.get("state") != "open" or pull.get("base", {}).get("ref") != "master":
+              raise SystemExit("pull request is not open against master")
+          if observed != expected:
+              raise SystemExit("pull request identity changed after policy validation")
+          PY
+            gh api --paginate --slurp \
+              "/repos/${CURRENT_REPOSITORY}/pulls/${pull_number}/files?per_page=100" \
+              >"$files_json"
+            if ! python3 - "$files_json" <<'PY'
+          import fnmatch
+          import json
+          import os
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as source:
+              pages = json.load(source)
+          paths = [item["filename"] for page in pages for item in page]
+          patterns = [line for line in os.environ["PATH_FILTERS"].splitlines() if line]
+          if not paths or len(paths) >= 3000:
+              raise SystemExit(0)
+          raise SystemExit(0 if any(
+              fnmatch.fnmatchcase(path, pattern)
+              for path in paths
+              for pattern in patterns
+          ) else 1)
+          PY
+            then
+              selected=false
+            fi
+            rm -f -- "$pull_json" "$files_json"
+            trap - EXIT
+          fi
+          [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          printf 'authorized=true\nrepository=%s\nrevision=%s\nselected=%s\n' \
+            "$repository" "$revision" "$selected" >>"$GITHUB_OUTPUT"
+
+  report-pending:
+    needs: validated-candidate
+    if: ${{ github.event_name == 'workflow_run' && needs.validated-candidate.outputs.authorized == 'true' && needs.validated-candidate.outputs.selected == 'true' }}
+    permissions:
+      statuses: write
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Mark candidate build pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ needs.validated-candidate.outputs.revision }}
+          STATUS_CONTEXT: Candidate CI / build
+        run: |
+          set -euo pipefail
+          gh api --method POST \
+            "/repos/${GITHUB_REPOSITORY}/statuses/${CANDIDATE_SHA}" \
+            --raw-field state=pending \
+            --raw-field context="$STATUS_CONTEXT" \
+            --raw-field description='Candidate platform builds are running' \
+            --raw-field target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+  linux:
+    needs: [validated-candidate, report-pending]
+    if: ${{ always() && needs.validated-candidate.outputs.authorized == 'true' && needs.validated-candidate.outputs.selected == 'true' && (github.event_name != 'workflow_run' || needs.report-pending.result == 'success') }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout authorized source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ needs.validated-candidate.outputs.repository }}
+          ref: ${{ needs.validated-candidate.outputs.revision }}
+          persist-credentials: false
+      - name: Install Qt
+        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with:
+          version: 6.8.3
+          arch: linux_gcc_64
+          modules: ${{ env.QT_MODULES }}
+          cache: ${{ github.event_name != 'workflow_run' }}
+      - name: Build and test Linux
+        run: |
+          set -euo pipefail
+          bash appveyor/linux/install.sh
+          bash appveyor/linux/before_build.sh
+          cp unittests/unittests.pri.in unittests/unittests.pri
+          lupdate src/src.pro
+          qmake build.pro -r \
+            QMAKE_CXXFLAGS_WARN_ON+="-Wno-unused-private-field -Wno-c++11-narrowing -Wno-deprecated-declarations -Wno-deprecated-register -Wno-nullability-completeness -Wno-sign-compare -Wno-inconsistent-missing-override" \
+            QMAKE_CFLAGS_WARN_ON+="-Wno-deprecated-declarations -Wno-sign-compare"
+          if [ ! -f qwt/lib/libqwt.a ]; then make -j2 sub-qwt; fi
+          make -j2 sub-src
+          make -j2 sub-unittests
+          python3 .github/scripts/run-tests.py --build-tool make --platform linux
+
+  macos:
+    needs: [validated-candidate, report-pending]
+    if: ${{ always() && needs.validated-candidate.outputs.authorized == 'true' && needs.validated-candidate.outputs.selected == 'true' && (github.event_name != 'workflow_run' || needs.report-pending.result == 'success') }}
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout authorized source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ needs.validated-candidate.outputs.repository }}
+          ref: ${{ needs.validated-candidate.outputs.revision }}
+          persist-credentials: false
+      - name: Build
+        run: ./.github/scripts/build.sh
+      - name: Test
+        run: |
+          bash ./appveyor/macos/run-build-regressions.sh
+          python3 ./.github/scripts/run-tests.py --platform macos
+          ./src/GoldenCheetah.app/Contents/MacOS/GoldenCheetah --version 2>GCversionMacOS_arm64.txt
+          git log -1 >> GCversionMacOS_arm64.txt
+          shasum -a 256 GoldenCheetah_v*_arm64.dmg | cut -f 1 -d ' ' >> GCversionMacOS_arm64.txt
+          cat GCversionMacOS_arm64.txt
+      - name: Upload dmg
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: GoldenCheetah
+          path: GoldenCheetah_v*_arm64.dmg
+
+  trusted-macos-release:
+    name: Trusted macOS snapshot release
+    needs: [validated-candidate, macos]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' && contains(github.event.head_commit.message, '[publish binaries]') }}
+    permissions:
+      contents: write
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      GC_CLOUD_OPENDATA_SECRET: ${{ secrets.GC_CLOUD_OPENDATA_SECRET }}
+      GC_NOKIA_CLIENT_SECRET: ${{ secrets.GC_NOKIA_CLIENT_SECRET }}
+      GC_DROPBOX_CLIENT_SECRET: ${{ secrets.GC_DROPBOX_CLIENT_SECRET }}
+      GC_CYCLINGANALYTICS_CLIENT_SECRET: ${{ secrets.GC_CYCLINGANALYTICS_CLIENT_SECRET }}
+      GC_CLOUD_DB_BASIC_AUTH: ${{ secrets.GC_CLOUD_DB_BASIC_AUTH }}
+      GC_CLOUD_DB_APP_NAME: ${{ secrets.GC_CLOUD_DB_APP_NAME }}
+      GC_POLARFLOW_CLIENT_SECRET: ${{ secrets.GC_POLARFLOW_CLIENT_SECRET }}
+      GC_SPORTTRACKS_CLIENT_SECRET: ${{ secrets.GC_SPORTTRACKS_CLIENT_SECRET }}
+      GC_RWGPS_API_KEY: ${{ secrets.GC_RWGPS_API_KEY }}
+      GC_NOLIO_CLIENT_ID: ${{ secrets.GC_NOLIO_CLIENT_ID }}
+      GC_NOLIO_SECRET: ${{ secrets.GC_NOLIO_SECRET }}
+      GC_XERT_CLIENT_SECRET: ${{ secrets.GC_XERT_CLIENT_SECRET }}
+      GC_AZUM_CLIENT_SECRET: ${{ secrets.GC_AZUM_CLIENT_SECRET }}
+      GC_TRAINERDAY_API_KEY: ${{ secrets.GC_TRAINERDAY_API_KEY }}
+    steps:
+      - name: Checkout trusted release source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - name: Add Secrets
         shell: pwsh
         run: ./util/add_secrets.ps1
@@ -36,18 +253,19 @@ jobs:
         run: ./.github/scripts/build.sh
       - name: Test
         run: |
+          bash ./appveyor/macos/run-build-regressions.sh
+          python3 ./.github/scripts/run-tests.py --platform macos
           ./src/GoldenCheetah.app/Contents/MacOS/GoldenCheetah --version 2>GCversionMacOS_arm64.txt
           git log -1 >> GCversionMacOS_arm64.txt
           shasum -a 256 GoldenCheetah_v*_arm64.dmg | cut -f 1 -d ' ' >> GCversionMacOS_arm64.txt
           cat GCversionMacOS_arm64.txt
-      - name: Upload dmg
-        uses: actions/upload-artifact@v7
+      - name: Upload release dmg
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: GoldenCheetah
+          name: GoldenCheetah-release
           path: GoldenCheetah_v*_arm64.dmg
       - name: Release
-        if: contains(github.event.head_commit.message, '[publish binaries]')
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           tag_name: snapshot
           name: 'Snapshot Builds'
@@ -55,3 +273,80 @@ jobs:
           files: |
             GoldenCheetah_v*_arm64.dmg
             GCversionMacOS_arm64.txt
+
+  windows:
+    needs: [validated-candidate, report-pending]
+    if: ${{ always() && needs.validated-candidate.outputs.authorized == 'true' && needs.validated-candidate.outputs.selected == 'true' && (github.event_name != 'workflow_run' || needs.report-pending.result == 'success') }}
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - name: Checkout authorized source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ needs.validated-candidate.outputs.repository }}
+          ref: ${{ needs.validated-candidate.outputs.revision }}
+          persist-credentials: false
+      - name: Install Qt
+        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with:
+          version: 6.8.3
+          arch: win64_msvc2022_64
+          modules: ${{ env.QT_MODULES }}
+          cache: ${{ github.event_name != 'workflow_run' }}
+      - name: Configure MSVC
+        uses: TheMrMilchmann/setup-msvc-dev@368ef7d1ee4d1171b31d4a7f67f4d954f903f5a9 # v4.1.0
+        with:
+          arch: x64
+      - name: Build and test Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          & appveyor/windows/install.ps1
+          $env:PATH = "C:\Python313-x64\Scripts;C:\Python313-x64;C:\JOM;C:\R\bin;$env:PATH"
+          & appveyor/windows/before_build.ps1
+          Copy-Item unittests/unittests.pri.in unittests/unittests.pri
+          lupdate src/src.pro
+          qmake.exe build.pro -r -spec win32-msvc
+          if (!(Test-Path qwt/lib/qwt.lib)) { jom -j1 sub-qwt }
+          jom -j2 sub-src
+          jom -j2 sub-unittests
+          python .github/scripts/run-tests.py --build-tool jom --platform windows
+
+  report-final:
+    needs: [validated-candidate, report-pending, linux, macos, windows]
+    if: ${{ always() && github.event_name == 'workflow_run' && needs.validated-candidate.outputs.authorized == 'true' }}
+    permissions:
+      statuses: write
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Publish candidate build result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ needs.validated-candidate.outputs.revision }}
+          STATUS_CONTEXT: Candidate CI / build
+          SELECTED: ${{ needs.validated-candidate.outputs.selected }}
+          PENDING_RESULT: ${{ needs.report-pending.result }}
+          LINUX_RESULT: ${{ needs.linux.result }}
+          MACOS_RESULT: ${{ needs.macos.result }}
+          WINDOWS_RESULT: ${{ needs.windows.result }}
+        run: |
+          set -euo pipefail
+          state=failure
+          description='Candidate platform builds failed'
+          if [ "$SELECTED" != true ]; then
+            state=success
+            description='Candidate tests are not applicable'
+          elif [ "$PENDING_RESULT" = success ] && \
+               [ "$LINUX_RESULT" = success ] && \
+               [ "$MACOS_RESULT" = success ] && \
+               [ "$WINDOWS_RESULT" = success ]; then
+            state=success
+            description='Candidate platform builds passed'
+          fi
+          gh api --method POST \
+            "/repos/${GITHUB_REPOSITORY}/statuses/${CANDIDATE_SHA}" \
+            --raw-field state="$state" \
+            --raw-field context="$STATUS_CONTEXT" \
+            --raw-field description="$description" \
+            --raw-field target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"

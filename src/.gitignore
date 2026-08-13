@@ -5,6 +5,8 @@ build/*
 Info.plist
 *.xcodeproj
 gcconfig.pri
+Core/GeneratedSecrets.h
+Core/GeneratedSecrets.h.tmp-*
 
 # QtCreator
 src.pro.user
@@ -63,4 +65,3 @@ tags
 
 # Python SIP generated files
 Python/SIP/build/
-

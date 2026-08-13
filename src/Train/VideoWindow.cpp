@@ -175,9 +175,9 @@ VideoWindow::VideoWindow(Context *context)  :
         connect(context, SIGNAL(mediaSelected(QString)), this, SLOT(mediaSelected(QString)));
 
         // The video file may have been already selected
-        mediaSelected(context->videoFilename);
+        mediaSelected(context->currentMediaFilename());
         // We may add a video player while training is already running!
-        if(context->isRunning) startPlayback();
+        if (context->isRunning()) startPlayback();
     }
 }
 
@@ -959,7 +959,7 @@ void VideoWindow::mediaSelected(QString filename)
         mp->setSource(QUrl::fromLocalFile(filename));
 
 #endif
-    if(context->isRunning) startPlayback();
+    if (context->isRunning()) startPlayback();
 }
 
 MediaHelper::MediaHelper()

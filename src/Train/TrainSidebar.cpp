@@ -1253,7 +1253,7 @@ TrainSidebar::mediaTreeWidgetSelectionChanged()
     QModelIndex current = mediaTree->currentIndex();
     QModelIndex target = vsortModel->mapToSource(current);
     QString filename = videoModel->data(videoModel->index(target.row(), TdbVideoModelIdx::filepath), Qt::DisplayRole).toString();
-    if (filename == context->videoFilename) {
+    if (filename == context->currentMediaFilename()) {
         mediafile = "";
         context->notifyMediaSelected(""); // CTRL+Click to clear selection
     } else {
@@ -1422,14 +1422,7 @@ void TrainSidebar::Start()       // when start button is pressed
             foreach(int dev, activeDevices) Devices[dev].controller->setMode(RT_MODE_SPIN);
         }
 
-        // tell the world
-        context->notifyStart();
-
-        // we're away!
         setStatusFlags(RT_RUNNING);
-
-        // tell the world
-        context->notifyStart();
 
         load_period.restart();
         session_time.start();
@@ -1452,8 +1445,6 @@ void TrainSidebar::Start()       // when start button is pressed
         //foreach(int dev, activeDevices) { // Do for selected device only
         //    Devices[dev].controller->resetCalibrationState();
         //}
-
-        load_timer->start(LOADRATE);      // start recording
 
         if (recordSelector->isChecked()) {
             setStatusFlags(RT_RECORDING);
@@ -1497,7 +1488,15 @@ void TrainSidebar::Start()       // when start button is pressed
                 disk_timer->start(SAMPLERATE);  // start screen
             }
         }
-        gui_timer->start(REFRESHRATE);      // start recording
+        if (!TrainSidebarRuntime::completeStart(
+                [this]() {
+                    load_timer->start(LOADRATE);
+                    gui_timer->start(REFRESHRATE);
+                },
+                [this]() { return applyWorkoutTarget(true); },
+                [this]() { context->notifyStart(); })) {
+            return;
+        }
 
         context->notifySetNotification(tr("Starting.."), 2);
     }
@@ -1781,7 +1780,8 @@ void TrainSidebar::finishStop(RecordingStopAction recordingAction)
 
         if (recordingAction == DiscardRecording)
         {
-            TrainingStopPolicy::applyFileAction(*recordFile, recordingAction);
+            TrainSidebarRuntime::discardRecordingArtifacts(
+                    recordFile->fileName());
         }
         else {
             if (recordingAction == ImportRecording) {
@@ -2562,14 +2562,19 @@ void TrainSidebar::diskUpdate()
 
 void TrainSidebar::loadUpdate()
 {
-    int curLap = 0;
-
     // we hold our horses whilst calibration is taking place...
     if (calibrating) return;
 
     // the period between loadUpdate calls is not constant, and not exactly LOADRATE,
     // therefore, use a QTime timer to measure the load period
     load_msecs += load_period.restart();
+
+    applyWorkoutTarget(false);
+}
+
+bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
+{
+    int curLap = 0;
 
     if (status&RT_MODE_ERGO) {
         if (context->currentErgFile()) {
@@ -2586,14 +2591,17 @@ void TrainSidebar::loadUpdate()
         // we got to the end!
         if (load == -100) {
             Stop(DEVICE_OK);
+            return false;
         } else {
             foreach(int dev, activeDevices) Devices[dev].controller->setLoad(load);
             context->notifySetNow(load_msecs);
         }
     } else {
         if (context->currentErgFile()) {
-            // Call gradientAt to obtain current lap num.
-            ergFileQueryAdapter.gradientAt(displayWorkoutDistance * 1000., curLap);
+            const double workoutSlope = ergFileQueryAdapter.gradientAt(
+                    displayWorkoutDistance * 1000., curLap);
+            slope = TrainSidebarRuntime::slopeTarget(
+                    slope, workoutSlope, initializeSlope);
 
             if (displayWorkoutLap != curLap) {
                 context->notifyNewLap();
@@ -2606,6 +2614,7 @@ void TrainSidebar::loadUpdate()
         // we got to the end!
         if (slope == -100) {
             Stop(DEVICE_OK);
+            return false;
         } else {
             foreach(int dev, activeDevices) {
                 Devices[dev].controller->setGradient(slope);
@@ -2614,6 +2623,7 @@ void TrainSidebar::loadUpdate()
             context->notifySetNow(displayWorkoutDistance * 1000);
         }
     }
+    return true;
 }
 
 void TrainSidebar::Calibrate()
@@ -3572,7 +3582,10 @@ void TrainSidebar::rrData(uint16_t  rrtime, uint8_t count, uint8_t bpm)
         } else {
 
             // CSV File header
-            QTextStream recordFileStream(rrFile);
+            QTextStream recordFileStream(
+                    TrainSidebarRuntime::auxiliaryHeaderDevice(
+                            TrainSidebarRuntime::AuxiliaryHeader::Rr,
+                            rrFile, tcoreFile));
             recordFileStream << "secs, hr, msecs\n";
         }
     }
@@ -3648,7 +3661,10 @@ void TrainSidebar::tcoreData(float  core, float skin, float hsi, int qual)
         } else {
 
             // CSV File header
-            QTextStream recordFileStream(rrFile);
+            QTextStream recordFileStream(
+                    TrainSidebarRuntime::auxiliaryHeaderDevice(
+                            TrainSidebarRuntime::AuxiliaryHeader::CoreTemperature,
+                            rrFile, tcoreFile));
             recordFileStream << "secs, core, skin, hsi, qual\n";
         }
     }
@@ -3731,8 +3747,9 @@ TrainSidebar::viewChanged(int index)
 void TrainSidebar::setStatusFlags(int flags)
 {
     status |= flags;
-    context->isRunning = (status&RT_RUNNING);
-    context->isPaused  = (status&RT_PAUSED);
+    context->setTrainingStatus(
+        status & RT_RUNNING,
+        status & RT_PAUSED);
 
     emit statusChanged(status);
 }
@@ -3740,8 +3757,9 @@ void TrainSidebar::setStatusFlags(int flags)
 void TrainSidebar::clearStatusFlags(int flags)
 {
     status &=~flags;
-    context->isRunning = (status&RT_RUNNING);
-    context->isPaused  = (status&RT_PAUSED);
+    context->setTrainingStatus(
+        status & RT_RUNNING,
+        status & RT_PAUSED);
 
     emit statusChanged(status);
 }

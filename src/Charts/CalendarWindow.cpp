@@ -35,11 +35,60 @@
 #include "FilterSimilarDialog.h"
 #include "SeasonDialogs.h"
 #include "SaveDialogs.h"
+#include "CalendarSeasonWorkflow.h"
+#include "ModalWorkflowGuard.h"
 
 #define HLO "<h4>"
 #define HLC "</h4>"
 
 namespace {
+
+struct CalendarWorkflowOwners
+{
+    QPointer<CalendarWindow> window;
+    QPointer<MainWindow> mainWindow;
+    QPointer<Context> context;
+    QPointer<Athlete> athlete;
+    QPointer<RideCache> cache;
+    QPointer<AthleteTab> tab;
+    QPointer<Seasons> seasons;
+
+    explicit CalendarWorkflowOwners(CalendarWindow *window,
+                                    Context *context)
+        : window(window),
+          mainWindow(context ? context->mainWindow : nullptr),
+          context(context),
+          athlete(context ? context->athlete : nullptr),
+          cache(athlete ? athlete->rideCache : nullptr),
+          tab(context ? context->tab : nullptr),
+          seasons(athlete ? athlete->seasons : nullptr)
+    {
+    }
+
+    bool current() const
+    {
+        return window && mainWindow && context
+            && athlete && cache && tab && seasons
+            && context->mainWindow == mainWindow.data()
+            && context->athlete == athlete.data()
+            && athlete->rideCache == cache.data()
+            && athlete->seasons == seasons.data()
+            && context->tab == tab.data()
+            && mainWindow->athleteTab() == tab.data();
+    }
+
+    QList<QObject*> lifetimes(
+        std::initializer_list<QObject*> extra = {}) const
+    {
+        QList<QObject*> result {
+            window.data(), mainWindow.data(), context.data(),
+            athlete.data(), cache.data(), tab.data(),
+            seasons.data()
+        };
+        for (QObject *owner : extra) result.append(owner);
+        return result;
+    }
+};
 
 using CalendarActivityIdentity =
     ActivityDeletionWorkflow::Identity;
@@ -180,6 +229,27 @@ void reportCalendarOperation(
             .arg(result.committed
                      ? committedSummary : failedSummary,
                  details));
+}
+
+RideItem *resolveCalendarActivity(
+    RideCache *cache,
+    const CalendarActivityIdentity &identity)
+{
+    if (!cache || identity.fileName.isEmpty()
+        || identity.path.isEmpty()) {
+        return nullptr;
+    }
+    RideItem *resolved = nullptr;
+    for (RideItem *item : cache->rides()) {
+        if (!item || item->fileName != identity.fileName
+            || item->path != identity.path
+            || item->planned != identity.planned) {
+            continue;
+        }
+        if (resolved) return nullptr;
+        resolved = item;
+    }
+    return resolved;
 }
 
 } // namespace
@@ -356,15 +426,20 @@ LinkDialog::LinkDialog
 }
 
 
-QString
-LinkDialog::getSelectedReference
-() const
+bool
+LinkDialog::getSelectedEntry
+(LinkEntry &selected) const
 {
     QList<QTreeWidgetItem*> selectedItems = candidateTree->selectedItems();
     if (! selectedItems.isEmpty()) {
-        return selectedItems.first()->data(0, Qt::UserRole).toString();
+        const int index = selectedItems.first()
+            ->data(0, Qt::UserRole).toInt();
+        if (index >= 0 && index < candidates.size()) {
+            selected = candidates[index];
+            return true;
+        }
     }
-    return QString();
+    return false;
 }
 
 
@@ -382,7 +457,10 @@ LinkDialog::updateCandidates
     int i = 0;
     double selectScore = 1;
     QLocale locale;
-    for (const LinkEntry &candidate : candidates) {
+    for (int candidateIndex = 0;
+         candidateIndex < candidates.size();
+         ++candidateIndex) {
+        const LinkEntry &candidate = candidates[candidateIndex];
         if (candidate.date >= minDate && candidate.date <= maxDate) {
             stackIdx = 1;
             QString quality;
@@ -412,7 +490,7 @@ LinkDialog::updateCandidates
             }
             QTreeWidgetItem *item = new QTreeWidgetItem(candidateTree);
             item->setText(0, quality);
-            item->setData(0, Qt::UserRole, candidate.reference);
+            item->setData(0, Qt::UserRole, candidateIndex);
             item->setText(1, candidate.primary);
             item->setText(2, locale.toString(candidate.date, QLocale::NarrowFormat));
             item->setText(3, days);
@@ -483,12 +561,52 @@ CalendarWindow::CalendarWindow(Context *context)
         }
     });
     connect(calendar, &Calendar::filterSimilar, this, [this](CalendarEntry activity) {
-        for (RideItem *rideItem : this->context->athlete->rideCache->rides()) {
-            if (rideItem != nullptr && rideItem->fileName == activity.reference) {
-                FilterSimilarDialog dlg(this->context, rideItem, this);
-                dlg.exec();
-                break;
-            }
+        const CalendarWorkflowOwners owners(this, this->context);
+        if (!owners.current()) return;
+        QPointer<RideItem> guardedItem(getRideItem(activity));
+        const CalendarActivityIdentity identity =
+            calendarActivityIdentity(guardedItem.data());
+        const ModalWorkflowGuard workflowGuard(
+            owners.lifetimes({guardedItem.data()}),
+            [owners, guardedItem, identity] {
+                return owners.current()
+                    && calendarWorkflowItemIsCurrent(
+                        owners.context, owners.athlete,
+                        owners.cache, guardedItem, identity);
+            });
+        if (!workflowGuard.canCommit()) return;
+
+        QPointer<FilterSimilarDialog> dialog(
+            new FilterSimilarDialog(
+                guardedItem.data(), owners.window.data()));
+        workflowGuard.rejectOnOwnerLoss(dialog.data());
+        modalWorkflowRejectOnMutation(
+            guardedItem.data(),
+            &RideItem::rideDataChanged, dialog.data());
+        modalWorkflowRejectOnMutation(
+            guardedItem.data(),
+            &RideItem::rideMetadataChanged, dialog.data());
+        modalWorkflowRejectOnMutation(
+            owners.cache.data(),
+            QOverload<RideItem*>::of(
+                &RideCache::itemChanged), dialog.data(),
+            [guardedItem](RideItem *changed) {
+                return changed == guardedItem.data();
+            });
+        modalWorkflowRejectOnMutation(
+            owners.cache.data(),
+            &RideCache::itemSaved, dialog.data(),
+            [guardedItem](RideItem *changed) {
+                return changed == guardedItem.data();
+            });
+        const int result = dialog->exec();
+        const QString filter = dialog
+            ? dialog->selectedFilter() : QString();
+        if (dialog) delete dialog.data();
+        if (result == QDialog::Accepted
+            && workflowGuard.canCommit()
+            && !filter.isEmpty()) {
+            owners.mainWindow->fillinFilter(filter);
         }
     });
     connect(calendar, &Calendar::linkActivity, this, &CalendarWindow::linkActivities);
@@ -510,10 +628,22 @@ CalendarWindow::CalendarWindow(Context *context)
     connect(calendar, &Calendar::copyPlannedActivity, this, &CalendarWindow::copyPlannedActivity);
     connect(calendar, &Calendar::pastePlannedActivity, this, &CalendarWindow::pastePlannedActivity);
     connect(calendar, &Calendar::addActivity, this, [this](bool plan, const QDate &day, const QTime &time) {
-        this->context->tab->setNoSwitch(true);
-        ManualActivityWizard wizard(this->context, plan, QDateTime(day, time));
+        const CalendarWorkflowOwners owners(this, this->context);
+        const ModalWorkflowGuard workflowGuard(
+            owners.lifetimes(),
+            [owners] { return owners.current(); });
+        if (!workflowGuard.canCommit()) return;
+        ModalNoSwitchLease<AthleteTab>
+            noSwitchLease(owners.tab.data());
+        ManualActivityWizard wizard(
+            owners.context.data(), plan,
+            QDateTime(day, time));
+        wizard.setWorkflowValidator(
+            [workflowGuard] {
+                return workflowGuard.canCommit();
+            });
+        workflowGuard.rejectOnOwnerLoss(&wizard);
         wizard.exec();
-        this->context->tab->setNoSwitch(false);
     });
     connect(calendar, &Calendar::repeatPlan, this, [this](const QDate &day) {
         const QPointer<CalendarWindow> guardedWindow(this);
@@ -552,17 +682,39 @@ CalendarWindow::CalendarWindow(Context *context)
         }
     });
     connect(calendar, &Calendar::importPlan, this, [this](const QDate &day) {
-        this->context->tab->setNoSwitch(true);
-        ImportPlanWizard wizard(this->context, day);
-        if (wizard.exec() == QDialog::Accepted) {
+        const CalendarWorkflowOwners owners(this, this->context);
+        const ModalWorkflowGuard workflowGuard(
+            owners.lifetimes(),
+            [owners] { return owners.current(); });
+        if (!workflowGuard.canCommit()) return;
+        ModalNoSwitchLease<AthleteTab>
+            noSwitchLease(owners.tab.data());
+        ImportPlanWizard wizard(owners.context.data(), day);
+        wizard.setWorkflowValidator(
+            [workflowGuard] {
+                return workflowGuard.canCommit();
+            });
+        workflowGuard.rejectOnOwnerLoss(&wizard);
+        const int result = wizard.exec();
+        if (result == QDialog::Accepted
+            && workflowGuard.canCommit()) {
             // Context::rideDeleted is not always emitted, therefore forcing the update
-            updateActivities();
+            owners.window->updateActivities();
         }
-        this->context->tab->setNoSwitch(false);
     });
     connect(calendar, QOverload<CalendarEntry>::of(&Calendar::exportPlan), this, &CalendarWindow::exportPlan);
     connect(calendar, QOverload<>::of(&Calendar::exportPlan), this, [this]() {
-        ExportPlanWizard wizard(this->context, nullptr);
+        const CalendarWorkflowOwners owners(this, this->context);
+        const ModalWorkflowGuard workflowGuard(
+            owners.lifetimes(),
+            [owners] { return owners.current(); });
+        if (!workflowGuard.canCommit()) return;
+        ExportPlanWizard wizard(owners.context.data(), nullptr);
+        wizard.setWorkflowValidator(
+            [workflowGuard] {
+                return workflowGuard.canCommit();
+            });
+        workflowGuard.rejectOnOwnerLoss(&wizard);
         wizard.exec();
     });
     connect(calendar, &Calendar::delActivity, this, [this](CalendarEntry activity) {
@@ -1667,11 +1819,7 @@ CalendarWindow::getPhasesEvents
                     entry.iconFile = ":images/breeze/task-process-0.svg";
                 }
                 entry.color = GColor(CCALEVENT);
-                if (event.id.isEmpty()) {
-                    entry.reference = QString("0x%1").arg(reinterpret_cast<quintptr>(&event), 0, 16);
-                } else {
-                    entry.reference = event.id;
-                }
+                entry.reference = event.id;
                 entry.start = QTime(0, 0, 0);
                 entry.durationSecs = 0;
                 entry.type = ENTRY_TYPE_EVENT;
@@ -1992,17 +2140,65 @@ void
 CalendarWindow::movePlannedActivity
 (RideItem *rideItem, const QDate &destDay, const QTime &destTime)
 {
-    RideCache::OperationPreCheck check = context->athlete->rideCache->checkMoveActivity(rideItem, QDateTime(destDay, destTime));
-    if (check.canProceed && proceedDialog(context, check)) {
-        context->tab->setNoSwitch(true);
-        RideCache::OperationResult result = context->athlete->rideCache->moveActivity(rideItem, QDateTime(destDay, destTime));
+    const CalendarWorkflowOwners owners(this, context);
+    QPointer<RideItem> guardedItem(rideItem);
+    CalendarActivityIdentity identity =
+        calendarActivityIdentity(rideItem);
+    const ModalWorkflowGuard ownerGuard(
+        owners.lifetimes(),
+        [owners] { return owners.current(); });
+    const ModalWorkflowGuard workflowGuard(
+        owners.lifetimes({guardedItem.data()}),
+        [owners, guardedItem, &identity] {
+            return owners.current()
+                && calendarWorkflowItemIsCurrent(
+                    owners.context, owners.athlete,
+                    owners.cache, guardedItem, identity);
+        });
+    if (!workflowGuard.canCommit()) return;
+    const QDateTime destination(destDay, destTime);
+    RideCache::OperationPreCheck check =
+        owners.cache->checkMoveActivity(
+            guardedItem.data(), destination);
+    if (!check.canProceed) return;
+    const ModalOwnerSetSnapshot<RideItem> affectedSnapshot(
+        check.affectedItems);
+    ProceedDialogResult dialogResult;
+    if (!proceedDialog(
+            owners.context.data(), check, &dialogResult)
+        || !workflowGuard.ownersAlive()
+        || !owners.current()
+        || !calendarWorkflowAdoptSavedIdentity(
+            owners.context, owners.athlete, owners.cache,
+            guardedItem, dialogResult, identity)) {
+        return;
+    }
+    check = owners.cache->checkMoveActivity(
+        guardedItem.data(), destination);
+    if (!workflowGuard.canCommit() || !check.canProceed
+        || !affectedSnapshot.matchesExactly(
+            check.affectedItems)) {
+        return;
+    }
+
+    ModalNoSwitchLease<AthleteTab>
+        noSwitchLease(owners.tab.data());
+    const RideCache::OperationResult result =
+        owners.cache->moveActivity(
+            guardedItem.data(), destination);
+    if (owners.current()) {
         reportCalendarOperation(
-            this, result, tr("Move Activity"),
+            owners.window.data(), result,
+            tr("Move Activity"),
             tr("The activity could not be moved."),
             tr("The activity move was committed, but the activity list or transaction cleanup requires attention. Do not repeat the move."));
-        if (result.committed && !result.cacheUpdated)
-            updateActivities();
-        context->tab->setNoSwitch(false);
+        if (result.committed && !result.cacheUpdated) {
+            modalWorkflowRunContinuation(
+                ownerGuard,
+                [owners] {
+                    owners.window->updateActivities();
+                });
+        }
     }
 }
 
@@ -2011,17 +2207,47 @@ void
 CalendarWindow::shiftPlannedActivities
 (const QDate &destDay, int offset)
 {
-    RideCache::OperationPreCheck check = context->athlete->rideCache->checkShiftPlannedActivities(destDay, offset);
-    if (check.canProceed && proceedDialog(context, check)) {
-        context->tab->setNoSwitch(true);
-        RideCache::OperationResult result = context->athlete->rideCache->shiftPlannedActivities(destDay, offset);
+    const CalendarWorkflowOwners owners(this, context);
+    const ModalWorkflowGuard workflowGuard(
+        owners.lifetimes(),
+        [owners] { return owners.current(); });
+    if (!workflowGuard.canCommit()) return;
+    RideCache::OperationPreCheck check =
+        owners.cache->checkShiftPlannedActivities(
+            destDay, offset);
+    const ModalOwnerSetSnapshot<RideItem> affectedSnapshot(
+        check.affectedItems);
+    if (!check.canProceed
+        || !proceedDialog(owners.context.data(), check)
+        || !workflowGuard.canCommit()) {
+        return;
+    }
+    check = owners.cache->checkShiftPlannedActivities(
+        destDay, offset);
+    if (!check.canProceed || !workflowGuard.canCommit()
+        || !affectedSnapshot.matchesExactly(
+            check.affectedItems)) {
+        return;
+    }
+
+    ModalNoSwitchLease<AthleteTab>
+        noSwitchLease(owners.tab.data());
+    const RideCache::OperationResult result =
+        owners.cache->shiftPlannedActivities(
+            destDay, offset);
+    if (owners.current()) {
         reportCalendarOperation(
-            this, result, tr("Shift Activities"),
+            owners.window.data(), result,
+            tr("Shift Activities"),
             tr("The planned activities could not be shifted."),
             tr("The planned activity shift was committed, but the activity list or transaction cleanup requires attention. Do not repeat the shift."));
-        if (result.committed && !result.cacheUpdated)
-            updateActivities();
-        context->tab->setNoSwitch(false);
+        if (result.committed && !result.cacheUpdated) {
+            modalWorkflowRunContinuation(
+                workflowGuard,
+                [owners] {
+                    owners.window->updateActivities();
+                });
+        }
     }
 }
 
@@ -2030,26 +2256,47 @@ void
 CalendarWindow::linkActivities
 (const CalendarEntry &entry, bool autoLink)
 {
-    RideItem *rideItem = getRideItem(entry);
-    if (rideItem == nullptr) {
-        return;
-    }
-    RideItem *other = nullptr;
+    const CalendarWorkflowOwners owners(this, context);
+    if (!owners.current()) return;
+    QPointer<RideItem> guardedItem(getRideItem(entry));
+    CalendarActivityIdentity itemIdentity =
+        calendarActivityIdentity(guardedItem.data());
+    const ModalWorkflowGuard sourceGuard(
+        owners.lifetimes({guardedItem.data()}),
+        [owners, guardedItem, &itemIdentity] {
+            return owners.current()
+                && calendarWorkflowItemIsCurrent(
+                    owners.context, owners.athlete,
+                    owners.cache, guardedItem,
+                    itemIdentity);
+        });
+    if (!sourceGuard.canCommit()) return;
+
+    QPointer<RideItem> guardedOther;
+    CalendarActivityIdentity otherIdentity;
     if (autoLink) {
-        if ((other = context->athlete->rideCache->findSuggestion(rideItem)) == nullptr) {
-            QMessageBox::warning(this, tr("Failed"), tr("No matching activity found"));
+        guardedOther = owners.cache->findSuggestion(
+            guardedItem.data());
+        if (!guardedOther) {
+            QMessageBox::warning(
+                owners.window.data(), tr("Failed"),
+                tr("No matching activity found"));
+            return;
         }
+        otherIdentity = calendarActivityIdentity(
+            guardedOther.data());
     } else {
         LinkEntry linkEntry;
         linkEntry.reference = entry.reference;
+        linkEntry.path = guardedItem->path;
         linkEntry.planned = entry.type == ENTRY_TYPE_PLANNED_ACTIVITY;
-        linkEntry.sport = rideItem->sport;
+        linkEntry.sport = guardedItem->sport;
         linkEntry.iconFile = entry.iconFile;
         linkEntry.iconColor = entry.color;
         linkEntry.primary = entry.primary;
         linkEntry.secondary = entry.secondary;
         linkEntry.secondaryMetric = entry.secondaryMetric;
-        linkEntry.date = rideItem->dateTime.date();
+        linkEntry.date = guardedItem->dateTime.date();
         linkEntry.time = entry.start;
         linkEntry.matchScore = 1;
 
@@ -2067,16 +2314,19 @@ CalendarWindow::linkActivities
                 rideMetricUnit = rideMetric->units(GlobalContext::context()->useMetricUnits);
             }
         }
-        double rideMetricValue = rideItem->getForSymbol(getSecondaryMetric(), GlobalContext::context()->useMetricUnits);
+        double rideMetricValue = guardedItem->getForSymbol(
+            getSecondaryMetric(),
+            GlobalContext::context()->useMetricUnits);
         QList<LinkEntry> candidates;
-        for (RideItem *candidateItem : context->athlete->rideCache->rides()) {
+        for (RideItem *candidateItem : owners.cache->rides()) {
             if (   candidateItem->dateTime.date() >= minDate
                 && candidateItem->dateTime.date() <= maxDate
                 && candidateItem->planned != linkEntry.planned
-                && candidateItem->sport == rideItem->sport
+                && candidateItem->sport == guardedItem->sport
                 && candidateItem->getLinkedFileName().isEmpty()) {
                 LinkEntry candidate;
                 candidate.reference = candidateItem->fileName;
+                candidate.path = candidateItem->path;
                 candidate.planned = candidateItem->planned;
                 candidate.primary = getPrimary(candidateItem);
                 candidate.secondary = candidateItem->getStringForSymbol(getSecondaryMetric(), GlobalContext::context()->useMetricUnits);
@@ -2101,25 +2351,103 @@ CalendarWindow::linkActivities
             }
         }
 
-        LinkDialog linkDialog(linkEntry, candidates, this);
-        if (linkDialog.exec() == QDialog::Accepted) {
-            other = context->athlete->rideCache->getRide(linkDialog.getSelectedReference(), ! linkEntry.planned);
+        QPointer<LinkDialog> linkDialog(
+            new LinkDialog(
+                linkEntry, candidates,
+                owners.window.data()));
+        sourceGuard.rejectOnOwnerLoss(linkDialog.data());
+        const int result = linkDialog->exec();
+        LinkEntry selected;
+        const bool hasSelection = linkDialog
+            && linkDialog->getSelectedEntry(selected);
+        if (linkDialog) delete linkDialog.data();
+        if (result != QDialog::Accepted
+            || !hasSelection || !sourceGuard.canCommit()) {
+            return;
         }
+        otherIdentity = CalendarActivityIdentity {
+            selected.reference, selected.path,
+            selected.planned};
+        guardedOther = resolveCalendarActivity(
+            owners.cache.data(), otherIdentity);
     }
 
-    if (rideItem != nullptr && other != nullptr) {
-        RideCache::OperationPreCheck check = context->athlete->rideCache->checkLinkActivities(rideItem, other);
-        if (check.canProceed && proceedDialog(context, check)) {
-            context->tab->setNoSwitch(true);
-            RideCache::OperationResult result = context->athlete->rideCache->linkActivities(rideItem, other);
-            if (result.success) {
-                QString error;
-                context->athlete->rideCache->saveActivities(check.affectedItems, error);
-            } else {
-                QMessageBox::warning(this, tr("Failed"), result.error);
-            }
-            context->tab->setNoSwitch(false);
+    const ModalWorkflowGuard pairGuard(
+        owners.lifetimes(
+            {guardedItem.data(), guardedOther.data()}),
+        [owners, guardedItem, guardedOther,
+         &itemIdentity, &otherIdentity] {
+            return owners.current()
+                && calendarWorkflowItemIsCurrent(
+                    owners.context, owners.athlete,
+                    owners.cache, guardedItem,
+                    itemIdentity)
+                && calendarWorkflowItemIsCurrent(
+                    owners.context, owners.athlete,
+                    owners.cache, guardedOther,
+                    otherIdentity);
+        });
+    if (!pairGuard.canCommit()) return;
+    RideCache::OperationPreCheck check =
+        owners.cache->checkLinkActivities(
+            guardedItem.data(), guardedOther.data());
+    if (!check.canProceed
+        || !modalWorkflowHasExactPair(
+            check.affectedItems,
+            guardedItem.data(), guardedOther.data())) {
+        return;
+    }
+    ProceedDialogResult dialogResult;
+    if (!proceedDialog(
+            owners.context.data(), check, &dialogResult)
+        || !pairGuard.ownersAlive()
+        || !owners.current()
+        || !calendarWorkflowAdoptSavedIdentity(
+            owners.context, owners.athlete, owners.cache,
+            guardedItem, dialogResult, itemIdentity)
+        || !calendarWorkflowAdoptSavedIdentity(
+            owners.context, owners.athlete, owners.cache,
+            guardedOther, dialogResult, otherIdentity)) {
+        return;
+    }
+    check = owners.cache->checkLinkActivities(
+        guardedItem.data(), guardedOther.data());
+    if (!pairGuard.canCommit() || !check.canProceed
+        || !modalWorkflowHasExactPair(
+            check.affectedItems,
+            guardedItem.data(), guardedOther.data())) {
+        return;
+    }
+
+    QList<QPointer<RideItem>> affected;
+    for (RideItem *item : check.affectedItems)
+        affected.append(QPointer<RideItem>(item));
+    ModalNoSwitchLease<AthleteTab>
+        noSwitchLease(owners.tab.data());
+    const RideCache::OperationResult result =
+        owners.cache->linkActivities(
+            guardedItem.data(), guardedOther.data());
+    QString saveError;
+    if (result.success && owners.cache) {
+        QList<RideItem*> liveItems;
+        const bool allAffectedItemsLive =
+            modalWorkflowCollectLiveOwners(
+                affected, liveItems);
+        if (!liveItems.isEmpty())
+            owners.cache->saveActivities(liveItems, saveError);
+        if (!allAffectedItemsLive) {
+            const QString ownerError = tr(
+                "An affected activity was removed before the link could be saved completely.");
+            saveError = saveError.isEmpty()
+                ? ownerError
+                : saveError + QStringLiteral("\n") + ownerError;
         }
+    }
+    if (owners.current()
+        && (!result.success || !saveError.isEmpty())) {
+        QMessageBox::warning(
+            owners.window.data(), tr("Failed"),
+            result.success ? saveError : result.error);
     }
 }
 
@@ -2128,25 +2456,102 @@ bool
 CalendarWindow::unlinkActivities
 (const CalendarEntry &entry)
 {
-    bool ret = false;
-    RideItem *item = context->athlete->rideCache->getRide(entry.reference, entry.type == ENTRY_TYPE_PLANNED_ACTIVITY);
-    if (item == nullptr || item->getLinkedFileName().isEmpty()) {
+    const CalendarWorkflowOwners owners(this, context);
+    if (!owners.current()) return false;
+    QPointer<RideItem> guardedItem(
+        owners.cache->getRide(
+            entry.reference,
+            entry.type == ENTRY_TYPE_PLANNED_ACTIVITY));
+    if (!guardedItem
+        || guardedItem->getLinkedFileName().isEmpty()) {
         return true;
     }
-    RideCache::OperationPreCheck check = context->athlete->rideCache->checkUnlinkActivity(item);
-    if (check.canProceed && proceedDialog(context, check)) {
-        context->tab->setNoSwitch(true);
-        RideCache::OperationResult result = context->athlete->rideCache->unlinkActivity(item);
-        if (result.success) {
-            QString error;
-            context->athlete->rideCache->saveActivities(check.affectedItems, error);
-            ret = true;
-        } else {
-            QMessageBox::warning(this, tr("Failed"), result.error);
-        }
-        context->tab->setNoSwitch(false);
+    CalendarActivityIdentity itemIdentity =
+        calendarActivityIdentity(guardedItem.data());
+    RideCache::OperationPreCheck check =
+        owners.cache->checkUnlinkActivity(
+            guardedItem.data());
+    if (!check.canProceed || check.affectedItems.size() != 2
+        || check.affectedItems.count(guardedItem.data()) != 1)
+        return false;
+    QPointer<RideItem> guardedOther(
+        check.affectedItems[0] == guardedItem.data()
+        ? check.affectedItems[1] : check.affectedItems[0]);
+    CalendarActivityIdentity otherIdentity =
+        calendarActivityIdentity(guardedOther.data());
+    if (!modalWorkflowHasExactPair(
+            check.affectedItems,
+            guardedItem.data(), guardedOther.data())) {
+        return false;
     }
-    return ret;
+    const ModalWorkflowGuard pairGuard(
+        owners.lifetimes(
+            {guardedItem.data(), guardedOther.data()}),
+        [owners, guardedItem, guardedOther,
+         &itemIdentity, &otherIdentity] {
+            return owners.current()
+                && calendarWorkflowItemIsCurrent(
+                    owners.context, owners.athlete,
+                    owners.cache, guardedItem,
+                    itemIdentity)
+                && calendarWorkflowItemIsCurrent(
+                    owners.context, owners.athlete,
+                    owners.cache, guardedOther,
+                    otherIdentity);
+        });
+    if (!pairGuard.canCommit()) return false;
+    ProceedDialogResult dialogResult;
+    if (!proceedDialog(
+            owners.context.data(), check, &dialogResult)
+        || !pairGuard.ownersAlive()
+        || !owners.current()
+        || !calendarWorkflowAdoptSavedIdentity(
+            owners.context, owners.athlete, owners.cache,
+            guardedItem, dialogResult, itemIdentity)
+        || !calendarWorkflowAdoptSavedIdentity(
+            owners.context, owners.athlete, owners.cache,
+            guardedOther, dialogResult, otherIdentity)) {
+        return false;
+    }
+    check = owners.cache->checkUnlinkActivity(
+        guardedItem.data());
+    if (!pairGuard.canCommit() || !check.canProceed
+        || !modalWorkflowHasExactPair(
+            check.affectedItems,
+            guardedItem.data(), guardedOther.data())) {
+        return false;
+    }
+
+    QList<QPointer<RideItem>> affected;
+    for (RideItem *affectedItem : check.affectedItems)
+        affected.append(QPointer<RideItem>(affectedItem));
+    ModalNoSwitchLease<AthleteTab>
+        noSwitchLease(owners.tab.data());
+    const RideCache::OperationResult result =
+        owners.cache->unlinkActivity(guardedItem.data());
+    QString saveError;
+    if (result.success && owners.cache) {
+        QList<RideItem*> liveItems;
+        const bool allAffectedItemsLive =
+            modalWorkflowCollectLiveOwners(
+                affected, liveItems);
+        if (!liveItems.isEmpty())
+            owners.cache->saveActivities(liveItems, saveError);
+        if (!allAffectedItemsLive) {
+            const QString ownerError = tr(
+                "An affected activity was removed before the unlink could be saved completely.");
+            saveError = saveError.isEmpty()
+                ? ownerError
+                : saveError + QStringLiteral("\n") + ownerError;
+        }
+    }
+    if (owners.current()
+        && (!result.success || !saveError.isEmpty())) {
+        QMessageBox::warning(
+            owners.window.data(), tr("Failed"),
+            result.success ? saveError : result.error);
+    }
+    return result.success;
 }
 
 
@@ -2180,31 +2585,79 @@ CalendarWindow::pastePlannedActivity
         QString reference;
         stream >> primary >> reference;
 
-        RideItem *sourceItem = nullptr;
-        for (RideItem *rideItem : context->athlete->rideCache->rides()) {
+        const CalendarWorkflowOwners owners(this, context);
+        if (!owners.current()) return;
+        QPointer<RideItem> sourceItem;
+        for (RideItem *rideItem : owners.cache->rides()) {
             if (rideItem != nullptr && rideItem->planned && rideItem->fileName == reference) {
+                if (sourceItem) return;
                 sourceItem = rideItem;
-                break;
             }
         }
-        time = findFreeSlot(sourceItem, day, time);
-        RideCache::OperationPreCheck check = context->athlete->rideCache->checkCopyPlannedActivity(sourceItem, day, time);
+        if (!sourceItem) return;
+        CalendarActivityIdentity identity =
+            calendarActivityIdentity(sourceItem.data());
+        const ModalWorkflowGuard workflowGuard(
+            owners.lifetimes({sourceItem.data()}),
+            [owners, sourceItem, &identity] {
+                return owners.current()
+                    && calendarWorkflowItemIsCurrent(
+                        owners.context, owners.athlete,
+                        owners.cache, sourceItem, identity);
+            });
+        if (!workflowGuard.canCommit()) return;
+        time = findFreeSlot(sourceItem.data(), day, time);
+        RideCache::OperationPreCheck check =
+            owners.cache->checkCopyPlannedActivity(
+                sourceItem.data(), day, time);
         if (check.canProceed) {
-            if (proceedDialog(context, check)) {
-                context->tab->setNoSwitch(true);
-                RideCache::OperationResult result = context->athlete->rideCache->copyPlannedActivity(sourceItem, day, time);
+            const ModalOwnerSetSnapshot<RideItem>
+                affectedSnapshot(check.affectedItems);
+            const ModalWorkflowGuard ownerGuard(
+                owners.lifetimes(),
+                [owners] { return owners.current(); });
+            ProceedDialogResult dialogResult;
+            if (proceedDialog(
+                    owners.context.data(), check,
+                    &dialogResult)
+                && workflowGuard.ownersAlive()
+                && owners.current()
+                && calendarWorkflowAdoptSavedIdentity(
+                    owners.context, owners.athlete,
+                    owners.cache, sourceItem,
+                    dialogResult, identity)) {
+                check = owners.cache->checkCopyPlannedActivity(
+                    sourceItem.data(), day, time);
+                if (!check.canProceed
+                    || !workflowGuard.canCommit()
+                    || !affectedSnapshot.matchesExactly(
+                        check.affectedItems)) {
+                    return;
+                }
+                ModalNoSwitchLease<AthleteTab>
+                    noSwitchLease(owners.tab.data());
+                const RideCache::OperationResult result =
+                    owners.cache->copyPlannedActivity(
+                        sourceItem.data(), day, time);
+                if (!owners.current()) return;
                 reportCalendarOperation(
-                    this, result,
+                    owners.window.data(), result,
                     tr("Paste Activity: %1").arg(primary),
                     tr("The planned activity could not be pasted."),
                     tr("The planned activity copy was committed, but the activity list or transaction cleanup requires attention. Do not paste it again."));
                 if (result.committed) {
-                    updateActivities();
+                    modalWorkflowRunContinuation(
+                        ownerGuard,
+                        [owners] {
+                            owners.window->updateActivities();
+                        });
                 }
-                context->tab->setNoSwitch(false);
             }
         } else {
-            QMessageBox::warning(this, tr("Paste failed: %1").arg(primary), check.blockingReason);
+            QMessageBox::warning(
+                owners.window.data(),
+                tr("Paste failed: %1").arg(primary),
+                check.blockingReason);
         }
     }
 }
@@ -2214,30 +2667,49 @@ void
 CalendarWindow::addEvent
 (const QDate &date)
 {
-    Season const *currentSeason = context->currentSeason();
-    if (currentSeason == nullptr) {
-        return;
-    }
-    if (! currentSeason->canHavePhasesOrEvents()) {
+    const CalendarWorkflowOwners owners(this, context);
+    if (!owners.current()) return;
+    const Season *currentSeason = owners.context->currentSeason();
+    if (!currentSeason
+        || !currentSeason->canHavePhasesOrEvents()) {
         return;
     }
     Season *season = nullptr;
-    for (Season &s : context->athlete->seasons->seasons) {
-        if (&s == currentSeason) {
-            season = &s;
-            break;
-        }
+    for (Season &candidate : owners.seasons->seasons) {
+        if (candidate.id() != currentSeason->id()) continue;
+        if (season) return;
+        season = &candidate;
     }
-    if (season == nullptr) {
+    if (!season) return;
+
+    const CalendarSeasonSnapshot seasonSnapshot(*season);
+    Season dialogSeason = seasonSnapshot.value();
+    SeasonEvent editedEvent(QString(), date);
+    const ModalWorkflowGuard workflowGuard(
+        owners.lifetimes(),
+        [owners, seasonSnapshot] {
+            return owners.current()
+                && seasonSnapshot.matchesCurrent(
+                    owners.context->currentSeason())
+                && seasonSnapshot.resolveUnchanged(
+                    owners.seasons->seasons);
+        });
+    QPointer<EditSeasonEventDialog> dialog(
+        new EditSeasonEventDialog(
+            owners.context.data(), &editedEvent,
+            dialogSeason));
+    workflowGuard.rejectOnOwnerLoss(dialog.data());
+    const int result = dialog->exec();
+    if (dialog) delete dialog.data();
+    if (result != QDialog::Accepted
+        || !workflowGuard.canCommit()) {
         return;
     }
-
-    SeasonEvent myevent("", date);
-    EditSeasonEventDialog dialog(context, &myevent, *season);
-    if (dialog.exec()) {
-        season->events.append(myevent);
-        context->athlete->seasons->writeSeasons();
-    }
+    Season *resolved = seasonSnapshot.resolveUnchanged(
+        owners.seasons->seasons);
+    if (!resolved) return;
+    resolved->events.append(editedEvent);
+    owners.seasons->writeSeasons();
 }
 
 
@@ -2248,31 +2720,54 @@ CalendarWindow::editEvent
     if (entry.type != ENTRY_TYPE_EVENT) {
         return;
     }
+    const CalendarWorkflowOwners owners(this, context);
+    if (!owners.current() || entry.reference.isEmpty()) return;
     Season *season = nullptr;
-    SeasonEvent *seasonEvent = nullptr;
-    for (Season &s : context->athlete->seasons->seasons) {
-        for (SeasonEvent &event : s.events) {
-            QString evId = event.id;
-            if (evId.isEmpty()) {
-                evId = QString("0x%1").arg(reinterpret_cast<quintptr>(&event), 0, 16);
-            }
-            if (entry.reference == evId) {
-                season = &s;
-                seasonEvent = &event;
-                break;
-            }
-        }
-        if (seasonEvent != nullptr) {
-            break;
-        }
+    int eventIndex = -1;
+    for (Season &candidate : owners.seasons->seasons) {
+        const int candidateIndex = calendarUniqueSeasonEventIndex(
+            candidate, entry.reference);
+        if (candidateIndex == CalendarAmbiguousRecordIndex)
+            return;
+        if (candidateIndex < 0) continue;
+        if (season) return;
+        season = &candidate;
+        eventIndex = candidateIndex;
     }
-    if (seasonEvent == nullptr) {
+    if (!season || eventIndex < 0) return;
+
+    const CalendarSeasonSnapshot seasonSnapshot(*season);
+    Season dialogSeason = seasonSnapshot.value();
+    SeasonEvent editedEvent = season->events[eventIndex];
+    const QString eventId = editedEvent.id;
+    const ModalWorkflowGuard workflowGuard(
+        owners.lifetimes(),
+        [owners, seasonSnapshot] {
+            return owners.current()
+                && seasonSnapshot.matchesCurrent(
+                    owners.context->currentSeason())
+                && seasonSnapshot.resolveUnchanged(
+                    owners.seasons->seasons);
+        });
+    QPointer<EditSeasonEventDialog> dialog(
+        new EditSeasonEventDialog(
+            owners.context.data(), &editedEvent,
+            dialogSeason));
+    workflowGuard.rejectOnOwnerLoss(dialog.data());
+    const int result = dialog->exec();
+    if (dialog) delete dialog.data();
+    if (result != QDialog::Accepted
+        || !workflowGuard.canCommit()) {
         return;
     }
-    EditSeasonEventDialog dialog(context, seasonEvent, *season);
-    if (dialog.exec()) {
-        context->athlete->seasons->writeSeasons();
-    }
+    Season *resolved = seasonSnapshot.resolveUnchanged(
+        owners.seasons->seasons);
+    if (!resolved) return;
+    const int resolvedIndex = calendarUniqueSeasonEventIndex(
+        *resolved, eventId);
+    if (resolvedIndex < 0) return;
+    resolved->events[resolvedIndex] = editedEvent;
+    owners.seasons->writeSeasons();
 }
 
 
@@ -2283,26 +2778,21 @@ CalendarWindow::delEvent
     if (entry.type != ENTRY_TYPE_EVENT) {
         return;
     }
-    bool done = false;
-    for (Season &s : context->athlete->seasons->seasons) {
-        int idx = 0;
-        for (SeasonEvent &event : s.events) {
-            QString evId = event.id;
-            if (evId.isEmpty()) {
-                evId = QString("0x%1").arg(reinterpret_cast<quintptr>(&event), 0, 16);
-            }
-            if (entry.reference == evId) {
-                s.events.removeAt(idx);
-                context->athlete->seasons->writeSeasons();
-                done = true;
-                break;
-            }
-            ++idx;
-        }
-        if (done) {
-            break;
-        }
+    if (entry.reference.isEmpty()) return;
+    Season *resolvedSeason = nullptr;
+    int resolvedIndex = -1;
+    for (Season &season : context->athlete->seasons->seasons) {
+        const int index = calendarUniqueSeasonEventIndex(
+            season, entry.reference);
+        if (index == CalendarAmbiguousRecordIndex) return;
+        if (index < 0) continue;
+        if (resolvedSeason) return;
+        resolvedSeason = &season;
+        resolvedIndex = index;
     }
+    if (!resolvedSeason || resolvedIndex < 0) return;
+    resolvedSeason->events.removeAt(resolvedIndex);
+    context->athlete->seasons->writeSeasons();
 }
 
 
@@ -2310,7 +2800,9 @@ void
 CalendarWindow::addPhase
 (const QDate &date)
 {
-    Season const *currentSeason = context->currentSeason();
+    const CalendarWorkflowOwners owners(this, context);
+    if (!owners.current()) return;
+    Season const *currentSeason = owners.context->currentSeason();
     if (currentSeason == nullptr) {
         return;
     }
@@ -2318,10 +2810,10 @@ CalendarWindow::addPhase
         return;
     }
     Season *phaseSeason = nullptr;
-    for (Season &s : context->athlete->seasons->seasons) {
+    for (Season &s : owners.seasons->seasons) {
         if (s.id() == currentSeason->id()) {
+            if (phaseSeason) return;
             phaseSeason = &s;
-            break;
         }
     }
     if (phaseSeason == nullptr) {
@@ -2341,12 +2833,34 @@ CalendarWindow::addPhase
     } else {
         start = start.addDays(-daysBefore);
     }
-    Phase myphase("", start, end);
-    EditPhaseDialog dialog(context, &myphase, *phaseSeason);
-    if (dialog.exec()) {
-        phaseSeason->phases.append(myphase);
-        context->athlete->seasons->writeSeasons();
+    const CalendarSeasonSnapshot seasonSnapshot(*phaseSeason);
+    Season dialogSeason = seasonSnapshot.value();
+    Phase editedPhase(QString(), start, end);
+    const ModalWorkflowGuard workflowGuard(
+        owners.lifetimes(),
+        [owners, seasonSnapshot] {
+            return owners.current()
+                && seasonSnapshot.matchesCurrent(
+                    owners.context->currentSeason())
+                && seasonSnapshot.resolveUnchanged(
+                    owners.seasons->seasons);
+        });
+    QPointer<EditPhaseDialog> dialog(
+        new EditPhaseDialog(
+            owners.context.data(), &editedPhase,
+            dialogSeason));
+    workflowGuard.rejectOnOwnerLoss(dialog.data());
+    const int result = dialog->exec();
+    if (dialog) delete dialog.data();
+    if (result != QDialog::Accepted
+        || !workflowGuard.canCommit()) {
+        return;
     }
+    Season *resolved = seasonSnapshot.resolveUnchanged(
+        owners.seasons->seasons);
+    if (!resolved) return;
+    resolved->phases.append(editedPhase);
+    owners.seasons->writeSeasons();
 }
 
 
@@ -2357,29 +2871,57 @@ CalendarWindow::editPhase
     if (entry.type != ENTRY_TYPE_PHASE) {
         return;
     }
-    Season const *currentSeason = context->currentSeason();
+    const CalendarWorkflowOwners owners(this, context);
+    if (!owners.current()) return;
+    Season const *currentSeason = owners.context->currentSeason();
     if (currentSeason == nullptr) {
         return;
     }
     Season *phaseSeason = nullptr;
-    for (Season &s : context->athlete->seasons->seasons) {
+    for (Season &s : owners.seasons->seasons) {
         if (s.id() == currentSeason->id()) {
+            if (phaseSeason) return;
             phaseSeason = &s;
-            break;
         }
     }
     if (phaseSeason == nullptr) {
         return;
     }
-    for (Phase &editPhase : phaseSeason->phases) {
-        if (entry.reference == editPhase.id().toString()) {
-            EditPhaseDialog dialog(context, &editPhase, *phaseSeason);
-            if (dialog.exec()) {
-                context->athlete->seasons->writeSeasons();
-            }
-            break;
-        }
+    const QUuid phaseId(entry.reference);
+    const int phaseIndex = calendarUniqueSeasonPhaseIndex(
+        *phaseSeason, phaseId);
+    if (phaseIndex < 0) return;
+    const CalendarSeasonSnapshot seasonSnapshot(*phaseSeason);
+    Season dialogSeason = seasonSnapshot.value();
+    Phase editedPhase = phaseSeason->phases[phaseIndex];
+    const ModalWorkflowGuard workflowGuard(
+        owners.lifetimes(),
+        [owners, seasonSnapshot] {
+            return owners.current()
+                && seasonSnapshot.matchesCurrent(
+                    owners.context->currentSeason())
+                && seasonSnapshot.resolveUnchanged(
+                    owners.seasons->seasons);
+        });
+    QPointer<EditPhaseDialog> dialog(
+        new EditPhaseDialog(
+            owners.context.data(), &editedPhase,
+            dialogSeason));
+    workflowGuard.rejectOnOwnerLoss(dialog.data());
+    const int result = dialog->exec();
+    if (dialog) delete dialog.data();
+    if (result != QDialog::Accepted
+        || !workflowGuard.canCommit()) {
+        return;
     }
+    Season *resolved = seasonSnapshot.resolveUnchanged(
+        owners.seasons->seasons);
+    if (!resolved) return;
+    const int resolvedIndex = calendarUniqueSeasonPhaseIndex(
+        *resolved, phaseId);
+    if (resolvedIndex < 0) return;
+    resolved->phases[resolvedIndex] = editedPhase;
+    owners.seasons->writeSeasons();
 }
 
 
@@ -2390,29 +2932,27 @@ CalendarWindow::delPhase
     if (entry.type != ENTRY_TYPE_PHASE) {
         return;
     }
-    Season const *currentSeason = context->currentSeason();
+    const CalendarWorkflowOwners owners(this, context);
+    if (!owners.current()) return;
+    Season const *currentSeason = owners.context->currentSeason();
     if (currentSeason == nullptr) {
         return;
     }
     Season *phaseSeason = nullptr;
-    for (Season &s : context->athlete->seasons->seasons) {
+    for (Season &s : owners.seasons->seasons) {
         if (s.id() == currentSeason->id()) {
+            if (phaseSeason) return;
             phaseSeason = &s;
-            break;
         }
     }
     if (phaseSeason == nullptr) {
         return;
     }
-    int idx = 0;
-    for (Phase &editPhase : phaseSeason->phases) {
-        if (entry.reference == editPhase.id().toString()) {
-            phaseSeason->phases.removeAt(idx);
-            context->athlete->seasons->writeSeasons();
-            break;
-        }
-        ++idx;
-    }
+    const int phaseIndex = calendarUniqueSeasonPhaseIndex(
+        *phaseSeason, QUuid(entry.reference));
+    if (phaseIndex < 0) return;
+    phaseSeason->phases.removeAt(phaseIndex);
+    owners.seasons->writeSeasons();
 }
 
 
@@ -2423,25 +2963,43 @@ CalendarWindow::exportPlan
     if (entry.type != ENTRY_TYPE_PHASE) {
         return;
     }
-    Season const *currentSeason = context->currentSeason();
+    const CalendarWorkflowOwners owners(this, context);
+    if (!owners.current()) return;
+    Season const *currentSeason = owners.context->currentSeason();
     if (currentSeason == nullptr) {
         return;
     }
     Season *phaseSeason = nullptr;
-    for (Season &s : context->athlete->seasons->seasons) {
+    for (Season &s : owners.seasons->seasons) {
         if (s.id() == currentSeason->id()) {
+            if (phaseSeason) return;
             phaseSeason = &s;
-            break;
         }
     }
     if (phaseSeason == nullptr) {
         return;
     }
-    for (Phase &editPhase : phaseSeason->phases) {
-        if (entry.reference == editPhase.id().toString()) {
-            ExportPlanWizard wizard(context, &editPhase);
-            wizard.exec();
-            break;
-        }
-    }
+    const QUuid phaseId(entry.reference);
+    const int phaseIndex = calendarUniqueSeasonPhaseIndex(
+        *phaseSeason, phaseId);
+    if (phaseIndex < 0) return;
+    const CalendarSeasonSnapshot seasonSnapshot(*phaseSeason);
+    Phase phaseValue = phaseSeason->phases[phaseIndex];
+    const ModalWorkflowGuard workflowGuard(
+        owners.lifetimes(),
+        [owners, seasonSnapshot] {
+            return owners.current()
+                && seasonSnapshot.matchesCurrent(
+                    owners.context->currentSeason())
+                && seasonSnapshot.resolveUnchanged(
+                    owners.seasons->seasons);
+        });
+    ExportPlanWizard wizard(
+        owners.context.data(), &phaseValue);
+    wizard.setWorkflowValidator(
+        [workflowGuard] {
+            return workflowGuard.canCommit();
+        });
+    workflowGuard.rejectOnOwnerLoss(&wizard);
+    wizard.exec();
 }

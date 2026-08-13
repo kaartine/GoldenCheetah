@@ -45,6 +45,7 @@ public:
     const int kQueryIntervalMS = 1000;
 
     Daum(QObject *parent, QString device, QString profile);
+    ~Daum() override;
 
     int start();
     int restart();
@@ -60,12 +61,26 @@ public:
     double getCadence() const;
     double getHeartRate() const;
 
-private:
-    void run();
+#ifdef GC_TRAIN_RUNTIME_TEST_HOOKS
+    bool pausedForTest() const { return isPaused(); }
+    bool workerResourcesReleasedForTest() const
+    {
+        QMutexLocker locker(&pvars);
+        return serial_dev_ == nullptr && timer_ == nullptr;
+    }
+#endif
 
-    bool openPort(QString dev);
-    bool closePort();
-    void initializeConnection();
+#ifdef GC_TRAIN_RUNTIME_TEST_HOOKS
+signals:
+    void workerPortOpenedForTest();
+#endif
+
+private:
+    void run() override;
+    void runWorker(QSerialPort &serial, QTimer &timer);
+
+    bool openPort(QSerialPort &serial, const QString &dev);
+    bool initializeConnection();
     bool configureForCockpitType(int cockpitType);
     bool configureFromProfile();
 
@@ -128,4 +143,3 @@ private slots:
 };
 
 #endif // _GC_Daum_h
-

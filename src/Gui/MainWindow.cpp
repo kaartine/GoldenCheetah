@@ -36,6 +36,8 @@
 // DATA STRUCTURES
 #include "MainWindow.h"
 #include "CacheWriteWarning.h"
+#include "GuiStartupPolicy.h"
+#include "OpenGLVersionProbe.h"
 #include "Context.h"
 #include "Athlete.h"
 #include "AthleteView.h"
@@ -175,8 +177,8 @@ MainWindow::MainWindow(const QDir &home)
     }
 
     QString temp = const_cast<AthleteDirectoryStructure*>(context->athlete->directoryStructure())->temp().absolutePath();
-    context->webEngineProfile->setCachePath(temp);
-    context->webEngineProfile->setPersistentStoragePath(temp);
+    context->webEngineProfile()->setCachePath(temp);
+    context->webEngineProfile()->setPersistentStoragePath(temp);
 
     currentAthleteTab = new AthleteTab(context);
 
@@ -417,15 +419,7 @@ MainWindow::MainWindow(const QDir &home)
 #ifdef Q_OS_LINUX
     // check opengl is available with version 2 or higher
     // only do this on Linux since Windows and MacOS have opengl "issues"
-    QOffscreenSurface surf;
-    surf.create();
-
-    QOpenGLContext ctx;
-    ctx.create();
-    ctx.makeCurrent(&surf);
-
-    // OpenGL version number
-    gl_version = QString::fromUtf8((char *)(ctx.functions()->glGetString(GL_VERSION)));
+    gl_version = OpenGLVersionProbe::detect();
     gl_major = Utils::number(gl_version);
 #endif
 
@@ -495,11 +489,14 @@ MainWindow::MainWindow(const QDir &home)
      * Temporarily add a dummy QWebEngineView with some random content before the MainWindow is shown
      * https://forum.qt.io/topic/141398/qwebengineview-closes-reopens-window-when-added-dynamically
      *--------------------------------------------------------------------*/
-    QWebEngineView *dummywev = new QWebEngineView();
-    dummywev->page()->setHtml("<html></html>");
-    mainLayout->addWidget(dummywev);
-    mainLayout->removeWidget(dummywev);
-    delete dummywev;
+    if (GuiStartupPolicy::shouldPrimeWebEngine(
+            QGuiApplication::platformName())) {
+        QWebEngineView *dummywev = new QWebEngineView();
+        dummywev->page()->setHtml("<html></html>");
+        mainLayout->addWidget(dummywev);
+        mainLayout->removeWidget(dummywev);
+        delete dummywev;
+    }
 
     /*----------------------------------------------------------------------
      * Application Menus
@@ -2232,8 +2229,8 @@ MainWindow::loadCompleted(QString name, Context *context)
 
     // setup the WebEngine paths
     QString temp = const_cast<AthleteDirectoryStructure*>(context->athlete->directoryStructure())->temp().absolutePath();
-    context->webEngineProfile->setCachePath(temp);
-    context->webEngineProfile->setPersistentStoragePath(temp);
+    context->webEngineProfile()->setCachePath(temp);
+    context->webEngineProfile()->setPersistentStoragePath(temp);
 
     // first tab
     athletetabs.insert(currentAthleteTab->context->athlete->home->root().dirName(), currentAthleteTab);

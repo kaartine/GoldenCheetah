@@ -12,6 +12,7 @@
 #include "Cloud/CloudService.h"
 #include "Cloud/MeasuresDownload.h"
 #include "Core/Athlete.h"
+#include "Core/AthleteSession.h"
 #include "Core/Context.h"
 #include "Core/Measures.h"
 #include "Core/NamedSearch.h"
@@ -20,6 +21,7 @@
 #include "Core/Route.h"
 #include "Core/Seasons.h"
 #include "Core/Settings.h"
+#include "Core/TrainingSession.h"
 #include "FileIO/CsvRideFile.h"
 #include "FileIO/DataProcessor.h"
 #include "FileIO/JsonRideFile.h"
@@ -41,11 +43,15 @@
 #include "Train/VideoWindow.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QDir>
+#include <QFileInfo>
 #include <QHash>
 #include <QMessageBox>
 #include <QMutex>
 #include <QSet>
 #include <QThread>
+#include <QTemporaryDir>
 #include <QTimer>
 
 #include <chrono>
@@ -58,12 +64,14 @@
 namespace {
 
 QHash<QString, QVariant> testValues;
+QTemporaryDir stravaTransactionRoot;
 QMutex testValuesMutex;
 int settingsCrossThreadWrites = 0;
 bool settingsSyncFails = false;
 int settingsSyncCalls = 0;
 int settingsSyncFailureCall = 0;
 bool unrelatedSettingsSyncFails = false;
+bool stravaCredentialReadsAvailable = true;
 std::mutex stravaCredentialWriteMutex;
 std::condition_variable stravaCredentialWriteCondition;
 bool blockStravaCredentialWrite = false;
@@ -122,6 +130,9 @@ bool DataProcessorFactory::autoprocess = true;
 
 void resetAthleteMigrationTestSettings()
 {
+    const QString transactionRoot = stravaTransactionRoot.path();
+    QDir(transactionRoot).removeRecursively();
+    QDir().mkpath(transactionRoot);
     {
         QMutexLocker locker(&testValuesMutex);
         testValues.clear();
@@ -130,6 +141,7 @@ void resetAthleteMigrationTestSettings()
         settingsSyncCalls = 0;
         settingsSyncFailureCall = 0;
         unrelatedSettingsSyncFails = false;
+        stravaCredentialReadsAvailable = true;
     }
     throwOnAthleteIdWrite = false;
     {
@@ -232,6 +244,13 @@ void setAthleteMigrationUnrelatedSettingsSyncFails(
 {
     QMutexLocker locker(&testValuesMutex);
     unrelatedSettingsSyncFails = enabled;
+}
+
+void setAthleteMigrationStravaCredentialReadsAvailable(
+    bool available)
+{
+    QMutexLocker locker(&testValuesMutex);
+    stravaCredentialReadsAvailable = available;
 }
 
 void setAthleteMigrationBlockStravaCredentialWrite(bool enabled)
@@ -356,6 +375,19 @@ QVariant GSettings::cvalue(QString athleteName, QString key, QVariant def)
     return testValues.value(settingKey(athleteName, key), def);
 }
 
+GSettings::CredentialReadResult GSettings::credentialCValueChecked(
+    const QString &athleteName,
+    const QString &key)
+{
+    QMutexLocker locker(&testValuesMutex);
+    if (!stravaCredentialReadsAvailable)
+        return {CredentialReadStatus::Unavailable, {}};
+    const QString storedKey = settingKey(athleteName, key);
+    if (!testValues.contains(storedKey))
+        return {CredentialReadStatus::NotFound, {}};
+    return {CredentialReadStatus::Present, testValues.value(storedKey)};
+}
+
 void GSettings::setCValue(QString athleteName, QString key, QVariant value)
 {
     QMutexLocker locker(&testValuesMutex);
@@ -423,6 +455,23 @@ bool GSettings::syncCValueChecked(
             || settingsSyncCalls != settingsSyncFailureCall);
 }
 
+QString GSettings::athleteConfigDirectory(
+    const QString &athleteName) const
+{
+    if (!stravaTransactionRoot.isValid()
+        || athleteName.trimmed().isEmpty()) {
+        return {};
+    }
+    const QString directory = stravaTransactionRoot.filePath(
+        QString::fromLatin1(
+            QCryptographicHash::hash(
+                athleteName.toUtf8(), QCryptographicHash::Sha256)
+                .toHex()));
+    return QDir().mkpath(directory)
+        ? QFileInfo(directory).canonicalFilePath()
+        : QString();
+}
+
 AppearanceSettings GSettings::defaultAppearanceSettings()
 {
     return {};
@@ -485,17 +534,10 @@ Context::Context(MainWindow *window)
     tab = nullptr;
     athlete = nullptr;
     ride = nullptr;
-    workout = nullptr;
-    videosync = nullptr;
-    now = 0;
     isfiltered = false;
     ishomefiltered = false;
-    isRunning = false;
-    isPaused = false;
     isCompareIntervals = false;
     isCompareDateRanges = false;
-    webEngineProfile = nullptr;
-    m_HtmlTrainingBridge = nullptr;
     {
         QMutexLocker locker(&validContextsMutex);
         validContexts.insert(this);
@@ -506,6 +548,42 @@ Context::~Context()
 {
     QMutexLocker locker(&validContextsMutex);
     validContexts.remove(this);
+}
+
+void Context::notifyErgFileSelected(ErgFile *workout)
+{
+    emit ergFileSelected(workout);
+    emit ergFileSelected(static_cast<ErgFileBase *>(workout));
+}
+
+void Context::notifyVideoSyncFileSelected(VideoSyncFile *videoSync)
+{
+    emit videoSyncFileSelected(videoSync);
+}
+
+ErgFile *Context::currentErgFile() const
+{
+    return nullptr;
+}
+
+VideoSyncFile *Context::currentVideoSyncFile() const
+{
+    return nullptr;
+}
+
+void Context::notifyMediaSelected(QString filename)
+{
+    emit mediaSelected(filename);
+}
+
+void Context::notifySetNow(long now)
+{
+    emit setNow(now);
+}
+
+long Context::getNow() const
+{
+    return 0;
 }
 
 bool Context::isValid(Context *context)

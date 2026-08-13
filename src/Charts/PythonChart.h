@@ -19,8 +19,8 @@
 #ifndef _GC_PythonChart_h
 #define _GC_PythonChart_h 1
 
-#include <PythonEmbed.h>
-#include <PythonChartOwner.h>
+#include "Python/PythonEmbed.h"
+#include "Python/PythonChartOwner.h"
 
 #include <QString>
 #include <QDebug>

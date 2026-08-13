@@ -1,12 +1,23 @@
 #include "Cloud/StravaOAuthPolicy.h"
+#include "Cloud/OAuthDialog.h"
+#include "Cloud/OAuthDialogMessageGuard.h"
 
+#include <QDialog>
+#include <QEventLoop>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QPointer>
 #include <QTest>
+#include <QTimer>
 #include <QUrlQuery>
+
+#include <algorithm>
+#include <cstring>
+#include <utility>
 
 namespace {
 
@@ -16,6 +27,48 @@ const QString AccessToken =
     QStringLiteral("synthetic-access-token");
 const QString RefreshToken =
     QStringLiteral("synthetic-refresh-token");
+
+class OAuthTestReply final : public QNetworkReply
+{
+public:
+    OAuthTestReply(
+        QByteArray payload,
+        QNetworkReply::NetworkError error,
+        QObject *parent)
+        : QNetworkReply(parent), payload_(std::move(payload))
+    {
+        setRequest(QNetworkRequest(
+            QUrl(QStringLiteral("https://www.strava.com/oauth/token"))));
+        setUrl(request().url());
+        setAttribute(
+            QNetworkRequest::HttpStatusCodeAttribute,
+            error == QNetworkReply::NoError ? 200 : 503);
+        if (error != QNetworkReply::NoError)
+            setError(error, QStringLiteral("Synthetic network failure"));
+        open(QIODevice::ReadOnly | QIODevice::Unbuffered);
+    }
+
+    void abort() override {}
+    qint64 bytesAvailable() const override
+    {
+        return payload_.size() - offset_ + QNetworkReply::bytesAvailable();
+    }
+
+protected:
+    qint64 readData(char *data, qint64 maximum) override
+    {
+        if (offset_ >= payload_.size()) return -1;
+        const qint64 available = payload_.size() - offset_;
+        const qint64 count = std::min(maximum, available);
+        std::memcpy(data, payload_.constData() + offset_, size_t(count));
+        offset_ += count;
+        return count;
+    }
+
+private:
+    QByteArray payload_;
+    qint64 offset_ = 0;
+};
 
 QByteArray authorizationPayload(const QJsonValue &scope)
 {
@@ -118,10 +171,182 @@ private slots:
     void rejectsInvalidAuthorizationScopes_data();
     void rejectsInvalidAuthorizationScopes();
     void serviceOpenUsesCoordinatedDurableRefresh();
+    void guardedFailureMessageSurvivesDialogDestruction_data();
+    void guardedFailureMessageSurvivesDialogDestruction();
+    void guardedSuccessMessageAcceptsLiveDialog();
+    void guardedSuccessMessageSurvivesDialogDestruction();
+    void detachedConstructorMessageSurvivesMessageDeletion();
+    void storageReconciliationIsCachedOnlyAfterAdoption();
     void oauthGrantSupersedesRefreshAndPublishesDurably();
     void serviceDisconnectRevokesBeforeCredentialRemoval();
+    void serviceWriteFileDisconnectCompilesWithoutErrorParameter();
     void credentialsPageOffersExplicitStravaDisconnectModes();
 };
+
+void TestStravaOAuthPolicy::
+serviceWriteFileDisconnectCompilesWithoutErrorParameter()
+{
+    const QByteArray service = sourceContents(
+        "../../../src/Cloud/Strava.cpp");
+    const QByteArray writeFile = sourceSection(
+        service,
+        "Strava::writeFile(QByteArray &data",
+        "Strava::writeFileCompleted()");
+
+    QVERIFY(!writeFile.isEmpty());
+    QVERIFY(writeFile.contains(
+        "if (!reconcileSharedAuthorizationStatus())"));
+    QVERIFY(writeFile.contains("return false;"));
+    QVERIFY(!writeFile.contains("error ="));
+}
+
+void TestStravaOAuthPolicy::
+guardedFailureMessageSurvivesDialogDestruction_data()
+{
+    QTest::addColumn<QByteArray>("payload");
+    QTest::addColumn<int>("networkError");
+
+    QTest::newRow("token-network-failure")
+        << QByteArrayLiteral("provider failure")
+        << int(QNetworkReply::ServiceUnavailableError);
+    QTest::newRow("malformed-token-json")
+        << QByteArrayLiteral("not-json")
+        << int(QNetworkReply::NoError);
+    QTest::newRow("invalid-strava-token-response")
+        << QByteArrayLiteral("{}")
+        << int(QNetworkReply::NoError);
+}
+
+void TestStravaOAuthPolicy::
+guardedFailureMessageSurvivesDialogDestruction()
+{
+    QFETCH(QByteArray, payload);
+    QFETCH(int, networkError);
+
+    QPointer<OAuthDialog> dialog = new OAuthDialog(
+        OAuthDialog::STRAVA,
+        OAuthDialog::TestConstruction{});
+    bool rejected = false;
+    QObject::connect(
+        dialog, &QDialog::rejected,
+        this, [&rejected] { rejected = true; });
+    QPointer<QNetworkReply> reply = new OAuthTestReply(
+        payload,
+        static_cast<QNetworkReply::NetworkError>(networkError),
+        dialog);
+    QVERIFY(dialog->trackTokenReplyForTest(reply));
+    dialog->finishTokenReplyForTest(reply);
+    QPointer<QMessageBox> guardedMessage =
+        dialog->findChild<QMessageBox *>();
+    QVERIFY(guardedMessage);
+    delete dialog.data();
+
+    QVERIFY(dialog.isNull());
+    QVERIFY(guardedMessage.isNull());
+    QVERIFY(!rejected);
+}
+
+void TestStravaOAuthPolicy::guardedSuccessMessageAcceptsLiveDialog()
+{
+    QPointer<OAuthDialog> dialog = new OAuthDialog(
+        OAuthDialog::NOLIO,
+        OAuthDialog::TestConstruction{});
+    bool accepted = false;
+    QObject::connect(
+        dialog, &QDialog::accepted,
+        this, [&accepted] { accepted = true; });
+    const QByteArray payload = QJsonDocument(QJsonObject{
+        {QStringLiteral("access_token"), AccessToken},
+        {QStringLiteral("refresh_token"), RefreshToken}
+    }).toJson(QJsonDocument::Compact);
+    QPointer<QNetworkReply> reply = new OAuthTestReply(
+        payload, QNetworkReply::NoError, dialog);
+
+    QVERIFY(dialog->trackTokenReplyForTest(reply));
+    dialog->finishTokenReplyForTest(reply);
+    QPointer<QMessageBox> guardedMessage =
+        dialog->findChild<QMessageBox *>();
+    QVERIFY(guardedMessage);
+    guardedMessage->done(QMessageBox::Ok);
+    QVERIFY(accepted);
+    QTRY_VERIFY_WITH_TIMEOUT(dialog.isNull(), 1000);
+    QVERIFY(guardedMessage.isNull());
+    QVERIFY(reply.isNull());
+}
+
+void TestStravaOAuthPolicy::
+guardedSuccessMessageSurvivesDialogDestruction()
+{
+    QPointer<QDialog> dialog = new QDialog;
+    bool accepted = false;
+    QObject::connect(
+        dialog, &QDialog::accepted,
+        this, [&accepted] { accepted = true; });
+    QPointer<QMessageBox> guardedMessage;
+
+    const bool survived = OAuthDialogMessageGuard::showAndAccept(
+        dialog,
+        QStringLiteral("Information"),
+        QStringLiteral("Synthetic success"),
+        [&dialog, &guardedMessage](QMessageBox &message) {
+            guardedMessage = &message;
+            delete dialog.data();
+        });
+
+    QVERIFY(!survived);
+    QVERIFY(dialog.isNull());
+    QVERIFY(guardedMessage.isNull());
+    QVERIFY(!accepted);
+}
+
+void TestStravaOAuthPolicy::
+detachedConstructorMessageSurvivesMessageDeletion()
+{
+    const bool survived = OAuthDialogMessageGuard::showDetached(
+        QStringLiteral("Authorization Error"),
+        QStringLiteral("Synthetic constructor failure"),
+        QString(),
+        [](QMessageBox &message) {
+            delete &message;
+        });
+    QVERIFY(!survived);
+}
+
+void TestStravaOAuthPolicy::
+storageReconciliationIsCachedOnlyAfterAdoption()
+{
+    const QByteArray source = sourceContents(
+        "../../../src/Cloud/Strava.cpp");
+    const QByteArray initialization = sourceSection(
+        source,
+        "Strava::initializeSharedAuthorizationStatus() const",
+        "Strava::reconcileSharedAuthorizationStatus() const");
+
+    QVERIFY(!initialization.isEmpty());
+    QVERIFY(initialization.contains("const bool reconciled ="));
+    const qsizetype guard = initialization.indexOf("if (reconciled)");
+    const qsizetype cachedRevision = initialization.indexOf(
+        "sharedAuthorizationRevision = authorization.revision");
+    const qsizetype initialized = initialization.indexOf(
+        "sharedAuthorizationInitialized.store(");
+    QVERIFY(guard >= 0);
+    QVERIFY(cachedRevision > guard);
+    QVERIFY(initialized > cachedRevision);
+    QVERIFY(initialization.contains(
+        "storageAuthoritative && reconciled"));
+
+    const QByteArray reconciliation = sourceSection(
+        source,
+        "Strava::reconcileSharedAuthorizationStatus() const",
+        "Strava::accountDisconnectOperation(");
+    QVERIFY(!reconciliation.isEmpty());
+    QVERIFY(reconciliation.contains(
+        "reconcileAuthoritativeAuthorizationFromStorage("));
+    QVERIFY(!reconciliation.contains(
+        "stored.revision == sharedAuthorizationRevision"));
+    QVERIFY(!reconciliation.contains(
+        "stored.state == sharedAuthorizationState"));
+}
 
 void TestStravaOAuthPolicy::rejectsUnavailableCredentials_data()
 {
@@ -162,50 +387,33 @@ void TestStravaOAuthPolicy::acceptsConfiguredCredentials()
 
 void TestStravaOAuthPolicy::reportsMachineReadableBuildStatus_data()
 {
-    QTest::addColumn<QString>("clientId");
-    QTest::addColumn<QString>("clientSecret");
-    QTest::addColumn<QByteArray>("oauthStatus");
+    QTest::addColumn<bool>("compileTimeFallbackConfigured");
+    QTest::addColumn<QByteArray>("fallbackStatus");
 
     QTest::newRow("configured")
-        << ClientId << ClientSecret
+        << true
         << QByteArray("configured");
-    QTest::newRow("missing-id")
-        << QString() << ClientSecret
-        << QByteArray("unavailable");
-    QTest::newRow("invalid-id")
-        << QStringLiteral("client-83") << ClientSecret
-        << QByteArray("unavailable");
-    QTest::newRow("missing-secret")
-        << ClientId << QString()
-        << QByteArray("unavailable");
-    QTest::newRow("specific-placeholder")
-        << ClientId
-        << QStringLiteral("__GC_STRAVA_CLIENT_SECRET__")
-        << QByteArray("unavailable");
-    QTest::newRow("generic-placeholder")
-        << ClientId << QStringLiteral("__MISSING_SECRET__")
-        << QByteArray("unavailable");
-    QTest::newRow("documented-config-placeholder")
-        << ClientId << QStringLiteral("your_client_secret")
+    QTest::newRow("runtime-only")
+        << false
         << QByteArray("unavailable");
 }
 
 void TestStravaOAuthPolicy::reportsMachineReadableBuildStatus()
 {
-    QFETCH(QString, clientId);
-    QFETCH(QString, clientSecret);
-    QFETCH(QByteArray, oauthStatus);
+    QFETCH(bool, compileTimeFallbackConfigured);
+    QFETCH(QByteArray, fallbackStatus);
 
     const QByteArray expected =
         QByteArrayLiteral(
             "goldencheetah_build_status=1\n"
             "application=GoldenCheetah\n"
             "strava_support=enabled\n"
-            "strava_oauth=")
-        + oauthStatus + '\n';
+            "strava_oauth=runtime_credentials\n"
+            "strava_compile_fallback=")
+        + fallbackStatus + '\n';
     QCOMPARE(
         StravaOAuthPolicy::buildStatusReport(
-            clientId, clientSecret),
+            compileTimeFallbackConfigured),
         expected);
 }
 
@@ -218,8 +426,37 @@ void TestStravaOAuthPolicy::mainExposesCredentialFreeBuildStatus()
         "\"--goldencheetah-build-status\""));
     QVERIFY(source.contains(
         "StravaOAuthPolicy::buildStatusReport("));
-    QVERIFY(source.contains("GC_STRAVA_CLIENT_ID"));
-    QVERIFY(source.contains("GC_STRAVA_CLIENT_SECRET"));
+    QVERIFY(source.contains(
+        "compileTimeFallbackIsConfigured()"));
+    QVERIFY(!source.contains("GC_STRAVA_CLIENT_ID"));
+    QVERIFY(!source.contains("GC_STRAVA_CLIENT_SECRET"));
+    const qsizetype shutdown = source.indexOf(
+        "StravaSettingsCommit::shutdownCredentialThread()");
+    const qsizetype settingsDeletion = source.indexOf(
+        "delete appsettings", shutdown);
+    QVERIFY(shutdown >= 0);
+    QVERIFY(settingsDeletion > shutdown);
+
+    const qsizetype eventLoop = source.indexOf(
+        "ret=application->exec()");
+    const qsizetype normalShutdown = source.indexOf(
+        "StravaSettingsCommit::shutdownCredentialThread()",
+        eventLoop);
+    const qsizetype settingsClear = source.indexOf(
+        "appsettings->clearGlobalAndAthletes(100)", eventLoop);
+    const qsizetype workerRestart = source.indexOf(
+        "StravaSettingsCommit::restartCredentialThread()",
+        eventLoop);
+    const qsizetype applicationDeletion = source.indexOf(
+        "delete application", eventLoop);
+    QVERIFY(eventLoop >= 0);
+    QVERIFY(normalShutdown > eventLoop);
+    QVERIFY(settingsClear > normalShutdown);
+    QVERIFY(workerRestart > settingsClear);
+    QVERIFY(applicationDeletion > settingsClear);
+    QVERIFY(source.contains(
+        "if (!credentialWorkerStopped)"));
+    QVERIFY(source.contains("_Exit(ret)"));
 }
 
 void TestStravaOAuthPolicy::buildsAuthorizationCodeRequest()
@@ -781,6 +1018,14 @@ serviceOpenUsesCoordinatedDurableRefresh()
     QVERIFY(open.contains("waitForNetworkReply("));
     QVERIFY(open.contains(
         "StravaCredentialPublisher::publish("));
+    QVERIFY(source.contains(
+        "StravaCredentialPublisher::CredentialSnapshotTimeoutMs"));
+    QVERIFY(open.contains(
+        "StravaCredentialPublisher::beginMutation("));
+    QVERIFY(open.contains(
+        "MutationKind::Refresh"));
+    QVERIFY(open.contains("mutation->isCurrent("));
+    QVERIFY(open.contains("publication.mutation = mutation"));
     QVERIFY(open.contains(
         "PublicationMode::"));
     QVERIFY(open.contains("CompareAndSwap"));
@@ -817,8 +1062,20 @@ oauthGrantSupersedesRefreshAndPublishesDurably()
         "../../../src/Cloud/OAuthDialog.cpp");
     const QByteArray header = sourceContents(
         "../../../src/Cloud/OAuthDialog.h");
+    const QByteArray settingsCommit = sourceContents(
+        "../../../src/Cloud/StravaSettingsCommit.cpp");
     QVERIFY(!source.isEmpty());
     QVERIFY(!header.isEmpty());
+    QVERIFY(!settingsCommit.isEmpty());
+    const QByteArray constructor = sourceSection(
+        source,
+        "OAuthDialog::OAuthDialog(",
+        "OAuthDialog::~OAuthDialog()");
+    QVERIFY(!constructor.isEmpty());
+    QVERIFY(!constructor.contains(
+        "StravaCredentialPublisher::recover("));
+    QVERIFY(!constructor.contains(
+        "StravaCredentialPublisher::readStoredAuthorization("));
     QVERIFY(source.contains(
         "StravaOAuthPolicy::parseAuthorizationResponse(payload)"));
     QVERIFY(source.contains(
@@ -834,6 +1091,43 @@ oauthGrantSupersedesRefreshAndPublishesDurably()
         "std::uint64_t stravaAuthorizationEpoch"));
     QVERIFY(source.contains(
         "StravaTokenRefreshCoordinator::authorizationEpoch("));
+    QVERIFY(source.contains(
+        "StravaCredentialPublisher::recover(accountKey, 30000)"));
+    QVERIFY(source.contains(
+        "StravaCredentialPublisher::beginMutation("));
+    QVERIFY(source.contains(
+        "MutationKind::Authorization"));
+    QVERIFY(source.contains(
+        "publication.mutation = stravaCredentialMutation"));
+    const qsizetype oauthMutation = source.indexOf(
+        "StravaCredentialPublisher::beginMutation(");
+    const qsizetype oauthRecovery = source.indexOf(
+        "StravaCredentialPublisher::recover(accountKey, 30000)");
+    const qsizetype oauthStoredState = source.indexOf(
+        "StravaCredentialPublisher::readStoredAuthorization(",
+        oauthMutation);
+    const qsizetype oauthCommitUnknown = source.indexOf(
+        "mutation->markCommitUnknown(error)",
+        oauthMutation);
+    const qsizetype oauthTokenPost = source.indexOf(
+        "reply = manager->post(request, data);",
+        oauthCommitUnknown);
+    QVERIFY(oauthRecovery >= 0);
+    QVERIFY(oauthMutation > oauthRecovery);
+    QVERIFY(oauthStoredState > oauthMutation);
+    QVERIFY(oauthCommitUnknown > oauthMutation);
+    QVERIFY(oauthTokenPost > oauthCommitUnknown);
+    QVERIFY(source.contains(
+        "stravaCredentialMutation->abortBeforeRemoteDispatch("));
+    QVERIFY(source.contains("attempt->cancelled"));
+    QVERIFY(source.contains(
+        "OAuthDialogMessageGuard::showAndAccept("));
+    QVERIFY(source.contains(
+        "mutation->abortBeforeRemoteDispatch(abortError)"));
+    QVERIFY(!source.contains("runOnCredentialThread("));
+    QVERIFY(settingsCommit.contains(
+        "completionContext, &QObject::destroyed"));
+    QVERIFY(settingsCommit.contains("Qt::QueuedConnection"));
 
     const qsizetype start = source.lastIndexOf(
         "} else if (site == STRAVA) {");
@@ -860,12 +1154,13 @@ oauthGrantSupersedesRefreshAndPublishesDurably()
     QVERIFY(branch.contains(
         "authorizationSnapshot("));
     QVERIFY(branch.contains(
-        "GC_STRAVA_REMOTE_GRANT_UNCERTAIN"));
-    QVERIFY(branch.contains(
         "stravaAuthorizationEpoch"));
+    QVERIFY(branch.contains(
+        "runOnCredentialThreadAsync("));
+    QVERIFY(source.contains("stravaCredentialAttempt"));
     QVERIFY(install >= 0);
     QVERIFY(publish > install);
-    QVERIFY(updateClone > install);
+    QCOMPARE(updateClone, qsizetype(-1));
 }
 
 void TestStravaOAuthPolicy::
@@ -877,7 +1172,29 @@ serviceDisconnectRevokesBeforeCredentialRemoval()
     QVERIFY(removal.contains(
         "removeAuthorizationTransaction("));
     QVERIFY(removal.contains(
-        "markRevocationPending("));
+        "markRevocationPendingTracked("));
+    QVERIFY(removal.contains(
+        "StravaCredentialPublisher::beginMutation("));
+    QVERIFY(removal.contains(
+        "MutationKind::Revocation"));
+    QVERIFY(removal.contains("mutation->isCurrent("));
+    QVERIFY(removal.contains("removal.mutation = mutation"));
+    const qsizetype removalCommitUnknown = removal.indexOf(
+        "mutation->markCommitUnknown(");
+    const qsizetype removalFence = removal.indexOf(
+        "readStoredAuthorization(mutation)");
+    const qsizetype remoteRevocation = removal.indexOf(
+        "revokeRemote(", removalCommitUnknown);
+    const qsizetype localCommit = removal.indexOf(
+        "mutation->markLocalCommitStarted(", remoteRevocation);
+    const qsizetype localRemoval = removal.indexOf(
+        "StravaCredentialPublisher::remove(", localCommit);
+    QVERIFY(removalFence >= 0);
+    QVERIFY(removalCommitUnknown >= 0);
+    QVERIFY(removalFence < removalCommitUnknown);
+    QVERIFY(remoteRevocation > removalCommitUnknown);
+    QVERIFY(localCommit > remoteRevocation);
+    QVERIFY(localRemoval > localCommit);
     QVERIFY(removal.contains(
         "StravaCredentialPublisher::remove("));
     QVERIFY(!removal.contains("Bearer "));
@@ -910,19 +1227,32 @@ serviceDisconnectRevokesBeforeCredentialRemoval()
         "Strava::refreshAccessGrant(",
         "Strava::performAuthenticatedGet(");
     const qsizetype pending = refresh.indexOf(
-        "markAuthorizationPending(");
+        "markAuthorizationPendingTracked(");
     const qsizetype tokenPost = refresh.indexOf(
         "nam->post(request, tokenRequest.body)");
+    const qsizetype commitUnknown = refresh.indexOf(
+        "mutation->markCommitUnknown(");
+    const qsizetype vaultFence = refresh.indexOf(
+        "readStoredAuthorization(mutation)");
     const qsizetype cancellationCheck =
         refresh.indexOf("if (interrupted())", pending);
     QVERIFY(pending >= 0);
+    QVERIFY(vaultFence > pending);
     QVERIFY(cancellationCheck > pending);
     QVERIFY(cancellationCheck < tokenPost);
+    QVERIFY(commitUnknown > cancellationCheck);
+    QVERIFY(commitUnknown < tokenPost);
     QVERIFY(tokenPost > pending);
+    QVERIFY(vaultFence < tokenPost);
+    QVERIFY(refresh.contains(
+        "mutation->abortBeforeRemoteDispatch("));
     QVERIFY(refresh.contains(
         "publication.activatesAuthorization = true"));
     QVERIFY(refresh.contains(
         "publication.clearsRemoteGrantUncertainty = true"));
+    QVERIFY(!refresh.contains("setSetting(GC_STRAVA_TOKEN"));
+    QVERIFY(!refresh.contains(
+        "setSetting(GC_STRAVA_REFRESH_TOKEN"));
 
     const QByteArray close = sourceSection(
         service,
@@ -931,6 +1261,14 @@ serviceDisconnectRevokesBeforeCredentialRemoval()
     QVERIFY(!close.isEmpty());
     QVERIFY(!close.contains("/oauth/revoke"));
     QVERIFY(!close.contains("removeAuthorization("));
+
+    const QByteArray publisher = sourceContents(
+        "../../../src/Cloud/StravaCredentialPublisher.cpp");
+    QVERIFY(!publisher.isEmpty());
+    QVERIFY(publisher.contains(
+        "RemovalStatus::CleanupPending"));
+    QVERIFY(publisher.contains(
+        "result.status == RemovalStatus::Cleared"));
 
     QCOMPARE(
         service.count(
@@ -942,6 +1280,30 @@ serviceDisconnectRevokesBeforeCredentialRemoval()
     QCOMPARE(
         service.count(".setAbortOperation("),
         5);
+    QVERIFY(service.contains(
+        "reconcileSharedAuthorizationStatus()"));
+    QVERIFY(service.contains(
+        "const StravaCredentialPublisher::StoredAuthorization stored ="));
+    QVERIFY(!service.contains(
+        "stored->revision != metadata.revision"));
+    const qsizetype reconcile = service.indexOf(
+        "reconcileSharedAuthorizationStatus()");
+    const qsizetype permit = service.indexOf(
+        "StravaTokenRefreshCoordinator::beginAuthorizedRequest(",
+        reconcile);
+    QVERIFY(reconcile >= 0);
+    QVERIFY(permit > reconcile);
+    const QByteArray readdir = sourceSection(
+        service, "Strava::readdir(", "Strava::readFile(");
+    const qsizetype pageLoop = readdir.indexOf(
+        "while (offset < resultCount)");
+    const qsizetype pageReconcile = readdir.indexOf(
+        "reconcileSharedAuthorizationStatus()", pageLoop);
+    const qsizetype pagePermit = readdir.indexOf(
+        "beginAuthorizedRequest(", pageLoop);
+    QVERIFY(pageLoop >= 0);
+    QVERIFY(pageReconcile > pageLoop);
+    QVERIFY(pagePermit > pageReconcile);
     QVERIFY(!service.contains(
         "StravaTokenRefreshCoordinator::authorizationUsable("));
 }

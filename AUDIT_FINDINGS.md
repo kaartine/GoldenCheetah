@@ -2781,7 +2781,11 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   API and restart coordinator were absent. A final injected SQLite case
   reproduced the uncertain-commit boundary: the decision was durable, but the
   API reported it as definitely uncommitted and would have allowed the staged
-  plan journal to be rolled back.
+  plan journal to be rolled back. Final source-level regressions also force a
+  target substitution after publication validation but before SQLite work and
+  require the legacy unbound recovery callback to fail closed. Restart cleanup
+  also substitutes a different predecessor generation with identical bytes and
+  requires that generation to be preserved.
 - Resolution: PlanBundle now reopens and validates every selected activity and
   attached workout before mutation, bounds individual and aggregate payloads,
   verifies both the bundle MD5 reference and stable exact contents, rejects
@@ -2792,7 +2796,13 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   plan journal back once the database commit may be durable. It then publishes
   one plan generation, idempotently publishes locked workout files, and inserts
   all workout rows while retiring the decision in the same database
-  transaction. Startup completes this outer transaction before ordinary plan
+  transaction. Recovery now accepts only a bound completion callback, verifies
+  that its published-target validator runs while the same `TrainDB` LUW is
+  active, and invokes that validator immediately before journal retirement.
+  Overwrite decisions persist the predecessor's native generation fingerprint
+  with its size and digest, and restart cleanup requires all three before an
+  anchored deletion.
+  Startup completes this outer transaction before ordinary plan
   journal reconciliation. Corrupt payloads, schemas, roots, identifiers,
   conflicting targets, and incomplete database completion fail closed and
   retain recovery state. The import UI distinguishes an uncommitted failure
@@ -3096,36 +3106,48 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Verification: Included in the focused removal program and its final normal and
   sanitizer runs recorded under `DATA-018`.
 
-### SEC-025: Activity deletion pathname checks remain TOCTOU-prone
+### SEC-025: Activity transaction pathname checks remain TOCTOU-prone
 
-- Status: IN_PROGRESS
+- Status: FIXED
 - Code: `src/Core/RideCacheRemoval.cpp`,
-  `src/Core/LinkedActivityRemovalJournal.cpp`,
+  `src/Core/CredentialSettings.cpp`,
   `src/Core/LinkedActivitySaveJournal.cpp`,
+  `src/Core/LinkedActivityRemovalJournal.cpp`,
   `src/Planning/PlanReplacementJournal.cpp`,
   `src/FileIO/AnchoredFileSystem.cpp`, and `src/FileIO/AtomicFileWriter.h`
 - Impact: Unsafe names, final symlinks, and planned-backup symlinks are rejected,
   snapshots are hashed, and cooperative writers share path locks. A separate
-  local process can still replace a parent or directory entry between
-  `QFileInfo`, open, hash, and move operations. Path-based cleanup can then act
-  on a different object or outside the intended athlete namespace.
+  process running as the same OS identity can still replace some parent or
+  directory entries between pathname checks and operations. Remaining
+  path-based mutation and namespace-bootstrap paths can therefore observe a
+  different generation or act outside the intended athlete namespace.
 - Test-first evidence: Deterministic regressions replace snapshotted activity
   parents, final entries, active journal directories, `manifest.json`,
   `peer.old`, commit markers, and enumerated journal temporary files at the
   corresponding validation-to-mutation boundaries. Further regressions replace
   the entire linked-removal namespace with a symlink immediately before journal
-  cleanup and exchange a just-verified empty directory before `rmdir`. The
-  unsafe baselines accepted byte-identical substitutes, overwrote or deleted
-  them, or followed the redirected namespace far enough to remove an empty
-  directory outside the athlete transaction tree. Separate RED rows placed
-  one and two exact `.rmlock` suffixes left by `QLockFile` in each removal,
-  linked-save, plan-replacement, and bundle-import namespace and journal parser.
-  They also covered pre-manifest journals, manifest/commit/data lock roles,
-  direct parser boundaries, malformed temporary-name lookalikes, non-files,
-  symlinks, and oversized recognized guards. The valid stale guards permanently
-  blocked reconciliation or the next transaction before the fix, while one
-  malformed removal-journal lookalike was incorrectly accepted and deleted.
-- Partial resolution: RideCache storage transactions now open one anchored
+  cleanup, exchange a just-verified empty directory before `rmdir`, substitute
+  the linked-save namespace and newly created journal, and terminate after a
+  private staging directory is anchored but before publication. The unsafe
+  baselines accepted byte-identical substitutes, overwrote or deleted them,
+  followed a redirected namespace far enough to remove an outside directory,
+  or left an unrecognized staging name that blocked later recovery.
+  Plan-specific follow-up regressions replace a byte-identical manifest,
+  commit marker after publication and while being read, staged activity,
+  preserved old activity, and pre-manifest recovery file at their respective
+  observation-to-use boundaries. Another exchanges the newly created UUID
+  journal before its first old-copy publication. The unsafe baselines accepted
+  the replacement generations, published from them, deleted them, or wrote a
+  new journal file into the substituted directory. Two additional lifetime
+  regressions exchange a just-created old copy before manifest publication and
+  a just-recorded staged file before the record operation returns; both unsafe
+  baselines accepted the substituted generation. A staged-set rollback
+  regression then moves a pinned second input aside, installs a foreign file at
+  its old name, and injects a publisher failure. The unsafe cleanup deleted the
+  foreign replacement. A follow-up contract regression showed that the first
+  identity-bound draft retained an otherwise removable stage when no publisher
+  was supplied.
+- Resolution: RideCache storage transactions now open one anchored
   athlete-root generation, walk children without following links, and pin each
   existing source, backup, derived file, and journal control file once. Reads,
   no-replace publication, rollback, and cleanup operate through those pinned
@@ -3148,38 +3170,159 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   visible to both rollback and commit retries instead of being mistaken for a
   completed transaction.
 
-  Journal scanners now share an exact lock-artifact parser. It strips one or
-  more lowercase trailing `.rmlock` suffixes, then requires a nonempty
-  `.<target>.lock` form; each caller still enforces its exact UUID or known
-  manifest, commit-marker, and staged-data roles plus regular-file, non-symlink,
-  and size limits. Linked-removal temporary-file recognition is also restricted
-  to the atomic writer's exact token form, so a lock guard with a `.tmp`
-  lookalike suffix is no longer removed as an atomic temporary file.
-- Verification: Every regression failed for its intended unsafe behavior before
-  its fix. On Linux, the complete RideCache removal suite passes 369 cases in
-  normal and ThreadSanitizer builds. The complete plan-replacement and bundle
-  suites pass 124 and 8 cases under strict ASan/UBSan/LSan and ThreadSanitizer.
-  The atomic-save suite passes 212 cases under ASan/UBSan and ThreadSanitizer;
-  its 21 focused lock-guard cases are also strict-LSan-clean (the complete
-  program retains the separately documented Qt teardown leak). The anchored
-  primitive suite passes 44 cases with 8 native-only skips on Linux and macOS
-  15, and 40 cases with 12 skips on Windows 2025; all 18 Windows durable-
-  filesystem cases also pass. The full native RideCache suite passes all 369
-  cases on macOS and 356 with 13 expected platform skips on Windows. Every run
-  reports zero failures and zero blacklisted cases.
-- Residual: Journal namespace and instance creation still perform pathname-based
-  permission and cleanup work before anchoring. Linked-save source retirement
-  validates content and then removes a pathname; replace-existing publication,
-  rollback, activity conversion/rename, split archival, plan replacement,
-  staged-publication rollback, and a few lower-risk backup cleanups retain
-  similar same-user exchange windows. POSIX exposes no portable identity-
-  conditional `rmdir`; the private random quarantine, two identity checks,
-  anchored post-checks, and fail-closed recovery reduce but cannot eliminate
-  the final check-to-syscall race. These residuals keep this item `IN_PROGRESS`.
-- Next test and fix: Pin linked-save retirement sources through deletion and
-  preserve both the original and a substituted pathname. Then apply the same
-  observed-generation contract to replace-existing publication and rollback,
-  followed by parent-anchored namespace creation.
+  Linked-save publication, rollback, source retirement, commit-marker handling,
+  and cleanup now retain pinned identities and anchored parents through their
+  mutations. Create-new atomic writers similarly hand their staging identity
+  from the writer to the anchored publisher, and stale `QLockFile` removal
+  helper names are parsed and ignored without weakening rejection of unknown
+  entries.
+
+  A new private-child primitive creates a random recovery-owned staging
+  directory below an anchored private parent, hardens and verifies it through
+  its open identity, publishes it with no replacement, synchronizes the parent,
+  and returns an open anchor for the published generation. Unix requires the
+  effective owner, exact mode `0700`, and no Linux or macOS extended ACL; it
+  uses descriptor-relative creation and identity checks. Windows creates an
+  owner-only protected inheritable DACL at birth, validates persistent ACL
+  support, keeps identity-checked handles across publication, and denies delete
+  sharing during the mutation. Cleanup failures retain their verified recovery
+  location and report a partial effect. Crash-left staging names are plain UUIDs
+  so existing pre-manifest recovery can reconcile them.
+
+  Linked-save preparation now hardens `.gc-transactions` and `linked-save`
+  through directory anchors and creates each UUID journal with that primitive.
+  Recovery hardens the same parent, namespace, and every valid UUID child before
+  namespace enumeration, manifest-existence branching, child enumeration, or
+  manifest reads. Preparation verifies the anchored journal after creation
+  hooks, before every source and prior-backup copy, and before manifest
+  publication. Substitutions injected at those deterministic validation hooks
+  are rejected without writing the next transaction file into the substitute.
+  Readiness now retains the linked-save, linked-removal, and plan-replacement
+  namespace generations together, performs bounded anchored enumeration, and
+  rechecks every held name before journal creation. Linked-save recovery uses
+  two matching anchored namespace snapshots before mutation, opens each UUID
+  child only when its native identity matches the enumerated generation, and
+  performs another stable namespace snapshot after recovery. A journal replaced
+  immediately after enumeration is rejected without deleting either the
+  original or substitute generation.
+
+  Linked-removal preparation and recovery now anchor the athlete root, create or
+  open `.gc-transactions` and `linked-removal` as fixed private children, and
+  create each UUID journal with the private-child primitive. Recovery performs
+  bounded, repeated namespace enumeration before mutation and hands manifest,
+  peer, temporary-file, and commit-marker identities through validation and
+  cleanup. Its transient manifest-existence reference is released before
+  Windows exchanges the journal observation handle for a delete handle.
+  Reapplying an already exact Windows private ACL is observational, preserving
+  the pinned child generation instead of changing its `ChangeTime`.
+
+  Plan-replacement preparation uses the same anchored fixed-child bootstrap and
+  private UUID-journal creation. This gives directories an explicit current-user
+  owner even under an elevated Windows token. Readiness now retains all three
+  activity-transaction namespace generations and enumerates them through their
+  anchors. Recovery retains the athlete root, transaction parent, and plan
+  namespace, requires two matching bounded snapshots before mutation, binds each
+  opened UUID child to the enumerated native identity, and verifies a stable
+  final namespace snapshot. Its standalone tests now link the anchored
+  implementation, and native CI builds and runs the plan-replacement and
+  plan-bundle suites on both Windows and macOS.
+
+  Plan UUID journals now retain their namespace and child anchors through
+  manifest, commit-marker, data-file, recovery, and cleanup operations. Initial
+  manifests, preserved old copies, and commit markers are created directly
+  below the anchored directory with no replacement. Existing manifests and
+  marker reads are pinned to one native identity; manifest rewrites retain the
+  expected old generation across pre-commit validation and re-pin the published
+  generation. Staged and preserved activity files are obtained from a bounded,
+  repeated anchored directory snapshot, pinned by the enumerated identity, and
+  streamed from that handle into the atomic activity writer. The reusable
+  anchored stream API verifies the file before, during, and after chunked reads
+  without buffering a complete activity in memory.
+
+  Cleanup removes only the pinned identities, rejects repopulated names, and
+  removes the verified empty UUID child through the anchored quarantine
+  primitive. Pre-manifest crash recovery follows the same bounded enumeration,
+  pinning, stable-snapshot, and anchored-removal contract. Successful cleanup is
+  recorded explicitly instead of inferred from a later pathname absence, so
+  repeated cleanup remains idempotent without accepting a replaced journal.
+
+  Staged-set publication now anchors and pins every valid staging generation
+  before target locking or publisher callbacks. Publication revalidates each
+  held source and both parent generations immediately before use. Cleanup
+  removes only a staging name that still resolves to its pinned identity and
+  synchronizes the held parent; substitutions, symlinks, and unpinnable entries
+  are retained and reported. The missing-publisher path preserves its prior
+  cleanup contract through the same identity-bound machinery, and split-output
+  staging failures use a stop-before-publication discard path instead of raw
+  pathname deletion.
+
+  A published output is accepted as transaction-owned only when a newly pinned
+  target has the same native identity, size, and digest as its staged source.
+  Rollback removes that held identity through the anchored removal primitive. A
+  target exchanged during finalization, or an output whose publisher cannot
+  prove identity continuity, is retained and reported instead of being deleted
+  by pathname.
+
+  Generic replace-existing publication now uses the same observed-generation
+  contract. First-time credential files use create-new publication and existing
+  files use replace-existing publication through the configured writer factory;
+  the generic writer interface exposes its staging path so platform hardening is
+  preserved. A successful replacement is not reported when retirement of the
+  displaced old target fails. On POSIX, an ambiguous post-exchange state fails
+  closed and retains a verified recovery path instead of attempting a second,
+  identity-unverified exchange. A custom writer whose commit cannot prove
+  identity continuity reports failure and retains the uncertain output rather
+  than restoring or deleting a pathname that may now name another file.
+- Verification: Every deterministic regression failed for its intended unsafe
+  behavior before its fix. On Linux, RideCache passes 390 cases with one skip,
+  PlanReplacement 124, PlanBundleImport 8, and linked-save cleanup 4 under both
+  ASan/UBSan and ThreadSanitizer; the anchored suite passes 83 cases with 13
+  platform skips under both configurations. The release application also builds,
+  links, and answers `--version` in the constrained remote Docker environment.
+  Final-head hosted run `30956053366` passes both native jobs. Windows reports
+  376/0/15 for RideCache, 85/0/22 for AnchoredFilesystem, 10/0/0 for linked-save
+  cleanup, 121/0/3 for PlanReplacement, and 8/0/0 for PlanBundleImport. macOS
+  reports 390/0/1, 81/0/15, 4/0/0, 124/0/0, and 8/0/0 respectively, plus the
+  307/0/1 atomic-activity suite. The linked-save readiness and recovery
+  regressions first reproduced the hidden pending namespace and destructive
+  enumerated-child substitution. The resulting atomic-activity suite passes
+  310/0/0 normally; 14 focused readiness, recovery, lock-guard, and hardened-
+  journal cases pass under strict ASan/UBSan/LSan and ThreadSanitizer. The two
+  plan-namespace regressions likewise first reproduced hidden sibling recovery
+  and destructive enumerated-child substitution. PlanReplacement now passes
+  126/0/0 normally, under strict ASan/UBSan/LSan, and under ThreadSanitizer;
+  PlanBundleImport passes 8/0/0 in all three configurations. The nine new plan
+  identity regressions first reproduced
+  acceptance, publication, destructive cleanup, or out-of-generation writes.
+  PlanReplacement now passes 136/0/0 normally, under strict ASan/UBSan/LSan,
+  and under ThreadSanitizer. AnchoredFilesystem passes 84/0/13 in all three
+  configurations, including direct multi-chunk and consumer-failure coverage
+  for the pinned stream API. PlanBundleImport passes 8/0/0 normally and under
+  both sanitizer configurations. The complete production application links,
+  and an isolated minimal-platform `--version` smoke test reports
+  `GoldenCheetah V3.8-DEV2605 (5012)`. The staged-input regressions first
+  reproduced destructive replacement cleanup and the missing-publisher cleanup
+  regression. Atomic activity save now passes 313/0/0 normally, under strict
+  ASan/UBSan/LSan, and under ThreadSanitizer. Split activity save passes 33/0/0
+  under both sanitizer configurations, including its staging-failure cleanup
+  path.
+  The final credential suite reports 426/0/7 normally, under strict
+  ASan/UBSan/LSan, and under ThreadSanitizer. AnchoredFilesystem reports 88/0/13
+  in all three configurations, with its five closure regressions passing in
+  focused runs. Atomic activity save reports 317/0/0 in all three
+  configurations, including 18 focused generic-publication regressions. Hosted
+  runs `30982140513`, `30982140602`, and `30982140674` all pass on SEC-025
+  implementation head `ef4dcac`, covering durable and anchored filesystems,
+  native Windows and macOS activity transactions, and the complete build.
+- Residual: The private-directory API explicitly trusts processes running as
+  the same OS identity and privileged administrators. POSIX exposes no portable
+  identity-conditional `rmdir`; private random quarantine, repeated identity
+  checks, anchored post-checks, and fail-closed recovery bound but cannot remove
+  its final check-to-syscall interval. A reported verified recovery path is
+  point-in-time evidence while its identity is held, not a permanent claim after
+  handles are released. These are explicit trust and platform limits; ambiguous
+  states are surfaced for recovery and are no longer resolved by destructive
+  pathname rollback.
 
 ### GUI-007: Modal activity workflows retained dangling RideItem pointers
 
@@ -3237,8 +3380,12 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### GUI-010: Other Calendar modal workflows retain mutable owner state
 
-- Status: OPEN
-- Code: `src/Charts/CalendarWindow.cpp`
+- Status: FIXED
+- Code: `src/Charts/CalendarWindow.cpp`,
+  `src/Charts/CalendarSeasonWorkflow.h`, `src/Core/Season.h`,
+  `src/Gui/AnalysisSidebar.cpp`, `src/Gui/FilterSimilarDialog.cpp`,
+  `src/Gui/ManualActivityWizard.cpp`, `src/Gui/ModalWorkflowGuard.h`,
+  `src/Gui/PlanWizards.cpp`, and `src/Train/ErgFile.h`
 - Impact: Manual Activity, Import/Export Plan, Filter Similar, activity
   linking, and season event/phase dialogs run nested event loops while retaining
   raw `Context`, `AthleteTab`, `RideItem`, `Season`, `Phase`, or `SeasonEvent`
@@ -3246,17 +3393,32 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   those objects. The add/import paths also restore `noSwitch` to `false`
   unconditionally, which can clear an outer navigation guard or modify a newly
   selected tab.
-- Partial resolution: Repeat Plan now guards CalendarWindow, Context, Athlete,
-  RideCache, and the original AthleteTab across the nested event loop, verifies
-  their topology before updating the calendar, and restores the original tab's
-  exact prior `noSwitch` value. The other listed workflows remain open.
-- Test: With a disposable athlete profile, destroy or replace each owner from a
-  modal callback and mutate the selected activity or season container before
-  acceptance. Require a clean cancellation, no write through stale pointers, and
-  exact restoration of the original tab's prior navigation state.
-- Fix direction: Snapshot value identities before each dialog, guard the complete
-  owner chain with `QPointer`, resolve mutable records again after acceptance,
-  and use an owner-aware RAII lease that restores the original `noSwitch` value.
+- Test-first evidence: The first focused build failed because the complete-owner,
+  active-tab, exact-affected-set, guarded-continuation, mutation-rejection,
+  committed-boundary, workout-lifetime, and current-season contracts did not
+  exist. A later regression reproduced the remaining pre-`exec()` gap: losing
+  an owner before installing the rejection hook returned `Accepted` instead of
+  `Rejected` after the nested loop began.
+- Resolution: A shared modal guard now tracks every QObject owner and validates
+  the active MainWindow/AthleteTab topology before commit. Dialogs reject on
+  owner destruction or source mutation, including owner loss immediately before
+  `exec()`. Navigation and temporary workout overrides use owner-aware leases
+  that restore only state they still own and never restore an expired workout.
+  Calendar operations snapshot and recheck the exact affected object set,
+  re-resolve stable activity identities after save-driven renames, preserve
+  committed outcomes as non-retryable, and guard continuations after nested
+  warnings. Season editing uses detached values, stable event UUIDs, unique
+  record resolution, unchanged-season snapshots, and the still-current season
+  identity. Link persistence saves every surviving affected item and reports an
+  incomplete save instead of silently skipping it.
+- Verification: All 37 modal-workflow cases pass normally and under strict
+  ASan/UBSan/LSan. The 9-case season parser and 27-case Repeat Plan contracts
+  pass both configurations. The complete production application links, and an
+  isolated 15-second offscreen event-loop smoke test with a disposable home
+  directory does not exit or crash. The expanded Windows, macOS, and Linux
+  workflow is clean under `actionlint` 1.7.12. Hosted run `30962466123` passes
+  all three jobs, and standard build run `30962466139` builds, tests, and
+  uploads the macOS package successfully.
 
 ### GUI-011: Repeat Plan treated committed outcomes as retryable failures
 
@@ -3283,7 +3445,838 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   ASan/UBSan/LSan. The production application build covers the real wizard and
   Calendar translation units; visible widget interaction remains in `TEST-005`.
 
+### THREAD-022: Credential shutdown can destroy live settings state
+
+- Status: FIXED
+- Code: `src/Core/Settings.cpp`, `src/Core/Settings.h`,
+  `src/Core/CredentialStoreQtKeychain.cpp`,
+  `src/Cloud/StravaSettingsCommit.cpp`, and `src/Core/main.cpp`, plus
+  `unittests/Core/credentialSettings/testCredentialSettings.cpp`
+- Impact: Credential operations release the `GSettings` mutex while retaining
+  pointers to settings and backend state. Reconfiguration or application
+  shutdown could delete those objects after the worker's 100 ms join expired,
+  allowing a stalled keychain callback to resume through freed settings,
+  storage, or mutex memory.
+- Test-first evidence: `credentialBackendBlocksSettingsReconfigurationUntilRelease`
+  blocks a backend after the settings mutex is released, proves that bounded
+  reconfiguration fails without destroying state, and then proves that an
+  unbounded reconfiguration completes only after backend release.
+  `credentialWorkerShutdownAbandonsQueuedOperations` holds the active operation
+  beyond the 100 ms worker join, concurrently destroys its `GSettings`, and
+  requires destruction to remain blocked until release while queued work and
+  stale completion callbacks remain suppressed.
+- Resolution: Every settings-backed credential call increments a suspension
+  lease before releasing the settings mutex and clears it only after the call
+  stack no longer retains settings or backend objects. Reconfiguration and the
+  `GSettings` destructor wait for all foreign leases. Credential-worker
+  generations suppress callbacks after shutdown, and every production shutdown
+  path uses `_Exit` before settings teardown if the bounded worker join does not
+  complete.
+- Verification: Implementation commit `906b5e3`. The complete 15-case
+  `THREAD-019..022` matrix passes ThreadSanitizer with no race reports. The full
+  credentialSettings program passes 443 cases under strict
+  ASan/UBSan/LSan, with zero failures and seven platform skips.
+
+### GUI-013: Linux startup dereferences an unavailable OpenGL dispatch table
+
+- Status: FIXED
+- Code: `src/Gui/MainWindow.cpp`, `src/Gui/OpenGLVersionProbe.cpp`,
+  `src/Gui/OpenGLVersionProbe.h`, and
+  `unittests/Gui/openGLVersionProbe/`
+- Impact: Linux startup ignored failures from OpenGL context creation and
+  `makeCurrent()`, then dispatched `glGetString()` through that invalid
+  context. Systems without a usable OpenGL context, including the packaged Qt
+  offscreen smoke environment, could crash before the main window became
+  ready.
+- Test-first evidence: The packaged offscreen smoke reproduced a segmentation
+  fault in `MainWindow` after Qt reported a non-current OpenGL context. The
+  focused invalid-context regression was added before the checked probe existed
+  and failed to build because no safe failure-path API was available.
+- Resolution: OpenGL version discovery now validates context creation, surface
+  creation, `makeCurrent()`, and the function table before dispatch. Every
+  successful current-context path calls `doneCurrent()`, while any unavailable
+  OpenGL capability returns an empty version and allows startup to continue.
+- Verification: All five focused cases pass normally and under strict
+  ASan/UBSan, covering null surfaces, an invalid context, and automatic cleanup
+  with no usable OpenGL context. Two clean build trees independently produced
+  the same AppImage at revision `b46e064`; both completed the packaged offscreen
+  startup gate on glibc 2.35, and the reproduced artifact has SHA-256
+  `9142bc5f60a272051d039e33c23ee573ffb811f5804de2754bfa1d75650b19a6`.
+
 ## Medium
+
+### DATA-023: A missing workout setting becomes a literal `0` path
+
+- Status: FIXED
+- Code: `src/Planning/PlanBundle.cpp` and
+  `unittests/Core/rideCacheRemoval/testRideCacheRemoval.cpp`
+- Impact: `GSettings::value()` defaults its fallback `QVariant` to integer zero.
+  Plan import recovery omitted an explicit fallback, converted that zero to the
+  string `"0"`, and skipped its intended athlete-library default. A fresh
+  profile therefore reported that the workout library was unavailable before
+  the main window had initialized the setting.
+- Test-first evidence: `planBundleRecoveryUsesDefaultWorkoutRoot()` leaves the
+  setting absent, supplies an existing athlete-library parent, and first failed
+  with `The workout library is unavailable`.
+- Resolution: The recovery path now requests an explicit empty `QString` from
+  settings. The existing empty-value branch then resolves and canonicalizes the
+  athlete-library parent as intended.
+- Verification: The focused recovery regression passes against the production
+  `PlanBundle::reconcilePendingImport()` implementation. The complete
+  RideCache removal, mutation, and recovery program passes 407 tests with zero
+  failures and one expected platform skip.
+
+### BUILD-037: Offscreen startup runs a desktop WebEngine workaround
+
+- Status: FIXED
+- Code: `src/Gui/MainWindow.cpp`, `src/Gui/GuiStartupPolicy.cpp`,
+  `src/Gui/GuiStartupPolicy.h`, and `unittests/Gui/guiStartupPolicy/`
+- Impact: Main-window construction always created and immediately destroyed a
+  temporary `QWebEngineView` to avoid flicker on real desktop windows. The
+  workaround has no purpose on Qt's offscreen platform, where it starts an
+  additional WebEngine rendering lifetime that the package smoke must tear
+  down despite having no visible surface.
+- Test-first evidence: Retained offscreen startup first reproduced entry into
+  Qt Quick and WebEngine teardown after the ready marker. The platform-policy
+  regression was then added before its production API and failed to build
+  because no guarded policy existed.
+- Resolution: The desktop primer is preserved for normal platform plugins but
+  is skipped case-insensitively for `offscreen`. The package smoke can therefore
+  validate the main window without creating a rendering workaround that cannot
+  affect an invisible surface.
+- Verification: The focused policy covers lowercase and mixed-case offscreen
+  names plus xcb, Wayland, Windows, and Cocoa desktop controls, with all eight
+  rows passing in normal and ASan/UBSan builds. A production constructor trace
+  confirms that the primer is absent offscreen. The retained production smoke
+  reaches the ready marker and exits successfully after BUILD-038's coordinated
+  shutdown. Both independent release packages also passed the completed
+  AppImage offscreen gate.
+
+### BUILD-038: GUI smoke exits before its main window is destroyed
+
+- Status: FIXED
+- Code: `src/Core/main.cpp`, `src/Gui/GuiSmokeShutdown.cpp`,
+  `src/Gui/GuiSmokeShutdown.h`, `appveyor/linux/package-appimage-pass.sh`, and
+  `unittests/Gui/guiSmokeShutdown/`; the corresponding protected-file digests
+  are updated in `.github/workflow-policy-contract.json`.
+- Impact: The package smoke exited the Qt event loop immediately after its
+  ready marker while the main window, map pages, and athlete WebEngine profile
+  were still alive. QApplication fallback teardown released the profile before
+  all deferred Qt Quick delegates and crashed, so a working runtime could not
+  pass release verification.
+- Test-first evidence: The retained production binary reproducibly reached the
+  ready marker and then crashed in `QQuickWindow` and
+  `QWebEngineView` teardown. A lifecycle regression was added first and failed
+  to build because no coordinated shutdown API existed.
+- Resolution: The smoke disables automatic last-window quit, closes the main
+  window through its normal athlete cleanup, and requests process exit only
+  after the window's `destroyed` signal. Production packaging allows 30 seconds
+  for this bounded cleanup instead of racing its existing ten-second thread
+  pool wait.
+- Verification: The focused lifecycle suite passes six tests in normal and
+  ASan/UBSan builds, including deferred and synchronous destruction, rejected
+  close, duplicate-exit prevention, and invalid inputs. The structural release
+  gate passes, and the retained production offscreen runtime reaches the ready
+  marker and exits with status zero in 11 seconds without a WebEngine profile
+  warning or crash. The full packaging and release-hardening regression programs
+  pass in a valid isolated worktree. Two clean build and package passes at
+  revision `b46e064` each passed the 30-second completed-AppImage smoke and
+  produced byte-identical output with SHA-256
+  `9142bc5f60a272051d039e33c23ee573ffb811f5804de2754bfa1d75650b19a6`.
+
+### BUILD-039: Legacy release migration rejects manifest version 1
+
+- Status: FIXED
+- Code: `src/Resources/linux/AppImagePackagingSupport.sh` and
+  `unittests/Build/appImagePackaging/testAppImagePackaging.sh`; the protected
+  file digests are updated in `.github/workflow-policy-contract.json`.
+- Impact: The release promoter advertises migration from an installed AppImage
+  without an SBOM, but it first required the current manifest version 2. A real
+  predecessor with the structurally valid version-1 manifest therefore failed
+  closed before the generation pointer could move, preventing installation of
+  the new verified release.
+- Test-first evidence: A real Type-2 fixture with matching version-1 embedded
+  and sidecar manifests, exact image digest, mode-0600 sidecar, and no SBOM was
+  seeded through the legacy release-store layout. Promotion first failed before
+  replacing it. A second fixture changes only the sidecar source revision and
+  requires the embedded-manifest mismatch to remain rejected without changing
+  the active pointer.
+- Resolution: A dedicated legacy verifier accepts only the exact five-field
+  version-1 base format and six-field sidecar, checks file shape and mode,
+  hashes the AppImage, extracts it without executing it, and
+  requires its embedded manifest to match byte for byte. It is available only
+  when validating an already installed release with no SBOM. New candidates
+  still require manifest version 2 and a verified SBOM, and the unverifiable
+  predecessor is not retained as the rollback generation.
+- Verification: The full AppImage packaging program passes in the locked Jammy
+  container, including the valid and tampered migration rows, 32 workflow-policy
+  cases, 19 release-hardening cases, and the complete provenance, extraction,
+  Qt archive, native-platform, and OAuth package gates. Local shell syntax and
+  all 32 immutable-workflow tests also pass.
+
+### MEM-028: OAuth nested messages can outlive their dialog
+
+- Status: FIXED
+- Code: `src/Cloud/OAuthDialog.cpp`, `src/Cloud/OAuthDialog.h`, and
+  `src/Cloud/OAuthDialogMessageGuard.cpp`
+- Impact: OAuth failure paths open nested message-box event loops and then
+  continue through the raw dialog pointer. Closing or deleting the OAuth dialog
+  reentrantly can therefore cause a use-after-free when the message returns.
+- Test-first evidence: The failure-message regression destroys the dialog from
+  network-failure, malformed-JSON, and invalid-Strava-response paths. Success
+  and constructor-message rows separately delete the live dialog or message
+  while callbacks remain queued.
+- Resolution: Commit `906b5e3` routes OAuth messages through a nonblocking
+  guard. It tracks dialogs and messages with `QPointer`, binds completion to a
+  live Qt context, and rejects or accepts only while the target still exists.
+- Verification: The implementation's OAuth package passed under strict
+  ASan/UBSan/LSan. At integration revision `daae182`, the current production
+  helper and OAuth sources pass all 68 focused cases, including every dialog
+  destruction row.
+
+### DUR-016: Cross-process Strava recovery can use stale revocation state
+
+- Status: FIXED
+- Code: `src/Cloud/StravaCredentialDurability.cpp`,
+  `src/Cloud/StravaCredentialPublisher.cpp`,
+  `src/Cloud/StravaTokenRefresh.cpp`, and
+  `src/Cloud/StravaAccountRemoval.cpp`
+- Impact: Durable recovery records are coordinated with process-local state.
+  Another GoldenCheetah process can rotate, revoke, or replace a grant before
+  recovery resumes, allowing stale recovery state to overwrite or misclassify
+  the newer authorization.
+- Test-first evidence: `independentProcessesSerializeAndFenceGenerations`
+  starts refresh, removal, and OAuth child processes against one disposable
+  account. It requires generations 1, 2, and 3 to serialize, each child to see
+  its predecessor, and the final OAuth grant to win. Process-death, coherent
+  revision-read, and lock/journal parent-swap rows cover recovery boundaries.
+- Resolution: Commit `906b5e3` adds an account-derived anchored interprocess
+  lease, refreshes storage metadata after acquiring it, and binds every journal
+  transition to a transaction ID and generation. Credential and authorization
+  revisions are checked around coherent snapshots and before publication, so a
+  stale process cannot publish through a newer generation.
+- Verification: The implementation's 26-case durability suite passed normally
+  and under strict ASan/UBSan/LSan. The expanded suite, built exactly from
+  integration revision `daae182`, passes all 28 cases.
+
+### THREAD-019: QtKeychain caller deadlines do not bound backend completion
+
+- Status: FIXED
+- Code: `src/Core/CredentialStoreQtKeychain.cpp`,
+  `src/Core/CredentialStoreQtKeychain.h`, and
+  `src/Cloud/StravaSettingsCommit.cpp`
+- Impact: A caller can time out while the QtKeychain job remains live and may
+  later mutate the vault. The apparent deadline therefore does not bound the
+  operation or establish whether a credential write committed.
+- Test-first evidence: The timeout regressions stall read, write, and removal
+  jobs beyond both native and caller deadlines, attempt competing mutations,
+  and then finish or destroy the original job. They require a tracked pending
+  or indeterminate result, retained process and filesystem serialization, and
+  deterministic retry only after terminal reconciliation.
+- Resolution: A timed-out native mutation retains its unique job gate and
+  durable backend marker until the job finishes or is destroyed. Callers see
+  `Pending` or `Indeterminate`, never success or an empty credential, and the
+  Strava durability transaction remains authoritative for late completion.
+  Generation checks prevent an old completion from releasing or publishing
+  through a newer owner.
+- Verification: Implementation commit `906b5e3`. The complete 15-case
+  `THREAD-019..022` matrix passes ThreadSanitizer with no race reports. The full
+  credentialSettings program passes 443 cases under strict
+  ASan/UBSan/LSan, with zero failures and seven platform skips.
+
+### THREAD-020: Credential suspension skips valid settings operations
+
+- Status: FIXED
+- Code: `src/Core/Settings.cpp`, `src/Core/Settings.h`, and
+  `src/Core/CredentialSettings.cpp`
+- Impact: A per-instance credential suspension counter makes unrelated settings
+  calls fail or return early. In particular, opening or creating an athlete
+  during a blocked credential request can silently skip same-instance settings
+  initialization with no retry.
+- Test-first evidence: Block a credential read, invoke
+  `initializeQSettingsAthlete()` on the same `GSettings` instance, release the
+  read, and require initialization exactly once. Also require unrelated
+  settings access to wait or proceed rather than report a false failure.
+- Resolution: Production structural operations wait for credential-backend
+  suspensions instead of skipping initialization. The wait temporarily releases
+  the recursive settings mutex and, on the application thread, processes the
+  restricted event path needed for native keychain completion. A suspension
+  owned by the current reentrant stack fails closed rather than deadlocking;
+  the caller retries that deferred structural operation after the owning lease
+  unwinds. A call from another thread waits and completes exactly once.
+- Verification: Implementation commit `906b5e3` includes the same-instance
+  initialization and reentrant application-thread regressions. The complete
+  15-case `THREAD-019..022` matrix passes ThreadSanitizer, and the full
+  credentialSettings program passes 443 cases under strict ASan/UBSan/LSan.
+
+### THREAD-021: Bounded credential-worker shutdown can leave work alive
+
+- Status: FIXED
+- Code: `src/Cloud/StravaSettingsCommit.cpp`,
+  `src/Cloud/StravaSettingsCommit.h`, and `src/Core/main.cpp`
+- Impact: Shutdown waits 100 ms and can return while a keychain or settings
+  operation still runs. The process then has neither a reliable completion
+  result nor a bounded guarantee that all credential work has stopped.
+- Test-first evidence: Hold a worker operation beyond
+  100 ms, initiate shutdown, then release it and require deterministic joining
+  or durable handoff with no live worker at process teardown.
+- Resolution: Shutdown atomically stops submissions, abandons queued operations,
+  interrupts the active worker, and invalidates its callback generation. A
+  cooperative operation joins and its stopped generation is reclaimed. If a
+  native backend remains wedged past 100 ms, production does not tear down any
+  referenced application state: both startup termination and normal shutdown
+  take an explicit `_Exit` fail-stop path. Durable credential journals retain
+  any mutation whose outcome is not definitive.
+- Verification: Implementation commit `906b5e3`. The shutdown child regression
+  proves bounded return, callback suppression, blocked settings destruction,
+  eventual join after release, and no queued execution. It passes in the
+  15-case ThreadSanitizer matrix and the full 443-case ASan/UBSan/LSan run.
+
+### DUR-017: Replaced split-journal payloads had ambiguous cleanup ownership
+
+- Status: FIXED
+- Code: `src/FileIO/AnchoredFileSystem.cpp`,
+  `src/FileIO/AnchoredFileSystem.h`, and `src/Gui/SplitActivitySave.cpp`
+- Impact: Cleanup could encounter a journal payload whose pathname had been
+  replaced after validation. Without identity, generation, size, and digest
+  continuity, deleting it could destroy foreign data while accepting it could
+  erase the evidence needed for recovery.
+- Test-first evidence / required regression: Replace the source, backup, or
+  output cleanup payload, and separately alter output size. Recovery must retain
+  the replacement and journal and report a payload-specific error.
+- Resolution: Cleanup derives expected payload evidence from the pinned
+  manifest, repins each observed journal file, and removes a payload only when
+  identity, durable generation, size, and SHA-256 all match. Ambiguous files
+  are preserved with explicit diagnostics.
+- Verification: Commit `220a96f`; the split suite passes 104/104 normally,
+  under ASan/UBSan, and under ThreadSanitizer. The atomic suite passes 331/331,
+  the full application links, and the isolated offscreen smoke reaches timeout.
+
+### DUR-018: Split recovery lacked durable-generation evidence
+
+- Status: FIXED
+- Code: `src/FileIO/AnchoredFileSystem.cpp`,
+  `src/FileIO/AnchoredFileSystem.h`, and `src/Gui/SplitActivitySave.cpp`
+- Impact: Native identity, size, and digest alone do not prove that a pathname
+  still names the same durable file generation after replacement and reuse.
+  Forward recovery could otherwise publish or remove an unproven artifact.
+- Test-first evidence / required regression: Use a filesystem fixture that
+  cannot provide generation evidence and replace or reuse an output identity;
+  recovery must fail closed, preserve production data, and retain its journal.
+- Resolution: Pinned files expose platform-backed durable-generation evidence.
+  Split manifests and cleanup records require and validate that evidence at
+  every publication, recovery, and retirement boundary.
+- Verification: Commit `220a96f`; the split suite passes 104/104 normally,
+  under ASan/UBSan, and under ThreadSanitizer. The atomic suite passes 331/331,
+  the full application links, and the isolated offscreen smoke reaches timeout.
+
+### DUR-019: Split recovery limits did not charge actual reads
+
+- Status: FIXED
+- Code: `src/FileIO/AnchoredFileSystem.cpp`,
+  `src/FileIO/AnchoredFileSystem.h`, and `src/Gui/SplitActivitySave.cpp`
+- Impact: Recovery limits based only on declared metadata can be bypassed by
+  actual payload reads, while a deadline checked only between files permits one
+  large read or digest operation to monopolize startup.
+- Test-first evidence / required regression: Recover oversized and aggregate
+  payload sets under a shared byte budget, expire the deadline in the middle of
+  a payload read, and require bounded failure followed by successful resumable
+  recovery.
+- Resolution: One recovery budget is shared across journals and phases. Every
+  bounded read and digest callback charges actual bytes in chunks of at most
+  one MiB and checks the common operation limit and deadline.
+- Verification: Commit `220a96f`; the split suite passes 104/104 normally,
+  under ASan/UBSan, and under ThreadSanitizer. The atomic suite passes 331/331,
+  the full application links, and the isolated offscreen smoke reaches timeout.
+
+### PERF-013: Split-manifest validation can become quadratic
+
+- Status: FIXED
+- Code: `src/Gui/SplitActivitySave.cpp`
+- Impact: Repeated linear searches and path comparisons across a maximum-size
+  hostile manifest can make startup recovery quadratic and hold application
+  initialization for an excessive time.
+- Test-first evidence: Validate maximum-sized manifests
+  with unique and adversarially colliding path sets, measure comparison or
+  lookup counts, and require linear or near-linear growth.
+- Resolution: Commit `220a96f` normalizes each path once, sorts the normalized
+  keys, and checks only adjacent paths for equality or ancestry. Identity and
+  cleanup-name uniqueness use keyed sets and maps while retaining anchored
+  filesystem validation.
+- Verification: The maximum-size regression validates 1000 outputs with a
+  bounded path-validation step count, and hostile-manifest coverage rejects a
+  source/output collision. Both are included in the split suite that passes
+  104/104 normally, under ASan/UBSan, and under ThreadSanitizer.
+
+### DUR-020: Multi-target overwrite can publish before all predecessors validate
+
+- Status: FIXED
+- Code: `src/Planning/PlanBundleImportJournal.cpp` and
+  `src/Train/StravaRoutesDownload.cpp`
+- Impact: A batched overwrite can publish an early target before discovering
+  that a later predecessor was replaced or became unsafe. Failure then exposes
+  a partially updated route set even though the transaction was rejected.
+- Test-first evidence: `standaloneMultiTargetPreflightIsMutationFree()` replaces
+  the second predecessor after the durable decision and before publication. Its
+  create and overwrite rows require the first target to remain absent or retain
+  its original bytes while the foreign second generation is preserved.
+- Resolution: Commit `47b70c3` locks every target and captures each current
+  file through the anchored directory before publication. It validates the
+  complete batch against the persisted predecessor size, SHA-256, and native
+  generation fingerprint before preparing or moving the first output.
+- Verification: The PlanBundleImport regression is part of the tested route
+  integration. The 48-case production route suite and complete build passed in
+  workflow `31088424022`; the relevant production and test files are unchanged
+  between `47b70c3` and this audit reconciliation.
+
+### DUR-021: Staged route publication is not bound to its original pin
+
+- Status: FIXED
+- Code: `src/Train/StravaRoutesDownloadPipeline.cpp`,
+  `src/Train/StravaRoutesDownloadPipeline.h`, and
+  `src/Train/StravaRoutesDownload.cpp`
+- Impact: Route preparation and later publication trust a staging pathname
+  across phases. Replacement at that pathname can cause the importer to parse
+  or publish bytes other than the authenticated download.
+- Test-first evidence: `pinnedRouteBytesSurviveStagingParentSwap()` proves a
+  validated read continues from the original handle during a directory swap,
+  while `stagedRouteRejectsSameSizedPrevalidationReplacement()` substitutes a
+  same-sized foreign generation and requires rejection before the parser runs.
+- Resolution: Commit `47b70c3` carries an anchored `StagedRoutePin`, byte count,
+  and SHA-256 with each staged route. Preparation verifies the pathname still
+  names that pin before and after streaming, hashes the pinned bytes again, and
+  passes only the authenticated in-memory bytes to the parser and durable
+  publication journal. Later phases no longer reopen the staging pathname.
+- Verification: The pin-swap regressions and real production composition are in
+  the 48-case route suite that passed in workflow `31088424022`; the relevant
+  implementation and tests are unchanged at this reconciliation revision.
+
+### GUI-012: Abort is ignored during route import preparation
+
+- Status: FIXED
+- Code: `src/Train/StravaRoutesDownload.cpp` and
+  `src/Train/StravaRoutesDownloadPipeline.cpp`, plus
+  `src/FileIO/GpxParser.cpp`
+- Impact: After downloads complete, route parsing, hashing, and preparation can
+  run for long enough that Close or Abort appears ineffective. The suffix can
+  continue consuming CPU and may be imported despite the user's request.
+- Test-first evidence: `delayedPinnedReadCancellationKeepsGuiResponsive()` and
+  `delayedGpxParserCancellationKeepsGuiResponsive()` stall both expensive
+  preparation phases and require prompt worker exit while GUI heartbeats
+  continue. Prefix, queued-stage, and actual dialog-slot regressions cover
+  between-route cancellation, Abort, Close, and window close.
+- Resolution: Commit `47b70c3` moves preparation to an owned worker, polls its
+  lock-free cancellation check between routes and inside bounded file, XML,
+  interpolation, and parser work, and generation-fences every queued handoff.
+  Abort discards uncommitted preparation; a decision that became durable is
+  retained for recovery instead of being misreported or rolled back.
+- Verification: The 48-case route suite passed normally and under strict
+  ASan/UBSan/LSan during the original fix. Its unchanged production composition
+  also passed the complete build in workflow `31088424022`.
+
+### TEST-008: Route-import composition test substitutes a fake parser
+
+- Status: FIXED
+- Code: `unittests/Train/stravaRoutesDownloadPipeline/`,
+  `src/Train/ErgFile.cpp`, `src/Train/GpxParser.cpp`, and
+  `src/Train/TrainDB.cpp`
+- Impact: The byte-backed route test replaces production parsing with a fake,
+  so it can pass while real GPX-to-`ErgFile` composition, metadata transfer, or
+  TrainDB import wiring is broken.
+- Test-first evidence: `byteBackedErgFileSurvivesParserTemporaryCleanup()` feeds
+  real GPX bytes through `ErgFile::fromGpxContentBytes()`, verifies route points,
+  altitude and location after parser cleanup, imports the result into a
+  disposable `TrainDB`, and checks the persisted workout row and type.
+- Resolution: Commit `47b70c3` links the production `GpxParser`, `ErgFile`,
+  byte-backed adapter, `TrainDB`, and journal into the focused suite. Its small
+  composition stub supplies only isolated settings and power-zone dependencies;
+  it does not replace route parsing, workout construction, or persistence.
+- Verification: Real multi-route commit, rollback, cancellation, restart
+  recovery, and dialog composition are included in the 48-case suite. The
+  complete build passed in workflow `31088424022`, and these sources are
+  unchanged at this audit reconciliation.
+
+### DUR-022: Unavailable vault reads look empty during local Strava removal
+
+- Status: FIXED
+- Code: `src/Cloud/StravaCredentialPublisher.cpp`,
+  `src/Cloud/StravaCredentialDurability.cpp`, and
+  `src/Cloud/StravaAccountRemoval.cpp`
+- Impact: Backend read failure is converted to empty tokens and then marked
+  readable. Local-only disconnect can report success and persist `revoked`
+  while real credentials remain in an unavailable vault.
+- Test-first evidence: `unavailableVaultReadCannotReportLocalDisconnect` makes
+  local-only token reads unavailable and requires no success, disconnect,
+  deletion, or `revoked` state. After backend recovery, the same regression
+  requires retry to remove both original tokens and complete revocation.
+- Resolution: Commit `906b5e3` preserves checked credential-read status through
+  the publisher and removal coordinator. A local removal proceeds only when
+  both token reads are authoritative; `Unavailable` fails closed without
+  converting unknown credentials into an empty pair or publishing success.
+- Verification: All 21 account-removal cases passed under strict
+  ASan/UBSan/LSan with the implementation and pass again against integration
+  revision `daae182`.
+
+### DUR-023: Revocation becomes uncertain before any remote dispatch
+
+- Status: FIXED
+- Code: `src/Cloud/StravaAccountRemoval.cpp`,
+  `src/Cloud/StravaCredentialDurability.cpp`, and
+  `src/Cloud/StravaRevocationClient.cpp`
+- Impact: Removal enters `CommitUnknown` before distinguishing local-only work
+  or proving that a remote request was dispatched. A crash during local cleanup
+  or request-construction failure can therefore leave authorization permanently
+  uncertain even though no remote side effect was possible.
+- Test-first evidence: Local and confirmed-remote crash rows restart before the
+  first credential deletion. `requestCreationFailureRestoresRetryableAuthorization`
+  requires a pre-dispatch failure to restore the previous authorization, while
+  the dispatched-request rows retain fail-closed uncertainty.
+- Resolution: Commit `906b5e3` separates local cleanup from the remote boundary
+  and carries an explicit `mayHaveBeenDispatched` result from request creation.
+  A failure before dispatch retires the uncertain transition and restores the
+  prior retryable state; once dispatch may have occurred, recovery remains
+  blocked until the durable remote outcome and local-commit phase reconcile.
+- Verification: The implementation's durability and account-removal programs
+  passed under strict ASan/UBSan/LSan. At integration revision `daae182`, their
+  expanded focused suites pass 28/28 and 21/21 cases respectively.
+
+### DUR-024: macOS root aliases made anchored persistence unusable
+
+- Status: FIXED
+- Code: `src/FileIO/AnchoredFileSystem.cpp` and
+  `unittests/FileIO/anchoredFilesystem/testAnchoredFilesystem.cpp`
+- Impact: The anchored-directory walker rejected every symbolic path component
+  with `O_NOFOLLOW`. macOS exposes the system-owned `/var` directory as a link
+  to `/private/var`, so ordinary temporary paths below `/var/folders` failed
+  before their actual directory could be opened. This broke atomic persistence
+  for otherwise safe paths and cascaded into 192 credential-settings failures
+  on the native macOS runner.
+- Test-first evidence: A focused regression first reproduced the native `/var`
+  failure on macOS and, in a root-owned Linux fixture, failed with `Not a
+  directory`. A separate regression requires a user-controlled directory alias
+  to remain rejected.
+- Resolution: The Unix walker may resolve only its first root-level component,
+  and only when that component is a root-owned symbolic link. It reads the
+  target relative to the already opened root descriptor, verifies device,
+  inode, type, and owner again after the read, then restarts traversal from the
+  cleaned absolute target. Every later component remains protected by strict
+  descriptor-relative `O_NOFOLLOW` traversal, so user-controlled aliases and
+  alias chains are still rejected.
+- Verification: The focused Linux suite passes 89 cases with 14 platform
+  skips, and the complete credential suite passes 427 cases with seven
+  platform skips. GitHub Actions run 31105481269 builds and passes the anchored
+  filesystem test on macOS 15 and both filesystem suites on Windows 2025.
+
+### DUR-025: Windows name tunneling misclassified successful publications
+
+- Status: FIXED
+- Code: `src/FileIO/AnchoredFileSystem.cpp` and
+  `unittests/FileIO/anchoredFilesystem/testAnchoredFilesystem.cpp`
+- Impact: NTFS can preserve the creation time associated with a recently
+  vacated filename. `ReplaceFileW` and rename therefore changed the pinned
+  file's creation-time component even though its volume, native file ID, byte
+  extent, modification time, and contents still identified the published
+  source. The anchored helpers reported a partial failure after the mutation
+  had already succeeded, leaving callers in unnecessary recovery state.
+- Test-first evidence: The Windows regressions assign distinct creation times
+  to replacement generations and move copied output into a just-vacated name.
+  The original implementation failed the tunneled move in workflow
+  `31574659831`; ordinary copied-output moves provide the non-tunneled control.
+- Resolution: Commits `ee425df` and `7962023` verify post-publication identity
+  with the stable Windows volume and file ID plus extent, modification time,
+  and SHA-256. They accept only the documented creation-time inheritance and
+  refresh the pinned identity and durable-generation evidence after the native
+  operation; unrelated substitutions still fail closed.
+- Verification: Focused workflow `31574854649` passed the Windows and macOS
+  regressions. Full native workflow `31579686400` subsequently passed Linux,
+  macOS, and Windows after portable fixture and responsiveness stabilization.
+
+### BUILD-014: Vendored Python metadata can claim false file ownership
+
+- Status: FIXED
+- Code: `src/Resources/linux/generate-runtime-provenance.py`,
+  `src/Resources/linux/normalize-embedded-python.py`, and
+  `src/Resources/linux/MakeAppImageQt6.sh`
+- Impact: A vendored `.dist-info` directory can be treated as proof that nearby
+  Python files belong to that distribution even when authenticated package
+  metadata does not claim them. The AppImage SBOM and provenance can therefore
+  attribute injected or unowned code to a legitimate dependency.
+- Test-first evidence: Fixtures with legitimate metadata plus an unclaimed
+  module, forged top-level `.dist-info`, invalid RECORD hashes and sizes,
+  overlapping wheels, and out-of-scope paths exposed that directory proximity
+  was not an ownership proof.
+- Resolution: Wheel archives are digest-locked before use and their complete
+  member sets are authenticated against normalized RECORD paths, hashes, and
+  sizes. The resulting wheel manifest is the only ownership authority;
+  unclaimed, overlapping, missing, or conflicting files fail closed.
+- Verification: All 22 SBOM/provenance regressions pass, including false-owner,
+  exact-consumption, replacement, and source-manifest cases. Both independent
+  release package passes generated and verified complete runtime provenance and
+  SBOM output.
+
+### BUILD-015: Bundled Python runtime lacks authenticated provenance
+
+- Status: FIXED
+- Code: `src/Resources/linux/AppImagePackagingSupport.sh`,
+  `src/Resources/linux/generate-runtime-provenance.py`, and
+  `src/Resources/linux/generate-appimage-sbom.py`
+- Impact: Hashing the final embedded interpreter records what was packaged but
+  does not authenticate where the Python runtime and standard library came
+  from. A substituted runtime can receive internally consistent provenance.
+- Test-first evidence: Runtime substitution, omitted-file, extra-file, changed
+  digest, incomplete manifest, and post-install replacement fixtures all fail
+  unless the complete source runtime is authenticated and consumed exactly.
+- Resolution: Packaging verifies the pinned Python AppImage digest before
+  extraction, captures every base-runtime file before package installation,
+  binds its canonical path and digest to that locked source artifact, and
+  carries the identity into runtime provenance and the CycloneDX SBOM.
+- Verification: The 22-case provenance suite passes. The integrated two-pass
+  release independently downloaded, verified, normalized, and attributed the
+  Python runtime in both packages before producing byte-identical AppImages.
+
+### BUILD-016: Runtime provenance uses incompatible path ordering
+
+- Status: FIXED
+- Code: `src/Resources/linux/generate-runtime-provenance.py` and
+  `src/Resources/linux/generate-appimage-sbom.py`
+- Impact: Sorting or comparing mixed filesystem `Path` and POSIX-path values can
+  raise a type error or produce platform-dependent ordering. Packaging can fail
+  or emit nondeterministically ordered provenance from equivalent inputs.
+- Test-first evidence: Mixed filesystem and serialized paths exposed the
+  cross-type comparison. Regressions now cover manifest-defined ordering,
+  non-ASCII names, case-sensitive names, and serialized runtime paths.
+- Resolution: Paths are normalized once to canonical relative POSIX strings and
+  every provenance and SBOM ordering operation uses those strings as its key.
+- Verification: The path-order regressions pass as part of all 22 provenance
+  cases. Two independent release trees emitted byte-identical AppImages and
+  matching manifests and SBOMs.
+
+### BUILD-017: Release archives are extracted without a safe boundary
+
+- Status: FIXED
+- Code: `appveyor/safe-extract.py`, `appveyor/linux/install.sh`,
+  `appveyor/macos/install.sh`, `appveyor/windows/install.ps1`, and
+  `appveyor/linux/after_build.sh`
+- Impact: Dependency archives can contain traversal paths, absolute paths,
+  links, device names, or collisions that escape or corrupt the build tree.
+  AppVeyor Linux also has a direct `tar` path that bypasses any shared safety
+  checks.
+- Test-first evidence: Malicious ZIP and TAR fixtures cover traversal,
+  absolute and dotted paths, links, devices, Windows aliases, case and
+  file/directory collisions, encryption, size limits, and the former direct-tar
+  bypass, requiring rejection before publication.
+- Resolution: Linux, macOS, and Windows dependency installers route archives
+  through the shared staged extractor. It validates the complete member set,
+  bounds expansion, extracts without following archive links, and publishes
+  only a completely validated tree.
+- Verification: All eight safe-extraction regressions pass. The platform
+  packaging contracts pass, and the Linux release consumed only verified,
+  safely extracted inputs in both independent passes.
+
+### BUILD-018: Qt installation trusts unlocked layout and updater behavior
+
+- Status: FIXED
+- Code: `.devcontainer/install-verified-qt.py`,
+  `.devcontainer/aqt-requirements.lock`,
+  `.devcontainer/qt-6.8.3-linux-gcc64.lock`, and
+  `.devcontainer/Dockerfile`
+- Impact: A pinned top-level Qt version is insufficient when the downloader,
+  module layout, metadata, or updater can change independently. The same source
+  can install different toolchains or execute different installer code.
+- Test-first evidence: Regressions alter installer inputs, archive digests,
+  special members, module layout, updater targets, output state, and the ICU
+  destination; all must fail before an unverified tree is published.
+- Resolution: The installer environment and hash-locked Python dependencies are
+  fixed, every reviewed Qt archive and destination is declared in a lock, all
+  digests are verified before extraction, and exact path-bounded layout checks
+  reject updater or network fallback behavior.
+- Verification: All ten verified-Qt archive regressions pass. The release used
+  the locked Qt 6.8.3 SDK and reported it in both matching build manifests.
+
+### BUILD-019: CI dependencies are mutable and their gate expects tags
+
+- Status: FIXED
+- Code: `.github/workflows/ci.yml`,
+  `.github/workflows/ridecache-removal-native.yml`,
+  `.github/workflows/windows-durable-filesystem.yml`, and
+  `unittests/Build/ciTestRunner/testCiTestRunner.py`
+- Impact: Tag-based GitHub Actions can change without a source commit, while a
+  stale self-test that requires `upload-artifact@v7` rejects the safer
+  full-commit SHA form. CI is either mutable or fails after being pinned.
+- Test-first evidence: Workflow fixtures accept reviewed full commit SHAs and
+  container digests while rejecting tags, incorrect repositories, unknown
+  commits, mutable images, duplicate YAML keys, merge keys, and uncontracted
+  workflow changes.
+- Resolution: External actions and containers are pinned to reviewed immutable
+  identities in a checked-in lock. A trusted, hash-locked policy parser validates
+  workflow semantics and protected inputs before candidate jobs can execute.
+- Verification: All 32 immutable-action and workflow-policy regressions pass,
+  including the checked-in workflows and their complete protected-file
+  contract. Subsequent native GitHub workflow runs passed on Linux, macOS, and
+  Windows with those immutable references.
+
+### BUILD-020: Runtime provenance override is fail-open and forgeable
+
+- Status: FIXED
+- Code: `src/Resources/linux/AppImagePackagingSupport.sh` and
+  `src/Resources/linux/generate-runtime-provenance.py`
+- Impact: A package-index environment override can supply arbitrary ownership
+  claims and let production packaging generate apparently valid provenance for
+  unauthenticated files.
+- Test-first evidence: Production-mode override attempts, non-canonical fixture
+  paths, unauthorized fixture digests, and fixture mutation after authorization
+  are all rejected.
+- Resolution: Production provenance has no caller-controlled package index.
+  Tests may supply fixtures only through an explicit test mode whose canonical
+  path and preauthorized SHA-256 are checked before every use.
+- Verification: The production-CLI and fixture-authorization regressions pass
+  in the 22-case provenance suite. Both production package passes ran without a
+  fixture override and generated authenticated provenance.
+
+### BUILD-021: Native releases lack OAuth credential gates
+
+- Status: FIXED
+- Code: `appveyor/macos/after_build.sh`,
+  `appveyor/windows/after_build.ps1`, `appveyor/check-unconfigured-oauth.py`,
+  and `src/Core/Secrets.h`
+- Impact: AppImage packaging validates configured OAuth credentials, but macOS
+  and Windows artifacts can ship placeholder, absent, malformed, or unintended
+  credentials while still being presented as production builds.
+- Test-first evidence: ELF, Mach-O, and PE fixtures cover exact configured and
+  intentionally runtime-configured status plus placeholders, missing support,
+  malformed output, failed execution, loader injection, and unrelated binary
+  formats.
+- Resolution: Every platform probes the built executable through the same exact
+  versioned status contract immediately before packaging. Native releases reject
+  malformed or compile-time-configured credentials; public builds intentionally
+  obtain user-owned Strava credentials from the runtime vault instead.
+- Verification: All three cross-platform OAuth-gate regressions, seven macOS
+  payload regressions, and four Windows runtime regressions pass. The final
+  AppImage manifest reports the expected credential-free compile-time fallback
+  without exposing credential material.
+
+### BUILD-022: CI test inventory is incomplete and manually maintained
+
+- Status: FIXED
+- Code: `.github/scripts/run-tests.py`, `unittests/unittests.pro`,
+  `unittests/ci-required-tests.txt`, and
+  `unittests/Build/ciTestRunner/testCiTestRunner.py`
+- Impact: A hand-maintained allowlist can omit a repository test target without
+  failing CI. The current inventory misses `linkedActivitySaveCleanup`, leaving
+  durable linked-save behavior outside the release gate.
+- Test-first evidence: Runner fixtures omit a discoverable top-level and nested
+  test, change its project kind, add an unreviewed generated target, generate no
+  cases, or omit `linkedActivitySaveCleanup`; each case must fail.
+- Resolution: The runner discovers qmake test projects, reconciles them against
+  an explicit platform-aware inventory and generated targets, and rejects
+  missing, duplicate, mismatched, unexecuted, or zero-case suites.
+- Verification: The CI-runner self-test passes all failure and success fixtures,
+  including shadow builds and auxiliary tests. `linkedActivitySaveCleanup` is
+  registered in both the inventory and the native transaction workflow.
+
+### BUILD-023: Transformed libraries lose authenticated source provenance
+
+- Status: FIXED
+- Code: `src/Resources/linux/generate-runtime-provenance.py`,
+  `src/Resources/linux/AppImagePackagingSupport.sh`, and
+  `src/Resources/linux/MakeAppImageQt6.sh`
+- Impact: `patchelf` legitimately changes a copied Debian library, so the final
+  bytes cannot equal the package's authenticated digest. Requiring exact source
+  bytes rejects valid packaging, while dropping the check leaves transformed
+  runtime code unauthenticated.
+- Test-first evidence: Regressions mutate verified source and transformed
+  output, change the relative path or deployment tool, exercise SONAME aliases,
+  and require package-private libraries to be present in the pre-transform
+  snapshot.
+- Resolution: Packaging snapshots authenticated source libraries before
+  `linuxdeployqt`, binds each source package and digest to the reviewed tool
+  identity and declared transformation, then records the final path and digest
+  in provenance and the SBOM. Unconsumed and ambiguous records fail closed.
+- Verification: The source/output, tool, SONAME, snapshot, and exact-consumption
+  cases pass in the 22-case provenance suite. Both complete package passes
+  verified their transformed runtime manifests and produced the same AppImage.
+
+### BUILD-033: Clean builds cannot compile qmake-renamed Bison parsers
+
+- Status: FIXED
+- Code: `src/src.pro`, parser-specific `src/{Core,FileIO,Train}/*.tab.h`
+  compatibility headers, and
+  `unittests/Build/appImagePackaging/testYaccCompatibility.py`
+- Impact: Modern Bison makes each generated parser include its original
+  `<name>.tab.h`, while qmake immediately renames that header to
+  `<name>_yacc.h`. A clean Linux build therefore fails all five parser
+  compilations with missing-header errors; parallel builds expose several
+  failures at once and cannot produce a release.
+- Test-first evidence: The regression generated every declared `YACCSOURCES`
+  parser and reproduced five unresolved `.tab.h` includes after applying
+  qmake's rename. The independent release build failed the same way in
+  `DataFilter`, `JsonRideFile`, `RideDB`, and `WorkoutFilter` before reaching
+  the fifth parser.
+- Resolution: Each parser source directory now supplies a tracked forwarding
+  header from Bison's retained name to qmake's generated name. Keeping the
+  wrappers outside the output root also preserves in-source and shadow builds;
+  older Bison output remains compatible.
+- Verification: The parser regression regenerates every production grammar and
+  requires each retained include to resolve after qmake's rename. A clean
+  qmake-generated `make -j10` build of all five parser objects passes.
+
+### BUILD-034: Shadow builds link Qwt from the source tree
+
+- Status: FIXED
+- Code: `src/src.pro` and
+  `unittests/Build/appImagePackaging/testShadowBuildPaths.py`
+- Impact: The top-level build writes Qwt to `<build>/qwt/lib`, but every
+  application link branch searches `<source>/qwt/lib`. A clean shadow release
+  compiles the complete application and then fails at the final link with
+  `cannot find -lqwt`; a stale source-tree library could instead be linked.
+- Test-first evidence: The regression compared Qwt's declared `DESTDIR` with
+  all application release/debug link roots and observed three `PWD` values
+  where `OUT_PWD` was required. The independent release build reproduced the
+  final-link failure after compiling all objects.
+- Resolution: Release and debug links now resolve Qwt relative to `OUT_PWD`,
+  matching Qwt's shadow-build destination while retaining in-source behavior.
+- Verification: The path regression requires every platform branch to match
+  Qwt's output root. A generated shadow-build Makefile now links through
+  `-L<build>/src/../qwt/lib`, which contains the freshly built Qwt archive.
+
+### BUILD-035: Credential-free AppImage releases reject their own OAuth status
+
+- Status: FIXED
+- Code: `src/Resources/linux/AppImagePackagingSupport.sh` and
+  `unittests/Build/appImagePackaging/testAppImagePackaging.sh`
+- Impact: The default credential-free Linux package pass verifies that the
+  compile-time Strava fallback is absent and returns
+  `Strava OAuth compile-time fallback: unavailable`. The build-manifest encoder
+  did not recognize that exact successful status, so every such release stopped
+  after both independent ELF builds without producing an AppImage.
+- Test-first evidence: The manifest regression passed the exact status emitted
+  by `require_unconfigured_strava_oauth_build()` to
+  `create_appimage_build_manifest()` and reproduced
+  `Cannot encode an unknown Strava OAuth status.`
+- Resolution: The manifest encoder now maps the verified absent compile-time
+  fallback to `strava_oauth_configured=false`. Its fail-closed default still
+  rejects every unknown status.
+- Verification: The regression passes and the complete AppImage packaging suite
+  passes in the release-capable container, including credential, provenance,
+  SBOM, keychain, offscreen, and reproducibility checks.
+
+### BUILD-036: Jammy CI cannot install its pinned policy parser
+
+- Status: FIXED
+- Code: `.github/scripts/immutable-actions-requirements.lock`
+- Impact: The Linux CI job runs on Ubuntu 22.04 and invokes its release-policy
+  tests with the host's CPython 3.10. The hash lock covered only CPython
+  3.11-3.13 wheels, so a clean Jammy job rejected PyYAML's selected wheel and
+  stopped before immutable-action and packaging policy tests could run.
+- Test-first evidence: The complete AppImage packaging suite in a clean Jammy
+  container selected PyYAML's CPython 3.10 manylinux x86_64 wheel, then pip's
+  `--require-hashes` gate rejected its absent SHA-256.
+- Resolution: The lock now includes the exact CPython 3.10 x86_64 wheel digest
+  published in PyPI's PyYAML 6.0.2 release metadata and documents the actual
+  CPython 3.10-3.13 CI range.
+- Verification: The same clean Jammy suite now installs the locked wheel and
+  passes all immutable-action, credential, provenance, SBOM, keychain,
+  offscreen, and reproducibility checks.
 
 ### MEM-026: Duplicate activity imports leak the replaced RideItem
 
@@ -3360,82 +4353,141 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DATA-014: CPX reuse does not consistently bind weight and analysis inputs
 
-- Status: OPEN
-- Code: `src/FileIO/RideFileCache.cpp:113-181`,
-  `src/FileIO/RideFileCache.cpp:416-523`,
-  `src/FileIO/RideFileCache.cpp:2147-2165`, and
-  `src/FileIO/RideFileCache.cpp:3068-3268`
+- Status: FIXED
+- Code: `src/FileIO/RideFileCache.cpp`, `src/FileIO/RideFileCache.h`,
+  `src/FileIO/RideFileCacheIntegrity.cpp`, and
+  `src/FileIO/RideFileCacheIntegrity.h`
 - Impact: Item-aware mutable best/TIZ calls verify the current athlete weight,
   but filename and const-item overloads, the single-file mean-max helper, and
   in-memory aggregate reuse can accept source-authentic CPX values after weight
   changes. Zone/profile/configuration inputs that affect derived arrays are not
   represented in the persisted source identity. W/kg and zone-dependent
   results can therefore remain stale while the activity bytes are unchanged.
-- Test: Change weight and zone/configuration generations after creating a valid
-  CPX and require every public fast path and aggregate reuse path either to
-  reject it or to prove that the requested series is independent of the
-  changed input.
-- Fix direction: Define one explicit analysis-input fingerprint or generation,
-  persist it in CPX, and require it through a single item-aware read contract.
-  Keep legacy overloads only as wrappers that can resolve all required inputs.
+- Test-first evidence: Regressions create a source-authentic CPX with one
+  analysis fingerprint, then substitute weight-, zone-, and setting-equivalent
+  fingerprint generations. Cache-current checks, individual best/TIZ reads,
+  and batched best reads accept the original generation and reject every
+  changed generation. Aggregate tests run the production source-and-analysis
+  binding validator and reject both changed source bytes and a changed member
+  analysis generation. The CPX integrity test also proves that the persisted
+  analysis fingerprint is covered by the authenticated cache digest.
+- Resolution: CPX v27 authenticates a SHA-256 fingerprint of analysis-affecting
+  inputs alongside the source fingerprint. Its canonical input includes
+  activity date, sport and swim mode, weight, power/heart-rate/pace zone ranges
+  and thresholds, W'bal formula and tau, and wheel size. Full, partial, batched,
+  and aggregate reads require the current fingerprint whenever their result is
+  analysis-dependent. Explicitly independent mean-max series may use the
+  source-bound cache without resolving athlete analysis state; contextless
+  weight-dependent APIs fail closed instead of returning stale values.
+- Verification: The focused Qt 6.8.3 suites report 44 refresh and 45 integrity
+  tests passing normally, under strict ASan/UBSan/LSan, and in fresh binaries
+  linked with ThreadSanitizer. Existing v26 files are rejected and rebuilt once.
+  Set-wide aggregate mutation races remain tracked separately by `DATA-015`.
 
 ### DATA-015: Aggregate source validation has a set-wide TOCTOU window
 
-- Status: OPEN
-- Code: `src/FileIO/RideFileCache.cpp:113-130` and
-  `src/FileIO/RideFileCache.cpp:2147-2165`
+- Status: FIXED
+- Code: `src/FileIO/RideFileCache.cpp`, `src/FileIO/RideFileCache.h`, and
+  `unittests/FileIO/rideFileCacheRefresh/testRideFileCacheRefresh.cpp`
 - Impact: Cached aggregate reuse hashes source bindings sequentially. Source A
   can change after its comparison while source B is being hashed, allowing an
   aggregate derived from A's old contents to be returned after A has changed.
-- Test: Pause validation after source A, replace A while source B is read, and
-  require aggregate reuse to reject the mixed-generation source set.
-- Fix direction: Bind aggregate reuse to a library/activity generation that
-  changes with source mutations, or implement a bounded set-snapshot protocol
-  that verifies every member belongs to one stable generation before publish.
+- Test-first evidence: A deterministic validation hook replaces source A after
+  its source and analysis bindings have passed, before source B is checked. The
+  former single-pass validator accepted the mixed source set, producing two
+  passing harness cases and one failed race regression.
+- Resolution: Aggregate reuse now performs two complete ordered validation
+  passes. Every pass recomputes each source's strong content fingerprint and
+  resolves its current analysis fingerprint against the generation stored in
+  the aggregate. A mutation after an earlier member in the first pass is
+  therefore observed and rejected by the second pass before the aggregate is
+  returned.
+- Verification: The refresh suite reports 45/45 passing normally, under strict
+  ASan/UBSan/LSan, and in a fresh ThreadSanitizer-linked build. The guarantee is
+  a bounded two-snapshot point-in-time check; a non-cooperating process can
+  still mutate a source after the final observation, as with any unpinned
+  multi-file read set.
 
 ### DATA-016: Activity rename ignores derived-file rename failures
 
-- Status: OPEN
-- Code: `src/Core/RideCacheRemoval.cpp:358-421`
+- Status: FIXED
+- Code: `src/Core/RideCacheCalendarMutations.cpp`,
+  `src/Planning/PlanReplacementJournal.cpp`, and
+  `src/Planning/PlanReplacementJournal.h`
 - Impact: The activity source is renamed first, but failures to rename notes,
   CPI, or CPX files are ignored and the operation still reports success. A
   destination collision or filesystem error can therefore detach metadata,
   leave stale cache artifacts, or expose an unrelated same-basename sidecar
   under the renamed activity.
-- Test: Pre-create each destination sidecar and inject rename failures after
-  the source move. The operation must either publish one consistent artifact
-  set or report the partial outcome without losing the original metadata.
-- Fix direction: Stage and commit the source and metadata as one rollback-aware
-  transaction. Derived CPX data may be invalidated instead of moved, but notes
-  must not be silently detached and every failure must be surfaced.
+- Test-first evidence: Ten new ride-cache rows failed on the baseline. Renames
+  committed when unowned CPI, CPX, or notes targets already existed or appeared
+  during publication; shared CPI and notes files were not copied to the new
+  identity; and the shared-sidecar crash hooks were never reached because those
+  files were outside the journal. The required-absence journal regressions were
+  compile-RED because the journal had no way to bind a target that must stay
+  absent throughout publication and recovery.
+- Resolution: Activity files and every existing CPI, CPX, and notes artifact
+  are staged and published through one plan-replacement journal. Legacy CPI and
+  notes files shared by another activity are copied to the new identity while
+  the shared source is retained. Missing derived artifacts add anchored,
+  locked must-remain-absent entries to manifest version 2; version 1 journals
+  remain recoverable. A destination collision, concurrent appearance, parent
+  substitution, staging failure, or crash now either preserves the old
+  generation or leaves an explicit recovery journal instead of reporting an
+  inconsistent rename as successful.
+- Verification: On the final integrated source, the complete plan-replacement
+  suite reports 149/149 passing and the complete ride-cache removal and rename
+  suite reports 406/406 passing with one expected environment-specific skip.
+  Focused strict ASan/UBSan/LSan runs report 13/13 and 37/37 passing with leak
+  detection enabled. Fresh binaries confirmed to link `libtsan` report the same
+  13/13 and 37/37 under ThreadSanitizer. The sanitizer source files are
+  byte-identical to the integrated files.
 
 ### METRIC-004: Ride best ranking is sorted in the wrong direction
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/FileIO/RideFileCache.cpp:2846-2884`
 - Impact: `rank()` sorts values ascending and returns the first value less than
   or equal to the candidate. For values 100, 200, and 300, a candidate of 250
   is therefore reported as rank 1 instead of rank 2; most non-minimum results
   collapse to the top rank.
-- Test: Cover top, middle, bottom, ties, and rejected-cache rows with a fixed
-  best-value set and define the `of` and insertion-rank semantics explicitly.
-- Fix direction: Rank a descending sequence with a tie policy shared by the UI
-  consumers, using a standard bound operation instead of the current loop.
+- Test-first evidence: A fixed best-value set covers top, middle, bottom, ties,
+  a rejected cache row, and the defined `of + 1` last-place result. The old
+  ascending loop returned ranks `1, 1, 1, 1, 1, 4` where the expected ranks
+  are `1, 1, 2, 2, 4, 5`.
+- Resolution: Accepted values are sorted descending and ranked with
+  `std::lower_bound`, placing a tied candidate before equal existing values.
+  `of` remains the number of accepted cache rows, while insertion below every
+  row is reported as `of + 1`.
+- Verification: The focused data-driven QtTest regression passes in the remote
+  Qt 6.8.3 Docker build and covers top, middle, bottom, ties, rejected-cache
+  rows, and the documented `of` semantics.
 
 ### PERF-011: Verified CPX refresh duplicates full caches and payloads
 
-- Status: OPEN
-- Code: `src/FileIO/RideFileCache.cpp:1096-1196`
+- Status: FIXED
+- Code: `src/FileIO/RideFileCache.cpp`, `src/FileIO/RideFileCache.h`, and
+  `src/FileIO/RideFileCacheIntegrity.h`
 - Impact: Verified refresh retains the original `RideFileCache`, a second
   independently parsed cache, and two complete serialized `QByteArray`
   payloads at once. Long activities with large mean-max and distribution
   arrays can create a substantial avoidable memory peak.
-- Test: Exercise a large synthetic cache through verified refresh and assert
-  that comparison and persistence remain bounded to one serialized payload
-  plus a fixed-size streaming buffer.
-- Fix direction: Serialize one side through a streaming comparator or digest
-  sink, then stream the accepted payload to `QSaveFile` without retaining two
-  full byte arrays.
+- Test-first evidence: A large synthetic refresh records every destination
+  write. The pre-fix serializer issued a 96,836-byte payload write, exceeding
+  the 65,536-byte bound. A second regression mutates computed cache data after
+  verification and requires publication to fail rather than install a payload
+  different from the verified generation.
+- Resolution: Verification serializes each cache into a fixed-size SHA-256
+  digest sink instead of retaining complete payload byte arrays. The accepted
+  cache is then serialized directly through a hashing forwarding device to the
+  atomic writer in chunks of at most 64 KiB, and its byte count and digest must
+  still match the independently recomputed cache before commit.
+- Verification: The bounded-write and post-verification-mutation regressions
+  pass as part of the 44-test refresh suite normally, under strict
+  ASan/UBSan/LSan, and in a fresh ThreadSanitizer-linked build. The independent
+  verification cache's numeric tables still coexist temporarily with the
+  original computed tables, but the two full serialized payload copies have
+  been eliminated.
 
 ### DUR-012: CPX refresh can publish torn files and stale in-memory arrays
 
@@ -3553,20 +4605,31 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 - Status: FIXED
 - Code: `src/Core/CredentialSettings.cpp`,
-  `src/Core/CredentialSettings.h`, `src/Core/Settings.cpp`, and
-  `unittests/Core/credentialSettings/testCredentialSettings.cpp`
+  `src/Core/CredentialSettings.h`, `src/Core/Settings.cpp`,
+  `src/Cloud/Strava.cpp`, `src/Cloud/StravaTokenRefresh.cpp`,
+  `unittests/Core/credentialSettings/testCredentialSettings.cpp`, and
+  `unittests/Cloud/stravaTokenRefresh/testStravaTokenRefresh.cpp`, plus
+  `unittests/Cloud/stravaOAuthPolicy/testStravaOAuthPolicy.cpp`
 - Impact: Cache entries are invalidated by GoldenCheetah's revision sidecar, but
   direct keychain changes by another application do not advance that revision.
   Normal reads can therefore return a stale positive or negative value until a
   local mutation, cache clear, or restart. SEC-018 now bypasses cached misses
   when authorizing cross-file fallback, but ordinary credential reads retain
-  the broader stale-cache behavior.
+  the broader stale-cache behavior. A long-lived Strava service also treated
+  unchanged authorization metadata as proof that a newly read credential pair
+  was unchanged, extending an externally replaced or deleted token past cache
+  expiry.
 - Test-first evidence: With a deterministic monotonic test clock but no expiry
   behavior, external replacement, deletion, insertion after a cached miss, and
   a backend error after expiry produced four failures and only the three
   setup/memory-only cases passed. A second RED matrix showed that an
   authoritative read still returned a fresh cached positive after external
-  replacement or deletion: three cases passed and two failed.
+  replacement or deletion: three cases passed and two failed. The follow-up
+  `authoritativeStorageReconciliationObservesSameMetadataCredentialChange`
+  regression keeps storage metadata unchanged while replacing and deleting
+  the pair, then exercises the coordinator path used by `Strava`; the existing
+  storage-reconciliation source contract also forbids restoring the metadata
+  fast path.
 - Resolution: Persisted positive and all negative cache entries now carry a
   monotonic insertion timestamp and expire after 30 seconds. Lookup checks and
   erases an expired entry under the cache mutex; clock rollback also expires
@@ -3575,7 +4638,10 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   `ReadPolicy::RequireLiveVault` explicitly bypasses vault-backed positive and
   negative cache entries for legacy-fallback authorization. Pending
   memory-only writes remain visible without expiry but cannot report live-vault
-  evidence or authorize fallback.
+  evidence or authorize fallback. Strava now reconciles every authoritative
+  read against the complete in-memory pair and uncertainty state; an active
+  record with missing credentials becomes fail-closed pending state instead of
+  retaining the previous request token.
 - Verification: The final credential program passes 423 cases normally with
   zero failures and seven Linux platform skips. The final SEC-023 cache,
   policy, revision, process-mutation, and serialization matrix passes 29 cases
@@ -4583,165 +5649,363 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-007: Split transactions have no restart recovery journal
 
-- Status: OPEN
-- Code: `src/FileIO/AtomicFileWriter.h`,
-  `src/Gui/SplitActivitySave.cpp`
+- Status: FIXED
+- Code: `src/Core/RideCache.cpp`,
+  `src/FileIO/AtomicFileWriter.h`,
+  `src/FileIO/AnchoredFileSystem.cpp`,
+  `src/FileIO/AnchoredFileSystem.h`,
+  `src/Gui/SplitActivitySave.cpp`,
+  `src/Gui/SplitActivitySave.h`, and
+  `src/Gui/SplitActivityWizard.cpp`
 - Impact: Runtime failures are rolled back, but a process or power loss between
   publishing outputs, preserving an old backup, and archiving the source can
   leave a recoverable mixture of split files and `.rollback-*` state with no
   automatic reconciliation on restart.
-- Test: Run each durable transition in a subprocess, terminate it at injected
-  failpoints, restart, and require deterministic completion or rollback without
-  losing the source or a prior backup.
-- Fix direction: Use a private transaction directory and fsynced manifest with
-  explicit states, then reconcile incomplete transactions before loading the
-  activity cache.
+- Test-first evidence: Subprocess regressions crash at every durable save and
+  recovery transition, restart with a fresh process, and require one complete
+  generation without losing a source, prior backup, or foreign replacement.
+  The baseline had no persistent split intent or startup reconciliation path,
+  so interrupted publication could not satisfy that contract. Additional
+  regressions cover hostile and replaced journals, bounded handles and reads,
+  recovery deadlines, same-filesystem publication, and durable-generation
+  failures.
+- Resolution: Split publication now uses a private, permission-restricted
+  transaction directory with identity-bound and durably synchronized control
+  records. Source snapshots, prior backups, staged outputs, commit markers, and
+  cleanup transitions are validated through anchored handles. Recovery is
+  forward-only after the commit boundary, preserves unowned replacements, and
+  runs before `RideCache` loads activities. Work, payload, path, deadline, and
+  open-handle budgets bound hostile or abandoned journals.
+- Verification: `splitActivitySave` passes 104/0/0 normally and 104/0/0 under
+  strict ASan/UBSan/LSan. `atomicActivitySave` passes 331/0/0 in both modes;
+  `rideFileCacheRefresh`, `planReplacementJournal`, and `rideCacheRemoval` pass
+  45/0/0, 149/0/0, and 406/0/1 respectively in both modes. The full Qt 6.8.3
+  application links, and an isolated minimal-platform invocation reports
+  `GoldenCheetah V3.8-DEV2605 (5012)`.
 
 ### DUR-008: Staged-set rollback trusts a mutable target pathname
 
-- Status: OPEN
-- Code: `src/FileIO/AtomicFileWriter.h:697`
+- Status: FIXED
+- Code: `src/FileIO/AtomicFileWriter.h` and
+  `unittests/FileIO/atomicActivitySave/testAtomicActivitySave.cpp`
 - Impact: GoldenCheetah holds cooperative path locks, but another process can
   replace a newly published target before finalization fails. Rollback removes
   the current pathname and could therefore delete the other process's file.
-- Test: Replace a published target through an injected non-cooperating writer
-  during finalization and verify rollback removes only the exact file identity
-  created by this transaction.
-- Fix direction: Record and revalidate platform file identities or publish an
-  immutable generation and atomically switch one manifest instead of deleting
-  rollback targets by pathname.
+- Test-first evidence: A deterministic finalizer moves the transaction's
+  published activity aside, creates a different file at the target pathname,
+  and then fails. The unsafe baseline deleted that replacement; the regression
+  observed an empty target instead of the concurrent contents. A pre-existing
+  partial-publication test also demonstrated that a callback-created copy has
+  no provable identity continuity with its staging source.
+- Resolution: Staging files are pinned before their publisher runs. Every
+  claimed output is pinned through an anchored target parent and accepted as
+  transaction-owned only when its native identity, size, and SHA-256 digest
+  match the staging pin. Rollback removes owned outputs through the pinned
+  identity. Replaced targets and ambiguous callback-created outputs are retained
+  with an explicit error.
+- Verification: The focused regression passes, and the complete atomic-activity
+  program passes 311/0/0 normally, under strict ASan/UBSan/LSan with leak
+  detection, and under ThreadSanitizer without suppressions. SplitActivitySave
+  passes 33/0/0 under both sanitizer configurations. The complete production
+  application links and reports its version from an isolated minimal-platform
+  profile.
 
 ### PORT-001: Unix atomic-new publication requires hard-link support
 
-- Status: OPEN
-- Code: `src/FileIO/AtomicFileWriter.h` and
-  `src/Core/RideCacheRemoval.cpp`
+- Status: FIXED
+- Code: `src/FileIO/AtomicFileWriter.h`,
+  `unittests/FileIO/atomicActivitySave/testAtomicActivitySave.cpp`, and
+  `unittests/FileIO/atomicActivitySave/atomicActivitySave.pro`
 - Impact: Unix no-replace publication is implemented as `link(2)` followed by
   `unlink(2)`. Athlete libraries on filesystems that reject hard links cannot
   publish new save, split, backup-archive, or deletion transaction files even
   though each staging file is deliberately created in its target directory.
-  Activity and backup directories being on different filesystems is not itself a
-  deletion failure: deletion copies and verifies the source into the backup
+  Activity and backup directories being on different filesystems is not itself
+  a deletion failure: deletion copies and verifies the source into the backup
   namespace and performs each atomic move within one directory.
-- Test: Exercise save, split, backup-archive, and deletion publication on a Unix
-  filesystem that rejects hard links. Require a safe supported no-replace
-  primitive or an explicit preflight error before metadata changes.
-- Fix direction: Prefer a native no-replace rename primitive such as Linux
-  `renameat2(RENAME_NOREPLACE)` where available, retain the current partial-effect
-  reconciliation contract, and define a verified target-directory staging
-  fallback for Unix platforms without either primitive.
+- Test-first evidence: With hard links rejected, six production-path Linux
+  contracts failed before the change across split-set, archive, collision, and
+  target-identity cases. The expanded fixture also covers create-new save and
+  deletion publication, symlink and hard-link collisions, missing staging,
+  unsupported native calls, non-fallback native failures, and partial
+  link/unlink reconciliation.
+- Resolution: Linux publication first uses
+  `renameat2(RENAME_NOREPLACE)`, while macOS uses
+  `renameatx_np(RENAME_EXCL)`. Linux `ENOSYS`, `EINVAL`, and `EOPNOTSUPP`, plus
+  unsupported Unix platforms, retain the no-replace hard-link fallback. Other
+  native errors fail closed without a second publication attempt, and the
+  existing partial-effect flag continues to drive identity-preserving rollback.
+- Verification: The complete atomic-activity suite passes 331/331. The focused
+  native, collision, fallback, and rollback matrix passes 16/16 under strict
+  ASan/UBSan/LSan and 16/16 under genuine ThreadSanitizer with `libtsan.so.2`
+  verified. Linux exercised the native syscalls at runtime; macOS remains
+  compile-guarded and awaits native CI/runtime coverage.
 
 ### DB-001: VideoSync import uses video-table helpers
 
-- Status: OPEN
-- Code: `src/Train/TrainDB.cpp:1065`
+- Status: FIXED
+- Code: `src/Train/TrainDB.cpp`, `src/Train/TrainDB.h`, and
+  `unittests/Train/trainDbVersionSafety/testTrainDbVersionSafety.cpp`
 - Impact: Replace can delete a same-path video and update can skip an existing
   videosync row.
-- Test: Cover insert/update/replace with identical paths in both tables.
-- Fix direction: Use videosync helpers or one SQLite upsert.
+- Test-first evidence: The migration-retry and same-path replacement
+  regressions first exposed that VideoSync import selected and replaced rows
+  through the video-table helpers, allowing one table's row to affect the
+  other.
+- Resolution: VideoSync import now queries, updates, and replaces only
+  `videosync` rows. Same-path video rows remain untouched, and retries update
+  the existing VideoSync record instead of inserting a duplicate.
+- Verification: `trainDbVersionSafety` passes 35/0/0 normally and 35/0/0 under
+  strict ASan/UBSan/LSan.
 
 ### DB-002: Workout update does not update average power
 
-- Status: OPEN
-- Code: `src/Train/TrainDB.cpp:1027`
+- Status: FIXED
+- Code: `src/Train/TrainDB.cpp` and
+  `unittests/Train/trainDbVersionSafety/testTrainDbVersionSafety.cpp`
 - Impact: Edited workouts retain stale `erg_avg_power` metadata.
-- Test: Insert, change power, update, and query the stored average.
-- Fix direction: Assign the bound `:erg_avg_power` value.
+- Test-first evidence: The regression inserts a workout, changes its average
+  power, updates it, and reads the database directly. The baseline retained the
+  original value because the update statement did not assign the bound field.
+- Resolution: The workout update now writes `erg_avg_power` from its bound
+  value together with the rest of the mutable workout metadata.
+- Verification: The focused regression is part of the 35/0/0 normal and
+  35/0/0 strict ASan/UBSan/LSan `trainDbVersionSafety` runs.
 
 ### DB-003: Training-library transaction failures are ignored
 
-- Status: OPEN
-- Code: `src/Train/TrainDB.cpp:795`,
-  `src/Train/TrainDB.cpp:803`, `src/Train/Library.cpp:144`
+- Status: FIXED
+- Code: `src/Train/TrainDB.cpp`, `src/Train/TrainDB.h`,
+  `src/Train/Library.cpp`, `src/Train/LibraryImportFileStager.cpp`,
+  `src/Train/LibraryParser.cpp`, and `src/Train/WorkoutImportBatch.cpp`
 - Impact: Partial imports can be reported to the UI as successful.
-- Test: Force duplicate, schema, and commit failures and require rollback.
-- Fix direction: RAII transaction with propagated result and post-commit signals.
+- Test-first evidence: Regressions inject transaction-start, duplicate, schema,
+  import, serialization, copy, collision, and commit failures. The baseline
+  could retain earlier database rows or files, emit success signals, accept the
+  dialog, or overwrite metadata despite a later failure.
+- Resolution: `TrainDB::ScopedLUW` owns rollback unless an explicit commit
+  succeeds. Library refresh/import and dialog batches stage file replacements,
+  database writes, and `QSaveFile` metadata together; every failure propagates,
+  restores owned files and metadata, and suppresses success publication.
+  Signals and dialog acceptance occur only after the durable commit boundary.
+- Verification: `libraryTransactionSafety`, `libraryImportFileStager`, and
+  `libraryParserSerialize` pass 20/0/0, 12/0/0, and 4/0/0 respectively both
+  normally and under strict ASan/UBSan/LSan. The integrated 11-program matrix
+  passes 151/0/0 in both modes, the full Qt 6.8.3 application links, and an
+  isolated minimal-platform run reports `GoldenCheetah V3.8-DEV2605 (5012)`.
 
 ### TRN-004: Core-temperature header is written to the RR file
 
-- Status: OPEN
-- Code: `src/Train/TrainSidebar.cpp:3486`
+- Status: FIXED
+- Code: `src/Train/TrainSidebar.cpp`, `src/Train/TrainSidebarRuntime.h`, and
+  `unittests/Train/trainRuntime/testTrainRuntime.cpp`
 - Impact: TCR lacks its header and RR can be corrupted by a TCR header.
-- Test: Round-trip core and RR data both together and independently.
-- Fix direction: Construct the header stream on `tcoreFile`.
+- Test-first evidence: Round-trip fixtures exercise RR and TCR together and
+  with either file absent. The former TCR path selected the RR device, leaving
+  the TCR header empty and contaminating RR output.
+- Resolution: Auxiliary header selection names the RR and core-temperature
+  destinations explicitly; TCR output now constructs its stream on
+  `tcoreFile`.
+- Verification: The focused Train runtime suite passes 11/11 normally, under
+  strict ASan/UBSan/LSan, and in a ThreadSanitizer-linked build. The five
+  adjacent Train suites pass 66/66.
 
 ### TRN-005: Discard leaves auxiliary recording files behind
 
-- Status: OPEN
-- Code: `src/Train/TrainSidebar.cpp:1663`,
-  `src/Train/TrainSidebar.cpp:1701`
+- Status: FIXED
+- Code: `src/Train/TrainSidebar.cpp`, `src/Train/TrainSidebarRuntime.h`, and
+  `unittests/Train/trainRuntime/testTrainRuntime.cpp`
 - Impact: `.rr`, `.pos.csv`, `.vo2`, and `.tcr` files remain orphaned.
-- Test: Create every sidecar, discard, and require all artifacts removed.
-- Fix direction: Track and dispose the complete recording artifact set.
+- Test-first evidence: A temporary recording creates the primary CSV and every
+  supported auxiliary artifact. The former discard path removed only the CSV,
+  leaving all four sidecars present.
+- Resolution: Discard derives and removes the complete `.csv`, `.rr`,
+  `.pos.csv`, `.vo2`, and `.tcr` artifact set from the recording path.
+- Verification: Covered by the 11/11 normal and sanitizer-clean Train runtime
+  suite and the 9/9 adjacent recording-I/O suite. Individual removal failures
+  are retained in the helper result but are not yet surfaced in the UI.
 
 ### TRN-006: Initial start signal is emitted twice
 
-- Status: OPEN
-- Code: `src/Train/TrainSidebar.cpp:1408`,
-  `src/Train/TrainSidebar.cpp:1414`, `src/Train/VideoWindow.cpp:346`
+- Status: FIXED
+- Code: `src/Train/TrainSidebar.cpp`, `src/Train/TrainSidebarRuntime.h`, and
+  `unittests/Train/trainRuntime/testTrainRuntime.cpp`
 - Impact: Consumers reset twice and the first callback observes non-running state.
-- Test: `QSignalSpy` must observe exactly one start after complete initialization.
-- Fix direction: Set state/timers first and emit once.
+- Test-first evidence: A `QSignalSpy` contract requires exactly one signal and
+  verifies that initialization and the first target are complete when the
+  observer runs. A failure row also requires an initial-target failure to emit
+  no start signal. The former production path contained two notifications, the
+  first before running state was established.
+- Resolution: Start establishes running/recording state and timers, applies the
+  initial target, and emits one notification only after those steps succeed.
+- Verification: Both start rows pass in the 11/11 normal, strict
+  ASan/UBSan/LSan, and ThreadSanitizer runs.
 
 ### TRN-007: First workout target is delayed by the load timer
 
-- Status: OPEN
-- Code: `src/Train/TrainSidebar.cpp:1389`,
-  `src/Train/TrainSidebar.cpp:1438`, `src/Train/TrainSidebar.cpp:2432`
+- Status: FIXED
+- Code: `src/Train/TrainSidebar.cpp`, `src/Train/TrainSidebar.h`,
+  `src/Train/TrainSidebarRuntime.h`, and
+  `unittests/Train/trainRuntime/testTrainRuntime.cpp`
 - Impact: The trainer can retain its previous target for roughly one second.
-- Test: A fake controller must receive the zero-time target before event-loop
-  advancement.
-- Fix direction: Calculate and apply the initial target synchronously.
+- Test-first evidence: A fake-controller contract requires the zero-time load
+  before start completion, and explicit SLOPE rows distinguish initial workout
+  gradient selection from later timer updates. The former start path waited for
+  the first load-timer event.
+- Resolution: Start calls the shared workout-target path synchronously before
+  notification. ERG mode applies the zero-time load, while SLOPE mode initializes
+  the current slope from the workout gradient; later timer ticks preserve the
+  existing slope update behavior.
+- Verification: The focused initial-load, initial-slope, and failure rows pass
+  in all three 11/11 test configurations; the 20/20 FTMS target-readiness suite
+  also remains green.
 
 ### DEV-005: Daum restart leaves the trainer paused
 
-- Status: OPEN
-- Code: `src/Train/Daum.cpp:45`, `src/Train/Daum.cpp:50`
+- Status: FIXED
+- Code: `src/Train/Daum.cpp`, `src/Train/Daum.h`, and
+  `unittests/Train/trainRuntime/testTrainRuntime.cpp`
 - Impact: Both pause and restart set `paused_ = true`, preventing later load writes.
-- Test: State-machine test for start, pause, restart, and stop.
-- Fix direction: Set `paused_ = false` in restart.
+- Test-first evidence: The real Daum thread state-machine fixture starts,
+  pauses, restarts, stops, and joins the worker. The former restart left the
+  test-visible paused state true.
+- Resolution: `restart()` clears `paused_` while holding the existing state
+  mutex.
+- Verification: The lifecycle row passes normally, under strict
+  ASan/UBSan/LSan, and under ThreadSanitizer. A separate real no-device leak
+  discovered by the sanitizer investigation remains `MEM-027`.
+
+### MEM-027: Daum worker teardown leaks its serial port and timer
+
+- Status: FIXED
+- Code: `src/Train/Daum.cpp`, `src/Train/Daum.h`, and
+  `unittests/Train/trainRuntime/testTrainRuntime.cpp`
+- Impact: Destroying a started Daum controller does not release its unparented
+  `QSerialPort` and `QTimer`, retaining their Qt backing allocations for the
+  process lifetime.
+- Evidence: A strict ASan/LSan no-device lifecycle run reported 1,364 bytes in
+  11 allocations rooted at `Daum::openPort()` and `Daum::run()`.
+- Test-first evidence: Production-worker tests for failed open, pseudo-terminal
+  partial start, explicit stop/join, and destruction during initialization
+  reproduced three failures: partial shutdown took 9.34 seconds, destruction
+  aborted with `QThread: Destroyed while thread is still running`, and the
+  current strict LSan run retained 1,484 bytes in 11 allocations rooted at the
+  serial port and timer.
+- Resolution: The serial port and polling timer are now stack-owned by
+  `Daum::run()`, so every return path destroys them in their worker thread.
+  Failed open and failed initialization return immediately, the timer callback
+  is context-bound to the worker-owned timer, and `stop()` requests
+  interruption, exits the event loop, and joins the worker. The destructor uses
+  the same joined shutdown.
+- Verification: The complete `trainRuntime` suite passes 14/14 normally and
+  the same 14/14 under strict ASan/UBSan/LSan and genuine ThreadSanitizer. Five
+  adjacent Train suites pass 66/66, and the production `Daum` translation unit
+  compiles. The normal partial-start and destructor paths now complete in the
+  suite's approximately two-second total runtime.
+- Residual: `Daum` retains the standard `QThread` ownership requirement that
+  its controller object be destroyed outside its own worker thread; normal
+  controller teardown already satisfies that contract.
 
 ### METRIC-001: Missing/cyclic metric dependencies can loop forever
 
-- Status: OPEN
-- Code: `src/Metrics/RideMetric.cpp:226`,
-  `src/Metrics/RideMetric.cpp:242`, `src/Metrics/RideMetric.cpp:281`
-- Impact: Refresh workers repeatedly requeue an unresolvable parent metric.
-- Test: Missing, self-cycle, multi-node cycle, diamond, and valid graphs.
-- Fix direction: Validate and topologically order the dependency graph.
+- Status: FIXED
+- Code: `src/Metrics/RideMetric.cpp`,
+  `unittests/Metrics/rideMetricDependencyGraph/`, and
+  `unittests/unittests.pro`
+- Impact: Refresh workers repeatedly requeued an unresolvable parent metric;
+  a null metric clone crashed the process, and duplicate requests could publish
+  a null result after transferring ownership twice.
+- Test-first evidence: Production-path fixtures for a missing dependency, a
+  self-cycle, and a multi-node cycle did not terminate within three seconds and
+  had to be killed. The null-clone row terminated with `SIGSEGV`, while the
+  duplicate-request row returned a null metric. Diamond and ordinary acyclic
+  graphs provided ordering and shared-dependency controls.
+- Resolution: Metric computation discovers the reachable dependency graph,
+  propagates missing-dependency invalidity to dependents, and uses Kahn's
+  algorithm for a deterministic topological order. Cycles and their dependents
+  are omitted instead of requeued. Clones are held by `QSharedPointer` before
+  computation, duplicate roots are de-duplicated, and only non-null requested
+  metrics are returned.
+- Verification: The focused suite passes 9/9 on the integrated branch and the
+  same 9/9 under strict ASan/UBSan/LSan and genuine ThreadSanitizer. The
+  sanitizer rows also verify that dependency-only clones and returned roots
+  have deterministic ownership.
+- Residual: Invalid metrics are omitted from the result using the established
+  missing-metric contract; no user-facing diagnostic identifies a malformed
+  third-party or user metric graph yet.
 
 ### METRIC-002: User metrics retain the first athlete Context
 
-- Status: OPEN
-- Code: `src/Core/RideCache.cpp:77`, `src/Metrics/UserMetric.cpp:27`,
-  `src/Core/Context.cpp:134`
+- Status: FIXED
+- Code: `src/Core/RideCache.cpp`, `src/Core/RideItem.cpp`,
+  `src/Metrics/UserMetric.cpp`, `src/Metrics/RideMetric.cpp`, and
+  `src/Metrics/RideMetric.h`
 - Impact: Closing the first athlete can leave global metrics with a dangling
   context while other athletes remain open.
-- Test: Open two athletes, close the first, and evaluate/reload metrics under ASan.
-- Fix direction: Compile formulas context-free and pass athlete services at
-  evaluation time.
+- Test-first evidence: The new two-athlete regression first observed that the
+  compiled `DataFilter` retained the first athlete address after that athlete
+  was destroyed. The old registry also had no immutable replacement API with
+  which the concurrent lifetime tests could pin one generation.
+- Resolution: User formulas are compiled without an athlete `Context` and the
+  active ride supplies its context only while the formula is evaluated.
+  Clones share the immutable compiled program, so destroying or replacing the
+  defining metric cannot invalidate an in-flight evaluation.
+- Verification: `userMetricRegistrySafety` passes 8/8 normally and 8/8 under
+  strict ASan/UBSan/LSan. The context-retention row destroys the first athlete,
+  evaluates with a second athlete, reloads the definition, and verifies the
+  second athlete's value throughout. The complete release build links and its
+  112 QtTest suites pass 4,632 cases.
 
 ### METRIC-003: Global metric reload races other athlete workers
 
-- Status: OPEN
-- Code: `src/Gui/ConfigDialog.cpp:241`,
-  `src/Core/Context.cpp:130`, `src/Core/RideCache.cpp:743`
+- Status: FIXED
+- Code: `src/Core/Context.cpp`, `src/Core/RideCache.cpp`,
+  `src/Core/RideItem.cpp`, `src/Metrics/RideMetric.cpp`, and
+  `src/Metrics/RideMetric.h`
 - Impact: One athlete cancels only its own cache before global metric objects are
   removed while other workers may still use them.
-- Test: Multi-athlete metric reload during refresh under TSAN.
-- Fix direction: Publish an immutable registry snapshot under one lock.
+- Test-first evidence: The regression contract could not be satisfied by the
+  mutable global vector: readers received borrowed metric pointers while reload
+  removed those objects in place. It also lacked one atomic operation for
+  publishing metrics, indexes, dependencies, and the schema generation.
+- Resolution: The factory now builds a complete immutable registry generation
+  and atomically publishes one `shared_ptr` snapshot. Cache refresh and metric
+  evaluation pin that generation for their whole operation; reload never
+  mutates or frees objects still visible to another athlete worker.
+- Verification: The concurrent two-athlete reload suite passes 8/8 normally,
+  8/8 under strict ASan/UBSan/LSan, and 8/8 under genuine ThreadSanitizer while
+  replacing the registry hundreds of times. Dependency-graph tests pass 9/9
+  normally and under strict sanitizers, and `rideCacheSaveSnapshot` passes
+  29/29. An exact `1e73b52` Qt 6.8.3 production build reports configured
+  Strava OAuth, all 4,632 registered cases pass across 112 suites, and a
+  read-only isolated offscreen startup remains live for the full smoke window.
 
 ### GUI-001: RideNavigator stores a dangling stack address in QModelIndex
 
-- Status: OPEN
-- Code: `src/Gui/RideNavigatorProxy.h:243`
+- Status: FIXED
+- Code: `src/Gui/RideNavigatorProxy.h`,
+  `unittests/Gui/rideNavigatorProxyMapping/testRideNavigatorProxyMapping.cpp`,
+  and `unittests/unittests.pro`
 - Impact: `mapFromSource` stores `&p`, the address of a local pointer, as
   `internalPointer`; later mapping dereferences invalid stack memory. The heap
   allocated QModelIndex is also leaked and source row zero is excluded.
-- Test: Round-trip every source/proxy row under ASan, including row zero and
-  model resets.
-- Fix direction: Use stable model-owned identity/internal IDs without heap or
-  stack pointer storage.
+- Test-first evidence: The production-path proxy test passed only its setup and
+  teardown while row zero, complete source/proxy round trips, and reset
+  rebuilding all failed. The sanitizer run additionally reported 200 leaked
+  bytes in six allocations from the heap-allocated parent indexes.
+- Resolution: Child indexes now refer to the corresponding model-owned group
+  index, never a stack address or an allocated temporary. `mapFromSource()`
+  validates model ownership and bounds, maps source row zero, and uses the
+  complete ungrouped source-row domain. Reset and destruction clear every
+  owned group row vector and stable group index.
+- Verification: The registered production-path suite passes 6/6 normally and
+  6/6 under both ASan/UBSan/LSan and ThreadSanitizer. It round-trips every row
+  and column in grouped and ungrouped modes and verifies that persistent
+  indexes are invalidated and rebuilt on source reset. The production
+  `RideNavigator` object also compiles with the change.
+- Residual: Group index addresses remain stable for one model generation and
+  are deliberately replaced only inside a Qt model reset, which invalidates
+  previously issued indexes before their storage is released.
 
 ### GUI-002: Ride deletion can retain a deleted current selection
 
@@ -4762,8 +6026,11 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### GUI-003: Power histogram selection guard is inverted
 
-- Status: OPEN
-- Code: `src/Charts/PowerHist.cpp:2401`
+- Status: FIXED
+- Code: `src/Charts/PowerHist.cpp`, `src/Charts/PowerHist.h`,
+  `src/Charts/PowerHistSelection.cpp`,
+  `unittests/Charts/powerHistSelection/testPowerHistSelection.cpp`, and
+  `unittests/unittests.pro`
 - Impact: The `RideFilePoint*` overload enters its interval loop only when
   `rideItem` is null and then dereferences it. A null item can therefore
   crash, while every normal non-null ride skips the loop and reports all point
@@ -4772,62 +6039,152 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Evidence: GCC 13 diagnoses that the loop calls a member function through a
   null `this` pointer. The adjacent time-based overload has the intended
   positive guard.
-- Test: Exercise the point overload with no ride, a ride with no selected
-  intervals, overlapping selected intervals, and exact sample boundaries.
-- Fix direction: Return false for a null ride/point and iterate selected
-  intervals only when `rideItem` is valid, matching the time-based overload.
+- Test-first evidence: Calling the production selection path with a null
+  `RideItem` terminated with `SIGSEGV`; GCC also diagnosed the null-`this`
+  member call. Non-null selected intervals were never visited because the
+  inverted branch was skipped.
+- Resolution: The point overload delegates to one directly tested helper that
+  rejects a null ride or point before iterating selected intervals. A sample is
+  selected only when its half-open time span overlaps a selected interval,
+  preserving the existing histogram boundary semantics.
+- Verification: The registered helper suite passes 6/6 normally and 6/6 under
+  both ASan/UBSan/LSan and ThreadSanitizer. It covers null inputs, an empty
+  selection, exact start and stop boundaries, multiple intervals, and ignored
+  unselected intervals. Both `PowerHist` production translation units compile.
+- Residual: Selection continues to use the existing strict overlap test, so a
+  sample ending exactly at an interval start or beginning exactly at its stop
+  is intentionally not selected.
 
 ### MAP-001: Map nearest-point longitude scaling uses degrees as radians
 
-- Status: OPEN
-- Code: `src/Charts/RideMapWindow.cpp:1772`
+- Status: FIXED
+- Code: `src/Charts/MapRoutePointIndex.cpp`,
+  `src/Charts/MapRoutePointIndex.h`, and `src/Charts/RideMapWindow.cpp`
 - Impact: `cos(latitude)` receives degrees, selecting the wrong route point at
   many latitudes.
-- Test: Known routes at equatorial and high latitudes with expected nearest point.
-- Fix direction: Convert latitude to radians or use a geodesic helper.
+- Test-first evidence: Equatorial and positive/negative 60-degree fixtures
+  offer one latitude-offset and one longitude-offset route point. The former
+  degree-based cosine selected the latitude-offset point for both high-latitude
+  rows, producing two failures while the equatorial control passed.
+- Resolution: Route lookup converts the query latitude to radians before
+  scaling longitude. Equal-distance results retain original route order through
+  their source indices.
+- Verification: The focused 10-case Qt 6.8.3 suite passes normally, under strict
+  ASan/UBSan/LSan, and in a ThreadSanitizer-linked build. The production
+  `RideMapWindow` and index translation units also compile in the release
+  application build.
 
 ### MAP-002: Map mouse movement repeatedly scans the full activity
 
-- Status: OPEN
-- Code: `src/Charts/RideMapWindow.cpp:1758`
+- Status: FIXED
+- Code: `src/Charts/MapRoutePointIndex.cpp`,
+  `src/Charts/MapRoutePointIndex.h`, `src/Charts/RideMapWindow.cpp`, and
+  `src/Charts/RideMapWindow.h`
 - Impact: Every mousemove performs an O(N) point search, causing stalls for
   long/high-frequency activities.
-- Test: Benchmark hover on 10k/100k/1m point routes.
-- Fix direction: Spatial index or map-rendered point/index identifiers.
+- Test-first evidence: Deterministic 10,000-, 100,000-, and 1,000,000-point
+  fixtures count inspected entries per query. The former implementation
+  inspected every point in each row and failed all three bounded-work checks.
+- Resolution: Each displayed ride is indexed once by latitude. Lookup uses
+  binary search to enter the narrow latitude window, examines only nearby
+  points, applies the corrected longitude scaling, and returns the original
+  RideFile point index. Ride changes clear the index through the existing map
+  bridge reset path.
+- Verification: The final release build indexed one million synthetic points in
+  28 ms and inspected 13 points for the query; the 10k and 100k rows inspected
+  one each. All 10 cases pass normally and under both sanitizer configurations,
+  and the production map translation units compile. Timings are diagnostic;
+  pass/fail is based on returned identity and bounded examined-point counts.
 
-### ARCH-001: Context is a cross-layer mutable service locator
+### ARCH-001: Context directly owned session and persistence lifetimes
 
-- Status: OPEN
-- Code: `src/Core/Context.h:22`, `src/Core/Context.h:147`,
-  `src/Core/Context.cpp:154`
-- Impact: Core, GUI, Train, FileIO, Cloud, and WebEngine lifetimes are coupled,
-  making thread ownership and isolated tests difficult.
-- Test: Architectural dependency check plus headless construction tests for
-  extracted services.
-- Fix direction: Incrementally introduce `AthleteSession`, `TrainingSession`,
-  and narrow settings/persistence/application service interfaces.
+- Status: FIXED
+- Code: `src/Core/AthleteSession.*`, `src/Core/TrainingSession.*`,
+  `src/Core/SessionServices.h`, `src/Core/Context.*`,
+  `src/Core/ContextSessionServices.cpp`,
+  `src/FileIO/RideFileCache.*`, `src/Core/RideItem.cpp`, and
+  `unittests/Core/sessionBoundaries`
+- Impact: Training state, WebEngine/bridge resources, and CPX persistence-error
+  delivery shared one unstructured `Context` lifetime, making ownership,
+  thread-bound notification, and isolated testing difficult.
+- Test-first evidence: The dependency check initially failed because `Context`
+  had no owned session boundaries. After the first extraction, the production
+  build also failed on the remaining `&Context::workout` state alias; the
+  extended check reproduced that failure deterministically.
+- Resolution: `AthleteSession` owns the athlete-scoped WebEngine and persistence
+  services, while `TrainingSession` owns mutable workout, media, timeline, and
+  run state. `Context` keeps source-compatible delegation methods as a migration
+  layer. CPX writes use an injected `AthletePersistenceService`; legacy callers
+  that omit it fall back centrally through the owning `Context`, so reporting
+  cannot disappear silently. The manual-workout lease uses session accessors
+  instead of a `Context` data member.
+- Verification: The boundary suite links production `Context.cpp` and covers
+  construction/destruction, per-athlete session isolation, compatibility
+  wrapper propagation, persistence delegation, lazy bridge creation, and
+  profile lifetime through injected service factories. The cache regression
+  exercises the exact omitted-service failure path. Remote focused suites
+  passed 614 tests with one existing platform skip and no failures. The new
+  boundary and cache suites also passed strict ASan/UBSan and TSan runs (54
+  tests in each sanitizer configuration). The architecture check passed, and
+  the complete Qt 6.8.3/Qwt 6.8.0 application built, linked, and executed its
+  `--version` startup path in the constrained remote container.
+- Deferred Low: `Context` still exposes broad mutable
+  navigation, filter, selection, and comparison state and therefore remains a
+  wider service locator. Eliminating that coupling is outside the active
+  High/Medium goal. This FIXED status applies only to the scoped session and
+  persistence ownership/thread-lifetime extraction. Workout and video-sync
+  pointers retain their existing externally owned lifetime contract.
 
 ### ARCH-002: Unit tests link private application object files
 
-- Status: OPEN
-- Code: `unittests/unittests.pri.in:8`, `unittests/unittests.pri.in:19`,
-  `src/src.pro:41`
+- Status: FIXED
+- Code: `unittests/unittests.pri.in` and the explicit-source projects under
+  `unittests/Core`, `unittests/Gui`, and `unittests/Train`
 - Impact: Tests depend on build paths/configuration, compile as C++11 while the
   application uses C++17, and omit most parser/training registrations.
-- Test: Build tests from a clean tree on every platform without prebuilt app
-  object discovery.
-- Fix direction: Extract Core/FileIO/Train library targets and link tests normally.
+- Test-first evidence: A clean out-of-source `calendarData` build compiled its
+  test object and then failed at link time because
+  `../../../src/CalendarData.o` did not exist. The shared test configuration
+  discovered private `.o`/`.obj` files using the application build's
+  `OBJECTS_DIR`, and selected C++11 despite the application's C++17 baseline.
+- Resolution: The private object discovery, platform extension selection, and
+  `GC_OBJS` linker loop were removed. All eight remaining consumers now name
+  their production sources and required moc headers explicitly, while the
+  shared configuration selects C++17 and rejects any future `GC_OBJS` use at
+  qmake time. The aggregate test project now registers the broader parser,
+  database, GUI, and training suites independently of application objects.
+- Verification: Eight clean, independent qmake builds selected
+  `-std=gnu++1z`, compiled without a prebuilt application tree, and passed
+  108/108 tests: CalendarData 3, TrainPerspectiveState 6, SeasonOffset 8,
+  Utils 3, Season 32, Units 8, ANT lifecycle 9, and ANT burst bounds 39. A
+  source-tree dependency scan finds no remaining `GC_OBJS`, object-directory,
+  or platform object-extension consumer.
+- Residual: These focused tests compile their small production source sets
+  directly. Extracting reusable Core/FileIO/Train libraries would reduce
+  duplicate compilation and remains a broader architectural optimization, but
+  tests no longer depend on private application artifacts or language-mode
+  drift.
 
 ### CI-001: Pull-request CI does not execute unit tests
 
-- Status: OPEN
-- Code: `.github/workflows/ci.yml:28`, `.github/workflows/ci.yml:37`,
-  `.github/scripts/build.sh:69`
+- Status: FIXED
+- Code: `.github/workflows/ci.yml`, `.github/scripts/build.sh`,
+  `.github/scripts/run-tests.py`, `unittests/ci-required-tests.txt`, and
+  `unittests/Build/ciTestRunner/testCiTestRunner.py`
 - Impact: The CI "Test" step only invokes `--version`; parser, database, and
   platform regressions can merge despite the existing test suite.
-- Test: CI self-check must fail if zero test cases are discovered.
-- Fix direction: Linux/macOS/Windows matrix, build and run all tests, then add
-  ASan/UBSan, TSAN where viable, and parser fuzzers.
+- Test-first evidence: The runner self-test requires failures for zero test
+  cases, absent results, build-tool failures, missing and extra generated
+  targets, omitted discoverable projects, project-kind mismatches, and an
+  incomplete platform inventory.
+- Resolution: Trusted pull-request CI builds the application and registered unit
+  projects on Linux, macOS, and Windows, then runs every platform-eligible test
+  through the inventory-reconciling runner. Candidate identity and workflow
+  policy are validated before untrusted source is built.
+- Verification: The runner self-test passes its complete success and failure
+  matrix, and the immutable-workflow suite confirms all three platform jobs call
+  the runner with the complete inventory. Focused native workflows subsequently
+  passed their Linux, macOS, and Windows test matrices.
 
 ### CI-002: Season parser test depends on its working directory
 
@@ -4844,14 +6201,29 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### BUILD-001: Release dependencies and tooling are not reproducibly pinned
 
-- Status: OPEN
-- Code: `appveyor/linux/after_build.sh:36`,
-  `appveyor/linux/install.sh:28`, `src/Python/requirements.txt:5`
+- Status: FIXED
+- Code: `appveyor/linux/reproduce-appimage.sh`,
+  `appveyor/linux/build-appimage-pass.sh`,
+  `appveyor/linux/package-appimage-pass.sh`, `.devcontainer/Dockerfile`,
+  `.devcontainer/install-verified-qt.py`, the checked-in dependency locks, and
+  `src/Resources/linux/generate-appimage-sbom.py`
 - Impact: Moving tool/dependency targets can change or break artifacts for the
   same source commit.
-- Test: Repeat the build from a locked manifest and compare dependency/SBOM data.
-- Fix direction: Pin commits/digests, hash-lock Python dependencies, generate an
-  SBOM, and smoke-test AppImage on the oldest supported glibc.
+- Test-first evidence: Release-hardening regressions reject mutable or locally
+  substituted inputs, inherited build and packaging variables, mismatched
+  independent ELFs, incomplete SBOM coverage, unlocked snapshots, and release
+  entrypoints that bypass the reproduction driver.
+- Resolution: Release inputs, actions, tool archives, APT snapshots, Qt
+  archives, Python wheels, and runtime artifacts are pinned by reviewed hashes.
+  The driver builds and packages two isolated trees, compares their ELF and
+  AppImage bytes, embeds complete provenance, and emits a content-verified
+  CycloneDX SBOM.
+- Verification: The focused release-hardening, snapshot, extraction, Qt-lock,
+  immutable-action, and provenance suites pass. Two clean Jammy builds at
+  revision `b46e064` independently compiled and packaged the application,
+  passed the completed-AppImage offscreen gate on glibc 2.35, and produced the
+  same 251,214,328-byte image with SHA-256
+  `9142bc5f60a272051d039e33c23ee573ffb811f5804de2754bfa1d75650b19a6`.
 
 ### BUILD-003: AppImage Python runtime is incompatible and its release asset moves
 
@@ -5185,32 +6557,83 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### THREAD-008: Strava refresh followers can still freeze the GUI
 
-- Status: OPEN
-- Code: `src/Cloud/StravaTokenRefresh.cpp` and
-  `src/Train/StravaRoutesDownload.cpp`
+- Status: FIXED
+- Code: `src/Cloud/StravaTokenRefresh.cpp`,
+  `src/FileIO/GpxParser.cpp`, `src/Train/StravaRoutesClient.cpp`,
+  `src/Train/StravaRoutesDownload.cpp`, and
+  `src/Train/StravaRoutesDownloadPipeline.cpp`
 - Impact: A Routes request on the GUI thread can join an in-flight refresh by
   waiting on a condition variable. Although the leader's real network request
   is bounded to 30 seconds, GUI events are not processed while the follower
   waits, so Close and Abort cannot update the cancellation flag during that
   interval.
-- Test: Hold a worker refresh open, join it from the GUI through the Routes
-  path, post Close, and require prompt cancellation without waiting for the
-  leader's deadline.
-- Fix direction: Expose asynchronous shared-flight completion or move the
-  complete Routes request off the GUI thread. Do not solve this by pumping
-  arbitrary nested GUI events inside the coordinator.
+- Test-first evidence: A refresh leader is held open while the real Routes
+  follower starts from the dialog. A posted Abort must reach the follower and
+  complete promptly without waiting for the leader's deadline. Additional
+  regressions require completion on the GUI thread, worker-affine destruction
+  of the complete network-service object tree, prompt cooperative teardown,
+  safe non-joining teardown for a non-cooperative operation, and responsive
+  cancellation during pinned reads, GPX parsing, publication, and database
+  finalization. Additional RED rows enter the smart-recording interpolation
+  loop, exceed a test-bounded generated-point budget, pass an excessive
+  high-water mark, and cancel during the initial GPX XML validation scan.
+- Resolution: Route listing, downloading, validation, journal publication, and
+  database finalization run in owned worker threads. The dialog receives only
+  queued completion callbacks, and Abort/Close set a lock-free cancellation
+  flag and request thread interruption without pumping nested GUI events or
+  joining a network wait. Worker-owned Qt objects are parented to a worker
+  context and destroyed on that thread; shared operation leases keep staged
+  data alive across queued and reentrant finalization notifications. GPX smart
+  recording now caps its high-water mark and total generated representation,
+  polls cancellation inside interpolation, and makes the preliminary XML scan
+  cooperative.
+- Verification: The 48-case Strava Routes pipeline suite passes normally and
+  under strict ASan/UBSan/LSan. Its production-composition cases exercise the
+  actual dialog slots, asynchronous Strava service tree, reentrant deletion,
+  queued cancellation, and worker finalization. The 30-case Routes client suite
+  passes, the complete application links, and an isolated minimal-platform
+  `--version` smoke test reports `GoldenCheetah V3.8-DEV2605 (5012)`.
 
 ### PERF-008: Strava route imports no longer share one database transaction
 
-- Status: OPEN
-- Code: `src/Train/StravaRoutesDownload.cpp`
+- Status: FIXED
+- Code: `src/Train/StravaRoutesDownload.cpp`,
+  `src/Train/StravaRoutesDownloadPipeline.cpp`,
+  `src/Planning/PlanBundleImportJournal.cpp`,
+  `src/FileIO/AnchoredFileSystem.cpp`, and `src/Train/TrainDB.cpp`
 - Impact: Removing network waits from the original long transaction fixed lock
   duration, but each successfully downloaded route now starts and commits its
   own LUW. Importing many routes loses the previous batching benefit.
-- Test: Import a representative multi-route set and compare transaction count
-  and elapsed import time while proving no network wait occurs inside an LUW.
-- Fix direction: Separate bounded download and validation from a short batched
-  import phase, with bounded memory and correct partial-cancellation behavior.
+- Test-first evidence: Multi-route imports initially observed one LUW per route.
+  Regressions require one short LUW for every completed bounded batch, no
+  download or GPX parsing inside that LUW, one commit for a cancellation-safe
+  completed prefix, and complete rollback of both database and published files
+  on begin, import, commit, or generation-validation failure. Final regressions
+  force a post-handoff partial replacement, replace `trainDB` at the exact
+  publication boundary, invoke target validation outside an LUW, and restart
+  with both an intact and a same-content, different-generation substituted
+  displaced-predecessor artifact.
+- Resolution: Downloads are staged before database access in batches of at most
+  eight routes and 32 MiB. Pinned staged inputs are parsed and recorded in a
+  durable import journal off the GUI thread. A short finalization phase then
+  imports every prepared route through one `TrainDB::ScopedLUW`, validates the
+  published generation, removes the journal row, and commits once. Cancellation
+  preserves a completed prefix, and later batches begin only after cleanup.
+  The decision is additionally witnessed by a constant-size anchored marker
+  bound to the athlete, workout-root, and `trainDB` generations, so replacing
+  the logical database cannot make a committed decision disappear. Publication
+  validates that generation around each mutation, preserves `Partial` outcomes
+  for forward recovery, and derives deterministic predecessor names from the
+  persisted journal identity. Cleanup pins and verifies the predecessor before
+  deletion against the native generation fingerprint persisted in the SQLite
+  decision, and is retried on restart before bound database completion.
+- Verification: The 48-case pipeline suite passes normally and under strict
+  ASan/UBSan/LSan, including real multi-route TrainDB commit and rollback,
+  batches larger than eight routes, byte limits, partial failures, cancellation,
+  and all transaction rollback paths. PlanBundleImport passes 37 cases,
+  TrainDbVersionSafety 35, LibraryTransactionSafety 10, and RideCacheRemoval
+  406 with one platform skip, and AnchoredFileSystem 89 with 13 platform skips;
+  every listed suite passes normally and under strict ASan/UBSan/LSan.
 
 ### CLOUD-007: Removing Strava locally does not revoke provider authorization
 
@@ -5312,22 +6735,30 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Verification: Both RED rows pass in the 50-case normal, sanitizer, and
   ThreadSanitizer coordinator runs.
 
-### MEM-021: Strava phase callback could target a destroyed progress dialog
+### MEM-021: Cross-thread Strava callbacks could target destroyed QObjects
 
 - Status: FIXED
-- Code: `src/Gui/AthletePages.cpp`
+- Code: `src/Gui/AthletePages.cpp`, `src/Cloud/Strava.cpp`,
+  `src/Cloud/StravaTokenRefresh.cpp`, and
+  `unittests/Cloud/stravaTokenRefresh/testStravaTokenRefresh.cpp`
 - Impact: A worker checked a cross-thread `QPointer` and then separately passed
   its raw widget pointer to `QMetaObject::invokeMethod`. Destruction between
   those operations could make the invocation target dangling during settings
-  page or application teardown.
+  page or application teardown. The same check/use pattern remained in active
+  request abort callbacks: the removal worker checked a reply `QPointer` and
+  then used the reply as a queued invocation target while its owner thread
+  could destroy it.
 - Test-first evidence: Commit `92c7c1a` forbade the raw `QPointer` invocation
   target and required an independently owned GUI context before the fix.
+  `threadBoundAbortSurvivesTargetDestructionAtDispatch` deterministically
+  destroys the guarded target at the abort dispatch boundary.
 - Resolution: The worker retains a shared, GUI-affine `QObject` context for the
   queued phase update. The progress-dialog `QPointer` is dereferenced only
   inside the GUI-thread callback. A shared irreversible flag also prevents a
   late visible Cancel action from changing operation state, and the queued
   phase update restores a dialog hidden by a boundary-racing Cancel before
-  removing its Cancel control.
+  removing its Cancel control. Network aborts now queue through an independently
+  owned, owner-thread relay and dereference the reply only inside that thread.
 - Verification: The UI source contract and complete application build pass.
   Runtime widget lifecycle coverage remains tracked by `TEST-001`.
 
@@ -5350,37 +6781,89 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DUR-009: Partial Strava credential publication has no automatic recovery
 
-- Status: OPEN
+- Status: FIXED
 - Code: `src/Cloud/StravaTokenPublication.cpp`,
-  `src/Cloud/StravaCredentialPublisher.cpp`, and `src/Cloud/Strava.cpp`
+  `src/Cloud/StravaCredentialPublisher.cpp`,
+  `src/Cloud/StravaCredentialDurability.cpp`, and `src/Cloud/Strava.cpp`
 - Impact: Refresh-token rotation must persist the new refresh token before the
   corresponding access token. If the later access-token or timestamp write
   fails, the coordinator correctly leaves authorization pending, but
   production does not schedule recovery. The in-process coordinator still
   knows the observed pair and the publication primitive can retry, but a
   restart loses that evidence and requires reauthorization or disconnection.
-- Test: Inject a one-time access-token or timestamp persistence failure,
-  restart against the same settings and vault, and require deterministic
-  recovery without admitting API requests until the complete pair is active.
-- Fix direction: Persist a minimal secure recovery journal for the observed
-  pair and retry publication during startup. Never mark the grant active until
-  every credential and metadata write has committed and synchronized.
+- Test-first evidence: One-time access-token and timestamp failures leave a
+  complete pending package, then reconstruct the coordinator against the same
+  settings and secure store. Further regressions terminate a child process at
+  each durable transition, distinguish operations that never reached the
+  provider from unknown remote outcomes, reject transiently unreadable state,
+  and resume both local and confirmed-remote revocation cleanup. A final
+  restart regression preserves the vault grant after an indeterminate remote
+  revocation, requires the stale transaction fence to retire, and then starts
+  a new explicit local-cleanup generation. Follow-up regressions
+  `revocationConflictRecoveryPreservesNewerGrantUntilExplicitCleanup` and
+  `publicationConflictRecoveryRetiresFenceForExplicitRetry` cover newer-vault
+  conflicts after restart and require a new explicit generation to proceed.
+- Resolution: Every grant mutation has an account-bound transaction id and
+  generation. An anchored, atomically replaced journal records the previous
+  authorization state, mutation kind, remote-transition boundary, and an
+  authenticated pending token package before publication can advance. Startup
+  recovery reopens that exact generation, keeps authorization pending, and
+  either completes all credential, timestamp, state, revision, and sync writes
+  or leaves the journal intact for another retry. Incomplete or unreadable
+  evidence fails closed instead of admitting API requests. An indeterminate
+  revocation with retained credentials remains durably `revocation_pending`
+  with remote-grant uncertainty, but its obsolete journal generation retires
+  after that state is durable. Authenticated use remains blocked while an
+  explicit retry or local-only cleanup can acquire a new fenced generation.
+  Confirmed-revocation cleanup stores its expected token and removal mode only
+  in the secure pending credential package and replays the same CAS after
+  restart. A conflicting newer pair is preserved while the obsolete journal
+  retires fail-closed. Publication conflicts follow the same supersession rule
+  instead of permanently retaining a non-idle journal.
+- Verification: `stravaCredentialDurability` passes 26 cases normally and
+  under strict ASan/UBSan/LSan. Together with CredentialSettings (439 with
+  seven platform skips), athlete migration (116), OAuth policy (73), account
+  removal (21), and token refresh (55), the package passes 730 cases with zero
+  failures in both configurations. The complete application also builds and
+  links.
 
 ### DUR-010: Credential-scope mirror failure is not propagated
 
-- Status: OPEN
-- Code: `src/Core/Settings.cpp`
+- Status: FIXED
+- Code: `src/Core/Settings.cpp`, `src/Core/Settings.h`,
+  `src/Core/CredentialSettings.cpp`, `src/Core/CredentialSettings.h`, and
+  `unittests/Core/credentialSettings/testCredentialSettings.cpp`
 - Impact: `mirrorCredentialScope()` logs a failed system-settings sync but its
   callers still cache and return the scope identifier. A later legacy or
   pre-initialization path can then select a different scope after restart,
   while credential migration may already have written to the first scope.
-- Test: Inject system scope-mirror write and sync failures for global and
-  athlete mappings. Require an empty/failure result, no cached scope, no vault
-  write, no plaintext removal, and deterministic recovery after restart.
-- Fix direction: Return and propagate checked mirror durability. Do not expose
-  or cache a newly selected scope, migrate credentials, or scrub a source until
-  both its canonical target mapping and required compatibility mirror are
-  durable.
+- Test-first evidence: The fresh-enrollment fault matrix originally rejected
+  the first root, global-scope, athlete-profile, or athlete-scope authority
+  publication and exposed local identities that could not be recovered. Its
+  eight global and athlete rows now require the failed attempt to leave the
+  vault empty and plaintext intact, then require deterministic recovery both
+  in the same process and after reconstructing `GSettings`. Separate exact
+  settings transaction tests inject file and directory synchronization
+  failures into the shared durability primitive and require fail-closed
+  results.
+- Resolution: `mirrorCredentialScope()` and its invocation-local scope cache
+  were removed. Global and athlete scope selection now uses a checked,
+  two-phase external authority enrollment: a canonical location-bound intent
+  and claim must be durably published before local metadata is exposed, and
+  the authority record is completed only after the exact local binding is
+  durable. Every enrollment, binding, and completion failure returns an empty
+  scope, so callers cannot write the vault, migrate a credential, or scrub its
+  plaintext source prematurely. Pending authority state supports deterministic
+  same-process and restart recovery.
+- Verification: `interruptedFreshEnrollmentRecovers` passes all eight
+  write-failure and recovery rows, including global and athlete mappings. The
+  complete credential suite passes 426 cases normally, under strict
+  ASan/UBSan/LSan, and under ThreadSanitizer, with no failures and seven
+  platform-contract skips per run.
+- Residual: A durability failure can leave an authenticated pending authority
+  intent on disk, but it cannot authorize credential access until the complete
+  local tuple is verified. Recovery deliberately retries that pending intent
+  instead of generating a second scope.
 
 ### DUR-011: Failed vault deletion is not retried in the same process
 
@@ -5413,37 +6896,78 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### THREAD-010: Strava grant coordination is process-local
 
-- Status: OPEN
-- Code: `src/Cloud/StravaTokenRefresh.cpp` and
-  `src/Cloud/StravaCredentialPublisher.cpp`
+- Status: FIXED
+- Code: `src/Cloud/StravaTokenRefresh.cpp`,
+  `src/Cloud/StravaCredentialPublisher.cpp`, and
+  `src/Cloud/StravaCredentialDurability.cpp`
 - Impact: Static mutexes, registries, epochs, and request permits coordinate
   service clones only inside one GoldenCheetah process. Two processes using the
   same athlete profile can concurrently rotate, revoke, install, or publish a
   grant and defeat the otherwise serialized state machine.
-- Test: Run independent subprocesses against one disposable athlete settings
-  tree and fake provider. Force overlapping refresh, OAuth, and removal
-  operations and require one durable ordering with no stale token publication.
-- Fix direction: Add a per-athlete interprocess lease around remote grant
-  mutation and credential publication, backed by a durable generation checked
-  before and after each network transition.
+- Test-first evidence: Independent child processes overlap refresh, OAuth, and
+  removal against one disposable account and secure-store fixture. Each child
+  reports the generation and credentials it observed; the regression requires
+  a single durable order and rejects stale publication. Namespace-swap tests
+  also replace the lock and journal parents at mutation boundaries.
+- Resolution: Refresh, OAuth installation, and removal acquire one private,
+  account-derived interprocess lease before reading grant state or crossing a
+  provider boundary. The lease owns an anchored journal generation and every
+  transition revalidates its transaction id and generation before publication.
+  In-process coordination remains the fast path, while the durable generation
+  fences independent processes and restart recovery. Replaced lock or journal
+  namespaces fail closed.
+- Verification: The subprocess serialization and generation-fencing rows pass
+  in the 26-case durability suite normally and under strict ASan/UBSan/LSan.
+  The adjacent 55 refresh, 21 removal, and 73 OAuth policy cases pass in both
+  configurations.
 
 ### THREAD-011: Started Strava settings commits can block callers indefinitely
 
-- Status: OPEN
-- Code: `src/Cloud/StravaCredentialPublisher.cpp`
-  (`runOnSettingsThread`)
+- Status: FIXED
+- Code: `src/Cloud/StravaCredentialPublisher.cpp`,
+  `src/Cloud/StravaSettingsCommit.cpp`, and
+  `src/Cloud/StravaCredentialDurability.cpp`,
+  `src/Core/Settings.cpp`, `src/Core/CredentialStoreQtKeychain.cpp`, and
+  `unittests/Core/credentialSettings/testCredentialSettings.cpp`
 - Impact: Cancellation and deadline handling can abandon an operation that has
   not started on the settings thread. Once the GUI thread begins a credential
   write, the caller waits for its definitive result even after the deadline.
   This avoids reporting timeout while a mutation can later commit silently,
   but an indefinitely blocked credential backend can hang a worker or
   application teardown.
-- Test: Block a settings backend after the GUI-side operation starts, then
-  cancel and expire the deadline. Require bounded owner teardown and a durable,
-  explicit unknown or pending result that startup recovery can resolve.
-- Fix direction: Use a bounded or cancellable storage backend, or move the
-  durable operation to an owned worker with a recoverable transaction identity.
-  Do not return timeout while an untracked mutation can still commit.
+- Test-first evidence: A storage callback blocks only after it has started.
+  Cancellation and the deadline must return a tracked pending result promptly,
+  owner teardown must remain bounded, and a reconstructed coordinator must
+  resolve the same transaction. Additional rows race late pending-state writes
+  against a newer mutation generation and require GUI-originated credential
+  work to execute outside the application thread. A deterministic native-job
+  hook also queues keychain completion on the application thread while that
+  thread starts settings reconfiguration; the wait must process completion
+  before the shortened backend deadline instead of freezing the event loop.
+  `applicationThreadKeychainReentrancyDefersSettingsReconfiguration` starts the
+  native job directly on the application thread, reenters athlete settings
+  initialization from its nested loop, and requires that initialization to
+  return without touching `QSettings` until the owning suspension unwinds.
+- Resolution: Credential storage runs on a dedicated owned worker rather than
+  the GUI/settings owner thread. Before dispatch, the durable coordinator
+  records the transaction identity and pending phase. An unstarted callback can
+  be abandoned; a started callback that exceeds its deadline returns only an
+  explicit pending result backed by that journal. Late completion is accepted
+  only while its worker and mutation generations remain current, so it cannot
+  cross a newer grant mutation. Shutdown interrupts and joins cooperative work;
+  a wedged native callback is detached from future generations without blocking
+  the caller or allowing untracked publication. Application-thread settings
+  reconfiguration now releases the settings mutex and runs a restricted,
+  timer-bounded event loop while credential backends remain suspended. It
+  reacquires the mutex and rechecks the suspension count before any `QSettings`
+  object can be accessed, replaced, or destroyed by that reconfiguration. A
+  suspension owned by the current application-thread stack is detected
+  separately and causes reentrant initialization to defer immediately, avoiding
+  a nested-loop cycle in which only the blocked outer frame can clear it.
+- Verification: The started-commit deadline, generation fence, worker-affinity,
+  clean shutdown/restart, and recovery rows pass normally and under strict
+  ASan/UBSan/LSan. The full six-suite package passes 730 cases with zero
+  failures and seven platform-contract skips in both configurations.
 
 ### BUILD-010: AppImage credential gate treats absence of one marker as proof
 
@@ -5491,9 +7015,12 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### BUILD-011: AppImage metadata is not bound to the binary source revision
 
-- Status: OPEN
-- Code: `src/Resources/linux/AppImagePackagingSupport.sh:91`,
-  `src/Resources/linux/MakeAppImageQt6.sh:110`, and release orchestration
+- Status: FIXED
+- Code: `src/Core/main.cpp`, `src/src.pro`,
+  `src/Resources/linux/AppImagePackagingSupport.sh`,
+  `src/Resources/linux/MakeAppImageQt6.sh`,
+  `.devcontainer/package-appimage.sh`, `appveyor/linux/after_build.sh`, and
+  `appveyor.yml`
 - Impact: `GC_SOURCE_REVISION` is checked only for hash syntax. Packaging does
   not prove that the commit exists, the worktree was clean, or the supplied
   binary was built from that tree. A plausible but incorrect revision can be
@@ -5502,14 +7029,27 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
   the transferred AppImage, but the repository packager does not bind the
   revision to a raw-binary hash or place a verifiable manifest in the image.
   AppVeyor does not generate the same sidecar.
-- Test: Package a binary from revision A while claiming revision B and require
-  rejection. Verify a manifest containing source revision, raw ELF hash,
-  AppImage hash, toolchain identity, and boolean OAuth status across atomic
-  `latest`/`previous` rotation.
-- Fix direction: Build and package from a clean, identified source export;
-  generate one canonical manifest before deployment, embed the non-recursive
-  fields in the image, and verify source, binary, image, and sidecar hashes at
-  promotion time.
+- Test-first evidence: The first packaging test failed because the manifest
+  creation API did not exist. A second RED case failed because release
+  promotion had no implementation. The completed suite rejects revision A
+  binaries claimed as revision B, unknown/non-HEAD revisions, tracked and
+  untracked source changes, malformed binary reports, unknown OAuth state,
+  tampered images and sidecars, and failed post-publication durability syncs.
+- Resolution: Commit `1f57d86` gives the ELF a strict build-provenance command
+  and injects the full source revision during qmake configuration. All Linux
+  packagers now require an existing clean HEAD, match it to the ELF report,
+  hash the raw ELF, record toolchain and boolean OAuth state, embed the
+  non-recursive manifest, append the final AppImage hash to a mode-0600
+  sidecar, and verify the extracted copy. AppVeyor publishes the same sidecar.
+  Promotion copies verified immutable artifacts and swaps one generation
+  symlink so `latest` and `previous` change together; a late verification or
+  sync failure restores the former pointer.
+- Verification: The packaging helper suite passes, malformed qmake revisions
+  are rejected, and the production `main.cpp` compiles with the expected
+  revision embedded. A clean release build of `1f57d86` reported GCC 13.3.0,
+  Qt 6.8.3, C++17, the exact commit, and configured OAuth. Its 366 MiB AppImage
+  passed embedded/sidecar hash verification, libsecret and offscreen gates,
+  local atomic promotion, and a ten-second isolated-container GUI smoke test.
 
 ### BUILD-012: Primary AppImage packaging omits the libsecret runtime
 
@@ -5608,33 +7148,41 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### SEC-013: A desktop AppImage cannot keep its Strava client secret private
 
-- Status: OPEN
-- Code: `src/Core/Secrets.h`, `src/gcconfig.pri`, generated Makefiles, and
-  configured GoldenCheetah executables
-- Impact: A configured native client embeds its reusable application secret in
-  the executable. Anyone receiving that binary can recover the value and
-  impersonate the application, potentially consuming rate limits or causing
-  provider sanctions that affect every user of that client identity.
-- Evidence: The configured value can be matched between the private qmake
-  configuration and the extracted AppImage ELF without source access. Strava's
-  OAuth documentation calls the client secret private, but its current desktop
-  flow still requires it for code exchange and does not document PKCE.
-  Verbose qmake builds can additionally place it in command lines, logs, and
-  generated Makefiles; remote build directories have been restricted to mode
-  0700 as an operational mitigation.
-- Test: Scan release payloads and build artifacts for sentinel credentials,
-  verify restrictive permissions on unavoidable intermediates, and exercise a
-  public-client or brokered flow without a reusable secret in the binary.
-- Fix direction: Prefer a provider-supported PKCE/public-client flow. Until one
-  exists, choose explicitly between per-user registered applications and a
-  narrowly scoped server-side exchange service; neither obfuscating the binary
-  nor keeping only the source define private solves distribution exposure.
+- Status: FIXED
+- Code: `src/Cloud/StravaClientCredentials.*`,
+  `src/Cloud/AddCloudWizard.*`, `src/Cloud/OAuthDialog.*`,
+  `src/Cloud/Strava.cpp`, `src/Cloud/StravaOAuthPolicy.*`,
+  `src/Core/CredentialSettings.cpp`, `.github/workflows/ci.yml`,
+  `appveyor.yml`, and `util/add_secrets.ps1`
+- Impact: Public release builds no longer receive or require a shared Strava
+  client secret. Each athlete supplies a Strava client ID and secret at
+  runtime; the pair is stored atomically through the platform credential vault
+  and never through ordinary QSettings. A compile-time fallback remains only
+  for an explicitly requested private personal build.
+- Evidence: Runtime credentials take precedence. An unavailable vault or an
+  invalid runtime record fails closed without falling back, and blank UI fields
+  do not delete a record. Removal requires the dedicated, confirmed Remove
+  command. Authorization-code exchange, refresh, and revocation all add the
+  runtime secret to their redaction paths; STRAVA_DEBUG logs only the already
+  redacted token-failure message. Public GitHub Actions and AppVeyor workflows
+  contain no `GC_STRAVA_CLIENT_SECRET` injection, while the release gate accepts
+  a runtime-only binary with no compile-time fallback.
+- Test: `tst_stravaClientCredentials` passes 14 cases normally and under
+  ASan/UBSan/LSan from a shadow build; `testStravaOAuthPolicy` passes 68 cases;
+  the focused CredentialSettings selection passes 41 cases; Strava account
+  removal passes 21 cases; and both public-release credential and AppImage
+  packaging shell suites pass. The modified production translation units also
+  compile with a credential-free build configuration.
 
 ## Low
 
+As of 2026-08-05, open Low-severity findings are deferred and excluded from
+the active remediation goal. They remain documented for later prioritization;
+`DEFERRED` does not mean fixed or accepted as harmless.
+
 ### PERF-010: A valid zero activity CRC remains an unknown sentinel
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Core/RideItem.cpp:538`
 - Impact: ISO-3309 CRC value zero is valid, but `RideItem` treats every stored
   zero as unknown. An unchanged activity with such a checksum is conservatively
@@ -5646,7 +7194,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### PERF-009: OpenData capture can monopolize the GUI thread
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Cloud/OpenData.cpp`, `src/Core/RideDB.y`, and
   `src/Cloud/OpenDataSummaryStatistics.cpp`
 - Impact: The thread-safety fix for `THREAD-015` deliberately captures the
@@ -5671,7 +7219,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### PERF-012: Linked-removal peer staging duplicates the serialized activity
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Core/LinkedActivityRemovalJournal.cpp`,
   `src/FileIO/JsonRideFile.y`, and `src/FileIO/AtomicFileWriter.h`
 - Impact: JSON save already materializes the complete survivor payload, and the
@@ -5696,7 +7244,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### TEST-001: Strava disconnect UI lifetime coverage is source-only
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Gui/AthletePages.cpp` and
   `unittests/Cloud/stravaOAuthPolicy/testStravaOAuthPolicy.cpp`
 - Impact: The implementation guards the page and progress dialog lifetimes,
@@ -5714,7 +7262,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### TEST-002: Source-contract tests skip in out-of-source builds
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `unittests/Core/signalSafety/testPatternDetection.cpp`,
   `unittests/Core/signalSafety/testTreeSafety.cpp`, and their source-checking
   scripts
@@ -5733,7 +7281,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### TEST-003: Compressed OpenData reader suffixes lack end-to-end coverage
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Cloud/OpenData.cpp`,
   `src/Cloud/OpenDataCaptureUtils.cpp`, and
   `src/FileIO/CompressedActivityFile.cpp`
@@ -5753,7 +7301,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### TEST-004: Concurrent credential enrollment coverage is timing-sensitive
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Core/CredentialSettings.cpp:1608-1661`,
   `src/Core/CredentialSettings.cpp:4715-4805`, and
   `unittests/Core/credentialSettings/testCredentialSettings.cpp:16963-17341`
@@ -5776,7 +7324,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### TEST-005: Activity deletion caller workflows lack widget-level coverage
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Gui/MainWindow.cpp`, `src/Charts/CalendarWindow.cpp`,
   `src/Gui/BatchProcessingDialog.cpp`, `src/Gui/PlanWizards.cpp`,
   `src/Gui/SplitActivityWizard.cpp`, and `src/Planning/PlanBundle.cpp`
@@ -5799,7 +7347,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### TEST-006: Linked-deletion tests stub production metadata persistence
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `unittests/Core/rideCacheRemoval/RideCacheRemovalTestStubs.cpp`,
   `unittests/Core/rideCacheRemoval/testRideCacheRemoval.cpp`,
   `src/Core/RideItem.cpp`, and `src/Gui/SaveDialogs.cpp`
@@ -5818,7 +7366,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### TEST-007: Synchronous model-owner destruction leaves Qt removal bookkeeping
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `unittests/Core/rideCacheRemoval/testRideCacheRemoval.cpp`,
   `unittests/Core/rideCacheRemoval/RideCacheRemovalTestStubs.cpp`, and
   `src/Core/RideCacheRemoval.cpp`
@@ -5877,7 +7425,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### BUILD-008: Qt 6.8.3 reports impossible QVariant inline-storage overflows
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Charts/GoldenCheetah.cpp:969`,
   `src/Charts/GoldenCheetah.cpp:1166`,
   `src/Gui/Perspective.cpp:1642`, and the Qt 6.8.3 build image
@@ -5899,7 +7447,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### BUILD-009: Release builds have no project-warning gate
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: release qmake configuration and CI
 - Impact: The clean MEM-019 release build succeeds with 160 warnings from
   project, generated, vendored, and toolchain code. Genuine findings
@@ -5972,7 +7520,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### DEV-007: ANT FE-C spindown result aliases the zero offset
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/ANT/ANT.h`, `src/ANT/ANTlocalController.cpp`,
   `src/Train/TrainSidebar.cpp`
 - Impact: Successful ANT+ FE-C spindown calibration displays the zero-offset
@@ -5987,7 +7535,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### THREAD-005: Cloud SSL callbacks read a GUI parent in worker threads
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Cloud/Strava.cpp`, `src/Cloud/Nolio.cpp`, and other provider
   `onSslErrors` implementations; `src/Cloud/CloudService.cpp`
 - Impact: The base SSL helper now creates warnings on the GUI thread, but each
@@ -6000,7 +7548,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### THREAD-006: Nested start listeners can reorder cloud lifecycle signals
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Cloud/CloudService.cpp` (`CloudServiceAutoDownload::startDownload`)
 - Impact: The worker starts before `autoDownloadStart` finishes notifying all
   direct listeners. If an early listener runs a nested event loop, a fast worker
@@ -6014,7 +7562,7 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 
 ### CLOUD-008: Strava API host migration is still duplicated in call sites
 
-- Status: OPEN
+- Status: DEFERRED
 - Code: `src/Cloud/Strava.cpp` and
   `src/Train/StravaRoutesDownload.cpp`
 - Impact: Strava announced that its API base URL is changing from
@@ -6028,6 +7576,157 @@ Statuses are `OPEN`, `IN_PROGRESS`, `FIXED`, `DEFERRED`, or `NOT_REPRODUCIBLE`.
 - Fix direction: Centralize API URL construction now, retain the documented
   current host until Strava opens the replacement, then validate and switch in
   one place before the provider's removal deadline is announced.
+
+### BUILD-024: AppImage verification executes the untrusted candidate runtime
+
+- Status: FIXED
+- Code: `src/Resources/linux/AppImagePackagingSupport.sh`
+- Impact: Manifest, SBOM, OAuth, and keychain inspection invoke a candidate
+  AppImage with `--appimage-extract`. A malformed or substituted runtime can
+  execute arbitrary code before the release payload has been authenticated.
+- Regression test: Build a Type 2 fixture whose ELF runtime leaves an execution
+  marker, inspect it through every pre-trust verifier, and require successful
+  SquashFS extraction without creating the marker.
+- Resolution: Candidate inspection now copies the regular AppImage into a
+  private snapshot, authenticates the source and snapshot hashes around that
+  copy, parses the Type 2 offset without executing the runtime, and extracts
+  the snapshot with `unsquashfs`. A changed snapshot removes the extracted tree
+  and fails closed.
+- Verification: Both executable-runtime and same-size in-place mutation
+  fixtures pass with real `mksquashfs` and `unsquashfs`; the complete AppImage
+  packaging fixture also passes.
+
+### BUILD-025: AppVeyor dependency setup dirties its source worktree
+
+- Status: FIXED
+- Code: `appveyor/linux/install.sh`, `appveyor/linux/before_build.sh`, and
+  `appveyor.yml`
+- Impact: Linux setup creates `D2XX`, `srmio`, and `python-source` below the
+  repository root. The release clean-tree gate consequently rejects the build
+  inputs that its own installer created.
+- Regression test: Run dependency path setup against a temporary repository and
+  require every generated or downloaded path to remain outside the worktree.
+- Resolution: Linux setup uses one bounded external input root and passes each
+  authenticated dependency path explicitly to configuration and packaging.
+  Release source trees remain clean.
+- Verification: Release-hardening tests require every generated dependency
+  path to resolve outside the repository and reject source-tree inputs.
+
+### BUILD-026: AppVeyor restores release dependencies into non-empty targets
+
+- Status: FIXED
+- Code: `appveyor.yml` and `appveyor/linux/install.sh`
+- Impact: Whole extracted dependency directories are cached, while the
+  fail-closed extractor requires an empty target. A cache hit can therefore
+  make the next release setup fail or mix stale and current payloads.
+- Regression test: Assert that AppVeyor does not cache mutable extracted
+  dependency trees and that setup recreates a bounded external input root.
+- Resolution: AppVeyor no longer caches mutable extracted source trees. Each
+  release pass recreates its bounded input root and extracts only verified,
+  pinned archives into empty destinations.
+- Verification: Pipeline-isolation tests reject extracted-tree cache entries
+  and non-empty or in-worktree release input roots.
+
+### BUILD-027: Source provenance omits ignored and local build inputs
+
+- Status: FIXED
+- Code: `src/src.pro`, `src/Core/main.cpp`, and
+  `src/Resources/linux/AppImagePackagingSupport.sh`
+- Impact: A clean Git revision does not identify ignored `gcconfig.pri`,
+  `GeneratedSecrets.h`, or arbitrary `LOCALHEADERS` and `LOCALSOURCES`.
+  BUILD-011 metadata can therefore claim a committed source identity for a
+  binary compiled from different inputs.
+- Regression test: Change an ignored effective configuration after producing a
+  binary provenance fixture and require packaging to reject it; reject local
+  source/header injection in release input identity generation.
+- Resolution: The compiled provenance and release manifest bind a deterministic
+  identity for effective `gcconfig.pri`, optional `GeneratedSecrets.h`, and Qwt
+  configuration. Release identity generation rejects local source and header
+  extensions.
+- Verification: Build-input fixtures mutate ignored configuration and require
+  rejection, while compiled report and manifest identities must match exactly.
+
+### BUILD-028: SBOM verification does not authenticate payload coverage
+
+- Status: FIXED
+- Code: `src/Resources/linux/generate-appimage-sbom.py` and
+  `src/Resources/linux/AppImagePackagingSupport.sh`
+- Impact: The verifier checks CycloneDX shape and sidecar equality but does not
+  require one accurate component for every payload file and symlink. Missing,
+  stale, or modified runtime files can pass the current gate.
+- Regression test: Verify a complete fixture, then remove a component, alter a
+  payload file, and redirect a symlink; every mutation must be rejected.
+- Resolution: The SBOM preserves the primary payload role for every file and
+  symlink and records Python provenance in a separate property. Verification
+  enforces exact path coverage, hashes, sizes, modes, link targets, and payload
+  containment.
+- Verification: Complete payload fixtures pass; missing entries, altered files,
+  redirected links, and Python-role substitutions are rejected.
+
+### BUILD-029: AppImage tooling inherits release-affecting host variables
+
+- Status: FIXED
+- Code: `src/Resources/linux/AppImagePackagingSupport.sh`
+- Impact: `appimagetool` and package smoke commands inherit variables such as
+  `VERSION`, signing/update settings, Qt plugin paths, and Python paths. Host
+  state can alter output or load code outside the verified package.
+- Regression test: Poison every relevant variable in a fake packaging tool and
+  require only the explicitly controlled locale, timezone, architecture, and
+  source epoch to reach it.
+- Resolution: Build, packaging, and smoke tools now run through separate
+  `env -i` allowlists. The reproducible build path supplies only authenticated
+  revision/epoch, fixed locale/timezone, private HOME/TMPDIR, Qt root, and
+  deterministic archive settings; host compiler and flag variables are absent.
+- Verification: Poisoned-environment tests confirm release-affecting host
+  variables do not reach build or packaging tools.
+
+### BUILD-030: Two-pass packaging reuses one compiled executable
+
+- Status: DEFERRED
+- Code: `appveyor/linux/after_build.sh`,
+  `appveyor/linux/package-appimage-pass.sh`,
+  `.devcontainer/package-appimage.sh`, and
+  `src/Resources/linux/MakeAppImageQt6.sh`
+- Impact: Byte-identical packages from the same ELF prove packaging
+  determinism, not source-build reproducibility. Local and devcontainer paths
+  additionally perform only one packaging pass.
+- Regression test: Drive the orchestration with fake compilers that stamp
+  distinct build roots, require two independent clean builds, and verify that
+  each pass packages its own executable before comparison.
+- Fix direction: Share one two-build/two-package orchestrator, isolate both
+  build roots, and compare complete release outputs.
+
+### BUILD-031: GUI smoke exits before GoldenCheetah runtime initialization
+
+- Status: DEFERRED
+- Code: `src/Core/main.cpp` and
+  `src/Resources/linux/AppImagePackagingSupport.sh`
+- Impact: The current marker proves only that `QApplication` entered its event
+  loop. It exits before bundled keychain configuration, local-store process
+  setup, and application defaults, so packaged startup regressions can pass.
+- Regression test: Require the smoke marker path to occur after non-profile
+  runtime initialization and to perform matching local-store shutdown.
+- Fix direction: Keep the disposable profile, initialize the bounded runtime
+  prerequisites, then emit an `application-runtime-ready` marker from the event
+  loop and shut down cleanly.
+
+### BUILD-032: APT snapshot integration bypasses the real Docker bootstrap
+
+- Status: FIXED
+- Code: `.devcontainer/Dockerfile` and
+  `unittests/Build/appImagePackaging/testAptSnapshot.py`
+- Impact: The optional integration test installs live CA and Python packages
+  before switching to the snapshot, so it cannot validate the actual
+  no-trust-yet bootstrap ordering used by the development image.
+- Regression test: Build the Dockerfile's named bootstrap stage directly with
+  no cache and require snapshot metadata verification and pinned CA/OpenSSL
+  installation to complete there.
+- Resolution: The real Docker bootstrap stage is built directly. Its initial
+  trust store comes from a SHA-256-pinned CA package whose digest was verified
+  against the signed Ubuntu snapshot index; APT then installs the exact pinned
+  CA/OpenSSL packages and verifies snapshot metadata before other dependencies.
+- Verification: All 13 APT tests pass, including a no-cache networked build of
+  the actual `apt-snapshot-bootstrap` stage.
 
 ## Verification Baseline
 

@@ -4,9 +4,13 @@ exists(unittests.pri) {
 	include(unittests.pri)
 }
 
-equals(GC_UNITTESTS, active) {
-	SUBDIRS += Build/appImagePackaging \
+	equals(GC_UNITTESTS, active) {
+	SUBDIRS += Build/ciTestRunner \
+			   Build/headerIncludePaths \
+			   Build/publicReleaseCredentials \
+			   Build/linkerSectionFlags \
 			   Core/athleteMigrationSafety \
+			   Core/sessionBoundaries \
 			   Core/credentialSettings \
 			   Core/dataFilterResources \
 			   Core/dataFilterSafety \
@@ -17,10 +21,12 @@ equals(GC_UNITTESTS, active) {
 			   Cloud/oauthTokenReplyController \
 			   Cloud/stravaAccountRemoval \
 			   Cloud/stravaAuthenticatedSession \
+			   Cloud/stravaClientCredentials \
 			   Cloud/stravaOAuthPolicy \
 			   Cloud/stravaApiReplyPolicy \
 			   Cloud/stravaTokenRefresh \
 			   Cloud/stravaTokenPublication \
+			   Cloud/stravaCredentialDurability \
 			   Cloud/openDataEndpointPolicy \
 			   Cloud/openDataCaptureUtils \
 			   Cloud/openDataCaptureStateMachine \
@@ -29,14 +35,20 @@ equals(GC_UNITTESTS, active) {
 			   Cloud/openDataTransport \
 			   Charts/indendPlotMarkerMatrix \
 			   Charts/mapPageSecurity \
+			   Charts/powerHistSelection \
+			   Charts/mapRoutePointIndex \
 			   Charts/voronoiSafety \
 			   Train/libraryImportFileStager \
 			   Train/stravaRoutesClient \
+			   Train/stravaRoutesDownloadPipeline \
 			   Train/webDownloadImportPolicy \
 			   Train/trainDbVersionSafety \
-			   Core/measuresAtomicSave \
-			   Core/plannedActivityFileStager \
-			   Core/rideCacheAtomicSave \
+			   Train/libraryTransactionSafety \
+			   Train/libraryParserSerialize \
+				   Core/measuresAtomicSave \
+				   Core/plannedActivityFileStager \
+				   Core/linkedActivitySaveCleanup \
+				   Core/rideCacheAtomicSave \
 			   Core/rideCacheCallbackGuard \
 			   Core/rideCacheSaveSnapshot \
 			   Core/rideCachePerformance \
@@ -72,12 +84,17 @@ equals(GC_UNITTESTS, active) {
 			   Gui/activityDeletionWorkflow \
 			   Gui/activitySaveWorkflow \
 			   Gui/cacheWriteWarning \
+			   Gui/guiStartupPolicy \
+			   Gui/guiSmokeShutdown \
+			   Gui/openGLVersionProbe \
+			   Gui/calendarModalWorkflow \
 			   Gui/calendarData \
 			   Gui/mergeActivityDistanceCursor \
 			   Gui/mergeActivityRidePreparation \
 			   Gui/mergeActivityTimeOffset \
 			   Gui/mergeActivityXData \
 			   Gui/rideImportBatch \
+			   Gui/rideNavigatorProxyMapping \
 			   Gui/repeatPlanWorkflow \
 			   Gui/mergeActivityAlignment \
 			   Gui/iconBundleSecurity \
@@ -87,6 +104,8 @@ equals(GC_UNITTESTS, active) {
 			   Gui/rideNavigatorSearchFilter \
 			   Gui/trainPerspectiveState \
 			   Metrics/rideMetadataAtomicSave \
+			   Metrics/rideMetricDependencyGraph \
+			   Metrics/userMetricRegistrySafety \
 			   Metrics/estimatorThreadControl \
 			   Planning/planBundleImportJournal \
 			   Planning/planReplacementJournal \
@@ -104,10 +123,14 @@ equals(GC_UNITTESTS, active) {
 			   Train/trainingStopPolicy \
 			   Train/trainingRecordingIo \
 			   Train/trainingTelemetryTimeline \
+			   Train/trainRuntime \
 			   Train/ftmsTargetReadiness \
 			   Train/bluetoothTelemetryRouter
+	linux:SUBDIRS += Build/appImagePackaging
 	!win32:SUBDIRS += Train/usbXpressSafety
 	CONFIG += ordered
+	CI_ENABLED_TESTS = $$SUBDIRS
+	write_file($$OUT_PWD/ci-enabled-tests.txt, CI_ENABLED_TESTS)
 } else {
 	message("Unittests are disabled; to enable copy unittests/unittests.pri.in to unittests/unittests.pri")
 }

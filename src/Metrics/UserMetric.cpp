@@ -20,12 +20,12 @@
 #include "UserMetricSettings.h"
 #include "DataFilter.h"
 
-UserMetric::UserMetric(Context *context, UserMetricSettings settings)
+UserMetric::UserMetric(UserMetricSettings settings)
     : RideMetric(), settings(settings)
 {
-    // compile the program - built in a context that can close.
-    program = new DataFilter(NULL, context, settings.program);
-    program->refcount = 1;
+    // User metrics are global. Athlete services are supplied by RideItem when
+    // the immutable program is evaluated, so the compiled form owns no athlete.
+    program.reset(new DataFilter(NULL, nullptr, settings.program));
     root = program->root();
     rt = &program->rt;
 
@@ -42,12 +42,15 @@ UserMetric::UserMetric(Context *context, UserMetricSettings settings)
     clone_ = false;
 }
 
+UserMetric::UserMetric(Context *, UserMetricSettings settings)
+    : UserMetric(std::move(settings))
+{
+}
+
 UserMetric::UserMetric(const UserMetric *from) : RideMetric()
 {
-    RideMetricFactory::instance().mutex.lock();
     this->settings = from->settings;
     this->program = from->program;
-    this->program->refcount++;
 
     this->root = from->program->root();
     this->finit = from->finit;
@@ -67,19 +70,11 @@ UserMetric::UserMetric(const UserMetric *from) : RideMetric()
 
     // we are being cloned
     clone_ = true;
-    RideMetricFactory::instance().mutex.unlock();
 }
 
 UserMetric::~UserMetric()
 {
-    // program is shared, only delete when last is destroyed
-    RideMetricFactory::instance().mutex.lock();
-    if (program) {
-        program->refcount--;
-        if (!program->refcount) delete program;
-    }
     if (clone_) delete rt;
-    RideMetricFactory::instance().mutex.unlock();
 }
 
 RideMetric *

@@ -33,8 +33,12 @@
 #include <QTextStream>
 #include <QTextEdit>
 #include <QRegExp>
+#include <functional>
+#include <memory>
 #include "Zones.h"      // For zones ... see below vvvv
 #include "LocationInterpolation.h"
+
+struct GpxParserOptions;
 #include "Settings.h"
 
 // which section of the file are we in?
@@ -123,6 +127,11 @@ class ErgFile : public ErgFileBase
 
         ~ErgFile();             // delete the contents
 
+        std::weak_ptr<const char> lifetimeToken() const
+        {
+            return lifetimeToken_;
+        }
+
         void finalize();        // finish up ergfile creation
 
         void setFrom(ErgFile *f); // clone an existing workout
@@ -130,6 +139,31 @@ class ErgFile : public ErgFileBase
 
         static ErgFile *fromContent(QString, Context *, QDate when = QDate()); // read from memory *.erg
         static ErgFile *fromContent2(QString, Context *, QDate when = QDate()); // read from memory *.erg2
+        static ErgFile *fromContentBytes(
+            const QByteArray &contents,
+            const QString &sourceFileName,
+            ErgFileFormat mode,
+            Context *context,
+            QString &error,
+            const std::function<bool()> &cancelled = {},
+            QDate when = QDate());
+        static ErgFile *fromGpxContentBytes(
+            const QByteArray &contents,
+            const QString &sourceFileName,
+            ErgFileFormat mode,
+            Context *context,
+            QString &error,
+            const std::function<bool()> &cancelled = {},
+            QDate when = QDate());
+        static ErgFile *fromGpxContentBytes(
+            const QByteArray &contents,
+            const QString &sourceFileName,
+            ErgFileFormat mode,
+            Context *context,
+            const GpxParserOptions &options,
+            QString &error,
+            const std::function<bool()> &cancelled = {},
+            QDate when = QDate());
 
         static bool isWorkout(QString);  // is this a supported workout?
 
@@ -145,12 +179,24 @@ class ErgFile : public ErgFileBase
         bool isValid() const;            // is the file valid or not?
 
 private:
+        bool parseGpxFile(
+            const std::function<bool()> &cancelled,
+            QString &error);
+        bool parseGpxFile(
+            const GpxParserOptions &options,
+            const std::function<bool()> &cancelled,
+            QString &error);
+        bool setFromRideFile(
+            std::unique_ptr<class RideFile> ride,
+            const std::function<bool()> &cancelled = {});
         void sortLaps() const;
         void sortTexts() const;
 
         bool coalescedSections = false;
 
         QDate when;
+        std::shared_ptr<const char> lifetimeToken_ =
+            std::make_shared<const char>(0);
 
 public:
         void coalesceSections();

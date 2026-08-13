@@ -11,7 +11,8 @@ CONFIG += console testcase c++17 release
 CONFIG -= debug
 
 SOURCES = testMeasuresAtomicSave.cpp \
-          ../../../src/Core/Measures.cpp
+          ../../../src/Core/Measures.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp
 
 HEADERS = ../../../src/Core/Measures.h \
           ../../../src/FileIO/AtomicFileWriter.h
@@ -28,9 +29,9 @@ INCLUDEPATH += ../../../src \
                ../../../src/Train \
                ../../../qwt/src
 
-QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-QMAKE_LFLAGS += -Wl,--gc-sections
+include(../../section-gc.prf)
 LIBS += -lz
+win32:LIBS += -ladvapi32
 
 sanitize:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

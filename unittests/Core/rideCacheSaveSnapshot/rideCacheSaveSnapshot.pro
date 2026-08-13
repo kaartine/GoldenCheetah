@@ -14,7 +14,8 @@ SOURCES = testRideCacheSaveSnapshot.cpp \
           ../../../src/Core/RideCacheBackgroundSaver.cpp \
           ../../../src/Core/RideCacheSaveCapture.cpp \
           ../../../src/Core/RideCacheSaveSnapshot.cpp \
-          ../../../src/Core/RideCachePersistence.cpp
+          ../../../src/Core/RideCachePersistence.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp
 
 HEADERS = ../../../src/Core/RideCacheBackgroundSaver.h \
           ../../../src/Core/RideCacheSaveCapture.h \
@@ -46,6 +47,7 @@ linux|win32-g++ {
 macx {
     QMAKE_LFLAGS += -Wl,-dead_strip
 }
+win32:LIBS += -ladvapi32
 
 sanitize:!tsan:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

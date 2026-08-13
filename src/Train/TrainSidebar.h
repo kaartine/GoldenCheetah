@@ -37,6 +37,7 @@
 #include "TrainingStopPolicy.h"
 #include "TrainingRecordingIo.h"
 #include "TrainingTelemetryTimeline.h"
+#include "TrainSidebarRuntime.h"
 
 // standard stuff
 #include <QDir>
@@ -345,6 +346,7 @@ class TrainSidebar : public GcWindow
         static constexpr RecordingStopAction DiscardRecording = RecordingStopAction::Discard;
 
         void finishStop(RecordingStopAction recordingAction);
+        bool applyWorkoutTarget(bool initializeSlope);
         bool writeRecordingData(const QByteArray &data);
         void stopForRecordingFailure(TrainingRecordingIo::Failure failure);
         TrainingTelemetryTimeline::SampleTime auxiliaryTimestamp(

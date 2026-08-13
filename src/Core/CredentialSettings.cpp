@@ -34,6 +34,8 @@
 #include <chrono>
 #include <cstring>
 #include <cstdlib>
+#include <memory>
+#include <mutex>
 #include <utility>
 
 #ifdef Q_OS_UNIX
@@ -65,11 +67,16 @@ bool windowsCredentialPathHasNoReparseComponents(
     const QString &path);
 #endif
 
-QMutex &credentialOperationMutex()
+std::recursive_mutex &credentialOperationMutex()
 {
-    static QMutex mutex;
+    static std::recursive_mutex mutex;
     return mutex;
 }
+
+thread_local unsigned int credentialOperationMutexDepth = 0;
+thread_local unsigned int credentialOperationWildcardDepth = 0;
+thread_local QHash<QString, unsigned int> credentialOperationContextDepth;
+thread_local QStringList credentialOperationContextStack;
 
 bool credentialRootIsSecure(
     const QFileInfo &directory)
@@ -1132,6 +1139,7 @@ QString credentialStateDirectory()
 
     const QString rootPath =
         QFileInfo(root).absoluteFilePath();
+    QString stableAncestor;
 #ifdef Q_OS_WIN
     QString stableRoot;
     bool createdRoot = false;
@@ -1141,7 +1149,25 @@ QString credentialStateDirectory()
             &retainedRoot, !explicitRoot)) {
         return {};
     }
+    stableAncestor = stableRoot;
 #else
+    QString existingAncestorPath = rootPath;
+    while (!QFileInfo::exists(existingAncestorPath)) {
+        const QString parent =
+            QFileInfo(existingAncestorPath).absolutePath();
+        if (parent == existingAncestorPath)
+            return {};
+        existingAncestorPath = parent;
+    }
+    const QFileInfo existingAncestor(
+        existingAncestorPath);
+    if (!existingAncestor.isDir())
+        return {};
+    stableAncestor =
+        existingAncestor.canonicalFilePath();
+    if (stableAncestor.isEmpty())
+        return {};
+
     const bool createdRoot =
         !QFileInfo::exists(rootPath);
     if (!QDir().mkpath(rootPath))
@@ -1158,12 +1184,17 @@ QString credentialStateDirectory()
 #endif
     }
     const QFileInfo rootDirectory(rootPath);
-    if (!credentialRootIsSecure(rootDirectory))
+    if (!rootDirectory.isDir()
+        || rootDirectory.isSymLink()) {
         return {};
+    }
     const QString stableRoot =
         rootDirectory.canonicalFilePath();
-    if (stableRoot.isEmpty())
+    if (stableRoot.isEmpty()
+        || !credentialRootIsSecure(
+            QFileInfo(stableRoot))) {
         return {};
+    }
 #endif
 
     QString applicationPath;
@@ -1217,14 +1248,6 @@ QString credentialStateDirectory()
         return {};
 #endif
 
-    QString stableAncestor = stablePath;
-    while (true) {
-        const QString parent =
-            QFileInfo(stableAncestor).absolutePath();
-        if (parent == stableAncestor)
-            break;
-        stableAncestor = parent;
-    }
     if (!credentialDirectoryTreeIsDurable(
             stablePath, stableAncestor,
             createdRoot || createdApplication
@@ -1611,9 +1634,16 @@ public:
         const QString &operationId,
         int processWaitMilliseconds = 0)
     {
-        if (!credentialOperationMutex().tryLock())
+        if (CredentialSettingsDetail::
+                credentialOperationContextActive(operationId)) {
             return;
+        }
+        credentialOperationMutex().lock();
+        ++credentialOperationMutexDepth;
         localLocked_ = true;
+        context_ = std::make_unique<
+            CredentialSettingsDetail::
+                CredentialOperationContextScope>(operationId);
 
         const QString directory =
 #ifdef Q_OS_WIN
@@ -1663,8 +1693,12 @@ public:
     {
         if (processLock_ && processLock_->isLocked())
             processLock_->unlock();
-        if (localLocked_)
+        context_.reset();
+        if (localLocked_) {
+            Q_ASSERT(credentialOperationMutexDepth > 0);
+            --credentialOperationMutexDepth;
             credentialOperationMutex().unlock();
+        }
     }
 
     explicit operator bool() const
@@ -1694,10 +1728,8 @@ public:
             return false;
         const QString lockPath =
             backendMutationLockPath();
-        if (CredentialSettingsDetail::
-                backendMutationMarkerStatus(lockPath)
-            != CredentialSettingsDetail::
-                BackendMutationMarkerStatus::Absent) {
+        if (!CredentialSettingsDetail::
+                recoverBackendMutationMarker(lockPath)) {
             return false;
         }
         QLockFile lock(lockPath);
@@ -1750,6 +1782,8 @@ private:
     bool localLocked_ = false;
     bool admitted_ = false;
     QString stateBasePath_;
+    std::unique_ptr<CredentialSettingsDetail::
+        CredentialOperationContextScope> context_;
     std::unique_ptr<QLockFile> processLock_;
 #ifdef Q_OS_WIN
     ScopedWindowsHandle rootDirectoryHandle_;
@@ -1971,19 +2005,25 @@ void credentialCrashPoint(const QByteArray &point)
 }
 
 #ifdef Q_OS_UNIX
-bool syncCredentialDescriptor(int descriptor)
+bool syncCredentialDescriptor(
+    int descriptor,
+    bool requestFullSync)
 {
 #ifdef Q_OS_DARWIN
-    int fullSyncResult;
-    do {
-        fullSyncResult =
-            ::fcntl(descriptor, F_FULLFSYNC);
-    } while (fullSyncResult == -1
-             && errno == EINTR);
-    if (fullSyncResult == 0)
-        return true;
-    if (errno != EINVAL && errno != ENOTSUP)
-        return false;
+    if (requestFullSync) {
+        int fullSyncResult;
+        do {
+            fullSyncResult =
+                ::fcntl(descriptor, F_FULLFSYNC);
+        } while (fullSyncResult == -1
+                 && errno == EINTR);
+        if (fullSyncResult == 0)
+            return true;
+        if (errno != EINVAL && errno != ENOTSUP)
+            return false;
+    }
+#else
+    Q_UNUSED(requestFullSync)
 #endif
 
     int result;
@@ -2024,7 +2064,7 @@ bool syncCredentialDirectoryPath(
     if (descriptor == -1)
         return false;
     const bool synchronized =
-        syncCredentialDescriptor(descriptor);
+        syncCredentialDescriptor(descriptor, false);
     return ::close(descriptor) == 0 && synchronized;
 }
 #endif
@@ -2095,7 +2135,7 @@ bool syncCredentialFile(
     if (descriptor == -1)
         return false;
     const bool synchronized =
-        syncCredentialDescriptor(descriptor);
+        syncCredentialDescriptor(descriptor, true);
     return ::close(descriptor) == 0 && synchronized;
 #elif defined(Q_OS_WIN)
     ScopedWindowsHandle file =
@@ -2156,15 +2196,25 @@ bool replaceCredentialFile(
     const QString &path,
     const QByteArray &contents)
 {
-    ReplaceAtomicFileWriter file(path);
-    if (!file.open())
-        return false;
-    if (file.write(contents) != contents.size()
-        || !file.flush()) {
-        file.cancelWriting();
+    const QFileInfo target(path);
+    if (path.isEmpty()
+        || credentialPathIsRedirected(target)
+        || (target.exists() && !target.isFile())) {
         return false;
     }
-    return file.commit();
+    const AtomicFileMode mode = target.exists()
+        ? AtomicFileMode::ReplaceExisting
+        : AtomicFileMode::CreateNew;
+    std::unique_ptr<AtomicFileWriter> file =
+        qSaveFileWriterFactory()(path, mode);
+    if (!file || !file->open())
+        return false;
+    if (file->write(contents) != contents.size()
+        || !file->flush()) {
+        file->cancelWriting();
+        return false;
+    }
+    return file->commit();
 }
 
 bool readCredentialFile(
@@ -3452,28 +3502,47 @@ bool replaceExactSettingsMap(
         return false;
     }
 
-    ReplaceAtomicFileWriter replacement(settings->fileName());
-    if (!replacement.open()
-#ifdef Q_OS_WIN
-        || !hardenWindowsCredentialFile(
-            replacement.temporaryPath())
-#endif
-        || replacement.write(serialized)
-            != serialized.size()
-        || !replacement.flush()) {
-        replacement.cancelWriting();
+    const QFileInfo target(settings->fileName());
+    if (credentialPathIsRedirected(target)
+        || (target.exists() && !target.isFile())) {
         if (error) {
             *error = QStringLiteral(
-                "Cannot stage credential settings replacement");
+                "Credential settings target is unsafe");
         }
         return false;
     }
-    if (!replacement.commit()) {
-        replacement.cancelWriting();
+    const AtomicFileMode mode = target.exists()
+        ? AtomicFileMode::ReplaceExisting
+        : AtomicFileMode::CreateNew;
+    std::unique_ptr<AtomicFileWriter> replacement =
+        qSaveFileWriterFactory()(settings->fileName(), mode);
+    if (!replacement || !replacement->open()
+#ifdef Q_OS_WIN
+        || !hardenWindowsCredentialFile(
+            replacement->temporaryPath())
+#endif
+        || replacement->write(serialized)
+            != serialized.size()
+        || !replacement->flush()) {
+        const QString detail = replacement
+            ? replacement->errorString() : QString();
+        if (replacement) replacement->cancelWriting();
+        if (error) {
+            *error = detail.isEmpty()
+                ? QStringLiteral(
+                      "Cannot stage credential settings replacement")
+                : QStringLiteral(
+                      "Cannot stage credential settings replacement: %1")
+                      .arg(detail);
+        }
+        return false;
+    }
+    if (!replacement->commit()) {
+        replacement->cancelWriting();
         if (error) {
             *error = QStringLiteral(
                 "Cannot publish credential settings replacement: %1")
-                .arg(replacement.errorString());
+                .arg(replacement->errorString());
         }
         return false;
     }
@@ -3952,8 +4021,10 @@ const QSet<QString> &credentialKeys()
         QStringLiteral(GC_WITHINGS_SECRET),
         QStringLiteral(GC_NOKIA_TOKEN),
         QStringLiteral(GC_NOKIA_REFRESH_TOKEN),
+        QStringLiteral(GC_STRAVA_CLIENT_CREDENTIALS),
         QStringLiteral(GC_STRAVA_TOKEN),
         QStringLiteral(GC_STRAVA_REFRESH_TOKEN),
+        QStringLiteral(GC_STRAVA_PENDING_TRANSACTION),
         QStringLiteral(GC_CYCLINGANALYTICS_TOKEN),
         QStringLiteral(GC_SIXCYCLE_PASS),
         QStringLiteral(GC_AZUM_ACCESS_TOKEN),
@@ -4011,6 +4082,79 @@ QString backendMutationMarkerPath(
 }
 
 } // namespace
+
+bool CredentialSettingsDetail::credentialOperationContextActive()
+{
+    return credentialOperationWildcardDepth > 0
+        || !credentialOperationContextDepth.isEmpty();
+}
+
+bool CredentialSettingsDetail::credentialOperationContextActive(
+    const QString &operationId)
+{
+    return credentialOperationWildcardDepth > 0
+        || (!operationId.isEmpty()
+            && credentialOperationContextDepth.value(operationId) > 0);
+}
+
+QString CredentialSettingsDetail::currentCredentialOperationId()
+{
+    for (auto found = credentialOperationContextStack.crbegin();
+         found != credentialOperationContextStack.crend(); ++found) {
+        if (!found->isEmpty()) return *found;
+    }
+    return {};
+}
+
+unsigned int CredentialSettingsDetail::
+suspendCredentialOperationMutexForBackend()
+{
+    const unsigned int depth = credentialOperationMutexDepth;
+    credentialOperationMutexDepth = 0;
+    for (unsigned int index = 0; index < depth; ++index)
+        credentialOperationMutex().unlock();
+    return depth;
+}
+
+void CredentialSettingsDetail::
+resumeCredentialOperationMutexAfterBackend(unsigned int depth)
+{
+    Q_ASSERT(credentialOperationMutexDepth == 0);
+    for (unsigned int index = 0; index < depth; ++index)
+        credentialOperationMutex().lock();
+    credentialOperationMutexDepth = depth;
+}
+
+CredentialSettingsDetail::CredentialOperationContextScope::
+CredentialOperationContextScope(const QString &operationId)
+    : operationId_(operationId)
+{
+    credentialOperationContextStack.append(operationId_);
+    if (operationId_.isEmpty()) {
+        ++credentialOperationWildcardDepth;
+    } else {
+        ++credentialOperationContextDepth[operationId_];
+    }
+}
+
+CredentialSettingsDetail::CredentialOperationContextScope::
+~CredentialOperationContextScope()
+{
+    Q_ASSERT(!credentialOperationContextStack.isEmpty());
+    Q_ASSERT(credentialOperationContextStack.constLast()
+             == operationId_);
+    credentialOperationContextStack.removeLast();
+    if (operationId_.isEmpty()) {
+        Q_ASSERT(credentialOperationWildcardDepth > 0);
+        --credentialOperationWildcardDepth;
+        return;
+    }
+    auto found = credentialOperationContextDepth.find(operationId_);
+    Q_ASSERT(found != credentialOperationContextDepth.end()
+             && found.value() > 0);
+    if (--found.value() == 0)
+        credentialOperationContextDepth.erase(found);
+}
 
 CredentialSettingsDetail::BackendMutationMarkerStatus
 CredentialSettingsDetail::backendMutationMarkerStatus(
@@ -4088,6 +4232,24 @@ bool CredentialSettingsDetail::removeBackendMutationMarker(
     return backendMutationMarkerStatus(
                mutationLockPath)
         == BackendMutationMarkerStatus::Absent;
+}
+
+bool CredentialSettingsDetail::recoverBackendMutationMarker(
+    const QString &mutationLockPath)
+{
+    if (mutationLockPath.isEmpty()) return false;
+
+    QLockFile lock(mutationLockPath);
+    lock.setStaleLockTime(0);
+    if (!lock.tryLock(0)) return false;
+
+    const BackendMutationMarkerStatus status =
+        backendMutationMarkerStatus(mutationLockPath);
+    if (status == BackendMutationMarkerStatus::Absent)
+        return true;
+    if (status != BackendMutationMarkerStatus::Pending)
+        return false;
+    return removeBackendMutationMarker(mutationLockPath);
 }
 
 #ifdef GC_CREDENTIAL_TEST_HOOKS

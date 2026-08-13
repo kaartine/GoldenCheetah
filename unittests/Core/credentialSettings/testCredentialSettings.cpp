@@ -19,12 +19,14 @@
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QTimer>
 #include <QUuid>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <future>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -43,6 +45,7 @@
 #include "Core/CredentialSettings.h"
 #include "Core/CredentialStoreQtKeychain.h"
 #include "Core/Settings.h"
+#include "Cloud/StravaSettingsCommit.h"
 #include "Gui/Colors.h"
 
 namespace {
@@ -394,6 +397,12 @@ std::shared_ptr<FakeStoreState> &factoryState()
     static std::shared_ptr<FakeStoreState> state =
         std::make_shared<FakeStoreState>();
     return state;
+}
+
+bool &useQtKeychainFactory()
+{
+    static bool enabled = false;
+    return enabled;
 }
 
 std::unique_ptr<CredentialStore> fakeStore(
@@ -1493,6 +1502,8 @@ createPlatformCredentialStore()
         return std::make_unique<FileCredentialStore>(
             enrollmentVault);
     }
+    if (useQtKeychainFactory())
+        return createQtKeychainCredentialStore();
     return fakeStore(factoryState());
 }
 
@@ -1512,6 +1523,7 @@ private slots:
     void cleanup();
     void credentialClassification_data();
     void credentialClassification();
+    void stravaClientCredentialsNeverReachPlaintextSettings();
     void keychainStatusMapping_data();
     void keychainStatusMapping();
     void linuxKeychainRuntimeStatusReport_data();
@@ -1526,11 +1538,11 @@ private slots:
     void timedOutKeychainReadRetainsSerialization();
     void destroyedTimedOutReadReleasesGate();
     void staleTimedOutKeychainJobCannotReleaseNewOwner();
-    void destroyedTimedOutMutationRemainsQuarantined();
+    void destroyedTimedOutMutationRecoversAfterLeaseRelease();
     void keychainMarkerCreationFailureBlocksBackend_data();
     void keychainMarkerCreationFailureBlocksBackend();
-    void keychainMarkerCleanupFailureRemainsQuarantined_data();
-    void keychainMarkerCleanupFailureRemainsQuarantined();
+    void keychainMarkerCleanupFailureRecoversOnNextLease_data();
+    void keychainMarkerCleanupFailureRecoversOnNextLease();
     void timedOutKeychainMutationFromWorkerIsBounded();
     void timedOutKeychainMutationBlocksCredentialStateUntilTerminal();
     void timedOutKeychainMutationLeaseIsCrossProcess_data();
@@ -1543,6 +1555,7 @@ private slots:
     void vaultCallsDoNotMutateFallbackState();
     void credentialOperationsAreSerialized();
     void reentrantCredentialOperationFailsFast();
+    void reentrantIndependentCredentialOperationSucceeds();
     void credentialProcessLockIsExclusive();
     void contendedCredentialReadWaitsForOwner_data();
     void contendedCredentialReadWaitsForOwner();
@@ -1648,6 +1661,7 @@ private slots:
     void credentialPostMutationDurabilityFailure();
     void credentialCrashRecoveryAcrossProcesses();
     void plaintextCleanupCrashRecoveryAcrossProcesses();
+    void canonicalCredentialStateAncestorIsAccepted();
     void credentialStateAncestorSyncFailureFailsClosed();
     void partialCredentialStateAncestryFailsClosed();
     void unsafeCredentialStateAncestorFailsClosed();
@@ -1731,6 +1745,7 @@ private slots:
     void migratePlaintextCoversConfiguredCredentials();
     void gsettingsRoutesCredentialsToVault();
     void gsettingsCheckedCredentialWriteReportsPersistence();
+    void gsettingsCheckedCredentialReadDistinguishesMissingAndFailure();
     void gsettingsSyncsOnlyRequestedAthleteFile();
     void constructionDoesNotPersistMigrationState();
     void systemFallbackDoesNotSuppressUserMigration();
@@ -1807,6 +1822,17 @@ private slots:
     void windowsAthleteJunctionFailsClosed();
     void preInitializationUsesLocalAthleteScope();
     void clearedRootDoesNotRetainAthleteScope();
+    void credentialBackendWaitDoesNotHoldSettingsMutex();
+    void applicationThreadCredentialBackendWaitProcessesKeychainCompletion();
+    void applicationThreadKeychainReentrancyDefersSettingsReconfiguration();
+    void credentialBackendBlocksSettingsReconfigurationUntilRelease();
+    void credentialBackendDoesNotDropSameInstanceAthleteInitialization();
+    void credentialWorkerKeychainTimeoutRespectsCallerDeadline();
+    void credentialAsyncCompletionHonorsContextLifetime();
+    void credentialWorkerKeepsNativeKeychainOnApplicationThread();
+    void credentialWorkerRestartsAfterCleanShutdown();
+    void stoppedCredentialWorkerGenerationsAreDestroyed();
+    void credentialWorkerShutdownAbandonsQueuedOperations();
 
 private:
     QString ownedCredentialStateRoot_;
@@ -1840,6 +1866,7 @@ void TestCredentialSettings::cleanupTestCase()
 
 void TestCredentialSettings::init()
 {
+    useQtKeychainFactory() = false;
     credentialScrubFaultState() = {};
 #ifdef GC_CREDENTIAL_TEST_HOOKS
     GSettings::setCredentialLegacyScopeSnapshotHook({});
@@ -1847,6 +1874,7 @@ void TestCredentialSettings::init()
     CredentialSettingsDetail::
         resetCredentialCacheNowForTest();
     CredentialStoreQtKeychainDetail::resetJobTestHooks();
+    GSettings::setCredentialBackendWaitTimeoutForTest(-1);
 #endif
     if (!ownedCredentialStateRoot_.isEmpty()) {
         QDir stateDirectory(QDir(ownedCredentialStateRoot_)
@@ -1860,11 +1888,13 @@ void TestCredentialSettings::init()
 
 void TestCredentialSettings::cleanup()
 {
+    useQtKeychainFactory() = false;
 #ifdef GC_CREDENTIAL_TEST_HOOKS
     CredentialSettingsDetail::
         resetCredentialCacheNowForTest();
     CredentialStoreQtKeychainDetail::resetJobTestHooks();
     CredentialStoreQtKeychainDetail::resetJobGateForTest();
+    GSettings::setCredentialBackendWaitTimeoutForTest(-1);
 #endif
 }
 
@@ -1889,6 +1919,8 @@ void TestCredentialSettings::credentialClassification_data()
     CREDENTIAL_ROW(GC_NOKIA_REFRESH_TOKEN);
     CREDENTIAL_ROW(GC_STRAVA_TOKEN);
     CREDENTIAL_ROW(GC_STRAVA_REFRESH_TOKEN);
+    CREDENTIAL_ROW(GC_STRAVA_PENDING_TRANSACTION);
+    CREDENTIAL_ROW(GC_STRAVA_CLIENT_CREDENTIALS);
     CREDENTIAL_ROW(GC_CYCLINGANALYTICS_TOKEN);
     CREDENTIAL_ROW(GC_SIXCYCLE_PASS);
     CREDENTIAL_ROW(GC_AZUM_ACCESS_TOKEN);
@@ -1923,6 +1955,51 @@ void TestCredentialSettings::credentialClassification()
     QFETCH(QString, key);
     QFETCH(bool, credential);
     QCOMPARE(CredentialSettings::isCredentialKey(key), credential);
+}
+
+void TestCredentialSettings::
+stravaClientCredentialsNeverReachPlaintextSettings()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(temporary.filePath(
+            QStringLiteral("credential-state"))));
+    const QString settingsPath =
+        temporary.filePath(QStringLiteral("athlete-private.ini"));
+    QSettings settings(settingsPath, QSettings::IniFormat);
+    const QString scope = QUuid::createUuid().toString(
+        QUuid::WithoutBraces);
+    const QString plaintextKey =
+        plainKey(GC_STRAVA_CLIENT_CREDENTIALS);
+    const QString sentinelSecret = QStringLiteral(
+        "sec013-runtime-secret-must-not-reach-qsettings");
+    const QString payload = QStringLiteral(
+        R"({"client_id":"123456","client_secret":"%1","version":1})")
+            .arg(sentinelSecret);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_CLIENT_CREDENTIALS);
+
+    auto state = std::make_shared<FakeStoreState>();
+    CredentialSettings credentials(fakeStore(state));
+    QVERIFY(credentials.setValueChecked(
+        &settings, scope, GC_STRAVA_CLIENT_CREDENTIALS,
+        plaintextKey, payload));
+    settings.sync();
+    QCOMPARE(settings.status(), QSettings::NoError);
+    QVERIFY(!settings.contains(plaintextKey));
+    QVERIFY(!fileContents(settingsPath).contains(
+        sentinelSecret.toUtf8()));
+    QCOMPARE(state->values.value(vaultKey), payload);
+
+    QVERIFY(credentials.removeChecked(
+        &settings, scope, GC_STRAVA_CLIENT_CREDENTIALS,
+        plaintextKey));
+    QVERIFY(!state->values.contains(vaultKey));
+    settings.sync();
+    QVERIFY(!fileContents(settingsPath).contains(
+        sentinelSecret.toUtf8()));
 }
 
 void TestCredentialSettings::keychainStatusMapping_data()
@@ -2545,7 +2622,7 @@ staleTimedOutKeychainJobCannotReleaseNewOwner()
 }
 
 void TestCredentialSettings::
-destroyedTimedOutMutationRemainsQuarantined()
+destroyedTimedOutMutationRecoversAfterLeaseRelease()
 {
     std::unique_ptr<CredentialStore> store =
         createQtKeychainCredentialStore();
@@ -2564,7 +2641,11 @@ destroyedTimedOutMutationRemainsQuarantined()
         setJobStartHookForTest(
             [&](QKeychain::Job *job) {
                 ++startedJobs;
-                delayedJob = job;
+                if (startedJobs == 1) {
+                    delayedJob = job;
+                    return true;
+                }
+                job->emitFinished();
                 return true;
             });
 
@@ -2577,21 +2658,21 @@ destroyedTimedOutMutationRemainsQuarantined()
     const bool firstStarted = delayedJob;
     delete delayedJob.data();
 
-    QLockFile backendProbe(mutationLockPath);
-    backendProbe.setStaleLockTime(0);
-    const bool backendLeaseHeld =
-        !backendProbe.tryLock(0);
-    if (backendProbe.isLocked())
-        backendProbe.unlock();
-    const CredentialStore::Status blockedStatus =
+    QLockFile releasedProbe(mutationLockPath);
+    releasedProbe.setStaleLockTime(0);
+    const bool backendLeaseReleased =
+        releasedProbe.tryLock(0);
+    if (releasedProbe.isLocked())
+        releasedProbe.unlock();
+    QCOMPARE(
+        CredentialSettingsDetail::backendMutationMarkerStatus(
+            mutationLockPath),
+        CredentialSettingsDetail::BackendMutationMarkerStatus::Pending);
+    const CredentialStore::Status recoveredStatus =
         store->writeCoordinated(
-            QStringLiteral("blocked-after-destroy"),
+            QStringLiteral("recovered-after-destroy"),
             QStringLiteral("replacement"),
             &error, mutationLockPath);
-    const int startedWhileQuarantined = startedJobs;
-
-    CredentialStoreQtKeychainDetail::
-        resetJobGateForTest();
     CredentialStoreQtKeychainDetail::
         resetJobTestHooks();
 
@@ -2599,10 +2680,14 @@ destroyedTimedOutMutationRemainsQuarantined()
              CredentialStore::Status::Indeterminate);
     QVERIFY(firstStarted);
     QVERIFY(delayedJob.isNull());
-    QVERIFY(backendLeaseHeld);
-    QCOMPARE(blockedStatus,
-             CredentialStore::Status::Unavailable);
-    QCOMPARE(startedWhileQuarantined, 1);
+    QVERIFY(backendLeaseReleased);
+    QCOMPARE(recoveredStatus,
+             CredentialStore::Status::Success);
+    QCOMPARE(startedJobs, 2);
+    QCOMPARE(
+        CredentialSettingsDetail::backendMutationMarkerStatus(
+            mutationLockPath),
+        CredentialSettingsDetail::BackendMutationMarkerStatus::Absent);
 }
 
 void TestCredentialSettings::
@@ -2701,7 +2786,7 @@ keychainMarkerCreationFailureBlocksBackend()
 }
 
 void TestCredentialSettings::
-keychainMarkerCleanupFailureRemainsQuarantined_data()
+keychainMarkerCleanupFailureRecoversOnNextLease_data()
 {
     QTest::addColumn<QByteArray>("failureStage");
     QTest::addColumn<bool>("markerRemains");
@@ -2716,7 +2801,7 @@ keychainMarkerCleanupFailureRemainsQuarantined_data()
 }
 
 void TestCredentialSettings::
-keychainMarkerCleanupFailureRemainsQuarantined()
+keychainMarkerCleanupFailureRecoversOnNextLease()
 {
     QFETCH(QByteArray, failureStage);
     QFETCH(bool, markerRemains);
@@ -2755,23 +2840,19 @@ keychainMarkerCleanupFailureRemainsQuarantined()
                 mutationLockPath);
     QLockFile backendProbe(mutationLockPath);
     backendProbe.setStaleLockTime(0);
-    const bool backendLeaseHeld =
-        !backendProbe.tryLock(0);
+    const bool backendLeaseReleased =
+        backendProbe.tryLock(0);
     if (backendProbe.isLocked())
         backendProbe.unlock();
-    const CredentialStore::Status blockedStatus =
+    durabilityFailure.reset();
+    const CredentialStore::Status retryStatus =
         store->writeCoordinated(
-            QStringLiteral("blocked-by-marker"),
+            QStringLiteral("after-cleanup-failure"),
             QStringLiteral("replacement"),
             &error, mutationLockPath);
-    const int startedWhileQuarantined = startedJobs;
-
-    durabilityFailure.reset();
-    CredentialStoreQtKeychainDetail::
-        resetJobGateForTest();
     CredentialStoreQtKeychainDetail::
         resetJobTestHooks();
-    const auto markerAfterReset =
+    const auto markerAfterRetry =
         CredentialSettingsDetail::
             backendMutationMarkerStatus(
                 mutationLockPath);
@@ -2785,12 +2866,11 @@ keychainMarkerCleanupFailureRemainsQuarantined()
                   BackendMutationMarkerStatus::Pending
             : CredentialSettingsDetail::
                   BackendMutationMarkerStatus::Absent);
-    QVERIFY(backendLeaseHeld);
-    QCOMPARE(blockedStatus,
-             CredentialStore::Status::Unavailable);
-    QCOMPARE(startedWhileQuarantined, 1);
+    QVERIFY(backendLeaseReleased);
+    QCOMPARE(retryStatus, CredentialStore::Status::Success);
+    QCOMPARE(startedJobs, 2);
     QCOMPARE(
-        markerAfterReset,
+        markerAfterRetry,
         CredentialSettingsDetail::
             BackendMutationMarkerStatus::Absent);
 }
@@ -3215,12 +3295,18 @@ timedOutKeychainMutationLeaseIsCrossProcess()
             &settings, scope, GC_STRAVA_TOKEN,
             plainKey(GC_STRAVA_TOKEN),
             QStringLiteral("parent-value"));
-    QVERIFY(!blockedWrite);
-    QCOMPARE(state->writes, 0);
-    QCOMPARE(state->removes, 0);
+    QCOMPARE(blockedWrite, crash);
+    QCOMPARE(state->writes, crash ? 1 : 0);
+    QCOMPARE(state->removes, crash && remove ? 1 : 0);
 
-    if (crash)
+    if (crash) {
+        QCOMPARE(
+            CredentialSettingsDetail::
+                backendMutationMarkerStatus(mutationLockPath),
+            CredentialSettingsDetail::
+                BackendMutationMarkerStatus::Absent);
         return;
+    }
 
     QVERIFY(writeSignalFile(releasePath));
     QVERIFY2(child.waitForFinished(10000),
@@ -3734,7 +3820,8 @@ void TestCredentialSettings::credentialOperationsAreSerialized()
     firstThread.join();
     secondThread.join();
 
-    QVERIFY(firstResult != secondResult);
+    QVERIFY(firstResult);
+    QVERIFY(secondResult);
     QCOMPARE(maximum.load(), 1);
 }
 
@@ -3771,6 +3858,51 @@ reentrantCredentialOperationFailsFast()
     QVERIFY(reentrantElapsed < 2000);
     QCOMPARE(state->reads, 0);
     QCOMPARE(state->writes, 1);
+}
+
+void TestCredentialSettings::
+reentrantIndependentCredentialOperationSucceeds()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings firstSettings(
+        temporary.filePath(QStringLiteral("first-private.ini")),
+        QSettings::IniFormat);
+    QSettings secondSettings(
+        temporary.filePath(QStringLiteral("second-private.ini")),
+        QSettings::IniFormat);
+    const QString firstScope = QStringLiteral("first-scope");
+    const QString secondScope = QStringLiteral("second-scope");
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+
+    auto firstState = std::make_shared<FakeStoreState>();
+    auto secondState = std::make_shared<FakeStoreState>();
+    firstState->values.insert(
+        CredentialSettings::vaultKey(firstScope, GC_STRAVA_TOKEN),
+        QStringLiteral("first-secret"));
+    secondState->values.insert(
+        CredentialSettings::vaultKey(secondScope, GC_STRAVA_TOKEN),
+        QStringLiteral("second-secret"));
+    CredentialSettings first(fakeStore(firstState));
+    CredentialSettings second(fakeStore(secondState));
+
+    QVariant nestedValue;
+    firstState->beforeRead = [&] {
+        nestedValue = second.value(
+            &secondSettings, secondScope,
+            GC_STRAVA_TOKEN, plaintextKey,
+            QStringLiteral("operation-busy"));
+    };
+
+    QCOMPARE(first.value(
+                 &firstSettings, firstScope,
+                 GC_STRAVA_TOKEN, plaintextKey,
+                 QStringLiteral("missing")),
+             QVariant(QStringLiteral("first-secret")));
+    QCOMPARE(nestedValue,
+             QVariant(QStringLiteral("second-secret")));
+    QCOMPARE(firstState->reads, 1);
+    QCOMPARE(secondState->reads, 1);
 }
 
 void TestCredentialSettings::credentialProcessLockIsExclusive()
@@ -4357,15 +4489,13 @@ void TestCredentialSettings::scopeCreationIsSerialized()
     first.join();
     second.join();
 
-    QVERIFY(firstScope.isEmpty() != secondScope.isEmpty());
-    const QString created = firstScope.isEmpty()
-        ? secondScope : firstScope;
-    QVERIFY(!QUuid(created).isNull());
+    QVERIFY(!QUuid(firstScope).isNull());
+    QCOMPARE(secondScope, firstScope);
 
     QSettings persisted(path, format);
     QCOMPARE(CredentialSettings::ensureScopeId(
                  &persisted, storageKey),
-             created);
+             firstScope);
 }
 
 void TestCredentialSettings::
@@ -6775,10 +6905,13 @@ plaintextCleanupIdentitySeparatesNewlineTuples()
         QFile::encodeName(stateRoot));
     const QString firstPath =
         temporary.filePath(QStringLiteral("source"));
-    const QString secondPath =
+    const QString secondDirectory =
         temporary.filePath(QStringLiteral("source\nsuffix"));
+    QVERIFY(QDir().mkpath(secondDirectory));
+    const QString secondPath = QDir(secondDirectory).filePath(
+        QStringLiteral("settings"));
     const QString firstKey =
-        QStringLiteral("suffix\ncredential");
+        QStringLiteral("suffix/settings\ncredential");
     const QString secondKey = QStringLiteral("credential");
     const QString scope =
         QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -10576,6 +10709,55 @@ plaintextCleanupCrashRecoveryAcrossProcesses()
                  QVariant(newerSecret));
         QVERIFY(!recovery.contains(plaintextKey));
     }
+}
+
+void TestCredentialSettings::
+canonicalCredentialStateAncestorIsAccepted()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Unix canonical path aliases are required");
+#else
+    QTemporaryDir stateTemporary;
+    QTemporaryDir settingsTemporary;
+    QVERIFY(stateTemporary.isValid());
+    QVERIFY(settingsTemporary.isValid());
+
+    const QString realParent = stateTemporary.filePath(
+        QStringLiteral("real-parent"));
+    const QString aliasParent = stateTemporary.filePath(
+        QStringLiteral("alias-parent"));
+    QVERIFY(QDir().mkpath(realParent));
+    QVERIFY(QFile::link(realParent, aliasParent));
+    QVERIFY(QFileInfo(aliasParent).isSymLink());
+
+    const QString stateRoot = QDir(aliasParent).filePath(
+        QStringLiteral("state-root"));
+    ScopedEnvironmentVariable stateRootEnvironment(
+        QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
+        QFile::encodeName(stateRoot));
+    QSettings settings(
+        settingsTemporary.filePath(
+            QStringLiteral("private.ini")),
+        QSettings::IniFormat);
+    const QString scope =
+        QUuid::createUuid().toString(
+            QUuid::WithoutBraces);
+    const QString plaintextKey = plainKey(GC_STRAVA_TOKEN);
+    const QString vaultKey = CredentialSettings::vaultKey(
+        scope, GC_STRAVA_TOKEN);
+    const QString secret = QStringLiteral("canonical-secret");
+
+    auto state = std::make_shared<FakeStoreState>();
+    CredentialSettings credentials(fakeStore(state));
+    QVERIFY(credentials.setValueChecked(
+        &settings, scope, GC_STRAVA_TOKEN,
+        plaintextKey, secret));
+    QCOMPARE(state->values.value(vaultKey), secret);
+    QVERIFY(QFileInfo(QDir(realParent).filePath(
+        QStringLiteral(
+            "state-root/GoldenCheetah/credential-locks")))
+                .isDir());
+#endif
 }
 
 void TestCredentialSettings::
@@ -14794,6 +14976,56 @@ gsettingsCheckedCredentialWriteReportsPersistence()
                      QStringLiteral("missing")).toString(),
                  sentinel);
     }
+}
+
+void TestCredentialSettings::
+gsettingsCheckedCredentialReadDistinguishesMissingAndFailure()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString path = temporary.filePath(QStringLiteral("legacy.ini"));
+    const QString athlete = QStringLiteral("Athlete");
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    GSettings settings(path, QSettings::IniFormat);
+
+    const GSettings::CredentialReadResult missing =
+        settings.credentialCValueChecked(
+            athlete, GC_STRAVA_REFRESH_TOKEN);
+    QCOMPARE(
+        missing.status,
+        GSettings::CredentialReadStatus::NotFound);
+    QVERIFY(!missing.value.isValid());
+
+    QVERIFY(settings.setCValueChecked(
+        athlete,
+        GC_STRAVA_REFRESH_TOKEN,
+        QStringLiteral("refresh-token")));
+    const GSettings::CredentialReadResult present =
+        settings.credentialCValueChecked(
+            athlete, GC_STRAVA_REFRESH_TOKEN);
+    QCOMPARE(
+        present.status,
+        GSettings::CredentialReadStatus::Present);
+    QCOMPARE(present.value.toString(), QStringLiteral("refresh-token"));
+
+    factoryState()->failReads = true;
+    const GSettings::CredentialReadResult unavailable =
+        settings.credentialCValueChecked(
+            athlete, GC_STRAVA_REFRESH_TOKEN);
+    QCOMPARE(
+        unavailable.status,
+        GSettings::CredentialReadStatus::Unavailable);
+    QVERIFY(!unavailable.value.isValid());
+
+    factoryState()->failReads = false;
+    const GSettings::CredentialReadResult recovered =
+        settings.credentialCValueChecked(
+            athlete, GC_STRAVA_REFRESH_TOKEN);
+    QCOMPARE(
+        recovered.status,
+        GSettings::CredentialReadStatus::Present);
+    QCOMPARE(recovered.value.toString(), QStringLiteral("refresh-token"));
 }
 
 void TestCredentialSettings::
@@ -23240,6 +23472,758 @@ void TestCredentialSettings::clearedRootDoesNotRetainAthleteScope()
                  QStringLiteral("missing")).toString(),
              sentinel);
     QCOMPARE(factoryState()->values.size(), 1);
+}
+
+void TestCredentialSettings::
+credentialBackendWaitDoesNotHoldSettingsMutex()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization = QStringLiteral("CredentialReentrant-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application = QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString otherAthleteName = QStringLiteral("OtherAthlete");
+    const QString athleteRoot = temporary.filePath(
+        QStringLiteral("athletes"));
+    const QString otherAthleteRoot = temporary.filePath(
+        QStringLiteral("other-athletes"));
+    QVERIFY(QDir().mkpath(
+        athleteRoot + QStringLiteral("/Athlete/config")));
+    QVERIFY(QDir().mkpath(
+        otherAthleteRoot
+            + QStringLiteral("/OtherAthlete/config")));
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    const auto settings = std::make_shared<GSettings>(
+        organization, application);
+    const auto otherSettings = std::make_shared<GSettings>(
+        organization + QStringLiteral("-Other"), application);
+    settings->initializeQSettingsGlobal(athleteRoot);
+    settings->initializeQSettingsAthlete(athleteRoot, athleteName);
+    otherSettings->initializeQSettingsGlobal(otherAthleteRoot);
+    otherSettings->initializeQSettingsAthlete(
+        otherAthleteRoot, otherAthleteName);
+    QVERIFY(otherSettings->setCValueChecked(
+        otherAthleteName, GC_STRAVA_TOKEN,
+        QStringLiteral("other-secret")));
+    const QString probeKey = QStringLiteral("<system>reentrant_probe");
+    QVERIFY(settings->setValueChecked(probeKey, 42));
+
+    struct ReentrantState
+    {
+        std::mutex mutex;
+        std::condition_variable condition;
+        std::atomic<bool> hookEntered{false};
+        std::atomic<bool> reentrantCompleted{false};
+        std::atomic<bool> backendWaitTimedOut{false};
+        std::atomic<bool> operationCompleted{false};
+        std::atomic<bool> credentialFailedClosed{false};
+        std::atomic<bool> independentCredentialSucceeded{false};
+    };
+    const auto state = std::make_shared<ReentrantState>();
+    factoryState()->beforeRead = [
+            settings, otherSettings, state,
+            athleteName, otherAthleteName, probeKey] {
+        if (state->hookEntered.exchange(true)) return;
+        const QString operationId = CredentialSettingsDetail::
+            currentCredentialOperationId();
+        const bool invoked = QMetaObject::invokeMethod(
+            QCoreApplication::instance(),
+            [settings, otherSettings, state,
+             athleteName, otherAthleteName,
+             probeKey, operationId] {
+                CredentialSettingsDetail::
+                    CredentialOperationContextScope operationContext(
+                        operationId);
+                QCOMPARE(
+                    settings->value(nullptr, probeKey).toInt(), 42);
+                state->credentialFailedClosed.store(
+                    settings->cvalue(
+                        athleteName,
+                        GC_STRAVA_TOKEN,
+                        QStringLiteral("backend-pending")).toString()
+                    == QStringLiteral("backend-pending"));
+                state->independentCredentialSucceeded.store(
+                    otherSettings->cvalue(
+                        otherAthleteName,
+                        GC_STRAVA_TOKEN,
+                        QStringLiteral("missing")).toString()
+                    == QStringLiteral("other-secret"));
+                state->reentrantCompleted.store(true);
+                state->condition.notify_all();
+            },
+            Qt::QueuedConnection);
+        if (!invoked) return;
+
+        std::unique_lock<std::mutex> lock(state->mutex);
+        const bool completed = state->condition.wait_for(
+            lock, std::chrono::seconds(5),
+            [state] { return state->reentrantCompleted.load(); });
+        state->backendWaitTimedOut.store(!completed);
+    };
+
+    const StravaSettingsCommit::DispatchResult dispatched =
+        StravaSettingsCommit::runOnCredentialThread(
+            [settings, state, athleteName] {
+                settings->cvalue(
+                    athleteName,
+                    GC_STRAVA_TOKEN,
+                    QStringLiteral("missing"));
+                state->operationCompleted.store(true);
+                state->condition.notify_all();
+            },
+            10000,
+            {});
+
+    QVERIFY(dispatched.status
+            != StravaSettingsCommit::DispatchStatus::NotStarted);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        state->operationCompleted.load(), 30000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        state->reentrantCompleted.load(), 30000);
+    QVERIFY(state->hookEntered.load());
+    QVERIFY2(!state->backendWaitTimedOut.load(),
+             "GUI settings access waited for the credential backend timeout");
+    QVERIFY(state->credentialFailedClosed.load());
+    QVERIFY(state->independentCredentialSucceeded.load());
+#if !defined(__SANITIZE_THREAD__)
+    QCOMPARE(dispatched.status,
+             StravaSettingsCommit::DispatchStatus::Completed);
+#endif
+    factoryState()->beforeRead = {};
+}
+
+void TestCredentialSettings::
+applicationThreadCredentialBackendWaitProcessesKeychainCompletion()
+{
+    struct WaitState
+    {
+        std::atomic<bool> jobStarted{false};
+        std::atomic<bool> workerFinished{false};
+        std::atomic<int> readStatus{
+            int(CredentialStore::Status::Failed)};
+        QPointer<QKeychain::Job> job;
+    };
+    const auto state = std::make_shared<WaitState>();
+    const auto settingsMutex =
+        std::make_shared<SettingsAccessMutex>();
+
+    constexpr int KeychainTimeoutMs = 250;
+    CredentialStoreQtKeychainDetail::setJobTimeoutForTest(
+        KeychainTimeoutMs);
+    CredentialStoreQtKeychainDetail::setJobStartHookForTest(
+        [state](QKeychain::Job *job) {
+            state->job = job;
+            state->jobStarted.store(
+                true, std::memory_order_release);
+            return true;
+        });
+
+    QVERIFY(StravaSettingsCommit::runOnCredentialThreadAsync(
+        [state, settingsMutex] {
+            settingsMutex->lock();
+            const unsigned int depth =
+                settingsMutex->suspendForCredentialBackend();
+            std::unique_ptr<CredentialStore> store =
+                createQtKeychainCredentialStore();
+            const CredentialStore::ReadResult read = store->read(
+                QStringLiteral(
+                    "application-thread-settings-wait"));
+            settingsMutex->resumeAfterCredentialBackend(depth);
+            settingsMutex->unlock();
+            state->readStatus.store(
+                int(read.status), std::memory_order_release);
+            state->workerFinished.store(
+                true, std::memory_order_release);
+        }, {}));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        state->jobStarted.load(std::memory_order_acquire), 1000);
+
+    QTimer::singleShot(
+        0,
+        QCoreApplication::instance(),
+        [state] {
+            if (!state->job) return;
+            state->job->emitFinishedWithError(
+                QKeychain::EntryNotFound,
+                QStringLiteral("synthetic completion"));
+        });
+
+    settingsMutex->lock();
+    QElapsedTimer elapsed;
+    elapsed.start();
+    const bool completed =
+        settingsMutex->waitForCredentialBackends(1000);
+    const qint64 waitElapsed = elapsed.elapsed();
+    settingsMutex->unlock();
+
+    QTRY_VERIFY_WITH_TIMEOUT(
+        state->workerFinished.load(std::memory_order_acquire), 1000);
+    QTRY_VERIFY_WITH_TIMEOUT(state->job.isNull(), 1000);
+    CredentialStoreQtKeychainDetail::resetJobTestHooks();
+
+    QVERIFY(completed);
+    QVERIFY2(
+        waitElapsed < KeychainTimeoutMs,
+        "Application-thread settings wait blocked keychain completion");
+    QCOMPARE(
+        state->readStatus.load(std::memory_order_acquire),
+        int(CredentialStore::Status::NotFound));
+}
+
+void TestCredentialSettings::
+applicationThreadKeychainReentrancyDefersSettingsReconfiguration()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization = QStringLiteral("CredentialReentrant-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application = QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString reentrantAthleteName =
+        QStringLiteral("ReentrantAthlete");
+    const QString athleteRoot = temporary.filePath(
+        QStringLiteral("athletes"));
+    QVERIFY(QDir().mkpath(
+        athleteRoot + QStringLiteral("/Athlete/config")));
+    QVERIFY(QDir().mkpath(
+        athleteRoot
+        + QStringLiteral("/ReentrantAthlete/config")));
+
+    struct ReentrantState
+    {
+        bool exerciseArmed = false;
+        bool exerciseStarted = false;
+        bool reconfigurationReturned = false;
+    };
+    const auto state = std::make_shared<ReentrantState>();
+    const auto finishJob = [](QKeychain::Job *job) {
+        if (!job) return;
+        if (qobject_cast<QKeychain::ReadPasswordJob *>(job)) {
+            job->emitFinishedWithError(
+                QKeychain::EntryNotFound,
+                QStringLiteral("synthetic missing credential"));
+        } else {
+            job->emitFinished();
+        }
+    };
+
+    useQtKeychainFactory() = true;
+    CredentialSettingsDetail::setCredentialCacheNowForTest(1000);
+    CredentialStoreQtKeychainDetail::setJobTimeoutForTest(1000);
+    GSettings::setCredentialBackendWaitTimeoutForTest(50);
+
+    std::shared_ptr<GSettings> settings;
+    CredentialStoreQtKeychainDetail::setJobStartHookForTest(
+        [state, &settings, athleteRoot,
+         reentrantAthleteName, finishJob](QKeychain::Job *job) {
+            const QPointer<QKeychain::Job> guardedJob(job);
+            if (!state->exerciseArmed
+                || state->exerciseStarted) {
+                QTimer::singleShot(
+                    0,
+                    QCoreApplication::instance(),
+                    [guardedJob, finishJob] {
+                        finishJob(guardedJob.data());
+                    });
+                return true;
+            }
+
+            state->exerciseStarted = true;
+            QTimer::singleShot(
+                0,
+                QCoreApplication::instance(),
+                [state, &settings, athleteRoot,
+                 reentrantAthleteName] {
+                    settings->initializeQSettingsAthlete(
+                        athleteRoot, reentrantAthleteName);
+                    state->reconfigurationReturned = true;
+                });
+            QTimer::singleShot(
+                10,
+                QCoreApplication::instance(),
+                [guardedJob, finishJob] {
+                    finishJob(guardedJob.data());
+                });
+            return true;
+        });
+
+    settings = std::make_shared<GSettings>(organization, application);
+    settings->initializeQSettingsGlobal(athleteRoot);
+    settings->initializeQSettingsAthlete(athleteRoot, athleteName);
+    QVERIFY(!settings->athleteConfigDirectory(athleteName).isEmpty());
+
+    CredentialSettingsDetail::setCredentialCacheNowForTest(
+        1000
+        + CredentialSettingsDetail::
+              credentialCacheLifetimeMsForTest()
+        + 1);
+    state->exerciseArmed = true;
+    const GSettings::CredentialReadResult read =
+        settings->credentialCValueChecked(
+            athleteName, GC_STRAVA_TOKEN);
+
+    QVERIFY(read.readable());
+    QVERIFY(state->exerciseStarted);
+    QVERIFY(state->reconfigurationReturned);
+    QVERIFY2(
+        settings->athleteConfigDirectory(
+            reentrantAthleteName).isEmpty(),
+        "Reentrant settings initialization accessed QSettings before the keychain suspension cleared");
+
+    settings->initializeQSettingsAthlete(
+        athleteRoot, reentrantAthleteName);
+    QVERIFY(!settings->athleteConfigDirectory(
+        reentrantAthleteName).isEmpty());
+
+    QVERIFY(settings->clearGlobalAndAthletes(1000));
+    settings.reset();
+    useQtKeychainFactory() = false;
+    GSettings::setCredentialBackendWaitTimeoutForTest(-1);
+    CredentialStoreQtKeychainDetail::resetJobTestHooks();
+}
+
+void TestCredentialSettings::
+credentialBackendBlocksSettingsReconfigurationUntilRelease()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization = QStringLiteral("CredentialLifecycle-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application = QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString athleteRoot = temporary.filePath(
+        QStringLiteral("athletes"));
+    QVERIFY(QDir().mkpath(
+        athleteRoot + QStringLiteral("/Athlete/config")));
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    const auto settings = std::make_shared<GSettings>(
+        organization, application);
+    settings->initializeQSettingsGlobal(athleteRoot);
+    settings->initializeQSettingsAthlete(athleteRoot, athleteName);
+
+    struct BlockingState
+    {
+        std::mutex mutex;
+        std::condition_variable condition;
+        std::atomic<bool> entered{false};
+        std::atomic<bool> released{false};
+        std::atomic<bool> readFinished{false};
+        std::atomic<bool> reconfigured{false};
+    };
+    const auto state = std::make_shared<BlockingState>();
+    factoryState()->beforeRead = [state] {
+        if (state->entered.exchange(true)) return;
+        std::unique_lock<std::mutex> lock(state->mutex);
+        state->condition.wait(lock, [state] {
+            return state->released.load();
+        });
+    };
+
+    QVERIFY(StravaSettingsCommit::runOnCredentialThreadAsync(
+        [settings, state, athleteName] {
+            settings->cvalue(
+                athleteName, GC_STRAVA_TOKEN,
+                QStringLiteral("missing"));
+            state->readFinished.store(true);
+        }, {}));
+    QTRY_VERIFY_WITH_TIMEOUT(state->entered.load(), 5000);
+
+    QElapsedTimer boundedClearElapsed;
+    boundedClearElapsed.start();
+    QVERIFY(!settings->clearGlobalAndAthletes(25));
+    QVERIFY2(boundedClearElapsed.elapsed() < 500,
+             "Bounded settings shutdown exceeded its deadline");
+
+    std::future<void> reconfiguration = std::async(
+        std::launch::async,
+        [settings, state] {
+            settings->clearGlobalAndAthletes();
+            state->reconfigured.store(true);
+        });
+    QTest::qWait(50);
+    QVERIFY2(!state->reconfigured.load(),
+             "Settings were destroyed while a credential backend retained them");
+
+    state->released.store(true);
+    state->condition.notify_all();
+    QVERIFY(reconfiguration.wait_for(std::chrono::seconds(15))
+            == std::future_status::ready);
+    reconfiguration.get();
+    QTRY_VERIFY_WITH_TIMEOUT(state->readFinished.load(), 1000);
+
+    settings->initializeQSettingsGlobal(athleteRoot);
+    settings->initializeQSettingsAthlete(athleteRoot, athleteName);
+    QVERIFY(settings->setCValueChecked(
+        athleteName, GC_STRAVA_TOKEN,
+        QStringLiteral("replacement-secret")));
+    factoryState()->beforeRead = {};
+}
+
+void TestCredentialSettings::
+credentialBackendDoesNotDropSameInstanceAthleteInitialization()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+
+    const QString organization = QStringLiteral("CredentialInitWait-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application = QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString newAthleteName = QStringLiteral("NewAthlete");
+    const QString athleteRoot = temporary.filePath(
+        QStringLiteral("athletes"));
+    QVERIFY(QDir().mkpath(
+        athleteRoot + QStringLiteral("/Athlete/config")));
+    QVERIFY(QDir().mkpath(
+        athleteRoot + QStringLiteral("/NewAthlete/config")));
+
+    factoryState() = std::make_shared<FakeStoreState>();
+    const auto settings = std::make_shared<GSettings>(
+        organization, application);
+    settings->initializeQSettingsGlobal(athleteRoot);
+    settings->initializeQSettingsAthlete(athleteRoot, athleteName);
+
+    struct BlockingState
+    {
+        std::mutex mutex;
+        std::condition_variable condition;
+        std::atomic<bool> entered{false};
+        std::atomic<bool> released{false};
+        std::atomic<int> initializationCompletions{0};
+    };
+    const auto state = std::make_shared<BlockingState>();
+    factoryState()->beforeRead = [state] {
+        if (state->entered.exchange(true)) return;
+        std::unique_lock<std::mutex> lock(state->mutex);
+        state->condition.wait(lock, [state] {
+            return state->released.load();
+        });
+    };
+
+    QVERIFY(StravaSettingsCommit::runOnCredentialThreadAsync(
+        [settings, athleteName] {
+            settings->cvalue(
+                athleteName, GC_STRAVA_TOKEN,
+                QStringLiteral("missing"));
+        }, {}));
+    QTRY_VERIFY_WITH_TIMEOUT(state->entered.load(), 5000);
+
+    std::future<void> initialization = std::async(
+        std::launch::async,
+        [settings, state, athleteRoot, newAthleteName] {
+            settings->initializeQSettingsAthlete(
+                athleteRoot, newAthleteName);
+            state->initializationCompletions.fetch_add(1);
+        });
+    QTest::qWait(50);
+    QCOMPARE(state->initializationCompletions.load(), 0);
+
+    state->released.store(true);
+    state->condition.notify_all();
+    QVERIFY(initialization.wait_for(std::chrono::seconds(15))
+            == std::future_status::ready);
+    initialization.get();
+    QCOMPARE(state->initializationCompletions.load(), 1);
+    QVERIFY(settings->setCValueChecked(
+        newAthleteName, GC_STRAVA_TOKEN,
+        QStringLiteral("new-athlete-secret")));
+    factoryState()->beforeRead = {};
+}
+
+void TestCredentialSettings::
+credentialWorkerKeepsNativeKeychainOnApplicationThread()
+{
+    std::atomic<bool> hookCalled{false};
+    std::atomic<bool> hookOnApplicationThread{false};
+    std::atomic<bool> coordinationOnApplicationThread{true};
+    std::atomic<int> readStatus{
+        int(CredentialStore::Status::Failed)};
+    CredentialStoreQtKeychainDetail::setJobStartHookForTest(
+        [&](QKeychain::Job *job) {
+            hookCalled.store(true);
+            hookOnApplicationThread.store(
+                QThread::currentThread()
+                == QCoreApplication::instance()->thread());
+            job->emitFinishedWithError(
+                QKeychain::EntryNotFound,
+                QStringLiteral("synthetic missing credential"));
+            return true;
+        });
+
+    const StravaSettingsCommit::DispatchResult dispatched =
+        StravaSettingsCommit::runOnCredentialThread(
+            [&] {
+                coordinationOnApplicationThread.store(
+                    QThread::currentThread()
+                    == QCoreApplication::instance()->thread());
+                std::unique_ptr<CredentialStore> store =
+                    createQtKeychainCredentialStore();
+                const CredentialStore::ReadResult read = store->read(
+                    QStringLiteral("synthetic-strava-affinity-probe"));
+                readStatus.store(int(read.status));
+            },
+            1000,
+            {});
+    QCOMPARE(dispatched.status,
+             StravaSettingsCommit::DispatchStatus::Completed);
+    QVERIFY(hookCalled.load());
+    QVERIFY(hookOnApplicationThread.load());
+    QVERIFY(!coordinationOnApplicationThread.load());
+    QCOMPARE(readStatus.load(),
+             int(CredentialStore::Status::NotFound));
+
+    CredentialStoreQtKeychainDetail::resetJobTestHooks();
+}
+
+void TestCredentialSettings::
+credentialWorkerKeychainTimeoutRespectsCallerDeadline()
+{
+    std::atomic<bool> jobStarted{false};
+    QPointer<QKeychain::Job> delayedJob;
+    CredentialStoreQtKeychainDetail::setJobTimeoutForTest(500);
+    CredentialStoreQtKeychainDetail::setJobStartHookForTest(
+        [&](QKeychain::Job *job) {
+            delayedJob = job;
+            jobStarted.store(true);
+            return true;
+        });
+
+    QElapsedTimer elapsed;
+    elapsed.start();
+    const StravaSettingsCommit::DispatchResult dispatched =
+        StravaSettingsCommit::runOnCredentialThread(
+            [] {
+                std::unique_ptr<CredentialStore> store =
+                    createQtKeychainCredentialStore();
+                store->read(QStringLiteral("deadline-probe"));
+            },
+            25,
+            {});
+    const qint64 callerElapsed = elapsed.elapsed();
+
+    QCOMPARE(dispatched.status,
+             StravaSettingsCommit::DispatchStatus::Pending);
+    QVERIFY(jobStarted.load());
+    QVERIFY2(callerElapsed < 200,
+             "GUI keychain dispatch exceeded the caller deadline");
+    QVERIFY(CredentialSettingsDetail::
+        credentialOperationContextActive());
+
+    if (delayedJob) {
+        delayedJob->emitFinishedWithError(
+            QKeychain::EntryNotFound,
+            QStringLiteral("late deadline completion"));
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(delayedJob.isNull(), 1000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        !CredentialSettingsDetail::
+            credentialOperationContextActive(),
+        1000);
+    CredentialStoreQtKeychainDetail::resetJobTestHooks();
+}
+
+void TestCredentialSettings::
+credentialAsyncCompletionHonorsContextLifetime()
+{
+    std::promise<void> releaseOperation;
+    const std::shared_future<void> released =
+        releaseOperation.get_future().share();
+    std::atomic<bool> operationStarted{false};
+    std::atomic<bool> completionCalled{false};
+    QObject *context = new QObject(this);
+
+    QVERIFY(StravaSettingsCommit::runOnCredentialThreadAsync(
+        [&] {
+            operationStarted.store(true);
+            released.wait();
+        },
+        context,
+        [&] { completionCalled.store(true); }));
+    QTRY_VERIFY_WITH_TIMEOUT(operationStarted.load(), 1000);
+    delete context;
+    releaseOperation.set_value();
+    QTest::qWait(100);
+    QVERIFY(!completionCalled.load());
+}
+
+void TestCredentialSettings::credentialWorkerRestartsAfterCleanShutdown()
+{
+    QVERIFY(StravaSettingsCommit::shutdownCredentialThread());
+    QVERIFY(StravaSettingsCommit::credentialThreadStopped());
+    QVERIFY(StravaSettingsCommit::restartCredentialThread());
+
+    std::atomic<bool> ran{false};
+    const StravaSettingsCommit::DispatchResult dispatched =
+        StravaSettingsCommit::runOnCredentialThread(
+            [&ran] { ran.store(true); }, 1000, {});
+    QCOMPARE(dispatched.status,
+             StravaSettingsCommit::DispatchStatus::Completed);
+    QVERIFY(ran.load());
+}
+
+void TestCredentialSettings::
+stoppedCredentialWorkerGenerationsAreDestroyed()
+{
+    QVERIFY(StravaSettingsCommit::shutdownCredentialThread());
+    QVERIFY(StravaSettingsCommit::restartCredentialThread());
+    QCOMPARE(
+        StravaSettingsCommit::credentialWorkerLiveInstancesForTest(),
+        0);
+
+    for (int generation = 0; generation < 3; ++generation) {
+        const StravaSettingsCommit::DispatchResult dispatched =
+            StravaSettingsCommit::runOnCredentialThread(
+                [] {}, 1000, {});
+        QCOMPARE(dispatched.status,
+                 StravaSettingsCommit::DispatchStatus::Completed);
+        QCOMPARE(
+            StravaSettingsCommit::credentialWorkerLiveInstancesForTest(),
+            1);
+        QVERIFY(StravaSettingsCommit::shutdownCredentialThread());
+        QVERIFY(StravaSettingsCommit::restartCredentialThread());
+        QCOMPARE(
+            StravaSettingsCommit::credentialWorkerLiveInstancesForTest(),
+            0);
+    }
+}
+
+void TestCredentialSettings::
+credentialWorkerShutdownAbandonsQueuedOperations()
+{
+    if (!qEnvironmentVariableIsSet(
+            "GC_CREDENTIAL_WORKER_SHUTDOWN_CHILD")) {
+        QProcess child;
+        QProcessEnvironment environment =
+            QProcessEnvironment::systemEnvironment();
+        environment.insert(
+            QStringLiteral(
+                "GC_CREDENTIAL_WORKER_SHUTDOWN_CHILD"),
+            QStringLiteral("1"));
+        child.setProcessEnvironment(environment);
+        child.setProgram(QCoreApplication::applicationFilePath());
+        child.setArguments({
+            QStringLiteral(
+                "credentialWorkerShutdownAbandonsQueuedOperations"),
+            QStringLiteral("-silent")
+        });
+        child.start();
+        QVERIFY2(child.waitForStarted(5000),
+                 qPrintable(child.errorString()));
+        const bool finished = child.waitForFinished(30000);
+        if (!finished) {
+            child.kill();
+            child.waitForFinished();
+        }
+        const QByteArray output = child.readAll();
+        QVERIFY2(finished, output.constData());
+        QVERIFY2(child.exitStatus() == QProcess::NormalExit,
+                 output.constData());
+        QVERIFY2(child.exitCode() == 0, output.constData());
+        return;
+    }
+
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    QSettings::setPath(QSettings::NativeFormat,
+                       QSettings::UserScope, temporary.path());
+    QSettings::setPath(QSettings::IniFormat,
+                       QSettings::UserScope, temporary.path());
+    const QString organization = QStringLiteral("CredentialShutdown-")
+        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString application = QStringLiteral("GoldenCheetahTest");
+    const QString athleteName = QStringLiteral("Athlete");
+    const QString athleteRoot = temporary.filePath(
+        QStringLiteral("athletes"));
+    QVERIFY(QDir().mkpath(
+        athleteRoot + QStringLiteral("/Athlete/config")));
+    factoryState() = std::make_shared<FakeStoreState>();
+    GSettings *settings = new GSettings(organization, application);
+    settings->initializeQSettingsGlobal(athleteRoot);
+    settings->initializeQSettingsAthlete(athleteRoot, athleteName);
+
+    std::atomic<bool> firstStarted{false};
+    std::atomic<bool> firstFinished{false};
+    std::atomic<bool> backendEntered{false};
+    std::atomic<bool> destructionFinished{false};
+    std::atomic<bool> completionCalled{false};
+    std::atomic<bool> queuedRan{false};
+    const auto release = std::make_shared<std::promise<void>>();
+    const std::shared_future<void> released =
+        release->get_future().share();
+    QObject *completionContext = new QObject(this);
+    factoryState()->beforeRead = [&, released] {
+        if (backendEntered.exchange(true)) return;
+        released.wait();
+    };
+
+    QVERIFY(StravaSettingsCommit::runOnCredentialThreadAsync(
+        [&, settings, athleteName] {
+            firstStarted.store(true);
+            settings->cvalue(
+                athleteName, GC_STRAVA_TOKEN,
+                QStringLiteral("missing"));
+            firstFinished.store(true);
+        },
+        completionContext,
+        [&] { completionCalled.store(true); }));
+    QTRY_VERIFY_WITH_TIMEOUT(firstStarted.load(), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(backendEntered.load(), 5000);
+    QVERIFY(StravaSettingsCommit::runOnCredentialThreadAsync(
+        [&] { queuedRan.store(true); },
+        {}));
+
+    QElapsedTimer shutdownElapsed;
+    shutdownElapsed.start();
+    const bool stopped =
+        StravaSettingsCommit::shutdownCredentialThread();
+    QVERIFY(!stopped);
+    QVERIFY2(shutdownElapsed.elapsed() < 1000,
+             "Credential shutdown waited for noncooperative work");
+    delete completionContext;
+
+    std::future<void> destruction = std::async(
+        std::launch::async,
+        [settings, &destructionFinished] {
+            delete settings;
+            destructionFinished.store(true);
+        });
+    QTest::qWait(50);
+    QVERIFY2(!destructionFinished.load(),
+             "GSettings was destroyed while credential work retained it");
+
+    release->set_value();
+    QTRY_VERIFY_WITH_TIMEOUT(firstFinished.load(), 1000);
+    QVERIFY(destruction.wait_for(std::chrono::seconds(5))
+            == std::future_status::ready);
+    destruction.get();
+    QVERIFY(destructionFinished.load());
+    QTRY_VERIFY_WITH_TIMEOUT(
+        StravaSettingsCommit::credentialThreadStopped(), 1000);
+    QTest::qWait(50);
+    QVERIFY(!completionCalled.load());
+    QVERIFY(!queuedRan.load());
 }
 
 QTEST_MAIN(TestCredentialSettings)

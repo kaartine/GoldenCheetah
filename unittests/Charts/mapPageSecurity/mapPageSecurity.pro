@@ -18,8 +18,7 @@ RESOURCES = ../../../src/Resources/map.qrc
 INCLUDEPATH += ../../../src \
                ../../../src/Charts
 
-QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-QMAKE_LFLAGS += -Wl,--gc-sections
+include(../../section-gc.prf)
 
 sanitize:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

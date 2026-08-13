@@ -33,6 +33,7 @@ struct RemoteRevocationResult
 {
     bool revoked = false;
     QString error;
+    bool mayHaveBeenDispatched = true;
 
     bool isSuccess() const
     {

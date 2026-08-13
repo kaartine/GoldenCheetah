@@ -2400,14 +2400,7 @@ bool PowerHist::shadePaceZones() const
 
 bool PowerHist::isSelected(const RideFilePoint *p, double sample)
 {
-    if (!rideItem) {
-
-        foreach (IntervalItem *interval, rideItem->intervalsSelected()) {
-            if (interval->selected && p->secs+sample>interval->start && p->secs<interval->stop) 
-                return true;
-        }
-    }
-    return false;
+    return isSelected(rideItem, p, sample);
 }
 
 bool PowerHist::isSelected(const double t, double sample)

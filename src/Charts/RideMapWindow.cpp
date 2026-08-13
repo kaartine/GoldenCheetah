@@ -1928,6 +1928,8 @@ void RideMapWindow::zoomInterval(IntervalItem *which)
 void MapWebBridge::resetState()
 {
     point = nullptr;
+    routePointIndex.clear();
+    indexedRide = nullptr;
     m_startDrag = false;
     m_drag = false;
     selection = 1;
@@ -2094,27 +2096,32 @@ MapWebBridge::searchPoint(double lat, double lng) const
         return nullptr;
     }
 
-    RideFilePoint *candidate = nullptr;
-    double candidateDist = std::numeric_limits<double>::max();
-    foreach (RideFilePoint *p1, rideItem->ride()->dataPoints()) {
-        if (p1->lat == 0 && p1->lon == 0)
-            continue;
-
-        double deltaLat = std::fabs(p1->lat - lat);
-        double deltaLon = std::fabs(p1->lon - lng);
-        if (deltaLat < 0.001 && deltaLon < 0.001) {
-            // exact distance if of no interest, a rough approximation is sufficient
-            double x = deltaLon * std::cos(lat);
-            double approxDist =
-                std::sqrt(x * x + deltaLat * deltaLat);
-            if (approxDist < candidateDist) {
-                candidate = p1;
-                candidateDist = approxDist;
+    RideFile *ride = rideItem->ride();
+    const auto &points = ride->dataPoints();
+    if (indexedRide != ride) {
+        routePointIndex.clear();
+        routePointIndex.reserve(points.size());
+        for (qsizetype index = 0;
+             index < points.size();
+             ++index) {
+            const RideFilePoint *candidate = points.at(index);
+            if (candidate
+                && (candidate->lat != 0.0
+                    || candidate->lon != 0.0)) {
+                routePointIndex.append(
+                    candidate->lat,
+                    candidate->lon,
+                    index);
             }
         }
+        routePointIndex.finalize();
+        indexedRide = ride;
     }
-
-    return candidate;
+    const qsizetype nearest =
+        routePointIndex.nearest(lat, lng);
+    return nearest >= 0 && nearest < points.size()
+        ? points.at(nearest)
+        : nullptr;
 }
 
 void

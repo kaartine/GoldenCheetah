@@ -515,7 +515,7 @@ LiveMapWidget::LiveMapWidget(QString Name, QWidget* parent, QString Source, Cont
     m_osmURL = "http://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
     forceSquareRatio = false;
     liveMapView = new QWebEngineView(this);
-    webPage = new QWebEnginePage(context->webEngineProfile);
+    webPage = new QWebEnginePage(context->webEngineProfile());
     liveMapView->setPage(webPage);
     routeInitialized = false;
     mapInitialized = false;

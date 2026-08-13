@@ -11,6 +11,7 @@ include(../../unittests.pri)
 
 INCLUDEPATH += ../../../contrib/qtsolutions
 LIBS += -lz
+win32:LIBS += -ladvapi32
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug
@@ -30,6 +31,8 @@ isEmpty(GC_CLOUD_SERVICE_SOURCE) {
 
 SOURCES = testAthleteMigrationSafety.cpp \
           AthleteMigrationTestStubs.cpp \
+          ../../../src/Core/AthleteSession.cpp \
+          ../../../src/Core/TrainingSession.cpp \
           CloudAutoDownloadTestSupport.cpp \
           ../../../src/Cloud/CloudCredentialTransport.cpp \
           ../../../src/Cloud/LocalFileStore.cpp \
@@ -41,12 +44,15 @@ SOURCES = testAthleteMigrationSafety.cpp \
           ../../../src/Cloud/OAuthPKCE.cpp \
           ../../../src/Cloud/SportsPlusHealth.cpp \
           ../../../src/Cloud/StravaCredentialPublisher.cpp \
+          ../../../src/Cloud/StravaCredentialDurability.cpp \
+          ../../../src/Cloud/StravaSettingsCommit.cpp \
           ../../../src/Cloud/StravaTokenPublication.cpp \
           ../../../src/Cloud/TredictMeasuresDownload.cpp \
           ../../../src/Cloud/TrainingsTageBuch.cpp \
           ../../../src/Cloud/WithingsDownload.cpp \
           ../../../contrib/qzip/zip.cpp \
           ../../../src/FileIO/CompressedActivityFile.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp \
           $$GC_UPGRADE_SOURCE \
           $$GC_ATHLETE_SOURCE \
           $$GC_CLOUD_SERVICE_SOURCE
@@ -64,12 +70,17 @@ HEADERS = CloudAutoDownloadTestSupport.h \
           ../../../src/Cloud/OAuthPKCE.h \
           ../../../src/Cloud/SportsPlusHealth.h \
           ../../../src/Cloud/StravaCredentialPublisher.h \
+          ../../../src/Cloud/StravaCredentialDurability.h \
+          ../../../src/Cloud/StravaSettingsCommit.h \
           ../../../src/Cloud/StravaTokenPublication.h \
           ../../../src/Cloud/TredictMeasuresDownload.h \
           ../../../src/Cloud/TrainingsTageBuch.h \
           ../../../src/Cloud/WithingsDownload.h \
           ../../../src/Core/Athlete.h \
+          ../../../src/Core/AthleteSession.h \
           ../../../src/Core/Context.h \
+          ../../../src/Core/SessionServices.h \
+          ../../../src/Core/TrainingSession.h \
           ../../../src/Core/GcUpgrade.h \
           ../../../src/Core/NamedSearch.h \
           ../../../src/Core/RideCache.h \
@@ -96,8 +107,7 @@ INCLUDEPATH += ../../../src \
                ../../../src/Cloud \
                ../../../qwt/src
 
-QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-QMAKE_LFLAGS += -Wl,--gc-sections
+include(../../section-gc.prf)
 
 sanitize:!tsan:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

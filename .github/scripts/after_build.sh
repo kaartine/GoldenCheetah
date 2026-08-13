@@ -102,13 +102,16 @@ fix_binary_deps() {
 main() {
   local PYTHON_VERSION=3.11
   pushd src
+  local OAUTH_CHECKER=../appveyor/check-unconfigured-oauth.py
+  /usr/bin/python3 "${OAUTH_CHECKER}" \
+    GoldenCheetah.app/Contents/MacOS/GoldenCheetah
 
   log "About to create dmg file and fix up"
   mkdir -p GoldenCheetah.app/Contents/Frameworks
 
   # This is a hack to include libicudata.*.dylib, not handled by macdployqt[fix]
   find \
-    "$(brew --prefix icu4c)/lib" \
+    "$(brew --prefix icu4c@78)/lib" \
     -maxdepth 1 \
     -name 'libicudata.*.dylib' \
     -exec cp {} GoldenCheetah.app/Contents/Frameworks \;
@@ -141,15 +144,14 @@ main() {
   rm "${SITE_PACKAGES}"
   mkdir -p "${SITE_PACKAGES}"
 
-  # Ensure modern build tools
-  python"${PYTHON_VERSION}" -m pip install --upgrade pip setuptools wheel
-
   log "Installing Python packages to bundle target: ${SITE_PACKAGES}"
   python"${PYTHON_VERSION}" -m pip \
-    install \
+    install --isolated --disable-pip-version-check --no-input --no-cache-dir \
+    --no-compile --ignore-installed --require-hashes \
     --target "${SITE_PACKAGES}" \
     --only-binary :all: \
-    -r ../src/Python/requirements.txt
+    --index-url=https://pypi.org/simple \
+    -r ../src/Python/requirements-appimage.lock
 
   chmod -R +w GoldenCheetah.app/Contents/Frameworks
 
@@ -369,7 +371,7 @@ EOF
     GoldenCheetah.app/Contents/MacOS GoldenCheetah.app/Contents/Frameworks \
     \( -name "GoldenCheetah" -o -name "*.dylib" -o -name "*.so" -o -perm +111 \) \
     -type f \
-    -exec bash -c 'file "$1" | grep -q Match-O' _ {} \; \
+    -exec bash -c 'file "$1" | grep -q Mach-O' _ {} \; \
     -print0 |
     while read -r -d '' BINARY; do
       fix_binary_id "${BINARY}"
@@ -415,6 +417,8 @@ EOF
   cp ../.github/scripts/DMG_README.md dmg_staging/README.md
 
   log "Creating dmg file..."
+  /usr/bin/python3 "${OAUTH_CHECKER}" \
+    dmg_staging/GoldenCheetah.app/Contents/MacOS/GoldenCheetah
   hdiutil create -volname GoldenCheetah -srcfolder dmg_staging -format UDBZ "../${DMG_NAME}"
 }
 main "$@"

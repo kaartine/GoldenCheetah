@@ -37,6 +37,7 @@ enum class PublicationStatus
 {
     Saved,
     AlreadyCurrent,
+    Pending,
     Conflict,
     StorageFailure,
     InvalidInput
@@ -58,6 +59,7 @@ enum class RemovalStatus
 {
     Cleared,
     CleanupPending,
+    Pending,
     Conflict,
     StorageFailure,
     InvalidInput

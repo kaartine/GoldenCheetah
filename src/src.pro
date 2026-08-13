@@ -17,6 +17,29 @@ include(gcconfig.pri)
 include(../contrib/qtkeychain/qtkeychain.pri)
 INCLUDEPATH += ../contrib/qtkeychain
 
+unix:!macx:CONFIG(release, debug|release) {
+    !isEmpty(LOCALHEADERS):error("LOCALHEADERS is not allowed in an authenticated release build")
+    !isEmpty(LOCALSOURCES):error("LOCALSOURCES is not allowed in an authenticated release build")
+    GC_BUILD_INPUTS_SHA256_VALUE = $$system(python3 $$shell_quote($$PWD/Resources/linux/compute-build-input-identity.py) $$shell_quote($$PWD/..))
+    !contains(GC_BUILD_INPUTS_SHA256_VALUE, ^[0-9a-f]{64}$) {
+        error("Cannot authenticate ignored release build inputs")
+    }
+    DEFINES += GC_BUILD_INPUTS_SHA256=\\\"$${GC_BUILD_INPUTS_SHA256_VALUE}\\\"
+}
+
+unix {
+    GC_BUILD_SOURCE_REVISION_VALUE = $$(GC_SOURCE_REVISION)
+    isEmpty(GC_BUILD_SOURCE_REVISION_VALUE) {
+        GC_BUILD_SOURCE_REVISION_VALUE = $$system(git -C $$shell_quote($$PWD/..) rev-parse --verify HEAD 2>/dev/null)
+    }
+    !isEmpty(GC_BUILD_SOURCE_REVISION_VALUE) {
+        !contains(GC_BUILD_SOURCE_REVISION_VALUE, ^[0-9a-f]{40}$) {
+            error("GC_SOURCE_REVISION must be a full lowercase Git commit hash")
+        }
+        DEFINES += GC_BUILD_SOURCE_REVISION=\\\"$${GC_BUILD_SOURCE_REVISION_VALUE}\\\"
+    }
+}
+
 # You can also define your own local source to add to build
 HEADERS += $${LOCALHEADERS}
 SOURCES += $${LOCALSOURCES}
@@ -72,15 +95,15 @@ DEFINES += QXT_STATIC
 win32 {
     #QWT is configured to build 2 libs (release/debug) on win32 (see qwtbuild.pri)
     CONFIG(release, debug|release){
-    LIBS += -L$${PWD}/../qwt/lib -lqwt
+    LIBS += -L$${OUT_PWD}/../qwt/lib -lqwt
     }
     CONFIG(debug, debug|release) {
-    LIBS += -L$${PWD}/../qwt/lib -lqwtd
+    LIBS += -L$${OUT_PWD}/../qwt/lib -lqwtd
     }
 
 } else {
     #QWT is configured to build 1 lib for all other OS (see qwtbuild.pri)
-    LIBS += -L$${PWD}/../qwt/lib -lqwt
+    LIBS += -L$${OUT_PWD}/../qwt/lib -lqwt
 }
 
 # compress and math libs must be defined in gcconfig.pri
@@ -539,6 +562,9 @@ SOURCES += Cloud/CloudCredentialTransport.cpp
 HEADERS += Cloud/CloudCredentialTransport.h
 SOURCES += Cloud/StravaOAuthPolicy.cpp
 HEADERS += Cloud/StravaOAuthPolicy.h
+SOURCES += Cloud/StravaClientCredentials.cpp
+SOURCES += Cloud/StravaClientCredentialsSettings.cpp
+HEADERS += Cloud/StravaClientCredentials.h
 SOURCES += Cloud/StravaRevocationClient.cpp
 HEADERS += Cloud/StravaRevocationClient.h
 SOURCES += Cloud/StravaAccountRemoval.cpp
@@ -551,6 +577,12 @@ SOURCES += Cloud/StravaTokenPublication.cpp
 HEADERS += Cloud/StravaTokenPublication.h
 SOURCES += Cloud/StravaCredentialPublisher.cpp
 HEADERS += Cloud/StravaCredentialPublisher.h
+SOURCES += Cloud/StravaCredentialDurability.cpp
+HEADERS += Cloud/StravaCredentialDurability.h
+SOURCES += Cloud/OAuthDialogMessageGuard.cpp
+HEADERS += Cloud/OAuthDialogMessageGuard.h
+SOURCES += Cloud/StravaSettingsCommit.cpp
+HEADERS += Cloud/StravaSettingsCommit.h
 SOURCES += Cloud/NolioTokenRefresh.cpp
 HEADERS += Cloud/NolioTokenRefresh.h
 SOURCES += Cloud/OAuthCallbackPolicy.cpp
@@ -608,6 +640,14 @@ SOURCES += Charts/UserChartWindow.cpp Charts/UserChartOverviewItem.cpp Charts/Us
 ### LEX AND YACC SOURCES
 ###=====================
 
+# Modern Bison keeps the original .tab.h include after qmake renames that
+# generated header. These source-side forwarding headers keep both names valid.
+HEADERS += Core/DataFilter.tab.h \
+           FileIO/JsonRideFile.tab.h \
+           Core/RideDB.tab.h \
+           Train/WorkoutFilter.tab.h \
+           Train/TrainerDayAPIQuery.tab.h
+
 YACCSOURCES += Core/DataFilter.y \
                FileIO/JsonRideFile.y \
                Core/RideDB.y \
@@ -640,9 +680,9 @@ HEADERS += Charts/Aerolab.h Charts/AerolabWindow.h Charts/AllPlot.h Charts/AllPl
            Charts/LTMCanvasPicker.h Charts/LTMChartParser.h Charts/LTMOutliers.h Charts/LTMPlot.h Charts/LTMPopup.h \
            Charts/LTMSettings.h Charts/LTMTool.h Charts/LTMTrend2.h Charts/LTMTrend.h Charts/LTMWindow.h \
            Charts/MetadataWindow.h Charts/MUPlot.h Charts/MUPool.h Charts/MUWidget.h Charts/PfPvPlot.h Charts/PfPvWindow.h \
-           Charts/PowerHist.h Charts/ReferenceLineDialog.h Charts/RideEditor.h Charts/MapPageSecurityPolicy.h Charts/RideMapWindow.h \
+           Charts/PowerHist.h Charts/ReferenceLineDialog.h Charts/RideEditor.h Charts/MapPageSecurityPolicy.h Charts/MapRoutePointIndex.h Charts/RideMapWindow.h \
            Charts/ScatterPlot.h Charts/ScatterWindow.h Charts/SmallPlot.h Charts/TreeMapPlot.h \
-           Charts/TreeMapWindow.h Charts/ZoneScaleDraw.h Charts/CalendarWindow.h Charts/AgendaWindow.h Charts/PlanAdherenceWindow.h
+           Charts/TreeMapWindow.h Charts/ZoneScaleDraw.h Charts/CalendarWindow.h Charts/CalendarSeasonWorkflow.h Charts/AgendaWindow.h Charts/PlanAdherenceWindow.h
 
 # cloud services
 HEADERS += Cloud/CalendarDownload.h Cloud/CloudService.h \
@@ -654,10 +694,10 @@ HEADERS += Cloud/CalendarDownload.h Cloud/CloudService.h \
 
 HEADERS += Cloud/LocalFileStoreProcess.h
 # core data
-HEADERS += Core/Athlete.h Core/ConfigFlags.h Core/Context.h Core/DataFilter.h Core/DataFilterResources.h Core/DataFilterSafety.h Core/DataFilterZones.h Core/FreeSearch.h Core/GcCalendarModel.h Core/GcUpgrade.h \
+HEADERS += Core/Athlete.h Core/AthleteSession.h Core/ConfigFlags.h Core/Context.h Core/DataFilter.h Core/DataFilterResources.h Core/DataFilterSafety.h Core/DataFilterZones.h Core/FreeSearch.h Core/GcCalendarModel.h Core/GcUpgrade.h \
            Core/IdleTimer.h Core/IntervalItem.h Core/LinkedActivityRemovalJournal.h Core/LinkedActivitySaveJournal.h Core/NamedSearch.h Core/PlannedActivityFileStager.h Core/RideCache.h Core/RideCacheBackgroundSaver.h Core/RideCacheBulkMerge.h Core/RideCacheCallbackGuard.h Core/RideCacheMutationScope.h Core/RideCachePersistence.h Core/RideCacheSaveCapture.h Core/RideCacheSaveSnapshot.h Core/RideCacheSnapshot.h Core/RideCacheStartup.h Core/RideCacheModel.h Core/RideDB.h \
            Core/RideCacheAggregate.h \
-           Core/RideItem.h Core/Route.h Core/RouteParser.h Core/Season.h Core/SeasonDialogs.h Core/Seasons.h Core/Secrets.h Core/Settings.h Core/CredentialSettings.h Core/CredentialStoreQtKeychain.h \
+           Core/RideItem.h Core/Route.h Core/RouteParser.h Core/Season.h Core/SeasonDialogs.h Core/Seasons.h Core/Secrets.h Core/SessionServices.h Core/Settings.h Core/CredentialSettings.h Core/CredentialStoreQtKeychain.h Core/TrainingSession.h \
            Core/Specification.h Core/TimeUtils.h Core/Units.h Core/UserData.h Core/Utils.h \
            Core/Measures.h Core/Quadtree.h Core/SplineLookup.h
 
@@ -682,8 +722,8 @@ HEADERS += FileIO/AnchoredFileSystem.h FileIO/ArchiveFile.h FileIO/AtomicFileWri
 HEADERS += Gui/AboutDialog.h Gui/AddIntervalDialog.h Gui/AnalysisSidebar.h Gui/CacheWriteWarning.h Gui/ChooseCyclistDialog.h Gui/ColorButton.h \
            Gui/Colors.h Gui/CompareDateRange.h Gui/CompareInterval.h Gui/ComparePane.h Gui/ConfigDialog.h Gui/MiniCalendar.h \
            Gui/DragBar.h Gui/EstimateCPDialog.h Gui/GcCrashDialog.h Gui/GcSideBarItem.h Gui/GcToolBar.h Gui/GcWindowLayout.h \
-           Gui/GcWindowRegistry.h Gui/GenerateHeatMapDialog.h Gui/HelpWhatsThis.h Gui/HelpWindow.h \
-           Gui/IntervalTreeView.h Gui/LTMSidebar.h Gui/MainWindow.h Gui/NewAthleteWizard.h Gui/Pages.h Gui/RideNavigator.h Gui/RideNavigatorProxy.h \
+           Gui/GcWindowRegistry.h Gui/GenerateHeatMapDialog.h Gui/GuiSmokeShutdown.h Gui/GuiStartupPolicy.h Gui/HelpWhatsThis.h Gui/HelpWindow.h \
+           Gui/IntervalTreeView.h Gui/LTMSidebar.h Gui/MainWindow.h Gui/OpenGLVersionProbe.h Gui/NewAthleteWizard.h Gui/Pages.h Gui/RideNavigator.h Gui/RideNavigatorProxy.h \
            Gui/RideNavigatorSearchFilter.h \
            Gui/SaveDialogs.h Gui/SearchBox.h Gui/SearchFilterBox.h Gui/SolveCPDialog.h Gui/AthleteTab.h Gui/AbstractView.h Gui/ToolsRhoEstimator.h \
            Gui/Views.h Gui/PerspectiveStateSource.h Gui/TrainPerspectiveState.h Gui/BatchProcessingDialog.h Gui/DownloadRideDialog.h Gui/ManualActivityWizard.h Gui/NewSideBar.h \
@@ -691,7 +731,7 @@ HEADERS += Gui/AboutDialog.h Gui/AddIntervalDialog.h Gui/AnalysisSidebar.h Gui/C
            Gui/SolverDisplay.h Gui/MetricSelect.h \
            Gui/AddTileWizard.h Gui/NavigationModel.h Gui/AthleteView.h Gui/AthleteConfigDialog.h Gui/AthletePages.h Gui/Perspective.h \
            Gui/PerspectiveDialog.h Gui/SplashScreen.h Gui/StyledItemDelegates.h Gui/MetadataDialog.h Gui/ActionButtonBox.h \
-           Gui/MetricOverrideDialog.h Gui/PlanWizards.h \
+           Gui/MetricOverrideDialog.h Gui/ModalWorkflowGuard.h Gui/PlanWizards.h \
            Gui/Calendar.h Gui/Agenda.h Gui/CalendarData.h Gui/CalendarItemDelegates.h \
            Gui/PlanAdherence.h \
            Gui/IconManager.h Gui/FilterSimilarDialog.h
@@ -727,14 +767,14 @@ HEADERS += Train/AddDeviceWizard.h Train/CalibrationData.h Train/ComputrainerCon
            Train/Library.h Train/LibraryParser.h Train/MeterWidget.h Train/NullController.h Train/RealtimeController.h \
            Train/RealtimeData.h Train/RealtimePlot.h Train/RealtimePlotWindow.h Train/RemoteControl.h Train/SpinScanPlot.h \
            Train/SpinScanPlotWindow.h Train/SpinScanPolarPlot.h Train/GarminServiceHelper.h Train/PhysicsUtility.h Train/BicycleSim.h \
-           Train/PolynomialRegression.h Train/MultiRegressionizer.h Train/StravaRoutesClient.h Train/StravaRoutesDownload.h \
+           Train/PolynomialRegression.h Train/MultiRegressionizer.h Train/StravaRoutesClient.h Train/StravaRoutesDownload.h Train/StravaRoutesDownloadPipeline.h \
            Train/HtmlTrainingBridge.h \
            Train/VideoSyncFileBase.h Train/ErgFileBase.h \
            Train/ModelFilter.h Train/MultiFilterProxyModel.h Train/WorkoutFilter.h Train/FilterEditor.h \
            Train/WorkoutFilterBox.h Train/TagBar.h Train/Taggable.h Train/TagStore.h Train/TagWidget.h \
            Train/TrainerDayAPIQuery.h Train/TrainerDayAPIDialog.h Train/ElevationChartWindow.h
 
-HEADERS += Train/LibraryImportFileStager.h Train/WebDownloadImportPolicy.h Train/TrainBottom.h Train/TrainDB.h Train/TrainSidebar.h \
+HEADERS += Train/LibraryImportFileStager.h Train/WorkoutImportBatch.h Train/WebDownloadImportPolicy.h Train/TrainBottom.h Train/TrainDB.h Train/TrainSidebar.h \
            Train/VideoLayoutParser.h Train/VideoSyncFile.h Train/WorkoutPlotWindow.h Train/WebPageWindow.h \
            Train/WorkoutWidget.h Train/WorkoutWidgetItems.h Train/WorkoutWindow.h Train/WorkoutWizard.h Train/ZwoParser.h \
            Train/LiveMapWebPageWindow.h Train/HtmlChart.h Train/ScalingLabel.h \
@@ -760,7 +800,7 @@ SOURCES += Charts/Aerolab.cpp Charts/AerolabWindow.cpp Charts/AllPlot.cpp Charts
            Charts/LTMCanvasPicker.cpp Charts/LTMChartParser.cpp Charts/LTMOutliers.cpp Charts/LTMPlot.cpp Charts/LTMPopup.cpp \
            Charts/LTMSettings.cpp Charts/LTMTool.cpp Charts/LTMTrend.cpp Charts/LTMWindow.cpp \
            Charts/MetadataWindow.cpp Charts/MUPlot.cpp Charts/MUWidget.cpp Charts/PfPvPlot.cpp Charts/PfPvWindow.cpp \
-           Charts/PowerHist.cpp Charts/ReferenceLineDialog.cpp Charts/RideEditor.cpp Charts/MapPageSecurityPolicy.cpp Charts/RideMapWindow.cpp \
+           Charts/PowerHist.cpp Charts/PowerHistSelection.cpp Charts/ReferenceLineDialog.cpp Charts/RideEditor.cpp Charts/MapPageSecurityPolicy.cpp Charts/MapRoutePointIndex.cpp Charts/RideMapWindow.cpp \
            Charts/ScatterPlot.cpp Charts/ScatterWindow.cpp Charts/SmallPlot.cpp Charts/TreeMapPlot.cpp \
            Charts/TreeMapWindow.cpp Charts/CalendarWindow.cpp Charts/AgendaWindow.cpp Charts/PlanAdherenceWindow.cpp
 
@@ -774,9 +814,9 @@ SOURCES += Cloud/CalendarDownload.cpp Cloud/CloudService.cpp \
 
 SOURCES += Cloud/LocalFileStoreProcess.cpp
 ## Core Data Structures
-SOURCES += Core/Athlete.cpp Core/Context.cpp Core/DataFilter.cpp Core/DataFilterSafety.cpp Core/DataFilterZones.cpp Core/FreeSearch.cpp Core/GcUpgrade.cpp Core/IdleTimer.cpp \
+SOURCES += Core/Athlete.cpp Core/AthleteSession.cpp Core/Context.cpp Core/ContextSessionServices.cpp Core/DataFilter.cpp Core/DataFilterSafety.cpp Core/DataFilterZones.cpp Core/FreeSearch.cpp Core/GcUpgrade.cpp Core/IdleTimer.cpp \
            Core/IntervalItem.cpp Core/LinkedActivityRemovalJournal.cpp Core/LinkedActivitySaveJournal.cpp Core/main.cpp Core/NamedSearch.cpp Core/PlannedActivityFileFactoryStager.cpp Core/PlannedActivityFileStager.cpp Core/RideCache.cpp Core/RideCacheActivityLinking.cpp Core/RideCacheBackgroundSaver.cpp Core/RideCacheCalendarMutations.cpp Core/RideCacheGarbageCollection.cpp Core/RideCacheImport.cpp Core/RideCacheLiveView.cpp Core/RideCacheMutationScope.cpp Core/RideCachePersistence.cpp Core/RideCacheSaveCapture.cpp Core/RideCacheSaveSnapshot.cpp Core/RideCacheSnapshot.cpp Core/RideCacheRemoval.cpp Core/RideCacheModel.cpp Core/RideCacheModelProtocol.cpp Core/RideItem.cpp \
-           Core/Route.cpp Core/RouteParser.cpp Core/Season.cpp Core/SeasonDialogs.cpp Core/Seasons.cpp Core/Settings.cpp Core/CredentialSettings.cpp Core/CredentialStoreQtKeychain.cpp Core/Specification.cpp \
+           Core/Route.cpp Core/RouteParser.cpp Core/Season.cpp Core/SeasonDialogs.cpp Core/Seasons.cpp Core/Settings.cpp Core/CredentialSettings.cpp Core/CredentialStoreQtKeychain.cpp Core/Specification.cpp Core/TrainingSession.cpp \
            Core/TimeUtils.cpp Core/Units.cpp Core/UserData.cpp Core/Utils.cpp \
            Core/Measures.cpp Core/Quadtree.cpp Core/SplineLookup.cpp
 
@@ -804,8 +844,8 @@ SOURCES += FileIO/AnchoredFileSystem.cpp FileIO/ArchiveFile.cpp FileIO/AthleteBa
 SOURCES += Gui/AboutDialog.cpp Gui/AddIntervalDialog.cpp Gui/AnalysisSidebar.cpp Gui/CacheWriteWarning.cpp Gui/ChooseCyclistDialog.cpp Gui/ColorButton.cpp \
            Gui/Colors.cpp Gui/CompareDateRange.cpp Gui/CompareInterval.cpp Gui/ComparePane.cpp Gui/ConfigDialog.cpp Gui/MiniCalendar.cpp \
            Gui/DragBar.cpp Gui/EstimateCPDialog.cpp Gui/GcCrashDialog.cpp Gui/GcSideBarItem.cpp Gui/GcToolBar.cpp Gui/GcWindowLayout.cpp \
-           Gui/GcWindowRegistry.cpp Gui/GenerateHeatMapDialog.cpp Gui/HelpWhatsThis.cpp Gui/HelpWindow.cpp \
-           Gui/IntervalTreeView.cpp Gui/LTMSidebar.cpp Gui/MainWindow.cpp Gui/NewAthleteWizard.cpp Gui/Pages.cpp Gui/RideNavigator.cpp Gui/SaveDialogs.cpp \
+           Gui/GcWindowRegistry.cpp Gui/GenerateHeatMapDialog.cpp Gui/GuiSmokeShutdown.cpp Gui/GuiStartupPolicy.cpp Gui/HelpWhatsThis.cpp Gui/HelpWindow.cpp \
+           Gui/IntervalTreeView.cpp Gui/LTMSidebar.cpp Gui/MainWindow.cpp Gui/OpenGLVersionProbe.cpp Gui/NewAthleteWizard.cpp Gui/Pages.cpp Gui/RideNavigator.cpp Gui/SaveDialogs.cpp \
            Gui/SearchBox.cpp Gui/SearchFilterBox.cpp Gui/SolveCPDialog.cpp Gui/AthleteTab.cpp Gui/AbstractView.cpp Gui/ToolsRhoEstimator.cpp Gui/Views.cpp Gui/PerspectiveStateSource.cpp Gui/TrainPerspectiveState.cpp \
            Gui/BatchProcessingDialog.cpp Gui/DownloadRideDialog.cpp Gui/ManualActivityWizard.cpp Gui/EditUserMetricDialog.cpp Gui/NewSideBar.cpp \
            Gui/MergeActivityAlignment.cpp Gui/MergeActivityDistanceCursor.cpp Gui/MergeActivityRidePreparation.cpp Gui/MergeActivityTimeOffset.cpp Gui/MergeActivityWizard.cpp Gui/MergeActivityXData.cpp Gui/RideImportWizard.cpp Gui/SplitActivitySave.cpp Gui/SplitActivityWizard.cpp Gui/SplitRideData.cpp \
@@ -844,11 +884,11 @@ SOURCES += ../contrib/qtsolutions/codeeditor/codeeditor.cpp ../contrib/qtsolutio
 
 ## Train View Components
 SOURCES += Train/AddDeviceWizard.cpp Train/CalibrationData.cpp Train/ComputrainerController.cpp Train/Computrainer.cpp Train/DeviceConfiguration.cpp \
-           Train/DeviceTypes.cpp Train/DialWindow.cpp Train/TrainerDay.cpp Train/TrainerDayDownloadDialog.cpp Train/ErgFile.cpp Train/ErgFilePlot.cpp \
-           Train/Library.cpp Train/LibraryImportFileStager.cpp Train/WebDownloadImportPolicy.cpp Train/LibraryParser.cpp Train/MeterWidget.cpp Train/NullController.cpp Train/RealtimeController.cpp \
+           Train/DeviceTypes.cpp Train/DialWindow.cpp Train/TrainerDay.cpp Train/TrainerDayDownloadDialog.cpp Train/ErgFile.cpp Train/ErgFileBytes.cpp Train/ErgFilePlot.cpp \
+           Train/Library.cpp Train/LibraryImportFileStager.cpp Train/WorkoutImportBatch.cpp Train/WebDownloadImportPolicy.cpp Train/LibraryParser.cpp Train/MeterWidget.cpp Train/NullController.cpp Train/RealtimeController.cpp \
            Train/RealtimeData.cpp Train/RealtimePlot.cpp Train/RealtimePlotWindow.cpp Train/RemoteControl.cpp Train/SpinScanPlot.cpp \
            Train/SpinScanPlotWindow.cpp Train/SpinScanPolarPlot.cpp Train/GarminServiceHelper.cpp Train/PhysicsUtility.cpp Train/BicycleSim.cpp \
-           Train/PolynomialRegression.cpp Train/StravaRoutesClient.cpp Train/StravaRoutesDownload.cpp \
+           Train/PolynomialRegression.cpp Train/StravaRoutesClient.cpp Train/StravaRoutesDownload.cpp Train/StravaRoutesDownloadPipeline.cpp \
            Train/VideoSyncFileBase.cpp Train/ErgFileBase.cpp \
            Train/ModelFilter.cpp Train/MultiFilterProxyModel.cpp Train/WorkoutFilter.cpp Train/FilterEditor.cpp \
            Train/WorkoutFilterBox.cpp Train/TagBar.cpp Train/TagWidget.cpp \

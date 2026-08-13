@@ -13,6 +13,8 @@ DEFINES += GC_RIDE_CACHE_REMOVAL_TEST_HOOKS \
 
 SOURCES = testRideCacheRemoval.cpp \
           RideCacheRemovalTestStubs.cpp \
+          ../../../src/Core/AthleteSession.cpp \
+          ../../../src/Core/TrainingSession.cpp \
           ../../../src/FileIO/AnchoredFileSystem.cpp \
           ../../../src/FileIO/LocationInterpolation.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
@@ -24,6 +26,7 @@ SOURCES = testRideCacheRemoval.cpp \
           ../../../src/Planning/PlanBundleImportJournal.cpp \
           ../../../src/Planning/PlanReplacementJournal.cpp \
           ../../../src/Train/TrainDB.cpp \
+          ../../../src/Train/ErgFileBytes.cpp \
           ../../../src/Train/ErgFileBase.cpp \
           ../../../src/Train/VideoSyncFileBase.cpp \
           ../../../src/Core/PlannedActivityFileStager.cpp \
@@ -38,6 +41,9 @@ SOURCES = testRideCacheRemoval.cpp \
           ../../../contrib/qzip/zip.cpp
 
 HEADERS = ../../../src/Core/Athlete.h \
+          ../../../src/Core/AthleteSession.h \
+          ../../../src/Core/TrainingSession.h \
+          ../../../src/Core/SessionServices.h \
           ../../../src/FileIO/AnchoredFileSystem.h \
           ../../../src/Core/Context.h \
           ../../../src/Core/RideCache.h \
@@ -71,15 +77,13 @@ INCLUDEPATH += ../../../src \
                $${GSL_INCLUDES}
 
 LIBS += $${GSL_LIBS}
+win32:LIBS += -ladvapi32
 
 unix {
     LIBS += -lz
 }
 
-unix:!macx {
-    QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-    QMAKE_LFLAGS += -Wl,--gc-sections
-}
+include(../../section-gc.prf)
 
 sanitize:!tsan:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

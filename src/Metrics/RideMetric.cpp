@@ -25,6 +25,10 @@
 #include "Zones.h"
 #include "HrZones.h"
 
+#include <QSet>
+
+#include <mutex>
+
 // DB Schema Version - YOU MUST UPDATE THIS IF THE SCHEMA VERSION CHANGES!!!
 // Schema version will change if a) the default metadata.xml is updated
 //                            or b) new metrics are added / old changed
@@ -171,14 +175,318 @@
 
 int DBSchemaVersion = 160;
 
-RideMetricFactory *RideMetricFactory::_instance;
-QVector<QString> RideMetricFactory::noDeps;
 QList<QString> RideMetricFactory::compatibilitymetrics;
 
 // user defined metrics are loaded by the ridecache on startup
 // and then reloaded by ridecache if they change
 QList<UserMetricSettings> _userMetrics;
-quint16 UserMetricSchemaVersion = 0;
+std::atomic<quint16> UserMetricSchemaVersion{0};
+
+class RideMetricRegistryState
+{
+public:
+    RideMetricRegistryState() = default;
+
+    RideMetricRegistryState(const RideMetricRegistryState &other)
+        : metricNames(other.metricNames), metricTypes(other.metricTypes),
+          metrics(other.metrics), dependencyMap(other.dependencyMap),
+          userMetricSchemaVersion(other.userMetricSchemaVersion)
+    {
+    }
+
+    QStringList metricNames;
+    QVector<RideMetric::MetricType> metricTypes;
+    QHash<QString, RideMetricPtr> metrics;
+    QHash<QString, QVector<QString>> dependencyMap;
+    quint16 userMetricSchemaVersion = 0;
+    mutable std::once_flag dependenciesChecked;
+};
+
+thread_local std::shared_ptr<const RideMetricRegistryState>
+    RideMetricFactory::constructionState_;
+
+namespace {
+
+const QStringList &emptyMetricNames()
+{
+    static const QStringList empty;
+    return empty;
+}
+
+const QVector<QString> &emptyDependencies()
+{
+    static const QVector<QString> empty;
+    return empty;
+}
+
+} // namespace
+
+RideMetricRegistrySnapshot::RideMetricRegistrySnapshot(
+    std::shared_ptr<const RideMetricRegistryState> state)
+    : state_(std::move(state))
+{
+}
+
+int RideMetricRegistrySnapshot::metricCount() const
+{
+    return state_ ? state_->metricNames.size() : 0;
+}
+
+const QStringList &RideMetricRegistrySnapshot::allMetrics() const
+{
+    return state_ ? state_->metricNames : emptyMetricNames();
+}
+
+QString RideMetricRegistrySnapshot::metricName(int index) const
+{
+    return state_ && index >= 0 && index < state_->metricNames.size()
+        ? state_->metricNames.at(index) : QString();
+}
+
+RideMetric::MetricType
+RideMetricRegistrySnapshot::metricType(int index) const
+{
+    return state_ && index >= 0 && index < state_->metricTypes.size()
+        ? state_->metricTypes.at(index) : RideMetric::Total;
+}
+
+const RideMetric *
+RideMetricRegistrySnapshot::rideMetric(const QString &symbol) const
+{
+    return state_ ? state_->metrics.value(symbol).data() : nullptr;
+}
+
+bool RideMetricRegistrySnapshot::haveMetric(const QString &symbol) const
+{
+    return state_ && state_->metrics.contains(symbol);
+}
+
+RideMetric *RideMetricRegistrySnapshot::newMetric(const QString &symbol) const
+{
+    if (!state_) return nullptr;
+
+    std::call_once(state_->dependenciesChecked, [state = state_]() {
+        for (auto it = state->dependencyMap.cbegin();
+             it != state->dependencyMap.cend(); ++it) {
+            for (const QString &dependency : it.value()) {
+                if (!state->metrics.contains(dependency))
+                    qDebug() << "metric dep error:" << dependency;
+            }
+        }
+    });
+
+    const RideMetricPtr definition = state_->metrics.value(symbol);
+    return definition ? definition->clone() : nullptr;
+}
+
+const QVector<QString> &
+RideMetricRegistrySnapshot::dependencies(const QString &symbol) const
+{
+    if (!state_ || !state_->metrics.contains(symbol))
+        return emptyDependencies();
+    const auto it = state_->dependencyMap.constFind(symbol);
+    return it == state_->dependencyMap.cend()
+        ? emptyDependencies() : it.value();
+}
+
+quint16 RideMetricRegistrySnapshot::userMetricSchemaVersion() const
+{
+    return state_ ? state_->userMetricSchemaVersion : 0;
+}
+
+RideMetricFactory::RideMetricFactory()
+    : state_(std::make_shared<const RideMetricRegistryState>())
+{
+}
+
+RideMetricRegistrySnapshot RideMetricFactory::snapshot() const
+{
+    if (constructionState_)
+        return RideMetricRegistrySnapshot(constructionState_);
+    return RideMetricRegistrySnapshot(
+        std::atomic_load_explicit(&state_, std::memory_order_acquire));
+}
+
+int RideMetricFactory::metricCount() const
+{
+    return snapshot().metricCount();
+}
+
+QHash<QString, RideMetric *> RideMetricFactory::metricHash() const
+{
+    const RideMetricRegistrySnapshot current = snapshot();
+    QHash<QString, RideMetric *> result;
+    if (!current.state_) return result;
+    for (auto it = current.state_->metrics.cbegin();
+         it != current.state_->metrics.cend(); ++it) {
+        result.insert(it.key(), it.value().data());
+    }
+    return result;
+}
+
+void RideMetricFactory::initialize()
+{
+    QMutexLocker locker(&writerMutex_);
+    const auto current =
+        std::atomic_load_explicit(&state_, std::memory_order_acquire);
+    auto next = std::make_shared<RideMetricRegistryState>(*current);
+    QHash<QString, RideMetricPtr> initialized;
+
+    for (const QString &name : current->metricNames) {
+        const RideMetricPtr definition = current->metrics.value(name);
+        RideMetricPtr copy(definition ? definition->clone() : nullptr);
+        if (!copy) {
+            qWarning() << "cannot initialize metric clone:" << name;
+            return;
+        }
+        copy->setIndex(definition->index());
+        copy->initialize();
+        initialized.insert(name, copy);
+    }
+    next->metrics = initialized;
+    std::atomic_store_explicit(
+        &state_, std::shared_ptr<const RideMetricRegistryState>(next),
+        std::memory_order_release);
+}
+
+QStringList RideMetricFactory::allMetrics() const
+{
+    return snapshot().allMetrics();
+}
+
+QString RideMetricFactory::metricName(int index) const
+{
+    return snapshot().metricName(index);
+}
+
+RideMetric::MetricType RideMetricFactory::metricType(int index) const
+{
+    return snapshot().metricType(index);
+}
+
+const RideMetric *RideMetricFactory::rideMetric(QString name) const
+{
+    return snapshot().rideMetric(name);
+}
+
+bool RideMetricFactory::haveMetric(const QString &symbol) const
+{
+    return snapshot().haveMetric(symbol);
+}
+
+RideMetric *RideMetricFactory::newMetric(const QString &symbol) const
+{
+    return snapshot().newMetric(symbol);
+}
+
+void RideMetricFactory::removeUserMetrics()
+{
+    QMutexLocker locker(&writerMutex_);
+    const auto current =
+        std::atomic_load_explicit(&state_, std::memory_order_acquire);
+    auto next = std::make_shared<RideMetricRegistryState>();
+    next->userMetricSchemaVersion = current->userMetricSchemaVersion;
+
+    for (const QString &name : current->metricNames) {
+        const RideMetricPtr metric = current->metrics.value(name);
+        if (metric && metric->isUser()) break;
+        next->metricNames.append(name);
+        next->metricTypes.append(current->metricTypes.at(
+            next->metricTypes.size()));
+        next->metrics.insert(name, metric);
+        const auto dependencies = current->dependencyMap.constFind(name);
+        if (dependencies != current->dependencyMap.cend())
+            next->dependencyMap.insert(name, dependencies.value());
+    }
+
+    if (next->metricNames.size() == current->metricNames.size()) return;
+    std::atomic_store_explicit(
+        &state_, std::shared_ptr<const RideMetricRegistryState>(next),
+        std::memory_order_release);
+}
+
+bool RideMetricFactory::replaceUserMetrics(
+    const QList<UserMetricSettings> &settings, quint16 schemaVersion)
+{
+    QMutexLocker locker(&writerMutex_);
+    const auto current =
+        std::atomic_load_explicit(&state_, std::memory_order_acquire);
+    auto next = std::make_shared<RideMetricRegistryState>();
+
+    for (const QString &name : current->metricNames) {
+        const RideMetricPtr metric = current->metrics.value(name);
+        if (metric && metric->isUser()) break;
+        next->metricNames.append(name);
+        next->metricTypes.append(current->metricTypes.at(
+            next->metricTypes.size()));
+        next->metrics.insert(name, metric);
+        const auto dependencies = current->dependencyMap.constFind(name);
+        if (dependencies != current->dependencyMap.cend())
+            next->dependencyMap.insert(name, dependencies.value());
+    }
+    next->userMetricSchemaVersion = schemaVersion;
+
+    const auto previousConstructionState = constructionState_;
+    constructionState_ = next;
+    struct ConstructionStateRestore {
+        std::shared_ptr<const RideMetricRegistryState> previous;
+        ~ConstructionStateRestore()
+        {
+            RideMetricFactory::constructionState_ = std::move(previous);
+        }
+    } restore{previousConstructionState};
+
+    for (const UserMetricSettings &setting : settings) {
+        if (next->metrics.contains(setting.symbol)) continue;
+        RideMetricPtr metric(new UserMetric(setting));
+        metric->setIndex(next->metrics.size());
+        next->metrics.insert(setting.symbol, metric);
+        next->metricNames.append(setting.symbol);
+        next->metricTypes.append(metric->type());
+    }
+
+    std::atomic_store_explicit(
+        &state_, std::shared_ptr<const RideMetricRegistryState>(next),
+        std::memory_order_release);
+    UserMetricSchemaVersion.store(schemaVersion, std::memory_order_release);
+    return true;
+}
+
+bool RideMetricFactory::addMetric(
+    const RideMetric &metric, const QVector<QString> *dependencies)
+{
+    RideMetricPtr registered(metric.clone());
+    if (!registered) return false;
+
+    QMutexLocker locker(&writerMutex_);
+    const auto current =
+        std::atomic_load_explicit(&state_, std::memory_order_acquire);
+    if (current->metrics.contains(metric.symbol())) return false;
+
+    auto next = std::make_shared<RideMetricRegistryState>(*current);
+    registered->setIndex(next->metrics.size());
+    next->metrics.insert(metric.symbol(), registered);
+    next->metricNames.append(metric.symbol());
+    next->metricTypes.append(metric.type());
+    if (dependencies)
+        next->dependencyMap.insert(metric.symbol(), *dependencies);
+
+    std::atomic_store_explicit(
+        &state_, std::shared_ptr<const RideMetricRegistryState>(next),
+        std::memory_order_release);
+    return true;
+}
+
+QVector<QString>
+RideMetricFactory::dependencies(const QString &symbol) const
+{
+    return snapshot().dependencies(symbol);
+}
+
+quint16 RideMetricFactory::userMetricSchemaVersion() const
+{
+    return snapshot().userMetricSchemaVersion();
+}
 
 quint16
 RideMetric::userMetricFingerprint(QList<UserMetricSettings> these)
@@ -194,25 +502,125 @@ RideMetric::userMetricFingerprint(QList<UserMetricSettings> these)
 QHash<QString,RideMetricPtr>
 RideMetric::computeMetrics(RideItem *item, Specification spec, const QStringList &metrics)
 {
-    const RideMetricFactory &factory = RideMetricFactory::instance();
+    return computeMetrics(
+        item, spec, metrics, RideMetricFactory::instance().snapshot());
+}
 
-    // generate worklist from metrics we know
-    // bear in mind this can change as users add
-    // and remove user metrics
-    // builtin User metrics are computed after builtins
-    // since they don't have explicit dependencies set, yet.
-    QStringList builtin;
-    QStringList user;
-    foreach(QString metric, metrics)
-        if (factory.haveMetric(metric)) {
-            if (factory.rideMetric(metric)->isUser())
-                user << metric;
-            else
-                builtin << metric;
+QHash<QString,RideMetricPtr>
+RideMetric::computeMetrics(
+    RideItem *item, Specification spec, const QStringList &metrics,
+    const RideMetricRegistrySnapshot &factory)
+{
+
+    // Keep the historical builtin-before-user root ordering, but de-duplicate
+    // requests before constructing the reachable dependency graph.
+    QStringList builtinRoots;
+    QStringList userRoots;
+    QSet<QString> requestedSymbols;
+    foreach (const QString &metric, metrics) {
+        if (!factory.haveMetric(metric) || requestedSymbols.contains(metric))
+            continue;
+
+        requestedSymbols.insert(metric);
+        if (factory.rideMetric(metric)->isUser())
+            userRoots.append(metric);
+        else
+            builtinRoots.append(metric);
+    }
+    const bool hasUserMetrics = !userRoots.isEmpty();
+    const QStringList roots = builtinRoots + userRoots;
+
+    // Discover only the graph reachable from requested metrics. Preserve root
+    // and declared dependency order so every valid graph has a stable order.
+    QStringList discovered = roots;
+    QSet<QString> discoveredSet(requestedSymbols);
+    QHash<QString, QVector<QString>> graph;
+    QHash<QString, QStringList> dependents;
+    QSet<QString> invalid;
+
+    for (int i = 0; i < discovered.size(); ++i) {
+        const QString symbol = discovered.at(i);
+        QVector<QString> knownDependencies;
+        QSet<QString> seenDependencies;
+
+        foreach (const QString &dependency, factory.dependencies(symbol)) {
+            if (seenDependencies.contains(dependency)) continue;
+            seenDependencies.insert(dependency);
+
+            if (!factory.haveMetric(dependency)) {
+                invalid.insert(symbol);
+                continue;
+            }
+
+            knownDependencies.append(dependency);
+            dependents[dependency].append(symbol);
+            if (!discoveredSet.contains(dependency)) {
+                discoveredSet.insert(dependency);
+                discovered.append(dependency);
+            }
         }
+        graph.insert(symbol, knownDependencies);
+    }
 
-    // this is what we've completed as we go
-    QHash<QString,RideMetric*> done;
+    // A metric with a missing dependency, and every metric depending on it,
+    // is unresolvable even when the remainder of its graph is acyclic.
+    QStringList invalidQueue;
+    foreach (const QString &symbol, discovered)
+        if (invalid.contains(symbol)) invalidQueue.append(symbol);
+
+    for (int i = 0; i < invalidQueue.size(); ++i) {
+        foreach (const QString &dependent, dependents.value(invalidQueue.at(i))) {
+            if (invalid.contains(dependent)) continue;
+            invalid.insert(dependent);
+            invalidQueue.append(dependent);
+        }
+    }
+
+    // Kahn's algorithm resolves the valid acyclic portion. Cycle members and
+    // their dependents retain a positive indegree and are never scheduled.
+    QHash<QString, int> indegree;
+    QStringList ready;
+    foreach (const QString &symbol, discovered) {
+        if (invalid.contains(symbol)) continue;
+        indegree.insert(symbol, graph.value(symbol).size());
+        if (indegree.value(symbol) == 0) ready.append(symbol);
+    }
+
+    QStringList topologicalOrder;
+    QSet<QString> resolved;
+    for (int i = 0; i < ready.size(); ++i) {
+        const QString symbol = ready.at(i);
+        if (resolved.contains(symbol)) continue;
+
+        resolved.insert(symbol);
+        topologicalOrder.append(symbol);
+        foreach (const QString &dependent, dependents.value(symbol)) {
+            if (invalid.contains(dependent) || resolved.contains(dependent))
+                continue;
+
+            const int remaining = indegree.value(dependent) - 1;
+            indegree.insert(dependent, remaining);
+            if (remaining == 0) ready.append(dependent);
+        }
+    }
+
+    // Do not compute an otherwise valid dependency when all requested roots
+    // that need it are unresolvable.
+    QSet<QString> needed;
+    QStringList neededQueue;
+    foreach (const QString &root, roots) {
+        if (!resolved.contains(root) || needed.contains(root)) continue;
+        needed.insert(root);
+        neededQueue.append(root);
+    }
+    for (int i = 0; i < neededQueue.size(); ++i) {
+        foreach (const QString &dependency, graph.value(neededQueue.at(i))) {
+            if (!resolved.contains(dependency) || needed.contains(dependency))
+                continue;
+            needed.insert(dependency);
+            neededQueue.append(dependency);
+        }
+    }
 
     // resize the metric array in the interval if needed
     if (spec.interval() && spec.interval()->metrics().size() < factory.metricCount()) 
@@ -222,81 +630,51 @@ RideMetric::computeMetrics(RideItem *item, Specification spec, const QStringList
     if (!spec.interval() && item->metrics().size() < factory.metricCount())
         item->metrics().resize(factory.metricCount());
 
-    // working through the todo list...
-    while (!builtin.isEmpty() || !user.isEmpty()) {
+    QHash<QString, RideMetricPtr> owned;
+    QHash<QString, RideMetric *> done;
+    foreach (const QString &symbol, topologicalOrder) {
+        if (!needed.contains(symbol)) continue;
 
-        // next one to do, builtins first then user defined
-        QString symbol = builtin.isEmpty() ? user.takeFirst() :
-                                             builtin.takeFirst();
-
-        // doesn't exist !
-        if (!factory.haveMetric(symbol)) continue;
-
-        // does this one have any dependencies?
-        const QVector<QString> &deps = factory.dependencies(symbol);
-
-        bool ready = true;
-
-        // if the dependencies aren't done yet add to the end of the list
-        foreach (QString dep, deps) {
-            if (!done.contains(dep)) {
-                ready = false;
-                if (!builtin.contains(dep))
-                    builtin.append(dep);
+        bool dependenciesReady = true;
+        foreach (const QString &dependency, graph.value(symbol)) {
+            if (!done.contains(dependency)) {
+                dependenciesReady = false;
+                break;
             }
         }
+        if (!dependenciesReady) continue;
 
-        // if all our depencies are computed we can do this one
-        if (ready) {
+        // Hold ownership before compute so null clones and exceptional metric
+        // implementations cannot leak already-computed instances.
+        RideMetricPtr metric(factory.newMetric(symbol));
+        if (metric.isNull()) continue;
 
-            // we clone so we can remain thread safe
-            // do not be tempted to change this (!)
-            RideMetric *m = factory.newMetric(symbol);
-            m->setValue(0.0);
-            m->setCount(0);
-            m->compute(item, spec, done);
+        RideMetric *m = metric.data();
+        m->setValue(0.0);
+        m->setCount(0);
+        m->compute(item, spec, done);
 
-            // override the computed value if set by user, but not for intervals
-            if (!spec.interval() && item->ride() && item->ride()->metricOverrides.contains(symbol))
-                m->override(item->ride()->metricOverrides.value(symbol));
+        // override the computed value if set by user, but not for intervals
+        if (!spec.interval() && item->ride() && item->ride()->metricOverrides.contains(symbol))
+            m->override(item->ride()->metricOverrides.value(symbol));
 
-            // all computed add to the return list
-            done.insert(symbol, m);
+        owned.insert(symbol, metric);
+        done.insert(symbol, m);
 
-            // put into value array too. user metrics will interrogate
-            // this for symbol values, rather than the metric pointer
-            // this is crucial, even though RideItem and IntervalItem both
-            // update their values directly. But only need to bother if the
-            // user has defined any local metrics.
-            if (user.count()) {
-                if (spec.interval()) spec.interval()->metrics()[m->index()] = m->value();
-                else item->metrics()[m->index()] = m->value();
-            }
-
-        } else {
-
-            // we need to wait for our dependencies so add
-            // to the back of the list 
-            if (!builtin.contains(symbol))
-                builtin.append(symbol);
+        // User metrics interrogate the value array rather than dependency
+        // pointers, so publish every resolved dependency before they run.
+        if (hasUserMetrics) {
+            if (spec.interval()) spec.interval()->metrics()[m->index()] = m->value();
+            else item->metrics()[m->index()] = m->value();
         }
     }
 
-    // lets prepate the results using a shared pointer
-    // which is deleted when reference count 0 and goes out of scope
     QHash<QString,RideMetricPtr> result;
-    foreach (QString symbol, metrics) {
-        if (factory.haveMetric(symbol)) {
-            result.insert(symbol, QSharedPointer<RideMetric>(done.value(symbol)));
-            done.remove(symbol);
-        }
+    foreach (const QString &symbol, metrics) {
+        const RideMetricPtr metric = owned.value(symbol);
+        if (!metric.isNull()) result.insert(symbol, metric);
     }
 
-    // delete the cloned metrics, no memory leak here :)
-    foreach (QString symbol, done.keys())
-        delete done.value(symbol);
-
-    // and we're done
     return result;
 }
 

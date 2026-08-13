@@ -24,6 +24,7 @@
 #include "SaveDialogs.h"
 #include "LinkedActivityRemovalJournal.h"
 #include "LinkedActivitySaveJournal.h"
+#include "SplitActivitySave.h"
 #include "PlanBundle.h"
 #include "PlanReplacementJournal.h"
 #include "PlannedActivityFileStager.h"
@@ -158,7 +159,7 @@ RideCache::RideCache(Context *context) : context(context)
 
     // initial load of user defined metrics - do once we have an initial context
     // but before we refresh or check metrics for the first time
-    if (UserMetricSchemaVersion == 0) {
+    if (RideMetricFactory::instance().userMetricSchemaVersion() == 0) {
 
         QString metrics = QString("%1/../usermetrics.xml").arg(context->athlete->home->root().absolutePath());
         if (QFile(metrics).exists()) {
@@ -177,12 +178,10 @@ RideCache::RideCache(Context *context) : context(context)
             UserMetric::addCompatibility(_userMetrics);
 
             // reset schema version
-            UserMetricSchemaVersion = RideMetric::userMetricFingerprint(_userMetrics);
-
-            // now add initial metrics
-            foreach(UserMetricSettings m, _userMetrics) {
-                RideMetricFactory::instance().addMetric(UserMetric(context, m));
-            }
+            const quint16 schemaVersion =
+                RideMetric::userMetricFingerprint(_userMetrics);
+            RideMetricFactory::instance().replaceUserMetrics(
+                _userMetrics, schemaVersion);
         }
 
         // reset special fields to take into account user metrics
@@ -198,6 +197,14 @@ RideCache::RideCache(Context *context) : context(context)
         context, SIGNAL(configChanged(qint32)),
         this, SLOT(configChanged(qint32)));
 
+    if (!SplitActivityTransaction::reconcileAll(
+            context->athlete->home->root().absolutePath(),
+            startupRecoveryError_)) {
+        qCritical().noquote()
+            << "Split activity recovery must be completed before loading:"
+            << startupRecoveryError_;
+        return;
+    }
     if (!LinkedActivityRemoval::Journal::reconcileAll(
             context->athlete->home->root().absolutePath(),
             startupRecoveryError_)) {

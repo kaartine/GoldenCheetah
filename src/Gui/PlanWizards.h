@@ -34,10 +34,15 @@
 #include <QStackedWidget>
 
 #include <functional>
+#include <memory>
 
 #include "PlanBundle.h"
+#include "ModalWorkflowGuard.h"
 #include "Season.h"
 #include "StyledItemDelegates.h"
+
+
+class MainWindow;
 
 
 class DisplayBox : public QFrame {
@@ -476,6 +481,10 @@ class ExportPlanWizard : public QWizard
 
         ExportPlanWizard(Context *context, Season const * const preselectSeason = nullptr, QWidget *parent = nullptr);
 
+        void setWorkflowValidator(
+            ModalWorkflowValidator validator);
+        bool workflowIsCurrent() const;
+
         QList<SourceRide> sourceRides;
 
         PlanExportDescription &description();
@@ -493,7 +502,13 @@ class ExportPlanWizard : public QWizard
         virtual void done(int result) override;
 
     private:
-        Context *context;
+        QPointer<Context> context;
+        QPointer<MainWindow> mainWindow;
+        QPointer<Athlete> athlete;
+        QPointer<RideCache> cache;
+        QPointer<AthleteTab> tab;
+        std::unique_ptr<ModalWorkflowGuard> ownerGuard;
+        ModalWorkflowValidator workflowValidator;
         PlanExportDescription _description;
 };
 
@@ -510,7 +525,7 @@ class ExportPlanPageSetup : public QWizardPage
         bool isComplete() const override;
 
     private:
-        Context *context;
+        QPointer<Context> context;
         QDateEdit *startDate;
         QDateEdit *endDate;
         QRadioButton *originalRadio;
@@ -535,7 +550,7 @@ class ExportPlanPageActivities : public QWizardPage
         void cleanupPage() override;
 
     private:
-        Context *context;
+        QPointer<Context> context;
         QTreeWidget *activityTree;
         TargetRangeBar *targetRangeBar;
         int numSelected = 0;
@@ -557,7 +572,7 @@ class ExportPlanPageMetadata : public QWizardPage
         void cleanupPage() override;
 
     private:
-        Context *context;
+        QPointer<Context> context;
         QLineEdit *authorEdit;
         QLineEdit *nameEdit;
         QLineEdit *copyrightEdit;
@@ -578,7 +593,7 @@ class ExportPlanPageSummary : public QWizardPage
         bool isComplete() const override;
 
     private:
-        Context *context;
+        QPointer<Context> context;
 
         DisplayBox *nameBox;
         DisplayBox *authorBox;
@@ -649,7 +664,20 @@ class ImportPlanWizard : public QWizard
 
         ImportPlanWizard(Context *context, QDate targetDay, QWidget *parent = nullptr);
 
+        void setWorkflowValidator(
+            ModalWorkflowValidator validator);
+        bool workflowIsCurrent() const;
+
         QSharedPointer<PlanBundleReader> planReader;
+
+    private:
+        QPointer<Context> context;
+        QPointer<MainWindow> mainWindow;
+        QPointer<Athlete> athlete;
+        QPointer<RideCache> cache;
+        QPointer<AthleteTab> tab;
+        std::unique_ptr<ModalWorkflowGuard> ownerGuard;
+        ModalWorkflowValidator workflowValidator;
 };
 
 

@@ -34,8 +34,7 @@ INCLUDEPATH += $$PWD/../../../src \
                $$PWD/../../../qwt/src \
                $$PWD/../../../contrib/boost
 
-QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-QMAKE_LFLAGS += -Wl,--gc-sections
+include(../../section-gc.prf)
 
 sanitize {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

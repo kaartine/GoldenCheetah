@@ -36,8 +36,15 @@
 #include "ErgFile.h"
 #include "ErgFilePlot.h"
 #include "InfoWidget.h"
+#include "ModalWorkflowGuard.h"
+
+#include <memory>
 
 class Context;
+class Athlete;
+class AthleteTab;
+class MainWindow;
+class RideCache;
 
 
 class ManualActivityWizard : public QWizard
@@ -56,11 +63,21 @@ class ManualActivityWizard : public QWizard
 
         ManualActivityWizard(Context *context, bool plan = false, const QDateTime &when = QDateTime(), QWidget *parent = nullptr);
 
+        void setWorkflowValidator(
+            ModalWorkflowValidator validator);
+        bool workflowIsCurrent() const;
+
     protected:
         virtual void done(int result) override;
 
     private:
-        Context *context;
+        QPointer<Context> context;
+        QPointer<MainWindow> mainWindow;
+        QPointer<Athlete> athlete;
+        QPointer<RideCache> cache;
+        QPointer<AthleteTab> tab;
+        std::unique_ptr<ModalWorkflowGuard> ownerGuard;
+        ModalWorkflowValidator workflowValidator;
         bool plan = false;
 
         void field2MetricDouble(RideFile &rideFile, const QString &fieldName, const QString &metricName) const;
@@ -86,7 +103,7 @@ class ManualActivityPageBasics : public QWizardPage
         void sportsChanged();
 
     private:
-        Context *context;
+        QPointer<Context> context;
         bool plan = false;
         QDateTime when;
         QLabel *duplicateActivityLabel;
@@ -107,7 +124,8 @@ class ManualActivityPageWorkout : public QWizardPage
         virtual int nextId() const override;
 
     private:
-        Context *context = nullptr;
+        QPointer<Context> context;
+        QPointer<Athlete> athlete;
         ErgFile *ergFile = nullptr;
         QAbstractTableModel *workoutModel = nullptr;
         MultiFilterProxyModel *sortModel = nullptr;
@@ -116,7 +134,9 @@ class ManualActivityPageWorkout : public QWizardPage
         QStackedWidget *contentStack;
         ErgFilePlot *ergFilePlot;
         InfoWidget *infoWidget;
-        ErgFile *backupWorkout = nullptr;
+        std::unique_ptr<
+            ModalPointerOverrideLease<Context, ErgFile*>>
+            workoutLease;
 
         void resetFields();
 
@@ -141,7 +161,7 @@ class ManualActivityPageMetrics : public QWizardPage
         void updateEstimates();
 
     private:
-        Context *context;
+        QPointer<Context> context;
         bool plan = false;
 
         std::pair<double, double> getDurationDistance() const;

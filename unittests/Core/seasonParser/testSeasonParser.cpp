@@ -100,6 +100,7 @@ private slots:
     void failedWritesPreservePreviousFile_data();
     void failedWritesPreservePreviousFile();
     void successfulWritePublishesCompleteXml();
+    void generatedLegacyEventIdSurvivesRoundTrip();
 
     void readSeasons() {
         const QString seasonsPath = QFINDTESTDATA("seasons.xml");
@@ -188,7 +189,7 @@ private slots:
         QCOMPARE(seasons[sx].events[0].date, QDate(2024, 10, 19));
         QCOMPARE(seasons[sx].events[0].priority, 1);
         QCOMPARE(seasons[sx].events[0].description, "Description");
-        QCOMPARE(seasons[sx].events[0].id, "");
+        QVERIFY(!seasons[sx].events[0].id.isEmpty());
         QCOMPARE(seasons[sx].phases.size(), 5);
         QCOMPARE(seasons[sx].phases[0].getName(), "Phase");
         QCOMPARE(seasons[sx].phases[0].getAbsoluteStart(), QDate(2024, 1, 25));
@@ -284,6 +285,36 @@ void TestSeasonParser::successfulWritePublishesCompleteXml()
     QCOMPARE(seasons.first().getName(), QStringLiteral("Atomic & <season>"));
     QCOMPARE(seasons.first().getAbsoluteStart(), QDate(2026, 1, 1));
     QCOMPARE(seasons.first().getAbsoluteEnd(), QDate(2026, 12, 31));
+}
+
+void TestSeasonParser::generatedLegacyEventIdSurvivesRoundTrip()
+{
+    const QString sourcePath = QFINDTESTDATA("seasons.xml");
+    QVERIFY2(!sourcePath.isEmpty(),
+             "Unable to locate seasons.xml test data");
+    QFile source(sourcePath);
+    QList<Season> seasons = SeasonParser::readSeasons(&source);
+    QVERIFY(!seasons.isEmpty());
+    QVERIFY(!seasons.last().events.isEmpty());
+
+    const QString generatedId = seasons.last().events.first().id;
+    QVERIFY(!generatedId.isEmpty());
+    QVERIFY(!QUuid(generatedId).isNull());
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = directory.filePath(
+        QStringLiteral("seasons.xml"));
+    QString error;
+    QVERIFY(SeasonParser::serialize(path, seasons, &error));
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+
+    QFile persisted(path);
+    const QList<Season> reloaded =
+        SeasonParser::readSeasons(&persisted);
+    QCOMPARE(reloaded.size(), seasons.size());
+    QVERIFY(!reloaded.last().events.isEmpty());
+    QCOMPARE(reloaded.last().events.first().id, generatedId);
 }
 
 QTEST_MAIN(TestSeasonParser)

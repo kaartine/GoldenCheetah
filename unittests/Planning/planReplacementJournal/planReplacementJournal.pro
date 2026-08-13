@@ -10,13 +10,17 @@ CONFIG -= debug
 DEFINES += GC_PLAN_REPLACEMENT_TEST_HOOKS
 
 SOURCES = testPlanReplacementJournal.cpp \
-          ../../../src/Planning/PlanReplacementJournal.cpp
+          ../../../src/Planning/PlanReplacementJournal.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp
 
 HEADERS = ../../../src/Planning/PlanReplacementJournal.h \
-          ../../../src/FileIO/AtomicFileWriter.h
+          ../../../src/FileIO/AtomicFileWriter.h \
+          ../../../src/FileIO/AnchoredFileSystem.h
 
 INCLUDEPATH += ../../../src/FileIO \
                ../../../src/Planning
+
+win32:LIBS += -ladvapi32
 
 sanitize:!tsan:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

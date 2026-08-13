@@ -11,13 +11,22 @@
 #define _GC_LibraryImportFileStager_h
 
 #include <QHash>
+#include <QFileDevice>
+#include <QList>
 #include <QString>
 #include <QStringList>
+
+enum class LibraryImportStageMode
+{
+    preserveExisting,
+    replaceExisting
+};
 
 enum class LibraryImportStageStatus
 {
     ready,
     copied,
+    replaced,
     targetConflict,
     ioError
 };
@@ -30,7 +39,8 @@ struct LibraryImportStageResult
     bool succeeded() const
     {
         return status == LibraryImportStageStatus::ready
-            || status == LibraryImportStageStatus::copied;
+            || status == LibraryImportStageStatus::copied
+            || status == LibraryImportStageStatus::replaced;
     }
 
     bool created() const
@@ -43,12 +53,22 @@ class LibraryImportFileStager
 {
 public:
     LibraryImportStageResult stage(const QString &sourcePath,
-                                   const QString &targetPath);
+                                   const QString &targetPath,
+                                   LibraryImportStageMode mode =
+                                       LibraryImportStageMode::preserveExisting);
     QStringList rollback();
+    QStringList finalize();
 
 private:
+    struct ReplacedTarget {
+        QString target;
+        QString backup;
+        QFileDevice::Permissions permissions;
+    };
+
     QHash<QString, QString> sourcesByTarget;
     QStringList createdTargets;
+    QList<ReplacedTarget> replacedTargets;
 };
 
 #endif // _GC_LibraryImportFileStager_h

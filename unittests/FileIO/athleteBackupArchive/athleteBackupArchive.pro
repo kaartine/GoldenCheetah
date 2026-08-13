@@ -3,6 +3,7 @@ CONFIG += c++17
 
 SOURCES = testAthleteBackupArchive.cpp \
           ../../../src/FileIO/AthleteBackupArchive.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp \
           ../../../contrib/qzip/zip.cpp
 
 HEADERS = ../../../src/FileIO/AthleteBackupArchive.h \
@@ -13,6 +14,7 @@ include(../../unittests.pri)
 INCLUDEPATH += ../../../src ../../../contrib/qzip $${LIBZ_INCLUDE}
 
 LIBS += $${LIBZ_LIBS}
+win32:LIBS += -ladvapi32
 
 sanitize:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

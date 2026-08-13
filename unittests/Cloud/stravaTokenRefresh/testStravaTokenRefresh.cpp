@@ -1,5 +1,7 @@
 #include "Cloud/StravaTokenRefresh.h"
 
+#include <QCoreApplication>
+#include <QPointer>
 #include <QTest>
 #include <QThread>
 #include <QUuid>
@@ -110,6 +112,7 @@ class TestStravaTokenRefresh : public QObject
     Q_OBJECT
 
 private slots:
+    void cleanup();
     void sameAccountConcurrentCallersExecuteOperationOnce();
     void followersReceiveIdenticalRotatingTokenPair();
     void cacheMatchesOriginalAndRotatedRefreshToken();
@@ -145,6 +148,13 @@ private slots:
     void abortedRemovalReconcilesCompletedRefresh();
     void explicitAuthorizationReopensPendingAccount();
     void persistedNonActiveStateCannotBeReopenedByStaleClone();
+    void successfulStorageRetryReplacesProvisionalPendingState();
+    void storageRetryCannotOverwriteNewerAuthorization();
+    void externalAuthoritativePairReplacesIdleLongLivedSnapshot();
+    void authoritativeStorageReconciliationObservesSameMetadataCredentialChange();
+    void threadBoundAbortSurvivesTargetDestructionAtDispatch();
+    void transientPendingStateCannotSupersedeActiveRefresh();
+    void externalRevocationInvalidatesExistingRequestPermits();
     void installedGrantSupersedesStaleCloneState();
     void authorizationSnapshotCannotTearTokenPairAndEpoch();
     void oauthCompletionCannotCrossRemovalEpoch();
@@ -155,6 +165,164 @@ private slots:
     void thrownOperationFailsClosed();
     void invalidInputAndIncompleteSuccessDoNotPolluteCache();
 };
+
+void TestStravaTokenRefresh::cleanup()
+{
+#ifdef GC_STRAVA_TOKEN_REFRESH_TEST_HOOKS
+    StravaTokenRefreshCoordinator::
+        setThreadBoundDispatchHookForTest({});
+#endif
+}
+
+void TestStravaTokenRefresh::
+authoritativeStorageReconciliationObservesSameMetadataCredentialChange()
+{
+    const QString account = uniqueValue(
+        QStringLiteral("same-metadata-storage-change"));
+    const StravaTokenRefreshResult original = successfulResult(
+        uniqueValue(QStringLiteral("access-original")),
+        uniqueValue(QStringLiteral("refresh-original")));
+    const StravaTokenRefreshResult replacement = successfulResult(
+        uniqueValue(QStringLiteral("access-replacement")),
+        uniqueValue(QStringLiteral("refresh-replacement")));
+    StravaTokenRefreshCoordinator::initializeAuthorization(
+        account,
+        StravaAuthorizationStatus::Active,
+        original.accessToken,
+        original.refreshToken);
+
+    bool active = false;
+    QVERIFY(StravaTokenRefreshCoordinator::
+        reconcileAuthoritativeAuthorizationFromStorage(
+            account,
+            StravaAuthorizationStatus::Active,
+            replacement.accessToken,
+            replacement.refreshToken,
+            false,
+            &active));
+    QVERIFY(active);
+    StravaAuthorizedRequest replacementRequest =
+        StravaTokenRefreshCoordinator::beginAuthorizedRequest(account);
+    QVERIFY(replacementRequest.isValid());
+    QCOMPARE(replacementRequest.accessToken(), replacement.accessToken);
+    replacementRequest.release();
+
+    QVERIFY(StravaTokenRefreshCoordinator::
+        reconcileAuthoritativeAuthorizationFromStorage(
+            account,
+            StravaAuthorizationStatus::Active,
+            QString(),
+            QString(),
+            false,
+            &active));
+    QVERIFY(!active);
+    QVERIFY(!StravaTokenRefreshCoordinator::
+        beginAuthorizedRequest(account).isValid());
+    const StravaAuthorizationSnapshot deleted =
+        StravaTokenRefreshCoordinator::authorizationSnapshot(account);
+    QCOMPARE(
+        deleted.status,
+        StravaAuthorizationStatus::RevocationPending);
+    QVERIFY(deleted.accessToken.isEmpty());
+    QVERIFY(deleted.refreshToken.isEmpty());
+}
+
+void TestStravaTokenRefresh::
+threadBoundAbortSurvivesTargetDestructionAtDispatch()
+{
+    struct DispatchGate
+    {
+        std::mutex mutex;
+        std::condition_variable condition;
+        bool entered = false;
+        bool released = false;
+    };
+    DispatchGate gate;
+    std::atomic<int> operations{0};
+    QPointer<QObject> target = new QObject;
+    std::function<void()> abortOperation =
+        StravaTokenRefreshCoordinator::threadBoundAbortOperation(
+            target,
+            [&operations](QObject *) {
+                ++operations;
+            });
+    QVERIFY(abortOperation);
+
+    const QString account = uniqueValue(
+        QStringLiteral("thread-bound-abort"));
+    const StravaTokenRefreshResult grant = successfulResult(
+        uniqueValue(QStringLiteral("access")),
+        uniqueValue(QStringLiteral("refresh")));
+    StravaTokenRefreshCoordinator::initializeAuthorization(
+        account,
+        StravaAuthorizationStatus::Active,
+        grant.accessToken,
+        grant.refreshToken);
+    const StravaAuthorizationSnapshot expected =
+        StravaTokenRefreshCoordinator::authorizationSnapshot(account);
+    StravaAuthorizedRequest request =
+        StravaTokenRefreshCoordinator::beginAuthorizedRequest(account);
+    QVERIFY(request.isValid());
+    QVERIFY(request.authorizeDispatch());
+    request.setAbortOperation(abortOperation);
+
+    StravaTokenRefreshCoordinator::
+        setThreadBoundDispatchHookForTest([&gate] {
+            std::unique_lock<std::mutex> lock(gate.mutex);
+            gate.entered = true;
+            gate.condition.notify_all();
+            gate.condition.wait(lock, [&gate] {
+                return gate.released;
+            });
+        });
+
+    std::future<bool> dispatch = std::async(
+        std::launch::async,
+        [account, expected] {
+            return StravaTokenRefreshCoordinator::
+                adoptAuthoritativeAuthorizationFromStorage(
+                    account,
+                    expected,
+                    StravaAuthorizationStatus::RevocationPending,
+                    QString(),
+                    QString(),
+                    true);
+        });
+    bool dispatchEntered = false;
+    {
+        std::unique_lock<std::mutex> lock(gate.mutex);
+        dispatchEntered = gate.condition.wait_for(
+            lock, 1s, [&gate] { return gate.entered; });
+    }
+    if (!dispatchEntered) {
+        {
+            const std::lock_guard<std::mutex> lock(gate.mutex);
+            gate.released = true;
+        }
+        gate.condition.notify_all();
+        dispatch.wait();
+        delete target.data();
+    }
+    QVERIFY(dispatchEntered);
+    delete target.data();
+    {
+        const std::lock_guard<std::mutex> lock(gate.mutex);
+        gate.released = true;
+    }
+    gate.condition.notify_all();
+    QVERIFY(target.isNull());
+    QVERIFY(dispatch.get());
+    request.release();
+    abortOperation = {};
+
+    bool eventFence = false;
+    QVERIFY(QMetaObject::invokeMethod(
+        QCoreApplication::instance(),
+        [&eventFence] { eventFence = true; },
+        Qt::QueuedConnection));
+    QTRY_VERIFY_WITH_TIMEOUT(eventFence, 1000);
+    QCOMPARE(operations.load(), 0);
+}
 
 void TestStravaTokenRefresh::
 sameAccountConcurrentCallersExecuteOperationOnce()
@@ -1889,6 +2057,271 @@ installedGrantSupersedesStaleCloneState()
 }
 
 void TestStravaTokenRefresh::
+successfulStorageRetryReplacesProvisionalPendingState()
+{
+    const QString account =
+        uniqueValue(QStringLiteral("storage-retry"));
+    const QString accessToken =
+        uniqueValue(QStringLiteral("access-recovered"));
+    const QString refreshToken =
+        uniqueValue(QStringLiteral("refresh-recovered"));
+
+    QVERIFY(StravaTokenRefreshCoordinator::
+        reconcileAuthorizationFromStorage(
+            account,
+            StravaAuthorizationStatus::RevocationPending,
+            QString(),
+            QString(),
+            true,
+            false));
+    QVERIFY(!StravaTokenRefreshCoordinator::
+        beginAuthorizedRequest(account).isValid());
+
+    QVERIFY(StravaTokenRefreshCoordinator::
+        reconcileAuthorizationFromStorage(
+            account,
+            StravaAuthorizationStatus::Active,
+            accessToken,
+            refreshToken,
+            false,
+            true));
+    auto request = StravaTokenRefreshCoordinator::
+        beginAuthorizedRequest(account);
+    QVERIFY(request.isValid());
+    QCOMPARE(request.accessToken(), accessToken);
+    const StravaAuthorizationSnapshot snapshot =
+        StravaTokenRefreshCoordinator::authorizationSnapshot(account);
+    QCOMPARE(snapshot.status, StravaAuthorizationStatus::Active);
+    QCOMPARE(snapshot.accessToken, accessToken);
+    QCOMPARE(snapshot.refreshToken, refreshToken);
+    QVERIFY(!snapshot.remoteGrantMayHaveRotated);
+}
+
+void TestStravaTokenRefresh::
+storageRetryCannotOverwriteNewerAuthorization()
+{
+    const QString account =
+        uniqueValue(QStringLiteral("storage-retry-fenced"));
+    QVERIFY(StravaTokenRefreshCoordinator::
+        reconcileAuthorizationFromStorage(
+            account,
+            StravaAuthorizationStatus::RevocationPending,
+            QString(),
+            QString(),
+            true,
+            false));
+
+    const StravaTokenRefreshResult installed = successfulResult(
+        uniqueValue(QStringLiteral("access-installed")),
+        uniqueValue(QStringLiteral("refresh-installed")));
+    QVERIFY(StravaTokenRefreshCoordinator::installAuthorization(
+        account, installed));
+
+    QVERIFY(!StravaTokenRefreshCoordinator::
+        reconcileAuthorizationFromStorage(
+            account,
+            StravaAuthorizationStatus::Active,
+            uniqueValue(QStringLiteral("access-stale")),
+            uniqueValue(QStringLiteral("refresh-stale")),
+            false,
+            true));
+    const StravaAuthorizationSnapshot snapshot =
+        StravaTokenRefreshCoordinator::authorizationSnapshot(account);
+    QCOMPARE(snapshot.status, StravaAuthorizationStatus::Active);
+    QCOMPARE(snapshot.accessToken, installed.accessToken);
+    QCOMPARE(snapshot.refreshToken, installed.refreshToken);
+}
+
+void TestStravaTokenRefresh::
+externalAuthoritativePairReplacesIdleLongLivedSnapshot()
+{
+    const QString account =
+        uniqueValue(QStringLiteral("external-authoritative"));
+    const StravaTokenRefreshResult oldGrant = successfulResult(
+        uniqueValue(QStringLiteral("access-old")),
+        uniqueValue(QStringLiteral("refresh-old")));
+    const StravaTokenRefreshResult externalGrant = successfulResult(
+        uniqueValue(QStringLiteral("access-external")),
+        uniqueValue(QStringLiteral("refresh-external")));
+    StravaTokenRefreshCoordinator::initializeAuthorization(
+        account,
+        StravaAuthorizationStatus::Active,
+        oldGrant.accessToken,
+        oldGrant.refreshToken);
+    const StravaAuthorizationSnapshot expected =
+        StravaTokenRefreshCoordinator::authorizationSnapshot(account);
+
+    auto activeRequest = StravaTokenRefreshCoordinator::
+        beginAuthorizedRequest(account);
+    QVERIFY(activeRequest.isValid());
+    QVERIFY(!StravaTokenRefreshCoordinator::
+        adoptAuthoritativeAuthorizationFromStorage(
+            account,
+            expected,
+            StravaAuthorizationStatus::Active,
+            externalGrant.accessToken,
+            externalGrant.refreshToken,
+            false));
+    activeRequest.release();
+
+    OperationGate fenceGate;
+    std::atomic<int> providerCalls{0};
+    QString observedRefreshToken;
+    auto staleRefresh = std::async(std::launch::async, [&] {
+        return StravaTokenRefreshCoordinator::refresh(
+            account,
+            oldGrant.refreshToken,
+            [&](const QString &effectiveRefreshToken) {
+                observedRefreshToken = effectiveRefreshToken;
+                enterAndWait(fenceGate);
+                return failedResult(QStringLiteral("fenced mismatch"));
+            });
+    });
+    QVERIFY2(waitForEntered(fenceGate, 1),
+             "The fenced refresh did not reach its storage check.");
+
+    QVERIFY(!StravaTokenRefreshCoordinator::
+        adoptAuthoritativeAuthorizationFromStorage(
+            account,
+            expected,
+            StravaAuthorizationStatus::Active,
+            externalGrant.accessToken,
+            externalGrant.refreshToken,
+            false));
+    release(fenceGate);
+    QVERIFY(!staleRefresh.get().isValid());
+    QCOMPARE(observedRefreshToken, oldGrant.refreshToken);
+    QCOMPARE(providerCalls.load(), 0);
+
+    QVERIFY(StravaTokenRefreshCoordinator::
+        adoptAuthoritativeAuthorizationFromStorage(
+            account,
+            expected,
+            StravaAuthorizationStatus::Active,
+            externalGrant.accessToken,
+            externalGrant.refreshToken,
+            false));
+    auto request = StravaTokenRefreshCoordinator::
+        beginAuthorizedRequest(account);
+    QVERIFY(request.isValid());
+    QCOMPARE(request.accessToken(), externalGrant.accessToken);
+    request.release();
+
+    const StravaAuthorizationSnapshot adopted =
+        StravaTokenRefreshCoordinator::authorizationSnapshot(account);
+    QCOMPARE(adopted.status, StravaAuthorizationStatus::Active);
+    QCOMPARE(adopted.accessToken, externalGrant.accessToken);
+    QCOMPARE(adopted.refreshToken, externalGrant.refreshToken);
+    QVERIFY(adopted.epoch > expected.epoch);
+
+    QVERIFY(!StravaTokenRefreshCoordinator::
+        adoptAuthoritativeAuthorizationFromStorage(
+            account,
+            expected,
+            StravaAuthorizationStatus::Active,
+            uniqueValue(QStringLiteral("access-stale")),
+            uniqueValue(QStringLiteral("refresh-stale")),
+            false));
+}
+
+void TestStravaTokenRefresh::
+externalRevocationInvalidatesExistingRequestPermits()
+{
+    const QString account =
+        uniqueValue(QStringLiteral("external-revocation"));
+    const StravaTokenRefreshResult grant = successfulResult(
+        uniqueValue(QStringLiteral("access-active")),
+        uniqueValue(QStringLiteral("refresh-active")));
+    StravaTokenRefreshCoordinator::initializeAuthorization(
+        account,
+        StravaAuthorizationStatus::Active,
+        grant.accessToken,
+        grant.refreshToken);
+    const StravaAuthorizationSnapshot expected =
+        StravaTokenRefreshCoordinator::authorizationSnapshot(account);
+
+    StravaAuthorizedRequest undispatched =
+        StravaTokenRefreshCoordinator::beginAuthorizedRequest(account);
+    QVERIFY(undispatched.isValid());
+    std::atomic<bool> dispatchedAborted{false};
+    StravaAuthorizedRequest dispatched =
+        StravaTokenRefreshCoordinator::beginAuthorizedRequest(account);
+    QVERIFY(dispatched.isValid());
+    QVERIFY(dispatched.authorizeDispatch());
+    dispatched.setAbortOperation(
+        [&] { dispatchedAborted.store(true); });
+    QVERIFY(StravaTokenRefreshCoordinator::
+        adoptAuthoritativeAuthorizationFromStorage(
+            account,
+            expected,
+            StravaAuthorizationStatus::Revoked,
+            QString(),
+            QString(),
+            false));
+    QVERIFY(!undispatched.authorizeDispatch());
+    QVERIFY(dispatchedAborted.load());
+    QVERIFY(!StravaTokenRefreshCoordinator::
+        beginAuthorizedRequest(account).isValid());
+
+    const StravaAuthorizationSnapshot revoked =
+        StravaTokenRefreshCoordinator::authorizationSnapshot(account);
+    QCOMPARE(revoked.status, StravaAuthorizationStatus::Revoked);
+    QVERIFY(revoked.accessToken.isEmpty());
+    QVERIFY(revoked.refreshToken.isEmpty());
+    QVERIFY(revoked.epoch > expected.epoch);
+}
+
+void TestStravaTokenRefresh::
+transientPendingStateCannotSupersedeActiveRefresh()
+{
+    const QString account =
+        uniqueValue(QStringLiteral("transient-pending"));
+    const StravaTokenRefreshResult current = successfulResult(
+        uniqueValue(QStringLiteral("access-current")),
+        uniqueValue(QStringLiteral("refresh-current")));
+    const StravaTokenRefreshResult replacement = successfulResult(
+        uniqueValue(QStringLiteral("access-replacement")),
+        uniqueValue(QStringLiteral("refresh-replacement")));
+    StravaTokenRefreshCoordinator::initializeAuthorization(
+        account,
+        StravaAuthorizationStatus::Active,
+        current.accessToken,
+        current.refreshToken);
+    const StravaAuthorizationSnapshot expected =
+        StravaTokenRefreshCoordinator::authorizationSnapshot(account);
+
+    OperationGate refreshGate;
+    auto refresh = std::async(std::launch::async, [&] {
+        return StravaTokenRefreshCoordinator::refresh(
+            account,
+            current.refreshToken,
+            [&](const QString &) {
+                enterAndWait(refreshGate);
+                return replacement;
+            });
+    });
+    QVERIFY2(waitForEntered(refreshGate, 1),
+             "The refresh did not reach its durable publication window.");
+
+    QVERIFY(!StravaTokenRefreshCoordinator::
+        adoptAuthoritativeAuthorizationFromStorage(
+            account,
+            expected,
+            StravaAuthorizationStatus::RevocationPending,
+            QString(),
+            QString(),
+            true));
+    release(refreshGate);
+
+    compareResult(refresh.get(), replacement);
+    const StravaAuthorizationSnapshot installed =
+        StravaTokenRefreshCoordinator::authorizationSnapshot(account);
+    QCOMPARE(installed.status, StravaAuthorizationStatus::Active);
+    QCOMPARE(installed.accessToken, replacement.accessToken);
+    QCOMPARE(installed.refreshToken, replacement.refreshToken);
+}
+
+void TestStravaTokenRefresh::
 authorizationSnapshotCannotTearTokenPairAndEpoch()
 {
     const QString account =
@@ -2201,6 +2634,6 @@ invalidInputAndIncompleteSuccessDoNotPolluteCache()
     QCOMPARE(calls.load(), 3);
 }
 
-QTEST_APPLESS_MAIN(TestStravaTokenRefresh)
+QTEST_GUILESS_MAIN(TestStravaTokenRefresh)
 
 #include "testStravaTokenRefresh.moc"

@@ -17,6 +17,7 @@
  */
 
 #include "RideItem.h"
+#include "AthleteSession.h"
 #include "RideCache.h"
 #include "RideMetric.h"
 #include "RideFile.h"
@@ -280,7 +281,10 @@ RideItem::fileCache()
             RideFileCacheIntegrity::activitySourcePath(
                 path, fileName),
             getWeight(),
-            ride());
+            ride(),
+            false,
+            true,
+            &context->athleteSession().persistenceService());
         if (isDirty()) fileCache_->refresh(ride_); // refresh from what we have now !
     }
     return fileCache_;
@@ -521,7 +525,9 @@ RideItem::checkStale()
     color = GlobalContext::context()->colorEngine->colorFor(getText(GlobalContext::context()->rideMetadata->getColorField(), ""));
 
     // upgraded metrics
-    if (udbversion != UserMetricSchemaVersion || dbversion != DBSchemaVersion) {
+    const quint16 userMetricSchemaVersion =
+        RideMetricFactory::instance().userMetricSchemaVersion();
+    if (udbversion != userMetricSchemaVersion || dbversion != DBSchemaVersion) {
 
         isstale = true;
 
@@ -708,18 +714,23 @@ RideItem::refresh()
                 path, fileName),
             getWeight(),
             ride_,
-            true);
+            true,
+            true,
+            &context->athleteSession().persistenceService());
 
         // refresh metrics etc
-        const RideMetricFactory &factory = RideMetricFactory::instance();
+        const RideMetricRegistrySnapshot metricRegistry =
+            RideMetricFactory::instance().snapshot();
 
         // ressize and initialize so we can store metric values at
         // RideMetric::index offsets into the metrics_ qvector
-        metrics_.fill(0, factory.metricCount());
-        count_.fill(0, factory.metricCount());
+        metrics_.fill(0, metricRegistry.metricCount());
+        count_.fill(0, metricRegistry.metricCount());
 
         // we compute all with not specification (not an interval)
-        QHash<QString,RideMetricPtr> computed= RideMetric::computeMetrics(this, Specification(), factory.allMetrics());
+        QHash<QString,RideMetricPtr> computed = RideMetric::computeMetrics(
+            this, Specification(), metricRegistry.allMetrics(),
+            metricRegistry);
 
         // snaffle away all the computed values into the array
         QHashIterator<QString, RideMetricPtr> i(computed);
@@ -737,7 +748,7 @@ RideItem::refresh()
         }
 
         // clean any bad values
-        for(int j=0; j<factory.metricCount(); j++)
+        for(int j=0; j<metricRegistry.metricCount(); j++)
             if (std::isinf(metrics_[j]) || std::isnan(metrics_[j])) {
                 metrics_[j] = 0.00f;
                 count_[j] = 0.00f;
@@ -756,7 +767,7 @@ RideItem::refresh()
                     + appsettings->cvalue(context->athlete->cyclist, GC_DISCOVERY, 57).toInt(); // 57 does not include search for PEAKS
 
         dbversion = DBSchemaVersion;
-        udbversion = UserMetricSchemaVersion;
+        udbversion = metricRegistry.userMetricSchemaVersion();
         timestamp = QDateTime::currentDateTime().toSecsSinceEpoch();
 
         // we now match

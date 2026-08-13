@@ -10,16 +10,12 @@
 #include "StravaCredentialPublisher.h"
 
 #include "Settings.h"
+#include "StravaSettingsCommit.h"
 
-#include <QCoreApplication>
-#include <QMetaObject>
-#include <QThread>
+#include <QUuid>
 
-#include <algorithm>
-#include <chrono>
-#include <condition_variable>
 #include <memory>
-#include <mutex>
+#include <stdexcept>
 
 namespace StravaCredentialPublisher {
 
@@ -30,17 +26,6 @@ using StravaTokenPublication::PublicationStatus;
 using StravaTokenPublication::RemovalResult;
 using StravaTokenPublication::RemovalStatus;
 
-template<typename Result>
-struct PendingOperation
-{
-    std::mutex mutex;
-    std::condition_variable condition;
-    bool abandoned = false;
-    bool complete = false;
-    bool started = false;
-    Result result;
-};
-
 PublicationResult invalidInput()
 {
     return {
@@ -49,11 +34,29 @@ PublicationResult invalidInput()
     };
 }
 
+PublicationResult publicationPending()
+{
+    return {
+        PublicationStatus::Pending,
+        QStringLiteral(
+            "Strava credential publication is pending recovery.")
+    };
+}
+
 PublicationResult storageFailure()
 {
     return {
         PublicationStatus::StorageFailure,
         QStringLiteral("Strava credentials could not be stored securely.")
+    };
+}
+
+RemovalResult removalPending()
+{
+    return {
+        RemovalStatus::Pending,
+        QStringLiteral(
+            "Strava credential removal has an unknown outcome and is pending recovery.")
     };
 }
 
@@ -75,155 +78,252 @@ RemovalResult removalStorageFailure()
     };
 }
 
-bool cancellationRequested(const CancellationCheck &cancelled)
+bool completeRevocationCleanup(const QString &accountKey)
 {
-    if (!cancelled) return false;
-    try {
-        return cancelled();
-    } catch (...) {
-        return true;
+    if (!appsettings
+        || StravaSettingsCommit::credentialThreadShutdownRequested()) {
+        return false;
     }
+    const bool stateSaved = appsettings->setCValueChecked(
+        accountKey,
+        GC_STRAVA_AUTHORIZATION_STATE,
+        QStringLiteral("revoked"));
+    const bool uncertaintyCleared = appsettings->setCValueChecked(
+        accountKey,
+        GC_STRAVA_REMOTE_GRANT_UNCERTAIN,
+        false);
+    const bool activeDisabled = appsettings->setCValueChecked(
+        accountKey,
+        QStringLiteral(
+            GC_QSETTINGS_ATHLETE_PRIVATE "/Strava/active"),
+        false);
+    const bool startupDisabled = appsettings->setCValueChecked(
+        accountKey,
+        QStringLiteral(
+            GC_QSETTINGS_ATHLETE_PRIVATE "/Strava/syncstartup"),
+        false);
+    const bool importDisabled = appsettings->setCValueChecked(
+        accountKey,
+        QStringLiteral(
+            GC_QSETTINGS_ATHLETE_PRIVATE "/Strava/syncimport"),
+        false);
+    const bool revisionSaved = appsettings->setCValueChecked(
+        accountKey,
+        GC_STRAVA_AUTHORIZATION_REVISION,
+        QUuid::createUuid().toString(QUuid::WithoutBraces));
+    const bool synced = appsettings->syncCValueChecked(
+        accountKey,
+        GC_STRAVA_AUTHORIZATION_STATE);
+    return stateSaved
+        && uncertaintyCleared
+        && activeDisabled
+        && startupDisabled
+        && importDisabled
+        && revisionSaved
+        && synced;
 }
 
-StravaTokenPublication::PublicationCallbacks callbacksFor(
+StravaCredentialDurability::TokenPairReadResult
+readCurrentCredentials(const QString &accountKey)
+{
+    if (!appsettings
+        || StravaSettingsCommit::credentialThreadShutdownRequested()) {
+        return {};
+    }
+    const GSettings::CredentialReadResult access =
+        appsettings->credentialCValueChecked(
+            accountKey, GC_STRAVA_TOKEN);
+    const GSettings::CredentialReadResult refresh =
+        appsettings->credentialCValueChecked(
+            accountKey, GC_STRAVA_REFRESH_TOKEN);
+    const bool readable = access.readable() && refresh.readable();
+    return {
+        readable,
+        readable
+            ? StravaTokenPublication::TokenPair{
+                access.status == GSettings::CredentialReadStatus::Present
+                    ? access.value.toString() : QString(),
+                refresh.status == GSettings::CredentialReadStatus::Present
+                    ? refresh.value.toString() : QString()
+            }
+            : StravaTokenPublication::TokenPair()
+    };
+}
+
+StravaCredentialDurability::StorageCallbacks storageFor(
     const QString &accountKey)
 {
-    StravaTokenPublication::PublicationCallbacks callbacks;
+    StravaCredentialDurability::StorageCallbacks callbacks;
     callbacks.readCurrent = [accountKey] {
-        return StravaTokenPublication::TokenPair{
-            appsettings->cvalue(
-                accountKey, GC_STRAVA_TOKEN, QString()).toString(),
-            appsettings->cvalue(
+        return readCurrentCredentials(accountKey);
+    };
+    callbacks.readTimestamp = [accountKey] {
+        if (!appsettings
+            || StravaSettingsCommit::
+                credentialThreadShutdownRequested()) {
+            return QString();
+        }
+        return appsettings->cvalue(
+            accountKey,
+            GC_STRAVA_LAST_REFRESH,
+            QString()).toString();
+    };
+    callbacks.readAuthorizationState = [accountKey] {
+        if (!appsettings
+            || StravaSettingsCommit::
+                credentialThreadShutdownRequested()) {
+            return QStringLiteral("authorization_pending");
+        }
+        return appsettings->cvalue(
+            accountKey,
+            GC_STRAVA_AUTHORIZATION_STATE,
+            QStringLiteral("active")).toString();
+    };
+    callbacks.readRemoteGrantUncertain = [accountKey] {
+        if (!appsettings
+            || StravaSettingsCommit::
+                credentialThreadShutdownRequested()) {
+            return true;
+        }
+        return appsettings->cvalue(
+            accountKey,
+            GC_STRAVA_REMOTE_GRANT_UNCERTAIN,
+            true).toBool();
+    };
+    callbacks.readPendingTransaction = [accountKey] {
+        if (!appsettings
+            || StravaSettingsCommit::
+                credentialThreadShutdownRequested()) {
+            return QString();
+        }
+        return appsettings->cvalue(
+            accountKey,
+            GC_STRAVA_PENDING_TRANSACTION,
+            QString()).toString();
+    };
+    callbacks.writePendingTransaction =
+        [accountKey](const QString &value) {
+            return appsettings
+                && !StravaSettingsCommit::
+                    credentialThreadShutdownRequested()
+                && appsettings->setCValueChecked(
                 accountKey,
-                GC_STRAVA_REFRESH_TOKEN,
-                QString()).toString()
+                GC_STRAVA_PENDING_TRANSACTION,
+                value);
         };
+    callbacks.clearPendingTransaction = [accountKey] {
+        return appsettings
+            && !StravaSettingsCommit::
+                credentialThreadShutdownRequested()
+            && appsettings->setCValueChecked(
+            accountKey,
+            GC_STRAVA_PENDING_TRANSACTION,
+            QVariant());
     };
     callbacks.writeRefreshToken =
         [accountKey](const QString &value) {
-            return appsettings->setCValueChecked(
+            return appsettings
+                && !StravaSettingsCommit::
+                    credentialThreadShutdownRequested()
+                && appsettings->setCValueChecked(
                 accountKey, GC_STRAVA_REFRESH_TOKEN, value);
         };
     callbacks.writeAccessToken =
         [accountKey](const QString &value) {
-            return appsettings->setCValueChecked(
+            return appsettings
+                && !StravaSettingsCommit::
+                    credentialThreadShutdownRequested()
+                && appsettings->setCValueChecked(
                 accountKey, GC_STRAVA_TOKEN, value);
         };
     callbacks.writeTimestamp =
         [accountKey](const QString &value) {
-            return appsettings->setCValueChecked(
+            return appsettings
+                && !StravaSettingsCommit::
+                    credentialThreadShutdownRequested()
+                && appsettings->setCValueChecked(
                 accountKey, GC_STRAVA_LAST_REFRESH, value);
         };
-    return callbacks;
-}
-
-bool saveAuthorizationState(
-    const QString &accountKey,
-    const QString &state)
-{
-    return appsettings
-        && appsettings->setCValueChecked(
-            accountKey,
-            GC_STRAVA_AUTHORIZATION_STATE,
-            state)
-        && appsettings->syncCValueChecked(
+    callbacks.writeAuthorizationState =
+        [accountKey](const QString &value) {
+            return appsettings
+                && !StravaSettingsCommit::
+                    credentialThreadShutdownRequested()
+                && appsettings->setCValueChecked(
+                accountKey,
+                GC_STRAVA_AUTHORIZATION_STATE,
+                value);
+        };
+    callbacks.writeRemoteGrantUncertain =
+        [accountKey](bool value) {
+            return appsettings
+                && !StravaSettingsCommit::
+                    credentialThreadShutdownRequested()
+                && appsettings->setCValueChecked(
+                accountKey,
+                GC_STRAVA_REMOTE_GRANT_UNCERTAIN,
+                value);
+        };
+    callbacks.sync = [accountKey] {
+        return appsettings
+            && !StravaSettingsCommit::
+                credentialThreadShutdownRequested()
+            && appsettings->syncCValueChecked(
             accountKey,
             GC_STRAVA_AUTHORIZATION_STATE);
-}
-
-bool saveAuthorizationStateAndUncertainty(
-    const QString &accountKey,
-    const QString &state,
-    bool remoteGrantUncertain)
-{
-    if (!appsettings) return false;
-
-    const bool stateSaved = appsettings->setCValueChecked(
-        accountKey,
-        GC_STRAVA_AUTHORIZATION_STATE,
-        state);
-    const bool uncertaintySaved =
-        appsettings->setCValueChecked(
+    };
+    callbacks.refresh = [accountKey] {
+        return appsettings
+            && !StravaSettingsCommit::
+                credentialThreadShutdownRequested()
+            && appsettings->syncCValueChecked(
             accountKey,
-            GC_STRAVA_REMOTE_GRANT_UNCERTAIN,
-            remoteGrantUncertain);
-    const bool synced = appsettings->syncCValueChecked(
-        accountKey,
-        GC_STRAVA_AUTHORIZATION_STATE);
-    return stateSaved && uncertaintySaved && synced;
-}
-
-PublicationResult publishOnSettingsThread(const Request &request)
-{
-    if (!appsettings) return storageFailure();
-
-    const QString accountKey = request.accountKey;
-    if (request.activatesAuthorization) {
-        if (!saveAuthorizationState(
+            GC_STRAVA_AUTHORIZATION_STATE);
+    };
+    callbacks.completeRevocationCleanup = [accountKey] {
+        return completeRevocationCleanup(accountKey);
+    };
+    callbacks.touchAuthorizationRevision = [accountKey] {
+        return appsettings
+            && !StravaSettingsCommit::
+                credentialThreadShutdownRequested()
+            && appsettings->setCValueChecked(
                 accountKey,
-                QStringLiteral("authorization_pending"))) {
-            return storageFailure();
+                GC_STRAVA_AUTHORIZATION_REVISION,
+                QUuid::createUuid().toString(
+                    QUuid::WithoutBraces));
+    };
+    callbacks.readPendingTransactionForRecovery =
+        [accountKey] {
+            if (!appsettings
+                || StravaSettingsCommit::
+                    credentialThreadShutdownRequested()) {
+                return StravaCredentialDurability::
+                    PendingTransactionReadResult{};
+            }
+            const GSettings::CredentialReadResult pending =
+                appsettings->credentialCValueChecked(
+                    accountKey,
+                    GC_STRAVA_PENDING_TRANSACTION);
+            return StravaCredentialDurability::PendingTransactionReadResult{
+                pending.readable(),
+                pending.status
+                        == GSettings::CredentialReadStatus::Present
+                    ? pending.value.toString() : QString()
+            };
+        };
+    callbacks.readAuthorizationRevision = [accountKey] {
+        if (!appsettings
+            || StravaSettingsCommit::
+                credentialThreadShutdownRequested()) {
+            return QString();
         }
-    }
-
-    const PublicationResult result =
-        StravaTokenPublication::publish(
-        request.expectedRefreshToken,
-        request.replacement,
-        request.refreshedAt,
-        request.mode,
-        callbacksFor(accountKey));
-    if (!result.isSuccess()) {
-        if (request.activatesAuthorization) {
-            saveAuthorizationStateAndUncertainty(
-                accountKey,
-                QStringLiteral("authorization_pending"),
-                true);
-        }
-        return result;
-    }
-    if (!request.activatesAuthorization) {
-        return result;
-    }
-
-    const bool stateSaved = appsettings->setCValueChecked(
-        accountKey,
-        GC_STRAVA_AUTHORIZATION_STATE,
-        QStringLiteral("active"));
-    const bool uncertaintySaved =
-        !request.clearsRemoteGrantUncertainty
-        || appsettings->setCValueChecked(
+        return appsettings->cvalue(
             accountKey,
-            GC_STRAVA_REMOTE_GRANT_UNCERTAIN,
-            false);
-    const bool synced = appsettings->syncCValueChecked(
-        accountKey,
-        GC_STRAVA_AUTHORIZATION_STATE);
-    if (!stateSaved || !uncertaintySaved || !synced) {
-        saveAuthorizationStateAndUncertainty(
-            accountKey,
-            QStringLiteral("authorization_pending"),
-            true);
-        return storageFailure();
-    }
-    return result;
-}
-
-bool markAuthorizationPendingOnSettingsThread(
-    const QString &accountKey)
-{
-    return saveAuthorizationStateAndUncertainty(
-        accountKey,
-        QStringLiteral("authorization_pending"),
-        true);
-}
-
-bool markRevocationPendingOnSettingsThread(
-    const QString &accountKey)
-{
-    return saveAuthorizationState(
-        accountKey,
-        QStringLiteral("revocation_pending"));
+            GC_STRAVA_AUTHORIZATION_REVISION,
+            QString()).toString();
+    };
+    return callbacks;
 }
 
 RemovalResult removeOnSettingsThread(
@@ -231,49 +331,28 @@ RemovalResult removeOnSettingsThread(
 {
     if (!appsettings) return removalStorageFailure();
 
+    const StravaCredentialDurability::StorageCallbacks storage =
+        storageFor(request.accountKey);
     RemovalResult result = StravaTokenPublication::remove(
         request.expectedRefreshToken,
         request.mode,
-        callbacksFor(request.accountKey));
+        {
+            [storage] {
+                const StravaCredentialDurability::TokenPairReadResult
+                    current = storage.readCurrent();
+                if (!current.readable) {
+                    throw std::runtime_error(
+                        "credential read unavailable");
+                }
+                return current.value;
+            },
+            storage.writeRefreshToken,
+            storage.writeAccessToken,
+            storage.writeTimestamp
+        });
     if (!result.isSuccess()) return result;
 
-    const bool stateSaved = appsettings->setCValueChecked(
-        request.accountKey,
-        GC_STRAVA_AUTHORIZATION_STATE,
-        QStringLiteral("revoked"));
-    const bool uncertaintyCleared =
-        appsettings->setCValueChecked(
-            request.accountKey,
-            GC_STRAVA_REMOTE_GRANT_UNCERTAIN,
-            false);
-    const bool activeDisabled = appsettings->setCValueChecked(
-        request.accountKey,
-        QStringLiteral(
-            GC_QSETTINGS_ATHLETE_PRIVATE "/Strava/active"),
-        false);
-    const bool startupDisabled = appsettings->setCValueChecked(
-        request.accountKey,
-        QStringLiteral(
-            GC_QSETTINGS_ATHLETE_PRIVATE
-            "/Strava/syncstartup"),
-        false);
-    const bool importDisabled = appsettings->setCValueChecked(
-        request.accountKey,
-        QStringLiteral(
-            GC_QSETTINGS_ATHLETE_PRIVATE
-            "/Strava/syncimport"),
-        false);
-    const bool synced = appsettings->syncCValueChecked(
-        request.accountKey,
-        GC_STRAVA_AUTHORIZATION_STATE);
-
-    if ((!stateSaved
-         || !uncertaintyCleared
-         || !activeDisabled
-         || !startupDisabled
-         || !importDisabled
-         || !synced)
-        && result.isSuccess()) {
+    if (!storage.completeRevocationCleanup()) {
         result.status = RemovalStatus::CleanupPending;
         result.error = QStringLiteral(
             "Strava credentials were removed, but local "
@@ -286,100 +365,89 @@ template<typename Result, typename Operation>
 Result runOnSettingsThread(
     Operation operation,
     const Result &failure,
+    const Result &pending,
     int timeoutMs,
     const CancellationCheck &cancelled)
 {
-    if (timeoutMs <= 0 || cancellationRequested(cancelled))
-        return failure;
-
-    QCoreApplication *application = QCoreApplication::instance();
-    if (!application) return failure;
-    if (QThread::currentThread() == application->thread()) {
-        try {
-            return operation();
-        } catch (...) {
-            return failure;
-        }
-    }
-
-    const auto pending =
-        std::make_shared<PendingOperation<Result>>();
-    const bool queued = QMetaObject::invokeMethod(
-        application,
-        [pending, operation, failure]() {
-            {
-                const std::lock_guard<std::mutex> lock(
-                    pending->mutex);
-                if (pending->abandoned) {
-                    pending->complete = true;
-                    pending->condition.notify_all();
-                    return;
+    auto result = std::make_shared<Result>(failure);
+    const StravaSettingsCommit::DispatchResult dispatched =
+        StravaSettingsCommit::runOnCredentialThread(
+            [result, operation] {
+                try {
+                    *result = operation();
+                } catch (...) {
                 }
-                pending->started = true;
-            }
+            },
+            timeoutMs,
+            cancelled);
+    if (dispatched.status
+        == StravaSettingsCommit::DispatchStatus::Completed) {
+        return *result;
+    }
+    return dispatched.status
+            == StravaSettingsCommit::DispatchStatus::Pending
+        ? pending : failure;
+}
 
-            Result result = failure;
-            try {
-                result = operation();
-            } catch (...) {
-            }
-            {
-                const std::lock_guard<std::mutex> lock(
-                    pending->mutex);
-                if (!pending->abandoned)
-                    pending->result = result;
-                pending->complete = true;
-            }
-            pending->condition.notify_all();
+StateCommitResult runPendingStateCommit(
+    const std::function<bool()> &operation,
+    int timeoutMs,
+    const CancellationCheck &cancelled)
+{
+    auto saved = std::make_shared<bool>(false);
+    const StravaSettingsCommit::DispatchResult dispatched =
+        StravaSettingsCommit::runOnCredentialThread(
+            [saved, operation] {
+                try {
+                    *saved = operation();
+                } catch (...) {
+                    *saved = false;
+                }
+            },
+            timeoutMs,
+            cancelled);
+    if (dispatched.status
+        == StravaSettingsCommit::DispatchStatus::Pending) {
+        return {StateCommitStatus::Pending};
+    }
+    if (dispatched.status
+        == StravaSettingsCommit::DispatchStatus::NotStarted) {
+        return {StateCommitStatus::NotStarted};
+    }
+    return {*saved
+            ? StateCommitStatus::Saved
+            : StateCommitStatus::StorageFailure};
+}
+
+void retireIncompleteStateCommit(
+    const std::shared_ptr<StravaCredentialDurability::Mutation> &mutation,
+    StateCommitStatus status)
+{
+    if (!mutation
+        || (status != StateCommitStatus::Pending
+            && status != StateCommitStatus::StorageFailure)) {
+        return;
+    }
+    StravaSettingsCommit::runOnCredentialThreadAsync(
+        [mutation] {
+            QString error;
+            mutation->finishNoChange(error);
         },
-        Qt::QueuedConnection);
-    if (!queued) return failure;
-
-    const auto deadline = std::chrono::steady_clock::now()
-        + std::chrono::milliseconds(timeoutMs);
-    for (;;) {
-        {
-            std::unique_lock<std::mutex> lock(pending->mutex);
-            if (pending->complete) return pending->result;
-            const auto now = std::chrono::steady_clock::now();
-            if (now >= deadline) {
-                if (!pending->started) {
-                    pending->abandoned = true;
-                    return failure;
-                }
-                pending->condition.wait_for(
-                    lock, std::chrono::milliseconds(10));
-                if (pending->complete)
-                    return pending->result;
-                continue;
-            }
-            const auto remaining = std::chrono::duration_cast<
-                std::chrono::milliseconds>(deadline - now);
-            pending->condition.wait_for(
-                lock,
-                std::min(
-                    remaining,
-                    std::chrono::milliseconds(10)));
-            if (pending->complete) return pending->result;
-        }
-        if (cancellationRequested(cancelled)) {
-            const std::lock_guard<std::mutex> lock(pending->mutex);
-            if (pending->complete) return pending->result;
-            if (!pending->started) {
-                pending->abandoned = true;
-                return failure;
-            }
-        }
-    }
+        {});
 }
 
 } // namespace
 
 bool Request::isValid() const
 {
+    const bool supportedMode = mode
+            == StravaTokenPublication::PublicationMode::Authoritative
+        || mode
+            == StravaTokenPublication::PublicationMode::CompareAndSwap;
     return !accountKey.trimmed().isEmpty()
         && replacement.isValid()
         && !refreshedAt.isEmpty()
+        && supportedMode
         && (mode
                 == StravaTokenPublication::PublicationMode::Authoritative
             || !expectedRefreshToken.isEmpty());
@@ -387,10 +455,240 @@ bool Request::isValid() const
 
 bool RemovalRequest::isValid() const
 {
+    const bool supportedMode = mode
+            == StravaTokenPublication::PublicationMode::Authoritative
+        || mode
+            == StravaTokenPublication::PublicationMode::CompareAndSwap;
     return !accountKey.trimmed().isEmpty()
+        && supportedMode
         && (mode
                 == StravaTokenPublication::PublicationMode::Authoritative
             || !expectedRefreshToken.isEmpty());
+}
+
+std::shared_ptr<StravaCredentialDurability::Mutation>
+beginMutation(
+    const QString &accountKey,
+    StravaCredentialDurability::MutationKind kind,
+    int timeoutMs,
+    QString &error)
+{
+    error.clear();
+    if (!appsettings || accountKey.trimmed().isEmpty()
+        || timeoutMs <= 0) {
+        error = QStringLiteral(
+            "The Strava credential mutation is unavailable");
+        return {};
+    }
+
+    const QString transactionParent = runOnSettingsThread<QString>(
+        [accountKey] {
+            return appsettings
+                ? appsettings->athleteConfigDirectory(accountKey)
+                : QString();
+        },
+        QString(),
+        QString(),
+        timeoutMs,
+        {});
+    if (transactionParent.isEmpty()) {
+        error = QStringLiteral(
+            "The athlete credential transaction directory is unavailable");
+        return {};
+    }
+    const auto coordinator =
+        std::make_shared<StravaCredentialDurability::Coordinator>(
+            accountKey, transactionParent, storageFor(accountKey));
+    struct BeginResult
+    {
+        std::shared_ptr<StravaCredentialDurability::Mutation> mutation;
+        QString error;
+    };
+    const auto started = std::make_shared<BeginResult>();
+    const StravaSettingsCommit::DispatchResult dispatched =
+        StravaSettingsCommit::runOnCredentialThread(
+            [coordinator, kind, timeoutMs, started] {
+                started->mutation = coordinator->begin(
+                    kind, timeoutMs, started->error, false);
+            },
+            timeoutMs,
+            {});
+    if (dispatched.status
+        == StravaSettingsCommit::DispatchStatus::Completed) {
+        error = started->error;
+        return started->mutation;
+    }
+    if (dispatched.status
+        == StravaSettingsCommit::DispatchStatus::Pending) {
+        StravaSettingsCommit::runOnCredentialThreadAsync(
+            [started] {
+                if (!started->mutation) return;
+                QString finishError;
+                started->mutation->finishNoChange(finishError);
+            },
+            {});
+        error = QStringLiteral(
+            "The Strava credential transaction is still starting");
+    }
+    return {};
+}
+
+StravaCredentialDurability::RecoveryResult recover(
+    const QString &accountKey,
+    int timeoutMs)
+{
+    if (!appsettings || accountKey.trimmed().isEmpty()
+        || timeoutMs <= 0) {
+        return {
+            StravaCredentialDurability::RecoveryStatus::Invalid,
+            QStringLiteral(
+                "The Strava credential recovery is unavailable"),
+            0
+        };
+    }
+    const QString transactionParent = runOnSettingsThread<QString>(
+        [accountKey] {
+            return appsettings
+                ? appsettings->athleteConfigDirectory(accountKey)
+                : QString();
+        },
+        QString(),
+        QString(),
+        timeoutMs,
+        {});
+    if (transactionParent.isEmpty()) {
+        return {
+            StravaCredentialDurability::RecoveryStatus::StorageFailure,
+            QStringLiteral(
+                "The athlete credential transaction directory is unavailable"),
+            0
+        };
+    }
+    const auto coordinator =
+        std::make_shared<StravaCredentialDurability::Coordinator>(
+            accountKey, transactionParent, storageFor(accountKey));
+    const StravaCredentialDurability::RecoveryResult failure = {
+        StravaCredentialDurability::RecoveryStatus::StorageFailure,
+        QStringLiteral(
+            "Strava credential recovery could not be started"),
+        0
+    };
+    const StravaCredentialDurability::RecoveryResult pending = {
+        StravaCredentialDurability::RecoveryStatus::Pending,
+        QStringLiteral(
+            "Strava credential recovery is still running"),
+        0
+    };
+    return runOnSettingsThread<
+        StravaCredentialDurability::RecoveryResult>(
+            [coordinator, timeoutMs] {
+                return coordinator->recover(timeoutMs);
+            },
+            failure,
+            pending,
+            timeoutMs,
+            {});
+}
+
+StoredAuthorization readStoredAuthorization(
+    const QString &accountKey,
+    int timeoutMs)
+{
+    if (!appsettings || accountKey.trimmed().isEmpty()
+        || timeoutMs <= 0) {
+        return {};
+    }
+    const QString transactionParent = runOnSettingsThread<QString>(
+        [accountKey] {
+            return appsettings
+                ? appsettings->athleteConfigDirectory(accountKey)
+                : QString();
+        },
+        QString(),
+        QString(),
+        timeoutMs,
+        {});
+    if (transactionParent.isEmpty()) return {};
+    const auto coordinator =
+        std::make_shared<StravaCredentialDurability::Coordinator>(
+            accountKey, transactionParent, storageFor(accountKey));
+    return runOnSettingsThread<StoredAuthorization>(
+        [coordinator, timeoutMs] {
+            StravaCredentialDurability::StoredState durable;
+            QString error;
+            if (!coordinator->readStoredState(
+                    durable, timeoutMs, error)) {
+                return StoredAuthorization();
+            }
+            StoredAuthorization stored;
+            stored.credentials = durable.credentials;
+            stored.refreshedAt = durable.refreshedAt;
+            stored.state = durable.authorizationState;
+            stored.revision = durable.authorizationRevision;
+            stored.remoteGrantUncertain = durable.remoteGrantUncertain;
+            stored.readable = durable.readable;
+            return stored;
+        },
+        StoredAuthorization(),
+        StoredAuthorization(),
+        timeoutMs,
+        {});
+}
+
+StoredAuthorizationMetadata readStoredAuthorizationMetadata(
+    const QString &accountKey,
+    int timeoutMs)
+{
+    const StoredAuthorization stored =
+        readStoredAuthorization(accountKey, timeoutMs);
+    return {
+        stored.state,
+        stored.revision,
+        stored.readable
+    };
+}
+
+bool finishNoChange(
+    const std::shared_ptr<StravaCredentialDurability::Mutation> &mutation,
+    int timeoutMs)
+{
+    if (!mutation || timeoutMs <= 0) return false;
+    return runOnSettingsThread<bool>(
+        [mutation] {
+            QString error;
+            return mutation->finishNoChange(error);
+        },
+        false,
+        false,
+        timeoutMs,
+        {});
+}
+
+StoredAuthorization readStoredAuthorization(
+    const std::shared_ptr<StravaCredentialDurability::Mutation> &mutation,
+    int timeoutMs)
+{
+    if (!mutation || timeoutMs <= 0) return {};
+    return runOnSettingsThread<StoredAuthorization>(
+        [mutation] {
+            StravaCredentialDurability::StoredState durable;
+            QString error;
+            if (!mutation->readStoredState(durable, error))
+                return StoredAuthorization();
+            StoredAuthorization stored;
+            stored.credentials = durable.credentials;
+            stored.refreshedAt = durable.refreshedAt;
+            stored.state = durable.authorizationState;
+            stored.revision = durable.authorizationRevision;
+            stored.remoteGrantUncertain =
+                durable.remoteGrantUncertain;
+            stored.readable = durable.readable;
+            return stored;
+        },
+        StoredAuthorization(),
+        StoredAuthorization(),
+        timeoutMs,
+        {});
 }
 
 PublicationResult publish(
@@ -400,47 +698,75 @@ PublicationResult publish(
 {
     if (!request.isValid())
         return invalidInput();
+    std::shared_ptr<StravaCredentialDurability::Mutation> mutation =
+        request.mutation;
+    QString error;
+    if (!mutation) {
+        mutation = beginMutation(
+            request.accountKey,
+            StravaCredentialDurability::MutationKind::Authorization,
+            timeoutMs,
+            error);
+    }
+    if (!mutation)
+        return storageFailure();
+
+    StravaCredentialDurability::Publication publication;
+    publication.expectedRefreshToken =
+        request.expectedRefreshToken;
+    publication.replacement = request.replacement;
+    publication.refreshedAt = request.refreshedAt;
+    publication.mode = request.mode;
+    publication.activatesAuthorization =
+        request.activatesAuthorization;
+    publication.clearsRemoteGrantUncertainty =
+        request.clearsRemoteGrantUncertainty;
     return runOnSettingsThread<PublicationResult>(
-        [request] {
-            return publishOnSettingsThread(request);
+        [mutation, publication] {
+            return mutation->publish(publication);
         },
-        storageFailure(),
+        publicationPending(),
+        publicationPending(),
         timeoutMs,
         cancelled);
 }
 
-bool markRevocationPending(
+StateCommitResult markRevocationPendingTracked(
     const QString &accountKey,
+    const std::shared_ptr<StravaCredentialDurability::Mutation> &mutation,
     int timeoutMs,
     const CancellationCheck &cancelled)
 {
-    if (accountKey.trimmed().isEmpty())
-        return false;
-    return runOnSettingsThread<bool>(
-        [accountKey] {
-            return markRevocationPendingOnSettingsThread(
-                accountKey);
+    if (accountKey.trimmed().isEmpty() || !mutation)
+        return {StateCommitStatus::NotStarted};
+    const StateCommitResult result = runPendingStateCommit(
+        [mutation] {
+            QString error;
+            return mutation->markPendingState(error);
         },
-        false,
         timeoutMs,
         cancelled);
+    retireIncompleteStateCommit(mutation, result.status);
+    return result;
 }
 
-bool markAuthorizationPending(
+StateCommitResult markAuthorizationPendingTracked(
     const QString &accountKey,
+    const std::shared_ptr<StravaCredentialDurability::Mutation> &mutation,
     int timeoutMs,
     const CancellationCheck &cancelled)
 {
-    if (accountKey.trimmed().isEmpty())
-        return false;
-    return runOnSettingsThread<bool>(
-        [accountKey] {
-            return markAuthorizationPendingOnSettingsThread(
-                accountKey);
+    if (accountKey.trimmed().isEmpty() || !mutation)
+        return {StateCommitStatus::NotStarted};
+    const StateCommitResult result = runPendingStateCommit(
+        [mutation] {
+            QString error;
+            return mutation->markPendingState(error);
         },
-        false,
         timeoutMs,
         cancelled);
+    retireIncompleteStateCommit(mutation, result.status);
+    return result;
 }
 
 RemovalResult remove(
@@ -450,11 +776,39 @@ RemovalResult remove(
 {
     if (!request.isValid())
         return invalidRemovalInput();
+    std::shared_ptr<StravaCredentialDurability::Mutation> mutation =
+        request.mutation;
+    QString error;
+    if (!mutation) {
+        mutation = beginMutation(
+            request.accountKey,
+            StravaCredentialDurability::MutationKind::Revocation,
+            timeoutMs,
+            error);
+    }
+    if (!mutation)
+        return removalPending();
+    if (!mutation->markLocalCommitStarted(
+            request.expectedRefreshToken,
+            request.mode,
+            error)) {
+        return removalPending();
+    }
     return runOnSettingsThread<RemovalResult>(
-        [request] {
-            return removeOnSettingsThread(request);
+        [request, mutation] {
+            RemovalResult result = removeOnSettingsThread(request);
+            if (result.status == RemovalStatus::Cleared) {
+                QString finishError;
+                if (!mutation->finishCommit(finishError)) {
+                    result = removalPending();
+                    if (!finishError.isEmpty())
+                        result.error = finishError;
+                }
+            }
+            return result;
         },
-        removalStorageFailure(),
+        removalPending(),
+        removalPending(),
         timeoutMs,
         cancelled);
 }

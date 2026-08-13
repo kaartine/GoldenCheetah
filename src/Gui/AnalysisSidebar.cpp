@@ -44,6 +44,8 @@
 
 // Filter for similar activities
 #include "FilterSimilarDialog.h"
+#include "AthleteTab.h"
+#include "ModalWorkflowGuard.h"
 
 AnalysisSidebar::AnalysisSidebar(Context *context) : QWidget(context->mainWindow), context(context)
 {
@@ -449,9 +451,90 @@ AnalysisSidebar::showActivityMenu(const QPoint &pos)
 
         QAction *filterSimilar = new QAction(tr("Filter similar activities..."), rideNavigator);
         connect(filterSimilar, &QAction::triggered, this, [this]() {
-            if (context->ride != nullptr) {
-                FilterSimilarDialog dlg(context, context->ride, this);
-                dlg.exec();
+            const QPointer<AnalysisSidebar> guardedSidebar(this);
+            const QPointer<Context> guardedContext(context);
+            const QPointer<MainWindow> guardedMainWindow(
+                guardedContext ? guardedContext->mainWindow : nullptr);
+            const QPointer<Athlete> guardedAthlete(
+                guardedContext ? guardedContext->athlete : nullptr);
+            const QPointer<RideCache> guardedCache(
+                guardedAthlete ? guardedAthlete->rideCache : nullptr);
+            const QPointer<AthleteTab> guardedTab(
+                guardedContext ? guardedContext->tab : nullptr);
+            const QPointer<RideItem> guardedRide(
+                guardedContext ? guardedContext->ride : nullptr);
+            if (!guardedSidebar || !guardedContext
+                || !guardedMainWindow
+                || !guardedAthlete || !guardedCache
+                || !guardedTab || !guardedRide) {
+                return;
+            }
+            const QString fileName = guardedRide->fileName;
+            const QString path = guardedRide->path;
+            const bool planned = guardedRide->planned;
+            const ModalWorkflowGuard workflowGuard(
+                {guardedSidebar.data(), guardedMainWindow.data(),
+                 guardedContext.data(),
+                 guardedAthlete.data(), guardedCache.data(),
+                 guardedTab.data(), guardedRide.data()},
+                [guardedSidebar, guardedMainWindow, guardedContext,
+                 guardedAthlete, guardedCache,
+                 guardedTab, guardedRide,
+                 fileName, path, planned] {
+                    return guardedSidebar
+                        && guardedSidebar->context
+                            == guardedContext.data()
+                        && modalWorkflowHasActiveTab(
+                            guardedMainWindow.data(),
+                            guardedContext.data(),
+                            guardedTab.data())
+                        && guardedContext->athlete
+                            == guardedAthlete.data()
+                        && guardedAthlete->rideCache
+                            == guardedCache.data()
+                        && guardedContext->tab
+                            == guardedTab.data()
+                        && guardedContext->ride
+                            == guardedRide.data()
+                        && guardedRide->fileName == fileName
+                        && guardedRide->path == path
+                        && guardedRide->planned == planned
+                        && guardedCache->rides().count(
+                               guardedRide.data()) == 1;
+                });
+            if (!workflowGuard.canCommit()) return;
+
+            QPointer<FilterSimilarDialog> dialog(
+                new FilterSimilarDialog(
+                    guardedRide.data(), guardedSidebar.data()));
+            workflowGuard.rejectOnOwnerLoss(dialog.data());
+            modalWorkflowRejectOnMutation(
+                guardedRide.data(),
+                &RideItem::rideDataChanged, dialog.data());
+            modalWorkflowRejectOnMutation(
+                guardedRide.data(),
+                &RideItem::rideMetadataChanged, dialog.data());
+            modalWorkflowRejectOnMutation(
+                guardedCache.data(),
+                QOverload<RideItem*>::of(
+                    &RideCache::itemChanged), dialog.data(),
+                [guardedRide](RideItem *changed) {
+                    return changed == guardedRide.data();
+                });
+            modalWorkflowRejectOnMutation(
+                guardedCache.data(),
+                &RideCache::itemSaved, dialog.data(),
+                [guardedRide](RideItem *changed) {
+                    return changed == guardedRide.data();
+                });
+            const int result = dialog->exec();
+            const QString filter = dialog
+                ? dialog->selectedFilter() : QString();
+            if (dialog) delete dialog.data();
+            if (result == QDialog::Accepted
+                && workflowGuard.canCommit()
+                && !filter.isEmpty()) {
+                guardedMainWindow->fillinFilter(filter);
             }
         });
         menu.addAction(filterSimilar);

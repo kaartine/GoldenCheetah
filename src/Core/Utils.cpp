@@ -27,9 +27,6 @@
 #include <QRegularExpression>
 #include <QStringRef>
 
-#include "GenericChart.h"
-#include "RideMetric.h"
-
 namespace Utils
 {
 

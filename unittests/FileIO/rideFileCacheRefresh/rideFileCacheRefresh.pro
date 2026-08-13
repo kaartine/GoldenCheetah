@@ -25,7 +25,8 @@ HEADERS = ../../../src/FileIO/RideFile.h \
           ../../../src/FileIO/RideFileCommand.h \
           ../../../src/FileIO/RideFileCache.h \
           ../../../src/FileIO/RideFileCacheIntegrity.h \
-          ../../../src/FileIO/RideFileCacheWriteError.h
+          ../../../src/FileIO/RideFileCacheWriteError.h \
+          ../../../src/Core/SessionServices.h
 
 INCLUDEPATH += ../../../src \
                ../../../src/ANT \
@@ -40,8 +41,7 @@ INCLUDEPATH += ../../../src \
                ../../../qwt/src \
                ../../../contrib/qzip
 
-QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-QMAKE_LFLAGS += -Wl,--gc-sections
+include(../../section-gc.prf)
 LIBS += -lz
 
 sanitize:!tsan:!msvc {

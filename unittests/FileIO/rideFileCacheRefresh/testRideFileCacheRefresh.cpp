@@ -10,6 +10,7 @@
 #include "RideFile.h"
 #include "RideFileCache.h"
 #include "RideFileCacheWriteError.h"
+#include "SessionServices.h"
 #include "WPrime.h"
 
 #include <QByteArrayView>
@@ -39,6 +40,12 @@ namespace {
 
 constexpr int FixedZoneFloatCount =
     10 + 4 + 10 + 4 + 10 + 4 + 4;
+
+QByteArray analysisFingerprint(const QByteArray &label)
+{
+    return QCryptographicHash::hash(
+        label, QCryptographicHash::Sha256);
+}
 
 QByteArray bytesForValue(quint32 value)
 {
@@ -164,7 +171,22 @@ public:
 
         auto *ride = new RideFile;
         ride->setRecIntSecs(1.0);
-        if (!contents.isEmpty()) {
+        if (contents.startsWith(QByteArrayLiteral("large:"))) {
+            bool validCount = false;
+            const int pointCount =
+                contents.mid(6).toInt(&validCount);
+            if (!validCount || pointCount <= 0) {
+                errors.append(QStringLiteral("Invalid large test ride"));
+                delete ride;
+                return nullptr;
+            }
+            for (int index = 0; index < pointCount; ++index) {
+                RideFilePoint point;
+                point.secs = index + 1.0;
+                point.watts = 200.0 + (index % 100);
+                ride->appendPoint(point);
+            }
+        } else if (!contents.isEmpty()) {
             RideFilePoint point;
             point.secs = 1.0;
             point.watts =
@@ -329,6 +351,34 @@ private:
     int readCalls_ = 0;
 };
 
+class CountingWriteDevice final : public QIODevice
+{
+public:
+    CountingWriteDevice()
+    {
+        open(QIODevice::WriteOnly | QIODevice::Unbuffered);
+    }
+
+    qint64 totalBytes() const { return totalBytes_; }
+    qint64 largestWrite() const { return largestWrite_; }
+
+protected:
+    qint64 readData(char *, qint64) override { return -1; }
+
+    qint64 writeData(const char *, qint64 size) override
+    {
+        if (size < 0)
+            return -1;
+        totalBytes_ += size;
+        largestWrite_ = std::max(largestWrite_, size);
+        return size;
+    }
+
+private:
+    qint64 totalBytes_ = 0;
+    qint64 largestWrite_ = 0;
+};
+
 class ThreadJoiner
 {
 public:
@@ -355,7 +405,9 @@ void writeCacheFixture(
     float best,
     float timeInZone,
     const QByteArray &sourceBytes = {},
-    double weight = 0.0)
+    double weight = 0.0,
+    const QByteArray &analysis =
+        analysisFingerprint(QByteArrayLiteral("analysis-v1")))
 {
     QVERIFY(QDir().mkpath(
         QFileInfo(path).absolutePath()));
@@ -364,6 +416,8 @@ void writeCacheFixture(
     header.crc = qChecksum(
         QByteArrayView(sourceBytes));
     header.WEIGHT = weight;
+    QVERIFY(RideFileCacheIntegrity::setAnalysisFingerprint(
+        header, analysis));
     header.wattsMeanMaxCount = 2;
     QVector<float> payload(
         2 + FixedZoneFloatCount, 0.0f);
@@ -404,6 +458,24 @@ void writeCacheFixture(
     file.close();
 }
 
+class RecordingPersistenceService final
+    : public AthletePersistenceService
+{
+public:
+    void reportCacheWriteFailure(
+        const QString &cachePath,
+        const QString &detail) override
+    {
+        ++reportCount;
+        reportedPath = cachePath;
+        reportedDetail = detail;
+    }
+
+    int reportCount = 0;
+    QString reportedPath;
+    QString reportedDetail;
+};
+
 } // namespace
 
 class TestRideFileCacheRefresh : public QObject
@@ -411,12 +483,15 @@ class TestRideFileCacheRefresh : public QObject
     Q_OBJECT
 
 private slots:
+    void cleanup();
     void refreshRestoresFixedZoneStorage();
     void repeatedRefreshClearsZoneValues();
     void temporaryActivityComputesWithoutPersistentCache();
     void standalonePowerActivityComputesWithoutContext();
     void standaloneWPrimeWithoutZonesStaysEmpty();
     void plannedAndCompletedActivitiesUseSeparateCaches();
+    void rankUsesDescendingInsertionSemantics_data();
+    void rankUsesDescendingInsertionSemantics();
     void batchReadDiscardsRowAfterMidReadFailure();
     void crcReadFailureSkipsPersistence();
     void restoredMtimeSourceChangeRejectsCache();
@@ -431,6 +506,9 @@ private slots:
     void apiReadersRejectChangedSource();
     void batchReadersRejectChangedSource();
     void aggregateBindingsRejectChangedSource();
+    void aggregateBindingsRejectMixedSourceGeneration();
+    void changedAnalysisInputsRejectDependentFastPaths();
+    void aggregateBindingsRejectChangedAnalysisInputs();
     void factoryCapturesSourceProvenance();
     void factoryLeavesUnauditedReaderUnprovenanced();
     void factoryLeavesPathDependentReaderUnprovenanced();
@@ -438,12 +516,21 @@ private slots:
     void unprovenancedRideSkipsPersistence();
     void savedRideRebindsAndPersistsAtomically();
     void matchingSourceProvenanceAllowsPersistenceAttempt();
+    void injectedPersistenceServiceReceivesWriteFailure();
+    void omittedPersistenceServiceFallsBackToContext();
     void sourceChangeInvalidatesPersistence();
     void rideMutationInvalidatesPersistence();
     void directPointMutationSkipsPersistence();
     void sourceChangeBeforeCommitSkipsPersistence();
+    void verifiedRefreshStreamsPayloadInBoundedWrites();
+    void verifiedRefreshRejectsMutationBeforePublication();
     void concurrentPersistenceFailuresKeepComputedResults();
 };
+
+void TestRideFileCacheRefresh::cleanup()
+{
+    RideFileCache::setContextPersistenceFallbackHookForTest({});
+}
 
 void TestRideFileCacheRefresh::refreshRestoresFixedZoneStorage()
 {
@@ -664,6 +751,73 @@ TestRideFileCacheRefresh::plannedAndCompletedActivitiesUseSeparateCaches()
             RideFile::watts,
             1),
         0);
+}
+
+void
+TestRideFileCacheRefresh::rankUsesDescendingInsertionSemantics_data()
+{
+    QTest::addColumn<double>("candidate");
+    QTest::addColumn<int>("expectedRank");
+
+    QTest::newRow("above-top") << 350.0 << 1;
+    QTest::newRow("tie-at-top") << 300.0 << 1;
+    QTest::newRow("between-top-and-middle") << 250.0 << 2;
+    QTest::newRow("tie-in-middle") << 200.0 << 2;
+    QTest::newRow("between-middle-and-bottom") << 150.0 << 4;
+    QTest::newRow("below-bottom") << 50.0 << 5;
+}
+
+void
+TestRideFileCacheRefresh::rankUsesDescendingInsertionSemantics()
+{
+    QFETCH(double, candidate);
+    QFETCH(int, expectedRank);
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QVector<QPair<QString, QString>> cacheRows;
+    const auto addRow = [&](const QString &name,
+                            float best,
+                            bool valid) {
+        const QString sourcePath =
+            directory.filePath(name + QStringLiteral(".fit"));
+        const QString cachePath =
+            directory.filePath(
+                QStringLiteral("cache/")
+                + name
+                + QStringLiteral(".cpx"));
+        const QByteArray sourceBytes =
+            name.toUtf8() + QByteArrayLiteral("-source");
+        writeFileBytes(sourcePath, sourceBytes);
+        writeCacheFixture(
+            cachePath,
+            best,
+            0.0f,
+            valid
+                ? sourceBytes
+                : QByteArrayLiteral("stale-source"));
+        cacheRows.append({sourcePath, cachePath});
+    };
+
+    addRow(QStringLiteral("top"), 300.0f, true);
+    addRow(QStringLiteral("middle-a"), 200.0f, true);
+    addRow(QStringLiteral("middle-b"), 200.0f, true);
+    addRow(QStringLiteral("bottom"), 100.0f, true);
+    addRow(QStringLiteral("rejected"), 1000.0f, false);
+
+    int of = -1;
+    const int rank =
+        RideFileCache::rankCacheRowsForTest(
+            cacheRows,
+            RideFile::watts,
+            1,
+            candidate,
+            of);
+
+    // "of" counts accepted rows. Rank is their one-based descending
+    // insertion position, so a new last place can be "of + 1".
+    QCOMPARE(of, 4);
+    QCOMPARE(rank, expectedRank);
 }
 
 void
@@ -1404,18 +1558,183 @@ aggregateBindingsRejectChangedSource()
         bindings = {
             {sourcePath, fingerprint}
         };
+    const QByteArray analysis = analysisFingerprint(
+        QByteArrayLiteral("analysis-v1"));
+    const QVector<QPair<QByteArray, QByteArray>>
+        analysisBindings = {
+            {analysis, analysis}
+        };
     QVERIFY(
         RideFileCache::
-            sourceBindingsAreCurrentForTest(
-                bindings));
+            aggregateBindingsAreCurrentForTest(
+                bindings, analysisBindings));
 
     writeFileBytes(
         sourcePath,
         QByteArrayLiteral("source-b"));
     QVERIFY(
         !RideFileCache::
-            sourceBindingsAreCurrentForTest(
-                bindings));
+            aggregateBindingsAreCurrentForTest(
+                bindings, analysisBindings));
+}
+
+void
+TestRideFileCacheRefresh::
+aggregateBindingsRejectMixedSourceGeneration()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QVector<
+        QPair<
+            QString,
+            RideFileCRC::ContentFingerprint>>
+        sourceBindings;
+    const QByteArray analysis = analysisFingerprint(
+        QByteArrayLiteral("analysis-v1"));
+    QVector<QPair<QByteArray, QByteArray>>
+        analysisBindings;
+    for (int index = 0; index < 2; ++index) {
+        const QString sourcePath = directory.filePath(
+            QStringLiteral("source-%1.fit").arg(index));
+        writeFileBytes(
+            sourcePath,
+            QByteArrayLiteral("original-")
+                + QByteArray::number(index));
+        RideFileCRC::ContentFingerprint fingerprint;
+        QVERIFY(RideFileCRC::computeFileFingerprint(
+            sourcePath, fingerprint));
+        sourceBindings.append({sourcePath, fingerprint});
+        analysisBindings.append({analysis, analysis});
+    }
+
+    RideFileCache::setAggregateBindingReadHookForTest(
+        [sourcePath = sourceBindings.constFirst().first]() {
+            writeFileBytes(
+                sourcePath,
+                QByteArrayLiteral("changed-0"));
+        });
+    QVERIFY(!RideFileCache::aggregateBindingsAreCurrentForTest(
+        sourceBindings, analysisBindings));
+}
+
+void
+TestRideFileCacheRefresh::
+changedAnalysisInputsRejectDependentFastPaths()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString cacheRoot =
+        directory.filePath(QStringLiteral("cache"));
+    const QString completedRoot =
+        directory.filePath(QStringLiteral("activities"));
+    const QString plannedRoot =
+        directory.filePath(QStringLiteral("planned"));
+    QVERIFY(QDir().mkpath(cacheRoot));
+    QVERIFY(QDir().mkpath(completedRoot));
+    QVERIFY(QDir().mkpath(plannedRoot));
+    const QString sourcePath = QDir(completedRoot).filePath(
+        QStringLiteral("2026_07_29_12_00_00.fit"));
+    const QString cachePath = QDir(cacheRoot).filePath(
+        QStringLiteral("2026_07_29_12_00_00.cpx"));
+    const QByteArray sourceBytes = QByteArrayLiteral("source-a");
+    const QByteArray current = analysisFingerprint(
+        QByteArrayLiteral("weight=75;zones=1;settings=1"));
+    const QVector<QByteArray> stale = {
+        analysisFingerprint(
+            QByteArrayLiteral("weight=76;zones=1;settings=1")),
+        analysisFingerprint(
+            QByteArrayLiteral("weight=75;zones=2;settings=1")),
+        analysisFingerprint(
+            QByteArrayLiteral("weight=75;zones=1;settings=2"))
+    };
+    constexpr double Weight = 75.0;
+    writeFileBytes(sourcePath, sourceBytes);
+    writeCacheFixture(
+        cachePath,
+        210.0f,
+        11.0f,
+        sourceBytes,
+        Weight,
+        current);
+    const QVector<QPair<RideFile::SeriesType, int>> requests = {
+        {RideFile::watts, 1}
+    };
+
+    QVERIFY(RideFileCache::cacheIsCurrentForSourceWithAnalysisForTest(
+        sourcePath, cachePath, Weight, current));
+    QCOMPARE(
+        RideFileCache::bestForActivityWithAnalysisForTest(
+            cacheRoot, completedRoot, plannedRoot,
+            sourcePath, RideFile::watts, 1, current),
+        210.0);
+    QCOMPARE(
+        RideFileCache::tizForActivityWithAnalysisForTest(
+            cacheRoot, completedRoot, plannedRoot,
+            sourcePath, RideFile::watts, 1, current),
+        11);
+    QVector<double> values;
+    QVERIFY(RideFileCache::readBestRowForSourceWithAnalysisForTest(
+        sourcePath, cachePath, current, requests, values));
+    QCOMPARE(values, QVector<double>({210.0}));
+
+    for (const QByteArray &changed : stale) {
+        QVERIFY(!RideFileCache::cacheIsCurrentForSourceWithAnalysisForTest(
+            sourcePath, cachePath, Weight, changed));
+        QCOMPARE(
+            RideFileCache::bestForActivityWithAnalysisForTest(
+                cacheRoot, completedRoot, plannedRoot,
+                sourcePath, RideFile::watts, 1, changed),
+            0.0);
+        QCOMPARE(
+            RideFileCache::tizForActivityWithAnalysisForTest(
+                cacheRoot, completedRoot, plannedRoot,
+                sourcePath, RideFile::watts, 1, changed),
+            0);
+        values = {999.0};
+        QVERIFY(!RideFileCache::readBestRowForSourceWithAnalysisForTest(
+            sourcePath, cachePath, changed, requests, values));
+        QVERIFY(values.isEmpty());
+    }
+}
+
+void
+TestRideFileCacheRefresh::
+aggregateBindingsRejectChangedAnalysisInputs()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QByteArray current = analysisFingerprint(
+        QByteArrayLiteral("analysis-v1"));
+    const QByteArray changed = analysisFingerprint(
+        QByteArrayLiteral("analysis-v2"));
+    QVector<
+        QPair<
+            QString,
+            RideFileCRC::ContentFingerprint>>
+        sourceBindings;
+    for (int index = 0; index < 2; ++index) {
+        const QString sourcePath = directory.filePath(
+            QStringLiteral("source-%1.fit").arg(index));
+        writeFileBytes(
+            sourcePath,
+            QByteArrayLiteral("source-")
+                + QByteArray::number(index));
+        RideFileCRC::ContentFingerprint fingerprint;
+        QVERIFY(RideFileCRC::computeFileFingerprint(
+            sourcePath, fingerprint));
+        sourceBindings.append({sourcePath, fingerprint});
+    }
+
+    QVERIFY(RideFileCache::aggregateBindingsAreCurrentForTest(
+        sourceBindings, {
+        {current, current},
+        {current, current}
+    }));
+    QVERIFY(!RideFileCache::aggregateBindingsAreCurrentForTest(
+        sourceBindings, {
+        {current, current},
+        {current, changed}
+    }));
 }
 
 void
@@ -1676,6 +1995,11 @@ savedRideRebindsAndPersistsAtomically()
         data.sourceFingerprint.legacyCrc16,
         qChecksum(
             QByteArrayView(sourceBytes)));
+    QCOMPARE(
+        data.analysisFingerprint.size(),
+        RideFileCRC::Sha256Size);
+    QVERIFY(data.analysisFingerprint
+        != QByteArray(RideFileCRC::Sha256Size, '\0'));
 }
 
 void
@@ -1723,6 +2047,113 @@ matchingSourceProvenanceAllowsPersistenceAttempt()
 
     QCOMPARE(writeCalls, 1);
     QCOMPARE(reportCalls, 1);
+    QVERIFY(!cache.incomplete);
+}
+
+void
+TestRideFileCacheRefresh::
+injectedPersistenceServiceReceivesWriteFailure()
+{
+    registerProvenanceTestReader();
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath =
+        directory.filePath(QStringLiteral("source.provenance"));
+    const QString cachePath =
+        directory.filePath(QStringLiteral("cache/source.cpx"));
+    writeFileBytes(sourcePath, QByteArrayLiteral("source-a"));
+
+    QFile source(sourcePath);
+    QStringList errors;
+    std::unique_ptr<RideFile> ride(
+        RideFileFactory::instance().openRideFile(
+            nullptr, source, errors));
+    QVERIFY2(ride, qPrintable(errors.join(QLatin1Char('\n'))));
+    RecordingPersistenceService persistence;
+    RideFileCache cache(
+        ride.get(),
+        RideFileCache::SkipInitialComputeForTest {},
+        &persistence);
+
+    QVERIFY(!cache.refreshCacheForTest(
+        sourcePath,
+        cachePath,
+        [](const QString &,
+           const RideFileCacheIntegrity::CacheWriteOperation &,
+           QString *error) {
+            if (error)
+                *error = QStringLiteral("injected write failure");
+            return false;
+        },
+        {}));
+
+    QCOMPARE(persistence.reportCount, 1);
+    QCOMPARE(persistence.reportedPath, cachePath);
+    QCOMPARE(
+        persistence.reportedDetail,
+        QStringLiteral("injected write failure"));
+    QVERIFY(!cache.incomplete);
+}
+
+void
+TestRideFileCacheRefresh::
+omittedPersistenceServiceFallsBackToContext()
+{
+    registerProvenanceTestReader();
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath =
+        directory.filePath(QStringLiteral("source.provenance"));
+    const QString cachePath =
+        directory.filePath(QStringLiteral("cache/source.cpx"));
+    writeFileBytes(sourcePath, QByteArrayLiteral("source-a"));
+
+    QFile source(sourcePath);
+    QStringList errors;
+    std::unique_ptr<RideFile> ride(
+        RideFileFactory::instance().openRideFile(
+            nullptr, source, errors));
+    QVERIFY2(ride, qPrintable(errors.join(QLatin1Char('\n'))));
+
+    Context *const expectedContext =
+        reinterpret_cast<Context *>(quintptr(0x1234));
+    Context *reportedContext = nullptr;
+    QString reportedPath;
+    QString reportedDetail;
+    int reportCount = 0;
+    RideFileCache::setContextPersistenceFallbackHookForTest(
+        [&](Context *context,
+            const QString &path,
+            const QString &detail) {
+            ++reportCount;
+            reportedContext = context;
+            reportedPath = path;
+            reportedDetail = detail;
+        });
+
+    RideFileCache cache(
+        ride.get(),
+        RideFileCache::SkipInitialComputeForTest {});
+    QVERIFY(!cache.refreshCacheForTest(
+        sourcePath,
+        cachePath,
+        [&cache, expectedContext](
+            const QString &,
+            const RideFileCacheIntegrity::CacheWriteOperation &,
+            QString *error) {
+            cache.setContextForTest(expectedContext);
+            if (error)
+                *error = QStringLiteral("injected write failure");
+            return false;
+        },
+        {}));
+
+    QCOMPARE(reportCount, 1);
+    QCOMPARE(reportedContext, expectedContext);
+    QCOMPARE(reportedPath, cachePath);
+    QCOMPARE(
+        reportedDetail,
+        QStringLiteral("injected write failure"));
     QVERIFY(!cache.incomplete);
 }
 
@@ -1919,6 +2350,96 @@ sourceChangeBeforeCommitSkipsPersistence()
     QCOMPARE(writeCalls, 1);
     QCOMPARE(validationCalls, 1);
     QCOMPARE(reportCalls, 0);
+    QVERIFY(!cache.incomplete);
+}
+
+void
+TestRideFileCacheRefresh::verifiedRefreshStreamsPayloadInBoundedWrites()
+{
+    constexpr qint64 WriteChunkLimit =
+        RideFileCacheIntegrity::CacheWriteChunkBytes;
+    registerProvenanceTestReader();
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath = directory.filePath(
+        QStringLiteral("large.provenance"));
+    writeFileBytes(
+        sourcePath,
+        QByteArrayLiteral("large:4096"));
+
+    QFile source(sourcePath);
+    QStringList errors;
+    std::unique_ptr<RideFile> ride(
+        RideFileFactory::instance().openRideFile(
+            nullptr, source, errors));
+    QVERIFY2(ride, qPrintable(errors.join(QLatin1Char('\n'))));
+    QCOMPARE(ride->dataPoints().size(), 4096);
+
+    RideFileCache cache(
+        ride.get(),
+        RideFileCache::SkipInitialComputeForTest {});
+    qint64 totalBytes = 0;
+    qint64 largestWrite = 0;
+    QVERIFY(cache.refreshCacheWithValidatorForTest(
+        sourcePath,
+        directory.filePath(QStringLiteral("cache/large.cpx")),
+        [&](const QString &,
+            const RideFileCacheIntegrity::CacheWriteOperation &write,
+            const RideFileCacheIntegrity::CachePreCommitValidator &validate,
+            QString *error) {
+            CountingWriteDevice output;
+            if (!write(output, error))
+                return false;
+            totalBytes = output.totalBytes();
+            largestWrite = output.largestWrite();
+            return validate(error);
+        },
+        {}));
+
+    QVERIFY(totalBytes > WriteChunkLimit);
+    QVERIFY2(
+        largestWrite <= WriteChunkLimit,
+        qPrintable(QStringLiteral(
+            "largest CPX write was %1 bytes").arg(largestWrite)));
+}
+
+void
+TestRideFileCacheRefresh::
+verifiedRefreshRejectsMutationBeforePublication()
+{
+    registerProvenanceTestReader();
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString sourcePath = directory.filePath(
+        QStringLiteral("source.provenance"));
+    writeFileBytes(sourcePath, QByteArrayLiteral("source-a"));
+
+    QFile source(sourcePath);
+    QStringList errors;
+    std::unique_ptr<RideFile> ride(
+        RideFileFactory::instance().openRideFile(
+            nullptr, source, errors));
+    QVERIFY2(ride, qPrintable(errors.join(QLatin1Char('\n'))));
+    RideFileCache cache(
+        ride.get(),
+        RideFileCache::SkipInitialComputeForTest {});
+    int writeCalls = 0;
+    QVERIFY(!cache.refreshCacheWithValidatorForTest(
+        sourcePath,
+        directory.filePath(QStringLiteral("cache/source.cpx")),
+        [&](const QString &,
+            const RideFileCacheIntegrity::CacheWriteOperation &write,
+            const RideFileCacheIntegrity::CachePreCommitValidator &,
+            QString *error) {
+            ++writeCalls;
+            cache.wattsZoneArray()[0] += 1.0f;
+            QByteArray bytes;
+            QBuffer output(&bytes);
+            return output.open(QIODevice::WriteOnly)
+                && write(output, error);
+        },
+        {}));
+    QCOMPARE(writeCalls, 1);
     QVERIFY(!cache.incomplete);
 }
 

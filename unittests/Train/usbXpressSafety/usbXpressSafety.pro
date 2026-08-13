@@ -8,8 +8,15 @@ CONFIG -= app_bundle
 
 DEFINES += WIN32 GC_HAVE_LIBUSB GC_HAVE_USBXPRESS
 
-QMAKE_CXXFLAGS += -I$$[QT_INSTALL_HEADERS] \
-                  -include $$PWD/QtPlatformShim.h
+unix {
+    macx {
+        QMAKE_CXXFLAGS += -F$$[QT_INSTALL_LIBS]
+    } else {
+        QMAKE_CXXFLAGS += -I$$[QT_INSTALL_HEADERS]
+    }
+
+    QMAKE_CXXFLAGS += -include $$PWD/QtPlatformShim.h
+}
 
 SOURCES = testUSBXpressSafety.cpp \
           FakeSiUSBXp.cpp \

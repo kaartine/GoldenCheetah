@@ -9,7 +9,8 @@ CONFIG += console testcase c++17 release
 CONFIG -= debug
 
 SOURCES = testRideCacheAtomicSave.cpp \
-          ../../../src/Core/RideCachePersistence.cpp
+          ../../../src/Core/RideCachePersistence.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp
 
 HEADERS = ../../../src/Core/RideCachePersistence.h \
           ../../../src/FileIO/AtomicFileWriter.h
@@ -18,8 +19,8 @@ INCLUDEPATH += ../../../src \
                ../../../src/Core \
                ../../../src/FileIO
 
-QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-QMAKE_LFLAGS += -Wl,--gc-sections
+include(../../section-gc.prf)
+win32:LIBS += -ladvapi32
 
 sanitize:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

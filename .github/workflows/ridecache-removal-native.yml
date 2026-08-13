@@ -1,4 +1,4 @@
-name: Native activity removal
+name: Native activity transactions
 
 on:
   push:
@@ -9,30 +9,38 @@ on:
       - src/Core/LinkedActivitySaveJournal.*
       - src/Core/PlannedActivityFileStager.*
       - src/Core/RideCache*.*
+      - src/Core/Season.*
+      - src/Core/Seasons.*
+      - src/Charts/CalendarSeasonWorkflow.h
+      - src/Charts/CalendarWindow.*
       - src/FileIO/AnchoredFileSystem.*
       - src/FileIO/AtomicFileWriter.*
+      - src/FileIO/JsonRideFile.*
+      - src/FileIO/RideFile*.*
+      - src/Gui/SaveDialogs.*
+      - src/Gui/ModalWorkflowGuard.h
+      - src/Gui/AnalysisSidebar.*
+      - src/Gui/FilterSimilarDialog.*
+      - src/Gui/ManualActivityWizard.*
+      - src/Gui/PlanWizards.*
       - src/Metrics/BlinnSolver.*
       - src/Planning/PlanBundle*.*
       - src/Planning/PlanReplacementJournal.*
+      - unittests/Core/linkedActivitySaveCleanup/**
       - unittests/Core/rideCacheRemoval/**
-  pull_request:
-    paths:
-      - .github/workflows/ridecache-removal-native.yml
-      - contrib/qzip/zip.*
-      - src/Core/LinkedActivityRemovalJournal.*
-      - src/Core/LinkedActivitySaveJournal.*
-      - src/Core/PlannedActivityFileStager.*
-      - src/Core/RideCache*.*
-      - src/FileIO/AnchoredFileSystem.*
-      - src/FileIO/AtomicFileWriter.*
-      - src/Metrics/BlinnSolver.*
-      - src/Planning/PlanBundle*.*
-      - src/Planning/PlanReplacementJournal.*
-      - unittests/Core/rideCacheRemoval/**
+      - unittests/Core/seasonParser/**
+      - unittests/Gui/calendarModalWorkflow/**
+      - unittests/FileIO/atomicActivitySave/**
+      - unittests/FileIO/anchoredFilesystem/**
+      - unittests/Planning/**
+  workflow_run:
+    workflows: ["Workflow policy"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
   contents: read
+  pull-requests: read
 
 env:
   QT_MODULES: >-
@@ -40,78 +48,500 @@ env:
     qtserialport qt5compat
 
 jobs:
+  validated-candidate:
+    runs-on: ubuntu-24.04
+    outputs:
+      authorized: ${{ steps.resolve.outputs.authorized }}
+      repository: ${{ steps.resolve.outputs.repository }}
+      revision: ${{ steps.resolve.outputs.revision }}
+      selected: ${{ steps.resolve.outputs.selected }}
+    steps:
+      - name: Resolve trusted candidate identity
+        id: resolve
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          CURRENT_REPOSITORY: ${{ github.repository }}
+          CURRENT_REVISION: ${{ github.sha }}
+          POLICY_EVENT: ${{ github.event.workflow_run.event }}
+          POLICY_PATH: ${{ github.event.workflow_run.path }}
+          POLICY_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          POLICY_IDENTITY: ${{ github.event.workflow_run.display_title }}
+          POLICY_REPOSITORY: ${{ github.event.workflow_run.repository.full_name }}
+          POLICY_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          POLICY_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          PATH_FILTERS: |-
+            .github/workflows/ridecache-removal-native.yml
+            contrib/qzip/zip.*
+            src/Core/LinkedActivityRemovalJournal.*
+            src/Core/LinkedActivitySaveJournal.*
+            src/Core/PlannedActivityFileStager.*
+            src/Core/RideCache*.*
+            src/Core/Season.*
+            src/Core/Seasons.*
+            src/Charts/CalendarSeasonWorkflow.h
+            src/Charts/CalendarWindow.*
+            src/FileIO/AnchoredFileSystem.*
+            src/FileIO/AtomicFileWriter.*
+            src/FileIO/JsonRideFile.*
+            src/FileIO/RideFile*.*
+            src/Gui/SaveDialogs.*
+            src/Gui/ModalWorkflowGuard.h
+            src/Gui/AnalysisSidebar.*
+            src/Gui/FilterSimilarDialog.*
+            src/Gui/ManualActivityWizard.*
+            src/Gui/PlanWizards.*
+            src/Metrics/BlinnSolver.*
+            src/Planning/PlanBundle*.*
+            src/Planning/PlanReplacementJournal.*
+            unittests/Core/linkedActivitySaveCleanup/**
+            unittests/Core/rideCacheRemoval/**
+            unittests/Core/seasonParser/**
+            unittests/Gui/calendarModalWorkflow/**
+            unittests/FileIO/atomicActivitySave/**
+            unittests/FileIO/anchoredFilesystem/**
+            unittests/Planning/**
+        run: |
+          set -euo pipefail
+          repository=$CURRENT_REPOSITORY
+          revision=$CURRENT_REVISION
+          selected=true
+          if [ "$EVENT_NAME" = workflow_run ]; then
+            [ "$POLICY_EVENT" = pull_request_target ]
+            [ "$POLICY_PATH" = .github/workflows/workflow-policy.yml ]
+            [ "$POLICY_CONCLUSION" = success ]
+            [ "$POLICY_REPOSITORY" = "$CURRENT_REPOSITORY" ]
+            [ "$POLICY_HEAD_BRANCH" = master ]
+            [[ "$POLICY_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+            case "$POLICY_IDENTITY" in
+              workflow-policy:*:*:[0-9a-f][0-9a-f]*) ;;
+              *) exit 1 ;;
+            esac
+            payload=${POLICY_IDENTITY#workflow-policy:}
+            pull_number=${payload%%:*}
+            payload=${payload#*:}
+            repository=${payload%:*}
+            revision=${payload##*:}
+            [[ "$pull_number" =~ ^[1-9][0-9]*$ ]]
+            [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+            [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+            master_revision=$(gh api "/repos/${CURRENT_REPOSITORY}/git/ref/heads/master" --jq .object.sha)
+            [ "$POLICY_HEAD_SHA" = "$master_revision" ]
+            pull_json=$(mktemp)
+            files_json=$(mktemp)
+            trap 'rm -f -- "$pull_json" "$files_json"' EXIT
+            gh api "/repos/${CURRENT_REPOSITORY}/pulls/${pull_number}" >"$pull_json"
+            python3 - "$pull_json" "$CURRENT_REPOSITORY" "$repository" "$revision" "$POLICY_HEAD_SHA" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as source:
+              pull = json.load(source)
+          expected = {
+              "base_repository": sys.argv[2],
+              "head_repository": sys.argv[3],
+              "head_revision": sys.argv[4],
+              "base_revision": sys.argv[5],
+          }
+          observed = {
+              "base_repository": pull.get("base", {}).get("repo", {}).get("full_name"),
+              "head_repository": pull.get("head", {}).get("repo", {}).get("full_name"),
+              "head_revision": pull.get("head", {}).get("sha"),
+              "base_revision": pull.get("base", {}).get("sha"),
+          }
+          if pull.get("state") != "open" or pull.get("base", {}).get("ref") != "master":
+              raise SystemExit("pull request is not open against master")
+          if observed != expected:
+              raise SystemExit("pull request identity changed after policy validation")
+          PY
+            gh api --paginate --slurp \
+              "/repos/${CURRENT_REPOSITORY}/pulls/${pull_number}/files?per_page=100" \
+              >"$files_json"
+            if ! python3 - "$files_json" <<'PY'
+          import fnmatch
+          import json
+          import os
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as source:
+              pages = json.load(source)
+          paths = [item["filename"] for page in pages for item in page]
+          patterns = [line for line in os.environ["PATH_FILTERS"].splitlines() if line]
+          if not paths or len(paths) >= 3000:
+              raise SystemExit(0)
+          raise SystemExit(0 if any(
+              fnmatch.fnmatchcase(path, pattern)
+              for path in paths
+              for pattern in patterns
+          ) else 1)
+          PY
+            then
+              selected=false
+            fi
+            rm -f -- "$pull_json" "$files_json"
+            trap - EXIT
+          fi
+          [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          printf 'authorized=true\nrepository=%s\nrevision=%s\nselected=%s\n' \
+            "$repository" "$revision" "$selected" >>"$GITHUB_OUTPUT"
+
+  report-pending:
+    needs: validated-candidate
+    if: ${{ github.event_name == 'workflow_run' && needs.validated-candidate.outputs.authorized == 'true' && needs.validated-candidate.outputs.selected == 'true' }}
+    permissions:
+      statuses: write
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Mark candidate native activity tests pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ needs.validated-candidate.outputs.revision }}
+          STATUS_CONTEXT: Candidate CI / native activity transactions
+        run: |
+          set -euo pipefail
+          gh api --method POST \
+            "/repos/${GITHUB_REPOSITORY}/statuses/${CANDIDATE_SHA}" \
+            --raw-field state=pending \
+            --raw-field context="$STATUS_CONTEXT" \
+            --raw-field description='Candidate native activity tests are running' \
+            --raw-field target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
   windows:
+    needs: [validated-candidate, report-pending]
+    if: ${{ always() && needs.validated-candidate.outputs.authorized == 'true' && needs.validated-candidate.outputs.selected == 'true' && (github.event_name != 'workflow_run' || needs.report-pending.result == 'success') }}
     runs-on: windows-2025
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v6
-      - uses: jurplel/install-qt-action@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ needs.validated-candidate.outputs.repository }}
+          ref: ${{ needs.validated-candidate.outputs.revision }}
+          persist-credentials: false
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: 6.8.3
           arch: win64_msvc2022_64
           modules: ${{ env.QT_MODULES }}
-          cache: true
-      - uses: TheMrMilchmann/setup-msvc-dev@v4
+          cache: ${{ github.event_name != 'workflow_run' }}
+      - uses: TheMrMilchmann/setup-msvc-dev@368ef7d1ee4d1171b31d4a7f67f4d954f903f5a9 # v4.1.0
         with:
           arch: x64
-      - name: Install GSL
-        shell: pwsh
-        run: vcpkg install gsl:x64-windows
-      - name: Build activity removal test
+      - name: Install build dependencies
         shell: pwsh
         run: |
+          vcpkg install gsl:x64-windows
+      - name: Build native activity tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $vcpkgRoot = Split-Path -Parent (Get-Command vcpkg).Source
           $gslRoot = "$vcpkgRoot/installed/x64-windows"
           if (!(Test-Path "$gslRoot/include/gsl/gsl_rng.h")) {
             throw 'The GSL headers were not installed'
           }
+          Set-Content src/gcconfig.pri 'CONFIG += release'
+          Copy-Item unittests/unittests.pri.in unittests/unittests.pri
           New-Item -ItemType Directory build-ridecache-removal | Out-Null
           Set-Location build-ridecache-removal
           qmake ../unittests/Core/rideCacheRemoval/rideCacheRemoval.pro `
             "GSL_INCLUDES=$gslRoot/include" `
             "GSL_LIBS=-L$gslRoot/lib -lgsl -lgslcblas"
           nmake /NOLOGO
-      - name: Run activity removal test
+          Set-Location ..
+          New-Item -ItemType Directory build-anchored-filesystem | Out-Null
+          Set-Location build-anchored-filesystem
+          qmake ../unittests/FileIO/anchoredFilesystem/anchoredFilesystem.pro
+          nmake /NOLOGO
+          Set-Location ..
+          New-Item -ItemType Directory build-linked-save-cleanup | Out-Null
+          Set-Location build-linked-save-cleanup
+          qmake ../unittests/Core/linkedActivitySaveCleanup/linkedActivitySaveCleanup.pro
+          nmake /NOLOGO
+          Set-Location ..
+          New-Item -ItemType Directory build-plan-replacement | Out-Null
+          Set-Location build-plan-replacement
+          qmake ../unittests/Planning/planReplacementJournal/planReplacementJournal.pro
+          nmake /NOLOGO
+          Set-Location ..
+          New-Item -ItemType Directory build-plan-bundle-import | Out-Null
+          Set-Location build-plan-bundle-import
+          qmake ../unittests/Planning/planBundleImportJournal/planBundleImportJournal.pro
+          nmake /NOLOGO
+          Set-Location ..
+          New-Item -ItemType Directory build-calendar-modal | Out-Null
+          Set-Location build-calendar-modal
+          qmake ../unittests/Gui/calendarModalWorkflow/calendarModalWorkflow.pro
+          nmake /NOLOGO
+          Set-Location ..
+          New-Item -ItemType Directory build-season-parser | Out-Null
+          Set-Location build-season-parser
+          qmake ../unittests/Core/seasonParser/seasonParser.pro
+          nmake /NOLOGO
+      - name: Run native activity tests
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $env:QT_QPA_PLATFORM = 'offscreen'
           & build-ridecache-removal/release/tst_rideCacheRemoval.exe `
             -silent -maxwarnings 0 `
             -o 'windows-ridecache-removal.txt,txt'
-          $testStatus = $LASTEXITCODE
+          $removalStatus = $LASTEXITCODE
           Get-Content windows-ridecache-removal.txt
-          exit $testStatus
+          & build-anchored-filesystem/release/tst_anchoredFilesystem.exe `
+            -silent -maxwarnings 0 `
+            -o 'windows-anchored-filesystem.txt,txt'
+          $anchoredStatus = $LASTEXITCODE
+          Get-Content windows-anchored-filesystem.txt
+          & build-linked-save-cleanup/release/tst_linkedActivitySaveCleanup.exe `
+            -silent -maxwarnings 0 `
+            -o 'windows-linked-save-cleanup.txt,txt'
+          $linkedSaveStatus = $LASTEXITCODE
+          Get-Content windows-linked-save-cleanup.txt
+          & build-plan-replacement/release/tst_planReplacementJournal.exe `
+            -silent -maxwarnings 0 `
+            -o 'windows-plan-replacement.txt,txt'
+          $planReplacementStatus = $LASTEXITCODE
+          Get-Content windows-plan-replacement.txt
+          & build-plan-bundle-import/release/tst_planBundleImportJournal.exe `
+            -silent -maxwarnings 0 `
+            -o 'windows-plan-bundle-import.txt,txt'
+          $planBundleStatus = $LASTEXITCODE
+          Get-Content windows-plan-bundle-import.txt
+          & build-calendar-modal/release/tst_calendarModalWorkflow.exe `
+            -silent -maxwarnings 0 `
+            -o 'windows-calendar-modal.txt,txt'
+          $calendarModalStatus = $LASTEXITCODE
+          Get-Content windows-calendar-modal.txt
+          & build-season-parser/release/tst_seasonParser.exe `
+            -silent -maxwarnings 0 `
+            -o 'windows-season-parser.txt,txt'
+          $seasonParserStatus = $LASTEXITCODE
+          Get-Content windows-season-parser.txt
+          if ($removalStatus -ne 0) { exit $removalStatus }
+          if ($anchoredStatus -ne 0) { exit $anchoredStatus }
+          if ($linkedSaveStatus -ne 0) { exit $linkedSaveStatus }
+          if ($planReplacementStatus -ne 0) { exit $planReplacementStatus }
+          if ($planBundleStatus -ne 0) { exit $planBundleStatus }
+          if ($calendarModalStatus -ne 0) { exit $calendarModalStatus }
+          exit $seasonParserStatus
 
   macos:
+    needs: [validated-candidate, report-pending]
+    if: ${{ always() && needs.validated-candidate.outputs.authorized == 'true' && needs.validated-candidate.outputs.selected == 'true' && (github.event_name != 'workflow_run' || needs.report-pending.result == 'success') }}
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v6
-      - uses: jurplel/install-qt-action@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ needs.validated-candidate.outputs.repository }}
+          ref: ${{ needs.validated-candidate.outputs.revision }}
+          persist-credentials: false
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: 6.8.3
           arch: clang_64
           modules: ${{ env.QT_MODULES }}
-          cache: true
-      - name: Install GSL
-        run: brew install gsl
-      - name: Build activity removal test
+          cache: ${{ github.event_name != 'workflow_run' }}
+      - name: Install build dependencies
+        run: brew install gsl bison flex
+      - name: Build native activity tests
         run: |
           gsl_root="$(brew --prefix gsl)"
+          bison_root="$(brew --prefix bison)"
+          flex_root="$(brew --prefix flex)"
+          printf 'CONFIG += release\n' > src/gcconfig.pri
+          cp unittests/unittests.pri.in unittests/unittests.pri
           mkdir build-ridecache-removal
           cd build-ridecache-removal
           qmake ../unittests/Core/rideCacheRemoval/rideCacheRemoval.pro \
             "GSL_INCLUDES=$gsl_root/include" \
             "GSL_LIBS=-L$gsl_root/lib -lgsl -lgslcblas"
           make -j3
-      - name: Run activity removal test
+          cd ..
+          mkdir build-anchored-filesystem
+          cd build-anchored-filesystem
+          qmake ../unittests/FileIO/anchoredFilesystem/anchoredFilesystem.pro
+          make -j3
+          cd ..
+          mkdir build-linked-save-cleanup
+          cd build-linked-save-cleanup
+          qmake ../unittests/Core/linkedActivitySaveCleanup/linkedActivitySaveCleanup.pro
+          make -j3
+          cd ..
+          mkdir build-plan-replacement
+          cd build-plan-replacement
+          qmake ../unittests/Planning/planReplacementJournal/planReplacementJournal.pro
+          make -j3
+          cd ..
+          mkdir build-plan-bundle-import
+          cd build-plan-bundle-import
+          qmake ../unittests/Planning/planBundleImportJournal/planBundleImportJournal.pro
+          make -j3
+          cd ..
+          mkdir build-calendar-modal
+          cd build-calendar-modal
+          qmake ../unittests/Gui/calendarModalWorkflow/calendarModalWorkflow.pro
+          make -j3
+          cd ..
+          mkdir build-season-parser
+          cd build-season-parser
+          qmake ../unittests/Core/seasonParser/seasonParser.pro
+          make -j3
+          cd ..
+          mkdir build-atomic-activity-save
+          cd build-atomic-activity-save
+          qmake ../unittests/FileIO/atomicActivitySave/atomicActivitySave.pro \
+            "GSL_INCLUDES=$gsl_root/include" \
+            "GSL_LIBS=-L$gsl_root/lib -lgsl -lgslcblas" \
+            "QMAKE_LEX=$flex_root/bin/flex" \
+            "QMAKE_YACC=$bison_root/bin/bison --file-prefix=y -t" \
+            "QMAKE_MOVE=cp"
+          make -j3
+      - name: Run native activity tests
         run: |
-          test_status=0
+          removal_status=0
           QT_QPA_PLATFORM=offscreen \
             build-ridecache-removal/tst_rideCacheRemoval.app/Contents/MacOS/tst_rideCacheRemoval \
             -silent -maxwarnings 0 \
-            -o macos-ridecache-removal.txt,txt || test_status=$?
+            -o macos-ridecache-removal.txt,txt || removal_status=$?
           cat macos-ridecache-removal.txt
-          exit "$test_status"
+          anchored_status=0
+          QT_QPA_PLATFORM=offscreen \
+            build-anchored-filesystem/tst_anchoredFilesystem.app/Contents/MacOS/tst_anchoredFilesystem \
+            -silent -maxwarnings 0 \
+            -o macos-anchored-filesystem.txt,txt || anchored_status=$?
+          cat macos-anchored-filesystem.txt
+          linked_save_status=0
+          QT_QPA_PLATFORM=offscreen \
+            build-linked-save-cleanup/tst_linkedActivitySaveCleanup.app/Contents/MacOS/tst_linkedActivitySaveCleanup \
+            -silent -maxwarnings 0 \
+            -o macos-linked-save-cleanup.txt,txt || linked_save_status=$?
+          cat macos-linked-save-cleanup.txt
+          plan_replacement_status=0
+          QT_QPA_PLATFORM=offscreen \
+            build-plan-replacement/tst_planReplacementJournal.app/Contents/MacOS/tst_planReplacementJournal \
+            -silent -maxwarnings 0 \
+            -o macos-plan-replacement.txt,txt || plan_replacement_status=$?
+          cat macos-plan-replacement.txt
+          plan_bundle_status=0
+          QT_QPA_PLATFORM=offscreen \
+            build-plan-bundle-import/tst_planBundleImportJournal.app/Contents/MacOS/tst_planBundleImportJournal \
+            -silent -maxwarnings 0 \
+            -o macos-plan-bundle-import.txt,txt || plan_bundle_status=$?
+          cat macos-plan-bundle-import.txt
+          calendar_modal_status=0
+          QT_QPA_PLATFORM=offscreen \
+            build-calendar-modal/tst_calendarModalWorkflow.app/Contents/MacOS/tst_calendarModalWorkflow \
+            -silent -maxwarnings 0 \
+            -o macos-calendar-modal.txt,txt || calendar_modal_status=$?
+          cat macos-calendar-modal.txt
+          season_parser_status=0
+          QT_QPA_PLATFORM=offscreen \
+            build-season-parser/tst_seasonParser.app/Contents/MacOS/tst_seasonParser \
+            -silent -maxwarnings 0 \
+            -o macos-season-parser.txt,txt || season_parser_status=$?
+          cat macos-season-parser.txt
+          atomic_status=0
+          QT_QPA_PLATFORM=offscreen \
+            build-atomic-activity-save/tst_atomicActivitySave.app/Contents/MacOS/tst_atomicActivitySave \
+            -silent -maxwarnings 0 \
+            -o macos-atomic-activity-save.txt,txt || atomic_status=$?
+          cat macos-atomic-activity-save.txt
+          if [ "$removal_status" -ne 0 ]; then exit "$removal_status"; fi
+          if [ "$anchored_status" -ne 0 ]; then exit "$anchored_status"; fi
+          if [ "$linked_save_status" -ne 0 ]; then exit "$linked_save_status"; fi
+          if [ "$plan_replacement_status" -ne 0 ]; then exit "$plan_replacement_status"; fi
+          if [ "$plan_bundle_status" -ne 0 ]; then exit "$plan_bundle_status"; fi
+          if [ "$calendar_modal_status" -ne 0 ]; then exit "$calendar_modal_status"; fi
+          if [ "$season_parser_status" -ne 0 ]; then exit "$season_parser_status"; fi
+          exit "$atomic_status"
+
+  linux:
+    needs: [validated-candidate, report-pending]
+    if: ${{ always() && needs.validated-candidate.outputs.authorized == 'true' && needs.validated-candidate.outputs.selected == 'true' && (github.event_name != 'workflow_run' || needs.report-pending.result == 'success') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ needs.validated-candidate.outputs.repository }}
+          ref: ${{ needs.validated-candidate.outputs.revision }}
+          persist-credentials: false
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with:
+          version: 6.8.3
+          arch: linux_gcc_64
+          modules: qt5compat
+          cache: ${{ github.event_name != 'workflow_run' }}
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libacl1-dev
+      - name: Build GUI-010 regression tests
+        run: |
+          set -euo pipefail
+          printf 'CONFIG += release\n' > src/gcconfig.pri
+          cp unittests/unittests.pri.in unittests/unittests.pri
+          mkdir build-linked-save-cleanup build-calendar-modal build-season-parser
+          cd build-linked-save-cleanup
+          qmake ../unittests/Core/linkedActivitySaveCleanup/linkedActivitySaveCleanup.pro
+          make -j2
+          cd ../build-calendar-modal
+          qmake ../unittests/Gui/calendarModalWorkflow/calendarModalWorkflow.pro
+          make -j2
+          cd ../build-season-parser
+          qmake ../unittests/Core/seasonParser/seasonParser.pro
+          make -j2
+      - name: Run GUI-010 regression tests
+        run: |
+          set -euo pipefail
+          build-linked-save-cleanup/tst_linkedActivitySaveCleanup \
+            -silent -maxwarnings 0
+          QT_QPA_PLATFORM=offscreen \
+            build-calendar-modal/tst_calendarModalWorkflow \
+            -silent -maxwarnings 0
+          QT_QPA_PLATFORM=offscreen \
+            build-season-parser/tst_seasonParser \
+            -silent -maxwarnings 0
+
+  report-final:
+    needs: [validated-candidate, report-pending, windows, macos, linux]
+    if: ${{ always() && github.event_name == 'workflow_run' && needs.validated-candidate.outputs.authorized == 'true' }}
+    permissions:
+      statuses: write
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Publish candidate native activity test result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ needs.validated-candidate.outputs.revision }}
+          STATUS_CONTEXT: Candidate CI / native activity transactions
+          SELECTED: ${{ needs.validated-candidate.outputs.selected }}
+          PENDING_RESULT: ${{ needs.report-pending.result }}
+          WINDOWS_RESULT: ${{ needs.windows.result }}
+          MACOS_RESULT: ${{ needs.macos.result }}
+          LINUX_RESULT: ${{ needs.linux.result }}
+        run: |
+          set -euo pipefail
+          state=failure
+          description='Candidate native activity tests failed'
+          if [ "$SELECTED" != true ]; then
+            state=success
+            description='Candidate tests are not applicable'
+          elif [ "$PENDING_RESULT" = success ] && \
+             [ "$WINDOWS_RESULT" = success ] && \
+             [ "$MACOS_RESULT" = success ] && \
+             [ "$LINUX_RESULT" = success ]; then
+            state=success
+            description='Candidate native activity tests passed'
+          fi
+          gh api --method POST \
+            "/repos/${GITHUB_REPOSITORY}/statuses/${CANDIDATE_SHA}" \
+            --raw-field state="$state" \
+            --raw-field context="$STATUS_CONTEXT" \
+            --raw-field description="$description" \
+            --raw-field target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"

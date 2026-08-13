@@ -1,0 +1,187 @@
+---
+name: Workflow policy
+run-name: workflow-policy:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.repo.full_name }}:${{ github.event.pull_request.head.sha }}
+
+on:
+  pull_request_target:
+    branches: [master]
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: workflow-policy-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  immutable-actions:
+    name: Trusted immutable action preflight
+    if: ${{ github.event.repository.full_name == github.repository && github.event.pull_request.base.repo.full_name == github.repository && github.event.pull_request.base.ref == 'master' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Validate pull request identity
+        env:
+          EVENT_REPOSITORY: ${{ github.event.repository.full_name }}
+          BASE_REPOSITORY: ${{ github.event.pull_request.base.repo.full_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PULL_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          [ "$EVENT_REPOSITORY" = "$GITHUB_REPOSITORY" ]
+          [ "$BASE_REPOSITORY" = "$GITHUB_REPOSITORY" ]
+          [ "$BASE_REF" = master ]
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$HEAD_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PULL_NUMBER" =~ ^[1-9][0-9]*$ ]]
+
+      - name: Mark candidate policy pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh api --method POST \
+            "/repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+            --raw-field state=pending \
+            --raw-field context='Workflow policy / immutable actions' \
+            --raw-field description='Checking candidate workflows as data' \
+            --raw-field target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+      - name: Checkout trusted policy source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: trusted-policy
+          persist-credentials: false
+
+      - name: Install hash-locked YAML parser
+        env:
+          POLICY_DEPS: ${{ runner.temp }}/workflow-policy-deps
+        run: |
+          python3 -m pip install \
+            --disable-pip-version-check \
+            --index-url https://pypi.org/simple \
+            --no-cache-dir \
+            --no-deps \
+            --only-binary=:all: \
+            --require-hashes \
+            --target "$POLICY_DEPS" \
+            --requirement trusted-policy/.github/scripts/immutable-actions-requirements.lock
+
+      - name: Checkout candidate workflows as data
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: candidate
+          persist-credentials: false
+          fetch-depth: 1
+          sparse-checkout: |-
+            /.devcontainer/Dockerfile
+            /.devcontainer/aqt-requirements.lock
+            /.devcontainer/gcconfig.pri
+            /.devcontainer/install-verified-qt.py
+            /.devcontainer/package-appimage.sh
+            /.devcontainer/qt-6.8.3-linux-gcc64.lock
+            /.devcontainer/ubuntu-snapshot.sources.list
+            /.github/CODEOWNERS
+            /.github/actions.lock
+            /.github/master-ruleset.json
+            /.github/scripts/DMG_README.md
+            /.github/scripts/after_build.sh
+            /.github/scripts/before_build.sh
+            /.github/scripts/build.sh
+            /.github/scripts/check-immutable-actions.py
+            /.github/scripts/immutable-actions-requirements.lock
+            /.github/scripts/install-pinned-homebrew.sh
+            /.github/scripts/install.sh
+            /.github/scripts/run-tests.py
+            /.github/workflows/
+            /appveyor.yml
+            /appveyor/check-unconfigured-oauth.py
+            /appveyor/linux/after_build.sh
+            /appveyor/linux/apt-get-fail-closed.sh
+            /appveyor/linux/before_build.sh
+            /appveyor/linux/build-appimage-pass.sh
+            /appveyor/linux/build-input-paths.sh
+            /appveyor/linux/install.sh
+            /appveyor/linux/package-appimage-pass.sh
+            /appveyor/linux/reproduce-appimage.sh
+            /appveyor/linux/ubuntu-snapshot.sources.list
+            /appveyor/linux/verify-apt-snapshot-bootstrap.sh
+            /appveyor/linux/verify-apt-snapshot.py
+            /appveyor/macos/after_build.sh
+            /appveyor/macos/before_build.sh
+            /appveyor/macos/install.sh
+            /appveyor/macos/run-build-regressions.sh
+            /appveyor/macos/validate-payload.py
+            /appveyor/safe-extract.py
+            /appveyor/windows/after_build.ps1
+            /appveyor/windows/before_build.ps1
+            /appveyor/windows/install.ps1
+            /appveyor/windows/run-build-regressions.ps1
+            /appveyor/windows/vcpkg.json
+            /src/Python/requirements-appimage.lock
+            /src/Resources/linux/AppImagePackagingSupport.sh
+            /src/Resources/linux/MakeAppImageQt6.sh
+            /src/Resources/linux/capture-linuxdeployqt-transforms.py
+            /src/Resources/linux/compute-build-input-identity.py
+            /src/Resources/linux/generate-appimage-sbom.py
+            /src/Resources/linux/generate-runtime-provenance.py
+            /src/Resources/linux/normalize-embedded-python.py
+            /src/Resources/linux/read-appimage-offset.py
+            /src/Resources/linux/verify-appimage-payload.py
+            /src/Resources/win32/GC3.8-Master-W64-QT6.nsi
+            /unittests/Build/appImagePackaging/appImagePackaging.pro
+            /unittests/Build/appImagePackaging/testAppImagePackaging.sh
+            /unittests/Build/appImagePackaging/testAptSnapshot.py
+            /unittests/Build/appImagePackaging/testCiReleaseGates.sh
+            /unittests/Build/appImagePackaging/testDiagnosticOAuth.sh
+            /unittests/Build/appImagePackaging/testGeneratedSecrets.ps1
+            /unittests/Build/appImagePackaging/testImmutableActions.py
+            /unittests/Build/appImagePackaging/testMacOSPackaging.py
+            /unittests/Build/appImagePackaging/testReleaseHardening.py
+            /unittests/Build/appImagePackaging/testSafeExtraction.py
+            /unittests/Build/appImagePackaging/testSbomProvenance.py
+            /unittests/Build/appImagePackaging/testUnconfiguredOAuthGate.py
+            /unittests/Build/appImagePackaging/testVerifiedQtArchives.py
+            /unittests/Build/appImagePackaging/testWindowsOpenSsl.py
+            /unittests/Build/appImagePackaging/testWindowsPackaging.ps1
+            /unittests/Build/ciTestRunner/ciTestRunner.pro
+            /unittests/Build/ciTestRunner/testCiTestRunner.py
+            /unittests/ci-required-tests.txt
+            /unittests/unittests.pri.in
+            /unittests/unittests.pro
+          sparse-checkout-cone-mode: false
+
+      - name: Validate candidate workflow data
+        id: validate
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          PYTHONPATH: ${{ runner.temp }}/workflow-policy-deps
+        run: |
+          python3 trusted-policy/.github/scripts/check-immutable-actions.py \
+            --workflows candidate/.github/workflows \
+            --repository-root candidate \
+            --allowlist trusted-policy/.github/actions.lock \
+            --enforce-policy
+
+      - name: Publish candidate policy result
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          POLICY_STATE: ${{ steps.validate.outcome == 'success' && 'success' || 'failure' }}
+        run: |
+          gh api --method POST \
+            "/repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+            --raw-field state="$POLICY_STATE" \
+            --raw-field context='Workflow policy / immutable actions' \
+            --raw-field description="Candidate workflow policy: ${POLICY_STATE}" \
+            --raw-field target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"

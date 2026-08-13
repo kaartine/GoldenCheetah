@@ -19,7 +19,9 @@
 #include "Context.h"
 #include "Athlete.h"
 #include "MainWindow.h"
+#include "GuiSmokeShutdown.h"
 #include "Settings.h"
+#include "StravaSettingsCommit.h"
 #include "CloudService.h"
 #include "LocalFileStoreProcess.h"
 #include "TrainDB.h"
@@ -32,11 +34,13 @@
 #include "CredentialStoreQtKeychain.h"
 #include "Secrets.h"
 #include "StravaOAuthPolicy.h"
+#include "StravaClientCredentials.h"
 
 #include <QApplication>
 #include <QtGui>
 #include <QFile>
 #include <QMessageBox>
+#include <QTimer>
 #include "ChooseCyclistDialog.h"
 #ifdef GC_WANT_HTTP
 #include "httplistener.h"
@@ -70,6 +74,53 @@
 // 'dup2': The POSIX name for this item is deprecated.
 #pragma warning(disable:4996)
 #endif
+
+#ifndef GC_BUILD_SOURCE_REVISION
+#define GC_BUILD_SOURCE_REVISION "0000000000000000000000000000000000000000"
+#endif
+
+#ifndef GC_BUILD_INPUTS_SHA256
+#define GC_BUILD_INPUTS_SHA256 "0000000000000000000000000000000000000000000000000000000000000000"
+#endif
+
+#define GC_STRINGIFY_DETAIL(value) #value
+#define GC_STRINGIFY(value) GC_STRINGIFY_DETAIL(value)
+
+namespace {
+
+QByteArray buildProvenanceReport()
+{
+#if defined(__clang__)
+    const QByteArray compilerFamily = QByteArrayLiteral("clang");
+    const QByteArray compilerVersion = QByteArrayLiteral(
+        GC_STRINGIFY(__clang_major__) "." GC_STRINGIFY(__clang_minor__) "."
+        GC_STRINGIFY(__clang_patchlevel__));
+#elif defined(__GNUC__)
+    const QByteArray compilerFamily = QByteArrayLiteral("gcc");
+    const QByteArray compilerVersion = QByteArrayLiteral(
+        GC_STRINGIFY(__GNUC__) "." GC_STRINGIFY(__GNUC_MINOR__) "."
+        GC_STRINGIFY(__GNUC_PATCHLEVEL__));
+#else
+    const QByteArray compilerFamily = QByteArrayLiteral("unknown");
+    const QByteArray compilerVersion = QByteArrayLiteral("0.0.0");
+#endif
+
+    QByteArray report = QByteArrayLiteral(
+        "goldencheetah_build_provenance=1\n"
+        "application=GoldenCheetah\n"
+        "source_revision=" GC_BUILD_SOURCE_REVISION "\n"
+        "build_inputs_sha256=" GC_BUILD_INPUTS_SHA256 "\n"
+        "compiler_family=");
+    report += compilerFamily;
+    report += QByteArrayLiteral("\ncompiler_version=");
+    report += compilerVersion;
+    report += QByteArrayLiteral("\nqt_version=" QT_VERSION_STR "\ncxx_standard=");
+    report += QByteArray::number(static_cast<qulonglong>(__cplusplus));
+    report += '\n';
+    return report;
+}
+
+} // namespace
 
 //
 // bootstrap state
@@ -111,8 +162,16 @@ void terminate(int code)
 #ifdef GC_WANT_PYTHON
     delete fixPySettings;
 #endif
-    delete appsettings;
+    const bool credentialWorkerStopped =
+        StravaSettingsCommit::shutdownCredentialThread();
+    if (credentialWorkerStopped) {
+        delete appsettings;
+        appsettings = nullptr;
+    }
+    // A stalled native keychain call may still reference settings. Process
+    // teardown reclaims them after the bounded UI shutdown path returns.
     application->exit();
+    if (!credentialWorkerStopped) _Exit(code);
 
     // because QT starts a bunch of threads (e.g. reading XcbEvents)
     // calling exit() during startup is a no-no. So we go nuclear and
@@ -250,15 +309,18 @@ main(int argc, char *argv[])
         const bool keychainStatus =
             argument == QByteArrayLiteral(
                 "--goldencheetah-linux-keychain-status");
-        if (!buildStatus && !keychainStatus) continue;
+        const bool buildProvenance =
+            argument == QByteArrayLiteral(
+                "--goldencheetah-build-provenance");
+        if (!buildStatus && !keychainStatus && !buildProvenance) continue;
         if (argc != 2) return EXIT_FAILURE;
 
         QByteArray report;
         if (buildStatus) {
             report = StravaOAuthPolicy::buildStatusReport(
-                QStringLiteral(GC_STRAVA_CLIENT_ID),
-                QStringLiteral(GC_STRAVA_CLIENT_SECRET));
-        } else {
+                StravaClientCredentials::
+                    compileTimeFallbackIsConfigured());
+        } else if (keychainStatus) {
             QCoreApplication statusApplication(argc, argv);
             CredentialStoreQtKeychainDetail::
                 configureBundledLinuxRuntime(
@@ -267,8 +329,10 @@ main(int argc, char *argv[])
                 linuxRuntimeStatusReport(
                     CredentialStoreQtKeychainDetail::
                         linuxLibSecretCompileSupport(),
-                    CredentialStoreQtKeychainDetail::
-                        linuxLibSecretRuntimeAvailable());
+                        CredentialStoreQtKeychainDetail::
+                            linuxLibSecretRuntimeAvailable());
+        } else {
+            report = buildProvenanceReport();
         }
         const size_t written = fwrite(
             report.constData(),
@@ -310,6 +374,7 @@ main(int argc, char *argv[])
     bool server = false;
     nogui = false;
     bool help = false;
+    bool guiSmoke = false;
 
     // honour command line switches
     QString arg;
@@ -372,6 +437,10 @@ main(int argc, char *argv[])
             fprintf(stderr, "HTTP support not compiled in, exiting.\n");
             exit(1);
 #endif
+
+        } else if (arg == "--goldencheetah-gui-smoke") {
+
+            guiSmoke = true;
 
 #ifdef GC_WANT_PYTHON
         } else if (arg == "--no-python") {
@@ -464,9 +533,27 @@ main(int argc, char *argv[])
 
     // create the application -- only ever ONE regardless of restarts
     application = new QApplication(argc, argv);
+    if (guiSmoke) {
+        application->setQuitOnLastWindowClosed(false);
+        const QString smokeHome = QDir::home().canonicalPath();
+        const QFileInfo smokeRoot(args.value(1));
+        const QString canonicalSmokeRoot =
+            smokeRoot.canonicalFilePath();
+        if (sargs.size() != 4 || args.size() != 3
+            || args.value(2) != QStringLiteral("SmokeAthlete")
+            || !smokeRoot.isDir() || smokeHome.isEmpty()
+            || canonicalSmokeRoot.isEmpty()
+            || !canonicalSmokeRoot.startsWith(
+                smokeHome + QLatin1Char('/'))) {
+            delete application;
+            return EXIT_FAILURE;
+        }
+    }
     CredentialStoreQtKeychainDetail::configureBundledLinuxRuntime(
         application->applicationDirPath());
-    if (!LocalFileStoreProcess::initializeReaper()) {
+    const bool localStoreReaperReady =
+        LocalFileStoreProcess::initializeReaper();
+    if (!localStoreReaperReady) {
         qWarning()
             << "Local Store process isolation is unavailable";
     }
@@ -526,13 +613,39 @@ main(int argc, char *argv[])
     appsettings->setValue(GC_FONT_DEFAULT_SIZE, font.pointSizeF());
     appsettings->setValue(GC_FONT_CHARTLABELS_SIZE, font.pointSizeF() * 0.8);
 
-
     // what filestores are registered (whilst we refactor)
     //qDebug()<<"Cloud services registered:"<<CloudServiceFactory::instance().serviceNames();
 
     //
     // OPEN FIRST MAINWINDOW
     //
+    const auto scheduleGuiSmokeCompletion = [guiSmoke, localStoreReaperReady](
+            MainWindow *mainWindow) {
+        if (!guiSmoke) return;
+        QTimer::singleShot(
+            0, mainWindow,
+            [mainWindow, localStoreReaperReady]() {
+                static const char marker[] =
+                    "goldencheetah_gui_smoke=main-window-ready\n";
+                const bool ready = mainWindow->isVisible()
+                    && gc_opened == 1
+                    && localStoreReaperReady;
+                const size_t size = sizeof(marker) - 1;
+                const bool written = ready
+                    && fwrite(marker, 1, size, stdout) == size;
+                const bool flushed = written && fflush(stdout) == 0;
+                const int completedCode =
+                    ready && written && flushed
+                        ? EXIT_SUCCESS : EXIT_FAILURE;
+                GuiSmokeShutdown::complete(
+                    mainWindow,
+                    [mainWindow]() { return mainWindow->close(); },
+                    [](int code) { QCoreApplication::exit(code); },
+                    completedCode,
+                    EXIT_FAILURE);
+            });
+    };
+
     do {
 
         // lets not restart endlessly
@@ -833,12 +946,19 @@ main(int argc, char *argv[])
                 QString homeDir = home.canonicalPath();
                 if (home.cd(cyclist)) {
                     appsettings->initializeQSettingsAthlete(homeDir, cyclist);
+                    if (guiSmoke) {
+                        appsettings->setCValue(
+                            cyclist, GC_UPGRADE_FOLDER_SUCCESS, true);
+                        appsettings->setCValue(
+                            cyclist, GC_VERSION_USED, VERSION_LATEST);
+                    }
                     GcUpgrade v3;
                     if (v3.executeAfterConfirmation(home, [&]() {
                             MainWindow *mainWindow = new MainWindow(home);
                             mainWindow->show();
                             mainWindow->ridesAutoImport();
                             gc_opened++;
+                            scheduleGuiSmokeCompletion(mainWindow);
                         })) {
                         home.cdUp();
                         anyOpened = true;
@@ -872,6 +992,12 @@ main(int argc, char *argv[])
             }
 
             appsettings->initializeQSettingsAthlete(homeDir, d.choice());
+            if (guiSmoke) {
+                appsettings->setCValue(
+                    d.choice(), GC_UPGRADE_FOLDER_SUCCESS, true);
+                appsettings->setCValue(
+                    d.choice(), GC_VERSION_USED, VERSION_LATEST);
+            }
             // .. and open a mainwindow
             GcUpgrade v3;
             if (!v3.executeAfterConfirmation(home, [&]() {
@@ -879,6 +1005,7 @@ main(int argc, char *argv[])
                     mainWindow->show();
                     mainWindow->ridesAutoImport();
                     gc_opened++;
+                    scheduleGuiSmokeCompletion(mainWindow);
                 })) {
                 delete trainDB;
                 terminate(0);
@@ -887,11 +1014,30 @@ main(int argc, char *argv[])
 
         ret=application->exec();
 
+        const bool credentialWorkerStopped =
+            StravaSettingsCommit::shutdownCredentialThread();
+        if (!credentialWorkerStopped) {
+            qCritical()
+                << "Credential backend did not stop before application shutdown";
+            _Exit(ret);
+        }
+
         // close trainDB
         delete trainDB;
 
         // reset QSettings (global & Athlete)
-        appsettings->clearGlobalAndAthletes();
+        if (!appsettings->clearGlobalAndAthletes(100)) {
+            qCritical()
+                << "Credential backend retained settings during shutdown";
+            _Exit(ret);
+        }
+
+        if (restarting
+            && !StravaSettingsCommit::restartCredentialThread()) {
+            qCritical()
+                << "Credential worker could not restart after settings reset";
+            _Exit(ret);
+        }
 
     } while (restarting);
 

@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <utility>
+#include <vector>
 
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
 void rideCacheRemovalTransitionReached(const char *transition);
@@ -38,6 +39,8 @@ constexpr qint64 MaximumManifestSize = 4 * 1024 * 1024;
 constexpr qint64 MaximumCommitMarkerSize = 128;
 constexpr qint64 MaximumLockFileSize = 64 * 1024;
 constexpr int MaximumDerivedPaths = 4096;
+constexpr qsizetype MaximumJournalEntries = 64;
+constexpr qsizetype MaximumNamespaceEntries = 4096;
 
 const QString ManifestName = QStringLiteral("manifest.json");
 const QString PeerOldName = QStringLiteral("peer.old");
@@ -98,6 +101,7 @@ struct JournalState
     QString commitMarkerPath;
     Detail::Manifest manifest;
     AtomicFileSnapshot manifestSnapshot;
+    AnchoredFileSystem::DirectoryAnchor namespaceDirectory;
     AnchoredFileSystem::DirectoryAnchor journalDirectory;
     AnchoredFileSystem::EntryRef manifestEntry;
     std::shared_ptr<AnchoredFileSystem::PinnedFile> manifestFile;
@@ -106,6 +110,8 @@ struct JournalState
     AnchoredFileSystem::EntryRef commitMarkerEntry;
     std::shared_ptr<AnchoredFileSystem::PinnedFile> commitMarkerFile;
     AtomicFileSnapshot commitMarkerSnapshot;
+    bool commitMarkerDirectoryObservationValid = false;
+    bool commitMarkerDirectoryObservationPresent = false;
     std::unique_ptr<AtomicFileLockSet> transactionLease;
     bool cleanupComplete = false;
 };
@@ -128,13 +134,23 @@ void appendError(QString &error, const QString &detail)
 bool journalDirectoryMatches(
     const JournalState &state, QString &error)
 {
-    if (!state.journalDirectory.isValid()) {
+    if (!state.namespaceDirectory.isValid()
+        || !state.journalDirectory.isValid()) {
         error = QStringLiteral(
-            "The active transaction journal directory is not anchored");
+            "The active transaction journal hierarchy is not anchored");
         return false;
     }
 
     QString detail;
+    if (!state.namespaceDirectory.pathMatches(detail)) {
+        error = detail.isEmpty()
+            ? QStringLiteral(
+                  "The active transaction journal namespace was replaced")
+            : QStringLiteral(
+                  "Cannot revalidate the active transaction journal namespace: %1")
+                  .arg(detail);
+        return false;
+    }
     if (state.journalDirectory.pathMatches(detail)) return true;
     error = detail.isEmpty()
         ? QStringLiteral(
@@ -164,6 +180,25 @@ bool validTransactionId(const QString &id)
     const QUuid uuid(id);
     return !uuid.isNull()
         && uuid.toString(QUuid::WithoutBraces).toLower() == id;
+}
+
+bool directorySnapshotsMatch(
+    const QList<AnchoredFileSystem::DirectoryEntry> &left,
+    const QList<AnchoredFileSystem::DirectoryEntry> &right)
+{
+    if (left.size() != right.size()) return false;
+    for (qsizetype index = 0; index < left.size(); ++index) {
+        const AnchoredFileSystem::DirectoryEntry &leftEntry = left.at(index);
+        const AnchoredFileSystem::DirectoryEntry &rightEntry = right.at(index);
+        if (leftEntry.name != rightEntry.name
+            || leftEntry.kind != rightEntry.kind
+            || leftEntry.identity != rightEntry.identity
+            || leftEntry.identity.linkCount()
+                != rightEntry.identity.linkCount()) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool normalizeAthleteRoot(
@@ -309,90 +344,6 @@ bool resolveRootRelativePath(
     return true;
 }
 
-bool validateExistingDirectory(const QString &path, QString &error)
-{
-    const QFileInfo info(path);
-    if (!info.exists() || !info.isDir() || info.isSymLink()) {
-        error = QStringLiteral(
-            "The activity transaction directory is unavailable or unsafe");
-        return false;
-    }
-    return true;
-}
-
-bool makeDirectoryPrivate(const QString &path, QString &error)
-{
-    const QFileDevice::Permissions privatePermissions =
-        QFileDevice::ReadOwner | QFileDevice::WriteOwner
-        | QFileDevice::ExeOwner;
-    if (!QFile::setPermissions(path, privatePermissions)) {
-        error = QStringLiteral(
-            "Cannot make the activity transaction directory private");
-        return false;
-    }
-
-#ifdef Q_OS_UNIX
-    QFileInfo info(path);
-    info.refresh();
-    const QFileDevice::Permissions nonOwnerPermissions =
-        QFileDevice::ReadGroup | QFileDevice::WriteGroup
-        | QFileDevice::ExeGroup | QFileDevice::ReadOther
-        | QFileDevice::WriteOther | QFileDevice::ExeOther;
-    const QFileDevice::Permissions permissions = info.permissions();
-    if ((permissions & nonOwnerPermissions)
-            != QFileDevice::Permissions()
-        || !permissions.testFlag(QFileDevice::ReadOwner)
-        || !permissions.testFlag(QFileDevice::WriteOwner)
-        || !permissions.testFlag(QFileDevice::ExeOwner)) {
-        error = QStringLiteral(
-            "The activity transaction directory is not private");
-        return false;
-    }
-#endif
-    return true;
-}
-
-bool ensurePrivateDirectory(const QString &path, QString &error)
-{
-    const QFileInfo existing(path);
-    if (existing.exists() || existing.isSymLink()) {
-        return validateExistingDirectory(path, error)
-            && makeDirectoryPrivate(path, error)
-            && syncParentDirectory(path, error);
-    }
-
-    const QFileInfo parent(existing.absolutePath());
-    if (!parent.exists() || !parent.isDir() || parent.isSymLink()) {
-        error = QStringLiteral(
-            "Cannot create an activity transaction under an unsafe directory");
-        return false;
-    }
-    if (!createDirectoryDurably(path, error)) {
-        if (error.isEmpty()) {
-            error = QStringLiteral(
-                "Cannot create the activity transaction directory");
-        }
-        return false;
-    }
-
-    if (!makeDirectoryPrivate(path, error)) {
-        QString cleanupError;
-        if (!removeDirectoryDurably(path, cleanupError)) {
-            cleanupError = QStringLiteral(
-                "cannot remove the insufficiently private directory");
-        }
-        appendError(error, cleanupError);
-        return false;
-    }
-
-    QString syncError;
-    if (!syncParentDirectory(path, syncError)) {
-        error = syncError;
-        return false;
-    }
-    return true;
-}
-
 QString transactionNamespacePath(const QString &root)
 {
     return QDir(root).filePath(
@@ -405,37 +356,189 @@ QString transactionLeaseTarget(const QString &root)
         QStringLiteral("linked-removal-transaction"));
 }
 
-bool ensureTransactionNamespace(
-    const QString &root, QString &namespacePath, QString &error)
+bool openOrCreatePrivateFixedDirectory(
+    const AnchoredFileSystem::DirectoryAnchor &parent,
+    const QString &component,
+    AnchoredFileSystem::DirectoryAnchor &directory,
+    QString &error)
 {
-    const QString transactions = QDir(root).filePath(
-        QStringLiteral(".gc-transactions"));
-    if (!ensurePrivateDirectory(transactions, error)) return false;
+    if (!AnchoredFileSystem::validateCurrentUserControlledDirectory(
+            parent, error)) {
+        return false;
+    }
+    bool exists = false;
+    if (!parent.openChildIfExists(
+            component, directory, exists, error)) {
+        return false;
+    }
+    if (exists) {
+        if (!AnchoredFileSystem::validateCurrentUserOwnedDirectory(
+                directory, error)
+            || !AnchoredFileSystem::hardenPrivateDirectory(
+                directory, error)) {
+            return false;
+        }
+    } else {
+        const AnchoredFileSystem::MutationResult creation =
+            AnchoredFileSystem::createPrivateFixedChildDirectory(
+                parent, component, directory);
+        if (creation.effect
+            != AnchoredFileSystem::MutationEffect::AppliedDurable) {
+            error = creation.error.isEmpty()
+                ? QStringLiteral(
+                      "Cannot create a private transaction directory")
+                : creation.error;
+            if (!creation.verifiedRecoveryPath.isEmpty()) {
+                appendError(
+                    error,
+                    QStringLiteral("recovery directory retained at %1")
+                        .arg(creation.verifiedRecoveryPath));
+            }
+            return false;
+        }
+    }
 
-    namespacePath = QDir(transactions).filePath(
-        QStringLiteral("linked-removal"));
-    return ensurePrivateDirectory(namespacePath, error);
+    QString matchError;
+    if (!parent.pathMatches(matchError)
+        || !directory.pathMatches(matchError)) {
+        error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The private transaction directory hierarchy changed")
+            : matchError;
+        return false;
+    }
+    return true;
+}
+
+bool openExistingPrivateDirectory(
+    const AnchoredFileSystem::DirectoryAnchor &parent,
+    const QString &component,
+    AnchoredFileSystem::DirectoryAnchor &directory,
+    bool &exists,
+    QString &error,
+    const AnchoredFileSystem::NativeIdentity *expectedIdentity = nullptr)
+{
+    if (!AnchoredFileSystem::validateCurrentUserControlledDirectory(
+            parent, error)) {
+        return false;
+    }
+    if (!parent.openChildIfExists(
+            component, directory, exists, error)) {
+        return false;
+    }
+    if (!exists) return true;
+    if (expectedIdentity
+        && (directory.identity() != *expectedIdentity
+            || directory.identity().linkCount()
+                != expectedIdentity->linkCount())) {
+        error = QStringLiteral(
+            "The private transaction directory changed after enumeration");
+        directory = AnchoredFileSystem::DirectoryAnchor();
+        return false;
+    }
+    if (!AnchoredFileSystem::validateCurrentUserOwnedDirectory(
+            directory, error)
+        || !AnchoredFileSystem::hardenPrivateDirectory(
+            directory, error)) {
+        return false;
+    }
+
+    QString matchError;
+    if (!parent.pathMatches(matchError)
+        || !directory.pathMatches(matchError)) {
+        error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The private transaction directory hierarchy changed")
+            : matchError;
+        return false;
+    }
+    return true;
+}
+
+bool ensureTransactionNamespace(
+    const QString &root,
+    QString &namespacePath,
+    AnchoredFileSystem::DirectoryAnchor &transactionsDirectory,
+    AnchoredFileSystem::DirectoryAnchor &namespaceDirectory,
+    QString &error)
+{
+    AnchoredFileSystem::DirectoryAnchor rootDirectory;
+    if (!AnchoredFileSystem::DirectoryAnchor::open(
+            root, rootDirectory, error)) {
+        error = QStringLiteral(
+            "Cannot anchor the athlete transaction root: %1").arg(error);
+        return false;
+    }
+    if (!openOrCreatePrivateFixedDirectory(
+            rootDirectory,
+            QStringLiteral(".gc-transactions"),
+            transactionsDirectory,
+            error)) {
+        error = QStringLiteral(
+            "Cannot prepare the transaction directory: %1").arg(error);
+        return false;
+    }
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    rideCacheRemovalTransitionReached(
+        "linked-removal-transactions-directory-ready");
+#endif
+
+    QString matchError;
+    if (!rootDirectory.pathMatches(matchError)
+        || !transactionsDirectory.pathMatches(matchError)) {
+        error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The transaction directory changed during bootstrap")
+            : matchError;
+        return false;
+    }
+
+    namespacePath = QDir(root).filePath(
+        QStringLiteral(".gc-transactions/linked-removal"));
+    if (!openOrCreatePrivateFixedDirectory(
+            transactionsDirectory,
+            QStringLiteral("linked-removal"),
+            namespaceDirectory,
+            error)) {
+        error = QStringLiteral(
+            "Cannot prepare the linked-removal namespace: %1").arg(error);
+        return false;
+    }
+    return true;
 }
 
 bool openAnchoredJournalDirectory(
-    const QString &namespacePath,
+    const AnchoredFileSystem::DirectoryAnchor &namespaceDirectory,
     const QString &id,
+    const AnchoredFileSystem::NativeIdentity &expectedIdentity,
     AnchoredFileSystem::DirectoryAnchor &journalDirectory,
     QString &error)
 {
-    AnchoredFileSystem::DirectoryAnchor namespaceDirectory;
-    if (!AnchoredFileSystem::DirectoryAnchor::open(
-            namespacePath, namespaceDirectory, error)) {
-        error = QStringLiteral(
-            "Cannot anchor the transaction journal namespace: %1")
-                    .arg(error);
-        return false;
-    }
-    if (!namespaceDirectory.openChild(
-            id, journalDirectory, error)) {
+    bool exists = false;
+    if (!openExistingPrivateDirectory(
+            namespaceDirectory,
+            id,
+            journalDirectory,
+            exists,
+            error,
+            &expectedIdentity)
+        || !exists) {
+        if (error.isEmpty()) {
+            error = QStringLiteral(
+                "The transaction journal directory does not exist");
+        }
         error = QStringLiteral(
             "Cannot anchor the transaction journal directory: %1")
                     .arg(error);
+        return false;
+    }
+    QString matchError;
+    if (!namespaceDirectory.pathMatches(matchError)
+        || !journalDirectory.pathMatches(matchError)) {
+        error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The transaction journal hierarchy changed while being anchored")
+            : matchError;
         return false;
     }
     return true;
@@ -444,32 +547,93 @@ bool openAnchoredJournalDirectory(
 bool transactionNamespaceIsReady(
     const QString &root,
     const QString &namespacePath,
+    const AnchoredFileSystem::DirectoryAnchor &transactionsDirectory,
+    const AnchoredFileSystem::DirectoryAnchor &namespaceDirectory,
     QString &error)
 {
-    const QStringList namespaces = {
+    struct NamespaceCandidate
+    {
+        QString path;
+        AnchoredFileSystem::DirectoryAnchor directory;
+    };
+    QList<NamespaceCandidate> namespaces;
+    namespaces.append({
         namespacePath,
-        QDir(root).filePath(
-            QStringLiteral(".gc-transactions/linked-save")),
-        QDir(root).filePath(
-            QStringLiteral(".gc-transactions/plan-replacement"))};
-    for (const QString &candidate : namespaces) {
-        const QFileInfo candidateInfo(candidate);
-        if (!candidateInfo.exists() && !candidateInfo.isSymLink()) continue;
-        if (!ensurePrivateDirectory(candidate, error)) return false;
-        const QFileInfoList entries = QDir(candidate).entryInfoList(
-            QDir::AllEntries | QDir::NoDotAndDotDot
-                | QDir::Hidden | QDir::System,
-            QDir::Name);
-        for (const QFileInfo &entry : entries) {
-            const QString name = entry.fileName();
+        namespaceDirectory});
+    const QStringList otherComponents = {
+        QStringLiteral("linked-save"),
+        QStringLiteral("plan-replacement")};
+    for (const QString &component : otherComponents) {
+        AnchoredFileSystem::DirectoryAnchor directory;
+        bool exists = false;
+        if (!openExistingPrivateDirectory(
+                transactionsDirectory,
+                component,
+                directory,
+                exists,
+                error)) {
+            return false;
+        }
+        if (!exists) continue;
+        namespaces.append({
+            QDir(root).filePath(
+                QStringLiteral(".gc-transactions/") + component),
+            directory});
+    }
+
+    for (const NamespaceCandidate &candidate : namespaces) {
+        QString matchError;
+        if (!transactionsDirectory.pathMatches(matchError)
+            || !candidate.directory.pathMatches(matchError)) {
+            error = matchError.isEmpty()
+                ? QStringLiteral(
+                      "An activity transaction namespace was replaced")
+                : matchError;
+            return false;
+        }
+        const bool linkedRemovalNamespace =
+            atomicFilePathKey(candidate.path)
+            == atomicFilePathKey(namespacePath);
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+        if (linkedRemovalNamespace) {
+            rideCacheRemovalTransitionReached(
+                "linked-removal-before-namespace-enumeration");
+        }
+#endif
+        QList<AnchoredFileSystem::DirectoryEntry> entries;
+        if (!candidate.directory.enumerateEntries(
+                entries, Detail::MaximumNamespaceEntries, error)) {
+            error = QStringLiteral(
+                "Cannot inspect an activity transaction namespace: %1")
+                    .arg(error);
+            return false;
+        }
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+        if (linkedRemovalNamespace) {
+            rideCacheRemovalTransitionReached(
+                "linked-removal-after-namespace-enumeration");
+        }
+#endif
+        for (const AnchoredFileSystem::DirectoryEntry &entry : entries) {
+            const QString &name = entry.name;
             QString lockedId;
-            if (entry.isFile() && !entry.isSymLink()
+            if (entry.kind
+                    == AnchoredFileSystem::DirectoryEntryKind::RegularFile
+                && entry.identity.linkCount() == 1
                 && atomicFileLockTargetName(name, lockedId)) {
                 if (validTransactionId(lockedId)) continue;
             }
 
             error = QStringLiteral(
                 "Pending linked activity recovery must be completed before starting another transaction");
+            return false;
+        }
+        if (!transactionsDirectory.pathMatches(matchError)
+            || !candidate.directory.pathMatches(matchError)) {
+            error = matchError.isEmpty()
+                ? QStringLiteral(
+                      "An activity transaction namespace changed while being inspected")
+                : matchError;
             return false;
         }
     }
@@ -1316,6 +1480,8 @@ bool removePeerOldFile(
 
 bool commitMarkerFileMatches(
     const JournalState &state, QString &error);
+AtomicFileSnapshot expectedCommitMarkerSnapshot(
+    const JournalState &state);
 
 bool removeCommitMarkerFile(
     const JournalState &state, QString &error)
@@ -1463,6 +1629,7 @@ bool isKnownTemporaryName(const QString &name)
 bool pinJournalFile(
     const AnchoredFileSystem::DirectoryAnchor &directory,
     const QString &name,
+    const AnchoredFileSystem::NativeIdentity &expectedIdentity,
     qint64 maximumSize,
     AnchoredJournalFile &anchored,
     QString &error)
@@ -1475,6 +1642,13 @@ bool pinJournalFile(
     auto file = std::make_shared<AnchoredFileSystem::PinnedFile>();
     if (!AnchoredFileSystem::pinRegularFile(
             entry, *file, error, maximumSize)) {
+        return false;
+    }
+    if (file->identity() != expectedIdentity
+        || file->identity().linkCount()
+            != expectedIdentity.linkCount()) {
+        error = QStringLiteral(
+            "A transaction journal file changed after directory enumeration");
         return false;
     }
     bool matches = false;
@@ -1494,27 +1668,110 @@ bool pinJournalFile(
 }
 
 bool inspectJournalDirectory(
-    const JournalState &state,
+    JournalState &state,
     QList<AnchoredJournalFile> &temporaryFiles,
     QString &error)
 {
     temporaryFiles.clear();
-    if (!journalDirectoryMatches(state, error)) return false;
-    if (!ensurePrivateDirectory(state.journalPath, error)) return false;
+    state.commitMarkerDirectoryObservationValid = false;
+    if (!manifestFileMatches(state, error)
+        || !peerOldFileMatches(state, error)
+        || !journalDirectoryMatches(state, error)) {
+        return false;
+    }
+    AnchoredFileSystem::DirectoryAnchor privateDirectory =
+        state.journalDirectory;
+    if (!AnchoredFileSystem::hardenPrivateDirectory(
+            privateDirectory, error)
+        || !journalDirectoryMatches(state, error)) {
+        return false;
+    }
 
-    const QFileInfoList entries = QDir(state.journalPath).entryInfoList(
-        QDir::AllEntries | QDir::NoDotAndDotDot
-            | QDir::Hidden | QDir::System,
-        QDir::Name);
-    for (const QFileInfo &entry : entries) {
-        if (entry.isSymLink() || !entry.isFile()) {
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    rideCacheRemovalTransitionReached(
+        "journal-before-directory-enumeration");
+#endif
+    QList<AnchoredFileSystem::DirectoryEntry> entries;
+    if (!state.journalDirectory.enumerateEntries(
+            entries, Detail::MaximumJournalEntries, error)) {
+        return false;
+    }
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    rideCacheRemovalTransitionReached(
+        "journal-after-directory-enumeration");
+#endif
+    bool commitMarkerPresent = false;
+    for (const AnchoredFileSystem::DirectoryEntry &entry : entries) {
+        if (entry.kind
+            != AnchoredFileSystem::DirectoryEntryKind::RegularFile) {
             error = QStringLiteral(
                 "The transaction journal contains an unsafe entry");
             return false;
         }
-        const QString name = entry.fileName();
-        if (name == Detail::ManifestName || name == Detail::PeerOldName
-            || name == Detail::CommitMarkerName) {
+        const QString &name = entry.name;
+        if (name == Detail::ManifestName) {
+            if (!state.manifestFile
+                || state.manifestFile->identity() != entry.identity
+                || state.manifestFile->identity().linkCount()
+                    != entry.identity.linkCount()) {
+                error = QStringLiteral(
+                    "The transaction manifest changed during directory enumeration");
+                return false;
+            }
+            continue;
+        }
+        if (name == Detail::PeerOldName) {
+            if (!state.peerOldFile
+                || state.peerOldFile->identity() != entry.identity
+                || state.peerOldFile->identity().linkCount()
+                    != entry.identity.linkCount()) {
+                error = QStringLiteral(
+                    "The linked activity journal copy changed during directory enumeration");
+                return false;
+            }
+            continue;
+        }
+        if (name == Detail::CommitMarkerName) {
+            if (state.commitMarkerFile
+                && state.commitMarkerFile->isValid()
+                && (state.commitMarkerFile->identity() != entry.identity
+                    || state.commitMarkerFile->identity().linkCount()
+                        != entry.identity.linkCount())) {
+                error = QStringLiteral(
+                    "The transaction commit marker changed during directory enumeration");
+                return false;
+            }
+            AnchoredJournalFile anchored;
+            if (!pinJournalFile(
+                    state.journalDirectory,
+                    name,
+                    entry.identity,
+                    Detail::MaximumCommitMarkerSize,
+                    anchored,
+                    error)) {
+                return false;
+            }
+            QByteArray contents;
+            if (!AnchoredFileSystem::readAll(
+                    *anchored.file,
+                    Detail::MaximumCommitMarkerSize,
+                    contents,
+                    error)) {
+                return false;
+            }
+            const AtomicFileSnapshot expected =
+                expectedCommitMarkerSnapshot(state);
+            if (contents != state.manifest.id.toLatin1() + '\n'
+                || anchored.file->size() != expected.size
+                || anchored.file->sha256() != expected.digest) {
+                error = QStringLiteral(
+                    "The transaction commit marker is invalid");
+                return false;
+            }
+            state.commitMarkerEntry = std::move(anchored.entry);
+            state.commitMarkerFile = std::move(anchored.file);
+            state.commitMarkerSnapshot = expected;
+            commitMarkerPresent = true;
             continue;
         }
         if (!isKnownTemporaryName(name)) {
@@ -1526,6 +1783,7 @@ bool inspectJournalDirectory(
         if (!pinJournalFile(
                 state.journalDirectory,
                 name,
+                entry.identity,
                 knownTemporaryMaximumSize(name),
                 anchored,
                 error)) {
@@ -1533,10 +1791,30 @@ bool inspectJournalDirectory(
         }
         temporaryFiles.append(std::move(anchored));
     }
+    if (!commitMarkerPresent) {
+        state.commitMarkerEntry = {};
+        state.commitMarkerFile.reset();
+        state.commitMarkerSnapshot = {};
+    }
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
     if (!temporaryFiles.isEmpty()) {
         rideCacheRemovalTransitionReached(
             "journal-temporary-files-inspected");
+    }
+#endif
+    if (!manifestFileMatches(state, error)
+        || !peerOldFileMatches(state, error)
+        || (commitMarkerPresent
+            && !commitMarkerFileMatches(state, error))
+        || !journalDirectoryMatches(state, error)) {
+        return false;
+    }
+    state.commitMarkerDirectoryObservationPresent = commitMarkerPresent;
+    state.commitMarkerDirectoryObservationValid = true;
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    if (commitMarkerPresent) {
+        rideCacheRemovalTransitionReached(
+            "journal-commit-marker-observation-published");
     }
 #endif
     return true;
@@ -1599,6 +1877,36 @@ bool readCommitMarker(
     exists = false;
     if (!journalDirectoryMatches(state, error)) return false;
 
+    if (state.commitMarkerDirectoryObservationValid) {
+        const bool observedPresent =
+            state.commitMarkerDirectoryObservationPresent;
+        state.commitMarkerDirectoryObservationValid = false;
+        if (observedPresent) {
+            if (!commitMarkerFileMatches(state, error)) return false;
+            exists = true;
+            return true;
+        }
+
+        AnchoredFileSystem::EntryRef observedEntry =
+            state.journalDirectory.entry(
+                Detail::CommitMarkerName, error);
+        bool entryPresent = false;
+        if (!observedEntry.isValid()
+            || !AnchoredFileSystem::entryExists(
+                observedEntry, entryPresent, error)) {
+            return false;
+        }
+        if (entryPresent) {
+            error = QStringLiteral(
+                "The transaction commit marker appeared after directory enumeration");
+            return false;
+        }
+        state.commitMarkerEntry = {};
+        state.commitMarkerFile.reset();
+        state.commitMarkerSnapshot = {};
+        return true;
+    }
+
     AnchoredFileSystem::EntryRef entry = state.journalDirectory.entry(
         Detail::CommitMarkerName, error);
     if (!entry.isValid()) return false;
@@ -1658,10 +1966,11 @@ bool readCommitMarker(
 bool loadJournalState(
     const QString &root,
     const QString &journalPath,
+    const AnchoredFileSystem::DirectoryAnchor &namespaceDirectory,
+    AnchoredFileSystem::DirectoryAnchor journalDirectory,
     std::shared_ptr<JournalState> &state,
     QString &error)
 {
-    if (!ensurePrivateDirectory(journalPath, error)) return false;
     const QString id = QFileInfo(journalPath).fileName();
     if (!validTransactionId(id)) {
         error = QStringLiteral("The transaction directory name is invalid");
@@ -1685,11 +1994,9 @@ bool loadJournalState(
         Detail::PeerOldName);
     loaded->commitMarkerPath = QDir(loaded->journalPath).filePath(
         Detail::CommitMarkerName);
-    if (!openAnchoredJournalDirectory(
-            expectedNamespace,
-            id,
-            loaded->journalDirectory,
-            error)) {
+    loaded->namespaceDirectory = namespaceDirectory;
+    loaded->journalDirectory = std::move(journalDirectory);
+    if (!journalDirectoryMatches(*loaded, error)) {
         return false;
     }
 
@@ -1745,8 +2052,9 @@ bool loadAndLockJournal(
                 "The active transaction journal path changed");
             return false;
         }
-    } else if (!loadJournalState(
-                   root, journalPath, current, error)) {
+    } else {
+        error = QStringLiteral(
+            "The transaction journal was not loaded from an anchored namespace");
         return false;
     }
     ResolvedPaths paths;
@@ -1789,8 +2097,9 @@ bool loadAndLockRuntimeCommit(
                 "The active transaction journal path changed");
             return false;
         }
-    } else if (!loadJournalState(
-                   root, journalPath, current, error)) {
+    } else {
+        error = QStringLiteral(
+            "The transaction journal was not loaded from an anchored namespace");
         return false;
     }
     ResolvedPaths paths;
@@ -2413,9 +2722,11 @@ bool removeJournalDirectory(
 #endif
 
     if (!journalDirectoryMatches(state, error)) return false;
-    const QFileInfoList remaining = QDir(state.journalPath).entryInfoList(
-        QDir::AllEntries | QDir::NoDotAndDotDot
-            | QDir::Hidden | QDir::System);
+    QList<AnchoredFileSystem::DirectoryEntry> remaining;
+    if (!state.journalDirectory.enumerateEntries(
+            remaining, Detail::MaximumJournalEntries, error)) {
+        return false;
+    }
     if (!remaining.isEmpty()) {
         error = QStringLiteral(
             "The transaction journal contains files that cannot be removed");
@@ -2625,48 +2936,59 @@ bool reconcileLockedJournal(
 
 bool removePreManifestJournal(
     const QString &journalPath,
+    AnchoredFileSystem::DirectoryAnchor journalDirectory,
     QString &error)
 {
     const QString id = QFileInfo(journalPath).fileName();
-    if (!validTransactionId(id)
-        || !ensurePrivateDirectory(journalPath, error)) {
+    if (!validTransactionId(id)) {
+        error = QStringLiteral(
+            "The incomplete transaction directory name is invalid");
+        return false;
+    }
+    QString matchError;
+    if (!journalDirectory.pathMatches(matchError)) {
+        error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The incomplete transaction journal was replaced")
+            : matchError;
         return false;
     }
 
     AtomicFileLockSet locks;
     if (!locks.lock({journalPath}, error)) return false;
-
-    AnchoredFileSystem::DirectoryAnchor journalDirectory;
-    if (!openAnchoredJournalDirectory(
-            QFileInfo(journalPath).absolutePath(),
-            id,
-            journalDirectory,
-            error)) {
+    if (!journalDirectory.pathMatches(matchError)) {
+        error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The incomplete transaction journal changed while being locked")
+            : matchError;
         return false;
     }
 
-    const QFileInfoList entries = QDir(journalPath).entryInfoList(
-        QDir::AllEntries | QDir::NoDotAndDotDot
-            | QDir::Hidden | QDir::System,
-        QDir::Name);
+    QList<AnchoredFileSystem::DirectoryEntry> entries;
+    if (!journalDirectory.enumerateEntries(
+            entries, Detail::MaximumJournalEntries, error)) {
+        return false;
+    }
     QList<AnchoredJournalFile> removable;
-    for (const QFileInfo &entry : entries) {
-        if (entry.isSymLink() || !entry.isFile()
-            || (entry.fileName() != Detail::PeerOldName
-                && entry.fileName() != Detail::CommitMarkerName
-                && !isKnownTemporaryName(entry.fileName()))) {
+    for (const AnchoredFileSystem::DirectoryEntry &entry : entries) {
+        if (entry.kind
+                != AnchoredFileSystem::DirectoryEntryKind::RegularFile
+            || (entry.name != Detail::PeerOldName
+                && entry.name != Detail::CommitMarkerName
+                && !isKnownTemporaryName(entry.name))) {
             error = QStringLiteral(
                 "An incomplete transaction contains an unknown entry");
             return false;
         }
         const qint64 maximumSize =
-            entry.fileName() == Detail::CommitMarkerName
+            entry.name == Detail::CommitMarkerName
             ? Detail::MaximumCommitMarkerSize
-            : knownTemporaryMaximumSize(entry.fileName());
+            : knownTemporaryMaximumSize(entry.name);
         AnchoredJournalFile anchored;
         if (!pinJournalFile(
                 journalDirectory,
-                entry.fileName(),
+                entry.name,
+                entry.identity,
                 maximumSize,
                 anchored,
                 error)) {
@@ -2896,6 +3218,11 @@ public:
         return delegate_ ? delegate_->errorString() : QString();
     }
 
+    bool verifiesCommittedResult() const override
+    {
+        return delegate_ && delegate_->verifiesCommittedResult();
+    }
+
 private:
     std::shared_ptr<JournalState> state_;
     AtomicFileWriterFactory delegateFactory_;
@@ -2988,9 +3315,23 @@ std::shared_ptr<Journal> Journal::prepare(
         return {};
     }
     QString namespacePath;
-    if (!ensureTransactionNamespace(root, namespacePath, error)) return {};
+    AnchoredFileSystem::DirectoryAnchor transactionsDirectory;
+    if (!ensureTransactionNamespace(
+            root,
+            namespacePath,
+            transactionsDirectory,
+            state->namespaceDirectory,
+            error)) {
+        return {};
+    }
     if (!transactionNamespaceIsReady(
-            root, namespacePath, error)) return {};
+            root,
+            namespacePath,
+            transactionsDirectory,
+            state->namespaceDirectory,
+            error)) {
+        return {};
+    }
     const QString journalPath = QDir(namespacePath).filePath(id);
 
     state->athleteRoot = root;
@@ -3124,14 +3465,37 @@ std::shared_ptr<Journal> Journal::prepare(
         state->manifest.derived.append(derived);
     }
 
-    if (!ensurePrivateDirectory(journalPath, error)) return {};
-    if (!openAnchoredJournalDirectory(
-            namespacePath,
+    const AnchoredFileSystem::MutationResult creation =
+        AnchoredFileSystem::createPrivateChildDirectory(
+            state->namespaceDirectory,
             id,
-            state->journalDirectory,
-            error)) {
+            state->journalDirectory);
+    if (creation.effect
+        != AnchoredFileSystem::MutationEffect::AppliedDurable) {
+        error = creation.error.isEmpty()
+            ? QStringLiteral(
+                  "Cannot create the linked-removal transaction journal")
+            : creation.error;
+        if (!creation.verifiedRecoveryPath.isEmpty()) {
+            appendError(
+                error,
+                QStringLiteral("recovery directory retained at %1")
+                    .arg(creation.verifiedRecoveryPath));
+        } else if (state->journalDirectory.isValid()) {
+            QString retainedError;
+            if (state->journalDirectory.pathMatches(retainedError)) {
+                appendError(
+                    error,
+                    QStringLiteral("recovery journal retained at %1")
+                        .arg(journalPath));
+            }
+        }
         return {};
     }
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    rideCacheRemovalTransitionReached(
+        "linked-removal-journal-path-created");
+#endif
 #ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
     rideCacheRemovalTransitionReached(
         "journal-directory-created");
@@ -3231,54 +3595,171 @@ bool Journal::reconcileAll(const QString &athleteRoot, QString &error)
         transactionNamespacePath(requestedRoot);
     const QFileInfo requestedNamespaceInfo(
         requestedNamespace);
+    const QString requestedTransactions = QDir(requestedRoot).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QFileInfo requestedTransactionsInfo(requestedTransactions);
     if (!requestedNamespaceInfo.exists()
-        && !requestedNamespaceInfo.isSymLink()) {
+        && !requestedNamespaceInfo.isSymLink()
+        && !requestedTransactionsInfo.exists()
+        && !requestedTransactionsInfo.isSymLink()) {
         return true;
     }
 
     QString root;
     if (!normalizeAthleteRoot(athleteRoot, root, error)) return false;
 
-    const QString transactions = QDir(root).filePath(
-        QStringLiteral(".gc-transactions"));
-    const QFileInfo transactionsInfo(transactions);
-    if (!transactionsInfo.exists() && !transactionsInfo.isSymLink()) {
+    AnchoredFileSystem::DirectoryAnchor rootDirectory;
+    if (!AnchoredFileSystem::DirectoryAnchor::open(
+            root, rootDirectory, error)) {
+        error = QStringLiteral(
+            "Cannot anchor the athlete transaction root: %1").arg(error);
+        return false;
+    }
+
+    AnchoredFileSystem::DirectoryAnchor transactionsDirectory;
+    bool transactionsExist = false;
+    if (!openExistingPrivateDirectory(
+            rootDirectory,
+            QStringLiteral(".gc-transactions"),
+            transactionsDirectory,
+            transactionsExist,
+            error)) {
+        return false;
+    }
+    if (!transactionsExist) {
         return true;
     }
-    if (!ensurePrivateDirectory(transactions, error)) return false;
 
     const QString namespacePath = transactionNamespacePath(root);
-    const QFileInfo namespaceInfo(namespacePath);
-    if (!namespaceInfo.exists() && !namespaceInfo.isSymLink()) return true;
-    if (!ensurePrivateDirectory(namespacePath, error)) return false;
+    AnchoredFileSystem::DirectoryAnchor namespaceDirectory;
+    bool namespaceExists = false;
+    if (!openExistingPrivateDirectory(
+            transactionsDirectory,
+            QStringLiteral("linked-removal"),
+            namespaceDirectory,
+            namespaceExists,
+            error)) {
+        return false;
+    }
+    if (!namespaceExists) return true;
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    rideCacheRemovalTransitionReached(
+        "linked-removal-recovery-namespace-ready");
+#endif
 
-    const QFileInfoList entries = QDir(namespacePath).entryInfoList(
-        QDir::AllEntries | QDir::NoDotAndDotDot
-            | QDir::Hidden | QDir::System,
-        QDir::Name);
-    QStringList failures;
-    for (const QFileInfo &entry : entries) {
-        const QString name = entry.fileName();
+    QString matchError;
+    if (!namespaceDirectory.pathMatches(matchError)) {
+        error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The linked-removal journal namespace was replaced")
+            : matchError;
+        return false;
+    }
+
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    rideCacheRemovalTransitionReached(
+        "linked-removal-recovery-before-namespace-enumeration");
+#endif
+    // Validate the complete snapshot before mutating any journal. Recovery is
+    // deliberately all-or-nothing when the namespace has an unsafe entry.
+    QList<AnchoredFileSystem::DirectoryEntry> entries;
+    if (!namespaceDirectory.enumerateEntries(
+            entries, Detail::MaximumNamespaceEntries, error)) {
+        return false;
+    }
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    rideCacheRemovalTransitionReached(
+        "linked-removal-recovery-after-namespace-enumeration");
+#endif
+    QList<AnchoredFileSystem::DirectoryEntry> verifiedEntries;
+    if (!namespaceDirectory.enumerateEntries(
+            verifiedEntries, Detail::MaximumNamespaceEntries, error)) {
+        return false;
+    }
+    if (!directorySnapshotsMatch(entries, verifiedEntries)) {
+        error = QStringLiteral(
+            "The linked-removal namespace changed after enumeration");
+        return false;
+    }
+    entries = std::move(verifiedEntries);
+    if (!namespaceDirectory.pathMatches(matchError)) {
+        error = matchError.isEmpty()
+            ? QStringLiteral(
+                  "The linked-removal namespace changed while being enumerated")
+            : matchError;
+        return false;
+    }
+
+    const auto isValidRemovalGuard = [](
+        const AnchoredFileSystem::DirectoryEntry &entry) {
         QString lockedId;
-        if (entry.isFile() && !entry.isSymLink()
-            && atomicFileLockTargetName(name, lockedId)) {
-            if (validTransactionId(lockedId)) continue;
-        }
-        if (entry.isSymLink() || !entry.isDir()
-            || !validTransactionId(name)) {
-            failures.append(QStringLiteral(
+        return entry.kind
+                == AnchoredFileSystem::DirectoryEntryKind::RegularFile
+            && entry.identity.linkCount() == 1
+            && atomicFileLockTargetName(entry.name, lockedId)
+            && validTransactionId(lockedId);
+    };
+    for (const AnchoredFileSystem::DirectoryEntry &entry : entries) {
+        if (isValidRemovalGuard(entry)) continue;
+        if (entry.kind
+                != AnchoredFileSystem::DirectoryEntryKind::Directory
+            || !validTransactionId(entry.name)) {
+            error = QStringLiteral(
                 "Unknown entry in the linked-removal journal namespace: %1")
-                                .arg(name));
+                            .arg(entry.name);
+            return false;
+        }
+    }
+
+    QStringList failures;
+    for (const AnchoredFileSystem::DirectoryEntry &entry : entries) {
+        if (!namespaceDirectory.pathMatches(matchError)) {
+            failures.append(
+                matchError.isEmpty()
+                    ? QStringLiteral(
+                          "The linked-removal journal namespace was replaced")
+                    : matchError);
+            break;
+        }
+        const QString &name = entry.name;
+        if (isValidRemovalGuard(entry)) continue;
+
+        QString transactionError;
+        AnchoredFileSystem::DirectoryAnchor journalDirectory;
+        if (!openAnchoredJournalDirectory(
+                namespaceDirectory,
+                name,
+                entry.identity,
+                journalDirectory,
+                transactionError)) {
+            failures.append(transactionError);
             continue;
         }
+        if (journalDirectory.identity() != entry.identity
+            || journalDirectory.identity().linkCount()
+                != entry.identity.linkCount()) {
+            failures.append(QStringLiteral(
+                "The linked-removal journal changed after namespace enumeration"));
+            continue;
+        }
+        bool manifestExists = false;
+        {
+            const AnchoredFileSystem::EntryRef manifestEntry =
+                journalDirectory.entry(
+                    Detail::ManifestName, transactionError);
+            if (!manifestEntry.isValid()
+                || !AnchoredFileSystem::entryExists(
+                    manifestEntry, manifestExists, transactionError)) {
+                failures.append(transactionError);
+                continue;
+            }
+        }
 
-        const QString manifestPath = QDir(entry.absoluteFilePath()).filePath(
-            Detail::ManifestName);
-        const QFileInfo manifestInfo(manifestPath);
-        QString transactionError;
-        if (!manifestInfo.exists() && !manifestInfo.isSymLink()) {
+        const QString journalPath = QDir(namespacePath).filePath(name);
+        if (!manifestExists) {
             if (!removePreManifestJournal(
-                    entry.absoluteFilePath(),
+                    journalPath,
+                    std::move(journalDirectory),
                     transactionError)) {
                 failures.append(transactionError);
             }
@@ -3287,14 +3768,72 @@ bool Journal::reconcileAll(const QString &athleteRoot, QString &error)
 
         std::shared_ptr<JournalState> state;
         std::unique_ptr<AtomicFileLockSet> locks;
-        if (!loadAndLockJournal(
+        if (!loadJournalState(
                 root,
-                entry.absoluteFilePath(),
+                journalPath,
+                namespaceDirectory,
+                std::move(journalDirectory),
+                state,
+                transactionError)
+            || !loadAndLockJournal(
+                root,
+                journalPath,
                 state,
                 locks,
-                transactionError)
+                transactionError,
+                state)
             || !reconcileLockedJournal(*state, transactionError)) {
             failures.append(transactionError);
+        }
+    }
+
+    if (!namespaceDirectory.pathMatches(matchError)) {
+        failures.append(
+            matchError.isEmpty()
+                ? QStringLiteral(
+                      "The linked-removal namespace changed during recovery")
+                : matchError);
+    }
+
+    if (failures.isEmpty()) {
+        QList<AnchoredFileSystem::DirectoryEntry> remaining;
+        QString enumerationError;
+        if (!namespaceDirectory.enumerateEntries(
+                remaining, Detail::MaximumNamespaceEntries,
+                enumerationError)) {
+            failures.append(enumerationError);
+        } else {
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+            rideCacheRemovalTransitionReached(
+                "linked-removal-recovery-final-namespace-enumerated");
+#endif
+            QList<AnchoredFileSystem::DirectoryEntry> verifiedRemaining;
+            if (!namespaceDirectory.enumerateEntries(
+                    verifiedRemaining,
+                    Detail::MaximumNamespaceEntries,
+                    enumerationError)) {
+                failures.append(enumerationError);
+            } else if (!directorySnapshotsMatch(
+                           remaining, verifiedRemaining)) {
+                failures.append(QStringLiteral(
+                    "The linked-removal namespace changed during recovery"));
+            } else {
+                for (const AnchoredFileSystem::DirectoryEntry &entry :
+                     verifiedRemaining) {
+                    if (isValidRemovalGuard(entry)) continue;
+                    failures.append(QStringLiteral(
+                        "The linked-removal namespace changed during recovery"));
+                    break;
+                }
+            }
+        }
+        if (!transactionsDirectory.pathMatches(matchError)
+            || !namespaceDirectory.pathMatches(matchError)) {
+            failures.append(
+                matchError.isEmpty()
+                    ? QStringLiteral(
+                          "The linked-removal namespace changed after final recovery inspection")
+                    : matchError);
         }
     }
 
@@ -3433,10 +3972,10 @@ bool Journal::markCommitted(QString &error)
 
 bool Journal::hasCommitMarker() const
 {
+    if (!state_) return false;
     QString ignored;
-    return state_
-        && journalDirectoryMatches(*state_, ignored)
-        && pathEntryExists(state_->commitMarkerPath);
+    bool exists = false;
+    return readCommitMarker(*state_, exists, ignored) && exists;
 }
 
 bool Journal::cleanupAfterRollback(QString &error)
@@ -3497,53 +4036,110 @@ bool Journal::cleanupAfterCommit(QString &error)
 
 QStringList Journal::recoveryPaths() const
 {
-    QStringList paths;
-    if (!state_) return paths;
+    if (!state_) return {};
     QString generationError;
-    if (!journalDirectoryMatches(*state_, generationError)) return paths;
+    if (!journalDirectoryMatches(*state_, generationError)) return {};
 
-    const auto addMatchingFile = [&paths](
+    struct RecoveryCandidate
+    {
+        AnchoredFileSystem::EntryRef entry;
+        AnchoredFileSystem::PinnedFile file;
+    };
+    std::vector<RecoveryCandidate> candidates;
+
+    const auto pinMatchingFile = [&candidates](
         const QString &path,
         const AtomicFileSnapshot &expected) {
-        ObservedFile observed;
         QString ignored;
-        if (inspectRegularFile(
-                path, observed, ignored, expected.size)
-            && snapshotMatches(observed, expected)) {
-            paths.append(path);
+        const QFileInfo info(path);
+        AnchoredFileSystem::DirectoryAnchor parent;
+        if (!AnchoredFileSystem::DirectoryAnchor::open(
+                info.absolutePath(), parent, ignored)) {
+            return;
         }
+        const AnchoredFileSystem::EntryRef entry =
+            parent.entry(info.fileName(), ignored);
+        if (!entry.isValid()) return;
+
+        AnchoredFileSystem::PinnedFile file;
+        if (!AnchoredFileSystem::pinRegularFile(
+                entry, file, ignored, expected.size)
+            || file.size() != expected.size
+            || file.sha256() != expected.digest) {
+            return;
+        }
+        candidates.push_back(
+            {entry, std::move(file)});
     };
-    const auto addMatchingJournal = [&] {
+
+    const auto journalRecoveryPathMatches = [&] {
         QString ignored;
-        if (manifestFileMatches(*state_, ignored)) {
-            paths.append(state_->journalPath);
-        }
+        return journalDirectoryMatches(*state_, ignored)
+            && manifestFileMatches(*state_, ignored)
+            && journalDirectoryMatches(*state_, ignored);
     };
+    const bool includeJournal = journalRecoveryPathMatches();
+    if (includeJournal) {
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+        rideCacheRemovalTransitionReached(
+            "journal-recovery-manifest-verified");
+#endif
+    }
 
     ResolvedPaths resolved;
     QString error;
     if (!resolveManifestPaths(*state_, resolved, error)) {
-        addMatchingJournal();
-        return paths;
+        if (includeJournal && journalRecoveryPathMatches()) {
+            return {state_->journalPath};
+        }
+        return {};
     }
 
-    addMatchingJournal();
-    addMatchingFile(
+    pinMatchingFile(
         resolved.backupStaging,
         state_->manifest.source.contents);
-    addMatchingFile(
+    pinMatchingFile(
         resolved.sourceTombstone,
         state_->manifest.source.contents);
     if (state_->manifest.previousBackup.exists) {
-        addMatchingFile(
+        pinMatchingFile(
             resolved.previousBackup,
             state_->manifest.previousBackup.contents);
     }
     if (state_->manifest.hasPeer
         && state_->manifest.peerNew.exists) {
-        addMatchingFile(
+        pinMatchingFile(
             resolved.peerStaging,
             state_->manifest.peerNew.contents);
+    }
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    rideCacheRemovalTransitionReached(
+        "journal-recovery-candidates-collected");
+#endif
+
+    if (!journalRecoveryPathMatches()) return {};
+    std::vector<bool> candidateMatched(candidates.size(), false);
+    for (std::size_t index = 0; index < candidates.size(); ++index) {
+        const RecoveryCandidate &candidate = candidates.at(index);
+        candidateMatched.at(index) =
+            !AnchoredFileSystem::verifiedRecoveryPath(
+                candidate.file, candidate.entry).isEmpty();
+    }
+    if (!journalRecoveryPathMatches()) return {};
+#ifdef GC_RIDE_CACHE_REMOVAL_TEST_HOOKS
+    rideCacheRemovalTransitionReached(
+        "journal-recovery-final-journal-verified");
+#endif
+
+    QStringList paths;
+    if (includeJournal) paths.append(state_->journalPath);
+    for (std::size_t index = 0; index < candidates.size(); ++index) {
+        if (!candidateMatched.at(index)) continue;
+        const RecoveryCandidate &candidate = candidates.at(index);
+        const QString verified =
+            AnchoredFileSystem::verifiedRecoveryPath(
+                candidate.file, candidate.entry);
+        if (!verified.isEmpty()) paths.append(verified);
     }
     return paths;
 }

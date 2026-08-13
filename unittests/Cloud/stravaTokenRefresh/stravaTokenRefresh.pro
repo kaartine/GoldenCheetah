@@ -1,5 +1,6 @@
 QT += testlib core
 CONFIG += c++17
+DEFINES += GC_STRAVA_TOKEN_REFRESH_TEST_HOOKS
 
 TARGET = testStravaTokenRefresh
 

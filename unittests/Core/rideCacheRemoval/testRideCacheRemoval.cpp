@@ -147,6 +147,100 @@ enum class JournalNamespaceEntryKind
     Directory
 };
 
+#ifdef Q_OS_WIN
+class WindowsTestHandle
+{
+public:
+    explicit WindowsTestHandle(HANDLE handle = INVALID_HANDLE_VALUE)
+        : handle_(handle)
+    {
+    }
+
+    ~WindowsTestHandle()
+    {
+        if (isValid()) ::CloseHandle(handle_);
+    }
+
+    WindowsTestHandle(const WindowsTestHandle &) = delete;
+    WindowsTestHandle &operator=(const WindowsTestHandle &) = delete;
+
+    bool isValid() const
+    {
+        return handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE;
+    }
+
+    HANDLE get() const { return handle_; }
+
+private:
+    HANDLE handle_ = INVALID_HANDLE_VALUE;
+};
+
+bool createCurrentUserOwnedDirectory(const QString &path)
+{
+    HANDLE rawToken = nullptr;
+    if (!::OpenProcessToken(
+            ::GetCurrentProcess(), TOKEN_QUERY, &rawToken)) {
+        return false;
+    }
+    WindowsTestHandle token(rawToken);
+    DWORD required = 0;
+    ::GetTokenInformation(
+        token.get(), TokenUser, nullptr, 0, &required);
+    if (::GetLastError() != ERROR_INSUFFICIENT_BUFFER
+        || required == 0) {
+        return false;
+    }
+    QByteArray userStorage(int(required), '\0');
+    if (!::GetTokenInformation(
+            token.get(), TokenUser, userStorage.data(),
+            required, &required)) {
+        return false;
+    }
+    auto *user = reinterpret_cast<TOKEN_USER *>(
+        userStorage.data());
+    if (!::IsValidSid(user->User.Sid)) return false;
+
+    const DWORD aclSize = DWORD(
+        sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE)
+        - sizeof(DWORD) + ::GetLengthSid(user->User.Sid));
+    QByteArray aclStorage(int(aclSize), '\0');
+    auto *acl = reinterpret_cast<PACL>(aclStorage.data());
+    SECURITY_DESCRIPTOR descriptor {};
+    if (!::InitializeAcl(acl, aclSize, ACL_REVISION)
+        || !::AddAccessAllowedAceEx(
+            acl, ACL_REVISION,
+            CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE,
+            FILE_ALL_ACCESS, user->User.Sid)
+        || !::InitializeSecurityDescriptor(
+            &descriptor, SECURITY_DESCRIPTOR_REVISION)
+        || !::SetSecurityDescriptorOwner(
+            &descriptor, user->User.Sid, FALSE)
+        || !::SetSecurityDescriptorDacl(
+            &descriptor, TRUE, acl, FALSE)
+        || !::SetSecurityDescriptorControl(
+            &descriptor, SE_DACL_PROTECTED,
+            SE_DACL_PROTECTED)) {
+        return false;
+    }
+    SECURITY_ATTRIBUTES attributes {};
+    attributes.nLength = sizeof(attributes);
+    attributes.lpSecurityDescriptor = &descriptor;
+    const QString native = QDir::toNativeSeparators(path);
+    return ::CreateDirectoryW(
+        reinterpret_cast<LPCWSTR>(native.utf16()),
+        &attributes);
+}
+#endif
+
+bool createOwnedFixtureDirectory(const QString &path)
+{
+#ifdef Q_OS_WIN
+    return createCurrentUserOwnedDirectory(path);
+#else
+    return QDir().mkdir(path);
+#endif
+}
+
 QString qlockRemovalGuardName(
     const QString &lockName, int suffixCount = 1)
 {
@@ -196,6 +290,22 @@ void writeFixture(const QString &path, const QByteArray &contents)
     QVERIFY(file.flush());
 }
 
+void replaceFixtureWhilePinned(
+    const QString &path,
+    const QByteArray &contents)
+{
+#ifdef Q_OS_WIN
+    const QString retainedPath =
+        path + QStringLiteral(".gc-test-retained-original");
+    QVERIFY(!QFileInfo::exists(retainedPath));
+    QFile original(path);
+    QVERIFY2(
+        original.rename(retainedPath),
+        qPrintable(original.errorString()));
+#endif
+    writeFixture(path, contents);
+}
+
 QByteArray readBytes(const QString &path)
 {
     QFile file(path);
@@ -233,6 +343,34 @@ bool createTestSymbolicLink(
 #else
     Q_UNUSED(directory)
     return QFile::link(targetPath, linkPath);
+#endif
+}
+
+bool renameTestPath(
+    const QString &source,
+    const QString &target,
+    QString &error)
+{
+#ifdef Q_OS_WIN
+    const QString nativeSource = QDir::toNativeSeparators(source);
+    const QString nativeTarget = QDir::toNativeSeparators(target);
+    if (::MoveFileExW(
+            reinterpret_cast<LPCWSTR>(nativeSource.utf16()),
+            reinterpret_cast<LPCWSTR>(nativeTarget.utf16()),
+            MOVEFILE_WRITE_THROUGH)) {
+        error.clear();
+        return true;
+    }
+    error = QStringLiteral("Windows rename failed with system error %1")
+                .arg(::GetLastError());
+    return false;
+#else
+    if (QDir().rename(source, target)) {
+        error.clear();
+        return true;
+    }
+    error = QStringLiteral("Cannot rename the test path");
+    return false;
 #endif
 }
 
@@ -571,7 +709,7 @@ private slots:
     void failedPreviousBackupMovePartialStateRequiresRecovery();
     void failedBackupPublishPartialMoveRequiresRecovery();
     void failedSourceMovePartialStateRequiresRecovery();
-    void committedCleanupPartialRemovalReportsExactRecoveryPath();
+    void committedCleanupPartialRemovalRejectsUnverifiedRecoveryPath();
     void committedCleanupParentReplacementDoesNotReportSubstitute();
     void batchStopsAfterRecoveryRequired();
     void derivedCleanupFailurePreservesCacheAndFiles_data();
@@ -592,6 +730,26 @@ private slots:
     void concurrentLinkedRemovalJournalsAreSerialized();
     void activeLinkedSaveAndRemovalShareAthleteLease();
     void abandonedLinkedRemovalJournalBlocksNextTransaction();
+    void linkedRemovalBootstrapPreservesSharedAthleteRoot();
+    void linkedRemovalBootstrapRejectsTransactionParentSubstitute();
+    void linkedRemovalCreationRejectsJournalSubstituteBeforeAnchor();
+    void linkedRemovalReadinessRejectsNamespaceAbaSubstitute();
+    void linkedRemovalRecoveryRejectsTransactionParentSubstitute();
+    void linkedRemovalRecoveryEnumeratesAnchoredNamespaceGeneration();
+    void linkedRemovalRecoveryRejectsJournalReplacementAfterEnumeration();
+    void linkedRemovalRecoveryRejectsNamespaceInsertionAfterEnumeration();
+    void linkedRemovalRecoveryRejectsFinalNamespaceSubstitute();
+    void linkedRemovalRecoveryRejectsFinalNamespaceInsertion();
+    void linkedRemovalJournalEnumerationRejectsAbaSubstitute();
+    void linkedRemovalJournalRejectsTemporaryReplacementAfterEnumeration();
+    void linkedRemovalJournalRejectsManifestReplacementAfterEnumeration();
+    void linkedRemovalJournalRejectsControlReplacementAfterTemporaryInspection_data();
+    void linkedRemovalJournalRejectsControlReplacementAfterTemporaryInspection();
+    void linkedRemovalJournalRejectsCommitMarkerReplacementAfterEnumeration();
+    void linkedRemovalJournalRejectsCommitMarkerInsertionAfterEnumeration();
+    void recoveryPathsRejectReplacedJournalDirectory();
+    void recoveryPathsRejectCandidateReplacedAfterCollection();
+    void recoveryPathsRejectCandidateReplacedAfterFinalJournalCheck();
     void staleQLockFileRemovalGuardDoesNotPoisonReconcile_data();
     void staleQLockFileRemovalGuardDoesNotPoisonReconcile();
     void staleJournalQLockFileRemovalGuardDoesNotPoisonReconcile_data();
@@ -600,6 +758,7 @@ private slots:
     void unsafeJournalQLockFileRemovalGuardEntriesRemainRejected();
     void unsafeQLockFileRemovalGuardEntriesRemainRejected_data();
     void unsafeQLockFileRemovalGuardEntriesRemainRejected();
+    void unsafeNamespaceEntryPreventsPartialRecovery();
     void pendingLinkedSaveJournalBlocksDeletionTransaction();
     void abandonedPlanJournalBlocksLinkedTransaction_data();
     void abandonedPlanJournalBlocksLinkedTransaction();
@@ -620,6 +779,7 @@ private slots:
     void startupReportsCorruptPlanReplacementJournal();
     void prepareRestrictsExistingTransactionDirectories();
     void startupRestrictsExistingTransactionDirectories();
+    void startupRejectsSymlinkedTransactionDirectoryWithoutNamespace();
     void oversizedUnreadableJournalControlFileFailsBeforeRead_data();
     void oversizedUnreadableJournalControlFileFailsBeforeRead();
     void startupWithoutJournalAllowsSymlinkedAthleteRoot();
@@ -677,6 +837,7 @@ private slots:
     void plannedReplacementCommitsOneCompleteGeneration();
     void planBundleImportPublishesOneCompleteGeneration();
     void planBundleImportCommitsWorkoutFileAndDatabaseRow();
+    void planBundleRecoveryUsesDefaultWorkoutRoot();
     void planBundleImportStageFailurePreservesOldGeneration();
     void plannedReplacementQuiescesWorkersAndDefersRefresh();
     void plannedReplacementBlocksRefreshRestartDuringCallbacks();
@@ -696,6 +857,7 @@ private slots:
     void copyPlannedActivitiesPurgesDestroyedRowsBeforePublish();
     void shiftPlannedActivitiesPurgesDestroyedRowsBeforeReorder();
     void moveActivityReservesModelBeforeStorageCommit();
+    void moveActivityCrashRecoveryIsGenerationAtomic_data();
     void moveActivityCrashRecoveryIsGenerationAtomic();
     void moveActivityPostCommitNotificationLossIsReportedCommitted();
     void moveLinkedActivityPersistsReciprocalGeneration();
@@ -765,6 +927,13 @@ private slots:
     void plannedCopyReplacementRejectsStaleSourceWithoutDereference();
     void plannedCopyReplacementCanReplaceSameTargetPath();
     void completedRenameMovesOnlyCompletedCpx();
+    void moveActivityCopiesSharedLegacySidecars();
+    void moveActivityRejectsDerivedDestinationCollision_data();
+    void moveActivityRejectsDerivedDestinationCollision();
+    void moveActivityRejectsDerivedDestinationRace();
+    void moveActivityRejectsSharedLegacySidecarDestinationCollision_data();
+    void moveActivityRejectsSharedLegacySidecarDestinationCollision();
+    void moveActivityRejectsSharedLegacySidecarDestinationRace();
 };
 
 void TestRideCacheRemoval::
@@ -1042,9 +1211,14 @@ sourceMutationBeforeArchiveRollsBackFiles()
         fixture.cachePath(
             firstName(), QStringLiteral("notes")),
         notes);
-    setRideCacheRemovalMoveMutation(
-        fixture.activityPath(firstName()),
-        concurrentActivity);
+    const QString activityPath =
+        fixture.activityPath(firstName());
+    setRideCacheRemovalMoveAction(
+        activityPath,
+        [activityPath, concurrentActivity] {
+            replaceFixtureWhilePinned(
+                activityPath, concurrentActivity);
+        });
 
     const RideCache::RemovalResult result =
         fixture.cache->removeRideResult(item);
@@ -2604,8 +2778,12 @@ derivedMutationBeforeStagingRollsBackFiles()
         fixture.backupPath(firstName()),
         previousBackup);
     writeFixture(notesPath, notes);
-    setRideCacheRemovalMoveMutation(
-        notesPath, concurrentNotes);
+    setRideCacheRemovalMoveAction(
+        notesPath,
+        [notesPath, concurrentNotes] {
+            replaceFixtureWhilePinned(
+                notesPath, concurrentNotes);
+        });
 
     const RideCache::RemovalResult result =
         fixture.cache->removeRideResult(item);
@@ -2838,8 +3016,9 @@ failedPreviousBackupMovePartialStateRequiresRecovery()
     QCOMPARE(readBytes(previousPath), previousBackup);
     QCOMPARE(readBytes(linkedPath), previousBackup);
     QVERIFY(result.recoveryPaths.contains(sourcePath));
-    QVERIFY(result.recoveryPaths.contains(previousPath));
-    QVERIFY(!result.error.contains(
+    QVERIFY(!result.recoveryPaths.contains(previousPath));
+    QVERIFY(!result.recoveryPaths.contains(linkedPath));
+    QVERIFY(result.error.contains(
         QStringLiteral("uncertain final location")));
     QVERIFY(recoveryFilesFor(
         backupPath,
@@ -2891,10 +3070,11 @@ failedBackupPublishPartialMoveRequiresRecovery()
         readBytes(previousRecovery.constFirst()),
         previousBackup);
     QVERIFY(result.recoveryPaths.contains(sourcePath));
-    QVERIFY(result.recoveryPaths.contains(backupPath));
+    QVERIFY(!result.recoveryPaths.contains(backupPath));
+    QVERIFY(!result.recoveryPaths.contains(linkedPath));
     QVERIFY(result.recoveryPaths.contains(
         previousRecovery.constFirst()));
-    QVERIFY(!result.error.contains(
+    QVERIFY(result.error.contains(
         QStringLiteral("uncertain final location")));
     QVERIFY(recoveryFilesFor(
         backupPath,
@@ -2949,16 +3129,17 @@ failedSourceMovePartialStateRequiresRecovery()
     QCOMPARE(
         readBytes(previousRecovery.constFirst()),
         previousBackup);
-    QVERIFY(result.recoveryPaths.contains(tombstonePath));
+    QVERIFY(!result.recoveryPaths.contains(tombstonePath));
+    QVERIFY(!result.recoveryPaths.contains(linkedPath));
     QVERIFY(result.recoveryPaths.contains(backupPath));
     QVERIFY(result.recoveryPaths.contains(
         previousRecovery.constFirst()));
-    QVERIFY(!result.error.contains(
+    QVERIFY(result.error.contains(
         QStringLiteral("uncertain final location")));
 }
 
 void TestRideCacheRemoval::
-committedCleanupPartialRemovalReportsExactRecoveryPath()
+committedCleanupPartialRemovalRejectsUnverifiedRecoveryPath()
 {
 #ifndef Q_OS_UNIX
     QSKIP("Exact quarantine recovery paths require Unix removal semantics");
@@ -2998,8 +3179,13 @@ committedCleanupPartialRemovalReportsExactRecoveryPath()
         linkedPath.size() - QStringLiteral(".partial-link").size());
     QCOMPARE(readBytes(quarantinePath), notes);
     QCOMPARE(readBytes(linkedPath), notes);
-    QVERIFY(result.recoveryPaths.contains(quarantinePath));
+    QVERIFY(!result.recoveryPaths.contains(quarantinePath));
+    QVERIFY(!result.recoveryPaths.contains(linkedPath));
     QVERIFY(!result.recoveryPaths.contains(notesPath));
+    QCOMPARE(result.recoveryPaths.size(), 1);
+    QVERIFY(QFileInfo(result.recoveryPaths.constFirst()).isDir());
+    QVERIFY(result.error.contains(
+        QStringLiteral("destination changed after publication")));
     QCOMPARE(readBytes(fixture.backupPath(firstName())), activity);
     QVERIFY(!QFileInfo::exists(sourcePath));
 }
@@ -3385,6 +3571,1031 @@ abandonedLinkedRemovalJournalBlocksNextTransaction()
 }
 
 void TestRideCacheRemoval::
+linkedRemovalBootstrapPreservesSharedAthleteRoot()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Unix directory permissions are required");
+#else
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    writeFixture(sourcePath, QByteArray("source"));
+
+    const QFileDevice::Permissions sharedPermissions =
+        QFileDevice::ReadOwner | QFileDevice::WriteOwner
+        | QFileDevice::ExeOwner | QFileDevice::ReadGroup
+        | QFileDevice::WriteGroup | QFileDevice::ExeGroup
+        | QFileDevice::ReadOther | QFileDevice::ExeOther;
+    QVERIFY(QFile::setPermissions(
+        fixture.temporary.path(), sharedPermissions));
+    QString error;
+    AnchoredFileSystem::DirectoryAnchor sharedRoot;
+    QVERIFY2(
+        AnchoredFileSystem::DirectoryAnchor::open(
+            fixture.temporary.path(), sharedRoot, error),
+        qPrintable(error));
+    if (!AnchoredFileSystem::validateCurrentUserControlledDirectory(
+            sharedRoot, error)) {
+        QSKIP(qPrintable(error));
+    }
+
+    error.clear();
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QFileDevice::Permissions rootPermissions =
+        QFileInfo(fixture.temporary.path()).permissions();
+    QVERIFY(rootPermissions.testFlag(QFileDevice::ReadOwner));
+    QVERIFY(rootPermissions.testFlag(QFileDevice::WriteOwner));
+    QVERIFY(rootPermissions.testFlag(QFileDevice::ExeOwner));
+    QVERIFY(rootPermissions.testFlag(QFileDevice::ReadGroup));
+    QVERIFY(rootPermissions.testFlag(QFileDevice::WriteGroup));
+    QVERIFY(rootPermissions.testFlag(QFileDevice::ExeGroup));
+    QVERIFY(rootPermissions.testFlag(QFileDevice::ReadOther));
+    QVERIFY(!rootPermissions.testFlag(QFileDevice::WriteOther));
+    QVERIFY(rootPermissions.testFlag(QFileDevice::ExeOther));
+
+    const QFileDevice::Permissions nonOwnerPermissions =
+        QFileDevice::ReadGroup | QFileDevice::WriteGroup
+        | QFileDevice::ExeGroup | QFileDevice::ReadOther
+        | QFileDevice::WriteOther | QFileDevice::ExeOther;
+    const QString transactionsPath =
+        QDir(fixture.temporary.path()).filePath(
+            QStringLiteral(".gc-transactions"));
+    const QString namespacePath = QDir(transactionsPath).filePath(
+        QStringLiteral("linked-removal"));
+    for (const QString &path :
+         {transactionsPath, namespacePath, journal->directoryPath()}) {
+        const QFileDevice::Permissions permissions =
+            QFileInfo(path).permissions();
+        QCOMPARE(
+            permissions & nonOwnerPermissions,
+            QFileDevice::Permissions());
+        QVERIFY(permissions.testFlag(QFileDevice::ReadOwner));
+        QVERIFY(permissions.testFlag(QFileDevice::WriteOwner));
+        QVERIFY(permissions.testFlag(QFileDevice::ExeOwner));
+    }
+
+    QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+#endif
+}
+
+void TestRideCacheRemoval::
+linkedRemovalBootstrapRejectsTransactionParentSubstitute()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    writeFixture(sourcePath, QByteArray("source"));
+
+    const QString transactionsPath = QDir(fixture.temporary.path()).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString displacedPath =
+        transactionsPath + QStringLiteral(".displaced");
+    const QString sentinelPath = QDir(transactionsPath).filePath(
+        QStringLiteral("sentinel"));
+    const QByteArray sentinelContents("substitute");
+    bool actionReached = false;
+    bool parentReplaced = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral(
+            "linked-removal-transactions-directory-ready"),
+        [&] {
+            actionReached = true;
+            if (!QDir().rename(transactionsPath, displacedPath)) return;
+            if (!QDir().mkpath(transactionsPath)) return;
+            writeFixture(sentinelPath, sentinelContents);
+            parentReplaced = true;
+        });
+
+    QString error;
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+
+    QVERIFY(actionReached);
+    if (!parentReplaced) {
+#ifdef Q_OS_WIN
+        QVERIFY2(journal, qPrintable(error));
+        QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+        return;
+#else
+        QFAIL("The transaction parent could not be replaced");
+#endif
+    }
+    QVERIFY2(
+        !journal,
+        "Linked-removal preparation accepted a substituted transaction parent");
+    QCOMPARE(readBytes(sentinelPath), sentinelContents);
+    QVERIFY(!QFileInfo::exists(
+        QDir(transactionsPath).filePath(
+            QStringLiteral("linked-removal"))));
+}
+
+void TestRideCacheRemoval::
+linkedRemovalCreationRejectsJournalSubstituteBeforeAnchor()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    writeFixture(sourcePath, QByteArray("source"));
+
+    const QString namespacePath = QDir(fixture.temporary.path()).filePath(
+        QStringLiteral(".gc-transactions/linked-removal"));
+    QString journalPath;
+    QString displacedPath;
+    QString sentinelPath;
+    const QByteArray sentinelContents("substitute");
+    bool actionReached = false;
+    bool journalReplaced = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("linked-removal-journal-path-created"),
+        [&] {
+            actionReached = true;
+            const QStringList journals = QDir(namespacePath).entryList(
+                QDir::Dirs | QDir::NoDotAndDotDot | QDir::Hidden,
+                QDir::Name);
+            if (journals.size() != 1) return;
+            journalPath = QDir(namespacePath).filePath(journals.constFirst());
+            displacedPath = journalPath + QStringLiteral(".displaced");
+            if (!QDir().rename(journalPath, displacedPath)) return;
+            if (!QDir().mkpath(journalPath)) return;
+            sentinelPath = QDir(journalPath).filePath(
+                QStringLiteral("sentinel"));
+            writeFixture(sentinelPath, sentinelContents);
+            journalReplaced = true;
+        });
+
+    QString error;
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+
+    QVERIFY(actionReached);
+    if (!journalReplaced) {
+#ifdef Q_OS_WIN
+        QVERIFY2(journal, qPrintable(error));
+        QVERIFY2(journal->cleanupAfterRollback(error), qPrintable(error));
+        return;
+#else
+        QFAIL("The new journal directory could not be replaced");
+#endif
+    }
+    QVERIFY2(
+        !journal,
+        "Linked-removal preparation accepted a substituted journal directory");
+    QCOMPARE(readBytes(sentinelPath), sentinelContents);
+    QVERIFY(!QFileInfo::exists(
+        QDir(journalPath).filePath(QStringLiteral("manifest.json"))));
+    QVERIFY(QFileInfo(displacedPath).isDir());
+}
+
+void TestRideCacheRemoval::
+linkedRemovalReadinessRejectsNamespaceAbaSubstitute()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString firstSource = fixture.activityPath(firstName());
+    const QString secondSource = fixture.activityPath(secondName());
+    writeFixture(firstSource, QByteArray("first source"));
+    writeFixture(secondSource, QByteArray("second source"));
+
+    QString error;
+    std::shared_ptr<LinkedActivityRemoval::Journal> abandoned =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), firstSource,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(abandoned, qPrintable(error));
+    const QString abandonedPath = abandoned->directoryPath();
+    abandoned.reset();
+
+    const QString transactionsPath = QDir(fixture.temporary.path()).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString displacedPath =
+        transactionsPath + QStringLiteral(".readiness-aba");
+    bool beforeReached = false;
+    bool afterReached = false;
+    bool parentReplaced = false;
+    bool parentRestored = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("linked-removal-before-namespace-enumeration"),
+        [&] {
+            beforeReached = true;
+            setRideCacheRemovalTransitionAction(
+                QByteArrayLiteral(
+                    "linked-removal-after-namespace-enumeration"),
+                [&] {
+                    afterReached = true;
+                    if (!parentReplaced) return;
+                    if (!QDir(transactionsPath).removeRecursively()) return;
+                    parentRestored = QDir().rename(
+                        displacedPath, transactionsPath);
+                });
+            if (!QDir().rename(transactionsPath, displacedPath)) return;
+            if (!QDir().mkpath(
+                    QDir(transactionsPath).filePath(
+                        QStringLiteral("linked-removal")))) {
+                return;
+            }
+            parentReplaced = true;
+        });
+
+    const std::shared_ptr<LinkedActivityRemoval::Journal> next =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), secondSource,
+             fixture.backupPath(secondName()), {}, {}},
+            error);
+
+    QVERIFY(beforeReached);
+    QVERIFY(afterReached);
+    if (parentReplaced) QVERIFY(parentRestored);
+    QVERIFY2(
+        !next,
+        "Linked-removal readiness ignored an abandoned anchored journal");
+    QVERIFY(QFileInfo::exists(abandonedPath));
+}
+
+void TestRideCacheRemoval::
+linkedRemovalRecoveryRejectsTransactionParentSubstitute()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QByteArray sourceContents("source");
+    writeFixture(sourcePath, sourceContents);
+
+    QString error;
+    std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    journal.reset();
+
+    const QString transactionsPath = QDir(fixture.temporary.path()).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString displacedPath =
+        transactionsPath + QStringLiteral(".recovery-displaced");
+    const QString sentinelPath = QDir(transactionsPath).filePath(
+        QStringLiteral("sentinel"));
+    const QByteArray sentinelContents("substitute");
+    bool actionReached = false;
+    bool parentReplaced = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("linked-removal-recovery-namespace-ready"),
+        [&] {
+            actionReached = true;
+            if (!QDir().rename(transactionsPath, displacedPath)) return;
+            if (!QDir().mkpath(transactionsPath)) return;
+            writeFixture(sentinelPath, sentinelContents);
+            parentReplaced = true;
+        });
+
+    const bool recovered =
+        LinkedActivityRemoval::Journal::reconcileAll(
+            fixture.temporary.path(), error);
+
+    QVERIFY(actionReached);
+    if (!parentReplaced) {
+#ifdef Q_OS_WIN
+        QVERIFY2(recovered, qPrintable(error));
+        QVERIFY(!QFileInfo::exists(journalPath));
+        QCOMPARE(readBytes(sourcePath), sourceContents);
+        return;
+#else
+        QFAIL("The recovery transaction parent could not be replaced");
+#endif
+    }
+    QVERIFY2(
+        !recovered,
+        "Linked-removal recovery accepted a substituted transaction parent");
+    QCOMPARE(readBytes(sentinelPath), sentinelContents);
+    QVERIFY(QFileInfo::exists(
+        QDir(displacedPath).filePath(
+            QStringLiteral("linked-removal/")
+            + QFileInfo(journalPath).fileName())));
+    QCOMPARE(readBytes(sourcePath), sourceContents);
+}
+
+void TestRideCacheRemoval::
+linkedRemovalRecoveryEnumeratesAnchoredNamespaceGeneration()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QByteArray sourceContents("source");
+    writeFixture(sourcePath, sourceContents);
+
+    QString error;
+    std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    journal.reset();
+
+    const QString transactionsPath = QDir(fixture.temporary.path()).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString displacedPath =
+        transactionsPath + QStringLiteral(".recovery-aba");
+    bool beforeReached = false;
+    bool afterReached = false;
+    bool parentReplaced = false;
+    bool parentRestored = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral(
+            "linked-removal-recovery-before-namespace-enumeration"),
+        [&] {
+            beforeReached = true;
+            setRideCacheRemovalTransitionAction(
+                QByteArrayLiteral(
+                    "linked-removal-recovery-after-namespace-enumeration"),
+                [&] {
+                    afterReached = true;
+                    if (!parentReplaced) return;
+                    if (!QDir(transactionsPath).removeRecursively()) return;
+                    parentRestored = QDir().rename(
+                        displacedPath, transactionsPath);
+                });
+            if (!QDir().rename(transactionsPath, displacedPath)) return;
+            if (!QDir().mkpath(
+                    QDir(transactionsPath).filePath(
+                        QStringLiteral("linked-removal")))) {
+                return;
+            }
+            parentReplaced = true;
+        });
+
+    const bool recovered =
+        LinkedActivityRemoval::Journal::reconcileAll(
+            fixture.temporary.path(), error);
+
+    QVERIFY(beforeReached);
+    QVERIFY(afterReached);
+    if (parentReplaced) QVERIFY(parentRestored);
+    QVERIFY2(recovered, qPrintable(error));
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QCOMPARE(readBytes(sourcePath), sourceContents);
+}
+
+void TestRideCacheRemoval::
+linkedRemovalRecoveryRejectsJournalReplacementAfterEnumeration()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QByteArray sourceContents("source");
+    writeFixture(sourcePath, sourceContents);
+
+    QString error;
+    std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString displacedPath =
+        journalPath + QStringLiteral(".post-enumeration");
+    const QString displacedManifest = QDir(displacedPath).filePath(
+        QStringLiteral("manifest.json"));
+    journal.reset();
+
+    bool hookReached = false;
+    bool journalReplaced = false;
+    QString replacementError;
+#ifdef Q_OS_UNIX
+    QFileDevice::Permissions replacementPermissions;
+#endif
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral(
+            "linked-removal-recovery-after-namespace-enumeration"),
+        [&] {
+            hookReached = true;
+            if (!renameTestPath(
+                    journalPath, displacedPath,
+                    replacementError)) {
+                return;
+            }
+            if (!QDir().mkdir(journalPath)) {
+                replacementError = QStringLiteral(
+                    "Cannot create the replacement journal directory");
+                return;
+            }
+#ifdef Q_OS_UNIX
+            replacementPermissions = QFileInfo(journalPath).permissions();
+#endif
+            journalReplaced = true;
+        });
+
+    const bool recovered =
+        LinkedActivityRemoval::Journal::reconcileAll(
+            fixture.temporary.path(), error);
+
+    QVERIFY(hookReached);
+    QVERIFY2(journalReplaced, qPrintable(replacementError));
+    QVERIFY2(
+        !recovered,
+        "Recovery accepted a journal replaced after namespace enumeration");
+    QVERIFY(QFileInfo::exists(displacedManifest));
+    QVERIFY(QFileInfo(journalPath).isDir());
+#ifdef Q_OS_UNIX
+    QCOMPARE(
+        QFileInfo(journalPath).permissions(),
+        replacementPermissions);
+#endif
+    QCOMPARE(readBytes(sourcePath), sourceContents);
+}
+
+void TestRideCacheRemoval::
+linkedRemovalRecoveryRejectsNamespaceInsertionAfterEnumeration()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString root = fixture.temporary.path();
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QByteArray sourceContents("source");
+    const QByteArray unsafeContents("retain me");
+    writeFixture(sourcePath, sourceContents);
+
+    QString error;
+    std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {root, sourcePath, fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString unsafePath = QDir(QFileInfo(journalPath).absolutePath())
+        .filePath(QStringLiteral("zz-inserted-after-enumeration"));
+    journal.reset();
+
+    bool hookReached = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral(
+            "linked-removal-recovery-after-namespace-enumeration"),
+        [&] {
+            hookReached = true;
+            writeFixture(unsafePath, unsafeContents);
+        });
+
+    const bool recovered =
+        LinkedActivityRemoval::Journal::reconcileAll(root, error);
+
+    QVERIFY(hookReached);
+    QVERIFY(!recovered);
+    QVERIFY2(
+        QFileInfo::exists(journalPath),
+        "Recovery mutated a journal before validating the namespace snapshot");
+    QCOMPARE(readBytes(sourcePath), sourceContents);
+    QCOMPARE(readBytes(unsafePath), unsafeContents);
+}
+
+void TestRideCacheRemoval::
+linkedRemovalRecoveryRejectsFinalNamespaceSubstitute()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QByteArray sourceContents("source");
+    writeFixture(sourcePath, sourceContents);
+
+    QString error;
+    std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    journal.reset();
+
+    const QString transactionsPath = QDir(fixture.temporary.path()).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString displacedPath =
+        transactionsPath + QStringLiteral(".final-substitute");
+    const QString sentinelPath = QDir(transactionsPath).filePath(
+        QStringLiteral("sentinel"));
+    const QByteArray sentinelContents("substitute");
+    bool hookReached = false;
+    bool parentReplaced = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral(
+            "linked-removal-recovery-final-namespace-enumerated"),
+        [&] {
+            hookReached = true;
+            if (!QDir().rename(transactionsPath, displacedPath)) return;
+            if (!QDir().mkpath(transactionsPath)) return;
+            writeFixture(sentinelPath, sentinelContents);
+            parentReplaced = true;
+        });
+
+    const bool recovered =
+        LinkedActivityRemoval::Journal::reconcileAll(
+            fixture.temporary.path(), error);
+
+    QVERIFY(hookReached);
+    if (!parentReplaced) {
+#ifdef Q_OS_WIN
+        QVERIFY2(recovered, qPrintable(error));
+        QCOMPARE(readBytes(sourcePath), sourceContents);
+        return;
+#else
+        QFAIL("The final transaction namespace could not be replaced");
+#endif
+    }
+    QVERIFY2(
+        !recovered,
+        "Recovery accepted a final transaction namespace substitute");
+    QCOMPARE(readBytes(sentinelPath), sentinelContents);
+    QVERIFY(QFileInfo(displacedPath).isDir());
+    QCOMPARE(readBytes(sourcePath), sourceContents);
+}
+
+void TestRideCacheRemoval::
+linkedRemovalRecoveryRejectsFinalNamespaceInsertion()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString root = fixture.temporary.path();
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QByteArray sourceContents("source");
+    const QByteArray unsafeContents("retain me");
+    writeFixture(sourcePath, sourceContents);
+
+    QString error;
+    std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {root, sourcePath, fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString unsafePath = QDir(QFileInfo(journal->directoryPath())
+                                        .absolutePath())
+        .filePath(QStringLiteral("zz-inserted-after-final-enumeration"));
+    journal.reset();
+
+    bool hookReached = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral(
+            "linked-removal-recovery-final-namespace-enumerated"),
+        [&] {
+            hookReached = true;
+            writeFixture(unsafePath, unsafeContents);
+        });
+
+    const bool recovered =
+        LinkedActivityRemoval::Journal::reconcileAll(root, error);
+
+    QVERIFY(hookReached);
+    QVERIFY2(!recovered, "Recovery accepted a stale final namespace snapshot");
+    QCOMPARE(readBytes(sourcePath), sourceContents);
+    QCOMPARE(readBytes(unsafePath), unsafeContents);
+}
+
+void TestRideCacheRemoval::
+linkedRemovalJournalEnumerationRejectsAbaSubstitute()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    writeFixture(sourcePath, QByteArray("source"));
+
+    QString error;
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString manifestPath = QDir(journalPath).filePath(
+        QStringLiteral("manifest.json"));
+    const QString unknownPath = QDir(journalPath).filePath(
+        QStringLiteral("unknown-entry"));
+    const QByteArray unknownContents("retain me");
+    writeFixture(unknownPath, unknownContents);
+
+    const QString displacedPath =
+        journalPath + QStringLiteral(".enumeration-aba");
+    bool beforeReached = false;
+    bool afterReached = false;
+    bool journalReplaced = false;
+    bool journalRestored = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("journal-before-directory-enumeration"),
+        [&] {
+            beforeReached = true;
+            setRideCacheRemovalTransitionAction(
+                QByteArrayLiteral("journal-after-directory-enumeration"),
+                [&] {
+                    afterReached = true;
+                    if (!journalReplaced) return;
+                    if (!QDir().rmdir(journalPath)) return;
+                    journalRestored = QDir().rename(
+                        displacedPath, journalPath);
+                });
+            if (!QDir().rename(journalPath, displacedPath)) return;
+            if (!QDir().mkdir(journalPath)) return;
+            journalReplaced = true;
+        });
+
+    QVERIFY(!journal->cleanupAfterRollback(error));
+
+    QVERIFY(beforeReached);
+    QVERIFY(afterReached);
+    if (journalReplaced) QVERIFY(journalRestored);
+    QVERIFY(QFileInfo::exists(manifestPath));
+    QCOMPARE(readBytes(unknownPath), unknownContents);
+}
+
+void TestRideCacheRemoval::
+linkedRemovalJournalRejectsTemporaryReplacementAfterEnumeration()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    writeFixture(sourcePath, QByteArray("source"));
+
+    QString error;
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString manifestPath = QDir(journalPath).filePath(
+        QStringLiteral("manifest.json"));
+    const QString temporaryPath = QDir(journalPath).filePath(
+        QStringLiteral(".manifest.json.ABC.tmp"));
+    const QString retainedPath = QDir(journalPath).filePath(
+        QStringLiteral("retained-temporary"));
+    const QByteArray originalContents("original temporary");
+    const QByteArray replacementContents("replacement temporary");
+    writeFixture(temporaryPath, originalContents);
+
+    bool hookReached = false;
+    bool temporaryReplaced = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("journal-after-directory-enumeration"),
+        [&] {
+            hookReached = true;
+            if (!QFile::rename(temporaryPath, retainedPath)) return;
+            writeFixture(temporaryPath, replacementContents);
+            temporaryReplaced = true;
+        });
+
+    QVERIFY(!journal->cleanupAfterRollback(error));
+
+    QVERIFY(hookReached);
+    QVERIFY(temporaryReplaced);
+    QVERIFY(QFileInfo::exists(manifestPath));
+    QCOMPARE(readBytes(retainedPath), originalContents);
+    QCOMPARE(readBytes(temporaryPath), replacementContents);
+}
+
+void TestRideCacheRemoval::
+linkedRemovalJournalRejectsManifestReplacementAfterEnumeration()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QByteArray sourceContents("source");
+    writeFixture(sourcePath, sourceContents);
+
+    QString error;
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString manifestPath = QDir(journal->directoryPath()).filePath(
+        QStringLiteral("manifest.json"));
+    const QString retainedPath = QDir(journal->directoryPath()).filePath(
+        QStringLiteral("manifest.retained"));
+    const QByteArray manifestContents = readBytes(manifestPath);
+    QVERIFY(!manifestContents.isEmpty());
+
+    bool hookReached = false;
+    bool manifestReplaced = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("journal-after-directory-enumeration"),
+        [&] {
+            hookReached = true;
+            if (!QFile::rename(manifestPath, retainedPath)) return;
+            writeFixture(manifestPath, manifestContents);
+            manifestReplaced = true;
+        });
+
+    const bool cleaned = journal->cleanupAfterRollback(error);
+    QVERIFY(hookReached);
+    if (!manifestReplaced) {
+#ifdef Q_OS_WIN
+        QVERIFY2(cleaned, qPrintable(error));
+        return;
+#else
+        QFAIL("The transaction manifest could not be replaced");
+#endif
+    }
+    QVERIFY(!cleaned);
+    QCOMPARE(readBytes(retainedPath), manifestContents);
+    QCOMPARE(readBytes(manifestPath), manifestContents);
+    QCOMPARE(readBytes(sourcePath), sourceContents);
+}
+
+void TestRideCacheRemoval::
+linkedRemovalJournalRejectsControlReplacementAfterTemporaryInspection_data()
+{
+    QTest::addColumn<QString>("controlName");
+    QTest::newRow("manifest") << QStringLiteral("manifest.json");
+    QTest::newRow("peer") << QStringLiteral("peer.old");
+}
+
+void TestRideCacheRemoval::
+linkedRemovalJournalRejectsControlReplacementAfterTemporaryInspection()
+{
+    QFETCH(QString, controlName);
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QString peerPath = fixture.plannedActivityPath(secondName());
+    const QByteArray sourceContents("source");
+    const QByteArray peerContents("peer");
+    writeFixture(sourcePath, sourceContents);
+    writeFixture(peerPath, peerContents);
+
+    QString error;
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), peerPath, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString controlPath = QDir(journal->directoryPath()).filePath(
+        controlName);
+    const QString retainedPath = fixture.temporary.filePath(
+        controlName + QStringLiteral(".retained"));
+    const QString temporaryPath = QDir(journal->directoryPath()).filePath(
+        QStringLiteral(".manifest.json.controlcheck.tmp"));
+    const QByteArray controlContents = readBytes(controlPath);
+    QVERIFY(!controlContents.isEmpty());
+    writeFixture(temporaryPath, QByteArrayLiteral("temporary control data"));
+
+    bool hookReached = false;
+    bool controlReplaced = false;
+    QString renameError;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("journal-temporary-files-inspected"),
+        [&] {
+            hookReached = true;
+            if (!renameTestPath(
+                    controlPath, retainedPath, renameError)) {
+                return;
+            }
+            writeFixture(controlPath, controlContents);
+            controlReplaced = true;
+        });
+
+    const bool cleaned = journal->cleanupAfterRollback(error);
+
+    QVERIFY(hookReached);
+    QVERIFY2(controlReplaced, qPrintable(renameError));
+    QVERIFY2(!cleaned, "Cleanup accepted a substituted journal control file");
+    QVERIFY2(
+        QFileInfo::exists(temporaryPath),
+        "Cleanup mutated journal state after a control-file substitution");
+    QCOMPARE(readBytes(controlPath), controlContents);
+    QCOMPARE(readBytes(retainedPath), controlContents);
+    QCOMPARE(readBytes(sourcePath), sourceContents);
+    QCOMPARE(readBytes(peerPath), peerContents);
+}
+
+void TestRideCacheRemoval::
+linkedRemovalJournalRejectsCommitMarkerReplacementAfterEnumeration()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QByteArray sourceContents("source");
+    writeFixture(sourcePath, sourceContents);
+
+    QString error;
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString markerPath = QDir(journal->directoryPath()).filePath(
+        QStringLiteral("COMMITTED"));
+    const QString retainedPath = fixture.temporary.filePath(
+        QStringLiteral("retained-commit-marker"));
+    const QString temporaryPath = QDir(journal->directoryPath()).filePath(
+        QStringLiteral(".manifest.json.commitmarker.tmp"));
+    const QByteArray markerContents =
+        journal->transactionId().toLatin1() + '\n';
+    writeFixture(markerPath, markerContents);
+    writeFixture(temporaryPath, QByteArrayLiteral("temporary control data"));
+
+    bool hookReached = false;
+    bool markerReplaced = false;
+    QString renameError;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("journal-commit-marker-observation-published"),
+        [&] {
+            hookReached = true;
+            if (!renameTestPath(markerPath, retainedPath, renameError)) return;
+            writeFixture(markerPath, markerContents);
+            markerReplaced = true;
+        });
+
+    const bool cleaned = journal->cleanupAfterRollback(error);
+
+    QVERIFY(hookReached);
+    QVERIFY2(markerReplaced, qPrintable(renameError));
+    QVERIFY(!cleaned);
+    QVERIFY2(
+        error.contains(QStringLiteral("changed"), Qt::CaseInsensitive)
+            || error.contains(
+                QStringLiteral("replaced"), Qt::CaseInsensitive),
+        qPrintable(error));
+    QCOMPARE(readBytes(retainedPath), markerContents);
+    QCOMPARE(readBytes(markerPath), markerContents);
+    QCOMPARE(readBytes(sourcePath), sourceContents);
+}
+
+void TestRideCacheRemoval::
+linkedRemovalJournalRejectsCommitMarkerInsertionAfterEnumeration()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QByteArray sourceContents("source");
+    writeFixture(sourcePath, sourceContents);
+
+    QString error;
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString markerPath = QDir(journal->directoryPath()).filePath(
+        QStringLiteral("COMMITTED"));
+    const QByteArray markerContents =
+        journal->transactionId().toLatin1() + '\n';
+
+    bool hookReached = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("journal-after-directory-enumeration"),
+        [&] {
+            hookReached = true;
+            writeFixture(markerPath, markerContents);
+        });
+
+    const bool cleaned = journal->cleanupAfterRollback(error);
+
+    QVERIFY(hookReached);
+    QVERIFY(!cleaned);
+    QVERIFY2(
+        error.contains(QStringLiteral("appeared"), Qt::CaseInsensitive),
+        qPrintable(error));
+    QCOMPARE(readBytes(markerPath), markerContents);
+    QCOMPARE(readBytes(sourcePath), sourceContents);
+}
+
+void TestRideCacheRemoval::
+recoveryPathsRejectReplacedJournalDirectory()
+{
+#ifndef Q_OS_UNIX
+    QSKIP("Live journal directory replacement is blocked on Windows");
+#else
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString sourcePath = fixture.activityPath(firstName());
+    writeFixture(sourcePath, QByteArray("source"));
+
+    QString error;
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    const QString displacedPath =
+        journalPath + QStringLiteral(".displaced");
+    bool hookReached = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("journal-recovery-manifest-verified"),
+        [&] {
+            hookReached = true;
+            QVERIFY(QDir().rename(journalPath, displacedPath));
+            QVERIFY(QDir().mkpath(journalPath));
+            writeFixture(
+                QDir(journalPath).filePath(
+                    QStringLiteral("manifest.json")),
+                QByteArray("substitute manifest"));
+        });
+
+    const QStringList recovery = journal->recoveryPaths();
+
+    QVERIFY(hookReached);
+    QVERIFY2(!recovery.contains(journalPath),
+             "A replacement journal directory was reported for recovery");
+#endif
+}
+
+void TestRideCacheRemoval::
+recoveryPathsRejectCandidateReplacedAfterCollection()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QByteArray sourceContents("source");
+    const QString sourcePath = fixture.activityPath(firstName());
+    writeFixture(sourcePath, sourceContents);
+
+    QString error;
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString firstCandidate = journal->backupStagingPath();
+    const QString secondCandidate = journal->sourceTombstonePath();
+    const QString displaced =
+        firstCandidate + QStringLiteral(".displaced");
+    writeFixture(firstCandidate, sourceContents);
+    writeFixture(secondCandidate, sourceContents);
+    bool hookReached = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("journal-recovery-candidates-collected"),
+        [&] {
+            hookReached = true;
+            QVERIFY(QFile::rename(firstCandidate, displaced));
+            writeFixture(firstCandidate, QByteArray("other!"));
+        });
+
+    const QStringList recovery = journal->recoveryPaths();
+
+    QVERIFY(hookReached);
+    QVERIFY2(!recovery.contains(firstCandidate),
+             "A replaced recovery candidate remained in the result");
+    QVERIFY(recovery.contains(secondCandidate));
+    QCOMPARE(readBytes(displaced), sourceContents);
+    QCOMPARE(readBytes(firstCandidate), QByteArray("other!"));
+}
+
+void TestRideCacheRemoval::
+recoveryPathsRejectCandidateReplacedAfterFinalJournalCheck()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QByteArray sourceContents("source");
+    const QString sourcePath = fixture.activityPath(firstName());
+    writeFixture(sourcePath, sourceContents);
+
+    QString error;
+    const std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {fixture.temporary.path(), sourcePath,
+             fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString candidate = journal->backupStagingPath();
+    const QString displaced = candidate + QStringLiteral(".displaced");
+    writeFixture(candidate, sourceContents);
+    bool hookReached = false;
+    setRideCacheRemovalTransitionAction(
+        QByteArrayLiteral("journal-recovery-final-journal-verified"),
+        [&] {
+            hookReached = true;
+            QVERIFY(QFile::rename(candidate, displaced));
+            writeFixture(candidate, QByteArray("other!"));
+        });
+
+    const QStringList recovery = journal->recoveryPaths();
+
+    QVERIFY(hookReached);
+    QVERIFY2(!recovery.contains(candidate),
+             "A candidate replaced after the journal check was returned");
+    QCOMPARE(readBytes(displaced), sourceContents);
+    QCOMPARE(readBytes(candidate), QByteArray("other!"));
+}
+
+void TestRideCacheRemoval::
 staleQLockFileRemovalGuardDoesNotPoisonReconcile_data()
 {
     QTest::addColumn<int>("suffixCount");
@@ -3399,9 +4610,12 @@ staleQLockFileRemovalGuardDoesNotPoisonReconcile()
     Fixture fixture;
     QVERIFY(fixture.initialize());
     const QString root = fixture.temporary.path();
-    const QString namespacePath = QDir(root).filePath(
-        QStringLiteral(".gc-transactions/linked-removal"));
-    QVERIFY(QDir().mkpath(namespacePath));
+    const QString transactionsPath = QDir(root).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString namespacePath = QDir(transactionsPath).filePath(
+        QStringLiteral("linked-removal"));
+    QVERIFY(createOwnedFixtureDirectory(transactionsPath));
+    QVERIFY(createOwnedFixtureDirectory(namespacePath));
     writeFixture(
         QDir(namespacePath).filePath(
             qlockRemovalGuardName(suffixCount)),
@@ -3583,9 +4797,12 @@ unsafeQLockFileRemovalGuardEntriesRemainRejected()
     Fixture fixture;
     QVERIFY(fixture.initialize());
     const QString root = fixture.temporary.path();
-    const QString namespacePath = QDir(root).filePath(
-        QStringLiteral(".gc-transactions/linked-removal"));
-    QVERIFY(QDir().mkpath(namespacePath));
+    const QString transactionsPath = QDir(root).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString namespacePath = QDir(transactionsPath).filePath(
+        QStringLiteral("linked-removal"));
+    QVERIFY(createOwnedFixtureDirectory(transactionsPath));
+    QVERIFY(createOwnedFixtureDirectory(namespacePath));
     const QString entryPath = QDir(namespacePath).filePath(entryName);
 
     if (kind == JournalNamespaceEntryKind::Directory) {
@@ -4229,6 +5446,36 @@ commitMarkerReadRejectsMarkerSubstitute()
     QCOMPARE(readBytes(fixture.backupPath(firstName())), sourceContents);
 }
 
+void TestRideCacheRemoval::unsafeNamespaceEntryPreventsPartialRecovery()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    const QString root = fixture.temporary.path();
+    const QString sourcePath = fixture.activityPath(firstName());
+    const QByteArray sourceContents("source");
+    writeFixture(sourcePath, sourceContents);
+
+    QString error;
+    std::shared_ptr<LinkedActivityRemoval::Journal> journal =
+        LinkedActivityRemoval::Journal::prepare(
+            {root, sourcePath, fixture.backupPath(firstName()), {}, {}},
+            error);
+    QVERIFY2(journal, qPrintable(error));
+    const QString journalPath = journal->directoryPath();
+    journal.reset();
+
+    const QString unsafePath = QDir(QFileInfo(journalPath).absolutePath())
+        .filePath(QStringLiteral("zz-unsafe-entry"));
+    const QByteArray unsafeContents("retain me");
+    writeFixture(unsafePath, unsafeContents);
+
+    QVERIFY(!LinkedActivityRemoval::Journal::reconcileAll(root, error));
+    QVERIFY2(!error.isEmpty(), "Unsafe namespace entry had no error");
+    QVERIFY(QFileInfo::exists(journalPath));
+    QCOMPARE(readBytes(sourcePath), sourceContents);
+    QCOMPARE(readBytes(unsafePath), unsafeContents);
+}
+
 void TestRideCacheRemoval::
 pendingLinkedSaveJournalBlocksDeletionTransaction()
 {
@@ -4239,10 +5486,15 @@ pendingLinkedSaveJournalBlocksDeletionTransaction()
     writeFixture(sourcePath, QByteArray("source"));
     writeFixture(peerPath, QByteArray("peer"));
 
-    const QString pending = QDir(fixture.temporary.path()).filePath(
-        QStringLiteral(".gc-transactions/linked-save/")
-        + QUuid::createUuid().toString(QUuid::WithoutBraces).toLower());
-    QVERIFY(QDir().mkpath(pending));
+    const QString transactionsPath = QDir(fixture.temporary.path()).filePath(
+        QStringLiteral(".gc-transactions"));
+    const QString namespacePath = QDir(transactionsPath).filePath(
+        QStringLiteral("linked-save"));
+    const QString pending = QDir(namespacePath).filePath(
+        QUuid::createUuid().toString(QUuid::WithoutBraces).toLower());
+    QVERIFY(createOwnedFixtureDirectory(transactionsPath));
+    QVERIFY(createOwnedFixtureDirectory(namespacePath));
+    QVERIFY(createOwnedFixtureDirectory(pending));
 
     const LinkedActivityRemoval::Specification specification = {
         fixture.temporary.path(),
@@ -4623,6 +5875,27 @@ startupRestrictsExistingTransactionDirectories()
 }
 
 void TestRideCacheRemoval::
+startupRejectsSymlinkedTransactionDirectoryWithoutNamespace()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    QTemporaryDir outside;
+    QVERIFY(outside.isValid());
+    const QString transactionsPath = QDir(fixture.temporary.path()).filePath(
+        QStringLiteral(".gc-transactions"));
+    if (!createTestSymbolicLink(
+            outside.path(), transactionsPath, true)) {
+        QSKIP("Directory symbolic links are unavailable");
+    }
+
+    QString error;
+    QVERIFY(!LinkedActivityRemoval::Journal::reconcileAll(
+        fixture.temporary.path(), error));
+    QVERIFY(!error.isEmpty());
+    QVERIFY(QFileInfo(transactionsPath).isSymLink());
+}
+
+void TestRideCacheRemoval::
 oversizedUnreadableJournalControlFileFailsBeforeRead_data()
 {
     QTest::addColumn<QString>("relativePath");
@@ -4874,6 +6147,12 @@ linkedDeletionCrashAfterPeerSaveRecoversOnRestart()
         "GC_RIDE_CACHE_REMOVAL_CRASH_ROOT";
     static const char ModeEnvironment[] =
         "GC_RIDE_CACHE_REMOVAL_CRASH_MODE";
+#ifdef Q_OS_WIN
+    constexpr int ChildFinishTimeoutMs = 30000;
+#else
+    constexpr int ChildFinishTimeoutMs = 10000;
+#endif
+    constexpr int ChildTerminationTimeoutMs = 5000;
     const QString root = qEnvironmentVariable(
         RootEnvironment);
     const QString mode = qEnvironmentVariable(
@@ -4976,6 +6255,7 @@ linkedDeletionCrashAfterPeerSaveRecoversOnRestart()
                     QString::number(crashOccurrence));
             }
             child.setProcessEnvironment(environment);
+            child.setProcessChannelMode(QProcess::MergedChannels);
             child.start(
                 QCoreApplication::applicationFilePath(),
                 {QStringLiteral(
@@ -4986,11 +6266,26 @@ linkedDeletionCrashAfterPeerSaveRecoversOnRestart()
                 return qMakePair(
                     -1, child.errorString());
             }
-            if (!child.waitForFinished(10000)) {
+            if (!child.waitForFinished(ChildFinishTimeoutMs)) {
                 child.kill();
-                child.waitForFinished();
-                return qMakePair(
-                    -2, QStringLiteral("child timed out"));
+                const bool terminated = child.waitForFinished(
+                    ChildTerminationTimeoutMs);
+                QString diagnostic = QStringLiteral(
+                    "child timed out after %1 ms; mode=%2; phase=%3; "
+                    "row=%4; terminated=%5; process-error=%6")
+                    .arg(ChildFinishTimeoutMs)
+                    .arg(childMode)
+                    .arg(requestedCrashPhase)
+                    .arg(QString::fromLatin1(QTest::currentDataTag()))
+                    .arg(terminated ? QStringLiteral("yes")
+                                    : QStringLiteral("no"))
+                    .arg(child.errorString());
+                const QByteArray output = child.readAll();
+                if (!output.isEmpty()) {
+                    diagnostic.append(QStringLiteral("; output=%1")
+                        .arg(QString::fromUtf8(output)));
+                }
+                return qMakePair(-2, diagnostic);
             }
             return qMakePair(
                 child.exitCode(),
@@ -4999,18 +6294,28 @@ linkedDeletionCrashAfterPeerSaveRecoversOnRestart()
 
     const auto crashed = runChild(
         QStringLiteral("crash"), crashPhase);
-    QCOMPARE(crashed.first, 86);
+    QVERIFY2(
+        crashed.first == 86,
+        qPrintable(QStringLiteral("Expected exit 86, got %1: %2")
+            .arg(crashed.first).arg(crashed.second)));
 
     if (!recoveryCrashPhase.isEmpty()) {
         const auto recoveryCrashed = runChild(
             QStringLiteral("recover"),
             recoveryCrashPhase);
-        QCOMPARE(recoveryCrashed.first, 86);
+        QVERIFY2(
+            recoveryCrashed.first == 86,
+            qPrintable(QStringLiteral("Expected exit 86, got %1: %2")
+                .arg(recoveryCrashed.first)
+                .arg(recoveryCrashed.second)));
     }
 
     const auto recovered = runChild(
         QStringLiteral("recover"), QString());
-    QCOMPARE(recovered.first, 0);
+    QVERIFY2(
+        recovered.first == 0,
+        qPrintable(QStringLiteral("Expected exit 0, got %1: %2")
+            .arg(recovered.first).arg(recovered.second)));
 
     const QByteArray targetAfterRecovery =
         readBytes(
@@ -5025,7 +6330,11 @@ linkedDeletionCrashAfterPeerSaveRecoversOnRestart()
 
     const auto recoveredAgain = runChild(
         QStringLiteral("recover"), QString());
-    QCOMPARE(recoveredAgain.first, 0);
+    QVERIFY2(
+        recoveredAgain.first == 0,
+        qPrintable(QStringLiteral("Expected exit 0, got %1: %2")
+            .arg(recoveredAgain.first)
+            .arg(recoveredAgain.second)));
 
     const QString targetPath =
         QDir(temporary.path()).filePath(
@@ -6453,7 +7762,8 @@ stagingCleanupFailureRequiresRecoveryAndStopsBatch()
                 QDir(retainedStagingPath).filePath(
                     QStringLiteral("sentinel")),
                 retainedContents);
-            writeFixture(firstPath, changedContents);
+            replaceFixtureWhilePinned(
+                firstPath, changedContents);
         });
 
     const RideCache::RemovalResult result =
@@ -7498,6 +8808,291 @@ completedRenameMovesOnlyCompletedCpx()
 }
 
 void TestRideCacheRemoval::
+moveActivityCopiesSharedLegacySidecars()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    QDateTime sourceDateTime;
+    QDateTime targetDateTime;
+    QVERIFY(RideFile::parseRideFileName(
+        firstName(), &sourceDateTime));
+    QVERIFY(RideFile::parseRideFileName(
+        thirdName(), &targetDateTime));
+    RideItem *completed = fixture.addRide(firstName(), true);
+    RideItem *planned = fixture.addPlannedRide(firstName(), false);
+    completed->dateTime = sourceDateTime;
+    planned->dateTime = sourceDateTime;
+
+    const QByteArray completedContents("completed activity");
+    const QByteArray plannedContents("planned activity");
+    writeFixture(
+        fixture.activityPath(firstName()), completedContents);
+    writeFixture(
+        fixture.plannedActivityPath(firstName()), plannedContents);
+    for (const QString &extension :
+         {QStringLiteral("cpi"), QStringLiteral("notes")}) {
+        const QByteArray contents =
+            extension.toLatin1() + QByteArray(" shared");
+        const QString oldPath =
+            fixture.cachePath(firstName(), extension);
+        const QString newPath =
+            fixture.cachePath(thirdName(), extension);
+        writeFixture(oldPath, contents);
+        QVERIFY(!QFileInfo::exists(newPath));
+    }
+
+    const RideCache::OperationResult result =
+        fixture.cache->moveActivity(completed, targetDateTime);
+
+    QVERIFY2(result.success, qPrintable(result.error));
+    QVERIFY(result.committed);
+    QCOMPARE(completed->fileName, thirdName());
+    QCOMPARE(planned->fileName, firstName());
+    QVERIFY(!QFileInfo::exists(fixture.activityPath(firstName())));
+    QVERIFY(QFileInfo::exists(fixture.activityPath(thirdName())));
+    QCOMPARE(
+        readBytes(fixture.plannedActivityPath(firstName())),
+        plannedContents);
+    for (const QString &extension :
+         {QStringLiteral("cpi"), QStringLiteral("notes")}) {
+        const QByteArray contents =
+            extension.toLatin1() + QByteArray(" shared");
+        QCOMPARE(
+            readBytes(fixture.cachePath(firstName(), extension)),
+            contents);
+        QCOMPARE(
+            readBytes(fixture.cachePath(thirdName(), extension)),
+            contents);
+    }
+}
+
+void TestRideCacheRemoval::
+moveActivityRejectsDerivedDestinationCollision_data()
+{
+    QTest::addColumn<QString>("extension");
+    QTest::addColumn<bool>("sourceArtifactExists");
+
+    for (const QString &extension :
+         {QStringLiteral("notes"),
+          QStringLiteral("cpi"),
+          QStringLiteral("cpx")}) {
+        QTest::newRow(
+            qPrintable(extension + QStringLiteral("-owned")))
+                << extension << true;
+        QTest::newRow(
+            qPrintable(extension + QStringLiteral("-unowned")))
+                << extension << false;
+    }
+}
+
+void TestRideCacheRemoval::
+moveActivityRejectsDerivedDestinationCollision()
+{
+    QFETCH(QString, extension);
+    QFETCH(bool, sourceArtifactExists);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    QDateTime sourceDateTime;
+    QDateTime targetDateTime;
+    QVERIFY(RideFile::parseRideFileName(
+        firstName(), &sourceDateTime));
+    QVERIFY(RideFile::parseRideFileName(
+        thirdName(), &targetDateTime));
+    RideItem *item = fixture.addRide(firstName(), true);
+    item->dateTime = sourceDateTime;
+
+    const QByteArray activityContents("completed activity");
+    const QByteArray sourceContents("source derived artifact");
+    const QByteArray collisionContents("unrelated destination artifact");
+    const QString oldActivity = fixture.activityPath(firstName());
+    const QString newActivity = fixture.activityPath(thirdName());
+    const QString oldDerived =
+        fixture.cachePath(firstName(), extension);
+    const QString newDerived =
+        fixture.cachePath(thirdName(), extension);
+    writeFixture(oldActivity, activityContents);
+    if (sourceArtifactExists)
+        writeFixture(oldDerived, sourceContents);
+    writeFixture(newDerived, collisionContents);
+
+    const RideCache::OperationResult result =
+        fixture.cache->moveActivity(item, targetDateTime);
+
+    QVERIFY(!result.success);
+    QVERIFY(!result.committed);
+    QVERIFY(!result.error.isEmpty());
+    QCOMPARE(item->fileName, firstName());
+    QCOMPARE(item->dateTime, sourceDateTime);
+    QCOMPARE(readBytes(oldActivity), activityContents);
+    QVERIFY(!QFileInfo::exists(newActivity));
+    if (sourceArtifactExists) {
+        QCOMPARE(readBytes(oldDerived), sourceContents);
+    } else {
+        QVERIFY(!QFileInfo::exists(oldDerived));
+    }
+    QCOMPARE(readBytes(newDerived), collisionContents);
+}
+
+void TestRideCacheRemoval::moveActivityRejectsDerivedDestinationRace()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    QDateTime sourceDateTime;
+    QDateTime targetDateTime;
+    QVERIFY(RideFile::parseRideFileName(
+        firstName(), &sourceDateTime));
+    QVERIFY(RideFile::parseRideFileName(
+        thirdName(), &targetDateTime));
+    RideItem *item = fixture.addRide(firstName(), true);
+    item->dateTime = sourceDateTime;
+
+    const QByteArray activityContents("completed activity");
+    const QByteArray collisionContents("concurrent destination notes");
+    const QString oldActivity = fixture.activityPath(firstName());
+    const QString newActivity = fixture.activityPath(thirdName());
+    const QString oldNotes = fixture.cachePath(
+        firstName(), QStringLiteral("notes"));
+    const QString newNotes = fixture.cachePath(
+        thirdName(), QStringLiteral("notes"));
+    writeFixture(oldActivity, activityContents);
+    QVERIFY(!QFileInfo::exists(oldNotes));
+    QVERIFY(!QFileInfo::exists(newNotes));
+    setRideCacheCalendarStorageAction([newNotes, collisionContents] {
+        writeFixture(newNotes, collisionContents);
+    });
+
+    const RideCache::OperationResult result =
+        fixture.cache->moveActivity(item, targetDateTime);
+
+    QVERIFY(!result.success);
+    QVERIFY(!result.committed);
+    QVERIFY(!result.cleanupComplete);
+    QVERIFY(!result.error.isEmpty());
+    QCOMPARE(item->fileName, firstName());
+    QCOMPARE(item->dateTime, sourceDateTime);
+    QCOMPARE(readBytes(oldActivity), activityContents);
+    QVERIFY(!QFileInfo::exists(newActivity));
+    QVERIFY(!QFileInfo::exists(oldNotes));
+    QCOMPARE(readBytes(newNotes), collisionContents);
+}
+
+void TestRideCacheRemoval::
+moveActivityRejectsSharedLegacySidecarDestinationCollision_data()
+{
+    QTest::addColumn<QString>("extension");
+
+    QTest::newRow("cpi") << QStringLiteral("cpi");
+    QTest::newRow("notes") << QStringLiteral("notes");
+}
+
+void TestRideCacheRemoval::
+moveActivityRejectsSharedLegacySidecarDestinationCollision()
+{
+    QFETCH(QString, extension);
+
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    QDateTime sourceDateTime;
+    QDateTime targetDateTime;
+    QVERIFY(RideFile::parseRideFileName(
+        firstName(), &sourceDateTime));
+    QVERIFY(RideFile::parseRideFileName(
+        thirdName(), &targetDateTime));
+    RideItem *completed = fixture.addRide(firstName(), true);
+    RideItem *planned = fixture.addPlannedRide(firstName(), false);
+    completed->dateTime = sourceDateTime;
+    planned->dateTime = sourceDateTime;
+
+    const QByteArray completedContents("completed activity");
+    const QByteArray plannedContents("planned activity");
+    const QByteArray sharedContents("shared legacy sidecar");
+    const QByteArray collisionContents("unrelated destination sidecar");
+    const QString oldSidecar =
+        fixture.cachePath(firstName(), extension);
+    const QString newSidecar =
+        fixture.cachePath(thirdName(), extension);
+    writeFixture(
+        fixture.activityPath(firstName()), completedContents);
+    writeFixture(
+        fixture.plannedActivityPath(firstName()), plannedContents);
+    writeFixture(oldSidecar, sharedContents);
+    writeFixture(newSidecar, collisionContents);
+
+    const RideCache::OperationResult result =
+        fixture.cache->moveActivity(completed, targetDateTime);
+
+    QVERIFY(!result.success);
+    QVERIFY(!result.committed);
+    QVERIFY(!result.error.isEmpty());
+    QCOMPARE(completed->fileName, firstName());
+    QCOMPARE(planned->fileName, firstName());
+    QCOMPARE(
+        readBytes(fixture.activityPath(firstName())),
+        completedContents);
+    QCOMPARE(
+        readBytes(fixture.plannedActivityPath(firstName())),
+        plannedContents);
+    QVERIFY(!QFileInfo::exists(fixture.activityPath(thirdName())));
+    QCOMPARE(readBytes(oldSidecar), sharedContents);
+    QCOMPARE(readBytes(newSidecar), collisionContents);
+}
+
+void TestRideCacheRemoval::
+moveActivityRejectsSharedLegacySidecarDestinationRace()
+{
+    Fixture fixture;
+    QVERIFY(fixture.initialize());
+    QDateTime sourceDateTime;
+    QDateTime targetDateTime;
+    QVERIFY(RideFile::parseRideFileName(
+        firstName(), &sourceDateTime));
+    QVERIFY(RideFile::parseRideFileName(
+        thirdName(), &targetDateTime));
+    RideItem *completed = fixture.addRide(firstName(), true);
+    RideItem *planned = fixture.addPlannedRide(firstName(), false);
+    completed->dateTime = sourceDateTime;
+    planned->dateTime = sourceDateTime;
+
+    const QByteArray completedContents("completed activity");
+    const QByteArray plannedContents("planned activity");
+    const QByteArray sharedContents("shared notes");
+    const QByteArray collisionContents("concurrent destination notes");
+    const QString oldNotes =
+        fixture.cachePath(firstName(), QStringLiteral("notes"));
+    const QString newNotes =
+        fixture.cachePath(thirdName(), QStringLiteral("notes"));
+    writeFixture(
+        fixture.activityPath(firstName()), completedContents);
+    writeFixture(
+        fixture.plannedActivityPath(firstName()), plannedContents);
+    writeFixture(oldNotes, sharedContents);
+    QVERIFY(!QFileInfo::exists(newNotes));
+    setRideCacheCalendarStorageAction([newNotes, collisionContents] {
+        writeFixture(newNotes, collisionContents);
+    });
+
+    const RideCache::OperationResult result =
+        fixture.cache->moveActivity(completed, targetDateTime);
+
+    QVERIFY(!result.success);
+    QVERIFY(!result.committed);
+    QVERIFY(!result.cleanupComplete);
+    QVERIFY(!result.error.isEmpty());
+    QCOMPARE(completed->fileName, firstName());
+    QCOMPARE(planned->fileName, firstName());
+    QCOMPARE(
+        readBytes(fixture.activityPath(firstName())),
+        completedContents);
+    QCOMPARE(
+        readBytes(fixture.plannedActivityPath(firstName())),
+        plannedContents);
+    QVERIFY(!QFileInfo::exists(fixture.activityPath(thirdName())));
+    QCOMPARE(readBytes(oldNotes), sharedContents);
+    QCOMPARE(readBytes(newNotes), collisionContents);
+}
+
+void TestRideCacheRemoval::
 plannedReplacementPurgesPreexistingDestroyedRow()
 {
     Fixture fixture;
@@ -7732,6 +9327,35 @@ planBundleImportCommitsWorkoutFileAndDatabaseRow()
                  pending, found, journalError),
              qPrintable(journalError));
     QVERIFY(!found);
+}
+
+void TestRideCacheRemoval::
+planBundleRecoveryUsesDefaultWorkoutRoot()
+{
+    QTemporaryDir libraryRoot;
+    QVERIFY(libraryRoot.isValid());
+    const QString athleteRoot = QDir(
+        libraryRoot.path()).filePath(
+            QStringLiteral("RecoveryAthlete"));
+    const QString databaseRoot = QDir(
+        libraryRoot.path()).filePath(
+            QStringLiteral("workout-database"));
+    QVERIFY(QDir().mkpath(athleteRoot));
+    QVERIFY(QDir().mkpath(databaseRoot));
+
+    Context context(nullptr);
+    Athlete athlete(&context, QDir(athleteRoot));
+    TrainDB database{QDir(databaseRoot)};
+    setPlanBundleWorkoutRootForTest(QString());
+
+    TrainDB *const previousDatabase = trainDB;
+    trainDB = &database;
+    QString error;
+    const bool recovered = PlanBundle::reconcilePendingImport(
+        &context, error);
+    trainDB = previousDatabase;
+
+    QVERIFY2(recovered, qPrintable(error));
 }
 
 void TestRideCacheRemoval::
@@ -8514,8 +10138,29 @@ void TestRideCacheRemoval::moveActivityReservesModelBeforeStorageCommit()
 }
 
 void TestRideCacheRemoval::
+moveActivityCrashRecoveryIsGenerationAtomic_data()
+{
+    QTest::addColumn<QString>("phase");
+    QTest::addColumn<int>("occurrence");
+    QTest::addColumn<bool>("sharedLegacySidecars");
+
+    const QString phase = QStringLiteral(
+        "plan-replacement-target-published");
+    QTest::newRow("activity-published") << phase << 1 << false;
+    QTest::newRow("cpx-published") << phase << 2 << false;
+    QTest::newRow("cpi-published") << phase << 3 << false;
+    QTest::newRow("notes-published") << phase << 4 << false;
+    QTest::newRow("shared-cpi-published") << phase << 3 << true;
+    QTest::newRow("shared-notes-published") << phase << 4 << true;
+}
+
+void TestRideCacheRemoval::
 moveActivityCrashRecoveryIsGenerationAtomic()
 {
+    QFETCH(QString, phase);
+    QFETCH(int, occurrence);
+    QFETCH(bool, sharedLegacySidecars);
+
     const QString root = qEnvironmentVariable(
         ActivityMoveCrashRootEnvironment);
     const QString mode = qEnvironmentVariable(
@@ -8551,6 +10196,17 @@ moveActivityCrashRecoveryIsGenerationAtomic()
         writeFixture(
             athlete->home->activities().filePath(firstName()),
             QByteArray("old activity"));
+        if (sharedLegacySidecars) {
+            RideItem *planned = new RideItem(nullptr, context.get());
+            planned->fileName = firstName();
+            planned->path = athlete->home->planned().absolutePath();
+            planned->dateTime = sourceDateTime;
+            planned->planned = true;
+            cache->mutableRidesForRemovalTest().append(planned);
+            writeFixture(
+                athlete->home->planned().filePath(firstName()),
+                QByteArray("planned peer"));
+        }
         const QString oldBase = QFileInfo(firstName()).baseName();
         for (const QString &extension :
              {QStringLiteral("cpx"), QStringLiteral("cpi"),
@@ -8599,13 +10255,15 @@ moveActivityCrashRecoveryIsGenerationAtomic()
                 environment.insert(
                     QString::fromLatin1(
                         PlanReplacementCrashOccurrenceEnvironment),
-                    QStringLiteral("1"));
+                    QString::number(occurrence));
             }
             child.setProcessEnvironment(environment);
             child.start(
                 QCoreApplication::applicationFilePath(),
                 {QStringLiteral(
-                    "moveActivityCrashRecoveryIsGenerationAtomic")});
+                    "moveActivityCrashRecoveryIsGenerationAtomic:%1")
+                     .arg(QString::fromLatin1(
+                         QTest::currentDataTag()))});
             if (!child.waitForStarted(5000))
                 return qMakePair(-1, child.errorString());
             if (!child.waitForFinished(20000)) {
@@ -8620,8 +10278,7 @@ moveActivityCrashRecoveryIsGenerationAtomic()
         };
 
     const auto crashed = runChild(
-        QStringLiteral("crash"),
-        QStringLiteral("plan-replacement-target-published"));
+        QStringLiteral("crash"), phase);
     QCOMPARE(crashed.first, PlannedCopyCrashExitCode);
     const auto recovered = runChild(
         QStringLiteral("recover"), QString());
@@ -8638,6 +10295,14 @@ moveActivityCrashRecoveryIsGenerationAtomic()
         QByteArray("old activity"));
     QVERIFY(!QFileInfo::exists(
         activities.filePath(thirdName())));
+    const QDir planned(
+        QDir(temporary.path()).filePath(
+            QStringLiteral("planned")));
+    if (sharedLegacySidecars) {
+        QCOMPARE(
+            readBytes(planned.filePath(firstName())),
+            QByteArray("planned peer"));
+    }
     const QString oldBase = QFileInfo(firstName()).baseName();
     const QString newBase = QFileInfo(thirdName()).baseName();
     for (const QString &extension :

@@ -29,6 +29,11 @@
 #include "VideoSyncFileBase.h"
 #include "ErgFileBase.h"
 
+#include <functional>
+#include <memory>
+
+struct TrainDatabaseFileGeneration;
+
 
 namespace TdbWorkoutModelIdx {
     enum WorkoutModelIdx {
@@ -128,6 +133,22 @@ class TrainDB : public QObject, public TagStore
     Q_OBJECT
 
     public:
+        class ScopedLUW {
+            public:
+                explicit ScopedLUW(TrainDB &database);
+                ~ScopedLUW();
+
+                bool isActive() const;
+                bool commit();
+                void rollback();
+
+            private:
+                Q_DISABLE_COPY_MOVE(ScopedLUW)
+
+                TrainDB &database;
+                bool active;
+        };
+
         enum class SchemaStatus {
             uninitialized,
             current,
@@ -156,6 +177,10 @@ class TrainDB : public QObject, public TagStore
             QString targetFileName;
             QByteArray contents;
             QByteArray digest;
+            bool replaceExisting = false;
+            qint64 previousSize = -1;
+            QByteArray previousDigest;
+            QByteArray previousIdentity;
         };
 
         struct PlanImportJournal {
@@ -167,6 +192,13 @@ class TrainDB : public QObject, public TagStore
         };
 
         TrainDB(QDir home);
+        TrainDB(QDir home, QString sessionId, bool interactiveErrors);
+        TrainDB(
+            QDir home,
+            QString sessionId,
+            bool interactiveErrors,
+            std::shared_ptr<TrainDatabaseFileGeneration>
+                databaseGeneration);
         ~TrainDB();
 
         // check the db structure is up to date
@@ -181,9 +213,49 @@ class TrainDB : public QObject, public TagStore
         bool startLUW();
         bool endLUW();
         void rollbackLUW();
+        bool hasActiveLUW() const;
         bool commitPlanImportJournal(
             const PlanImportJournal &journal,
             bool &mayBeCommitted,
+            QString &error) const;
+        bool commitPreparedPlanImportJournal(
+            const PlanImportJournal &journal,
+            bool &mayBeCommitted,
+            QString &error) const;
+        static bool commitPreparedPlanImportJournalAtPath(
+            const QString &databasePath,
+            const PlanImportJournal &journal,
+            const std::function<bool()> &cancelled,
+            bool &mayBeCommitted,
+            QString &error,
+            const std::function<bool(QString &error)>
+                &validateBeforeCommit = {});
+        static bool commitPreparedPlanImportJournalAtPath(
+            const QString &databasePath,
+            const PlanImportJournal &journal,
+            const std::function<bool()> &cancelled,
+            const std::shared_ptr<TrainDatabaseFileGeneration>
+                &databaseGeneration,
+            bool &mayBeCommitted,
+            QString &error,
+            const std::function<bool(QString &error)>
+                &validateBeforeCommit = {});
+        static std::shared_ptr<TrainDatabaseFileGeneration>
+        captureDatabaseFileGeneration(
+            const QString &databasePath,
+            QString &error);
+        static bool databaseFileGenerationMatches(
+            const QString &databasePath,
+            const std::shared_ptr<TrainDatabaseFileGeneration>
+                &databaseGeneration,
+            QString &error);
+        static QByteArray databaseFileGenerationFingerprint(
+            const std::shared_ptr<TrainDatabaseFileGeneration>
+                &databaseGeneration);
+        QString databaseFilePath() const;
+        bool planImportJournalExists(
+            const QString &athleteRoot,
+            bool &found,
             QString &error) const;
         bool loadPlanImportJournal(
             const QString &athleteRoot,
@@ -275,6 +347,8 @@ class TrainDB : public QObject, public TagStore
         QDir home;
         QSqlDatabase *db;
         const QString sessionid;
+        const bool interactiveErrors;
+        bool luwActive = false;
         bool tagSignalsDeferred = false;
         QList<int> deferredTagsAdded;
         QList<int> deferredTagsDeleted;
@@ -293,7 +367,15 @@ class TrainDB : public QObject, public TagStore
         // get connection name
         QSqlDatabase connection() const;
 
-        void initDatabase();
+        bool commitPlanImportJournalImpl(
+            const PlanImportJournal &journal,
+            bool payloadsPrevalidated,
+            bool &mayBeCommitted,
+            QString &error) const;
+
+        void initDatabase(
+            const std::shared_ptr<TrainDatabaseFileGeneration>
+                &databaseGeneration = {});
 
         /**
          * create database - does nothing if its already there

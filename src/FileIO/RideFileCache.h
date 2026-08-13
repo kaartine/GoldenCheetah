@@ -28,6 +28,7 @@
 #include <thread>
 
 class Context;
+class AthletePersistenceService;
 class RideFile;
 class RideBest;
 class MetricDetail;
@@ -72,9 +73,11 @@ typedef double data_t;
 // 24       15-Jun-15    Fix percentify error on W'bal Distribution
 // 25       19-Dec-16    Added aPower
 // 26       30-Jul-26    Bind source SHA-256 and protect complete cache contents
+// 27       05-Aug-26    Bind analysis inputs to authenticated cache contents
 
 // The cache file (.cpx) has a binary format:
 // 1 x Header data - describing the version and contents of the cache
+// Header includes a SHA-256 fingerprint of analysis-affecting inputs
 // 1 x Source byte size and SHA-256 fingerprint
 // n x Blocks - meanmax or distribution arrays
 // 1 x Watts TIZ - 10 floats
@@ -114,7 +117,14 @@ class RideFileCache
         // the calling class.
         // to save time you can pass the ride file if you already have it open
         // and if you don't want the data and just want to check pass check=true
-        RideFileCache(Context *context, QString filename, double weight, RideFile *ride =0, bool check = false, bool refresh = true);
+        RideFileCache(
+            Context *context,
+            QString filename,
+            double weight,
+            RideFile *ride = 0,
+            bool check = false,
+            bool refresh = true,
+            AthletePersistenceService *persistenceService = nullptr);
 
         // Construct a ridefile cache that represents the data
         // across a date range. This is used to provide aggregated data.
@@ -153,7 +163,10 @@ class RideFileCache
 
 #ifdef GC_RIDE_FILE_CACHE_TEST_HOOKS
         struct SkipInitialComputeForTest {};
-        RideFileCache(RideFile*, SkipInitialComputeForTest);
+        RideFileCache(
+            RideFile*,
+            SkipInitialComputeForTest,
+            AthletePersistenceService *persistenceService = nullptr);
         struct NoPersistentTargetForTest {
             double weight = 75.0;
         };
@@ -165,6 +178,12 @@ class RideFileCache
             const QString &sourceActivityPath,
             RideFile::SeriesType series,
             int duration);
+        static int rankCacheRowsForTest(
+            const QVector<QPair<QString, QString>> &cacheRows,
+            RideFile::SeriesType series,
+            int duration,
+            double value,
+            int &of);
         static int tizForActivityForTest(
             const QString &cacheRoot,
             const QString &completedRoot,
@@ -189,17 +208,56 @@ class RideFileCache
             const QString &sourcePath,
             const QString &cachePath,
             double weight);
+        static bool cacheIsCurrentForSourceWithAnalysisForTest(
+            const QString &sourcePath,
+            const QString &cachePath,
+            double weight,
+            const QByteArray &analysisFingerprint);
         static void setSourceBoundReadHookForTest(
             std::function<void()> hook);
+        static void setAggregateBindingReadHookForTest(
+            std::function<void()> hook);
+        static void setContextPersistenceFallbackHookForTest(
+            std::function<void(
+                Context *,
+                const QString &,
+                const QString &)> hook);
+        void setContextForTest(Context *context);
         static void resetSourceFingerprintReadCountForTest();
         static int sourceFingerprintReadCountForTest();
-        static bool sourceBindingsAreCurrentForTest(
+        static bool aggregateBindingsAreCurrentForTest(
             const QVector<
                 QPair<
                     QString,
                     RideFileCRC::
                         ContentFingerprint>>
-                &bindings);
+                &sourceBindings,
+            const QVector<QPair<QByteArray, QByteArray>>
+                &analysisBindings);
+        static double bestForActivityWithAnalysisForTest(
+            const QString &cacheRoot,
+            const QString &completedRoot,
+            const QString &plannedRoot,
+            const QString &sourceActivityPath,
+            RideFile::SeriesType series,
+            int duration,
+            const QByteArray &analysisFingerprint);
+        static int tizForActivityWithAnalysisForTest(
+            const QString &cacheRoot,
+            const QString &completedRoot,
+            const QString &plannedRoot,
+            const QString &sourceActivityPath,
+            RideFile::SeriesType series,
+            int zone,
+            const QByteArray &analysisFingerprint);
+        static bool readBestRowForSourceWithAnalysisForTest(
+            const QString &sourcePath,
+            const QString &cachePath,
+            const QByteArray &analysisFingerprint,
+            const QVector<
+                QPair<RideFile::SeriesType, int>>
+                &requests,
+            QVector<double> &values);
         bool refreshCacheForTest(
             const QString &sourcePath,
             const QString &cachePath,
@@ -224,10 +282,12 @@ class RideFileCache
                 const QString &)> &reportError);
 #endif
 
-        // get a single best or time in zone value from the cache file
-        // intended to be very fast (using lseek to jump direct to the value requested
+        // Rank is the one-based descending insertion position before ties.
+        // "of" counts accepted cache rows, so rank can be "of + 1".
         static int rank(Context *context, RideFile::SeriesType series, int duration, 
                         double value, Specification spec, int &of);
+        // get a single best or time in zone value from the cache file
+        // intended to be very fast (using lseek to jump direct to the value requested
         static double best(Context *context, QString fileName, RideFile::SeriesType series, int duration);
         static double best(Context *context, RideItem *item, RideFile::SeriesType series, int duration);
         static double best(Context *context, const RideItem *item, RideFile::SeriesType series, int duration);
@@ -287,11 +347,14 @@ class RideFileCache
 
         bool refreshCache(
             const PersistenceOperations *operations = nullptr);
-        bool readCache(double expectedWeight);
+        bool readCache(
+            double expectedWeight,
+            const QByteArray &expectedAnalysisFingerprint);
         bool serialize(
             QDataStream *out,
             const RideFileCRC::ContentFingerprint
-                &sourceFingerprint);
+                &sourceFingerprint,
+            const QByteArray &analysisFingerprint);
 
         bool compute();             // compute all arrays
         bool computeWithoutPersistentCache(bool refresh, double weight);
@@ -305,15 +368,20 @@ class RideFileCache
     private:
 
         Context *context;
+        AthletePersistenceService *persistenceService_;
         QString rideFileName; // filename of ride
         QString cacheFileName; // filename of cache file
         RideFile *ride;
         RideFileCRC::ContentFingerprint
             sourceFingerprint_;
-        QVector<
-            QPair<
-                QString,
-                RideFileCRC::ContentFingerprint>>
+        QByteArray analysisFingerprint_;
+        struct AggregateSourceBinding {
+            QString sourcePath;
+            RideFileCRC::ContentFingerprint
+                sourceFingerprint;
+            QByteArray analysisFingerprint;
+        };
+        QVector<AggregateSourceBinding>
             aggregateSourceBindings_;
         bool aggregateSourceBindingsComplete_ =
             false;

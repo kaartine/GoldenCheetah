@@ -49,7 +49,7 @@ static_assert(
 static_assert(
     std::is_trivially_copyable_v<RideFileCacheHeader>,
     "The CPX cache header must be copied as raw bytes");
-static_assert(sizeof(RideFileCacheHeader) == 152,
+static_assert(sizeof(RideFileCacheHeader) == 184,
               "Unexpected CPX cache header size");
 
 #define GC_CPX_ASSERT_OFFSET(member, expected) \
@@ -91,6 +91,7 @@ GC_CPX_ASSERT_OFFSET(CP, 124);
 GC_CPX_ASSERT_OFFSET(CV, 128);
 GC_CPX_ASSERT_OFFSET(WEIGHT, 136);
 GC_CPX_ASSERT_OFFSET(WPRIME, 144);
+GC_CPX_ASSERT_OFFSET(analysisSha256, 152);
 #undef GC_CPX_ASSERT_OFFSET
 
 void setError(QString *error, const QString &message)
@@ -255,6 +256,7 @@ void CacheData::clear()
     header = RideFileCacheHeader {};
     sourceFingerprint =
         RideFileCRC::ContentFingerprint {};
+    analysisFingerprint.clear();
     for (QVector<float> &block : blocks)
         block.clear();
     for (QVector<float> &zone : zones)
@@ -307,6 +309,30 @@ bool validateCacheLayout(
         return false;
     }
     return true;
+}
+
+bool setAnalysisFingerprint(
+    RideFileCacheHeader &header,
+    const QByteArray &fingerprint)
+{
+    if (fingerprint.size()
+        != RideFileCRC::Sha256Size) {
+        return false;
+    }
+    std::memcpy(
+        header.analysisSha256,
+        fingerprint.constData(),
+        RideFileCRC::Sha256Size);
+    return true;
+}
+
+QByteArray analysisFingerprint(
+    const RideFileCacheHeader &header)
+{
+    return QByteArray(
+        reinterpret_cast<const char *>(
+            header.analysisSha256),
+        RideFileCRC::Sha256Size);
 }
 
 bool inspectCache(QIODevice &input,
@@ -431,6 +457,9 @@ PartialReader::PartialReader(
         return;
     }
     counts_ = blockCounts(header_);
+    analysisFingerprint_ =
+        RideFileCacheIntegrity::analysisFingerprint(
+            header_);
     if (!expectedCacheSize(
             header_, expectedSize_)) {
         setError(
@@ -489,6 +518,12 @@ const RideFileCRC::ContentFingerprint &
 PartialReader::sourceFingerprint() const
 {
     return sourceFingerprint_;
+}
+
+const QByteArray &
+PartialReader::analysisFingerprint() const
+{
+    return analysisFingerprint_;
 }
 
 bool PartialReader::readBlock(
@@ -867,6 +902,8 @@ bool readCache(QIODevice &input, CacheData &output, QString *error)
         reader.header();
     loaded.sourceFingerprint =
         reader.sourceFingerprint();
+    loaded.analysisFingerprint =
+        reader.analysisFingerprint();
     for (int index = 0;
          index < BlockCount;
          ++index) {

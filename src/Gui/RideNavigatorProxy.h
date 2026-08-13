@@ -129,7 +129,7 @@ public:
     GroupByModel(RideNavigator *parent) : QAbstractProxyModel(parent), rideNavigator(parent), groupBy(-1) {
         setParent(parent);
     }
-    ~GroupByModel() {}
+    ~GroupByModel() override { clearGroups(); }
 
     void setIndexes() {
 
@@ -233,19 +233,25 @@ public:
 
     QModelIndex mapFromSource(const QModelIndex &sourceIndex) const {
 
+        if (!sourceIndex.isValid()
+            || sourceIndex.model() != sourceModel()
+            || sourceIndex.parent().isValid()
+            || sourceIndex.row() < 0
+            || sourceIndex.row() >= sourceRowToGroupRow.size()) {
+            return QModelIndex();
+        }
+
         // which group did we put this row into?
         QString group = whichGroup(sourceIndex.row());
         int groupNo = groups.indexOf(group);
 
         if (groupNo < 0) {
             return QModelIndex();
-        } else {
-            QModelIndex *p = new QModelIndex(createIndex(groupNo, 0, (void*)NULL));
-            if (sourceIndex.row() > 0 && sourceIndex.row() < sourceRowToGroupRow.size())
-                return createIndex(sourceRowToGroupRow[sourceIndex.row()], sourceIndex.column()+2, &p); // accommodate virtual columns
-            else
-                return QModelIndex();
         }
+
+        return index(sourceRowToGroupRow.at(sourceIndex.row()),
+                     sourceIndex.column() + 2,
+                     groupIndexes.at(groupNo)); // accommodate virtual columns
     }
 
     // we override the standard version to make our virtual column zero
@@ -581,8 +587,13 @@ public:
 
     QString whichGroup(int row) const {
 
-        if (row < 0 || row >= rankedRows.count()) return ("");
+        if (!sourceModel()
+            || row < 0
+            || row >= sourceModel()->rowCount(QModelIndex())) {
+            return QString();
+        }
         if (groupBy == -1) return tr("All Activities");
+        if (row >= rankedRows.count()) return QString();
         else return groupFromValue(headerData(groupBy+2, // accommodate virtual column
                                     Qt::Horizontal).toString(),
                                     sourceModel()->data(sourceModel()->index(row,groupBy)).toString(),
@@ -685,6 +696,8 @@ public slots:
         setIndexes();
 
         myEndResetModel();// we're clean
+
+        if (!rideNavigator) return;
 
         // lets expand column 0 for the groupBy heading
         for (int i=0; i < groupCount(); i++)

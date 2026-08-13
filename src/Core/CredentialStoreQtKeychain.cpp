@@ -16,6 +16,9 @@
 #endif
 
 #include <memory>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <utility>
 
 namespace {
@@ -32,6 +35,7 @@ enum class CredentialJobAccess
 
 struct CredentialJobGate
 {
+    QMutex mutex;
     quint64 activeOwner = 0;
     quint64 nextOwner = 0;
     std::unique_ptr<QLockFile> mutationLock;
@@ -55,6 +59,7 @@ CredentialJobGateAcquisition acquireCredentialJobGate(
     const QString &mutationLockPath)
 {
     CredentialJobGate &gate = credentialJobGate();
+    QMutexLocker locker(&gate.mutex);
     if (gate.activeOwner != 0) {
         return {
             0,
@@ -77,16 +82,28 @@ CredentialJobGateAcquisition acquireCredentialJobGate(
                     "Another credential mutation is still active")
             };
         }
-        if (CredentialSettingsDetail::
-                backendMutationMarkerStatus(
-                    mutationLockPath)
-            != CredentialSettingsDetail::
-                BackendMutationMarkerStatus::Absent) {
+        const CredentialSettingsDetail::BackendMutationMarkerStatus
+            markerStatus = CredentialSettingsDetail::
+                backendMutationMarkerStatus(mutationLockPath);
+        if (markerStatus
+                == CredentialSettingsDetail::
+                    BackendMutationMarkerStatus::Pending) {
+            if (!CredentialSettingsDetail::
+                    removeBackendMutationMarker(mutationLockPath)) {
+                return {
+                    0,
+                    QStringLiteral(
+                        "A previous credential mutation "
+                        "could not be reconciled")
+                };
+            }
+        } else if (markerStatus
+                   != CredentialSettingsDetail::
+                       BackendMutationMarkerStatus::Absent) {
             return {
                 0,
                 QStringLiteral(
-                    "A previous credential mutation "
-                    "has an unresolved outcome")
+                    "A previous credential mutation marker is invalid")
             };
         }
         if (!CredentialSettingsDetail::
@@ -112,19 +129,32 @@ CredentialJobGateAcquisition acquireCredentialJobGate(
 QString releaseCredentialJobGate(quint64 owner)
 {
     CredentialJobGate &gate = credentialJobGate();
+    QMutexLocker locker(&gate.mutex);
     if (gate.activeOwner == owner) {
+        QString error;
         if (!gate.mutationLockPath.isEmpty()
             && !CredentialSettingsDetail::
                 removeBackendMutationMarker(
                     gate.mutationLockPath)) {
-            return QStringLiteral(
+            error = QStringLiteral(
                 "Cannot clear credential mutation state");
         }
         gate.mutationLock.reset();
         gate.mutationLockPath.clear();
         gate.activeOwner = 0;
+        return error;
     }
     return QString();
+}
+
+void abandonCredentialJobGate(quint64 owner)
+{
+    CredentialJobGate &gate = credentialJobGate();
+    QMutexLocker locker(&gate.mutex);
+    if (gate.activeOwner != owner) return;
+    gate.mutationLock.reset();
+    gate.mutationLockPath.clear();
+    gate.activeOwner = 0;
 }
 
 #ifdef GC_CREDENTIAL_TEST_HOOKS
@@ -194,6 +224,8 @@ JobResult executeJobOnCurrentThread(const QString &key,
             QStringLiteral(
                 "No running application event loop"));
     }
+    CredentialSettingsDetail::CredentialOperationContextScope
+        operationContext(key);
 
     const CredentialJobGateAcquisition gate =
         acquireCredentialJobGate(
@@ -215,13 +247,19 @@ JobResult executeJobOnCurrentThread(const QString &key,
             terminalReleaseError](QKeychain::Job *) {
             *terminalReleaseError =
                 releaseCredentialJobGate(gateOwner);
-        });
+        }, Qt::DirectConnection);
     QObject::connect(
         job.get(), &QObject::destroyed,
         application, [gateOwner, access](QObject *) {
-            if (access == CredentialJobAccess::ReadOnly)
+            if (access == CredentialJobAccess::ReadOnly) {
                 releaseCredentialJobGate(gateOwner);
-        });
+            } else {
+                // The backend result is unknown. Leave the durable marker
+                // behind, but release the process-local and filesystem lease
+                // so the next owner can reconcile it under the lock.
+                abandonCredentialJobGate(gateOwner);
+            }
+        }, Qt::DirectConnection);
 
     QEventLoop loop;
     QTimer timeout;
@@ -299,7 +337,9 @@ JobResult executeJob(const QString &key,
             QStringLiteral("No running application event loop"));
     }
 
-    const auto operation = [&]() {
+    auto operation = [
+            key, access, mutationLockPath,
+            configure, extract]() mutable {
         return executeJobOnCurrentThread<Job>(
             key, access, mutationLockPath,
             configure, extract);
@@ -308,23 +348,172 @@ JobResult executeJob(const QString &key,
         return operation();
     }
 
-    JobResult result = unavailableResult(
-        QStringLiteral("Cannot access application event loop"));
-    QMutex resultMutex;
+    struct GuiDispatch
+    {
+        std::mutex mutex;
+        std::condition_variable condition;
+        JobResult result;
+        bool abandoned = false;
+        bool complete = false;
+        bool started = false;
+    };
+    const auto dispatch = std::make_shared<GuiDispatch>();
+    const auto completeDispatch =
+        [dispatch](JobResult completed) {
+            {
+                const std::lock_guard<std::mutex> lock(
+                    dispatch->mutex);
+                if (dispatch->complete) return;
+                dispatch->result = std::move(completed);
+                dispatch->complete = true;
+            }
+            dispatch->condition.notify_all();
+        };
     const bool invoked = QMetaObject::invokeMethod(
         application,
-        [&result, &resultMutex, &operation]() {
-            JobResult completed = operation();
-            QMutexLocker locker(&resultMutex);
-            result = std::move(completed);
+        [dispatch, completeDispatch, key, access,
+         mutationLockPath, configure, extract,
+         application]() mutable {
+            {
+                const std::lock_guard<std::mutex> lock(
+                    dispatch->mutex);
+                if (dispatch->abandoned) {
+                    dispatch->complete = true;
+                    dispatch->condition.notify_all();
+                    return;
+                }
+                dispatch->started = true;
+            }
+
+            if (QCoreApplication::closingDown()) {
+                completeDispatch(unavailableResult(
+                    QStringLiteral(
+                        "No running application event loop")));
+                return;
+            }
+
+            const CredentialJobGateAcquisition gate =
+                acquireCredentialJobGate(
+                    access, mutationLockPath);
+            if (gate.owner == 0) {
+                completeDispatch(unavailableResult(gate.error));
+                return;
+            }
+
+            struct AsyncTerminal
+            {
+                bool gateReleased = false;
+            };
+            const auto terminal =
+                std::make_shared<AsyncTerminal>();
+            const auto operationContext = std::make_shared<
+                CredentialSettingsDetail::
+                    CredentialOperationContextScope>(key);
+            Job *job = new Job(credentialService);
+            CredentialStoreQtKeychainDetail::configureJob(job, key);
+            configure(job);
+
+            QObject::connect(
+                job, &QKeychain::Job::finished,
+                application,
+                [job, gateOwner = gate.owner, terminal,
+                 operationContext, extract,
+                 completeDispatch](QKeychain::Job *) mutable {
+                    const QString releaseError =
+                        releaseCredentialJobGate(gateOwner);
+                    terminal->gateReleased = releaseError.isEmpty();
+                    if (!releaseError.isEmpty()) {
+                        completeDispatch({
+                            QKeychain::NoBackendAvailable,
+                            QString(),
+                            releaseError,
+                            true
+                        });
+                    } else {
+                        completeDispatch({
+                            job->error(),
+                            extract(job),
+                            job->errorString(),
+                            false
+                        });
+                    }
+                    job->deleteLater();
+                });
+            QObject::connect(
+                job, &QObject::destroyed,
+                application,
+                [gateOwner = gate.owner, access, terminal,
+                 operationContext,
+                 completeDispatch](QObject *) {
+                    if (!terminal->gateReleased) {
+                        if (access == CredentialJobAccess::ReadOnly)
+                            releaseCredentialJobGate(gateOwner);
+                        else
+                            abandonCredentialJobGate(gateOwner);
+                        terminal->gateReleased = true;
+                    }
+                    completeDispatch({
+                        QKeychain::NoBackendAvailable,
+                        QString(),
+                        QStringLiteral(
+                            "Credential store operation ended unexpectedly"),
+                        access == CredentialJobAccess::Mutating
+                    });
+                });
+            QTimer::singleShot(
+                configuredCredentialJobTimeoutMs(),
+                job,
+                [job, access, operationContext,
+                 completeDispatch] {
+                    job->setAutoDelete(true);
+                    completeDispatch({
+                        QKeychain::NoBackendAvailable,
+                        QString(),
+                        QStringLiteral(
+                            "Credential store operation timed out and may still complete"),
+                        access == CredentialJobAccess::Mutating
+                    });
+                });
+            startCredentialJob(job);
         },
-        Qt::BlockingQueuedConnection);
+        Qt::QueuedConnection);
     if (!invoked) {
         return unavailableResult(
             QStringLiteral("Cannot invoke credential store operation"));
     }
-    QMutexLocker locker(&resultMutex);
-    return result;
+
+    const int timeoutMs = configuredCredentialJobTimeoutMs();
+    const auto deadline = std::chrono::steady_clock::now()
+        + std::chrono::milliseconds(timeoutMs * 2);
+    std::unique_lock<std::mutex> lock(dispatch->mutex);
+    while (!dispatch->complete) {
+        const auto now = std::chrono::steady_clock::now();
+        const bool interrupted =
+            QThread::currentThread()->isInterruptionRequested();
+        if (interrupted || now >= deadline) {
+            const bool started = dispatch->started;
+            if (!started) dispatch->abandoned = true;
+            return {
+                QKeychain::NoBackendAvailable,
+                QString(),
+                interrupted
+                    ? QStringLiteral(
+                        "Credential store operation was interrupted and may still complete")
+                    : started
+                    ? QStringLiteral(
+                        "Credential store operation is still running")
+                    : QStringLiteral(
+                        "Cannot access application event loop"),
+                started
+                    && access == CredentialJobAccess::Mutating
+            };
+        }
+        const auto wake = std::min(
+            deadline,
+            now + std::chrono::milliseconds(10));
+        dispatch->condition.wait_until(lock, wake);
+    }
+    return dispatch->result;
 }
 
 class QtKeychainCredentialStore final : public CredentialStore
@@ -382,7 +571,7 @@ public:
                 key,
                 CredentialJobAccess::Mutating,
                 mutationLockPath,
-                [&value](QKeychain::WritePasswordJob *job) {
+                [value](QKeychain::WritePasswordJob *job) {
                     job->setTextData(value);
                 },
                 [](QKeychain::WritePasswordJob *) {
@@ -485,6 +674,7 @@ void CredentialStoreQtKeychainDetail::resetJobTestHooks()
 void CredentialStoreQtKeychainDetail::resetJobGateForTest()
 {
     CredentialJobGate &gate = credentialJobGate();
+    QMutexLocker locker(&gate.mutex);
     if (!gate.mutationLockPath.isEmpty()) {
         CredentialSettingsDetail::
             removeBackendMutationMarker(

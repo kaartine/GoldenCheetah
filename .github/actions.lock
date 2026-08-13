@@ -1,0 +1,6 @@
+# Reviewed immutable GitHub Action sources. Keep entries sorted by action path.
+TheMrMilchmann/setup-msvc-dev 368ef7d1ee4d1171b31d4a7f67f4d954f903f5a9
+actions/checkout d23441a48e516b6c34aea4fa41551a30e30af803
+actions/upload-artifact 043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+jurplel/install-qt-action 48d3ad6db93f3627c8ee7a0454bc6f3744f7e730
+softprops/action-gh-release 3d0d9888cb7fd7b750713d6e236d1fcb99157228

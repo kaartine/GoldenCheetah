@@ -21,13 +21,17 @@ unix:!android:!macx {
 }
 
 SOURCES = testCredentialSettings.cpp \
+          ../../../src/Cloud/StravaSettingsCommit.cpp \
           ../../../src/Core/CredentialSettings.cpp \
           ../../../src/Core/CredentialStoreQtKeychain.cpp \
-          ../../../src/Core/Settings.cpp
+          ../../../src/Core/Settings.cpp \
+          ../../../src/FileIO/AnchoredFileSystem.cpp
 
 HEADERS = ../../../src/Core/CredentialSettings.h \
+          ../../../src/Cloud/StravaSettingsCommit.h \
           ../../../src/Core/CredentialStoreQtKeychain.h \
-          ../../../src/Core/Settings.h
+          ../../../src/Core/Settings.h \
+          ../../../src/FileIO/AnchoredFileSystem.h
 
 include(../../../contrib/qtkeychain/qtkeychain.pri)
 
@@ -46,8 +50,7 @@ INCLUDEPATH += ../../../src \
                ../../../src/Train \
                ../../../qwt/src
 
-QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-QMAKE_LFLAGS += -Wl,--gc-sections
+include(../../section-gc.prf)
 
 sanitize:!tsan:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

@@ -31,11 +31,14 @@
 #include <cmath>
 
 #include "Context.h"
+#include "TrainingSession.h"
+#include "MainWindow.h"
 #include "TrainDB.h"
 #include "Colors.h"
 #include "Athlete.h"
 #include "RideCache.h"
 #include "RideItem.h"
+#include "AthleteTab.h"
 #include "Settings.h"
 #include "RideMetadata.h"
 #include "Units.h"
@@ -67,8 +70,31 @@ static QString activityFilename(const QDateTime &dt, bool plan, Context *context
 
 ManualActivityWizard::ManualActivityWizard
 (Context *context, bool plan, const QDateTime &when, QWidget *parent)
-: QWizard(parent), context(context), plan(plan)
+: QWizard(parent), context(context),
+  mainWindow(context ? context->mainWindow : nullptr),
+  athlete(context ? context->athlete : nullptr),
+  cache(context && context->athlete
+        ? context->athlete->rideCache : nullptr),
+  tab(context ? context->tab : nullptr),
+  plan(plan)
 {
+    ownerGuard.reset(new ModalWorkflowGuard(
+        {this->context.data(), mainWindow.data(), athlete.data(),
+         cache.data(), tab.data()},
+        [this] {
+            return this->context && this->mainWindow
+                && this->athlete && this->cache && this->tab
+                && modalWorkflowHasActiveTab(
+                    this->mainWindow.data(),
+                    this->context.data(), this->tab.data())
+                && this->context->athlete
+                    == this->athlete.data()
+                && this->athlete->rideCache
+                    == this->cache.data()
+                && this->context->tab
+                    == this->tab.data();
+        }));
+    ownerGuard->rejectOnOwnerLoss(this);
     if (plan) {
         setWindowTitle(tr("Plan Activity"));
     } else {
@@ -94,11 +120,37 @@ ManualActivityWizard::ManualActivityWizard
 
 
 void
+ManualActivityWizard::setWorkflowValidator
+(ModalWorkflowValidator validator)
+{
+    workflowValidator = std::move(validator);
+}
+
+
+bool
+ManualActivityWizard::workflowIsCurrent
+() const
+{
+    return context && mainWindow && athlete && cache && tab
+        && modalWorkflowHasActiveTab(
+            mainWindow.data(), context.data(), tab.data())
+        && context->athlete == athlete.data()
+        && athlete->rideCache == cache.data()
+        && context->tab == tab.data()
+        && (!workflowValidator || workflowValidator());
+}
+
+
+void
 ManualActivityWizard::done
 (int result)
 {
     int finalResult = result;
     if (result == QDialog::Accepted) {
+        if (!workflowIsCurrent()) {
+            QWizard::done(QDialog::Rejected);
+            return;
+        }
         QString sport = RideFile::sportTag(field("sport").toString().trimmed());
         appsettings->setValue(GC_BIKESCOREDAYS, field("estimationDays").toInt());
         int eb = field("estimateBy").toInt();
@@ -168,10 +220,24 @@ ManualActivityWizard::done
 
         // what should the filename be?
         QString basename = activityBasename(rideDateTime);
-        QFile out(activityFilename(rideDateTime, plan, context));
-        if (RideFileFactory::instance().writeRideFile(context, &rideFile, out, "json")) {
+        if (!workflowIsCurrent()) {
+            QWizard::done(QDialog::Rejected);
+            return;
+        }
+        QFile out(activityFilename(
+            rideDateTime, plan, context.data()));
+        if (RideFileFactory::instance().writeRideFile(
+                context.data(), &rideFile, out, "json")) {
+            const bool committed = true;
             // refresh metric db etc
-            context->athlete->addRide(basename + ".json", true, true, false, plan);
+            if (workflowIsCurrent()) {
+                athlete->addRide(
+                    basename + ".json", true, true,
+                    false, plan);
+            }
+            finalResult = modalWorkflowCanAdvanceAfterCommit(
+                committed, workflowIsCurrent())
+                ? QDialog::Accepted : QDialog::Rejected;
         } else {
             // rather than dance around renaming existing rides, this time we will let the user
             // work it out -- they may actually want to keep an existing ride, so we shouldn't
@@ -419,8 +485,13 @@ void
 ManualActivityPageBasics::checkDateTime
 ()
 {
+    if (!context || !context->athlete
+        || !context->athlete->home) {
+        duplicateActivityLabel->setVisible(false);
+        return;
+    }
     QDateTime dt(field("activityDate").toDate(), field("activityTime").toTime());
-    QFile file(activityFilename(dt, plan, context));
+    QFile file(activityFilename(dt, plan, context.data()));
     duplicateActivityLabel->setVisible(file.exists());
 }
 
@@ -441,7 +512,8 @@ ManualActivityPageBasics::sportsChanged
 
 ManualActivityPageWorkout::ManualActivityPageWorkout
 (Context *context, QWidget *parent)
-: QWizardPage(parent), context(context)
+: QWizardPage(parent), context(context),
+  athlete(context ? context->athlete : nullptr)
 {
     setTitle(tr("Workout for Train Mode"));
     setSubTitle(tr("Browse and filter workouts based on your goals and preferences. Choose the one that best suits your needs to guide your upcoming session."));
@@ -486,10 +558,33 @@ ManualActivityPageWorkout::ManualActivityPageWorkout
     workoutTree->verticalScrollBar()->setStyle(xde);
 #endif
 
-    backupWorkout = context->workout; // ergFilePlot->setData is not sufficient for showing a workout, ErgFilePlot also
-                                      // relies on context->workout therefore keeping a backup of the original workout in
-                                      // the context so it can be reset on destruction of this page (yes, this is ugly)
-    context->workout = nullptr;
+    ErgFile *const originalWorkout =
+        context ? context->currentErgFile() : nullptr;
+    const std::weak_ptr<const char> originalWorkoutLifetime =
+        originalWorkout
+        ? originalWorkout->lifetimeToken()
+        : std::weak_ptr<const char>();
+    const QPointer<Context> guardedContext(this->context);
+    const QPointer<Athlete> guardedAthlete(this->athlete);
+    workoutLease.reset(
+        new ModalPointerOverrideLease<Context, ErgFile*>(
+            context,
+            [](const Context &owner) {
+                return owner.trainingSession().currentWorkout();
+            },
+            [](Context &owner, ErgFile *const &workout) {
+                owner.trainingSession().setWorkout(workout);
+            },
+            nullptr,
+            [guardedContext, guardedAthlete] {
+                return guardedContext && guardedAthlete
+                    && guardedContext->athlete
+                        == guardedAthlete.data();
+            },
+            [originalWorkout, originalWorkoutLifetime] {
+                return !originalWorkout
+                    || !originalWorkoutLifetime.expired();
+            }));
     ergFilePlot = new ErgFilePlot(context);
     ergFilePlot->setShowColorZones(2);
     ergFilePlot->setShowTooltip(1);
@@ -609,7 +704,7 @@ ManualActivityPageWorkout::ManualActivityPageWorkout
 ManualActivityPageWorkout::~ManualActivityPageWorkout
 ()
 {
-    context->workout = backupWorkout;
+    workoutLease.reset();
     if (workoutModel != nullptr) {
         delete workoutModel;
     }
@@ -659,11 +754,17 @@ void
 ManualActivityPageWorkout::selectionChanged
 ()
 {
+    if (!context || !athlete
+        || context->athlete != athlete.data()) {
+        return;
+    }
     QModelIndex current = workoutTree->currentIndex();
     if (! current.isValid()) {
         setField("woFilename", QString());
         contentStack->setCurrentIndex(0);
         if (ergFile != nullptr) {
+            if (workoutLease)
+                workoutLease->publish(nullptr);
             delete ergFile;
             ergFile = nullptr;
         }
@@ -676,6 +777,8 @@ ManualActivityPageWorkout::selectionChanged
     QString type = workoutModel->data(workoutModel->index(target.row(), TdbWorkoutModelIdx::type), Qt::DisplayRole).toString();
     QString description = workoutModel->data(workoutModel->index(target.row(), TdbWorkoutModelIdx::description), Qt::DisplayRole).toString();
     if (ergFile != nullptr) {
+        if (workoutLease)
+            workoutLease->publish(nullptr);
         delete ergFile;
         ergFile = nullptr;
     }
@@ -724,7 +827,8 @@ ManualActivityPageWorkout::selectionChanged
     }
 
     contentStack->setCurrentIndex(ergFile != nullptr ? 1 : 2);
-    context->workout = ergFile;
+    if (workoutLease)
+        workoutLease->publish(ergFile);
     ergFilePlot->setData(ergFile);
     ergFilePlot->replot();
     infoWidget->ergFileSelected(ergFile);
@@ -1147,6 +1251,11 @@ ManualActivityPageMetrics::updateEstimates
     }
 
     // do we have any rides?
+    if (!context || !context->athlete
+        || !context->athlete->rideCache) {
+        return;
+    }
+
     if (context->athlete->rideCache->rides().count()) {
         // last 'n' days calculation
         double seconds = 0.0;
@@ -1521,6 +1630,10 @@ static QString
 activityFilename
 (const QDateTime &dt, bool plan, Context *context)
 {
+    if (!context || !context->athlete
+        || !context->athlete->home) {
+        return QString();
+    }
     QString basename = activityBasename(dt);
     QString filename;
     if (plan) {
