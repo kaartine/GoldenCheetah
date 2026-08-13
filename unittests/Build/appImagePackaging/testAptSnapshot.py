@@ -445,11 +445,15 @@ class AptSnapshotTests(unittest.TestCase):
                 "Acquire::AllowInsecureRepositories=false",
                 "Acquire::AllowDowngradeToInsecureRepositories=false",
                 "APT::Get::AllowUnauthenticated=false",
+                "--allow-downgrades",
             ):
                 self.assertIn(option, observed)
 
         installer = INSTALLER.read_text(encoding="utf-8")
         self.assertIn('APT_GET="$REPOSITORY_ROOT/appveyor/linux/apt-get-fail-closed.sh"', installer)
+        self.assertIn("/etc/apt/preferences.d/goldencheetah-snapshot", installer)
+        self.assertIn('Pin: origin "snapshot.ubuntu.com"', installer)
+        self.assertIn("Pin-Priority: 1001", installer)
         self.assertNotIn("sudo apt-get ", installer)
 
     def test_docker_bootstraps_pinned_ca_from_authenticated_snapshot(self):

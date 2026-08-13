@@ -66,11 +66,11 @@
           "Test": "b6f66eaf761a33fba5b32bab8afb555dae4c92e0cf770272f3452af82539d0b7"
         },
         "windows": {
-          "Build and test Windows": "895d95016b0a3b36c277ab71ad968d58feefc31a28c18ccd4e423f2782830639"
+          "Build and test Windows": "95123b03ab338609be79d5c0abe13b41c531555619196b013143769749c303fe"
         }
       },
       "semantic_sha256": [
-        "7e93e7b7049f307425d2d06b7b0f5f4ddb86d77965bb268f7b44b7ef4d07f3a3"
+        "0c81e72848e7c411428cbbdcc3050dcd5206af82206284024acf136c05e74824"
       ],
       "trusted_run_sha256": {
         "report-final": "69e43e6387d779b8f1f330e83971285e707ce9fc32e0184c85421f61ee5f2dc6",
@@ -228,7 +228,7 @@
     ".github/scripts/DMG_README.md": "420a5a78c7f82d62ecacd446572fa61040c00959cb86d365b849e648b76d20f6",
     ".github/scripts/after_build.sh": "aced87f919c9f81ca7a97a33dd110d029adf0e7dbed3773635c49b82d38f12fd",
     ".github/scripts/before_build.sh": "013982f40ac27e626b8df52f1e8fc043f96cc47ce0afcd5e5ae7982c9923a4c2",
-    ".github/scripts/build.sh": "3127abd7af54e37c56a53ee3b91403183c631ad72e9f420ed5ea5d76d70a2b81",
+    ".github/scripts/build.sh": "bc22c99f383b80eb95954a44634f4a1168956fc0eeefc2a6a10ce663f7e52a22",
     ".github/scripts/check-immutable-actions.py": "8240ede87866254cb2b5b5123ce1b64a79a8baf99ab912ad0b65ccef66df1dd2",
     ".github/scripts/immutable-actions-requirements.lock": "f4eb4eb9e1a67e2ac46d760f7f364f81319b6af5467b5404ec82a29a0d84bf6e",
     ".github/scripts/install-pinned-homebrew.sh": "16a919842b9bcffff01146e3d46a674b1672a5504ecdf57050b564f6aa60b874",
@@ -237,11 +237,11 @@
     "appveyor.yml": "3aa901e6f97e26f9c3aacc899dbaf7c1de809b4ddff657c5fa1d47af7e341554",
     "appveyor/check-unconfigured-oauth.py": "50f5a22b60c7d30b136de22b61e3b651cb54b2fa0c5b9f21907ec44a32201209",
     "appveyor/linux/after_build.sh": "52cacd13fa2841a21762fed76d903f4ea21d2c2fcf2e1252acb939f78943dbdc",
-    "appveyor/linux/apt-get-fail-closed.sh": "919778fefbb9ff63a047f6131b984c06df76987d24f6078cee0bd65064b6780c",
+    "appveyor/linux/apt-get-fail-closed.sh": "76c67abbe63e28896374349e071ceec2dbbf04b2cff832719ec41f198ffedb91",
     "appveyor/linux/before_build.sh": "26feda72bfb3a18875738dbd77b697f669c978e3dd74b8b436ea87b25ab82fb7",
     "appveyor/linux/build-appimage-pass.sh": "7c414b9894ddfa4393e3d9f78b8cd9332c5837a6a39515c3466178d4700c1a8f",
     "appveyor/linux/build-input-paths.sh": "7c3cf8a0c1e9b32c882aeb1072d8a1a39837700d3e8fbe0d60c36efb2c3d9b5c",
-    "appveyor/linux/install.sh": "948077dfd4b25390e5ed2053558d9b0be0eae083594176455fc3f796569852e4",
+    "appveyor/linux/install.sh": "5cb5c0f7b1418efb8abb19650f6098934c14be81dc744230cb82143595123421",
     "appveyor/linux/package-appimage-pass.sh": "270a0e4a4b950c640102d7d258c9a1a2b96c29029d2981e10ad01e64734813a8",
     "appveyor/linux/reproduce-appimage.sh": "1e8af63bf5be3073e8e32a89e67a38c2d87a45dae0db8f7966ebd0a5d7d59645",
     "appveyor/linux/ubuntu-snapshot.sources.list": "090781d92edbdda63f40316d22859542961c91f927f469e0cf5421503ccddae1",
@@ -255,7 +255,7 @@
     "appveyor/safe-extract.py": "08ebecf3331dd6386fba7149279a4ca84517f5a2083c51845e2af848fd42638b",
     "appveyor/windows/after_build.ps1": "62bcbe0845f6c0a4422f343bad0e61a76da85fb279c7c39d121466942f3526cc",
     "appveyor/windows/before_build.ps1": "d2cf8eb1c7648c6e47882d150465919d6831211048da1205839705abe02d468d",
-    "appveyor/windows/install.ps1": "ac9ee8ef5ce2a7872cbf7223ce3b1787666ea55bbb42b5c22ea12bd95508bb24",
+    "appveyor/windows/install.ps1": "0401076713db479f8881eb3933184e7e08640a7cbbf55406761a8a2e28b8d333",
     "appveyor/windows/run-build-regressions.ps1": "7375ad60bf3aba53a9ec14bcad43f06516c026efbd4b3ad32c63c4daa28c6995",
     "appveyor/windows/vcpkg.json": "965e28da83be81089b59ae69ec31058de76c6fe15f366e983b338406238a0153",
     "src/Python/requirements-appimage.lock": "7b8c9bb16c8dddbd26352e97650b5313641c7ea71740ba62e70e7c6be7c4883b",
@@ -271,19 +271,19 @@
     "src/Resources/win32/GC3.8-Master-W64-QT6.nsi": "faa9df078f3cce406b1eaf7188c24bc2c8a288958207af55d052f932cefcccde",
     "unittests/Build/appImagePackaging/appImagePackaging.pro": "cfe1447304665c49477eb2c96660eb31f88e254d7a2f8f9fc444cec884bb8a52",
     "unittests/Build/appImagePackaging/testAppImagePackaging.sh": "e753c2f3dc91e33c50d2370cefd2c51a97e13a7ff467152447de28be80c0bee9",
-    "unittests/Build/appImagePackaging/testAptSnapshot.py": "224bbc8516616d127452cc13c7d1d4c51b60632123527248abb91dee5ce41a44",
+    "unittests/Build/appImagePackaging/testAptSnapshot.py": "561b45ce266ed340ff1e1e978b6049ad41f4513c9941b6294c8de66305dd4867",
     "unittests/Build/appImagePackaging/testCiReleaseGates.sh": "f27ad24e7a34a857a44e7cb6047bf3e34c99217add327b17a41e8a52cdc24172",
     "unittests/Build/appImagePackaging/testDiagnosticOAuth.sh": "2f14458503e751bc33f284b43d1de13450fa9cfd350ad2866d88dd248e19bc3c",
     "unittests/Build/appImagePackaging/testGeneratedSecrets.ps1": "da1b89ff997b473ec30414b6b96fa7ffde6934b88a1ccd04783c9e02b353b418",
     "unittests/Build/appImagePackaging/testImmutableActions.py": "a050788b005a93465b54e4436c89011fd50f37d937b69292d109a1d5173305b8",
-    "unittests/Build/appImagePackaging/testMacOSPackaging.py": "dd319d547616a1465f81811bf1ea96505099b852b68d3eb8865563fe31175024",
+    "unittests/Build/appImagePackaging/testMacOSPackaging.py": "42429045380654ae6b2bed4dc8eec702aebc38889e8ec407c8591195623137ee",
     "unittests/Build/appImagePackaging/testReleaseHardening.py": "f1c56d4d0422f1a6e56b9692ec3b637427c670ce79faa3fde98815f5dc47fe2c",
     "unittests/Build/appImagePackaging/testSafeExtraction.py": "d9f86b09ca2b2b10562679dfcb06def7fcd69b033fb8c828d20810d7402c29b0",
     "unittests/Build/appImagePackaging/testSbomProvenance.py": "46e5ee6af497432902b5e22c2e058470f071b127a4b05a8768d5176ef36ff0c5",
     "unittests/Build/appImagePackaging/testUnconfiguredOAuthGate.py": "9d58a7f21edf908207069629e569eaa9f7dee74880101f894417f52370e0590b",
     "unittests/Build/appImagePackaging/testVerifiedQtArchives.py": "9c5dbf4f13b6dae0067c3d739c0ac7614b63a9c3cc742c2626b573018c880812",
-    "unittests/Build/appImagePackaging/testWindowsOpenSsl.py": "b55e489c2a2f87c6b70463c34138e74ce5c0f0afbdb46734c30f2fe741648ad5",
-    "unittests/Build/appImagePackaging/testWindowsPackaging.ps1": "79d829a7297d516a60610084ca4acc33a7b84d03f73cd9d1f7672599354cd6fc",
+    "unittests/Build/appImagePackaging/testWindowsOpenSsl.py": "d158c5248781835537dd8f6a1eb32c2b2f0f8b99dcf59c3da7df6f9cab9b8b2b",
+    "unittests/Build/appImagePackaging/testWindowsPackaging.ps1": "d06a08209cc1e1d4108780c820166e3fc6a92cbd9b893d7581bb12659c4f33ac",
     "unittests/Build/ciTestRunner/ciTestRunner.pro": "2f0afcc5fea392caf3c728960171159afbe1464404a30e9da65256968a284234",
     "unittests/Build/ciTestRunner/testCiTestRunner.py": "9bac7a05cb8578df1abbf828e57908bf085073dad1533da76fbfe138471c4deb",
     "unittests/ci-required-tests.txt": "0e6ceb72d3865e1e97fa152a5485d623738d9b2df140035f99d703586f617be9",

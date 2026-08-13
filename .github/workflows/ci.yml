@@ -303,7 +303,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           & appveyor/windows/install.ps1
-          $env:PATH = "C:\Python313-x64\Scripts;C:\Python313-x64;C:\JOM;C:\R\bin;$env:PATH"
+          $env:PATH = "C:\JOM;C:\R\bin;$env:PATH"
           & appveyor/windows/before_build.ps1
           Copy-Item unittests/unittests.pri.in unittests/unittests.pri
           lupdate src/src.pro

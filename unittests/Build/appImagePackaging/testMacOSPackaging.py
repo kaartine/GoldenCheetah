@@ -13,6 +13,7 @@ import unittest
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 VALIDATOR = REPOSITORY_ROOT / "appveyor" / "macos" / "validate-payload.py"
 HOMEBREW_INSTALLER = REPOSITORY_ROOT / ".github" / "scripts" / "install-pinned-homebrew.sh"
+MACOS_BUILD = REPOSITORY_ROOT / ".github" / "scripts" / "build.sh"
 MACOS_REGRESSION_RUNNER = (
     REPOSITORY_ROOT / "appveyor" / "macos" / "run-build-regressions.sh"
 )
@@ -208,6 +209,10 @@ if "rev-parse" in args:
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(tool.read_text(encoding="ascii"), "trusted")
         self.assertEqual(log.read_text(encoding="ascii"), "reinstall\n")
+
+    def test_homebrew_formula_revision_is_part_of_expected_version(self):
+        build = MACOS_BUILD.read_text(encoding="utf-8")
+        self.assertIn("automake=1.18.1_1", build)
 
     def test_native_regressions_skip_linux_only_release_gates(self):
         runner = MACOS_REGRESSION_RUNNER.read_text(encoding="utf-8")

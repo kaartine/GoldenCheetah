@@ -13,6 +13,7 @@ LOCK = REPOSITORY_ROOT / "appveyor/windows/openssl-runtime.lock.json"
 INSTALLER = REPOSITORY_ROOT / "src/Resources/win32/GC3.8-Master-W64-QT6.nsi"
 VCPKG_MANIFEST = REPOSITORY_ROOT / "appveyor/windows/vcpkg.json"
 APPVEYOR = REPOSITORY_ROOT / "appveyor.yml"
+CI_WORKFLOW = REPOSITORY_ROOT / ".github" / "workflows" / "ci.yml"
 PYTHON_VERSION = "3.13.14"
 PYTHON_ABI = "313"
 PYTHON_ARCHIVE_SHA256 = (
@@ -56,12 +57,20 @@ class WindowsOpenSslTests(unittest.TestCase):
     def test_windows_build_uses_the_same_hash_pinned_python_abi(self):
         install_script = INSTALL_SCRIPT.read_text(encoding="utf-8")
         before_build = BEFORE_BUILD.read_text(encoding="utf-8")
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
         self.assertIn(f"$pythonBuildVersion = '{PYTHON_VERSION}'", install_script)
         self.assertIn(PYTHON_INSTALLER_SHA256, install_script)
         self.assertIn("Install-VerifiedPythonBuild", install_script)
         self.assertIn("python313.lib", install_script)
         self.assertIn("sys.version.split()[0]", install_script)
+        self.assertIn("Resolve-GitHubRunnerPythonBuildRoot", install_script)
+        self.assertIn("$env:RUNNER_TOOL_CACHE", install_script)
+        self.assertIn("$env:GITHUB_ACTIONS", install_script)
+        self.assertNotIn(
+            '$env:PATH = "C:\\Python313-x64\\Scripts;C:\\Python313-x64;',
+            workflow,
+        )
         self.assertNotIn("-lpython311", before_build)
         self.assertIn("-lpython$pythonAbi", before_build)
 

@@ -22,6 +22,11 @@ sudo install -m 0644 appveyor/linux/ubuntu-snapshot.sources.list \
     /etc/apt/sources.list
 printf 'APT::Snapshot "%s";\n' "$UBUNTU_SNAPSHOT" |
     sudo tee /etc/apt/apt.conf.d/50goldencheetah-snapshot >/dev/null
+sudo tee /etc/apt/preferences.d/goldencheetah-snapshot >/dev/null <<'EOF'
+Package: *
+Pin: origin "snapshot.ubuntu.com"
+Pin-Priority: 1001
+EOF
 sudo rm -rf /var/lib/apt/lists/*
 sudo "$APT_GET" update --error-on=any -qq
 sudo find /var/lib/apt/lists -maxdepth 1 \

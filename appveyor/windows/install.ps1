@@ -77,6 +77,27 @@ function Assert-RequiredFiles {
   }
 }
 
+function Resolve-GitHubRunnerPythonBuildRoot {
+  param(
+    [Parameter(Mandatory = $true)][string]$Version,
+    [Parameter(Mandatory = $true)][string[]]$RequiredFiles
+  )
+
+  if ($env:GITHUB_ACTIONS -cne 'true' -or
+      [string]::IsNullOrWhiteSpace($env:RUNNER_TOOL_CACHE)) {
+    return $null
+  }
+  $pythonCache = Join-Path $env:RUNNER_TOOL_CACHE 'Python'
+  $versionCache = Join-Path $pythonCache $Version
+  $candidate = Join-Path $versionCache 'x64'
+  foreach ($relativePath in $RequiredFiles) {
+    if (-not (Test-Path -LiteralPath (Join-Path $candidate $relativePath) -PathType Leaf)) {
+      return $null
+    }
+  }
+  return $candidate
+}
+
 function Install-ZipDependency {
   param(
     [Parameter(Mandatory = $true)][string]$Root,
@@ -149,19 +170,31 @@ function Install-VerifiedPythonBuild {
     throw "Python installer failed with exit code $($process.ExitCode)"
   }
 
-  Assert-RequiredFiles -Root $Root -RequiredFiles @(
+  $required = @(
     'python.exe',
     'python313.dll',
     'include\Python.h',
     'libs\python313.lib',
     'DLLs\_ssl.pyd'
   )
-  Invoke-NativeCommand -FilePath (Join-Path $Root 'python.exe') -ArgumentList @(
+  $selectedRoot = $Root
+  try {
+    Assert-RequiredFiles -Root $selectedRoot -RequiredFiles $required
+  } catch {
+    $selectedRoot = Resolve-GitHubRunnerPythonBuildRoot `
+      -Version $Version `
+      -RequiredFiles $required
+    if ([string]::IsNullOrWhiteSpace($selectedRoot)) {
+      throw
+    }
+  }
+  Assert-RequiredFiles -Root $selectedRoot -RequiredFiles $required
+  Invoke-NativeCommand -FilePath (Join-Path $selectedRoot 'python.exe') -ArgumentList @(
     '-B', '-I', '-c',
     "import ssl, sys; assert sys.version.split()[0] == '$Version'; assert ssl.OPENSSL_VERSION.split()[1] == '$OpenSslVersion'"
   ) | Out-Null
 
-  $env:PATH = "$Root\Scripts;$Root;$env:PATH"
+  $env:PATH = "$selectedRoot\Scripts;$selectedRoot;$env:PATH"
   if ($null -ne (Get-Command Set-AppveyorBuildVariable -ErrorAction SilentlyContinue)) {
     Set-AppveyorBuildVariable -Name 'PATH' -Value $env:PATH
   }

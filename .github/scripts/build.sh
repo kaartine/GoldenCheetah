@@ -53,7 +53,7 @@ main() {
     PATH=/opt/homebrew/opt/bison/bin:/opt/homebrew/opt/python@${PYTHON_VERSION}/libexec/bin:${PATH}
 
   local brewdeps=(
-    automake=1.18.1
+    automake=1.18.1_1
     bison=3.8.2
     gsl=2.8
     icu4c@78=78.3

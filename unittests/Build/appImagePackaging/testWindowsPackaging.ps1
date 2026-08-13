@@ -22,6 +22,35 @@ try {
 
   $env:GC_BUILD_ACQUISITION_HELPERS_ONLY = '1'
   . $installScript
+
+  $runnerCache = Join-Path $temporaryRoot 'runner-tool-cache'
+  $runnerPython = Join-Path (Join-Path (Join-Path $runnerCache 'Python') '3.13.14') 'x64'
+  $runnerRequired = @(
+    'python.exe', 'python313.dll', 'include\Python.h',
+    'libs\python313.lib', 'DLLs\_ssl.pyd'
+  )
+  foreach ($relativePath in $runnerRequired) {
+    $path = Join-Path $runnerPython $relativePath
+    New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+    [IO.File]::WriteAllText($path, 'authenticated runner fixture')
+  }
+  $env:GITHUB_ACTIONS = 'true'
+  $env:RUNNER_TOOL_CACHE = $runnerCache
+  $resolvedRunnerPython = Resolve-GitHubRunnerPythonBuildRoot `
+    -Version '3.13.14' `
+    -RequiredFiles $runnerRequired
+  if ($resolvedRunnerPython -cne $runnerPython) {
+    throw 'Exact GitHub runner Python toolcache entry was not resolved'
+  }
+  Remove-Item -LiteralPath (Join-Path $runnerPython 'DLLs\_ssl.pyd') -Force
+  if ($null -ne (Resolve-GitHubRunnerPythonBuildRoot `
+        -Version '3.13.14' `
+        -RequiredFiles $runnerRequired)) {
+    throw 'Incomplete GitHub runner Python toolcache entry was accepted'
+  }
+  Remove-Item Env:GITHUB_ACTIONS
+  Remove-Item Env:RUNNER_TOOL_CACHE
+
   function Get-VerifiedDownload {
     param($Uri, $Destination, $ExpectedSha256)
     [IO.File]::WriteAllText($Destination, 'verified archive fixture')
@@ -270,6 +299,8 @@ try {
   Write-Output 'PASS: Windows dependencies and Python staging fail closed'
 } finally {
   Remove-Item Env:GC_BUILD_ACQUISITION_HELPERS_ONLY -ErrorAction SilentlyContinue
+  Remove-Item Env:GITHUB_ACTIONS -ErrorAction SilentlyContinue
+  Remove-Item Env:RUNNER_TOOL_CACHE -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $temporaryRoot -Recurse -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath (Join-Path ([IO.Path]::GetTempPath()) "gc-cache-fixture-$PID.zip") -Force -ErrorAction SilentlyContinue
 }
