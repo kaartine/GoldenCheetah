@@ -219,6 +219,9 @@ if "rev-parse" in args:
         runner = MACOS_REGRESSION_RUNNER.read_text(encoding="utf-8")
         release_gates = CI_RELEASE_GATES.read_text(encoding="utf-8")
 
+        self.assertIn('brew --prefix "python@${PYTHON_VERSION}"', runner)
+        self.assertIn('export PATH="$BREW_PYTHON_ROOT/libexec/bin:$PATH"', runner)
+        self.assertIn('sys.version_info[:2]', runner)
         self.assertIn(
             'bash "$TEST_ROOT/testCiReleaseGates.sh" --portable', runner
         )

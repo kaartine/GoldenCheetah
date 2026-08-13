@@ -8,6 +8,8 @@ DEFINES += GC_OAUTH_DIALOG_TEST_HOOKS
 
 TARGET = testStravaOAuthPolicy
 
+include(../../unittests.pri)
+
 SOURCES = testStravaOAuthPolicy.cpp \
           OAuthDialogTestStubs.cpp \
           ../stravaAccountRemoval/StravaPublisherTestSettings.cpp \
@@ -58,8 +60,6 @@ INCLUDEPATH += ../../../src \
                ../../../qwt/src
 
 win32:LIBS += -ladvapi32
-
-include(../../unittests.pri)
 
 sanitize:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

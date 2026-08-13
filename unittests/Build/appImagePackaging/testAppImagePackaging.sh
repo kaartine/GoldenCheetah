@@ -2708,6 +2708,13 @@ assert_contains "$ATHLETE_MIGRATION_STUB" 'RideCache::saveActivities('
 assert_contains "$ATHLETE_MIGRATION_STUB" 'QColor GCColor::invertColor('
 assert_contains "$STRAVA_OAUTH_POLICY_PROJECT" 'QT += charts'
 assert_contains "$STRAVA_OAUTH_POLICY_PROJECT" '$${GSL_INCLUDES}'
+strava_config_line=$(grep -nF 'include(../../unittests.pri)' \
+    "$STRAVA_OAUTH_POLICY_PROJECT" | cut -d: -f1)
+strava_gsl_line=$(grep -nF '$${GSL_INCLUDES}' \
+    "$STRAVA_OAUTH_POLICY_PROJECT" | cut -d: -f1)
+if [ "$strava_config_line" -ge "$strava_gsl_line" ]; then
+    fail "Strava OAuth policy test expands GSL_INCLUDES before loading gcconfig.pri"
+fi
 assert_contains "$STRAVA_ROUTES_PIPELINE_PROJECT" '$${GSL_INCLUDES}'
 assert_contains "$DATA_FILTER_ZONES_PROJECT" '$${GSL_INCLUDES}'
 assert_contains "$CREDENTIAL_SETTINGS_TEST" 'double dpiXFactor = 1.0;'
