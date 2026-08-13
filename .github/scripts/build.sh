@@ -64,7 +64,7 @@ main() {
     openssl@3=3.6.3
     python@"${PYTHON_VERSION}"=3.11.15_4
     qt=6.11.1
-    dbus=1.16.2
+    dbus=1.16.2_1
   )
 
   .github/scripts/install-pinned-homebrew.sh "${brewdeps[@]}"

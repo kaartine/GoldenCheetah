@@ -46,7 +46,20 @@ sudo "$APT_GET" install -qq flex libpulse-dev
 sudo "$APT_GET" install -qq pkg-config libsecret-1-dev libgpg-error-dev
 sudo "$APT_GET" install -qq libcap2 libgnutls30
 sudo "$APT_GET" install -qq libglu1-mesa-dev libxcb-cursor-dev
-sudo "$APT_GET" install -qq libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+mapfile -t conflicting_unwind_packages < <(
+    dpkg-query -W -f='${binary:Package}\n' 'libunwind-*-dev' 2>/dev/null |
+        grep -E '^libunwind-[0-9]+-dev(:[[:alnum:]-]+)?$' || true
+)
+if [ "${#conflicting_unwind_packages[@]}" -gt 0 ]; then
+    sudo "$APT_GET" remove -qq "${conflicting_unwind_packages[@]}"
+fi
+if ! sudo "$APT_GET" install -qq \
+    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev; then
+    sudo "$APT_GET" install --simulate \
+        -o Debug::pkgProblemResolver=yes \
+        libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev || true
+    exit 1
+fi
 sudo "$APT_GET" install -qq libsamplerate0-dev
 sudo "$APT_GET" install -qq libical-dev
 

@@ -454,6 +454,11 @@ class AptSnapshotTests(unittest.TestCase):
         self.assertIn("/etc/apt/preferences.d/goldencheetah-snapshot", installer)
         self.assertIn('Pin: origin "snapshot.ubuntu.com"', installer)
         self.assertIn("Pin-Priority: 1001", installer)
+        unwind_cleanup = installer.index("conflicting_unwind_packages")
+        gstreamer_install = installer.index("libgstreamer1.0-dev")
+        self.assertLess(unwind_cleanup, gstreamer_install)
+        self.assertIn("libunwind-[0-9]+-dev", installer)
+        self.assertIn("Debug::pkgProblemResolver=yes", installer)
         self.assertNotIn("sudo apt-get ", installer)
 
     def test_docker_bootstraps_pinned_ca_from_authenticated_snapshot(self):

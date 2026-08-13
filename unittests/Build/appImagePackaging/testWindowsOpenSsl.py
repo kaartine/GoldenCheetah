@@ -67,6 +67,7 @@ class WindowsOpenSslTests(unittest.TestCase):
         self.assertIn("Resolve-GitHubRunnerPythonBuildRoot", install_script)
         self.assertIn("$env:RUNNER_TOOL_CACHE", install_script)
         self.assertIn("$env:GITHUB_ACTIONS", install_script)
+        self.assertIn("qtconnectivity", workflow)
         self.assertNotIn(
             '$env:PATH = "C:\\Python313-x64\\Scripts;C:\\Python313-x64;',
             workflow,
