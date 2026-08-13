@@ -445,6 +445,9 @@ class AptSnapshotTests(unittest.TestCase):
                 "Acquire::AllowInsecureRepositories=false",
                 "Acquire::AllowDowngradeToInsecureRepositories=false",
                 "APT::Get::AllowUnauthenticated=false",
+                "Acquire::Retries=5",
+                "Acquire::http::Timeout=30",
+                "Acquire::https::Timeout=30",
                 "--allow-downgrades",
             ):
                 self.assertIn(option, observed)
