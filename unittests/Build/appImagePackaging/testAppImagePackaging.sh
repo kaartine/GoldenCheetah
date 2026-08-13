@@ -51,6 +51,7 @@ STRAVA_OAUTH_POLICY_PROJECT="$REPO_ROOT/unittests/Cloud/stravaOAuthPolicy/strava
 STRAVA_ROUTES_PIPELINE_PROJECT="$REPO_ROOT/unittests/Train/stravaRoutesDownloadPipeline/stravaRoutesDownloadPipeline.pro"
 DATA_FILTER_ZONES_PROJECT="$REPO_ROOT/unittests/Core/dataFilterZones/dataFilterZones.pro"
 INDEND_PLOT_MARKER_PROJECT="$REPO_ROOT/unittests/Charts/indendPlotMarkerMatrix/indendPlotMarkerMatrix.pro"
+UNITTEST_CONFIG="$REPO_ROOT/unittests/unittests.pri.in"
 CREDENTIAL_SETTINGS_TEST="$REPO_ROOT/unittests/Core/credentialSettings/testCredentialSettings.cpp"
 
 fail()
@@ -2719,6 +2720,7 @@ fi
 assert_contains "$STRAVA_ROUTES_PIPELINE_PROJECT" '$${GSL_INCLUDES}'
 assert_contains "$DATA_FILTER_ZONES_PROJECT" '$${GSL_INCLUDES}'
 assert_contains "$INDEND_PLOT_MARKER_PROJECT" 'QT += testlib widgets svg'
+assert_contains "$UNITTEST_CONFIG" 'INCLUDEPATH += $${GSL_INCLUDES}'
 assert_contains "$CREDENTIAL_SETTINGS_TEST" 'double dpiXFactor = 1.0;'
 assert_contains "$CREDENTIAL_SETTINGS_TEST" 'double dpiYFactor = 1.0;'
 if grep -Fq '$${QT_INSTALL_PREFIX}/src/3rdparty/zlib' "$SOURCE_PROJECT"; then

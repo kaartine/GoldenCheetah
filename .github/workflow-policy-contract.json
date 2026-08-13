@@ -270,7 +270,7 @@
     "src/Resources/linux/verify-appimage-payload.py": "18809da68d8571df92af71bfd6110b7921eb7e555142da68d7de433598dba34e",
     "src/Resources/win32/GC3.8-Master-W64-QT6.nsi": "faa9df078f3cce406b1eaf7188c24bc2c8a288958207af55d052f932cefcccde",
     "unittests/Build/appImagePackaging/appImagePackaging.pro": "cfe1447304665c49477eb2c96660eb31f88e254d7a2f8f9fc444cec884bb8a52",
-    "unittests/Build/appImagePackaging/testAppImagePackaging.sh": "74da0b05b2adf174519229ce4aa0810d295a9014a389d6616de39b6894f4299f",
+    "unittests/Build/appImagePackaging/testAppImagePackaging.sh": "badbebdc3af8fab2723da5f3ff6622ea70172abb9b78f54069404d83b992b4a9",
     "unittests/Build/appImagePackaging/testAptSnapshot.py": "5a22e82ade11811ce80788400dcdeb60e349f3ba4390f54f87d5221097eef454",
     "unittests/Build/appImagePackaging/testCiReleaseGates.sh": "f27ad24e7a34a857a44e7cb6047bf3e34c99217add327b17a41e8a52cdc24172",
     "unittests/Build/appImagePackaging/testDiagnosticOAuth.sh": "2f14458503e751bc33f284b43d1de13450fa9cfd350ad2866d88dd248e19bc3c",
@@ -287,7 +287,7 @@
     "unittests/Build/ciTestRunner/ciTestRunner.pro": "2f0afcc5fea392caf3c728960171159afbe1464404a30e9da65256968a284234",
     "unittests/Build/ciTestRunner/testCiTestRunner.py": "9bac7a05cb8578df1abbf828e57908bf085073dad1533da76fbfe138471c4deb",
     "unittests/ci-required-tests.txt": "98c6a17fcd4ef897bc19710fc32d30d29524475111ba0fbe091b10261aa307c6",
-    "unittests/unittests.pri.in": "205f84784e7e12a28dcb2dd278a1106fd57df4e31af8a3f809cbc24d921e4e92",
+    "unittests/unittests.pri.in": "58c1673c4ed201bb91b0c82375265dfa10011c3401f9529c59bd5ef4691ca69d",
     "unittests/unittests.pro": "b0fb0fa8e8a4461df561877a5468172c1ee99bca2a705024fa373b87c5d37ccb"
   }
 }
