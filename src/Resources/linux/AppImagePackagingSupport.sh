@@ -29,8 +29,9 @@ SRMIO_REVISION="b444b8747317c41607d468ae71a0ecd36a94332e"
 SRMIO_SOURCE_FILE="srmio-${SRMIO_REVISION}.tar.gz"
 SRMIO_SOURCE_SHA256="16359481488476df47de3cd1499787d3947036c06bd9d9b632f6e8a63e654186"
 SRMIO_SOURCE_URL="https://github.com/kaartine/GoldenCheetah/releases/download/appimage-build-deps-v1/${SRMIO_SOURCE_FILE}"
-D2XX_LINUX_VERSION="1.4.27"
-D2XX_LINUX_SHA256="537fc9db6e1eea110dd7661982dc49a28de22a4514b588e8a33a21110a5b6b4c"
+D2XX_LINUX_VERSION="1.4.33"
+D2XX_LINUX_SHA256="e260a4594a313583b87bf230c79cec9d46f11db6dcfd7c7d4f963279703214d3"
+D2XX_LINUX_SOURCE_URL="https://distfiles.gentoo.org/distfiles/b1/libftd2xx-x86_64-${D2XX_LINUX_VERSION}.tar.gz"
 QTKEYCHAIN_LICENSE_SHA256="ca46b73d5159548ab52834db51f195aa3d1f277f020e9dca92f4beb21b468a50"
 LGPL21_LICENSE_SHA256="dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
 
@@ -2060,7 +2061,7 @@ create_appimage_sbom()
         --requirements-lock "$requirements_lock" \
         --python-install-report "$python_install_report" \
         --d2xx-version "$D2XX_LINUX_VERSION" \
-        --d2xx-provenance "https://ftdichip.com/drivers/d2xx-drivers/#sha256=${D2XX_LINUX_SHA256}" \
+        --d2xx-provenance "${D2XX_LINUX_SOURCE_URL}#sha256=${D2XX_LINUX_SHA256}" \
         --linuxdeployqt-sha256 "$LINUXDEPLOYQT_SHA256" \
         --transformed-runtime-manifest "$transformed_runtime_manifest"
 

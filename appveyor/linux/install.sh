@@ -68,9 +68,9 @@ sudo "$APT_GET" install -qq r-base-dev
 R --version
 
 # D2XX
-D2XX_ARCHIVE=libftd2xx-x86_64-1.4.27.tgz
-D2XX_SHA256=537fc9db6e1eea110dd7661982dc49a28de22a4514b588e8a33a21110a5b6b4c
-D2XX_URL=https://ftdichip.com/wp-content/uploads/2022/07/$D2XX_ARCHIVE
+D2XX_ARCHIVE=libftd2xx-x86_64-1.4.33.tar.gz
+D2XX_SHA256=e260a4594a313583b87bf230c79cec9d46f11db6dcfd7c7d4f963279703214d3
+D2XX_URL=https://distfiles.gentoo.org/distfiles/b1/$D2XX_ARCHIVE
 if ! printf '%s  %s\n' "$D2XX_SHA256" "$GC_D2XX_ROOT/$D2XX_ARCHIVE" |
      sha256sum --check --status -; then
     rm -f "$GC_D2XX_ROOT/$D2XX_ARCHIVE" \
@@ -96,11 +96,13 @@ cleanup_d2xx()
 trap cleanup_d2xx EXIT
 python3 "$SAFE_EXTRACT" --format tar \
     --archive "$GC_D2XX_ROOT/$D2XX_ARCHIVE" \
-    --destination "$D2XX_WORK/release" --strip-components 1
+    --destination "$D2XX_WORK/release" --strip-components 1 \
+    --skip-link linux-x86_64/libftd2xx.so.1.4.33
 for required in \
     ftd2xx.h \
     WinTypes.h \
-    build/libftd2xx.so.1.4.27; do
+    libftd2xx.so \
+    README.pdf; do
     [ -f "$D2XX_WORK/release/$required" ] &&
         [ ! -L "$D2XX_WORK/release/$required" ]
 done

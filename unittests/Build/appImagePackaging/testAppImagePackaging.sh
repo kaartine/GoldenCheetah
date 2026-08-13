@@ -84,6 +84,14 @@ assert_contains()
 [ "$PYTHON_APPIMAGE_URL" = \
   "https://github.com/kaartine/GoldenCheetah/releases/download/appimage-build-deps-v1/$PYTHON_APPIMAGE_FILE" ] ||
     fail "embedded Python URL is not the project-controlled immutable asset"
+[ "$D2XX_LINUX_VERSION" = "1.4.33" ] ||
+    fail "unexpected Linux D2XX version"
+[ "$D2XX_LINUX_SHA256" = \
+  "e260a4594a313583b87bf230c79cec9d46f11db6dcfd7c7d4f963279703214d3" ] ||
+    fail "Linux D2XX SHA-256 is not the independently verified digest"
+[ "$D2XX_LINUX_SOURCE_URL" = \
+  "https://distfiles.gentoo.org/distfiles/b1/libftd2xx-x86_64-1.4.33.tar.gz" ] ||
+    fail "Linux D2XX source is not the stable reviewed mirror"
 [ "$LINUXDEPLOYQT_FILE" = \
   "linuxdeployqt-build107-20251021-x86_64.AppImage" ] ||
     fail "linuxdeployqt filename is not versioned"
@@ -2493,7 +2501,15 @@ assert_contains "$APPVEYOR_MACOS_INSTALL" 'SRMIO_WORK=$(mktemp -d)'
 assert_contains "$APPVEYOR_INSTALL" '--strip-components 1'
 assert_contains "$APPVEYOR_MACOS_INSTALL" '--strip-components 1'
 assert_contains "$APPVEYOR_INSTALL" \
-    'D2XX_SHA256=537fc9db6e1eea110dd7661982dc49a28de22a4514b588e8a33a21110a5b6b4c'
+    'D2XX_ARCHIVE=libftd2xx-x86_64-1.4.33.tar.gz'
+assert_contains "$APPVEYOR_INSTALL" \
+    'D2XX_SHA256=e260a4594a313583b87bf230c79cec9d46f11db6dcfd7c7d4f963279703214d3'
+assert_contains "$APPVEYOR_INSTALL" \
+    'D2XX_URL=https://distfiles.gentoo.org/distfiles/b1/$D2XX_ARCHIVE'
+assert_contains "$APPVEYOR_INSTALL" \
+    '--skip-link linux-x86_64/libftd2xx.so.1.4.33'
+assert_contains "$APPVEYOR_INSTALL" 'libftd2xx.so'
+assert_contains "$APPVEYOR_INSTALL" 'README.pdf'
 assert_contains "$APPVEYOR_MACOS_INSTALL" \
     'D2XX_SHA256=f59d18c11ecf5dedf0fcbdef24f18823c122ff24189a8e204479f9c408af7704'
 assert_contains "$APPVEYOR_MACOS_INSTALL" 'brew reinstall --formula "$formula"'

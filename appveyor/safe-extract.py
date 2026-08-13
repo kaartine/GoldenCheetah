@@ -96,15 +96,38 @@ def prepare_target(stage, relative, is_directory, executable=False):
     return target, 0o755
 
 
-def extract_tar(archive_path, stage, strip_components):
+def extract_tar(archive_path, stage, strip_components, skip_links=frozenset()):
     with tarfile.open(archive_path, mode="r:*") as archive:
         members = archive.getmembers()
         if not members or len(members) > MAX_MEMBERS:
             raise ValueError("archive has an invalid member count")
+        members_by_name = {member.name: member for member in members}
         seen = {}
+        skipped = set()
         planned = []
         total = 0
         for member in members:
+            if member.name in skip_links:
+                if member.name in skipped or not member.issym():
+                    raise ValueError("requested skipped member is not one symbolic link")
+                if safe_relative(member.name, strip_components) is None:
+                    raise ValueError("strip-components removes a skipped link name")
+                link = PurePosixPath(member.linkname)
+                if (
+                    not member.linkname
+                    or "\\" in member.linkname
+                    or "\x00" in member.linkname
+                    or unicodedata.normalize("NFC", member.linkname) != member.linkname
+                    or link.is_absolute()
+                    or any(part in {"", ".", ".."} for part in link.parts)
+                ):
+                    raise ValueError("requested skipped link has an unsafe target")
+                target_name = str(PurePosixPath(member.name).parent / link)
+                target = members_by_name.get(target_name)
+                if target is None or not target.isreg():
+                    raise ValueError("requested skipped link does not target a regular member")
+                skipped.add(member.name)
+                continue
             if not (member.isdir() or member.isreg()):
                 raise ValueError("archive contains a link or special member")
             relative = safe_relative(member.name, strip_components)
@@ -117,6 +140,8 @@ def extract_tar(archive_path, stage, strip_components):
             if total > MAX_UNCOMPRESSED_BYTES:
                 raise ValueError("archive is too large")
             planned.append((member, relative))
+        if skipped != skip_links:
+            raise ValueError("requested skipped link is absent from archive")
         for member, relative in planned:
             target, mode = prepare_target(
                 stage, relative, member.isdir(), bool(member.mode & 0o111)
@@ -173,7 +198,10 @@ def extract_zip(archive_path, stage, strip_components):
             os.chmod(target, mode)
 
 
-def extract_archive(archive_path, destination, archive_format, strip_components):
+def extract_archive(
+    archive_path, destination, archive_format, strip_components,
+    skip_links=frozenset(),
+):
     archive_path = archive_path.absolute()
     destination = destination.absolute()
     if archive_path.is_symlink() or not archive_path.is_file():
@@ -188,8 +216,10 @@ def extract_archive(archive_path, destination, archive_format, strip_components)
     stage = Path(tempfile.mkdtemp(prefix=destination.name + ".stage.", dir=parent))
     try:
         if archive_format == "tar":
-            extract_tar(archive_path, stage, strip_components)
+            extract_tar(archive_path, stage, strip_components, skip_links)
         elif archive_format == "zip":
+            if skip_links:
+                raise ValueError("skipped links are supported only for tar archives")
             extract_zip(archive_path, stage, strip_components)
         else:
             raise ValueError("unsupported archive format")
@@ -205,6 +235,7 @@ def main():
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--destination", type=Path, required=True)
     parser.add_argument("--strip-components", type=int, default=0)
+    parser.add_argument("--skip-link", action="append", default=[])
     arguments = parser.parse_args()
     if arguments.strip_components < 0 or arguments.strip_components > 32:
         raise ValueError("invalid strip-components value")
@@ -213,6 +244,7 @@ def main():
         arguments.destination,
         arguments.format,
         arguments.strip_components,
+        frozenset(arguments.skip_link),
     )
 
 

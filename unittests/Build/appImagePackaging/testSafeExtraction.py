@@ -64,6 +64,50 @@ class SafeExtractionTests(unittest.TestCase):
                 self.assertFalse(destination.exists(), name)
             self.assertFalse((root / "escape").exists())
 
+    def test_tar_can_skip_one_named_safe_symlink_without_publishing_it(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "vendor.tar"
+            with tarfile.open(archive, "w") as stream:
+                payload = b"library"
+                library = tarfile.TarInfo("vendor/lib.so")
+                library.size = len(payload)
+                stream.addfile(library, io.BytesIO(payload))
+                link = tarfile.TarInfo("vendor/lib.so.1")
+                link.type = tarfile.SYMTYPE
+                link.linkname = "lib.so"
+                stream.addfile(link)
+
+            destination = root / "output"
+            result = self.run_extract(
+                archive, destination, "tar",
+                "--strip-components", "1",
+                "--skip-link", "vendor/lib.so.1",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((destination / "lib.so").read_bytes(), payload)
+            self.assertFalse((destination / "lib.so.1").exists())
+
+            missing = self.run_extract(
+                archive, root / "missing", "tar",
+                "--skip-link", "vendor/not-present",
+            )
+            self.assertNotEqual(missing.returncode, 0)
+            self.assertFalse((root / "missing").exists())
+
+            unsafe_archive = root / "unsafe-vendor.tar"
+            with tarfile.open(unsafe_archive, "w") as stream:
+                link = tarfile.TarInfo("vendor/lib.so.1")
+                link.type = tarfile.SYMTYPE
+                link.linkname = "../outside"
+                stream.addfile(link)
+            unsafe = self.run_extract(
+                unsafe_archive, root / "unsafe", "tar",
+                "--skip-link", "vendor/lib.so.1",
+            )
+            self.assertNotEqual(unsafe.returncode, 0)
+            self.assertFalse((root / "unsafe").exists())
+
     def test_zip_rejects_symlinks_and_case_collisions(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
