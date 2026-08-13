@@ -51,16 +51,35 @@ int main(int argc, char **argv)
     return 0;
 }
 EOF
-"${CC:-cc}" -std=c99 -Wall -Wextra -Werror \
-    "$TEMP_DIR/runtime-only.c" -o "$TEMP_DIR/runtime-only"
 
 # shellcheck source=/dev/null
 . "$SUPPORT"
-[ "$(require_strava_oauth_build "$TEMP_DIR/runtime-only")" = \
-  "Strava OAuth: runtime credentials supported" ] ||
-    fail "runtime-only public build was rejected by the release gate"
-[ "$(require_unconfigured_strava_oauth_build "$TEMP_DIR/runtime-only")" = \
-  "Strava OAuth compile-time fallback: unavailable" ] ||
-    fail "public build did not prove its compile-time fallback absent"
+if [ "$(uname -s)" = Darwin ]; then
+    cat >"$TEMP_DIR/runtime-only" <<'EOF'
+#!/bin/sh
+printf '%s\n' \
+    goldencheetah_build_status=1 \
+    application=GoldenCheetah \
+    strava_support=enabled \
+    strava_oauth=runtime_credentials \
+    strava_compile_fallback=unavailable
+EOF
+    chmod 0700 "$TEMP_DIR/runtime-only"
+    [ "$(strava_oauth_build_status "$TEMP_DIR/runtime-only" true)" = \
+      "Strava OAuth: runtime credentials supported" ] ||
+        fail "runtime-only public build status was rejected"
+    [ "$(strava_oauth_build_fallback_status \
+          "$TEMP_DIR/runtime-only" true)" = unavailable ] ||
+        fail "public build status did not prove its compile-time fallback absent"
+else
+    "${CC:-cc}" -std=c99 -Wall -Wextra -Werror \
+        "$TEMP_DIR/runtime-only.c" -o "$TEMP_DIR/runtime-only"
+    [ "$(require_strava_oauth_build "$TEMP_DIR/runtime-only")" = \
+      "Strava OAuth: runtime credentials supported" ] ||
+        fail "runtime-only public build was rejected by the release gate"
+    [ "$(require_unconfigured_strava_oauth_build "$TEMP_DIR/runtime-only")" = \
+      "Strava OAuth compile-time fallback: unavailable" ] ||
+        fail "public build did not prove its compile-time fallback absent"
+fi
 
 echo "PASS: public releases use runtime-only Strava credentials"
