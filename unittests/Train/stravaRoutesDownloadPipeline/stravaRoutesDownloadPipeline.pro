@@ -82,13 +82,4 @@ tsan:!msvc {
     }
 }
 
-msvc {
-    QMAKE_CXXFLAGS += /Gy
-    QMAKE_LFLAGS += /OPT:REF
-} else:macx {
-    QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-    QMAKE_LFLAGS += -Wl,-dead_strip
-} else {
-    QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
-    QMAKE_LFLAGS += -Wl,--gc-sections
-}
+include(../../section-gc.prf)

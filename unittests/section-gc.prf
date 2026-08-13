@@ -8,7 +8,10 @@
     GC_SECTION_LINKER = gnu
 }
 
-!equals(GC_SECTION_LINKER, msvc) {
+equals(GC_SECTION_LINKER, msvc) {
+    QMAKE_CXXFLAGS += /Gy
+    QMAKE_LFLAGS += /OPT:REF
+} else {
     QMAKE_CXXFLAGS += -ffunction-sections -fdata-sections
 }
 

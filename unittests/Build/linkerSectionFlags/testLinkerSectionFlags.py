@@ -33,6 +33,7 @@ PORTABLE_SECTION_PROJECTS = (
     "Metrics/userMetricRegistrySafety/userMetricRegistrySafety.pro",
     "Python/pythonChartLifecycle/pythonChartLifecycle.pro",
     "Train/libraryImportFileStager/libraryImportFileStager.pro",
+    "Train/stravaRoutesDownloadPipeline/stravaRoutesDownloadPipeline.pro",
     "Train/webDownloadImportPolicy/webDownloadImportPolicy.pro",
 )
 CUSTOM_SECTION_PROJECTS = {
@@ -45,6 +46,7 @@ SECTION_FLAG_MARKERS = (
     "-fdata-sections",
     "--gc-sections",
     "-dead_strip",
+    "/Gy",
 )
 
 
@@ -140,6 +142,9 @@ def main() -> None:
     require_flag(gnu, "-Wl,--gc-sections", "-dead_strip", "GNU")
 
     msvc = generated_flags("msvc")
+    for expected in ("/Gy", "/OPT:REF"):
+        if expected not in msvc:
+            raise AssertionError(f"MSVC config is missing {expected}")
     for forbidden in ("--gc-sections", "-dead_strip", "-ffunction-sections"):
         if forbidden in msvc:
             raise AssertionError(f"MSVC config contains forbidden {forbidden}")
