@@ -9,9 +9,14 @@ TARGET = tst_athleteMigrationSafety
 
 include(../../unittests.pri)
 
-INCLUDEPATH += ../../../contrib/qtsolutions
-LIBS += -lz
-win32:LIBS += -ladvapi32
+INCLUDEPATH += ../../../contrib/qtsolutions \
+               $${GSL_INCLUDES}
+LIBS += $${GSL_LIBS}
+unix:LIBS += -lz
+win32 {
+    INCLUDEPATH += $${ZLIB_INCLUDE}
+    LIBS += $${ZLIB_LIBS} -ladvapi32
+}
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug

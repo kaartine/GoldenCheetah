@@ -906,7 +906,8 @@ void GCColor::setColor(int, QColor) {}
 void GCColor::applyTheme(int) {}
 
 TrainDB::TrainDB(QDir home)
-    : home(std::move(home)), db(nullptr), sessionid(QStringLiteral("test"))
+    : home(std::move(home)), db(nullptr), sessionid(QStringLiteral("test")),
+      interactiveErrors(false)
 {
 }
 

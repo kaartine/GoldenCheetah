@@ -45,6 +45,8 @@ MAIN_SOURCE="$REPO_ROOT/src/Core/main.cpp"
 LIBSECRET_SOURCE="$REPO_ROOT/contrib/qtkeychain/qtkeychain/libsecret.cpp"
 SOURCE_PROJECT="$REPO_ROOT/src/src.pro"
 SOURCE_CONFIG_TEMPLATE="$REPO_ROOT/src/gcconfig.pri.in"
+ATHLETE_MIGRATION_STUB="$REPO_ROOT/unittests/Core/athleteMigrationSafety/AthleteMigrationTestStubs.cpp"
+ATHLETE_MIGRATION_PROJECT="$REPO_ROOT/unittests/Core/athleteMigrationSafety/athleteMigrationSafety.pro"
 
 fail()
 {
@@ -2679,6 +2681,12 @@ assert_contains "$APPVEYOR_WINDOWS_BEFORE_BUILD" \
 assert_contains "$SOURCE_PROJECT" '!isEmpty(ZLIB_INCLUDE)'
 assert_contains "$SOURCE_PROJECT" '!isEmpty(ZLIB_LIBS)'
 assert_contains "$SOURCE_PROJECT" '$$[QT_INSTALL_PREFIX]/src/3rdparty/zlib'
+assert_contains "$ATHLETE_MIGRATION_STUB" \
+    'interactiveErrors(false)'
+assert_contains "$ATHLETE_MIGRATION_PROJECT" '$${GSL_INCLUDES}'
+assert_contains "$ATHLETE_MIGRATION_PROJECT" '$${GSL_LIBS}'
+assert_contains "$ATHLETE_MIGRATION_PROJECT" '$${ZLIB_INCLUDE}'
+assert_contains "$ATHLETE_MIGRATION_PROJECT" '$${ZLIB_LIBS}'
 if grep -Fq '$${QT_INSTALL_PREFIX}/src/3rdparty/zlib' "$SOURCE_PROJECT"; then
     fail "Windows zlib fallback still expands an unset qmake variable"
 fi
