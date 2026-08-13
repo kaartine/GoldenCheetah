@@ -1,5 +1,6 @@
 # platform kind project
 all aux Build/ciTestRunner
+all aux Build/headerIncludePaths
 all aux Build/publicReleaseCredentials
 all aux Build/linkerSectionFlags
 all qt Core/athleteMigrationSafety
@@ -77,6 +78,9 @@ all qt FileIO/wkoBounds
 all qt Gui/activityDeletionWorkflow
 all qt Gui/activitySaveWorkflow
 all qt Gui/cacheWriteWarning
+all qt Gui/guiStartupPolicy
+all qt Gui/guiSmokeShutdown
+all qt Gui/openGLVersionProbe
 all qt Gui/calendarModalWorkflow
 all qt Gui/calendarData
 all qt Gui/mergeActivityDistanceCursor

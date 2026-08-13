@@ -45,6 +45,7 @@ HEADERS = ../stravaAccountRemoval/StravaPublisherTestSettings.h \
           ../../../src/FileIO/AnchoredFileSystem.h
 
 INCLUDEPATH += ../../../src \
+               $${GSL_INCLUDES} \
                ../../../src/ANT \
                ../../../src/Charts \
                ../../../src/Cloud \

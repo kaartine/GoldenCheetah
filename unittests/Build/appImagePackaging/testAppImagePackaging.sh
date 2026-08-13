@@ -2688,7 +2688,18 @@ assert_contains "$ATHLETE_MIGRATION_PROJECT" '$${GSL_INCLUDES}'
 assert_contains "$ATHLETE_MIGRATION_PROJECT" '$${GSL_LIBS}'
 assert_contains "$ATHLETE_MIGRATION_PROJECT" '$${ZLIB_INCLUDE}'
 assert_contains "$ATHLETE_MIGRATION_PROJECT" '$${ZLIB_LIBS}'
+assert_contains "$ATHLETE_MIGRATION_STUB" 'MeasuresGroup::getFieldValue('
+assert_contains "$ATHLETE_MIGRATION_STUB" 'RideFile *RideItem::ride('
+assert_contains "$ATHLETE_MIGRATION_STUB" 'QString Leaf::toString()'
+assert_contains "$ATHLETE_MIGRATION_STUB" 'PMCData::PMCData('
+assert_contains "$ATHLETE_MIGRATION_STUB" 'Banister::Banister('
+assert_contains "$ATHLETE_MIGRATION_STUB" 'RideImportWizard::RideImportWizard('
+assert_contains "$ATHLETE_MIGRATION_STUB" 'AthleteBackup::AthleteBackup('
+assert_contains "$ATHLETE_MIGRATION_STUB" 'MainWindow::saveSilent('
+assert_contains "$ATHLETE_MIGRATION_STUB" 'RideCache::saveActivities('
+assert_contains "$ATHLETE_MIGRATION_STUB" 'QColor GCColor::invertColor('
 assert_contains "$STRAVA_OAUTH_POLICY_PROJECT" 'QT += charts'
+assert_contains "$STRAVA_OAUTH_POLICY_PROJECT" '$${GSL_INCLUDES}'
 if grep -Fq '$${QT_INSTALL_PREFIX}/src/3rdparty/zlib' "$SOURCE_PROJECT"; then
     fail "Windows zlib fallback still expands an unset qmake variable"
 fi

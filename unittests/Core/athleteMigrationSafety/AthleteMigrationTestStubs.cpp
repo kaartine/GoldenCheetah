@@ -11,6 +11,7 @@
 #include "Cloud/CalendarDownload.h"
 #include "Cloud/CloudService.h"
 #include "Cloud/MeasuresDownload.h"
+#include "Core/DataFilter.h"
 #include "Core/Athlete.h"
 #include "Core/AthleteSession.h"
 #include "Core/Context.h"
@@ -26,12 +27,15 @@
 #include "FileIO/DataProcessor.h"
 #include "FileIO/JsonRideFile.h"
 #include "FileIO/MeasuresCsvImport.h"
+#include "FileIO/AthleteBackup.h"
 #include "FileIO/RideAutoImportConfig.h"
 #include "Gui/Colors.h"
 #include "Gui/CompareDateRange.h"
 #include "Gui/CompareInterval.h"
 #include "Gui/HelpWhatsThis.h"
 #include "Gui/MainWindow.h"
+#include "Gui/RideImportWizard.h"
+#include "Metrics/Banister.h"
 #include "Metrics/HrZones.h"
 #include "Metrics/PaceZones.h"
 #include "Metrics/PMCData.h"
@@ -707,6 +711,9 @@ void RideItem::saved() {}
 void RideItem::notifyRideDataChanged() {}
 void RideItem::notifyRideMetadataChanged() {}
 double RideItem::getForSymbol(QString, bool) { return 0.0; }
+RideFile *RideItem::ride(bool) { return ride_; }
+
+QString Leaf::toString() { return {}; }
 
 QString RideFile::sportTag(QString sport)
 {
@@ -795,6 +802,11 @@ void MeasuresGroup::setMeasures(QList<Measure> &measures)
     measures_ = measures;
 }
 
+double MeasuresGroup::getFieldValue(QDate, int, bool) const
+{
+    return 0.0;
+}
+
 bool MeasuresGroup::write(
         QString *error, const AtomicFileWriterFactory &)
 {
@@ -848,6 +860,7 @@ void RideCache::garbageCollect() {}
 void RideCache::initEstimates() {}
 void RideCache::addRide(QString, bool, bool, bool, bool) {}
 bool RideCache::removeCurrentRide() { return false; }
+bool RideCache::saveActivities(QList<RideItem *>, QString &) { return true; }
 
 void LTMSettings::readChartXML(QDir, bool, QList<LTMSettings> &)
 {
@@ -857,6 +870,67 @@ void LTMSettings::readChartXML(QDir, bool, QList<LTMSettings> &)
 void LTMSettings::writeChartXML(QDir, QList<LTMSettings>) {}
 
 void PMCData::invalidate() {}
+
+PMCData::PMCData(
+        Context *context, Specification specification, QString metricName,
+        int stsDays, int ltsDays)
+    : context(context), specification_(std::move(specification)),
+      fromDataFilter(false), expr(nullptr),
+      metricName_(std::move(metricName)), metric_(nullptr),
+      stsDays_(stsDays), ltsDays_(ltsDays), useDefaults(false),
+      days_(0), isstale(true)
+{
+}
+
+PMCData::PMCData(
+        Context *context, Specification specification, Leaf *expr,
+        DataFilterRuntime *, int stsDays, int ltsDays)
+    : context(context), specification_(std::move(specification)),
+      fromDataFilter(true), expr(expr), metric_(nullptr),
+      stsDays_(stsDays), ltsDays_(ltsDays), useDefaults(false),
+      days_(0), isstale(true)
+{
+}
+
+Banister::Banister(
+        Context *context, QString symbol, QString performanceSymbol,
+        double t1, double t2, double k1, double k2)
+    : symbol(std::move(symbol)), perf_symbol(std::move(performanceSymbol)),
+      k1(k1), k2(k2), t1(t1), t2(t2), metric(nullptr), days(0),
+      meanscore(0.0), rides(0), performances(0), context(context),
+      isstale(true)
+{
+}
+
+RideImportWizard::RideImportWizard(
+        RideAutoImportConfig *config, Context *context, QWidget *parent)
+    : QDialog(parent), numberOfFiles(0), aborted(false),
+      autoImportMode(true), autoImportStealth(true),
+      _importInProcess(false), phaseLabel(nullptr), tableWidget(nullptr),
+      directoryWidget(nullptr), progressBar(nullptr), abortButton(nullptr),
+      cancelButton(nullptr), continueTrainingButton(nullptr),
+      todayButton(nullptr), trainingContinuationEnabled(false),
+      context(context), importConfig(config)
+{
+}
+
+RideImportWizard::~RideImportWizard() = default;
+int RideImportWizard::getNumberOfFiles() { return 0; }
+int RideImportWizard::process() { return 0; }
+
+AthleteBackup::AthleteBackup(QDir athleteHome)
+    : athleteHome(std::move(athleteHome))
+{
+}
+
+AthleteBackup::~AthleteBackup() = default;
+void AthleteBackup::backupOnClose() {}
+
+bool MainWindow::saveSilent(
+        Context *, RideItem *, QString *, const ActivitySaveOperations *)
+{
+    return true;
+}
 
 HelpWhatsThis::HelpWhatsThis(QObject *parent)
     : QObject(parent)
@@ -904,6 +978,10 @@ QColor GCColor::getColor(int)
 
 void GCColor::setColor(int, QColor) {}
 void GCColor::applyTheme(int) {}
+QColor GCColor::invertColor(QColor color)
+{
+    return color.lightness() < 128 ? Qt::white : Qt::black;
+}
 
 TrainDB::TrainDB(QDir home)
     : home(std::move(home)), db(nullptr), sessionid(QStringLiteral("test")),

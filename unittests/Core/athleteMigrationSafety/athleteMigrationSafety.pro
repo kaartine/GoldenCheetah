@@ -93,10 +93,14 @@ HEADERS = CloudAutoDownloadTestSupport.h \
           ../../../src/Core/Route.h \
           ../../../src/Core/Seasons.h \
           ../../../src/FileIO/MeasuresCsvImport.h \
+          ../../../src/FileIO/AthleteBackup.h \
           ../../../src/Gui/HelpWhatsThis.h \
+          ../../../src/Gui/RideImportWizard.h \
           ../../../src/FileIO/RideAutoImportConfig.h \
+          ../../../src/Metrics/Banister.h \
           ../../../src/Metrics/HrZones.h \
           ../../../src/Metrics/PaceZones.h \
+          ../../../src/Metrics/PMCData.h \
           ../../../src/Metrics/Zones.h \
           ../../../src/Train/TrainDB.h
 
