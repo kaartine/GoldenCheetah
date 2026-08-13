@@ -917,6 +917,16 @@ RideImportWizard::RideImportWizard(
 RideImportWizard::~RideImportWizard() = default;
 int RideImportWizard::getNumberOfFiles() { return 0; }
 int RideImportWizard::process() { return 0; }
+void RideImportWizard::closeEvent(QCloseEvent *) {}
+void RideImportWizard::done(int) {}
+void RideImportWizard::abortClicked() {}
+void RideImportWizard::cancelClicked() {}
+void RideImportWizard::continueTrainingClicked() {}
+void RideImportWizard::todayClicked(int) {}
+void RideImportWizard::activateSave() {}
+
+void RideDelegate::commitAndCloseTimeEditor() {}
+void RideDelegate::commitAndCloseDateEditor() {}
 
 AthleteBackup::AthleteBackup(QDir athleteHome)
     : athleteHome(std::move(athleteHome))
@@ -925,6 +935,18 @@ AthleteBackup::AthleteBackup(QDir athleteHome)
 
 AthleteBackup::~AthleteBackup() = default;
 void AthleteBackup::backupOnClose() {}
+
+void Banister::init() {}
+void Banister::invalidate() { isstale = true; }
+void Banister::refresh() { isstale = false; }
+void Banister::setDecay(double newT1, double newT2)
+{
+    t1 = newT1;
+    t2 = newT2;
+}
+void Banister::fit() {}
+
+void PMCData::refresh() { isstale = false; }
 
 bool MainWindow::saveSilent(
         Context *, RideItem *, QString *, const ActivitySaveOperations *)

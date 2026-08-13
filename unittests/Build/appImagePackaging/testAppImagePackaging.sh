@@ -48,6 +48,7 @@ SOURCE_CONFIG_TEMPLATE="$REPO_ROOT/src/gcconfig.pri.in"
 ATHLETE_MIGRATION_STUB="$REPO_ROOT/unittests/Core/athleteMigrationSafety/AthleteMigrationTestStubs.cpp"
 ATHLETE_MIGRATION_PROJECT="$REPO_ROOT/unittests/Core/athleteMigrationSafety/athleteMigrationSafety.pro"
 STRAVA_OAUTH_POLICY_PROJECT="$REPO_ROOT/unittests/Cloud/stravaOAuthPolicy/stravaOAuthPolicy.pro"
+STRAVA_ROUTES_PIPELINE_PROJECT="$REPO_ROOT/unittests/Train/stravaRoutesDownloadPipeline/stravaRoutesDownloadPipeline.pro"
 
 fail()
 {
@@ -2694,12 +2695,18 @@ assert_contains "$ATHLETE_MIGRATION_STUB" 'QString Leaf::toString()'
 assert_contains "$ATHLETE_MIGRATION_STUB" 'PMCData::PMCData('
 assert_contains "$ATHLETE_MIGRATION_STUB" 'Banister::Banister('
 assert_contains "$ATHLETE_MIGRATION_STUB" 'RideImportWizard::RideImportWizard('
+assert_contains "$ATHLETE_MIGRATION_STUB" 'RideImportWizard::closeEvent('
+assert_contains "$ATHLETE_MIGRATION_STUB" 'RideImportWizard::continueTrainingClicked()'
+assert_contains "$ATHLETE_MIGRATION_STUB" 'RideDelegate::commitAndCloseTimeEditor()'
 assert_contains "$ATHLETE_MIGRATION_STUB" 'AthleteBackup::AthleteBackup('
+assert_contains "$ATHLETE_MIGRATION_STUB" 'void Banister::refresh()'
+assert_contains "$ATHLETE_MIGRATION_STUB" 'void PMCData::refresh()'
 assert_contains "$ATHLETE_MIGRATION_STUB" 'MainWindow::saveSilent('
 assert_contains "$ATHLETE_MIGRATION_STUB" 'RideCache::saveActivities('
 assert_contains "$ATHLETE_MIGRATION_STUB" 'QColor GCColor::invertColor('
 assert_contains "$STRAVA_OAUTH_POLICY_PROJECT" 'QT += charts'
 assert_contains "$STRAVA_OAUTH_POLICY_PROJECT" '$${GSL_INCLUDES}'
+assert_contains "$STRAVA_ROUTES_PIPELINE_PROJECT" '$${GSL_INCLUDES}'
 if grep -Fq '$${QT_INSTALL_PREFIX}/src/3rdparty/zlib' "$SOURCE_PROJECT"; then
     fail "Windows zlib fallback still expands an unset qmake variable"
 fi

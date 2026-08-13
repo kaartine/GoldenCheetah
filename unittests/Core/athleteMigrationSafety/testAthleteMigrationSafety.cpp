@@ -4898,6 +4898,14 @@ startedStravaPublicationReturnsTrackedPending()
     request.mode =
         StravaTokenPublication::PublicationMode::CompareAndSwap;
 
+    QString mutationError;
+    request.mutation = StravaCredentialPublisher::beginMutation(
+        athlete,
+        StravaCredentialDurability::MutationKind::Authorization,
+        2000,
+        mutationError);
+    QVERIFY2(request.mutation, qPrintable(mutationError));
+
     setAthleteMigrationBlockStravaCredentialWrite(true);
     std::atomic<bool> writeStarted{false};
     std::thread releaser([&] {

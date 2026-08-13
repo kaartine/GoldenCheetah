@@ -50,6 +50,7 @@ HEADERS = ../../../src/Cloud/StravaTokenRefresh.h \
           ../../../src/Cloud/StravaNetworkReply.h
 
 INCLUDEPATH += ../../../src \
+               $${GSL_INCLUDES} \
                ../../../src/ANT \
                ../../../src/Charts \
                ../../../src/Cloud \
