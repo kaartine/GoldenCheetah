@@ -183,7 +183,7 @@ PYTHON_WORK=$(mktemp -d)
 PYTHON_BUILD="$PYTHON_WORK/source"
 cleanup_python_build()
 {
-    rm -rf "$PYTHON_WORK"
+    sudo rm -rf -- "$PYTHON_WORK"
 }
 trap cleanup_python_build EXIT
 python3 "$SAFE_EXTRACT" --format tar \
@@ -196,7 +196,7 @@ python3 "$SAFE_EXTRACT" --format tar \
     sudo make altinstall
 )
 sudo ldconfig
-rm -rf "$PYTHON_WORK"
+cleanup_python_build
 trap - EXIT
 test "$(python${PYTHON_VERSION} --version)" = \
     "Python $PYTHON_BUILD_VERSION"

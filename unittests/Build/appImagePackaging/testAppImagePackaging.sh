@@ -2638,6 +2638,7 @@ assert_contains "$APPVEYOR_INSTALL" \
 assert_contains "$APPVEYOR_INSTALL" 'QT_BUILD_VERSION=6.8.3'
 assert_contains "$APPVEYOR_INSTALL" \
     'PYTHON_SOURCE_SHA256=f4de1b10bd6c70cbb9fa1cd71fc5038b832747a74ee59d599c69ce4846defb50'
+assert_contains "$APPVEYOR_INSTALL" 'sudo rm -rf -- "$PYTHON_WORK"'
 if grep -Eq 'add-apt-repository|apt-key' "$APPVEYOR_INSTALL"; then
     fail "Linux release setup still adds a moving package repository"
 fi
