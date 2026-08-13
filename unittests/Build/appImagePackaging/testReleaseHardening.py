@@ -540,7 +540,11 @@ class PipelineIsolationTests(unittest.TestCase):
     def test_compiler_environment_is_allowlisted(self):
         build_pass = REPOSITORY_ROOT / "appveyor/linux/build-appimage-pass.sh"
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            temporary_root = Path(temporary)
+            physical_root = temporary_root / "physical"
+            physical_root.mkdir()
+            root = temporary_root / "alias"
+            root.symlink_to(physical_root, target_is_directory=True)
             qt_root = root / "Qt"
             home = root / "home"
             temporary_build = root / "tmp"
@@ -599,9 +603,9 @@ class PipelineIsolationTests(unittest.TestCase):
                     '"$5" "$2" "$3" "$4"',
                     "bash",
                     str(SUPPORT),
-                    str(qt_root),
-                    str(home),
-                    str(temporary_build),
+                    str(qt_root.resolve()),
+                    str(home.resolve()),
+                    str(temporary_build.resolve()),
                     str(probe),
                 ],
                 env=environment,

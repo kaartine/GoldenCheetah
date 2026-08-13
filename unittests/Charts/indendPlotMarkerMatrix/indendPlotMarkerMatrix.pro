@@ -1,4 +1,4 @@
-QT += testlib widgets
+QT += testlib widgets svg
 
 TEMPLATE = app
 TARGET = tst_indendPlotMarkerMatrix
