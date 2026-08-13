@@ -15,7 +15,9 @@ APPVEYOR_INSTALL="$REPO_ROOT/appveyor/linux/install.sh"
 APPVEYOR_MACOS_INSTALL="$REPO_ROOT/appveyor/macos/install.sh"
 APPVEYOR_MACOS_PACKAGER="$REPO_ROOT/appveyor/macos/after_build.sh"
 APPVEYOR_WINDOWS_INSTALL="$REPO_ROOT/appveyor/windows/install.ps1"
+APPVEYOR_WINDOWS_BEFORE_BUILD="$REPO_ROOT/appveyor/windows/before_build.ps1"
 APPVEYOR_WINDOWS_PACKAGER="$REPO_ROOT/appveyor/windows/after_build.ps1"
+APPVEYOR_WINDOWS_VCPKG="$REPO_ROOT/appveyor/windows/vcpkg.json"
 APPVEYOR_CONFIG="$REPO_ROOT/appveyor.yml"
 GITHUB_CI_CONFIG="$REPO_ROOT/.github/workflows/ci.yml"
 UBUNTU_SNAPSHOT="$REPO_ROOT/appveyor/linux/ubuntu-snapshot.sources.list"
@@ -41,6 +43,8 @@ PYTHON_NORMALIZER="$REPO_ROOT/src/Resources/linux/normalize-embedded-python.py"
 DEV_CONFIG="$REPO_ROOT/.devcontainer/gcconfig.pri"
 MAIN_SOURCE="$REPO_ROOT/src/Core/main.cpp"
 LIBSECRET_SOURCE="$REPO_ROOT/contrib/qtkeychain/qtkeychain/libsecret.cpp"
+SOURCE_PROJECT="$REPO_ROOT/src/src.pro"
+SOURCE_CONFIG_TEMPLATE="$REPO_ROOT/src/gcconfig.pri.in"
 
 fail()
 {
@@ -2664,6 +2668,19 @@ if grep -Fq 'Test-DependencyCache' "$APPVEYOR_WINDOWS_INSTALL" ||
 fi
 assert_contains "$APPVEYOR_WINDOWS_INSTALL" \
     'Remove-Item -LiteralPath $Root -Recurse -Force'
+assert_contains "$APPVEYOR_WINDOWS_VCPKG" '"zlib"'
+assert_contains "$SOURCE_CONFIG_TEMPLATE" '#ZLIB_INCLUDE ='
+assert_contains "$SOURCE_CONFIG_TEMPLATE" '#ZLIB_LIBS ='
+assert_contains "$APPVEYOR_WINDOWS_BEFORE_BUILD" \
+    'ZLIB_INCLUDE = c:\tools\vcpkg\installed\x64-windows\include'
+assert_contains "$APPVEYOR_WINDOWS_BEFORE_BUILD" \
+    'ZLIB_LIBS = -Lc:\tools\vcpkg\installed\x64-windows\lib -lzlib'
+assert_contains "$SOURCE_PROJECT" '!isEmpty(ZLIB_INCLUDE)'
+assert_contains "$SOURCE_PROJECT" '!isEmpty(ZLIB_LIBS)'
+assert_contains "$SOURCE_PROJECT" '$$[QT_INSTALL_PREFIX]/src/3rdparty/zlib'
+if grep -Fq '$${QT_INSTALL_PREFIX}/src/3rdparty/zlib' "$SOURCE_PROJECT"; then
+    fail "Windows zlib fallback still expands an unset qmake variable"
+fi
 if grep -Eq 'pip(3|\.exe| -m pip)?.*install.*--upgrade|pip install --upgrade' \
     "$APPVEYOR_MACOS_INSTALL" "$APPVEYOR_MACOS_PACKAGER" \
     "$APPVEYOR_WINDOWS_PACKAGER"; then

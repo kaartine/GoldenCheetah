@@ -40,6 +40,10 @@ Add-Content $gcconfig "yacc_decl.CONFIG += target_predeps"
 Replace-InFile $gcconfig "#D2XX_INCLUDE =" "D2XX_INCLUDE = c:\libs\10_Precompiled_DLL\D2XX\CDM"
 Replace-InFile $gcconfig "#D2XX_LIBS =" "D2XX_LIBS = -Lc:\libs\10_Precompiled_DLL\D2XX\CDM\Static\amd64 -lftd2xx"
 
+# 6a. ZLIB
+Replace-InFile $gcconfig "#ZLIB_INCLUDE =" "ZLIB_INCLUDE = c:\tools\vcpkg\installed\x64-windows\include"
+Replace-InFile $gcconfig "#ZLIB_LIBS =" "ZLIB_LIBS = -Lc:\tools\vcpkg\installed\x64-windows\lib -lzlib"
+
 # 7. ICAL
 #Replace-InFile $gcconfig "#ICAL_INSTALL =" "ICAL_INSTALL = c:\libs\10_Precompiled_DLL\libical64"
 #Replace-InFile $gcconfig "#ICAL_INCLUDE =" "ICAL_INCLUDE = c:\libs\10_Precompiled_DLL\libical64\include"

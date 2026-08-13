@@ -143,7 +143,15 @@ win32-msvc* {
 win32 {
 
     RC_FILE = Resources/win32/windowsico.rc
-    INCLUDEPATH += Resources/win32 $${QT_INSTALL_PREFIX}/src/3rdparty/zlib
+    INCLUDEPATH += Resources/win32
+    !isEmpty(ZLIB_INCLUDE) {
+        INCLUDEPATH += $${ZLIB_INCLUDE}
+    } else {
+        INCLUDEPATH += $$[QT_INSTALL_PREFIX]/src/3rdparty/zlib
+    }
+    !isEmpty(ZLIB_LIBS) {
+        LIBS += $${ZLIB_LIBS}
+    }
     LIBS += -lws2_32 -ladvapi32
 
 } else {

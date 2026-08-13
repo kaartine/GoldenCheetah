@@ -161,6 +161,11 @@ contains(DEFINES, "GC_WANT_PYTHON") {
 #D2XX_INCLUDE = 
 #D2XX_LIBS    =
 
+# Windows builds need zlib headers and an import library. Qt source builds can
+# use their bundled copy as a fallback, while binary Qt SDKs should set these.
+#ZLIB_INCLUDE =
+#ZLIB_LIBS =
+
 # If you want support for downloading from iCal calendars you will need libical
 #     http://sourceforge.net/projects/freeassociation/
 # Set path to the root of the libical installation

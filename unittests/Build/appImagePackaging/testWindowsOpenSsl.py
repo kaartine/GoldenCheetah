@@ -45,7 +45,8 @@ class WindowsOpenSslTests(unittest.TestCase):
         self.assertIn("-ExpectedOpenSslVersion $pythonOpenSslVersion", packager)
 
         vcpkg = json.loads(VCPKG_MANIFEST.read_text(encoding="utf-8"))
-        self.assertEqual(vcpkg["dependencies"], ["gsl"])
+        self.assertEqual(vcpkg["dependencies"], ["gsl", "zlib"])
+        self.assertNotIn("openssl", vcpkg["dependencies"])
 
         appveyor = APPVEYOR.read_text(encoding="utf-8")
         self.assertIn(r"C:\Python313-x64", appveyor)
