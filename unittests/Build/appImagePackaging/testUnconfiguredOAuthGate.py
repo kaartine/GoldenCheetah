@@ -63,7 +63,8 @@ class UnconfiguredOAuthGateTests(unittest.TestCase):
             "goldencheetah_build_status=1\n"
             "application=GoldenCheetah\n"
             "strava_support=enabled\n"
-            "strava_oauth=unavailable\n"
+            "strava_oauth=runtime_credentials\n"
+            "strava_compile_fallback=unavailable\n"
         )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

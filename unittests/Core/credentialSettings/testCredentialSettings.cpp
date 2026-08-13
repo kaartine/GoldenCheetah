@@ -48,6 +48,9 @@
 #include "Cloud/StravaSettingsCommit.h"
 #include "Gui/Colors.h"
 
+double dpiXFactor = 1.0;
+double dpiYFactor = 1.0;
+
 namespace {
 
 struct FakeStoreState

@@ -13,7 +13,8 @@ EXPECTED = (
     "goldencheetah_build_status=1\n"
     "application=GoldenCheetah\n"
     "strava_support=enabled\n"
-    "strava_oauth=unavailable\n"
+    "strava_oauth=runtime_credentials\n"
+    "strava_compile_fallback=unavailable\n"
 )
 
 MACH_O_32_MAGICS = {b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe"}

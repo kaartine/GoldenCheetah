@@ -49,6 +49,7 @@ ATHLETE_MIGRATION_STUB="$REPO_ROOT/unittests/Core/athleteMigrationSafety/Athlete
 ATHLETE_MIGRATION_PROJECT="$REPO_ROOT/unittests/Core/athleteMigrationSafety/athleteMigrationSafety.pro"
 STRAVA_OAUTH_POLICY_PROJECT="$REPO_ROOT/unittests/Cloud/stravaOAuthPolicy/stravaOAuthPolicy.pro"
 STRAVA_ROUTES_PIPELINE_PROJECT="$REPO_ROOT/unittests/Train/stravaRoutesDownloadPipeline/stravaRoutesDownloadPipeline.pro"
+CREDENTIAL_SETTINGS_TEST="$REPO_ROOT/unittests/Core/credentialSettings/testCredentialSettings.cpp"
 
 fail()
 {
@@ -2707,6 +2708,8 @@ assert_contains "$ATHLETE_MIGRATION_STUB" 'QColor GCColor::invertColor('
 assert_contains "$STRAVA_OAUTH_POLICY_PROJECT" 'QT += charts'
 assert_contains "$STRAVA_OAUTH_POLICY_PROJECT" '$${GSL_INCLUDES}'
 assert_contains "$STRAVA_ROUTES_PIPELINE_PROJECT" '$${GSL_INCLUDES}'
+assert_contains "$CREDENTIAL_SETTINGS_TEST" 'double dpiXFactor = 1.0;'
+assert_contains "$CREDENTIAL_SETTINGS_TEST" 'double dpiYFactor = 1.0;'
 if grep -Fq '$${QT_INSTALL_PREFIX}/src/3rdparty/zlib' "$SOURCE_PROJECT"; then
     fail "Windows zlib fallback still expands an unset qmake variable"
 fi
