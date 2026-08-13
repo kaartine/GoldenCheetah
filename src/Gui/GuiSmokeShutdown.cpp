@@ -49,6 +49,7 @@ bool complete(
     QObject::connect(
         window,
         &QObject::destroyed,
+        window,
         [exitOnce, completedCode]() { exitOnce(completedCode); });
 
     if (closeWindow()) return true;
