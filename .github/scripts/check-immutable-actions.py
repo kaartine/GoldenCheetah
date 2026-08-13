@@ -815,7 +815,7 @@ def enforce_policy_workflow(
 def enforce_trusted_macos_release(job, checkout_reference):
     description = "ci.yml.trusted-macos-release"
     require_scalar(job, "runs-on", "macos-latest", description)
-    require_scalar(job, "timeout-minutes", "60", description)
+    require_scalar(job, "timeout-minutes", "90", description)
     require_scalar(
         job,
         "if",

@@ -70,7 +70,7 @@
         }
       },
       "semantic_sha256": [
-        "a2b4f5505e086c6b24f590a0071c2ce065c02bdf279b2f7504bf4c2c750853b3"
+        "2707708931029ae0e90fb2698949fe8d367930db3890fbcc14fd7be9a2be5f5a"
       ],
       "trusted_run_sha256": {
         "report-final": "69e43e6387d779b8f1f330e83971285e707ce9fc32e0184c85421f61ee5f2dc6",
@@ -229,7 +229,7 @@
     ".github/scripts/after_build.sh": "aced87f919c9f81ca7a97a33dd110d029adf0e7dbed3773635c49b82d38f12fd",
     ".github/scripts/before_build.sh": "013982f40ac27e626b8df52f1e8fc043f96cc47ce0afcd5e5ae7982c9923a4c2",
     ".github/scripts/build.sh": "7d61d8a3402db4f553ae610ca8efbd774d93f127156ee4bc7afc21c1326bd855",
-    ".github/scripts/check-immutable-actions.py": "8240ede87866254cb2b5b5123ce1b64a79a8baf99ab912ad0b65ccef66df1dd2",
+    ".github/scripts/check-immutable-actions.py": "49a91c7331884e88ec54ade9917f8116722933b020c96cfbba5cba6504d64192",
     ".github/scripts/immutable-actions-requirements.lock": "f4eb4eb9e1a67e2ac46d760f7f364f81319b6af5467b5404ec82a29a0d84bf6e",
     ".github/scripts/install-pinned-homebrew.sh": "16a919842b9bcffff01146e3d46a674b1672a5504ecdf57050b564f6aa60b874",
     ".github/scripts/install.sh": "3701459000ce3731f450d101316e3143471cf2623bd8aab95da6d442d34ce236",
@@ -270,12 +270,12 @@
     "src/Resources/linux/verify-appimage-payload.py": "18809da68d8571df92af71bfd6110b7921eb7e555142da68d7de433598dba34e",
     "src/Resources/win32/GC3.8-Master-W64-QT6.nsi": "faa9df078f3cce406b1eaf7188c24bc2c8a288958207af55d052f932cefcccde",
     "unittests/Build/appImagePackaging/appImagePackaging.pro": "cfe1447304665c49477eb2c96660eb31f88e254d7a2f8f9fc444cec884bb8a52",
-    "unittests/Build/appImagePackaging/testAppImagePackaging.sh": "a5df38c40be390b9ea25f9af58d52489c84706f2885e3cc6bb4eba1f00653318",
+    "unittests/Build/appImagePackaging/testAppImagePackaging.sh": "e780d6f5dcffaac54a151a9a370d359b3a38a6dfbb76ee3119b7285de56d292e",
     "unittests/Build/appImagePackaging/testAptSnapshot.py": "4466708eb4b263e08c930c841d460105abfbcf13b918dd4f04801c63bd76d103",
     "unittests/Build/appImagePackaging/testCiReleaseGates.sh": "f27ad24e7a34a857a44e7cb6047bf3e34c99217add327b17a41e8a52cdc24172",
     "unittests/Build/appImagePackaging/testDiagnosticOAuth.sh": "2f14458503e751bc33f284b43d1de13450fa9cfd350ad2866d88dd248e19bc3c",
-    "unittests/Build/appImagePackaging/testGeneratedSecrets.ps1": "da1b89ff997b473ec30414b6b96fa7ffde6934b88a1ccd04783c9e02b353b418",
-    "unittests/Build/appImagePackaging/testImmutableActions.py": "a050788b005a93465b54e4436c89011fd50f37d937b69292d109a1d5173305b8",
+    "unittests/Build/appImagePackaging/testGeneratedSecrets.ps1": "c4903413f869dcf2c74b8e4adc65f2f6537e38885be09e2f6abe7a921514cb58",
+    "unittests/Build/appImagePackaging/testImmutableActions.py": "99098931f0799e7862560f1bb42b3c373265960aa3feea56f7aaeb5db94a2714",
     "unittests/Build/appImagePackaging/testMacOSPackaging.py": "6f32cbba332023fb4d7af21cd3883203118df12d4b4d41774ab880311fc9789b",
     "unittests/Build/appImagePackaging/testReleaseHardening.py": "f1c56d4d0422f1a6e56b9692ec3b637427c670ce79faa3fde98815f5dc47fe2c",
     "unittests/Build/appImagePackaging/testSafeExtraction.py": "b4acb441339418f82b9e5fc253cf25864338f41e99d0dc77aa2d798dc84993c2",

@@ -67,7 +67,7 @@ try {
   $staleTemporary = "$header.tmp-stale"
   [IO.File]::WriteAllText($staleTemporary, 'stale-secret')
   $env:GC_STRAVA_CLIENT_SECRET = $secret
-  $env:GC_CLOUD_OPENDATA_SECRET = 'opendata-enabled'
+  $env:GC_CLOUD_OPENDATA_SECRET = $secret
   & $generator $header
 
   if (Test-Path -LiteralPath $staleTemporary) {
@@ -78,24 +78,23 @@ try {
   }
 
   $content = [IO.File]::ReadAllText($header)
-  if ($content.Contains($secret) -or $content.Contains('opendata-enabled')) {
+  if ($content.Contains($secret)) {
     throw 'Generated header contains a raw secret value'
   }
   if ($content.Contains('DEFINES +=')) {
     throw 'Generated header contains a qmake compiler definition'
   }
-  $stravaLines = @($content -split "`n" |
-    Where-Object { $_ -match '^#define GC_STRAVA_CLIENT_SECRET ' })
-  if ($stravaLines.Count -ne 1) {
-    throw 'Generated Strava secret definition is missing or duplicated'
+  if ($content -match '(?m)^#define GC_STRAVA_CLIENT_SECRET ') {
+    throw 'Generated header contains a runtime-only Strava credential'
   }
-  $stravaLine = $stravaLines[0]
-  $encoded = $stravaLine.Substring($stravaLine.IndexOf('"'))
+  $openDataLines = @($content -split "`n" |
+    Where-Object { $_ -match '^#define GC_CLOUD_OPENDATA_SECRET ' })
+  if ($openDataLines.Count -ne 1) {
+    throw 'Generated OpenData secret definition is missing or duplicated'
+  }
+  $encoded = $openDataLines[0].Substring($openDataLines[0].IndexOf('"'))
   if ((Decode-CEncodedUtf8 -Encoded $encoded) -cne $secret) {
-    throw 'Generated Strava secret does not round-trip as UTF-8'
-  }
-  if ($content -notmatch '(?m)^#define GC_CLOUD_OPENDATA_SECRET ') {
-    throw 'OpenData credential definition is missing'
+    throw 'Generated OpenData secret does not round-trip as UTF-8'
   }
 
   Remove-Item Env:GC_STRAVA_CLIENT_SECRET -ErrorAction SilentlyContinue

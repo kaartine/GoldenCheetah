@@ -654,6 +654,7 @@ class ImmutableActionTests(unittest.TestCase):
         )
         self.assertEqual(trusted["permissions"], {"contents": "write"})
         self.assertEqual(set(trusted["needs"]), {"validated-candidate", "macos"})
+        self.assertEqual(trusted["timeout-minutes"], 90)
         expected_secrets = {
             "GC_CLOUD_OPENDATA_SECRET",
             "GC_NOKIA_CLIENT_SECRET",
@@ -699,14 +700,17 @@ class ImmutableActionTests(unittest.TestCase):
         workflow = self.BUILD_WORKFLOWS[0].read_text(encoding="utf-8")
         document = yaml.compose(workflow, Loader=yaml.SafeLoader)
         jobs = self.mapping_value(document, "jobs")
-        for job_name, runner, platform in (
-            ("linux", "ubuntu-22.04", "linux"),
-            ("macos", "macos-latest", "macos"),
-            ("windows", "windows-2025", "windows"),
+        for job_name, runner, platform, timeout in (
+            ("linux", "ubuntu-22.04", "linux", "60"),
+            ("macos", "macos-latest", "macos", "90"),
+            ("windows", "windows-2025", "windows", "60"),
         ):
             with self.subTest(job=job_name):
                 job = self.mapping_value(jobs, job_name)
                 self.assertEqual(self.mapping_value(job, "runs-on").value, runner)
+                self.assertEqual(
+                    self.mapping_value(job, "timeout-minutes").value, timeout
+                )
                 steps = self.mapping_value(job, "steps")
                 scripts = []
                 for step in steps.value:

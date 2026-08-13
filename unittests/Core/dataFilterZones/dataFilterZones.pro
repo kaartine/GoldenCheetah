@@ -35,6 +35,7 @@ INCLUDEPATH += ../../../src/ANT \
                ../../../contrib/lmfit \
                ../../../contrib/boost \
                ../../../contrib/kmeans \
+               $${GSL_INCLUDES} \
                ../../../contrib/voronoi
 
 sanitize:!msvc {
