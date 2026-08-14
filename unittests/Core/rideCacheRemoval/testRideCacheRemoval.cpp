@@ -610,7 +610,10 @@ bool preparePlanBundleReader(
 {
     reader.tempDir = new QTemporaryDir();
     if (!reader.tempDir->isValid()) return false;
-    const QDir root(reader.tempDir->path());
+    const QString rootPath =
+        QFileInfo(reader.tempDir->path()).canonicalFilePath();
+    if (rootPath.isEmpty()) return false;
+    const QDir root(rootPath);
     if (!root.mkpath(QStringLiteral("planned"))
         || !root.mkpath(QStringLiteral("workouts"))) {
         return false;
