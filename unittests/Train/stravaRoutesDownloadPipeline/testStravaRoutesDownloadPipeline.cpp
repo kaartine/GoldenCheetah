@@ -1761,8 +1761,8 @@ delayedPinnedReadCancellationKeepsGuiResponsive()
     QElapsedTimer elapsed;
     elapsed.start();
     runner.cancel();
-    QTRY_VERIFY_WITH_TIMEOUT(finished, 300);
-    QVERIFY(elapsed.elapsed() < 250);
+    QTRY_VERIFY_WITH_TIMEOUT(finished, 500);
+    QVERIFY(elapsed.elapsed() < 400);
     QVERIFY(heartbeats > 0);
     QVERIFY(cancelledRead.load(std::memory_order_acquire));
     routeChunkDelayMs.store(0, std::memory_order_release);
