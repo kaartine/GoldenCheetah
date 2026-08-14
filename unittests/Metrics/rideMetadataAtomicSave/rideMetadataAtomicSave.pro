@@ -9,6 +9,7 @@ include(../../unittests.pri)
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug
+DEFINES += GC_RIDE_METADATA_FILE_IO_ONLY
 
 SOURCES = testRideMetadataAtomicSave.cpp \
           ../../../src/Metrics/RideMetadata.cpp \

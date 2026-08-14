@@ -43,6 +43,8 @@
 // shorthand when looking up our ride via  Q_PROPERTY
 #define ourRideItem meta->property("ride").value<RideItem*>()
 
+#ifndef GC_RIDE_METADATA_FILE_IO_ONLY
+
 /*----------------------------------------------------------------------
  * Master widget for Metadata Entry
  *--------------------------------------------------------------------*/
@@ -1662,6 +1664,8 @@ KeywordDefinition::fingerprint(QList<KeywordDefinition> list)
 
     return qChecksum(ba);
 }
+
+#endif
 
 /*----------------------------------------------------------------------
  * Read / Write metadata.xml file

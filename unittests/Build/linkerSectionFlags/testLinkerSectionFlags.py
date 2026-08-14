@@ -15,6 +15,9 @@ RIDE_FILE_CACHE_REFRESH_STUBS = (
     UNITTESTS
     / "FileIO/rideFileCacheRefresh/RideFileCacheRefreshTestStubs.cpp"
 )
+RIDE_METADATA_ATOMIC_PROJECT = (
+    UNITTESTS / "Metrics/rideMetadataAtomicSave/rideMetadataAtomicSave.pro"
+)
 STRAVA_ROUTES_PROJECT = (
     UNITTESTS
     / "Train/stravaRoutesDownloadPipeline/stravaRoutesDownloadPipeline.pro"
@@ -355,6 +358,14 @@ def main() -> None:
             raise AssertionError(
                 "RideFileCache MSVC link stubs are missing " + expected
             )
+
+    ride_metadata_project = RIDE_METADATA_ATOMIC_PROJECT.read_text(
+        encoding="utf-8"
+    )
+    if "GC_RIDE_METADATA_FILE_IO_ONLY" not in ride_metadata_project:
+        raise AssertionError(
+            "RideMetadata atomic-save tests compile unrelated UI code"
+        )
 
 
 if __name__ == "__main__":
