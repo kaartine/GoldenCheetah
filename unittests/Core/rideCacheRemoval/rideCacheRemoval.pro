@@ -5,6 +5,8 @@ QT += core gui widgets testlib xml sql network svg concurrent serialport \
 TEMPLATE = app
 TARGET = tst_rideCacheRemoval
 
+include(../../unittests.pri)
+
 CONFIG += console testcase no_testcase_installs c++17 release
 CONFIG -= debug
 DEFINES += GC_RIDE_CACHE_REMOVAL_TEST_HOOKS \

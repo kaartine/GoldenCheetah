@@ -18,6 +18,9 @@ STRAVA_ROUTES_STUBS = (
     UNITTESTS
     / "Train/stravaRoutesDownloadPipeline/ErgFileGpxCompositionTestStubs.cpp"
 )
+RIDE_CACHE_REMOVAL_PROJECT = (
+    UNITTESTS / "Core/rideCacheRemoval/rideCacheRemoval.pro"
+)
 PORTABLE_SECTION_PROJECTS = (
     "Charts/mapPageSecurity/mapPageSecurity.pro",
     "Charts/mapRoutePointIndex/mapRoutePointIndex.pro",
@@ -213,6 +216,20 @@ def main() -> None:
         if expected not in strava_stubs:
             raise AssertionError(
                 "Strava routes test is missing a production dependency stub: "
+                + expected
+            )
+
+    ride_cache_removal = RIDE_CACHE_REMOVAL_PROJECT.read_text(
+        encoding="utf-8"
+    )
+    for expected in (
+        "include(../../unittests.pri)",
+        "$${GSL_INCLUDES}",
+        "$${GSL_LIBS}",
+    ):
+        if expected not in ride_cache_removal:
+            raise AssertionError(
+                "ride cache removal test is missing GSL build configuration: "
                 + expected
             )
 
