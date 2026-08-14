@@ -114,6 +114,10 @@ def main() -> None:
         "python3 ./.github/scripts/run-tests.py",
         REPOSITORY / ".github" / "workflows" / "ci.yml",
     )
+    require_literal(
+        "jom -k -j4 sub-unittests",
+        REPOSITORY / ".github" / "workflows" / "ci.yml",
+    )
 
     appveyor = REPOSITORY / "appveyor.yml"
     for wiring in (
