@@ -43,6 +43,7 @@ INCLUDEPATH += ../../../src \
 
 include(../../section-gc.prf)
 include(../../zlib-link.prf)
+include(../../qwt-msvc-link.prf)
 
 sanitize:!tsan:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

@@ -12,6 +12,8 @@ CONFIG -= debug
 
 SOURCES = testRideFileOwnership.cpp \
           RideFileOwnershipTestStubs.cpp \
+          ../atomicActivitySave/RideFileTestStubs.cpp \
+          ../RideFileSettingsTestStubs.cpp \
           ../../../src/FileIO/RideFile.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCommand.cpp
@@ -34,6 +36,7 @@ INCLUDEPATH += ../../../src \
 
 include(../../section-gc.prf)
 include(../../zlib-link.prf)
+include(../../qwt-msvc-link.prf)
 
 sanitize:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

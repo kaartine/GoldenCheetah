@@ -8,12 +8,16 @@
  */
 
 #include "Athlete.h"
+#include "Colors.h"
 #include "CompressedActivityFile.h"
 #include "Context.h"
 #include "FilterHRV.h"
 #include "HrZones.h"
 #include "PaceZones.h"
 #include "Settings.h"
+#include "Specification.h"
+#include "SplineLookup.h"
+#include "Units.h"
 #include "WPrime.h"
 #include "Zones.h"
 
@@ -100,6 +104,43 @@ QString RidefileUnEscape(QString value)
 double Athlete::getWeight(QDate, RideFile *)
 {
     return 75.0;
+}
+
+double Athlete::getHeight(RideFile *)
+{
+    return 1.75;
+}
+
+double Specification::secsStart() const
+{
+    return -1.0;
+}
+
+double Specification::secsEnd() const
+{
+    return -1.0;
+}
+
+void SplineLookup::update(
+    const QwtSplineBasis &,
+    const QPolygonF &,
+    double)
+{
+}
+
+double SplineLookup::valueY(double) const
+{
+    return 0.0;
+}
+
+QColor GCColor::getColor(int)
+{
+    return {};
+}
+
+QString kphToPace(double, bool, bool)
+{
+    return {};
 }
 
 int Zones::whichRange(const QDate &) const

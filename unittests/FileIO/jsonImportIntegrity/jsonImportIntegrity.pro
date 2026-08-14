@@ -12,6 +12,7 @@ CONFIG -= debug
 
 SOURCES = testJsonImportIntegrity.cpp \
           JsonImportIntegrityTestStubs.cpp \
+          ../atomicActivitySave/RideFileTestStubs.cpp \
           ../../../src/FileIO/AnchoredFileSystem.cpp \
           ../../../src/FileIO/RideFile.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
@@ -40,6 +41,7 @@ INCLUDEPATH += ../../../src \
 
 include(../../section-gc.prf)
 include(../../zlib-link.prf)
+include(../../qwt-msvc-link.prf)
 win32:LIBS += -ladvapi32
 
 sanitize:!msvc {

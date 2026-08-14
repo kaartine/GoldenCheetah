@@ -30,6 +30,11 @@ QVariant GSettings::value(const QObject *, const QString,
     return def;
 }
 
+QVariant GSettings::cvalue(QString, QString, QVariant def)
+{
+    return def;
+}
+
 static GSettings testSettings(QStringLiteral("GoldenCheetah"),
                               QStringLiteral("JsonImportIntegrityTest"));
 GSettings *appsettings = &testSettings;

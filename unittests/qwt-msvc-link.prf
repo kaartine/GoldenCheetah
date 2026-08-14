@@ -1,0 +1,4 @@
+win32 {
+    QWT_LIB_DIR = $$OUT_PWD/../../../qwt/lib
+    LIBS += -L$$QWT_LIB_DIR -lqwt
+}

@@ -13,6 +13,7 @@ DEFINES += GC_FIT_READER_ONLY
 
 SOURCES = testFitReaderIntegrity.cpp \
           FitReaderIntegrityTestStubs.cpp \
+          ../atomicActivitySave/RideFileTestStubs.cpp \
           $$PWD/../../../src/FileIO/RideFile.cpp \
           $$PWD/../../../src/FileIO/RideFileCRC.cpp \
           $$PWD/../../../src/FileIO/RideFileCommand.cpp \
@@ -39,6 +40,7 @@ INCLUDEPATH += $$PWD/../../../src \
 
 include(../../section-gc.prf)
 include(../../zlib-link.prf)
+include(../../qwt-msvc-link.prf)
 
 sanitize:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

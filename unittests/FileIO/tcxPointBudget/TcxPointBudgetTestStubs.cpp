@@ -47,6 +47,11 @@ QVariant GSettings::value(const QObject *, const QString key,
     return def;
 }
 
+QVariant GSettings::cvalue(QString, QString, QVariant def)
+{
+    return def;
+}
+
 static GSettings testSettings(QStringLiteral("GoldenCheetah"),
                               QStringLiteral("TcxPointBudgetTest"));
 GSettings *appsettings = &testSettings;

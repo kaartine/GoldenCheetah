@@ -12,6 +12,8 @@ CONFIG -= debug
 
 SOURCES = testSplitRideData.cpp \
           SplitRideDataTestStubs.cpp \
+          ../../FileIO/atomicActivitySave/RideFileTestStubs.cpp \
+          ../../FileIO/RideFileSettingsTestStubs.cpp \
           ../../../src/Gui/SplitRideData.cpp \
           ../../../src/FileIO/RideFile.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
@@ -37,6 +39,7 @@ INCLUDEPATH += ../../../src \
 
 include(../../section-gc.prf)
 include(../../zlib-link.prf)
+include(../../qwt-msvc-link.prf)
 
 sanitize:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

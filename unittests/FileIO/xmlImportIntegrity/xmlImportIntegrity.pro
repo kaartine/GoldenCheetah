@@ -13,6 +13,7 @@ DEFINES += GC_TCX_READER_ONLY GC_FITLOG_READER_ONLY
 
 SOURCES = testXmlImportIntegrity.cpp \
           XmlImportIntegrityTestStubs.cpp \
+          ../atomicActivitySave/RideFileTestStubs.cpp \
           ../../../src/FileIO/RideFile.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/FileIO/RideFileCommand.cpp \
@@ -47,6 +48,7 @@ INCLUDEPATH += ../../../src \
 
 include(../../section-gc.prf)
 include(../../zlib-link.prf)
+include(../../qwt-msvc-link.prf)
 
 sanitize:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

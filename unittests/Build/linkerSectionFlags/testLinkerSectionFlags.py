@@ -10,6 +10,7 @@ TEST_DIRECTORY = Path(__file__).resolve().parent
 UNITTESTS = TEST_DIRECTORY.parents[1]
 SECTION_FLAGS = UNITTESTS / "section-gc.prf"
 ZLIB_LINK = UNITTESTS / "zlib-link.prf"
+QWT_MSVC_LINK = UNITTESTS / "qwt-msvc-link.prf"
 STRAVA_ROUTES_PROJECT = (
     UNITTESTS
     / "Train/stravaRoutesDownloadPipeline/stravaRoutesDownloadPipeline.pro"
@@ -58,6 +59,14 @@ CUSTOM_SECTION_PROJECTS = {
     "Core/rideCacheSaveSnapshot/rideCacheSaveSnapshot.pro",
     "FileIO/atomicActivitySave/atomicActivitySave.pro",
     "Python/pythonDataSeriesOwnership/testPythonDataSeriesOwnership.pro",
+}
+SHARED_RIDE_FILE_STUB_PROJECTS = {
+    "FileIO/fitReaderIntegrity/fitReaderIntegrity.pro",
+    "FileIO/jsonImportIntegrity/jsonImportIntegrity.pro",
+    "FileIO/rideFileOwnership/rideFileOwnership.pro",
+    "FileIO/tcxPointBudget/tcxPointBudget.pro",
+    "FileIO/xmlImportIntegrity/xmlImportIntegrity.pro",
+    "Gui/splitRideData/splitRideData.pro",
 }
 SECTION_FLAG_MARKERS = (
     "-ffunction-sections",
@@ -273,11 +282,23 @@ def main() -> None:
 
     for project in UNITTESTS.rglob("*.pro"):
         contents = project.read_text(encoding="utf-8")
+        relative = project.relative_to(UNITTESTS).as_posix()
         if "$${LIBZ_LIBS}" in contents:
             raise AssertionError(
                 f"{project.relative_to(UNITTESTS)} ignores the configured "
                 "Windows zlib library"
             )
+        if "src/FileIO/RideFile.cpp" in contents:
+            if "qwt-msvc-link.prf" not in contents and "-lqwt" not in contents:
+                raise AssertionError(
+                    f"{relative} compiles RideFile without its MSVC Qwt "
+                    "dependency"
+                )
+            if (relative in SHARED_RIDE_FILE_STUB_PROJECTS
+                    and "RideFileTestStubs.cpp" not in contents):
+                raise AssertionError(
+                    f"{relative} is missing the shared RideFile link stubs"
+                )
         if "src/FileIO/AnchoredFileSystem.cpp" not in contents:
             continue
         if "-ladvapi32" not in contents:
@@ -308,6 +329,13 @@ def main() -> None:
         raise AssertionError(
             "shared zlib link configuration ignores ZLIB_LIBS"
         )
+
+    qwt_msvc_link = QWT_MSVC_LINK.read_text(encoding="utf-8")
+    for expected in ("win32 {", "LIBS += -L$$QWT_LIB_DIR -lqwt"):
+        if expected not in qwt_msvc_link:
+            raise AssertionError(
+                "shared MSVC Qwt link configuration is missing " + expected
+            )
 
 
 if __name__ == "__main__":
