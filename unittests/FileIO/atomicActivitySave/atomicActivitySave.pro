@@ -53,9 +53,11 @@ INCLUDEPATH += ../../../src \
                $${GSL_INCLUDES} \
                $${ZLIB_INCLUDES}
 
-QWT_LIB_DIR = $$OUT_PWD/../../../qwt/lib
-LIBS += $${GSL_LIBS} -L$$QWT_LIB_DIR -lqwt
-QMAKE_RPATHDIR += $$QWT_LIB_DIR
+LIBS += $${GSL_LIBS}
+win32 {
+    QWT_LIB_DIR = $$OUT_PWD/../../../qwt/lib
+    LIBS += -L$$QWT_LIB_DIR -lqwt
+}
 win32:LIBS += -ladvapi32
 
 isEmpty(ZLIB_LIBS) {

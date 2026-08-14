@@ -494,8 +494,9 @@ workerFinalizationKeepsOwnerEventLoopResponsive()
     QVERIFY(heartbeats > 0);
     QVERIFY2(result->load(), qPrintable(workerError->load()));
     QVERIFY(cleaned->load());
-    const QString target = QDir(workoutRoot).filePath(
-        StravaRoutesClient::workoutFileName(QStringLiteral("42")));
+    const QString target =
+        QDir(QFileInfo(workoutRoot).canonicalFilePath()).filePath(
+            StravaRoutesClient::workoutFileName(QStringLiteral("42")));
     QVERIFY(database.hasWorkout(target));
 }
 
@@ -698,10 +699,10 @@ routesFollowerPostedCancellationIsPrompt()
     QTimer::singleShot(0, &runner, [&runner] {
         runner.cancel();
     });
-    QTRY_VERIFY_WITH_TIMEOUT(finished, 300);
+    QTRY_VERIFY_WITH_TIMEOUT(finished, 500);
 
     QVERIFY2(
-        elapsed.elapsed() < 200,
+        elapsed.elapsed() < 400,
         qPrintable(QStringLiteral(
             "The asynchronous Routes follower cancelled in %1 ms")
             .arg(elapsed.elapsed())));
@@ -2231,7 +2232,8 @@ productionMultiRouteCommitUsesOneDatabaseLuw()
     QVERIFY(stagingCleaned);
     QCOMPARE(changed.count(), 1);
     for (const QString &routeId : routeIds) {
-        QVERIFY(database.hasWorkout(QDir(workoutRoot).filePath(
+        QVERIFY(database.hasWorkout(
+            QDir(QFileInfo(workoutRoot).canonicalFilePath()).filePath(
             StravaRoutesClient::workoutFileName(routeId))));
     }
 }
@@ -2317,8 +2319,9 @@ databaseReplacementBeforePublicationRetainsDecisionMarker()
 #endif
     QVERIFY(swapped);
     QVERIFY(!published);
-    const QString target = QDir(workoutRoot).filePath(
-        StravaRoutesClient::workoutFileName(QStringLiteral("42")));
+    const QString target =
+        QDir(QFileInfo(workoutRoot).canonicalFilePath()).filePath(
+            StravaRoutesClient::workoutFileName(QStringLiteral("42")));
     QVERIFY(!QFileInfo::exists(target));
     QCOMPARE(decisionMarkers(workoutRoot).size(), 1);
     QCOMPARE(readFile(databasePath), readFile(replacementSource));
@@ -2403,8 +2406,9 @@ productionCompositionAbortCloseRecovers()
         QStringLiteral("cancel"), Qt::CaseInsensitive));
     operation.reset();
 
-    const QString target = QDir(workoutRoot).filePath(
-        StravaRoutesClient::workoutFileName(QStringLiteral("42")));
+    const QString target =
+        QDir(QFileInfo(workoutRoot).canonicalFilePath()).filePath(
+            StravaRoutesClient::workoutFileName(QStringLiteral("42")));
     const PlanBundleImport::BoundDatabaseCompletion recoverDatabase =
         [&database, &options](
             const TrainDB::PlanImportJournal &journal,

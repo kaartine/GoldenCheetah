@@ -245,7 +245,8 @@ def main() -> None:
     for expected in (
         "RideFileTestStubs.cpp",
         "../../../src/Core/RideCacheActivitySave.cpp",
-        "-L$$QWT_LIB_DIR -lqwt",
+        "win32 {",
+        "LIBS += -L$$QWT_LIB_DIR -lqwt",
     ):
         if expected not in atomic_activity_save:
             raise AssertionError(

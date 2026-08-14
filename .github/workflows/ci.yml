@@ -309,8 +309,8 @@ jobs:
           lupdate src/src.pro
           qmake.exe build.pro -r -spec win32-msvc
           if (!(Test-Path qwt/lib/qwt.lib)) { jom -j1 sub-qwt }
-          jom -j2 sub-src
-          jom -j2 sub-unittests
+          jom -j4 sub-src
+          jom -j4 sub-unittests
           python .github/scripts/run-tests.py --build-tool jom --platform windows
 
   report-final:

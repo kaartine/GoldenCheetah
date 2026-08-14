@@ -124,6 +124,7 @@ public:
             }
             return false;
         }
+        workoutDirectory = workoutRootAnchor.displayPath();
         const AnchoredFileSystem::EntryRef targetEntry =
             workoutRootAnchor.entry(fileName, error);
         bool targetExists = false;
