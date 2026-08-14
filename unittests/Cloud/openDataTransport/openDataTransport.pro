@@ -26,7 +26,7 @@ INCLUDEPATH += ../../../src \
                ../../../contrib/qzip \
                $${LIBZ_INCLUDE}
 
-LIBS += $${LIBZ_LIBS}
+include(../../zlib-link.prf)
 
 sanitize:!tsan:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

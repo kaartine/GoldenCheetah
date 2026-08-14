@@ -13,7 +13,7 @@ include(../../unittests.pri)
 
 INCLUDEPATH += ../../../src ../../../contrib/qzip $${LIBZ_INCLUDE}
 
-LIBS += $${LIBZ_LIBS}
+include(../../zlib-link.prf)
 win32:LIBS += -ladvapi32
 
 sanitize:!msvc {

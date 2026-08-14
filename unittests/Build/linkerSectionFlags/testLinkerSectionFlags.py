@@ -273,6 +273,11 @@ def main() -> None:
 
     for project in UNITTESTS.rglob("*.pro"):
         contents = project.read_text(encoding="utf-8")
+        if "$${LIBZ_LIBS}" in contents:
+            raise AssertionError(
+                f"{project.relative_to(UNITTESTS)} ignores the configured "
+                "Windows zlib library"
+            )
         if "src/FileIO/AnchoredFileSystem.cpp" not in contents:
             continue
         if "-ladvapi32" not in contents:
