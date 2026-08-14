@@ -26,6 +26,9 @@
 #else
 #include <zlib.h>
 #endif
+#ifdef uncompress
+#undef uncompress
+#endif
 
 namespace {
 
