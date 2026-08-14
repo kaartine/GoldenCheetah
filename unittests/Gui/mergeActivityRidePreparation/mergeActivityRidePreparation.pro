@@ -12,11 +12,12 @@ CONFIG -= debug
 
 SOURCES = testMergeActivityRidePreparation.cpp \
           MergeActivityRidePreparationTestStubs.cpp \
+          ../../FileIO/atomicActivitySave/RideFileTestStubs.cpp \
+          ../../FileIO/RideFileSettingsTestStubs.cpp \
           ../../../src/Gui/MergeActivityRidePreparation.cpp \
           ../../../src/FileIO/RideFile.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
-          ../../../src/FileIO/RideFileCommand.cpp \
-          ../../../src/Core/SplineLookup.cpp
+          ../../../src/FileIO/RideFileCommand.cpp
 
 HEADERS = ../../../src/Gui/MergeActivityRidePreparation.h \
           ../../../src/FileIO/RideFile.h \

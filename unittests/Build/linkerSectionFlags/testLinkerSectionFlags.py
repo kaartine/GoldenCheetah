@@ -70,6 +70,7 @@ SHARED_RIDE_FILE_STUB_PROJECTS = {
     "FileIO/rideFileOwnership/rideFileOwnership.pro",
     "FileIO/tcxPointBudget/tcxPointBudget.pro",
     "FileIO/xmlImportIntegrity/xmlImportIntegrity.pro",
+    "Gui/mergeActivityRidePreparation/mergeActivityRidePreparation.pro",
     "Gui/splitRideData/splitRideData.pro",
 }
 SECTION_FLAG_MARKERS = (
