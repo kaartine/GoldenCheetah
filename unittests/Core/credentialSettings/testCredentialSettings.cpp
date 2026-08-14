@@ -15382,6 +15382,7 @@ markerlessEstablishedSettingsAreAdoptedWithoutBackfill()
     QVERIFY(QDir().mkpath(configPath));
 
     const QString systemExistingKey = plainKey(GC_SETTINGS_LAST);
+    const QString systemCompanionKey = plainKey(GC_START_HTTP);
     const QString systemMissingKey =
         plainKey(GC_SETTINGS_LAST_IMPORT_PATH);
     const QString globalExistingKey = plainKey(GC_TABBAR);
@@ -15415,6 +15416,7 @@ markerlessEstablishedSettingsAreAdoptedWithoutBackfill()
             organization,
             application);
         system.setValue(systemExistingKey, systemExisting);
+        system.setValue(systemCompanionKey, false);
         system.sync();
         QCOMPARE(system.status(), QSettings::NoError);
         systemPath = system.fileName();
@@ -15450,6 +15452,7 @@ markerlessEstablishedSettingsAreAdoptedWithoutBackfill()
     QSettings system(systemPath, QSettings::IniFormat);
     QVERIFY(system.contains(systemExistingKey));
     QCOMPARE(system.value(systemExistingKey).toString(), systemExisting);
+    QCOMPARE(system.value(systemCompanionKey).toBool(), false);
     QVERIFY(!system.contains(systemMissingKey));
     QCOMPARE(
         system.value(legacySystemMigrationMarkerKey).toString(),
