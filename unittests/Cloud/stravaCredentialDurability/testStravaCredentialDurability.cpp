@@ -255,7 +255,7 @@ QString createTransactionParent(QTemporaryDir &temporary)
 {
     const QString path = temporary.filePath(QStringLiteral("config"));
     if (!QDir().mkpath(path)) return {};
-    return path;
+    return QFileInfo(path).canonicalFilePath();
 }
 
 Publication replacementPublication(const QString &label)
