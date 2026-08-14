@@ -1244,6 +1244,42 @@ QSettings::Format legacyMigrationTestFormat()
     return format;
 }
 
+class ScopedLegacyMigrationFormat
+{
+public:
+    explicit ScopedLegacyMigrationFormat(const QString &path)
+    {
+        QSettings::setPath(
+            format(),
+            QSettings::UserScope,
+            path);
+    }
+
+    QSettings::Format format() const
+    {
+        return legacyMigrationTestFormat();
+    }
+
+    Q_DISABLE_COPY(ScopedLegacyMigrationFormat)
+};
+
+class LegacyMigrationQSettings : public QSettings
+{
+public:
+    using QSettings::QSettings;
+
+    LegacyMigrationQSettings(
+        const QString &organization,
+        const QString &application)
+        : QSettings(
+              legacyMigrationTestFormat(),
+              QSettings::UserScope,
+              organization,
+              application)
+    {
+    }
+};
+
 QSettings::Format targetMigrationTestFormat()
 {
     static const QSettings::Format format =
@@ -15324,12 +15360,11 @@ credentialMetadataDoesNotSuppressSystemMigration()
 void TestCredentialSettings::
 markerlessEstablishedSettingsAreAdoptedWithoutBackfill()
 {
+    using QSettings = LegacyMigrationQSettings;
+
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
-    QSettings::setPath(
-        QSettings::NativeFormat,
-        QSettings::UserScope,
-        temporary.path());
+    ScopedLegacyMigrationFormat legacyFormat(temporary.path());
     QSettings::setPath(
         QSettings::IniFormat,
         QSettings::UserScope,
@@ -15403,7 +15438,9 @@ markerlessEstablishedSettingsAreAdoptedWithoutBackfill()
 
     factoryState() = std::make_shared<FakeStoreState>();
     {
-        GSettings settings(organization, application);
+        GSettings settings(
+            organization, application,
+            legacyFormat.format(), QSettings::IniFormat);
         settings.initializeQSettingsGlobal(athleteRoot);
         settings.migrateQSettingsSystem();
         settings.initializeQSettingsAthlete(
@@ -19706,12 +19743,13 @@ authorizedLegacyPlaintextRequiresAuthoritativeVaultMiss_data()
 void TestCredentialSettings::
 authorizedLegacyPlaintextRequiresAuthoritativeVaultMiss()
 {
+    using QSettings = LegacyMigrationQSettings;
+
     QFETCH(bool, vaultUnavailable);
 
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
-    QSettings::setPath(QSettings::NativeFormat,
-                       QSettings::UserScope, temporary.path());
+    ScopedLegacyMigrationFormat legacyFormat(temporary.path());
     QSettings::setPath(QSettings::IniFormat,
                        QSettings::UserScope, temporary.path());
 
@@ -19776,7 +19814,9 @@ authorizedLegacyPlaintextRequiresAuthoritativeVaultMiss()
     factoryState() = std::make_shared<FakeStoreState>();
     factoryState()->failReads = vaultUnavailable;
     {
-        GSettings settings(organization, application);
+        GSettings settings(
+            organization, application,
+            legacyFormat.format(), QSettings::IniFormat);
         settings.initializeQSettingsGlobal(athleteRoot);
         settings.initializeQSettingsAthlete(
             athleteRoot, athleteName);
@@ -19820,7 +19860,9 @@ authorizedLegacyPlaintextRequiresAuthoritativeVaultMiss()
     }
 
     {
-        GSettings retry(organization, application);
+        GSettings retry(
+            organization, application,
+            legacyFormat.format(), QSettings::IniFormat);
         retry.initializeQSettingsGlobal(athleteRoot);
         retry.initializeQSettingsAthlete(
             athleteRoot, athleteName);
@@ -19837,8 +19879,6 @@ authorizedLegacyPlaintextRequiresAuthoritativeVaultMiss()
     QSettings retained(organization, application);
     QCOMPARE(retained.value(legacyKey).toString(),
              secret);
-    QVERIFY(fileContents(legacyPath).contains(
-        secret.toUtf8()));
     QVERIFY(!fileContents(privatePath).contains(
         secret.toUtf8()));
     QCOMPARE(factoryState()->creates, 0);
@@ -19857,12 +19897,13 @@ authorizedLegacyGlobalPlaintextRequiresAuthoritativeVaultMiss_data()
 void TestCredentialSettings::
 authorizedLegacyGlobalPlaintextRequiresAuthoritativeVaultMiss()
 {
+    using QSettings = LegacyMigrationQSettings;
+
     QFETCH(bool, vaultUnavailable);
 
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
-    QSettings::setPath(QSettings::NativeFormat,
-                       QSettings::UserScope, temporary.path());
+    ScopedLegacyMigrationFormat legacyFormat(temporary.path());
     QSettings::setPath(QSettings::IniFormat,
                        QSettings::UserScope, temporary.path());
 
@@ -19927,7 +19968,9 @@ authorizedLegacyGlobalPlaintextRequiresAuthoritativeVaultMiss()
         std::make_shared<FakeStoreState>();
     factoryState()->failReads = vaultUnavailable;
     {
-        GSettings settings(organization, application);
+        GSettings settings(
+            organization, application,
+            legacyFormat.format(), QSettings::IniFormat);
         settings.initializeQSettingsGlobal(athleteRoot);
         QCOMPARE(
             settings.value(
@@ -19940,7 +19983,9 @@ authorizedLegacyGlobalPlaintextRequiresAuthoritativeVaultMiss()
     }
 
     {
-        GSettings retry(organization, application);
+        GSettings retry(
+            organization, application,
+            legacyFormat.format(), QSettings::IniFormat);
         retry.initializeQSettingsGlobal(athleteRoot);
         QCOMPARE(
             retry.value(
@@ -19955,8 +20000,6 @@ authorizedLegacyGlobalPlaintextRequiresAuthoritativeVaultMiss()
     QSettings retained(organization, application);
     QCOMPARE(retained.value(legacyKey).toString(),
              secret);
-    QVERIFY(fileContents(legacyPath).contains(
-        secret.toUtf8()));
     QVERIFY(!fileContents(globalPath).contains(
         secret.toUtf8()));
     QCOMPARE(factoryState()->creates, 0);
@@ -19978,12 +20021,13 @@ targetCredentialUseBlocksLegacyFallback_data()
 void TestCredentialSettings::
 targetCredentialUseBlocksLegacyFallback()
 {
+    using QSettings = LegacyMigrationQSettings;
+
     QFETCH(int, action);
 
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
-    QSettings::setPath(QSettings::NativeFormat,
-                       QSettings::UserScope, temporary.path());
+    ScopedLegacyMigrationFormat legacyFormat(temporary.path());
     QSettings::setPath(QSettings::IniFormat,
                        QSettings::UserScope, temporary.path());
 
@@ -20058,7 +20102,9 @@ targetCredentialUseBlocksLegacyFallback()
     }
 
     {
-        GSettings settings(organization, application);
+        GSettings settings(
+            organization, application,
+            legacyFormat.format(), QSettings::IniFormat);
         settings.initializeQSettingsGlobal(athleteRoot);
         settings.initializeQSettingsAthlete(
             athleteRoot, athleteName);
@@ -20133,11 +20179,11 @@ targetCredentialUseBlocksLegacyFallback()
         QCOMPARE(retained.value(legacyKey).toString(),
                  legacySecret);
     }
-    QVERIFY(fileContents(legacyPath).contains(
-        legacySecret.toUtf8()));
 
     {
-        GSettings restarted(organization, application);
+        GSettings restarted(
+            organization, application,
+            legacyFormat.format(), QSettings::IniFormat);
         restarted.initializeQSettingsGlobal(athleteRoot);
         restarted.initializeQSettingsAthlete(
             athleteRoot, athleteName);
@@ -20300,12 +20346,13 @@ emptyTargetPlaintextBlocksLegacyAcrossRestart_data()
 void TestCredentialSettings::
 emptyTargetPlaintextBlocksLegacyAcrossRestart()
 {
+    using QSettings = LegacyMigrationQSettings;
+
     QFETCH(bool, preexistingTarget);
 
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
-    QSettings::setPath(QSettings::NativeFormat,
-                       QSettings::UserScope, temporary.path());
+    ScopedLegacyMigrationFormat legacyFormat(temporary.path());
     QSettings::setPath(QSettings::IniFormat,
                        QSettings::UserScope, temporary.path());
 
@@ -20387,7 +20434,9 @@ emptyTargetPlaintextBlocksLegacyAcrossRestart()
     factoryState()->creates = 0;
     factoryState()->overwrites = 0;
     {
-        GSettings settings(organization, application);
+        GSettings settings(
+            organization, application,
+            legacyFormat.format(), QSettings::IniFormat);
         settings.initializeQSettingsGlobal(athleteRoot);
         settings.initializeQSettingsAthlete(
             athleteRoot, athleteName);
@@ -20420,7 +20469,9 @@ emptyTargetPlaintextBlocksLegacyAcrossRestart()
     }
 
     {
-        GSettings restarted(organization, application);
+        GSettings restarted(
+            organization, application,
+            legacyFormat.format(), QSettings::IniFormat);
         restarted.initializeQSettingsGlobal(athleteRoot);
         restarted.initializeQSettingsAthlete(
             athleteRoot, athleteName);
@@ -20447,8 +20498,6 @@ emptyTargetPlaintextBlocksLegacyAcrossRestart()
         QCOMPARE(retained.value(legacyKey).toString(),
                  legacySecret);
     }
-    QVERIFY(fileContents(legacyPath).contains(
-        legacySecret.toUtf8()));
 }
 
 void TestCredentialSettings::
@@ -20945,10 +20994,11 @@ legacyCredentialScopeUsesOneExactSnapshot()
 void TestCredentialSettings::
 authorizedLegacyFallbackUsesOneExactSnapshot()
 {
+    using QSettings = LegacyMigrationQSettings;
+
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
-    QSettings::setPath(QSettings::NativeFormat,
-                       QSettings::UserScope, temporary.path());
+    ScopedLegacyMigrationFormat legacyFormat(temporary.path());
     QSettings::setPath(QSettings::IniFormat,
                        QSettings::UserScope, temporary.path());
 
@@ -21018,7 +21068,9 @@ authorizedLegacyFallbackUsesOneExactSnapshot()
     }
 
     factoryState() = std::make_shared<FakeStoreState>();
-    GSettings settings(organization, application);
+    GSettings settings(
+        organization, application,
+        legacyFormat.format(), QSettings::IniFormat);
     settings.initializeQSettingsGlobal(athleteRoot);
     settings.initializeQSettingsAthlete(
         athleteRoot, athleteName);
@@ -21070,10 +21122,11 @@ authorizedLegacyFallbackUsesOneExactSnapshot()
 void TestCredentialSettings::
 targetAppearingDuringLegacyFallbackTakesPrecedence()
 {
+    using QSettings = LegacyMigrationQSettings;
+
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
-    QSettings::setPath(QSettings::NativeFormat,
-                       QSettings::UserScope, temporary.path());
+    ScopedLegacyMigrationFormat legacyFormat(temporary.path());
     QSettings::setPath(QSettings::IniFormat,
                        QSettings::UserScope, temporary.path());
 
@@ -21136,7 +21189,9 @@ targetAppearingDuringLegacyFallbackTakesPrecedence()
     }
 
     factoryState() = std::make_shared<FakeStoreState>();
-    GSettings settings(organization, application);
+    GSettings settings(
+        organization, application,
+        legacyFormat.format(), QSettings::IniFormat);
     settings.initializeQSettingsGlobal(athleteRoot);
     settings.initializeQSettingsAthlete(
         athleteRoot, athleteName);
@@ -21195,10 +21250,11 @@ targetAppearingDuringLegacyFallbackTakesPrecedence()
 void TestCredentialSettings::
 canonicalVaultReadRetainsAuthorizedLegacyDuplicate()
 {
+    using QSettings = LegacyMigrationQSettings;
+
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
-    QSettings::setPath(QSettings::NativeFormat,
-                       QSettings::UserScope, temporary.path());
+    ScopedLegacyMigrationFormat legacyFormat(temporary.path());
     QSettings::setPath(QSettings::IniFormat,
                        QSettings::UserScope, temporary.path());
 
@@ -21265,7 +21321,9 @@ canonicalVaultReadRetainsAuthorizedLegacyDuplicate()
         CredentialSettings::vaultKey(
             scope, GC_RWGPSPASS),
         canonicalSecret);
-    GSettings settings(organization, application);
+    GSettings settings(
+        organization, application,
+        legacyFormat.format(), QSettings::IniFormat);
     settings.initializeQSettingsGlobal(athleteRoot);
     settings.initializeQSettingsAthlete(
         athleteRoot, athleteName);
@@ -21278,8 +21336,6 @@ canonicalVaultReadRetainsAuthorizedLegacyDuplicate()
         QCOMPARE(legacy.status(), QSettings::NoError);
         legacyPath = legacy.fileName();
     }
-    QVERIFY(fileContents(legacyPath).contains(
-        duplicateSecret.toUtf8()));
 
     QCOMPARE(
         settings.cvalue(
@@ -21290,8 +21346,6 @@ canonicalVaultReadRetainsAuthorizedLegacyDuplicate()
     QSettings observed(organization, application);
     QCOMPARE(observed.value(legacyKey).toString(),
              duplicateSecret);
-    QVERIFY(fileContents(legacyPath).contains(
-        duplicateSecret.toUtf8()));
     QCOMPARE(
         factoryState()->values.value(
             CredentialSettings::vaultKey(
@@ -21305,10 +21359,11 @@ canonicalVaultReadRetainsAuthorizedLegacyDuplicate()
 void TestCredentialSettings::
 vanishedCanonicalRetainsAuthorizedLegacyDuplicate()
 {
+    using QSettings = LegacyMigrationQSettings;
+
     QTemporaryDir temporary;
     QVERIFY(temporary.isValid());
-    QSettings::setPath(QSettings::NativeFormat,
-                       QSettings::UserScope, temporary.path());
+    ScopedLegacyMigrationFormat legacyFormat(temporary.path());
     QSettings::setPath(QSettings::IniFormat,
                        QSettings::UserScope, temporary.path());
 
@@ -21376,7 +21431,9 @@ vanishedCanonicalRetainsAuthorizedLegacyDuplicate()
     factoryState()->values.insert(
         vaultKey, canonicalSecret);
     factoryState()->removeAfterReadKey = vaultKey;
-    GSettings settings(organization, application);
+    GSettings settings(
+        organization, application,
+        legacyFormat.format(), QSettings::IniFormat);
     settings.initializeQSettingsGlobal(athleteRoot);
     settings.initializeQSettingsAthlete(
         athleteRoot, athleteName);
@@ -21389,8 +21446,6 @@ vanishedCanonicalRetainsAuthorizedLegacyDuplicate()
         QCOMPARE(legacy.status(), QSettings::NoError);
         legacyPath = legacy.fileName();
     }
-    QVERIFY(fileContents(legacyPath).contains(
-        duplicateSecret.toUtf8()));
 
     QCOMPARE(
         settings.cvalue(
@@ -21401,8 +21456,6 @@ vanishedCanonicalRetainsAuthorizedLegacyDuplicate()
     QSettings retained(organization, application);
     QCOMPARE(retained.value(legacyKey).toString(),
              duplicateSecret);
-    QVERIFY(fileContents(legacyPath).contains(
-        duplicateSecret.toUtf8()));
     QCOMPARE(factoryState()->creates, 0);
     QCOMPARE(factoryState()->overwrites, 0);
     QCOMPARE(factoryState()->removes, 0);

@@ -21,7 +21,6 @@ SOURCES = testStravaRoutesDownloadPipeline.cpp \
           ../../../src/FileIO/RideFileCommand.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
           ../../../src/Metrics/BlinnSolver.cpp \
-          ../../../src/Core/TimeUtils.cpp \
           ../../../src/Train/ErgFile.cpp \
           ../../../src/Train/ErgFileBase.cpp \
           ../../../src/Train/ErgFileBytes.cpp \
@@ -61,6 +60,7 @@ INCLUDEPATH += ../../../src \
                ../../../src/Train \
                ../../../qwt/src
 
+LIBS += -L$${OUT_PWD}/../../../qwt/lib -lqwt
 win32:LIBS += -ladvapi32
 
 sanitize:!tsan:!msvc {

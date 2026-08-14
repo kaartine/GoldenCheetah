@@ -17,11 +17,13 @@
  */
 
 #include "StravaRoutesDownload.h"
+#include "Strava.h"
+#ifndef GC_STRAVA_ROUTES_PIPELINE_TEST_HOOKS
 #include "MainWindow.h"
-#include "TrainDB.h"
 #include "HelpWhatsThis.h"
 #include "CloudService.h"
-#include "Strava.h"
+#endif
+#include "TrainDB.h"
 #include "FileIO/AnchoredFileSystem.h"
 #include "FileIO/GpxParser.h"
 #include "Planning/PlanBundleImportJournal.h"
@@ -683,6 +685,7 @@ void finishDialogFinalization(
 } // namespace StravaRoutesDownloadProductionTest
 #endif
 
+#ifndef GC_STRAVA_ROUTES_PIPELINE_TEST_HOOKS
 StravaRoutesDownload::StravaRoutesDownload(Context *context)
     : QDialog(context->mainWindow)
     , context(context)
@@ -780,6 +783,7 @@ StravaRoutesDownload::StravaRoutesDownload(Context *context)
 
     QTimer::singleShot(0, this, &StravaRoutesDownload::refreshClicked);
 }
+#endif
 
 #ifdef GC_STRAVA_ROUTES_PIPELINE_TEST_HOOKS
 StravaRoutesDownload::StravaRoutesDownload(TestConstruction)
@@ -839,6 +843,7 @@ void StravaRoutesDownload::contextClosing()
     reject();
 }
 
+#ifndef GC_STRAVA_ROUTES_PIPELINE_TEST_HOOKS
 Strava *StravaRoutesDownload::createStravaService() const
 {
     if (!context) return nullptr;
@@ -849,6 +854,12 @@ Strava *StravaRoutesDownload::createStravaService() const
     if (!service) delete configured;
     return service;
 }
+#else
+Strava *StravaRoutesDownload::createStravaService() const
+{
+    return nullptr;
+}
+#endif
 
 void StravaRoutesDownload::allClicked()
 {
@@ -926,6 +937,7 @@ void StravaRoutesDownload::cancelClicked()
     if (activeRunner) activeRunner->cancel();
 }
 
+#ifndef GC_STRAVA_ROUTES_PIPELINE_TEST_HOOKS
 void StravaRoutesDownload::refreshClicked()
 {
     if (busy) return;
@@ -989,6 +1001,7 @@ void StravaRoutesDownload::refreshClicked()
         finishRefresh(failure, true);
     }
 }
+#endif
 
 void StravaRoutesDownload::finishRefresh(
     const StravaRoutesClient::RoutesResult &result,
@@ -1606,7 +1619,9 @@ void StravaRoutesDownload::finishDownload()
     refreshButton->setEnabled(true);
     overwrite->setEnabled(true);
     busy = false;
+#ifndef GC_STRAVA_ROUTES_PIPELINE_TEST_HOOKS
     if (downloads > 0 && context) context->notifyWorkoutsChanged();
+#endif
     if (lifecycle.closeWhenIdle()) reject();
 }
 

@@ -9,6 +9,14 @@ import tempfile
 TEST_DIRECTORY = Path(__file__).resolve().parent
 UNITTESTS = TEST_DIRECTORY.parents[1]
 SECTION_FLAGS = UNITTESTS / "section-gc.prf"
+STRAVA_ROUTES_PROJECT = (
+    UNITTESTS
+    / "Train/stravaRoutesDownloadPipeline/stravaRoutesDownloadPipeline.pro"
+)
+STRAVA_ROUTES_STUBS = (
+    UNITTESTS
+    / "Train/stravaRoutesDownloadPipeline/ErgFileGpxCompositionTestStubs.cpp"
+)
 PORTABLE_SECTION_PROJECTS = (
     "Charts/mapPageSecurity/mapPageSecurity.pro",
     "Charts/mapRoutePointIndex/mapRoutePointIndex.pro",
@@ -148,6 +156,30 @@ def main() -> None:
     for forbidden in ("--gc-sections", "-dead_strip", "-ffunction-sections"):
         if forbidden in msvc:
             raise AssertionError(f"MSVC config contains forbidden {forbidden}")
+
+    strava_project = STRAVA_ROUTES_PROJECT.read_text(encoding="utf-8")
+    for expected in ("../../../qwt/lib -lqwt",):
+        if expected not in strava_project:
+            raise AssertionError(
+                "Strava routes test is missing its MSVC link dependency: "
+                + expected
+            )
+    if "../../../src/Core/TimeUtils.cpp" in strava_project:
+        raise AssertionError(
+            "Strava routes test compiles the unrelated TimeUtils widget implementation"
+        )
+    strava_stubs = STRAVA_ROUTES_STUBS.read_text(encoding="utf-8")
+    for expected in (
+        "bool extractSingleFile(",
+        "convertToLocalTime(QString timestamp)",
+        "NS_TTSReader::TTSReader::parseFile",
+        "ZwoParser::startDocument",
+    ):
+        if expected not in strava_stubs:
+            raise AssertionError(
+                "Strava routes test is missing a production dependency stub: "
+                + expected
+            )
 
 
 if __name__ == "__main__":
