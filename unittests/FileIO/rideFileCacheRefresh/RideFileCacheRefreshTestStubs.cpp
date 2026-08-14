@@ -8,12 +8,16 @@
  */
 
 #include "Athlete.h"
+#include "AthleteSession.h"
 #include "Colors.h"
 #include "CompressedActivityFile.h"
 #include "Context.h"
 #include "FilterHRV.h"
 #include "HrZones.h"
 #include "PaceZones.h"
+#include "RideItem.h"
+#include "RideMetric.h"
+#include "SessionServices.h"
 #include "Settings.h"
 #include "Specification.h"
 #include "SplineLookup.h"
@@ -22,6 +26,34 @@
 #include "Zones.h"
 
 #include <QString>
+
+#include <memory>
+#include <utility>
+
+namespace {
+
+class TestAthleteApplicationService final
+    : public AthleteApplicationService
+{
+public:
+    QWebEngineProfile *webEngineProfile() const override
+    {
+        return nullptr;
+    }
+};
+
+class TestAthletePersistenceService final
+    : public AthletePersistenceService
+{
+public:
+    void reportCacheWriteFailure(
+        const QString &,
+        const QString &) override
+    {
+    }
+};
+
+} // namespace
 
 GSettings::GSettings(QString, QString)
     : newFormat(false)
@@ -88,6 +120,35 @@ void Context::reportCacheWriteFailure(
 {
 }
 
+AthleteSession::AthleteSession(
+    std::unique_ptr<AthleteApplicationService> applicationService,
+    std::unique_ptr<AthletePersistenceService> persistenceService)
+    : applicationService_(std::move(applicationService))
+    , persistenceService_(std::move(persistenceService))
+{
+}
+
+AthleteSession::~AthleteSession() = default;
+
+AthletePersistenceService &
+AthleteSession::persistenceService() const
+{
+    return *persistenceService_;
+}
+
+AthleteSession &Context::athleteSession()
+{
+    static AthleteSession session(
+        std::make_unique<TestAthleteApplicationService>(),
+        std::make_unique<TestAthletePersistenceService>());
+    return session;
+}
+
+const AthleteSession &Context::athleteSession() const
+{
+    return const_cast<Context *>(this)->athleteSession();
+}
+
 namespace Utils {
 
 QString RidefileUnEscape(QString value)
@@ -119,6 +180,24 @@ double Specification::secsStart() const
 double Specification::secsEnd() const
 {
     return -1.0;
+}
+
+bool Specification::pass(RideItem *) const
+{
+    return true;
+}
+
+RideMetricFactory::RideMetricFactory() = default;
+
+const RideMetric *
+RideMetricFactory::rideMetric(QString) const
+{
+    return nullptr;
+}
+
+double RideItem::getWeight(int)
+{
+    return 75.0;
 }
 
 void SplineLookup::update(

@@ -11,6 +11,10 @@ UNITTESTS = TEST_DIRECTORY.parents[1]
 SECTION_FLAGS = UNITTESTS / "section-gc.prf"
 ZLIB_LINK = UNITTESTS / "zlib-link.prf"
 QWT_MSVC_LINK = UNITTESTS / "qwt-msvc-link.prf"
+RIDE_FILE_CACHE_REFRESH_STUBS = (
+    UNITTESTS
+    / "FileIO/rideFileCacheRefresh/RideFileCacheRefreshTestStubs.cpp"
+)
 STRAVA_ROUTES_PROJECT = (
     UNITTESTS
     / "Train/stravaRoutesDownloadPipeline/stravaRoutesDownloadPipeline.pro"
@@ -335,6 +339,20 @@ def main() -> None:
         if expected not in qwt_msvc_link:
             raise AssertionError(
                 "shared MSVC Qwt link configuration is missing " + expected
+            )
+
+    cache_stubs = RIDE_FILE_CACHE_REFRESH_STUBS.read_text(encoding="utf-8")
+    for expected in (
+        "AthleteSession::persistenceService() const",
+        "Context::athleteSession()",
+        "Specification::pass(RideItem *) const",
+        "RideMetricFactory::RideMetricFactory()",
+        "RideMetricFactory::rideMetric(QString) const",
+        "RideItem::getWeight(int)",
+    ):
+        if expected not in cache_stubs:
+            raise AssertionError(
+                "RideFileCache MSVC link stubs are missing " + expected
             )
 
 
