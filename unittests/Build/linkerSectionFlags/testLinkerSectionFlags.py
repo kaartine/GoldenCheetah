@@ -18,6 +18,10 @@ RIDE_FILE_CACHE_REFRESH_STUBS = (
 RIDE_METADATA_ATOMIC_PROJECT = (
     UNITTESTS / "Metrics/rideMetadataAtomicSave/rideMetadataAtomicSave.pro"
 )
+RIDE_METRIC_DEPENDENCY_STUBS = (
+    UNITTESTS
+    / "Metrics/rideMetricDependencyGraph/RideMetricDependencyGraphTestStubs.cpp"
+)
 STRAVA_ROUTES_PROJECT = (
     UNITTESTS
     / "Train/stravaRoutesDownloadPipeline/stravaRoutesDownloadPipeline.pro"
@@ -365,6 +369,18 @@ def main() -> None:
     if "GC_RIDE_METADATA_FILE_IO_ONLY" not in ride_metadata_project:
         raise AssertionError(
             "RideMetadata atomic-save tests compile unrelated UI code"
+        )
+
+    ride_metric_dependency_stubs = RIDE_METRIC_DEPENDENCY_STUBS.read_text(
+        encoding="utf-8"
+    )
+    if (
+        "createUserMetricForRegistry(UserMetricSettings)"
+        not in ride_metric_dependency_stubs
+    ):
+        raise AssertionError(
+            "RideMetric dependency graph test is missing its user metric "
+            "factory stub"
         )
 
 

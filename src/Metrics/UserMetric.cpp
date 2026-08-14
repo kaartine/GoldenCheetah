@@ -20,6 +20,11 @@
 #include "UserMetricSettings.h"
 #include "DataFilter.h"
 
+RideMetric *createUserMetricForRegistry(UserMetricSettings settings)
+{
+    return new UserMetric(std::move(settings));
+}
+
 UserMetric::UserMetric(UserMetricSettings settings)
     : RideMetric(), settings(settings)
 {

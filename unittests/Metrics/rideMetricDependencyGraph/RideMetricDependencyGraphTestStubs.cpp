@@ -11,6 +11,11 @@
 #include "Specification.h"
 #include "TimeUtils.h"
 
+RideMetric *createUserMetricForRegistry(UserMetricSettings)
+{
+    return nullptr;
+}
+
 RideFile *RideItem::ride(bool)
 {
     return nullptr;

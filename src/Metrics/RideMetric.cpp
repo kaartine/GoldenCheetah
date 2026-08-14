@@ -29,6 +29,8 @@
 
 #include <mutex>
 
+RideMetric *createUserMetricForRegistry(UserMetricSettings settings);
+
 // DB Schema Version - YOU MUST UPDATE THIS IF THE SCHEMA VERSION CHANGES!!!
 // Schema version will change if a) the default metadata.xml is updated
 //                            or b) new metrics are added / old changed
@@ -438,7 +440,7 @@ bool RideMetricFactory::replaceUserMetrics(
 
     for (const UserMetricSettings &setting : settings) {
         if (next->metrics.contains(setting.symbol)) continue;
-        RideMetricPtr metric(new UserMetric(setting));
+        RideMetricPtr metric(createUserMetricForRegistry(setting));
         metric->setIndex(next->metrics.size());
         next->metrics.insert(setting.symbol, metric);
         next->metricNames.append(setting.symbol);
