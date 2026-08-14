@@ -57,12 +57,18 @@ EOF
 if [ "$(uname -s)" = Darwin ]; then
     # macOS does not provide GNU timeout. Keep exercising the parser while
     # preserving the helper's expected timeout command contract.
-    timeout()
-    {
-        [ "$#" -ge 4 ] || return 64
-        shift 3
-        "$@"
-    }
+    cat >"$TEMP_DIR/timeout" <<'EOF'
+#!/bin/sh
+[ "$#" -ge 4 ] || exit 64
+shift 3
+: >"$GC_TIMEOUT_SHIM_MARKER"
+exec "$@"
+EOF
+    chmod 0700 "$TEMP_DIR/timeout"
+    GC_TIMEOUT_SHIM_MARKER="$TEMP_DIR/timeout-invoked"
+    export GC_TIMEOUT_SHIM_MARKER
+    PATH="$TEMP_DIR:$PATH"
+    export PATH
     cat >"$TEMP_DIR/runtime-only" <<'EOF'
 #!/bin/sh
 printf '%s\n' \
@@ -79,6 +85,8 @@ EOF
     [ "$(strava_oauth_build_fallback_status \
           "$TEMP_DIR/runtime-only" true)" = unavailable ] ||
         fail "public build status did not prove its compile-time fallback absent"
+    [ -f "$GC_TIMEOUT_SHIM_MARKER" ] ||
+        fail "macOS build-status timeout shim was not invoked"
 else
     "${CC:-cc}" -std=c99 -Wall -Wextra -Werror \
         "$TEMP_DIR/runtime-only.c" -o "$TEMP_DIR/runtime-only"
