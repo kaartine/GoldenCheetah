@@ -16,9 +16,7 @@
 #include <random>
 #include <type_traits>
 
-#define private public
 #include "Voronoi.h"
-#undef private
 
 static bool hasOnlyFiniteLines(const QList<QLineF> &lines)
 {

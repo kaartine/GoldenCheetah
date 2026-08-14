@@ -66,6 +66,9 @@ typedef struct tagHalfedge
     struct tagHalfedge * PQnext ;
     } Halfedge ;
 
+#ifdef GC_VORONOI_TEST_HOOKS
+class TestVoronoiSafety;
+#endif
 
 class Voronoi {
 
@@ -83,6 +86,10 @@ class Voronoi {
         QList<QLineF> &lines() { return output; }
 
     private:
+
+#ifdef GC_VORONOI_TEST_HOOKS
+        friend class TestVoronoiSafety;
+#endif
 
         // original global variables
         int triangulate, plot, debug, nsites, siteidx ;

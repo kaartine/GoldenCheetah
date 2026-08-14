@@ -55,6 +55,14 @@ EOF
 # shellcheck source=/dev/null
 . "$SUPPORT"
 if [ "$(uname -s)" = Darwin ]; then
+    # macOS does not provide GNU timeout. Keep exercising the parser while
+    # preserving the helper's expected timeout command contract.
+    timeout()
+    {
+        [ "$#" -ge 4 ] || return 64
+        shift 3
+        "$@"
+    }
     cat >"$TEMP_DIR/runtime-only" <<'EOF'
 #!/bin/sh
 printf '%s\n' \

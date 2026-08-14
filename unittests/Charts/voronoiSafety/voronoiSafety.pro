@@ -7,6 +7,7 @@ include(../../unittests.pri)
 
 CONFIG += console testcase c++17 release
 CONFIG -= debug app_bundle
+DEFINES += GC_VORONOI_TEST_HOOKS
 
 SOURCES = testVoronoiSafety.cpp \
           ../../../contrib/voronoi/Voronoi.cpp
