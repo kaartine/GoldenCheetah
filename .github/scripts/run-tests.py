@@ -120,9 +120,20 @@ def read_enabled(unit_tests: Path) -> set[str]:
     return set(projects)
 
 
-def run_tests(command: list[str], working_directory: Path) -> tuple[int, int]:
+def run_tests(
+    command: list[str], working_directory: Path, platform: str
+) -> tuple[int, int]:
     environment = os.environ.copy()
     environment.setdefault("QT_QPA_PLATFORM", "offscreen")
+    if platform == "macos":
+        temporary = Path(environment.get("TMPDIR", "/private/tmp"))
+        try:
+            canonical_temporary = temporary.resolve(strict=True)
+        except OSError as error:
+            fail(f"cannot resolve macOS temporary directory: {error}")
+        if not canonical_temporary.is_dir():
+            fail("macOS temporary directory is not a directory")
+        environment["TMPDIR"] = str(canonical_temporary)
 
     suites = 0
     cases = 0
@@ -237,7 +248,9 @@ def main() -> None:
         makefile = project_directory / "Makefile"
         if makefile.is_symlink() or not makefile.is_file():
             fail(f"eligible test project has no generated Makefile: {project}")
-        project_suites, project_cases = run_tests(command, project_directory)
+        project_suites, project_cases = run_tests(
+            command, project_directory, arguments.platform
+        )
         if kind == "qt" and project_suites == 0:
             fail(f"test project completed without a QtTest result: {project}")
         if kind == "qt" and project_cases == 0:

@@ -66,9 +66,13 @@ def run_runner(
     fake_build_tool: Path,
     mode: str,
     build_root: Path | None = None,
+    platform: str = "linux",
+    environment_updates: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     environment = os.environ.copy()
     environment["GC_FAKE_TEST_RESULT"] = mode
+    if environment_updates:
+        environment.update(environment_updates)
     command = [
             sys.executable,
             str(RUNNER),
@@ -79,7 +83,7 @@ def run_runner(
             "--build-tool-arg",
             str(fake_build_tool),
             "--platform",
-            "linux",
+            platform,
         ]
     if build_root is not None:
         command.extend(("--build-root", str(build_root)))
@@ -152,6 +156,10 @@ def main() -> None:
 import sys
 
 mode = os.environ["GC_FAKE_TEST_RESULT"]
+expected_tmpdir = os.environ.get("GC_FAKE_EXPECT_TMPDIR")
+if expected_tmpdir and os.environ.get("TMPDIR") != expected_tmpdir:
+    print("unexpected TMPDIR: " + os.environ.get("TMPDIR", ""), file=sys.stderr)
+    sys.exit(8)
 if mode == "failure":
     sys.exit(7)
 if os.path.basename(os.getcwd()) == "Aux":
@@ -194,6 +202,26 @@ elif mode == "success":
             )
         if "Executed 2 QtTest cases across 1 suites." not in success.stderr:
             raise AssertionError(f"missing execution summary: {success.stderr}")
+
+        canonical_temp = temporary_path / "canonical-temp"
+        canonical_temp.mkdir()
+        temp_alias = temporary_path / "temp-alias"
+        temp_alias.symlink_to(canonical_temp, target_is_directory=True)
+        macos_temp = run_runner(
+            registered,
+            fake_build_tool,
+            "success",
+            platform="macos",
+            environment_updates={
+                "TMPDIR": str(temp_alias),
+                "GC_FAKE_EXPECT_TMPDIR": str(canonical_temp.resolve()),
+            },
+        )
+        if macos_temp.returncode != 0:
+            raise AssertionError(
+                "macOS TMPDIR was not canonicalized: "
+                + macos_temp.stderr
+            )
 
         shadow_source = temporary_path / "shadow-source"
         shadow_build = temporary_path / "shadow-build"
