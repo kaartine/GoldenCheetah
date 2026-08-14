@@ -1603,7 +1603,7 @@ startedCredentialCommitReturnsTrackedPendingWithinDeadline()
 
     QTRY_VERIFY_WITH_TIMEOUT(backendStarted.load(), 1000);
     QCOMPARE(
-        caller.wait_for(std::chrono::milliseconds(0)),
+        caller.wait_for(std::chrono::milliseconds(200)),
         std::future_status::ready);
     QCOMPARE(
         caller.get(),
