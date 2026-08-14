@@ -37,6 +37,8 @@ INCLUDEPATH += . \
                ../../../src/Gui \
                ../../../src/Train
 
+win32:LIBS += -ladvapi32
+
 sanitize:!tsan:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \
                       -fno-omit-frame-pointer \

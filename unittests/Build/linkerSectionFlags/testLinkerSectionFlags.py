@@ -181,6 +181,16 @@ def main() -> None:
                 + expected
             )
 
+    for project in UNITTESTS.rglob("*.pro"):
+        contents = project.read_text(encoding="utf-8")
+        if "src/FileIO/AnchoredFileSystem.cpp" not in contents:
+            continue
+        if "-ladvapi32" not in contents:
+            raise AssertionError(
+                f"{project.relative_to(UNITTESTS)} compiles AnchoredFileSystem "
+                "without linking advapi32 on Windows"
+            )
+
 
 if __name__ == "__main__":
     main()
