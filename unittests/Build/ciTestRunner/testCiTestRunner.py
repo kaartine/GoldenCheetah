@@ -115,7 +115,7 @@ def main() -> None:
         REPOSITORY / ".github" / "workflows" / "ci.yml",
     )
     require_literal(
-        "jom -k -j4 sub-unittests",
+        "jom -j4 sub-unittests",
         REPOSITORY / ".github" / "workflows" / "ci.yml",
     )
 
