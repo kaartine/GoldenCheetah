@@ -140,6 +140,22 @@ const char PlanReplacementCrashPhaseEnvironment[] =
 const char PlanReplacementCrashOccurrenceEnvironment[] =
     "GC_PLAN_REPLACEMENT_CRASH_OCCURRENCE";
 
+class CanonicalTemporaryDir final : public QTemporaryDir
+{
+public:
+    QString path() const
+    {
+        const QString canonical =
+            QFileInfo(QTemporaryDir::path()).canonicalFilePath();
+        return canonical.isEmpty() ? QTemporaryDir::path() : canonical;
+    }
+
+    QString filePath(const QString &fileName) const
+    {
+        return QDir(path()).filePath(fileName);
+    }
+};
+
 enum class JournalNamespaceEntryKind
 {
     RegularFile,
@@ -580,7 +596,7 @@ struct Fixture
                 + QLatin1Char('.') + extension);
     }
 
-    QTemporaryDir temporary;
+    CanonicalTemporaryDir temporary;
     std::unique_ptr<Context> context;
     std::unique_ptr<Athlete> athlete;
     std::unique_ptr<RideCache> cache;
@@ -5588,7 +5604,7 @@ abandonedPlanJournalBlocksLinkedTransaction()
 void TestRideCacheRemoval::
 startupReconcilesAbandonedLinkedSaveJournal()
 {
-    QTemporaryDir temporary;
+    CanonicalTemporaryDir temporary;
     QVERIFY(temporary.isValid());
     std::unique_ptr<Context> context(new Context(nullptr));
     std::unique_ptr<Athlete> athlete(
@@ -5632,7 +5648,7 @@ startupReconcilesAbandonedLinkedSaveJournal()
 void TestRideCacheRemoval::
 startupReportsCorruptLinkedSaveJournal()
 {
-    QTemporaryDir temporary;
+    CanonicalTemporaryDir temporary;
     QVERIFY(temporary.isValid());
     std::unique_ptr<Context> context(new Context(nullptr));
     std::unique_ptr<Athlete> athlete(
@@ -5682,7 +5698,7 @@ startupReportsCorruptLinkedSaveJournal()
 void TestRideCacheRemoval::
 startupReconcilesAbandonedPlanReplacementJournal()
 {
-    QTemporaryDir temporary;
+    CanonicalTemporaryDir temporary;
     QVERIFY(temporary.isValid());
     std::unique_ptr<Context> context(new Context(nullptr));
     std::unique_ptr<Athlete> athlete(
@@ -5720,7 +5736,7 @@ startupReconcilesAbandonedPlanReplacementJournal()
 void TestRideCacheRemoval::
 startupReportsCorruptPlanReplacementJournal()
 {
-    QTemporaryDir temporary;
+    CanonicalTemporaryDir temporary;
     QVERIFY(temporary.isValid());
     std::unique_ptr<Context> context(new Context(nullptr));
     std::unique_ptr<Athlete> athlete(
@@ -5977,7 +5993,7 @@ oversizedUnreadableJournalControlFileFailsBeforeRead()
 void TestRideCacheRemoval::
 startupWithoutJournalAllowsSymlinkedAthleteRoot()
 {
-    QTemporaryDir temporary;
+    CanonicalTemporaryDir temporary;
     QVERIFY(temporary.isValid());
     const QString actualRoot =
         QDir(temporary.path()).filePath(
@@ -6225,7 +6241,7 @@ linkedDeletionCrashAfterPeerSaveRecoversOnRestart()
         QFAIL("linked deletion child did not stop at the requested transition");
     }
 
-    QTemporaryDir temporary;
+    CanonicalTemporaryDir temporary;
     QVERIFY(temporary.isValid());
     const auto runChild =
         [&](const QString &childMode,
@@ -6518,7 +6534,7 @@ ordinaryDeletionCrashRecoversOnRestart()
         QFAIL("ordinary deletion child did not stop at the requested transition");
     }
 
-    QTemporaryDir temporary;
+    CanonicalTemporaryDir temporary;
     QVERIFY(temporary.isValid());
     const auto runChild = [&](const QString &childMode,
                               const QString &requestedCrashPhase) {
@@ -10224,7 +10240,7 @@ moveActivityCrashRecoveryIsGenerationAtomic()
                              .arg(childResult.error)));
     }
 
-    QTemporaryDir temporary;
+    CanonicalTemporaryDir temporary;
     QVERIFY(temporary.isValid());
     const auto runChild =
         [&](const QString &childMode,
@@ -10602,7 +10618,7 @@ moveLinkedActivityCrashRecoveryIsGenerationAtomic()
                              .arg(childResult.error)));
     }
 
-    QTemporaryDir temporary;
+    CanonicalTemporaryDir temporary;
     QVERIFY(temporary.isValid());
     const auto runChild =
         [&](const QString &childMode,
@@ -10946,7 +10962,7 @@ copyPlannedActivitiesCrashRecoveryIsGenerationAtomic()
                              .arg(childResult.error)));
     }
 
-    QTemporaryDir temporary;
+    CanonicalTemporaryDir temporary;
     QVERIFY(temporary.isValid());
     const auto runChild =
         [&](const QString &childMode,
@@ -11355,7 +11371,7 @@ shiftPlannedActivitiesCrashRecoveryIsGenerationAtomic()
                              .arg(childResult.error)));
     }
 
-    QTemporaryDir temporary;
+    CanonicalTemporaryDir temporary;
     QVERIFY(temporary.isValid());
     const auto runChild =
         [&](const QString &childMode,
