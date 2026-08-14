@@ -170,8 +170,10 @@ TestOpenDataCaptureUtils::sourcePathStaysInsideActivityDirectory()
     QVERIFY(outside.isValid());
     const QString fileName =
         QStringLiteral("2026_07_28_12_00_00.json");
-    const QString expected = QDir(directory.path()).filePath(
-        fileName);
+    const QString canonicalDirectory =
+        QDir(directory.path()).canonicalPath();
+    QVERIFY(!canonicalDirectory.isEmpty());
+    const QString expected = QDir(canonicalDirectory).filePath(fileName);
     QFile activity(expected);
     QVERIFY(activity.open(QIODevice::WriteOnly));
     QVERIFY(activity.write("{}") == 2);
