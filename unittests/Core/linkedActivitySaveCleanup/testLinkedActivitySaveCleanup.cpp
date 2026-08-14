@@ -225,8 +225,12 @@ void TestLinkedActivitySaveCleanup::releasesTransactionResources()
 
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
-    const QString athleteRoot = dir.filePath(QStringLiteral("athlete"));
-    const QString movedRoot = dir.filePath(QStringLiteral("moved-athlete"));
+    const QString fixtureRoot = QFileInfo(dir.path()).canonicalFilePath();
+    QVERIFY(!fixtureRoot.isEmpty());
+    const QString athleteRoot =
+        QDir(fixtureRoot).filePath(QStringLiteral("athlete"));
+    const QString movedRoot =
+        QDir(fixtureRoot).filePath(QStringLiteral("moved-athlete"));
     QVERIFY(createOwnedFixtureDirectory(athleteRoot));
     writeSources(athleteRoot);
 
