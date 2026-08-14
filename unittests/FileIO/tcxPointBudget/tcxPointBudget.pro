@@ -38,7 +38,7 @@ INCLUDEPATH += ../../../src \
                ../../../contrib/qzip
 
 include(../../section-gc.prf)
-LIBS += -lz
+include(../../zlib-link.prf)
 
 sanitize:!msvc {
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \

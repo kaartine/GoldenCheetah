@@ -39,7 +39,8 @@ INCLUDEPATH += ../../../src \
 include(../../section-gc.prf)
 
 QWT_LIB_DIR = $$OUT_PWD/../../../qwt/lib
-LIBS += -L$$QWT_LIB_DIR -lqwt -lz
+LIBS += -L$$QWT_LIB_DIR -lqwt
+include(../../zlib-link.prf)
 QMAKE_RPATHDIR += $$QWT_LIB_DIR
 
 sanitize:!msvc {

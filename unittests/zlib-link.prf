@@ -1,0 +1,5 @@
+isEmpty(ZLIB_LIBS) {
+    LIBS += -lz
+} else {
+    LIBS += $${ZLIB_LIBS}
+}

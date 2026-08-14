@@ -30,7 +30,7 @@ INCLUDEPATH += ../../../src \
                ../../../qwt/src
 
 include(../../section-gc.prf)
-LIBS += -lz
+include(../../zlib-link.prf)
 win32:LIBS += -ladvapi32
 
 sanitize:!msvc {

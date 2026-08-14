@@ -9,6 +9,7 @@ import tempfile
 TEST_DIRECTORY = Path(__file__).resolve().parent
 UNITTESTS = TEST_DIRECTORY.parents[1]
 SECTION_FLAGS = UNITTESTS / "section-gc.prf"
+ZLIB_LINK = UNITTESTS / "zlib-link.prf"
 STRAVA_ROUTES_PROJECT = (
     UNITTESTS
     / "Train/stravaRoutesDownloadPipeline/stravaRoutesDownloadPipeline.pro"
@@ -97,6 +98,40 @@ def generated_flags(platform: str) -> str:
         return "\n".join(
             makefile.read_text(encoding="utf-8", errors="replace")
             for makefile in makefiles
+        )
+
+
+def generated_zlib_flags() -> str:
+    with tempfile.TemporaryDirectory(prefix="gc-zlib-flags-") as temporary:
+        root = Path(temporary)
+        project = root / "zlib.pro"
+        project.write_text(
+            "TEMPLATE = app\n"
+            "TARGET = zlib_fixture\n"
+            "SOURCES = main.cpp\n"
+            f"include({ZLIB_LINK.as_posix()})\n",
+            encoding="utf-8",
+        )
+        (root / "main.cpp").write_text(
+            "int main() { return 0; }\n", encoding="utf-8"
+        )
+        result = subprocess.run(
+            [
+                qmake_executable(),
+                "ZLIB_LIBS=-LC:/vcpkg/lib -lzlib",
+                project.name,
+            ],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise AssertionError(
+                "qmake failed for configured zlib: " + result.stderr
+            )
+        return (root / "Makefile").read_text(
+            encoding="utf-8", errors="replace"
         )
 
 
@@ -190,6 +225,29 @@ def main() -> None:
                 f"{project.relative_to(UNITTESTS)} compiles AnchoredFileSystem "
                 "without linking advapi32 on Windows"
             )
+
+        for line in contents.splitlines():
+            if not line.startswith("LIBS +="):
+                continue
+            if "-lz" not in line.split():
+                continue
+            if "include(../../zlib-link.prf)" not in contents:
+                raise AssertionError(
+                    f"{project.relative_to(UNITTESTS)} links zlib without "
+                    "honoring the configured Windows library"
+                )
+
+    zlib_link = ZLIB_LINK.read_text(encoding="utf-8")
+    for expected in ("isEmpty(ZLIB_LIBS)", "LIBS += $${ZLIB_LIBS}"):
+        if expected not in zlib_link:
+            raise AssertionError(
+                "shared zlib link configuration is missing " + expected
+            )
+    configured_zlib = generated_zlib_flags()
+    if "-LC:/vcpkg/lib -lzlib" not in configured_zlib:
+        raise AssertionError(
+            "shared zlib link configuration ignores ZLIB_LIBS"
+        )
 
 
 if __name__ == "__main__":
