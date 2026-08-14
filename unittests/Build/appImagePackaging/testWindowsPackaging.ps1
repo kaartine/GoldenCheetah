@@ -23,6 +23,83 @@ try {
   $env:GC_BUILD_ACQUISITION_HELPERS_ONLY = '1'
   . $installScript
 
+  $script:installerExitCodes = [Collections.Queue]::new()
+  $script:installerCalls = @()
+  $script:installerSleeps = 0
+  function Start-Process {
+    param(
+      $FilePath,
+      $ArgumentList,
+      [switch]$NoNewWindow,
+      [switch]$Wait,
+      [switch]$PassThru
+    )
+    $script:installerCalls += ,@($ArgumentList)
+    return [pscustomobject]@{
+      ExitCode = $script:installerExitCodes.Dequeue()
+    }
+  }
+  function Start-Sleep {
+    param($Seconds)
+    $script:installerSleeps++
+  }
+  $installerLog = Join-Path $temporaryRoot 'python-install.log'
+  $script:installerExitCodes.Enqueue(1603)
+  $script:installerExitCodes.Enqueue(0)
+  Invoke-InstallerWithRetry `
+    -FilePath 'python-installer.exe' `
+    -ArgumentList @('/quiet') `
+    -LogPath $installerLog `
+    -RetryExitCodes @(1603, 1618) `
+    -MaximumAttempts 2 `
+    -RetryDelaySeconds 1
+  if ($script:installerCalls.Count -ne 2 -or
+      $script:installerSleeps -ne 1 -or
+      $script:installerCalls[0][-2] -cne '/log' -or
+      $script:installerCalls[0][-1] -cne $installerLog) {
+    throw 'Transient Python installer failure was not retried with logging'
+  }
+  $script:installerCalls = @()
+  $script:installerSleeps = 0
+  $script:installerExitCodes.Enqueue(42)
+  $rejected = $false
+  try {
+    Invoke-InstallerWithRetry `
+      -FilePath 'python-installer.exe' `
+      -ArgumentList @('/quiet') `
+      -LogPath $installerLog `
+      -RetryExitCodes @(1603, 1618) `
+      -MaximumAttempts 2 `
+      -RetryDelaySeconds 1
+  } catch {
+    $rejected = $true
+  }
+  if (-not $rejected -or
+      $script:installerCalls.Count -ne 1 -or
+      $script:installerSleeps -ne 0) {
+    throw 'Non-transient Python installer failure was retried'
+  }
+  $script:installerCalls = @()
+  $script:installerExitCodes.Enqueue(1603)
+  $script:installerExitCodes.Enqueue(1603)
+  $rejected = $false
+  try {
+    Invoke-InstallerWithRetry `
+      -FilePath 'python-installer.exe' `
+      -ArgumentList @('/quiet') `
+      -LogPath $installerLog `
+      -RetryExitCodes @(1603, 1618) `
+      -MaximumAttempts 2 `
+      -RetryDelaySeconds 1
+  } catch {
+    $rejected = $true
+  }
+  if (-not $rejected -or $script:installerCalls.Count -ne 2) {
+    throw 'Repeated Python installer failure exceeded its retry bound'
+  }
+  Remove-Item Function:Start-Process
+  Remove-Item Function:Start-Sleep
+
   $runnerCache = Join-Path $temporaryRoot 'runner-tool-cache'
   $runnerPython = Join-Path (Join-Path (Join-Path $runnerCache 'Python') '3.13.14') 'x64'
   $runnerRequired = @(

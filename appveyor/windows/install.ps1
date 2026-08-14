@@ -126,6 +126,43 @@ function Install-ZipDependency {
   }
 }
 
+function Invoke-InstallerWithRetry {
+  param(
+    [Parameter(Mandatory = $true)][string]$FilePath,
+    [Parameter(Mandatory = $true)][string[]]$ArgumentList,
+    [Parameter(Mandatory = $true)][string]$LogPath,
+    [Parameter(Mandatory = $true)][int[]]$RetryExitCodes,
+    [ValidateRange(1, 5)][int]$MaximumAttempts = 2,
+    [ValidateRange(0, 300)][int]$RetryDelaySeconds = 15
+  )
+
+  $installerArguments = @($ArgumentList) + @('/log', $LogPath)
+  for ($attempt = 1; $attempt -le $MaximumAttempts; $attempt++) {
+    $process = Start-Process `
+      -FilePath $FilePath `
+      -ArgumentList $installerArguments `
+      -NoNewWindow `
+      -Wait `
+      -PassThru
+    if ($process.ExitCode -eq 0) {
+      return
+    }
+    $retryable = $RetryExitCodes -contains $process.ExitCode
+    if (-not $retryable -or $attempt -eq $MaximumAttempts) {
+      if (Test-Path -LiteralPath $LogPath -PathType Leaf) {
+        Write-Warning "Installer log tail from ${LogPath}:"
+        Get-Content -LiteralPath $LogPath -Tail 120 | Write-Warning
+      }
+      throw "Installer failed with exit code $($process.ExitCode) after $attempt attempt(s)"
+    }
+    Write-Warning (
+      "Installer failed with retryable exit code $($process.ExitCode); " +
+      "retrying after $RetryDelaySeconds seconds"
+    )
+    Start-Sleep -Seconds $RetryDelaySeconds
+  }
+}
+
 function Install-VerifiedPythonBuild {
   param(
     [Parameter(Mandatory = $true)][string]$Root,
@@ -147,7 +184,7 @@ function Install-VerifiedPythonBuild {
     -ExpectedSha256 $InstallerSha256
 
   Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction SilentlyContinue
-  $process = Start-Process -FilePath $installer -ArgumentList @(
+  $installerArguments = @(
     '/quiet',
     'InstallAllUsers=1',
     "TargetDir=$Root",
@@ -164,10 +201,19 @@ function Install-VerifiedPythonBuild {
     'Include_symbols=0',
     'Include_debug=0',
     'Shortcuts=0'
-  ) -NoNewWindow -Wait -PassThru
-  if ($process.ExitCode -ne 0) {
+  )
+  $installerLog = Join-Path ([IO.Path]::GetTempPath()) "python-$Version-install.log"
+  try {
+    Invoke-InstallerWithRetry `
+      -FilePath $installer `
+      -ArgumentList $installerArguments `
+      -LogPath $installerLog `
+      -RetryExitCodes @(1603, 1618) `
+      -MaximumAttempts 2 `
+      -RetryDelaySeconds 15
+  } catch {
     Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction SilentlyContinue
-    throw "Python installer failed with exit code $($process.ExitCode)"
+    throw
   }
 
   $required = @(
