@@ -15,8 +15,9 @@ DEFINES += GC_LINKED_ACTIVITY_SAVE_TEST_HOOKS \
 
 SOURCES = testAtomicActivitySave.cpp \
           ApplicationSaveTestStubs.cpp \
+          RideFileTestStubs.cpp \
           ../../../src/Core/LinkedActivitySaveJournal.cpp \
-          ../../../src/Core/RideCache.cpp \
+          ../../../src/Core/RideCacheActivitySave.cpp \
           ../../../src/FileIO/AnchoredFileSystem.cpp \
           ../../../src/FileIO/RideFile.cpp \
           ../../../src/FileIO/RideFileCRC.cpp \
@@ -52,7 +53,9 @@ INCLUDEPATH += ../../../src \
                $${GSL_INCLUDES} \
                $${ZLIB_INCLUDES}
 
-LIBS += $${GSL_LIBS}
+QWT_LIB_DIR = $$OUT_PWD/../../../qwt/lib
+LIBS += $${GSL_LIBS} -L$$QWT_LIB_DIR -lqwt
+QMAKE_RPATHDIR += $$QWT_LIB_DIR
 win32:LIBS += -ladvapi32
 
 isEmpty(ZLIB_LIBS) {

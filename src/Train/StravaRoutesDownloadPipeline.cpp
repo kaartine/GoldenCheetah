@@ -406,7 +406,7 @@ DownloadBatchResult stageDownloadBatch(
                 .arg(stagingError);
         return result;
     }
-    staging->path = QDir(stagingParent).filePath(component);
+    staging->path = staging->directory.displayPath();
 
     const int attempts = qMin(routeIds.size(), MaximumFiles);
     qint64 stagedBytes = 0;

@@ -21,6 +21,12 @@ STRAVA_ROUTES_STUBS = (
 RIDE_CACHE_REMOVAL_PROJECT = (
     UNITTESTS / "Core/rideCacheRemoval/rideCacheRemoval.pro"
 )
+ATOMIC_ACTIVITY_SAVE_PROJECT = (
+    UNITTESTS / "FileIO/atomicActivitySave/atomicActivitySave.pro"
+)
+ATOMIC_ACTIVITY_SAVE_STUBS = (
+    UNITTESTS / "FileIO/atomicActivitySave/RideFileTestStubs.cpp"
+)
 PORTABLE_SECTION_PROJECTS = (
     "Charts/mapPageSecurity/mapPageSecurity.pro",
     "Charts/mapRoutePointIndex/mapRoutePointIndex.pro",
@@ -231,6 +237,37 @@ def main() -> None:
             raise AssertionError(
                 "ride cache removal test is missing GSL build configuration: "
                 + expected
+            )
+
+    atomic_activity_save = ATOMIC_ACTIVITY_SAVE_PROJECT.read_text(
+        encoding="utf-8"
+    )
+    for expected in (
+        "RideFileTestStubs.cpp",
+        "../../../src/Core/RideCacheActivitySave.cpp",
+        "-L$$QWT_LIB_DIR -lqwt",
+    ):
+        if expected not in atomic_activity_save:
+            raise AssertionError(
+                "atomic activity save test is missing its isolated link "
+                "dependency: " + expected
+            )
+    if "../../../src/Core/RideCache.cpp" in atomic_activity_save:
+        raise AssertionError(
+            "atomic activity save test compiles the complete ride cache"
+        )
+    atomic_activity_stubs = ATOMIC_ACTIVITY_SAVE_STUBS.read_text(
+        encoding="utf-8"
+    )
+    for expected in (
+        "bool extractSingleFile(",
+        "GlobalContext *GlobalContext::context()",
+        "WPrime::WPrime()",
+    ):
+        if expected not in atomic_activity_stubs:
+            raise AssertionError(
+                "atomic activity save test is missing a RideFile dependency "
+                "stub: " + expected
             )
 
     for project in UNITTESTS.rglob("*.pro"):

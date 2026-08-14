@@ -271,6 +271,11 @@ QVariant GSettings::value(const QObject *, const QString key,
     return settingsValues.value(key, defaultValue);
 }
 
+QVariant GSettings::cvalue(QString, QString key, QVariant defaultValue)
+{
+    return settingsValues.value(key, defaultValue);
+}
+
 void GSettings::setValue(QString key, QVariant value)
 {
     settingsValues.insert(std::move(key), std::move(value));
@@ -291,4 +296,15 @@ void Estimator::refresh()
 
 void RideCache::itemSaved(RideItem *)
 {
+}
+
+RideItem *RideCache::getLinkedActivity(RideItem *)
+{
+    return nullptr;
+}
+
+bool RideCache::saveActivities(QList<RideItem *>, QString &error)
+{
+    error = QStringLiteral("No test activity collection available");
+    return false;
 }
