@@ -77,34 +77,14 @@ function Assert-RequiredFiles {
   }
 }
 
-function Resolve-GitHubRunnerPythonBuildRoot {
-  param(
-    [Parameter(Mandatory = $true)][string]$Version,
-    [Parameter(Mandatory = $true)][string[]]$RequiredFiles
-  )
-
-  if ($env:GITHUB_ACTIONS -cne 'true' -or
-      [string]::IsNullOrWhiteSpace($env:RUNNER_TOOL_CACHE)) {
-    return $null
-  }
-  $pythonCache = Join-Path $env:RUNNER_TOOL_CACHE 'Python'
-  $versionCache = Join-Path $pythonCache $Version
-  $candidate = Join-Path $versionCache 'x64'
-  foreach ($relativePath in $RequiredFiles) {
-    if (-not (Test-Path -LiteralPath (Join-Path $candidate $relativePath) -PathType Leaf)) {
-      return $null
-    }
-  }
-  return $candidate
-}
-
 function Install-ZipDependency {
   param(
     [Parameter(Mandatory = $true)][string]$Root,
     [Parameter(Mandatory = $true)][string[]]$RequiredFiles,
     [Parameter(Mandatory = $true)][string]$Uri,
     [Parameter(Mandatory = $true)][string]$ArchiveName,
-    [Parameter(Mandatory = $true)][string]$ArchiveSha256
+    [Parameter(Mandatory = $true)][string]$ArchiveSha256,
+    [string]$PayloadSubdirectory = ''
   )
 
   $archivePath = Join-Path ([IO.Path]::GetTempPath()) $ArchiveName
@@ -118,48 +98,20 @@ function Install-ZipDependency {
       $safeExtractor, '--format', 'zip', '--archive', $archivePath,
       '--destination', $stage
     )
-    Assert-RequiredFiles -Root $stage -RequiredFiles $RequiredFiles
+    $payloadRoot = $stage
+    if (-not [string]::IsNullOrWhiteSpace($PayloadSubdirectory)) {
+      $stagePrefix = [IO.Path]::GetFullPath($stage) + [IO.Path]::DirectorySeparatorChar
+      $payloadRoot = [IO.Path]::GetFullPath((Join-Path $stage $PayloadSubdirectory))
+      if (-not $payloadRoot.StartsWith($stagePrefix, [StringComparison]::OrdinalIgnoreCase) -or
+          -not (Test-Path -LiteralPath $payloadRoot -PathType Container)) {
+        throw "Archive payload subdirectory is missing or unsafe: $PayloadSubdirectory"
+      }
+    }
+    Assert-RequiredFiles -Root $payloadRoot -RequiredFiles $RequiredFiles
     Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction SilentlyContinue
-    Move-Item -LiteralPath $stage -Destination $Root
+    Move-Item -LiteralPath $payloadRoot -Destination $Root
   } finally {
     Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
-  }
-}
-
-function Invoke-InstallerWithRetry {
-  param(
-    [Parameter(Mandatory = $true)][string]$FilePath,
-    [Parameter(Mandatory = $true)][string[]]$ArgumentList,
-    [Parameter(Mandatory = $true)][string]$LogPath,
-    [Parameter(Mandatory = $true)][int[]]$RetryExitCodes,
-    [ValidateRange(1, 5)][int]$MaximumAttempts = 2,
-    [ValidateRange(0, 300)][int]$RetryDelaySeconds = 15
-  )
-
-  $installerArguments = @($ArgumentList) + @('/log', $LogPath)
-  for ($attempt = 1; $attempt -le $MaximumAttempts; $attempt++) {
-    $process = Start-Process `
-      -FilePath $FilePath `
-      -ArgumentList $installerArguments `
-      -NoNewWindow `
-      -Wait `
-      -PassThru
-    if ($process.ExitCode -eq 0) {
-      return
-    }
-    $retryable = $RetryExitCodes -contains $process.ExitCode
-    if (-not $retryable -or $attempt -eq $MaximumAttempts) {
-      if (Test-Path -LiteralPath $LogPath -PathType Leaf) {
-        Write-Warning "Installer log tail from ${LogPath}:"
-        Get-Content -LiteralPath $LogPath -Tail 120 | Write-Warning
-      }
-      throw "Installer failed with exit code $($process.ExitCode) after $attempt attempt(s)"
-    }
-    Write-Warning (
-      "Installer failed with retryable exit code $($process.ExitCode); " +
-      "retrying after $RetryDelaySeconds seconds"
-    )
-    Start-Sleep -Seconds $RetryDelaySeconds
   }
 }
 
@@ -168,54 +120,13 @@ function Install-VerifiedPythonBuild {
     [Parameter(Mandatory = $true)][string]$Root,
     [Parameter(Mandatory = $true)][string]$Version,
     [Parameter(Mandatory = $true)][string]$OpenSslVersion,
-    [Parameter(Mandatory = $true)][string]$InstallerUri,
-    [Parameter(Mandatory = $true)][string]$InstallerSha256
+    [Parameter(Mandatory = $true)][string]$PackageUri,
+    [Parameter(Mandatory = $true)][string]$PackageSha256
   )
 
   if ($Version -cne '3.13.14' -or $OpenSslVersion -cne '3.0.21') {
     throw 'Windows build Python identity is not the reviewed release'
   }
-  $installer = Join-Path (
-    [IO.Path]::GetTempPath()
-  ) "python-$Version-amd64.exe"
-  Get-VerifiedDownload `
-    -Uri $InstallerUri `
-    -Destination $installer `
-    -ExpectedSha256 $InstallerSha256
-
-  Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction SilentlyContinue
-  $installerArguments = @(
-    '/quiet',
-    'InstallAllUsers=1',
-    "TargetDir=$Root",
-    'PrependPath=0',
-    'Include_launcher=0',
-    'InstallLauncherAllUsers=0',
-    'Include_doc=0',
-    'Include_test=0',
-    'Include_tcltk=0',
-    'Include_pip=1',
-    'Include_dev=1',
-    'Include_exe=1',
-    'Include_lib=1',
-    'Include_symbols=0',
-    'Include_debug=0',
-    'Shortcuts=0'
-  )
-  $installerLog = Join-Path ([IO.Path]::GetTempPath()) "python-$Version-install.log"
-  try {
-    Invoke-InstallerWithRetry `
-      -FilePath $installer `
-      -ArgumentList $installerArguments `
-      -LogPath $installerLog `
-      -RetryExitCodes @(1603, 1618) `
-      -MaximumAttempts 2 `
-      -RetryDelaySeconds 15
-  } catch {
-    Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction SilentlyContinue
-    throw
-  }
-
   $required = @(
     'python.exe',
     'python313.dll',
@@ -223,24 +134,19 @@ function Install-VerifiedPythonBuild {
     'libs\python313.lib',
     'DLLs\_ssl.pyd'
   )
-  $selectedRoot = $Root
-  try {
-    Assert-RequiredFiles -Root $selectedRoot -RequiredFiles $required
-  } catch {
-    $selectedRoot = Resolve-GitHubRunnerPythonBuildRoot `
-      -Version $Version `
-      -RequiredFiles $required
-    if ([string]::IsNullOrWhiteSpace($selectedRoot)) {
-      throw
-    }
-  }
-  Assert-RequiredFiles -Root $selectedRoot -RequiredFiles $required
-  Invoke-NativeCommand -FilePath (Join-Path $selectedRoot 'python.exe') -ArgumentList @(
+  Install-ZipDependency `
+    -Root $Root `
+    -RequiredFiles $required `
+    -Uri $PackageUri `
+    -ArchiveName "python-$Version.nupkg" `
+    -ArchiveSha256 $PackageSha256 `
+    -PayloadSubdirectory 'tools'
+  Invoke-NativeCommand -FilePath (Join-Path $Root 'python.exe') -ArgumentList @(
     '-B', '-I', '-c',
     "import ssl, sys; assert sys.version.split()[0] == '$Version'; assert ssl.OPENSSL_VERSION.split()[1] == '$OpenSslVersion'"
   ) | Out-Null
 
-  $env:PATH = "$selectedRoot\Scripts;$selectedRoot;$env:PATH"
+  $env:PATH = "$Root\Scripts;$Root;$env:PATH"
   if ($null -ne (Get-Command Set-AppveyorBuildVariable -ErrorAction SilentlyContinue)) {
     Set-AppveyorBuildVariable -Name 'PATH' -Value $env:PATH
   }
@@ -327,13 +233,13 @@ if ($env:GC_BUILD_ACQUISITION_HELPERS_ONLY -eq '1') {
 
 $pythonBuildVersion = '3.13.14'
 $pythonBuildOpenSslVersion = '3.0.21'
-$pythonBuildInstallerSha256 = 'c54d9b9bbb8a36e6489363ddd01139707fd781d72f1f9e90c7ec65d0061368e0'
+$pythonBuildPackageSha256 = '9ac15cfa6cab1115c83d48f2af55c554efa4d1bb044bbc4ab1c9d17ad426e16c'
 Install-VerifiedPythonBuild `
   -Root 'C:\Python313-x64' `
   -Version $pythonBuildVersion `
   -OpenSslVersion $pythonBuildOpenSslVersion `
-  -InstallerUri "https://www.python.org/ftp/python/$pythonBuildVersion/python-$pythonBuildVersion-amd64.exe" `
-  -InstallerSha256 $pythonBuildInstallerSha256
+  -PackageUri "https://www.nuget.org/api/v2/package/python/$pythonBuildVersion" `
+  -PackageSha256 $pythonBuildPackageSha256
 
 $libsSha256 = '4d80f4166dee19a7e4ad0a17278b0dd5c9338c9bdcb38fb5856f091dce179a49'
 $libsRequired = @(

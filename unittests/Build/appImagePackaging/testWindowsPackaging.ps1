@@ -23,111 +23,6 @@ try {
   $env:GC_BUILD_ACQUISITION_HELPERS_ONLY = '1'
   . $installScript
 
-  $script:installerExitCodes = [Collections.Queue]::new()
-  $script:installerCalls = @()
-  $script:installerSleeps = 0
-  function Start-Process {
-    param(
-      $FilePath,
-      $ArgumentList,
-      [switch]$NoNewWindow,
-      [switch]$Wait,
-      [switch]$PassThru
-    )
-    $script:installerCalls += ,@($ArgumentList)
-    return [pscustomobject]@{
-      ExitCode = $script:installerExitCodes.Dequeue()
-    }
-  }
-  function Start-Sleep {
-    param($Seconds)
-    $script:installerSleeps++
-  }
-  $installerLog = Join-Path $temporaryRoot 'python-install.log'
-  $script:installerExitCodes.Enqueue(1603)
-  $script:installerExitCodes.Enqueue(0)
-  Invoke-InstallerWithRetry `
-    -FilePath 'python-installer.exe' `
-    -ArgumentList @('/quiet') `
-    -LogPath $installerLog `
-    -RetryExitCodes @(1603, 1618) `
-    -MaximumAttempts 2 `
-    -RetryDelaySeconds 1
-  if ($script:installerCalls.Count -ne 2 -or
-      $script:installerSleeps -ne 1 -or
-      $script:installerCalls[0][-2] -cne '/log' -or
-      $script:installerCalls[0][-1] -cne $installerLog) {
-    throw 'Transient Python installer failure was not retried with logging'
-  }
-  $script:installerCalls = @()
-  $script:installerSleeps = 0
-  $script:installerExitCodes.Enqueue(42)
-  $rejected = $false
-  try {
-    Invoke-InstallerWithRetry `
-      -FilePath 'python-installer.exe' `
-      -ArgumentList @('/quiet') `
-      -LogPath $installerLog `
-      -RetryExitCodes @(1603, 1618) `
-      -MaximumAttempts 2 `
-      -RetryDelaySeconds 1
-  } catch {
-    $rejected = $true
-  }
-  if (-not $rejected -or
-      $script:installerCalls.Count -ne 1 -or
-      $script:installerSleeps -ne 0) {
-    throw 'Non-transient Python installer failure was retried'
-  }
-  $script:installerCalls = @()
-  $script:installerExitCodes.Enqueue(1603)
-  $script:installerExitCodes.Enqueue(1603)
-  $rejected = $false
-  try {
-    Invoke-InstallerWithRetry `
-      -FilePath 'python-installer.exe' `
-      -ArgumentList @('/quiet') `
-      -LogPath $installerLog `
-      -RetryExitCodes @(1603, 1618) `
-      -MaximumAttempts 2 `
-      -RetryDelaySeconds 1
-  } catch {
-    $rejected = $true
-  }
-  if (-not $rejected -or $script:installerCalls.Count -ne 2) {
-    throw 'Repeated Python installer failure exceeded its retry bound'
-  }
-  Remove-Item Function:Start-Process
-  Remove-Item Function:Start-Sleep
-
-  $runnerCache = Join-Path $temporaryRoot 'runner-tool-cache'
-  $runnerPython = Join-Path (Join-Path (Join-Path $runnerCache 'Python') '3.13.14') 'x64'
-  $runnerRequired = @(
-    'python.exe', 'python313.dll', 'include\Python.h',
-    'libs\python313.lib', 'DLLs\_ssl.pyd'
-  )
-  foreach ($relativePath in $runnerRequired) {
-    $path = Join-Path $runnerPython $relativePath
-    New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
-    [IO.File]::WriteAllText($path, 'authenticated runner fixture')
-  }
-  $env:GITHUB_ACTIONS = 'true'
-  $env:RUNNER_TOOL_CACHE = $runnerCache
-  $resolvedRunnerPython = Resolve-GitHubRunnerPythonBuildRoot `
-    -Version '3.13.14' `
-    -RequiredFiles $runnerRequired
-  if ($resolvedRunnerPython -cne $runnerPython) {
-    throw 'Exact GitHub runner Python toolcache entry was not resolved'
-  }
-  Remove-Item -LiteralPath (Join-Path $runnerPython 'DLLs\_ssl.pyd') -Force
-  if ($null -ne (Resolve-GitHubRunnerPythonBuildRoot `
-        -Version '3.13.14' `
-        -RequiredFiles $runnerRequired)) {
-    throw 'Incomplete GitHub runner Python toolcache entry was accepted'
-  }
-  Remove-Item Env:GITHUB_ACTIONS
-  Remove-Item Env:RUNNER_TOOL_CACHE
-
   function Get-VerifiedDownload {
     param($Uri, $Destination, $ExpectedSha256)
     [IO.File]::WriteAllText($Destination, 'verified archive fixture')
@@ -139,16 +34,19 @@ try {
       throw 'Unexpected extraction command in fixture'
     }
     $stage = $ArgumentList[$destinationIndex + 1]
-    New-Item -ItemType Directory -Path $stage | Out-Null
-    [IO.File]::WriteAllText((Join-Path $stage 'trusted.exe'), 'trusted')
+    $payload = Join-Path $stage 'tools'
+    New-Item -ItemType Directory -Path $payload | Out-Null
+    [IO.File]::WriteAllText((Join-Path $payload 'trusted.exe'), 'trusted')
   }
   Install-ZipDependency `
     -Root $dependencyRoot `
     -RequiredFiles @('trusted.exe') `
     -Uri 'https://invalid.example/dependency.zip' `
     -ArchiveName "gc-cache-fixture-$PID.zip" `
-    -ArchiveSha256 ('0' * 64)
+    -ArchiveSha256 ('0' * 64) `
+    -PayloadSubdirectory 'tools'
   if (-not (Test-Path -LiteralPath (Join-Path $dependencyRoot 'trusted.exe') -PathType Leaf) -or
+      (Test-Path -LiteralPath (Join-Path $dependencyRoot 'tools')) -or
       (Test-Path -LiteralPath (Join-Path $dependencyRoot 'hostile.exe')) -or
       (Test-Path -LiteralPath (Join-Path $dependencyRoot '.gc-dependency-complete'))) {
     throw 'Verified dependency reconstruction retained a forgeable cached payload'

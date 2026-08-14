@@ -19,8 +19,8 @@ PYTHON_ABI = "313"
 PYTHON_ARCHIVE_SHA256 = (
     "90b4e5b9898b72d744650524bff92377c367f44bd5fbd09e3148656c080ad907"
 )
-PYTHON_INSTALLER_SHA256 = (
-    "c54d9b9bbb8a36e6489363ddd01139707fd781d72f1f9e90c7ec65d0061368e0"
+PYTHON_BUILD_PACKAGE_SHA256 = (
+    "9ac15cfa6cab1115c83d48f2af55c554efa4d1bb044bbc4ab1c9d17ad426e16c"
 )
 OPENSSL_VERSION = "3.0.21"
 
@@ -61,13 +61,13 @@ class WindowsOpenSslTests(unittest.TestCase):
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
 
         self.assertIn(f"$pythonBuildVersion = '{PYTHON_VERSION}'", install_script)
-        self.assertIn(PYTHON_INSTALLER_SHA256, install_script)
+        self.assertIn(PYTHON_BUILD_PACKAGE_SHA256, install_script)
         self.assertIn("Install-VerifiedPythonBuild", install_script)
         self.assertIn("python313.lib", install_script)
         self.assertIn("sys.version.split()[0]", install_script)
-        self.assertIn("Resolve-GitHubRunnerPythonBuildRoot", install_script)
-        self.assertIn("$env:RUNNER_TOOL_CACHE", install_script)
-        self.assertIn("$env:GITHUB_ACTIONS", install_script)
+        self.assertIn("-PayloadSubdirectory 'tools'", install_script)
+        self.assertIn("safe-extract.py", install_script)
+        self.assertNotIn("InstallAllUsers=1", install_script)
         self.assertIn("qtconnectivity", workflow)
         self.assertNotIn(
             '$env:PATH = "C:\\Python313-x64\\Scripts;C:\\Python313-x64;',
