@@ -12,6 +12,8 @@
 
 #include <memory>
 
+QString gcroot;
+
 namespace {
 
 enum class FailurePoint
