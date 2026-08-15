@@ -56,6 +56,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstddef>
+#include <cstdio>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -6874,6 +6875,11 @@ stalledGuiBoundsAndCoalescesSslWarnings()
 
 int main(int argc, char *argv[])
 {
+    // Preserve the last QtTest message when a hosted process terminates
+    // abruptly before the standard streams can be flushed.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::setvbuf(stderr, nullptr, _IONBF, 0);
+
     if (LocalFileStoreProcess::isHelperInvocation(argc, argv)) {
         QCoreApplication helperApplication(argc, argv);
         return LocalFileStoreProcess::runHelper(
