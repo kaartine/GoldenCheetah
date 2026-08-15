@@ -1773,7 +1773,7 @@ private slots:
     {
         BT40Controller controller(nullptr, nullptr);
         BT40Device *device = createDevice(&controller);
-        QLowEnergyController *initialLink =
+        QPointer<QLowEnergyController> initialLink =
                 device->findChild<QLowEnergyController *>(
                         QString(), Qt::FindDirectChildrenOnly);
         QVERIFY(initialLink);
@@ -1791,12 +1791,12 @@ private slots:
                 nullptr, QEvent::DeferredDelete);
         QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
         QCoreApplication::processEvents();
+        QVERIFY(initialLink.isNull());
 
         QLowEnergyController *freshLink =
                 device->findChild<QLowEnergyController *>(
                         QString(), Qt::FindDirectChildrenOnly);
         QVERIFY(freshLink);
-        QVERIFY(freshLink != initialLink);
         freshLink->emitConnectedForTest();
         QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
         QCoreApplication::processEvents();
