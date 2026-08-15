@@ -6938,7 +6938,17 @@ int main(int argc, char *argv[])
     } else {
         TestAthleteMigrationSafety test;
         traceTestStartup("entering-qtest");
-        result = QTest::qExec(&test, argc, argv);
+#ifdef Q_OS_WIN
+        if (qEnvironmentVariableIsSet("CI")) {
+            QStringList testArguments = application.arguments();
+            testArguments << QStringLiteral("-o")
+                          << QStringLiteral("-,txt");
+            result = QTest::qExec(&test, testArguments);
+        } else
+#endif
+        {
+            result = QTest::qExec(&test, argc, argv);
+        }
         traceTestStartup("qtest-returned");
     }
 
