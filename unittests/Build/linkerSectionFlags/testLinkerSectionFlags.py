@@ -8,6 +8,7 @@ import tempfile
 
 TEST_DIRECTORY = Path(__file__).resolve().parent
 UNITTESTS = TEST_DIRECTORY.parents[1]
+REPOSITORY = UNITTESTS.parent
 SECTION_FLAGS = UNITTESTS / "section-gc.prf"
 ZLIB_LINK = UNITTESTS / "zlib-link.prf"
 QWT_MSVC_LINK = UNITTESTS / "qwt-msvc-link.prf"
@@ -37,6 +38,9 @@ PYTHON_DATA_SERIES_PROJECT = (
     UNITTESTS
     / "Python/pythonDataSeriesOwnership/testPythonDataSeriesOwnership.pro"
 )
+PYTHON_DATA_SERIES_SOURCE = REPOSITORY / "src/Python/SIP/PythonDataSeries.cpp"
+PYTHON_BINDINGS_SOURCE = REPOSITORY / "src/Python/SIP/Bindings.cpp"
+APPLICATION_PROJECT = REPOSITORY / "src/src.pro"
 STRAVA_ROUTES_PROJECT = (
     UNITTESTS
     / "Train/stravaRoutesDownloadPipeline/stravaRoutesDownloadPipeline.pro"
@@ -84,7 +88,6 @@ PORTABLE_SECTION_PROJECTS = (
 CUSTOM_SECTION_PROJECTS = {
     "Core/rideCacheSaveSnapshot/rideCacheSaveSnapshot.pro",
     "FileIO/atomicActivitySave/atomicActivitySave.pro",
-    "Python/pythonDataSeriesOwnership/testPythonDataSeriesOwnership.pro",
 }
 SHARED_RIDE_FILE_STUB_PROJECTS = {
     "FileIO/fitReaderIntegrity/fitReaderIntegrity.pro",
@@ -436,10 +439,33 @@ def main() -> None:
     python_data_series_project = PYTHON_DATA_SERIES_PROJECT.read_text(
         encoding="utf-8"
     )
-    if "win32:LIBS += $${PYTHONLIBS}" not in python_data_series_project:
+    if "../../../src/Python/SIP/PythonDataSeries.cpp" not in python_data_series_project:
         raise AssertionError(
-            "Python data-series ownership test does not link the configured "
-            "Windows Python library"
+            "Python data-series ownership test is missing its isolated "
+            "production implementation"
+        )
+    if "../../../src/Python/SIP/Bindings.cpp" in python_data_series_project:
+        raise AssertionError(
+            "Python data-series ownership test compiles unrelated bindings"
+        )
+    python_data_series_source = PYTHON_DATA_SERIES_SOURCE.read_text(
+        encoding="utf-8"
+    )
+    if "PythonDataSeries::PythonDataSeries" not in python_data_series_source:
+        raise AssertionError(
+            "isolated Python data-series implementation is missing constructors"
+        )
+    if "PythonDataSeries::PythonDataSeries" in PYTHON_BINDINGS_SOURCE.read_text(
+        encoding="utf-8"
+    ):
+        raise AssertionError(
+            "Python data-series implementation leaked back into bindings"
+        )
+    if "Python/SIP/PythonDataSeries.cpp" not in APPLICATION_PROJECT.read_text(
+        encoding="utf-8"
+    ):
+        raise AssertionError(
+            "production Python build omits the data-series implementation"
         )
 
 

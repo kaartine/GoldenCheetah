@@ -254,7 +254,8 @@ contains(DEFINES, "GC_WANT_PYTHON") {
     ## Python integration & SIP files
     HEADERS += $$files(Python/SIP/sip*.h) Python/SIP/Bindings.h
     SOURCES += $$files(Python/SIP/sip*.c)
-    SOURCES += $$files(Python/SIP/sip*.cpp) Python/SIP/Bindings.cpp
+    SOURCES += $$files(Python/SIP/sip*.cpp) Python/SIP/Bindings.cpp \
+               Python/SIP/PythonDataSeries.cpp
 
     ## Python Embedding & Charts
     HEADERS += Python/PythonEmbed.h Python/PythonExecutionGate.h \
