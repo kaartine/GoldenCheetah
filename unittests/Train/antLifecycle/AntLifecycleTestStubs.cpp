@@ -10,7 +10,16 @@
 #include "GarminServiceHelper.h"
 #include "RemoteControl.h"
 #include "Settings.h"
+
+#ifdef GC_HAVE_LIBUSB
+#define GC_ANT_LIFECYCLE_RESTORE_LIBUSB
+#undef GC_HAVE_LIBUSB
+#endif
 #include "TrainSidebar.h"
+#ifdef GC_ANT_LIFECYCLE_RESTORE_LIBUSB
+#define GC_HAVE_LIBUSB
+#undef GC_ANT_LIFECYCLE_RESTORE_LIBUSB
+#endif
 
 int OperatingSystem = LINUX;
 
