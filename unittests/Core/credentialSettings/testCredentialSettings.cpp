@@ -1356,6 +1356,135 @@ bool currentWindowsUserSid(
     return true;
 }
 
+bool createCurrentWindowsUserOwnedDirectory(const QString &path)
+{
+    QByteArray userStorage;
+    PSID userSid = nullptr;
+    if (!currentWindowsUserSid(&userStorage, &userSid))
+        return false;
+
+    const DWORD aclSize = DWORD(
+        sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE)
+        - sizeof(DWORD) + ::GetLengthSid(userSid));
+    QByteArray aclStorage(int(aclSize), '\0');
+    auto *acl = reinterpret_cast<PACL>(aclStorage.data());
+    SECURITY_DESCRIPTOR descriptor = {};
+    if (!::InitializeAcl(acl, aclSize, ACL_REVISION)
+        || !::AddAccessAllowedAceEx(
+            acl, ACL_REVISION,
+            CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE,
+            FILE_ALL_ACCESS, userSid)
+        || !::InitializeSecurityDescriptor(
+            &descriptor, SECURITY_DESCRIPTOR_REVISION)
+        || !::SetSecurityDescriptorOwner(
+            &descriptor, userSid, FALSE)
+        || !::SetSecurityDescriptorDacl(
+            &descriptor, TRUE, acl, FALSE)
+        || !::SetSecurityDescriptorControl(
+            &descriptor, SE_DACL_PROTECTED,
+            SE_DACL_PROTECTED)) {
+        return false;
+    }
+    SECURITY_ATTRIBUTES attributes = {};
+    attributes.nLength = sizeof(attributes);
+    attributes.lpSecurityDescriptor = &descriptor;
+    const QString nativePath = QDir::toNativeSeparators(path);
+    return ::CreateDirectoryW(
+        reinterpret_cast<LPCWSTR>(nativePath.utf16()),
+        &attributes);
+}
+
+class ScopedPrivateWindowsTestEnvironment
+{
+public:
+    ScopedPrivateWindowsTestEnvironment()
+        : oldTemp_(qgetenv("TEMP")),
+          oldTmp_(qgetenv("TMP")),
+          hadTemp_(qEnvironmentVariableIsSet("TEMP")),
+          hadTmp_(qEnvironmentVariableIsSet("TMP"))
+    {
+        if (!::OpenProcessToken(
+                ::GetCurrentProcess(),
+                TOKEN_QUERY | TOKEN_ADJUST_DEFAULT,
+                &token_)) {
+            return;
+        }
+        DWORD required = 0;
+        ::GetTokenInformation(
+            token_, TokenOwner, nullptr, 0, &required);
+        if (::GetLastError() != ERROR_INSUFFICIENT_BUFFER
+            || required == 0) {
+            return;
+        }
+        originalOwner_.resize(int(required));
+        if (!::GetTokenInformation(
+                token_, TokenOwner, originalOwner_.data(),
+                required, &required)) {
+            return;
+        }
+
+        QByteArray userStorage;
+        PSID userSid = nullptr;
+        if (!currentWindowsUserSid(&userStorage, &userSid))
+            return;
+        TOKEN_OWNER currentUserOwner = {};
+        currentUserOwner.Owner = userSid;
+        if (!::SetTokenInformation(
+                token_, TokenOwner, &currentUserOwner,
+                sizeof(currentUserOwner))) {
+            return;
+        }
+        ownerChanged_ = true;
+
+        rootPath_ = QDir(QDir::tempPath()).filePath(
+            QStringLiteral("gc-credential-windows-%1-%2")
+                .arg(QCoreApplication::applicationPid())
+                .arg(QUuid::createUuid().toString(
+                    QUuid::WithoutBraces)));
+        if (!createCurrentWindowsUserOwnedDirectory(rootPath_))
+            return;
+
+        const QByteArray encodedRoot = QFile::encodeName(rootPath_);
+        qputenv("TEMP", encodedRoot);
+        qputenv("TMP", encodedRoot);
+        valid_ = true;
+    }
+
+    ~ScopedPrivateWindowsTestEnvironment()
+    {
+        if (hadTemp_)
+            qputenv("TEMP", oldTemp_);
+        else
+            qunsetenv("TEMP");
+        if (hadTmp_)
+            qputenv("TMP", oldTmp_);
+        else
+            qunsetenv("TMP");
+        if (!rootPath_.isEmpty())
+            QDir(rootPath_).removeRecursively();
+        if (ownerChanged_ && !originalOwner_.isEmpty()) {
+            ::SetTokenInformation(
+                token_, TokenOwner, originalOwner_.data(),
+                DWORD(originalOwner_.size()));
+        }
+        if (token_)
+            ::CloseHandle(token_);
+    }
+
+    bool isValid() const { return valid_; }
+
+private:
+    QByteArray oldTemp_;
+    QByteArray oldTmp_;
+    QByteArray originalOwner_;
+    QString rootPath_;
+    bool hadTemp_ = false;
+    bool hadTmp_ = false;
+    bool ownerChanged_ = false;
+    bool valid_ = false;
+    HANDLE token_ = nullptr;
+};
+
 bool setWindowsDirectoryAcl(
     const QString &path,
     bool allowEveryone,
@@ -1573,6 +1702,7 @@ private slots:
     void init();
     void cleanup();
     void persistentLoggerUsesFileArgument();
+    void temporarySettingsFileCanBeHardened();
     void credentialClassification_data();
     void credentialClassification();
     void stravaClientCredentialsNeverReachPlaintextSettings();
@@ -1899,6 +2029,22 @@ void TestCredentialSettings::persistentLoggerUsesFileArgument()
         QStringList({QStringLiteral("test"), QStringLiteral("-silent"),
                      QStringLiteral("-o"),
                      QStringLiteral("persistent.txt,txt")}));
+}
+
+void TestCredentialSettings::temporarySettingsFileCanBeHardened()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString path = temporary.filePath(
+        QStringLiteral("private.ini"));
+    QSettings settings(path, QSettings::IniFormat);
+    settings.setValue(QStringLiteral("test/value"), 1);
+    settings.sync();
+    QCOMPARE(settings.status(), QSettings::NoError);
+    QVERIFY(CredentialSettings::hardenSettingsFile(&settings));
+#ifdef Q_OS_WIN
+    QVERIFY(windowsFileHasOwnerOnlyAcl(path));
+#endif
 }
 
 void TestCredentialSettings::initTestCase()
@@ -24352,6 +24498,15 @@ int main(int argc, char *argv[])
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::setvbuf(stderr, nullptr, _IONBF, 0);
+#ifdef Q_OS_WIN
+    ScopedPrivateWindowsTestEnvironment privateEnvironment;
+    if (!privateEnvironment.isValid()) {
+        std::fprintf(
+            stderr,
+            "Could not create a private Windows test environment\n");
+        return 2;
+    }
+#endif
     QApplication application(argc, argv);
     TestCredentialSettings test;
     if (!qEnvironmentVariableIsSet("CI")) {
