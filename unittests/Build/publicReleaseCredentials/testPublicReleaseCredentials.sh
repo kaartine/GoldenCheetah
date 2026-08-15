@@ -54,9 +54,11 @@ EOF
 
 # shellcheck source=/dev/null
 . "$SUPPORT"
-if [ "$(uname -s)" = Darwin ]; then
-    # macOS does not provide GNU timeout. Keep exercising the parser while
-    # preserving the helper's expected timeout command contract.
+PLATFORM=${GC_PUBLIC_RELEASE_TEST_PLATFORM:-$(uname -s)}
+case "$PLATFORM" in
+Darwin|MINGW*|MSYS*|CYGWIN*)
+    # These hosts do not produce ELF test executables. Keep exercising the
+    # parser while preserving the helper's expected GNU timeout contract.
     cat >"$TEMP_DIR/timeout" <<'EOF'
 #!/bin/sh
 [ "$#" -ge 4 ] || exit 64
@@ -86,8 +88,9 @@ EOF
           "$TEMP_DIR/runtime-only" true)" = unavailable ] ||
         fail "public build status did not prove its compile-time fallback absent"
     [ -f "$GC_TIMEOUT_SHIM_MARKER" ] ||
-        fail "macOS build-status timeout shim was not invoked"
-else
+        fail "portable build-status timeout shim was not invoked"
+    ;;
+*)
     "${CC:-cc}" -std=c99 -Wall -Wextra -Werror \
         "$TEMP_DIR/runtime-only.c" -o "$TEMP_DIR/runtime-only"
     [ "$(require_strava_oauth_build "$TEMP_DIR/runtime-only")" = \
@@ -96,6 +99,7 @@ else
     [ "$(require_unconfigured_strava_oauth_build "$TEMP_DIR/runtime-only")" = \
       "Strava OAuth compile-time fallback: unavailable" ] ||
         fail "public build did not prove its compile-time fallback absent"
-fi
+    ;;
+esac
 
 echo "PASS: public releases use runtime-only Strava credentials"
