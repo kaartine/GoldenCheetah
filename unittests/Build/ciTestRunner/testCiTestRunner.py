@@ -158,6 +158,7 @@ def main() -> None:
         fake_build_tool = temporary_path / "fake_build_tool.py"
         fake_build_tool.write_text(
             """import os
+from pathlib import Path
 import sys
 
 mode = os.environ["GC_FAKE_TEST_RESULT"]
@@ -165,9 +166,18 @@ expected_tmpdir = os.environ.get("GC_FAKE_EXPECT_TMPDIR")
 if expected_tmpdir and os.environ.get("TMPDIR") != expected_tmpdir:
     print("unexpected TMPDIR: " + os.environ.get("TMPDIR", ""), file=sys.stderr)
     sys.exit(8)
+diagnostic = os.environ.get("GC_QTTEST_PERSISTENT_LOG")
+is_auxiliary = os.path.basename(os.getcwd()) == "Aux"
+if is_auxiliary and diagnostic:
+    sys.exit(9)
+if not is_auxiliary and not diagnostic:
+    sys.exit(10)
 if mode == "failure":
+    Path(diagnostic).write_text(
+        "persisted QtTest diagnostic\\n", encoding="utf-8"
+    )
     sys.exit(7)
-if os.path.basename(os.getcwd()) == "Aux":
+if is_auxiliary:
     sys.exit(0)
 if mode == "zero":
     print("Totals: 0 passed, 0 failed, 0 skipped, 0 blacklisted, 0ms")
@@ -198,6 +208,10 @@ elif mode == "success":
         if build_failure.returncode != 7:
             raise AssertionError(
                 f"expected build-tool status 7, got {build_failure.returncode}"
+            )
+        if "persisted QtTest diagnostic" not in build_failure.stdout:
+            raise AssertionError(
+                "runner did not emit the persisted failure diagnostic"
             )
 
         success = run_runner(registered, fake_build_tool, "success")

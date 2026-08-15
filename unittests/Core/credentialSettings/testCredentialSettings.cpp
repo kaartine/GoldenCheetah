@@ -1,6 +1,8 @@
 #include <QtTest>
 
+#include <QApplication>
 #include <QCryptographicHash>
+#include <QCoreApplication>
 #include <QDataStream>
 #include <QDateTime>
 #include <QDir>
@@ -25,6 +27,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <functional>
 #include <future>
 #include <memory>
@@ -52,6 +55,15 @@ double dpiXFactor = 1.0;
 double dpiYFactor = 1.0;
 
 namespace {
+
+QStringList persistentCredentialTestArguments(
+    const QStringList &arguments, const QString &logPath)
+{
+    QStringList result = arguments;
+    result << QStringLiteral("-o")
+           << logPath + QStringLiteral(",txt");
+    return result;
+}
 
 struct FakeStoreState
 {
@@ -1560,6 +1572,7 @@ private slots:
     void cleanupTestCase();
     void init();
     void cleanup();
+    void persistentLoggerUsesFileArgument();
     void credentialClassification_data();
     void credentialClassification();
     void stravaClientCredentialsNeverReachPlaintextSettings();
@@ -1876,6 +1889,17 @@ private slots:
 private:
     QString ownedCredentialStateRoot_;
 };
+
+void TestCredentialSettings::persistentLoggerUsesFileArgument()
+{
+    QCOMPARE(
+        persistentCredentialTestArguments(
+            {QStringLiteral("test"), QStringLiteral("-silent")},
+            QStringLiteral("persistent.txt")),
+        QStringList({QStringLiteral("test"), QStringLiteral("-silent"),
+                     QStringLiteral("-o"),
+                     QStringLiteral("persistent.txt,txt")}));
+}
 
 void TestCredentialSettings::initTestCase()
 {
@@ -24324,5 +24348,50 @@ credentialWorkerShutdownAbandonsQueuedOperations()
     QVERIFY(!queuedRan.load());
 }
 
-QTEST_MAIN(TestCredentialSettings)
+int main(int argc, char *argv[])
+{
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::setvbuf(stderr, nullptr, _IONBF, 0);
+    QApplication application(argc, argv);
+    TestCredentialSettings test;
+    if (!qEnvironmentVariableIsSet("CI")) {
+        return QTest::qExec(&test, application.arguments());
+    }
+
+    const QString runnerLog = qEnvironmentVariable(
+        "GC_QTTEST_PERSISTENT_LOG");
+    const bool runnerOwnsLog = !runnerLog.isEmpty();
+    const QString logPath = runnerOwnsLog
+        ? runnerLog
+        : QDir(QDir::tempPath()).filePath(
+              QStringLiteral("gc-credential-settings-%1.txt").arg(
+                  QCoreApplication::applicationPid()));
+    QLockFile ownership(logPath + QStringLiteral(".lock"));
+    ownership.setStaleLockTime(0);
+    if (!ownership.tryLock(0)) {
+        return QTest::qExec(&test, application.arguments());
+    }
+
+    QFile::remove(logPath);
+    const int result = QTest::qExec(
+        &test,
+        persistentCredentialTestArguments(
+            application.arguments(), logPath));
+    if (runnerOwnsLog) return result;
+
+    QFile log(logPath);
+    if (!log.open(QIODevice::ReadOnly)) {
+        std::fprintf(
+            stderr, "Could not read QtTest log: %s\n",
+            qPrintable(log.errorString()));
+        return result == 0 ? 2 : result;
+    }
+    const QByteArray output = log.readAll();
+    std::fwrite(
+        output.constData(), 1,
+        static_cast<std::size_t>(output.size()), stderr);
+    log.close();
+    QFile::remove(logPath);
+    return result;
+}
 #include "testCredentialSettings.moc"

@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 
 QTTEST_TOTAL = re.compile(r"Totals:\s+([0-9]+)\s+passed")
@@ -121,7 +122,10 @@ def read_enabled(unit_tests: Path) -> set[str]:
 
 
 def run_tests(
-    command: list[str], working_directory: Path, platform: str
+    command: list[str],
+    working_directory: Path,
+    platform: str,
+    persistent_output: bool,
 ) -> tuple[int, int]:
     environment = os.environ.copy()
     environment.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -134,35 +138,70 @@ def run_tests(
         if not canonical_temporary.is_dir():
             fail("macOS temporary directory is not a directory")
         environment["TMPDIR"] = str(canonical_temporary)
+    diagnostic_directory = (
+        tempfile.TemporaryDirectory(prefix="gc-qtest-output-")
+        if persistent_output
+        else None
+    )
+    diagnostic_path = (
+        Path(diagnostic_directory.name) / "result.txt"
+        if diagnostic_directory is not None
+        else None
+    )
+    if diagnostic_path is not None:
+        environment["GC_QTTEST_PERSISTENT_LOG"] = str(diagnostic_path)
 
     suites = 0
     cases = 0
     try:
-        process = subprocess.Popen(
-            command,
-            cwd=working_directory,
-            env=environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
-    except OSError as error:
-        fail(f"cannot start unit-test command: {error}", 127)
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=working_directory,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except OSError as error:
+            fail(f"cannot start unit-test command: {error}", 127)
 
-    assert process.stdout is not None
-    for line in process.stdout:
-        print(line, end="", flush=True)
-        match = QTTEST_TOTAL.search(line)
-        if match:
-            suites += 1
-            cases += int(match.group(1))
+        assert process.stdout is not None
+        for line in process.stdout:
+            print(line, end="", flush=True)
+            match = QTTEST_TOTAL.search(line)
+            if match:
+                suites += 1
+                cases += int(match.group(1))
 
-    returncode = process.wait()
-    if returncode != 0:
-        raise SystemExit(returncode if returncode > 0 else 128 - returncode)
-    return suites, cases
+        returncode = process.wait()
+        if diagnostic_path is not None and diagnostic_path.exists():
+            if (
+                diagnostic_path.is_symlink()
+                or not diagnostic_path.is_file()
+                or diagnostic_path.stat().st_size > 16 * 1024 * 1024
+            ):
+                fail("persisted QtTest diagnostic is unsafe")
+            diagnostic = diagnostic_path.read_text(
+                encoding="utf-8", errors="replace"
+            )
+            print(diagnostic, end="", flush=True)
+            for line in diagnostic.splitlines():
+                match = QTTEST_TOTAL.search(line)
+                if match:
+                    suites += 1
+                    cases += int(match.group(1))
+
+        if returncode != 0:
+            raise SystemExit(
+                returncode if returncode > 0 else 128 - returncode
+            )
+        return suites, cases
+    finally:
+        if diagnostic_directory is not None:
+            diagnostic_directory.cleanup()
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -249,7 +288,10 @@ def main() -> None:
         if makefile.is_symlink() or not makefile.is_file():
             fail(f"eligible test project has no generated Makefile: {project}")
         project_suites, project_cases = run_tests(
-            command, project_directory, arguments.platform
+            command,
+            project_directory,
+            arguments.platform,
+            kind == "qt",
         )
         if kind == "qt" and project_suites == 0:
             fail(f"test project completed without a QtTest result: {project}")
