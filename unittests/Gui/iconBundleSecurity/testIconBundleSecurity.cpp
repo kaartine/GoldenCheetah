@@ -837,8 +837,8 @@ private slots:
         const QString decomposed =
             QString("cafe") + QChar(0x0301) + ".svg";
         QVERIFY(writeFile(iconPath(decomposed), svgData("#a23b3b")));
-        if (QFileInfo(iconPath(decomposed)).fileName() != decomposed)
-            QSKIP("The filesystem normalizes filenames");
+        if (QFileInfo::exists(iconPath(composed)))
+            QSKIP("The filesystem aliases Unicode-normalized filenames");
 
         const IconState before = captureIconState();
         const QString assigned = iconManager->assignedIcon("Sport", "Bike");
