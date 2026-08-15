@@ -8,7 +8,6 @@
  */
 
 #include "GarminServiceHelper.h"
-#include "RemoteControl.h"
 #include "Settings.h"
 
 #ifdef GC_HAVE_LIBUSB

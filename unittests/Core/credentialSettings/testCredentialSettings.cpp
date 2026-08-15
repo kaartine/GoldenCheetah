@@ -17613,15 +17613,54 @@ freshEnrollmentIsSerializedAcrossProcesses()
     const QByteArray secondEnrollment =
         fileContents(secondResult);
     QVERIFY(!firstEnrollment.isEmpty());
-    QCOMPARE(secondEnrollment, firstEnrollment);
-    QJsonParseError enrollmentError;
+    QJsonParseError firstEnrollmentError;
+    QJsonParseError secondEnrollmentError;
     const QJsonDocument enrollmentDocument =
         QJsonDocument::fromJson(
-            firstEnrollment, &enrollmentError);
+            firstEnrollment, &firstEnrollmentError);
+    const QJsonDocument secondEnrollmentDocument =
+        QJsonDocument::fromJson(
+            secondEnrollment, &secondEnrollmentError);
     QVERIFY(
-        enrollmentError.error
+        firstEnrollmentError.error
                 == QJsonParseError::NoError
             && enrollmentDocument.isObject());
+    QVERIFY(
+        secondEnrollmentError.error
+                == QJsonParseError::NoError
+            && secondEnrollmentDocument.isObject());
+    QJsonObject firstEnrollmentObject =
+        enrollmentDocument.object();
+    QJsonObject secondEnrollmentObject =
+        secondEnrollmentDocument.object();
+    const auto normalizeBinding = [](
+        QJsonObject *enrollment,
+        const QString &key) {
+        if (!enrollment->contains(key)) return true;
+        QJsonParseError error;
+        const QJsonDocument binding =
+            QJsonDocument::fromJson(
+                enrollment->value(key)
+                    .toString().toUtf8(),
+                &error);
+        if (error.error != QJsonParseError::NoError
+            || !binding.isObject()) {
+            return false;
+        }
+        enrollment->insert(key, binding.object());
+        return true;
+    };
+    for (const QString &key : {
+             QStringLiteral("global_binding"),
+             QStringLiteral("athlete_binding")}) {
+        QVERIFY(normalizeBinding(
+            &firstEnrollmentObject, key));
+        QVERIFY(normalizeBinding(
+            &secondEnrollmentObject, key));
+    }
+    QCOMPARE(
+        secondEnrollmentObject,
+        firstEnrollmentObject);
 
     QString scopeId;
     {

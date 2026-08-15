@@ -41,6 +41,9 @@ PYTHON_DATA_SERIES_PROJECT = (
 PYTHON_DATA_SERIES_SOURCE = REPOSITORY / "src/Python/SIP/PythonDataSeries.cpp"
 PYTHON_BINDINGS_SOURCE = REPOSITORY / "src/Python/SIP/Bindings.cpp"
 APPLICATION_PROJECT = REPOSITORY / "src/src.pro"
+ANT_LIFECYCLE_STUBS = (
+    UNITTESTS / "Train/antLifecycle/AntLifecycleTestStubs.cpp"
+)
 STRAVA_ROUTES_PROJECT = (
     UNITTESTS
     / "Train/stravaRoutesDownloadPipeline/stravaRoutesDownloadPipeline.pro"
@@ -470,6 +473,19 @@ def main() -> None:
     ):
         raise AssertionError(
             "production Python build omits the data-series implementation"
+        )
+
+    ant_lifecycle_stubs = ANT_LIFECYCLE_STUBS.read_text(encoding="utf-8")
+    libusb_suspend = ant_lifecycle_stubs.find("#undef GC_HAVE_LIBUSB")
+    sidebar_include = ant_lifecycle_stubs.find('#include "TrainSidebar.h"')
+    remote_include = ant_lifecycle_stubs.find('#include "RemoteControl.h"')
+    if libusb_suspend < 0 or sidebar_include < libusb_suspend:
+        raise AssertionError(
+            "ANT lifecycle stubs expose TrainSidebar to the production USB stack"
+        )
+    if 0 <= remote_include < libusb_suspend:
+        raise AssertionError(
+            "ANT lifecycle stubs load RemoteControl before USB isolation"
         )
 
 
