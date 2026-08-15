@@ -189,6 +189,13 @@ bool Specification::pass(RideItem *) const
 
 RideMetricFactory::RideMetricFactory() = default;
 
+RideMetricFactory &
+RideMetricFactory::instance()
+{
+    static RideMetricFactory factory;
+    return factory;
+}
+
 const RideMetric *
 RideMetricFactory::rideMetric(QString) const
 {

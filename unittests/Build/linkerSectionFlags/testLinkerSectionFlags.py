@@ -370,6 +370,7 @@ def main() -> None:
         "Context::athleteSession()",
         "Specification::pass(RideItem *) const",
         "RideMetricFactory::RideMetricFactory()",
+        "RideMetricFactory::instance()",
         "RideMetricFactory::rideMetric(QString) const",
         "RideItem::getWeight(int)",
     ):
