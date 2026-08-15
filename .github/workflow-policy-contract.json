@@ -66,11 +66,11 @@
           "Test": "b6f66eaf761a33fba5b32bab8afb555dae4c92e0cf770272f3452af82539d0b7"
         },
         "windows": {
-          "Build and test Windows": "0ab5c8bc617cf35f0a850b7510b8701042c4037e0b6465864ec0896e698967dc"
+          "Build and test Windows": "e495bd50922f61b682c613c5265f8f9606aeb1bae9cada9f884476515b85850b"
         }
       },
       "semantic_sha256": [
-        "fdc0caa0a071485130ce1dab78b1e7a7eec656b9b8f1f83de4163348066efce2"
+        "21befa7cd9ef0ddb19d6da8d49e779a4df447d60550d200a9f0e4087e17a6686"
       ],
       "trusted_run_sha256": {
         "report-final": "69e43e6387d779b8f1f330e83971285e707ce9fc32e0184c85421f61ee5f2dc6",

@@ -2207,14 +2207,33 @@ bool replaceCredentialFile(
         : AtomicFileMode::CreateNew;
     std::unique_ptr<AtomicFileWriter> file =
         qSaveFileWriterFactory()(path, mode);
-    if (!file || !file->open())
+    if (!file) {
+        qWarning() << "Cannot allocate atomic credential writer:" << path;
         return false;
-    if (file->write(contents) != contents.size()
-        || !file->flush()) {
+    }
+    if (!file->open()) {
+        qWarning() << "Cannot open atomic credential writer:"
+                   << path << file->errorString();
+        return false;
+    }
+    if (file->write(contents) != contents.size()) {
+        qWarning() << "Cannot write atomic credential state:"
+                   << path << file->errorString();
         file->cancelWriting();
         return false;
     }
-    return file->commit();
+    if (!file->flush()) {
+        qWarning() << "Cannot flush atomic credential state:"
+                   << path << file->errorString();
+        file->cancelWriting();
+        return false;
+    }
+    if (!file->commit()) {
+        qWarning() << "Cannot commit atomic credential state:"
+                   << path << file->errorString();
+        return false;
+    }
+    return true;
 }
 
 bool readCredentialFile(
@@ -2509,6 +2528,7 @@ bool writePlaintextCleanupState(
             path,
             QByteArrayLiteral("cleanup-file"),
             QByteArrayLiteral("cleanup-directory"))) {
+        qWarning() << "Credential cleanup state is not durable:" << path;
         return false;
     }
     const PlaintextCleanupState persisted =
@@ -2525,6 +2545,9 @@ bool writePlaintextCleanupState(
         credentialCrashPoint(
             QByteArrayLiteral("cleanup:")
             + plaintextCleanupPhaseName(phase));
+    } else {
+        qWarning() << "Cannot verify committed credential cleanup state:"
+                   << path;
     }
     return committed;
 }
