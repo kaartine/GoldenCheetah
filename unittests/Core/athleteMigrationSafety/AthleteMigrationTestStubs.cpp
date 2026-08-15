@@ -58,6 +58,13 @@
 #include <QTemporaryDir>
 #include <QTimer>
 
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include <chrono>
 #include <cstring>
 #include <condition_variable>
@@ -114,6 +121,71 @@ QString settingKey(const QString &athlete, const QString &key)
 GSettings testSettings(QStringLiteral("GoldenCheetahTests"),
                        QStringLiteral("AthleteMigrationSafety"));
 
+bool createPrivateTestDirectory(const QString &path)
+{
+    if (QFileInfo(path).isDir()) return true;
+
+#ifdef Q_OS_WIN
+    // Elevated CI accounts otherwise create directories owned by Administrators.
+    HANDLE rawToken = nullptr;
+    if (!::OpenProcessToken(
+            ::GetCurrentProcess(), TOKEN_QUERY, &rawToken)) {
+        return false;
+    }
+    DWORD required = 0;
+    ::GetTokenInformation(
+        rawToken, TokenUser, nullptr, 0, &required);
+    if (::GetLastError() != ERROR_INSUFFICIENT_BUFFER
+        || required == 0) {
+        ::CloseHandle(rawToken);
+        return false;
+    }
+    QByteArray userStorage(int(required), '\0');
+    const bool resolved = ::GetTokenInformation(
+        rawToken, TokenUser, userStorage.data(),
+        required, &required);
+    ::CloseHandle(rawToken);
+    if (!resolved) return false;
+
+    auto *user = reinterpret_cast<TOKEN_USER *>(
+        userStorage.data());
+    PSID userSid = user->User.Sid;
+    if (!::IsValidSid(userSid)) return false;
+
+    const DWORD aclSize = DWORD(
+        sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE)
+        - sizeof(DWORD) + ::GetLengthSid(userSid));
+    QByteArray aclStorage(int(aclSize), '\0');
+    auto *acl = reinterpret_cast<PACL>(aclStorage.data());
+    SECURITY_DESCRIPTOR descriptor {};
+    if (!::InitializeAcl(acl, aclSize, ACL_REVISION)
+        || !::AddAccessAllowedAceEx(
+            acl, ACL_REVISION,
+            CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE,
+            FILE_ALL_ACCESS, userSid)
+        || !::InitializeSecurityDescriptor(
+            &descriptor, SECURITY_DESCRIPTOR_REVISION)
+        || !::SetSecurityDescriptorOwner(
+            &descriptor, userSid, FALSE)
+        || !::SetSecurityDescriptorDacl(
+            &descriptor, TRUE, acl, FALSE)
+        || !::SetSecurityDescriptorControl(
+            &descriptor, SE_DACL_PROTECTED,
+            SE_DACL_PROTECTED)) {
+        return false;
+    }
+    SECURITY_ATTRIBUTES attributes {};
+    attributes.nLength = sizeof(attributes);
+    attributes.lpSecurityDescriptor = &descriptor;
+    const QString nativePath = QDir::toNativeSeparators(path);
+    return ::CreateDirectoryW(
+        reinterpret_cast<LPCWSTR>(nativePath.utf16()),
+        &attributes);
+#else
+    return QDir().mkpath(path);
+#endif
+}
+
 } // namespace
 
 namespace Utils {
@@ -135,8 +207,13 @@ bool DataProcessorFactory::autoprocess = true;
 void resetAthleteMigrationTestSettings()
 {
     const QString transactionRoot = stravaTransactionRoot.path();
-    QDir(transactionRoot).removeRecursively();
-    QDir().mkpath(transactionRoot);
+    if (QFileInfo::exists(transactionRoot)
+        && !QDir(transactionRoot).removeRecursively()) {
+        qFatal("Cannot reset the Strava transaction test root");
+    }
+    if (!createPrivateTestDirectory(transactionRoot)) {
+        qFatal("Cannot create the private Strava transaction test root");
+    }
     {
         QMutexLocker locker(&testValuesMutex);
         testValues.clear();
@@ -471,7 +548,7 @@ QString GSettings::athleteConfigDirectory(
             QCryptographicHash::hash(
                 athleteName.toUtf8(), QCryptographicHash::Sha256)
                 .toHex()));
-    return QDir().mkpath(directory)
+    return createPrivateTestDirectory(directory)
         ? QFileInfo(directory).canonicalFilePath()
         : QString();
 }
