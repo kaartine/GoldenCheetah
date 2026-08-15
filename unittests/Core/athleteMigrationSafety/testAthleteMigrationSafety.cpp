@@ -101,6 +101,15 @@ int athleteMigrationRideCacheRefreshCalls();
 
 namespace {
 
+void traceTestStartup(const char *stage)
+{
+    if (!qEnvironmentVariableIsSet("CI")
+        && !qEnvironmentVariableIsSet("GC_TEST_STARTUP_TRACE")) {
+        return;
+    }
+    std::fprintf(stderr, "GC_TEST_STARTUP_TRACE: %s\n", stage);
+}
+
 constexpr char ReaperAffinityChildSwitch[] =
         "--gc-test-local-store-reaper-affinity-child";
 constexpr char ReaperShutdownRaceChildSwitch[] =
@@ -6879,15 +6888,20 @@ int main(int argc, char *argv[])
     // abruptly before the standard streams can be flushed.
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     std::setvbuf(stderr, nullptr, _IONBF, 0);
+    traceTestStartup("main-entered");
 
     if (LocalFileStoreProcess::isHelperInvocation(argc, argv)) {
+        traceTestStartup("helper-invocation");
         QCoreApplication helperApplication(argc, argv);
         return LocalFileStoreProcess::runHelper(
             helperApplication.arguments());
     }
 
+    traceTestStartup("creating-application");
     QApplication application(argc, argv);
+    traceTestStartup("application-created");
     if (!LocalFileStoreProcess::initializeReaper()) return 3;
+    traceTestStartup("reaper-initialized");
 
     int result = 0;
     if (application.arguments().contains(
@@ -6923,13 +6937,16 @@ int main(int argc, char *argv[])
         result = runManualMeasuresDeletionChild();
     } else {
         TestAthleteMigrationSafety test;
+        traceTestStartup("entering-qtest");
         result = QTest::qExec(&test, argc, argv);
+        traceTestStartup("qtest-returned");
     }
 
     if (!LocalFileStoreProcess::shutdownReaper()
         && result == 0) {
         result = 4;
     }
+    traceTestStartup("main-returning");
     return result;
 }
 
