@@ -6938,14 +6938,30 @@ int main(int argc, char *argv[])
     } else {
         TestAthleteMigrationSafety test;
         traceTestStartup("entering-qtest");
-#ifdef Q_OS_WIN
         if (qEnvironmentVariableIsSet("CI")) {
+            const QString logPath = QDir(QDir::tempPath()).filePath(
+                QStringLiteral("gc-athlete-migration-%1.txt").arg(
+                    QCoreApplication::applicationPid()));
+            QFile::remove(logPath);
             QStringList testArguments = application.arguments();
             testArguments << QStringLiteral("-o")
-                          << QStringLiteral("-,txt");
+                          << logPath + QStringLiteral(",txt");
             result = QTest::qExec(&test, testArguments);
+
+            QFile log(logPath);
+            if (log.open(QIODevice::ReadOnly)) {
+                const QByteArray output = log.readAll();
+                std::fwrite(
+                    output.constData(), 1,
+                    static_cast<std::size_t>(output.size()), stderr);
+                log.close();
+            } else {
+                std::fprintf(
+                    stderr, "Could not read QtTest log: %s\n",
+                    qPrintable(log.errorString()));
+            }
+            QFile::remove(logPath);
         } else
-#endif
         {
             result = QTest::qExec(&test, argc, argv);
         }
