@@ -248,8 +248,11 @@ def main() -> None:
         makefile = project_directory / "Makefile"
         if makefile.is_symlink() or not makefile.is_file():
             fail(f"eligible test project has no generated Makefile: {project}")
+        project_command = list(command)
+        if kind == "qt":
+            project_command.append("TESTARGS=-o -,txt")
         project_suites, project_cases = run_tests(
-            command, project_directory, arguments.platform
+            project_command, project_directory, arguments.platform
         )
         if kind == "qt" and project_suites == 0:
             fail(f"test project completed without a QtTest result: {project}")
