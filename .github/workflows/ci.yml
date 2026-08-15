@@ -278,7 +278,7 @@ jobs:
     needs: [validated-candidate, report-pending]
     if: ${{ always() && needs.validated-candidate.outputs.authorized == 'true' && needs.validated-candidate.outputs.selected == 'true' && (github.event_name != 'workflow_run' || needs.report-pending.result == 'success') }}
     runs-on: windows-2025
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - name: Checkout authorized source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6

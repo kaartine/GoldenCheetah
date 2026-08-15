@@ -70,7 +70,7 @@
         }
       },
       "semantic_sha256": [
-        "15d377c477e3bfd7da63245348f20a903881cfcbee8c19b6e479728a13c811fc"
+        "fdc0caa0a071485130ce1dab78b1e7a7eec656b9b8f1f83de4163348066efce2"
       ],
       "trusted_run_sha256": {
         "report-final": "69e43e6387d779b8f1f330e83971285e707ce9fc32e0184c85421f61ee5f2dc6",
@@ -275,7 +275,7 @@
     "unittests/Build/appImagePackaging/testCiReleaseGates.sh": "f27ad24e7a34a857a44e7cb6047bf3e34c99217add327b17a41e8a52cdc24172",
     "unittests/Build/appImagePackaging/testDiagnosticOAuth.sh": "2f14458503e751bc33f284b43d1de13450fa9cfd350ad2866d88dd248e19bc3c",
     "unittests/Build/appImagePackaging/testGeneratedSecrets.ps1": "c4903413f869dcf2c74b8e4adc65f2f6537e38885be09e2f6abe7a921514cb58",
-    "unittests/Build/appImagePackaging/testImmutableActions.py": "99098931f0799e7862560f1bb42b3c373265960aa3feea56f7aaeb5db94a2714",
+    "unittests/Build/appImagePackaging/testImmutableActions.py": "8f27a99d910fce19867176e06a3abd69345b515c14a86f9425c0ab3789cb2992",
     "unittests/Build/appImagePackaging/testMacOSPackaging.py": "151aaf9cfb9ef12483c5eb5f67ebd2aadb99a70410804e5ef71b4194a5810b04",
     "unittests/Build/appImagePackaging/testReleaseHardening.py": "2e84d191fc31be1ab0135217d278ada95cdc183a4b1c16993a55d6765d39201d",
     "unittests/Build/appImagePackaging/testSafeExtraction.py": "b4acb441339418f82b9e5fc253cf25864338f41e99d0dc77aa2d798dc84993c2",
@@ -285,9 +285,9 @@
     "unittests/Build/appImagePackaging/testWindowsOpenSsl.py": "a96db29f62a16a6566bef53a5b4cad031ec6a1a0ab20a8a344509d0d5a75502d",
     "unittests/Build/appImagePackaging/testWindowsPackaging.ps1": "6fc97e5353b278f573e3d5f555d610e0d0e10bd58f4c3bccbee055670d15d06f",
     "unittests/Build/ciTestRunner/ciTestRunner.pro": "2f0afcc5fea392caf3c728960171159afbe1464404a30e9da65256968a284234",
-    "unittests/Build/ciTestRunner/testCiTestRunner.py": "a288ee6337c7798a032a45c86a41311245e487ead7ea2412f0a9536f225394f7",
+    "unittests/Build/ciTestRunner/testCiTestRunner.py": "9b9e6c016a3e688e96c657ee14266be4bf9a0d618dc269a46645f4fc7090ad5e",
     "unittests/ci-required-tests.txt": "98c6a17fcd4ef897bc19710fc32d30d29524475111ba0fbe091b10261aa307c6",
     "unittests/unittests.pri.in": "58c1673c4ed201bb91b0c82375265dfa10011c3401f9529c59bd5ef4691ca69d",
-    "unittests/unittests.pro": "b0fb0fa8e8a4461df561877a5468172c1ee99bca2a705024fa373b87c5d37ccb"
+    "unittests/unittests.pro": "df21cb9f8c0c23765eba29ee52ebaf7671a63a3d811642bb7563f1a52940a95f"
   }
 }

@@ -128,7 +128,6 @@ exists(unittests.pri) {
 			   Train/bluetoothTelemetryRouter
 	linux:SUBDIRS += Build/appImagePackaging
 	!win32:SUBDIRS += Train/usbXpressSafety
-	CONFIG += ordered
 	CI_ENABLED_TESTS = $$SUBDIRS
 	write_file($$OUT_PWD/ci-enabled-tests.txt, CI_ENABLED_TESTS)
 } else {

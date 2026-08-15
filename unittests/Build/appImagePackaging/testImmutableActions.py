@@ -703,7 +703,7 @@ class ImmutableActionTests(unittest.TestCase):
         for job_name, runner, platform, timeout in (
             ("linux", "ubuntu-22.04", "linux", "60"),
             ("macos", "macos-latest", "macos", "90"),
-            ("windows", "windows-2025", "windows", "60"),
+            ("windows", "windows-2025", "windows", "90"),
         ):
             with self.subTest(job=job_name):
                 job = self.mapping_value(jobs, job_name)

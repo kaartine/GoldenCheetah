@@ -130,9 +130,10 @@ def main() -> None:
     ):
         require_literal(wiring, appveyor)
 
-    require_literal(
-        "Build/ciTestRunner", REPOSITORY / "unittests" / "unittests.pro"
-    )
+    unit_test_project = REPOSITORY / "unittests" / "unittests.pro"
+    require_literal("Build/ciTestRunner", unit_test_project)
+    if "CONFIG += ordered" in unit_test_project.read_text(encoding="utf-8"):
+        raise AssertionError("unit-test subprojects must build in parallel")
     require_literal(
         "linux:SUBDIRS += Build/appImagePackaging",
         REPOSITORY / "unittests" / "unittests.pro",
