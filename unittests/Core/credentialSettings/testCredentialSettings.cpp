@@ -1394,6 +1394,31 @@ bool createCurrentWindowsUserOwnedDirectory(const QString &path)
         &attributes);
 }
 
+class PrivateCredentialTestDirectory : public QTemporaryDir
+{
+public:
+    PrivateCredentialTestDirectory()
+    {
+        if (!QTemporaryDir::isValid())
+            return;
+        const QString temporaryPath = path();
+        if (!QDir(temporaryPath).removeRecursively())
+            return;
+        privateDirectoryReady_ =
+            createCurrentWindowsUserOwnedDirectory(
+                temporaryPath);
+    }
+
+    bool isValid() const
+    {
+        return privateDirectoryReady_
+            && QTemporaryDir::isValid();
+    }
+
+private:
+    bool privateDirectoryReady_ = false;
+};
+
 class ScopedPrivateWindowsTestEnvironment
 {
 public:
@@ -1668,6 +1693,10 @@ bool windowsFileHasOwnerOnlyAcl(const QString &path)
         ::LocalFree(descriptor);
     return valid;
 }
+#endif
+
+#ifndef Q_OS_WIN
+using PrivateCredentialTestDirectory = QTemporaryDir;
 #endif
 
 } // namespace
@@ -2033,8 +2062,11 @@ void TestCredentialSettings::persistentLoggerUsesFileArgument()
 
 void TestCredentialSettings::temporarySettingsFileCanBeHardened()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
+#ifdef Q_OS_WIN
+    QVERIFY(windowsDirectoryHasOwnerOnlyAcl(temporary.path()));
+#endif
     const QString path = temporary.filePath(
         QStringLiteral("private.ini"));
     QSettings settings(path, QSettings::IniFormat);
@@ -2058,7 +2090,12 @@ void TestCredentialSettings::initTestCase()
     ownedCredentialStateRoot_ = QDir(QDir::tempPath()).filePath(
         QStringLiteral("gc-credential-test-state-%1")
             .arg(QCoreApplication::applicationPid()));
+#ifdef Q_OS_WIN
+    QVERIFY(createCurrentWindowsUserOwnedDirectory(
+        ownedCredentialStateRoot_));
+#else
     QVERIFY(QDir().mkpath(ownedCredentialStateRoot_));
+#endif
     qputenv(
         "GC_CREDENTIAL_TEST_STATE_ROOT",
         QFile::encodeName(ownedCredentialStateRoot_));
@@ -2169,7 +2206,7 @@ void TestCredentialSettings::credentialClassification()
 void TestCredentialSettings::
 stravaClientCredentialsNeverReachPlaintextSettings()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedEnvironmentVariable stateRootEnvironment(
         QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
@@ -2285,8 +2322,8 @@ void TestCredentialSettings::
 bundledLinuxRuntimePathRequiresContainedRegularFile()
 {
 #ifdef Q_OS_LINUX
-    QTemporaryDir applicationDir;
-    QTemporaryDir outsideDir;
+    PrivateCredentialTestDirectory applicationDir;
+    PrivateCredentialTestDirectory outsideDir;
     QVERIFY(applicationDir.isValid());
     QVERIFY(outsideDir.isValid());
     QVERIFY(QDir(applicationDir.path()).mkpath(
@@ -2366,7 +2403,7 @@ timedOutKeychainMutationRetainsSerialization()
     std::unique_ptr<CredentialStore> store =
         createQtKeychainCredentialStore();
     QVERIFY(store);
-    QTemporaryDir leaseDirectory;
+    PrivateCredentialTestDirectory leaseDirectory;
     QVERIFY(leaseDirectory.isValid());
 
     const QString key = QStringLiteral("timeout-mutation");
@@ -2528,7 +2565,7 @@ timedOutKeychainMutationIsBounded()
         std::unique_ptr<CredentialStore> store =
             createQtKeychainCredentialStore();
         QVERIFY(store);
-        QTemporaryDir leaseDirectory;
+        PrivateCredentialTestDirectory leaseDirectory;
         QVERIFY(leaseDirectory.isValid());
         const QString mutationLockPath =
             leaseDirectory.filePath(
@@ -2639,7 +2676,7 @@ timedOutKeychainReadRetainsSerialization()
         createQtKeychainCredentialStore();
     QVERIFY(store);
     QVERIFY(competingStore);
-    QTemporaryDir leaseDirectory;
+    PrivateCredentialTestDirectory leaseDirectory;
     QVERIFY(leaseDirectory.isValid());
 
     const QString key = QStringLiteral("timeout-read");
@@ -2836,7 +2873,7 @@ destroyedTimedOutMutationRecoversAfterLeaseRelease()
     std::unique_ptr<CredentialStore> store =
         createQtKeychainCredentialStore();
     QVERIFY(store);
-    QTemporaryDir leaseDirectory;
+    PrivateCredentialTestDirectory leaseDirectory;
     QVERIFY(leaseDirectory.isValid());
     const QString mutationLockPath =
         leaseDirectory.filePath(
@@ -2918,7 +2955,7 @@ keychainMarkerCreationFailureBlocksBackend()
     std::unique_ptr<CredentialStore> store =
         createQtKeychainCredentialStore();
     QVERIFY(store);
-    QTemporaryDir leaseDirectory;
+    PrivateCredentialTestDirectory leaseDirectory;
     QVERIFY(leaseDirectory.isValid());
     const QString mutationLockPath =
         leaseDirectory.filePath(
@@ -3018,7 +3055,7 @@ keychainMarkerCleanupFailureRecoversOnNextLease()
     std::unique_ptr<CredentialStore> store =
         createQtKeychainCredentialStore();
     QVERIFY(store);
-    QTemporaryDir leaseDirectory;
+    PrivateCredentialTestDirectory leaseDirectory;
     QVERIFY(leaseDirectory.isValid());
     const QString mutationLockPath =
         leaseDirectory.filePath(
@@ -3126,7 +3163,7 @@ timedOutKeychainMutationFromWorkerIsBounded()
     std::unique_ptr<CredentialStore> store =
         createQtKeychainCredentialStore();
     QVERIFY(store);
-    QTemporaryDir leaseDirectory;
+    PrivateCredentialTestDirectory leaseDirectory;
     QVERIFY(leaseDirectory.isValid());
     const QString mutationLockPath =
         leaseDirectory.filePath(
@@ -3189,7 +3226,7 @@ timedOutKeychainMutationFromWorkerIsBounded()
 void TestCredentialSettings::
 timedOutKeychainMutationBlocksCredentialStateUntilTerminal()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot =
         temporary.filePath(
@@ -3403,7 +3440,7 @@ timedOutKeychainMutationLeaseIsCrossProcess()
         return;
     }
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot =
         temporary.filePath(
@@ -3559,7 +3596,7 @@ invalidKeychainMutationMarkerBlocksCredentialState()
 {
     QFETCH(int, fixture);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot =
         temporary.filePath(
@@ -3773,7 +3810,7 @@ fileStoreCreateIfAbsentIsAtomicAcrossProcesses()
         return;
     }
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString vaultPath =
         temporary.filePath(QStringLiteral("vault.ini"));
@@ -3924,7 +3961,7 @@ fileStoreCreateIfAbsentIsAtomicAcrossProcesses()
 
 void TestCredentialSettings::vaultCallsDoNotMutateFallbackState()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings ini(temporary.filePath(QStringLiteral("private.ini")),
                   QSettings::IniFormat);
@@ -3970,7 +4007,7 @@ void TestCredentialSettings::vaultCallsDoNotMutateFallbackState()
 
 void TestCredentialSettings::credentialOperationsAreSerialized()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString firstPath =
         temporary.filePath(QStringLiteral("first.ini"));
@@ -4037,7 +4074,7 @@ void TestCredentialSettings::credentialOperationsAreSerialized()
 void TestCredentialSettings::
 reentrantCredentialOperationFailsFast()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings ini(
         temporary.filePath(QStringLiteral("private.ini")),
@@ -4072,7 +4109,7 @@ reentrantCredentialOperationFailsFast()
 void TestCredentialSettings::
 reentrantIndependentCredentialOperationSucceeds()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings firstSettings(
         temporary.filePath(QStringLiteral("first-private.ini")),
@@ -4149,7 +4186,7 @@ void TestCredentialSettings::credentialProcessLockIsExclusive()
         return;
     }
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString settingsPath =
         temporary.filePath(QStringLiteral("private.ini"));
@@ -4333,7 +4370,7 @@ contendedCredentialReadWaitsForOwner()
         return;
     }
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -4481,7 +4518,7 @@ contendedCredentialReadWaitsForOwner()
 void TestCredentialSettings::
 activeKeychainMutationLeaseBlocksCredentialState()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot =
         temporary.filePath(
@@ -4552,7 +4589,7 @@ activeKeychainMutationLeaseBlocksCredentialState()
 void TestCredentialSettings::
 activeCredentialProcessLockDoesNotExpire()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString settingsPath =
         temporary.filePath(QStringLiteral("private.ini"));
@@ -4652,7 +4689,7 @@ activeCredentialProcessLockDoesNotExpire()
 
 void TestCredentialSettings::scopeCreationIsSerialized()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     static const QSettings::Format format =
         QSettings::registerFormat(
@@ -4726,7 +4763,7 @@ scopeProcessLockCanonicalizesAliases()
         return;
     }
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString realDirectory =
         temporary.filePath(QStringLiteral("real"));
@@ -4835,7 +4872,7 @@ scopeProcessLockCanonicalizesAliases()
 void TestCredentialSettings::
 identityIdsAreStableAndMalformedValuesFailClosed()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString storageKey =
         QStringLiteral("credential_store/root_id");
@@ -4883,7 +4920,7 @@ identityIdsAreStableAndMalformedValuesFailClosed()
 void TestCredentialSettings::
 scopeBindingsAreStableAndRootBound()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString bindingKey =
         QStringLiteral("credential_store/binding_v2");
@@ -4939,7 +4976,7 @@ scopeBindingsAreStableAndRootBound()
 void TestCredentialSettings::
 scopeBindingsRejectUnconfirmedLegacyScopes()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString bindingKey =
         QStringLiteral("credential_store/binding_v2");
@@ -4971,7 +5008,7 @@ scopeBindingsRejectUnconfirmedLegacyScopes()
 void TestCredentialSettings::
 persistedLegacyBindingsRequireAuthorization()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString bindingKey =
         QStringLiteral("credential_store/binding_v2");
@@ -5086,7 +5123,7 @@ malformedScopeBindingsFailClosed()
     QFETCH(bool, scopePresent);
     QFETCH(QString, scope);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString bindingKey =
         QStringLiteral("credential_store/binding_v2");
@@ -5125,7 +5162,7 @@ malformedScopeBindingsFailClosed()
 void TestCredentialSettings::
 locationClaimsRejectCopiesAndUnconfirmedMoves()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString original =
         temporary.filePath(QStringLiteral("original"));
@@ -5178,7 +5215,7 @@ locationClaimsRejectCopiesAndUnconfirmedMoves()
 void TestCredentialSettings::
 pendingLocationEnrollmentRejectsCompetingParent()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString directory =
         temporary.filePath(QStringLiteral("athlete"));
@@ -5240,7 +5277,7 @@ pendingLocationEnrollmentRejectsCompetingParent()
 void TestCredentialSettings::
 canonicalLocationClaimRejectsCompetingParent()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString directory =
         temporary.filePath(QStringLiteral("athlete"));
@@ -5301,7 +5338,7 @@ canonicalLocationClaimRejectsCompetingParent()
 void TestCredentialSettings::
 misplacedLocationClaimCannotAuthorizeBackfill()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString directory =
         temporary.filePath(QStringLiteral("athlete"));
@@ -5395,7 +5432,7 @@ void TestCredentialSettings::
 malformedLocationAuthorityRecordsFailClosed()
 {
     QFETCH(QString, mode);
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString directory =
         temporary.filePath(QStringLiteral("athlete"));
@@ -5491,7 +5528,7 @@ malformedLocationAuthorityRecordsFailClosed()
 void TestCredentialSettings::
 locationEnrollmentCompletionRequiresLocalMetadata()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString directory =
         temporary.filePath(QStringLiteral("library"));
@@ -5632,7 +5669,7 @@ locationEnrollmentCompletionRequiresFullLocalBinding()
 {
     QFETCH(QByteArray, kind);
     QFETCH(QString, tamperMode);
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString directory =
         temporary.filePath(QStringLiteral("athlete"));
@@ -5747,7 +5784,7 @@ persistedCachesTrackOtherInstances()
 {
     QFETCH(bool, initiallyPresent);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedEnvironmentVariable stateRootEnvironment(
         QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
@@ -5809,7 +5846,7 @@ externalVaultMutationExpiresPersistedCache()
     QFETCH(QString, mutation);
     QFETCH(bool, clockRollback);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -5939,7 +5976,7 @@ activeCredentialCacheObservesExternalMutation()
 {
     QFETCH(QString, mutation);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -6020,7 +6057,7 @@ activeCredentialCacheObservesExternalMutation()
 void TestCredentialSettings::
 expiredPersistedCacheFailsClosedOnVaultError()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedEnvironmentVariable stateRootEnvironment(
         QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
@@ -6083,7 +6120,7 @@ memoryOnlyCredentialCacheDoesNotExpire()
 {
     QFETCH(bool, updating);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedEnvironmentVariable stateRootEnvironment(
         QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
@@ -6162,7 +6199,7 @@ authoritativeReadObservesExternalVaultMutation()
 {
     QFETCH(QString, mutation);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedEnvironmentVariable stateRootEnvironment(
         QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
@@ -6226,7 +6263,7 @@ authoritativeReadObservesExternalVaultMutation()
 void TestCredentialSettings::
 cachedCredentialTracksOtherInstanceRemoval()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedEnvironmentVariable stateRootEnvironment(
         QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
@@ -6262,7 +6299,7 @@ cachedCredentialTracksOtherInstanceRemoval()
 void TestCredentialSettings::
 memoryOnlyCredentialTracksOtherInstanceReplacement()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedEnvironmentVariable stateRootEnvironment(
         QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
@@ -6300,7 +6337,7 @@ memoryOnlyCredentialTracksOtherInstanceReplacement()
 void TestCredentialSettings::
 failedUpdateResolutionInvalidatesMemoryOnlyCache()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -6345,7 +6382,7 @@ failedUpdateResolutionInvalidatesMemoryOnlyCache()
 void TestCredentialSettings::
 supersededUpdateInvalidatesMemoryOnlyCache()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -6466,7 +6503,7 @@ credentialCacheTracksProcessMutations()
         return;
     }
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString settingsPath =
         temporary.filePath(QStringLiteral("private.ini"));
@@ -6578,7 +6615,7 @@ credentialCacheTracksProcessMutations()
 void TestCredentialSettings::
 missingRevisionInvalidatesCachedCredential()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot =
         temporary.filePath(QStringLiteral("credential-state"));
@@ -6620,7 +6657,7 @@ missingRevisionInvalidatesCachedCredential()
 void TestCredentialSettings::
 credentialRevisionFailureBlocksVaultMutation()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot =
         temporary.filePath(QStringLiteral("credential-state"));
@@ -6672,7 +6709,7 @@ credentialRevisionFailureBlocksVaultMutation()
 void TestCredentialSettings::
 credentialRevisionFailureBlocksMigration()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot =
         temporary.filePath(QStringLiteral("credential-state"));
@@ -6722,7 +6759,7 @@ credentialRevisionFailureBlocksMigration()
 void TestCredentialSettings::
 credentialRevisionFailureBlocksRemoval()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot =
         temporary.filePath(QStringLiteral("credential-state"));
@@ -6769,7 +6806,7 @@ credentialRevisionFailureBlocksRemoval()
 void TestCredentialSettings::
 groupedCredentialCleanupTargetsActiveGroup()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings ini(
         temporary.filePath(QStringLiteral("private.ini")),
@@ -6802,7 +6839,7 @@ groupedCredentialCleanupTargetsActiveGroup()
 void TestCredentialSettings::
 plaintextCleanupRequiresMatchingVaultCopy()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.ini"));
@@ -6844,7 +6881,7 @@ plaintextCleanupRequiresMatchingVaultCopy()
 void TestCredentialSettings::
 plaintextCleanupConflictsAreGroupScoped()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -6939,7 +6976,7 @@ plaintextCleanupConflictsAreGroupScoped()
 void TestCredentialSettings::
 plaintextCleanupConflictsAreSourceScoped()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -7018,7 +7055,7 @@ plaintextCleanupConflictsAreSourceScoped()
 void TestCredentialSettings::
 plaintextCleanupAliasesShareGeneration()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -7105,7 +7142,7 @@ plaintextCleanupIdentitySeparatesNewlineTuples()
 #ifdef Q_OS_WIN
     QSKIP("Windows file names cannot contain newlines");
 #else
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -7162,7 +7199,7 @@ plaintextCleanupIdentitySeparatesNewlineTuples()
 void TestCredentialSettings::
 plaintextCleanupSurvivesLiveSettingsCache()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.ini"));
@@ -7220,7 +7257,7 @@ plaintextCleanupUsesFreshDiskSnapshot()
             "GC_CREDENTIAL_TEST_FIXED_SNAPSHOT_TIME"),
         QByteArrayLiteral("1"));
 #endif
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.ini"));
@@ -7350,7 +7387,7 @@ plaintextCleanupBypassesStaleNegativeCache()
 #ifndef Q_OS_UNIX
     QSKIP("Exact timestamp restoration is required");
 #else
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.ini"));
@@ -7459,7 +7496,7 @@ plaintextRemovalBypassesStaleNegativeCache()
 #ifndef Q_OS_UNIX
     QSKIP("Exact timestamp restoration is required");
 #else
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -7580,7 +7617,7 @@ plaintextSnapshotCrashLeavesNoCopy()
         QFAIL("Configured snapshot crash was not reached");
     }
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -7695,7 +7732,7 @@ settingsSerializationCrashLeavesPrivateCopy()
         QFAIL("Configured serialization crash was not reached");
     }
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -7850,7 +7887,7 @@ scratchCleanupLockRecoversAfterCrash()
         QFAIL("Configured scratch lock crash was not reached");
     }
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -7937,7 +7974,7 @@ scratchCleanupLockRecoversAfterCrash()
 void TestCredentialSettings::
 vaultOnlyReadIgnoresSettingsCleanupLock()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedEnvironmentVariable stateRootEnvironment(
         QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
@@ -7981,7 +8018,7 @@ plaintextCleanupFlushesLivePendingSettings()
         "GC_PLAINTEXT_CLEANUP_PENDING_ACTION");
     if (!action.isEmpty()) {
         QCOMPARE(action, QStringLiteral("child"));
-        QTemporaryDir temporary;
+        PrivateCredentialTestDirectory temporary;
         QVERIFY(temporary.isValid());
         ScopedEnvironmentVariable stateRootEnvironment(
             QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
@@ -8076,7 +8113,7 @@ plaintextCleanupFlushesLivePendingSettings()
 
 void TestCredentialSettings::plaintextMigratesToVault()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path = temporary.filePath(QStringLiteral("private.ini"));
     const QString sentinel = QStringLiteral("legacy-secret-sentinel");
@@ -8112,7 +8149,7 @@ void TestCredentialSettings::plaintextMigratesToVault()
 void TestCredentialSettings::
 vaultValueWinsAndDistinctPlaintextIsRetained()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path = temporary.filePath(QStringLiteral("private.ini"));
     QSettings ini(path, QSettings::IniFormat);
@@ -8147,7 +8184,7 @@ vaultValueWinsAndDistinctPlaintextIsRetained()
 
 void TestCredentialSettings::writesAndDeletesNeverTouchIni()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path = temporary.filePath(QStringLiteral("private.ini"));
     QSettings ini(path, QSettings::IniFormat);
@@ -8177,7 +8214,7 @@ void TestCredentialSettings::writesAndDeletesNeverTouchIni()
 
 void TestCredentialSettings::failedMigrationIsRetriedWithoutCredentialLoss()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path = temporary.filePath(QStringLiteral("private.ini"));
     QSettings ini(path, QSettings::IniFormat);
@@ -8220,7 +8257,7 @@ void TestCredentialSettings::failedMigrationIsRetriedWithoutCredentialLoss()
 
 void TestCredentialSettings::failedNewCredentialWriteIsMemoryOnly()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path = temporary.filePath(QStringLiteral("private.ini"));
     QSettings ini(path, QSettings::IniFormat);
@@ -8251,7 +8288,7 @@ void TestCredentialSettings::failedNewCredentialWriteIsMemoryOnly()
 
 void TestCredentialSettings::checkedCredentialWriteReportsPersistence()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path = temporary.filePath(QStringLiteral("private.ini"));
     QSettings ini(path, QSettings::IniFormat);
@@ -8287,7 +8324,7 @@ void TestCredentialSettings::checkedCredentialWriteReportsPersistence()
 
 void TestCredentialSettings::failedReplacementPreservesLegacyCredential()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path = temporary.filePath(QStringLiteral("private.ini"));
     QSettings ini(path, QSettings::IniFormat);
@@ -8325,7 +8362,7 @@ void TestCredentialSettings::failedReplacementPreservesLegacyCredential()
 void TestCredentialSettings::
 creatingRecoveryFindsLegacyInOtherSource()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -8398,7 +8435,7 @@ creatingRecoveryFindsLegacyInOtherSource()
 void TestCredentialSettings::
 duplicatePlaintextDoesNotResurrectDeletedCredential()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedEnvironmentVariable stateRootEnvironment(
         QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
@@ -8453,7 +8490,7 @@ duplicatePlaintextDoesNotResurrectDeletedCredential()
 void TestCredentialSettings::
 failedDeleteIntentAppliesAcrossPlaintextSources()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedEnvironmentVariable stateRootEnvironment(
         QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
@@ -8502,7 +8539,7 @@ failedDeleteIntentAppliesAcrossPlaintextSources()
 void TestCredentialSettings::
 deletionStatePersistenceFailurePreservesVault()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -8535,7 +8572,7 @@ deletionStatePersistenceFailurePreservesVault()
 void TestCredentialSettings::
 completedDeletionPersistsGlobalTombstone()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -8582,7 +8619,7 @@ completedDeletionPersistsGlobalTombstone()
 void TestCredentialSettings::
 replacementRecoveryRetainsUnboundPlaintext()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -8631,7 +8668,7 @@ replacementRecoveryRetainsUnboundPlaintext()
 void TestCredentialSettings::
 uncommittedCleanupIntentCannotAuthorizeReplacement()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -8697,7 +8734,7 @@ uncommittedCleanupIntentCannotAuthorizeReplacement()
 void TestCredentialSettings::
 authorizedCleanupRequiresWrittenVaultValue()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -8772,7 +8809,7 @@ authorizedCleanupCrashRecoveryAcrossProcesses()
         QFAIL("Configured authorized-cleanup crash was not reached");
     }
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -8899,7 +8936,7 @@ authorizedCleanupCrashRecoveryAcrossProcesses()
 void TestCredentialSettings::
 incompleteReplacementBlocksPlaintextMigration()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -8951,7 +8988,7 @@ incompleteReplacementBlocksPlaintextMigration()
 void TestCredentialSettings::
 stalePendingRemovalDoesNotDeleteReplacementAcrossSources()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -9005,7 +9042,7 @@ stalePendingRemovalDoesNotDeleteReplacementAcrossSources()
 void TestCredentialSettings::
 stalePendingRemovalDoesNotDeleteOrdinaryWrite()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -9054,7 +9091,7 @@ stalePendingRemovalDoesNotDeleteOrdinaryWrite()
 void TestCredentialSettings::
 activeStateBlocksDuplicateMigrationAfterExternalVaultLoss()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -9109,7 +9146,7 @@ activeStateBlocksDuplicateMigrationAfterExternalVaultLoss()
 void TestCredentialSettings::
 uncertainActiveUpdateDoesNotMigrateDuplicatePlaintext()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -9172,7 +9209,7 @@ uncertainActiveUpdateDoesNotMigrateDuplicatePlaintext()
 void TestCredentialSettings::
 orphanedDeletePreparationDoesNotRemoveCredential()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -9219,7 +9256,7 @@ orphanedDeletePreparationDoesNotRemoveCredential()
 void TestCredentialSettings::
 preparedDeleteWithMarkerCompletes()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -9272,7 +9309,7 @@ preparedDeleteWithMarkerCompletes()
 void TestCredentialSettings::
 mismatchedPreparedMarkerDoesNotDeleteCredential()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -9345,7 +9382,7 @@ mismatchedPreparedMarkerDoesNotDeleteCredential()
 void TestCredentialSettings::
 orphanedGeneratedRemovalFailsClosed()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedEnvironmentVariable stateRootEnvironment(
         QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
@@ -9399,7 +9436,7 @@ orphanedGeneratedRemovalFailsClosed()
 void TestCredentialSettings::
 malformedGeneratedRemovalFailsClosed()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedEnvironmentVariable stateRootEnvironment(
         QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
@@ -9451,7 +9488,7 @@ malformedGeneratedRemovalFailsClosed()
 void TestCredentialSettings::
 credentialTransactionMetadataContainsNoSecrets()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -9510,7 +9547,7 @@ credentialTransactionMetadataContainsNoSecrets()
 void TestCredentialSettings::
 plaintextCleanupMetadataContainsNoSecrets()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -9576,7 +9613,7 @@ void TestCredentialSettings::
 plaintextCleanupDurabilityFailureRetainsSource()
 {
     QFETCH(QByteArray, failureStage);
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -9634,7 +9671,7 @@ void TestCredentialSettings::
 explicitWriteAuthorizationFailureRetainsSource()
 {
     QFETCH(QByteArray, failure);
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -9731,7 +9768,7 @@ void TestCredentialSettings::
 malformedPlaintextCleanupStateFailsClosed()
 {
     QFETCH(QByteArray, metadata);
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -9789,7 +9826,7 @@ redirectedPlaintextCleanupStateFailsClosed()
 #ifdef Q_OS_WIN
     QSKIP("Symbolic-link creation requires platform privileges");
 #else
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -9852,7 +9889,7 @@ hardLinkedPlaintextCleanupStateFailsClosed()
 #ifndef Q_OS_UNIX
     QSKIP("Hard-link state validation requires Unix");
 #else
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -9925,7 +9962,7 @@ hardLinkedPlaintextSourceFailsClosed()
 #ifndef Q_OS_UNIX
     QSKIP("Hard-link source validation requires Unix");
 #else
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.ini"));
@@ -9976,7 +10013,7 @@ explicitWriteRejectsRedirectedCleanupState()
 #ifdef Q_OS_WIN
     QSKIP("Symbolic-link creation requires platform privileges");
 #else
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -10045,7 +10082,7 @@ void TestCredentialSettings::
 explicitMutationRepairsMalformedCleanupState()
 {
     QFETCH(bool, removeCredential);
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -10111,7 +10148,7 @@ void TestCredentialSettings::
 explicitWriteProtectsLaterPlaintext()
 {
     QFETCH(bool, seedCompleteState);
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.ini"));
@@ -10174,7 +10211,7 @@ void TestCredentialSettings::
 credentialStateDurabilityFailureFailsClosed()
 {
     QFETCH(QByteArray, failureStage);
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -10266,7 +10303,7 @@ credentialPostMutationDurabilityFailure()
     QFETCH(QByteArray, operation);
     QFETCH(QByteArray, failure);
     QFETCH(QByteArray, expectedPhase);
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -10561,7 +10598,7 @@ credentialCrashRecoveryAcrossProcesses()
     };
 
     for (const CrashCase &testCase : cases) {
-        QTemporaryDir temporary;
+        PrivateCredentialTestDirectory temporary;
         QVERIFY2(temporary.isValid(), testCase.name);
         const QString stateRoot = temporary.filePath(
             QStringLiteral("credential-state"));
@@ -10774,7 +10811,7 @@ plaintextCleanupCrashRecoveryAcrossProcesses()
     };
 
     for (const CrashCase &testCase : cases) {
-        QTemporaryDir temporary;
+        PrivateCredentialTestDirectory temporary;
         QVERIFY2(temporary.isValid(), testCase.name);
         const QString stateRoot = temporary.filePath(
             QStringLiteral("credential-state"));
@@ -10926,8 +10963,8 @@ canonicalCredentialStateAncestorIsAccepted()
 #ifndef Q_OS_UNIX
     QSKIP("Unix canonical path aliases are required");
 #else
-    QTemporaryDir stateTemporary;
-    QTemporaryDir settingsTemporary;
+    PrivateCredentialTestDirectory stateTemporary;
+    PrivateCredentialTestDirectory settingsTemporary;
     QVERIFY(stateTemporary.isValid());
     QVERIFY(settingsTemporary.isValid());
 
@@ -10972,7 +11009,7 @@ canonicalCredentialStateAncestorIsAccepted()
 void TestCredentialSettings::
 credentialStateAncestorSyncFailureFailsClosed()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("missing/state-root"));
@@ -11023,8 +11060,8 @@ partialCredentialStateAncestryFailsClosed()
 #ifndef Q_OS_UNIX
     QSKIP("Unix directory permissions are required");
 #else
-    QTemporaryDir stateTemporary;
-    QTemporaryDir settingsTemporary;
+    PrivateCredentialTestDirectory stateTemporary;
+    PrivateCredentialTestDirectory settingsTemporary;
     QVERIFY(stateTemporary.isValid());
     QVERIFY(settingsTemporary.isValid());
     const QString partial =
@@ -11082,8 +11119,8 @@ unsafeCredentialStateAncestorFailsClosed()
 #ifndef Q_OS_UNIX
     QSKIP("Unix directory permissions are required");
 #else
-    QTemporaryDir stateTemporary;
-    QTemporaryDir settingsTemporary;
+    PrivateCredentialTestDirectory stateTemporary;
+    PrivateCredentialTestDirectory settingsTemporary;
     QVERIFY(stateTemporary.isValid());
     QVERIFY(settingsTemporary.isValid());
     const QString unsafeParent =
@@ -11145,8 +11182,8 @@ insecureCredentialStateRootFailsClosed()
 #ifndef Q_OS_UNIX
     QSKIP("Unix directory permissions are required");
 #else
-    QTemporaryDir stateTemporary;
-    QTemporaryDir settingsTemporary;
+    PrivateCredentialTestDirectory stateTemporary;
+    PrivateCredentialTestDirectory settingsTemporary;
     QVERIFY(stateTemporary.isValid());
     QVERIFY(settingsTemporary.isValid());
     ScopedEnvironmentVariable stateRootEnvironment(
@@ -11203,9 +11240,9 @@ symlinkedCredentialStateDirectoryFailsClosed()
 #ifndef Q_OS_UNIX
     QSKIP("Unix symbolic links are required");
 #else
-    QTemporaryDir stateTemporary;
-    QTemporaryDir targetTemporary;
-    QTemporaryDir settingsTemporary;
+    PrivateCredentialTestDirectory stateTemporary;
+    PrivateCredentialTestDirectory targetTemporary;
+    PrivateCredentialTestDirectory settingsTemporary;
     QVERIFY(stateTemporary.isValid());
     QVERIFY(targetTemporary.isValid());
     QVERIFY(settingsTemporary.isValid());
@@ -11257,7 +11294,7 @@ windowsCredentialDirectoriesUseOwnerOnlyAcl()
 #ifndef Q_OS_WIN
     QSKIP("Windows DACLs are required");
 #else
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -11295,7 +11332,7 @@ windowsSettingsReplacementUsesOwnerOnlyAcl()
 #ifndef Q_OS_WIN
     QSKIP("Windows DACLs are required");
 #else
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedEnvironmentVariable stateRootEnvironment(
         QByteArrayLiteral("GC_CREDENTIAL_TEST_STATE_ROOT"),
@@ -11341,7 +11378,7 @@ windowsCleanupMatchesIniKeysCaseInsensitively()
 #ifndef Q_OS_WIN
     QSKIP("Windows INI key semantics are required");
 #else
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -11404,7 +11441,7 @@ windowsWritableCredentialRootFailsClosed()
 #ifndef Q_OS_WIN
     QSKIP("Windows DACLs are required");
 #else
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -11461,7 +11498,7 @@ windowsExistingWritableCredentialDirectoryFailsClosed()
     QSKIP("Windows DACLs are required");
 #else
     QFETCH(bool, writableApplication);
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -11526,7 +11563,7 @@ windowsNonInheritableCredentialDirectoryFailsClosed()
     QSKIP("Windows DACLs are required");
 #else
     QFETCH(bool, targetApplication);
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -11575,7 +11612,7 @@ windowsNonInheritableCredentialDirectoryFailsClosed()
 void TestCredentialSettings::
 reissuedDeleteResumesDurableTransaction()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -11633,7 +11670,7 @@ reissuedDeleteResumesDurableTransaction()
 void TestCredentialSettings::
 reportedMarkerFailureRecoversDurableMarker()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -11698,7 +11735,7 @@ reportedMarkerFailureRecoversDurableMarker()
 void TestCredentialSettings::
 failedMarkerPersistenceLeavesPreparationState()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -11742,7 +11779,7 @@ failedMarkerPersistenceLeavesPreparationState()
 void TestCredentialSettings::
 failedCreationDeletePreparationPreservesLegacyCredential()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -11820,7 +11857,7 @@ failedCreationDeletePreparationPreservesLegacyCredential()
 void TestCredentialSettings::
 failedCreationDeletePreparationFindsLegacyInOtherSource()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -11901,7 +11938,7 @@ failedCreationDeletePreparationFindsLegacyInOtherSource()
 void TestCredentialSettings::
 failedActiveDeletePreparationBlocksDuplicateResurrection()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -11989,7 +12026,7 @@ failedActiveDeletePreparationBlocksDuplicateResurrection()
 void TestCredentialSettings::
 deletionCommitFailureRetriesWithoutResurrection()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -12052,7 +12089,7 @@ deletionCommitFailureRetriesWithoutResurrection()
 void TestCredentialSettings::
 replacementCommitFailureRecoversWithoutRewrite()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -12121,7 +12158,7 @@ void TestCredentialSettings::
 finalRevisionFailureRecoversCommittedWrite()
 {
     QFETCH(bool, replacement);
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -12198,7 +12235,7 @@ finalRevisionFailureRecoversCommittedWrite()
 void TestCredentialSettings::
 failedReplacementResultRecoversCommittedSecret()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -12257,7 +12294,7 @@ failedReplacementResultRecoversCommittedSecret()
 void TestCredentialSettings::
 failedOrdinaryWriteResultRecoversCommittedSecret()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -12319,7 +12356,7 @@ failedOrdinaryWriteResultRecoversCommittedSecret()
 void TestCredentialSettings::
 transientReplacementReadKeepsDeletionState()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -12372,7 +12409,7 @@ transientReplacementReadKeepsDeletionState()
 void TestCredentialSettings::
 malformedDeletionStateFailsClosed()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -12436,7 +12473,7 @@ malformedDeletionStateFailsClosed()
 
 void TestCredentialSettings::failedDeleteIsRetriedWithoutCredentialResurrection()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path = temporary.filePath(QStringLiteral("private.ini"));
     auto ini = std::make_unique<QSettings>(
@@ -12497,7 +12534,7 @@ void TestCredentialSettings::failedDeleteIsRetriedWithoutCredentialResurrection(
 
 void TestCredentialSettings::failedDeleteIsRetriedInSameSession()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings ini(temporary.filePath(QStringLiteral("private.ini")),
                   QSettings::IniFormat);
@@ -12531,7 +12568,7 @@ void TestCredentialSettings::failedDeleteIsRetriedInSameSession()
 void TestCredentialSettings::
 failedDeleteMarkerWriteDefersDeletionUntilDurable()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.gc-credential-scrub"));
@@ -12590,7 +12627,7 @@ failedDeleteMarkerWriteDefersDeletionUntilDurable()
 void TestCredentialSettings::
 externalPendingRemovalOverridesFailedMarkerState()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.gc-credential-scrub"));
@@ -12644,7 +12681,7 @@ externalPendingRemovalOverridesFailedMarkerState()
 void TestCredentialSettings::
 externalReplacementClearsStaleRemovalState()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings ini(
         temporary.filePath(QStringLiteral("private.ini")),
@@ -12683,7 +12720,7 @@ externalReplacementClearsStaleRemovalState()
 void TestCredentialSettings::
 failedReplacementAfterPendingRemovalDoesNotResurrect()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.ini"));
@@ -12734,7 +12771,7 @@ failedReplacementAfterPendingRemovalDoesNotResurrect()
 void TestCredentialSettings::
 pendingRemovalClearsMemoryOnlyCredential()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.ini"));
@@ -12794,7 +12831,7 @@ pendingRemovalClearsMemoryOnlyCredential()
 void TestCredentialSettings::
 pendingRemovalDiscardsMemoryOnlyCredentialAfterRestart()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.ini"));
@@ -12848,7 +12885,7 @@ pendingRemovalDiscardsMemoryOnlyCredentialAfterRestart()
 
 void TestCredentialSettings::persistedCacheScrubsDuplicatePlaintext()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString firstPath = temporary.filePath(
         QStringLiteral("first.ini"));
@@ -12884,7 +12921,7 @@ void TestCredentialSettings::persistedCacheScrubsDuplicatePlaintext()
 
 void TestCredentialSettings::unpersistedCachePreservesDuplicatePlaintext()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings first(temporary.filePath(QStringLiteral("first.ini")),
                     QSettings::IniFormat);
@@ -12929,7 +12966,7 @@ void TestCredentialSettings::failedPlaintextScrubIsRetried()
     QFETCH(bool, preexistingVault);
     QFETCH(bool, newSession);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.gc-credential-scrub"));
@@ -12998,7 +13035,7 @@ void TestCredentialSettings::failedPlaintextScrubIsRetried()
 
 void TestCredentialSettings::failedCachedPlaintextScrubIsRetried()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString firstPath =
         temporary.filePath(QStringLiteral("first.ini"));
@@ -13063,7 +13100,7 @@ void TestCredentialSettings::failedCachedPlaintextScrubIsRetried()
 void TestCredentialSettings::
 failedMigrationScrubInvalidatesNegativeCache()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings empty(
         temporary.filePath(QStringLiteral("empty.ini")),
@@ -13135,7 +13172,7 @@ failedMigrationScrubInvalidatesNegativeCache()
 void TestCredentialSettings::
 failedVaultReadScrubInvalidatesNegativeCache()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings empty(
         temporary.filePath(QStringLiteral("empty.ini")),
@@ -13199,7 +13236,7 @@ failedVaultReadScrubInvalidatesNegativeCache()
 void TestCredentialSettings::
 failedSetValuePlaintextScrubIsRetried()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.gc-credential-scrub"));
@@ -13272,7 +13309,7 @@ failedSetValuePlaintextScrubIsRetried()
 void TestCredentialSettings::
 failedSetValueScrubInvalidatesOldCache()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings cacheSource(
         temporary.filePath(QStringLiteral("cache.ini")),
@@ -13346,7 +13383,7 @@ failedSetValueScrubInvalidatesOldCache()
 void TestCredentialSettings::
 failedRemovePlaintextScrubPreservesVault()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.gc-credential-scrub"));
@@ -13409,7 +13446,7 @@ failedRemovePlaintextScrubPreservesVault()
 void TestCredentialSettings::
 pendingRemovalPersistenceFailurePreservesVault()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.gc-credential-scrub"));
@@ -13465,7 +13502,7 @@ pendingRemovalPersistenceFailurePreservesVault()
 void TestCredentialSettings::
 pendingRemovalCleanupFailureIsRetried()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.gc-credential-scrub"));
@@ -13521,7 +13558,7 @@ pendingRemovalCleanupFailureIsRetried()
 void TestCredentialSettings::
 pendingRemovalCleanupRetriesInSameSettingsSession()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.gc-credential-scrub"));
@@ -13569,7 +13606,7 @@ pendingRemovalCleanupRetriesInSameSettingsSession()
 void TestCredentialSettings::
 credentialOperationsRecoverFromStickyCallerStatus()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.gc-credential-scrub"));
@@ -13627,7 +13664,7 @@ credentialOperationsRecoverFromStickyCallerStatus()
 void TestCredentialSettings::
 pendingRemovalMustClearBeforeCredentialWrite()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.gc-credential-scrub"));
@@ -13684,7 +13721,7 @@ pendingRemovalMustClearBeforeCredentialWrite()
 
 void TestCredentialSettings::systemFallbackCredentialIsIgnored()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString userPath =
         temporary.filePath(QStringLiteral("user"));
@@ -13740,7 +13777,7 @@ void TestCredentialSettings::systemFallbackCredentialIsIgnored()
 
 void TestCredentialSettings::systemFallbackPendingRemovalIsIgnored()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString userPath =
         temporary.filePath(QStringLiteral("user"));
@@ -13800,7 +13837,7 @@ void TestCredentialSettings::systemFallbackPendingRemovalIsIgnored()
 
 void TestCredentialSettings::systemFallbackScopeIdIsIgnored()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString userPath =
         temporary.filePath(QStringLiteral("user"));
@@ -13850,7 +13887,7 @@ void TestCredentialSettings::systemFallbackScopeIdIsIgnored()
 
 void TestCredentialSettings::negativeCacheDoesNotHideLegacyCredential()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings empty(temporary.filePath(QStringLiteral("empty.ini")),
                     QSettings::IniFormat);
@@ -13879,7 +13916,7 @@ void TestCredentialSettings::negativeCacheDoesNotHideLegacyCredential()
 
 void TestCredentialSettings::emptyPlaintextDoesNotCacheTransientVaultFailure()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings ini(temporary.filePath(QStringLiteral("private.ini")),
                   QSettings::IniFormat);
@@ -13911,7 +13948,7 @@ void TestCredentialSettings::emptyPlaintextDoesNotCacheTransientVaultFailure()
 
 void TestCredentialSettings::transientReadFailureIsRetried()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings ini(temporary.filePath(QStringLiteral("private.ini")),
                   QSettings::IniFormat);
@@ -13953,7 +13990,7 @@ transientReadDoesNotOverwriteNewerCredential()
 {
     QFETCH(int, readStatus);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings ini(temporary.filePath(QStringLiteral("private.ini")),
                   QSettings::IniFormat);
@@ -13998,7 +14035,7 @@ transientReadDoesNotOverwriteNewerCredential()
 void TestCredentialSettings::
 migrationDoesNotOverwriteCredentialCreatedAfterMiss()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings ini(temporary.filePath(QStringLiteral("private.ini")),
                   QSettings::IniFormat);
@@ -14062,7 +14099,7 @@ migrationCleanupRetainsChangedOrLastPlaintext()
     QFETCH(bool, restartBeforeRecovery);
     QFETCH(bool, replaceDuringFinalConfirmation);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.ini"));
@@ -14211,7 +14248,7 @@ completedCleanupProtectsReappearedPlaintext()
 {
     QFETCH(bool, restartAfterReappearance);
     QFETCH(bool, sameValue);
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.ini"));
@@ -14287,7 +14324,7 @@ completedCleanupProtectsReappearedPlaintext()
 void TestCredentialSettings::
 migrationCollisionReadFailureRetainsPlaintextAndRetries()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path =
         temporary.filePath(QStringLiteral("private.ini"));
@@ -14351,7 +14388,7 @@ definiteMigrationOutcomeRequiresConfirmation()
 {
     QFETCH(bool, collision);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings ini(
         temporary.filePath(QStringLiteral("private.ini")),
@@ -14413,7 +14450,7 @@ definiteMigrationOutcomeRequiresConfirmation()
 void TestCredentialSettings::
 creatingMigrationDoesNotOverwriteCredentialCreatedAfterMiss()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -14467,7 +14504,7 @@ creatingMigrationDoesNotOverwriteCredentialCreatedAfterMiss()
 void TestCredentialSettings::
 creatingMigrationCollisionReadFailureRetainsTransaction()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot =
         temporary.filePath(QStringLiteral("credential-state"));
@@ -14538,7 +14575,7 @@ creatingMigrationCollisionReadFailureRetainsTransaction()
 void TestCredentialSettings::
 creatingMigrationUnsupportedRetainsTransactionAndRetries()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString stateRoot = temporary.filePath(
         QStringLiteral("credential-state"));
@@ -14606,7 +14643,7 @@ creatingMigrationUnsupportedRetainsTransactionAndRetries()
 void TestCredentialSettings::
 failedMigrationDoesNotCacheOverNewerCredential()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings ini(temporary.filePath(QStringLiteral("private.ini")),
                   QSettings::IniFormat);
@@ -14654,7 +14691,7 @@ failedMigrationDoesNotCacheOverNewerCredential()
 void TestCredentialSettings::
 transientMigrationCreateFailureRetriesInSameSession()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings ini(
         temporary.filePath(QStringLiteral("private.ini")),
@@ -14697,7 +14734,7 @@ transientMigrationCreateFailureRetriesInSameSession()
 void TestCredentialSettings::
 failedMigrationCreateRetainsPlaintextAndRetries()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings ini(
         temporary.filePath(QStringLiteral("private.ini")),
@@ -14745,7 +14782,7 @@ failedMigrationCreateRetainsPlaintextAndRetries()
 void TestCredentialSettings::
 unsupportedMigrationRetainsPlaintextAndRetries()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings ini(
         temporary.filePath(QStringLiteral("private.ini")),
@@ -14796,7 +14833,7 @@ unsupportedMigrationRetainsPlaintextAndRetries()
 void TestCredentialSettings::
 indeterminateMigrationCommitIsConfirmed()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings ini(
         temporary.filePath(QStringLiteral("private.ini")),
@@ -14836,7 +14873,7 @@ indeterminateMigrationCommitIsConfirmed()
 void TestCredentialSettings::
 indeterminateMigrationMissFailsClosedAndRetries()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings ini(
         temporary.filePath(QStringLiteral("private.ini")),
@@ -14880,7 +14917,7 @@ indeterminateMigrationMissFailsClosedAndRetries()
 void TestCredentialSettings::
 indeterminateMigrationReadFailureRetainsPlaintext()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings ini(
         temporary.filePath(QStringLiteral("private.ini")),
@@ -14927,7 +14964,7 @@ indeterminateMigrationReadFailureRetainsPlaintext()
 void TestCredentialSettings::
 transientReadBeforeMissingCredentialRetriesMigration()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings ini(temporary.filePath(QStringLiteral("private.ini")),
                   QSettings::IniFormat);
@@ -14965,7 +15002,7 @@ transientReadBeforeMissingCredentialRetriesMigration()
 
 void TestCredentialSettings::scopesAreIsolated()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings first(temporary.filePath(QStringLiteral("first.ini")),
                     QSettings::IniFormat);
@@ -14998,7 +15035,7 @@ void TestCredentialSettings::scopesAreIsolated()
 
 void TestCredentialSettings::scopeIdentifiersAreStableAndValidated()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings ini(temporary.filePath(QStringLiteral("settings.ini")),
                   QSettings::IniFormat);
@@ -15016,7 +15053,7 @@ void TestCredentialSettings::scopeIdentifiersAreStableAndValidated()
 
 void TestCredentialSettings::scopeCreationFailsClosedWhenItCannotPersist()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QSettings::Format format = QSettings::registerFormat(
         QStringLiteral("gc-reject-write"),
@@ -15073,7 +15110,7 @@ void TestCredentialSettings::scopeCreationFailsClosedWhenItCannotPersist()
 
 void TestCredentialSettings::migratePlaintextCoversConfiguredCredentials()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings ini(temporary.filePath(QStringLiteral("private.ini")),
                   QSettings::IniFormat);
@@ -15103,7 +15140,7 @@ void TestCredentialSettings::migratePlaintextCoversConfiguredCredentials()
 
 void TestCredentialSettings::gsettingsRoutesCredentialsToVault()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path = temporary.filePath(QStringLiteral("legacy.ini"));
     {
@@ -15155,7 +15192,7 @@ void TestCredentialSettings::gsettingsRoutesCredentialsToVault()
 void TestCredentialSettings::
 gsettingsCheckedCredentialWriteReportsPersistence()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path = temporary.filePath(QStringLiteral("legacy.ini"));
     const QString athlete = QStringLiteral("Athlete");
@@ -15190,7 +15227,7 @@ gsettingsCheckedCredentialWriteReportsPersistence()
 void TestCredentialSettings::
 gsettingsCheckedCredentialReadDistinguishesMissingAndFailure()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString path = temporary.filePath(QStringLiteral("legacy.ini"));
     const QString athlete = QStringLiteral("Athlete");
@@ -15240,7 +15277,7 @@ gsettingsCheckedCredentialReadDistinguishesMissingAndFailure()
 void TestCredentialSettings::
 gsettingsSyncsOnlyRequestedAthleteFile()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(
         QSettings::NativeFormat,
@@ -15305,7 +15342,7 @@ gsettingsSyncsOnlyRequestedAthleteFile()
 void TestCredentialSettings::
 constructionDoesNotPersistMigrationState()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(
         QSettings::NativeFormat,
@@ -15342,7 +15379,7 @@ constructionDoesNotPersistMigrationState()
 void TestCredentialSettings::
 systemFallbackDoesNotSuppressUserMigration()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString legacyPath =
         temporary.filePath(QStringLiteral("legacy-user"));
@@ -15439,7 +15476,7 @@ systemFallbackDoesNotSuppressUserMigration()
 void TestCredentialSettings::
 credentialMetadataDoesNotSuppressSystemMigration()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(
         QSettings::NativeFormat,
@@ -15532,7 +15569,7 @@ markerlessEstablishedSettingsAreAdoptedWithoutBackfill()
 {
     using QSettings = LegacyMigrationQSettings;
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedLegacyMigrationFormat legacyFormat(temporary.path());
     QSettings::setPath(
@@ -15647,7 +15684,7 @@ markerlessEstablishedSettingsAreAdoptedWithoutBackfill()
 
 void TestCredentialSettings::partialSystemMigrationResumesWithoutOverwrite()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(
         QSettings::NativeFormat,
@@ -15727,7 +15764,7 @@ partialGlobalMigrationResumesWithoutOverwrite()
 {
     QFETCH(QString, partialFile);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(
         QSettings::NativeFormat,
@@ -15833,7 +15870,7 @@ partialAthleteMigrationResumesWithoutOverwrite()
 {
     QFETCH(QString, partialFile);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(
         QSettings::NativeFormat,
@@ -15967,7 +16004,7 @@ partialAthleteMigrationResumesWithoutOverwrite()
 void TestCredentialSettings::
 dynamicLegacyKeysMigrateToTheirExactTargets()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(
         QSettings::NativeFormat,
@@ -16069,7 +16106,7 @@ dynamicLegacyKeysMigrateToTheirExactTargets()
 
 void TestCredentialSettings::unknownMigrationStateFailsClosed()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(
         QSettings::NativeFormat,
@@ -16185,7 +16222,7 @@ migrationSyncFailuresResumeAfterRestart()
     QFETCH(QString, scope);
     QFETCH(QString, failurePoint);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QSettings::Format legacyFormat =
         legacyMigrationTestFormat();
@@ -16485,7 +16522,7 @@ migrationSyncFailuresResumeAfterRestart()
 void TestCredentialSettings::
 credentialClaimFailureDoesNotBlockGlobalMigration()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QSettings::Format legacyFormat =
         legacyMigrationTestFormat();
@@ -16621,7 +16658,7 @@ interruptedFreshEnrollmentRecovers()
     } faultReset;
     Q_UNUSED(faultReset)
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QSettings::Format legacyFormat =
         legacyMigrationTestFormat();
@@ -16866,7 +16903,7 @@ pendingEnrollmentIntentIsPathBound()
     } faultReset;
     Q_UNUSED(faultReset)
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QSettings::Format legacyFormat =
         legacyMigrationTestFormat();
@@ -17178,7 +17215,7 @@ locationEnrollmentIsSerializedAcrossProcesses()
     QFETCH(QString, kind);
     QFETCH(QString, parentId);
     QFETCH(bool, athleteDirectory);
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QString library =
         temporary.filePath(QStringLiteral("library"));
@@ -17537,7 +17574,7 @@ freshEnrollmentIsSerializedAcrossProcesses()
     }
 
     QFETCH(bool, athleteEnrollment);
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QSettings::Format legacyFormat =
         legacyMigrationTestFormat();
@@ -18051,7 +18088,7 @@ freshEnrollmentCrashRecoveryAcrossProcesses()
     };
 
     for (const CrashCase &testCase : cases) {
-        QTemporaryDir temporary;
+        PrivateCredentialTestDirectory temporary;
         QVERIFY2(temporary.isValid(), testCase.name);
         const QSettings::Format legacyFormat =
             legacyMigrationTestFormat();
@@ -18826,7 +18863,7 @@ freshEnrollmentCrashRecoveryAcrossProcesses()
 void TestCredentialSettings::
 credentialEnrollmentAuthorityMustBeExternal()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QSettings::Format legacyFormat =
         legacyMigrationTestFormat();
@@ -18954,7 +18991,7 @@ void TestCredentialSettings::
 credentialEnrollmentAuthorityAliasesFailClosed()
 {
     QFETCH(QString, aliasMode);
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QSettings::Format legacyFormat =
         legacyMigrationTestFormat();
@@ -19242,7 +19279,7 @@ completedLocationCannotBeReenrolledWithoutLocalMetadata()
     QFETCH(QString, lossMode);
     QFETCH(bool, recoverable);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QSettings::Format legacyFormat =
         legacyMigrationTestFormat();
@@ -19618,7 +19655,7 @@ void TestCredentialSettings::
 legacyLocationClaimsAreBackfilled()
 {
     QFETCH(bool, athleteCredential);
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QSettings::Format legacyFormat =
         legacyMigrationTestFormat();
@@ -19776,7 +19813,7 @@ legacyLocationClaimsAreBackfilled()
 void TestCredentialSettings::
 newFormatRootlessCredentialIsRetained()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -19850,7 +19887,7 @@ newFormatRootlessCredentialIsRetained()
 void TestCredentialSettings::
 newFormatRootlessCredentialRemainsAfterStoreRecovery()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -19959,7 +19996,7 @@ authorizedLegacyPlaintextRequiresAuthoritativeVaultMiss()
 
     QFETCH(bool, vaultUnavailable);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedLegacyMigrationFormat legacyFormat(temporary.path());
     QSettings::setPath(QSettings::IniFormat,
@@ -20113,7 +20150,7 @@ authorizedLegacyGlobalPlaintextRequiresAuthoritativeVaultMiss()
 
     QFETCH(bool, vaultUnavailable);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedLegacyMigrationFormat legacyFormat(temporary.path());
     QSettings::setPath(QSettings::IniFormat,
@@ -20237,7 +20274,7 @@ targetCredentialUseBlocksLegacyFallback()
 
     QFETCH(int, action);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedLegacyMigrationFormat legacyFormat(temporary.path());
     QSettings::setPath(QSettings::IniFormat,
@@ -20410,7 +20447,7 @@ targetCredentialUseBlocksLegacyFallback()
 void TestCredentialSettings::
 targetPlaintextPrecedesLegacyAfterTransientVaultFailure()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -20562,7 +20599,7 @@ emptyTargetPlaintextBlocksLegacyAcrossRestart()
 
     QFETCH(bool, preexistingTarget);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedLegacyMigrationFormat legacyFormat(temporary.path());
     QSettings::setPath(QSettings::IniFormat,
@@ -20731,7 +20768,7 @@ failedFallbackMarkerPersistenceFailsClosedAndRetries()
     QFETCH(bool, canonicalTarget);
     QFETCH(bool, sameProcessRetry);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QSettings::Format legacyFormat =
         legacyMigrationTestFormat();
@@ -20944,7 +20981,7 @@ failedFallbackMarkerPersistenceFailsClosedAndRetries()
 void TestCredentialSettings::
 legacyPlaintextRequiresMatchingSourceRoot()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -21042,7 +21079,7 @@ legacyPlaintextRequiresMatchingSourceRoot()
 void TestCredentialSettings::
 legacyPlaintextRequiresMatchingSourceScope()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -21139,7 +21176,7 @@ legacyPlaintextRequiresMatchingSourceScope()
 void TestCredentialSettings::
 legacyCredentialScopeUsesOneExactSnapshot()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -21208,7 +21245,7 @@ authorizedLegacyFallbackUsesOneExactSnapshot()
 {
     using QSettings = LegacyMigrationQSettings;
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedLegacyMigrationFormat legacyFormat(temporary.path());
     QSettings::setPath(QSettings::IniFormat,
@@ -21336,7 +21373,7 @@ targetAppearingDuringLegacyFallbackTakesPrecedence()
 {
     using QSettings = LegacyMigrationQSettings;
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedLegacyMigrationFormat legacyFormat(temporary.path());
     QSettings::setPath(QSettings::IniFormat,
@@ -21464,7 +21501,7 @@ canonicalVaultReadRetainsAuthorizedLegacyDuplicate()
 {
     using QSettings = LegacyMigrationQSettings;
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedLegacyMigrationFormat legacyFormat(temporary.path());
     QSettings::setPath(QSettings::IniFormat,
@@ -21573,7 +21610,7 @@ vanishedCanonicalRetainsAuthorizedLegacyDuplicate()
 {
     using QSettings = LegacyMigrationQSettings;
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     ScopedLegacyMigrationFormat legacyFormat(temporary.path());
     QSettings::setPath(QSettings::IniFormat,
@@ -21676,7 +21713,7 @@ vanishedCanonicalRetainsAuthorizedLegacyDuplicate()
 void TestCredentialSettings::
 globalCredentialsInDifferentRootsHaveIsolatedScopes()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -21757,7 +21794,7 @@ globalCredentialsInDifferentRootsHaveIsolatedScopes()
 void TestCredentialSettings::
 sameNamedAthletesInDifferentRootsHaveIsolatedScopes()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -21879,7 +21916,7 @@ preUpgradeCopiedCredentialScopesFailClosed()
 {
     QFETCH(bool, openCopyFirst);
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -22023,7 +22060,7 @@ preUpgradeCopiedCredentialScopesFailClosed()
 void TestCredentialSettings::
 preUpgradeCopiedAthleteScopeFailsClosedWhenOpenedFirst()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -22104,7 +22141,7 @@ preUpgradeCopiedAthleteScopeFailsClosedWhenOpenedFirst()
 void TestCredentialSettings::
 legacyClaimsSurviveLocalBindingWriteFailure()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     const QSettings::Format legacyFormat =
         legacyMigrationTestFormat();
@@ -22289,7 +22326,7 @@ legacyClaimsSurviveLocalBindingWriteFailure()
 void TestCredentialSettings::
 switchingCredentialRootsClearsScopedState()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -22351,7 +22388,7 @@ switchingCredentialRootsClearsScopedState()
 void TestCredentialSettings::
 invalidCredentialRootSwitchFailsClosed()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -22421,7 +22458,7 @@ invalidCredentialRootSwitchFailsClosed()
 void TestCredentialSettings::
 copiedCredentialRootFailsClosed()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -22525,7 +22562,7 @@ copiedCredentialRootFailsClosed()
 void TestCredentialSettings::
 copiedAthleteCredentialProfileFailsClosed()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -22585,7 +22622,7 @@ copiedAthleteCredentialProfileFailsClosed()
 void TestCredentialSettings::
 existingFreshRootCannotBootstrapMissingClaims()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -22698,7 +22735,7 @@ existingFreshRootCannotBootstrapMissingClaims()
 void TestCredentialSettings::
 existingFreshAthleteCannotBootstrapMissingClaims()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -22849,7 +22886,7 @@ existingFreshAthleteCannotBootstrapMissingClaims()
 void TestCredentialSettings::
 unavailableClaimedRootCannotBeReboundByCopy()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -22911,7 +22948,7 @@ symlinkedGlobalCredentialSettingsFailClosed()
 #ifndef Q_OS_UNIX
     QSKIP("This regression requires Unix symlinks");
 #else
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -22987,7 +23024,7 @@ symlinkedGlobalCredentialSettingsFailClosed()
 void TestCredentialSettings::
 localAthleteScopeIsPreservedWithoutCrossRootAdoption()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -23094,7 +23131,7 @@ localAthleteScopeIsPreservedWithoutCrossRootAdoption()
 void TestCredentialSettings::
 ambiguousLegacyAthleteScopeFailsClosed()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -23163,7 +23200,7 @@ ambiguousLegacyAthleteScopeFailsClosed()
 void TestCredentialSettings::
 ambiguousLegacyPlaintextFailsClosed()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -23221,7 +23258,7 @@ ambiguousLegacyPlaintextFailsClosed()
 void TestCredentialSettings::
 malformedRootIdentityFailsClosed()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -23264,7 +23301,7 @@ malformedRootIdentityFailsClosed()
 void TestCredentialSettings::
 malformedAthleteScopeFailsClosed()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -23315,7 +23352,7 @@ malformedAthleteScopeFailsClosed()
 void TestCredentialSettings::
 escapedAthleteCredentialPathsFailClosed()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -23417,7 +23454,7 @@ danglingAthletePrivateSymlinkFailsClosed()
 #ifndef Q_OS_UNIX
     QSKIP("This regression requires a dangling symlink");
 #else
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -23468,7 +23505,7 @@ danglingAthletePrivateSymlinkFailsClosed()
 void TestCredentialSettings::
 invalidAthleteDoesNotDisableValidCredentials()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -23520,7 +23557,7 @@ windowsAthleteJunctionFailsClosed()
 #ifndef Q_OS_WIN
     QSKIP("This regression requires an NTFS junction");
 #else
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -23603,7 +23640,7 @@ windowsAthleteJunctionFailsClosed()
 void TestCredentialSettings::
 preInitializationUsesLocalAthleteScope()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -23698,7 +23735,7 @@ preInitializationUsesLocalAthleteScope()
 
 void TestCredentialSettings::clearedRootDoesNotRetainAthleteScope()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -23745,7 +23782,7 @@ void TestCredentialSettings::clearedRootDoesNotRetainAthleteScope()
 void TestCredentialSettings::
 credentialBackendWaitDoesNotHoldSettingsMutex()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -23948,7 +23985,7 @@ applicationThreadCredentialBackendWaitProcessesKeychainCompletion()
 void TestCredentialSettings::
 applicationThreadKeychainReentrancyDefersSettingsReconfiguration()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -24065,7 +24102,7 @@ applicationThreadKeychainReentrancyDefersSettingsReconfiguration()
 void TestCredentialSettings::
 credentialBackendBlocksSettingsReconfigurationUntilRelease()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -24148,7 +24185,7 @@ credentialBackendBlocksSettingsReconfigurationUntilRelease()
 void TestCredentialSettings::
 credentialBackendDoesNotDropSameInstanceAthleteInitialization()
 {
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
@@ -24412,7 +24449,7 @@ credentialWorkerShutdownAbandonsQueuedOperations()
         return;
     }
 
-    QTemporaryDir temporary;
+    PrivateCredentialTestDirectory temporary;
     QVERIFY(temporary.isValid());
     QSettings::setPath(QSettings::NativeFormat,
                        QSettings::UserScope, temporary.path());
