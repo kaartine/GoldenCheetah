@@ -44,6 +44,13 @@ APPLICATION_PROJECT = REPOSITORY / "src/src.pro"
 ANT_LIFECYCLE_STUBS = (
     UNITTESTS / "Train/antLifecycle/AntLifecycleTestStubs.cpp"
 )
+ANT_LIFECYCLE_PROJECT = (
+    UNITTESTS / "Train/antLifecycle/antLifecycle.pro"
+)
+ANT_LIFECYCLE_TEST = (
+    UNITTESTS / "Train/antLifecycle/testAntLifecycle.cpp"
+)
+ANT_HEADER = REPOSITORY / "src/ANT/ANT.h"
 STRAVA_ROUTES_PROJECT = (
     UNITTESTS
     / "Train/stravaRoutesDownloadPipeline/stravaRoutesDownloadPipeline.pro"
@@ -486,6 +493,20 @@ def main() -> None:
     if 0 <= remote_include < libusb_suspend:
         raise AssertionError(
             "ANT lifecycle stubs load RemoteControl before USB isolation"
+        )
+    ant_lifecycle_project = ANT_LIFECYCLE_PROJECT.read_text(encoding="utf-8")
+    if "GC_ANT_LIBUSB_HEADER" not in ant_lifecycle_project:
+        raise AssertionError(
+            "ANT lifecycle test does not select an unambiguous fake USB header"
+        )
+    if '#include "LibUsb.h"' in ANT_LIFECYCLE_TEST.read_text(encoding="utf-8"):
+        raise AssertionError(
+            "ANT lifecycle test includes the ambiguous production USB header name"
+        )
+    ant_header = ANT_HEADER.read_text(encoding="utf-8")
+    if "#include GC_ANT_LIBUSB_HEADER" not in ant_header:
+        raise AssertionError(
+            "ANT transport header cannot be overridden by isolated tests"
         )
 
 

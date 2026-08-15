@@ -2,7 +2,8 @@ QT += core gui widgets testlib bluetooth network xml sql svg concurrent serialpo
       multimedia multimediawidgets webenginecore webenginewidgets webchannel \
       positioning webenginequick charts openglwidgets core5compat
 
-DEFINES += GC_HAVE_LIBUSB
+DEFINES += GC_HAVE_LIBUSB \
+           GC_ANT_LIBUSB_HEADER=\\\"AntLifecycleLibUsb.h\\\"
 
 TEMPLATE = app
 TARGET = antLifecycle
@@ -21,7 +22,7 @@ SOURCES = testAntLifecycle.cpp \
           ../../../src/Train/PolynomialRegression.cpp \
           ../../../src/Train/RealtimeController.cpp
 
-HEADERS = LibUsb.h \
+HEADERS = AntLifecycleLibUsb.h \
           ../../../src/ANT/ANT.h \
           ../../../src/ANT/ANTChannel.h \
           ../../../src/ANT/ANTlocalController.h \

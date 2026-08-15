@@ -9,7 +9,7 @@
 
 #include "ANT.h"
 #include "ANTlocalController.h"
-#include "LibUsb.h"
+#include "AntLifecycleLibUsb.h"
 
 #include <QApplication>
 #include <QCoreApplication>

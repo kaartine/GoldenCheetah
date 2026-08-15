@@ -7,8 +7,8 @@
  * option) any later version.
  */
 
-#ifndef gc_LibUsb_h
-#define gc_LibUsb_h
+#ifndef gc_AntLifecycleLibUsb_h
+#define gc_AntLifecycleLibUsb_h
 
 #define TYPE_ANT 0
 

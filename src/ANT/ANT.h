@@ -79,7 +79,11 @@
 #endif
 
 #if defined GC_HAVE_LIBUSB
+#if defined GC_ANT_LIBUSB_HEADER
+#include GC_ANT_LIBUSB_HEADER
+#else
 #include "LibUsb.h"    // for Garmin USB2 sticks
+#endif
 #endif
 
 #include <QDebug>

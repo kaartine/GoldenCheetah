@@ -7,7 +7,7 @@
  * option) any later version.
  */
 
-#include "LibUsb.h"
+#include "AntLifecycleLibUsb.h"
 
 #include <QElapsedTimer>
 #include <QMutex>
