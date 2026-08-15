@@ -448,6 +448,10 @@ def main() -> None:
         raise AssertionError(
             "Python data-series ownership test compiles unrelated bindings"
         )
+    if "win32:DEFINES += Py_NO_ENABLE_SHARED" not in python_data_series_project:
+        raise AssertionError(
+            "Python data-series ownership test permits Windows Python autolinking"
+        )
     python_data_series_source = PYTHON_DATA_SERIES_SOURCE.read_text(
         encoding="utf-8"
     )

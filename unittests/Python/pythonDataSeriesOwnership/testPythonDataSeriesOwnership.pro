@@ -16,6 +16,9 @@ SOURCES = testPythonDataSeriesOwnership.cpp \
 
 INCLUDEPATH += $$PYTHON_DATA_SERIES_OWNERSHIP_INCLUDEPATH
 
+# Python 3.13's Windows headers otherwise request pythonXY.lib through MSVC autolinking.
+win32:DEFINES += Py_NO_ENABLE_SHARED
+
 sanitize {
     contains(QMAKE_COMPILER, msvc) {
         error("CONFIG+=sanitize is unsupported for MSVC-style toolchains, including clang-cl")
