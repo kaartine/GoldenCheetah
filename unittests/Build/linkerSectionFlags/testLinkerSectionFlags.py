@@ -22,6 +22,21 @@ RIDE_METRIC_DEPENDENCY_STUBS = (
     UNITTESTS
     / "Metrics/rideMetricDependencyGraph/RideMetricDependencyGraphTestStubs.cpp"
 )
+USER_METRIC_REGISTRY_STUBS = (
+    UNITTESTS
+    / "Metrics/userMetricRegistrySafety/UserMetricRegistrySafetyTestStubs.cpp"
+)
+PYTHON_CHART_PROJECT = (
+    UNITTESTS / "Python/pythonChartLifecycle/pythonChartLifecycle.pro"
+)
+PYTHON_CHART_STUBS = (
+    UNITTESTS
+    / "Python/pythonChartLifecycle/PythonChartLifecycleTestStubs.cpp"
+)
+PYTHON_DATA_SERIES_PROJECT = (
+    UNITTESTS
+    / "Python/pythonDataSeriesOwnership/testPythonDataSeriesOwnership.pro"
+)
 STRAVA_ROUTES_PROJECT = (
     UNITTESTS
     / "Train/stravaRoutesDownloadPipeline/stravaRoutesDownloadPipeline.pro"
@@ -381,6 +396,49 @@ def main() -> None:
         raise AssertionError(
             "RideMetric dependency graph test is missing its user metric "
             "factory stub"
+        )
+
+    user_metric_registry_stubs = USER_METRIC_REGISTRY_STUBS.read_text(
+        encoding="utf-8"
+    )
+    if "DataFilter::fingerprint(QString &query)" not in user_metric_registry_stubs:
+        raise AssertionError(
+            "user metric registry test is missing its fingerprint stub"
+        )
+
+    python_chart_project = PYTHON_CHART_PROJECT.read_text(encoding="utf-8")
+    for forbidden in (
+        "../../../src/Core/Specification.cpp",
+        "../../../src/Core/TimeUtils.cpp",
+    ):
+        if forbidden in python_chart_project:
+            raise AssertionError(
+                "Python chart lifecycle test compiles unrelated production "
+                "code: " + forbidden
+            )
+    if "PythonChartLifecycleTestStubs.cpp" not in python_chart_project:
+        raise AssertionError(
+            "Python chart lifecycle test is missing its isolated stubs"
+        )
+    python_chart_stubs = PYTHON_CHART_STUBS.read_text(encoding="utf-8")
+    for expected in (
+        "DateRange::DateRange(QDate",
+        "PlanFilter::PlanFilter(PlanFilterType type)",
+        "Specification::Specification()",
+    ):
+        if expected not in python_chart_stubs:
+            raise AssertionError(
+                "Python chart lifecycle test is missing a construction stub: "
+                + expected
+            )
+
+    python_data_series_project = PYTHON_DATA_SERIES_PROJECT.read_text(
+        encoding="utf-8"
+    )
+    if "win32:LIBS += $${PYTHONLIBS}" not in python_data_series_project:
+        raise AssertionError(
+            "Python data-series ownership test does not link the configured "
+            "Windows Python library"
         )
 
 

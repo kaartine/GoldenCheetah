@@ -83,6 +83,11 @@ void DataFilter::dynamicParse()
 {
 }
 
+QString DataFilter::fingerprint(QString &query)
+{
+    return query;
+}
+
 Result Leaf::eval(DataFilterRuntime *, Leaf *function, const Result &, long,
                   RideItem *item, RideFilePoint *,
                   const QHash<QString, RideMetric *> *,

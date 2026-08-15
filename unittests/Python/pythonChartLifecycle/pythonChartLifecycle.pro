@@ -8,8 +8,7 @@ CONFIG -= debug
 include(../../unittests.pri)
 
 SOURCES = testPythonChartLifecycle.cpp \
-          $$PWD/../../../src/Core/Specification.cpp \
-          $$PWD/../../../src/Core/TimeUtils.cpp \
+          PythonChartLifecycleTestStubs.cpp \
           $$PWD/../../../src/Python/PythonExecutionGate.cpp \
           $$PWD/../../../src/Python/PythonChartRunState.cpp \
           $$PWD/../../../src/Python/PythonChartRunner.cpp \

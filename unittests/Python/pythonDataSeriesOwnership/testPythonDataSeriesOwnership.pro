@@ -16,6 +16,8 @@ SOURCES = testPythonDataSeriesOwnership.cpp \
 
 INCLUDEPATH += $$PYTHON_DATA_SERIES_OWNERSHIP_INCLUDEPATH
 
+win32:LIBS += $${PYTHONLIBS}
+
 # Qt's cl and clang-cl mkspecs both include msvc in QMAKE_COMPILER. Test it
 # first so only native Clang and GCC can enter GNU-style option branches.
 PYTHON_DATA_SERIES_OWNERSHIP_TOOLCHAIN = unsupported

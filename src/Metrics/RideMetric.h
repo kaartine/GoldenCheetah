@@ -404,13 +404,7 @@ private:
 
     public:
 
-    static RideMetricFactory &instance() {
-        // Metric registrars have static lifetime and can run during global
-        // teardown. Preserve the historical process-lifetime factory while
-        // retaining thread-safe function-local initialization.
-        static RideMetricFactory *const factory = new RideMetricFactory;
-        return *factory;
-    }
+    static RideMetricFactory &instance();
 
     RideMetricRegistrySnapshot snapshot() const;
     int metricCount() const;
