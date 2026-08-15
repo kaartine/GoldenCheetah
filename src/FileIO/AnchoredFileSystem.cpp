@@ -7004,8 +7004,7 @@ MutationResult moveNoReplace(
             : MutationEffect::NoEffect;
         return result;
     }
-    const QString name = QDir::toNativeSeparators(
-        destination.displayPath_);
+    const QString name = extendedWindowsPath(destination.displayPath_);
     const DWORD nameBytes = DWORD(name.size() * sizeof(wchar_t));
     // Keep room for the trailing NUL even though FileNameLength excludes it.
     const size_t bufferSize = sizeof(FILE_RENAME_INFO)
@@ -7023,8 +7022,7 @@ MutationResult moveNoReplace(
             DWORD(storage.size()))) {
         const DWORD native = ::GetLastError();
         const DWORD targetAttributes = ::GetFileAttributesW(
-            reinterpret_cast<LPCWSTR>(
-                extendedWindowsPath(name).utf16()));
+            reinterpret_cast<LPCWSTR>(name.utf16()));
         result.effect = (native == ERROR_ALREADY_EXISTS
                          || native == ERROR_FILE_EXISTS
                          || (native == ERROR_ACCESS_DENIED
