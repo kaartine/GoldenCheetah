@@ -14,8 +14,11 @@
 
 #include <QtTest>
 
+#include <QCoreApplication>
+#include <QDir>
 #include <QFile>
 
+#include <cstdio>
 #include <memory>
 #include <utility>
 
@@ -237,6 +240,15 @@ private:
     std::unique_ptr<DestructionProbe> bridgeToken_;
 };
 
+QStringList hostedSessionTestArguments(
+    const QStringList &arguments, const QString &logPath)
+{
+    QStringList result = arguments;
+    result << QStringLiteral("-o")
+           << logPath + QStringLiteral(",txt");
+    return result;
+}
+
 } // namespace
 
 std::unique_ptr<AthleteApplicationService>
@@ -297,12 +309,26 @@ class TestSessionBoundaries : public QObject
     Q_OBJECT
 
 private slots:
+    void hostedLoggerUsesPersistentFile();
     void contextOwnershipBoundaryIsEnforced();
     void cacheFailurePathUsesInjectedPersistencePort();
     void athleteSessionOwnsInjectedServices();
     void trainingSessionOwnsStateAndApplicationService();
     void productionContextOwnsAndDelegatesSessions();
 };
+
+void TestSessionBoundaries::hostedLoggerUsesPersistentFile()
+{
+    QCOMPARE(
+        hostedSessionTestArguments(
+            {QStringLiteral("test"), QStringLiteral("-maxwarnings"),
+             QStringLiteral("0")},
+            QStringLiteral("persistent.txt")),
+        QStringList({QStringLiteral("test"),
+                     QStringLiteral("-maxwarnings"), QStringLiteral("0"),
+                     QStringLiteral("-o"),
+                     QStringLiteral("persistent.txt,txt")}));
+}
 
 void TestSessionBoundaries::contextOwnershipBoundaryIsEnforced()
 {
@@ -573,6 +599,39 @@ void TestSessionBoundaries::productionContextOwnsAndDelegatesSessions()
     QCOMPARE(state.trainingDestroyed, 2);
 }
 
-QTEST_GUILESS_MAIN(TestSessionBoundaries)
+int main(int argc, char *argv[])
+{
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::setvbuf(stderr, nullptr, _IONBF, 0);
+    QCoreApplication application(argc, argv);
+    TestSessionBoundaries test;
+    if (!qEnvironmentVariableIsSet("CI")) {
+        return QTest::qExec(&test, application.arguments());
+    }
+
+    const QString logPath = QDir(QDir::tempPath()).filePath(
+        QStringLiteral("gc-session-boundaries-%1.txt").arg(
+            QCoreApplication::applicationPid()));
+    QFile::remove(logPath);
+    const int result = QTest::qExec(
+        &test,
+        hostedSessionTestArguments(
+            application.arguments(), logPath));
+
+    QFile log(logPath);
+    if (!log.open(QIODevice::ReadOnly)) {
+        std::fprintf(
+            stderr, "Could not read QtTest log: %s\n",
+            qPrintable(log.errorString()));
+        return result == 0 ? 2 : result;
+    }
+    const QByteArray output = log.readAll();
+    std::fwrite(
+        output.constData(), 1,
+        static_cast<std::size_t>(output.size()), stderr);
+    log.close();
+    QFile::remove(logPath);
+    return result;
+}
 
 #include "testSessionBoundaries.moc"

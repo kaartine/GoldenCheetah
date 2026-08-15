@@ -110,23 +110,6 @@ void traceTestStartup(const char *stage)
     std::fprintf(stderr, "GC_TEST_STARTUP_TRACE: %s\n", stage);
 }
 
-QStringList persistentQtTestArguments(
-    QStringList arguments, const QString &logPath)
-{
-    for (qsizetype index = 1; index + 1 < arguments.size();) {
-        if (arguments.at(index) == QStringLiteral("-o")
-            && arguments.at(index + 1) == QStringLiteral("-,txt")) {
-            arguments.removeAt(index);
-            arguments.removeAt(index);
-        } else {
-            ++index;
-        }
-    }
-    arguments << QStringLiteral("-o")
-              << logPath + QStringLiteral(",txt");
-    return arguments;
-}
-
 constexpr char ReaperAffinityChildSwitch[] =
         "--gc-test-local-store-reaper-affinity-child";
 constexpr char ReaperShutdownRaceChildSwitch[] =
@@ -1424,7 +1407,6 @@ class TestAthleteMigrationSafety : public QObject
 
 private slots:
     void init();
-    void hostedLoggerReplacesStdoutTextSink();
     void folderUpgradeRejectionSkipsAction();
     void folderAcceptanceThenCompatibilityRejectionSkipsAction();
     void allRequiredPromptsAcceptedRunActionOnce();
@@ -1543,25 +1525,6 @@ void TestAthleteMigrationSafety::init()
     resetCloudServiceHandoffQueuesForTest();
     disableCloudSslWarningCapture();
     resetAthleteMigrationTestSettings();
-}
-
-void TestAthleteMigrationSafety::hostedLoggerReplacesStdoutTextSink()
-{
-    const QStringList arguments = persistentQtTestArguments(
-        {QStringLiteral("test"),
-         QStringLiteral("-maxwarnings"), QStringLiteral("0"),
-         QStringLiteral("-o"), QStringLiteral("-,txt"),
-         QStringLiteral("-o"), QStringLiteral("results.xml,junitxml")},
-        QStringLiteral("persistent.txt"));
-
-    QCOMPARE(
-        arguments,
-        QStringList({QStringLiteral("test"),
-                     QStringLiteral("-maxwarnings"), QStringLiteral("0"),
-                     QStringLiteral("-o"),
-                     QStringLiteral("results.xml,junitxml"),
-                     QStringLiteral("-o"),
-                     QStringLiteral("persistent.txt,txt")}));
 }
 
 void TestAthleteMigrationSafety::folderUpgradeRejectionSkipsAction()
@@ -6980,9 +6943,9 @@ int main(int argc, char *argv[])
                 QStringLiteral("gc-athlete-migration-%1.txt").arg(
                     QCoreApplication::applicationPid()));
             QFile::remove(logPath);
-            const QStringList testArguments =
-                persistentQtTestArguments(
-                    application.arguments(), logPath);
+            QStringList testArguments = application.arguments();
+            testArguments << QStringLiteral("-o")
+                          << logPath + QStringLiteral(",txt");
             result = QTest::qExec(&test, testArguments);
 
             QFile log(logPath);

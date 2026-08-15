@@ -165,15 +165,9 @@ expected_tmpdir = os.environ.get("GC_FAKE_EXPECT_TMPDIR")
 if expected_tmpdir and os.environ.get("TMPDIR") != expected_tmpdir:
     print("unexpected TMPDIR: " + os.environ.get("TMPDIR", ""), file=sys.stderr)
     sys.exit(8)
-qt_output_argument = "TESTARGS=-o -,txt"
-is_auxiliary = os.path.basename(os.getcwd()) == "Aux"
-if is_auxiliary and qt_output_argument in sys.argv:
-    sys.exit(9)
-if not is_auxiliary and qt_output_argument not in sys.argv:
-    sys.exit(10)
 if mode == "failure":
     sys.exit(7)
-if is_auxiliary:
+if os.path.basename(os.getcwd()) == "Aux":
     sys.exit(0)
 if mode == "zero":
     print("Totals: 0 passed, 0 failed, 0 skipped, 0 blacklisted, 0ms")
