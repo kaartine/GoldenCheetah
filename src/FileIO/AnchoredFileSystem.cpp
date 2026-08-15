@@ -1046,6 +1046,23 @@ bool removeLinuxDirectoryAcls(int descriptor, QString &error)
 
 #ifdef Q_OS_WIN
 
+QString extendedWindowsPath(const QString &path)
+{
+    const QString native = QDir::toNativeSeparators(
+        QDir::cleanPath(path));
+    if (native.startsWith(QStringLiteral("\\\\?\\")))
+        return native;
+    if (native.startsWith(QStringLiteral("\\\\"))) {
+        return QStringLiteral("\\\\?\\UNC\\") + native.mid(2);
+    }
+    if (native.size() >= 3
+        && native.at(1) == QLatin1Char(':')
+        && native.at(2) == QLatin1Char('\\')) {
+        return QStringLiteral("\\\\?\\") + native;
+    }
+    return native;
+}
+
 class WindowsHandle
 {
 public:
@@ -1775,13 +1792,14 @@ WindowsHandle openWindowsDirectoryHandle(
     QString &error,
     DWORD *nativeError = nullptr)
 {
+    const QString extendedPath = extendedWindowsPath(path);
     DWORD access = FILE_LIST_DIRECTORY | FILE_TRAVERSE
         | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
     if (allowChildMutation) {
         access |= FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY;
     }
     WindowsHandle handle(::CreateFileW(
-        reinterpret_cast<LPCWSTR>(path.utf16()),
+        reinterpret_cast<LPCWSTR>(extendedPath.utf16()),
         access,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
         nullptr,
@@ -1807,8 +1825,9 @@ WindowsHandle openWindowsDirectoryBridge(
     QString &error,
     DWORD *nativeError = nullptr)
 {
+    const QString extendedPath = extendedWindowsPath(path);
     WindowsHandle handle(::CreateFileW(
-        reinterpret_cast<LPCWSTR>(path.utf16()),
+        reinterpret_cast<LPCWSTR>(extendedPath.utf16()),
         FILE_LIST_DIRECTORY | FILE_TRAVERSE
             | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -2210,7 +2229,7 @@ bool enumerateWindowsDirectoryPass(
                 const QString path = QDir(state.displayPath).filePath(name);
                 WindowsHandle handle(::CreateFileW(
                     reinterpret_cast<LPCWSTR>(
-                        QDir::toNativeSeparators(path).utf16()),
+                        extendedWindowsPath(path).utf16()),
                     FILE_READ_ATTRIBUTES | SYNCHRONIZE,
                     FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                     nullptr,
@@ -2289,7 +2308,8 @@ WindowsHandle openWindowsMutationHandle(
 {
     conflict = false;
     WindowsHandle handle(::CreateFileW(
-        reinterpret_cast<LPCWSTR>(state.entry.displayPath().utf16()),
+        reinterpret_cast<LPCWSTR>(
+            extendedWindowsPath(state.entry.displayPath()).utf16()),
         DELETE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         nullptr,
@@ -2340,7 +2360,8 @@ bool windowsMovedEntryMatches(
     }
 
     WindowsHandle named(::CreateFileW(
-        reinterpret_cast<LPCWSTR>(entry.displayPath().utf16()),
+        reinterpret_cast<LPCWSTR>(
+            extendedWindowsPath(entry.displayPath()).utf16()),
         FILE_READ_ATTRIBUTES | SYNCHRONIZE,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         nullptr,
@@ -2581,7 +2602,8 @@ bool makeWindowsOutputPinImmutable(
 {
     cleanupIsIdentityBound = true;
     WindowsHandle bridge(::CreateFileW(
-        reinterpret_cast<LPCWSTR>(state.entry.displayPath().utf16()),
+        reinterpret_cast<LPCWSTR>(
+            extendedWindowsPath(state.entry.displayPath()).utf16()),
         GENERIC_READ | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         nullptr,
@@ -2611,7 +2633,8 @@ bool makeWindowsOutputPinImmutable(
         "output-pin-writer-released",
         state.entry.displayPath());
     WindowsHandle immutable(::CreateFileW(
-        reinterpret_cast<LPCWSTR>(state.entry.displayPath().utf16()),
+        reinterpret_cast<LPCWSTR>(
+            extendedWindowsPath(state.entry.displayPath()).utf16()),
         GENERIC_READ | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
         FILE_SHARE_READ | FILE_SHARE_DELETE,
         nullptr,
@@ -3243,7 +3266,8 @@ QString PinnedFile::verifiedPath(
             return false;
         }
         WindowsHandle named(::CreateFileW(
-            reinterpret_cast<LPCWSTR>(entry.displayPath_.utf16()),
+            reinterpret_cast<LPCWSTR>(
+                extendedWindowsPath(entry.displayPath_).utf16()),
             FILE_READ_ATTRIBUTES | SYNCHRONIZE,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             nullptr,
@@ -3380,7 +3404,8 @@ bool writeNewFile(
     }
 #elif defined(Q_OS_WIN)
     WindowsHandle output(::CreateFileW(
-        reinterpret_cast<LPCWSTR>(destination.displayPath_.utf16()),
+        reinterpret_cast<LPCWSTR>(
+            extendedWindowsPath(destination.displayPath_).utf16()),
         GENERIC_READ | GENERIC_WRITE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
         FILE_SHARE_READ | FILE_SHARE_DELETE,
         nullptr,
@@ -3695,7 +3720,8 @@ bool copyToNewFile(
     }
 #elif defined(Q_OS_WIN)
     WindowsHandle output(::CreateFileW(
-        reinterpret_cast<LPCWSTR>(destination.displayPath_.utf16()),
+        reinterpret_cast<LPCWSTR>(
+            extendedWindowsPath(destination.displayPath_).utf16()),
         GENERIC_READ | GENERIC_WRITE | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
         FILE_SHARE_READ | FILE_SHARE_DELETE,
         nullptr,
@@ -4041,7 +4067,8 @@ bool pinRegularFile(
 #elif defined(Q_OS_WIN)
     if (maximumSize >= 0) {
         WindowsHandle metadata(::CreateFileW(
-            reinterpret_cast<LPCWSTR>(entry.displayPath_.utf16()),
+            reinterpret_cast<LPCWSTR>(
+                extendedWindowsPath(entry.displayPath_).utf16()),
             FILE_READ_ATTRIBUTES | SYNCHRONIZE,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             nullptr,
@@ -4071,7 +4098,8 @@ bool pinRegularFile(
         }
     }
     WindowsHandle handle(::CreateFileW(
-        reinterpret_cast<LPCWSTR>(entry.displayPath_.utf16()),
+        reinterpret_cast<LPCWSTR>(
+            extendedWindowsPath(entry.displayPath_).utf16()),
         GENERIC_READ | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
         FILE_SHARE_READ | FILE_SHARE_DELETE,
         nullptr,
@@ -4150,7 +4178,8 @@ bool pinRegularFileIdentity(
     return true;
 #elif defined(Q_OS_WIN)
     WindowsHandle handle(::CreateFileW(
-        reinterpret_cast<LPCWSTR>(entry.displayPath_.utf16()),
+        reinterpret_cast<LPCWSTR>(
+            extendedWindowsPath(entry.displayPath_).utf16()),
         FILE_READ_ATTRIBUTES | SYNCHRONIZE,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
         nullptr,
@@ -4394,7 +4423,8 @@ bool pinRegularFileAfterWriterRelease(
         "writer-pin-identity-captured", entry.displayPath());
 
     WindowsHandle bridge(::CreateFileW(
-        reinterpret_cast<LPCWSTR>(entry.displayPath().utf16()),
+        reinterpret_cast<LPCWSTR>(
+            extendedWindowsPath(entry.displayPath()).utf16()),
         GENERIC_READ | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         nullptr,
@@ -4528,7 +4558,8 @@ bool entryExists(
         entry.component_, stamp, exists, error);
 #elif defined(Q_OS_WIN)
     WindowsHandle named(::CreateFileW(
-        reinterpret_cast<LPCWSTR>(entry.displayPath_.utf16()),
+        reinterpret_cast<LPCWSTR>(
+            extendedWindowsPath(entry.displayPath_).utf16()),
         FILE_READ_ATTRIBUTES | SYNCHRONIZE,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         nullptr,
@@ -4599,7 +4630,8 @@ bool entryMatches(
     }
 
     WindowsHandle named(::CreateFileW(
-        reinterpret_cast<LPCWSTR>(entry.displayPath_.utf16()),
+        reinterpret_cast<LPCWSTR>(
+            extendedWindowsPath(entry.displayPath_).utf16()),
         FILE_READ_ATTRIBUTES | SYNCHRONIZE,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         nullptr,
@@ -4665,7 +4697,8 @@ bool entryIdentityMatches(
         return false;
     }
     WindowsHandle named(::CreateFileW(
-        reinterpret_cast<LPCWSTR>(entry.displayPath_.utf16()),
+        reinterpret_cast<LPCWSTR>(
+            extendedWindowsPath(entry.displayPath_).utf16()),
         FILE_READ_ATTRIBUTES | SYNCHRONIZE,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         nullptr,
@@ -5024,7 +5057,8 @@ bool hardenPrivateDirectory(
         const DWORD mutationAccess = FILE_READ_ATTRIBUTES | READ_CONTROL
             | WRITE_DAC | SYNCHRONIZE;
         WindowsHandle mutation(::CreateFileW(
-            reinterpret_cast<LPCWSTR>(nativePath.utf16()),
+            reinterpret_cast<LPCWSTR>(
+                extendedWindowsPath(nativePath).utf16()),
             mutationAccess,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             nullptr,
@@ -5466,7 +5500,7 @@ MutationResult Detail::PrivateDirectoryOperations::create(
             : parentSecurityError;
         return result;
     }
-    const QString nativeFinal = QDir::toNativeSeparators(finalPath);
+    const QString nativeFinal = extendedWindowsPath(finalPath);
     const DWORD finalAttributes = ::GetFileAttributesW(
         reinterpret_cast<LPCWSTR>(nativeFinal.utf16()));
     if (finalAttributes != INVALID_FILE_ATTRIBUTES) {
@@ -5498,8 +5532,7 @@ MutationResult Detail::PrivateDirectoryOperations::create(
         if (stagingComponent == component) continue;
         stagingPath = QDir(parent.state_->displayPath)
             .filePath(stagingComponent);
-        const QString nativeStaging =
-            QDir::toNativeSeparators(stagingPath);
+        const QString nativeStaging = extendedWindowsPath(stagingPath);
         if (::CreateDirectoryW(
                 reinterpret_cast<LPCWSTR>(nativeStaging.utf16()),
                 privateSecurity.attributes())) {
@@ -5524,8 +5557,7 @@ MutationResult Detail::PrivateDirectoryOperations::create(
     }
 
     QString openError;
-    const QString nativeStaging =
-        QDir::toNativeSeparators(stagingPath);
+    const QString nativeStaging = extendedWindowsPath(stagingPath);
     WindowsHandle observation(::CreateFileW(
         reinterpret_cast<LPCWSTR>(nativeStaging.utf16()),
         FILE_LIST_DIRECTORY | FILE_TRAVERSE
@@ -6040,7 +6072,7 @@ MutationResult Detail::PrivateDirectoryOperations::createFixed(
             "Cannot prepare private Windows directory security");
         return result;
     }
-    const QString nativeFinal = QDir::toNativeSeparators(finalPath);
+    const QString nativeFinal = extendedWindowsPath(finalPath);
     if (!::CreateDirectoryW(
             reinterpret_cast<LPCWSTR>(nativeFinal.utf16()),
             privateSecurity.attributes())) {
@@ -6588,12 +6620,9 @@ MutationResult replaceExisting(
         "replace-before-publish",
         staging.displayPath_,
         target.displayPath_);
-    const QString nativeTarget = QDir::toNativeSeparators(
-        target.displayPath_);
-    const QString nativeStaging = QDir::toNativeSeparators(
-        staging.displayPath_);
-    const QString nativeBackup = QDir::toNativeSeparators(
-        backup.displayPath_);
+    const QString nativeTarget = extendedWindowsPath(target.displayPath_);
+    const QString nativeStaging = extendedWindowsPath(staging.displayPath_);
+    const QString nativeBackup = extendedWindowsPath(backup.displayPath_);
     const BOOL replaced = ::ReplaceFileW(
         reinterpret_cast<LPCWSTR>(nativeTarget.utf16()),
         reinterpret_cast<LPCWSTR>(nativeStaging.utf16()),
@@ -6994,7 +7023,8 @@ MutationResult moveNoReplace(
             DWORD(storage.size()))) {
         const DWORD native = ::GetLastError();
         const DWORD targetAttributes = ::GetFileAttributesW(
-            reinterpret_cast<LPCWSTR>(name.utf16()));
+            reinterpret_cast<LPCWSTR>(
+                extendedWindowsPath(name).utf16()));
         result.effect = (native == ERROR_ALREADY_EXISTS
                          || native == ERROR_FILE_EXISTS
                          || (native == ERROR_ACCESS_DENIED
@@ -7343,7 +7373,8 @@ MutationResult remove(
         return result;
     }
     WindowsHandle named(::CreateFileW(
-        reinterpret_cast<LPCWSTR>(original.displayPath_.utf16()),
+        reinterpret_cast<LPCWSTR>(
+            extendedWindowsPath(original.displayPath_).utf16()),
         FILE_READ_ATTRIBUTES | SYNCHRONIZE,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         nullptr,
@@ -7669,11 +7700,11 @@ MutationResult removeEmptyDirectory(DirectoryAnchor &directory)
         return result;
     }
 
-    const QString path = QDir::toNativeSeparators(
-        directory.state_->displayPath);
+    const QString displayPath = directory.state_->displayPath;
+    const QString path = extendedWindowsPath(displayPath);
     const WindowsStamp expected = directory.state_->stamp;
     const auto restoreObservation = [
-        &directory, &path, &expected](QString failure) {
+        &directory, &path, &displayPath, &expected](QString failure) {
         MutationResult restoredResult;
         QString observationError;
         WindowsHandle observation = openWindowsDirectoryHandle(
@@ -7708,8 +7739,7 @@ MutationResult removeEmptyDirectory(DirectoryAnchor &directory)
         directory.state_->stamp = restored;
         directory.state_->identity = windowsIdentity(restored, 'd');
         restoredResult.error = std::move(failure);
-        restoredResult.verifiedRecoveryPath =
-            QDir::fromNativeSeparators(path);
+        restoredResult.verifiedRecoveryPath = displayPath;
         return restoredResult;
     };
 
@@ -7747,7 +7777,7 @@ MutationResult removeEmptyDirectory(DirectoryAnchor &directory)
 
     reportAnchoredFilesystemTransition(
         "remove-directory-finally-verified",
-        QDir::fromNativeSeparators(path));
+        displayPath);
 
     struct WindowsDispositionInfoEx
     {
@@ -7805,7 +7835,7 @@ MutationResult removeEmptyDirectory(DirectoryAnchor &directory)
     mutation.reset();
     reportAnchoredFilesystemTransition(
         "remove-directory-disposition-completed",
-        QDir::fromNativeSeparators(path));
+        displayPath);
     if (!parent.pathMatches(matchError)) {
         result.effect = MutationEffect::Partial;
         result.error = matchError.isEmpty()

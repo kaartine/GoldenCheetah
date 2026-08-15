@@ -752,6 +752,7 @@ private slots:
     void newAtomicWriterDoesNotClaimDeletedStaging();
 #endif
 #ifdef Q_OS_WIN
+    void newAtomicWriterHandlesLongWindowsPath();
     void newAtomicWriterBlocksWindowsPreBridgeReplacement();
     void newAtomicWriterRetainsWindowsStagingWhenHandoffIsBlocked();
     void newAtomicWriterRejectsWindowsHandoffRace_data();
@@ -1168,6 +1169,31 @@ void TestAnchoredFilesystem::newAtomicWriterHandsOffStagingPin()
     QVERIFY2(writer.commit(), qPrintable(writer.errorString()));
     QCOMPARE(readFixture(target), contents);
 }
+
+#ifdef Q_OS_WIN
+void TestAnchoredFilesystem::newAtomicWriterHandlesLongWindowsPath()
+{
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QString directory = root.path();
+    const QString component(72, QLatin1Char('a'));
+    for (int depth = 0; depth < 3; ++depth)
+        directory = QDir(directory).filePath(component);
+    QVERIFY(QDir().mkpath(directory));
+
+    const QString target = QDir(directory).filePath(
+        QStringLiteral("activity.json"));
+    QVERIFY(target.size() > MAX_PATH);
+    const QByteArray contents("complete activity");
+
+    NewAtomicFileWriter writer(target);
+    QVERIFY2(writer.open(), qPrintable(writer.errorString()));
+    QCOMPARE(writer.write(contents), qint64(contents.size()));
+    QVERIFY2(writer.flush(), qPrintable(writer.errorString()));
+    QVERIFY2(writer.commit(), qPrintable(writer.errorString()));
+    QCOMPARE(readFixture(target), contents);
+}
+#endif
 
 void TestAnchoredFilesystem::newAtomicWriterRejectsNameReplacement_data()
 {
