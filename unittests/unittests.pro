@@ -20,6 +20,7 @@ exists(unittests.pri) {
 			   Cloud/oauthCallbackPolicy \
 			   Cloud/oauthTokenReplyController \
 			   Cloud/stravaAccountRemoval \
+			   Cloud/stravaActivityDescription \
 			   Cloud/stravaAuthenticatedSession \
 			   Cloud/stravaClientCredentials \
 			   Cloud/stravaOAuthPolicy \

@@ -416,6 +416,7 @@ private:
 #define GC_STRAVA_REMOTE_GRANT_UNCERTAIN "<athlete-private>strava_remote_grant_uncertain"
 #define GC_STRAVA_AUTHORIZATION_REVISION "<athlete-private>strava_authorization_revision"
 #define GC_STRAVA_ACTIVITY_NAME         "<athlete-private>strava_metaname"
+#define GC_STRAVA_DESCRIPTION_MODE      "<athlete-private>strava_description_mode"
 
 //Cycling Analytics
 #define GC_CYCLINGANALYTICS_TOKEN       "<athlete-private>cyclinganalytics_token"

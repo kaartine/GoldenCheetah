@@ -25,11 +25,13 @@
 #include "NetworkReplyWait.h"
 #include "StravaAccountRemoval.h"
 #include "StravaApiReplyPolicy.h"
+#include "StravaActivityDescription.h"
 #include "StravaClientCredentials.h"
 #include "StravaCredentialPublisher.h"
 #include "StravaNetworkReply.h"
 #include "StravaOAuthPolicy.h"
 #include "StravaTokenRefresh.h"
+#include "Zones.h"
 #include "mvjson.h"
 #include <QByteArray>
 #include <QHttpMultiPart>
@@ -40,6 +42,7 @@
 #include <QPointer>
 #include <QThread>
 
+#include <cmath>
 #include <memory>
 #include <optional>
 
@@ -165,6 +168,9 @@ Strava::Strava(Context *context) : CloudService(context), context(context), root
     settings.insert(Local2, GC_STRAVA_LAST_REFRESH);
     settings.insert(Local3, GC_STRAVA_AUTHORIZATION_STATE);
     settings.insert(Local4, GC_STRAVA_REMOTE_GRANT_UNCERTAIN);
+    settings.insert(Combo1,
+        QString("%1::Activity Description::Notes only::Automatic summary::Notes + automatic summary")
+            .arg(GC_STRAVA_DESCRIPTION_MODE));
     settings.insert(Metadata1, QString("%1::Activity Name").arg(GC_STRAVA_ACTIVITY_NAME));
 }
 
@@ -1065,11 +1071,111 @@ Strava::writeFile(QByteArray &data, QString remotename, RideFile *ride)
     if (activityName != "")
         multiPart->append(activityNamePart);
 
+    StravaActivityDescription::Input descriptionInput;
+    descriptionInput.recordingInterval = ride->recIntSecs();
+    descriptionInput.hasPower = ride->isDataPresent(RideFile::watts);
+    descriptionInput.hasHeartRate = ride->isDataPresent(RideFile::hr);
+    descriptionInput.hasCadence = ride->isDataPresent(RideFile::cad);
+    descriptionInput.samples.reserve(ride->dataPoints().size());
+    for (const RideFilePoint *point : ride->dataPoints()) {
+        if (!point) continue;
+        descriptionInput.samples.append({
+            point->secs, point->watts, point->hr, point->cad
+        });
+    }
+    descriptionInput.intervals.reserve(ride->intervals().size());
+    for (const RideFileInterval *interval : ride->intervals()) {
+        if (!interval) continue;
+        descriptionInput.intervals.append({
+            interval->start, interval->stop, interval->name
+        });
+    }
+
+    auto positiveRideValue = [ride](
+        const QString &symbol, const QString &tag) {
+        double value = 0.0;
+        if (ride->metricOverrides.contains(symbol)) {
+            bool ok = false;
+            const double candidate = ride->metricOverrides.value(symbol)
+                .value(QStringLiteral("value")).toDouble(&ok);
+            if (ok && std::isfinite(candidate) && candidate > 0.0)
+                value = candidate;
+        }
+        if (value <= 0.0 && !tag.isEmpty()) {
+            bool ok = false;
+            const double candidate = ride->getTag(tag, QString()).toDouble(&ok);
+            if (ok && std::isfinite(candidate) && candidate > 0.0)
+                value = candidate;
+        }
+        return value;
+    };
+    descriptionInput.duration = positiveRideValue(
+        QStringLiteral("workout_time"), QStringLiteral("Duration"));
+    descriptionInput.work = positiveRideValue(
+        QStringLiteral("total_work"), QStringLiteral("Work"));
+    descriptionInput.averagePower = positiveRideValue(
+        QStringLiteral("average_power"), QStringLiteral("Average Power"));
+    descriptionInput.maximumPower = positiveRideValue(
+        QStringLiteral("max_power"), QStringLiteral("Max Power"));
+    descriptionInput.normalizedPower = positiveRideValue(
+        QStringLiteral("coggan_np"), QStringLiteral("NP"));
+    descriptionInput.intensityFactor = positiveRideValue(
+        QStringLiteral("coggan_if"), QStringLiteral("IF"));
+    descriptionInput.bikeStress = positiveRideValue(
+        QStringLiteral("coggan_tss"), QStringLiteral("BikeStress"));
+    descriptionInput.averageHeartRate = positiveRideValue(
+        QStringLiteral("average_hr"), QStringLiteral("Average Heart Rate"));
+    descriptionInput.maximumHeartRate = positiveRideValue(
+        QStringLiteral("max_heartrate"), QStringLiteral("Max Heartrate"));
+    descriptionInput.averageCadence = positiveRideValue(
+        QStringLiteral("average_cad"), QStringLiteral("Average Cadence"));
+
+    bool ftpOk = false;
+    descriptionInput.ftp = ride->getTag(
+        QStringLiteral("FTP"), QString()).toDouble(&ftpOk);
+    if (!ftpOk || descriptionInput.ftp <= 0.0) {
+        descriptionInput.ftp = ride->getTag(
+            QStringLiteral("CP"), QString()).toDouble(&ftpOk);
+    }
+    if (context && context->athlete) {
+        const Zones *zones = context->athlete->zones(ride->sport());
+        const int range = zones
+            ? zones->whichRange(ride->startTime().date()) : -1;
+        if (zones && range >= 0) {
+            if (!ftpOk || descriptionInput.ftp <= 0.0) {
+                const bool useCp = appsettings->cvalue(
+                    context->athlete->cyclist,
+                    zones->useCPforFTPSetting(), 0).toInt() == 0;
+                descriptionInput.ftp = useCp
+                    ? zones->getCP(range) : zones->getFTP(range);
+            }
+            const QList<int> highs = zones->getZoneHighs(range);
+            const QList<QString> names = zones->getZoneNames(range);
+            for (int index = 0;
+                 index < highs.size() && index < names.size(); ++index) {
+                descriptionInput.powerZones.append({
+                    names.at(index), static_cast<double>(highs.at(index))
+                });
+            }
+        }
+    }
+
+    const StravaActivityDescription::Mode descriptionMode =
+        StravaActivityDescription::modeFromSetting(getSetting(
+            GC_STRAVA_DESCRIPTION_MODE,
+            QStringLiteral("Notes only")).toString());
+    const QString automaticSummary = descriptionMode
+            == StravaActivityDescription::Mode::NotesOnly
+        ? QString()
+        : StravaActivityDescription::summary(descriptionInput);
+
     QHttpPart activityDescriptionPart;
     activityDescriptionPart.setHeader(QNetworkRequest::ContentDispositionHeader, QVariant("form-data; name=\"description\""));
-    QString activityDescription = "";
-    if (activityNameFieldname != "Notes")
-        activityDescription = ride->getTag("Notes", "");
+    const QString activityDescription = StravaActivityDescription::compose(
+        ride->getTag(QStringLiteral("Notes"), QString()),
+        activityNameFieldname == QStringLiteral("Notes"),
+        descriptionMode,
+        automaticSummary);
     activityDescriptionPart.setHeader(QNetworkRequest::ContentTypeHeader, QVariant("text/plain;charset=utf-8"));
     activityDescriptionPart.setBody(activityDescription.toUtf8());
     if (activityDescription != "")
