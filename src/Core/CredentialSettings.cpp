@@ -1575,6 +1575,11 @@ constexpr int enrollmentOperationWaitMilliseconds = 5000;
 constexpr int credentialReadProcessWaitMilliseconds = 5000;
 
 #ifdef GC_CREDENTIAL_TEST_HOOKS
+void reportCredentialOperationTestRejection(const char *stage)
+{
+    qWarning() << "Credential operation rejected at" << stage;
+}
+
 bool writeCredentialTestSignal(
     const char *environmentName)
 {
@@ -1677,8 +1682,13 @@ public:
 #else
             credentialStateDirectory();
 #endif
-        if (directory.isEmpty())
+        if (directory.isEmpty()) {
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+            reportCredentialOperationTestRejection(
+                "state-directory");
+#endif
             return;
+        }
         const QByteArray digest = QCryptographicHash::hash(
             operationId.toUtf8(),
             QCryptographicHash::Sha256).toHex();
@@ -1695,13 +1705,19 @@ public:
 #endif
                 if (!processLock_->tryLock(
                         processWaitMilliseconds)) {
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+                    reportCredentialOperationTestRejection(
+                        "process-lock-timeout");
+#endif
                     return;
                 }
             }
         } else if (!processLock_->tryLock(0)) {
 #ifdef GC_CREDENTIAL_TEST_HOOKS
-            signalCredentialOperationLockContentionForTest(
-                operationId);
+                signalCredentialOperationLockContentionForTest(
+                    operationId);
+            reportCredentialOperationTestRejection(
+                "process-lock");
 #endif
             return;
         }
@@ -1753,12 +1769,21 @@ public:
             backendMutationLockPath();
         if (!CredentialSettingsDetail::
                 recoverBackendMutationMarker(lockPath)) {
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+            reportCredentialOperationTestRejection(
+                "backend-marker-recovery");
+#endif
             return false;
         }
         QLockFile lock(lockPath);
         lock.setStaleLockTime(0);
-        if (!lock.tryLock(0))
+        if (!lock.tryLock(0)) {
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+            reportCredentialOperationTestRejection(
+                "backend-lock");
+#endif
             return false;
+        }
         lock.unlock();
         return true;
     }
@@ -5575,19 +5600,32 @@ QVariant CredentialSettings::value(
     const QString key = vaultKey(scopeId, credentialKey);
     CredentialOperationGuard operation(
         key, credentialReadProcessWaitMilliseconds);
-    if (!operation)
+    if (!operation) {
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+        reportCredentialOperationTestRejection("read-guard");
+#endif
         return defaultValue;
+    }
     if (!operation.backendMutationIdle()) {
         invalidateCache(key);
         return defaultValue;
     }
     const QString cleanupPath =
         operation.cleanupPath(settings, plaintextKey);
-    if (cleanupPath.isEmpty())
+    if (cleanupPath.isEmpty()) {
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+        reportCredentialOperationTestRejection(
+            "read-cleanup-identity");
+#endif
         return defaultValue;
+    }
     CredentialDeletionState deletion =
         readCredentialDeletionState(operation.deletionPath());
     if (!deletion.readable) {
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+        reportCredentialOperationTestRejection(
+            "read-deletion-state");
+#endif
         invalidateCache(key);
         return defaultValue;
     }
@@ -5648,8 +5686,13 @@ QVariant CredentialSettings::value(
     const ExactSetting plaintext =
         readCredentialPlaintextSetting(
             settings, plaintextKey);
-    if (!plaintext.readable)
+    if (!plaintext.readable) {
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+        reportCredentialOperationTestRejection(
+            "read-plaintext");
+#endif
         return defaultValue;
+    }
     const QString expectedPlaintext =
         plaintext.present
         ? plaintext.value.toString() : QString();
@@ -6243,19 +6286,32 @@ bool CredentialSettings::setValueChecked(
 
     const QString key = vaultKey(scopeId, credentialKey);
     CredentialOperationGuard operation(key);
-    if (!operation)
+    if (!operation) {
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+        reportCredentialOperationTestRejection("write-guard");
+#endif
         return false;
+    }
     if (!operation.backendMutationIdle()) {
         invalidateCache(key);
         return false;
     }
     const QString cleanupPath =
         operation.cleanupPath(settings, plaintextKey);
-    if (cleanupPath.isEmpty())
+    if (cleanupPath.isEmpty()) {
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+        reportCredentialOperationTestRejection(
+            "write-cleanup-identity");
+#endif
         return false;
+    }
     CredentialDeletionState deletion =
         readCredentialDeletionState(operation.deletionPath());
     if (!deletion.readable) {
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+        reportCredentialOperationTestRejection(
+            "write-deletion-state");
+#endif
         invalidateCache(key);
         return false;
     }
@@ -6267,6 +6323,10 @@ bool CredentialSettings::setValueChecked(
             readCredentialPlaintextSetting(
                 settings, plaintextKey);
         if (!plaintext.readable) {
+#ifdef GC_CREDENTIAL_TEST_HOOKS
+            reportCredentialOperationTestRejection(
+                "write-plaintext");
+#endif
             invalidateCache(key);
             return false;
         }
