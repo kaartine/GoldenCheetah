@@ -1543,7 +1543,8 @@ CloudServiceSyncDialog::CloudServiceSyncDialog(Context *context, CloudService *s
     rideListSync->headerItem()->setText(6, tr("Action"));
     rideListSync->headerItem()->setText(7, tr("Status"));
     rideListSync->headerItem()->setText(8, tr("Workout Id"));
-    rideListSync->setColumnCount(8);
+    rideListSync->setColumnCount(9);
+    rideListSync->setColumnHidden(8, true);
     rideListSync->setSelectionMode(QAbstractItemView::SingleSelection);
     rideListSync->setEditTriggers(QAbstractItemView::SelectedClicked); // allow edit
     rideListSync->setUniformRowHeights(true);
@@ -1702,13 +1703,62 @@ CloudServiceSyncDialog::refreshClicked()
 
     // clear current
     rideFiles.clear();
+    QHash<QString, RideItem *> localRidesByTime;
 
     Specification specification;
     specification.setDateRange(DateRange(from->date(), to->date()));
     foreach(RideItem *item, context->athlete->rideCache->rides()) {
-        if (specification.pass(item))
-            rideFiles << QFileInfo(item->fileName).baseName().mid(0,14);
+        if (specification.pass(item)) {
+            const QString key =
+                QFileInfo(item->fileName).baseName().mid(0, 14);
+            rideFiles << key;
+            if (!localRidesByTime.contains(key))
+                localRidesByTime.insert(key, item);
+        }
     }
+
+    QSet<QString> descriptionSyncKeys;
+    auto addDescriptionSyncItem = [this, distanceFactor, &descriptionSyncKeys](
+        RideItem *ride,
+        const QString &matchKey,
+        const QString &remoteId,
+        const QString &distanceUnits) {
+        if (!ride || descriptionSyncKeys.contains(matchKey)) return;
+        descriptionSyncKeys.insert(matchKey);
+
+        QTreeWidgetItem *sync = new QTreeWidgetItem(
+            rideListSync->invisibleRootItem());
+        QCheckBox *check = new QCheckBox(QString(), this);
+        connect(
+            check, SIGNAL(stateChanged(int)),
+            this, SLOT(refreshSyncCount()));
+        rideListSync->setItemWidget(sync, 0, check);
+
+        sync->setText(1, ride->fileName);
+        sync->setTextAlignment(1, Qt::AlignLeft | Qt::AlignVCenter);
+        sync->setText(2, ride->dateTime.toString(tr("MMM d, yyyy")));
+        sync->setTextAlignment(2, Qt::AlignLeft | Qt::AlignVCenter);
+        sync->setText(3, ride->dateTime.toString(QStringLiteral("hh:mm:ss")));
+        sync->setTextAlignment(3, Qt::AlignCenter);
+
+        const long secs = ride->getForSymbol("workout_time");
+        const QChar zero = QLatin1Char('0');
+        sync->setText(4, QStringLiteral("%1:%2:%3")
+            .arg(secs / 3600, 2, 10, zero)
+            .arg(secs % 3600 / 60, 2, 10, zero)
+            .arg(secs % 60, 2, 10, zero));
+        sync->setTextAlignment(4, Qt::AlignCenter);
+
+        const double distance = ride->getForSymbol("total_distance");
+        sync->setText(5, QStringLiteral("%1 %2")
+            .arg(distance * distanceFactor, 0, 'f', 1)
+            .arg(distanceUnits));
+        sync->setTextAlignment(5, Qt::AlignRight | Qt::AlignVCenter);
+        sync->setText(6, tr("Update description"));
+        sync->setTextAlignment(6, Qt::AlignLeft | Qt::AlignVCenter);
+        sync->setText(7, QString());
+        sync->setText(8, remoteId);
+    };
 
     //
     // Setup the Download list
@@ -1787,8 +1837,17 @@ CloudServiceSyncDialog::refreshClicked()
         add->setTextAlignment(4, Qt::AlignCenter);
         add->setText(6, workouts[i]->id); // download_id
 
-        if (rideFiles.contains(targetnosuffix.mid(0,14))) exists->setChecked(true);
-        else {
+        const QString matchKey = targetnosuffix.mid(0, 14);
+        if (rideFiles.contains(matchKey)) {
+            exists->setChecked(true);
+            if (store->supportsActivityDescriptionSync()) {
+                addDescriptionSyncItem(
+                    localRidesByTime.value(matchKey),
+                    matchKey,
+                    workouts[i]->id,
+                    distanceUnits);
+            }
+        } else {
             exists->setChecked(Qt::Unchecked);
 
             // doesn't exist -- add it to the sync list too then
@@ -2099,6 +2158,29 @@ CloudServiceSyncDialog::syncNext()
                 store->readFile(data, curr->text(1), curr->text(8)); // filename
                 QApplication::processEvents();
 
+            } else if (curr->text(6) == tr("Update description")) {
+                curr->setText(7, tr("Updating description"));
+                rideListSync->setCurrentItem(curr);
+
+                QStringList errors;
+                QFile file(
+                    context->athlete->home->activities().canonicalPath()
+                    + "/" + curr->text(1));
+                RideFile *ride = RideFileFactory::instance().openRideFile(
+                    context, file, errors);
+                if (ride) {
+                    const bool started = store->updateActivityDescription(
+                        curr->text(1), curr->text(8), ride);
+                    delete ride;
+                    QApplication::processEvents();
+                    if (started) return true;
+                    curr->setText(7, tr("Update failed"));
+                } else {
+                    curr->setText(7, tr("Parse failure"));
+                }
+                progressBar->setValue(++downloadcounter);
+                QApplication::processEvents();
+                continue;
             } else {
                 curr->setText(7, tr("Uploading"));
                 rideListSync->setCurrentItem(curr);

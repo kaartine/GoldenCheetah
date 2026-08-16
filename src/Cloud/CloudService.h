@@ -254,6 +254,16 @@ class CloudService : public QObject {
         }
         void notifyWriteComplete(QString name,QString message) { emit writeComplete(name,message); }
 
+        // Optional metadata update used by synchronization when an activity
+        // already exists both locally and remotely.
+        virtual bool supportsActivityDescriptionSync() const { return false; }
+        virtual bool updateActivityDescription(
+            QString remotename, QString remoteid, RideFile *ride)
+        {
+            Q_UNUSED(remotename); Q_UNUSED(remoteid); Q_UNUSED(ride);
+            return false;
+        }
+
         // read a file  and notify when done
         virtual bool readFile(QByteArray *data, QString remotename, QString remoteid) {
             Q_UNUSED(data); Q_UNUSED(remotename); Q_UNUSED(remoteid); return false;

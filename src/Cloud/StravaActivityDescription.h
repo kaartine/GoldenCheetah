@@ -10,6 +10,7 @@
 #ifndef GC_STRAVA_ACTIVITY_DESCRIPTION_H
 #define GC_STRAVA_ACTIVITY_DESCRIPTION_H
 
+#include <QByteArray>
 #include <QCoreApplication>
 #include <QString>
 #include <QVector>
@@ -64,8 +65,22 @@ public:
         bool hasCadence = false;
     };
 
+    struct RemoteUpdate {
+        bool valid = false;
+        bool changed = false;
+        QByteArray requestBody;
+        QString error;
+    };
+
     static Mode modeFromSetting(const QString &setting);
     static QString summary(const Input &input);
+    static QString managedSummaryBlock(const QString &automaticSummary);
+    static QString mergeManagedSummary(
+        const QString &remoteDescription,
+        const QString &automaticSummary);
+    static RemoteUpdate prepareRemoteUpdate(
+        const QByteArray &activityResponse,
+        const QString &automaticSummary);
     static QString compose(
         const QString &notes,
         bool notesUsedAsActivityName,

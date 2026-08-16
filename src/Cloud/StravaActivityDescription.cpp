@@ -10,6 +10,9 @@
 #include "StravaActivityDescription.h"
 
 #include <QChar>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
 #include <QStringList>
 
 #include <algorithm>
@@ -18,6 +21,43 @@
 namespace {
 
 constexpr int SparklineBins = 32;
+const QString ManagedSummaryStart =
+    QStringLiteral("--- GoldenCheetah summary ---");
+const QString ManagedSummaryEnd =
+    QStringLiteral("--- /GoldenCheetah summary ---");
+
+int standaloneMarkerPosition(
+    const QString &text,
+    const QString &marker,
+    int from = 0)
+{
+    int position = text.indexOf(marker, from);
+    while (position >= 0) {
+        const int after = position + marker.size();
+        const bool startsLine = position == 0
+            || text.at(position - 1) == QLatin1Char('\n');
+        const bool endsLine = after == text.size()
+            || text.at(after) == QLatin1Char('\n')
+            || (text.at(after) == QLatin1Char('\r')
+                && after + 1 < text.size()
+                && text.at(after + 1) == QLatin1Char('\n'));
+        if (startsLine && endsLine) return position;
+        position = text.indexOf(marker, position + marker.size());
+    }
+    return -1;
+}
+
+QString appendDescriptionSection(
+    const QString &description,
+    const QString &section)
+{
+    if (description.isEmpty()) return section;
+    if (description.endsWith(QStringLiteral("\n\n")))
+        return description + section;
+    if (description.endsWith(QLatin1Char('\n')))
+        return description + QLatin1Char('\n') + section;
+    return description + QStringLiteral("\n\n") + section;
+}
 
 bool positive(double value)
 {
@@ -401,6 +441,90 @@ StravaActivityDescription::summary(const Input &input)
     if (!zones.isEmpty()) lines.append(tr("Zones %1").arg(zones));
 
     return lines.join(QLatin1Char('\n'));
+}
+
+QString
+StravaActivityDescription::managedSummaryBlock(
+    const QString &automaticSummary)
+{
+    const QString summary = automaticSummary.trimmed();
+    if (summary.isEmpty()) return {};
+    return ManagedSummaryStart + QLatin1Char('\n') + summary
+        + QLatin1Char('\n') + ManagedSummaryEnd;
+}
+
+QString
+StravaActivityDescription::mergeManagedSummary(
+    const QString &remoteDescription,
+    const QString &automaticSummary)
+{
+    const QString summary = automaticSummary.trimmed();
+    const QString block = managedSummaryBlock(summary);
+    const int start = standaloneMarkerPosition(
+        remoteDescription, ManagedSummaryStart);
+    if (start >= 0) {
+        const int end = standaloneMarkerPosition(
+            remoteDescription,
+            ManagedSummaryEnd,
+            start + ManagedSummaryStart.size());
+        if (end >= 0) {
+            return remoteDescription.left(start)
+                + block
+                + remoteDescription.mid(
+                    end + ManagedSummaryEnd.size());
+        }
+    }
+
+    if (block.isEmpty()) return remoteDescription;
+
+    if (remoteDescription == summary) return block;
+    const QString legacySuffix = QStringLiteral("\n\n") + summary;
+    if (remoteDescription.endsWith(legacySuffix)) {
+        return remoteDescription.left(
+                   remoteDescription.size() - summary.size())
+            + block;
+    }
+    return appendDescriptionSection(remoteDescription, block);
+}
+
+StravaActivityDescription::RemoteUpdate
+StravaActivityDescription::prepareRemoteUpdate(
+    const QByteArray &activityResponse,
+    const QString &automaticSummary)
+{
+    RemoteUpdate result;
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(
+        activityResponse, &parseError);
+    if (parseError.error != QJsonParseError::NoError
+        || !document.isObject()) {
+        result.error = tr("Strava returned an invalid activity response.");
+        return result;
+    }
+
+    const QJsonValue descriptionValue = document.object().value(
+        QStringLiteral("description"));
+    if (!descriptionValue.isUndefined()
+        && !descriptionValue.isNull()
+        && !descriptionValue.isString()) {
+        result.error = tr("Strava returned an invalid activity description.");
+        return result;
+    }
+
+    result.valid = true;
+    const QString summary = automaticSummary.trimmed();
+    if (summary.isEmpty()) return result;
+
+    const QString existing = descriptionValue.isString()
+        ? descriptionValue.toString() : QString();
+    const QString merged = mergeManagedSummary(existing, summary);
+    if (merged == existing) return result;
+
+    result.changed = true;
+    result.requestBody = QJsonDocument(QJsonObject{
+        {QStringLiteral("description"), merged}
+    }).toJson(QJsonDocument::Compact);
+    return result;
 }
 
 QString

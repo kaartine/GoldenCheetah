@@ -22,6 +22,8 @@
 #include "CloudService.h"
 #include "StravaAuthenticatedSession.h"
 
+#include <QHash>
+
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -72,6 +74,11 @@ class Strava : public CloudService {
 
         // write a file
         bool writeFile(QByteArray &data, QString remotename, RideFile *ride);
+        bool supportsActivityDescriptionSync() const override;
+        bool updateActivityDescription(
+            QString remotename,
+            QString remoteid,
+            RideFile *ride) override;
 
         // read a file
         bool readFile(QByteArray *data, QString remotename, QString remoteid);
@@ -88,6 +95,8 @@ class Strava : public CloudService {
 
         // sending data
         void writeFileCompleted();
+        void descriptionReadCompleted();
+        void descriptionWriteCompleted();
 
     private:
         Context *context;
@@ -98,6 +107,8 @@ class Strava : public CloudService {
         int garminHighWaterMark = 30;
 
         QMap<QNetworkReply*, QByteArray*> buffers;
+        QHash<QNetworkReply*, QString> descriptionSummaries;
+        QHash<QNetworkReply*, QString> descriptionRemoteIds;
         QHash<
             QNetworkReply *,
             std::shared_ptr<StravaAuthorizedRequest>>
@@ -125,6 +136,11 @@ class Strava : public CloudService {
 
         bool addSamples(
             RideFile *ret, const QString &remoteid, QString &error);
+        QString automaticActivitySummary(RideFile *ride) const;
+        bool dispatchDescriptionUpdate(
+            const QString &remotename,
+            const QString &remoteid,
+            const QByteArray &requestBody);
         void fixLapSwim(RideFile* ret, QJsonArray laps);
         void fixSmartRecording(RideFile* ret);
 

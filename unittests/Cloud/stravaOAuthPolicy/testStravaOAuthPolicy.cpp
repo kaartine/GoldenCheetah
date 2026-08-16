@@ -1005,7 +1005,29 @@ serviceOpenUsesCoordinatedDurableRefresh()
     QCOMPARE(
         source.count(
             "QNetworkRequest::SameOriginRedirectPolicy"),
-        6);
+        8);
+
+    const QByteArray descriptionRead = sourceSection(
+        source,
+        "Strava::updateActivityDescription(",
+        "Strava::dispatchDescriptionUpdate(");
+    QVERIFY(!descriptionRead.isEmpty());
+    QVERIFY(descriptionRead.contains(
+        "QNetworkRequest::SameOriginRedirectPolicy"));
+    QVERIFY(descriptionRead.contains(
+        "StravaTokenRefreshCoordinator::beginAuthorizedRequest("));
+    QVERIFY(descriptionRead.contains(".authorizeDispatch()"));
+
+    const QByteArray descriptionWrite = sourceSection(
+        source,
+        "Strava::dispatchDescriptionUpdate(",
+        "Strava::descriptionReadCompleted()");
+    QVERIFY(!descriptionWrite.isEmpty());
+    QVERIFY(descriptionWrite.contains(
+        "QNetworkRequest::SameOriginRedirectPolicy"));
+    QVERIFY(descriptionWrite.contains(
+        "StravaTokenRefreshCoordinator::beginAuthorizedRequest("));
+    QVERIFY(descriptionWrite.contains(".authorizeDispatch()"));
 
     const QByteArray open = sourceSection(
         source,
@@ -1273,13 +1295,13 @@ serviceDisconnectRevokesBeforeCredentialRemoval()
     QCOMPARE(
         service.count(
             "StravaTokenRefreshCoordinator::beginAuthorizedRequest("),
-        5);
+        7);
     QCOMPARE(
         service.count(".authorizeDispatch()"),
-        5);
+        7);
     QCOMPARE(
         service.count(".setAbortOperation("),
-        5);
+        7);
     QVERIFY(service.contains(
         "reconcileSharedAuthorizationStatus()"));
     QVERIFY(service.contains(

@@ -1,5 +1,7 @@
 #include "Cloud/StravaActivityDescription.h"
 
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTest>
 
 #include <algorithm>
@@ -13,6 +15,14 @@ private slots:
     void parsesModesWithoutChangingLegacyDefault();
     void composesNotesAndSummary();
     void omitsNotesUsedAsActivityName();
+    void wrapsAutomaticSummaryInManagedBlock();
+    void appendsManagedSummaryWithoutLosingRemoteDescription();
+    void replacesManagedSummaryIdempotently();
+    void preservesTextAfterManagedSummary();
+    void preservesRemoteDescriptionWhitespace();
+    void migratesUnmarkedAutomaticSummary();
+    void preparesDescriptionUpdateFromStravaActivity();
+    void rejectsInvalidStravaActivityResponses();
     void summarizesRecordedMetrics();
     void omitsUnavailableChannels();
     void rendersPowerZonesAndBoundedSparkline();
@@ -67,6 +77,158 @@ void TestStravaActivityDescription::omitsNotesUsedAsActivityName()
                 QStringLiteral("Workout title"), true,
                 Description::Mode::NotesOnly,
                 QStringLiteral("Duration 45:00")).isEmpty());
+}
+
+void TestStravaActivityDescription::wrapsAutomaticSummaryInManagedBlock()
+{
+    using Description = StravaActivityDescription;
+    QCOMPARE(Description::managedSummaryBlock(QStringLiteral("Duration 45:00")),
+             QStringLiteral("--- GoldenCheetah summary ---\n"
+                            "Duration 45:00\n"
+                            "--- /GoldenCheetah summary ---"));
+    QVERIFY(Description::managedSummaryBlock(QStringLiteral("  \n")).isEmpty());
+}
+
+void TestStravaActivityDescription::appendsManagedSummaryWithoutLosingRemoteDescription()
+{
+    using Description = StravaActivityDescription;
+    QCOMPARE(Description::mergeManagedSummary(
+                 QStringLiteral("Windy ride. Felt good."),
+                 QStringLiteral("Duration 45:00")),
+             QStringLiteral("Windy ride. Felt good.\n\n"
+                            "--- GoldenCheetah summary ---\n"
+                            "Duration 45:00\n"
+                            "--- /GoldenCheetah summary ---"));
+}
+
+void TestStravaActivityDescription::replacesManagedSummaryIdempotently()
+{
+    using Description = StravaActivityDescription;
+    const QString first = Description::mergeManagedSummary(
+        QStringLiteral("Original description"),
+        QStringLiteral("Duration 45:00"));
+    QCOMPARE(Description::mergeManagedSummary(
+                 first, QStringLiteral("Duration 45:00")), first);
+
+    const QString updated = Description::mergeManagedSummary(
+        first, QStringLiteral("Duration 46:00"));
+    QVERIFY(updated.startsWith(QStringLiteral("Original description\n\n")));
+    QVERIFY(updated.contains(QStringLiteral("Duration 46:00")));
+    QVERIFY(!updated.contains(QStringLiteral("Duration 45:00")));
+    QCOMPARE(updated.count(QStringLiteral("--- GoldenCheetah summary ---")), 1);
+}
+
+void TestStravaActivityDescription::preservesTextAfterManagedSummary()
+{
+    using Description = StravaActivityDescription;
+    const QString existing = QStringLiteral(
+        "Before\n\n"
+        "--- GoldenCheetah summary ---\n"
+        "Duration 40:00\n"
+        "--- /GoldenCheetah summary ---\n\n"
+        "Added later in Strava");
+    QCOMPARE(Description::mergeManagedSummary(
+                 existing, QStringLiteral("Duration 45:00")),
+             QStringLiteral(
+                 "Before\n\n"
+                 "--- GoldenCheetah summary ---\n"
+                 "Duration 45:00\n"
+                 "--- /GoldenCheetah summary ---\n\n"
+                 "Added later in Strava"));
+}
+
+void TestStravaActivityDescription::preservesRemoteDescriptionWhitespace()
+{
+    using Description = StravaActivityDescription;
+    const QString existing = QStringLiteral(
+        "  Before  \n\n"
+        "--- GoldenCheetah summary ---\n"
+        "Duration 40:00\n"
+        "--- /GoldenCheetah summary ---\n\n"
+        "  Added later in Strava  \n");
+    QCOMPARE(Description::mergeManagedSummary(
+                 existing, QStringLiteral("Duration 45:00")),
+             QStringLiteral(
+                 "  Before  \n\n"
+                 "--- GoldenCheetah summary ---\n"
+                 "Duration 45:00\n"
+                 "--- /GoldenCheetah summary ---\n\n"
+                 "  Added later in Strava  \n"));
+
+    QCOMPARE(Description::mergeManagedSummary(
+                 QStringLiteral("  User text  \n"),
+                 QStringLiteral("Duration 45:00")),
+             QStringLiteral(
+                 "  User text  \n\n"
+                 "--- GoldenCheetah summary ---\n"
+                 "Duration 45:00\n"
+                 "--- /GoldenCheetah summary ---"));
+}
+
+void TestStravaActivityDescription::migratesUnmarkedAutomaticSummary()
+{
+    using Description = StravaActivityDescription;
+    QCOMPARE(Description::mergeManagedSummary(
+                 QStringLiteral("User text\n\nDuration 45:00"),
+                 QStringLiteral("Duration 45:00")),
+             QStringLiteral(
+                 "User text\n\n"
+                 "--- GoldenCheetah summary ---\n"
+                 "Duration 45:00\n"
+                 "--- /GoldenCheetah summary ---"));
+}
+
+void TestStravaActivityDescription::preparesDescriptionUpdateFromStravaActivity()
+{
+    using Description = StravaActivityDescription;
+    const QByteArray response = QJsonDocument(QJsonObject{
+        {QStringLiteral("id"), 123.0},
+        {QStringLiteral("description"), QStringLiteral("Existing text")}
+    }).toJson(QJsonDocument::Compact);
+
+    const Description::RemoteUpdate update =
+        Description::prepareRemoteUpdate(
+            response, QStringLiteral("Duration 45:00"));
+    QVERIFY2(update.valid, qPrintable(update.error));
+    QVERIFY(update.changed);
+    const QJsonDocument request = QJsonDocument::fromJson(update.requestBody);
+    QCOMPARE(request.object().size(), 1);
+    QCOMPARE(request.object().value(QStringLiteral("description")).toString(),
+             Description::mergeManagedSummary(
+                 QStringLiteral("Existing text"),
+                 QStringLiteral("Duration 45:00")));
+
+    const Description::RemoteUpdate unchanged =
+        Description::prepareRemoteUpdate(
+            QJsonDocument(QJsonObject{
+                {QStringLiteral("description"),
+                 request.object().value(QStringLiteral("description"))}
+            }).toJson(QJsonDocument::Compact),
+            QStringLiteral("Duration 45:00"));
+    QVERIFY2(unchanged.valid, qPrintable(unchanged.error));
+    QVERIFY(!unchanged.changed);
+    QVERIFY(unchanged.requestBody.isEmpty());
+}
+
+void TestStravaActivityDescription::rejectsInvalidStravaActivityResponses()
+{
+    using Description = StravaActivityDescription;
+    QVERIFY(!Description::prepareRemoteUpdate(
+                 QByteArrayLiteral("not json"),
+                 QStringLiteral("Duration 45:00")).valid);
+    QVERIFY(!Description::prepareRemoteUpdate(
+                 QByteArrayLiteral("[]"),
+                 QStringLiteral("Duration 45:00")).valid);
+    QVERIFY(!Description::prepareRemoteUpdate(
+                 QByteArrayLiteral("{\"description\":42}"),
+                 QStringLiteral("Duration 45:00")).valid);
+
+    const Description::RemoteUpdate nullDescription =
+        Description::prepareRemoteUpdate(
+            QByteArrayLiteral("{\"description\":null}"),
+            QStringLiteral("Duration 45:00"));
+    QVERIFY2(nullDescription.valid, qPrintable(nullDescription.error));
+    QVERIFY(nullDescription.changed);
 }
 
 void TestStravaActivityDescription::summarizesRecordedMetrics()

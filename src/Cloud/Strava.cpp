@@ -993,83 +993,18 @@ Strava::readFile(QByteArray *data, QString remotename, QString remoteid)
 }
 
 bool
-Strava::writeFile(QByteArray &data, QString remotename, RideFile *ride)
+Strava::supportsActivityDescriptionSync() const
 {
-    // Manual activity upload or File upload according to available data
-    bool manual = ride->dataPoints().isEmpty();
+    return StravaActivityDescription::modeFromSetting(getSetting(
+        GC_STRAVA_DESCRIPTION_MODE,
+        QStringLiteral("Notes only")).toString())
+        != StravaActivityDescription::Mode::NotesOnly;
+}
 
-    printd("Strava::writeFile(%s) manual(%s)\n", remotename.toStdString().c_str(), manual ? "true" : "false");
-
-    if (!reconcileSharedAuthorizationStatus()) {
-        return false;
-    }
-    StravaAuthorizedRequest requestPermit =
-        StravaTokenRefreshCoordinator::beginAuthorizedRequest(
-            sharedAccountKey());
-    if (!requestPermit.isValid() || !nam) {
-        return false;
-    }
-
-    // The V3 API doc said "https://api.strava.com" but it is not working yet
-    QUrl url = manual ?  QUrl( "https://www.strava.com/api/v3/activities" )
-                      :  QUrl( "https://www.strava.com/api/v3/uploads" );
-    QNetworkRequest request = QNetworkRequest(url);
-    request.setAttribute(
-        QNetworkRequest::RedirectPolicyAttribute,
-        QNetworkRequest::SameOriginRedirectPolicy);
-
-    //QString boundary = QString::number(QRandomGenerator::global()->generate() * (90000000000) / (RAND_MAX + 1) + 10000000000, 16);
-    QString boundary = QVariant(QRandomGenerator::global()->generate()).toString() +
-        QVariant(QRandomGenerator::global()->generate()).toString() + QVariant(QRandomGenerator::global()->generate()).toString();
-
-    // MULTIPART *****************
-
-    QHttpMultiPart *multiPart = new QHttpMultiPart(QHttpMultiPart::FormDataType);
-    multiPart->setBoundary(boundary.toLatin1());
-
-    QHttpPart accessTokenPart;
-    accessTokenPart.setHeader(QNetworkRequest::ContentDispositionHeader,
-                              QVariant("form-data; name=\"access_token\""));
-    accessTokenPart.setBody(
-        requestPermit.accessToken().toLatin1());
-    multiPart->append(accessTokenPart);
-
-    QHttpPart activityTypePart;
-    activityTypePart.setHeader(QNetworkRequest::ContentDispositionHeader,
-                               manual ? QVariant("form-data; name=\"type\"")
-                                      : QVariant("form-data; name=\"activity_type\""));
-
-    // Map some known sports and default to ride for anything else
-    if (ride->isRun())
-      activityTypePart.setBody("Run");
-    else if (ride->isSwim())
-      activityTypePart.setBody("Swim");
-    else if (ride->sport() == "Row")
-      activityTypePart.setBody("Rowing");
-    else if (ride->sport() == "Ski")
-      activityTypePart.setBody("NordicSki");
-    else if (ride->sport() == "Gym")
-      activityTypePart.setBody("WeightTraining");
-    else if (ride->sport() == "Walk")
-      activityTypePart.setBody("Walk");
-    else if (ride->xdata("TRAIN") && ride->isDataPresent(RideFile::lat))
-      activityTypePart.setBody("VirtualRide");
-    else
-      activityTypePart.setBody("Ride");
-    multiPart->append(activityTypePart);
-
-    QHttpPart activityNamePart;
-    activityNamePart.setHeader(QNetworkRequest::ContentDispositionHeader, QVariant("form-data; name=\"name\""));
-
-    // use metadata config if the user selected it
-    QString activityNameFieldname = getSetting(GC_STRAVA_ACTIVITY_NAME, QVariant("")).toString();
-    QString activityName = "";
-    if (activityNameFieldname != "")
-        activityName = ride->getTag(activityNameFieldname, "");
-    activityNamePart.setHeader(QNetworkRequest::ContentTypeHeader, QVariant("text/plain;charset=utf-8"));
-    activityNamePart.setBody(activityName.toUtf8());
-    if (activityName != "")
-        multiPart->append(activityNamePart);
+QString
+Strava::automaticActivitySummary(RideFile *ride) const
+{
+    if (!ride) return {};
 
     StravaActivityDescription::Input descriptionInput;
     descriptionInput.recordingInterval = ride->recIntSecs();
@@ -1160,6 +1095,315 @@ Strava::writeFile(QByteArray &data, QString remotename, RideFile *ride)
         }
     }
 
+    return StravaActivityDescription::summary(descriptionInput);
+}
+
+bool
+Strava::updateActivityDescription(
+    QString remotename,
+    QString remoteid,
+    RideFile *ride)
+{
+    bool remoteIdOk = false;
+    const qulonglong numericRemoteId =
+        remoteid.toULongLong(&remoteIdOk);
+    if (!ride || !remoteIdOk || numericRemoteId == 0
+        || !supportsActivityDescriptionSync()
+        || !reconcileSharedAuthorizationStatus()) {
+        return false;
+    }
+    remoteid = QString::number(numericRemoteId);
+
+    const QString automaticSummary = automaticActivitySummary(ride);
+    if (automaticSummary.trimmed().isEmpty()) return false;
+
+    StravaAuthorizedRequest requestPermit =
+        StravaTokenRefreshCoordinator::beginAuthorizedRequest(
+            sharedAccountKey());
+    if (!requestPermit.isValid() || !nam) return false;
+
+    const QUrl url(QStringLiteral(
+        "https://www.strava.com/api/v3/activities/%1").arg(remoteid));
+    QNetworkRequest request(url);
+    request.setRawHeader(
+        "Authorization",
+        QStringLiteral("Bearer %1")
+            .arg(requestPermit.accessToken()).toLatin1());
+    request.setRawHeader("Accept", "application/json");
+    request.setAttribute(
+        QNetworkRequest::RedirectPolicyAttribute,
+        QNetworkRequest::SameOriginRedirectPolicy);
+
+    if (!requestPermit.authorizeDispatch()) return false;
+    QNetworkReply *networkReply = nam->get(request);
+    if (!networkReply) return false;
+    requestPermit.setAbortOperation(abortOperationFor(networkReply));
+
+    QByteArray *response = new QByteArray;
+    buffers.insert(networkReply, response);
+    descriptionSummaries.insert(networkReply, automaticSummary);
+    descriptionRemoteIds.insert(networkReply, remoteid);
+    requestPermits.insert(
+        networkReply,
+        std::make_shared<StravaAuthorizedRequest>(
+            std::move(requestPermit)));
+    mapReply(networkReply, remotename);
+    connect(
+        networkReply, &QIODevice::readyRead,
+        this, &Strava::readyRead);
+    connect(
+        networkReply, &QNetworkReply::finished,
+        this, &Strava::descriptionReadCompleted);
+    return true;
+}
+
+bool
+Strava::dispatchDescriptionUpdate(
+    const QString &remotename,
+    const QString &remoteid,
+    const QByteArray &requestBody)
+{
+    if (requestBody.isEmpty()
+        || !reconcileSharedAuthorizationStatus()) {
+        return false;
+    }
+    StravaAuthorizedRequest requestPermit =
+        StravaTokenRefreshCoordinator::beginAuthorizedRequest(
+            sharedAccountKey());
+    if (!requestPermit.isValid() || !nam) return false;
+
+    const QUrl url(QStringLiteral(
+        "https://www.strava.com/api/v3/activities/%1").arg(remoteid));
+    QNetworkRequest request(url);
+    request.setRawHeader(
+        "Authorization",
+        QStringLiteral("Bearer %1")
+            .arg(requestPermit.accessToken()).toLatin1());
+    request.setRawHeader("Accept", "application/json");
+    request.setHeader(
+        QNetworkRequest::ContentTypeHeader,
+        QStringLiteral("application/json"));
+    request.setAttribute(
+        QNetworkRequest::RedirectPolicyAttribute,
+        QNetworkRequest::SameOriginRedirectPolicy);
+
+    if (!requestPermit.authorizeDispatch()) return false;
+    QNetworkReply *networkReply = nam->put(request, requestBody);
+    if (!networkReply) return false;
+    requestPermit.setAbortOperation(abortOperationFor(networkReply));
+
+    buffers.insert(networkReply, new QByteArray);
+    requestPermits.insert(
+        networkReply,
+        std::make_shared<StravaAuthorizedRequest>(
+            std::move(requestPermit)));
+    mapReply(networkReply, remotename);
+    connect(
+        networkReply, &QIODevice::readyRead,
+        this, &Strava::readyRead);
+    connect(
+        networkReply, &QNetworkReply::finished,
+        this, &Strava::descriptionWriteCompleted);
+    return true;
+}
+
+void
+Strava::descriptionReadCompleted()
+{
+    QNetworkReply *networkReply =
+        qobject_cast<QNetworkReply *>(QObject::sender());
+    if (!networkReply) return;
+
+    const std::shared_ptr<StravaAuthorizedRequest> requestPermit =
+        requestPermits.take(networkReply);
+    Q_UNUSED(requestPermit)
+    std::unique_ptr<QByteArray> response(buffers.take(networkReply));
+    const QString remotename = replymap_.take(networkReply);
+    const QString automaticSummary =
+        descriptionSummaries.take(networkReply);
+    const QString remoteid = descriptionRemoteIds.take(networkReply);
+
+    bool oversized =
+        networkReply->property(OversizedReplyProperty).toBool();
+    if (response && !oversized
+        && !appendAvailableReplyData(networkReply, response.get())) {
+        oversized =
+            networkReply->property(OversizedReplyProperty).toBool();
+    }
+    const int httpStatus = networkReply->attribute(
+        QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QNetworkReply::NetworkError networkError = networkReply->error();
+    const QString networkErrorString = networkReply->errorString();
+    const QString contentType = networkReply->header(
+        QNetworkRequest::ContentTypeHeader).toString();
+    networkReply->deleteLater();
+
+    if (!response || oversized) {
+        notifyWriteComplete(
+            remotename,
+            tr("Strava activity response exceeds the download size limit."));
+        return;
+    }
+    const StravaApiReplyPolicy::Result validation =
+        StravaApiReplyPolicy::validate(
+            StravaApiReplyPolicy::PayloadKind::Activity,
+            httpStatus,
+            networkError,
+            networkErrorString,
+            *response,
+            stravaSensitiveValues(this),
+            contentType);
+    if (!validation.isValid()) {
+        notifyWriteComplete(remotename, validation.error);
+        return;
+    }
+
+    const StravaActivityDescription::RemoteUpdate update =
+        StravaActivityDescription::prepareRemoteUpdate(
+            *response, automaticSummary);
+    if (!update.valid) {
+        notifyWriteComplete(remotename, update.error);
+        return;
+    }
+    if (!update.changed) {
+        notifyWriteComplete(remotename, tr("Completed."));
+        return;
+    }
+    if (!dispatchDescriptionUpdate(
+            remotename, remoteid, update.requestBody)) {
+        notifyWriteComplete(
+            remotename,
+            tr("The Strava description update could not be started."));
+    }
+}
+
+void
+Strava::descriptionWriteCompleted()
+{
+    QNetworkReply *networkReply =
+        qobject_cast<QNetworkReply *>(QObject::sender());
+    if (!networkReply) return;
+
+    const std::shared_ptr<StravaAuthorizedRequest> requestPermit =
+        requestPermits.take(networkReply);
+    Q_UNUSED(requestPermit)
+    std::unique_ptr<QByteArray> response(buffers.take(networkReply));
+    const QString remotename = replymap_.take(networkReply);
+
+    bool oversized =
+        networkReply->property(OversizedReplyProperty).toBool();
+    if (response && !oversized
+        && !appendAvailableReplyData(networkReply, response.get())) {
+        oversized =
+            networkReply->property(OversizedReplyProperty).toBool();
+    }
+    const int httpStatus = networkReply->attribute(
+        QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QNetworkReply::NetworkError networkError = networkReply->error();
+    const QString networkErrorString = networkReply->errorString();
+    const QString contentType = networkReply->header(
+        QNetworkRequest::ContentTypeHeader).toString();
+    networkReply->deleteLater();
+
+    if (!response || oversized) {
+        notifyWriteComplete(
+            remotename,
+            tr("Strava activity response exceeds the download size limit."));
+        return;
+    }
+    const StravaApiReplyPolicy::Result validation =
+        StravaApiReplyPolicy::validate(
+            StravaApiReplyPolicy::PayloadKind::Activity,
+            httpStatus,
+            networkError,
+            networkErrorString,
+            *response,
+            stravaSensitiveValues(this),
+            contentType);
+    notifyWriteComplete(
+        remotename,
+        validation.isValid() ? tr("Completed.") : validation.error);
+}
+
+bool
+Strava::writeFile(QByteArray &data, QString remotename, RideFile *ride)
+{
+    // Manual activity upload or File upload according to available data
+    bool manual = ride->dataPoints().isEmpty();
+
+    printd("Strava::writeFile(%s) manual(%s)\n", remotename.toStdString().c_str(), manual ? "true" : "false");
+
+    if (!reconcileSharedAuthorizationStatus()) {
+        return false;
+    }
+    StravaAuthorizedRequest requestPermit =
+        StravaTokenRefreshCoordinator::beginAuthorizedRequest(
+            sharedAccountKey());
+    if (!requestPermit.isValid() || !nam) {
+        return false;
+    }
+
+    // The V3 API doc said "https://api.strava.com" but it is not working yet
+    QUrl url = manual ?  QUrl( "https://www.strava.com/api/v3/activities" )
+                      :  QUrl( "https://www.strava.com/api/v3/uploads" );
+    QNetworkRequest request = QNetworkRequest(url);
+    request.setAttribute(
+        QNetworkRequest::RedirectPolicyAttribute,
+        QNetworkRequest::SameOriginRedirectPolicy);
+
+    //QString boundary = QString::number(QRandomGenerator::global()->generate() * (90000000000) / (RAND_MAX + 1) + 10000000000, 16);
+    QString boundary = QVariant(QRandomGenerator::global()->generate()).toString() +
+        QVariant(QRandomGenerator::global()->generate()).toString() + QVariant(QRandomGenerator::global()->generate()).toString();
+
+    // MULTIPART *****************
+
+    QHttpMultiPart *multiPart = new QHttpMultiPart(QHttpMultiPart::FormDataType);
+    multiPart->setBoundary(boundary.toLatin1());
+
+    QHttpPart accessTokenPart;
+    accessTokenPart.setHeader(QNetworkRequest::ContentDispositionHeader,
+                              QVariant("form-data; name=\"access_token\""));
+    accessTokenPart.setBody(
+        requestPermit.accessToken().toLatin1());
+    multiPart->append(accessTokenPart);
+
+    QHttpPart activityTypePart;
+    activityTypePart.setHeader(QNetworkRequest::ContentDispositionHeader,
+                               manual ? QVariant("form-data; name=\"type\"")
+                                      : QVariant("form-data; name=\"activity_type\""));
+
+    // Map some known sports and default to ride for anything else
+    if (ride->isRun())
+      activityTypePart.setBody("Run");
+    else if (ride->isSwim())
+      activityTypePart.setBody("Swim");
+    else if (ride->sport() == "Row")
+      activityTypePart.setBody("Rowing");
+    else if (ride->sport() == "Ski")
+      activityTypePart.setBody("NordicSki");
+    else if (ride->sport() == "Gym")
+      activityTypePart.setBody("WeightTraining");
+    else if (ride->sport() == "Walk")
+      activityTypePart.setBody("Walk");
+    else if (ride->xdata("TRAIN") && ride->isDataPresent(RideFile::lat))
+      activityTypePart.setBody("VirtualRide");
+    else
+      activityTypePart.setBody("Ride");
+    multiPart->append(activityTypePart);
+
+    QHttpPart activityNamePart;
+    activityNamePart.setHeader(QNetworkRequest::ContentDispositionHeader, QVariant("form-data; name=\"name\""));
+
+    // use metadata config if the user selected it
+    QString activityNameFieldname = getSetting(GC_STRAVA_ACTIVITY_NAME, QVariant("")).toString();
+    QString activityName = "";
+    if (activityNameFieldname != "")
+        activityName = ride->getTag(activityNameFieldname, "");
+    activityNamePart.setHeader(QNetworkRequest::ContentTypeHeader, QVariant("text/plain;charset=utf-8"));
+    activityNamePart.setBody(activityName.toUtf8());
+    if (activityName != "")
+        multiPart->append(activityNamePart);
+
     const StravaActivityDescription::Mode descriptionMode =
         StravaActivityDescription::modeFromSetting(getSetting(
             GC_STRAVA_DESCRIPTION_MODE,
@@ -1167,7 +1411,7 @@ Strava::writeFile(QByteArray &data, QString remotename, RideFile *ride)
     const QString automaticSummary = descriptionMode
             == StravaActivityDescription::Mode::NotesOnly
         ? QString()
-        : StravaActivityDescription::summary(descriptionInput);
+        : automaticActivitySummary(ride);
 
     QHttpPart activityDescriptionPart;
     activityDescriptionPart.setHeader(QNetworkRequest::ContentDispositionHeader, QVariant("form-data; name=\"description\""));
@@ -1175,7 +1419,7 @@ Strava::writeFile(QByteArray &data, QString remotename, RideFile *ride)
         ride->getTag(QStringLiteral("Notes"), QString()),
         activityNameFieldname == QStringLiteral("Notes"),
         descriptionMode,
-        automaticSummary);
+        StravaActivityDescription::managedSummaryBlock(automaticSummary));
     activityDescriptionPart.setHeader(QNetworkRequest::ContentTypeHeader, QVariant("text/plain;charset=utf-8"));
     activityDescriptionPart.setBody(activityDescription.toUtf8());
     if (activityDescription != "")
