@@ -56,6 +56,20 @@ double dpiYFactor = 1.0;
 
 namespace {
 
+#ifdef Q_OS_WIN
+bool createPrivateWindowsTestDirectoryPath(const QString &path);
+#endif
+
+bool createPrivateCredentialTestDirectoryPath(
+    const QString &path)
+{
+#ifdef Q_OS_WIN
+    return createPrivateWindowsTestDirectoryPath(path);
+#else
+    return QDir().mkpath(path);
+#endif
+}
+
 QStringList persistentCredentialTestArguments(
     const QStringList &arguments, const QString &logPath)
 {
@@ -901,8 +915,10 @@ bool writePrivateStateFile(
     const QString &path,
     const QByteArray &contents)
 {
-    if (!QDir().mkpath(QFileInfo(path).absolutePath()))
+    if (!createPrivateCredentialTestDirectoryPath(
+            QFileInfo(path).absolutePath())) {
         return false;
+    }
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
         return false;
@@ -1436,6 +1452,30 @@ bool createCurrentWindowsUserOwnedDirectory(const QString &path)
     return ::CreateDirectoryW(
         reinterpret_cast<LPCWSTR>(nativePath.utf16()),
         &attributes);
+}
+
+bool createPrivateWindowsTestDirectoryPath(const QString &path)
+{
+    QString current = QDir::cleanPath(
+        QFileInfo(path).absoluteFilePath());
+    QStringList missing;
+    while (!QFileInfo::exists(current)) {
+        const QFileInfo information(current);
+        const QString name = information.fileName();
+        const QString parent = information.absolutePath();
+        if (name.isEmpty() || parent == current)
+            return false;
+        missing.prepend(name);
+        current = parent;
+    }
+    if (!QFileInfo(current).isDir())
+        return false;
+    for (const QString &name : std::as_const(missing)) {
+        current = QDir(current).filePath(name);
+        if (!createCurrentWindowsUserOwnedDirectory(current))
+            return false;
+    }
+    return true;
 }
 
 class PrivateCredentialTestDirectory : public QTemporaryDir
@@ -3666,7 +3706,7 @@ invalidKeychainMutationMarkerBlocksCredentialState()
     const QByteArray validMarker =
         QByteArrayLiteral(
             "goldencheetah_backend_mutation_pending=1\n");
-    QVERIFY(QDir().mkpath(
+    QVERIFY(createPrivateCredentialTestDirectoryPath(
         QFileInfo(markerPath).absolutePath()));
 
     if (fixture == 0) {
@@ -3677,7 +3717,8 @@ invalidKeychainMutationMarkerBlocksCredentialState()
         QVERIFY(writePrivateStateFile(
             markerPath, validMarker.chopped(1)));
     } else if (fixture == 2) {
-        QVERIFY(QDir().mkpath(markerPath));
+        QVERIFY(createPrivateCredentialTestDirectoryPath(
+            markerPath));
 #ifdef Q_OS_UNIX
     } else {
         const QString targetPath =
@@ -4588,7 +4629,8 @@ activeKeychainMutationLeaseBlocksCredentialState()
         QStringLiteral(".backend.lock"));
     const QString lockDirectory =
         QFileInfo(lockPath).absolutePath();
-    QVERIFY(QDir().mkpath(lockDirectory));
+    QVERIFY(createPrivateCredentialTestDirectoryPath(
+        lockDirectory));
 #ifdef Q_OS_UNIX
     QVERIFY(QFile::setPermissions(
         QDir(stateRoot).filePath(
@@ -6784,9 +6826,10 @@ credentialRevisionFailureBlocksMigration()
     settings.setValue(plaintextKey, secret);
     settings.sync();
     QCOMPARE(settings.status(), QSettings::NoError);
-    QVERIFY(QDir().mkpath(
+    QVERIFY(createPrivateCredentialTestDirectoryPath(
         QFileInfo(revisionPath).absolutePath()));
-    QVERIFY(QDir().mkpath(revisionPath));
+    QVERIFY(createPrivateCredentialTestDirectoryPath(
+        revisionPath));
 
     auto state = std::make_shared<FakeStoreState>();
     CredentialSettings credentials(fakeStore(state));
@@ -6832,9 +6875,10 @@ credentialRevisionFailureBlocksRemoval()
         pendingRemovalTestKey(scope, GC_STRAVA_TOKEN);
     const QString revisionPath = credentialOperationFile(
         stateRoot, vaultKey, QStringLiteral(".revision"));
-    QVERIFY(QDir().mkpath(
+    QVERIFY(createPrivateCredentialTestDirectoryPath(
         QFileInfo(revisionPath).absolutePath()));
-    QVERIFY(QDir().mkpath(revisionPath));
+    QVERIFY(createPrivateCredentialTestDirectoryPath(
+        revisionPath));
 
     auto state = std::make_shared<FakeStoreState>();
     state->values.insert(
@@ -8607,7 +8651,8 @@ deletionStatePersistenceFailurePreservesVault()
         scope, GC_STRAVA_TOKEN);
     const QString deletionPath = credentialOperationFile(
         stateRoot, vaultKey, QStringLiteral(".deletion"));
-    QVERIFY(QDir().mkpath(deletionPath));
+    QVERIFY(createPrivateCredentialTestDirectoryPath(
+        deletionPath));
 
     auto state = std::make_shared<FakeStoreState>();
     state->values.insert(
@@ -18992,6 +19037,22 @@ credentialEnrollmentAuthorityMustBeExternal()
             organization, application);
         internalAuthority.setFallbacksEnabled(false);
         internalAuthority.sync();
+#ifdef Q_OS_WIN
+        const QString authorityPath =
+            QDir::fromNativeSeparators(
+                QFileInfo(internalAuthority.fileName())
+                    .absoluteFilePath())
+                .toCaseFolded();
+        const QString rootPath =
+            QDir::fromNativeSeparators(
+                QFileInfo(athleteRoot)
+                    .absoluteFilePath())
+                .toCaseFolded();
+        QCOMPARE(
+            authorityPath.startsWith(
+                rootPath + QLatin1Char('/')),
+            true);
+#else
         QCOMPARE(
             QFileInfo(internalAuthority.fileName())
                 .canonicalFilePath()
@@ -19000,6 +19061,7 @@ credentialEnrollmentAuthorityMustBeExternal()
                         .canonicalFilePath()
                     + QDir::separator()),
             true);
+#endif
         QVERIFY(internalAuthority.allKeys()
                     .filter(QStringLiteral(
                         "credential_store/"

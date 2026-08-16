@@ -563,20 +563,98 @@ static QString normalizedFileSystemPath(
     return normalized;
 }
 
+#ifdef Q_OS_WIN
+static QString extendedWindowsFileSystemPath(
+    const QString &path)
+{
+    const QString native = QDir::toNativeSeparators(
+        QFileInfo(path).absoluteFilePath());
+    if (native.startsWith(QStringLiteral("\\\\?\\")))
+        return native;
+    if (native.startsWith(QStringLiteral("\\\\"))) {
+        return QStringLiteral("\\\\?\\UNC\\")
+            + native.mid(2);
+    }
+    return QStringLiteral("\\\\?\\") + native;
+}
+
+static QString canonicalWindowsFileSystemPath(
+    const QString &path,
+    bool directory)
+{
+    const QString native =
+        extendedWindowsFileSystemPath(path);
+    const HANDLE handle = ::CreateFileW(
+        reinterpret_cast<LPCWSTR>(native.utf16()),
+        FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE
+            | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING,
+        directory ? FILE_FLAG_BACKUP_SEMANTICS
+                  : FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (!handle || handle == INVALID_HANDLE_VALUE)
+        return {};
+
+    const DWORD flags =
+        FILE_NAME_NORMALIZED | VOLUME_NAME_DOS;
+    const DWORD required = ::GetFinalPathNameByHandleW(
+        handle, nullptr, 0, flags);
+    QString canonical;
+    if (required != 0) {
+        canonical.resize(int(required));
+        const DWORD written = ::GetFinalPathNameByHandleW(
+            handle,
+            reinterpret_cast<LPWSTR>(canonical.data()),
+            required, flags);
+        if (written == 0 || written >= required) {
+            canonical.clear();
+        } else {
+            canonical.resize(int(written));
+        }
+    }
+    ::CloseHandle(handle);
+
+    if (canonical.isEmpty())
+        return {};
+    if (canonical.startsWith(
+            QStringLiteral("\\\\?\\UNC\\"))) {
+        canonical = QStringLiteral("\\\\")
+            + canonical.mid(8);
+    } else if (canonical.startsWith(
+                   QStringLiteral("\\\\?\\"))) {
+        canonical.remove(0, 4);
+    }
+    return QDir::cleanPath(canonical);
+}
+#endif
+
 static bool credentialAuthorityIsExternal(
     QSettings *authority,
     const QString &athletesRoot)
 {
     if (!authority || authority->fileName().isEmpty())
         return false;
-    const QString canonicalRoot =
-        canonicalExistingDirectory(athletesRoot);
     const QFileInfo authorityInformation(
         authority->fileName());
+#ifdef Q_OS_WIN
+    const QString canonicalRoot =
+        canonicalWindowsFileSystemPath(
+            athletesRoot, true);
+    const QString canonicalAuthority =
+        authorityInformation.isFile()
+        ? canonicalWindowsFileSystemPath(
+              authorityInformation.absoluteFilePath(),
+              false)
+        : QString();
+#else
+    const QString canonicalRoot =
+        canonicalExistingDirectory(athletesRoot);
     const QString canonicalAuthority =
         authorityInformation.isFile()
         ? authorityInformation.canonicalFilePath()
         : QString();
+#endif
     if (canonicalRoot.isEmpty()
         || canonicalAuthority.isEmpty()) {
         return false;
