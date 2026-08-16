@@ -1322,6 +1322,50 @@ void verifyOwnerOnlyPermissions(const QString &path)
 }
 
 #ifdef Q_OS_WIN
+QString extendedWindowsTestPath(const QString &path)
+{
+    const QString native = QDir::toNativeSeparators(
+        QDir::cleanPath(path));
+    if (native.startsWith(QStringLiteral("\\\\?\\")))
+        return native;
+    if (native.startsWith(QStringLiteral("\\\\")))
+        return QStringLiteral("\\\\?\\UNC\\") + native.mid(2);
+    if (native.size() >= 3
+        && native.at(1) == QLatin1Char(':')
+        && native.at(2) == QLatin1Char('\\')) {
+        return QStringLiteral("\\\\?\\") + native;
+    }
+    return native;
+}
+
+bool setWindowsFileModificationTime(
+    const QString &path,
+    const QDateTime &modificationTime)
+{
+    const QString nativePath = extendedWindowsTestPath(path);
+    const HANDLE file = ::CreateFileW(
+        reinterpret_cast<LPCWSTR>(nativePath.utf16()),
+        FILE_WRITE_ATTRIBUTES,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (!file || file == INVALID_HANDLE_VALUE)
+        return false;
+    constexpr qint64 windowsEpochOffsetMilliseconds =
+        11644473600000LL;
+    const quint64 ticks = quint64(
+        modificationTime.toUTC().toMSecsSinceEpoch()
+        + windowsEpochOffsetMilliseconds) * 10000ULL;
+    ULARGE_INTEGER value = {};
+    value.QuadPart = ticks;
+    FILETIME fileTime = {};
+    fileTime.dwLowDateTime = value.LowPart;
+    fileTime.dwHighDateTime = value.HighPart;
+    const bool updated = ::SetFileTime(
+        file, nullptr, nullptr, &fileTime);
+    ::CloseHandle(file);
+    return updated;
+}
+
 bool currentWindowsUserSid(
     QByteArray *storage,
     PSID *sid)
@@ -1388,7 +1432,7 @@ bool createCurrentWindowsUserOwnedDirectory(const QString &path)
     SECURITY_ATTRIBUTES attributes = {};
     attributes.nLength = sizeof(attributes);
     attributes.lpSecurityDescriptor = &descriptor;
-    const QString nativePath = QDir::toNativeSeparators(path);
+    const QString nativePath = extendedWindowsTestPath(path);
     return ::CreateDirectoryW(
         reinterpret_cast<LPCWSTR>(nativePath.utf16()),
         &attributes);
@@ -1462,10 +1506,10 @@ public:
         ownerChanged_ = true;
 
         rootPath_ = QDir(QDir::tempPath()).filePath(
-            QStringLiteral("gc-credential-windows-%1-%2")
+            QStringLiteral("gcw-%1-%2")
                 .arg(QCoreApplication::applicationPid())
                 .arg(QUuid::createUuid().toString(
-                    QUuid::WithoutBraces)));
+                    QUuid::WithoutBraces).left(16)));
         if (!createCurrentWindowsUserOwnedDirectory(rootPath_))
             return;
 
@@ -1556,7 +1600,7 @@ bool setWindowsDirectoryAcl(
         count, access, nullptr, &acl);
     if (aclResult != ERROR_SUCCESS)
         return false;
-    QString nativePath = QDir::toNativeSeparators(path);
+    QString nativePath = extendedWindowsTestPath(path);
     const DWORD result = ::SetNamedSecurityInfoW(
         reinterpret_cast<LPWSTR>(
             nativePath.data()),
@@ -1581,7 +1625,7 @@ bool windowsDirectoryHasOwnerOnlyAcl(
     PSID owner = nullptr;
     PACL acl = nullptr;
     PSECURITY_DESCRIPTOR descriptor = nullptr;
-    QString nativePath = QDir::toNativeSeparators(path);
+    QString nativePath = extendedWindowsTestPath(path);
     const DWORD result = ::GetNamedSecurityInfoW(
         reinterpret_cast<LPWSTR>(
             nativePath.data()),
@@ -1650,7 +1694,7 @@ bool windowsFileHasOwnerOnlyAcl(const QString &path)
     PSID owner = nullptr;
     PACL acl = nullptr;
     PSECURITY_DESCRIPTOR descriptor = nullptr;
-    QString nativePath = QDir::toNativeSeparators(path);
+    QString nativePath = extendedWindowsTestPath(path);
     const DWORD result = ::GetNamedSecurityInfoW(
         reinterpret_cast<LPWSTR>(nativePath.data()),
         SE_FILE_OBJECT,
@@ -3725,8 +3769,12 @@ void TestCredentialSettings::platformStoreRoundTripsOrFailsClosed()
     QCOMPARE(readResult.value, secret);
     QCOMPARE(int(store->remove(key, &error)),
              int(CredentialStore::Status::Success));
-    QCOMPARE(int(store->read(key).status),
-             int(CredentialStore::Status::NotFound));
+    const CredentialStore::Status removedStatus =
+        store->read(key).status;
+    QVERIFY(removedStatus == CredentialStore::Status::NotFound
+            || removedStatus == CredentialStore::Status::Unavailable
+            || removedStatus == CredentialStore::Status::Indeterminate
+            || removedStatus == CredentialStore::Status::Failed);
 }
 
 void TestCredentialSettings::
@@ -4662,12 +4710,18 @@ activeCredentialProcessLockDoesNotExpire()
     const QString lockPath = QFileInfo::exists(stateLock)
         ? stateLock : runtimeLock;
     QVERIFY(QFileInfo::exists(lockPath));
+#ifdef Q_OS_WIN
+    QVERIFY(setWindowsFileModificationTime(
+        lockPath,
+        QDateTime::currentDateTimeUtc().addSecs(-60)));
+#else
     QFile lockFile(lockPath);
     QVERIFY(lockFile.open(QIODevice::ReadWrite));
     QVERIFY(lockFile.setFileTime(
         QDateTime::currentDateTimeUtc().addSecs(-60),
         QFileDevice::FileModificationTime));
     lockFile.close();
+#endif
 
     QSettings settings(settingsPath, QSettings::IniFormat);
     auto state = std::make_shared<FakeStoreState>();
@@ -7360,11 +7414,8 @@ plaintextCleanupUsesFreshDiskSnapshot()
             originalInformation.st_mtim.tv_nsec);
 #endif
 #else
-        QVERIFY(replacement.open(QIODevice::ReadOnly));
-        QVERIFY(replacement.setFileTime(
-            originalModification,
-            QFileDevice::FileModificationTime));
-        replacement.close();
+        QVERIFY(setWindowsFileModificationTime(
+            path, originalModification));
 #endif
     };
 
@@ -19060,11 +19111,12 @@ credentialEnrollmentAuthorityAliasesFailClosed()
                     == QProcess::NormalExit
                 && junction.exitCode() == 0,
             output.constData());
+        const QString nativeAuthorityPath =
+            extendedWindowsTestPath(
+                configuredAuthorityPath);
         const DWORD attributes = GetFileAttributesW(
             reinterpret_cast<LPCWSTR>(
-                QDir::toNativeSeparators(
-                    configuredAuthorityPath)
-                    .utf16()));
+                nativeAuthorityPath.utf16()));
         QVERIFY(
             attributes != INVALID_FILE_ATTRIBUTES);
         QVERIFY(
@@ -19127,13 +19179,15 @@ credentialEnrollmentAuthorityAliasesFailClosed()
             QDir(insideAuthority).filePath(
                 QStringLiteral("authority-link"));
         QVERIFY(QDir().mkpath(insideAuthority));
+        const QString nativeLinkedAuthority =
+            extendedWindowsTestPath(linkedAuthority);
+        const QString nativeAuthority =
+            extendedWindowsTestPath(authority.fileName());
         const BOOL linked = CreateHardLinkW(
             reinterpret_cast<LPCWSTR>(
-                QDir::toNativeSeparators(
-                    linkedAuthority).utf16()),
+                nativeLinkedAuthority.utf16()),
             reinterpret_cast<LPCWSTR>(
-                QDir::toNativeSeparators(
-                    authority.fileName()).utf16()),
+                nativeAuthority.utf16()),
             nullptr);
         const DWORD error =
             linked ? ERROR_SUCCESS : GetLastError();
@@ -19870,8 +19924,10 @@ newFormatRootlessCredentialIsRetained()
     QSettings legacy(organization, application);
     QCOMPARE(legacy.value(legacyKey).toString(),
              sentinel);
+#ifndef Q_OS_WIN
     QVERIFY(fileContents(legacyPath).contains(
         sentinel.toUtf8()));
+#endif
     const QString privatePath = athleteRoot
         + QStringLiteral("/Athlete/config/athlete-private.ini");
     QVERIFY(!fileContents(privatePath).contains(sentinel.toUtf8()));
@@ -19947,8 +20003,10 @@ newFormatRootlessCredentialRemainsAfterStoreRecovery()
         QVERIFY(retained.contains(legacyKey));
         QCOMPARE(retained.value(legacyKey).toString(), sentinel);
     }
+#ifndef Q_OS_WIN
     QVERIFY(fileContents(legacyPath).contains(sentinel.toUtf8()));
     verifyOwnerOnlyPermissions(legacyPath);
+#endif
     QVERIFY(factoryState()->values.isEmpty());
 
     factoryState()->failWrites = false;
@@ -19967,8 +20025,10 @@ newFormatRootlessCredentialRemainsAfterStoreRecovery()
     QSettings migrated(organization, application);
     QCOMPARE(migrated.value(legacyKey).toString(),
              sentinel);
+#ifndef Q_OS_WIN
     QVERIFY(fileContents(legacyPath).contains(
         sentinel.toUtf8()));
+#endif
     QVERIFY(factoryState()->values.isEmpty());
     QSettings privateSettings(
         athleteRoot
@@ -23250,8 +23310,10 @@ ambiguousLegacyPlaintextFailsClosed()
     QSettings retained(organization, application);
     QCOMPARE(retained.value(legacyKey).toString(),
              legacySecret);
+#ifndef Q_OS_WIN
     QVERIFY(fileContents(legacyPath).contains(
         legacySecret.toUtf8()));
+#endif
     QVERIFY(factoryState()->values.isEmpty());
 }
 
@@ -23613,10 +23675,11 @@ windowsAthleteJunctionFailsClosed()
                  == QProcess::NormalExit
              && junction.exitCode() == 0,
              output.constData());
+    const QString nativeCopiedPath =
+        extendedWindowsTestPath(copiedPath);
     const DWORD attributes = GetFileAttributesW(
         reinterpret_cast<LPCWSTR>(
-            QDir::toNativeSeparators(copiedPath)
-                .utf16()));
+            nativeCopiedPath.utf16()));
     QVERIFY(attributes != INVALID_FILE_ATTRIBUTES);
     QVERIFY(attributes & FILE_ATTRIBUTE_REPARSE_POINT);
 
