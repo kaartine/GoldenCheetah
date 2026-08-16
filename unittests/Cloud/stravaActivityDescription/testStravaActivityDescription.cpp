@@ -24,6 +24,8 @@ private slots:
     void preparesDescriptionUpdateFromStravaActivity();
     void rejectsInvalidStravaActivityResponses();
     void summarizesRecordedMetrics();
+    void weightsMetricsByElapsedSampleTime();
+    void boundsNormalizedPowerExpansion();
     void omitsUnavailableChannels();
     void rendersPowerZonesAndBoundedSparkline();
     void groupsRepeatedWorkIntervals();
@@ -239,7 +241,7 @@ void TestStravaActivityDescription::summarizesRecordedMetrics()
     input.hasCadence = true;
     input.recordingInterval = 1.0;
     input.ftp = 200.0;
-    for (int second = 0; second < 60; ++second) {
+    for (int second = 0; second <= 60; ++second) {
         input.samples.append({
             static_cast<double>(second),
             second < 30 ? 100.0 : 200.0,
@@ -269,6 +271,75 @@ void TestStravaActivityDescription::summarizesRecordedMetrics()
              qPrintable(summary));
 }
 
+void TestStravaActivityDescription::weightsMetricsByElapsedSampleTime()
+{
+    StravaActivityDescription::Input input;
+    input.hasPower = true;
+    input.hasHeartRate = true;
+    input.hasCadence = true;
+    input.recordingInterval = 1.0;
+    input.powerZones = {
+        {QStringLiteral("Z1"), 150.0},
+        {QStringLiteral("Z2"), 300.0}
+    };
+    input.samples = {
+        {0.0, 100.0, 120.0, 80.0},
+        {10.0, 100.0, 120.0, 80.0},
+        {40.0, 200.0, 160.0, 100.0},
+        {50.0, 200.0, 160.0, 100.0}
+    };
+
+    const QString summary = StravaActivityDescription::summary(input);
+    QVERIFY2(summary.contains(QStringLiteral("Duration 0:50")),
+             qPrintable(summary));
+    QVERIFY2(summary.contains(QStringLiteral("Work 6 kJ")),
+             qPrintable(summary));
+    QVERIFY2(summary.contains(QStringLiteral("120 W avg")),
+             qPrintable(summary));
+    QVERIFY2(summary.contains(QStringLiteral("128 bpm avg")),
+             qPrintable(summary));
+    QVERIFY2(summary.contains(QStringLiteral("Cadence 84 rpm")),
+             qPrintable(summary));
+    QVERIFY2(summary.contains(QStringLiteral("Zones Z1 40s")),
+             qPrintable(summary));
+    QVERIFY(!summary.contains(QStringLiteral("Z2 ")));
+}
+
+void TestStravaActivityDescription::boundsNormalizedPowerExpansion()
+{
+    StravaActivityDescription::Input input;
+    input.hasPower = true;
+    input.recordingInterval = 1.0;
+    input.ftp = 200.0;
+    input.samples = {
+        {0.0, 100.0, 0.0, 0.0},
+        {1000001.0, 200.0, 0.0, 0.0}
+    };
+
+    const QString summary = StravaActivityDescription::summary(input);
+    QVERIFY2(summary.contains(QStringLiteral("Duration 277:46:41")),
+             qPrintable(summary));
+    QVERIFY2(summary.contains(QStringLiteral("Work 100000 kJ")),
+             qPrintable(summary));
+    QVERIFY2(summary.contains(QStringLiteral("100 W avg")),
+             qPrintable(summary));
+    QVERIFY(!summary.contains(QStringLiteral(" W NP")));
+    QVERIFY(!summary.contains(QStringLiteral("BikeStress")));
+
+    input.recordingInterval = 0.000001;
+    input.samples = {
+        {0.0, 100.0, 0.0, 0.0},
+        {1.0, 200.0, 0.0, 0.0}
+    };
+    const QString tinyIntervalSummary =
+        StravaActivityDescription::summary(input);
+    QVERIFY2(tinyIntervalSummary.contains(QStringLiteral("Duration 0:01")),
+             qPrintable(tinyIntervalSummary));
+    QVERIFY2(tinyIntervalSummary.contains(QStringLiteral("100 W avg")),
+             qPrintable(tinyIntervalSummary));
+    QVERIFY(!tinyIntervalSummary.contains(QStringLiteral(" W NP")));
+}
+
 void TestStravaActivityDescription::omitsUnavailableChannels()
 {
     StravaActivityDescription::Input input;
@@ -276,7 +347,7 @@ void TestStravaActivityDescription::omitsUnavailableChannels()
     input.samples.append({1.0, 300.0, 170.0, 95.0});
 
     const QString summary = StravaActivityDescription::summary(input);
-    QCOMPARE(summary, QStringLiteral("Duration 0:02"));
+    QCOMPARE(summary, QStringLiteral("Duration 0:01"));
 }
 
 void TestStravaActivityDescription::rendersPowerZonesAndBoundedSparkline()
@@ -289,7 +360,7 @@ void TestStravaActivityDescription::rendersPowerZonesAndBoundedSparkline()
         {QStringLiteral("Z2"), 180.0},
         {QStringLiteral("Z3"), 240.0}
     };
-    for (int second = 0; second < 96; ++second) {
+    for (int second = 0; second <= 96; ++second) {
         input.samples.append({
             static_cast<double>(second),
             second < 32 ? 100.0 : (second < 64 ? 150.0 : 220.0),
@@ -351,7 +422,7 @@ void TestStravaActivityDescription::ignoresInvalidValues()
     };
 
     const QString summary = StravaActivityDescription::summary(input);
-    QCOMPARE(summary, QStringLiteral("Duration 0:02"));
+    QCOMPARE(summary, QStringLiteral("Duration 0:01"));
     QVERIFY(!summary.contains(QStringLiteral("nan"), Qt::CaseInsensitive));
     QVERIFY(!summary.contains(QStringLiteral("inf"), Qt::CaseInsensitive));
 }

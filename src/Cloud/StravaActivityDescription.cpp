@@ -21,6 +21,7 @@
 namespace {
 
 constexpr int SparklineBins = 32;
+constexpr qint64 MaximumNormalizedPowerSamples = 1000000;
 const QString ManagedSummaryStart =
     QStringLiteral("--- GoldenCheetah summary ---");
 const QString ManagedSummaryEnd =
@@ -101,6 +102,27 @@ double resolved(double supplied, double calculated)
     return positive(supplied) ? supplied : calculated;
 }
 
+QVector<double> elapsedSampleDurations(
+    const StravaActivityDescription::Input &input,
+    double recordingInterval)
+{
+    QVector<double> durations(input.samples.size(), 0.0);
+    if (input.samples.isEmpty()) return durations;
+    if (input.samples.size() == 1) {
+        durations[0] = recordingInterval;
+        return durations;
+    }
+
+    for (int index = 0; index + 1 < input.samples.size(); ++index) {
+        const double current = input.samples.at(index).seconds;
+        const double next = input.samples.at(index + 1).seconds;
+        const double elapsed = next - current;
+        durations[index] = positive(elapsed)
+            ? elapsed : recordingInterval;
+    }
+    return durations;
+}
+
 struct CalculatedMetrics {
     double duration = 0.0;
     double work = 0.0;
@@ -121,59 +143,94 @@ CalculatedMetrics calculate(
     const double recordingInterval = positive(input.recordingInterval)
         ? input.recordingInterval : 1.0;
 
-    if (!input.samples.isEmpty()) {
-        result.duration = input.samples.constLast().seconds
-            - input.samples.constFirst().seconds + recordingInterval;
-    }
+    const QVector<double> durations = elapsedSampleDurations(
+        input, recordingInterval);
 
     double powerTotal = 0.0;
-    int powerCount = 0;
+    double powerDuration = 0.0;
     double heartRateTotal = 0.0;
-    int heartRateCount = 0;
+    double heartRateDuration = 0.0;
     double cadenceTotal = 0.0;
-    int cadenceCount = 0;
+    double cadenceDuration = 0.0;
 
-    for (const auto &sample : input.samples) {
+    for (int index = 0; index < input.samples.size(); ++index) {
+        const auto &sample = input.samples.at(index);
+        const double elapsed = durations.at(index);
+        result.duration += elapsed;
         if (input.hasPower && std::isfinite(sample.power)
             && sample.power >= 0.0) {
-            powerTotal += sample.power;
+            powerTotal += sample.power * elapsed;
             result.maximumPower = qMax(result.maximumPower, sample.power);
-            result.work += sample.power * recordingInterval / 1000.0;
-            ++powerCount;
+            result.work += sample.power * elapsed / 1000.0;
+            powerDuration += elapsed;
         }
         if (input.hasHeartRate && positive(sample.heartRate)) {
-            heartRateTotal += sample.heartRate;
+            heartRateTotal += sample.heartRate * elapsed;
             result.maximumHeartRate = qMax(
                 result.maximumHeartRate, sample.heartRate);
-            ++heartRateCount;
+            heartRateDuration += elapsed;
         }
         if (input.hasCadence && positive(sample.cadence)) {
-            cadenceTotal += sample.cadence;
-            ++cadenceCount;
+            cadenceTotal += sample.cadence * elapsed;
+            cadenceDuration += elapsed;
         }
     }
 
-    if (powerCount > 0) result.averagePower = powerTotal / powerCount;
-    if (heartRateCount > 0)
-        result.averageHeartRate = heartRateTotal / heartRateCount;
-    if (cadenceCount > 0) result.averageCadence = cadenceTotal / cadenceCount;
+    if (positive(powerDuration))
+        result.averagePower = powerTotal / powerDuration;
+    if (positive(heartRateDuration))
+        result.averageHeartRate = heartRateTotal / heartRateDuration;
+    if (positive(cadenceDuration))
+        result.averageCadence = cadenceTotal / cadenceDuration;
 
-    const int rollingWindow = qFloor(30.0 / recordingInterval);
+    const double rollingWindowSamples = 30.0 / recordingInterval;
+    const int rollingWindow = std::isfinite(rollingWindowSamples)
+            && rollingWindowSamples <= MaximumNormalizedPowerSamples
+        ? qFloor(rollingWindowSamples) : 0;
     if (input.hasPower && rollingWindow > 1) {
+        qint64 expandedSampleCount = 0;
+        bool bounded = true;
+        for (double elapsed : durations) {
+            if (!positive(elapsed)) continue;
+            if (elapsed / recordingInterval
+                > MaximumNormalizedPowerSamples) {
+                bounded = false;
+                break;
+            }
+            const qint64 count = qMax<qint64>(
+                1, qRound64(elapsed / recordingInterval));
+            if (count > MaximumNormalizedPowerSamples
+                - expandedSampleCount) {
+                bounded = false;
+                break;
+            }
+            expandedSampleCount += count;
+        }
+        if (!bounded || expandedSampleCount == 0)
+            return result;
+
         QVector<double> rolling(rollingWindow, 0.0);
         int rollingIndex = 0;
         double rollingSum = 0.0;
         double fourthPowerTotal = 0.0;
-        int count = 0;
-        for (const auto &sample : input.samples) {
+        qint64 count = 0;
+        for (int index = 0; index < input.samples.size(); ++index) {
+            const auto &sample = input.samples.at(index);
             const double power = std::isfinite(sample.power)
                 ? qMax(0.0, sample.power) : 0.0;
-            rollingSum += power - rolling.at(rollingIndex);
-            rolling[rollingIndex] = power;
-            fourthPowerTotal += std::pow(
-                rollingSum / rollingWindow, 4.0);
-            rollingIndex = (rollingIndex + 1) % rollingWindow;
-            ++count;
+            const qint64 repeats = positive(durations.at(index))
+                ? qMax<qint64>(
+                      1, qRound64(
+                             durations.at(index) / recordingInterval))
+                : 0;
+            for (qint64 repeat = 0; repeat < repeats; ++repeat) {
+                rollingSum += power - rolling.at(rollingIndex);
+                rolling[rollingIndex] = power;
+                fourthPowerTotal += std::pow(
+                    rollingSum / rollingWindow, 4.0);
+                rollingIndex = (rollingIndex + 1) % rollingWindow;
+                ++count;
+            }
         }
         if (count > 0) {
             result.normalizedPower = std::pow(
@@ -182,7 +239,7 @@ CalculatedMetrics calculate(
                 result.intensityFactor =
                     result.normalizedPower / input.ftp;
                 result.bikeStress = result.normalizedPower
-                    * count * recordingInterval
+                    * result.duration
                     * result.intensityFactor
                     / (input.ftp * 3600.0) * 100.0;
             }
@@ -242,7 +299,11 @@ QString powerZoneLine(
     QVector<double> seconds(input.powerZones.size(), 0.0);
     const double recordingInterval = positive(input.recordingInterval)
         ? input.recordingInterval : 1.0;
-    for (const auto &sample : input.samples) {
+    const QVector<double> durations = elapsedSampleDurations(
+        input, recordingInterval);
+    for (int sampleIndex = 0;
+         sampleIndex < input.samples.size(); ++sampleIndex) {
+        const auto &sample = input.samples.at(sampleIndex);
         if (!std::isfinite(sample.power) || sample.power < 0.0) continue;
         int zoneIndex = input.powerZones.size() - 1;
         for (int index = 0; index < input.powerZones.size(); ++index) {
@@ -251,7 +312,7 @@ QString powerZoneLine(
                 break;
             }
         }
-        seconds[zoneIndex] += recordingInterval;
+        seconds[zoneIndex] += durations.at(sampleIndex);
     }
 
     QStringList values;
