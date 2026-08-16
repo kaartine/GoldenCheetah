@@ -14,6 +14,7 @@ all qt Cloud/credentialTransportSafety
 all qt Cloud/oauthCallbackPolicy
 all qt Cloud/oauthTokenReplyController
 all qt Cloud/stravaAccountRemoval
+all qt Cloud/stravaActivityDescription
 all qt Cloud/stravaAuthenticatedSession
 all qt Cloud/stravaClientCredentials
 all qt Cloud/stravaOAuthPolicy
