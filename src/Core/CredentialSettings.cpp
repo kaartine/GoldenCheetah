@@ -65,6 +65,23 @@ void credentialCrashPoint(const QByteArray &point);
 bool windowsCredentialRootIsSafe(const QString &path);
 bool windowsCredentialPathHasNoReparseComponents(
     const QString &path);
+
+QString extendedWindowsCredentialPath(const QString &path)
+{
+    const QString native = QDir::toNativeSeparators(
+        QDir::cleanPath(path));
+    if (native.startsWith(QStringLiteral("\\\\?\\")))
+        return native;
+    if (native.startsWith(QStringLiteral("\\\\"))) {
+        return QStringLiteral("\\\\?\\UNC\\") + native.mid(2);
+    }
+    if (native.size() >= 3
+        && native.at(1) == QLatin1Char(':')
+        && native.at(2) == QLatin1Char('\\')) {
+        return QStringLiteral("\\\\?\\") + native;
+    }
+    return native;
+}
 #endif
 
 std::recursive_mutex &credentialOperationMutex()
@@ -131,8 +148,9 @@ bool credentialPathIsRedirected(
         return true;
 #ifdef Q_OS_WIN
     const QString path = information.absoluteFilePath();
+    const QString nativePath = extendedWindowsCredentialPath(path);
     const DWORD attributes = ::GetFileAttributesW(
-        reinterpret_cast<LPCWSTR>(path.utf16()));
+        reinterpret_cast<LPCWSTR>(nativePath.utf16()));
     if (attributes == INVALID_FILE_ATTRIBUTES) {
         const DWORD error = ::GetLastError();
         return error != ERROR_FILE_NOT_FOUND
@@ -143,7 +161,7 @@ bool credentialPathIsRedirected(
     if (attributes & FILE_ATTRIBUTE_DIRECTORY)
         return false;
     const HANDLE file = ::CreateFileW(
-        reinterpret_cast<LPCWSTR>(path.utf16()),
+        reinterpret_cast<LPCWSTR>(nativePath.utf16()),
         FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ | FILE_SHARE_WRITE
             | FILE_SHARE_DELETE,
@@ -236,12 +254,13 @@ ScopedWindowsHandle openWindowsCredentialDirectory(
     bool shareDelete = true,
     bool openReparsePoint = true)
 {
+    const QString nativePath = extendedWindowsCredentialPath(path);
     DWORD sharing =
         FILE_SHARE_READ | FILE_SHARE_WRITE;
     if (shareDelete)
         sharing |= FILE_SHARE_DELETE;
     return ScopedWindowsHandle(::CreateFileW(
-        reinterpret_cast<LPCWSTR>(path.utf16()),
+        reinterpret_cast<LPCWSTR>(nativePath.utf16()),
         access,
         sharing,
         nullptr,
@@ -257,8 +276,9 @@ ScopedWindowsHandle openWindowsCredentialFile(
     const QString &path,
     DWORD access)
 {
+    const QString nativePath = extendedWindowsCredentialPath(path);
     return ScopedWindowsHandle(::CreateFileW(
-        reinterpret_cast<LPCWSTR>(path.utf16()),
+        reinterpret_cast<LPCWSTR>(nativePath.utf16()),
         access,
         FILE_SHARE_READ | FILE_SHARE_WRITE
             | FILE_SHARE_DELETE,
@@ -884,8 +904,9 @@ bool createWindowsCredentialDirectory(
     bool *created)
 {
     const QString path = QDir(parentPath).filePath(name);
+    const QString nativePath = extendedWindowsCredentialPath(path);
     const DWORD existingAttributes = ::GetFileAttributesW(
-        reinterpret_cast<LPCWSTR>(path.utf16()));
+        reinterpret_cast<LPCWSTR>(nativePath.utf16()));
     if (existingAttributes != INVALID_FILE_ATTRIBUTES) {
         if (created) *created = false;
         return validateWindowsPrivateCredentialDirectory(
@@ -917,9 +938,11 @@ bool createWindowsCredentialDirectory(
                          QUuid::WithoutBraces));
         const QString temporaryPath =
             QDir(parentPath).filePath(temporaryName);
+        const QString nativeTemporaryPath =
+            extendedWindowsCredentialPath(temporaryPath);
         if (!::CreateDirectoryW(
                 reinterpret_cast<LPCWSTR>(
-                    temporaryPath.utf16()),
+                    nativeTemporaryPath.utf16()),
                 &attributes)) {
             const DWORD createError = ::GetLastError();
             if (createError == ERROR_ALREADY_EXISTS
@@ -932,14 +955,14 @@ bool createWindowsCredentialDirectory(
                 temporaryPath)) {
             ::RemoveDirectoryW(
                 reinterpret_cast<LPCWSTR>(
-                    temporaryPath.utf16()));
+                    nativeTemporaryPath.utf16()));
             return false;
         }
 
         if (::MoveFileExW(
                 reinterpret_cast<LPCWSTR>(
-                    temporaryPath.utf16()),
-                reinterpret_cast<LPCWSTR>(path.utf16()),
+                    nativeTemporaryPath.utf16()),
+                reinterpret_cast<LPCWSTR>(nativePath.utf16()),
                 MOVEFILE_WRITE_THROUGH)) {
             if (created) *created = true;
             return validateWindowsPrivateCredentialDirectory(
@@ -949,7 +972,7 @@ bool createWindowsCredentialDirectory(
         const DWORD moveError = ::GetLastError();
         ::RemoveDirectoryW(
             reinterpret_cast<LPCWSTR>(
-                temporaryPath.utf16()));
+                nativeTemporaryPath.utf16()));
         if (moveError == ERROR_ALREADY_EXISTS
             || moveError == ERROR_FILE_EXISTS) {
             if (created) *created = false;
