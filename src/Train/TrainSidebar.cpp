@@ -26,6 +26,7 @@
 #include "DeviceTypes.h"
 #include "DeviceConfiguration.h"
 #include "TrainingControllerLifecycle.h"
+#include "TrainingCommandRouter.h"
 #include "TrainingDeviceSelection.h"
 #include "RideImportWizard.h"
 #include "HelpWhatsThis.h"
@@ -40,8 +41,13 @@
 #include <QEvent>
 #include <QInputEvent>
 #include <QKeyEvent>
+#include <QAbstractSpinBox>
+#include <QComboBox>
+#include <QLineEdit>
 #include <QMutexLocker>
+#include <QPlainTextEdit>
 #include <QSoundEffect>
+#include <QTextEdit>
 
 // Three current realtime device types supported are:
 #include "RealtimeController.h"
@@ -80,6 +86,22 @@
 #if defined(GC_HAVE_VLC)||defined(GC_VIDEO_QT6) // RLV currently only support for VLC
 #define USE_RLV
 #endif
+
+namespace {
+
+bool trainingTextInputIsActive()
+{
+    if (QApplication::activeModalWidget()) return true;
+
+    QWidget *focus = QApplication::focusWidget();
+    return qobject_cast<QLineEdit *>(focus)
+            || qobject_cast<QTextEdit *>(focus)
+            || qobject_cast<QPlainTextEdit *>(focus)
+            || qobject_cast<QAbstractSpinBox *>(focus)
+            || qobject_cast<QComboBox *>(focus);
+}
+
+}
 
 TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(context),
     bicycle(context)
@@ -580,44 +602,27 @@ TrainSidebar::eventFilter(QObject *, QEvent *event)
 
     // only when we are recording !
     if (status & RT_RECORDING) {
-        if (event->type() == QEvent::KeyPress) {
+        if (event->type() == QEvent::KeyPress && !trainingTextInputIsActive()) {
+            QKeyEvent *keyEvent = static_cast<QKeyEvent *>(event);
+            const TrainingCommand command = TrainingCommandRouter::commandForKey(
+                    keyEvent->key(), keyEvent->modifiers(), keyEvent->isAutoRepeat());
 
-            // we care about cmd / ctrl
-            Qt::KeyboardModifiers kmod = static_cast<QInputEvent*>(event)->modifiers();
-            bool ctrl = (kmod & Qt::ControlModifier) != 0;
-            Q_UNUSED(ctrl);
-
-            // what was pressed
-            int key =static_cast<QKeyEvent*>(event)->key();
-
-            //
-            // We can process the keyboard event here
-            // and call any training method
-            //
-            // KEY        FUNCTION
-            //            Start() - will pause/unpause if running
-            //            Stop() - will end workout
-            //            Pause() - pause only
-            //            UnPause() - unpause
-            //            FFwd() - nip forward
-            //            Rewind() - nip back
-            //            newLap() - new lap marker
-            //
-            switch(key) {
-
-                case Qt::Key_Space:
-                    Start();
-                    break;
-
-                case Qt::Key_Escape:
-                    RequestStop();
-                    break;
-
-                default:
-                    break;
-
+            switch (command) {
+            case TrainingCommand::ToggleStartPause:
+                Start();
+                return true;
+            case TrainingCommand::RequestStop:
+                RequestStop();
+                return true;
+            case TrainingCommand::ShiftUp:
+                VirtualShiftUp();
+                return true;
+            case TrainingCommand::ShiftDown:
+                VirtualShiftDown();
+                return true;
+            case TrainingCommand::None:
+                break;
             }
-            return true; // we listen to 'em all
         }
     }
     return false;
@@ -1406,6 +1411,7 @@ void TrainSidebar::Start()       // when start button is pressed
         // START!
         load = 100;
         slope = 0.0;
+        virtualDrivetrain.reset();
 
         // Reset Speed Simulation
         bicycle.clear();
@@ -1482,7 +1488,7 @@ void TrainSidebar::Start()       // when start button is pressed
                 const QByteArray header(
                         "secs, cad, hr, km, kph, nm, watts, alt, lon, lat, headwind, "
                         "slope, temp, interval, lrbalance, lte, rte, lps, rps, smo2, thb, "
-                        "o2hb, hhb, target, rppb, rppe, rpppb, rpppe, lppb, lppe, lpppb, lpppe\n");
+                        "o2hb, hhb, target, rppb, rppe, rpppb, rpppe, lppb, lppe, lpppb, lpppe, virtualgear\n");
                 if (!writeRecordingData(header)) return;
 
                 disk_timer->start(SAMPLERATE);  // start screen
@@ -2392,6 +2398,7 @@ void TrainSidebar::guiUpdate()           // refreshes the telemetry
             double vs = computeInstantSpeed(weightKG, rtData.getSlope(), rtData.getAltitude(), rtData.getWatts());
 
             rtData.setVirtualSpeed(vs);
+            rtData.setVirtualGear(virtualDrivetrain.gear());
 
             // W'bal on the fly
             // using Dave Waterworth's reformulation
@@ -2507,7 +2514,7 @@ void TrainSidebar::diskUpdate()
     if (secs <= lastRecordSecs) return; // Avoid duplicates
     lastRecordSecs = secs;
 
-    // GoldenCheetah CVS Format "secs, cad, hr, km, kph, nm, watts, alt, lon, lat, headwind, slope, temp, interval, lrbalance, lte, rte, lps, rps, smo2, thb, o2hb, hhb, target, rppb, rppe, rpppb, rpppe, lppb, lppe, lpppb, lpppe\n";
+    // GoldenCheetah CVS Format "secs, cad, hr, km, kph, nm, watts, alt, lon, lat, headwind, slope, temp, interval, lrbalance, lte, rte, lps, rps, smo2, thb, o2hb, hhb, target, rppb, rppe, rpppb, rpppe, lppb, lppe, lpppb, lpppe, virtualgear\n";
 
     recordFileStream    << secs
                         << "," << displayCadence
@@ -2550,6 +2557,7 @@ void TrainSidebar::diskUpdate()
                         << "," << displayLppe
                         << "," << displayLpppb
                         << "," << displayLpppe
+                        << "," << virtualDrivetrain.gear()
                         << "," << "\n";
 
     recordFileStream.flush();
@@ -3174,6 +3182,24 @@ void TrainSidebar::Lower()
     }
 
     context->notifySetNotification(tr("Decreasing intensity.."), 2);
+}
+
+void TrainSidebar::VirtualShiftUp()
+{
+    if ((status & RT_CONNECTED) == 0) return;
+    if (virtualDrivetrain.shiftUp()) {
+        context->notifySetNotification(
+                tr("Virtual gear %1").arg(virtualDrivetrain.gear()), 2);
+    }
+}
+
+void TrainSidebar::VirtualShiftDown()
+{
+    if ((status & RT_CONNECTED) == 0) return;
+    if (virtualDrivetrain.shiftDown()) {
+        context->notifySetNotification(
+                tr("Virtual gear %1").arg(virtualDrivetrain.gear()), 2);
+    }
 }
 
 void TrainSidebar::setLabels()

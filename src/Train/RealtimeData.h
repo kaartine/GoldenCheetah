@@ -56,7 +56,8 @@ public:
                       RightPowerPhasePeakBegin, RightPowerPhasePeakEnd,
                       Position, RightPCO, LeftPCO,
                       Temp,
-                      CoreTemp, SkinTemp, HeatStrain, HeatLoad
+                      CoreTemp, SkinTemp, HeatStrain, HeatLoad,
+                      VirtualGear
                     };
 
     typedef enum dataseries DataSeries;
@@ -206,6 +207,8 @@ public:
 
     void setTemp(double temp);
     double getTemp() const;
+    void setVirtualGear(int gear);
+    int getVirtualGear() const;
 
     uint8_t spinScan[24];
 
@@ -228,6 +231,7 @@ private:
     double temp;
     double skinTemp, coreTemp;
     double heatStrain;
+    int virtualGear;
 
     std::chrono::high_resolution_clock::time_point wheelRpmSampleTime;
 

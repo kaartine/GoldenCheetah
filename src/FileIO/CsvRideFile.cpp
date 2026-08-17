@@ -26,6 +26,7 @@
 #include "Zones.h"
 #include "WPrime.h"
 #include "Settings.h"
+#include "TrainingCsvSeries.h"
 
 #include <QRegExp>
 #include <QTextStream>
@@ -669,6 +670,7 @@ RideFile *CsvFileReader::openRideFile(QFile &file, QStringList &errors, QList<Ri
                 double gct = 0.0, vo = 0.0, rcad = 0.0;
                 //UNUSED double o2hb = 0.0, hhb = 0.0;
                 double target = 0.0;
+                double virtualGear = 0.0;
 
                 int interval=0;
                 int pause=0;
@@ -775,6 +777,8 @@ RideFile *CsvFileReader::openRideFile(QFile &file, QStringList &errors, QList<Ri
                             //     hhb = valueStr.toDouble();
                             } else if (valueName == "target") {
                                 target = valueStr.toDouble();
+                            } else if (valueName == "virtualgear") {
+                                virtualGear = valueStr.toDouble();
                             } else {
                                 // print debug message but only once
                                 static bool debugMessageFlag=false;
@@ -1320,19 +1324,26 @@ RideFile *CsvFileReader::openRideFile(QFile &file, QStringList &errors, QList<Ri
                             rideFile->setPointValue(minutes * 60.0, RideFile::lpppe, lpppe);
                     }
 
-                    if (target > 0.0) {
+                    const TrainingCsvSeriesLayout trainingLayout =
+                            TrainingCsvSeriesLayout::fromColumns(
+                                    gcSeries->valuename);
+                    if (trainingLayout.shouldAppend(target, virtualGear)) {
                         if (trainSeries == NULL)  {
                             // add XDATA
                             trainSeries = new XDataSeries();
                             trainSeries->name = "TRAIN";
-                            trainSeries->valuename << "TARGET";
-                            trainSeries->unitname << "Watts";
+                            trainSeries->valuename = trainingLayout.valueNames();
+                            trainSeries->unitname = trainingLayout.unitNames();
                         }
 
                         XDataPoint *p = new XDataPoint();
                         p->secs = minutes * 60.0;
                         p->km = km;
-                        p->number[0] = target;
+                        const QVector<double> values =
+                                trainingLayout.values(target, virtualGear);
+                        for (int i = 0; i < values.size(); ++i) {
+                            p->number[i] = values.at(i);
+                        }
 
                         trainSeries->datapoints.append(p);
                     }

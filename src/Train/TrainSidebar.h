@@ -39,6 +39,7 @@
 #include "TrainingTelemetryTimeline.h"
 #include "TrainSidebarRuntime.h"
 #include "TrainerTargetCoordinator.h"
+#include "VirtualDrivetrain.h"
 
 // standard stuff
 #include <QDir>
@@ -200,6 +201,8 @@ class TrainSidebar : public GcWindow
         void RewindLap();   // jump backwards to previous Lap marker
         void Higher();      // set load/gradient higher
         void Lower();       // set load/gradient higher
+        void VirtualShiftUp();
+        void VirtualShiftDown();
         void newLap();      // start new Lap!
         void resetLapTimer(); //reset the lap timer
         void resetTextAudioEmitTracking();
@@ -359,6 +362,7 @@ class TrainSidebar : public GcWindow
         TrainingRecordingIo::Health recordingHealth;
         TrainingTelemetryTimeline::Timeline telemetryTimeline;
         TrainerTargetCoordinator trainerTargetCoordinator;
+        VirtualDrivetrain virtualDrivetrain;
 
         Bicycle bicycle;
 

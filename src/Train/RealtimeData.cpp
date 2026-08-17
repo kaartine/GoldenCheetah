@@ -41,6 +41,7 @@ RealtimeData::RealtimeData()
     lppb = lppe = lpppb = lpppe = 0.0;
     coreTemp = skinTemp = 0.0;
     heatStrain = 0.0;
+    virtualGear = 0;
     latitude = longitude = altitude = 0.0;
     rf = rmv = vo2 = vco2 = tv = feo2 = 0.0;
     routeDistance = distanceRemaining = 0.0;
@@ -549,6 +550,9 @@ double RealtimeData::value(DataSeries series) const
     case HeatStrain: return heatStrain;
         break;
 
+    case VirtualGear: return virtualGear;
+        break;
+
     case None:
     default:
         return 0;
@@ -626,6 +630,7 @@ const QList<RealtimeData::DataSeries> &RealtimeData::listDataSeries()
         seriesList << SkinTemp;
         seriesList << HeatStrain;
         seriesList << HeatLoad;
+        seriesList << VirtualGear;
     }
     return seriesList;
 }
@@ -825,6 +830,9 @@ QString RealtimeData::seriesName(DataSeries series)
     case HeatStrain: return tr("Heat Strain");
         break;
     case HeatLoad: return tr("Estimated Heat Load");
+        break;
+
+    case VirtualGear: return tr("Virtual Gear");
         break;
 
     case RightPCO: return tr("Right PCO");
@@ -1031,6 +1039,9 @@ QString RealtimeData::seriesSymbol(DataSeries series)
     case HeatLoad: return QString("Estimated Heat Load");
         break;
 
+    case VirtualGear: return QString("Virtual Gear");
+        break;
+
     case RightPCO: return QString("Right PCO");
         break;
     case LeftPCO: return QString("Left PCO");
@@ -1125,6 +1136,8 @@ double RealtimeData::getFeO2() const { return feo2; }
 
 void RealtimeData::setTemp(double temp) { this->temp = temp; }
 double RealtimeData::getTemp() const { return temp; }
+void RealtimeData::setVirtualGear(int gear) { virtualGear = gear; }
+int RealtimeData::getVirtualGear() const { return virtualGear; }
 
 double RealtimeData::getCoreTemp() const { return coreTemp; }
 double RealtimeData::getSkinTemp() const { return skinTemp; }
