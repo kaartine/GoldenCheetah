@@ -120,6 +120,7 @@ all qt Train/trainingRecordingIo
 all qt Train/trainingTelemetryTimeline
 all qt Train/trainRuntime
 all qt Train/trainerTargetCoordinator
+all qt Train/virtualDrivetrain
 all qt Train/ftmsTargetReadiness
 all qt Train/bluetoothTelemetryRouter
 linux aux Build/appImagePackaging

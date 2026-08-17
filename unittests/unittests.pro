@@ -126,6 +126,7 @@ exists(unittests.pri) {
 			   Train/trainingTelemetryTimeline \
 			   Train/trainRuntime \
 			   Train/trainerTargetCoordinator \
+			   Train/virtualDrivetrain \
 			   Train/ftmsTargetReadiness \
 			   Train/bluetoothTelemetryRouter
 	linux:SUBDIRS += Build/appImagePackaging

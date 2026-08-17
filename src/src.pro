@@ -772,7 +772,7 @@ HEADERS += ../contrib/qtsolutions/codeeditor/codeeditor.h ../contrib/qtsolutions
 # Train View
 HEADERS += Train/AddDeviceWizard.h Train/CalibrationData.h Train/ComputrainerController.h Train/Computrainer.h Train/DeviceConfiguration.h \
            Train/BluetoothDeviceTypes.h Train/DeviceTypes.h Train/TrainingControllerLifecycle.h Train/TrainingDeviceSelection.h Train/TrainingStopPolicy.h \
-           Train/TrainingRecordingIo.h Train/TrainingTelemetryTimeline.h Train/TrainerTargetCoordinator.h \
+           Train/TrainingRecordingIo.h Train/TrainingTelemetryTimeline.h Train/TrainerTargetCoordinator.h Train/VirtualDrivetrain.h \
            Train/DialWindow.h \
            Train/TrainerDayDownloadDialog.h Train/TrainerDay.h Train/ErgFile.h Train/ErgFilePlot.h \
            Train/Library.h Train/LibraryParser.h Train/MeterWidget.h Train/NullController.h Train/RealtimeController.h \
@@ -900,7 +900,7 @@ SOURCES += Train/AddDeviceWizard.cpp Train/CalibrationData.cpp Train/Computraine
            Train/RealtimeData.cpp Train/RealtimePlot.cpp Train/RealtimePlotWindow.cpp Train/RemoteControl.cpp Train/SpinScanPlot.cpp \
            Train/SpinScanPlotWindow.cpp Train/SpinScanPolarPlot.cpp Train/GarminServiceHelper.cpp Train/PhysicsUtility.cpp Train/BicycleSim.cpp \
            Train/PolynomialRegression.cpp Train/StravaRoutesClient.cpp Train/StravaRoutesDownload.cpp Train/StravaRoutesDownloadPipeline.cpp \
-           Train/VideoSyncFileBase.cpp Train/ErgFileBase.cpp Train/TrainerTargetCoordinator.cpp \
+           Train/VideoSyncFileBase.cpp Train/ErgFileBase.cpp Train/TrainerTargetCoordinator.cpp Train/VirtualDrivetrain.cpp \
            Train/ModelFilter.cpp Train/MultiFilterProxyModel.cpp Train/WorkoutFilter.cpp Train/FilterEditor.cpp \
            Train/WorkoutFilterBox.cpp Train/TagBar.cpp Train/TagWidget.cpp \
            Train/TrainerDayAPIQuery.cpp Train/TrainerDayAPIDialog.cpp Train/ElevationChartWindow.cpp
