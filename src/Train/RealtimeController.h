@@ -24,6 +24,7 @@
 #include "CalibrationData.h"
 #include "TrainSidebar.h"
 #include "TrainerTargetCoordinator.h"
+#include "WorkoutRideTargetPlanner.h"
 #include "PolynomialRegression.h"
 
 #include "GoldenCheetah.h"
@@ -96,6 +97,7 @@ public:
     virtual bool doesPush();                    // this device is a push device (e.g. Quarq)
     virtual bool doesPull();                    // this device is a pull device (e.g. CT)
     virtual bool doesLoad();                    // this device can generate Load
+    virtual TrainerControlCapabilities controlCapabilities();
 
     // will update the realtime data with current data (only called for doesPull devices)
     virtual void getRealtimeData(RealtimeData &rtData); // update realtime data with current values

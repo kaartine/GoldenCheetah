@@ -36,12 +36,18 @@ TrainerControlCapabilities TrainerControlCapabilities::commonCapabilities(
     auto current = capabilities.begin();
     TrainerControlCapabilities result = *current;
     for (++current; current != capabilities.end(); ++current) {
-        result.targetPower &= current->targetPower;
-        result.targetResistance &= current->targetResistance;
-        result.simulation &= current->simulation;
-        result.nativeVirtualGearing &= current->nativeVirtualGearing;
+        result.intersectWith(*current);
     }
     return result;
+}
+
+void TrainerControlCapabilities::intersectWith(
+        const TrainerControlCapabilities &other)
+{
+    targetPower &= other.targetPower;
+    targetResistance &= other.targetResistance;
+    simulation &= other.simulation;
+    nativeVirtualGearing &= other.nativeVirtualGearing;
 }
 
 PlannedTrainerTarget WorkoutRideTargetPlanner::plan(

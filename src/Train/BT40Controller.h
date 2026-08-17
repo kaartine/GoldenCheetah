@@ -67,6 +67,7 @@ public:
 
     // telemetry push pull
     bool doesPush(), doesPull(), doesLoad();
+    TrainerControlCapabilities controlCapabilities() override;
     void getRealtimeData(RealtimeData &rtData);
     void pushRealtimeData(RealtimeData &rtData);
     void setBPM(BT40Device *source, float value,

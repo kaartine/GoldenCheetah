@@ -28,6 +28,7 @@
 #include <QTimer>
 
 #include "BluetoothDeviceTypes.h"
+#include "BluetoothTrainerCapabilities.h"
 #include "BluetoothTelemetryRouter.h"
 #include "CalibrationData.h"
 #include "Ftms.h"
@@ -70,6 +71,7 @@ public:
     void setRollingResistance(double);
     void setWindResistance(double);
     void setWheelCircumference(double);
+    TrainerControlCapabilities controlCapabilities() const;
 
     uint8_t  getCalibrationType()         { return calibrationData.getType(); }
     uint8_t  getCalibrationState()        { return calibrationData.getState(); }

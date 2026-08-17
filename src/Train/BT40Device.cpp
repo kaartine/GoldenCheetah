@@ -1851,6 +1851,37 @@ BT40Device::deviceInfo() const
     return m_currentDevice;
 }
 
+TrainerControlCapabilities BT40Device::controlCapabilities() const
+{
+    BluetoothTrainerControlProtocol protocol =
+            BluetoothTrainerControlProtocol::None;
+    switch (loadType) {
+    case Tacx_UART:
+        protocol = BluetoothTrainerControlProtocol::TacxUart;
+        break;
+    case Wahoo_Kickr:
+        protocol = BluetoothTrainerControlProtocol::WahooKickr;
+        break;
+    case Kurt_InRide:
+        protocol = BluetoothTrainerControlProtocol::KurtInRide;
+        break;
+    case Kurt_SmartControl:
+        protocol = BluetoothTrainerControlProtocol::KurtSmartControl;
+        break;
+    case FTMS_Device:
+        protocol = BluetoothTrainerControlProtocol::Ftms;
+        break;
+    case Load_None:
+        break;
+    }
+
+    BluetoothFtmsControlFeatures ftms;
+    ftms.targetPower = ftmsDeviceInfo.supports_power_target;
+    ftms.targetResistance = ftmsDeviceInfo.supports_resistance_target;
+    ftms.simulation = ftmsDeviceInfo.supports_simulation_target;
+    return BluetoothTrainerCapabilities::forProtocol(protocol, ftms);
+}
+
 void
 BT40Device::setLoad(double l)
 {

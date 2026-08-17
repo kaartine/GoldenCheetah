@@ -22,6 +22,7 @@ struct TrainerControlCapabilities
     static TrainerControlCapabilities targetPowerOnly();
     static TrainerControlCapabilities commonCapabilities(
             std::initializer_list<TrainerControlCapabilities> capabilities);
+    void intersectWith(const TrainerControlCapabilities &other);
 };
 
 enum class PlannedTrainerTargetMode

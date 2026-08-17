@@ -8,6 +8,7 @@
  */
 
 #include "Train/VirtualDrivetrain.h"
+#include "Train/BluetoothTrainerCapabilities.h"
 #include "Train/WorkoutRideTargetPlanner.h"
 
 #include <QTest>
@@ -216,6 +217,93 @@ private slots:
         QVERIFY(!common.targetResistance);
         QVERIFY(!common.simulation);
         QVERIFY(!common.nativeVirtualGearing);
+    }
+
+    void capabilityIntersectionCanBeAccumulated()
+    {
+        TrainerControlCapabilities common;
+        common.targetPower = true;
+        common.targetResistance = true;
+        common.simulation = true;
+        common.nativeVirtualGearing = true;
+
+        TrainerControlCapabilities powerAndSimulation;
+        powerAndSimulation.targetPower = true;
+        powerAndSimulation.simulation = true;
+        common.intersectWith(powerAndSimulation);
+
+        QVERIFY(common.targetPower);
+        QVERIFY(!common.targetResistance);
+        QVERIFY(common.simulation);
+        QVERIFY(!common.nativeVirtualGearing);
+    }
+
+    void bluetoothProtocolCapabilities_data()
+    {
+        QTest::addColumn<BluetoothTrainerControlProtocol>("protocol");
+        QTest::addColumn<bool>("power");
+        QTest::addColumn<bool>("resistance");
+        QTest::addColumn<bool>("simulation");
+
+        QTest::newRow("none")
+                << BluetoothTrainerControlProtocol::None
+                << false << false << false;
+        QTest::newRow("tacx-uart")
+                << BluetoothTrainerControlProtocol::TacxUart
+                << true << false << true;
+        QTest::newRow("wahoo-kickr")
+                << BluetoothTrainerControlProtocol::WahooKickr
+                << true << true << true;
+        QTest::newRow("kurt-inride")
+                << BluetoothTrainerControlProtocol::KurtInRide
+                << false << false << false;
+        QTest::newRow("kurt-smart-control")
+                << BluetoothTrainerControlProtocol::KurtSmartControl
+                << true << true << true;
+    }
+
+    void bluetoothProtocolCapabilities()
+    {
+        QFETCH(BluetoothTrainerControlProtocol, protocol);
+        QFETCH(bool, power);
+        QFETCH(bool, resistance);
+        QFETCH(bool, simulation);
+
+        const TrainerControlCapabilities result =
+                BluetoothTrainerCapabilities::forProtocol(protocol);
+
+        QCOMPARE(result.targetPower, power);
+        QCOMPARE(result.targetResistance, resistance);
+        QCOMPARE(result.simulation, simulation);
+        QVERIFY(!result.nativeVirtualGearing);
+    }
+
+    void ftmsCapabilitiesFollowAdvertisedTargetFeatures()
+    {
+        BluetoothFtmsControlFeatures features;
+        features.targetPower = true;
+        features.simulation = true;
+
+        const TrainerControlCapabilities result =
+                BluetoothTrainerCapabilities::forProtocol(
+                        BluetoothTrainerControlProtocol::Ftms, features);
+
+        QVERIFY(result.targetPower);
+        QVERIFY(!result.targetResistance);
+        QVERIFY(result.simulation);
+        QVERIFY(!result.nativeVirtualGearing);
+    }
+
+    void ftmsWithoutFeatureResponseSupportsNothing()
+    {
+        const TrainerControlCapabilities result =
+                BluetoothTrainerCapabilities::forProtocol(
+                        BluetoothTrainerControlProtocol::Ftms);
+
+        QVERIFY(!result.targetPower);
+        QVERIFY(!result.targetResistance);
+        QVERIFY(!result.simulation);
+        QVERIFY(!result.nativeVirtualGearing);
     }
 };
 

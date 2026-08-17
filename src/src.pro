@@ -621,8 +621,8 @@ SOURCES += Train/KurtInRide.cpp Train/KurtSmartControl.cpp
 HEADERS += Train/KurtInRide.h Train/KurtSmartControl.h
 
 QT += bluetooth
-HEADERS += Train/BT40Controller.h Train/BT40Device.h
-SOURCES += Train/BT40Controller.cpp Train/BT40Device.cpp
+HEADERS += Train/BT40Controller.h Train/BT40Device.h Train/BluetoothTrainerCapabilities.h
+SOURCES += Train/BT40Controller.cpp Train/BT40Device.cpp Train/BluetoothTrainerCapabilities.cpp
 HEADERS += Train/BluetoothTelemetryRouter.h
 SOURCES += Train/BluetoothTelemetryRouter.cpp
 HEADERS += Train/VMProConfigurator.h Train/VMProWidget.h

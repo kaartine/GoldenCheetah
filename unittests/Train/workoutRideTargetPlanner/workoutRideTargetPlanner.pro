@@ -4,10 +4,12 @@ CONFIG += c++17
 TARGET = testWorkoutRideTargetPlanner
 
 SOURCES = testWorkoutRideTargetPlanner.cpp \
+          ../../../src/Train/BluetoothTrainerCapabilities.cpp \
           ../../../src/Train/VirtualDrivetrain.cpp \
           ../../../src/Train/WorkoutRideTargetPlanner.cpp
 
-HEADERS = ../../../src/Train/VirtualDrivetrain.h \
+HEADERS = ../../../src/Train/BluetoothTrainerCapabilities.h \
+          ../../../src/Train/VirtualDrivetrain.h \
           ../../../src/Train/WorkoutRideTargetPlanner.h
 
 include(../../unittests.pri)

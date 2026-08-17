@@ -65,6 +65,12 @@ bool RealtimeController::discover(QString) { return false; }
 bool RealtimeController::doesPull() { return false; }
 bool RealtimeController::doesPush() { return false; }
 bool RealtimeController::doesLoad() { return false; }
+TrainerControlCapabilities RealtimeController::controlCapabilities()
+{
+    return doesLoad()
+            ? TrainerControlCapabilities::targetPowerOnly()
+            : TrainerControlCapabilities();
+}
 void RealtimeController::getRealtimeData(RealtimeData &) { }
 void RealtimeController::pushRealtimeData(RealtimeData &) { } // update realtime data with current values
 

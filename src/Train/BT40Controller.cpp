@@ -273,6 +273,19 @@ bool BT40Controller::doesPush() { return false; }
 bool BT40Controller::doesPull() { return true; }
 bool BT40Controller::doesLoad() { return !isHeartRateOnly(); }
 
+TrainerControlCapabilities BT40Controller::controlCapabilities()
+{
+    if (isHeartRateOnly() || devices.isEmpty()) {
+        return TrainerControlCapabilities();
+    }
+
+    TrainerControlCapabilities common = devices.first()->controlCapabilities();
+    for (int index = 1; index < devices.size(); ++index) {
+        common.intersectWith(devices.at(index)->controlCapabilities());
+    }
+    return common;
+}
+
 bool BT40Controller::isHeartRateOnly() const
 {
     return localDc && BluetoothDeviceTypes::roleForType(localDc->type) ==
