@@ -397,13 +397,16 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
     disk_timer = new QTimer(this);
     load_timer = new QTimer(this);
     start_timer = new QTimer(this);
+    workoutRideCommandTimer = new QTimer(this);
     start_timer->setSingleShot(true);
+    workoutRideCommandTimer->setSingleShot(true);
 
     session_time.start();
     session_elapsed_msec = 0;
     lap_time.start();
     lap_elapsed_msec = 0;
     secs_to_start = 0;
+    workoutRideCommandClock.start();
 
     rrFile = posFile = recordFile = vo2File = tcoreFile = NULL;
     lastRecordSecs = 0;
@@ -440,6 +443,13 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
     connect(disk_timer, SIGNAL(timeout()), this, SLOT(diskUpdate()));
     connect(load_timer, SIGNAL(timeout()), this, SLOT(loadUpdate()));
     connect(start_timer, SIGNAL(timeout()), this, SLOT(Start()));
+    connect(workoutRideCommandTimer, &QTimer::timeout, this, [this]() {
+        if (workoutRideModeEnabled
+                && (status & RT_RUNNING)
+                && !(status & RT_PAUSED)) {
+            applyWorkoutTarget(false);
+        }
+    });
 
     configChanged(CONFIG_APPEARANCE | CONFIG_DEVICES); // will reset the workout tree
     setLabels();
@@ -1339,6 +1349,10 @@ void TrainSidebar::Start()       // when start button is pressed
         if (status & RT_RECORDING) disk_timer->start(SAMPLERATE);
         load_period.restart();
         load_timer->start(LOADRATE);
+        if (workoutRideModeEnabled) {
+            resetWorkoutRideCommandDispatch();
+            applyWorkoutTarget(false);
+        }
 
 #if !defined GC_VIDEO_NONE
         mediaTree->setEnabled(false);
@@ -1364,6 +1378,7 @@ void TrainSidebar::Start()       // when start button is pressed
         //gui_timer->stop();
         if (status & RT_RECORDING) disk_timer->stop();
         load_timer->stop();
+        workoutRideCommandTimer->stop();
         load_msecs += load_period.restart();
 
 #if !defined GC_VIDEO_NONE
@@ -1430,6 +1445,7 @@ void TrainSidebar::Start()       // when start button is pressed
         load = 100;
         slope = 0.0;
         virtualDrivetrain.reset();
+        resetWorkoutRideCommandDispatch();
 
         // Reset Speed Simulation
         bicycle.clear();
@@ -1543,6 +1559,10 @@ void TrainSidebar::Pause()        // pause capture to recalibrate
         if (status & RT_RECORDING) disk_timer->start(SAMPLERATE);
         load_period.restart();
         load_timer->start(LOADRATE);
+        if (workoutRideModeEnabled) {
+            resetWorkoutRideCommandDispatch();
+            applyWorkoutTarget(false);
+        }
 
 #if !defined GC_VIDEO_NONE
         mediaTree->setEnabled(false);
@@ -1562,6 +1582,7 @@ void TrainSidebar::Pause()        // pause capture to recalibrate
         gui_timer->stop();
         if (status & RT_RECORDING) disk_timer->stop();
         load_timer->stop();
+        workoutRideCommandTimer->stop();
         load_msecs += load_period.restart();
 
         // enable media tree so we can change movie
@@ -1828,6 +1849,7 @@ void TrainSidebar::finishStop(RecordingStopAction recordingAction)
     }
 
     load_timer->stop();
+    resetWorkoutRideCommandDispatch();
     load_msecs = 0;
 
     // get back to normal after it may have been adusted by the user
@@ -2044,6 +2066,7 @@ void TrainSidebar::Disconnect()
     }
     workoutRideModeEnabled = false;
     workoutRideFallbackNotified = false;
+    resetWorkoutRideCommandDispatch();
     clearStatusFlags(RT_CONNECTED);
     emit workoutRideModeChanged();
 
@@ -2643,6 +2666,7 @@ void TrainSidebar::setWorkoutRideEnabled(bool enabled)
     if (workoutRideModeEnabled == enabled) return;
     workoutRideModeEnabled = enabled;
     workoutRideFallbackNotified = false;
+    resetWorkoutRideCommandDispatch();
     emit workoutRideModeChanged();
     context->notifySetNotification(
             enabled ? tr("Workout Ride enabled") : tr("Standard ERG enabled"),
@@ -2651,6 +2675,7 @@ void TrainSidebar::setWorkoutRideEnabled(bool enabled)
 
 void TrainSidebar::trainerControlCapabilitiesChanged()
 {
+    resetWorkoutRideCommandDispatch();
     if (workoutRideModeEnabled
             && !(status & RT_RUNNING)
             && !workoutRideModeAvailability().supported) {
@@ -2658,6 +2683,33 @@ void TrainSidebar::trainerControlCapabilitiesChanged()
         workoutRideFallbackNotified = false;
     }
     emit workoutRideModeChanged();
+
+    if (workoutRideModeEnabled
+            && (status & RT_RUNNING)
+            && !(status & RT_PAUSED)
+            && workoutRideModeAvailability().supported) {
+        applyWorkoutTarget(false);
+    }
+}
+
+void TrainSidebar::resetWorkoutRideCommandDispatch()
+{
+    workoutRideCommandTimer->stop();
+    workoutRideCommandFilter.reset();
+    workoutRideCommandClock.restart();
+}
+
+void TrainSidebar::scheduleWorkoutRideCommandRetry(int delayMs)
+{
+    if (delayMs < 0) {
+        workoutRideCommandTimer->stop();
+        return;
+    }
+
+    if (!workoutRideCommandTimer->isActive()
+            || workoutRideCommandTimer->remainingTime() > delayMs) {
+        workoutRideCommandTimer->start(delayMs);
+    }
 }
 
 void TrainSidebar::loadUpdate()
@@ -2676,6 +2728,7 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
 {
     int curLap = 0;
     TrainerTarget target;
+    bool dispatchTarget = true;
 
     if (status&RT_MODE_ERGO) {
         if (context->currentErgFile()) {
@@ -2689,6 +2742,7 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
             displayWorkoutLap = curLap;
         }
 
+        const double baseWorkoutWatts = load;
         WorkoutRideTargetInput input;
         input.enabled = workoutRideModeEnabled;
         input.workoutWatts = load;
@@ -2710,9 +2764,27 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
             workoutRideFallbackNotified = false;
         }
 
-        load = std::lround(planned.targetWatts);
+        if (planned.mode == PlannedTrainerTargetMode::WorkoutRidePower) {
+            const WorkoutRideCommandDecision decision =
+                    workoutRideCommandFilter.update(
+                            planned.targetWatts,
+                            baseWorkoutWatts,
+                            workoutRideCommandClock.elapsed());
+            if (decision.hasEffectiveTarget) {
+                load = std::lround(decision.effectiveWatts);
+                dispatchTarget = decision.dispatch;
+                scheduleWorkoutRideCommandRetry(decision.retryAfterMs);
+            } else {
+                resetWorkoutRideCommandDispatch();
+                load = std::lround(baseWorkoutWatts);
+            }
+        } else {
+            resetWorkoutRideCommandDispatch();
+            load = std::lround(planned.targetWatts);
+        }
         target = TrainerTarget::erg(load, load_msecs);
     } else {
+        resetWorkoutRideCommandDispatch();
         if (context->currentErgFile()) {
             const double workoutSlope = ergFileQueryAdapter.gradientAt(
                     displayWorkoutDistance * 1000., curLap);
@@ -2739,7 +2811,8 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
         targetDevices.push_back(Devices[dev].controller);
     }
 
-    if (trainerTargetCoordinator.apply(target, targetDevices)
+    if (dispatchTarget
+            && trainerTargetCoordinator.apply(target, targetDevices)
             == TrainerTargetResult::WorkoutFinished) {
         Stop(DEVICE_OK);
         return false;

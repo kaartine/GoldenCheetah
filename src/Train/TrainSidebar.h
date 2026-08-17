@@ -40,6 +40,7 @@
 #include "TrainSidebarRuntime.h"
 #include "TrainerTargetCoordinator.h"
 #include "VirtualDrivetrain.h"
+#include "WorkoutRideCommandFilter.h"
 #include "WorkoutRideTargetPlanner.h"
 
 // standard stuff
@@ -357,6 +358,8 @@ class TrainSidebar : public GcWindow
 
         void finishStop(RecordingStopAction recordingAction);
         bool applyWorkoutTarget(bool initializeSlope);
+        void resetWorkoutRideCommandDispatch();
+        void scheduleWorkoutRideCommandRetry(int delayMs);
         TrainerControlCapabilities activeTrainerCapabilities();
         bool writeRecordingData(const QByteArray &data);
         void stopForRecordingFailure(TrainingRecordingIo::Failure failure);
@@ -370,6 +373,9 @@ class TrainSidebar : public GcWindow
         TrainingTelemetryTimeline::Timeline telemetryTimeline;
         TrainerTargetCoordinator trainerTargetCoordinator;
         VirtualDrivetrain virtualDrivetrain;
+        WorkoutRideCommandFilter workoutRideCommandFilter;
+        QElapsedTimer workoutRideCommandClock;
+        QTimer *workoutRideCommandTimer;
         bool workoutRideModeEnabled;
         bool workoutRideFallbackNotified;
 

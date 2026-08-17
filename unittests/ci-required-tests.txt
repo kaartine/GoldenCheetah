@@ -122,6 +122,7 @@ all qt Train/trainRuntime
 all qt Train/trainerTargetCoordinator
 all qt Train/virtualDrivetrain
 all qt Train/virtualGearRuntime
+all qt Train/workoutRideCommandFilter
 all qt Train/workoutRideTargetPlanner
 all qt Train/ftmsTargetReadiness
 all qt Train/bluetoothTelemetryRouter
