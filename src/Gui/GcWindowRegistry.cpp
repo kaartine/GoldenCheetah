@@ -41,6 +41,7 @@
 #include "SpinScanPlotWindow.h"
 #include "WorkoutPlotWindow.h"
 #include "WorkoutWindow.h"
+#include "WorkoutGameWindow.h"
 #include "WebPageWindow.h"
 #include "LiveMapWebPageWindow.h"
 #include "CalendarWindow.h"
@@ -109,6 +110,7 @@ GcWindowRegistry::initialize()
     { VIEW_TRAIN, tr("Pedal Stroke"),GcWindowTypes::SpinScanPlot },
     { VIEW_TRAIN, tr("Video Player"),GcWindowTypes::VideoPlayer },
     { VIEW_TRAIN, tr("Workout Editor"),GcWindowTypes::WorkoutWindow },
+    { VIEW_TRAIN, tr("Workout Game"),GcWindowTypes::WorkoutGame },
     { VIEW_TRAIN, tr("Live Map"),GcWindowTypes::LiveMapWebPageWindow },
     { VIEW_TRAIN, tr("HTML Chart"),GcWindowTypes::HtmlTraining },
     { VIEW_TRAIN, tr("Elevation Chart"),GcWindowTypes::ElevationChart },
@@ -239,6 +241,7 @@ GcWindowRegistry::newGcWindow(GcWinID id, Context *context)
 
     case GcWindowTypes::ActivityNavigator: returning = new RideNavigator(context); break;
     case GcWindowTypes::WorkoutWindow: returning = new WorkoutWindow(context); break;
+    case GcWindowTypes::WorkoutGame: returning = new WorkoutGameWindow(context); break;
 
     case GcWindowTypes::WebPageWindow: returning = new WebPageWindow(context); break;
     case GcWindowTypes::LiveMapWebPageWindow: returning = new LiveMapWebPageWindow(context); break;

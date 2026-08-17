@@ -128,6 +128,7 @@ exists(unittests.pri) {
 			   Train/trainerTargetCoordinator \
 			   Train/virtualDrivetrain \
 			   Train/virtualGearRuntime \
+			   Train/workoutGameCanvas \
 			   Train/workoutGameCourse \
 			   Train/workoutGameSimulation \
 			   Train/workoutGameWorkoutAdapter \

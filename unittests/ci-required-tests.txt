@@ -122,6 +122,7 @@ all qt Train/trainRuntime
 all qt Train/trainerTargetCoordinator
 all qt Train/virtualDrivetrain
 all qt Train/virtualGearRuntime
+all qt Train/workoutGameCanvas
 all qt Train/workoutGameCourse
 all qt Train/workoutGameSimulation
 all qt Train/workoutGameWorkoutAdapter
