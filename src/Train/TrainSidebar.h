@@ -40,6 +40,7 @@
 #include "TrainSidebarRuntime.h"
 #include "TrainerTargetCoordinator.h"
 #include "VirtualDrivetrain.h"
+#include "WorkoutRideTargetPlanner.h"
 
 // standard stuff
 #include <QDir>
@@ -139,6 +140,8 @@ class TrainSidebar : public GcWindow
 
         RemoteControl *remote;      // remote control settings
         int currentStatus() {return status;}
+        bool workoutRideEnabled() const { return workoutRideModeEnabled; }
+        WorkoutRideModeAvailability workoutRideModeAvailability();
 
     signals:
         void deviceSelected();
@@ -146,6 +149,7 @@ class TrainSidebar : public GcWindow
         void pause();
         void stop();
         void statusChanged(int status);
+        void workoutRideModeChanged();
 
     private slots:
         void deviceTreeWidgetSelectionChanged();
@@ -203,6 +207,7 @@ class TrainSidebar : public GcWindow
         void Lower();       // set load/gradient higher
         void VirtualShiftUp();
         void VirtualShiftDown();
+        void setWorkoutRideEnabled(bool enabled);
         void newLap();      // start new Lap!
         void resetLapTimer(); //reset the lap timer
         void resetTextAudioEmitTracking();
@@ -239,6 +244,7 @@ class TrainSidebar : public GcWindow
         void discardAndStopTraining();
         void continueTraining();
         void stopDialogFinished();
+        void trainerControlCapabilitiesChanged();
 
     protected:
 
@@ -351,6 +357,7 @@ class TrainSidebar : public GcWindow
 
         void finishStop(RecordingStopAction recordingAction);
         bool applyWorkoutTarget(bool initializeSlope);
+        TrainerControlCapabilities activeTrainerCapabilities();
         bool writeRecordingData(const QByteArray &data);
         void stopForRecordingFailure(TrainingRecordingIo::Failure failure);
         TrainingTelemetryTimeline::SampleTime auxiliaryTimestamp(
@@ -363,6 +370,8 @@ class TrainSidebar : public GcWindow
         TrainingTelemetryTimeline::Timeline telemetryTimeline;
         TrainerTargetCoordinator trainerTargetCoordinator;
         VirtualDrivetrain virtualDrivetrain;
+        bool workoutRideModeEnabled;
+        bool workoutRideFallbackNotified;
 
         Bicycle bicycle;
 

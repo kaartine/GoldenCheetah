@@ -413,6 +413,8 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
     pendingConfigChange = false;
     stopConfirmationActive = false;
     resumeAfterStopConfirmation = false;
+    workoutRideModeEnabled = false;
+    workoutRideFallbackNotified = false;
 
     displayTemp = 0;
     displayWorkoutLap = 0;
@@ -1002,6 +1004,13 @@ TrainSidebar::workoutTreeWidgetSelectionChanged()
         foreach(int dev, activeDevices) Devices[dev].controller->setMode(RT_MODE_SPIN);
     }
 
+    if ((mode != ErgFileFormat::erg && mode != ErgFileFormat::mrc)
+            || !context->currentErgFile()) {
+        workoutRideModeEnabled = false;
+        workoutRideFallbackNotified = false;
+    }
+    emit workoutRideModeChanged();
+
     maintainLapDistanceState();
     
     ergFileQueryAdapter.resetQueryState();
@@ -1385,6 +1394,15 @@ void TrainSidebar::Start()       // when start button is pressed
         }
 
         qDebug() << "start...";
+
+        if (workoutRideModeEnabled
+                && !workoutRideModeAvailability().supported) {
+            workoutRideModeEnabled = false;
+            workoutRideFallbackNotified = false;
+            emit workoutRideModeChanged();
+            context->notifySetNotification(
+                    tr("Workout Ride unavailable; using standard ERG"), 4);
+        }
 
         recordingHealth.reset();
         telemetryTimeline.reset();
@@ -1992,8 +2010,13 @@ void TrainSidebar::Connect()
         Devices[dev].controller->resetCalibrationState();
         connect(Devices[dev].controller, &RealtimeController::setNotification,
                 context, &Context::setNotification);
+        connect(Devices[dev].controller,
+                &RealtimeController::controlCapabilitiesChanged,
+                this, &TrainSidebar::trainerControlCapabilitiesChanged,
+                Qt::UniqueConnection);
     }
     setStatusFlags(RT_CONNECTED);
+    emit workoutRideModeChanged();
     gui_timer->start(REFRESHRATE);
 
     context->notifySetNotification(tr("Connected.."), 2);
@@ -2014,9 +2037,15 @@ void TrainSidebar::Disconnect()
 
     foreach(int dev, activeDevices) {
         disconnect(Devices[dev].controller, &RealtimeController::setNotification, context, &Context::setNotification);
+        disconnect(Devices[dev].controller,
+                   &RealtimeController::controlCapabilitiesChanged,
+                   this, &TrainSidebar::trainerControlCapabilitiesChanged);
         Devices[dev].controller->stop();
     }
+    workoutRideModeEnabled = false;
+    workoutRideFallbackNotified = false;
     clearStatusFlags(RT_CONNECTED);
+    emit workoutRideModeChanged();
 
     gui_timer->stop();
 
@@ -2568,6 +2597,69 @@ void TrainSidebar::diskUpdate()
 // WORKOUT MODE
 //----------------------------------------------------------------------
 
+TrainerControlCapabilities TrainSidebar::activeTrainerCapabilities()
+{
+    TrainerControlCapabilities common;
+    bool foundTrainer = false;
+
+    foreach (int dev, activeDevices) {
+        RealtimeController *controller = Devices[dev].controller;
+        if (!controller || !controller->doesLoad()) continue;
+
+        if (!foundTrainer) {
+            common = controller->controlCapabilities();
+            foundTrainer = true;
+        } else {
+            common.intersectWith(controller->controlCapabilities());
+        }
+    }
+
+    return foundTrainer ? common : TrainerControlCapabilities();
+}
+
+WorkoutRideModeAvailability TrainSidebar::workoutRideModeAvailability()
+{
+    const bool ergWorkout = context->currentErgFile()
+            && (mode == ErgFileFormat::erg || mode == ErgFileFormat::mrc);
+    return WorkoutRideTargetPlanner::availability(
+            status & RT_CONNECTED,
+            status & RT_RUNNING,
+            ergWorkout,
+            activeTrainerCapabilities());
+}
+
+void TrainSidebar::setWorkoutRideEnabled(bool enabled)
+{
+    if (status & RT_RUNNING) return;
+
+    if (enabled && !workoutRideModeAvailability().editable) {
+        context->notifySetNotification(
+                tr("Workout Ride requires a connected power-controlled trainer and ERG workout"),
+                4);
+        emit workoutRideModeChanged();
+        return;
+    }
+
+    if (workoutRideModeEnabled == enabled) return;
+    workoutRideModeEnabled = enabled;
+    workoutRideFallbackNotified = false;
+    emit workoutRideModeChanged();
+    context->notifySetNotification(
+            enabled ? tr("Workout Ride enabled") : tr("Standard ERG enabled"),
+            2);
+}
+
+void TrainSidebar::trainerControlCapabilitiesChanged()
+{
+    if (workoutRideModeEnabled
+            && !(status & RT_RUNNING)
+            && !workoutRideModeAvailability().supported) {
+        workoutRideModeEnabled = false;
+        workoutRideFallbackNotified = false;
+    }
+    emit workoutRideModeChanged();
+}
+
 void TrainSidebar::loadUpdate()
 {
     // we hold our horses whilst calibration is taking place...
@@ -2597,6 +2689,28 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
             displayWorkoutLap = curLap;
         }
 
+        WorkoutRideTargetInput input;
+        input.enabled = workoutRideModeEnabled;
+        input.workoutWatts = load;
+        input.cadenceRpm = displayCadence;
+        input.relativeGearRatio = virtualDrivetrain.relativeRatio();
+        const PlannedTrainerTarget planned = WorkoutRideTargetPlanner::plan(
+                input, activeTrainerCapabilities());
+
+        if (workoutRideModeEnabled
+                && planned.mode == PlannedTrainerTargetMode::StandardErg
+                && planned.targetWatts != -100.0) {
+            if (!workoutRideFallbackNotified) {
+                context->notifySetNotification(
+                        tr("Workout Ride control unavailable; using standard ERG target"),
+                        4);
+                workoutRideFallbackNotified = true;
+            }
+        } else {
+            workoutRideFallbackNotified = false;
+        }
+
+        load = std::lround(planned.targetWatts);
         target = TrainerTarget::erg(load, load_msecs);
     } else {
         if (context->currentErgFile()) {
@@ -3188,6 +3302,11 @@ void TrainSidebar::VirtualShiftUp()
 {
     if ((status & RT_CONNECTED) == 0) return;
     if (virtualDrivetrain.shiftUp()) {
+        if (workoutRideModeEnabled
+                && (status & RT_RUNNING)
+                && !(status & RT_PAUSED)) {
+            applyWorkoutTarget(false);
+        }
         context->notifySetNotification(
                 tr("Virtual gear %1").arg(virtualDrivetrain.gear()), 2);
     }
@@ -3197,6 +3316,11 @@ void TrainSidebar::VirtualShiftDown()
 {
     if ((status & RT_CONNECTED) == 0) return;
     if (virtualDrivetrain.shiftDown()) {
+        if (workoutRideModeEnabled
+                && (status & RT_RUNNING)
+                && !(status & RT_PAUSED)) {
+            applyWorkoutTarget(false);
+        }
         context->notifySetNotification(
                 tr("Virtual gear %1").arg(virtualDrivetrain.gear()), 2);
     }

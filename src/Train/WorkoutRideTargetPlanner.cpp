@@ -84,3 +84,15 @@ PlannedTrainerTarget WorkoutRideTargetPlanner::plan(
         std::clamp(targetWatts, 0.0, MaximumTargetWatts)
     };
 }
+
+WorkoutRideModeAvailability WorkoutRideTargetPlanner::availability(
+        bool connected,
+        bool running,
+        bool ergWorkout,
+        const TrainerControlCapabilities &capabilities)
+{
+    WorkoutRideModeAvailability result;
+    result.supported = connected && ergWorkout && capabilities.targetPower;
+    result.editable = result.supported && !running;
+    return result;
+}

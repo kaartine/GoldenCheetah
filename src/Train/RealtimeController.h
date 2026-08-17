@@ -135,6 +135,7 @@ public:
 
 signals:
     void setNotification(QString text, int timeout);
+    void controlCapabilitiesChanged();
 
 private:
     DeviceConfiguration *dc;

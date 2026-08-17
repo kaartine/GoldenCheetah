@@ -45,11 +45,22 @@ struct PlannedTrainerTarget
     double targetWatts = 0.0;
 };
 
+struct WorkoutRideModeAvailability
+{
+    bool supported = false;
+    bool editable = false;
+};
+
 class WorkoutRideTargetPlanner
 {
 public:
     static PlannedTrainerTarget plan(
             const WorkoutRideTargetInput &input,
+            const TrainerControlCapabilities &capabilities);
+    static WorkoutRideModeAvailability availability(
+            bool connected,
+            bool running,
+            bool ergWorkout,
             const TrainerControlCapabilities &capabilities);
 };
 

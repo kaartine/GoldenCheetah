@@ -106,6 +106,7 @@ signals:
     void reconnectScanCancelled();
     void connectionRestored();
     void adapterUnavailable();
+    void controlCapabilitiesChanged();
 private:
     QPointer<BT40Controller> parentController;
     QBluetoothDeviceInfo m_currentDevice;

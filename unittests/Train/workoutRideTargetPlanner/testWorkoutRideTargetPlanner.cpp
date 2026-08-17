@@ -53,6 +53,22 @@ private slots:
         QCOMPARE(result.targetWatts, 240.0);
     }
 
+    void workoutFinishedSentinelIsNeverScaled()
+    {
+        WorkoutRideTargetInput input;
+        input.enabled = true;
+        input.workoutWatts = -100.0;
+        input.cadenceRpm = 120.0;
+        input.relativeGearRatio = 2.0;
+
+        const PlannedTrainerTarget result =
+                WorkoutRideTargetPlanner::plan(
+                        input, TrainerControlCapabilities::targetPowerOnly());
+
+        QCOMPARE(result.mode, PlannedTrainerTargetMode::StandardErg);
+        QCOMPARE(result.targetWatts, -100.0);
+    }
+
     void referenceCadenceAndInitialGearPreserveWorkoutTarget()
     {
         WorkoutRideTargetInput input;
@@ -304,6 +320,46 @@ private slots:
         QVERIFY(!result.targetResistance);
         QVERIFY(!result.simulation);
         QVERIFY(!result.nativeVirtualGearing);
+    }
+
+    void modeAvailabilityRequiresConnectedPowerTrainerAndErgWorkout_data()
+    {
+        QTest::addColumn<bool>("connected");
+        QTest::addColumn<bool>("running");
+        QTest::addColumn<bool>("ergWorkout");
+        QTest::addColumn<bool>("targetPower");
+        QTest::addColumn<bool>("supported");
+        QTest::addColumn<bool>("editable");
+
+        QTest::newRow("ready")
+                << true << false << true << true << true << true;
+        QTest::newRow("running-locks-selection")
+                << true << true << true << true << true << false;
+        QTest::newRow("disconnected")
+                << false << false << true << true << false << false;
+        QTest::newRow("slope-workout")
+                << true << false << false << true << false << false;
+        QTest::newRow("telemetry-only")
+                << true << false << true << false << false << false;
+    }
+
+    void modeAvailabilityRequiresConnectedPowerTrainerAndErgWorkout()
+    {
+        QFETCH(bool, connected);
+        QFETCH(bool, running);
+        QFETCH(bool, ergWorkout);
+        QFETCH(bool, targetPower);
+        QFETCH(bool, supported);
+        QFETCH(bool, editable);
+
+        TrainerControlCapabilities capabilities;
+        capabilities.targetPower = targetPower;
+        const WorkoutRideModeAvailability result =
+                WorkoutRideTargetPlanner::availability(
+                        connected, running, ergWorkout, capabilities);
+
+        QCOMPARE(result.supported, supported);
+        QCOMPARE(result.editable, editable);
     }
 };
 

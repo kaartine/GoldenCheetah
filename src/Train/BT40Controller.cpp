@@ -365,6 +365,8 @@ BT40Controller::addDevice(const QBluetoothDeviceInfo &info)
                     : BluetoothDeviceTypes::DeviceRole::Trainer;
             BT40Device* dev = new BT40Device(this, info, role);
             devices.append(dev);
+            connect(dev, &BT40Device::controlCapabilitiesChanged,
+                    this, &BT40Controller::controlCapabilitiesChanged);
 
             // Only connect to device if we really want
             // to use them for a workout

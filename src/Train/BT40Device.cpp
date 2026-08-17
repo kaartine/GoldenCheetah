@@ -255,6 +255,7 @@ BT40Device::clearGattServices()
     commandRetry = 0;
     ftmsDeviceInfo = FtmsDeviceInformation();
     ftmsTargetController.reset();
+    emit controlCapabilitiesChanged();
 }
 
 void
@@ -894,6 +895,7 @@ BT40Device::serviceStateChanged(QLowEnergyService::ServiceState s)
                             loadService = service;
                             loadCharacteristic = characteristic;
                             loadType = Tacx_UART;
+                            emit controlCapabilitiesChanged();
 
                         } else if(characteristic.uuid() == QBluetoothUuid(QString(WAHOO_BRAKE_CONTROL_UUID))) {
                             qDebug() << "Starting indication for char with UUID: " << characteristic.uuid().toString();
@@ -903,6 +905,7 @@ BT40Device::serviceStateChanged(QLowEnergyService::ServiceState s)
                                 loadService = service;
                                 loadCharacteristic = characteristic;
                                 loadType = Wahoo_Kickr;
+                                emit controlCapabilitiesChanged();
                                 commandQueue.clear();
                                 commandRetry = 0;
 
@@ -927,6 +930,7 @@ BT40Device::serviceStateChanged(QLowEnergyService::ServiceState s)
                             loadService = service;
                             loadCharacteristic = characteristic;
                             loadType = Kurt_InRide;
+                            emit controlCapabilitiesChanged();
 
                             calibrationData.setType(0, CALIBRATION_TYPE_SPINDOWN);
                             calibrationData.setState(CALIBRATION_STATE_IDLE);
@@ -942,6 +946,7 @@ BT40Device::serviceStateChanged(QLowEnergyService::ServiceState s)
                             loadService = service;
                             loadCharacteristic = characteristic;
                             loadType = Kurt_SmartControl;
+                            emit controlCapabilitiesChanged();
 
                             calibrationData.setType(0, CALIBRATION_TYPE_SPINDOWN);
                             calibrationData.setState(CALIBRATION_STATE_IDLE);
@@ -968,6 +973,7 @@ BT40Device::serviceStateChanged(QLowEnergyService::ServiceState s)
                             loadService = service;
                             loadCharacteristic = characteristic;
                             loadType = FTMS_Device;
+                            emit controlCapabilitiesChanged();
 
                             QByteArray command;
                             QDataStream commandDs(&command, QIODevice::ReadWrite);
@@ -1407,6 +1413,7 @@ BT40Device::updateValue(const QLowEnergyCharacteristic &c, const QByteArray &val
                 targetSettings & FtmsTargetSetting::FTMS_INDOOR_BIKE_SIMULATION_SUPPORTED;
         ftmsDeviceInfo.supports_spin_down_calibration =
                 targetSettings & FtmsTargetSetting::FTMS_SPIN_DOWN_CONTROL_SUPPORTED;
+        emit controlCapabilitiesChanged();
 
         if (ftmsDeviceInfo.supports_power_target && loadService) {
             readTrainerCharacteristic(

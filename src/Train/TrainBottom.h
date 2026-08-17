@@ -28,6 +28,7 @@ class TrainSidebar;
 class QPushButton;
 class QSlider;
 class QPlainTextEdit;
+class QComboBox;
 
 class TrainBottom : public QWidget
 {
@@ -44,6 +45,7 @@ private:
     QPushButton *m_playButton, *m_rewindButton, *m_stopButton, *m_forwardButton;
     QPushButton *m_lapButton, *m_connectButton, *loadDown, *loadUp, *cal, *fwdLap, *backLap;
     QSlider *intensitySlider;
+    QComboBox *rideMode;
     QPlainTextEdit *notificationText;
     QTimer *notificationTimer;
     QMap<void*, QString> iconNames;
@@ -64,6 +66,8 @@ private slots:
     void statusChanged(int status);
     void setNotification(QString msg, int timeout);
     void clearNotification(void);
+    void rideModeChanged(int index);
+    void refreshRideMode();
 
 signals:
     void autoHideChanged(bool enabled);

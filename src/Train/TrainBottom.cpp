@@ -24,7 +24,9 @@
 #include <QPushButton>
 #include <QSlider>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QPlainTextEdit>
+#include <QSignalBlocker>
 #include <QTimer>
 
 TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
@@ -136,6 +138,16 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
     toolbuttons->addWidget(newSep());
     toolbuttons->addSpacing(5);
 
+    rideMode = new QComboBox(this);
+    rideMode->setFocusPolicy(Qt::NoFocus);
+    rideMode->addItem(tr("Standard ERG"), false);
+    rideMode->addItem(tr("Workout Ride"), true);
+    toolbuttons->addWidget(rideMode);
+
+    toolbuttons->addSpacing(5);
+    toolbuttons->addWidget(newSep());
+    toolbuttons->addSpacing(5);
+
     loadDown = new QPushButton(this);
     applyIcon(loadDown, "down");
     loadDown->setFocusPolicy(Qt::NoFocus);
@@ -210,6 +222,10 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
     connect(loadDown, SIGNAL(clicked()), m_trainSidebar, SLOT(Lower()));
     connect(intensitySlider, SIGNAL(valueChanged(int)), m_trainSidebar, SLOT(adjustIntensity(int)));
     connect(m_trainSidebar->context, SIGNAL(intensityChanged(int)), intensitySlider, SLOT(setValue(int)));
+    connect(rideMode, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &TrainBottom::rideModeChanged);
+    connect(m_trainSidebar, &TrainSidebar::workoutRideModeChanged,
+            this, &TrainBottom::refreshRideMode);
 
     connect(m_trainSidebar->context, SIGNAL(setNotification(QString, int)), this, SLOT(setNotification(QString, int)));
     connect(m_trainSidebar->context, SIGNAL(clearNotification(void)), this, SLOT(clearNotification(void)));
@@ -251,6 +267,7 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
     updateStyles();
     m_tooltips = appsettings->value(this, TRAIN_TOOLTIPS, true).toBool();
     updateTooltips();
+    refreshRideMode();
 }
 
 void TrainBottom::updatePlayButtonIcon()
@@ -289,6 +306,8 @@ void TrainBottom::autoHideCheckboxChanged(int state)
 
 void TrainBottom::statusChanged(int status)
 {
+    refreshRideMode();
+
     // not yet connected
     if ((status&RT_CONNECTED) == 0) {
         applyIcon(m_connectButton, "offline");
@@ -397,6 +416,21 @@ void TrainBottom::statusChanged(int status)
 
 }
 
+void TrainBottom::rideModeChanged(int index)
+{
+    m_trainSidebar->setWorkoutRideEnabled(
+            rideMode->itemData(index).toBool());
+    refreshRideMode();
+}
+
+void TrainBottom::refreshRideMode()
+{
+    const QSignalBlocker blocker(rideMode);
+    rideMode->setCurrentIndex(m_trainSidebar->workoutRideEnabled() ? 1 : 0);
+    rideMode->setEnabled(
+            m_trainSidebar->workoutRideModeAvailability().editable);
+}
+
 void TrainBottom::setNotification(QString msg, int timeout)
 {
     if (timeout > 0) {
@@ -461,6 +495,7 @@ void TrainBottom::updateTooltips()
         m_lapButton->setToolTip(tr("Lap"));
         fwdLap->setToolTip(tr("Forward 1 lap"));
         cal->setToolTip(tr("Calibrate"));
+        rideMode->setToolTip(tr("Trainer control mode"));
         loadDown->setToolTip(tr("Decrease intensity"));
         loadUp->setToolTip(tr("Increase intensity"));
     }
@@ -474,6 +509,7 @@ void TrainBottom::updateTooltips()
         m_lapButton->setToolTip("");
         fwdLap->setToolTip("");
         cal->setToolTip("");
+        rideMode->setToolTip("");
         loadUp->setToolTip("");
         loadDown->setToolTip("");
         intensitySlider->setToolTip("");
