@@ -129,6 +129,7 @@ exists(unittests.pri) {
 			   Train/virtualDrivetrain \
 			   Train/virtualGearRuntime \
 			   Train/workoutGameCourse \
+			   Train/workoutGameSimulation \
 			   Train/workoutRideCommandFilter \
 			   Train/workoutRideTargetPlanner \
 			   Train/ftmsTargetReadiness \

@@ -123,6 +123,7 @@ all qt Train/trainerTargetCoordinator
 all qt Train/virtualDrivetrain
 all qt Train/virtualGearRuntime
 all qt Train/workoutGameCourse
+all qt Train/workoutGameSimulation
 all qt Train/workoutRideCommandFilter
 all qt Train/workoutRideTargetPlanner
 all qt Train/ftmsTargetReadiness
