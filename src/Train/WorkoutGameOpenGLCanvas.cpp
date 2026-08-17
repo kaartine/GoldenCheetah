@@ -42,6 +42,13 @@ void WorkoutGameOpenGLCanvas::setCourse(const WorkoutGameCourse &newCourse)
     update();
 }
 
+void WorkoutGameOpenGLCanvas::setCompetition(
+        const WorkoutGameCompetitionSnapshot &newCompetition)
+{
+    competition = newCompetition;
+    update();
+}
+
 void WorkoutGameOpenGLCanvas::setSnapshot(
         const WorkoutGameSimulationSnapshot &snapshot,
         double newWatts,
@@ -83,7 +90,7 @@ void WorkoutGameOpenGLCanvas::paintGL()
     glClear(GL_COLOR_BUFFER_BIT);
     QPainter painter(this);
     WorkoutGameCanvas::paintScene(
-            painter, rect(), course, current, watts, targetWatts,
+            painter, rect(), course, current, competition, watts, targetWatts,
             cadenceRpm, heartRate, virtualGear, animationFrame);
 }
 

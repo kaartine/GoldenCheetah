@@ -12,6 +12,7 @@
 
 #include "GoldenCheetah.h"
 #include "RealtimeData.h"
+#include "WorkoutGameCompetition.h"
 #include "WorkoutGameSimulation.h"
 
 class Context;
@@ -34,20 +35,27 @@ private slots:
     void start();
     void pause();
     void unpause();
+    void stop();
     void usePainterFallback();
 
 private:
     double currentFtp(ErgFile *workout) const;
+    WorkoutGameGhostReplay loadGhost(const WorkoutGameCourse &course) const;
+    void storeGhost();
     void updateSimulation(std::int64_t workoutTimeMs);
 
     Context *context;
     QStackedWidget *renderStack;
     WorkoutGameCanvas *painterCanvas;
     WorkoutGameOpenGLCanvas *openGLCanvas;
+    WorkoutGameCourse currentCourse;
     WorkoutGameSimulation simulation;
+    WorkoutGameCompetition competition;
+    WorkoutGameGhostRecorder ghostRecorder;
     RealtimeData latestTelemetry;
     bool hasTelemetry = false;
     bool paused = false;
+    bool sessionActive = false;
     double ftpWatts = 0.0;
 };
 

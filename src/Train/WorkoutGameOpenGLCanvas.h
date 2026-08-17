@@ -11,6 +11,7 @@
 #define _GC_WorkoutGameOpenGLCanvas_h
 
 #include "WorkoutGameCourse.h"
+#include "WorkoutGameCompetition.h"
 #include "WorkoutGameSimulation.h"
 
 #include <QOpenGLFunctions>
@@ -27,6 +28,7 @@ public:
     explicit WorkoutGameOpenGLCanvas(QWidget *parent = nullptr);
 
     void setCourse(const WorkoutGameCourse &course);
+    void setCompetition(const WorkoutGameCompetitionSnapshot &competition);
     void setSnapshot(
             const WorkoutGameSimulationSnapshot &snapshot,
             double watts,
@@ -49,6 +51,7 @@ private:
 
     WorkoutGameCourse course;
     WorkoutGameSimulationSnapshot current;
+    WorkoutGameCompetitionSnapshot competition;
     double watts = 0.0;
     double targetWatts = 0.0;
     int cadenceRpm = 0;

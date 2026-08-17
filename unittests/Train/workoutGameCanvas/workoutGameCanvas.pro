@@ -5,11 +5,13 @@ TARGET = testWorkoutGameCanvas
 
 SOURCES = testWorkoutGameCanvas.cpp \
           ../../../src/Train/WorkoutGameCanvas.cpp \
+          ../../../src/Train/WorkoutGameCompetition.cpp \
           ../../../src/Train/WorkoutGameCourse.cpp \
           ../../../src/Train/WorkoutGameOpenGLCanvas.cpp \
           ../../../src/Train/WorkoutGameSimulation.cpp
 
 HEADERS = ../../../src/Train/WorkoutGameCanvas.h \
+          ../../../src/Train/WorkoutGameCompetition.h \
           ../../../src/Train/WorkoutGameCourse.h \
           ../../../src/Train/WorkoutGameOpenGLCanvas.h \
           ../../../src/Train/WorkoutGameSimulation.h

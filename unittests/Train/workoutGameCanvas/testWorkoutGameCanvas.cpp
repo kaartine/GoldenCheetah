@@ -8,6 +8,7 @@
  */
 
 #include "Train/WorkoutGameCanvas.h"
+#include "Train/WorkoutGameCompetition.h"
 #include "Train/WorkoutGameOpenGLCanvas.h"
 
 #include <QGuiApplication>
@@ -36,6 +37,18 @@ QSet<QRgb> colors(const QImage &image)
         for (int x = 0; x < image.width(); x += 4) result.insert(line[x]);
     }
     return result;
+}
+
+int changedPixels(const QImage &first, const QImage &second)
+{
+    if (first.size() != second.size()) return 0;
+    int changed = 0;
+    for (int y = 0; y < first.height(); y += 2) {
+        for (int x = 0; x < first.width(); x += 2) {
+            if (first.pixel(x, y) != second.pixel(x, y)) ++changed;
+        }
+    }
+    return changed;
 }
 
 }
@@ -105,6 +118,41 @@ private slots:
         const QImage bypassImage = render(canvas);
 
         QVERIFY(mainImage != bypassImage);
+    }
+
+    void competitorsAndGhostChangeRenderedScene()
+    {
+        const WorkoutGameCourse course = WorkoutGameCourseBuilder::build(
+                {{0, 60000, 180.0, 180.0}}, 200.0, 7u);
+        WorkoutGameSimulationSnapshot snapshot;
+        snapshot.ready = true;
+        snapshot.activeSection = 0;
+        snapshot.workoutTimeMs = 30000;
+        snapshot.courseProgress = 0.5;
+        snapshot.speedKph = 28.0;
+
+        WorkoutGameCanvas canvas;
+        canvas.resize(960, 540);
+        canvas.setCourse(course);
+        canvas.setSnapshot(snapshot, 180.0, 180.0, 85, 140, 10);
+        const QImage solo = render(canvas);
+
+        WorkoutGameCompetitionSnapshot race;
+        race.ready = true;
+        race.playerRank = 2;
+        race.totalRiders = 3;
+        race.competitors = {
+            {WorkoutGameCompetitorKind::Ai, 1, -1, 2900, 0.53,
+             WorkoutGameRoute::MainLine},
+            {WorkoutGameCompetitorKind::Ghost, 0, 1, 2500, 0.47,
+             WorkoutGameRoute::SafeBypass}
+        };
+        canvas.setCompetition(race);
+        const QImage group = render(canvas);
+
+        QVERIFY(group != solo);
+        QVERIFY(changedPixels(group, solo) > 30);
+        QVERIFY(qAlpha(group.pixel(0, group.height() - 1)) == 255);
     }
 
     void compactSupportedSizeDoesNotClipToTransparentPixels()

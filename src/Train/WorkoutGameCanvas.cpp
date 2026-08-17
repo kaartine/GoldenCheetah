@@ -48,6 +48,13 @@ void WorkoutGameCanvas::setCourse(const WorkoutGameCourse &newCourse)
     update();
 }
 
+void WorkoutGameCanvas::setCompetition(
+        const WorkoutGameCompetitionSnapshot &newCompetition)
+{
+    competition = newCompetition;
+    update();
+}
+
 void WorkoutGameCanvas::setSnapshot(
         const WorkoutGameSimulationSnapshot &snapshot,
         double newWatts,
@@ -120,7 +127,7 @@ void WorkoutGameCanvas::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
     paintScene(
-            painter, rect(), course, current, watts, targetWatts,
+            painter, rect(), course, current, competition, watts, targetWatts,
             cadenceRpm, heartRate, virtualGear, animationFrame);
 }
 
@@ -129,6 +136,7 @@ void WorkoutGameCanvas::paintScene(
         const QRect &viewport,
         const WorkoutGameCourse &course,
         const WorkoutGameSimulationSnapshot &current,
+        const WorkoutGameCompetitionSnapshot &competition,
         double watts,
         double targetWatts,
         int cadenceRpm,
@@ -197,6 +205,51 @@ void WorkoutGameCanvas::paintScene(
                 QPointF(x + sampleWidth, trailY(x + sampleWidth, scene, course, current)));
     }
 
+    const int riderX = int(viewport.width() * 0.28);
+    const int wheelRadius = std::clamp(viewport.height() / 30, 7, 18);
+    if (competition.ready && current.ready) {
+        static const QColor aiColors[] = {
+            QColor(64, 132, 210),
+            QColor(235, 171, 52),
+            QColor(184, 78, 148)
+        };
+        for (const WorkoutGameCompetitorSnapshot &rider : competition.competitors) {
+            const double progressGap = std::clamp(
+                    rider.courseProgress - current.courseProgress,
+                    -0.10, 0.10);
+            const int x = std::clamp(
+                    riderX + int(progressGap * scene.width() * 4.5),
+                    scene.left() + wheelRadius * 3,
+                    scene.right() - wheelRadius * 3);
+            const int laneOffset = rider.lane * wheelRadius * 3 / 2;
+            const int ground = int(trailY(x, scene, course, current))
+                    + laneOffset;
+            QColor color = rider.kind == WorkoutGameCompetitorKind::Ghost
+                    ? QColor(119, 237, 232, 150)
+                    : aiColors[std::size_t(std::clamp(rider.identity, 0, 2))];
+            painter.setPen(QPen(color.darker(160), std::max(2, wheelRadius / 4)));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawEllipse(
+                    QPoint(x - wheelRadius, ground - wheelRadius / 2),
+                    wheelRadius / 2, wheelRadius / 2);
+            painter.drawEllipse(
+                    QPoint(x + wheelRadius, ground - wheelRadius / 2),
+                    wheelRadius / 2, wheelRadius / 2);
+            painter.setPen(QPen(color, std::max(2, wheelRadius / 3)));
+            painter.drawLine(x - wheelRadius, ground - wheelRadius / 2,
+                             x, ground - wheelRadius * 3 / 2);
+            painter.drawLine(x, ground - wheelRadius * 3 / 2,
+                             x + wheelRadius, ground - wheelRadius / 2);
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(color);
+            painter.drawRect(
+                    x - wheelRadius / 3,
+                    ground - wheelRadius * 5 / 2,
+                    std::max(3, wheelRadius * 2 / 3),
+                    wheelRadius);
+        }
+    }
+
     if (current.activeSection >= 0
             && current.activeSection < int(course.sections.size())
             && course.sections[current.activeSection].feature
@@ -220,10 +273,8 @@ void WorkoutGameCanvas::paintScene(
         }
     }
 
-    const int riderX = int(viewport.width() * 0.28);
     const int riderBob = current.speedKph > 1.0 ? (animationFrame / 6) % 2 : 0;
     const int riderGround = int(trailY(riderX, scene, course, current)) - riderBob;
-    const int wheelRadius = std::clamp(viewport.height() / 30, 7, 18);
     static const QPixmap rider(QStringLiteral(":/images/workout-game-rider.png"));
     if (!rider.isNull()) {
         const int riderWidth = std::clamp(viewport.width() / 5, 110, 260);
@@ -278,12 +329,19 @@ void WorkoutGameCanvas::paintScene(
     hudFont.setPixelSize(14);
     hudFont.setBold(true);
     painter.setFont(hudFont);
-    const QString stats = tr("%1 W   TARGET %2   %3 RPM   HR %4   GEAR %5")
-            .arg(int(std::lround(watts)))
-            .arg(int(std::lround(targetWatts)))
-            .arg(cadenceRpm)
-            .arg(heartRate)
-            .arg(virtualGear);
+    const QString stats = viewport.width() < 700
+            ? tr("%1W  T%2  %3RPM  HR%4  G%5")
+                .arg(int(std::lround(watts)))
+                .arg(int(std::lround(targetWatts)))
+                .arg(cadenceRpm)
+                .arg(heartRate)
+                .arg(virtualGear)
+            : tr("%1 W   TARGET %2   %3 RPM   HR %4   GEAR %5")
+                .arg(int(std::lround(watts)))
+                .arg(int(std::lround(targetWatts)))
+                .arg(cadenceRpm)
+                .arg(heartRate)
+                .arg(virtualGear);
     painter.drawText(QRect(14, viewport.top(), viewport.width() - 28, hudHeight / 2),
                      Qt::AlignLeft | Qt::AlignVCenter, stats);
 
@@ -302,7 +360,17 @@ void WorkoutGameCanvas::paintScene(
     painter.drawText(QRect(viewport.width() / 2, viewport.top() + hudHeight / 2,
                            viewport.width() / 2 - 14, hudHeight / 2),
                      Qt::AlignRight | Qt::AlignVCenter,
-                     tr("SCORE %1").arg(current.score));
+                     competition.ready && competition.totalRiders > 0
+                        ? (viewport.width() < 700
+                            ? tr("#%1/%2  %3")
+                                .arg(competition.playerRank)
+                                .arg(competition.totalRiders)
+                                .arg(current.score)
+                            : tr("RANK %1/%2   SCORE %3")
+                            .arg(competition.playerRank)
+                            .arg(competition.totalRiders)
+                            .arg(current.score))
+                        : tr("SCORE %1").arg(current.score));
 
     const int progressHeight = std::clamp(viewport.height() / 80, 4, 9);
     painter.fillRect(viewport.left(), viewport.bottom() - progressHeight + 1,

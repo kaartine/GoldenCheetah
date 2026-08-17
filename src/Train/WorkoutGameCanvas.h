@@ -11,6 +11,7 @@
 #define _GC_WorkoutGameCanvas_h
 
 #include "WorkoutGameCourse.h"
+#include "WorkoutGameCompetition.h"
 #include "WorkoutGameSimulation.h"
 
 #include <QTimer>
@@ -26,6 +27,7 @@ public:
     explicit WorkoutGameCanvas(QWidget *parent = nullptr);
 
     void setCourse(const WorkoutGameCourse &course);
+    void setCompetition(const WorkoutGameCompetitionSnapshot &competition);
     void setSnapshot(
             const WorkoutGameSimulationSnapshot &snapshot,
             double watts,
@@ -38,6 +40,7 @@ public:
             const QRect &viewport,
             const WorkoutGameCourse &course,
             const WorkoutGameSimulationSnapshot &snapshot,
+            const WorkoutGameCompetitionSnapshot &competition,
             double watts,
             double targetWatts,
             int cadenceRpm,
@@ -60,6 +63,7 @@ private:
 
     WorkoutGameCourse course;
     WorkoutGameSimulationSnapshot current;
+    WorkoutGameCompetitionSnapshot competition;
     double watts = 0.0;
     double targetWatts = 0.0;
     int cadenceRpm = 0;
