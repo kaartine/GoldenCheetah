@@ -12,12 +12,17 @@
 #include "Athlete.h"
 #include "Context.h"
 #include "ErgFile.h"
+#include "ChartSpace.h"
 #include "WorkoutGameCanvas.h"
 #include "WorkoutGameCourse.h"
+#include "WorkoutGameOpenGLCanvas.h"
+#include "WorkoutGameRendererPolicy.h"
 #include "WorkoutGameWorkoutAdapter.h"
 #include "Zones.h"
 
 #include <QDate>
+#include <QGuiApplication>
+#include <QStackedWidget>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -25,7 +30,11 @@
 #include <vector>
 
 WorkoutGameWindow::WorkoutGameWindow(Context *context) :
-    GcChartWindow(context), context(context), canvas(new WorkoutGameCanvas(this))
+    GcChartWindow(context),
+    context(context),
+    renderStack(new QStackedWidget(this)),
+    painterCanvas(new WorkoutGameCanvas(renderStack)),
+    openGLCanvas(new WorkoutGameOpenGLCanvas(renderStack))
 {
     setContentsMargins(0, 0, 0, 0);
     setProperty("color", QColor(20, 27, 31));
@@ -35,7 +44,22 @@ WorkoutGameWindow::WorkoutGameWindow(Context *context) :
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     setChartLayout(layout);
-    layout->addWidget(canvas);
+    renderStack->addWidget(painterCanvas);
+    renderStack->addWidget(openGLCanvas);
+    layout->addWidget(renderStack);
+
+    const bool forcePainter = qEnvironmentVariableIntValue(
+            "GC_WORKOUT_GAME_FORCE_PAINTER") != 0;
+    const WorkoutGameRendererBackend backend = WorkoutGameRendererPolicy::choose(
+            forcePainter,
+            QGuiApplication::platformName().toStdString(),
+            gl_major);
+    renderStack->setCurrentWidget(
+            backend == WorkoutGameRendererBackend::OpenGL
+                    ? static_cast<QWidget *>(openGLCanvas)
+                    : static_cast<QWidget *>(painterCanvas));
+    connect(openGLCanvas, &WorkoutGameOpenGLCanvas::rendererFailed,
+            this, &WorkoutGameWindow::usePainterFallback);
 
     connect(context, qOverload<ErgFile *>(&Context::ergFileSelected),
             this, &WorkoutGameWindow::ergFileSelected);
@@ -80,7 +104,8 @@ void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
     }
 
     simulation.configure(course, ftpWatts);
-    canvas->setCourse(course);
+    painterCanvas->setCourse(course);
+    openGLCanvas->setCourse(course);
     hasTelemetry = false;
     paused = false;
     updateSimulation(0);
@@ -117,6 +142,11 @@ void WorkoutGameWindow::unpause()
     updateSimulation(context->getNow());
 }
 
+void WorkoutGameWindow::usePainterFallback()
+{
+    renderStack->setCurrentWidget(painterCanvas);
+}
+
 void WorkoutGameWindow::updateSimulation(std::int64_t workoutTimeMs)
 {
     WorkoutGameSimulationInput input;
@@ -130,7 +160,14 @@ void WorkoutGameWindow::updateSimulation(std::int64_t workoutTimeMs)
     }
 
     const WorkoutGameSimulationSnapshot snapshot = simulation.update(input);
-    canvas->setSnapshot(
+    painterCanvas->setSnapshot(
+            snapshot,
+            input.actualWatts,
+            input.targetWatts,
+            int(std::lround(input.cadenceRpm)),
+            hasTelemetry ? int(std::lround(latestTelemetry.getHr())) : 0,
+            std::max(1, input.virtualGear));
+    openGLCanvas->setSnapshot(
             snapshot,
             input.actualWatts,
             input.targetWatts,

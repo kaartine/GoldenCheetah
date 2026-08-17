@@ -12,6 +12,7 @@
 #include <QHideEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPixmap>
 #include <QShowEvent>
 
 #include <algorithm>
@@ -76,7 +77,7 @@ void WorkoutGameCanvas::hideEvent(QHideEvent *event)
     QWidget::hideEvent(event);
 }
 
-QString WorkoutGameCanvas::featureName(WorkoutGameFeature feature) const
+QString WorkoutGameCanvas::featureName(WorkoutGameFeature feature)
 {
     switch (feature) {
     case WorkoutGameFeature::WarmupTrail: return tr("WARM UP");
@@ -90,13 +91,17 @@ QString WorkoutGameCanvas::featureName(WorkoutGameFeature feature) const
     return QString();
 }
 
-double WorkoutGameCanvas::trailY(double x, const QRect &scene) const
+double WorkoutGameCanvas::trailY(
+        double x,
+        const QRect &scene,
+        const WorkoutGameCourse &course,
+        const WorkoutGameSimulationSnapshot &snapshot)
 {
     double grade = 0.0;
     std::uint32_t variant = 0;
-    if (current.activeSection >= 0
-            && current.activeSection < int(course.sections.size())) {
-        const WorkoutGameSection &section = course.sections[current.activeSection];
+    if (snapshot.activeSection >= 0
+            && snapshot.activeSection < int(course.sections.size())) {
+        const WorkoutGameSection &section = course.sections[snapshot.activeSection];
         grade = section.gradePercent;
         variant = section.visualVariant;
     }
@@ -114,11 +119,30 @@ double WorkoutGameCanvas::trailY(double x, const QRect &scene) const
 void WorkoutGameCanvas::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing, false);
-    painter.fillRect(rect(), skyColor());
+    paintScene(
+            painter, rect(), course, current, watts, targetWatts,
+            cadenceRpm, heartRate, virtualGear, animationFrame);
+}
 
-    const int hudHeight = std::clamp(height() / 7, 42, 72);
-    const QRect scene(0, hudHeight, width(), height() - hudHeight);
+void WorkoutGameCanvas::paintScene(
+        QPainter &painter,
+        const QRect &viewport,
+        const WorkoutGameCourse &course,
+        const WorkoutGameSimulationSnapshot &current,
+        double watts,
+        double targetWatts,
+        int cadenceRpm,
+        int heartRate,
+        int virtualGear,
+        int animationFrame)
+{
+    painter.setRenderHint(QPainter::Antialiasing, false);
+    painter.fillRect(viewport, skyColor());
+
+    const int hudHeight = std::clamp(viewport.height() / 7, 42, 72);
+    const QRect scene(
+            viewport.left(), viewport.top() + hudHeight,
+            viewport.width(), viewport.height() - hudHeight);
 
     painter.setPen(Qt::NoPen);
     painter.setBrush(distantColor());
@@ -134,8 +158,8 @@ void WorkoutGameCanvas::paintEvent(QPaintEvent *)
     painter.drawPolygon(distant);
 
     painter.setBrush(forestColor());
-    const int treeWidth = std::clamp(width() / 24, 18, 46);
-    for (int x = -treeWidth; x < width() + treeWidth; x += treeWidth) {
+    const int treeWidth = std::clamp(viewport.width() / 24, 18, 46);
+    for (int x = -treeWidth; x < viewport.width() + treeWidth; x += treeWidth) {
         const int offset = (x / treeWidth + animationFrame / 12) % 3;
         const int baseY = scene.top() + int(scene.height() * (0.48 + offset * 0.025));
         QPolygon tree;
@@ -149,11 +173,16 @@ void WorkoutGameCanvas::paintEvent(QPaintEvent *)
         painter.drawPolygon(tree);
     }
 
+    static const QPixmap background(QStringLiteral(":/images/workout-game-background.png"));
+    if (!background.isNull()) {
+        painter.drawPixmap(scene, background, background.rect());
+    }
+
     QPainterPath ground;
-    ground.moveTo(scene.left(), trailY(scene.left(), scene));
-    const int sampleWidth = std::max(4, width() / 100);
+    ground.moveTo(scene.left(), trailY(scene.left(), scene, course, current));
+    const int sampleWidth = std::max(4, viewport.width() / 100);
     for (int x = scene.left() + sampleWidth; x <= scene.right(); x += sampleWidth) {
-        ground.lineTo(x, trailY(x, scene));
+        ground.lineTo(x, trailY(x, scene, course, current));
     }
     ground.lineTo(scene.right(), scene.bottom());
     ground.lineTo(scene.left(), scene.bottom());
@@ -161,19 +190,19 @@ void WorkoutGameCanvas::paintEvent(QPaintEvent *)
     painter.setBrush(dirtColor());
     painter.drawPath(ground);
 
-    painter.setPen(QPen(dirtHighlightColor(), std::clamp(height() / 90, 3, 8)));
+    painter.setPen(QPen(dirtHighlightColor(), std::clamp(viewport.height() / 90, 3, 8)));
     for (int x = scene.left(); x < scene.right(); x += sampleWidth) {
         painter.drawLine(
-                QPointF(x, trailY(x, scene)),
-                QPointF(x + sampleWidth, trailY(x + sampleWidth, scene)));
+                QPointF(x, trailY(x, scene, course, current)),
+                QPointF(x + sampleWidth, trailY(x + sampleWidth, scene, course, current)));
     }
 
     if (current.activeSection >= 0
             && current.activeSection < int(course.sections.size())
             && course.sections[current.activeSection].feature
                     == WorkoutGameFeature::SprintJump) {
-        const int obstacleX = int(width() * 0.72);
-        const int obstacleY = int(trailY(obstacleX, scene));
+        const int obstacleX = int(viewport.width() * 0.72);
+        const int obstacleY = int(trailY(obstacleX, scene, course, current));
         painter.setPen(Qt::NoPen);
         painter.setBrush(current.route == WorkoutGameRoute::SafeBypass
                 ? QColor(232, 197, 78)
@@ -191,32 +220,59 @@ void WorkoutGameCanvas::paintEvent(QPaintEvent *)
         }
     }
 
-    const int riderX = int(width() * 0.28);
-    const int riderGround = int(trailY(riderX, scene));
-    const int wheelRadius = std::clamp(height() / 30, 7, 18);
-    painter.setPen(QPen(inkColor(), std::max(2, wheelRadius / 4)));
-    painter.setBrush(Qt::NoBrush);
-    painter.drawEllipse(QPoint(riderX - wheelRadius * 2, riderGround - wheelRadius),
-                        wheelRadius, wheelRadius);
-    painter.drawEllipse(QPoint(riderX + wheelRadius * 2, riderGround - wheelRadius),
-                        wheelRadius, wheelRadius);
-    painter.drawLine(riderX - wheelRadius * 2, riderGround - wheelRadius,
-                     riderX, riderGround - wheelRadius * 2);
-    painter.drawLine(riderX, riderGround - wheelRadius * 2,
-                     riderX + wheelRadius * 2, riderGround - wheelRadius);
-    painter.drawLine(riderX - wheelRadius * 2, riderGround - wheelRadius,
-                     riderX + wheelRadius, riderGround - wheelRadius);
-    painter.setBrush(QColor(235, 74, 66));
-    painter.setPen(Qt::NoPen);
-    painter.drawRect(riderX - wheelRadius / 2,
-                     riderGround - wheelRadius * 4,
-                     wheelRadius, wheelRadius * 2);
-    painter.setBrush(QColor(242, 197, 132));
-    painter.drawRect(riderX - wheelRadius / 2,
-                     riderGround - wheelRadius * 5,
-                     wheelRadius, wheelRadius);
+    const int riderX = int(viewport.width() * 0.28);
+    const int riderBob = current.speedKph > 1.0 ? (animationFrame / 6) % 2 : 0;
+    const int riderGround = int(trailY(riderX, scene, course, current)) - riderBob;
+    const int wheelRadius = std::clamp(viewport.height() / 30, 7, 18);
+    static const QPixmap rider(QStringLiteral(":/images/workout-game-rider.png"));
+    if (!rider.isNull()) {
+        const int riderWidth = std::clamp(viewport.width() / 5, 110, 260);
+        const int riderHeight = riderWidth * rider.height() / rider.width();
+        painter.drawPixmap(
+                QRect(riderX - riderWidth / 2,
+                      riderGround - riderHeight + riderHeight / 20,
+                      riderWidth,
+                      riderHeight),
+                rider,
+                rider.rect());
+    } else {
+        painter.setPen(QPen(inkColor(), std::max(2, wheelRadius / 4)));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawEllipse(QPoint(riderX - wheelRadius * 2, riderGround - wheelRadius),
+                            wheelRadius, wheelRadius);
+        painter.drawEllipse(QPoint(riderX + wheelRadius * 2, riderGround - wheelRadius),
+                            wheelRadius, wheelRadius);
+        painter.drawLine(riderX - wheelRadius * 2, riderGround - wheelRadius,
+                         riderX, riderGround - wheelRadius * 2);
+        painter.drawLine(riderX, riderGround - wheelRadius * 2,
+                         riderX + wheelRadius * 2, riderGround - wheelRadius);
+        painter.drawLine(riderX - wheelRadius * 2, riderGround - wheelRadius,
+                         riderX + wheelRadius, riderGround - wheelRadius);
+        painter.setBrush(QColor(235, 74, 66));
+        painter.setPen(Qt::NoPen);
+        painter.drawRect(riderX - wheelRadius / 2,
+                         riderGround - wheelRadius * 4,
+                         wheelRadius, wheelRadius * 2);
+        painter.setBrush(QColor(242, 197, 132));
+        painter.drawRect(riderX - wheelRadius / 2,
+                         riderGround - wheelRadius * 5,
+                         wheelRadius, wheelRadius);
+    }
 
-    painter.fillRect(QRect(0, 0, width(), hudHeight), inkColor());
+    if (current.speedKph > 10.0) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(220, 177, 99, 190));
+        for (int dust = 0; dust < 3; ++dust) {
+            const int offset = (animationFrame * 2 + dust * 13) % 38;
+            painter.drawRect(
+                    riderX - wheelRadius * 2 - offset,
+                    riderGround - 3 - dust * 3,
+                    3 + dust,
+                    3 + dust);
+        }
+    }
+
+    painter.fillRect(QRect(viewport.left(), viewport.top(), viewport.width(), hudHeight), inkColor());
     painter.setPen(QColor(246, 239, 215));
     QFont hudFont = painter.font();
     hudFont.setPixelSize(14);
@@ -228,7 +284,7 @@ void WorkoutGameCanvas::paintEvent(QPaintEvent *)
             .arg(cadenceRpm)
             .arg(heartRate)
             .arg(virtualGear);
-    painter.drawText(QRect(14, 0, width() - 28, hudHeight / 2),
+    painter.drawText(QRect(14, viewport.top(), viewport.width() - 28, hudHeight / 2),
                      Qt::AlignLeft | Qt::AlignVCenter, stats);
 
     QString sectionText = tr("NO ERG WORKOUT");
@@ -239,17 +295,20 @@ void WorkoutGameCanvas::paintEvent(QPaintEvent *)
         sectionText = tr("FINISH");
     }
     painter.setPen(QColor(232, 197, 78));
-    painter.drawText(QRect(14, hudHeight / 2, width() / 2, hudHeight / 2),
+    painter.drawText(QRect(14, viewport.top() + hudHeight / 2,
+                           viewport.width() / 2, hudHeight / 2),
                      Qt::AlignLeft | Qt::AlignVCenter, sectionText);
     painter.setPen(QColor(246, 239, 215));
-    painter.drawText(QRect(width() / 2, hudHeight / 2, width() / 2 - 14, hudHeight / 2),
+    painter.drawText(QRect(viewport.width() / 2, viewport.top() + hudHeight / 2,
+                           viewport.width() / 2 - 14, hudHeight / 2),
                      Qt::AlignRight | Qt::AlignVCenter,
                      tr("SCORE %1").arg(current.score));
 
-    const int progressHeight = std::clamp(height() / 80, 4, 9);
-    painter.fillRect(0, height() - progressHeight, width(), progressHeight,
+    const int progressHeight = std::clamp(viewport.height() / 80, 4, 9);
+    painter.fillRect(viewport.left(), viewport.bottom() - progressHeight + 1,
+                     viewport.width(), progressHeight,
                      QColor(29, 40, 43));
-    painter.fillRect(0, height() - progressHeight,
-                     int(width() * current.courseProgress), progressHeight,
+    painter.fillRect(viewport.left(), viewport.bottom() - progressHeight + 1,
+                     int(viewport.width() * current.courseProgress), progressHeight,
                      QColor(232, 197, 78));
 }

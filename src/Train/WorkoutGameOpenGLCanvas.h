@@ -7,23 +7,24 @@
  * option) any later version.
  */
 
-#ifndef _GC_WorkoutGameCanvas_h
-#define _GC_WorkoutGameCanvas_h
+#ifndef _GC_WorkoutGameOpenGLCanvas_h
+#define _GC_WorkoutGameOpenGLCanvas_h
 
 #include "WorkoutGameCourse.h"
 #include "WorkoutGameSimulation.h"
 
+#include <QOpenGLFunctions>
+#include <QOpenGLWidget>
 #include <QTimer>
-#include <QWidget>
 
-class QPainter;
-
-class WorkoutGameCanvas : public QWidget
+class WorkoutGameOpenGLCanvas :
+        public QOpenGLWidget,
+        protected QOpenGLFunctions
 {
     Q_OBJECT
 
 public:
-    explicit WorkoutGameCanvas(QWidget *parent = nullptr);
+    explicit WorkoutGameOpenGLCanvas(QWidget *parent = nullptr);
 
     void setCourse(const WorkoutGameCourse &course);
     void setSnapshot(
@@ -33,30 +34,18 @@ public:
             int cadenceRpm,
             int heartRate,
             int virtualGear);
-    static void paintScene(
-            QPainter &painter,
-            const QRect &viewport,
-            const WorkoutGameCourse &course,
-            const WorkoutGameSimulationSnapshot &snapshot,
-            double watts,
-            double targetWatts,
-            int cadenceRpm,
-            int heartRate,
-            int virtualGear,
-            int animationFrame);
+
+signals:
+    void rendererFailed();
 
 protected:
-    void paintEvent(QPaintEvent *event) override;
+    void initializeGL() override;
+    void paintGL() override;
     void showEvent(QShowEvent *event) override;
     void hideEvent(QHideEvent *event) override;
 
 private:
-    static double trailY(
-            double x,
-            const QRect &scene,
-            const WorkoutGameCourse &course,
-            const WorkoutGameSimulationSnapshot &snapshot);
-    static QString featureName(WorkoutGameFeature feature);
+    void reportFailure();
 
     WorkoutGameCourse course;
     WorkoutGameSimulationSnapshot current;
@@ -66,6 +55,7 @@ private:
     int heartRate = 0;
     int virtualGear = 1;
     int animationFrame = 0;
+    bool failureReported = false;
     QTimer animationTimer;
 };
 

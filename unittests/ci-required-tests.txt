@@ -124,6 +124,7 @@ all qt Train/virtualDrivetrain
 all qt Train/virtualGearRuntime
 all qt Train/workoutGameCanvas
 all qt Train/workoutGameCourse
+all qt Train/workoutGameRendererPolicy
 all qt Train/workoutGameSimulation
 all qt Train/workoutGameWorkoutAdapter
 all qt Train/workoutRideCommandFilter

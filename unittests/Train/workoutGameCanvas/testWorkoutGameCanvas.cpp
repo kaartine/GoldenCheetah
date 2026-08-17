@@ -8,10 +8,13 @@
  */
 
 #include "Train/WorkoutGameCanvas.h"
+#include "Train/WorkoutGameOpenGLCanvas.h"
 
+#include <QGuiApplication>
 #include <QImage>
 #include <QPainter>
 #include <QSet>
+#include <QSignalSpy>
 #include <QTest>
 
 namespace {
@@ -112,6 +115,37 @@ private slots:
 
         QVERIFY(qAlpha(image.pixel(0, 0)) == 255);
         QVERIFY(qAlpha(image.pixel(image.width() - 1, image.height() - 1)) == 255);
+    }
+
+    void openGLCanvasRendersOnWindowedPlatforms()
+    {
+        const QString platform = QGuiApplication::platformName().toLower();
+        if (platform == QStringLiteral("offscreen")
+                || platform == QStringLiteral("minimal")) {
+            QSKIP("QOpenGLWidget is unavailable on the active Qt platform");
+        }
+
+        const WorkoutGameCourse course = WorkoutGameCourseBuilder::build(
+                {{0, 10000, 250.0, 250.0}}, 200.0, 7u);
+        WorkoutGameSimulationSnapshot snapshot;
+        snapshot.ready = true;
+        snapshot.activeSection = 0;
+        snapshot.courseProgress = 0.7;
+        snapshot.speedKph = 30.0;
+
+        WorkoutGameOpenGLCanvas canvas;
+        QSignalSpy failureSpy(&canvas, &WorkoutGameOpenGLCanvas::rendererFailed);
+        canvas.resize(960, 540);
+        canvas.setCourse(course);
+        canvas.setSnapshot(snapshot, 250.0, 250.0, 90, 148, 11);
+        canvas.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&canvas));
+        QTest::qWait(100);
+
+        const QImage image = canvas.grabFramebuffer();
+        QCOMPARE(failureSpy.count(), 0);
+        QVERIFY(!image.isNull());
+        QVERIFY(colors(image).size() >= 10);
     }
 };
 

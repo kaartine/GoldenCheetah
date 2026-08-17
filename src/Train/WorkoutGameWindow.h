@@ -17,6 +17,8 @@
 class Context;
 class ErgFile;
 class WorkoutGameCanvas;
+class WorkoutGameOpenGLCanvas;
+class QStackedWidget;
 
 class WorkoutGameWindow : public GcChartWindow
 {
@@ -32,13 +34,16 @@ private slots:
     void start();
     void pause();
     void unpause();
+    void usePainterFallback();
 
 private:
     double currentFtp(ErgFile *workout) const;
     void updateSimulation(std::int64_t workoutTimeMs);
 
     Context *context;
-    WorkoutGameCanvas *canvas;
+    QStackedWidget *renderStack;
+    WorkoutGameCanvas *painterCanvas;
+    WorkoutGameOpenGLCanvas *openGLCanvas;
     WorkoutGameSimulation simulation;
     RealtimeData latestTelemetry;
     bool hasTelemetry = false;

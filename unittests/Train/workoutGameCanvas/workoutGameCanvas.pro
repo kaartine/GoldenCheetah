@@ -1,4 +1,4 @@
-QT += core gui widgets testlib
+QT += core gui widgets testlib opengl openglwidgets
 CONFIG += c++17
 
 TARGET = testWorkoutGameCanvas
@@ -6,11 +6,15 @@ TARGET = testWorkoutGameCanvas
 SOURCES = testWorkoutGameCanvas.cpp \
           ../../../src/Train/WorkoutGameCanvas.cpp \
           ../../../src/Train/WorkoutGameCourse.cpp \
+          ../../../src/Train/WorkoutGameOpenGLCanvas.cpp \
           ../../../src/Train/WorkoutGameSimulation.cpp
 
 HEADERS = ../../../src/Train/WorkoutGameCanvas.h \
           ../../../src/Train/WorkoutGameCourse.h \
+          ../../../src/Train/WorkoutGameOpenGLCanvas.h \
           ../../../src/Train/WorkoutGameSimulation.h
+
+RESOURCES = workoutGameCanvas.qrc
 
 include(../../unittests.pri)
 
