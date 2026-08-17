@@ -138,6 +138,10 @@ or recorded physiological data.
 5. Manual release testing uses a copied athlete directory and verifies trainer
    connection, start, pause, continue, stop, recording import, and live mode
    switching without modifying production athlete data.
+6. Hardware-free UI testing uses the `Data Generator` training device. It
+   follows ERG targets and emits deterministic power, heart rate, cadence, and
+   speed telemetry without advertising trainer-control capabilities or sending
+   commands to physical hardware.
 
 ## Delivery Stages
 

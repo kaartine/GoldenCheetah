@@ -124,6 +124,7 @@ exists(unittests.pri) {
 			   Train/trainingStopPolicy \
 			   Train/trainingRecordingIo \
 			   Train/trainingTelemetryTimeline \
+			   Train/trainingDataGenerator \
 			   Train/trainRuntime \
 			   Train/trainerTargetCoordinator \
 			   Train/virtualDrivetrain \

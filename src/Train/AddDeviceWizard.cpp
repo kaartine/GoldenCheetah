@@ -25,6 +25,7 @@
 #include "HelpWhatsThis.h"
 
 #include "RealtimeController.h" // for power trainer definitions
+#include "TrainingDeviceWizardRouting.h"
 #include "MultiRegressionizer.h"
 
 #include <memory>
@@ -169,19 +170,9 @@ AddType::clicked(QString p)
         wizard->found = false;
 
     // Still no dice. Go to the not found dialog
-    if (wizard->found == false) next =20;
-    else {
-        switch(wizard->deviceTypes.Supported[wizard->current].type) {
-        case DEV_BT40 : next = 55; break;
-        case DEV_BT40_HEARTRATE : next = 55; break;
-        case DEV_ANTLOCAL : next = 50; break; // pair 
-        default:
-        case DEV_CT : next = 60; break; // confirm and add 
-        case DEV_MONARK : next = 60; break; // confirm and add
-        case DEV_FORTIUS : next = 30; break; // confirm and add
-        case DEV_IMAGIC : next = 35; break; // confirm and add
-        }
-    }
+    if (wizard->found == false) next = TrainingDeviceWizardRouting::ScanPage;
+    else next = TrainingDeviceWizardRouting::pageAfterSuccessfulScan(
+            wizard->deviceTypes.Supported[wizard->current].type);
     wizard->next();
 }
 

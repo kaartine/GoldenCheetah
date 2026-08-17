@@ -21,10 +21,11 @@
 
 #ifndef _GC_DeviceTypes_h
 #define _GC_DeviceTypes_h 1
-#include "GoldenCheetah.h"
 #include "BluetoothDeviceTypes.h"
 
+#include <QCoreApplication>
 #include <QList>
+#include <QString>
 
 #define DEV_PT         0x0001
 #define DEV_SRM        0x0002
@@ -76,4 +77,3 @@ class DeviceTypes
 };
 
 #endif // _GC_DeviceTypes_h
-

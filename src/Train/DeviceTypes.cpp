@@ -79,12 +79,10 @@ DeviceTypes::DeviceTypes()
         "to a USB port.") ,
         ":images/devices/imagic.png" },
 #endif
-#ifdef GC_WANT_ROBOT
-      { DEV_NULL,     DEV_TCP,     (char *) "Robot", false,   false,
-        tr("Testing device used for development only. If an ERG file is selected it will "
-        "replay back, with a little randomness thrown in."),
+      { DEV_NULL,     DEV_TCP,     (char *) "Data Generator", true,   false,
+        tr("Generates deterministic power, heart rate, cadence and speed data for testing "
+        "the Train view without connecting physical sensors or a trainer."),
         "" },
-#endif
       { 0, 0, NULL, 0, 0, "", "" }
     };
     for (int i=0; SupportedDevices[i].type;i++)

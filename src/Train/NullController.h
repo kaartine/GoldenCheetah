@@ -32,6 +32,7 @@
 #include <chrono>
 #include "PhysicsUtility.h"
 #include "BicycleSim.h"
+#include "TrainingDataGenerator.h"
 
 class NullController : public RealtimeController
 {
@@ -57,7 +58,7 @@ class NullController : public RealtimeController
         bool doesLoad() {  return false; }
 
         void setMode(int);
-        void setLoad(double watts) { load = watts; }
+        void setLoad(double watts) override;
         void getRealtimeData(RealtimeData &rtData);
         void pushRealtimeData(RealtimeData &rtData);
 
@@ -69,10 +70,8 @@ class NullController : public RealtimeController
 
     private:
 
-        double load;
-        int beats,count; // send an R-R signal every 4th call
-        double core, skin, heatStrain;
-        
+        int beats,count; // emit R-R data periodically
+        TrainingDataGenerator generator;
         Bicycle bicycle;
 };
 
