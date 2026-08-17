@@ -2575,6 +2575,7 @@ void TrainSidebar::loadUpdate()
 bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
 {
     int curLap = 0;
+    TrainerTarget target;
 
     if (status&RT_MODE_ERGO) {
         if (context->currentErgFile()) {
@@ -2588,14 +2589,7 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
             displayWorkoutLap = curLap;
         }
 
-        // we got to the end!
-        if (load == -100) {
-            Stop(DEVICE_OK);
-            return false;
-        } else {
-            foreach(int dev, activeDevices) Devices[dev].controller->setLoad(load);
-            context->notifySetNow(load_msecs);
-        }
+        target = TrainerTarget::erg(load, load_msecs);
     } else {
         if (context->currentErgFile()) {
             const double workoutSlope = ergFileQueryAdapter.gradientAt(
@@ -2611,18 +2605,25 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
             displayWorkoutLap = curLap;
         }
 
-        // we got to the end!
-        if (slope == -100) {
-            Stop(DEVICE_OK);
-            return false;
-        } else {
-            foreach(int dev, activeDevices) {
-                Devices[dev].controller->setGradient(slope);
-                Devices[dev].controller->setWindResistance(bicycle.WindResistance(displayAltitude));
-            }
-            context->notifySetNow(displayWorkoutDistance * 1000);
-        }
+        target = TrainerTarget::slope(
+                slope,
+                bicycle.WindResistance(displayAltitude),
+                displayWorkoutDistance * 1000);
     }
+
+    std::vector<TrainerTargetDevice *> targetDevices;
+    targetDevices.reserve(activeDevices.size());
+    foreach (int dev, activeDevices) {
+        targetDevices.push_back(Devices[dev].controller);
+    }
+
+    if (trainerTargetCoordinator.apply(target, targetDevices)
+            == TrainerTargetResult::WorkoutFinished) {
+        Stop(DEVICE_OK);
+        return false;
+    }
+
+    context->notifySetNow(target.workoutPosition);
     return true;
 }
 

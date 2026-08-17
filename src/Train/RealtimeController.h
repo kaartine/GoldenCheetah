@@ -23,6 +23,7 @@
 #include "RealtimeData.h"
 #include "CalibrationData.h"
 #include "TrainSidebar.h"
+#include "TrainerTargetCoordinator.h"
 #include "PolynomialRegression.h"
 
 #include "GoldenCheetah.h"
@@ -72,7 +73,7 @@ public:
     ~VirtualPowerTrainerManager();
 };
 
-class RealtimeController : public QObject
+class RealtimeController : public QObject, public TrainerTargetDevice
 {
     Q_OBJECT
 
@@ -101,13 +102,13 @@ public:
     virtual void pushRealtimeData(RealtimeData &rtData); // update realtime data with current values
 
     // only relevant for Computrainer like devices
-    virtual void setLoad(double) { return; }
-    virtual void setGradient(double) { return; }
+    void setLoad(double) override { return; }
+    void setGradient(double) override { return; }
     virtual void setMode(int) { return; }
     virtual void setWindSpeed(double) { return; }
     virtual void setWeight(double) { return; }
     virtual void setRollingResistance(double) { return; }
-    virtual void setWindResistance(double) { return; }
+    void setWindResistance(double) override { return; }
     virtual void setWheelCircumference(double) { return; }
 
     virtual uint8_t  getCalibrationType() { return CALIBRATION_TYPE_NOT_SUPPORTED; }
@@ -158,4 +159,3 @@ public:
 };
 
 #endif // _GC_RealtimeController_h
-

@@ -38,6 +38,7 @@
 #include "TrainingRecordingIo.h"
 #include "TrainingTelemetryTimeline.h"
 #include "TrainSidebarRuntime.h"
+#include "TrainerTargetCoordinator.h"
 
 // standard stuff
 #include <QDir>
@@ -357,6 +358,7 @@ class TrainSidebar : public GcWindow
         QPointer<RideImportWizard> stopConfirmationDialog;
         TrainingRecordingIo::Health recordingHealth;
         TrainingTelemetryTimeline::Timeline telemetryTimeline;
+        TrainerTargetCoordinator trainerTargetCoordinator;
 
         Bicycle bicycle;
 
