@@ -128,6 +128,7 @@ exists(unittests.pri) {
 			   Train/trainerTargetCoordinator \
 			   Train/virtualDrivetrain \
 			   Train/virtualGearRuntime \
+			   Train/workoutGameCourse \
 			   Train/workoutRideCommandFilter \
 			   Train/workoutRideTargetPlanner \
 			   Train/ftmsTargetReadiness \
