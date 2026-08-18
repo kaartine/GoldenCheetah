@@ -103,28 +103,37 @@ WorkoutGameSection makeSection(
 
     switch (feature) {
     case WorkoutGameFeature::WarmupTrail:
+        section.terrain = WorkoutGameTerrainKind::Roots;
         section.gradePercent = 1.0 + 2.0 * section.difficulty;
         break;
     case WorkoutGameFeature::Trail:
+        section.terrain = section.visualVariant % 2u == 0u
+                ? WorkoutGameTerrainKind::Roots
+                : WorkoutGameTerrainKind::RockGarden;
         section.gradePercent = 0.5 * section.difficulty;
         break;
     case WorkoutGameFeature::FlowTrail:
+        section.terrain = WorkoutGameTerrainKind::Rollers;
         section.gradePercent = 1.0 + 2.0 * section.difficulty;
         section.challengeCount = std::max(1, int(interval.durationMs / 30000));
         break;
     case WorkoutGameFeature::Climb:
+        section.terrain = WorkoutGameTerrainKind::Climb;
         section.gradePercent = 3.0 + 5.0 * section.difficulty;
         section.challengeCount = std::max(1, int(interval.durationMs / 60000));
         break;
     case WorkoutGameFeature::SprintJump:
+        section.terrain = WorkoutGameTerrainKind::BunnyHop;
         section.gradePercent = 2.0;
         section.challengeCount = 1;
         break;
     case WorkoutGameFeature::RecoveryDescent:
+        section.terrain = WorkoutGameTerrainKind::Drop;
         section.gradePercent = -4.0;
         section.gravityAssisted = true;
         break;
     case WorkoutGameFeature::CooldownDescent:
+        section.terrain = WorkoutGameTerrainKind::SmoothTrail;
         section.gradePercent = -3.0;
         section.gravityAssisted = true;
         break;

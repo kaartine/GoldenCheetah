@@ -10,6 +10,8 @@
 #ifndef _GC_WorkoutGameCourse_h
 #define _GC_WorkoutGameCourse_h
 
+#include "WorkoutGameWorld.h"
+
 #include <cstdint>
 #include <vector>
 
@@ -35,6 +37,7 @@ struct WorkoutGameInterval
 struct WorkoutGameSection
 {
     WorkoutGameFeature feature = WorkoutGameFeature::Trail;
+    WorkoutGameTerrainKind terrain = WorkoutGameTerrainKind::SmoothTrail;
     std::int64_t startMs = 0;
     std::int64_t durationMs = 0;
     double targetWatts = 0.0;

@@ -115,6 +115,17 @@ private slots:
         QCOMPARE(course.sections[4].feature, WorkoutGameFeature::FlowTrail);
         QCOMPARE(course.sections[5].feature, WorkoutGameFeature::Trail);
         QCOMPARE(course.sections[6].feature, WorkoutGameFeature::CooldownDescent);
+
+        QCOMPARE(course.sections[0].terrain, WorkoutGameTerrainKind::Roots);
+        QCOMPARE(course.sections[1].terrain, WorkoutGameTerrainKind::BunnyHop);
+        QCOMPARE(course.sections[2].terrain, WorkoutGameTerrainKind::Drop);
+        QCOMPARE(course.sections[3].terrain, WorkoutGameTerrainKind::Climb);
+        QCOMPARE(course.sections[4].terrain, WorkoutGameTerrainKind::Rollers);
+        QVERIFY(course.sections[5].terrain == WorkoutGameTerrainKind::Roots
+                || course.sections[5].terrain
+                        == WorkoutGameTerrainKind::RockGarden);
+        QCOMPARE(course.sections[6].terrain,
+                 WorkoutGameTerrainKind::SmoothTrail);
     }
 
     void recoveryAndCooldownAreGravityAssisted()
@@ -183,6 +194,26 @@ private slots:
 
         QCOMPARE(course.sections[0].difficulty, 1.0);
         QVERIFY(course.sections[0].visualVariant < 8u);
+    }
+
+    void trailVariantsIncludeRootsAndRockGardens()
+    {
+        bool sawRoots = false;
+        bool sawRockGarden = false;
+        for (std::uint32_t seed = 1; seed <= 32; ++seed) {
+            const WorkoutGameCourse course = WorkoutGameCourseBuilder::build({
+                interval(0, 30000, 140.0, 140.0)
+            }, 200.0, seed);
+            QCOMPARE(course.sections[0].feature, WorkoutGameFeature::Trail);
+            sawRoots = sawRoots
+                    || course.sections[0].terrain
+                            == WorkoutGameTerrainKind::Roots;
+            sawRockGarden = sawRockGarden
+                    || course.sections[0].terrain
+                            == WorkoutGameTerrainKind::RockGarden;
+        }
+        QVERIFY(sawRoots);
+        QVERIFY(sawRockGarden);
     }
 };
 
