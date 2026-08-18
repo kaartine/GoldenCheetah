@@ -213,8 +213,13 @@ class UiDriver:
             f"showing={showing!r}"
         )
 
-    def require_names(self, names, role=None):
-        missing = [name for name in names if not self.find_all(name, role)]
+    def require_names(self, names, role=None, timeout=10.0):
+        deadline = time.monotonic() + timeout
+        missing = list(names)
+        while missing and time.monotonic() < deadline:
+            missing = [name for name in names if not self.find_all(name, role)]
+            if missing:
+                time.sleep(0.15)
         if missing:
             raise UiFailure(f"Missing accessible controls: {', '.join(missing)}")
 
@@ -240,8 +245,44 @@ class UiDriver:
                 f"Cannot activate {self.role(node)} {self.name(node)!r}"
             ) from error
 
-    def select_named(self, name):
-        nodes = self.find_all(name=name)
+    def click(self, node):
+        try:
+            bounds = node.queryComponent().getExtents(
+                self.pyatspi.DESKTOP_COORDS
+            )
+            if bounds.width <= 0 or bounds.height <= 0:
+                raise ValueError("empty accessible bounds")
+            x = bounds.x + bounds.width // 2
+            y = bounds.y + bounds.height // 2
+            self.xtest.fake_input(self.display, self.X.MotionNotify, x=x, y=y)
+            self.xtest.fake_input(self.display, self.X.ButtonPress, 1)
+            self.xtest.fake_input(self.display, self.X.ButtonRelease, 1)
+            self.display.sync()
+        except Exception as error:
+            raise UiFailure(
+                f"Cannot click {self.role(node)} {self.name(node)!r}"
+            ) from error
+
+    def activate_named(self, name, role=None, showing=None, timeout=30.0):
+        deadline = time.monotonic() + timeout
+        last_error = None
+        while time.monotonic() < deadline:
+            try:
+                node = self.find(
+                    name=name,
+                    role=role,
+                    showing=showing,
+                    timeout=min(1.0, max(0.1, deadline - time.monotonic())),
+                )
+                self.activate(node)
+                return
+            except Exception as error:
+                last_error = error
+                time.sleep(0.2)
+        raise UiFailure(f"Cannot activate {role or 'control'} {name!r}") from last_error
+
+    def select_named(self, name, timeout=10.0):
+        nodes = self.find_all(name=name, showing=True)
         for node in reversed(nodes):
             if self.role(node) in ("list item", "table cell"):
                 try:
@@ -250,19 +291,59 @@ class UiDriver:
                     return
                 except UiFailure:
                     continue
+        for combo in self.find_all(role="combo box"):
+            if not any(
+                self.role(node) == "list item" and self.name(node) == name
+                for node in self.all_nodes(combo)
+            ):
+                continue
+            self.activate(combo)
+            item = self.find(
+                name=name,
+                role="list item",
+                showing=True,
+                timeout=timeout,
+            )
+            self.activate(item)
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                if self.name(combo) == name:
+                    return
+                time.sleep(0.1)
+            raise UiFailure(f"Combo box did not select {name!r}")
         raise UiFailure(f"Cannot select {name!r}")
 
-    def combo_with_items(self, expected):
+    def combo_with_items(self, expected, timeout=15.0):
         expected = set(expected)
-        for combo in self.find_all(role="combo box"):
-            descendants = {
-                self.name(node)
-                for node in self.all_nodes(combo)
-                if self.role(node) == "list item"
-            }
-            if expected.issubset(descendants):
-                return combo
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            for combo in self.find_all(role="combo box"):
+                descendants = {
+                    self.name(node)
+                    for node in self.all_nodes(combo)
+                    if self.role(node) == "list item"
+                }
+                if expected.issubset(descendants):
+                    return combo
+            time.sleep(0.15)
         raise UiFailure(f"Perspective selector lacks: {sorted(expected)!r}")
+
+    def select_combo_item(self, expected, name, timeout=10.0):
+        combo = self.combo_with_items(expected)
+        self.click(combo)
+        item = self.find(
+            name=name,
+            role="list item",
+            showing=True,
+            timeout=timeout,
+        )
+        self.click(item)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.name(combo) == name:
+                return combo
+            time.sleep(0.1)
+        raise UiFailure(f"Combo box did not select {name!r}")
 
     def current_value(self, node) -> float:
         try:
@@ -273,6 +354,20 @@ class UiDriver:
     def send_key(self, text: str):
         frame = self.find(ATHLETE, "frame")
         frame.queryComponent().grabFocus()
+        windows = [self.display.screen().root]
+        target = None
+        while windows:
+            window = windows.pop()
+            try:
+                if window.get_wm_name() == ATHLETE:
+                    target = window
+                    break
+                windows.extend(window.query_tree().children)
+            except Exception:
+                continue
+        if target is None:
+            raise UiFailure("GoldenCheetah X11 window was not found")
+        target.set_input_focus(self.X.RevertToParent, self.X.CurrentTime)
         keycode = self.display.keysym_to_keycode(ord(text.lower()))
         self.xtest.fake_input(self.display, self.X.KeyPress, keycode)
         self.xtest.fake_input(self.display, self.X.KeyRelease, keycode)
@@ -364,6 +459,25 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
         driver = UiDriver(root, artifacts)
         suite = Suite(driver, artifacts)
 
+        def enter_train():
+            driver.activate_named("Train", "menu item")
+            deadline = time.monotonic() + 30.0
+            while time.monotonic() < deadline:
+                controls = driver.find_all(
+                    name="Connect training devices",
+                    role="push button",
+                    showing=True,
+                )
+                if controls:
+                    return
+                close_buttons = driver.find_all(
+                    name="Close", role="push button", showing=True
+                )
+                if close_buttons:
+                    driver.activate(close_buttons[-1])
+                time.sleep(0.2)
+            raise UiFailure("Train controls did not become ready")
+
         def startup():
             driver.require_names(
                 ["Athlete", "Activity", "Share", "Tools", "View", "Help"],
@@ -373,12 +487,13 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
 
         def views():
             for view in ("Plan", "Trends", "Activities", "Train"):
-                driver.activate(driver.find(view, "menu item"))
-                time.sleep(0.4)
-            driver.find("Train", "label", showing=True)
+                driver.activate_named(view, "menu item")
+                driver.find(view, "label", showing=True, timeout=30.0)
+                time.sleep(0.5)
             driver.screenshot("02-train")
 
         def train_controls():
+            enter_train()
             driver.combo_with_items(
                 [
                     "Erg Workout",
@@ -400,16 +515,17 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
                     "New lap",
                     "Next lap",
                     "Calibrate trainer",
-                    "Training mode",
                     "Virtual gear",
                     "Decrease intensity",
                     "Increase intensity",
                     "Workout intensity",
                 ]
             )
+            driver.combo_with_items(["Standard ERG", "Workout Ride"])
             driver.find("Data Generator", "table cell")
 
         def generator_and_gears():
+            enter_train()
             driver.select_named("Data Generator")
             connect = driver.find(
                 "Connect training devices", "push button", showing=True
@@ -421,25 +537,38 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
                 time.sleep(0.1)
             if not driver.enabled(gear):
                 raise UiFailure("Data Generator did not connect")
+            driver.select_named("Manual Erg Mode")
+            driver.activate(
+                driver.find(
+                    "Start or pause training", "push button", showing=True
+                )
+            )
+            time.sleep(1.0)
             initial = driver.current_value(gear)
             driver.send_key("w")
             driver.wait_value(gear, initial + 1)
             driver.send_key("s")
             driver.wait_value(gear, initial)
             driver.screenshot("03-generator-connected")
+            driver.activate(
+                driver.find("Stop training", "push button", showing=True)
+            )
+            driver.activate(
+                driver.find(
+                    "Cancel", "push button", showing=True, timeout=8.0
+                )
+            )
 
         def game():
-            driver.select_named("Workout Game")
-            combo = driver.combo_with_items(["Workout Game", "Workout Editor"])
-            deadline = time.monotonic() + 5.0
-            while driver.name(combo) != "Workout Game" and time.monotonic() < deadline:
-                time.sleep(0.1)
-            if driver.name(combo) != "Workout Game":
-                raise UiFailure("Workout Game perspective did not become active")
+            enter_train()
+            driver.select_combo_item(
+                ["Workout Game", "Workout Editor"], "Workout Game"
+            )
             driver.find("Workout game canvas", showing=True)
             driver.screenshot("04-workout-game")
 
         def stop_continue():
+            enter_train()
             driver.select_named("Manual Erg Mode")
             start = driver.find(
                 "Start or pause training", "push button", showing=True
@@ -460,10 +589,16 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
             time.sleep(0.5)
 
         def save_workout():
-            driver.select_named("Workout Editor")
+            enter_train()
+            driver.select_combo_item(
+                ["Workout Game", "Workout Editor"], "Workout Editor"
+            )
             driver.activate(driver.find("New", "push button", showing=True))
-            driver.activate(driver.find("Save As", "push button", showing=True))
-            driver.find(role="file chooser", showing=True, timeout=8.0)
+            driver.click(driver.find("Save As", "push button", showing=True))
+            try:
+                driver.find(role="file chooser", showing=True, timeout=2.0)
+            except UiFailure:
+                driver.find(role="dialog", showing=True, timeout=8.0)
             destination = root / "library" / ATHLETE / "workouts" / "ui-save.erg"
             editable = None
             for node in driver.find_all(role="text", showing=True):
@@ -475,15 +610,32 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
             if editable is None:
                 raise UiFailure("Save dialog file name input was not found")
             editable.queryEditableText().setTextContents(str(destination))
-            driver.activate(driver.find("Save", "push button", showing=True))
+            driver.click(driver.find("Save", "push button", showing=True))
             driver.wait_file(destination)
             driver.screenshot("06-workout-saved")
 
         def shutdown():
             try:
-                driver.activate(driver.find("Quit", "menu item"))
+                driver.click(
+                    driver.find(
+                        "Athlete", "menu item", showing=True, timeout=5.0
+                    )
+                )
+                driver.click(
+                    driver.find(
+                        "Quit", "menu item", showing=True, timeout=5.0
+                    )
+                )
             except Exception:
                 os.kill(app_pid, signal.SIGTERM)
+            deadline = time.monotonic() + 8.0
+            while time.monotonic() < deadline:
+                try:
+                    os.kill(app_pid, 0)
+                except ProcessLookupError:
+                    return
+                time.sleep(0.1)
+            raise UiFailure("GoldenCheetah did not exit after Quit")
 
         suite.run("startup_and_main_navigation", startup)
         suite.run("view_navigation", views)

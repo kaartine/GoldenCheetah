@@ -26,8 +26,9 @@ python3 -c 'import pyatspi; import Xlib' 2>/dev/null || {
     exit 2
 }
 
-if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ]; then
-    exec dbus-run-session -- "$0" "$IMAGE" "$ARTIFACT_DIR"
+if [ -z "${GC_UI_DBUS_SESSION:-}" ]; then
+    exec env -u DBUS_SESSION_BUS_ADDRESS GC_UI_DBUS_SESSION=1 \
+        dbus-run-session -- "$0" "$IMAGE" "$ARTIFACT_DIR"
 fi
 
 mkdir -p -- "$ARTIFACT_DIR"
@@ -70,16 +71,43 @@ XVFB_PID=$!
 export DISPLAY=:$DISPLAY_NUMBER
 
 for unused in $(seq 1 50); do
-    [ -S "/tmp/.X11-unix/X$DISPLAY_NUMBER" ] && break
+    if [ -S "/tmp/.X11-unix/X$DISPLAY_NUMBER" ] && \
+        python3 -c 'from Xlib import display; connection = display.Display(); connection.sync(); connection.close()' \
+            >/dev/null 2>&1; then
+        break
+    fi
     sleep 0.1
 done
-[ -S "/tmp/.X11-unix/X$DISPLAY_NUMBER" ] || {
+[ -S "/tmp/.X11-unix/X$DISPLAY_NUMBER" ] && \
+    python3 -c 'from Xlib import display; connection = display.Display(); connection.close()' \
+        >/dev/null 2>&1 || {
     echo "Xvfb did not become ready" >&2
     exit 1
 }
 
-gdbus call --session --dest org.a11y.Bus --object-path /org/a11y/bus \
-    --method org.a11y.Bus.GetAddress >"$ARTIFACT_DIR/at-spi-address.log"
+AT_SPI_REPLY=$(gdbus call --session --dest org.a11y.Bus \
+    --object-path /org/a11y/bus --method org.a11y.Bus.GetAddress)
+printf '%s\n' "$AT_SPI_REPLY" >"$ARTIFACT_DIR/at-spi-address.log"
+AT_SPI_BUS_ADDRESS=$(printf '%s\n' "$AT_SPI_REPLY" | \
+    sed -n "s/^('\\(.*\\)',)$/\\1/p")
+[ -n "$AT_SPI_BUS_ADDRESS" ] || {
+    echo "AT-SPI bus returned an invalid address" >&2
+    exit 1
+}
+export AT_SPI_BUS_ADDRESS
+AT_SPI_READY=0
+for unused in $(seq 1 50); do
+    if python3 -c 'import pyatspi; desktop = pyatspi.Registry.getDesktop(0); desktop.childCount' \
+        >/dev/null 2>&1; then
+        AT_SPI_READY=1
+        break
+    fi
+    sleep 0.1
+done
+[ "$AT_SPI_READY" -eq 1 ] || {
+    echo "AT-SPI accessibility registry did not become ready" >&2
+    exit 1
+}
 
 export HOME=$TEST_ROOT/home
 export XDG_CONFIG_HOME=$HOME/.config
