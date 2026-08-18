@@ -62,6 +62,7 @@ WorkoutGameWindow::WorkoutGameWindow(Context *context) :
     openGLCanvas(new WorkoutGameOpenGLCanvas(renderStack))
 {
     setContentsMargins(0, 0, 0, 0);
+    setAccessibleName(tr("Workout game view"));
     setProperty("color", QColor(20, 27, 31));
     setProperty("title", tr("Workout Game"));
 
@@ -69,6 +70,8 @@ WorkoutGameWindow::WorkoutGameWindow(Context *context) :
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     setChartLayout(layout);
+    painterCanvas->setAccessibleName(tr("Workout game canvas"));
+    openGLCanvas->setAccessibleName(tr("Workout game canvas"));
     renderStack->addWidget(painterCanvas);
     renderStack->addWidget(openGLCanvas);
     layout->addWidget(renderStack);

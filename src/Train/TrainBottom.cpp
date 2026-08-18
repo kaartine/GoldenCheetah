@@ -45,6 +45,7 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
     toolbuttons->setContentsMargins(0,0,0,0);
 
     m_connectButton = new QPushButton(this);
+    m_connectButton->setAccessibleName(tr("Connect training devices"));
     applyIcon(m_connectButton, "offline");
     m_connectButton->setFocusPolicy(Qt::NoFocus);
     m_connectButton->setAutoDefault(false);
@@ -57,6 +58,7 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
     toolbuttons->addSpacing(5);
 
     m_rewindButton = new QPushButton(this);
+    m_rewindButton->setAccessibleName(tr("Rewind workout"));
     applyIcon(m_rewindButton, "rewind");
     m_rewindButton->setFocusPolicy(Qt::NoFocus);
     m_rewindButton->setAutoDefault(false);
@@ -67,6 +69,7 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
     toolbuttons->addWidget(m_rewindButton);
 
     m_stopButton = new QPushButton(this);
+    m_stopButton->setAccessibleName(tr("Stop training"));
     applyIcon(m_stopButton, "stop");
     m_stopButton->setFocusPolicy(Qt::NoFocus);
     m_stopButton->setAutoDefault(false);
@@ -75,6 +78,7 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
     toolbuttons->addWidget(m_stopButton);
 
     m_playButton = new QPushButton(this);
+    m_playButton->setAccessibleName(tr("Start or pause training"));
     applyIcon(m_playButton, "play");
     m_playButton->setFocusPolicy(Qt::NoFocus);
     m_playButton->setAutoDefault(false);
@@ -83,6 +87,7 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
     toolbuttons->addWidget(m_playButton);
 
     m_forwardButton = new QPushButton(this);
+    m_forwardButton->setAccessibleName(tr("Advance workout"));
     applyIcon(m_forwardButton, "ffwd");
     m_forwardButton->setFocusPolicy(Qt::NoFocus);
     m_forwardButton->setAutoDefault(false);
@@ -97,6 +102,7 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
     toolbuttons->addSpacing(5);
 
     backLap = new QPushButton(this);
+    backLap->setAccessibleName(tr("Previous lap"));
     applyIcon(backLap, "back");
     backLap->setFocusPolicy(Qt::NoFocus);
     backLap->setAutoDefault(false);
@@ -106,6 +112,7 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
     toolbuttons->addWidget(backLap);
 
     m_lapButton = new QPushButton(this);
+    m_lapButton->setAccessibleName(tr("New lap"));
     applyIcon(m_lapButton, "lap");
     m_lapButton->setFocusPolicy(Qt::NoFocus);
     m_lapButton->setAutoDefault(false);
@@ -114,6 +121,7 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
     toolbuttons->addWidget(m_lapButton);
 
     fwdLap = new QPushButton(this);
+    fwdLap->setAccessibleName(tr("Next lap"));
     applyIcon(fwdLap, "fwd");
     fwdLap->setFocusPolicy(Qt::NoFocus);
     fwdLap->setAutoDefault(false);
@@ -128,6 +136,7 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
     toolbuttons->addSpacing(5);
 
     cal = new QPushButton(this);
+    cal->setAccessibleName(tr("Calibrate trainer"));
     applyIcon(cal, "cal");
     cal->setFocusPolicy(Qt::NoFocus);
     cal->setAutoDefault(false);
@@ -140,6 +149,7 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
     toolbuttons->addSpacing(5);
 
     rideMode = new QComboBox(this);
+    rideMode->setAccessibleName(tr("Training mode"));
     rideMode->setFocusPolicy(Qt::NoFocus);
     rideMode->addItem(tr("Standard ERG"), false);
     rideMode->addItem(tr("Workout Ride"), true);
@@ -147,6 +157,7 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
 
     virtualGear = new QSpinBox(this);
     virtualGear->setObjectName(QStringLiteral("virtualGearSelector"));
+    virtualGear->setAccessibleName(tr("Virtual gear"));
     virtualGear->setFocusPolicy(Qt::NoFocus);
     virtualGear->setPrefix(tr("Gear "));
     virtualGear->setRange(m_trainSidebar->minimumVirtualGear(),
@@ -163,6 +174,7 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
     toolbuttons->addSpacing(5);
 
     loadDown = new QPushButton(this);
+    loadDown->setAccessibleName(tr("Decrease intensity"));
     applyIcon(loadDown, "down");
     loadDown->setFocusPolicy(Qt::NoFocus);
     loadDown->setAutoDefault(false);
@@ -173,6 +185,7 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
     toolbuttons->addWidget(loadDown);
 
     loadUp = new QPushButton(this);
+    loadUp->setAccessibleName(tr("Increase intensity"));
     applyIcon(loadUp, "up");
     loadUp->setFocusPolicy(Qt::NoFocus);
     loadUp->setAutoDefault(false);
@@ -183,6 +196,7 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
     toolbuttons->addWidget(loadUp);
 
     intensitySlider = new QSlider(Qt::Vertical, this);
+    intensitySlider->setAccessibleName(tr("Workout intensity"));
     intensitySlider->setFocusPolicy(Qt::NoFocus);
     intensitySlider->setMinimum(75);
     intensitySlider->setMaximum(125);
