@@ -36,6 +36,7 @@ struct WorkoutGameVehiclePose
     double frontSuspension = 0.0;
     double rearWheelRadians = 0.0;
     double frontWheelRadians = 0.0;
+    double clearanceMeters = 0.0;
     bool airborne = false;
     bool walking = false;
 };
@@ -45,6 +46,10 @@ struct WorkoutGameWorldSnapshot
     bool ready = false;
     std::uint64_t generation = 0;
     WorkoutGameTerrainKind terrain = WorkoutGameTerrainKind::SmoothTrail;
+    std::uint32_t seed = 0;
+    double gradePercent = 0.0;
+    double difficulty = 0.0;
+    double terrainOffsetMeters = 0.0;
     WorkoutGameVehiclePose rider;
     double speedMetersPerSecond = 0.0;
     double landingImpact = 0.0;

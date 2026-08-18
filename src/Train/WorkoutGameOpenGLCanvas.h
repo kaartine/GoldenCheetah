@@ -13,6 +13,7 @@
 #include "WorkoutGameCourse.h"
 #include "WorkoutGameCompetition.h"
 #include "WorkoutGameSimulation.h"
+#include "WorkoutGameWorld.h"
 
 #include <QOpenGLFunctions>
 #include <QOpenGLWidget>
@@ -29,6 +30,9 @@ public:
 
     void setCourse(const WorkoutGameCourse &course);
     void setCompetition(const WorkoutGameCompetitionSnapshot &competition);
+    void setWorld(
+            const WorkoutGameWorldSnapshot &world,
+            const WorkoutGameCameraSnapshot &camera);
     void setSnapshot(
             const WorkoutGameSimulationSnapshot &snapshot,
             double watts,
@@ -52,6 +56,8 @@ private:
     WorkoutGameCourse course;
     WorkoutGameSimulationSnapshot current;
     WorkoutGameCompetitionSnapshot competition;
+    WorkoutGameWorldSnapshot world;
+    WorkoutGameCameraSnapshot camera;
     double watts = 0.0;
     double targetWatts = 0.0;
     int cadenceRpm = 0;

@@ -120,6 +120,7 @@ exists(unittests.pri) {
 			   Train/vmProWidgetLifecycle \
 			   Train/virtualPowerTrainerOwnership \
 			   Train/bt40Lifecycle \
+			   Train/box2dVendor \
 			   Train/deviceSelection \
 			   Train/trainingStopPolicy \
 			   Train/trainingRecordingIo \
@@ -133,6 +134,7 @@ exists(unittests.pri) {
 			   Train/workoutGameCourse \
 			   Train/workoutGameRendererPolicy \
 			   Train/workoutGameSimulation \
+			   Train/workoutGameWorld \
 			   Train/workoutGameWorkoutAdapter \
 			   Train/workoutRideCommandFilter \
 			   Train/workoutRideTargetPlanner \

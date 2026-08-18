@@ -136,6 +136,67 @@ private slots:
         QVERIFY(mainImage != bypassImage);
     }
 
+    void physicsPoseAndDynamicCameraChangeRenderedScene()
+    {
+        const WorkoutGameCourse course = WorkoutGameCourseBuilder::build(
+                {{0, 30000, 140.0, 140.0}}, 200.0, 997u);
+        WorkoutGameSimulationSnapshot snapshot;
+        snapshot.ready = true;
+        snapshot.activeSection = 0;
+        snapshot.courseProgress = 0.4;
+        snapshot.speedKph = 24.0;
+
+        WorkoutGamePhysics rootsPhysics;
+        QVERIFY(rootsPhysics.configure(997u));
+        WorkoutGamePhysicsInput input;
+        input.terrain = WorkoutGameTerrainKind::Roots;
+        input.desiredSpeedMetersPerSecond = 6.0;
+        input.difficulty = 0.8;
+        input.effortRatio = 1.0;
+        WorkoutGameWorldSnapshot world = rootsPhysics.update(input);
+        for (int time = 20; time <= 3000; time += 20) {
+            input.workoutTimeMs = time;
+            world = rootsPhysics.update(input);
+        }
+        QVERIFY(world.ready);
+        WorkoutGameCamera camera;
+        WorkoutGameCameraSnapshot view = camera.update(world, 0.016);
+
+        WorkoutGameCanvas canvas;
+        canvas.resize(960, 540);
+        canvas.setCourse(course);
+        canvas.setSnapshot(snapshot, 140.0, 140.0, 82, 136, 9);
+        canvas.setWorld(world, view);
+        const QImage grounded = render(canvas);
+        const QString groundedOutput =
+                qEnvironmentVariable("GC_TEST_PHYSICS_GROUNDED_OUTPUT");
+        if (!groundedOutput.isEmpty()) QVERIFY(grounded.save(groundedOutput));
+
+        WorkoutGamePhysics dropPhysics;
+        QVERIFY(dropPhysics.configure(997u));
+        input = WorkoutGamePhysicsInput();
+        input.terrain = WorkoutGameTerrainKind::Drop;
+        input.desiredSpeedMetersPerSecond = 7.0;
+        input.difficulty = 0.8;
+        input.effortRatio = 1.0;
+        world = dropPhysics.update(input);
+        for (int time = 20; time <= 12000 && !world.rider.airborne;
+             time += 20) {
+            input.workoutTimeMs = time;
+            world = dropPhysics.update(input);
+        }
+        QVERIFY(world.rider.airborne);
+        view = camera.update(world, 0.1);
+        canvas.setWorld(world, view);
+        const QImage airborne = render(canvas);
+        const QString airborneOutput =
+                qEnvironmentVariable("GC_TEST_PHYSICS_AIRBORNE_OUTPUT");
+        if (!airborneOutput.isEmpty()) QVERIFY(airborne.save(airborneOutput));
+
+        QVERIFY(changedPixels(grounded, airborne) > 100);
+        QVERIFY(qAlpha(airborne.pixel(0, airborne.height() - 1)) == 255);
+    }
+
     void competitorsAndGhostChangeRenderedScene()
     {
         const WorkoutGameCourse course = WorkoutGameCourseBuilder::build(

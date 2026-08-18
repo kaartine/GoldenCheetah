@@ -14,6 +14,7 @@
 #include "RealtimeData.h"
 #include "WorkoutGameCompetition.h"
 #include "WorkoutGameSimulation.h"
+#include "WorkoutGameWorld.h"
 
 class Context;
 class ErgFile;
@@ -50,12 +51,16 @@ private:
     WorkoutGameOpenGLCanvas *openGLCanvas;
     WorkoutGameCourse currentCourse;
     WorkoutGameSimulation simulation;
+    WorkoutGamePhysics physics;
+    WorkoutGameCamera camera;
     WorkoutGameCompetition competition;
     WorkoutGameGhostRecorder ghostRecorder;
     RealtimeData latestTelemetry;
     bool hasTelemetry = false;
     bool paused = false;
     bool sessionActive = false;
+    bool worldClockInitialized = false;
+    std::int64_t lastWorldTimeMs = 0;
     double ftpWatts = 0.0;
 };
 

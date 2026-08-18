@@ -73,6 +73,15 @@ reliably from the side. Camera angles blend over time, while a new physics-world
 generation performs an explicit cut instead of interpolating unrelated
 coordinates.
 
+The camera pose is continuous: renderers consume interpolated yaw, pitch, zoom,
+look-ahead and target coordinates rather than switching between unrelated scene
+implementations. A later pseudo-3D chase projection can therefore blend from the
+side projection while the same world snapshot, workout clock and recording path
+continue uninterrupted. Projection changes must never recreate the physics
+world or reset course progress. Skinny and berm remain disabled as generated
+features until that projection communicates trail width and lateral line choice
+and has deterministic transition tests.
+
 The initial physics backend is vendored Box2D 3.1.1 (MIT license, pinned to
 commit `8c661469c9507d3ad6fbd2fea3f1aa71669c2fe3`). Box2D controls terrain
 contacts, suspension, vehicle pose and airborne motion. It never controls
@@ -172,3 +181,15 @@ or recorded physiological data.
 4. Scoring, feature bypasses, and deterministic AI riders.
 5. Athlete-private best-attempt ghost rider.
 6. Optional recorded-activity metadata and external route adapters.
+7. Complete the initial side/three-quarter feature set in this order: roots,
+   rollers, climb/hike, rock garden, bunny hop, and drop. Each feature receives
+   deterministic physics, success/failure rules, animation, and a rendered UI
+   regression test before the next feature is enabled.
+8. Add a lightweight GPU pseudo-3D chase projection with perspective trail
+   strips, distance-scaled 2D sprites, curves, hills, and a rear/three-quarter
+   rider sprite. Keep the bounded QPainter side-view fallback.
+9. Blend camera pose during live side, three-quarter, and chase transitions.
+   Transition tests must cover workout continuity, renderer fallback, frame
+   bounds, and fixed-step physics independence.
+10. Enable skinny and berm only after chase-view line choice, trail edges, and
+    low-end GPU frame-budget tests pass.

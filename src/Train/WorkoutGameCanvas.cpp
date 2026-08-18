@@ -21,6 +21,7 @@
 namespace {
 
 constexpr int TargetFrameMs = 33;
+constexpr double Pi = 3.14159265358979323846;
 
 QColor skyColor() { return QColor(99, 190, 187); }
 QColor distantColor() { return QColor(55, 102, 110); }
@@ -55,6 +56,15 @@ void WorkoutGameCanvas::setCompetition(
         const WorkoutGameCompetitionSnapshot &newCompetition)
 {
     competition = newCompetition;
+    update();
+}
+
+void WorkoutGameCanvas::setWorld(
+        const WorkoutGameWorldSnapshot &newWorld,
+        const WorkoutGameCameraSnapshot &newCamera)
+{
+    world = newWorld;
+    camera = newCamera;
     update();
 }
 
@@ -101,6 +111,22 @@ QString WorkoutGameCanvas::featureName(WorkoutGameFeature feature)
     return QString();
 }
 
+QString WorkoutGameCanvas::terrainName(WorkoutGameTerrainKind terrain)
+{
+    switch (terrain) {
+    case WorkoutGameTerrainKind::SmoothTrail: return tr("TRAIL");
+    case WorkoutGameTerrainKind::Roots: return tr("ROOTS");
+    case WorkoutGameTerrainKind::Rollers: return tr("ROLLERS");
+    case WorkoutGameTerrainKind::Climb: return tr("CLIMB");
+    case WorkoutGameTerrainKind::RockGarden: return tr("ROCK GARDEN");
+    case WorkoutGameTerrainKind::BunnyHop: return tr("BUNNY HOP");
+    case WorkoutGameTerrainKind::Drop: return tr("DROP");
+    case WorkoutGameTerrainKind::Skinny: return tr("SKINNY");
+    case WorkoutGameTerrainKind::Berm: return tr("BERM");
+    }
+    return QString();
+}
+
 double WorkoutGameCanvas::trailY(
         double x,
         const QRect &scene,
@@ -126,12 +152,43 @@ double WorkoutGameCanvas::trailY(
     return base + gradeOffset + pixelWave;
 }
 
+double WorkoutGameCanvas::physicsTrailY(
+        double x,
+        const QRect &scene,
+        const WorkoutGameWorldSnapshot &world,
+        const WorkoutGameCameraSnapshot &camera)
+{
+    const double width = std::max(1, scene.width());
+    const double pixelsPerMeter = width / 42.0;
+    const double riderX = scene.left() + width * 0.28;
+    const double distance = world.rider.distanceMeters
+            + world.terrainOffsetMeters + (x - riderX) / pixelsPerMeter;
+    const double riderTerrainDistance = world.rider.distanceMeters
+            + world.terrainOffsetMeters;
+    const double height = WorkoutGamePhysics::terrainHeight(
+            world.terrain, distance, world.gradePercent,
+            world.difficulty, world.seed);
+    const double riderHeight = WorkoutGamePhysics::terrainHeight(
+            world.terrain, riderTerrainDistance, world.gradePercent,
+            world.difficulty, world.seed);
+    const double yaw = camera.ready ? camera.yawDegrees : 90.0;
+    const double verticalScale = 0.72
+            + 0.28 * std::sin(std::clamp(yaw, 0.0, 90.0) * Pi / 180.0);
+    const double pitchShift = camera.ready
+            ? camera.pitchDegrees * scene.height() / 180.0
+            : 0.0;
+    return scene.top() + scene.height() * 0.67
+            - (height - riderHeight) * pixelsPerMeter * verticalScale
+            + pitchShift;
+}
+
 void WorkoutGameCanvas::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
     paintScene(
-            painter, rect(), course, current, competition, watts, targetWatts,
-            cadenceRpm, heartRate, virtualGear, animationFrame);
+            painter, rect(), course, current, competition, world, camera,
+            watts, targetWatts, cadenceRpm, heartRate, virtualGear,
+            animationFrame);
 }
 
 QImage WorkoutGameCanvas::addRiderContrastKeyline(const QImage &sprite)
@@ -179,6 +236,8 @@ void WorkoutGameCanvas::paintScene(
         const WorkoutGameCourse &course,
         const WorkoutGameSimulationSnapshot &current,
         const WorkoutGameCompetitionSnapshot &competition,
+        const WorkoutGameWorldSnapshot &world,
+        const WorkoutGameCameraSnapshot &camera,
         double watts,
         double targetWatts,
         int cadenceRpm,
@@ -228,11 +287,17 @@ void WorkoutGameCanvas::paintScene(
         painter.drawPixmap(scene, background, background.rect());
     }
 
+    const auto sceneTrailY = [&](double x) {
+        return world.ready
+                ? physicsTrailY(x, scene, world, camera)
+                : trailY(x, scene, course, current);
+    };
+
     QPainterPath ground;
-    ground.moveTo(scene.left(), trailY(scene.left(), scene, course, current));
+    ground.moveTo(scene.left(), sceneTrailY(scene.left()));
     const int sampleWidth = std::max(4, viewport.width() / 100);
     for (int x = scene.left() + sampleWidth; x <= scene.right(); x += sampleWidth) {
-        ground.lineTo(x, trailY(x, scene, course, current));
+        ground.lineTo(x, sceneTrailY(x));
     }
     ground.lineTo(scene.right(), scene.bottom());
     ground.lineTo(scene.left(), scene.bottom());
@@ -243,8 +308,21 @@ void WorkoutGameCanvas::paintScene(
     painter.setPen(QPen(dirtHighlightColor(), std::clamp(viewport.height() / 90, 3, 8)));
     for (int x = scene.left(); x < scene.right(); x += sampleWidth) {
         painter.drawLine(
-                QPointF(x, trailY(x, scene, course, current)),
-                QPointF(x + sampleWidth, trailY(x + sampleWidth, scene, course, current)));
+                QPointF(x, sceneTrailY(x)),
+                QPointF(x + sampleWidth, sceneTrailY(x + sampleWidth)));
+    }
+
+    if (camera.ready && camera.yawDegrees < 80.0) {
+        const double trailWidth = scene.height()
+                * std::clamp((80.0 - camera.yawDegrees) / 90.0, 0.04, 0.22);
+        painter.setPen(QPen(dirtColor().darker(145),
+                            std::clamp(viewport.height() / 120, 2, 6)));
+        for (int x = scene.left(); x < scene.right(); x += sampleWidth) {
+            painter.drawLine(
+                    QPointF(x, sceneTrailY(x) + trailWidth),
+                    QPointF(x + sampleWidth,
+                            sceneTrailY(x + sampleWidth) + trailWidth));
+        }
     }
 
     const int riderX = int(viewport.width() * 0.28);
@@ -264,7 +342,7 @@ void WorkoutGameCanvas::paintScene(
                     scene.left() + wheelRadius * 3,
                     scene.right() - wheelRadius * 3);
             const int laneOffset = rider.lane * wheelRadius * 3 / 2;
-            const int ground = int(trailY(x, scene, course, current))
+            const int ground = int(sceneTrailY(x))
                     + laneOffset;
             QColor color = rider.kind == WorkoutGameCompetitorKind::Ghost
                     ? QColor(119, 237, 232, 150)
@@ -294,10 +372,11 @@ void WorkoutGameCanvas::paintScene(
 
     if (current.activeSection >= 0
             && current.activeSection < int(course.sections.size())
+            && !world.ready
             && course.sections[current.activeSection].feature
                     == WorkoutGameFeature::SprintJump) {
         const int obstacleX = int(viewport.width() * 0.72);
-        const int obstacleY = int(trailY(obstacleX, scene, course, current));
+        const int obstacleY = int(sceneTrailY(obstacleX));
         painter.setPen(Qt::NoPen);
         painter.setBrush(current.route == WorkoutGameRoute::SafeBypass
                 ? QColor(232, 197, 78)
@@ -315,8 +394,20 @@ void WorkoutGameCanvas::paintScene(
         }
     }
 
-    const int riderBob = current.speedKph > 1.0 ? (animationFrame / 6) % 2 : 0;
-    const int riderGround = int(trailY(riderX, scene, course, current)) - riderBob;
+    const int riderBob = world.ready
+            ? (world.rider.walking ? (animationFrame / 5) % 3 : 0)
+            : (current.speedKph > 1.0 ? (animationFrame / 6) % 2 : 0);
+    const double pixelsPerMeter = std::max(1, scene.width()) / 42.0;
+    const double airLift = world.ready
+            ? std::max(0.0, world.rider.clearanceMeters - 0.82)
+                    * pixelsPerMeter
+            : 0.0;
+    const double suspensionLift = world.ready
+            ? ((world.rider.frontSuspension + world.rider.rearSuspension)
+                    * 0.5 - 0.5) * wheelRadius * 0.5
+            : 0.0;
+    const int riderGround = int(sceneTrailY(riderX)
+            - airLift - suspensionLift) - riderBob;
     static const QPixmap riderSource(QStringLiteral(":/images/workout-game-rider.png"));
     static const QPixmap rider = QPixmap::fromImage(
             addRiderContrastKeyline(riderSource.toImage()));
@@ -337,12 +428,18 @@ void WorkoutGameCanvas::paintScene(
                 riderGround - riderHeight + riderHeight / 20,
                 riderWidth,
                 riderHeight);
-        painter.drawPixmap(
-                riderRect.adjusted(
+        const QRect drawRect = riderRect.adjusted(
                     -horizontalPadding, -verticalPadding,
-                    horizontalPadding, verticalPadding),
-                rider,
-                rider.rect());
+                    horizontalPadding, verticalPadding);
+        painter.save();
+        painter.translate(drawRect.center());
+        if (world.ready) {
+            painter.rotate(-std::clamp(
+                    world.rider.pitchDegrees, -35.0, 35.0));
+        }
+        painter.translate(-drawRect.center());
+        painter.drawPixmap(drawRect, rider, rider.rect());
+        painter.restore();
     } else {
         painter.setPen(QPen(inkColor(), std::max(2, wheelRadius / 4)));
         painter.setBrush(Qt::NoBrush);
@@ -405,7 +502,11 @@ void WorkoutGameCanvas::paintScene(
     QString sectionText = tr("NO ERG WORKOUT");
     if (current.ready && current.activeSection >= 0
             && current.activeSection < int(course.sections.size())) {
-        sectionText = featureName(course.sections[current.activeSection].feature);
+        sectionText = world.ready
+                ? (world.rider.walking
+                    ? tr("HIKE")
+                    : terrainName(world.terrain))
+                : featureName(course.sections[current.activeSection].feature);
     } else if (current.finished) {
         sectionText = tr("FINISH");
     }

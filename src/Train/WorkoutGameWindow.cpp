@@ -188,6 +188,8 @@ void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
     }
 
     simulation.configure(currentCourse, ftpWatts);
+    physics.configure(currentCourse.seed);
+    camera.reset();
     competition.configure(currentCourse, loadGhost(currentCourse));
     ghostRecorder.configure(currentCourse.seed, currentCourse.durationMs);
     painterCanvas->setCourse(currentCourse);
@@ -195,6 +197,8 @@ void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
     hasTelemetry = false;
     paused = false;
     sessionActive = false;
+    worldClockInitialized = false;
+    lastWorldTimeMs = 0;
     updateSimulation(0);
 }
 
@@ -213,9 +217,13 @@ void WorkoutGameWindow::setNow(long workoutTimeMs)
 void WorkoutGameWindow::start()
 {
     simulation.reset();
+    physics.reset();
+    camera.reset();
     ghostRecorder.configure(currentCourse.seed, currentCourse.durationMs);
     paused = false;
     sessionActive = true;
+    worldClockInitialized = false;
+    lastWorldTimeMs = 0;
     updateSimulation(context->getNow());
 }
 
@@ -255,10 +263,50 @@ void WorkoutGameWindow::updateSimulation(std::int64_t workoutTimeMs)
     }
 
     const WorkoutGameSimulationSnapshot snapshot = simulation.update(input);
+    WorkoutGameWorldSnapshot world;
+    WorkoutGameCameraSnapshot view;
+    if (snapshot.ready
+            && snapshot.activeSection >= 0
+            && snapshot.activeSection < int(currentCourse.sections.size())) {
+        const WorkoutGameSection &section =
+                currentCourse.sections[snapshot.activeSection];
+        const double target = std::max(
+                1.0,
+                input.targetWatts > 0.0
+                        ? input.targetWatts
+                        : section.targetWatts);
+        WorkoutGamePhysicsInput physicsInput;
+        physicsInput.workoutTimeMs = snapshot.workoutTimeMs;
+        physicsInput.terrain = section.terrain;
+        physicsInput.desiredSpeedMetersPerSecond = snapshot.speedKph / 3.6;
+        physicsInput.gradePercent = section.gradePercent;
+        physicsInput.difficulty = section.difficulty;
+        physicsInput.effortRatio = std::max(0.0, input.actualWatts) / target;
+        physicsInput.paused = paused;
+        physicsInput.jumpRequested = section.terrain
+                    == WorkoutGameTerrainKind::BunnyHop
+                && physicsInput.effortRatio >= 0.9
+                && input.cadenceRpm >= 65.0;
+        world = physics.update(physicsInput);
+
+        const double cameraElapsedSeconds = worldClockInitialized
+                && snapshot.workoutTimeMs >= lastWorldTimeMs && !paused
+                ? double(snapshot.workoutTimeMs - lastWorldTimeMs) / 1000.0
+                : 0.0;
+        view = camera.update(world, cameraElapsedSeconds);
+        worldClockInitialized = true;
+        lastWorldTimeMs = snapshot.workoutTimeMs;
+    } else {
+        camera.reset();
+        worldClockInitialized = false;
+        lastWorldTimeMs = workoutTimeMs;
+    }
     const WorkoutGameCompetitionSnapshot race = competition.update(snapshot);
     if (sessionActive) ghostRecorder.record(snapshot);
     painterCanvas->setCompetition(race);
     openGLCanvas->setCompetition(race);
+    painterCanvas->setWorld(world, view);
+    openGLCanvas->setWorld(world, view);
     painterCanvas->setSnapshot(
             snapshot,
             input.actualWatts,

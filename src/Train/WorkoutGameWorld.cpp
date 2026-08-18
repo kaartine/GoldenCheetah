@@ -278,8 +278,13 @@ struct WorkoutGamePhysics::Impl
         result.ready = true;
         result.generation = generation;
         result.terrain = terrain;
+        result.seed = seed;
+        result.gradePercent = gradePercent;
+        result.difficulty = difficulty;
         result.rider.distanceMeters = distanceBase
                 + double(position.x) - RiderStartMeters;
+        result.terrainOffsetMeters = double(position.x)
+                - result.rider.distanceMeters;
         result.rider.elevationMeters = elevationBase
                 + double(position.y) - originBodyY;
         result.rider.pitchDegrees = radiansToDegrees(
@@ -290,6 +295,9 @@ struct WorkoutGamePhysics::Impl
                 b2Body_GetRotation(rearWheel));
         result.rider.frontWheelRadians = b2Rot_GetAngle(
                 b2Body_GetRotation(frontWheel));
+        result.rider.clearanceMeters = double(position.y)
+                - WorkoutGamePhysics::terrainHeight(
+                    terrain, position.x, gradePercent, difficulty, seed);
         result.rider.airborne = !grounded();
         result.rider.walking = weakClimbMicroseconds
                 >= WalkDecisionMicroseconds;

@@ -29,6 +29,9 @@ public:
 
     void setCourse(const WorkoutGameCourse &course);
     void setCompetition(const WorkoutGameCompetitionSnapshot &competition);
+    void setWorld(
+            const WorkoutGameWorldSnapshot &world,
+            const WorkoutGameCameraSnapshot &camera);
     void setSnapshot(
             const WorkoutGameSimulationSnapshot &snapshot,
             double watts,
@@ -43,6 +46,8 @@ public:
             const WorkoutGameCourse &course,
             const WorkoutGameSimulationSnapshot &snapshot,
             const WorkoutGameCompetitionSnapshot &competition,
+            const WorkoutGameWorldSnapshot &world,
+            const WorkoutGameCameraSnapshot &camera,
             double watts,
             double targetWatts,
             int cadenceRpm,
@@ -61,11 +66,19 @@ private:
             const QRect &scene,
             const WorkoutGameCourse &course,
             const WorkoutGameSimulationSnapshot &snapshot);
+    static double physicsTrailY(
+            double x,
+            const QRect &scene,
+            const WorkoutGameWorldSnapshot &world,
+            const WorkoutGameCameraSnapshot &camera);
     static QString featureName(WorkoutGameFeature feature);
+    static QString terrainName(WorkoutGameTerrainKind terrain);
 
     WorkoutGameCourse course;
     WorkoutGameSimulationSnapshot current;
     WorkoutGameCompetitionSnapshot competition;
+    WorkoutGameWorldSnapshot world;
+    WorkoutGameCameraSnapshot camera;
     double watts = 0.0;
     double targetWatts = 0.0;
     int cadenceRpm = 0;
