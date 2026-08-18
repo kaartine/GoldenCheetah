@@ -10,6 +10,7 @@
 #ifndef _GC_WorkoutGameVisualSmoother_h
 #define _GC_WorkoutGameVisualSmoother_h
 
+#include "WorkoutGameCompetition.h"
 #include "WorkoutGameSimulation.h"
 #include "WorkoutGameWorld.h"
 
@@ -18,6 +19,7 @@
 struct WorkoutGameVisualSnapshot
 {
     WorkoutGameSimulationSnapshot simulation;
+    WorkoutGameCompetitionSnapshot competition;
     WorkoutGameWorldSnapshot world;
     WorkoutGameCameraSnapshot camera;
 };
@@ -26,6 +28,7 @@ class WorkoutGameVisualSmoother
 {
 public:
     static constexpr std::int64_t TransitionDurationMs = 200;
+    static constexpr std::int64_t MaximumPredictionMs = 250;
 
     void reset();
     void setTarget(

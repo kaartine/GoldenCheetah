@@ -31,6 +31,7 @@ WorkoutGameOpenGLCanvas::WorkoutGameOpenGLCanvas(QWidget *parent) :
     setMinimumSize(320, 180);
     setUpdateBehavior(QOpenGLWidget::NoPartialUpdate);
     visualClock.start();
+    animationTimer.setTimerType(Qt::PreciseTimer);
     animationTimer.setInterval(TargetFrameMs);
     connect(&animationTimer, &QTimer::timeout, this, [this]() {
         animationFrame = (animationFrame + 1) % 120;
@@ -52,6 +53,8 @@ void WorkoutGameOpenGLCanvas::setCompetition(
         const WorkoutGameCompetitionSnapshot &newCompetition)
 {
     competition = newCompetition;
+    visualSmoother.setTarget(
+            {current, competition, world, camera}, visualClock.elapsed());
     update();
 }
 
@@ -61,8 +64,30 @@ void WorkoutGameOpenGLCanvas::setWorld(
 {
     world = newWorld;
     camera = newCamera;
-    visualSmoother.setTarget({current, world, camera}, visualClock.elapsed());
+    visualSmoother.setTarget(
+            {current, competition, world, camera}, visualClock.elapsed());
     update();
+}
+
+void WorkoutGameOpenGLCanvas::setFrame(
+        const WorkoutGameVisualSnapshot &frame,
+        double newWatts,
+        double newTargetWatts,
+        int newCadenceRpm,
+        int newHeartRate,
+        int newVirtualGear)
+{
+    current = frame.simulation;
+    competition = frame.competition;
+    world = frame.world;
+    camera = frame.camera;
+    watts = std::max(0.0, newWatts);
+    targetWatts = std::max(0.0, newTargetWatts);
+    cadenceRpm = std::max(0, newCadenceRpm);
+    heartRate = std::max(0, newHeartRate);
+    virtualGear = std::max(1, newVirtualGear);
+    visualSmoother.setTarget(frame, visualClock.elapsed());
+    if (!animationTimer.isActive()) update();
 }
 
 void WorkoutGameOpenGLCanvas::setSnapshot(
@@ -79,7 +104,8 @@ void WorkoutGameOpenGLCanvas::setSnapshot(
     cadenceRpm = std::max(0, newCadenceRpm);
     heartRate = std::max(0, newHeartRate);
     virtualGear = std::max(1, newVirtualGear);
-    visualSmoother.setTarget({current, world, camera}, visualClock.elapsed());
+    visualSmoother.setTarget(
+            {current, competition, world, camera}, visualClock.elapsed());
     update();
 }
 
@@ -121,7 +147,7 @@ void WorkoutGameOpenGLCanvas::paintGL()
     const double fps = frameRateCounter.frameRendered(nowMs);
     QPainter painter(this);
     WorkoutGameCanvas::paintScene(
-            painter, rect(), course, visual.simulation, competition,
+            painter, rect(), course, visual.simulation, visual.competition,
             visual.world, visual.camera,
             watts, targetWatts, cadenceRpm, heartRate, virtualGear,
             animationFrame, fps, rendererLabel);

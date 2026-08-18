@@ -35,6 +35,13 @@ public:
     void setWorld(
             const WorkoutGameWorldSnapshot &world,
             const WorkoutGameCameraSnapshot &camera);
+    void setFrame(
+            const WorkoutGameVisualSnapshot &frame,
+            double watts,
+            double targetWatts,
+            int cadenceRpm,
+            int heartRate,
+            int virtualGear);
     void setSnapshot(
             const WorkoutGameSimulationSnapshot &snapshot,
             double watts,

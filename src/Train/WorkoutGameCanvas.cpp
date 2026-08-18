@@ -33,6 +33,35 @@ QColor riderKeylineColor() { return QColor(246, 239, 215); }
 
 constexpr int RiderKeylineRadius = 3;
 
+const QPixmap &riderSourcePixmap()
+{
+    static const QPixmap sprite(
+            QStringLiteral(":/images/workout-game-rider.png"));
+    return sprite;
+}
+
+const QPixmap &outlinedRiderPixmap()
+{
+    static const QPixmap sprite = QPixmap::fromImage(
+            WorkoutGameCanvas::addRiderContrastKeyline(
+                riderSourcePixmap().toImage()));
+    return sprite;
+}
+
+const QPixmap &scaledBackground(const QSize &size)
+{
+    static QSize cachedSize;
+    static QPixmap cached;
+    static const QPixmap source(
+            QStringLiteral(":/images/workout-game-background.png"));
+    if (!source.isNull() && (cached.isNull() || cachedSize != size)) {
+        cachedSize = size;
+        cached = source.scaled(
+                size, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+    }
+    return cached;
+}
+
 }
 
 WorkoutGameCanvas::WorkoutGameCanvas(QWidget *parent) : QWidget(parent)
@@ -40,6 +69,7 @@ WorkoutGameCanvas::WorkoutGameCanvas(QWidget *parent) : QWidget(parent)
     setMinimumSize(320, 180);
     setAutoFillBackground(false);
     visualClock.start();
+    animationTimer.setTimerType(Qt::PreciseTimer);
     animationTimer.setInterval(TargetFrameMs);
     connect(&animationTimer, &QTimer::timeout, this, [this]() {
         animationFrame = (animationFrame + 1) % 120;
@@ -61,6 +91,8 @@ void WorkoutGameCanvas::setCompetition(
         const WorkoutGameCompetitionSnapshot &newCompetition)
 {
     competition = newCompetition;
+    visualSmoother.setTarget(
+            {current, competition, world, camera}, visualClock.elapsed());
     update();
 }
 
@@ -70,8 +102,30 @@ void WorkoutGameCanvas::setWorld(
 {
     world = newWorld;
     camera = newCamera;
-    visualSmoother.setTarget({current, world, camera}, visualClock.elapsed());
+    visualSmoother.setTarget(
+            {current, competition, world, camera}, visualClock.elapsed());
     update();
+}
+
+void WorkoutGameCanvas::setFrame(
+        const WorkoutGameVisualSnapshot &frame,
+        double newWatts,
+        double newTargetWatts,
+        int newCadenceRpm,
+        int newHeartRate,
+        int newVirtualGear)
+{
+    current = frame.simulation;
+    competition = frame.competition;
+    world = frame.world;
+    camera = frame.camera;
+    watts = std::max(0.0, newWatts);
+    targetWatts = std::max(0.0, newTargetWatts);
+    cadenceRpm = std::max(0, newCadenceRpm);
+    heartRate = std::max(0, newHeartRate);
+    virtualGear = std::max(1, newVirtualGear);
+    visualSmoother.setTarget(frame, visualClock.elapsed());
+    if (!animationTimer.isActive()) update();
 }
 
 void WorkoutGameCanvas::setSnapshot(
@@ -88,7 +142,8 @@ void WorkoutGameCanvas::setSnapshot(
     cadenceRpm = std::max(0, newCadenceRpm);
     heartRate = std::max(0, newHeartRate);
     virtualGear = std::max(1, newVirtualGear);
-    visualSmoother.setTarget({current, world, camera}, visualClock.elapsed());
+    visualSmoother.setTarget(
+            {current, competition, world, camera}, visualClock.elapsed());
     update();
 }
 
@@ -196,7 +251,7 @@ void WorkoutGameCanvas::paintEvent(QPaintEvent *)
     const double fps = frameRateCounter.frameRendered(nowMs);
     QPainter painter(this);
     paintScene(
-            painter, rect(), course, visual.simulation, competition,
+            painter, rect(), course, visual.simulation, visual.competition,
             visual.world, visual.camera,
             watts, targetWatts, cadenceRpm, heartRate, virtualGear,
             animationFrame, fps, QStringLiteral("CPU"));
@@ -266,38 +321,40 @@ void WorkoutGameCanvas::paintScene(
             viewport.left(), viewport.top() + hudHeight,
             viewport.width(), viewport.height() - hudHeight);
 
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(distantColor());
-    QPolygon distant;
-    distant << QPoint(scene.left(), scene.top() + scene.height() * 0.45)
-            << QPoint(scene.left() + scene.width() * 0.16, scene.top() + scene.height() * 0.20)
-            << QPoint(scene.left() + scene.width() * 0.34, scene.top() + scene.height() * 0.42)
-            << QPoint(scene.left() + scene.width() * 0.56, scene.top() + scene.height() * 0.15)
-            << QPoint(scene.left() + scene.width() * 0.78, scene.top() + scene.height() * 0.40)
-            << QPoint(scene.right(), scene.top() + scene.height() * 0.24)
-            << QPoint(scene.right(), scene.bottom())
-            << QPoint(scene.left(), scene.bottom());
-    painter.drawPolygon(distant);
-
-    painter.setBrush(forestColor());
-    const int treeWidth = std::clamp(viewport.width() / 24, 18, 46);
-    for (int x = -treeWidth; x < viewport.width() + treeWidth; x += treeWidth) {
-        const int offset = (x / treeWidth + animationFrame / 12) % 3;
-        const int baseY = scene.top() + int(scene.height() * (0.48 + offset * 0.025));
-        QPolygon tree;
-        tree << QPoint(x, baseY)
-             << QPoint(x + treeWidth / 2, baseY - treeWidth * 2)
-             << QPoint(x + treeWidth, baseY)
-             << QPoint(x + treeWidth * 3 / 4, baseY)
-             << QPoint(x + treeWidth * 3 / 4, baseY + treeWidth)
-             << QPoint(x + treeWidth / 4, baseY + treeWidth)
-             << QPoint(x + treeWidth / 4, baseY);
-        painter.drawPolygon(tree);
-    }
-
     static const QPixmap background(QStringLiteral(":/images/workout-game-background.png"));
     if (!background.isNull()) {
-        painter.drawPixmap(scene, background, background.rect());
+        painter.drawPixmap(scene.topLeft(), scaledBackground(scene.size()));
+    } else {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(distantColor());
+        QPolygon distant;
+        distant << QPoint(scene.left(), scene.top() + scene.height() * 0.45)
+                << QPoint(scene.left() + scene.width() * 0.16, scene.top() + scene.height() * 0.20)
+                << QPoint(scene.left() + scene.width() * 0.34, scene.top() + scene.height() * 0.42)
+                << QPoint(scene.left() + scene.width() * 0.56, scene.top() + scene.height() * 0.15)
+                << QPoint(scene.left() + scene.width() * 0.78, scene.top() + scene.height() * 0.40)
+                << QPoint(scene.right(), scene.top() + scene.height() * 0.24)
+                << QPoint(scene.right(), scene.bottom())
+                << QPoint(scene.left(), scene.bottom());
+        painter.drawPolygon(distant);
+
+        painter.setBrush(forestColor());
+        const int treeWidth = std::clamp(viewport.width() / 24, 18, 46);
+        for (int x = -treeWidth;
+             x < viewport.width() + treeWidth; x += treeWidth) {
+            const int offset = (x / treeWidth + animationFrame / 12) % 3;
+            const int baseY = scene.top()
+                    + int(scene.height() * (0.48 + offset * 0.025));
+            QPolygon tree;
+            tree << QPoint(x, baseY)
+                 << QPoint(x + treeWidth / 2, baseY - treeWidth * 2)
+                 << QPoint(x + treeWidth, baseY)
+                 << QPoint(x + treeWidth * 3 / 4, baseY)
+                 << QPoint(x + treeWidth * 3 / 4, baseY + treeWidth)
+                 << QPoint(x + treeWidth / 4, baseY + treeWidth)
+                 << QPoint(x + treeWidth / 4, baseY);
+            painter.drawPolygon(tree);
+        }
     }
 
     const auto sceneTrailY = [&](double x) {
@@ -360,26 +417,33 @@ void WorkoutGameCanvas::paintScene(
             QColor color = rider.kind == WorkoutGameCompetitorKind::Ghost
                     ? QColor(119, 237, 232, 150)
                     : aiColors[std::size_t(std::clamp(rider.identity, 0, 2))];
-            painter.setPen(QPen(color.darker(160), std::max(2, wheelRadius / 4)));
-            painter.setBrush(Qt::NoBrush);
-            painter.drawEllipse(
-                    QPoint(x - wheelRadius, ground - wheelRadius / 2),
-                    wheelRadius / 2, wheelRadius / 2);
-            painter.drawEllipse(
-                    QPoint(x + wheelRadius, ground - wheelRadius / 2),
-                    wheelRadius / 2, wheelRadius / 2);
-            painter.setPen(QPen(color, std::max(2, wheelRadius / 3)));
-            painter.drawLine(x - wheelRadius, ground - wheelRadius / 2,
-                             x, ground - wheelRadius * 3 / 2);
-            painter.drawLine(x, ground - wheelRadius * 3 / 2,
-                             x + wheelRadius, ground - wheelRadius / 2);
+            const QPixmap &competitorSprite = outlinedRiderPixmap();
+            if (!competitorSprite.isNull()) {
+                const int competitorWidth = std::clamp(
+                        viewport.width() / 11, 64, 128);
+                const int competitorHeight = competitorWidth
+                        * competitorSprite.height() / competitorSprite.width();
+                const QRect competitorRect(
+                        x - competitorWidth / 2,
+                        ground - competitorHeight,
+                        competitorWidth,
+                        competitorHeight);
+                painter.save();
+                painter.setOpacity(
+                        rider.kind == WorkoutGameCompetitorKind::Ghost
+                                ? 0.58 : 0.9);
+                painter.drawPixmap(
+                        competitorRect, competitorSprite,
+                        competitorSprite.rect());
+                painter.restore();
+            }
             painter.setPen(Qt::NoPen);
             painter.setBrush(color);
             painter.drawRect(
-                    x - wheelRadius / 3,
-                    ground - wheelRadius * 5 / 2,
-                    std::max(3, wheelRadius * 2 / 3),
-                    wheelRadius);
+                    x - wheelRadius,
+                    ground + std::max(2, wheelRadius / 4),
+                    wheelRadius * 2,
+                    std::max(3, wheelRadius / 3));
         }
     }
 
@@ -421,9 +485,8 @@ void WorkoutGameCanvas::paintScene(
             : 0.0;
     const int riderGround = int(sceneTrailY(riderX)
             - airLift - suspensionLift) - riderBob;
-    static const QPixmap riderSource(QStringLiteral(":/images/workout-game-rider.png"));
-    static const QPixmap rider = QPixmap::fromImage(
-            addRiderContrastKeyline(riderSource.toImage()));
+    const QPixmap &riderSource = riderSourcePixmap();
+    const QPixmap &rider = outlinedRiderPixmap();
     if (!riderSource.isNull() && !rider.isNull()) {
         const int riderWidth = std::clamp(viewport.width() / 5, 110, 260);
         const int riderHeight =

@@ -93,6 +93,71 @@ private slots:
         QCOMPARE(smoother.sample(1400).world.rider.distanceMeters, 14.0);
     }
 
+    void visualStateInterpolatesCompetitorsBetweenTelemetryUpdates()
+    {
+        WorkoutGameVisualSnapshot first;
+        first.simulation.ready = true;
+        first.simulation.activeSection = 1;
+        first.competition.ready = true;
+        first.competition.playerRank = 2;
+        first.competition.totalRiders = 2;
+        first.competition.competitors = {
+            {WorkoutGameCompetitorKind::Ai, 1, -1, 1000, 0.2,
+             WorkoutGameRoute::MainLine}
+        };
+
+        WorkoutGameVisualSnapshot second = first;
+        second.competition.competitors[0].score = 1200;
+        second.competition.competitors[0].courseProgress = 0.4;
+
+        WorkoutGameVisualSmoother smoother;
+        smoother.setTarget(first, 1000);
+        smoother.setTarget(second, 1200);
+        const WorkoutGameVisualSnapshot halfway = smoother.sample(1300);
+
+        QCOMPARE(halfway.competition.competitors.size(), std::size_t(1));
+        QVERIFY(std::abs(
+                halfway.competition.competitors[0].courseProgress - 0.3)
+                < 1e-9);
+    }
+
+    void visualStatePredictsBrieflyWhenTelemetryIsLate()
+    {
+        WorkoutGameVisualSnapshot first;
+        first.simulation.ready = true;
+        first.simulation.activeSection = 1;
+        first.simulation.workoutTimeMs = 1000;
+        first.world.ready = true;
+        first.world.generation = 2;
+        first.world.rider.distanceMeters = 10.0;
+        first.world.speedMetersPerSecond = 10.0;
+        first.camera.ready = true;
+        first.camera.centerDistanceMeters = 9.0;
+        first.competition.ready = true;
+        first.competition.totalRiders = 2;
+        first.competition.competitors = {
+            {WorkoutGameCompetitorKind::Ai, 1, -1, 1000, 0.2,
+             WorkoutGameRoute::MainLine}
+        };
+
+        WorkoutGameVisualSnapshot second = first;
+        second.simulation.workoutTimeMs = 1200;
+        second.world.rider.distanceMeters = 12.0;
+        second.camera.centerDistanceMeters = 11.0;
+        second.competition.competitors[0].courseProgress = 0.3;
+
+        WorkoutGameVisualSmoother smoother;
+        smoother.setTarget(first, 1000);
+        smoother.setTarget(second, 1200);
+        const WorkoutGameVisualSnapshot late = smoother.sample(1500);
+
+        QCOMPARE(late.world.rider.distanceMeters, 13.0);
+        QCOMPARE(late.camera.centerDistanceMeters, 12.0);
+        QVERIFY(std::abs(
+                late.competition.competitors[0].courseProgress - 0.35)
+                < 1e-9);
+    }
+
     void visualStateDoesNotBlendAcrossCourseSections()
     {
         WorkoutGameVisualSnapshot first;
@@ -296,6 +361,9 @@ private slots:
         };
         canvas.setCompetition(race);
         const QImage group = render(canvas);
+        const QString groupOutput =
+                qEnvironmentVariable("GC_TEST_COMPETITION_OUTPUT");
+        if (!groupOutput.isEmpty()) QVERIFY(group.save(groupOutput));
 
         QVERIFY(group != solo);
         QVERIFY(changedPixels(group, solo) > 30);

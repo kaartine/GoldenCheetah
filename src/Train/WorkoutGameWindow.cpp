@@ -306,19 +306,16 @@ void WorkoutGameWindow::updateSimulation(std::int64_t workoutTimeMs)
     }
     const WorkoutGameCompetitionSnapshot race = competition.update(snapshot);
     if (sessionActive) ghostRecorder.record(snapshot);
-    painterCanvas->setCompetition(race);
-    openGLCanvas->setCompetition(race);
-    painterCanvas->setWorld(world, view);
-    openGLCanvas->setWorld(world, view);
-    painterCanvas->setSnapshot(
-            snapshot,
+    const WorkoutGameVisualSnapshot frame = {snapshot, race, world, view};
+    painterCanvas->setFrame(
+            frame,
             input.actualWatts,
             input.targetWatts,
             int(std::lround(input.cadenceRpm)),
             hasTelemetry ? int(std::lround(latestTelemetry.getHr())) : 0,
             std::max(1, input.virtualGear));
-    openGLCanvas->setSnapshot(
-            snapshot,
+    openGLCanvas->setFrame(
+            frame,
             input.actualWatts,
             input.targetWatts,
             int(std::lround(input.cadenceRpm)),

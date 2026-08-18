@@ -27,6 +27,36 @@ double lerpAngle(double from, double to, double amount, double period)
     return from + difference * amount;
 }
 
+bool sameCompetitors(
+        const WorkoutGameCompetitionSnapshot &from,
+        const WorkoutGameCompetitionSnapshot &to)
+{
+    if (from.ready != to.ready
+            || from.competitors.size() != to.competitors.size()) {
+        return false;
+    }
+    for (std::size_t index = 0; index < from.competitors.size(); ++index) {
+        const WorkoutGameCompetitorSnapshot &left = from.competitors[index];
+        const WorkoutGameCompetitorSnapshot &right = to.competitors[index];
+        if (left.kind != right.kind
+                || left.identity != right.identity
+                || left.lane != right.lane) {
+            return false;
+        }
+    }
+    return true;
+}
+
+double extrapolate(
+        double previous,
+        double target,
+        std::int64_t predictionMs)
+{
+    return target + (target - previous)
+            * double(predictionMs)
+            / double(WorkoutGameVisualSmoother::TransitionDurationMs);
+}
+
 }
 
 void WorkoutGameVisualSmoother::reset()
@@ -60,11 +90,55 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::sample(
         std::int64_t monotonicTimeMs) const
 {
     if (!initialized) return WorkoutGameVisualSnapshot();
+    const std::int64_t elapsedMs = std::max<std::int64_t>(
+            0, monotonicTimeMs - transitionStartMs);
     const double amount = std::clamp(
-            double(monotonicTimeMs - transitionStartMs)
-                    / double(TransitionDurationMs),
+            double(elapsedMs) / double(TransitionDurationMs),
             0.0, 1.0);
-    return interpolate(previous, target, amount);
+    WorkoutGameVisualSnapshot result = interpolate(previous, target, amount);
+
+    const std::int64_t predictionMs = std::clamp<std::int64_t>(
+            elapsedMs - TransitionDurationMs, 0, MaximumPredictionMs);
+    const bool movingForward = target.simulation.ready
+            && !target.simulation.finished
+            && target.simulation.workoutTimeMs
+                    > previous.simulation.workoutTimeMs;
+    if (predictionMs <= 0 || !movingForward) return result;
+
+    result.simulation.workoutTimeMs += predictionMs;
+    result.simulation.courseProgress = std::clamp(extrapolate(
+            previous.simulation.courseProgress,
+            target.simulation.courseProgress, predictionMs), 0.0, 1.0);
+    result.simulation.sectionProgress = std::clamp(extrapolate(
+            previous.simulation.sectionProgress,
+            target.simulation.sectionProgress, predictionMs), 0.0, 1.0);
+
+    if (result.world.ready) {
+        const double predictionSeconds = double(predictionMs) / 1000.0;
+        result.world.rider.distanceMeters +=
+                result.world.speedMetersPerSecond * predictionSeconds;
+        result.world.rider.elevationMeters = extrapolate(
+                previous.world.rider.elevationMeters,
+                target.world.rider.elevationMeters, predictionMs);
+    }
+    if (result.camera.ready) {
+        const double predictionSeconds = double(predictionMs) / 1000.0;
+        result.camera.centerDistanceMeters +=
+                result.world.speedMetersPerSecond * predictionSeconds;
+        result.camera.centerElevationMeters = extrapolate(
+                previous.camera.centerElevationMeters,
+                target.camera.centerElevationMeters, predictionMs);
+    }
+    for (std::size_t index = 0;
+         index < result.competition.competitors.size(); ++index) {
+        result.competition.competitors[index].courseProgress = std::clamp(
+                extrapolate(
+                    previous.competition.competitors[index].courseProgress,
+                    target.competition.competitors[index].courseProgress,
+                    predictionMs),
+                0.0, 1.0);
+    }
+    return result;
 }
 
 bool WorkoutGameVisualSmoother::isDiscontinuity(
@@ -78,7 +152,8 @@ bool WorkoutGameVisualSmoother::isDiscontinuity(
             || (from.world.ready
                 && (from.world.generation != to.world.generation
                     || from.world.terrain != to.world.terrain))
-            || from.camera.ready != to.camera.ready;
+            || from.camera.ready != to.camera.ready
+            || !sameCompetitors(from.competition, to.competition);
 }
 
 WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::interpolate(
@@ -101,6 +176,13 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::interpolate(
             from.simulation.adherence, to.simulation.adherence, amount);
     result.simulation.streakSeconds = lerp(
             from.simulation.streakSeconds, to.simulation.streakSeconds, amount);
+
+    for (std::size_t index = 0;
+         index < result.competition.competitors.size(); ++index) {
+        result.competition.competitors[index].courseProgress = lerp(
+                from.competition.competitors[index].courseProgress,
+                to.competition.competitors[index].courseProgress, amount);
+    }
 
     result.world.gradePercent = lerp(
             from.world.gradePercent, to.world.gradePercent, amount);
