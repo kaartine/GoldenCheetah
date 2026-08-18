@@ -34,6 +34,7 @@ D2XX_LINUX_SHA256="e260a4594a313583b87bf230c79cec9d46f11db6dcfd7c7d4f96327970321
 D2XX_LINUX_SOURCE_URL="https://distfiles.gentoo.org/distfiles/b1/libftd2xx-x86_64-${D2XX_LINUX_VERSION}.tar.gz"
 QTKEYCHAIN_LICENSE_SHA256="ca46b73d5159548ab52834db51f195aa3d1f277f020e9dca92f4beb21b468a50"
 LGPL21_LICENSE_SHA256="dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+BOX2D_LICENSE_SHA256="68a3e676d7e94093b102d5cba0d4e04af812040d6f230c3db67a6664574e43d2"
 
 download_file()
 {
@@ -1072,6 +1073,32 @@ install_regular_keychain_payload()
         return 1
     fi
     install -m 0644 "$source" "$destination"
+}
+
+install_box2d_license()
+{
+    if [ "$#" -ne 2 ]; then
+        echo "Usage: install_box2d_license APPDIR LICENSE" >&2
+        return 2
+    fi
+    local appdir=$1
+    local source=$2
+    local license_dir destination
+
+    file_matches_sha256 "$source" "$BOX2D_LICENSE_SHA256" || {
+        echo "Box2D license is missing or invalid." >&2
+        return 1
+    }
+    license_dir=$(prepare_contained_appdir_directory \
+        "$appdir" usr/share/doc/GoldenCheetah/licenses) || return
+    destination="$license_dir/Box2D-LICENSE"
+    if [ -L "$destination" ] ||
+       { [ -e "$destination" ] && [ ! -f "$destination" ]; }; then
+        echo "Box2D license destination is not a regular file." >&2
+        return 1
+    fi
+    install -m 0644 "$source" "$destination" || return
+    cmp -s -- "$source" "$destination"
 }
 
 install_linux_keychain_runtime()

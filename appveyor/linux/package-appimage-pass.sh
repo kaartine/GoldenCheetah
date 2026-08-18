@@ -108,6 +108,8 @@ install_embedded_python \
 install_linux_keychain_runtime \
     "$APPDIR" "$REPOSITORY_ROOT/contrib/qtkeychain/COPYING" \
     "$RUNTIME_TRANSFORM_MANIFEST"
+install_box2d_license \
+    "$APPDIR" "$REPOSITORY_ROOT/vendor/box2d-3.1.1/LICENSE"
 
 patchelf --set-rpath '$ORIGIN/../lib' \
     "$APPDIR/libexec/QtWebEngineProcess"

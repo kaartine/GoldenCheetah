@@ -33,6 +33,8 @@ SPDX_LICENSE_IDS = {
     "PSF-2.0",
     "Unicode-3.0",
 }
+BOX2D_VERSION = "3.1.1"
+BOX2D_REVISION = "8c661469c9507d3ad6fbd2fea3f1aa71669c2fe3"
 
 
 def sha256_file(path):
@@ -610,6 +612,23 @@ def build_document(arguments):
             ),
         ]
     )
+    components.append({
+        "bom-ref": "pkg:github/erincatto/box2d@{}".format(BOX2D_REVISION),
+        "type": "library",
+        "name": "box2d",
+        "version": BOX2D_VERSION,
+        "purl": "pkg:github/erincatto/box2d@{}".format(BOX2D_REVISION),
+        "licenses": [{"license": {"id": "MIT"}}],
+        "properties": [
+            property_entry("goldencheetah:role", "linked-dependency"),
+            property_entry(
+                "goldencheetah:provenance",
+                "https://github.com/erincatto/box2d/tree/{}".format(
+                    BOX2D_REVISION
+                ),
+            ),
+        ],
+    })
     if features["srmio"]:
         components.append({
                 "bom-ref": "pkg:github/rclasen/srmio@{}".format(

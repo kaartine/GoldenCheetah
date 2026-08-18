@@ -114,6 +114,7 @@ all qt Train/kineticPacketBounds
 all qt Train/vmProWidgetLifecycle
 all qt Train/virtualPowerTrainerOwnership
 all qt Train/bt40Lifecycle
+all qt Train/box2dVendor
 all qt Train/deviceSelection
 all qt Train/trainingStopPolicy
 all qt Train/trainingRecordingIo
@@ -127,6 +128,7 @@ all qt Train/workoutGameCanvas
 all qt Train/workoutGameCourse
 all qt Train/workoutGameRendererPolicy
 all qt Train/workoutGameSimulation
+all qt Train/workoutGameWorld
 all qt Train/workoutGameWorkoutAdapter
 all qt Train/workoutRideCommandFilter
 all qt Train/workoutRideTargetPlanner

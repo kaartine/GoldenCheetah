@@ -2073,6 +2073,8 @@ SBOM_APPDIR="$TEMP_DIR/sbom-appdir"
 SBOM_PYTHON_SITE="$SBOM_APPDIR/opt/python3.11/lib/python3.11/site-packages"
 mkdir -p "$SBOM_APPDIR/usr/lib" "$SBOM_APPDIR/usr/share/goldencheetah" \
     "$SBOM_PYTHON_SITE/fixture_package-1.2.3.dist-info"
+install_box2d_license \
+    "$SBOM_APPDIR" "$REPO_ROOT/vendor/box2d-3.1.1/LICENSE"
 printf 'application binary\n' >"$SBOM_APPDIR/GoldenCheetah"
 printf 'runtime library\n' >"$SBOM_APPDIR/usr/lib/libfixture.so"
 printf 'Qt runtime library\n' >"$SBOM_APPDIR/usr/lib/libQt6Core.so.6.8.3"
@@ -2319,6 +2321,8 @@ assert "srmio" not in names
 assert "d2xx-linux" not in names
 assert "Qt6Core" in names
 assert "libsecret-1-0" in names
+assert "box2d" in names
+assert "usr/share/doc/GoldenCheetah/licenses/Box2D-LICENSE" in names
 qt = next(component for component in components
           if component["name"] == "Qt6Core")
 assert qt["version"] == "6.8.3"
@@ -2352,6 +2356,11 @@ assert fixture["hashes"] == [{
     "alg": "SHA-256",
     "content": "a" * 64,
 }]
+box2d = next(component for component in components
+             if component["name"] == "box2d")
+assert box2d["version"] == "3.1.1"
+assert box2d["licenses"] == [{"license": {"id": "MIT"}}]
+assert box2d["purl"].startswith("pkg:github/erincatto/box2d@")
 PY
 python3 - "$SBOM_ENABLED" <<'PY'
 import json
