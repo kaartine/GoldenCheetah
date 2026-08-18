@@ -41,6 +41,12 @@ public:
             int cadenceRpm,
             int heartRate,
             int virtualGear);
+    void setTelemetry(
+            double watts,
+            double targetWatts,
+            int cadenceRpm,
+            int heartRate,
+            int virtualGear);
     void setSnapshot(
             const WorkoutGameSimulationSnapshot &snapshot,
             double watts,

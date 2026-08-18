@@ -50,11 +50,12 @@ bool sameCompetitors(
 double extrapolate(
         double previous,
         double target,
-        std::int64_t predictionMs)
+        std::int64_t predictionMs,
+        std::int64_t sourceIntervalMs)
 {
     return target + (target - previous)
             * double(predictionMs)
-            / double(WorkoutGameVisualSmoother::TransitionDurationMs);
+            / double(std::max<std::int64_t>(1, sourceIntervalMs));
 }
 
 }
@@ -63,7 +64,10 @@ void WorkoutGameVisualSmoother::reset()
 {
     initialized = false;
     transitionStartMs = 0;
+    lastTargetMonotonicMs = 0;
+    sourceIntervalMs = 1000;
     previous = WorkoutGameVisualSnapshot();
+    predictionOrigin = WorkoutGameVisualSnapshot();
     target = WorkoutGameVisualSnapshot();
 }
 
@@ -76,14 +80,34 @@ void WorkoutGameVisualSmoother::setTarget(
             || isDiscontinuity(target, snapshot)) {
         initialized = true;
         transitionStartMs = monotonicTimeMs;
+        lastTargetMonotonicMs = monotonicTimeMs;
+        sourceIntervalMs = 1000;
         previous = snapshot;
+        predictionOrigin = snapshot;
         target = snapshot;
         return;
     }
 
-    previous = sample(monotonicTimeMs);
+    const WorkoutGameVisualSnapshot sampled = sample(monotonicTimeMs);
+    const std::int64_t workoutIntervalMs =
+            snapshot.simulation.workoutTimeMs
+            - target.simulation.workoutTimeMs;
+    const std::int64_t monotonicIntervalMs =
+            monotonicTimeMs - lastTargetMonotonicMs;
+    const std::int64_t observedIntervalMs = workoutIntervalMs > 0
+            ? workoutIntervalMs
+            : monotonicIntervalMs;
+    if (observedIntervalMs > 0) {
+        sourceIntervalMs = std::clamp(
+                observedIntervalMs,
+                MinimumSourceIntervalMs,
+                MaximumSourceIntervalMs);
+    }
+    previous = sampled;
+    predictionOrigin = target;
     target = snapshot;
     transitionStartMs = monotonicTimeMs;
+    lastTargetMonotonicMs = monotonicTimeMs;
 }
 
 WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::sample(
@@ -107,35 +131,41 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::sample(
 
     result.simulation.workoutTimeMs += predictionMs;
     result.simulation.courseProgress = std::clamp(extrapolate(
-            previous.simulation.courseProgress,
-            target.simulation.courseProgress, predictionMs), 0.0, 1.0);
+            predictionOrigin.simulation.courseProgress,
+            target.simulation.courseProgress,
+            predictionMs, sourceIntervalMs), 0.0, 1.0);
     result.simulation.sectionProgress = std::clamp(extrapolate(
-            previous.simulation.sectionProgress,
-            target.simulation.sectionProgress, predictionMs), 0.0, 1.0);
+            predictionOrigin.simulation.sectionProgress,
+            target.simulation.sectionProgress,
+            predictionMs, sourceIntervalMs), 0.0, 1.0);
 
     if (result.world.ready) {
         const double predictionSeconds = double(predictionMs) / 1000.0;
         result.world.rider.distanceMeters +=
                 result.world.speedMetersPerSecond * predictionSeconds;
         result.world.rider.elevationMeters = extrapolate(
-                previous.world.rider.elevationMeters,
-                target.world.rider.elevationMeters, predictionMs);
+                predictionOrigin.world.rider.elevationMeters,
+                target.world.rider.elevationMeters,
+                predictionMs, sourceIntervalMs);
     }
     if (result.camera.ready) {
         const double predictionSeconds = double(predictionMs) / 1000.0;
         result.camera.centerDistanceMeters +=
                 result.world.speedMetersPerSecond * predictionSeconds;
         result.camera.centerElevationMeters = extrapolate(
-                previous.camera.centerElevationMeters,
-                target.camera.centerElevationMeters, predictionMs);
+                predictionOrigin.camera.centerElevationMeters,
+                target.camera.centerElevationMeters,
+                predictionMs, sourceIntervalMs);
     }
     for (std::size_t index = 0;
          index < result.competition.competitors.size(); ++index) {
+        const WorkoutGameCompetitorSnapshot &origin =
+                predictionOrigin.competition.competitors[index];
         result.competition.competitors[index].courseProgress = std::clamp(
                 extrapolate(
-                    previous.competition.competitors[index].courseProgress,
+                    origin.courseProgress,
                     target.competition.competitors[index].courseProgress,
-                    predictionMs),
+                    predictionMs, sourceIntervalMs),
                 0.0, 1.0);
     }
     return result;

@@ -159,6 +159,76 @@ private slots:
                 < 1e-9);
     }
 
+    void visualStateKeepsMovingBetweenOneHertzTelemetryUpdates()
+    {
+        WorkoutGameVisualSnapshot first;
+        first.simulation.ready = true;
+        first.simulation.activeSection = 1;
+        first.simulation.workoutTimeMs = 1000;
+        first.simulation.courseProgress = 0.1;
+        first.world.ready = true;
+        first.world.generation = 2;
+        first.world.rider.distanceMeters = 10.0;
+        first.world.speedMetersPerSecond = 10.0;
+        first.camera.ready = true;
+        first.camera.centerDistanceMeters = 9.0;
+        first.competition.ready = true;
+        first.competition.totalRiders = 2;
+        first.competition.competitors = {
+            {WorkoutGameCompetitorKind::Ai, 1, -1, 1000, 0.1,
+             WorkoutGameRoute::MainLine}
+        };
+
+        WorkoutGameVisualSnapshot second = first;
+        second.simulation.workoutTimeMs = 2000;
+        second.simulation.courseProgress = 0.2;
+        second.world.rider.distanceMeters = 20.0;
+        second.camera.centerDistanceMeters = 19.0;
+        second.competition.competitors[0].courseProgress = 0.2;
+
+        WorkoutGameVisualSmoother smoother;
+        smoother.setTarget(first, 1000);
+        smoother.setTarget(second, 2000);
+        const WorkoutGameVisualSnapshot middle = smoother.sample(2700);
+        const WorkoutGameVisualSnapshot late = smoother.sample(2900);
+
+        QCOMPARE(middle.world.rider.distanceMeters, 25.0);
+        QCOMPARE(late.world.rider.distanceMeters, 27.0);
+        QCOMPARE(middle.camera.centerDistanceMeters, 24.0);
+        QCOMPARE(late.camera.centerDistanceMeters, 26.0);
+        QVERIFY(std::abs(middle.simulation.courseProgress - 0.25) < 1e-9);
+        QVERIFY(std::abs(late.simulation.courseProgress - 0.27) < 1e-9);
+        QVERIFY(std::abs(
+                middle.competition.competitors[0].courseProgress - 0.25)
+                < 1e-9);
+        QVERIFY(std::abs(
+                late.competition.competitors[0].courseProgress - 0.27)
+                < 1e-9);
+    }
+
+    void visualStateBoundsPredictionAcrossLongTelemetryGaps()
+    {
+        WorkoutGameVisualSnapshot first;
+        first.simulation.ready = true;
+        first.simulation.activeSection = 1;
+        first.simulation.workoutTimeMs = 1000;
+        first.world.ready = true;
+        first.world.generation = 2;
+        first.world.rider.distanceMeters = 10.0;
+        first.world.speedMetersPerSecond = 10.0;
+
+        WorkoutGameVisualSnapshot second = first;
+        second.simulation.workoutTimeMs = 2000;
+        second.world.rider.distanceMeters = 20.0;
+
+        WorkoutGameVisualSmoother smoother;
+        smoother.setTarget(first, 1000);
+        smoother.setTarget(second, 2000);
+
+        QCOMPARE(smoother.sample(3700).world.rider.distanceMeters, 35.0);
+        QCOMPARE(smoother.sample(5000).world.rider.distanceMeters, 35.0);
+    }
+
     void visualStateDoesNotBlendAcrossCourseSections()
     {
         WorkoutGameVisualSnapshot first;
@@ -275,6 +345,29 @@ private slots:
         QVERIFY(image.pixelColor(20, 20) != image.pixelColor(20, 300));
         const QString outputPath = qEnvironmentVariable("GC_TEST_RENDER_OUTPUT");
         if (!outputPath.isEmpty()) QVERIFY(image.save(outputPath));
+    }
+
+    void telemetryOnlyUpdateRefreshesHudWithoutNewSimulationFrame()
+    {
+        const WorkoutGameCourse course = WorkoutGameCourseBuilder::build(
+                {{0, 10000, 250.0, 250.0}}, 200.0, 7u);
+        WorkoutGameVisualSnapshot frame;
+        frame.simulation.ready = true;
+        frame.simulation.activeSection = 0;
+        frame.simulation.workoutTimeMs = 2000;
+        frame.simulation.courseProgress = 0.2;
+        frame.simulation.speedKph = 24.0;
+
+        WorkoutGameCanvas canvas;
+        canvas.resize(960, 540);
+        canvas.setCourse(course);
+        canvas.setFrame(frame, 150.0, 250.0, 80, 130, 8);
+        const QImage before = render(canvas);
+
+        canvas.setTelemetry(275.0, 250.0, 95, 155, 12);
+        const QImage after = render(canvas);
+
+        QVERIFY(changedPixels(before, after) > 10);
     }
 
     void safeBypassChangesRenderedRoute()

@@ -209,7 +209,15 @@ void WorkoutGameWindow::telemetryUpdate(const RealtimeData &telemetry)
 {
     latestTelemetry = telemetry;
     hasTelemetry = true;
-    updateSimulation(context->getNow());
+    const int cadenceRpm = int(std::lround(latestTelemetry.getCadence()));
+    const int heartRate = int(std::lround(latestTelemetry.getHr()));
+    const int virtualGear = std::max(1, latestTelemetry.getVirtualGear());
+    painterCanvas->setTelemetry(
+            latestTelemetry.getWatts(), latestTelemetry.getLoad(),
+            cadenceRpm, heartRate, virtualGear);
+    openGLCanvas->setTelemetry(
+            latestTelemetry.getWatts(), latestTelemetry.getLoad(),
+            cadenceRpm, heartRate, virtualGear);
 }
 
 void WorkoutGameWindow::setNow(long workoutTimeMs)

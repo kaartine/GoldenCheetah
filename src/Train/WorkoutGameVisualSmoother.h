@@ -28,7 +28,9 @@ class WorkoutGameVisualSmoother
 {
 public:
     static constexpr std::int64_t TransitionDurationMs = 200;
-    static constexpr std::int64_t MaximumPredictionMs = 250;
+    static constexpr std::int64_t MaximumPredictionMs = 1500;
+    static constexpr std::int64_t MinimumSourceIntervalMs = 20;
+    static constexpr std::int64_t MaximumSourceIntervalMs = 2000;
 
     void reset();
     void setTarget(
@@ -47,7 +49,10 @@ private:
 
     bool initialized = false;
     std::int64_t transitionStartMs = 0;
+    std::int64_t lastTargetMonotonicMs = 0;
+    std::int64_t sourceIntervalMs = 1000;
     WorkoutGameVisualSnapshot previous;
+    WorkoutGameVisualSnapshot predictionOrigin;
     WorkoutGameVisualSnapshot target;
 };
 

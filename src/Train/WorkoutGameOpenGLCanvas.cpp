@@ -87,6 +87,21 @@ void WorkoutGameOpenGLCanvas::setFrame(
     if (!renderLoopActive) update();
 }
 
+void WorkoutGameOpenGLCanvas::setTelemetry(
+        double newWatts,
+        double newTargetWatts,
+        int newCadenceRpm,
+        int newHeartRate,
+        int newVirtualGear)
+{
+    watts = std::max(0.0, newWatts);
+    targetWatts = std::max(0.0, newTargetWatts);
+    cadenceRpm = std::max(0, newCadenceRpm);
+    heartRate = std::max(0, newHeartRate);
+    virtualGear = std::max(1, newVirtualGear);
+    if (!renderLoopActive) update();
+}
+
 void WorkoutGameOpenGLCanvas::setSnapshot(
         const WorkoutGameSimulationSnapshot &snapshot,
         double newWatts,

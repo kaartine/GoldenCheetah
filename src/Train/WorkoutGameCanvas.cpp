@@ -128,6 +128,21 @@ void WorkoutGameCanvas::setFrame(
     if (!animationTimer.isActive()) update();
 }
 
+void WorkoutGameCanvas::setTelemetry(
+        double newWatts,
+        double newTargetWatts,
+        int newCadenceRpm,
+        int newHeartRate,
+        int newVirtualGear)
+{
+    watts = std::max(0.0, newWatts);
+    targetWatts = std::max(0.0, newTargetWatts);
+    cadenceRpm = std::max(0, newCadenceRpm);
+    heartRate = std::max(0, newHeartRate);
+    virtualGear = std::max(1, newVirtualGear);
+    if (!animationTimer.isActive()) update();
+}
+
 void WorkoutGameCanvas::setSnapshot(
         const WorkoutGameSimulationSnapshot &snapshot,
         double newWatts,
