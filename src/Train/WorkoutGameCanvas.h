@@ -14,6 +14,7 @@
 #include "WorkoutGameCompetition.h"
 #include "WorkoutGameSimulation.h"
 
+#include <QImage>
 #include <QTimer>
 #include <QWidget>
 
@@ -35,6 +36,7 @@ public:
             int cadenceRpm,
             int heartRate,
             int virtualGear);
+    static QImage addRiderContrastKeyline(const QImage &sprite);
     static void paintScene(
             QPainter &painter,
             const QRect &viewport,

@@ -58,6 +58,22 @@ class TestWorkoutGameCanvas : public QObject
     Q_OBJECT
 
 private slots:
+    void riderContrastKeylineHasDarkAndLightEdges()
+    {
+        QImage sprite(1, 1, QImage::Format_ARGB32_Premultiplied);
+        sprite.fill(QColor(220, 40, 30));
+
+        const QImage outlined =
+                WorkoutGameCanvas::addRiderContrastKeyline(sprite);
+
+        QCOMPARE(outlined.size(), QSize(7, 7));
+        QCOMPARE(outlined.pixelColor(3, 3), QColor(220, 40, 30));
+        QCOMPARE(outlined.pixelColor(3, 2), QColor(20, 27, 31));
+        QCOMPARE(outlined.pixelColor(3, 0), QColor(246, 239, 215));
+        QCOMPARE(outlined.pixelColor(0, 0), QColor(246, 239, 215));
+        QVERIFY(WorkoutGameCanvas::addRiderContrastKeyline(QImage()).isNull());
+    }
+
     void fallbackSceneIsVisibleWithoutWorkout()
     {
         WorkoutGameCanvas canvas;

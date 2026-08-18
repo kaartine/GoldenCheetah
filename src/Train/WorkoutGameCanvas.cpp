@@ -28,6 +28,9 @@ QColor forestColor() { return QColor(38, 85, 61); }
 QColor dirtColor() { return QColor(145, 92, 52); }
 QColor dirtHighlightColor() { return QColor(220, 177, 99); }
 QColor inkColor() { return QColor(20, 27, 31); }
+QColor riderKeylineColor() { return QColor(246, 239, 215); }
+
+constexpr int RiderKeylineRadius = 3;
 
 }
 
@@ -129,6 +132,45 @@ void WorkoutGameCanvas::paintEvent(QPaintEvent *)
     paintScene(
             painter, rect(), course, current, competition, watts, targetWatts,
             cadenceRpm, heartRate, virtualGear, animationFrame);
+}
+
+QImage WorkoutGameCanvas::addRiderContrastKeyline(const QImage &sprite)
+{
+    if (sprite.isNull()) return QImage();
+
+    const QImage source =
+            sprite.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    const int padding = RiderKeylineRadius;
+    QImage result(
+            source.width() + padding * 2,
+            source.height() + padding * 2,
+            QImage::Format_ARGB32_Premultiplied);
+    result.fill(Qt::transparent);
+
+    const auto paintDilatedMask = [&](int radius, const QColor &color) {
+        const QRgb pixel = color.rgba();
+        for (int y = 0; y < source.height(); ++y) {
+            const QRgb *line = reinterpret_cast<const QRgb *>(
+                    source.constScanLine(y));
+            for (int x = 0; x < source.width(); ++x) {
+                if (qAlpha(line[x]) < 32) continue;
+                for (int offsetY = -radius; offsetY <= radius; ++offsetY) {
+                    QRgb *target = reinterpret_cast<QRgb *>(
+                            result.scanLine(y + padding + offsetY));
+                    for (int offsetX = -radius; offsetX <= radius; ++offsetX) {
+                        target[x + padding + offsetX] = pixel;
+                    }
+                }
+            }
+        }
+    };
+
+    paintDilatedMask(RiderKeylineRadius, riderKeylineColor());
+    paintDilatedMask(1, inkColor());
+
+    QPainter painter(&result);
+    painter.drawImage(padding, padding, source);
+    return result;
 }
 
 void WorkoutGameCanvas::paintScene(
@@ -275,15 +317,30 @@ void WorkoutGameCanvas::paintScene(
 
     const int riderBob = current.speedKph > 1.0 ? (animationFrame / 6) % 2 : 0;
     const int riderGround = int(trailY(riderX, scene, course, current)) - riderBob;
-    static const QPixmap rider(QStringLiteral(":/images/workout-game-rider.png"));
-    if (!rider.isNull()) {
+    static const QPixmap riderSource(QStringLiteral(":/images/workout-game-rider.png"));
+    static const QPixmap rider = QPixmap::fromImage(
+            addRiderContrastKeyline(riderSource.toImage()));
+    if (!riderSource.isNull() && !rider.isNull()) {
         const int riderWidth = std::clamp(viewport.width() / 5, 110, 260);
-        const int riderHeight = riderWidth * rider.height() / rider.width();
+        const int riderHeight =
+                riderWidth * riderSource.height() / riderSource.width();
+        const int horizontalPadding = std::max(
+                1, int(std::ceil(
+                    riderWidth * RiderKeylineRadius
+                    / double(riderSource.width()))));
+        const int verticalPadding = std::max(
+                1, int(std::ceil(
+                    riderHeight * RiderKeylineRadius
+                    / double(riderSource.height()))));
+        const QRect riderRect(
+                riderX - riderWidth / 2,
+                riderGround - riderHeight + riderHeight / 20,
+                riderWidth,
+                riderHeight);
         painter.drawPixmap(
-                QRect(riderX - riderWidth / 2,
-                      riderGround - riderHeight + riderHeight / 20,
-                      riderWidth,
-                      riderHeight),
+                riderRect.adjusted(
+                    -horizontalPadding, -verticalPadding,
+                    horizontalPadding, verticalPadding),
                 rider,
                 rider.rect());
     } else {
