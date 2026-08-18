@@ -30,6 +30,7 @@ class TrainingDataGenerator
 public:
     TrainingDataGenerator();
 
+    static constexpr bool acceptsTargetPowerCommands() { return true; }
     void reset();
     void setTargetWatts(double watts);
     double targetWatts() const { return target; }

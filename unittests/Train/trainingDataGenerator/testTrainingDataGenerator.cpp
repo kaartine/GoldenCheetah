@@ -35,6 +35,7 @@ private slots:
             QVERIFY(!device.download);
         }
         QVERIFY(found);
+        QVERIFY(TrainingDataGenerator::acceptsTargetPowerCommands());
     }
 
     void generatorSkipsTheVirtualPowerWizardPage()

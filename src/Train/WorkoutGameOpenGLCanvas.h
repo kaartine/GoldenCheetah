@@ -14,7 +14,9 @@
 #include "WorkoutGameCompetition.h"
 #include "WorkoutGameSimulation.h"
 #include "WorkoutGameWorld.h"
+#include "WorkoutGameVisualSmoother.h"
 
+#include <QElapsedTimer>
 #include <QOpenGLFunctions>
 #include <QOpenGLWidget>
 #include <QTimer>
@@ -65,6 +67,10 @@ private:
     int virtualGear = 1;
     int animationFrame = 0;
     bool failureReported = false;
+    QString rendererLabel = QStringLiteral("GL");
+    QElapsedTimer visualClock;
+    WorkoutGameVisualSmoother visualSmoother;
+    WorkoutGameFrameRateCounter frameRateCounter;
     QTimer animationTimer;
 };
 

@@ -39,6 +39,7 @@ WorkoutGameCanvas::WorkoutGameCanvas(QWidget *parent) : QWidget(parent)
 {
     setMinimumSize(320, 180);
     setAutoFillBackground(false);
+    visualClock.start();
     animationTimer.setInterval(TargetFrameMs);
     connect(&animationTimer, &QTimer::timeout, this, [this]() {
         animationFrame = (animationFrame + 1) % 120;
@@ -49,6 +50,10 @@ WorkoutGameCanvas::WorkoutGameCanvas(QWidget *parent) : QWidget(parent)
 void WorkoutGameCanvas::setCourse(const WorkoutGameCourse &newCourse)
 {
     course = newCourse;
+    current = WorkoutGameSimulationSnapshot();
+    world = WorkoutGameWorldSnapshot();
+    camera = WorkoutGameCameraSnapshot();
+    visualSmoother.reset();
     update();
 }
 
@@ -65,6 +70,7 @@ void WorkoutGameCanvas::setWorld(
 {
     world = newWorld;
     camera = newCamera;
+    visualSmoother.setTarget({current, world, camera}, visualClock.elapsed());
     update();
 }
 
@@ -82,6 +88,7 @@ void WorkoutGameCanvas::setSnapshot(
     cadenceRpm = std::max(0, newCadenceRpm);
     heartRate = std::max(0, newHeartRate);
     virtualGear = std::max(1, newVirtualGear);
+    visualSmoother.setTarget({current, world, camera}, visualClock.elapsed());
     update();
 }
 
@@ -184,11 +191,15 @@ double WorkoutGameCanvas::physicsTrailY(
 
 void WorkoutGameCanvas::paintEvent(QPaintEvent *)
 {
+    const std::int64_t nowMs = visualClock.elapsed();
+    const WorkoutGameVisualSnapshot visual = visualSmoother.sample(nowMs);
+    const double fps = frameRateCounter.frameRendered(nowMs);
     QPainter painter(this);
     paintScene(
-            painter, rect(), course, current, competition, world, camera,
+            painter, rect(), course, visual.simulation, competition,
+            visual.world, visual.camera,
             watts, targetWatts, cadenceRpm, heartRate, virtualGear,
-            animationFrame);
+            animationFrame, fps, QStringLiteral("CPU"));
 }
 
 QImage WorkoutGameCanvas::addRiderContrastKeyline(const QImage &sprite)
@@ -243,7 +254,9 @@ void WorkoutGameCanvas::paintScene(
         int cadenceRpm,
         int heartRate,
         int virtualGear,
-        int animationFrame)
+        int animationFrame,
+        double framesPerSecond,
+        const QString &rendererLabel)
 {
     painter.setRenderHint(QPainter::Antialiasing, false);
     painter.fillRect(viewport, skyColor());
@@ -483,19 +496,28 @@ void WorkoutGameCanvas::paintScene(
     hudFont.setPixelSize(14);
     hudFont.setBold(true);
     painter.setFont(hudFont);
+    const int roundedFps = int(std::lround(framesPerSecond));
+    const QString fpsText = roundedFps > 0
+            ? QString::number(roundedFps)
+            : QStringLiteral("--");
     const QString stats = viewport.width() < 700
-            ? tr("%1W  T%2  %3RPM  HR%4  G%5")
+            ? tr("%1W T%2 %3RPM HR%4 G%5 %6K %7FPS")
                 .arg(int(std::lround(watts)))
                 .arg(int(std::lround(targetWatts)))
                 .arg(cadenceRpm)
                 .arg(heartRate)
                 .arg(virtualGear)
-            : tr("%1 W   TARGET %2   %3 RPM   HR %4   GEAR %5")
+                .arg(int(std::lround(current.speedKph)))
+                .arg(fpsText)
+            : tr("%1 W   TARGET %2   %3 RPM   HR %4   GEAR %5   %6 KM/H   %7 %8 FPS")
                 .arg(int(std::lround(watts)))
                 .arg(int(std::lround(targetWatts)))
                 .arg(cadenceRpm)
                 .arg(heartRate)
-                .arg(virtualGear);
+                .arg(virtualGear)
+                .arg(current.speedKph, 0, 'f', 1)
+                .arg(rendererLabel)
+                .arg(fpsText);
     painter.drawText(QRect(14, viewport.top(), viewport.width() - 28, hudHeight / 2),
                      Qt::AlignLeft | Qt::AlignVCenter, stats);
 

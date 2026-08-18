@@ -55,7 +55,9 @@ class NullController : public RealtimeController
         bool discover(QString) {  return true;  }
         bool doesPush() {  return false; }
         bool doesPull() {  return true; }
-        bool doesLoad() {  return false; }
+        bool doesLoad() override {
+            return TrainingDataGenerator::acceptsTargetPowerCommands();
+        }
 
         void setMode(int);
         void setLoad(double watts) override;

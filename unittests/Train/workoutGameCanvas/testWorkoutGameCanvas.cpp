@@ -10,6 +10,7 @@
 #include "Train/WorkoutGameCanvas.h"
 #include "Train/WorkoutGameCompetition.h"
 #include "Train/WorkoutGameOpenGLCanvas.h"
+#include "Train/WorkoutGameVisualSmoother.h"
 
 #include <QGuiApplication>
 #include <QImage>
@@ -58,6 +59,75 @@ class TestWorkoutGameCanvas : public QObject
     Q_OBJECT
 
 private slots:
+    void visualStateInterpolatesBetweenTelemetryUpdates()
+    {
+        WorkoutGameVisualSnapshot first;
+        first.simulation.ready = true;
+        first.simulation.activeSection = 2;
+        first.simulation.courseProgress = 0.2;
+        first.simulation.speedKph = 20.0;
+        first.world.ready = true;
+        first.world.generation = 4;
+        first.world.rider.distanceMeters = 10.0;
+        first.world.rider.pitchDegrees = 350.0;
+        first.camera.ready = true;
+        first.camera.centerDistanceMeters = 9.0;
+
+        WorkoutGameVisualSnapshot second = first;
+        second.simulation.courseProgress = 0.4;
+        second.simulation.speedKph = 30.0;
+        second.world.rider.distanceMeters = 14.0;
+        second.world.rider.pitchDegrees = 10.0;
+        second.camera.centerDistanceMeters = 13.0;
+
+        WorkoutGameVisualSmoother smoother;
+        smoother.setTarget(first, 1000);
+        smoother.setTarget(second, 1200);
+        const WorkoutGameVisualSnapshot halfway = smoother.sample(1300);
+
+        QVERIFY(std::abs(halfway.simulation.courseProgress - 0.3) < 1e-9);
+        QVERIFY(std::abs(halfway.simulation.speedKph - 25.0) < 1e-9);
+        QVERIFY(std::abs(halfway.world.rider.distanceMeters - 12.0) < 1e-9);
+        QVERIFY(std::abs(halfway.world.rider.pitchDegrees - 360.0) < 1e-9);
+        QVERIFY(std::abs(halfway.camera.centerDistanceMeters - 11.0) < 1e-9);
+        QCOMPARE(smoother.sample(1400).world.rider.distanceMeters, 14.0);
+    }
+
+    void visualStateDoesNotBlendAcrossCourseSections()
+    {
+        WorkoutGameVisualSnapshot first;
+        first.simulation.ready = true;
+        first.simulation.activeSection = 1;
+        first.world.ready = true;
+        first.world.generation = 3;
+        first.world.rider.distanceMeters = 20.0;
+        first.camera.ready = true;
+
+        WorkoutGameVisualSnapshot second = first;
+        second.simulation.activeSection = 2;
+        second.world.generation = 4;
+        second.world.rider.distanceMeters = 1.0;
+
+        WorkoutGameVisualSmoother smoother;
+        smoother.setTarget(first, 0);
+        smoother.setTarget(second, 200);
+        QCOMPARE(smoother.sample(200).simulation.activeSection, 2);
+        QCOMPARE(smoother.sample(200).world.rider.distanceMeters, 1.0);
+    }
+
+    void frameRateCounterMeasuresCompletedFrameIntervals()
+    {
+        WorkoutGameFrameRateCounter counter;
+        QCOMPARE(counter.frameRendered(0), 0.0);
+        for (int timestamp = 20; timestamp <= 1000; timestamp += 20) {
+            counter.frameRendered(timestamp);
+        }
+        QCOMPARE(counter.framesPerSecond(), 50.0);
+
+        counter.reset();
+        QCOMPARE(counter.framesPerSecond(), 0.0);
+    }
+
     void riderContrastKeylineHasDarkAndLightEdges()
     {
         QImage sprite(1, 1, QImage::Format_ARGB32_Premultiplied);

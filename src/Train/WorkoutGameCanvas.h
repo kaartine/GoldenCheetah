@@ -13,7 +13,9 @@
 #include "WorkoutGameCourse.h"
 #include "WorkoutGameCompetition.h"
 #include "WorkoutGameSimulation.h"
+#include "WorkoutGameVisualSmoother.h"
 
+#include <QElapsedTimer>
 #include <QImage>
 #include <QTimer>
 #include <QWidget>
@@ -53,7 +55,9 @@ public:
             int cadenceRpm,
             int heartRate,
             int virtualGear,
-            int animationFrame);
+            int animationFrame,
+            double framesPerSecond,
+            const QString &rendererLabel);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -85,6 +89,9 @@ private:
     int heartRate = 0;
     int virtualGear = 1;
     int animationFrame = 0;
+    QElapsedTimer visualClock;
+    WorkoutGameVisualSmoother visualSmoother;
+    WorkoutGameFrameRateCounter frameRateCounter;
     QTimer animationTimer;
 };
 
