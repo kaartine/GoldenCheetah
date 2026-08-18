@@ -13,6 +13,7 @@
 #include "Train/WorkoutGameVisualSmoother.h"
 
 #include <QGuiApplication>
+#include <QElapsedTimer>
 #include <QImage>
 #include <QPainter>
 #include <QSet>
@@ -191,6 +192,36 @@ private slots:
 
         counter.reset();
         QCOMPARE(counter.framesPerSecond(), 0.0);
+    }
+
+    void elapsedWorkoutTimeUsesReadableClockFormat()
+    {
+        QCOMPARE(WorkoutGameCanvas::elapsedTimeText(0), QString("00:00"));
+        QCOMPARE(
+                WorkoutGameCanvas::elapsedTimeText(65000),
+                QString("01:05"));
+        QCOMPARE(
+                WorkoutGameCanvas::elapsedTimeText(3661000),
+                QString("1:01:01"));
+        QCOMPARE(
+                WorkoutGameCanvas::elapsedTimeText(-1000),
+                QString("00:00"));
+    }
+
+    void openGLRendererLabelIdentifiesBackend()
+    {
+        QCOMPARE(
+                WorkoutGameOpenGLCanvas::rendererLabelForDescription(
+                    QString("Mesa Intel(R) UHD Graphics")),
+                QString("GL INTEL"));
+        QCOMPARE(
+                WorkoutGameOpenGLCanvas::rendererLabelForDescription(
+                    QString("NVIDIA RTX A3000/PCIe/SSE2")),
+                QString("GL NVIDIA"));
+        QCOMPARE(
+                WorkoutGameOpenGLCanvas::rendererLabelForDescription(
+                    QString("llvmpipe (LLVM 19.1.7)")),
+                QString("GL SW"));
     }
 
     void riderContrastKeylineHasDarkAndLightEdges()
@@ -398,17 +429,37 @@ private slots:
 
         WorkoutGameOpenGLCanvas canvas;
         QSignalSpy failureSpy(&canvas, &WorkoutGameOpenGLCanvas::rendererFailed);
+        QElapsedTimer frameClock;
+        QVector<qint64> frameTimes;
+        connect(&canvas, &QOpenGLWidget::frameSwapped, &canvas, [&]() {
+            frameTimes.push_back(frameClock.elapsed());
+        });
         canvas.resize(960, 540);
         canvas.setCourse(course);
         canvas.setSnapshot(snapshot, 250.0, 250.0, 90, 148, 11);
+        frameClock.start();
         canvas.show();
         QVERIFY(QTest::qWaitForWindowExposed(&canvas));
-        QTest::qWait(100);
+        QTest::qWait(1200);
 
         const QImage image = canvas.grabFramebuffer();
         QCOMPARE(failureSpy.count(), 0);
         QVERIFY(!image.isNull());
         QVERIFY(colors(image).size() >= 10);
+        QVERIFY2(frameTimes.size() >= 20, "OpenGL frame loop is too slow");
+        int slowIntervals = 0;
+        for (qsizetype index = 1; index < frameTimes.size(); ++index) {
+            if (frameTimes[index] - frameTimes[index - 1] > 50) {
+                ++slowIntervals;
+            }
+        }
+        QVERIFY2(
+                qsizetype(slowIntervals)
+                        <= std::max<qsizetype>(1, frameTimes.size() / 10),
+                "OpenGL frame presentation is uneven");
+        const double measuredFps = double(frameTimes.size() - 1) * 1000.0
+                / double(frameTimes.back() - frameTimes.front());
+        qInfo() << "Measured Workout Game OpenGL FPS:" << measuredFps;
     }
 };
 

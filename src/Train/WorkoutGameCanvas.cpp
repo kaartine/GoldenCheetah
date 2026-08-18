@@ -296,6 +296,24 @@ QImage WorkoutGameCanvas::addRiderContrastKeyline(const QImage &sprite)
     return result;
 }
 
+QString WorkoutGameCanvas::elapsedTimeText(std::int64_t workoutTimeMs)
+{
+    const std::int64_t totalSeconds =
+            std::max<std::int64_t>(0, workoutTimeMs) / 1000;
+    const std::int64_t hours = totalSeconds / 3600;
+    const std::int64_t minutes = (totalSeconds / 60) % 60;
+    const std::int64_t seconds = totalSeconds % 60;
+    if (hours > 0) {
+        return QStringLiteral("%1:%2:%3")
+                .arg(hours)
+                .arg(minutes, 2, 10, QLatin1Char('0'))
+                .arg(seconds, 2, 10, QLatin1Char('0'));
+    }
+    return QStringLiteral("%1:%2")
+            .arg(minutes, 2, 10, QLatin1Char('0'))
+            .arg(seconds, 2, 10, QLatin1Char('0'));
+}
+
 void WorkoutGameCanvas::paintScene(
         QPainter &painter,
         const QRect &viewport,
@@ -398,11 +416,6 @@ void WorkoutGameCanvas::paintScene(
     const int riderX = int(viewport.width() * 0.28);
     const int wheelRadius = std::clamp(viewport.height() / 30, 7, 18);
     if (competition.ready && current.ready) {
-        static const QColor aiColors[] = {
-            QColor(64, 132, 210),
-            QColor(235, 171, 52),
-            QColor(184, 78, 148)
-        };
         for (const WorkoutGameCompetitorSnapshot &rider : competition.competitors) {
             const double progressGap = std::clamp(
                     rider.courseProgress - current.courseProgress,
@@ -411,21 +424,16 @@ void WorkoutGameCanvas::paintScene(
                     riderX + int(progressGap * scene.width() * 4.5),
                     scene.left() + wheelRadius * 3,
                     scene.right() - wheelRadius * 3);
-            const int laneOffset = rider.lane * wheelRadius * 3 / 2;
-            const int ground = int(sceneTrailY(x))
-                    + laneOffset;
-            QColor color = rider.kind == WorkoutGameCompetitorKind::Ghost
-                    ? QColor(119, 237, 232, 150)
-                    : aiColors[std::size_t(std::clamp(rider.identity, 0, 2))];
+            const int ground = int(sceneTrailY(x));
             const QPixmap &competitorSprite = outlinedRiderPixmap();
             if (!competitorSprite.isNull()) {
                 const int competitorWidth = std::clamp(
-                        viewport.width() / 11, 64, 128);
+                        viewport.width() / 6, 90, 190);
                 const int competitorHeight = competitorWidth
                         * competitorSprite.height() / competitorSprite.width();
                 const QRect competitorRect(
                         x - competitorWidth / 2,
-                        ground - competitorHeight,
+                        ground - competitorHeight + competitorHeight / 20,
                         competitorWidth,
                         competitorHeight);
                 painter.save();
@@ -437,13 +445,6 @@ void WorkoutGameCanvas::paintScene(
                         competitorSprite.rect());
                 painter.restore();
             }
-            painter.setPen(Qt::NoPen);
-            painter.setBrush(color);
-            painter.drawRect(
-                    x - wheelRadius,
-                    ground + std::max(2, wheelRadius / 4),
-                    wheelRadius * 2,
-                    std::max(3, wheelRadius / 3));
         }
     }
 
@@ -563,16 +564,20 @@ void WorkoutGameCanvas::paintScene(
     const QString fpsText = roundedFps > 0
             ? QString::number(roundedFps)
             : QStringLiteral("--");
+    const QString elapsed = elapsedTimeText(current.workoutTimeMs);
     const QString stats = viewport.width() < 700
-            ? tr("%1W T%2 %3RPM HR%4 G%5 %6K %7FPS")
+            ? tr("%1W T%2 C%3 H%4 G%5 %6K %7 %8 %9F")
                 .arg(int(std::lround(watts)))
                 .arg(int(std::lround(targetWatts)))
                 .arg(cadenceRpm)
                 .arg(heartRate)
                 .arg(virtualGear)
                 .arg(int(std::lround(current.speedKph)))
+                .arg(elapsed)
+                .arg(rendererLabel)
                 .arg(fpsText)
-            : tr("%1 W   TARGET %2   %3 RPM   HR %4   GEAR %5   %6 KM/H   %7 %8 FPS")
+            : tr("TIME %1   %2 W   TARGET %3 W   %4 RPM   HR %5   GEAR %6   %7 KM/H   %8 %9 FPS")
+                .arg(elapsed)
                 .arg(int(std::lround(watts)))
                 .arg(int(std::lround(targetWatts)))
                 .arg(cadenceRpm)

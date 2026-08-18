@@ -19,7 +19,6 @@
 #include <QElapsedTimer>
 #include <QOpenGLFunctions>
 #include <QOpenGLWidget>
-#include <QTimer>
 
 class WorkoutGameOpenGLCanvas :
         public QOpenGLWidget,
@@ -49,6 +48,7 @@ public:
             int cadenceRpm,
             int heartRate,
             int virtualGear);
+    static QString rendererLabelForDescription(const QString &description);
 
 signals:
     void rendererFailed();
@@ -73,12 +73,12 @@ private:
     int heartRate = 0;
     int virtualGear = 1;
     int animationFrame = 0;
+    bool renderLoopActive = false;
     bool failureReported = false;
     QString rendererLabel = QStringLiteral("GL");
     QElapsedTimer visualClock;
     WorkoutGameVisualSmoother visualSmoother;
     WorkoutGameFrameRateCounter frameRateCounter;
-    QTimer animationTimer;
 };
 
 #endif

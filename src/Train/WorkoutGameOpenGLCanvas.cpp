@@ -16,26 +16,23 @@
 #include <QOpenGLContext>
 #include <QPainter>
 #include <QShowEvent>
+#include <QSurfaceFormat>
+#include <QTimer>
 
 #include <algorithm>
-
-namespace {
-
-constexpr int TargetFrameMs = 16;
-
-}
 
 WorkoutGameOpenGLCanvas::WorkoutGameOpenGLCanvas(QWidget *parent) :
     QOpenGLWidget(parent)
 {
     setMinimumSize(320, 180);
     setUpdateBehavior(QOpenGLWidget::NoPartialUpdate);
+    QSurfaceFormat format = QSurfaceFormat::defaultFormat();
+    format.setSwapBehavior(QSurfaceFormat::DoubleBuffer);
+    format.setSwapInterval(1);
+    setFormat(format);
     visualClock.start();
-    animationTimer.setTimerType(Qt::PreciseTimer);
-    animationTimer.setInterval(TargetFrameMs);
-    connect(&animationTimer, &QTimer::timeout, this, [this]() {
-        animationFrame = (animationFrame + 1) % 120;
-        update();
+    connect(this, &QOpenGLWidget::frameSwapped, this, [this]() {
+        if (renderLoopActive) update();
     });
 }
 
@@ -87,7 +84,7 @@ void WorkoutGameOpenGLCanvas::setFrame(
     heartRate = std::max(0, newHeartRate);
     virtualGear = std::max(1, newVirtualGear);
     visualSmoother.setTarget(frame, visualClock.elapsed());
-    if (!animationTimer.isActive()) update();
+    if (!renderLoopActive) update();
 }
 
 void WorkoutGameOpenGLCanvas::setSnapshot(
@@ -109,6 +106,28 @@ void WorkoutGameOpenGLCanvas::setSnapshot(
     update();
 }
 
+QString WorkoutGameOpenGLCanvas::rendererLabelForDescription(
+        const QString &description)
+{
+    const QString normalized = description.toLower();
+    if (normalized.contains(QStringLiteral("llvmpipe"))
+            || normalized.contains(QStringLiteral("softpipe"))
+            || normalized.contains(QStringLiteral("software"))) {
+        return QStringLiteral("GL SW");
+    }
+    if (normalized.contains(QStringLiteral("nvidia"))) {
+        return QStringLiteral("GL NVIDIA");
+    }
+    if (normalized.contains(QStringLiteral("intel"))) {
+        return QStringLiteral("GL INTEL");
+    }
+    if (normalized.contains(QStringLiteral("amd"))
+            || normalized.contains(QStringLiteral("radeon"))) {
+        return QStringLiteral("GL AMD");
+    }
+    return QStringLiteral("GL");
+}
+
 void WorkoutGameOpenGLCanvas::initializeGL()
 {
     if (!context() || !context()->isValid()) {
@@ -126,11 +145,7 @@ void WorkoutGameOpenGLCanvas::initializeGL()
     const QString rendererDescription = renderer
             ? QString::fromLatin1(reinterpret_cast<const char *>(renderer))
             : QStringLiteral("unknown");
-    const QString normalized = rendererDescription.toLower();
-    rendererLabel = normalized.contains(QStringLiteral("llvmpipe"))
-            || normalized.contains(QStringLiteral("software"))
-            ? QStringLiteral("GL SW")
-            : QStringLiteral("GL");
+    rendererLabel = rendererLabelForDescription(rendererDescription);
     qInfo().noquote() << "Workout Game OpenGL renderer:"
                       << rendererDescription;
 }
@@ -143,6 +158,7 @@ void WorkoutGameOpenGLCanvas::paintGL()
     }
     glClear(GL_COLOR_BUFFER_BIT);
     const std::int64_t nowMs = visualClock.elapsed();
+    animationFrame = int((nowMs / 16) % 120);
     const WorkoutGameVisualSnapshot visual = visualSmoother.sample(nowMs);
     const double fps = frameRateCounter.frameRendered(nowMs);
     QPainter painter(this);
@@ -156,12 +172,13 @@ void WorkoutGameOpenGLCanvas::paintGL()
 void WorkoutGameOpenGLCanvas::showEvent(QShowEvent *event)
 {
     QOpenGLWidget::showEvent(event);
-    animationTimer.start();
+    renderLoopActive = true;
+    update();
 }
 
 void WorkoutGameOpenGLCanvas::hideEvent(QHideEvent *event)
 {
-    animationTimer.stop();
+    renderLoopActive = false;
     QOpenGLWidget::hideEvent(event);
 }
 
@@ -169,6 +186,6 @@ void WorkoutGameOpenGLCanvas::reportFailure()
 {
     if (failureReported) return;
     failureReported = true;
-    animationTimer.stop();
+    renderLoopActive = false;
     QTimer::singleShot(0, this, [this]() { emit rendererFailed(); });
 }

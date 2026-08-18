@@ -48,6 +48,7 @@ public:
             int cadenceRpm,
             int heartRate,
             int virtualGear);
+    static QString elapsedTimeText(std::int64_t workoutTimeMs);
     static QImage addRiderContrastKeyline(const QImage &sprite);
     static void paintScene(
             QPainter &painter,
