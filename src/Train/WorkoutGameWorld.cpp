@@ -9,10 +9,25 @@
 
 #include "WorkoutGameWorld.h"
 
+#include <box2d/box2d.h>
+
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace {
+
+constexpr double Pi = 3.14159265358979323846;
+constexpr double TerrainPeriodMeters = 80.0;
+constexpr double TerrainStartMeters = -12.0;
+constexpr double TerrainEndMeters = 220.0;
+constexpr double TerrainSampleMeters = 0.25;
+constexpr double RiderStartMeters = 4.0;
+constexpr double RebaseAtMeters = 180.0;
+constexpr double WheelRadiusMeters = 0.36;
+constexpr std::int64_t PhysicsStepMicroseconds = 8333;
+constexpr std::int64_t MaximumCatchupMicroseconds = 1000000;
+constexpr std::int64_t WalkDecisionMicroseconds = 1500000;
 
 double finiteOr(double value, double fallback)
 {
@@ -48,6 +63,446 @@ double targetZoom(WorkoutGameTerrainKind terrain)
     }
 }
 
+double positivePhase(double distance, std::uint32_t seed)
+{
+    const double seedOffset = double(seed % 997u) * TerrainPeriodMeters / 997.0;
+    double phase = std::fmod(distance + seedOffset, TerrainPeriodMeters);
+    if (phase < 0.0) phase += TerrainPeriodMeters;
+    return phase;
+}
+
+double smoothStep(double value)
+{
+    const double clamped = std::clamp(value, 0.0, 1.0);
+    return clamped * clamped * (3.0 - 2.0 * clamped);
+}
+
+double radiansToDegrees(double value)
+{
+    return value * 180.0 / Pi;
+}
+
+}
+
+struct WorkoutGamePhysics::Impl
+{
+    std::uint32_t seed = 0;
+    bool configured = false;
+    bool initialized = false;
+    std::int64_t lastWorkoutTimeMs = 0;
+    std::int64_t remainderMicroseconds = 0;
+    std::int64_t weakClimbMicroseconds = 0;
+    std::uint64_t generation = 0;
+    WorkoutGameTerrainKind terrain = WorkoutGameTerrainKind::SmoothTrail;
+    double gradePercent = 0.0;
+    double difficulty = 0.0;
+    double distanceBase = 0.0;
+    double elevationBase = 0.0;
+    double originBodyY = 0.0;
+    double landingImpact = 0.0;
+    bool wasGrounded = true;
+    int lastJumpTile = -1;
+    WorkoutGameWorldSnapshot latest;
+
+    b2WorldId world = b2_nullWorldId;
+    b2BodyId chassis = b2_nullBodyId;
+    b2BodyId rearWheel = b2_nullBodyId;
+    b2BodyId frontWheel = b2_nullBodyId;
+    b2ShapeId rearWheelShape = b2_nullShapeId;
+    b2ShapeId frontWheelShape = b2_nullShapeId;
+    b2JointId rearJoint = b2_nullJointId;
+    b2JointId frontJoint = b2_nullJointId;
+
+    ~Impl()
+    {
+        destroyWorld();
+    }
+
+    void destroyWorld()
+    {
+        if (B2_IS_NON_NULL(world)) b2DestroyWorld(world);
+        world = b2_nullWorldId;
+        chassis = b2_nullBodyId;
+        rearWheel = b2_nullBodyId;
+        frontWheel = b2_nullBodyId;
+        rearWheelShape = b2_nullShapeId;
+        frontWheelShape = b2_nullShapeId;
+        rearJoint = b2_nullJointId;
+        frontJoint = b2_nullJointId;
+    }
+
+    b2BodyId createWheel(b2Vec2 position, b2ShapeId &shape)
+    {
+        b2BodyDef bodyDefinition = b2DefaultBodyDef();
+        bodyDefinition.type = b2_dynamicBody;
+        bodyDefinition.position = position;
+        bodyDefinition.allowFastRotation = true;
+        const b2BodyId body = b2CreateBody(world, &bodyDefinition);
+
+        b2ShapeDef shapeDefinition = b2DefaultShapeDef();
+        shapeDefinition.density = 8.0f;
+        shapeDefinition.material.friction = 1.4f;
+        shapeDefinition.material.rollingResistance = 0.025f;
+        const b2Circle circle = {{0.0f, 0.0f}, float(WheelRadiusMeters)};
+        shape = b2CreateCircleShape(body, &shapeDefinition, &circle);
+        return body;
+    }
+
+    b2JointId attachWheel(b2BodyId wheel, bool driven)
+    {
+        const b2Vec2 pivot = b2Body_GetPosition(wheel);
+        b2WheelJointDef definition = b2DefaultWheelJointDef();
+        definition.bodyIdA = chassis;
+        definition.bodyIdB = wheel;
+        definition.localAxisA = b2Body_GetLocalVector(
+                chassis, b2Vec2{0.0f, 1.0f});
+        definition.localAnchorA = b2Body_GetLocalPoint(chassis, pivot);
+        definition.localAnchorB = b2Body_GetLocalPoint(wheel, pivot);
+        definition.enableMotor = driven;
+        definition.maxMotorTorque = driven ? 120.0f : 0.0f;
+        definition.hertz = 6.0f;
+        definition.dampingRatio = 0.8f;
+        definition.lowerTranslation = -0.2f;
+        definition.upperTranslation = 0.2f;
+        definition.enableLimit = true;
+        return b2CreateWheelJoint(world, &definition);
+    }
+
+    void createWorld()
+    {
+        destroyWorld();
+
+        b2WorldDef worldDefinition = b2DefaultWorldDef();
+        worldDefinition.gravity = b2Vec2{0.0f, -9.81f};
+        worldDefinition.enableSleep = false;
+        world = b2CreateWorld(&worldDefinition);
+
+        b2BodyDef groundDefinition = b2DefaultBodyDef();
+        const b2BodyId ground = b2CreateBody(world, &groundDefinition);
+        b2ShapeDef terrainShape = b2DefaultShapeDef();
+        terrainShape.material.friction = 1.1f;
+        double priorX = TerrainStartMeters;
+        double priorY = WorkoutGamePhysics::terrainHeight(
+                terrain, priorX, gradePercent, difficulty, seed);
+        for (double x = TerrainStartMeters + TerrainSampleMeters;
+                x <= TerrainEndMeters + 0.001;
+                x += TerrainSampleMeters) {
+            const double y = WorkoutGamePhysics::terrainHeight(
+                    terrain, x, gradePercent, difficulty, seed);
+            const b2Segment segment = {
+                {float(priorX), float(priorY)},
+                {float(x), float(y)}
+            };
+            b2CreateSegmentShape(ground, &terrainShape, &segment);
+            priorX = x;
+            priorY = y;
+        }
+
+        const double groundY = WorkoutGamePhysics::terrainHeight(
+                terrain, RiderStartMeters, gradePercent, difficulty, seed);
+        b2BodyDef chassisDefinition = b2DefaultBodyDef();
+        chassisDefinition.type = b2_dynamicBody;
+        chassisDefinition.position = {
+            float(RiderStartMeters), float(groundY + 0.92)
+        };
+        chassis = b2CreateBody(world, &chassisDefinition);
+        b2ShapeDef chassisShape = b2DefaultShapeDef();
+        chassisShape.density = 22.0f;
+        chassisShape.material.friction = 0.15f;
+        const b2Polygon frame = b2MakeRoundedBox(0.72f, 0.18f, 0.1f);
+        b2CreatePolygonShape(chassis, &chassisShape, &frame);
+
+        rearWheel = createWheel(
+                {float(RiderStartMeters - 0.62), float(groundY + 0.43)},
+                rearWheelShape);
+        frontWheel = createWheel(
+                {float(RiderStartMeters + 0.62), float(groundY + 0.43)},
+                frontWheelShape);
+        rearJoint = attachWheel(rearWheel, true);
+        frontJoint = attachWheel(frontWheel, false);
+        originBodyY = b2Body_GetPosition(chassis).y;
+
+        for (int settle = 0; settle < 60; ++settle) {
+            b2World_Step(world, 1.0f / 120.0f, 4);
+        }
+        wasGrounded = grounded();
+    }
+
+    bool shapeGrounded(b2ShapeId shape) const
+    {
+        const int capacity = b2Shape_GetContactCapacity(shape);
+        if (capacity <= 0) return false;
+        std::vector<b2ContactData> contacts;
+        contacts.resize(std::size_t(capacity));
+        const int count = b2Shape_GetContactData(
+                shape, contacts.data(), capacity);
+        for (int index = 0; index < count; ++index) {
+            if (contacts[std::size_t(index)].manifold.pointCount > 0) return true;
+        }
+        return false;
+    }
+
+    bool grounded() const
+    {
+        return shapeGrounded(rearWheelShape)
+                || shapeGrounded(frontWheelShape);
+    }
+
+    double suspensionCompression(b2BodyId wheel) const
+    {
+        const b2Vec2 wheelInChassis = b2Body_GetLocalPoint(
+                chassis, b2Body_GetPosition(wheel));
+        return std::clamp((double(wheelInChassis.y) + 0.69) / 0.4, 0.0, 1.0);
+    }
+
+    void setDriveSpeed(double metersPerSecond)
+    {
+        const float wheelSpeed = float(-metersPerSecond / WheelRadiusMeters);
+        b2WheelJoint_SetMotorSpeed(rearJoint, wheelSpeed);
+
+        const b2Vec2 velocity = b2Body_GetLinearVelocity(chassis);
+        const float mass = b2Body_GetMass(chassis);
+        const float force = std::clamp(
+                mass * float(metersPerSecond - velocity.x) * 3.0f,
+                -450.0f, 450.0f);
+        b2Body_ApplyForceToCenter(chassis, {force, 0.0f}, true);
+    }
+
+    WorkoutGameWorldSnapshot snapshot() const
+    {
+        WorkoutGameWorldSnapshot result;
+        if (B2_IS_NULL(world)) return result;
+
+        const b2Vec2 position = b2Body_GetPosition(chassis);
+        const b2Vec2 velocity = b2Body_GetLinearVelocity(chassis);
+        result.ready = true;
+        result.generation = generation;
+        result.terrain = terrain;
+        result.rider.distanceMeters = distanceBase
+                + double(position.x) - RiderStartMeters;
+        result.rider.elevationMeters = elevationBase
+                + double(position.y) - originBodyY;
+        result.rider.pitchDegrees = radiansToDegrees(
+                b2Rot_GetAngle(b2Body_GetRotation(chassis)));
+        result.rider.rearSuspension = suspensionCompression(rearWheel);
+        result.rider.frontSuspension = suspensionCompression(frontWheel);
+        result.rider.rearWheelRadians = b2Rot_GetAngle(
+                b2Body_GetRotation(rearWheel));
+        result.rider.frontWheelRadians = b2Rot_GetAngle(
+                b2Body_GetRotation(frontWheel));
+        result.rider.airborne = !grounded();
+        result.rider.walking = weakClimbMicroseconds
+                >= WalkDecisionMicroseconds;
+        result.speedMetersPerSecond = std::max(0.0, double(velocity.x));
+        result.landingImpact = landingImpact;
+        return result;
+    }
+
+    void rebaseIfNeeded()
+    {
+        if (b2Body_GetPosition(chassis).x < RebaseAtMeters) return;
+        const WorkoutGameWorldSnapshot before = snapshot();
+        distanceBase = before.rider.distanceMeters;
+        elevationBase = before.rider.elevationMeters;
+        createWorld();
+        latest = snapshot();
+    }
+
+    void step(const WorkoutGamePhysicsInput &input)
+    {
+        const bool walking = weakClimbMicroseconds >= WalkDecisionMicroseconds;
+        const double requestedSpeed = walking
+                ? 1.3
+                : std::clamp(
+                    finiteOr(input.desiredSpeedMetersPerSecond, 0.0),
+                    0.0, 16.0);
+        setDriveSpeed(requestedSpeed);
+
+        if (input.jumpRequested
+                && terrain == WorkoutGameTerrainKind::BunnyHop
+                && grounded()) {
+            const double distance = distanceBase
+                    + double(b2Body_GetPosition(chassis).x) - RiderStartMeters;
+            const int tile = int(std::floor(distance / TerrainPeriodMeters));
+            const double phase = positivePhase(
+                    b2Body_GetPosition(chassis).x, seed);
+            if (phase >= 23.0 && phase <= 29.0 && tile != lastJumpTile) {
+                const float impulse = b2Body_GetMass(chassis) * 3.8f;
+                b2Body_ApplyLinearImpulseToCenter(
+                        chassis, {0.0f, impulse}, true);
+                lastJumpTile = tile;
+            }
+        }
+
+        const b2Vec2 priorVelocity = b2Body_GetLinearVelocity(chassis);
+        b2World_Step(world, float(PhysicsStepMicroseconds) / 1000000.0f, 4);
+        const bool isGrounded = grounded();
+        if (!wasGrounded && isGrounded && priorVelocity.y < -0.5f) {
+            landingImpact = std::clamp(
+                    double(-priorVelocity.y) / 8.0, 0.0, 1.0);
+        } else {
+            landingImpact *= 0.94;
+        }
+        wasGrounded = isGrounded;
+    }
+};
+
+WorkoutGamePhysics::WorkoutGamePhysics() : impl(new Impl)
+{
+}
+
+WorkoutGamePhysics::~WorkoutGamePhysics() = default;
+
+bool WorkoutGamePhysics::configure(std::uint32_t seed)
+{
+    impl->seed = seed == 0 ? 2166136261u : seed;
+    impl->configured = true;
+    impl->generation = 0;
+    reset();
+    return true;
+}
+
+void WorkoutGamePhysics::reset()
+{
+    impl->destroyWorld();
+    impl->initialized = false;
+    impl->lastWorkoutTimeMs = 0;
+    impl->remainderMicroseconds = 0;
+    impl->weakClimbMicroseconds = 0;
+    impl->distanceBase = 0.0;
+    impl->elevationBase = 0.0;
+    impl->landingImpact = 0.0;
+    impl->lastJumpTile = -1;
+    impl->latest = WorkoutGameWorldSnapshot();
+    ++impl->generation;
+}
+
+double WorkoutGamePhysics::terrainHeight(
+        WorkoutGameTerrainKind terrain,
+        double distanceMeters,
+        double gradePercent,
+        double difficulty,
+        std::uint32_t seed)
+{
+    const double distance = finiteOr(distanceMeters, 0.0);
+    const double grade = std::clamp(finiteOr(gradePercent, 0.0), -20.0, 20.0);
+    const double challenge = std::clamp(finiteOr(difficulty, 0.0), 0.0, 1.0);
+    const double phase = positivePhase(distance, seed);
+    const double slope = distance * grade / 100.0;
+
+    switch (terrain) {
+    case WorkoutGameTerrainKind::Roots: {
+        const double root = std::pow(
+                std::max(0.0, std::sin(2.0 * Pi * phase / 1.6)), 6.0);
+        const double crossRoot = std::pow(
+                std::max(0.0, std::sin(2.0 * Pi * phase / 2.5 + 0.8)), 8.0);
+        return slope + (0.06 + 0.09 * challenge) * root
+                + (0.02 + 0.05 * challenge) * crossRoot;
+    }
+    case WorkoutGameTerrainKind::Rollers:
+        return slope + (0.25 + 0.4 * challenge)
+                * (1.0 - std::cos(2.0 * Pi * phase / 8.0)) * 0.5;
+    case WorkoutGameTerrainKind::RockGarden: {
+        const double rock = std::pow(
+                std::max(0.0, std::sin(2.0 * Pi * phase / 3.2)), 4.0);
+        const double offsetRock = std::pow(
+                std::max(0.0, std::sin(2.0 * Pi * phase / 5.0 + 1.1)), 6.0);
+        return slope + (0.14 + 0.3 * challenge) * rock
+                + (0.08 + 0.2 * challenge) * offsetRock;
+    }
+    case WorkoutGameTerrainKind::BunnyHop: {
+        const double approach = std::abs(phase - 30.0);
+        const double obstacle = approach < 0.7
+                ? 0.3 * (1.0 - smoothStep(approach / 0.7))
+                : 0.0;
+        return slope + obstacle;
+    }
+    case WorkoutGameTerrainKind::Drop:
+        if (phase < 30.0) return slope;
+        if (phase < 31.0) return slope - smoothStep(phase - 30.0)
+                * (0.7 + 0.5 * challenge);
+        if (phase < 68.0) return slope - (0.7 + 0.5 * challenge);
+        if (phase < 76.0) return slope - (0.7 + 0.5 * challenge)
+                * (1.0 - smoothStep((phase - 68.0) / 8.0));
+        return slope;
+    case WorkoutGameTerrainKind::Climb:
+    case WorkoutGameTerrainKind::SmoothTrail:
+    case WorkoutGameTerrainKind::Skinny:
+    case WorkoutGameTerrainKind::Berm:
+        return slope;
+    }
+    return slope;
+}
+
+WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
+        const WorkoutGamePhysicsInput &rawInput)
+{
+    if (!impl->configured) return WorkoutGameWorldSnapshot();
+
+    WorkoutGamePhysicsInput input = rawInput;
+    input.workoutTimeMs = std::max<std::int64_t>(0, input.workoutTimeMs);
+    input.gradePercent = std::clamp(
+            finiteOr(input.gradePercent, 0.0), -20.0, 20.0);
+    input.difficulty = std::clamp(
+            finiteOr(input.difficulty, 0.0), 0.0, 1.0);
+    input.effortRatio = std::clamp(
+            finiteOr(input.effortRatio, 0.0), 0.0, 3.0);
+
+    if (impl->initialized && input.workoutTimeMs < impl->lastWorkoutTimeMs) {
+        reset();
+    }
+
+    const bool terrainChanged = !impl->initialized
+            || input.terrain != impl->terrain
+            || input.gradePercent != impl->gradePercent
+            || input.difficulty != impl->difficulty;
+    if (terrainChanged) {
+        if (impl->initialized) {
+            impl->latest = impl->snapshot();
+            impl->distanceBase = impl->latest.rider.distanceMeters;
+            impl->elevationBase = impl->latest.rider.elevationMeters;
+            ++impl->generation;
+        }
+        impl->terrain = input.terrain;
+        impl->gradePercent = input.gradePercent;
+        impl->difficulty = input.difficulty;
+        impl->createWorld();
+    }
+
+    if (!impl->initialized) {
+        impl->initialized = true;
+        impl->lastWorkoutTimeMs = input.workoutTimeMs;
+        impl->latest = impl->snapshot();
+        return impl->latest;
+    }
+
+    const std::int64_t elapsedMs = input.workoutTimeMs - impl->lastWorkoutTimeMs;
+    impl->lastWorkoutTimeMs = input.workoutTimeMs;
+    if (input.paused || elapsedMs <= 0) {
+        impl->latest = impl->snapshot();
+        return impl->latest;
+    }
+
+    const std::int64_t elapsedMicroseconds = std::min<std::int64_t>(
+            elapsedMs, MaximumCatchupMicroseconds / 1000) * 1000;
+    if (input.terrain == WorkoutGameTerrainKind::Climb
+            && input.effortRatio < 0.55) {
+        impl->weakClimbMicroseconds = std::min(
+                WalkDecisionMicroseconds,
+                impl->weakClimbMicroseconds + elapsedMicroseconds);
+    } else {
+        impl->weakClimbMicroseconds = 0;
+    }
+
+    std::int64_t available = elapsedMicroseconds + impl->remainderMicroseconds;
+    while (available >= PhysicsStepMicroseconds) {
+        impl->step(input);
+        available -= PhysicsStepMicroseconds;
+    }
+    impl->remainderMicroseconds = available;
+    impl->latest = impl->snapshot();
+    impl->rebaseIfNeeded();
+    return impl->latest;
 }
 
 WorkoutGameCameraMode WorkoutGameCamera::preferredMode(

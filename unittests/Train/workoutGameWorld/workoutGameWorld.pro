@@ -8,9 +8,15 @@ SOURCES = testWorkoutGameWorld.cpp \
 
 HEADERS = ../../../src/Train/WorkoutGameWorld.h
 
+BOX2D_ROOT = $$clean_path($$PWD/../../../vendor/box2d-3.1.1)
+include($$BOX2D_ROOT/box2d.pri)
+
 include(../../unittests.pri)
 
 sanitize:!msvc {
+    QMAKE_CFLAGS += -fsanitize=address,undefined \
+                    -fno-omit-frame-pointer \
+                    -fno-sanitize-recover=all
     QMAKE_CXXFLAGS += -fsanitize=address,undefined \
                       -fno-omit-frame-pointer \
                       -fno-sanitize-recover=all

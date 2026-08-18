@@ -11,6 +11,7 @@
 #define _GC_WorkoutGameWorld_h
 
 #include <cstdint>
+#include <memory>
 
 enum class WorkoutGameTerrainKind
 {
@@ -47,6 +48,43 @@ struct WorkoutGameWorldSnapshot
     WorkoutGameVehiclePose rider;
     double speedMetersPerSecond = 0.0;
     double landingImpact = 0.0;
+};
+
+struct WorkoutGamePhysicsInput
+{
+    std::int64_t workoutTimeMs = 0;
+    WorkoutGameTerrainKind terrain = WorkoutGameTerrainKind::SmoothTrail;
+    double desiredSpeedMetersPerSecond = 0.0;
+    double gradePercent = 0.0;
+    double difficulty = 0.0;
+    double effortRatio = 0.0;
+    bool paused = false;
+    bool jumpRequested = false;
+};
+
+class WorkoutGamePhysics
+{
+public:
+    WorkoutGamePhysics();
+    ~WorkoutGamePhysics();
+
+    WorkoutGamePhysics(const WorkoutGamePhysics &) = delete;
+    WorkoutGamePhysics &operator=(const WorkoutGamePhysics &) = delete;
+
+    bool configure(std::uint32_t seed);
+    void reset();
+    WorkoutGameWorldSnapshot update(const WorkoutGamePhysicsInput &input);
+
+    static double terrainHeight(
+            WorkoutGameTerrainKind terrain,
+            double distanceMeters,
+            double gradePercent,
+            double difficulty,
+            std::uint32_t seed);
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl;
 };
 
 enum class WorkoutGameCameraMode

@@ -894,6 +894,9 @@ SOURCES += ../contrib/qtsolutions/codeeditor/codeeditor.cpp ../contrib/qtsolutio
 
 
 ## Train View Components
+BOX2D_ROOT = $$clean_path($$PWD/../vendor/box2d-3.1.1)
+include($$BOX2D_ROOT/box2d.pri)
+
 SOURCES += Train/AddDeviceWizard.cpp Train/CalibrationData.cpp Train/ComputrainerController.cpp Train/Computrainer.cpp Train/DeviceConfiguration.cpp \
            Train/DeviceTypes.cpp Train/DialWindow.cpp Train/TrainerDay.cpp Train/TrainerDayDownloadDialog.cpp Train/ErgFile.cpp Train/ErgFileBytes.cpp Train/ErgFilePlot.cpp \
            Train/Library.cpp Train/LibraryImportFileStager.cpp Train/WorkoutImportBatch.cpp Train/WebDownloadImportPolicy.cpp Train/LibraryParser.cpp Train/MeterWidget.cpp Train/NullController.cpp Train/RealtimeController.cpp Train/TrainingDataGenerator.cpp \
