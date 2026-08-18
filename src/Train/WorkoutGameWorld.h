@@ -1,0 +1,88 @@
+/*
+ * Copyright (c) 2026
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.
+ */
+
+#ifndef _GC_WorkoutGameWorld_h
+#define _GC_WorkoutGameWorld_h
+
+#include <cstdint>
+
+enum class WorkoutGameTerrainKind
+{
+    SmoothTrail,
+    Roots,
+    Rollers,
+    Climb,
+    RockGarden,
+    BunnyHop,
+    Drop,
+    Skinny,
+    Berm
+};
+
+struct WorkoutGameVehiclePose
+{
+    double distanceMeters = 0.0;
+    double elevationMeters = 0.0;
+    double pitchDegrees = 0.0;
+    double rollDegrees = 0.0;
+    double rearSuspension = 0.0;
+    double frontSuspension = 0.0;
+    double rearWheelRadians = 0.0;
+    double frontWheelRadians = 0.0;
+    bool airborne = false;
+    bool walking = false;
+};
+
+struct WorkoutGameWorldSnapshot
+{
+    bool ready = false;
+    std::uint64_t generation = 0;
+    WorkoutGameTerrainKind terrain = WorkoutGameTerrainKind::SmoothTrail;
+    WorkoutGameVehiclePose rider;
+    double speedMetersPerSecond = 0.0;
+    double landingImpact = 0.0;
+};
+
+enum class WorkoutGameCameraMode
+{
+    Side,
+    ThreeQuarter,
+    Chase
+};
+
+struct WorkoutGameCameraSnapshot
+{
+    bool ready = false;
+    WorkoutGameCameraMode mode = WorkoutGameCameraMode::Side;
+    double centerDistanceMeters = 0.0;
+    double centerElevationMeters = 0.0;
+    double lookAheadMeters = 0.0;
+    double zoom = 1.0;
+    double yawDegrees = 90.0;
+    double pitchDegrees = 0.0;
+};
+
+class WorkoutGameCamera
+{
+public:
+    void reset();
+    WorkoutGameCameraSnapshot update(
+            const WorkoutGameWorldSnapshot &world,
+            double elapsedSeconds);
+
+    static WorkoutGameCameraMode preferredMode(
+            WorkoutGameTerrainKind terrain);
+
+private:
+    bool initialized = false;
+    std::uint64_t currentGeneration = 0;
+    WorkoutGameCameraSnapshot current;
+};
+
+#endif

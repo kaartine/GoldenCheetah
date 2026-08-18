@@ -57,6 +57,27 @@ power changes animation speed, line choice, and scoring, but cannot move the
 workout timeline. Long pauses reset transient jump and streak state without
 discarding accumulated score.
 
+### WorkoutGameWorld And Camera
+
+`WorkoutGameWorld` owns visual vehicle physics only. Its immutable snapshot
+uses trail coordinates (distance, elevation, lateral roll and vehicle pitch)
+instead of screen pixels. Workout time, scoring and trainer commands remain in
+their existing owners. A failed or late physics step can therefore reduce only
+visual fidelity.
+
+`WorkoutGameCamera` consumes world snapshots and produces a renderer-neutral
+camera pose. Smooth terrain, climbs, jumps and drops favor a side view; roots,
+rollers and rock gardens favor a three-quarter view. Skinny and berm features
+are reserved for a chase camera because their line choice cannot be conveyed
+reliably from the side. Camera angles blend over time, while a new physics-world
+generation performs an explicit cut instead of interpolating unrelated
+coordinates.
+
+The initial physics backend is vendored Box2D 3.1.1 (MIT license, pinned to
+commit `8c661469c9507d3ad6fbd2fea3f1aa71669c2fe3`). Box2D controls terrain
+contacts, suspension, vehicle pose and airborne motion. It never controls
+workout progress, trainer resistance, scoring or recording.
+
 ### WorkoutGameWindow
 
 The game is registered as a Train `GcChartWindow`. The window is the Qt-facing
