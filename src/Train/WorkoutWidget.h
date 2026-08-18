@@ -123,6 +123,9 @@ class WorkoutWidget : public QWidget
         // do we need to save?
         bool isDirty() { return stack.count() > 0; }
 
+        // Clear edit history only after a workout has been written successfully.
+        void markSaved();
+
         // update f with current edited content
         void updateErgFile(ErgFile *f);
 
@@ -272,7 +275,7 @@ class WorkoutWidget : public QWidget
         void ergFileSelected(ErgFile *, ErgFileFormat format = ErgFileFormat::unknown);
 
         // save or save as (when erfile is NULL)
-        void save();
+        bool save();
 
         // qwkcode edited
         void fromQwkcode(QString);

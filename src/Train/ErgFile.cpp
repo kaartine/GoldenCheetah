@@ -17,6 +17,7 @@
  */
 
 #include "ErgFile.h"
+#include "WorkoutFileWriter.h"
 #include "GpxParser.h"
 #include "Athlete.h"
 
@@ -1384,7 +1385,7 @@ ErgFile::save(QStringList &errors)
 
     // get CP so we can scale back etc
     int lCP=0;
-    if (context->athlete->zones("Bike")) {
+    if (context && context->athlete && context->athlete->zones("Bike")) {
         int zonerange = context->athlete->zones("Bike")->whichRange(when);
         if (zonerange >= 0) lCP = context->athlete->zones("Bike")->getCP(zonerange);
     }
@@ -1397,14 +1398,16 @@ ErgFile::save(QStringList &errors)
     if (typestring == "ERG" && format() == ErgFileFormat::erg) {
 
         // open the file etc
-        QFile f(filename());
-        if (f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text) == false) {
-            errors << "Unable to open file for writing.";
+        WorkoutFileWriter writer(filename());
+        QString writeError;
+        if (!writer.open(writeError)) {
+            errors << QObject::tr("Unable to open file for writing: %1")
+                              .arg(writeError);
             return false;
         }
 
         // setup output stream to file
-        QTextStream out(&f);
+        QTextStream &out = writer.stream();
 
         // write the header
         //
@@ -1498,7 +1501,12 @@ ErgFile::save(QStringList &errors)
             out << "[END COURSE TEXT]\n";
         }
 
-        f.close();
+        if (!writer.commit(writeError)) {
+            errors << QObject::tr("Unable to finish writing workout: %1")
+                              .arg(writeError);
+            return false;
+        }
+        return true;
 
     }
 
@@ -1508,14 +1516,16 @@ ErgFile::save(QStringList &errors)
     if (typestring == "MRC" && format() == ErgFileFormat::mrc) {
 
         // open the file etc
-        QFile f(filename());
-        if (f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text) == false) {
-            errors << "Unable to open file for writing.";
+        WorkoutFileWriter writer(filename());
+        QString writeError;
+        if (!writer.open(writeError)) {
+            errors << QObject::tr("Unable to open file for writing: %1")
+                              .arg(writeError);
             return false;
         }
 
         // setup output stream to file
-        QTextStream out(&f);
+        QTextStream &out = writer.stream();
 
         // write the header
         //
@@ -1605,21 +1615,28 @@ ErgFile::save(QStringList &errors)
             out << "[END COURSE TEXT]\n";
         }
 
-        f.close();
+        if (!writer.commit(writeError)) {
+            errors << QObject::tr("Unable to finish writing workout: %1")
+                              .arg(writeError);
+            return false;
+        }
+        return true;
 
     }
 
     if (typestring == "ZWO" && format() == ErgFileFormat::erg) {
 
         // open the file etc
-        QFile f(filename());
-        if (f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text) == false) {
-            errors << "Unable to open file for writing.";
+        WorkoutFileWriter writer(filename());
+        QString writeError;
+        if (!writer.open(writeError)) {
+            errors << QObject::tr("Unable to open file for writing: %1")
+                              .arg(writeError);
             return false;
         }
 
         // setup output stream to file
-        QTextStream out(&f);
+        QTextStream &out = writer.stream();
 
         out << "<workout_file>\n";
 
@@ -1734,9 +1751,15 @@ ErgFile::save(QStringList &errors)
         }
         out << "    </workout>\n";
         out << "</workout_file>\n";
-        f.close();
+        if (!writer.commit(writeError)) {
+            errors << QObject::tr("Unable to finish writing workout: %1")
+                              .arg(writeError);
+            return false;
+        }
+        return true;
     }
-    return true;
+    errors << QObject::tr("Unsupported workout file format");
+    return false;
 }
 
 ErgFile::~ErgFile()

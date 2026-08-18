@@ -26,6 +26,7 @@
 #include "Library.h"
 #include "LibraryParser.h"
 #include "TrainDB.h"
+#include "WorkoutFileWriter.h"
 
 #include "qwt_plot.h"
 #include "qwt_plot_curve.h"
@@ -358,16 +359,17 @@ bool AbsWattagePage::SaveWorkout()
                                                     workoutDir,tr("Computrainer Format *.erg"));
     if (filename.isEmpty()) return false;
 
-    if(!filename.endsWith(".erg"))
-    {
-        filename.append(".erg");
+    filename = WorkoutFileWriter::ensureSuffix(filename, QStringLiteral(".erg"));
+    WorkoutFileWriter writer(filename);
+    QString writeError;
+    if (!writer.open(writeError)) {
+        QMessageBox::critical(this, tr("Save Workout"),
+                tr("Unable to save %1:\n%2").arg(filename, writeError));
+        return false;
     }
-    // open the file
-    QFile f(filename);
-    f.open(QIODevice::WriteOnly | QIODevice::Text);
-    QTextStream stream(&f);
+    QTextStream &stream = writer.stream();
     // create the header
-    SaveWorkoutHeader(stream,f.fileName(),QString("golden cheetah"),QString("MINUTES WATTS"));
+    SaveWorkoutHeader(stream, filename, QString("golden cheetah"), QString("MINUTES WATTS"));
     QVector<QPair<QString, QString> > rawData;
     we->rawData(rawData);
     double currentX = 0;
@@ -387,7 +389,11 @@ bool AbsWattagePage::SaveWorkout()
         }
     }
     stream << "[END COURSE DATA]" << Qt::endl;
-    f.close();
+    if (!writer.commit(writeError)) {
+        QMessageBox::critical(this, tr("Save Workout"),
+                tr("Unable to save %1:\n%2").arg(filename, writeError));
+        return false;
+    }
 
     // import them via the workoutimporter
     QStringList files;
@@ -500,16 +506,17 @@ bool RelWattagePage::SaveWorkout()
                                                     workoutDir,tr("Computrainer Format *.mrc"));
     if (filename.isEmpty()) return false;
 
-    if(!filename.endsWith(".mrc"))
-    {
-        filename.append(".mrc");
+    filename = WorkoutFileWriter::ensureSuffix(filename, QStringLiteral(".mrc"));
+    WorkoutFileWriter writer(filename);
+    QString writeError;
+    if (!writer.open(writeError)) {
+        QMessageBox::critical(this, tr("Save Workout"),
+                tr("Unable to save %1:\n%2").arg(filename, writeError));
+        return false;
     }
-    // open the file
-    QFile f(filename);
-    f.open(QIODevice::WriteOnly | QIODevice::Text);
-    QTextStream stream(&f);
+    QTextStream &stream = writer.stream();
     // create the header
-    SaveWorkoutHeader(stream,f.fileName(),QString("golden cheetah"),QString("MINUTES PERCENT"));
+    SaveWorkoutHeader(stream, filename, QString("golden cheetah"), QString("MINUTES PERCENT"));
     QVector<QPair<QString, QString> > rawData;
     we->rawData(rawData);
     double currentX = 0;
@@ -529,7 +536,11 @@ bool RelWattagePage::SaveWorkout()
         }
     }
     stream << "[END COURSE DATA]" << Qt::endl;
-    f.close();
+    if (!writer.commit(writeError)) {
+        QMessageBox::critical(this, tr("Save Workout"),
+                tr("Unable to save %1:\n%2").arg(filename, writeError));
+        return false;
+    }
 
     // import them via the workoutimporter
     QStringList files;
@@ -602,16 +613,17 @@ bool GradientPage::SaveWorkout()
                                                     workoutDir,tr("Computrainer Format *.crs"));
     if (filename.isEmpty()) return false;
 
-    if(!filename.endsWith(".crs"))
-    {
-        filename.append(".crs");
+    filename = WorkoutFileWriter::ensureSuffix(filename, QStringLiteral(".crs"));
+    WorkoutFileWriter writer(filename);
+    QString writeError;
+    if (!writer.open(writeError)) {
+        QMessageBox::critical(this, tr("Save Workout"),
+                tr("Unable to save %1:\n%2").arg(filename, writeError));
+        return false;
     }
-    // open the file
-    QFile f(filename);
-    f.open(QIODevice::WriteOnly | QIODevice::Text);
-    QTextStream stream(&f);
+    QTextStream &stream = writer.stream();
     // create the header
-    SaveWorkoutHeader(stream,f.fileName(),QString("golden cheetah"),QString("DISTANCE GRADE WIND"));
+    SaveWorkoutHeader(stream, filename, QString("golden cheetah"), QString("DISTANCE GRADE WIND"));
     QVector<QPair<QString, QString> > rawData;
     we->rawData(rawData);
     stream << "[COURSE DATA]" << Qt::endl;
@@ -630,7 +642,11 @@ bool GradientPage::SaveWorkout()
         }
     }
     stream << "[END COURSE DATA]" << Qt::endl;
-    f.close();
+    if (!writer.commit(writeError)) {
+        QMessageBox::critical(this, tr("Save Workout"),
+                tr("Unable to save %1:\n%2").arg(filename, writeError));
+        return false;
+    }
 
     // import them via the workoutimporter
     QStringList files;
@@ -762,16 +778,17 @@ bool ImportPage::SaveWorkout()
                                                     workoutDir,tr("Computrainer Format *.crs"));
     if (filename.isEmpty()) return false;
 
-    if(!filename.endsWith(".crs"))
-    {
-        filename.append(".crs");
+    filename = WorkoutFileWriter::ensureSuffix(filename, QStringLiteral(".crs"));
+    WorkoutFileWriter writer(filename);
+    QString writeError;
+    if (!writer.open(writeError)) {
+        QMessageBox::critical(this, tr("Save Workout"),
+                tr("Unable to save %1:\n%2").arg(filename, writeError));
+        return false;
     }
-    // open the file
-    QFile f(filename);
-    f.open(QIODevice::WriteOnly | QIODevice::Text);
-    QTextStream stream(&f);
+    QTextStream &stream = writer.stream();
     // create the header
-    SaveWorkoutHeader(stream,f.fileName(),QString("golden cheetah"),QString("DISTANCE GRADE WIND"));
+    SaveWorkoutHeader(stream, filename, QString("golden cheetah"), QString("DISTANCE GRADE WIND"));
     stream << "[COURSE DATA]" << Qt::endl;
     QPair<double,double> p;
     double prevDistance = 0;
@@ -783,7 +800,11 @@ bool ImportPage::SaveWorkout()
         prevDistance = curDistance;
     }
     stream << "[END COURSE DATA]" << Qt::endl;
-    f.close();
+    if (!writer.commit(writeError)) {
+        QMessageBox::critical(this, tr("Save Workout"),
+                tr("Unable to save %1:\n%2").arg(filename, writeError));
+        return false;
+    }
 
     // import them via the workoutimporter
     QStringList files;

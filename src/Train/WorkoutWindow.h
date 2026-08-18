@@ -116,7 +116,7 @@ class WorkoutWindow : public GcChartWindow
         void newErgFile();
         void newMrcFile();
         void saveFile();
-        void saveAs();
+        bool saveAs();
         void properties();
         void drawMode();
         void selectMode();

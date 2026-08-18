@@ -1535,14 +1535,14 @@ WorkoutWidget::ergFileSelected(ErgFile *ergFile, ErgFileFormat format)
     repaint();
 }
 
-void
+bool
 WorkoutWidget::save()
 {
     // we always save if we can, regardless of if its needed or not
 
     // no ergfile?
     if (ergFile == NULL) {
-        return;
+        return false;
     }
 
     //
@@ -1576,20 +1576,24 @@ WorkoutWidget::save()
         msgBox.setDefaultButton(QMessageBox::Ok);
         msgBox.setIcon(QMessageBox::Critical);
         msgBox.exec();
+        return false;
 
     } else {
-
-        // if it succeeds then reset stuff
-        foreach (WorkoutWidgetCommand *p, stack) delete p;
-        stack.clear();
-        stackptr = 0;
-        parent->saveAct->setEnabled(false);
-        parent->undoAct->setEnabled(false);
-        parent->redoAct->setEnabled(false);
-
+        markSaved();
     }
 
-    return;
+    return true;
+}
+
+void
+WorkoutWidget::markSaved()
+{
+    foreach (WorkoutWidgetCommand *command, stack) delete command;
+    stack.clear();
+    stackptr = 0;
+    parent->saveAct->setEnabled(false);
+    parent->undoAct->setEnabled(false);
+    parent->redoAct->setEnabled(false);
 }
 
 void

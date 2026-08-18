@@ -126,6 +126,7 @@ exists(unittests.pri) {
 			   Train/trainingRecordingIo \
 			   Train/trainingTelemetryTimeline \
 			   Train/trainingDataGenerator \
+			   Train/workoutFileWriter \
 			   Train/trainRuntime \
 			   Train/trainerTargetCoordinator \
 			   Train/virtualDrivetrain \

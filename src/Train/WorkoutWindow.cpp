@@ -20,7 +20,10 @@
 #include "WorkoutWindow.h"
 #include "WorkoutWidget.h"
 #include "WorkoutWidgetItems.h"
+#include "WorkoutFileWriter.h"
 #include "HelpWhatsThis.h"
+
+#include <memory>
 
 static int MINTOOLHEIGHT = 350; // smaller than this, lose the toolbar
 
@@ -567,7 +570,7 @@ WorkoutWindow::newMrcFile()
     ergFileSelected(NULL, ErgFileFormat::mrc);
 }
 
-void
+bool
 WorkoutWindow::saveAs()
 {
     QString selected = format == ErgFileFormat::mrc ? "MRC workout (*.mrc)" : "ERG workout (*.erg)";
@@ -578,44 +581,66 @@ WorkoutWindow::saveAs()
 
     // if they didn't select, give up.
     if (filename.isEmpty()) {
-        return;
+        return false;
     }
 
     // filetype defaults to .erg
-    if(!filename.endsWith(".erg") && !filename.endsWith(".mrc") && !filename.endsWith(".zwo")) {
-        if (format == ErgFileFormat::mrc) filename.append(".mrc");
-        else filename.append(".erg");
+    const bool hasKnownSuffix = filename.endsWith(".erg", Qt::CaseInsensitive)
+            || filename.endsWith(".mrc", Qt::CaseInsensitive)
+            || filename.endsWith(".zwo", Qt::CaseInsensitive);
+    if (!hasKnownSuffix) {
+        const QString suffix = selected.startsWith(QStringLiteral("MRC"))
+                ? QStringLiteral(".mrc")
+                : selected.startsWith(QStringLiteral("Zwift"))
+                        ? QStringLiteral(".zwo")
+                        : QStringLiteral(".erg");
+        filename = WorkoutFileWriter::ensureSuffix(filename, suffix);
     }
 
     // New ergfile will be created almost empty
-    ErgFile *newergFile = new ErgFile(context);
+    std::unique_ptr<ErgFile> newergFile = std::make_unique<ErgFile>(context);
 
     // we need to set sensible defaults for
     // all the metadata in the file.
     newergFile->version("2.0");
     newergFile->units("");
-    newergFile->originalFilename(QFileInfo(filename).fileName());
     newergFile->filename(filename);
     newergFile->name("New Workout");
     newergFile->ftp(newergFile->CP());
     newergFile->valid = true;
-    newergFile->format(format);
 
     // if we're save as from an existing keep all the data
     // EXCEPT filename, which has just been changed!
     if (ergFile) newergFile->setFrom(ergFile);
 
+    const ErgFileFormat targetFormat = filename.endsWith(
+            QStringLiteral(".mrc"), Qt::CaseInsensitive)
+            ? ErgFileFormat::mrc
+            : ErgFileFormat::erg;
+    newergFile->format(targetFormat);
+    newergFile->originalFilename(QFileInfo(filename).fileName());
+
     // Update with whatever is currently in editor
-    workout->updateErgFile(newergFile);
+    workout->updateErgFile(newergFile.get());
 
-    // select new workout
-    workout->ergFileSelected(newergFile);
+    QStringList errors;
+    if (!newergFile->save(errors)) {
+        QMessageBox msgBox(this);
+        msgBox.setText(tr("File save failed."));
+        msgBox.setInformativeText(errors.join(QStringLiteral("\n")));
+        msgBox.setStandardButtons(QMessageBox::Ok);
+        msgBox.setIcon(QMessageBox::Critical);
+        msgBox.exec();
+        return false;
+    }
 
-    // write file
-    workout->save();
+    workout->markSaved();
+    ErgFile *savedWorkout = newergFile.release();
+    ergFileSelected(savedWorkout);
 
     // add to collection with new name, a single new file
     Library::importFiles(context, QStringList(filename));
+    return true;
 }
 
 void
@@ -625,11 +650,10 @@ WorkoutWindow::saveFile()
     // edit state being held by the workout editor
     // otherwise just write it to disk straight away as its
     // an existing ergFile we just need to write to
-    if (ergFile) workout->save();
-    else saveAs();
+    const bool saved = ergFile ? workout->save() : saveAs();
 
     // force any other plots to take the changes
-    context->notifyErgFileSelected(ergFile);
+    if (saved) context->notifyErgFileSelected(ergFile);
 }
 
 void
