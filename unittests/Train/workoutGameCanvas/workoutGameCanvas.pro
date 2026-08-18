@@ -20,7 +20,7 @@ HEADERS = ../../../src/Train/WorkoutGameCanvas.h \
 
 RESOURCES = workoutGameCanvas.qrc
 
-BOX2D_ROOT = $$clean_path($$PWD/../../../vendor/box2d-3.1.1)
+BOX2D_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../../vendor/box2d-3.1.1)
 include($$BOX2D_ROOT/box2d.pri)
 
 include(../../unittests.pri)
