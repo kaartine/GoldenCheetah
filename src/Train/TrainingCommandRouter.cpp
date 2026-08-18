@@ -9,6 +9,12 @@
 
 #include "TrainingCommandRouter.h"
 
+#include <QAbstractSpinBox>
+#include <QComboBox>
+#include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QTextEdit>
+
 TrainingCommand TrainingCommandRouter::commandForKey(
         int key,
         Qt::KeyboardModifiers modifiers,
@@ -34,4 +40,18 @@ TrainingCommand TrainingCommandRouter::commandForKey(
     default:
         return TrainingCommand::None;
     }
+}
+
+bool TrainingCommandRouter::shouldPreserveFocusedInput(
+        const QWidget *focus,
+        bool modalDialogActive)
+{
+    if (modalDialogActive) return true;
+    if (const QComboBox *combo = qobject_cast<const QComboBox *>(focus)) {
+        return combo->isEditable();
+    }
+    return qobject_cast<const QLineEdit *>(focus)
+            || qobject_cast<const QTextEdit *>(focus)
+            || qobject_cast<const QPlainTextEdit *>(focus)
+            || qobject_cast<const QAbstractSpinBox *>(focus);
 }

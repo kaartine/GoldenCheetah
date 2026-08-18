@@ -68,20 +68,28 @@ private slots:
         }
     }
 
-    void tracksWorkoutTargetWithinBoundedVariation()
+    void followsWorkoutTargetAboveAndBelow()
     {
         TrainingDataGenerator generator;
         generator.setTargetWatts(300.0);
 
-        for (int i = 0; i < 32; ++i) {
+        bool wentBelow = false;
+        bool wentAbove = false;
+        for (int i = 0; i < 240; ++i) {
             const TrainingDataGeneratorSample sample = generator.nextSample();
-            QVERIFY(sample.watts >= 297.0);
-            QVERIFY(sample.watts <= 303.0);
+            wentBelow = wentBelow || sample.watts < 285.0;
+            wentAbove = wentAbove || sample.watts > 315.0;
+            if (i >= 5) {
+                QVERIFY(sample.watts >= 255.0);
+                QVERIFY(sample.watts <= 345.0);
+            }
             QVERIFY(sample.cadence >= 70.0);
             QVERIFY(sample.cadence <= 105.0);
             QVERIFY(sample.heartRate >= 90.0);
             QVERIFY(sample.heartRate <= 185.0);
         }
+        QVERIFY(wentBelow);
+        QVERIFY(wentAbove);
     }
 
     void heartRateRespondsGraduallyToLoadChanges()
@@ -110,7 +118,7 @@ private slots:
 
         generator.setTargetWatts(9000.0);
         QCOMPARE(generator.targetWatts(), 2500.0);
-        QVERIFY(generator.nextSample().watts <= 2503.0);
+        QVERIFY(generator.nextSample().watts <= 2500.0);
 
         generator.setTargetWatts(std::numeric_limits<double>::quiet_NaN());
         QCOMPARE(generator.targetWatts(), 0.0);

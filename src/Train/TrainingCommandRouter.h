@@ -12,6 +12,8 @@
 
 #include <QtCore/qnamespace.h>
 
+class QWidget;
+
 enum class TrainingCommand {
     None,
     ToggleStartPause,
@@ -27,6 +29,9 @@ public:
             int key,
             Qt::KeyboardModifiers modifiers,
             bool autoRepeat);
+    static bool shouldPreserveFocusedInput(
+            const QWidget *focus,
+            bool modalDialogActive);
 };
 
 #endif

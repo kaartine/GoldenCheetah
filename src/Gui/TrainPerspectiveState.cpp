@@ -20,6 +20,7 @@ constexpr int TelemetryChartId = 22;
 constexpr int ErgTrainSwitch = 1;
 constexpr int SlopeTrainSwitch = 2;
 constexpr int MapTrainSwitch = 4;
+constexpr int WorkoutGameChartId = 59;
 
 QDomElement chartProperty(const QDomElement &chart, const QString &name)
 {
@@ -70,6 +71,35 @@ QDomElement layoutForTrainSwitch(const QDomDocument &document, const QString &tr
          !layout.isNull();
          layout = layout.nextSiblingElement("layout")) {
         if (layout.attribute("trainswitch") == trainSwitch) return layout;
+    }
+    return QDomElement();
+}
+
+bool containsChart(const QDomElement &root, int chartId)
+{
+    for (QDomElement layout = root.firstChildElement("layout");
+         !layout.isNull();
+         layout = layout.nextSiblingElement("layout")) {
+        for (QDomElement chart = layout.firstChildElement("chart");
+             !chart.isNull();
+             chart = chart.nextSiblingElement("chart")) {
+            if (chart.attribute("id").toInt() == chartId) return true;
+        }
+    }
+    return false;
+}
+
+QDomElement layoutContainingChart(const QDomDocument &document, int chartId)
+{
+    const QDomElement root = document.documentElement();
+    for (QDomElement layout = root.firstChildElement("layout");
+         !layout.isNull();
+         layout = layout.nextSiblingElement("layout")) {
+        for (QDomElement chart = layout.firstChildElement("chart");
+             !chart.isNull();
+             chart = chart.nextSiblingElement("chart")) {
+            if (chart.attribute("id").toInt() == chartId) return layout;
+        }
     }
     return QDomElement();
 }
@@ -161,6 +191,14 @@ TrainPerspectiveState::migrate(QString &content, const QString &defaultsContent)
         const QDomElement insertionPoint = telemetryCharts.last().nextSiblingElement("chart");
         if (insertionPoint.isNull()) layout.appendChild(importedHeartRate);
         else layout.insertBefore(importedHeartRate, insertionPoint);
+    }
+
+    if (!containsChart(root, WorkoutGameChartId)) {
+        const QDomElement gameLayout = layoutContainingChart(
+                defaults, WorkoutGameChartId);
+        if (!gameLayout.isNull()) {
+            root.appendChild(document.importNode(gameLayout, true));
+        }
     }
 
     root.setAttribute("version", CurrentVersion);

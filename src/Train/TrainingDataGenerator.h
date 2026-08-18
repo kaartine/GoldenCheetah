@@ -37,6 +37,7 @@ public:
 
 private:
     double target = 100.0;
+    double currentWatts = 100.0;
     double currentHeartRate = 105.0;
     std::uint64_t sampleNumber = 0;
 };

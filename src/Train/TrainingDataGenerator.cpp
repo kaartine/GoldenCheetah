@@ -40,6 +40,7 @@ TrainingDataGenerator::TrainingDataGenerator()
 void TrainingDataGenerator::reset()
 {
     sampleNumber = 0;
+    currentWatts = target;
     currentHeartRate = bounded(90.0 + target * 0.28, 90.0, 185.0);
 }
 
@@ -52,24 +53,32 @@ TrainingDataGeneratorSample TrainingDataGenerator::nextSample()
 {
     const std::size_t phase = static_cast<std::size_t>(
             sampleNumber % WattOffsets.size());
+    currentWatts += bounded(target - currentWatts, -40.0, 40.0);
+    const double riderPhase = static_cast<double>(sampleNumber % 150U)
+            * (2.0 * std::acos(-1.0) / 150.0);
+    const double simulatedEffort = currentWatts
+            * (1.0 + 0.10 * std::sin(riderPhase));
+    const double actualWatts = bounded(
+            simulatedEffort + WattOffsets[phase], 0.0, 2500.0);
+
     const double desiredHeartRate = bounded(
-            90.0 + target * 0.28, 90.0, 185.0);
+            90.0 + actualWatts * 0.28, 90.0, 185.0);
     const double heartRateDelta = bounded(
             desiredHeartRate - currentHeartRate, -0.35, 0.8);
     currentHeartRate += heartRateDelta;
 
     TrainingDataGeneratorSample sample;
-    sample.watts = std::max(0.0, target + WattOffsets[phase]);
+    sample.watts = actualWatts;
     sample.cadence = bounded(
-            78.0 + target / 20.0 + CadenceOffsets[phase], 70.0, 105.0);
+            78.0 + actualWatts / 20.0 + CadenceOffsets[phase], 70.0, 105.0);
     sample.heartRate = currentHeartRate;
     sample.leftRightBalance = 50.0 + BalanceOffsets[phase];
-    sample.smO2 = 52.0 - bounded(target / 100.0, 0.0, 12.0)
+    sample.smO2 = 52.0 - bounded(actualWatts / 100.0, 0.0, 12.0)
             + BalanceOffsets[phase];
     sample.totalHb = 12.4 + BalanceOffsets[phase] * 0.05;
     sample.coreTemperature = 37.5 + static_cast<double>(phase) * 0.01;
     sample.skinTemperature = 35.0 - static_cast<double>(phase) * 0.01;
-    sample.heatStrain = 2.0 + bounded(target / 1000.0, 0.0, 2.5);
+    sample.heatStrain = 2.0 + bounded(actualWatts / 1000.0, 0.0, 2.5);
 
     ++sampleNumber;
     return sample;

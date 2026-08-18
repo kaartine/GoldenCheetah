@@ -41,13 +41,9 @@
 #include <QEvent>
 #include <QInputEvent>
 #include <QKeyEvent>
-#include <QAbstractSpinBox>
 #include <QComboBox>
-#include <QLineEdit>
 #include <QMutexLocker>
-#include <QPlainTextEdit>
 #include <QSoundEffect>
-#include <QTextEdit>
 
 // Three current realtime device types supported are:
 #include "RealtimeController.h"
@@ -91,14 +87,9 @@ namespace {
 
 bool trainingTextInputIsActive()
 {
-    if (QApplication::activeModalWidget()) return true;
-
-    QWidget *focus = QApplication::focusWidget();
-    return qobject_cast<QLineEdit *>(focus)
-            || qobject_cast<QTextEdit *>(focus)
-            || qobject_cast<QPlainTextEdit *>(focus)
-            || qobject_cast<QAbstractSpinBox *>(focus)
-            || qobject_cast<QComboBox *>(focus);
+    return TrainingCommandRouter::shouldPreserveFocusedInput(
+            QApplication::focusWidget(),
+            QApplication::activeModalWidget() != nullptr);
 }
 
 }
@@ -454,8 +445,9 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
     configChanged(CONFIG_APPEARANCE | CONFIG_DEVICES); // will reset the workout tree
     setLabels();
 
-    // capture keyboard events so we can control during
-    // a workout using basic keyboard controls
+    // Capture at application level so focused child widgets cannot consume
+    // training controls before they reach the main window.
+    qApp->installEventFilter(this);
     context->mainWindow->installEventFilter(this);
 
 #ifndef Q_OS_MAC
@@ -468,6 +460,9 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
 TrainSidebar::~TrainSidebar
 ()
 {
+    qApp->removeEventFilter(this);
+    context->mainWindow->removeEventFilter(this);
+
     for (DeviceConfiguration &device : Devices) {
         if (device.type == DEV_ANTLOCAL)
             TrainingControllerLifecycle::stopAndDelete(device.controller);
@@ -597,10 +592,10 @@ TrainSidebar::workoutPopup()
 }
 
 bool
-TrainSidebar::eventFilter(QObject *, QEvent *event)
+TrainSidebar::eventFilter(QObject *object, QEvent *event)
 {
     // do not allow to close the Window when active
-    if (event->type() == QEvent::Close) {
+    if (object == context->mainWindow && event->type() == QEvent::Close) {
         if (status & RT_RUNNING) {
             QMessageBox::warning(this, tr("Train mode active"), tr("Please stop the train mode before closing the window or application."));
             event->ignore();
@@ -612,8 +607,7 @@ TrainSidebar::eventFilter(QObject *, QEvent *event)
         }
     }
 
-    // only when we are recording !
-    if (status & RT_RECORDING) {
+    if (status & RT_RUNNING) {
         if (event->type() == QEvent::KeyPress && !trainingTextInputIsActive()) {
             QKeyEvent *keyEvent = static_cast<QKeyEvent *>(event);
             const TrainingCommand command = TrainingCommandRouter::commandForKey(
@@ -621,11 +615,17 @@ TrainSidebar::eventFilter(QObject *, QEvent *event)
 
             switch (command) {
             case TrainingCommand::ToggleStartPause:
-                Start();
-                return true;
+                if (status & RT_RECORDING) {
+                    Start();
+                    return true;
+                }
+                break;
             case TrainingCommand::RequestStop:
-                RequestStop();
-                return true;
+                if (status & RT_RECORDING) {
+                    RequestStop();
+                    return true;
+                }
+                break;
             case TrainingCommand::ShiftUp:
                 VirtualShiftUp();
                 return true;
@@ -1445,6 +1445,7 @@ void TrainSidebar::Start()       // when start button is pressed
         load = 100;
         slope = 0.0;
         virtualDrivetrain.reset();
+        emit virtualGearChanged(virtualDrivetrain.gear());
         resetWorkoutRideCommandDispatch();
 
         // Reset Speed Simulation
@@ -3382,6 +3383,7 @@ void TrainSidebar::VirtualShiftUp()
         }
         context->notifySetNotification(
                 tr("Virtual gear %1").arg(virtualDrivetrain.gear()), 2);
+        emit virtualGearChanged(virtualDrivetrain.gear());
     }
 }
 
@@ -3396,7 +3398,23 @@ void TrainSidebar::VirtualShiftDown()
         }
         context->notifySetNotification(
                 tr("Virtual gear %1").arg(virtualDrivetrain.gear()), 2);
+        emit virtualGearChanged(virtualDrivetrain.gear());
     }
+}
+
+void TrainSidebar::setVirtualGear(int gear)
+{
+    if ((status & RT_CONNECTED) == 0) return;
+    if (!virtualDrivetrain.setGear(gear)) return;
+
+    if (workoutRideModeEnabled
+            && (status & RT_RUNNING)
+            && !(status & RT_PAUSED)) {
+        applyWorkoutTarget(false);
+    }
+    context->notifySetNotification(
+            tr("Virtual gear %1").arg(virtualDrivetrain.gear()), 2);
+    emit virtualGearChanged(virtualDrivetrain.gear());
 }
 
 void TrainSidebar::setLabels()

@@ -143,6 +143,9 @@ class TrainSidebar : public GcWindow
         int currentStatus() {return status;}
         bool workoutRideEnabled() const { return workoutRideModeEnabled; }
         WorkoutRideModeAvailability workoutRideModeAvailability();
+        int virtualGear() const { return virtualDrivetrain.gear(); }
+        int minimumVirtualGear() const { return virtualDrivetrain.minimumGear(); }
+        int maximumVirtualGear() const { return virtualDrivetrain.maximumGear(); }
 
     signals:
         void deviceSelected();
@@ -151,6 +154,7 @@ class TrainSidebar : public GcWindow
         void stop();
         void statusChanged(int status);
         void workoutRideModeChanged();
+        void virtualGearChanged(int gear);
 
     private slots:
         void deviceTreeWidgetSelectionChanged();
@@ -208,6 +212,7 @@ class TrainSidebar : public GcWindow
         void Lower();       // set load/gradient higher
         void VirtualShiftUp();
         void VirtualShiftDown();
+        void setVirtualGear(int gear);
         void setWorkoutRideEnabled(bool enabled);
         void newLap();      // start new Lap!
         void resetLapTimer(); //reset the lap timer

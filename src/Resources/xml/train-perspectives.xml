@@ -449,4 +449,14 @@
 		<property name="resizable" type="bool" value="0" />
 	</chart>
 </layout>
+<layout name="Workout Game" style="0" type="1" expression="" trainswitch="1">
+	<chart id="59" name="" title="Workout Game" >
+		<property name="title" type="QString" value="Workout Game" />
+		<property name="subtitle" type="QString" value="" />
+		<property name="widthFactor" type="double" value="1" />
+		<property name="heightFactor" type="double" value="1" />
+		<property name="style" type="int" value="0" />
+		<property name="resizable" type="bool" value="0" />
+	</chart>
+</layout>
 </layouts>

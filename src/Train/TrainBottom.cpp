@@ -27,6 +27,7 @@
 #include <QComboBox>
 #include <QPlainTextEdit>
 #include <QSignalBlocker>
+#include <QSpinBox>
 #include <QTimer>
 
 TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
@@ -144,6 +145,19 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
     rideMode->addItem(tr("Workout Ride"), true);
     toolbuttons->addWidget(rideMode);
 
+    virtualGear = new QSpinBox(this);
+    virtualGear->setObjectName(QStringLiteral("virtualGearSelector"));
+    virtualGear->setFocusPolicy(Qt::NoFocus);
+    virtualGear->setPrefix(tr("Gear "));
+    virtualGear->setRange(m_trainSidebar->minimumVirtualGear(),
+                          m_trainSidebar->maximumVirtualGear());
+    virtualGear->setValue(m_trainSidebar->virtualGear());
+    virtualGear->setEnabled(false);
+    virtualGear->setToolTip(tr("Virtual gear (Up/W and Down/S)"));
+    virtualGear->setFixedWidth(
+            virtualGear->fontMetrics().horizontalAdvance(tr("Gear 12")) + 36);
+    toolbuttons->addWidget(virtualGear);
+
     toolbuttons->addSpacing(5);
     toolbuttons->addWidget(newSep());
     toolbuttons->addSpacing(5);
@@ -226,6 +240,10 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
             this, &TrainBottom::rideModeChanged);
     connect(m_trainSidebar, &TrainSidebar::workoutRideModeChanged,
             this, &TrainBottom::refreshRideMode);
+    connect(virtualGear, QOverload<int>::of(&QSpinBox::valueChanged),
+            m_trainSidebar, &TrainSidebar::setVirtualGear);
+    connect(m_trainSidebar, &TrainSidebar::virtualGearChanged,
+            this, &TrainBottom::refreshVirtualGear);
 
     connect(m_trainSidebar->context, SIGNAL(setNotification(QString, int)), this, SLOT(setNotification(QString, int)));
     connect(m_trainSidebar->context, SIGNAL(clearNotification(void)), this, SLOT(clearNotification(void)));
@@ -268,6 +286,7 @@ TrainBottom::TrainBottom(TrainSidebar *trainSidebar, QWidget *parent) :
     m_tooltips = appsettings->value(this, TRAIN_TOOLTIPS, true).toBool();
     updateTooltips();
     refreshRideMode();
+    refreshVirtualGear(m_trainSidebar->virtualGear());
 }
 
 void TrainBottom::updatePlayButtonIcon()
@@ -307,6 +326,7 @@ void TrainBottom::autoHideCheckboxChanged(int state)
 void TrainBottom::statusChanged(int status)
 {
     refreshRideMode();
+    virtualGear->setEnabled((status & RT_CONNECTED) != 0);
 
     // not yet connected
     if ((status&RT_CONNECTED) == 0) {
@@ -429,6 +449,12 @@ void TrainBottom::refreshRideMode()
     rideMode->setCurrentIndex(m_trainSidebar->workoutRideEnabled() ? 1 : 0);
     rideMode->setEnabled(
             m_trainSidebar->workoutRideModeAvailability().editable);
+}
+
+void TrainBottom::refreshVirtualGear(int gear)
+{
+    const QSignalBlocker blocker(virtualGear);
+    virtualGear->setValue(gear);
 }
 
 void TrainBottom::setNotification(QString msg, int timeout)

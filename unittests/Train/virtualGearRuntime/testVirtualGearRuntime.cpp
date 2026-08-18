@@ -11,6 +11,9 @@
 #include "Train/TrainingCommandRouter.h"
 #include "Train/TrainingCsvSeries.h"
 
+#include <QComboBox>
+#include <QLineEdit>
+#include <QSpinBox>
 #include <QTest>
 
 class TestVirtualGearRuntime : public QObject
@@ -109,6 +112,29 @@ private slots:
                  TrainingCommand::ShiftUp);
     }
 
+    void preservesOnlyActualTextInputs()
+    {
+        QComboBox perspectiveSelector;
+        QComboBox editableCombo;
+        editableCombo.setEditable(true);
+        QLineEdit lineEdit;
+        QSpinBox spinBox;
+        QWidget passiveWidget;
+
+        QVERIFY(!TrainingCommandRouter::shouldPreserveFocusedInput(
+                &perspectiveSelector, false));
+        QVERIFY(TrainingCommandRouter::shouldPreserveFocusedInput(
+                &editableCombo, false));
+        QVERIFY(TrainingCommandRouter::shouldPreserveFocusedInput(
+                &lineEdit, false));
+        QVERIFY(TrainingCommandRouter::shouldPreserveFocusedInput(
+                &spinBox, false));
+        QVERIFY(!TrainingCommandRouter::shouldPreserveFocusedInput(
+                &passiveWidget, false));
+        QVERIFY(TrainingCommandRouter::shouldPreserveFocusedInput(
+                &passiveWidget, true));
+    }
+
     void realtimeGearIsAnAppendOnlyDisplaySeries()
     {
         RealtimeData data;
@@ -184,5 +210,5 @@ private slots:
     }
 };
 
-QTEST_GUILESS_MAIN(TestVirtualGearRuntime)
+QTEST_MAIN(TestVirtualGearRuntime)
 #include "testVirtualGearRuntime.moc"
