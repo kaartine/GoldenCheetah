@@ -167,6 +167,10 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::sample(
                     target.competition.competitors[index].courseProgress,
                     predictionMs, sourceIntervalMs),
                 0.0, 1.0);
+        result.competition.competitors[index].relativeProgress = extrapolate(
+                origin.relativeProgress,
+                target.competition.competitors[index].relativeProgress,
+                predictionMs, sourceIntervalMs);
     }
     return result;
 }
@@ -212,6 +216,9 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::interpolate(
         result.competition.competitors[index].courseProgress = lerp(
                 from.competition.competitors[index].courseProgress,
                 to.competition.competitors[index].courseProgress, amount);
+        result.competition.competitors[index].relativeProgress = lerp(
+                from.competition.competitors[index].relativeProgress,
+                to.competition.competitors[index].relativeProgress, amount);
     }
 
     result.world.gradePercent = lerp(

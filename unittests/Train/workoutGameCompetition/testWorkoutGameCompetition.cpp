@@ -11,6 +11,7 @@
 
 #include <QTest>
 
+#include <algorithm>
 #include <limits>
 #include <string>
 
@@ -121,6 +122,33 @@ private slots:
         QVERIFY(trailing.playerRank > leading.playerRank);
     }
 
+    void visualOrderMatchesRankAndKeepsRidersSeparated()
+    {
+        WorkoutGameCompetition competition;
+        QVERIFY(competition.configure(course(), ghost()));
+
+        const auto trailing = competition.update(player(15000, 0, 0.25));
+        QCOMPARE(trailing.playerRank, 5);
+        QCOMPARE(trailing.totalRiders, 5);
+        QCOMPARE(trailing.competitors.size(), std::size_t(4));
+
+        std::vector<double> positions;
+        for (const auto &rider : trailing.competitors) {
+            QVERIFY(rider.relativeProgress > 0.0);
+            positions.push_back(rider.relativeProgress);
+        }
+        std::sort(positions.begin(), positions.end());
+        for (std::size_t index = 1; index < positions.size(); ++index) {
+            QVERIFY(positions[index] - positions[index - 1] >= 0.029);
+        }
+
+        const auto leading = competition.update(player(15000, 100000, 0.25));
+        QCOMPARE(leading.playerRank, 1);
+        for (const auto &rider : leading.competitors) {
+            QVERIFY(rider.relativeProgress < 0.0);
+        }
+    }
+
     void ghostScoreAndRouteAreInterpolatedWithoutExtrapolation()
     {
         WorkoutGameCompetition competition;
@@ -134,7 +162,11 @@ private slots:
         QCOMPARE(rider.route, WorkoutGameRoute::MainLine);
 
         const auto after = competition.update(player(25001, 2600, 0.42));
-        QCOMPARE(after.competitors.size(), std::size_t(3));
+        QCOMPARE(after.competitors.size(), std::size_t(4));
+        QCOMPARE(after.totalRiders, 5);
+        QCOMPARE(after.competitors.back().kind,
+                 WorkoutGameCompetitorKind::Ghost);
+        QCOMPARE(after.competitors.back().score, std::uint64_t(2500));
     }
 
     void ghostForAnotherCourseIsIgnored()

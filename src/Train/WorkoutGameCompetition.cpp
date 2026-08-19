@@ -23,6 +23,8 @@ constexpr std::int64_t RecordingIntervalMs = 5000;
 constexpr double Pi = 3.14159265358979323846;
 constexpr std::array<double, 3> AiEfficiency = {0.84, 0.97, 0.72};
 constexpr std::array<int, 3> AiLane = {-1, 1, -2};
+constexpr double VisualRiderSpacing = 0.03;
+constexpr double MaximumVisualGap = 0.15;
 
 template<typename Integer>
 bool parseInteger(std::string_view input, Integer &value)
@@ -310,9 +312,18 @@ bool WorkoutGameCompetition::ghostAt(
         WorkoutGameGhostPoint &point) const
 {
     if (!WorkoutGameGhostCodec::isValid(configuredGhost)
-            || workoutTimeMs < configuredGhost.points.front().timeMs
-            || workoutTimeMs > configuredGhost.points.back().timeMs) {
+            || workoutTimeMs < 0
+            || workoutTimeMs > configuredCourse.durationMs) {
         return false;
+    }
+
+    if (workoutTimeMs <= configuredGhost.points.front().timeMs) {
+        point = configuredGhost.points.front();
+        return true;
+    }
+    if (workoutTimeMs >= configuredGhost.points.back().timeMs) {
+        point = configuredGhost.points.back();
+        return true;
     }
 
     const auto upper = std::upper_bound(
@@ -341,18 +352,41 @@ bool WorkoutGameCompetition::ghostAt(
     return true;
 }
 
-double WorkoutGameCompetition::visualProgress(
+void WorkoutGameCompetition::assignVisualProgress(
         const WorkoutGameSimulationSnapshot &player,
-        std::uint64_t competitorScore) const
+        std::vector<WorkoutGameCompetitorSnapshot> &competitors) const
 {
-    const double elapsedSeconds = std::max(
-            0.0, double(player.workoutTimeMs) / 1000.0);
-    const double normalizer = std::max(1000.0, elapsedSeconds * 100.0);
-    const long double scoreGap = static_cast<long double>(competitorScore)
-            - static_cast<long double>(player.score);
-    const double offset = std::clamp(
-            double(scoreGap / normalizer) * 0.08, -0.08, 0.08);
-    return std::clamp(player.courseProgress + offset, 0.0, 1.0);
+    std::vector<std::size_t> ahead;
+    std::vector<std::size_t> behind;
+    for (std::size_t index = 0; index < competitors.size(); ++index) {
+        if (competitors[index].score > player.score) ahead.push_back(index);
+        else if (competitors[index].score < player.score) behind.push_back(index);
+        else {
+            competitors[index].relativeProgress = std::clamp(
+                    competitors[index].lane * VisualRiderSpacing,
+                    -MaximumVisualGap, MaximumVisualGap);
+        }
+    }
+
+    std::sort(ahead.begin(), ahead.end(), [&](std::size_t left, std::size_t right) {
+        return competitors[left].score < competitors[right].score;
+    });
+    std::sort(behind.begin(), behind.end(), [&](std::size_t left, std::size_t right) {
+        return competitors[left].score > competitors[right].score;
+    });
+
+    for (std::size_t rank = 0; rank < ahead.size(); ++rank) {
+        competitors[ahead[rank]].relativeProgress = std::min(
+                MaximumVisualGap, VisualRiderSpacing * double(rank + 1));
+    }
+    for (std::size_t rank = 0; rank < behind.size(); ++rank) {
+        competitors[behind[rank]].relativeProgress = -std::min(
+                MaximumVisualGap, VisualRiderSpacing * double(rank + 1));
+    }
+    for (WorkoutGameCompetitorSnapshot &rider : competitors) {
+        rider.courseProgress = std::clamp(
+                player.courseProgress + rider.relativeProgress, 0.0, 1.0);
+    }
 }
 
 WorkoutGameCompetitionSnapshot WorkoutGameCompetition::update(
@@ -377,7 +411,6 @@ WorkoutGameCompetitionSnapshot WorkoutGameCompetition::update(
         rider.identity = identity;
         rider.lane = AiLane[std::size_t(identity)];
         rider.score = aiScore(identity, player.workoutTimeMs);
-        rider.courseProgress = visualProgress(player, rider.score);
         result.competitors.push_back(rider);
     }
 
@@ -388,10 +421,11 @@ WorkoutGameCompetitionSnapshot WorkoutGameCompetition::update(
         rider.identity = 0;
         rider.lane = 2;
         rider.score = ghostPoint.score;
-        rider.courseProgress = visualProgress(player, rider.score);
         rider.route = ghostPoint.route;
         result.competitors.push_back(rider);
     }
+
+    assignVisualProgress(player, result.competitors);
 
     result.playerRank = 1;
     for (const WorkoutGameCompetitorSnapshot &rider : result.competitors) {

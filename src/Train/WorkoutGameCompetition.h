@@ -74,6 +74,7 @@ struct WorkoutGameCompetitorSnapshot
     std::uint64_t score = 0;
     double courseProgress = 0.0;
     WorkoutGameRoute route = WorkoutGameRoute::MainLine;
+    double relativeProgress = 0.0;
 };
 
 struct WorkoutGameCompetitionSnapshot
@@ -98,9 +99,9 @@ private:
     bool ghostAt(
             std::int64_t workoutTimeMs,
             WorkoutGameGhostPoint &point) const;
-    double visualProgress(
+    void assignVisualProgress(
             const WorkoutGameSimulationSnapshot &player,
-            std::uint64_t competitorScore) const;
+            std::vector<WorkoutGameCompetitorSnapshot> &competitors) const;
 
     WorkoutGameCourse configuredCourse;
     WorkoutGameGhostReplay configuredGhost;

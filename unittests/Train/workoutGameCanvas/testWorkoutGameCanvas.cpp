@@ -110,6 +110,8 @@ private slots:
         WorkoutGameVisualSnapshot second = first;
         second.competition.competitors[0].score = 1200;
         second.competition.competitors[0].courseProgress = 0.4;
+        first.competition.competitors[0].relativeProgress = 0.1;
+        second.competition.competitors[0].relativeProgress = 0.2;
 
         WorkoutGameVisualSmoother smoother;
         smoother.setTarget(first, 1000);
@@ -119,6 +121,9 @@ private slots:
         QCOMPARE(halfway.competition.competitors.size(), std::size_t(1));
         QVERIFY(std::abs(
                 halfway.competition.competitors[0].courseProgress - 0.3)
+                < 1e-9);
+        QVERIFY(std::abs(
+                halfway.competition.competitors[0].relativeProgress - 0.15)
                 < 1e-9);
     }
 

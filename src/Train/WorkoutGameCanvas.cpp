@@ -433,8 +433,7 @@ void WorkoutGameCanvas::paintScene(
     if (competition.ready && current.ready) {
         for (const WorkoutGameCompetitorSnapshot &rider : competition.competitors) {
             const double progressGap = std::clamp(
-                    rider.courseProgress - current.courseProgress,
-                    -0.10, 0.10);
+                    rider.relativeProgress, -0.15, 0.15);
             const int x = std::clamp(
                     riderX + int(progressGap * scene.width() * 4.5),
                     scene.left() + wheelRadius * 3,
