@@ -133,7 +133,10 @@ exists(unittests.pri) {
 			   Train/virtualGearRuntime \
 			   Train/workoutGameCanvas \
 			   Train/workoutGameCourse \
+			   Train/workoutGameCourseConversion \
+			   Train/workoutGameCourseDocument \
 			   Train/workoutGameDistanceCourse \
+			   Train/workoutGameDistancePlayback \
 			   Train/workoutGameRendererPolicy \
 			   Train/workoutGameRoadPhysics \
 			   Train/workoutGameSimulation \

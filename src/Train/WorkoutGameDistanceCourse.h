@@ -65,6 +65,11 @@ struct WorkoutGameDistanceCourseGenerationParameters
     WorkoutGameRoadPhysicsParameters roadPhysics;
     double recoveryIntensity = 0.65;
     double shortClimbIntensity = 1.1;
+    double gradeScale = 1.0;
+    double workMinimumDurationScale = 0.9;
+    double workMaximumDurationScale = 1.25;
+    double recoveryMinimumDurationScale = 0.7;
+    double recoveryMaximumDurationScale = 1.5;
     std::int64_t shortClimbMaximumDurationMs = 120000;
     std::int64_t simulationStepMs = 50;
     std::int64_t maximumWorkoutDurationMs = 12 * 60 * 60 * 1000;
@@ -91,6 +96,7 @@ public:
 
     static bool validParameters(
             const WorkoutGameDistanceCourseGenerationParameters &parameters);
+    static bool validCourse(const WorkoutGameDistanceCourse &course);
 };
 
 class WorkoutGameDistanceCourseEstimator

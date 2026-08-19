@@ -65,6 +65,7 @@ WorkoutGameSection adaptSection(
         result.gravityAssisted = false;
         result.challengeCount = 1;
     }
+    result.gradePercent *= parameters.gradeScale;
     return result;
 }
 
@@ -95,31 +96,52 @@ bool validCourseForEstimate(const WorkoutGameDistanceCourse &course)
 {
     if (course.status != WorkoutGameDistanceCourseStatus::Ready
             || course.sections.empty()
+            || course.sections.size() > 10000
             || course.nominalDurationMs <= 0
+            || course.nominalDurationMs > MaximumEstimateDurationMs
             || !std::isfinite(course.totalDistanceMeters)
-            || course.totalDistanceMeters <= 0.0) {
+            || course.totalDistanceMeters <= 0.0
+            || !std::isfinite(course.elevationGainMeters)
+            || !std::isfinite(course.elevationLossMeters)
+            || course.elevationGainMeters < 0.0
+            || course.elevationLossMeters < 0.0) {
         return false;
     }
 
     double expectedStart = 0.0;
+    std::int64_t expectedTime = 0;
     for (const WorkoutGameDistanceCourseSection &section : course.sections) {
         if (!std::isfinite(section.startDistanceMeters)
                 || !std::isfinite(section.lengthMeters)
+                || !std::isfinite(section.startElevationMeters)
+                || !std::isfinite(section.endElevationMeters)
                 || !std::isfinite(section.targetStartWatts)
                 || !std::isfinite(section.targetEndWatts)
                 || !std::isfinite(section.gradePercent)
+                || !std::isfinite(section.difficulty)
                 || std::abs(section.startDistanceMeters - expectedStart) > 0.001
+                || section.sourceStartMs != expectedTime
+                || section.nominalDurationMs <= 0
+                || section.minimumDurationMs <= 0
+                || section.maximumDurationMs < section.nominalDurationMs
+                || section.minimumDurationMs > section.nominalDurationMs
                 || section.lengthMeters < MinimumSectionLengthMeters
                 || section.targetStartWatts < 0.0
                 || section.targetEndWatts < 0.0
                 || section.gradePercent < -30.0
-                || section.gradePercent > 30.0) {
+                || section.gradePercent > 30.0
+                || section.difficulty < 0.0
+                || section.difficulty > 1.0
+                || section.nominalDurationMs
+                    > course.nominalDurationMs - expectedTime) {
             return false;
         }
         expectedStart += section.lengthMeters;
+        expectedTime += section.nominalDurationMs;
         if (!std::isfinite(expectedStart)) return false;
     }
-    return std::abs(expectedStart - course.totalDistanceMeters) <= 0.001;
+    return std::abs(expectedStart - course.totalDistanceMeters) <= 0.001
+            && expectedTime == course.nominalDurationMs;
 }
 
 }
@@ -133,6 +155,21 @@ bool WorkoutGameDistanceCourseBuilder::validParameters(
             && parameters.recoveryIntensity <= 1.0
             && std::isfinite(parameters.shortClimbIntensity)
             && parameters.shortClimbIntensity > parameters.recoveryIntensity
+            && std::isfinite(parameters.gradeScale)
+            && parameters.gradeScale >= 0.5
+            && parameters.gradeScale <= 1.5
+            && std::isfinite(parameters.workMinimumDurationScale)
+            && parameters.workMinimumDurationScale > 0.0
+            && parameters.workMinimumDurationScale <= 1.0
+            && std::isfinite(parameters.workMaximumDurationScale)
+            && parameters.workMaximumDurationScale >= 1.0
+            && parameters.workMaximumDurationScale <= 3.0
+            && std::isfinite(parameters.recoveryMinimumDurationScale)
+            && parameters.recoveryMinimumDurationScale > 0.0
+            && parameters.recoveryMinimumDurationScale <= 1.0
+            && std::isfinite(parameters.recoveryMaximumDurationScale)
+            && parameters.recoveryMaximumDurationScale >= 1.0
+            && parameters.recoveryMaximumDurationScale <= 3.0
             && parameters.shortClimbMaximumDurationMs > 20000
             && parameters.simulationStepMs >= 10
             && parameters.simulationStepMs <= 1000
@@ -141,6 +178,12 @@ bool WorkoutGameDistanceCourseBuilder::validParameters(
                     <= MaximumEstimateDurationMs
             && parameters.maximumSections > 0
             && parameters.maximumSections <= 1000000;
+}
+
+bool WorkoutGameDistanceCourseBuilder::validCourse(
+        const WorkoutGameDistanceCourse &course)
+{
+    return validCourseForEstimate(course);
 }
 
 WorkoutGameDistanceCourse WorkoutGameDistanceCourseBuilder::build(
@@ -191,10 +234,12 @@ WorkoutGameDistanceCourse WorkoutGameDistanceCourseBuilder::build(
         section.nominalDurationMs = interval.durationMs;
         section.minimumDurationMs = scaledDuration(
                 interval.durationMs, isRecoveryFeature(adapted.feature)
-                    ? 0.7 : 0.9);
+                    ? parameters.recoveryMinimumDurationScale
+                    : parameters.workMinimumDurationScale);
         section.maximumDurationMs = scaledDuration(
                 interval.durationMs, isRecoveryFeature(adapted.feature)
-                    ? 1.5 : 1.25);
+                    ? parameters.recoveryMaximumDurationScale
+                    : parameters.workMaximumDurationScale);
         section.startDistanceMeters = before.distanceMeters;
         section.startElevationMeters = before.elevationMeters;
         section.targetStartWatts = interval.startWatts;
@@ -251,7 +296,7 @@ WorkoutGameDistanceCourseEstimate WorkoutGameDistanceCourseEstimator::estimate(
         std::int64_t rawSimulationStepMs)
 {
     WorkoutGameDistanceCourseEstimate result;
-    if (!validCourseForEstimate(course)
+    if (!WorkoutGameDistanceCourseBuilder::validCourse(course)
             || !WorkoutGameRoadPhysics::validParameters(physicsParameters)
             || !std::isfinite(rawPowerScale)
             || rawPowerScale < 0.0
