@@ -190,6 +190,43 @@ The initial course format is distance-authored and offline:
 - optional target power or power-zone guidance for selected segments; and
 - deterministic seed, checkpoints, branches, and finish metadata.
 
+### Unified MTB Course Generator
+
+GoldenCheetah should expose one `Generate MTB Course` workflow from both the
+workout library and activity history. It always creates a new editable private
+course workout and never modifies the source workout or activity.
+
+The generator supports three source combinations:
+
+- `Workout`: convert an ERG workout into a procedural MTB route. Interval
+  duration, target power, ramps, and recoveries determine climbs, descents,
+  connectors, and game features.
+- `Past activity`: convert a previously synchronized activity into a compressed
+  MTB course and derive an optional editable target-power profile from its
+  recorded effort.
+- `Workout + past activity`: use the ERG file as the authoritative training
+  prescription and the activity as the terrain template. Match hard intervals
+  to suitable climbs or technical sections and recoveries to descents or easy
+  connectors, synthesizing or resizing terrain only where the source activity
+  cannot accommodate the workout safely.
+
+All variants produce the same course data model and open in the same editor.
+The generated draft records source identifiers, conversion parameters, and a
+deterministic seed for reproducibility, but keeps athlete and activity data in
+the private athlete directory.
+
+The command is available as `Generate MTB Course...` in the context menu of a
+compatible ERG workout or activity. The wizard then allows an optional second
+source, terrain style, connector compression, target duration, trainer
+difficulty, and generation seed. Its final preview compares source and output
+duration, distance, elevation gain, target load, and any sections that were
+trimmed, synthesized, or assigned a safe bypass.
+
+An ERG-only source remains fully useful without GPS or Strava: the procedural
+generator creates all terrain. An activity without power remains useful as a
+terrain-only source. Missing optional streams degrade generation choices rather
+than preventing course creation.
+
 This mode must not reinterpret an existing time-based ERG file implicitly. A
 separate course file or an explicit conversion creates a stable distance route.
 The conversion UI must show that completion time becomes variable.
