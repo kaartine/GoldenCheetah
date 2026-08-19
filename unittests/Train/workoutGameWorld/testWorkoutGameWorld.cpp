@@ -335,6 +335,29 @@ private slots:
         QCOMPARE(reset.centerElevationMeters, 6.2);
     }
 
+    void terrainGenerationChangeKeepsCameraContinuous()
+    {
+        WorkoutGameWorldSnapshot world;
+        world.ready = true;
+        world.generation = 1;
+        world.terrain = WorkoutGameTerrainKind::SmoothTrail;
+        world.rider.distanceMeters = 80.0;
+
+        WorkoutGameCamera camera;
+        QCOMPARE(camera.update(world, 0.016).yawDegrees, 90.0);
+
+        world.generation = 2;
+        world.terrain = WorkoutGameTerrainKind::RockGarden;
+        world.rider.distanceMeters = 80.5;
+        const WorkoutGameCameraSnapshot transition =
+                camera.update(world, 0.016);
+
+        QVERIFY(transition.centerDistanceMeters > 80.0);
+        QVERIFY(transition.centerDistanceMeters < 80.5);
+        QVERIFY(transition.yawDegrees < 90.0);
+        QVERIFY(transition.yawDegrees > 42.0);
+    }
+
     void invalidInputsCannotPoisonCameraState()
     {
         WorkoutGameWorldSnapshot world;

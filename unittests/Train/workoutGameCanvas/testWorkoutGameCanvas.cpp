@@ -10,6 +10,7 @@
 #include "Train/WorkoutGameCanvas.h"
 #include "Train/WorkoutGameCompetition.h"
 #include "Train/WorkoutGameOpenGLCanvas.h"
+#include "Train/WorkoutGameTerrainTransition.h"
 #include "Train/WorkoutGameVisualSmoother.h"
 
 #include <QGuiApplication>
@@ -46,6 +47,18 @@ int changedPixels(const QImage &first, const QImage &second)
     if (first.size() != second.size()) return 0;
     int changed = 0;
     for (int y = 0; y < first.height(); y += 2) {
+        for (int x = 0; x < first.width(); x += 2) {
+            if (first.pixel(x, y) != second.pixel(x, y)) ++changed;
+        }
+    }
+    return changed;
+}
+
+int changedScenePixels(const QImage &first, const QImage &second)
+{
+    if (first.size() != second.size()) return 0;
+    int changed = 0;
+    for (int y = 80; y < first.height() - 10; y += 2) {
         for (int x = 0; x < first.width(); x += 2) {
             if (first.pixel(x, y) != second.pixel(x, y)) ++changed;
         }
@@ -234,7 +247,7 @@ private slots:
         QCOMPARE(smoother.sample(5000).world.rider.distanceMeters, 35.0);
     }
 
-    void visualStateDoesNotBlendAcrossCourseSections()
+    void visualStateCutsOnlyWhenCoursePositionResets()
     {
         WorkoutGameVisualSnapshot first;
         first.simulation.ready = true;
@@ -254,6 +267,171 @@ private slots:
         smoother.setTarget(second, 200);
         QCOMPARE(smoother.sample(200).simulation.activeSection, 2);
         QCOMPARE(smoother.sample(200).world.rider.distanceMeters, 1.0);
+    }
+
+    void visualStateBlendsAcrossContinuousCourseSections()
+    {
+        WorkoutGameVisualSnapshot first;
+        first.simulation.ready = true;
+        first.simulation.activeSection = 1;
+        first.world.ready = true;
+        first.world.generation = 3;
+        first.world.terrain = WorkoutGameTerrainKind::Roots;
+        first.world.rider.distanceMeters = 20.0;
+        first.camera.ready = true;
+        first.camera.yawDegrees = 42.0;
+
+        WorkoutGameVisualSnapshot second = first;
+        second.simulation.activeSection = 2;
+        second.world.generation = 4;
+        second.world.terrain = WorkoutGameTerrainKind::Climb;
+        second.world.rider.distanceMeters = 21.0;
+        second.camera.yawDegrees = 90.0;
+
+        WorkoutGameVisualSmoother smoother;
+        smoother.setTarget(first, 0);
+        smoother.setTarget(second, 200);
+        const WorkoutGameVisualSnapshot start = smoother.sample(200);
+        const WorkoutGameVisualSnapshot halfway = smoother.sample(300);
+
+        QCOMPARE(start.world.rider.distanceMeters, 20.0);
+        QCOMPARE(start.camera.yawDegrees, 42.0);
+        QCOMPARE(halfway.world.rider.distanceMeters, 20.5);
+        QCOMPARE(halfway.camera.yawDegrees, 66.0);
+        QVERIFY(start.terrainTransition.active);
+        QCOMPARE(start.terrainTransition.progress, 0.0);
+    }
+
+    void terrainTransitionUsesSmoothTimedCrossfade()
+    {
+        WorkoutGameWorldSnapshot roots;
+        roots.ready = true;
+        roots.generation = 1;
+        roots.terrain = WorkoutGameTerrainKind::Roots;
+        roots.seed = 99u;
+        roots.difficulty = 0.7;
+        roots.terrainOffsetMeters = 4.0;
+        roots.rider.distanceMeters = 20.0;
+
+        WorkoutGameTerrainTransition transition;
+        transition.setTarget(roots, 100);
+        QVERIFY(!transition.sample(100).active);
+
+        WorkoutGameWorldSnapshot rocks = roots;
+        rocks.generation = 2;
+        rocks.terrain = WorkoutGameTerrainKind::RockGarden;
+        rocks.terrainOffsetMeters = -16.0;
+        transition.setTarget(rocks, 200);
+
+        const WorkoutGameTerrainTransitionSnapshot start =
+                transition.sample(200);
+        const WorkoutGameTerrainTransitionSnapshot halfway =
+                transition.sample(700);
+        const WorkoutGameTerrainTransitionSnapshot finished =
+                transition.sample(1200);
+        QVERIFY(start.active);
+        QCOMPARE(start.from.terrain, WorkoutGameTerrainKind::Roots);
+        QCOMPARE(start.from.terrainOffsetMeters, 4.0);
+        QCOMPARE(start.progress, 0.0);
+        QVERIFY(halfway.active);
+        QCOMPARE(halfway.progress, 0.5);
+        QVERIFY(!finished.active);
+        QCOMPARE(finished.progress, 1.0);
+    }
+
+    void terrainTransitionDoesNotBlendAcrossSessionReset()
+    {
+        WorkoutGameWorldSnapshot before;
+        before.ready = true;
+        before.generation = 2;
+        before.terrain = WorkoutGameTerrainKind::Roots;
+        before.rider.distanceMeters = 80.0;
+
+        WorkoutGameTerrainTransition transition;
+        transition.setTarget(before, 100);
+        WorkoutGameWorldSnapshot reset = before;
+        reset.generation = 3;
+        reset.terrain = WorkoutGameTerrainKind::SmoothTrail;
+        reset.rider.distanceMeters = 0.0;
+        transition.setTarget(reset, 200);
+
+        const WorkoutGameTerrainTransitionSnapshot snapshot =
+                transition.sample(200);
+        QVERIFY(!snapshot.active);
+        QCOMPARE(snapshot.progress, 1.0);
+        QCOMPARE(snapshot.from.terrain,
+                 WorkoutGameTerrainKind::SmoothTrail);
+    }
+
+    void terrainKindsHaveDistinctScenesAndCrossfadeContinuously()
+    {
+        const WorkoutGameCourse course = WorkoutGameCourseBuilder::build(
+                {{0, 10000, 200.0, 200.0}}, 200.0, 99u);
+        WorkoutGameSimulationSnapshot simulation;
+        simulation.ready = true;
+        simulation.activeSection = 0;
+        simulation.speedKph = 22.0;
+        WorkoutGameCompetitionSnapshot competition;
+        WorkoutGameCameraSnapshot camera;
+        camera.ready = true;
+        camera.yawDegrees = 90.0;
+
+        const auto renderTerrain = [&](WorkoutGameTerrainKind terrain,
+                                       const WorkoutGameTerrainTransitionSnapshot &transition) {
+            WorkoutGameWorldSnapshot world;
+            world.ready = true;
+            world.generation = 2;
+            world.terrain = terrain;
+            world.seed = 99u;
+            world.difficulty = 0.8;
+            world.rider.distanceMeters = 20.0;
+            world.rider.clearanceMeters = 0.82;
+            QImage image(960, 540, QImage::Format_ARGB32_Premultiplied);
+            image.fill(Qt::transparent);
+            QPainter painter(&image);
+            WorkoutGameCanvas::paintScene(
+                    painter, image.rect(), course, simulation, competition,
+                    world, camera, transition,
+                    200.0, 200.0, 85, 140, 10, 0, 60.0,
+                    QStringLiteral("TEST"));
+            return image;
+        };
+
+        const WorkoutGameTerrainTransitionSnapshot settled;
+        const QImage trail = renderTerrain(
+                WorkoutGameTerrainKind::SmoothTrail, settled);
+        for (WorkoutGameTerrainKind terrain : {
+                WorkoutGameTerrainKind::Roots,
+                WorkoutGameTerrainKind::Rollers,
+                WorkoutGameTerrainKind::Climb,
+                WorkoutGameTerrainKind::RockGarden,
+                WorkoutGameTerrainKind::BunnyHop,
+                WorkoutGameTerrainKind::Drop,
+                WorkoutGameTerrainKind::Skinny,
+                WorkoutGameTerrainKind::Berm}) {
+            QVERIFY(changedScenePixels(
+                    trail, renderTerrain(terrain, settled)) > 500);
+        }
+
+        WorkoutGameTerrainTransitionSnapshot start;
+        start.active = true;
+        start.from.terrain = WorkoutGameTerrainKind::Roots;
+        start.from.seed = 99u;
+        start.from.difficulty = 0.8;
+        start.progress = 0.0;
+        const QImage roots = renderTerrain(
+                WorkoutGameTerrainKind::Roots, settled);
+        const QImage rocks = renderTerrain(
+                WorkoutGameTerrainKind::RockGarden, settled);
+        const QImage transitionStart = renderTerrain(
+                WorkoutGameTerrainKind::RockGarden, start);
+        QCOMPARE(changedScenePixels(roots, transitionStart), 0);
+
+        start.progress = 0.5;
+        const QImage transitionMiddle = renderTerrain(
+                WorkoutGameTerrainKind::RockGarden, start);
+        QVERIFY(changedScenePixels(roots, transitionMiddle) > 100);
+        QVERIFY(changedScenePixels(rocks, transitionMiddle) > 100);
     }
 
     void frameRateCounterMeasuresCompletedFrameIntervals()

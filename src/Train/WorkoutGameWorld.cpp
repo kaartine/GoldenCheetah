@@ -555,7 +555,10 @@ WorkoutGameCameraSnapshot WorkoutGameCamera::update(
             finiteOr(world.rider.pitchDegrees, 0.0) * 0.3,
             -12.0, 12.0);
 
-    if (!initialized || world.generation != currentGeneration) {
+    const bool worldReset = initialized
+            && world.generation != currentGeneration
+            && distance + 2.0 < current.centerDistanceMeters;
+    if (!initialized || worldReset) {
         current.ready = true;
         current.mode = mode;
         current.centerDistanceMeters = distance;

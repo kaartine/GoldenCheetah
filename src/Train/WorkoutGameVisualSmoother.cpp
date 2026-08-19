@@ -69,12 +69,14 @@ void WorkoutGameVisualSmoother::reset()
     previous = WorkoutGameVisualSnapshot();
     predictionOrigin = WorkoutGameVisualSnapshot();
     target = WorkoutGameVisualSnapshot();
+    terrainTransition.reset();
 }
 
 void WorkoutGameVisualSmoother::setTarget(
         const WorkoutGameVisualSnapshot &snapshot,
         std::int64_t monotonicTimeMs)
 {
+    terrainTransition.setTarget(snapshot.world, monotonicTimeMs);
     if (!initialized
             || monotonicTimeMs < transitionStartMs
             || isDiscontinuity(target, snapshot)) {
@@ -120,6 +122,7 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::sample(
             double(elapsedMs) / double(TransitionDurationMs),
             0.0, 1.0);
     WorkoutGameVisualSnapshot result = interpolate(previous, target, amount);
+    result.terrainTransition = terrainTransition.sample(monotonicTimeMs);
 
     const std::int64_t predictionMs = std::clamp<std::int64_t>(
             elapsedMs - TransitionDurationMs, 0, MaximumPredictionMs);
@@ -179,13 +182,14 @@ bool WorkoutGameVisualSmoother::isDiscontinuity(
         const WorkoutGameVisualSnapshot &from,
         const WorkoutGameVisualSnapshot &to)
 {
+    const bool worldReset = from.world.ready && to.world.ready
+            && from.world.generation != to.world.generation
+            && to.world.rider.distanceMeters + 2.0
+                    < from.world.rider.distanceMeters;
     return from.simulation.ready != to.simulation.ready
             || from.simulation.finished != to.simulation.finished
-            || from.simulation.activeSection != to.simulation.activeSection
             || from.world.ready != to.world.ready
-            || (from.world.ready
-                && (from.world.generation != to.world.generation
-                    || from.world.terrain != to.world.terrain))
+            || worldReset
             || from.camera.ready != to.camera.ready
             || !sameCompetitors(from.competition, to.competition);
 }
@@ -225,8 +229,11 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::interpolate(
             from.world.gradePercent, to.world.gradePercent, amount);
     result.world.difficulty = lerp(
             from.world.difficulty, to.world.difficulty, amount);
-    result.world.terrainOffsetMeters = lerp(
-            from.world.terrainOffsetMeters, to.world.terrainOffsetMeters, amount);
+    result.world.terrainOffsetMeters = from.world.generation
+                    == to.world.generation
+            ? lerp(from.world.terrainOffsetMeters,
+                   to.world.terrainOffsetMeters, amount)
+            : to.world.terrainOffsetMeters;
     result.world.speedMetersPerSecond = lerp(
             from.world.speedMetersPerSecond,
             to.world.speedMetersPerSecond, amount);

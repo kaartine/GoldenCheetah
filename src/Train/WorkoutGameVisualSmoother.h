@@ -12,6 +12,7 @@
 
 #include "WorkoutGameCompetition.h"
 #include "WorkoutGameSimulation.h"
+#include "WorkoutGameTerrainTransition.h"
 #include "WorkoutGameWorld.h"
 
 #include <cstdint>
@@ -22,6 +23,7 @@ struct WorkoutGameVisualSnapshot
     WorkoutGameCompetitionSnapshot competition;
     WorkoutGameWorldSnapshot world;
     WorkoutGameCameraSnapshot camera;
+    WorkoutGameTerrainTransitionSnapshot terrainTransition;
 };
 
 class WorkoutGameVisualSmoother
@@ -54,6 +56,7 @@ private:
     WorkoutGameVisualSnapshot previous;
     WorkoutGameVisualSnapshot predictionOrigin;
     WorkoutGameVisualSnapshot target;
+    WorkoutGameTerrainTransition terrainTransition;
 };
 
 class WorkoutGameFrameRateCounter

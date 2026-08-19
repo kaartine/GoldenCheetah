@@ -31,6 +31,49 @@ QColor dirtHighlightColor() { return QColor(220, 177, 99); }
 QColor inkColor() { return QColor(20, 27, 31); }
 QColor riderKeylineColor() { return QColor(246, 239, 215); }
 
+struct TerrainPalette
+{
+    QColor ground;
+    QColor highlight;
+    QColor accent;
+};
+
+TerrainPalette terrainPalette(WorkoutGameTerrainKind terrain)
+{
+    switch (terrain) {
+    case WorkoutGameTerrainKind::Roots:
+        return {{113, 70, 43}, {201, 146, 76}, {67, 44, 32}};
+    case WorkoutGameTerrainKind::Rollers:
+        return {{151, 94, 48}, {236, 189, 91}, {91, 65, 39}};
+    case WorkoutGameTerrainKind::Climb:
+        return {{130, 76, 47}, {224, 159, 84}, {77, 63, 48}};
+    case WorkoutGameTerrainKind::RockGarden:
+        return {{105, 91, 77}, {184, 169, 132}, {57, 64, 63}};
+    case WorkoutGameTerrainKind::BunnyHop:
+        return {{139, 86, 48}, {232, 183, 82}, {190, 62, 48}};
+    case WorkoutGameTerrainKind::Drop:
+        return {{121, 77, 51}, {214, 157, 88}, {232, 197, 78}};
+    case WorkoutGameTerrainKind::Skinny:
+        return {{92, 78, 55}, {191, 154, 83}, {53, 47, 38}};
+    case WorkoutGameTerrainKind::Berm:
+        return {{151, 83, 50}, {228, 165, 84}, {72, 91, 76}};
+    case WorkoutGameTerrainKind::SmoothTrail:
+        return {dirtColor(), dirtHighlightColor(), QColor(91, 65, 39)};
+    }
+    return {dirtColor(), dirtHighlightColor(), QColor(91, 65, 39)};
+}
+
+QColor blendColor(const QColor &from, const QColor &to, double amount)
+{
+    const double blend = std::clamp(amount, 0.0, 1.0);
+    return QColor(
+            int(std::lround(from.red() + (to.red() - from.red()) * blend)),
+            int(std::lround(from.green()
+                    + (to.green() - from.green()) * blend)),
+            int(std::lround(from.blue()
+                    + (to.blue() - from.blue()) * blend)));
+}
+
 constexpr int RiderKeylineRadius = 3;
 
 const QPixmap &riderSourcePixmap()
@@ -92,7 +135,7 @@ void WorkoutGameCanvas::setCompetition(
 {
     competition = newCompetition;
     visualSmoother.setTarget(
-            {current, competition, world, camera}, visualClock.elapsed());
+            {current, competition, world, camera, {}}, visualClock.elapsed());
     update();
 }
 
@@ -103,7 +146,7 @@ void WorkoutGameCanvas::setWorld(
     world = newWorld;
     camera = newCamera;
     visualSmoother.setTarget(
-            {current, competition, world, camera}, visualClock.elapsed());
+            {current, competition, world, camera, {}}, visualClock.elapsed());
     update();
 }
 
@@ -158,7 +201,7 @@ void WorkoutGameCanvas::setSnapshot(
     heartRate = std::max(0, newHeartRate);
     virtualGear = std::max(1, newVirtualGear);
     visualSmoother.setTarget(
-            {current, competition, world, camera}, visualClock.elapsed());
+            {current, competition, world, camera, {}}, visualClock.elapsed());
     update();
 }
 
@@ -235,19 +278,35 @@ double WorkoutGameCanvas::physicsTrailY(
         const WorkoutGameWorldSnapshot &world,
         const WorkoutGameCameraSnapshot &camera)
 {
+    WorkoutGameTerrainProfile profile;
+    profile.terrain = world.terrain;
+    profile.seed = world.seed;
+    profile.gradePercent = world.gradePercent;
+    profile.difficulty = world.difficulty;
+    profile.terrainOffsetMeters = world.terrainOffsetMeters;
+    return terrainProfileY(x, scene, world, camera, profile);
+}
+
+double WorkoutGameCanvas::terrainProfileY(
+        double x,
+        const QRect &scene,
+        const WorkoutGameWorldSnapshot &world,
+        const WorkoutGameCameraSnapshot &camera,
+        const WorkoutGameTerrainProfile &profile)
+{
     const double width = std::max(1, scene.width());
     const double pixelsPerMeter = width / 42.0;
     const double riderX = scene.left() + width * 0.28;
     const double distance = world.rider.distanceMeters
-            + world.terrainOffsetMeters + (x - riderX) / pixelsPerMeter;
+            + profile.terrainOffsetMeters + (x - riderX) / pixelsPerMeter;
     const double riderTerrainDistance = world.rider.distanceMeters
-            + world.terrainOffsetMeters;
+            + profile.terrainOffsetMeters;
     const double height = WorkoutGamePhysics::terrainHeight(
-            world.terrain, distance, world.gradePercent,
-            world.difficulty, world.seed);
+            profile.terrain, distance, profile.gradePercent,
+            profile.difficulty, profile.seed);
     const double riderHeight = WorkoutGamePhysics::terrainHeight(
-            world.terrain, riderTerrainDistance, world.gradePercent,
-            world.difficulty, world.seed);
+            profile.terrain, riderTerrainDistance, profile.gradePercent,
+            profile.difficulty, profile.seed);
     const double yaw = camera.ready ? camera.yawDegrees : 90.0;
     const double verticalScale = 0.72
             + 0.28 * std::sin(std::clamp(yaw, 0.0, 90.0) * Pi / 180.0);
@@ -268,6 +327,7 @@ void WorkoutGameCanvas::paintEvent(QPaintEvent *)
     paintScene(
             painter, rect(), course, visual.simulation, visual.competition,
             visual.world, visual.camera,
+            visual.terrainTransition,
             watts, targetWatts, cadenceRpm, heartRate, virtualGear,
             animationFrame, fps, QStringLiteral("CPU"));
 }
@@ -337,6 +397,7 @@ void WorkoutGameCanvas::paintScene(
         const WorkoutGameCompetitionSnapshot &competition,
         const WorkoutGameWorldSnapshot &world,
         const WorkoutGameCameraSnapshot &camera,
+        const WorkoutGameTerrainTransitionSnapshot &terrainTransition,
         double watts,
         double targetWatts,
         int cadenceRpm,
@@ -391,9 +452,26 @@ void WorkoutGameCanvas::paintScene(
     }
 
     const auto sceneTrailY = [&](double x) {
-        return world.ready
-                ? physicsTrailY(x, scene, world, camera)
-                : trailY(x, scene, course, current);
+        if (!world.ready) return trailY(x, scene, course, current);
+        const double currentY = physicsTrailY(x, scene, world, camera);
+        if (!terrainTransition.active) return currentY;
+        const double previousY = terrainProfileY(
+                x, scene, world, camera, terrainTransition.from);
+        return previousY
+                + (currentY - previousY) * terrainTransition.progress;
+    };
+
+    const TerrainPalette currentPalette = terrainPalette(world.terrain);
+    const TerrainPalette previousPalette = terrainTransition.active
+            ? terrainPalette(terrainTransition.from.terrain)
+            : currentPalette;
+    const double terrainBlend = terrainTransition.active
+            ? terrainTransition.progress : 1.0;
+    const TerrainPalette palette = {
+        blendColor(previousPalette.ground, currentPalette.ground, terrainBlend),
+        blendColor(previousPalette.highlight,
+                   currentPalette.highlight, terrainBlend),
+        blendColor(previousPalette.accent, currentPalette.accent, terrainBlend)
     };
 
     QPainterPath ground;
@@ -405,10 +483,12 @@ void WorkoutGameCanvas::paintScene(
     ground.lineTo(scene.right(), scene.bottom());
     ground.lineTo(scene.left(), scene.bottom());
     ground.closeSubpath();
-    painter.setBrush(dirtColor());
+    painter.setBrush(world.ready ? palette.ground : dirtColor());
     painter.drawPath(ground);
 
-    painter.setPen(QPen(dirtHighlightColor(), std::clamp(viewport.height() / 90, 3, 8)));
+    painter.setPen(QPen(
+            world.ready ? palette.highlight : dirtHighlightColor(),
+            std::clamp(viewport.height() / 90, 3, 8)));
     for (int x = scene.left(); x < scene.right(); x += sampleWidth) {
         painter.drawLine(
                 QPointF(x, sceneTrailY(x)),
@@ -427,6 +507,69 @@ void WorkoutGameCanvas::paintScene(
                             sceneTrailY(x + sampleWidth) + trailWidth));
         }
     }
+
+    const auto drawTerrainDetails = [&](WorkoutGameTerrainKind terrain,
+                                        double opacity) {
+        if (!world.ready || opacity <= 0.0) return;
+        painter.save();
+        painter.setOpacity(std::clamp(opacity, 0.0, 1.0));
+        painter.setPen(QPen(palette.accent,
+                            std::clamp(viewport.height() / 180, 2, 4)));
+        painter.setBrush(palette.accent);
+        const int spacing = std::clamp(viewport.width() / 9, 72, 150);
+        for (int x = scene.left() + spacing / 2;
+             x < scene.right(); x += spacing) {
+            const int y = int(sceneTrailY(x));
+            switch (terrain) {
+            case WorkoutGameTerrainKind::Roots:
+                painter.drawArc(
+                        QRect(x - 18, y - 6, 36, 13), 0, 180 * 16);
+                painter.drawLine(x - 21, y + 1, x + 22, y - 2);
+                break;
+            case WorkoutGameTerrainKind::RockGarden: {
+                QPolygon rock;
+                rock << QPoint(x - 13, y)
+                     << QPoint(x - 7, y - 12)
+                     << QPoint(x + 5, y - 16)
+                     << QPoint(x + 15, y);
+                painter.drawPolygon(rock);
+                break;
+            }
+            case WorkoutGameTerrainKind::Climb:
+                painter.drawLine(x - 14, y, x - 4, y - 10);
+                painter.drawLine(x - 4, y - 10, x + 6, y);
+                break;
+            case WorkoutGameTerrainKind::Rollers:
+                painter.drawEllipse(QPoint(x, y - 4), 4, 4);
+                break;
+            case WorkoutGameTerrainKind::BunnyHop:
+                painter.drawRect(x - 3, y - 18, 6, 18);
+                painter.drawLine(x - 14, y - 18, x + 14, y - 18);
+                break;
+            case WorkoutGameTerrainKind::Drop:
+                painter.drawLine(x - 10, y - 13, x + 10, y - 13);
+                painter.drawLine(x, y - 13, x, y);
+                break;
+            case WorkoutGameTerrainKind::Skinny:
+                painter.drawLine(x - spacing / 2, y - 3,
+                                 x + spacing / 2, y - 3);
+                break;
+            case WorkoutGameTerrainKind::Berm:
+                painter.drawArc(
+                        QRect(x - 24, y - 14, 48, 24), 0, 180 * 16);
+                break;
+            case WorkoutGameTerrainKind::SmoothTrail:
+                painter.drawEllipse(QPoint(x, y - 2), 2, 2);
+                break;
+            }
+        }
+        painter.restore();
+    };
+    if (terrainTransition.active) {
+        drawTerrainDetails(
+                terrainTransition.from.terrain, 1.0 - terrainBlend);
+    }
+    drawTerrainDetails(world.terrain, terrainBlend);
 
     const int riderX = int(viewport.width() * 0.28);
     const int wheelRadius = std::clamp(viewport.height() / 30, 7, 18);

@@ -64,6 +64,7 @@ public:
             const WorkoutGameCompetitionSnapshot &competition,
             const WorkoutGameWorldSnapshot &world,
             const WorkoutGameCameraSnapshot &camera,
+            const WorkoutGameTerrainTransitionSnapshot &terrainTransition,
             double watts,
             double targetWatts,
             int cadenceRpm,
@@ -89,6 +90,12 @@ private:
             const QRect &scene,
             const WorkoutGameWorldSnapshot &world,
             const WorkoutGameCameraSnapshot &camera);
+    static double terrainProfileY(
+            double x,
+            const QRect &scene,
+            const WorkoutGameWorldSnapshot &world,
+            const WorkoutGameCameraSnapshot &camera,
+            const WorkoutGameTerrainProfile &profile);
     static QString featureName(WorkoutGameFeature feature);
     static QString terrainName(WorkoutGameTerrainKind terrain);
 

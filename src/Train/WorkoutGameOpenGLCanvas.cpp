@@ -51,7 +51,7 @@ void WorkoutGameOpenGLCanvas::setCompetition(
 {
     competition = newCompetition;
     visualSmoother.setTarget(
-            {current, competition, world, camera}, visualClock.elapsed());
+            {current, competition, world, camera, {}}, visualClock.elapsed());
     update();
 }
 
@@ -62,7 +62,7 @@ void WorkoutGameOpenGLCanvas::setWorld(
     world = newWorld;
     camera = newCamera;
     visualSmoother.setTarget(
-            {current, competition, world, camera}, visualClock.elapsed());
+            {current, competition, world, camera, {}}, visualClock.elapsed());
     update();
 }
 
@@ -117,7 +117,7 @@ void WorkoutGameOpenGLCanvas::setSnapshot(
     heartRate = std::max(0, newHeartRate);
     virtualGear = std::max(1, newVirtualGear);
     visualSmoother.setTarget(
-            {current, competition, world, camera}, visualClock.elapsed());
+            {current, competition, world, camera, {}}, visualClock.elapsed());
     update();
 }
 
@@ -180,6 +180,7 @@ void WorkoutGameOpenGLCanvas::paintGL()
     WorkoutGameCanvas::paintScene(
             painter, rect(), course, visual.simulation, visual.competition,
             visual.world, visual.camera,
+            visual.terrainTransition,
             watts, targetWatts, cadenceRpm, heartRate, virtualGear,
             animationFrame, fps, rendererLabel);
 }
