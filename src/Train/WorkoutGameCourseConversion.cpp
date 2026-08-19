@@ -8,6 +8,7 @@
  */
 
 #include "WorkoutGameCourseConversion.h"
+#include "WorkoutGameFeatureCatalog.h"
 
 #include <cmath>
 
@@ -29,19 +30,8 @@ void countFeatures(
         WorkoutGameCourseConversionSummary &summary)
 {
     for (const WorkoutGameDistanceCourseSection &section : course.sections) {
-        switch (section.terrain) {
-        case WorkoutGameTerrainKind::Roots:
-        case WorkoutGameTerrainKind::RockGarden:
-        case WorkoutGameTerrainKind::Rollers:
-        case WorkoutGameTerrainKind::BunnyHop:
-        case WorkoutGameTerrainKind::Berm:
-        case WorkoutGameTerrainKind::Skinny:
+        if (WorkoutGameFeatureCatalog::definition(section.terrain).technical) {
             ++summary.technicalFeatureCount;
-            break;
-        case WorkoutGameTerrainKind::SmoothTrail:
-        case WorkoutGameTerrainKind::Climb:
-        case WorkoutGameTerrainKind::Drop:
-            break;
         }
         switch (section.feature) {
         case WorkoutGameFeature::Climb:

@@ -23,7 +23,10 @@ enum class WorkoutGameTerrainKind
     BunnyHop,
     Drop,
     Skinny,
-    Berm
+    Berm,
+    LogOver,
+    Tabletop,
+    RockSlab
 };
 
 struct WorkoutGameVehiclePose

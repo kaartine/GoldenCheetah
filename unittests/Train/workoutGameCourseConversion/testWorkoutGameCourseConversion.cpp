@@ -119,6 +119,15 @@ private slots:
                 < balanced.summary.technicalFeatureCount);
         QVERIFY(balanced.summary.technicalFeatureCount
                 < rideFirst.summary.technicalFeatureCount);
+        bool hasNewRideFeature = false;
+        for (const WorkoutGameDistanceCourseSection &section
+                : rideFirst.course.sections) {
+            hasNewRideFeature = hasNewRideFeature
+                    || section.terrain == WorkoutGameTerrainKind::LogOver
+                    || section.terrain == WorkoutGameTerrainKind::Tabletop
+                    || section.terrain == WorkoutGameTerrainKind::RockSlab;
+        }
+        QVERIFY(hasNewRideFeature);
 
         for (std::size_t index = 0; index < balanced.course.sections.size(); ++index) {
             QCOMPARE(workoutFirst.course.sections[index].targetStartWatts,

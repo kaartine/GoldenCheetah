@@ -180,12 +180,24 @@ private slots:
         QVERIFY(maximum - minimum > 0.08);
     }
 
-    void bunnyHopLeavesGroundAndLands()
+    void jumpableFeaturesLeaveGroundAndLand_data()
     {
+        QTest::addColumn<int>("terrain");
+        QTest::newRow("bunny-hop")
+                << int(WorkoutGameTerrainKind::BunnyHop);
+        QTest::newRow("log-over")
+                << int(WorkoutGameTerrainKind::LogOver);
+        QTest::newRow("tabletop")
+                << int(WorkoutGameTerrainKind::Tabletop);
+    }
+
+    void jumpableFeaturesLeaveGroundAndLand()
+    {
+        QFETCH(int, terrain);
         WorkoutGamePhysics physics;
         QVERIFY(physics.configure(997u));
         WorkoutGamePhysicsInput input;
-        input.terrain = WorkoutGameTerrainKind::BunnyHop;
+        input.terrain = WorkoutGameTerrainKind(terrain);
         input.desiredSpeedMetersPerSecond = 6.0;
         input.effortRatio = 1.0;
         input.jumpRequested = true;
@@ -260,10 +272,29 @@ private slots:
                 WorkoutGameTerrainKind::BunnyHop,
                 WorkoutGameTerrainKind::Drop,
                 WorkoutGameTerrainKind::Skinny,
-                WorkoutGameTerrainKind::Berm}) {
+                WorkoutGameTerrainKind::Berm,
+                WorkoutGameTerrainKind::LogOver,
+                WorkoutGameTerrainKind::Tabletop,
+                WorkoutGameTerrainKind::RockSlab}) {
             QCOMPARE(WorkoutGameCamera::preferredMode(terrain),
                      WorkoutGameCameraMode::ThreeQuarter);
         }
+    }
+
+    void addedFeaturesHaveDistinctRideableProfiles()
+    {
+        const double flat = WorkoutGamePhysics::terrainHeight(
+                WorkoutGameTerrainKind::SmoothTrail, 30.0, 0.0, 0.7, 0u);
+        const double log = WorkoutGamePhysics::terrainHeight(
+                WorkoutGameTerrainKind::LogOver, 30.0, 0.0, 0.7, 0u);
+        const double tabletop = WorkoutGamePhysics::terrainHeight(
+                WorkoutGameTerrainKind::Tabletop, 30.0, 0.0, 0.7, 0u);
+        const double slab = WorkoutGamePhysics::terrainHeight(
+                WorkoutGameTerrainKind::RockSlab, 30.0, 0.0, 0.7, 0u);
+
+        QVERIFY(log > flat + 0.15);
+        QVERIFY(tabletop > flat + 0.3);
+        QVERIFY(slab > flat + 0.1);
     }
 
     void initialSnapshotFramesTheRider()

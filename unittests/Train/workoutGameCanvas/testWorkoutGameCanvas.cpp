@@ -408,7 +408,10 @@ private slots:
                 WorkoutGameTerrainKind::BunnyHop,
                 WorkoutGameTerrainKind::Drop,
                 WorkoutGameTerrainKind::Skinny,
-                WorkoutGameTerrainKind::Berm}) {
+                WorkoutGameTerrainKind::Berm,
+                WorkoutGameTerrainKind::LogOver,
+                WorkoutGameTerrainKind::Tabletop,
+                WorkoutGameTerrainKind::RockSlab}) {
             QVERIFY(changedScenePixels(
                     trail, renderTerrain(terrain, settled)) > 500);
         }

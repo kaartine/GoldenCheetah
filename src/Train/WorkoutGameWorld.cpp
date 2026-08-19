@@ -8,6 +8,7 @@
  */
 
 #include "WorkoutGameWorld.h"
+#include "WorkoutGameFeatureCatalog.h"
 
 #include <box2d/box2d.h>
 
@@ -53,6 +54,8 @@ double targetZoom(WorkoutGameTerrainKind terrain)
 {
     switch (terrain) {
     case WorkoutGameTerrainKind::BunnyHop:
+    case WorkoutGameTerrainKind::LogOver:
+    case WorkoutGameTerrainKind::Tabletop:
     case WorkoutGameTerrainKind::Drop:
         return 0.9;
     case WorkoutGameTerrainKind::Skinny:
@@ -327,7 +330,7 @@ struct WorkoutGamePhysics::Impl
         setDriveSpeed(requestedSpeed);
 
         if (input.jumpRequested
-                && terrain == WorkoutGameTerrainKind::BunnyHop
+                && WorkoutGameFeatureCatalog::definition(terrain).jumpable
                 && grounded()) {
             const double distance = distanceBase
                     + double(b2Body_GetPosition(chassis).x) - RiderStartMeters;
@@ -424,6 +427,32 @@ double WorkoutGamePhysics::terrainHeight(
                 ? 0.3 * (1.0 - smoothStep(approach / 0.7))
                 : 0.0;
         return slope + obstacle;
+    }
+    case WorkoutGameTerrainKind::LogOver: {
+        const double approach = std::abs(phase - 30.0);
+        const double obstacle = approach < 0.85
+                ? (0.22 + 0.12 * challenge)
+                    * (1.0 - smoothStep(approach / 0.85))
+                : 0.0;
+        return slope + obstacle;
+    }
+    case WorkoutGameTerrainKind::Tabletop: {
+        const double height = 0.45 + 0.35 * challenge;
+        if (phase < 26.0 || phase >= 38.0) return slope;
+        if (phase < 30.0) {
+            return slope + height * smoothStep((phase - 26.0) / 4.0);
+        }
+        if (phase < 34.0) return slope + height;
+        return slope + height * (1.0 - smoothStep((phase - 34.0) / 4.0));
+    }
+    case WorkoutGameTerrainKind::RockSlab: {
+        const double height = 0.2 + 0.24 * challenge;
+        if (phase < 27.0 || phase >= 36.0) return slope;
+        if (phase < 29.0) {
+            return slope + height * smoothStep((phase - 27.0) / 2.0);
+        }
+        if (phase < 34.0) return slope + height;
+        return slope + height * (1.0 - smoothStep((phase - 34.0) / 2.0));
     }
     case WorkoutGameTerrainKind::Drop:
         if (phase < 30.0) return slope;

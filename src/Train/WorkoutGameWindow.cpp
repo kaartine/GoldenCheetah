@@ -8,6 +8,7 @@
  */
 
 #include "WorkoutGameWindow.h"
+#include "WorkoutGameFeatureCatalog.h"
 
 #include "Athlete.h"
 #include "Context.h"
@@ -337,8 +338,8 @@ void WorkoutGameWindow::updateSimulation(std::int64_t workoutTimeMs)
         physicsInput.difficulty = section.difficulty;
         physicsInput.effortRatio = std::max(0.0, input.actualWatts) / target;
         physicsInput.paused = paused;
-        physicsInput.jumpRequested = section.terrain
-                    == WorkoutGameTerrainKind::BunnyHop
+        physicsInput.jumpRequested =
+                WorkoutGameFeatureCatalog::definition(section.terrain).jumpable
                 && physicsInput.effortRatio >= 0.9
                 && input.cadenceRpm >= 65.0;
         world = physics.update(physicsInput);

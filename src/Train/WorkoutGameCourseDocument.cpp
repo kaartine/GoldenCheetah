@@ -102,6 +102,9 @@ QString terrainName(WorkoutGameTerrainKind terrain)
     case WorkoutGameTerrainKind::Drop: return QStringLiteral("drop");
     case WorkoutGameTerrainKind::Berm: return QStringLiteral("berm");
     case WorkoutGameTerrainKind::Skinny: return QStringLiteral("skinny");
+    case WorkoutGameTerrainKind::LogOver: return QStringLiteral("log-over");
+    case WorkoutGameTerrainKind::Tabletop: return QStringLiteral("tabletop");
+    case WorkoutGameTerrainKind::RockSlab: return QStringLiteral("rock-slab");
     }
     return {};
 }
@@ -117,7 +120,10 @@ bool parseTerrain(const QString &name, WorkoutGameTerrainKind &terrain)
         {"bunny-hop", WorkoutGameTerrainKind::BunnyHop},
         {"drop", WorkoutGameTerrainKind::Drop},
         {"berm", WorkoutGameTerrainKind::Berm},
-        {"skinny", WorkoutGameTerrainKind::Skinny}
+        {"skinny", WorkoutGameTerrainKind::Skinny},
+        {"log-over", WorkoutGameTerrainKind::LogOver},
+        {"tabletop", WorkoutGameTerrainKind::Tabletop},
+        {"rock-slab", WorkoutGameTerrainKind::RockSlab}
     };
     for (const auto &value : values) {
         if (name == QLatin1String(value.first)) {

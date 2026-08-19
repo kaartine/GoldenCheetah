@@ -58,6 +58,12 @@ TerrainPalette terrainPalette(WorkoutGameTerrainKind terrain)
         return {{92, 78, 55}, {191, 154, 83}, {53, 47, 38}};
     case WorkoutGameTerrainKind::Berm:
         return {{151, 83, 50}, {228, 165, 84}, {72, 91, 76}};
+    case WorkoutGameTerrainKind::LogOver:
+        return {{123, 76, 45}, {217, 153, 75}, {73, 45, 29}};
+    case WorkoutGameTerrainKind::Tabletop:
+        return {{148, 91, 47}, {235, 185, 88}, {83, 70, 44}};
+    case WorkoutGameTerrainKind::RockSlab:
+        return {{101, 94, 82}, {188, 176, 145}, {55, 60, 58}};
     case WorkoutGameTerrainKind::SmoothTrail:
         return {dirtColor(), dirtHighlightColor(), QColor(91, 65, 39)};
     }
@@ -118,6 +124,9 @@ int trailPropAtlasIndex(WorkoutGameTrailPropKind kind)
     case WorkoutGameTrailPropKind::RollerMarker: return 6;
     case WorkoutGameTrailPropKind::DropMarker: return 7;
     case WorkoutGameTrailPropKind::ClimbMarker: return 8;
+    case WorkoutGameTrailPropKind::TabletopMarker:
+    case WorkoutGameTrailPropKind::Slab:
+        return -1;
     }
     return 2;
 }
@@ -274,6 +283,9 @@ QString WorkoutGameCanvas::terrainName(WorkoutGameTerrainKind terrain)
     case WorkoutGameTerrainKind::Drop: return tr("DROP");
     case WorkoutGameTerrainKind::Skinny: return tr("SKINNY");
     case WorkoutGameTerrainKind::Berm: return tr("BERM");
+    case WorkoutGameTerrainKind::LogOver: return tr("LOG OVER");
+    case WorkoutGameTerrainKind::Tabletop: return tr("TABLETOP");
+    case WorkoutGameTerrainKind::RockSlab: return tr("ROCK SLAB");
     }
     return QString();
 }
@@ -646,8 +658,9 @@ void WorkoutGameCanvas::paintScene(
                         scene.height() / 42.0 * prop.scale * cameraScale)),
                     6,
                     20);
-            if (!atlas.isNull() && cellWidth > 0 && cellHeight > 0) {
-                const int atlasIndex = trailPropAtlasIndex(prop.kind);
+            const int atlasIndex = trailPropAtlasIndex(prop.kind);
+            if (!atlas.isNull() && cellWidth > 0 && cellHeight > 0
+                    && atlasIndex >= 0) {
                 const QRect source(
                         (atlasIndex % 3) * cellWidth,
                         (atlasIndex / 3) * cellHeight,
@@ -715,6 +728,25 @@ void WorkoutGameCanvas::paintScene(
             case WorkoutGameTrailPropKind::Pebble:
                 painter.drawEllipse(QPoint(x, y), size / 4, size / 5);
                 break;
+            case WorkoutGameTrailPropKind::TabletopMarker: {
+                QPolygon tabletop;
+                tabletop << QPoint(x - size * 3, y)
+                         << QPoint(x - size, y - size)
+                         << QPoint(x + size, y - size)
+                         << QPoint(x + size * 3, y);
+                painter.drawPolygon(tabletop);
+                break;
+            }
+            case WorkoutGameTrailPropKind::Slab: {
+                QPolygon slab;
+                slab << QPoint(x - size * 2, y)
+                     << QPoint(x - size, y - size)
+                     << QPoint(x + size * 2, y - size * 2 / 3)
+                     << QPoint(x + size * 3, y)
+                     << QPoint(x, y + size / 3);
+                painter.drawPolygon(slab);
+                break;
+            }
             }
         }
         painter.restore();

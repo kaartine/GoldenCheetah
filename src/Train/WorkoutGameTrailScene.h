@@ -11,22 +11,10 @@
 #define _GC_WorkoutGameTrailScene_h
 
 #include "WorkoutGameWorld.h"
+#include "WorkoutGameFeatureCatalog.h"
 
 #include <cstdint>
 #include <vector>
-
-enum class WorkoutGameTrailPropKind
-{
-    Pebble,
-    Root,
-    RollerMarker,
-    ClimbMarker,
-    Rock,
-    Log,
-    DropMarker,
-    Plank,
-    BermMarker
-};
 
 struct WorkoutGameTrailPoint
 {

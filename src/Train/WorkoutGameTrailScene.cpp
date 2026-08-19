@@ -45,13 +45,8 @@ double halfWidth(
         double distanceMeters,
         std::uint32_t seed)
 {
-    double base = 0.092;
-    switch (terrain) {
-    case WorkoutGameTerrainKind::Skinny: base = 0.066; break;
-    case WorkoutGameTerrainKind::Berm: base = 0.108; break;
-    case WorkoutGameTerrainKind::RockGarden: base = 0.1; break;
-    default: break;
-    }
+    const double base = 0.092
+            * WorkoutGameFeatureCatalog::definition(terrain).trailWidthScale;
     const double phase = distanceMeters * 0.11 + double(seed % 97u) * 0.03;
     return base * (1.0 + 0.08 * std::sin(phase));
 }
@@ -99,44 +94,6 @@ WorkoutGameTrailPoint pointAt(
     return point;
 }
 
-double spacingFor(WorkoutGameTerrainKind terrain)
-{
-    switch (terrain) {
-    case WorkoutGameTerrainKind::Roots: return 3.6;
-    case WorkoutGameTerrainKind::Rollers: return 6.0;
-    case WorkoutGameTerrainKind::Climb: return 7.0;
-    case WorkoutGameTerrainKind::RockGarden: return 4.1;
-    case WorkoutGameTerrainKind::BunnyHop: return 11.0;
-    case WorkoutGameTerrainKind::Drop: return 13.0;
-    case WorkoutGameTerrainKind::Skinny: return 5.0;
-    case WorkoutGameTerrainKind::Berm: return 9.0;
-    case WorkoutGameTerrainKind::SmoothTrail: return 7.5;
-    }
-    return 7.5;
-}
-
-WorkoutGameTrailPropKind propKindFor(WorkoutGameTerrainKind terrain)
-{
-    switch (terrain) {
-    case WorkoutGameTerrainKind::Roots: return WorkoutGameTrailPropKind::Root;
-    case WorkoutGameTerrainKind::Rollers:
-        return WorkoutGameTrailPropKind::RollerMarker;
-    case WorkoutGameTerrainKind::Climb:
-        return WorkoutGameTrailPropKind::ClimbMarker;
-    case WorkoutGameTerrainKind::RockGarden:
-        return WorkoutGameTrailPropKind::Rock;
-    case WorkoutGameTerrainKind::BunnyHop: return WorkoutGameTrailPropKind::Log;
-    case WorkoutGameTerrainKind::Drop:
-        return WorkoutGameTrailPropKind::DropMarker;
-    case WorkoutGameTerrainKind::Skinny: return WorkoutGameTrailPropKind::Plank;
-    case WorkoutGameTerrainKind::Berm:
-        return WorkoutGameTrailPropKind::BermMarker;
-    case WorkoutGameTerrainKind::SmoothTrail:
-        return WorkoutGameTrailPropKind::Pebble;
-    }
-    return WorkoutGameTrailPropKind::Pebble;
-}
-
 }
 
 WorkoutGameTrailSceneSnapshot WorkoutGameTrailScene::build(
@@ -168,7 +125,9 @@ WorkoutGameTrailSceneSnapshot WorkoutGameTrailScene::build(
     result.riderXNormalized = rider.xNormalized;
     result.riderYNormalized = rider.centerYNormalized;
 
-    const double spacing = spacingFor(world.terrain);
+    const WorkoutGameTerrainDefinition definition =
+            WorkoutGameFeatureCatalog::definition(world.terrain);
+    const double spacing = definition.propSpacingMeters;
     const std::int64_t firstIndex = std::int64_t(
             std::floor(visibleStart / spacing)) - 1;
     const std::int64_t lastIndex = std::int64_t(
@@ -185,7 +144,7 @@ WorkoutGameTrailSceneSnapshot WorkoutGameTrailScene::build(
         const double lateral = (unitValue(identity ^ 0xd1b54a32d192ed03ULL)
                 * 2.0 - 1.0) * 0.72;
         WorkoutGameTrailProp prop;
-        prop.kind = propKindFor(world.terrain);
+        prop.kind = definition.prop;
         prop.variant = std::uint32_t(mixed(identity));
         prop.worldDistanceMeters = distance;
         prop.lateralPosition = lateral;

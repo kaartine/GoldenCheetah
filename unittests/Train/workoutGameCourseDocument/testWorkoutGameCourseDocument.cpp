@@ -111,6 +111,22 @@ private slots:
         QCOMPARE(WorkoutGameCourseDocumentCodec::encode(decoded), encoded);
     }
 
+    void addedTerrainKindsRoundTrip()
+    {
+        for (WorkoutGameTerrainKind terrain : {
+                WorkoutGameTerrainKind::LogOver,
+                WorkoutGameTerrainKind::Tabletop,
+                WorkoutGameTerrainKind::RockSlab}) {
+            WorkoutGameCourseDocument source = sampleDocument();
+            source.course.sections[0].terrain = terrain;
+            WorkoutGameCourseDocument decoded;
+            QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                        WorkoutGameCourseDocumentCodec::encode(source), decoded),
+                     WorkoutGameCourseDocumentStatus::Ready);
+            QCOMPARE(decoded.course.sections[0].terrain, terrain);
+        }
+    }
+
     void privateOrMalformedSourceIdentityIsRejected_data()
     {
         QTest::addColumn<QString>("fileName");

@@ -73,11 +73,17 @@ WorkoutGameSection adaptSection(
     } else if (parameters.technicality >= 0.85) {
         if (isRecoveryFeature(result.feature)) {
             result.terrain = WorkoutGameTerrainKind::Berm;
+        } else if (result.feature == WorkoutGameFeature::SprintJump) {
+            result.terrain = result.visualVariant % 2u == 0u
+                    ? WorkoutGameTerrainKind::LogOver
+                    : WorkoutGameTerrainKind::Tabletop;
         } else if (result.feature == WorkoutGameFeature::Trail
                 || result.feature == WorkoutGameFeature::FlowTrail) {
-            result.terrain = result.visualVariant % 2u == 0u
-                    ? WorkoutGameTerrainKind::Skinny
-                    : WorkoutGameTerrainKind::RockGarden;
+            switch (result.visualVariant % 3u) {
+            case 0u: result.terrain = WorkoutGameTerrainKind::Skinny; break;
+            case 1u: result.terrain = WorkoutGameTerrainKind::RockGarden; break;
+            default: result.terrain = WorkoutGameTerrainKind::RockSlab; break;
+            }
         }
     }
     result.gradePercent *= parameters.gradeScale;

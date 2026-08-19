@@ -49,6 +49,34 @@ class TestWorkoutGameTrailScene : public QObject
     Q_OBJECT
 
 private slots:
+    void catalogDefinesEveryRideFeature()
+    {
+        for (WorkoutGameTerrainKind terrain : {
+                WorkoutGameTerrainKind::SmoothTrail,
+                WorkoutGameTerrainKind::Roots,
+                WorkoutGameTerrainKind::Rollers,
+                WorkoutGameTerrainKind::Climb,
+                WorkoutGameTerrainKind::RockGarden,
+                WorkoutGameTerrainKind::BunnyHop,
+                WorkoutGameTerrainKind::Drop,
+                WorkoutGameTerrainKind::Skinny,
+                WorkoutGameTerrainKind::Berm,
+                WorkoutGameTerrainKind::LogOver,
+                WorkoutGameTerrainKind::Tabletop,
+                WorkoutGameTerrainKind::RockSlab}) {
+            const WorkoutGameTerrainDefinition definition =
+                    WorkoutGameFeatureCatalog::definition(terrain);
+            QVERIFY(definition.propSpacingMeters > 0.0);
+            QVERIFY(definition.trailWidthScale > 0.0);
+        }
+        QVERIFY(WorkoutGameFeatureCatalog::definition(
+                    WorkoutGameTerrainKind::LogOver).jumpable);
+        QVERIFY(WorkoutGameFeatureCatalog::definition(
+                    WorkoutGameTerrainKind::Tabletop).jumpable);
+        QVERIFY(!WorkoutGameFeatureCatalog::definition(
+                    WorkoutGameTerrainKind::RockSlab).jumpable);
+    }
+
     void unavailableWorldProducesNoGeometry()
     {
         const WorkoutGameTrailSceneSnapshot scene =
@@ -139,7 +167,10 @@ private slots:
             {WorkoutGameTerrainKind::RockGarden, WorkoutGameTrailPropKind::Rock},
             {WorkoutGameTerrainKind::BunnyHop, WorkoutGameTrailPropKind::Log},
             {WorkoutGameTerrainKind::Skinny, WorkoutGameTrailPropKind::Plank},
-            {WorkoutGameTerrainKind::Berm, WorkoutGameTrailPropKind::BermMarker}
+            {WorkoutGameTerrainKind::Berm, WorkoutGameTrailPropKind::BermMarker},
+            {WorkoutGameTerrainKind::LogOver, WorkoutGameTrailPropKind::Log},
+            {WorkoutGameTerrainKind::Tabletop, WorkoutGameTrailPropKind::TabletopMarker},
+            {WorkoutGameTerrainKind::RockSlab, WorkoutGameTrailPropKind::Slab}
         };
 
         for (const auto &entry : cases) {
