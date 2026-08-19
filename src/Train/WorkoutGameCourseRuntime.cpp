@@ -13,6 +13,9 @@
 
 #include <QFileInfo>
 
+#include <algorithm>
+#include <cmath>
+
 WorkoutGameCourseRuntimeStatus WorkoutGameCourseRuntime::configure(
         const QString &coursePath)
 {
@@ -72,4 +75,19 @@ WorkoutGameCourseRuntime::atWorkoutPosition(
 {
     if (!configured) return {};
     return playback.atDistance(double(positionMeters));
+}
+
+double WorkoutGameCourseRuntime::generatedTargetWattsAt(
+        std::int64_t positionMeters, double relativeGearRatio) const
+{
+    if (!configured || !std::isfinite(relativeGearRatio)
+            || relativeGearRatio <= 0.0) {
+        return -1.0;
+    }
+
+    const WorkoutGameDistancePlaybackSnapshot snapshot =
+            atWorkoutPosition(positionMeters);
+    if (!snapshot.ready || !std::isfinite(snapshot.targetWatts)) return -1.0;
+
+    return std::clamp(snapshot.targetWatts * relativeGearRatio, 0.0, 2500.0);
 }

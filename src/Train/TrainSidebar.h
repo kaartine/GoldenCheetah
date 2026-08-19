@@ -42,6 +42,7 @@
 #include "VirtualDrivetrain.h"
 #include "WorkoutRideCommandFilter.h"
 #include "WorkoutRideTargetPlanner.h"
+#include "WorkoutGameCourseRuntime.h"
 
 // standard stuff
 #include <QDir>
@@ -383,6 +384,7 @@ class TrainSidebar : public GcWindow
         TrainingTelemetryTimeline::Timeline telemetryTimeline;
         TrainerTargetCoordinator trainerTargetCoordinator;
         VirtualDrivetrain virtualDrivetrain;
+        WorkoutGameCourseRuntime workoutGameCourseRuntime;
         WorkoutRideCommandFilter workoutRideCommandFilter;
         QElapsedTimer workoutRideCommandClock;
         QTimer *workoutRideCommandTimer;

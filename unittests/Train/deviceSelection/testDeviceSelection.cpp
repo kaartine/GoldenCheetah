@@ -108,7 +108,7 @@ private slots:
         QVERIFY(!allowsTrainerControl(DeviceRole::HeartRateOnly));
     }
 
-    void selectsOneHeartRateCompanion()
+    void doesNotActivateAnUnselectedHeartRateDevice()
     {
         const QList<int> types = QList<int>()
                 << DEV_BT40 << DEV_BT40_HEARTRATE << DEV_BT40_HEARTRATE;
@@ -117,8 +117,8 @@ private slots:
         const TrainingDeviceSelection::Selection selection =
                 TrainingDeviceSelection::select(selected, types);
 
-        QCOMPARE(selection.active, QList<int>() << 0 << 1);
-        QCOMPARE(selection.heartRateSource, 1);
+        QCOMPARE(selection.active, QList<int>() << 0);
+        QCOMPARE(selection.heartRateSource, -1);
     }
 
     void honorsExplicitHeartRateSelection()
@@ -155,8 +155,8 @@ private slots:
         const TrainingDeviceSelection::Selection selection =
                 TrainingDeviceSelection::select(selected, types);
 
-        QCOMPARE(selection.active, QList<int>() << 0 << 1);
-        QCOMPARE(selection.heartRateSource, 1);
+        QCOMPARE(selection.active, QList<int>() << 0);
+        QCOMPARE(selection.heartRateSource, -1);
     }
 
     void refusesActivationWithoutAValidSelection()
@@ -274,15 +274,15 @@ private slots:
         QVERIFY(!shouldReconnect(true, LinkState::Closing));
     }
 
-    void addsHeartRateDeviceToSelectedTrainer()
+    void companionSelectionRequiresExplicitHeartRateDevice()
     {
         const QList<int> types = QList<int>() << DEV_BT40 << DEV_BT40_HEARTRATE;
         const QList<int> selected = QList<int>() << 0;
 
         const QList<int> active = TrainingDeviceSelection::withHeartRateCompanions(selected, types);
 
-        QCOMPARE(active, QList<int>() << 0 << 1);
-        QCOMPARE(TrainingDeviceSelection::heartRateSource(active, types), 1);
+        QCOMPARE(active, QList<int>() << 0);
+        QCOMPARE(TrainingDeviceSelection::heartRateSource(active, types), -1);
     }
 
     void doesNotActivateAnotherTrainer()
@@ -292,7 +292,7 @@ private slots:
         const QList<int> selected = QList<int>() << 0;
 
         QCOMPARE(TrainingDeviceSelection::withHeartRateCompanions(selected, types),
-                 QList<int>() << 0 << 2);
+                 QList<int>() << 0);
     }
 
     void doesNotDuplicateSelectedHeartRateDevice()

@@ -34,6 +34,8 @@ public:
     const WorkoutGameCourse &visualCourse() const;
     WorkoutGameDistancePlaybackSnapshot atWorkoutPosition(
             std::int64_t positionMeters) const;
+    double generatedTargetWattsAt(
+            std::int64_t positionMeters, double relativeGearRatio) const;
 
 private:
     bool configured = false;

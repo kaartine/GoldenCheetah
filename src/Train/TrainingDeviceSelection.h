@@ -31,7 +31,6 @@ inline Selection select(const QList<int> &selected, const QList<int> &deviceType
 {
     Selection result;
     int selectedHeartRate = -1;
-    bool hasValidSelection = false;
 
     foreach (int index, selected) {
         if (index < 0 || index >= deviceTypes.size() ||
@@ -39,22 +38,10 @@ inline Selection select(const QList<int> &selected, const QList<int> &deviceType
             continue;
         }
 
-        hasValidSelection = true;
         if (isHeartRateDevice(deviceTypes.at(index))) {
             if (selectedHeartRate < 0) selectedHeartRate = index;
         } else {
             result.active.append(index);
-        }
-    }
-
-    if (!hasValidSelection) return result;
-
-    if (selectedHeartRate < 0) {
-        for (int index = 0; index < deviceTypes.size(); ++index) {
-            if (isHeartRateDevice(deviceTypes.at(index))) {
-                selectedHeartRate = index;
-                break;
-            }
         }
     }
 

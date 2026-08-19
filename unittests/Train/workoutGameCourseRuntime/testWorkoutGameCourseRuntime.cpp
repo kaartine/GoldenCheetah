@@ -14,6 +14,8 @@
 #include <QTemporaryDir>
 #include <QTest>
 
+#include <limits>
+
 namespace {
 
 WorkoutGameCourseDocument sampleDocument()
@@ -151,6 +153,44 @@ private slots:
         QVERIFY(!runtime.enabled());
         QCOMPARE(runtime.ftpWatts(), 0.0);
         QVERIFY(!runtime.atWorkoutPosition(50).ready);
+    }
+
+    void scalesGeneratorTargetWithVirtualGear()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("runtime.crs"));
+        QString error;
+        QCOMPARE(WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    path, sampleDocument(), error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+
+        WorkoutGameCourseRuntime runtime;
+        QCOMPARE(runtime.configure(path), WorkoutGameCourseRuntimeStatus::Ready);
+
+        QCOMPARE(runtime.generatedTargetWattsAt(50, 1.0), 200.0);
+        QCOMPARE(runtime.generatedTargetWattsAt(50, 1.25), 250.0);
+        QCOMPARE(runtime.generatedTargetWattsAt(50, 0.5), 100.0);
+        QCOMPARE(runtime.generatedTargetWattsAt(200, 2.0), 200.0);
+    }
+
+    void rejectsUnavailableOrInvalidGeneratorTargets()
+    {
+        WorkoutGameCourseRuntime runtime;
+        QCOMPARE(runtime.generatedTargetWattsAt(50, 1.0), -1.0);
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("runtime.crs"));
+        QString error;
+        QCOMPARE(WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    path, sampleDocument(), error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(runtime.configure(path), WorkoutGameCourseRuntimeStatus::Ready);
+
+        QCOMPARE(runtime.generatedTargetWattsAt(50, 0.0), -1.0);
+        QCOMPARE(runtime.generatedTargetWattsAt(
+                     50, std::numeric_limits<double>::infinity()), -1.0);
     }
 };
 

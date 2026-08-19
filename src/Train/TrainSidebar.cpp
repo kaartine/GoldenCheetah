@@ -996,6 +996,7 @@ TrainSidebar::workoutTreeWidgetSelectionChanged()
         return;
     }
     workoutfile = filename;
+    workoutGameCourseRuntime.reset();
 
     if (filename == "") {
 
@@ -1065,6 +1066,9 @@ TrainSidebar::workoutTreeWidgetSelectionChanged()
             // display!
             context->notifyErgFileSelected(ergFile);
             ergFileQueryAdapter.setErgFile(ergFile);
+            if (mode == ErgFileFormat::crs) {
+                workoutGameCourseRuntime.configure(filename);
+            }
             adjustIntensity(100);
             setLabels();
 
@@ -2830,6 +2834,7 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
     int curLap = 0;
     TrainerTarget target;
     bool dispatchTarget = true;
+    double generatedCourseTargetWatts = -1.0;
 
     if (status&RT_MODE_ERGO) {
         if (context->currentErgFile()) {
@@ -2904,6 +2909,10 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
                 slope,
                 bicycle.WindResistance(displayAltitude),
                 displayWorkoutDistance * 1000);
+        generatedCourseTargetWatts =
+                workoutGameCourseRuntime.generatedTargetWattsAt(
+                    std::llround(displayWorkoutDistance * 1000.0),
+                    virtualDrivetrain.relativeRatio());
     }
 
     std::vector<TrainerTargetDevice *> targetDevices;
@@ -2917,6 +2926,14 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
             == TrainerTargetResult::WorkoutFinished) {
         Stop(DEVICE_OK);
         return false;
+    }
+
+    if (generatedCourseTargetWatts >= 0.0) {
+        foreach (int dev, activeDevices) {
+            if (Devices[dev].type == DEV_NULL) {
+                Devices[dev].controller->setLoad(generatedCourseTargetWatts);
+            }
+        }
     }
 
     context->notifySetNow(target.workoutPosition);
@@ -3476,7 +3493,7 @@ void TrainSidebar::VirtualShiftUp()
 {
     if ((status & RT_CONNECTED) == 0) return;
     if (virtualDrivetrain.shiftUp()) {
-        if (workoutRideModeEnabled
+        if ((workoutRideModeEnabled || workoutGameCourseRuntime.enabled())
                 && (status & RT_RUNNING)
                 && !(status & RT_PAUSED)) {
             applyWorkoutTarget(false);
@@ -3491,7 +3508,7 @@ void TrainSidebar::VirtualShiftDown()
 {
     if ((status & RT_CONNECTED) == 0) return;
     if (virtualDrivetrain.shiftDown()) {
-        if (workoutRideModeEnabled
+        if ((workoutRideModeEnabled || workoutGameCourseRuntime.enabled())
                 && (status & RT_RUNNING)
                 && !(status & RT_PAUSED)) {
             applyWorkoutTarget(false);
@@ -3507,7 +3524,7 @@ void TrainSidebar::setVirtualGear(int gear)
     if ((status & RT_CONNECTED) == 0) return;
     if (!virtualDrivetrain.setGear(gear)) return;
 
-    if (workoutRideModeEnabled
+    if ((workoutRideModeEnabled || workoutGameCourseRuntime.enabled())
             && (status & RT_RUNNING)
             && !(status & RT_PAUSED)) {
         applyWorkoutTarget(false);
