@@ -13,6 +13,7 @@
 #include "GoldenCheetah.h"
 #include "RealtimeData.h"
 #include "WorkoutGameCompetition.h"
+#include "WorkoutGameCourseRuntime.h"
 #include "WorkoutGameSimulation.h"
 #include "WorkoutGameWorld.h"
 
@@ -43,6 +44,7 @@ private:
     double currentFtp(ErgFile *workout) const;
     WorkoutGameGhostReplay loadGhost(const WorkoutGameCourse &course) const;
     void storeGhost();
+    void updateAtWorkoutPosition(std::int64_t workoutPosition);
     void updateSimulation(std::int64_t workoutTimeMs);
 
     Context *context;
@@ -50,6 +52,8 @@ private:
     WorkoutGameCanvas *painterCanvas;
     WorkoutGameOpenGLCanvas *openGLCanvas;
     WorkoutGameCourse currentCourse;
+    WorkoutGameCourseRuntime distanceRuntime;
+    WorkoutGameDistancePlaybackSnapshot distanceSnapshot;
     WorkoutGameSimulation simulation;
     WorkoutGamePhysics physics;
     WorkoutGameCamera camera;

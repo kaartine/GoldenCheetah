@@ -175,8 +175,16 @@ double WorkoutGameWindow::currentFtp(ErgFile *workout) const
 void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
 {
     currentCourse = WorkoutGameCourse();
+    distanceRuntime.reset();
+    distanceSnapshot = WorkoutGameDistancePlaybackSnapshot();
     ftpWatts = currentFtp(workout);
-    if (workout && workout->hasWatts() && ftpWatts > 0.0) {
+    if (workout
+            && workout->format() == ErgFileFormat::crs
+            && distanceRuntime.configure(workout->filename())
+                == WorkoutGameCourseRuntimeStatus::Ready) {
+        currentCourse = distanceRuntime.visualCourse();
+        ftpWatts = distanceRuntime.ftpWatts();
+    } else if (workout && workout->hasWatts() && ftpWatts > 0.0) {
         std::vector<WorkoutGamePowerPoint> points;
         points.reserve(workout->Points.size());
         for (const ErgFilePoint &point : workout->Points) {
@@ -202,7 +210,7 @@ void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
     sessionActive = false;
     worldClockInitialized = false;
     lastWorldTimeMs = 0;
-    updateSimulation(0);
+    updateAtWorkoutPosition(0);
 }
 
 void WorkoutGameWindow::telemetryUpdate(const RealtimeData &telemetry)
@@ -212,17 +220,21 @@ void WorkoutGameWindow::telemetryUpdate(const RealtimeData &telemetry)
     const int cadenceRpm = int(std::lround(latestTelemetry.getCadence()));
     const int heartRate = int(std::lround(latestTelemetry.getHr()));
     const int virtualGear = std::max(1, latestTelemetry.getVirtualGear());
+    const double targetWatts = distanceRuntime.enabled()
+            && distanceSnapshot.ready
+            ? distanceSnapshot.targetWatts
+            : latestTelemetry.getLoad();
     painterCanvas->setTelemetry(
-            latestTelemetry.getWatts(), latestTelemetry.getLoad(),
+            latestTelemetry.getWatts(), targetWatts,
             cadenceRpm, heartRate, virtualGear);
     openGLCanvas->setTelemetry(
-            latestTelemetry.getWatts(), latestTelemetry.getLoad(),
+            latestTelemetry.getWatts(), targetWatts,
             cadenceRpm, heartRate, virtualGear);
 }
 
-void WorkoutGameWindow::setNow(long workoutTimeMs)
+void WorkoutGameWindow::setNow(long workoutPosition)
 {
-    updateSimulation(workoutTimeMs);
+    updateAtWorkoutPosition(workoutPosition);
 }
 
 void WorkoutGameWindow::start()
@@ -235,19 +247,19 @@ void WorkoutGameWindow::start()
     sessionActive = true;
     worldClockInitialized = false;
     lastWorldTimeMs = 0;
-    updateSimulation(context->getNow());
+    updateAtWorkoutPosition(context->getNow());
 }
 
 void WorkoutGameWindow::pause()
 {
     paused = true;
-    updateSimulation(context->getNow());
+    updateAtWorkoutPosition(context->getNow());
 }
 
 void WorkoutGameWindow::unpause()
 {
     paused = false;
-    updateSimulation(context->getNow());
+    updateAtWorkoutPosition(context->getNow());
 }
 
 void WorkoutGameWindow::stop()
@@ -261,6 +273,19 @@ void WorkoutGameWindow::usePainterFallback()
     renderStack->setCurrentWidget(painterCanvas);
 }
 
+void WorkoutGameWindow::updateAtWorkoutPosition(
+        std::int64_t workoutPosition)
+{
+    if (!distanceRuntime.enabled()) {
+        updateSimulation(workoutPosition);
+        return;
+    }
+    distanceSnapshot = distanceRuntime.atWorkoutPosition(workoutPosition);
+    updateSimulation(distanceSnapshot.ready
+            ? distanceSnapshot.nominalTimeMs
+            : 0);
+}
+
 void WorkoutGameWindow::updateSimulation(std::int64_t workoutTimeMs)
 {
     WorkoutGameSimulationInput input;
@@ -268,7 +293,10 @@ void WorkoutGameWindow::updateSimulation(std::int64_t workoutTimeMs)
     input.paused = paused;
     if (hasTelemetry) {
         input.actualWatts = latestTelemetry.getWatts();
-        input.targetWatts = latestTelemetry.getLoad();
+        input.targetWatts = distanceRuntime.enabled()
+                && distanceSnapshot.ready
+                ? distanceSnapshot.targetWatts
+                : latestTelemetry.getLoad();
         input.cadenceRpm = latestTelemetry.getCadence();
         input.virtualGear = latestTelemetry.getVirtualGear();
     }

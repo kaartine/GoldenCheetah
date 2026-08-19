@@ -214,6 +214,26 @@ private slots:
                     QStringLiteral("/tmp/ride")),
                  QStringLiteral("/tmp/ride.gcmtb.json"));
     }
+
+    void modifiedCourseDoesNotLoadWithStaleMetadata()
+    {
+        QTemporaryDir directory;
+        const QString crsPath = directory.filePath(QStringLiteral("course.crs"));
+        QString error;
+        QCOMPARE(WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    crsPath, sampleDocument(), error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QFile course(crsPath);
+        QVERIFY(course.open(QIODevice::Append));
+        QCOMPARE(course.write("; modified\n"), qint64(11));
+        course.close();
+
+        WorkoutGameCourseDocument loaded;
+        QCOMPARE(WorkoutGameCourseDocumentStore::loadForCourse(
+                    crsPath, loaded, error),
+                 WorkoutGameCourseDocumentStatus::InvalidDocument);
+        QVERIFY(!error.isEmpty());
+    }
 };
 
 QTEST_GUILESS_MAIN(TestWorkoutGameCourseDocument)

@@ -519,6 +519,29 @@ WorkoutGameCourseDocumentStatus WorkoutGameCourseDocumentStore::loadForCourse(
             WorkoutGameCourseDocumentCodec::decode(data, document);
     if (status != WorkoutGameCourseDocumentStatus::Ready) {
         error = QStringLiteral("Invalid MTB course metadata");
+        return status;
     }
-    return status;
+
+    const QByteArray expectedCourse =
+            WorkoutGameCourseCrsExporter::encode(document);
+    if (expectedCourse.isEmpty()) {
+        error = QStringLiteral("Invalid MTB course metadata");
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+    QFile course(coursePath);
+    if (!course.open(QIODevice::ReadOnly)) {
+        error = course.errorString();
+        return WorkoutGameCourseDocumentStatus::IoError;
+    }
+    const QByteArray actualCourse = course.read(expectedCourse.size() + 1);
+    if (course.error() != QFile::NoError) {
+        error = course.errorString();
+        return WorkoutGameCourseDocumentStatus::IoError;
+    }
+    if (actualCourse != expectedCourse) {
+        error = QStringLiteral(
+                "MTB course metadata does not match the course file");
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+    return WorkoutGameCourseDocumentStatus::Ready;
 }

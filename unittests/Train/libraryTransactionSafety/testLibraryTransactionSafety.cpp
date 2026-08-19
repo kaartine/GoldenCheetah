@@ -218,6 +218,8 @@ private slots:
     void importFilesSchemaFailureRollsBackEarlierWrite();
     void importFilesCommitFailureRollsBackWithoutSignal();
     void importFilesSuccessSignalsAfterCommit();
+    void importFilesCopiesMtbCourseMetadata();
+    void importFilesFailureRollsBackMtbCourseMetadata();
     void refreshWorkoutsUpdateFailureDoesNotCommitPartialBatch();
     void refreshWorkoutsSchemaFailureDoesNotReportSuccess();
     void refreshWorkoutsCommitFailureRollsBackWithoutSignal();
@@ -353,6 +355,65 @@ void TestLibraryTransactionSafety::importFilesSuccessSignalsAfterCommit()
     QCOMPARE(changed.count(), 1);
     QVERIFY(committedRowObserved);
     QCOMPARE(environment.context.selectedWorkout, path);
+}
+
+void TestLibraryTransactionSafety::importFilesCopiesMtbCourseMetadata()
+{
+    TestEnvironment environment;
+    QVERIFY(environment.valid);
+
+    const QString source = environment.sourcePath(QStringLiteral("trail.crs"));
+    const QString sourceMetadata = environment.sourcePath(
+            QStringLiteral("trail.gcmtb.json"));
+    const QString target = environment.filePath(QStringLiteral("trail.crs"));
+    const QString targetMetadata = environment.filePath(
+            QStringLiteral("trail.gcmtb.json"));
+    QVERIFY(writeFile(source, QByteArrayLiteral("245")));
+    QVERIFY(writeFile(sourceMetadata, QByteArrayLiteral("metadata")));
+
+    const LibraryImportResult result = Library::importFiles(
+            &environment.context,
+            {source},
+            LibraryBatchImportConfirmation::noDialog);
+
+    QVERIFY(result.allSucceeded());
+    QCOMPARE(readFile(target), QByteArrayLiteral("245"));
+    QCOMPARE(readFile(targetMetadata), QByteArrayLiteral("metadata"));
+    QCOMPARE(environment.context.selectedWorkout, target);
+}
+
+void TestLibraryTransactionSafety::importFilesFailureRollsBackMtbCourseMetadata()
+{
+    TestEnvironment environment;
+    QVERIFY(environment.valid);
+
+    const QString source = environment.sourcePath(QStringLiteral("trail.crs"));
+    const QString sourceMetadata = environment.sourcePath(
+            QStringLiteral("trail.gcmtb.json"));
+    const QString target = environment.filePath(QStringLiteral("trail.crs"));
+    const QString targetMetadata = environment.filePath(
+            QStringLiteral("trail.gcmtb.json"));
+    QVERIFY(writeFile(source, QByteArrayLiteral("245")));
+    QVERIFY(writeFile(sourceMetadata, QByteArrayLiteral("metadata")));
+    QSqlDatabase connection = QSqlDatabase::database(
+            QStringLiteral("train"), false);
+    QVERIFY(execSql(connection,
+            QStringLiteral("CREATE TRIGGER reject_mtb_course "
+                           "BEFORE INSERT ON workout "
+                           "WHEN NEW.filepath = %1 BEGIN "
+                           "SELECT RAISE(FAIL, 'course rejected'); END")
+                .arg(sqlString(target))));
+
+    const LibraryImportResult result = Library::importFiles(
+            &environment.context,
+            {source},
+            LibraryBatchImportConfirmation::noDialog);
+
+    QVERIFY(result.completed);
+    QVERIFY(!result.allSucceeded());
+    QVERIFY(!QFileInfo::exists(target));
+    QVERIFY(!QFileInfo::exists(targetMetadata));
+    QVERIFY(!environment.database->hasWorkout(target));
 }
 
 void TestLibraryTransactionSafety::

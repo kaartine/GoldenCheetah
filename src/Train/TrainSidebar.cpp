@@ -28,6 +28,7 @@
 #include "TrainingControllerLifecycle.h"
 #include "TrainingCommandRouter.h"
 #include "TrainingDeviceSelection.h"
+#include "WorkoutGameCourseConversionDialog.h"
 #include "RideImportWizard.h"
 #include "HelpWhatsThis.h"
 #include "RideFile.h"
@@ -44,6 +45,7 @@
 #include <QComboBox>
 #include <QMutexLocker>
 #include <QSoundEffect>
+#include <QFile>
 
 // Three current realtime device types supported are:
 #include "RealtimeController.h"
@@ -376,6 +378,8 @@ TrainSidebar::TrainSidebar(Context *context) : GcWindow(context), context(contex
     connect(trainDB, SIGNAL(dataChanged()), this, SLOT(refresh()));
 
     connect(workoutTree->selectionModel(), SIGNAL(selectionChanged(QItemSelection, QItemSelection)), this, SLOT(workoutTreeWidgetSelectionChanged()));
+    connect(workoutTree, SIGNAL(customContextMenuRequested(const QPoint &)),
+            this, SLOT(workoutTreeMenuPopup(const QPoint &)));
 
     videosyncFile = NULL;
     calibrating = false;
@@ -540,19 +544,36 @@ TrainSidebar::refresh()
 void
 TrainSidebar::workoutPopup()
 {
+    showWorkoutPopup(trainSplitter->mapToGlobal(
+            QPoint(workoutItem->pos().x() + workoutItem->width() - 20,
+                   workoutItem->pos().y())));
+}
+
+void
+TrainSidebar::workoutTreeMenuPopup(const QPoint &position)
+{
+    showWorkoutPopup(workoutTree->viewport()->mapToGlobal(position));
+}
+
+void
+TrainSidebar::showWorkoutPopup(const QPoint &globalPosition)
+{
     // OK - we are working with a specific event..
     QMenu menu(workoutTree);
-    QAction *import = new QAction(tr("Import Workout from File"), workoutTree);
-    QAction *download = new QAction(tr("Get Workouts from TrainerDay"), workoutTree);
-    QAction *dlStravaRoutes = new QAction(tr("Get Workouts from Strava Routes"), workoutTree);
-    QAction *wizard = new QAction(tr("Create Workout via Wizard"), workoutTree);
-    QAction *scan = new QAction(tr("Scan for Workouts"), workoutTree);
+    QAction *import = menu.addAction(tr("Import Workout from File"));
+    QAction *download = menu.addAction(tr("Get Workouts from TrainerDay"));
+    QAction *dlStravaRoutes = menu.addAction(
+            tr("Get Workouts from Strava Routes"));
+    QAction *wizard = menu.addAction(tr("Create Workout via Wizard"));
+    QAction *createMtb = menu.addAction(tr("Create MTB Course"));
+    QAction *scan = menu.addAction(tr("Scan for Workouts"));
 
-    menu.addAction(import);
-    menu.addAction(download);
-    menu.addAction(dlStravaRoutes);
-    menu.addAction(wizard);
-    menu.addAction(scan);
+    const ErgFile *selectedWorkout = ergFileQueryAdapter.getErgFile();
+    createMtb->setEnabled(
+            !(status & RT_RUNNING)
+            && selectedWorkout
+            && selectedWorkout->hasWatts()
+            && QFileInfo(selectedWorkout->filename()).isFile());
 
 
     // we can delete too
@@ -570,25 +591,104 @@ TrainSidebar::workoutPopup()
     }
 
     if (delNumber > 0) {
-        QAction *del = new QAction(tr("Delete selected Workout"), workoutTree);
+        QAction *del = menu.addAction(tr("Delete selected Workout"));
 
         if (delNumber > 1) {
             del->setText(QString(tr("Delete %1 selected Workouts")).arg(delNumber));
         }
-        menu.addAction(del);
         connect(del, SIGNAL(triggered(void)), this, SLOT(deleteWorkouts(void)));
     }
 
     // connect menu to functions
     connect(import, SIGNAL(triggered(void)), context->mainWindow, SLOT(importWorkout(void)));
     connect(wizard, SIGNAL(triggered(void)), context->mainWindow, SLOT(showWorkoutWizard(void)));
+    connect(createMtb, SIGNAL(triggered(void)), this, SLOT(createMtbCourse(void)));
     connect(download, SIGNAL(triggered(void)), context->mainWindow, SLOT(downloadTrainerDay(void)));
     connect(dlStravaRoutes, SIGNAL(triggered(void)), context->mainWindow, SLOT(downloadStravaRoutes(void)));
     connect(scan, SIGNAL(triggered(void)), context->mainWindow, SLOT(manageLibrary(void)));
 
     // execute the menu
-    menu.exec(trainSplitter->mapToGlobal(QPoint(workoutItem->pos().x()+workoutItem->width()-20,
-                                           workoutItem->pos().y())));
+    menu.exec(globalPosition);
+}
+
+void
+TrainSidebar::createMtbCourse()
+{
+    const ErgFile *workout = ergFileQueryAdapter.getErgFile();
+    if ((status & RT_RUNNING)
+            || !workout
+            || !workout->hasWatts()
+            || !QFileInfo(workout->filename()).isFile()) {
+        QMessageBox::warning(
+                this, tr("Create MTB Course"),
+                tr("Select a power workout before creating an MTB course."));
+        return;
+    }
+
+    QFile source(workout->filename());
+    if (!source.open(QIODevice::ReadOnly)) {
+        QMessageBox::warning(
+                this, tr("Create MTB Course"), source.errorString());
+        return;
+    }
+    const QByteArray sourceContents = source.read(
+            WorkoutGameCourseSourceAdapter::MaximumSourceBytes + 1);
+    if (source.error() != QFile::NoError
+            || sourceContents.size()
+                > WorkoutGameCourseSourceAdapter::MaximumSourceBytes) {
+        QMessageBox::warning(
+                this, tr("Create MTB Course"),
+                source.error() == QFile::NoError
+                    ? tr("The workout file is too large to convert.")
+                    : source.errorString());
+        return;
+    }
+
+    WorkoutGameCourseSourceRequest request;
+    request.points.reserve(std::size_t(workout->Points.size()));
+    for (const ErgFilePoint &point : workout->Points) {
+        request.points.push_back({point.x, point.val});
+    }
+    request.sourceContents = sourceContents;
+    request.sourceFileName = workout->filename();
+    request.ftpWatts = FTP > 0
+            ? double(FTP)
+            : workout->ftp() > 0
+                ? double(workout->ftp())
+                : workout->CP();
+
+    QString outputDirectory =
+            appsettings->value(nullptr, GC_WORKOUTDIR).toString();
+    if (outputDirectory.isEmpty()) {
+        outputDirectory = QFileInfo(workout->filename()).absolutePath();
+    }
+    const QString baseName =
+            QFileInfo(workout->filename()).completeBaseName()
+            + QStringLiteral("-mtb");
+    QString coursePath = QDir(outputDirectory).filePath(
+            baseName + QStringLiteral(".crs"));
+    for (int suffix = 2;
+            QFileInfo::exists(coursePath)
+                || QFileInfo::exists(
+                    WorkoutGameCourseDocumentStore::sidecarPathForCourse(
+                        coursePath));
+            ++suffix) {
+        coursePath = QDir(outputDirectory).filePath(
+                baseName + QStringLiteral("-%1.crs").arg(suffix));
+    }
+
+    WorkoutGameCourseConversionDialog dialog(request, coursePath, this);
+    if (dialog.exec() != QDialog::Accepted) return;
+
+    const QString generated = dialog.generatedCoursePath();
+    const LibraryImportResult imported = Library::importFiles(
+            context, {generated}, LibraryBatchImportConfirmation::noDialog);
+    if (!imported.allSucceeded()) {
+        QMessageBox::warning(
+                this, tr("Create MTB Course"),
+                tr("The course was created but could not be added to the workout library: %1")
+                    .arg(generated));
+    }
 }
 
 bool

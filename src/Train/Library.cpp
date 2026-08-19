@@ -98,6 +98,29 @@ Library::initialise(QDir gcRoot)
 }
 #endif
 
+namespace {
+
+constexpr qint64 MaximumMtbCourseMetadataBytes = 1024 * 1024;
+
+QString mtbCourseMetadataPath(const QString &coursePath)
+{
+    const QFileInfo info(coursePath);
+    return info.dir().filePath(
+            info.completeBaseName() + QStringLiteral(".gcmtb.json"));
+}
+
+bool hasMtbCourseMetadata(const QString &coursePath)
+{
+    if (QFileInfo(coursePath).suffix().compare(
+                QStringLiteral("crs"), Qt::CaseInsensitive) != 0) {
+        return false;
+    }
+    const QFileInfo metadata(mtbCourseMetadataPath(coursePath));
+    return metadata.isFile();
+}
+
+}
+
 LibraryImportResult
 Library::importFiles(Context *context, QStringList files, LibraryBatchImportConfirmation showDialog)
 {
@@ -334,6 +357,25 @@ Library::importFiles(Context *context, QStringList files, LibraryBatchImportConf
         ok = copyToLibrary(source, target, tr("Workout"));
         if (!ok) {
             break;
+        }
+
+        if (hasMtbCourseMetadata(source)) {
+            const QString sourceMetadata = mtbCourseMetadataPath(source);
+            const QFileInfo metadataInfo(sourceMetadata);
+            if (metadataInfo.size() > MaximumMtbCourseMetadataBytes) {
+                ok = false;
+                setFailure(
+                    tr("Import Workout Failed"),
+                    tr("%1 contains oversized MTB course metadata.")
+                        .arg(QFileInfo(source).fileName()));
+                break;
+            }
+            const QString targetMetadata = mtbCourseMetadataPath(target);
+            ok = copyToLibrary(
+                    sourceMetadata, targetMetadata, tr("MTB course metadata"));
+            if (!ok) {
+                break;
+            }
         }
 
         ErgFile workout(target, ErgFileFormat::unknown, context);

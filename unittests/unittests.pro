@@ -134,7 +134,10 @@ exists(unittests.pri) {
 			   Train/workoutGameCanvas \
 			   Train/workoutGameCourse \
 			   Train/workoutGameCourseConversion \
+			   Train/workoutGameCourseConversionDialog \
 			   Train/workoutGameCourseDocument \
+			   Train/workoutGameCourseRuntime \
+			   Train/workoutGameCourseSourceAdapter \
 			   Train/workoutGameDistanceCourse \
 			   Train/workoutGameDistancePlayback \
 			   Train/workoutGameRendererPolicy \

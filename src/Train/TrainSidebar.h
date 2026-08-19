@@ -168,8 +168,10 @@ class TrainSidebar : public GcWindow
 
         void devicePopup();
         void workoutPopup();
+        void workoutTreeMenuPopup(const QPoint &position);
         void videosyncPopup();
         void mediaPopup();
+        void createMtbCourse();
 
         void refresh(); // when TrainDB is updated...
 
@@ -188,6 +190,9 @@ class TrainSidebar : public GcWindow
         // workout filters
         void workoutFiltersChanged(QList<ModelFilter*>& f) { sortModel->setFilters(f); }
         void workoutFiltersRemoved() { sortModel->removeFilters(); }
+
+    private:
+        void showWorkoutPopup(const QPoint &globalPosition);
 
     public slots:
         void configChanged(qint32);

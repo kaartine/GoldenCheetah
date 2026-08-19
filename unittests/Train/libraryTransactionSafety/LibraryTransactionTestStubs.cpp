@@ -73,8 +73,9 @@ ErgFile::ErgFile(const QString &path, ErgFileFormat, Context *)
 
 bool ErgFile::isWorkout(const QString &path)
 {
-    return QFileInfo(path).suffix().compare(
-               QStringLiteral("erg"), Qt::CaseInsensitive) == 0;
+    const QString suffix = QFileInfo(path).suffix();
+    return suffix.compare(QStringLiteral("erg"), Qt::CaseInsensitive) == 0
+        || suffix.compare(QStringLiteral("crs"), Qt::CaseInsensitive) == 0;
 }
 
 VideoSyncFile::VideoSyncFile(const QString &path, int &, Context *)
