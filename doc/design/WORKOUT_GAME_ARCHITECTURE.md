@@ -143,6 +143,118 @@ pacing curves derive from the course seed, while placement is based on score.
 Small visual progress offsets show whether a rider is ahead without changing
 the authoritative workout progress or trainer target.
 
+## Arcade Design Direction
+
+The game should adopt the clarity of 1980s arcade games without copying their
+punishing failure rules. Each challenge must be visible early, require one
+understandable decision, and produce immediate visual and audible feedback.
+
+- Enduro Racer is the primary camera and presentation reference: a lightweight
+  pseudo-3D trail, large readable obstacles, a small set of reusable riding
+  techniques, checkpoints, and visibly different stages.
+- Excitebike is the primary jump reference: approach speed, take-off timing,
+  airborne bike angle, and landing quality are separate parts of a jump. A
+  workout-earned flow meter can replace its heat/turbo resource without
+  encouraging the rider to exceed the prescribed power.
+- OutRun is the primary structure reference: route branches and biome changes
+  provide replay value while every branch preserves the workout prescription.
+- Paperboy is the soft-failure reference: short skill courses can appear during
+  recovery, and failure ends only the bonus opportunity rather than the ride.
+
+Before adding more terrain types, the first polished game loop should include:
+
+1. An event timeline that announces the next feature and its input window.
+2. Pumped rollers, a timed bunny hop, and controllable landing angle.
+3. `Perfect`, `Good`, and `Missed` outcomes with score, animation, and sound.
+4. A soft bypass or lost multiplier on failure, never a changed power target.
+5. A result view containing per-section adherence, feature outcomes, longest
+   streak, personal-best comparison, and ghost delta.
+
+The normal HUD should prioritize the next action, target band, interval
+countdown, flow/streak, gear, and route position. Renderer and frame-time
+diagnostics belong in an optional debug overlay.
+
+## Future Distance Course Mode
+
+Distance Course is a separate mode from the time-authored ERG Workout Game.
+Elapsed time is still recorded and used to integrate physics, but it no longer
+determines course progress. The finish condition is a configured route distance,
+and the rider advances only through simulated road speed. On level ground the
+bike coasts and stops without power; downhill it can accelerate under gravity.
+
+The initial course format is distance-authored and offline:
+
+- total distance in meters;
+- piecewise grade and elevation profile by distance;
+- terrain, biome, and game-event markers by distance;
+- optional target power or power-zone guidance for selected segments; and
+- deterministic seed, checkpoints, branches, and finish metadata.
+
+This mode must not reinterpret an existing time-based ERG file implicitly. A
+separate course file or an explicit conversion creates a stable distance route.
+The conversion UI must show that completion time becomes variable.
+
+### Longitudinal Physics
+
+Road speed is integrated at a fixed game-physics cadence from measured power
+and opposing forces. The baseline model is:
+
+```text
+wheel power = measured power * drivetrain efficiency
+drive force = wheel power / max(speed, low-speed threshold)
+net force = drive force
+          - aerodynamic drag
+          - rolling resistance
+          - grade force
+acceleration = net force / effective mass
+```
+
+The model uses rider-plus-bike mass, air density, `CdA`, rolling coefficient,
+gradient, drivetrain loss, and rotating-mass compensation. Low-speed launch,
+traction, terminal downhill speed, braking, and numerical integration need
+explicit bounds. Arcade tuning may smooth or scale forces, but one named
+physics profile must remain deterministic and unit tested.
+
+Virtual gear determines the relationship between cadence, trainer torque, and
+road feel. It must not directly create energy or distance. The simulated road
+speed comes from power and forces; gear selection changes whether producing that
+power feels like a slow/high-torque or fast/low-torque effort.
+
+### Trainer Integration
+
+`TrainSidebar` remains the only component allowed to send trainer commands. The
+course model publishes the current grade and requested road-feel parameters;
+existing Train control code validates and applies them using slope or resistance
+control. Unsupported trainers keep a passive speed simulation and display a
+clear capability state.
+
+A trainer-difficulty setting may scale the gradient felt at the pedals without
+changing the full gradient used by road-speed physics. This lets a steep virtual
+climb remain steep while making its gearing practical on limited hardware.
+
+### Safety And Session Bounds
+
+Because finishing time is unknown, Distance Course requires an independent
+maximum-duration guard, ordinary pause/continue/stop behavior, and a visible
+remaining-distance estimate. Disconnects freeze trainer commands safely and
+allow simulated coasting only for a short bounded period before pausing course
+progress. Recording remains time based and must be recoverable even when the
+course is not completed.
+
+### Tuning And Validation
+
+The first version should use the Data Generator and recorded telemetry replays,
+then be calibrated with a real trainer. Tests cover flat-road acceleration,
+coasting to a stop, climb deceleration, downhill terminal speed, no negative or
+non-finite speed, virtual-gear energy conservation, pause/disconnect behavior,
+and deterministic completion time. Reference scenarios should include a flat
+kilometer, a sustained climb, rollers, and a climb followed by a recovery
+descent.
+
+Implementation should proceed as a non-rendered physics prototype first. A
+speed-versus-time and distance-versus-time plot will make model errors easier to
+identify before the mode is connected to trainer resistance or game graphics.
+
 ## Determinism And Persistence
 
 Course seeds use a specified integer hash over normalized interval values. They
