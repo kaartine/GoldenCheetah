@@ -143,6 +143,7 @@ exists(unittests.pri) {
 			   Train/workoutGameRendererPolicy \
 			   Train/workoutGameRoadPhysics \
 			   Train/workoutGameSimulation \
+			   Train/workoutGameSessionState \
 			   Train/workoutGameWorld \
 			   Train/workoutGameWorkoutAdapter \
 			   Train/workoutRideCommandFilter \

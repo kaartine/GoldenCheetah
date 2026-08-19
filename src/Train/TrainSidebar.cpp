@@ -2921,11 +2921,14 @@ bool TrainSidebar::applyWorkoutTarget(bool initializeSlope)
         targetDevices.push_back(Devices[dev].controller);
     }
 
-    if (dispatchTarget
-            && trainerTargetCoordinator.apply(target, targetDevices)
-            == TrainerTargetResult::WorkoutFinished) {
-        Stop(DEVICE_OK);
-        return false;
+    if (dispatchTarget) {
+        const TrainerTargetResult result = trainerTargetCoordinator.apply(
+                target, targetDevices);
+        if (result == TrainerTargetResult::WorkoutFinished) {
+            context->notifySetNow(target.workoutPosition);
+            Stop(DEVICE_OK);
+            return false;
+        }
     }
 
     if (generatedCourseTargetWatts >= 0.0) {

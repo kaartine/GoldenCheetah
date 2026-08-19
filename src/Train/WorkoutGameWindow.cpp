@@ -174,6 +174,7 @@ double WorkoutGameWindow::currentFtp(ErgFile *workout) const
 
 void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
 {
+    sessionState.workoutSelected();
     currentCourse = WorkoutGameCourse();
     distanceRuntime.reset();
     distanceSnapshot = WorkoutGameDistancePlaybackSnapshot();
@@ -234,11 +235,13 @@ void WorkoutGameWindow::telemetryUpdate(const RealtimeData &telemetry)
 
 void WorkoutGameWindow::setNow(long workoutPosition)
 {
+    if (!sessionState.acceptsPositionUpdate(context->isRunning())) return;
     updateAtWorkoutPosition(workoutPosition);
 }
 
 void WorkoutGameWindow::start()
 {
+    sessionState.started();
     simulation.reset();
     physics.reset();
     camera.reset();
@@ -264,6 +267,7 @@ void WorkoutGameWindow::unpause()
 
 void WorkoutGameWindow::stop()
 {
+    sessionState.stopped();
     sessionActive = false;
     storeGhost();
 }

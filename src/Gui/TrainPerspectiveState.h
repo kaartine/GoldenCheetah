@@ -14,7 +14,7 @@
 
 namespace TrainPerspectiveState {
 
-constexpr int CurrentVersion = 3;
+constexpr int CurrentVersion = 4;
 
 bool migrate(QString &content, const QString &defaultsContent);
 

@@ -201,6 +201,10 @@ TrainPerspectiveState::migrate(QString &content, const QString &defaultsContent)
         }
     }
 
+    QDomElement gameLayout = layoutContainingChart(
+            document, WorkoutGameChartId);
+    if (!gameLayout.isNull()) gameLayout.setAttribute("trainswitch", "0");
+
     root.setAttribute("version", CurrentVersion);
     content = document.toString(1);
     return true;

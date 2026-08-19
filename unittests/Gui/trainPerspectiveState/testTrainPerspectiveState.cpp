@@ -51,7 +51,7 @@ class TestTrainPerspectiveState : public QObject
             "<layout name=\"Erg Workout\" trainswitch=\"1\">"
             "%1"
             "</layout>"
-            "<layout name=\"Workout Game\" trainswitch=\"1\">"
+            "<layout name=\"Workout Game\" trainswitch=\"0\">"
             "<chart id=\"59\" title=\"Workout Game\"/>"
             "</layout>"
             "</layouts>")
@@ -107,7 +107,7 @@ private slots:
 
         const QDomDocument document = parse(content);
         QVERIFY(!document.isNull());
-        QCOMPARE(document.documentElement().attribute("version"), QString("3"));
+        QCOMPARE(document.documentElement().attribute("version"), QString("4"));
 
         const QList<int> expected = QList<int>() << 5 << 9 << 12 << 19 << 6 << 7 << 8;
         QCOMPARE(telemetrySeries(document), expected);
@@ -122,6 +122,9 @@ private slots:
         QCOMPARE(document.documentElement().lastChildElement("layout")
                          .attribute("name"),
                  QString("Workout Game"));
+        QCOMPARE(document.documentElement().lastChildElement("layout")
+                         .attribute("trainswitch"),
+                 QString("0"));
     }
 
     void preservesCustomizedLayout()
@@ -132,7 +135,7 @@ private slots:
         QVERIFY(TrainPerspectiveState::migrate(content, defaults()));
 
         const QDomDocument document = parse(content);
-        QCOMPARE(document.documentElement().attribute("version"), QString("3"));
+        QCOMPARE(document.documentElement().attribute("version"), QString("4"));
         QCOMPARE(telemetrySeries(document), customized);
         foreach (const QDomElement &chart, telemetryCharts(document)) {
             QCOMPARE(property(chart, "widthFactor").attribute("value"), QString("6.25"));
@@ -142,7 +145,7 @@ private slots:
     void respectsCurrentVersion()
     {
         const QList<int> oldDefault = QList<int>() << 5 << 9 << 12 << 19 << 6 << 7;
-        QString content = layout(oldDefault, "3");
+        QString content = layout(oldDefault, "4");
         const QString original = content;
 
         QVERIFY(!TrainPerspectiveState::migrate(content, defaults()));
@@ -158,7 +161,7 @@ private slots:
 
         const QDomDocument document = parse(content);
         QCOMPARE(telemetrySeries(document), withHeartRate);
-        QCOMPARE(document.documentElement().attribute("version"), QString("3"));
+        QCOMPARE(document.documentElement().attribute("version"), QString("4"));
     }
 
     void doesNotDuplicateExistingWorkoutGameLayout()
@@ -179,6 +182,9 @@ private slots:
             if (charts.at(index).toElement().attribute("id") == "59") ++gameCharts;
         }
         QCOMPARE(gameCharts, 1);
+        QCOMPARE(document.documentElement().lastChildElement("layout")
+                         .attribute("trainswitch"),
+                 QString("0"));
     }
 };
 

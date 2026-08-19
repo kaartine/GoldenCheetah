@@ -15,6 +15,7 @@
 #include "WorkoutGameCompetition.h"
 #include "WorkoutGameCourseRuntime.h"
 #include "WorkoutGameSimulation.h"
+#include "WorkoutGameSessionState.h"
 #include "WorkoutGameWorld.h"
 
 class Context;
@@ -55,6 +56,7 @@ private:
     WorkoutGameCourseRuntime distanceRuntime;
     WorkoutGameDistancePlaybackSnapshot distanceSnapshot;
     WorkoutGameSimulation simulation;
+    WorkoutGameSessionState sessionState;
     WorkoutGamePhysics physics;
     WorkoutGameCamera camera;
     WorkoutGameCompetition competition;
