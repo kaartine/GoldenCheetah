@@ -269,6 +269,58 @@ preferred offline source. Strava synchronization is an optional source, and all
 downloaded or derived athlete data stays in the private athlete directory. It
 must never be bundled into the application, tests, screenshots, or repository.
 
+### Building A Course From A Past Activity
+
+The primary historical-data workflow starts from an activity already downloaded
+by GoldenCheetah synchronization. It does not make another Strava request. The
+activity becomes an editable course draft rather than an immutable geographic
+replay.
+
+1. Read moving time, distance, altitude, grade, position, power, cadence, and
+   heart rate from the local activity where available.
+2. Remove stops, GPS jumps, implausible elevation spikes, and sensor dropouts,
+   then build a smoothed distance-indexed elevation profile.
+3. Detect meaningful climbs, descents, high-effort passages, technical changes,
+   and scenic or recovery transitions.
+4. Preserve the characteristic sections while shortening low-information,
+   low-effort connectors according to a user-selected compression level.
+5. Join retained sections with bounded grade and curvature transitions, run the
+   complete physics model, and report distance, elevation gain, and expected
+   duration before and after compression.
+
+Compression must not simply shorten horizontal distance while retaining the
+same elevation change, because that invents steeper gradients. Long flat
+connectors can be shortened directly. For rolling or climbing connectors the
+generator selects representative sub-sections or removes proportional distance
+and elevation before smoothing the join. The editor marks every generated join
+so the user can inspect or undo it.
+
+The first draft can derive a simplified target-power profile from the original
+ride using change-point detection and FTP-relative zones rather than copying
+every noisy power sample. The user then edits that profile independently of the
+terrain. Three starting choices are useful:
+
+- `Original effort`: preserve the major effort and recovery pattern;
+- `Normalize to zones`: convert the ride into editable FTP-relative blocks; and
+- `Route only`: discard historical power and place a different workout on the
+  retained terrain.
+
+The course editor displays elevation and target power together over distance,
+with predicted time as a secondary scale. A target block can be either
+distance-anchored to a climb or duration-anchored after a course marker. Editing
+power updates expected speed and ETA immediately. An explicit `Fit to time`
+operation may resize only unlocked recovery and connector sections; it never
+silently changes locked work targets or characteristic terrain.
+
+The intended UI flow is:
+
+1. Select a synchronized past activity.
+2. Preview detected key sections and choose connector compression.
+3. Inspect the generated elevation profile and joins.
+4. Generate, normalize, or replace the target-power profile.
+5. Edit targets and locks while viewing nominal and confidence-range duration.
+6. Test with the Data Generator and save as a reusable private course workout.
+
 ### Longitudinal Physics
 
 Road speed is integrated at a fixed game-physics cadence from measured power
