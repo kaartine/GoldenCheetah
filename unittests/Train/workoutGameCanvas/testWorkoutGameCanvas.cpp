@@ -493,6 +493,21 @@ private slots:
         QVERIFY(WorkoutGameCanvas::addRiderContrastKeyline(QImage()).isNull());
     }
 
+    void obliquePixelArtResourcesAreBundled()
+    {
+        QVERIFY(!QPixmap(QStringLiteral(
+                ":/images/workout-game-background-oblique.png")).isNull());
+        QVERIFY(!QPixmap(QStringLiteral(
+                ":/images/workout-game-rider-oblique.png")).isNull());
+        const QPixmap props(QStringLiteral(
+                ":/images/workout-game-trail-props.png"));
+        QVERIFY(!props.isNull());
+        QCOMPARE(props.width() % 3, 0);
+        QCOMPARE(props.height() % 3, 0);
+        QVERIFY(!QPixmap(QStringLiteral(
+                ":/images/workout-game-trail-surface.png")).isNull());
+    }
+
     void fallbackSceneIsVisibleWithoutWorkout()
     {
         WorkoutGameCanvas canvas;

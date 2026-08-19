@@ -1,6 +1,10 @@
 <RCC>
     <qresource prefix="/images">
         <file alias="workout-game-background.png">../../../src/Resources/images/workout-game-background.png</file>
+        <file alias="workout-game-background-oblique.png">../../../src/Resources/images/workout-game-background-oblique.png</file>
         <file alias="workout-game-rider.png">../../../src/Resources/images/workout-game-rider.png</file>
+        <file alias="workout-game-rider-oblique.png">../../../src/Resources/images/workout-game-rider-oblique.png</file>
+        <file alias="workout-game-trail-props.png">../../../src/Resources/images/workout-game-trail-props.png</file>
+        <file alias="workout-game-trail-surface.png">../../../src/Resources/images/workout-game-trail-surface.png</file>
     </qresource>
 </RCC>

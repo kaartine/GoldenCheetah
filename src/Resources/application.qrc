@@ -95,7 +95,11 @@
         <file>images/noavatar.png</file>
         <file>images/activity.png</file>
         <file>images/workout-game-background.png</file>
+        <file>images/workout-game-background-oblique.png</file>
         <file>images/workout-game-rider.png</file>
+        <file>images/workout-game-rider-oblique.png</file>
+        <file>images/workout-game-trail-props.png</file>
+        <file>images/workout-game-trail-surface.png</file>
         <file>images/metadata.png</file>
         <file>images/stopwatch.png</file>
         <file>images/toolbar/main/measures.png</file>

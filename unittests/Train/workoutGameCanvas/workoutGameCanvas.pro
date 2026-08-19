@@ -10,6 +10,7 @@ SOURCES = testWorkoutGameCanvas.cpp \
           ../../../src/Train/WorkoutGameOpenGLCanvas.cpp \
           ../../../src/Train/WorkoutGameSimulation.cpp \
           ../../../src/Train/WorkoutGameTerrainTransition.cpp \
+          ../../../src/Train/WorkoutGameTrailScene.cpp \
           ../../../src/Train/WorkoutGameVisualSmoother.cpp \
           ../../../src/Train/WorkoutGameWorld.cpp
 
@@ -19,6 +20,7 @@ HEADERS = ../../../src/Train/WorkoutGameCanvas.h \
           ../../../src/Train/WorkoutGameOpenGLCanvas.h \
           ../../../src/Train/WorkoutGameSimulation.h \
           ../../../src/Train/WorkoutGameTerrainTransition.h \
+          ../../../src/Train/WorkoutGameTrailScene.h \
           ../../../src/Train/WorkoutGameVisualSmoother.h \
           ../../../src/Train/WorkoutGameWorld.h
 
