@@ -195,7 +195,9 @@ RUN echo "${USERNAME} ALL=(root) NOPASSWD:ALL" > "/etc/sudoers.d/${USERNAME}" \
 
 ENV QT_VERSION="${QT_VERSION}"
 ENV QTDIR="/opt/Qt/${QT_VERSION}/gcc_64"
-ENV PATH="/opt/Qt/${QT_VERSION}/gcc_64/bin:${PATH}"
+ENV CCACHE_DIR="/home/${USERNAME}/.cache/ccache"
+ENV CCACHE_MAXSIZE="12G"
+ENV PATH="/usr/lib/ccache:/opt/Qt/${QT_VERSION}/gcc_64/bin:${PATH}"
 ENV LD_LIBRARY_PATH="/opt/Qt/${QT_VERSION}/gcc_64/lib"
 ENV QTWEBENGINE_DISABLE_SANDBOX=1
 

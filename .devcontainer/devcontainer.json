@@ -12,10 +12,15 @@
   "remoteUser": "ubuntu",
   "updateRemoteUserUID": true,
   "runArgs": ["--init"],
+  "mounts": [
+    "source=goldencheetah-ccache,target=/home/ubuntu/.cache/ccache,type=volume"
+  ],
   "containerEnv": {
+    "CCACHE_DIR": "/home/ubuntu/.cache/ccache",
+    "CCACHE_MAXSIZE": "12G",
     "QTWEBENGINE_DISABLE_SANDBOX": "1"
   },
-  "postCreateCommand": "bash .devcontainer/bootstrap.sh",
+  "postCreateCommand": "sudo chown -R $(id -u):$(id -g) /home/ubuntu/.cache/ccache && bash .devcontainer/bootstrap.sh",
   "customizations": {
     "vscode": {
       "extensions": [

@@ -566,7 +566,9 @@ class PipelineIsolationTests(unittest.TestCase):
                     case "$PATH" in *poison*) exit 72;; esac
                     for variable in CC CXX CFLAGS CXXFLAGS CPPFLAGS LDFLAGS \
                         ARFLAGS MAKEFLAGS QMAKEFLAGS QMAKEFEATURES QMAKEPATH \
-                        PKG_CONFIG_PATH PYTHONHOME PYTHONPATH; do
+                        PKG_CONFIG_PATH PYTHONHOME PYTHONPATH CCACHE_DIR \
+                        CCACHE_COMPILERCHECK CCACHE_IGNOREOPTIONS CCACHE_MAXSIZE \
+                        CCACHE_NOHASHDIR CCACHE_SLOPPINESS; do
                         eval 'test -z "${'"$variable"'+x}"'
                     done
                     """
@@ -593,6 +595,12 @@ class PipelineIsolationTests(unittest.TestCase):
                 "PKG_CONFIG_PATH": "poison",
                 "PYTHONHOME": "poison",
                 "PYTHONPATH": "poison",
+                "CCACHE_DIR": "poison",
+                "CCACHE_COMPILERCHECK": "poison",
+                "CCACHE_IGNOREOPTIONS": "poison",
+                "CCACHE_MAXSIZE": "poison",
+                "CCACHE_NOHASHDIR": "poison",
+                "CCACHE_SLOPPINESS": "poison",
             }
             result = run(
                 [
@@ -614,6 +622,103 @@ class PipelineIsolationTests(unittest.TestCase):
             self.assertIn("run_reproducible_build_tool", build_pass.read_text(
                 encoding="utf-8"
             ))
+
+    def test_compiler_environment_allows_only_validated_ccache_settings(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            qt_root = root / "Qt"
+            home = root / "home"
+            temporary_build = root / "tmp"
+            cache = root / "ccache"
+            (qt_root / "bin").mkdir(parents=True)
+            home.mkdir()
+            temporary_build.mkdir()
+            cache.mkdir()
+            probe = root / "probe"
+            probe.write_text(
+                textwrap.dedent(
+                    """#!/bin/sh
+                    set -eu
+                    test "$CCACHE_DIR" = "$1"
+                    test "$CCACHE_COMPILERCHECK" = content
+                    test "$CCACHE_MAXSIZE" = 12G
+                    test "$CCACHE_NOHASHDIR" = true
+                    test "$CCACHE_IGNOREOPTIONS" = \
+                        '-ffile-prefix-map=* -fdebug-prefix-map=* -fmacro-prefix-map=*'
+                    test "$CCACHE_SLOPPINESS" = \
+                        pch_defines,time_macros,include_file_ctime,include_file_mtime
+                    test -z "${CCACHE_PREFIX+x}"
+                    """
+                ),
+                encoding="ascii",
+            )
+            probe.chmod(0o700)
+            result = run(
+                [
+                    "bash",
+                    "-c",
+                    'set -euo pipefail; . "$1"; '
+                    'run_reproducible_build_tool "$2" "$3" "$4" "$5" "$6"',
+                    "bash",
+                    str(SUPPORT),
+                    str(qt_root),
+                    str(home),
+                    str(temporary_build),
+                    str(probe),
+                    str(cache),
+                ],
+                env={
+                    **os.environ,
+                    "SOURCE_DATE_EPOCH": "1234567890",
+                    "GC_SOURCE_REVISION": "1" * 40,
+                    "GC_APPIMAGE_CCACHE_DIR": str(cache),
+                    "CCACHE_PREFIX": "poison",
+                },
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_compiler_environment_rejects_unsafe_ccache_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            qt_root = root / "Qt"
+            home = root / "home"
+            temporary_build = root / "tmp"
+            cache = root / "ccache"
+            cache_target = root / "ccache-target"
+            (qt_root / "bin").mkdir(parents=True)
+            home.mkdir()
+            temporary_build.mkdir()
+            cache_target.mkdir()
+            cache.symlink_to(cache_target, target_is_directory=True)
+            result = run(
+                [
+                    "bash",
+                    "-c",
+                    'set -euo pipefail; . "$1"; '
+                    'run_reproducible_build_tool "$2" "$3" "$4" true',
+                    "bash",
+                    str(SUPPORT),
+                    str(qt_root),
+                    str(home),
+                    str(temporary_build),
+                ],
+                env={
+                    **os.environ,
+                    "SOURCE_DATE_EPOCH": "1234567890",
+                    "GC_SOURCE_REVISION": "1" * 40,
+                    "GC_APPIMAGE_CCACHE_DIR": str(cache),
+                },
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unsafe or not writable", result.stderr)
+
+    def test_release_build_routes_compilers_through_ccache_when_requested(self):
+        build_pass = (
+            REPOSITORY_ROOT / "appveyor/linux/build-appimage-pass.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn('QMAKE_CC=$CCACHE_COMMAND gcc', build_pass)
+        self.assertIn('QMAKE_CXX=$CCACHE_COMMAND g++', build_pass)
+        self.assertIn('QMAKE_CXXFLAGS+=-fpch-preprocess', build_pass)
 
     def test_reproduction_builds_and_packages_two_independent_trees(self):
         self.assertTrue(REPRODUCE_APPIMAGE.is_file(), "reproduction driver is missing")
@@ -658,6 +763,8 @@ class PipelineIsolationTests(unittest.TestCase):
             qwt_config.write_text(
                 "QWT_CONFIG += QwtPlot QwtSvg\n", encoding="ascii"
             )
+            cache = root / "ccache"
+            cache.mkdir()
 
             build_log = root / "build.log"
             package_log = root / "package.log"
@@ -672,7 +779,8 @@ class PipelineIsolationTests(unittest.TestCase):
                 "cp \"$3/src/Core/GeneratedSecrets.h\" "
                 "\"$1/src/Core/GeneratedSecrets.h\"\n"
                 "cp \"$3/qwt/qwtconfig.pri\" \"$1/qwt/qwtconfig.pri\"\n"
-                "printf '%s|%s\\n' \"$1\" \"$2\" >>\"$GC_BUILD_LOG\"\n"
+                "printf '%s|%s|%s\\n' \"$1\" \"$2\" "
+                "\"${GC_APPIMAGE_CCACHE_DIR:-}\" >>\"$GC_BUILD_LOG\"\n"
                 "mkdir -p \"$2/src\"\n"
                 "printf 'same independently built elf\\n' >\"$2/src/GoldenCheetah\"\n"
                 "chmod 700 \"$2/src/GoldenCheetah\"\n",
@@ -712,6 +820,7 @@ class PipelineIsolationTests(unittest.TestCase):
                     "GC_APPIMAGE_PACKAGE_PASS_SCRIPT": str(package_probe),
                     "GC_BUILD_LOG": str(build_log),
                     "GC_PACKAGE_LOG": str(package_log),
+                    "GC_APPIMAGE_CCACHE_DIR": str(cache),
                     "GC_EFFECTIVE_CONFIG": str(config),
                     "GC_EFFECTIVE_SECRETS": str(secrets),
                     "GC_EFFECTIVE_QWT_CONFIG": str(qwt_config),
@@ -723,13 +832,18 @@ class PipelineIsolationTests(unittest.TestCase):
             self.assertEqual(len(builds), 2)
             self.assertEqual(len(packages), 2)
             self.assertEqual(
-                len({line.split("|", 1)[0] for line in builds}),
+                len({line.split("|", 2)[0] for line in builds}),
                 1,
                 "independent checkouts must reuse one canonical source path",
             )
-            self.assertEqual(len({line.split("|", 1)[1] for line in builds}), 2)
+            self.assertEqual(len({line.split("|", 2)[1] for line in builds}), 2)
+            self.assertEqual(
+                [line.split("|", 2)[2] for line in builds],
+                [str(cache), ""],
+                "the verification build must bypass the shared compiler cache",
+            )
             for build, package in zip(builds, packages):
-                source_tree, build_tree = build.split("|", 1)
+                source_tree, build_tree, _cache_dir = build.split("|", 2)
                 package_source, package_binary = package.split("|", 1)
                 self.assertEqual(package_source, source_tree)
                 self.assertEqual(package_binary, f"{build_tree}/src/GoldenCheetah")
@@ -815,6 +929,33 @@ class PipelineIsolationTests(unittest.TestCase):
 
 
 class PlatformGateTests(unittest.TestCase):
+    def test_devcontainer_uses_a_persistent_compiler_cache(self):
+        dockerfile = (REPOSITORY_ROOT / ".devcontainer/Dockerfile").read_text(
+            encoding="utf-8"
+        )
+        build_script = (REPOSITORY_ROOT / ".devcontainer/build.sh").read_text(
+            encoding="utf-8"
+        )
+        configuration = json.loads(
+            (REPOSITORY_ROOT / ".devcontainer/devcontainer.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        self.assertIn("/usr/lib/ccache", dockerfile)
+        self.assertIn("ccache --show-stats", build_script)
+        self.assertIn("CCACHE_BASEDIR", build_script)
+        self.assertIn(
+            "source=goldencheetah-ccache,"
+            "target=/home/ubuntu/.cache/ccache,type=volume",
+            configuration["mounts"],
+        )
+        self.assertEqual(
+            configuration["containerEnv"]["CCACHE_DIR"],
+            "/home/ubuntu/.cache/ccache",
+        )
+        self.assertIn("chown -R", configuration["postCreateCommand"])
+
     def test_gui_smoke_marks_initialized_runtime(self):
         main = (REPOSITORY_ROOT / "src/Core/main.cpp").read_text(encoding="utf-8")
         marker = main.index("goldencheetah_gui_smoke=main-window-ready")

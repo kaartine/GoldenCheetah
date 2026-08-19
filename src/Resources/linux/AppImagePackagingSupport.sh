@@ -189,7 +189,8 @@ run_reproducible_build_tool()
     local build_home=$2
     local build_tmp=$3
     shift 3
-    local tool_path revision epoch
+    local tool_path revision epoch cache_dir
+    local -a optional_environment=()
 
     [ -d "$qt_root" ] && [ ! -L "$qt_root" ] &&
         [ -d "$build_home" ] && [ ! -L "$build_home" ] &&
@@ -207,6 +208,30 @@ run_reproducible_build_tool()
         echo "Authenticated source revision and epoch are required." >&2
         return 1
     }
+    cache_dir=${GC_APPIMAGE_CCACHE_DIR:-}
+    if [ -n "$cache_dir" ]; then
+        case "$cache_dir" in
+            /*) ;;
+            *)
+                echo "The AppImage ccache directory must be absolute." >&2
+                return 1
+                ;;
+        esac
+        [ -d "$cache_dir" ] && [ ! -L "$cache_dir" ] &&
+            [ -w "$cache_dir" ] || {
+            echo "The AppImage ccache directory is unsafe or not writable." >&2
+            return 1
+        }
+        cache_dir=$(cd -- "$cache_dir" && pwd -P) || return
+        optional_environment=(
+            CCACHE_DIR="$cache_dir"
+            CCACHE_COMPILERCHECK=content
+            CCACHE_IGNOREOPTIONS="-ffile-prefix-map=* -fdebug-prefix-map=* -fmacro-prefix-map=*"
+            CCACHE_MAXSIZE=12G
+            CCACHE_NOHASHDIR=true
+            CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_ctime,include_file_mtime
+        )
+    fi
     tool_path="$qt_root/bin:/usr/local/bin:/usr/bin:/bin"
     env -i \
         PATH="$tool_path" \
@@ -218,6 +243,7 @@ run_reproducible_build_tool()
         SOURCE_DATE_EPOCH="$epoch" \
         GC_SOURCE_REVISION="$revision" \
         ZERO_AR_DATE=1 \
+        "${optional_environment[@]}" \
         "$@"
 )
 

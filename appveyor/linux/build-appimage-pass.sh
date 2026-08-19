@@ -12,6 +12,7 @@ INPUT_SOURCE=$(cd -- "$3" && pwd -P)
 QMAKE_COMMAND=${GC_APPIMAGE_QMAKE:-qmake}
 BUILD_JOBS=${GC_BUILD_JOBS:-2}
 SUPPORT="$SOURCE_TREE/src/Resources/linux/AppImagePackagingSupport.sh"
+QMAKE_CACHE_ARGUMENTS=()
 
 [[ "$BUILD_JOBS" =~ ^[1-9][0-9]*$ ]] || {
     echo "GC_BUILD_JOBS must be a positive integer." >&2
@@ -38,6 +39,17 @@ MAKE_COMMAND=$(command -v make) || {
     echo "make is unavailable." >&2
     exit 1
 }
+if [ -n "${GC_APPIMAGE_CCACHE_DIR:-}" ]; then
+    CCACHE_COMMAND=$(PATH=/usr/local/bin:/usr/bin:/bin command -v ccache) || {
+        echo "ccache was requested but is unavailable." >&2
+        exit 1
+    }
+    QMAKE_CACHE_ARGUMENTS=(
+        "QMAKE_CC=$CCACHE_COMMAND gcc"
+        "QMAKE_CXX=$CCACHE_COMMAND g++"
+        "QMAKE_CXXFLAGS+=-fpch-preprocess"
+    )
+fi
 QT_ROOT=$(cd -- "$(dirname -- "$QMAKE_COMMAND")/.." && pwd -P)
 BUILD_HOME="$BUILD_TREE/.build-home"
 BUILD_TMP="$BUILD_TREE/.build-tmp"
@@ -66,7 +78,8 @@ PREFIX_MAP_FLAGS="-ffile-prefix-map=$SOURCE_TREE=/usr/src/goldencheetah -fdebug-
         QMAKE_CXXFLAGS_WARN_ON+="-Wno-unused-private-field -Wno-c++11-narrowing -Wno-deprecated-declarations -Wno-deprecated-register -Wno-nullability-completeness -Wno-sign-compare -Wno-inconsistent-missing-override" \
         QMAKE_CFLAGS_WARN_ON+="-Wno-deprecated-declarations -Wno-sign-compare" \
         QMAKE_CFLAGS+="$PREFIX_MAP_FLAGS" \
-        QMAKE_CXXFLAGS+="$PREFIX_MAP_FLAGS"
+        QMAKE_CXXFLAGS+="$PREFIX_MAP_FLAGS" \
+        "${QMAKE_CACHE_ARGUMENTS[@]}"
     run_reproducible_build_tool \
         "$QT_ROOT" "$BUILD_HOME" "$BUILD_TMP" \
         "$MAKE_COMMAND" -j"$BUILD_JOBS" sub-qwt
