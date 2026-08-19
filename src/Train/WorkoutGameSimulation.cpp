@@ -143,6 +143,38 @@ void WorkoutGameSimulation::moveToSection(int sectionIndex)
     }
 }
 
+void WorkoutGameSimulation::updateSpeed(
+        const WorkoutGameSimulationInput &input,
+        const WorkoutGameSection &section,
+        double actualWatts,
+        std::int64_t stepDurationMs,
+        bool immediate)
+{
+    if (std::isfinite(input.authoritativeSpeedKph)
+            && input.authoritativeSpeedKph >= 0.0) {
+        currentSpeedKph = std::clamp(input.authoritativeSpeedKph, 0.0, 108.0);
+        if (!section.gravityAssisted
+                && std::isfinite(input.drivetrainSpeedLimitKph)
+                && input.drivetrainSpeedLimitKph >= 0.0) {
+            currentSpeedKph = std::min(
+                    currentSpeedKph, input.drivetrainSpeedLimitKph);
+        }
+        return;
+    }
+
+    const double desiredSpeed = section.gravityAssisted
+            ? 32.0 + 3.0 * std::min(actualWatts / configuredFtpWatts, 2.0)
+            : 8.0 + 18.0 * std::sqrt(
+                    std::min(actualWatts / configuredFtpWatts, 2.5));
+    if (immediate) {
+        currentSpeedKph = desiredSpeed;
+        return;
+    }
+    const double speedBlend = std::min(
+            1.0, double(stepDurationMs) / 500.0);
+    currentSpeedKph += (desiredSpeed - currentSpeedKph) * speedBlend;
+}
+
 void WorkoutGameSimulation::simulateStep(
         const WorkoutGameSimulationInput &input,
         std::int64_t stepTimeMs,
@@ -170,12 +202,7 @@ void WorkoutGameSimulation::simulateStep(
                         / std::max(targetWatts, configuredFtpWatts * 0.2));
     }
 
-    const double desiredSpeed = section.gravityAssisted
-            ? 32.0 + 3.0 * std::min(actualWatts / configuredFtpWatts, 2.0)
-            : 8.0 + 18.0 * std::sqrt(
-                    std::min(actualWatts / configuredFtpWatts, 2.5));
-    const double speedBlend = std::min(1.0, double(stepDurationMs) / 500.0);
-    currentSpeedKph += (desiredSpeed - currentSpeedKph) * speedBlend;
+    updateSpeed(input, section, actualWatts, stepDurationMs, false);
 
     if (currentAdherence >= 0.8) {
         streakMs += stepDurationMs;
@@ -259,10 +286,7 @@ WorkoutGameSimulationSnapshot WorkoutGameSimulation::update(
         if (activeSection >= 0) {
             const WorkoutGameSection &section = configuredCourse.sections[activeSection];
             const double actualWatts = finiteNonNegative(input.actualWatts);
-            currentSpeedKph = section.gravityAssisted
-                    ? 32.0 + 3.0 * std::min(actualWatts / configuredFtpWatts, 2.0)
-                    : 8.0 + 18.0 * std::sqrt(
-                            std::min(actualWatts / configuredFtpWatts, 2.5));
+            updateSpeed(input, section, actualWatts, 0, true);
         }
         return snapshot(workoutTimeMs, 0);
     }
@@ -271,6 +295,14 @@ WorkoutGameSimulationSnapshot WorkoutGameSimulation::update(
     if (input.paused || elapsedMs <= 0) {
         lastWorkoutTimeMs = workoutTimeMs;
         moveToSection(sectionAt(workoutTimeMs));
+        if (!input.paused && activeSection >= 0) {
+            updateSpeed(
+                    input,
+                    configuredCourse.sections[activeSection],
+                    finiteNonNegative(input.actualWatts),
+                    0,
+                    true);
+        }
         return snapshot(workoutTimeMs, 0);
     }
 

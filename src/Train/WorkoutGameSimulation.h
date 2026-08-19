@@ -35,6 +35,8 @@ struct WorkoutGameSimulationInput
     double actualWatts = 0.0;
     double targetWatts = 0.0;
     double cadenceRpm = 0.0;
+    double authoritativeSpeedKph = -1.0;
+    double drivetrainSpeedLimitKph = -1.0;
     int virtualGear = 1;
     bool paused = false;
 };
@@ -73,6 +75,12 @@ private:
     int sectionAt(std::int64_t workoutTimeMs) const;
     void moveToSection(int sectionIndex);
     void finalizeActiveSection();
+    void updateSpeed(
+            const WorkoutGameSimulationInput &input,
+            const WorkoutGameSection &section,
+            double actualWatts,
+            std::int64_t stepDurationMs,
+            bool immediate);
     void simulateStep(
             const WorkoutGameSimulationInput &input,
             std::int64_t stepTimeMs,

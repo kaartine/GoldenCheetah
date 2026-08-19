@@ -121,6 +121,49 @@ private slots:
         QCOMPARE(result.adherence, 1.0);
     }
 
+    void distanceRideUsesAuthoritativeSlopeSpeed()
+    {
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(
+                courseFor({{0, 60000, 180.0, 180.0}}), 200.0));
+
+        WorkoutGameSimulationInput moving = sample(0, 180.0, 180.0);
+        moving.authoritativeSpeedKph = 20.0;
+        moving.drivetrainSpeedLimitKph = 7.2;
+        QCOMPARE(simulation.update(moving).speedKph, 7.2);
+
+        WorkoutGameSimulationInput stopped = sample(0, 180.0, 180.0);
+        stopped.authoritativeSpeedKph = 0.0;
+        stopped.drivetrainSpeedLimitKph = 7.2;
+        QCOMPARE(simulation.update(stopped).speedKph, 0.0);
+    }
+
+    void recoveryDescentCanFreewheelFasterThanSelectedGear()
+    {
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(
+                courseFor({{0, 60000, 100.0, 100.0}}), 200.0));
+
+        WorkoutGameSimulationInput input = sample(0, 0.0, 100.0, 0.0);
+        input.authoritativeSpeedKph = 34.0;
+        input.drivetrainSpeedLimitKph = 7.2;
+
+        QCOMPARE(simulation.update(input).speedKph, 34.0);
+    }
+
+    void invalidAuthoritativeSpeedFallsBackToPowerEstimate()
+    {
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(
+                courseFor({{0, 60000, 180.0, 180.0}}), 200.0));
+
+        WorkoutGameSimulationInput input = sample(0, 180.0, 180.0);
+        input.authoritativeSpeedKph =
+                std::numeric_limits<double>::quiet_NaN();
+
+        QVERIFY(simulation.update(input).speedKph > 8.0);
+    }
+
     void accurateRidingScoresMoreThanMissingTarget()
     {
         const WorkoutGameCourse course = courseFor({{0, 60000, 180.0, 180.0}});

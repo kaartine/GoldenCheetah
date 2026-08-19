@@ -19,6 +19,7 @@
 #include "WorkoutGameRendererPolicy.h"
 #include "WorkoutGameWorkoutAdapter.h"
 #include "Settings.h"
+#include "VirtualDrivetrain.h"
 #include "Zones.h"
 
 #include <QDate>
@@ -33,6 +34,7 @@
 namespace {
 
 constexpr int MaximumStoredGhosts = 12;
+constexpr double GameWheelCircumferenceMeters = 2.12;
 
 QString ghostKey(std::uint32_t seed)
 {
@@ -302,6 +304,15 @@ void WorkoutGameWindow::updateSimulation(std::int64_t workoutTimeMs)
                 ? distanceSnapshot.targetWatts
                 : latestTelemetry.getLoad();
         input.cadenceRpm = latestTelemetry.getCadence();
+        if (distanceRuntime.enabled()) {
+            input.authoritativeSpeedKph = latestTelemetry.getSpeed();
+            const VirtualDrivetrain drivetrain(
+                    std::max(1, latestTelemetry.getVirtualGear()));
+            if (input.cadenceRpm > 0.0) {
+                input.drivetrainSpeedLimitKph = drivetrain.speedKph(
+                        input.cadenceRpm, GameWheelCircumferenceMeters);
+            }
+        }
         input.virtualGear = latestTelemetry.getVirtualGear();
     }
 
