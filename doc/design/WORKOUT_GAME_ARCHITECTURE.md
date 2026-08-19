@@ -194,6 +194,81 @@ This mode must not reinterpret an existing time-based ERG file implicitly. A
 separate course file or an explicit conversion creates a stable distance route.
 The conversion UI must show that completion time becomes variable.
 
+### Generating A Course From A Timed Workout
+
+A timed workout can be converted explicitly into a distance course whose
+nominal completion time matches the original workout duration. FTP classifies
+the training intensity, but FTP alone cannot determine gradient or speed. The
+generator also needs rider-plus-bike mass, available virtual gearing, trainer
+capabilities, and a selected terrain style.
+
+For each workout interval the generator:
+
+1. Classifies its physiological role from duration, target power relative to
+   FTP, ramp direction, and surrounding recovery.
+2. Selects a suitable feature and bounded grade range. Short sprints favor a
+   fast, shallow approach; 30-second to two-minute efforts favor punchy climbs;
+   sustained threshold efforts favor longer moderate climbs; and recovery
+   favors descents or low-resistance flow trail.
+3. Runs the longitudinal model at the prescribed power and solves the segment
+   distance that produces the requested nominal duration.
+4. Adds grade transitions and approach/exit terrain, then simulates the complete
+   course again to correct accumulated timing error.
+
+For example, a `4 x 30 s @ 250 W` workout at an FTP of `190 W` is classified as
+four short anaerobic efforts. Rider mass and the speed model determine whether
+each effort becomes, for example, an 80- or 130-meter climb; the ratio to FTP
+selects the challenge class but does not alone fix the gradient. Recovery
+intervals become descents and connectors sized by their nominal recovery time.
+
+The generated course stores both nominal duration and acceptable time bounds
+for every prescribed effort. Course movement remains distance based, but the
+training target is protected from extreme pacing errors:
+
+- arriving early can extend a neutral crest or exit line until the minimum
+  useful exposure is reached;
+- falling substantially behind opens a visible safe bypass at the maximum
+  exposure time; and
+- automatic adjustment never raises target power or silently extends a hard
+  interval beyond its configured bound.
+
+Two completion policies are useful:
+
+- `Fixed Course` never changes generated distances and reports a continuously
+  updated finish-time estimate.
+- `Time Budget` targets a requested session duration by choosing shorter or
+  longer recovery, warm-up, cool-down, and scenic connector branches at
+  checkpoints. It does not shorten prescribed work or change its target power.
+
+Thus a one-hour source workout should take approximately one hour when targets
+are followed. A confidence range is shown before starting and a live ETA during
+the ride. When a strict end time matters more than distance, the existing timed
+ERG mode remains the correct choice.
+
+### Activity And Route Templates
+
+Past activities can provide terrain rather than merely training targets. A
+Strava activity or locally imported FIT/GPX file may supply distance, altitude,
+smoothed grade, time, power, cadence, and heart-rate streams. The generator can:
+
+- reuse an activity's elevation shape as a recognizable virtual route;
+- select matching climb or descent fragments from prior rides as interval
+  templates;
+- scale fragment distance and grade within safe limits to match a new workout;
+- estimate personal speed ranges from previous clean efforts; and
+- offer a direct replay course with new target zones overlaid.
+
+The workout prescription and terrain template remain separate inputs. Inferring
+a structured workout solely from noisy outdoor power is optional and must not
+replace an explicitly authored workout. Stops, GPS elevation noise, drafting,
+wind, traffic, and missing sensor samples are filtered before historical data is
+used for calibration.
+
+Previously synchronized GoldenCheetah activities and local FIT/GPX files are the
+preferred offline source. Strava synchronization is an optional source, and all
+downloaded or derived athlete data stays in the private athlete directory. It
+must never be bundled into the application, tests, screenshots, or repository.
+
 ### Longitudinal Physics
 
 Road speed is integrated at a fixed game-physics cadence from measured power
