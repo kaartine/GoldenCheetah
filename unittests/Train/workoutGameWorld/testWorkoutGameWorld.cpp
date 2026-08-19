@@ -251,21 +251,19 @@ private slots:
 
     void cameraModesMatchFeatureGeometry()
     {
-        QCOMPARE(WorkoutGameCamera::preferredMode(
-                    WorkoutGameTerrainKind::Climb),
-                 WorkoutGameCameraMode::Side);
-        QCOMPARE(WorkoutGameCamera::preferredMode(
-                    WorkoutGameTerrainKind::Roots),
-                 WorkoutGameCameraMode::ThreeQuarter);
-        QCOMPARE(WorkoutGameCamera::preferredMode(
-                    WorkoutGameTerrainKind::RockGarden),
-                 WorkoutGameCameraMode::ThreeQuarter);
-        QCOMPARE(WorkoutGameCamera::preferredMode(
-                    WorkoutGameTerrainKind::Skinny),
-                 WorkoutGameCameraMode::Chase);
-        QCOMPARE(WorkoutGameCamera::preferredMode(
-                    WorkoutGameTerrainKind::Berm),
-                 WorkoutGameCameraMode::Chase);
+        for (WorkoutGameTerrainKind terrain : {
+                WorkoutGameTerrainKind::SmoothTrail,
+                WorkoutGameTerrainKind::Roots,
+                WorkoutGameTerrainKind::Rollers,
+                WorkoutGameTerrainKind::Climb,
+                WorkoutGameTerrainKind::RockGarden,
+                WorkoutGameTerrainKind::BunnyHop,
+                WorkoutGameTerrainKind::Drop,
+                WorkoutGameTerrainKind::Skinny,
+                WorkoutGameTerrainKind::Berm}) {
+            QCOMPARE(WorkoutGameCamera::preferredMode(terrain),
+                     WorkoutGameCameraMode::ThreeQuarter);
+        }
     }
 
     void initialSnapshotFramesTheRider()
@@ -289,7 +287,7 @@ private slots:
         QVERIFY(view.lookAheadMeters > 3.0);
     }
 
-    void cameraTransitionIsSmoothAndConverges()
+    void fixedObliqueCameraKeepsSmoothFeatureZoom()
     {
         WorkoutGameWorldSnapshot world;
         world.ready = true;
@@ -299,13 +297,16 @@ private slots:
         world.speedMetersPerSecond = 7.0;
 
         WorkoutGameCamera camera;
-        QCOMPARE(camera.update(world, 0.016).yawDegrees, 90.0);
+        const WorkoutGameCameraSnapshot initial = camera.update(world, 0.016);
+        QCOMPARE(initial.yawDegrees, 42.0);
+        QCOMPARE(initial.zoom, 1.0);
         world.terrain = WorkoutGameTerrainKind::Skinny;
         world.rider.distanceMeters = 15.0;
 
         const WorkoutGameCameraSnapshot first = camera.update(world, 0.016);
-        QVERIFY(first.yawDegrees < 90.0);
-        QVERIFY(first.yawDegrees > 8.0);
+        QCOMPARE(first.yawDegrees, 42.0);
+        QVERIFY(first.zoom > 1.0);
+        QVERIFY(first.zoom < 1.08);
         QVERIFY(first.centerDistanceMeters > 10.0);
         QVERIFY(first.centerDistanceMeters < 15.0);
 
@@ -313,7 +314,8 @@ private slots:
         for (int frame = 0; frame < 180; ++frame) {
             settled = camera.update(world, 1.0 / 60.0);
         }
-        QVERIFY(std::abs(settled.yawDegrees - 8.0) < 0.2);
+        QCOMPARE(settled.yawDegrees, 42.0);
+        QVERIFY(std::abs(settled.zoom - 1.08) < 0.002);
         QVERIFY(std::abs(settled.centerDistanceMeters - 15.0) < 0.01);
     }
 
@@ -344,7 +346,7 @@ private slots:
         world.rider.distanceMeters = 80.0;
 
         WorkoutGameCamera camera;
-        QCOMPARE(camera.update(world, 0.016).yawDegrees, 90.0);
+        QCOMPARE(camera.update(world, 0.016).yawDegrees, 42.0);
 
         world.generation = 2;
         world.terrain = WorkoutGameTerrainKind::RockGarden;
@@ -354,8 +356,7 @@ private slots:
 
         QVERIFY(transition.centerDistanceMeters > 80.0);
         QVERIFY(transition.centerDistanceMeters < 80.5);
-        QVERIFY(transition.yawDegrees < 90.0);
-        QVERIFY(transition.yawDegrees > 42.0);
+        QCOMPARE(transition.yawDegrees, 42.0);
     }
 
     void invalidInputsCannotPoisonCameraState()

@@ -514,19 +514,9 @@ WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
 }
 
 WorkoutGameCameraMode WorkoutGameCamera::preferredMode(
-        WorkoutGameTerrainKind terrain)
+        WorkoutGameTerrainKind)
 {
-    switch (terrain) {
-    case WorkoutGameTerrainKind::Roots:
-    case WorkoutGameTerrainKind::Rollers:
-    case WorkoutGameTerrainKind::RockGarden:
-        return WorkoutGameCameraMode::ThreeQuarter;
-    case WorkoutGameTerrainKind::Skinny:
-    case WorkoutGameTerrainKind::Berm:
-        return WorkoutGameCameraMode::Chase;
-    default:
-        return WorkoutGameCameraMode::Side;
-    }
+    return WorkoutGameCameraMode::ThreeQuarter;
 }
 
 void WorkoutGameCamera::reset()

@@ -129,6 +129,7 @@ all qt Train/workoutGameCanvas
 all qt Train/workoutGameCourse
 all qt Train/workoutGameRendererPolicy
 all qt Train/workoutGameSimulation
+all qt Train/workoutGameTrailScene
 all qt Train/workoutGameSessionState
 all qt Train/workoutGameWorld
 all qt Train/workoutGameWorkoutAdapter
