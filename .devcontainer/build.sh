@@ -20,6 +20,11 @@ fi
 
 bash "${script_dir}/bootstrap.sh"
 mkdir -p "${build_dir}"
+
+# qmake does not invalidate GCC precompiled headers when compiler flags change.
+# Remove only its generated PCH directories; ccache still supplies the rebuild.
+find -P "${build_dir}" -type d -name 'GoldenCheetah.gch' -prune \
+    -exec rm -rf -- {} +
 cd "${build_dir}"
 
 qmake "${qmake_arguments[@]}"

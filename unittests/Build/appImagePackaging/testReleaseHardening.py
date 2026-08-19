@@ -875,9 +875,16 @@ class PlatformGateTests(unittest.TestCase):
             build_script,
         )
         self.assertIn('mkdir -p "${build_dir}"', build_script)
+        pch_cleanup = build_script.index(
+            "find -P \"${build_dir}\" -type d -name 'GoldenCheetah.gch'"
+        )
         self.assertLess(
             build_script.index('mkdir -p "${build_dir}"'),
-            build_script.index('cd "${build_dir}"'),
+            pch_cleanup,
+        )
+        self.assertLess(
+            pch_cleanup,
+            build_script.index('qmake "${qmake_arguments[@]}"'),
         )
         self.assertIn(
             "source=goldencheetah-ccache,"
