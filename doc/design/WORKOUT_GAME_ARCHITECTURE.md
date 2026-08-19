@@ -57,6 +57,23 @@ power changes animation speed, line choice, and scoring, but cannot move the
 workout timeline. Long pauses reset transient jump and streak state without
 discarding accumulated score.
 
+### WorkoutGameRoadPhysics
+
+`WorkoutGameRoadPhysics` is the deterministic longitudinal vehicle model for
+distance-based courses. It consumes only power, grade, brake input, and elapsed
+time, and publishes speed, distance, and elevation. It has no Qt, workout-file,
+trainer, rendering, map, or persistence dependencies. Trainer control remains
+outside this module so road simulation can be tested and tuned independently.
+
+### WorkoutGameDistanceCourse
+
+`WorkoutGameDistanceCourseBuilder` converts normalized workout intervals into
+distance and elevation sections by running the road model at target power.
+`WorkoutGameDistanceCourseEstimator` replays those sections at a selected power
+scale to estimate completion time. Neither class reads files or controls a
+trainer. Future ERG and activity importers must adapt their source data to this
+course model instead of adding source-specific behavior to physics or rendering.
+
 ### WorkoutGameWorld And Camera
 
 `WorkoutGameWorld` owns visual vehicle physics only. Its immutable snapshot
