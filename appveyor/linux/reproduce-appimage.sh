@@ -89,13 +89,7 @@ for label in one two; do
     pass_output="$WORK_ROOT/package-$label"
     mkdir -p -- "$pass_build" "$pass_output"
     create_reproduction_source
-    if [ "$label" = one ]; then
-        "$BUILD_PASS" "$ACTIVE_SOURCE" "$pass_build" "$SOURCE_ROOT"
-    else
-        # The verification pass must compile independently of the shared cache.
-        GC_APPIMAGE_CCACHE_DIR= \
-            "$BUILD_PASS" "$ACTIVE_SOURCE" "$pass_build" "$SOURCE_ROOT"
-    fi
+    "$BUILD_PASS" "$ACTIVE_SOURCE" "$pass_build" "$SOURCE_ROOT"
     remove_reproduction_source
 done
 

@@ -145,8 +145,14 @@ def verify(appdir, sbom):
                 raise ValueError("payload file digest mismatch")
             if component_properties.get("goldencheetah:size") != str(metadata.st_size):
                 raise ValueError("payload file size mismatch")
-            if component_properties.get("goldencheetah:mode") != f"{stat.S_IMODE(metadata.st_mode):04o}":
-                raise ValueError("payload file mode mismatch")
+            expected_mode = component_properties.get("goldencheetah:mode")
+            actual_mode = f"{stat.S_IMODE(metadata.st_mode):04o}"
+            if expected_mode != actual_mode:
+                raise ValueError(
+                    "payload file mode mismatch for {}: expected {}, got {}".format(
+                        relative, expected_mode, actual_mode
+                    )
+                )
         elif stat.S_ISLNK(metadata.st_mode):
             if role != "payload-symlink" or "hashes" in component:
                 raise ValueError("symlink payload represented as a file")

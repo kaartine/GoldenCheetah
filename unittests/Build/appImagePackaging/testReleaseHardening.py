@@ -281,6 +281,24 @@ class PayloadSbomTests(unittest.TestCase):
             os.symlink("missing", appdir / "gc")
             self.assertNotEqual(self.verify(appdir, sbom).returncode, 0)
 
+    def test_payload_mode_mismatch_identifies_file_and_modes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            appdir = Path(temporary) / "AppDir"
+            executable = appdir / "bin/gc"
+            executable.parent.mkdir(parents=True)
+            executable.write_text("release payload\n", encoding="ascii")
+            executable.chmod(0o755)
+            sbom = self.write_sbom(appdir, [file_component(appdir, "bin/gc")])
+
+            executable.chmod(0o700)
+            result = self.verify(appdir, sbom)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "payload file mode mismatch for bin/gc: expected 0755, got 0700",
+                result.stderr,
+            )
+
 
 class BuildInputTests(unittest.TestCase):
     def identity(self, source_root):
@@ -623,102 +641,15 @@ class PipelineIsolationTests(unittest.TestCase):
                 encoding="utf-8"
             ))
 
-    def test_compiler_environment_allows_only_validated_ccache_settings(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            qt_root = root / "Qt"
-            home = root / "home"
-            temporary_build = root / "tmp"
-            cache = root / "ccache"
-            (qt_root / "bin").mkdir(parents=True)
-            home.mkdir()
-            temporary_build.mkdir()
-            cache.mkdir()
-            probe = root / "probe"
-            probe.write_text(
-                textwrap.dedent(
-                    """#!/bin/sh
-                    set -eu
-                    test "$CCACHE_DIR" = "$1"
-                    test "$CCACHE_COMPILERCHECK" = content
-                    test "$CCACHE_MAXSIZE" = 12G
-                    test "$CCACHE_NOHASHDIR" = true
-                    test "$CCACHE_IGNOREOPTIONS" = \
-                        '-ffile-prefix-map=* -fdebug-prefix-map=* -fmacro-prefix-map=*'
-                    test "$CCACHE_SLOPPINESS" = \
-                        pch_defines,time_macros,include_file_ctime,include_file_mtime
-                    test -z "${CCACHE_PREFIX+x}"
-                    """
-                ),
-                encoding="ascii",
-            )
-            probe.chmod(0o700)
-            result = run(
-                [
-                    "bash",
-                    "-c",
-                    'set -euo pipefail; . "$1"; '
-                    'run_reproducible_build_tool "$2" "$3" "$4" "$5" "$6"',
-                    "bash",
-                    str(SUPPORT),
-                    str(qt_root),
-                    str(home),
-                    str(temporary_build),
-                    str(probe),
-                    str(cache),
-                ],
-                env={
-                    **os.environ,
-                    "SOURCE_DATE_EPOCH": "1234567890",
-                    "GC_SOURCE_REVISION": "1" * 40,
-                    "GC_APPIMAGE_CCACHE_DIR": str(cache),
-                    "CCACHE_PREFIX": "poison",
-                },
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_compiler_environment_rejects_unsafe_ccache_directory(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            qt_root = root / "Qt"
-            home = root / "home"
-            temporary_build = root / "tmp"
-            cache = root / "ccache"
-            cache_target = root / "ccache-target"
-            (qt_root / "bin").mkdir(parents=True)
-            home.mkdir()
-            temporary_build.mkdir()
-            cache_target.mkdir()
-            cache.symlink_to(cache_target, target_is_directory=True)
-            result = run(
-                [
-                    "bash",
-                    "-c",
-                    'set -euo pipefail; . "$1"; '
-                    'run_reproducible_build_tool "$2" "$3" "$4" true',
-                    "bash",
-                    str(SUPPORT),
-                    str(qt_root),
-                    str(home),
-                    str(temporary_build),
-                ],
-                env={
-                    **os.environ,
-                    "SOURCE_DATE_EPOCH": "1234567890",
-                    "GC_SOURCE_REVISION": "1" * 40,
-                    "GC_APPIMAGE_CCACHE_DIR": str(cache),
-                },
-            )
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("unsafe or not writable", result.stderr)
-
-    def test_release_build_routes_compilers_through_ccache_when_requested(self):
-        build_pass = (
-            REPOSITORY_ROOT / "appveyor/linux/build-appimage-pass.sh"
-        ).read_text(encoding="utf-8")
-        self.assertIn('QMAKE_CC=$CCACHE_COMMAND gcc', build_pass)
-        self.assertIn('QMAKE_CXX=$CCACHE_COMMAND g++', build_pass)
-        self.assertIn('QMAKE_CXXFLAGS+=-fpch-preprocess', build_pass)
+    def test_reproducible_release_bypasses_shared_compiler_caches(self):
+        for relative in (
+            "appveyor/linux/build-appimage-pass.sh",
+            "appveyor/linux/reproduce-appimage.sh",
+            "src/Resources/linux/AppImagePackagingSupport.sh",
+        ):
+            source = (REPOSITORY_ROOT / relative).read_text(encoding="utf-8")
+            self.assertNotIn("GC_APPIMAGE_CCACHE", source, relative)
+            self.assertNotIn("QMAKE_CC=$CCACHE", source, relative)
 
     def test_reproduction_builds_and_packages_two_independent_trees(self):
         self.assertTrue(REPRODUCE_APPIMAGE.is_file(), "reproduction driver is missing")
@@ -763,9 +694,6 @@ class PipelineIsolationTests(unittest.TestCase):
             qwt_config.write_text(
                 "QWT_CONFIG += QwtPlot QwtSvg\n", encoding="ascii"
             )
-            cache = root / "ccache"
-            cache.mkdir()
-
             build_log = root / "build.log"
             package_log = root / "package.log"
             build_probe = root / "build-pass"
@@ -779,8 +707,7 @@ class PipelineIsolationTests(unittest.TestCase):
                 "cp \"$3/src/Core/GeneratedSecrets.h\" "
                 "\"$1/src/Core/GeneratedSecrets.h\"\n"
                 "cp \"$3/qwt/qwtconfig.pri\" \"$1/qwt/qwtconfig.pri\"\n"
-                "printf '%s|%s|%s\\n' \"$1\" \"$2\" "
-                "\"${GC_APPIMAGE_CCACHE_DIR:-}\" >>\"$GC_BUILD_LOG\"\n"
+                "printf '%s|%s\\n' \"$1\" \"$2\" >>\"$GC_BUILD_LOG\"\n"
                 "mkdir -p \"$2/src\"\n"
                 "printf 'same independently built elf\\n' >\"$2/src/GoldenCheetah\"\n"
                 "chmod 700 \"$2/src/GoldenCheetah\"\n",
@@ -820,7 +747,6 @@ class PipelineIsolationTests(unittest.TestCase):
                     "GC_APPIMAGE_PACKAGE_PASS_SCRIPT": str(package_probe),
                     "GC_BUILD_LOG": str(build_log),
                     "GC_PACKAGE_LOG": str(package_log),
-                    "GC_APPIMAGE_CCACHE_DIR": str(cache),
                     "GC_EFFECTIVE_CONFIG": str(config),
                     "GC_EFFECTIVE_SECRETS": str(secrets),
                     "GC_EFFECTIVE_QWT_CONFIG": str(qwt_config),
@@ -832,18 +758,13 @@ class PipelineIsolationTests(unittest.TestCase):
             self.assertEqual(len(builds), 2)
             self.assertEqual(len(packages), 2)
             self.assertEqual(
-                len({line.split("|", 2)[0] for line in builds}),
+                len({line.split("|", 1)[0] for line in builds}),
                 1,
                 "independent checkouts must reuse one canonical source path",
             )
-            self.assertEqual(len({line.split("|", 2)[1] for line in builds}), 2)
-            self.assertEqual(
-                [line.split("|", 2)[2] for line in builds],
-                [str(cache), ""],
-                "the verification build must bypass the shared compiler cache",
-            )
+            self.assertEqual(len({line.split("|", 1)[1] for line in builds}), 2)
             for build, package in zip(builds, packages):
-                source_tree, build_tree, _cache_dir = build.split("|", 2)
+                source_tree, build_tree = build.split("|", 1)
                 package_source, package_binary = package.split("|", 1)
                 self.assertEqual(package_source, source_tree)
                 self.assertEqual(package_binary, f"{build_tree}/src/GoldenCheetah")
@@ -945,6 +866,19 @@ class PlatformGateTests(unittest.TestCase):
         self.assertIn("/usr/lib/ccache", dockerfile)
         self.assertIn("ccache --show-stats", build_script)
         self.assertIn("CCACHE_BASEDIR", build_script)
+        self.assertIn(
+            'ccache --set-config="sloppiness=pch_defines,time_macros"',
+            build_script,
+        )
+        self.assertIn(
+            'qmake_arguments+=("QMAKE_CXXFLAGS+=-fpch-preprocess")',
+            build_script,
+        )
+        self.assertIn('mkdir -p "${build_dir}"', build_script)
+        self.assertLess(
+            build_script.index('mkdir -p "${build_dir}"'),
+            build_script.index('cd "${build_dir}"'),
+        )
         self.assertIn(
             "source=goldencheetah-ccache,"
             "target=/home/ubuntu/.cache/ccache,type=volume",
