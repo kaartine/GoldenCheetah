@@ -115,6 +115,10 @@ private slots:
                 < balanced.summary.elevationGainMeters);
         QVERIFY(balanced.summary.elevationGainMeters
                 < rideFirst.summary.elevationGainMeters);
+        QVERIFY(workoutFirst.summary.technicalFeatureCount
+                < balanced.summary.technicalFeatureCount);
+        QVERIFY(balanced.summary.technicalFeatureCount
+                < rideFirst.summary.technicalFeatureCount);
 
         for (std::size_t index = 0; index < balanced.course.sections.size(); ++index) {
             QCOMPARE(workoutFirst.course.sections[index].targetStartWatts,

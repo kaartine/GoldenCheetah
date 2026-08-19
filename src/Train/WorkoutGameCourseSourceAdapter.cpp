@@ -84,6 +84,7 @@ WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::convert(
     result.document.sourceSha256 = QString::fromLatin1(
             QCryptographicHash::hash(
                 request.sourceContents, QCryptographicHash::Sha256).toHex());
+    result.document.sourceIntervals = workout.intervals;
     result.document.ftpWatts = request.ftpWatts;
     result.document.preset = request.preset;
     result.document.generationParameters = conversion.generationParameters;
@@ -93,6 +94,41 @@ WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::convert(
         return result;
     }
 
+    result.summary = conversion.summary;
+    result.status = WorkoutGameCourseSourceStatus::Ready;
+    return result;
+}
+
+WorkoutGameCourseSourceResult WorkoutGameCourseSourceAdapter::regenerate(
+        const WorkoutGameCourseDocument &source,
+        WorkoutGameCoursePreset preset,
+        const QString &title)
+{
+    WorkoutGameCourseSourceResult result;
+    if (source.sourceIntervals.empty()
+            || !validTitle(title)
+            || !WorkoutGameCourseDocumentCodec::valid(source)) {
+        return result;
+    }
+
+    WorkoutGameCourseConversionRequest request;
+    request.intervals = source.sourceIntervals;
+    request.ftpWatts = source.ftpWatts;
+    request.preset = preset;
+    request.roadPhysics = source.generationParameters.roadPhysics;
+    request.seed = source.course.seed;
+    const WorkoutGameCourseConversionResult conversion =
+            WorkoutGameCourseConverter::convert(request);
+    if (conversion.status != WorkoutGameCourseConversionStatus::Ready) {
+        result.status = WorkoutGameCourseSourceStatus::ConversionFailed;
+        return result;
+    }
+
+    result.document = source;
+    result.document.title = title;
+    result.document.preset = preset;
+    result.document.generationParameters = conversion.generationParameters;
+    result.document.course = conversion.course;
     result.summary = conversion.summary;
     result.status = WorkoutGameCourseSourceStatus::Ready;
     return result;

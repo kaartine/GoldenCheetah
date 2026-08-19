@@ -67,6 +67,7 @@ WorkoutGameCourseConversionDialog::WorkoutGameCourseConversionDialog(
     layout->setSpacing(14);
 
     QLabel *heading = new QLabel(tr("Create MTB Course"), this);
+    heading->setObjectName(QStringLiteral("courseDialogHeading"));
     QFont headingFont = heading->font();
     headingFont.setPointSize(headingFont.pointSize() + 3);
     headingFont.setBold(true);
@@ -181,6 +182,30 @@ WorkoutGameCourseConversionDialog::WorkoutGameCourseConversionDialog(
     }
 }
 
+WorkoutGameCourseConversionDialog::WorkoutGameCourseConversionDialog(
+        const WorkoutGameCourseDocument &document,
+        const QString &coursePath,
+        QWidget *parent)
+    : WorkoutGameCourseConversionDialog(
+        WorkoutGameCourseSourceRequest(), coursePath, parent)
+{
+    editMode = true;
+    editSourceDocument = document;
+    setWindowTitle(tr("Edit MTB Course"));
+    if (QLabel *heading = findChild<QLabel *>(
+                QStringLiteral("courseDialogHeading"))) {
+        heading->setText(tr("Edit MTB Course"));
+    }
+    titleEdit->setText(document.title);
+    outputPathEdit->setReadOnly(true);
+    if (QPushButton *browse = findChild<QPushButton *>(
+                QStringLiteral("browseCourseOutputButton"))) {
+        browse->setEnabled(false);
+    }
+    createButton->setText(tr("Save Course"));
+    selectPreset(document.preset);
+}
+
 WorkoutGameCoursePreset WorkoutGameCourseConversionDialog::selectedPreset() const
 {
     return preset;
@@ -219,8 +244,16 @@ void WorkoutGameCourseConversionDialog::selectPreset(
     workoutFirstButton->setChecked(preset == WorkoutGameCoursePreset::WorkoutFirst);
     balancedButton->setChecked(preset == WorkoutGameCoursePreset::Balanced);
     rideFirstButton->setChecked(preset == WorkoutGameCoursePreset::RideFirst);
-    sourceRequest.preset = preset;
-    previewResult = WorkoutGameCourseSourceAdapter::convert(sourceRequest);
+    if (editMode) {
+        const QString title = titleEdit->text().trimmed().isEmpty()
+                ? editSourceDocument.title
+                : titleEdit->text().trimmed();
+        previewResult = WorkoutGameCourseSourceAdapter::regenerate(
+                editSourceDocument, preset, title);
+    } else {
+        sourceRequest.preset = preset;
+        previewResult = WorkoutGameCourseSourceAdapter::convert(sourceRequest);
+    }
     preview->setResult(previewResult);
     refreshSummary();
 }
@@ -248,7 +281,8 @@ void WorkoutGameCourseConversionDialog::refreshSummary()
             .arg(value.distanceMeters / 1000.0, 0, 'f', 1));
     ascentValue->setText(QStringLiteral("%1 m")
             .arg(std::lround(value.elevationGainMeters)));
-    featuresValue->setText(tr("%1 climbs | %2 jumps | %3 descents")
+    featuresValue->setText(tr("%1 technical | %2 climbs | %3 jumps | %4 descents")
+            .arg(value.technicalFeatureCount)
             .arg(value.climbCount)
             .arg(value.jumpCount)
             .arg(value.descentCount));
@@ -265,9 +299,14 @@ void WorkoutGameCourseConversionDialog::browseOutput()
 void WorkoutGameCourseConversionDialog::createCourse()
 {
     showError({});
-    sourceRequest.title = titleEdit->text().trimmed();
-    sourceRequest.preset = preset;
-    previewResult = WorkoutGameCourseSourceAdapter::convert(sourceRequest);
+    if (editMode) {
+        previewResult = WorkoutGameCourseSourceAdapter::regenerate(
+                editSourceDocument, preset, titleEdit->text().trimmed());
+    } else {
+        sourceRequest.title = titleEdit->text().trimmed();
+        sourceRequest.preset = preset;
+        previewResult = WorkoutGameCourseSourceAdapter::convert(sourceRequest);
+    }
     if (previewResult.status != WorkoutGameCourseSourceStatus::Ready) {
         showError(tr("Check the course title and workout settings."));
         return;
@@ -283,8 +322,10 @@ void WorkoutGameCourseConversionDialog::createCourse()
         outputPathEdit->setText(path);
     }
     QString error;
-    const WorkoutGameCourseDocumentStatus status =
-            WorkoutGameCourseDocumentStore::saveNewArtifact(
+    const WorkoutGameCourseDocumentStatus status = editMode
+            ? WorkoutGameCourseDocumentStore::replaceArtifact(
+                path, previewResult.document, error)
+            : WorkoutGameCourseDocumentStore::saveNewArtifact(
                 path, previewResult.document, error);
     if (status != WorkoutGameCourseDocumentStatus::Ready) {
         showError(error.isEmpty() ? tr("Could not create the MTB course.") : error);

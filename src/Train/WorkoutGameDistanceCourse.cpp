@@ -65,6 +65,21 @@ WorkoutGameSection adaptSection(
         result.gravityAssisted = false;
         result.challengeCount = 1;
     }
+
+    if (parameters.technicality <= 0.25
+            && result.feature != WorkoutGameFeature::Climb) {
+        result.terrain = WorkoutGameTerrainKind::SmoothTrail;
+        result.challengeCount = 0;
+    } else if (parameters.technicality >= 0.85) {
+        if (isRecoveryFeature(result.feature)) {
+            result.terrain = WorkoutGameTerrainKind::Berm;
+        } else if (result.feature == WorkoutGameFeature::Trail
+                || result.feature == WorkoutGameFeature::FlowTrail) {
+            result.terrain = result.visualVariant % 2u == 0u
+                    ? WorkoutGameTerrainKind::Skinny
+                    : WorkoutGameTerrainKind::RockGarden;
+        }
+    }
     result.gradePercent *= parameters.gradeScale;
     return result;
 }
@@ -158,6 +173,9 @@ bool WorkoutGameDistanceCourseBuilder::validParameters(
             && std::isfinite(parameters.gradeScale)
             && parameters.gradeScale >= 0.5
             && parameters.gradeScale <= 1.5
+            && std::isfinite(parameters.technicality)
+            && parameters.technicality >= 0.0
+            && parameters.technicality <= 1.0
             && std::isfinite(parameters.workMinimumDurationScale)
             && parameters.workMinimumDurationScale > 0.0
             && parameters.workMinimumDurationScale <= 1.0

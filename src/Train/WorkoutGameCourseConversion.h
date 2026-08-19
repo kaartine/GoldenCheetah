@@ -48,6 +48,7 @@ struct WorkoutGameCourseConversionSummary
     int climbCount = 0;
     int jumpCount = 0;
     int descentCount = 0;
+    int technicalFeatureCount = 0;
     WorkoutGameDistanceCourseEstimate fastEstimate;
     WorkoutGameDistanceCourseEstimate nominalEstimate;
     WorkoutGameDistanceCourseEstimate slowEstimate;

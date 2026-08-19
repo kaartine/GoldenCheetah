@@ -566,6 +566,7 @@ TrainSidebar::showWorkoutPopup(const QPoint &globalPosition)
             tr("Get Workouts from Strava Routes"));
     QAction *wizard = menu.addAction(tr("Create Workout via Wizard"));
     QAction *createMtb = menu.addAction(tr("Create MTB Course"));
+    QAction *editMtb = menu.addAction(tr("Edit MTB Course"));
     QAction *scan = menu.addAction(tr("Scan for Workouts"));
 
     const ErgFile *selectedWorkout = ergFileQueryAdapter.getErgFile();
@@ -574,6 +575,12 @@ TrainSidebar::showWorkoutPopup(const QPoint &globalPosition)
             && selectedWorkout
             && selectedWorkout->hasWatts()
             && QFileInfo(selectedWorkout->filename()).isFile());
+    editMtb->setEnabled(
+            !(status & RT_RUNNING)
+            && selectedWorkout
+            && QFileInfo::exists(
+                WorkoutGameCourseDocumentStore::sidecarPathForCourse(
+                    selectedWorkout->filename())));
 
 
     // we can delete too
@@ -603,12 +610,52 @@ TrainSidebar::showWorkoutPopup(const QPoint &globalPosition)
     connect(import, SIGNAL(triggered(void)), context->mainWindow, SLOT(importWorkout(void)));
     connect(wizard, SIGNAL(triggered(void)), context->mainWindow, SLOT(showWorkoutWizard(void)));
     connect(createMtb, SIGNAL(triggered(void)), this, SLOT(createMtbCourse(void)));
+    connect(editMtb, SIGNAL(triggered(void)), this, SLOT(editMtbCourse(void)));
     connect(download, SIGNAL(triggered(void)), context->mainWindow, SLOT(downloadTrainerDay(void)));
     connect(dlStravaRoutes, SIGNAL(triggered(void)), context->mainWindow, SLOT(downloadStravaRoutes(void)));
     connect(scan, SIGNAL(triggered(void)), context->mainWindow, SLOT(manageLibrary(void)));
 
     // execute the menu
     menu.exec(globalPosition);
+}
+
+void
+TrainSidebar::editMtbCourse()
+{
+    const ErgFile *workout = ergFileQueryAdapter.getErgFile();
+    if ((status & RT_RUNNING) || !workout) return;
+
+    const QString coursePath = workout->filename();
+    WorkoutGameCourseDocument document;
+    QString error;
+    const WorkoutGameCourseDocumentStatus loadStatus =
+            WorkoutGameCourseDocumentStore::loadForCourse(
+                coursePath, document, error);
+    if (loadStatus != WorkoutGameCourseDocumentStatus::Ready) {
+        QMessageBox::warning(
+                this, tr("Edit MTB Course"),
+                error.isEmpty()
+                    ? tr("The MTB course metadata could not be loaded.")
+                    : error);
+        return;
+    }
+    if (document.sourceIntervals.empty()) {
+        QMessageBox::warning(
+                this, tr("Edit MTB Course"),
+                tr("This course was created by an older version and does not contain its source workout profile."));
+        return;
+    }
+
+    WorkoutGameCourseConversionDialog dialog(document, coursePath, this);
+    if (dialog.exec() != QDialog::Accepted) return;
+
+    if (!Library::refreshWorkouts(context)) {
+        QMessageBox::warning(
+                this, tr("Edit MTB Course"),
+                tr("The course was saved but the workout library could not be refreshed."));
+    }
+    refresh();
+    selectWorkout(coursePath);
 }
 
 void

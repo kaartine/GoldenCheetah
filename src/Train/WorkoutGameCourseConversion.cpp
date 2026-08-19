@@ -29,6 +29,20 @@ void countFeatures(
         WorkoutGameCourseConversionSummary &summary)
 {
     for (const WorkoutGameDistanceCourseSection &section : course.sections) {
+        switch (section.terrain) {
+        case WorkoutGameTerrainKind::Roots:
+        case WorkoutGameTerrainKind::RockGarden:
+        case WorkoutGameTerrainKind::Rollers:
+        case WorkoutGameTerrainKind::BunnyHop:
+        case WorkoutGameTerrainKind::Berm:
+        case WorkoutGameTerrainKind::Skinny:
+            ++summary.technicalFeatureCount;
+            break;
+        case WorkoutGameTerrainKind::SmoothTrail:
+        case WorkoutGameTerrainKind::Climb:
+        case WorkoutGameTerrainKind::Drop:
+            break;
+        }
         switch (section.feature) {
         case WorkoutGameFeature::Climb:
             ++summary.climbCount;
@@ -58,15 +72,18 @@ WorkoutGameCourseConverter::parametersForPreset(
     switch (preset) {
     case WorkoutGameCoursePreset::WorkoutFirst:
         parameters.gradeScale = 0.82;
+        parameters.technicality = 0.15;
         parameters.workMinimumDurationScale = 0.95;
         parameters.workMaximumDurationScale = 1.15;
         parameters.recoveryMinimumDurationScale = 0.8;
         parameters.recoveryMaximumDurationScale = 1.35;
         break;
     case WorkoutGameCoursePreset::Balanced:
+        parameters.technicality = 0.55;
         break;
     case WorkoutGameCoursePreset::RideFirst:
         parameters.gradeScale = 1.18;
+        parameters.technicality = 0.95;
         parameters.workMinimumDurationScale = 0.8;
         parameters.workMaximumDurationScale = 1.5;
         parameters.recoveryMinimumDurationScale = 0.55;

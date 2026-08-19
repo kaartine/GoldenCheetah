@@ -66,6 +66,7 @@ struct WorkoutGameDistanceCourseGenerationParameters
     double recoveryIntensity = 0.65;
     double shortClimbIntensity = 1.1;
     double gradeScale = 1.0;
+    double technicality = 0.55;
     double workMinimumDurationScale = 0.9;
     double workMaximumDurationScale = 1.25;
     double recoveryMinimumDurationScale = 0.7;

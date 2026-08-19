@@ -12,6 +12,7 @@
 
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
@@ -158,6 +159,47 @@ private slots:
                  WorkoutGameCourseDocumentStatus::ResourceLimit);
     }
 
+    void legacyDocumentWithoutTechnicalityStillLoads()
+    {
+        QJsonObject root = QJsonDocument::fromJson(
+                WorkoutGameCourseDocumentCodec::encode(sampleDocument()))
+                .object();
+        QJsonObject conversion = root.value(QStringLiteral("conversion")).toObject();
+        QJsonObject parameters = conversion.value(QStringLiteral("parameters")).toObject();
+        parameters.remove(QStringLiteral("technicality"));
+        conversion.insert(QStringLiteral("parameters"), parameters);
+        root.insert(QStringLiteral("conversion"), conversion);
+
+        WorkoutGameCourseDocument decoded;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                    QJsonDocument(root).toJson(), decoded),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(decoded.generationParameters.technicality, 0.55);
+        QVERIFY(decoded.sourceIntervals.empty());
+    }
+
+    void discontinuousStoredSourceProfileIsRejected()
+    {
+        QJsonObject root = QJsonDocument::fromJson(
+                WorkoutGameCourseDocumentCodec::encode(sampleDocument()))
+                .object();
+        QJsonObject source = root.value(QStringLiteral("source")).toObject();
+        source.insert(QStringLiteral("intervals"), QJsonArray {
+            QJsonObject {
+                {QStringLiteral("startMs"), 1000},
+                {QStringLiteral("durationMs"), 30000},
+                {QStringLiteral("startWatts"), 150.0},
+                {QStringLiteral("endWatts"), 150.0}
+            }
+        });
+        root.insert(QStringLiteral("source"), source);
+
+        WorkoutGameCourseDocument decoded;
+        QCOMPARE(WorkoutGameCourseDocumentCodec::decode(
+                    QJsonDocument(root).toJson(), decoded),
+                 WorkoutGameCourseDocumentStatus::InvalidDocument);
+    }
+
     void crsExportContainsMetricSegmentsLapsAndPowerCues()
     {
         const QByteArray crs = WorkoutGameCourseCrsExporter::encode(
@@ -203,6 +245,30 @@ private slots:
                     crsPath, loaded, error),
                  WorkoutGameCourseDocumentStatus::Ready);
         QCOMPARE(loaded.title, QStringLiteral("Three climbs MTB"));
+    }
+
+    void existingArtifactCanBeReplacedAsAValidatedPair()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString crsPath = directory.filePath(QStringLiteral("course.crs"));
+        QString error;
+        WorkoutGameCourseDocument original = sampleDocument();
+        QCOMPARE(WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    crsPath, original, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+
+        WorkoutGameCourseDocument replacement = original;
+        replacement.title = QStringLiteral("Edited course");
+        QCOMPARE(WorkoutGameCourseDocumentStore::replaceArtifact(
+                    crsPath, replacement, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+
+        WorkoutGameCourseDocument loaded;
+        QCOMPARE(WorkoutGameCourseDocumentStore::loadForCourse(
+                    crsPath, loaded, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(loaded.title, replacement.title);
     }
 
     void sidecarNameDoesNotReplaceUnrelatedSuffixes()

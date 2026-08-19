@@ -64,6 +64,9 @@ private slots:
                      "b00361a396177a9cb410ff61f20015ad"));
         QCOMPARE(result.document.ftpWatts, 190.0);
         QCOMPARE(result.document.preset, WorkoutGameCoursePreset::Balanced);
+        QVERIFY(!result.document.sourceIntervals.empty());
+        QCOMPARE(result.document.sourceIntervals.front().startMs,
+                 std::int64_t(0));
         QCOMPARE(result.document.course.status,
                  WorkoutGameDistanceCourseStatus::Ready);
         QCOMPARE(result.summary.distanceMeters,
@@ -137,6 +140,28 @@ private slots:
         QCOMPARE(second.status, WorkoutGameCourseSourceStatus::Ready);
         QCOMPARE(WorkoutGameCourseDocumentCodec::encode(first.document),
                  WorkoutGameCourseDocumentCodec::encode(second.document));
+    }
+
+    void storedIntervalsCanBeRegeneratedWithAnotherPreset()
+    {
+        const WorkoutGameCourseSourceResult original =
+                WorkoutGameCourseSourceAdapter::convert(sampleRequest());
+
+        const WorkoutGameCourseSourceResult edited =
+                WorkoutGameCourseSourceAdapter::regenerate(
+                    original.document,
+                    WorkoutGameCoursePreset::RideFirst,
+                    QStringLiteral("Technical Tuesday"));
+
+        QCOMPARE(edited.status, WorkoutGameCourseSourceStatus::Ready);
+        QCOMPARE(edited.document.title, QStringLiteral("Technical Tuesday"));
+        QCOMPARE(edited.document.preset, WorkoutGameCoursePreset::RideFirst);
+        QCOMPARE(edited.document.sourceSha256,
+                 original.document.sourceSha256);
+        QCOMPARE(edited.document.sourceIntervals.size(),
+                 original.document.sourceIntervals.size());
+        QVERIFY(edited.summary.technicalFeatureCount
+                > original.summary.technicalFeatureCount);
     }
 };
 

@@ -224,6 +224,37 @@ private slots:
         QVERIFY(error->isVisibleTo(&second) || !error->isHidden());
         QVERIFY(!error->text().isEmpty());
     }
+
+    void editRegeneratesAndReplacesExistingCourse()
+    {
+        QTemporaryDir directory;
+        const QString coursePath = directory.filePath("editable.crs");
+        const WorkoutGameCourseSourceResult source =
+                WorkoutGameCourseSourceAdapter::convert(sampleRequest());
+        QString error;
+        QCOMPARE(WorkoutGameCourseDocumentStore::saveNewArtifact(
+                    coursePath, source.document, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+
+        WorkoutGameCourseConversionDialog dialog(
+                source.document, coursePath);
+        QCOMPARE(dialog.selectedPreset(), WorkoutGameCoursePreset::Balanced);
+        QVERIFY(requiredChild<QLineEdit>(dialog, "courseOutputPathEdit")
+                        ->isReadOnly());
+        requiredChild<QToolButton>(dialog, "rideFirstPresetButton")->click();
+        requiredChild<QLineEdit>(dialog, "courseTitleEdit")
+                ->setText(QStringLiteral("Edited MTB"));
+        requiredChild<QPushButton>(dialog, "createCourseButton")->click();
+
+        QCOMPARE(dialog.result(), int(QDialog::Accepted));
+        WorkoutGameCourseDocument loaded;
+        QCOMPARE(WorkoutGameCourseDocumentStore::loadForCourse(
+                    coursePath, loaded, error),
+                 WorkoutGameCourseDocumentStatus::Ready);
+        QCOMPARE(loaded.title, QStringLiteral("Edited MTB"));
+        QCOMPARE(loaded.preset, WorkoutGameCoursePreset::RideFirst);
+        QVERIFY(!loaded.sourceIntervals.empty());
+    }
 };
 
 QTEST_MAIN(TestWorkoutGameCourseConversionDialog)

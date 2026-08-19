@@ -32,6 +32,7 @@ struct WorkoutGameCourseDocument
     QString title;
     QString sourceFileName;
     QString sourceSha256;
+    std::vector<WorkoutGameInterval> sourceIntervals;
     double ftpWatts = 0.0;
     WorkoutGameCoursePreset preset = WorkoutGameCoursePreset::Balanced;
     WorkoutGameDistanceCourseGenerationParameters generationParameters;
@@ -56,6 +57,10 @@ class WorkoutGameCourseDocumentStore
 public:
     static QString sidecarPathForCourse(const QString &coursePath);
     static WorkoutGameCourseDocumentStatus saveNewArtifact(
+            const QString &coursePath,
+            const WorkoutGameCourseDocument &document,
+            QString &error);
+    static WorkoutGameCourseDocumentStatus replaceArtifact(
             const QString &coursePath,
             const WorkoutGameCourseDocument &document,
             QString &error);

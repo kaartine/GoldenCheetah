@@ -55,6 +55,10 @@ public:
 
     static WorkoutGameCourseSourceResult convert(
             const WorkoutGameCourseSourceRequest &request);
+    static WorkoutGameCourseSourceResult regenerate(
+            const WorkoutGameCourseDocument &source,
+            WorkoutGameCoursePreset preset,
+            const QString &title);
 };
 
 #endif

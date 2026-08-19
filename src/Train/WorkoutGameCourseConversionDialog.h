@@ -29,6 +29,10 @@ public:
             const WorkoutGameCourseSourceRequest &request,
             const QString &defaultCoursePath,
             QWidget *parent = nullptr);
+    WorkoutGameCourseConversionDialog(
+            const WorkoutGameCourseDocument &document,
+            const QString &coursePath,
+            QWidget *parent = nullptr);
 
     WorkoutGameCoursePreset selectedPreset() const;
     const WorkoutGameCourseSourceResult &currentResult() const;
@@ -47,6 +51,8 @@ private:
     void showError(const QString &message);
 
     WorkoutGameCourseSourceRequest sourceRequest;
+    WorkoutGameCourseDocument editSourceDocument;
+    bool editMode = false;
     WorkoutGameCourseSourceResult previewResult;
     WorkoutGameCoursePreset preset = WorkoutGameCoursePreset::Balanced;
     QString createdPath;

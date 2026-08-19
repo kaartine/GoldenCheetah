@@ -173,6 +173,7 @@ class TrainSidebar : public GcWindow
         void videosyncPopup();
         void mediaPopup();
         void createMtbCourse();
+        void editMtbCourse();
 
         void refresh(); // when TrainDB is updated...
 

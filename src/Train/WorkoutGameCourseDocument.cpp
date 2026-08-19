@@ -207,6 +207,7 @@ QJsonObject generationToJson(
         {QStringLiteral("recoveryIntensity"), parameters.recoveryIntensity},
         {QStringLiteral("shortClimbIntensity"), parameters.shortClimbIntensity},
         {QStringLiteral("gradeScale"), parameters.gradeScale},
+        {QStringLiteral("technicality"), parameters.technicality},
         {QStringLiteral("workMinimumDurationScale"), parameters.workMinimumDurationScale},
         {QStringLiteral("workMaximumDurationScale"), parameters.workMaximumDurationScale},
         {QStringLiteral("recoveryMinimumDurationScale"), parameters.recoveryMinimumDurationScale},
@@ -222,6 +223,7 @@ bool parseGeneration(
         const QJsonObject &object,
         WorkoutGameDistanceCourseGenerationParameters &parameters)
 {
+    parameters.technicality = 0.55;
     std::int64_t maximumSections = 0;
     if (!object.value(QStringLiteral("physics")).isObject()
             || !parsePhysics(
@@ -242,8 +244,78 @@ bool parseGeneration(
             || std::uint64_t(maximumSections) > std::numeric_limits<std::size_t>::max()) {
         return false;
     }
+    if (object.contains(QStringLiteral("technicality"))
+            && !finiteNumber(object, "technicality", parameters.technicality)) {
+        return false;
+    }
     parameters.maximumSections = std::size_t(maximumSections);
     return true;
+}
+
+QJsonArray intervalsToJson(const std::vector<WorkoutGameInterval> &intervals)
+{
+    QJsonArray result;
+    for (const WorkoutGameInterval &interval : intervals) {
+        result.append(QJsonObject {
+            {QStringLiteral("startMs"), double(interval.startMs)},
+            {QStringLiteral("durationMs"), double(interval.durationMs)},
+            {QStringLiteral("startWatts"), interval.startWatts},
+            {QStringLiteral("endWatts"), interval.endWatts}
+        });
+    }
+    return result;
+}
+
+bool parseIntervals(
+        const QJsonArray &values,
+        std::vector<WorkoutGameInterval> &intervals)
+{
+    if (values.size() > 10000) return false;
+    intervals.clear();
+    intervals.reserve(std::size_t(values.size()));
+    std::int64_t expectedStart = 0;
+    for (const QJsonValue &value : values) {
+        if (!value.isObject()) return false;
+        WorkoutGameInterval interval;
+        const QJsonObject object = value.toObject();
+        if (!integerNumber(object, "startMs", interval.startMs)
+                || !integerNumber(object, "durationMs", interval.durationMs)
+                || !finiteNumber(object, "startWatts", interval.startWatts)
+                || !finiteNumber(object, "endWatts", interval.endWatts)
+                || interval.startMs != expectedStart
+                || interval.durationMs <= 0
+                || interval.startWatts < 0.0
+                || interval.endWatts < 0.0
+                || interval.durationMs
+                    > std::numeric_limits<std::int64_t>::max() - expectedStart) {
+            return false;
+        }
+        expectedStart += interval.durationMs;
+        intervals.push_back(interval);
+    }
+    return true;
+}
+
+bool validIntervals(
+        const std::vector<WorkoutGameInterval> &intervals,
+        std::int64_t nominalDurationMs)
+{
+    if (intervals.empty() || intervals.size() > 10000) return false;
+    std::int64_t expectedStart = 0;
+    for (const WorkoutGameInterval &interval : intervals) {
+        if (interval.startMs != expectedStart
+                || interval.durationMs <= 0
+                || !std::isfinite(interval.startWatts)
+                || !std::isfinite(interval.endWatts)
+                || interval.startWatts < 0.0
+                || interval.endWatts < 0.0
+                || interval.durationMs
+                    > std::numeric_limits<std::int64_t>::max() - expectedStart) {
+            return false;
+        }
+        expectedStart += interval.durationMs;
+    }
+    return expectedStart == nominalDurationMs;
 }
 
 QJsonObject sectionToJson(const WorkoutGameDistanceCourseSection &section)
@@ -361,6 +433,9 @@ bool WorkoutGameCourseDocumentCodec::valid(
     static const QRegularExpression sha256Pattern(
             QStringLiteral("^[0-9a-f]{64}$"));
     const QFileInfo sourceInfo(document.sourceFileName);
+    const bool sourceIntervalsValid = document.sourceIntervals.empty()
+            || validIntervals(document.sourceIntervals,
+                              document.course.nominalDurationMs);
     return document.schemaVersion == CurrentSchemaVersion
             && !document.title.trimmed().isEmpty()
             && document.title.size() <= 200
@@ -374,6 +449,7 @@ bool WorkoutGameCourseDocumentCodec::valid(
             && std::isfinite(document.ftpWatts)
             && document.ftpWatts > 0.0
             && document.ftpWatts <= 3000.0
+            && sourceIntervalsValid
             && !presetName(document.preset).isEmpty()
             && WorkoutGameDistanceCourseBuilder::validParameters(
                 document.generationParameters)
@@ -384,10 +460,14 @@ QByteArray WorkoutGameCourseDocumentCodec::encode(
         const WorkoutGameCourseDocument &document)
 {
     if (!valid(document)) return {};
-    const QJsonObject source {
+    QJsonObject source {
         {QStringLiteral("fileName"), document.sourceFileName},
         {QStringLiteral("sha256"), document.sourceSha256}
     };
+    if (!document.sourceIntervals.empty()) {
+        source.insert(QStringLiteral("intervals"),
+                      intervalsToJson(document.sourceIntervals));
+    }
     const QJsonObject conversion {
         {QStringLiteral("ftpWatts"), document.ftpWatts},
         {QStringLiteral("preset"), presetName(document.preset)},
@@ -401,7 +481,9 @@ QByteArray WorkoutGameCourseDocumentCodec::encode(
         {QStringLiteral("conversion"), conversion},
         {QStringLiteral("course"), courseToJson(document.course)}
     };
-    return QJsonDocument(root).toJson(QJsonDocument::Compact) + '\n';
+    const QByteArray encoded =
+            QJsonDocument(root).toJson(QJsonDocument::Compact) + '\n';
+    return encoded.size() <= MaximumDocumentBytes ? encoded : QByteArray();
 }
 
 WorkoutGameCourseDocumentStatus WorkoutGameCourseDocumentCodec::decode(
@@ -457,6 +539,12 @@ WorkoutGameCourseDocumentStatus WorkoutGameCourseDocumentCodec::decode(
     }
     document.sourceFileName = sourceFileName.toString();
     document.sourceSha256 = sourceSha256.toString();
+    const QJsonValue intervals = source.value(QStringLiteral("intervals"));
+    if (!intervals.isUndefined()
+            && (!intervals.isArray()
+                || !parseIntervals(intervals.toArray(), document.sourceIntervals))) {
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
     return valid(document)
             ? WorkoutGameCourseDocumentStatus::Ready
             : WorkoutGameCourseDocumentStatus::InvalidDocument;
@@ -493,6 +581,37 @@ WorkoutGameCourseDocumentStatus WorkoutGameCourseDocumentStore::saveNewArtifact(
     if (!writeAtomically(coursePath, course, error)) {
         const bool rolledBack = QFile::remove(sidecarPath);
         if (!rolledBack) error += QStringLiteral("; metadata rollback failed");
+        return WorkoutGameCourseDocumentStatus::IoError;
+    }
+    return WorkoutGameCourseDocumentStatus::Ready;
+}
+
+WorkoutGameCourseDocumentStatus WorkoutGameCourseDocumentStore::replaceArtifact(
+        const QString &coursePath,
+        const WorkoutGameCourseDocument &document,
+        QString &error)
+{
+    WorkoutGameCourseDocument existing;
+    const WorkoutGameCourseDocumentStatus loadStatus =
+            loadForCourse(coursePath, existing, error);
+    if (loadStatus != WorkoutGameCourseDocumentStatus::Ready) return loadStatus;
+
+    const QByteArray metadata = WorkoutGameCourseDocumentCodec::encode(document);
+    const QByteArray course = WorkoutGameCourseCrsExporter::encode(document);
+    if (metadata.isEmpty() || course.isEmpty()) {
+        error = QStringLiteral("Invalid MTB course document");
+        return WorkoutGameCourseDocumentStatus::InvalidDocument;
+    }
+
+    const QByteArray oldCourse = WorkoutGameCourseCrsExporter::encode(existing);
+    if (!writeAtomically(coursePath, course, error)) {
+        return WorkoutGameCourseDocumentStatus::IoError;
+    }
+    if (!writeAtomically(sidecarPathForCourse(coursePath), metadata, error)) {
+        QString rollbackError;
+        if (!writeAtomically(coursePath, oldCourse, rollbackError)) {
+            error += QStringLiteral("; course rollback failed: ") + rollbackError;
+        }
         return WorkoutGameCourseDocumentStatus::IoError;
     }
     return WorkoutGameCourseDocumentStatus::Ready;
