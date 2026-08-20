@@ -850,6 +850,14 @@ class PipelineIsolationTests(unittest.TestCase):
 
 
 class PlatformGateTests(unittest.TestCase):
+    def test_gcc_pch_rejection_fails_before_executable_fallback(self):
+        project = (REPOSITORY_ROOT / "src/src.pro").read_text(encoding="utf-8")
+
+        self.assertIn("QMAKE_CXXFLAGS_USE_PRECOMPILE", project)
+        self.assertIn("-Winvalid-pch", project)
+        self.assertIn("-Werror=invalid-pch", project)
+        self.assertIn("-Wfatal-errors", project)
+
     def test_devcontainer_uses_a_persistent_compiler_cache(self):
         dockerfile = (REPOSITORY_ROOT / ".devcontainer/Dockerfile").read_text(
             encoding="utf-8"
@@ -875,17 +883,27 @@ class PlatformGateTests(unittest.TestCase):
             build_script,
         )
         self.assertIn('mkdir -p "${build_dir}"', build_script)
+        qmake = build_script.index('qmake "${qmake_arguments[@]}"')
+        signature = build_script.index('pch_signature="$({')
         pch_cleanup = build_script.index(
             "find -P \"${build_dir}\" -type d -name 'GoldenCheetah.gch'"
         )
         self.assertLess(
             build_script.index('mkdir -p "${build_dir}"'),
-            pch_cleanup,
+            qmake,
         )
-        self.assertLess(
-            pch_cleanup,
-            build_script.index('qmake "${qmake_arguments[@]}"'),
+        self.assertLess(qmake, signature)
+        self.assertLess(signature, pch_cleanup)
+        self.assertIn(
+            'if [[ "${pch_signature}" != "${previous_pch_signature}" ]]',
+            build_script,
         )
+        self.assertIn(
+            'make -C "${build_dir}/src" -j"${jobs}" GoldenCheetah.gch/c++',
+            build_script,
+        )
+        self.assertLess(pch_cleanup, build_script.index('make -j"${jobs}"'))
+        self.assertIn(".goldencheetah-pch-signature", build_script)
         self.assertIn(
             "source=goldencheetah-ccache,"
             "target=/home/ubuntu/.cache/ccache,type=volume",

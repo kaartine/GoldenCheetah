@@ -939,6 +939,15 @@ macx {
     message("Enabling precompile_header")
     PRECOMPILED_HEADER = stable.h
     CONFIG += precompile_header
+
+    # qmake does not invalidate GCC PCH files when compiler flags change. Stop
+    # immediately instead of letting GCC parse the GoldenCheetah executable as
+    # a fallback header when an incompatible PCH is encountered.
+    linux-g++ | linux-g++-64 {
+        QMAKE_CXXFLAGS_USE_PRECOMPILE += -Winvalid-pch \
+                                         -Werror=invalid-pch \
+                                         -Wfatal-errors
+    }
 }
 
 ###============================================================================

@@ -20,14 +20,51 @@ fi
 
 bash "${script_dir}/bootstrap.sh"
 mkdir -p "${build_dir}"
-
-# qmake does not invalidate GCC precompiled headers when compiler flags change.
-# Remove only its generated PCH directories; ccache still supplies the rebuild.
-find -P "${build_dir}" -type d -name 'GoldenCheetah.gch' -prune \
-    -exec rm -rf -- {} +
 cd "${build_dir}"
 
 qmake "${qmake_arguments[@]}"
+
+# qmake tracks PCH header dependencies but not changes to compiler options. Use
+# the generated app Makefile and toolchain versions as an options signature so
+# unchanged development builds retain their PCH and remain incremental.
+app_makefile="${build_dir}/src/Makefile"
+pch_signature_file="${build_dir}/.goldencheetah-pch-signature"
+if [[ ! -f "${app_makefile}" ]]; then
+    echo "Generated application Makefile is missing: ${app_makefile}" >&2
+    exit 1
+fi
+
+compiler_line="$(sed -n -E 's/^CXX[[:space:]]*=[[:space:]]*(.*)$/\1/p' \
+    "${app_makefile}" | head -n 1)"
+read -r -a compiler_command <<< "${compiler_line}"
+if (( ${#compiler_command[@]} == 0 )); then
+    echo "Cannot determine the C++ compiler from ${app_makefile}" >&2
+    exit 1
+fi
+
+pch_signature="$({
+    sed -n -E \
+        '/^(CXX|DEFINES|CXXFLAGS|INCPATH|QMAKE)[[:space:]]*=/p' \
+        "${app_makefile}"
+    command -v "${compiler_command[0]}"
+    "${compiler_command[@]}" --version
+    qmake -v
+} | sha256sum | awk '{print $1}')"
+
+previous_pch_signature=""
+if [[ -f "${pch_signature_file}" ]]; then
+    previous_pch_signature="$(<"${pch_signature_file}")"
+fi
+
+if [[ "${pch_signature}" != "${previous_pch_signature}" ]]; then
+    find -P "${build_dir}" -type d -name 'GoldenCheetah.gch' -prune \
+        -exec rm -rf -- {} +
+    make -C "${build_dir}/src" -j"${jobs}" GoldenCheetah.gch/c++
+    pch_signature_tmp="${pch_signature_file}.tmp.$$"
+    printf '%s\n' "${pch_signature}" > "${pch_signature_tmp}"
+    mv -f -- "${pch_signature_tmp}" "${pch_signature_file}"
+fi
+
 make -j"${jobs}"
 
 echo "Build completed. Binary: ${build_dir}/src/GoldenCheetah"
