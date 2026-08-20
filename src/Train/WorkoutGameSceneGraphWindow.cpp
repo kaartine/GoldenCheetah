@@ -13,12 +13,14 @@
 
 #include <QColor>
 #include <QFont>
+#include <QMatrix4x4>
 #include <QPainter>
 #include <QQuickWindow>
 #include <QResizeEvent>
 #include <QSGGeometry>
 #include <QSGGeometryNode>
 #include <QSGSimpleTextureNode>
+#include <QSGTransformNode>
 #include <QSGVertexColorMaterial>
 
 #include <algorithm>
@@ -37,6 +39,7 @@ struct WorkoutGameSceneRoot : public QSGNode
     QSGGeometryNode *shoulders = nullptr;
     QSGGeometryNode *road = nullptr;
     QSGGeometryNode *features = nullptr;
+    QSGTransformNode *riderTransform = nullptr;
     QSGSimpleTextureNode *rider = nullptr;
     QSGSimpleTextureNode *hud = nullptr;
     std::uint64_t hudRevision = 0;
@@ -67,9 +70,11 @@ WorkoutGameSceneRoot *createSceneRoot()
     root->shoulders = createGeometryNode(root);
     root->road = createGeometryNode(root);
     root->features = createGeometryNode(root);
+    root->riderTransform = new QSGTransformNode;
+    root->appendChildNode(root->riderTransform);
     root->rider = new QSGSimpleTextureNode;
     root->rider->setOwnsTexture(true);
-    root->appendChildNode(root->rider);
+    root->riderTransform->appendChildNode(root->rider);
     root->hud = new QSGSimpleTextureNode;
     root->hud->setOwnsTexture(true);
     root->appendChildNode(root->hud);
@@ -119,6 +124,17 @@ void appendQuad(
     appendTriangle(vertices,
                    farLeft, farY, nearRight, nearY, farRight, farY,
                    color);
+}
+
+void appendScreenRect(
+        std::vector<Vertex> &vertices,
+        float left, float top, float right, float bottom,
+        const QColor &color)
+{
+    appendQuad(vertices,
+               left, top, right,
+               left, bottom, right,
+               color);
 }
 
 void updateGeometry(
@@ -208,12 +224,60 @@ void buildRoadGeometry(
 void buildFeatureGeometry(
         const WorkoutGameRoadCourse &course,
         const WorkoutGameRoadProjectionFrame &projection,
+        const WorkoutGameFeatureRuntimeSnapshot &active,
         std::vector<Vertex> &features)
 {
     if (projection.slices.empty()) return;
     for (const WorkoutGameRoadPiece &piece : course.pieces) {
         if (!piece.challenge.enabled) continue;
         const double obstacle = piece.challenge.obstacleDistanceMeters;
+
+        const double branchStart = piece.challenge.decisionDistanceMeters;
+        const double branchEnd = std::min(
+                piece.startDistanceMeters + piece.lengthMeters,
+                obstacle + piece.lengthMeters * 0.10);
+        const double branchLength = std::max(1.0, branchEnd - branchStart);
+        const bool selectedBypass = active.ready
+                && active.sourceSectionIndex == int(piece.sourceSectionIndex)
+                && active.route == WorkoutGameRoute::SafeBypass;
+        for (std::size_t index = 1;
+             index < projection.slices.size(); ++index) {
+            const WorkoutGameRoadProjectedSlice &far =
+                    projection.slices[index - 1];
+            const WorkoutGameRoadProjectedSlice &near =
+                    projection.slices[index];
+            if (far.worldDistanceMeters < branchStart
+                    || near.worldDistanceMeters > branchEnd) {
+                continue;
+            }
+            const auto branchCenter = [&](
+                    const WorkoutGameRoadProjectedSlice &slice) {
+                const double progress = std::clamp(
+                        (slice.worldDistanceMeters - branchStart)
+                            / branchLength,
+                        0.0, 1.0);
+                const double direction = (piece.sourceSectionIndex & 1u)
+                        == 0u ? -1.0 : 1.0;
+                return float(slice.centerX + direction
+                        * std::sin(progress * 3.14159265358979323846)
+                        * slice.halfWidthPixels * 1.45);
+            };
+            const float farCenter = branchCenter(far);
+            const float nearCenter = branchCenter(near);
+            const float farWidth = std::max(
+                    1.0f, float(far.halfWidthPixels * 0.34));
+            const float nearWidth = std::max(
+                    1.0f, float(near.halfWidthPixels * 0.34));
+            appendQuad(features,
+                       farCenter - farWidth, float(far.centerY),
+                       farCenter + farWidth,
+                       nearCenter - nearWidth, float(near.centerY),
+                       nearCenter + nearWidth,
+                       selectedBypass
+                            ? QColor(181, 139, 72)
+                            : QColor(94, 79, 55));
+        }
+
         const WorkoutGameRoadProjectedSlice *nearest = nullptr;
         double nearestDistance = std::numeric_limits<double>::max();
         for (const WorkoutGameRoadProjectedSlice &slice : projection.slices) {
@@ -232,12 +296,82 @@ void buildFeatureGeometry(
         const float thickness = std::clamp(
                 float(nearest->halfWidthPixels * 0.12), 2.0f, 18.0f);
         const float y = float(nearest->centerY);
-        const QColor color = piece.animation == WorkoutGameRoadAnimation::Jump
-                ? QColor(75, 45, 26)
-                : QColor(189, 157, 75);
-        appendQuad(features,
-                   left, y - thickness, right,
-                   left, y + thickness, right, color);
+        const float width = right - left;
+        switch (piece.terrain) {
+        case WorkoutGameTerrainKind::BunnyHop:
+        case WorkoutGameTerrainKind::LogOver:
+            appendScreenRect(features,
+                    left - thickness * 0.3f, y - thickness * 0.15f,
+                    right + thickness * 0.3f, y + thickness * 1.2f,
+                    QColor(48, 34, 25));
+            appendScreenRect(features,
+                    left, y - thickness,
+                    right, y + thickness * 0.65f,
+                    QColor(100, 58, 31));
+            appendScreenRect(features,
+                    left + width * 0.04f, y - thickness * 0.72f,
+                    right - width * 0.04f, y - thickness * 0.30f,
+                    QColor(171, 103, 48));
+            break;
+        case WorkoutGameTerrainKind::Roots:
+            for (int root = 0; root < 6; ++root) {
+                const float offset = (float(root) - 2.5f) * thickness * 0.62f;
+                const float inset = (root & 1) ? width * 0.08f : 0.0f;
+                appendScreenRect(features,
+                        left + inset, y + offset,
+                        right - inset, y + offset + std::max(2.0f,
+                            thickness * 0.22f),
+                        root & 1 ? QColor(137, 84, 42)
+                                 : QColor(91, 55, 31));
+            }
+            break;
+        case WorkoutGameTerrainKind::RockGarden:
+            for (int rock = 0; rock < 7; ++rock) {
+                const float center = left + width
+                        * (0.10f + 0.13f * float(rock));
+                const float rockWidth = std::max(
+                        3.0f, thickness * (0.55f + 0.12f * (rock % 3)));
+                const float rockY = y + thickness
+                        * (-0.9f + 0.32f * float((rock * 5) % 6));
+                appendScreenRect(features,
+                        center - rockWidth, rockY - rockWidth * 0.7f,
+                        center + rockWidth, rockY + rockWidth * 0.7f,
+                        rock & 1 ? QColor(107, 111, 103)
+                                 : QColor(68, 74, 69));
+                appendScreenRect(features,
+                        center - rockWidth * 0.5f,
+                        rockY - rockWidth * 0.55f,
+                        center + rockWidth * 0.45f,
+                        rockY - rockWidth * 0.2f,
+                        QColor(151, 151, 131));
+            }
+            break;
+        case WorkoutGameTerrainKind::Tabletop:
+            appendScreenRect(features,
+                    left, y - thickness * 2.4f,
+                    right, y + thickness * 1.2f,
+                    QColor(77, 53, 34));
+            appendScreenRect(features,
+                    left + width * 0.08f, y - thickness * 2.1f,
+                    right - width * 0.08f, y - thickness * 1.2f,
+                    QColor(176, 112, 54));
+            break;
+        case WorkoutGameTerrainKind::Drop:
+            appendScreenRect(features,
+                    left, y - thickness * 0.8f,
+                    right, y + thickness * 1.8f,
+                    QColor(39, 42, 38));
+            appendScreenRect(features,
+                    left, y - thickness * 1.1f,
+                    right, y - thickness * 0.45f,
+                    QColor(188, 139, 66));
+            break;
+        default:
+            appendScreenRect(features,
+                    left, y - thickness, right, y + thickness,
+                    QColor(189, 157, 75));
+            break;
+        }
     }
 }
 
@@ -267,6 +401,7 @@ void WorkoutGameSceneGraphItem::setCourse(
         double ftpWatts)
 {
     roadCourse = WorkoutGameRoadCourseBuilder::build(course, ftpWatts);
+    featureRuntime.configure(roadCourse);
     currentFrame = {};
     visualSmoother.reset();
     frameRateCounter.reset();
@@ -393,10 +528,14 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
 
     const std::int64_t nowMs = visualClock.elapsed();
     const WorkoutGameVisualSnapshot visual = visualSmoother.sample(nowMs);
+    const WorkoutGameFeatureRuntimeSnapshot feature =
+            featureRuntime.update(visual.simulation);
     WorkoutGameRoadProjectionConfig config;
     config.viewportWidth = viewportWidth;
     config.viewportHeight = viewportHeight;
-    const double riderDistance = visual.world.ready
+    const double riderDistance = feature.ready
+            ? feature.visualDistanceMeters
+            : visual.world.ready
             ? visual.world.rider.distanceMeters
             : roadCourse.totalLengthMeters
                 * visual.simulation.courseProgress;
@@ -411,7 +550,7 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
     if (projection.ready) {
         buildRoadGeometry(
                 projection, viewportWidth, ground, shoulders, road);
-        buildFeatureGeometry(roadCourse, projection, features);
+        buildFeatureGeometry(roadCourse, projection, feature, features);
     }
     updateGeometry(root->ground, ground);
     updateGeometry(root->shoulders, shoulders);
@@ -422,19 +561,40 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
             viewportWidth * 0.16, 105.0, 210.0);
     const double riderHeight = riderWidth * riderImage.height()
             / double(std::max(1, riderImage.width()));
+    const double featureShake = feature.vibration > 0.0
+            ? feature.vibration
+                * std::sin(feature.visualDistanceMeters * 18.0) * 12.0
+            : 0.0;
+    const double physicsLift = visual.world.ready
+            ? visual.world.rider.clearanceMeters * 18.0 : 0.0;
+    const double featureLift = feature.verticalOffsetMeters * 45.0;
+    const double lift = feature.motion == WorkoutGameFeatureMotion::Drop
+            ? physicsLift + featureLift
+            : std::max(physicsLift, featureLift);
+    const double landingCompression = std::max(
+            visual.world.landingImpact, feature.landingImpact) * 12.0;
     const double bob = visual.world.ready
-            ? visual.world.rider.clearanceMeters * 18.0
+            ? lift
                 - (visual.world.rider.rearSuspension
                     + visual.world.rider.frontSuspension) * 3.0
+                + featureShake
+                - landingCompression
             : 0.0;
-    const double riderX = projection.ready
-            ? projection.riderScreenX : viewportWidth * 0.5;
+    const double riderX = (projection.ready
+            ? projection.riderScreenX : viewportWidth * 0.5)
+            + feature.lateralOffset * viewportWidth * 0.12;
     const double riderY = projection.ready
             ? projection.riderScreenY : viewportHeight * 0.82;
     root->rider->setRect(
             riderX - riderWidth * 0.5,
             riderY - riderHeight * 0.78 - bob,
             riderWidth, riderHeight);
+    QMatrix4x4 riderTransform;
+    const double riderCenterY = riderY - riderHeight * 0.35 - bob;
+    riderTransform.translate(float(riderX), float(riderCenterY));
+    riderTransform.rotate(float(-feature.pitchDegrees), 0.0f, 0.0f, 1.0f);
+    riderTransform.translate(float(-riderX), float(-riderCenterY));
+    root->riderTransform->setMatrix(riderTransform);
 
     if (root->hudRevision != hudRevision) {
         setTexture(root->hud, window(), hudImage);

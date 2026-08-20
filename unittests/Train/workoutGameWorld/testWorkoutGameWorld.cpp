@@ -215,6 +215,42 @@ private slots:
         QVERIFY(landed);
     }
 
+    void anchoredFeatureActionJumpsImmediatelyAndOnlyOnce()
+    {
+        WorkoutGamePhysics physics;
+        QVERIFY(physics.configure(997u));
+        WorkoutGamePhysicsInput input;
+        input.terrain = WorkoutGameTerrainKind::LogOver;
+        input.desiredSpeedMetersPerSecond = 3.0;
+        input.effortRatio = 1.0;
+        input.jumpRequested = true;
+        input.featureActionId = 42u;
+        physics.update(input);
+
+        bool sawAirborne = false;
+        for (int time = 20; time <= 800; time += 20) {
+            input.workoutTimeMs = time;
+            sawAirborne = sawAirborne || physics.update(input).rider.airborne;
+        }
+        QVERIFY(sawAirborne);
+
+        input.jumpRequested = false;
+        bool landed = false;
+        for (int time = 820; time <= 5000; time += 20) {
+            input.workoutTimeMs = time;
+            landed = landed || !physics.update(input).rider.airborne;
+        }
+        QVERIFY(landed);
+
+        input.jumpRequested = true;
+        bool jumpedAgain = false;
+        for (int time = 5020; time <= 5500; time += 20) {
+            input.workoutTimeMs = time;
+            jumpedAgain = jumpedAgain || physics.update(input).rider.airborne;
+        }
+        QVERIFY(!jumpedAgain);
+    }
+
     void dropCreatesAirTimeAndLandingImpact()
     {
         WorkoutGamePhysics physics;

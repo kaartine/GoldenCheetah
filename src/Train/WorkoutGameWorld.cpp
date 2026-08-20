@@ -105,6 +105,7 @@ struct WorkoutGamePhysics::Impl
     double landingImpact = 0.0;
     bool wasGrounded = true;
     int lastJumpTile = -1;
+    std::uint64_t lastFeatureActionId = 0;
     WorkoutGameWorldSnapshot latest;
 
     b2WorldId world = b2_nullWorldId;
@@ -332,16 +333,29 @@ struct WorkoutGamePhysics::Impl
         if (input.jumpRequested
                 && WorkoutGameFeatureCatalog::definition(terrain).jumpable
                 && grounded()) {
-            const double distance = distanceBase
-                    + double(b2Body_GetPosition(chassis).x) - RiderStartMeters;
-            const int tile = int(std::floor(distance / TerrainPeriodMeters));
-            const double phase = positivePhase(
-                    b2Body_GetPosition(chassis).x, seed);
-            if (phase >= 23.0 && phase <= 29.0 && tile != lastJumpTile) {
-                const float impulse = b2Body_GetMass(chassis) * 3.8f;
+            if (input.featureActionId != 0
+                    && input.featureActionId != lastFeatureActionId) {
+                const float launchSpeed = terrain
+                        == WorkoutGameTerrainKind::Tabletop ? 4.6f : 3.8f;
+                const float impulse = b2Body_GetMass(chassis) * launchSpeed;
                 b2Body_ApplyLinearImpulseToCenter(
                         chassis, {0.0f, impulse}, true);
-                lastJumpTile = tile;
+                lastFeatureActionId = input.featureActionId;
+            } else if (input.featureActionId == 0) {
+                const double distance = distanceBase
+                        + double(b2Body_GetPosition(chassis).x)
+                            - RiderStartMeters;
+                const int tile = int(std::floor(
+                        distance / TerrainPeriodMeters));
+                const double phase = positivePhase(
+                        b2Body_GetPosition(chassis).x, seed);
+                if (phase >= 23.0 && phase <= 29.0
+                        && tile != lastJumpTile) {
+                    const float impulse = b2Body_GetMass(chassis) * 3.8f;
+                    b2Body_ApplyLinearImpulseToCenter(
+                            chassis, {0.0f, impulse}, true);
+                    lastJumpTile = tile;
+                }
             }
         }
 
@@ -384,6 +398,7 @@ void WorkoutGamePhysics::reset()
     impl->elevationBase = 0.0;
     impl->landingImpact = 0.0;
     impl->lastJumpTile = -1;
+    impl->lastFeatureActionId = 0;
     impl->latest = WorkoutGameWorldSnapshot();
     ++impl->generation;
 }

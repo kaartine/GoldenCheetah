@@ -8,6 +8,8 @@
  */
 
 #include "Train/WorkoutGameSceneGraphWindow.h"
+#include "Train/WorkoutGameFeatureLab.h"
+#include "Train/WorkoutGameFeatureRuntime.h"
 
 #include <QApplication>
 #include <QColor>
@@ -17,6 +19,8 @@
 #include <QSGRendererInterface>
 #include <QSet>
 #include <QTest>
+
+#include <algorithm>
 
 namespace {
 
@@ -58,6 +62,8 @@ WorkoutGameVisualSnapshot frameAt(double distanceMeters)
     frame.simulation.ready = true;
     frame.simulation.workoutTimeMs = std::int64_t(distanceMeters * 500.0);
     frame.simulation.courseProgress = distanceMeters / 500.0;
+    frame.simulation.sectionProgress = std::clamp(
+            (distanceMeters - 190.0) / 100.0, 0.0, 1.0);
     frame.simulation.speedKph = 18.4;
     frame.simulation.activeSection = 1;
     frame.world.ready = true;
@@ -67,6 +73,29 @@ WorkoutGameVisualSnapshot frameAt(double distanceMeters)
     frame.world.rider.rearSuspension = 0.15;
     frame.world.rider.frontSuspension = 0.2;
     frame.world.speedMetersPerSecond = 5.1;
+    return frame;
+}
+
+WorkoutGameVisualSnapshot featureFrame(
+        WorkoutGameFeatureOutcome outcome,
+        WorkoutGameRoute route)
+{
+    WorkoutGameVisualSnapshot frame;
+    frame.simulation.ready = true;
+    frame.simulation.workoutTimeMs = 69400;
+    frame.simulation.courseProgress = 0.94;
+    frame.simulation.sectionProgress = 0.94;
+    frame.simulation.speedKph = 20.0;
+    frame.simulation.activeSection = 2;
+    frame.simulation.featureOutcome = outcome;
+    frame.simulation.route = route;
+    frame.simulation.challengeReadiness = outcome
+            == WorkoutGameFeatureOutcome::Completed ? 1.0 : 0.4;
+    frame.world.ready = true;
+    frame.world.generation = 1;
+    frame.world.terrain = WorkoutGameTerrainKind::LogOver;
+    frame.world.rider.distanceMeters = 1.0;
+    frame.world.speedMetersPerSecond = 5.5;
     return frame;
 }
 
@@ -125,6 +154,76 @@ private slots:
         const QString screenshotPath = QDir(QDir::tempPath()).filePath(
                 QStringLiteral("workout-game-scenegraph-test.png"));
         QVERIFY(second.save(screenshotPath));
+    }
+
+    void completedAndBypassedFeaturesRenderDifferentLines()
+    {
+        WorkoutGameSceneGraphWindow window;
+        window.resize(1280, 720);
+        window.setCourse(sampleCourse(), 200.0);
+        window.setFrame(
+                featureFrame(WorkoutGameFeatureOutcome::Completed,
+                             WorkoutGameRoute::MainLine),
+                270.0, 270.0, 88, 155, 7);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 3000);
+        QTest::qWait(400);
+        const QImage completed = window.grabWindow();
+        QVERIFY(!completed.isNull());
+
+        window.setFrame(
+                featureFrame(WorkoutGameFeatureOutcome::Bypassed,
+                             WorkoutGameRoute::SafeBypass),
+                110.0, 270.0, 45, 130, 2);
+        QTest::qWait(400);
+        const QImage bypassed = window.grabWindow();
+        QVERIFY(!bypassed.isNull());
+
+        QVERIFY(changedPixels(completed, bypassed, 180) > 1800);
+    }
+
+    void featureLabRendersFiveDistinctObstacles()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        WorkoutGameSceneGraphWindow window;
+        window.resize(1280, 720);
+        window.setCourse(course, 200.0);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 3000);
+
+        QImage prior;
+        const int featureSections[] = {0, 2, 4, 6, 8};
+        for (int section : featureSections) {
+            WorkoutGameVisualSnapshot frame;
+            frame.simulation.ready = true;
+            frame.simulation.workoutTimeMs =
+                    course.sections[std::size_t(section)].startMs + 9800;
+            frame.simulation.activeSection = section;
+            frame.simulation.sectionProgress = 0.82;
+            frame.simulation.courseProgress = double(frame.simulation.workoutTimeMs)
+                    / double(course.durationMs);
+            frame.simulation.speedKph = 20.0;
+            frame.simulation.featureOutcome = WorkoutGameFeatureOutcome::Completed;
+            frame.simulation.challengeReadiness = 1.0;
+            frame.world.ready = true;
+            frame.world.generation = std::uint64_t(section + 1);
+            frame.world.terrain = course.sections[std::size_t(section)].terrain;
+            frame.world.speedMetersPerSecond = 5.5;
+            window.setFrame(frame, 220.0,
+                    course.sections[std::size_t(section)].targetWatts,
+                    88, 150, 7);
+            QTest::qWait(300);
+            const QImage rendered = window.grabWindow();
+            QVERIFY(!rendered.isNull());
+            if (!prior.isNull()) {
+                QVERIFY(changedPixels(prior, rendered, 180) > 900);
+            }
+            const QString output = QDir(QDir::tempPath()).filePath(
+                    QStringLiteral("workout-game-feature-%1.png")
+                        .arg(section));
+            QVERIFY(rendered.save(output));
+            prior = rendered;
+        }
     }
 };
 

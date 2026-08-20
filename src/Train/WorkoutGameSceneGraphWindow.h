@@ -10,6 +10,7 @@
 #ifndef _GC_WorkoutGameSceneGraphWindow_h
 #define _GC_WorkoutGameSceneGraphWindow_h
 
+#include "WorkoutGameFeatureRuntime.h"
 #include "WorkoutGameRoadCourse.h"
 #include "WorkoutGameVisualSmoother.h"
 
@@ -52,6 +53,7 @@ private:
     void publishFps(double fps);
 
     WorkoutGameRoadCourse roadCourse;
+    WorkoutGameFeatureRuntime featureRuntime;
     WorkoutGameVisualSnapshot currentFrame;
     WorkoutGameVisualSmoother visualSmoother;
     QElapsedTimer visualClock;

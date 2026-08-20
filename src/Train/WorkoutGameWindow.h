@@ -14,6 +14,7 @@
 #include "RealtimeData.h"
 #include "WorkoutGameCompetition.h"
 #include "WorkoutGameCourseRuntime.h"
+#include "WorkoutGameFeatureRuntime.h"
 #include "WorkoutGameSimulation.h"
 #include "WorkoutGameSessionState.h"
 #include "WorkoutGameWorld.h"
@@ -61,6 +62,7 @@ private:
     WorkoutGameCourseRuntime distanceRuntime;
     WorkoutGameDistancePlaybackSnapshot distanceSnapshot;
     WorkoutGameSimulation simulation;
+    WorkoutGameFeatureRuntime featureRuntime;
     WorkoutGameSessionState sessionState;
     WorkoutGamePhysics physics;
     WorkoutGameCamera camera;
@@ -70,9 +72,11 @@ private:
     bool hasTelemetry = false;
     bool paused = false;
     bool sessionActive = false;
+    bool featureLabEnabled = false;
     bool worldClockInitialized = false;
     std::int64_t lastWorldTimeMs = 0;
     double ftpWatts = 0.0;
+    double featureLabTargetWatts = 0.0;
 };
 
 #endif

@@ -8,7 +8,7 @@
  */
 
 #include "WorkoutGameWindow.h"
-#include "WorkoutGameFeatureCatalog.h"
+#include "WorkoutGameFeatureLab.h"
 
 #include "Athlete.h"
 #include "Context.h"
@@ -199,7 +199,13 @@ void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
     distanceRuntime.reset();
     distanceSnapshot = WorkoutGameDistancePlaybackSnapshot();
     ftpWatts = currentFtp(workout);
-    if (workout
+    featureLabEnabled = qEnvironmentVariableIntValue(
+            "GC_WORKOUT_GAME_FEATURE_LAB") != 0;
+    featureLabTargetWatts = 0.0;
+    if (featureLabEnabled) {
+        if (ftpWatts <= 0.0) ftpWatts = 200.0;
+        currentCourse = WorkoutGameFeatureLab::course(ftpWatts);
+    } else if (workout
             && workout->format() == ErgFileFormat::crs
             && distanceRuntime.configure(workout->filename())
                 == WorkoutGameCourseRuntimeStatus::Ready) {
@@ -220,6 +226,8 @@ void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
     }
 
     simulation.configure(currentCourse, ftpWatts);
+    featureRuntime.configure(WorkoutGameRoadCourseBuilder::build(
+            currentCourse, ftpWatts));
     physics.configure(currentCourse.seed);
     camera.reset();
     competition.configure(currentCourse, loadGhost(currentCourse));
@@ -242,7 +250,9 @@ void WorkoutGameWindow::telemetryUpdate(const RealtimeData &telemetry)
     const int cadenceRpm = int(std::lround(latestTelemetry.getCadence()));
     const int heartRate = int(std::lround(latestTelemetry.getHr()));
     const int virtualGear = std::max(1, latestTelemetry.getVirtualGear());
-    const double targetWatts = distanceRuntime.enabled()
+    const double targetWatts = featureLabEnabled
+            ? featureLabTargetWatts
+            : distanceRuntime.enabled()
             && distanceSnapshot.ready
             ? distanceSnapshot.targetWatts
             : latestTelemetry.getLoad();
@@ -342,8 +352,15 @@ void WorkoutGameWindow::updateSimulation(std::int64_t workoutTimeMs)
         }
         input.virtualGear = latestTelemetry.getVirtualGear();
     }
+    if (featureLabEnabled) {
+        input.targetWatts = WorkoutGameFeatureLab::targetWattsAt(
+                currentCourse, workoutTimeMs);
+        featureLabTargetWatts = input.targetWatts;
+    }
 
     const WorkoutGameSimulationSnapshot snapshot = simulation.update(input);
+    const WorkoutGameFeatureRuntimeSnapshot feature =
+            featureRuntime.update(snapshot);
     WorkoutGameWorldSnapshot world;
     WorkoutGameCameraSnapshot view;
     if (snapshot.ready
@@ -364,10 +381,8 @@ void WorkoutGameWindow::updateSimulation(std::int64_t workoutTimeMs)
         physicsInput.difficulty = section.difficulty;
         physicsInput.effortRatio = std::max(0.0, input.actualWatts) / target;
         physicsInput.paused = paused;
-        physicsInput.jumpRequested =
-                WorkoutGameFeatureCatalog::definition(section.terrain).jumpable
-                && physicsInput.effortRatio >= 0.9
-                && input.cadenceRpm >= 65.0;
+        physicsInput.jumpRequested = feature.triggerJump;
+        physicsInput.featureActionId = feature.actionId;
         world = physics.update(physicsInput);
 
         const double cameraElapsedSeconds = worldClockInitialized

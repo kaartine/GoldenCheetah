@@ -68,6 +68,7 @@ struct WorkoutGamePhysicsInput
     double effortRatio = 0.0;
     bool paused = false;
     bool jumpRequested = false;
+    std::uint64_t featureActionId = 0;
 };
 
 class WorkoutGamePhysics
