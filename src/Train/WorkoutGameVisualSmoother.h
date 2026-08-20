@@ -50,6 +50,7 @@ private:
             double amount);
 
     bool initialized = false;
+    bool sourceAdvancing = false;
     std::int64_t transitionStartMs = 0;
     std::int64_t lastTargetMonotonicMs = 0;
     std::int64_t sourceIntervalMs = 1000;

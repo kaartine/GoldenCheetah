@@ -275,6 +275,42 @@ private slots:
         QCOMPARE(smoother.sample(5000).world.rider.distanceMeters, 35.0);
     }
 
+    void delayedSourceAnchorNeverPullsVisualTimelineBackward()
+    {
+        WorkoutGameVisualSnapshot first;
+        first.simulation.ready = true;
+        first.simulation.workoutTimeMs = 1000;
+        first.simulation.courseProgress = 0.10;
+        first.world.ready = true;
+        first.world.generation = 2;
+        first.world.rider.distanceMeters = 10.0;
+        first.world.speedMetersPerSecond = 10.0;
+
+        WorkoutGameVisualSnapshot second = first;
+        second.simulation.workoutTimeMs = 2000;
+        second.simulation.courseProgress = 0.20;
+        second.world.rider.distanceMeters = 20.0;
+
+        WorkoutGameVisualSnapshot delayed = second;
+        delayed.simulation.workoutTimeMs = 3000;
+        delayed.simulation.courseProgress = 0.30;
+        delayed.world.rider.distanceMeters = 30.0;
+
+        WorkoutGameVisualSmoother smoother;
+        smoother.setTarget(first, 1000);
+        smoother.setTarget(second, 2000);
+        const WorkoutGameVisualSnapshot before = smoother.sample(3500);
+        smoother.setTarget(delayed, 3500);
+
+        std::int64_t priorWorkoutTime = before.simulation.workoutTimeMs;
+        for (std::int64_t now = 3500; now <= 3900; now += 16) {
+            const WorkoutGameVisualSnapshot frame = smoother.sample(now);
+            QVERIFY2(frame.simulation.workoutTimeMs >= priorWorkoutTime,
+                     "a delayed source anchor moved rendered workout time backward");
+            priorWorkoutTime = frame.simulation.workoutTimeMs;
+        }
+    }
+
     void visualStateCutsOnlyWhenCoursePositionResets()
     {
         WorkoutGameVisualSnapshot first;

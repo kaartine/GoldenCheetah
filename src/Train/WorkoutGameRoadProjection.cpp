@@ -92,6 +92,8 @@ WorkoutGameRoadProjectionFrame WorkoutGameRoadProjection::project(
                 focalLength * sample.center.halfWidthMeters / localZ,
                 0.25,
                 config.viewportWidth);
+        slice.halfWidthMeters = sample.center.halfWidthMeters;
+        slice.pixelsPerMeter = focalLength / localZ;
         slice.pieceIndex = sample.pieceIndex;
         slice.terrain = sample.terrain;
         result.slices.push_back(slice);
@@ -99,5 +101,47 @@ WorkoutGameRoadProjectionFrame WorkoutGameRoadProjection::project(
     result.ready = result.slices.size() >= 2;
     result.riderScreenX = config.viewportWidth * 0.5;
     result.riderScreenY = config.viewportHeight * 0.82;
+    return result;
+}
+
+WorkoutGameRoadProjectedPoint WorkoutGameRoadProjection::projectPoint(
+        const WorkoutGameRoadProjectionFrame &frame,
+        double worldDistanceMeters,
+        double lateralMeters,
+        double elevationMeters)
+{
+    WorkoutGameRoadProjectedPoint result;
+    if (!frame.ready || frame.slices.size() < 2
+            || !std::isfinite(worldDistanceMeters)
+            || !std::isfinite(lateralMeters)
+            || !std::isfinite(elevationMeters)
+            || worldDistanceMeters > frame.slices.front().worldDistanceMeters
+            || worldDistanceMeters < frame.slices.back().worldDistanceMeters) {
+        return result;
+    }
+    for (std::size_t index = 1; index < frame.slices.size(); ++index) {
+        const WorkoutGameRoadProjectedSlice &far = frame.slices[index - 1];
+        const WorkoutGameRoadProjectedSlice &near = frame.slices[index];
+        if (worldDistanceMeters > far.worldDistanceMeters
+                || worldDistanceMeters < near.worldDistanceMeters) {
+            continue;
+        }
+        const double span = far.worldDistanceMeters - near.worldDistanceMeters;
+        const double amount = span > 1e-9
+                ? (far.worldDistanceMeters - worldDistanceMeters) / span
+                : 0.0;
+        const auto interpolate = [amount](double from, double to) {
+            return from + (to - from) * amount;
+        };
+        const double centerX = interpolate(far.centerX, near.centerX);
+        const double centerY = interpolate(far.centerY, near.centerY);
+        const double scale = interpolate(
+                far.pixelsPerMeter, near.pixelsPerMeter);
+        result.ready = true;
+        result.x = centerX + lateralMeters * scale;
+        result.y = centerY - elevationMeters * scale;
+        result.depthMeters = interpolate(far.depthMeters, near.depthMeters);
+        return result;
+    }
     return result;
 }

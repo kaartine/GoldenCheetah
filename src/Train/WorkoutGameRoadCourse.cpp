@@ -170,9 +170,25 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
         });
         const double challengeDistance = result.totalLengthMeters
                 + sectionLength * challenge.decisionProgress;
-        const double obstacleProgress = std::min(
-                0.98,
-                std::max(0.92, challenge.decisionProgress + 0.03));
+        double obstacleProgress = std::min(
+                0.98, challenge.decisionProgress + 0.03);
+        switch (section.terrain) {
+        case WorkoutGameTerrainKind::BunnyHop:
+        case WorkoutGameTerrainKind::LogOver:
+        case WorkoutGameTerrainKind::Tabletop:
+        case WorkoutGameTerrainKind::Drop:
+            obstacleProgress = std::clamp(
+                    challenge.decisionProgress + 0.08, 0.70, 0.82);
+            break;
+        case WorkoutGameTerrainKind::Roots:
+        case WorkoutGameTerrainKind::RockGarden:
+        case WorkoutGameTerrainKind::RockSlab:
+            obstacleProgress = std::min(
+                    0.92, challenge.decisionProgress + 0.05);
+            break;
+        default:
+            break;
+        }
         const double obstacleDistance = sectionStart
                 + sectionLength * obstacleProgress;
 

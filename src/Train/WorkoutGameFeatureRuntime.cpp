@@ -22,6 +22,32 @@ double smoothStep(double value)
     return clamped * clamped * (3.0 - 2.0 * clamped);
 }
 
+double smootherStep(double value)
+{
+    const double clamped = std::clamp(value, 0.0, 1.0);
+    return clamped * clamped * clamped
+            * (clamped * (clamped * 6.0 - 15.0) + 10.0);
+}
+
+double smoothPulse(double value)
+{
+    const double progress = std::clamp(value, 0.0, 1.0);
+    if (progress <= 0.0 || progress >= 1.0) return 0.0;
+    if (progress < 0.35) return smoothStep(progress / 0.35);
+    if (progress > 0.80) return smootherStep((1.0 - progress) / 0.20);
+    return 1.0;
+}
+
+double jumpArc(double progress)
+{
+    constexpr double ApexProgress = 0.30;
+    const double clamped = std::clamp(progress, 0.0, 1.0);
+    if (clamped <= ApexProgress) {
+        return std::sin(clamped / ApexProgress * Pi * 0.5);
+    }
+    return std::sin((1.0 - clamped) / (1.0 - ApexProgress) * Pi * 0.5);
+}
+
 WorkoutGameFeatureMotion motionFor(WorkoutGameTerrainKind terrain)
 {
     switch (terrain) {
@@ -118,6 +144,8 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
             &configuredCourse.pieces[layout.challengePieceIndex];
     result.terrain = piece->terrain;
     result.motion = motionFor(piece->terrain);
+    result.prepareDistanceMeters = piece->challenge.prepareDistanceMeters;
+    result.decisionDistanceMeters = piece->challenge.decisionDistanceMeters;
     result.obstacleDistanceMeters = piece->challenge.obstacleDistanceMeters;
     result.distanceToObstacleMeters = result.obstacleDistanceMeters
             - result.visualDistanceMeters;
@@ -126,7 +154,8 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
             1.0, layout.endDistanceMeters - layout.startDistanceMeters);
     const double actionEnd = std::min(
             layout.endDistanceMeters,
-            result.obstacleDistanceMeters + sectionLength * 0.06);
+            std::max(result.obstacleDistanceMeters + 6.0,
+                     layout.startDistanceMeters + sectionLength * 0.98));
     const double recoveryEnd = layout.endDistanceMeters;
     if (result.visualDistanceMeters < piece->challenge.prepareDistanceMeters) {
         result.phase = WorkoutGameFeaturePhase::Approach;
@@ -151,13 +180,15 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
             || result.route == WorkoutGameRoute::SafeBypass;
     if (bypass) {
         const double branchStart = piece->challenge.decisionDistanceMeters;
-        const double branchEnd = std::max(branchStart + 1.0, actionEnd);
+        const double branchEnd = std::min(
+                layout.endDistanceMeters,
+                std::max(branchStart + 1.0,
+                    layout.startDistanceMeters + sectionLength * 0.96));
         const double branchProgress = (result.visualDistanceMeters - branchStart)
                 / (branchEnd - branchStart);
         const double direction = (simulation.activeSection & 1) == 0
                 ? -1.0 : 1.0;
-        result.lateralOffset = direction * std::sin(
-                Pi * std::clamp(branchProgress, 0.0, 1.0));
+        result.lateralOffset = direction * smoothPulse(branchProgress);
     }
 
     if (result.phase == WorkoutGameFeaturePhase::Action) {
@@ -170,7 +201,7 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
                 && !bypass) {
             result.triggerJump = true;
             result.verticalOffsetMeters = jumpHeight(piece->terrain)
-                    * std::sin(Pi * actionProgress);
+                    * jumpArc(actionProgress);
             result.pitchDegrees = 7.0 * std::cos(Pi * actionProgress);
         } else if (result.motion == WorkoutGameFeatureMotion::Absorb
                 && completed && !bypass) {

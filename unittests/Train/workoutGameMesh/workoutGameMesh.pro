@@ -1,0 +1,23 @@
+QT += core testlib
+CONFIG += c++17
+
+TARGET = testWorkoutGameMesh
+
+SOURCES = testWorkoutGameMesh.cpp \
+          ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
+          ../../../src/Train/WorkoutGameMesh.cpp \
+          ../../../src/Train/WorkoutGameRoadCourse.cpp \
+          ../../../src/Train/WorkoutGameRoadProjection.cpp
+
+HEADERS = ../../../src/Train/WorkoutGameMesh.h \
+          ../../../src/Train/WorkoutGameRoadCourse.h \
+          ../../../src/Train/WorkoutGameRoadProjection.h
+
+include(../../unittests.pri)
+
+sanitize:!msvc {
+    QMAKE_CXXFLAGS += -fsanitize=address,undefined \
+                      -fno-omit-frame-pointer \
+                      -fno-sanitize-recover=all
+    QMAKE_LFLAGS += -fsanitize=address,undefined
+}

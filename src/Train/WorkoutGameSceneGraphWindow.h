@@ -13,12 +13,14 @@
 #include "WorkoutGameFeatureRuntime.h"
 #include "WorkoutGameDiagnostics.h"
 #include "WorkoutGameRoadCourse.h"
+#include "WorkoutGamePowerProfile.h"
 #include "WorkoutGameVisualSmoother.h"
 
 #include <QElapsedTimer>
 #include <QImage>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QTimer>
 
 #include <cstdint>
 
@@ -61,6 +63,7 @@ private:
             const WorkoutGameDiagnosticsSnapshot &snapshot);
 
     WorkoutGameRoadCourse roadCourse;
+    WorkoutGameCourse currentCourse;
     WorkoutGameFeatureRuntime featureRuntime;
     WorkoutGameVisualSnapshot currentFrame;
     WorkoutGameVisualSmoother visualSmoother;
@@ -121,6 +124,9 @@ protected:
 
 private:
     WorkoutGameSceneGraphItem *sceneItem;
+    QTimer renderTimer;
+    QElapsedTimer renderClock;
+    std::int64_t renderUntilMs = 0;
     bool failureReported = false;
     bool sessionRunning = false;
     QString captureDirectory;

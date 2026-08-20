@@ -210,7 +210,7 @@ TrainSidebar::loadUpdate (nominally 1000 ms)
          smooth workout time and sample one road timeline  [render]
                +--> road projection and feature geometry
                +--> QSG geometry/texture node updates
-               +--> swap -> request next visible frame
+               +--> 16 ms presentation request while session is active
 ```
 
 Both game rules and vehicle physics cap catch-up at one second. With the normal
@@ -222,15 +222,19 @@ coarse source cadence by interpolating and briefly predicting workout time,
 then maps that single time to road distance, section progress, and feature
 presentation.
 
-The primary scene graph renderer schedules another frame from `frameSwapped`
-and normally follows display vsync. It rebuilds bounded road and feature vertex
-arrays every frame. The OpenGL fallback is a `QOpenGLWidget`: Qt renders it into
-an offscreen framebuffer and composites it into the top-level widget rather
-than giving it an independently swappable native double buffer. Its scene is
-still painted by `QPainter` on the GUI thread. The final
-fallback uses a 33 ms GUI timer. Direct PNG capture calls `grabWindow` and writes
-the image from the GUI side; it is intentionally a diagnostic path and can
-disturb frame pacing.
+The primary scene graph renderer uses a precise 16 ms presentation timer and
+normally remains bounded by display vsync. This avoids relying on
+`frameSwapped` feedback, which did not continuously request frames on every Qt
+render loop and produced one-second bursts when source anchors arrived. The
+timer runs while training is active and for a bounded 1.7 second interpolation
+tail after an isolated frame; it then stops while inactive. The renderer
+rebuilds bounded road and feature vertex arrays every frame. The OpenGL fallback
+is a `QOpenGLWidget`: Qt renders it into an offscreen framebuffer and composites
+it into the top-level widget rather than giving it an independently swappable
+native double buffer. Its scene is still painted by `QPainter` on the GUI
+thread. The final fallback uses a 33 ms GUI timer. Direct PNG capture calls
+`grabWindow` and writes the image from the GUI side; it is intentionally a
+diagnostic path and can disturb frame pacing.
 
 #### Current Engine State Ownership
 
@@ -246,6 +250,7 @@ Mutable state has the following owners:
 | Box2D world, vehicle contacts and suspension | `WorkoutGamePhysics::update` on the same GUI callback |
 | Camera target and transition | `WorkoutGameCamera::update` on the same GUI callback |
 | Workout-time-to-road mapping | Immutable `WorkoutGameRoadCourse`, sampled by the scene graph |
+| Feature and trail meshes | Immutable course-space values from `WorkoutGameMeshLibrary`; projected by the scene graph |
 | Visual interpolation, projected trail and render diagnostics | `WorkoutGameSceneGraphItem::updatePaintNode` during Qt scene graph synchronization |
 | HUD source image and telemetry labels | `WorkoutGameSceneGraphItem` on the GUI thread; copied to a scene graph texture during synchronization |
 | Saved ghost | `WorkoutGameGhostRecorder` in the window and athlete settings on stop |
@@ -257,6 +262,23 @@ Box2D owns only the local visual bicycle world; the time-to-road timeline owns
 the primary rendered longitudinal position. This split is deliberate for
 workout safety, but it also means that road position and the Box2D bicycle are
 not yet one authoritative simulated body.
+
+#### Course-Space 2.5D Geometry
+
+`WorkoutGameMesh` is the presentation-neutral geometry contract for reusable
+trail pieces and features. Vertices use course-local forward, right, and up
+coordinates and carry normalized UV coordinates. Indexed triangles reference
+material slots instead of fixed textures. An instance adds course distance,
+lateral/elevation offsets, yaw, and per-axis scale before
+`WorkoutGameMeshProjector` maps it through the road camera. This allows flat
+colors now and atlas textures later without changing course generation.
+
+Each model also exposes entry and exit connectors plus local collision boxes.
+Connectors let generated trail tiles meet as puzzle pieces with compatible
+width and elevation. Collision boxes are data only in the current release;
+feature success remains authoritative in `WorkoutGameFeatureChallenge`. A
+future Box2D adapter may install those boxes as fixtures, but rendering must
+never decide workout progress, resistance, recording, or feature rewards.
 
 The GUI-to-render handoff currently relies on Qt Quick's synchronization phase.
 `setFrame`, `setTelemetry`, and `setCourse` mutate the `QQuickItem` on the GUI
@@ -302,28 +324,24 @@ nodes or textures whose lifetime belongs to the render thread.
    The current bounded scene has measured headroom, so optimize only after
    counters show pressure: reuse buffers, retain unchanged chunks, and batch by
    material before adding workers.
-7. **P2: the visible scene renders while training is inactive.** The
-   `frameSwapped` loop checks window visibility but not session state. Stop the
-   continuous loop when inactive and request isolated frames for setup or HUD
-   changes.
-8. **P2: HUD changes recreate a texture.** Telemetry and changing FPS values
+7. **P2: HUD changes recreate a texture.** Telemetry and changing FPS values
    rebuild a `QImage`, then replace its scene graph texture. Rate-limit debug
    values or use a persistent dynamic texture if profiling shows upload cost.
-9. **P2: course creation is synchronous.** ERG normalization and current small
+8. **P2: course creation is synchronous.** ERG normalization and current small
    procedural courses are cheap, but imported long activities and future asset
    decoding must run as cancelable jobs before their immutable result is
    installed on the GUI thread.
-10. **P2: physics frequency has not been justified by profiling.** The current
+9. **P2: physics frequency has not been justified by profiling.** The current
    vehicle path calls Box2D at 120 Hz with four solver substeps, potentially 480
    solver substeps during a one-second catch-up burst. Box2D documents a fixed
    60 Hz primary step with substeps as a common starting point. Compare 60/4,
    120/2, and the current 120/4 against contact quality and CPU time before
    treating the current rate as a requirement.
-11. **P2: scene graph pacing assumes working vsync.** The self-scheduled
-    `frameSwapped` loop has no software frame cap. It follows the display on the
-    normal desktop, but headless X11 traces ran at 118-140 FPS. Record the
-    graphics API, render loop, swap interval, and presented-frame cadence, and
-    add an inactive or no-vsync limiter if real systems show waste or jitter.
+10. **P2: presentation cadence needs production telemetry.** The 16 ms request
+    timer caps the previous no-vsync runaway and stops while inactive. Record
+    graphics API, Qt render loop, swap interval, requested frames, presented
+    frames, and sensor-to-display latency before adding adaptive quality or a
+    display-rate-specific scheduler.
 
 ### Clock And Thread Model
 

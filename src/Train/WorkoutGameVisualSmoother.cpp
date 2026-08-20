@@ -63,6 +63,7 @@ double extrapolate(
 void WorkoutGameVisualSmoother::reset()
 {
     initialized = false;
+    sourceAdvancing = false;
     transitionStartMs = 0;
     lastTargetMonotonicMs = 0;
     sourceIntervalMs = 1000;
@@ -81,6 +82,7 @@ void WorkoutGameVisualSmoother::setTarget(
             || monotonicTimeMs < transitionStartMs
             || isDiscontinuity(target, snapshot)) {
         initialized = true;
+        sourceAdvancing = false;
         transitionStartMs = monotonicTimeMs;
         lastTargetMonotonicMs = monotonicTimeMs;
         sourceIntervalMs = 1000;
@@ -91,6 +93,8 @@ void WorkoutGameVisualSmoother::setTarget(
     }
 
     const WorkoutGameVisualSnapshot sampled = sample(monotonicTimeMs);
+    const bool advancing = snapshot.simulation.workoutTimeMs
+            > target.simulation.workoutTimeMs;
     const std::int64_t workoutIntervalMs =
             snapshot.simulation.workoutTimeMs
             - target.simulation.workoutTimeMs;
@@ -110,6 +114,36 @@ void WorkoutGameVisualSmoother::setTarget(
     target = snapshot;
     transitionStartMs = monotonicTimeMs;
     lastTargetMonotonicMs = monotonicTimeMs;
+    sourceAdvancing = advancing;
+
+    if (sourceAdvancing
+            && target.simulation.workoutTimeMs
+                < sampled.simulation.workoutTimeMs) {
+        target.simulation.workoutTimeMs =
+                sampled.simulation.workoutTimeMs;
+        target.simulation.courseProgress = std::max(
+                target.simulation.courseProgress,
+                sampled.simulation.courseProgress);
+        if (target.simulation.activeSection
+                == sampled.simulation.activeSection) {
+            target.simulation.sectionProgress = std::max(
+                    target.simulation.sectionProgress,
+                    sampled.simulation.sectionProgress);
+        }
+        if (target.world.ready && sampled.world.ready
+                && target.world.generation == sampled.world.generation) {
+            target.world.rider.distanceMeters = std::max(
+                    target.world.rider.distanceMeters,
+                    sampled.world.rider.distanceMeters);
+        }
+        if (target.camera.ready && sampled.camera.ready) {
+            target.camera.centerDistanceMeters = std::max(
+                    target.camera.centerDistanceMeters,
+                    sampled.camera.centerDistanceMeters);
+        }
+        predictionOrigin = target;
+        transitionStartMs -= TransitionDurationMs;
+    }
 }
 
 WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::sample(
@@ -126,10 +160,10 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::sample(
 
     const std::int64_t predictionMs = std::clamp<std::int64_t>(
             elapsedMs - TransitionDurationMs, 0, MaximumPredictionMs);
-    const bool movingForward = target.simulation.ready
+    const bool movingForward = sourceAdvancing
+            && target.simulation.ready
             && !target.simulation.finished
-            && target.simulation.workoutTimeMs
-                    > previous.simulation.workoutTimeMs;
+            && target.simulation.workoutTimeMs >= 0;
     if (predictionMs <= 0 || !movingForward) return result;
 
     result.simulation.workoutTimeMs += predictionMs;

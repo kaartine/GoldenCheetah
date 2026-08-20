@@ -45,6 +45,8 @@ struct WorkoutGameFeatureRuntimeSnapshot
     WorkoutGameFeatureOutcome outcome = WorkoutGameFeatureOutcome::None;
     WorkoutGameRoute route = WorkoutGameRoute::MainLine;
     double visualDistanceMeters = 0.0;
+    double prepareDistanceMeters = 0.0;
+    double decisionDistanceMeters = 0.0;
     double obstacleDistanceMeters = 0.0;
     double distanceToObstacleMeters = 0.0;
     double readiness = 0.0;

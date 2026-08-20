@@ -10,6 +10,7 @@
 #include "WorkoutGameSceneGraphWindow.h"
 
 #include "WorkoutGameRoadProjection.h"
+#include "WorkoutGameMesh.h"
 
 #include <QColor>
 #include <QDir>
@@ -28,7 +29,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 #include <vector>
 
 namespace {
@@ -136,17 +136,6 @@ void appendQuad(
                    color);
 }
 
-void appendScreenRect(
-        std::vector<Vertex> &vertices,
-        float left, float top, float right, float bottom,
-        const QColor &color)
-{
-    appendQuad(vertices,
-               left, top, right,
-               left, bottom, right,
-               color);
-}
-
 void updateGeometry(
         QSGGeometryNode *node,
         const std::vector<Vertex> &vertices)
@@ -181,6 +170,22 @@ QColor groundColor(WorkoutGameTerrainKind terrain, bool alternate)
             ? QColor(75, 104, 78)
             : QColor(50, 111, 66);
     return alternate ? base.lighter(108) : base.darker(106);
+}
+
+QColor meshColor(WorkoutGameMeshMaterial material, bool selectedBypass = false)
+{
+    switch (material) {
+    case WorkoutGameMeshMaterial::Dirt: return QColor(145, 105, 62);
+    case WorkoutGameMeshMaterial::DirtEdge: return QColor(79, 57, 39);
+    case WorkoutGameMeshMaterial::Bypass:
+        return selectedBypass ? QColor(218, 167, 76) : QColor(91, 76, 52);
+    case WorkoutGameMeshMaterial::WoodSide: return QColor(78, 47, 28);
+    case WorkoutGameMeshMaterial::WoodTop: return QColor(166, 96, 43);
+    case WorkoutGameMeshMaterial::RockSide: return QColor(67, 73, 68);
+    case WorkoutGameMeshMaterial::RockTop: return QColor(145, 147, 130);
+    case WorkoutGameMeshMaterial::DropFace: return QColor(45, 47, 43);
+    }
+    return QColor(180, 140, 72);
 }
 
 void buildRoadGeometry(
@@ -306,7 +311,85 @@ void buildMotionCueGeometry(
     }
 }
 
+void appendCourseBand(
+        const WorkoutGameRoadProjectionFrame &projection,
+        double startDistanceMeters,
+        double endDistanceMeters,
+        const QColor &color,
+        std::vector<Vertex> &features)
+{
+    const WorkoutGameRoadProjectedPoint farLeft =
+            WorkoutGameRoadProjection::projectPoint(
+                projection, endDistanceMeters, -1.15, 0.035);
+    const WorkoutGameRoadProjectedPoint farRight =
+            WorkoutGameRoadProjection::projectPoint(
+                projection, endDistanceMeters, 1.15, 0.035);
+    const WorkoutGameRoadProjectedPoint nearLeft =
+            WorkoutGameRoadProjection::projectPoint(
+                projection, startDistanceMeters, -1.15, 0.035);
+    const WorkoutGameRoadProjectedPoint nearRight =
+            WorkoutGameRoadProjection::projectPoint(
+                projection, startDistanceMeters, 1.15, 0.035);
+    if (!farLeft.ready || !farRight.ready || !nearLeft.ready || !nearRight.ready) {
+        return;
+    }
+    appendQuad(features,
+               float(farLeft.x), float(farLeft.y), float(farRight.x),
+               float(nearLeft.x), float(nearLeft.y), float(nearRight.x),
+               color);
+}
+
+void buildPowerCueGeometry(
+        const WorkoutGameRoadProjectionFrame &projection,
+        const WorkoutGameFeatureRuntimeSnapshot &active,
+        std::vector<Vertex> &features)
+{
+    if (!active.ready || active.decisionDistanceMeters
+            <= active.prepareDistanceMeters) {
+        return;
+    }
+    constexpr double StripeLengthMeters = 0.65;
+    constexpr double StripeGapMeters = 1.25;
+    for (double distance = active.prepareDistanceMeters;
+         distance < active.decisionDistanceMeters;
+         distance += StripeGapMeters) {
+        appendCourseBand(
+                projection,
+                distance,
+                std::min(distance + StripeLengthMeters,
+                         active.decisionDistanceMeters),
+                QColor(241, 184, 58, 185),
+                features);
+    }
+    appendCourseBand(
+            projection,
+            active.decisionDistanceMeters - 0.35,
+            active.decisionDistanceMeters + 0.35,
+            QColor(245, 231, 98, 235),
+            features);
+}
+
+void appendProjectedMesh(
+        const WorkoutGameMeshInstance &instance,
+        const WorkoutGameRoadProjectionFrame &projection,
+        bool selectedBypass,
+        std::vector<Vertex> &features)
+{
+    const std::vector<WorkoutGameProjectedMeshTriangle> triangles =
+            WorkoutGameMeshProjector::project(instance, projection);
+    features.reserve(features.size() + triangles.size() * 3u);
+    for (const WorkoutGameProjectedMeshTriangle &triangle : triangles) {
+        appendTriangle(
+                features,
+                float(triangle.vertices[0].x), float(triangle.vertices[0].y),
+                float(triangle.vertices[1].x), float(triangle.vertices[1].y),
+                float(triangle.vertices[2].x), float(triangle.vertices[2].y),
+                meshColor(triangle.material, selectedBypass));
+    }
+}
+
 void buildFeatureGeometry(
+        const WorkoutGameCourse &workout,
         const WorkoutGameRoadCourse &course,
         const WorkoutGameRoadProjectionFrame &projection,
         const WorkoutGameFeatureRuntimeSnapshot &active,
@@ -316,147 +399,40 @@ void buildFeatureGeometry(
     for (const WorkoutGameRoadPiece &piece : course.pieces) {
         if (!piece.challenge.enabled) continue;
         const double obstacle = piece.challenge.obstacleDistanceMeters;
-
         const double branchStart = piece.challenge.decisionDistanceMeters;
+        double sectionEnd = piece.startDistanceMeters + piece.lengthMeters;
+        double sectionStart = piece.startDistanceMeters;
+        if (piece.sourceSectionIndex < course.timeline.size()) {
+            sectionStart = course.timeline[piece.sourceSectionIndex]
+                    .startDistanceMeters;
+            sectionEnd = course.timeline[piece.sourceSectionIndex]
+                    .endDistanceMeters;
+        }
         const double branchEnd = std::min(
-                piece.startDistanceMeters + piece.lengthMeters,
-                obstacle + piece.lengthMeters * 0.10);
+                sectionEnd,
+                std::max(branchStart + 1.0,
+                         sectionStart + (sectionEnd - sectionStart) * 0.96));
         const double branchLength = std::max(1.0, branchEnd - branchStart);
         const bool selectedBypass = active.ready
                 && active.sourceSectionIndex == int(piece.sourceSectionIndex)
                 && active.route == WorkoutGameRoute::SafeBypass;
-        for (std::size_t index = 1;
-             index < projection.slices.size(); ++index) {
-            const WorkoutGameRoadProjectedSlice &far =
-                    projection.slices[index - 1];
-            const WorkoutGameRoadProjectedSlice &near =
-                    projection.slices[index];
-            if (far.worldDistanceMeters < branchStart
-                    || near.worldDistanceMeters > branchEnd) {
-                continue;
-            }
-            const auto branchCenter = [&](
-                    const WorkoutGameRoadProjectedSlice &slice) {
-                const double progress = std::clamp(
-                        (slice.worldDistanceMeters - branchStart)
-                            / branchLength,
-                        0.0, 1.0);
-                const double direction = (piece.sourceSectionIndex & 1u)
-                        == 0u ? -1.0 : 1.0;
-                return float(slice.centerX + direction
-                        * std::sin(progress * 3.14159265358979323846)
-                        * slice.halfWidthPixels * 1.45);
-            };
-            const float farCenter = branchCenter(far);
-            const float nearCenter = branchCenter(near);
-            const float farWidth = std::max(
-                    1.0f, float(far.halfWidthPixels * 0.34));
-            const float nearWidth = std::max(
-                    1.0f, float(near.halfWidthPixels * 0.34));
-            appendQuad(features,
-                       farCenter - farWidth, float(far.centerY),
-                       farCenter + farWidth,
-                       nearCenter - nearWidth, float(near.centerY),
-                       nearCenter + nearWidth,
-                       selectedBypass
-                            ? QColor(181, 139, 72)
-                            : QColor(94, 79, 55));
-        }
+        const double direction = (piece.sourceSectionIndex & 1u) == 0u
+                ? -1.0 : 1.0;
+        WorkoutGameMeshInstance bypass;
+        bypass.mesh = WorkoutGameMeshLibrary::bypassRibbon(
+                branchLength, direction * 2.2, 0.50);
+        bypass.anchorDistanceMeters = branchStart;
+        appendProjectedMesh(bypass, projection, selectedBypass, features);
 
-        const WorkoutGameRoadProjectedSlice *nearest = nullptr;
-        double nearestDistance = std::numeric_limits<double>::max();
-        for (const WorkoutGameRoadProjectedSlice &slice : projection.slices) {
-            const double distance = std::abs(
-                    slice.worldDistanceMeters - obstacle);
-            if (distance < nearestDistance) {
-                nearestDistance = distance;
-                nearest = &slice;
-            }
-        }
-        if (!nearest || nearestDistance > 2.5) continue;
-        const float left = float(nearest->centerX
-                - nearest->halfWidthPixels * 0.85);
-        const float right = float(nearest->centerX
-                + nearest->halfWidthPixels * 0.85);
-        const float thickness = std::clamp(
-                float(nearest->halfWidthPixels * 0.12), 2.0f, 18.0f);
-        const float y = float(nearest->centerY);
-        const float width = right - left;
-        switch (piece.terrain) {
-        case WorkoutGameTerrainKind::BunnyHop:
-        case WorkoutGameTerrainKind::LogOver:
-            appendScreenRect(features,
-                    left - thickness * 0.3f, y - thickness * 0.15f,
-                    right + thickness * 0.3f, y + thickness * 1.2f,
-                    QColor(48, 34, 25));
-            appendScreenRect(features,
-                    left, y - thickness,
-                    right, y + thickness * 0.65f,
-                    QColor(100, 58, 31));
-            appendScreenRect(features,
-                    left + width * 0.04f, y - thickness * 0.72f,
-                    right - width * 0.04f, y - thickness * 0.30f,
-                    QColor(171, 103, 48));
-            break;
-        case WorkoutGameTerrainKind::Roots:
-            for (int root = 0; root < 6; ++root) {
-                const float offset = (float(root) - 2.5f) * thickness * 0.62f;
-                const float inset = (root & 1) ? width * 0.08f : 0.0f;
-                appendScreenRect(features,
-                        left + inset, y + offset,
-                        right - inset, y + offset + std::max(2.0f,
-                            thickness * 0.22f),
-                        root & 1 ? QColor(137, 84, 42)
-                                 : QColor(91, 55, 31));
-            }
-            break;
-        case WorkoutGameTerrainKind::RockGarden:
-            for (int rock = 0; rock < 7; ++rock) {
-                const float center = left + width
-                        * (0.10f + 0.13f * float(rock));
-                const float rockWidth = std::max(
-                        3.0f, thickness * (0.55f + 0.12f * (rock % 3)));
-                const float rockY = y + thickness
-                        * (-0.9f + 0.32f * float((rock * 5) % 6));
-                appendScreenRect(features,
-                        center - rockWidth, rockY - rockWidth * 0.7f,
-                        center + rockWidth, rockY + rockWidth * 0.7f,
-                        rock & 1 ? QColor(107, 111, 103)
-                                 : QColor(68, 74, 69));
-                appendScreenRect(features,
-                        center - rockWidth * 0.5f,
-                        rockY - rockWidth * 0.55f,
-                        center + rockWidth * 0.45f,
-                        rockY - rockWidth * 0.2f,
-                        QColor(151, 151, 131));
-            }
-            break;
-        case WorkoutGameTerrainKind::Tabletop:
-            appendScreenRect(features,
-                    left, y - thickness * 2.4f,
-                    right, y + thickness * 1.2f,
-                    QColor(77, 53, 34));
-            appendScreenRect(features,
-                    left + width * 0.08f, y - thickness * 2.1f,
-                    right - width * 0.08f, y - thickness * 1.2f,
-                    QColor(176, 112, 54));
-            break;
-        case WorkoutGameTerrainKind::Drop:
-            appendScreenRect(features,
-                    left, y - thickness * 0.8f,
-                    right, y + thickness * 1.8f,
-                    QColor(39, 42, 38));
-            appendScreenRect(features,
-                    left, y - thickness * 1.1f,
-                    right, y - thickness * 0.45f,
-                    QColor(188, 139, 66));
-            break;
-        default:
-            appendScreenRect(features,
-                    left, y - thickness, right, y + thickness,
-                    QColor(189, 157, 75));
-            break;
-        }
+        const double difficulty = piece.sourceSectionIndex
+                < workout.sections.size()
+                ? workout.sections[piece.sourceSectionIndex].difficulty
+                : 0.5;
+        WorkoutGameMeshInstance obstacleMesh;
+        obstacleMesh.mesh = WorkoutGameMeshLibrary::feature(
+                piece.terrain, difficulty);
+        obstacleMesh.anchorDistanceMeters = obstacle;
+        appendProjectedMesh(obstacleMesh, projection, false, features);
     }
 }
 
@@ -487,6 +463,7 @@ void WorkoutGameSceneGraphItem::setCourse(
         const WorkoutGameCourse &course,
         double ftpWatts)
 {
+    currentCourse = course;
     roadCourse = WorkoutGameRoadCourseBuilder::build(course, ftpWatts);
     featureRuntime.configure(roadCourse);
     currentFrame = {};
@@ -543,7 +520,10 @@ void WorkoutGameSceneGraphItem::setSessionRunning(bool running)
 
 void WorkoutGameSceneGraphItem::rebuildHud()
 {
-    const int hudHeight = diagnosticsEnabled ? 132 : 78;
+    constexpr int StatsHeight = 74;
+    constexpr int ProfileHeight = 62;
+    constexpr int BaseHudHeight = StatsHeight + ProfileHeight + 4;
+    const int hudHeight = diagnosticsEnabled ? BaseHudHeight + 54 : BaseHudHeight;
     hudImage = QImage(1240, hudHeight,
                       QImage::Format_RGBA8888_Premultiplied);
     hudImage.fill(Qt::transparent);
@@ -573,7 +553,7 @@ void WorkoutGameSceneGraphItem::rebuildHud()
     };
     const int columnWidth = hudImage.width() / int(stats.size());
     for (std::size_t index = 0; index < stats.size(); ++index) {
-        const QRect column(int(index) * columnWidth, 0, columnWidth, 74);
+        const QRect column(int(index) * columnWidth, 0, columnWidth, StatsHeight);
         painter.setFont(labelFont);
         painter.setPen(QColor(154, 181, 167));
         painter.drawText(column.adjusted(8, 6, -4, 0),
@@ -583,9 +563,94 @@ void WorkoutGameSceneGraphItem::rebuildHud()
         painter.drawText(column.adjusted(8, 28, -4, -4),
                          Qt::AlignLeft | Qt::AlignTop, stats[index].value);
     }
+    const WorkoutGamePowerProfileSnapshot profile =
+            WorkoutGamePowerProfile::build(
+                currentCourse, currentFrame.simulation, watts);
+    const QRect profileArea(8, StatsHeight + 3, 930, ProfileHeight - 9);
+    painter.fillRect(profileArea, QColor(7, 13, 14, 238));
+    if (profile.ready) {
+        const double graphBottom = profileArea.bottom() - 3.0;
+        const double graphHeight = profileArea.height() - 8.0;
+        for (const WorkoutGamePowerProfileSegment &segment : profile.segments) {
+            const double left = profileArea.left()
+                    + segment.start * profileArea.width();
+            const double right = profileArea.left()
+                    + segment.end * profileArea.width();
+            const double height = graphHeight * segment.targetWatts
+                    / profile.maximumWatts;
+            painter.fillRect(QRectF(left, graphBottom - height,
+                                    std::max(1.0, right - left), height),
+                             QColor(78, 151, 139));
+            if (segment.challenge) {
+                const double challengeLeft = profileArea.left()
+                        + segment.challengeStart * profileArea.width();
+                const double challengeRight = profileArea.left()
+                        + segment.challengeEnd * profileArea.width();
+                painter.fillRect(QRectF(challengeLeft, profileArea.top(),
+                                        std::max(1.0,
+                                            challengeRight - challengeLeft),
+                                        profileArea.height()),
+                                 QColor(239, 174, 54, 92));
+            }
+        }
+        const double cursorX = profileArea.left()
+                + profile.cursor * profileArea.width();
+        painter.fillRect(QRectF(cursorX - 1.0, profileArea.top(),
+                                3.0, profileArea.height()),
+                         QColor(250, 231, 91));
+        const double actualY = graphBottom - graphHeight
+                * std::min(profile.actualWatts, profile.maximumWatts)
+                / profile.maximumWatts;
+        painter.setBrush(QColor(255, 255, 255));
+        painter.setPen(QColor(12, 18, 18));
+        painter.drawEllipse(QPointF(cursorX, actualY), 4.0, 4.0);
+    }
+
+    const QRect cueArea(952, StatsHeight + 3, 280, ProfileHeight - 9);
+    painter.fillRect(cueArea, QColor(7, 13, 14, 238));
+    QString cueText = tr("RIDE STEADY");
+    QColor cueColor(151, 181, 169);
+    if (profile.ready) {
+        switch (profile.cue.state) {
+        case WorkoutGamePowerCueState::Prepare:
+            cueText = tr("PUSH IN %1 s").arg(
+                    int(std::ceil(profile.cue.secondsUntilWindow)));
+            cueColor = QColor(242, 190, 67);
+            break;
+        case WorkoutGamePowerCueState::PushNow:
+            cueText = tr("PUSH NOW >= %1 W").arg(
+                    int(std::lround(profile.cue.requiredWatts)));
+            cueColor = QColor(250, 231, 91);
+            break;
+        case WorkoutGamePowerCueState::Committed:
+            cueText = tr("FEATURE COMMITTED");
+            cueColor = QColor(99, 207, 136);
+            break;
+        case WorkoutGamePowerCueState::Bypassed:
+            cueText = tr("SAFE LINE");
+            cueColor = QColor(181, 139, 72);
+            break;
+        case WorkoutGamePowerCueState::None:
+            break;
+        }
+    }
+    QFont cueFont = labelFont;
+    cueFont.setPixelSize(17);
+    painter.setFont(cueFont);
+    painter.setPen(cueColor);
+    painter.drawText(cueArea.adjusted(8, 4, -8, -19),
+                     Qt::AlignCenter, cueText);
+    const int readinessWidth = int((cueArea.width() - 16)
+            * std::clamp(profile.cue.readiness, 0.0, 1.0));
+    painter.fillRect(cueArea.left() + 8, cueArea.bottom() - 10,
+                     cueArea.width() - 16, 6, QColor(42, 61, 57));
+    painter.fillRect(cueArea.left() + 8, cueArea.bottom() - 10,
+                     readinessWidth, 6, cueColor);
+
     if (diagnosticsEnabled) {
         const WorkoutGameDiagnosticsSnapshot &snapshot = publishedDiagnostics;
-        painter.fillRect(0, 74, hudImage.width(), 54, QColor(8, 13, 14, 230));
+        painter.fillRect(0, BaseHudHeight, hudImage.width(), 54,
+                         QColor(8, 13, 14, 230));
         QFont diagnosticFont = labelFont;
         diagnosticFont.setPixelSize(12);
         painter.setFont(diagnosticFont);
@@ -593,7 +658,7 @@ void WorkoutGameSceneGraphItem::rebuildHud()
                 ? QColor(255, 116, 96) : QColor(186, 211, 198));
         const auto &input = snapshot.input;
         painter.drawText(
-                QRect(8, 76, hudImage.width() - 16, 24),
+                QRect(8, BaseHudHeight + 2, hudImage.width() - 16, 24),
                 Qt::AlignLeft | Qt::AlignVCenter,
                 QStringLiteral(
                     "ROAD %1 m  SRC %2 m  d %3 m  SEC %4 %5%  "
@@ -607,7 +672,7 @@ void WorkoutGameSceneGraphItem::rebuildHud()
                     .arg(input.renderedWorkoutTimeMs)
                     .arg(input.sourceWorkoutTimeMs));
         painter.drawText(
-                QRect(8, 100, hudImage.width() - 16, 24),
+                QRect(8, BaseHudHeight + 26, hudImage.width() - 16, 24),
                 Qt::AlignLeft | Qt::AlignVCenter,
                 QStringLiteral(
                     "DT %1 ms  MAX %2 ms  LATE %3  BACK %4  "
@@ -728,7 +793,9 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
         buildRoadGeometry(
                 projection, viewportWidth, ground, shoulders, road);
         buildMotionCueGeometry(projection, features);
-        buildFeatureGeometry(roadCourse, projection, feature, features);
+        buildPowerCueGeometry(projection, feature, features);
+        buildFeatureGeometry(
+                currentCourse, roadCourse, projection, feature, features);
     }
     updateGeometry(root->ground, ground);
     updateGeometry(root->shoulders, shoulders);
@@ -831,10 +898,20 @@ WorkoutGameSceneGraphWindow::WorkoutGameSceneGraphWindow(QWindow *parent) :
 {
     setColor(QColor(99, 190, 187));
     sceneItem->setSize(size());
-    connect(this, &QQuickWindow::frameSwapped,
+    renderClock.start();
+    renderTimer.setTimerType(Qt::PreciseTimer);
+    renderTimer.setInterval(16);
+    connect(&renderTimer, &QTimer::timeout,
             sceneItem, [this]() {
-                if (isVisible()) sceneItem->update();
-            }, Qt::QueuedConnection);
+                if (isVisible()
+                        && (sessionRunning
+                            || renderClock.elapsed() <= renderUntilMs)) {
+                    sceneItem->update();
+                } else if (!sessionRunning
+                           && renderClock.elapsed() > renderUntilMs) {
+                    renderTimer.stop();
+                }
+            });
     connect(this, &QQuickWindow::sceneGraphError,
             this, [this](QQuickWindow::SceneGraphError, const QString &message) {
                 if (failureReported) return;
@@ -896,6 +973,8 @@ void WorkoutGameSceneGraphWindow::setFrame(
 {
     sceneItem->setFrame(frame, watts, targetWatts,
                         cadenceRpm, heartRate, virtualGear);
+    renderUntilMs = renderClock.elapsed() + 1700;
+    if (!renderTimer.isActive()) renderTimer.start();
 }
 
 void WorkoutGameSceneGraphWindow::setTelemetry(
@@ -913,6 +992,11 @@ void WorkoutGameSceneGraphWindow::setSessionRunning(bool running)
 {
     sessionRunning = running;
     sceneItem->setSessionRunning(running);
+    if (running) {
+        if (!renderTimer.isActive()) renderTimer.start();
+    } else {
+        renderUntilMs = renderClock.elapsed() + 250;
+    }
 }
 
 void WorkoutGameSceneGraphWindow::resizeEvent(QResizeEvent *event)

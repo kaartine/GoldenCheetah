@@ -34,8 +34,18 @@ struct WorkoutGameRoadProjectedSlice
     double centerX = 0.0;
     double centerY = 0.0;
     double halfWidthPixels = 0.0;
+    double halfWidthMeters = 0.0;
+    double pixelsPerMeter = 0.0;
     std::size_t pieceIndex = 0;
     WorkoutGameTerrainKind terrain = WorkoutGameTerrainKind::SmoothTrail;
+};
+
+struct WorkoutGameRoadProjectedPoint
+{
+    bool ready = false;
+    double x = 0.0;
+    double y = 0.0;
+    double depthMeters = 0.0;
 };
 
 struct WorkoutGameRoadProjectionFrame
@@ -53,6 +63,11 @@ public:
             const WorkoutGameRoadCourse &course,
             double riderDistanceMeters,
             const WorkoutGameRoadProjectionConfig &config = {});
+    static WorkoutGameRoadProjectedPoint projectPoint(
+            const WorkoutGameRoadProjectionFrame &frame,
+            double worldDistanceMeters,
+            double lateralMeters,
+            double elevationMeters);
 };
 
 #endif

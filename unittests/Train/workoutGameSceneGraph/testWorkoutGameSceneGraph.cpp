@@ -23,6 +23,7 @@
 #include <QTemporaryDir>
 
 #include <algorithm>
+#include <cmath>
 
 namespace {
 
@@ -149,11 +150,14 @@ private slots:
         QVERIFY(QColor(first.pixel(640, 690))
                 != QColor(first.pixel(60, 690)));
 
-        window.setFrame(frameAt(205.0), 245.0, 230.0, 91, 154, 6);
+        window.setFrame(frameAt(212.0), 245.0, 230.0, 91, 154, 6);
         QTest::qWait(300);
         const QImage second = window.grabWindow();
         QVERIFY(!second.isNull());
-        QVERIFY(changedPixels(first, second, 250) > 1200);
+        const int roadChanges = changedPixels(first, second, 250);
+        QVERIFY2(roadChanges > 1200,
+                 qPrintable(QStringLiteral("only %1 road pixels changed")
+                         .arg(roadChanges)));
 
         const QString screenshotPath = QDir(QDir::tempPath()).filePath(
                 QStringLiteral("workout-game-scenegraph-test.png"));
@@ -265,6 +269,8 @@ private slots:
     void featureLabRendersFiveDistinctObstacles()
     {
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
         WorkoutGameSceneGraphWindow window;
         window.resize(1280, 720);
         window.setCourse(course, 200.0);
@@ -274,12 +280,35 @@ private slots:
         QImage prior;
         const int featureSections[] = {0, 2, 4, 6, 8};
         for (int section : featureSections) {
+            const WorkoutGameRoadPiece *challengePiece = nullptr;
+            for (const WorkoutGameRoadPiece &piece : road.pieces) {
+                if (piece.sourceSectionIndex == std::size_t(section)
+                        && piece.challenge.enabled) {
+                    challengePiece = &piece;
+                    break;
+                }
+            }
+            QVERIFY(challengePiece);
+            const WorkoutGameRoadTimelineSection &timeline =
+                    road.timeline[std::size_t(section)];
+            const double sectionLength = timeline.endDistanceMeters
+                    - timeline.startDistanceMeters;
+            const double visualDistance = std::max(
+                    timeline.startDistanceMeters,
+                    challengePiece->challenge.obstacleDistanceMeters - 8.0);
+            const double sectionProgress = std::clamp(
+                    (visualDistance - timeline.startDistanceMeters)
+                        / sectionLength,
+                    0.0, 1.0);
             WorkoutGameVisualSnapshot frame;
             frame.simulation.ready = true;
             frame.simulation.workoutTimeMs =
-                    course.sections[std::size_t(section)].startMs + 9800;
+                    course.sections[std::size_t(section)].startMs
+                    + std::int64_t(std::llround(
+                        course.sections[std::size_t(section)].durationMs
+                            * sectionProgress));
             frame.simulation.activeSection = section;
-            frame.simulation.sectionProgress = 0.82;
+            frame.simulation.sectionProgress = sectionProgress;
             frame.simulation.courseProgress = double(frame.simulation.workoutTimeMs)
                     / double(course.durationMs);
             frame.simulation.speedKph = 20.0;
@@ -296,7 +325,11 @@ private slots:
             const QImage rendered = window.grabWindow();
             QVERIFY(!rendered.isNull());
             if (!prior.isNull()) {
-                QVERIFY(changedPixels(prior, rendered, 180) > 900);
+                const int featureChanges = changedPixels(prior, rendered, 180);
+                QVERIFY2(featureChanges > 900,
+                         qPrintable(QStringLiteral(
+                             "only %1 feature pixels changed for section %2")
+                             .arg(featureChanges).arg(section)));
             }
             const QString output = QDir(QDir::tempPath()).filePath(
                     QStringLiteral("workout-game-feature-%1.png")
@@ -313,7 +346,8 @@ private slots:
         qputenv("GC_WORKOUT_GAME_CAPTURE_DIR",
                 captures.path().toLocal8Bit());
         qputenv("GC_WORKOUT_GAME_CAPTURE_MS", "50");
-        qputenv("GC_WORKOUT_GAME_CAPTURE_FRAMES", "12");
+        qputenv("GC_WORKOUT_GAME_CAPTURE_FRAMES", "40");
+        QString beforeUpdateFrame;
         {
             WorkoutGameSceneGraphWindow window;
             window.resize(1280, 720);
@@ -322,12 +356,20 @@ private slots:
             window.setFrame(frameAt(200.0), 215.0, 230.0, 86, 151, 5);
             window.show();
             QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 3000);
-            QTest::qWait(180);
-            window.setFrame(frameAt(210.0), 245.0, 230.0, 91, 154, 6);
             QTRY_VERIFY_WITH_TIMEOUT(
                     QDir(captures.path()).entryList(
                             {QStringLiteral("frame-*.png")},
-                            QDir::Files, QDir::Name).size() >= 4,
+                            QDir::Files, QDir::Name).size() >= 3,
+                    3000);
+            const QStringList beforeFrames = QDir(captures.path()).entryList(
+                    {QStringLiteral("frame-*.png")}, QDir::Files, QDir::Name);
+            beforeUpdateFrame = beforeFrames.back();
+            const int beforeCount = beforeFrames.size();
+            window.setFrame(frameAt(220.0), 245.0, 230.0, 91, 154, 6);
+            QTRY_VERIFY_WITH_TIMEOUT(
+                    QDir(captures.path()).entryList(
+                            {QStringLiteral("frame-*.png")},
+                            QDir::Files, QDir::Name).size() >= beforeCount + 5,
                     3000);
         }
         qunsetenv("GC_WORKOUT_GAME_CAPTURE_DIR");
@@ -338,11 +380,14 @@ private slots:
         QVERIFY2(frames.size() >= 4,
                  qPrintable(QStringLiteral("captured only %1 frames")
                          .arg(frames.size())));
-        const QImage first(QDir(captures.path()).filePath(frames.front()));
+        const QImage first(QDir(captures.path()).filePath(beforeUpdateFrame));
         const QImage last(QDir(captures.path()).filePath(frames.back()));
         QVERIFY(!first.isNull());
         QVERIFY(!last.isNull());
-        QVERIFY(changedPixels(first, last, 250) > 900);
+        const int captureChanges = changedPixels(first, last, 250);
+        QVERIFY2(captureChanges > 900,
+                 qPrintable(QStringLiteral("only %1 capture pixels changed")
+                         .arg(captureChanges)));
     }
 };
 

@@ -166,6 +166,56 @@ private slots:
         QVERIFY(tabletop.verticalOffsetMeters > log.verticalOffsetMeters);
     }
 
+    void jumpArcHasVisibleTakeoffApexAndLanding()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(
+                WorkoutGameRoadCourseBuilder::build(course, 200.0)));
+        const int section = sectionFor(course, WorkoutGameTerrainKind::Tabletop);
+        const auto completed = WorkoutGameFeatureOutcome::Completed;
+
+        const WorkoutGameFeatureRuntimeSnapshot takeoff = runtime.update(
+                snapshot(section, 0.79, completed));
+        const WorkoutGameFeatureRuntimeSnapshot apex = runtime.update(
+                snapshot(section, 0.84, completed));
+        const WorkoutGameFeatureRuntimeSnapshot landing = runtime.update(
+                snapshot(section, 0.89, completed));
+
+        QCOMPARE(takeoff.phase, WorkoutGameFeaturePhase::Action);
+        QCOMPARE(apex.phase, WorkoutGameFeaturePhase::Action);
+        QCOMPARE(landing.phase, WorkoutGameFeaturePhase::Action);
+        QVERIFY(takeoff.verticalOffsetMeters > 0.05);
+        QVERIFY(apex.verticalOffsetMeters > takeoff.verticalOffsetMeters);
+        QVERIFY(apex.verticalOffsetMeters > landing.verticalOffsetMeters);
+        QVERIFY(landing.verticalOffsetMeters > 0.05);
+    }
+
+    void bypassLineEasesInAndOutWithoutLateralJumps()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(
+                WorkoutGameRoadCourseBuilder::build(course, 200.0)));
+        const int section = sectionFor(course, WorkoutGameTerrainKind::LogOver);
+        const auto bypassed = WorkoutGameFeatureOutcome::Bypassed;
+        const auto route = WorkoutGameRoute::SafeBypass;
+
+        const double atBranch = runtime.update(
+                snapshot(section, 0.65, bypassed, route)).lateralOffset;
+        const double justAfterBranch = runtime.update(
+                snapshot(section, 0.655, bypassed, route)).lateralOffset;
+        const double nearReturn = runtime.update(
+                snapshot(section, 0.955, bypassed, route)).lateralOffset;
+        const double afterReturn = runtime.update(
+                snapshot(section, 0.96, bypassed, route)).lateralOffset;
+
+        QVERIFY(std::abs(atBranch) < 1e-9);
+        QVERIFY(std::abs(justAfterBranch - atBranch) < 0.01);
+        QVERIFY(std::abs(afterReturn - nearReturn) < 0.01);
+        QVERIFY(std::abs(afterReturn) < 1e-9);
+    }
+
     void dropPitchesTheRiderAndReportsLanding()
     {
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
