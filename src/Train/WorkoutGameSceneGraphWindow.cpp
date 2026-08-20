@@ -533,7 +533,9 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
     WorkoutGameRoadProjectionConfig config;
     config.viewportWidth = viewportWidth;
     config.viewportHeight = viewportHeight;
-    const double riderDistance = feature.ready
+    const double riderDistance = visual.roadDistanceReady
+            ? visual.roadDistanceMeters
+            : feature.ready
             ? feature.visualDistanceMeters
             : visual.world.ready
             ? visual.world.rider.distanceMeters

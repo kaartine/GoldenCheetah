@@ -399,7 +399,9 @@ void WorkoutGameWindow::updateSimulation(std::int64_t workoutTimeMs)
     }
     const WorkoutGameCompetitionSnapshot race;
     if (sessionActive) ghostRecorder.record(snapshot);
-    const WorkoutGameVisualSnapshot frame = {snapshot, race, world, view};
+    WorkoutGameVisualSnapshot frame = {snapshot, race, world, view};
+    frame.roadDistanceReady = feature.ready;
+    frame.roadDistanceMeters = feature.visualDistanceMeters;
     painterCanvas->setFrame(
             frame,
             input.actualWatts,

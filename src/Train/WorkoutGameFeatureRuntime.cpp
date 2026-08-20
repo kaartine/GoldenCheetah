@@ -156,7 +156,8 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
                 / (branchEnd - branchStart);
         const double direction = (simulation.activeSection & 1) == 0
                 ? -1.0 : 1.0;
-        result.lateralOffset = direction * smoothStep(branchProgress);
+        result.lateralOffset = direction * std::sin(
+                Pi * std::clamp(branchProgress, 0.0, 1.0));
     }
 
     if (result.phase == WorkoutGameFeaturePhase::Action) {

@@ -119,7 +119,13 @@ private slots:
 
         QVERIFY(!result.triggerJump);
         QCOMPARE(result.verticalOffsetMeters, 0.0);
-        QVERIFY(std::abs(result.lateralOffset) > 0.5);
+        QVERIFY(std::abs(result.lateralOffset) > 0.1);
+
+        const WorkoutGameFeatureRuntimeSnapshot recovered = runtime.update(
+                snapshot(section, 0.995,
+                         WorkoutGameFeatureOutcome::Bypassed,
+                         WorkoutGameRoute::SafeBypass));
+        QVERIFY(std::abs(recovered.lateralOffset) < 1e-9);
     }
 
     void rootsAndRockGardenExposeDifferentRoughness()

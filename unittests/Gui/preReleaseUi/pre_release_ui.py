@@ -565,7 +565,21 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
                 ["Workout Game", "Workout Editor"], "Workout Game"
             )
             driver.find("Workout game canvas", showing=True)
-            driver.screenshot("04-workout-game")
+            driver.activate(
+                driver.find(
+                    "Start or pause training", "push button", showing=True
+                )
+            )
+            time.sleep(3.0)
+            driver.screenshot("04-workout-game-running")
+            driver.activate(
+                driver.find("Stop training", "push button", showing=True)
+            )
+            driver.activate(
+                driver.find(
+                    "Cancel", "push button", showing=True, timeout=8.0
+                )
+            )
 
         def stop_continue():
             enter_train()
