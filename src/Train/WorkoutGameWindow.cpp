@@ -18,6 +18,7 @@
 #include "WorkoutGameCourse.h"
 #include "WorkoutGameOpenGLCanvas.h"
 #include "WorkoutGameRendererPolicy.h"
+#include "WorkoutGameSceneGraphWindow.h"
 #include "WorkoutGameWorkoutAdapter.h"
 #include "Settings.h"
 #include "VirtualDrivetrain.h"
@@ -27,6 +28,7 @@
 #include <QGuiApplication>
 #include <QStackedWidget>
 #include <QVBoxLayout>
+#include <QWidget>
 
 #include <algorithm>
 #include <cmath>
@@ -61,6 +63,9 @@ WorkoutGameWindow::WorkoutGameWindow(Context *context) :
     GcChartWindow(context),
     context(context),
     renderStack(new QStackedWidget(this)),
+    sceneGraphWindow(new WorkoutGameSceneGraphWindow),
+    sceneGraphContainer(QWidget::createWindowContainer(
+            sceneGraphWindow, renderStack)),
     painterCanvas(new WorkoutGameCanvas(renderStack)),
     openGLCanvas(new WorkoutGameOpenGLCanvas(renderStack))
 {
@@ -75,8 +80,11 @@ WorkoutGameWindow::WorkoutGameWindow(Context *context) :
     setChartLayout(layout);
     painterCanvas->setAccessibleName(tr("Workout game canvas"));
     openGLCanvas->setAccessibleName(tr("Workout game canvas"));
+    sceneGraphContainer->setAccessibleName(tr("Workout game canvas"));
+    sceneGraphContainer->setMinimumSize(320, 180);
     renderStack->addWidget(painterCanvas);
     renderStack->addWidget(openGLCanvas);
+    renderStack->addWidget(sceneGraphContainer);
     layout->addWidget(renderStack);
 
     const bool forcePainter = qEnvironmentVariableIntValue(
@@ -85,10 +93,19 @@ WorkoutGameWindow::WorkoutGameWindow(Context *context) :
             forcePainter,
             QGuiApplication::platformName().toStdString(),
             gl_major);
-    renderStack->setCurrentWidget(
-            backend == WorkoutGameRendererBackend::OpenGL
-                    ? static_cast<QWidget *>(openGLCanvas)
-                    : static_cast<QWidget *>(painterCanvas));
+    switch (backend) {
+    case WorkoutGameRendererBackend::SceneGraph:
+        renderStack->setCurrentWidget(sceneGraphContainer);
+        break;
+    case WorkoutGameRendererBackend::OpenGL:
+        renderStack->setCurrentWidget(openGLCanvas);
+        break;
+    case WorkoutGameRendererBackend::Painter:
+        renderStack->setCurrentWidget(painterCanvas);
+        break;
+    }
+    connect(sceneGraphWindow, &WorkoutGameSceneGraphWindow::rendererFailed,
+            this, &WorkoutGameWindow::useOpenGLFallback);
     connect(openGLCanvas, &WorkoutGameOpenGLCanvas::rendererFailed,
             this, &WorkoutGameWindow::usePainterFallback);
 
@@ -209,6 +226,7 @@ void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
     ghostRecorder.configure(currentCourse.seed, currentCourse.durationMs);
     painterCanvas->setCourse(currentCourse);
     openGLCanvas->setCourse(currentCourse);
+    sceneGraphWindow->setCourse(currentCourse, ftpWatts);
     hasTelemetry = false;
     paused = false;
     sessionActive = false;
@@ -232,6 +250,9 @@ void WorkoutGameWindow::telemetryUpdate(const RealtimeData &telemetry)
             latestTelemetry.getWatts(), targetWatts,
             cadenceRpm, heartRate, virtualGear);
     openGLCanvas->setTelemetry(
+            latestTelemetry.getWatts(), targetWatts,
+            cadenceRpm, heartRate, virtualGear);
+    sceneGraphWindow->setTelemetry(
             latestTelemetry.getWatts(), targetWatts,
             cadenceRpm, heartRate, virtualGear);
 }
@@ -278,6 +299,11 @@ void WorkoutGameWindow::stop()
 void WorkoutGameWindow::usePainterFallback()
 {
     renderStack->setCurrentWidget(painterCanvas);
+}
+
+void WorkoutGameWindow::useOpenGLFallback()
+{
+    renderStack->setCurrentWidget(openGLCanvas);
 }
 
 void WorkoutGameWindow::updateAtWorkoutPosition(
@@ -356,7 +382,7 @@ void WorkoutGameWindow::updateSimulation(std::int64_t workoutTimeMs)
         worldClockInitialized = false;
         lastWorldTimeMs = workoutTimeMs;
     }
-    const WorkoutGameCompetitionSnapshot race = competition.update(snapshot);
+    const WorkoutGameCompetitionSnapshot race;
     if (sessionActive) ghostRecorder.record(snapshot);
     const WorkoutGameVisualSnapshot frame = {snapshot, race, world, view};
     painterCanvas->setFrame(
@@ -367,6 +393,13 @@ void WorkoutGameWindow::updateSimulation(std::int64_t workoutTimeMs)
             hasTelemetry ? int(std::lround(latestTelemetry.getHr())) : 0,
             std::max(1, input.virtualGear));
     openGLCanvas->setFrame(
+            frame,
+            input.actualWatts,
+            input.targetWatts,
+            int(std::lround(input.cadenceRpm)),
+            hasTelemetry ? int(std::lround(latestTelemetry.getHr())) : 0,
+            std::max(1, input.virtualGear));
+    sceneGraphWindow->setFrame(
             frame,
             input.actualWatts,
             input.targetWatts,

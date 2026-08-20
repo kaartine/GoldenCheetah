@@ -16,10 +16,10 @@ class TestWorkoutGameRendererPolicy : public QObject
     Q_OBJECT
 
 private slots:
-    void normalDesktopUsesOpenGL()
+    void normalDesktopUsesSceneGraph()
     {
         QCOMPARE(WorkoutGameRendererPolicy::choose(false, "xcb", 4.6),
-                 WorkoutGameRendererBackend::OpenGL);
+                 WorkoutGameRendererBackend::SceneGraph);
     }
 
     void explicitPainterOverrideWins()
@@ -50,9 +50,17 @@ private slots:
                  WorkoutGameRendererBackend::Painter);
     }
 
-    void initializationFailureNeverRetriesOpenGL()
+    void sceneGraphFailureUsesLegacyOpenGL()
     {
-        QCOMPARE(WorkoutGameRendererPolicy::afterInitializationFailure(),
+        QCOMPARE(WorkoutGameRendererPolicy::afterInitializationFailure(
+                         WorkoutGameRendererBackend::SceneGraph),
+                 WorkoutGameRendererBackend::OpenGL);
+    }
+
+    void legacyOpenGLFailureUsesPainter()
+    {
+        QCOMPARE(WorkoutGameRendererPolicy::afterInitializationFailure(
+                         WorkoutGameRendererBackend::OpenGL),
                  WorkoutGameRendererBackend::Painter);
     }
 };

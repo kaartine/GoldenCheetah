@@ -28,10 +28,18 @@ WorkoutGameRendererBackend WorkoutGameRendererPolicy::choose(
             || widgetOpenGLUnsupported
             || openGLMajorVersion < 2.0
             ? WorkoutGameRendererBackend::Painter
-            : WorkoutGameRendererBackend::OpenGL;
+            : WorkoutGameRendererBackend::SceneGraph;
 }
 
-WorkoutGameRendererBackend WorkoutGameRendererPolicy::afterInitializationFailure()
+WorkoutGameRendererBackend WorkoutGameRendererPolicy::afterInitializationFailure(
+        WorkoutGameRendererBackend failedBackend)
 {
+    switch (failedBackend) {
+    case WorkoutGameRendererBackend::SceneGraph:
+        return WorkoutGameRendererBackend::OpenGL;
+    case WorkoutGameRendererBackend::OpenGL:
+    case WorkoutGameRendererBackend::Painter:
+        return WorkoutGameRendererBackend::Painter;
+    }
     return WorkoutGameRendererBackend::Painter;
 }

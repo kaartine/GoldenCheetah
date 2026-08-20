@@ -142,6 +142,8 @@ exists(unittests.pri) {
 			   Train/workoutGameDistancePlayback \
 			   Train/workoutGameFeatureChallenge \
 			   Train/workoutGameRendererPolicy \
+    Train/workoutGameRoadCourse \
+    Train/workoutGameSceneGraph \
 			   Train/workoutGameRoadPhysics \
 			   Train/workoutGameSimulation \
 			   Train/workoutGameTrailScene \

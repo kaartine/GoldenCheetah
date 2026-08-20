@@ -70,6 +70,9 @@ private slots:
             QVERIFY(profile.enabled);
             QCOMPARE(profile.cue, expected.cue);
             QCOMPARE(profile.minimumSpeedKph > 0.0, expected.speedRequired);
+            QVERIFY(profile.measurementStartProgress >= 0.0);
+            QVERIFY(profile.measurementStartProgress
+                    < profile.decisionProgress);
             QVERIFY(profile.decisionProgress > 0.5);
             QVERIFY(profile.decisionProgress <= 1.0);
             QVERIFY(profile.bonusPoints > 0u);

@@ -22,7 +22,9 @@ class Context;
 class ErgFile;
 class WorkoutGameCanvas;
 class WorkoutGameOpenGLCanvas;
+class WorkoutGameSceneGraphWindow;
 class QStackedWidget;
+class QWidget;
 
 class WorkoutGameWindow : public GcChartWindow
 {
@@ -39,6 +41,7 @@ private slots:
     void pause();
     void unpause();
     void stop();
+    void useOpenGLFallback();
     void usePainterFallback();
 
 private:
@@ -50,6 +53,8 @@ private:
 
     Context *context;
     QStackedWidget *renderStack;
+    WorkoutGameSceneGraphWindow *sceneGraphWindow;
+    QWidget *sceneGraphContainer;
     WorkoutGameCanvas *painterCanvas;
     WorkoutGameOpenGLCanvas *openGLCanvas;
     WorkoutGameCourse currentCourse;

@@ -27,6 +27,7 @@ struct WorkoutGameFeatureChallengeProfile
 {
     bool enabled = false;
     WorkoutGameChallengeCue cue = WorkoutGameChallengeCue::None;
+    double measurementStartProgress = 0.0;
     double decisionProgress = 1.0;
     double minimumEffortRatio = 0.0;
     double minimumCadenceRpm = 0.0;

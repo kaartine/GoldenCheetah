@@ -1,0 +1,6 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="images/workout-game-background-oblique.png">../../../src/Resources/images/workout-game-background-oblique.png</file>
+        <file alias="images/workout-game-rider-oblique.png">../../../src/Resources/images/workout-game-rider-oblique.png</file>
+    </qresource>
+</RCC>

@@ -227,23 +227,24 @@ void WorkoutGameSimulation::simulateStep(
             * streakMultiplier * double(stepDurationMs) / 1000.0;
 
     if (outcomes[activeSection] == WorkoutGameFeatureOutcome::Active) {
-        sectionEffortRatioMs += effortRatio * double(stepDurationMs);
-        sectionCadenceMs += cadenceRpm * double(stepDurationMs);
-        sectionSpeedKphMs += currentSpeedKph * double(stepDurationMs);
-        sectionAdherenceMs += currentAdherence * double(stepDurationMs);
-        sectionSampleMs += stepDurationMs;
-
-        WorkoutGameFeatureChallengeMetrics metrics;
-        const double duration = double(sectionSampleMs);
-        metrics.averageEffortRatio = sectionEffortRatioMs / duration;
-        metrics.averageCadenceRpm = sectionCadenceMs / duration;
-        metrics.averageSpeedKph = sectionSpeedKphMs / duration;
-        metrics.averageAdherence = sectionAdherenceMs / duration;
-        activeChallengeReadiness = WorkoutGameFeatureChallenge::assess(
-                activeChallenge, metrics).readiness;
-
         const double progress = double(stepTimeMs - section.startMs)
                 / double(section.durationMs);
+        if (progress >= activeChallenge.measurementStartProgress) {
+            sectionEffortRatioMs += effortRatio * double(stepDurationMs);
+            sectionCadenceMs += cadenceRpm * double(stepDurationMs);
+            sectionSpeedKphMs += currentSpeedKph * double(stepDurationMs);
+            sectionAdherenceMs += currentAdherence * double(stepDurationMs);
+            sectionSampleMs += stepDurationMs;
+
+            WorkoutGameFeatureChallengeMetrics metrics;
+            const double duration = double(sectionSampleMs);
+            metrics.averageEffortRatio = sectionEffortRatioMs / duration;
+            metrics.averageCadenceRpm = sectionCadenceMs / duration;
+            metrics.averageSpeedKph = sectionSpeedKphMs / duration;
+            metrics.averageAdherence = sectionAdherenceMs / duration;
+            activeChallengeReadiness = WorkoutGameFeatureChallenge::assess(
+                    activeChallenge, metrics).readiness;
+        }
         if (progress >= activeChallenge.decisionProgress) {
             finalizeActiveSection();
         }

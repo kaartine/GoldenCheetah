@@ -165,6 +165,8 @@ private slots:
         input.authoritativeSpeedKph = 6.0;
         simulation.update(input);
         input.workoutTimeMs = 3000;
+        QCOMPARE(simulation.update(input).challengeReadiness, 0.0);
+        input.workoutTimeMs = 4000;
 
         const WorkoutGameSimulationSnapshot result = simulation.update(input);
 
@@ -172,6 +174,38 @@ private slots:
         QCOMPARE(result.challenge.cue, WorkoutGameChallengeCue::CarrySpeed);
         QVERIFY(result.challengeReadiness > 0.0);
         QVERIFY(result.challengeReadiness < 1.0);
+    }
+
+    void jumpChallengeMeasuresTheTimedApproachWindow()
+    {
+        const WorkoutGameCourse course = challengeCourse(
+                WorkoutGameTerrainKind::LogOver);
+        WorkoutGameSimulation earlyOnly;
+        WorkoutGameSimulation timedBurst;
+        QVERIFY(earlyOnly.configure(course, 200.0));
+        QVERIFY(timedBurst.configure(course, 200.0));
+
+        WorkoutGameSimulationSnapshot earlyResult;
+        WorkoutGameSimulationSnapshot timedResult;
+        for (std::int64_t time = 0; time <= 7000; time += 250) {
+            const bool inApproach = time >= 4500;
+            WorkoutGameSimulationInput earlyInput = sample(
+                    time, inApproach ? 100.0 : 200.0, 200.0,
+                    inApproach ? 45.0 : 85.0);
+            earlyInput.authoritativeSpeedKph = inApproach ? 6.0 : 20.0;
+            earlyResult = earlyOnly.update(earlyInput);
+
+            WorkoutGameSimulationInput burstInput = sample(
+                    time, inApproach ? 200.0 : 100.0, 200.0,
+                    inApproach ? 85.0 : 45.0);
+            burstInput.authoritativeSpeedKph = inApproach ? 20.0 : 6.0;
+            timedResult = timedBurst.update(burstInput);
+        }
+
+        QCOMPARE(earlyResult.featureOutcome,
+                 WorkoutGameFeatureOutcome::Bypassed);
+        QCOMPARE(timedResult.featureOutcome,
+                 WorkoutGameFeatureOutcome::Completed);
     }
 
     void recoveryDescentCarriesSpeedWithoutPower()

@@ -14,6 +14,7 @@
 
 enum class WorkoutGameRendererBackend
 {
+    SceneGraph,
     OpenGL,
     Painter
 };
@@ -25,7 +26,8 @@ public:
             bool forcePainter,
             const std::string &platformName,
             double openGLMajorVersion);
-    static WorkoutGameRendererBackend afterInitializationFailure();
+    static WorkoutGameRendererBackend afterInitializationFailure(
+            WorkoutGameRendererBackend failedBackend);
 };
 
 #endif
