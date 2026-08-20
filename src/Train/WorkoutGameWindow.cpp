@@ -406,7 +406,7 @@ void WorkoutGameWindow::updateSimulation(std::int64_t workoutTimeMs)
     }
     const WorkoutGameCompetitionSnapshot race;
     if (sessionActive) ghostRecorder.record(snapshot);
-    const WorkoutGameVisualSnapshot frame = {snapshot, race, world, view};
+    const WorkoutGameVisualSnapshot frame = {snapshot, race, world, view, {}};
     painterCanvas->setFrame(
             frame,
             input.actualWatts,
