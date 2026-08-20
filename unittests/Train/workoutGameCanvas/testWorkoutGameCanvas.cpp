@@ -80,6 +80,7 @@ private slots:
         first.simulation.activeSection = 2;
         first.simulation.courseProgress = 0.2;
         first.simulation.speedKph = 20.0;
+        first.simulation.challengeReadiness = 0.2;
         first.world.ready = true;
         first.world.generation = 4;
         first.world.rider.distanceMeters = 10.0;
@@ -90,6 +91,7 @@ private slots:
         WorkoutGameVisualSnapshot second = first;
         second.simulation.courseProgress = 0.4;
         second.simulation.speedKph = 30.0;
+        second.simulation.challengeReadiness = 0.8;
         second.world.rider.distanceMeters = 14.0;
         second.world.rider.pitchDegrees = 10.0;
         second.camera.centerDistanceMeters = 13.0;
@@ -101,6 +103,7 @@ private slots:
 
         QVERIFY(std::abs(halfway.simulation.courseProgress - 0.3) < 1e-9);
         QVERIFY(std::abs(halfway.simulation.speedKph - 25.0) < 1e-9);
+        QVERIFY(std::abs(halfway.simulation.challengeReadiness - 0.5) < 1e-9);
         QVERIFY(std::abs(halfway.world.rider.distanceMeters - 12.0) < 1e-9);
         QVERIFY(std::abs(halfway.world.rider.pitchDegrees - 360.0) < 1e-9);
         QVERIFY(std::abs(halfway.camera.centerDistanceMeters - 11.0) < 1e-9);
@@ -435,6 +438,64 @@ private slots:
                 WorkoutGameTerrainKind::RockGarden, start);
         QVERIFY(changedScenePixels(roots, transitionMiddle) > 100);
         QVERIFY(changedScenePixels(rocks, transitionMiddle) > 100);
+    }
+
+    void featureChallengeHudShowsApproachAndOutcomeStates()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 99u;
+        course.durationMs = 10000;
+        WorkoutGameSection section;
+        section.terrain = WorkoutGameTerrainKind::Tabletop;
+        section.durationMs = course.durationMs;
+        section.targetWatts = 200.0;
+        section.challengeCount = 1;
+        course.sections.push_back(section);
+
+        WorkoutGameWorldSnapshot world;
+        world.ready = true;
+        world.generation = 1;
+        world.terrain = section.terrain;
+        world.seed = course.seed;
+        world.rider.distanceMeters = 20.0;
+        world.rider.clearanceMeters = 0.82;
+        WorkoutGameCameraSnapshot camera;
+        camera.ready = true;
+        WorkoutGameCompetitionSnapshot competition;
+        const WorkoutGameFeatureChallengeProfile profile =
+                WorkoutGameFeatureChallenge::profile(section);
+
+        const auto renderState = [&](WorkoutGameFeatureOutcome outcome,
+                                     double readiness) {
+            WorkoutGameSimulationSnapshot simulation;
+            simulation.ready = true;
+            simulation.activeSection = 0;
+            simulation.featureOutcome = outcome;
+            simulation.challenge = profile;
+            simulation.challengeReadiness = readiness;
+            QImage image(960, 540, QImage::Format_ARGB32_Premultiplied);
+            image.fill(Qt::transparent);
+            QPainter painter(&image);
+            WorkoutGameCanvas::paintScene(
+                    painter, image.rect(), course, simulation, competition,
+                    world, camera, {}, 200.0, 200.0, 85, 140, 10, 0, 60.0,
+                    QStringLiteral("TEST"));
+            return image;
+        };
+
+        const QImage approaching = renderState(
+                WorkoutGameFeatureOutcome::Active, 0.45);
+        const QImage ready = renderState(
+                WorkoutGameFeatureOutcome::Active, 1.0);
+        const QImage completed = renderState(
+                WorkoutGameFeatureOutcome::Completed, 1.0);
+        const QImage bypassed = renderState(
+                WorkoutGameFeatureOutcome::Bypassed, 0.45);
+
+        QVERIFY(changedScenePixels(approaching, ready) > 100);
+        QVERIFY(changedScenePixels(ready, completed) > 100);
+        QVERIFY(changedScenePixels(completed, bypassed) > 100);
     }
 
     void frameRateCounterMeasuresCompletedFrameIntervals()

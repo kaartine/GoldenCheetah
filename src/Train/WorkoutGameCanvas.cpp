@@ -290,6 +290,18 @@ QString WorkoutGameCanvas::terrainName(WorkoutGameTerrainKind terrain)
     return QString();
 }
 
+QString WorkoutGameCanvas::challengeCueName(WorkoutGameChallengeCue cue)
+{
+    switch (cue) {
+    case WorkoutGameChallengeCue::CarrySpeed: return tr("CARRY SPEED");
+    case WorkoutGameChallengeCue::Jump: return tr("BUILD FOR JUMP");
+    case WorkoutGameChallengeCue::HoldLine: return tr("HOLD LINE");
+    case WorkoutGameChallengeCue::Climb: return tr("KEEP PRESSURE");
+    case WorkoutGameChallengeCue::None: break;
+    }
+    return QString();
+}
+
 double WorkoutGameCanvas::trailY(
         double x,
         const QRect &scene,
@@ -896,6 +908,73 @@ void WorkoutGameCanvas::paintScene(
                     riderGround - 3 - dust * 3,
                     3 + dust,
                     3 + dust);
+        }
+    }
+
+    if (current.challenge.enabled
+            && current.featureOutcome != WorkoutGameFeatureOutcome::None) {
+        const WorkoutGameTerrainKind challengeTerrain = current.activeSection >= 0
+                && current.activeSection < int(course.sections.size())
+                ? course.sections[std::size_t(current.activeSection)].terrain
+                : world.terrain;
+        const int challengeWidth = std::clamp(
+                viewport.width() * 2 / 5, 230, 460);
+        const int challengeHeight = std::clamp(
+                viewport.height() / 14, 32, 46);
+        const QRect challengeRect(
+                viewport.center().x() - challengeWidth / 2,
+                scene.top() + 10,
+                challengeWidth,
+                challengeHeight);
+        const bool completed = current.featureOutcome
+                == WorkoutGameFeatureOutcome::Completed;
+        const bool bypassed = current.featureOutcome
+                == WorkoutGameFeatureOutcome::Bypassed;
+        const QColor accent = completed
+                ? QColor(88, 188, 105)
+                : bypassed ? QColor(232, 197, 78) : QColor(246, 239, 215);
+        painter.fillRect(challengeRect, QColor(20, 27, 31, 225));
+        painter.setPen(accent);
+        QFont challengeFont = painter.font();
+        challengeFont.setPixelSize(std::clamp(challengeHeight / 3, 11, 15));
+        challengeFont.setBold(true);
+        painter.setFont(challengeFont);
+        QString challengeText;
+        if (completed) {
+            challengeText = tr("%1 CLEARED  +%2")
+                    .arg(terrainName(challengeTerrain))
+                    .arg(current.challenge.bonusPoints);
+        } else if (bypassed) {
+            challengeText = tr("%1  SAFE LINE")
+                    .arg(terrainName(challengeTerrain));
+        } else {
+            challengeText = tr("%1  %2  %3% READY")
+                    .arg(terrainName(challengeTerrain))
+                    .arg(challengeCueName(current.challenge.cue))
+                    .arg(int(std::floor(
+                        std::clamp(current.challengeReadiness, 0.0, 1.0)
+                            * 100.0 + 1e-9)));
+        }
+        painter.drawText(
+                challengeRect.adjusted(8, 0, -8, -5),
+                Qt::AlignCenter,
+                challengeText);
+        if (!completed && !bypassed) {
+            const int meterHeight = std::clamp(challengeHeight / 9, 3, 5);
+            const QRect meter(
+                    challengeRect.left() + 8,
+                    challengeRect.bottom() - meterHeight - 4,
+                    challengeRect.width() - 16,
+                    meterHeight);
+            painter.fillRect(meter, QColor(55, 65, 65));
+            painter.fillRect(
+                    meter.left(), meter.top(),
+                    int(meter.width() * std::clamp(
+                        current.challengeReadiness, 0.0, 1.0)),
+                    meter.height(),
+                    current.challengeReadiness >= 1.0
+                            ? QColor(88, 188, 105)
+                            : QColor(232, 197, 78));
         }
     }
 

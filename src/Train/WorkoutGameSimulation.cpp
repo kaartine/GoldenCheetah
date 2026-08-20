@@ -18,9 +18,6 @@ namespace {
 
 constexpr std::int64_t SimulationStepMs = 50;
 constexpr std::int64_t MaximumCatchupMs = 1000;
-constexpr double JumpDecisionProgress = 0.65;
-constexpr double JumpEffortThreshold = 0.9;
-constexpr double JumpCadenceThreshold = 65.0;
 
 double finiteNonNegative(double value)
 {
@@ -61,7 +58,11 @@ void WorkoutGameSimulation::reset()
     activeSection = -1;
     sectionEffortRatioMs = 0.0;
     sectionCadenceMs = 0.0;
+    sectionSpeedKphMs = 0.0;
+    sectionAdherenceMs = 0.0;
     sectionSampleMs = 0;
+    activeChallenge = WorkoutGameFeatureChallengeProfile();
+    activeChallengeReadiness = 0.0;
     currentSpeedKph = 0.0;
     currentAdherence = 0.0;
     scorePoints = 0.0;
@@ -99,21 +100,21 @@ void WorkoutGameSimulation::finalizeActiveSection()
         return;
     }
 
-    const WorkoutGameSection &section = configuredCourse.sections[activeSection];
-    const double averageEffort = sectionSampleMs > 0
-            ? sectionEffortRatioMs / double(sectionSampleMs)
-            : 0.0;
-    const double averageCadence = sectionSampleMs > 0
-            ? sectionCadenceMs / double(sectionSampleMs)
-            : 0.0;
-    const double requiredEffort = section.feature == WorkoutGameFeature::SprintJump
-            ? JumpEffortThreshold
-            : 0.8;
-    const bool cadenceReady = section.feature != WorkoutGameFeature::SprintJump
-            || averageCadence >= JumpCadenceThreshold;
-    outcomes[activeSection] = averageEffort >= requiredEffort && cadenceReady
+    WorkoutGameFeatureChallengeMetrics metrics;
+    if (sectionSampleMs > 0) {
+        const double duration = double(sectionSampleMs);
+        metrics.averageEffortRatio = sectionEffortRatioMs / duration;
+        metrics.averageCadenceRpm = sectionCadenceMs / duration;
+        metrics.averageSpeedKph = sectionSpeedKphMs / duration;
+        metrics.averageAdherence = sectionAdherenceMs / duration;
+    }
+    const WorkoutGameFeatureChallengeAssessment assessment =
+            WorkoutGameFeatureChallenge::assess(activeChallenge, metrics);
+    activeChallengeReadiness = assessment.readiness;
+    outcomes[activeSection] = assessment.completed
             ? WorkoutGameFeatureOutcome::Completed
             : WorkoutGameFeatureOutcome::Bypassed;
+    if (assessment.completed) scorePoints += activeChallenge.bonusPoints;
 }
 
 void WorkoutGameSimulation::moveToSection(int sectionIndex)
@@ -125,7 +126,8 @@ void WorkoutGameSimulation::moveToSection(int sectionIndex)
     if (sectionIndex > priorSection + 1) {
         const int firstSkipped = std::max(0, priorSection + 1);
         for (int index = firstSkipped; index < sectionIndex; ++index) {
-            if (configuredCourse.sections[index].challengeCount > 0
+            if (WorkoutGameFeatureChallenge::profile(
+                    configuredCourse.sections[index]).enabled
                     && outcomes[index] == WorkoutGameFeatureOutcome::None) {
                 outcomes[index] = WorkoutGameFeatureOutcome::Bypassed;
             }
@@ -135,10 +137,17 @@ void WorkoutGameSimulation::moveToSection(int sectionIndex)
     activeSection = sectionIndex;
     sectionEffortRatioMs = 0.0;
     sectionCadenceMs = 0.0;
+    sectionSpeedKphMs = 0.0;
+    sectionAdherenceMs = 0.0;
     sectionSampleMs = 0;
+    activeChallenge = WorkoutGameFeatureChallengeProfile();
+    activeChallengeReadiness = 0.0;
     if (activeSection >= 0
-            && configuredCourse.sections[activeSection].challengeCount > 0
             && outcomes[activeSection] == WorkoutGameFeatureOutcome::None) {
+        activeChallenge = WorkoutGameFeatureChallenge::profile(
+                configuredCourse.sections[activeSection]);
+    }
+    if (activeChallenge.enabled) {
         outcomes[activeSection] = WorkoutGameFeatureOutcome::Active;
     }
 }
@@ -220,14 +229,23 @@ void WorkoutGameSimulation::simulateStep(
     if (outcomes[activeSection] == WorkoutGameFeatureOutcome::Active) {
         sectionEffortRatioMs += effortRatio * double(stepDurationMs);
         sectionCadenceMs += cadenceRpm * double(stepDurationMs);
+        sectionSpeedKphMs += currentSpeedKph * double(stepDurationMs);
+        sectionAdherenceMs += currentAdherence * double(stepDurationMs);
         sectionSampleMs += stepDurationMs;
 
-        if (section.feature == WorkoutGameFeature::SprintJump) {
-            const double progress = double(stepTimeMs - section.startMs)
-                    / double(section.durationMs);
-            if (progress >= JumpDecisionProgress) {
-                finalizeActiveSection();
-            }
+        WorkoutGameFeatureChallengeMetrics metrics;
+        const double duration = double(sectionSampleMs);
+        metrics.averageEffortRatio = sectionEffortRatioMs / duration;
+        metrics.averageCadenceRpm = sectionCadenceMs / duration;
+        metrics.averageSpeedKph = sectionSpeedKphMs / duration;
+        metrics.averageAdherence = sectionAdherenceMs / duration;
+        activeChallengeReadiness = WorkoutGameFeatureChallenge::assess(
+                activeChallenge, metrics).readiness;
+
+        const double progress = double(stepTimeMs - section.startMs)
+                / double(section.durationMs);
+        if (progress >= activeChallenge.decisionProgress) {
+            finalizeActiveSection();
         }
     }
 }
@@ -259,6 +277,8 @@ WorkoutGameSimulationSnapshot WorkoutGameSimulation::snapshot(
                         / double(section.durationMs),
                 0.0, 1.0);
         result.featureOutcome = outcomes[activeSection];
+        result.challenge = activeChallenge;
+        result.challengeReadiness = activeChallengeReadiness;
         if (result.featureOutcome == WorkoutGameFeatureOutcome::Bypassed) {
             result.route = WorkoutGameRoute::SafeBypass;
         }

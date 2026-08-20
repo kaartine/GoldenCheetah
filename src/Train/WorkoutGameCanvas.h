@@ -98,6 +98,7 @@ private:
             const WorkoutGameTerrainProfile &profile);
     static QString featureName(WorkoutGameFeature feature);
     static QString terrainName(WorkoutGameTerrainKind terrain);
+    static QString challengeCueName(WorkoutGameChallengeCue cue);
 
     WorkoutGameCourse course;
     WorkoutGameSimulationSnapshot current;

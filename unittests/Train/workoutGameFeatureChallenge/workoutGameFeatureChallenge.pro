@@ -1,16 +1,14 @@
 QT += core testlib
 CONFIG += c++17
 
-TARGET = testWorkoutGameSimulation
+TARGET = testWorkoutGameFeatureChallenge
 
-SOURCES = testWorkoutGameSimulation.cpp \
-          ../../../src/Train/WorkoutGameCourse.cpp \
-          ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
-          ../../../src/Train/WorkoutGameSimulation.cpp
+SOURCES = testWorkoutGameFeatureChallenge.cpp \
+          ../../../src/Train/WorkoutGameFeatureChallenge.cpp
 
 HEADERS = ../../../src/Train/WorkoutGameCourse.h \
           ../../../src/Train/WorkoutGameFeatureChallenge.h \
-          ../../../src/Train/WorkoutGameSimulation.h
+          ../../../src/Train/WorkoutGameWorld.h
 
 include(../../unittests.pri)
 

@@ -11,6 +11,7 @@
 #define _GC_WorkoutGameSimulation_h
 
 #include "WorkoutGameCourse.h"
+#include "WorkoutGameFeatureChallenge.h"
 
 #include <cstdint>
 #include <vector>
@@ -56,6 +57,8 @@ struct WorkoutGameSimulationSnapshot
     double streakSeconds = 0.0;
     WorkoutGameFeatureOutcome featureOutcome = WorkoutGameFeatureOutcome::None;
     WorkoutGameRoute route = WorkoutGameRoute::MainLine;
+    WorkoutGameFeatureChallengeProfile challenge;
+    double challengeReadiness = 0.0;
 };
 
 class WorkoutGameSimulation
@@ -97,7 +100,11 @@ private:
     int activeSection = -1;
     double sectionEffortRatioMs = 0.0;
     double sectionCadenceMs = 0.0;
+    double sectionSpeedKphMs = 0.0;
+    double sectionAdherenceMs = 0.0;
     std::int64_t sectionSampleMs = 0;
+    WorkoutGameFeatureChallengeProfile activeChallenge;
+    double activeChallengeReadiness = 0.0;
     double currentSpeedKph = 0.0;
     double currentAdherence = 0.0;
     double scorePoints = 0.0;

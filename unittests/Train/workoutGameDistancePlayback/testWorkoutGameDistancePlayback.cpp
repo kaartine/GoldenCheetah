@@ -143,6 +143,20 @@ private slots:
                  WorkoutGameFeature::RecoveryDescent);
         QVERIFY(visual.sections[1].gravityAssisted);
     }
+
+    void technicalTrailBecomesAChallengeButRecoveryDoesNot()
+    {
+        WorkoutGameDistanceCourse course = sampleCourse();
+        course.sections[0].feature = WorkoutGameFeature::Trail;
+        course.sections[0].terrain = WorkoutGameTerrainKind::Skinny;
+        course.sections[1].terrain = WorkoutGameTerrainKind::Berm;
+
+        const WorkoutGameCourse visual =
+                WorkoutGameDistancePlayback::visualCourse(course);
+
+        QCOMPARE(visual.sections[0].challengeCount, 1);
+        QCOMPARE(visual.sections[1].challengeCount, 0);
+    }
 };
 
 QTEST_GUILESS_MAIN(TestWorkoutGameDistancePlayback)

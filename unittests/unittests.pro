@@ -140,6 +140,7 @@ exists(unittests.pri) {
 			   Train/workoutGameCourseSourceAdapter \
 			   Train/workoutGameDistanceCourse \
 			   Train/workoutGameDistancePlayback \
+			   Train/workoutGameFeatureChallenge \
 			   Train/workoutGameRendererPolicy \
 			   Train/workoutGameRoadPhysics \
 			   Train/workoutGameSimulation \

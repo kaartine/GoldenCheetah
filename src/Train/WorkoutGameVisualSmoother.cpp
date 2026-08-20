@@ -214,6 +214,10 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::interpolate(
             from.simulation.adherence, to.simulation.adherence, amount);
     result.simulation.streakSeconds = lerp(
             from.simulation.streakSeconds, to.simulation.streakSeconds, amount);
+    result.simulation.challengeReadiness = lerp(
+            from.simulation.challengeReadiness,
+            to.simulation.challengeReadiness,
+            amount);
 
     for (std::size_t index = 0;
          index < result.competition.competitors.size(); ++index) {

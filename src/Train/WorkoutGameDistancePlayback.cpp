@@ -8,6 +8,7 @@
  */
 
 #include "WorkoutGameDistancePlayback.h"
+#include "WorkoutGameFeatureCatalog.h"
 
 #include <algorithm>
 #include <cmath>
@@ -85,8 +86,14 @@ WorkoutGameCourse WorkoutGameDistancePlayback::visualCourse(
                 + source.targetEndWatts) * 0.5;
         section.gradePercent = source.gradePercent;
         section.difficulty = source.difficulty;
-        section.challengeCount = source.feature == WorkoutGameFeature::Trail
-                ? 0 : 1;
+        const bool recovery = source.feature
+                    == WorkoutGameFeature::RecoveryDescent
+                || source.feature == WorkoutGameFeature::CooldownDescent;
+        section.challengeCount = !recovery
+                && (source.feature != WorkoutGameFeature::Trail
+                    || WorkoutGameFeatureCatalog::definition(
+                        source.terrain).technical)
+                ? 1 : 0;
         section.visualVariant = source.visualVariant;
         section.gravityAssisted = source.feature
                 == WorkoutGameFeature::RecoveryDescent

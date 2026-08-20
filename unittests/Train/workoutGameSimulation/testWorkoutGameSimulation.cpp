@@ -37,6 +37,23 @@ WorkoutGameSimulationInput sample(
     return input;
 }
 
+WorkoutGameCourse challengeCourse(WorkoutGameTerrainKind terrain)
+{
+    WorkoutGameCourse course;
+    course.status = WorkoutGameCourseStatus::Ready;
+    course.seed = 123u;
+    course.durationMs = 10000;
+    WorkoutGameSection section;
+    section.feature = WorkoutGameFeature::Trail;
+    section.terrain = terrain;
+    section.durationMs = course.durationMs;
+    section.targetWatts = 200.0;
+    section.difficulty = 0.5;
+    section.challengeCount = 1;
+    course.sections.push_back(section);
+    return course;
+}
+
 }
 
 class TestWorkoutGameSimulation : public QObject
@@ -104,6 +121,57 @@ private slots:
 
         QCOMPARE(result.featureOutcome, WorkoutGameFeatureOutcome::Bypassed);
         QCOMPARE(result.route, WorkoutGameRoute::SafeBypass);
+    }
+
+    void tabletopRequiresEnoughApproachSpeedAndAwardsBonus()
+    {
+        WorkoutGameSimulation strong;
+        WorkoutGameSimulation slow;
+        const WorkoutGameCourse course = challengeCourse(
+                WorkoutGameTerrainKind::Tabletop);
+        QVERIFY(strong.configure(course, 200.0));
+        QVERIFY(slow.configure(course, 200.0));
+
+        WorkoutGameSimulationSnapshot strongResult;
+        WorkoutGameSimulationSnapshot slowResult;
+        for (std::int64_t time = 0; time <= 7500; time += 500) {
+            WorkoutGameSimulationInput strongInput = sample(
+                    time, 200.0, 200.0, 85.0);
+            strongInput.authoritativeSpeedKph = 20.0;
+            strongResult = strong.update(strongInput);
+            WorkoutGameSimulationInput slowInput = strongInput;
+            slowInput.authoritativeSpeedKph = 5.0;
+            slowResult = slow.update(slowInput);
+        }
+
+        QCOMPARE(strongResult.featureOutcome,
+                 WorkoutGameFeatureOutcome::Completed);
+        QCOMPARE(strongResult.challengeReadiness, 1.0);
+        QVERIFY(strongResult.score >= strongResult.challenge.bonusPoints);
+        QCOMPARE(slowResult.featureOutcome,
+                 WorkoutGameFeatureOutcome::Bypassed);
+        QVERIFY(slowResult.challengeReadiness < 0.5);
+        QVERIFY(strongResult.score > slowResult.score);
+        QCOMPARE(strongResult.score - slowResult.score,
+                 strongResult.challenge.bonusPoints);
+    }
+
+    void activeChallengeReportsReadinessBeforeDecision()
+    {
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(
+                challengeCourse(WorkoutGameTerrainKind::RockGarden), 200.0));
+        WorkoutGameSimulationInput input = sample(0, 160.0, 200.0, 60.0);
+        input.authoritativeSpeedKph = 6.0;
+        simulation.update(input);
+        input.workoutTimeMs = 3000;
+
+        const WorkoutGameSimulationSnapshot result = simulation.update(input);
+
+        QCOMPARE(result.featureOutcome, WorkoutGameFeatureOutcome::Active);
+        QCOMPARE(result.challenge.cue, WorkoutGameChallengeCue::CarrySpeed);
+        QVERIFY(result.challengeReadiness > 0.0);
+        QVERIFY(result.challengeReadiness < 1.0);
     }
 
     void recoveryDescentCarriesSpeedWithoutPower()

@@ -12,6 +12,7 @@ SOURCES = testWorkoutGameDistancePlayback.cpp \
 HEADERS = ../../../src/Train/WorkoutGameCourse.h \
           ../../../src/Train/WorkoutGameDistanceCourse.h \
           ../../../src/Train/WorkoutGameDistancePlayback.h \
+          ../../../src/Train/WorkoutGameFeatureCatalog.h \
           ../../../src/Train/WorkoutGameRoadPhysics.h
 
 include(../../unittests.pri)
