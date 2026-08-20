@@ -141,6 +141,171 @@ context.
 There is no unbounded event queue. Simulation and rendering use latest-value
 snapshots, so stale frames are overwritten rather than accumulated.
 
+### Current Execution Model
+
+This section describes the implementation as of August 2026. The following
+`Clock And Thread Model` section describes the target architecture; it is not a
+claim that a dedicated simulation thread already exists.
+
+GoldenCheetah currently gives Workout Game two execution contexts:
+
+| Context | Current work |
+| --- | --- |
+| Qt GUI thread | `TrainSidebar` timers, telemetry aggregation, workout position, `WorkoutGameWindow`, game rules, Box2D stepping, camera updates, fallback rendering, HUD image construction, debug capture, and ghost persistence |
+| Qt scene graph | `updatePaintNode`, visual interpolation, road timeline sampling, pseudo-3D projection, feature presentation, dynamic vertex generation, GPU node updates, and render diagnostics |
+
+The scene graph context is a separate render thread when Qt selects its
+threaded render loop. It may instead be the GUI thread on platforms or graphics
+backends using the basic render loop. During threaded scene graph
+synchronization Qt blocks the GUI thread, which allows `QQuickItem` state set on
+the GUI side to be consumed by `updatePaintNode` without a second application
+lock. Code in `updatePaintNode` must still use only scene graph APIs that are
+valid in that phase.
+
+There is no Workout Game `QThread`, worker pool, snapshot exchange, or explicit
+sequence number yet. Device controllers may use their own implementation
+threads, but Workout Game sees only the `Context` signals delivered to its GUI
+object and does not depend on controller thread ownership.
+
+The current live path is:
+
+```text
+device controllers
+       |
+       v
+TrainSidebar::guiUpdate (nominally 200 ms)
+       |
+       +--> Context::telemetryUpdate
+       |       |
+       |       +--> cache latest power/cadence/HR/gear and rebuild HUD
+       |
+TrainSidebar::loadUpdate (nominally 1000 ms)
+       |
+       +--> trainer target dispatch and Context::setNow
+               |
+               v
+         WorkoutGameWindow::updateSimulation              [GUI]
+               |
+               +--> game rules, 50 ms fixed steps
+               +--> feature decision
+               +--> Box2D vehicle, 8.33 ms fixed steps
+               +--> camera and ghost sample
+               +--> visual target for each renderer
+                              |
+                    Qt scene graph synchronization
+                              |
+                              v
+         smooth workout time and sample one road timeline  [render]
+               +--> road projection and feature geometry
+               +--> QSG geometry/texture node updates
+               +--> swap -> request next visible frame
+```
+
+Both game rules and vehicle physics cap catch-up at one second. With the normal
+one-second workout position cadence, one GUI callback can therefore execute
+about 20 game-rule steps and 120 Box2D steps. All those steps use the latest
+telemetry value available at callback time; the intermediate 200 ms telemetry
+samples are not replayed through simulation. Rendering hides most of this
+coarse source cadence by interpolating and briefly predicting workout time,
+then maps that single time to road distance, section progress, and feature
+presentation.
+
+The primary scene graph renderer schedules another frame from `frameSwapped`
+and normally follows display vsync. It rebuilds bounded road and feature vertex
+arrays every frame. The OpenGL fallback is a double-buffered `QOpenGLWidget`,
+but its scene is still painted by `QPainter` on the GUI thread. The final
+fallback uses a 33 ms GUI timer. Direct PNG capture calls `grabWindow` and writes
+the image from the GUI side; it is intentionally a diagnostic path and can
+disturb frame pacing.
+
+#### Current Engine State Ownership
+
+The current implementation is a collection of deterministic domain modules
+coordinated by `WorkoutGameWindow`, not a separate general-purpose game engine.
+Mutable state has the following owners:
+
+| State | Owner and update point |
+| --- | --- |
+| Selected workout, latest telemetry, pause/session flags | `WorkoutGameWindow` on the GUI thread |
+| Score, adherence, section outcomes and nominal speed | `WorkoutGameSimulation::update` on `Context::setNow` |
+| Feature decisions and one-shot action IDs | `WorkoutGameFeatureRuntime::update` on the same GUI callback |
+| Box2D world, vehicle contacts and suspension | `WorkoutGamePhysics::update` on the same GUI callback |
+| Camera target and transition | `WorkoutGameCamera::update` on the same GUI callback |
+| Workout-time-to-road mapping | Immutable `WorkoutGameRoadCourse`, sampled by the scene graph |
+| Visual interpolation, projected trail and render diagnostics | `WorkoutGameSceneGraphItem::updatePaintNode` during Qt scene graph synchronization |
+| HUD source image and telemetry labels | `WorkoutGameSceneGraphItem` on the GUI thread; copied to a scene graph texture during synchronization |
+| Saved ghost | `WorkoutGameGhostRecorder` in the window and athlete settings on stop |
+
+Course builders and adapters are pure or value-oriented preparation modules.
+They do not participate in the frame loop. The primary renderer keeps QSG nodes
+alive between frames but currently regenerates their dynamic vertex contents.
+Box2D owns only the local visual bicycle world; the time-to-road timeline owns
+the primary rendered longitudinal position. This split is deliberate for
+workout safety, but it also means that road position and the Box2D bicycle are
+not yet one authoritative simulated body.
+
+The GUI-to-render handoff currently relies on Qt Quick's synchronization phase.
+`setFrame`, `setTelemetry`, and `setCourse` mutate the `QQuickItem` on the GUI
+thread. `updatePaintNode` reads that state while the GUI thread is blocked by a
+threaded render loop, or on the GUI thread under the basic render loop. Render
+diagnostics return through queued invocations. This pattern must not be treated
+as a general lock-free mailbox: only the Qt-documented synchronization window
+protects these item fields, and queued callbacks must not retain scene graph
+nodes or textures whose lifetime belongs to the render thread.
+
+### Current Gaps And Priorities
+
+1. **P1: GUI-thread simulation bursts.** Trainer target timers, UI work, game
+   rules, Box2D catch-up, and camera updates share one event loop. A slow game
+   update can delay trainer/UI callbacks even though the game never calls the
+   trainer directly. Move stateful simulation to one fixed-rate owner and keep
+   only bounded snapshot publication on the GUI path.
+2. **P1: telemetry history is discarded.** Five nominal telemetry samples can
+   arrive between two simulation updates, but only the newest sample is applied
+   to the whole elapsed second. Introduce a small timestamped input ring and
+   consume samples at fixed simulation ticks. Bound its size and collapse old
+   data explicitly after stalls.
+3. **P1: presentation predicts beyond authoritative state.** The monotonic
+   visual smoother can predict up to 1.5 seconds while game outcomes and Box2D
+   remain at the last workout position. The unified road timeline prevents the
+   known backward section transition, but previous/current simulation snapshots
+   with render interpolation are the durable solution. The training session's
+   workout position remains authoritative; a monotonic scheduler may pace work
+   but must not create a second workout timeline.
+4. **P2: no snapshot identity or latency accounting.** The current Qt sync is
+   safe for GUI-to-scene-graph transfer, but diagnostics cannot state which
+   input and simulation tick produced a frame. Add input, simulation, and frame
+   sequence numbers plus sensor-to-display latency. A future direct cross-thread
+   buffer also needs an explicit ownership and memory-order protocol; a plain
+   shared struct plus index would be a data race.
+5. **P2: render work scales poorly with richer courses.** Projection sampling,
+   temporary vectors, and complete dynamic geometry updates occur every frame.
+   The current bounded scene has measured headroom, so optimize only after
+   counters show pressure: reuse buffers, retain unchanged chunks, and batch by
+   material before adding workers.
+6. **P2: the visible scene renders while training is inactive.** The
+   `frameSwapped` loop checks window visibility but not session state. Stop the
+   continuous loop when inactive and request isolated frames for setup or HUD
+   changes.
+7. **P2: HUD changes recreate a texture.** Telemetry and changing FPS values
+   rebuild a `QImage`, then replace its scene graph texture. Rate-limit debug
+   values or use a persistent dynamic texture if profiling shows upload cost.
+8. **P2: course creation is synchronous.** ERG normalization and current small
+   procedural courses are cheap, but imported long activities and future asset
+   decoding must run as cancelable jobs before their immutable result is
+   installed on the GUI thread.
+9. **P2: physics frequency has not been justified by profiling.** The current
+   vehicle path calls Box2D at 120 Hz with four solver substeps, potentially 480
+   solver substeps during a one-second catch-up burst. Box2D documents a fixed
+   60 Hz primary step with substeps as a common starting point. Compare 60/4,
+   120/2, and the current 120/4 against contact quality and CPU time before
+   treating the current rate as a requirement.
+10. **P2: scene graph pacing assumes working vsync.** The self-scheduled
+    `frameSwapped` loop has no software frame cap. It follows the display on the
+    normal desktop, but headless X11 traces ran at 118-140 FPS. Record the
+    graphics API, render loop, swap interval, and presented-frame cadence, and
+    add an inactive or no-vsync limiter if real systems show waste or jitter.
+
 ### Clock And Thread Model
 
 The game has three clock domains with explicit ownership:
@@ -148,10 +313,12 @@ The game has three clock domains with explicit ownership:
 1. Sensor samples retain their device or ingestion timestamps. Trainer control
    and activity recording continue on the existing Train paths and never wait
    for the game.
-2. `WorkoutGameClock` uses a monotonic clock to drive one deterministic,
-   fixed-step simulation owner. It advances in complete ticks, limits catch-up
-   work after a stall, and reports discontinuities instead of integrating one
-   unbounded time step.
+2. `WorkoutGameClock` uses a monotonic clock only to schedule one deterministic,
+   fixed-step simulation owner. Each input also carries the authoritative
+   training-session workout position. The runner advances complete internal
+   ticks toward that position, never advances workout time while paused, limits
+   catch-up work after a stall, and treats seek, reset, and clock drift as
+   explicit discontinuities instead of creating an independent timeline.
 3. Presentation follows the display refresh. The renderer interpolates between
    the previous and current complete simulation snapshots. It must not
    extrapolate independently smoothed position, section, feature, or camera
@@ -170,10 +337,91 @@ Train telemetry -> latest input snapshot -> fixed-step simulation
 ```
 
 The simulation owns mutable game and physics state. At the end of a tick it
-publishes an immutable `WorkoutGameFrameSnapshot` through a bounded double or
-triple buffer with a monotonically increasing sequence number. The renderer
-reads the newest complete pair and never waits for a partially written frame.
-Old snapshots are overwritten rather than queued.
+publishes an immutable `WorkoutGameFrameSnapshot` with a generation and
+monotonically increasing sequence number. The first implementation should use a
+queued Qt handoff to a GUI-owned latest snapshot, then rely on the existing Qt
+scene graph synchronization for GUI-to-render transfer. This is easier to
+verify than a custom lock-free buffer and the game update rate does not require
+one initially.
+
+If profiling later justifies a direct simulation-to-render exchange, use a
+bounded single-producer/single-consumer triple buffer with explicit slot
+ownership and release/acquire publication. The producer must never overwrite a
+slot that the consumer can still read. The renderer reads the newest complete
+pair and never waits for a partially written frame; old snapshots are
+overwritten rather than queued. A plain non-atomic active index is not a valid
+implementation.
+
+The target thread ownership is:
+
+| Thread or execution context | Responsibilities | Must not do |
+| --- | --- | --- |
+| Existing device/Train paths | Read sensors, control resistance, record activity and timestamp telemetry | Wait for game simulation or rendering |
+| Qt GUI thread | Own widgets/windows, translate user commands, install completed courses, publish bounded inputs and handle session lifecycle | Step Box2D, run catch-up loops or wait for workers |
+| One simulation thread | Own all mutable rules, feature, Box2D and camera state; consume inputs; run fixed ticks; publish complete snapshots | Access QObjects, QSG resources, athlete storage or trainer controllers |
+| Qt scene graph render context | Interpolate published snapshots, update retained QSG nodes and submit GPU work | Mutate simulation state or block for a newer snapshot |
+| Optional worker jobs | Build long courses and decode assets into immutable results | Publish partial results or join from Train/render hot paths |
+
+There is intentionally no thread per subsystem. The current Box2D world and
+game rules are small, ordered and stateful; splitting rules, physics and camera
+across workers would add synchronization and nondeterministic ordering without
+removing measured work. Box2D stepping remains on one owner even if Box2D's
+internal worker support is evaluated later.
+
+#### Fixed-Step Loop
+
+The simulation thread sleeps or waits for input until the next monotonic
+deadline, then advances an accumulator in fixed quanta. A conceptual iteration
+is:
+
+```text
+elapsed = clamp(monotonic_now - previous_now, 0, maximum_stall)
+accumulator += elapsed
+apply all timestamped inputs up to next_tick_time
+while accumulator >= fixed_step and steps < maximum_catch_up_steps:
+    advance rules, feature state, Box2D and camera by fixed_step
+    publish current snapshot sequence
+    accumulator -= fixed_step
+if another complete step remains:
+    report a discontinuity and discard bounded excess time
+publish interpolation_alpha = accumulator / fixed_step
+```
+
+The loop uses absolute monotonic deadlines to avoid accumulating timer drift.
+Waking the thread is not itself a simulation tick: early and spurious wakes only
+refresh inputs or lifecycle commands. Pause freezes game-time integration while
+telemetry and recording continue through Train. Resume resets the monotonic
+deadline so paused wall time is never caught up. Seek, workout replacement and
+session restart increment a generation, reset incompatible transient state and
+publish a non-interpolated snapshot; the renderer never blends snapshots from
+different generations.
+
+Timestamped telemetry uses a bounded single-producer/single-consumer mailbox or
+ring. The simulation consumes samples in timestamp order and holds the newest
+known value between samples. Overflow drops or coalesces the oldest unconsumed
+telemetry with a counter; it cannot grow memory or block sensor ingestion.
+Lifecycle commands such as stop, reset and course replacement use an ordered
+command channel and take precedence over telemetry coalescing.
+
+#### Snapshot Publication And Lifetime
+
+Each frame snapshot contains at least generation, simulation sequence,
+simulation time, source-input sequence, monotonic publication time, rules,
+world, camera and presentation state. Publication uses release/acquire ordering
+or a small locked handoff whose critical section copies only bounded values.
+The producer never overwrites a slot still being copied by the consumer. A
+plain shared index plus two mutable slots is insufficient without a proven
+ownership protocol; triple buffering or immutable shared ownership is safer
+for the first implementation.
+
+The renderer keeps the latest two consecutive snapshots from the same
+generation and interpolates presentation state using the simulation clock and
+display time. Discrete events carry sequence IDs and are consumed once; they
+are not numerically interpolated. If only one snapshot exists, a sequence is
+skipped, the generation changes, or data becomes stale, the renderer displays
+the newest complete snapshot without extrapolating. Missing frames reduce
+visual smoothness but cannot feed back into physics, scoring, trainer control or
+recording.
 
 Qt Quick already owns GUI/render synchronization and can use a dedicated render
 thread. Scene graph updates therefore remain small snapshot-to-node copies;
@@ -182,6 +430,10 @@ and other measured heavy work may use worker jobs, but workers publish results
 for a later simulation tick and are never joined from trainer control or the
 render hot path. The current vehicle simulation should remain one owner until
 profiling proves that a phase is large enough to justify job scheduling.
+Course changes, seeks, and shutdown increment the generation, cancel pending
+jobs, and stop the runner without holding a trainer or render-path lock. A
+snapshot from an older generation is discarded. Box2D state is created, used,
+and destroyed only by the simulation owner.
 
 This follows the fixed-timestep and render-interpolation model used by mature
 engines while respecting Qt's scene graph ownership rules:
