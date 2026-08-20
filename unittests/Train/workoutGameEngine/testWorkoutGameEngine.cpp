@@ -171,11 +171,17 @@ private slots:
         engine.resynchronize(input, 6000, 250);
         input.simulation.workoutTimeMs = 5020;
         const WorkoutGameEngineFrame after = engine.update(input, 6020, 250);
+        const WorkoutGameRoadTimelineSample road =
+                WorkoutGameRoadCourseBuilder::sampleAtWorkoutTime(
+                    WorkoutGameRoadCourseBuilder::build(course, 200.0), 5020);
 
         QCOMPARE(after.visual.simulation.droppedCatchupMs, std::int64_t(0));
         QCOMPARE(after.skippedTicks, std::size_t(250));
-        QVERIFY(after.visual.world.rider.distanceMeters
-                - before.visual.world.rider.distanceMeters < 2.0);
+        QVERIFY(road.ready);
+        QCOMPARE(after.visual.world.rider.distanceMeters,
+                 road.distanceMeters);
+        QVERIFY(after.visual.riderPedalCycles
+                - before.visual.riderPedalCycles < 0.2);
     }
 
     void nonFiniteTelemetryCannotPoisonPublishedFrame()
@@ -227,6 +233,30 @@ private slots:
         QCOMPARE(frame.targetWatts, 10000.0);
         QCOMPARE(frame.cadenceRpm, 300);
         QCOMPARE(frame.heartRate, 300);
+    }
+
+    void framePublishesOneAuthoritativeRoadAndFeaturePosition()
+    {
+        WorkoutGameEngine engine;
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        QVERIFY(engine.configure(course, 200.0, true));
+        WorkoutGameEngineInput input;
+        input.simulation = WorkoutGameFeatureLab::input(
+                course, 5000, WorkoutGameFeatureLabScenario::Pass);
+
+        const WorkoutGameEngineFrame frame = engine.update(input, 6000);
+        const WorkoutGameRoadTimelineSample expected =
+                WorkoutGameRoadCourseBuilder::sampleAtWorkoutTime(road, 5000);
+        QVERIFY(expected.ready);
+        QVERIFY(frame.visual.feature.ready);
+        QCOMPARE(frame.visual.world.rider.distanceMeters,
+                 expected.distanceMeters);
+        QCOMPARE(frame.visual.feature.visualDistanceMeters,
+                 expected.distanceMeters);
+        QCOMPARE(frame.visual.feature.sourceSectionIndex,
+                 int(expected.sourceSectionIndex));
     }
 };
 

@@ -466,7 +466,6 @@ void WorkoutGameSceneGraphItem::setCourse(
 {
     currentCourse = course;
     roadCourse = WorkoutGameRoadCourseBuilder::build(course, ftpWatts);
-    featureRuntime.configure(roadCourse);
     currentFrame = {};
     visualSmoother.reset();
     frameRateResetRequested.store(true, std::memory_order_release);
@@ -796,21 +795,14 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
     const WorkoutGameRoadTimelineSample renderedTimeline =
             WorkoutGameRoadCourseBuilder::sampleAtWorkoutTime(
                     roadCourse, visual.simulation.workoutTimeMs);
-    WorkoutGameSimulationSnapshot featureSimulation = visual.simulation;
-    if (renderedTimeline.ready) {
-        featureSimulation.activeSection =
-                int(renderedTimeline.sourceSectionIndex);
-        featureSimulation.sectionProgress = renderedTimeline.sectionProgress;
-    }
-    const WorkoutGameFeatureRuntimeSnapshot feature =
-            featureRuntime.update(featureSimulation);
+    const WorkoutGameFeatureRuntimeSnapshot &feature = visual.feature;
     WorkoutGameRoadProjectionConfig config;
     config.viewportWidth = viewportWidth;
     config.viewportHeight = viewportHeight;
-    const double riderDistance = renderedTimeline.ready
-            ? renderedTimeline.distanceMeters
-            : visual.world.ready
+    const double riderDistance = visual.world.ready
             ? visual.world.rider.distanceMeters
+            : renderedTimeline.ready
+            ? renderedTimeline.distanceMeters
             : roadCourse.totalLengthMeters
                 * visual.simulation.courseProgress;
     const WorkoutGameRoadProjectionFrame projection =
@@ -857,14 +849,10 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
             : 0.0;
     const double physicsLift = visual.world.ready
             ? visual.world.rider.clearanceMeters * 18.0 : 0.0;
-    const double featureLift = feature.verticalOffsetMeters * 45.0;
-    const double lift = feature.motion == WorkoutGameFeatureMotion::Drop
-            ? physicsLift + featureLift
-            : std::max(physicsLift, featureLift);
     const double landingCompression = std::max(
             visual.world.landingImpact, feature.landingImpact) * 12.0;
     const double bob = visual.world.ready
-            ? lift
+            ? physicsLift
                 - (visual.world.rider.rearSuspension
                     + visual.world.rider.frontSuspension) * 3.0
                 + featureShake
@@ -882,7 +870,10 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
     QMatrix4x4 riderTransform;
     const double riderCenterY = riderY - riderHeight * 0.35 - bob;
     riderTransform.translate(float(riderX), float(riderCenterY));
-    riderTransform.rotate(float(-feature.pitchDegrees), 0.0f, 0.0f, 1.0f);
+    riderTransform.rotate(
+            float(-visual.world.rider.pitchDegrees
+                  - feature.pitchDegrees * 0.35),
+            0.0f, 0.0f, 1.0f);
     riderTransform.translate(float(-riderX), float(-riderCenterY));
     root->riderTransform->setMatrix(riderTransform);
 

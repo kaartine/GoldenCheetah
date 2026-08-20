@@ -176,7 +176,7 @@ void WorkoutGameCanvas::setCompetition(
 {
     competition = newCompetition;
     visualSmoother.setTarget(
-            {current, competition, world, camera, {}},
+            {current, competition, world, camera, {}, {}},
             WorkoutGameClock::monotonicMilliseconds());
     update();
 }
@@ -188,7 +188,7 @@ void WorkoutGameCanvas::setWorld(
     world = newWorld;
     camera = newCamera;
     visualSmoother.setTarget(
-            {current, competition, world, camera, {}},
+            {current, competition, world, camera, {}, {}},
             WorkoutGameClock::monotonicMilliseconds());
     update();
 }
@@ -245,7 +245,7 @@ void WorkoutGameCanvas::setSnapshot(
     heartRate = std::max(0, newHeartRate);
     virtualGear = std::max(1, newVirtualGear);
     visualSmoother.setTarget(
-            {current, competition, world, camera, {}},
+            {current, competition, world, camera, {}, {}},
             WorkoutGameClock::monotonicMilliseconds());
     update();
 }

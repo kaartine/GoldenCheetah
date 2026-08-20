@@ -137,6 +137,32 @@ void addCamera(StateHasher &hash, const WorkoutGameCameraSnapshot &camera)
     hash.addDouble(camera.pitchDegrees);
 }
 
+void addFeature(
+        StateHasher &hash,
+        const WorkoutGameFeatureRuntimeSnapshot &feature)
+{
+    hash.addBool(feature.ready);
+    hash.addInteger(feature.sourceSectionIndex);
+    hash.addEnum(feature.terrain);
+    hash.addEnum(feature.phase);
+    hash.addEnum(feature.motion);
+    hash.addEnum(feature.outcome);
+    hash.addEnum(feature.route);
+    hash.addDouble(feature.visualDistanceMeters);
+    hash.addDouble(feature.prepareDistanceMeters);
+    hash.addDouble(feature.decisionDistanceMeters);
+    hash.addDouble(feature.obstacleDistanceMeters);
+    hash.addDouble(feature.distanceToObstacleMeters);
+    hash.addDouble(feature.readiness);
+    hash.addDouble(feature.lateralOffset);
+    hash.addDouble(feature.verticalOffsetMeters);
+    hash.addDouble(feature.pitchDegrees);
+    hash.addDouble(feature.vibration);
+    hash.addDouble(feature.landingImpact);
+    hash.addInteger(feature.actionId);
+    hash.addBool(feature.triggerJump);
+}
+
 bool isFiniteValue(double value)
 {
     return std::isfinite(value);
@@ -163,6 +189,7 @@ bool WorkoutGameReplayHarness::finiteState(
     const WorkoutGameSimulationSnapshot &simulation = frame.visual.simulation;
     const WorkoutGameWorldSnapshot &world = frame.visual.world;
     const WorkoutGameCameraSnapshot &camera = frame.visual.camera;
+    const WorkoutGameFeatureRuntimeSnapshot &feature = frame.visual.feature;
     return isFiniteValue(simulation.courseProgress)
             && isFiniteValue(simulation.sectionProgress)
             && isFiniteValue(simulation.speedKph)
@@ -186,6 +213,17 @@ bool WorkoutGameReplayHarness::finiteState(
             && isFiniteValue(camera.zoom)
             && isFiniteValue(camera.yawDegrees)
             && isFiniteValue(camera.pitchDegrees)
+            && isFiniteValue(feature.visualDistanceMeters)
+            && isFiniteValue(feature.prepareDistanceMeters)
+            && isFiniteValue(feature.decisionDistanceMeters)
+            && isFiniteValue(feature.obstacleDistanceMeters)
+            && isFiniteValue(feature.distanceToObstacleMeters)
+            && isFiniteValue(feature.readiness)
+            && isFiniteValue(feature.lateralOffset)
+            && isFiniteValue(feature.verticalOffsetMeters)
+            && isFiniteValue(feature.pitchDegrees)
+            && isFiniteValue(feature.vibration)
+            && isFiniteValue(feature.landingImpact)
             && isFiniteValue(frame.visual.riderPedalCycles)
             && isFiniteValue(frame.watts)
             && isFiniteValue(frame.targetWatts);
@@ -209,9 +247,11 @@ std::uint64_t WorkoutGameReplayHarness::hashFrame(
     hash.addInteger(sample.input.simulation.virtualGear);
     hash.addBool(sample.input.simulation.paused);
     hash.addInteger(sample.input.heartRate);
+    hash.addInteger(sample.input.telemetryMonotonicTimeMs);
     addSimulation(hash, frame.visual.simulation);
     addWorld(hash, frame.visual.world);
     addCamera(hash, frame.visual.camera);
+    addFeature(hash, frame.visual.feature);
     hash.addInteger(frame.visual.presentationTimeMs);
     hash.addInteger(frame.visual.skippedSimulationTicks);
     hash.addDouble(frame.visual.riderPedalCycles);
@@ -222,6 +262,7 @@ std::uint64_t WorkoutGameReplayHarness::hashFrame(
     hash.addInteger(frame.virtualGear);
     hash.addInteger(frame.sequence);
     hash.addInteger(frame.skippedTicks);
+    hash.addBool(frame.telemetryStale);
     return hash.result();
 }
 

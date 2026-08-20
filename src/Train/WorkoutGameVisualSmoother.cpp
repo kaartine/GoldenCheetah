@@ -374,6 +374,34 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::interpolate(
             from.world.rider.clearanceMeters,
             to.world.rider.clearanceMeters, amount);
 
+    if (from.feature.ready && to.feature.ready
+            && from.feature.sourceSectionIndex
+                == to.feature.sourceSectionIndex
+            && from.feature.actionId == to.feature.actionId) {
+        result.feature.visualDistanceMeters = lerp(
+                from.feature.visualDistanceMeters,
+                to.feature.visualDistanceMeters, amount);
+        result.feature.distanceToObstacleMeters = lerp(
+                from.feature.distanceToObstacleMeters,
+                to.feature.distanceToObstacleMeters, amount);
+        result.feature.readiness = lerp(
+                from.feature.readiness, to.feature.readiness, amount);
+        result.feature.lateralOffset = lerp(
+                from.feature.lateralOffset,
+                to.feature.lateralOffset, amount);
+        result.feature.verticalOffsetMeters = lerp(
+                from.feature.verticalOffsetMeters,
+                to.feature.verticalOffsetMeters, amount);
+        result.feature.pitchDegrees = lerp(
+                from.feature.pitchDegrees,
+                to.feature.pitchDegrees, amount);
+        result.feature.vibration = lerp(
+                from.feature.vibration, to.feature.vibration, amount);
+        result.feature.landingImpact = lerp(
+                from.feature.landingImpact,
+                to.feature.landingImpact, amount);
+    }
+
     result.camera.centerDistanceMeters = lerp(
             from.camera.centerDistanceMeters,
             to.camera.centerDistanceMeters, amount);

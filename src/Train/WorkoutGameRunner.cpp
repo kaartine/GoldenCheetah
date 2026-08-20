@@ -21,6 +21,7 @@
 namespace {
 
 using MonotonicClock = std::chrono::steady_clock;
+constexpr std::int64_t MaximumTelemetryAgeMs = 2000;
 
 MonotonicClock::time_point timePoint(std::int64_t milliseconds)
 {
@@ -34,6 +35,22 @@ void lowerWorkerPriority()
     // control remain on the application's normal-priority threads.
     setpriority(PRIO_PROCESS, 0, 5);
 #endif
+}
+
+bool expireTelemetry(
+        WorkoutGameEngineInput &input,
+        std::int64_t tickMonotonicTimeMs)
+{
+    const bool stale = input.telemetryMonotonicTimeMs < 0
+            || tickMonotonicTimeMs - input.telemetryMonotonicTimeMs
+                > MaximumTelemetryAgeMs;
+    if (!stale) return false;
+    input.simulation.actualWatts = 0.0;
+    input.simulation.cadenceRpm = 0.0;
+    input.simulation.authoritativeSpeedKph = -1.0;
+    input.simulation.drivetrainSpeedLimitKph = -1.0;
+    input.heartRate = 0;
+    return true;
 }
 
 }
@@ -156,6 +173,10 @@ void WorkoutGameRunner::setTelemetry(const WorkoutGameEngineInput &input)
                 inputState.input.simulation.workoutTimeMs;
         const bool paused = inputState.input.simulation.paused;
         inputState.input = input;
+        const std::int64_t nowMs = monotonicMilliseconds();
+        if (inputState.input.telemetryMonotonicTimeMs > nowMs + 1000) {
+            inputState.input.telemetryMonotonicTimeMs = nowMs;
+        }
         inputState.input.simulation.workoutTimeMs = currentWorkoutTime;
         inputState.input.simulation.paused = paused;
         ++inputState.revision;
@@ -285,6 +306,9 @@ void WorkoutGameRunner::run()
         std::size_t firstTick = 0;
         if (advance.skippedTicks > 0 && !advance.ticks.empty()) {
             WorkoutGameEngineInput skipInput = state.input;
+            expireTelemetry(
+                    skipInput,
+                    advance.ticks.front().deadlineMonotonicMs);
             skipInput.simulation.workoutTimeMs =
                     advance.ticks.front().workoutTimeMs;
             engine.resynchronize(
@@ -297,13 +321,17 @@ void WorkoutGameRunner::run()
              index < advance.ticks.size(); ++index) {
             const WorkoutGameClockTick &tick = advance.ticks[index];
             WorkoutGameEngineInput tickInput = state.input;
+            const bool telemetryStale = expireTelemetry(
+                    tickInput, tick.deadlineMonotonicMs);
             tickInput.simulation.workoutTimeMs = tick.workoutTimeMs;
             tickInput.simulation.paused = false;
-            if (!publish(
-                    engine.update(
+            WorkoutGameEngineFrame frame = engine.update(
                         tickInput,
                         tick.deadlineMonotonicMs,
-                        totalSkippedTicks),
+                        totalSkippedTicks);
+            frame.telemetryStale = telemetryStale;
+            if (!publish(
+                    std::move(frame),
                     state.generation)) {
                 break;
             }

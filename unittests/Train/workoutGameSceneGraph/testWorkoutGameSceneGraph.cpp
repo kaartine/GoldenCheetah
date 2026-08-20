@@ -101,6 +101,13 @@ WorkoutGameVisualSnapshot featureFrame(
     frame.world.terrain = WorkoutGameTerrainKind::LogOver;
     frame.world.rider.distanceMeters = 1.0;
     frame.world.speedMetersPerSecond = 5.5;
+    WorkoutGameFeatureRuntime runtime;
+    if (!runtime.configure(WorkoutGameRoadCourseBuilder::build(
+            sampleCourse(), 200.0))) {
+        return frame;
+    }
+    frame.feature = runtime.update(frame.simulation);
+    frame.world.rider.distanceMeters = frame.feature.visualDistanceMeters;
     return frame;
 }
 
@@ -278,6 +285,8 @@ private slots:
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
         const WorkoutGameRoadCourse road =
                 WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        WorkoutGameFeatureRuntime featureRuntime;
+        QVERIFY(featureRuntime.configure(road));
         WorkoutGameSceneGraphWindow window;
         window.resize(1280, 720);
         window.setCourse(course, 200.0);
@@ -325,6 +334,9 @@ private slots:
             frame.world.generation = std::uint64_t(section + 1);
             frame.world.terrain = course.sections[std::size_t(section)].terrain;
             frame.world.speedMetersPerSecond = 5.5;
+            frame.feature = featureRuntime.update(frame.simulation);
+            frame.world.rider.distanceMeters =
+                    frame.feature.visualDistanceMeters;
             window.setFrame(frame, 220.0,
                     course.sections[std::size_t(section)].targetWatts,
                     88, 150, 7);

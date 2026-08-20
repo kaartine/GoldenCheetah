@@ -48,6 +48,8 @@ private slots:
         input.simulation.cadenceRpm = 88.0;
         input.simulation.virtualGear = 8;
         input.heartRate = 142;
+        input.telemetryMonotonicTimeMs =
+                WorkoutGameRunner::monotonicMilliseconds();
         runner.setTelemetry(input);
         runner.start(0, 1.0);
 
@@ -116,6 +118,53 @@ private slots:
             runner.stop(frame.visual.simulation.workoutTimeMs);
         }
         runner.shutdown();
+    }
+
+    void staleTelemetryCannotKeepTheRiderPowered()
+    {
+        WorkoutGameRunner runner;
+        QVERIFY(runner.configure(
+                WorkoutGameFeatureLab::course(200.0), 200.0, false));
+        WorkoutGameEngineInput input;
+        input.simulation.actualWatts = 260.0;
+        input.simulation.targetWatts = 220.0;
+        input.simulation.cadenceRpm = 92.0;
+        input.heartRate = 155;
+        input.telemetryMonotonicTimeMs =
+                WorkoutGameRunner::monotonicMilliseconds() - 5000;
+        runner.setTelemetry(input);
+        runner.start(0, 1.0);
+
+        WorkoutGameEngineFrame frame;
+        QVERIFY(waitForFrame(runner, frame));
+        QVERIFY(frame.telemetryStale);
+        QCOMPARE(frame.watts, 0.0);
+        QCOMPARE(frame.cadenceRpm, 0);
+        QCOMPARE(frame.heartRate, 0);
+        QCOMPARE(frame.targetWatts, 220.0);
+    }
+
+    void freshTelemetryRemainsAvailableToTheEngine()
+    {
+        WorkoutGameRunner runner;
+        QVERIFY(runner.configure(
+                WorkoutGameFeatureLab::course(200.0), 200.0, false));
+        WorkoutGameEngineInput input;
+        input.simulation.actualWatts = 240.0;
+        input.simulation.targetWatts = 210.0;
+        input.simulation.cadenceRpm = 89.0;
+        input.heartRate = 149;
+        input.telemetryMonotonicTimeMs =
+                WorkoutGameRunner::monotonicMilliseconds();
+        runner.setTelemetry(input);
+        runner.start(0, 1.0);
+
+        WorkoutGameEngineFrame frame;
+        QVERIFY(waitForFrame(runner, frame));
+        QVERIFY(!frame.telemetryStale);
+        QCOMPARE(frame.watts, 240.0);
+        QCOMPARE(frame.cadenceRpm, 89);
+        QCOMPARE(frame.heartRate, 149);
     }
 };
 

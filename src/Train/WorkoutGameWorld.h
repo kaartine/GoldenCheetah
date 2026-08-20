@@ -13,6 +13,8 @@
 #include <cstdint>
 #include <memory>
 
+struct WorkoutGameRoadCourse;
+
 enum class WorkoutGameTerrainKind
 {
     SmoothTrail,
@@ -63,6 +65,7 @@ struct WorkoutGamePhysicsInput
     std::int64_t workoutTimeMs = 0;
     WorkoutGameTerrainKind terrain = WorkoutGameTerrainKind::SmoothTrail;
     double desiredSpeedMetersPerSecond = 0.0;
+    double courseDistanceMeters = -1.0;
     double gradePercent = 0.0;
     double difficulty = 0.0;
     double effortRatio = 0.0;
@@ -81,6 +84,7 @@ public:
     WorkoutGamePhysics &operator=(const WorkoutGamePhysics &) = delete;
 
     bool configure(std::uint32_t seed);
+    bool configure(const WorkoutGameRoadCourse &course);
     void reset();
     WorkoutGameWorldSnapshot update(const WorkoutGamePhysicsInput &input);
 

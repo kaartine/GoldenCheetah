@@ -37,6 +37,7 @@ struct WorkoutGameRoadConnector
     double elevationMeters = 0.0;
     double headingRadians = 0.0;
     double halfWidthMeters = 1.4;
+    double gradePercent = 0.0;
 };
 
 struct WorkoutGameRoadChallengeGate

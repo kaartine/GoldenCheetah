@@ -78,6 +78,7 @@ private:
     std::int64_t lastAnchorWorkoutTimeMs = 0;
     std::int64_t lastAnchorMonotonicTimeMs = 0;
     std::int64_t currentWorkoutTimeMs = 0;
+    std::int64_t lastTelemetryMonotonicTimeMs = -1;
     double currentAnchorRate = 1.0;
     double ftpWatts = 0.0;
 };

@@ -44,9 +44,10 @@ bool WorkoutGameEngine::configure(
     ftpWatts = newFtpWatts;
     featureLabEnabled = newFeatureLabEnabled;
     configured = simulation.configure(course, ftpWatts);
-    featureRuntime.configure(WorkoutGameRoadCourseBuilder::build(
-            course, ftpWatts));
-    physics.configure(course.seed);
+    roadCourse = WorkoutGameRoadCourseBuilder::build(course, ftpWatts);
+    if (!physics.configure(roadCourse)) {
+        physics.configure(course.seed);
+    }
     reset();
     return configured;
 }
@@ -56,7 +57,11 @@ void WorkoutGameEngine::reset()
     simulation.reset();
     physics.reset();
     camera.reset();
-    featureRuntime.reset();
+    if (configured) {
+        featureRuntime.configure(roadCourse);
+    } else {
+        featureRuntime.reset();
+    }
     worldClockInitialized = false;
     lastWorldTimeMs = 0;
     riderPedalCycles = 0.0;
@@ -102,9 +107,19 @@ WorkoutGameEngineFrame WorkoutGameEngine::update(
                         ? input.targetWatts : section.targetWatts);
         WorkoutGamePhysicsInput physicsInput;
         physicsInput.workoutTimeMs = snapshot.workoutTimeMs;
+        const WorkoutGameRoadTimelineSample road =
+                WorkoutGameRoadCourseBuilder::sampleAtWorkoutTime(
+                    roadCourse, snapshot.workoutTimeMs);
+        physicsInput.courseDistanceMeters = road.ready
+                ? road.distanceMeters : -1.0;
         physicsInput.terrain = section.terrain;
         physicsInput.desiredSpeedMetersPerSecond = snapshot.speedKph / 3.6;
-        physicsInput.gradePercent = section.gradePercent;
+        const WorkoutGameRoadSample roadSurface = road.ready
+                ? WorkoutGameRoadCourseBuilder::sample(
+                    roadCourse, road.distanceMeters)
+                : WorkoutGameRoadSample();
+        physicsInput.gradePercent = roadSurface.ready
+                ? roadSurface.center.gradePercent : section.gradePercent;
         physicsInput.difficulty = section.difficulty;
         physicsInput.effortRatio = std::max(0.0, input.actualWatts) / target;
         physicsInput.paused = input.paused;
@@ -128,7 +143,7 @@ WorkoutGameEngineFrame WorkoutGameEngine::update(
         lastWorldTimeMs = input.workoutTimeMs;
     }
 
-    result.visual = {snapshot, {}, world, view, {}};
+    result.visual = {snapshot, {}, world, view, {}, feature};
     result.visual.presentationTimeMs = presentationTimeMs;
     result.visual.skippedSimulationTicks = skippedTicks;
     result.visual.riderPedalCycles = riderPedalCycles;

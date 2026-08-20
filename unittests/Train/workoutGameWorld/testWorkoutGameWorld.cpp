@@ -8,6 +8,7 @@
  */
 
 #include "Train/WorkoutGameWorld.h"
+#include "Train/WorkoutGameRoadCourse.h"
 
 #include <QTest>
 
@@ -20,6 +21,53 @@ class TestWorkoutGameWorld : public QObject
     Q_OBJECT
 
 private slots:
+    void authoritativeDistanceUsesTheRenderedCourseSurface()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 91u;
+        course.durationMs = 12000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::SprintJump;
+        section.terrain = WorkoutGameTerrainKind::LogOver;
+        section.durationMs = course.durationMs;
+        section.targetWatts = 240.0;
+        section.gradePercent = 4.0;
+        section.difficulty = 0.6;
+        section.challengeCount = 1;
+        course.sections = {section};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        QVERIFY(road.ready);
+
+        WorkoutGamePhysics physics;
+        QVERIFY(physics.configure(road));
+        WorkoutGamePhysicsInput input;
+        input.terrain = section.terrain;
+        input.desiredSpeedMetersPerSecond = 5.0;
+        input.effortRatio = 1.0;
+        double previousDistance = 0.0;
+        std::uint64_t physicsGeneration = 0;
+        for (int tick = 0; tick <= 100; ++tick) {
+            input.workoutTimeMs = tick * 20;
+            input.courseDistanceMeters = tick * 0.1;
+            const WorkoutGameRoadSample surface =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        road, input.courseDistanceMeters);
+            input.gradePercent = surface.center.gradePercent;
+            const WorkoutGameWorldSnapshot frame = physics.update(input);
+            QVERIFY(frame.ready);
+            QCOMPARE(frame.rider.distanceMeters,
+                     input.courseDistanceMeters);
+            QVERIFY(frame.rider.distanceMeters >= previousDistance);
+            QVERIFY(std::isfinite(frame.rider.elevationMeters));
+            QVERIFY(std::isfinite(frame.rider.clearanceMeters));
+            if (tick == 0) physicsGeneration = frame.generation;
+            QCOMPARE(frame.generation, physicsGeneration);
+            previousDistance = frame.rider.distanceMeters;
+        }
+    }
+
     void terrainProfilesAreDeterministicAndPeriodic()
     {
         for (WorkoutGameTerrainKind terrain : {

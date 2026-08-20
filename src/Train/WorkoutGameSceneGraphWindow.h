@@ -65,7 +65,6 @@ private:
 
     WorkoutGameRoadCourse roadCourse;
     WorkoutGameCourse currentCourse;
-    WorkoutGameFeatureRuntime featureRuntime;
     WorkoutGameVisualSnapshot currentFrame;
     WorkoutGameVisualSmoother visualSmoother;
     QElapsedTimer visualClock;

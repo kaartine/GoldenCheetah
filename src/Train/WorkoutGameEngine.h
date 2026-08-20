@@ -17,6 +17,7 @@ struct WorkoutGameEngineInput
 {
     WorkoutGameSimulationInput simulation;
     int heartRate = 0;
+    std::int64_t telemetryMonotonicTimeMs = -1;
 };
 
 struct WorkoutGameEngineFrame
@@ -29,6 +30,7 @@ struct WorkoutGameEngineFrame
     int virtualGear = 1;
     std::uint64_t sequence = 0;
     std::size_t skippedTicks = 0;
+    bool telemetryStale = false;
 };
 
 class WorkoutGameEngine
@@ -53,6 +55,7 @@ private:
     double ftpWatts = 0.0;
     bool featureLabEnabled = false;
     bool configured = false;
+    WorkoutGameRoadCourse roadCourse;
     bool worldClockInitialized = false;
     std::int64_t lastWorldTimeMs = 0;
     double riderPedalCycles = 0.0;

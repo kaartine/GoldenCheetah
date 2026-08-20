@@ -78,6 +78,7 @@ private slots:
             QVERIFY(near(prior.elevationMeters, next.elevationMeters));
             QVERIFY(near(prior.headingRadians, next.headingRadians));
             QVERIFY(near(prior.halfWidthMeters, next.halfWidthMeters));
+            QVERIFY(near(prior.gradePercent, next.gradePercent));
         }
     }
 
@@ -106,6 +107,17 @@ private slots:
                 >= jump->startDistanceMeters);
         QVERIFY(jump->challenge.obstacleDistanceMeters
                 <= jump->startDistanceMeters + jump->lengthMeters);
+        const WorkoutGameRoadSample obstacle =
+                WorkoutGameRoadCourseBuilder::sample(
+                    road, jump->challenge.obstacleDistanceMeters);
+        const WorkoutGameRoadSample approach =
+                WorkoutGameRoadCourseBuilder::sample(
+                    road, jump->challenge.obstacleDistanceMeters - 1.1);
+        QVERIFY(obstacle.ready);
+        QVERIFY(approach.ready);
+        QVERIFY(obstacle.center.elevationMeters
+                > approach.center.elevationMeters + 0.15);
+        QVERIFY(std::isfinite(obstacle.center.gradePercent));
     }
 
     void generationAndSamplingAreDeterministic()

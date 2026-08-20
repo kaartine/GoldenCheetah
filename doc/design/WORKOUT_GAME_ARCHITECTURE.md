@@ -253,7 +253,7 @@ Mutable state has the following owners:
 | Feature decisions and one-shot action IDs | `WorkoutGameEngine` on the runner thread |
 | Box2D world, vehicle contacts and suspension | `WorkoutGameEngine` on the runner thread |
 | Camera target and transition | `WorkoutGameEngine` on the runner thread |
-| Workout-time-to-road mapping | Immutable `WorkoutGameRoadCourse`, sampled by the scene graph |
+| Workout-time-to-road mapping and sampled surface | Immutable `WorkoutGameRoadCourse`; the engine publishes its authoritative distance, while Box2D and the scene graph sample the same elevation and grade |
 | Feature and trail meshes | Immutable course-space values from `WorkoutGameMeshLibrary`; projected by the scene graph |
 | Visual interpolation, projected trail and render diagnostics | `WorkoutGameSceneGraphItem::updatePaintNode` during Qt scene graph synchronization |
 | Runner input and latest output slot | Separate small mutexes in `WorkoutGameRunner`; heavy simulation occurs outside both critical sections |
@@ -263,10 +263,11 @@ Mutable state has the following owners:
 Course builders and adapters are pure or value-oriented preparation modules.
 They do not participate in the frame loop. The primary renderer keeps QSG nodes
 alive between frames but currently regenerates their dynamic vertex contents.
-Box2D owns only the local visual bicycle world; the time-to-road timeline owns
-the primary rendered longitudinal position. This split is deliberate for
-workout safety, but it also means that road position and the Box2D bicycle are
-not yet one authoritative simulated body.
+The workout-time-to-road timeline owns longitudinal progress. Each engine tick
+passes that distance to Box2D and publishes it with the resulting vehicle pose,
+feature state, and camera. `WorkoutGameRoadCourse::sample()` supplies the same
+surface elevation and grade to collider construction and pseudo-3D projection,
+so a visible obstacle and its physical response share course coordinates.
 
 #### Course-Space 2.5D Geometry
 
@@ -296,59 +297,46 @@ nodes or textures whose lifetime belongs to the render thread.
 
 ### Current Gaps And Priorities
 
-1. **P0: road position and surface are not yet canonical.** Rendering derives
-   distance and feature placement from the workout timeline, while Box2D
-   integrates a separate periodic side profile. Introduce one sampled course
-   surface and one authoritative road distance for rules, physics, features,
-   camera, projection, grade, tangent, and normal. Until then a visible obstacle
-   cannot be proven to occupy the same world position as its collision response.
-2. **P0: feature presentation is recomputed after physics.** The engine uses a
-   feature snapshot to trigger physics, but the renderer recomputes feature
-   state from an interpolated workout snapshot. Publish the authoritative
-   feature state in every engine frame and interpolate only its continuous
-   presentation fields. Physics owns displacement; feature state owns animation
-   phases rather than adding a second jump arc.
-3. **P0: telemetry history and validity are undefined.** Several samples can
-   arrive between runner input copies and the newest value is held indefinitely.
-   Normalize timestamps into one monotonic domain, consume a bounded ring in
-   timestamp order, count or reject out-of-order values, and expire power,
-   cadence, speed, and heart rate independently. A disconnected sensor must not
-   continue moving the rider, satisfying features, or awarding score.
-4. **P1: end-to-end scheduling and frame-pacing evidence is incomplete.** Add a
+1. **P1: telemetry history is still collapsed to the newest sample.** The
+   current monotonic timestamp and two-second expiry prevent disconnected power,
+   cadence, speed, or heart rate from remaining active indefinitely. A bounded
+   timestamped ring is still needed to consume multiple samples in order, count
+   rejected/out-of-order values, and support field-specific validity periods.
+2. **P1: end-to-end scheduling and frame-pacing evidence is incomplete.** Add a
    virtual-clock runner/executor test and retain a bounded raw presentation
    timestamp series. Release analysis must report p50/p95/p99/max frame interval,
    missed refreshes, longest stall, and burst sequences rather than relying only
    on a rolling aggregate.
-5. **P2: incomplete snapshot identity and latency accounting.** Runner frames
+3. **P2: incomplete snapshot identity and latency accounting.** Runner frames
    have publication sequences and timestamps, but diagnostics cannot yet state
    which telemetry sample produced a frame. Add input sequences plus
    sensor-to-display latency.
-6. **P2: generation does not yet span all handoffs.** Runner lifecycle state and
+4. **P2: generation does not yet span all handoffs.** Runner lifecycle state and
    output publication are generation-tagged, while interpolation also rejects
    detected discontinuities. Carry the same session generation on timestamped
    telemetry and render snapshots so stale-session rejection is independently
    testable from device ingestion through presentation.
-7. **P2: direct render handoff remains Qt synchronized.** A future direct
+5. **P2: direct render handoff remains Qt synchronized.** A future direct
    cross-thread buffer needs an explicit ownership and memory-order protocol; a
    plain shared struct plus index would be a data race.
-8. **P2: render work scales poorly with richer courses.** Projection sampling,
+6. **P2: render work scales poorly with richer courses.** Projection sampling,
    temporary vectors, and complete dynamic geometry updates occur every frame.
    The current bounded scene has measured headroom, so optimize only after
    counters show pressure: reuse buffers, retain unchanged chunks, and batch by
    material before adding workers.
-9. **P2: HUD changes recreate a texture.** Telemetry and realized FPS values
+7. **P2: HUD changes recreate a texture.** Telemetry and realized FPS values
    rebuild a `QImage` at most 10 Hz, then replace its scene graph texture. Use a
    persistent dynamic texture only if production profiling still shows pressure.
-10. **P2: course creation is synchronous.** ERG normalization and current small
+8. **P2: course creation is synchronous.** ERG normalization and current small
    procedural courses are cheap, but imported long activities and future asset
    decoding must run as cancelable jobs before their immutable result is
    installed on the GUI thread.
-11. **P2: physics frequency has not been justified by profiling.** The vehicle
+9. **P2: physics frequency has not been justified by profiling.** The vehicle
    path calls Box2D at 120 Hz with four solver substeps. Box2D documents a fixed
    60 Hz primary step with substeps as a common starting point. Compare 60/4,
    120/2, and the current 120/4 against contact quality and CPU time before
    treating the current rate as a requirement.
-12. **P2: presentation cadence needs production telemetry.** The render request
+10. **P2: presentation cadence needs production telemetry.** The render request
     loop follows completed swaps while the runner drain has a 16 ms cap. Record
     graphics API, Qt render loop, swap interval, requested frames, presented
     frames, and sensor-to-display latency before adding adaptive quality or a

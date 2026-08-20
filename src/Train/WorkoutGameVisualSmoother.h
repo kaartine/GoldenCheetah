@@ -11,6 +11,7 @@
 #define _GC_WorkoutGameVisualSmoother_h
 
 #include "WorkoutGameCompetition.h"
+#include "WorkoutGameFeatureRuntime.h"
 #include "WorkoutGameSimulation.h"
 #include "WorkoutGameTerrainTransition.h"
 #include "WorkoutGameWorld.h"
@@ -26,6 +27,7 @@ struct WorkoutGameVisualSnapshot
     WorkoutGameWorldSnapshot world;
     WorkoutGameCameraSnapshot camera;
     WorkoutGameTerrainTransitionSnapshot terrainTransition;
+    WorkoutGameFeatureRuntimeSnapshot feature;
     std::int64_t presentationTimeMs = 0;
     std::size_t skippedSimulationTicks = 0;
     double riderPedalCycles = 0.0;

@@ -9,6 +9,7 @@
 
 #include "WorkoutGameWorld.h"
 #include "WorkoutGameFeatureCatalog.h"
+#include "WorkoutGameRoadCourse.h"
 
 #include <box2d/box2d.h>
 
@@ -100,6 +101,7 @@ struct WorkoutGamePhysics::Impl
     double gradePercent = 0.0;
     double difficulty = 0.0;
     double distanceBase = 0.0;
+    double authoritativeDistanceMeters = -1.0;
     double publishedDistanceMeters = 0.0;
     double elevationBase = 0.0;
     double originBodyY = 0.0;
@@ -108,6 +110,7 @@ struct WorkoutGamePhysics::Impl
     int lastJumpTile = -1;
     std::uint64_t lastFeatureActionId = 0;
     WorkoutGameWorldSnapshot latest;
+    WorkoutGameRoadCourse roadCourse;
 
     b2WorldId world = b2_nullWorldId;
     b2BodyId chassis = b2_nullBodyId;
@@ -186,14 +189,29 @@ struct WorkoutGamePhysics::Impl
         const b2BodyId ground = b2CreateBody(world, &groundDefinition);
         b2ShapeDef terrainShape = b2DefaultShapeDef();
         terrainShape.material.friction = 1.1f;
+        const auto surfaceHeight = [this](double localX) {
+            if (roadCourse.ready) {
+                const WorkoutGameRoadSample sample =
+                        WorkoutGameRoadCourseBuilder::sample(
+                            roadCourse,
+                            distanceBase + localX - RiderStartMeters);
+                const WorkoutGameRoadSample origin =
+                        WorkoutGameRoadCourseBuilder::sample(
+                            roadCourse, distanceBase);
+                if (sample.ready && origin.ready) {
+                    return sample.center.elevationMeters
+                            - origin.center.elevationMeters;
+                }
+            }
+            return WorkoutGamePhysics::terrainHeight(
+                    terrain, localX, gradePercent, difficulty, seed);
+        };
         double priorX = TerrainStartMeters;
-        double priorY = WorkoutGamePhysics::terrainHeight(
-                terrain, priorX, gradePercent, difficulty, seed);
+        double priorY = surfaceHeight(priorX);
         for (double x = TerrainStartMeters + TerrainSampleMeters;
                 x <= TerrainEndMeters + 0.001;
                 x += TerrainSampleMeters) {
-            const double y = WorkoutGamePhysics::terrainHeight(
-                    terrain, x, gradePercent, difficulty, seed);
+            const double y = surfaceHeight(x);
             const b2Segment segment = {
                 {float(priorX), float(priorY)},
                 {float(x), float(y)}
@@ -203,8 +221,7 @@ struct WorkoutGamePhysics::Impl
             priorY = y;
         }
 
-        const double groundY = WorkoutGamePhysics::terrainHeight(
-                terrain, RiderStartMeters, gradePercent, difficulty, seed);
+        const double groundY = surfaceHeight(RiderStartMeters);
         b2BodyDef chassisDefinition = b2DefaultBodyDef();
         chassisDefinition.type = b2_dynamicBody;
         chassisDefinition.position = {
@@ -273,6 +290,34 @@ struct WorkoutGamePhysics::Impl
         b2Body_ApplyForceToCenter(chassis, {force, 0.0f}, true);
     }
 
+    void synchronizeDistance(double distanceMeters)
+    {
+        if (!std::isfinite(distanceMeters) || distanceMeters < 0.0
+                || B2_IS_NULL(world)) {
+            return;
+        }
+        authoritativeDistanceMeters = distanceMeters;
+        const double targetLocalX = RiderStartMeters
+                + authoritativeDistanceMeters - distanceBase;
+        if (targetLocalX < 0.0 || targetLocalX > RebaseAtMeters) {
+            const WorkoutGameWorldSnapshot before = captureSnapshot();
+            distanceBase = authoritativeDistanceMeters;
+            elevationBase = before.ready
+                    ? before.rider.elevationMeters : elevationBase;
+            createWorld();
+            return;
+        }
+
+        const double delta = targetLocalX - b2Body_GetPosition(chassis).x;
+        if (std::abs(delta) <= 1e-6) return;
+        for (b2BodyId body : {chassis, rearWheel, frontWheel}) {
+            b2Body_SetTransform(
+                    body,
+                    b2Body_GetPosition(body) + b2Vec2{float(delta), 0.0f},
+                    b2Body_GetRotation(body));
+        }
+    }
+
     WorkoutGameWorldSnapshot snapshot() const
     {
         WorkoutGameWorldSnapshot result;
@@ -286,11 +331,18 @@ struct WorkoutGamePhysics::Impl
         result.seed = seed;
         result.gradePercent = gradePercent;
         result.difficulty = difficulty;
-        result.rider.distanceMeters = distanceBase
-                + double(position.x) - RiderStartMeters;
+        result.rider.distanceMeters = authoritativeDistanceMeters >= 0.0
+                ? authoritativeDistanceMeters
+                : distanceBase + double(position.x) - RiderStartMeters;
         result.terrainOffsetMeters = double(position.x)
                 - result.rider.distanceMeters;
-        result.rider.elevationMeters = elevationBase
+        const WorkoutGameRoadSample road = roadCourse.ready
+                ? WorkoutGameRoadCourseBuilder::sample(
+                    roadCourse, result.rider.distanceMeters)
+                : WorkoutGameRoadSample();
+        const double surfaceElevation = road.ready
+                ? road.center.elevationMeters : elevationBase;
+        result.rider.elevationMeters = surfaceElevation
                 + double(position.y) - originBodyY;
         result.rider.pitchDegrees = radiansToDegrees(
                 b2Rot_GetAngle(b2Body_GetRotation(chassis)));
@@ -300,9 +352,21 @@ struct WorkoutGamePhysics::Impl
                 b2Body_GetRotation(rearWheel));
         result.rider.frontWheelRadians = b2Rot_GetAngle(
                 b2Body_GetRotation(frontWheel));
-        result.rider.clearanceMeters = double(position.y)
-                - WorkoutGamePhysics::terrainHeight(
+        const WorkoutGameRoadSample ground = roadCourse.ready
+                ? WorkoutGameRoadCourseBuilder::sample(
+                    roadCourse, distanceBase + double(position.x)
+                        - RiderStartMeters)
+                : WorkoutGameRoadSample();
+        const WorkoutGameRoadSample groundOrigin = roadCourse.ready
+                ? WorkoutGameRoadCourseBuilder::sample(
+                    roadCourse, distanceBase)
+                : WorkoutGameRoadSample();
+        const double groundY = ground.ready && groundOrigin.ready
+                ? ground.center.elevationMeters
+                    - groundOrigin.center.elevationMeters
+                : WorkoutGamePhysics::terrainHeight(
                     terrain, position.x, gradePercent, difficulty, seed);
+        result.rider.clearanceMeters = double(position.y) - groundY;
         result.rider.airborne = !grounded();
         result.rider.walking = weakClimbMicroseconds
                 >= WalkDecisionMicroseconds;
@@ -397,7 +461,19 @@ WorkoutGamePhysics::~WorkoutGamePhysics() = default;
 
 bool WorkoutGamePhysics::configure(std::uint32_t seed)
 {
+    impl->roadCourse = WorkoutGameRoadCourse();
     impl->seed = seed == 0 ? 2166136261u : seed;
+    impl->configured = true;
+    impl->generation = 0;
+    reset();
+    return true;
+}
+
+bool WorkoutGamePhysics::configure(const WorkoutGameRoadCourse &course)
+{
+    if (!course.ready || course.pieces.empty()) return false;
+    impl->roadCourse = course;
+    impl->seed = course.seed == 0 ? 2166136261u : course.seed;
     impl->configured = true;
     impl->generation = 0;
     reset();
@@ -412,6 +488,7 @@ void WorkoutGamePhysics::reset()
     impl->remainderMicroseconds = 0;
     impl->weakClimbMicroseconds = 0;
     impl->distanceBase = 0.0;
+    impl->authoritativeDistanceMeters = -1.0;
     impl->publishedDistanceMeters = 0.0;
     impl->elevationBase = 0.0;
     impl->landingImpact = 0.0;
@@ -517,6 +594,14 @@ WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
             finiteOr(input.difficulty, 0.0), 0.0, 1.0);
     input.effortRatio = std::clamp(
             finiteOr(input.effortRatio, 0.0), 0.0, 3.0);
+    input.courseDistanceMeters = std::isfinite(input.courseDistanceMeters)
+            && input.courseDistanceMeters >= 0.0
+            ? input.courseDistanceMeters : -1.0;
+    impl->authoritativeDistanceMeters = input.courseDistanceMeters;
+    if (!impl->initialized && input.courseDistanceMeters >= 0.0) {
+        impl->distanceBase = input.courseDistanceMeters;
+        impl->publishedDistanceMeters = input.courseDistanceMeters;
+    }
 
     if (impl->initialized && input.workoutTimeMs < impl->lastWorkoutTimeMs) {
         reset();
@@ -524,8 +609,9 @@ WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
 
     const bool terrainChanged = !impl->initialized
             || input.terrain != impl->terrain
-            || input.gradePercent != impl->gradePercent
-            || input.difficulty != impl->difficulty;
+            || (!impl->roadCourse.ready
+                && (input.gradePercent != impl->gradePercent
+                    || input.difficulty != impl->difficulty));
     if (terrainChanged) {
         if (impl->initialized) {
             impl->latest = impl->captureSnapshot();
@@ -537,6 +623,9 @@ WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
         impl->gradePercent = input.gradePercent;
         impl->difficulty = input.difficulty;
         impl->createWorld();
+    } else {
+        impl->gradePercent = input.gradePercent;
+        impl->difficulty = input.difficulty;
     }
 
     if (!impl->initialized) {
@@ -545,6 +634,8 @@ WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
         impl->latest = impl->captureSnapshot();
         return impl->latest;
     }
+
+    impl->synchronizeDistance(input.courseDistanceMeters);
 
     const std::int64_t elapsedMs = input.workoutTimeMs - impl->lastWorkoutTimeMs;
     impl->lastWorkoutTimeMs = input.workoutTimeMs;

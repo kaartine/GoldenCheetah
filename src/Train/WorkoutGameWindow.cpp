@@ -260,6 +260,7 @@ void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
     lastAnchorWorkoutTimeMs = 0;
     lastAnchorMonotonicTimeMs = 0;
     currentWorkoutTimeMs = 0;
+    lastTelemetryMonotonicTimeMs = -1;
     currentAnchorRate = 1.0;
     updateAtWorkoutPosition(0);
     drainRunnerFrame();
@@ -269,6 +270,8 @@ void WorkoutGameWindow::telemetryUpdate(const RealtimeData &telemetry)
 {
     latestTelemetry = telemetry;
     hasTelemetry = true;
+    lastTelemetryMonotonicTimeMs =
+            WorkoutGameRunner::monotonicMilliseconds();
     updateRunnerTelemetry();
 }
 
@@ -366,6 +369,7 @@ void WorkoutGameWindow::updateRunnerTelemetry()
     WorkoutGameEngineInput input;
     input.simulation.workoutTimeMs = currentWorkoutTimeMs;
     input.simulation.paused = paused;
+    input.telemetryMonotonicTimeMs = lastTelemetryMonotonicTimeMs;
     if (hasTelemetry) {
         input.simulation.actualWatts = finiteClampedNonNegative(
                 latestTelemetry.getWatts(), MaximumPowerWatts);

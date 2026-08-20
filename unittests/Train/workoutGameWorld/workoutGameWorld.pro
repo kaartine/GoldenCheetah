@@ -4,9 +4,15 @@ CONFIG += c++17
 TARGET = testWorkoutGameWorld
 
 SOURCES = testWorkoutGameWorld.cpp \
+          ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
+          ../../../src/Train/WorkoutGameRoadCourse.cpp \
           ../../../src/Train/WorkoutGameWorld.cpp
 
-HEADERS = ../../../src/Train/WorkoutGameWorld.h
+HEADERS = ../../../src/Train/WorkoutGameCourse.h \
+          ../../../src/Train/WorkoutGameFeatureCatalog.h \
+          ../../../src/Train/WorkoutGameFeatureChallenge.h \
+          ../../../src/Train/WorkoutGameRoadCourse.h \
+          ../../../src/Train/WorkoutGameWorld.h
 
 BOX2D_ROOT = $$clean_path($$_PRO_FILE_PWD_/../../../vendor/box2d-3.1.1)
 include($$BOX2D_ROOT/box2d.pri)

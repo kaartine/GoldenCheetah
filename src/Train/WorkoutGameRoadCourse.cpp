@@ -17,11 +17,90 @@
 namespace {
 
 constexpr int IntegrationSteps = 48;
+constexpr double Pi = 3.14159265358979323846;
 
 double smoothStep(double value)
 {
     const double clamped = std::clamp(value, 0.0, 1.0);
     return clamped * clamped * (3.0 - 2.0 * clamped);
+}
+
+double smootherStep(double value)
+{
+    const double clamped = std::clamp(value, 0.0, 1.0);
+    return clamped * clamped * clamped
+            * (clamped * (clamped * 6.0 - 15.0) + 10.0);
+}
+
+double challengeSurfaceOffset(
+        const WorkoutGameRoadPiece &piece,
+        double distanceMeters)
+{
+    const double progress = piece.lengthMeters > 0.0
+            ? std::clamp(
+                (distanceMeters - piece.startDistanceMeters)
+                    / piece.lengthMeters,
+                0.0, 1.0)
+            : 0.0;
+    const double envelope = std::pow(std::sin(Pi * progress), 2.0);
+    double offset = 0.0;
+    switch (piece.terrain) {
+    case WorkoutGameTerrainKind::Roots:
+        offset += 0.07 * envelope
+                * std::pow(std::sin(8.0 * Pi * progress), 2.0);
+        break;
+    case WorkoutGameTerrainKind::RockGarden:
+        offset += 0.16 * envelope
+                * (0.35 + 0.65
+                    * std::pow(std::sin(7.0 * Pi * progress), 2.0));
+        break;
+    case WorkoutGameTerrainKind::Rollers:
+        offset += 0.28 * envelope * std::sin(4.0 * Pi * progress);
+        break;
+    default:
+        break;
+    }
+    if (!piece.challenge.enabled) return offset;
+
+    const double local = distanceMeters
+            - piece.challenge.obstacleDistanceMeters;
+    switch (piece.terrain) {
+    case WorkoutGameTerrainKind::BunnyHop:
+    case WorkoutGameTerrainKind::LogOver:
+        if (std::abs(local) < 1.0) {
+            const double height = piece.terrain
+                    == WorkoutGameTerrainKind::LogOver ? 0.28 : 0.18;
+            offset += height * (1.0 - smootherStep(std::abs(local)));
+        }
+        break;
+    case WorkoutGameTerrainKind::Tabletop:
+        if (local >= -4.0 && local < 0.0) {
+            offset += 0.75 * smootherStep((local + 4.0) / 4.0);
+        } else if (local >= 0.0 && local <= 4.0) {
+            offset += 0.75;
+        } else if (local > 4.0 && local < 8.0) {
+            offset += 0.75 * (1.0 - smootherStep((local - 4.0) / 4.0));
+        }
+        break;
+    case WorkoutGameTerrainKind::RockSlab:
+        if (local >= -3.0 && local < 0.0) {
+            offset += 0.42 * smootherStep((local + 3.0) / 3.0);
+        } else if (local >= 0.0 && local <= 3.0) {
+            offset += 0.42;
+        } else if (local > 3.0 && local < 6.0) {
+            offset += 0.42 * (1.0 - smootherStep((local - 3.0) / 3.0));
+        }
+        break;
+    case WorkoutGameTerrainKind::Drop:
+        if (local >= -1.5 && local <= 0.5) {
+            offset += 0.18 * std::sin(
+                    Pi * (local + 1.5) / 2.0);
+        }
+        break;
+    default:
+        break;
+    }
+    return offset;
 }
 
 double targetHalfWidth(WorkoutGameTerrainKind terrain)
@@ -108,8 +187,27 @@ WorkoutGameRoadConnector connectorAt(
     WorkoutGameRoadConnector result = piece.entry;
     result.headingRadians = piece.entry.headingRadians
             + piece.turnRadians * smoothStep(progress);
-    result.elevationMeters = piece.entry.elevationMeters
-            + piece.riseMeters * smoothStep(progress);
+    const double startElevation = piece.entry.elevationMeters;
+    const double endElevation = startElevation + piece.riseMeters;
+    const double startTangent = piece.entry.gradePercent
+            * piece.lengthMeters / 100.0;
+    const double endTangent = piece.exit.gradePercent
+            * piece.lengthMeters / 100.0;
+    const double p2 = progress * progress;
+    const double p3 = p2 * progress;
+    result.elevationMeters = (2.0 * p3 - 3.0 * p2 + 1.0)
+                * startElevation
+            + (p3 - 2.0 * p2 + progress) * startTangent
+            + (-2.0 * p3 + 3.0 * p2) * endElevation
+            + (p3 - p2) * endTangent;
+    const double elevationDerivative =
+            (6.0 * p2 - 6.0 * progress) * startElevation
+            + (3.0 * p2 - 4.0 * progress + 1.0) * startTangent
+            + (-6.0 * p2 + 6.0 * progress) * endElevation
+            + (3.0 * p2 - 2.0 * progress) * endTangent;
+    result.gradePercent = piece.lengthMeters > 0.0
+            ? elevationDerivative / piece.lengthMeters * 100.0
+            : piece.exit.gradePercent;
     result.halfWidthMeters = piece.entry.halfWidthMeters
             + (piece.exit.halfWidthMeters - piece.entry.halfWidthMeters)
                 * smoothStep(progress);
@@ -204,6 +302,7 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
             piece.entry = connector;
             piece.exit = connector;
             piece.exit.halfWidthMeters = targetHalfWidth(section.terrain);
+            piece.exit.gradePercent = section.gradePercent;
             piece.exit = connectorAt(piece, 1.0);
 
             const double pieceEnd = piece.startDistanceMeters
@@ -307,5 +406,20 @@ WorkoutGameRoadSample WorkoutGameRoadCourseBuilder::sample(
     result.distanceMeters = distance;
     result.pieceProgress = progress;
     result.center = connectorAt(piece, progress);
+    result.center.elevationMeters += challengeSurfaceOffset(piece, distance);
+    const double sampleRadius = std::min(0.05, piece.lengthMeters * 0.1);
+    if (sampleRadius > 0.0) {
+        const double low = std::max(
+                piece.startDistanceMeters, distance - sampleRadius);
+        const double high = std::min(
+                piece.startDistanceMeters + piece.lengthMeters,
+                distance + sampleRadius);
+        if (high > low) {
+            result.center.gradePercent +=
+                    (challengeSurfaceOffset(piece, high)
+                     - challengeSurfaceOffset(piece, low))
+                    / (high - low) * 100.0;
+        }
+    }
     return result;
 }
