@@ -12,6 +12,8 @@
 #include "WorkoutGameRoadProjection.h"
 
 #include <QColor>
+#include <QDir>
+#include <QDebug>
 #include <QFont>
 #include <QMatrix4x4>
 #include <QPainter>
@@ -22,6 +24,7 @@
 #include <QSGSimpleTextureNode>
 #include <QSGTransformNode>
 #include <QSGVertexColorMaterial>
+#include <QTimer>
 
 #include <algorithm>
 #include <cmath>
@@ -31,6 +34,13 @@
 namespace {
 
 using Vertex = QSGGeometry::ColoredPoint2D;
+
+bool environmentEnabled(const char *name)
+{
+    const QByteArray value = qgetenv(name).trimmed().toLower();
+    return !value.isEmpty() && value != "0" && value != "false"
+            && value != "off" && value != "no";
+}
 
 struct WorkoutGameSceneRoot : public QSGNode
 {
@@ -221,6 +231,81 @@ void buildRoadGeometry(
     }
 }
 
+bool projectedSliceAt(
+        const WorkoutGameRoadProjectionFrame &projection,
+        double worldDistanceMeters,
+        WorkoutGameRoadProjectedSlice &result)
+{
+    if (projection.slices.size() < 2
+            || worldDistanceMeters > projection.slices.front().worldDistanceMeters
+            || worldDistanceMeters < projection.slices.back().worldDistanceMeters) {
+        return false;
+    }
+    for (std::size_t index = 1; index < projection.slices.size(); ++index) {
+        const WorkoutGameRoadProjectedSlice &far = projection.slices[index - 1];
+        const WorkoutGameRoadProjectedSlice &near = projection.slices[index];
+        if (worldDistanceMeters > far.worldDistanceMeters
+                || worldDistanceMeters < near.worldDistanceMeters) {
+            continue;
+        }
+        const double span = far.worldDistanceMeters - near.worldDistanceMeters;
+        const double amount = span > 1e-9
+                ? (far.worldDistanceMeters - worldDistanceMeters) / span
+                : 0.0;
+        result = near;
+        result.worldDistanceMeters = worldDistanceMeters;
+        result.depthMeters = far.depthMeters
+                + (near.depthMeters - far.depthMeters) * amount;
+        result.centerX = far.centerX + (near.centerX - far.centerX) * amount;
+        result.centerY = far.centerY + (near.centerY - far.centerY) * amount;
+        result.halfWidthPixels = far.halfWidthPixels
+                + (near.halfWidthPixels - far.halfWidthPixels) * amount;
+        return true;
+    }
+    return false;
+}
+
+void buildMotionCueGeometry(
+        const WorkoutGameRoadProjectionFrame &projection,
+        std::vector<Vertex> &features)
+{
+    if (projection.slices.size() < 2) return;
+    constexpr double SpacingMeters = 4.0;
+    constexpr double LengthMeters = 0.55;
+    const double nearDistance = projection.slices.back().worldDistanceMeters;
+    const double farDistance = projection.slices.front().worldDistanceMeters;
+    const std::int64_t firstMarker = std::int64_t(
+            std::ceil(nearDistance / SpacingMeters));
+    for (std::int64_t markerIndex = firstMarker;; ++markerIndex) {
+        const double markerDistance = double(markerIndex) * SpacingMeters;
+        if (markerDistance + LengthMeters > farDistance) break;
+        WorkoutGameRoadProjectedSlice near;
+        WorkoutGameRoadProjectedSlice far;
+        if (!projectedSliceAt(projection, markerDistance, near)
+                || !projectedSliceAt(
+                    projection, markerDistance + LengthMeters, far)) {
+            continue;
+        }
+        const double lateral = markerIndex % 3 == 0
+                ? -0.32 : markerIndex % 3 == 1 ? 0.08 : 0.35;
+        const float nearCenter = float(near.centerX
+                + lateral * near.halfWidthPixels);
+        const float farCenter = float(far.centerX
+                + lateral * far.halfWidthPixels);
+        const float nearHalfWidth = std::max(
+                1.2f, float(near.halfWidthPixels * 0.07));
+        const float farHalfWidth = std::max(
+                0.7f, float(far.halfWidthPixels * 0.07));
+        appendQuad(features,
+                   farCenter - farHalfWidth, float(far.centerY),
+                   farCenter + farHalfWidth,
+                   nearCenter - nearHalfWidth, float(near.centerY),
+                   nearCenter + nearHalfWidth,
+                   markerIndex & 1 ? QColor(91, 69, 46, 210)
+                                   : QColor(155, 122, 77, 190));
+    }
+}
+
 void buildFeatureGeometry(
         const WorkoutGameRoadCourse &course,
         const WorkoutGameRoadProjectionFrame &projection,
@@ -392,6 +477,8 @@ WorkoutGameSceneGraphItem::WorkoutGameSceneGraphItem(QQuickItem *parent) :
     riderImage(QStringLiteral(":/images/workout-game-rider-oblique.png"))
 {
     setFlag(ItemHasContents, true);
+    diagnosticsEnabled = environmentEnabled("GC_WORKOUT_GAME_DIAGNOSTICS");
+    traceEnabled = environmentEnabled("GC_WORKOUT_GAME_TRACE");
     visualClock.start();
     rebuildHud();
 }
@@ -405,6 +492,10 @@ void WorkoutGameSceneGraphItem::setCourse(
     currentFrame = {};
     visualSmoother.reset();
     frameRateCounter.reset();
+    diagnostics.reset();
+    publishedDiagnostics = {};
+    frameNumber = 0;
+    lastDiagnosticsPublishMs = -1;
     rebuildHud();
     update();
 }
@@ -444,14 +535,23 @@ void WorkoutGameSceneGraphItem::setTelemetry(
     update();
 }
 
+void WorkoutGameSceneGraphItem::setSessionRunning(bool running)
+{
+    sessionRunning = running;
+    update();
+}
+
 void WorkoutGameSceneGraphItem::rebuildHud()
 {
-    hudImage = QImage(1240, 78, QImage::Format_RGBA8888_Premultiplied);
+    const int hudHeight = diagnosticsEnabled ? 132 : 78;
+    hudImage = QImage(1240, hudHeight,
+                      QImage::Format_RGBA8888_Premultiplied);
     hudImage.fill(Qt::transparent);
     QPainter painter(&hudImage);
     painter.setRenderHint(QPainter::Antialiasing, false);
     painter.fillRect(hudImage.rect(), QColor(16, 24, 25, 224));
-    painter.fillRect(0, 74, hudImage.width(), 4, QColor(217, 176, 65));
+    painter.fillRect(0, hudHeight - 4, hudImage.width(), 4,
+                     QColor(217, 176, 65));
     QFont labelFont = painter.font();
     labelFont.setPixelSize(13);
     labelFont.setBold(true);
@@ -483,6 +583,42 @@ void WorkoutGameSceneGraphItem::rebuildHud()
         painter.drawText(column.adjusted(8, 28, -4, -4),
                          Qt::AlignLeft | Qt::AlignTop, stats[index].value);
     }
+    if (diagnosticsEnabled) {
+        const WorkoutGameDiagnosticsSnapshot &snapshot = publishedDiagnostics;
+        painter.fillRect(0, 74, hudImage.width(), 54, QColor(8, 13, 14, 230));
+        QFont diagnosticFont = labelFont;
+        diagnosticFont.setPixelSize(12);
+        painter.setFont(diagnosticFont);
+        painter.setPen(snapshot.backwardFrameCount > 0
+                ? QColor(255, 116, 96) : QColor(186, 211, 198));
+        const auto &input = snapshot.input;
+        painter.drawText(
+                QRect(8, 76, hudImage.width() - 16, 24),
+                Qt::AlignLeft | Qt::AlignVCenter,
+                QStringLiteral(
+                    "ROAD %1 m  SRC %2 m  d %3 m  SEC %4 %5%  "
+                    "TIME %6/%7 ms")
+                    .arg(input.renderedRoadDistanceMeters, 0, 'f', 2)
+                    .arg(input.sourceRoadDistanceMeters, 0, 'f', 2)
+                    .arg(snapshot.frameDistanceDeltaMeters, 0, 'f', 3)
+                    .arg(input.renderedSection)
+                    .arg(int(std::lround(
+                            input.renderedSectionProgress * 100.0)))
+                    .arg(input.renderedWorkoutTimeMs)
+                    .arg(input.sourceWorkoutTimeMs));
+        painter.drawText(
+                QRect(8, 100, hudImage.width() - 16, 24),
+                Qt::AlignLeft | Qt::AlignVCenter,
+                QStringLiteral(
+                    "DT %1 ms  MAX %2 ms  LATE %3  BACK %4  "
+                    "STILL %5  FRAME %6")
+                    .arg(snapshot.frameIntervalMs)
+                    .arg(snapshot.largestFrameIntervalMs)
+                    .arg(snapshot.lateFrameCount)
+                    .arg(snapshot.backwardFrameCount)
+                    .arg(snapshot.stationaryFrameCount)
+                    .arg(input.frameNumber));
+    }
     ++hudRevision;
 }
 
@@ -491,6 +627,35 @@ void WorkoutGameSceneGraphItem::publishFps(double fps)
     if (std::abs(displayedFps - fps) < 0.5) return;
     displayedFps = fps;
     rebuildHud();
+    update();
+}
+
+void WorkoutGameSceneGraphItem::publishDiagnostics(
+        const WorkoutGameDiagnosticsSnapshot &snapshot)
+{
+    publishedDiagnostics = snapshot;
+    if (traceEnabled && snapshot.ready) {
+        const auto &input = snapshot.input;
+        qInfo().nospace()
+                << "workout-game-trace frame=" << input.frameNumber
+                << " mono_ms=" << input.monotonicTimeMs
+                << " source_ms=" << input.sourceWorkoutTimeMs
+                << " render_ms=" << input.renderedWorkoutTimeMs
+                << " source_section=" << input.sourceSection
+                << " render_section=" << input.renderedSection
+                << " source_progress=" << input.sourceSectionProgress
+                << " render_progress=" << input.renderedSectionProgress
+                << " source_road_m=" << input.sourceRoadDistanceMeters
+                << " render_road_m=" << input.renderedRoadDistanceMeters
+                << " delta_m=" << snapshot.frameDistanceDeltaMeters
+                << " frame_ms=" << snapshot.frameIntervalMs
+                << " max_frame_ms=" << snapshot.largestFrameIntervalMs
+                << " late_frames=" << snapshot.lateFrameCount
+                << " backwards=" << snapshot.backwardFrameCount
+                << " stationary=" << snapshot.stationaryFrameCount
+                << " fps=" << input.framesPerSecond;
+    }
+    if (diagnosticsEnabled) rebuildHud();
     update();
 }
 
@@ -528,15 +693,25 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
 
     const std::int64_t nowMs = visualClock.elapsed();
     const WorkoutGameVisualSnapshot visual = visualSmoother.sample(nowMs);
+    const WorkoutGameRoadTimelineSample sourceTimeline =
+            WorkoutGameRoadCourseBuilder::sampleAtWorkoutTime(
+                    roadCourse, currentFrame.simulation.workoutTimeMs);
+    const WorkoutGameRoadTimelineSample renderedTimeline =
+            WorkoutGameRoadCourseBuilder::sampleAtWorkoutTime(
+                    roadCourse, visual.simulation.workoutTimeMs);
+    WorkoutGameSimulationSnapshot featureSimulation = visual.simulation;
+    if (renderedTimeline.ready) {
+        featureSimulation.activeSection =
+                int(renderedTimeline.sourceSectionIndex);
+        featureSimulation.sectionProgress = renderedTimeline.sectionProgress;
+    }
     const WorkoutGameFeatureRuntimeSnapshot feature =
-            featureRuntime.update(visual.simulation);
+            featureRuntime.update(featureSimulation);
     WorkoutGameRoadProjectionConfig config;
     config.viewportWidth = viewportWidth;
     config.viewportHeight = viewportHeight;
-    const double riderDistance = visual.roadDistanceReady
-            ? visual.roadDistanceMeters
-            : feature.ready
-            ? feature.visualDistanceMeters
+    const double riderDistance = renderedTimeline.ready
+            ? renderedTimeline.distanceMeters
             : visual.world.ready
             ? visual.world.rider.distanceMeters
             : roadCourse.totalLengthMeters
@@ -552,6 +727,7 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
     if (projection.ready) {
         buildRoadGeometry(
                 projection, viewportWidth, ground, shoulders, road);
+        buildMotionCueGeometry(projection, features);
         buildFeatureGeometry(roadCourse, projection, feature, features);
     }
     updateGeometry(root->ground, ground);
@@ -610,6 +786,36 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
                        std::max(1.0, hudWidth), std::max(1.0, hudHeight));
 
     const double fps = frameRateCounter.frameRendered(nowMs);
+    WorkoutGameDiagnosticsInput diagnosticsInput;
+    diagnosticsInput.ready = sourceTimeline.ready && renderedTimeline.ready;
+    diagnosticsInput.movingForward = sessionRunning
+            && visual.simulation.ready
+            && !visual.simulation.finished;
+    diagnosticsInput.frameNumber = ++frameNumber;
+    diagnosticsInput.monotonicTimeMs = nowMs;
+    diagnosticsInput.sourceWorkoutTimeMs =
+            currentFrame.simulation.workoutTimeMs;
+    diagnosticsInput.renderedWorkoutTimeMs = visual.simulation.workoutTimeMs;
+    diagnosticsInput.sourceSection = sourceTimeline.ready
+            ? int(sourceTimeline.sourceSectionIndex) : -1;
+    diagnosticsInput.renderedSection = renderedTimeline.ready
+            ? int(renderedTimeline.sourceSectionIndex) : -1;
+    diagnosticsInput.sourceSectionProgress = sourceTimeline.sectionProgress;
+    diagnosticsInput.renderedSectionProgress = renderedTimeline.sectionProgress;
+    diagnosticsInput.sourceRoadDistanceMeters = sourceTimeline.distanceMeters;
+    diagnosticsInput.renderedRoadDistanceMeters = renderedTimeline.distanceMeters;
+    diagnosticsInput.framesPerSecond = fps;
+    const WorkoutGameDiagnosticsSnapshot diagnosticSnapshot =
+            diagnostics.update(diagnosticsInput);
+    if ((diagnosticsEnabled || traceEnabled)
+            && (lastDiagnosticsPublishMs < 0
+                || nowMs - lastDiagnosticsPublishMs >= 250)) {
+        lastDiagnosticsPublishMs = nowMs;
+        QMetaObject::invokeMethod(
+                this, [this, diagnosticSnapshot]() {
+                    publishDiagnostics(diagnosticSnapshot);
+                }, Qt::QueuedConnection);
+    }
     if (fps > 0.0 && std::abs(publishedFps - fps) >= 0.5) {
         publishedFps = fps;
         QMetaObject::invokeMethod(
@@ -637,6 +843,40 @@ WorkoutGameSceneGraphWindow::WorkoutGameSceneGraphWindow(QWindow *parent) :
                                      << message;
                 emit rendererFailed();
             });
+    captureDirectory = QString::fromLocal8Bit(
+            qgetenv("GC_WORKOUT_GAME_CAPTURE_DIR")).trimmed();
+    if (!captureDirectory.isEmpty()) {
+        QDir().mkpath(captureDirectory);
+        bool intervalOk = false;
+        int intervalMs = QString::fromLocal8Bit(
+                qgetenv("GC_WORKOUT_GAME_CAPTURE_MS"))
+                .toInt(&intervalOk);
+        intervalMs = intervalOk ? std::clamp(intervalMs, 50, 5000) : 100;
+        bool frameLimitOk = false;
+        int frameLimit = QString::fromLocal8Bit(
+                qgetenv("GC_WORKOUT_GAME_CAPTURE_FRAMES"))
+                .toInt(&frameLimitOk);
+        frameLimit = frameLimitOk ? std::clamp(frameLimit, 1, 10000) : 300;
+        auto *captureTimer = new QTimer(this);
+        captureTimer->setInterval(intervalMs);
+        connect(captureTimer, &QTimer::timeout, this,
+                [this, captureTimer, frameLimit]() {
+            if (captureFrameNumber >= std::uint64_t(frameLimit)) {
+                captureTimer->stop();
+                return;
+            }
+            if (!isVisible() || !sessionRunning) return;
+            const QImage frame = grabWindow();
+            if (frame.isNull()) return;
+            const QString fileName = QStringLiteral(
+                    "frame-%1.png").arg(
+                        ++captureFrameNumber, 6, 10, QLatin1Char('0'));
+            if (!frame.save(QDir(captureDirectory).filePath(fileName))) {
+                qWarning() << "Workout Game capture failed:" << fileName;
+            }
+        });
+        captureTimer->start();
+    }
 }
 
 void WorkoutGameSceneGraphWindow::setCourse(
@@ -667,6 +907,12 @@ void WorkoutGameSceneGraphWindow::setTelemetry(
 {
     sceneItem->setTelemetry(watts, targetWatts,
                             cadenceRpm, heartRate, virtualGear);
+}
+
+void WorkoutGameSceneGraphWindow::setSessionRunning(bool running)
+{
+    sessionRunning = running;
+    sceneItem->setSessionRunning(running);
 }
 
 void WorkoutGameSceneGraphWindow::resizeEvent(QResizeEvent *event)

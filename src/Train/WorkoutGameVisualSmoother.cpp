@@ -141,15 +141,6 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::sample(
             predictionOrigin.simulation.sectionProgress,
             target.simulation.sectionProgress,
             predictionMs, sourceIntervalMs), 0.0, 1.0);
-    if (result.roadDistanceReady
-            && predictionOrigin.roadDistanceReady
-            && target.roadDistanceReady) {
-        result.roadDistanceMeters = extrapolate(
-                predictionOrigin.roadDistanceMeters,
-                target.roadDistanceMeters,
-                predictionMs, sourceIntervalMs);
-    }
-
     if (result.world.ready) {
         const double predictionSeconds = double(predictionMs) / 1000.0;
         result.world.rider.distanceMeters +=
@@ -226,11 +217,6 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::interpolate(
             from.simulation.challengeReadiness,
             to.simulation.challengeReadiness,
             amount);
-    if (from.roadDistanceReady && to.roadDistanceReady) {
-        result.roadDistanceMeters = lerp(
-                from.roadDistanceMeters, to.roadDistanceMeters, amount);
-    }
-
     for (std::size_t index = 0;
          index < result.competition.competitors.size(); ++index) {
         result.competition.competitors[index].courseProgress = lerp(

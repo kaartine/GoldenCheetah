@@ -62,12 +62,22 @@ struct WorkoutGameRoadPiece
     WorkoutGameRoadChallengeGate challenge;
 };
 
+struct WorkoutGameRoadTimelineSection
+{
+    std::size_t sourceSectionIndex = 0;
+    std::int64_t startTimeMs = 0;
+    std::int64_t durationMs = 0;
+    double startDistanceMeters = 0.0;
+    double endDistanceMeters = 0.0;
+};
+
 struct WorkoutGameRoadCourse
 {
     bool ready = false;
     std::uint32_t seed = 0;
     double totalLengthMeters = 0.0;
     std::vector<WorkoutGameRoadPiece> pieces;
+    std::vector<WorkoutGameRoadTimelineSection> timeline;
 };
 
 struct WorkoutGameRoadSample
@@ -80,6 +90,14 @@ struct WorkoutGameRoadSample
     WorkoutGameRoadConnector center;
 };
 
+struct WorkoutGameRoadTimelineSample
+{
+    bool ready = false;
+    std::size_t sourceSectionIndex = 0;
+    double sectionProgress = 0.0;
+    double distanceMeters = 0.0;
+};
+
 class WorkoutGameRoadCourseBuilder
 {
 public:
@@ -89,6 +107,9 @@ public:
     static WorkoutGameRoadSample sample(
             const WorkoutGameRoadCourse &course,
             double distanceMeters);
+    static WorkoutGameRoadTimelineSample sampleAtWorkoutTime(
+            const WorkoutGameRoadCourse &course,
+            std::int64_t workoutTimeMs);
 };
 
 #endif

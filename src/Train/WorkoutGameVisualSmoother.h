@@ -24,8 +24,6 @@ struct WorkoutGameVisualSnapshot
     WorkoutGameWorldSnapshot world;
     WorkoutGameCameraSnapshot camera;
     WorkoutGameTerrainTransitionSnapshot terrainTransition;
-    bool roadDistanceReady = false;
-    double roadDistanceMeters = 0.0;
 };
 
 class WorkoutGameVisualSmoother

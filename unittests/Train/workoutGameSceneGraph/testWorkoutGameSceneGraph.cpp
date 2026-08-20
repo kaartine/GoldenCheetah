@@ -8,6 +8,7 @@
  */
 
 #include "Train/WorkoutGameSceneGraphWindow.h"
+#include "Train/WorkoutGameDiagnostics.h"
 #include "Train/WorkoutGameFeatureLab.h"
 #include "Train/WorkoutGameFeatureRuntime.h"
 
@@ -19,6 +20,7 @@
 #include <QSGRendererInterface>
 #include <QSet>
 #include <QTest>
+#include <QTemporaryDir>
 
 #include <algorithm>
 
@@ -60,10 +62,12 @@ WorkoutGameVisualSnapshot frameAt(double distanceMeters)
 {
     WorkoutGameVisualSnapshot frame;
     frame.simulation.ready = true;
-    frame.simulation.workoutTimeMs = std::int64_t(distanceMeters * 500.0);
-    frame.simulation.courseProgress = distanceMeters / 500.0;
+    frame.simulation.workoutTimeMs = std::int64_t(distanceMeters * 200.0);
+    frame.simulation.courseProgress = double(frame.simulation.workoutTimeMs)
+            / 90000.0;
     frame.simulation.sectionProgress = std::clamp(
-            (distanceMeters - 190.0) / 100.0, 0.0, 1.0);
+            double(frame.simulation.workoutTimeMs - 30000) / 30000.0,
+            0.0, 1.0);
     frame.simulation.speedKph = 18.4;
     frame.simulation.activeSection = 1;
     frame.world.ready = true;
@@ -82,7 +86,7 @@ WorkoutGameVisualSnapshot featureFrame(
 {
     WorkoutGameVisualSnapshot frame;
     frame.simulation.ready = true;
-    frame.simulation.workoutTimeMs = 69400;
+    frame.simulation.workoutTimeMs = 88200;
     frame.simulation.courseProgress = 0.94;
     frame.simulation.sectionProgress = 0.94;
     frame.simulation.speedKph = 20.0;
@@ -156,6 +160,82 @@ private slots:
         QVERIFY(second.save(screenshotPath));
     }
 
+    void featureLabVisualDistanceNeverMovesBackward()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(course, 200.0));
+
+        WorkoutGameVisualSmoother smoother;
+        double previousDistance = -1.0;
+        for (std::int64_t sourceTimeMs = 0;
+             sourceTimeMs <= course.durationMs; sourceTimeMs += 1000) {
+            const WorkoutGameSimulationSnapshot simulationFrame =
+                    simulation.update(WorkoutGameFeatureLab::input(
+                            course, sourceTimeMs,
+                            WorkoutGameFeatureLabScenario::Pass));
+            WorkoutGameVisualSnapshot frame;
+            frame.simulation = simulationFrame;
+            smoother.setTarget(frame, sourceTimeMs);
+
+            for (std::int64_t renderTimeMs = sourceTimeMs;
+                 renderTimeMs < sourceTimeMs + 1000;
+                 renderTimeMs += 16) {
+                const WorkoutGameVisualSnapshot rendered =
+                        smoother.sample(renderTimeMs);
+                const WorkoutGameRoadTimelineSample timeline =
+                        WorkoutGameRoadCourseBuilder::sampleAtWorkoutTime(
+                                road, rendered.simulation.workoutTimeMs);
+                if (!timeline.ready) continue;
+                QVERIFY2(
+                        timeline.distanceMeters + 1e-9 >= previousDistance,
+                        qPrintable(QStringLiteral(
+                                "road moved backward at source=%1 render=%2: "
+                                "%3 -> %4")
+                                .arg(sourceTimeMs)
+                                .arg(renderTimeMs)
+                                .arg(previousDistance, 0, 'f', 6)
+                                .arg(timeline.distanceMeters, 0, 'f', 6)));
+                previousDistance = timeline.distanceMeters;
+            }
+        }
+    }
+
+    void diagnosticsDetectsBackwardAndStationaryFrames()
+    {
+        WorkoutGameDiagnostics diagnostics;
+        WorkoutGameDiagnosticsInput input;
+        input.ready = true;
+        input.movingForward = true;
+        input.renderedWorkoutTimeMs = 1000;
+        input.renderedRoadDistanceMeters = 10.0;
+        QVERIFY(diagnostics.update(input).ready);
+
+        input.renderedWorkoutTimeMs = 1016;
+        input.monotonicTimeMs = 16;
+        input.renderedRoadDistanceMeters = 10.0;
+        QCOMPARE(diagnostics.update(input).stationaryFrameCount,
+                 std::uint64_t(1));
+
+        input.renderedWorkoutTimeMs = 1032;
+        input.monotonicTimeMs = 48;
+        input.renderedRoadDistanceMeters = 9.75;
+        const WorkoutGameDiagnosticsSnapshot regression =
+                diagnostics.update(input);
+        QCOMPARE(regression.backwardFrameCount, std::uint64_t(1));
+        QCOMPARE(regression.largestRegressionMeters, 0.25);
+        QCOMPARE(regression.frameIntervalMs, std::int64_t(32));
+        QCOMPARE(regression.lateFrameCount, std::uint64_t(1));
+
+        input.renderedWorkoutTimeMs = 0;
+        input.renderedRoadDistanceMeters = 0.0;
+        const WorkoutGameDiagnosticsSnapshot reset = diagnostics.update(input);
+        QCOMPARE(reset.backwardFrameCount, std::uint64_t(0));
+        QCOMPARE(reset.lateFrameCount, std::uint64_t(0));
+    }
+
     void completedAndBypassedFeaturesRenderDifferentLines()
     {
         WorkoutGameSceneGraphWindow window;
@@ -224,6 +304,45 @@ private slots:
             QVERIFY(rendered.save(output));
             prior = rendered;
         }
+    }
+
+    void capturesSceneFramesDirectly()
+    {
+        QTemporaryDir captures;
+        QVERIFY(captures.isValid());
+        qputenv("GC_WORKOUT_GAME_CAPTURE_DIR",
+                captures.path().toLocal8Bit());
+        qputenv("GC_WORKOUT_GAME_CAPTURE_MS", "50");
+        qputenv("GC_WORKOUT_GAME_CAPTURE_FRAMES", "12");
+        {
+            WorkoutGameSceneGraphWindow window;
+            window.resize(1280, 720);
+            window.setSessionRunning(true);
+            window.setCourse(sampleCourse(), 200.0);
+            window.setFrame(frameAt(200.0), 215.0, 230.0, 86, 151, 5);
+            window.show();
+            QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 3000);
+            QTest::qWait(180);
+            window.setFrame(frameAt(210.0), 245.0, 230.0, 91, 154, 6);
+            QTRY_VERIFY_WITH_TIMEOUT(
+                    QDir(captures.path()).entryList(
+                            {QStringLiteral("frame-*.png")},
+                            QDir::Files, QDir::Name).size() >= 4,
+                    3000);
+        }
+        qunsetenv("GC_WORKOUT_GAME_CAPTURE_DIR");
+        qunsetenv("GC_WORKOUT_GAME_CAPTURE_MS");
+        qunsetenv("GC_WORKOUT_GAME_CAPTURE_FRAMES");
+        const QStringList frames = QDir(captures.path()).entryList(
+                {QStringLiteral("frame-*.png")}, QDir::Files, QDir::Name);
+        QVERIFY2(frames.size() >= 4,
+                 qPrintable(QStringLiteral("captured only %1 frames")
+                         .arg(frames.size())));
+        const QImage first(QDir(captures.path()).filePath(frames.front()));
+        const QImage last(QDir(captures.path()).filePath(frames.back()));
+        QVERIFY(!first.isNull());
+        QVERIFY(!last.isNull());
+        QVERIFY(changedPixels(first, last, 250) > 900);
     }
 };
 

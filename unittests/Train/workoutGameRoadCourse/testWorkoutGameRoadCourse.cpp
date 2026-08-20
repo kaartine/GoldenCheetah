@@ -127,6 +127,35 @@ private slots:
         }
     }
 
+    void workoutTimelineIsContinuousAndMonotonic()
+    {
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(sampleCourse(), 200.0);
+        QCOMPARE(road.timeline.size(), std::size_t(2));
+        QVERIFY(near(road.timeline[0].endDistanceMeters,
+                     road.timeline[1].startDistanceMeters));
+
+        double previousDistance = -1.0;
+        for (std::int64_t timeMs = -1000; timeMs <= 31000; timeMs += 17) {
+            const WorkoutGameRoadTimelineSample sample =
+                    WorkoutGameRoadCourseBuilder::sampleAtWorkoutTime(
+                            road, timeMs);
+            QVERIFY(sample.ready);
+            QVERIFY(sample.distanceMeters + 1e-9 >= previousDistance);
+            previousDistance = sample.distanceMeters;
+        }
+        const WorkoutGameRoadTimelineSample boundary =
+                WorkoutGameRoadCourseBuilder::sampleAtWorkoutTime(road, 15000);
+        QCOMPARE(boundary.sourceSectionIndex, std::size_t(1));
+        QCOMPARE(boundary.sectionProgress, 0.0);
+        QVERIFY(near(boundary.distanceMeters,
+                     road.timeline[1].startDistanceMeters));
+        const WorkoutGameRoadTimelineSample end =
+                WorkoutGameRoadCourseBuilder::sampleAtWorkoutTime(road, 40000);
+        QCOMPARE(end.distanceMeters, road.totalLengthMeters);
+        QCOMPARE(end.sectionProgress, 1.0);
+    }
+
     void climbAndTurnAreVisibleInWorldGeometry()
     {
         const WorkoutGameRoadCourse road =

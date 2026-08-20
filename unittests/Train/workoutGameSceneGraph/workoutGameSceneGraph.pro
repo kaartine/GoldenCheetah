@@ -4,21 +4,25 @@ CONFIG += c++17
 TARGET = testWorkoutGameSceneGraph
 
 SOURCES = testWorkoutGameSceneGraph.cpp \
+          ../../../src/Train/WorkoutGameDiagnostics.cpp \
           ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
           ../../../src/Train/WorkoutGameFeatureLab.cpp \
           ../../../src/Train/WorkoutGameFeatureRuntime.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \
           ../../../src/Train/WorkoutGameRoadProjection.cpp \
           ../../../src/Train/WorkoutGameSceneGraphWindow.cpp \
+          ../../../src/Train/WorkoutGameSimulation.cpp \
           ../../../src/Train/WorkoutGameTerrainTransition.cpp \
           ../../../src/Train/WorkoutGameVisualSmoother.cpp
 
 HEADERS = ../../../src/Train/WorkoutGameFeatureChallenge.h \
+          ../../../src/Train/WorkoutGameDiagnostics.h \
           ../../../src/Train/WorkoutGameFeatureLab.h \
           ../../../src/Train/WorkoutGameFeatureRuntime.h \
           ../../../src/Train/WorkoutGameRoadCourse.h \
           ../../../src/Train/WorkoutGameRoadProjection.h \
           ../../../src/Train/WorkoutGameSceneGraphWindow.h \
+          ../../../src/Train/WorkoutGameSimulation.h \
           ../../../src/Train/WorkoutGameTerrainTransition.h \
           ../../../src/Train/WorkoutGameVisualSmoother.h
 

@@ -138,6 +138,11 @@ python3 "$SCRIPT_DIR/pre_release_ui.py" exercise \
 STATUS=$?
 set -e
 
+if [ -f "$TEST_ROOT/library/goldencheetah.log" ]; then
+    cp -f -- "$TEST_ROOT/library/goldencheetah.log" \
+        "$ARTIFACT_DIR/goldencheetah.log"
+fi
+
 if [ "$STATUS" -eq 0 ]; then
     for unused in $(seq 1 50); do
         ! kill -0 "$APP_PID" 2>/dev/null && break

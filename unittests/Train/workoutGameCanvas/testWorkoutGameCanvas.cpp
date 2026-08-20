@@ -227,29 +227,29 @@ private slots:
                 < 1e-9);
     }
 
-    void anchoredRoadDistanceStaysSmoothBetweenOneHertzUpdates()
+    void workoutTimeStaysSmoothBetweenOneHertzUpdates()
     {
         WorkoutGameVisualSnapshot first;
         first.simulation.ready = true;
         first.simulation.activeSection = 1;
         first.simulation.sectionProgress = 0.95;
         first.simulation.workoutTimeMs = 1000;
-        first.roadDistanceReady = true;
-        first.roadDistanceMeters = 10.0;
 
         WorkoutGameVisualSnapshot second = first;
         second.simulation.activeSection = 2;
         second.simulation.sectionProgress = 0.05;
         second.simulation.workoutTimeMs = 2000;
-        second.roadDistanceMeters = 20.0;
 
         WorkoutGameVisualSmoother smoother;
         smoother.setTarget(first, 1000);
         smoother.setTarget(second, 2000);
 
-        QCOMPARE(smoother.sample(2100).roadDistanceMeters, 15.0);
-        QCOMPARE(smoother.sample(2700).roadDistanceMeters, 25.0);
-        QCOMPARE(smoother.sample(2900).roadDistanceMeters, 27.0);
+        QCOMPARE(smoother.sample(2100).simulation.workoutTimeMs,
+                 std::int64_t(1500));
+        QCOMPARE(smoother.sample(2700).simulation.workoutTimeMs,
+                 std::int64_t(2500));
+        QCOMPARE(smoother.sample(2900).simulation.workoutTimeMs,
+                 std::int64_t(2700));
     }
 
     void visualStateBoundsPredictionAcrossLongTelemetryGaps()

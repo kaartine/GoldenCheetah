@@ -282,6 +282,7 @@ void WorkoutGameWindow::start()
     ghostRecorder.configure(currentCourse.seed, currentCourse.durationMs);
     paused = false;
     sessionActive = true;
+    sceneGraphWindow->setSessionRunning(sceneGraphContainer->isVisible());
     worldClockInitialized = false;
     lastWorldTimeMs = 0;
     updateAtWorkoutPosition(context->getNow());
@@ -290,12 +291,15 @@ void WorkoutGameWindow::start()
 void WorkoutGameWindow::pause()
 {
     paused = true;
+    sceneGraphWindow->setSessionRunning(false);
     updateAtWorkoutPosition(context->getNow());
 }
 
 void WorkoutGameWindow::unpause()
 {
     paused = false;
+    sceneGraphWindow->setSessionRunning(
+            sessionActive && sceneGraphContainer->isVisible());
     updateAtWorkoutPosition(context->getNow());
 }
 
@@ -303,6 +307,7 @@ void WorkoutGameWindow::stop()
 {
     sessionState.stopped();
     sessionActive = false;
+    sceneGraphWindow->setSessionRunning(false);
     storeGhost();
 }
 
@@ -331,6 +336,8 @@ void WorkoutGameWindow::updateAtWorkoutPosition(
 
 void WorkoutGameWindow::updateSimulation(std::int64_t workoutTimeMs)
 {
+    sceneGraphWindow->setSessionRunning(
+            sessionActive && !paused && sceneGraphContainer->isVisible());
     WorkoutGameSimulationInput input;
     input.workoutTimeMs = workoutTimeMs;
     input.paused = paused;
@@ -399,9 +406,7 @@ void WorkoutGameWindow::updateSimulation(std::int64_t workoutTimeMs)
     }
     const WorkoutGameCompetitionSnapshot race;
     if (sessionActive) ghostRecorder.record(snapshot);
-    WorkoutGameVisualSnapshot frame = {snapshot, race, world, view};
-    frame.roadDistanceReady = feature.ready;
-    frame.roadDistanceMeters = feature.visualDistanceMeters;
+    const WorkoutGameVisualSnapshot frame = {snapshot, race, world, view};
     painterCanvas->setFrame(
             frame,
             input.actualWatts,

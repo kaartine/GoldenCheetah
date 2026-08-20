@@ -161,6 +161,13 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
         const WorkoutGameFeatureChallengeProfile challenge =
                 WorkoutGameFeatureChallenge::profile(section);
         const double sectionStart = result.totalLengthMeters;
+        result.timeline.push_back({
+            sectionIndex,
+            section.startMs,
+            section.durationMs,
+            sectionStart,
+            sectionStart + sectionLength
+        });
         const double challengeDistance = result.totalLengthMeters
                 + sectionLength * challenge.decisionProgress;
         const double obstacleProgress = std::min(
@@ -211,6 +218,43 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
             && std::isfinite(result.totalLengthMeters)
             && result.totalLengthMeters > 0.0;
     if (!result.ready) return {};
+    return result;
+}
+
+WorkoutGameRoadTimelineSample
+WorkoutGameRoadCourseBuilder::sampleAtWorkoutTime(
+        const WorkoutGameRoadCourse &course,
+        std::int64_t requestedWorkoutTimeMs)
+{
+    WorkoutGameRoadTimelineSample result;
+    if (!course.ready || course.timeline.empty()) return result;
+
+    const WorkoutGameRoadTimelineSection &first = course.timeline.front();
+    const WorkoutGameRoadTimelineSection &last = course.timeline.back();
+    const std::int64_t endTimeMs = last.startTimeMs
+            + std::max<std::int64_t>(0, last.durationMs);
+    const std::int64_t workoutTimeMs = std::clamp(
+            requestedWorkoutTimeMs, first.startTimeMs, endTimeMs);
+    auto found = std::upper_bound(
+            course.timeline.begin(), course.timeline.end(), workoutTimeMs,
+            [](std::int64_t value,
+               const WorkoutGameRoadTimelineSection &section) {
+                return value < section.startTimeMs;
+            });
+    const WorkoutGameRoadTimelineSection &section = found
+            == course.timeline.begin() ? first : *(found - 1);
+    const double progress = section.durationMs > 0
+            ? std::clamp(
+                double(workoutTimeMs - section.startTimeMs)
+                    / double(section.durationMs),
+                0.0, 1.0)
+            : 1.0;
+    result.ready = true;
+    result.sourceSectionIndex = section.sourceSectionIndex;
+    result.sectionProgress = progress;
+    result.distanceMeters = section.startDistanceMeters
+            + (section.endDistanceMeters - section.startDistanceMeters)
+                * progress;
     return result;
 }
 

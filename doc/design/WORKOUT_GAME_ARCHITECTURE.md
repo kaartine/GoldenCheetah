@@ -46,8 +46,8 @@ will convert `ErgFile` points into its normalized interval input.
 
 ### WorkoutGameSimulation
 
-The simulation is a pure C++ fixed-step state machine with a 20 Hz internal
-step. Inputs are immutable snapshots containing workout time, power, cadence,
+The simulation is a pure C++ fixed-step state machine. Inputs are immutable
+snapshots containing workout time, power, cadence,
 target power, pause state, and virtual gear. Heart rate is displayed by the
 renderer but does not affect game rules. Outputs contain course progress,
 section state, feature outcome, speed, adherence, and score state.
@@ -130,7 +130,9 @@ context.
 - Recording cadence: owned by existing Train code and independent of the game.
 - Telemetry ingestion: existing cadence, copied into a small latest-value
   snapshot without waiting for rendering.
-- Simulation: fixed 50 ms steps, capped catch-up work after UI stalls.
+- Game rules: fixed 50 ms steps. Vehicle physics: fixed 8.33 ms steps. Both
+  cap catch-up work after stalls. A future simulation runner may publish at the
+  display rate without changing these deterministic internal step sizes.
 - Rendering: target 60 FPS on GPU and 30 FPS with QPainter.
 - The current scene has bounded geometry, four competitor sprites at most, no
   per-frame texture upload, and no unbounded particle list. Automatic
@@ -138,6 +140,76 @@ context.
 
 There is no unbounded event queue. Simulation and rendering use latest-value
 snapshots, so stale frames are overwritten rather than accumulated.
+
+### Clock And Thread Model
+
+The game has three clock domains with explicit ownership:
+
+1. Sensor samples retain their device or ingestion timestamps. Trainer control
+   and activity recording continue on the existing Train paths and never wait
+   for the game.
+2. `WorkoutGameClock` uses a monotonic clock to drive one deterministic,
+   fixed-step simulation owner. It advances in complete ticks, limits catch-up
+   work after a stall, and reports discontinuities instead of integrating one
+   unbounded time step.
+3. Presentation follows the display refresh. The renderer interpolates between
+   the previous and current complete simulation snapshots. It must not
+   extrapolate independently smoothed position, section, feature, or camera
+   values because those values can then disagree at interval boundaries.
+
+The intended steady-state data flow is:
+
+```text
+Train telemetry -> latest input snapshot -> fixed-step simulation
+                                             |
+                                             v
+                                    immutable frame snapshots
+                                             |
+                                             v
+                               Qt scene graph / presentation
+```
+
+The simulation owns mutable game and physics state. At the end of a tick it
+publishes an immutable `WorkoutGameFrameSnapshot` through a bounded double or
+triple buffer with a monotonically increasing sequence number. The renderer
+reads the newest complete pair and never waits for a partially written frame.
+Old snapshots are overwritten rather than queued.
+
+Qt Quick already owns GUI/render synchronization and can use a dedicated render
+thread. Scene graph updates therefore remain small snapshot-to-node copies;
+GPU submission stays in Qt's render loop. Course generation, asset decoding,
+and other measured heavy work may use worker jobs, but workers publish results
+for a later simulation tick and are never joined from trainer control or the
+render hot path. The current vehicle simulation should remain one owner until
+profiling proves that a phase is large enough to justify job scheduling.
+
+This follows the fixed-timestep and render-interpolation model used by mature
+engines while respecting Qt's scene graph ownership rules:
+
+- [Qt Quick Scene Graph](https://doc.qt.io/qt-6/qtquick-visualcanvas-scenegraph.html)
+- [Fix Your Timestep](https://gafferongames.com/post/fix_your_timestep/)
+- [Godot physics interpolation](https://docs.godotengine.org/en/stable/tutorials/physics/interpolation/physics_interpolation_introduction.html)
+- [Box2D simulation](https://box2d.org/documentation/md_simulation.html)
+
+### Migration And Acceptance
+
+The thread model is introduced in measured stages rather than changing trainer,
+simulation, and rendering ownership at once:
+
+1. Use one workout-time-to-road timeline and instrument frame time, world
+   position, regressions, stationary frames, and section state.
+2. Extract the monotonic clock and fixed-step simulation runner with fake-clock
+   tests for stalls, pause, resume, reset, and bounded catch-up.
+3. Publish immutable previous/current snapshots and interpolate presentation
+   from only that pair.
+4. Profile on the old integrated-GPU laptop before moving any course or physics
+   phase to workers or adding GPU effects.
+
+Acceptance requires deterministic replay for the same timestamped input, no
+backward world movement during forward riding, no trainer or recording wait on
+rendering, bounded work after a one-second UI stall, and no unbounded memory or
+event-queue growth. Automated UI traces must report frame intervals, world
+distance, section/progress, source/render time, late frames, and regressions.
 
 ## Game Rules
 

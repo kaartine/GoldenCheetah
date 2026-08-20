@@ -11,6 +11,7 @@
 #define _GC_WorkoutGameSceneGraphWindow_h
 
 #include "WorkoutGameFeatureRuntime.h"
+#include "WorkoutGameDiagnostics.h"
 #include "WorkoutGameRoadCourse.h"
 #include "WorkoutGameVisualSmoother.h"
 
@@ -42,6 +43,11 @@ public:
             int cadenceRpm,
             int heartRate,
             int virtualGear);
+    void setSessionRunning(bool running);
+    WorkoutGameDiagnosticsSnapshot diagnosticsSnapshot() const
+    {
+        return publishedDiagnostics;
+    }
 
 protected:
     QSGNode *updatePaintNode(
@@ -51,6 +57,8 @@ protected:
 private:
     void rebuildHud();
     void publishFps(double fps);
+    void publishDiagnostics(
+            const WorkoutGameDiagnosticsSnapshot &snapshot);
 
     WorkoutGameRoadCourse roadCourse;
     WorkoutGameFeatureRuntime featureRuntime;
@@ -67,6 +75,13 @@ private:
     int virtualGear = 1;
     double displayedFps = 0.0;
     double publishedFps = -1.0;
+    bool diagnosticsEnabled = false;
+    bool traceEnabled = false;
+    bool sessionRunning = false;
+    std::uint64_t frameNumber = 0;
+    std::int64_t lastDiagnosticsPublishMs = -1;
+    WorkoutGameDiagnostics diagnostics;
+    WorkoutGameDiagnosticsSnapshot publishedDiagnostics;
     std::uint64_t hudRevision = 0;
     WorkoutGameFrameRateCounter frameRateCounter;
 };
@@ -92,6 +107,11 @@ public:
             int cadenceRpm,
             int heartRate,
             int virtualGear);
+    void setSessionRunning(bool running);
+    WorkoutGameDiagnosticsSnapshot diagnosticsSnapshot() const
+    {
+        return sceneItem->diagnosticsSnapshot();
+    }
 
 signals:
     void rendererFailed();
@@ -102,6 +122,9 @@ protected:
 private:
     WorkoutGameSceneGraphItem *sceneItem;
     bool failureReported = false;
+    bool sessionRunning = false;
+    QString captureDirectory;
+    std::uint64_t captureFrameNumber = 0;
 };
 
 #endif
