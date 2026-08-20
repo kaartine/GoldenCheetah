@@ -11,6 +11,7 @@
 
 #include <QApplication>
 #include <QColor>
+#include <QDir>
 #include <QImage>
 #include <QQuickWindow>
 #include <QSGRendererInterface>
@@ -121,8 +122,9 @@ private slots:
         QVERIFY(!second.isNull());
         QVERIFY(changedPixels(first, second, 250) > 1200);
 
-        QVERIFY(second.save(QStringLiteral(
-                "/work/test-output/workout-game-scenegraph-test.png")));
+        const QString screenshotPath = QDir(QDir::tempPath()).filePath(
+                QStringLiteral("workout-game-scenegraph-test.png"));
+        QVERIFY(second.save(screenshotPath));
     }
 };
 
