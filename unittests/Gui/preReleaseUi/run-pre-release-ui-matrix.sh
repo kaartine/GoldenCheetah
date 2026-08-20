@@ -1,0 +1,25 @@
+#!/bin/sh
+
+set -eu
+
+if [ "$#" -ne 2 ]; then
+    echo "Usage: $0 /path/to/GoldenCheetah.AppImage artifact-directory" >&2
+    exit 2
+fi
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+IMAGE=$1
+ARTIFACT_DIR=$2
+
+mkdir -p -- "$ARTIFACT_DIR"
+
+GC_WORKOUT_GAME_FORCE_PAINTER=1 \
+GC_WORKOUT_GAME_TRACE=0 \
+    "$SCRIPT_DIR/run-pre-release-ui.sh" \
+    "$IMAGE" "$ARTIFACT_DIR/painter"
+
+GC_WORKOUT_GAME_FORCE_PAINTER=0 \
+GC_WORKOUT_GAME_TRACE=1 \
+GC_WORKOUT_GAME_DIAGNOSTICS=1 \
+    "$SCRIPT_DIR/run-pre-release-ui.sh" \
+    "$IMAGE" "$ARTIFACT_DIR/scenegraph"

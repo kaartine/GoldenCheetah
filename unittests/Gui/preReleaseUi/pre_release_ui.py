@@ -109,10 +109,10 @@ MINUTES WATTS
 [END COURSE HEADER]
 [COURSE DATA]
 0 100
-0.25 100
-0.5 220
-0.75 220
-1 100
+0.02 100
+0.04 220
+0.08 220
+0.10 100
 [END COURSE DATA]
 """,
     )
@@ -373,12 +373,24 @@ class UiDriver:
         self.xtest.fake_input(self.display, self.X.KeyRelease, keycode)
         self.display.sync()
 
-    def screenshot(self, name: str):
+    def screenshot(self, name: str, node=None):
         screen = self.display.screen()
+        x = 0
+        y = 0
         width = screen.width_in_pixels
         height = screen.height_in_pixels
+        if node is not None:
+            bounds = node.queryComponent().getExtents(
+                self.pyatspi.DESKTOP_COORDS
+            )
+            x = max(0, bounds.x)
+            y = max(0, bounds.y)
+            width = min(bounds.width, screen.width_in_pixels - x)
+            height = min(bounds.height, screen.height_in_pixels - y)
+            if width < 64 or height < 64:
+                raise UiFailure("Workout game canvas has invalid bounds")
         image = screen.root.get_image(
-            0, 0, width, height, self.X.ZPixmap, 0xFFFFFFFF
+            x, y, width, height, self.X.ZPixmap, 0xFFFFFFFF
         )
         data = image.data
         rgb = bytearray(width * height * 3)
@@ -393,6 +405,34 @@ class UiDriver:
             handle.write(rgb)
         if len(set(rgb[:: max(3, len(rgb) // 5000)])) < 4:
             raise UiFailure(f"Screenshot appears blank: {output}")
+        return width, height, bytes(rgb)
+
+    @staticmethod
+    def changed_pixels(
+        first,
+        second,
+        top_ratio=0.20,
+        bottom_ratio=0.92,
+        side_ratio=0.30,
+        sample_step=2,
+    ) -> int:
+        if first[:2] != second[:2]:
+            raise UiFailure("Screenshot dimensions changed during the game test")
+        width, height = first[:2]
+        first_rgb = first[2]
+        second_rgb = second[2]
+        changed = 0
+        top = int(height * top_ratio)
+        bottom = min(height, int(height * bottom_ratio))
+        side = int(width * side_ratio)
+        for y in range(top, bottom, sample_step):
+            for x in range(0, width, sample_step):
+                if side <= x < width - side:
+                    continue
+                offset = (y * width + x) * 3
+                if first_rgb[offset : offset + 3] != second_rgb[offset : offset + 3]:
+                    changed += 1
+        return changed
 
     def wait_value(self, node, expected, timeout=5.0):
         deadline = time.monotonic() + timeout
@@ -561,6 +601,31 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
 
         def game():
             enter_train()
+            selected = False
+            for workout_name in ("Pre-release UI test", "ui-test.erg", "ui-test"):
+                try:
+                    driver.select_named(workout_name, timeout=2.0)
+                    selected = True
+                    break
+                except UiFailure:
+                    pass
+            if not selected:
+                raise UiFailure("Prepared ui-test.erg workout was not selectable")
+
+            driver.select_named("Data Generator")
+            gear = driver.find("Virtual gear", "spin button", showing=True)
+            if not driver.enabled(gear):
+                driver.activate(
+                    driver.find(
+                        "Connect training devices", "push button", showing=True
+                    )
+                )
+                deadline = time.monotonic() + 8.0
+                while not driver.enabled(gear) and time.monotonic() < deadline:
+                    time.sleep(0.1)
+                if not driver.enabled(gear):
+                    raise UiFailure("Data Generator did not connect for Workout Game")
+
             driver.select_combo_item(
                 ["Workout Game", "Workout Editor"], "Workout Game"
             )
@@ -570,8 +635,16 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
                     "Start or pause training", "push button", showing=True
                 )
             )
-            time.sleep(3.0)
-            driver.screenshot("04-workout-game-running")
+            canvas = driver.find("Workout game canvas", showing=True)
+            time.sleep(1.2)
+            first = driver.screenshot("04-workout-game-first", canvas)
+            time.sleep(2.2)
+            second = driver.screenshot("04-workout-game-running", canvas)
+            changed = driver.changed_pixels(first, second)
+            if changed < 1200:
+                raise UiFailure(
+                    f"Workout Game appears static: only {changed} sampled pixels changed"
+                )
             driver.activate(
                 driver.find("Stop training", "push button", showing=True)
             )

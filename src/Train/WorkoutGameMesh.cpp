@@ -9,6 +9,8 @@
 
 #include "WorkoutGameMesh.h"
 
+#include "WorkoutGameFeatureGeometry.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -108,9 +110,12 @@ void addBox(
 WorkoutGameMesh logModel(double difficulty)
 {
     WorkoutGameMesh mesh;
-    const double radius = 0.22 + 0.10 * difficulty;
+    const WorkoutGameFeatureGeometryProfile profile =
+            WorkoutGameFeatureGeometry::profile(
+                    WorkoutGameTerrainKind::LogOver, difficulty);
+    const double radius = profile.heightMeters * 0.5;
     const double halfWidth = 1.55;
-    constexpr int Segments = 8;
+    constexpr int Segments = WorkoutGameLogRadialSegments;
     for (int side = 0; side < 2; ++side) {
         const double right = side == 0 ? -halfWidth : halfWidth;
         for (int index = 0; index < Segments; ++index) {
@@ -145,9 +150,15 @@ WorkoutGameMesh logModel(double difficulty)
 WorkoutGameMesh tabletopModel(double difficulty)
 {
     WorkoutGameMesh mesh;
-    const double height = 0.65 + 0.35 * difficulty;
+    const WorkoutGameFeatureGeometryProfile profile =
+            WorkoutGameFeatureGeometry::profile(
+                    WorkoutGameTerrainKind::Tabletop, difficulty);
+    const double height = profile.heightMeters;
     const double halfWidth = 1.35;
-    const double forward[] = {-3.2, -1.25, 1.25, 3.2};
+    const double forward[] = {
+        profile.startMeters, profile.plateauStartMeters,
+        profile.plateauEndMeters, profile.endMeters
+    };
     const double up[] = {0.0, height, height, 0.0};
     for (int section = 0; section < 4; ++section) {
         addVertex(mesh, forward[section], -halfWidth, up[section],
@@ -167,9 +178,47 @@ WorkoutGameMesh tabletopModel(double difficulty)
         0.0, 0.0, height * 0.5,
         3.2, halfWidth, height * 0.5
     });
-    mesh.lengthMeters = 6.4;
-    mesh.entry = {-3.2, halfWidth, 0.0};
-    mesh.exit = {3.2, halfWidth, 0.0};
+    mesh.lengthMeters = profile.endMeters - profile.startMeters;
+    mesh.entry = {profile.startMeters, halfWidth, 0.0};
+    mesh.exit = {profile.endMeters, halfWidth, 0.0};
+    mesh.ready = true;
+    return mesh;
+}
+
+WorkoutGameMesh rockSlabModel(double difficulty)
+{
+    WorkoutGameMesh mesh;
+    const WorkoutGameFeatureGeometryProfile profile =
+            WorkoutGameFeatureGeometry::profile(
+                    WorkoutGameTerrainKind::RockSlab, difficulty);
+    const double height = profile.heightMeters;
+    const double halfWidth = 1.30;
+    const double forward[] = {
+        profile.startMeters, profile.plateauStartMeters,
+        profile.plateauEndMeters, profile.endMeters
+    };
+    const double up[] = {0.0, height, height, 0.0};
+    for (int section = 0; section < 4; ++section) {
+        addVertex(mesh, forward[section], -halfWidth, up[section],
+                  double(section) / 3.0, 0.0);
+        addVertex(mesh, forward[section], halfWidth, up[section],
+                  double(section) / 3.0, 1.0);
+    }
+    for (std::uint32_t section = 0; section < 3; ++section) {
+        addQuad(mesh,
+                section * 2, section * 2 + 1,
+                section * 2 + 3, section * 2 + 2,
+                WorkoutGameMeshMaterial::RockTop);
+    }
+    addQuad(mesh, 0, 2, 4, 6, WorkoutGameMeshMaterial::RockSide);
+    addQuad(mesh, 1, 7, 5, 3, WorkoutGameMeshMaterial::RockSide);
+    mesh.colliders.push_back({
+        1.5, 0.0, height * 0.5,
+        4.5, halfWidth, height * 0.5
+    });
+    mesh.lengthMeters = profile.endMeters - profile.startMeters;
+    mesh.entry = {profile.startMeters, halfWidth, 0.0};
+    mesh.exit = {profile.endMeters, halfWidth, 0.0};
     mesh.ready = true;
     return mesh;
 }
@@ -234,19 +283,41 @@ WorkoutGameMesh WorkoutGameMeshLibrary::feature(
         return roughModel(terrain, difficulty);
     case WorkoutGameTerrainKind::Tabletop:
         return tabletopModel(difficulty);
+    case WorkoutGameTerrainKind::RockSlab:
+        return rockSlabModel(difficulty);
     case WorkoutGameTerrainKind::Drop: {
         WorkoutGameMesh mesh;
-        const double height = 0.7 + 0.5 * difficulty;
-        addBox(mesh, 0.0, 0.0, -height, 4.0, 3.0, height,
-               WorkoutGameMeshMaterial::DropFace,
-               WorkoutGameMeshMaterial::RockTop);
+        const WorkoutGameFeatureGeometryProfile profile =
+                WorkoutGameFeatureGeometry::profile(terrain, difficulty);
+        const double halfWidth = 1.5;
+        const double forward[] = {
+            profile.startMeters, profile.plateauStartMeters,
+            profile.plateauEndMeters, profile.endMeters
+        };
+        const double up[] = {
+            0.0, profile.heightMeters, profile.heightMeters, 0.0
+        };
+        for (int section = 0; section < 4; ++section) {
+            addVertex(mesh, forward[section], -halfWidth, up[section],
+                      double(section) / 3.0, 0.0);
+            addVertex(mesh, forward[section], halfWidth, up[section],
+                      double(section) / 3.0, 1.0);
+        }
+        for (std::uint32_t section = 0; section < 3; ++section) {
+            addQuad(mesh, section * 2, section * 2 + 1,
+                    section * 2 + 3, section * 2 + 2,
+                    section == 0 ? WorkoutGameMeshMaterial::DropFace
+                                 : WorkoutGameMeshMaterial::RockTop);
+        }
         mesh.colliders.push_back({
-            0.0, 0.0, -height * 0.5,
-            2.0, 1.5, height * 0.5
+            (profile.plateauStartMeters + profile.plateauEndMeters) * 0.5,
+            0.0, profile.heightMeters * 0.5,
+            (profile.plateauEndMeters - profile.plateauStartMeters) * 0.5,
+            halfWidth, -profile.heightMeters * 0.5
         });
-        mesh.lengthMeters = 4.0;
-        mesh.entry = {-2.0, 1.5, 0.0};
-        mesh.exit = {2.0, 1.5, -height};
+        mesh.lengthMeters = profile.endMeters - profile.startMeters;
+        mesh.entry = {profile.startMeters, halfWidth, 0.0};
+        mesh.exit = {profile.endMeters, halfWidth, 0.0};
         mesh.ready = true;
         return mesh;
     }
@@ -407,15 +478,116 @@ WorkoutGameMeshProjector::project(
             || instance.upScale <= 0.0) {
         return result;
     }
+    struct WorldVertex
+    {
+        double distance = 0.0;
+        double lateral = 0.0;
+        double elevation = 0.0;
+        double u = 0.0;
+        double v = 0.0;
+    };
+    struct ScreenVertex
+    {
+        WorkoutGameProjectedMeshVertex projected;
+        double occlusionY = 0.0;
+    };
+    const auto interpolateWorld = [](const WorldVertex &from,
+                                     const WorldVertex &to,
+                                     double amount) {
+        const auto value = [amount](double first, double second) {
+            return first + (second - first) * amount;
+        };
+        return WorldVertex{
+            value(from.distance, to.distance),
+            value(from.lateral, to.lateral),
+            value(from.elevation, to.elevation),
+            value(from.u, to.u),
+            value(from.v, to.v)
+        };
+    };
+    const auto clipDistance = [&interpolateWorld](
+            const std::vector<WorldVertex> &input,
+            double boundary,
+            bool keepGreater) {
+        std::vector<WorldVertex> output;
+        if (input.empty()) return output;
+        const auto inside = [boundary, keepGreater](const WorldVertex &vertex) {
+            return keepGreater ? vertex.distance >= boundary - 1e-9
+                               : vertex.distance <= boundary + 1e-9;
+        };
+        WorldVertex previous = input.back();
+        bool previousInside = inside(previous);
+        for (const WorldVertex &current : input) {
+            const bool currentInside = inside(current);
+            if (currentInside != previousInside) {
+                const double span = current.distance - previous.distance;
+                const double amount = std::abs(span) > 1e-12
+                        ? std::clamp(
+                            (boundary - previous.distance) / span,
+                            0.0, 1.0)
+                        : 0.0;
+                output.push_back(interpolateWorld(previous, current, amount));
+            }
+            if (currentInside) output.push_back(current);
+            previous = current;
+            previousInside = currentInside;
+        }
+        return output;
+    };
+    const auto interpolateScreen = [](const ScreenVertex &from,
+                                      const ScreenVertex &to,
+                                      double amount) {
+        const auto value = [amount](double first, double second) {
+            return first + (second - first) * amount;
+        };
+        ScreenVertex result;
+        result.projected = {
+            value(from.projected.x, to.projected.x),
+            value(from.projected.y, to.projected.y),
+            value(from.projected.depthMeters, to.projected.depthMeters),
+            value(from.projected.u, to.projected.u),
+            value(from.projected.v, to.projected.v)
+        };
+        result.occlusionY = value(from.occlusionY, to.occlusionY);
+        return result;
+    };
+    const auto clipOcclusion = [&interpolateScreen](
+            const std::vector<ScreenVertex> &input) {
+        std::vector<ScreenVertex> output;
+        if (input.empty()) return output;
+        const auto visibility = [](const ScreenVertex &vertex) {
+            return vertex.occlusionY - vertex.projected.y;
+        };
+        ScreenVertex previous = input.back();
+        double previousVisibility = visibility(previous);
+        bool previousInside = previousVisibility >= -1e-6;
+        for (const ScreenVertex &current : input) {
+            const double currentVisibility = visibility(current);
+            const bool currentInside = currentVisibility >= -1e-6;
+            if (currentInside != previousInside) {
+                const double span = previousVisibility - currentVisibility;
+                const double amount = std::abs(span) > 1e-12
+                        ? std::clamp(previousVisibility / span, 0.0, 1.0)
+                        : 0.0;
+                output.push_back(interpolateScreen(previous, current, amount));
+            }
+            if (currentInside) output.push_back(current);
+            previous = current;
+            previousVisibility = currentVisibility;
+            previousInside = currentInside;
+        }
+        return output;
+    };
+
     const double yaw = instance.yawDegrees * Pi / 180.0;
     const double cosine = std::cos(yaw);
     const double sine = std::sin(yaw);
-    result.reserve(instance.mesh.triangles.size());
+    const double nearDistance = road.slices.back().worldDistanceMeters;
+    const double farDistance = road.slices.front().worldDistanceMeters;
+    result.reserve(instance.mesh.triangles.size() * 2u);
     for (const WorkoutGameMeshTriangle &source : instance.mesh.triangles) {
-        WorkoutGameProjectedMeshTriangle triangle;
-        triangle.material = source.material;
-        bool ready = true;
-        double depth = 0.0;
+        std::vector<WorldVertex> world;
+        world.reserve(3);
         for (std::size_t corner = 0; corner < 3; ++corner) {
             const WorkoutGameMeshVertex &vertex =
                     instance.mesh.vertices[source.indices[corner]];
@@ -425,26 +597,55 @@ WorkoutGameMeshProjector::project(
                     vertex.rightMeters * instance.rightScale;
             const double forward = localForward * cosine - localRight * sine;
             const double right = localForward * sine + localRight * cosine;
+            world.push_back({
+                instance.anchorDistanceMeters + forward,
+                instance.lateralMeters + right,
+                instance.elevationMeters + vertex.upMeters * instance.upScale,
+                vertex.u,
+                vertex.v
+            });
+        }
+        world = clipDistance(world, nearDistance, true);
+        world = clipDistance(world, farDistance, false);
+        if (world.size() < 3u) continue;
+
+        std::vector<ScreenVertex> screen;
+        screen.reserve(world.size());
+        bool ready = true;
+        for (const WorldVertex &vertex : world) {
             const WorkoutGameRoadProjectedPoint projected =
                     WorkoutGameRoadProjection::projectPoint(
                         road,
-                        instance.anchorDistanceMeters + forward,
-                        instance.lateralMeters + right,
-                        instance.elevationMeters
-                            + vertex.upMeters * instance.upScale);
+                        vertex.distance,
+                        vertex.lateral,
+                        vertex.elevation,
+                        instance.anchorToBaseSurface);
             if (!projected.ready) {
                 ready = false;
                 break;
             }
-            triangle.vertices[corner] = {
+            screen.push_back({{
                 projected.x, projected.y, projected.depthMeters,
                 vertex.u, vertex.v
-            };
-            depth += projected.depthMeters;
+            }, projected.occlusionY});
         }
         if (!ready) continue;
-        triangle.depthMeters = depth / 3.0;
-        result.push_back(triangle);
+        screen = clipOcclusion(screen);
+        if (screen.size() < 3u) continue;
+        for (std::size_t corner = 1; corner + 1 < screen.size(); ++corner) {
+            WorkoutGameProjectedMeshTriangle triangle;
+            triangle.material = source.material;
+            triangle.vertices = {
+                screen[0].projected,
+                screen[corner].projected,
+                screen[corner + 1].projected
+            };
+            triangle.depthMeters = (
+                    triangle.vertices[0].depthMeters
+                    + triangle.vertices[1].depthMeters
+                    + triangle.vertices[2].depthMeters) / 3.0;
+            result.push_back(triangle);
+        }
     }
     std::stable_sort(result.begin(), result.end(),
             [](const WorkoutGameProjectedMeshTriangle &left,

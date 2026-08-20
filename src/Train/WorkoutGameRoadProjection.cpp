@@ -9,8 +9,11 @@
 
 #include "WorkoutGameRoadProjection.h"
 
+#include "WorkoutGameFeatureGeometry.h"
+
 #include <algorithm>
 #include <cmath>
+#include <functional>
 
 namespace {
 
@@ -22,6 +25,8 @@ bool validConfig(const WorkoutGameRoadProjectionConfig &config)
             && std::isfinite(config.viewportHeight)
             && std::isfinite(config.horizonRatio)
             && std::isfinite(config.cameraHeightMeters)
+            && (std::isfinite(config.cameraElevationMeters)
+                || std::isnan(config.cameraElevationMeters))
             && std::isfinite(config.fieldOfViewDegrees)
             && std::isfinite(config.nearDistanceMeters)
             && std::isfinite(config.visibleDistanceMeters)
@@ -59,18 +64,52 @@ WorkoutGameRoadProjectionFrame WorkoutGameRoadProjection::project(
     const double horizonY = config.viewportHeight * config.horizonRatio;
     const double cameraX = rider.center.xMeters;
     const double cameraZ = rider.center.zMeters;
-    const double cameraElevation = rider.center.elevationMeters
-            + config.cameraHeightMeters;
+    const double cameraElevation = std::isfinite(config.cameraElevationMeters)
+            ? config.cameraElevationMeters
+            : rider.center.elevationMeters + config.cameraHeightMeters;
     const double cameraHeading = rider.center.headingRadians;
-    result.slices.reserve(std::size_t(config.sliceCount + 1));
-
+    std::vector<double> sampleDistances;
+    sampleDistances.reserve(std::size_t(config.sliceCount + 1)
+            + course.pieces.size() * 5u);
     for (int index = config.sliceCount; index >= 0; --index) {
         const double amount = double(index) / double(config.sliceCount);
         const double ahead = config.nearDistanceMeters
                 + config.visibleDistanceMeters * amount * amount;
+        sampleDistances.push_back(rider.distanceMeters + ahead);
+    }
+    const double nearest = rider.distanceMeters + config.nearDistanceMeters;
+    const double farthest = nearest + config.visibleDistanceMeters;
+    for (const WorkoutGameRoadPiece &piece : course.pieces) {
+        if (!piece.challenge.enabled) continue;
+        const WorkoutGameFeatureGeometryProfile profile =
+                WorkoutGameFeatureGeometry::profile(
+                    piece.terrain, piece.difficulty);
+        if (!profile.ready) continue;
+        const double obstacle = piece.challenge.obstacleDistanceMeters;
+        const double keyDistances[] = {
+            obstacle + profile.startMeters,
+            obstacle + profile.plateauStartMeters,
+            obstacle + profile.plateauEndMeters,
+            obstacle + profile.endMeters
+        };
+        for (double distance : keyDistances) {
+            if (distance >= nearest && distance <= farthest) {
+                sampleDistances.push_back(distance);
+            }
+        }
+    }
+    std::sort(sampleDistances.begin(), sampleDistances.end(), std::greater<>());
+    sampleDistances.erase(std::unique(
+            sampleDistances.begin(), sampleDistances.end(),
+            [](double left, double right) {
+                return std::abs(left - right) < 1e-7;
+            }), sampleDistances.end());
+    result.slices.reserve(sampleDistances.size());
+
+    for (double sampleDistance : sampleDistances) {
         const WorkoutGameRoadSample sample =
                 WorkoutGameRoadCourseBuilder::sample(
-                    course, rider.distanceMeters + ahead);
+                    course, sampleDistance);
         if (!sample.ready) continue;
 
         const double worldX = sample.center.xMeters - cameraX;
@@ -94,9 +133,16 @@ WorkoutGameRoadProjectionFrame WorkoutGameRoadProjection::project(
                 config.viewportWidth);
         slice.halfWidthMeters = sample.center.halfWidthMeters;
         slice.pixelsPerMeter = focalLength / localZ;
+        slice.surfaceOffsetMeters = sample.surfaceOffsetMeters;
         slice.pieceIndex = sample.pieceIndex;
         slice.terrain = sample.terrain;
         result.slices.push_back(slice);
+    }
+    double occlusionY = config.viewportHeight;
+    for (auto slice = result.slices.rbegin();
+         slice != result.slices.rend(); ++slice) {
+        slice->occlusionY = occlusionY;
+        occlusionY = std::min(occlusionY, slice->centerY);
     }
     result.ready = result.slices.size() >= 2;
     result.riderScreenX = config.viewportWidth * 0.5;
@@ -108,7 +154,8 @@ WorkoutGameRoadProjectedPoint WorkoutGameRoadProjection::projectPoint(
         const WorkoutGameRoadProjectionFrame &frame,
         double worldDistanceMeters,
         double lateralMeters,
-        double elevationMeters)
+        double elevationMeters,
+        bool relativeToBaseSurface)
 {
     WorkoutGameRoadProjectedPoint result;
     if (!frame.ready || frame.slices.size() < 2
@@ -137,10 +184,16 @@ WorkoutGameRoadProjectedPoint WorkoutGameRoadProjection::projectPoint(
         const double centerY = interpolate(far.centerY, near.centerY);
         const double scale = interpolate(
                 far.pixelsPerMeter, near.pixelsPerMeter);
+        const double surfaceOffset = interpolate(
+                far.surfaceOffsetMeters, near.surfaceOffsetMeters);
+        const double relativeElevation = relativeToBaseSurface
+                ? elevationMeters - surfaceOffset : elevationMeters;
         result.ready = true;
         result.x = centerX + lateralMeters * scale;
-        result.y = centerY - elevationMeters * scale;
+        result.y = centerY - relativeElevation * scale;
         result.depthMeters = interpolate(far.depthMeters, near.depthMeters);
+        result.occlusionY = interpolate(far.occlusionY, near.occlusionY);
+        result.visible = result.y <= result.occlusionY + 1e-6;
         return result;
     }
     return result;

@@ -58,6 +58,7 @@ struct WorkoutGameRoadPiece
     double lengthMeters = 0.0;
     double turnRadians = 0.0;
     double riseMeters = 0.0;
+    double difficulty = 0.0;
     WorkoutGameRoadConnector entry;
     WorkoutGameRoadConnector exit;
     WorkoutGameRoadChallengeGate challenge;
@@ -88,6 +89,7 @@ struct WorkoutGameRoadSample
     WorkoutGameTerrainKind terrain = WorkoutGameTerrainKind::SmoothTrail;
     double distanceMeters = 0.0;
     double pieceProgress = 0.0;
+    double surfaceOffsetMeters = 0.0;
     WorkoutGameRoadConnector center;
 };
 

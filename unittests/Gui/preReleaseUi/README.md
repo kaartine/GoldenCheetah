@@ -4,18 +4,19 @@ This suite exercises a packaged Linux AppImage through Qt's AT-SPI
 accessibility interface. It creates a temporary athlete library and never
 opens the user's normal GoldenCheetah data.
 
-Run it with:
+Run the release matrix with:
 
 ```bash
-unittests/Gui/preReleaseUi/run-pre-release-ui.sh \
+unittests/Gui/preReleaseUi/run-pre-release-ui-matrix.sh \
   /path/to/GoldenCheetah.AppImage artifacts/ui
 ```
 
 The output directory contains `junit.xml`, `goldencheetah.log`, screenshots and,
 when `GC_UI_RECORD_VIDEO=1` and `ffmpeg` are available, `session.mp4`.
 
-The default run forces the QPainter fallback and software OpenGL. Exercise the
-packaged Scene Graph path separately with:
+The matrix runs twice against separate temporary athletes. The first run forces
+the QPainter fallback. The second run exercises the packaged Scene Graph path
+with trace validation. To run only the Scene Graph leg:
 
 ```bash
 GC_WORKOUT_GAME_FORCE_PAINTER=0 \

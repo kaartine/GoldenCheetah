@@ -47,6 +47,7 @@ def analyze(samples: list[dict[str, float]]) -> dict[str, float | int]:
     reported_p95 = [sample["p95_frame_ms"] for sample in samples if sample.get("p95_frame_ms", 0) > 0]
     reported_max = [sample["max_frame_ms"] for sample in samples if sample.get("max_frame_ms", 0) > 0]
     distances = [sample["render_road_m"] for sample in samples if "render_road_m" in sample]
+    target_watts = [sample["target_watts"] for sample in samples if sample.get("target_watts", 0) > 0]
     trace_regressions = sum(
         1 for previous, current in zip(distances, distances[1:])
         if current < previous - 1e-6
@@ -70,6 +71,7 @@ def analyze(samples: list[dict[str, float]]) -> dict[str, float | int]:
         )),
         "distance_advanced_m": max(0.0, distances[-1] - distances[0])
             if len(distances) >= 2 else 0.0,
+        "maximum_target_watts": max(target_watts, default=0.0),
     }
 
 
@@ -81,6 +83,7 @@ def validate(
     maximum_stall_ms: float,
     minimum_distance_m: float,
     maximum_skipped_ticks: int,
+    minimum_target_watts: float,
 ) -> list[str]:
     failures = []
     if summary["samples"] < minimum_samples:
@@ -111,6 +114,11 @@ def validate(
         failures.append(
             f"simulation skipped {summary['skipped_simulation_ticks']} ticks"
         )
+    if summary["maximum_target_watts"] < minimum_target_watts:
+        failures.append(
+            f"maximum target power {summary['maximum_target_watts']:.1f} W "
+            f"is below {minimum_target_watts:.1f} W"
+        )
     return failures
 
 
@@ -124,6 +132,7 @@ def main() -> int:
     parser.add_argument("--maximum-stall-ms", type=float, default=150.0)
     parser.add_argument("--minimum-distance-m", type=float, default=1.0)
     parser.add_argument("--maximum-skipped-ticks", type=int, default=4)
+    parser.add_argument("--minimum-target-watts", type=float, default=200.0)
     args = parser.parse_args()
 
     summary = analyze(parse_trace(args.log))
@@ -135,6 +144,7 @@ def main() -> int:
         args.maximum_stall_ms,
         args.minimum_distance_m,
         args.maximum_skipped_ticks,
+        args.minimum_target_watts,
     )
     summary["passed"] = not failures
     summary["failures"] = failures

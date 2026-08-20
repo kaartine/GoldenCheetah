@@ -82,6 +82,7 @@ struct WorkoutGameMeshInstance
     double forwardScale = 1.0;
     double rightScale = 1.0;
     double upScale = 1.0;
+    bool anchorToBaseSurface = false;
 };
 
 struct WorkoutGameProjectedMeshVertex

@@ -30,11 +30,18 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 #include <vector>
 
 namespace {
 
 using Vertex = QSGGeometry::ColoredPoint2D;
+
+struct SceneTriangle
+{
+    Vertex vertices[3];
+    double depthMeters = 0.0;
+};
 
 bool environmentEnabled(const char *name)
 {
@@ -46,10 +53,7 @@ bool environmentEnabled(const char *name)
 struct WorkoutGameSceneRoot : public QSGNode
 {
     QSGSimpleTextureNode *background = nullptr;
-    QSGGeometryNode *ground = nullptr;
-    QSGGeometryNode *shoulders = nullptr;
-    QSGGeometryNode *road = nullptr;
-    QSGGeometryNode *features = nullptr;
+    QSGGeometryNode *terrain = nullptr;
     QSGTransformNode *riderTransform = nullptr;
     QSGSimpleTextureNode *rider = nullptr;
     QSGSimpleTextureNode *hud = nullptr;
@@ -77,10 +81,7 @@ WorkoutGameSceneRoot *createSceneRoot()
     root->background = new QSGSimpleTextureNode;
     root->background->setOwnsTexture(true);
     root->appendChildNode(root->background);
-    root->ground = createGeometryNode(root);
-    root->shoulders = createGeometryNode(root);
-    root->road = createGeometryNode(root);
-    root->features = createGeometryNode(root);
+    root->terrain = createGeometryNode(root);
     root->riderTransform = new QSGTransformNode;
     root->appendChildNode(root->riderTransform);
     root->rider = new QSGSimpleTextureNode;
@@ -103,38 +104,106 @@ void setTexture(
 }
 
 void appendTriangle(
-        std::vector<Vertex> &vertices,
+        std::vector<SceneTriangle> &triangles,
         float ax, float ay,
         float bx, float by,
         float cx, float cy,
-        const QColor &color)
+        const QColor &color,
+        double depthMeters)
 {
-    const auto add = [&vertices, &color](float x, float y) {
+    SceneTriangle triangle;
+    int corner = 0;
+    const auto add = [&triangle, &corner, &color](float x, float y) {
         Vertex vertex;
         vertex.set(x, y,
                    uchar(color.red()), uchar(color.green()),
                    uchar(color.blue()), uchar(color.alpha()));
-        vertices.push_back(vertex);
+        triangle.vertices[corner++] = vertex;
     };
     add(ax, ay);
     add(bx, by);
     add(cx, cy);
+    triangle.depthMeters = depthMeters;
+    triangles.push_back(triangle);
 }
 
 void appendQuad(
-        std::vector<Vertex> &vertices,
+        std::vector<SceneTriangle> &triangles,
         float farLeft, float farY,
         float farRight,
         float nearLeft, float nearY,
         float nearRight,
-        const QColor &color)
+        const QColor &color,
+        double farDepthMeters,
+        double nearDepthMeters)
 {
-    appendTriangle(vertices,
+    appendTriangle(triangles,
                    farLeft, farY, nearLeft, nearY, nearRight, nearY,
-                   color);
-    appendTriangle(vertices,
+                   color, (farDepthMeters + nearDepthMeters * 2.0) / 3.0);
+    appendTriangle(triangles,
                    farLeft, farY, nearRight, nearY, farRight, farY,
-                   color);
+                   color, (farDepthMeters * 2.0 + nearDepthMeters) / 3.0);
+}
+
+WorkoutGameRoadProjectedSlice interpolateSlice(
+        const WorkoutGameRoadProjectedSlice &from,
+        const WorkoutGameRoadProjectedSlice &to,
+        double amount)
+{
+    const auto value = [amount](double first, double second) {
+        return first + (second - first) * amount;
+    };
+    WorkoutGameRoadProjectedSlice result = to;
+    result.worldDistanceMeters = value(
+            from.worldDistanceMeters, to.worldDistanceMeters);
+    result.depthMeters = value(from.depthMeters, to.depthMeters);
+    result.centerX = value(from.centerX, to.centerX);
+    result.centerY = value(from.centerY, to.centerY);
+    result.halfWidthPixels = value(
+            from.halfWidthPixels, to.halfWidthPixels);
+    result.halfWidthMeters = value(
+            from.halfWidthMeters, to.halfWidthMeters);
+    result.pixelsPerMeter = value(
+            from.pixelsPerMeter, to.pixelsPerMeter);
+    result.surfaceOffsetMeters = value(
+            from.surfaceOffsetMeters, to.surfaceOffsetMeters);
+    result.occlusionY = value(from.occlusionY, to.occlusionY);
+    return result;
+}
+
+bool clipProjectedPair(
+        WorkoutGameRoadProjectedSlice &far,
+        WorkoutGameRoadProjectedSlice &near)
+{
+    const double farVisibility = far.occlusionY - far.centerY;
+    const double nearVisibility = near.occlusionY - near.centerY;
+    if (farVisibility < -1e-6 && nearVisibility < -1e-6) return false;
+    if (farVisibility < -1e-6 || nearVisibility < -1e-6) {
+        const double span = farVisibility - nearVisibility;
+        const double amount = std::abs(span) > 1e-12
+                ? std::clamp(farVisibility / span, 0.0, 1.0)
+                : 0.0;
+        const WorkoutGameRoadProjectedSlice crossing =
+                interpolateSlice(far, near, amount);
+        if (farVisibility < -1e-6) far = crossing;
+        else near = crossing;
+    }
+    return true;
+}
+
+std::vector<Vertex> sortedVertices(std::vector<SceneTriangle> triangles)
+{
+    std::stable_sort(triangles.begin(), triangles.end(),
+            [](const SceneTriangle &left, const SceneTriangle &right) {
+                return left.depthMeters > right.depthMeters;
+            });
+    std::vector<Vertex> vertices;
+    vertices.reserve(triangles.size() * 3u);
+    for (const SceneTriangle &triangle : triangles) {
+        vertices.insert(vertices.end(), std::begin(triangle.vertices),
+                        std::end(triangle.vertices));
+    }
+    return vertices;
 }
 
 void updateGeometry(
@@ -192,17 +261,15 @@ QColor meshColor(WorkoutGameMeshMaterial material, bool selectedBypass = false)
 void buildRoadGeometry(
         const WorkoutGameRoadProjectionFrame &projection,
         double viewportWidth,
-        std::vector<Vertex> &ground,
-        std::vector<Vertex> &shoulders,
-        std::vector<Vertex> &road)
+        std::vector<SceneTriangle> &geometry)
 {
     if (projection.slices.size() < 2) return;
-    ground.reserve((projection.slices.size() - 1u) * 12u);
-    shoulders.reserve((projection.slices.size() - 1u) * 12u);
-    road.reserve((projection.slices.size() - 1u) * 6u);
+    geometry.reserve(geometry.size()
+            + (projection.slices.size() - 1u) * 10u);
     for (std::size_t index = 1; index < projection.slices.size(); ++index) {
-        const WorkoutGameRoadProjectedSlice &far = projection.slices[index - 1];
-        const WorkoutGameRoadProjectedSlice &near = projection.slices[index];
+        WorkoutGameRoadProjectedSlice far = projection.slices[index - 1];
+        WorkoutGameRoadProjectedSlice near = projection.slices[index];
+        if (!clipProjectedPair(far, near)) continue;
         const bool alternate = (int(std::floor(
                 near.worldDistanceMeters / 3.5)) & 1) != 0;
         const float farLeft = float(far.centerX - far.halfWidthPixels);
@@ -212,28 +279,33 @@ void buildRoadGeometry(
         const float farY = float(far.centerY);
         const float nearY = float(near.centerY);
         const QColor grass = groundColor(near.terrain, alternate);
-        appendQuad(ground,
+        appendQuad(geometry,
                    0.0f, farY, farLeft,
-                   0.0f, nearY, nearLeft, grass);
-        appendQuad(ground,
+                   0.0f, nearY, nearLeft, grass,
+                   far.depthMeters, near.depthMeters);
+        appendQuad(geometry,
                    farRight, farY, float(viewportWidth),
-                   nearRight, nearY, float(viewportWidth), grass);
+                   nearRight, nearY, float(viewportWidth), grass,
+                   far.depthMeters, near.depthMeters);
 
         const float farShoulder = std::max(1.0f,
                 float(far.halfWidthPixels * 0.12));
         const float nearShoulder = std::max(1.0f,
                 float(near.halfWidthPixels * 0.12));
         const QColor shoulder(66, 72, 57);
-        appendQuad(shoulders,
+        appendQuad(geometry,
                    farLeft - farShoulder, farY, farLeft,
-                   nearLeft - nearShoulder, nearY, nearLeft, shoulder);
-        appendQuad(shoulders,
+                   nearLeft - nearShoulder, nearY, nearLeft, shoulder,
+                   far.depthMeters, near.depthMeters);
+        appendQuad(geometry,
                    farRight, farY, farRight + farShoulder,
-                   nearRight, nearY, nearRight + nearShoulder, shoulder);
-        appendQuad(road,
+                   nearRight, nearY, nearRight + nearShoulder, shoulder,
+                   far.depthMeters, near.depthMeters);
+        appendQuad(geometry,
                    farLeft, farY, farRight,
                    nearLeft, nearY, nearRight,
-                   roadColor(near.terrain, alternate));
+                   roadColor(near.terrain, alternate),
+                   far.depthMeters, near.depthMeters);
     }
 }
 
@@ -266,6 +338,14 @@ bool projectedSliceAt(
         result.centerY = far.centerY + (near.centerY - far.centerY) * amount;
         result.halfWidthPixels = far.halfWidthPixels
                 + (near.halfWidthPixels - far.halfWidthPixels) * amount;
+        result.halfWidthMeters = far.halfWidthMeters
+                + (near.halfWidthMeters - far.halfWidthMeters) * amount;
+        result.pixelsPerMeter = far.pixelsPerMeter
+                + (near.pixelsPerMeter - far.pixelsPerMeter) * amount;
+        result.surfaceOffsetMeters = far.surfaceOffsetMeters
+                + (near.surfaceOffsetMeters - far.surfaceOffsetMeters) * amount;
+        result.occlusionY = far.occlusionY
+                + (near.occlusionY - far.occlusionY) * amount;
         return true;
     }
     return false;
@@ -273,7 +353,7 @@ bool projectedSliceAt(
 
 void buildMotionCueGeometry(
         const WorkoutGameRoadProjectionFrame &projection,
-        std::vector<Vertex> &features)
+        std::vector<SceneTriangle> &geometry)
 {
     if (projection.slices.size() < 2) return;
     constexpr double SpacingMeters = 4.0;
@@ -302,13 +382,15 @@ void buildMotionCueGeometry(
                 1.2f, float(near.halfWidthPixels * 0.07));
         const float farHalfWidth = std::max(
                 0.7f, float(far.halfWidthPixels * 0.07));
-        appendQuad(features,
+        if (!clipProjectedPair(far, near)) continue;
+        appendQuad(geometry,
                    farCenter - farHalfWidth, float(far.centerY),
                    farCenter + farHalfWidth,
                    nearCenter - nearHalfWidth, float(near.centerY),
                    nearCenter + nearHalfWidth,
                    markerIndex & 1 ? QColor(91, 69, 46, 210)
-                                   : QColor(155, 122, 77, 190));
+                                   : QColor(155, 122, 77, 190),
+                   far.depthMeters, near.depthMeters);
     }
 }
 
@@ -317,33 +399,31 @@ void appendCourseBand(
         double startDistanceMeters,
         double endDistanceMeters,
         const QColor &color,
-        std::vector<Vertex> &features)
+        std::vector<SceneTriangle> &geometry)
 {
-    const WorkoutGameRoadProjectedPoint farLeft =
-            WorkoutGameRoadProjection::projectPoint(
-                projection, endDistanceMeters, -1.15, 0.035);
-    const WorkoutGameRoadProjectedPoint farRight =
-            WorkoutGameRoadProjection::projectPoint(
-                projection, endDistanceMeters, 1.15, 0.035);
-    const WorkoutGameRoadProjectedPoint nearLeft =
-            WorkoutGameRoadProjection::projectPoint(
-                projection, startDistanceMeters, -1.15, 0.035);
-    const WorkoutGameRoadProjectedPoint nearRight =
-            WorkoutGameRoadProjection::projectPoint(
-                projection, startDistanceMeters, 1.15, 0.035);
-    if (!farLeft.ready || !farRight.ready || !nearLeft.ready || !nearRight.ready) {
-        return;
-    }
-    appendQuad(features,
-               float(farLeft.x), float(farLeft.y), float(farRight.x),
-               float(nearLeft.x), float(nearLeft.y), float(nearRight.x),
-               color);
+    WorkoutGameRoadProjectedSlice far;
+    WorkoutGameRoadProjectedSlice near;
+    if (!projectedSliceAt(projection, endDistanceMeters, far)
+            || !projectedSliceAt(projection, startDistanceMeters, near)) return;
+    constexpr double ElevationMeters = 0.035;
+    far.centerY -= ElevationMeters * far.pixelsPerMeter;
+    near.centerY -= ElevationMeters * near.pixelsPerMeter;
+    if (!clipProjectedPair(far, near)) return;
+    constexpr double HalfWidthMeters = 1.15;
+    appendQuad(geometry,
+               float(far.centerX - HalfWidthMeters * far.pixelsPerMeter),
+               float(far.centerY),
+               float(far.centerX + HalfWidthMeters * far.pixelsPerMeter),
+               float(near.centerX - HalfWidthMeters * near.pixelsPerMeter),
+               float(near.centerY),
+               float(near.centerX + HalfWidthMeters * near.pixelsPerMeter),
+               color, far.depthMeters, near.depthMeters);
 }
 
 void buildPowerCueGeometry(
         const WorkoutGameRoadProjectionFrame &projection,
         const WorkoutGameFeatureRuntimeSnapshot &active,
-        std::vector<Vertex> &features)
+        std::vector<SceneTriangle> &geometry)
 {
     if (!active.ready || active.decisionDistanceMeters
             <= active.prepareDistanceMeters) {
@@ -360,32 +440,33 @@ void buildPowerCueGeometry(
                 std::min(distance + StripeLengthMeters,
                          active.decisionDistanceMeters),
                 QColor(241, 184, 58, 185),
-                features);
+                geometry);
     }
     appendCourseBand(
             projection,
             active.decisionDistanceMeters - 0.35,
             active.decisionDistanceMeters + 0.35,
             QColor(245, 231, 98, 235),
-            features);
+            geometry);
 }
 
 void appendProjectedMesh(
         const WorkoutGameMeshInstance &instance,
         const WorkoutGameRoadProjectionFrame &projection,
         bool selectedBypass,
-        std::vector<Vertex> &features)
+        std::vector<SceneTriangle> &geometry)
 {
     const std::vector<WorkoutGameProjectedMeshTriangle> triangles =
             WorkoutGameMeshProjector::project(instance, projection);
-    features.reserve(features.size() + triangles.size() * 3u);
+    geometry.reserve(geometry.size() + triangles.size());
     for (const WorkoutGameProjectedMeshTriangle &triangle : triangles) {
         appendTriangle(
-                features,
+                geometry,
                 float(triangle.vertices[0].x), float(triangle.vertices[0].y),
                 float(triangle.vertices[1].x), float(triangle.vertices[1].y),
                 float(triangle.vertices[2].x), float(triangle.vertices[2].y),
-                meshColor(triangle.material, selectedBypass));
+                meshColor(triangle.material, selectedBypass),
+                triangle.depthMeters);
     }
 }
 
@@ -394,7 +475,7 @@ void buildFeatureGeometry(
         const WorkoutGameRoadCourse &course,
         const WorkoutGameRoadProjectionFrame &projection,
         const WorkoutGameFeatureRuntimeSnapshot &active,
-        std::vector<Vertex> &features)
+        std::vector<SceneTriangle> &geometry)
 {
     if (projection.slices.empty()) return;
     for (const WorkoutGameRoadPiece &piece : course.pieces) {
@@ -423,7 +504,8 @@ void buildFeatureGeometry(
         bypass.mesh = WorkoutGameMeshLibrary::bypassRibbon(
                 branchLength, direction * 2.2, 0.50);
         bypass.anchorDistanceMeters = branchStart;
-        appendProjectedMesh(bypass, projection, selectedBypass, features);
+        bypass.anchorToBaseSurface = true;
+        appendProjectedMesh(bypass, projection, selectedBypass, geometry);
 
         const double difficulty = piece.sourceSectionIndex
                 < workout.sections.size()
@@ -433,7 +515,8 @@ void buildFeatureGeometry(
         obstacleMesh.mesh = WorkoutGameMeshLibrary::feature(
                 piece.terrain, difficulty);
         obstacleMesh.anchorDistanceMeters = obstacle;
-        appendProjectedMesh(obstacleMesh, projection, false, features);
+        obstacleMesh.anchorToBaseSurface = true;
+        appendProjectedMesh(obstacleMesh, projection, false, geometry);
     }
 }
 
@@ -528,13 +611,12 @@ void WorkoutGameSceneGraphItem::setSessionRunning(bool running)
     update();
 }
 
-void WorkoutGameSceneGraphItem::framePresented(
-        std::int64_t monotonicTimeNs)
+void WorkoutGameSceneGraphItem::framePresented()
 {
     if (frameRateResetRequested.exchange(false, std::memory_order_acq_rel)) {
         frameRateCounter.reset();
     }
-    frameRateCounter.frameRenderedNanoseconds(monotonicTimeNs);
+    frameRateCounter.frameRenderedNanoseconds(visualClock.nsecsElapsed());
 }
 
 void WorkoutGameSceneGraphItem::rebuildHud()
@@ -745,7 +827,12 @@ void WorkoutGameSceneGraphItem::publishDiagnostics(
                 << " stationary=" << snapshot.stationaryFrameCount
                 << " fps=" << input.framesPerSecond
                 << " p95_frame_ms=" << input.p95FrameIntervalMs
-                << " skipped_ticks=" << input.skippedSimulationTicks;
+                << " skipped_ticks=" << input.skippedSimulationTicks
+                << " watts=" << watts
+                << " target_watts=" << targetWatts
+                << " cadence=" << cadenceRpm
+                << " hr=" << heartRate
+                << " gear=" << virtualGear;
     }
     const std::int64_t nowMs = WorkoutGameClock::monotonicMilliseconds();
     if (diagnosticsEnabled
@@ -799,6 +886,9 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
     WorkoutGameRoadProjectionConfig config;
     config.viewportWidth = viewportWidth;
     config.viewportHeight = viewportHeight;
+    if (visual.camera.ready) {
+        config.cameraElevationMeters = visual.camera.centerElevationMeters;
+    }
     const double riderDistance = visual.world.ready
             ? visual.world.rider.distanceMeters
             : renderedTimeline.ready
@@ -809,22 +899,15 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
             WorkoutGameRoadProjection::project(
                     roadCourse, riderDistance, config);
 
-    std::vector<Vertex> ground;
-    std::vector<Vertex> shoulders;
-    std::vector<Vertex> road;
-    std::vector<Vertex> features;
+    std::vector<SceneTriangle> terrain;
     if (projection.ready) {
-        buildRoadGeometry(
-                projection, viewportWidth, ground, shoulders, road);
-        buildMotionCueGeometry(projection, features);
-        buildPowerCueGeometry(projection, feature, features);
+        buildRoadGeometry(projection, viewportWidth, terrain);
+        buildMotionCueGeometry(projection, terrain);
+        buildPowerCueGeometry(projection, feature, terrain);
         buildFeatureGeometry(
-                currentCourse, roadCourse, projection, feature, features);
+                currentCourse, roadCourse, projection, feature, terrain);
     }
-    updateGeometry(root->ground, ground);
-    updateGeometry(root->shoulders, shoulders);
-    updateGeometry(root->road, road);
-    updateGeometry(root->features, features);
+    updateGeometry(root->terrain, sortedVertices(std::move(terrain)));
 
     constexpr int RiderColumns = 4;
     constexpr int RiderRows = 2;
@@ -940,10 +1023,10 @@ WorkoutGameSceneGraphWindow::WorkoutGameSceneGraphWindow(QWindow *parent) :
     sceneItem->setSize(size());
     renderClock.start();
     connect(this, &QQuickWindow::frameSwapped,
-            sceneItem, [this]() {
+            sceneItem, [item = sceneItem]() {
                 // Direct delivery keeps the timestamp at actual presentation
                 // and leaves the counter on Qt's render-loop owner.
-                sceneItem->framePresented(renderClock.nsecsElapsed());
+                item->framePresented();
             }, Qt::DirectConnection);
     connect(this, &QQuickWindow::frameSwapped,
             this, [this]() {
@@ -998,6 +1081,13 @@ WorkoutGameSceneGraphWindow::WorkoutGameSceneGraphWindow(QWindow *parent) :
         });
         captureTimer->start();
     }
+}
+
+WorkoutGameSceneGraphWindow::~WorkoutGameSceneGraphWindow()
+{
+    // frameSwapped can be emitted while QQuickWindow tears down its scene graph.
+    // Disconnect while the derived members captured by the callbacks still live.
+    disconnect(this, nullptr, nullptr, nullptr);
 }
 
 void WorkoutGameSceneGraphWindow::setCourse(

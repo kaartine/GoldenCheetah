@@ -91,6 +91,8 @@ bool WorkoutGameRunner::configure(
     inputState.anchorMonotonicTimeMs = nowMs;
     inputState.generation = lifecycleGeneration.fetch_add(
             1, std::memory_order_acq_rel) + 1;
+    inputState.publicationEpoch = publicationEpoch.fetch_add(
+            1, std::memory_order_acq_rel) + 1;
     inputState.revision = 1;
     inputState.anchorRevision = 1;
     inputState.resetRevision = 1;
@@ -111,9 +113,12 @@ void WorkoutGameRunner::start(
 {
     if (!configured) return;
     ensureThread();
+    std::lock_guard<std::mutex> lifecycleLock(engineLifecycleMutex);
     {
         std::lock_guard<std::mutex> lock(inputMutex);
         inputState.generation = lifecycleGeneration.fetch_add(
+                1, std::memory_order_acq_rel) + 1;
+        inputState.publicationEpoch = publicationEpoch.fetch_add(
                 1, std::memory_order_acq_rel) + 1;
         inputState.anchorWorkoutTimeMs = std::max<std::int64_t>(0, workoutTimeMs);
         inputState.anchorMonotonicTimeMs = monotonicMilliseconds();
@@ -133,9 +138,12 @@ void WorkoutGameRunner::resume(
 {
     if (!configured) return;
     ensureThread();
+    std::lock_guard<std::mutex> lifecycleLock(engineLifecycleMutex);
     {
         std::lock_guard<std::mutex> lock(inputMutex);
         inputState.generation = lifecycleGeneration.fetch_add(
+                1, std::memory_order_acq_rel) + 1;
+        inputState.publicationEpoch = publicationEpoch.fetch_add(
                 1, std::memory_order_acq_rel) + 1;
         inputState.anchorWorkoutTimeMs = std::max<std::int64_t>(0, workoutTimeMs);
         inputState.anchorMonotonicTimeMs = monotonicMilliseconds();
@@ -143,6 +151,7 @@ void WorkoutGameRunner::resume(
         inputState.running = true;
         inputState.input.simulation.paused = false;
         ++inputState.anchorRevision;
+        ++inputState.resynchronizeRevision;
         ++inputState.revision;
     }
     inputChanged.notify_one();
@@ -155,12 +164,15 @@ void WorkoutGameRunner::setAnchor(
     if (!configured) return;
     {
         std::lock_guard<std::mutex> lock(inputMutex);
+        inputState.publicationEpoch = publicationEpoch.fetch_add(
+                1, std::memory_order_acq_rel) + 1;
         inputState.anchorWorkoutTimeMs = std::max<std::int64_t>(0, workoutTimeMs);
         inputState.anchorMonotonicTimeMs = monotonicMilliseconds();
         inputState.rateHint = rateHint;
         ++inputState.anchorRevision;
         ++inputState.revision;
     }
+    clearOutput();
     inputChanged.notify_one();
 }
 
@@ -187,9 +199,12 @@ void WorkoutGameRunner::setTelemetry(const WorkoutGameEngineInput &input)
 void WorkoutGameRunner::pause(std::int64_t workoutTimeMs)
 {
     if (!configured) return;
+    std::lock_guard<std::mutex> lifecycleLock(engineLifecycleMutex);
     {
         std::lock_guard<std::mutex> lock(inputMutex);
         inputState.generation = lifecycleGeneration.fetch_add(
+                1, std::memory_order_acq_rel) + 1;
+        inputState.publicationEpoch = publicationEpoch.fetch_add(
                 1, std::memory_order_acq_rel) + 1;
         inputState.anchorWorkoutTimeMs = std::max<std::int64_t>(0, workoutTimeMs);
         inputState.anchorMonotonicTimeMs = monotonicMilliseconds();
@@ -204,7 +219,43 @@ void WorkoutGameRunner::pause(std::int64_t workoutTimeMs)
 
 void WorkoutGameRunner::stop(std::int64_t workoutTimeMs)
 {
-    pause(workoutTimeMs);
+    WorkoutGameEngineFrame ignored;
+    stopAndTakeLatest(workoutTimeMs, ignored);
+}
+
+bool WorkoutGameRunner::stopAndTakeLatest(
+        std::int64_t workoutTimeMs,
+        WorkoutGameEngineFrame &frame)
+{
+    if (!configured) return false;
+    std::lock_guard<std::mutex> lifecycleLock(engineLifecycleMutex);
+    {
+        std::lock_guard<std::mutex> inputLock(inputMutex);
+        inputState.generation = lifecycleGeneration.fetch_add(
+                1, std::memory_order_acq_rel) + 1;
+        inputState.publicationEpoch = publicationEpoch.fetch_add(
+                1, std::memory_order_acq_rel) + 1;
+        inputState.anchorWorkoutTimeMs = std::max<std::int64_t>(
+                0, workoutTimeMs);
+        inputState.anchorMonotonicTimeMs = monotonicMilliseconds();
+        inputState.running = false;
+        inputState.input.simulation.paused = true;
+        ++inputState.anchorRevision;
+        ++inputState.revision;
+    }
+    bool available = false;
+    {
+        std::lock_guard<std::mutex> outputLock(outputMutex);
+        if (latestFrame.sequence != 0
+                && latestFrame.sequence != consumedSequence) {
+            frame = latestFrame;
+            available = true;
+        }
+        latestFrame = WorkoutGameEngineFrame();
+        consumedSequence = publicationSequence;
+    }
+    inputChanged.notify_one();
+    return available;
 }
 
 bool WorkoutGameRunner::takeLatest(WorkoutGameEngineFrame &frame)
@@ -228,12 +279,18 @@ void WorkoutGameRunner::clearOutput()
 
 bool WorkoutGameRunner::publish(
         WorkoutGameEngineFrame frame,
-        std::uint64_t expectedGeneration)
+        std::uint64_t expectedGeneration,
+        std::uint64_t expectedPublicationEpoch)
 {
     std::lock_guard<std::mutex> lock(outputMutex);
     if (expectedGeneration != 0
             && lifecycleGeneration.load(std::memory_order_acquire)
                 != expectedGeneration) {
+        return false;
+    }
+    if (expectedPublicationEpoch != 0
+            && publicationEpoch.load(std::memory_order_acquire)
+                != expectedPublicationEpoch) {
         return false;
     }
     frame.sequence = ++publicationSequence;
@@ -253,6 +310,7 @@ void WorkoutGameRunner::run()
     std::uint64_t seenRevision = 0;
     std::uint64_t seenAnchorRevision = 0;
     std::uint64_t seenResetRevision = 0;
+    std::uint64_t seenResynchronizeRevision = 0;
     std::size_t totalSkippedTicks = 0;
     InputState state;
 
@@ -280,6 +338,11 @@ void WorkoutGameRunner::run()
         }
 
         if (state.resetRevision != seenResetRevision) {
+            std::lock_guard<std::mutex> lifecycleLock(engineLifecycleMutex);
+            if (lifecycleGeneration.load(std::memory_order_acquire)
+                    != state.generation) {
+                continue;
+            }
             engine.reset();
             totalSkippedTicks = 0;
             clock.reset(
@@ -288,6 +351,7 @@ void WorkoutGameRunner::run()
                     state.running,
                     state.rateHint);
             seenResetRevision = state.resetRevision;
+            seenResynchronizeRevision = state.resynchronizeRevision;
             seenAnchorRevision = state.anchorRevision;
         } else if (state.anchorRevision != seenAnchorRevision) {
             clock.setAnchor(
@@ -298,6 +362,21 @@ void WorkoutGameRunner::run()
             seenAnchorRevision = state.anchorRevision;
         } else if (clock.isRunning() != state.running) {
             clock.setRunning(state.running, monotonicMilliseconds());
+        }
+
+        if (state.resynchronizeRevision != seenResynchronizeRevision) {
+            WorkoutGameEngineInput anchorInput = state.input;
+            anchorInput.simulation.workoutTimeMs = state.anchorWorkoutTimeMs;
+            std::lock_guard<std::mutex> lifecycleLock(engineLifecycleMutex);
+            if (lifecycleGeneration.load(std::memory_order_acquire)
+                    != state.generation) {
+                continue;
+            }
+            engine.resynchronize(
+                    anchorInput,
+                    state.anchorMonotonicTimeMs,
+                    totalSkippedTicks);
+            seenResynchronizeRevision = state.resynchronizeRevision;
         }
 
         const std::int64_t nowMs = monotonicMilliseconds();
@@ -311,10 +390,18 @@ void WorkoutGameRunner::run()
                     advance.ticks.front().deadlineMonotonicMs);
             skipInput.simulation.workoutTimeMs =
                     advance.ticks.front().workoutTimeMs;
-            engine.resynchronize(
-                    skipInput,
-                    advance.ticks.front().deadlineMonotonicMs,
-                    totalSkippedTicks);
+            {
+                std::lock_guard<std::mutex> lifecycleLock(
+                        engineLifecycleMutex);
+                if (lifecycleGeneration.load(std::memory_order_acquire)
+                        != state.generation) {
+                    continue;
+                }
+                engine.resynchronize(
+                        skipInput,
+                        advance.ticks.front().deadlineMonotonicMs,
+                        totalSkippedTicks);
+            }
             firstTick = 1;
         }
         for (std::size_t index = firstTick;
@@ -325,6 +412,11 @@ void WorkoutGameRunner::run()
                     tickInput, tick.deadlineMonotonicMs);
             tickInput.simulation.workoutTimeMs = tick.workoutTimeMs;
             tickInput.simulation.paused = false;
+            std::lock_guard<std::mutex> lifecycleLock(engineLifecycleMutex);
+            if (lifecycleGeneration.load(std::memory_order_acquire)
+                    != state.generation) {
+                break;
+            }
             WorkoutGameEngineFrame frame = engine.update(
                         tickInput,
                         tick.deadlineMonotonicMs,
@@ -333,7 +425,8 @@ void WorkoutGameRunner::run()
             frame.telemetryStale = telemetryStale;
             if (!publish(
                     std::move(frame),
-                    state.generation)) {
+                    state.generation,
+                    state.publicationEpoch)) {
                 break;
             }
         }
@@ -342,9 +435,10 @@ void WorkoutGameRunner::run()
 
 void WorkoutGameRunner::shutdown()
 {
-    lifecycleGeneration.fetch_add(1, std::memory_order_acq_rel);
     {
-        std::lock_guard<std::mutex> lock(inputMutex);
+        std::lock_guard<std::mutex> lifecycleLock(engineLifecycleMutex);
+        lifecycleGeneration.fetch_add(1, std::memory_order_acq_rel);
+        std::lock_guard<std::mutex> inputLock(inputMutex);
         stopping = true;
         ++inputState.revision;
     }

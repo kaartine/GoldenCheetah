@@ -139,10 +139,12 @@ Renderer selection is capability-based. Runtime rendering errors permanently
 fall back for the current session instead of repeatedly recreating a GPU
 context.
 
-Only the selected renderer receives frames. Hiding the chart stops its GUI drain
-timer and scene graph request loop; the one-slot runner output continues to
-overwrite stale game frames without affecting Train telemetry, control, or
-recording. Showing the chart consumes the newest complete frame.
+Only the selected renderer receives frames. Hiding the chart drains its newest
+frame, stops the GUI drain and scene graph request loops, and suspends that
+chart's runner. Showing it re-anchors and resynchronizes the engine at the
+current workout position before simulation resumes. This prevents multiple
+hidden Workout Game charts from retaining independent 50 Hz Box2D workloads;
+Train telemetry, control, and recording continue unchanged.
 
 ## Scheduling And Performance
 
@@ -232,6 +234,12 @@ presentation timestamp. Rendering stays one tick behind and interpolates the
 previous/current complete pair; it does not extrapolate runner state past the
 latest physics result. The current input mailbox deliberately keeps only the
 latest telemetry value, so timestamped telemetry replay remains future work.
+Lifecycle generation changes and an engine tick share a narrow lifecycle
+barrier. A start, pause, resume, stop, or shutdown therefore cannot retire a
+generation halfway through a mutating engine update. Telemetry and anchor
+publication do not take this barrier; they still copy into the bounded input
+slot immediately. A lifecycle action can wait only for the currently executing
+bounded tick, never for rendering, the GUI drain, or an event queue.
 
 The primary scene graph renderer requests the next presentation from Qt's
 completed `frameSwapped` callback and is normally bounded by display vsync.
@@ -260,8 +268,8 @@ Mutable state has the following owners:
 | Feature decisions and one-shot action IDs | `WorkoutGameEngine` on the runner thread |
 | Box2D world, vehicle contacts and suspension | `WorkoutGameEngine` on the runner thread |
 | Camera target and transition | `WorkoutGameEngine` on the runner thread |
-| Workout-time-to-road mapping and sampled surface | Immutable `WorkoutGameRoadCourse`; the engine publishes its authoritative distance, while Box2D and the scene graph sample the same elevation and grade |
-| Feature and trail meshes | Immutable course-space values from `WorkoutGameMeshLibrary`; projected by the scene graph |
+| Workout-time-to-road mapping and sampled surface | Immutable `WorkoutGameRoadCourse`; the engine publishes its authoritative distance, while Box2D and the scene graph sample the same base elevation, feature surface offset, and grade |
+| Feature and trail meshes | Immutable course-space values from `WorkoutGameMeshLibrary`; feature meshes are anchored to the base surface and projected by the scene graph so the course feature height is not applied twice |
 | Visual interpolation, projected trail and render diagnostics | `WorkoutGameSceneGraphItem::updatePaintNode` during Qt scene graph synchronization |
 | Runner input and latest output slot | Separate small mutexes in `WorkoutGameRunner`; heavy simulation occurs outside both critical sections |
 | HUD source image and telemetry labels | `WorkoutGameSceneGraphItem` on the GUI thread, rebuilt at most 10 Hz; copied to a scene graph texture during synchronization |
@@ -275,6 +283,9 @@ passes that distance to Box2D and publishes it with the resulting vehicle pose,
 feature state, and camera. `WorkoutGameRoadCourse::sample()` supplies the same
 surface elevation and grade to collider construction and pseudo-3D projection,
 so a visible obstacle and its physical response share course coordinates.
+Feature pieces also publish a canonical surface offset derived from their
+difficulty. The same dimensions drive the physical road surface and the visible
+log, tabletop, rock slab, or drop mesh.
 
 #### Course-Space 2.5D Geometry
 
@@ -292,6 +303,14 @@ width and elevation. Collision boxes are data only in the current release;
 feature success remains authoritative in `WorkoutGameFeatureChallenge`. A
 future Box2D adapter may install those boxes as fixtures, but rendering must
 never decide workout progress, resistance, recording, or feature rewards.
+
+The scene graph projects only the bounded near/far course window. Source mesh
+triangles that cross either plane are clipped before projection instead of
+being dropped. Projected geometry is then clipped at the nearest visible crest
+and all road, shoulder, ground, cue, and feature triangles are depth-sorted into
+one terrain node. This avoids geometry from separate QSG nodes painting through
+nearer terrain. Camera elevation comes from the interpolated presentation
+snapshot, so visual suspension motion does not reintroduce fixed-step jitter.
 
 The GUI-to-render handoff currently relies on Qt Quick's synchronization phase.
 `setFrame`, `setTelemetry`, and `setCourse` mutate the `QQuickItem` on the GUI
@@ -388,7 +407,10 @@ sequence number into a one-element latest-frame slot. A 16 ms GUI timer copies
 only the newest frame, so a stalled GUI cannot accumulate simulation events. It
 then relies on the existing Qt scene graph synchronization for GUI-to-render
 transfer. Both input and output critical sections copy bounded values only;
-clock, rules, camera and Box2D work occur without those locks held.
+clock, rules, camera and Box2D work occur without those locks held. The separate
+lifecycle barrier covers one engine tick plus publication so a rejected
+old-generation frame cannot leave unpublished mutations behind. It is not used
+by normal telemetry or trainer-target paths.
 
 If profiling later justifies a direct simulation-to-render exchange, use a
 bounded single-producer/single-consumer triple buffer with explicit slot
@@ -457,6 +479,11 @@ generation, and publication
 rejects a completed frame when pause, stop, restart, replacement, or shutdown
 has invalidated that generation. Extending this identity through timestamped
 telemetry remains P2 work.
+Anchor corrections also carry a separate publication epoch. They retire queued
+or in-flight pre-anchor frames without forcing the renderer to cut interpolation
+for routine forward synchronization. Stop retires publication and takes the
+latest unconsumed frame atomically, so final display and ghost state are not
+lost by clearing the one-slot mailbox first.
 
 The next telemetry iteration should use a bounded single-producer/single-consumer
 ring after timestamps have been normalized to the monotonic scheduler domain.
@@ -528,7 +555,7 @@ not copied from an engine or added as a new runtime dependency:
 | Godot | [`main/main_timer_sync.cpp`](https://github.com/godotengine/godot/blob/9ba32b09e0dfa4a6c1b82312554894615c716cce/main/main_timer_sync.cpp), [`main/main.cpp`](https://github.com/godotengine/godot/blob/9ba32b09e0dfa4a6c1b82312554894615c716cce/main/main.cpp), and [`scene/main/scene_tree_fti.cpp`](https://github.com/godotengine/godot/blob/9ba32b09e0dfa4a6c1b82312554894615c716cce/scene/main/scene_tree_fti.cpp) | Accumulate real time, execute a bounded number of fixed physics steps, retain the remainder as an interpolation fraction, and interpolate previous/current transforms. Keep a maximum step count to avoid a stall-induced spiral. | [MIT](https://github.com/godotengine/godot/blob/9ba32b09e0dfa4a6c1b82312554894615c716cce/LICENSE.txt) |
 | Bevy | [`crates/bevy_time/src/fixed.rs`](https://github.com/bevyengine/bevy/blob/70a1fb4fddc57972c722d1f49919b771687b940d/crates/bevy_time/src/fixed.rs), [`examples/movement/physics_in_fixed_timestep.rs`](https://github.com/bevyengine/bevy/blob/70a1fb4fddc57972c722d1f49919b771687b940d/examples/movement/physics_in_fixed_timestep.rs), and [`crates/bevy_render/src/pipelined_rendering.rs`](https://github.com/bevyengine/bevy/blob/70a1fb4fddc57972c722d1f49919b771687b940d/crates/bevy_render/src/pipelined_rendering.rs) | Keep physical previous/current positions separate from rendered transforms. Use fixed-clock overstep for interpolation and a capacity-one channel when pipelining simulation and rendering so stale work cannot queue without bound. | [MIT or Apache-2.0](https://github.com/bevyengine/bevy/tree/70a1fb4fddc57972c722d1f49919b771687b940d#license) |
 | raylib | [`src/rcore.c`](https://github.com/raysan5/raylib/blob/af3045377a4faf2d8a5125feed88cdd3f375f1ca/src/rcore.c) | Buffer swap, frame waiting and measured frame-time averaging belong to presentation. This is useful as a minimal pacing reference, but its single-loop design is not appropriate for trainer control ownership. | [zlib/libpng](https://github.com/raysan5/raylib/blob/af3045377a4faf2d8a5125feed88cdd3f375f1ca/LICENSE) |
-| Javascript Racer | [`v4.final.html`](https://github.com/jakesgordon/javascript-racer/blob/master/v4.final.html) | Use one longitudinal position for update and projection, process a bounded segment window, and clip road behind visible crests. The implementation is a reference for algorithms only; its third-party art and audio are not used. | [MIT for code](https://github.com/jakesgordon/javascript-racer/blob/master/LICENSE) |
+| Javascript Racer | [`v4.final.html`](https://github.com/jakesgordon/javascript-racer/blob/master/v4.final.html) | Use one longitudinal position for update and projection, process a bounded segment window, and clip road behind visible crests. These rules are now implemented by the canonical road projection and crest clipper. The implementation is a reference for algorithms only; its third-party art and audio are not used. | [MIT for code](https://github.com/jakesgordon/javascript-racer/blob/master/LICENSE) |
 | TrackGenerator | [`TrackGenerator`](https://github.com/rob1997/TrackGenerator) | A sampled center spline with shared entry and exit tangents is a useful model for joining generated course pieces without grade or heading discontinuities. | [MIT](https://github.com/rob1997/TrackGenerator/blob/master/LICENSE) |
 | Redrock | [`redrock`](https://github.com/StarKnightt/redrock) | A common sampled surface for visible geometry and collision avoids independent road truths. Only the architectural idea is used. | [ISC](https://github.com/StarKnightt/redrock/blob/master/LICENSE) |
 
@@ -554,9 +581,13 @@ simulation, and rendering ownership at once:
    reject invalid or regressing streams, hash every complete engine frame, and
    compare repeated pass, bypass, pause/resume, and input-mutation replays.
 5. **Implemented for pre-release gating:** trace realized frame intervals,
-   cumulative stalls, skipped simulation ticks, and forward road progress on the
-   old integrated-GPU laptop. Production sessions are still needed before moving
-   course or physics phases to more workers or adding adaptive GPU effects.
+   cumulative stalls, skipped simulation ticks, forward road progress, telemetry,
+   virtual gear, and workout target power. The packaged UI gate explicitly loads
+   a prepared ERG workout, connects the data generator, proves that two running
+   frames differ, and validates the trace. It runs once through the QPainter
+   fallback and once through the Scene Graph path against separate temporary
+   athlete libraries. Production sessions are still needed before moving course
+   or physics phases to more workers or adding adaptive GPU effects.
 
 Acceptance requires deterministic replay for the same timestamped input, no
 backward world movement during forward riding, no trainer or recording wait on

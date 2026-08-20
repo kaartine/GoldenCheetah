@@ -38,6 +38,9 @@ public:
     void setTelemetry(const WorkoutGameEngineInput &input);
     void pause(std::int64_t workoutTimeMs);
     void stop(std::int64_t workoutTimeMs);
+    bool stopAndTakeLatest(
+            std::int64_t workoutTimeMs,
+            WorkoutGameEngineFrame &frame);
     bool takeLatest(WorkoutGameEngineFrame &frame);
     void shutdown();
 
@@ -53,8 +56,10 @@ private:
         bool running = false;
         std::uint64_t anchorRevision = 0;
         std::uint64_t resetRevision = 0;
+        std::uint64_t resynchronizeRevision = 0;
         std::uint64_t revision = 0;
         std::uint64_t generation = 0;
+        std::uint64_t publicationEpoch = 0;
     };
 
     void ensureThread();
@@ -62,7 +67,8 @@ private:
     void clearOutput();
     bool publish(
             WorkoutGameEngineFrame frame,
-            std::uint64_t expectedGeneration = 0);
+            std::uint64_t expectedGeneration = 0,
+            std::uint64_t expectedPublicationEpoch = 0);
 
     WorkoutGameEngine engine;
     WorkoutGameClock clock;
@@ -75,6 +81,9 @@ private:
     bool configured = false;
     bool stopping = false;
     std::atomic<std::uint64_t> lifecycleGeneration{0};
+    std::atomic<std::uint64_t> publicationEpoch{0};
+    // A lifecycle transition cannot split an otherwise transactional engine tick.
+    std::mutex engineLifecycleMutex;
     std::thread worker;
 
     std::mutex outputMutex;

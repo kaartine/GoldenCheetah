@@ -44,6 +44,28 @@ WorkoutGameCourse sampleCourse()
     return course;
 }
 
+WorkoutGameCourse crestCourse()
+{
+    WorkoutGameCourse course;
+    course.status = WorkoutGameCourseStatus::Ready;
+    course.seed = 912u;
+    WorkoutGameSection climb;
+    climb.feature = WorkoutGameFeature::Climb;
+    climb.terrain = WorkoutGameTerrainKind::Climb;
+    climb.durationMs = 10000;
+    climb.targetWatts = 220.0;
+    climb.gradePercent = 15.0;
+    WorkoutGameSection descent = climb;
+    descent.startMs = 10000;
+    descent.gradePercent = -15.0;
+    WorkoutGameSection finish = climb;
+    finish.startMs = 20000;
+    finish.gradePercent = 0.0;
+    course.durationMs = 30000;
+    course.sections = {climb, descent, finish};
+    return course;
+}
+
 bool near(double left, double right, double tolerance = 1e-7)
 {
     return std::abs(left - right) <= tolerance;
@@ -224,6 +246,84 @@ private slots:
             QVERIFY(std::abs(first.slices[index].centerY
                     - next.slices[index].centerY) < 2.0);
         }
+    }
+
+    void crestOcclusionMarksRoadHiddenByNearerTerrain()
+    {
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(crestCourse(), 200.0);
+        WorkoutGameRoadProjectionConfig config;
+        config.visibleDistanceMeters = 120.0;
+        const WorkoutGameRoadProjectionFrame frame =
+                WorkoutGameRoadProjection::project(road, 0.0, config);
+        QVERIFY(frame.ready);
+
+        bool hiddenSlice = false;
+        double priorOcclusion = config.viewportHeight;
+        for (auto slice = frame.slices.rbegin();
+             slice != frame.slices.rend(); ++slice) {
+            QVERIFY(slice->occlusionY <= priorOcclusion + 1e-9);
+            priorOcclusion = slice->occlusionY;
+            hiddenSlice = hiddenSlice
+                    || slice->centerY > slice->occlusionY + 1e-6;
+        }
+        QVERIFY2(hiddenSlice, "the valley behind the crest was not occluded");
+    }
+
+    void explicitCameraElevationMovesProjectionSmoothly()
+    {
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(sampleCourse(), 200.0);
+        WorkoutGameRoadProjectionConfig lowConfig;
+        lowConfig.cameraElevationMeters = 2.0;
+        WorkoutGameRoadProjectionConfig highConfig = lowConfig;
+        highConfig.cameraElevationMeters = 2.1;
+        const WorkoutGameRoadProjectionFrame low =
+                WorkoutGameRoadProjection::project(road, 10.0, lowConfig);
+        const WorkoutGameRoadProjectionFrame high =
+                WorkoutGameRoadProjection::project(road, 10.0, highConfig);
+        QVERIFY(low.ready);
+        QVERIFY(high.ready);
+        QCOMPARE(low.slices.size(), high.slices.size());
+        for (std::size_t index = 0; index < low.slices.size(); ++index) {
+            QVERIFY(high.slices[index].centerY > low.slices[index].centerY);
+        }
+    }
+
+    void projectionPreservesNarrowFeatureBreakpoints()
+    {
+        WorkoutGameCourse source;
+        source.status = WorkoutGameCourseStatus::Ready;
+        source.seed = 551u;
+        source.durationMs = 30000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::SprintJump;
+        section.terrain = WorkoutGameTerrainKind::LogOver;
+        section.durationMs = source.durationMs;
+        section.targetWatts = 260.0;
+        section.difficulty = 0.5;
+        section.challengeCount = 1;
+        source.sections.push_back(section);
+        const WorkoutGameRoadCourse course =
+                WorkoutGameRoadCourseBuilder::build(source, 200.0);
+        QVERIFY(course.ready);
+        const auto piece = std::find_if(
+                course.pieces.begin(), course.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != course.pieces.end());
+        const double obstacle = piece->challenge.obstacleDistanceMeters;
+        const WorkoutGameRoadProjectionFrame projection =
+                WorkoutGameRoadProjection::project(course, obstacle - 10.0);
+        QVERIFY(projection.ready);
+        const auto obstacleSlice = std::find_if(
+                projection.slices.begin(), projection.slices.end(),
+                [obstacle](const WorkoutGameRoadProjectedSlice &slice) {
+                    return std::abs(slice.worldDistanceMeters - obstacle) < 1e-7;
+                });
+        QVERIFY(obstacleSlice != projection.slices.end());
+        QVERIFY(obstacleSlice->surfaceOffsetMeters > 0.4);
     }
 };
 

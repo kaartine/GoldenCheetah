@@ -46,7 +46,7 @@ public:
             int heartRate,
             int virtualGear);
     void setSessionRunning(bool running);
-    void framePresented(std::int64_t monotonicTimeNs);
+    void framePresented();
     WorkoutGameDiagnosticsSnapshot diagnosticsSnapshot() const
     {
         return publishedDiagnostics;
@@ -97,6 +97,7 @@ class WorkoutGameSceneGraphWindow : public QQuickWindow
 
 public:
     explicit WorkoutGameSceneGraphWindow(QWindow *parent = nullptr);
+    ~WorkoutGameSceneGraphWindow() override;
 
     void setCourse(const WorkoutGameCourse &course, double ftpWatts);
     void setFrame(

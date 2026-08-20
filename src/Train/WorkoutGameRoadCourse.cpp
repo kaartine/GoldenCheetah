@@ -10,6 +10,7 @@
 #include "WorkoutGameRoadCourse.h"
 
 #include "WorkoutGameFeatureCatalog.h"
+#include "WorkoutGameFeatureGeometry.h"
 
 #include <algorithm>
 #include <cmath>
@@ -23,13 +24,6 @@ double smoothStep(double value)
 {
     const double clamped = std::clamp(value, 0.0, 1.0);
     return clamped * clamped * (3.0 - 2.0 * clamped);
-}
-
-double smootherStep(double value)
-{
-    const double clamped = std::clamp(value, 0.0, 1.0);
-    return clamped * clamped * clamped
-            * (clamped * (clamped * 6.0 - 15.0) + 10.0);
 }
 
 double challengeSurfaceOffset(
@@ -67,35 +61,11 @@ double challengeSurfaceOffset(
     switch (piece.terrain) {
     case WorkoutGameTerrainKind::BunnyHop:
     case WorkoutGameTerrainKind::LogOver:
-        if (std::abs(local) < 1.0) {
-            const double height = piece.terrain
-                    == WorkoutGameTerrainKind::LogOver ? 0.28 : 0.18;
-            offset += height * (1.0 - smootherStep(std::abs(local)));
-        }
-        break;
     case WorkoutGameTerrainKind::Tabletop:
-        if (local >= -4.0 && local < 0.0) {
-            offset += 0.75 * smootherStep((local + 4.0) / 4.0);
-        } else if (local >= 0.0 && local <= 4.0) {
-            offset += 0.75;
-        } else if (local > 4.0 && local < 8.0) {
-            offset += 0.75 * (1.0 - smootherStep((local - 4.0) / 4.0));
-        }
-        break;
     case WorkoutGameTerrainKind::RockSlab:
-        if (local >= -3.0 && local < 0.0) {
-            offset += 0.42 * smootherStep((local + 3.0) / 3.0);
-        } else if (local >= 0.0 && local <= 3.0) {
-            offset += 0.42;
-        } else if (local > 3.0 && local < 6.0) {
-            offset += 0.42 * (1.0 - smootherStep((local - 3.0) / 3.0));
-        }
-        break;
     case WorkoutGameTerrainKind::Drop:
-        if (local >= -1.5 && local <= 0.5) {
-            offset += 0.18 * std::sin(
-                    Pi * (local + 1.5) / 2.0);
-        }
+        offset += WorkoutGameFeatureGeometry::profile(
+                piece.terrain, piece.difficulty).surfaceOffset(local);
         break;
     default:
         break;
@@ -299,6 +269,7 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
             piece.turnRadians = pieceTurn(
                     section, std::size_t(part));
             piece.riseMeters = pieceLength * section.gradePercent / 100.0;
+            piece.difficulty = std::clamp(section.difficulty, 0.0, 1.0);
             piece.entry = connector;
             piece.exit = connector;
             piece.exit.halfWidthMeters = targetHalfWidth(section.terrain);
@@ -406,7 +377,8 @@ WorkoutGameRoadSample WorkoutGameRoadCourseBuilder::sample(
     result.distanceMeters = distance;
     result.pieceProgress = progress;
     result.center = connectorAt(piece, progress);
-    result.center.elevationMeters += challengeSurfaceOffset(piece, distance);
+    result.surfaceOffsetMeters = challengeSurfaceOffset(piece, distance);
+    result.center.elevationMeters += result.surfaceOffsetMeters;
     const double sampleRadius = std::min(0.05, piece.lengthMeters * 0.1);
     if (sampleRadius > 0.0) {
         const double low = std::max(

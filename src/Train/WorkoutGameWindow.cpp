@@ -149,6 +149,11 @@ WorkoutGameWindow::WorkoutGameWindow(Context *context) :
 void WorkoutGameWindow::showEvent(QShowEvent *event)
 {
     GcChartWindow::showEvent(event);
+    if (sessionActive && !paused && presentationSuspended) {
+        updateAtWorkoutPosition(context->getNow());
+        runner.resume(currentWorkoutTimeMs, currentAnchorRate);
+        presentationSuspended = false;
+    }
     frameDrainTimer->start();
     drainRunnerFrame();
     sceneGraphWindow->setSessionRunning(
@@ -160,6 +165,12 @@ void WorkoutGameWindow::hideEvent(QHideEvent *event)
 {
     frameDrainTimer->stop();
     sceneGraphWindow->setSessionRunning(false);
+    if (sessionActive && !paused && !presentationSuspended) {
+        drainRunnerFrame();
+        updateAtWorkoutPosition(context->getNow());
+        runner.pause(currentWorkoutTimeMs);
+        presentationSuspended = true;
+    }
     GcChartWindow::hideEvent(event);
 }
 
@@ -276,6 +287,7 @@ void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
     lastFrame = WorkoutGameEngineFrame();
     paused = false;
     sessionActive = false;
+    presentationSuspended = false;
     anchorRateInitialized = false;
     lastAnchorWorkoutTimeMs = 0;
     lastAnchorMonotonicTimeMs = 0;
@@ -305,16 +317,25 @@ void WorkoutGameWindow::start()
 {
     sessionState.started();
     ghostRecorder.configure(currentCourse.seed, currentCourse.durationMs);
+    hasFrame = false;
+    lastFrame = WorkoutGameEngineFrame();
     paused = false;
     sessionActive = true;
     sceneGraphWindow->setSessionRunning(
             isVisible() && renderStack->currentWidget() == sceneGraphContainer);
     updateAtWorkoutPosition(context->getNow());
     runner.start(currentWorkoutTimeMs, currentAnchorRate);
+    if (!isVisible()) {
+        runner.pause(currentWorkoutTimeMs);
+        presentationSuspended = true;
+    } else {
+        presentationSuspended = false;
+    }
 }
 
 void WorkoutGameWindow::pause()
 {
+    drainRunnerFrame();
     paused = true;
     sceneGraphWindow->setSessionRunning(false);
     updateAtWorkoutPosition(context->getNow());
@@ -328,16 +349,27 @@ void WorkoutGameWindow::unpause()
             sessionActive && isVisible()
             && renderStack->currentWidget() == sceneGraphContainer);
     updateAtWorkoutPosition(context->getNow());
-    runner.resume(currentWorkoutTimeMs, currentAnchorRate);
+    if (isVisible()) {
+        runner.resume(currentWorkoutTimeMs, currentAnchorRate);
+        presentationSuspended = false;
+    } else {
+        presentationSuspended = true;
+    }
 }
 
 void WorkoutGameWindow::stop()
 {
     sessionState.stopped();
-    sessionActive = false;
     sceneGraphWindow->setSessionRunning(false);
-    runner.stop(currentWorkoutTimeMs);
-    drainRunnerFrame();
+    WorkoutGameEngineFrame finalFrame;
+    if (runner.stopAndTakeLatest(currentWorkoutTimeMs, finalFrame)) {
+        ghostRecorder.record(finalFrame.visual.simulation);
+        lastFrame = finalFrame;
+        hasFrame = true;
+        displayFrame(finalFrame);
+    }
+    sessionActive = false;
+    presentationSuspended = false;
     storeGhost();
 }
 

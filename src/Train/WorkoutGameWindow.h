@@ -82,6 +82,7 @@ private:
     bool hasFrame = false;
     bool paused = false;
     bool sessionActive = false;
+    bool presentationSuspended = false;
     bool featureLabEnabled = false;
     bool anchorRateInitialized = false;
     std::int64_t lastAnchorWorkoutTimeMs = 0;

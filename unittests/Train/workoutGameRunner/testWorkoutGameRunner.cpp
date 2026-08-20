@@ -93,6 +93,66 @@ private slots:
         QVERIFY(frame.visual.sessionGeneration > beforeGeneration);
     }
 
+    void rapidPauseResumeNeverPublishesRetiredGeneration()
+    {
+        WorkoutGameRunner runner;
+        QVERIFY(runner.configure(
+                WorkoutGameFeatureLab::course(200.0), 200.0, true));
+        runner.start(0, 1.0);
+        WorkoutGameEngineFrame frame;
+        QVERIFY(waitForFrame(runner, frame));
+        std::uint64_t generation = frame.visual.sessionGeneration;
+
+        for (int transition = 0; transition < 20; ++transition) {
+            const std::int64_t anchor =
+                    frame.visual.simulation.workoutTimeMs;
+            runner.pause(anchor);
+            while (runner.takeLatest(frame)) {}
+            QTest::qWait(3);
+            QVERIFY(!runner.takeLatest(frame));
+
+            runner.resume(anchor, 1.0);
+            QVERIFY(waitForFrame(runner, frame));
+            QVERIFY(frame.visual.sessionGeneration > generation);
+            QVERIFY(frame.visual.simulation.workoutTimeMs >= anchor);
+            generation = frame.visual.sessionGeneration;
+        }
+    }
+
+    void anchorChangeRetiresQueuedFrames()
+    {
+        WorkoutGameRunner runner;
+        QVERIFY(runner.configure(
+                WorkoutGameFeatureLab::course(200.0), 200.0, true));
+        runner.start(0, 1.0);
+        WorkoutGameEngineFrame frame;
+        QVERIFY(waitForFrame(runner, frame));
+        QTest::qWait(60);
+
+        runner.setAnchor(5000, 1.0);
+        QVERIFY(!runner.takeLatest(frame));
+        QVERIFY(waitForFrame(runner, frame));
+        QVERIFY(frame.visual.simulation.workoutTimeMs >= 5000);
+    }
+
+    void stopReturnsNewestUnconsumedFrameBeforeRetirement()
+    {
+        WorkoutGameRunner runner;
+        QVERIFY(runner.configure(
+                WorkoutGameFeatureLab::course(200.0), 200.0, true));
+        runner.start(0, 1.0);
+        WorkoutGameEngineFrame first;
+        QVERIFY(waitForFrame(runner, first));
+        QTest::qWait(80);
+
+        WorkoutGameEngineFrame finalFrame;
+        QVERIFY(runner.stopAndTakeLatest(
+                first.visual.simulation.workoutTimeMs, finalFrame));
+        QVERIFY(finalFrame.visual.simulation.workoutTimeMs
+                > first.visual.simulation.workoutTimeMs);
+        QVERIFY(!runner.takeLatest(finalFrame));
+    }
+
     void failedCourseReplacementCannotLeakPreviousFrame()
     {
         WorkoutGameRunner runner;

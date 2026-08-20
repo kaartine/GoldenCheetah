@@ -13,6 +13,7 @@
 #include "WorkoutGameRoadCourse.h"
 
 #include <cstddef>
+#include <limits>
 #include <vector>
 
 struct WorkoutGameRoadProjectionConfig
@@ -21,6 +22,7 @@ struct WorkoutGameRoadProjectionConfig
     double viewportHeight = 720.0;
     double horizonRatio = 0.34;
     double cameraHeightMeters = 1.55;
+    double cameraElevationMeters = std::numeric_limits<double>::quiet_NaN();
     double fieldOfViewDegrees = 62.0;
     double nearDistanceMeters = 1.4;
     double visibleDistanceMeters = 105.0;
@@ -36,6 +38,8 @@ struct WorkoutGameRoadProjectedSlice
     double halfWidthPixels = 0.0;
     double halfWidthMeters = 0.0;
     double pixelsPerMeter = 0.0;
+    double surfaceOffsetMeters = 0.0;
+    double occlusionY = 0.0;
     std::size_t pieceIndex = 0;
     WorkoutGameTerrainKind terrain = WorkoutGameTerrainKind::SmoothTrail;
 };
@@ -46,6 +50,8 @@ struct WorkoutGameRoadProjectedPoint
     double x = 0.0;
     double y = 0.0;
     double depthMeters = 0.0;
+    double occlusionY = 0.0;
+    bool visible = false;
 };
 
 struct WorkoutGameRoadProjectionFrame
@@ -67,7 +73,8 @@ public:
             const WorkoutGameRoadProjectionFrame &frame,
             double worldDistanceMeters,
             double lateralMeters,
-            double elevationMeters);
+            double elevationMeters,
+            bool relativeToBaseSurface = false);
 };
 
 #endif
