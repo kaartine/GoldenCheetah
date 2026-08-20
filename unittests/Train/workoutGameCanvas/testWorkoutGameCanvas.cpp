@@ -311,6 +311,71 @@ private slots:
         }
     }
 
+    void fixedStepSnapshotsInterpolateWithBufferedTickWithoutExtrapolation()
+    {
+        WorkoutGameVisualSnapshot first;
+        first.presentationTimeMs = 1000;
+        first.simulation.ready = true;
+        first.simulation.workoutTimeMs = 1000;
+        first.world.ready = true;
+        first.world.generation = 1;
+        first.world.rider.distanceMeters = 10.0;
+        first.riderPedalCycles = 2.0;
+
+        WorkoutGameVisualSnapshot second = first;
+        second.presentationTimeMs = 1020;
+        second.simulation.workoutTimeMs = 1020;
+        second.world.rider.distanceMeters = 10.2;
+        second.riderPedalCycles = 2.2;
+
+        WorkoutGameVisualSmoother smoother;
+        smoother.setTarget(first, 1002);
+        smoother.setTarget(second, 1022);
+
+        const WorkoutGameVisualSnapshot halfway = smoother.sample(1050);
+        QCOMPARE(halfway.simulation.workoutTimeMs, std::int64_t(1010));
+        QVERIFY(std::abs(halfway.world.rider.distanceMeters - 10.1) < 1e-9);
+        QVERIFY(std::abs(halfway.riderPedalCycles - 2.1) < 1e-9);
+        QCOMPARE(smoother.sample(1100).simulation.workoutTimeMs,
+                 std::int64_t(1020));
+    }
+
+    void fixedStepHistoryKeepsSixtyHertzPresentationMoving()
+    {
+        WorkoutGameVisualSmoother smoother;
+        std::int64_t nextSnapshotMs = 1000;
+        double priorDistance = 0.0;
+        bool presentationStarted = false;
+
+        for (std::int64_t nowMs = 1002; nowMs <= 1162; nowMs += 16) {
+            while (nextSnapshotMs <= nowMs - 2) {
+                WorkoutGameVisualSnapshot frame;
+                frame.presentationTimeMs = nextSnapshotMs;
+                frame.simulation.ready = true;
+                frame.simulation.workoutTimeMs = nextSnapshotMs;
+                frame.world.ready = true;
+                frame.world.generation = 1;
+                frame.world.rider.distanceMeters = 10.0
+                        + double(nextSnapshotMs - 1000) * 0.01;
+                smoother.setTarget(frame, nextSnapshotMs + 2);
+                nextSnapshotMs += 20;
+            }
+
+            const WorkoutGameVisualSnapshot rendered = smoother.sample(nowMs);
+            if (nowMs < 1050) continue;
+            const double expectedDistance = 10.0
+                    + double(nowMs - 40 - 1000) * 0.01;
+            QVERIFY(std::abs(rendered.world.rider.distanceMeters
+                             - expectedDistance) < 1e-9);
+            if (presentationStarted) {
+                QVERIFY2(rendered.world.rider.distanceMeters > priorDistance,
+                         "50 Hz snapshots stalled 60 Hz presentation");
+            }
+            presentationStarted = true;
+            priorDistance = rendered.world.rider.distanceMeters;
+        }
+    }
+
     void visualStateCutsOnlyWhenCoursePositionResets()
     {
         WorkoutGameVisualSnapshot first;
@@ -570,6 +635,41 @@ private slots:
 
         counter.reset();
         QCOMPARE(counter.framesPerSecond(), 0.0);
+    }
+
+    void frameRateCounterUsesRecentRealizedFrameIntervals()
+    {
+        WorkoutGameFrameRateCounter counter;
+        counter.frameRendered(0);
+        const std::int64_t intervals[] = {16, 17, 16, 24, 16, 17};
+        std::int64_t now = 0;
+        for (std::int64_t interval : intervals) {
+            now += interval;
+            counter.frameRendered(now);
+        }
+
+        const double expected = 6.0 * 1000.0 / 106.0;
+        QVERIFY(std::abs(counter.framesPerSecond() - expected) < 1e-9);
+        QCOMPARE(counter.p95FrameIntervalMilliseconds(), 24.0);
+    }
+
+    void frameRateCounterPreservesSubMillisecondPresentationTiming()
+    {
+        WorkoutGameFrameRateCounter counter;
+        counter.frameRenderedNanoseconds(0);
+        std::int64_t nowNs = 0;
+        const std::int64_t intervalsNs[] = {
+            16666666, 16666667, 16666667,
+            16666666, 16666667, 16666667
+        };
+        for (std::int64_t intervalNs : intervalsNs) {
+            nowNs += intervalNs;
+            counter.frameRenderedNanoseconds(nowNs);
+        }
+
+        QVERIFY(std::abs(counter.framesPerSecond() - 60.0) < 1e-6);
+        QVERIFY(std::abs(counter.p95FrameIntervalMilliseconds()
+                         - 16.666667) < 1e-9);
     }
 
     void elapsedWorkoutTimeUsesReadableClockFormat()

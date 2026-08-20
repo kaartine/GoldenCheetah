@@ -8,6 +8,7 @@
  */
 
 #include "WorkoutGameOpenGLCanvas.h"
+#include "WorkoutGameClock.h"
 
 #include "WorkoutGameCanvas.h"
 
@@ -32,6 +33,8 @@ WorkoutGameOpenGLCanvas::WorkoutGameOpenGLCanvas(QWidget *parent) :
     setFormat(format);
     visualClock.start();
     connect(this, &QOpenGLWidget::frameSwapped, this, [this]() {
+        frameRateCounter.frameRenderedNanoseconds(
+                visualClock.nsecsElapsed());
         if (renderLoopActive) update();
     });
 }
@@ -51,7 +54,8 @@ void WorkoutGameOpenGLCanvas::setCompetition(
 {
     competition = newCompetition;
     visualSmoother.setTarget(
-            {current, competition, world, camera, {}}, visualClock.elapsed());
+            {current, competition, world, camera, {}},
+            WorkoutGameClock::monotonicMilliseconds());
     update();
 }
 
@@ -62,7 +66,8 @@ void WorkoutGameOpenGLCanvas::setWorld(
     world = newWorld;
     camera = newCamera;
     visualSmoother.setTarget(
-            {current, competition, world, camera, {}}, visualClock.elapsed());
+            {current, competition, world, camera, {}},
+            WorkoutGameClock::monotonicMilliseconds());
     update();
 }
 
@@ -83,7 +88,8 @@ void WorkoutGameOpenGLCanvas::setFrame(
     cadenceRpm = std::max(0, newCadenceRpm);
     heartRate = std::max(0, newHeartRate);
     virtualGear = std::max(1, newVirtualGear);
-    visualSmoother.setTarget(frame, visualClock.elapsed());
+    visualSmoother.setTarget(
+            frame, WorkoutGameClock::monotonicMilliseconds());
     if (!renderLoopActive) update();
 }
 
@@ -117,7 +123,8 @@ void WorkoutGameOpenGLCanvas::setSnapshot(
     heartRate = std::max(0, newHeartRate);
     virtualGear = std::max(1, newVirtualGear);
     visualSmoother.setTarget(
-            {current, competition, world, camera, {}}, visualClock.elapsed());
+            {current, competition, world, camera, {}},
+            WorkoutGameClock::monotonicMilliseconds());
     update();
 }
 
@@ -172,10 +179,10 @@ void WorkoutGameOpenGLCanvas::paintGL()
         return;
     }
     glClear(GL_COLOR_BUFFER_BIT);
-    const std::int64_t nowMs = visualClock.elapsed();
+    const std::int64_t nowMs = WorkoutGameClock::monotonicMilliseconds();
     animationFrame = int((nowMs / 16) % 120);
     const WorkoutGameVisualSnapshot visual = visualSmoother.sample(nowMs);
-    const double fps = frameRateCounter.frameRendered(nowMs);
+    const double fps = frameRateCounter.framesPerSecond();
     QPainter painter(this);
     WorkoutGameCanvas::paintScene(
             painter, rect(), course, visual.simulation, visual.competition,
@@ -188,6 +195,7 @@ void WorkoutGameOpenGLCanvas::paintGL()
 void WorkoutGameOpenGLCanvas::showEvent(QShowEvent *event)
 {
     QOpenGLWidget::showEvent(event);
+    frameRateCounter.reset();
     renderLoopActive = true;
     update();
 }

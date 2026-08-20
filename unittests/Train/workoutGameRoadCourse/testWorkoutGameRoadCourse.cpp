@@ -99,6 +99,8 @@ private slots:
         QVERIFY(jump->challenge.prepareDistanceMeters
                 < jump->challenge.decisionDistanceMeters);
         QVERIFY(jump->challenge.decisionDistanceMeters
+                - jump->challenge.prepareDistanceMeters <= 6.0 + 1e-9);
+        QVERIFY(jump->challenge.decisionDistanceMeters
                 < jump->challenge.obstacleDistanceMeters);
         QVERIFY(jump->challenge.obstacleDistanceMeters
                 >= jump->startDistanceMeters);

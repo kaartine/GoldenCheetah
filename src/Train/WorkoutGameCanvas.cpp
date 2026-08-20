@@ -8,6 +8,7 @@
  */
 
 #include "WorkoutGameCanvas.h"
+#include "WorkoutGameClock.h"
 #include "WorkoutGameTrailScene.h"
 
 #include <QHideEvent>
@@ -175,7 +176,8 @@ void WorkoutGameCanvas::setCompetition(
 {
     competition = newCompetition;
     visualSmoother.setTarget(
-            {current, competition, world, camera, {}}, visualClock.elapsed());
+            {current, competition, world, camera, {}},
+            WorkoutGameClock::monotonicMilliseconds());
     update();
 }
 
@@ -186,7 +188,8 @@ void WorkoutGameCanvas::setWorld(
     world = newWorld;
     camera = newCamera;
     visualSmoother.setTarget(
-            {current, competition, world, camera, {}}, visualClock.elapsed());
+            {current, competition, world, camera, {}},
+            WorkoutGameClock::monotonicMilliseconds());
     update();
 }
 
@@ -207,7 +210,8 @@ void WorkoutGameCanvas::setFrame(
     cadenceRpm = std::max(0, newCadenceRpm);
     heartRate = std::max(0, newHeartRate);
     virtualGear = std::max(1, newVirtualGear);
-    visualSmoother.setTarget(frame, visualClock.elapsed());
+    visualSmoother.setTarget(
+            frame, WorkoutGameClock::monotonicMilliseconds());
     if (!animationTimer.isActive()) update();
 }
 
@@ -241,7 +245,8 @@ void WorkoutGameCanvas::setSnapshot(
     heartRate = std::max(0, newHeartRate);
     virtualGear = std::max(1, newVirtualGear);
     visualSmoother.setTarget(
-            {current, competition, world, camera, {}}, visualClock.elapsed());
+            {current, competition, world, camera, {}},
+            WorkoutGameClock::monotonicMilliseconds());
     update();
 }
 
@@ -375,7 +380,7 @@ double WorkoutGameCanvas::terrainProfileY(
 
 void WorkoutGameCanvas::paintEvent(QPaintEvent *)
 {
-    const std::int64_t nowMs = visualClock.elapsed();
+    const std::int64_t nowMs = WorkoutGameClock::monotonicMilliseconds();
     const WorkoutGameVisualSnapshot visual = visualSmoother.sample(nowMs);
     const double fps = frameRateCounter.frameRendered(nowMs);
     QPainter painter(this);

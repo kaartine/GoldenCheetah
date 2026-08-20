@@ -14,10 +14,8 @@
 #include "RealtimeData.h"
 #include "WorkoutGameCompetition.h"
 #include "WorkoutGameCourseRuntime.h"
-#include "WorkoutGameFeatureRuntime.h"
-#include "WorkoutGameSimulation.h"
+#include "WorkoutGameRunner.h"
 #include "WorkoutGameSessionState.h"
-#include "WorkoutGameWorld.h"
 
 class Context;
 class ErgFile;
@@ -25,6 +23,7 @@ class WorkoutGameCanvas;
 class WorkoutGameOpenGLCanvas;
 class WorkoutGameSceneGraphWindow;
 class QStackedWidget;
+class QTimer;
 class QWidget;
 
 class WorkoutGameWindow : public GcChartWindow
@@ -50,7 +49,11 @@ private:
     WorkoutGameGhostReplay loadGhost(const WorkoutGameCourse &course) const;
     void storeGhost();
     void updateAtWorkoutPosition(std::int64_t workoutPosition);
-    void updateSimulation(std::int64_t workoutTimeMs);
+    void updateRunnerTelemetry();
+    void drainRunnerFrame();
+    double anchorRate(
+            std::int64_t workoutTimeMs,
+            std::int64_t monotonicTimeMs);
 
     Context *context;
     QStackedWidget *renderStack;
@@ -61,22 +64,22 @@ private:
     WorkoutGameCourse currentCourse;
     WorkoutGameCourseRuntime distanceRuntime;
     WorkoutGameDistancePlaybackSnapshot distanceSnapshot;
-    WorkoutGameSimulation simulation;
-    WorkoutGameFeatureRuntime featureRuntime;
     WorkoutGameSessionState sessionState;
-    WorkoutGamePhysics physics;
-    WorkoutGameCamera camera;
     WorkoutGameCompetition competition;
     WorkoutGameGhostRecorder ghostRecorder;
+    WorkoutGameRunner runner;
+    QTimer *frameDrainTimer;
     RealtimeData latestTelemetry;
     bool hasTelemetry = false;
     bool paused = false;
     bool sessionActive = false;
     bool featureLabEnabled = false;
-    bool worldClockInitialized = false;
-    std::int64_t lastWorldTimeMs = 0;
+    bool anchorRateInitialized = false;
+    std::int64_t lastAnchorWorkoutTimeMs = 0;
+    std::int64_t lastAnchorMonotonicTimeMs = 0;
+    std::int64_t currentWorkoutTimeMs = 0;
+    double currentAnchorRate = 1.0;
     double ftpWatts = 0.0;
-    double featureLabTargetWatts = 0.0;
 };
 
 #endif

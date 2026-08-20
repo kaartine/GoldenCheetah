@@ -14,6 +14,21 @@ unittests/Gui/preReleaseUi/run-pre-release-ui.sh \
 The output directory contains `junit.xml`, `goldencheetah.log`, screenshots and,
 when `GC_UI_RECORD_VIDEO=1` and `ffmpeg` are available, `session.mp4`.
 
+The default run forces the QPainter fallback and software OpenGL. Exercise the
+packaged Scene Graph path separately with:
+
+```bash
+GC_WORKOUT_GAME_FORCE_PAINTER=0 \
+GC_WORKOUT_GAME_TRACE=1 \
+GC_WORKOUT_GAME_DIAGNOSTICS=1 \
+unittests/Gui/preReleaseUi/run-pre-release-ui.sh \
+  /path/to/GoldenCheetah.AppImage artifacts/ui-scenegraph
+```
+
+On a test session where direct rendering is available, add
+`GC_UI_USE_HARDWARE_GL=1`. Every mode still uses the temporary athlete library
+created by the runner.
+
 ## Workout Game diagnostics
 
 The packaged application can expose world and frame state without a debugger:
@@ -29,8 +44,10 @@ GC_WORKOUT_GAME_CAPTURE_FRAMES=120 \
 
 `GC_WORKOUT_GAME_DIAGNOSTICS` adds road distance, source and rendered workout
 time, section progress, frame interval, late/stationary/backward-frame counters,
-and maximum regression to the debug HUD. `GC_WORKOUT_GAME_TRACE` writes the same
-state to the application log about four times per second.
+rolling realized FPS, p95 frame interval, skipped simulation ticks, and maximum
+regression to the debug HUD. `GC_WORKOUT_GAME_TRACE` writes the same state to the
+application log about four times per second. The pre-release runner validates a
+trace automatically and writes `workout-game-summary.json` when tracing is on.
 
 Direct capture writes numbered PNG files while a visible game session is
 running. Capturing reads pixels back from the GPU and can disturb frame pacing,

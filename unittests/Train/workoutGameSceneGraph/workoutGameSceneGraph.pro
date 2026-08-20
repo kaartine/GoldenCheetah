@@ -4,6 +4,7 @@ CONFIG += c++17
 TARGET = testWorkoutGameSceneGraph
 
 SOURCES = testWorkoutGameSceneGraph.cpp \
+          ../../../src/Train/WorkoutGameClock.cpp \
           ../../../src/Train/WorkoutGameDiagnostics.cpp \
           ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
           ../../../src/Train/WorkoutGameFeatureLab.cpp \
@@ -18,6 +19,7 @@ SOURCES = testWorkoutGameSceneGraph.cpp \
           ../../../src/Train/WorkoutGameVisualSmoother.cpp
 
 HEADERS = ../../../src/Train/WorkoutGameFeatureChallenge.h \
+          ../../../src/Train/WorkoutGameClock.h \
           ../../../src/Train/WorkoutGameDiagnostics.h \
           ../../../src/Train/WorkoutGameFeatureLab.h \
           ../../../src/Train/WorkoutGameFeatureRuntime.h \

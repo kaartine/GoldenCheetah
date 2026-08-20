@@ -114,8 +114,13 @@ export XDG_CONFIG_HOME=$HOME/.config
 export XDG_CACHE_HOME=$HOME/.cache
 export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
 export QT_ACCESSIBILITY=1
-export QT_OPENGL=software
-export LIBGL_ALWAYS_SOFTWARE=1
+if [ "${GC_UI_USE_HARDWARE_GL:-0}" = 1 ]; then
+    export QT_OPENGL=${QT_OPENGL:-desktop}
+    unset LIBGL_ALWAYS_SOFTWARE
+else
+    export QT_OPENGL=${QT_OPENGL:-software}
+    export LIBGL_ALWAYS_SOFTWARE=${LIBGL_ALWAYS_SOFTWARE:-1}
+fi
 export QTWEBENGINE_DISABLE_SANDBOX=1
 export APPIMAGE_EXTRACT_AND_RUN=1
 export GC_WORKOUT_GAME_FORCE_PAINTER=${GC_WORKOUT_GAME_FORCE_PAINTER:-1}
@@ -141,6 +146,12 @@ set -e
 if [ -f "$TEST_ROOT/library/goldencheetah.log" ]; then
     cp -f -- "$TEST_ROOT/library/goldencheetah.log" \
         "$ARTIFACT_DIR/goldencheetah.log"
+fi
+
+if [ "$STATUS" -eq 0 ] && [ "${GC_WORKOUT_GAME_TRACE:-0}" = 1 ]; then
+    python3 "$SCRIPT_DIR/analyze_workout_game.py" \
+        "$ARTIFACT_DIR/application.log" \
+        --json "$ARTIFACT_DIR/workout-game-summary.json" || STATUS=$?
 fi
 
 if [ "$STATUS" -eq 0 ]; then

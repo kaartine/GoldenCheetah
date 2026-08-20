@@ -10,6 +10,7 @@
 #ifndef _GC_WorkoutGameDiagnostics_h
 #define _GC_WorkoutGameDiagnostics_h
 
+#include <cstddef>
 #include <cstdint>
 
 struct WorkoutGameDiagnosticsInput
@@ -27,6 +28,8 @@ struct WorkoutGameDiagnosticsInput
     double sourceRoadDistanceMeters = 0.0;
     double renderedRoadDistanceMeters = 0.0;
     double framesPerSecond = 0.0;
+    double p95FrameIntervalMs = 0.0;
+    std::size_t skippedSimulationTicks = 0;
 };
 
 struct WorkoutGameDiagnosticsSnapshot

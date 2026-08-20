@@ -8,6 +8,7 @@
  */
 
 #include "WorkoutGameSceneGraphWindow.h"
+#include "WorkoutGameClock.h"
 
 #include "WorkoutGameRoadProjection.h"
 #include "WorkoutGameMesh.h"
@@ -450,7 +451,7 @@ WorkoutGameSceneGraphItem::WorkoutGameSceneGraphItem(QQuickItem *parent) :
     QQuickItem(parent),
     backgroundImage(QStringLiteral(
             ":/images/workout-game-background-oblique.png")),
-    riderImage(QStringLiteral(":/images/workout-game-rider-oblique.png"))
+    riderImage(QStringLiteral(":/images/workout-game-rider-chase-sheet.png"))
 {
     setFlag(ItemHasContents, true);
     diagnosticsEnabled = environmentEnabled("GC_WORKOUT_GAME_DIAGNOSTICS");
@@ -468,7 +469,7 @@ void WorkoutGameSceneGraphItem::setCourse(
     featureRuntime.configure(roadCourse);
     currentFrame = {};
     visualSmoother.reset();
-    frameRateCounter.reset();
+    frameRateResetRequested.store(true, std::memory_order_release);
     diagnostics.reset();
     publishedDiagnostics = {};
     frameNumber = 0;
@@ -491,8 +492,12 @@ void WorkoutGameSceneGraphItem::setFrame(
     cadenceRpm = std::max(0, newCadenceRpm);
     heartRate = std::max(0, newHeartRate);
     virtualGear = std::max(1, newVirtualGear);
-    visualSmoother.setTarget(frame, visualClock.elapsed());
-    rebuildHud();
+    visualSmoother.setTarget(
+            frame, WorkoutGameClock::monotonicMilliseconds());
+    const std::int64_t nowMs = WorkoutGameClock::monotonicMilliseconds();
+    if (lastHudRebuildMs < 0 || nowMs - lastHudRebuildMs >= 100) {
+        rebuildHud();
+    }
     update();
 }
 
@@ -508,18 +513,34 @@ void WorkoutGameSceneGraphItem::setTelemetry(
     cadenceRpm = std::max(0, newCadenceRpm);
     heartRate = std::max(0, newHeartRate);
     virtualGear = std::max(1, newVirtualGear);
-    rebuildHud();
+    const std::int64_t nowMs = WorkoutGameClock::monotonicMilliseconds();
+    if (lastHudRebuildMs < 0 || nowMs - lastHudRebuildMs >= 100) {
+        rebuildHud();
+    }
     update();
 }
 
 void WorkoutGameSceneGraphItem::setSessionRunning(bool running)
 {
+    if (running && !sessionRunning) {
+        frameRateResetRequested.store(true, std::memory_order_release);
+    }
     sessionRunning = running;
     update();
 }
 
+void WorkoutGameSceneGraphItem::framePresented(
+        std::int64_t monotonicTimeNs)
+{
+    if (frameRateResetRequested.exchange(false, std::memory_order_acq_rel)) {
+        frameRateCounter.reset();
+    }
+    frameRateCounter.frameRenderedNanoseconds(monotonicTimeNs);
+}
+
 void WorkoutGameSceneGraphItem::rebuildHud()
 {
+    lastHudRebuildMs = WorkoutGameClock::monotonicMilliseconds();
     constexpr int StatsHeight = 74;
     constexpr int ProfileHeight = 62;
     constexpr int BaseHudHeight = StatsHeight + ProfileHeight + 4;
@@ -549,7 +570,7 @@ void WorkoutGameSceneGraphItem::rebuildHud()
                 currentFrame.simulation.speedKph, 0, 'f', 1)},
         {tr("GEAR"), QString::number(virtualGear)},
         {tr("TIME"), elapsedText(currentFrame.simulation.workoutTimeMs)},
-        {QStringLiteral("FPS"), QString::number(displayedFps, 'f', 0)}
+        {QStringLiteral("FPS"), QString::number(displayedFps, 'f', 1)}
     };
     const int columnWidth = hudImage.width() / int(stats.size());
     for (std::size_t index = 0; index < stats.size(); ++index) {
@@ -675,13 +696,15 @@ void WorkoutGameSceneGraphItem::rebuildHud()
                 QRect(8, BaseHudHeight + 26, hudImage.width() - 16, 24),
                 Qt::AlignLeft | Qt::AlignVCenter,
                 QStringLiteral(
-                    "DT %1 ms  MAX %2 ms  LATE %3  BACK %4  "
-                    "STILL %5  FRAME %6")
+                    "DT %1 ms  P95 %2 ms  MAX %3 ms  LATE %4  BACK %5  "
+                    "STILL %6  SKIP %7  FRAME %8")
                     .arg(snapshot.frameIntervalMs)
+                    .arg(input.p95FrameIntervalMs, 0, 'f', 1)
                     .arg(snapshot.largestFrameIntervalMs)
                     .arg(snapshot.lateFrameCount)
                     .arg(snapshot.backwardFrameCount)
                     .arg(snapshot.stationaryFrameCount)
+                    .arg(input.skippedSimulationTicks)
                     .arg(input.frameNumber));
     }
     ++hudRevision;
@@ -691,7 +714,10 @@ void WorkoutGameSceneGraphItem::publishFps(double fps)
 {
     if (std::abs(displayedFps - fps) < 0.5) return;
     displayedFps = fps;
-    rebuildHud();
+    const std::int64_t nowMs = WorkoutGameClock::monotonicMilliseconds();
+    if (lastHudRebuildMs < 0 || nowMs - lastHudRebuildMs >= 100) {
+        rebuildHud();
+    }
     update();
 }
 
@@ -718,9 +744,15 @@ void WorkoutGameSceneGraphItem::publishDiagnostics(
                 << " late_frames=" << snapshot.lateFrameCount
                 << " backwards=" << snapshot.backwardFrameCount
                 << " stationary=" << snapshot.stationaryFrameCount
-                << " fps=" << input.framesPerSecond;
+                << " fps=" << input.framesPerSecond
+                << " p95_frame_ms=" << input.p95FrameIntervalMs
+                << " skipped_ticks=" << input.skippedSimulationTicks;
     }
-    if (diagnosticsEnabled) rebuildHud();
+    const std::int64_t nowMs = WorkoutGameClock::monotonicMilliseconds();
+    if (diagnosticsEnabled
+            && (lastHudRebuildMs < 0 || nowMs - lastHudRebuildMs >= 100)) {
+        rebuildHud();
+    }
     update();
 }
 
@@ -756,7 +788,7 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
                 sourceWidth, backgroundImage.height());
     }
 
-    const std::int64_t nowMs = visualClock.elapsed();
+    const std::int64_t nowMs = WorkoutGameClock::monotonicMilliseconds();
     const WorkoutGameVisualSnapshot visual = visualSmoother.sample(nowMs);
     const WorkoutGameRoadTimelineSample sourceTimeline =
             WorkoutGameRoadCourseBuilder::sampleAtWorkoutTime(
@@ -802,10 +834,23 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
     updateGeometry(root->road, road);
     updateGeometry(root->features, features);
 
+    constexpr int RiderColumns = 4;
+    constexpr int RiderRows = 2;
+    constexpr int RiderFrameCount = RiderColumns * RiderRows;
+    const int riderFrameWidth = riderImage.width() / RiderColumns;
+    const int riderFrameHeight = riderImage.height() / RiderRows;
+    const int riderFrame = cadenceRpm > 0
+            ? int(std::floor(visual.riderPedalCycles * RiderFrameCount))
+                    % RiderFrameCount
+            : 0;
+    root->rider->setSourceRect(QRectF(
+            (riderFrame % RiderColumns) * riderFrameWidth,
+            (riderFrame / RiderColumns) * riderFrameHeight,
+            riderFrameWidth, riderFrameHeight));
     const double riderWidth = std::clamp(
-            viewportWidth * 0.16, 105.0, 210.0);
-    const double riderHeight = riderWidth * riderImage.height()
-            / double(std::max(1, riderImage.width()));
+            viewportWidth * 0.11, 90.0, 165.0);
+    const double riderHeight = riderWidth * riderFrameHeight
+            / double(std::max(1, riderFrameWidth));
     const double featureShake = feature.vibration > 0.0
             ? feature.vibration
                 * std::sin(feature.visualDistanceMeters * 18.0) * 12.0
@@ -852,7 +897,7 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
     root->hud->setRect(12.0, 12.0,
                        std::max(1.0, hudWidth), std::max(1.0, hudHeight));
 
-    const double fps = frameRateCounter.frameRendered(nowMs);
+    const double fps = frameRateCounter.framesPerSecond();
     WorkoutGameDiagnosticsInput diagnosticsInput;
     diagnosticsInput.ready = sourceTimeline.ready && renderedTimeline.ready;
     diagnosticsInput.movingForward = sessionRunning
@@ -872,6 +917,10 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
     diagnosticsInput.sourceRoadDistanceMeters = sourceTimeline.distanceMeters;
     diagnosticsInput.renderedRoadDistanceMeters = renderedTimeline.distanceMeters;
     diagnosticsInput.framesPerSecond = fps;
+    diagnosticsInput.p95FrameIntervalMs =
+            frameRateCounter.p95FrameIntervalMilliseconds();
+    diagnosticsInput.skippedSimulationTicks =
+            currentFrame.skippedSimulationTicks;
     const WorkoutGameDiagnosticsSnapshot diagnosticSnapshot =
             diagnostics.update(diagnosticsInput);
     if ((diagnosticsEnabled || traceEnabled)
@@ -899,19 +948,23 @@ WorkoutGameSceneGraphWindow::WorkoutGameSceneGraphWindow(QWindow *parent) :
     setColor(QColor(99, 190, 187));
     sceneItem->setSize(size());
     renderClock.start();
-    renderTimer.setTimerType(Qt::PreciseTimer);
-    renderTimer.setInterval(16);
-    connect(&renderTimer, &QTimer::timeout,
+    connect(this, &QQuickWindow::frameSwapped,
             sceneItem, [this]() {
+                // Direct delivery keeps the timestamp at actual presentation
+                // and leaves the counter on Qt's render-loop owner.
+                sceneItem->framePresented(renderClock.nsecsElapsed());
+            }, Qt::DirectConnection);
+    connect(this, &QQuickWindow::frameSwapped,
+            this, [this]() {
+                // Let Qt's presentation loop pace interpolation. A queued call
+                // keeps QQuickItem::update() on the GUI thread and avoids an
+                // independent 16 ms timer fighting display vsync.
                 if (isVisible()
                         && (sessionRunning
                             || renderClock.elapsed() <= renderUntilMs)) {
                     sceneItem->update();
-                } else if (!sessionRunning
-                           && renderClock.elapsed() > renderUntilMs) {
-                    renderTimer.stop();
                 }
-            });
+            }, Qt::QueuedConnection);
     connect(this, &QQuickWindow::sceneGraphError,
             this, [this](QQuickWindow::SceneGraphError, const QString &message) {
                 if (failureReported) return;
@@ -974,7 +1027,6 @@ void WorkoutGameSceneGraphWindow::setFrame(
     sceneItem->setFrame(frame, watts, targetWatts,
                         cadenceRpm, heartRate, virtualGear);
     renderUntilMs = renderClock.elapsed() + 1700;
-    if (!renderTimer.isActive()) renderTimer.start();
 }
 
 void WorkoutGameSceneGraphWindow::setTelemetry(
@@ -992,9 +1044,7 @@ void WorkoutGameSceneGraphWindow::setSessionRunning(bool running)
 {
     sessionRunning = running;
     sceneItem->setSessionRunning(running);
-    if (running) {
-        if (!renderTimer.isActive()) renderTimer.start();
-    } else {
+    if (!running) {
         renderUntilMs = renderClock.elapsed() + 250;
     }
 }

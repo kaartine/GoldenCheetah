@@ -100,6 +100,7 @@ struct WorkoutGamePhysics::Impl
     double gradePercent = 0.0;
     double difficulty = 0.0;
     double distanceBase = 0.0;
+    double publishedDistanceMeters = 0.0;
     double elevationBase = 0.0;
     double originBodyY = 0.0;
     double landingImpact = 0.0;
@@ -310,14 +311,30 @@ struct WorkoutGamePhysics::Impl
         return result;
     }
 
+    WorkoutGameWorldSnapshot captureSnapshot()
+    {
+        WorkoutGameWorldSnapshot result = snapshot();
+        if (!result.ready) return result;
+
+        // Box2D may push the chassis a few centimetres backwards at an
+        // obstacle contact. Keep that local response for suspension and pose,
+        // but never publish backwards course progress within one generation.
+        result.rider.distanceMeters = std::max(
+                publishedDistanceMeters, result.rider.distanceMeters);
+        publishedDistanceMeters = result.rider.distanceMeters;
+        result.terrainOffsetMeters = double(b2Body_GetPosition(chassis).x)
+                - result.rider.distanceMeters;
+        return result;
+    }
+
     void rebaseIfNeeded()
     {
         if (b2Body_GetPosition(chassis).x < RebaseAtMeters) return;
-        const WorkoutGameWorldSnapshot before = snapshot();
+        const WorkoutGameWorldSnapshot before = captureSnapshot();
         distanceBase = before.rider.distanceMeters;
         elevationBase = before.rider.elevationMeters;
         createWorld();
-        latest = snapshot();
+        latest = captureSnapshot();
     }
 
     void step(const WorkoutGamePhysicsInput &input)
@@ -395,6 +412,7 @@ void WorkoutGamePhysics::reset()
     impl->remainderMicroseconds = 0;
     impl->weakClimbMicroseconds = 0;
     impl->distanceBase = 0.0;
+    impl->publishedDistanceMeters = 0.0;
     impl->elevationBase = 0.0;
     impl->landingImpact = 0.0;
     impl->lastJumpTile = -1;
@@ -510,7 +528,7 @@ WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
             || input.difficulty != impl->difficulty;
     if (terrainChanged) {
         if (impl->initialized) {
-            impl->latest = impl->snapshot();
+            impl->latest = impl->captureSnapshot();
             impl->distanceBase = impl->latest.rider.distanceMeters;
             impl->elevationBase = impl->latest.rider.elevationMeters;
             ++impl->generation;
@@ -524,14 +542,14 @@ WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
     if (!impl->initialized) {
         impl->initialized = true;
         impl->lastWorkoutTimeMs = input.workoutTimeMs;
-        impl->latest = impl->snapshot();
+        impl->latest = impl->captureSnapshot();
         return impl->latest;
     }
 
     const std::int64_t elapsedMs = input.workoutTimeMs - impl->lastWorkoutTimeMs;
     impl->lastWorkoutTimeMs = input.workoutTimeMs;
     if (input.paused || elapsedMs <= 0) {
-        impl->latest = impl->snapshot();
+        impl->latest = impl->captureSnapshot();
         return impl->latest;
     }
 
@@ -552,7 +570,7 @@ WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
         available -= PhysicsStepMicroseconds;
     }
     impl->remainderMicroseconds = available;
-    impl->latest = impl->snapshot();
+    impl->latest = impl->captureSnapshot();
     impl->rebaseIfNeeded();
     return impl->latest;
 }

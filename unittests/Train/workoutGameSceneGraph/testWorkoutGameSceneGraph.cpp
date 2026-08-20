@@ -215,7 +215,14 @@ private slots:
         input.movingForward = true;
         input.renderedWorkoutTimeMs = 1000;
         input.renderedRoadDistanceMeters = 10.0;
-        QVERIFY(diagnostics.update(input).ready);
+        input.framesPerSecond = 57.4;
+        input.p95FrameIntervalMs = 21.0;
+        input.skippedSimulationTicks = 2;
+        const WorkoutGameDiagnosticsSnapshot first = diagnostics.update(input);
+        QVERIFY(first.ready);
+        QCOMPARE(first.input.framesPerSecond, 57.4);
+        QCOMPARE(first.input.p95FrameIntervalMs, 21.0);
+        QCOMPARE(first.input.skippedSimulationTicks, std::size_t(2));
 
         input.renderedWorkoutTimeMs = 1016;
         input.monotonicTimeMs = 16;
@@ -388,6 +395,57 @@ private slots:
         QVERIFY2(captureChanges > 900,
                  qPrintable(QStringLiteral("only %1 capture pixels changed")
                          .arg(captureChanges)));
+    }
+
+    void frameRateComesFromPresentedFrames()
+    {
+        qputenv("GC_WORKOUT_GAME_DIAGNOSTICS", "1");
+        {
+            WorkoutGameSceneGraphWindow window;
+            window.resize(960, 540);
+            window.setSessionRunning(true);
+            window.setCourse(sampleCourse(), 200.0);
+            window.setFrame(frameAt(200.0), 215.0, 230.0, 86, 151, 5);
+            window.show();
+            QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 3000);
+            QTRY_VERIFY_WITH_TIMEOUT(
+                    window.diagnosticsSnapshot().ready
+                    && window.diagnosticsSnapshot().input.framesPerSecond > 1.0
+                    && window.diagnosticsSnapshot().input
+                        .p95FrameIntervalMs > 0.0,
+                    3000);
+            QVERIFY(window.diagnosticsSnapshot().input.frameNumber > 1);
+        }
+        qunsetenv("GC_WORKOUT_GAME_DIAGNOSTICS");
+    }
+
+    void chaseRiderSpriteSheetHasEightConsistentFrames()
+    {
+        const QImage sheet(QStringLiteral(
+                ":/images/workout-game-rider-chase-sheet.png"));
+        QVERIFY(!sheet.isNull());
+        QCOMPARE(sheet.width() % 4, 0);
+        QCOMPARE(sheet.height() % 2, 0);
+        const int frameWidth = sheet.width() / 4;
+        const int frameHeight = sheet.height() / 2;
+        QVERIFY(frameWidth > 0);
+        QVERIFY(frameHeight > frameWidth);
+        for (int frame = 0; frame < 8; ++frame) {
+            const QImage image = sheet.copy(
+                    (frame % 4) * frameWidth,
+                    (frame / 4) * frameHeight,
+                    frameWidth, frameHeight);
+            int opaquePixels = 0;
+            for (int y = 0; y < image.height(); ++y) {
+                for (int x = 0; x < image.width(); ++x) {
+                    if (qAlpha(image.pixel(x, y)) >= 220) ++opaquePixels;
+                }
+            }
+            QVERIFY2(opaquePixels > frameWidth * frameHeight / 12,
+                     "rider animation frame has insufficient visible content");
+            QVERIFY2(opaquePixels < frameWidth * frameHeight / 2,
+                     "rider animation frame retained an opaque background");
+        }
     }
 };
 

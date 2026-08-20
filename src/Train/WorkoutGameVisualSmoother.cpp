@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace {
 
@@ -64,12 +65,16 @@ void WorkoutGameVisualSmoother::reset()
 {
     initialized = false;
     sourceAdvancing = false;
+    fixedStepSnapshots = false;
     transitionStartMs = 0;
     lastTargetMonotonicMs = 0;
     sourceIntervalMs = 1000;
+    previousPresentationTimeMs = 0;
+    targetPresentationTimeMs = 0;
     previous = WorkoutGameVisualSnapshot();
     predictionOrigin = WorkoutGameVisualSnapshot();
     target = WorkoutGameVisualSnapshot();
+    fixedStepHistory.clear();
     terrainTransition.reset();
 }
 
@@ -78,10 +83,41 @@ void WorkoutGameVisualSmoother::setTarget(
         std::int64_t monotonicTimeMs)
 {
     terrainTransition.setTarget(snapshot.world, monotonicTimeMs);
+    const bool fixedStepTarget = snapshot.presentationTimeMs > 0;
+    if (fixedStepTarget) {
+        const std::int64_t presentationTimeMs = snapshot.presentationTimeMs;
+        if (!initialized || !fixedStepSnapshots
+                || presentationTimeMs <= targetPresentationTimeMs
+                || isDiscontinuity(target, snapshot)) {
+            initialized = true;
+            fixedStepSnapshots = true;
+            sourceAdvancing = false;
+            previous = snapshot;
+            target = snapshot;
+            previousPresentationTimeMs = presentationTimeMs;
+            targetPresentationTimeMs = presentationTimeMs;
+            fixedStepHistory.clear();
+            fixedStepHistory.push_back(snapshot);
+            return;
+        }
+        previous = target;
+        target = snapshot;
+        previousPresentationTimeMs = targetPresentationTimeMs;
+        targetPresentationTimeMs = presentationTimeMs;
+        sourceAdvancing = target.simulation.workoutTimeMs
+                >= previous.simulation.workoutTimeMs;
+        fixedStepHistory.push_back(snapshot);
+        while (fixedStepHistory.size() > 8) {
+            fixedStepHistory.pop_front();
+        }
+        return;
+    }
+
     if (!initialized
             || monotonicTimeMs < transitionStartMs
             || isDiscontinuity(target, snapshot)) {
         initialized = true;
+        fixedStepSnapshots = false;
         sourceAdvancing = false;
         transitionStartMs = monotonicTimeMs;
         lastTargetMonotonicMs = monotonicTimeMs;
@@ -150,6 +186,39 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::sample(
         std::int64_t monotonicTimeMs) const
 {
     if (!initialized) return WorkoutGameVisualSnapshot();
+    if (fixedStepSnapshots) {
+        if (fixedStepHistory.empty()) return target;
+        const std::int64_t renderTimeMs = monotonicTimeMs
+                - FixedStepPresentationDelayMs;
+        std::size_t upperIndex = 0;
+        while (upperIndex < fixedStepHistory.size()
+                && fixedStepHistory[upperIndex].presentationTimeMs
+                    <= renderTimeMs) {
+            ++upperIndex;
+        }
+        WorkoutGameVisualSnapshot result;
+        if (upperIndex == 0) {
+            result = fixedStepHistory.front();
+        } else if (upperIndex >= fixedStepHistory.size()) {
+            result = fixedStepHistory.back();
+        } else {
+            const WorkoutGameVisualSnapshot &from =
+                    fixedStepHistory[upperIndex - 1];
+            const WorkoutGameVisualSnapshot &to =
+                    fixedStepHistory[upperIndex];
+            const std::int64_t intervalMs = to.presentationTimeMs
+                    - from.presentationTimeMs;
+            const double amount = intervalMs > 0
+                    ? std::clamp(
+                        double(renderTimeMs - from.presentationTimeMs)
+                            / double(intervalMs),
+                        0.0, 1.0)
+                    : 1.0;
+            result = interpolate(from, to, amount);
+        }
+        result.terrainTransition = terrainTransition.sample(monotonicTimeMs);
+        return result;
+    }
     const std::int64_t elapsedMs = std::max<std::int64_t>(
             0, monotonicTimeMs - transitionStartMs);
     const double amount = std::clamp(
@@ -251,6 +320,8 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::interpolate(
             from.simulation.challengeReadiness,
             to.simulation.challengeReadiness,
             amount);
+    result.riderPedalCycles = lerp(
+            from.riderPedalCycles, to.riderPedalCycles, amount);
     for (std::size_t index = 0;
          index < result.competition.competitors.size(); ++index) {
         result.competition.competitors[index].courseProgress = lerp(
@@ -322,28 +393,52 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::interpolate(
 void WorkoutGameFrameRateCounter::reset()
 {
     initialized = false;
-    windowStartMs = 0;
-    frameIntervals = 0;
+    lastFrameNs = 0;
+    intervalTotalNs = 0;
+    recentIntervalsNs.clear();
     currentFps = 0.0;
+    p95FrameIntervalMs = 0.0;
 }
 
 double WorkoutGameFrameRateCounter::frameRendered(
         std::int64_t monotonicTimeMs)
 {
-    if (!initialized || monotonicTimeMs < windowStartMs) {
+    return frameRenderedNanoseconds(monotonicTimeMs * 1000000);
+}
+
+double WorkoutGameFrameRateCounter::frameRenderedNanoseconds(
+        std::int64_t monotonicTimeNs)
+{
+    if (!initialized || monotonicTimeNs < lastFrameNs) {
         initialized = true;
-        windowStartMs = monotonicTimeMs;
-        frameIntervals = 0;
+        lastFrameNs = monotonicTimeNs;
+        intervalTotalNs = 0;
+        recentIntervalsNs.clear();
         currentFps = 0.0;
+        p95FrameIntervalMs = 0.0;
         return currentFps;
     }
 
-    ++frameIntervals;
-    const std::int64_t elapsedMs = monotonicTimeMs - windowStartMs;
-    if (elapsedMs >= 1000) {
-        currentFps = double(frameIntervals) * 1000.0 / double(elapsedMs);
-        windowStartMs = monotonicTimeMs;
-        frameIntervals = 0;
+    const std::int64_t intervalNs = monotonicTimeNs - lastFrameNs;
+    lastFrameNs = monotonicTimeNs;
+    if (intervalNs <= 0) return currentFps;
+    recentIntervalsNs.push_back(intervalNs);
+    intervalTotalNs += intervalNs;
+    while (recentIntervalsNs.size() > 2
+            && intervalTotalNs > 1000000000ll) {
+        intervalTotalNs -= recentIntervalsNs.front();
+        recentIntervalsNs.pop_front();
     }
+    currentFps = double(recentIntervalsNs.size()) * 1000000000.0
+            / double(std::max<std::int64_t>(1, intervalTotalNs));
+    std::vector<std::int64_t> ordered(
+            recentIntervalsNs.begin(), recentIntervalsNs.end());
+    std::sort(ordered.begin(), ordered.end());
+    const std::size_t percentileIndex = ordered.empty() ? 0
+            : std::min(
+                ordered.size() - 1,
+                std::size_t(std::ceil(ordered.size() * 0.95)) - 1);
+    p95FrameIntervalMs = ordered.empty()
+            ? 0.0 : double(ordered[percentileIndex]) / 1000000.0;
     return currentFps;
 }

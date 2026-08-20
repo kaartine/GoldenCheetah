@@ -132,6 +132,7 @@ exists(unittests.pri) {
 			   Train/virtualDrivetrain \
 			   Train/virtualGearRuntime \
 			   Train/workoutGameCanvas \
+			   Train/workoutGameClock \
 			   Train/workoutGameCourse \
 			   Train/workoutGameCourseConversion \
 			   Train/workoutGameCourseConversionDialog \
@@ -140,10 +141,13 @@ exists(unittests.pri) {
 			   Train/workoutGameCourseSourceAdapter \
 			   Train/workoutGameDistanceCourse \
 			   Train/workoutGameDistancePlayback \
+			   Train/workoutGameEngine \
 			   Train/workoutGameFeatureChallenge \
 			   Train/workoutGameFeatureLab \
 			   Train/workoutGameFeatureRuntime \
 			   Train/workoutGameRendererPolicy \
+			   Train/workoutGameReplay \
+			   Train/workoutGameRunner \
     Train/workoutGameRoadCourse \
     Train/workoutGameSceneGraph \
 			   Train/workoutGameRoadPhysics \

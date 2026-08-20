@@ -27,6 +27,7 @@
 #include <QDate>
 #include <QGuiApplication>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -38,6 +39,21 @@ namespace {
 
 constexpr int MaximumStoredGhosts = 12;
 constexpr double GameWheelCircumferenceMeters = 2.12;
+constexpr double MaximumPowerWatts = 10000.0;
+constexpr double MaximumCadenceRpm = 300.0;
+constexpr double MaximumSpeedKph = 300.0;
+
+double finiteClampedNonNegative(double value, double maximum)
+{
+    return std::isfinite(value)
+            ? std::clamp(value, 0.0, maximum) : 0.0;
+}
+
+int heartRateValue(double value)
+{
+    return std::isfinite(value)
+            ? int(std::lround(std::clamp(value, 0.0, 300.0))) : 0;
+}
 
 QString ghostKey(std::uint32_t seed)
 {
@@ -67,7 +83,8 @@ WorkoutGameWindow::WorkoutGameWindow(Context *context) :
     sceneGraphContainer(QWidget::createWindowContainer(
             sceneGraphWindow, renderStack)),
     painterCanvas(new WorkoutGameCanvas(renderStack)),
-    openGLCanvas(new WorkoutGameOpenGLCanvas(renderStack))
+    openGLCanvas(new WorkoutGameOpenGLCanvas(renderStack)),
+    frameDrainTimer(new QTimer(this))
 {
     setContentsMargins(0, 0, 0, 0);
     setAccessibleName(tr("Workout game view"));
@@ -118,6 +135,12 @@ WorkoutGameWindow::WorkoutGameWindow(Context *context) :
     connect(context, &Context::pause, this, &WorkoutGameWindow::pause);
     connect(context, &Context::unpause, this, &WorkoutGameWindow::unpause);
     connect(context, &Context::stop, this, &WorkoutGameWindow::stop);
+
+    frameDrainTimer->setTimerType(Qt::PreciseTimer);
+    frameDrainTimer->setInterval(16);
+    connect(frameDrainTimer, &QTimer::timeout,
+            this, &WorkoutGameWindow::drainRunnerFrame);
+    frameDrainTimer->start();
 
     ergFileSelected(context->currentErgFile());
 }
@@ -201,7 +224,6 @@ void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
     ftpWatts = currentFtp(workout);
     featureLabEnabled = qEnvironmentVariableIntValue(
             "GC_WORKOUT_GAME_FEATURE_LAB") != 0;
-    featureLabTargetWatts = 0.0;
     if (featureLabEnabled) {
         if (ftpWatts <= 0.0) ftpWatts = 200.0;
         currentCourse = WorkoutGameFeatureLab::course(ftpWatts);
@@ -225,11 +247,7 @@ void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
         }
     }
 
-    simulation.configure(currentCourse, ftpWatts);
-    featureRuntime.configure(WorkoutGameRoadCourseBuilder::build(
-            currentCourse, ftpWatts));
-    physics.configure(currentCourse.seed);
-    camera.reset();
+    runner.configure(currentCourse, ftpWatts, featureLabEnabled);
     competition.configure(currentCourse, loadGhost(currentCourse));
     ghostRecorder.configure(currentCourse.seed, currentCourse.durationMs);
     painterCanvas->setCourse(currentCourse);
@@ -238,33 +256,20 @@ void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
     hasTelemetry = false;
     paused = false;
     sessionActive = false;
-    worldClockInitialized = false;
-    lastWorldTimeMs = 0;
+    anchorRateInitialized = false;
+    lastAnchorWorkoutTimeMs = 0;
+    lastAnchorMonotonicTimeMs = 0;
+    currentWorkoutTimeMs = 0;
+    currentAnchorRate = 1.0;
     updateAtWorkoutPosition(0);
+    drainRunnerFrame();
 }
 
 void WorkoutGameWindow::telemetryUpdate(const RealtimeData &telemetry)
 {
     latestTelemetry = telemetry;
     hasTelemetry = true;
-    const int cadenceRpm = int(std::lround(latestTelemetry.getCadence()));
-    const int heartRate = int(std::lround(latestTelemetry.getHr()));
-    const int virtualGear = std::max(1, latestTelemetry.getVirtualGear());
-    const double targetWatts = featureLabEnabled
-            ? featureLabTargetWatts
-            : distanceRuntime.enabled()
-            && distanceSnapshot.ready
-            ? distanceSnapshot.targetWatts
-            : latestTelemetry.getLoad();
-    painterCanvas->setTelemetry(
-            latestTelemetry.getWatts(), targetWatts,
-            cadenceRpm, heartRate, virtualGear);
-    openGLCanvas->setTelemetry(
-            latestTelemetry.getWatts(), targetWatts,
-            cadenceRpm, heartRate, virtualGear);
-    sceneGraphWindow->setTelemetry(
-            latestTelemetry.getWatts(), targetWatts,
-            cadenceRpm, heartRate, virtualGear);
+    updateRunnerTelemetry();
 }
 
 void WorkoutGameWindow::setNow(long workoutPosition)
@@ -276,16 +281,12 @@ void WorkoutGameWindow::setNow(long workoutPosition)
 void WorkoutGameWindow::start()
 {
     sessionState.started();
-    simulation.reset();
-    physics.reset();
-    camera.reset();
     ghostRecorder.configure(currentCourse.seed, currentCourse.durationMs);
     paused = false;
     sessionActive = true;
     sceneGraphWindow->setSessionRunning(sceneGraphContainer->isVisible());
-    worldClockInitialized = false;
-    lastWorldTimeMs = 0;
     updateAtWorkoutPosition(context->getNow());
+    runner.start(currentWorkoutTimeMs, currentAnchorRate);
 }
 
 void WorkoutGameWindow::pause()
@@ -293,6 +294,7 @@ void WorkoutGameWindow::pause()
     paused = true;
     sceneGraphWindow->setSessionRunning(false);
     updateAtWorkoutPosition(context->getNow());
+    runner.pause(currentWorkoutTimeMs);
 }
 
 void WorkoutGameWindow::unpause()
@@ -301,6 +303,7 @@ void WorkoutGameWindow::unpause()
     sceneGraphWindow->setSessionRunning(
             sessionActive && sceneGraphContainer->isVisible());
     updateAtWorkoutPosition(context->getNow());
+    runner.resume(currentWorkoutTimeMs, currentAnchorRate);
 }
 
 void WorkoutGameWindow::stop()
@@ -308,6 +311,8 @@ void WorkoutGameWindow::stop()
     sessionState.stopped();
     sessionActive = false;
     sceneGraphWindow->setSessionRunning(false);
+    runner.stop(currentWorkoutTimeMs);
+    drainRunnerFrame();
     storeGhost();
 }
 
@@ -324,108 +329,82 @@ void WorkoutGameWindow::useOpenGLFallback()
 void WorkoutGameWindow::updateAtWorkoutPosition(
         std::int64_t workoutPosition)
 {
-    if (!distanceRuntime.enabled()) {
-        updateSimulation(workoutPosition);
-        return;
+    if (distanceRuntime.enabled()) {
+        distanceSnapshot = distanceRuntime.atWorkoutPosition(workoutPosition);
+        currentWorkoutTimeMs = distanceSnapshot.ready
+                ? distanceSnapshot.nominalTimeMs : 0;
+    } else {
+        currentWorkoutTimeMs = std::max<std::int64_t>(0, workoutPosition);
     }
-    distanceSnapshot = distanceRuntime.atWorkoutPosition(workoutPosition);
-    updateSimulation(distanceSnapshot.ready
-            ? distanceSnapshot.nominalTimeMs
-            : 0);
+    const std::int64_t nowMs = WorkoutGameRunner::monotonicMilliseconds();
+    currentAnchorRate = anchorRate(currentWorkoutTimeMs, nowMs);
+    runner.setAnchor(currentWorkoutTimeMs, currentAnchorRate);
+    updateRunnerTelemetry();
 }
 
-void WorkoutGameWindow::updateSimulation(std::int64_t workoutTimeMs)
+double WorkoutGameWindow::anchorRate(
+        std::int64_t workoutTimeMs,
+        std::int64_t monotonicTimeMs)
 {
-    sceneGraphWindow->setSessionRunning(
-            sessionActive && !paused && sceneGraphContainer->isVisible());
-    WorkoutGameSimulationInput input;
-    input.workoutTimeMs = workoutTimeMs;
-    input.paused = paused;
+    double rate = distanceRuntime.enabled() ? currentAnchorRate : 1.0;
+    if (distanceRuntime.enabled() && anchorRateInitialized
+            && monotonicTimeMs > lastAnchorMonotonicTimeMs
+            && workoutTimeMs >= lastAnchorWorkoutTimeMs) {
+        rate = std::clamp(
+                double(workoutTimeMs - lastAnchorWorkoutTimeMs)
+                    / double(monotonicTimeMs - lastAnchorMonotonicTimeMs),
+                0.0, 4.0);
+    }
+    anchorRateInitialized = true;
+    lastAnchorWorkoutTimeMs = workoutTimeMs;
+    lastAnchorMonotonicTimeMs = monotonicTimeMs;
+    return rate;
+}
+
+void WorkoutGameWindow::updateRunnerTelemetry()
+{
+    WorkoutGameEngineInput input;
+    input.simulation.workoutTimeMs = currentWorkoutTimeMs;
+    input.simulation.paused = paused;
     if (hasTelemetry) {
-        input.actualWatts = latestTelemetry.getWatts();
-        input.targetWatts = distanceRuntime.enabled()
+        input.simulation.actualWatts = finiteClampedNonNegative(
+                latestTelemetry.getWatts(), MaximumPowerWatts);
+        input.simulation.targetWatts = distanceRuntime.enabled()
                 && distanceSnapshot.ready
                 ? distanceSnapshot.targetWatts
-                : latestTelemetry.getLoad();
-        input.cadenceRpm = latestTelemetry.getCadence();
+                : finiteClampedNonNegative(
+                    latestTelemetry.getLoad(), MaximumPowerWatts);
+        input.simulation.cadenceRpm = finiteClampedNonNegative(
+                latestTelemetry.getCadence(), MaximumCadenceRpm);
         if (distanceRuntime.enabled()) {
-            input.authoritativeSpeedKph = latestTelemetry.getSpeed();
+            input.simulation.authoritativeSpeedKph = finiteClampedNonNegative(
+                    latestTelemetry.getSpeed(), MaximumSpeedKph);
             const VirtualDrivetrain drivetrain(
                     std::max(1, latestTelemetry.getVirtualGear()));
-            if (input.cadenceRpm > 0.0) {
-                input.drivetrainSpeedLimitKph = drivetrain.speedKph(
-                        input.cadenceRpm, GameWheelCircumferenceMeters);
+            if (input.simulation.cadenceRpm > 0.0) {
+                input.simulation.drivetrainSpeedLimitKph = drivetrain.speedKph(
+                        input.simulation.cadenceRpm,
+                        GameWheelCircumferenceMeters);
             }
         }
-        input.virtualGear = latestTelemetry.getVirtualGear();
+        input.simulation.virtualGear = latestTelemetry.getVirtualGear();
+        input.heartRate = heartRateValue(latestTelemetry.getHr());
     }
-    if (featureLabEnabled) {
-        input.targetWatts = WorkoutGameFeatureLab::targetWattsAt(
-                currentCourse, workoutTimeMs);
-        featureLabTargetWatts = input.targetWatts;
-    }
+    runner.setTelemetry(input);
+}
 
-    const WorkoutGameSimulationSnapshot snapshot = simulation.update(input);
-    const WorkoutGameFeatureRuntimeSnapshot feature =
-            featureRuntime.update(snapshot);
-    WorkoutGameWorldSnapshot world;
-    WorkoutGameCameraSnapshot view;
-    if (snapshot.ready
-            && snapshot.activeSection >= 0
-            && snapshot.activeSection < int(currentCourse.sections.size())) {
-        const WorkoutGameSection &section =
-                currentCourse.sections[snapshot.activeSection];
-        const double target = std::max(
-                1.0,
-                input.targetWatts > 0.0
-                        ? input.targetWatts
-                        : section.targetWatts);
-        WorkoutGamePhysicsInput physicsInput;
-        physicsInput.workoutTimeMs = snapshot.workoutTimeMs;
-        physicsInput.terrain = section.terrain;
-        physicsInput.desiredSpeedMetersPerSecond = snapshot.speedKph / 3.6;
-        physicsInput.gradePercent = section.gradePercent;
-        physicsInput.difficulty = section.difficulty;
-        physicsInput.effortRatio = std::max(0.0, input.actualWatts) / target;
-        physicsInput.paused = paused;
-        physicsInput.jumpRequested = feature.triggerJump;
-        physicsInput.featureActionId = feature.actionId;
-        world = physics.update(physicsInput);
-
-        const double cameraElapsedSeconds = worldClockInitialized
-                && snapshot.workoutTimeMs >= lastWorldTimeMs && !paused
-                ? double(snapshot.workoutTimeMs - lastWorldTimeMs) / 1000.0
-                : 0.0;
-        view = camera.update(world, cameraElapsedSeconds);
-        worldClockInitialized = true;
-        lastWorldTimeMs = snapshot.workoutTimeMs;
-    } else {
-        camera.reset();
-        worldClockInitialized = false;
-        lastWorldTimeMs = workoutTimeMs;
-    }
-    const WorkoutGameCompetitionSnapshot race;
-    if (sessionActive) ghostRecorder.record(snapshot);
-    const WorkoutGameVisualSnapshot frame = {snapshot, race, world, view, {}};
+void WorkoutGameWindow::drainRunnerFrame()
+{
+    WorkoutGameEngineFrame frame;
+    if (!runner.takeLatest(frame)) return;
+    if (sessionActive) ghostRecorder.record(frame.visual.simulation);
     painterCanvas->setFrame(
-            frame,
-            input.actualWatts,
-            input.targetWatts,
-            int(std::lround(input.cadenceRpm)),
-            hasTelemetry ? int(std::lround(latestTelemetry.getHr())) : 0,
-            std::max(1, input.virtualGear));
+            frame.visual, frame.watts, frame.targetWatts,
+            frame.cadenceRpm, frame.heartRate, frame.virtualGear);
     openGLCanvas->setFrame(
-            frame,
-            input.actualWatts,
-            input.targetWatts,
-            int(std::lround(input.cadenceRpm)),
-            hasTelemetry ? int(std::lround(latestTelemetry.getHr())) : 0,
-            std::max(1, input.virtualGear));
+            frame.visual, frame.watts, frame.targetWatts,
+            frame.cadenceRpm, frame.heartRate, frame.virtualGear);
     sceneGraphWindow->setFrame(
-            frame,
-            input.actualWatts,
-            input.targetWatts,
-            int(std::lround(input.cadenceRpm)),
-            hasTelemetry ? int(std::lround(latestTelemetry.getHr())) : 0,
-            std::max(1, input.virtualGear));
+            frame.visual, frame.watts, frame.targetWatts,
+            frame.cadenceRpm, frame.heartRate, frame.virtualGear);
 }

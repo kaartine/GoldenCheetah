@@ -218,9 +218,11 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
             if (ownsChallenge) {
                 piece.challenge.enabled = true;
                 piece.challenge.profile = challenge;
-                piece.challenge.prepareDistanceMeters = sectionStart
-                        + sectionLength
-                            * challenge.measurementStartProgress;
+                const double measuredPreparationDistance = sectionStart
+                        + sectionLength * challenge.measurementStartProgress;
+                piece.challenge.prepareDistanceMeters = std::max(
+                        measuredPreparationDistance,
+                        challengeDistance - 6.0);
                 piece.challenge.decisionDistanceMeters = challengeDistance;
                 piece.challenge.obstacleDistanceMeters = obstacleDistance;
             }

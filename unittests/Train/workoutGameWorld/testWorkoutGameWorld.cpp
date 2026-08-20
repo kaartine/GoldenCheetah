@@ -70,6 +70,34 @@ private slots:
         }
     }
 
+    void forwardRideNeverPublishesBackwardCourseProgress()
+    {
+        WorkoutGamePhysics physics;
+        QVERIFY(physics.configure(997u));
+        WorkoutGamePhysicsInput input;
+        input.desiredSpeedMetersPerSecond = 6.0;
+        input.effortRatio = 1.0;
+
+        double priorDistance = 0.0;
+        const WorkoutGameTerrainKind terrains[] = {
+            WorkoutGameTerrainKind::Roots,
+            WorkoutGameTerrainKind::RockGarden,
+            WorkoutGameTerrainKind::LogOver,
+            WorkoutGameTerrainKind::Tabletop,
+            WorkoutGameTerrainKind::Drop
+        };
+        for (int time = 0; time <= 12000; time += 20) {
+            input.workoutTimeMs = time;
+            input.terrain = terrains[(time / 2400) % 5];
+            input.difficulty = 0.8;
+            const WorkoutGameWorldSnapshot result = physics.update(input);
+            QVERIFY2(result.rider.distanceMeters + 1e-9 >= priorDistance,
+                     "forward riding published backwards course progress");
+            priorDistance = result.rider.distanceMeters;
+        }
+        QVERIFY(priorDistance > 20.0);
+    }
+
     void pauseAndLongUiStallDoNotRunUnboundedCatchup()
     {
         WorkoutGamePhysics physics;

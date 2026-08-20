@@ -20,8 +20,8 @@
 #include <QImage>
 #include <QQuickItem>
 #include <QQuickWindow>
-#include <QTimer>
 
+#include <atomic>
 #include <cstdint>
 
 class WorkoutGameSceneGraphItem : public QQuickItem
@@ -46,6 +46,7 @@ public:
             int heartRate,
             int virtualGear);
     void setSessionRunning(bool running);
+    void framePresented(std::int64_t monotonicTimeNs);
     WorkoutGameDiagnosticsSnapshot diagnosticsSnapshot() const
     {
         return publishedDiagnostics;
@@ -86,6 +87,8 @@ private:
     WorkoutGameDiagnostics diagnostics;
     WorkoutGameDiagnosticsSnapshot publishedDiagnostics;
     std::uint64_t hudRevision = 0;
+    std::int64_t lastHudRebuildMs = -1;
+    std::atomic<bool> frameRateResetRequested{true};
     WorkoutGameFrameRateCounter frameRateCounter;
 };
 
@@ -124,7 +127,6 @@ protected:
 
 private:
     WorkoutGameSceneGraphItem *sceneItem;
-    QTimer renderTimer;
     QElapsedTimer renderClock;
     std::int64_t renderUntilMs = 0;
     bool failureReported = false;
