@@ -25,6 +25,8 @@ class WorkoutGameSceneGraphWindow;
 class QStackedWidget;
 class QTimer;
 class QWidget;
+class QHideEvent;
+class QShowEvent;
 
 class WorkoutGameWindow : public GcChartWindow
 {
@@ -32,6 +34,10 @@ class WorkoutGameWindow : public GcChartWindow
 
 public:
     explicit WorkoutGameWindow(Context *context);
+
+protected:
+    void showEvent(QShowEvent *event) override;
+    void hideEvent(QHideEvent *event) override;
 
 private slots:
     void ergFileSelected(ErgFile *workout);
@@ -51,6 +57,7 @@ private:
     void updateAtWorkoutPosition(std::int64_t workoutPosition);
     void updateRunnerTelemetry();
     void drainRunnerFrame();
+    void displayFrame(const WorkoutGameEngineFrame &frame);
     double anchorRate(
             std::int64_t workoutTimeMs,
             std::int64_t monotonicTimeMs);
@@ -69,8 +76,10 @@ private:
     WorkoutGameGhostRecorder ghostRecorder;
     WorkoutGameRunner runner;
     QTimer *frameDrainTimer;
+    WorkoutGameEngineFrame lastFrame;
     RealtimeData latestTelemetry;
     bool hasTelemetry = false;
+    bool hasFrame = false;
     bool paused = false;
     bool sessionActive = false;
     bool featureLabEnabled = false;

@@ -288,7 +288,8 @@ bool WorkoutGameVisualSmoother::isDiscontinuity(
             && from.world.generation != to.world.generation
             && to.world.rider.distanceMeters + 2.0
                     < from.world.rider.distanceMeters;
-    return from.simulation.ready != to.simulation.ready
+    return from.sessionGeneration != to.sessionGeneration
+            || from.simulation.ready != to.simulation.ready
             || from.simulation.finished != to.simulation.finished
             || from.world.ready != to.world.ready
             || worldReset

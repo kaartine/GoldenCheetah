@@ -28,6 +28,7 @@ struct WorkoutGameVisualSnapshot
     WorkoutGameCameraSnapshot camera;
     WorkoutGameTerrainTransitionSnapshot terrainTransition;
     WorkoutGameFeatureRuntimeSnapshot feature;
+    std::uint64_t sessionGeneration = 0;
     std::int64_t presentationTimeMs = 0;
     std::size_t skippedSimulationTicks = 0;
     double riderPedalCycles = 0.0;

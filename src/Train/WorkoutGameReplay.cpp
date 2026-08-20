@@ -252,6 +252,7 @@ std::uint64_t WorkoutGameReplayHarness::hashFrame(
     addWorld(hash, frame.visual.world);
     addCamera(hash, frame.visual.camera);
     addFeature(hash, frame.visual.feature);
+    hash.addInteger(frame.visual.sessionGeneration);
     hash.addInteger(frame.visual.presentationTimeMs);
     hash.addInteger(frame.visual.skippedSimulationTicks);
     hash.addDouble(frame.visual.riderPedalCycles);

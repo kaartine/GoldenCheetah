@@ -25,7 +25,7 @@ struct WorkoutGameReplaySample
 
 struct WorkoutGameReplay
 {
-    static constexpr std::uint32_t CurrentFormatVersion = 2;
+    static constexpr std::uint32_t CurrentFormatVersion = 3;
 
     std::uint32_t formatVersion = CurrentFormatVersion;
     WorkoutGameCourse course;

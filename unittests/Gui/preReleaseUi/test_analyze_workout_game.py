@@ -20,6 +20,7 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
                 "frame_ms": 16,
                 "fps": 59.4 + (index % 3),
                 "p95_frame_ms": 18,
+                "max_frame_ms": 24,
                 "render_road_m": index * 0.5,
                 "backwards": 0,
                 "skipped_ticks": 0,
@@ -28,7 +29,7 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         ]
         summary = ANALYZER.analyze(samples)
         self.assertEqual(
-            ANALYZER.validate(summary, 8, 25.0, 45.0, 1.0, 4), []
+            ANALYZER.validate(summary, 8, 25.0, 45.0, 150.0, 1.0, 4), []
         )
 
     def test_rejects_regression_and_pacing_failure(self):
@@ -37,6 +38,7 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
                 "frame_ms": 80,
                 "fps": 12,
                 "p95_frame_ms": 90,
+                "max_frame_ms": 220,
                 "render_road_m": distance,
                 "backwards": 1,
                 "skipped_ticks": 2,
@@ -44,7 +46,7 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             for distance in (0.0, 1.0, 0.5, 0.6)
         ]
         failures = ANALYZER.validate(
-            ANALYZER.analyze(samples), 4, 25.0, 45.0, 0.5, 4
+            ANALYZER.analyze(samples), 4, 25.0, 45.0, 150.0, 0.5, 4
         )
         self.assertGreaterEqual(len(failures), 4)
 
@@ -54,13 +56,14 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             path.write_text(
                 "[debug] workout-game-trace frame=9 frame_ms=17 "
                 "fps=58.7 render_road_m=12.5 p95_frame_ms=19 "
-                "backwards=0 skipped_ticks=0\n",
+                "max_frame_ms=31 backwards=0 skipped_ticks=0\n",
                 encoding="utf-8",
             )
             samples = ANALYZER.parse_trace(path)
             self.assertEqual(len(samples), 1)
             self.assertEqual(samples[0]["frame"], 9)
             self.assertEqual(samples[0]["fps"], 58.7)
+            self.assertEqual(samples[0]["max_frame_ms"], 31)
 
 
 if __name__ == "__main__":

@@ -26,7 +26,9 @@
 
 #include <QDate>
 #include <QGuiApplication>
+#include <QHideEvent>
 #include <QStackedWidget>
+#include <QShowEvent>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -140,9 +142,25 @@ WorkoutGameWindow::WorkoutGameWindow(Context *context) :
     frameDrainTimer->setInterval(16);
     connect(frameDrainTimer, &QTimer::timeout,
             this, &WorkoutGameWindow::drainRunnerFrame);
-    frameDrainTimer->start();
 
     ergFileSelected(context->currentErgFile());
+}
+
+void WorkoutGameWindow::showEvent(QShowEvent *event)
+{
+    GcChartWindow::showEvent(event);
+    frameDrainTimer->start();
+    drainRunnerFrame();
+    sceneGraphWindow->setSessionRunning(
+            sessionActive && !paused
+            && renderStack->currentWidget() == sceneGraphContainer);
+}
+
+void WorkoutGameWindow::hideEvent(QHideEvent *event)
+{
+    frameDrainTimer->stop();
+    sceneGraphWindow->setSessionRunning(false);
+    GcChartWindow::hideEvent(event);
 }
 
 WorkoutGameGhostReplay WorkoutGameWindow::loadGhost(
@@ -254,6 +272,8 @@ void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
     openGLCanvas->setCourse(currentCourse);
     sceneGraphWindow->setCourse(currentCourse, ftpWatts);
     hasTelemetry = false;
+    hasFrame = false;
+    lastFrame = WorkoutGameEngineFrame();
     paused = false;
     sessionActive = false;
     anchorRateInitialized = false;
@@ -287,7 +307,8 @@ void WorkoutGameWindow::start()
     ghostRecorder.configure(currentCourse.seed, currentCourse.durationMs);
     paused = false;
     sessionActive = true;
-    sceneGraphWindow->setSessionRunning(sceneGraphContainer->isVisible());
+    sceneGraphWindow->setSessionRunning(
+            isVisible() && renderStack->currentWidget() == sceneGraphContainer);
     updateAtWorkoutPosition(context->getNow());
     runner.start(currentWorkoutTimeMs, currentAnchorRate);
 }
@@ -304,7 +325,8 @@ void WorkoutGameWindow::unpause()
 {
     paused = false;
     sceneGraphWindow->setSessionRunning(
-            sessionActive && sceneGraphContainer->isVisible());
+            sessionActive && isVisible()
+            && renderStack->currentWidget() == sceneGraphContainer);
     updateAtWorkoutPosition(context->getNow());
     runner.resume(currentWorkoutTimeMs, currentAnchorRate);
 }
@@ -321,12 +343,16 @@ void WorkoutGameWindow::stop()
 
 void WorkoutGameWindow::usePainterFallback()
 {
+    sceneGraphWindow->setSessionRunning(false);
     renderStack->setCurrentWidget(painterCanvas);
+    if (hasFrame) displayFrame(lastFrame);
 }
 
 void WorkoutGameWindow::useOpenGLFallback()
 {
+    sceneGraphWindow->setSessionRunning(false);
     renderStack->setCurrentWidget(openGLCanvas);
+    if (hasFrame) displayFrame(lastFrame);
 }
 
 void WorkoutGameWindow::updateAtWorkoutPosition(
@@ -402,13 +428,25 @@ void WorkoutGameWindow::drainRunnerFrame()
     WorkoutGameEngineFrame frame;
     if (!runner.takeLatest(frame)) return;
     if (sessionActive) ghostRecorder.record(frame.visual.simulation);
-    painterCanvas->setFrame(
-            frame.visual, frame.watts, frame.targetWatts,
-            frame.cadenceRpm, frame.heartRate, frame.virtualGear);
-    openGLCanvas->setFrame(
-            frame.visual, frame.watts, frame.targetWatts,
-            frame.cadenceRpm, frame.heartRate, frame.virtualGear);
-    sceneGraphWindow->setFrame(
-            frame.visual, frame.watts, frame.targetWatts,
-            frame.cadenceRpm, frame.heartRate, frame.virtualGear);
+    lastFrame = frame;
+    hasFrame = true;
+    displayFrame(frame);
+}
+
+void WorkoutGameWindow::displayFrame(const WorkoutGameEngineFrame &frame)
+{
+    QWidget *renderer = renderStack->currentWidget();
+    if (renderer == painterCanvas) {
+        painterCanvas->setFrame(
+                frame.visual, frame.watts, frame.targetWatts,
+                frame.cadenceRpm, frame.heartRate, frame.virtualGear);
+    } else if (renderer == openGLCanvas) {
+        openGLCanvas->setFrame(
+                frame.visual, frame.watts, frame.targetWatts,
+                frame.cadenceRpm, frame.heartRate, frame.virtualGear);
+    } else if (renderer == sceneGraphContainer) {
+        sceneGraphWindow->setFrame(
+                frame.visual, frame.watts, frame.targetWatts,
+                frame.cadenceRpm, frame.heartRate, frame.virtualGear);
+    }
 }

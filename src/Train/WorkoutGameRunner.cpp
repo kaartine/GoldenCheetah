@@ -329,6 +329,7 @@ void WorkoutGameRunner::run()
                         tickInput,
                         tick.deadlineMonotonicMs,
                         totalSkippedTicks);
+            frame.visual.sessionGeneration = state.generation;
             frame.telemetryStale = telemetryStale;
             if (!publish(
                     std::move(frame),

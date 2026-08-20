@@ -340,6 +340,31 @@ private slots:
                  std::int64_t(1020));
     }
 
+    void sessionGenerationChangeCutsFixedStepInterpolation()
+    {
+        WorkoutGameVisualSnapshot first;
+        first.sessionGeneration = 4;
+        first.presentationTimeMs = 1000;
+        first.simulation.ready = true;
+        first.simulation.workoutTimeMs = 1000;
+        first.world.ready = true;
+        first.world.rider.distanceMeters = 25.0;
+
+        WorkoutGameVisualSnapshot resumed = first;
+        resumed.sessionGeneration = 5;
+        resumed.presentationTimeMs = 1020;
+        resumed.simulation.workoutTimeMs = 1000;
+        resumed.world.rider.distanceMeters = 10.0;
+
+        WorkoutGameVisualSmoother smoother;
+        smoother.setTarget(first, 1000);
+        smoother.setTarget(resumed, 1020);
+
+        const WorkoutGameVisualSnapshot rendered = smoother.sample(1040);
+        QCOMPARE(rendered.sessionGeneration, std::uint64_t(5));
+        QCOMPARE(rendered.world.rider.distanceMeters, 10.0);
+    }
+
     void fixedStepHistoryKeepsSixtyHertzPresentationMoving()
     {
         WorkoutGameVisualSmoother smoother;

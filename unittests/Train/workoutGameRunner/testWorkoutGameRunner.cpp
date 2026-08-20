@@ -58,6 +58,7 @@ private slots:
         QVERIFY(waitForFrame(runner, first));
         QVERIFY(first.visual.simulation.workoutTimeMs >= 80);
         QVERIFY(first.visual.presentationTimeMs > 0);
+        QVERIFY(first.visual.sessionGeneration > 0);
         QCOMPARE(first.heartRate, 142);
 
         QTest::qWait(80);
@@ -79,6 +80,7 @@ private slots:
         QTest::qWait(90);
         QVERIFY(waitForFrame(runner, frame));
         const std::int64_t beforePause = frame.visual.simulation.workoutTimeMs;
+        const std::uint64_t beforeGeneration = frame.visual.sessionGeneration;
         while (runner.takeLatest(frame)) {}
 
         runner.pause(beforePause);
@@ -88,6 +90,7 @@ private slots:
         runner.resume(beforePause, 1.0);
         QVERIFY(waitForFrame(runner, frame));
         QVERIFY(frame.visual.simulation.workoutTimeMs >= beforePause);
+        QVERIFY(frame.visual.sessionGeneration > beforeGeneration);
     }
 
     void failedCourseReplacementCannotLeakPreviousFrame()

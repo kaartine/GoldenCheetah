@@ -45,6 +45,7 @@ def analyze(samples: list[dict[str, float]]) -> dict[str, float | int]:
     frame_ms = [sample["frame_ms"] for sample in samples if sample.get("frame_ms", 0) > 0]
     fps = [sample["fps"] for sample in samples if sample.get("fps", 0) > 0]
     reported_p95 = [sample["p95_frame_ms"] for sample in samples if sample.get("p95_frame_ms", 0) > 0]
+    reported_max = [sample["max_frame_ms"] for sample in samples if sample.get("max_frame_ms", 0) > 0]
     distances = [sample["render_road_m"] for sample in samples if "render_road_m" in sample]
     trace_regressions = sum(
         1 for previous, current in zip(distances, distances[1:])
@@ -56,7 +57,10 @@ def analyze(samples: list[dict[str, float]]) -> dict[str, float | int]:
         "minimum_fps": min(fps, default=0.0),
         "median_frame_ms": statistics.median(frame_ms) if frame_ms else 0.0,
         "observed_p95_frame_ms": percentile(frame_ms, 0.95),
+        "observed_p99_frame_ms": percentile(frame_ms, 0.99),
+        "observed_max_frame_ms": max(frame_ms, default=0.0),
         "reported_p95_frame_ms": max(reported_p95, default=0.0),
+        "reported_max_frame_ms": max(reported_max, default=0.0),
         "backward_frames": int(max(
             (sample.get("backwards", 0) for sample in samples), default=0
         )),
@@ -74,6 +78,7 @@ def validate(
     minimum_samples: int,
     minimum_fps: float,
     maximum_p95_ms: float,
+    maximum_stall_ms: float,
     minimum_distance_m: float,
     maximum_skipped_ticks: int,
 ) -> list[str]:
@@ -88,6 +93,11 @@ def validate(
         failures.append(
             "reported p95 frame interval "
             f"{summary['reported_p95_frame_ms']:.1f} ms exceeds {maximum_p95_ms:.1f} ms"
+        )
+    if summary["reported_max_frame_ms"] > maximum_stall_ms:
+        failures.append(
+            "reported maximum frame interval "
+            f"{summary['reported_max_frame_ms']:.1f} ms exceeds {maximum_stall_ms:.1f} ms"
         )
     if summary["backward_frames"]:
         failures.append(f"renderer counted {summary['backward_frames']} backward frames")
@@ -111,6 +121,7 @@ def main() -> int:
     parser.add_argument("--minimum-samples", type=int, default=8)
     parser.add_argument("--minimum-fps", type=float, default=25.0)
     parser.add_argument("--maximum-p95-ms", type=float, default=45.0)
+    parser.add_argument("--maximum-stall-ms", type=float, default=150.0)
     parser.add_argument("--minimum-distance-m", type=float, default=1.0)
     parser.add_argument("--maximum-skipped-ticks", type=int, default=4)
     args = parser.parse_args()
@@ -121,6 +132,7 @@ def main() -> int:
         args.minimum_samples,
         args.minimum_fps,
         args.maximum_p95_ms,
+        args.maximum_stall_ms,
         args.minimum_distance_m,
         args.maximum_skipped_ticks,
     )

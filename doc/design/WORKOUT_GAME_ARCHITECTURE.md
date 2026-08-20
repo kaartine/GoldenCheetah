@@ -12,11 +12,12 @@ must never depend on a map service, network latency, or API credentials.
 
 ## Safety Requirements
 
-These are normative requirements for the finished architecture, not guarantees
-that the current implementation already provides. In particular, game rules,
-Box2D stepping, fallback painting, and Train timers currently share the GUI
-thread, and Qt Quick synchronization can block that thread. The deviations and
-migration work are listed under `Current Gaps And Priorities`.
+These are normative requirements for the implementation. Game rules and Box2D
+stepping run on the low-priority Workout Game worker; Train timers and fallback
+painting remain on the GUI thread. Qt Quick synchronization can briefly block
+that thread, so rendering is bounded, optional, and never owns trainer or
+recording work. Remaining deviations are listed under
+`Current Gaps And Priorities`.
 
 1. `TrainSidebar` remains the only owner of trainer commands and recording.
 2. The workout clock remains authoritative. Game progress cannot pause, extend,
@@ -119,13 +120,16 @@ workout progress, trainer resistance, scoring or recording.
 The game is registered as a Train `GcChartWindow`. The window is the Qt-facing
 coordinator: it owns the course, runner, competition model, and ghost recorder;
 subscribes to existing `Context` signals; and publishes immutable snapshots to
-both canvases. The runner's worker owns simulation, feature, physics, and camera
+the selected renderer only while the chart is visible. The runner's worker owns
+simulation, feature, physics, and camera
 state. The window does not own a trainer controller. The existing chart system
 allows the game to coexist with current perspectives and switch to full-screen
 without restarting the session.
 
 The window selects one renderer at construction:
 
+- `WorkoutGameSceneGraphWindow`: the primary retained Qt Quick scene graph and
+  GPU renderer, paced by completed presentation swaps.
 - `WorkoutGameOpenGLCanvas`: a `QOpenGLWidget` which uses Qt's OpenGL paint
   engine to composite bundled bitmap assets and the shared scene at 60 FPS.
 - `WorkoutGameCanvas`: QPainter fallback using the same render snapshot and
@@ -134,6 +138,11 @@ The window selects one renderer at construction:
 Renderer selection is capability-based. Runtime rendering errors permanently
 fall back for the current session instead of repeatedly recreating a GPU
 context.
+
+Only the selected renderer receives frames. Hiding the chart stops its GUI drain
+timer and scene graph request loop; the one-slot runner output continues to
+overwrite stale game frames without affecting Train telemetry, control, or
+recording. Showing the chart consumes the newest complete frame.
 
 ## Scheduling And Performance
 
@@ -204,7 +213,7 @@ TrainSidebar::loadUpdate (nominally 1000 ms)
                +--> camera update and complete frame snapshot
                +--> overwrite bounded latest-frame slot
                               |
-                  16 ms newest-frame drain                  [GUI]
+            visible-only 16 ms newest-frame drain           [GUI]
                               |
                     Qt scene graph synchronization
                               |
@@ -224,14 +233,12 @@ previous/current complete pair; it does not extrapolate runner state past the
 latest physics result. The current input mailbox deliberately keeps only the
 latest telemetry value, so timestamped telemetry replay remains future work.
 
-The primary scene graph renderer uses a precise 16 ms timer to request
-presentation and normally remains bounded by display vsync. It does not use
-`frameSwapped` as a request loop because that did not continuously request
-frames on every Qt render loop and produced one-second bursts when source
-anchors arrived. `frameSwapped` timestamps only completed presentation for the
-realized FPS and frame-interval metrics. The request timer runs while training
-is active and for a bounded 1.7 second interpolation tail after an isolated
-frame; it then stops while inactive. The renderer
+The primary scene graph renderer requests the next presentation from Qt's
+completed `frameSwapped` callback and is normally bounded by display vsync.
+The same completed swap timestamps realized FPS and frame-interval metrics.
+Requests continue while its visible session is active and for a bounded 250 ms
+tail after stopping; isolated frame updates retain a bounded 1.7 second
+interpolation window. The renderer
 rebuilds bounded road and feature vertex arrays every frame. The OpenGL fallback
 is a `QOpenGLWidget`: Qt renders it into an offscreen framebuffer and composites
 it into the top-level widget rather than giving it an independently swappable
@@ -304,18 +311,18 @@ nodes or textures whose lifetime belongs to the render thread.
    rejected/out-of-order values, and support field-specific validity periods.
 2. **P1: end-to-end scheduling and frame-pacing evidence is incomplete.** Add a
    virtual-clock runner/executor test and retain a bounded raw presentation
-   timestamp series. Release analysis must report p50/p95/p99/max frame interval,
-   missed refreshes, longest stall, and burst sequences rather than relying only
-   on a rolling aggregate.
+   timestamp series. Release analysis now reports observed p95/p99/max plus the
+   renderer's rolling p95 and maximum; missed-refresh and burst-sequence
+   reporting remain.
 3. **P2: incomplete snapshot identity and latency accounting.** Runner frames
    have publication sequences and timestamps, but diagnostics cannot yet state
    which telemetry sample produced a frame. Add input sequences plus
    sensor-to-display latency.
-4. **P2: generation does not yet span all handoffs.** Runner lifecycle state and
-   output publication are generation-tagged, while interpolation also rejects
-   detected discontinuities. Carry the same session generation on timestamped
-   telemetry and render snapshots so stale-session rejection is independently
-   testable from device ingestion through presentation.
+4. **P2: generation does not yet identify telemetry inputs.** Runner lifecycle,
+   output publication, render snapshots, and interpolation are generation-tagged,
+   so resume/restart cannot blend two sessions. Timestamped telemetry still needs
+   the same identity before stale-session rejection is independently testable
+   from device ingestion through presentation.
 5. **P2: direct render handoff remains Qt synchronized.** A future direct
    cross-thread buffer needs an explicit ownership and memory-order protocol; a
    plain shared struct plus index would be a data race.
@@ -355,8 +362,8 @@ The game has three clock domains with explicit ownership:
    one deterministic fixed-step owner and, only while `running`, derives a tick's
    workout position from that anchor. A newer anchor corrects drift. Backward
    movement, a large correction, seek, reset, and workout replacement reset or
-   cut interpolation through the current lifecycle path; an explicit generation
-   identifier remains P2 work. This gives smooth positions between the current
+   cut interpolation through an explicit session generation carried in render
+   snapshots. This gives smooth positions between the current
    one-second Train updates without creating a second independent workout clock.
 3. Presentation follows the display refresh. The renderer interpolates between
    the previous and current complete simulation snapshots. It must not
@@ -445,10 +452,11 @@ refresh inputs or lifecycle commands. Pause freezes game-time integration while
 telemetry and recording continue through Train. Resume resets the monotonic
 deadline so paused wall time is never caught up. Workout replacement and session
 restart reset the engine; the smoother also cuts on detected timeline or world
-discontinuities. Runner lifecycle commands carry a generation, and publication
+discontinuities. Runner lifecycle commands and render snapshots carry a
+generation, and publication
 rejects a completed frame when pause, stop, restart, replacement, or shutdown
-has invalidated that generation. Extending this identity through telemetry and
-render snapshots remains P2 work.
+has invalidated that generation. Extending this identity through timestamped
+telemetry remains P2 work.
 
 The next telemetry iteration should use a bounded single-producer/single-consumer
 ring after timestamps have been normalized to the monotonic scheduler domain.
@@ -471,8 +479,8 @@ The producer never overwrites a slot still being copied by the consumer. A
 plain shared index plus two mutable slots would be insufficient without a proven
 ownership protocol.
 
-The renderer keeps the latest two timestamped snapshots from the same
-timeline and interpolates presentation state using the simulation clock and
+The renderer keeps a bounded history of timestamped snapshots from the same
+session generation and interpolates presentation state using the simulation clock and
 display time. A skipped snapshot sequence is expected with latest-value
 publication and does not by itself disable interpolation; reversed time, an
 invalid interval, or a detected world reset does. Discrete action IDs are copied
@@ -545,9 +553,10 @@ simulation, and rendering ownership at once:
 4. **Implemented:** run timestamped inputs through `WorkoutGameReplayHarness`,
    reject invalid or regressing streams, hash every complete engine frame, and
    compare repeated pass, bypass, pause/resume, and input-mutation replays.
-5. **In progress:** profile with deterministic traces on the old integrated-GPU
-   laptop before moving any course or physics phase to workers or adding GPU
-   effects.
+5. **Implemented for pre-release gating:** trace realized frame intervals,
+   cumulative stalls, skipped simulation ticks, and forward road progress on the
+   old integrated-GPU laptop. Production sessions are still needed before moving
+   course or physics phases to more workers or adding adaptive GPU effects.
 
 Acceptance requires deterministic replay for the same timestamped input, no
 backward world movement during forward riding, no trainer or recording wait on
