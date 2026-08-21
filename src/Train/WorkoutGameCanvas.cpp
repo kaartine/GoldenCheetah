@@ -14,6 +14,9 @@
 #include <QHideEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QGuiApplication>
+#include <QScreen>
+#include <QWindow>
 #include <QPixmap>
 #include <QShowEvent>
 
@@ -22,7 +25,6 @@
 
 namespace {
 
-constexpr int TargetFrameMs = 33;
 constexpr double Pi = 3.14159265358979323846;
 
 QColor skyColor() { return QColor(99, 190, 187); }
@@ -154,11 +156,20 @@ WorkoutGameCanvas::WorkoutGameCanvas(QWidget *parent) : QWidget(parent)
     setAutoFillBackground(false);
     visualClock.start();
     animationTimer.setTimerType(Qt::PreciseTimer);
-    animationTimer.setInterval(TargetFrameMs);
+    animationTimer.setInterval(targetFrameIntervalMs(60.0));
     connect(&animationTimer, &QTimer::timeout, this, [this]() {
         animationFrame = (animationFrame + 1) % 120;
         update();
     });
+}
+
+int WorkoutGameCanvas::targetFrameIntervalMs(double refreshRateHz)
+{
+    if (!std::isfinite(refreshRateHz) || refreshRateHz <= 0.0) {
+        return 16;
+    }
+    const double boundedRate = std::clamp(refreshRateHz, 30.0, 120.0);
+    return std::max(1, int(std::floor(1000.0 / boundedRate)));
 }
 
 void WorkoutGameCanvas::setCourse(const WorkoutGameCourse &newCourse)
@@ -253,6 +264,10 @@ void WorkoutGameCanvas::setSnapshot(
 void WorkoutGameCanvas::showEvent(QShowEvent *event)
 {
     QWidget::showEvent(event);
+    QScreen *display = windowHandle() ? windowHandle()->screen() : nullptr;
+    if (!display) display = QGuiApplication::primaryScreen();
+    animationTimer.setInterval(targetFrameIntervalMs(
+            display ? display->refreshRate() : 60.0));
     animationTimer.start();
 }
 

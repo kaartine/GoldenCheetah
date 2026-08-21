@@ -90,13 +90,14 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
                 "backwards": 0,
                 "skipped_ticks": 0,
                 "target_watts": 220,
+                "unexpected_airborne_frames": 0,
             }
             for index in range(10)
         ]
         summary = ANALYZER.analyze(samples)
         self.assertEqual(
             ANALYZER.validate(
-                summary, 8, 25.0, 45.0, 150.0, 1.0, 4, 200.0
+                summary, 8, 25.0, 45.0, 150.0, 1.0, 4, 200.0, 0
             ), []
         )
 
@@ -111,11 +112,13 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
                 "backwards": 1,
                 "skipped_ticks": 2,
                 "target_watts": 100,
+                "unexpected_airborne_frames": 3,
             }
             for distance in (0.0, 1.0, 0.5, 0.6)
         ]
         failures = ANALYZER.validate(
-            ANALYZER.analyze(samples), 4, 25.0, 45.0, 150.0, 0.5, 4, 200.0
+            ANALYZER.analyze(samples),
+            4, 25.0, 45.0, 150.0, 0.5, 4, 200.0, 0,
         )
         self.assertGreaterEqual(len(failures), 4)
 

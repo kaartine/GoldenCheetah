@@ -12,6 +12,7 @@
 
 #include "WorkoutGameRoadProjection.h"
 #include "WorkoutGameMesh.h"
+#include "WorkoutGamePowerCueGeometry.h"
 
 #include <QColor>
 #include <QDir>
@@ -21,11 +22,13 @@
 #include <QPainter>
 #include <QQuickWindow>
 #include <QResizeEvent>
+#include <QScreen>
 #include <QSGGeometry>
 #include <QSGGeometryNode>
 #include <QSGSimpleTextureNode>
 #include <QSGTransformNode>
 #include <QSGVertexColorMaterial>
+#include <QSGRendererInterface>
 #include <QTimer>
 
 #include <algorithm>
@@ -167,6 +170,9 @@ WorkoutGameRoadProjectedSlice interpolateSlice(
             from.pixelsPerMeter, to.pixelsPerMeter);
     result.surfaceOffsetMeters = value(
             from.surfaceOffsetMeters, to.surfaceOffsetMeters);
+    result.surfaceElevationMeters = value(
+            from.surfaceElevationMeters, to.surfaceElevationMeters);
+    result.gradePercent = value(from.gradePercent, to.gradePercent);
     result.occlusionY = value(from.occlusionY, to.occlusionY);
     return result;
 }
@@ -242,6 +248,28 @@ QColor groundColor(WorkoutGameTerrainKind terrain, bool alternate)
     return alternate ? base.lighter(108) : base.darker(106);
 }
 
+QColor blendColor(const QColor &from, const QColor &to, double amount)
+{
+    const double blend = std::clamp(amount, 0.0, 1.0);
+    return QColor(
+            int(std::lround(from.red() + (to.red() - from.red()) * blend)),
+            int(std::lround(from.green()
+                + (to.green() - from.green()) * blend)),
+            int(std::lround(from.blue()
+                + (to.blue() - from.blue()) * blend)),
+            int(std::lround(from.alpha()
+                + (to.alpha() - from.alpha()) * blend)));
+}
+
+QColor gradeTint(QColor color, double gradePercent)
+{
+    const double strength = std::clamp(
+            std::abs(gradePercent) / 12.0, 0.0, 1.0);
+    const QColor accent = gradePercent >= 0.0
+            ? QColor(190, 139, 72) : QColor(70, 124, 102);
+    return blendColor(color, accent, strength * 0.22);
+}
+
 QColor meshColor(WorkoutGameMeshMaterial material, bool selectedBypass = false)
 {
     switch (material) {
@@ -278,7 +306,10 @@ void buildRoadGeometry(
         const float nearRight = float(near.centerX + near.halfWidthPixels);
         const float farY = float(far.centerY);
         const float nearY = float(near.centerY);
-        const QColor grass = groundColor(near.terrain, alternate);
+        const QColor grass = gradeTint(blendColor(
+                groundColor(far.terrain, alternate),
+                groundColor(near.terrain, alternate), 0.65),
+                near.gradePercent);
         appendQuad(geometry,
                    0.0f, farY, farLeft,
                    0.0f, nearY, nearLeft, grass,
@@ -304,7 +335,10 @@ void buildRoadGeometry(
         appendQuad(geometry,
                    farLeft, farY, farRight,
                    nearLeft, nearY, nearRight,
-                   roadColor(near.terrain, alternate),
+                   gradeTint(blendColor(
+                       roadColor(far.terrain, alternate),
+                       roadColor(near.terrain, alternate), 0.65),
+                       near.gradePercent),
                    far.depthMeters, near.depthMeters);
     }
 }
@@ -344,6 +378,11 @@ bool projectedSliceAt(
                 + (near.pixelsPerMeter - far.pixelsPerMeter) * amount;
         result.surfaceOffsetMeters = far.surfaceOffsetMeters
                 + (near.surfaceOffsetMeters - far.surfaceOffsetMeters) * amount;
+        result.surfaceElevationMeters = far.surfaceElevationMeters
+                + (near.surfaceElevationMeters
+                   - far.surfaceElevationMeters) * amount;
+        result.gradePercent = far.gradePercent
+                + (near.gradePercent - far.gradePercent) * amount;
         result.occlusionY = far.occlusionY
                 + (near.occlusionY - far.occlusionY) * amount;
         return true;
@@ -398,6 +437,7 @@ void appendCourseBand(
         const WorkoutGameRoadProjectionFrame &projection,
         double startDistanceMeters,
         double endDistanceMeters,
+        double halfWidthRatio,
         const QColor &color,
         std::vector<SceneTriangle> &geometry)
 {
@@ -409,45 +449,52 @@ void appendCourseBand(
     far.centerY -= ElevationMeters * far.pixelsPerMeter;
     near.centerY -= ElevationMeters * near.pixelsPerMeter;
     if (!clipProjectedPair(far, near)) return;
-    constexpr double HalfWidthMeters = 1.15;
     appendQuad(geometry,
-               float(far.centerX - HalfWidthMeters * far.pixelsPerMeter),
+               float(far.centerX
+                     - far.halfWidthPixels * halfWidthRatio),
                float(far.centerY),
-               float(far.centerX + HalfWidthMeters * far.pixelsPerMeter),
-               float(near.centerX - HalfWidthMeters * near.pixelsPerMeter),
+               float(far.centerX
+                     + far.halfWidthPixels * halfWidthRatio),
+               float(near.centerX
+                     - near.halfWidthPixels * halfWidthRatio),
                float(near.centerY),
-               float(near.centerX + HalfWidthMeters * near.pixelsPerMeter),
+               float(near.centerX
+                     + near.halfWidthPixels * halfWidthRatio),
                color, far.depthMeters, near.depthMeters);
 }
 
 void buildPowerCueGeometry(
         const WorkoutGameRoadProjectionFrame &projection,
         const WorkoutGameFeatureRuntimeSnapshot &active,
+        WorkoutGameChallengeCue cue,
         std::vector<SceneTriangle> &geometry)
 {
-    if (!active.ready || active.decisionDistanceMeters
-            <= active.prepareDistanceMeters) {
-        return;
-    }
-    constexpr double StripeLengthMeters = 0.65;
-    constexpr double StripeGapMeters = 1.25;
-    for (double distance = active.prepareDistanceMeters;
-         distance < active.decisionDistanceMeters;
-         distance += StripeGapMeters) {
+    const std::vector<WorkoutGamePowerCueBand> bands =
+            WorkoutGamePowerCueGeometry::build(active, cue);
+    for (const WorkoutGamePowerCueBand &band : bands) {
         appendCourseBand(
                 projection,
-                distance,
-                std::min(distance + StripeLengthMeters,
-                         active.decisionDistanceMeters),
-                QColor(241, 184, 58, 185),
+                band.startDistanceMeters,
+                band.endDistanceMeters,
+                band.halfWidthRatio,
+                band.decision
+                    ? QColor(245, 231, 98, 235)
+                    : QColor(241, 184, 58, 185),
                 geometry);
     }
-    appendCourseBand(
-            projection,
-            active.decisionDistanceMeters - 0.35,
-            active.decisionDistanceMeters + 0.35,
-            QColor(245, 231, 98, 235),
-            geometry);
+}
+
+QString graphicsApiName(QSGRendererInterface::GraphicsApi api)
+{
+    switch (api) {
+    case QSGRendererInterface::Software: return QStringLiteral("QSG SW");
+    case QSGRendererInterface::OpenGL: return QStringLiteral("QSG GL");
+    case QSGRendererInterface::Direct3D11: return QStringLiteral("QSG D3D11");
+    case QSGRendererInterface::Vulkan: return QStringLiteral("QSG Vulkan");
+    case QSGRendererInterface::Metal: return QStringLiteral("QSG Metal");
+    case QSGRendererInterface::Null: return QStringLiteral("QSG Null");
+    default: return QStringLiteral("QSG");
+    }
 }
 
 void appendProjectedMesh(
@@ -602,6 +649,15 @@ void WorkoutGameSceneGraphItem::setTelemetry(
     update();
 }
 
+void WorkoutGameSceneGraphItem::setRendererLabel(const QString &label)
+{
+    const QString normalized = label.trimmed();
+    rendererLabel = normalized.isEmpty()
+            ? QStringLiteral("QSG") : normalized;
+    rebuildHud();
+    update();
+}
+
 void WorkoutGameSceneGraphItem::setSessionRunning(bool running)
 {
     if (running != sessionRunning) {
@@ -630,7 +686,7 @@ void WorkoutGameSceneGraphItem::rebuildHud()
     constexpr int StatsHeight = 74;
     constexpr int ProfileHeight = 62;
     constexpr int BaseHudHeight = StatsHeight + ProfileHeight + 4;
-    const int hudHeight = diagnosticsEnabled ? BaseHudHeight + 54 : BaseHudHeight;
+    const int hudHeight = diagnosticsEnabled ? BaseHudHeight + 78 : BaseHudHeight;
     hudImage = QImage(1240, hudHeight,
                       QImage::Format_RGBA8888_Premultiplied);
     hudImage.fill(Qt::transparent);
@@ -654,9 +710,12 @@ void WorkoutGameSceneGraphItem::rebuildHud()
         {tr("CADENCE"), QStringLiteral("%1 rpm").arg(cadenceRpm)},
         {tr("SPEED"), QStringLiteral("%1 km/h").arg(
                 currentFrame.simulation.speedKph, 0, 'f', 1)},
+        {tr("GRADE"), QStringLiteral("%1%").arg(
+                currentFrame.world.gradePercent, 0, 'f', 1)},
         {tr("GEAR"), QString::number(virtualGear)},
         {tr("TIME"), elapsedText(currentFrame.simulation.workoutTimeMs)},
-        {QStringLiteral("FPS"), QString::number(displayedFps, 'f', 1)}
+        {rendererLabel + QStringLiteral(" FPS"),
+         QString::number(displayedFps, 'f', 1)}
     };
     const int columnWidth = hudImage.width() / int(stats.size());
     for (std::size_t index = 0; index < stats.size(); ++index) {
@@ -756,7 +815,7 @@ void WorkoutGameSceneGraphItem::rebuildHud()
 
     if (diagnosticsEnabled) {
         const WorkoutGameDiagnosticsSnapshot &snapshot = publishedDiagnostics;
-        painter.fillRect(0, BaseHudHeight, hudImage.width(), 54,
+        painter.fillRect(0, BaseHudHeight, hudImage.width(), 78,
                          QColor(8, 13, 14, 230));
         QFont diagnosticFont = labelFont;
         diagnosticFont.setPixelSize(12);
@@ -792,6 +851,19 @@ void WorkoutGameSceneGraphItem::rebuildHud()
                     .arg(snapshot.stationaryFrameCount)
                     .arg(input.skippedSimulationTicks)
                     .arg(input.frameNumber));
+        painter.drawText(
+                QRect(8, BaseHudHeight + 50, hudImage.width() - 16, 24),
+                Qt::AlignLeft | Qt::AlignVCenter,
+                QStringLiteral(
+                    "GRADE %1%  VIEW DZ %2 m  SURFACE %3 m  RIDER %4 m  "
+                    "CLEAR %5 m  AIR %6 m  UNEXPECTED %7")
+                    .arg(input.renderedGradePercent, 0, 'f', 1)
+                    .arg(input.visibleElevationChangeMeters, 0, 'f', 2)
+                    .arg(input.surfaceElevationMeters, 0, 'f', 2)
+                    .arg(input.riderElevationMeters, 0, 'f', 2)
+                    .arg(input.riderClearanceMeters, 0, 'f', 2)
+                    .arg(input.airHeightMeters, 0, 'f', 2)
+                    .arg(snapshot.unexpectedAirborneFrameCount));
     }
     ++hudRevision;
 }
@@ -833,6 +905,16 @@ void WorkoutGameSceneGraphItem::publishDiagnostics(
                 << " fps=" << input.framesPerSecond
                 << " p95_frame_ms=" << input.p95FrameIntervalMs
                 << " skipped_ticks=" << input.skippedSimulationTicks
+                << " grade=" << input.renderedGradePercent
+                << " view_dz_m=" << input.visibleElevationChangeMeters
+                << " surface_m=" << input.surfaceElevationMeters
+                << " rider_elevation_m=" << input.riderElevationMeters
+                << " clearance_m=" << input.riderClearanceMeters
+                << " air_height_m=" << input.airHeightMeters
+                << " airborne=" << input.riderAirborne
+                << " airborne_expected=" << input.airborneExpected
+                << " unexpected_airborne_frames="
+                    << snapshot.unexpectedAirborneFrameCount
                 << " watts=" << watts
                 << " target_watts=" << targetWatts
                 << " cadence=" << cadenceRpm
@@ -906,9 +988,17 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
 
     std::vector<SceneTriangle> terrain;
     if (projection.ready) {
+        WorkoutGameChallengeCue cue = WorkoutGameChallengeCue::None;
+        if (feature.sourceSectionIndex >= 0
+                && feature.sourceSectionIndex
+                    < int(currentCourse.sections.size())) {
+            cue = WorkoutGameFeatureChallenge::profile(
+                    currentCourse.sections[std::size_t(
+                        feature.sourceSectionIndex)]).cue;
+        }
         buildRoadGeometry(projection, viewportWidth, terrain);
         buildMotionCueGeometry(projection, terrain);
-        buildPowerCueGeometry(projection, feature, terrain);
+        buildPowerCueGeometry(projection, feature, cue, terrain);
         buildFeatureGeometry(
                 currentCourse, roadCourse, projection, feature, terrain);
     }
@@ -1002,6 +1092,25 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
             frameRateCounter.p95FrameIntervalMilliseconds();
     diagnosticsInput.skippedSimulationTicks =
             currentFrame.skippedSimulationTicks;
+    diagnosticsInput.worldReady = visual.world.ready;
+    diagnosticsInput.riderAirborne = visual.world.rider.airborne;
+    diagnosticsInput.airborneExpected =
+            (feature.motion == WorkoutGameFeatureMotion::Jump
+             || feature.motion == WorkoutGameFeatureMotion::Drop)
+            && (feature.phase == WorkoutGameFeaturePhase::Action
+                || feature.phase == WorkoutGameFeaturePhase::Recovery);
+    diagnosticsInput.riderElevationMeters =
+            visual.world.rider.elevationMeters;
+    diagnosticsInput.surfaceElevationMeters =
+            visual.world.surfaceElevationMeters;
+    diagnosticsInput.riderClearanceMeters =
+            visual.world.rider.clearanceMeters;
+    diagnosticsInput.airHeightMeters =
+            visual.world.rider.airHeightMeters();
+    diagnosticsInput.visibleElevationChangeMeters =
+            projection.visibleElevationChangeMeters;
+    diagnosticsInput.renderedGradePercent =
+            projection.renderedGradePercent;
     const WorkoutGameDiagnosticsSnapshot diagnosticSnapshot =
             diagnostics.update(diagnosticsInput);
     if ((diagnosticsEnabled || traceEnabled)
@@ -1035,6 +1144,20 @@ WorkoutGameSceneGraphWindow::WorkoutGameSceneGraphWindow(QWindow *parent) :
                 // and leaves the counter on Qt's render-loop owner.
                 item->framePresented();
             }, Qt::DirectConnection);
+    connect(this, &QQuickWindow::sceneGraphInitialized,
+            this, [this]() {
+                const QSGRendererInterface::GraphicsApi api =
+                        rendererInterface()->graphicsApi();
+                activeRendererLabel = graphicsApiName(api);
+                sceneItem->setRendererLabel(activeRendererLabel);
+                const double refreshRate = screen()
+                        ? screen()->refreshRate() : 0.0;
+                qInfo().noquote()
+                        << "Workout Game scene graph initialized:"
+                        << activeRendererLabel
+                        << "api=" << int(api)
+                        << "refresh=" << refreshRate << "Hz";
+            });
     connect(this, &QQuickWindow::frameSwapped,
             this, [this]() {
                 // Let Qt's presentation loop pace interpolation. A queued call

@@ -38,6 +38,76 @@ bool isRecoveryFeature(WorkoutGameFeature feature)
             || feature == WorkoutGameFeature::CooldownDescent;
 }
 
+double recoveryGrade(
+        WorkoutGameFeature feature,
+        std::int64_t durationMs)
+{
+    const double durationSeconds = std::max(
+            1.0, double(durationMs) / 1000.0);
+    if (feature == WorkoutGameFeature::CooldownDescent) {
+        return -(0.70 + std::min(0.80, 60.0 / durationSeconds));
+    }
+    return -(0.90 + std::clamp(
+            90.0 / durationSeconds, 0.15, 1.50));
+}
+
+void applyTechnicalPalette(
+        WorkoutGameSection &section,
+        double technicality)
+{
+    if (technicality <= 0.25) {
+        if (section.feature != WorkoutGameFeature::Climb) {
+            section.terrain = WorkoutGameTerrainKind::SmoothTrail;
+            section.challengeCount = 0;
+        }
+        return;
+    }
+
+    if (technicality >= 0.85) {
+        if (isRecoveryFeature(section.feature)) {
+            section.terrain = WorkoutGameTerrainKind::Berm;
+        } else if (section.feature == WorkoutGameFeature::SprintJump) {
+            section.terrain = section.visualVariant % 2u == 0u
+                    ? WorkoutGameTerrainKind::LogOver
+                    : WorkoutGameTerrainKind::Tabletop;
+        } else if (section.feature == WorkoutGameFeature::Trail
+                || section.feature == WorkoutGameFeature::FlowTrail) {
+            switch (section.visualVariant % 3u) {
+            case 0u: section.terrain = WorkoutGameTerrainKind::Skinny; break;
+            case 1u: section.terrain = WorkoutGameTerrainKind::RockGarden; break;
+            default: section.terrain = WorkoutGameTerrainKind::RockSlab; break;
+            }
+        }
+        return;
+    }
+
+    if (isRecoveryFeature(section.feature)) {
+        if (section.visualVariant % 3u == 0u) {
+            section.terrain = WorkoutGameTerrainKind::Berm;
+        }
+        return;
+    }
+    if (section.feature != WorkoutGameFeature::Trail
+            && section.feature != WorkoutGameFeature::FlowTrail
+            && section.feature != WorkoutGameFeature::WarmupTrail) {
+        return;
+    }
+
+    switch (section.visualVariant % 6u) {
+    case 0u: section.terrain = WorkoutGameTerrainKind::Roots; break;
+    case 1u: section.terrain = WorkoutGameTerrainKind::RockGarden; break;
+    case 2u: section.terrain = WorkoutGameTerrainKind::Rollers; break;
+    case 3u: section.terrain = WorkoutGameTerrainKind::LogOver; break;
+    case 4u: section.terrain = WorkoutGameTerrainKind::Skinny; break;
+    default: section.terrain = WorkoutGameTerrainKind::SmoothTrail; break;
+    }
+    if (section.terrain == WorkoutGameTerrainKind::LogOver
+            || section.terrain == WorkoutGameTerrainKind::Skinny
+            || section.terrain == WorkoutGameTerrainKind::RockGarden) {
+        section.challengeCount = std::max(1, section.challengeCount);
+    }
+}
+
 WorkoutGameSection adaptSection(
         const WorkoutGameSection &source,
         const WorkoutGameInterval &interval,
@@ -52,7 +122,8 @@ WorkoutGameSection adaptSection(
     if (!first && !last && intensity <= parameters.recoveryIntensity) {
         result.feature = WorkoutGameFeature::RecoveryDescent;
         result.terrain = WorkoutGameTerrainKind::Drop;
-        result.gradePercent = -4.0;
+        result.gradePercent = recoveryGrade(
+                result.feature, interval.durationMs);
         result.gravityAssisted = true;
         result.challengeCount = 0;
     } else if (!first && !last
@@ -66,26 +137,11 @@ WorkoutGameSection adaptSection(
         result.challengeCount = 1;
     }
 
-    if (parameters.technicality <= 0.25
-            && result.feature != WorkoutGameFeature::Climb) {
-        result.terrain = WorkoutGameTerrainKind::SmoothTrail;
-        result.challengeCount = 0;
-    } else if (parameters.technicality >= 0.85) {
-        if (isRecoveryFeature(result.feature)) {
-            result.terrain = WorkoutGameTerrainKind::Berm;
-        } else if (result.feature == WorkoutGameFeature::SprintJump) {
-            result.terrain = result.visualVariant % 2u == 0u
-                    ? WorkoutGameTerrainKind::LogOver
-                    : WorkoutGameTerrainKind::Tabletop;
-        } else if (result.feature == WorkoutGameFeature::Trail
-                || result.feature == WorkoutGameFeature::FlowTrail) {
-            switch (result.visualVariant % 3u) {
-            case 0u: result.terrain = WorkoutGameTerrainKind::Skinny; break;
-            case 1u: result.terrain = WorkoutGameTerrainKind::RockGarden; break;
-            default: result.terrain = WorkoutGameTerrainKind::RockSlab; break;
-            }
-        }
+    if (result.feature == WorkoutGameFeature::CooldownDescent) {
+        result.gradePercent = recoveryGrade(
+                result.feature, interval.durationMs);
     }
+    applyTechnicalPalette(result, parameters.technicality);
     result.gradePercent *= parameters.gradeScale;
     return result;
 }

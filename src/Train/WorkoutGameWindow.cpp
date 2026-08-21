@@ -27,6 +27,7 @@
 #include <QDate>
 #include <QGuiApplication>
 #include <QHideEvent>
+#include <QDebug>
 #include <QStackedWidget>
 #include <QShowEvent>
 #include <QTimer>
@@ -108,10 +109,19 @@ WorkoutGameWindow::WorkoutGameWindow(Context *context) :
 
     const bool forcePainter = qEnvironmentVariableIntValue(
             "GC_WORKOUT_GAME_FORCE_PAINTER") != 0;
-    const WorkoutGameRendererBackend backend = WorkoutGameRendererPolicy::choose(
+    const WorkoutGameRendererDecision rendererDecision =
+            WorkoutGameRendererPolicy::decide(
             forcePainter,
             QGuiApplication::platformName().toStdString(),
             gl_major);
+    const WorkoutGameRendererBackend backend = rendererDecision.backend;
+    qInfo().noquote()
+            << "Workout Game renderer selection:"
+            << WorkoutGameRendererPolicy::backendName(backend)
+            << "reason="
+            << WorkoutGameRendererPolicy::reasonName(rendererDecision.reason)
+            << "platform=" << QGuiApplication::platformName()
+            << "OpenGL=" << gl_major;
     switch (backend) {
     case WorkoutGameRendererBackend::SceneGraph:
         renderStack->setCurrentWidget(sceneGraphContainer);
@@ -375,6 +385,8 @@ void WorkoutGameWindow::stop()
 
 void WorkoutGameWindow::usePainterFallback()
 {
+    qWarning().noquote()
+            << "Workout Game renderer fallback: OpenGL -> Painter";
     sceneGraphWindow->setSessionRunning(false);
     renderStack->setCurrentWidget(painterCanvas);
     if (hasFrame) displayFrame(lastFrame);
@@ -382,6 +394,8 @@ void WorkoutGameWindow::usePainterFallback()
 
 void WorkoutGameWindow::useOpenGLFallback()
 {
+    qWarning().noquote()
+            << "Workout Game renderer fallback: SceneGraph -> OpenGL";
     sceneGraphWindow->setSessionRunning(false);
     renderStack->setCurrentWidget(openGLCanvas);
     if (hasFrame) displayFrame(lastFrame);

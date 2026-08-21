@@ -46,6 +46,7 @@ public:
             int heartRate,
             int virtualGear);
     void setSessionRunning(bool running);
+    void setRendererLabel(const QString &label);
     void framePresented();
     WorkoutGameDiagnosticsSnapshot diagnosticsSnapshot() const
     {
@@ -78,6 +79,7 @@ private:
     int virtualGear = 1;
     double displayedFps = 0.0;
     double publishedFps = -1.0;
+    QString rendererLabel = QStringLiteral("QSG pending");
     bool diagnosticsEnabled = false;
     bool traceEnabled = false;
     bool sessionRunning = false;
@@ -118,6 +120,7 @@ public:
     {
         return sceneItem->diagnosticsSnapshot();
     }
+    QString rendererLabel() const { return activeRendererLabel; }
 
 signals:
     void rendererFailed();
@@ -132,6 +135,7 @@ private:
     bool failureReported = false;
     bool sessionRunning = false;
     QString captureDirectory;
+    QString activeRendererLabel = QStringLiteral("QSG pending");
     std::uint64_t captureFrameNumber = 0;
 };
 

@@ -11,6 +11,7 @@
 #include "Train/WorkoutGameDiagnostics.h"
 #include "Train/WorkoutGameFeatureLab.h"
 #include "Train/WorkoutGameFeatureRuntime.h"
+#include "Train/WorkoutGamePowerCueGeometry.h"
 
 #include <QApplication>
 #include <QColor>
@@ -287,6 +288,75 @@ private slots:
         QCOMPARE(resumed.frameIntervalMs, std::int64_t(0));
         QCOMPARE(resumed.largestFrameIntervalMs, std::int64_t(0));
         QCOMPARE(resumed.backwardFrameCount, std::uint64_t(0));
+    }
+
+    void powerCueBandsAreShortAndStayInsideTheTrail()
+    {
+        WorkoutGameFeatureRuntimeSnapshot feature;
+        feature.ready = true;
+        feature.phase = WorkoutGameFeaturePhase::Measure;
+        feature.prepareDistanceMeters = 20.0;
+        feature.decisionDistanceMeters = 170.0;
+        feature.visualDistanceMeters = 155.0;
+
+        const std::vector<WorkoutGamePowerCueBand> bands =
+                WorkoutGamePowerCueGeometry::build(
+                    feature, WorkoutGameChallengeCue::CarrySpeed);
+
+        QVERIFY(!bands.empty());
+        QVERIFY(bands.size() <= std::size_t(7));
+        for (const WorkoutGamePowerCueBand &band : bands) {
+            QVERIFY(band.startDistanceMeters >= 160.0);
+            QVERIFY(band.endDistanceMeters <= 170.4);
+            QVERIFY(band.endDistanceMeters > band.startDistanceMeters);
+            QVERIFY(band.halfWidthRatio > 0.0);
+            QVERIFY(band.halfWidthRatio <= 0.9);
+        }
+    }
+
+    void climbUsesHudInsteadOfPaintingTheWholeRoadYellow()
+    {
+        WorkoutGameFeatureRuntimeSnapshot feature;
+        feature.ready = true;
+        feature.phase = WorkoutGameFeaturePhase::Measure;
+        feature.prepareDistanceMeters = 0.0;
+        feature.decisionDistanceMeters = 900.0;
+        feature.visualDistanceMeters = 400.0;
+
+        QVERIFY(WorkoutGamePowerCueGeometry::build(
+                    feature, WorkoutGameChallengeCue::Climb).empty());
+    }
+
+    void diagnosticsCountOnlyUnexpectedAirTime()
+    {
+        WorkoutGameDiagnostics diagnostics;
+        WorkoutGameDiagnosticsInput input;
+        input.ready = true;
+        input.sessionRunning = true;
+        input.movingForward = true;
+        input.worldReady = true;
+        input.monotonicTimeMs = 1000;
+        input.renderedWorkoutTimeMs = 1000;
+        input.renderedRoadDistanceMeters = 10.0;
+        input.riderAirborne = true;
+        input.airborneExpected = false;
+        input.riderClearanceMeters = 1.15;
+        input.airHeightMeters = 0.33;
+        QCOMPARE(diagnostics.update(input).unexpectedAirborneFrameCount,
+                 std::uint64_t(0));
+
+        input.monotonicTimeMs = 1020;
+        input.renderedWorkoutTimeMs = 1020;
+        input.renderedRoadDistanceMeters = 10.1;
+        QCOMPARE(diagnostics.update(input).unexpectedAirborneFrameCount,
+                 std::uint64_t(1));
+
+        input.monotonicTimeMs = 1040;
+        input.renderedWorkoutTimeMs = 1040;
+        input.renderedRoadDistanceMeters = 10.2;
+        input.airborneExpected = true;
+        QCOMPARE(diagnostics.update(input).unexpectedAirborneFrameCount,
+                 std::uint64_t(1));
     }
 
     void completedAndBypassedFeaturesRenderDifferentLines()

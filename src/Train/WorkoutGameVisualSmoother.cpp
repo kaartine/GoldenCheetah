@@ -338,10 +338,15 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::interpolate(
     result.world.difficulty = lerp(
             from.world.difficulty, to.world.difficulty, amount);
     result.world.terrainOffsetMeters = from.world.generation
-                    == to.world.generation
+            == to.world.generation
             ? lerp(from.world.terrainOffsetMeters,
                    to.world.terrainOffsetMeters, amount)
             : to.world.terrainOffsetMeters;
+    result.world.surfaceElevationMeters = from.world.generation
+            == to.world.generation
+            ? lerp(from.world.surfaceElevationMeters,
+                   to.world.surfaceElevationMeters, amount)
+            : to.world.surfaceElevationMeters;
     result.world.speedMetersPerSecond = lerp(
             from.world.speedMetersPerSecond,
             to.world.speedMetersPerSecond, amount);

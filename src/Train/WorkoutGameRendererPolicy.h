@@ -19,15 +19,36 @@ enum class WorkoutGameRendererBackend
     Painter
 };
 
+enum class WorkoutGameRendererSelectionReason
+{
+    Preferred,
+    ForcedPainter,
+    UnsupportedPlatform,
+    InsufficientOpenGL
+};
+
+struct WorkoutGameRendererDecision
+{
+    WorkoutGameRendererBackend backend = WorkoutGameRendererBackend::Painter;
+    WorkoutGameRendererSelectionReason reason =
+            WorkoutGameRendererSelectionReason::Preferred;
+};
+
 class WorkoutGameRendererPolicy
 {
 public:
+    static WorkoutGameRendererDecision decide(
+            bool forcePainter,
+            const std::string &platformName,
+            double openGLMajorVersion);
     static WorkoutGameRendererBackend choose(
             bool forcePainter,
             const std::string &platformName,
             double openGLMajorVersion);
     static WorkoutGameRendererBackend afterInitializationFailure(
             WorkoutGameRendererBackend failedBackend);
+    static const char *backendName(WorkoutGameRendererBackend backend);
+    static const char *reasonName(WorkoutGameRendererSelectionReason reason);
 };
 
 #endif

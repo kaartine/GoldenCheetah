@@ -69,6 +69,10 @@ def analyze(samples: list[dict[str, float]]) -> dict[str, float | int]:
         "skipped_simulation_ticks": int(max(
             (sample.get("skipped_ticks", 0) for sample in samples), default=0
         )),
+        "unexpected_airborne_frames": int(max(
+            (sample.get("unexpected_airborne_frames", 0) for sample in samples),
+            default=0,
+        )),
         "distance_advanced_m": max(0.0, distances[-1] - distances[0])
             if len(distances) >= 2 else 0.0,
         "maximum_target_watts": max(target_watts, default=0.0),
@@ -84,6 +88,7 @@ def validate(
     minimum_distance_m: float,
     maximum_skipped_ticks: int,
     minimum_target_watts: float,
+    maximum_unexpected_airborne_frames: int,
 ) -> list[str]:
     failures = []
     if summary["samples"] < minimum_samples:
@@ -119,6 +124,11 @@ def validate(
             f"maximum target power {summary['maximum_target_watts']:.1f} W "
             f"is below {minimum_target_watts:.1f} W"
         )
+    if summary["unexpected_airborne_frames"] > maximum_unexpected_airborne_frames:
+        failures.append(
+            "renderer counted "
+            f"{summary['unexpected_airborne_frames']} unexpected airborne frames"
+        )
     return failures
 
 
@@ -133,6 +143,9 @@ def main() -> int:
     parser.add_argument("--minimum-distance-m", type=float, default=1.0)
     parser.add_argument("--maximum-skipped-ticks", type=int, default=4)
     parser.add_argument("--minimum-target-watts", type=float, default=200.0)
+    parser.add_argument(
+        "--maximum-unexpected-airborne-frames", type=int, default=0
+    )
     args = parser.parse_args()
 
     summary = analyze(parse_trace(args.log))
@@ -145,6 +158,7 @@ def main() -> int:
         args.minimum_distance_m,
         args.maximum_skipped_ticks,
         args.minimum_target_watts,
+        args.maximum_unexpected_airborne_frames,
     )
     summary["passed"] = not failures
     summary["failures"] = failures

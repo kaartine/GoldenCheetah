@@ -18,14 +18,22 @@ class TestWorkoutGameRendererPolicy : public QObject
 private slots:
     void normalDesktopUsesSceneGraph()
     {
-        QCOMPARE(WorkoutGameRendererPolicy::choose(false, "xcb", 4.6),
-                 WorkoutGameRendererBackend::SceneGraph);
+        const WorkoutGameRendererDecision decision =
+                WorkoutGameRendererPolicy::decide(false, "xcb", 4.6);
+        QCOMPARE(decision.backend, WorkoutGameRendererBackend::SceneGraph);
+        QCOMPARE(decision.reason,
+                 WorkoutGameRendererSelectionReason::Preferred);
+        QCOMPARE(QString::fromLatin1(WorkoutGameRendererPolicy::backendName(
+                         decision.backend)), QStringLiteral("SceneGraph"));
     }
 
     void explicitPainterOverrideWins()
     {
         QCOMPARE(WorkoutGameRendererPolicy::choose(true, "xcb", 4.6),
                  WorkoutGameRendererBackend::Painter);
+        QCOMPARE(WorkoutGameRendererPolicy::decide(
+                         true, "xcb", 4.6).reason,
+                 WorkoutGameRendererSelectionReason::ForcedPainter);
     }
 
     void widgetlessPlatformsUsePainter_data()
@@ -48,6 +56,9 @@ private slots:
     {
         QCOMPARE(WorkoutGameRendererPolicy::choose(false, "xcb", 1.5),
                  WorkoutGameRendererBackend::Painter);
+        QCOMPARE(WorkoutGameRendererPolicy::decide(
+                         false, "xcb", 1.5).reason,
+                 WorkoutGameRendererSelectionReason::InsufficientOpenGL);
     }
 
     void sceneGraphFailureUsesLegacyOpenGL()

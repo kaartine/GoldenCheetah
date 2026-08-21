@@ -73,6 +73,52 @@ private slots:
         }
     }
 
+    void authoritativePhysicsUsesTheSameTechnicalSurfaceAsRendering()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 171u;
+        course.durationMs = 60000;
+        WorkoutGameSection roots;
+        roots.feature = WorkoutGameFeature::Trail;
+        roots.terrain = WorkoutGameTerrainKind::Roots;
+        roots.durationMs = course.durationMs;
+        roots.targetWatts = 180.0;
+        roots.difficulty = 1.0;
+        roots.challengeCount = 1;
+        course.sections = {roots};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 190.0);
+        QVERIFY(road.ready);
+
+        WorkoutGamePhysics physics;
+        QVERIFY(physics.configure(road));
+        WorkoutGamePhysicsInput input;
+        input.terrain = roots.terrain;
+        input.desiredSpeedMetersPerSecond = 4.0;
+        input.effortRatio = 1.0;
+        double largestSurfaceOffset = 0.0;
+        double largestReportedDifference = 0.0;
+        for (int tick = 0; tick <= 600; ++tick) {
+            input.workoutTimeMs = tick * 20;
+            input.courseDistanceMeters = tick * 0.05;
+            const WorkoutGameRoadSample surface =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        road, input.courseDistanceMeters);
+            const WorkoutGameWorldSnapshot frame = physics.update(input);
+            QVERIFY(frame.ready);
+            const double renderedSurface = surface.center.elevationMeters
+                    + surface.surfaceOffsetMeters;
+            largestSurfaceOffset = std::max(
+                    largestSurfaceOffset, surface.surfaceOffsetMeters);
+            largestReportedDifference = std::max(
+                    largestReportedDifference,
+                    std::abs(frame.surfaceElevationMeters - renderedSurface));
+        }
+        QVERIFY(largestSurfaceOffset > 0.03);
+        QVERIFY(largestReportedDifference < 0.02);
+    }
+
     void terrainProfilesAreDeterministicAndPeriodic()
     {
         for (WorkoutGameTerrainKind terrain : {

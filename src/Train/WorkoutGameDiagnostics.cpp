@@ -28,6 +28,7 @@ void WorkoutGameDiagnostics::reset()
     backwardFrameCount = 0;
     stationaryFrameCount = 0;
     lateFrameCount = 0;
+    unexpectedAirborneFrameCount = 0;
     largestFrameIntervalMs = 0;
     largestRegressionMeters = 0.0;
 }
@@ -54,6 +55,7 @@ WorkoutGameDiagnosticsSnapshot WorkoutGameDiagnostics::update(
         result.backwardFrameCount = backwardFrameCount;
         result.stationaryFrameCount = stationaryFrameCount;
         result.lateFrameCount = lateFrameCount;
+        result.unexpectedAirborneFrameCount = unexpectedAirborneFrameCount;
         result.largestFrameIntervalMs = largestFrameIntervalMs;
         result.largestRegressionMeters = largestRegressionMeters;
         return result;
@@ -65,6 +67,10 @@ WorkoutGameDiagnosticsSnapshot WorkoutGameDiagnostics::update(
     largestFrameIntervalMs = std::max(
             largestFrameIntervalMs, result.frameIntervalMs);
     if (result.frameIntervalMs > LateFrameThresholdMs) ++lateFrameCount;
+    if (input.worldReady && input.riderAirborne
+            && !input.airborneExpected) {
+        ++unexpectedAirborneFrameCount;
+    }
     result.frameDistanceDeltaMeters = input.renderedRoadDistanceMeters
             - previousRoadDistanceMeters;
     if (input.movingForward
@@ -81,6 +87,7 @@ WorkoutGameDiagnosticsSnapshot WorkoutGameDiagnostics::update(
     result.backwardFrameCount = backwardFrameCount;
     result.stationaryFrameCount = stationaryFrameCount;
     result.lateFrameCount = lateFrameCount;
+    result.unexpectedAirborneFrameCount = unexpectedAirborneFrameCount;
     result.largestFrameIntervalMs = largestFrameIntervalMs;
     result.largestRegressionMeters = largestRegressionMeters;
     previousRoadDistanceMeters = input.renderedRoadDistanceMeters;

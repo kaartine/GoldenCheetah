@@ -13,6 +13,7 @@
 
 #include <cmath>
 #include <limits>
+#include <set>
 
 namespace {
 
@@ -209,6 +210,51 @@ private slots:
             QCOMPARE(first.sections[index].feature,
                      second.sections[index].feature);
         }
+    }
+
+    void balancedCourseUsesAVariedTechnicalPalette()
+    {
+        std::vector<WorkoutGameInterval> intervals;
+        for (int index = 0; index < 14; ++index) {
+            appendInterval(intervals, 45000,
+                    index % 3 == 0 ? 175.0 : 155.0,
+                    index % 3 == 0 ? 175.0 : 155.0);
+        }
+        const WorkoutGameDistanceCourse course =
+                WorkoutGameDistanceCourseBuilder::build(
+                    intervals, 190.0,
+                    WorkoutGameDistanceCourseGenerationParameters(), 55u);
+        QCOMPARE(course.status, WorkoutGameDistanceCourseStatus::Ready);
+
+        std::set<WorkoutGameTerrainKind> terrains;
+        int challenges = 0;
+        for (const WorkoutGameDistanceCourseSection &section : course.sections) {
+            terrains.insert(section.terrain);
+            challenges += section.terrain == WorkoutGameTerrainKind::LogOver
+                    || section.terrain == WorkoutGameTerrainKind::Skinny
+                    || section.terrain == WorkoutGameTerrainKind::RockGarden;
+        }
+        QVERIFY(terrains.size() >= std::size_t(4));
+        QVERIFY(challenges >= 3);
+    }
+
+    void longRecoverySectionsUseGentleDescents()
+    {
+        const WorkoutGameDistanceCourse course =
+                WorkoutGameDistanceCourseBuilder::build({
+                    {0, 60000, 140.0, 140.0},
+                    {60000, 60000, 225.0, 225.0},
+                    {120000, 10 * 60000, 100.0, 100.0},
+                    {720000, 5 * 60000, 110.0, 80.0}
+                }, 190.0);
+        QCOMPARE(course.status, WorkoutGameDistanceCourseStatus::Ready);
+        QCOMPARE(course.sections[2].feature,
+                 WorkoutGameFeature::RecoveryDescent);
+        QVERIFY(course.sections[2].gradePercent > -2.0);
+        QCOMPARE(course.sections[3].feature,
+                 WorkoutGameFeature::CooldownDescent);
+        QVERIFY(course.sections[3].gradePercent > -2.0);
+        QVERIFY(course.elevationLossMeters < course.totalDistanceMeters * 0.025);
     }
 
     void estimatorRejectsMalformedCourse()

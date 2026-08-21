@@ -294,6 +294,65 @@ private slots:
         QCOMPARE(frame.riderScreenX, center);
     }
 
+    void projectionReportsAndDrawsVisibleClimbRelief()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 19u;
+        course.durationMs = 180000;
+        WorkoutGameSection climb;
+        climb.feature = WorkoutGameFeature::Climb;
+        climb.terrain = WorkoutGameTerrainKind::Climb;
+        climb.durationMs = course.durationMs;
+        climb.targetWatts = 230.0;
+        climb.gradePercent = 7.0;
+        climb.difficulty = 0.7;
+        course.sections = {climb};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 190.0);
+        const WorkoutGameRoadProjectionFrame frame =
+                WorkoutGameRoadProjection::project(road, 20.0);
+
+        QVERIFY(frame.ready);
+        QVERIFY(frame.renderedGradePercent > 5.0);
+        QVERIFY(frame.visibleElevationChangeMeters > 4.0);
+        QVERIFY(frame.slices.front().centerY
+                < frame.slices.back().centerY - 20.0);
+    }
+
+    void projectionUsesCanonicalTechnicalSurfaceHeight()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 29u;
+        course.durationMs = 60000;
+        WorkoutGameSection roots;
+        roots.feature = WorkoutGameFeature::Trail;
+        roots.terrain = WorkoutGameTerrainKind::Roots;
+        roots.durationMs = course.durationMs;
+        roots.targetWatts = 170.0;
+        roots.difficulty = 1.0;
+        course.sections = {roots};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 190.0);
+        const WorkoutGameRoadProjectionFrame frame =
+                WorkoutGameRoadProjection::project(road, 0.0);
+        QVERIFY(frame.ready);
+
+        bool sawTechnicalRelief = false;
+        for (const WorkoutGameRoadProjectedSlice &slice : frame.slices) {
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        road, slice.worldDistanceMeters);
+            QCOMPARE(slice.surfaceElevationMeters,
+                     sample.center.elevationMeters
+                        + sample.surfaceOffsetMeters);
+            sawTechnicalRelief = sawTechnicalRelief
+                    || sample.surfaceOffsetMeters > 0.03;
+        }
+        QVERIFY(sawTechnicalRelief);
+    }
+
     void tinyDistanceChangesProduceContinuousProjection()
     {
         const WorkoutGameRoadCourse road =

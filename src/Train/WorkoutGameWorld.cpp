@@ -200,7 +200,9 @@ struct WorkoutGamePhysics::Impl
                             roadCourse, distanceBase);
                 if (sample.ready && origin.ready) {
                     return sample.center.elevationMeters
-                            - origin.center.elevationMeters;
+                            + sample.surfaceOffsetMeters
+                            - origin.center.elevationMeters
+                            - origin.surfaceOffsetMeters;
                 }
             }
             return WorkoutGamePhysics::terrainHeight(
@@ -341,7 +343,9 @@ struct WorkoutGamePhysics::Impl
                     roadCourse, distanceBase)
                 : WorkoutGameRoadSample();
         const double originSurfaceElevation = groundOrigin.ready
-                ? groundOrigin.center.elevationMeters : elevationBase;
+                ? groundOrigin.center.elevationMeters
+                    + groundOrigin.surfaceOffsetMeters
+                : elevationBase;
         result.rider.elevationMeters = originSurfaceElevation
                 + double(position.y) - originBodyY;
         result.rider.pitchDegrees = radiansToDegrees(
@@ -359,9 +363,14 @@ struct WorkoutGamePhysics::Impl
                 : WorkoutGameRoadSample();
         const double groundY = ground.ready && groundOrigin.ready
                 ? ground.center.elevationMeters
+                    + ground.surfaceOffsetMeters
                     - groundOrigin.center.elevationMeters
+                    - groundOrigin.surfaceOffsetMeters
                 : WorkoutGamePhysics::terrainHeight(
                     terrain, position.x, gradePercent, difficulty, seed);
+        result.surfaceElevationMeters = ground.ready
+                ? ground.center.elevationMeters + ground.surfaceOffsetMeters
+                : originSurfaceElevation + groundY;
         result.rider.clearanceMeters = double(position.y) - groundY;
         result.rider.airborne = !grounded();
         result.rider.walking = weakClimbMicroseconds

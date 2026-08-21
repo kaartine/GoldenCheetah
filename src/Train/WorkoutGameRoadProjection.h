@@ -39,6 +39,8 @@ struct WorkoutGameRoadProjectedSlice
     double halfWidthMeters = 0.0;
     double pixelsPerMeter = 0.0;
     double surfaceOffsetMeters = 0.0;
+    double surfaceElevationMeters = 0.0;
+    double gradePercent = 0.0;
     double occlusionY = 0.0;
     std::size_t pieceIndex = 0;
     WorkoutGameTerrainKind terrain = WorkoutGameTerrainKind::SmoothTrail;
@@ -59,6 +61,8 @@ struct WorkoutGameRoadProjectionFrame
     bool ready = false;
     double riderScreenX = 0.0;
     double riderScreenY = 0.0;
+    double renderedGradePercent = 0.0;
+    double visibleElevationChangeMeters = 0.0;
     std::vector<WorkoutGameRoadProjectedSlice> slices;
 };
 

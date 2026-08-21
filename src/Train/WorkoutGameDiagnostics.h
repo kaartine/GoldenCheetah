@@ -31,6 +31,15 @@ struct WorkoutGameDiagnosticsInput
     double framesPerSecond = 0.0;
     double p95FrameIntervalMs = 0.0;
     std::size_t skippedSimulationTicks = 0;
+    bool worldReady = false;
+    bool riderAirborne = false;
+    bool airborneExpected = false;
+    double riderElevationMeters = 0.0;
+    double surfaceElevationMeters = 0.0;
+    double riderClearanceMeters = 0.0;
+    double airHeightMeters = 0.0;
+    double visibleElevationChangeMeters = 0.0;
+    double renderedGradePercent = 0.0;
 };
 
 struct WorkoutGameDiagnosticsSnapshot
@@ -43,6 +52,7 @@ struct WorkoutGameDiagnosticsSnapshot
     std::uint64_t backwardFrameCount = 0;
     std::uint64_t stationaryFrameCount = 0;
     std::uint64_t lateFrameCount = 0;
+    std::uint64_t unexpectedAirborneFrameCount = 0;
     double largestRegressionMeters = 0.0;
 };
 
@@ -61,6 +71,7 @@ private:
     std::uint64_t backwardFrameCount = 0;
     std::uint64_t stationaryFrameCount = 0;
     std::uint64_t lateFrameCount = 0;
+    std::uint64_t unexpectedAirborneFrameCount = 0;
     std::int64_t largestFrameIntervalMs = 0;
     double largestRegressionMeters = 0.0;
 };

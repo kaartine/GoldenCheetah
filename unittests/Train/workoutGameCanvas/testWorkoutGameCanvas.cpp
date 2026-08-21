@@ -73,6 +73,15 @@ class TestWorkoutGameCanvas : public QObject
     Q_OBJECT
 
 private slots:
+    void painterFramePacingFollowsTheDisplay()
+    {
+        QCOMPARE(WorkoutGameCanvas::targetFrameIntervalMs(30.0), 33);
+        QCOMPARE(WorkoutGameCanvas::targetFrameIntervalMs(60.0), 16);
+        QCOMPARE(WorkoutGameCanvas::targetFrameIntervalMs(120.0), 8);
+        QCOMPARE(WorkoutGameCanvas::targetFrameIntervalMs(240.0), 8);
+        QCOMPARE(WorkoutGameCanvas::targetFrameIntervalMs(0.0), 16);
+    }
+
     void visualStateInterpolatesBetweenTelemetryUpdates()
     {
         WorkoutGameVisualSnapshot first;

@@ -63,6 +63,7 @@ struct WorkoutGameWorldSnapshot
     double gradePercent = 0.0;
     double difficulty = 0.0;
     double terrainOffsetMeters = 0.0;
+    double surfaceElevationMeters = 0.0;
     WorkoutGameVehiclePose rider;
     double speedMetersPerSecond = 0.0;
     double landingImpact = 0.0;
