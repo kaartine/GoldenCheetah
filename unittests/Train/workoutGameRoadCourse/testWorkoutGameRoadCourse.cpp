@@ -9,6 +9,7 @@
 
 #include "Train/WorkoutGameRoadCourse.h"
 #include "Train/WorkoutGameRoadProjection.h"
+#include "Train/WorkoutGameFeatureGeometry.h"
 
 #include <QTest>
 
@@ -203,6 +204,70 @@ private slots:
         QVERIFY(std::abs(first.exit.xMeters - first.entry.xMeters) > 0.01);
     }
 
+    void trailUsesSingletrackWidthAndContinuousRelief()
+    {
+        WorkoutGameCourse course = sampleCourse();
+        for (WorkoutGameSection &section : course.sections) {
+            section.terrain = WorkoutGameTerrainKind::SmoothTrail;
+            section.gradePercent = 0.0;
+            section.challengeCount = 0;
+        }
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        QVERIFY(road.ready);
+
+        double minimumElevation = 1e9;
+        double maximumElevation = -1e9;
+        double maximumHalfWidth = 0.0;
+        for (double distance = 0.0;
+             distance <= road.totalLengthMeters; distance += 0.5) {
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sample(road, distance);
+            QVERIFY(sample.ready);
+            minimumElevation = std::min(
+                    minimumElevation, sample.center.elevationMeters);
+            maximumElevation = std::max(
+                    maximumElevation, sample.center.elevationMeters);
+            maximumHalfWidth = std::max(
+                    maximumHalfWidth, sample.center.halfWidthMeters);
+        }
+        QVERIFY2(maximumHalfWidth <= 0.75,
+                 "the generated trail is wider than a singletrack");
+        QVERIFY2(maximumElevation - minimumElevation >= 0.08,
+                 "smooth trail has no visible surface relief");
+        QVERIFY(std::abs(road.pieces.front().turnRadians) > 0.02);
+    }
+
+    void jumpEffortWindowIsCloseToObstacle()
+    {
+        for (std::int64_t durationMs : {15000, 120000}) {
+            WorkoutGameCourse course;
+            course.status = WorkoutGameCourseStatus::Ready;
+            course.seed = 123u;
+            course.durationMs = durationMs;
+            WorkoutGameSection section;
+            section.feature = WorkoutGameFeature::SprintJump;
+            section.terrain = WorkoutGameTerrainKind::LogOver;
+            section.durationMs = durationMs;
+            section.targetWatts = 260.0;
+            section.difficulty = 0.5;
+            section.challengeCount = 1;
+            course.sections.push_back(section);
+            const WorkoutGameRoadCourse road =
+                    WorkoutGameRoadCourseBuilder::build(course, 200.0);
+            const auto jump = std::find_if(
+                    road.pieces.begin(), road.pieces.end(),
+                    [](const WorkoutGameRoadPiece &piece) {
+                        return piece.challenge.enabled;
+                    });
+            QVERIFY(jump != road.pieces.end());
+            QVERIFY(jump->challenge.obstacleDistanceMeters
+                    - jump->challenge.prepareDistanceMeters <= 10.0);
+            QVERIFY(jump->challenge.obstacleDistanceMeters
+                    - jump->challenge.decisionDistanceMeters <= 4.0 + 1e-9);
+        }
+    }
+
     void projectionUsesDepthInsteadOfSidewaysTravel()
     {
         WorkoutGameCourse straightCourse = sampleCourse();
@@ -324,6 +389,59 @@ private slots:
                 });
         QVERIFY(obstacleSlice != projection.slices.end());
         QVERIFY(obstacleSlice->surfaceOffsetMeters > 0.4);
+    }
+
+    void featureSurfaceContinuesAcrossPieceBoundary()
+    {
+        WorkoutGameRoadCourse selected;
+        const WorkoutGameRoadPiece *challengePiece = nullptr;
+        WorkoutGameFeatureGeometryProfile profile;
+        for (std::int64_t durationMs = 10000;
+             durationMs <= 180000 && !challengePiece; durationMs += 1000) {
+            WorkoutGameCourse source;
+            source.status = WorkoutGameCourseStatus::Ready;
+            source.seed = 667u;
+            source.durationMs = durationMs;
+            WorkoutGameSection section;
+            section.feature = WorkoutGameFeature::SprintJump;
+            section.terrain = WorkoutGameTerrainKind::Tabletop;
+            section.durationMs = durationMs;
+            section.targetWatts = 280.0;
+            section.difficulty = 0.7;
+            section.challengeCount = 1;
+            source.sections.push_back(section);
+            WorkoutGameRoadCourse candidate =
+                    WorkoutGameRoadCourseBuilder::build(source, 200.0);
+            for (std::size_t index = 0; index + 1 < candidate.pieces.size(); ++index) {
+                const WorkoutGameRoadPiece &piece = candidate.pieces[index];
+                if (!piece.challenge.enabled) continue;
+                const WorkoutGameFeatureGeometryProfile candidateProfile =
+                        WorkoutGameFeatureGeometry::profile(
+                            piece.terrain, piece.difficulty);
+                const double boundary = piece.startDistanceMeters
+                        + piece.lengthMeters;
+                if (piece.challenge.obstacleDistanceMeters
+                        + candidateProfile.endMeters > boundary + 0.2) {
+                    selected = std::move(candidate);
+                    challengePiece = &selected.pieces[index];
+                    profile = candidateProfile;
+                    break;
+                }
+            }
+        }
+        QVERIFY2(challengePiece,
+                 "could not construct a feature crossing a piece boundary");
+        QVERIFY(profile.ready);
+        const double boundary = challengePiece->startDistanceMeters
+                + challengePiece->lengthMeters;
+        const WorkoutGameRoadSample before =
+                WorkoutGameRoadCourseBuilder::sample(selected, boundary - 0.01);
+        const WorkoutGameRoadSample after =
+                WorkoutGameRoadCourseBuilder::sample(selected, boundary + 0.01);
+        QVERIFY(before.surfaceOffsetMeters > 0.05);
+        QVERIFY(after.surfaceOffsetMeters > 0.05);
+        QVERIFY(std::abs(before.surfaceOffsetMeters
+                - after.surfaceOffsetMeters) < 0.05);
     }
 };
 

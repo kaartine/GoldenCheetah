@@ -34,7 +34,9 @@ WorkoutGamePowerProfileSnapshot WorkoutGamePowerProfile::build(
             0.0, 1.0);
     result.maximumWatts = std::max(1.0, result.actualWatts);
     result.segments.reserve(course.sections.size());
-    for (const WorkoutGameSection &section : course.sections) {
+    for (std::size_t sectionIndex = 0;
+         sectionIndex < course.sections.size(); ++sectionIndex) {
+        const WorkoutGameSection &section = course.sections[sectionIndex];
         WorkoutGamePowerProfileSegment segment;
         segment.start = std::clamp(
                 double(section.startMs) / double(course.durationMs), 0.0, 1.0);
@@ -45,7 +47,10 @@ WorkoutGamePowerProfileSnapshot WorkoutGamePowerProfile::build(
                 0.0, std::isfinite(section.targetWatts)
                     ? section.targetWatts : 0.0);
         const WorkoutGameFeatureChallengeProfile challenge =
-                WorkoutGameFeatureChallenge::profile(section);
+                simulation.activeSection == int(sectionIndex)
+                    && simulation.challenge.enabled
+                ? simulation.challenge
+                : WorkoutGameFeatureChallenge::profile(section);
         segment.challenge = challenge.enabled;
         if (challenge.enabled) {
             const double span = segment.end - segment.start;
@@ -70,7 +75,9 @@ WorkoutGamePowerProfileSnapshot WorkoutGamePowerProfile::build(
                 course.sections[std::size_t(simulation.activeSection)];
         result.targetWatts = std::max(0.0, section.targetWatts);
         const WorkoutGameFeatureChallengeProfile challenge =
-                WorkoutGameFeatureChallenge::profile(section);
+                simulation.challenge.enabled
+                ? simulation.challenge
+                : WorkoutGameFeatureChallenge::profile(section);
         if (challenge.enabled) {
             const double progress = std::clamp(
                     simulation.sectionProgress, 0.0, 1.0);

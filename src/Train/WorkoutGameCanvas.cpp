@@ -837,8 +837,7 @@ void WorkoutGameCanvas::paintScene(
             : (current.speedKph > 1.0 ? (animationFrame / 6) % 2 : 0);
     const double pixelsPerMeter = std::max(1, scene.width()) / 42.0;
     const double airLift = world.ready
-            ? std::max(0.0, world.rider.clearanceMeters - 0.82)
-                    * pixelsPerMeter
+            ? world.rider.airHeightMeters() * pixelsPerMeter
             : 0.0;
     const double suspensionLift = world.ready
             ? ((world.rider.frontSuspension + world.rider.rearSuspension)

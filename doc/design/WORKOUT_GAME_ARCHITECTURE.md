@@ -101,6 +101,12 @@ reliably from the side. Camera angles blend over time, while a new physics-world
 generation performs an explicit cut instead of interpolating unrelated
 coordinates.
 
+The chase camera follows the sampled trail surface, not the airborne chassis.
+Vehicle clearance above the nominal loaded ride height is published as the
+only visual air gap and is applied once to the rider sprite. This keeps a real
+Box2D jump visible without moving the camera and projected ground in the
+opposite direction or treating normal chassis clearance as flight.
+
 The camera pose is continuous: renderers consume interpolated yaw, pitch, zoom,
 look-ahead and target coordinates rather than switching between unrelated scene
 implementations. A later pseudo-3D chase projection can therefore blend from the
@@ -278,6 +284,20 @@ Mutable state has the following owners:
 Course builders and adapters are pure or value-oriented preparation modules.
 They do not participate in the frame loop. The primary renderer keeps QSG nodes
 alive between frames but currently regenerates their dynamic vertex contents.
+
+The generated road is a singletrack: its nominal full width is 1.36 metres,
+scaled only for terrain-specific features. Each puzzle piece adds bounded,
+zero-value and zero-slope relief at both connectors. The connector spline,
+continuous relief, technical surface and obstacle profile are summed by
+`WorkoutGameRoadCourse::sample()`, and that exact elevation and derivative are
+used by both Box2D and scene projection. Feature meshes remain anchored to the
+base surface so their obstacle height is not applied twice.
+
+Jump effort is intentionally local to the feature. The simulation measures the
+late approach window, while the generated gate clamps the visible preparation
+segment to at most six metres before the decision line. Jump obstacles are
+placed no more than five metres beyond that line; long workout intervals cannot
+therefore turn one short MTB burst into a prolonged power prompt.
 The workout-time-to-road timeline owns longitudinal progress. Each engine tick
 passes that distance to Box2D and publishes it with the resulting vehicle pose,
 feature state, and camera. `WorkoutGameRoadCourse::sample()` supplies the same

@@ -32,7 +32,7 @@ private slots:
         section.terrain = WorkoutGameTerrainKind::LogOver;
         section.durationMs = course.durationMs;
         section.targetWatts = 240.0;
-        section.gradePercent = 4.0;
+        section.gradePercent = 12.0;
         section.difficulty = 0.6;
         section.challengeCount = 1;
         course.sections = {section};
@@ -62,6 +62,11 @@ private slots:
             QVERIFY(frame.rider.distanceMeters >= previousDistance);
             QVERIFY(std::isfinite(frame.rider.elevationMeters));
             QVERIFY(std::isfinite(frame.rider.clearanceMeters));
+            if (tick >= 50) {
+                QVERIFY2(std::abs(frame.rider.elevationMeters
+                            - surface.center.elevationMeters) < 0.6,
+                         "vehicle elevation diverged from the canonical surface");
+            }
             if (tick == 0) physicsGeneration = frame.generation;
             QCOMPARE(frame.generation, physicsGeneration);
             previousDistance = frame.rider.distanceMeters;
@@ -428,6 +433,27 @@ private slots:
         QCOMPARE(view.centerElevationMeters, 4.2);
         QCOMPARE(view.yawDegrees, 42.0);
         QVERIFY(view.lookAheadMeters > 3.0);
+    }
+
+    void cameraTracksTrailSurfaceInsteadOfAirborneChassis()
+    {
+        WorkoutGameWorldSnapshot world;
+        world.ready = true;
+        world.generation = 1;
+        world.rider.distanceMeters = 25.0;
+        world.rider.elevationMeters = 5.0;
+        world.rider.clearanceMeters = 1.82;
+        world.rider.airborne = true;
+
+        QCOMPARE(world.rider.airHeightMeters(), 1.0);
+        WorkoutGameCamera camera;
+        const WorkoutGameCameraSnapshot view = camera.update(world, 0.016);
+        QCOMPARE(view.centerElevationMeters, 5.2);
+
+        world.rider.airborne = false;
+        QCOMPARE(world.rider.airHeightMeters(), 1.0);
+        world.rider.clearanceMeters = 0.90;
+        QVERIFY(std::abs(world.rider.airHeightMeters() - 0.08) < 1e-9);
     }
 
     void fixedObliqueCameraKeepsSmoothFeatureZoom()

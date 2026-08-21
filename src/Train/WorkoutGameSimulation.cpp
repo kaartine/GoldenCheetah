@@ -9,6 +9,8 @@
 
 #include "WorkoutGameSimulation.h"
 
+#include "WorkoutGameRoadCourse.h"
+
 #include <algorithm>
 #include <cmath>
 #include <iterator>
@@ -38,6 +40,7 @@ bool WorkoutGameSimulation::configure(
         configuredCourse = WorkoutGameCourse();
         configuredFtpWatts = 0.0;
         outcomes.clear();
+        challengeProfiles.clear();
         reset();
         return false;
     }
@@ -47,6 +50,26 @@ bool WorkoutGameSimulation::configure(
     outcomes.assign(
             configuredCourse.sections.size(),
             WorkoutGameFeatureOutcome::None);
+    challengeProfiles.assign(
+            configuredCourse.sections.size(),
+            WorkoutGameFeatureChallengeProfile());
+    const WorkoutGameRoadCourse road =
+            WorkoutGameRoadCourseBuilder::build(course, ftpWatts);
+    if (road.ready) {
+        for (const WorkoutGameRoadPiece &piece : road.pieces) {
+            if (piece.challenge.enabled
+                    && piece.sourceSectionIndex < challengeProfiles.size()) {
+                challengeProfiles[piece.sourceSectionIndex] =
+                        piece.challenge.profile;
+            }
+        }
+    }
+    for (std::size_t index = 0; index < challengeProfiles.size(); ++index) {
+        if (!challengeProfiles[index].enabled) {
+            challengeProfiles[index] = WorkoutGameFeatureChallenge::profile(
+                    configuredCourse.sections[index]);
+        }
+    }
     reset();
     return true;
 }
@@ -126,8 +149,7 @@ void WorkoutGameSimulation::moveToSection(int sectionIndex)
     if (sectionIndex > priorSection + 1) {
         const int firstSkipped = std::max(0, priorSection + 1);
         for (int index = firstSkipped; index < sectionIndex; ++index) {
-            if (WorkoutGameFeatureChallenge::profile(
-                    configuredCourse.sections[index]).enabled
+            if (challengeProfiles[std::size_t(index)].enabled
                     && outcomes[index] == WorkoutGameFeatureOutcome::None) {
                 outcomes[index] = WorkoutGameFeatureOutcome::Bypassed;
             }
@@ -144,8 +166,7 @@ void WorkoutGameSimulation::moveToSection(int sectionIndex)
     activeChallengeReadiness = 0.0;
     if (activeSection >= 0
             && outcomes[activeSection] == WorkoutGameFeatureOutcome::None) {
-        activeChallenge = WorkoutGameFeatureChallenge::profile(
-                configuredCourse.sections[activeSection]);
+        activeChallenge = challengeProfiles[std::size_t(activeSection)];
     }
     if (activeChallenge.enabled) {
         outcomes[activeSection] = WorkoutGameFeatureOutcome::Active;

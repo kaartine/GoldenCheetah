@@ -95,6 +95,7 @@ private:
     WorkoutGameCourse configuredCourse;
     double configuredFtpWatts = 0.0;
     std::vector<WorkoutGameFeatureOutcome> outcomes;
+    std::vector<WorkoutGameFeatureChallengeProfile> challengeProfiles;
     bool initialized = false;
     std::int64_t lastWorkoutTimeMs = 0;
     int activeSection = -1;

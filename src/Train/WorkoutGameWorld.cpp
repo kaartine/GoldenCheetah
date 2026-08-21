@@ -336,13 +336,13 @@ struct WorkoutGamePhysics::Impl
                 : distanceBase + double(position.x) - RiderStartMeters;
         result.terrainOffsetMeters = double(position.x)
                 - result.rider.distanceMeters;
-        const WorkoutGameRoadSample road = roadCourse.ready
+        const WorkoutGameRoadSample groundOrigin = roadCourse.ready
                 ? WorkoutGameRoadCourseBuilder::sample(
-                    roadCourse, result.rider.distanceMeters)
+                    roadCourse, distanceBase)
                 : WorkoutGameRoadSample();
-        const double surfaceElevation = road.ready
-                ? road.center.elevationMeters : elevationBase;
-        result.rider.elevationMeters = surfaceElevation
+        const double originSurfaceElevation = groundOrigin.ready
+                ? groundOrigin.center.elevationMeters : elevationBase;
+        result.rider.elevationMeters = originSurfaceElevation
                 + double(position.y) - originBodyY;
         result.rider.pitchDegrees = radiansToDegrees(
                 b2Rot_GetAngle(b2Body_GetRotation(chassis)));
@@ -356,10 +356,6 @@ struct WorkoutGamePhysics::Impl
                 ? WorkoutGameRoadCourseBuilder::sample(
                     roadCourse, distanceBase + double(position.x)
                         - RiderStartMeters)
-                : WorkoutGameRoadSample();
-        const WorkoutGameRoadSample groundOrigin = roadCourse.ready
-                ? WorkoutGameRoadCourseBuilder::sample(
-                    roadCourse, distanceBase)
                 : WorkoutGameRoadSample();
         const double groundY = ground.ready && groundOrigin.ready
                 ? ground.center.elevationMeters
@@ -690,7 +686,8 @@ WorkoutGameCameraSnapshot WorkoutGameCamera::update(
 
     const WorkoutGameCameraMode mode = preferredMode(world.terrain);
     const double distance = finiteOr(world.rider.distanceMeters, 0.0);
-    const double elevation = finiteOr(world.rider.elevationMeters, 0.0);
+    const double elevation = finiteOr(world.rider.elevationMeters, 0.0)
+            - world.rider.airHeightMeters();
     const double speed = std::clamp(
             finiteOr(world.speedMetersPerSecond, 0.0), 0.0, 30.0);
     const double lookAhead = std::clamp(3.0 + speed * 0.55, 3.0, 15.0);

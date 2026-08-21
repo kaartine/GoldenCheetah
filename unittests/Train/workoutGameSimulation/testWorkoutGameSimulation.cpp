@@ -8,6 +8,7 @@
  */
 
 #include "Train/WorkoutGameSimulation.h"
+#include "Train/WorkoutGameRoadCourse.h"
 
 #include <QTest>
 
@@ -104,7 +105,7 @@ private slots:
 
         simulation.update(sample(0, 250.0, 250.0, 90.0));
         const WorkoutGameSimulationSnapshot result =
-                simulation.update(sample(7000, 250.0, 250.0, 90.0));
+                simulation.update(sample(7500, 250.0, 250.0, 90.0));
 
         QCOMPARE(result.featureOutcome, WorkoutGameFeatureOutcome::Completed);
         QCOMPARE(result.route, WorkoutGameRoute::MainLine);
@@ -117,7 +118,7 @@ private slots:
 
         simulation.update(sample(0, 100.0, 250.0, 50.0));
         const WorkoutGameSimulationSnapshot result =
-                simulation.update(sample(7000, 100.0, 250.0, 50.0));
+                simulation.update(sample(7500, 100.0, 250.0, 50.0));
 
         QCOMPARE(result.featureOutcome, WorkoutGameFeatureOutcome::Bypassed);
         QCOMPARE(result.route, WorkoutGameRoute::SafeBypass);
@@ -163,10 +164,15 @@ private slots:
                 challengeCourse(WorkoutGameTerrainKind::RockGarden), 200.0));
         WorkoutGameSimulationInput input = sample(0, 160.0, 200.0, 60.0);
         input.authoritativeSpeedKph = 6.0;
-        simulation.update(input);
-        input.workoutTimeMs = 3000;
+        const WorkoutGameSimulationSnapshot initial = simulation.update(input);
+        const std::int64_t measurementStartMs = std::int64_t(std::ceil(
+                initial.challenge.measurementStartProgress * 10000.0));
+        const std::int64_t decisionMs = std::int64_t(std::floor(
+                initial.challenge.decisionProgress * 10000.0));
+        input.workoutTimeMs = measurementStartMs - 100;
         QCOMPARE(simulation.update(input).challengeReadiness, 0.0);
-        input.workoutTimeMs = 4000;
+        input.workoutTimeMs = std::min(
+                measurementStartMs + 500, decisionMs - 100);
 
         const WorkoutGameSimulationSnapshot result = simulation.update(input);
 
@@ -187,8 +193,8 @@ private slots:
 
         WorkoutGameSimulationSnapshot earlyResult;
         WorkoutGameSimulationSnapshot timedResult;
-        for (std::int64_t time = 0; time <= 7000; time += 250) {
-            const bool inApproach = time >= 4500;
+        for (std::int64_t time = 0; time <= 7500; time += 250) {
+            const bool inApproach = time >= 6400;
             WorkoutGameSimulationInput earlyInput = sample(
                     time, inApproach ? 100.0 : 200.0, 200.0,
                     inApproach ? 45.0 : 85.0);
@@ -206,6 +212,44 @@ private slots:
                  WorkoutGameFeatureOutcome::Bypassed);
         QCOMPARE(timedResult.featureOutcome,
                  WorkoutGameFeatureOutcome::Completed);
+    }
+
+    void longJumpSectionStillMeasuresOnlySixMetres()
+    {
+        WorkoutGameCourse course = challengeCourse(
+                WorkoutGameTerrainKind::LogOver);
+        course.durationMs = 120000;
+        course.sections.front().durationMs = course.durationMs;
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        QVERIFY(road.ready);
+
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(course, 200.0));
+        const WorkoutGameSimulationSnapshot initial = simulation.update(
+                sample(0, 200.0, 200.0));
+        QVERIFY(initial.challenge.enabled);
+        const double sectionLength = road.timeline.front().endDistanceMeters
+                - road.timeline.front().startDistanceMeters;
+        QVERIFY((initial.challenge.decisionProgress
+                 - initial.challenge.measurementStartProgress)
+                * sectionLength <= 6.0 + 1e-9);
+    }
+
+    void longClimbStillMeasuresTheWholeEffort()
+    {
+        WorkoutGameCourse course = challengeCourse(
+                WorkoutGameTerrainKind::Climb);
+        course.durationMs = 120000;
+        course.sections.front().durationMs = course.durationMs;
+        course.sections.front().gradePercent = 8.0;
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(course, 200.0));
+        const WorkoutGameSimulationSnapshot initial = simulation.update(
+                sample(0, 200.0, 200.0));
+        QVERIFY(initial.challenge.enabled);
+        QCOMPARE(initial.challenge.measurementStartProgress, 0.0);
+        QCOMPARE(initial.challenge.decisionProgress, 0.95);
     }
 
     void recoveryDescentCarriesSpeedWithoutPower()

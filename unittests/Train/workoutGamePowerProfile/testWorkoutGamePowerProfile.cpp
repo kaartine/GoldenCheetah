@@ -63,8 +63,8 @@ private slots:
         QCOMPARE(prepare.cue.state, WorkoutGamePowerCueState::Prepare);
         QVERIFY(prepare.cue.secondsUntilWindow > 1.0);
 
-        simulation.sectionProgress = 0.55;
-        simulation.workoutTimeMs = 6600;
+        simulation.sectionProgress = 0.68;
+        simulation.workoutTimeMs = 8160;
         const WorkoutGamePowerProfileSnapshot push =
                 WorkoutGamePowerProfile::build(course, simulation, 210.0);
         QCOMPARE(push.cue.state, WorkoutGamePowerCueState::PushNow);
@@ -72,8 +72,8 @@ private slots:
         QVERIFY(push.cue.windowProgress > 0.0);
         QVERIFY(push.cue.windowProgress < 1.0);
 
-        simulation.sectionProgress = 0.72;
-        simulation.workoutTimeMs = 8640;
+        simulation.sectionProgress = 0.76;
+        simulation.workoutTimeMs = 9120;
         simulation.featureOutcome = WorkoutGameFeatureOutcome::Completed;
         simulation.challengeReadiness = 1.0;
         const WorkoutGamePowerProfileSnapshot committed =

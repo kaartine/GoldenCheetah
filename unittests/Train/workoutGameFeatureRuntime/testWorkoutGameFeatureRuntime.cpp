@@ -72,10 +72,10 @@ private slots:
                     section, 0.10, WorkoutGameFeatureOutcome::Active)).phase,
                  WorkoutGameFeaturePhase::Approach);
         QCOMPARE(runtime.update(snapshot(
-                    section, 0.50, WorkoutGameFeatureOutcome::Active)).phase,
+                    section, 0.68, WorkoutGameFeatureOutcome::Active)).phase,
                  WorkoutGameFeaturePhase::Measure);
         QCOMPARE(runtime.update(snapshot(
-                    section, 0.72, WorkoutGameFeatureOutcome::Completed)).phase,
+                    section, 0.74, WorkoutGameFeatureOutcome::Completed)).phase,
                  WorkoutGameFeaturePhase::Committed);
         QCOMPARE(runtime.update(snapshot(
                     section, 0.94, WorkoutGameFeatureOutcome::Completed)).phase,

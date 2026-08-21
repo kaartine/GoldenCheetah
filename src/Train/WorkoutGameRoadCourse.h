@@ -36,7 +36,7 @@ struct WorkoutGameRoadConnector
     double zMeters = 0.0;
     double elevationMeters = 0.0;
     double headingRadians = 0.0;
-    double halfWidthMeters = 1.4;
+    double halfWidthMeters = 0.68;
     double gradePercent = 0.0;
 };
 

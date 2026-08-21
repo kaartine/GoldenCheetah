@@ -26,7 +26,7 @@ double smoothStep(double value)
     return clamped * clamped * (3.0 - 2.0 * clamped);
 }
 
-double challengeSurfaceOffset(
+double technicalSurfaceOffset(
         const WorkoutGameRoadPiece &piece,
         double distanceMeters)
 {
@@ -54,8 +54,14 @@ double challengeSurfaceOffset(
     default:
         break;
     }
-    if (!piece.challenge.enabled) return offset;
+    return offset;
+}
 
+double featureSurfaceOffset(
+        const WorkoutGameRoadPiece &piece,
+        double distanceMeters)
+{
+    if (!piece.challenge.enabled) return 0.0;
     const double local = distanceMeters
             - piece.challenge.obstacleDistanceMeters;
     switch (piece.terrain) {
@@ -64,19 +70,85 @@ double challengeSurfaceOffset(
     case WorkoutGameTerrainKind::Tabletop:
     case WorkoutGameTerrainKind::RockSlab:
     case WorkoutGameTerrainKind::Drop:
-        offset += WorkoutGameFeatureGeometry::profile(
+        return WorkoutGameFeatureGeometry::profile(
                 piece.terrain, piece.difficulty).surfaceOffset(local);
         break;
     default:
         break;
     }
-    return offset;
+    return 0.0;
+}
+
+double trailReliefOffset(
+        const WorkoutGameRoadPiece &piece,
+        double distanceMeters)
+{
+    const double progress = piece.lengthMeters > 0.0
+            ? std::clamp(
+                (distanceMeters - piece.startDistanceMeters)
+                    / piece.lengthMeters,
+                0.0, 1.0)
+            : 0.0;
+    const double envelope = std::pow(std::sin(Pi * progress), 2.0);
+    const double phase = double((piece.sourceSectionIndex * 37u
+            + std::size_t(std::llround(piece.startDistanceMeters))) % 101u)
+            / 101.0 * 2.0 * Pi;
+    double amplitude = 0.07 + 0.07 * piece.difficulty;
+    switch (piece.terrain) {
+    case WorkoutGameTerrainKind::Climb:
+        amplitude *= 1.25;
+        break;
+    case WorkoutGameTerrainKind::Skinny:
+        amplitude *= 0.35;
+        break;
+    case WorkoutGameTerrainKind::Roots:
+    case WorkoutGameTerrainKind::RockGarden:
+    case WorkoutGameTerrainKind::Rollers:
+        amplitude *= 0.55;
+        break;
+    default:
+        break;
+    }
+    return amplitude * envelope
+            * (0.72 * std::sin(2.0 * Pi * progress + phase)
+               + 0.28 * std::sin(6.0 * Pi * progress + phase * 0.43));
 }
 
 double targetHalfWidth(WorkoutGameTerrainKind terrain)
 {
-    return 1.45 * WorkoutGameFeatureCatalog::definition(
+    return 0.68 * WorkoutGameFeatureCatalog::definition(
             terrain).trailWidthScale;
+}
+
+std::size_t pieceIndexAt(
+        const WorkoutGameRoadCourse &course,
+        double distanceMeters)
+{
+    const auto found = std::upper_bound(
+            course.pieces.begin(), course.pieces.end(), distanceMeters,
+            [](double value, const WorkoutGameRoadPiece &piece) {
+                return value < piece.startDistanceMeters;
+            });
+    return found == course.pieces.begin()
+            ? 0u
+            : std::size_t(std::distance(course.pieces.begin(), found) - 1);
+}
+
+double surfaceOffsetAt(
+        const WorkoutGameRoadCourse &course,
+        double distanceMeters)
+{
+    const std::size_t index = pieceIndexAt(course, distanceMeters);
+    double offset = technicalSurfaceOffset(
+            course.pieces[index], distanceMeters);
+    const std::size_t first = index > 0u ? index - 1u : 0u;
+    const std::size_t last = std::min(
+            course.pieces.size() - 1u, index + 1u);
+    for (std::size_t candidate = first; candidate <= last; ++candidate) {
+        offset += featureSurfaceOffset(
+                course.pieces[candidate], distanceMeters);
+    }
+    return offset;
 }
 
 double estimatedLength(
@@ -98,6 +170,9 @@ double pieceTurn(
 {
     double amount = 0.0;
     switch (section.terrain) {
+    case WorkoutGameTerrainKind::SmoothTrail:
+        amount = section.visualVariant == 0u ? 0.0 : 0.10;
+        break;
     case WorkoutGameTerrainKind::Berm: amount = 0.52; break;
     case WorkoutGameTerrainKind::Rollers: amount = 0.16; break;
     case WorkoutGameTerrainKind::Roots:
@@ -105,6 +180,10 @@ double pieceTurn(
     case WorkoutGameTerrainKind::Skinny: amount = 0.08; break;
     case WorkoutGameTerrainKind::Climb:
     case WorkoutGameTerrainKind::RockSlab: amount = 0.05; break;
+    case WorkoutGameTerrainKind::BunnyHop:
+    case WorkoutGameTerrainKind::Drop:
+    case WorkoutGameTerrainKind::LogOver:
+    case WorkoutGameTerrainKind::Tabletop: amount = 0.04; break;
     default: amount = 0.0; break;
     }
     amount *= 0.65 + 0.7 * std::clamp(section.difficulty, 0.0, 1.0);
@@ -219,6 +298,8 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
 
     result.seed = course.seed;
     WorkoutGameRoadConnector connector;
+    connector.halfWidthMeters = targetHalfWidth(
+            course.sections.front().terrain);
     for (std::size_t sectionIndex = 0;
          sectionIndex < course.sections.size(); ++sectionIndex) {
         const WorkoutGameSection &section = course.sections[sectionIndex];
@@ -238,28 +319,26 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
         });
         const double challengeDistance = result.totalLengthMeters
                 + sectionLength * challenge.decisionProgress;
-        double obstacleProgress = std::min(
+        double obstacleDistance = sectionStart + sectionLength * std::min(
                 0.98, challenge.decisionProgress + 0.03);
         switch (section.terrain) {
         case WorkoutGameTerrainKind::BunnyHop:
         case WorkoutGameTerrainKind::LogOver:
         case WorkoutGameTerrainKind::Tabletop:
         case WorkoutGameTerrainKind::Drop:
-            obstacleProgress = std::clamp(
-                    challenge.decisionProgress + 0.08, 0.70, 0.82);
+            obstacleDistance = std::min(
+                    sectionStart + sectionLength * 0.80,
+                    challengeDistance + 4.0);
             break;
         case WorkoutGameTerrainKind::Roots:
         case WorkoutGameTerrainKind::RockGarden:
         case WorkoutGameTerrainKind::RockSlab:
-            obstacleProgress = std::min(
+            obstacleDistance = sectionStart + sectionLength * std::min(
                     0.92, challenge.decisionProgress + 0.05);
             break;
         default:
             break;
         }
-        const double obstacleDistance = sectionStart
-                + sectionLength * obstacleProgress;
-
         for (int part = 0; part < pieceCount; ++part) {
             WorkoutGameRoadPiece piece;
             piece.sourceSectionIndex = sectionIndex;
@@ -290,11 +369,19 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                 piece.challenge.profile = challenge;
                 const double measuredPreparationDistance = sectionStart
                         + sectionLength * challenge.measurementStartProgress;
-                piece.challenge.prepareDistanceMeters = std::max(
-                        measuredPreparationDistance,
-                        challengeDistance - 6.0);
+                piece.challenge.prepareDistanceMeters = challenge.cue
+                        == WorkoutGameChallengeCue::Jump
+                    ? std::max(measuredPreparationDistance,
+                               challengeDistance - 6.0)
+                    : measuredPreparationDistance;
                 piece.challenge.decisionDistanceMeters = challengeDistance;
                 piece.challenge.obstacleDistanceMeters = obstacleDistance;
+                piece.challenge.profile.measurementStartProgress =
+                        (piece.challenge.prepareDistanceMeters - sectionStart)
+                        / sectionLength;
+                piece.challenge.profile.decisionProgress =
+                        (piece.challenge.decisionDistanceMeters - sectionStart)
+                        / sectionLength;
             }
 
             connector = piece.exit;
@@ -357,14 +444,7 @@ WorkoutGameRoadSample WorkoutGameRoadCourseBuilder::sample(
     }
     const double distance = std::clamp(
             requestedDistanceMeters, 0.0, course.totalLengthMeters);
-    auto found = std::upper_bound(
-            course.pieces.begin(), course.pieces.end(), distance,
-            [](double value, const WorkoutGameRoadPiece &piece) {
-                return value < piece.startDistanceMeters;
-            });
-    const std::size_t index = found == course.pieces.begin()
-            ? 0
-            : std::size_t(std::distance(course.pieces.begin(), found) - 1);
+    const std::size_t index = pieceIndexAt(course, distance);
     const WorkoutGameRoadPiece &piece = course.pieces[index];
     const double progress = piece.lengthMeters > 0.0
             ? std::clamp(
@@ -377,8 +457,10 @@ WorkoutGameRoadSample WorkoutGameRoadCourseBuilder::sample(
     result.distanceMeters = distance;
     result.pieceProgress = progress;
     result.center = connectorAt(piece, progress);
-    result.surfaceOffsetMeters = challengeSurfaceOffset(piece, distance);
-    result.center.elevationMeters += result.surfaceOffsetMeters;
+    result.surfaceOffsetMeters = surfaceOffsetAt(course, distance);
+    const double reliefOffset = trailReliefOffset(piece, distance);
+    result.center.elevationMeters += reliefOffset
+            + result.surfaceOffsetMeters;
     const double sampleRadius = std::min(0.05, piece.lengthMeters * 0.1);
     if (sampleRadius > 0.0) {
         const double low = std::max(
@@ -388,8 +470,10 @@ WorkoutGameRoadSample WorkoutGameRoadCourseBuilder::sample(
                 distance + sampleRadius);
         if (high > low) {
             result.center.gradePercent +=
-                    (challengeSurfaceOffset(piece, high)
-                     - challengeSurfaceOffset(piece, low))
+                    (trailReliefOffset(piece, high)
+                     + surfaceOffsetAt(course, high)
+                     - trailReliefOffset(piece, low)
+                     - surfaceOffsetAt(course, low))
                     / (high - low) * 100.0;
         }
     }

@@ -936,7 +936,8 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
                 * std::sin(feature.visualDistanceMeters * 18.0) * 12.0
             : 0.0;
     const double physicsLift = visual.world.ready
-            ? visual.world.rider.clearanceMeters * 18.0 : 0.0;
+            ? visual.world.rider.airHeightMeters() * 18.0
+            : 0.0;
     const double landingCompression = std::max(
             visual.world.landingImpact, feature.landingImpact) * 12.0;
     const double bob = visual.world.ready

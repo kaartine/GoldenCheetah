@@ -44,7 +44,7 @@ WorkoutGameFeatureChallengeProfile baseProfile(
                 0.80, 60.0, 8.0, 0.0, 0.72, 0};
     case WorkoutGameTerrainKind::BunnyHop:
     case WorkoutGameTerrainKind::LogOver:
-        return {true, Cue::Jump, 0.45, 0.65,
+        return {true, Cue::Jump, 0.64, 0.72,
                 0.90, 65.0, 12.0, 0.0, 0.70, 0};
     case WorkoutGameTerrainKind::Drop:
         return {true, Cue::CarrySpeed, 0.45, 0.68,
@@ -56,7 +56,7 @@ WorkoutGameFeatureChallengeProfile baseProfile(
         return {true, Cue::CarrySpeed, 0.40, 0.78,
                 0.0, 0.0, 14.0, 0.0, 0.0, 0};
     case WorkoutGameTerrainKind::Tabletop:
-        return {true, Cue::Jump, 0.45, 0.70,
+        return {true, Cue::Jump, 0.62, 0.72,
                 0.92, 70.0, 16.0, 0.0, 0.72, 0};
     case WorkoutGameTerrainKind::RockSlab:
         return {true, Cue::CarrySpeed, 0.35, 0.88,

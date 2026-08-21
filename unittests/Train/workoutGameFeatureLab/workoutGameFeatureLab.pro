@@ -7,11 +7,13 @@ SOURCES = testWorkoutGameFeatureLab.cpp \
           ../../../src/Train/WorkoutGameCourse.cpp \
           ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
           ../../../src/Train/WorkoutGameFeatureLab.cpp \
+          ../../../src/Train/WorkoutGameRoadCourse.cpp \
           ../../../src/Train/WorkoutGameSimulation.cpp
 
 HEADERS = ../../../src/Train/WorkoutGameCourse.h \
           ../../../src/Train/WorkoutGameFeatureChallenge.h \
           ../../../src/Train/WorkoutGameFeatureLab.h \
+          ../../../src/Train/WorkoutGameRoadCourse.h \
           ../../../src/Train/WorkoutGameSimulation.h \
           ../../../src/Train/WorkoutGameWorld.h
 

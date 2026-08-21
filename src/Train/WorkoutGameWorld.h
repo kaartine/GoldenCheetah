@@ -10,6 +10,8 @@
 #ifndef _GC_WorkoutGameWorld_h
 #define _GC_WorkoutGameWorld_h
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 
@@ -44,6 +46,12 @@ struct WorkoutGameVehiclePose
     double clearanceMeters = 0.0;
     bool airborne = false;
     bool walking = false;
+
+    double airHeightMeters() const
+    {
+        if (!std::isfinite(clearanceMeters)) return 0.0;
+        return std::clamp(clearanceMeters - 0.82, 0.0, 4.0);
+    }
 };
 
 struct WorkoutGameWorldSnapshot
