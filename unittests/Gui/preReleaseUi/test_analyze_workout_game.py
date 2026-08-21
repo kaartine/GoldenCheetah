@@ -36,6 +36,7 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
 
             self.assertIn(f"workoutDir={workout_directory}\n", settings)
             self.assertIn("FTP = 190\n", workout)
+            self.assertIn("0.10 100\n0.10 220\n", workout)
             self.assertIn("1.00 100\n", workout)
 
     def test_frame_delta_ignores_header_and_counts_game_pixels(self):

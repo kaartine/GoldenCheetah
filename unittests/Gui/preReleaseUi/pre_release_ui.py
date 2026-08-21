@@ -113,10 +113,10 @@ MINUTES WATTS
 [END COURSE HEADER]
 [COURSE DATA]
 0 100
-0.02 100
-0.02 220
-0.10 220
 0.10 100
+0.10 220
+0.18 220
+0.18 100
 1.00 100
 [END COURSE DATA]
 """,
@@ -683,7 +683,7 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
                 canvas = driver.find("Workout game canvas", showing=True)
                 time.sleep(1.2)
                 first = driver.screenshot("04-workout-game-first", canvas)
-                time.sleep(2.2)
+                time.sleep(5.8)
                 second = driver.screenshot("04-workout-game-running", canvas)
                 changed = driver.changed_pixels(first, second)
                 if changed < 1200:
