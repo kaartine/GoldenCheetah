@@ -256,6 +256,32 @@ private slots:
         feature.motion = WorkoutGameFeatureMotion::None;
         QVERIFY(!WorkoutGameFeatureRuntime::airborneExpected(feature));
     }
+
+    void rollerSectionsWithoutChallengesRetainTheirTerrainPolicy()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.durationMs = 12000;
+        course.seed = 7u;
+        WorkoutGameSection section;
+        section.terrain = WorkoutGameTerrainKind::Rollers;
+        section.durationMs = course.durationMs;
+        section.targetWatts = 180.0;
+        section.difficulty = 0.5;
+        section.challengeCount = 0;
+        course.sections.push_back(section);
+
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(
+                WorkoutGameRoadCourseBuilder::build(course, 200.0)));
+        const WorkoutGameFeatureRuntimeSnapshot feature = runtime.update(
+                snapshot(0, 0.5, WorkoutGameFeatureOutcome::Active));
+
+        QVERIFY(feature.ready);
+        QCOMPARE(feature.terrain, WorkoutGameTerrainKind::Rollers);
+        QCOMPARE(feature.phase, WorkoutGameFeaturePhase::None);
+        QVERIFY(WorkoutGameFeatureRuntime::airborneExpected(feature));
+    }
 };
 
 QTEST_GUILESS_MAIN(TestWorkoutGameFeatureRuntime)

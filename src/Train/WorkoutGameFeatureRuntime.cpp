@@ -93,6 +93,7 @@ bool WorkoutGameFeatureRuntime::configure(
         SectionLayout &layout = sections[piece.sourceSectionIndex];
         if (!layout.valid) {
             layout.valid = true;
+            layout.terrain = piece.terrain;
             layout.startDistanceMeters = piece.startDistanceMeters;
         }
         layout.endDistanceMeters = piece.startDistanceMeters + piece.lengthMeters;
@@ -134,6 +135,7 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
 
     result.ready = true;
     result.sourceSectionIndex = simulation.activeSection;
+    result.terrain = layout.terrain;
     const double sectionProgress = std::clamp(
             std::isfinite(simulation.sectionProgress)
                     ? simulation.sectionProgress : 0.0,

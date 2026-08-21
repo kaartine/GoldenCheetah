@@ -73,6 +73,7 @@ private:
     struct SectionLayout
     {
         bool valid = false;
+        WorkoutGameTerrainKind terrain = WorkoutGameTerrainKind::SmoothTrail;
         double startDistanceMeters = 0.0;
         double endDistanceMeters = 0.0;
         std::size_t challengePieceIndex =
