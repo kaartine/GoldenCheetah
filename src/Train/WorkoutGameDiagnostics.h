@@ -16,6 +16,7 @@
 struct WorkoutGameDiagnosticsInput
 {
     bool ready = false;
+    bool sessionRunning = false;
     bool movingForward = false;
     std::uint64_t frameNumber = 0;
     std::int64_t monotonicTimeMs = 0;

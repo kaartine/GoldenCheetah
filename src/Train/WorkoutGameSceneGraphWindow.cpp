@@ -604,6 +604,11 @@ void WorkoutGameSceneGraphItem::setTelemetry(
 
 void WorkoutGameSceneGraphItem::setSessionRunning(bool running)
 {
+    if (running != sessionRunning) {
+        diagnostics.reset();
+        publishedDiagnostics = {};
+        lastDiagnosticsPublishMs = -1;
+    }
     if (running && !sessionRunning) {
         frameRateResetRequested.store(true, std::memory_order_release);
     }
@@ -974,6 +979,7 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
     const double fps = frameRateCounter.framesPerSecond();
     WorkoutGameDiagnosticsInput diagnosticsInput;
     diagnosticsInput.ready = sourceTimeline.ready && renderedTimeline.ready;
+    diagnosticsInput.sessionRunning = sessionRunning;
     diagnosticsInput.movingForward = sessionRunning
             && visual.simulation.ready
             && !visual.simulation.finished;

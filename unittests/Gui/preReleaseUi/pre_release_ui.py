@@ -52,7 +52,10 @@ def prepare(root: Path) -> None:
     )
     write_text(
         library / "configglobal-general.ini",
-        "[migration]\nlegacy_qsettings_v1\\global_state=complete\n",
+        "[General]\n"
+        f"workoutDir={athlete / 'workouts'}\n\n"
+        "[migration]\n"
+        "legacy_qsettings_v1\\global_state=complete\n",
     )
     write_text(
         library / "configglobal-trainmode.ini",
@@ -103,6 +106,7 @@ folder=true
         """[COURSE HEADER]
 VERSION = 2
 UNITS = ENGLISH
+FTP = 190
 DESCRIPTION = Pre-release UI test
 FILE NAME = ui-test.erg
 MINUTES WATTS
@@ -110,9 +114,10 @@ MINUTES WATTS
 [COURSE DATA]
 0 100
 0.02 100
-0.04 220
-0.08 220
+0.02 220
+0.10 220
 0.10 100
+1.00 100
 [END COURSE DATA]
 """,
     )
@@ -312,6 +317,14 @@ class UiDriver:
                 time.sleep(0.1)
             raise UiFailure(f"Combo box did not select {name!r}")
         raise UiFailure(f"Cannot select {name!r}")
+
+    def click_named_item(self, name):
+        for node in reversed(self.find_all(name=name, showing=True)):
+            if self.role(node) in ("list item", "table cell"):
+                self.click(node)
+                time.sleep(0.5)
+                return
+        raise UiFailure(f"Cannot click selectable item {name!r}")
 
     def combo_with_items(self, expected, timeout=15.0):
         expected = set(expected)
@@ -518,6 +531,18 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
                 time.sleep(0.2)
             raise UiFailure("Train controls did not become ready")
 
+        def stop_without_saving():
+            stop_buttons = driver.find_all(
+                name="Stop training", role="push button", showing=True
+            )
+            if not stop_buttons or not driver.enabled(stop_buttons[-1]):
+                return
+            driver.activate(stop_buttons[-1])
+            cancel = driver.find(
+                "Cancel", "push button", showing=True, timeout=8.0
+            )
+            driver.activate(cancel)
+
         def startup():
             driver.require_names(
                 ["Athlete", "Activity", "Share", "Tools", "View", "Help"],
@@ -564,6 +589,30 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
             driver.combo_with_items(["Standard ERG", "Workout Ride"])
             driver.find("Data Generator", "table cell")
 
+        def import_prepared_workout():
+            driver.activate_named("Train", "menu item")
+            driver.activate(
+                driver.find(
+                    "Scan hard drives", "push button", showing=True, timeout=20.0
+                )
+            )
+            driver.find(
+                "Search for Workouts, Syncs and Media",
+                "dialog",
+                showing=True,
+                timeout=10.0,
+            )
+            driver.activate(
+                driver.find("Search", "push button", showing=True, timeout=10.0)
+            )
+            driver.activate(
+                driver.find("Save", "push button", showing=True, timeout=60.0)
+            )
+            enter_train()
+            driver.find(
+                "ui-test", "table cell", showing=True, timeout=30.0
+            )
+
         def generator_and_gears():
             enter_train()
             driver.select_named("Data Generator")
@@ -584,27 +633,22 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
                 )
             )
             time.sleep(1.0)
-            initial = driver.current_value(gear)
-            driver.send_key("w")
-            driver.wait_value(gear, initial + 1)
-            driver.send_key("s")
-            driver.wait_value(gear, initial)
-            driver.screenshot("03-generator-connected")
-            driver.activate(
-                driver.find("Stop training", "push button", showing=True)
-            )
-            driver.activate(
-                driver.find(
-                    "Cancel", "push button", showing=True, timeout=8.0
-                )
-            )
+            try:
+                initial = driver.current_value(gear)
+                driver.send_key("w")
+                driver.wait_value(gear, initial + 1)
+                driver.send_key("s")
+                driver.wait_value(gear, initial)
+                driver.screenshot("03-generator-connected")
+            finally:
+                stop_without_saving()
 
         def game():
             enter_train()
             selected = False
             for workout_name in ("Pre-release UI test", "ui-test.erg", "ui-test"):
                 try:
-                    driver.select_named(workout_name, timeout=2.0)
+                    driver.click_named_item(workout_name)
                     selected = True
                     break
                 except UiFailure:
@@ -635,24 +679,23 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
                     "Start or pause training", "push button", showing=True
                 )
             )
-            canvas = driver.find("Workout game canvas", showing=True)
-            time.sleep(1.2)
-            first = driver.screenshot("04-workout-game-first", canvas)
-            time.sleep(2.2)
-            second = driver.screenshot("04-workout-game-running", canvas)
-            changed = driver.changed_pixels(first, second)
-            if changed < 1200:
-                raise UiFailure(
-                    f"Workout Game appears static: only {changed} sampled pixels changed"
+            try:
+                canvas = driver.find("Workout game canvas", showing=True)
+                time.sleep(1.2)
+                first = driver.screenshot("04-workout-game-first", canvas)
+                time.sleep(2.2)
+                second = driver.screenshot("04-workout-game-running", canvas)
+                changed = driver.changed_pixels(first, second)
+                if changed < 1200:
+                    raise UiFailure(
+                        "Workout Game appears static: "
+                        f"only {changed} sampled pixels changed"
+                    )
+            finally:
+                stop_without_saving()
+                driver.select_combo_item(
+                    ["Erg Workout", "Workout Game"], "Erg Workout"
                 )
-            driver.activate(
-                driver.find("Stop training", "push button", showing=True)
-            )
-            driver.activate(
-                driver.find(
-                    "Cancel", "push button", showing=True, timeout=8.0
-                )
-            )
 
         def stop_continue():
             enter_train()
@@ -726,6 +769,7 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
 
         suite.run("startup_and_main_navigation", startup)
         suite.run("view_navigation", views)
+        suite.run("prepared_workout_library_import", import_prepared_workout)
         suite.run("train_control_accessibility", train_controls)
         suite.run("data_generator_and_virtual_gears", generator_and_gears)
         suite.run("workout_game_perspective", game)

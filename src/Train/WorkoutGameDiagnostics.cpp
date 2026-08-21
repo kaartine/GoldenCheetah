@@ -37,7 +37,7 @@ WorkoutGameDiagnosticsSnapshot WorkoutGameDiagnostics::update(
 {
     WorkoutGameDiagnosticsSnapshot result;
     result.input = input;
-    if (!input.ready) {
+    if (!input.ready || !input.sessionRunning) {
         reset();
         return result;
     }

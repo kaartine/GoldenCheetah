@@ -20,6 +20,24 @@ UI_SPEC.loader.exec_module(UI)
 
 
 class AnalyzeWorkoutGameTest(unittest.TestCase):
+    def test_prepare_anchors_a_usable_workout_library(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            UI.prepare(root)
+            workout_directory = (
+                root / "library" / UI.ATHLETE / "workouts"
+            )
+            settings = (
+                root / "library" / "configglobal-general.ini"
+            ).read_text(encoding="utf-8")
+            workout = (workout_directory / "ui-test.erg").read_text(
+                encoding="utf-8"
+            )
+
+            self.assertIn(f"workoutDir={workout_directory}\n", settings)
+            self.assertIn("FTP = 190\n", workout)
+            self.assertIn("1.00 100\n", workout)
+
     def test_frame_delta_ignores_header_and_counts_game_pixels(self):
         width = 4
         height = 4

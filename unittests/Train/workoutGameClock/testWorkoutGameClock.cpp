@@ -93,6 +93,23 @@ private slots:
         QCOMPARE(clock.positionAt(5000), std::int64_t(1500));
         QCOMPARE(clock.positionAt(5100), std::int64_t(1600));
     }
+
+    void pauseAndResumeAnchorsRetireTheOldDeadline()
+    {
+        WorkoutGameClock clock(20, 4);
+        clock.reset(1000, 1000, true, 1.0);
+        QCOMPARE(clock.advance(1080).skippedTicks, std::size_t(0));
+
+        clock.setAnchor(1100, 1100, false, 1.0);
+        QVERIFY(clock.advance(5000).ticks.empty());
+
+        clock.setAnchor(1100, 5000, true, 1.0);
+        const WorkoutGameClockAdvance resumed = clock.advance(5020);
+        QCOMPARE(resumed.skippedTicks, std::size_t(0));
+        QCOMPARE(resumed.ticks.size(), std::size_t(1));
+        QCOMPARE(resumed.ticks.front().deadlineMonotonicMs,
+                 std::int64_t(5020));
+    }
 };
 
 QTEST_GUILESS_MAIN(TestWorkoutGameClock)

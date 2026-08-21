@@ -95,6 +95,7 @@ void WorkoutGameClock::setAnchor(
         return;
     }
 
+    const bool runningChanged = running != requestedRunning;
     const std::int64_t predicted = positionAt(monotonicTimeMs);
     const bool sourceReversed = lastSourceWorkoutTimeMs
                 > DiscontinuityThresholdMs
@@ -116,6 +117,9 @@ void WorkoutGameClock::setAnchor(
     lastSourceWorkoutTimeMs = std::max(
             lastSourceWorkoutTimeMs, workoutTimeMs);
     running = requestedRunning;
+    if (runningChanged) {
+        nextDeadlineMonotonicMs = nextDeadlineAfter(monotonicTimeMs);
+    }
     if (!running) {
         anchorWorkoutTimeMs = std::max(
                 workoutTimeMs, lastPublishedWorkoutTimeMs);

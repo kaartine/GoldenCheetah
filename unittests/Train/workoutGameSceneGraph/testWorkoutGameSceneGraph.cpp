@@ -219,6 +219,7 @@ private slots:
         WorkoutGameDiagnostics diagnostics;
         WorkoutGameDiagnosticsInput input;
         input.ready = true;
+        input.sessionRunning = true;
         input.movingForward = true;
         input.renderedWorkoutTimeMs = 1000;
         input.renderedRoadDistanceMeters = 10.0;
@@ -252,6 +253,40 @@ private slots:
         const WorkoutGameDiagnosticsSnapshot reset = diagnostics.update(input);
         QCOMPARE(reset.backwardFrameCount, std::uint64_t(0));
         QCOMPARE(reset.lateFrameCount, std::uint64_t(0));
+    }
+
+    void diagnosticsIgnoreInactivePresentationGaps()
+    {
+        WorkoutGameDiagnostics diagnostics;
+        WorkoutGameDiagnosticsInput input;
+        input.ready = true;
+        input.sessionRunning = true;
+        input.movingForward = true;
+        input.monotonicTimeMs = 1000;
+        input.renderedWorkoutTimeMs = 1000;
+        input.renderedRoadDistanceMeters = 10.0;
+        QVERIFY(diagnostics.update(input).ready);
+
+        input.monotonicTimeMs = 1020;
+        input.renderedWorkoutTimeMs = 1020;
+        input.renderedRoadDistanceMeters = 10.2;
+        QCOMPARE(diagnostics.update(input).frameIntervalMs,
+                 std::int64_t(20));
+
+        input.sessionRunning = false;
+        input.monotonicTimeMs = 9000;
+        QVERIFY(!diagnostics.update(input).ready);
+
+        input.sessionRunning = true;
+        input.monotonicTimeMs = 9020;
+        input.renderedWorkoutTimeMs = 1040;
+        input.renderedRoadDistanceMeters = 10.4;
+        const WorkoutGameDiagnosticsSnapshot resumed =
+                diagnostics.update(input);
+        QVERIFY(resumed.ready);
+        QCOMPARE(resumed.frameIntervalMs, std::int64_t(0));
+        QCOMPARE(resumed.largestFrameIntervalMs, std::int64_t(0));
+        QCOMPARE(resumed.backwardFrameCount, std::uint64_t(0));
     }
 
     void completedAndBypassedFeaturesRenderDifferentLines()
