@@ -234,7 +234,7 @@ private slots:
         }
         QVERIFY2(maximumHalfWidth <= 0.75,
                  "the generated trail is wider than a singletrack");
-        QVERIFY2(maximumElevation - minimumElevation >= 0.50,
+        QVERIFY2(maximumElevation - minimumElevation >= 0.20,
                  "smooth trail relief is too flat to read while riding");
         QVERIFY(std::abs(road.pieces.front().turnRadians) > 0.02);
     }
@@ -348,7 +348,7 @@ private slots:
             QCOMPARE(slice.surfaceElevationMeters,
                      sample.center.elevationMeters);
             sawTechnicalRelief = sawTechnicalRelief
-                    || sample.surfaceOffsetMeters > 0.03;
+                    || sample.surfaceOffsetMeters > 0.005;
         }
         QVERIFY(sawTechnicalRelief);
     }

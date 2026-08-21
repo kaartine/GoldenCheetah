@@ -118,6 +118,22 @@ private slots:
         QVERIFY(largestCenter > 2.0);
     }
 
+    void logObstacleClearsButDoesNotDwarfTheSingletrack()
+    {
+        const WorkoutGameMesh log = WorkoutGameMeshLibrary::feature(
+                WorkoutGameTerrainKind::LogOver, 0.7);
+        QVERIFY(WorkoutGameMeshLibrary::valid(log));
+
+        double halfWidth = 0.0;
+        for (const WorkoutGameMeshVertex &vertex : log.vertices) {
+            halfWidth = std::max(halfWidth, std::abs(vertex.rightMeters));
+        }
+        QVERIFY2(halfWidth >= 0.75,
+                 "the log no longer reaches beyond both trail edges");
+        QVERIFY2(halfWidth <= 1.0,
+                 "the log becomes a wall in the near camera projection");
+    }
+
     void transformedMeshProjectsAndSortsFarFacesFirst()
     {
         const WorkoutGameRoadCourse course = straightCourse();

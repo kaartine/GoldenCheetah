@@ -37,19 +37,23 @@ double technicalSurfaceOffset(
                 0.0, 1.0)
             : 0.0;
     const double envelope = std::pow(std::sin(Pi * progress), 2.0);
+    const double lengthScale = std::clamp(
+            piece.lengthMeters / 24.0, 0.25, 1.0);
+    const double curvatureScale = lengthScale * lengthScale;
     double offset = 0.0;
     switch (piece.terrain) {
     case WorkoutGameTerrainKind::Roots:
-        offset += 0.07 * envelope
-                * std::pow(std::sin(8.0 * Pi * progress), 2.0);
+        offset += 0.012 * curvatureScale * envelope
+                * std::pow(std::sin(2.0 * Pi * progress), 2.0);
         break;
     case WorkoutGameTerrainKind::RockGarden:
-        offset += 0.16 * envelope
+        offset += 0.04 * curvatureScale * envelope
                 * (0.35 + 0.65
-                    * std::pow(std::sin(7.0 * Pi * progress), 2.0));
+                    * std::pow(std::sin(2.0 * Pi * progress), 2.0));
         break;
     case WorkoutGameTerrainKind::Rollers:
-        offset += 0.28 * envelope * std::sin(4.0 * Pi * progress);
+        offset += 0.10 * curvatureScale * envelope
+                * std::sin(2.0 * Pi * progress);
         break;
     default:
         break;
@@ -89,14 +93,13 @@ double trailReliefOffset(
                     / piece.lengthMeters,
                 0.0, 1.0)
             : 0.0;
-    const double envelope = std::pow(std::sin(Pi * progress), 2.0);
     const double phase = double((piece.sourceSectionIndex * 37u
             + std::size_t(std::llround(piece.startDistanceMeters))) % 101u)
             / 101.0 * 2.0 * Pi;
-    double amplitude = 0.32 + 0.30 * piece.difficulty;
+    double amplitude = 0.10 + 0.07 * piece.difficulty;
     switch (piece.terrain) {
     case WorkoutGameTerrainKind::Climb:
-        amplitude *= 1.45;
+        amplitude *= 1.25;
         break;
     case WorkoutGameTerrainKind::Skinny:
         amplitude *= 0.30;
@@ -109,9 +112,11 @@ double trailReliefOffset(
     default:
         break;
     }
-    return amplitude * envelope
-            * (0.84 * std::sin(2.0 * Pi * progress + phase)
-               + 0.16 * std::sin(4.0 * Pi * progress + phase * 0.43));
+    const double envelope = std::pow(std::sin(Pi * progress), 2.0);
+    const double asymmetry = 1.0
+            + 0.12 * std::sin(2.0 * Pi * progress + phase);
+    const double polarity = std::sin(phase) >= -0.15 ? 1.0 : -0.65;
+    return amplitude * polarity * envelope * asymmetry;
 }
 
 double targetHalfWidth(WorkoutGameTerrainKind terrain)

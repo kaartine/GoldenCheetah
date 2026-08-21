@@ -114,7 +114,9 @@ WorkoutGameMesh logModel(double difficulty)
             WorkoutGameFeatureGeometry::profile(
                     WorkoutGameTerrainKind::LogOver, difficulty);
     const double radius = profile.heightMeters * 0.5;
-    const double halfWidth = 1.55;
+    // A fallen trunk should clear the singletrack edges without turning into
+    // a screen-wide wall when it reaches the near projection plane.
+    const double halfWidth = 0.90;
     constexpr int Segments = WorkoutGameLogRadialSegments;
     for (int side = 0; side < 2; ++side) {
         const double right = side == 0 ? -halfWidth : halfWidth;

@@ -114,8 +114,66 @@ private slots:
                     largestReportedDifference,
                     std::abs(frame.surfaceElevationMeters - renderedSurface));
         }
-        QVERIFY(largestSurfaceOffset > 0.03);
+        QVERIFY(largestSurfaceOffset > 0.005);
         QVERIFY(largestReportedDifference < 0.02);
+    }
+
+    void ordinaryRollingReliefKeepsRiderGrounded()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 4015825171u;
+        course.durationMs = 48000;
+        WorkoutGameSection roots;
+        roots.feature = WorkoutGameFeature::Trail;
+        roots.terrain = WorkoutGameTerrainKind::Roots;
+        roots.durationMs = course.durationMs;
+        roots.targetWatts = 177.0;
+        roots.gradePercent = 0.1175;
+        roots.difficulty = 0.235;
+        roots.challengeCount = 0;
+        course.sections = {roots};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 190.0);
+        QVERIFY(road.ready);
+
+        WorkoutGamePhysics physics;
+        QVERIFY(physics.configure(road));
+        WorkoutGamePhysicsInput input;
+        input.terrain = roots.terrain;
+        input.desiredSpeedMetersPerSecond = 20.0;
+        input.effortRatio = 1.0;
+        double maximumAirHeightMeters = 0.0;
+        double maximumAirHeightDistanceMeters = 0.0;
+        double maximumAirHeightGradePercent = 0.0;
+        const int ticks = int((road.totalLengthMeters - 1.0) / 0.4);
+        for (int tick = 0; tick <= ticks; ++tick) {
+            input.workoutTimeMs = tick * 20;
+            input.courseDistanceMeters = tick * 0.4;
+            const WorkoutGameRoadSample surface =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        road, input.courseDistanceMeters);
+            input.gradePercent = surface.center.gradePercent;
+            const WorkoutGameWorldSnapshot frame = physics.update(input);
+            QVERIFY(frame.ready);
+            if (tick > 50) {
+                const double airHeight = frame.rider.airborne
+                        ? frame.rider.airHeightMeters() : 0.0;
+                if (airHeight > maximumAirHeightMeters) {
+                    maximumAirHeightMeters = airHeight;
+                    maximumAirHeightDistanceMeters = input.courseDistanceMeters;
+                    maximumAirHeightGradePercent = surface.center.gradePercent;
+                }
+            }
+        }
+        const QByteArray failure = QStringLiteral(
+                "ordinary trail relief raised the rider %1 m at %2 m, "
+                "grade %3%")
+                .arg(maximumAirHeightMeters)
+                .arg(maximumAirHeightDistanceMeters)
+                .arg(maximumAirHeightGradePercent)
+                .toUtf8();
+        QVERIFY2(maximumAirHeightMeters < 0.08, failure.constData());
     }
 
     void terrainProfilesAreDeterministicAndPeriodic()

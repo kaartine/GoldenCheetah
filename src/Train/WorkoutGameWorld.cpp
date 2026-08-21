@@ -86,6 +86,22 @@ double radiansToDegrees(double value)
     return value * 180.0 / Pi;
 }
 
+bool retainsOrdinaryGroundContact(WorkoutGameTerrainKind terrain)
+{
+    switch (terrain) {
+    case WorkoutGameTerrainKind::SmoothTrail:
+    case WorkoutGameTerrainKind::Roots:
+    case WorkoutGameTerrainKind::RockGarden:
+    case WorkoutGameTerrainKind::Climb:
+    case WorkoutGameTerrainKind::Skinny:
+    case WorkoutGameTerrainKind::Berm:
+    case WorkoutGameTerrainKind::RockSlab:
+        return true;
+    default:
+        return false;
+    }
+}
+
 }
 
 struct WorkoutGamePhysics::Impl
@@ -176,6 +192,25 @@ struct WorkoutGamePhysics::Impl
         return b2CreateWheelJoint(world, &definition);
     }
 
+    double surfaceHeight(double localX) const
+    {
+        if (roadCourse.ready) {
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        roadCourse,
+                        distanceBase + localX - RiderStartMeters);
+            const WorkoutGameRoadSample origin =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        roadCourse, distanceBase);
+            if (sample.ready && origin.ready) {
+                return sample.surfaceElevationMeters()
+                        - origin.surfaceElevationMeters();
+            }
+        }
+        return WorkoutGamePhysics::terrainHeight(
+                terrain, localX, gradePercent, difficulty, seed);
+    }
+
     void createWorld()
     {
         destroyWorld();
@@ -189,23 +224,6 @@ struct WorkoutGamePhysics::Impl
         const b2BodyId ground = b2CreateBody(world, &groundDefinition);
         b2ShapeDef terrainShape = b2DefaultShapeDef();
         terrainShape.material.friction = 1.1f;
-        const auto surfaceHeight = [this](double localX) {
-            if (roadCourse.ready) {
-                const WorkoutGameRoadSample sample =
-                        WorkoutGameRoadCourseBuilder::sample(
-                            roadCourse,
-                            distanceBase + localX - RiderStartMeters);
-                const WorkoutGameRoadSample origin =
-                        WorkoutGameRoadCourseBuilder::sample(
-                            roadCourse, distanceBase);
-                if (sample.ready && origin.ready) {
-                    return sample.surfaceElevationMeters()
-                            - origin.surfaceElevationMeters();
-                }
-            }
-            return WorkoutGamePhysics::terrainHeight(
-                    terrain, localX, gradePercent, difficulty, seed);
-        };
         double priorX = TerrainStartMeters;
         double priorY = surfaceHeight(priorX);
         for (double x = TerrainStartMeters + TerrainSampleMeters;
@@ -308,12 +326,21 @@ struct WorkoutGamePhysics::Impl
             return;
         }
 
-        const double delta = targetLocalX - b2Body_GetPosition(chassis).x;
+        const b2Vec2 chassisPosition = b2Body_GetPosition(chassis);
+        const double delta = targetLocalX - chassisPosition.x;
         if (std::abs(delta) <= 1e-6) return;
+        double verticalDelta = 0.0;
+        // Distance playback translates the vehicle horizontally. Follow the
+        // same ground delta so synchronization cannot manufacture air time.
+        if (retainsOrdinaryGroundContact(terrain)) {
+            verticalDelta = surfaceHeight(targetLocalX)
+                    - surfaceHeight(chassisPosition.x);
+        }
         for (b2BodyId body : {chassis, rearWheel, frontWheel}) {
             b2Body_SetTransform(
                     body,
-                    b2Body_GetPosition(body) + b2Vec2{float(delta), 0.0f},
+                    b2Body_GetPosition(body) + b2Vec2{
+                        float(delta), float(verticalDelta)},
                     b2Body_GetRotation(body));
         }
     }
