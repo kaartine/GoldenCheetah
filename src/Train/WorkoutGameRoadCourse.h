@@ -91,6 +91,11 @@ struct WorkoutGameRoadSample
     double pieceProgress = 0.0;
     double surfaceOffsetMeters = 0.0;
     WorkoutGameRoadConnector center;
+
+    double surfaceElevationMeters() const
+    {
+        return center.elevationMeters;
+    }
 };
 
 struct WorkoutGameRoadTimelineSample

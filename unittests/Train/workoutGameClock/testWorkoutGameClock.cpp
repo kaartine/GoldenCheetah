@@ -8,6 +8,7 @@
  */
 
 #include "Train/WorkoutGameClock.h"
+#include "Train/WorkoutGamePositionRate.h"
 
 #include <QTest>
 
@@ -109,6 +110,30 @@ private slots:
         QCOMPARE(resumed.ticks.size(), std::size_t(1));
         QCOMPARE(resumed.ticks.front().deadlineMonotonicMs,
                  std::int64_t(5020));
+    }
+
+    void quantizedDistanceDoesNotAlternateBetweenStopAndBurst()
+    {
+        WorkoutGamePositionRate estimator;
+        estimator.reset(1.0);
+        QCOMPARE(estimator.update({1000, 1000, true, true}), 1.0);
+
+        const double repeated = estimator.update({1000, 1150, true, true});
+        QVERIFY(repeated > 0.5);
+        const double advanced = estimator.update({1200, 1200, true, true});
+        QVERIFY(advanced > 0.5);
+        QVERIFY(advanced < 2.0);
+        QCOMPARE(estimator.update({1200, 1250, true, true}), advanced);
+    }
+
+    void explicitStationaryTelemetryStopsDistancePresentation()
+    {
+        WorkoutGamePositionRate estimator;
+        estimator.reset(1.0);
+        estimator.update({1000, 1000, true, true});
+        QCOMPARE(estimator.update({1000, 1100, true, false}), 0.0);
+        QVERIFY(estimator.update({1000, 1150, true, true}) > 0.0);
+        QVERIFY(estimator.update({1200, 1300, true, true}) > 0.0);
     }
 };
 

@@ -199,10 +199,8 @@ struct WorkoutGamePhysics::Impl
                         WorkoutGameRoadCourseBuilder::sample(
                             roadCourse, distanceBase);
                 if (sample.ready && origin.ready) {
-                    return sample.center.elevationMeters
-                            + sample.surfaceOffsetMeters
-                            - origin.center.elevationMeters
-                            - origin.surfaceOffsetMeters;
+                    return sample.surfaceElevationMeters()
+                            - origin.surfaceElevationMeters();
                 }
             }
             return WorkoutGamePhysics::terrainHeight(
@@ -343,8 +341,7 @@ struct WorkoutGamePhysics::Impl
                     roadCourse, distanceBase)
                 : WorkoutGameRoadSample();
         const double originSurfaceElevation = groundOrigin.ready
-                ? groundOrigin.center.elevationMeters
-                    + groundOrigin.surfaceOffsetMeters
+                ? groundOrigin.surfaceElevationMeters()
                 : elevationBase;
         result.rider.elevationMeters = originSurfaceElevation
                 + double(position.y) - originBodyY;
@@ -362,14 +359,12 @@ struct WorkoutGamePhysics::Impl
                         - RiderStartMeters)
                 : WorkoutGameRoadSample();
         const double groundY = ground.ready && groundOrigin.ready
-                ? ground.center.elevationMeters
-                    + ground.surfaceOffsetMeters
-                    - groundOrigin.center.elevationMeters
-                    - groundOrigin.surfaceOffsetMeters
+                ? ground.surfaceElevationMeters()
+                    - groundOrigin.surfaceElevationMeters()
                 : WorkoutGamePhysics::terrainHeight(
                     terrain, position.x, gradePercent, difficulty, seed);
         result.surfaceElevationMeters = ground.ready
-                ? ground.center.elevationMeters + ground.surfaceOffsetMeters
+                ? ground.surfaceElevationMeters()
                 : originSurfaceElevation + groundY;
         result.rider.clearanceMeters = double(position.y) - groundY;
         result.rider.airborne = !grounded();

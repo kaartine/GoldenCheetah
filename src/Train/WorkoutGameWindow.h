@@ -14,6 +14,7 @@
 #include "RealtimeData.h"
 #include "WorkoutGameCompetition.h"
 #include "WorkoutGameCourseRuntime.h"
+#include "WorkoutGamePositionRate.h"
 #include "WorkoutGameRunner.h"
 #include "WorkoutGameSessionState.h"
 
@@ -84,9 +85,7 @@ private:
     bool sessionActive = false;
     bool presentationSuspended = false;
     bool featureLabEnabled = false;
-    bool anchorRateInitialized = false;
-    std::int64_t lastAnchorWorkoutTimeMs = 0;
-    std::int64_t lastAnchorMonotonicTimeMs = 0;
+    WorkoutGamePositionRate positionRate;
     std::int64_t currentWorkoutTimeMs = 0;
     std::int64_t lastTelemetryMonotonicTimeMs = -1;
     double currentAnchorRate = 1.0;

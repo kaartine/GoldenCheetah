@@ -14,6 +14,7 @@
 #include "WorkoutGameFeatureChallenge.h"
 
 #include <cstdint>
+#include <deque>
 #include <vector>
 
 enum class WorkoutGameFeatureOutcome
@@ -75,6 +76,15 @@ public:
     }
 
 private:
+    struct ChallengeSample
+    {
+        std::int64_t durationMs = 0;
+        double effortRatio = 0.0;
+        double cadenceRpm = 0.0;
+        double speedKph = 0.0;
+        double adherence = 0.0;
+    };
+
     int sectionAt(std::int64_t workoutTimeMs) const;
     void moveToSection(int sectionIndex);
     void finalizeActiveSection();
@@ -88,6 +98,13 @@ private:
             const WorkoutGameSimulationInput &input,
             std::int64_t stepTimeMs,
             std::int64_t stepDurationMs);
+    void appendChallengeSample(
+            double effortRatio,
+            double cadenceRpm,
+            double speedKph,
+            double adherence,
+            std::int64_t durationMs);
+    WorkoutGameFeatureChallengeMetrics challengeMetrics() const;
     WorkoutGameSimulationSnapshot snapshot(
             std::int64_t workoutTimeMs,
             std::int64_t droppedCatchupMs) const;
@@ -104,6 +121,7 @@ private:
     double sectionSpeedKphMs = 0.0;
     double sectionAdherenceMs = 0.0;
     std::int64_t sectionSampleMs = 0;
+    std::deque<ChallengeSample> challengeSamples;
     WorkoutGameFeatureChallengeProfile activeChallenge;
     double activeChallengeReadiness = 0.0;
     double currentSpeedKph = 0.0;

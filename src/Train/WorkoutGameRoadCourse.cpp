@@ -93,25 +93,25 @@ double trailReliefOffset(
     const double phase = double((piece.sourceSectionIndex * 37u
             + std::size_t(std::llround(piece.startDistanceMeters))) % 101u)
             / 101.0 * 2.0 * Pi;
-    double amplitude = 0.07 + 0.07 * piece.difficulty;
+    double amplitude = 0.32 + 0.30 * piece.difficulty;
     switch (piece.terrain) {
     case WorkoutGameTerrainKind::Climb:
-        amplitude *= 1.25;
+        amplitude *= 1.45;
         break;
     case WorkoutGameTerrainKind::Skinny:
-        amplitude *= 0.35;
+        amplitude *= 0.30;
         break;
     case WorkoutGameTerrainKind::Roots:
     case WorkoutGameTerrainKind::RockGarden:
     case WorkoutGameTerrainKind::Rollers:
-        amplitude *= 0.55;
+        amplitude *= 0.62;
         break;
     default:
         break;
     }
     return amplitude * envelope
-            * (0.72 * std::sin(2.0 * Pi * progress + phase)
-               + 0.28 * std::sin(6.0 * Pi * progress + phase * 0.43));
+            * (0.84 * std::sin(2.0 * Pi * progress + phase)
+               + 0.16 * std::sin(4.0 * Pi * progress + phase * 0.43));
 }
 
 double targetHalfWidth(WorkoutGameTerrainKind terrain)

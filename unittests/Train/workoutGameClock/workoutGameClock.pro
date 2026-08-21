@@ -4,9 +4,11 @@ CONFIG += c++17
 TARGET = testWorkoutGameClock
 
 SOURCES = testWorkoutGameClock.cpp \
-          ../../../src/Train/WorkoutGameClock.cpp
+          ../../../src/Train/WorkoutGameClock.cpp \
+          ../../../src/Train/WorkoutGamePositionRate.cpp
 
-HEADERS = ../../../src/Train/WorkoutGameClock.h
+HEADERS = ../../../src/Train/WorkoutGameClock.h \
+          ../../../src/Train/WorkoutGamePositionRate.h
 
 include(../../unittests.pri)
 

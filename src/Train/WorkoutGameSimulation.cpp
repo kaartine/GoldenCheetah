@@ -20,6 +20,7 @@ namespace {
 
 constexpr std::int64_t SimulationStepMs = 50;
 constexpr std::int64_t MaximumCatchupMs = 1000;
+constexpr std::int64_t JumpMeasurementWindowMs = 1500;
 
 double finiteNonNegative(double value)
 {
@@ -84,6 +85,7 @@ void WorkoutGameSimulation::reset()
     sectionSpeedKphMs = 0.0;
     sectionAdherenceMs = 0.0;
     sectionSampleMs = 0;
+    challengeSamples.clear();
     activeChallenge = WorkoutGameFeatureChallengeProfile();
     activeChallengeReadiness = 0.0;
     currentSpeedKph = 0.0;
@@ -123,14 +125,7 @@ void WorkoutGameSimulation::finalizeActiveSection()
         return;
     }
 
-    WorkoutGameFeatureChallengeMetrics metrics;
-    if (sectionSampleMs > 0) {
-        const double duration = double(sectionSampleMs);
-        metrics.averageEffortRatio = sectionEffortRatioMs / duration;
-        metrics.averageCadenceRpm = sectionCadenceMs / duration;
-        metrics.averageSpeedKph = sectionSpeedKphMs / duration;
-        metrics.averageAdherence = sectionAdherenceMs / duration;
-    }
+    const WorkoutGameFeatureChallengeMetrics metrics = challengeMetrics();
     const WorkoutGameFeatureChallengeAssessment assessment =
             WorkoutGameFeatureChallenge::assess(activeChallenge, metrics);
     activeChallengeReadiness = assessment.readiness;
@@ -162,6 +157,7 @@ void WorkoutGameSimulation::moveToSection(int sectionIndex)
     sectionSpeedKphMs = 0.0;
     sectionAdherenceMs = 0.0;
     sectionSampleMs = 0;
+    challengeSamples.clear();
     activeChallenge = WorkoutGameFeatureChallengeProfile();
     activeChallengeReadiness = 0.0;
     if (activeSection >= 0
@@ -171,6 +167,53 @@ void WorkoutGameSimulation::moveToSection(int sectionIndex)
     if (activeChallenge.enabled) {
         outcomes[activeSection] = WorkoutGameFeatureOutcome::Active;
     }
+}
+
+void WorkoutGameSimulation::appendChallengeSample(
+        double effortRatio,
+        double cadenceRpm,
+        double speedKph,
+        double adherence,
+        std::int64_t durationMs)
+{
+    if (durationMs <= 0) return;
+    sectionEffortRatioMs += effortRatio * double(durationMs);
+    sectionCadenceMs += cadenceRpm * double(durationMs);
+    sectionSpeedKphMs += speedKph * double(durationMs);
+    sectionAdherenceMs += adherence * double(durationMs);
+    sectionSampleMs += durationMs;
+
+    if (activeChallenge.cue != WorkoutGameChallengeCue::Jump) return;
+    challengeSamples.push_back({
+        durationMs, effortRatio, cadenceRpm, speedKph, adherence
+    });
+    std::int64_t excess = sectionSampleMs - JumpMeasurementWindowMs;
+    while (excess > 0 && !challengeSamples.empty()) {
+        ChallengeSample &oldest = challengeSamples.front();
+        const std::int64_t removed = std::min(excess, oldest.durationMs);
+        sectionEffortRatioMs -= oldest.effortRatio * double(removed);
+        sectionCadenceMs -= oldest.cadenceRpm * double(removed);
+        sectionSpeedKphMs -= oldest.speedKph * double(removed);
+        sectionAdherenceMs -= oldest.adherence * double(removed);
+        sectionSampleMs -= removed;
+        oldest.durationMs -= removed;
+        excess -= removed;
+        if (oldest.durationMs == 0) challengeSamples.pop_front();
+    }
+}
+
+WorkoutGameFeatureChallengeMetrics
+WorkoutGameSimulation::challengeMetrics() const
+{
+    WorkoutGameFeatureChallengeMetrics metrics;
+    if (sectionSampleMs <= 0) return metrics;
+    const double duration = double(sectionSampleMs);
+    metrics.averageEffortRatio = std::max(0.0, sectionEffortRatioMs / duration);
+    metrics.averageCadenceRpm = std::max(0.0, sectionCadenceMs / duration);
+    metrics.averageSpeedKph = std::max(0.0, sectionSpeedKphMs / duration);
+    metrics.averageAdherence = std::clamp(
+            sectionAdherenceMs / duration, 0.0, 1.0);
+    return metrics;
 }
 
 void WorkoutGameSimulation::updateSpeed(
@@ -251,18 +294,11 @@ void WorkoutGameSimulation::simulateStep(
         const double progress = double(stepTimeMs - section.startMs)
                 / double(section.durationMs);
         if (progress >= activeChallenge.measurementStartProgress) {
-            sectionEffortRatioMs += effortRatio * double(stepDurationMs);
-            sectionCadenceMs += cadenceRpm * double(stepDurationMs);
-            sectionSpeedKphMs += currentSpeedKph * double(stepDurationMs);
-            sectionAdherenceMs += currentAdherence * double(stepDurationMs);
-            sectionSampleMs += stepDurationMs;
-
-            WorkoutGameFeatureChallengeMetrics metrics;
-            const double duration = double(sectionSampleMs);
-            metrics.averageEffortRatio = sectionEffortRatioMs / duration;
-            metrics.averageCadenceRpm = sectionCadenceMs / duration;
-            metrics.averageSpeedKph = sectionSpeedKphMs / duration;
-            metrics.averageAdherence = sectionAdherenceMs / duration;
+            appendChallengeSample(
+                    effortRatio, cadenceRpm, currentSpeedKph,
+                    currentAdherence, stepDurationMs);
+            const WorkoutGameFeatureChallengeMetrics metrics =
+                    challengeMetrics();
             activeChallengeReadiness = WorkoutGameFeatureChallenge::assess(
                     activeChallenge, metrics).readiness;
         }

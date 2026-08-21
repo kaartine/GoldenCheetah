@@ -5,12 +5,14 @@ TARGET = testWorkoutGameRoadCourse
 
 SOURCES = testWorkoutGameRoadCourse.cpp \
           ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
+          ../../../src/Train/WorkoutGameHorizon.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \
           ../../../src/Train/WorkoutGameRoadProjection.cpp
 
 HEADERS = ../../../src/Train/WorkoutGameCourse.h \
           ../../../src/Train/WorkoutGameFeatureCatalog.h \
           ../../../src/Train/WorkoutGameFeatureChallenge.h \
+          ../../../src/Train/WorkoutGameHorizon.h \
           ../../../src/Train/WorkoutGameRoadCourse.h \
           ../../../src/Train/WorkoutGameRoadProjection.h \
           ../../../src/Train/WorkoutGameWorld.h

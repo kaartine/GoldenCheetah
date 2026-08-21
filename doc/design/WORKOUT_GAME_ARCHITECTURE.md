@@ -145,6 +145,13 @@ Renderer selection is capability-based. Runtime rendering errors permanently
 fall back for the current session instead of repeatedly recreating a GPU
 context.
 
+Distance courses publish an integer workout position from Train view.
+`WorkoutGamePositionRate` converts those quantized anchors into a continuous
+presentation rate: repeated positions retain the latest moving rate, explicit
+stationary telemetry stops presentation, and a moving sample resumes it before
+the next whole distance unit arrives. The source position remains authoritative;
+the estimator only removes stop-and-burst motion between source updates.
+
 Only the selected renderer receives frames. Hiding the chart drains its newest
 frame, stops the GUI drain and scene graph request loops, and suspends that
 chart's runner. Showing it re-anchors and resynchronizes the engine at the
@@ -161,7 +168,9 @@ Train telemetry, control, and recording continue unchanged.
 - Simulation runner: fixed 20 ms deadlines on one worker. Game rules retain
   semi-fixed 50 ms steps and vehicle physics retains fixed 8.33 ms steps. All
   layers cap catch-up work after stalls.
-- Rendering: target 60 FPS on GPU and 30 FPS with QPainter.
+- Rendering: display-vsync rate on the scene graph, target 60 FPS with the
+  OpenGL fallback, and 30 FPS with QPainter. A 29.99 Hz display therefore
+  correctly reports a stable 30 FPS.
 - The current scene has bounded geometry, four competitor sprites at most, no
   per-frame texture upload, and no unbounded particle list. Automatic
   frame-budget quality scaling remains a future enhancement.
@@ -276,6 +285,7 @@ Mutable state has the following owners:
 | Camera target and transition | `WorkoutGameEngine` on the runner thread |
 | Workout-time-to-road mapping and sampled surface | Immutable `WorkoutGameRoadCourse`; the engine publishes its authoritative distance, while Box2D and the scene graph sample the same base elevation, feature surface offset, and grade |
 | Feature and trail meshes | Immutable course-space values from `WorkoutGameMeshLibrary`; feature meshes are anchored to the base surface and projected by the scene graph so the course feature height is not applied twice |
+| Distant terrain silhouette | Pure deterministic `WorkoutGameHorizon` samples generated from course seed and distance; presentation-only and never consumed by physics or trainer control |
 | Visual interpolation, projected trail and render diagnostics | `WorkoutGameSceneGraphItem::updatePaintNode` during Qt scene graph synchronization |
 | Runner input and latest output slot | Separate small mutexes in `WorkoutGameRunner`; heavy simulation occurs outside both critical sections |
 | HUD source image and telemetry labels | `WorkoutGameSceneGraphItem` on the GUI thread, rebuilt at most 10 Hz; copied to a scene graph texture during synchronization |
@@ -289,15 +299,19 @@ The generated road is a singletrack: its nominal full width is 1.36 metres,
 scaled only for terrain-specific features. Each puzzle piece adds bounded,
 zero-value and zero-slope relief at both connectors. The connector spline,
 continuous relief, technical surface and obstacle profile are summed by
-`WorkoutGameRoadCourse::sample()`, and that exact elevation and derivative are
-used by both Box2D and scene projection. Feature meshes remain anchored to the
-base surface so their obstacle height is not applied twice.
+`WorkoutGameRoadCourse::sample()`. Its `center.elevationMeters` is the canonical
+finished riding surface. `surfaceOffsetMeters` describes the feature component
+for mesh anchoring and diagnostics; consumers must not add it to the finished
+elevation again. The canonical elevation and derivative are used by both Box2D
+and scene projection.
 
-Jump effort is intentionally local to the feature. The simulation measures the
-late approach window, while the generated gate clamps the visible preparation
-segment to at most six metres before the decision line. Jump obstacles are
-placed no more than five metres beyond that line; long workout intervals cannot
-therefore turn one short MTB burst into a prolonged power prompt.
+Jump effort is intentionally local to the feature. The simulation retains only
+the latest 1.5 seconds of power, cadence and approach speed, while the generated
+gate clamps the visible preparation segment to at most six metres before the
+decision line. Jump profiles do not use target-adherence as a requirement,
+because an intentional over-target burst must not count against the rider.
+Jump obstacles are placed no more than five metres beyond the decision line;
+long workout intervals cannot turn one short MTB burst into a prolonged prompt.
 The workout-time-to-road timeline owns longitudinal progress. Each engine tick
 passes that distance to Box2D and publishes it with the resulting vehicle pose,
 feature state, and camera. `WorkoutGameRoadCourse::sample()` supplies the same

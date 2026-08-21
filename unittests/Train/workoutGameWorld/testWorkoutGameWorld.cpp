@@ -107,8 +107,7 @@ private slots:
                         road, input.courseDistanceMeters);
             const WorkoutGameWorldSnapshot frame = physics.update(input);
             QVERIFY(frame.ready);
-            const double renderedSurface = surface.center.elevationMeters
-                    + surface.surfaceOffsetMeters;
+            const double renderedSurface = surface.surfaceElevationMeters();
             largestSurfaceOffset = std::max(
                     largestSurfaceOffset, surface.surfaceOffsetMeters);
             largestReportedDifference = std::max(

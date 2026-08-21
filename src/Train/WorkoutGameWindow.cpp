@@ -298,9 +298,7 @@ void WorkoutGameWindow::ergFileSelected(ErgFile *workout)
     paused = false;
     sessionActive = false;
     presentationSuspended = false;
-    anchorRateInitialized = false;
-    lastAnchorWorkoutTimeMs = 0;
-    lastAnchorMonotonicTimeMs = 0;
+    positionRate.reset(1.0);
     currentWorkoutTimeMs = 0;
     lastTelemetryMonotonicTimeMs = -1;
     currentAnchorRate = 1.0;
@@ -421,19 +419,20 @@ double WorkoutGameWindow::anchorRate(
         std::int64_t workoutTimeMs,
         std::int64_t monotonicTimeMs)
 {
-    double rate = distanceRuntime.enabled() ? currentAnchorRate : 1.0;
-    if (distanceRuntime.enabled() && anchorRateInitialized
-            && monotonicTimeMs > lastAnchorMonotonicTimeMs
-            && workoutTimeMs >= lastAnchorWorkoutTimeMs) {
-        rate = std::clamp(
-                double(workoutTimeMs - lastAnchorWorkoutTimeMs)
-                    / double(monotonicTimeMs - lastAnchorMonotonicTimeMs),
-                0.0, 4.0);
-    }
-    anchorRateInitialized = true;
-    lastAnchorWorkoutTimeMs = workoutTimeMs;
-    lastAnchorMonotonicTimeMs = monotonicTimeMs;
-    return rate;
+    if (!distanceRuntime.enabled()) return 1.0;
+    const bool moving = hasTelemetry
+            && (finiteClampedNonNegative(
+                    latestTelemetry.getSpeed(), MaximumSpeedKph) > 0.2
+                || finiteClampedNonNegative(
+                    latestTelemetry.getCadence(), MaximumCadenceRpm) > 0.0
+                || finiteClampedNonNegative(
+                    latestTelemetry.getWatts(), MaximumPowerWatts) > 5.0);
+    return positionRate.update({
+        workoutTimeMs,
+        monotonicTimeMs,
+        hasTelemetry,
+        moving
+    });
 }
 
 void WorkoutGameWindow::updateRunnerTelemetry()

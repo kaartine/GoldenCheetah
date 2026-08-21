@@ -9,6 +9,7 @@
 
 #include "WorkoutGameSceneGraphWindow.h"
 #include "WorkoutGameClock.h"
+#include "WorkoutGameHorizon.h"
 
 #include "WorkoutGameRoadProjection.h"
 #include "WorkoutGameMesh.h"
@@ -289,6 +290,7 @@ QColor meshColor(WorkoutGameMeshMaterial material, bool selectedBypass = false)
 void buildRoadGeometry(
         const WorkoutGameRoadProjectionFrame &projection,
         double viewportWidth,
+        double viewportHeight,
         std::vector<SceneTriangle> &geometry)
 {
     if (projection.slices.size() < 2) return;
@@ -341,6 +343,72 @@ void buildRoadGeometry(
                        near.gradePercent),
                    far.depthMeters, near.depthMeters);
     }
+
+    const WorkoutGameRoadProjectedSlice &nearest = projection.slices.back();
+    const float left = float(nearest.centerX - nearest.halfWidthPixels);
+    const float right = float(nearest.centerX + nearest.halfWidthPixels);
+    const float bottomLeft = float(std::max(
+            0.0, nearest.centerX - nearest.halfWidthPixels * 1.75));
+    const float bottomRight = float(std::min(
+            viewportWidth, nearest.centerX + nearest.halfWidthPixels * 1.75));
+    const QColor grass = gradeTint(
+            groundColor(nearest.terrain, false), nearest.gradePercent);
+    appendQuad(geometry,
+               0.0f, float(nearest.centerY), left,
+               0.0f, float(viewportHeight), bottomLeft, grass,
+               nearest.depthMeters, 0.0);
+    appendQuad(geometry,
+               right, float(nearest.centerY), float(viewportWidth),
+               bottomRight, float(viewportHeight), float(viewportWidth), grass,
+               nearest.depthMeters, 0.0);
+    appendQuad(geometry,
+               left, float(nearest.centerY), right,
+               bottomLeft, float(viewportHeight), bottomRight,
+               roadColor(nearest.terrain, false),
+               nearest.depthMeters, 0.0);
+}
+
+void appendRidgeLayer(
+        const std::vector<double> &ridge,
+        double viewportWidth,
+        double viewportHeight,
+        const QColor &color,
+        double depthMeters,
+        std::vector<SceneTriangle> &geometry)
+{
+    const std::size_t segments = ridge.size() - 1u;
+    for (std::size_t index = 0; index < segments; ++index) {
+        const float left = float(viewportWidth * double(index)
+                / double(segments));
+        const float right = float(viewportWidth * double(index + 1u)
+                / double(segments));
+        const float leftY = float(ridge[index] * viewportHeight);
+        const float rightY = float(ridge[index + 1u] * viewportHeight);
+        appendTriangle(geometry,
+                       left, leftY, left, float(viewportHeight),
+                       right, float(viewportHeight), color, depthMeters);
+        appendTriangle(geometry,
+                       left, leftY, right, float(viewportHeight),
+                       right, rightY, color, depthMeters);
+    }
+}
+
+void buildHorizonGeometry(
+        const WorkoutGameHorizonSnapshot &horizon,
+        double viewportWidth,
+        double viewportHeight,
+        std::vector<SceneTriangle> &geometry)
+{
+    if (!horizon.ready || horizon.farRidgeY.size() < 2
+            || horizon.farRidgeY.size() != horizon.nearRidgeY.size()) {
+        return;
+    }
+    appendRidgeLayer(horizon.farRidgeY,
+                     viewportWidth, viewportHeight,
+                     QColor(47, 91, 72), 1400.0, geometry);
+    appendRidgeLayer(horizon.nearRidgeY,
+                     viewportWidth, viewportHeight,
+                     QColor(38, 104, 64), 1200.0, geometry);
 }
 
 bool projectedSliceAt(
@@ -987,6 +1055,9 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
                     roadCourse, riderDistance, config);
 
     std::vector<SceneTriangle> terrain;
+    buildHorizonGeometry(
+            WorkoutGameHorizon::build(roadCourse.seed, riderDistance),
+            viewportWidth, viewportHeight, terrain);
     if (projection.ready) {
         WorkoutGameChallengeCue cue = WorkoutGameChallengeCue::None;
         if (feature.sourceSectionIndex >= 0
@@ -996,7 +1067,8 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
                     currentCourse.sections[std::size_t(
                         feature.sourceSectionIndex)]).cue;
         }
-        buildRoadGeometry(projection, viewportWidth, terrain);
+        buildRoadGeometry(
+                projection, viewportWidth, viewportHeight, terrain);
         buildMotionCueGeometry(projection, terrain);
         buildPowerCueGeometry(projection, feature, cue, terrain);
         buildFeatureGeometry(

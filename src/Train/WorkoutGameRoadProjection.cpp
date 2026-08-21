@@ -125,8 +125,7 @@ WorkoutGameRoadProjectionFrame WorkoutGameRoadProjection::project(
         slice.depthMeters = localZ;
         slice.centerX = config.viewportWidth * 0.5
                 + focalLength * localX / localZ;
-        slice.surfaceElevationMeters = sample.center.elevationMeters
-                + sample.surfaceOffsetMeters;
+        slice.surfaceElevationMeters = sample.surfaceElevationMeters();
         slice.centerY = horizonY - focalLength
                 * (slice.surfaceElevationMeters - cameraElevation) / localZ;
         slice.halfWidthPixels = std::clamp(
@@ -154,8 +153,7 @@ WorkoutGameRoadProjectionFrame WorkoutGameRoadProjection::project(
     if (result.ready) {
         result.visibleElevationChangeMeters =
                 result.slices.front().surfaceElevationMeters
-                - (rider.center.elevationMeters
-                   + rider.surfaceOffsetMeters);
+                - rider.surfaceElevationMeters();
     }
     return result;
 }

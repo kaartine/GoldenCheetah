@@ -10,6 +10,7 @@
 #include "Train/WorkoutGameRoadCourse.h"
 #include "Train/WorkoutGameRoadProjection.h"
 #include "Train/WorkoutGameFeatureGeometry.h"
+#include "Train/WorkoutGameHorizon.h"
 
 #include <QTest>
 
@@ -233,8 +234,8 @@ private slots:
         }
         QVERIFY2(maximumHalfWidth <= 0.75,
                  "the generated trail is wider than a singletrack");
-        QVERIFY2(maximumElevation - minimumElevation >= 0.08,
-                 "smooth trail has no visible surface relief");
+        QVERIFY2(maximumElevation - minimumElevation >= 0.50,
+                 "smooth trail relief is too flat to read while riding");
         QVERIFY(std::abs(road.pieces.front().turnRadians) > 0.02);
     }
 
@@ -345,12 +346,72 @@ private slots:
                     WorkoutGameRoadCourseBuilder::sample(
                         road, slice.worldDistanceMeters);
             QCOMPARE(slice.surfaceElevationMeters,
-                     sample.center.elevationMeters
-                        + sample.surfaceOffsetMeters);
+                     sample.center.elevationMeters);
             sawTechnicalRelief = sawTechnicalRelief
                     || sample.surfaceOffsetMeters > 0.03;
         }
         QVERIFY(sawTechnicalRelief);
+    }
+
+    void jumpSurfaceOffsetIsAppliedExactlyOnce()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 730u;
+        course.durationMs = 30000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::SprintJump;
+        section.terrain = WorkoutGameTerrainKind::Tabletop;
+        section.durationMs = course.durationMs;
+        section.targetWatts = 260.0;
+        section.difficulty = 1.0;
+        section.challengeCount = 1;
+        course.sections = {section};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const double obstacle = piece->challenge.obstacleDistanceMeters;
+        const WorkoutGameRoadProjectionFrame frame =
+                WorkoutGameRoadProjection::project(road, obstacle - 8.0);
+        bool sawFeatureSurface = false;
+        for (const WorkoutGameRoadProjectedSlice &slice : frame.slices) {
+            const WorkoutGameRoadSample sample =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        road, slice.worldDistanceMeters);
+            QCOMPARE(slice.surfaceElevationMeters,
+                     sample.surfaceElevationMeters());
+            sawFeatureSurface = sawFeatureSurface
+                    || sample.surfaceOffsetMeters > 0.5;
+        }
+        QVERIFY(sawFeatureSurface);
+        QVERIFY(frame.slices.size() >= 16u);
+    }
+
+    void horizonIsShapedDeterministicAndScrollsSmoothly()
+    {
+        const WorkoutGameHorizonSnapshot first =
+                WorkoutGameHorizon::build(123u, 100.0, 32);
+        const WorkoutGameHorizonSnapshot same =
+                WorkoutGameHorizon::build(123u, 100.0, 32);
+        const WorkoutGameHorizonSnapshot moved =
+                WorkoutGameHorizon::build(123u, 100.1, 32);
+        QVERIFY(first.ready);
+        QCOMPARE(first.farRidgeY, same.farRidgeY);
+        QCOMPARE(first.nearRidgeY, same.nearRidgeY);
+        double minimum = 1.0;
+        double maximum = 0.0;
+        for (std::size_t index = 0; index < first.nearRidgeY.size(); ++index) {
+            minimum = std::min(minimum, first.nearRidgeY[index]);
+            maximum = std::max(maximum, first.nearRidgeY[index]);
+            QVERIFY(std::abs(first.nearRidgeY[index]
+                    - moved.nearRidgeY[index]) < 0.002);
+        }
+        QVERIFY(maximum - minimum > 0.06);
     }
 
     void tinyDistanceChangesProduceContinuousProjection()

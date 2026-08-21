@@ -214,6 +214,26 @@ private slots:
                  WorkoutGameFeatureOutcome::Completed);
     }
 
+    void lateJumpBurstIsNotRejectedAsPoorAdherence()
+    {
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(
+                challengeCourse(WorkoutGameTerrainKind::LogOver), 200.0));
+
+        WorkoutGameSimulationSnapshot result;
+        for (std::int64_t time = 0; time <= 7500; time += 100) {
+            const bool push = time >= 6800;
+            WorkoutGameSimulationInput input = sample(
+                    time, push ? 300.0 : 100.0, 200.0,
+                    push ? 90.0 : 50.0);
+            input.authoritativeSpeedKph = push ? 20.0 : 7.0;
+            result = simulation.update(input);
+        }
+        QCOMPARE(result.featureOutcome,
+                 WorkoutGameFeatureOutcome::Completed);
+        QCOMPARE(result.route, WorkoutGameRoute::MainLine);
+    }
+
     void longJumpSectionStillMeasuresOnlySixMetres()
     {
         WorkoutGameCourse course = challengeCourse(
