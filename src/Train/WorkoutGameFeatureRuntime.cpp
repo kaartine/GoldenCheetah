@@ -9,6 +9,8 @@
 
 #include "WorkoutGameFeatureRuntime.h"
 
+#include "WorkoutGameFeatureGeometry.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -109,10 +111,15 @@ bool WorkoutGameFeatureRuntime::airborneExpected(
 {
     if (!feature.ready) return false;
     if (feature.terrain == WorkoutGameTerrainKind::Rollers) return true;
+    if (feature.motion == WorkoutGameFeatureMotion::Jump
+            && feature.phase == WorkoutGameFeaturePhase::Committed) {
+        return feature.visualDistanceMeters
+                >= feature.physicalTakeoffDistanceMeters;
+    }
     return (feature.motion == WorkoutGameFeatureMotion::Jump
-            || feature.motion == WorkoutGameFeatureMotion::Drop)
+                || feature.motion == WorkoutGameFeatureMotion::Drop)
             && (feature.phase == WorkoutGameFeaturePhase::Action
-                || feature.phase == WorkoutGameFeaturePhase::Recovery);
+                    || feature.phase == WorkoutGameFeaturePhase::Recovery);
 }
 
 void WorkoutGameFeatureRuntime::reset()
@@ -160,11 +167,23 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
     result.prepareDistanceMeters = piece->challenge.prepareDistanceMeters;
     result.decisionDistanceMeters = piece->challenge.decisionDistanceMeters;
     result.obstacleDistanceMeters = piece->challenge.obstacleDistanceMeters;
+    result.physicalTakeoffDistanceMeters = result.obstacleDistanceMeters;
     result.distanceToObstacleMeters = result.obstacleDistanceMeters
             - result.visualDistanceMeters;
 
     const double sectionLength = std::max(
             1.0, layout.endDistanceMeters - layout.startDistanceMeters);
+    if (result.motion == WorkoutGameFeatureMotion::Jump) {
+        const WorkoutGameFeatureGeometryProfile geometry =
+                WorkoutGameFeatureGeometry::profile(
+                    piece->terrain, piece->difficulty);
+        if (geometry.ready) {
+            const double takeoffOffset = piece->terrain
+                    == WorkoutGameTerrainKind::Tabletop
+                ? geometry.plateauStartMeters : geometry.startMeters;
+            result.physicalTakeoffDistanceMeters += takeoffOffset;
+        }
+    }
     const double actionEnd = std::min(
             layout.endDistanceMeters,
             std::max(result.obstacleDistanceMeters + 6.0,

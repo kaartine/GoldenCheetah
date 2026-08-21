@@ -8,10 +8,12 @@
  */
 
 #include "Train/WorkoutGameFeatureLab.h"
+#include "Train/WorkoutGameFeatureGeometry.h"
 #include "Train/WorkoutGameFeatureRuntime.h"
 
 #include <QTest>
 
+#include <algorithm>
 #include <cmath>
 
 namespace {
@@ -102,6 +104,59 @@ private slots:
         QVERIFY(result.verticalOffsetMeters > 0.2);
         QCOMPARE(result.lateralOffset, 0.0);
         QVERIFY(result.actionId != 0u);
+    }
+
+    void airbornePolicyStartsAtThePhysicalTakeoff()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        QVERIFY(road.ready);
+
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        const WorkoutGameTerrainKind terrains[] = {
+            WorkoutGameTerrainKind::LogOver,
+            WorkoutGameTerrainKind::Tabletop
+        };
+        for (WorkoutGameTerrainKind terrain : terrains) {
+            const int section = sectionFor(course, terrain);
+            QVERIFY(section >= 0);
+            const auto piece = std::find_if(
+                    road.pieces.begin(), road.pieces.end(),
+                    [section](const WorkoutGameRoadPiece &candidate) {
+                        return candidate.sourceSectionIndex
+                                    == std::size_t(section)
+                                && candidate.challenge.enabled;
+                    });
+            QVERIFY(piece != road.pieces.end());
+            const WorkoutGameFeatureGeometryProfile geometry =
+                    WorkoutGameFeatureGeometry::profile(
+                        terrain, piece->difficulty);
+            QVERIFY(geometry.ready);
+            const double takeoffOffset = terrain
+                    == WorkoutGameTerrainKind::Tabletop
+                ? geometry.plateauStartMeters : geometry.startMeters;
+            const WorkoutGameRoadTimelineSection &timeline =
+                    road.timeline[std::size_t(section)];
+            const double sectionLength = timeline.endDistanceMeters
+                    - timeline.startDistanceMeters;
+            const double takeoffProgress = (
+                    piece->challenge.obstacleDistanceMeters + takeoffOffset
+                    - timeline.startDistanceMeters) / sectionLength;
+
+            const WorkoutGameFeatureRuntimeSnapshot before = runtime.update(
+                    snapshot(section, takeoffProgress - 0.0001,
+                             WorkoutGameFeatureOutcome::Completed));
+            const WorkoutGameFeatureRuntimeSnapshot takeoff = runtime.update(
+                    snapshot(section, takeoffProgress + 0.0001,
+                             WorkoutGameFeatureOutcome::Completed));
+            QCOMPARE(before.phase, WorkoutGameFeaturePhase::Committed);
+            QCOMPARE(takeoff.phase, WorkoutGameFeaturePhase::Committed);
+            QVERIFY(!takeoff.triggerJump);
+            QVERIFY(!WorkoutGameFeatureRuntime::airborneExpected(before));
+            QVERIFY(WorkoutGameFeatureRuntime::airborneExpected(takeoff));
+        }
     }
 
     void missedLogUsesVisibleBypassWithoutJumping()

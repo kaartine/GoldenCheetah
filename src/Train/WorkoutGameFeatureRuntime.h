@@ -48,6 +48,7 @@ struct WorkoutGameFeatureRuntimeSnapshot
     double prepareDistanceMeters = 0.0;
     double decisionDistanceMeters = 0.0;
     double obstacleDistanceMeters = 0.0;
+    double physicalTakeoffDistanceMeters = 0.0;
     double distanceToObstacleMeters = 0.0;
     double readiness = 0.0;
     double lateralOffset = 0.0;
