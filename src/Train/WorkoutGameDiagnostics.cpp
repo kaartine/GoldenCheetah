@@ -15,6 +15,7 @@
 namespace {
 
 constexpr double MovementEpsilonMeters = 1e-6;
+constexpr double VisibleAirborneHeightMeters = 0.08;
 constexpr std::int64_t LateFrameThresholdMs = 25;
 
 }
@@ -68,6 +69,7 @@ WorkoutGameDiagnosticsSnapshot WorkoutGameDiagnostics::update(
             largestFrameIntervalMs, result.frameIntervalMs);
     if (result.frameIntervalMs > LateFrameThresholdMs) ++lateFrameCount;
     if (input.worldReady && input.riderAirborne
+            && input.airHeightMeters >= VisibleAirborneHeightMeters
             && !input.airborneExpected) {
         ++unexpectedAirborneFrameCount;
     }

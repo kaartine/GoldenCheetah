@@ -340,8 +340,8 @@ private slots:
         input.renderedRoadDistanceMeters = 10.0;
         input.riderAirborne = true;
         input.airborneExpected = false;
-        input.riderClearanceMeters = 1.15;
-        input.airHeightMeters = 0.33;
+        input.riderClearanceMeters = 0.85;
+        input.airHeightMeters = 0.03;
         QCOMPARE(diagnostics.update(input).unexpectedAirborneFrameCount,
                  std::uint64_t(0));
 
@@ -349,11 +349,19 @@ private slots:
         input.renderedWorkoutTimeMs = 1020;
         input.renderedRoadDistanceMeters = 10.1;
         QCOMPARE(diagnostics.update(input).unexpectedAirborneFrameCount,
-                 std::uint64_t(1));
+                 std::uint64_t(0));
 
         input.monotonicTimeMs = 1040;
         input.renderedWorkoutTimeMs = 1040;
         input.renderedRoadDistanceMeters = 10.2;
+        input.riderClearanceMeters = 1.15;
+        input.airHeightMeters = 0.33;
+        QCOMPARE(diagnostics.update(input).unexpectedAirborneFrameCount,
+                 std::uint64_t(1));
+
+        input.monotonicTimeMs = 1060;
+        input.renderedWorkoutTimeMs = 1060;
+        input.renderedRoadDistanceMeters = 10.3;
         input.airborneExpected = true;
         QCOMPARE(diagnostics.update(input).unexpectedAirborneFrameCount,
                  std::uint64_t(1));
