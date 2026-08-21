@@ -186,10 +186,14 @@ declare -F strava_oauth_build_status >/dev/null ||
     fail "strava_oauth_build_status helper is missing"
 declare -F require_strava_oauth_build >/dev/null ||
     fail "require_strava_oauth_build helper is missing"
+declare -F require_configured_strava_oauth_build >/dev/null ||
+    fail "configured build-status gate is missing"
 declare -F strava_oauth_appimage_status >/dev/null ||
     fail "strava_oauth_appimage_status helper is missing"
 declare -F require_strava_oauth_appimage >/dev/null ||
     fail "require_strava_oauth_appimage helper is missing"
+declare -F require_configured_strava_oauth_appimage >/dev/null ||
+    fail "configured AppImage-status gate is missing"
 declare -F require_unconfigured_strava_oauth_build >/dev/null ||
     fail "credential-free build-status gate is missing"
 declare -F require_unconfigured_strava_oauth_appimage >/dev/null ||
@@ -1810,6 +1814,12 @@ require_strava_oauth_build "$TEMP_DIR/configured" >/dev/null ||
     fail "runtime Strava support was rejected by the release gate"
 require_strava_oauth_build "$TEMP_DIR/unconfigured" >/dev/null ||
     fail "runtime-only Strava support was rejected by the release gate"
+require_configured_strava_oauth_build "$TEMP_DIR/configured" >/dev/null ||
+    fail "private build rejected a configured compile fallback"
+if require_configured_strava_oauth_build "$TEMP_DIR/unconfigured" \
+    >/dev/null 2>&1; then
+    fail "private build accepted an unavailable compile fallback"
+fi
 require_unconfigured_strava_oauth_build "$TEMP_DIR/unconfigured" >/dev/null ||
     fail "credential-free build rejected an unavailable compile fallback"
 if require_unconfigured_strava_oauth_build "$TEMP_DIR/configured" \
@@ -1870,6 +1880,9 @@ trusted_appimage_extract()
 require_strava_oauth_appimage "$TEMP_DIR/type2.AppImage" \
     >/dev/null ||
     fail "configured packaged GoldenCheetah was rejected"
+require_configured_strava_oauth_appimage "$TEMP_DIR/type2.AppImage" \
+    >/dev/null ||
+    fail "private AppImage rejected a configured compile fallback"
 
 GC_TEST_APPIMAGE_ENTRY="$TEMP_DIR/app-run-wrapper"
 GC_TEST_APPIMAGE_ENTRY_NAME="app-run-wrapper"
@@ -1893,6 +1906,10 @@ GC_TEST_APPIMAGE_ENTRY_NAME="unconfigured-entry"
 require_strava_oauth_appimage "$TEMP_DIR/type2.AppImage" \
     >/dev/null ||
     fail "release gate rejected runtime-only Strava support"
+if require_configured_strava_oauth_appimage "$TEMP_DIR/type2.AppImage" \
+    >/dev/null 2>&1; then
+    fail "private AppImage accepted an unavailable compile fallback"
+fi
 require_unconfigured_strava_oauth_appimage "$TEMP_DIR/type2.AppImage" \
     >/dev/null ||
     fail "credential-free AppImage rejected an unavailable compile fallback"
@@ -2447,7 +2464,9 @@ done
 
 for packager in "$CI_PACKAGE_PASS"; do
     assert_contains "$packager" \
-        'require_strava_oauth_appimage'
+        'require_configured_strava_oauth_appimage'
+    assert_contains "$packager" \
+        'require_unconfigured_strava_oauth_appimage'
     assert_contains "$packager" \
         'install_linux_keychain_runtime'
     assert_contains "$packager" \

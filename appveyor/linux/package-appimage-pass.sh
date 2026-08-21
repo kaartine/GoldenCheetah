@@ -51,7 +51,7 @@ cd "$PASS_DIR"
 
 case "$OAUTH_POLICY" in
 configured)
-    STRAVA_OAUTH_STATUS=$(require_strava_oauth_build "$BINARY")
+    STRAVA_OAUTH_STATUS=$(require_configured_strava_oauth_build "$BINARY")
     ;;
 unconfigured)
     STRAVA_OAUTH_STATUS=$(require_unconfigured_strava_oauth_build "$BINARY")
@@ -144,7 +144,7 @@ verify_appimage_manifest "$IMAGE" "$MANIFEST"
 verify_appimage_sbom "$IMAGE" "$SBOM"
 
 if [ "$OAUTH_POLICY" = configured ]; then
-    STRAVA_OAUTH_STATUS=$(require_strava_oauth_appimage "$IMAGE")
+    STRAVA_OAUTH_STATUS=$(require_configured_strava_oauth_appimage "$IMAGE")
 else
     STRAVA_OAUTH_STATUS=$(require_unconfigured_strava_oauth_appimage "$IMAGE")
 fi

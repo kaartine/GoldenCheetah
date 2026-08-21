@@ -661,6 +661,21 @@ require_strava_oauth_build()
     echo "$status"
 }
 
+require_configured_strava_oauth_build()
+{
+    local executable=$1
+    local status
+
+    status=$(strava_oauth_build_fallback_status "$executable") || return
+    if [ "$status" != "configured" ]; then
+        echo "$status" >&2
+        echo "Refusing to package a private release without a" \
+            "compile-time Strava OAuth fallback." >&2
+        return 1
+    fi
+    echo "Strava OAuth: configured"
+}
+
 require_unconfigured_strava_oauth_build()
 {
     local executable=$1
@@ -760,6 +775,21 @@ require_strava_oauth_appimage()
         return 1
     fi
     echo "$status"
+}
+
+require_configured_strava_oauth_appimage()
+{
+    local image=$1
+    local status
+
+    status=$(strava_oauth_appimage_status "$image" fallback) || return
+    if [ "$status" != "configured" ]; then
+        echo "$status" >&2
+        echo "Refusing to publish a private AppImage without a" \
+            "compile-time Strava OAuth fallback." >&2
+        return 1
+    fi
+    echo "Strava OAuth: configured"
 }
 
 require_unconfigured_strava_oauth_appimage()
