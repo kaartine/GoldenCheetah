@@ -233,6 +233,29 @@ private slots:
         QVERIFY(action.pitchDegrees < -2.0);
         QVERIFY(recovery.landingImpact > 0.0);
     }
+
+    void airbornePolicyDistinguishesRollersFromAnchoredFeatures()
+    {
+        WorkoutGameFeatureRuntimeSnapshot feature;
+        QVERIFY(!WorkoutGameFeatureRuntime::airborneExpected(feature));
+
+        feature.ready = true;
+        feature.terrain = WorkoutGameTerrainKind::Rollers;
+        feature.phase = WorkoutGameFeaturePhase::Approach;
+        QVERIFY(WorkoutGameFeatureRuntime::airborneExpected(feature));
+
+        feature.terrain = WorkoutGameTerrainKind::LogOver;
+        feature.motion = WorkoutGameFeatureMotion::Jump;
+        feature.phase = WorkoutGameFeaturePhase::Measure;
+        QVERIFY(!WorkoutGameFeatureRuntime::airborneExpected(feature));
+
+        feature.phase = WorkoutGameFeaturePhase::Action;
+        QVERIFY(WorkoutGameFeatureRuntime::airborneExpected(feature));
+
+        feature.terrain = WorkoutGameTerrainKind::SmoothTrail;
+        feature.motion = WorkoutGameFeatureMotion::None;
+        QVERIFY(!WorkoutGameFeatureRuntime::airborneExpected(feature));
+    }
 };
 
 QTEST_GUILESS_MAIN(TestWorkoutGameFeatureRuntime)

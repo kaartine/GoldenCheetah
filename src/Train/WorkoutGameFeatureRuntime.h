@@ -64,6 +64,8 @@ class WorkoutGameFeatureRuntime
 public:
     bool configure(const WorkoutGameRoadCourse &course);
     void reset();
+    static bool airborneExpected(
+            const WorkoutGameFeatureRuntimeSnapshot &feature);
     WorkoutGameFeatureRuntimeSnapshot update(
             const WorkoutGameSimulationSnapshot &simulation) const;
 

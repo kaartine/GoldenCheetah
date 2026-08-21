@@ -103,6 +103,17 @@ bool WorkoutGameFeatureRuntime::configure(
     return true;
 }
 
+bool WorkoutGameFeatureRuntime::airborneExpected(
+        const WorkoutGameFeatureRuntimeSnapshot &feature)
+{
+    if (!feature.ready) return false;
+    if (feature.terrain == WorkoutGameTerrainKind::Rollers) return true;
+    return (feature.motion == WorkoutGameFeatureMotion::Jump
+            || feature.motion == WorkoutGameFeatureMotion::Drop)
+            && (feature.phase == WorkoutGameFeaturePhase::Action
+                || feature.phase == WorkoutGameFeaturePhase::Recovery);
+}
+
 void WorkoutGameFeatureRuntime::reset()
 {
     configuredCourse = WorkoutGameRoadCourse();

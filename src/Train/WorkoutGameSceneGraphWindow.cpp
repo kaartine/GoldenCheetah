@@ -1095,10 +1095,7 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
     diagnosticsInput.worldReady = visual.world.ready;
     diagnosticsInput.riderAirborne = visual.world.rider.airborne;
     diagnosticsInput.airborneExpected =
-            (feature.motion == WorkoutGameFeatureMotion::Jump
-             || feature.motion == WorkoutGameFeatureMotion::Drop)
-            && (feature.phase == WorkoutGameFeaturePhase::Action
-                || feature.phase == WorkoutGameFeaturePhase::Recovery);
+            WorkoutGameFeatureRuntime::airborneExpected(feature);
     diagnosticsInput.riderElevationMeters =
             visual.world.rider.elevationMeters;
     diagnosticsInput.surfaceElevationMeters =
