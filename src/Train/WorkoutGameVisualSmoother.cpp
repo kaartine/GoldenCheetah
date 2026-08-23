@@ -431,6 +431,9 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::interpolate(
         result.feature.verticalOffsetMeters = lerp(
                 from.feature.verticalOffsetMeters,
                 to.feature.verticalOffsetMeters, amount);
+        result.feature.flightDurationSeconds = lerp(
+                from.feature.flightDurationSeconds,
+                to.feature.flightDurationSeconds, amount);
         result.feature.pitchDegrees = lerp(
                 from.feature.pitchDegrees,
                 to.feature.pitchDegrees, amount);

@@ -123,6 +123,10 @@ private slots:
         const WorkoutGameRoadPiece *piece = challengePieceFor(road, section);
         QVERIFY(piece != nullptr);
         const double takeoff = jumpTakeoffDistance(*piece);
+        const WorkoutGameFeatureRuntimeSnapshot actionLayout = runtime.update(
+                snapshot(section, progressAtDistance(
+                            road, section, takeoff + 0.1),
+                         WorkoutGameFeatureOutcome::Completed));
 
         QCOMPARE(runtime.update(snapshot(
                     section, 0.10, WorkoutGameFeatureOutcome::Active)).phase,
@@ -145,7 +149,7 @@ private slots:
         QCOMPARE(runtime.update(snapshot(
                     section, progressAtDistance(
                         road, section,
-                        jumpActionEndDistance(road, section, *piece) + 0.1),
+                        actionLayout.actionEndDistanceMeters + 0.1),
                     WorkoutGameFeatureOutcome::Completed)).phase,
                  WorkoutGameFeaturePhase::Recovery);
     }
@@ -329,9 +333,13 @@ private slots:
                 WorkoutGameRoadCourseBuilder::build(course, 200.0);
         const WorkoutGameRoadPiece *piece = challengePieceFor(road, section);
         QVERIFY(piece != nullptr);
-        const double actionStart = jumpTakeoffDistance(*piece);
-        const double actionSpan = jumpActionEndDistance(
-                road, section, *piece) - actionStart;
+        const WorkoutGameFeatureRuntimeSnapshot actionLayout = runtime.update(
+                snapshot(section, progressAtDistance(
+                            road, section, jumpTakeoffDistance(*piece) + 0.1),
+                         completed));
+        const double actionStart = actionLayout.actionStartDistanceMeters;
+        const double actionSpan = actionLayout.actionEndDistanceMeters
+                - actionStart;
 
         const WorkoutGameFeatureRuntimeSnapshot takeoff = runtime.update(
                 snapshot(section, progressAtDistance(
@@ -353,6 +361,36 @@ private slots:
         QVERIFY(apex.verticalOffsetMeters > takeoff.verticalOffsetMeters);
         QVERIFY(apex.verticalOffsetMeters > landing.verticalOffsetMeters);
         QVERIFY(landing.verticalOffsetMeters > 0.05);
+    }
+
+    void tabletopFlightDurationGrowsWithSpeedButStaysBounded()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        const int section = sectionFor(course, WorkoutGameTerrainKind::Tabletop);
+        const WorkoutGameRoadPiece *piece = challengePieceFor(road, section);
+        QVERIFY(piece != nullptr);
+        const double takeoff = jumpTakeoffDistance(*piece);
+        const double progress = progressAtDistance(
+                road, section, takeoff + 0.5);
+
+        WorkoutGameSimulationSnapshot normal = snapshot(
+                section, progress, WorkoutGameFeatureOutcome::Completed);
+        normal.speedKph = 20.0;
+        WorkoutGameSimulationSnapshot fast = normal;
+        fast.speedKph = 42.0;
+        const WorkoutGameFeatureRuntimeSnapshot normalFlight =
+                runtime.update(normal);
+        const WorkoutGameFeatureRuntimeSnapshot fastFlight =
+                runtime.update(fast);
+
+        QVERIFY(normalFlight.flightDurationSeconds >= 1.5);
+        QVERIFY(fastFlight.flightDurationSeconds
+                > normalFlight.flightDurationSeconds);
+        QVERIFY(fastFlight.flightDurationSeconds <= 5.0);
     }
 
     void bypassLineEasesInAndOutWithoutLateralJumps()

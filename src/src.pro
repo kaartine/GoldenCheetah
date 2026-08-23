@@ -794,6 +794,8 @@ HEADERS += Train/LibraryImportFileStager.h Train/WorkoutImportBatch.h Train/WebD
            Train/WorkoutTagWrapper.h \
            Train/MenuProvider.h Train/WorkoutMenuProvider.h
 
+HEADERS += Train/WorkoutGameFeaturePrompt.h
+
 
 ###=============
 ### SOURCE FILES
@@ -917,6 +919,8 @@ SOURCES += Train/TrainBottom.cpp Train/TrainDB.cpp Train/TrainSidebar.cpp \
            Train/ErgOverview.cpp Train/Shy.cpp \
            Train/WorkoutTagWrapper.cpp \
            Train/WorkoutMenuProvider.cpp
+
+SOURCES += Train/WorkoutGameFeaturePrompt.cpp
 
 ## Crash Handling
 win32-msvc* {

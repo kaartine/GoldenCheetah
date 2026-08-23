@@ -8,6 +8,7 @@ SOURCES = testWorkoutGameSceneGraph.cpp \
           ../../../src/Train/WorkoutGameDiagnostics.cpp \
           ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
           ../../../src/Train/WorkoutGameFeatureLab.cpp \
+          ../../../src/Train/WorkoutGameFeaturePrompt.cpp \
           ../../../src/Train/WorkoutGameFeatureRuntime.cpp \
           ../../../src/Train/WorkoutGameHorizon.cpp \
           ../../../src/Train/WorkoutGameMesh.cpp \
@@ -24,6 +25,7 @@ HEADERS = ../../../src/Train/WorkoutGameFeatureChallenge.h \
           ../../../src/Train/WorkoutGameClock.h \
           ../../../src/Train/WorkoutGameDiagnostics.h \
           ../../../src/Train/WorkoutGameFeatureLab.h \
+          ../../../src/Train/WorkoutGameFeaturePrompt.h \
           ../../../src/Train/WorkoutGameFeatureRuntime.h \
           ../../../src/Train/WorkoutGameHorizon.h \
           ../../../src/Train/WorkoutGameMesh.h \

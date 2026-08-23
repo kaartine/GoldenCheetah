@@ -9,6 +9,7 @@
 
 #include "WorkoutGameSceneGraphWindow.h"
 #include "WorkoutGameClock.h"
+#include "WorkoutGameFeaturePrompt.h"
 #include "WorkoutGameHorizon.h"
 
 #include "WorkoutGameRoadProjection.h"
@@ -59,6 +60,7 @@ struct WorkoutGameSceneRoot : public QSGNode
 {
     QSGSimpleTextureNode *background = nullptr;
     QSGGeometryNode *terrain = nullptr;
+    QSGGeometryNode *features = nullptr;
     QSGTransformNode *riderTransform = nullptr;
     QSGSimpleTextureNode *rider = nullptr;
     QSGSimpleTextureNode *hud = nullptr;
@@ -87,6 +89,7 @@ WorkoutGameSceneRoot *createSceneRoot()
     root->background->setOwnsTexture(true);
     root->appendChildNode(root->background);
     root->terrain = createGeometryNode(root);
+    root->features = createGeometryNode(root);
     root->riderTransform = new QSGTransformNode;
     root->appendChildNode(root->riderTransform);
     root->rider = new QSGSimpleTextureNode;
@@ -232,11 +235,11 @@ QColor roadColor(WorkoutGameTerrainKind terrain, bool alternate)
     QColor base;
     switch (terrain) {
     case WorkoutGameTerrainKind::RockGarden:
-    case WorkoutGameTerrainKind::RockSlab: base = QColor(98, 104, 93); break;
-    case WorkoutGameTerrainKind::Skinny: base = QColor(129, 91, 49); break;
-    case WorkoutGameTerrainKind::Roots: base = QColor(104, 79, 50); break;
-    case WorkoutGameTerrainKind::Climb: base = QColor(114, 88, 58); break;
-    default: base = QColor(126, 99, 65); break;
+    case WorkoutGameTerrainKind::RockSlab: base = QColor(82, 87, 76); break;
+    case WorkoutGameTerrainKind::Skinny: base = QColor(104, 72, 38); break;
+    case WorkoutGameTerrainKind::Roots: base = QColor(77, 58, 37); break;
+    case WorkoutGameTerrainKind::Climb: base = QColor(91, 66, 42); break;
+    default: base = QColor(89, 65, 40); break;
     }
     return alternate ? base.lighter(108) : base.darker(106);
 }
@@ -247,7 +250,7 @@ QColor groundColor(WorkoutGameTerrainKind terrain, bool alternate)
             || terrain == WorkoutGameTerrainKind::RockSlab
             ? QColor(75, 104, 78)
             : QColor(50, 111, 66);
-    return alternate ? base.lighter(108) : base.darker(106);
+    return alternate ? base.lighter(102) : base.darker(102);
 }
 
 QColor blendColor(const QColor &from, const QColor &to, double amount)
@@ -288,6 +291,46 @@ QColor meshColor(WorkoutGameMeshMaterial material, bool selectedBypass = false)
     return QColor(180, 140, 72);
 }
 
+double forestFloorOffsetMeters(
+        double worldDistanceMeters,
+        double lateralMeters,
+        double trailHalfWidthMeters)
+{
+    const double side = lateralMeters < 0.0 ? -1.0 : 1.0;
+    const double awayFromTrail = std::max(
+            0.0, std::abs(lateralMeters) - trailHalfWidthMeters);
+    const double blend = std::clamp(awayFromTrail / 3.2, 0.0, 1.0);
+    const double phase = side < 0.0 ? 0.65 : 2.35;
+    const double rolling = 0.72
+            * std::sin(worldDistanceMeters * 0.052 + phase)
+            + 0.34 * std::sin(worldDistanceMeters * 0.137 - phase * 0.6)
+            + side * 0.18
+                * std::sin(worldDistanceMeters * 0.031 + 1.2);
+    return std::clamp(blend * rolling, -1.05, 1.05);
+}
+
+void appendForestFloorQuad(
+        std::vector<SceneTriangle> &geometry,
+        float farOuterX, float farOuterY,
+        float farTrailX, float farTrailY,
+        float nearOuterX, float nearOuterY,
+        float nearTrailX, float nearTrailY,
+        const QColor &color,
+        double farDepthMeters,
+        double nearDepthMeters)
+{
+    appendTriangle(geometry,
+                   farOuterX, farOuterY,
+                   nearOuterX, nearOuterY,
+                   nearTrailX, nearTrailY,
+                   color, (farDepthMeters + nearDepthMeters * 2.0) / 3.0);
+    appendTriangle(geometry,
+                   farOuterX, farOuterY,
+                   nearTrailX, nearTrailY,
+                   farTrailX, farTrailY,
+                   color, (farDepthMeters * 2.0 + nearDepthMeters) / 3.0);
+}
+
 void buildRoadGeometry(
         const WorkoutGameRoadProjectionFrame &projection,
         double viewportWidth,
@@ -303,30 +346,61 @@ void buildRoadGeometry(
         if (!clipProjectedPair(far, near)) continue;
         const bool alternate = (int(std::floor(
                 near.worldDistanceMeters / 3.5)) & 1) != 0;
-        const float farLeft = float(far.centerX - far.halfWidthPixels);
-        const float farRight = float(far.centerX + far.halfWidthPixels);
-        const float nearLeft = float(near.centerX - near.halfWidthPixels);
-        const float nearRight = float(near.centerX + near.halfWidthPixels);
+        const auto edgeScale = [](double distance, double phase) {
+            return 0.82
+                    + 0.07 * std::sin(distance * 0.31 + phase)
+                    + 0.035 * std::sin(distance * 0.83 - phase * 0.7);
+        };
+        const float farLeft = float(far.centerX - far.halfWidthPixels
+                * edgeScale(far.worldDistanceMeters, 0.4));
+        const float farRight = float(far.centerX + far.halfWidthPixels
+                * edgeScale(far.worldDistanceMeters, 2.1));
+        const float nearLeft = float(near.centerX - near.halfWidthPixels
+                * edgeScale(near.worldDistanceMeters, 0.4));
+        const float nearRight = float(near.centerX + near.halfWidthPixels
+                * edgeScale(near.worldDistanceMeters, 2.1));
         const float farY = float(far.centerY);
         const float nearY = float(near.centerY);
+        const double farForestLateral = far.halfWidthMeters + 5.0;
+        const double nearForestLateral = near.halfWidthMeters + 5.0;
+        const float farLeftForestY = float(far.centerY
+                - forestFloorOffsetMeters(
+                    far.worldDistanceMeters, -farForestLateral,
+                    far.halfWidthMeters)
+                    * far.pixelsPerMeter * projection.verticalExaggeration);
+        const float farRightForestY = float(far.centerY
+                - forestFloorOffsetMeters(
+                    far.worldDistanceMeters, farForestLateral,
+                    far.halfWidthMeters)
+                    * far.pixelsPerMeter * projection.verticalExaggeration);
+        const float nearLeftForestY = float(near.centerY
+                - forestFloorOffsetMeters(
+                    near.worldDistanceMeters, -nearForestLateral,
+                    near.halfWidthMeters)
+                    * near.pixelsPerMeter * projection.verticalExaggeration);
+        const float nearRightForestY = float(near.centerY
+                - forestFloorOffsetMeters(
+                    near.worldDistanceMeters, nearForestLateral,
+                    near.halfWidthMeters)
+                    * near.pixelsPerMeter * projection.verticalExaggeration);
         const QColor grass = gradeTint(blendColor(
                 groundColor(far.terrain, alternate),
                 groundColor(near.terrain, alternate), 0.65),
                 near.gradePercent);
-        appendQuad(geometry,
-                   0.0f, farY, farLeft,
-                   0.0f, nearY, nearLeft, grass,
-                   far.depthMeters, near.depthMeters);
-        appendQuad(geometry,
-                   farRight, farY, float(viewportWidth),
-                   nearRight, nearY, float(viewportWidth), grass,
-                   far.depthMeters, near.depthMeters);
+        appendForestFloorQuad(geometry,
+                   0.0f, farLeftForestY, farLeft, farY,
+                   0.0f, nearLeftForestY, nearLeft, nearY,
+                   grass, far.depthMeters, near.depthMeters);
+        appendForestFloorQuad(geometry,
+                   float(viewportWidth), farRightForestY, farRight, farY,
+                   float(viewportWidth), nearRightForestY, nearRight, nearY,
+                   grass, far.depthMeters, near.depthMeters);
 
         const float farShoulder = std::max(1.0f,
-                float(far.halfWidthPixels * 0.12));
+                float(far.halfWidthPixels * 0.18));
         const float nearShoulder = std::max(1.0f,
-                float(near.halfWidthPixels * 0.12));
-        const QColor shoulder(66, 72, 57);
+                float(near.halfWidthPixels * 0.18));
+        const QColor shoulder(48, 72, 48);
         appendQuad(geometry,
                    farLeft - farShoulder, farY, farLeft,
                    nearLeft - nearShoulder, nearY, nearLeft, shoulder,
@@ -346,12 +420,16 @@ void buildRoadGeometry(
     }
 
     const WorkoutGameRoadProjectedSlice &nearest = projection.slices.back();
-    const float left = float(nearest.centerX - nearest.halfWidthPixels);
-    const float right = float(nearest.centerX + nearest.halfWidthPixels);
+    const double nearestScale = 0.82
+            + 0.07 * std::sin(nearest.worldDistanceMeters * 0.31 + 0.4);
+    const float left = float(nearest.centerX
+            - nearest.halfWidthPixels * nearestScale);
+    const float right = float(nearest.centerX
+            + nearest.halfWidthPixels * nearestScale);
     const float bottomLeft = float(std::max(
-            0.0, nearest.centerX - nearest.halfWidthPixels * 1.30));
+            0.0, nearest.centerX - nearest.halfWidthPixels * 1.05));
     const float bottomRight = float(std::min(
-            viewportWidth, nearest.centerX + nearest.halfWidthPixels * 1.30));
+            viewportWidth, nearest.centerX + nearest.halfWidthPixels * 1.05));
     const QColor grass = gradeTint(
             groundColor(nearest.terrain, false), nearest.gradePercent);
     appendQuad(geometry,
@@ -417,7 +495,9 @@ void buildForestGeometry(
             const double crownWidth = 0.75
                     + forestRandom(key + 47u) * 0.65;
             const double trunkWidth = 0.10 + height * 0.025;
-            const double baseElevation = slice.surfaceOffsetMeters;
+            const double baseElevation = slice.surfaceOffsetMeters
+                    + forestFloorOffsetMeters(
+                        distance, lateral, slice.halfWidthMeters);
             const auto point = [&](double right, double up) {
                 return WorkoutGameRoadProjection::projectPoint(
                         projection, distance, right,
@@ -898,6 +978,9 @@ void WorkoutGameSceneGraphItem::rebuildHud()
     const WorkoutGamePowerProfileSnapshot profile =
             WorkoutGamePowerProfile::build(
                 currentCourse, currentFrame.simulation, watts, cadenceRpm);
+    const WorkoutGameFeaturePromptSnapshot prompt =
+            WorkoutGameFeaturePrompt::build(
+                profile, currentFrame.feature);
     const QRect profileArea(8, StatsHeight + 3, 930, ProfileHeight - 9);
     painter.fillRect(profileArea, QColor(7, 13, 14, 238));
     if (profile.ready) {
@@ -941,35 +1024,83 @@ void WorkoutGameSceneGraphItem::rebuildHud()
     const QRect cueArea(952, StatsHeight + 3, 280, ProfileHeight - 9);
     painter.fillRect(cueArea, QColor(7, 13, 14, 238));
     QString cueText = tr("RIDE STEADY");
+    QString featureText;
     QColor cueColor(151, 181, 169);
-    if (profile.ready) {
-        switch (profile.cue.state) {
-        case WorkoutGamePowerCueState::Prepare:
-            cueText = tr("PUSH IN %1 s").arg(
-                    int(std::ceil(profile.cue.secondsUntilWindow)));
-            cueColor = QColor(242, 190, 67);
-            break;
-        case WorkoutGamePowerCueState::PushNow:
-            cueText = tr("PUSH NOW");
-            cueColor = QColor(250, 231, 91);
-            break;
-        case WorkoutGamePowerCueState::Committed:
-            cueText = tr("FEATURE COMMITTED");
-            cueColor = QColor(99, 207, 136);
-            break;
-        case WorkoutGamePowerCueState::Bypassed:
+    if (prompt.featureActive) {
+        switch (prompt.terrain) {
+        case WorkoutGameTerrainKind::Roots: featureText = tr("ROOTS"); break;
+        case WorkoutGameTerrainKind::Rollers: featureText = tr("ROLLERS"); break;
+        case WorkoutGameTerrainKind::Climb: featureText = tr("CLIMB"); break;
+        case WorkoutGameTerrainKind::RockGarden:
+            featureText = tr("ROCK GARDEN"); break;
+        case WorkoutGameTerrainKind::BunnyHop:
+            featureText = tr("BUNNY HOP"); break;
+        case WorkoutGameTerrainKind::Drop: featureText = tr("DROP"); break;
+        case WorkoutGameTerrainKind::Skinny: featureText = tr("SKINNY"); break;
+        case WorkoutGameTerrainKind::Berm: featureText = tr("BERM"); break;
+        case WorkoutGameTerrainKind::LogOver: featureText = tr("LOG"); break;
+        case WorkoutGameTerrainKind::Tabletop:
+            featureText = tr("TABLETOP"); break;
+        case WorkoutGameTerrainKind::RockSlab:
+            featureText = tr("ROCK SLAB"); break;
+        case WorkoutGameTerrainKind::SmoothTrail:
+            featureText = tr("TRAIL"); break;
+        }
+        if (prompt.distanceMeters >= 0.5
+                && currentFrame.feature.phase
+                    != WorkoutGameFeaturePhase::Recovery) {
+            featureText += tr("  %1 m").arg(
+                    int(std::ceil(prompt.distanceMeters)));
+        }
+        switch (prompt.instruction) {
+        case WorkoutGameFeatureInstruction::RideSteady:
+            cueText = tr("RIDE STEADY"); break;
+        case WorkoutGameFeatureInstruction::GetReady:
+            cueText = tr("GET READY");
+            cueColor = QColor(242, 190, 67); break;
+        case WorkoutGameFeatureInstruction::PedalHard:
+            cueText = tr("PEDAL HARD");
+            cueColor = QColor(250, 231, 91); break;
+        case WorkoutGameFeatureInstruction::CarrySpeed:
+            cueText = tr("CARRY SPEED");
+            cueColor = QColor(250, 231, 91); break;
+        case WorkoutGameFeatureInstruction::HoldLine:
+            cueText = tr("HOLD LINE");
+            cueColor = QColor(250, 231, 91); break;
+        case WorkoutGameFeatureInstruction::KeepClimbing:
+            cueText = tr("KEEP CLIMBING");
+            cueColor = QColor(250, 231, 91); break;
+        case WorkoutGameFeatureInstruction::Ready:
+            cueText = tr("READY - HOLD");
+            cueColor = QColor(99, 207, 136); break;
+        case WorkoutGameFeatureInstruction::FeatureCommitted:
+            cueText = tr("LINE LOCKED");
+            cueColor = QColor(99, 207, 136); break;
+        case WorkoutGameFeatureInstruction::Takeoff:
+            cueText = tr("TAKEOFF");
+            cueColor = QColor(99, 207, 136); break;
+        case WorkoutGameFeatureInstruction::Absorb:
+            cueText = tr("ABSORB");
+            cueColor = QColor(99, 207, 136); break;
+        case WorkoutGameFeatureInstruction::Drop:
+            cueText = tr("LIGHT HANDS");
+            cueColor = QColor(99, 207, 136); break;
+        case WorkoutGameFeatureInstruction::SafeLine:
             cueText = tr("SAFE LINE");
-            cueColor = QColor(181, 139, 72);
-            break;
-        case WorkoutGamePowerCueState::None:
-            break;
+            cueColor = QColor(181, 139, 72); break;
         }
     }
+    QFont featureFont = labelFont;
+    featureFont.setPixelSize(10);
+    painter.setFont(featureFont);
+    painter.setPen(QColor(154, 181, 167));
+    painter.drawText(cueArea.adjusted(8, 2, -8, -47),
+                     Qt::AlignCenter, featureText);
     QFont cueFont = labelFont;
-    cueFont.setPixelSize(15);
+    cueFont.setPixelSize(14);
     painter.setFont(cueFont);
     painter.setPen(cueColor);
-    painter.drawText(cueArea.adjusted(8, 2, -8, -38),
+    painter.drawText(cueArea.adjusted(8, 15, -8, -31),
                      Qt::AlignCenter, cueText);
 
     const QColor readyColor(99, 207, 136);
@@ -1011,7 +1142,7 @@ void WorkoutGameSceneGraphItem::rebuildHud()
     QFont requirementFont = labelFont;
     requirementFont.setPixelSize(10);
     painter.setFont(requirementFont);
-    const int requirementTop = cueArea.top() + 29;
+    const int requirementTop = cueArea.top() + 37;
     const int requirementWidth = cueArea.width() / 3;
     const std::array<QString, 3> requirementTexts = {
         powerText, cadenceText, speedText
@@ -1025,10 +1156,18 @@ void WorkoutGameSceneGraphItem::rebuildHud()
                          profile.cue.speedReadiness)
     };
     for (int index = 0; index < 3; ++index) {
-        painter.setPen(requirementColors[std::size_t(index)]);
+        const QRect requirementArea(
+                cueArea.left() + index * requirementWidth + 2,
+                requirementTop, requirementWidth - 4, 17);
+        QColor background = requirementColors[std::size_t(index)];
+        const bool required = index == 0 ? profile.cue.powerRequired
+                : index == 1 ? profile.cue.cadenceRequired
+                : profile.cue.speedRequired;
+        background.setAlpha(required ? 165 : 70);
+        painter.fillRect(requirementArea, background);
+        painter.setPen(Qt::white);
         painter.drawText(
-                QRect(cueArea.left() + index * requirementWidth,
-                      requirementTop, requirementWidth, 18),
+                requirementArea,
                 Qt::AlignCenter, requirementTexts[std::size_t(index)]);
     }
     const int readinessWidth = int((cueArea.width() - 16)
@@ -1220,6 +1359,7 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
     }
 
     std::vector<SceneTriangle> terrain;
+    std::vector<SceneTriangle> features;
     buildHorizonGeometry(
             WorkoutGameHorizon::build(roadCourse.seed, riderDistance),
             viewportWidth, viewportHeight, terrain);
@@ -1238,9 +1378,10 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
         buildMotionCueGeometry(projection, terrain);
         buildPowerCueGeometry(projection, feature, cue, terrain);
         buildFeatureGeometry(
-                currentCourse, roadCourse, projection, feature, terrain);
+                currentCourse, roadCourse, projection, feature, features);
     }
     updateGeometry(root->terrain, sortedVertices(std::move(terrain)));
+    updateGeometry(root->features, sortedVertices(std::move(features)));
 
     constexpr int RiderColumns = 4;
     constexpr int RiderRows = 2;
@@ -1263,9 +1404,12 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
             ? feature.vibration
                 * std::sin(feature.visualDistanceMeters * 18.0) * 12.0
             : 0.0;
-    const double physicsLift = visual.world.ready
-            ? visual.world.rider.airHeightMeters() * 18.0
-            : 0.0;
+    const double airHeightMeters = std::max(
+            visual.world.ready
+                ? visual.world.rider.airHeightMeters() : 0.0,
+            feature.verticalOffsetMeters);
+    const double physicsLift = airHeightMeters
+            * std::clamp(viewportHeight * 0.09, 52.0, 86.0);
     const double landingCompression = std::max(
             visual.world.landingImpact, feature.landingImpact) * 12.0;
     const double bob = visual.world.ready

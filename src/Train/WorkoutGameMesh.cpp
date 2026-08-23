@@ -594,11 +594,12 @@ WorkoutGameMeshProjector::project(
         return result;
     };
     const auto clipOcclusion = [&interpolateScreen](
-            const std::vector<ScreenVertex> &input) {
+            const std::vector<ScreenVertex> &input,
+            double allowancePixels) {
         std::vector<ScreenVertex> output;
         if (input.empty()) return output;
-        const auto visibility = [](const ScreenVertex &vertex) {
-            return vertex.occlusionY - vertex.projected.y;
+        const auto visibility = [allowancePixels](const ScreenVertex &vertex) {
+            return vertex.occlusionY + allowancePixels - vertex.projected.y;
         };
         ScreenVertex previous = input.back();
         double previousVisibility = visibility(previous);
@@ -672,7 +673,11 @@ WorkoutGameMeshProjector::project(
             }, projected.occlusionY});
         }
         if (!ready) continue;
-        screen = clipOcclusion(screen);
+        // Canonical feature meshes share the sampled road surface. A small
+        // screen-space allowance keeps their top faces from being clipped by
+        // that same surface while a crest can still hide a distant feature.
+        screen = clipOcclusion(
+                screen, instance.anchorToBaseSurface ? 18.0 : 0.0);
         if (screen.size() < 3u) continue;
         for (std::size_t corner = 1; corner + 1 < screen.size(); ++corner) {
             WorkoutGameProjectedMeshTriangle triangle;

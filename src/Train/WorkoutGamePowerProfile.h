@@ -38,6 +38,8 @@ struct WorkoutGamePowerProfileSegment
 struct WorkoutGamePowerCue
 {
     WorkoutGamePowerCueState state = WorkoutGamePowerCueState::None;
+    WorkoutGameChallengeCue challengeCue = WorkoutGameChallengeCue::None;
+    WorkoutGameTerrainKind terrain = WorkoutGameTerrainKind::SmoothTrail;
     double secondsUntilWindow = 0.0;
     double windowProgress = 0.0;
     double requiredWatts = 0.0;

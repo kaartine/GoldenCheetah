@@ -48,10 +48,10 @@ WorkoutGameHorizonSnapshot WorkoutGameHorizon::build(
     for (int index = 0; index <= sampleCount; ++index) {
         const double x = double(index) / double(sampleCount);
         result.farRidgeY.push_back(ridge(
-                x, seedPhase + scroll * 0.28, 0.305, 0.030, 0.014));
+                x, seedPhase + scroll * 0.28, 0.310, 0.055, 0.024));
         result.nearRidgeY.push_back(ridge(
                 x, seedPhase * 0.61 + scroll * 0.52,
-                0.355, 0.046, 0.021));
+                0.365, 0.085, 0.038));
     }
     result.ready = true;
     return result;

@@ -11,7 +11,11 @@
 #include "Train/WorkoutGameDiagnostics.h"
 #include "Train/WorkoutGameFeatureLab.h"
 #include "Train/WorkoutGameFeatureRuntime.h"
+#include "Train/WorkoutGameFeaturePrompt.h"
+#include "Train/WorkoutGameHorizon.h"
+#include "Train/WorkoutGameMesh.h"
 #include "Train/WorkoutGamePowerCueGeometry.h"
+#include "Train/WorkoutGameRoadProjection.h"
 
 #include <QApplication>
 #include <QColor>
@@ -25,6 +29,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace {
 
@@ -140,6 +145,20 @@ int changedPixels(const QImage &left, const QImage &right, int top)
         }
     }
     return changed;
+}
+
+int exactColorPixels(const QImage &image, const QSet<QRgb> &colors)
+{
+    int count = 0;
+    const QImage source = image.convertToFormat(QImage::Format_ARGB32);
+    for (int y = source.height() / 4; y < source.height(); ++y) {
+        const QRgb *line = reinterpret_cast<const QRgb *>(
+                source.constScanLine(y));
+        for (int x = 0; x < source.width(); ++x) {
+            if (colors.contains(line[x])) ++count;
+        }
+    }
+    return count;
 }
 
 }
@@ -323,14 +342,61 @@ private slots:
                     feature, WorkoutGameChallengeCue::CarrySpeed);
 
         QVERIFY(!bands.empty());
-        QVERIFY(bands.size() <= std::size_t(7));
+        QVERIFY(bands.size() <= std::size_t(5));
         for (const WorkoutGamePowerCueBand &band : bands) {
-            QVERIFY(band.startDistanceMeters >= 160.0);
+            QVERIFY(band.startDistanceMeters >= 163.0);
             QVERIFY(band.endDistanceMeters <= 170.4);
             QVERIFY(band.endDistanceMeters > band.startDistanceMeters);
             QVERIFY(band.halfWidthRatio > 0.0);
             QVERIFY(band.halfWidthRatio <= 0.9);
         }
+    }
+
+    void featurePromptStatesWhatToDoAndWhere()
+    {
+        WorkoutGamePowerProfileSnapshot profile;
+        profile.ready = true;
+        profile.cue.state = WorkoutGamePowerCueState::PushNow;
+        profile.cue.challengeCue = WorkoutGameChallengeCue::Jump;
+        profile.cue.readiness = 0.72;
+        WorkoutGameFeatureRuntimeSnapshot feature;
+        feature.ready = true;
+        feature.terrain = WorkoutGameTerrainKind::LogOver;
+        feature.phase = WorkoutGameFeaturePhase::Measure;
+        feature.distanceToObstacleMeters = 4.4;
+        feature.motion = WorkoutGameFeatureMotion::Jump;
+
+        const WorkoutGameFeaturePromptSnapshot pedal =
+                WorkoutGameFeaturePrompt::build(profile, feature);
+        QCOMPARE(pedal.instruction,
+                 WorkoutGameFeatureInstruction::PedalHard);
+        QCOMPARE(pedal.terrain, WorkoutGameTerrainKind::LogOver);
+        QCOMPARE(pedal.distanceMeters, 4.4);
+
+        profile.cue.readiness = 1.0;
+        const WorkoutGameFeaturePromptSnapshot ready =
+                WorkoutGameFeaturePrompt::build(profile, feature);
+        QCOMPARE(ready.instruction,
+                 WorkoutGameFeatureInstruction::Ready);
+
+        feature.phase = WorkoutGameFeaturePhase::Action;
+        const WorkoutGameFeaturePromptSnapshot takeoff =
+                WorkoutGameFeaturePrompt::build(profile, feature);
+        QCOMPARE(takeoff.instruction,
+                 WorkoutGameFeatureInstruction::Takeoff);
+    }
+
+    void horizonHasClearlyVisibleForestRelief()
+    {
+        const WorkoutGameHorizonSnapshot horizon =
+                WorkoutGameHorizon::build(441u, 250.0, 64);
+        QVERIFY(horizon.ready);
+        const auto far = std::minmax_element(
+                horizon.farRidgeY.begin(), horizon.farRidgeY.end());
+        const auto near = std::minmax_element(
+                horizon.nearRidgeY.begin(), horizon.nearRidgeY.end());
+        QVERIFY(*far.second - *far.first >= 0.09);
+        QVERIFY(*near.second - *near.first >= 0.14);
     }
 
     void climbUsesHudInsteadOfPaintingTheWholeRoadYellow()
@@ -443,7 +509,7 @@ private slots:
                     - timeline.startDistanceMeters;
             const double visualDistance = std::max(
                     timeline.startDistanceMeters,
-                    challengePiece->challenge.obstacleDistanceMeters - 8.0);
+                    challengePiece->challenge.obstacleDistanceMeters - 14.0);
             const double sectionProgress = std::clamp(
                     (visualDistance - timeline.startDistanceMeters)
                         / sectionLength,
@@ -469,12 +535,34 @@ private slots:
             frame.feature = featureRuntime.update(frame.simulation);
             frame.world.rider.distanceMeters =
                     frame.feature.visualDistanceMeters;
+            window.setCourse(course, 200.0);
+            QTest::qWait(110);
             window.setFrame(frame, 220.0,
                     course.sections[std::size_t(section)].targetWatts,
                     88, 150, 7);
             QTest::qWait(300);
             const QImage rendered = window.grabWindow();
             QVERIFY(!rendered.isNull());
+            QSet<QRgb> featureColors;
+            if (section == 0 || section == 2) {
+                featureColors.insert(qRgb(78, 47, 28));
+                featureColors.insert(qRgb(166, 96, 43));
+            } else if (section == 4) {
+                featureColors.insert(qRgb(67, 73, 68));
+                featureColors.insert(qRgb(145, 147, 130));
+            } else if (section == 6) {
+                featureColors.insert(qRgb(145, 105, 62));
+                featureColors.insert(qRgb(79, 57, 39));
+            } else {
+                featureColors.insert(qRgb(45, 47, 43));
+                featureColors.insert(qRgb(145, 147, 130));
+            }
+            const int visibleFeaturePixels = exactColorPixels(
+                    rendered, featureColors);
+            QVERIFY2(visibleFeaturePixels > 250,
+                     qPrintable(QStringLiteral(
+                         "only %1 visible obstacle pixels for section %2")
+                         .arg(visibleFeaturePixels).arg(section)));
             if (!prior.isNull()) {
                 const int featureChanges = changedPixels(prior, rendered, 180);
                 QVERIFY2(featureChanges > 900,
@@ -488,6 +576,134 @@ private slots:
             QVERIFY(rendered.save(output));
             prior = rendered;
         }
+    }
+
+    void featureMeshesProjectAboveTheTrailAtEightMeters()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        for (const WorkoutGameRoadPiece &piece : road.pieces) {
+            if (!piece.challenge.enabled) continue;
+            const double riderDistance =
+                    piece.challenge.obstacleDistanceMeters - 8.0;
+            const WorkoutGameRoadProjectionFrame projection =
+                    WorkoutGameRoadProjection::project(road, riderDistance);
+            QVERIFY(projection.ready);
+            WorkoutGameMeshInstance instance;
+            instance.mesh = WorkoutGameMeshLibrary::feature(
+                    piece.terrain, piece.difficulty);
+            instance.anchorDistanceMeters =
+                    piece.challenge.obstacleDistanceMeters;
+            instance.anchorToBaseSurface = true;
+            const std::vector<WorkoutGameProjectedMeshTriangle> triangles =
+                    WorkoutGameMeshProjector::project(instance, projection);
+            QVERIFY2(!triangles.empty(),
+                     qPrintable(QStringLiteral(
+                         "terrain %1 projected no visible triangles")
+                         .arg(int(piece.terrain))));
+            double top = std::numeric_limits<double>::max();
+            double bottom = std::numeric_limits<double>::lowest();
+            for (const WorkoutGameProjectedMeshTriangle &triangle : triangles) {
+                for (const WorkoutGameProjectedMeshVertex &vertex :
+                        triangle.vertices) {
+                    top = std::min(top, vertex.y);
+                    bottom = std::max(bottom, vertex.y);
+                }
+            }
+            QVERIFY2(bottom - top >= 4.0,
+                     qPrintable(QStringLiteral(
+                         "terrain %1 projected only %2 px high")
+                         .arg(int(piece.terrain)).arg(bottom - top)));
+            QVERIFY2(top < 720.0 && bottom > 0.0,
+                     qPrintable(QStringLiteral(
+                         "terrain %1 projected outside viewport: %2..%3")
+                         .arg(int(piece.terrain)).arg(top).arg(bottom)));
+        }
+    }
+
+    void completedJumpRendersAVisibleAirbornePose()
+    {
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        const int section = 6;
+        const auto piece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [section](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.sourceSectionIndex
+                                == std::size_t(section)
+                            && candidate.challenge.enabled;
+                });
+        QVERIFY(piece != road.pieces.end());
+        const WorkoutGameRoadTimelineSection &timeline =
+                road.timeline[std::size_t(section)];
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        WorkoutGameSimulationSnapshot simulation;
+        simulation.ready = true;
+        simulation.activeSection = section;
+        simulation.featureOutcome = WorkoutGameFeatureOutcome::Completed;
+        simulation.route = WorkoutGameRoute::MainLine;
+        simulation.challengeReadiness = 1.0;
+        simulation.speedKph = 20.0;
+        const double takeoff = piece->challenge.obstacleDistanceMeters - 0.9;
+        simulation.sectionProgress = std::clamp(
+                (takeoff + 0.1 - timeline.startDistanceMeters)
+                    / (timeline.endDistanceMeters
+                        - timeline.startDistanceMeters),
+                0.0, 1.0);
+        const WorkoutGameFeatureRuntimeSnapshot layout =
+                runtime.update(simulation);
+        const double apexDistance = layout.actionStartDistanceMeters
+                + 0.30 * (layout.actionEndDistanceMeters
+                          - layout.actionStartDistanceMeters);
+        simulation.sectionProgress = std::clamp(
+                (apexDistance - timeline.startDistanceMeters)
+                    / (timeline.endDistanceMeters
+                        - timeline.startDistanceMeters),
+                0.0, 1.0);
+        simulation.workoutTimeMs = course.sections[section].startMs
+                + std::int64_t(std::llround(
+                    course.sections[section].durationMs
+                        * simulation.sectionProgress));
+
+        WorkoutGameVisualSnapshot airborne;
+        airborne.simulation = simulation;
+        airborne.feature = runtime.update(simulation);
+        airborne.world.ready = true;
+        airborne.world.generation = 1;
+        airborne.world.terrain = WorkoutGameTerrainKind::Tabletop;
+        airborne.world.rider.distanceMeters = apexDistance;
+        airborne.world.speedMetersPerSecond = 20.0 / 3.6;
+        QVERIFY(airborne.feature.verticalOffsetMeters > 1.0);
+        WorkoutGameVisualSnapshot grounded = airborne;
+        grounded.feature.verticalOffsetMeters = 0.0;
+        grounded.feature.pitchDegrees = 0.0;
+
+        WorkoutGameSceneGraphWindow groundWindow;
+        groundWindow.resize(1280, 720);
+        groundWindow.setCourse(course, 200.0);
+        groundWindow.setFrame(grounded, 230.0, 230.0, 88, 150, 7);
+        groundWindow.show();
+        QTRY_VERIFY_WITH_TIMEOUT(groundWindow.isExposed(), 3000);
+        QTest::qWait(400);
+        const QImage groundImage = groundWindow.grabWindow();
+        groundWindow.hide();
+
+        WorkoutGameSceneGraphWindow airWindow;
+        airWindow.resize(1280, 720);
+        airWindow.setCourse(course, 200.0);
+        airWindow.setFrame(airborne, 230.0, 230.0, 88, 150, 7);
+        airWindow.show();
+        QTRY_VERIFY_WITH_TIMEOUT(airWindow.isExposed(), 3000);
+        QTest::qWait(400);
+        const QImage airImage = airWindow.grabWindow();
+        QVERIFY(!groundImage.isNull());
+        QVERIFY(!airImage.isNull());
+        QVERIFY(changedPixels(groundImage, airImage, 240) > 450);
+        QVERIFY(airImage.save(QDir(QDir::tempPath()).filePath(
+                QStringLiteral("workout-game-jump-apex.png"))));
     }
 
     void capturesSceneFramesDirectly()

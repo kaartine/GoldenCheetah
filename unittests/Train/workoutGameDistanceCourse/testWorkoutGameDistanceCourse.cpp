@@ -132,7 +132,7 @@ private slots:
         QVERIFY(course.sections[1].adjustableConnector);
     }
 
-    void thirtySecondAnaerobicEffortBecomesPunchyClimb()
+    void thirtySecondAnaerobicEffortBecomesJumpFeature()
     {
         const WorkoutGameDistanceCourse course =
                 WorkoutGameDistanceCourseBuilder::build({
@@ -142,9 +142,14 @@ private slots:
                 }, 190.0);
 
         QCOMPARE(course.status, WorkoutGameDistanceCourseStatus::Ready);
-        QCOMPARE(course.sections[1].feature, WorkoutGameFeature::Climb);
-        QCOMPARE(course.sections[1].terrain, WorkoutGameTerrainKind::Climb);
-        QVERIFY(course.sections[1].gradePercent >= 4.0);
+        QCOMPARE(course.sections[1].feature,
+                 WorkoutGameFeature::SprintJump);
+        QVERIFY(course.sections[1].terrain
+                    == WorkoutGameTerrainKind::BunnyHop
+                || course.sections[1].terrain
+                    == WorkoutGameTerrainKind::LogOver
+                || course.sections[1].terrain
+                    == WorkoutGameTerrainKind::Tabletop);
     }
 
     void targetPowerReplaysCloseToNominalDuration()

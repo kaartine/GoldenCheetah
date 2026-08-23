@@ -49,10 +49,13 @@ struct WorkoutGameFeatureRuntimeSnapshot
     double decisionDistanceMeters = 0.0;
     double obstacleDistanceMeters = 0.0;
     double physicalTakeoffDistanceMeters = 0.0;
+    double actionStartDistanceMeters = 0.0;
+    double actionEndDistanceMeters = 0.0;
     double distanceToObstacleMeters = 0.0;
     double readiness = 0.0;
     double lateralOffsetMeters = 0.0;
     double verticalOffsetMeters = 0.0;
+    double flightDurationSeconds = 0.0;
     double pitchDegrees = 0.0;
     double vibration = 0.0;
     double landingImpact = 0.0;
@@ -77,6 +80,7 @@ private:
         WorkoutGameTerrainKind terrain = WorkoutGameTerrainKind::SmoothTrail;
         double startDistanceMeters = 0.0;
         double endDistanceMeters = 0.0;
+        std::int64_t durationMs = 0;
         std::size_t challengePieceIndex =
                 std::numeric_limits<std::size_t>::max();
     };

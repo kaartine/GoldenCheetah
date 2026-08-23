@@ -72,6 +72,20 @@ double jumpHeight(WorkoutGameTerrainKind terrain)
     return terrain == WorkoutGameTerrainKind::Tabletop ? 1.35 : 0.72;
 }
 
+double jumpFlightDurationSeconds(
+        WorkoutGameTerrainKind terrain,
+        double difficulty,
+        double speedKph)
+{
+    const double challenge = std::clamp(difficulty, 0.0, 1.0);
+    const double speedBonus = std::clamp(
+            (speedKph - 25.0) / 20.0, 0.0, 1.0);
+    if (terrain == WorkoutGameTerrainKind::Tabletop) {
+        return 1.7 + 0.8 * challenge + 2.2 * speedBonus;
+    }
+    return 0.9 + 0.5 * challenge + 0.4 * speedBonus;
+}
+
 }
 
 bool WorkoutGameFeatureRuntime::configure(
@@ -101,6 +115,13 @@ bool WorkoutGameFeatureRuntime::configure(
         layout.endDistanceMeters = piece.startDistanceMeters + piece.lengthMeters;
         if (piece.challenge.enabled) {
             layout.challengePieceIndex = pieceIndex;
+        }
+    }
+    for (const WorkoutGameRoadTimelineSection &timeline :
+            configuredCourse.timeline) {
+        if (timeline.sourceSectionIndex < sections.size()) {
+            sections[timeline.sourceSectionIndex].durationMs =
+                    timeline.durationMs;
         }
     }
     return true;
@@ -189,13 +210,30 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
         const WorkoutGameFeatureGeometryProfile geometry =
                 WorkoutGameFeatureGeometry::profile(
                     piece->terrain, piece->difficulty);
+        const double sectionLengthMeters = std::max(
+                0.01, layout.endDistanceMeters - layout.startDistanceMeters);
+        const double sectionSeconds = std::max(
+                0.001, double(layout.durationMs) / 1000.0);
+        const double timelineMetersPerSecond = layout.durationMs > 0
+                ? sectionLengthMeters / sectionSeconds
+                : std::max(3.0, simulation.speedKph / 3.6);
+        const double requestedFlightSeconds = jumpFlightDurationSeconds(
+                piece->terrain, piece->difficulty,
+                std::max(0.0, simulation.speedKph));
         actionStart = result.physicalTakeoffDistanceMeters;
         actionEnd = std::min(
                 layout.endDistanceMeters,
-                std::max(actionStart + 5.5,
+                std::max({actionStart + 5.5,
                          result.obstacleDistanceMeters
-                            + geometry.endMeters + 1.5));
+                            + geometry.endMeters + 1.5,
+                         actionStart + timelineMetersPerSecond
+                            * requestedFlightSeconds}));
+        result.flightDurationSeconds = std::clamp(
+                (actionEnd - actionStart) / timelineMetersPerSecond,
+                0.0, 5.0);
     }
+    result.actionStartDistanceMeters = actionStart;
+    result.actionEndDistanceMeters = actionEnd;
     const double recoveryEnd = layout.endDistanceMeters;
     if (result.visualDistanceMeters < piece->challenge.prepareDistanceMeters) {
         result.phase = WorkoutGameFeaturePhase::Approach;

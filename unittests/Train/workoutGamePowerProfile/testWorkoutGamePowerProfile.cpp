@@ -70,6 +70,8 @@ private slots:
                 WorkoutGamePowerProfile::build(
                     course, simulation, 210.0, 80.0);
         QCOMPARE(push.cue.state, WorkoutGamePowerCueState::PushNow);
+        QCOMPARE(push.cue.challengeCue, WorkoutGameChallengeCue::Jump);
+        QCOMPARE(push.cue.terrain, WorkoutGameTerrainKind::LogOver);
         QVERIFY(push.cue.requiredWatts > 190.0);
         QCOMPARE(push.cue.actualWatts, 210.0);
         QCOMPARE(push.cue.actualCadenceRpm, 80.0);

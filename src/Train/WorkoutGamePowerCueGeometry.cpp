@@ -17,9 +17,9 @@ namespace {
 double leadDistance(WorkoutGameChallengeCue cue)
 {
     switch (cue) {
-    case WorkoutGameChallengeCue::Jump: return 7.0;
-    case WorkoutGameChallengeCue::CarrySpeed: return 10.0;
-    case WorkoutGameChallengeCue::HoldLine: return 8.0;
+    case WorkoutGameChallengeCue::Jump: return 5.5;
+    case WorkoutGameChallengeCue::CarrySpeed: return 7.0;
+    case WorkoutGameChallengeCue::HoldLine: return 6.0;
     case WorkoutGameChallengeCue::Climb:
     case WorkoutGameChallengeCue::None:
         return 0.0;

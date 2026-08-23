@@ -27,6 +27,7 @@ bool validConfig(const WorkoutGameRoadProjectionConfig &config)
             && std::isfinite(config.cameraHeightMeters)
             && (std::isfinite(config.cameraElevationMeters)
                 || std::isnan(config.cameraElevationMeters))
+            && std::isfinite(config.verticalExaggeration)
             && std::isfinite(config.fieldOfViewDegrees)
             && std::isfinite(config.nearDistanceMeters)
             && std::isfinite(config.visibleDistanceMeters)
@@ -35,6 +36,8 @@ bool validConfig(const WorkoutGameRoadProjectionConfig &config)
             && config.horizonRatio > 0.05
             && config.horizonRatio < 0.8
             && config.cameraHeightMeters > 0.0
+            && config.verticalExaggeration >= 1.0
+            && config.verticalExaggeration <= 2.0
             && config.fieldOfViewDegrees > 20.0
             && config.fieldOfViewDegrees < 140.0
             && config.nearDistanceMeters > 0.0
@@ -127,7 +130,8 @@ WorkoutGameRoadProjectionFrame WorkoutGameRoadProjection::project(
                 + focalLength * localX / localZ;
         slice.surfaceElevationMeters = sample.surfaceElevationMeters();
         slice.centerY = horizonY - focalLength
-                * (slice.surfaceElevationMeters - cameraElevation) / localZ;
+                * (slice.surfaceElevationMeters - cameraElevation)
+                * config.verticalExaggeration / localZ;
         slice.halfWidthPixels = std::clamp(
                 focalLength * sample.center.halfWidthMeters / localZ,
                 0.25,
@@ -150,6 +154,7 @@ WorkoutGameRoadProjectionFrame WorkoutGameRoadProjection::project(
     result.riderScreenX = config.viewportWidth * 0.5;
     result.riderScreenY = config.viewportHeight * 0.82;
     result.renderedGradePercent = rider.center.gradePercent;
+    result.verticalExaggeration = config.verticalExaggeration;
     if (result.ready) {
         result.visibleElevationChangeMeters =
                 result.slices.front().surfaceElevationMeters
@@ -194,8 +199,9 @@ WorkoutGameRoadProjectedPoint WorkoutGameRoadProjection::projectPoint(
                 far.pixelsPerMeter, near.pixelsPerMeter);
         const double surfaceOffset = interpolate(
                 far.surfaceOffsetMeters, near.surfaceOffsetMeters);
-        const double relativeElevation = relativeToBaseSurface
-                ? elevationMeters - surfaceOffset : elevationMeters;
+        const double relativeElevation = (relativeToBaseSurface
+                ? elevationMeters - surfaceOffset : elevationMeters)
+                * frame.verticalExaggeration;
         result.ready = true;
         result.x = centerX + lateralMeters * scale;
         result.y = centerY - relativeElevation * scale;

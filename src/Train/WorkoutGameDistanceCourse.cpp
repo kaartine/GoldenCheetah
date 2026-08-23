@@ -127,6 +127,7 @@ WorkoutGameSection adaptSection(
         result.gravityAssisted = true;
         result.challengeCount = 0;
     } else if (!first && !last
+            && result.feature != WorkoutGameFeature::SprintJump
             && interval.durationMs > 20000
             && interval.durationMs <= parameters.shortClimbMaximumDurationMs
             && intensity >= parameters.shortClimbIntensity) {

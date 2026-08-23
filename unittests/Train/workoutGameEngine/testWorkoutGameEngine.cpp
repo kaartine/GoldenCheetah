@@ -288,6 +288,50 @@ private slots:
                      .arg(maximumAirHeightMeters)));
         QVERIFY(airborneFrames >= 8);
     }
+
+    void generatedThirtySecondEffortProducesAVisibleJump()
+    {
+        constexpr double FtpWatts = 190.0;
+        const WorkoutGameCourse course = WorkoutGameCourseBuilder::build({
+            {0, 60000, 140.0, 140.0},
+            {60000, 30000, 250.0, 250.0},
+            {90000, 60000, 120.0, 120.0}
+        }, FtpWatts, 1234u);
+        QCOMPARE(course.sections[1].feature,
+                 WorkoutGameFeature::SprintJump);
+
+        WorkoutGameEngine engine;
+        QVERIFY(engine.configure(course, FtpWatts, false));
+        double maximumAirHeightMeters = 0.0;
+        int airborneFrames = 0;
+        for (std::int64_t timeMs = 0; timeMs < course.durationMs;
+             timeMs += 20) {
+            const WorkoutGameSection &section = timeMs < 60000
+                    ? course.sections[0]
+                    : timeMs < 90000
+                    ? course.sections[1] : course.sections[2];
+            WorkoutGameEngineInput input;
+            input.simulation.workoutTimeMs = timeMs;
+            input.simulation.actualWatts = section.targetWatts * 1.2;
+            input.simulation.targetWatts = section.targetWatts;
+            input.simulation.cadenceRpm = 90.0;
+            input.simulation.authoritativeSpeedKph = 20.0;
+            const WorkoutGameEngineFrame frame = engine.update(
+                    input, 100000 + timeMs);
+            if (frame.visual.simulation.activeSection == 1) {
+                maximumAirHeightMeters = std::max(
+                        maximumAirHeightMeters,
+                        frame.visual.world.rider.airHeightMeters());
+                airborneFrames += frame.visual.world.rider.airborne ? 1 : 0;
+            }
+        }
+
+        QVERIFY2(maximumAirHeightMeters >= 0.20,
+                 qPrintable(QStringLiteral(
+                     "generated feature reached only %1 m air height")
+                     .arg(maximumAirHeightMeters)));
+        QVERIFY(airborneFrames >= 8);
+    }
 };
 
 QTEST_GUILESS_MAIN(TestWorkoutGameEngine)

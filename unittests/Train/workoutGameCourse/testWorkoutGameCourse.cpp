@@ -128,6 +128,22 @@ private slots:
                  WorkoutGameTerrainKind::SmoothTrail);
     }
 
+    void thirtySecondHardEffortBecomesAJumpFeature()
+    {
+        const WorkoutGameCourse course = WorkoutGameCourseBuilder::build({
+            interval(0, 60000, 140.0, 140.0),
+            interval(60000, 30000, 250.0, 250.0),
+            interval(90000, 60000, 120.0, 120.0)
+        }, 190.0, 1234u);
+
+        QCOMPARE(course.status, WorkoutGameCourseStatus::Ready);
+        QCOMPARE(course.sections[1].feature,
+                 WorkoutGameFeature::SprintJump);
+        QCOMPARE(course.sections[1].terrain,
+                 WorkoutGameTerrainKind::BunnyHop);
+        QCOMPARE(course.sections[1].challengeCount, 1);
+    }
+
     void recoveryAndCooldownAreGravityAssisted()
     {
         const WorkoutGameCourse course = WorkoutGameCourseBuilder::build({

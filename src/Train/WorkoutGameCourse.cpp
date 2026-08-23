@@ -73,7 +73,7 @@ WorkoutGameFeature classify(
         return WorkoutGameFeature::CooldownDescent;
     }
     if (intensity <= 0.6) return WorkoutGameFeature::RecoveryDescent;
-    if (interval.durationMs <= 20000 && intensity >= 1.1) {
+    if (interval.durationMs <= 45000 && intensity >= 1.1) {
         return WorkoutGameFeature::SprintJump;
     }
     if (rise >= 0.15

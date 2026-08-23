@@ -23,6 +23,7 @@ struct WorkoutGameRoadProjectionConfig
     double horizonRatio = 0.34;
     double cameraHeightMeters = 1.55;
     double cameraElevationMeters = std::numeric_limits<double>::quiet_NaN();
+    double verticalExaggeration = 1.35;
     double fieldOfViewDegrees = 62.0;
     double nearDistanceMeters = 1.4;
     double visibleDistanceMeters = 105.0;
@@ -63,6 +64,7 @@ struct WorkoutGameRoadProjectionFrame
     double riderScreenY = 0.0;
     double renderedGradePercent = 0.0;
     double visibleElevationChangeMeters = 0.0;
+    double verticalExaggeration = 1.0;
     std::vector<WorkoutGameRoadProjectedSlice> slices;
 };
 

@@ -80,6 +80,8 @@ WorkoutGamePowerProfileSnapshot WorkoutGamePowerProfile::build(
                 ? simulation.challenge
                 : WorkoutGameFeatureChallenge::profile(section);
         if (challenge.enabled) {
+            result.cue.challengeCue = challenge.cue;
+            result.cue.terrain = section.terrain;
             const double progress = std::clamp(
                     simulation.sectionProgress, 0.0, 1.0);
             WorkoutGameFeatureChallengeMetrics metrics;
