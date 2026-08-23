@@ -51,7 +51,7 @@ struct WorkoutGameFeatureRuntimeSnapshot
     double physicalTakeoffDistanceMeters = 0.0;
     double distanceToObstacleMeters = 0.0;
     double readiness = 0.0;
-    double lateralOffset = 0.0;
+    double lateralOffsetMeters = 0.0;
     double verticalOffsetMeters = 0.0;
     double pitchDegrees = 0.0;
     double vibration = 0.0;

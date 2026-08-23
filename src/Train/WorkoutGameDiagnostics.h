@@ -38,6 +38,7 @@ struct WorkoutGameDiagnosticsInput
     double surfaceElevationMeters = 0.0;
     double riderClearanceMeters = 0.0;
     double airHeightMeters = 0.0;
+    double lateralOffsetMeters = 0.0;
     double visibleElevationChangeMeters = 0.0;
     double renderedGradePercent = 0.0;
 };

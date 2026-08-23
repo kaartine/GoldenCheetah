@@ -182,6 +182,36 @@ private slots:
         QVERIFY(result.challengeReadiness < 1.0);
     }
 
+    void activeChallengeExposesMeasuredInputsAndLimitingRequirement()
+    {
+        WorkoutGameSimulation simulation;
+        QVERIFY(simulation.configure(
+                challengeCourse(WorkoutGameTerrainKind::Tabletop), 200.0));
+
+        WorkoutGameSimulationSnapshot result;
+        for (std::int64_t time = 0; time <= 6800; time += 100) {
+            WorkoutGameSimulationInput input = sample(
+                    time, 190.0, 200.0, 35.0);
+            input.authoritativeSpeedKph = 18.0;
+            result = simulation.update(input);
+        }
+
+        QVERIFY(result.challengeMeasurementActive);
+        QVERIFY(std::abs(result.challengeMetrics.averageActualWatts
+                         - 190.0) < 1e-9);
+        QVERIFY(std::abs(result.challengeMetrics.averageTargetWatts
+                         - 200.0) < 1e-9);
+        QVERIFY(std::abs(result.challengeMetrics.averageCadenceRpm
+                         - 35.0) < 1e-9);
+        QVERIFY(std::abs(result.challengeMetrics.averageSpeedKph
+                         - 18.0) < 1e-9);
+        QCOMPARE(result.challengeAssessment.effortReadiness, 1.0);
+        QVERIFY(std::abs(result.challengeAssessment.cadenceReadiness
+                         - 0.5) < 1e-9);
+        QCOMPARE(result.challengeAssessment.speedReadiness, 1.0);
+        QVERIFY(std::abs(result.challengeReadiness - 0.5) < 1e-9);
+    }
+
     void jumpChallengeMeasuresTheTimedApproachWindow()
     {
         const WorkoutGameCourse course = challengeCourse(

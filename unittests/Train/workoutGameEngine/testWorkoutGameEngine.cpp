@@ -258,6 +258,36 @@ private slots:
         QCOMPARE(frame.visual.feature.sourceSectionIndex,
                  int(expected.sourceSectionIndex));
     }
+
+    void completedLogFeatureProducesAVisibleAirborneArc()
+    {
+        constexpr double FtpWatts = 200.0;
+        WorkoutGameEngine engine;
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(FtpWatts);
+        QVERIFY(engine.configure(course, FtpWatts, true));
+
+        double maximumAirHeightMeters = 0.0;
+        int airborneFrames = 0;
+        for (std::int64_t timeMs = 0;
+             timeMs < course.sections.front().durationMs;
+             timeMs += 20) {
+            WorkoutGameEngineInput input;
+            input.simulation = WorkoutGameFeatureLab::input(
+                    course, timeMs, WorkoutGameFeatureLabScenario::Pass);
+            const WorkoutGameEngineFrame frame = engine.update(
+                    input, 100000 + timeMs);
+            maximumAirHeightMeters = std::max(
+                    maximumAirHeightMeters,
+                    frame.visual.world.rider.airHeightMeters());
+            airborneFrames += frame.visual.world.rider.airborne ? 1 : 0;
+        }
+
+        QVERIFY2(maximumAirHeightMeters >= 0.20,
+                 qPrintable(QStringLiteral(
+                     "feature reached only %1 m air height")
+                     .arg(maximumAirHeightMeters)));
+        QVERIFY(airborneFrames >= 8);
+    }
 };
 
 QTEST_GUILESS_MAIN(TestWorkoutGameEngine)

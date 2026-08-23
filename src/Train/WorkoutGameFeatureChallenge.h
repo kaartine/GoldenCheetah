@@ -39,6 +39,8 @@ struct WorkoutGameFeatureChallengeProfile
 
 struct WorkoutGameFeatureChallengeMetrics
 {
+    double averageActualWatts = 0.0;
+    double averageTargetWatts = 0.0;
     double averageEffortRatio = 0.0;
     double averageCadenceRpm = 0.0;
     double averageSpeedKph = 0.0;
@@ -48,6 +50,10 @@ struct WorkoutGameFeatureChallengeMetrics
 struct WorkoutGameFeatureChallengeAssessment
 {
     double readiness = 0.0;
+    double effortReadiness = 0.0;
+    double cadenceReadiness = 0.0;
+    double speedReadiness = 0.0;
+    double adherenceReadiness = 0.0;
     bool completed = false;
 };
 

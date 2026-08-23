@@ -86,11 +86,31 @@ WorkoutGameVisualSnapshot featureFrame(
         WorkoutGameFeatureOutcome outcome,
         WorkoutGameRoute route)
 {
+    const WorkoutGameCourse course = sampleCourse();
+    const WorkoutGameRoadCourse road =
+            WorkoutGameRoadCourseBuilder::build(course, 200.0);
+    const auto piece = std::find_if(
+            road.pieces.begin(), road.pieces.end(),
+            [](const WorkoutGameRoadPiece &candidate) {
+                return candidate.sourceSectionIndex == 2u
+                        && candidate.challenge.enabled;
+            });
     WorkoutGameVisualSnapshot frame;
     frame.simulation.ready = true;
-    frame.simulation.workoutTimeMs = 88200;
-    frame.simulation.courseProgress = 0.94;
-    frame.simulation.sectionProgress = 0.94;
+    if (piece == road.pieces.end()) return frame;
+    const WorkoutGameRoadTimelineSection &timeline = road.timeline[2];
+    const double branchMiddle =
+            (piece->challenge.decisionDistanceMeters
+             + piece->challenge.bypassEndDistanceMeters) * 0.5;
+    const double sectionProgress = (branchMiddle
+            - timeline.startDistanceMeters)
+            / (timeline.endDistanceMeters - timeline.startDistanceMeters);
+    frame.simulation.workoutTimeMs = course.sections[2].startMs
+            + std::int64_t(std::llround(
+                sectionProgress * course.sections[2].durationMs));
+    frame.simulation.courseProgress = double(frame.simulation.workoutTimeMs)
+            / double(course.durationMs);
+    frame.simulation.sectionProgress = sectionProgress;
     frame.simulation.speedKph = 20.0;
     frame.simulation.activeSection = 2;
     frame.simulation.featureOutcome = outcome;
@@ -103,8 +123,7 @@ WorkoutGameVisualSnapshot featureFrame(
     frame.world.rider.distanceMeters = 1.0;
     frame.world.speedMetersPerSecond = 5.5;
     WorkoutGameFeatureRuntime runtime;
-    if (!runtime.configure(WorkoutGameRoadCourseBuilder::build(
-            sampleCourse(), 200.0))) {
+    if (!runtime.configure(road)) {
         return frame;
     }
     frame.feature = runtime.update(frame.simulation);

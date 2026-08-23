@@ -33,6 +33,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <utility>
 #include <vector>
@@ -348,9 +349,9 @@ void buildRoadGeometry(
     const float left = float(nearest.centerX - nearest.halfWidthPixels);
     const float right = float(nearest.centerX + nearest.halfWidthPixels);
     const float bottomLeft = float(std::max(
-            0.0, nearest.centerX - nearest.halfWidthPixels * 1.75));
+            0.0, nearest.centerX - nearest.halfWidthPixels * 1.30));
     const float bottomRight = float(std::min(
-            viewportWidth, nearest.centerX + nearest.halfWidthPixels * 1.75));
+            viewportWidth, nearest.centerX + nearest.halfWidthPixels * 1.30));
     const QColor grass = gradeTint(
             groundColor(nearest.terrain, false), nearest.gradePercent);
     appendQuad(geometry,
@@ -366,6 +367,114 @@ void buildRoadGeometry(
                bottomLeft, float(viewportHeight), bottomRight,
                roadColor(nearest.terrain, false),
                nearest.depthMeters, 0.0);
+}
+
+std::uint32_t forestHash(std::uint32_t value)
+{
+    value ^= value >> 16;
+    value *= 0x7feb352du;
+    value ^= value >> 15;
+    value *= 0x846ca68bu;
+    return value ^ (value >> 16);
+}
+
+double forestRandom(std::uint32_t value)
+{
+    return double(forestHash(value) & 0xffffu) / 65535.0;
+}
+
+bool projectedSliceAt(
+        const WorkoutGameRoadProjectionFrame &projection,
+        double worldDistanceMeters,
+        WorkoutGameRoadProjectedSlice &result);
+
+void buildForestGeometry(
+        const WorkoutGameRoadProjectionFrame &projection,
+        std::uint32_t seed,
+        std::vector<SceneTriangle> &geometry)
+{
+    if (projection.slices.size() < 2u) return;
+    constexpr double SpacingMeters = 6.5;
+    const double nearDistance =
+            projection.slices.back().worldDistanceMeters + 2.0;
+    const double farDistance = projection.slices.front().worldDistanceMeters;
+    const std::int64_t first = std::int64_t(
+            std::ceil(nearDistance / SpacingMeters));
+    for (std::int64_t marker = first;; ++marker) {
+        const double distance = double(marker) * SpacingMeters;
+        if (distance > farDistance) break;
+        WorkoutGameRoadProjectedSlice slice;
+        if (!projectedSliceAt(projection, distance, slice)) continue;
+        for (int side = 0; side < 2; ++side) {
+            const std::uint32_t key = seed
+                    ^ std::uint32_t(marker * 131 + side * 977);
+            if (forestRandom(key + 17u) < 0.16) continue;
+            const double direction = side == 0 ? -1.0 : 1.0;
+            const double lateral = direction
+                    * (slice.halfWidthMeters + 1.2
+                       + forestRandom(key + 23u) * 3.2);
+            const double height = 2.4 + forestRandom(key + 31u) * 2.4;
+            const double crownWidth = 0.75
+                    + forestRandom(key + 47u) * 0.65;
+            const double trunkWidth = 0.10 + height * 0.025;
+            const double baseElevation = slice.surfaceOffsetMeters;
+            const auto point = [&](double right, double up) {
+                return WorkoutGameRoadProjection::projectPoint(
+                        projection, distance, right,
+                        baseElevation + up, true);
+            };
+            const WorkoutGameRoadProjectedPoint trunkLeft = point(
+                    lateral - trunkWidth, 0.0);
+            const WorkoutGameRoadProjectedPoint trunkRight = point(
+                    lateral + trunkWidth, 0.0);
+            const WorkoutGameRoadProjectedPoint trunkTopLeft = point(
+                    lateral - trunkWidth, height * 0.58);
+            const WorkoutGameRoadProjectedPoint trunkTopRight = point(
+                    lateral + trunkWidth, height * 0.58);
+            const WorkoutGameRoadProjectedPoint crownLeft = point(
+                    lateral - crownWidth, height * 0.32);
+            const WorkoutGameRoadProjectedPoint crownRight = point(
+                    lateral + crownWidth, height * 0.32);
+            const WorkoutGameRoadProjectedPoint crownMiddleLeft = point(
+                    lateral - crownWidth * 0.72, height * 0.58);
+            const WorkoutGameRoadProjectedPoint crownMiddleRight = point(
+                    lateral + crownWidth * 0.72, height * 0.58);
+            const WorkoutGameRoadProjectedPoint crownTop = point(
+                    lateral, height);
+            if (!trunkLeft.ready || !trunkRight.ready
+                    || !trunkTopLeft.ready || !trunkTopRight.ready
+                    || !crownLeft.ready || !crownRight.ready
+                    || !crownMiddleLeft.ready || !crownMiddleRight.ready
+                    || !crownTop.ready) {
+                continue;
+            }
+            const QColor trunk(76, 52, 35);
+            const QColor lowerCrown = side == 0
+                    ? QColor(31, 91, 57) : QColor(37, 105, 61);
+            const QColor upperCrown = side == 0
+                    ? QColor(43, 119, 67) : QColor(49, 131, 72);
+            appendTriangle(geometry,
+                    float(trunkLeft.x), float(trunkLeft.y),
+                    float(trunkRight.x), float(trunkRight.y),
+                    float(trunkTopRight.x), float(trunkTopRight.y),
+                    trunk, slice.depthMeters);
+            appendTriangle(geometry,
+                    float(trunkLeft.x), float(trunkLeft.y),
+                    float(trunkTopRight.x), float(trunkTopRight.y),
+                    float(trunkTopLeft.x), float(trunkTopLeft.y),
+                    trunk, slice.depthMeters);
+            appendTriangle(geometry,
+                    float(crownLeft.x), float(crownLeft.y),
+                    float(crownRight.x), float(crownRight.y),
+                    float(crownTop.x), float(crownTop.y),
+                    lowerCrown, slice.depthMeters - 0.02);
+            appendTriangle(geometry,
+                    float(crownMiddleLeft.x), float(crownMiddleLeft.y),
+                    float(crownMiddleRight.x), float(crownMiddleRight.y),
+                    float(crownTop.x), float(crownTop.y),
+                    upperCrown, slice.depthMeters - 0.03);
+        }
+    }
 }
 
 void appendRidgeLayer(
@@ -597,27 +706,16 @@ void buildFeatureGeometry(
         if (!piece.challenge.enabled) continue;
         const double obstacle = piece.challenge.obstacleDistanceMeters;
         const double branchStart = piece.challenge.decisionDistanceMeters;
-        double sectionEnd = piece.startDistanceMeters + piece.lengthMeters;
-        double sectionStart = piece.startDistanceMeters;
-        if (piece.sourceSectionIndex < course.timeline.size()) {
-            sectionStart = course.timeline[piece.sourceSectionIndex]
-                    .startDistanceMeters;
-            sectionEnd = course.timeline[piece.sourceSectionIndex]
-                    .endDistanceMeters;
-        }
-        const double branchEnd = std::min(
-                sectionEnd,
-                std::max(branchStart + 1.0,
-                         sectionStart + (sectionEnd - sectionStart) * 0.96));
+        const double branchEnd = std::max(
+                branchStart + 0.01,
+                piece.challenge.bypassEndDistanceMeters);
         const double branchLength = std::max(1.0, branchEnd - branchStart);
         const bool selectedBypass = active.ready
                 && active.sourceSectionIndex == int(piece.sourceSectionIndex)
                 && active.route == WorkoutGameRoute::SafeBypass;
-        const double direction = (piece.sourceSectionIndex & 1u) == 0u
-                ? -1.0 : 1.0;
         WorkoutGameMeshInstance bypass;
         bypass.mesh = WorkoutGameMeshLibrary::bypassRibbon(
-                branchLength, direction * 2.2, 0.50);
+                branchLength, piece.challenge.bypassLateralMeters, 0.50);
         bypass.anchorDistanceMeters = branchStart;
         bypass.anchorToBaseSurface = true;
         appendProjectedMesh(bypass, projection, selectedBypass, geometry);
@@ -752,7 +850,7 @@ void WorkoutGameSceneGraphItem::rebuildHud()
 {
     lastHudRebuildMs = WorkoutGameClock::monotonicMilliseconds();
     constexpr int StatsHeight = 74;
-    constexpr int ProfileHeight = 62;
+    constexpr int ProfileHeight = 76;
     constexpr int BaseHudHeight = StatsHeight + ProfileHeight + 4;
     const int hudHeight = diagnosticsEnabled ? BaseHudHeight + 78 : BaseHudHeight;
     hudImage = QImage(1240, hudHeight,
@@ -773,7 +871,7 @@ void WorkoutGameSceneGraphItem::rebuildHud()
     struct Stat { QString label; QString value; };
     const std::vector<Stat> stats = {
         {tr("POWER"), QStringLiteral("%1 W").arg(int(std::lround(watts)))},
-        {tr("TARGET"), QStringLiteral("%1 W").arg(int(std::lround(targetWatts)))},
+        {tr("WORKOUT"), QStringLiteral("%1 W").arg(int(std::lround(targetWatts)))},
         {tr("HEART"), QStringLiteral("%1 bpm").arg(heartRate)},
         {tr("CADENCE"), QStringLiteral("%1 rpm").arg(cadenceRpm)},
         {tr("SPEED"), QStringLiteral("%1 km/h").arg(
@@ -799,7 +897,7 @@ void WorkoutGameSceneGraphItem::rebuildHud()
     }
     const WorkoutGamePowerProfileSnapshot profile =
             WorkoutGamePowerProfile::build(
-                currentCourse, currentFrame.simulation, watts);
+                currentCourse, currentFrame.simulation, watts, cadenceRpm);
     const QRect profileArea(8, StatsHeight + 3, 930, ProfileHeight - 9);
     painter.fillRect(profileArea, QColor(7, 13, 14, 238));
     if (profile.ready) {
@@ -852,8 +950,7 @@ void WorkoutGameSceneGraphItem::rebuildHud()
             cueColor = QColor(242, 190, 67);
             break;
         case WorkoutGamePowerCueState::PushNow:
-            cueText = tr("PUSH NOW >= %1 W").arg(
-                    int(std::lround(profile.cue.requiredWatts)));
+            cueText = tr("PUSH NOW");
             cueColor = QColor(250, 231, 91);
             break;
         case WorkoutGamePowerCueState::Committed:
@@ -869,11 +966,71 @@ void WorkoutGameSceneGraphItem::rebuildHud()
         }
     }
     QFont cueFont = labelFont;
-    cueFont.setPixelSize(17);
+    cueFont.setPixelSize(15);
     painter.setFont(cueFont);
     painter.setPen(cueColor);
-    painter.drawText(cueArea.adjusted(8, 4, -8, -19),
+    painter.drawText(cueArea.adjusted(8, 2, -8, -38),
                      Qt::AlignCenter, cueText);
+
+    const QColor readyColor(99, 207, 136);
+    const QColor missingColor(255, 116, 96);
+    const QColor unusedColor(112, 137, 127);
+    const auto requirementColor = [&](bool required, double readiness) {
+        if (!required) return unusedColor;
+        return readiness >= 1.0 - 1e-9 ? readyColor : missingColor;
+    };
+    const QString powerText = profile.cue.powerRequired
+            ? QStringLiteral("W %1/%2")
+                .arg(int(std::lround(profile.cue.actualWatts)))
+                .arg(int(std::lround(profile.cue.requiredWatts)))
+            : QStringLiteral("W --");
+    const QString cadenceText = profile.cue.cadenceRequired
+            ? QStringLiteral("RPM %1/%2")
+                .arg(int(std::lround(profile.cue.actualCadenceRpm)))
+                .arg(int(std::lround(profile.cue.requiredCadenceRpm)))
+            : QStringLiteral("RPM --");
+    QString speedText = QStringLiteral("KM/H --");
+    if (profile.cue.speedRequired) {
+        const int actualSpeed = int(std::lround(profile.cue.actualSpeedKph));
+        if (profile.cue.requiredSpeedKph > 0.0
+                && profile.cue.maximumSpeedKph > 0.0) {
+            speedText = QStringLiteral("KM/H %1/%2-%3")
+                    .arg(actualSpeed)
+                    .arg(int(std::lround(profile.cue.requiredSpeedKph)))
+                    .arg(int(std::lround(profile.cue.maximumSpeedKph)));
+        } else if (profile.cue.maximumSpeedKph > 0.0) {
+            speedText = QStringLiteral("KM/H %1/<%2")
+                    .arg(actualSpeed)
+                    .arg(int(std::lround(profile.cue.maximumSpeedKph)));
+        } else {
+            speedText = QStringLiteral("KM/H %1/%2")
+                    .arg(actualSpeed)
+                    .arg(int(std::lround(profile.cue.requiredSpeedKph)));
+        }
+    }
+    QFont requirementFont = labelFont;
+    requirementFont.setPixelSize(10);
+    painter.setFont(requirementFont);
+    const int requirementTop = cueArea.top() + 29;
+    const int requirementWidth = cueArea.width() / 3;
+    const std::array<QString, 3> requirementTexts = {
+        powerText, cadenceText, speedText
+    };
+    const std::array<QColor, 3> requirementColors = {
+        requirementColor(profile.cue.powerRequired,
+                         profile.cue.powerReadiness),
+        requirementColor(profile.cue.cadenceRequired,
+                         profile.cue.cadenceReadiness),
+        requirementColor(profile.cue.speedRequired,
+                         profile.cue.speedReadiness)
+    };
+    for (int index = 0; index < 3; ++index) {
+        painter.setPen(requirementColors[std::size_t(index)]);
+        painter.drawText(
+                QRect(cueArea.left() + index * requirementWidth,
+                      requirementTop, requirementWidth, 18),
+                Qt::AlignCenter, requirementTexts[std::size_t(index)]);
+    }
     const int readinessWidth = int((cueArea.width() - 16)
             * std::clamp(profile.cue.readiness, 0.0, 1.0));
     painter.fillRect(cueArea.left() + 8, cueArea.bottom() - 10,
@@ -924,13 +1081,14 @@ void WorkoutGameSceneGraphItem::rebuildHud()
                 Qt::AlignLeft | Qt::AlignVCenter,
                 QStringLiteral(
                     "GRADE %1%  VIEW DZ %2 m  SURFACE %3 m  RIDER %4 m  "
-                    "CLEAR %5 m  AIR %6 m  UNEXPECTED %7")
+                    "CLEAR %5 m  AIR %6 m  LAT %7 m  UNEXPECTED %8")
                     .arg(input.renderedGradePercent, 0, 'f', 1)
                     .arg(input.visibleElevationChangeMeters, 0, 'f', 2)
                     .arg(input.surfaceElevationMeters, 0, 'f', 2)
                     .arg(input.riderElevationMeters, 0, 'f', 2)
                     .arg(input.riderClearanceMeters, 0, 'f', 2)
                     .arg(input.airHeightMeters, 0, 'f', 2)
+                    .arg(input.lateralOffsetMeters, 0, 'f', 2)
                     .arg(snapshot.unexpectedAirborneFrameCount));
     }
     ++hudRevision;
@@ -979,6 +1137,7 @@ void WorkoutGameSceneGraphItem::publishDiagnostics(
                 << " rider_elevation_m=" << input.riderElevationMeters
                 << " clearance_m=" << input.riderClearanceMeters
                 << " air_height_m=" << input.airHeightMeters
+                << " lateral_m=" << input.lateralOffsetMeters
                 << " airborne=" << input.riderAirborne
                 << " airborne_expected=" << input.airborneExpected
                 << " unexpected_airborne_frames="
@@ -1050,9 +1209,15 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
             ? renderedTimeline.distanceMeters
             : roadCourse.totalLengthMeters
                 * visual.simulation.courseProgress;
-    const WorkoutGameRoadProjectionFrame projection =
+    WorkoutGameRoadProjectionFrame projection =
             WorkoutGameRoadProjection::project(
                     roadCourse, riderDistance, config);
+    if (projection.ready && std::isfinite(feature.lateralOffsetMeters)) {
+        for (WorkoutGameRoadProjectedSlice &slice : projection.slices) {
+            slice.centerX -= feature.lateralOffsetMeters
+                    * slice.pixelsPerMeter;
+        }
+    }
 
     std::vector<SceneTriangle> terrain;
     buildHorizonGeometry(
@@ -1069,6 +1234,7 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
         }
         buildRoadGeometry(
                 projection, viewportWidth, viewportHeight, terrain);
+        buildForestGeometry(projection, roadCourse.seed, terrain);
         buildMotionCueGeometry(projection, terrain);
         buildPowerCueGeometry(projection, feature, cue, terrain);
         buildFeatureGeometry(
@@ -1109,9 +1275,8 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
                 + featureShake
                 - landingCompression
             : 0.0;
-    const double riderX = (projection.ready
-            ? projection.riderScreenX : viewportWidth * 0.5)
-            + feature.lateralOffset * viewportWidth * 0.12;
+    const double riderX = projection.ready
+            ? projection.riderScreenX : viewportWidth * 0.5;
     const double riderY = projection.ready
             ? projection.riderScreenY : viewportHeight * 0.82;
     root->rider->setRect(
@@ -1176,6 +1341,7 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
             visual.world.rider.clearanceMeters;
     diagnosticsInput.airHeightMeters =
             visual.world.rider.airHeightMeters();
+    diagnosticsInput.lateralOffsetMeters = feature.lateralOffsetMeters;
     diagnosticsInput.visibleElevationChangeMeters =
             projection.visibleElevationChangeMeters;
     diagnosticsInput.renderedGradePercent =

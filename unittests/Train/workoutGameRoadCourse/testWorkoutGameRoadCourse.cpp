@@ -353,6 +353,47 @@ private slots:
         QVERIFY(sawTechnicalRelief);
     }
 
+    void forestTrailHasVisibleRollingReliefBetweenConnectors()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 912u;
+        course.durationMs = 90000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::Trail;
+        section.terrain = WorkoutGameTerrainKind::SmoothTrail;
+        section.durationMs = course.durationMs;
+        section.targetWatts = 180.0;
+        section.difficulty = 0.8;
+        course.sections = {section};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 190.0);
+        QVERIFY(road.ready);
+        double maximumRelief = 0.0;
+        for (const WorkoutGameRoadPiece &piece : road.pieces) {
+            const double start = piece.startDistanceMeters;
+            const double end = start + piece.lengthMeters;
+            const double startElevation =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        road, start).surfaceElevationMeters();
+            const double endElevation =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        road, end).surfaceElevationMeters();
+            for (int sampleIndex = 1; sampleIndex < 8; ++sampleIndex) {
+                const double progress = double(sampleIndex) / 8.0;
+                const double elevation =
+                        WorkoutGameRoadCourseBuilder::sample(
+                            road, start + progress * piece.lengthMeters)
+                            .surfaceElevationMeters();
+                const double baseline = startElevation
+                        + (endElevation - startElevation) * progress;
+                maximumRelief = std::max(
+                        maximumRelief, std::abs(elevation - baseline));
+            }
+        }
+        QVERIFY(maximumRelief > 0.5);
+    }
+
     void jumpSurfaceOffsetIsAppliedExactlyOnce()
     {
         WorkoutGameCourse course;

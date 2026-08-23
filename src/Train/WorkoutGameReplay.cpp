@@ -98,6 +98,19 @@ void addSimulation(
     hash.addEnum(simulation.featureOutcome);
     hash.addEnum(simulation.route);
     addChallenge(hash, simulation.challenge);
+    hash.addDouble(simulation.challengeMetrics.averageActualWatts);
+    hash.addDouble(simulation.challengeMetrics.averageTargetWatts);
+    hash.addDouble(simulation.challengeMetrics.averageEffortRatio);
+    hash.addDouble(simulation.challengeMetrics.averageCadenceRpm);
+    hash.addDouble(simulation.challengeMetrics.averageSpeedKph);
+    hash.addDouble(simulation.challengeMetrics.averageAdherence);
+    hash.addDouble(simulation.challengeAssessment.readiness);
+    hash.addDouble(simulation.challengeAssessment.effortReadiness);
+    hash.addDouble(simulation.challengeAssessment.cadenceReadiness);
+    hash.addDouble(simulation.challengeAssessment.speedReadiness);
+    hash.addDouble(simulation.challengeAssessment.adherenceReadiness);
+    hash.addBool(simulation.challengeAssessment.completed);
+    hash.addBool(simulation.challengeMeasurementActive);
     hash.addDouble(simulation.challengeReadiness);
 }
 
@@ -154,7 +167,7 @@ void addFeature(
     hash.addDouble(feature.obstacleDistanceMeters);
     hash.addDouble(feature.distanceToObstacleMeters);
     hash.addDouble(feature.readiness);
-    hash.addDouble(feature.lateralOffset);
+    hash.addDouble(feature.lateralOffsetMeters);
     hash.addDouble(feature.verticalOffsetMeters);
     hash.addDouble(feature.pitchDegrees);
     hash.addDouble(feature.vibration);
@@ -195,6 +208,17 @@ bool WorkoutGameReplayHarness::finiteState(
             && isFiniteValue(simulation.speedKph)
             && isFiniteValue(simulation.adherence)
             && isFiniteValue(simulation.streakSeconds)
+            && isFiniteValue(simulation.challengeMetrics.averageActualWatts)
+            && isFiniteValue(simulation.challengeMetrics.averageTargetWatts)
+            && isFiniteValue(simulation.challengeMetrics.averageEffortRatio)
+            && isFiniteValue(simulation.challengeMetrics.averageCadenceRpm)
+            && isFiniteValue(simulation.challengeMetrics.averageSpeedKph)
+            && isFiniteValue(simulation.challengeMetrics.averageAdherence)
+            && isFiniteValue(simulation.challengeAssessment.readiness)
+            && isFiniteValue(simulation.challengeAssessment.effortReadiness)
+            && isFiniteValue(simulation.challengeAssessment.cadenceReadiness)
+            && isFiniteValue(simulation.challengeAssessment.speedReadiness)
+            && isFiniteValue(simulation.challengeAssessment.adherenceReadiness)
             && isFiniteValue(simulation.challengeReadiness)
             && isFiniteValue(world.rider.distanceMeters)
             && isFiniteValue(world.rider.elevationMeters)
@@ -219,7 +243,7 @@ bool WorkoutGameReplayHarness::finiteState(
             && isFiniteValue(feature.obstacleDistanceMeters)
             && isFiniteValue(feature.distanceToObstacleMeters)
             && isFiniteValue(feature.readiness)
-            && isFiniteValue(feature.lateralOffset)
+            && isFiniteValue(feature.lateralOffsetMeters)
             && isFiniteValue(feature.verticalOffsetMeters)
             && isFiniteValue(feature.pitchDegrees)
             && isFiniteValue(feature.vibration)

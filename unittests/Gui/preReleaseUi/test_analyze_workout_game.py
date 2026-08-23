@@ -98,7 +98,7 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         summary = ANALYZER.analyze(samples)
         self.assertEqual(
             ANALYZER.validate(
-                summary, 8, 25.0, 45.0, 150.0, 1.0, 4, 200.0, 0
+                summary, 8, 25.0, 45.0, 150.0, 1.0, 4, 200.0, 0, 1.0
             ), []
         )
 
@@ -119,7 +119,7 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
         ]
         failures = ANALYZER.validate(
             ANALYZER.analyze(samples),
-            4, 25.0, 45.0, 150.0, 0.5, 4, 200.0, 0,
+            4, 25.0, 45.0, 150.0, 0.5, 4, 200.0, 0, 1.0,
         )
         self.assertGreaterEqual(len(failures), 4)
 
@@ -136,7 +136,46 @@ class AnalyzeWorkoutGameTest(unittest.TestCase):
             self.assertEqual(len(samples), 1)
             self.assertEqual(samples[0]["frame"], 9)
             self.assertEqual(samples[0]["fps"], 58.7)
+            self.assertEqual(samples[0]["p95_frame_ms"], 19)
             self.assertEqual(samples[0]["max_frame_ms"], 31)
+
+    def test_accepts_fractional_target_near_test_ftp(self):
+        summary = ANALYZER.analyze(
+            [{
+                "frame_ms": 10,
+                "fps": 100,
+                "p95_frame_ms": 12,
+                "max_frame_ms": 14,
+                "render_road_m": index,
+                "backwards": 0,
+                "skipped_ticks": 0,
+                "target_watts": 199.5,
+                "unexpected_airborne_frames": 0,
+            } for index in range(8)]
+        )
+        self.assertEqual(
+            ANALYZER.validate(
+                summary, 8, 25.0, 45.0, 150.0, 1.0, 4, 190.0, 0, 1.0
+            ),
+            [],
+        )
+
+    def test_rejects_lateral_teleport(self):
+        samples = [
+            {
+                "frame_ms": 10,
+                "fps": 100,
+                "render_road_m": index,
+                "target_watts": 220,
+                "lateral_m": lateral,
+            }
+            for index, lateral in enumerate((0.0, 0.1, 0.25, 2.2))
+        ]
+        failures = ANALYZER.validate(
+            ANALYZER.analyze(samples),
+            4, 25.0, 45.0, 150.0, 1.0, 4, 190.0, 0, 1.0,
+        )
+        self.assertTrue(any("lateral route offset" in item for item in failures))
 
 
 if __name__ == "__main__":

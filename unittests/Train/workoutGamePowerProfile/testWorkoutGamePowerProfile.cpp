@@ -65,21 +65,40 @@ private slots:
 
         simulation.sectionProgress = 0.68;
         simulation.workoutTimeMs = 8160;
+        simulation.speedKph = 18.0;
         const WorkoutGamePowerProfileSnapshot push =
-                WorkoutGamePowerProfile::build(course, simulation, 210.0);
+                WorkoutGamePowerProfile::build(
+                    course, simulation, 210.0, 80.0);
         QCOMPARE(push.cue.state, WorkoutGamePowerCueState::PushNow);
         QVERIFY(push.cue.requiredWatts > 190.0);
+        QCOMPARE(push.cue.actualWatts, 210.0);
+        QCOMPARE(push.cue.actualCadenceRpm, 80.0);
+        QCOMPARE(push.cue.actualSpeedKph, 18.0);
+        QVERIFY(push.cue.powerRequired);
+        QVERIFY(push.cue.cadenceRequired);
+        QVERIFY(push.cue.speedRequired);
         QVERIFY(push.cue.windowProgress > 0.0);
         QVERIFY(push.cue.windowProgress < 1.0);
 
         simulation.sectionProgress = 0.76;
         simulation.workoutTimeMs = 9120;
         simulation.featureOutcome = WorkoutGameFeatureOutcome::Completed;
+        simulation.challengeMeasurementActive = true;
+        simulation.challengeMetrics.averageActualWatts = 220.0;
+        simulation.challengeMetrics.averageTargetWatts = 200.0;
+        simulation.challengeMetrics.averageEffortRatio = 1.1;
+        simulation.challengeMetrics.averageCadenceRpm = 85.0;
+        simulation.challengeMetrics.averageSpeedKph = 20.0;
+        simulation.challengeMetrics.averageAdherence = 1.0;
         simulation.challengeReadiness = 1.0;
         const WorkoutGamePowerProfileSnapshot committed =
                 WorkoutGamePowerProfile::build(course, simulation, 220.0);
         QCOMPARE(committed.cue.state, WorkoutGamePowerCueState::Committed);
         QCOMPARE(committed.cue.readiness, 1.0);
+        QCOMPARE(committed.cue.actualWatts, 220.0);
+        QVERIFY(std::abs(committed.cue.requiredWatts
+                         - 200.0 * simulation.challenge.minimumEffortRatio)
+                < 1e-9);
     }
 };
 

@@ -41,7 +41,20 @@ struct WorkoutGamePowerCue
     double secondsUntilWindow = 0.0;
     double windowProgress = 0.0;
     double requiredWatts = 0.0;
+    double actualWatts = 0.0;
+    double requiredCadenceRpm = 0.0;
+    double actualCadenceRpm = 0.0;
+    double requiredSpeedKph = 0.0;
+    double maximumSpeedKph = 0.0;
+    double actualSpeedKph = 0.0;
+    double powerReadiness = 0.0;
+    double cadenceReadiness = 0.0;
+    double speedReadiness = 0.0;
     double readiness = 0.0;
+    bool powerRequired = false;
+    bool cadenceRequired = false;
+    bool speedRequired = false;
+    bool measurementActive = false;
 };
 
 struct WorkoutGamePowerProfileSnapshot
@@ -61,7 +74,8 @@ public:
     static WorkoutGamePowerProfileSnapshot build(
             const WorkoutGameCourse &course,
             const WorkoutGameSimulationSnapshot &simulation,
-            double actualWatts);
+            double actualWatts,
+            double cadenceRpm = 0.0);
 };
 
 #endif

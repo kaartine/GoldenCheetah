@@ -107,6 +107,48 @@ void addBox(
     addQuad(mesh, start + 3, start + 7, start + 6, start + 2, side);
 }
 
+void addHorizontalCylinder(
+        WorkoutGameMesh &mesh,
+        double forward,
+        double right,
+        double radius,
+        double halfWidth,
+        int segments,
+        WorkoutGameMeshMaterial side,
+        WorkoutGameMeshMaterial cap)
+{
+    const std::uint32_t start = std::uint32_t(mesh.vertices.size());
+    for (int end = 0; end < 2; ++end) {
+        const double endRight = right + (end == 0 ? -halfWidth : halfWidth);
+        for (int index = 0; index < segments; ++index) {
+            const double angle = 2.0 * Pi * double(index) / double(segments);
+            addVertex(mesh,
+                      forward + std::cos(angle) * radius,
+                      endRight,
+                      radius + std::sin(angle) * radius,
+                      double(end), double(index) / double(segments));
+        }
+    }
+    const std::uint32_t firstCenter = addVertex(
+            mesh, forward, right - halfWidth, radius, 0.5, 0.5);
+    const std::uint32_t secondCenter = addVertex(
+            mesh, forward, right + halfWidth, radius, 0.5, 0.5);
+    for (int index = 0; index < segments; ++index) {
+        const int next = (index + 1) % segments;
+        addQuad(mesh,
+                start + std::uint32_t(index),
+                start + std::uint32_t(next),
+                start + std::uint32_t(segments + next),
+                start + std::uint32_t(segments + index), side);
+        addTriangle(mesh, firstCenter,
+                    start + std::uint32_t(next),
+                    start + std::uint32_t(index), cap);
+        addTriangle(mesh, secondCenter,
+                    start + std::uint32_t(segments + index),
+                    start + std::uint32_t(segments + next), cap);
+    }
+}
+
 WorkoutGameMesh logModel(double difficulty)
 {
     WorkoutGameMesh mesh;
@@ -117,27 +159,11 @@ WorkoutGameMesh logModel(double difficulty)
     // A fallen trunk should clear the singletrack edges without turning into
     // a screen-wide wall when it reaches the near projection plane.
     const double halfWidth = 0.90;
-    constexpr int Segments = WorkoutGameLogRadialSegments;
-    for (int side = 0; side < 2; ++side) {
-        const double right = side == 0 ? -halfWidth : halfWidth;
-        for (int index = 0; index < Segments; ++index) {
-            const double angle = 2.0 * Pi * double(index) / double(Segments);
-            addVertex(mesh,
-                    std::cos(angle) * radius,
-                    right,
-                    radius + std::sin(angle) * radius,
-                    double(side), double(index) / double(Segments));
-        }
-    }
-    for (int index = 0; index < Segments; ++index) {
-        const int next = (index + 1) % Segments;
-        addQuad(mesh,
-                std::uint32_t(index), std::uint32_t(next),
-                std::uint32_t(Segments + next),
-                std::uint32_t(Segments + index),
-                index < 3 ? WorkoutGameMeshMaterial::WoodTop
-                          : WorkoutGameMeshMaterial::WoodSide);
-    }
+    addHorizontalCylinder(
+            mesh, 0.0, 0.0, radius, halfWidth,
+            WorkoutGameLogRadialSegments,
+            WorkoutGameMeshMaterial::WoodSide,
+            WorkoutGameMeshMaterial::WoodTop);
     mesh.colliders.push_back({
         0.0, 0.0, radius,
         radius, halfWidth, radius
@@ -156,29 +182,42 @@ WorkoutGameMesh tabletopModel(double difficulty)
             WorkoutGameFeatureGeometry::profile(
                     WorkoutGameTerrainKind::Tabletop, difficulty);
     const double height = profile.heightMeters;
-    const double halfWidth = 1.35;
-    const double forward[] = {
-        profile.startMeters, profile.plateauStartMeters,
-        profile.plateauEndMeters, profile.endMeters
-    };
-    const double up[] = {0.0, height, height, 0.0};
-    for (int section = 0; section < 4; ++section) {
-        addVertex(mesh, forward[section], -halfWidth, up[section],
-                  double(section) / 3.0, 0.0);
-        addVertex(mesh, forward[section], halfWidth, up[section],
-                  double(section) / 3.0, 1.0);
+    const double halfWidth = 1.05;
+    constexpr int Samples = 20;
+    for (int section = 0; section <= Samples; ++section) {
+        const double progress = double(section) / double(Samples);
+        const double forward = profile.startMeters
+                + progress * (profile.endMeters - profile.startMeters);
+        const double up = profile.surfaceOffset(forward);
+        addVertex(mesh, forward, -halfWidth, up, progress, 0.0);
+        addVertex(mesh, forward, halfWidth, up, progress, 1.0);
+        addVertex(mesh, forward, -halfWidth, 0.0, progress, 0.0);
+        addVertex(mesh, forward, halfWidth, 0.0, progress, 1.0);
+        if (section > 0) {
+            const std::uint32_t start = std::uint32_t(section * 4);
+            addQuad(mesh, start - 4, start - 3, start + 1, start,
+                    WorkoutGameMeshMaterial::Dirt);
+            addQuad(mesh, start - 2, start - 4, start, start + 2,
+                    WorkoutGameMeshMaterial::DirtEdge);
+            addQuad(mesh, start - 3, start - 1, start + 3, start + 1,
+                    WorkoutGameMeshMaterial::DirtEdge);
+        }
     }
-    for (std::uint32_t section = 0; section < 3; ++section) {
-        addQuad(mesh,
-                section * 2, section * 2 + 1,
-                section * 2 + 3, section * 2 + 2,
-                WorkoutGameMeshMaterial::Dirt);
-    }
-    addQuad(mesh, 0, 2, 4, 6, WorkoutGameMeshMaterial::DirtEdge);
-    addQuad(mesh, 1, 7, 5, 3, WorkoutGameMeshMaterial::DirtEdge);
+    const std::uint32_t lip = std::uint32_t(mesh.vertices.size());
+    addVertex(mesh, profile.plateauStartMeters, -halfWidth,
+              height - 0.18, 0.0, 0.0);
+    addVertex(mesh, profile.plateauStartMeters, halfWidth,
+              height - 0.18, 1.0, 0.0);
+    addVertex(mesh, profile.plateauStartMeters, halfWidth,
+              height, 1.0, 1.0);
+    addVertex(mesh, profile.plateauStartMeters, -halfWidth,
+              height, 0.0, 1.0);
+    addQuad(mesh, lip, lip + 1, lip + 2, lip + 3,
+            WorkoutGameMeshMaterial::DirtEdge);
     mesh.colliders.push_back({
         0.0, 0.0, height * 0.5,
-        3.2, halfWidth, height * 0.5
+        (profile.endMeters - profile.startMeters) * 0.5,
+        halfWidth, height * 0.5
     });
     mesh.lengthMeters = profile.endMeters - profile.startMeters;
     mesh.entry = {profile.startMeters, halfWidth, 0.0};
@@ -234,10 +273,11 @@ WorkoutGameMesh roughModel(
         for (int index = -2; index <= 2; ++index) {
             const double height = 0.08 + 0.04 * ((index + 2) % 2)
                     + 0.04 * difficulty;
-            addBox(mesh, double(index) * 0.65, 0.0, 0.0,
-                   0.14, 2.7 - 0.12 * std::abs(index), height,
-                   WorkoutGameMeshMaterial::WoodSide,
-                   WorkoutGameMeshMaterial::WoodTop);
+            addHorizontalCylinder(
+                    mesh, double(index) * 0.65, 0.0, height * 0.5,
+                    (2.7 - 0.12 * std::abs(index)) * 0.5, 12,
+                    WorkoutGameMeshMaterial::WoodSide,
+                    WorkoutGameMeshMaterial::WoodTop);
             mesh.colliders.push_back({
                 double(index) * 0.65, 0.0, height * 0.5,
                 0.07, 1.25, height * 0.5

@@ -102,6 +102,12 @@ bool retainsOrdinaryGroundContact(WorkoutGameTerrainKind terrain)
     }
 }
 
+double physicalSurfaceElevation(const WorkoutGameRoadSample &sample)
+{
+    return sample.surfaceElevationMeters()
+            - sample.nonPhysicalFeatureOffsetMeters;
+}
+
 }
 
 struct WorkoutGamePhysics::Impl
@@ -203,8 +209,8 @@ struct WorkoutGamePhysics::Impl
                     WorkoutGameRoadCourseBuilder::sample(
                         roadCourse, distanceBase);
             if (sample.ready && origin.ready) {
-                return sample.surfaceElevationMeters()
-                        - origin.surfaceElevationMeters();
+                return physicalSurfaceElevation(sample)
+                        - physicalSurfaceElevation(origin);
             }
         }
         return WorkoutGamePhysics::terrainHeight(
@@ -308,7 +314,7 @@ struct WorkoutGamePhysics::Impl
         b2Body_ApplyForceToCenter(chassis, {force, 0.0f}, true);
     }
 
-    void synchronizeDistance(double distanceMeters)
+    void synchronizeDistance(double distanceMeters, bool forceGroundFollowing)
     {
         if (!std::isfinite(distanceMeters) || distanceMeters < 0.0
                 || B2_IS_NULL(world)) {
@@ -332,7 +338,7 @@ struct WorkoutGamePhysics::Impl
         double verticalDelta = 0.0;
         // Distance playback translates the vehicle horizontally. Follow the
         // same ground delta so synchronization cannot manufacture air time.
-        if (retainsOrdinaryGroundContact(terrain)) {
+        if (forceGroundFollowing || retainsOrdinaryGroundContact(terrain)) {
             verticalDelta = surfaceHeight(targetLocalX)
                     - surfaceHeight(chassisPosition.x);
         }
@@ -368,7 +374,7 @@ struct WorkoutGamePhysics::Impl
                     roadCourse, distanceBase)
                 : WorkoutGameRoadSample();
         const double originSurfaceElevation = groundOrigin.ready
-                ? groundOrigin.surfaceElevationMeters()
+                ? physicalSurfaceElevation(groundOrigin)
                 : elevationBase;
         result.rider.elevationMeters = originSurfaceElevation
                 + double(position.y) - originBodyY;
@@ -386,12 +392,12 @@ struct WorkoutGamePhysics::Impl
                         - RiderStartMeters)
                 : WorkoutGameRoadSample();
         const double groundY = ground.ready && groundOrigin.ready
-                ? ground.surfaceElevationMeters()
-                    - groundOrigin.surfaceElevationMeters()
+                ? physicalSurfaceElevation(ground)
+                    - physicalSurfaceElevation(groundOrigin)
                 : WorkoutGamePhysics::terrainHeight(
                     terrain, position.x, gradePercent, difficulty, seed);
         result.surfaceElevationMeters = ground.ready
-                ? ground.surfaceElevationMeters()
+                ? physicalSurfaceElevation(ground)
                 : originSurfaceElevation + groundY;
         result.rider.clearanceMeters = double(position.y) - groundY;
         result.rider.airborne = !grounded();
@@ -444,7 +450,7 @@ struct WorkoutGamePhysics::Impl
             if (input.featureActionId != 0
                     && input.featureActionId != lastFeatureActionId) {
                 const float launchSpeed = terrain
-                        == WorkoutGameTerrainKind::Tabletop ? 4.6f : 3.8f;
+                        == WorkoutGameTerrainKind::Tabletop ? 3.5f : 3.0f;
                 const float impulse = b2Body_GetMass(chassis) * launchSpeed;
                 b2Body_ApplyLinearImpulseToCenter(
                         chassis, {0.0f, impulse}, true);
@@ -662,7 +668,8 @@ WorkoutGameWorldSnapshot WorkoutGamePhysics::update(
         return impl->latest;
     }
 
-    impl->synchronizeDistance(input.courseDistanceMeters);
+    impl->synchronizeDistance(
+            input.courseDistanceMeters, input.forceGroundFollowing);
 
     const std::int64_t elapsedMs = input.workoutTimeMs - impl->lastWorkoutTimeMs;
     impl->lastWorkoutTimeMs = input.workoutTimeMs;

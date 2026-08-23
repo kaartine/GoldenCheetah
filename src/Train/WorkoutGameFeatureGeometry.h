@@ -18,10 +18,11 @@
 enum class WorkoutGameFeatureGeometryShape
 {
     Linear,
-    FacetedLog
+    FacetedLog,
+    CurvedTabletop
 };
 
-constexpr int WorkoutGameLogRadialSegments = 8;
+constexpr int WorkoutGameLogRadialSegments = 16;
 
 struct WorkoutGameFeatureGeometryProfile
 {
@@ -66,6 +67,23 @@ struct WorkoutGameFeatureGeometryProfile
             }
             return radius;
         }
+        if (shape == WorkoutGameFeatureGeometryShape::CurvedTabletop) {
+            if (localDistanceMeters < plateauStartMeters) {
+                const double progress = std::clamp(
+                        (localDistanceMeters - startMeters)
+                            / (plateauStartMeters - startMeters),
+                        0.0, 1.0);
+                return heightMeters * std::pow(progress, 1.65);
+            }
+            if (localDistanceMeters <= plateauEndMeters) {
+                return heightMeters;
+            }
+            const double progress = std::clamp(
+                    (localDistanceMeters - plateauEndMeters)
+                        / (endMeters - plateauEndMeters),
+                    0.0, 1.0);
+            return heightMeters * (1.0 - std::pow(progress, 1.35));
+        }
         if (localDistanceMeters < plateauStartMeters) {
             return heightMeters * (
                     (localDistanceMeters - startMeters)
@@ -101,8 +119,9 @@ public:
             break;
         }
         case WorkoutGameTerrainKind::Tabletop:
-            result = {true, -3.2, -1.25, 1.25, 3.2,
-                      0.65 + 0.35 * difficulty};
+            result = {true, -4.2, -0.9, 1.7, 5.2,
+                      0.75 + 0.40 * difficulty,
+                      WorkoutGameFeatureGeometryShape::CurvedTabletop};
             break;
         case WorkoutGameTerrainKind::RockSlab:
             result = {true, -3.0, 0.0, 3.0, 6.0,

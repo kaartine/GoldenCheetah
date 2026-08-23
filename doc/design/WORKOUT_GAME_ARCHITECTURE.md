@@ -171,8 +171,8 @@ Train telemetry, control, and recording continue unchanged.
 - Rendering: display-vsync rate on the scene graph, target 60 FPS with the
   OpenGL fallback, and 30 FPS with QPainter. A 29.99 Hz display therefore
   correctly reports a stable 30 FPS.
-- The current scene has bounded geometry, four competitor sprites at most, no
-  per-frame texture upload, and no unbounded particle list. Automatic
+- The current scene has bounded road, feature, and deterministic forest
+  geometry, no per-frame asset upload, and no unbounded particle list. Automatic
   frame-budget quality scaling remains a future enhancement.
 
 The implementation has no unbounded frame event queue. Simulation and rendering use a
@@ -286,6 +286,7 @@ Mutable state has the following owners:
 | Workout-time-to-road mapping and sampled surface | Immutable `WorkoutGameRoadCourse`; the engine publishes its authoritative distance, while Box2D and the scene graph sample the same base elevation, feature surface offset, and grade |
 | Feature and trail meshes | Immutable course-space values from `WorkoutGameMeshLibrary`; feature meshes are anchored to the base surface and projected by the scene graph so the course feature height is not applied twice |
 | Distant terrain silhouette | Pure deterministic `WorkoutGameHorizon` samples generated from course seed and distance; presentation-only and never consumed by physics or trainer control |
+| Near forest dressing | Deterministic, bounded scene-graph triangles generated from the course seed and projected road slices; presentation-only and rebuilt with the visible terrain window |
 | Visual interpolation, projected trail and render diagnostics | `WorkoutGameSceneGraphItem::updatePaintNode` during Qt scene graph synchronization |
 | Runner input and latest output slot | Separate small mutexes in `WorkoutGameRunner`; heavy simulation occurs outside both critical sections |
 | HUD source image and telemetry labels | `WorkoutGameSceneGraphItem` on the GUI thread, rebuilt at most 10 Hz; copied to a scene graph texture during synchronization |
@@ -306,7 +307,8 @@ elevation again. The canonical elevation and derivative are used by both Box2D
 and scene projection.
 
 Jump effort is intentionally local to the feature. The simulation retains only
-the latest 1.5 seconds of power, cadence and approach speed, while the generated
+the latest 1.5 seconds of actual and target power, cadence, and approach speed,
+while the generated
 gate clamps the visible preparation segment to at most six metres before the
 decision line. Jump profiles do not use target-adherence as a requirement,
 because an intentional over-target burst must not count against the rider.
@@ -315,11 +317,22 @@ long workout intervals cannot turn one short MTB burst into a prolonged prompt.
 The workout-time-to-road timeline owns longitudinal progress. Each engine tick
 passes that distance to Box2D and publishes it with the resulting vehicle pose,
 feature state, and camera. `WorkoutGameRoadCourse::sample()` supplies the same
-surface elevation and grade to collider construction and pseudo-3D projection,
-so a visible obstacle and its physical response share course coordinates.
-Feature pieces also publish a canonical surface offset derived from their
-difficulty. The same dimensions drive the physical road surface and the visible
-log, tabletop, rock slab, or drop mesh.
+base surface elevation and grade to collider construction and pseudo-3D
+projection. Logs and technical surfaces use their canonical feature offset in
+both paths. A jump's curved takeoff, deck, and landing remain visible course
+geometry, while its collider uses the continuous base surface and a bounded
+Box2D launch impulse at the physical lip. This prevents the chassis from
+colliding twice with the visible ramp while retaining real airborne motion and
+landing contacts.
+
+Feature readiness is the minimum of the requirements that apply to that
+feature: rolling power, cadence, minimum or maximum speed, and workout-target
+adherence. The HUD publishes each measured/required pair independently and
+colors each component by its own readiness. A failed decision selects a smooth,
+localized safe-line offset around the obstacle. Projection follows that route
+offset while the rider remains camera-centered, and safe-line physics is pinned
+to the sampled ground. The route returns continuously to the main line after
+the obstacle instead of moving the rider sprite sideways in one frame.
 
 #### Course-Space 2.5D Geometry
 
@@ -957,12 +970,16 @@ or recorded physiological data.
 3. Current image tests assert nonblank, changing, and feature-distinct output in
    OpenGL/Qt Scene Graph and QPainter. Pinned golden-master comparisons remain a
    release-test enhancement.
-4. AppImage smoke tests must verify `xcb`; bundled `offscreen` becomes a required
+4. The hardware-free UI trace validates realized frame pacing, monotonically
+   increasing road distance, skipped simulation ticks, unexpected airborne
+   frames, and bounded lateral route steps while direct scene capture records
+   the complete first feature approach and result.
+5. AppImage smoke tests must verify `xcb`; bundled `offscreen` becomes a required
    second path only after the package includes and supports that Qt plugin.
-5. Manual release testing uses a copied athlete directory and verifies trainer
+6. Manual release testing uses a copied athlete directory and verifies trainer
    connection, start, pause, continue, stop, recording import, and live mode
    switching without modifying production athlete data.
-6. Hardware-free UI testing uses the `Data Generator` training device. It
+7. Hardware-free UI testing uses the `Data Generator` training device. It
    follows ERG targets and emits deterministic power, heart rate, cadence, and
    speed telemetry without advertising trainer-control capabilities or sending
    commands to physical hardware.

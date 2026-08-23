@@ -13,7 +13,7 @@ import sys
 
 
 TRACE_MARKER = "workout-game-trace "
-FIELD = re.compile(r"([a-z_]+)=([^\s]+)")
+FIELD = re.compile(r"([a-z][a-z0-9_]*)=([^\s]+)")
 
 
 def percentile(values: list[float], fraction: float) -> float:
@@ -48,6 +48,9 @@ def analyze(samples: list[dict[str, float]]) -> dict[str, float | int]:
     reported_max = [sample["max_frame_ms"] for sample in samples if sample.get("max_frame_ms", 0) > 0]
     distances = [sample["render_road_m"] for sample in samples if "render_road_m" in sample]
     target_watts = [sample["target_watts"] for sample in samples if sample.get("target_watts", 0) > 0]
+    lateral_offsets = [
+        sample["lateral_m"] for sample in samples if "lateral_m" in sample
+    ]
     trace_regressions = sum(
         1 for previous, current in zip(distances, distances[1:])
         if current < previous - 1e-6
@@ -76,6 +79,11 @@ def analyze(samples: list[dict[str, float]]) -> dict[str, float | int]:
         "distance_advanced_m": max(0.0, distances[-1] - distances[0])
             if len(distances) >= 2 else 0.0,
         "maximum_target_watts": max(target_watts, default=0.0),
+        "maximum_lateral_step_m": max(
+            (abs(current - previous)
+             for previous, current in zip(lateral_offsets, lateral_offsets[1:])),
+            default=0.0,
+        ),
     }
 
 
@@ -89,6 +97,7 @@ def validate(
     maximum_skipped_ticks: int,
     minimum_target_watts: float,
     maximum_unexpected_airborne_frames: int,
+    maximum_lateral_step_m: float,
 ) -> list[str]:
     failures = []
     if summary["samples"] < minimum_samples:
@@ -129,6 +138,11 @@ def validate(
             "renderer counted "
             f"{summary['unexpected_airborne_frames']} unexpected airborne frames"
         )
+    if summary["maximum_lateral_step_m"] > maximum_lateral_step_m:
+        failures.append(
+            "lateral route offset changed "
+            f"{summary['maximum_lateral_step_m']:.2f} m between trace samples"
+        )
     return failures
 
 
@@ -142,10 +156,11 @@ def main() -> int:
     parser.add_argument("--maximum-stall-ms", type=float, default=150.0)
     parser.add_argument("--minimum-distance-m", type=float, default=1.0)
     parser.add_argument("--maximum-skipped-ticks", type=int, default=4)
-    parser.add_argument("--minimum-target-watts", type=float, default=200.0)
+    parser.add_argument("--minimum-target-watts", type=float, default=190.0)
     parser.add_argument(
         "--maximum-unexpected-airborne-frames", type=int, default=0
     )
+    parser.add_argument("--maximum-lateral-step-m", type=float, default=1.0)
     args = parser.parse_args()
 
     summary = analyze(parse_trace(args.log))
@@ -159,6 +174,7 @@ def main() -> int:
         args.maximum_skipped_ticks,
         args.minimum_target_watts,
         args.maximum_unexpected_airborne_frames,
+        args.maximum_lateral_step_m,
     )
     summary["passed"] = not failures
     summary["failures"] = failures

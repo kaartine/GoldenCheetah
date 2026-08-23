@@ -101,25 +101,29 @@ WorkoutGameFeatureChallengeAssessment WorkoutGameFeatureChallenge::assess(
     WorkoutGameFeatureChallengeAssessment result;
     if (!profile.enabled) return result;
 
-    double readiness = 1.0;
-    readiness = std::min(readiness, requirementRatio(
-            metrics.averageEffortRatio, profile.minimumEffortRatio));
-    readiness = std::min(readiness, requirementRatio(
-            metrics.averageCadenceRpm, profile.minimumCadenceRpm));
-    readiness = std::min(readiness, requirementRatio(
-            metrics.averageSpeedKph, profile.minimumSpeedKph));
-    readiness = std::min(readiness, requirementRatio(
-            metrics.averageAdherence, profile.minimumAdherence));
+    result.effortReadiness = requirementRatio(
+            metrics.averageEffortRatio, profile.minimumEffortRatio);
+    result.cadenceReadiness = requirementRatio(
+            metrics.averageCadenceRpm, profile.minimumCadenceRpm);
+    result.speedReadiness = requirementRatio(
+            metrics.averageSpeedKph, profile.minimumSpeedKph);
+    result.adherenceReadiness = requirementRatio(
+            metrics.averageAdherence, profile.minimumAdherence);
     if (profile.maximumSpeedKph > 0.0) {
         const double speed = finiteNonNegative(metrics.averageSpeedKph);
-        readiness = std::min(
-                readiness,
+        result.speedReadiness = std::min(
+                result.speedReadiness,
                 speed > 0.0
                         ? std::clamp(profile.maximumSpeedKph / speed, 0.0, 1.0)
                         : 0.0);
     }
 
-    result.readiness = std::clamp(readiness, 0.0, 1.0);
+    result.readiness = std::min({
+        result.effortReadiness,
+        result.cadenceReadiness,
+        result.speedReadiness,
+        result.adherenceReadiness
+    });
     result.completed = result.readiness >= 1.0 - 1e-9;
     return result;
 }

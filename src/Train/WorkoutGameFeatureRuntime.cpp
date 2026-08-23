@@ -171,8 +171,6 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
     result.distanceToObstacleMeters = result.obstacleDistanceMeters
             - result.visualDistanceMeters;
 
-    const double sectionLength = std::max(
-            1.0, layout.endDistanceMeters - layout.startDistanceMeters);
     if (result.motion == WorkoutGameFeatureMotion::Jump) {
         const WorkoutGameFeatureGeometryProfile geometry =
                 WorkoutGameFeatureGeometry::profile(
@@ -184,18 +182,27 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
             result.physicalTakeoffDistanceMeters += takeoffOffset;
         }
     }
-    const double actionEnd = std::min(
-            layout.endDistanceMeters,
-            std::max(result.obstacleDistanceMeters + 6.0,
-                     layout.startDistanceMeters + sectionLength * 0.98));
+    double actionStart = result.obstacleDistanceMeters;
+    double actionEnd = std::min(
+            layout.endDistanceMeters, actionStart + 6.0);
+    if (result.motion == WorkoutGameFeatureMotion::Jump) {
+        const WorkoutGameFeatureGeometryProfile geometry =
+                WorkoutGameFeatureGeometry::profile(
+                    piece->terrain, piece->difficulty);
+        actionStart = result.physicalTakeoffDistanceMeters;
+        actionEnd = std::min(
+                layout.endDistanceMeters,
+                std::max(actionStart + 5.5,
+                         result.obstacleDistanceMeters
+                            + geometry.endMeters + 1.5));
+    }
     const double recoveryEnd = layout.endDistanceMeters;
     if (result.visualDistanceMeters < piece->challenge.prepareDistanceMeters) {
         result.phase = WorkoutGameFeaturePhase::Approach;
     } else if (result.visualDistanceMeters
             < piece->challenge.decisionDistanceMeters) {
         result.phase = WorkoutGameFeaturePhase::Measure;
-    } else if (result.visualDistanceMeters
-            < result.obstacleDistanceMeters) {
+    } else if (result.visualDistanceMeters < actionStart) {
         result.phase = WorkoutGameFeaturePhase::Committed;
     } else if (result.visualDistanceMeters < actionEnd) {
         result.phase = WorkoutGameFeaturePhase::Action;
@@ -212,22 +219,20 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
             || result.route == WorkoutGameRoute::SafeBypass;
     if (bypass) {
         const double branchStart = piece->challenge.decisionDistanceMeters;
-        const double branchEnd = std::min(
-                layout.endDistanceMeters,
-                std::max(branchStart + 1.0,
-                    layout.startDistanceMeters + sectionLength * 0.96));
+        const double branchEnd = std::max(
+                branchStart + 0.01,
+                piece->challenge.bypassEndDistanceMeters);
         const double branchProgress = (result.visualDistanceMeters - branchStart)
                 / (branchEnd - branchStart);
-        const double direction = (simulation.activeSection & 1) == 0
-                ? -1.0 : 1.0;
-        result.lateralOffset = direction * smoothPulse(branchProgress);
+        result.lateralOffsetMeters = piece->challenge.bypassLateralMeters
+                * smoothPulse(branchProgress);
     }
 
     if (result.phase == WorkoutGameFeaturePhase::Action) {
         const double actionProgress = std::clamp(
-                (result.visualDistanceMeters - result.obstacleDistanceMeters)
+                (result.visualDistanceMeters - actionStart)
                     / std::max(0.01,
-                        actionEnd - result.obstacleDistanceMeters),
+                        actionEnd - actionStart),
                 0.0, 1.0);
         if (result.motion == WorkoutGameFeatureMotion::Jump && completed
                 && !bypass) {

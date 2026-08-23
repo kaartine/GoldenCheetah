@@ -123,6 +123,30 @@ private slots:
         QVERIFY(!slow.completed);
     }
 
+    void reportsEachReadinessRequirementSeparately()
+    {
+        WorkoutGameSection section;
+        section.terrain = WorkoutGameTerrainKind::Tabletop;
+        section.challengeCount = 1;
+        const WorkoutGameFeatureChallengeProfile profile =
+                WorkoutGameFeatureChallenge::profile(section);
+        WorkoutGameFeatureChallengeMetrics metrics;
+        metrics.averageEffortRatio = profile.minimumEffortRatio;
+        metrics.averageCadenceRpm = profile.minimumCadenceRpm * 0.5;
+        metrics.averageSpeedKph = profile.minimumSpeedKph;
+        metrics.averageAdherence = 1.0;
+
+        const WorkoutGameFeatureChallengeAssessment result =
+                WorkoutGameFeatureChallenge::assess(profile, metrics);
+
+        QCOMPARE(result.effortReadiness, 1.0);
+        QVERIFY(std::abs(result.cadenceReadiness - 0.5) < 1e-9);
+        QCOMPARE(result.speedReadiness, 1.0);
+        QCOMPARE(result.adherenceReadiness, 1.0);
+        QVERIFY(std::abs(result.readiness - 0.5) < 1e-9);
+        QVERIFY(!result.completed);
+    }
+
     void skinnyRejectsExcessiveSpeed()
     {
         WorkoutGameSection section;

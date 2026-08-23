@@ -9,6 +9,7 @@
 
 #include "WorkoutGameCanvas.h"
 #include "WorkoutGameClock.h"
+#include "WorkoutGamePowerProfile.h"
 #include "WorkoutGameTrailScene.h"
 
 #include <QHideEvent>
@@ -21,6 +22,7 @@
 #include <QShowEvent>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace {
@@ -932,6 +934,9 @@ void WorkoutGameCanvas::paintScene(
 
     if (current.challenge.enabled
             && current.featureOutcome != WorkoutGameFeatureOutcome::None) {
+        const WorkoutGamePowerProfileSnapshot powerProfile =
+                WorkoutGamePowerProfile::build(
+                    course, current, watts, cadenceRpm);
         const WorkoutGameTerrainKind challengeTerrain = current.activeSection >= 0
                 && current.activeSection < int(course.sections.size())
                 ? course.sections[std::size_t(current.activeSection)].terrain
@@ -939,7 +944,7 @@ void WorkoutGameCanvas::paintScene(
         const int challengeWidth = std::clamp(
                 viewport.width() * 2 / 5, 230, 460);
         const int challengeHeight = std::clamp(
-                viewport.height() / 14, 32, 46);
+                viewport.height() / 11, 54, 68);
         const QRect challengeRect(
                 viewport.center().x() - challengeWidth / 2,
                 scene.top() + 10,
@@ -975,10 +980,81 @@ void WorkoutGameCanvas::paintScene(
                             * 100.0 + 1e-9)));
         }
         painter.drawText(
-                challengeRect.adjusted(8, 0, -8, -5),
+                challengeRect.adjusted(8, 0, -8, -challengeHeight / 2),
                 Qt::AlignCenter,
                 challengeText);
         if (!completed && !bypassed) {
+            const QColor readyColor(88, 188, 105);
+            const QColor missingColor(238, 101, 82);
+            const QColor unusedColor(125, 143, 135);
+            const auto requirementColor = [&](bool required,
+                                               double readiness) {
+                if (!required) return unusedColor;
+                return readiness >= 1.0 - 1e-9
+                        ? readyColor : missingColor;
+            };
+            QString speedRequirement = QStringLiteral("KM/H --");
+            if (powerProfile.cue.speedRequired) {
+                const int actualSpeed = int(std::lround(
+                        powerProfile.cue.actualSpeedKph));
+                if (powerProfile.cue.requiredSpeedKph > 0.0
+                        && powerProfile.cue.maximumSpeedKph > 0.0) {
+                    speedRequirement = QStringLiteral("KM/H %1/%2-%3")
+                            .arg(actualSpeed)
+                            .arg(int(std::lround(
+                                powerProfile.cue.requiredSpeedKph)))
+                            .arg(int(std::lround(
+                                powerProfile.cue.maximumSpeedKph)));
+                } else if (powerProfile.cue.maximumSpeedKph > 0.0) {
+                    speedRequirement = QStringLiteral("KM/H %1/<%2")
+                            .arg(actualSpeed)
+                            .arg(int(std::lround(
+                                powerProfile.cue.maximumSpeedKph)));
+                } else {
+                    speedRequirement = QStringLiteral("KM/H %1/%2")
+                            .arg(actualSpeed)
+                            .arg(int(std::lround(
+                                powerProfile.cue.requiredSpeedKph)));
+                }
+            }
+            const std::array<QString, 3> labels = {
+                powerProfile.cue.powerRequired
+                    ? QStringLiteral("W %1/%2")
+                        .arg(int(std::lround(
+                            powerProfile.cue.actualWatts)))
+                        .arg(int(std::lround(
+                            powerProfile.cue.requiredWatts)))
+                    : QStringLiteral("W --"),
+                powerProfile.cue.cadenceRequired
+                    ? QStringLiteral("RPM %1/%2")
+                        .arg(int(std::lround(
+                            powerProfile.cue.actualCadenceRpm)))
+                        .arg(int(std::lround(
+                            powerProfile.cue.requiredCadenceRpm)))
+                    : QStringLiteral("RPM --"),
+                speedRequirement
+            };
+            const std::array<QColor, 3> colors = {
+                requirementColor(powerProfile.cue.powerRequired,
+                                 powerProfile.cue.powerReadiness),
+                requirementColor(powerProfile.cue.cadenceRequired,
+                                 powerProfile.cue.cadenceReadiness),
+                requirementColor(powerProfile.cue.speedRequired,
+                                 powerProfile.cue.speedReadiness)
+            };
+            QFont requirementFont = challengeFont;
+            requirementFont.setPixelSize(10);
+            painter.setFont(requirementFont);
+            const int requirementWidth = challengeRect.width() / 3;
+            for (int index = 0; index < 3; ++index) {
+                painter.setPen(colors[std::size_t(index)]);
+                painter.drawText(
+                        QRect(challengeRect.left()
+                                + index * requirementWidth,
+                              challengeRect.center().y() - 2,
+                              requirementWidth, 22),
+                        Qt::AlignCenter, labels[std::size_t(index)]);
+            }
             const int meterHeight = std::clamp(challengeHeight / 9, 3, 5);
             const QRect meter(
                     challengeRect.left() + 8,

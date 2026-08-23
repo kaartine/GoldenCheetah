@@ -59,6 +59,9 @@ struct WorkoutGameSimulationSnapshot
     WorkoutGameFeatureOutcome featureOutcome = WorkoutGameFeatureOutcome::None;
     WorkoutGameRoute route = WorkoutGameRoute::MainLine;
     WorkoutGameFeatureChallengeProfile challenge;
+    WorkoutGameFeatureChallengeMetrics challengeMetrics;
+    WorkoutGameFeatureChallengeAssessment challengeAssessment;
+    bool challengeMeasurementActive = false;
     double challengeReadiness = 0.0;
 };
 
@@ -79,6 +82,8 @@ private:
     struct ChallengeSample
     {
         std::int64_t durationMs = 0;
+        double actualWatts = 0.0;
+        double targetWatts = 0.0;
         double effortRatio = 0.0;
         double cadenceRpm = 0.0;
         double speedKph = 0.0;
@@ -99,6 +104,8 @@ private:
             std::int64_t stepTimeMs,
             std::int64_t stepDurationMs);
     void appendChallengeSample(
+            double actualWatts,
+            double targetWatts,
             double effortRatio,
             double cadenceRpm,
             double speedKph,
@@ -116,6 +123,8 @@ private:
     bool initialized = false;
     std::int64_t lastWorkoutTimeMs = 0;
     int activeSection = -1;
+    double sectionActualWattsMs = 0.0;
+    double sectionTargetWattsMs = 0.0;
     double sectionEffortRatioMs = 0.0;
     double sectionCadenceMs = 0.0;
     double sectionSpeedKphMs = 0.0;

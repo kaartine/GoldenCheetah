@@ -46,6 +46,8 @@ struct WorkoutGameRoadChallengeGate
     double prepareDistanceMeters = 0.0;
     double decisionDistanceMeters = 0.0;
     double obstacleDistanceMeters = 0.0;
+    double bypassEndDistanceMeters = 0.0;
+    double bypassLateralMeters = 0.0;
     WorkoutGameFeatureChallengeProfile profile;
 };
 
@@ -90,6 +92,7 @@ struct WorkoutGameRoadSample
     double distanceMeters = 0.0;
     double pieceProgress = 0.0;
     double surfaceOffsetMeters = 0.0;
+    double nonPhysicalFeatureOffsetMeters = 0.0;
     WorkoutGameRoadConnector center;
 
     double surfaceElevationMeters() const

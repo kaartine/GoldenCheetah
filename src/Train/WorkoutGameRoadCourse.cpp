@@ -96,27 +96,28 @@ double trailReliefOffset(
     const double phase = double((piece.sourceSectionIndex * 37u
             + std::size_t(std::llround(piece.startDistanceMeters))) % 101u)
             / 101.0 * 2.0 * Pi;
-    double amplitude = 0.10 + 0.07 * piece.difficulty;
+    double amplitude = 0.65 + 0.55 * piece.difficulty;
     switch (piece.terrain) {
     case WorkoutGameTerrainKind::Climb:
-        amplitude *= 1.25;
+        amplitude *= 1.20;
         break;
     case WorkoutGameTerrainKind::Skinny:
-        amplitude *= 0.30;
+        amplitude *= 0.35;
         break;
     case WorkoutGameTerrainKind::Roots:
     case WorkoutGameTerrainKind::RockGarden:
     case WorkoutGameTerrainKind::Rollers:
-        amplitude *= 0.62;
+        amplitude *= 0.50;
         break;
     default:
         break;
     }
     const double envelope = std::pow(std::sin(Pi * progress), 2.0);
-    const double asymmetry = 1.0
-            + 0.12 * std::sin(2.0 * Pi * progress + phase);
-    const double polarity = std::sin(phase) >= -0.15 ? 1.0 : -0.65;
-    return amplitude * polarity * envelope * asymmetry;
+    const double polarity = std::sin(phase) >= -0.15 ? 1.0 : -0.72;
+    const double rollingShape = polarity
+            * (0.78 + 0.22 * std::cos(2.0 * Pi * progress + phase))
+            + 0.26 * std::sin(2.0 * Pi * progress + phase);
+    return amplitude * envelope * rollingShape;
 }
 
 double targetHalfWidth(WorkoutGameTerrainKind terrain)
@@ -152,6 +153,26 @@ double surfaceOffsetAt(
     for (std::size_t candidate = first; candidate <= last; ++candidate) {
         offset += featureSurfaceOffset(
                 course.pieces[candidate], distanceMeters);
+    }
+    return offset;
+}
+
+double nonPhysicalFeatureOffsetAt(
+        const WorkoutGameRoadCourse &course,
+        double distanceMeters)
+{
+    const std::size_t index = pieceIndexAt(course, distanceMeters);
+    const std::size_t first = index > 0u ? index - 1u : 0u;
+    const std::size_t last = std::min(
+            course.pieces.size() - 1u, index + 1u);
+    double offset = 0.0;
+    for (std::size_t candidate = first; candidate <= last; ++candidate) {
+        const WorkoutGameRoadPiece &piece = course.pieces[candidate];
+        if (piece.terrain == WorkoutGameTerrainKind::BunnyHop
+                || piece.terrain == WorkoutGameTerrainKind::LogOver
+                || piece.terrain == WorkoutGameTerrainKind::Tabletop) {
+            offset += featureSurfaceOffset(piece, distanceMeters);
+        }
     }
     return offset;
 }
@@ -381,6 +402,12 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                     : measuredPreparationDistance;
                 piece.challenge.decisionDistanceMeters = challengeDistance;
                 piece.challenge.obstacleDistanceMeters = obstacleDistance;
+                piece.challenge.bypassEndDistanceMeters = std::min(
+                        sectionStart + sectionLength,
+                        std::max(obstacleDistance + 8.0,
+                                 challengeDistance + 12.0));
+                piece.challenge.bypassLateralMeters =
+                        (sectionIndex & 1u) == 0u ? -2.2 : 2.2;
                 piece.challenge.profile.measurementStartProgress =
                         (piece.challenge.prepareDistanceMeters - sectionStart)
                         / sectionLength;
@@ -463,6 +490,8 @@ WorkoutGameRoadSample WorkoutGameRoadCourseBuilder::sample(
     result.pieceProgress = progress;
     result.center = connectorAt(piece, progress);
     result.surfaceOffsetMeters = surfaceOffsetAt(course, distance);
+    result.nonPhysicalFeatureOffsetMeters =
+            nonPhysicalFeatureOffsetAt(course, distance);
     const double reliefOffset = trailReliefOffset(piece, distance);
     result.center.elevationMeters += reliefOffset
             + result.surfaceOffsetMeters;

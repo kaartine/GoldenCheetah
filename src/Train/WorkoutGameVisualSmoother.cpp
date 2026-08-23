@@ -321,6 +321,39 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::interpolate(
             from.simulation.challengeReadiness,
             to.simulation.challengeReadiness,
             amount);
+    result.simulation.challengeMetrics.averageActualWatts = lerp(
+            from.simulation.challengeMetrics.averageActualWatts,
+            to.simulation.challengeMetrics.averageActualWatts, amount);
+    result.simulation.challengeMetrics.averageTargetWatts = lerp(
+            from.simulation.challengeMetrics.averageTargetWatts,
+            to.simulation.challengeMetrics.averageTargetWatts, amount);
+    result.simulation.challengeMetrics.averageEffortRatio = lerp(
+            from.simulation.challengeMetrics.averageEffortRatio,
+            to.simulation.challengeMetrics.averageEffortRatio, amount);
+    result.simulation.challengeMetrics.averageCadenceRpm = lerp(
+            from.simulation.challengeMetrics.averageCadenceRpm,
+            to.simulation.challengeMetrics.averageCadenceRpm, amount);
+    result.simulation.challengeMetrics.averageSpeedKph = lerp(
+            from.simulation.challengeMetrics.averageSpeedKph,
+            to.simulation.challengeMetrics.averageSpeedKph, amount);
+    result.simulation.challengeMetrics.averageAdherence = lerp(
+            from.simulation.challengeMetrics.averageAdherence,
+            to.simulation.challengeMetrics.averageAdherence, amount);
+    result.simulation.challengeAssessment.readiness = lerp(
+            from.simulation.challengeAssessment.readiness,
+            to.simulation.challengeAssessment.readiness, amount);
+    result.simulation.challengeAssessment.effortReadiness = lerp(
+            from.simulation.challengeAssessment.effortReadiness,
+            to.simulation.challengeAssessment.effortReadiness, amount);
+    result.simulation.challengeAssessment.cadenceReadiness = lerp(
+            from.simulation.challengeAssessment.cadenceReadiness,
+            to.simulation.challengeAssessment.cadenceReadiness, amount);
+    result.simulation.challengeAssessment.speedReadiness = lerp(
+            from.simulation.challengeAssessment.speedReadiness,
+            to.simulation.challengeAssessment.speedReadiness, amount);
+    result.simulation.challengeAssessment.adherenceReadiness = lerp(
+            from.simulation.challengeAssessment.adherenceReadiness,
+            to.simulation.challengeAssessment.adherenceReadiness, amount);
     result.riderPedalCycles = lerp(
             from.riderPedalCycles, to.riderPedalCycles, amount);
     for (std::size_t index = 0;
@@ -392,9 +425,9 @@ WorkoutGameVisualSnapshot WorkoutGameVisualSmoother::interpolate(
                 to.feature.distanceToObstacleMeters, amount);
         result.feature.readiness = lerp(
                 from.feature.readiness, to.feature.readiness, amount);
-        result.feature.lateralOffset = lerp(
-                from.feature.lateralOffset,
-                to.feature.lateralOffset, amount);
+        result.feature.lateralOffsetMeters = lerp(
+                from.feature.lateralOffsetMeters,
+                to.feature.lateralOffsetMeters, amount);
         result.feature.verticalOffsetMeters = lerp(
                 from.feature.verticalOffsetMeters,
                 to.feature.verticalOffsetMeters, amount);

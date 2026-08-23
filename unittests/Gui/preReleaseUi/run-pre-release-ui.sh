@@ -149,8 +149,12 @@ if [ -f "$TEST_ROOT/library/goldencheetah.log" ]; then
 fi
 
 if [ "$STATUS" -eq 0 ] && [ "${GC_WORKOUT_GAME_TRACE:-0}" = 1 ]; then
+    TRACE_LOG=$ARTIFACT_DIR/application.log
+    if [ -f "$ARTIFACT_DIR/goldencheetah.log" ]; then
+        TRACE_LOG=$ARTIFACT_DIR/goldencheetah.log
+    fi
     python3 "$SCRIPT_DIR/analyze_workout_game.py" \
-        "$ARTIFACT_DIR/application.log" \
+        "$TRACE_LOG" \
         --json "$ARTIFACT_DIR/workout-game-summary.json" || STATUS=$?
 fi
 

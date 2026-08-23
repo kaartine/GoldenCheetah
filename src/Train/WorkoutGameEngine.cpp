@@ -124,6 +124,8 @@ WorkoutGameEngineFrame WorkoutGameEngine::update(
         physicsInput.effortRatio = std::max(0.0, input.actualWatts) / target;
         physicsInput.paused = input.paused;
         physicsInput.jumpRequested = feature.triggerJump;
+        physicsInput.forceGroundFollowing = feature.route
+                == WorkoutGameRoute::SafeBypass;
         physicsInput.featureActionId = feature.actionId;
         world = physics.update(physicsInput);
 

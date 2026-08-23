@@ -118,6 +118,64 @@ private slots:
         QVERIFY(largestReportedDifference < 0.02);
     }
 
+    void safeBypassDoesNotCollideWithTheVisibleJumpMesh()
+    {
+        WorkoutGameCourse course;
+        course.status = WorkoutGameCourseStatus::Ready;
+        course.seed = 451u;
+        course.durationMs = 20000;
+        WorkoutGameSection section;
+        section.feature = WorkoutGameFeature::SprintJump;
+        section.terrain = WorkoutGameTerrainKind::Tabletop;
+        section.durationMs = course.durationMs;
+        section.targetWatts = 230.0;
+        section.difficulty = 0.8;
+        section.challengeCount = 1;
+        course.sections = {section};
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 200.0);
+        QVERIFY(road.ready);
+        const auto challengePiece = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &piece) {
+                    return piece.challenge.enabled;
+                });
+        QVERIFY(challengePiece != road.pieces.end());
+        const double obstacle =
+                challengePiece->challenge.obstacleDistanceMeters;
+        const WorkoutGameRoadSample obstacleSurface =
+                WorkoutGameRoadCourseBuilder::sample(road, obstacle);
+        QVERIFY(obstacleSurface.nonPhysicalFeatureOffsetMeters > 0.4);
+
+        WorkoutGamePhysics physics;
+        QVERIFY(physics.configure(road));
+        WorkoutGamePhysicsInput input;
+        input.terrain = section.terrain;
+        input.desiredSpeedMetersPerSecond = 5.0;
+        input.effortRatio = 0.5;
+        input.forceGroundFollowing = true;
+        const double start = std::max(0.0, obstacle - 6.0);
+        double maximumAirHeight = 0.0;
+        for (int tick = 0; tick <= 150; ++tick) {
+            input.workoutTimeMs = tick * 20;
+            input.courseDistanceMeters = start + tick * 0.1;
+            const WorkoutGameRoadSample surface =
+                    WorkoutGameRoadCourseBuilder::sample(
+                        road, input.courseDistanceMeters);
+            const WorkoutGameWorldSnapshot frame = physics.update(input);
+            QVERIFY(frame.ready);
+            const double physicalElevation = surface.surfaceElevationMeters()
+                    - surface.nonPhysicalFeatureOffsetMeters;
+            QVERIFY(std::abs(frame.surfaceElevationMeters
+                             - physicalElevation) < 0.03);
+            if (frame.rider.airborne) {
+                maximumAirHeight = std::max(
+                        maximumAirHeight, frame.rider.airHeightMeters());
+            }
+        }
+        QVERIFY(maximumAirHeight < 0.08);
+    }
+
     void ordinaryRollingReliefKeepsRiderGrounded()
     {
         WorkoutGameCourse course;
@@ -385,18 +443,30 @@ private slots:
         input.desiredSpeedMetersPerSecond = 6.0;
         input.effortRatio = 1.0;
         input.jumpRequested = true;
+        input.featureActionId = 42u;
         physics.update(input);
 
         bool sawAirborne = false;
         bool landed = false;
+        double maximumAirHeightMeters = 0.0;
         for (int time = 20; time <= 10000; time += 20) {
             input.workoutTimeMs = time;
             const WorkoutGameWorldSnapshot result = physics.update(input);
             sawAirborne = sawAirborne || result.rider.airborne;
             landed = landed || (sawAirborne && !result.rider.airborne);
+            maximumAirHeightMeters = std::max(
+                    maximumAirHeightMeters,
+                    result.rider.airHeightMeters());
         }
         QVERIFY(sawAirborne);
         QVERIFY(landed);
+        const double minimumVisibleAirHeight =
+                WorkoutGameTerrainKind(terrain)
+                        == WorkoutGameTerrainKind::Tabletop ? 0.32 : 0.20;
+        QVERIFY2(maximumAirHeightMeters >= minimumVisibleAirHeight,
+                 qPrintable(QStringLiteral(
+                     "feature reached only %1 m air height")
+                     .arg(maximumAirHeightMeters)));
     }
 
     void anchoredFeatureActionJumpsImmediatelyAndOnlyOnce()

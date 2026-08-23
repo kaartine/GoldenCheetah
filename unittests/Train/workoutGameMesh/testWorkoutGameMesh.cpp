@@ -134,6 +134,45 @@ private slots:
                  "the log becomes a wall in the near camera projection");
     }
 
+    void tabletopHasCurvedTakeoffDeckAndLandingGeometry()
+    {
+        const WorkoutGameFeatureGeometryProfile profile =
+                WorkoutGameFeatureGeometry::profile(
+                    WorkoutGameTerrainKind::Tabletop, 0.7);
+        const WorkoutGameMesh tabletop = WorkoutGameMeshLibrary::feature(
+                WorkoutGameTerrainKind::Tabletop, 0.7);
+        QVERIFY(profile.ready);
+        QCOMPARE(profile.shape,
+                 WorkoutGameFeatureGeometryShape::CurvedTabletop);
+        QVERIFY(WorkoutGameMeshLibrary::valid(tabletop));
+        QVERIFY(tabletop.vertices.size() >= 80u);
+        QVERIFY(tabletop.triangles.size() >= 80u);
+        const double takeoffMiddle =
+                (profile.startMeters + profile.plateauStartMeters) * 0.5;
+        const double landingMiddle =
+                (profile.plateauEndMeters + profile.endMeters) * 0.5;
+        QVERIFY(profile.surfaceOffset(takeoffMiddle)
+                < profile.heightMeters * 0.45);
+        QVERIFY(profile.surfaceOffset(landingMiddle)
+                > profile.heightMeters * 0.55);
+        QCOMPARE(profile.surfaceOffset(profile.plateauStartMeters),
+                 profile.heightMeters);
+        QCOMPARE(profile.surfaceOffset(profile.plateauEndMeters),
+                 profile.heightMeters);
+    }
+
+    void logUsesAReadableRoundedCrossSection()
+    {
+        QVERIFY(WorkoutGameLogRadialSegments >= 16);
+        const WorkoutGameMesh log = WorkoutGameMeshLibrary::feature(
+                WorkoutGameTerrainKind::LogOver, 0.7);
+        QVERIFY(WorkoutGameMeshLibrary::valid(log));
+        QVERIFY(log.vertices.size()
+                >= std::size_t(WorkoutGameLogRadialSegments * 2 + 2));
+        QVERIFY(log.triangles.size()
+                >= std::size_t(WorkoutGameLogRadialSegments * 3));
+    }
+
     void transformedMeshProjectsAndSortsFarFacesFirst()
     {
         const WorkoutGameRoadCourse course = straightCourse();

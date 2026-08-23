@@ -17,7 +17,8 @@
 WorkoutGamePowerProfileSnapshot WorkoutGamePowerProfile::build(
         const WorkoutGameCourse &course,
         const WorkoutGameSimulationSnapshot &simulation,
-        double requestedActualWatts)
+        double requestedActualWatts,
+        double requestedCadenceRpm)
 {
     WorkoutGamePowerProfileSnapshot result;
     if (course.status != WorkoutGameCourseStatus::Ready
@@ -81,11 +82,47 @@ WorkoutGamePowerProfileSnapshot WorkoutGamePowerProfile::build(
         if (challenge.enabled) {
             const double progress = std::clamp(
                     simulation.sectionProgress, 0.0, 1.0);
-            result.cue.requiredWatts = section.targetWatts
-                    * (challenge.minimumEffortRatio > 0.0
-                        ? challenge.minimumEffortRatio : 1.0);
-            result.cue.readiness = std::clamp(
-                    simulation.challengeReadiness, 0.0, 1.0);
+            WorkoutGameFeatureChallengeMetrics metrics;
+            result.cue.measurementActive =
+                    simulation.challengeMeasurementActive;
+            if (result.cue.measurementActive) {
+                metrics = simulation.challengeMetrics;
+            } else {
+                metrics.averageActualWatts = result.actualWatts;
+                metrics.averageTargetWatts = section.targetWatts;
+                metrics.averageEffortRatio = section.targetWatts > 0.0
+                        ? result.actualWatts / section.targetWatts : 0.0;
+                metrics.averageCadenceRpm = std::max(
+                        0.0, std::isfinite(requestedCadenceRpm)
+                            ? requestedCadenceRpm : 0.0);
+                metrics.averageSpeedKph = std::max(
+                        0.0, std::isfinite(simulation.speedKph)
+                            ? simulation.speedKph : 0.0);
+                metrics.averageAdherence = std::clamp(
+                        std::isfinite(simulation.adherence)
+                            ? simulation.adherence : 0.0,
+                        0.0, 1.0);
+            }
+            const WorkoutGameFeatureChallengeAssessment assessment =
+                    WorkoutGameFeatureChallenge::assess(challenge, metrics);
+            const double measuredTarget = metrics.averageTargetWatts > 0.0
+                    ? metrics.averageTargetWatts : section.targetWatts;
+            result.cue.powerRequired = challenge.minimumEffortRatio > 0.0;
+            result.cue.cadenceRequired = challenge.minimumCadenceRpm > 0.0;
+            result.cue.speedRequired = challenge.minimumSpeedKph > 0.0
+                    || challenge.maximumSpeedKph > 0.0;
+            result.cue.requiredWatts = result.cue.powerRequired
+                    ? measuredTarget * challenge.minimumEffortRatio : 0.0;
+            result.cue.actualWatts = metrics.averageActualWatts;
+            result.cue.requiredCadenceRpm = challenge.minimumCadenceRpm;
+            result.cue.actualCadenceRpm = metrics.averageCadenceRpm;
+            result.cue.requiredSpeedKph = challenge.minimumSpeedKph;
+            result.cue.maximumSpeedKph = challenge.maximumSpeedKph;
+            result.cue.actualSpeedKph = metrics.averageSpeedKph;
+            result.cue.powerReadiness = assessment.effortReadiness;
+            result.cue.cadenceReadiness = assessment.cadenceReadiness;
+            result.cue.speedReadiness = assessment.speedReadiness;
+            result.cue.readiness = assessment.readiness;
             if (progress < challenge.measurementStartProgress) {
                 result.cue.state = WorkoutGamePowerCueState::Prepare;
                 result.cue.secondsUntilWindow =

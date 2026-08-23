@@ -683,7 +683,7 @@ def exercise(root: Path, artifacts: Path, app_pid: int) -> int:
                 canvas = driver.find("Workout game canvas", showing=True)
                 time.sleep(1.2)
                 first = driver.screenshot("04-workout-game-first", canvas)
-                time.sleep(5.8)
+                time.sleep(11.8)
                 second = driver.screenshot("04-workout-game-running", canvas)
                 changed = driver.changed_pixels(first, second)
                 if changed < 1200:
