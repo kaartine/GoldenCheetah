@@ -572,7 +572,7 @@ private slots:
         QVERIFY(changedPixels(completed, bypassed, 180) > 1800);
     }
 
-    void featureLabRendersFiveDistinctObstacles()
+    void featureLabRendersItsOriginalFiveDistinctObstacles()
     {
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
         const WorkoutGameRoadCourse road =
@@ -603,7 +603,7 @@ private slots:
                     - timeline.startDistanceMeters;
             const double visualDistance = std::max(
                     timeline.startDistanceMeters,
-                    challengePiece->challenge.obstacleDistanceMeters - 14.0);
+                    challengePiece->challenge.obstacleDistanceMeters - 10.0);
             const double sectionProgress = std::clamp(
                     (visualDistance - timeline.startDistanceMeters)
                         / sectionLength,

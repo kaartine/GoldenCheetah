@@ -15,8 +15,29 @@
 
 namespace {
 
-constexpr std::int64_t FeatureDurationMs = 12000;
-constexpr std::int64_t RecoveryDurationMs = 4000;
+constexpr std::int64_t FeatureDurationMs = 5000;
+constexpr std::int64_t TabletopDurationMs = 12000;
+constexpr std::int64_t RecoveryDurationMs = 1000;
+constexpr double FeatureLengthMeters = 28.0;
+constexpr double DropLengthMeters = 36.0;
+constexpr double TabletopLengthMeters = 100.0;
+constexpr double RecoveryLengthMeters = 8.0;
+
+WorkoutGameFeature featureForTerrain(WorkoutGameTerrainKind terrain)
+{
+    switch (terrain) {
+    case WorkoutGameTerrainKind::Climb:
+        return WorkoutGameFeature::Climb;
+    case WorkoutGameTerrainKind::BunnyHop:
+    case WorkoutGameTerrainKind::LogOver:
+    case WorkoutGameTerrainKind::Tabletop:
+        return WorkoutGameFeature::SprintJump;
+    case WorkoutGameTerrainKind::Drop:
+        return WorkoutGameFeature::RecoveryDescent;
+    default:
+        return WorkoutGameFeature::Trail;
+    }
+}
 
 WorkoutGameSection featureSection(
         WorkoutGameTerrainKind terrain,
@@ -26,12 +47,14 @@ WorkoutGameSection featureSection(
         std::uint32_t variant)
 {
     WorkoutGameSection section;
-    section.feature = terrain == WorkoutGameTerrainKind::Tabletop
-            || terrain == WorkoutGameTerrainKind::LogOver
-            ? WorkoutGameFeature::SprintJump
-            : WorkoutGameFeature::Trail;
+    section.feature = featureForTerrain(terrain);
     section.terrain = terrain;
-    section.durationMs = FeatureDurationMs;
+    section.durationMs = terrain == WorkoutGameTerrainKind::Tabletop
+            ? TabletopDurationMs : FeatureDurationMs;
+    section.lengthMeters = terrain == WorkoutGameTerrainKind::Tabletop
+            ? TabletopLengthMeters
+            : terrain == WorkoutGameTerrainKind::Drop
+            ? DropLengthMeters : FeatureLengthMeters;
     section.targetWatts = targetWatts;
     section.gradePercent = gradePercent;
     section.difficulty = difficulty;
@@ -47,6 +70,7 @@ WorkoutGameSection recoverySection(double ftpWatts, std::uint32_t variant)
     section.feature = WorkoutGameFeature::FlowTrail;
     section.terrain = WorkoutGameTerrainKind::SmoothTrail;
     section.durationMs = RecoveryDurationMs;
+    section.lengthMeters = RecoveryLengthMeters;
     section.targetWatts = ftpWatts * 0.55;
     section.gradePercent = -1.0;
     section.difficulty = 0.2;
@@ -95,7 +119,19 @@ WorkoutGameCourse WorkoutGameFeatureLab::course(
         featureSection(WorkoutGameTerrainKind::Tabletop,
                        ftpWatts * 1.15, -1.0, 0.68, 4u),
         featureSection(WorkoutGameTerrainKind::Drop,
-                       ftpWatts * 0.55, -6.0, 0.58, 5u)
+                       ftpWatts * 0.55, -6.0, 0.58, 5u),
+        featureSection(WorkoutGameTerrainKind::Rollers,
+                       ftpWatts * 0.82, 0.0, 0.42, 6u),
+        featureSection(WorkoutGameTerrainKind::Climb,
+                       ftpWatts * 1.10, 9.0, 0.72, 7u),
+        featureSection(WorkoutGameTerrainKind::BunnyHop,
+                       ftpWatts * 1.10, 0.0, 0.56, 8u),
+        featureSection(WorkoutGameTerrainKind::Skinny,
+                       ftpWatts * 0.78, 0.0, 0.60, 9u),
+        featureSection(WorkoutGameTerrainKind::Berm,
+                       ftpWatts * 0.88, -1.0, 0.66, 10u),
+        featureSection(WorkoutGameTerrainKind::RockSlab,
+                       ftpWatts * 0.92, -4.0, 0.70, 11u)
     };
 
     std::int64_t startMs = 0;

@@ -333,7 +333,10 @@ private slots:
                  qPrintable(QStringLiteral(
                      "tabletop produced only %1 px of visible lift")
                      .arg(maximumLiftPixels)));
-        QVERIFY(readableAirborneFrames >= 40);
+        QVERIFY2(readableAirborneFrames >= 40,
+                 qPrintable(QStringLiteral(
+                     "tabletop produced only %1 readable airborne frames")
+                     .arg(readableAirborneFrames)));
         QVERIFY(minimumAirborneShadowScale <= 0.70);
     }
 

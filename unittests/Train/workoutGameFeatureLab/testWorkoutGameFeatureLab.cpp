@@ -16,7 +16,7 @@ class TestWorkoutGameFeatureLab : public QObject
     Q_OBJECT
 
 private slots:
-    void courseContainsTheFirstFeatureSetInOrder()
+    void courseContainsEveryTechnicalFeatureInOrder()
     {
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(
                 200.0, 712u);
@@ -34,9 +34,16 @@ private slots:
             WorkoutGameTerrainKind::Roots,
             WorkoutGameTerrainKind::RockGarden,
             WorkoutGameTerrainKind::Tabletop,
-            WorkoutGameTerrainKind::Drop
+            WorkoutGameTerrainKind::Drop,
+            WorkoutGameTerrainKind::Rollers,
+            WorkoutGameTerrainKind::Climb,
+            WorkoutGameTerrainKind::BunnyHop,
+            WorkoutGameTerrainKind::Skinny,
+            WorkoutGameTerrainKind::Berm,
+            WorkoutGameTerrainKind::RockSlab
         };
         QCOMPARE(challenged, expected);
+        QCOMPARE(course.durationMs, std::int64_t(72000));
     }
 
     void generatedCourseIsDeterministicAndRejectsInvalidFtp()
@@ -63,8 +70,8 @@ private slots:
 
         QCOMPARE(WorkoutGameFeatureLab::targetWattsAt(course, -1), 0.0);
         QCOMPARE(WorkoutGameFeatureLab::targetWattsAt(course, 0), 210.0);
-        QCOMPARE(WorkoutGameFeatureLab::targetWattsAt(course, 11999), 210.0);
-        QCOMPARE(WorkoutGameFeatureLab::targetWattsAt(course, 12000), 110.0);
+        QCOMPARE(WorkoutGameFeatureLab::targetWattsAt(course, 4999), 210.0);
+        QCOMPARE(WorkoutGameFeatureLab::targetWattsAt(course, 5000), 110.0);
         QCOMPARE(WorkoutGameFeatureLab::targetWattsAt(
                     course, course.durationMs), 0.0);
     }

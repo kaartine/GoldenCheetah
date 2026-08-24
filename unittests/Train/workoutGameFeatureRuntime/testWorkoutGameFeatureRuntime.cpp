@@ -307,8 +307,12 @@ private slots:
         const auto actionProgress = [&](int section,
                                         const WorkoutGameRoadPiece &piece) {
             const double takeoff = jumpTakeoffDistance(piece);
-            const double distance = takeoff + 0.3
-                    * (jumpActionEndDistance(road, section, piece) - takeoff);
+            const WorkoutGameFeatureRuntimeSnapshot layout = runtime.update(
+                    snapshot(section, progressAtDistance(
+                                road, section, takeoff + 0.1), completed));
+            const double distance = layout.actionStartDistanceMeters + 0.3
+                    * (layout.actionEndDistanceMeters
+                       - layout.actionStartDistanceMeters);
             return progressAtDistance(road, section, distance);
         };
         const WorkoutGameFeatureRuntimeSnapshot log = runtime.update(snapshot(
@@ -387,9 +391,16 @@ private slots:
         const WorkoutGameFeatureRuntimeSnapshot fastFlight =
                 runtime.update(fast);
 
-        QVERIFY(normalFlight.flightDurationSeconds >= 1.5);
-        QVERIFY(fastFlight.flightDurationSeconds
-                > normalFlight.flightDurationSeconds);
+        QVERIFY2(normalFlight.flightDurationSeconds >= 1.5,
+                 qPrintable(QStringLiteral(
+                     "normal tabletop flight lasted only %1 seconds")
+                     .arg(normalFlight.flightDurationSeconds)));
+        QVERIFY2(fastFlight.flightDurationSeconds
+                    > normalFlight.flightDurationSeconds,
+                 qPrintable(QStringLiteral(
+                     "fast tabletop flight %1 s did not exceed normal %2 s")
+                     .arg(fastFlight.flightDurationSeconds)
+                     .arg(normalFlight.flightDurationSeconds)));
         QVERIFY(fastFlight.flightDurationSeconds <= 5.0);
     }
 
@@ -457,7 +468,11 @@ private slots:
                 WorkoutGameFeatureOutcome::Completed));
 
         QCOMPARE(action.motion, WorkoutGameFeatureMotion::Drop);
-        QVERIFY(action.pitchDegrees < -2.0);
+        QCOMPARE(action.phase, WorkoutGameFeaturePhase::Action);
+        QVERIFY2(action.pitchDegrees < -2.0,
+                 qPrintable(QStringLiteral(
+                     "drop action pitch was %1 degrees")
+                     .arg(action.pitchDegrees)));
         QVERIFY(recovery.landingImpact > 0.0);
     }
 

@@ -85,6 +85,21 @@ private slots:
                  QQuick3DGeometry::Attribute::IndexSemantic);
     }
 
+    void trailPreservesAcceptedRiderScale()
+    {
+        WorkoutGame3DGeometry geometry(
+                WorkoutGame3DGeometry::Layer::Trail);
+        geometry.setCourse(straightCourse(12.0));
+
+        QVERIFY(geometry.ready());
+        const float leftX = vertexFloat(
+                geometry.vertexData(), geometry.stride(), 0, 0);
+        const float rightX = vertexFloat(
+                geometry.vertexData(), geometry.stride(), 1, 0);
+        QVERIFY(std::abs(leftX + 0.68f) < 0.001f);
+        QVERIFY(std::abs(rightX - 0.68f) < 0.001f);
+    }
+
     void floorIsWiderAndBelowTrail()
     {
         WorkoutGame3DGeometry trail(

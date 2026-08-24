@@ -11,6 +11,7 @@ SOURCES += testWorkoutGame3DView.cpp \
            ../../../src/Train/WorkoutGame3DWindow.cpp \
            ../../../src/Train/WorkoutGameRoadCourse.cpp \
            ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
+           ../../../src/Train/WorkoutGameFeatureRuntime.cpp \
            ../../../src/Train/WorkoutGameTerrainTransition.cpp \
            ../../../src/Train/WorkoutGameVisualSmoother.cpp
 
