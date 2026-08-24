@@ -1472,7 +1472,8 @@ LGPL21_LICENSE_FIXTURE="/usr/share/common-licenses/LGPL-2.1"
 
 KEYCHAIN_APPDIR="$TEMP_DIR/keychain.AppDir"
 KEYCHAIN_TRANSFORM_MANIFEST="$TEMP_DIR/keychain-transformations.json"
-mkdir -p "$KEYCHAIN_APPDIR/lib"
+mkdir -p "$KEYCHAIN_APPDIR/lib" \
+    "$KEYCHAIN_APPDIR/qml/QtQml/Models"
 cp "$TEMP_DIR/libsecret/lib/libglib-2.0.so.0" \
     "$TEMP_DIR/libsecret/lib/libgio-2.0.so.0" \
     "$TEMP_DIR/libsecret/lib/libgobject-2.0.so.0" \
@@ -1480,9 +1481,14 @@ cp "$TEMP_DIR/libsecret/lib/libglib-2.0.so.0" \
     "$KEYCHAIN_APPDIR/lib/"
 printf 'prior authenticated source\n' >"$TEMP_DIR/prior-source.so.1"
 printf 'prior transformed output\n' >"$KEYCHAIN_APPDIR/lib/libprior.so.1"
+printf 'Qt QML plugin source\n' >"$TEMP_DIR/libmodelsplugin.so"
+printf 'transformed Qt QML plugin\n' \
+    >"$KEYCHAIN_APPDIR/qml/QtQml/Models/libmodelsplugin.so"
 python3 - \
     "$TEMP_DIR/prior-source.so.1" \
     "$KEYCHAIN_APPDIR/lib/libprior.so.1" \
+    "$TEMP_DIR/libmodelsplugin.so" \
+    "$KEYCHAIN_APPDIR/qml/QtQml/Models/libmodelsplugin.so" \
     "$KEYCHAIN_TRANSFORM_MANIFEST" <<'PY'
 import hashlib
 import json
@@ -1491,7 +1497,9 @@ import sys
 
 source = Path(sys.argv[1]).resolve()
 output = Path(sys.argv[2]).resolve()
-manifest = Path(sys.argv[3])
+qml_source = Path(sys.argv[3]).resolve()
+qml_output = Path(sys.argv[4]).resolve()
+manifest = Path(sys.argv[5])
 document = {
     "format": "goldencheetah-transformed-runtime-1",
     "libraries": [
@@ -1505,7 +1513,18 @@ document = {
                 + "d" * 64
                 + ":rpath=$ORIGIN"
             ),
-        }
+        },
+        {
+            "output_sha256": hashlib.sha256(qml_output.read_bytes()).hexdigest(),
+            "path": "qml/QtQml/Models/libmodelsplugin.so",
+            "source_path": str(qml_source),
+            "source_sha256": hashlib.sha256(qml_source.read_bytes()).hexdigest(),
+            "transformation": (
+                "linuxdeployqt-no-strip:"
+                + "d" * 64
+                + ":rpath=relative-lib"
+            ),
+        },
     ],
 }
 manifest.write_text(json.dumps(document), encoding="utf-8")
@@ -1533,9 +1552,12 @@ assert [entry["path"] for entry in manifest["libraries"]] == [
     "lib/libgcrypt.so.20",
     "lib/libprior.so.1",
     "lib/libsecret-1.so.0",
+    "qml/QtQml/Models/libmodelsplugin.so",
 ]
 for entry in manifest["libraries"]:
-    if entry["path"] == "lib/libprior.so.1":
+    if entry["path"].startswith("qml/"):
+        assert entry["transformation"].endswith("rpath=relative-lib")
+    elif entry["path"] == "lib/libprior.so.1":
         assert entry["transformation"].startswith("linuxdeployqt-no-strip:")
     else:
         assert entry["transformation"] == "patchelf-set-rpath:$ORIGIN"

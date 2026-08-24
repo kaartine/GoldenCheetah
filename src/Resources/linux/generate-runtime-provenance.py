@@ -215,6 +215,10 @@ def load_transformed_runtime_manifest(
             or transformation not in allowed_transformations
         ):
             raise ValueError("invalid transformed runtime transformation")
+        if transformation.endswith(":rpath=relative-lib") and not (
+            relative.startswith("plugins/") or relative.startswith("qml/")
+        ):
+            raise ValueError("invalid transformed runtime transformation path")
         output = checked_appdir_relative_path(
             relative, appdir, "transformed runtime"
         )

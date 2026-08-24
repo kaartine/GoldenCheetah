@@ -1269,7 +1269,8 @@ import sys
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 LINUXDEPLOYQT_TRANSFORMATION_RE = re.compile(
-    r"^linuxdeployqt-no-strip:[0-9a-f]{64}:rpath=\$ORIGIN$"
+    r"^linuxdeployqt-no-strip:[0-9a-f]{64}:"
+    r"rpath=(?:\$ORIGIN|relative-lib)$"
 )
 
 
@@ -1380,6 +1381,10 @@ for entry in document["libraries"]:
             transformation != "patchelf-set-rpath:$ORIGIN"
             and not LINUXDEPLOYQT_TRANSFORMATION_RE.fullmatch(transformation)
         )
+    ):
+        raise ValueError("invalid Linux keychain transformation entry")
+    if transformation.endswith(":rpath=relative-lib") and not (
+        relative.startswith("plugins/") or relative.startswith("qml/")
     ):
         raise ValueError("invalid Linux keychain transformation entry")
     if sha256_file(source) != source_digest:

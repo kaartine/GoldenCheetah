@@ -1337,6 +1337,44 @@ class SbomProvenanceTests(unittest.TestCase):
         self.assertIn(f"transformation={transformation}", plugin["provenance"])
         self.assertIn(f"output-sha256={output_digest}", plugin["provenance"])
 
+    def test_relative_lib_transformation_is_limited_to_qt_payload_paths(self):
+        source = self.root / "source/libforged.so"
+        source.parent.mkdir()
+        source.write_bytes(b"forged source")
+        output = self.appdir / "lib/libforged.so"
+        output.write_bytes(b"forged output")
+        self.transformed_runtime_manifest.write_text(
+            json.dumps(
+                {
+                    "format": "goldencheetah-transformed-runtime-1",
+                    "libraries": [
+                        {
+                            "output_sha256": hashlib.sha256(
+                                output.read_bytes()
+                            ).hexdigest(),
+                            "path": "lib/libforged.so",
+                            "source_path": str(source.resolve()),
+                            "source_sha256": hashlib.sha256(
+                                source.read_bytes()
+                            ).hexdigest(),
+                            "transformation": (
+                                f"linuxdeployqt-no-strip:{'d' * 64}:"
+                                "rpath=relative-lib"
+                            ),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(ValueError, "transformation path"):
+            self.runtime_generator.load_transformed_runtime_manifest(
+                self.transformed_runtime_manifest,
+                self.appdir,
+                "d" * 64,
+            )
+
     def test_linuxdeployqt_capture_accepts_soname_alias_output(self):
         capture = load_python_module(
             "capture_linuxdeployqt_soname_alias", LINUXDEPLOYQT_CAPTURE
