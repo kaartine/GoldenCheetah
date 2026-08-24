@@ -11,6 +11,7 @@
 #include "WorkoutGameClock.h"
 #include "WorkoutGameFeaturePrompt.h"
 #include "WorkoutGameHorizon.h"
+#include "WorkoutGameRiderVisual.h"
 
 #include "WorkoutGameRoadProjection.h"
 #include "WorkoutGameMesh.h"
@@ -27,6 +28,7 @@
 #include <QScreen>
 #include <QSGGeometry>
 #include <QSGGeometryNode>
+#include <QSGOpacityNode>
 #include <QSGSimpleTextureNode>
 #include <QSGTransformNode>
 #include <QSGVertexColorMaterial>
@@ -61,6 +63,8 @@ struct WorkoutGameSceneRoot : public QSGNode
     QSGSimpleTextureNode *background = nullptr;
     QSGGeometryNode *terrain = nullptr;
     QSGGeometryNode *features = nullptr;
+    QSGOpacityNode *riderShadowOpacity = nullptr;
+    QSGSimpleTextureNode *riderShadow = nullptr;
     QSGTransformNode *riderTransform = nullptr;
     QSGSimpleTextureNode *rider = nullptr;
     QSGSimpleTextureNode *hud = nullptr;
@@ -90,6 +94,11 @@ WorkoutGameSceneRoot *createSceneRoot()
     root->appendChildNode(root->background);
     root->terrain = createGeometryNode(root);
     root->features = createGeometryNode(root);
+    root->riderShadowOpacity = new QSGOpacityNode;
+    root->appendChildNode(root->riderShadowOpacity);
+    root->riderShadow = new QSGSimpleTextureNode;
+    root->riderShadow->setOwnsTexture(true);
+    root->riderShadowOpacity->appendChildNode(root->riderShadow);
     root->riderTransform = new QSGTransformNode;
     root->appendChildNode(root->riderTransform);
     root->rider = new QSGSimpleTextureNode;
@@ -109,6 +118,20 @@ void setTexture(
     if (!node || !window || image.isNull()) return;
     node->setTexture(window->createTextureFromImage(image));
     node->setFiltering(QSGTexture::Nearest);
+}
+
+QImage createRiderShadowImage()
+{
+    QImage image(96, 32, QImage::Format_RGBA8888_Premultiplied);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing, false);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(7, 12, 9, 190));
+    painter.drawEllipse(QRect(4, 7, 88, 18));
+    painter.setBrush(QColor(7, 12, 9, 220));
+    painter.drawEllipse(QRect(18, 10, 60, 12));
+    return image;
 }
 
 void appendTriangle(
@@ -833,7 +856,8 @@ WorkoutGameSceneGraphItem::WorkoutGameSceneGraphItem(QQuickItem *parent) :
     QQuickItem(parent),
     backgroundImage(QStringLiteral(
             ":/images/workout-game-background-oblique.png")),
-    riderImage(QStringLiteral(":/images/workout-game-rider-chase-sheet.png"))
+    riderImage(QStringLiteral(":/images/workout-game-rider-chase-sheet.png")),
+    riderShadowImage(createRiderShadowImage())
 {
     setFlag(ItemHasContents, true);
     diagnosticsEnabled = environmentEnabled("GC_WORKOUT_GAME_DIAGNOSTICS");
@@ -1313,6 +1337,7 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
     if (!root) {
         root = createSceneRoot();
         setTexture(root->background, window(), backgroundImage);
+        setTexture(root->riderShadow, window(), riderShadowImage);
         setTexture(root->rider, window(), riderImage);
         setTexture(root->hud, window(), hudImage);
         root->hudRevision = hudRevision;
@@ -1406,24 +1431,23 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
             (riderFrame % RiderColumns) * riderFrameWidth,
             (riderFrame / RiderColumns) * riderFrameHeight,
             riderFrameWidth, riderFrameHeight));
-    const double riderWidth = std::clamp(
+    const double baseRiderWidth = std::clamp(
             viewportWidth * 0.11, 90.0, 165.0);
-    const double riderHeight = riderWidth * riderFrameHeight
+    const double baseRiderHeight = baseRiderWidth * riderFrameHeight
             / double(std::max(1, riderFrameWidth));
+    const WorkoutGameRiderVisualPose riderPose =
+            WorkoutGameRiderVisual::pose(
+                visual.world, feature, baseRiderHeight);
+    const double riderWidth = baseRiderWidth * riderPose.riderWidthScale;
+    const double riderHeight = baseRiderHeight * riderPose.riderHeightScale;
     const double featureShake = feature.vibration > 0.0
             ? feature.vibration
                 * std::sin(feature.visualDistanceMeters * 18.0) * 12.0
             : 0.0;
-    const double airHeightMeters = std::max(
-            visual.world.ready
-                ? visual.world.rider.airHeightMeters() : 0.0,
-            feature.verticalOffsetMeters);
-    const double physicsLift = airHeightMeters
-            * std::clamp(viewportHeight * 0.09, 52.0, 86.0);
     const double landingCompression = std::max(
             visual.world.landingImpact, feature.landingImpact) * 12.0;
     const double bob = visual.world.ready
-            ? physicsLift
+            ? riderPose.liftPixels
                 - (visual.world.rider.rearSuspension
                     + visual.world.rider.frontSuspension) * 3.0
                 + featureShake
@@ -1433,6 +1457,15 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
             ? projection.riderScreenX : viewportWidth * 0.5;
     const double riderY = projection.ready
             ? projection.riderScreenY : viewportHeight * 0.82;
+    const double shadowWidth = baseRiderWidth * 0.62
+            * riderPose.shadowScale;
+    const double shadowHeight = baseRiderHeight * 0.105
+            * riderPose.shadowScale;
+    root->riderShadow->setRect(
+            riderX - shadowWidth * 0.5,
+            riderY + baseRiderHeight * 0.12 - shadowHeight * 0.5,
+            shadowWidth, shadowHeight);
+    root->riderShadowOpacity->setOpacity(riderPose.shadowOpacity);
     root->rider->setRect(
             riderX - riderWidth * 0.5,
             riderY - riderHeight * 0.78 - bob,
@@ -1441,8 +1474,7 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
     const double riderCenterY = riderY - riderHeight * 0.35 - bob;
     riderTransform.translate(float(riderX), float(riderCenterY));
     riderTransform.rotate(
-            float(-visual.world.rider.pitchDegrees
-                  - feature.pitchDegrees * 0.35),
+            float(riderPose.screenRollDegrees),
             0.0f, 0.0f, 1.0f);
     riderTransform.translate(float(-riderX), float(-riderCenterY));
     root->riderTransform->setMatrix(riderTransform);
@@ -1484,7 +1516,7 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
     diagnosticsInput.skippedSimulationTicks =
             currentFrame.skippedSimulationTicks;
     diagnosticsInput.worldReady = visual.world.ready;
-    diagnosticsInput.riderAirborne = visual.world.rider.airborne;
+    diagnosticsInput.riderAirborne = riderPose.airborne;
     diagnosticsInput.airborneExpected =
             WorkoutGameFeatureRuntime::airborneExpected(feature);
     diagnosticsInput.riderElevationMeters =
@@ -1493,8 +1525,7 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
             visual.world.surfaceElevationMeters;
     diagnosticsInput.riderClearanceMeters =
             visual.world.rider.clearanceMeters;
-    diagnosticsInput.airHeightMeters =
-            visual.world.rider.airHeightMeters();
+    diagnosticsInput.airHeightMeters = riderPose.airHeightMeters;
     diagnosticsInput.lateralOffsetMeters = feature.lateralOffsetMeters;
     diagnosticsInput.visibleElevationChangeMeters =
             projection.visibleElevationChangeMeters;

@@ -14,6 +14,7 @@ SOURCES = testWorkoutGameSceneGraph.cpp \
           ../../../src/Train/WorkoutGameMesh.cpp \
           ../../../src/Train/WorkoutGamePowerCueGeometry.cpp \
           ../../../src/Train/WorkoutGamePowerProfile.cpp \
+          ../../../src/Train/WorkoutGameRiderVisual.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \
           ../../../src/Train/WorkoutGameRoadProjection.cpp \
           ../../../src/Train/WorkoutGameSceneGraphWindow.cpp \
@@ -31,6 +32,7 @@ HEADERS = ../../../src/Train/WorkoutGameFeatureChallenge.h \
           ../../../src/Train/WorkoutGameMesh.h \
           ../../../src/Train/WorkoutGamePowerCueGeometry.h \
           ../../../src/Train/WorkoutGamePowerProfile.h \
+          ../../../src/Train/WorkoutGameRiderVisual.h \
           ../../../src/Train/WorkoutGameRoadCourse.h \
           ../../../src/Train/WorkoutGameRoadProjection.h \
           ../../../src/Train/WorkoutGameSceneGraphWindow.h \

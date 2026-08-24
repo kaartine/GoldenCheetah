@@ -906,9 +906,12 @@ SOURCES += Train/AddDeviceWizard.cpp Train/CalibrationData.cpp Train/Computraine
            Train/SpinScanPlotWindow.cpp Train/SpinScanPolarPlot.cpp Train/GarminServiceHelper.cpp Train/PhysicsUtility.cpp Train/BicycleSim.cpp \
            Train/PolynomialRegression.cpp Train/StravaRoutesClient.cpp Train/StravaRoutesDownload.cpp Train/StravaRoutesDownloadPipeline.cpp \
            Train/VideoSyncFileBase.cpp Train/ErgFileBase.cpp Train/TrainingCommandRouter.cpp Train/TrainingCsvSeries.cpp Train/TrainerTargetCoordinator.cpp Train/VirtualDrivetrain.cpp Train/WorkoutGameCanvas.cpp Train/WorkoutGameClock.cpp Train/WorkoutGameCompetition.cpp Train/WorkoutGameCourse.cpp Train/WorkoutGameCourseConversion.cpp Train/WorkoutGameCourseConversionDialog.cpp Train/WorkoutGameCourseCrsExporter.cpp Train/WorkoutGameCourseDocument.cpp Train/WorkoutGameCoursePreviewWidget.cpp Train/WorkoutGameCourseRuntime.cpp Train/WorkoutGameCourseSourceAdapter.cpp Train/WorkoutGameDiagnostics.cpp Train/WorkoutGameDistanceCourse.cpp Train/WorkoutGameDistancePlayback.cpp Train/WorkoutGameEngine.cpp Train/WorkoutGameFeatureChallenge.cpp Train/WorkoutGameFeatureLab.cpp Train/WorkoutGameFeatureRuntime.cpp Train/WorkoutGameHorizon.cpp Train/WorkoutGameMesh.cpp Train/WorkoutGameOpenGLCanvas.cpp Train/WorkoutGamePositionRate.cpp Train/WorkoutGamePowerCueGeometry.cpp Train/WorkoutGamePowerProfile.cpp Train/WorkoutGameRendererPolicy.cpp Train/WorkoutGameReplay.cpp Train/WorkoutGameRoadCourse.cpp Train/WorkoutGameRoadPhysics.cpp Train/WorkoutGameRoadProjection.cpp Train/WorkoutGameRunner.cpp Train/WorkoutGameSceneGraphWindow.cpp Train/WorkoutGameSessionState.cpp Train/WorkoutGameSimulation.cpp Train/WorkoutGameTerrainTransition.cpp Train/WorkoutGameTrailScene.cpp Train/WorkoutGameVisualSmoother.cpp Train/WorkoutGameWindow.cpp Train/WorkoutGameWorkoutAdapter.cpp Train/WorkoutGameWorld.cpp Train/WorkoutRideCommandFilter.cpp Train/WorkoutRideTargetPlanner.cpp \
+           Train/WorkoutGameRiderVisual.cpp \
            Train/ModelFilter.cpp Train/MultiFilterProxyModel.cpp Train/WorkoutFilter.cpp Train/FilterEditor.cpp \
            Train/WorkoutFilterBox.cpp Train/TagBar.cpp Train/TagWidget.cpp \
            Train/TrainerDayAPIQuery.cpp Train/TrainerDayAPIDialog.cpp Train/ElevationChartWindow.cpp
+
+HEADERS += Train/WorkoutGameRiderVisual.h
 
 SOURCES += Train/TrainBottom.cpp Train/TrainDB.cpp Train/TrainSidebar.cpp \
            Train/VideoLayoutParser.cpp Train/VideoSyncFile.cpp Train/WorkoutPlotWindow.cpp Train/WebPageWindow.cpp \

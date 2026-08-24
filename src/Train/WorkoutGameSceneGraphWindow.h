@@ -71,6 +71,7 @@ private:
     QElapsedTimer visualClock;
     QImage backgroundImage;
     QImage riderImage;
+    QImage riderShadowImage;
     QImage hudImage;
     double watts = 0.0;
     double targetWatts = 0.0;

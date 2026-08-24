@@ -9,6 +9,7 @@
 
 #include "Train/WorkoutGameEngine.h"
 #include "Train/WorkoutGameFeatureLab.h"
+#include "Train/WorkoutGameRiderVisual.h"
 
 #include <QTest>
 
@@ -267,6 +268,7 @@ private slots:
         QVERIFY(engine.configure(course, FtpWatts, true));
 
         double maximumAirHeightMeters = 0.0;
+        double maximumLiftPixels = 0.0;
         int airborneFrames = 0;
         for (std::int64_t timeMs = 0;
              timeMs < course.sections.front().durationMs;
@@ -280,6 +282,11 @@ private slots:
                     maximumAirHeightMeters,
                     frame.visual.world.rider.airHeightMeters());
             airborneFrames += frame.visual.world.rider.airborne ? 1 : 0;
+            const WorkoutGameRiderVisualPose pose =
+                    WorkoutGameRiderVisual::pose(
+                        frame.visual.world, frame.visual.feature, 188.0);
+            maximumLiftPixels = std::max(
+                    maximumLiftPixels, pose.liftPixels);
         }
 
         QVERIFY2(maximumAirHeightMeters >= 0.20,
@@ -287,6 +294,64 @@ private slots:
                      "feature reached only %1 m air height")
                      .arg(maximumAirHeightMeters)));
         QVERIFY(airborneFrames >= 8);
+        QVERIFY2(maximumLiftPixels >= 65.0,
+                 qPrintable(QStringLiteral(
+                     "feature produced only %1 px of visible lift")
+                     .arg(maximumLiftPixels)));
+    }
+
+    void completedTabletopProducesReadableLiftAndDepthCue()
+    {
+        constexpr double FtpWatts = 200.0;
+        WorkoutGameEngine engine;
+        const WorkoutGameCourse course = WorkoutGameFeatureLab::course(FtpWatts);
+        QVERIFY(engine.configure(course, FtpWatts, true));
+
+        double maximumLiftPixels = 0.0;
+        double minimumAirborneShadowScale = 1.0;
+        int readableAirborneFrames = 0;
+        for (std::int64_t timeMs = 0; timeMs < course.durationMs;
+             timeMs += 20) {
+            WorkoutGameEngineInput input;
+            input.simulation = WorkoutGameFeatureLab::input(
+                    course, timeMs, WorkoutGameFeatureLabScenario::Pass);
+            const WorkoutGameEngineFrame frame = engine.update(
+                    input, 100000 + timeMs);
+            if (frame.visual.simulation.activeSection != 6) continue;
+            const WorkoutGameRiderVisualPose pose =
+                    WorkoutGameRiderVisual::pose(
+                        frame.visual.world, frame.visual.feature, 188.0);
+            maximumLiftPixels = std::max(maximumLiftPixels, pose.liftPixels);
+            if (pose.airborne && pose.liftPixels >= 40.0) {
+                ++readableAirborneFrames;
+                minimumAirborneShadowScale = std::min(
+                        minimumAirborneShadowScale, pose.shadowScale);
+            }
+        }
+
+        QVERIFY2(maximumLiftPixels >= 125.0,
+                 qPrintable(QStringLiteral(
+                     "tabletop produced only %1 px of visible lift")
+                     .arg(maximumLiftPixels)));
+        QVERIFY(readableAirborneFrames >= 40);
+        QVERIFY(minimumAirborneShadowScale <= 0.70);
+    }
+
+    void bypassCannotActivateTheScriptedAirbornePose()
+    {
+        WorkoutGameWorldSnapshot world;
+        WorkoutGameFeatureRuntimeSnapshot feature;
+        feature.ready = true;
+        feature.outcome = WorkoutGameFeatureOutcome::Bypassed;
+        feature.route = WorkoutGameRoute::SafeBypass;
+        feature.verticalOffsetMeters = 1.35;
+
+        const WorkoutGameRiderVisualPose pose =
+                WorkoutGameRiderVisual::pose(world, feature, 188.0);
+        QVERIFY(!pose.airborne);
+        QCOMPARE(pose.airHeightMeters, 0.0);
+        QCOMPARE(pose.liftPixels, 0.0);
+        QCOMPARE(pose.shadowScale, 1.0);
     }
 
     void generatedThirtySecondEffortProducesAVisibleJump()

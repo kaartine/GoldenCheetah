@@ -28,6 +28,7 @@
 #include <QTemporaryDir>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 
@@ -134,6 +135,53 @@ WorkoutGameVisualSnapshot featureFrame(
     frame.feature = runtime.update(frame.simulation);
     frame.world.rider.distanceMeters = frame.feature.visualDistanceMeters;
     return frame;
+}
+
+struct FeatureCatalogEntry
+{
+    WorkoutGameTerrainKind terrain;
+    const char *name;
+};
+
+constexpr std::array<FeatureCatalogEntry, 11> FeatureCatalog = {{
+    {WorkoutGameTerrainKind::Roots, "roots"},
+    {WorkoutGameTerrainKind::Rollers, "rollers"},
+    {WorkoutGameTerrainKind::Climb, "climb"},
+    {WorkoutGameTerrainKind::RockGarden, "rock-garden"},
+    {WorkoutGameTerrainKind::BunnyHop, "bunny-hop"},
+    {WorkoutGameTerrainKind::Drop, "drop"},
+    {WorkoutGameTerrainKind::Skinny, "skinny"},
+    {WorkoutGameTerrainKind::Berm, "berm"},
+    {WorkoutGameTerrainKind::LogOver, "log-over"},
+    {WorkoutGameTerrainKind::Tabletop, "tabletop"},
+    {WorkoutGameTerrainKind::RockSlab, "rock-slab"}
+}};
+
+WorkoutGameCourse catalogCourse(WorkoutGameTerrainKind terrain)
+{
+    WorkoutGameCourse course;
+    course.status = WorkoutGameCourseStatus::Ready;
+    course.seed = 9173u + std::uint32_t(terrain);
+    course.durationMs = 30000;
+    WorkoutGameSection section;
+    section.feature = terrain == WorkoutGameTerrainKind::Climb
+            ? WorkoutGameFeature::Climb
+            : terrain == WorkoutGameTerrainKind::BunnyHop
+                    || terrain == WorkoutGameTerrainKind::LogOver
+                    || terrain == WorkoutGameTerrainKind::Tabletop
+            ? WorkoutGameFeature::SprintJump
+            : terrain == WorkoutGameTerrainKind::Drop
+            ? WorkoutGameFeature::RecoveryDescent
+            : WorkoutGameFeature::Trail;
+    section.terrain = terrain;
+    section.durationMs = course.durationMs;
+    section.targetWatts = 220.0;
+    section.gradePercent = terrain == WorkoutGameTerrainKind::Climb
+            ? 8.0 : terrain == WorkoutGameTerrainKind::Drop ? -6.0 : 0.0;
+    section.difficulty = 0.65;
+    section.challengeCount = 1;
+    course.sections = {section};
+    return course;
 }
 
 int changedPixels(const QImage &left, const QImage &right, int top)
@@ -583,6 +631,81 @@ private slots:
         }
     }
 
+    void exportsEveryFeatureAtAConsistentViewpoint()
+    {
+        const QByteArray requestedOutput =
+                qgetenv("GC_WORKOUT_GAME_FEATURE_CATALOG_DIR");
+        const QString outputDirectory = requestedOutput.isEmpty()
+                ? QDir(QDir::tempPath()).filePath(
+                    QStringLiteral("workout-game-feature-catalog"))
+                : QString::fromLocal8Bit(requestedOutput);
+        QVERIFY(QDir().mkpath(outputDirectory));
+
+        WorkoutGameSceneGraphWindow window;
+        window.resize(1280, 720);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 3000);
+        QImage prior;
+        for (const FeatureCatalogEntry &entry : FeatureCatalog) {
+            const WorkoutGameCourse course = catalogCourse(entry.terrain);
+            const WorkoutGameRoadCourse road =
+                    WorkoutGameRoadCourseBuilder::build(course, 200.0);
+            QVERIFY(road.ready);
+            const auto challenge = std::find_if(
+                    road.pieces.begin(), road.pieces.end(),
+                    [](const WorkoutGameRoadPiece &piece) {
+                        return piece.challenge.enabled;
+                    });
+            QVERIFY(challenge != road.pieces.end());
+            const WorkoutGameRoadTimelineSection &timeline = road.timeline.front();
+            const double distance = std::max(
+                    timeline.startDistanceMeters,
+                    challenge->challenge.obstacleDistanceMeters - 10.0);
+            WorkoutGameSimulationSnapshot simulation;
+            simulation.ready = true;
+            simulation.activeSection = 0;
+            simulation.sectionProgress = std::clamp(
+                    (distance - timeline.startDistanceMeters)
+                        / (timeline.endDistanceMeters
+                           - timeline.startDistanceMeters),
+                    0.0, 1.0);
+            simulation.workoutTimeMs = std::int64_t(std::llround(
+                    course.durationMs * simulation.sectionProgress));
+            simulation.courseProgress = simulation.sectionProgress;
+            simulation.speedKph = 20.0;
+            simulation.featureOutcome = WorkoutGameFeatureOutcome::Completed;
+            simulation.route = WorkoutGameRoute::MainLine;
+            simulation.challengeReadiness = 1.0;
+            WorkoutGameFeatureRuntime runtime;
+            QVERIFY(runtime.configure(road));
+            WorkoutGameVisualSnapshot frame;
+            frame.simulation = simulation;
+            frame.feature = runtime.update(simulation);
+            frame.world.ready = true;
+            frame.world.generation = 1;
+            frame.world.terrain = entry.terrain;
+            frame.world.gradePercent = course.sections.front().gradePercent;
+            frame.world.rider.distanceMeters = distance;
+            frame.world.rider.clearanceMeters = 0.82;
+            frame.world.speedMetersPerSecond = 20.0 / 3.6;
+
+            window.setCourse(course, 200.0);
+            window.setFrame(frame, 220.0, 220.0, 88, 150, 7);
+            QTest::qWait(260);
+            const QImage rendered = window.grabWindow();
+            QVERIFY(!rendered.isNull());
+            QCOMPARE(rendered.size(), QSize(1280, 720));
+            if (!prior.isNull()) {
+                QVERIFY(changedPixels(prior, rendered, 180) > 700);
+            }
+            const QString output = QDir(outputDirectory).filePath(
+                    QStringLiteral("feature-%1.png")
+                        .arg(QString::fromLatin1(entry.name)));
+            QVERIFY2(rendered.save(output), qPrintable(output));
+            prior = rendered;
+        }
+    }
+
     void featureMeshesProjectAboveTheTrailAtEightMeters()
     {
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
@@ -707,6 +830,17 @@ private slots:
         QVERIFY(!groundImage.isNull());
         QVERIFY(!airImage.isNull());
         QVERIFY(changedPixels(groundImage, airImage, 240) > 450);
+        const QByteArray requestedAuditDirectory =
+                qgetenv("GC_WORKOUT_GAME_JUMP_AUDIT_DIR");
+        if (!requestedAuditDirectory.isEmpty()) {
+            const QString auditDirectory =
+                    QString::fromLocal8Bit(requestedAuditDirectory);
+            QVERIFY(QDir().mkpath(auditDirectory));
+            QVERIFY(groundImage.save(QDir(auditDirectory).filePath(
+                    QStringLiteral("jump-grounded.png"))));
+            QVERIFY(airImage.save(QDir(auditDirectory).filePath(
+                    QStringLiteral("jump-apex.png"))));
+        }
         QVERIFY(airImage.save(QDir(QDir::tempPath()).filePath(
                 QStringLiteral("workout-game-jump-apex.png"))));
     }

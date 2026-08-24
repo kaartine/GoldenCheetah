@@ -1,0 +1,82 @@
+# Workout Game Feature Reference Audit
+
+This audit compares the workout game's eleven generated trail features with
+the engineering diagrams and photographs in the Recreation Aotearoa New
+Zealand Mountain Bike Trail Design Guidelines. The guideline is an engineering
+reference, not a complete art reference: it gives direct visual guidance for
+drops, rollers, jumps, berms, structures, and split lines, but not for every
+natural trail feature.
+
+Reference:
+
+- Recreation Aotearoa, *New Zealand Mountain Bike Trail Design Guidelines*,
+  pages 25, 30, 35-40, 48, and 70:
+  <https://sportnz.org.nz/media/3j3pmk0y/new-zealand-mountain-bike-trail-design-guidelines.pdf>
+
+## Reproducible Catalog
+
+`TestWorkoutGameSceneGraph::exportsEveryFeatureAtAConsistentViewpoint`
+renders every feature at 1280 by 720, ten metres before the obstacle. Set
+`GC_WORKOUT_GAME_FEATURE_CATALOG_DIR` to retain the PNG files. The test uses
+the production road builder, feature runtime, mesh projection, and scene graph
+renderer.
+
+The catalog is deliberately rendered without final textures. This isolates
+silhouette, scale, trail integration, and line readability from future art.
+
+## Feature Findings
+
+| Feature | NZ reference | Current assessment | Required correction |
+| --- | --- | --- | --- |
+| Roots | Track armouring, p. 35; obstacle limits in grading tables | Branched geometry is recognisable, but reads as loose branches placed on top of the trail. | Start roots at one or two off-trail trunks, bury part of each root, and form low transverse ridges in the tread. |
+| Rollers | Roller profile and spacing, p. 37 | The continuous strip is a sound base, but the shallow, flat-topped bands resemble a boardwalk more than rounded pump rollers. | Use two or three clearly rounded crests and troughs. Keep spacing near the guideline's ten-times-height rule. |
+| Climb | Gradient design, p. 25 | Edge rocks are visible, but the mesh does not communicate a climb; the road grade carries all of the meaning. | Give the trail a long visible rising face, transverse rock steps, and a readable crest. |
+| Rock garden | Track armouring, p. 35 | Irregular rocks make the feature recognisable, but many look like detached upright blocks. | Sink and overlap rocks into an uneven rideable surface, with varied size and orientation. |
+| Bunny hop | Jump anatomy, p. 38 | It is not distinguishable from log-over because both dispatch to the same mesh. | Add a separate low hurdle or compact kicker, a clear take-off cue, and an unobstructed landing area. |
+| Drop | Drop sections, p. 36 | Incorrect silhouette. The profile descends gradually, stays low, and climbs back, so it reads as a dip rather than a ledge. | Rebuild as level approach, sharp lip, visible face/air gap, lower landing transition, and a separately readable bypass. |
+| Skinny | Boardwalk construction, p. 48 | Width and raised line are credible, but the uninterrupted brown strip resembles a narrow road. | Add deck boards, beams, supports, visible ground below, and aligned entry and exit transitions. |
+| Berm | Berm cross-section, p. 30 | Curvature and raised outside edge are directionally correct. The surface is a narrow wedge and the rider still follows the ordinary centre line. | Build a broad bowl-shaped tread and make road centre, rider lateral position, roll, and mesh use the same curve. |
+| Log over | Drop/obstacle examples, p. 36 | The tapered round log is one of the clearest current features. | Extend it beyond the trail, partly bury it, and add end-grain and broken branch details. |
+| Tabletop | Jump anatomy and examples, pp. 38-40 | The main proportions are plausible, but the current solid mound hides the take-off belly, lip, knuckle, and landing transition. | Preserve the measured dimensions while exposing those named parts in the silhouette and shading. |
+| Rock slab | Track armouring, p. 35 | The wide raised stone strip reads as a manufactured ramp. | Use one asymmetric rock face with a rollover crest, exposed sides, fissures, and irregular edges. |
+
+## Numeric Checks
+
+At catalog difficulty 0.65, the current tabletop is approximately 1.01 m
+high. Its 3.3 m take-off is about 3.3 times the height and its 2.6 m deck is
+inside the guideline ranges for an intermediate tabletop. Its dimensions are
+therefore a reasonable baseline; visual anatomy and trail integration are the
+larger problems.
+
+The current 7.2 m roller strip reaches only about 0.26 m. Its height is
+credible for an easy roller, but the sampled profile and material bands need
+to read as smooth ground rather than separate planks.
+
+## Airborne Presentation
+
+The former renderer mixed two vertical scales: the road used perspective while
+the rider used a fixed viewport multiplier. A roughly 0.27 m physics jump could
+therefore move the rider only about 14 pixels at 720p. It also used an ordinary
+pedalling sprite with no ground-fixed shadow, so there was no reliable depth
+cue.
+
+`WorkoutGameRiderVisual` now derives the near-field pixels-per-metre scale from
+the rendered rider height, keeps a shadow on the trail, and changes shadow size
+and opacity through the flight. Screen-space rotation uses roll only; jump
+pitch no longer appears as a sideways rotation in the chase camera.
+
+The remaining gameplay issue is independent of rendering: a jump that is
+classified as a safe bypass never starts the scripted flight. Power-decision
+semantics and their on-screen indication should be revised as a separate,
+test-driven change.
+
+## Implementation Priority
+
+1. Rebuild drop and give bunny-hop its own geometry.
+2. Align berm geometry with the rider's actual route.
+3. Expose tabletop anatomy and round the roller profiles.
+4. Integrate climb, roots, rocks, and slab into the trail surface.
+5. Show both main and bypass lines before the decision point, following the
+   split-line guidance on page 70.
+6. Add final materials and feature-specific camera treatment only after the
+   geometry and route contracts are stable.
