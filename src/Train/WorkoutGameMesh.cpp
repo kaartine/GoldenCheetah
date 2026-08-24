@@ -10,6 +10,7 @@
 #include "WorkoutGameMesh.h"
 
 #include "WorkoutGameFeatureGeometry.h"
+#include "WorkoutGameTrailBranch.h"
 
 #include <algorithm>
 #include <cmath>
@@ -22,22 +23,6 @@ double smoothStep(double value)
 {
     const double clamped = std::clamp(value, 0.0, 1.0);
     return clamped * clamped * (3.0 - 2.0 * clamped);
-}
-
-double smootherStep(double value)
-{
-    const double clamped = std::clamp(value, 0.0, 1.0);
-    return clamped * clamped * clamped
-            * (clamped * (clamped * 6.0 - 15.0) + 10.0);
-}
-
-double smoothPulse(double value)
-{
-    const double progress = std::clamp(value, 0.0, 1.0);
-    if (progress <= 0.0 || progress >= 1.0) return 0.0;
-    if (progress < 0.35) return smoothStep(progress / 0.35);
-    if (progress > 0.80) return smootherStep((1.0 - progress) / 0.20);
-    return 1.0;
 }
 
 std::uint32_t addVertex(
@@ -684,7 +669,9 @@ WorkoutGameMesh WorkoutGameMeshLibrary::trailTile(
 WorkoutGameMesh WorkoutGameMeshLibrary::bypassRibbon(
         double lengthMeters,
         double lateralMeters,
-        double halfWidthMeters)
+        double halfWidthMeters,
+        double requestedEntryConnectorHalfWidthMeters,
+        double requestedExitConnectorHalfWidthMeters)
 {
     WorkoutGameMesh mesh;
     if (!std::isfinite(lengthMeters) || !std::isfinite(lateralMeters)
@@ -694,20 +681,33 @@ WorkoutGameMesh WorkoutGameMeshLibrary::bypassRibbon(
     }
     constexpr int Samples = 20;
     const double edgeWidth = std::min(0.08, halfWidthMeters * 0.22);
+    const double entryConnectorHalfWidthMeters =
+            requestedEntryConnectorHalfWidthMeters > edgeWidth
+            ? requestedEntryConnectorHalfWidthMeters
+            : halfWidthMeters + edgeWidth;
+    const double exitConnectorHalfWidthMeters =
+            requestedExitConnectorHalfWidthMeters > edgeWidth
+            ? requestedExitConnectorHalfWidthMeters
+            : halfWidthMeters + edgeWidth;
     for (int index = 0; index <= Samples; ++index) {
         const double progress = double(index) / double(Samples);
-        const double pulse = smoothPulse(progress);
-        const double center = lateralMeters * pulse
-                + 0.05 * std::sin(4.0 * Pi * progress) * pulse;
+        const double pulse = WorkoutGameTrailBranch::blend(progress);
+        const double center = lateralMeters * pulse;
+        const double connectorHalfWidth = entryConnectorHalfWidthMeters
+                + (exitConnectorHalfWidthMeters
+                   - entryConnectorHalfWidthMeters) * smoothStep(progress);
+        const double localHalfWidth = (connectorHalfWidth - edgeWidth)
+                + (halfWidthMeters - (connectorHalfWidth - edgeWidth))
+                    * pulse;
         addVertex(mesh, lengthMeters * progress,
-                  center - halfWidthMeters - edgeWidth,
+                  center - localHalfWidth - edgeWidth,
                   0.012, progress, 0.0);
         addVertex(mesh, lengthMeters * progress,
-                  center - halfWidthMeters, 0.02, progress, 0.12);
+                  center - localHalfWidth, 0.02, progress, 0.12);
         addVertex(mesh, lengthMeters * progress,
-                  center + halfWidthMeters, 0.02, progress, 0.88);
+                  center + localHalfWidth, 0.02, progress, 0.88);
         addVertex(mesh, lengthMeters * progress,
-                  center + halfWidthMeters + edgeWidth,
+                  center + localHalfWidth + edgeWidth,
                   0.012, progress, 1.0);
         if (index > 0) {
             const std::uint32_t start = std::uint32_t(index * 4);
@@ -720,8 +720,8 @@ WorkoutGameMesh WorkoutGameMeshLibrary::bypassRibbon(
         }
     }
     mesh.lengthMeters = lengthMeters;
-    mesh.entry = {0.0, halfWidthMeters + edgeWidth, 0.0};
-    mesh.exit = {lengthMeters, halfWidthMeters + edgeWidth, 0.0};
+    mesh.entry = {0.0, entryConnectorHalfWidthMeters, 0.0};
+    mesh.exit = {lengthMeters, exitConnectorHalfWidthMeters, 0.0};
     mesh.ready = true;
     return mesh;
 }
@@ -781,11 +781,15 @@ WorkoutGameMeshProjector::project(
             || !std::isfinite(instance.elevationMeters)
             || !std::isfinite(instance.yawDegrees)
             || !std::isfinite(instance.forwardScale)
-            || !std::isfinite(instance.rightScale)
+            || !std::isfinite(instance.entryRightScale)
+            || !std::isfinite(instance.exitRightScale)
             || !std::isfinite(instance.upScale)
+            || !std::isfinite(instance.occlusionAllowancePixels)
             || instance.forwardScale <= 0.0
-            || instance.rightScale <= 0.0
-            || instance.upScale <= 0.0) {
+            || instance.entryRightScale <= 0.0
+            || instance.exitRightScale <= 0.0
+            || instance.upScale <= 0.0
+            || instance.occlusionAllowancePixels < 0.0) {
         return result;
     }
     struct WorldVertex
@@ -904,8 +908,17 @@ WorkoutGameMeshProjector::project(
                     instance.mesh.vertices[source.indices[corner]];
             const double localForward =
                     vertex.forwardMeters * instance.forwardScale;
-            const double localRight =
-                    vertex.rightMeters * instance.rightScale;
+            const double meshProgress = instance.mesh.lengthMeters > 0.0
+                    ? std::clamp(
+                        (vertex.forwardMeters
+                         - instance.mesh.entry.forwardMeters)
+                            / instance.mesh.lengthMeters,
+                        0.0, 1.0)
+                    : 0.0;
+            const double rightScale = instance.entryRightScale
+                    + (instance.exitRightScale
+                       - instance.entryRightScale) * smoothStep(meshProgress);
+            const double localRight = vertex.rightMeters * rightScale;
             const double forward = localForward * cosine - localRight * sine;
             const double right = localForward * sine + localRight * cosine;
             world.push_back({
@@ -941,12 +954,11 @@ WorkoutGameMeshProjector::project(
             }, projected.occlusionY});
         }
         if (!ready) continue;
-        // Canonical feature meshes share the sampled road surface. A small
-        // screen-space allowance keeps their top faces from being clipped by
-        // that same surface while a crest can still hide a distant feature.
-        screen = clipOcclusion(
-                screen, instance.anchorToBaseSurface ? 18.0 : 0.0);
-        if (screen.size() < 3u) continue;
+        if (instance.clipToRoadOcclusion) {
+            screen = clipOcclusion(
+                    screen, instance.occlusionAllowancePixels);
+            if (screen.size() < 3u) continue;
+        }
         for (std::size_t corner = 1; corner + 1 < screen.size(); ++corner) {
             WorkoutGameProjectedMeshTriangle triangle;
             triangle.material = source.material;

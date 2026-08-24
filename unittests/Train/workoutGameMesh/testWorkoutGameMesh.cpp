@@ -9,6 +9,9 @@
 
 #include "Train/WorkoutGameMesh.h"
 #include "Train/WorkoutGameFeatureGeometry.h"
+#include "Train/WorkoutGameForestFloor.h"
+#include "Train/WorkoutGameTrailBranch.h"
+#include "Train/WorkoutGameTrailTile.h"
 
 #include <QTest>
 
@@ -165,6 +168,99 @@ private slots:
         QVERIFY(largestCenter > 1.4);
     }
 
+    void bypassMeshAndRuntimeCurveUseTheSameLateralFunction()
+    {
+        constexpr double Length = 18.0;
+        constexpr double Lateral = -2.1;
+        const WorkoutGameMesh bypass = WorkoutGameMeshLibrary::bypassRibbon(
+                Length, Lateral, 0.38, 0.68, 0.68);
+        QVERIFY(WorkoutGameMeshLibrary::valid(bypass));
+        for (std::size_t index = 0; index + 3u < bypass.vertices.size();
+             index += 4u) {
+            const double distance = bypass.vertices[index].forwardMeters;
+            const double center = (bypass.vertices[index + 1].rightMeters
+                    + bypass.vertices[index + 2].rightMeters) * 0.5;
+            QCOMPARE(center, WorkoutGameTrailBranch::lateralAt(
+                    distance, 0.0, Length, Lateral));
+        }
+    }
+
+    void forestPropsAndFloorShareOneCrossSection()
+    {
+        constexpr double Distance = 138.0;
+        constexpr double TrailHalfWidth = 0.68;
+        const double outer = WorkoutGameForestFloor::outerLateralMeters(
+                TrailHalfWidth, false);
+        const double outerHeight = WorkoutGameForestFloor::offsetMeters(
+                Distance, outer, TrailHalfWidth);
+        const double middle = TrailHalfWidth
+                + WorkoutGameForestFloor::BlendWidthMeters * 0.5;
+        QCOMPARE(WorkoutGameForestFloor::offsetMeters(
+                    Distance, middle, TrailHalfWidth), outerHeight * 0.5);
+        QCOMPARE(WorkoutGameForestFloor::offsetMeters(
+                    Distance, outer + 2.0, TrailHalfWidth), outerHeight);
+    }
+
+    void challengeTileUsesOneSocketPairForFeatureAndBypass()
+    {
+        const WorkoutGameRoadCourse course = featureCourse(
+                WorkoutGameTerrainKind::Tabletop, 0.7);
+        const auto piece = std::find_if(
+                course.pieces.begin(), course.pieces.end(),
+                [](const WorkoutGameRoadPiece &candidate) {
+                    return candidate.challenge.enabled;
+                });
+        QVERIFY(piece != course.pieces.end());
+
+        const WorkoutGameTrailTile tile =
+                WorkoutGameTrailTileAssembler::challenge(course, *piece);
+        QVERIFY(tile.ready);
+        QVERIFY(tile.entryDistanceMeters
+                < piece->challenge.obstacleDistanceMeters);
+        QVERIFY(tile.exitDistanceMeters
+                > piece->challenge.obstacleDistanceMeters);
+        QCOMPARE(tile.entryDistanceMeters,
+                 piece->challenge.bypassStartDistanceMeters);
+        QCOMPARE(tile.exitDistanceMeters,
+                 piece->challenge.bypassEndDistanceMeters);
+        QVERIFY(!tile.mainLine.empty());
+        QCOMPARE(tile.mainLine.front().mesh.entry.halfWidthMeters
+                    * tile.mainLine.front().entryRightScale,
+                 tile.entryHalfWidthMeters);
+        QCOMPARE(tile.mainLine.back().mesh.exit.halfWidthMeters
+                    * tile.mainLine.back().exitRightScale,
+                 tile.exitHalfWidthMeters);
+        QCOMPARE(tile.bypass.mesh.entry.halfWidthMeters,
+                 tile.entryHalfWidthMeters);
+        QCOMPARE(tile.bypass.mesh.exit.halfWidthMeters,
+                 tile.exitHalfWidthMeters);
+        QCOMPARE(tile.bypass.anchorDistanceMeters,
+                 tile.entryDistanceMeters);
+        QVERIFY(!tile.bypass.clipToRoadOcclusion);
+
+        double featureHalfWidth = 0.0;
+        for (const WorkoutGameMeshInstance &instance : tile.mainLine) {
+            for (const WorkoutGameMeshVertex &vertex : instance.mesh.vertices) {
+                featureHalfWidth = std::max(
+                        featureHalfWidth,
+                        std::abs(vertex.rightMeters)
+                            * std::max(instance.entryRightScale,
+                                       instance.exitRightScale));
+            }
+        }
+        double bypassCenter = 0.0;
+        for (std::size_t index = 0;
+             index + 3u < tile.bypass.mesh.vertices.size(); index += 4u) {
+            bypassCenter = std::max(
+                    bypassCenter,
+                    std::abs((tile.bypass.mesh.vertices[index + 1].rightMeters
+                              + tile.bypass.mesh.vertices[index + 2].rightMeters)
+                             * 0.5));
+        }
+        QVERIFY2(bypassCenter - featureHalfWidth >= 0.55,
+                 "bypass does not clear the feature and rider envelope");
+    }
+
     void logObstacleClearsButDoesNotDwarfTheSingletrack()
     {
         const WorkoutGameMesh log = WorkoutGameMeshLibrary::feature(
@@ -238,7 +334,8 @@ private slots:
         instance.lateralMeters = 0.4;
         instance.yawDegrees = 18.0;
         instance.forwardScale = 1.2;
-        instance.rightScale = 0.8;
+        instance.entryRightScale = 0.8;
+        instance.exitRightScale = 0.8;
         instance.upScale = 1.4;
         const std::vector<WorkoutGameProjectedMeshTriangle> projected =
                 WorkoutGameMeshProjector::project(instance, road);
@@ -402,6 +499,7 @@ private slots:
                 WorkoutGameTerrainKind::LogOver, 0.5);
         instance.anchorDistanceMeters = obstacle;
         instance.anchorToBaseSurface = true;
+        instance.occlusionAllowancePixels = 18.0;
         QVERIFY(!WorkoutGameMeshProjector::project(instance, projection).empty());
     }
 

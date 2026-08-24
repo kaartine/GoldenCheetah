@@ -14,8 +14,10 @@
 #include "WorkoutGameRiderVisual.h"
 
 #include "WorkoutGameRoadProjection.h"
+#include "WorkoutGameForestFloor.h"
 #include "WorkoutGameMesh.h"
 #include "WorkoutGamePowerCueGeometry.h"
+#include "WorkoutGameTrailTile.h"
 
 #include <QColor>
 #include <QDir>
@@ -62,7 +64,8 @@ struct WorkoutGameSceneRoot : public QSGNode
 {
     QSGSimpleTextureNode *background = nullptr;
     QSGGeometryNode *terrain = nullptr;
-    QSGGeometryNode *features = nullptr;
+    QSGGeometryNode *trailSurfaces = nullptr;
+    QSGGeometryNode *props = nullptr;
     QSGOpacityNode *riderShadowOpacity = nullptr;
     QSGSimpleTextureNode *riderShadow = nullptr;
     QSGTransformNode *riderTransform = nullptr;
@@ -93,7 +96,8 @@ WorkoutGameSceneRoot *createSceneRoot()
     root->background->setOwnsTexture(true);
     root->appendChildNode(root->background);
     root->terrain = createGeometryNode(root);
-    root->features = createGeometryNode(root);
+    root->trailSurfaces = createGeometryNode(root);
+    root->props = createGeometryNode(root);
     root->riderShadowOpacity = new QSGOpacityNode;
     root->appendChildNode(root->riderShadowOpacity);
     root->riderShadow = new QSGSimpleTextureNode;
@@ -301,12 +305,12 @@ QColor gradeTint(QColor color, double gradePercent)
 QColor meshColor(WorkoutGameMeshMaterial material, bool selectedBypass = false)
 {
     switch (material) {
-    case WorkoutGameMeshMaterial::Dirt: return QColor(145, 105, 62);
-    case WorkoutGameMeshMaterial::DirtHighlight: return QColor(181, 135, 76);
-    case WorkoutGameMeshMaterial::DirtEdge: return QColor(79, 57, 39);
+    case WorkoutGameMeshMaterial::Dirt: return QColor(91, 66, 42);
+    case WorkoutGameMeshMaterial::DirtHighlight: return QColor(126, 92, 52);
+    case WorkoutGameMeshMaterial::DirtEdge: return QColor(58, 46, 35);
     case WorkoutGameMeshMaterial::Bypass:
         return selectedBypass
-                ? QColor(218, 167, 76, 235) : QColor(91, 76, 52, 72);
+                ? QColor(125, 90, 48, 245) : QColor(83, 70, 47, 215);
     case WorkoutGameMeshMaterial::WoodSide: return QColor(78, 47, 28);
     case WorkoutGameMeshMaterial::WoodHighlight: return QColor(118, 69, 36);
     case WorkoutGameMeshMaterial::WoodTop: return QColor(166, 96, 43);
@@ -316,24 +320,6 @@ QColor meshColor(WorkoutGameMeshMaterial material, bool selectedBypass = false)
     case WorkoutGameMeshMaterial::DropFace: return QColor(45, 47, 43);
     }
     return QColor(180, 140, 72);
-}
-
-double forestFloorOffsetMeters(
-        double worldDistanceMeters,
-        double lateralMeters,
-        double trailHalfWidthMeters)
-{
-    const double side = lateralMeters < 0.0 ? -1.0 : 1.0;
-    const double awayFromTrail = std::max(
-            0.0, std::abs(lateralMeters) - trailHalfWidthMeters);
-    const double blend = std::clamp(awayFromTrail / 3.2, 0.0, 1.0);
-    const double phase = side < 0.0 ? 0.65 : 2.35;
-    const double rolling = 0.72
-            * std::sin(worldDistanceMeters * 0.052 + phase)
-            + 0.34 * std::sin(worldDistanceMeters * 0.137 - phase * 0.6)
-            + side * 0.18
-                * std::sin(worldDistanceMeters * 0.031 + 1.2);
-    return std::clamp(blend * rolling, -1.05, 1.05);
 }
 
 void appendForestFloorQuad(
@@ -362,6 +348,7 @@ void buildRoadGeometry(
         const WorkoutGameRoadProjectionFrame &projection,
         double viewportWidth,
         double viewportHeight,
+        const std::vector<WorkoutGameTrailTile> &tiles,
         std::vector<SceneTriangle> &geometry)
 {
     if (projection.slices.size() < 2) return;
@@ -374,9 +361,9 @@ void buildRoadGeometry(
         const bool alternate = (int(std::floor(
                 near.worldDistanceMeters / 3.5)) & 1) != 0;
         const auto edgeScale = [](double distance, double phase) {
-            return 0.82
-                    + 0.07 * std::sin(distance * 0.31 + phase)
-                    + 0.035 * std::sin(distance * 0.83 - phase * 0.7);
+            Q_UNUSED(distance)
+            Q_UNUSED(phase)
+            return 1.0;
         };
         const float farLeft = float(far.centerX - far.halfWidthPixels
                 * edgeScale(far.worldDistanceMeters, 0.4));
@@ -388,26 +375,44 @@ void buildRoadGeometry(
                 * edgeScale(near.worldDistanceMeters, 2.1));
         const float farY = float(far.centerY);
         const float nearY = float(near.centerY);
-        const double farForestLateral = far.halfWidthMeters + 5.0;
-        const double nearForestLateral = near.halfWidthMeters + 5.0;
+        const double farLeftForestLateral =
+                WorkoutGameForestFloor::outerLateralMeters(
+                    far.halfWidthMeters, true);
+        const double farRightForestLateral =
+                WorkoutGameForestFloor::outerLateralMeters(
+                    far.halfWidthMeters, false);
+        const double nearLeftForestLateral =
+                WorkoutGameForestFloor::outerLateralMeters(
+                    near.halfWidthMeters, true);
+        const double nearRightForestLateral =
+                WorkoutGameForestFloor::outerLateralMeters(
+                    near.halfWidthMeters, false);
+        const float farLeftForestX = float(far.centerX
+                + farLeftForestLateral * far.pixelsPerMeter);
+        const float farRightForestX = float(far.centerX
+                + farRightForestLateral * far.pixelsPerMeter);
+        const float nearLeftForestX = float(near.centerX
+                + nearLeftForestLateral * near.pixelsPerMeter);
+        const float nearRightForestX = float(near.centerX
+                + nearRightForestLateral * near.pixelsPerMeter);
         const float farLeftForestY = float(far.centerY
-                - forestFloorOffsetMeters(
-                    far.worldDistanceMeters, -farForestLateral,
+                - WorkoutGameForestFloor::offsetMeters(
+                    far.worldDistanceMeters, farLeftForestLateral,
                     far.halfWidthMeters)
                     * far.pixelsPerMeter * projection.verticalExaggeration);
         const float farRightForestY = float(far.centerY
-                - forestFloorOffsetMeters(
-                    far.worldDistanceMeters, farForestLateral,
+                - WorkoutGameForestFloor::offsetMeters(
+                    far.worldDistanceMeters, farRightForestLateral,
                     far.halfWidthMeters)
                     * far.pixelsPerMeter * projection.verticalExaggeration);
         const float nearLeftForestY = float(near.centerY
-                - forestFloorOffsetMeters(
-                    near.worldDistanceMeters, -nearForestLateral,
+                - WorkoutGameForestFloor::offsetMeters(
+                    near.worldDistanceMeters, nearLeftForestLateral,
                     near.halfWidthMeters)
                     * near.pixelsPerMeter * projection.verticalExaggeration);
         const float nearRightForestY = float(near.centerY
-                - forestFloorOffsetMeters(
-                    near.worldDistanceMeters, nearForestLateral,
+                - WorkoutGameForestFloor::offsetMeters(
+                    near.worldDistanceMeters, nearRightForestLateral,
                     near.halfWidthMeters)
                     * near.pixelsPerMeter * projection.verticalExaggeration);
         const QColor grass = gradeTint(blendColor(
@@ -415,14 +420,36 @@ void buildRoadGeometry(
                 groundColor(near.terrain, alternate), 0.65),
                 near.gradePercent);
         appendForestFloorQuad(geometry,
-                   0.0f, farLeftForestY, farLeft, farY,
-                   0.0f, nearLeftForestY, nearLeft, nearY,
+                   farLeftForestX, farLeftForestY, farLeft, farY,
+                   nearLeftForestX, nearLeftForestY, nearLeft, nearY,
                    grass, far.depthMeters, near.depthMeters);
         appendForestFloorQuad(geometry,
-                   float(viewportWidth), farRightForestY, farRight, farY,
-                   float(viewportWidth), nearRightForestY, nearRight, nearY,
+                   farRightForestX, farRightForestY, farRight, farY,
+                   nearRightForestX, nearRightForestY, nearRight, nearY,
                    grass, far.depthMeters, near.depthMeters);
 
+        appendForestFloorQuad(geometry,
+                   0.0f, farLeftForestY,
+                   farLeftForestX, farLeftForestY,
+                   0.0f, nearLeftForestY,
+                   nearLeftForestX, nearLeftForestY,
+                   grass, far.depthMeters, near.depthMeters);
+        appendForestFloorQuad(geometry,
+                   float(viewportWidth), farRightForestY,
+                   farRightForestX, farRightForestY,
+                   float(viewportWidth), nearRightForestY,
+                   nearRightForestX, nearRightForestY,
+                   grass, far.depthMeters, near.depthMeters);
+
+        const bool tileOwnsSurface = std::any_of(
+                tiles.begin(), tiles.end(), [&far, &near](const auto &tile) {
+                    return tile.ready
+                            && near.worldDistanceMeters
+                                >= tile.entryDistanceMeters - 1e-6
+                            && far.worldDistanceMeters
+                                <= tile.exitDistanceMeters + 1e-6;
+                });
+        if (tileOwnsSurface) continue;
         const float farShoulder = std::max(1.0f,
                 float(far.halfWidthPixels * 0.18));
         const float nearShoulder = std::max(1.0f,
@@ -447,8 +474,7 @@ void buildRoadGeometry(
     }
 
     const WorkoutGameRoadProjectedSlice &nearest = projection.slices.back();
-    const double nearestScale = 0.82
-            + 0.07 * std::sin(nearest.worldDistanceMeters * 0.31 + 0.4);
+    const double nearestScale = 1.0;
     const float left = float(nearest.centerX
             - nearest.halfWidthPixels * nearestScale);
     const float right = float(nearest.centerX
@@ -523,7 +549,7 @@ void buildForestGeometry(
                     + forestRandom(key + 47u) * 0.65;
             const double trunkWidth = 0.10 + height * 0.025;
             const double baseElevation = slice.surfaceOffsetMeters
-                    + forestFloorOffsetMeters(
+                    + WorkoutGameForestFloor::offsetMeters(
                         distance, lateral, slice.halfWidthMeters);
             const auto point = [&](double right, double up) {
                 return WorkoutGameRoadProjection::projectPoint(
@@ -552,7 +578,12 @@ void buildForestGeometry(
                     || !trunkTopLeft.ready || !trunkTopRight.ready
                     || !crownLeft.ready || !crownRight.ready
                     || !crownMiddleLeft.ready || !crownMiddleRight.ready
-                    || !crownTop.ready) {
+                    || !crownTop.ready
+                    || !trunkLeft.visible || !trunkRight.visible
+                    || !trunkTopLeft.visible || !trunkTopRight.visible
+                    || !crownLeft.visible || !crownRight.visible
+                    || !crownMiddleLeft.visible || !crownMiddleRight.visible
+                    || !crownTop.visible) {
                 continue;
             }
             const QColor trunk(76, 52, 35);
@@ -802,43 +833,25 @@ void appendProjectedMesh(
 }
 
 void buildFeatureGeometry(
-        const WorkoutGameCourse &workout,
-        const WorkoutGameRoadCourse &course,
+        const std::vector<WorkoutGameTrailTile> &tiles,
         const WorkoutGameRoadProjectionFrame &projection,
         const WorkoutGameFeatureRuntimeSnapshot &active,
-        std::vector<SceneTriangle> &geometry)
+        std::vector<SceneTriangle> &trailSurfaces,
+        std::vector<SceneTriangle> &props)
 {
     if (projection.slices.empty()) return;
-    for (const WorkoutGameRoadPiece &piece : course.pieces) {
-        if (!piece.challenge.enabled) continue;
-        const double obstacle = piece.challenge.obstacleDistanceMeters;
-        const double branchStart = piece.challenge.decisionDistanceMeters;
-        const double branchEnd = std::max(
-                branchStart + 0.01,
-                piece.challenge.bypassEndDistanceMeters);
-        const double branchLength = std::max(1.0, branchEnd - branchStart);
+    for (const WorkoutGameTrailTile &tile : tiles) {
+        if (!tile.ready) continue;
         const bool selectedBypass = active.ready
-                && active.sourceSectionIndex == int(piece.sourceSectionIndex)
+                && active.sourceSectionIndex == int(tile.sourceSectionIndex)
                 && active.route == WorkoutGameRoute::SafeBypass;
-        if (selectedBypass) {
-            WorkoutGameMeshInstance bypass;
-            bypass.mesh = WorkoutGameMeshLibrary::bypassRibbon(
-                    branchLength, piece.challenge.bypassLateralMeters, 0.38);
-            bypass.anchorDistanceMeters = branchStart;
-            bypass.anchorToBaseSurface = true;
-            appendProjectedMesh(bypass, projection, true, geometry);
+        for (const WorkoutGameMeshInstance &instance : tile.mainLine) {
+            appendProjectedMesh(
+                    instance, projection, false,
+                    instance.clipToRoadOcclusion ? props : trailSurfaces);
         }
-
-        const double difficulty = piece.sourceSectionIndex
-                < workout.sections.size()
-                ? workout.sections[piece.sourceSectionIndex].difficulty
-                : 0.5;
-        WorkoutGameMeshInstance obstacleMesh;
-        obstacleMesh.mesh = WorkoutGameMeshLibrary::feature(
-                piece.terrain, difficulty);
-        obstacleMesh.anchorDistanceMeters = obstacle;
-        obstacleMesh.anchorToBaseSurface = true;
-        appendProjectedMesh(obstacleMesh, projection, false, geometry);
+        appendProjectedMesh(
+                tile.bypass, projection, selectedBypass, trailSurfaces);
     }
 }
 
@@ -1374,6 +1387,7 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
     WorkoutGameRoadProjectionConfig config;
     config.viewportWidth = viewportWidth;
     config.viewportHeight = viewportHeight;
+    config.cameraTrailingDistanceMeters = 8.0;
     if (visual.camera.ready) {
         config.cameraElevationMeters = visual.camera.centerElevationMeters;
     }
@@ -1394,7 +1408,16 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
     }
 
     std::vector<SceneTriangle> terrain;
-    std::vector<SceneTriangle> features;
+    std::vector<SceneTriangle> trailSurfaces;
+    std::vector<SceneTriangle> props;
+    std::vector<WorkoutGameTrailTile> trailTiles;
+    trailTiles.reserve(roadCourse.pieces.size());
+    for (const WorkoutGameRoadPiece &piece : roadCourse.pieces) {
+        if (!piece.challenge.enabled) continue;
+        const WorkoutGameTrailTile tile =
+                WorkoutGameTrailTileAssembler::challenge(roadCourse, piece);
+        if (tile.ready) trailTiles.push_back(tile);
+    }
     buildHorizonGeometry(
             WorkoutGameHorizon::build(roadCourse.seed, riderDistance),
             viewportWidth, viewportHeight, terrain);
@@ -1408,15 +1431,20 @@ QSGNode *WorkoutGameSceneGraphItem::updatePaintNode(
                         feature.sourceSectionIndex)]).cue;
         }
         buildRoadGeometry(
-                projection, viewportWidth, viewportHeight, terrain);
-        buildForestGeometry(projection, roadCourse.seed, terrain);
-        buildMotionCueGeometry(projection, terrain);
-        buildPowerCueGeometry(projection, feature, cue, terrain);
+                projection, viewportWidth, viewportHeight,
+                trailTiles, terrain);
+        buildForestGeometry(projection, roadCourse.seed, props);
+        buildMotionCueGeometry(projection, trailSurfaces);
+        buildPowerCueGeometry(
+                projection, feature, cue, trailSurfaces);
         buildFeatureGeometry(
-                currentCourse, roadCourse, projection, feature, features);
+                trailTiles, projection, feature, trailSurfaces, props);
     }
     updateGeometry(root->terrain, sortedVertices(std::move(terrain)));
-    updateGeometry(root->features, sortedVertices(std::move(features)));
+    updateGeometry(
+            root->trailSurfaces,
+            sortedVertices(std::move(trailSurfaces)));
+    updateGeometry(root->props, sortedVertices(std::move(props)));
 
     constexpr int RiderColumns = 4;
     constexpr int RiderRows = 2;

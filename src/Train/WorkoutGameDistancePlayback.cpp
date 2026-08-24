@@ -85,6 +85,7 @@ WorkoutGameCourse WorkoutGameDistancePlayback::visualCourse(
         section.targetWatts = (source.targetStartWatts
                 + source.targetEndWatts) * 0.5;
         section.gradePercent = source.gradePercent;
+        section.lengthMeters = source.lengthMeters;
         section.difficulty = source.difficulty;
         const bool recovery = source.feature
                     == WorkoutGameFeature::RecoveryDescent

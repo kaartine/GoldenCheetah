@@ -83,9 +83,12 @@ struct WorkoutGameMeshInstance
     double elevationMeters = 0.0;
     double yawDegrees = 0.0;
     double forwardScale = 1.0;
-    double rightScale = 1.0;
+    double entryRightScale = 1.0;
+    double exitRightScale = 1.0;
     double upScale = 1.0;
+    double occlusionAllowancePixels = 0.0;
     bool anchorToBaseSurface = false;
+    bool clipToRoadOcclusion = true;
 };
 
 struct WorkoutGameProjectedMeshVertex
@@ -118,7 +121,9 @@ public:
     static WorkoutGameMesh bypassRibbon(
             double lengthMeters,
             double lateralMeters,
-            double halfWidthMeters);
+            double halfWidthMeters,
+            double entryConnectorHalfWidthMeters = 0.0,
+            double exitConnectorHalfWidthMeters = 0.0);
     static bool valid(const WorkoutGameMesh &mesh);
 };
 

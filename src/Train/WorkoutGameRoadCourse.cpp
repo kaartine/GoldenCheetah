@@ -126,6 +126,25 @@ double targetHalfWidth(WorkoutGameTerrainKind terrain)
             terrain).trailWidthScale;
 }
 
+double featureClearanceHalfWidth(WorkoutGameTerrainKind terrain)
+{
+    switch (terrain) {
+    case WorkoutGameTerrainKind::Roots: return 1.4;
+    case WorkoutGameTerrainKind::Rollers: return 1.0;
+    case WorkoutGameTerrainKind::Climb: return 1.25;
+    case WorkoutGameTerrainKind::RockGarden: return 1.4;
+    case WorkoutGameTerrainKind::BunnyHop:
+    case WorkoutGameTerrainKind::LogOver: return 0.95;
+    case WorkoutGameTerrainKind::Drop: return 1.25;
+    case WorkoutGameTerrainKind::Skinny: return 0.38;
+    case WorkoutGameTerrainKind::Berm: return 1.4;
+    case WorkoutGameTerrainKind::Tabletop: return 1.10;
+    case WorkoutGameTerrainKind::RockSlab: return 1.30;
+    case WorkoutGameTerrainKind::SmoothTrail: return 0.68;
+    }
+    return 1.4;
+}
+
 std::size_t pieceIndexAt(
         const WorkoutGameRoadCourse &course,
         double distanceMeters)
@@ -181,6 +200,9 @@ double estimatedLength(
         const WorkoutGameSection &section,
         double ftpWatts)
 {
+    if (std::isfinite(section.lengthMeters) && section.lengthMeters > 0.0) {
+        return section.lengthMeters;
+    }
     const double seconds = double(section.durationMs) / 1000.0;
     const double intensity = std::clamp(
             section.targetWatts / ftpWatts, 0.0, 2.5);
@@ -365,6 +387,22 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
         default:
             break;
         }
+        const WorkoutGameFeatureGeometryProfile featureGeometry =
+                WorkoutGameFeatureGeometry::profile(
+                    section.terrain, section.difficulty);
+        if (challenge.enabled && featureGeometry.ready) {
+            const double minimumObstacle = sectionStart
+                    - featureGeometry.startMeters + 1.5;
+            const double maximumObstacle = sectionStart + sectionLength
+                    - featureGeometry.endMeters - 1.5;
+            if (maximumObstacle >= minimumObstacle) {
+                obstacleDistance = std::clamp(
+                        std::max(obstacleDistance,
+                                 challengeDistance
+                                    - featureGeometry.startMeters + 1.5),
+                        minimumObstacle, maximumObstacle);
+            }
+        }
         for (int part = 0; part < pieceCount; ++part) {
             WorkoutGameRoadPiece piece;
             piece.sourceSectionIndex = sectionIndex;
@@ -402,12 +440,32 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                     : measuredPreparationDistance;
                 piece.challenge.decisionDistanceMeters = challengeDistance;
                 piece.challenge.obstacleDistanceMeters = obstacleDistance;
+                const double featureStart = obstacleDistance
+                        + (featureGeometry.ready
+                            ? featureGeometry.startMeters : -4.0);
+                const double featureEnd = obstacleDistance
+                        + (featureGeometry.ready
+                            ? featureGeometry.endMeters : 4.0);
+                piece.challenge.bypassStartDistanceMeters = std::max(
+                        challengeDistance + 0.5,
+                        featureStart - 2.0);
+                piece.challenge.bypassStartDistanceMeters = std::min(
+                        featureStart - 0.25,
+                        piece.challenge.bypassStartDistanceMeters);
+                constexpr double MinimumBypassLengthMeters = 18.0;
+                constexpr double BypassExitRunoutMeters = 10.0;
                 piece.challenge.bypassEndDistanceMeters = std::min(
                         sectionStart + sectionLength,
-                        std::max(obstacleDistance + 8.0,
-                                 challengeDistance + 12.0));
+                        std::max(
+                            featureEnd + BypassExitRunoutMeters,
+                            piece.challenge.bypassStartDistanceMeters
+                                + MinimumBypassLengthMeters));
+                const double bypassClearance =
+                        featureClearanceHalfWidth(section.terrain)
+                        + 0.35 + 0.38 + 0.25;
                 piece.challenge.bypassLateralMeters =
-                        (sectionIndex & 1u) == 0u ? -1.5 : 1.5;
+                        (sectionIndex & 1u) == 0u
+                        ? -bypassClearance : bypassClearance;
                 piece.challenge.profile.measurementStartProgress =
                         (piece.challenge.prepareDistanceMeters - sectionStart)
                         / sectionLength;

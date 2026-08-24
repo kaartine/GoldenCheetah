@@ -27,6 +27,7 @@ struct WorkoutGameRoadProjectionConfig
     double fieldOfViewDegrees = 62.0;
     double nearDistanceMeters = 1.4;
     double visibleDistanceMeters = 105.0;
+    double cameraTrailingDistanceMeters = 0.0;
     int sliceCount = 96;
 };
 

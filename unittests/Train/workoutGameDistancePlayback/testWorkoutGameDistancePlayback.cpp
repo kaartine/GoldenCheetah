@@ -135,10 +135,12 @@ private slots:
         QCOMPARE(visual.sections.size(), std::size_t(2));
         QCOMPARE(visual.sections[0].startMs, std::int64_t(0));
         QCOMPARE(visual.sections[0].durationMs, std::int64_t(10000));
+        QCOMPARE(visual.sections[0].lengthMeters, 100.0);
         QCOMPARE(visual.sections[0].feature, WorkoutGameFeature::Climb);
         QCOMPARE(visual.sections[0].targetWatts, 200.0);
         QCOMPARE(visual.sections[1].startMs, std::int64_t(10000));
         QCOMPARE(visual.sections[1].durationMs, std::int64_t(20000));
+        QCOMPARE(visual.sections[1].lengthMeters, 200.0);
         QCOMPARE(visual.sections[1].feature,
                  WorkoutGameFeature::RecoveryDescent);
         QVERIFY(visual.sections[1].gravityAssisted);

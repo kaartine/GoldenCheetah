@@ -244,7 +244,7 @@ private slots:
         const WorkoutGameRoadPiece *piece = challengePieceFor(road, section);
         QVERIFY(piece != nullptr);
         const double branchMiddle =
-                (piece->challenge.decisionDistanceMeters
+                (piece->challenge.bypassStartDistanceMeters
                  + piece->challenge.bypassEndDistanceMeters) * 0.5;
 
         const WorkoutGameFeatureRuntimeSnapshot result = runtime.update(
@@ -410,12 +410,12 @@ private slots:
         const double atBranch = runtime.update(
                 snapshot(section, progressAtDistance(
                             road, section,
-                            piece->challenge.decisionDistanceMeters),
+                            piece->challenge.bypassStartDistanceMeters),
                          bypassed, route)).lateralOffsetMeters;
         const double justAfterBranch = runtime.update(
                 snapshot(section, progressAtDistance(
                             road, section,
-                            piece->challenge.decisionDistanceMeters + 0.05),
+                            piece->challenge.bypassStartDistanceMeters + 0.05),
                          bypassed, route)).lateralOffsetMeters;
         const double nearReturn = runtime.update(
                 snapshot(section, progressAtDistance(

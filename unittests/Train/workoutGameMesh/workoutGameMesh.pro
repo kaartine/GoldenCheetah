@@ -6,10 +6,14 @@ TARGET = testWorkoutGameMesh
 SOURCES = testWorkoutGameMesh.cpp \
           ../../../src/Train/WorkoutGameFeatureChallenge.cpp \
           ../../../src/Train/WorkoutGameMesh.cpp \
+          ../../../src/Train/WorkoutGameTrailTile.cpp \
           ../../../src/Train/WorkoutGameRoadCourse.cpp \
           ../../../src/Train/WorkoutGameRoadProjection.cpp
 
 HEADERS = ../../../src/Train/WorkoutGameMesh.h \
+          ../../../src/Train/WorkoutGameForestFloor.h \
+          ../../../src/Train/WorkoutGameTrailBranch.h \
+          ../../../src/Train/WorkoutGameTrailTile.h \
           ../../../src/Train/WorkoutGameRoadCourse.h \
           ../../../src/Train/WorkoutGameRoadProjection.h
 

@@ -9,6 +9,8 @@
 
 #include "WorkoutGameFeatureRuntime.h"
 
+#include "WorkoutGameTrailBranch.h"
+
 #include "WorkoutGameFeatureGeometry.h"
 
 #include <algorithm>
@@ -22,22 +24,6 @@ double smoothStep(double value)
 {
     const double clamped = std::clamp(value, 0.0, 1.0);
     return clamped * clamped * (3.0 - 2.0 * clamped);
-}
-
-double smootherStep(double value)
-{
-    const double clamped = std::clamp(value, 0.0, 1.0);
-    return clamped * clamped * clamped
-            * (clamped * (clamped * 6.0 - 15.0) + 10.0);
-}
-
-double smoothPulse(double value)
-{
-    const double progress = std::clamp(value, 0.0, 1.0);
-    if (progress <= 0.0 || progress >= 1.0) return 0.0;
-    if (progress < 0.35) return smoothStep(progress / 0.35);
-    if (progress > 0.80) return smootherStep((1.0 - progress) / 0.20);
-    return 1.0;
 }
 
 double jumpArc(double progress)
@@ -256,14 +242,14 @@ WorkoutGameFeatureRuntimeSnapshot WorkoutGameFeatureRuntime::update(
             == WorkoutGameFeatureOutcome::Bypassed
             || result.route == WorkoutGameRoute::SafeBypass;
     if (bypass) {
-        const double branchStart = piece->challenge.decisionDistanceMeters;
+        const double branchStart = piece->challenge.bypassStartDistanceMeters;
         const double branchEnd = std::max(
                 branchStart + 0.01,
                 piece->challenge.bypassEndDistanceMeters);
-        const double branchProgress = (result.visualDistanceMeters - branchStart)
-                / (branchEnd - branchStart);
-        result.lateralOffsetMeters = piece->challenge.bypassLateralMeters
-                * smoothPulse(branchProgress);
+        result.lateralOffsetMeters = WorkoutGameTrailBranch::lateralAt(
+                result.visualDistanceMeters,
+                branchStart, branchEnd,
+                piece->challenge.bypassLateralMeters);
     }
 
     if (result.phase == WorkoutGameFeaturePhase::Action) {

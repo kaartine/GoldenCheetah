@@ -284,7 +284,7 @@ Mutable state has the following owners:
 | Box2D world, vehicle contacts and suspension | `WorkoutGameEngine` on the runner thread |
 | Camera target and transition | `WorkoutGameEngine` on the runner thread |
 | Workout-time-to-road mapping and sampled surface | Immutable `WorkoutGameRoadCourse`; the engine publishes its authoritative distance, while Box2D and the scene graph sample the same base elevation, feature surface offset, and grade |
-| Feature and trail meshes | Immutable course-space values from `WorkoutGameMeshLibrary`; feature meshes are anchored to the base surface and projected by the scene graph so the course feature height is not applied twice |
+| Feature and trail meshes | Immutable course-space values from `WorkoutGameMeshLibrary`, assembled into connector-compatible `WorkoutGameTrailTile` values; feature meshes are anchored to the base surface and projected by the scene graph so the course feature height is not applied twice |
 | Distant terrain silhouette | Pure deterministic `WorkoutGameHorizon` samples generated from course seed and distance; presentation-only and never consumed by physics or trainer control |
 | Near forest dressing | Deterministic, bounded scene-graph triangles generated from the course seed and projected road slices; presentation-only and rebuilt with the visible terrain window |
 | Visual interpolation, projected trail and render diagnostics | `WorkoutGameSceneGraphItem::updatePaintNode` during Qt scene graph synchronization |
@@ -329,10 +329,14 @@ Feature readiness is the minimum of the requirements that apply to that
 feature: rolling power, cadence, minimum or maximum speed, and workout-target
 adherence. The HUD publishes each measured/required pair independently and
 colors each component by its own readiness. A failed decision selects a smooth,
-localized safe-line offset around the obstacle. Projection follows that route
-offset while the rider remains camera-centered, and safe-line physics is pinned
-to the sampled ground. The route returns continuously to the main line after
-the obstacle instead of moving the rider sprite sideways in one frame.
+localized safe-line offset around the obstacle. `WorkoutGameTrailBranch` is the
+single lateral curve used by both the rendered branch and runtime rider offset.
+Projection follows that route while the rider remains camera-centered, and
+safe-line physics is pinned to the sampled ground. The route returns
+continuously to the main line after the obstacle instead of moving the rider
+sprite sideways in one frame. A challenge branch retains at least 18 metres of
+visible trail when its source section permits it, including ten metres of exit
+runout after the physical feature.
 
 #### Course-Space 2.5D Geometry
 
@@ -346,7 +350,11 @@ colors now and atlas textures later without changing course generation.
 
 Each model also exposes entry and exit connectors plus local collision boxes.
 Connectors let generated trail tiles meet as puzzle pieces with compatible
-width and elevation. Collision boxes are data only in the current release;
+width and elevation. `WorkoutGameTrailTileAssembler` replaces the base road
+over a challenge span with one connector pair shared by the main feature line
+and safe bypass. The saved course section length remains authoritative during
+this assembly; the renderer must not estimate it again from workout duration.
+Collision boxes are data only in the current release;
 feature success remains authoritative in `WorkoutGameFeatureChallenge`. A
 future Box2D adapter may install those boxes as fixtures, but rendering must
 never decide workout progress, resistance, recording, or feature rewards.
@@ -354,10 +362,21 @@ never decide workout progress, resistance, recording, or feature rewards.
 The scene graph projects only the bounded near/far course window. Source mesh
 triangles that cross either plane are clipped before projection instead of
 being dropped. Projected geometry is then clipped at the nearest visible crest
-and all road, shoulder, ground, cue, and feature triangles are depth-sorted into
-one terrain node. This avoids geometry from separate QSG nodes painting through
-nearer terrain. Camera elevation comes from the interpolated presentation
-snapshot, so visual suspension motion does not reintroduce fixed-step jitter.
+when appropriate. Rendering uses three ordered 2.5D layers: ground and distant
+terrain, trail surfaces and cues, then grounded props and raised feature
+geometry. Triangles remain depth-sorted inside each layer. This prevents a
+trail tile from disappearing under its own co-planar ground while trees and
+obstacles still cover the trail. `WorkoutGameForestFloor` supplies one lateral
+cross-section to both the ground strip and prop anchors; props whose projected
+extent is hidden by a crest are omitted instead of exposing a below-ground
+fragment.
+
+The chase projection places the camera eight metres behind the tracked rider
+and translates the projected frame so the rider's course-space point matches
+the fixed sprite position. This keeps the selected trail branch underneath the
+rider instead of projecting the camera and sprite from different world points.
+Camera elevation comes from the interpolated presentation snapshot, so visual
+suspension motion does not reintroduce fixed-step jitter.
 
 The GUI-to-render handoff currently relies on Qt Quick's synchronization phase.
 `setFrame`, `setTelemetry`, and `setCourse` mutate the `QQuickItem` on the GUI

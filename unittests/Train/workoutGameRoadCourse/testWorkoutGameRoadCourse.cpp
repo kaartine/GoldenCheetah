@@ -106,6 +106,27 @@ private slots:
         }
     }
 
+    void trailingCameraAnchorsTheTrackedRiderToTheChasePosition()
+    {
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(sampleCourse(), 200.0);
+        WorkoutGameRoadProjectionConfig config;
+        config.cameraTrailingDistanceMeters = 8.0;
+        const double riderDistance = 30.0;
+        const WorkoutGameRoadProjectionFrame projection =
+                WorkoutGameRoadProjection::project(
+                    road, riderDistance, config);
+        QVERIFY(projection.ready);
+        QVERIFY(projection.slices.back().worldDistanceMeters
+                < riderDistance);
+        const WorkoutGameRoadProjectedPoint rider =
+                WorkoutGameRoadProjection::projectPoint(
+                    projection, riderDistance, 0.0, 0.0);
+        QVERIFY(rider.ready);
+        QVERIFY(std::abs(rider.x - projection.riderScreenX) < 1e-6);
+        QVERIFY(std::abs(rider.y - projection.riderScreenY) < 1e-6);
+    }
+
     void logPieceOwnsTimedJumpGate()
     {
         const WorkoutGameRoadCourse road =
@@ -127,6 +148,21 @@ private slots:
                 - jump->challenge.prepareDistanceMeters <= 6.0 + 1e-9);
         QVERIFY(jump->challenge.decisionDistanceMeters
                 < jump->challenge.obstacleDistanceMeters);
+        QVERIFY(jump->challenge.decisionDistanceMeters
+                < jump->challenge.bypassStartDistanceMeters);
+        QVERIFY(jump->challenge.bypassStartDistanceMeters
+                < jump->challenge.obstacleDistanceMeters);
+        QVERIFY(jump->challenge.bypassEndDistanceMeters
+                > jump->challenge.obstacleDistanceMeters);
+        QVERIFY(jump->challenge.bypassEndDistanceMeters
+                - jump->challenge.bypassStartDistanceMeters >= 18.0 - 1e-9);
+        const WorkoutGameFeatureGeometryProfile featureGeometry =
+                WorkoutGameFeatureGeometry::profile(
+                    jump->terrain, jump->difficulty);
+        QVERIFY(featureGeometry.ready);
+        QVERIFY(jump->challenge.bypassEndDistanceMeters
+                >= jump->challenge.obstacleDistanceMeters
+                    + featureGeometry.endMeters + 10.0 - 1e-9);
         QVERIFY(jump->challenge.obstacleDistanceMeters
                 >= jump->startDistanceMeters);
         QVERIFY(jump->challenge.obstacleDistanceMeters
@@ -192,6 +228,25 @@ private slots:
                 WorkoutGameRoadCourseBuilder::sampleAtWorkoutTime(road, 40000);
         QCOMPARE(end.distanceMeters, road.totalLengthMeters);
         QCOMPARE(end.sectionProgress, 1.0);
+    }
+
+    void savedDistanceCourseLengthsAreNotReestimated()
+    {
+        WorkoutGameCourse course = sampleCourse();
+        course.sections[0].lengthMeters = 114.86038315951464;
+        course.sections[1].lengthMeters = 154.99442656317188;
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 250.0);
+
+        QVERIFY(road.ready);
+        QCOMPARE(road.timeline[0].startDistanceMeters, 0.0);
+        QCOMPARE(road.timeline[0].endDistanceMeters,
+                 course.sections[0].lengthMeters);
+        QCOMPARE(road.timeline[1].startDistanceMeters,
+                 course.sections[0].lengthMeters);
+        QCOMPARE(road.totalLengthMeters,
+                 course.sections[0].lengthMeters
+                    + course.sections[1].lengthMeters);
     }
 
     void climbAndTurnAreVisibleInWorldGeometry()

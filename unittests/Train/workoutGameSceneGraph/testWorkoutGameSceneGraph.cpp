@@ -16,6 +16,7 @@
 #include "Train/WorkoutGameMesh.h"
 #include "Train/WorkoutGamePowerCueGeometry.h"
 #include "Train/WorkoutGameRoadProjection.h"
+#include "Train/WorkoutGameTrailTile.h"
 
 #include <QApplication>
 #include <QColor>
@@ -106,7 +107,7 @@ WorkoutGameVisualSnapshot featureFrame(
     if (piece == road.pieces.end()) return frame;
     const WorkoutGameRoadTimelineSection &timeline = road.timeline[2];
     const double branchMiddle =
-            (piece->challenge.decisionDistanceMeters
+            (piece->challenge.bypassStartDistanceMeters
              + piece->challenge.bypassEndDistanceMeters) * 0.5;
     const double sectionProgress = (branchMiddle
             - timeline.startDistanceMeters)
@@ -181,6 +182,46 @@ WorkoutGameCourse catalogCourse(WorkoutGameTerrainKind terrain)
     section.difficulty = 0.65;
     section.challengeCount = 1;
     course.sections = {section};
+    return course;
+}
+
+WorkoutGameCourse savedDistanceCourseSample()
+{
+    WorkoutGameCourse course;
+    course.status = WorkoutGameCourseStatus::Ready;
+    course.seed = 4015825171u;
+    course.durationMs = 103800;
+    WorkoutGameSection skinny;
+    skinny.feature = WorkoutGameFeature::Trail;
+    skinny.terrain = WorkoutGameTerrainKind::Skinny;
+    skinny.durationMs = 48000;
+    skinny.targetWatts = 172.0;
+    skinny.gradePercent = 0.1175;
+    skinny.lengthMeters = 261.7991243169085;
+    skinny.difficulty = 0.235;
+    skinny.challengeCount = 1;
+    skinny.visualVariant = 4u;
+    WorkoutGameSection climb = skinny;
+    climb.feature = WorkoutGameFeature::Climb;
+    climb.terrain = WorkoutGameTerrainKind::Climb;
+    climb.startMs = 48000;
+    climb.durationMs = 28800;
+    climb.targetWatts = 223.0;
+    climb.gradePercent = 5.45;
+    climb.lengthMeters = 114.86038315951464;
+    climb.difficulty = 0.49;
+    climb.visualVariant = 6u;
+    WorkoutGameSection jump = skinny;
+    jump.feature = WorkoutGameFeature::SprintJump;
+    jump.terrain = WorkoutGameTerrainKind::BunnyHop;
+    jump.startMs = 76800;
+    jump.durationMs = 27000;
+    jump.targetWatts = 279.0;
+    jump.gradePercent = 2.0;
+    jump.lengthMeters = 154.99442656317188;
+    jump.difficulty = 0.7675;
+    jump.visualVariant = 1u;
+    course.sections = {skinny, climb, jump};
     return course;
 }
 
@@ -604,8 +645,8 @@ private slots:
                 featureColors.insert(qRgb(67, 73, 68));
                 featureColors.insert(qRgb(145, 147, 130));
             } else if (section == 6) {
-                featureColors.insert(qRgb(145, 105, 62));
-                featureColors.insert(qRgb(79, 57, 39));
+                featureColors.insert(qRgb(91, 66, 42));
+                featureColors.insert(qRgb(58, 46, 35));
             } else {
                 featureColors.insert(qRgb(45, 47, 43));
                 featureColors.insert(qRgb(145, 147, 130));
@@ -706,6 +747,165 @@ private slots:
         }
     }
 
+    void savedDistanceCourseKeepsFeatureAndBypassOnTheEditedTrail()
+    {
+        const WorkoutGameCourse course = savedDistanceCourseSample();
+        const WorkoutGameRoadCourse road =
+                WorkoutGameRoadCourseBuilder::build(course, 250.0);
+        QVERIFY(road.ready);
+        const double jumpStart = course.sections[0].lengthMeters
+                + course.sections[1].lengthMeters;
+        QCOMPARE(road.timeline[2].startDistanceMeters, jumpStart);
+        const auto challenge = std::find_if(
+                road.pieces.begin(), road.pieces.end(),
+                [](const WorkoutGameRoadPiece &piece) {
+                    return piece.sourceSectionIndex == 2u
+                            && piece.challenge.enabled;
+                });
+        QVERIFY(challenge != road.pieces.end());
+        QVERIFY(challenge->challenge.decisionDistanceMeters
+                < challenge->challenge.bypassStartDistanceMeters);
+        QVERIFY(challenge->challenge.bypassStartDistanceMeters
+                < challenge->challenge.obstacleDistanceMeters);
+        QVERIFY(challenge->challenge.bypassEndDistanceMeters
+                > challenge->challenge.obstacleDistanceMeters);
+        QVERIFY(challenge->challenge.bypassEndDistanceMeters
+                - challenge->challenge.bypassStartDistanceMeters >= 18.0);
+
+        WorkoutGameFeatureRuntime runtime;
+        QVERIFY(runtime.configure(road));
+        const WorkoutGameRoadTimelineSection &timeline = road.timeline[2];
+        const auto frameAtDistance = [&](
+                double distance,
+                WorkoutGameFeatureOutcome outcome,
+                WorkoutGameRoute route) {
+            WorkoutGameVisualSnapshot frame;
+            frame.simulation.ready = true;
+            frame.simulation.activeSection = 2;
+            frame.simulation.sectionProgress = (distance
+                    - timeline.startDistanceMeters)
+                    / (timeline.endDistanceMeters
+                       - timeline.startDistanceMeters);
+            frame.simulation.workoutTimeMs = course.sections[2].startMs
+                    + std::int64_t(std::llround(
+                        frame.simulation.sectionProgress
+                            * course.sections[2].durationMs));
+            frame.simulation.courseProgress = double(
+                    frame.simulation.workoutTimeMs) / course.durationMs;
+            frame.simulation.speedKph = 20.0;
+            frame.simulation.featureOutcome = outcome;
+            frame.simulation.route = route;
+            frame.simulation.challengeReadiness =
+                    outcome == WorkoutGameFeatureOutcome::Completed
+                    ? 1.0 : 0.45;
+            frame.feature = runtime.update(frame.simulation);
+            frame.world.ready = true;
+            frame.world.generation = 1;
+            frame.world.terrain = WorkoutGameTerrainKind::BunnyHop;
+            frame.world.rider.distanceMeters = distance;
+            frame.world.speedMetersPerSecond = 20.0 / 3.6;
+            return frame;
+        };
+
+        WorkoutGameSceneGraphWindow window;
+        window.resize(1280, 720);
+        window.setCourse(course, 250.0);
+        const double approachDistance =
+                challenge->challenge.bypassStartDistanceMeters - 8.0;
+        window.setFrame(frameAtDistance(
+                    approachDistance,
+                    WorkoutGameFeatureOutcome::Active,
+                    WorkoutGameRoute::MainLine),
+                220.0, 279.0, 88, 150, 7);
+        window.show();
+        QTRY_VERIFY_WITH_TIMEOUT(window.isExposed(), 3000);
+        QTest::qWait(350);
+        const QImage approach = window.grabWindow();
+        QVERIFY(!approach.isNull());
+
+        const double branchMiddle =
+                (challenge->challenge.bypassStartDistanceMeters
+                 + challenge->challenge.bypassEndDistanceMeters) * 0.5;
+        const WorkoutGameVisualSnapshot bypassFrame = frameAtDistance(
+                    branchMiddle,
+                    WorkoutGameFeatureOutcome::Bypassed,
+                    WorkoutGameRoute::SafeBypass);
+        WorkoutGameRoadProjectionConfig bypassProjectionConfig;
+        bypassProjectionConfig.cameraTrailingDistanceMeters = 8.0;
+        WorkoutGameRoadProjectionFrame bypassProjection =
+                WorkoutGameRoadProjection::project(
+                    road, branchMiddle, bypassProjectionConfig);
+        QVERIFY(bypassProjection.ready);
+        for (WorkoutGameRoadProjectedSlice &slice : bypassProjection.slices) {
+            slice.centerX -= bypassFrame.feature.lateralOffsetMeters
+                    * slice.pixelsPerMeter;
+        }
+        const WorkoutGameTrailTile tile =
+                WorkoutGameTrailTileAssembler::challenge(road, *challenge);
+        QVERIFY(tile.ready);
+        const std::vector<WorkoutGameProjectedMeshTriangle>
+                projectedBypass = WorkoutGameMeshProjector::project(
+                    tile.bypass, bypassProjection);
+        QVERIFY2(!projectedBypass.empty(),
+                 "The selected bypass must remain visible over shaped ground");
+        bool crossesRiderLine = false;
+        bool crossesRiderPosition = false;
+        for (const WorkoutGameProjectedMeshTriangle &triangle
+             : projectedBypass) {
+            double left = std::numeric_limits<double>::infinity();
+            double right = -std::numeric_limits<double>::infinity();
+            double top = std::numeric_limits<double>::infinity();
+            double bottom = -std::numeric_limits<double>::infinity();
+            for (const WorkoutGameProjectedMeshVertex &vertex
+                 : triangle.vertices) {
+                left = std::min(left, vertex.x);
+                right = std::max(right, vertex.x);
+                top = std::min(top, vertex.y);
+                bottom = std::max(bottom, vertex.y);
+            }
+            crossesRiderLine = crossesRiderLine
+                    || (left <= bypassProjection.riderScreenX
+                        && right >= bypassProjection.riderScreenX);
+            crossesRiderPosition = crossesRiderPosition
+                    || (left <= bypassProjection.riderScreenX
+                        && right >= bypassProjection.riderScreenX
+                        && top <= bypassProjection.riderScreenY
+                        && bottom >= bypassProjection.riderScreenY);
+        }
+        QVERIFY2(crossesRiderLine,
+                 "The bypass and rider must use the same branch curve");
+        QVERIFY2(crossesRiderPosition,
+                 "The selected trail surface must run underneath the rider");
+        bool visibleInViewport = false;
+        for (const WorkoutGameProjectedMeshTriangle &triangle
+             : projectedBypass) {
+            for (const WorkoutGameProjectedMeshVertex &vertex
+                 : triangle.vertices) {
+                visibleInViewport = visibleInViewport
+                        || (vertex.y >= 180.0 && vertex.y < 720.0);
+            }
+        }
+        QVERIFY2(visibleInViewport,
+                 "The bypass merge must remain visible ahead of the rider");
+        window.setFrame(bypassFrame,
+                220.0, 279.0, 88, 150, 7);
+        QTest::qWait(350);
+        const QImage bypass = window.grabWindow();
+        QVERIFY(!bypass.isNull());
+        QVERIFY(changedPixels(approach, bypass, 180) > 700);
+
+        const QByteArray requestedOutput =
+                qgetenv("GC_WORKOUT_GAME_SAVED_COURSE_AUDIT_DIR");
+        if (!requestedOutput.isEmpty()) {
+            const QString directory = QString::fromLocal8Bit(requestedOutput);
+            QVERIFY(QDir().mkpath(directory));
+            QVERIFY(approach.save(QDir(directory).filePath(
+                    QStringLiteral("saved-course-approach.png"))));
+            QVERIFY(bypass.save(QDir(directory).filePath(
+                    QStringLiteral("saved-course-bypass.png"))));
+        }
+    }
+
     void featureMeshesProjectAboveTheTrailAtEightMeters()
     {
         const WorkoutGameCourse course = WorkoutGameFeatureLab::course(200.0);
@@ -724,6 +924,7 @@ private slots:
             instance.anchorDistanceMeters =
                     piece.challenge.obstacleDistanceMeters;
             instance.anchorToBaseSurface = true;
+            instance.occlusionAllowancePixels = 18.0;
             const std::vector<WorkoutGameProjectedMeshTriangle> triangles =
                     WorkoutGameMeshProjector::project(instance, projection);
             QVERIFY2(!triangles.empty(),

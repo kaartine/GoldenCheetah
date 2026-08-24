@@ -42,6 +42,7 @@ struct WorkoutGameSection
     std::int64_t durationMs = 0;
     double targetWatts = 0.0;
     double gradePercent = 0.0;
+    double lengthMeters = 0.0;
     double difficulty = 0.0;
     int challengeCount = 0;
     std::uint32_t visualVariant = 0;
