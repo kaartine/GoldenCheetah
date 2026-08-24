@@ -20,11 +20,14 @@
 enum class WorkoutGameMeshMaterial
 {
     Dirt,
+    DirtHighlight,
     DirtEdge,
     Bypass,
     WoodSide,
+    WoodHighlight,
     WoodTop,
     RockSide,
+    RockHighlight,
     RockTop,
     DropFace
 };

@@ -124,7 +124,7 @@ private slots:
         QCOMPARE(result.route, WorkoutGameRoute::SafeBypass);
     }
 
-    void tabletopRequiresEnoughApproachSpeedAndAwardsBonus()
+    void tabletopUsesTargetPowerRegardlessOfSyntheticSpeed()
     {
         WorkoutGameSimulation strong;
         WorkoutGameSimulation slow;
@@ -150,11 +150,9 @@ private slots:
         QCOMPARE(strongResult.challengeReadiness, 1.0);
         QVERIFY(strongResult.score >= strongResult.challenge.bonusPoints);
         QCOMPARE(slowResult.featureOutcome,
-                 WorkoutGameFeatureOutcome::Bypassed);
-        QVERIFY(slowResult.challengeReadiness < 0.5);
-        QVERIFY(strongResult.score > slowResult.score);
-        QCOMPARE(strongResult.score - slowResult.score,
-                 strongResult.challenge.bonusPoints);
+                 WorkoutGameFeatureOutcome::Completed);
+        QCOMPARE(slowResult.challengeReadiness, 1.0);
+        QCOMPARE(strongResult.score, slowResult.score);
     }
 
     void activeChallengeReportsReadinessBeforeDecision()
@@ -182,7 +180,7 @@ private slots:
         QVERIFY(result.challengeReadiness < 1.0);
     }
 
-    void activeChallengeExposesMeasuredInputsAndLimitingRequirement()
+    void activeChallengeExposesMeasuredInputsAndPowerReadiness()
     {
         WorkoutGameSimulation simulation;
         QVERIFY(simulation.configure(
@@ -205,11 +203,11 @@ private slots:
                          - 35.0) < 1e-9);
         QVERIFY(std::abs(result.challengeMetrics.averageSpeedKph
                          - 18.0) < 1e-9);
-        QCOMPARE(result.challengeAssessment.effortReadiness, 1.0);
-        QVERIFY(std::abs(result.challengeAssessment.cadenceReadiness
-                         - 0.5) < 1e-9);
+        QVERIFY(std::abs(result.challengeAssessment.effortReadiness
+                         - 0.95) < 1e-9);
+        QCOMPARE(result.challengeAssessment.cadenceReadiness, 1.0);
         QCOMPARE(result.challengeAssessment.speedReadiness, 1.0);
-        QVERIFY(std::abs(result.challengeReadiness - 0.5) < 1e-9);
+        QVERIFY(std::abs(result.challengeReadiness - 0.95) < 1e-9);
     }
 
     void jumpChallengeMeasuresTheTimedApproachWindow()
@@ -329,6 +327,7 @@ private slots:
         QCOMPARE(simulation.update(moving).speedKph, 7.2);
 
         WorkoutGameSimulationInput stopped = sample(0, 180.0, 180.0);
+        stopped.workoutTimeMs = 1000;
         stopped.authoritativeSpeedKph = 0.0;
         stopped.drivetrainSpeedLimitKph = 7.2;
         QCOMPARE(simulation.update(stopped).speedKph, 0.0);
@@ -345,6 +344,47 @@ private slots:
         input.drivetrainSpeedLimitKph = 7.2;
 
         QCOMPARE(simulation.update(input).speedKph, 34.0);
+    }
+
+    void virtualGearChangesSpeedThroughInertiaInsteadOfTeleporting()
+    {
+        WorkoutGameSimulation downshift;
+        QVERIFY(downshift.configure(
+                courseFor({{0, 60000, 180.0, 180.0}}), 200.0));
+        WorkoutGameSimulationInput fast = sample(0, 180.0, 180.0);
+        fast.authoritativeSpeedKph = 20.0;
+        fast.drivetrainSpeedLimitKph = 35.0;
+        fast.virtualGear = 10;
+        QCOMPARE(downshift.update(fast).speedKph, 20.0);
+
+        WorkoutGameSimulationInput lowGear = fast;
+        lowGear.drivetrainSpeedLimitKph = 7.2;
+        lowGear.virtualGear = 1;
+        QCOMPARE(downshift.update(lowGear).speedKph, 20.0);
+        lowGear.workoutTimeMs = 100;
+        const double afterDownshift = downshift.update(lowGear).speedKph;
+        QVERIFY(afterDownshift < 20.0);
+        QVERIFY2(afterDownshift > 15.0,
+                 "a downshift teleported the bicycle to the new cadence speed");
+
+        WorkoutGameSimulation upshift;
+        QVERIFY(upshift.configure(
+                courseFor({{0, 60000, 180.0, 180.0}}), 200.0));
+        WorkoutGameSimulationInput slow = sample(0, 180.0, 180.0);
+        slow.authoritativeSpeedKph = 30.0;
+        slow.drivetrainSpeedLimitKph = 7.2;
+        slow.virtualGear = 1;
+        QCOMPARE(upshift.update(slow).speedKph, 7.2);
+
+        WorkoutGameSimulationInput highGear = slow;
+        highGear.drivetrainSpeedLimitKph = 35.0;
+        highGear.virtualGear = 10;
+        QCOMPARE(upshift.update(highGear).speedKph, 7.2);
+        highGear.workoutTimeMs = 100;
+        const double afterUpshift = upshift.update(highGear).speedKph;
+        QVERIFY(afterUpshift > 7.2);
+        QVERIFY2(afterUpshift < 12.0,
+                 "an upshift teleported the bicycle to the new cadence speed");
     }
 
     void invalidAuthoritativeSpeedFallsBackToPowerEstimate()

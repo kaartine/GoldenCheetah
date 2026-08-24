@@ -17,6 +17,7 @@ enum class WorkoutGameFeatureInstruction
 {
     RideSteady,
     GetReady,
+    ReachTargetPower,
     PedalHard,
     CarrySpeed,
     HoldLine,
@@ -35,6 +36,8 @@ struct WorkoutGameFeaturePromptSnapshot
             WorkoutGameFeatureInstruction::RideSteady;
     WorkoutGameTerrainKind terrain = WorkoutGameTerrainKind::SmoothTrail;
     double distanceMeters = 0.0;
+    double requiredWatts = 0.0;
+    double actualWatts = 0.0;
     bool featureActive = false;
 };
 

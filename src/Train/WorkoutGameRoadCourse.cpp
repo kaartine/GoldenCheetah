@@ -96,7 +96,7 @@ double trailReliefOffset(
     const double phase = double((piece.sourceSectionIndex * 37u
             + std::size_t(std::llround(piece.startDistanceMeters))) % 101u)
             / 101.0 * 2.0 * Pi;
-    double amplitude = 0.65 + 0.55 * piece.difficulty;
+    double amplitude = 0.68 + 0.58 * piece.difficulty;
     switch (piece.terrain) {
     case WorkoutGameTerrainKind::Climb:
         amplitude *= 1.20;
@@ -407,7 +407,7 @@ WorkoutGameRoadCourse WorkoutGameRoadCourseBuilder::build(
                         std::max(obstacleDistance + 8.0,
                                  challengeDistance + 12.0));
                 piece.challenge.bypassLateralMeters =
-                        (sectionIndex & 1u) == 0u ? -2.2 : 2.2;
+                        (sectionIndex & 1u) == 0u ? -1.5 : 1.5;
                 piece.challenge.profile.measurementStartProgress =
                         (piece.challenge.prepareDistanceMeters - sectionStart)
                         / sectionLength;

@@ -279,12 +279,16 @@ QColor meshColor(WorkoutGameMeshMaterial material, bool selectedBypass = false)
 {
     switch (material) {
     case WorkoutGameMeshMaterial::Dirt: return QColor(145, 105, 62);
+    case WorkoutGameMeshMaterial::DirtHighlight: return QColor(181, 135, 76);
     case WorkoutGameMeshMaterial::DirtEdge: return QColor(79, 57, 39);
     case WorkoutGameMeshMaterial::Bypass:
-        return selectedBypass ? QColor(218, 167, 76) : QColor(91, 76, 52);
+        return selectedBypass
+                ? QColor(218, 167, 76, 235) : QColor(91, 76, 52, 72);
     case WorkoutGameMeshMaterial::WoodSide: return QColor(78, 47, 28);
+    case WorkoutGameMeshMaterial::WoodHighlight: return QColor(118, 69, 36);
     case WorkoutGameMeshMaterial::WoodTop: return QColor(166, 96, 43);
     case WorkoutGameMeshMaterial::RockSide: return QColor(67, 73, 68);
+    case WorkoutGameMeshMaterial::RockHighlight: return QColor(105, 111, 101);
     case WorkoutGameMeshMaterial::RockTop: return QColor(145, 147, 130);
     case WorkoutGameMeshMaterial::DropFace: return QColor(45, 47, 43);
     }
@@ -793,12 +797,14 @@ void buildFeatureGeometry(
         const bool selectedBypass = active.ready
                 && active.sourceSectionIndex == int(piece.sourceSectionIndex)
                 && active.route == WorkoutGameRoute::SafeBypass;
-        WorkoutGameMeshInstance bypass;
-        bypass.mesh = WorkoutGameMeshLibrary::bypassRibbon(
-                branchLength, piece.challenge.bypassLateralMeters, 0.50);
-        bypass.anchorDistanceMeters = branchStart;
-        bypass.anchorToBaseSurface = true;
-        appendProjectedMesh(bypass, projection, selectedBypass, geometry);
+        if (selectedBypass) {
+            WorkoutGameMeshInstance bypass;
+            bypass.mesh = WorkoutGameMeshLibrary::bypassRibbon(
+                    branchLength, piece.challenge.bypassLateralMeters, 0.38);
+            bypass.anchorDistanceMeters = branchStart;
+            bypass.anchorToBaseSurface = true;
+            appendProjectedMesh(bypass, projection, true, geometry);
+        }
 
         const double difficulty = piece.sourceSectionIndex
                 < workout.sections.size()
@@ -1058,6 +1064,10 @@ void WorkoutGameSceneGraphItem::rebuildHud()
         case WorkoutGameFeatureInstruction::GetReady:
             cueText = tr("GET READY");
             cueColor = QColor(242, 190, 67); break;
+        case WorkoutGameFeatureInstruction::ReachTargetPower:
+            cueText = tr("HIT %1 W").arg(
+                    int(std::lround(prompt.requiredWatts)));
+            cueColor = QColor(250, 231, 91); break;
         case WorkoutGameFeatureInstruction::PedalHard:
             cueText = tr("PEDAL HARD");
             cueColor = QColor(250, 231, 91); break;

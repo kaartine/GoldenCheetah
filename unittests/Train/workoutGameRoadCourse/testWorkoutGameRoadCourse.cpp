@@ -391,7 +391,8 @@ private slots:
                         maximumRelief, std::abs(elevation - baseline));
             }
         }
-        QVERIFY(maximumRelief > 0.5);
+        QVERIFY2(maximumRelief > 0.8,
+                 "terrain relief is still visually too shallow");
     }
 
     void jumpSurfaceOffsetIsAppliedExactlyOnce()

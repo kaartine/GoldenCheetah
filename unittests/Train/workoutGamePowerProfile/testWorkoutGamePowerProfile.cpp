@@ -72,13 +72,14 @@ private slots:
         QCOMPARE(push.cue.state, WorkoutGamePowerCueState::PushNow);
         QCOMPARE(push.cue.challengeCue, WorkoutGameChallengeCue::Jump);
         QCOMPARE(push.cue.terrain, WorkoutGameTerrainKind::LogOver);
-        QVERIFY(push.cue.requiredWatts > 190.0);
+        QCOMPARE(push.cue.requiredWatts,
+                 course.sections.front().targetWatts);
         QCOMPARE(push.cue.actualWatts, 210.0);
         QCOMPARE(push.cue.actualCadenceRpm, 80.0);
         QCOMPARE(push.cue.actualSpeedKph, 18.0);
         QVERIFY(push.cue.powerRequired);
-        QVERIFY(push.cue.cadenceRequired);
-        QVERIFY(push.cue.speedRequired);
+        QVERIFY(!push.cue.cadenceRequired);
+        QVERIFY(!push.cue.speedRequired);
         QVERIFY(push.cue.windowProgress > 0.0);
         QVERIFY(push.cue.windowProgress < 1.0);
 

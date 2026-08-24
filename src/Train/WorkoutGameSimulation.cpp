@@ -21,6 +21,8 @@ namespace {
 constexpr std::int64_t SimulationStepMs = 50;
 constexpr std::int64_t MaximumCatchupMs = 1000;
 constexpr std::int64_t JumpMeasurementWindowMs = 1500;
+constexpr double MaximumAccelerationKphPerSecond = 7.2;
+constexpr double MaximumDecelerationKphPerSecond = 10.8;
 
 double finiteNonNegative(double value)
 {
@@ -240,13 +242,25 @@ void WorkoutGameSimulation::updateSpeed(
 {
     if (std::isfinite(input.authoritativeSpeedKph)
             && input.authoritativeSpeedKph >= 0.0) {
-        currentSpeedKph = std::clamp(input.authoritativeSpeedKph, 0.0, 108.0);
+        double desiredSpeedKph = std::clamp(
+                input.authoritativeSpeedKph, 0.0, 108.0);
         if (!section.gravityAssisted
                 && std::isfinite(input.drivetrainSpeedLimitKph)
                 && input.drivetrainSpeedLimitKph >= 0.0) {
-            currentSpeedKph = std::min(
-                    currentSpeedKph, input.drivetrainSpeedLimitKph);
+            desiredSpeedKph = std::min(
+                    desiredSpeedKph, input.drivetrainSpeedLimitKph);
         }
+        if (immediate || stepDurationMs <= 0) {
+            currentSpeedKph = desiredSpeedKph;
+            return;
+        }
+        const double seconds = double(stepDurationMs) / 1000.0;
+        const double delta = desiredSpeedKph - currentSpeedKph;
+        const double limitedDelta = std::clamp(
+                delta,
+                -MaximumDecelerationKphPerSecond * seconds,
+                MaximumAccelerationKphPerSecond * seconds);
+        currentSpeedKph += limitedDelta;
         return;
     }
 
@@ -393,14 +407,6 @@ WorkoutGameSimulationSnapshot WorkoutGameSimulation::update(
     if (input.paused || elapsedMs <= 0) {
         lastWorkoutTimeMs = workoutTimeMs;
         moveToSection(sectionAt(workoutTimeMs));
-        if (!input.paused && activeSection >= 0) {
-            updateSpeed(
-                    input,
-                    configuredCourse.sections[activeSection],
-                    finiteNonNegative(input.actualWatts),
-                    0,
-                    true);
-        }
         return snapshot(workoutTimeMs, 0);
     }
 

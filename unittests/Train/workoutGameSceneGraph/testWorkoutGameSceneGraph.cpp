@@ -359,6 +359,9 @@ private slots:
         profile.cue.state = WorkoutGamePowerCueState::PushNow;
         profile.cue.challengeCue = WorkoutGameChallengeCue::Jump;
         profile.cue.readiness = 0.72;
+        profile.cue.powerRequired = true;
+        profile.cue.requiredWatts = 240.0;
+        profile.cue.actualWatts = 180.0;
         WorkoutGameFeatureRuntimeSnapshot feature;
         feature.ready = true;
         feature.terrain = WorkoutGameTerrainKind::LogOver;
@@ -369,9 +372,11 @@ private slots:
         const WorkoutGameFeaturePromptSnapshot pedal =
                 WorkoutGameFeaturePrompt::build(profile, feature);
         QCOMPARE(pedal.instruction,
-                 WorkoutGameFeatureInstruction::PedalHard);
+                 WorkoutGameFeatureInstruction::ReachTargetPower);
         QCOMPARE(pedal.terrain, WorkoutGameTerrainKind::LogOver);
         QCOMPARE(pedal.distanceMeters, 4.4);
+        QCOMPARE(pedal.requiredWatts, 240.0);
+        QCOMPARE(pedal.actualWatts, 180.0);
 
         profile.cue.readiness = 1.0;
         const WorkoutGameFeaturePromptSnapshot ready =

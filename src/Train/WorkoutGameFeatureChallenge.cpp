@@ -32,35 +32,35 @@ WorkoutGameFeatureChallengeProfile baseProfile(
     switch (terrain) {
     case WorkoutGameTerrainKind::Roots:
         return {true, Cue::CarrySpeed, 0.35, 0.85,
-                0.78, 60.0, 7.0, 0.0, 0.75, 0};
+                1.0, 0.0, 0.0, 0.0, 0.0, 0};
     case WorkoutGameTerrainKind::Rollers:
         return {true, Cue::CarrySpeed, 0.30, 0.82,
-                0.78, 65.0, 10.0, 0.0, 0.72, 0};
+                1.0, 0.0, 0.0, 0.0, 0.0, 0};
     case WorkoutGameTerrainKind::Climb:
         return {true, Cue::Climb, 0.0, 0.95,
-                0.80, 50.0, 0.0, 0.0, 0.75, 0};
+                1.0, 0.0, 0.0, 0.0, 0.0, 0};
     case WorkoutGameTerrainKind::RockGarden:
         return {true, Cue::CarrySpeed, 0.35, 0.85,
-                0.80, 60.0, 8.0, 0.0, 0.72, 0};
+                1.0, 0.0, 0.0, 0.0, 0.0, 0};
     case WorkoutGameTerrainKind::BunnyHop:
     case WorkoutGameTerrainKind::LogOver:
         return {true, Cue::Jump, 0.64, 0.72,
-                0.90, 65.0, 12.0, 0.0, 0.0, 0};
+                1.0, 0.0, 0.0, 0.0, 0.0, 0};
     case WorkoutGameTerrainKind::Drop:
         return {true, Cue::CarrySpeed, 0.45, 0.68,
-                0.0, 0.0, 12.0, 0.0, 0.0, 0};
+                1.0, 0.0, 0.0, 0.0, 0.0, 0};
     case WorkoutGameTerrainKind::Skinny:
         return {true, Cue::HoldLine, 0.20, 0.85,
-                0.75, 60.0, 6.0, 22.0, 0.82, 0};
+                1.0, 0.0, 0.0, 0.0, 0.0, 0};
     case WorkoutGameTerrainKind::Berm:
         return {true, Cue::CarrySpeed, 0.40, 0.78,
-                0.0, 0.0, 14.0, 0.0, 0.0, 0};
+                1.0, 0.0, 0.0, 0.0, 0.0, 0};
     case WorkoutGameTerrainKind::Tabletop:
         return {true, Cue::Jump, 0.62, 0.72,
-                0.92, 70.0, 16.0, 0.0, 0.0, 0};
+                1.0, 0.0, 0.0, 0.0, 0.0, 0};
     case WorkoutGameTerrainKind::RockSlab:
         return {true, Cue::CarrySpeed, 0.35, 0.88,
-                0.82, 55.0, 7.0, 0.0, 0.75, 0};
+                1.0, 0.0, 0.0, 0.0, 0.0, 0};
     case WorkoutGameTerrainKind::SmoothTrail:
         return {};
     }
@@ -81,13 +81,6 @@ WorkoutGameFeatureChallengeProfile WorkoutGameFeatureChallenge::profile(
             std::isfinite(section.difficulty) ? section.difficulty : 0.0,
             0.0,
             1.0);
-    if (result.minimumEffortRatio > 0.0) {
-        result.minimumEffortRatio = std::min(
-                1.0, result.minimumEffortRatio + 0.05 * difficulty);
-    }
-    if (result.minimumSpeedKph > 0.0) {
-        result.minimumSpeedKph *= 0.9 + 0.2 * difficulty;
-    }
     const int challenges = std::clamp(section.challengeCount, 1, 10);
     result.bonusPoints = std::uint64_t(std::llround(
             250.0 + 100.0 * double(challenges) + 150.0 * difficulty));

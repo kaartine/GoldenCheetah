@@ -27,6 +27,12 @@ WorkoutGameFeaturePromptSnapshot WorkoutGameFeaturePrompt::build(
     result.distanceMeters = std::max(
             0.0, std::isfinite(feature.distanceToObstacleMeters)
                 ? feature.distanceToObstacleMeters : 0.0);
+    result.requiredWatts = std::max(
+            0.0, std::isfinite(profile.cue.requiredWatts)
+                ? profile.cue.requiredWatts : 0.0);
+    result.actualWatts = std::max(
+            0.0, std::isfinite(profile.cue.actualWatts)
+                ? profile.cue.actualWatts : 0.0);
 
     if (profile.cue.state == WorkoutGamePowerCueState::Bypassed
             || feature.route == WorkoutGameRoute::SafeBypass) {
@@ -65,6 +71,10 @@ WorkoutGameFeaturePromptSnapshot WorkoutGameFeaturePrompt::build(
     }
     if (profile.cue.readiness >= 1.0 - 1e-9) {
         result.instruction = WorkoutGameFeatureInstruction::Ready;
+        return result;
+    }
+    if (profile.cue.powerRequired) {
+        result.instruction = WorkoutGameFeatureInstruction::ReachTargetPower;
         return result;
     }
 

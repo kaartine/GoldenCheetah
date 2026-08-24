@@ -61,24 +61,71 @@ private slots:
     void featureModelsAreValidAndReadyForTexturesAndCollision()
     {
         const WorkoutGameTerrainKind terrains[] = {
+            WorkoutGameTerrainKind::Rollers,
+            WorkoutGameTerrainKind::Climb,
             WorkoutGameTerrainKind::LogOver,
             WorkoutGameTerrainKind::Roots,
             WorkoutGameTerrainKind::RockGarden,
+            WorkoutGameTerrainKind::BunnyHop,
+            WorkoutGameTerrainKind::Skinny,
+            WorkoutGameTerrainKind::Berm,
             WorkoutGameTerrainKind::Tabletop,
-            WorkoutGameTerrainKind::Drop
+            WorkoutGameTerrainKind::Drop,
+            WorkoutGameTerrainKind::RockSlab
         };
         for (WorkoutGameTerrainKind terrain : terrains) {
             const WorkoutGameMesh model =
                     WorkoutGameMeshLibrary::feature(terrain, 0.7);
             QVERIFY2(WorkoutGameMeshLibrary::valid(model),
                      "feature mesh must have finite indexed triangles");
-            QVERIFY(model.vertices.size() >= 8u);
-            QVERIFY(model.triangles.size() >= 4u);
+            QVERIFY2(model.vertices.size() >= 12u,
+                     "feature still uses the old generic box silhouette");
+            QVERIFY2(model.triangles.size() >= 8u,
+                     "feature lacks a sculpted surface");
             QVERIFY(!model.colliders.empty());
             for (const WorkoutGameMeshVertex &vertex : model.vertices) {
                 QVERIFY(std::isfinite(vertex.u));
                 QVERIFY(std::isfinite(vertex.v));
             }
+        }
+    }
+
+    void everyFeatureHasDepthAndHeightVariationInsteadOfABoxFallback()
+    {
+        const WorkoutGameTerrainKind terrains[] = {
+            WorkoutGameTerrainKind::Rollers,
+            WorkoutGameTerrainKind::Climb,
+            WorkoutGameTerrainKind::Roots,
+            WorkoutGameTerrainKind::RockGarden,
+            WorkoutGameTerrainKind::BunnyHop,
+            WorkoutGameTerrainKind::Drop,
+            WorkoutGameTerrainKind::Skinny,
+            WorkoutGameTerrainKind::Berm,
+            WorkoutGameTerrainKind::LogOver,
+            WorkoutGameTerrainKind::Tabletop,
+            WorkoutGameTerrainKind::RockSlab
+        };
+        for (WorkoutGameTerrainKind terrain : terrains) {
+            const WorkoutGameMesh mesh = WorkoutGameMeshLibrary::feature(
+                    terrain, 0.65);
+            std::vector<double> forward;
+            std::vector<double> height;
+            for (const WorkoutGameMeshVertex &vertex : mesh.vertices) {
+                forward.push_back(vertex.forwardMeters);
+                height.push_back(vertex.upMeters);
+            }
+            const auto uniqueCount = [](std::vector<double> values) {
+                std::sort(values.begin(), values.end());
+                values.erase(std::unique(
+                    values.begin(), values.end(), [](double a, double b) {
+                        return std::abs(a - b) < 1e-6;
+                    }), values.end());
+                return values.size();
+            };
+            QVERIFY2(uniqueCount(forward) >= 3u,
+                     "feature has only the front and back faces of a box");
+            QVERIFY2(uniqueCount(height) >= 3u,
+                     "feature has only the top and bottom faces of a box");
         }
     }
 
@@ -99,23 +146,23 @@ private slots:
     void bypassRibbonLeavesAndReturnsToTheMainTrailSmoothly()
     {
         const WorkoutGameMesh bypass = WorkoutGameMeshLibrary::bypassRibbon(
-                20.0, 2.2, 0.55);
+                20.0, 1.5, 0.38);
         QVERIFY(WorkoutGameMeshLibrary::valid(bypass));
         QVERIFY(bypass.vertices.size() >= 20u);
 
-        const double startRight = bypass.vertices.front().rightMeters
-                + bypass.vertices[1].rightMeters;
-        const double endRight = bypass.vertices[bypass.vertices.size() - 2].rightMeters
-                + bypass.vertices.back().rightMeters;
+        const double startRight = bypass.vertices[1].rightMeters
+                + bypass.vertices[2].rightMeters;
+        const double endRight = bypass.vertices[bypass.vertices.size() - 3].rightMeters
+                + bypass.vertices[bypass.vertices.size() - 2].rightMeters;
         double largestCenter = 0.0;
-        for (std::size_t index = 0; index + 1 < bypass.vertices.size(); index += 2) {
+        for (std::size_t index = 0; index + 3 < bypass.vertices.size(); index += 4) {
             largestCenter = std::max(largestCenter, std::abs(
-                    (bypass.vertices[index].rightMeters
-                     + bypass.vertices[index + 1].rightMeters) * 0.5));
+                    (bypass.vertices[index + 1].rightMeters
+                     + bypass.vertices[index + 2].rightMeters) * 0.5));
         }
         QVERIFY(std::abs(startRight) < 1e-9);
         QVERIFY(std::abs(endRight) < 1e-9);
-        QVERIFY(largestCenter > 2.0);
+        QVERIFY(largestCenter > 1.4);
     }
 
     void logObstacleClearsButDoesNotDwarfTheSingletrack()
@@ -256,9 +303,17 @@ private slots:
             QCOMPARE(mesh.lengthMeters,
                      profile.endMeters - profile.startMeters);
             for (const WorkoutGameMeshVertex &vertex : mesh.vertices) {
+                if (terrain == WorkoutGameTerrainKind::LogOver
+                        && std::abs(vertex.rightMeters) > 0.1) {
+                    continue;
+                }
                 double visibleSurface =
                         -std::numeric_limits<double>::infinity();
                 for (const WorkoutGameMeshVertex &candidate : mesh.vertices) {
+                    if (terrain == WorkoutGameTerrainKind::LogOver
+                            && std::abs(candidate.rightMeters) > 0.1) {
+                        continue;
+                    }
                     if (std::abs(candidate.forwardMeters
                                  - vertex.forwardMeters) < 1e-9) {
                         visibleSurface = std::max(

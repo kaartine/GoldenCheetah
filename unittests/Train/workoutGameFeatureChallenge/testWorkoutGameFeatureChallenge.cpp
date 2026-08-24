@@ -31,36 +31,35 @@ private slots:
         QVERIFY(!WorkoutGameFeatureChallenge::profile(section).enabled);
     }
 
-    void terrainSelectsSkillAndRequirements()
+    void terrainSelectsSkillButUsesOneVisiblePowerRequirement()
     {
         struct Expected {
             WorkoutGameTerrainKind terrain;
             WorkoutGameChallengeCue cue;
-            bool speedRequired;
         };
         for (const Expected &expected : {
                 Expected{WorkoutGameTerrainKind::Roots,
-                         WorkoutGameChallengeCue::CarrySpeed, true},
+                         WorkoutGameChallengeCue::CarrySpeed},
                 Expected{WorkoutGameTerrainKind::Rollers,
-                         WorkoutGameChallengeCue::CarrySpeed, true},
+                         WorkoutGameChallengeCue::CarrySpeed},
                 Expected{WorkoutGameTerrainKind::Climb,
-                         WorkoutGameChallengeCue::Climb, false},
+                         WorkoutGameChallengeCue::Climb},
                 Expected{WorkoutGameTerrainKind::RockGarden,
-                         WorkoutGameChallengeCue::CarrySpeed, true},
+                         WorkoutGameChallengeCue::CarrySpeed},
                 Expected{WorkoutGameTerrainKind::BunnyHop,
-                         WorkoutGameChallengeCue::Jump, true},
+                         WorkoutGameChallengeCue::Jump},
                 Expected{WorkoutGameTerrainKind::Drop,
-                         WorkoutGameChallengeCue::CarrySpeed, true},
+                         WorkoutGameChallengeCue::CarrySpeed},
                 Expected{WorkoutGameTerrainKind::Skinny,
-                         WorkoutGameChallengeCue::HoldLine, true},
+                         WorkoutGameChallengeCue::HoldLine},
                 Expected{WorkoutGameTerrainKind::Berm,
-                         WorkoutGameChallengeCue::CarrySpeed, true},
+                         WorkoutGameChallengeCue::CarrySpeed},
                 Expected{WorkoutGameTerrainKind::LogOver,
-                         WorkoutGameChallengeCue::Jump, true},
+                         WorkoutGameChallengeCue::Jump},
                 Expected{WorkoutGameTerrainKind::Tabletop,
-                         WorkoutGameChallengeCue::Jump, true},
+                         WorkoutGameChallengeCue::Jump},
                 Expected{WorkoutGameTerrainKind::RockSlab,
-                         WorkoutGameChallengeCue::CarrySpeed, true}}) {
+                         WorkoutGameChallengeCue::CarrySpeed}}) {
             WorkoutGameSection section;
             section.terrain = expected.terrain;
             section.challengeCount = 1;
@@ -69,7 +68,11 @@ private slots:
                     WorkoutGameFeatureChallenge::profile(section);
             QVERIFY(profile.enabled);
             QCOMPARE(profile.cue, expected.cue);
-            QCOMPARE(profile.minimumSpeedKph > 0.0, expected.speedRequired);
+            QCOMPARE(profile.minimumEffortRatio, 1.0);
+            QCOMPARE(profile.minimumCadenceRpm, 0.0);
+            QCOMPARE(profile.minimumSpeedKph, 0.0);
+            QCOMPARE(profile.maximumSpeedKph, 0.0);
+            QCOMPARE(profile.minimumAdherence, 0.0);
             QVERIFY(profile.measurementStartProgress >= 0.0);
             QVERIFY(profile.measurementStartProgress
                     < profile.decisionProgress);
@@ -79,7 +82,7 @@ private slots:
         }
     }
 
-    void difficultyAndChallengeCountScaleRequirementsAndBonus()
+    void difficultyAndChallengeCountScaleBonusNotPowerThreshold()
     {
         WorkoutGameSection section;
         section.terrain = WorkoutGameTerrainKind::Roots;
@@ -92,13 +95,13 @@ private slots:
         const WorkoutGameFeatureChallengeProfile hard =
                 WorkoutGameFeatureChallenge::profile(section);
 
-        QVERIFY(hard.minimumEffortRatio > easy.minimumEffortRatio);
-        QVERIFY(hard.minimumSpeedKph > easy.minimumSpeedKph);
+        QCOMPARE(easy.minimumEffortRatio, 1.0);
+        QCOMPARE(hard.minimumEffortRatio, 1.0);
         QVERIFY(hard.bonusPoints > easy.bonusPoints);
         QCOMPARE(hard.bonusPoints, std::uint64_t(1400));
     }
 
-    void allRequirementsMustBeMet()
+    void targetPowerSelectsMainLineWithoutHiddenRequirements()
     {
         WorkoutGameSection section;
         section.terrain = WorkoutGameTerrainKind::Tabletop;
@@ -107,63 +110,23 @@ private slots:
                 WorkoutGameFeatureChallenge::profile(section);
         WorkoutGameFeatureChallengeMetrics metrics;
         metrics.averageEffortRatio = 1.0;
-        metrics.averageCadenceRpm = 85.0;
-        metrics.averageSpeedKph = 20.0;
-        metrics.averageAdherence = 1.0;
+        metrics.averageCadenceRpm = 0.0;
+        metrics.averageSpeedKph = 0.0;
+        metrics.averageAdherence = 0.0;
 
         const WorkoutGameFeatureChallengeAssessment ready =
                 WorkoutGameFeatureChallenge::assess(profile, metrics);
         QCOMPARE(ready.readiness, 1.0);
         QVERIFY(ready.completed);
 
-        metrics.averageSpeedKph = profile.minimumSpeedKph * 0.5;
-        const WorkoutGameFeatureChallengeAssessment slow =
-                WorkoutGameFeatureChallenge::assess(profile, metrics);
-        QVERIFY(std::abs(slow.readiness - 0.5) < 1e-9);
-        QVERIFY(!slow.completed);
-    }
-
-    void reportsEachReadinessRequirementSeparately()
-    {
-        WorkoutGameSection section;
-        section.terrain = WorkoutGameTerrainKind::Tabletop;
-        section.challengeCount = 1;
-        const WorkoutGameFeatureChallengeProfile profile =
-                WorkoutGameFeatureChallenge::profile(section);
-        WorkoutGameFeatureChallengeMetrics metrics;
-        metrics.averageEffortRatio = profile.minimumEffortRatio;
-        metrics.averageCadenceRpm = profile.minimumCadenceRpm * 0.5;
-        metrics.averageSpeedKph = profile.minimumSpeedKph;
+        metrics.averageEffortRatio = 0.999;
+        metrics.averageCadenceRpm = 200.0;
+        metrics.averageSpeedKph = 80.0;
         metrics.averageAdherence = 1.0;
-
-        const WorkoutGameFeatureChallengeAssessment result =
+        const WorkoutGameFeatureChallengeAssessment belowTarget =
                 WorkoutGameFeatureChallenge::assess(profile, metrics);
-
-        QCOMPARE(result.effortReadiness, 1.0);
-        QVERIFY(std::abs(result.cadenceReadiness - 0.5) < 1e-9);
-        QCOMPARE(result.speedReadiness, 1.0);
-        QCOMPARE(result.adherenceReadiness, 1.0);
-        QVERIFY(std::abs(result.readiness - 0.5) < 1e-9);
-        QVERIFY(!result.completed);
-    }
-
-    void skinnyRejectsExcessiveSpeed()
-    {
-        WorkoutGameSection section;
-        section.terrain = WorkoutGameTerrainKind::Skinny;
-        section.challengeCount = 1;
-        const WorkoutGameFeatureChallengeProfile profile =
-                WorkoutGameFeatureChallenge::profile(section);
-        WorkoutGameFeatureChallengeMetrics metrics;
-        metrics.averageEffortRatio = 1.0;
-        metrics.averageCadenceRpm = 85.0;
-        metrics.averageSpeedKph = profile.maximumSpeedKph * 2.0;
-        metrics.averageAdherence = 1.0;
-
-        const WorkoutGameFeatureChallengeAssessment result =
-                WorkoutGameFeatureChallenge::assess(profile, metrics);
-        QVERIFY(std::abs(result.readiness - 0.5) < 1e-9);
-        QVERIFY(!result.completed);
+        QVERIFY(std::abs(belowTarget.readiness - 0.999) < 1e-9);
+        QVERIFY(!belowTarget.completed);
     }
 
     void invalidMetricsFailSafely()
